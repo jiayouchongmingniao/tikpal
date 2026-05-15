@@ -1,16 +1,32 @@
 import { Settings } from "lucide-react";
 import { FlameScene } from "./FlameScene";
-import { formatDuration, formatSampleRate, playback, systemState } from "../mockState";
+import { formatDuration, formatSampleRate } from "../mockState";
+import type { TikpalDataStatus } from "../hooks/useTikpalState";
+import type { PlaybackSummary, SystemState } from "../types";
 
 interface AmbientScreenProps {
   boosted: boolean;
   timeLabel: string;
   dateLabel: string;
+  playback: PlaybackSummary;
+  system: SystemState;
+  status: TikpalDataStatus;
   onOpenSettings: () => void;
 }
 
-export function AmbientScreen({ boosted, timeLabel, dateLabel, onOpenSettings }: AmbientScreenProps) {
-  const progress = playback.elapsedSeconds / playback.durationSeconds;
+export function AmbientScreen({ boosted, timeLabel, dateLabel, playback, system, status, onOpenSettings }: AmbientScreenProps) {
+  const title = playback.title ?? "Not Playing";
+  const artist = playback.artist ?? "Unknown Artist";
+  const album = playback.album ?? "No Album";
+  const elapsedSeconds = playback.elapsedSeconds ?? 0;
+  const durationSeconds = playback.durationSeconds ?? 0;
+  const progress = durationSeconds > 0 ? Math.min(1, elapsedSeconds / durationSeconds) : 0;
+  const coverLabel = album
+    .split(/\s+/)
+    .map((word) => word[0])
+    .join("")
+    .slice(0, 3)
+    .toUpperCase();
 
   return (
     <section className={`ambient-screen ${boosted ? "is-boosted" : ""}`} aria-label="Ambient flame screen">
@@ -28,17 +44,18 @@ export function AmbientScreen({ boosted, timeLabel, dateLabel, onOpenSettings }:
 
       <div className="ambient-hud" aria-label="Current playback">
         <div className="ambient-cover" aria-hidden="true">
-          <span>RAM</span>
+          {playback.albumArtUrl ? <img src={playback.albumArtUrl} alt="" /> : <span>{coverLabel}</span>}
         </div>
         <div className="ambient-track">
-          <strong>{playback.title}</strong>
-          <span>{playback.artist} - {playback.album}</span>
+          <strong>{title}</strong>
+          <span>{artist} - {album}</span>
         </div>
         <div className="ambient-status">
+          <span className={`data-pill ${status.source === "api" ? "is-live" : "is-fallback"}`}>{status.pending ? "Syncing" : status.source === "api" ? "API" : "Fallback"}</span>
           <span>{formatDuration(playback.elapsedSeconds)}</span>
-          <span>{systemState.audioFormat.codec} {systemState.bitDepth}bit / {formatSampleRate(systemState.sampleRate)}</span>
-          <span>{systemState.outputDevice.label}</span>
-          <span>{systemState.volume.db.toFixed(1)} dB</span>
+          <span>{system.audioFormat.codec} {system.bitDepth}bit / {formatSampleRate(system.sampleRate)}</span>
+          <span>{system.outputDevice.label}</span>
+          <span>{system.volume.db.toFixed(1)} dB</span>
         </div>
         <div className="ambient-progress" aria-hidden="true">
           <span style={{ width: `${progress * 100}%` }} />

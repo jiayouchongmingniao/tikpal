@@ -1,71 +1,75 @@
 import { Cpu, Database, EthernetPort, Info, Monitor, Music2, Power, RotateCcw, SlidersHorizontal, Volume2 } from "lucide-react";
-import { systemState } from "../mockState";
+import type { TikpalDataStatus } from "../hooks/useTikpalState";
+import type { RuntimeState, SystemState } from "../types";
 
 interface QuickSettingsOverlayProps {
   active: boolean;
+  system: SystemState;
+  runtime: RuntimeState;
+  status: TikpalDataStatus;
   onReturnAmbient: () => void;
 }
 
-const settingsCards = [
-  {
-    icon: EthernetPort,
-    title: "Network",
-    value: systemState.network.label,
-    meta: `${systemState.network.ip} - ${systemState.network.speed}`,
-    tone: "cyan"
-  },
-  {
-    icon: Volume2,
-    title: "Audio Output",
-    value: systemState.outputDevice.label,
-    meta: systemState.outputDevice.detail,
-    tone: "gold"
-  },
-  {
-    icon: SlidersHorizontal,
-    title: "DSP",
-    value: systemState.dspState.enabled ? "Enabled" : "Disabled",
-    meta: `Preset: ${systemState.dspState.preset}`,
-    tone: "cyan"
-  },
-  {
-    icon: Database,
-    title: "Library",
-    value: systemState.library.source,
-    meta: `${systemState.library.trackCount.toLocaleString()} tracks`,
-    tone: "gold"
-  },
-  {
-    icon: Monitor,
-    title: "Display",
-    value: "Brightness 70%",
-    meta: "Flame: Medium",
-    tone: "neutral"
-  },
-  {
-    icon: Info,
-    title: "System",
-    value: "moOde 8.6.0",
-    meta: `CPU ${systemState.cpuTemp}C - ${systemState.uptime}`,
-    tone: "neutral"
-  },
-  {
-    icon: RotateCcw,
-    title: "Restart",
-    value: "Confirm Needed",
-    meta: "System reboot",
-    tone: "warn"
-  },
-  {
-    icon: Power,
-    title: "Shutdown",
-    value: "Confirm Needed",
-    meta: "Power off",
-    tone: "danger"
-  }
-];
+export function QuickSettingsOverlay({ active, system, runtime, status, onReturnAmbient }: QuickSettingsOverlayProps) {
+  const settingsCards = [
+    {
+      icon: EthernetPort,
+      title: "Network",
+      value: system.network.label,
+      meta: `${system.network.ip} - ${system.network.speed}`,
+      tone: "cyan"
+    },
+    {
+      icon: Volume2,
+      title: "Audio Output",
+      value: system.outputDevice.label,
+      meta: system.outputDevice.detail,
+      tone: "gold"
+    },
+    {
+      icon: SlidersHorizontal,
+      title: "DSP",
+      value: system.dspState.enabled ? "Enabled" : "Disabled",
+      meta: `Preset: ${system.dspState.preset}`,
+      tone: "cyan"
+    },
+    {
+      icon: Database,
+      title: "Library",
+      value: system.library.source,
+      meta: `${system.library.trackCount.toLocaleString()} tracks`,
+      tone: "gold"
+    },
+    {
+      icon: Monitor,
+      title: "Display",
+      value: runtime.kioskWindow,
+      meta: `Renderer: ${runtime.requestedRenderer}`,
+      tone: "neutral"
+    },
+    {
+      icon: Info,
+      title: "System",
+      value: status.source === "api" ? "Tikpal API" : "Fallback",
+      meta: status.error ?? `CPU ${system.cpuTemp}C - ${system.uptime}`,
+      tone: status.source === "api" ? "neutral" : "warn"
+    },
+    {
+      icon: RotateCcw,
+      title: "Restart",
+      value: "Confirm Needed",
+      meta: "System reboot",
+      tone: "warn"
+    },
+    {
+      icon: Power,
+      title: "Shutdown",
+      value: "Confirm Needed",
+      meta: "Power off",
+      tone: "danger"
+    }
+  ];
 
-export function QuickSettingsOverlay({ active, onReturnAmbient }: QuickSettingsOverlayProps) {
   return (
     <section className={`overlay quick-settings ${active ? "is-active" : ""}`} aria-label="Quick settings" aria-hidden={!active}>
       <button className="overlay-backdrop" type="button" tabIndex={active ? 0 : -1} aria-label="Return to ambient" onClick={onReturnAmbient} />

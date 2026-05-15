@@ -23,7 +23,7 @@ type AppMode = "ambient" | "player" | "quickSettings" | "quickMenu";
 | --- | --- | --- |
 | One-finger swipe down | Ambient | Open player overlay. |
 | Two-finger swipe down | Ambient | Open quick settings overlay. |
-| Swipe up | Player or quick settings | Return to ambient. |
+| Swipe up | Player or quick settings | Return to ambient, including swipes that start inside the overlay panel. |
 | Tap | Ambient | Strengthen playback HUD for 3 seconds. |
 | Long press | Ambient | Open quick menu. |
 | Horizontal swipe | Ambient | Optional v2 ambience switch. |
@@ -86,6 +86,8 @@ stateDiagram-v2
 ### Player
 
 - Blank tap returns to ambient because player is a temporary overlay.
+- Swipe up returns to ambient even when the gesture starts inside the protected player panel.
+- Button-sized taps inside the protected player panel must remain local control actions, not blank-tap returns.
 - Transport controls must never be smaller than 72 x 72px.
 - Play / pause should be the dominant control, 96-112px.
 - Queue, source, audio status, and volume can expand panels from within player.
@@ -93,6 +95,8 @@ stateDiagram-v2
 ### Quick Settings
 
 - Cards are overview-first.
+- Swipe up returns to ambient even when the gesture starts inside the protected settings panel.
+- Button-sized taps inside the protected settings panel must remain local settings actions, not blank-tap returns.
 - Dangerous actions require a confirmation state inside the card or a modal.
 - Reboot, shutdown, database rebuild, audio output switch, network reset, and reset defaults are dangerous.
 
@@ -116,6 +120,7 @@ Current desktop validation mappings:
 - Shift + wheel / trackpad down from ambient opens `quickSettings`.
 - Wheel / trackpad up from an overlay returns to `ambient`.
 - Clicks inside protected overlay panels do not count as blank-tap return.
+- Drag / touch-swipe up inside protected player or settings panels returns to `ambient`.
 
 ## Non-Goals
 

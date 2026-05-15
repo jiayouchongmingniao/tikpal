@@ -63,10 +63,35 @@ export interface SystemState {
 export interface PlaybackSummary {
   state: PlaybackState;
   source: SourceState;
-  title: string;
-  artist: string;
-  album: string;
-  elapsedSeconds: number;
-  durationSeconds: number;
+  albumArtUrl: string | null;
+  title: string | null;
+  artist: string | null;
+  album: string | null;
+  elapsedSeconds: number | null;
+  durationSeconds: number | null;
+  currentTrackIndex: number;
+  queueLength: number;
   favorite: boolean;
+}
+
+export interface RuntimeState {
+  rendererType: "webgl" | "fallback" | "unknown";
+  requestedRenderer: "webgl";
+  kioskWindow: "2560x720";
+  appVersion: string;
+  apiMode: "mock";
+  updatedAt: string;
+}
+
+export interface TikpalState {
+  playback: PlaybackSummary;
+  system: SystemState;
+  runtime: RuntimeState;
+}
+
+export type PlaybackActionType = "play_pause" | "play" | "pause" | "next" | "previous" | "seek" | "favorite_toggle" | "volume_set";
+
+export interface PlaybackActionRequest {
+  type: PlaybackActionType;
+  value?: number;
 }

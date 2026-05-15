@@ -6,6 +6,7 @@ import { QuickSettingsOverlay } from "./components/QuickSettingsOverlay";
 import { useAppMode } from "./hooks/useAppMode";
 import { useBrowserKioskGuard } from "./hooks/useBrowserKioskGuard";
 import { useKioskGestures } from "./hooks/useKioskGestures";
+import { useTikpalState } from "./hooks/useTikpalState";
 import type { AppMode } from "./types";
 
 const dateFormatter = new Intl.DateTimeFormat("en-US", {
@@ -29,6 +30,7 @@ function readInitialMode(): AppMode {
 export default function App() {
   const [now, setNow] = useState(() => new Date());
   const { mode, hudBoosted, idleTotalMs, idleRemainingMs, boostHud, changeMode, returnAmbient, resetIdleTimer } = useAppMode(readInitialMode());
+  const { state: tikpalState, status: tikpalStatus, sendPlaybackAction } = useTikpalState();
 
   useBrowserKioskGuard();
 
@@ -52,10 +54,31 @@ export default function App() {
 
   return (
     <main className="app-root" {...gestureHandlers}>
-      <AmbientScreen boosted={hudBoosted} timeLabel={timeLabel} dateLabel={dateLabel} onOpenSettings={() => changeMode("quickSettings")} />
+      <AmbientScreen
+        boosted={hudBoosted}
+        timeLabel={timeLabel}
+        dateLabel={dateLabel}
+        playback={tikpalState.playback}
+        system={tikpalState.system}
+        status={tikpalStatus}
+        onOpenSettings={() => changeMode("quickSettings")}
+      />
 
-      <PlayerOverlay active={mode === "player"} onReturnAmbient={returnAmbient} />
-      <QuickSettingsOverlay active={mode === "quickSettings"} onReturnAmbient={returnAmbient} />
+      <PlayerOverlay
+        active={mode === "player"}
+        playback={tikpalState.playback}
+        system={tikpalState.system}
+        status={tikpalStatus}
+        onPlaybackAction={sendPlaybackAction}
+        onReturnAmbient={returnAmbient}
+      />
+      <QuickSettingsOverlay
+        active={mode === "quickSettings"}
+        system={tikpalState.system}
+        runtime={tikpalState.runtime}
+        status={tikpalStatus}
+        onReturnAmbient={returnAmbient}
+      />
       <QuickMenu active={mode === "quickMenu"} onChoose={changeMode} onClose={returnAmbient} />
 
       <div className={`gesture-cue ${gesturePreview ? "is-visible" : ""}`} aria-hidden={!gesturePreview}>

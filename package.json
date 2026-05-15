@@ -5,9 +5,15 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
+    "dev:api": "node server/index.mjs",
+    "dev:web": "vite --host 0.0.0.0",
     "build": "tsc -b && vite build",
     "preview": "vite preview --host 0.0.0.0",
+    "start:api": "node server/index.mjs",
+    "start:web": "node server/web.mjs",
     "typecheck": "tsc -b",
+    "test:api": "node scripts/api-smoke.mjs",
+    "test:kiosk": "node scripts/kiosk-package-smoke.mjs",
     "test:interaction": "node scripts/interaction-smoke.mjs"
   },
   "dependencies": {

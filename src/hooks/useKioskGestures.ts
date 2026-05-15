@@ -75,8 +75,6 @@ export function useKioskGestures(options: GestureOptions): GestureHandlers & { g
     (event) => {
       options.onActivity();
       const protectedStart = isProtectedTarget(event.target);
-
-      event.currentTarget.setPointerCapture(event.pointerId);
       pointersRef.current.set(event.pointerId, {
         id: event.pointerId,
         x: event.clientX,
@@ -87,7 +85,15 @@ export function useKioskGestures(options: GestureOptions): GestureHandlers & { g
         protectedStart
       });
 
-      if (pointersRef.current.size === 1 && options.mode === "ambient" && !protectedStart) {
+      if (protectedStart) {
+        clearLongPress();
+        setGesturePreview(null);
+        return;
+      }
+
+      event.currentTarget.setPointerCapture(event.pointerId);
+
+      if (pointersRef.current.size === 1 && options.mode === "ambient") {
         clearLongPress();
         setGesturePreview({ kind: "menu", label: "Quick Menu", progress: 0 });
         longPressTimerRef.current = window.setTimeout(() => {

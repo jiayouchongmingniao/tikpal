@@ -27,6 +27,14 @@ The first commit is documentation-only. The future implementation should keep th
 - `deploy/systemd/`: API, web, and kiosk services.
 - `docs/`: product and implementation contract.
 
+Current deployment package:
+
+- `server/index.mjs`: local mock API and future adapter boundary.
+- `server/web.mjs`: production static server for `dist/`, with `/api` proxied to the API service.
+- `deploy/chromium/launch-tikpal-kiosk.sh`: Chromium launcher with `--check`, dedicated profile cleanup, dark startup flags, and display mode hooks.
+- `deploy/chromium/start-tikpal-kiosk-session.sh`: X-session entrypoint for systemd `startx`.
+- `deploy/systemd/install-systemd-services.sh`: installs `tikpal-api.service`, `tikpal-web.service`, and optionally `tikpal-kiosk.service`.
+
 ## Kiosk Launch Goals
 
 The kiosk must:
@@ -52,6 +60,8 @@ TIKPAL_CHROMIUM_COLOR_SCHEME=dark
 TIKPAL_RENDERER=webgl
 TIKPAL_RENDER_PROFILE=pi4-balanced
 ```
+
+These names are now used by `deploy/chromium/env.kiosk.example`.
 
 ## WebGL Policy
 

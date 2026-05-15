@@ -48,6 +48,8 @@ Acceptance:
 - One-finger swipe reliably opens player.
 - Two-finger swipe reliably opens quick settings.
 - Releasing below threshold cancels settings.
+- Swipe up returns from player and quick settings, including gestures that start inside protected overlay panels.
+- Protected panel taps remain local control/settings clicks and do not count as blank-tap return.
 - Player returns after 15 seconds idle.
 - Quick settings returns after 30 seconds idle.
 - Long press opens quick menu.
@@ -65,7 +67,7 @@ Acceptance:
 
 - Title, artist, album, cover, playback state, progress, volume, format, output, network, and DSP states are visible from mock or backend data.
 - Transport controls meet minimum touch size.
-- Blank tap or swipe up returns to ambient.
+- Blank tap or swipe up returns to ambient; transport/control taps stay actionable inside the protected panel.
 
 ### Slice 5: moOde / MPD Playback Bridge
 
@@ -80,6 +82,13 @@ Acceptance:
 - Transport controls affect real playback.
 - Volume display matches actual output.
 - Backend unavailable state is visible and graceful.
+
+Batch 3 implementation note:
+
+- Local Node API bridge is now implemented in mock mode.
+- Frontend reads `/api/v1/system/state` and posts playback actions to `/api/v1/playback/actions`.
+- API unavailable state falls back to bundled data and is visible in the UI.
+- Real MPD/moOde adapter wiring remains required before this slice is fully device-accepted.
 
 ### Slice 6: Quick Settings
 
@@ -108,6 +117,13 @@ Acceptance:
 - Browser chrome and restore prompts do not show during normal startup.
 - App starts with a dark background.
 - Services restart cleanly.
+
+Batch 4 deployment note:
+
+- Repo-owned Chromium launcher, flags, managed policy, and `.env.kiosk` example are implemented under `deploy/chromium/`.
+- API, production web, and kiosk service templates plus installer are implemented under `deploy/systemd/`.
+- `server/web.mjs` serves `dist/` on port `4173` and proxies `/api` to the local API on port `8787`, so the Pi does not need the Vite dev server.
+- `npm run test:kiosk` validates the local packaging contract; real fullscreen/window-size acceptance still requires the target Pi display.
 
 ## MVP Acceptance Criteria
 

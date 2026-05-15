@@ -16,7 +16,7 @@ This directory is the source of truth for Tikpal product, UX, visual, architectu
 - The first implementation should use Vite + React + TypeScript and Three.js / WebGL.
 - The default screen is an ambient flame screen, not a conventional app homepage.
 - moOde / MPD remains the playback and system capability owner; Tikpal presents a focused touch UI over those capabilities.
-- Batch 1 now includes the first runnable frontend scaffold. Real moOde / MPD integration remains out of scope until the backend slice.
+- Batch 3 now includes a local mock API bridge and frontend API read/write path. Real moOde / MPD integration remains the next backend adapter slice.
 
 ## Document Index
 
@@ -56,6 +56,12 @@ This directory is the source of truth for Tikpal product, UX, visual, architectu
 | --- | --- | --- |
 | [MVP backlog and acceptance v1](05-planning/mvp-backlog-and-acceptance-v1.md) | Acceptance baseline | Build slices, acceptance criteria, risks, and first implementation defaults. |
 
+### Deployment
+
+| Document | Status | Purpose |
+| --- | --- | --- |
+| [Raspberry Pi kiosk deploy v1](06-deployment/raspberry-pi-kiosk-deploy-v1.md) | Current reference | Pi sync, systemd install, Chromium kiosk launch, verification, and rollback. |
+
 ### Source Assets
 
 | Asset | Status | Purpose |
@@ -65,7 +71,7 @@ This directory is the source of truth for Tikpal product, UX, visual, architectu
 
 ## Public Interface Draft
 
-The first implementation should expose these concepts consistently across frontend state, local backend state, telemetry, and documentation:
+The implementation exposes these concepts consistently across frontend state, local backend state, telemetry, and documentation:
 
 ```ts
 type AppMode = "ambient" | "player" | "quickSettings" | "quickMenu";

@@ -192,6 +192,13 @@ button {
   transform: scale(0.96);
 }
 
+.icon-button:disabled,
+.play-button:disabled,
+.volume-actions button:disabled {
+  cursor: wait;
+  opacity: 0.48;
+}
+
 .ambient-settings {
   position: absolute;
   z-index: 3;
@@ -276,6 +283,13 @@ button {
   letter-spacing: 0;
 }
 
+.ambient-cover img,
+.cover-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
 .ambient-track {
   display: grid;
   gap: 5px;
@@ -313,6 +327,21 @@ button {
   margin-right: 28px;
   vertical-align: -4px;
   background: rgba(255, 255, 255, 0.16);
+}
+
+.data-pill {
+  padding: 5px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.data-pill.is-live {
+  color: var(--cyan);
+}
+
+.data-pill.is-fallback {
+  color: var(--warning);
 }
 
 .ambient-progress {
@@ -571,6 +600,33 @@ button {
   overflow: hidden;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.12);
+}
+
+.volume-actions {
+  position: absolute;
+  right: 22px;
+  top: 20px;
+  display: flex;
+  gap: 8px;
+}
+
+.volume-actions button {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.07);
+  color: rgba(255, 255, 255, 0.82);
+  cursor: pointer;
+}
+
+.volume-actions button:hover,
+.volume-actions button:focus-visible {
+  border-color: rgba(212, 175, 55, 0.32);
+  color: var(--gold-strong);
+  outline: none;
 }
 
 .settings-shell {

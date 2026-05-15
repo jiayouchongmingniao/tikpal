@@ -44,6 +44,7 @@ Key documents:
 - [Pi4 kiosk WebGL architecture](docs/03-architecture/pi4-kiosk-webgl-architecture-v1.md)
 - [moOde capability mapping](docs/04-integration/moode-capability-mapping-v1.md)
 - [MVP backlog and acceptance](docs/05-planning/mvp-backlog-and-acceptance-v1.md)
+- [Raspberry Pi kiosk deploy](docs/06-deployment/raspberry-pi-kiosk-deploy-v1.md)
 
 Reference assets:
 
@@ -54,10 +55,13 @@ Reference assets:
 
 ```bash
 npm install
-npm run dev
+npm run dev:api
+npm run dev:web
 ```
 
 Open [http://localhost:4173/](http://localhost:4173/).
+
+The Vite app proxies `/api` to the local Tikpal API on port `8787`. If the API is not running, the UI stays usable with bundled fallback state and marks the data source as fallback.
 
 Validation entry points:
 
@@ -70,6 +74,50 @@ Validation entry points:
 ```bash
 npm run build
 ```
+
+## API Smoke Test
+
+Validate the Batch 3 local API bridge:
+
+```bash
+npm run test:api
+```
+
+The smoke test starts a temporary mock API, checks state endpoints, verifies playback actions, and confirms invalid action handling.
+
+## Kiosk Package Smoke Test
+
+Validate the Raspberry Pi service and Chromium kiosk package:
+
+```bash
+npm run test:kiosk
+```
+
+The smoke test checks the production static server path, systemd templates, kiosk launcher, managed policy files, and `launch-tikpal-kiosk.sh --check`.
+
+## Raspberry Pi Deploy
+
+Build locally, sync the repo to the Pi, and install the services from the repo-owned deploy package:
+
+```bash
+npm run typecheck
+npm run test:api
+npm run test:kiosk
+npm run build
+```
+
+On the Pi:
+
+```bash
+cd /home/moode/code/tikpal
+npm ci
+npm run build
+cp -n deploy/chromium/env.kiosk.example .env.kiosk
+deploy/chromium/launch-tikpal-kiosk.sh --check
+sudo deploy/systemd/install-systemd-services.sh --app-dir /home/moode/code/tikpal --user moode --enable-kiosk --restart
+```
+
+See the full deploy and rollback runbook in [docs/06-deployment/raspberry-pi-kiosk-deploy-v1.md](docs/06-deployment/raspberry-pi-kiosk-deploy-v1.md).
 
 ## Interaction Smoke Test
 
@@ -94,4 +142,6 @@ The first implementation milestone should deliver:
 
 ## Repository Status
 
-Batch 2 is implemented. The app is still mock-data only; no real moOde / MPD backend is wired yet.
+Batch 3 local API bridge is implemented in mock mode: the frontend reads Tikpal state from `/api/v1/system/state`, playback controls post to `/api/v1/playback/actions`, and the UI falls back gracefully when the API is unavailable. The repo now also includes the Raspberry Pi kiosk deploy package for API, web, and Chromium services.
+
+The real moOde / MPD adapter is still the next backend step. The current API shape is intended to be the stable contract for that adapter.

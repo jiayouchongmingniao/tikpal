@@ -1,0 +1,12 @@
+{
+  "BrowserSignin": 0,
+  "DefaultPopupsSetting": 2,
+  "MetricsReportingEnabled": false,
+  "PasswordManagerEnabled": false,
+  "PromotionalTabsEnabled": false,
+  "RestoreOnStartup": 4,
+  "RestoreOnStartupURLs": ["http://localhost:4173/"],
+  "SavingBrowserHistoryDisabled": true,
+  "SyncDisabled": true,
+  "TranslateEnabled": false
+}

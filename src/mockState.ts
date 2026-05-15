@@ -1,13 +1,16 @@
-import type { PlaybackSummary, SystemState } from "./types";
+import type { PlaybackSummary, SystemState, TikpalState } from "./types";
 
 export const playback: PlaybackSummary = {
   state: "playing",
   source: "mpd",
+  albumArtUrl: null,
   title: "Get Lucky (feat. Pharrell Williams)",
   artist: "Daft Punk",
   album: "Random Access Memories",
   elapsedSeconds: 84,
   durationSeconds: 369,
+  currentTrackIndex: 1,
+  queueLength: 13,
   favorite: false
 };
 
@@ -50,7 +53,21 @@ export const systemState: SystemState = {
   uptime: "2d 4h"
 };
 
-export function formatDuration(seconds: number): string {
+export const fallbackTikpalState: TikpalState = {
+  playback,
+  system: systemState,
+  runtime: {
+    rendererType: "unknown",
+    requestedRenderer: "webgl",
+    kioskWindow: "2560x720",
+    appVersion: "0.1.0",
+    apiMode: "mock",
+    updatedAt: new Date().toISOString()
+  }
+};
+
+export function formatDuration(seconds: number | null): string {
+  if (seconds === null || !Number.isFinite(seconds)) return "--:--";
   const minutes = Math.floor(seconds / 60);
   const rest = Math.floor(seconds % 60);
   return `${minutes}:${rest.toString().padStart(2, "0")}`;

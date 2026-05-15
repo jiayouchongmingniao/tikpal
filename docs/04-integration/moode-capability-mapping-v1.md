@@ -165,6 +165,19 @@ Browser responsibilities:
 - Send local API commands.
 - Display optimistic states only when backed by API confirmation or short pending-state logic.
 
+Current Batch 3 mock API contract:
+
+| Endpoint | Method | Purpose |
+| --- | --- | --- |
+| `/api/v1/health` | `GET` | Local API health and mode. |
+| `/api/v1/system/state` | `GET` | Combined playback, system, and runtime state for the UI. |
+| `/api/v1/playback/status` | `GET` | Playback summary only. |
+| `/api/v1/system/status` | `GET` | System summary only. |
+| `/api/v1/system/runtime` | `GET` | Kiosk/runtime summary. |
+| `/api/v1/playback/actions` | `POST` | Playback actions: `play_pause`, `play`, `pause`, `next`, `previous`, `seek`, `favorite_toggle`, and `volume_set`. |
+
+The mock API preserves the frontend contract while the real moOde / MPD adapter is still pending.
+
 ## Errors and Fallbacks
 
 | Condition | UI Behavior |

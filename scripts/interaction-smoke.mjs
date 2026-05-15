@@ -10,6 +10,13 @@ function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function waitForExit(child) {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  await new Promise((resolve) => {
+    child.once("exit", resolve);
+  });
+}
+
 function waitForDevTools(chrome) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("Timed out waiting for Chrome DevTools endpoint")), 10000);
@@ -124,6 +131,37 @@ async function click(client, x, y) {
   await wait(250);
 }
 
+async function drag(client, fromX, fromY, toX, toY, steps = 8) {
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    x: fromX,
+    y: fromY,
+    button: "left",
+    clickCount: 1
+  });
+
+  for (let index = 1; index <= steps; index += 1) {
+    const progress = index / steps;
+    await client.send("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: fromX + (toX - fromX) * progress,
+      y: fromY + (toY - fromY) * progress,
+      button: "left",
+      buttons: 1
+    });
+    await wait(16);
+  }
+
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    x: toX,
+    y: toY,
+    button: "left",
+    clickCount: 1
+  });
+  await wait(300);
+}
+
 const profileDir = await mkdtemp(path.join(tmpdir(), "tikpal-chrome-"));
 const chrome = spawn(CHROME_BIN, [
   "--headless=new",
@@ -158,6 +196,10 @@ try {
   await click(client, 1360, 600);
   await expect(client, "document.querySelector('.player-overlay.is-active') !== null", "protected player click stays in player");
 
+  await drag(client, 1360, 600, 1360, 470);
+  await expect(client, "document.querySelector('.player-overlay.is-active') === null", "protected player swipe up exits player");
+
+  await navigate(client, `${APP_URL}?mode=player`);
   await click(client, 10, 10);
   await expect(client, "document.querySelector('.player-overlay.is-active') === null", "backdrop click exits player");
 
@@ -168,8 +210,12 @@ try {
   await navigate(client, `${APP_URL}?mode=quickSettings`);
   await click(client, 1260, 210);
   await expect(client, "document.querySelector('.quick-settings.is-active') !== null", "protected settings click stays in settings");
+
+  await drag(client, 1260, 500, 1260, 350);
+  await expect(client, "document.querySelector('.quick-settings.is-active') === null", "protected settings swipe up exits settings");
 } finally {
   client?.close();
   chrome.kill();
-  await rm(profileDir, { recursive: true, force: true });
+  await waitForExit(chrome);
+  await rm(profileDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 }
