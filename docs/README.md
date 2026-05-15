@@ -1,0 +1,94 @@
+# Tikpal Docs
+
+This directory is the source of truth for Tikpal product, UX, visual, architecture, integration, and delivery planning.
+
+## Status Labels
+
+| Label | Meaning |
+| --- | --- |
+| Current reference | Use this as the current planning and implementation baseline. |
+| Source reference | Original input material. Do not edit except to replace with a newer source. |
+| Acceptance baseline | Use for implementation completion and device validation. |
+
+## Current Scope
+
+- Tikpal targets a Raspberry Pi 4 running Chromium kiosk at 2560 x 720.
+- The first implementation should use Vite + React + TypeScript and Three.js / WebGL.
+- The default screen is an ambient flame screen, not a conventional app homepage.
+- moOde / MPD remains the playback and system capability owner; Tikpal presents a focused touch UI over those capabilities.
+- This repo is documentation-first. The initial commit should not contain runnable app code.
+
+## Document Index
+
+### Product
+
+| Document | Status | Purpose |
+| --- | --- | --- |
+| [Product brief v1](00-product/product-brief-v1.md) | Current reference | Product goal, hierarchy, MVP boundaries, and source-derived decisions. |
+
+### UX
+
+| Document | Status | Purpose |
+| --- | --- | --- |
+| [Interaction and state model v1](01-ux/interaction-and-state-model-v1.md) | Current reference | Gestures, app modes, timeout behavior, and mistake prevention. |
+
+### Visual
+
+| Document | Status | Purpose |
+| --- | --- | --- |
+| [Visual system and 2560 x 720 layout v1](02-visual/visual-system-and-2560x720-layout-v1.md) | Current reference | Layout proportions, colors, type, control sizing, and page composition. |
+
+### Architecture
+
+| Document | Status | Purpose |
+| --- | --- | --- |
+| [Pi4 kiosk WebGL architecture v1](03-architecture/pi4-kiosk-webgl-architecture-v1.md) | Current reference | Runtime topology, rendering policy, kiosk packaging, and performance budget. |
+
+### Integration
+
+| Document | Status | Purpose |
+| --- | --- | --- |
+| [moOde capability mapping v1](04-integration/moode-capability-mapping-v1.md) | Current reference | Mapping moOde / MPD capabilities into Tikpal UI state and controls. |
+
+### Planning
+
+| Document | Status | Purpose |
+| --- | --- | --- |
+| [MVP backlog and acceptance v1](05-planning/mvp-backlog-and-acceptance-v1.md) | Acceptance baseline | Build slices, acceptance criteria, risks, and first implementation defaults. |
+
+### Source Assets
+
+| Asset | Status | Purpose |
+| --- | --- | --- |
+| [moOde streamer UI product design PDF](assets/references/moode-streamer-ui-product-design-doc.pdf) | Source reference | Original 24-page Chinese product design document. |
+| [UI reference board](assets/references/ui-reference-board.png) | Source reference | Visual reference board for layout, hierarchy, and interaction examples. |
+
+## Public Interface Draft
+
+The first implementation should expose these concepts consistently across frontend state, local backend state, telemetry, and documentation:
+
+```ts
+type AppMode = "ambient" | "player" | "quickSettings" | "quickMenu";
+type PlaybackState = "playing" | "paused" | "stopped";
+type SourceState =
+  | "mpd"
+  | "airplay"
+  | "spotify"
+  | "bluetooth"
+  | "roonbridge"
+  | "upnp"
+  | "radio";
+
+interface SystemState {
+  network: NetworkState;
+  outputDevice: OutputDeviceState;
+  volume: VolumeState;
+  audioFormat: AudioFormatState;
+  sampleRate: number | null;
+  bitDepth: number | null;
+  cpuTemp: number | null;
+  dspState: DspState;
+}
+```
+
+The local backend boundary should reserve endpoints or adapters for playback control, system state, library scan, kiosk status, and runtime diagnostics.

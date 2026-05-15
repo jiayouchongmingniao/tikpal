@@ -1,0 +1,192 @@
+# MVP Backlog and Acceptance v1
+
+## Summary
+
+This document turns the product design into buildable slices. The first repo commit is documentation-only. The first runnable implementation should be selected from these slices after the documentation baseline is reviewed.
+
+## MVP Backlog
+
+### Slice 1: Project Scaffold
+
+- Create Vite + React + TypeScript app.
+- Add Three.js.
+- Add fixed 2560 x 720 design viewport rules.
+- Add black startup background in HTML before React loads.
+- Add app mode state machine with `ambient`, `player`, `quickSettings`, and `quickMenu`.
+
+Acceptance:
+
+- Local app opens at the root route.
+- No browser-white flash during initial load.
+- App mode transitions can be exercised with temporary dev controls or test hooks.
+
+### Slice 2: Ambient Flame Screen
+
+- Implement WebGL flame visual using Three.js.
+- Add time display.
+- Add weak playback HUD.
+- Add tap-to-boost HUD behavior.
+- Add renderer fallback and diagnostic fields.
+
+Acceptance:
+
+- Default entry is ambient.
+- Flame animation is visible and does not obscure HUD text.
+- Tapping strengthens playback HUD for 3 seconds and fades back.
+- Renderer fallback keeps the page usable.
+
+### Slice 3: Gesture State Machine
+
+- Implement one-finger swipe down to player.
+- Implement two-finger swipe down to quick settings with threshold hint.
+- Implement swipe up return.
+- Implement long-press quick menu.
+- Implement inactivity timers.
+
+Acceptance:
+
+- One-finger swipe reliably opens player.
+- Two-finger swipe reliably opens quick settings.
+- Releasing below threshold cancels settings.
+- Player returns after 15 seconds idle.
+- Quick settings returns after 30 seconds idle.
+- Long press opens quick menu.
+
+### Slice 4: Player Overlay
+
+- Add 720 / 1240 / 600 horizontal layout.
+- Add cover art area.
+- Add current track metadata.
+- Add progress and time.
+- Add transport controls.
+- Add right-side audio/status cards.
+
+Acceptance:
+
+- Title, artist, album, cover, playback state, progress, volume, format, output, network, and DSP states are visible from mock or backend data.
+- Transport controls meet minimum touch size.
+- Blank tap or swipe up returns to ambient.
+
+### Slice 5: moOde / MPD Playback Bridge
+
+- Add local backend.
+- Read MPD playback state.
+- Implement play, pause, previous, next, seek, and volume actions where supported.
+- Normalize source and audio state.
+
+Acceptance:
+
+- Current song and playback state match MPD.
+- Transport controls affect real playback.
+- Volume display matches actual output.
+- Backend unavailable state is visible and graceful.
+
+### Slice 6: Quick Settings
+
+- Add card grid for network, output, DSP, library, display, system info, reboot, shutdown.
+- Add confirmation flow for dangerous actions.
+- Add library update action where supported.
+
+Acceptance:
+
+- Network, output, DSP, library, display, and system cards render from backend or mock state.
+- Reboot and shutdown cannot run on first tap.
+- Dangerous confirmation is visually distinct.
+
+### Slice 7: Pi4 Kiosk Package
+
+- Add Chromium launcher.
+- Add managed policies and flags.
+- Add dedicated Chromium profile cleanup.
+- Add systemd services for API, web, and kiosk.
+- Add kiosk validation command.
+
+Acceptance:
+
+- Kiosk launches local app full screen.
+- Window size is 2560 x 720.
+- Browser chrome and restore prompts do not show during normal startup.
+- App starts with a dark background.
+- Services restart cleanly.
+
+## MVP Acceptance Criteria
+
+### Ambient
+
+- Default entry is the flame screen.
+- Flame animation is smooth enough on the target device.
+- Current time is correct.
+- Playback information does not disturb the ambient visual.
+- Tap strengthens playback information and fades it back automatically.
+
+### Gestures
+
+- One-finger swipe down opens player.
+- Two-finger swipe down opens quick settings.
+- Two-finger swipe has mistake prevention threshold feedback.
+- Swipe up returns to ambient.
+- Long press opens quick menu.
+- Inactivity returns to ambient.
+
+### Playback
+
+- Song, artist, album, and cover display correctly.
+- Play / pause state is synchronized.
+- Previous and next work.
+- Progress and playback time synchronize.
+- Volume display matches real output.
+- Format, sample rate, and bit depth display correctly.
+- Output device displays correctly.
+
+### Quick Settings
+
+- Network state displays correctly.
+- Output state displays correctly.
+- DSP state displays correctly.
+- Library update entry is available.
+- Reboot and shutdown require confirmation.
+- Settings cannot accidentally trigger dangerous operations.
+
+### Experience
+
+- Daily playback does not require entering settings.
+- Settings are reachable through at least two paths.
+- Device returns to ambient after inactivity.
+- Main screen remains readable from a distance.
+- UI does not feel like a complex configuration center.
+
+## Risks
+
+| Risk | Mitigation |
+| --- | --- |
+| WebGL cost is too high on Pi4 at 2560 x 720. | Add render scale, quality tier, frame cap, and static fallback from the first implementation. |
+| Browser startup shows white or restore UI. | Set black HTML background, use dark Chromium flags, dedicated profile, and profile cleanup. |
+| Two-finger gesture is hard to discover. | Add weak gear and long-press quick menu fallback. |
+| moOde data is inconsistent across sources. | Normalize source state and label passive renderers as status, not guaranteed switch actions. |
+| Dangerous system actions are triggered accidentally. | Require explicit confirmation and separate dangerous actions visually. |
+| Physical screen geometry is wrong. | Validate Chromium window size, xrandr output, and actual viewport on-device. |
+
+## Documentation Completeness Check
+
+Before implementation starts, confirm:
+
+- Product goals and non-goals are documented.
+- Page hierarchy is documented.
+- Gesture thresholds are documented.
+- Visual layout proportions are documented.
+- moOde capability mapping is documented.
+- MVP and v2 boundaries are documented.
+- Pi4 kiosk runtime assumptions are documented.
+- Acceptance criteria are documented.
+
+## Initial Defaults
+
+- App mode: `ambient`.
+- Player timeout: 15 seconds.
+- Quick settings timeout: 30 seconds.
+- Tap HUD boost: 3 seconds.
+- Physical output: 2560 x 720.
+- Frontend stack: Vite + React + TypeScript.
+- Visual stack: Three.js / WebGL.
+- Backend owner: local Node.js service.
+- Audio owner: moOde / MPD.
