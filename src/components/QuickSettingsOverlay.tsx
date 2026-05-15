@@ -69,7 +69,7 @@ export function QuickSettingsOverlay({ active, onReturnAmbient }: QuickSettingsO
   return (
     <section className={`overlay quick-settings ${active ? "is-active" : ""}`} aria-label="Quick settings" aria-hidden={!active}>
       <button className="overlay-backdrop" type="button" tabIndex={active ? 0 : -1} aria-label="Return to ambient" onClick={onReturnAmbient} />
-      <div className="settings-shell" role="dialog" aria-modal="true">
+      <div className="settings-shell" role="dialog" aria-modal="true" data-gesture-protected>
         <aside className="settings-nav" aria-label="Settings sections">
           <button className="settings-nav-item is-active" type="button">
             <Music2 size={24} />

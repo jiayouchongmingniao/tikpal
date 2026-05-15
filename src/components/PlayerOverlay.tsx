@@ -35,7 +35,7 @@ export function PlayerOverlay({ active, onReturnAmbient }: PlayerOverlayProps) {
   return (
     <section className={`overlay player-overlay ${active ? "is-active" : ""}`} aria-label="Player controls" aria-hidden={!active}>
       <button className="overlay-backdrop" type="button" tabIndex={active ? 0 : -1} aria-label="Return to ambient" onClick={onReturnAmbient} />
-      <div className="player-shell" role="dialog" aria-modal="true">
+      <div className="player-shell" role="dialog" aria-modal="true" data-gesture-protected>
         <div className="cover-zone">
           <div className="cover-art">
             <div className="helmet-shine" />

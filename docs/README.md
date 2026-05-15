@@ -99,4 +99,6 @@ The local backend boundary should reserve endpoints or adapters for playback con
 - Visual layer: Three.js/WebGL flame scene with CSS fallback when WebGL is unavailable.
 - State model: `ambient`, `player`, `quickSettings`, and `quickMenu`.
 - Validation routes: `/`, `/?mode=player`, `/?mode=quickSettings`.
+- Interaction validation: `npm run test:interaction` while the dev server is running.
+- Kiosk guard: root-level context menu, drag, selection, browser zoom, and multi-touch browser default suppression.
 - Current data: mocked playback and system state only.

@@ -71,6 +71,16 @@ Validation entry points:
 npm run build
 ```
 
+## Interaction Smoke Test
+
+With the dev server running, verify the Batch 2 kiosk interaction contract:
+
+```bash
+npm run test:interaction
+```
+
+The smoke test drives Chrome through the DevTools protocol and checks wheel/trackpad-style entry, overlay return, protected panel clicks, and the quick settings fallback path.
+
 ## MVP Summary
 
 The first implementation milestone should deliver:
@@ -84,4 +94,4 @@ The first implementation milestone should deliver:
 
 ## Repository Status
 
-Batch 1 is implemented. The app is still mock-data only; no real moOde / MPD backend is wired yet.
+Batch 2 is implemented. The app is still mock-data only; no real moOde / MPD backend is wired yet.

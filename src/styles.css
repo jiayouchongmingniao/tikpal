@@ -37,6 +37,7 @@ body,
 #root {
   width: 100%;
   height: 100%;
+  overscroll-behavior: none;
 }
 
 body {
@@ -44,8 +45,10 @@ body {
   overflow: hidden;
   background: var(--bg);
   touch-action: none;
+  overscroll-behavior: none;
   user-select: none;
   -webkit-user-select: none;
+  -webkit-touch-callout: none;
 }
 
 button {
@@ -63,6 +66,8 @@ button {
   background:
     radial-gradient(circle at 52% 72%, rgba(166, 57, 12, 0.28), transparent 36%),
     linear-gradient(180deg, #050609, #090b0e 60%, #040506);
+  touch-action: none;
+  overscroll-behavior: none;
 }
 
 .ambient-screen,
@@ -693,17 +698,21 @@ button {
   outline: none;
 }
 
-.settings-hint {
+.gesture-cue {
   position: absolute;
   z-index: 20;
   top: 22px;
   left: 50%;
-  padding: 12px 22px;
+  display: grid;
+  min-width: 220px;
+  gap: 8px;
+  padding: 12px 22px 14px;
   border: 1px solid rgba(212, 175, 55, 0.22);
-  border-radius: 999px;
+  border-radius: 8px;
   background: rgba(0, 0, 0, 0.48);
   color: rgba(255, 255, 255, 0.78);
   font-size: 18px;
+  text-align: center;
   opacity: 0;
   transform: translateX(-50%) translateY(-12px);
   transition:
@@ -711,9 +720,53 @@ button {
     transform 160ms ease;
 }
 
-.settings-hint.is-visible {
+.gesture-cue.is-visible {
   opacity: 1;
   transform: translateX(-50%) translateY(0);
+}
+
+.gesture-cue-track,
+.idle-meter-track {
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.gesture-cue-track i,
+.idle-meter-track i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--gold), var(--gold-strong));
+}
+
+.idle-meter {
+  position: absolute;
+  z-index: 20;
+  right: 46px;
+  bottom: 34px;
+  display: grid;
+  width: 150px;
+  gap: 8px;
+  padding: 10px 12px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.42);
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 16px;
+  text-align: right;
+  opacity: 0;
+  transform: translateY(10px);
+  transition:
+    opacity 180ms ease,
+    transform 180ms ease;
+  pointer-events: none;
+}
+
+.idle-meter.is-visible {
+  opacity: 1;
+  transform: translateY(0);
 }
 
 @media (max-aspect-ratio: 2.4 / 1) {

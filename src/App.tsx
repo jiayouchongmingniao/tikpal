@@ -4,6 +4,7 @@ import { PlayerOverlay } from "./components/PlayerOverlay";
 import { QuickMenu } from "./components/QuickMenu";
 import { QuickSettingsOverlay } from "./components/QuickSettingsOverlay";
 import { useAppMode } from "./hooks/useAppMode";
+import { useBrowserKioskGuard } from "./hooks/useBrowserKioskGuard";
 import { useKioskGestures } from "./hooks/useKioskGestures";
 import type { AppMode } from "./types";
 
@@ -27,7 +28,9 @@ function readInitialMode(): AppMode {
 
 export default function App() {
   const [now, setNow] = useState(() => new Date());
-  const { mode, hudBoosted, boostHud, changeMode, returnAmbient, resetIdleTimer } = useAppMode(readInitialMode());
+  const { mode, hudBoosted, idleTotalMs, idleRemainingMs, boostHud, changeMode, returnAmbient, resetIdleTimer } = useAppMode(readInitialMode());
+
+  useBrowserKioskGuard();
 
   useEffect(() => {
     const interval = window.setInterval(() => setNow(new Date()), 1000);
@@ -37,7 +40,7 @@ export default function App() {
   const timeLabel = useMemo(() => timeFormatter.format(now), [now]);
   const dateLabel = useMemo(() => dateFormatter.format(now), [now]);
 
-  const { settingsHintVisible, ...gestureHandlers } = useKioskGestures({
+  const { gesturePreview, ...gestureHandlers } = useKioskGestures({
     mode,
     onOpenPlayer: () => changeMode("player"),
     onOpenSettings: () => changeMode("quickSettings"),
@@ -55,8 +58,18 @@ export default function App() {
       <QuickSettingsOverlay active={mode === "quickSettings"} onReturnAmbient={returnAmbient} />
       <QuickMenu active={mode === "quickMenu"} onChoose={changeMode} onClose={returnAmbient} />
 
-      <div className={`settings-hint ${settingsHintVisible ? "is-visible" : ""}`} aria-hidden={!settingsHintVisible}>
-        Quick Settings
+      <div className={`gesture-cue ${gesturePreview ? "is-visible" : ""}`} aria-hidden={!gesturePreview}>
+        <span>{gesturePreview?.label ?? ""}</span>
+        <div className="gesture-cue-track">
+          <i style={{ width: `${(gesturePreview?.progress ?? 0) * 100}%` }} />
+        </div>
+      </div>
+
+      <div className={`idle-meter ${idleTotalMs && mode !== "ambient" ? "is-visible" : ""}`} aria-hidden={mode === "ambient"}>
+        <span>{Math.ceil((idleRemainingMs ?? 0) / 1000)}s</span>
+        <div className="idle-meter-track">
+          <i style={{ width: `${idleTotalMs ? 100 - ((idleRemainingMs ?? 0) / idleTotalMs) * 100 : 0}%` }} />
+        </div>
       </div>
     </main>
   );

@@ -110,6 +110,13 @@ MVP is touch-first. The state model should still reserve clean mappings for:
 - Rotary control: volume, selection, press to confirm.
 - Browser/dev input: mouse or touchpad simulation for local development.
 
+Current desktop validation mappings:
+
+- Wheel / trackpad down from ambient opens `player`.
+- Shift + wheel / trackpad down from ambient opens `quickSettings`.
+- Wheel / trackpad up from an overlay returns to `ambient`.
+- Clicks inside protected overlay panels do not count as blank-tap return.
+
 ## Non-Goals
 
 - No multi-window navigation.
