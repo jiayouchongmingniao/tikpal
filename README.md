@@ -2,7 +2,7 @@
 
 Tikpal is a documentation-first product project for a Raspberry Pi 4 based moOde streamer touch UI. The target device is a 2560 x 720 ultra-wide kiosk screen that should feel like a quiet HiFi object first, and a playback controller only when the user asks for controls.
 
-The first version is intentionally documentation-only. It defines the product, interaction, visual, architecture, integration, and acceptance baseline before any runnable UI is implemented.
+The project started documentation-first and now includes the first runnable frontend scaffold: a Vite + React + TypeScript app with a Three.js/WebGL ambient layer, kiosk-safe dark startup, fixed 2560 x 720 design rules, and mock player/settings surfaces.
 
 ## Product Direction
 
@@ -50,6 +50,27 @@ Reference assets:
 - [Original product design PDF](docs/assets/references/moode-streamer-ui-product-design-doc.pdf)
 - [UI reference board](docs/assets/references/ui-reference-board.png)
 
+## Run Locally
+
+```bash
+npm install
+npm run dev
+```
+
+Open [http://localhost:4173/](http://localhost:4173/).
+
+Validation entry points:
+
+- Ambient: [http://localhost:4173/](http://localhost:4173/)
+- Player overlay: [http://localhost:4173/?mode=player](http://localhost:4173/?mode=player)
+- Quick settings: [http://localhost:4173/?mode=quickSettings](http://localhost:4173/?mode=quickSettings)
+
+## Build
+
+```bash
+npm run build
+```
+
 ## MVP Summary
 
 The first implementation milestone should deliver:
@@ -63,4 +84,4 @@ The first implementation milestone should deliver:
 
 ## Repository Status
 
-This repository begins as a product specification and implementation contract. Do not add runnable frontend code until the documentation baseline has been reviewed and the first implementation slice is chosen.
+Batch 1 is implemented. The app is still mock-data only; no real moOde / MPD backend is wired yet.
