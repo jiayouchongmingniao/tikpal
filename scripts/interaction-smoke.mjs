@@ -5,6 +5,7 @@ import path from "node:path";
 
 const APP_URL = process.env.TIKPAL_TEST_URL ?? "http://localhost:4173/";
 const CHROME_BIN = process.env.CHROME_BIN ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+const DEVTOOLS_PORT = Number(process.env.TIKPAL_TEST_DEVTOOLS_PORT ?? 9222);
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -17,20 +18,19 @@ async function waitForExit(child) {
   });
 }
 
-function waitForDevTools(chrome) {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("Timed out waiting for Chrome DevTools endpoint")), 10000);
-    const onData = (chunk) => {
-      const text = String(chunk);
-      const match = text.match(/DevTools listening on (ws:\/\/[^\s]+)/);
-      if (match) {
-        clearTimeout(timer);
-        chrome.stderr.off("data", onData);
-        resolve(match[1]);
+async function waitForDevTools() {
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    try {
+      const payload = await fetch(`http://127.0.0.1:${DEVTOOLS_PORT}/json/version`).then((response) => response.json());
+      if (payload.webSocketDebuggerUrl) {
+        return payload.webSocketDebuggerUrl;
       }
-    };
-    chrome.stderr.on("data", onData);
-  });
+    } catch {
+      // Chrome is still starting.
+    }
+    await wait(125);
+  }
+  throw new Error("Timed out waiting for Chrome DevTools endpoint");
 }
 
 async function getPageWebSocket(browserWsUrl) {
@@ -101,6 +101,15 @@ async function navigate(client, url) {
   await wait(750);
 }
 
+async function evaluate(client, expression) {
+  const result = await client.send("Runtime.evaluate", {
+    expression,
+    awaitPromise: true,
+    returnByValue: true
+  });
+  return result.result.value;
+}
+
 async function wheel(client, deltaY, modifiers = 0) {
   await client.send("Input.dispatchMouseEvent", {
     type: "mouseWheel",
@@ -168,7 +177,7 @@ const chrome = spawn(CHROME_BIN, [
   "--disable-gpu=false",
   "--enable-webgl",
   "--ignore-gpu-blocklist",
-  "--remote-debugging-port=0",
+  `--remote-debugging-port=${DEVTOOLS_PORT}`,
   `--user-data-dir=${profileDir}`,
   "--window-size=2560,720",
   APP_URL
@@ -176,7 +185,7 @@ const chrome = spawn(CHROME_BIN, [
 
 let client;
 try {
-  const browserWsUrl = await waitForDevTools(chrome);
+  const browserWsUrl = await waitForDevTools();
   const pageWsUrl = await getPageWebSocket(browserWsUrl);
   client = new CdpClient(pageWsUrl);
   await client.open();
@@ -220,6 +229,30 @@ try {
   await navigate(client, `${APP_URL}?mode=quickSettings`);
   await click(client, 1260, 210);
   await expect(client, "document.querySelector('.quick-settings.is-active') !== null", "protected settings click stays in settings");
+
+  await evaluate(
+    client,
+    `
+      (() => {
+        const target = [...document.querySelectorAll('.settings-card-button')].find((node) => node.textContent.includes('Restart'));
+        target?.click();
+        return Boolean(target);
+      })()
+    `
+  );
+  await expect(client, "document.querySelector('.settings-card-button.is-confirming') !== null", "restart requires a confirm step");
+
+  await evaluate(
+    client,
+    `
+      (() => {
+        const target = [...document.querySelectorAll('.settings-card')].find((node) => node.textContent.includes('Network'));
+        target?.click();
+        return Boolean(target);
+      })()
+    `
+  );
+  await expect(client, "document.querySelector('.settings-card-button.is-confirming') === null", "confirm state clears when another card is tapped");
 
   await drag(client, 1260, 500, 1260, 350);
   await expect(client, "document.querySelector('.quick-settings.is-active') === null", "protected settings swipe up exits settings");

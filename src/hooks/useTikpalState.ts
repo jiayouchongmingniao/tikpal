@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import { fetchTikpalState, sendPlaybackAction as postPlaybackAction } from "../api/tikpalClient";
+import { fetchTikpalState, sendPlaybackAction as postPlaybackAction, sendSystemAction as postSystemAction } from "../api/tikpalClient";
 import { fallbackTikpalState } from "../mockState";
-import type { PlaybackActionType, TikpalState } from "../types";
+import type { PlaybackActionType, SystemActionType, TikpalState } from "../types";
 
 export interface TikpalDataStatus {
   source: "api" | "fallback";
@@ -48,17 +48,38 @@ export function useTikpalState() {
   }, [refresh]);
 
   const sendPlaybackAction = useCallback(async (type: PlaybackActionType, value?: number) => {
-    setStatus((current) => ({ ...current, pending: true }));
+    setStatus((current) => ({ ...current, pending: true, error: null }));
     try {
       const nextState = await postPlaybackAction(type, value);
       setState(nextState);
       setStatus({ source: "api", pending: false, error: null });
+      return nextState;
     } catch (error) {
-      setStatus({
-        source: "fallback",
+      const message = error instanceof Error ? error.message : "Playback action failed";
+      setStatus((current) => ({
+        ...current,
         pending: false,
-        error: error instanceof Error ? error.message : "Playback action failed"
-      });
+        error: message
+      }));
+      throw error;
+    }
+  }, []);
+
+  const sendSystemAction = useCallback(async (type: SystemActionType) => {
+    setStatus((current) => ({ ...current, pending: true, error: null }));
+    try {
+      const nextState = await postSystemAction(type);
+      setState(nextState);
+      setStatus({ source: "api", pending: false, error: null });
+      return nextState;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "System action failed";
+      setStatus((current) => ({
+        ...current,
+        pending: false,
+        error: message
+      }));
+      throw new Error(message);
     }
   }, []);
 
@@ -66,6 +87,7 @@ export function useTikpalState() {
     state,
     status,
     refresh,
-    sendPlaybackAction
+    sendPlaybackAction,
+    sendSystemAction
   };
 }

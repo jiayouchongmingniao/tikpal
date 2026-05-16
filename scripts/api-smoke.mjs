@@ -105,12 +105,26 @@ async function run() {
     assert(volume.response.ok, "volume_set action should return 200");
     assert(volume.body.system.volume.percent === 42, "volume_set should update volume percent");
 
+    const libraryScan = await request("/api/v1/system/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "library_scan" })
+    });
+    assert(libraryScan.response.ok, "library_scan action should return 200");
+    assert(libraryScan.body.system.library.lastScan, "library_scan should return updated system state");
+
     const invalid = await request("/api/v1/playback/actions", {
       method: "POST",
       body: JSON.stringify({ type: "volume_set", value: 180 })
     });
     assert(invalid.response.status === 400, "invalid volume should return 400");
     assert(invalid.body.error === "BAD_REQUEST", "invalid action should return BAD_REQUEST");
+
+    const invalidSystemAction = await request("/api/v1/system/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "factory_reset" })
+    });
+    assert(invalidSystemAction.response.status === 400, "invalid system action should return 400");
+    assert(invalidSystemAction.body.error === "BAD_REQUEST", "invalid system action should return BAD_REQUEST");
 
     console.log("api smoke passed");
   } finally {

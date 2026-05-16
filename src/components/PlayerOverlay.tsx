@@ -8,7 +8,7 @@ interface PlayerOverlayProps {
   playback: PlaybackSummary;
   system: SystemState;
   status: TikpalDataStatus;
-  onPlaybackAction: (type: PlaybackActionType, value?: number) => Promise<void>;
+  onPlaybackAction: (type: PlaybackActionType, value?: number) => Promise<unknown>;
   onReturnAmbient: () => void;
 }
 

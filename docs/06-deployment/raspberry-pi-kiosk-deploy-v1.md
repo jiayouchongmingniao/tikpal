@@ -95,10 +95,16 @@ TIKPAL_MPD_HOST=127.0.0.1
 TIKPAL_MPD_PORT=6600
 TIKPAL_MPC_BIN=mpc
 TIKPAL_MPD_DEFAULT_QUEUE_PATH=Codex
+TIKPAL_MPD_STARTUP_VOLUME=30
+TIKPAL_SYSTEM_REBOOT_COMMAND="sudo systemctl reboot"
+TIKPAL_SYSTEM_SHUTDOWN_COMMAND="sudo systemctl poweroff"
+TIKPAL_DSP_PRESET=Unknown
 EOF
 ```
 
 `TIKPAL_MPD_DEFAULT_QUEUE_PATH=Codex` tells the backend which local library path to queue first when MPD is empty.
+`TIKPAL_MPD_STARTUP_VOLUME=30` makes Tikpal set MPD to 30% before auto-resuming playback when the API starts and playback is not already running.
+If `mpc update` is not the right library refresh command on the device, also set `TIKPAL_LIBRARY_SCAN_COMMAND`.
 
 Install and restart API + web services:
 
@@ -124,6 +130,16 @@ systemctl show tikpal-api.service -p Environment --no-pager
 mpc status
 mpc current
 curl -fsS http://127.0.0.1:8787/api/v1/playback/status
+curl -fsS http://127.0.0.1:8787/api/v1/system/status
+curl -fsS http://127.0.0.1:8787/api/v1/system/runtime
+```
+
+Verify Quick Settings actions from the API before relying on the kiosk UI:
+
+```bash
+curl -fsS -X POST http://127.0.0.1:8787/api/v1/system/actions \
+  -H 'Content-Type: application/json' \
+  -d '{"type":"library_scan"}'
 ```
 
 ## Enable Kiosk

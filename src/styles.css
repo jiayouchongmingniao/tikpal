@@ -742,6 +742,38 @@ button {
   padding: 28px;
 }
 
+.settings-card-button {
+  width: 100%;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 180ms ease,
+    background 180ms ease,
+    transform 180ms ease;
+}
+
+.settings-card-button:hover,
+.settings-card-button:focus-visible {
+  border-color: rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.085);
+  outline: none;
+}
+
+.settings-card-button.is-confirming {
+  border-color: rgba(245, 158, 11, 0.36);
+  background: rgba(245, 158, 11, 0.12);
+}
+
+.settings-card-button.is-pending {
+  border-color: rgba(34, 211, 238, 0.3);
+}
+
+.settings-card-button:disabled {
+  cursor: wait;
+}
+
 .settings-card > div:last-child {
   display: grid;
   gap: 8px;
@@ -775,6 +807,12 @@ button {
 .settings-card.tone-danger .settings-icon,
 .settings-card.tone-danger span {
   color: var(--danger);
+}
+
+.settings-card-action {
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 15px;
+  font-style: normal;
 }
 
 .quick-menu {

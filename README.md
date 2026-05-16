@@ -142,6 +142,6 @@ The first implementation milestone should deliver:
 
 ## Repository Status
 
-Batch 3 local API bridge is implemented in mock mode: the frontend reads Tikpal state from `/api/v1/system/state`, playback controls post to `/api/v1/playback/actions`, and the UI falls back gracefully when the API is unavailable. The repo now also includes the Raspberry Pi kiosk deploy package for API, web, and Chromium services.
+Batch 3 local API bridge is implemented in mock mode: the frontend reads Tikpal state from `/api/v1/system/state`, playback controls post to `/api/v1/playback/actions`, Quick Settings system cards can post to `/api/v1/system/actions`, and the UI falls back gracefully when the API is unavailable. The repo now also includes the Raspberry Pi kiosk deploy package for API, web, and Chromium services.
 
-The real moOde / MPD adapter is still the next backend step. The current API shape is intended to be the stable contract for that adapter.
+The real moOde / MPD adapter is still the next backend step. The current API shape is intended to be the stable contract for that adapter, with `mock` and `mpc` sharing the same browser-facing state contract.

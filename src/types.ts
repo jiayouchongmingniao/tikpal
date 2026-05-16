@@ -90,8 +90,13 @@ export interface TikpalState {
 }
 
 export type PlaybackActionType = "play_pause" | "play" | "pause" | "next" | "previous" | "seek" | "favorite_toggle" | "volume_set";
+export type SystemActionType = "library_scan" | "reboot" | "shutdown";
 
 export interface PlaybackActionRequest {
   type: PlaybackActionType;
   value?: number;
+}
+
+export interface SystemActionRequest {
+  type: SystemActionType;
 }

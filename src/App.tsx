@@ -30,7 +30,7 @@ function readInitialMode(): AppMode {
 export default function App() {
   const [now, setNow] = useState(() => new Date());
   const { mode, hudVisible, idleTotalMs, idleRemainingMs, toggleHud, changeMode, returnAmbient, resetIdleTimer } = useAppMode(readInitialMode());
-  const { state: tikpalState, status: tikpalStatus, sendPlaybackAction } = useTikpalState();
+  const { state: tikpalState, status: tikpalStatus, sendPlaybackAction, sendSystemAction } = useTikpalState();
 
   useBrowserKioskGuard();
 
@@ -77,6 +77,7 @@ export default function App() {
         system={tikpalState.system}
         runtime={tikpalState.runtime}
         status={tikpalStatus}
+        onSystemAction={sendSystemAction}
         onReturnAmbient={returnAmbient}
       />
       <QuickMenu active={mode === "quickMenu"} onChoose={changeMode} onClose={returnAmbient} />
