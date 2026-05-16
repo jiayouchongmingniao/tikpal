@@ -3,6 +3,7 @@ import { Check, Disc3, Heart, ListMusic, LoaderCircle, Minus, Pause, Play, Plus,
 import { formatDuration, formatSampleRate } from "../mockState";
 import { buildGeneratedCoverArtUrl } from "../coverArt";
 import type { TikpalDataStatus } from "../hooks/useTikpalState";
+import { useOverlayReturnGesture } from "../hooks/useOverlayReturnGesture";
 import type { AudioState, PlaybackActionType, PlaybackSummary, RadioStationSummary, SourceSummary, SourceSwitchTarget, SystemState, TikpalState } from "../types";
 
 interface PlayerOverlayProps {
@@ -54,17 +55,24 @@ export function PlayerOverlay({
   onSourceSwitch,
   onReturnAmbient
 }: PlayerOverlayProps) {
+  const overlayReturnGesture = useOverlayReturnGesture(onReturnAmbient);
   const [sourcePanelOpen, setSourcePanelOpen] = useState(false);
+  const [queuePanelOpen, setQueuePanelOpen] = useState(false);
   const [pendingSource, setPendingSource] = useState<SourceSwitchTarget | null>(null);
   const [pendingRadioStationId, setPendingRadioStationId] = useState<string | null>(null);
   const [sourceError, setSourceError] = useState<string | null>(null);
   const [sourceHint, setSourceHint] = useState<string | null>(null);
+  const [seekDraftSeconds, setSeekDraftSeconds] = useState<number | null>(null);
+  const [seekPendingSeconds, setSeekPendingSeconds] = useState<number | null>(null);
+  const [seekError, setSeekError] = useState<string | null>(null);
   const title = playback.title ?? "Not Playing";
   const artist = playback.artist ?? "Unknown Artist";
   const album = playback.album ?? "No Album";
   const elapsedSeconds = playback.elapsedSeconds ?? 0;
   const durationSeconds = playback.durationSeconds ?? 0;
-  const progress = durationSeconds > 0 ? Math.min(1, elapsedSeconds / durationSeconds) : 0;
+  const seekSupported = playback.source === "mpd" && durationSeconds > 0;
+  const displayedElapsedSeconds = seekDraftSeconds ?? seekPendingSeconds ?? elapsedSeconds;
+  const progress = durationSeconds > 0 ? Math.min(1, displayedElapsedSeconds / durationSeconds) : 0;
   const isPlaying = playback.state === "playing";
   const currentSource = audio.currentSource;
   const coverLabel = album
@@ -100,12 +108,24 @@ export function PlayerOverlay({
   useEffect(() => {
     if (!active) {
       setSourcePanelOpen(false);
+      setQueuePanelOpen(false);
       setPendingSource(null);
       setPendingRadioStationId(null);
       setSourceError(null);
       setSourceHint(null);
+      setSeekDraftSeconds(null);
+      setSeekPendingSeconds(null);
+      setSeekError(null);
     }
   }, [active]);
+
+  useEffect(() => {
+    if (!seekSupported) {
+      setSeekDraftSeconds(null);
+      setSeekPendingSeconds(null);
+      setSeekError(null);
+    }
+  }, [seekSupported]);
 
   async function handleSourceSwitch(target: SourceSwitchTarget, radioStation?: RadioStationSummary) {
     if (status.pending || pendingSource) return;
@@ -135,10 +155,35 @@ export function PlayerOverlay({
     }
   }
 
+  async function commitSeek(nextSeconds: number | null) {
+    if (!seekSupported || nextSeconds === null || status.pending) {
+      setSeekDraftSeconds(null);
+      return;
+    }
+
+    const clampedSeconds = Math.max(0, Math.min(durationSeconds, Math.round(nextSeconds)));
+    setSeekDraftSeconds(null);
+    setSeekPendingSeconds(clampedSeconds);
+    setSeekError(null);
+
+    try {
+      await onPlaybackAction("seek", clampedSeconds);
+    } catch (error) {
+      setSeekError(error instanceof Error ? error.message : "Seek failed");
+    } finally {
+      setSeekPendingSeconds(null);
+    }
+  }
+
+  function handleSeekDraft(value: string) {
+    setSeekDraftSeconds(Number(value));
+    setSeekError(null);
+  }
+
   return (
     <section className={`overlay player-overlay ${active ? "is-active" : ""}`} aria-label="Player controls" aria-hidden={!active}>
       <button className="overlay-backdrop" type="button" tabIndex={active ? 0 : -1} aria-label="Return to ambient" onClick={onReturnAmbient} />
-      <div className="player-shell" role="dialog" aria-modal="true" data-gesture-protected>
+      <div className="player-shell" role="dialog" aria-modal="true" data-gesture-protected {...overlayReturnGesture}>
         <div className="cover-zone">
           <div className="cover-art">
             <img src={coverArtUrl} alt="" />
@@ -252,15 +297,47 @@ export function PlayerOverlay({
           </div>
 
           <div className="progress-row">
-            <span>{formatDuration(playback.elapsedSeconds)}</span>
-            <div className="progress-bar" aria-hidden="true">
-              <span style={{ width: `${progress * 100}%` }} />
+            <span>{formatDuration(displayedElapsedSeconds)}</span>
+            <div className={`progress-control ${seekSupported ? "is-interactive" : "is-readonly"}`}>
+              <div className="progress-bar" aria-hidden="true">
+                <span style={{ width: `${progress * 100}%` }} />
+              </div>
+              {seekSupported ? (
+                <input
+                  className="progress-slider"
+                  type="range"
+                  min={0}
+                  max={durationSeconds}
+                  step={1}
+                  value={seekDraftSeconds ?? seekPendingSeconds ?? elapsedSeconds}
+                  aria-label="Seek position"
+                  disabled={status.pending}
+                  onChange={(event) => handleSeekDraft(event.currentTarget.value)}
+                  onPointerUp={() => void commitSeek(seekDraftSeconds)}
+                  onPointerCancel={() => setSeekDraftSeconds(null)}
+                  onBlur={() => void commitSeek(seekDraftSeconds)}
+                  onKeyUp={(event) => {
+                    if (event.key === "ArrowLeft" || event.key === "ArrowRight" || event.key === "Home" || event.key === "End" || event.key === "PageUp" || event.key === "PageDown") {
+                      void commitSeek(seekDraftSeconds);
+                    }
+                  }}
+                />
+              ) : null}
             </div>
             <span>{formatDuration(playback.durationSeconds)}</span>
           </div>
+          {seekError ? <p className="player-inline-message is-error">{seekError}</p> : null}
+          {!seekError && seekPendingSeconds !== null ? <p className="player-inline-message">Seeking to {formatDuration(seekPendingSeconds)}...</p> : null}
 
           <div className="transport-row" aria-label="Playback controls">
-            <button className="icon-button" type="button" aria-label="Queue" title="Queue">
+            <button
+              className={`icon-button ${queuePanelOpen ? "is-active" : ""}`}
+              type="button"
+              aria-label="Queue"
+              title="Queue"
+              aria-expanded={queuePanelOpen}
+              onClick={() => setQueuePanelOpen((current) => !current)}
+            >
               <ListMusic size={30} />
             </button>
             <button className="icon-button" type="button" aria-label="Previous" title="Previous" disabled={status.pending} onClick={() => void onPlaybackAction("previous")}>
@@ -276,6 +353,37 @@ export function PlayerOverlay({
               <Heart size={30} fill={playback.favorite ? "currentColor" : "none"} />
             </button>
           </div>
+          {queuePanelOpen ? (
+            <section className="queue-panel" aria-label="Playback queue" data-queue-panel>
+              <div className="queue-panel-header">
+                <div>
+                  <span className="source-panel-kicker">Queue</span>
+                  <strong>{playback.queueLength > 0 ? `${playback.currentTrackIndex} / ${playback.queueLength}` : "No active queue"}</strong>
+                  <p>{playback.source === "mpd" ? "Current and upcoming library entries" : "Queue preview is only available for local library playback"}</p>
+                </div>
+              </div>
+              {playback.queuePreview.length > 0 ? (
+                <div className="queue-list">
+                  {playback.queuePreview.map((entry) => (
+                    <article className={`queue-entry ${entry.active ? "is-active" : ""}`} key={entry.id}>
+                      <span className="queue-entry-position">{String(entry.position).padStart(2, "0")}</span>
+                      <div className="queue-entry-copy">
+                        <strong>{entry.title}</strong>
+                        <p>{entry.artist} · {entry.album}</p>
+                      </div>
+                      <span className="queue-entry-duration">{formatDuration(entry.durationSeconds)}</span>
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <p className="queue-panel-empty">
+                  {playback.source === "mpd"
+                    ? "Queue preview is temporarily unavailable."
+                    : "Switch back to Library to inspect the active queue."}
+                </p>
+              )}
+            </section>
+          ) : null}
         </div>
 
         <div className="status-zone">

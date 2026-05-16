@@ -140,6 +140,36 @@ function clampPercent(value, fallback = 0) {
   return Math.max(0, Math.min(100, Math.round(numeric)));
 }
 
+function buildQueueEntrySummary({ id, position, title, artist, album, durationSeconds, active }) {
+  return {
+    id,
+    position,
+    title,
+    artist,
+    album,
+    durationSeconds,
+    active
+  };
+}
+
+function buildMockQueuePreview() {
+  const total = 13;
+  const queue = Array.from({ length: total }, (_, index) => {
+    const track = tracks[index % tracks.length];
+    return buildQueueEntrySummary({
+      id: `mock-queue-${index + 1}`,
+      position: index + 1,
+      title: track.title,
+      artist: track.artist,
+      album: track.album,
+      durationSeconds: track.durationSeconds,
+      active: index === trackIndex
+    });
+  });
+  const previewStart = Math.max(0, Math.min(queue.length - 5, trackIndex - 1));
+  return queue.slice(previewStart, previewStart + 5);
+}
+
 function buildAudioState({ activeSource, spotifyReady, spotifyActive, radioReady, radioActive, radioStations = [] }) {
   const activeRadio = radioStations.find((station) => station.active) ?? null;
   const sources = [
@@ -225,7 +255,8 @@ function getPlayback() {
       durationSeconds: null,
       currentTrackIndex: 0,
       queueLength: 0,
-      favorite: false
+      favorite: false,
+      queuePreview: []
     };
   }
 
@@ -242,7 +273,18 @@ function getPlayback() {
       durationSeconds: null,
       currentTrackIndex: 1,
       queueLength: 1,
-      favorite: false
+      favorite: false,
+      queuePreview: [
+        buildQueueEntrySummary({
+          id: activeRadio?.id ?? "radio-active",
+          position: 1,
+          title: activeRadio?.label ?? RADIO_LABEL,
+          artist: "Internet Radio",
+          album: "Radio",
+          durationSeconds: null,
+          active: true
+        })
+      ]
     };
   }
 
@@ -258,7 +300,8 @@ function getPlayback() {
     durationSeconds: track.durationSeconds,
     currentTrackIndex: trackIndex + 1,
     queueLength: 13,
-    favorite
+    favorite,
+    queuePreview: buildMockQueuePreview()
   };
 }
 
@@ -881,6 +924,39 @@ async function getMpcAudioSnapshot(currentFile) {
   });
 }
 
+async function getMpcQueuePreview(status) {
+  if (!status.queueLength) return [];
+
+  const playlistRaw = await runMpc([
+    "playlist",
+    "--format",
+    "%position%\t%title%\t%artist%\t%album%\t%time%\t%file%"
+  ], { allowFailure: true });
+
+  const queue = playlistRaw
+    .split("\n")
+    .filter(Boolean)
+    .map((line, index) => {
+      const [positionRaw, title, artist, album, duration, file] = line.split("\t");
+      const position = Number(positionRaw) + 1;
+      return buildQueueEntrySummary({
+        id: file || `mpd-queue-${position || index + 1}`,
+        position: Number.isFinite(position) ? position : index + 1,
+        title: title?.trim() || trackTitleFromFile(file) || `Track ${index + 1}`,
+        artist: artist?.trim() || "Unknown Artist",
+        album: album?.trim() || albumLabelFromFile(file),
+        durationSeconds: parseDuration(duration),
+        active: (Number.isFinite(position) ? position : index + 1) === status.currentTrackIndex
+      });
+    });
+
+  if (queue.length === 0) return [];
+
+  const activeIndex = Math.max(0, queue.findIndex((entry) => entry.active));
+  const previewStart = Math.max(0, Math.min(queue.length - 6, activeIndex - 1));
+  return queue.slice(previewStart, previewStart + 6);
+}
+
 async function getMpcSnapshot() {
   const [currentRaw, statusRaw, statsRaw] = await Promise.all([
     runMpc(["--format", "%title%\t%artist%\t%album%\t%file%\t%time%", "current"], { allowFailure: true }),
@@ -895,6 +971,7 @@ async function getMpcSnapshot() {
   const volumePercent = status.volumePercent ?? system.volume.percent;
   const nextSystem = await getMpcSystemSnapshot(statusRaw, statsRaw);
   const audio = await getMpcAudioSnapshot(file);
+  const queuePreview = await getMpcQueuePreview(status);
   const metadata = hasCurrentTrack
     ? await readMediaMetadata(file)
     : {
@@ -941,7 +1018,8 @@ async function getMpcSnapshot() {
       durationSeconds: audio.currentSource.id === "mpd" && hasCurrentTrack ? durationSeconds : null,
       currentTrackIndex: audio.currentSource.id === "mpd" ? status.currentTrackIndex : 0,
       queueLength: audio.currentSource.id === "mpd" ? status.queueLength : 0,
-      favorite
+      favorite,
+      queuePreview: audio.currentSource.id === "mpd" ? queuePreview : []
     },
     system: {
       ...nextSystem,

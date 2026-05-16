@@ -11,7 +11,54 @@ export const playback: PlaybackSummary = {
   durationSeconds: 369,
   currentTrackIndex: 1,
   queueLength: 13,
-  favorite: false
+  favorite: false,
+  queuePreview: [
+    {
+      id: "mock-queue-1",
+      position: 1,
+      title: "Get Lucky (feat. Pharrell Williams)",
+      artist: "Daft Punk",
+      album: "Random Access Memories",
+      durationSeconds: 369,
+      active: true
+    },
+    {
+      id: "mock-queue-2",
+      position: 2,
+      title: "Instant Crush",
+      artist: "Daft Punk",
+      album: "Random Access Memories",
+      durationSeconds: 337,
+      active: false
+    },
+    {
+      id: "mock-queue-3",
+      position: 3,
+      title: "Lose Yourself to Dance",
+      artist: "Daft Punk",
+      album: "Random Access Memories",
+      durationSeconds: 353,
+      active: false
+    },
+    {
+      id: "mock-queue-4",
+      position: 4,
+      title: "Get Lucky (feat. Pharrell Williams)",
+      artist: "Daft Punk",
+      album: "Random Access Memories",
+      durationSeconds: 369,
+      active: false
+    },
+    {
+      id: "mock-queue-5",
+      position: 5,
+      title: "Instant Crush",
+      artist: "Daft Punk",
+      album: "Random Access Memories",
+      durationSeconds: 337,
+      active: false
+    }
+  ]
 };
 
 export const systemState: SystemState = {

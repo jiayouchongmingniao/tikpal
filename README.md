@@ -30,6 +30,8 @@ Primary gestures:
 - Swipe up returns to the ambient flame screen.
 - Tap temporarily strengthens playback HUD information.
 - Long press opens a quick menu.
+- Left ambient zone swipe adjusts moOde volume live.
+- Right ambient zone swipe adjusts display brightness live through DDC/CI when available.
 - Inactivity returns the device to the ambient flame screen.
 
 ## Documentation
@@ -145,3 +147,14 @@ The first implementation milestone should deliver:
 The local API now exposes a first-class audio-source model for `Library`, `Spotify`, and `Radio`. The frontend reads current source summary from `/api/v1/system/state`, can inspect the full source list plus `radios` preset entries through `GET /api/v1/audio/sources`, posts source switches to `POST /api/v1/audio/source`, and still uses `/api/v1/playback/actions` plus `/api/v1/system/actions` for transport and system cards.
 
 The real moOde / MPD adapter remains the audio owner. In `mpc` mode, Tikpal keeps MPD/library control as the default path, can expose Spotify as a truthful renderer/handoff state, and now treats Radio as a preset list first: the source panel can switch directly to a `radioStationId`, while `TIKPAL_RADIO_DEFAULT_URI` stays as a fallback when moOde presets are unavailable.
+
+Quick Settings now also includes a local font preset selector, and the ambient flame screen has split live-control zones: left for volume, right for DDC/CI brightness on supported displays.
+
+## Current Gaps
+
+The repo is no longer mock-only, but a few visible pieces are still only partial:
+
+- `npm run test:interaction` is still failing at the initial `ambient root renders` check, so browser-driven regression coverage is not yet trustworthy.
+- The source model is still intentionally narrow. The UI truthfully exposes `Library`, `Spotify`, and `Radio`, but not a complete moOde source-management surface.
+- The ambient right-side brightness gesture depends on working DDC/CI on the target display. When `ddcutil` cannot read or set VCP `0x10`, Tikpal currently degrades to read-only/unavailable status instead of offering a fallback brightness path.
+- The player `Queue` button is still a placeholder entry point; there is no queue drawer or queue management surface implemented behind it yet.

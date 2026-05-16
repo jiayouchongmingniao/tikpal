@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Cpu, Database, EthernetPort, Info, Monitor, Music2, Palette, Power, RotateCcw, SlidersHorizontal, Type, Volume2 } from "lucide-react";
 import type { TikpalDataStatus } from "../hooks/useTikpalState";
+import { useOverlayReturnGesture } from "../hooks/useOverlayReturnGesture";
 import type { FontTheme, RuntimeState, SystemActionType, SystemState } from "../types";
 
 interface QuickSettingsOverlayProps {
@@ -10,15 +11,18 @@ interface QuickSettingsOverlayProps {
   status: TikpalDataStatus;
   fontTheme: FontTheme;
   onFontThemeChange: (theme: FontTheme) => void;
-  onSystemAction: (type: SystemActionType) => Promise<unknown>;
+  onSystemAction: (type: SystemActionType, value?: number) => Promise<unknown>;
   onReturnAmbient: () => void;
 }
 
 type CardTone = "cyan" | "gold" | "neutral" | "warn" | "danger";
 type ActionableCardKey = "library_scan" | "reboot" | "shutdown";
+type SettingsSectionKey = "home" | "network" | "output" | "system";
+type SettingsDetailView = "display" | "font" | null;
 
 interface BaseCard {
   key: string;
+  section: SettingsSectionKey;
   icon: typeof Database;
   title: string;
   value: string;
@@ -41,13 +45,36 @@ interface FontCard extends BaseCard {
   kind: "font";
 }
 
-type SettingsCard = ReadOnlyCard | ActionCard | FontCard;
+interface DisplayCard extends BaseCard {
+  kind: "display";
+}
+
+type SettingsCard = ReadOnlyCard | ActionCard | FontCard | DisplayCard;
 
 const fontChoices: Array<{ id: FontTheme; label: string; sample: string }> = [
   { id: "sans", label: "Modern Sans", sample: "Balanced UI default" },
   { id: "serif", label: "Editorial Serif", sample: "Warmer reading tone" },
   { id: "mono", label: "Mono Grid", sample: "Sharper technical look" }
 ];
+
+const sectionCopy: Record<SettingsSectionKey, { label: string; description: string }> = {
+  home: {
+    label: "Home",
+    description: "Overview-first controls across playback, display, and system status."
+  },
+  network: {
+    label: "Network",
+    description: "Connectivity, API sync state, and kiosk runtime reachability."
+  },
+  output: {
+    label: "Output",
+    description: "Playback output, DSP, display brightness, and local typography."
+  },
+  system: {
+    label: "System",
+    description: "Library maintenance plus guarded restart and shutdown actions."
+  }
+};
 
 export function QuickSettingsOverlay({
   active,
@@ -59,31 +86,46 @@ export function QuickSettingsOverlay({
   onSystemAction,
   onReturnAmbient
 }: QuickSettingsOverlayProps) {
+  const overlayReturnGesture = useOverlayReturnGesture(onReturnAmbient);
+  const [activeSection, setActiveSection] = useState<SettingsSectionKey>("home");
+  const [detailView, setDetailView] = useState<SettingsDetailView>(null);
   const [confirmAction, setConfirmAction] = useState<ActionableCardKey | null>(null);
   const [pendingAction, setPendingAction] = useState<ActionableCardKey | null>(null);
+  const [pendingBrightness, setPendingBrightness] = useState<number | null>(null);
   const [actionError, setActionError] = useState<Record<ActionableCardKey, string | null>>({
     library_scan: null,
     reboot: null,
     shutdown: null
   });
+  const [brightnessError, setBrightnessError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!active) {
+      setActiveSection("home");
+      setDetailView(null);
       setConfirmAction(null);
       setPendingAction(null);
+      setPendingBrightness(null);
       setActionError({
         library_scan: null,
         reboot: null,
         shutdown: null
       });
+      setBrightnessError(null);
     }
   }, [active]);
+
+  useEffect(() => {
+    setConfirmAction(null);
+    setDetailView(null);
+  }, [activeSection]);
 
   const settingsCards = useMemo<SettingsCard[]>(
     () => [
       {
         kind: "readonly",
         key: "network",
+        section: "network",
         icon: EthernetPort,
         title: "Network",
         value: system.network.label,
@@ -93,6 +135,7 @@ export function QuickSettingsOverlay({
       {
         kind: "readonly",
         key: "output",
+        section: "output",
         icon: Volume2,
         title: "Audio Output",
         value: system.outputDevice.label,
@@ -102,6 +145,7 @@ export function QuickSettingsOverlay({
       {
         kind: "readonly",
         key: "dsp",
+        section: "output",
         icon: SlidersHorizontal,
         title: "DSP",
         value: system.dspState.enabled ? "Enabled" : "Disabled",
@@ -111,6 +155,7 @@ export function QuickSettingsOverlay({
       {
         kind: "action",
         key: "library",
+        section: "system",
         icon: Database,
         title: "Library",
         value: system.library.source,
@@ -122,6 +167,7 @@ export function QuickSettingsOverlay({
       {
         kind: "font",
         key: "font",
+        section: "output",
         icon: Type,
         title: "Font",
         value: fontChoices.find((choice) => choice.id === fontTheme)?.label ?? "Modern Sans",
@@ -129,19 +175,21 @@ export function QuickSettingsOverlay({
         tone: "cyan"
       },
       {
-        kind: "readonly",
+        kind: "display",
         key: "display",
+        section: "output",
         icon: Monitor,
         title: "Display",
         value: runtime.kioskWindow,
         meta: system.display.controllable
-          ? `Renderer: ${runtime.requestedRenderer} · Brightness ${system.display.brightnessPercent}%`
-          : `Renderer: ${runtime.requestedRenderer} · Brightness unavailable`,
+          ? `Renderer: ${runtime.requestedRenderer} · Live brightness ready`
+          : `Renderer: ${runtime.requestedRenderer} · DDC/CI unavailable`,
         tone: "neutral"
       },
       {
         kind: "readonly",
         key: "system",
+        section: "network",
         icon: Info,
         title: "System",
         value: status.source === "api" ? "Tikpal API" : "Fallback",
@@ -151,6 +199,7 @@ export function QuickSettingsOverlay({
       {
         kind: "action",
         key: "restart",
+        section: "system",
         icon: RotateCcw,
         title: "Restart",
         value: "Confirm Needed",
@@ -163,6 +212,7 @@ export function QuickSettingsOverlay({
       {
         kind: "action",
         key: "shutdown",
+        section: "system",
         icon: Power,
         title: "Shutdown",
         value: "Confirm Needed",
@@ -175,6 +225,31 @@ export function QuickSettingsOverlay({
     ],
     [fontTheme, runtime.kioskWindow, runtime.requestedRenderer, status.error, status.source, system.cpuTemp, system.display.brightnessPercent, system.display.controllable, system.dspState.enabled, system.dspState.preset, system.library.scanning, system.library.source, system.library.trackCount, system.network.ip, system.network.label, system.network.speed, system.outputDevice.detail, system.outputDevice.label, system.uptime]
   );
+
+  const visibleCards = useMemo(() => {
+    if (activeSection === "home") {
+      return settingsCards.filter((card) => ["network", "output", "display", "library", "system", "font"].includes(card.key));
+    }
+    return settingsCards.filter((card) => card.section === activeSection);
+  }, [activeSection, settingsCards]);
+
+  async function handleBrightnessAdjust(nextPercent: number) {
+    if (pendingAction || pendingBrightness !== null || !system.display.controllable) return;
+    const clampedPercent = Math.max(0, Math.min(100, Math.round(nextPercent)));
+    if (clampedPercent === system.display.brightnessPercent) return;
+
+    setBrightnessError(null);
+    setPendingBrightness(clampedPercent);
+
+    try {
+      await onSystemAction("brightness_set", clampedPercent);
+      setBrightnessError(null);
+    } catch (error) {
+      setBrightnessError(error instanceof Error ? error.message : "Brightness update failed");
+    } finally {
+      setPendingBrightness(null);
+    }
+  }
 
   async function handleAction(card: ActionCard) {
     if (pendingAction) return;
@@ -212,104 +287,242 @@ export function QuickSettingsOverlay({
 
   function handleReturnAmbient() {
     setConfirmAction(null);
+    setDetailView(null);
     onReturnAmbient();
+  }
+
+  function openDetail(nextDetail: Exclude<SettingsDetailView, null>) {
+    setDetailView(nextDetail);
+    setConfirmAction(null);
+  }
+
+  function renderFontDetail() {
+    return (
+      <section className="settings-detail-panel" aria-label="Font detail" data-settings-detail="font">
+        <div className="settings-detail-header">
+          <button className="settings-detail-back" type="button" onClick={() => setDetailView(null)}>
+            Back
+          </button>
+          <div>
+            <span>Output</span>
+            <strong>Font Presets</strong>
+            <p>Choose the kiosk typography without expanding the overview dashboard.</p>
+          </div>
+        </div>
+
+        <div className="font-theme-options font-theme-options-detail" role="group" aria-label="Font theme">
+          {fontChoices.map((choice) => (
+            <button
+              key={choice.id}
+              className={`font-theme-option ${fontTheme === choice.id ? "is-active" : ""}`}
+              type="button"
+              onClick={() => onFontThemeChange(choice.id)}
+            >
+              <strong>{choice.label}</strong>
+              <span>{choice.sample}</span>
+            </button>
+          ))}
+        </div>
+      </section>
+    );
+  }
+
+  function renderDisplayDetail() {
+    const brightnessPercent = pendingBrightness ?? system.display.brightnessPercent;
+    const brightnessBusy = pendingBrightness !== null;
+    const brightnessDisabled = !system.display.controllable || pendingAction !== null || brightnessBusy;
+    const quickLevels = [25, 50, 75, 100];
+
+    return (
+      <section className="settings-detail-panel" aria-label="Display detail" data-settings-detail="display">
+        <div className="settings-detail-header">
+          <button className="settings-detail-back" type="button" onClick={() => setDetailView(null)}>
+            Back
+          </button>
+          <div>
+            <span>Output</span>
+            <strong>Display Brightness</strong>
+            <p>{brightnessError ?? (system.display.controllable ? "Live display brightness control" : "Brightness control unavailable on this display")}</p>
+          </div>
+        </div>
+
+        <div className="display-brightness-panel display-brightness-panel-detail">
+          <div className="display-brightness-header">
+            <strong>{brightnessPercent}% Brightness</strong>
+            <em>{system.display.transport === "ddcci" ? "DDC/CI" : system.display.transport}</em>
+          </div>
+          <div className="display-brightness-bar" aria-hidden="true">
+            <span style={{ width: `${brightnessPercent}%` }} />
+          </div>
+          <div className="display-brightness-controls" role="group" aria-label="Display brightness controls">
+            <button
+              className="display-brightness-step"
+              type="button"
+              disabled={brightnessDisabled || brightnessPercent <= 0}
+              onClick={() => void handleBrightnessAdjust(brightnessPercent - 10)}
+            >
+              Dim -10
+            </button>
+            <button
+              className="display-brightness-step"
+              type="button"
+              disabled={brightnessDisabled || brightnessPercent >= 100}
+              onClick={() => void handleBrightnessAdjust(brightnessPercent + 10)}
+            >
+              Boost +10
+            </button>
+          </div>
+          <div className="display-brightness-presets" role="group" aria-label="Display brightness presets">
+            {quickLevels.map((level) => (
+              <button
+                key={level}
+                className={`display-brightness-preset ${brightnessPercent === level ? "is-active" : ""}`}
+                type="button"
+                disabled={brightnessDisabled}
+                onClick={() => void handleBrightnessAdjust(level)}
+              >
+                {level}%
+              </button>
+            ))}
+          </div>
+          <em className="settings-card-action">
+            {system.display.controllable
+              ? brightnessBusy
+                ? `Applying ${brightnessPercent}%...`
+                : "Dedicated display control panel"
+              : "This display does not expose DDC/CI brightness control"}
+          </em>
+        </div>
+      </section>
+    );
   }
 
   return (
     <section className={`overlay quick-settings ${active ? "is-active" : ""}`} aria-label="Quick settings" aria-hidden={!active}>
       <button className="overlay-backdrop" type="button" tabIndex={active ? 0 : -1} aria-label="Return to ambient" onClick={handleReturnAmbient} />
-      <div className="settings-shell" role="dialog" aria-modal="true" data-gesture-protected>
+      <div className="settings-shell" role="dialog" aria-modal="true" data-gesture-protected {...overlayReturnGesture}>
         <aside className="settings-nav" aria-label="Settings sections">
-          <button className="settings-nav-item is-active" type="button">
+          <button className={`settings-nav-item ${activeSection === "home" ? "is-active" : ""}`} type="button" onClick={() => setActiveSection("home")}>
             <Music2 size={24} />
             <span>Home</span>
           </button>
-          <button className="settings-nav-item" type="button">
+          <button className={`settings-nav-item ${activeSection === "network" ? "is-active" : ""}`} type="button" onClick={() => setActiveSection("network")}>
             <EthernetPort size={24} />
             <span>Network</span>
           </button>
-          <button className="settings-nav-item" type="button">
+          <button className={`settings-nav-item ${activeSection === "output" ? "is-active" : ""}`} type="button" onClick={() => setActiveSection("output")}>
             <Volume2 size={24} />
             <span>Output</span>
           </button>
-          <button className="settings-nav-item" type="button">
+          <button className={`settings-nav-item ${activeSection === "system" ? "is-active" : ""}`} type="button" onClick={() => setActiveSection("system")}>
             <Cpu size={24} />
             <span>System</span>
           </button>
         </aside>
 
-        <div className="settings-grid">
-          {settingsCards.map((card) => {
-            const Icon = card.icon;
+        <div className="settings-content">
+          <header className="settings-section-header">
+            <span>{sectionCopy[activeSection].label}</span>
+            <strong>{sectionCopy[activeSection].description}</strong>
+          </header>
 
-            if (card.kind === "readonly") {
+          {detailView === "display"
+            ? renderDisplayDetail()
+            : detailView === "font"
+              ? renderFontDetail()
+              : (
+          <div className="settings-grid" data-settings-section={activeSection}>
+            {visibleCards.map((card) => {
+              const Icon = card.icon;
+
+              if (card.kind === "readonly") {
+                return (
+                  <article className={`settings-card tone-${card.tone}`} key={card.key}>
+                    <div className="settings-icon">
+                      <Icon size={32} />
+                    </div>
+                    <div>
+                      <span>{card.title}</span>
+                      <strong>{card.value}</strong>
+                      <p>{card.meta}</p>
+                    </div>
+                  </article>
+                );
+              }
+
+              if (card.kind === "font") {
+                return (
+                  <button
+                    className={`settings-card settings-card-button settings-card-summary settings-card-font tone-${card.tone}`}
+                    key={card.key}
+                    type="button"
+                    onClick={() => openDetail("font")}
+                  >
+                    <div className="settings-icon">
+                      <Palette size={32} />
+                    </div>
+                    <div>
+                      <span>{card.title}</span>
+                      <strong>{card.value}</strong>
+                      <p>{card.meta}</p>
+                      <em className="settings-card-action">Open font presets</em>
+                    </div>
+                  </button>
+                );
+              }
+
+              if (card.kind === "display") {
+                return (
+                  <button
+                    className={`settings-card settings-card-button settings-card-summary settings-card-display tone-${card.tone}`}
+                    key={card.key}
+                    type="button"
+                    onClick={() => openDetail("display")}
+                  >
+                    <div className="settings-icon">
+                      <Icon size={32} />
+                    </div>
+                    <div>
+                      <span>{card.title}</span>
+                      <strong>{card.value}</strong>
+                      <p>{card.meta}</p>
+                      <em className="settings-card-action">
+                        {system.display.controllable
+                          ? `${system.display.brightnessPercent}% brightness`
+                          : "Open display status"}
+                      </em>
+                    </div>
+                  </button>
+                );
+              }
+
+              const isConfirming = confirmAction === card.actionType;
+              const isPending = pendingAction === card.actionType;
+              const error = actionError[card.actionType];
+              const disabled = status.pending || pendingAction !== null;
+
               return (
-                <article className={`settings-card tone-${card.tone}`} key={card.key}>
+                <button
+                  className={`settings-card settings-card-button tone-${card.tone} ${isConfirming ? "is-confirming" : ""} ${isPending ? "is-pending" : ""}`}
+                  key={card.key}
+                  type="button"
+                  disabled={disabled}
+                  onClick={() => void handleAction(card)}
+                >
                   <div className="settings-icon">
                     <Icon size={32} />
                   </div>
                   <div>
                     <span>{card.title}</span>
                     <strong>{card.value}</strong>
-                    <p>{card.meta}</p>
+                    <p>{error ?? (isConfirming ? card.confirmLabel : card.meta)}</p>
+                    <em className="settings-card-action">{isPending ? "Working..." : card.buttonLabel}</em>
                   </div>
-                </article>
+                </button>
               );
-            }
-
-            if (card.kind === "font") {
-              return (
-                <article className={`settings-card settings-card-font tone-${card.tone}`} key={card.key}>
-                  <div className="settings-icon">
-                    <Palette size={32} />
-                  </div>
-                  <div>
-                    <span>{card.title}</span>
-                    <strong>{card.value}</strong>
-                    <p>{card.meta}</p>
-                    <div className="font-theme-options" role="group" aria-label="Font theme">
-                      {fontChoices.map((choice) => (
-                        <button
-                          key={choice.id}
-                          className={`font-theme-option ${fontTheme === choice.id ? "is-active" : ""}`}
-                          type="button"
-                          onClick={() => onFontThemeChange(choice.id)}
-                        >
-                          <strong>{choice.label}</strong>
-                          <span>{choice.sample}</span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                </article>
-              );
-            }
-
-            const isConfirming = confirmAction === card.actionType;
-            const isPending = pendingAction === card.actionType;
-            const error = actionError[card.actionType];
-            const disabled = status.pending || pendingAction !== null;
-
-            return (
-              <button
-                className={`settings-card settings-card-button tone-${card.tone} ${isConfirming ? "is-confirming" : ""} ${isPending ? "is-pending" : ""}`}
-                key={card.key}
-                type="button"
-                disabled={disabled}
-                onClick={() => void handleAction(card)}
-              >
-                <div className="settings-icon">
-                  <Icon size={32} />
-                </div>
-                <div>
-                  <span>{card.title}</span>
-                  <strong>{card.value}</strong>
-                  <p>{error ?? (isConfirming ? card.confirmLabel : card.meta)}</p>
-                  <em className="settings-card-action">{isPending ? "Working..." : card.buttonLabel}</em>
-                </div>
-              </button>
-            );
-          })}
+            })}
+          </div>
+              )}
         </div>
       </div>
     </section>

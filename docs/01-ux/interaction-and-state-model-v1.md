@@ -26,6 +26,8 @@ type AppMode = "ambient" | "player" | "quickSettings" | "quickMenu";
 | Swipe up | Player or quick settings | Return to ambient, including swipes that start inside the overlay panel. |
 | Tap | Ambient | Toggle the weak playback HUD. When shown, the HUD auto-hides after 5 seconds. |
 | Long press | Ambient | Open quick menu. |
+| Vertical drag in left ambient zone | Ambient | Live volume adjustment against moOde volume state. |
+| Vertical drag in right ambient zone | Ambient | Live display brightness adjustment through DDC/CI when available. |
 | Horizontal swipe | Ambient | Optional v2 ambience switch. |
 
 ## Gesture Thresholds
@@ -82,6 +84,9 @@ stateDiagram-v2
 
 - Tap does not open controls; it only toggles the weak playback HUD.
 - Startup should show the HUD briefly, then let the flame scene return to a quieter default after 5 seconds.
+- The left edge band is reserved for live volume drag and should not fall through to the generic one-finger swipe-down player gesture.
+- The right edge band is reserved for live brightness drag and should not fall through to the generic one-finger swipe-down player gesture.
+- If DDC/CI brightness is unavailable on the target display, the right-side control zone should show unavailable feedback instead of behaving like a normal ambient gesture lane.
 - Horizontal swipe is reserved for ambience mode switching after MVP.
 - The weak top-right settings entry should be visible enough to discover but not visually compete with the flame scene.
 

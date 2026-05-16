@@ -34,6 +34,11 @@ interface PlaybackSummary {
 
 interface SystemState {
   network: NetworkState;
+  display: {
+    brightnessPercent: number;
+    controllable: boolean;
+    transport: "ddcci" | "mock" | "unavailable";
+  };
   outputDevice: OutputDeviceState;
   volume: VolumeState;
   audioFormat: AudioFormatState;
@@ -59,6 +64,7 @@ Exact wire shapes should be finalized during implementation, but these concepts 
 | Output device | Player status card, quick settings | USB, I2S, HDMI, DAC name, volume mode. |
 | Playback source / renderer | Player top state, source panel | MPD, AirPlay, Spotify, Bluetooth, RoonBridge, UPnP, radio. |
 | Network | Player status, quick settings | Ethernet/Wi-Fi, IP, connection state. |
+| Display brightness | Ambient edge gesture, quick settings display card | DDC/CI brightness percent when the monitor exposes VCP `0x10`. |
 | DSP / CamillaDSP | Player status, quick settings | ON/OFF, preset. |
 | Library scan | Quick settings | Update/rescan status and progress. |
 | System info | Quick settings | Version, uptime, CPU temperature, storage. |
@@ -94,6 +100,7 @@ Allowed:
 - Transport actions.
 - Progress seek when supported.
 - Volume adjustment.
+- Live ambient edge controls for volume and brightness when the target hardware supports them.
 - Queue entry.
 - Source status entry.
 - Audio/output/network/DSP cards.
@@ -177,8 +184,9 @@ Current Batch 3 mock API contract:
 | `/api/v1/system/runtime` | `GET` | Kiosk/runtime summary. |
 | `/api/v1/audio/source` | `POST` | Source switch action with truthful `available`, `waiting`, or `unavailable` semantics. |
 | `/api/v1/playback/actions` | `POST` | Playback actions: `play_pause`, `play`, `pause`, `next`, `previous`, `seek`, `favorite_toggle`, and `volume_set`. |
+| `/api/v1/system/actions` | `POST` | System actions including `library_scan`, `reboot`, `shutdown`, and `brightness_set`. |
 
-The mock API preserves the frontend contract while the real moOde / MPD adapter is still pending, and the `mpc` runtime now uses the same API shape for a first-pass source panel. Spotify is treated as a renderer/handoff path rather than a fake full client, while Radio is modeled as a preset list first, with `radioStationId` direct switching and a default stream URI only as fallback.
+The mock API preserves the frontend contract while the real moOde / MPD adapter is still pending, and the `mpc` runtime now uses the same API shape for a first-pass source panel. Spotify is treated as a renderer/handoff path rather than a fake full client, while Radio is modeled as a preset list first, with `radioStationId` direct switching and a default stream URI only as fallback. The same local system surface now also carries display brightness state so the ambient right-edge gesture can talk to DDC/CI through the Node service instead of the browser pretending to own the monitor.
 
 ## Errors and Fallbacks
 
@@ -190,6 +198,7 @@ The mock API preserves the frontend contract while the real moOde / MPD adapter 
 | Network offline | Show weak ambient warning and highlighted network card. |
 | Library scanning | Show progress but do not block playback. |
 | System overheated | Show warning state and non-blocking prompt. |
+| DDC/CI brightness unavailable | Keep the right ambient control lane non-destructive and show unavailable feedback instead of silently acting like a generic ambient swipe. |
 
 ## Non-Goals
 

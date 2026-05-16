@@ -89,6 +89,7 @@ Batch 3 implementation note:
 - Frontend reads `/api/v1/system/state` and posts playback actions to `/api/v1/playback/actions`.
 - API unavailable state falls back to bundled data and is visible in the UI.
 - Real MPD/moOde adapter wiring remains required before this slice is fully device-accepted.
+- The current repo has moved beyond this note: `mpc` mode is live on the Pi, radio presets are wired into the source panel, and ambient edge gestures now issue live `volume_set` updates against the same API contract.
 
 ### Slice 6: Quick Settings
 
@@ -101,6 +102,11 @@ Acceptance:
 - Network, output, DSP, library, display, and system cards render from backend or mock state.
 - Reboot and shutdown cannot run on first tap.
 - Dangerous confirmation is visually distinct.
+
+Current status note:
+
+- Quick Settings is implemented as an overview-first card grid with live backend/system state, reboot/shutdown confirmation, and a local font selector.
+- Display brightness is reflected in system state and can now be adjusted both from the ambient right-edge gesture and from an in-panel Quick Settings control surface on DDC/CI-capable hardware.
 
 ### Slice 7: Pi4 Kiosk Package
 
@@ -160,6 +166,7 @@ Batch 4 deployment note:
 - Output state displays correctly.
 - DSP state displays correctly.
 - Library update entry is available.
+- Display brightness state is visible.
 - Reboot and shutdown require confirmation.
 - Settings cannot accidentally trigger dangerous operations.
 
@@ -180,7 +187,17 @@ Batch 4 deployment note:
 | Two-finger gesture is hard to discover. | Add weak gear and long-press quick menu fallback. |
 | moOde data is inconsistent across sources. | Normalize source state and label passive renderers as status, not guaranteed switch actions. |
 | Dangerous system actions are triggered accidentally. | Require explicit confirmation and separate dangerous actions visually. |
+| Ambient live-control zones conflict with shell gestures. | Reserve protected left/right ambient edge bands so volume and brightness drags do not fall through to generic swipe-down navigation. |
+| DDC/CI behavior differs across displays. | Treat brightness as capability-detected state, parse monitor-specific `ddcutil` output carefully, and degrade to unavailable feedback instead of issuing blind writes. |
 | Physical screen geometry is wrong. | Validate Chromium window size, xrandr output, and actual viewport on-device. |
+
+## Visible Gaps
+
+These gaps are obvious from the current repo state and should be treated as follow-up work rather than assumed complete:
+
+- `npm run test:interaction` is still failing at `ambient root renders`, so end-to-end browser interaction regression coverage is not yet landed.
+- The player `Queue` button is still only a placeholder affordance; no queue drawer or queue management UI exists behind it yet.
+- The source model is intentionally incomplete relative to full moOde. `Library`, `Spotify`, and `Radio` are surfaced, but broader renderer/source administration is still outside the frontstage contract.
 
 ## Documentation Completeness Check
 

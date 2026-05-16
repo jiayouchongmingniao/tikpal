@@ -96,6 +96,8 @@ TIKPAL_MPD_PORT=6600
 TIKPAL_MPC_BIN=mpc
 TIKPAL_MPD_DEFAULT_QUEUE_PATH=Codex
 TIKPAL_MPD_STARTUP_VOLUME=30
+TIKPAL_DDCUTIL_BIN=ddcutil
+TIKPAL_DDCUTIL_DISPLAY=""
 TIKPAL_SPOTIFY_READY_COMMAND=""
 TIKPAL_SPOTIFY_ACTIVE_COMMAND=""
 TIKPAL_SPOTIFY_ACTIVATE_COMMAND=""
@@ -110,6 +112,7 @@ EOF
 
 `TIKPAL_MPD_DEFAULT_QUEUE_PATH=Codex` tells the backend which local library path to queue first when MPD is empty.
 `TIKPAL_MPD_STARTUP_VOLUME=30` makes Tikpal set MPD to 30% before auto-resuming playback when the API starts and playback is not already running.
+`TIKPAL_DDCUTIL_BIN` and optional `TIKPAL_DDCUTIL_DISPLAY` control the ambient right-edge brightness gesture path when the display exposes DDC/CI VCP `0x10`.
 `TIKPAL_SPOTIFY_*` lets the Pi expose Spotify Connect as a truthful ready/active handoff target without using Spotify Web API.
 moOde `cfg_radio` presets are now the primary Radio source list for the source panel, and `POST /api/v1/audio/source` can switch directly by `radioStationId`.
 `TIKPAL_RADIO_PRESET_LIMIT` caps how many moOde radio presets Tikpal reads into the panel.
@@ -150,6 +153,16 @@ Verify Quick Settings actions from the API before relying on the kiosk UI:
 curl -fsS -X POST http://127.0.0.1:8787/api/v1/system/actions \
   -H 'Content-Type: application/json' \
   -d '{"type":"library_scan"}'
+```
+
+If ambient brightness gestures should work on the target display, also verify the DDC/CI path explicitly:
+
+```bash
+ddcutil getvcp 10 --brief
+curl -fsS http://127.0.0.1:8787/api/v1/system/status
+curl -fsS -X POST http://127.0.0.1:8787/api/v1/system/actions \
+  -H 'Content-Type: application/json' \
+  -d '{"type":"brightness_set","value":80}'
 ```
 
 ## Enable Kiosk

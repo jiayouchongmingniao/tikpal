@@ -108,6 +108,17 @@ export interface PlaybackSummary {
   currentTrackIndex: number;
   queueLength: number;
   favorite: boolean;
+  queuePreview: QueueEntrySummary[];
+}
+
+export interface QueueEntrySummary {
+  id: string;
+  position: number;
+  title: string;
+  artist: string;
+  album: string;
+  durationSeconds: number | null;
+  active: boolean;
 }
 
 export interface RuntimeState {
