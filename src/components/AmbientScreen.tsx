@@ -1,20 +1,22 @@
 import { Settings } from "lucide-react";
 import { FlameScene } from "./FlameScene";
+import { buildGeneratedCoverArtUrl } from "../coverArt";
 import { formatDuration, formatSampleRate } from "../mockState";
 import type { TikpalDataStatus } from "../hooks/useTikpalState";
-import type { PlaybackSummary, SystemState } from "../types";
+import type { AudioState, PlaybackSummary, SystemState } from "../types";
 
 interface AmbientScreenProps {
   hudVisible: boolean;
   timeLabel: string;
   dateLabel: string;
   playback: PlaybackSummary;
+  audio: AudioState;
   system: SystemState;
   status: TikpalDataStatus;
   onOpenSettings: () => void;
 }
 
-export function AmbientScreen({ hudVisible, timeLabel, dateLabel, playback, system, status, onOpenSettings }: AmbientScreenProps) {
+export function AmbientScreen({ hudVisible, timeLabel, dateLabel, playback, audio, system, status, onOpenSettings }: AmbientScreenProps) {
   const title = playback.title ?? "Not Playing";
   const artist = playback.artist ?? "Unknown Artist";
   const album = playback.album ?? "No Album";
@@ -27,6 +29,7 @@ export function AmbientScreen({ hudVisible, timeLabel, dateLabel, playback, syst
     .join("")
     .slice(0, 3)
     .toUpperCase();
+  const coverArtUrl = playback.albumArtUrl ?? buildGeneratedCoverArtUrl(title, artist, album);
 
   return (
     <section className={`ambient-screen ${hudVisible ? "is-hud-visible" : "is-hud-hidden"}`} aria-label="Ambient flame screen">
@@ -44,7 +47,8 @@ export function AmbientScreen({ hudVisible, timeLabel, dateLabel, playback, syst
 
       <div className="ambient-hud" aria-label="Current playback">
         <div className="ambient-cover" aria-hidden="true">
-          {playback.albumArtUrl ? <img src={playback.albumArtUrl} alt="" /> : <span>{coverLabel}</span>}
+          <img src={coverArtUrl} alt="" />
+          {!playback.albumArtUrl ? <span>{coverLabel}</span> : null}
         </div>
         <div className="ambient-track">
           <strong>{title}</strong>
@@ -52,6 +56,7 @@ export function AmbientScreen({ hudVisible, timeLabel, dateLabel, playback, syst
         </div>
         <div className="ambient-status">
           <span className={`data-pill ${status.source === "api" ? "is-live" : "is-fallback"}`}>{status.pending ? "Syncing" : status.source === "api" ? "API" : "Fallback"}</span>
+          <span>{audio.currentSource.label}</span>
           <span>{formatDuration(playback.elapsedSeconds)}</span>
           <span>{system.audioFormat.codec} {system.bitDepth}bit / {formatSampleRate(system.sampleRate)}</span>
           <span>{system.outputDevice.label}</span>

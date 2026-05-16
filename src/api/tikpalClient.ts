@@ -1,4 +1,12 @@
-import type { PlaybackActionRequest, PlaybackActionType, SystemActionRequest, SystemActionType, TikpalState } from "../types";
+import type {
+  PlaybackActionRequest,
+  PlaybackActionType,
+  SourceSwitchRequest,
+  SourceSwitchTarget,
+  SystemActionRequest,
+  SystemActionType,
+  TikpalState
+} from "../types";
 
 const API_ROOT = "/api/v1";
 
@@ -42,6 +50,19 @@ export async function sendPlaybackAction(type: PlaybackActionType, value?: numbe
 export async function sendSystemAction(type: SystemActionType): Promise<TikpalState> {
   const body: SystemActionRequest = { type };
   const response = await fetch(`${API_ROOT}/system/actions`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(body)
+  });
+  return readJson<TikpalState>(response);
+}
+
+export async function sendSourceSwitch(target: SourceSwitchTarget, radioStationId?: string): Promise<TikpalState> {
+  const body: SourceSwitchRequest = { target, radioStationId };
+  const response = await fetch(`${API_ROOT}/audio/source`, {
     method: "POST",
     headers: {
       Accept: "application/json",

@@ -96,6 +96,12 @@ TIKPAL_MPD_PORT=6600
 TIKPAL_MPC_BIN=mpc
 TIKPAL_MPD_DEFAULT_QUEUE_PATH=Codex
 TIKPAL_MPD_STARTUP_VOLUME=30
+TIKPAL_SPOTIFY_READY_COMMAND=""
+TIKPAL_SPOTIFY_ACTIVE_COMMAND=""
+TIKPAL_SPOTIFY_ACTIVATE_COMMAND=""
+TIKPAL_RADIO_ACTIVATE_COMMAND=""
+TIKPAL_RADIO_DEFAULT_URI=""
+TIKPAL_RADIO_LABEL="Last Station"
 TIKPAL_SYSTEM_REBOOT_COMMAND="sudo systemctl reboot"
 TIKPAL_SYSTEM_SHUTDOWN_COMMAND="sudo systemctl poweroff"
 TIKPAL_DSP_PRESET=Unknown
@@ -104,6 +110,10 @@ EOF
 
 `TIKPAL_MPD_DEFAULT_QUEUE_PATH=Codex` tells the backend which local library path to queue first when MPD is empty.
 `TIKPAL_MPD_STARTUP_VOLUME=30` makes Tikpal set MPD to 30% before auto-resuming playback when the API starts and playback is not already running.
+`TIKPAL_SPOTIFY_*` lets the Pi expose Spotify Connect as a truthful ready/active handoff target without using Spotify Web API.
+moOde `cfg_radio` presets are now the primary Radio source list for the source panel, and `POST /api/v1/audio/source` can switch directly by `radioStationId`.
+`TIKPAL_RADIO_PRESET_LIMIT` caps how many moOde radio presets Tikpal reads into the panel.
+`TIKPAL_RADIO_DEFAULT_URI` stays as a fallback preset when moOde radio rows are unavailable, and `TIKPAL_RADIO_ACTIVATE_COMMAND` is only used when no switchable preset URI is available.
 If `mpc update` is not the right library refresh command on the device, also set `TIKPAL_LIBRARY_SCAN_COMMAND`.
 
 Install and restart API + web services:

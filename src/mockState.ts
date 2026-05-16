@@ -1,4 +1,4 @@
-import type { PlaybackSummary, SystemState, TikpalState } from "./types";
+import type { AudioState, PlaybackSummary, RadioStationSummary, SourceSummary, SystemState, TikpalState } from "./types";
 
 export const playback: PlaybackSummary = {
   state: "playing",
@@ -53,6 +53,78 @@ export const systemState: SystemState = {
   uptime: "2d 4h"
 };
 
+function buildSourceSummary(summary: SourceSummary): SourceSummary {
+  return summary;
+}
+
+function buildRadioStation(summary: RadioStationSummary): RadioStationSummary {
+  return summary;
+}
+
+export const audioState: AudioState = {
+  currentSource: buildSourceSummary({
+    id: "mpd",
+    label: "Library",
+    kind: "mpd",
+    availability: "available",
+    active: true,
+    controllability: "switchable",
+    secondaryStatus: "Local queue ready"
+  }),
+  sources: [
+    buildSourceSummary({
+      id: "mpd",
+      label: "Library",
+      kind: "mpd",
+      availability: "available",
+      active: true,
+      controllability: "switchable",
+      secondaryStatus: "Local queue ready"
+    }),
+    buildSourceSummary({
+      id: "spotify",
+      label: "Spotify",
+      kind: "spotify",
+      availability: "waiting",
+      active: false,
+      controllability: "handoff",
+      secondaryStatus: "Renderer ready"
+    }),
+    buildSourceSummary({
+      id: "radio",
+      label: "Radio",
+      kind: "radio",
+      availability: "available",
+      active: false,
+      controllability: "switchable",
+      secondaryStatus: "Resume last station"
+    })
+  ],
+  radios: [
+    buildRadioStation({
+      id: "radio-1",
+      label: "1.FM - Blues Radio",
+      uri: "http://strm112.1.fm/blues_mobile_mp3",
+      secondaryStatus: "Blues · 192 kbps MP3",
+      active: false
+    }),
+    buildRadioStation({
+      id: "radio-2",
+      label: "A.M. Ambient",
+      uri: "http://radio.stereoscenic.com/ama-h",
+      secondaryStatus: "Ambient · 256 kbps MP3",
+      active: false
+    }),
+    buildRadioStation({
+      id: "radio-3",
+      label: "6forty Radio",
+      uri: "http://radio.6forty.com:8000/6forty",
+      secondaryStatus: "Alternative · 192 kbps MP3",
+      active: false
+    })
+  ]
+};
+
 export const fallbackTikpalState: TikpalState = {
   playback,
   system: systemState,
@@ -63,7 +135,8 @@ export const fallbackTikpalState: TikpalState = {
     appVersion: "0.1.0",
     apiMode: "mock",
     updatedAt: new Date().toISOString()
-  }
+  },
+  audio: audioState
 };
 
 export function formatDuration(seconds: number | null): string {

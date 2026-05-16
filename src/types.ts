@@ -1,4 +1,5 @@
 export type AppMode = "ambient" | "player" | "quickSettings" | "quickMenu";
+export type FontTheme = "sans" | "serif" | "mono";
 
 export type PlaybackState = "playing" | "paused" | "stopped";
 
@@ -10,6 +11,34 @@ export type SourceState =
   | "roonbridge"
   | "upnp"
   | "radio";
+
+export type SourceAvailability = "available" | "waiting" | "unavailable";
+export type SourceControllability = "switchable" | "handoff" | "status-only";
+export type SourceSwitchTarget = "mpd" | "spotify" | "radio";
+
+export interface RadioStationSummary {
+  id: string;
+  label: string;
+  uri: string;
+  secondaryStatus: string;
+  active: boolean;
+}
+
+export interface SourceSummary {
+  id: SourceState;
+  label: string;
+  kind: SourceState;
+  availability: SourceAvailability;
+  active: boolean;
+  controllability: SourceControllability;
+  secondaryStatus: string;
+}
+
+export interface AudioState {
+  currentSource: SourceSummary;
+  sources: SourceSummary[];
+  radios: RadioStationSummary[];
+}
 
 export interface VolumeState {
   db: number;
@@ -87,6 +116,7 @@ export interface TikpalState {
   playback: PlaybackSummary;
   system: SystemState;
   runtime: RuntimeState;
+  audio: AudioState;
 }
 
 export type PlaybackActionType = "play_pause" | "play" | "pause" | "next" | "previous" | "seek" | "favorite_toggle" | "volume_set";
@@ -99,4 +129,9 @@ export interface PlaybackActionRequest {
 
 export interface SystemActionRequest {
   type: SystemActionType;
+}
+
+export interface SourceSwitchRequest {
+  target: SourceSwitchTarget;
+  radioStationId?: string;
 }

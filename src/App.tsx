@@ -7,7 +7,9 @@ import { useAppMode } from "./hooks/useAppMode";
 import { useBrowserKioskGuard } from "./hooks/useBrowserKioskGuard";
 import { useKioskGestures } from "./hooks/useKioskGestures";
 import { useTikpalState } from "./hooks/useTikpalState";
-import type { AppMode } from "./types";
+import type { AppMode, FontTheme } from "./types";
+
+const FONT_THEME_STORAGE_KEY = "tikpal.fontTheme";
 
 const dateFormatter = new Intl.DateTimeFormat("en-US", {
   month: "2-digit",
@@ -27,10 +29,19 @@ function readInitialMode(): AppMode {
   return "ambient";
 }
 
+function readInitialFontTheme(): FontTheme {
+  const savedTheme = window.localStorage.getItem(FONT_THEME_STORAGE_KEY);
+  if (savedTheme === "sans" || savedTheme === "serif" || savedTheme === "mono") {
+    return savedTheme;
+  }
+  return "sans";
+}
+
 export default function App() {
   const [now, setNow] = useState(() => new Date());
+  const [fontTheme, setFontTheme] = useState<FontTheme>(readInitialFontTheme);
   const { mode, hudVisible, idleTotalMs, idleRemainingMs, toggleHud, changeMode, returnAmbient, resetIdleTimer } = useAppMode(readInitialMode());
-  const { state: tikpalState, status: tikpalStatus, sendPlaybackAction, sendSystemAction } = useTikpalState();
+  const { state: tikpalState, status: tikpalStatus, sendPlaybackAction, sendSystemAction, sendSourceSwitch } = useTikpalState();
 
   useBrowserKioskGuard();
 
@@ -38,6 +49,11 @@ export default function App() {
     const interval = window.setInterval(() => setNow(new Date()), 1000);
     return () => window.clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    document.documentElement.dataset.fontTheme = fontTheme;
+    window.localStorage.setItem(FONT_THEME_STORAGE_KEY, fontTheme);
+  }, [fontTheme]);
 
   const timeLabel = useMemo(() => timeFormatter.format(now), [now]);
   const dateLabel = useMemo(() => dateFormatter.format(now), [now]);
@@ -59,6 +75,7 @@ export default function App() {
         timeLabel={timeLabel}
         dateLabel={dateLabel}
         playback={tikpalState.playback}
+        audio={tikpalState.audio}
         system={tikpalState.system}
         status={tikpalStatus}
         onOpenSettings={() => changeMode("quickSettings")}
@@ -67,9 +84,11 @@ export default function App() {
       <PlayerOverlay
         active={mode === "player"}
         playback={tikpalState.playback}
+        audio={tikpalState.audio}
         system={tikpalState.system}
         status={tikpalStatus}
         onPlaybackAction={sendPlaybackAction}
+        onSourceSwitch={sendSourceSwitch}
         onReturnAmbient={returnAmbient}
       />
       <QuickSettingsOverlay
@@ -77,6 +96,8 @@ export default function App() {
         system={tikpalState.system}
         runtime={tikpalState.runtime}
         status={tikpalStatus}
+        fontTheme={fontTheme}
+        onFontThemeChange={setFontTheme}
         onSystemAction={sendSystemAction}
         onReturnAmbient={returnAmbient}
       />

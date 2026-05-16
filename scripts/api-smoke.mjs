@@ -76,6 +76,16 @@ async function run() {
     assert(initial.response.ok, "system state should return 200");
     assert(initial.body.runtime.apiMode === "mock", "runtime should report mock API mode");
     assert(initial.body.playback.title, "playback title should be present");
+    assert(initial.body.audio.currentSource.id === "mpd", "system state should expose current audio source");
+
+    const sources = await request("/api/v1/audio/sources");
+    assert(sources.response.ok, "audio sources should return 200");
+    assert(Array.isArray(sources.body.sources) && sources.body.sources.length === 3, "audio sources should return MPD, Spotify, and Radio");
+    assert(sources.body.currentSource.id === "mpd", "audio source payload should start on MPD");
+    assert(Array.isArray(sources.body.radios) && sources.body.radios.length >= 1, "audio sources payload should include radio presets");
+
+    const artwork = await request("/api/v1/media/artwork?track=mock");
+    assert(artwork.response.status === 404, "mock artwork endpoint should return 404 when no current artwork is available");
 
     const next = await request("/api/v1/playback/actions", {
       method: "POST",
@@ -105,6 +115,31 @@ async function run() {
     assert(volume.response.ok, "volume_set action should return 200");
     assert(volume.body.system.volume.percent === 42, "volume_set should update volume percent");
 
+    const spotify = await request("/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({ target: "spotify" })
+    });
+    assert(spotify.response.ok, "spotify source switch should return 200");
+    assert(spotify.body.audio.currentSource.id === "spotify", "spotify switch should activate spotify in mock mode");
+    assert(spotify.body.playback.source === "spotify", "playback source should follow spotify switch");
+
+    const radio = await request("/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({ target: "radio", radioStationId: "radio-2" })
+    });
+    assert(radio.response.ok, "radio source switch should return 200");
+    assert(radio.body.audio.currentSource.id === "radio", "radio switch should activate radio in mock mode");
+    assert(radio.body.playback.source === "radio", "playback source should follow radio switch");
+    assert(radio.body.audio.radios.some((station) => station.id === "radio-2" && station.active), "radio switch should activate the requested preset");
+    assert(radio.body.playback.title === "A.M. Ambient", "radio switch should surface the active preset label");
+
+    const mpd = await request("/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({ target: "mpd" })
+    });
+    assert(mpd.response.ok, "mpd source switch should return 200");
+    assert(mpd.body.audio.currentSource.id === "mpd", "mpd switch should return to library in mock mode");
+
     const libraryScan = await request("/api/v1/system/actions", {
       method: "POST",
       body: JSON.stringify({ type: "library_scan" })
@@ -125,6 +160,20 @@ async function run() {
     });
     assert(invalidSystemAction.response.status === 400, "invalid system action should return 400");
     assert(invalidSystemAction.body.error === "BAD_REQUEST", "invalid system action should return BAD_REQUEST");
+
+    const invalidSource = await request("/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({ target: "bluetooth" })
+    });
+    assert(invalidSource.response.status === 400, "invalid source should return 400");
+    assert(invalidSource.body.error === "BAD_REQUEST", "invalid source should return BAD_REQUEST");
+
+    const invalidRadioStation = await request("/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({ target: "radio", radioStationId: "radio-missing" })
+    });
+    assert(invalidRadioStation.response.status === 400, "unknown radio station should return 400");
+    assert(invalidRadioStation.body.error === "BAD_REQUEST", "unknown radio station should return BAD_REQUEST");
 
     console.log("api smoke passed");
   } finally {

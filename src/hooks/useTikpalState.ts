@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
-import { fetchTikpalState, sendPlaybackAction as postPlaybackAction, sendSystemAction as postSystemAction } from "../api/tikpalClient";
+import {
+  fetchTikpalState,
+  sendPlaybackAction as postPlaybackAction,
+  sendSourceSwitch as postSourceSwitch,
+  sendSystemAction as postSystemAction
+} from "../api/tikpalClient";
 import { fallbackTikpalState } from "../mockState";
-import type { PlaybackActionType, SystemActionType, TikpalState } from "../types";
+import type { PlaybackActionType, SourceSwitchTarget, SystemActionType, TikpalState } from "../types";
 
 export interface TikpalDataStatus {
   source: "api" | "fallback";
@@ -83,11 +88,30 @@ export function useTikpalState() {
     }
   }, []);
 
+  const sendSourceSwitch = useCallback(async (target: SourceSwitchTarget, radioStationId?: string) => {
+    setStatus((current) => ({ ...current, pending: true, error: null }));
+    try {
+      const nextState = await postSourceSwitch(target, radioStationId);
+      setState(nextState);
+      setStatus({ source: "api", pending: false, error: null });
+      return nextState;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Source switch failed";
+      setStatus((current) => ({
+        ...current,
+        pending: false,
+        error: message
+      }));
+      throw new Error(message);
+    }
+  }, []);
+
   return {
     state,
     status,
     refresh,
     sendPlaybackAction,
-    sendSystemAction
+    sendSystemAction,
+    sendSourceSwitch
   };
 }

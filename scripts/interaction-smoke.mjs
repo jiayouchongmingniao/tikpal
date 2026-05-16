@@ -215,6 +215,18 @@ try {
   await click(client, 1360, 600);
   await expect(client, "document.querySelector('.player-overlay.is-active') !== null", "protected player click stays in player");
 
+  await evaluate(
+    client,
+    `
+      (() => {
+        const target = document.querySelector('[data-source-panel-toggle]');
+        target?.click();
+        return Boolean(target);
+      })()
+    `
+  );
+  await expect(client, "document.querySelector('[data-source-panel]') !== null", "player source panel opens");
+
   await drag(client, 1360, 600, 1360, 470);
   await expect(client, "document.querySelector('.player-overlay.is-active') === null", "protected player swipe up exits player");
 

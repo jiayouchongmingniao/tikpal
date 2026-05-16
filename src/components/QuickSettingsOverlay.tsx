@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
-import { Cpu, Database, EthernetPort, Info, Monitor, Music2, Power, RotateCcw, SlidersHorizontal, Volume2 } from "lucide-react";
+import { Cpu, Database, EthernetPort, Info, Monitor, Music2, Palette, Power, RotateCcw, SlidersHorizontal, Type, Volume2 } from "lucide-react";
 import type { TikpalDataStatus } from "../hooks/useTikpalState";
-import type { RuntimeState, SystemActionType, SystemState } from "../types";
+import type { FontTheme, RuntimeState, SystemActionType, SystemState } from "../types";
 
 interface QuickSettingsOverlayProps {
   active: boolean;
   system: SystemState;
   runtime: RuntimeState;
   status: TikpalDataStatus;
+  fontTheme: FontTheme;
+  onFontThemeChange: (theme: FontTheme) => void;
   onSystemAction: (type: SystemActionType) => Promise<unknown>;
   onReturnAmbient: () => void;
 }
@@ -35,9 +37,28 @@ interface ActionCard extends BaseCard {
   confirmLabel?: string;
 }
 
-type SettingsCard = ReadOnlyCard | ActionCard;
+interface FontCard extends BaseCard {
+  kind: "font";
+}
 
-export function QuickSettingsOverlay({ active, system, runtime, status, onSystemAction, onReturnAmbient }: QuickSettingsOverlayProps) {
+type SettingsCard = ReadOnlyCard | ActionCard | FontCard;
+
+const fontChoices: Array<{ id: FontTheme; label: string; sample: string }> = [
+  { id: "sans", label: "Modern Sans", sample: "Balanced UI default" },
+  { id: "serif", label: "Editorial Serif", sample: "Warmer reading tone" },
+  { id: "mono", label: "Mono Grid", sample: "Sharper technical look" }
+];
+
+export function QuickSettingsOverlay({
+  active,
+  system,
+  runtime,
+  status,
+  fontTheme,
+  onFontThemeChange,
+  onSystemAction,
+  onReturnAmbient
+}: QuickSettingsOverlayProps) {
   const [confirmAction, setConfirmAction] = useState<ActionableCardKey | null>(null);
   const [pendingAction, setPendingAction] = useState<ActionableCardKey | null>(null);
   const [actionError, setActionError] = useState<Record<ActionableCardKey, string | null>>({
@@ -99,6 +120,15 @@ export function QuickSettingsOverlay({ active, system, runtime, status, onSystem
         buttonLabel: system.library.scanning ? "Scanning..." : "Scan library"
       },
       {
+        kind: "font",
+        key: "font",
+        icon: Type,
+        title: "Font",
+        value: fontChoices.find((choice) => choice.id === fontTheme)?.label ?? "Modern Sans",
+        meta: "Choose the kiosk typography",
+        tone: "cyan"
+      },
+      {
         kind: "readonly",
         key: "display",
         icon: Monitor,
@@ -141,7 +171,7 @@ export function QuickSettingsOverlay({ active, system, runtime, status, onSystem
         confirmLabel: "Tap again to power off"
       }
     ],
-    [runtime.kioskWindow, runtime.requestedRenderer, status.error, status.source, system.cpuTemp, system.dspState.enabled, system.dspState.preset, system.library.scanning, system.library.source, system.library.trackCount, system.network.ip, system.network.label, system.network.speed, system.outputDevice.detail, system.outputDevice.label, system.uptime]
+    [fontTheme, runtime.kioskWindow, runtime.requestedRenderer, status.error, status.source, system.cpuTemp, system.dspState.enabled, system.dspState.preset, system.library.scanning, system.library.source, system.library.trackCount, system.network.ip, system.network.label, system.network.speed, system.outputDevice.detail, system.outputDevice.label, system.uptime]
   );
 
   async function handleAction(card: ActionCard) {
@@ -220,6 +250,34 @@ export function QuickSettingsOverlay({ active, system, runtime, status, onSystem
                     <span>{card.title}</span>
                     <strong>{card.value}</strong>
                     <p>{card.meta}</p>
+                  </div>
+                </article>
+              );
+            }
+
+            if (card.kind === "font") {
+              return (
+                <article className={`settings-card settings-card-font tone-${card.tone}`} key={card.key}>
+                  <div className="settings-icon">
+                    <Palette size={32} />
+                  </div>
+                  <div>
+                    <span>{card.title}</span>
+                    <strong>{card.value}</strong>
+                    <p>{card.meta}</p>
+                    <div className="font-theme-options" role="group" aria-label="Font theme">
+                      {fontChoices.map((choice) => (
+                        <button
+                          key={choice.id}
+                          className={`font-theme-option ${fontTheme === choice.id ? "is-active" : ""}`}
+                          type="button"
+                          onClick={() => onFontThemeChange(choice.id)}
+                        >
+                          <strong>{choice.label}</strong>
+                          <span>{choice.sample}</span>
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 </article>
               );

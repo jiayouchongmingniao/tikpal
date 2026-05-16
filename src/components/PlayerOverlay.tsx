@@ -1,32 +1,79 @@
-import { Heart, ListMusic, Minus, Pause, Play, Plus, SkipBack, SkipForward, Volume2 } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Check, Disc3, Heart, ListMusic, LoaderCircle, Minus, Pause, Play, Plus, Radio, SkipBack, SkipForward, Volume2 } from "lucide-react";
 import { formatDuration, formatSampleRate } from "../mockState";
+import { buildGeneratedCoverArtUrl } from "../coverArt";
 import type { TikpalDataStatus } from "../hooks/useTikpalState";
-import type { PlaybackActionType, PlaybackSummary, SystemState } from "../types";
+import type { AudioState, PlaybackActionType, PlaybackSummary, RadioStationSummary, SourceSummary, SourceSwitchTarget, SystemState, TikpalState } from "../types";
 
 interface PlayerOverlayProps {
   active: boolean;
   playback: PlaybackSummary;
+  audio: AudioState;
   system: SystemState;
   status: TikpalDataStatus;
-  onPlaybackAction: (type: PlaybackActionType, value?: number) => Promise<unknown>;
+  onPlaybackAction: (type: PlaybackActionType, value?: number) => Promise<TikpalState>;
+  onSourceSwitch: (target: SourceSwitchTarget, radioStationId?: string) => Promise<TikpalState>;
   onReturnAmbient: () => void;
 }
 
-export function PlayerOverlay({ active, playback, system, status, onPlaybackAction, onReturnAmbient }: PlayerOverlayProps) {
+const sourceTargets: SourceSwitchTarget[] = ["mpd", "spotify", "radio"];
+
+function sourceActionLabel(source: SourceSummary) {
+  if (source.active) return "Active";
+  if (source.availability === "unavailable") return "Unavailable";
+  if (source.controllability === "handoff") return "Connect";
+  return "Switch";
+}
+
+function sourceIcon(source: SourceSummary) {
+  switch (source.id) {
+    case "spotify":
+      return Disc3;
+    case "radio":
+      return Radio;
+    default:
+      return ListMusic;
+  }
+}
+
+function findSource(audio: AudioState, target: SourceSwitchTarget) {
+  return audio.sources.find((source): source is SourceSummary & { id: SourceSwitchTarget } => source.id === target);
+}
+
+function activeRadio(audio: AudioState) {
+  return audio.radios.find((radio) => radio.active) ?? null;
+}
+
+export function PlayerOverlay({
+  active,
+  playback,
+  audio,
+  system,
+  status,
+  onPlaybackAction,
+  onSourceSwitch,
+  onReturnAmbient
+}: PlayerOverlayProps) {
+  const [sourcePanelOpen, setSourcePanelOpen] = useState(false);
+  const [pendingSource, setPendingSource] = useState<SourceSwitchTarget | null>(null);
+  const [pendingRadioStationId, setPendingRadioStationId] = useState<string | null>(null);
+  const [sourceError, setSourceError] = useState<string | null>(null);
+  const [sourceHint, setSourceHint] = useState<string | null>(null);
   const title = playback.title ?? "Not Playing";
   const artist = playback.artist ?? "Unknown Artist";
   const album = playback.album ?? "No Album";
   const elapsedSeconds = playback.elapsedSeconds ?? 0;
   const durationSeconds = playback.durationSeconds ?? 0;
   const progress = durationSeconds > 0 ? Math.min(1, elapsedSeconds / durationSeconds) : 0;
-  const sourceLabel = playback.source.toUpperCase();
   const isPlaying = playback.state === "playing";
+  const currentSource = audio.currentSource;
   const coverLabel = album
     .split(/\s+/)
     .map((word) => word[0])
     .join("")
     .slice(0, 3)
     .toUpperCase();
+  const coverArtUrl = playback.albumArtUrl ?? buildGeneratedCoverArtUrl(title, artist, album);
   const statusCards = [
     {
       label: "AUDIO",
@@ -50,27 +97,64 @@ export function PlayerOverlay({ active, playback, system, status, onPlaybackActi
     }
   ];
 
+  useEffect(() => {
+    if (!active) {
+      setSourcePanelOpen(false);
+      setPendingSource(null);
+      setPendingRadioStationId(null);
+      setSourceError(null);
+      setSourceHint(null);
+    }
+  }, [active]);
+
+  async function handleSourceSwitch(target: SourceSwitchTarget, radioStation?: RadioStationSummary) {
+    if (status.pending || pendingSource) return;
+    setPendingSource(target);
+    setPendingRadioStationId(radioStation?.id ?? null);
+    setSourceError(null);
+    setSourceHint(null);
+    try {
+      const nextState = await onSourceSwitch(target, radioStation?.id);
+      const nextSource = findSource(nextState.audio, target);
+
+      if (target === "spotify" && nextSource?.availability === "waiting" && !nextSource.active) {
+        setSourceHint("Spotify Connect is ready on this device. Start playback from the Spotify app to hand off audio.");
+      } else if (target === "spotify" && nextSource?.active) {
+        setSourceHint("Spotify is now the active source on this device.");
+      } else if (target === "radio" && nextSource?.active) {
+        const nextRadio = activeRadio(nextState.audio);
+        setSourceHint(`Radio switched to ${nextRadio?.label ?? nextSource.label}.`);
+      } else if (target === "mpd" && nextSource?.active) {
+        setSourceHint("Returned to the local library playback path.");
+      }
+    } catch (error) {
+      setSourceError(error instanceof Error ? error.message : "Source switch failed");
+    } finally {
+      setPendingSource(null);
+      setPendingRadioStationId(null);
+    }
+  }
+
   return (
     <section className={`overlay player-overlay ${active ? "is-active" : ""}`} aria-label="Player controls" aria-hidden={!active}>
       <button className="overlay-backdrop" type="button" tabIndex={active ? 0 : -1} aria-label="Return to ambient" onClick={onReturnAmbient} />
       <div className="player-shell" role="dialog" aria-modal="true" data-gesture-protected>
         <div className="cover-zone">
           <div className="cover-art">
-            {playback.albumArtUrl ? (
-              <img src={playback.albumArtUrl} alt="" />
-            ) : (
+            <img src={coverArtUrl} alt="" />
+            {!playback.albumArtUrl ? (
               <>
                 <div className="helmet-shine" />
                 <span>{coverLabel}</span>
               </>
-            )}
+            ) : null}
           </div>
         </div>
 
         <div className="playback-zone">
           <div className="source-line">
-            <span>{sourceLabel} {playback.state}</span>
-            <span>{system.library.source}</span>
+            <span>{currentSource.label} {playback.state}</span>
+            <span>{currentSource.secondaryStatus}</span>
             <span>{status.pending ? "Syncing" : status.source === "api" ? "API Confirmed" : "Fallback Data"}</span>
           </div>
 
@@ -79,6 +163,92 @@ export function PlayerOverlay({ active, playback, system, status, onPlaybackActi
             <p className="artist">{artist}</p>
             <p>{album}</p>
             <p>{playback.currentTrackIndex} of {playback.queueLength}</p>
+          </div>
+
+          <div className={`source-panel ${sourcePanelOpen ? "is-open" : ""}`}>
+            <div className="source-panel-header">
+              <div>
+                <span className="source-panel-kicker">Source</span>
+                <strong>{currentSource.label}</strong>
+                <p>{currentSource.secondaryStatus}</p>
+              </div>
+              <button
+                className="source-panel-toggle"
+                type="button"
+                aria-expanded={sourcePanelOpen}
+                data-source-panel-toggle
+                onClick={() => setSourcePanelOpen((current) => !current)}
+              >
+                {sourcePanelOpen ? "Hide" : "Show"} Sources
+              </button>
+            </div>
+
+            {sourcePanelOpen ? (
+              <div className="source-options" data-source-panel>
+                {audio.sources
+                  .filter((source): source is SourceSummary & { id: SourceSwitchTarget } => sourceTargets.includes(source.id as SourceSwitchTarget))
+                  .map((source) => {
+                    const Icon = sourceIcon(source);
+                    const isPending = pendingSource === source.id;
+                    const disabled = status.pending || pendingSource !== null || source.availability === "unavailable";
+                    const sourceRadios = source.id === "radio" ? audio.radios : [];
+
+                    return (
+                      <div className={`source-item-wrap ${source.id === "radio" ? "has-radio-list" : ""}`} key={source.id}>
+                        <button
+                          className={`source-item ${source.active ? "is-active" : ""} source-${source.availability}`}
+                          type="button"
+                          data-source-item={source.id}
+                          disabled={disabled}
+                          onClick={() => void handleSourceSwitch(source.id)}
+                        >
+                          <div className="source-item-icon">
+                            <Icon size={20} />
+                          </div>
+                          <div className="source-item-copy">
+                            <div className="source-item-title-row">
+                              <strong>{source.label}</strong>
+                              <span>{sourceActionLabel(source)}</span>
+                            </div>
+                            <p>{isPending ? "Switching source..." : source.secondaryStatus}</p>
+                          </div>
+                          <div className="source-item-state" aria-hidden="true">
+                            {isPending ? <LoaderCircle size={18} className="is-spinning" /> : source.active ? <Check size={18} /> : null}
+                          </div>
+                        </button>
+
+                        {source.id === "radio" && sourceRadios.length > 0 ? (
+                          <div className="radio-station-list">
+                            {sourceRadios.map((station) => {
+                              const stationPending = pendingRadioStationId === station.id;
+                              return (
+                                <button
+                                  className={`radio-station-item ${station.active ? "is-active" : ""}`}
+                                  key={station.id}
+                                  type="button"
+                                  disabled={status.pending || pendingSource !== null}
+                                  onClick={() => void handleSourceSwitch("radio", station)}
+                                >
+                                  <div className="radio-station-copy">
+                                    <strong>{station.label}</strong>
+                                    <p>{stationPending ? "Switching station..." : station.secondaryStatus}</p>
+                                  </div>
+                                  <div className="radio-station-state" aria-hidden="true">
+                                    {stationPending ? <LoaderCircle size={16} className="is-spinning" /> : station.active ? <Check size={16} /> : null}
+                                  </div>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+              </div>
+            ) : null}
+
+            {sourceError ? <p className="source-panel-error">{sourceError}</p> : null}
+            {!sourceError && sourceHint ? <p className="source-panel-hint">{sourceHint}</p> : null}
           </div>
 
           <div className="progress-row">

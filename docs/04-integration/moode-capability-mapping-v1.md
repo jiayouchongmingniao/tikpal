@@ -171,12 +171,14 @@ Current Batch 3 mock API contract:
 | --- | --- | --- |
 | `/api/v1/health` | `GET` | Local API health and mode. |
 | `/api/v1/system/state` | `GET` | Combined playback, system, and runtime state for the UI. |
+| `/api/v1/audio/sources` | `GET` | Source list plus current source summary for `mpd`, `spotify`, and `radio`, including `radios` preset entries for direct station switching. |
 | `/api/v1/playback/status` | `GET` | Playback summary only. |
 | `/api/v1/system/status` | `GET` | System summary only. |
 | `/api/v1/system/runtime` | `GET` | Kiosk/runtime summary. |
+| `/api/v1/audio/source` | `POST` | Source switch action with truthful `available`, `waiting`, or `unavailable` semantics. |
 | `/api/v1/playback/actions` | `POST` | Playback actions: `play_pause`, `play`, `pause`, `next`, `previous`, `seek`, `favorite_toggle`, and `volume_set`. |
 
-The mock API preserves the frontend contract while the real moOde / MPD adapter is still pending.
+The mock API preserves the frontend contract while the real moOde / MPD adapter is still pending, and the `mpc` runtime now uses the same API shape for a first-pass source panel. Spotify is treated as a renderer/handoff path rather than a fake full client, while Radio is modeled as a preset list first, with `radioStationId` direct switching and a default stream URI only as fallback.
 
 ## Errors and Fallbacks
 
