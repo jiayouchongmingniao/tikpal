@@ -15,7 +15,7 @@ interface GestureOptions {
   onOpenSettings: () => void;
   onOpenMenu: () => void;
   onReturnAmbient: () => void;
-  onBoostHud: () => void;
+  onToggleHud: () => void;
   onActivity: () => void;
 }
 
@@ -167,7 +167,7 @@ export function useKioskGestures(options: GestureOptions): GestureHandlers & { g
         } else if (pointers.length === 1 && primaryDeltaY > ONE_FINGER_DOWN_THRESHOLD) {
           options.onOpenPlayer();
         } else if (pointers.length === 1 && distance <= TAP_MAX_DISTANCE) {
-          options.onBoostHud();
+          options.onToggleHud();
         }
       } else if (primaryDeltaY < SWIPE_UP_THRESHOLD || (!pointer.protectedStart && distance <= TAP_MAX_DISTANCE)) {
         options.onReturnAmbient();

@@ -24,7 +24,7 @@ type AppMode = "ambient" | "player" | "quickSettings" | "quickMenu";
 | One-finger swipe down | Ambient | Open player overlay. |
 | Two-finger swipe down | Ambient | Open quick settings overlay. |
 | Swipe up | Player or quick settings | Return to ambient, including swipes that start inside the overlay panel. |
-| Tap | Ambient | Strengthen playback HUD for 3 seconds. |
+| Tap | Ambient | Toggle the weak playback HUD. When shown, the HUD auto-hides after 5 seconds. |
 | Long press | Ambient | Open quick menu. |
 | Horizontal swipe | Ambient | Optional v2 ambience switch. |
 
@@ -35,7 +35,8 @@ type AppMode = "ambient" | "player" | "quickSettings" | "quickMenu";
 | One-finger swipe down | 80-120px vertical travel. |
 | Two-finger swipe down | 120-160px vertical travel. |
 | Long press | 800-1000ms. |
-| Tap HUD boost | 3000ms visible duration. |
+| Ambient HUD default dwell | 5000ms from startup before auto-hide. |
+| Tap-shown HUD dwell | 5000ms before auto-hide. |
 | Player inactivity timeout | 15s. |
 | Quick settings inactivity timeout | 30s. |
 | Dangerous confirmation timeout | No auto-close, or extend to 60s. |
@@ -67,7 +68,7 @@ stateDiagram-v2
   ambient --> player: one-finger swipe down
   ambient --> quickSettings: two-finger swipe down
   ambient --> quickMenu: long press
-  ambient --> ambient: tap / HUD boost
+  ambient --> ambient: tap / HUD show-hide
   player --> ambient: swipe up / blank tap / 15s idle
   quickSettings --> ambient: swipe up / 30s idle
   quickMenu --> player: choose player
@@ -79,7 +80,8 @@ stateDiagram-v2
 
 ### Ambient
 
-- Tap does not open controls; it only strengthens the HUD temporarily.
+- Tap does not open controls; it only toggles the weak playback HUD.
+- Startup should show the HUD briefly, then let the flame scene return to a quieter default after 5 seconds.
 - Horizontal swipe is reserved for ambience mode switching after MVP.
 - The weak top-right settings entry should be visible enough to discover but not visually compete with the flame scene.
 

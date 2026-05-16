@@ -15,6 +15,7 @@ fi
 
 : "${TIKPAL_KIOSK_URL:=http://localhost:4173/}"
 : "${TIKPAL_KIOSK_WINDOW:=2560x720}"
+: "${TIKPAL_KIOSK_WINDOW_POSITION:=0,0}"
 : "${TIKPAL_KIOSK_DISPLAY:=:0}"
 : "${TIKPAL_KIOSK_XRANDR_MODE:=2560x720}"
 : "${TIKPAL_KIOSK_XRANDR_OUTPUT:=}"
@@ -35,6 +36,20 @@ fail() {
   log "ERROR: $*"
   exit 1
 }
+
+normalize_chromium_window_size() {
+  local value
+  value="$(printf '%s' "$1" | tr -d '[:space:]')"
+
+  if [[ "$value" =~ ^([0-9]+)[xX,]([0-9]+)$ ]]; then
+    printf '%s,%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+    return
+  fi
+
+  fail "Invalid TIKPAL_KIOSK_WINDOW '$1'; expected WIDTHxHEIGHT or WIDTH,HEIGHT"
+}
+
+CHROMIUM_WINDOW_SIZE="$(normalize_chromium_window_size "$TIKPAL_KIOSK_WINDOW")"
 
 read_flags() {
   local flags=()
@@ -93,6 +108,8 @@ check_runtime() {
   log "env file: $ENV_FILE"
   log "kiosk url: $TIKPAL_KIOSK_URL"
   log "window: $TIKPAL_KIOSK_WINDOW"
+  log "chromium window: $CHROMIUM_WINDOW_SIZE"
+  log "window position: $TIKPAL_KIOSK_WINDOW_POSITION"
   log "display: $TIKPAL_KIOSK_DISPLAY"
   log "chromium: $TIKPAL_CHROMIUM_BIN"
   log "profile: $TIKPAL_CHROMIUM_PROFILE_DIR"
@@ -146,7 +163,9 @@ ARGS=(
   "--kiosk"
   "$TIKPAL_KIOSK_URL"
   "--user-data-dir=$TIKPAL_CHROMIUM_PROFILE_DIR"
-  "--window-size=$TIKPAL_KIOSK_WINDOW"
+  "--start-fullscreen"
+  "--window-position=$TIKPAL_KIOSK_WINDOW_POSITION"
+  "--window-size=$CHROMIUM_WINDOW_SIZE"
 )
 
 if [[ "$TIKPAL_CHROMIUM_COLOR_SCHEME" == "dark" ]]; then

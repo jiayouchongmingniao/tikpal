@@ -5,7 +5,7 @@ import type { TikpalDataStatus } from "../hooks/useTikpalState";
 import type { PlaybackSummary, SystemState } from "../types";
 
 interface AmbientScreenProps {
-  boosted: boolean;
+  hudVisible: boolean;
   timeLabel: string;
   dateLabel: string;
   playback: PlaybackSummary;
@@ -14,7 +14,7 @@ interface AmbientScreenProps {
   onOpenSettings: () => void;
 }
 
-export function AmbientScreen({ boosted, timeLabel, dateLabel, playback, system, status, onOpenSettings }: AmbientScreenProps) {
+export function AmbientScreen({ hudVisible, timeLabel, dateLabel, playback, system, status, onOpenSettings }: AmbientScreenProps) {
   const title = playback.title ?? "Not Playing";
   const artist = playback.artist ?? "Unknown Artist";
   const album = playback.album ?? "No Album";
@@ -29,7 +29,7 @@ export function AmbientScreen({ boosted, timeLabel, dateLabel, playback, system,
     .toUpperCase();
 
   return (
-    <section className={`ambient-screen ${boosted ? "is-boosted" : ""}`} aria-label="Ambient flame screen">
+    <section className={`ambient-screen ${hudVisible ? "is-hud-visible" : "is-hud-hidden"}`} aria-label="Ambient flame screen">
       <FlameScene />
       <div className="ambient-vignette" />
 

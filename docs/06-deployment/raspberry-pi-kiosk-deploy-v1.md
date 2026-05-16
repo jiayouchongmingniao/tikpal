@@ -86,6 +86,20 @@ nano .env.kiosk
 deploy/chromium/launch-tikpal-kiosk.sh --check
 ```
 
+If the Pi should control real moOde playback instead of the local mock bridge, create `.env` with native MPD settings before restarting the API service:
+
+```bash
+cat > .env <<'EOF'
+TIKPAL_PLAYER_BACKEND=mpc
+TIKPAL_MPD_HOST=127.0.0.1
+TIKPAL_MPD_PORT=6600
+TIKPAL_MPC_BIN=mpc
+TIKPAL_MPD_DEFAULT_QUEUE_PATH=Codex
+EOF
+```
+
+`TIKPAL_MPD_DEFAULT_QUEUE_PATH=Codex` tells the backend which local library path to queue first when MPD is empty.
+
 Install and restart API + web services:
 
 ```bash
@@ -101,6 +115,15 @@ Verify:
 systemctl is-active tikpal-api.service tikpal-web.service
 curl -fsS http://127.0.0.1:8787/api/v1/health
 curl -fsSI http://127.0.0.1:4173/
+```
+
+When `TIKPAL_PLAYER_BACKEND=mpc` is active, also verify the real device path:
+
+```bash
+systemctl show tikpal-api.service -p Environment --no-pager
+mpc status
+mpc current
+curl -fsS http://127.0.0.1:8787/api/v1/playback/status
 ```
 
 ## Enable Kiosk
@@ -132,6 +155,14 @@ journalctl -u tikpal-kiosk.service -n 80 --no-pager
 ps -ef | grep '[c]hrom'
 xrandr --query
 ```
+
+The effective Chromium command line should include these window flags:
+
+```text
+--start-fullscreen --window-position=0,0 --window-size=2560,720
+```
+
+The launcher accepts `TIKPAL_KIOSK_WINDOW=2560x720` in `.env.kiosk`, but normalizes it to Chromium's `2560,720` format during launch.
 
 ## Rollback
 

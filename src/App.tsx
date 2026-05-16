@@ -29,7 +29,7 @@ function readInitialMode(): AppMode {
 
 export default function App() {
   const [now, setNow] = useState(() => new Date());
-  const { mode, hudBoosted, idleTotalMs, idleRemainingMs, boostHud, changeMode, returnAmbient, resetIdleTimer } = useAppMode(readInitialMode());
+  const { mode, hudVisible, idleTotalMs, idleRemainingMs, toggleHud, changeMode, returnAmbient, resetIdleTimer } = useAppMode(readInitialMode());
   const { state: tikpalState, status: tikpalStatus, sendPlaybackAction } = useTikpalState();
 
   useBrowserKioskGuard();
@@ -48,14 +48,14 @@ export default function App() {
     onOpenSettings: () => changeMode("quickSettings"),
     onOpenMenu: () => changeMode("quickMenu"),
     onReturnAmbient: returnAmbient,
-    onBoostHud: boostHud,
+    onToggleHud: toggleHud,
     onActivity: () => resetIdleTimer(mode)
   });
 
   return (
     <main className="app-root" {...gestureHandlers}>
       <AmbientScreen
-        boosted={hudBoosted}
+        hudVisible={hudVisible}
         timeLabel={timeLabel}
         dateLabel={dateLabel}
         playback={tikpalState.playback}

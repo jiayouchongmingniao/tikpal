@@ -79,7 +79,7 @@ export interface RuntimeState {
   requestedRenderer: "webgl";
   kioskWindow: "2560x720";
   appVersion: string;
-  apiMode: "mock";
+  apiMode: "mock" | "mpc";
   updatedAt: string;
 }
 

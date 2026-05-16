@@ -81,7 +81,33 @@ button {
   overflow: hidden;
 }
 
+.flame-scene {
+  overflow: hidden;
+  background: #110604;
+}
+
+.fireplace-backdrop {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  filter: brightness(1.08) saturate(1.18) contrast(1.02) sepia(0.08);
+  object-fit: cover;
+  object-position: center center;
+  pointer-events: none;
+  user-select: none;
+}
+
+.flame-particle-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
 .flame-scene canvas {
+  position: absolute;
+  inset: 0;
   display: block;
   width: 100%;
   height: 100%;
@@ -93,74 +119,104 @@ button {
 }
 
 .flame-fallback {
-  position: relative;
-  width: 78vw;
-  max-width: 1900px;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  max-width: none;
   height: 100%;
   overflow: hidden;
-  opacity: 0.92;
+  opacity: 0.72;
   filter: blur(0.2px);
+  background:
+    radial-gradient(circle at 50% 84%, rgba(255, 118, 38, 0.3), transparent 0 12%, transparent 32%),
+    radial-gradient(circle at 45% 66%, rgba(220, 94, 34, 0.14), transparent 0 20%, transparent 42%);
+}
+
+.flame-fallback::before,
+.flame-fallback::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 11%;
+  width: min(54vw, 1220px);
+  height: 7vh;
+  border-radius: 999px;
+  background:
+    radial-gradient(circle at 46% 56%, rgba(255, 111, 28, 0.38), transparent 0 10%, transparent 18%),
+    linear-gradient(180deg, rgba(74, 26, 10, 0.42), rgba(10, 3, 2, 0.38) 62%, rgba(1, 1, 1, 0.28));
+  box-shadow:
+    inset 0 1.8vh 2.4vh rgba(0, 0, 0, 0.72),
+    0 2.2vh 6vh rgba(0, 0, 0, 0.72),
+    0 -1.2vh 7vh rgba(255, 94, 18, 0.26);
+}
+
+.flame-fallback::before {
+  transform: translateX(-55%) rotate(7deg);
+}
+
+.flame-fallback::after {
+  transform: translateX(-43%) translateY(-2vh) rotate(-13deg);
 }
 
 .flame-fallback span {
   position: absolute;
-  bottom: 7%;
-  width: 34%;
-  height: 76%;
+  bottom: 16%;
+  width: 11%;
+  height: 28%;
   border-radius: 50% 50% 46% 46%;
   background:
-    radial-gradient(circle at 50% 78%, rgba(255, 213, 93, 0.88), transparent 0 17%, transparent 30%),
-    radial-gradient(circle at 50% 60%, rgba(241, 93, 23, 0.72), transparent 0 28%, transparent 54%),
-    radial-gradient(circle at 48% 34%, rgba(115, 27, 6, 0.58), transparent 0 38%, transparent 72%);
+    radial-gradient(circle at 50% 78%, rgba(255, 198, 72, 0.52), transparent 0 14%, transparent 30%),
+    radial-gradient(circle at 50% 60%, rgba(224, 74, 18, 0.42), transparent 0 26%, transparent 54%),
+    radial-gradient(circle at 48% 34%, rgba(83, 22, 7, 0.36), transparent 0 38%, transparent 72%);
   mix-blend-mode: screen;
-  opacity: 0.62;
+  opacity: 0.36;
   transform-origin: 50% 100%;
   animation: fallbackFlame 4.5s ease-in-out infinite alternate;
 }
 
 .flame-fallback span:nth-child(1) {
-  left: 16%;
+  left: 39%;
   transform: scaleX(0.7) rotate(-9deg);
 }
 
 .flame-fallback span:nth-child(2) {
-  left: 31%;
+  left: 46%;
   animation-delay: -1.3s;
   transform: scaleX(0.9) rotate(4deg);
 }
 
 .flame-fallback span:nth-child(3) {
-  left: 48%;
+  left: 54%;
   animation-delay: -2.1s;
   transform: scaleX(0.78) rotate(8deg);
 }
 
 .flame-fallback span:nth-child(4) {
-  left: 62%;
+  left: 61%;
   animation-delay: -3s;
   transform: scaleX(0.58) rotate(-6deg);
 }
 
 @keyframes fallbackFlame {
   from {
-    translate: 0 8px;
+    translate: 0 4px;
     scale: 1 0.92;
-    opacity: 0.44;
+    opacity: 0.22;
   }
 
   to {
-    translate: 0 -18px;
-    scale: 1.08 1.08;
-    opacity: 0.78;
+    translate: 0 -8px;
+    scale: 1.04 1.06;
+    opacity: 0.46;
   }
 }
 
 .ambient-vignette {
   pointer-events: none;
   background:
-    radial-gradient(circle at 50% 61%, transparent 0 24%, rgba(0, 0, 0, 0.14) 45%, rgba(0, 0, 0, 0.72) 100%),
-    linear-gradient(90deg, rgba(0, 0, 0, 0.62), transparent 26%, transparent 72%, rgba(0, 0, 0, 0.62)),
-    linear-gradient(180deg, rgba(0, 0, 0, 0.55), transparent 26%, rgba(0, 0, 0, 0.72));
+    radial-gradient(circle at 50% 68%, rgba(255, 118, 28, 0.12) 0 18%, rgba(35, 10, 2, 0.1) 44%, rgba(0, 0, 0, 0.52) 100%),
+    linear-gradient(90deg, rgba(0, 0, 0, 0.5), transparent 24%, transparent 74%, rgba(0, 0, 0, 0.48)),
+    linear-gradient(180deg, rgba(0, 0, 0, 0.44), transparent 28%, rgba(36, 9, 2, 0.5));
 }
 
 .icon-button,
@@ -249,16 +305,22 @@ button {
   background: rgba(0, 0, 0, 0.28);
   box-shadow: 0 24px 90px rgba(0, 0, 0, 0.45);
   opacity: 0.66;
+  pointer-events: none;
   transition:
     opacity 260ms ease,
     background 260ms ease,
     transform 260ms ease;
 }
 
-.ambient-screen.is-boosted .ambient-hud {
-  opacity: 1;
-  background: rgba(0, 0, 0, 0.42);
+.ambient-screen.is-hud-visible .ambient-hud {
+  opacity: 0.92;
+  background: rgba(0, 0, 0, 0.38);
   transform: translateY(-2px);
+}
+
+.ambient-screen.is-hud-hidden .ambient-hud {
+  opacity: 0;
+  transform: translateY(18px);
 }
 
 .ambient-cover {

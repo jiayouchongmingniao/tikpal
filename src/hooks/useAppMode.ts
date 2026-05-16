@@ -3,7 +3,7 @@ import type { AppMode } from "../types";
 
 const PLAYER_IDLE_MS = 15000;
 const SETTINGS_IDLE_MS = 30000;
-const HUD_BOOST_MS = 3000;
+const HUD_AUTO_HIDE_MS = 5000;
 
 function getIdleTotalMs(mode: AppMode): number | null {
   if (mode === "player") return PLAYER_IDLE_MS;
@@ -13,7 +13,7 @@ function getIdleTotalMs(mode: AppMode): number | null {
 
 export function useAppMode(initialMode: AppMode = "ambient") {
   const [mode, setMode] = useState<AppMode>(initialMode);
-  const [hudBoosted, setHudBoosted] = useState(false);
+  const [hudVisible, setHudVisible] = useState(true);
   const [idleTotalMs, setIdleTotalMs] = useState(() => getIdleTotalMs(initialMode));
   const [idleRemainingMs, setIdleRemainingMs] = useState(() => getIdleTotalMs(initialMode));
   const [idleDeadlineMs, setIdleDeadlineMs] = useState<number | null>(() => {
@@ -53,10 +53,15 @@ export function useAppMode(initialMode: AppMode = "ambient") {
     [resetIdleTimer]
   );
 
-  const boostHud = useCallback(() => {
-    setHudBoosted(true);
-    clearTimer(hudTimerRef);
-    hudTimerRef.current = window.setTimeout(() => setHudBoosted(false), HUD_BOOST_MS);
+  const toggleHud = useCallback(() => {
+    setHudVisible((visible) => {
+      const nextVisible = !visible;
+      clearTimer(hudTimerRef);
+      if (nextVisible) {
+        hudTimerRef.current = window.setTimeout(() => setHudVisible(false), HUD_AUTO_HIDE_MS);
+      }
+      return nextVisible;
+    });
   }, [clearTimer]);
 
   const returnAmbient = useCallback(() => {
@@ -76,6 +81,14 @@ export function useAppMode(initialMode: AppMode = "ambient") {
   }, [clearTimer, mode, resetIdleTimer]);
 
   useEffect(() => {
+    clearTimer(hudTimerRef);
+    if (!hudVisible) return undefined;
+
+    hudTimerRef.current = window.setTimeout(() => setHudVisible(false), HUD_AUTO_HIDE_MS);
+    return () => clearTimer(hudTimerRef);
+  }, [clearTimer, hudVisible]);
+
+  useEffect(() => {
     if (idleDeadlineMs === null) return undefined;
 
     const interval = window.setInterval(() => {
@@ -87,10 +100,10 @@ export function useAppMode(initialMode: AppMode = "ambient") {
 
   return {
     mode,
-    hudBoosted,
+    hudVisible,
     idleTotalMs,
     idleRemainingMs,
-    boostHud,
+    toggleHud,
     changeMode,
     returnAmbient,
     resetIdleTimer

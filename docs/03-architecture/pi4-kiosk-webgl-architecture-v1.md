@@ -29,7 +29,7 @@ The first commit is documentation-only. The future implementation should keep th
 
 Current deployment package:
 
-- `server/index.mjs`: local mock API and future adapter boundary.
+- `server/index.mjs`: local API with mock-by-default playback plus optional native `mpc` backend for moOde devices.
 - `server/web.mjs`: production static server for `dist/`, with `/api` proxied to the API service.
 - `deploy/chromium/launch-tikpal-kiosk.sh`: Chromium launcher with `--check`, dedicated profile cleanup, dark startup flags, and display mode hooks.
 - `deploy/chromium/start-tikpal-kiosk-session.sh`: X-session entrypoint for systemd `startx`.
@@ -59,6 +59,10 @@ TIKPAL_CHROMIUM_PROFILE_DIR=/home/moode/.config/tikpal-chromium-kiosk
 TIKPAL_CHROMIUM_COLOR_SCHEME=dark
 TIKPAL_RENDERER=webgl
 TIKPAL_RENDER_PROFILE=pi4-balanced
+TIKPAL_PLAYER_BACKEND=mock
+TIKPAL_MPD_HOST=127.0.0.1
+TIKPAL_MPD_PORT=6600
+TIKPAL_MPD_DEFAULT_QUEUE_PATH=Codex
 ```
 
 These names are now used by `deploy/chromium/env.kiosk.example`.
@@ -74,6 +78,7 @@ Renderer requirements:
 - Report renderer type and fallback reason.
 - Handle context loss without crashing the whole UI.
 - Keep HUD and controls readable if the visual layer degrades.
+- Keep the fireplace image as the visual base layer and treat the GPU particle layer as an alpha overlay that can degrade independently.
 
 Three.js should be used for the primary flame scene because it provides a stable rendering layer and a familiar ecosystem for future visual modes.
 
@@ -127,6 +132,8 @@ Reserve local APIs for:
 - Safe system actions with confirmation and authorization.
 
 The UI should not shell out directly or call moOde internals from the browser. Browser code should talk to the local backend.
+
+For moOde deployments, the backend may switch from `mock` to `mpc` through `.env`. In that mode the server owns queue seeding, real transport actions, and passive playback reads through `mpc`, while the browser contract stays unchanged.
 
 ## Startup Experience
 

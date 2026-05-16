@@ -61,6 +61,8 @@ async function run() {
 
   assert(check.status === 0, `launcher --check failed:\n${check.stdout}\n${check.stderr}`);
   assert(check.stdout.includes("check passed"), "launcher --check should report success");
+  assert(check.stdout.includes("chromium window: 2560,720"), "launcher should normalize Chromium window size");
+  assert(check.stdout.includes("window position: 0,0"), "launcher should pin Chromium to the top-left display origin");
 
   console.log("kiosk package smoke passed");
 }

@@ -185,6 +185,16 @@ try {
 
   await navigate(client, APP_URL);
   await expect(client, "document.querySelector('.ambient-screen') !== null", "ambient root renders");
+  await expect(client, "document.querySelector('.ambient-screen.is-hud-visible') !== null", "ambient HUD starts visible");
+
+  await wait(5200);
+  await expect(client, "document.querySelector('.ambient-screen.is-hud-hidden') !== null", "ambient HUD auto hides after startup");
+
+  await click(client, 1280, 280);
+  await expect(client, "document.querySelector('.ambient-screen.is-hud-visible') !== null", "single tap shows ambient HUD");
+
+  await wait(5200);
+  await expect(client, "document.querySelector('.ambient-screen.is-hud-hidden') !== null", "ambient HUD auto hides after tap show");
 
   await wheel(client, 260);
   await expect(client, "document.querySelector('.player-overlay.is-active') !== null", "wheel down opens player overlay");

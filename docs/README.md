@@ -16,7 +16,7 @@ This directory is the source of truth for Tikpal product, UX, visual, architectu
 - The first implementation should use Vite + React + TypeScript and Three.js / WebGL.
 - The default screen is an ambient flame screen, not a conventional app homepage.
 - moOde / MPD remains the playback and system capability owner; Tikpal presents a focused touch UI over those capabilities.
-- Batch 3 now includes a local mock API bridge and frontend API read/write path. Real moOde / MPD integration remains the next backend adapter slice.
+- Batch 3 now includes a local API bridge, frontend API read/write path, a repo-owned Chromium kiosk package, and an optional native MPD backend for moOde devices.
 
 ## Document Index
 
@@ -102,9 +102,10 @@ The local backend boundary should reserve endpoints or adapters for playback con
 ## Current Implementation Checkpoints
 
 - Root app: Vite + React + TypeScript.
-- Visual layer: Three.js/WebGL flame scene with CSS fallback when WebGL is unavailable.
+- Visual layer: Three.js/WebGL flame scene with CSS-backed fireplace art and CSS fallback when WebGL is unavailable.
 - State model: `ambient`, `player`, `quickSettings`, and `quickMenu`.
 - Validation routes: `/`, `/?mode=player`, `/?mode=quickSettings`.
 - Interaction validation: `npm run test:interaction` while the dev server is running.
 - Kiosk guard: root-level context menu, drag, selection, browser zoom, and multi-touch browser default suppression.
-- Current data: mocked playback and system state only.
+- Ambient HUD: visible on startup, auto-hides after 5s, and can be shown again with a single tap.
+- Playback backend: `mock` by default, `mpc` when the Pi runtime sets `TIKPAL_PLAYER_BACKEND=mpc`.
