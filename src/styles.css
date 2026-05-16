@@ -104,6 +104,29 @@ button {
   overflow: hidden;
 }
 
+.ambient-adjust-zone {
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  bottom: 0;
+  width: 28vw;
+  min-width: 120px;
+  max-width: 360px;
+  touch-action: none;
+}
+
+.ambient-adjust-zone-left {
+  left: 0;
+}
+
+.ambient-adjust-zone-right {
+  right: 0;
+}
+
+.ambient-adjust-zone.is-disabled {
+  opacity: 0.45;
+}
+
 .flame-scene {
   overflow: hidden;
   background: #110604;
@@ -454,6 +477,66 @@ button {
   height: 100%;
   border-radius: inherit;
   background: linear-gradient(90deg, var(--gold), var(--gold-strong));
+}
+
+.ambient-adjust-indicator {
+  position: absolute;
+  z-index: 4;
+  top: 50%;
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr);
+  gap: 14px;
+  align-items: center;
+  min-width: 240px;
+  padding: 16px 18px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  background: rgba(4, 6, 10, 0.62);
+  box-shadow: 0 26px 90px rgba(0, 0, 0, 0.42);
+  backdrop-filter: blur(16px);
+  transform: translateY(-50%);
+}
+
+.ambient-adjust-volume {
+  left: 42px;
+}
+
+.ambient-adjust-brightness {
+  right: 42px;
+}
+
+.ambient-adjust-indicator-icon {
+  display: grid;
+  place-items: center;
+  width: 54px;
+  height: 54px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--gold-strong);
+}
+
+.ambient-adjust-indicator-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.ambient-adjust-indicator-copy strong {
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 18px;
+  font-weight: 650;
+}
+
+.ambient-adjust-indicator-copy span {
+  color: var(--text);
+  font-size: 32px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.ambient-adjust-indicator-copy p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
 }
 
 .overlay,
@@ -1270,6 +1353,10 @@ button {
   .ambient-progress {
     grid-column: 2;
   }
+
+  .ambient-adjust-indicator {
+    min-width: 220px;
+  }
 }
 
 @media (max-width: 900px) {
@@ -1277,6 +1364,24 @@ button {
     left: 20px;
     right: 20px;
     bottom: 20px;
+  }
+
+  .ambient-adjust-zone {
+    width: 34vw;
+  }
+
+  .ambient-adjust-indicator {
+    left: 20px;
+    right: 20px;
+    top: auto;
+    bottom: 132px;
+    transform: none;
+  }
+
+  .ambient-adjust-brightness,
+  .ambient-adjust-volume {
+    left: 20px;
+    right: 20px;
   }
 
   .player-shell {

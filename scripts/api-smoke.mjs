@@ -147,6 +147,13 @@ async function run() {
     assert(libraryScan.response.ok, "library_scan action should return 200");
     assert(libraryScan.body.system.library.lastScan, "library_scan should return updated system state");
 
+    const brightness = await request("/api/v1/system/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "brightness_set", value: 64 })
+    });
+    assert(brightness.response.ok, "brightness_set action should return 200");
+    assert(brightness.body.system.display.brightnessPercent === 64, "brightness_set should update display brightness percent");
+
     const invalid = await request("/api/v1/playback/actions", {
       method: "POST",
       body: JSON.stringify({ type: "volume_set", value: 180 })
@@ -160,6 +167,13 @@ async function run() {
     });
     assert(invalidSystemAction.response.status === 400, "invalid system action should return 400");
     assert(invalidSystemAction.body.error === "BAD_REQUEST", "invalid system action should return BAD_REQUEST");
+
+    const invalidBrightness = await request("/api/v1/system/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "brightness_set", value: 180 })
+    });
+    assert(invalidBrightness.response.status === 400, "invalid brightness should return 400");
+    assert(invalidBrightness.body.error === "BAD_REQUEST", "invalid brightness should return BAD_REQUEST");
 
     const invalidSource = await request("/api/v1/audio/source", {
       method: "POST",

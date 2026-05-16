@@ -70,10 +70,10 @@ export function useTikpalState() {
     }
   }, []);
 
-  const sendSystemAction = useCallback(async (type: SystemActionType) => {
+  const sendSystemAction = useCallback(async (type: SystemActionType, value?: number) => {
     setStatus((current) => ({ ...current, pending: true, error: null }));
     try {
-      const nextState = await postSystemAction(type);
+      const nextState = await postSystemAction(type, value);
       setState(nextState);
       setStatus({ source: "api", pending: false, error: null });
       return nextState;

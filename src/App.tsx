@@ -78,6 +78,8 @@ export default function App() {
         audio={tikpalState.audio}
         system={tikpalState.system}
         status={tikpalStatus}
+        onPlaybackAction={sendPlaybackAction}
+        onSystemAction={sendSystemAction}
         onOpenSettings={() => changeMode("quickSettings")}
       />
 

@@ -22,6 +22,8 @@ const LIBRARY_SCAN_COMMAND = process.env.TIKPAL_LIBRARY_SCAN_COMMAND ?? "";
 const SYSTEM_REBOOT_COMMAND = process.env.TIKPAL_SYSTEM_REBOOT_COMMAND ?? "systemctl reboot";
 const SYSTEM_SHUTDOWN_COMMAND = process.env.TIKPAL_SYSTEM_SHUTDOWN_COMMAND ?? "systemctl poweroff";
 const DSP_PRESET = process.env.TIKPAL_DSP_PRESET ?? "Unknown";
+const DDCUTIL_BIN = process.env.TIKPAL_DDCUTIL_BIN ?? "ddcutil";
+const DDCUTIL_DISPLAY = process.env.TIKPAL_DDCUTIL_DISPLAY ?? "";
 const FFPROBE_BIN = process.env.TIKPAL_FFPROBE_BIN ?? "ffprobe";
 const FFMPEG_BIN = process.env.TIKPAL_FFMPEG_BIN ?? "ffmpeg";
 const SPOTIFY_READY_COMMAND = process.env.TIKPAL_SPOTIFY_READY_COMMAND ?? "";
@@ -72,6 +74,11 @@ const system = {
     label: "Ethernet",
     ip: "192.168.1.100",
     speed: "1Gbps"
+  },
+  display: {
+    brightnessPercent: 72,
+    controllable: true,
+    transport: "mock"
   },
   outputDevice: {
     kind: "usb",
@@ -125,6 +132,12 @@ function buildRadioStationSummary({ id, label, uri, secondaryStatus, active }) {
     secondaryStatus,
     active
   };
+}
+
+function clampPercent(value, fallback = 0) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.max(0, Math.min(100, Math.round(numeric)));
 }
 
 function buildAudioState({ activeSource, spotifyReady, spotifyActive, radioReady, radioActive, radioStations = [] }) {
@@ -692,6 +705,54 @@ async function getDspSnapshot() {
   };
 }
 
+function ddcutilArgs(args) {
+  return DDCUTIL_DISPLAY ? ["--display", DDCUTIL_DISPLAY, ...args] : args;
+}
+
+async function readDisplayBrightnessSnapshot() {
+  const raw = await runCommand(`${DDCUTIL_BIN} ${ddcutilArgs(["getvcp", "10", "--brief"]).join(" ")}`, { allowFailure: true, timeout: 3500 });
+  const current = raw.match(/current value =\s*(\d+)/i)?.[1] ?? raw.match(/^VCP\s+10\s+\S+\s+(\d+)\s+(\d+)/i)?.[1];
+  const max = raw.match(/max value =\s*(\d+)/i)?.[1] ?? raw.match(/^VCP\s+10\s+\S+\s+(\d+)\s+(\d+)/i)?.[2];
+
+  if (!current || !max) {
+    return {
+      brightnessPercent: system.display.brightnessPercent,
+      controllable: false,
+      transport: "unavailable"
+    };
+  }
+
+  const currentNumber = Number(current);
+  const maxNumber = Number(max);
+  if (!Number.isFinite(currentNumber) || !Number.isFinite(maxNumber) || maxNumber <= 0) {
+    return {
+      brightnessPercent: system.display.brightnessPercent,
+      controllable: false,
+      transport: "unavailable"
+    };
+  }
+
+  return {
+    brightnessPercent: clampPercent((currentNumber / maxNumber) * 100, system.display.brightnessPercent),
+    controllable: true,
+    transport: "ddcci"
+  };
+}
+
+async function setDisplayBrightnessPercent(percent) {
+  const nextPercent = clampPercent(percent, system.display.brightnessPercent);
+
+  if (API_MODE !== "mpc") {
+    system.display.brightnessPercent = nextPercent;
+    system.display.controllable = true;
+    system.display.transport = "mock";
+    return;
+  }
+
+  const command = `${DDCUTIL_BIN} ${ddcutilArgs(["setvcp", "10", String(nextPercent)]).join(" ")}`;
+  await runCommand(command, { allowFailure: false, timeout: 5000 });
+}
+
 async function getRuntimeSnapshot() {
   const xrandrRaw = await runCommand("xrandr --query", { allowFailure: true });
   const currentMatch = xrandrRaw.match(/current\s+(\d+)\s+x\s+(\d+)/i);
@@ -717,8 +778,9 @@ async function getOutputDeviceSnapshot() {
 async function getMpcSystemSnapshot(statusRaw, statsRaw) {
   const status = parseMpcStatus(statusRaw);
   const stats = parseMpcStats(statsRaw);
-  const [network, outputDevice, dspState, cpuTemp, uptime] = await Promise.all([
+  const [network, display, outputDevice, dspState, cpuTemp, uptime] = await Promise.all([
     getNetworkSnapshot(),
+    readDisplayBrightnessSnapshot(),
     getOutputDeviceSnapshot(),
     getDspSnapshot(),
     getCpuTempSnapshot(),
@@ -730,6 +792,7 @@ async function getMpcSystemSnapshot(statusRaw, statsRaw) {
   return {
     ...system,
     network,
+    display,
     outputDevice,
     cpuTemp,
     uptime,
@@ -1044,6 +1107,9 @@ function getMockAudioSnapshot() {
 async function getMockSystemSnapshot() {
   return {
     ...system,
+    display: {
+      ...system.display
+    },
     library: {
       ...system.library,
       scanning: Date.now() - lastMockLibraryScanAt < 2000
@@ -1250,6 +1316,16 @@ function applyMockSystemAction(action) {
     case "reboot":
     case "shutdown":
       throw new Error(`${action.type} is not supported while the API runs in mock mode`);
+    case "brightness_set": {
+      const percent = Number(action.value);
+      if (!Number.isFinite(percent) || percent < 0 || percent > 100) {
+        throw new Error("brightness_set requires value between 0 and 100");
+      }
+      system.display.brightnessPercent = Math.round(percent);
+      system.display.controllable = true;
+      system.display.transport = "mock";
+      return;
+    }
     default:
       throw new Error(`Unsupported system action: ${action.type}`);
   }
@@ -1271,6 +1347,14 @@ async function applyMpcSystemAction(action) {
     case "shutdown":
       await runSystemActionCommand(SYSTEM_SHUTDOWN_COMMAND, "shutdown");
       return;
+    case "brightness_set": {
+      const percent = Number(action.value);
+      if (!Number.isFinite(percent) || percent < 0 || percent > 100) {
+        throw new Error("brightness_set requires value between 0 and 100");
+      }
+      await setDisplayBrightnessPercent(percent);
+      return;
+    }
     default:
       throw new Error(`Unsupported system action: ${action.type}`);
   }

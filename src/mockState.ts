@@ -21,6 +21,11 @@ export const systemState: SystemState = {
     ip: "192.168.1.100",
     speed: "1Gbps"
   },
+  display: {
+    brightnessPercent: 72,
+    controllable: true,
+    transport: "mock"
+  },
   outputDevice: {
     kind: "usb",
     label: "USB Audio",

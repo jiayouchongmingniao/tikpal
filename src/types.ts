@@ -59,6 +59,12 @@ export interface OutputDeviceState {
   detail: string;
 }
 
+export interface DisplayState {
+  brightnessPercent: number;
+  controllable: boolean;
+  transport: "ddcci" | "mock" | "unavailable";
+}
+
 export interface AudioFormatState {
   codec: string;
   bitDepth: number | null;
@@ -73,6 +79,7 @@ export interface DspState {
 
 export interface SystemState {
   network: NetworkState;
+  display: DisplayState;
   outputDevice: OutputDeviceState;
   volume: VolumeState;
   audioFormat: AudioFormatState;
@@ -120,7 +127,7 @@ export interface TikpalState {
 }
 
 export type PlaybackActionType = "play_pause" | "play" | "pause" | "next" | "previous" | "seek" | "favorite_toggle" | "volume_set";
-export type SystemActionType = "library_scan" | "reboot" | "shutdown";
+export type SystemActionType = "library_scan" | "reboot" | "shutdown" | "brightness_set";
 
 export interface PlaybackActionRequest {
   type: PlaybackActionType;
@@ -129,6 +136,7 @@ export interface PlaybackActionRequest {
 
 export interface SystemActionRequest {
   type: SystemActionType;
+  value?: number;
 }
 
 export interface SourceSwitchRequest {

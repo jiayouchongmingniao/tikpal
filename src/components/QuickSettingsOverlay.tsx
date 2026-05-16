@@ -134,7 +134,9 @@ export function QuickSettingsOverlay({
         icon: Monitor,
         title: "Display",
         value: runtime.kioskWindow,
-        meta: `Renderer: ${runtime.requestedRenderer}`,
+        meta: system.display.controllable
+          ? `Renderer: ${runtime.requestedRenderer} · Brightness ${system.display.brightnessPercent}%`
+          : `Renderer: ${runtime.requestedRenderer} · Brightness unavailable`,
         tone: "neutral"
       },
       {
@@ -171,7 +173,7 @@ export function QuickSettingsOverlay({
         confirmLabel: "Tap again to power off"
       }
     ],
-    [fontTheme, runtime.kioskWindow, runtime.requestedRenderer, status.error, status.source, system.cpuTemp, system.dspState.enabled, system.dspState.preset, system.library.scanning, system.library.source, system.library.trackCount, system.network.ip, system.network.label, system.network.speed, system.outputDevice.detail, system.outputDevice.label, system.uptime]
+    [fontTheme, runtime.kioskWindow, runtime.requestedRenderer, status.error, status.source, system.cpuTemp, system.display.brightnessPercent, system.display.controllable, system.dspState.enabled, system.dspState.preset, system.library.scanning, system.library.source, system.library.trackCount, system.network.ip, system.network.label, system.network.speed, system.outputDevice.detail, system.outputDevice.label, system.uptime]
   );
 
   async function handleAction(card: ActionCard) {

@@ -47,8 +47,8 @@ export async function sendPlaybackAction(type: PlaybackActionType, value?: numbe
   return readJson<TikpalState>(response);
 }
 
-export async function sendSystemAction(type: SystemActionType): Promise<TikpalState> {
-  const body: SystemActionRequest = { type };
+export async function sendSystemAction(type: SystemActionType, value?: number): Promise<TikpalState> {
+  const body: SystemActionRequest = { type, value };
   const response = await fetch(`${API_ROOT}/system/actions`, {
     method: "POST",
     headers: {
