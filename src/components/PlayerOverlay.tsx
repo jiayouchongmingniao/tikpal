@@ -1,10 +1,38 @@
-import { useEffect, useState } from "react";
-import { Check, Disc3, Heart, ListMusic, LoaderCircle, Minus, Pause, Play, Plus, Radio, SkipBack, SkipForward, Volume2 } from "lucide-react";
-import { formatDuration, formatSampleRate } from "../mockState";
+import { useDeferredValue, useEffect, useState } from "react";
+import {
+  Bluetooth,
+  Cast,
+  Check,
+  Heart,
+  LibraryBig,
+  ListMusic,
+  LoaderCircle,
+  Minus,
+  Pause,
+  Play,
+  Plus,
+  Radio,
+  Search,
+  SkipBack,
+  SkipForward,
+  Volume2
+} from "lucide-react";
+import { fetchRadioCatalog } from "../api/tikpalClient";
 import { buildGeneratedCoverArtUrl } from "../coverArt";
 import type { TikpalDataStatus } from "../hooks/useTikpalState";
+import { formatDuration, formatSampleRate } from "../mockState";
 import { useOverlayReturnGesture } from "../hooks/useOverlayReturnGesture";
-import type { AudioState, PlaybackActionType, PlaybackSummary, RadioStationSummary, SourceSummary, SourceSwitchTarget, SystemState, TikpalState } from "../types";
+import type {
+  AudioState,
+  PlaybackActionType,
+  PlaybackSummary,
+  RadioCatalogResponse,
+  RadioStationSummary,
+  SourceSummary,
+  SourceSwitchTarget,
+  SystemState,
+  TikpalState
+} from "../types";
 
 interface PlayerOverlayProps {
   active: boolean;
@@ -17,23 +45,57 @@ interface PlayerOverlayProps {
   onReturnAmbient: () => void;
 }
 
-const sourceTargets: SourceSwitchTarget[] = ["mpd", "spotify", "radio"];
+const primarySourceTargets: SourceSwitchTarget[] = ["mpd", "radio", "bluetooth", "airplay"];
+
+const EMPTY_RADIO_CATALOG: RadioCatalogResponse = {
+  stations: [],
+  total: 0,
+  genres: [],
+  bitrates: [],
+  filters: {
+    q: "",
+    genre: "",
+    bitrate: "",
+    limit: 120,
+    offset: 0
+  },
+  updatedAt: ""
+};
 
 function sourceActionLabel(source: SourceSummary) {
   if (source.active) return "Active";
-  if (source.availability === "unavailable") return "Unavailable";
-  if (source.controllability === "handoff") return "Connect";
-  return "Switch";
+  if (source.id === "radio") return "Browse";
+  if (source.connectionState === "armed") return "Armed";
+  if (source.connectionState === "connected") return "Connected";
+  if (source.controllability === "status-only") return "Locked";
+  return "Select";
+}
+
+function sourceActionCopy(source: SourceSummary) {
+  switch (source.id) {
+    case "bluetooth":
+      return source.active ? "Pairing Open" : "Open Pairing";
+    case "airplay":
+      return source.active ? "AirPlay Open" : "Open AirPlay";
+    case "radio":
+      return source.active ? "Live Radio" : "Browse Radios";
+    case "mpd":
+    default:
+      return source.active ? "In Library" : "Return to Library";
+  }
 }
 
 function sourceIcon(source: SourceSummary) {
   switch (source.id) {
-    case "spotify":
-      return Disc3;
     case "radio":
       return Radio;
+    case "bluetooth":
+      return Bluetooth;
+    case "airplay":
+      return Cast;
+    case "mpd":
     default:
-      return ListMusic;
+      return LibraryBig;
   }
 }
 
@@ -41,8 +103,32 @@ function findSource(audio: AudioState, target: SourceSwitchTarget) {
   return audio.sources.find((source): source is SourceSummary & { id: SourceSwitchTarget } => source.id === target);
 }
 
-function activeRadio(audio: AudioState) {
-  return audio.radios.find((radio) => radio.active) ?? null;
+function sourceDiscoveryCopy(source: SourceSummary) {
+  if (!source.advertisedLabel) return null;
+  return source.id === "bluetooth"
+    ? `Look for ${source.advertisedLabel} in your phone's Bluetooth list.`
+    : `Look for ${source.advertisedLabel} in your AirPlay target list.`;
+}
+
+function describeConnectionPolicy(source: SourceSummary) {
+  if (source.id === "bluetooth" || source.id === "airplay") {
+    if (source.connectedLabel) return `${source.label} is currently connected to ${source.connectedLabel}.`;
+    if (source.armed) {
+      return source.advertisedLabel
+        ? `${source.label} is armed as ${source.advertisedLabel}. New connections are allowed only while this source stays selected.`
+        : `${source.label} is armed. New connections are allowed only while this source stays selected.`;
+    }
+    if (source.controllability === "status-only") return `${source.label} cannot be armed from this runtime yet.`;
+    return source.advertisedLabel
+      ? `${source.label} is blocked until you explicitly select it. When opened, it will advertise as ${source.advertisedLabel}.`
+      : `${source.label} is blocked until you explicitly select it.`;
+  }
+
+  if (source.id === "radio") {
+    return "Radio switches immediately to the selected station and closes Bluetooth and AirPlay intake.";
+  }
+
+  return "Library returns playback to the local MPD queue and closes wireless intake paths.";
 }
 
 export function PlayerOverlay({
@@ -58,6 +144,7 @@ export function PlayerOverlay({
   const overlayReturnGesture = useOverlayReturnGesture(onReturnAmbient);
   const [sourcePanelOpen, setSourcePanelOpen] = useState(false);
   const [queuePanelOpen, setQueuePanelOpen] = useState(false);
+  const [selectedSource, setSelectedSource] = useState<SourceSwitchTarget>("mpd");
   const [pendingSource, setPendingSource] = useState<SourceSwitchTarget | null>(null);
   const [pendingRadioStationId, setPendingRadioStationId] = useState<string | null>(null);
   const [sourceError, setSourceError] = useState<string | null>(null);
@@ -65,6 +152,13 @@ export function PlayerOverlay({
   const [seekDraftSeconds, setSeekDraftSeconds] = useState<number | null>(null);
   const [seekPendingSeconds, setSeekPendingSeconds] = useState<number | null>(null);
   const [seekError, setSeekError] = useState<string | null>(null);
+  const [radioQuery, setRadioQuery] = useState("");
+  const [radioGenre, setRadioGenre] = useState("");
+  const [radioBitrate, setRadioBitrate] = useState("");
+  const [radioCatalog, setRadioCatalog] = useState<RadioCatalogResponse>(EMPTY_RADIO_CATALOG);
+  const [radioLoading, setRadioLoading] = useState(false);
+  const [radioError, setRadioError] = useState<string | null>(null);
+  const deferredRadioQuery = useDeferredValue(radioQuery);
   const title = playback.title ?? "Not Playing";
   const artist = playback.artist ?? "Unknown Artist";
   const album = playback.album ?? "No Album";
@@ -75,6 +169,7 @@ export function PlayerOverlay({
   const progress = durationSeconds > 0 ? Math.min(1, displayedElapsedSeconds / durationSeconds) : 0;
   const isPlaying = playback.state === "playing";
   const currentSource = audio.currentSource;
+  const selectedSourceSummary = findSource(audio, selectedSource) ?? audio.currentSource;
   const coverLabel = album
     .split(/\s+/)
     .map((word) => word[0])
@@ -116,8 +211,16 @@ export function PlayerOverlay({
       setSeekDraftSeconds(null);
       setSeekPendingSeconds(null);
       setSeekError(null);
+      setRadioError(null);
+      setRadioLoading(false);
     }
   }, [active]);
+
+  useEffect(() => {
+    if (primarySourceTargets.includes(currentSource.id as SourceSwitchTarget)) {
+      setSelectedSource(currentSource.id as SourceSwitchTarget);
+    }
+  }, [currentSource.id]);
 
   useEffect(() => {
     if (!seekSupported) {
@@ -126,6 +229,38 @@ export function PlayerOverlay({
       setSeekError(null);
     }
   }, [seekSupported]);
+
+  useEffect(() => {
+    if (!sourcePanelOpen || selectedSource !== "radio") return;
+
+    const controller = new AbortController();
+    setRadioLoading(true);
+    setRadioError(null);
+
+    void fetchRadioCatalog(
+      {
+        q: deferredRadioQuery,
+        genre: radioGenre,
+        bitrate: radioBitrate,
+        limit: 120
+      },
+      controller.signal
+    )
+      .then((catalog) => {
+        setRadioCatalog(catalog);
+      })
+      .catch((error) => {
+        if (controller.signal.aborted) return;
+        setRadioError(error instanceof Error ? error.message : "Radio catalog unavailable");
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setRadioLoading(false);
+        }
+      });
+
+    return () => controller.abort();
+  }, [deferredRadioQuery, radioBitrate, radioGenre, selectedSource, sourcePanelOpen]);
 
   async function handleSourceSwitch(target: SourceSwitchTarget, radioStation?: RadioStationSummary) {
     if (status.pending || pendingSource) return;
@@ -137,13 +272,24 @@ export function PlayerOverlay({
       const nextState = await onSourceSwitch(target, radioStation?.id);
       const nextSource = findSource(nextState.audio, target);
 
-      if (target === "spotify" && nextSource?.availability === "waiting" && !nextSource.active) {
-        setSourceHint("Spotify Connect is ready on this device. Start playback from the Spotify app to hand off audio.");
-      } else if (target === "spotify" && nextSource?.active) {
-        setSourceHint("Spotify is now the active source on this device.");
-      } else if (target === "radio" && nextSource?.active) {
-        const nextRadio = activeRadio(nextState.audio);
-        setSourceHint(`Radio switched to ${nextRadio?.label ?? nextSource.label}.`);
+      if (target === "radio" && nextSource?.active) {
+        setSourceHint(`Radio switched to ${radioStation?.label ?? nextSource.secondaryStatus}.`);
+      } else if (target === "bluetooth" && nextSource) {
+        setSourceHint(
+          nextSource.connectedLabel
+            ? `Bluetooth connected to ${nextSource.connectedLabel}.`
+            : nextSource.advertisedLabel
+              ? `Bluetooth pairing is now open as ${nextSource.advertisedLabel}.`
+              : "Bluetooth pairing is now open."
+        );
+      } else if (target === "airplay" && nextSource) {
+        setSourceHint(
+          nextSource.connectedLabel
+            ? `AirPlay connected to ${nextSource.connectedLabel}.`
+            : nextSource.advertisedLabel
+              ? `AirPlay is now open as ${nextSource.advertisedLabel}.`
+              : "AirPlay is now open for new connections."
+        );
       } else if (target === "mpd" && nextSource?.active) {
         setSourceHint("Returned to the local library playback path.");
       }
@@ -180,6 +326,143 @@ export function PlayerOverlay({
     setSeekError(null);
   }
 
+  async function handleSourceRailPress(source: SourceSummary & { id: SourceSwitchTarget }) {
+    if (source.id === "radio") {
+      setSelectedSource("radio");
+      setSourcePanelOpen(true);
+      return;
+    }
+
+    setSelectedSource(source.id);
+    await handleSourceSwitch(source.id);
+  }
+
+  function renderSourceWorkspaceContent() {
+    if (selectedSource === "radio") {
+      return (
+        <section className="source-workspace-content" aria-label="Radio catalog">
+          <div className="radio-filter-row">
+            <label className="source-search-field" data-radio-search>
+              <Search size={18} />
+              <input
+                type="search"
+                value={radioQuery}
+                placeholder="Search station name or genre"
+                onChange={(event) => setRadioQuery(event.currentTarget.value)}
+              />
+            </label>
+            <label className="source-filter-field">
+              <span>Genre</span>
+              <select value={radioGenre} onChange={(event) => setRadioGenre(event.currentTarget.value)}>
+                <option value="">All</option>
+                {radioCatalog.genres.map((genre) => (
+                  <option key={genre} value={genre}>{genre}</option>
+                ))}
+              </select>
+            </label>
+            <label className="source-filter-field">
+              <span>Bitrate</span>
+              <select value={radioBitrate} onChange={(event) => setRadioBitrate(event.currentTarget.value)}>
+                <option value="">All</option>
+                {radioCatalog.bitrates.map((bitrate) => (
+                  <option key={bitrate} value={bitrate}>{bitrate}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          <div className="source-result-meta">
+            <span>{radioLoading ? "Refreshing station catalog..." : `${radioCatalog.total} stations ready`}</span>
+            <span>{radioCatalog.filters.genre || "All genres"} · {radioCatalog.filters.bitrate || "All bitrates"}</span>
+          </div>
+
+          {radioError ? <p className="source-panel-error">{radioError}</p> : null}
+
+          <div className="radio-catalog-list">
+            {radioCatalog.stations.map((station) => {
+              const stationPending = pendingRadioStationId === station.id;
+              return (
+                <button
+                  className={`radio-catalog-item ${station.active ? "is-active" : ""}`}
+                  key={station.id}
+                  type="button"
+                  disabled={status.pending || pendingSource !== null}
+                  data-radio-station={station.id}
+                  data-gesture-control
+                  onClick={() => void handleSourceSwitch("radio", station)}
+                >
+                  <div className="radio-catalog-copy">
+                    <strong>{station.label}</strong>
+                    <p>{stationPending ? "Switching station..." : station.secondaryStatus}</p>
+                  </div>
+                  <div className="radio-catalog-meta">
+                    <span>{station.genre}</span>
+                    <span>{station.bitrateKbps ? `${station.bitrateKbps} kbps` : "Stream"}</span>
+                    <span>{station.codec ?? "Unknown"}</span>
+                  </div>
+                  <div className="radio-station-state" aria-hidden="true">
+                    {stationPending ? <LoaderCircle size={16} className="is-spinning" /> : station.active ? <Check size={16} /> : null}
+                  </div>
+                </button>
+              );
+            })}
+            {!radioLoading && radioCatalog.stations.length === 0 ? (
+              <p className="queue-panel-empty">No stations matched the current filters.</p>
+            ) : null}
+          </div>
+        </section>
+      );
+    }
+
+    const selectedIcon = sourceIcon(selectedSourceSummary);
+    const SourceIcon = selectedIcon;
+    const canSwitch = selectedSourceSummary.controllability !== "status-only" && selectedSourceSummary.availability !== "unavailable";
+    const isPending = pendingSource === selectedSource;
+
+    return (
+      <section className="source-workspace-content" aria-label={`${selectedSourceSummary.label} source`}>
+        <div className="source-hero-card">
+          <div className="source-hero-icon">
+            <SourceIcon size={28} />
+          </div>
+          <div className="source-hero-copy">
+            <span className="source-panel-kicker">{selectedSourceSummary.label}</span>
+            <strong>{selectedSourceSummary.secondaryStatus}</strong>
+            <p>{describeConnectionPolicy(selectedSourceSummary)}</p>
+          </div>
+          <button
+            className={`source-hero-action ${selectedSourceSummary.active ? "is-active" : ""}`}
+            type="button"
+            disabled={status.pending || pendingSource !== null || !canSwitch}
+            data-gesture-control
+            onClick={() => void handleSourceSwitch(selectedSource)}
+          >
+            {isPending ? <LoaderCircle size={18} className="is-spinning" /> : null}
+            <span>{sourceActionCopy(selectedSourceSummary)}</span>
+          </button>
+        </div>
+
+        <div className="source-policy-grid">
+          <article className="source-policy-card">
+            <span>Status</span>
+            <strong>{selectedSourceSummary.connectionState}</strong>
+            <p>{selectedSourceSummary.connectedLabel ?? sourceDiscoveryCopy(selectedSourceSummary) ?? selectedSourceSummary.secondaryStatus}</p>
+          </article>
+          <article className="source-policy-card">
+            <span>Availability</span>
+            <strong>{selectedSourceSummary.availability}</strong>
+            <p>{selectedSourceSummary.controllability === "status-only" ? "Read-only in this runtime" : "User-selectable source"}</p>
+          </article>
+          <article className="source-policy-card">
+            <span>Gate</span>
+            <strong>{selectedSourceSummary.armed ? "Open" : "Closed"}</strong>
+            <p>{selectedSourceSummary.id === "bluetooth" || selectedSourceSummary.id === "airplay" ? "New connections are allowed only while selected." : "Wireless intake is closed."}</p>
+          </article>
+        </div>
+      </section>
+    );
+  }
+
   return (
     <section className={`overlay player-overlay ${active ? "is-active" : ""}`} aria-label="Player controls" aria-hidden={!active}>
       <button className="overlay-backdrop" type="button" tabIndex={active ? 0 : -1} aria-label="Return to ambient" onClick={onReturnAmbient} />
@@ -210,10 +493,10 @@ export function PlayerOverlay({
             <p>{playback.currentTrackIndex} of {playback.queueLength}</p>
           </div>
 
-          <div className={`source-panel ${sourcePanelOpen ? "is-open" : ""}`}>
+          <div className={`source-panel source-workspace ${sourcePanelOpen ? "is-open" : ""}`}>
             <div className="source-panel-header">
               <div>
-                <span className="source-panel-kicker">Source</span>
+                <span className="source-panel-kicker">Source Workspace</span>
                 <strong>{currentSource.label}</strong>
                 <p>{currentSource.secondaryStatus}</p>
               </div>
@@ -222,6 +505,7 @@ export function PlayerOverlay({
                 type="button"
                 aria-expanded={sourcePanelOpen}
                 data-source-panel-toggle
+                data-gesture-control
                 onClick={() => setSourcePanelOpen((current) => !current)}
               >
                 {sourcePanelOpen ? "Hide" : "Show"} Sources
@@ -229,23 +513,21 @@ export function PlayerOverlay({
             </div>
 
             {sourcePanelOpen ? (
-              <div className="source-options" data-source-panel>
-                {audio.sources
-                  .filter((source): source is SourceSummary & { id: SourceSwitchTarget } => sourceTargets.includes(source.id as SourceSwitchTarget))
-                  .map((source) => {
-                    const Icon = sourceIcon(source);
-                    const isPending = pendingSource === source.id;
-                    const disabled = status.pending || pendingSource !== null || source.availability === "unavailable";
-                    const sourceRadios = source.id === "radio" ? audio.radios : [];
-
-                    return (
-                      <div className={`source-item-wrap ${source.id === "radio" ? "has-radio-list" : ""}`} key={source.id}>
+              <div className="source-workspace-shell" data-source-workspace data-source-panel>
+                <nav className="source-rail" aria-label="Source categories">
+                  {audio.sources
+                    .filter((source): source is SourceSummary & { id: SourceSwitchTarget } => primarySourceTargets.includes(source.id as SourceSwitchTarget))
+                    .map((source) => {
+                      const Icon = sourceIcon(source);
+                      const isSelected = selectedSource === source.id;
+                      return (
                         <button
-                          className={`source-item ${source.active ? "is-active" : ""} source-${source.availability}`}
+                          className={`source-rail-item ${isSelected ? "is-selected" : ""} ${source.active ? "is-active" : ""}`}
+                          key={source.id}
                           type="button"
                           data-source-item={source.id}
-                          disabled={disabled}
-                          onClick={() => void handleSourceSwitch(source.id)}
+                          data-gesture-control
+                          onClick={() => void handleSourceRailPress(source)}
                         >
                           <div className="source-item-icon">
                             <Icon size={20} />
@@ -255,40 +537,33 @@ export function PlayerOverlay({
                               <strong>{source.label}</strong>
                               <span>{sourceActionLabel(source)}</span>
                             </div>
-                            <p>{isPending ? "Switching source..." : source.secondaryStatus}</p>
-                          </div>
-                          <div className="source-item-state" aria-hidden="true">
-                            {isPending ? <LoaderCircle size={18} className="is-spinning" /> : source.active ? <Check size={18} /> : null}
+                            <p>{source.secondaryStatus}</p>
                           </div>
                         </button>
+                      );
+                    })}
+                </nav>
 
-                        {source.id === "radio" && sourceRadios.length > 0 ? (
-                          <div className="radio-station-list">
-                            {sourceRadios.map((station) => {
-                              const stationPending = pendingRadioStationId === station.id;
-                              return (
-                                <button
-                                  className={`radio-station-item ${station.active ? "is-active" : ""}`}
-                                  key={station.id}
-                                  type="button"
-                                  disabled={status.pending || pendingSource !== null}
-                                  onClick={() => void handleSourceSwitch("radio", station)}
-                                >
-                                  <div className="radio-station-copy">
-                                    <strong>{station.label}</strong>
-                                    <p>{stationPending ? "Switching station..." : station.secondaryStatus}</p>
-                                  </div>
-                                  <div className="radio-station-state" aria-hidden="true">
-                                    {stationPending ? <LoaderCircle size={16} className="is-spinning" /> : station.active ? <Check size={16} /> : null}
-                                  </div>
-                                </button>
-                              );
-                            })}
-                          </div>
-                        ) : null}
-                      </div>
-                    );
-                  })}
+                {renderSourceWorkspaceContent()}
+
+                <aside className="source-detail-panel" aria-label="Source detail">
+                  <span className="source-panel-kicker">Selected Source</span>
+                  <strong>{selectedSourceSummary.label}</strong>
+                  <p>{selectedSourceSummary.secondaryStatus}</p>
+
+                  <div className="source-detail-stack">
+                    <article className="source-detail-card">
+                      <span>Connection</span>
+                      <strong>{selectedSourceSummary.connectionState}</strong>
+                      <p>{selectedSourceSummary.connectedLabel ?? sourceDiscoveryCopy(selectedSourceSummary) ?? "No device connected"}</p>
+                    </article>
+                    <article className="source-detail-card">
+                      <span>Policy</span>
+                      <strong>{selectedSourceSummary.armed ? "Armed" : "Blocked"}</strong>
+                      <p>{describeConnectionPolicy(selectedSourceSummary)}</p>
+                    </article>
+                  </div>
+                </aside>
               </div>
             ) : null}
 

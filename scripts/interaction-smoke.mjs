@@ -303,6 +303,18 @@ try {
     client,
     `
       (() => {
+        const target = document.querySelector('[data-source-item="bluetooth"]');
+        target?.click();
+        return Boolean(target);
+      })()
+    `
+  );
+  await expect(client, "document.querySelector('.source-line span')?.textContent?.includes('Bluetooth') === true", "single tap on bluetooth source switches source");
+
+  await evaluate(
+    client,
+    `
+      (() => {
         const slider = document.querySelector('.progress-slider');
         return slider instanceof HTMLInputElement && !slider.disabled && Number(slider.max) > 0;
       })()

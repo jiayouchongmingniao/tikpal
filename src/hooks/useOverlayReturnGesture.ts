@@ -3,6 +3,7 @@ import { useCallback, useRef } from "react";
 const TAP_MAX_DISTANCE = 10;
 const SWIPE_UP_THRESHOLD = -80;
 const HORIZONTAL_DRIFT_LIMIT = 72;
+const INTERACTIVE_SELECTOR = "button, input, select, textarea, a, [role='button'], [data-gesture-control]";
 
 interface GestureState {
   pointerId: number;
@@ -16,6 +17,10 @@ export function useOverlayReturnGesture(onReturnAmbient: () => void) {
   const gestureRef = useRef<GestureState | null>(null);
   const suppressClickRef = useRef(false);
 
+  const isInteractiveTarget = useCallback((target: EventTarget | null) => {
+    return target instanceof Element && target.closest(INTERACTIVE_SELECTOR) !== null;
+  }, []);
+
   const clearSuppressClick = useCallback(() => {
     window.setTimeout(() => {
       suppressClickRef.current = false;
@@ -27,6 +32,10 @@ export function useOverlayReturnGesture(onReturnAmbient: () => void) {
   }, []);
 
   const onPointerDown = useCallback<React.PointerEventHandler<HTMLElement>>((event) => {
+    if (isInteractiveTarget(event.target)) {
+      gestureRef.current = null;
+      return;
+    }
     gestureRef.current = {
       pointerId: event.pointerId,
       startX: event.clientX,
@@ -35,7 +44,7 @@ export function useOverlayReturnGesture(onReturnAmbient: () => void) {
       currentY: event.clientY
     };
     event.currentTarget.setPointerCapture(event.pointerId);
-  }, []);
+  }, [isInteractiveTarget]);
 
   const onPointerMove = useCallback<React.PointerEventHandler<HTMLElement>>((event) => {
     const gesture = gestureRef.current;

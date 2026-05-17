@@ -129,7 +129,7 @@ With the dev server running, verify the Batch 2 kiosk interaction contract:
 npm run test:interaction
 ```
 
-The smoke test drives Chrome through the DevTools protocol and checks wheel/trackpad-style entry, overlay return, protected panel clicks, the Player source panel, and the quick settings fallback path.
+The smoke test drives Chrome through the DevTools protocol and checks wheel/trackpad-style entry, overlay return, protected panel clicks, the Player source workspace, and the quick settings fallback path.
 
 ## MVP Summary
 
@@ -144,9 +144,9 @@ The first implementation milestone should deliver:
 
 ## Repository Status
 
-The local API now exposes a first-class audio-source model for `Library`, `Spotify`, and `Radio`. The frontend reads current source summary from `/api/v1/system/state`, can inspect the full source list plus `radios` preset entries through `GET /api/v1/audio/sources`, posts source switches to `POST /api/v1/audio/source`, and still uses `/api/v1/playback/actions` plus `/api/v1/system/actions` for transport and system cards.
+The local API now exposes a first-class audio-source model for `Library`, `Radio`, `Bluetooth`, and `AirPlay`. The frontend reads current source summary from `/api/v1/system/state`, inspects compact source state through `GET /api/v1/audio/sources`, fetches the searchable radio catalog through `GET /api/v1/audio/radios`, posts source switches to `POST /api/v1/audio/source`, and still uses `/api/v1/playback/actions` plus `/api/v1/system/actions` for transport and system cards.
 
-The real moOde / MPD adapter remains the audio owner. In `mpc` mode, Tikpal keeps MPD/library control as the default path, can expose Spotify as a truthful renderer/handoff state, and now treats Radio as a preset list first: the source panel can switch directly to a `radioStationId`, while `TIKPAL_RADIO_DEFAULT_URI` stays as a fallback when moOde presets are unavailable.
+The real moOde / MPD adapter remains the audio owner. In `mpc` mode, Tikpal keeps MPD/library control as the default path, treats Radio as a searchable station catalog with direct `radioStationId` switching, and now models Bluetooth / AirPlay as armed-only intake paths: they are connectable only while explicitly selected. `TIKPAL_RADIO_DEFAULT_URI` stays as a fallback when moOde presets are unavailable, while Bluetooth / AirPlay gating is wired through environment-configured enable/disable and status commands. Bluetooth state now also carries the local advertised device name so the frontend can tell the user exactly what to look for on their phone while pairing.
 
 Quick Settings now also includes a local font preset selector, and the ambient flame screen has split live-control zones: left for volume, right for DDC/CI brightness on supported displays.
 
@@ -155,6 +155,6 @@ Quick Settings now also includes a local font preset selector, and the ambient f
 The repo is no longer mock-only, but a few visible pieces are still only partial:
 
 - `npm run test:interaction` is still failing at the initial `ambient root renders` check, so browser-driven regression coverage is not yet trustworthy.
-- The source model is still intentionally narrow. The UI truthfully exposes `Library`, `Spotify`, and `Radio`, but not a complete moOde source-management surface.
+- The source model is still intentionally focused. The UI now exposes `Library`, `Radio`, `Bluetooth`, and `AirPlay`, but not the full moOde management surface.
 - The ambient right-side brightness gesture depends on working DDC/CI on the target display. When `ddcutil` cannot read or set VCP `0x10`, Tikpal currently degrades to read-only/unavailable status instead of offering a fallback brightness path.
 - The player `Queue` button is still a placeholder entry point; there is no queue drawer or queue management surface implemented behind it yet.

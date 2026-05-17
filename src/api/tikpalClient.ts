@@ -1,6 +1,8 @@
 import type {
   PlaybackActionRequest,
   PlaybackActionType,
+  RadioCatalogFilters,
+  RadioCatalogResponse,
   SourceSwitchRequest,
   SourceSwitchTarget,
   SystemActionRequest,
@@ -32,6 +34,22 @@ export async function fetchTikpalState(signal?: AbortSignal): Promise<TikpalStat
     signal
   });
   return readJson<TikpalState>(response);
+}
+
+export async function fetchRadioCatalog(filters: RadioCatalogFilters = {}, signal?: AbortSignal): Promise<RadioCatalogResponse> {
+  const params = new URLSearchParams();
+  if (filters.q) params.set("q", filters.q);
+  if (filters.genre) params.set("genre", filters.genre);
+  if (filters.bitrate) params.set("bitrate", filters.bitrate);
+  if (typeof filters.limit === "number") params.set("limit", String(filters.limit));
+  if (typeof filters.offset === "number") params.set("offset", String(filters.offset));
+
+  const search = params.toString();
+  const response = await fetch(`${API_ROOT}/audio/radios${search ? `?${search}` : ""}`, {
+    headers: { Accept: "application/json" },
+    signal
+  });
+  return readJson<RadioCatalogResponse>(response);
 }
 
 export async function sendPlaybackAction(type: PlaybackActionType, value?: number): Promise<TikpalState> {

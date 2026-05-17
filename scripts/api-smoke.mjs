@@ -80,9 +80,16 @@ async function run() {
 
     const sources = await request("/api/v1/audio/sources");
     assert(sources.response.ok, "audio sources should return 200");
-    assert(Array.isArray(sources.body.sources) && sources.body.sources.length === 3, "audio sources should return MPD, Spotify, and Radio");
+    assert(Array.isArray(sources.body.sources) && sources.body.sources.length === 4, "audio sources should return Library, Radio, Bluetooth, and AirPlay");
     assert(sources.body.currentSource.id === "mpd", "audio source payload should start on MPD");
-    assert(Array.isArray(sources.body.radios) && sources.body.radios.length >= 1, "audio sources payload should include radio presets");
+    assert(sources.body.sources.some((source) => source.id === "bluetooth"), "audio sources payload should include bluetooth");
+    assert(sources.body.sources.some((source) => source.id === "airplay"), "audio sources payload should include airplay");
+    assert(sources.body.sources.some((source) => source.id === "bluetooth" && source.advertisedLabel === "Tikpal Speaker"), "bluetooth source should expose advertised device name");
+
+    const radios = await request("/api/v1/audio/radios?q=ambient&genre=Ambient");
+    assert(radios.response.ok, "radio catalog should return 200");
+    assert(radios.body.total >= 1, "radio catalog should include matching stations");
+    assert(radios.body.stations.every((station) => station.genre === "Ambient"), "radio catalog should filter by genre");
 
     const artwork = await request("/api/v1/media/artwork?track=mock");
     assert(artwork.response.status === 404, "mock artwork endpoint should return 404 when no current artwork is available");
@@ -115,13 +122,24 @@ async function run() {
     assert(volume.response.ok, "volume_set action should return 200");
     assert(volume.body.system.volume.percent === 42, "volume_set should update volume percent");
 
-    const spotify = await request("/api/v1/audio/source", {
+    const bluetooth = await request("/api/v1/audio/source", {
       method: "POST",
-      body: JSON.stringify({ target: "spotify" })
+      body: JSON.stringify({ target: "bluetooth" })
     });
-    assert(spotify.response.ok, "spotify source switch should return 200");
-    assert(spotify.body.audio.currentSource.id === "spotify", "spotify switch should activate spotify in mock mode");
-    assert(spotify.body.playback.source === "spotify", "playback source should follow spotify switch");
+    assert(bluetooth.response.ok, "bluetooth source switch should return 200");
+    assert(bluetooth.body.audio.currentSource.id === "bluetooth", "bluetooth switch should activate bluetooth in mock mode");
+    assert(bluetooth.body.audio.currentSource.armed === true, "bluetooth switch should arm bluetooth intake");
+    assert(bluetooth.body.audio.currentSource.advertisedLabel === "Tikpal Speaker", "bluetooth switch should keep advertised device name in state");
+    assert(bluetooth.body.playback.source === "bluetooth", "playback source should follow bluetooth switch");
+
+    const airplay = await request("/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({ target: "airplay" })
+    });
+    assert(airplay.response.ok, "airplay source switch should return 200");
+    assert(airplay.body.audio.currentSource.id === "airplay", "airplay switch should activate airplay in mock mode");
+    assert(airplay.body.audio.currentSource.armed === true, "airplay switch should arm airplay intake");
+    assert(airplay.body.audio.sources.some((source) => source.id === "bluetooth" && source.armed === false), "airplay switch should disarm bluetooth");
 
     const radio = await request("/api/v1/audio/source", {
       method: "POST",
@@ -130,8 +148,8 @@ async function run() {
     assert(radio.response.ok, "radio source switch should return 200");
     assert(radio.body.audio.currentSource.id === "radio", "radio switch should activate radio in mock mode");
     assert(radio.body.playback.source === "radio", "playback source should follow radio switch");
-    assert(radio.body.audio.radios.some((station) => station.id === "radio-2" && station.active), "radio switch should activate the requested preset");
     assert(radio.body.playback.title === "A.M. Ambient", "radio switch should surface the active preset label");
+    assert(radio.body.audio.sources.some((source) => source.id === "airplay" && source.armed === false), "radio switch should close airplay intake");
 
     const mpd = await request("/api/v1/audio/source", {
       method: "POST",
@@ -139,6 +157,7 @@ async function run() {
     });
     assert(mpd.response.ok, "mpd source switch should return 200");
     assert(mpd.body.audio.currentSource.id === "mpd", "mpd switch should return to library in mock mode");
+    assert(mpd.body.audio.sources.some((source) => source.id === "bluetooth" && source.armed === false), "mpd switch should keep bluetooth blocked");
 
     const libraryScan = await request("/api/v1/system/actions", {
       method: "POST",
@@ -177,7 +196,7 @@ async function run() {
 
     const invalidSource = await request("/api/v1/audio/source", {
       method: "POST",
-      body: JSON.stringify({ target: "bluetooth" })
+      body: JSON.stringify({ target: "vinyl" })
     });
     assert(invalidSource.response.status === 400, "invalid source should return 400");
     assert(invalidSource.body.error === "BAD_REQUEST", "invalid source should return BAD_REQUEST");
@@ -188,6 +207,10 @@ async function run() {
     });
     assert(invalidRadioStation.response.status === 400, "unknown radio station should return 400");
     assert(invalidRadioStation.body.error === "BAD_REQUEST", "unknown radio station should return BAD_REQUEST");
+
+    const invalidRadioQuery = await request("/api/v1/audio/radios?limit=500");
+    assert(invalidRadioQuery.response.status === 400, "invalid radio query should return 400");
+    assert(invalidRadioQuery.body.error === "BAD_REQUEST", "invalid radio query should return BAD_REQUEST");
 
     console.log("api smoke passed");
   } finally {

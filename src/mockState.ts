@@ -121,6 +121,10 @@ export const audioState: AudioState = {
     availability: "available",
     active: true,
     controllability: "switchable",
+    armed: false,
+    connectionState: "idle",
+    connectedLabel: null,
+    advertisedLabel: null,
     secondaryStatus: "Local queue ready"
   }),
   sources: [
@@ -131,16 +135,11 @@ export const audioState: AudioState = {
       availability: "available",
       active: true,
       controllability: "switchable",
+      armed: false,
+      connectionState: "idle",
+      connectedLabel: null,
+      advertisedLabel: null,
       secondaryStatus: "Local queue ready"
-    }),
-    buildSourceSummary({
-      id: "spotify",
-      label: "Spotify",
-      kind: "spotify",
-      availability: "waiting",
-      active: false,
-      controllability: "handoff",
-      secondaryStatus: "Renderer ready"
     }),
     buildSourceSummary({
       id: "radio",
@@ -149,14 +148,49 @@ export const audioState: AudioState = {
       availability: "available",
       active: false,
       controllability: "switchable",
-      secondaryStatus: "Resume last station"
+      armed: false,
+      connectionState: "idle",
+      connectedLabel: null,
+      advertisedLabel: null,
+      secondaryStatus: "Browse 240 stations"
+    }),
+    buildSourceSummary({
+      id: "bluetooth",
+      label: "Bluetooth",
+      kind: "bluetooth",
+      availability: "available",
+      active: false,
+      controllability: "switchable",
+      armed: false,
+      connectionState: "blocked",
+      connectedLabel: null,
+      advertisedLabel: "Tikpal Speaker",
+      secondaryStatus: "Select to open pairing as Tikpal Speaker"
+    }),
+    buildSourceSummary({
+      id: "airplay",
+      label: "AirPlay",
+      kind: "airplay",
+      availability: "available",
+      active: false,
+      controllability: "switchable",
+      armed: false,
+      connectionState: "blocked",
+      connectedLabel: null,
+      advertisedLabel: "Tikpal Speaker",
+      secondaryStatus: "Select to allow AirPlay as Tikpal Speaker"
     })
-  ],
-  radios: [
+  ]
+};
+
+export const radioStations: RadioStationSummary[] = [
     buildRadioStation({
       id: "radio-1",
       label: "1.FM - Blues Radio",
       uri: "http://strm112.1.fm/blues_mobile_mp3",
+      genre: "Blues",
+      bitrateKbps: 192,
+      codec: "MP3",
       secondaryStatus: "Blues · 192 kbps MP3",
       active: false
     }),
@@ -164,6 +198,9 @@ export const audioState: AudioState = {
       id: "radio-2",
       label: "A.M. Ambient",
       uri: "http://radio.stereoscenic.com/ama-h",
+      genre: "Ambient",
+      bitrateKbps: 256,
+      codec: "MP3",
       secondaryStatus: "Ambient · 256 kbps MP3",
       active: false
     }),
@@ -171,11 +208,13 @@ export const audioState: AudioState = {
       id: "radio-3",
       label: "6forty Radio",
       uri: "http://radio.6forty.com:8000/6forty",
+      genre: "Alternative",
+      bitrateKbps: 192,
+      codec: "MP3",
       secondaryStatus: "Alternative · 192 kbps MP3",
       active: false
     })
-  ]
-};
+];
 
 export const fallbackTikpalState: TikpalState = {
   playback,

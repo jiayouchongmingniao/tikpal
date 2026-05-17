@@ -14,7 +14,6 @@ type PlaybackState = "playing" | "paused" | "stopped";
 type SourceState =
   | "mpd"
   | "airplay"
-  | "spotify"
   | "bluetooth"
   | "roonbridge"
   | "upnp"
@@ -62,7 +61,7 @@ Exact wire shapes should be finalized during implementation, but these concepts 
 | Volume | Ambient status, player status card, volume panel | dB or percent according to backend truth. |
 | Audio format | Player status card | Format, bit depth, sample rate. |
 | Output device | Player status card, quick settings | USB, I2S, HDMI, DAC name, volume mode. |
-| Playback source / renderer | Player top state, source panel | MPD, AirPlay, Spotify, Bluetooth, RoonBridge, UPnP, radio. |
+| Playback source / renderer | Player top state, source workspace | MPD, AirPlay, Bluetooth, RoonBridge, UPnP, radio. |
 | Network | Player status, quick settings | Ethernet/Wi-Fi, IP, connection state. |
 | Display brightness | Ambient edge gesture, quick settings display card | DDC/CI brightness percent when the monitor exposes VCP `0x10`. |
 | DSP / CamillaDSP | Player status, quick settings | ON/OFF, preset. |
@@ -149,7 +148,6 @@ Example statuses:
 | --- | --- |
 | MPD - NAS - Music Library | Local library playback. |
 | AirPlay - iPhone | Passive AirPlay session. |
-| Spotify Connect - Living Room | Spotify renderer active. |
 | Bluetooth - Connected | Bluetooth source connected. |
 | RoonBridge - Ready | Renderer ready or active. |
 
@@ -178,7 +176,8 @@ Current Batch 3 mock API contract:
 | --- | --- | --- |
 | `/api/v1/health` | `GET` | Local API health and mode. |
 | `/api/v1/system/state` | `GET` | Combined playback, system, and runtime state for the UI. |
-| `/api/v1/audio/sources` | `GET` | Source list plus current source summary for `mpd`, `spotify`, and `radio`, including `radios` preset entries for direct station switching. |
+| `/api/v1/audio/sources` | `GET` | Compact source list plus current source summary for `mpd`, `radio`, `bluetooth`, and `airplay`, including armed / connected state and any advertised receiver name that the frontend should surface during pairing. |
+| `/api/v1/audio/radios` | `GET` | Searchable radio catalog with query filters for text, genre, bitrate, and paging window. |
 | `/api/v1/playback/status` | `GET` | Playback summary only. |
 | `/api/v1/system/status` | `GET` | System summary only. |
 | `/api/v1/system/runtime` | `GET` | Kiosk/runtime summary. |
@@ -186,7 +185,7 @@ Current Batch 3 mock API contract:
 | `/api/v1/playback/actions` | `POST` | Playback actions: `play_pause`, `play`, `pause`, `next`, `previous`, `seek`, `favorite_toggle`, and `volume_set`. |
 | `/api/v1/system/actions` | `POST` | System actions including `library_scan`, `reboot`, `shutdown`, and `brightness_set`. |
 
-The mock API preserves the frontend contract while the real moOde / MPD adapter is still pending, and the `mpc` runtime now uses the same API shape for a first-pass source panel. Spotify is treated as a renderer/handoff path rather than a fake full client, while Radio is modeled as a preset list first, with `radioStationId` direct switching and a default stream URI only as fallback. The same local system surface now also carries display brightness state so the ambient right-edge gesture can talk to DDC/CI through the Node service instead of the browser pretending to own the monitor.
+The mock API preserves the frontend contract while the real moOde / MPD adapter is still pending, and the `mpc` runtime now uses the same API shape for a first-pass source workspace. Radio is modeled as a searchable station catalog with `radioStationId` direct switching and a default stream URI only as fallback. Bluetooth and AirPlay are modeled as armed-only intake paths: Tikpal only opens them for new connections while the user has explicitly selected that source, and switching away closes the intake again. The same local system surface now also carries display brightness state so the ambient right-edge gesture can talk to DDC/CI through the Node service instead of the browser pretending to own the monitor.
 
 ## Errors and Fallbacks
 

@@ -14,12 +14,16 @@ export type SourceState =
 
 export type SourceAvailability = "available" | "waiting" | "unavailable";
 export type SourceControllability = "switchable" | "handoff" | "status-only";
-export type SourceSwitchTarget = "mpd" | "spotify" | "radio";
+export type SourceSwitchTarget = "mpd" | "radio" | "bluetooth" | "airplay";
+export type SourceConnectionState = "idle" | "armed" | "connected" | "blocked";
 
 export interface RadioStationSummary {
   id: string;
   label: string;
   uri: string;
+  genre: string;
+  bitrateKbps: number | null;
+  codec: string | null;
   secondaryStatus: string;
   active: boolean;
 }
@@ -31,13 +35,39 @@ export interface SourceSummary {
   availability: SourceAvailability;
   active: boolean;
   controllability: SourceControllability;
+  armed: boolean;
+  connectionState: SourceConnectionState;
+  connectedLabel: string | null;
+  advertisedLabel: string | null;
   secondaryStatus: string;
 }
 
 export interface AudioState {
   currentSource: SourceSummary;
   sources: SourceSummary[];
-  radios: RadioStationSummary[];
+}
+
+export interface RadioCatalogFilters {
+  q?: string;
+  genre?: string;
+  bitrate?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface RadioCatalogResponse {
+  stations: RadioStationSummary[];
+  total: number;
+  genres: string[];
+  bitrates: string[];
+  filters: {
+    q: string;
+    genre: string;
+    bitrate: string;
+    limit: number;
+    offset: number;
+  };
+  updatedAt: string;
 }
 
 export interface VolumeState {
