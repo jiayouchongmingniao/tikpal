@@ -110,27 +110,6 @@ function sourceDiscoveryCopy(source: SourceSummary) {
     : `Look for ${source.advertisedLabel} in your AirPlay target list.`;
 }
 
-function describeConnectionPolicy(source: SourceSummary) {
-  if (source.id === "bluetooth" || source.id === "airplay") {
-    if (source.connectedLabel) return `${source.label} is currently connected to ${source.connectedLabel}.`;
-    if (source.armed) {
-      return source.advertisedLabel
-        ? `${source.label} is armed as ${source.advertisedLabel}. New connections are allowed only while this source stays selected.`
-        : `${source.label} is armed. New connections are allowed only while this source stays selected.`;
-    }
-    if (source.controllability === "status-only") return `${source.label} cannot be armed from this runtime yet.`;
-    return source.advertisedLabel
-      ? `${source.label} is blocked until you explicitly select it. When opened, it will advertise as ${source.advertisedLabel}.`
-      : `${source.label} is blocked until you explicitly select it.`;
-  }
-
-  if (source.id === "radio") {
-    return "Radio switches immediately to the selected station and closes Bluetooth and AirPlay intake.";
-  }
-
-  return "Library returns playback to the local MPD queue and closes wireless intake paths.";
-}
-
 export function PlayerOverlay({
   active,
   playback,
@@ -142,7 +121,6 @@ export function PlayerOverlay({
   onReturnAmbient
 }: PlayerOverlayProps) {
   const overlayReturnGesture = useOverlayReturnGesture(onReturnAmbient);
-  const [sourcePanelOpen, setSourcePanelOpen] = useState(false);
   const [queuePanelOpen, setQueuePanelOpen] = useState(false);
   const [selectedSource, setSelectedSource] = useState<SourceSwitchTarget>("mpd");
   const [pendingSource, setPendingSource] = useState<SourceSwitchTarget | null>(null);
@@ -202,7 +180,6 @@ export function PlayerOverlay({
 
   useEffect(() => {
     if (!active) {
-      setSourcePanelOpen(false);
       setQueuePanelOpen(false);
       setPendingSource(null);
       setPendingRadioStationId(null);
@@ -231,7 +208,7 @@ export function PlayerOverlay({
   }, [seekSupported]);
 
   useEffect(() => {
-    if (!sourcePanelOpen || selectedSource !== "radio") return;
+    if (!active || selectedSource !== "radio") return;
 
     const controller = new AbortController();
     setRadioLoading(true);
@@ -260,7 +237,7 @@ export function PlayerOverlay({
       });
 
     return () => controller.abort();
-  }, [deferredRadioQuery, radioBitrate, radioGenre, selectedSource, sourcePanelOpen]);
+  }, [active, deferredRadioQuery, radioBitrate, radioGenre, selectedSource]);
 
   async function handleSourceSwitch(target: SourceSwitchTarget, radioStation?: RadioStationSummary) {
     if (status.pending || pendingSource) return;
@@ -273,25 +250,25 @@ export function PlayerOverlay({
       const nextSource = findSource(nextState.audio, target);
 
       if (target === "radio" && nextSource?.active) {
-        setSourceHint(`Radio switched to ${radioStation?.label ?? nextSource.secondaryStatus}.`);
+        setSourceHint(`${radioStation?.label ?? nextSource.label} live.`);
       } else if (target === "bluetooth" && nextSource) {
         setSourceHint(
           nextSource.connectedLabel
-            ? `Bluetooth connected to ${nextSource.connectedLabel}.`
+            ? `Bluetooth: ${nextSource.connectedLabel}.`
             : nextSource.advertisedLabel
-              ? `Bluetooth pairing is now open as ${nextSource.advertisedLabel}.`
-              : "Bluetooth pairing is now open."
+              ? `Bluetooth ready as ${nextSource.advertisedLabel}.`
+              : "Bluetooth ready."
         );
       } else if (target === "airplay" && nextSource) {
         setSourceHint(
           nextSource.connectedLabel
-            ? `AirPlay connected to ${nextSource.connectedLabel}.`
+            ? `AirPlay: ${nextSource.connectedLabel}.`
             : nextSource.advertisedLabel
-              ? `AirPlay is now open as ${nextSource.advertisedLabel}.`
-              : "AirPlay is now open for new connections."
+              ? `AirPlay ready as ${nextSource.advertisedLabel}.`
+              : "AirPlay ready."
         );
       } else if (target === "mpd" && nextSource?.active) {
-        setSourceHint("Returned to the local library playback path.");
+        setSourceHint("Library ready.");
       }
     } catch (error) {
       setSourceError(error instanceof Error ? error.message : "Source switch failed");
@@ -327,13 +304,14 @@ export function PlayerOverlay({
   }
 
   async function handleSourceRailPress(source: SourceSummary & { id: SourceSwitchTarget }) {
+    setSelectedSource(source.id);
     if (source.id === "radio") {
-      setSelectedSource("radio");
-      setSourcePanelOpen(true);
+      if (!source.active) {
+        await handleSourceSwitch("radio");
+      }
       return;
     }
 
-    setSelectedSource(source.id);
     await handleSourceSwitch(source.id);
   }
 
@@ -372,8 +350,8 @@ export function PlayerOverlay({
           </div>
 
           <div className="source-result-meta">
-            <span>{radioLoading ? "Refreshing station catalog..." : `${radioCatalog.total} stations ready`}</span>
-            <span>{radioCatalog.filters.genre || "All genres"} · {radioCatalog.filters.bitrate || "All bitrates"}</span>
+            <span>{radioLoading ? "Refreshing stations..." : `${radioCatalog.total} stations`}</span>
+            <span>{radioCatalog.filters.genre || "All genres"}</span>
           </div>
 
           {radioError ? <p className="source-panel-error">{radioError}</p> : null}
@@ -396,9 +374,7 @@ export function PlayerOverlay({
                     <p>{stationPending ? "Switching station..." : station.secondaryStatus}</p>
                   </div>
                   <div className="radio-catalog-meta">
-                    <span>{station.genre}</span>
-                    <span>{station.bitrateKbps ? `${station.bitrateKbps} kbps` : "Stream"}</span>
-                    <span>{station.codec ?? "Unknown"}</span>
+                    <span>{station.genre || "Radio"}</span>
                   </div>
                   <div className="radio-station-state" aria-hidden="true">
                     {stationPending ? <LoaderCircle size={16} className="is-spinning" /> : station.active ? <Check size={16} /> : null}
@@ -428,7 +404,11 @@ export function PlayerOverlay({
           <div className="source-hero-copy">
             <span className="source-panel-kicker">{selectedSourceSummary.label}</span>
             <strong>{selectedSourceSummary.secondaryStatus}</strong>
-            <p>{describeConnectionPolicy(selectedSourceSummary)}</p>
+            <p>
+              {selectedSourceSummary.id === "bluetooth" || selectedSourceSummary.id === "airplay"
+                ? sourceDiscoveryCopy(selectedSourceSummary) ?? selectedSourceSummary.secondaryStatus
+                : selectedSourceSummary.secondaryStatus}
+            </p>
           </div>
           <button
             className={`source-hero-action ${selectedSourceSummary.active ? "is-active" : ""}`}
@@ -440,24 +420,6 @@ export function PlayerOverlay({
             {isPending ? <LoaderCircle size={18} className="is-spinning" /> : null}
             <span>{sourceActionCopy(selectedSourceSummary)}</span>
           </button>
-        </div>
-
-        <div className="source-policy-grid">
-          <article className="source-policy-card">
-            <span>Status</span>
-            <strong>{selectedSourceSummary.connectionState}</strong>
-            <p>{selectedSourceSummary.connectedLabel ?? sourceDiscoveryCopy(selectedSourceSummary) ?? selectedSourceSummary.secondaryStatus}</p>
-          </article>
-          <article className="source-policy-card">
-            <span>Availability</span>
-            <strong>{selectedSourceSummary.availability}</strong>
-            <p>{selectedSourceSummary.controllability === "status-only" ? "Read-only in this runtime" : "User-selectable source"}</p>
-          </article>
-          <article className="source-policy-card">
-            <span>Gate</span>
-            <strong>{selectedSourceSummary.armed ? "Open" : "Closed"}</strong>
-            <p>{selectedSourceSummary.id === "bluetooth" || selectedSourceSummary.id === "airplay" ? "New connections are allowed only while selected." : "Wireless intake is closed."}</p>
-          </article>
         </div>
       </section>
     );
@@ -493,26 +455,15 @@ export function PlayerOverlay({
             <p>{playback.currentTrackIndex} of {playback.queueLength}</p>
           </div>
 
-          <div className={`source-panel source-workspace ${sourcePanelOpen ? "is-open" : ""}`}>
+          <div className="source-panel source-workspace">
             <div className="source-panel-header">
               <div>
-                <span className="source-panel-kicker">Source Workspace</span>
+                <span className="source-panel-kicker">Sources</span>
                 <strong>{currentSource.label}</strong>
-                <p>{currentSource.secondaryStatus}</p>
+                <p>Tap once to switch.</p>
               </div>
-              <button
-                className="source-panel-toggle"
-                type="button"
-                aria-expanded={sourcePanelOpen}
-                data-source-panel-toggle
-                data-gesture-control
-                onClick={() => setSourcePanelOpen((current) => !current)}
-              >
-                {sourcePanelOpen ? "Hide" : "Show"} Sources
-              </button>
             </div>
 
-            {sourcePanelOpen ? (
               <div className="source-workspace-shell" data-source-workspace data-source-panel>
                 <nav className="source-rail" aria-label="Source categories">
                   {audio.sources
@@ -537,7 +488,6 @@ export function PlayerOverlay({
                               <strong>{source.label}</strong>
                               <span>{sourceActionLabel(source)}</span>
                             </div>
-                            <p>{source.secondaryStatus}</p>
                           </div>
                         </button>
                       );
@@ -545,27 +495,7 @@ export function PlayerOverlay({
                 </nav>
 
                 {renderSourceWorkspaceContent()}
-
-                <aside className="source-detail-panel" aria-label="Source detail">
-                  <span className="source-panel-kicker">Selected Source</span>
-                  <strong>{selectedSourceSummary.label}</strong>
-                  <p>{selectedSourceSummary.secondaryStatus}</p>
-
-                  <div className="source-detail-stack">
-                    <article className="source-detail-card">
-                      <span>Connection</span>
-                      <strong>{selectedSourceSummary.connectionState}</strong>
-                      <p>{selectedSourceSummary.connectedLabel ?? sourceDiscoveryCopy(selectedSourceSummary) ?? "No device connected"}</p>
-                    </article>
-                    <article className="source-detail-card">
-                      <span>Policy</span>
-                      <strong>{selectedSourceSummary.armed ? "Armed" : "Blocked"}</strong>
-                      <p>{describeConnectionPolicy(selectedSourceSummary)}</p>
-                    </article>
-                  </div>
-                </aside>
               </div>
-            ) : null}
 
             {sourceError ? <p className="source-panel-error">{sourceError}</p> : null}
             {!sourceError && sourceHint ? <p className="source-panel-hint">{sourceHint}</p> : null}

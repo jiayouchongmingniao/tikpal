@@ -160,11 +160,44 @@ export interface RuntimeState {
   updatedAt: string;
 }
 
+export interface LyricsLine {
+  text: string;
+  startMs: number | null;
+  endMs: number | null;
+}
+
+export type LyricsTimingStrategy =
+  | "provider_synced"
+  | "bluez_duration_clipped"
+  | "estimated_plain"
+  | "plain_static"
+  | "static_duration_mismatch"
+  | null;
+
+export interface LyricsState {
+  status: "idle" | "recognizing" | "ready" | "not_found" | "error";
+  sourceScope: "local_playback" | "bluetooth_input";
+  providerMode: "online";
+  recognitionMode: "metadata" | "fingerprint" | null;
+  recognitionProvider: "lrclib" | "acrcloud" | null;
+  recognitionConfidence: number | null;
+  trackKey: string | null;
+  title: string | null;
+  artist: string | null;
+  synced: boolean;
+  timingStrategy: LyricsTimingStrategy;
+  activeLineIndex: number | null;
+  lines: LyricsLine[];
+  message: string | null;
+  updatedAt: string;
+}
+
 export interface TikpalState {
   playback: PlaybackSummary;
   system: SystemState;
   runtime: RuntimeState;
   audio: AudioState;
+  lyrics: LyricsState;
 }
 
 export type PlaybackActionType = "play_pause" | "play" | "pause" | "next" | "previous" | "seek" | "favorite_toggle" | "volume_set";

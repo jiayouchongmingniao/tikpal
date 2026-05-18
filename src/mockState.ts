@@ -1,4 +1,4 @@
-import type { AudioState, PlaybackSummary, RadioStationSummary, SourceSummary, SystemState, TikpalState } from "./types";
+import type { AudioState, LyricsState, PlaybackSummary, RadioStationSummary, SourceSummary, SystemState, TikpalState } from "./types";
 
 export const playback: PlaybackSummary = {
   state: "playing",
@@ -216,6 +216,29 @@ export const radioStations: RadioStationSummary[] = [
     })
 ];
 
+export const lyricsState: LyricsState = {
+  status: "ready",
+  sourceScope: "local_playback",
+  providerMode: "online",
+  recognitionMode: "metadata",
+  recognitionProvider: "lrclib",
+  recognitionConfidence: null,
+  trackKey: "mock:get-lucky:daft-punk",
+  title: "Get Lucky (feat. Pharrell Williams)",
+  artist: "Daft Punk",
+  synced: true,
+  timingStrategy: "provider_synced",
+  activeLineIndex: null,
+  lines: [
+    { text: "Like the legend of the phoenix", startMs: 12000, endMs: 18000 },
+    { text: "All ends with beginnings", startMs: 18000, endMs: 23500 },
+    { text: "What keeps the planet spinning", startMs: 23500, endMs: 30000 },
+    { text: "The force from the beginning", startMs: 30000, endMs: 36000 }
+  ],
+  message: null,
+  updatedAt: new Date().toISOString()
+};
+
 export const fallbackTikpalState: TikpalState = {
   playback,
   system: systemState,
@@ -227,7 +250,8 @@ export const fallbackTikpalState: TikpalState = {
     apiMode: "mock",
     updatedAt: new Date().toISOString()
   },
-  audio: audioState
+  audio: audioState,
+  lyrics: lyricsState
 };
 
 export function formatDuration(seconds: number | null): string {

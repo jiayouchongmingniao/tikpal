@@ -144,6 +144,22 @@ async function expect(client, expression, label) {
   console.log(`ok - ${label}`);
 }
 
+async function expectEventually(client, expression, label, attempts = 20, delayMs = 150) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const result = await client.send("Runtime.evaluate", {
+      expression,
+      returnByValue: true
+    });
+    if (result.result.value) {
+      console.log(`ok - ${label}`);
+      return;
+    }
+    await wait(delayMs);
+  }
+
+  throw new Error(`Failed: ${label}`);
+}
+
 async function navigate(client, url) {
   await client.send("Page.navigate", { url });
   await wait(750);
@@ -273,6 +289,7 @@ try {
   await navigate(client, APP_URL);
   await expect(client, "document.querySelector('.ambient-screen') !== null", "ambient root renders");
   await expect(client, "document.querySelector('.ambient-screen.is-hud-visible') !== null", "ambient HUD starts visible");
+  await expect(client, "document.querySelector('[data-ambient-lyrics]') !== null", "ambient lyrics layer renders");
 
   await wait(5600);
   await expect(client, "document.querySelector('.ambient-screen.is-hud-hidden') !== null", "ambient HUD auto hides after startup");
@@ -287,16 +304,6 @@ try {
   await click(client, 1360, 600);
   await expect(client, "document.querySelector('.player-overlay.is-active') !== null", "protected player click stays in player");
 
-  await evaluate(
-    client,
-    `
-      (() => {
-        const target = document.querySelector('[data-source-panel-toggle]');
-        target?.click();
-        return Boolean(target);
-      })()
-    `
-  );
   await expect(client, "document.querySelector('[data-source-panel]') !== null", "player source panel opens");
 
   await evaluate(
@@ -309,7 +316,19 @@ try {
       })()
     `
   );
-  await expect(client, "document.querySelector('.source-line span')?.textContent?.includes('Bluetooth') === true", "single tap on bluetooth source switches source");
+  await expectEventually(client, "document.querySelector('.source-line span')?.textContent?.includes('Bluetooth') === true", "single tap on bluetooth source switches source");
+
+  await evaluate(
+    client,
+    `
+      (() => {
+        const target = document.querySelector('[data-source-item="mpd"]');
+        target?.click();
+        return Boolean(target);
+      })()
+    `
+  );
+  await expectEventually(client, "document.querySelector('.source-line span')?.textContent?.includes('Library') === true", "single tap on library source returns to mpd");
 
   await evaluate(
     client,

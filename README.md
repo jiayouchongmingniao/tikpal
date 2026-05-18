@@ -148,6 +148,8 @@ The local API now exposes a first-class audio-source model for `Library`, `Radio
 
 The real moOde / MPD adapter remains the audio owner. In `mpc` mode, Tikpal keeps MPD/library control as the default path, treats Radio as a searchable station catalog with direct `radioStationId` switching, and now models Bluetooth / AirPlay as armed-only intake paths: they are connectable only while explicitly selected. `TIKPAL_RADIO_DEFAULT_URI` stays as a fallback when moOde presets are unavailable, while Bluetooth / AirPlay gating is wired through environment-configured enable/disable and status commands. Bluetooth state now also carries the local advertised device name so the frontend can tell the user exactly what to look for on their phone while pairing.
 
+Ambient lyrics now have two recognition paths behind the same `lyrics` state. Local `MPD` / `Radio` playback still resolves lyrics from metadata through LRCLIB, while Bluetooth first tries BlueZ / AVRCP title metadata and playback position, then can fall back to a short local PCM sample identified through ACRCloud before reusing the same LRCLIB lyrics lookup. The Bluetooth recognition path is only armed while Bluetooth is the selected source and the input is actually connected, and it keeps its own `bluetooth_input` scope so source truth stays separate from `audio.currentSource` and `playback.source`.
+
 Quick Settings now also includes a local font preset selector, and the ambient flame screen has split live-control zones: left for volume, right for DDC/CI brightness on supported displays.
 
 ## Current Gaps

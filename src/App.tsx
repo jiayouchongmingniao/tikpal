@@ -75,6 +75,7 @@ export default function App() {
         timeLabel={timeLabel}
         dateLabel={dateLabel}
         playback={tikpalState.playback}
+        lyrics={tikpalState.lyrics}
         audio={tikpalState.audio}
         system={tikpalState.system}
         status={tikpalStatus}

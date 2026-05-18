@@ -1,16 +1,17 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { Settings, SunMedium, Volume2 } from "lucide-react";
 import { FlameScene } from "./FlameScene";
 import { buildGeneratedCoverArtUrl } from "../coverArt";
 import { formatDuration, formatSampleRate } from "../mockState";
 import type { TikpalDataStatus } from "../hooks/useTikpalState";
-import type { AudioState, PlaybackActionType, PlaybackSummary, SystemActionType, SystemState, TikpalState } from "../types";
+import type { AudioState, LyricsState, PlaybackActionType, PlaybackSummary, SystemActionType, SystemState, TikpalState } from "../types";
 
 interface AmbientScreenProps {
   hudVisible: boolean;
   timeLabel: string;
   dateLabel: string;
   playback: PlaybackSummary;
+  lyrics: LyricsState;
   audio: AudioState;
   system: SystemState;
   status: TikpalDataStatus;
@@ -36,11 +37,34 @@ interface AdjustOverlayState {
 
 const DRAG_PIXELS_PER_PERCENT = 4;
 
+function findActiveLyricsLineIndex(lyrics: LyricsState, elapsedSeconds: number | null) {
+  if (!lyrics.synced || lyrics.lines.length === 0 || !Number.isFinite(elapsedSeconds)) {
+    return null;
+  }
+
+  const elapsedMs = Math.max(0, Math.round((elapsedSeconds ?? 0) * 1000));
+  for (let index = lyrics.lines.length - 1; index >= 0; index -= 1) {
+    const line = lyrics.lines[index];
+    if (line.startMs === null) continue;
+    if (elapsedMs >= line.startMs) {
+      if (line.endMs === null || elapsedMs < line.endMs) {
+        return index;
+      }
+      if (elapsedMs >= line.endMs) {
+        return Math.min(index + 1, lyrics.lines.length - 1);
+      }
+    }
+  }
+
+  return 0;
+}
+
 export function AmbientScreen({
   hudVisible,
   timeLabel,
   dateLabel,
   playback,
+  lyrics,
   audio,
   system,
   status,
@@ -54,6 +78,8 @@ export function AmbientScreen({
     brightness: { inFlight: false, queued: null, lastSent: null }
   });
   const [adjustOverlay, setAdjustOverlay] = useState<AdjustOverlayState | null>(null);
+  const [frozenLyricsLineIndex, setFrozenLyricsLineIndex] = useState<number | null>(null);
+  const [staticLyricsLineIndex, setStaticLyricsLineIndex] = useState(0);
   const title = playback.title ?? "Not Playing";
   const artist = playback.artist ?? "Unknown Artist";
   const album = playback.album ?? "No Album";
@@ -68,6 +94,67 @@ export function AmbientScreen({
     .toUpperCase();
   const coverArtUrl = playback.albumArtUrl ?? buildGeneratedCoverArtUrl(title, artist, album);
   const brightnessPercent = system.display.brightnessPercent;
+  const canAdvanceLyrics = lyrics.synced
+    && (playback.source === "mpd" || playback.source === "radio" || playback.source === "bluetooth")
+    && playback.state === "playing";
+  const computedLyricsLineIndex = canAdvanceLyrics ? findActiveLyricsLineIndex(lyrics, playback.elapsedSeconds) : null;
+  const activeLyricsLineIndex = canAdvanceLyrics ? computedLyricsLineIndex : frozenLyricsLineIndex;
+  const activeLyricsLine = activeLyricsLineIndex !== null ? lyrics.lines[activeLyricsLineIndex] ?? null : null;
+  const staticLyricsLines = lyrics.lines.map((line) => line.text.trim()).filter(Boolean);
+  const staticLyricsText = staticLyricsLines.length > 0
+    ? staticLyricsLines[staticLyricsLineIndex % staticLyricsLines.length] ?? ""
+    : "";
+  const showSyncedLyrics = lyrics.status === "ready" && lyrics.synced && canAdvanceLyrics && Boolean(activeLyricsLine);
+  const showStaticLyrics = lyrics.status === "ready" && Boolean(staticLyricsText) && (!lyrics.synced || !canAdvanceLyrics);
+  const showIdentifiedTrack = (lyrics.status === "not_found" || lyrics.status === "error") && Boolean(lyrics.title || lyrics.artist);
+  const recognizingMessage = lyrics.sourceScope === "bluetooth_input"
+    ? "Listening to Bluetooth audio..."
+    : "Identifying track...";
+  const tickerText = showSyncedLyrics
+    ? activeLyricsLine?.text ?? ""
+    : showStaticLyrics
+      ? staticLyricsText
+      : showIdentifiedTrack
+        ? [lyrics.title, lyrics.artist].filter(Boolean).join(" - ")
+        : lyrics.status === "recognizing"
+          ? recognizingMessage
+          : (lyrics.status === "idle" || lyrics.status === "not_found" || lyrics.status === "error")
+            ? lyrics.message ?? ""
+            : "";
+  const shouldScrollTicker = tickerText.length > 56;
+  const marqueeDurationSeconds = shouldScrollTicker
+    ? Math.max(34, Math.min(96, Math.ceil(tickerText.length * 0.45)))
+    : 0;
+  const tickerStyle = shouldScrollTicker
+    ? ({ "--ambient-lyrics-marquee-duration": `${marqueeDurationSeconds}s` } as CSSProperties)
+    : undefined;
+
+  useEffect(() => {
+    if (computedLyricsLineIndex !== null) {
+      setFrozenLyricsLineIndex(computedLyricsLineIndex);
+      return;
+    }
+
+    if (!lyrics.synced) {
+      setFrozenLyricsLineIndex(null);
+    }
+  }, [computedLyricsLineIndex, lyrics.synced, lyrics.trackKey]);
+
+  useEffect(() => {
+    setStaticLyricsLineIndex(0);
+  }, [lyrics.status, lyrics.sourceScope, lyrics.trackKey]);
+
+  useEffect(() => {
+    if (lyrics.status !== "ready" || staticLyricsLines.length <= 1 || (lyrics.synced && canAdvanceLyrics)) {
+      return undefined;
+    }
+
+    const interval = window.setInterval(() => {
+      setStaticLyricsLineIndex((current) => (current + 1) % staticLyricsLines.length);
+    }, lyrics.sourceScope === "bluetooth_input" ? 8500 : 7000);
+
+    return () => window.clearInterval(interval);
+  }, [canAdvanceLyrics, lyrics.sourceScope, lyrics.status, lyrics.synced, lyrics.trackKey, staticLyricsLines.length]);
 
   useEffect(() => {
     requestStateRef.current.volume.lastSent = system.volume.percent;
@@ -243,6 +330,23 @@ export function AmbientScreen({
       <div className="ambient-clock" aria-label="Current time">
         <div className="ambient-time">{timeLabel}</div>
         <div className="ambient-date">{dateLabel}</div>
+      </div>
+
+      <div className="ambient-lyrics-layer" aria-live="polite" data-ambient-lyrics>
+        {tickerText ? (
+          <div
+            className={`ambient-lyrics-ticker ${shouldScrollTicker ? "is-scrolling" : "is-static"} ${lyrics.status === "error" ? "is-error" : ""}`}
+            data-lyrics-state={lyrics.status}
+            style={tickerStyle}
+          >
+            <div className="ambient-lyrics-marquee">
+              <div className="ambient-lyrics-marquee-track">
+                <span className="ambient-lyrics-text">{tickerText}</span>
+                {shouldScrollTicker ? <span className="ambient-lyrics-text" aria-hidden="true">{tickerText}</span> : null}
+              </div>
+            </div>
+          </div>
+        ) : null}
       </div>
 
       <div className="ambient-hud" aria-label="Current playback">
