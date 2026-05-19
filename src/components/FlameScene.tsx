@@ -15,6 +15,7 @@ const flameHotspots = [
 
 const FLAME_COUNT = flameHotspots.reduce((count, hotspot) => count + hotspot.count, 0);
 const FLARE_COUNT = 2;
+const BACK_WALL_FLARE_COUNT = 5;
 const SPARK_COUNT = 420;
 const EMBER_COUNT = 360;
 const ASH_COUNT = 120;
@@ -120,6 +121,99 @@ export function FlameScene({ lowPower = false }: FlameSceneProps) {
     firebed.position.set(0, -0.78, -0.01);
     scene.add(firebed);
     disposables.push(firebedGeometry, firebedMaterial);
+
+    const backWallFlareBaseGeometry = new THREE.PlaneGeometry(1, 1, 8, 24);
+    const backWallFlareGeometry = new THREE.InstancedBufferGeometry();
+    backWallFlareGeometry.index = backWallFlareBaseGeometry.index;
+    backWallFlareGeometry.attributes.position = backWallFlareBaseGeometry.attributes.position;
+    backWallFlareGeometry.attributes.uv = backWallFlareBaseGeometry.attributes.uv;
+    backWallFlareGeometry.instanceCount = BACK_WALL_FLARE_COUNT;
+
+    const backWallFlareSeeds = new Float32Array(BACK_WALL_FLARE_COUNT);
+    for (let index = 0; index < BACK_WALL_FLARE_COUNT; index += 1) {
+      backWallFlareSeeds[index] = Math.random();
+    }
+    backWallFlareGeometry.setAttribute("iSeed", new THREE.InstancedBufferAttribute(backWallFlareSeeds, 1));
+
+    const backWallFlareMaterial = new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      blending: THREE.AdditiveBlending,
+      uniforms: {
+        uTime: { value: 0 }
+      },
+      vertexShader: `
+        attribute float iSeed;
+        uniform float uTime;
+        varying vec2 vUv;
+        varying float vPresence;
+        varying float vHeight;
+        varying float vWallPocket;
+
+        float hash(float value) {
+          return fract(sin(value) * 43758.5453123);
+        }
+
+        void main() {
+          vUv = uv;
+          float cycleLength = 8.5 + iSeed * 6.5;
+          float cycle = floor((uTime + iSeed * 23.0) / cycleLength);
+          float phase = fract((uTime + iSeed * 23.0) / cycleLength);
+          float appear = smoothstep(0.02, 0.09, phase);
+          float vanish = 1.0 - smoothstep(0.28, 0.58, phase);
+          float pulse = 0.72 + 0.28 * sin(phase * 31.416);
+          float presence = max(0.018, appear * vanish * pulse);
+          float randX = hash(cycle * 17.11 + iSeed * 71.9);
+          float randH = hash(cycle * 3.29 + iSeed * 53.4);
+          float randW = hash(cycle * 7.91 + iSeed * 19.6);
+          float baseX = mix(-1.36, 1.36, randX);
+          float flameHeight = mix(0.24, 0.42, randH);
+          float flameWidth = mix(0.3, 0.52, randW);
+          float wallPocket = smoothstep(0.18, 0.82, randX);
+          float height = uv.y;
+          float taper = mix(1.0, 0.08, pow(height, 1.18));
+          float sway = sin(uTime * (0.42 + iSeed * 0.18) + height * 6.4 + iSeed * 13.0);
+          vec3 p = position;
+          p.x = p.x * flameWidth * taper + baseX + sway * 0.055 * height * presence;
+          p.y = p.y * flameHeight * presence + flameHeight * 0.5 * presence - 0.58;
+          p.z = -0.04;
+          vPresence = presence;
+          vHeight = randH;
+          vWallPocket = wallPocket;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
+        }
+      `,
+      fragmentShader: `
+        varying vec2 vUv;
+        varying float vPresence;
+        varying float vHeight;
+        varying float vWallPocket;
+
+        void main() {
+          float height = vUv.y;
+          float center = abs(vUv.x - 0.5);
+          float width = mix(0.48, 0.05, pow(height, 1.1));
+          float body = smoothstep(width, width - 0.2, center);
+          float core = smoothstep(width * 0.28, width * 0.28 - 0.08, center);
+          float baseFade = smoothstep(0.0, 0.1, height);
+          float tipFade = 1.0 - smoothstep(0.64, 0.98, height);
+          vec3 emberRed = vec3(0.7, 0.065, 0.014);
+          vec3 wallOrange = vec3(1.0, 0.42, 0.06);
+          vec3 paleCore = vec3(1.0, 0.78, 0.28);
+          vec3 color = mix(emberRed, wallOrange, height * 0.62 + core * 0.28);
+          color = mix(color, paleCore, core * (0.55 - height * 0.22));
+          color *= 0.72 + vHeight * 0.28 + vWallPocket * 0.08;
+          float alpha = body * baseFade * tipFade * vPresence * (0.5 + core * 0.42);
+          gl_FragColor = vec4(color, alpha);
+        }
+      `
+    });
+
+    const backWallFlares = new THREE.Mesh(backWallFlareGeometry, backWallFlareMaterial);
+    backWallFlares.renderOrder = 1;
+    scene.add(backWallFlares);
+    disposables.push(backWallFlareBaseGeometry, backWallFlareGeometry, backWallFlareMaterial);
 
     const flameBaseGeometry = new THREE.PlaneGeometry(1, 1, 12, 24);
     const flameGeometry = new THREE.InstancedBufferGeometry();
@@ -566,6 +660,7 @@ export function FlameScene({ lowPower = false }: FlameSceneProps) {
       lastRenderAt = timestamp - ((timestamp - lastRenderAt) % TARGET_FRAME_MS);
       const elapsed = (performance.now() - startedAt) / 1000;
       firebedMaterial.uniforms.uTime.value = elapsed;
+      backWallFlareMaterial.uniforms.uTime.value = elapsed;
       flameMaterial.uniforms.uTime.value = elapsed;
       flareMaterial.uniforms.uTime.value = elapsed;
       sparkMaterial.uniforms.uTime.value = elapsed;
