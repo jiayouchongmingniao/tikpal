@@ -218,6 +218,7 @@ async function run() {
       TIKPAL_BLUETOOTH_CAPTURE_MOCK_FILE: BLUETOOTH_SCENARIO_PATH,
       TIKPAL_BLUETOOTH_RECOGNITION_SETTLE_MS: "700",
       TIKPAL_BLUETOOTH_RECOGNITION_RETRY_MS: "45000",
+      TIKPAL_BLUETOOTH_RECOGNITION_NOT_FOUND_RETRY_MS: "300",
       TIKPAL_MOCK_BLUETOOTH_CONNECT_AFTER_MS: "150",
       TIKPAL_MOCK_BLUETOOTH_METADATA_FILE: BLUETOOTH_METADATA_PATH,
       TIKPAL_LRCLIB_BASE_URL: PROVIDER_URL,
@@ -405,6 +406,13 @@ async function run() {
     await waitForLyricsStatus(["recognizing"]);
     const bluetoothNotFound = await waitForLyricsStatus(["not_found"]);
     assert(bluetoothNotFound.sourceScope === "bluetooth_input", "bluetooth not_found should keep bluetooth_input scope");
+
+    await writeFile(BLUETOOTH_SCENARIO_PATH, "BT_SUCCESS\n");
+    await wait(350);
+    const bluetoothRetryTick = await request("/api/v1/system/state");
+    assert(bluetoothRetryTick.response.ok, "system state should schedule bluetooth retry after not_found backoff");
+    const bluetoothRetryReady = await waitForLyricsStatus(["ready"]);
+    assert(bluetoothRetryReady.title === "Get Lucky (feat. Pharrell Williams)", "bluetooth not_found should retry and recover when a later sample identifies the track");
 
     await writeFile(BLUETOOTH_SCENARIO_PATH, "BT_ERROR\n");
     const bluetoothRefreshError = await request("/api/v1/lyrics/refresh", {

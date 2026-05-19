@@ -50,15 +50,34 @@ extract_property_uint() {
   printf '%s\n' "$1" | sed -n 's/^u \([0-9][0-9]*\)/\1/p' | head -n 1
 }
 
-title="$(extract_string Title)"
-artist="$(extract_string Artist)"
-album="$(extract_string Album)"
+decode_busctl_string() {
+  value="$1"
+  if [ -z "$value" ]; then
+    return 0
+  fi
+  printf '%b' "$value"
+}
+
+sanitize_text_value() {
+  value="$(decode_busctl_string "$1")"
+  normalized="$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')"
+  case "$normalized" in
+    "" | "unknown" | "unknow" | "unknown artist" | "unknown album")
+      return 0
+      ;;
+  esac
+  printf '%s' "$value"
+}
+
+title="$(sanitize_text_value "$(extract_string Title)")"
+artist="$(sanitize_text_value "$(extract_string Artist)")"
+album="$(sanitize_text_value "$(extract_string Album)")"
 duration_ms="$(extract_uint Duration)"
 status_value="$(extract_property_string "$status")"
 position_ms="$(extract_property_uint "$position")"
 
 if [ -z "$artist" ]; then
-  artist="$(extract_artist_array)"
+  artist="$(sanitize_text_value "$(extract_artist_array)")"
 fi
 
 if [ -n "$title" ]; then

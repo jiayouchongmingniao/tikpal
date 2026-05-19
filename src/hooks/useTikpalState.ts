@@ -15,6 +15,7 @@ export interface TikpalDataStatus {
 }
 
 const REFRESH_MS = 3000;
+const AUDIO_PROTECTION_REFRESH_MS = 6000;
 
 export function useTikpalState() {
   const [state, setState] = useState<TikpalState>(fallbackTikpalState);
@@ -41,16 +42,19 @@ export function useTikpalState() {
 
   useEffect(() => {
     const controller = new AbortController();
+    const refreshMs = state.playback.source === "airplay" && state.playback.state === "playing"
+      ? AUDIO_PROTECTION_REFRESH_MS
+      : REFRESH_MS;
     void refresh(controller.signal);
     const interval = window.setInterval(() => {
       void refresh();
-    }, REFRESH_MS);
+    }, refreshMs);
 
     return () => {
       controller.abort();
       window.clearInterval(interval);
     };
-  }, [refresh]);
+  }, [refresh, state.playback.source, state.playback.state]);
 
   const sendPlaybackAction = useCallback(async (type: PlaybackActionType, value?: number) => {
     setStatus((current) => ({ ...current, pending: true, error: null }));

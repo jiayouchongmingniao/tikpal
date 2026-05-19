@@ -96,6 +96,8 @@ TIKPAL_MPD_PORT=6600
 TIKPAL_MPC_BIN=mpc
 TIKPAL_MPD_DEFAULT_QUEUE_PATH=Codex
 TIKPAL_MPD_STARTUP_VOLUME=30
+TIKPAL_OUTPUT_VOLUME_GET_COMMAND="amixer get PCM"
+TIKPAL_OUTPUT_VOLUME_SET_COMMAND="amixer sset PCM %VALUE%%"
 TIKPAL_DDCUTIL_BIN=ddcutil
 TIKPAL_DDCUTIL_DISPLAY=""
 TIKPAL_SPOTIFY_READY_COMMAND=""
@@ -111,10 +113,15 @@ TIKPAL_BLUETOOTH_CAPTURE_COMMAND="./deploy/moode/tikpal-bluetooth-capture.sh"
 TIKPAL_BLUETOOTH_CAPTURE_DURATION_SECONDS=10
 TIKPAL_BLUETOOTH_RECOGNITION_SETTLE_MS=4000
 TIKPAL_BLUETOOTH_RECOGNITION_RETRY_MS=45000
+TIKPAL_BLUETOOTH_RECOGNITION_NOT_FOUND_RETRY_MS=30000
 TIKPAL_AIRPLAY_READY_COMMAND="[ \"$(sqlite3 /var/local/www/db/moode-sqlite3.db \"SELECT value FROM cfg_system WHERE param='airplaysvc'\")\" = \"1\" ]"
 TIKPAL_AIRPLAY_ACTIVE_COMMAND="[ \"$(sqlite3 /var/local/www/db/moode-sqlite3.db \"SELECT value FROM cfg_system WHERE param='aplactive'\")\" = \"1\" ]"
-TIKPAL_AIRPLAY_ENABLE_COMMAND="moodeutl -Ro --airplay on"
+TIKPAL_AIRPLAY_ENABLE_COMMAND="./deploy/moode/tikpal-airplay-enable.sh"
 TIKPAL_AIRPLAY_DISABLE_COMMAND="moodeutl -Ro --airplay off"
+TIKPAL_AIRPLAY_RECEIVER_ACTIVE_COMMAND="systemctl is-active --quiet shairport-sync.service"
+TIKPAL_AIRPLAY_METADATA_COMMAND="./deploy/moode/tikpal-airplay-metadata.sh"
+TIKPAL_AIRPLAY_METADATA_MAX_AGE_SECONDS=3600
+TIKPAL_AIRPLAY_METADATA_CLOCK_LEAD_MS=1000
 TIKPAL_RECOGNITION_PROVIDER=acrcloud
 TIKPAL_ACRCLOUD_HOST=identify-cn-north-1.acrcloud.com
 TIKPAL_ACRCLOUD_ACCESS_KEY="YOUR_ACCESS_KEY"
@@ -132,10 +139,11 @@ EOF
 `TIKPAL_MPD_STARTUP_VOLUME=30` makes Tikpal set MPD to 30% before auto-resuming playback when the API starts and playback is not already running.
 `TIKPAL_DDCUTIL_BIN` and optional `TIKPAL_DDCUTIL_DISPLAY` control the ambient right-edge brightness gesture path when the display exposes DDC/CI VCP `0x10`.
 `TIKPAL_SPOTIFY_*` lets the Pi expose Spotify Connect as a truthful ready/active handoff target without using Spotify Web API.
-`TIKPAL_BLUETOOTH_*` and `TIKPAL_AIRPLAY_*` let Tikpal enforce the armed-only source gate against moOde's renderer services. On moOde, the checked-in `deploy/moode/tikpal-bluetooth-enable.sh` script is the preferred Bluetooth enable path because it both enables the renderer and re-arms the controller to `power on`, `discoverable on`, and `pairable on`. `deploy/moode/tikpal-bluetooth-label.sh` reads the current broadcast name from `bluetoothctl show` so the frontend can tell the user what name to search for on their phone. `moodeutl -Ro --bluetooth off` and `moodeutl -Ro --airplay on|off` remain the practical disable/enable commands, while `cfg_system` values `btsvc`, `btactive`, `airplaysvc`, and `aplactive` are the truthful state probes.
+`TIKPAL_BLUETOOTH_*` and `TIKPAL_AIRPLAY_*` let Tikpal enforce the armed-only source gate against moOde's renderer services. On moOde, the checked-in `deploy/moode/tikpal-bluetooth-enable.sh` script is the preferred Bluetooth enable path because it both enables the renderer and re-arms the controller to `power on`, `discoverable on`, and `pairable on`. `deploy/moode/tikpal-airplay-enable.sh` is the preferred AirPlay enable path because it enables the renderer and then nudges `shairport-sync.service` into the running state that actually advertises the receiver. `deploy/moode/tikpal-bluetooth-label.sh` reads the current broadcast name from `bluetoothctl show` so the frontend can tell the user what name to search for on their phone. `moodeutl -Ro --bluetooth off` and `moodeutl -Ro --airplay off` remain the practical disable commands, while `cfg_system` values `btsvc`, `btactive`, `airplaysvc`, and `aplactive` plus `TIKPAL_AIRPLAY_RECEIVER_ACTIVE_COMMAND` keep the UI honest about whether AirPlay is really up.
 `TIKPAL_BLUETOOTH_METADATA_COMMAND` points to the BlueZ / AVRCP metadata probe. Tikpal uses this first when Bluetooth is connected, so phones that expose title / artist metadata can resolve lyrics through LRCLIB without audio fingerprint credentials. When BlueZ also exposes `Position` and `Duration`, Tikpal maps those into playback progress so synced LRCLIB lyrics can follow Bluetooth playback timing instead of falling back to a fixed text rotation.
+`TIKPAL_AIRPLAY_METADATA_COMMAND` points to moOde's AirPlay metadata bridge. The checked-in `deploy/moode/tikpal-airplay-metadata.sh` reads `/var/local/www/aplmeta.txt`, which is maintained by moOde's `aplmeta-reader.sh` process, and emits title / artist / album fields that Tikpal can use for LRCLIB lyrics lookup. `TIKPAL_AIRPLAY_METADATA_CLOCK_LEAD_MS` compensates for moOde's metadata file write delay when Tikpal has to infer AirPlay progress from the metadata mtime.
 `TIKPAL_BLUETOOTH_CAPTURE_COMMAND` points to the local PCM capture script used for Bluetooth fingerprint recognition when Bluetooth metadata is unavailable. The checked-in `deploy/moode/tikpal-bluetooth-capture.sh` first tries `ffmpeg` against the connected BlueALSA device and then falls back to `arecord`; if moOde exposes a different ALSA capture path, override `TIKPAL_BLUETOOTH_CAPTURE_DEVICE` in the service environment before restarting `tikpal-api.service`.
-`TIKPAL_RECOGNITION_PROVIDER=acrcloud` plus the `TIKPAL_ACRCLOUD_*` credentials enable the online fingerprint fallback. Tikpal waits `TIKPAL_BLUETOOTH_RECOGNITION_SETTLE_MS` after the Bluetooth connection becomes active, captures `TIKPAL_BLUETOOTH_CAPTURE_DURATION_SECONDS` seconds of audio, sends it to ACRCloud, and then reuses the same LRCLIB lyrics path once a track is identified.
+`TIKPAL_RECOGNITION_PROVIDER=acrcloud` plus the `TIKPAL_ACRCLOUD_*` credentials enable the online fingerprint fallback. Tikpal waits `TIKPAL_BLUETOOTH_RECOGNITION_SETTLE_MS` after the Bluetooth connection becomes active, captures `TIKPAL_BLUETOOTH_CAPTURE_DURATION_SECONDS` seconds of audio, sends it to ACRCloud, and then reuses the same LRCLIB lyrics path once a track is identified. `TIKPAL_BLUETOOTH_RECOGNITION_NOT_FOUND_RETRY_MS` keeps the receiver trying again when the first sample catches silence or a transition instead of permanently pinning Ambient to "not found".
 moOde `cfg_radio` presets are now the primary Radio source list for the source panel, and `POST /api/v1/audio/source` can switch directly by `radioStationId`.
 `TIKPAL_RADIO_PRESET_LIMIT` caps how many moOde radio presets Tikpal reads into the panel.
 `TIKPAL_RADIO_DEFAULT_URI` stays as a fallback preset when moOde radio rows are unavailable, and `TIKPAL_RADIO_ACTIVATE_COMMAND` is only used when no switchable preset URI is available.

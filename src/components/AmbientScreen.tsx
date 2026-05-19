@@ -4,7 +4,7 @@ import { FlameScene } from "./FlameScene";
 import { buildGeneratedCoverArtUrl } from "../coverArt";
 import { formatDuration, formatSampleRate } from "../mockState";
 import type { TikpalDataStatus } from "../hooks/useTikpalState";
-import type { AudioState, LyricsState, PlaybackActionType, PlaybackSummary, SystemActionType, SystemState, TikpalState } from "../types";
+import type { AudioState, LyricsFontSize, LyricsState, PlaybackActionType, PlaybackSummary, SystemActionType, SystemState, TikpalState } from "../types";
 
 interface AmbientScreenProps {
   hudVisible: boolean;
@@ -12,6 +12,8 @@ interface AmbientScreenProps {
   dateLabel: string;
   playback: PlaybackSummary;
   lyrics: LyricsState;
+  lyricsVisible: boolean;
+  lyricsFontSize: LyricsFontSize;
   audio: AudioState;
   system: SystemState;
   status: TikpalDataStatus;
@@ -36,13 +38,18 @@ interface AdjustOverlayState {
 }
 
 const DRAG_PIXELS_PER_PERCENT = 4;
+const WHEEL_PIXELS_PER_PERCENT = 9;
+
+function clampPercent(value: number) {
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
 
 function findActiveLyricsLineIndex(lyrics: LyricsState, elapsedSeconds: number | null) {
   if (!lyrics.synced || lyrics.lines.length === 0 || !Number.isFinite(elapsedSeconds)) {
     return null;
   }
 
-  const elapsedMs = Math.max(0, Math.round((elapsedSeconds ?? 0) * 1000));
+  const elapsedMs = normalizeLyricsElapsedMs(lyrics, Math.max(0, Math.round((elapsedSeconds ?? 0) * 1000)));
   for (let index = lyrics.lines.length - 1; index >= 0; index -= 1) {
     const line = lyrics.lines[index];
     if (line.startMs === null) continue;
@@ -59,12 +66,54 @@ function findActiveLyricsLineIndex(lyrics: LyricsState, elapsedSeconds: number |
   return 0;
 }
 
+function isProxyInputLyricsSource(sourceScope: LyricsState["sourceScope"]) {
+  return sourceScope === "bluetooth_input" || sourceScope === "airplay_input";
+}
+
+function getLyricsTimelineMs(lyrics: LyricsState) {
+  const timedLines = lyrics.lines.filter((line) => Number.isFinite(line.startMs));
+  if (timedLines.length === 0) return null;
+
+  const lastLine = timedLines[timedLines.length - 1];
+  const lastStartMs = lastLine.startMs ?? 0;
+  if (Number.isFinite(lastLine.endMs)) {
+    return Math.max(lastLine.endMs ?? 0, lastStartMs);
+  }
+
+  const previousLine = timedLines[timedLines.length - 2];
+  const previousStartMs = previousLine?.startMs ?? null;
+  const estimatedFinalLineMs = Number.isFinite(previousStartMs)
+    ? Math.max(4_000, Math.min(12_000, lastStartMs - (previousStartMs ?? 0)))
+    : 8_000;
+  return lastStartMs + estimatedFinalLineMs;
+}
+
+function normalizeLyricsElapsedMs(lyrics: LyricsState, elapsedMs: number) {
+  if (lyrics.sourceScope !== "airplay_input") {
+    return elapsedMs;
+  }
+
+  const timelineMs = getLyricsTimelineMs(lyrics);
+  if (!Number.isFinite(timelineMs) || (timelineMs ?? 0) < 30_000) {
+    return elapsedMs;
+  }
+
+  const loopThresholdMs = (timelineMs ?? 0) + 15_000;
+  if (elapsedMs <= loopThresholdMs) {
+    return elapsedMs;
+  }
+
+  return elapsedMs % (timelineMs ?? elapsedMs);
+}
+
 export function AmbientScreen({
   hudVisible,
   timeLabel,
   dateLabel,
   playback,
   lyrics,
+  lyricsVisible,
+  lyricsFontSize,
   audio,
   system,
   status,
@@ -73,6 +122,7 @@ export function AmbientScreen({
   onOpenSettings
 }: AmbientScreenProps) {
   const dragStateRef = useRef<DragState | null>(null);
+  const adjustDismissTimerRef = useRef<number | null>(null);
   const requestStateRef = useRef<Record<AmbientAdjustChannel, { inFlight: boolean; queued: number | null; lastSent: number | null }>>({
     volume: { inFlight: false, queued: null, lastSent: null },
     brightness: { inFlight: false, queued: null, lastSent: null }
@@ -94,8 +144,9 @@ export function AmbientScreen({
     .toUpperCase();
   const coverArtUrl = playback.albumArtUrl ?? buildGeneratedCoverArtUrl(title, artist, album);
   const brightnessPercent = system.display.brightnessPercent;
+  const audioProtectionMode = playback.source === "airplay" && playback.state === "playing";
   const canAdvanceLyrics = lyrics.synced
-    && (playback.source === "mpd" || playback.source === "radio" || playback.source === "bluetooth")
+    && (playback.source === "mpd" || playback.source === "radio" || playback.source === "bluetooth" || playback.source === "airplay")
     && playback.state === "playing";
   const computedLyricsLineIndex = canAdvanceLyrics ? findActiveLyricsLineIndex(lyrics, playback.elapsedSeconds) : null;
   const activeLyricsLineIndex = canAdvanceLyrics ? computedLyricsLineIndex : frozenLyricsLineIndex;
@@ -107,8 +158,8 @@ export function AmbientScreen({
   const showSyncedLyrics = lyrics.status === "ready" && lyrics.synced && canAdvanceLyrics && Boolean(activeLyricsLine);
   const showStaticLyrics = lyrics.status === "ready" && Boolean(staticLyricsText) && (!lyrics.synced || !canAdvanceLyrics);
   const showIdentifiedTrack = (lyrics.status === "not_found" || lyrics.status === "error") && Boolean(lyrics.title || lyrics.artist);
-  const recognizingMessage = lyrics.sourceScope === "bluetooth_input"
-    ? "Listening to Bluetooth audio..."
+  const recognizingMessage = isProxyInputLyricsSource(lyrics.sourceScope)
+    ? `Listening to ${lyrics.sourceScope === "airplay_input" ? "AirPlay" : "Bluetooth"} audio...`
     : "Identifying track...";
   const tickerText = showSyncedLyrics
     ? activeLyricsLine?.text ?? ""
@@ -128,6 +179,26 @@ export function AmbientScreen({
   const tickerStyle = shouldScrollTicker
     ? ({ "--ambient-lyrics-marquee-duration": `${marqueeDurationSeconds}s` } as CSSProperties)
     : undefined;
+  const showLyricsLayer = lyricsVisible && Boolean(tickerText);
+
+  function clearAdjustDismissTimer() {
+    if (adjustDismissTimerRef.current !== null) {
+      window.clearTimeout(adjustDismissTimerRef.current);
+      adjustDismissTimerRef.current = null;
+    }
+  }
+
+  function scheduleAdjustDismiss() {
+    clearAdjustDismissTimer();
+    adjustDismissTimerRef.current = window.setTimeout(() => {
+      adjustDismissTimerRef.current = null;
+      setAdjustOverlay((current) => (dragStateRef.current ? current : null));
+    }, 850);
+  }
+
+  useEffect(() => () => {
+    clearAdjustDismissTimer();
+  }, []);
 
   useEffect(() => {
     if (computedLyricsLineIndex !== null) {
@@ -151,7 +222,7 @@ export function AmbientScreen({
 
     const interval = window.setInterval(() => {
       setStaticLyricsLineIndex((current) => (current + 1) % staticLyricsLines.length);
-    }, lyrics.sourceScope === "bluetooth_input" ? 8500 : 7000);
+    }, isProxyInputLyricsSource(lyrics.sourceScope) ? 8500 : 7000);
 
     return () => window.clearInterval(interval);
   }, [canAdvanceLyrics, lyrics.sourceScope, lyrics.status, lyrics.synced, lyrics.trackKey, staticLyricsLines.length]);
@@ -166,7 +237,7 @@ export function AmbientScreen({
 
   const dispatchAdjust = useCallback(
     (channel: AmbientAdjustChannel, percent: number) => {
-      const nextPercent = Math.max(0, Math.min(100, Math.round(percent)));
+      const nextPercent = clampPercent(percent);
       const requestState = requestStateRef.current[channel];
       requestState.queued = nextPercent;
 
@@ -222,6 +293,7 @@ export function AmbientScreen({
 
   function startAdjust(channel: AmbientAdjustChannel, pointerId: number, startY: number) {
     const startPercent = channel === "volume" ? system.volume.percent : brightnessPercent;
+    clearAdjustDismissTimer();
     dragStateRef.current = {
       channel,
       pointerId,
@@ -239,7 +311,7 @@ export function AmbientScreen({
     const dragState = dragStateRef.current;
     if (!dragState) return;
     const deltaPercent = Math.round((dragState.startY - clientY) / DRAG_PIXELS_PER_PERCENT);
-    const nextPercent = Math.max(0, Math.min(100, dragState.startPercent + deltaPercent));
+    const nextPercent = clampPercent(dragState.startPercent + deltaPercent);
     setAdjustOverlay((current) => (
       current
         ? { ...current, percent: nextPercent, error: null }
@@ -250,9 +322,61 @@ export function AmbientScreen({
 
   function finishAdjust() {
     dragStateRef.current = null;
-    window.setTimeout(() => {
-      setAdjustOverlay((current) => (dragStateRef.current ? current : null));
-    }, 800);
+    scheduleAdjustDismiss();
+  }
+
+  function currentAdjustPercent(channel: AmbientAdjustChannel) {
+    const requestState = requestStateRef.current[channel];
+    if (requestState.queued !== null) return requestState.queued;
+    if (adjustOverlay?.channel === channel) return adjustOverlay.percent;
+    return channel === "volume" ? system.volume.percent : brightnessPercent;
+  }
+
+  function applyWheelAdjust(channel: AmbientAdjustChannel, event: React.WheelEvent<HTMLElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (channel === "brightness" && !system.display.controllable) {
+      setAdjustOverlay({
+        channel,
+        percent: brightnessPercent,
+        error: "DDC/CI brightness unavailable"
+      });
+      scheduleAdjustDismiss();
+      return;
+    }
+
+    const rawDeltaPercent = -event.deltaY / WHEEL_PIXELS_PER_PERCENT;
+    const deltaPercent = Math.abs(rawDeltaPercent) < 1
+      ? Math.sign(rawDeltaPercent)
+      : Math.round(rawDeltaPercent);
+    if (deltaPercent === 0) return;
+
+    const nextPercent = clampPercent(currentAdjustPercent(channel) + deltaPercent);
+    setAdjustOverlay({
+      channel,
+      percent: nextPercent,
+      error: null
+    });
+    dispatchAdjust(channel, nextPercent);
+    scheduleAdjustDismiss();
+  }
+
+  function handleAmbientWheelCapture(event: React.WheelEvent<HTMLElement>) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const edgeWidth = Math.min(560, Math.max(120, rect.width * 0.32));
+    const localX = event.clientX - rect.left;
+    if (localX <= edgeWidth) {
+      applyWheelAdjust("volume", event);
+      return;
+    }
+    if (localX >= rect.width - edgeWidth) {
+      applyWheelAdjust("brightness", event);
+    }
+  }
+
+  function handleZoneWheel(channel: AmbientAdjustChannel): React.WheelEventHandler<HTMLDivElement> {
+    return (event) => applyWheelAdjust(channel, event);
   }
 
   function handleZonePointerDown(channel: AmbientAdjustChannel): React.PointerEventHandler<HTMLDivElement> {
@@ -270,7 +394,9 @@ export function AmbientScreen({
 
       event.preventDefault();
       event.stopPropagation();
-      event.currentTarget.setPointerCapture(event.pointerId);
+      if (event.currentTarget.setPointerCapture) {
+        event.currentTarget.setPointerCapture(event.pointerId);
+      }
       startAdjust(channel, event.pointerId, event.clientY);
     };
   }
@@ -301,26 +427,28 @@ export function AmbientScreen({
   }, []);
 
   return (
-    <section className={`ambient-screen ${hudVisible ? "is-hud-visible" : "is-hud-hidden"}`} aria-label="Ambient flame screen">
-      <FlameScene />
+    <section className={`ambient-screen ${hudVisible ? "is-hud-visible" : "is-hud-hidden"}`} aria-label="Ambient flame screen" onWheelCapture={handleAmbientWheelCapture}>
+      <FlameScene lowPower={audioProtectionMode} />
       <div className="ambient-vignette" />
       <div
         className="ambient-adjust-zone ambient-adjust-zone-left"
         data-gesture-protected
-        aria-label="Swipe to change volume"
+        aria-label="Swipe or scroll to change volume"
         onPointerDown={handleZonePointerDown("volume")}
         onPointerMove={handleZonePointerMove}
         onPointerUp={handleZonePointerUp}
         onPointerCancel={handleZonePointerCancel}
+        onWheel={handleZoneWheel("volume")}
       />
       <div
         className={`ambient-adjust-zone ambient-adjust-zone-right ${system.display.controllable ? "" : "is-disabled"}`}
         data-gesture-protected
-        aria-label="Swipe to change brightness"
+        aria-label="Swipe or scroll to change brightness"
         onPointerDown={handleZonePointerDown("brightness")}
         onPointerMove={handleZonePointerMove}
         onPointerUp={handleZonePointerUp}
         onPointerCancel={handleZonePointerCancel}
+        onWheel={handleZoneWheel("brightness")}
       />
 
       <button className="icon-button ambient-settings" type="button" onClick={onOpenSettings} aria-label="Open settings" title="Settings">
@@ -332,8 +460,8 @@ export function AmbientScreen({
         <div className="ambient-date">{dateLabel}</div>
       </div>
 
-      <div className="ambient-lyrics-layer" aria-live="polite" data-ambient-lyrics>
-        {tickerText ? (
+      <div className={`ambient-lyrics-layer lyrics-size-${lyricsFontSize}`} aria-live={lyricsVisible ? "polite" : "off"} aria-hidden={!lyricsVisible} data-ambient-lyrics>
+        {showLyricsLayer ? (
           <div
             className={`ambient-lyrics-ticker ${shouldScrollTicker ? "is-scrolling" : "is-static"} ${lyrics.status === "error" ? "is-error" : ""}`}
             data-lyrics-state={lyrics.status}

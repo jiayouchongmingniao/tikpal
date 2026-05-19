@@ -7,9 +7,11 @@ import { useAppMode } from "./hooks/useAppMode";
 import { useBrowserKioskGuard } from "./hooks/useBrowserKioskGuard";
 import { useKioskGestures } from "./hooks/useKioskGestures";
 import { useTikpalState } from "./hooks/useTikpalState";
-import type { AppMode, FontTheme } from "./types";
+import type { AppMode, FontTheme, LyricsFontSize } from "./types";
 
 const FONT_THEME_STORAGE_KEY = "tikpal.fontTheme";
+const LYRICS_VISIBLE_STORAGE_KEY = "tikpal.lyricsVisible";
+const LYRICS_FONT_SIZE_STORAGE_KEY = "tikpal.lyricsFontSize";
 
 const dateFormatter = new Intl.DateTimeFormat("en-US", {
   month: "2-digit",
@@ -37,9 +39,23 @@ function readInitialFontTheme(): FontTheme {
   return "sans";
 }
 
+function readInitialLyricsVisible() {
+  return window.localStorage.getItem(LYRICS_VISIBLE_STORAGE_KEY) !== "false";
+}
+
+function readInitialLyricsFontSize(): LyricsFontSize {
+  const savedSize = window.localStorage.getItem(LYRICS_FONT_SIZE_STORAGE_KEY);
+  if (savedSize === "small" || savedSize === "medium" || savedSize === "large") {
+    return savedSize;
+  }
+  return "medium";
+}
+
 export default function App() {
   const [now, setNow] = useState(() => new Date());
   const [fontTheme, setFontTheme] = useState<FontTheme>(readInitialFontTheme);
+  const [lyricsVisible, setLyricsVisible] = useState(readInitialLyricsVisible);
+  const [lyricsFontSize, setLyricsFontSize] = useState<LyricsFontSize>(readInitialLyricsFontSize);
   const { mode, hudVisible, idleTotalMs, idleRemainingMs, toggleHud, changeMode, returnAmbient, resetIdleTimer } = useAppMode(readInitialMode());
   const { state: tikpalState, status: tikpalStatus, sendPlaybackAction, sendSystemAction, sendSourceSwitch } = useTikpalState();
 
@@ -54,6 +70,14 @@ export default function App() {
     document.documentElement.dataset.fontTheme = fontTheme;
     window.localStorage.setItem(FONT_THEME_STORAGE_KEY, fontTheme);
   }, [fontTheme]);
+
+  useEffect(() => {
+    window.localStorage.setItem(LYRICS_VISIBLE_STORAGE_KEY, lyricsVisible ? "true" : "false");
+  }, [lyricsVisible]);
+
+  useEffect(() => {
+    window.localStorage.setItem(LYRICS_FONT_SIZE_STORAGE_KEY, lyricsFontSize);
+  }, [lyricsFontSize]);
 
   const timeLabel = useMemo(() => timeFormatter.format(now), [now]);
   const dateLabel = useMemo(() => dateFormatter.format(now), [now]);
@@ -76,6 +100,8 @@ export default function App() {
         dateLabel={dateLabel}
         playback={tikpalState.playback}
         lyrics={tikpalState.lyrics}
+        lyricsVisible={lyricsVisible}
+        lyricsFontSize={lyricsFontSize}
         audio={tikpalState.audio}
         system={tikpalState.system}
         status={tikpalStatus}
@@ -100,7 +126,11 @@ export default function App() {
         runtime={tikpalState.runtime}
         status={tikpalStatus}
         fontTheme={fontTheme}
+        lyricsVisible={lyricsVisible}
+        lyricsFontSize={lyricsFontSize}
         onFontThemeChange={setFontTheme}
+        onLyricsVisibleChange={setLyricsVisible}
+        onLyricsFontSizeChange={setLyricsFontSize}
         onSystemAction={sendSystemAction}
         onReturnAmbient={returnAmbient}
       />

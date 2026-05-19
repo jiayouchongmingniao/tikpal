@@ -43,16 +43,20 @@ const AIRPLAY_ACTIVE_COMMAND = process.env.TIKPAL_AIRPLAY_ACTIVE_COMMAND ?? "";
 const AIRPLAY_ENABLE_COMMAND = process.env.TIKPAL_AIRPLAY_ENABLE_COMMAND ?? "";
 const AIRPLAY_DISABLE_COMMAND = process.env.TIKPAL_AIRPLAY_DISABLE_COMMAND ?? "";
 const AIRPLAY_LABEL_COMMAND = process.env.TIKPAL_AIRPLAY_LABEL_COMMAND ?? "";
+const AIRPLAY_RECEIVER_ACTIVE_COMMAND = process.env.TIKPAL_AIRPLAY_RECEIVER_ACTIVE_COMMAND ?? "systemctl is-active --quiet shairport-sync.service";
+const AIRPLAY_METADATA_COMMAND = process.env.TIKPAL_AIRPLAY_METADATA_COMMAND ?? "";
 const OUTPUT_VOLUME_GET_COMMAND = process.env.TIKPAL_OUTPUT_VOLUME_GET_COMMAND ?? "amixer get PCM";
-const OUTPUT_VOLUME_SET_COMMAND = process.env.TIKPAL_OUTPUT_VOLUME_SET_COMMAND ?? "amixer -M sset PCM %VALUE%%";
+const OUTPUT_VOLUME_SET_COMMAND = process.env.TIKPAL_OUTPUT_VOLUME_SET_COMMAND ?? "amixer sset PCM %VALUE%%";
 const RECOGNITION_PROVIDER = (process.env.TIKPAL_RECOGNITION_PROVIDER ?? "").trim().toLowerCase();
 const ACRCLOUD_HOST = process.env.TIKPAL_ACRCLOUD_HOST ?? "";
 const ACRCLOUD_ACCESS_KEY = process.env.TIKPAL_ACRCLOUD_ACCESS_KEY ?? "";
 const ACRCLOUD_ACCESS_SECRET = process.env.TIKPAL_ACRCLOUD_ACCESS_SECRET ?? "";
 const BLUETOOTH_CAPTURE_COMMAND = process.env.TIKPAL_BLUETOOTH_CAPTURE_COMMAND ?? "";
+const AIRPLAY_CAPTURE_COMMAND = process.env.TIKPAL_AIRPLAY_CAPTURE_COMMAND ?? "";
 const BLUETOOTH_CAPTURE_DURATION_SECONDS = Number(process.env.TIKPAL_BLUETOOTH_CAPTURE_DURATION_SECONDS ?? 10);
 const BLUETOOTH_RECOGNITION_SETTLE_MS = Number(process.env.TIKPAL_BLUETOOTH_RECOGNITION_SETTLE_MS ?? 4000);
 const BLUETOOTH_RECOGNITION_RETRY_MS = Number(process.env.TIKPAL_BLUETOOTH_RECOGNITION_RETRY_MS ?? 45000);
+const BLUETOOTH_RECOGNITION_NOT_FOUND_RETRY_MS = Number(process.env.TIKPAL_BLUETOOTH_RECOGNITION_NOT_FOUND_RETRY_MS ?? 30000);
 const MOCK_BLUETOOTH_CONNECT_AFTER_MS = Number(process.env.TIKPAL_MOCK_BLUETOOTH_CONNECT_AFTER_MS ?? 1200);
 const MOCK_BLUETOOTH_METADATA = process.env.TIKPAL_MOCK_BLUETOOTH_METADATA ?? "";
 const MOCK_BLUETOOTH_METADATA_FILE = process.env.TIKPAL_MOCK_BLUETOOTH_METADATA_FILE ?? "";
@@ -68,7 +72,6 @@ const BLUETOOTH_LYRICS_DURATION_GRACE_MS = 2_000;
 const REMOTE_MEDIA_CACHE_ROOT = resolve(process.cwd(), ".cache", "remote-media");
 const REMOTE_ARTWORK_CACHE_DIR = resolve(REMOTE_MEDIA_CACHE_ROOT, "artwork");
 const REMOTE_ARTWORK_INDEX_DIR = resolve(REMOTE_MEDIA_CACHE_ROOT, "artwork-index");
-const BLUETOOTH_CAPTURE_CACHE_DIR = resolve(REMOTE_MEDIA_CACHE_ROOT, "bluetooth-capture");
 const execFileAsync = promisify(execFile);
 
 const tracks = [
@@ -113,6 +116,7 @@ const lyricsInFlight = new Map();
 const remoteArtworkCache = new Map();
 const remoteArtworkInFlight = new Map();
 let bluetoothRecognitionSession = buildBluetoothRecognitionSession();
+let displayBrightnessSnapshotCache = null;
 
 const system = {
   network: {
@@ -657,6 +661,31 @@ function parseKeyValueMetadata(raw) {
   return metadata;
 }
 
+function readMetadataNumber(metadata, keys) {
+  for (const key of keys) {
+    const value = Number(metadata[key]);
+    if (Number.isFinite(value)) return value;
+  }
+  return null;
+}
+
+function parsePlaybackTimingDiagnostics(metadata) {
+  const diagnostics = {
+    metadataMtimeMs: readMetadataNumber(metadata, ["metadatamtimems", "metadataMtimeMs", "metadata_mtime_ms"]),
+    airplayStartedAtMs: readMetadataNumber(metadata, ["airplaystartedatms", "airplayStartedAtMs", "airplay_started_at_ms"]),
+    airplayStoppedAtMs: readMetadataNumber(metadata, ["airplaystoppedatms", "airplayStoppedAtMs", "airplay_stopped_at_ms"]),
+    clockStartMs: readMetadataNumber(metadata, ["clockstartms", "clockStartMs", "clock_start_ms"]),
+    clockLeadMs: readMetadataNumber(metadata, ["clockleadms", "clockLeadMs", "clock_lead_ms"]),
+    effectiveClockStartMs: readMetadataNumber(metadata, ["effectiveclockstartms", "effectiveClockStartMs", "effective_clock_start_ms"]),
+    clockStartReason: normalizeMetadataValue(metadata.clockstartreason ?? metadata.clockStartReason ?? metadata.clock_start_reason) || null
+  };
+
+  const hasTimingValue = Object.entries(diagnostics).some(([key, value]) => (
+    key === "clockStartReason" ? Boolean(value) : Number.isFinite(value)
+  ));
+  return hasTimingValue ? diagnostics : null;
+}
+
 function parseBluetoothMetadataOutput(raw) {
   const value = String(raw ?? "").trim();
   if (!value) return null;
@@ -683,13 +712,20 @@ function parseBluetoothMetadataOutput(raw) {
     album: normalizeMetadataValue(metadata.album) || null,
     status: status || null,
     positionMs: Number.isFinite(positionMs) ? positionMs : null,
-    durationMs: Number.isFinite(durationMs) ? durationMs : null
+    durationMs: Number.isFinite(durationMs) ? durationMs : null,
+    timingDiagnostics: parsePlaybackTimingDiagnostics(metadata)
   };
 }
 
 async function readBluetoothPlaybackMetadata() {
   if (!BLUETOOTH_METADATA_COMMAND.trim()) return null;
   const raw = await runCommand(BLUETOOTH_METADATA_COMMAND, { allowFailure: true, timeout: 3500 });
+  return parseBluetoothMetadataOutput(raw);
+}
+
+async function readAirplayPlaybackMetadata() {
+  if (!AIRPLAY_METADATA_COMMAND.trim()) return null;
+  const raw = await runCommand(AIRPLAY_METADATA_COMMAND, { allowFailure: true, timeout: 3500 });
   return parseBluetoothMetadataOutput(raw);
 }
 
@@ -1052,33 +1088,43 @@ function ddcutilArgs(args) {
 }
 
 async function readDisplayBrightnessSnapshot() {
+  if (displayBrightnessSnapshotCache && Date.now() - displayBrightnessSnapshotCache.updatedAtMs < 10_000) {
+    return displayBrightnessSnapshotCache.value;
+  }
+
   const raw = await runCommand(`${DDCUTIL_BIN} ${ddcutilArgs(["getvcp", "10", "--brief"]).join(" ")}`, { allowFailure: true, timeout: 3500 });
   const current = raw.match(/current value =\s*(\d+)/i)?.[1] ?? raw.match(/^VCP\s+10\s+\S+\s+(\d+)\s+(\d+)/i)?.[1];
   const max = raw.match(/max value =\s*(\d+)/i)?.[1] ?? raw.match(/^VCP\s+10\s+\S+\s+(\d+)\s+(\d+)/i)?.[2];
 
   if (!current || !max) {
-    return {
+    const unavailable = {
       brightnessPercent: system.display.brightnessPercent,
       controllable: false,
       transport: "unavailable"
     };
+    displayBrightnessSnapshotCache = { value: unavailable, updatedAtMs: Date.now() };
+    return unavailable;
   }
 
   const currentNumber = Number(current);
   const maxNumber = Number(max);
   if (!Number.isFinite(currentNumber) || !Number.isFinite(maxNumber) || maxNumber <= 0) {
-    return {
+    const unavailable = {
       brightnessPercent: system.display.brightnessPercent,
       controllable: false,
       transport: "unavailable"
     };
+    displayBrightnessSnapshotCache = { value: unavailable, updatedAtMs: Date.now() };
+    return unavailable;
   }
 
-  return {
+  const snapshot = {
     brightnessPercent: clampPercent((currentNumber / maxNumber) * 100, system.display.brightnessPercent),
     controllable: true,
     transport: "ddcci"
   };
+  displayBrightnessSnapshotCache = { value: snapshot, updatedAtMs: Date.now() };
+  return snapshot;
 }
 
 async function setDisplayBrightnessPercent(percent) {
@@ -1093,6 +1139,14 @@ async function setDisplayBrightnessPercent(percent) {
 
   const command = `${DDCUTIL_BIN} ${ddcutilArgs(["setvcp", "10", String(nextPercent)]).join(" ")}`;
   await runCommand(command, { allowFailure: false, timeout: 5000 });
+  displayBrightnessSnapshotCache = {
+    value: {
+      brightnessPercent: nextPercent,
+      controllable: true,
+      transport: "ddcci"
+    },
+    updatedAtMs: Date.now()
+  };
 }
 
 async function getRuntimeSnapshot() {
@@ -1290,6 +1344,33 @@ async function getSourceStatusFromCommands({ readyCommand, activeCommand, labelC
   };
 }
 
+async function getAirplaySourceStatus({ readyCommand, activeCommand, labelCommand, armed, supported }) {
+  const [ready, rendererActive, receiverActive, label] = await Promise.all([
+    commandSucceeds(readyCommand, { timeout: 2500 }),
+    commandSucceeds(activeCommand, { timeout: 2500 }),
+    commandSucceeds(AIRPLAY_RECEIVER_ACTIVE_COMMAND, { timeout: 2500 }),
+    labelCommand.trim() ? runCommand(labelCommand, { allowFailure: true, timeout: 2500 }) : Promise.resolve("")
+  ]);
+
+  const airplayArmed = receiverActive && (ready || rendererActive || armed);
+
+  return {
+    supported,
+    available: supported ? ready || receiverActive || airplayArmed : false,
+    armed: airplayArmed,
+    connected: receiverActive && rendererActive,
+    connectedLabel: null,
+    advertisedLabel: label.trim() || null
+  };
+}
+
+async function ensureAirplayReceiverState(enabled) {
+  const command = enabled
+    ? "sh -lc 'systemctl start shairport-sync.service >/dev/null 2>&1 || sudo -n systemctl start shairport-sync.service >/dev/null 2>&1 || true'"
+    : "sh -lc 'systemctl stop shairport-sync.service >/dev/null 2>&1 || sudo -n systemctl stop shairport-sync.service >/dev/null 2>&1 || true'";
+  await runCommand(command, { allowFailure: true, timeout: 5000 });
+}
+
 async function enforceConnectionGate(nextSource) {
   if (nextSource === "bluetooth") {
     if (!BLUETOOTH_ENABLE_COMMAND) {
@@ -1307,6 +1388,7 @@ async function enforceConnectionGate(nextSource) {
       throw new Error("airplay gating is unavailable in this runtime");
     }
     await runSystemActionCommand(AIRPLAY_ENABLE_COMMAND, "airplay enable");
+    await ensureAirplayReceiverState(true);
     if (BLUETOOTH_DISABLE_COMMAND) {
       await runSystemActionCommand(BLUETOOTH_DISABLE_COMMAND, "bluetooth disable");
     }
@@ -1319,6 +1401,7 @@ async function enforceConnectionGate(nextSource) {
   if (AIRPLAY_DISABLE_COMMAND) {
     await runSystemActionCommand(AIRPLAY_DISABLE_COMMAND, "airplay disable");
   }
+  await ensureAirplayReceiverState(false);
 }
 
 async function getMpcAudioSnapshot(currentFile) {
@@ -1337,7 +1420,7 @@ async function getMpcAudioSnapshot(currentFile) {
         || BLUETOOTH_DISABLE_COMMAND
       )
     }),
-    getSourceStatusFromCommands({
+    getAirplaySourceStatus({
       readyCommand: AIRPLAY_READY_COMMAND,
       activeCommand: AIRPLAY_ACTIVE_COMMAND,
       labelCommand: AIRPLAY_LABEL_COMMAND,
@@ -1438,6 +1521,11 @@ async function getMpcSnapshot() {
   const bluetoothPlaybackMetadata = playbackSource === "bluetooth"
     ? await readBluetoothPlaybackMetadata()
     : null;
+  const airplayPlaybackMetadata = playbackSource === "airplay"
+    ? await readAirplayPlaybackMetadata()
+    : null;
+  const hasBluetoothTrackMetadata = Boolean(bluetoothPlaybackMetadata?.title);
+  const hasAirplayTrackMetadata = Boolean(airplayPlaybackMetadata?.title);
   const metadata = hasCurrentTrack
     ? await readMediaMetadata(file)
     : {
@@ -1463,6 +1551,8 @@ async function getMpcSnapshot() {
     playback: {
       state: playbackSource === "bluetooth"
         ? mapBluetoothPlaybackState(bluetoothPlaybackMetadata)
+        : playbackSource === "airplay"
+          ? audio.currentSource.connectionState === "connected" ? mapBluetoothPlaybackState(airplayPlaybackMetadata) : "stopped"
         : hasCurrentTrack ? status.state : "stopped",
       source: playbackSource,
       albumArtUrl: playbackSource !== "bluetooth" && playbackSource !== "airplay" && hasCurrentTrack ? `/api/v1/media/artwork?track=${encodeURIComponent(currentArtworkState?.token ?? "current")}` : null,
@@ -1471,31 +1561,43 @@ async function getMpcSnapshot() {
           : playbackSource === "bluetooth"
             ? bluetoothPlaybackMetadata?.title || "Bluetooth Ready"
             : playbackSource === "airplay"
-              ? "AirPlay Ready"
+              ? airplayPlaybackMetadata?.title || "AirPlay Ready"
           : hasCurrentTrack ? metadata.title || title || trackTitleFromFile(file) : null,
       artist: playbackSource === "radio"
           ? radioPlaybackMetadata?.artist || metadata.artist || artist || "Internet Radio"
           : playbackSource === "bluetooth"
-            ? bluetoothPlaybackMetadata?.artist
-              || audio.currentSource.connectedLabel
-              || (audio.currentSource.advertisedLabel ? `Find ${audio.currentSource.advertisedLabel} in Bluetooth` : "Pair a device to start playback")
+            ? bluetoothPlaybackMetadata?.artist || (hasBluetoothTrackMetadata
+              ? null
+              : audio.currentSource.connectedLabel
+                || (audio.currentSource.advertisedLabel ? `Find ${audio.currentSource.advertisedLabel} in Bluetooth` : "Pair a device to start playback"))
           : playbackSource === "airplay"
-              ? audio.currentSource.connectedLabel
-                || (audio.currentSource.advertisedLabel ? `Choose ${audio.currentSource.advertisedLabel} from AirPlay` : "Choose Tikpal from AirPlay")
+              ? airplayPlaybackMetadata?.artist || (hasAirplayTrackMetadata
+                ? null
+                : audio.currentSource.connectedLabel
+                  || (audio.currentSource.advertisedLabel ? `Choose ${audio.currentSource.advertisedLabel} from AirPlay` : "Choose Tikpal from AirPlay"))
           : hasCurrentTrack ? metadata.artist || artist || "Unknown Artist" : null,
       album: playbackSource === "radio"
           ? radioPlaybackMetadata?.album || metadata.album || album || "Radio"
           : playbackSource === "bluetooth"
             ? bluetoothPlaybackMetadata?.album || null
             : playbackSource === "airplay"
-              ? "AirPlay Source"
+              ? airplayPlaybackMetadata?.album || "AirPlay Source"
           : hasCurrentTrack ? metadata.album || album || "MPD Queue" : null,
       elapsedSeconds: playbackSource === "bluetooth"
         ? millisecondsToSeconds(bluetoothPlaybackMetadata?.positionMs)
+        : playbackSource === "airplay"
+          ? millisecondsToSeconds(airplayPlaybackMetadata?.positionMs)
         : playbackSource === "mpd" && hasCurrentTrack ? status.elapsedSeconds : null,
       durationSeconds: playbackSource === "bluetooth"
         ? millisecondsToSeconds(bluetoothPlaybackMetadata?.durationMs, { allowZero: false })
+        : playbackSource === "airplay"
+          ? millisecondsToSeconds(airplayPlaybackMetadata?.durationMs, { allowZero: false })
         : playbackSource === "mpd" && hasCurrentTrack ? durationSeconds : null,
+      timingDiagnostics: playbackSource === "bluetooth"
+        ? bluetoothPlaybackMetadata?.timingDiagnostics ?? null
+        : playbackSource === "airplay"
+          ? airplayPlaybackMetadata?.timingDiagnostics ?? null
+          : null,
       currentTrackIndex: playbackSource === "mpd" ? status.currentTrackIndex : 0,
       queueLength: playbackSource === "mpd" ? status.queueLength : 0,
       favorite,
@@ -1833,6 +1935,22 @@ function buildBluetoothRecognitionSession(overrides = {}) {
   };
 }
 
+function isProxyInputSource(source) {
+  return source === "bluetooth" || source === "airplay";
+}
+
+function isProxyInputSourceScope(sourceScope) {
+  return sourceScope === "bluetooth_input" || sourceScope === "airplay_input";
+}
+
+function getProxyInputScope(source) {
+  return source === "airplay" ? "airplay_input" : "bluetooth_input";
+}
+
+function getProxyInputLabel(source) {
+  return source === "airplay" ? "AirPlay" : "Bluetooth";
+}
+
 function normalizeMetadataValue(value) {
   return String(value ?? "").trim().replace(/\s+/g, " ");
 }
@@ -1886,15 +2004,16 @@ function buildMetadataLyricsCandidate(playback, overrides = {}) {
   };
 }
 
-function getBluetoothSourceSummary(audio) {
-  if (audio?.currentSource?.id === "bluetooth") {
+function getProxyInputSourceSummary(audio, source) {
+  if (audio?.currentSource?.id === source) {
     return audio.currentSource;
   }
-  return Array.isArray(audio?.sources) ? audio.sources.find((source) => source.id === "bluetooth") ?? null : null;
+  return Array.isArray(audio?.sources) ? audio.sources.find((entry) => entry.id === source) ?? null : null;
 }
 
-function buildBluetoothConnectionKey(sourceSummary) {
+function buildProxyInputConnectionKey(sourceSummary, source) {
   return [
+    source,
     sourceSummary?.connectedLabel ?? "",
     sourceSummary?.advertisedLabel ?? "",
     sourceSummary?.connectionState ?? ""
@@ -1905,34 +2024,30 @@ function getLyricsCandidate(snapshot) {
   const playback = snapshot?.playback ?? {};
   const audio = snapshot?.audio ?? null;
 
-  if (playback.source === "airplay") {
-    return {
-      supported: false,
-      sourceScope: "local_playback",
-      reason: "Lyrics unavailable for this source"
-    };
-  }
+  if (isProxyInputSource(playback.source)) {
+    const source = playback.source;
+    const sourceSummary = getProxyInputSourceSummary(audio, source);
+    const sourceScope = getProxyInputScope(source);
+    const sourceLabel = getProxyInputLabel(source);
 
-  if (playback.source === "bluetooth") {
-    const bluetoothSource = getBluetoothSourceSummary(audio);
-    if (!bluetoothSource?.armed && !bluetoothSource?.active) {
+    if (!sourceSummary?.armed && !sourceSummary?.active) {
       return {
         supported: false,
-        sourceScope: "bluetooth_input",
-        reason: "Select Bluetooth to identify incoming audio"
+        sourceScope,
+        reason: `Select ${sourceLabel} to identify incoming audio`
       };
     }
 
-    if (bluetoothSource.connectionState !== "connected") {
+    if (sourceSummary.connectionState !== "connected") {
       return {
         supported: false,
-        sourceScope: "bluetooth_input",
-        reason: "Waiting for Bluetooth audio"
+        sourceScope,
+        reason: `Waiting for ${sourceLabel} audio`
       };
     }
 
     const metadataCandidate = buildMetadataLyricsCandidate(playback, {
-      sourceScope: "bluetooth_input"
+      sourceScope
     });
     if (metadataCandidate.trackKey && !looksLikeUntrustedTrackMetadata(metadataCandidate)) {
       return metadataCandidate;
@@ -1940,14 +2055,14 @@ function getLyricsCandidate(snapshot) {
 
     return {
       supported: true,
-      source: "bluetooth",
-      sourceScope: "bluetooth_input",
+      source,
+      sourceScope,
       recognitionMode: "fingerprint",
       recognitionProvider: "acrcloud",
       recognitionConfidence: null,
-      connectionKey: buildBluetoothConnectionKey(bluetoothSource),
+      connectionKey: buildProxyInputConnectionKey(sourceSummary, source),
       title: null,
-      artist: bluetoothSource.connectedLabel ?? playback.artist ?? null,
+      artist: sourceSummary.connectedLabel ?? playback.artist ?? null,
       album: null,
       durationMs: Number.isFinite(playback.durationSeconds) ? Math.round(playback.durationSeconds * 1000) : null,
       playbackClock: Number.isFinite(playback.elapsedSeconds)
@@ -2015,6 +2130,9 @@ function lyricsErrorMessage(error) {
     const rawMessage = normalizeMetadataValue(error.message);
     const lowerMessage = rawMessage.toLowerCase();
     if (!rawMessage) return "Lyrics lookup failed";
+    if (lowerMessage.includes("airplay capture")) {
+      return "AirPlay audio capture unavailable";
+    }
     if (lowerMessage.includes("bluealsa")
       || lowerMessage.includes("bluetooth capture")
       || lowerMessage.includes("no readable bluealsa input device was found")
@@ -2028,7 +2146,8 @@ function lyricsErrorMessage(error) {
     }
     if (lowerMessage.includes("acrcloud credentials are not configured")
       || lowerMessage.includes("acrcloud host is not configured")
-      || lowerMessage.includes("bluetooth recognition provider is not configured")) {
+      || lowerMessage.includes("bluetooth recognition provider is not configured")
+      || lowerMessage.includes("airplay recognition provider is not configured")) {
       return "Track identification is not configured";
     }
     if (rawMessage.length > 140 || error.message.includes("\n")) {
@@ -2205,7 +2324,7 @@ function buildDisplayableLyricsLines(lyricsBody, candidate) {
   const syncedLines = parseSyncedLyrics(lyricsBody?.syncedLyrics);
   const plainLines = parseUnsyncedLyrics(lyricsBody?.plainLyrics);
 
-  if (candidate.sourceScope === "bluetooth_input") {
+  if (isProxyInputSourceScope(candidate.sourceScope)) {
     const syncedTiming = buildBluetoothSyncedLyricsTiming(syncedLines, candidate.durationMs);
     if (candidate.playbackClock && syncedLines.length > 0) {
       if (syncedTiming.lines.length > 0) {
@@ -2480,7 +2599,7 @@ async function fetchLyricsFromProvider(candidate) {
   ];
 
   let lyricsBody = null;
-  const shouldPreferSearch = candidate.sourceScope === "bluetooth_input";
+  const shouldPreferSearch = isProxyInputSourceScope(candidate.sourceScope);
 
   if (shouldPreferSearch) {
     for (const params of searchVariants) {
@@ -2530,7 +2649,16 @@ async function fetchLyricsFromProvider(candidate) {
     });
   }
 
-  const { synced, timingStrategy, lines } = buildDisplayableLyricsLines(lyricsBody, candidate);
+  const providerDurationSeconds = Number(lyricsBody?.duration ?? lyricsBody?.durationSeconds);
+  const candidateWithProviderDuration = Number.isFinite(candidate.durationMs)
+    ? candidate
+    : {
+        ...candidate,
+        durationMs: Number.isFinite(providerDurationSeconds) && providerDurationSeconds > 0
+          ? Math.round(providerDurationSeconds * 1000)
+          : candidate.durationMs
+      };
+  const { synced, timingStrategy, lines } = buildDisplayableLyricsLines(lyricsBody, candidateWithProviderDuration);
 
   if (lines.length === 0) {
     return buildLyricsState({
@@ -2554,18 +2682,25 @@ async function fetchLyricsFromProvider(candidate) {
   });
 }
 
-async function captureBluetoothSample() {
-  if (!BLUETOOTH_CAPTURE_COMMAND.trim()) {
-    throw new Error("Bluetooth capture command is not configured");
+function getProxyInputCaptureCommand(source) {
+  return source === "airplay" ? AIRPLAY_CAPTURE_COMMAND : BLUETOOTH_CAPTURE_COMMAND;
+}
+
+async function captureBluetoothSample(source = "bluetooth") {
+  const captureCommand = getProxyInputCaptureCommand(source);
+  const sourceLabel = getProxyInputLabel(source);
+  if (!captureCommand.trim()) {
+    throw new Error(`${sourceLabel} capture command is not configured`);
   }
 
   const durationSeconds = Math.max(1, Math.round(BLUETOOTH_CAPTURE_DURATION_SECONDS));
-  await mkdir(BLUETOOTH_CAPTURE_CACHE_DIR, { recursive: true });
-  const fileName = `capture-${Date.now()}-${Math.random().toString(16).slice(2)}.wav`;
-  const outputPath = resolve(BLUETOOTH_CAPTURE_CACHE_DIR, fileName);
+  const cacheDir = resolve(REMOTE_MEDIA_CACHE_ROOT, `${source}-capture`);
+  await mkdir(cacheDir, { recursive: true });
+  const fileName = `${source}-capture-${Date.now()}-${Math.random().toString(16).slice(2)}.wav`;
+  const outputPath = resolve(cacheDir, fileName);
 
   try {
-    await execFileAsync("sh", ["-lc", `${BLUETOOTH_CAPTURE_COMMAND} "$1" "$2"`, "--", outputPath, String(durationSeconds)], {
+    await execFileAsync("sh", ["-lc", `${captureCommand} "$1" "$2"`, "--", outputPath, String(durationSeconds)], {
       timeout: Math.max(10_000, durationSeconds * 2000),
       maxBuffer: 1024 * 256
     });
@@ -2587,13 +2722,13 @@ function resetBluetoothRecognitionSession(overrides = {}) {
   bluetoothRecognitionSession = buildBluetoothRecognitionSession(overrides);
 }
 
-function syncBluetoothRecognitionSession(sourceSummary) {
+function syncBluetoothRecognitionSession(sourceSummary, source = "bluetooth") {
   if (sourceSummary?.connectionState !== "connected") {
     resetBluetoothRecognitionSession();
     return null;
   }
 
-  const connectionKey = buildBluetoothConnectionKey(sourceSummary);
+  const connectionKey = buildProxyInputConnectionKey(sourceSummary, source);
   if (bluetoothRecognitionSession.connectionKey !== connectionKey) {
     resetBluetoothRecognitionSession({
       connectionKey,
@@ -2603,14 +2738,14 @@ function syncBluetoothRecognitionSession(sourceSummary) {
   return bluetoothRecognitionSession;
 }
 
-function buildBluetoothRecognitionMessage() {
-  return "Listening to Bluetooth audio...";
+function buildProxyInputRecognitionMessage(source) {
+  return `Listening to ${getProxyInputLabel(source)} audio...`;
 }
 
 function buildBluetoothRecognizingState(candidate) {
   return buildLyricsState({
     status: "recognizing",
-    sourceScope: "bluetooth_input",
+    sourceScope: candidate.sourceScope ?? getProxyInputScope(candidate.source ?? "bluetooth"),
     recognitionMode: "fingerprint",
     recognitionProvider: "acrcloud",
     recognitionConfidence: null,
@@ -2618,16 +2753,16 @@ function buildBluetoothRecognizingState(candidate) {
     artist: candidate.artist ?? null,
     synced: false,
     lines: [],
-    message: buildBluetoothRecognitionMessage()
+    message: buildProxyInputRecognitionMessage(candidate.source ?? "bluetooth")
   });
 }
 
-async function identifyBluetoothTrack() {
+async function identifyBluetoothTrack(source = "bluetooth") {
   if (RECOGNITION_PROVIDER !== "acrcloud") {
-    throw new Error("Bluetooth recognition provider is not configured");
+    throw new Error(`${getProxyInputLabel(source)} recognition provider is not configured`);
   }
 
-  const sample = await captureBluetoothSample();
+  const sample = await captureBluetoothSample(source);
   return recognizeWithAcrCloud({
     host: ACRCLOUD_HOST,
     accessKey: ACRCLOUD_ACCESS_KEY,
@@ -2768,24 +2903,26 @@ function scheduleMetadataLyricsRecognition(candidate, options = {}) {
 }
 
 async function resolveBluetoothRecognition(candidate, sourceSummary, { force = false } = {}) {
-  const session = syncBluetoothRecognitionSession(sourceSummary);
+  const source = candidate?.source ?? "bluetooth";
+  const sourceScope = candidate?.sourceScope ?? getProxyInputScope(source);
+  const session = syncBluetoothRecognitionSession(sourceSummary, source);
   const activeConnectionKey = session?.connectionKey ?? null;
   if (!activeConnectionKey) {
     return buildLyricsState({
       status: "idle",
-      sourceScope: "bluetooth_input",
+      sourceScope,
       recognitionMode: "fingerprint",
       recognitionProvider: "acrcloud",
-      message: "Waiting for Bluetooth audio"
+      message: `Waiting for ${getProxyInputLabel(source)} audio`
     });
   }
 
   try {
-    const recognizedTrack = await identifyBluetoothTrack();
+    const recognizedTrack = await identifyBluetoothTrack(source);
     if (!recognizedTrack?.title) {
       return buildLyricsState({
         status: "not_found",
-        sourceScope: "bluetooth_input",
+        sourceScope,
         recognitionMode: "fingerprint",
         recognitionProvider: "acrcloud",
         title: null,
@@ -2798,13 +2935,13 @@ async function resolveBluetoothRecognition(candidate, sourceSummary, { force = f
 
     const recognizedCandidate = {
       supported: true,
-      source: "bluetooth",
-      sourceScope: "bluetooth_input",
+      source,
+      sourceScope,
       recognitionMode: "fingerprint",
       recognitionProvider: "acrcloud",
       recognitionConfidence: recognizedTrack.confidence,
       trackKey: buildPlaybackTrackKey({
-        source: "bluetooth",
+        source,
         title: recognizedTrack.title,
         artist: recognizedTrack.artist,
         album: recognizedTrack.album,
@@ -2829,7 +2966,7 @@ async function resolveBluetoothRecognition(candidate, sourceSummary, { force = f
     console.warn("tikpal-api bluetooth recognition failed:", error instanceof Error ? error.message : error);
     return buildLyricsState({
       status: "error",
-      sourceScope: "bluetooth_input",
+      sourceScope,
       recognitionMode: "fingerprint",
       recognitionProvider: "acrcloud",
       recognitionConfidence: null,
@@ -2843,20 +2980,24 @@ async function resolveBluetoothRecognition(candidate, sourceSummary, { force = f
 }
 
 function scheduleBluetoothLyricsRecognition(snapshot, candidate, options = {}) {
-  const sourceSummary = getBluetoothSourceSummary(snapshot.audio);
-  const session = syncBluetoothRecognitionSession(sourceSummary);
+  const source = candidate?.source ?? "bluetooth";
+  const sourceScope = candidate?.sourceScope ?? getProxyInputScope(source);
+  const sourceSummary = getProxyInputSourceSummary(snapshot.audio, source);
+  const session = syncBluetoothRecognitionSession(sourceSummary, source);
   const shouldForce = options.force === true;
   if (!session) {
     return updateLyricsState(buildLyricsState({
       status: "idle",
-      sourceScope: "bluetooth_input",
+      sourceScope,
       recognitionMode: "fingerprint",
       recognitionProvider: "acrcloud",
       title: null,
       artist: sourceSummary?.advertisedLabel ?? null,
       synced: false,
       lines: [],
-      message: sourceSummary?.armed ? "Waiting for Bluetooth audio" : "Select Bluetooth to identify incoming audio"
+      message: sourceSummary?.armed
+        ? `Waiting for ${getProxyInputLabel(source)} audio`
+        : `Select ${getProxyInputLabel(source)} to identify incoming audio`
     }));
   }
 
@@ -2866,7 +3007,12 @@ function scheduleBluetoothLyricsRecognition(snapshot, candidate, options = {}) {
   }
 
   if (!shouldForce && bluetoothRecognitionSession.resolvedState) {
-    return updateLyricsState(bluetoothRecognitionSession.resolvedState);
+    const resolvedState = bluetoothRecognitionSession.resolvedState;
+    const retryAfterMs = bluetoothRecognitionSession.retryAfterMs ?? 0;
+    if (resolvedState.status === "ready" || retryAfterMs > Date.now()) {
+      return updateLyricsState(resolvedState);
+    }
+    bluetoothRecognitionSession.resolvedState = null;
   }
 
   const settleUntil = bluetoothRecognitionSession.connectedAtMs + BLUETOOTH_RECOGNITION_SETTLE_MS;
@@ -2890,6 +3036,8 @@ function scheduleBluetoothLyricsRecognition(snapshot, candidate, options = {}) {
         bluetoothRecognitionSession.resolvedState = result;
         if (result.status === "error") {
           bluetoothRecognitionSession.retryAfterMs = Date.now() + BLUETOOTH_RECOGNITION_RETRY_MS;
+        } else if (result.status === "not_found") {
+          bluetoothRecognitionSession.retryAfterMs = Date.now() + BLUETOOTH_RECOGNITION_NOT_FOUND_RETRY_MS;
         } else {
           bluetoothRecognitionSession.retryAfterMs = 0;
         }
@@ -2913,8 +3061,8 @@ function scheduleLyricsRecognition(snapshot, options = {}) {
     return updateLyricsState(buildLyricsState({
       status: "idle",
       sourceScope: candidate.sourceScope ?? "local_playback",
-      recognitionMode: candidate.sourceScope === "bluetooth_input" ? "fingerprint" : null,
-      recognitionProvider: candidate.sourceScope === "bluetooth_input" ? "acrcloud" : null,
+      recognitionMode: isProxyInputSourceScope(candidate.sourceScope) ? "fingerprint" : null,
+      recognitionProvider: isProxyInputSourceScope(candidate.sourceScope) ? "acrcloud" : null,
       trackKey: null,
       title: normalizeMetadataValue(snapshot.playback?.title) || null,
       artist: normalizeMetadataValue(snapshot.playback?.artist) || null,

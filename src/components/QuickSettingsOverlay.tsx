@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { Cpu, Database, EthernetPort, Info, Monitor, Music2, Palette, Power, RotateCcw, SlidersHorizontal, Type, Volume2 } from "lucide-react";
+import { Captions, Cpu, Database, EthernetPort, Eye, EyeOff, Info, Monitor, Music2, Palette, Power, RotateCcw, SlidersHorizontal, Type, Volume2 } from "lucide-react";
 import type { TikpalDataStatus } from "../hooks/useTikpalState";
 import { useOverlayReturnGesture } from "../hooks/useOverlayReturnGesture";
-import type { FontTheme, RuntimeState, SystemActionType, SystemState } from "../types";
+import type { FontTheme, LyricsFontSize, RuntimeState, SystemActionType, SystemState } from "../types";
 
 interface QuickSettingsOverlayProps {
   active: boolean;
@@ -10,7 +10,11 @@ interface QuickSettingsOverlayProps {
   runtime: RuntimeState;
   status: TikpalDataStatus;
   fontTheme: FontTheme;
+  lyricsVisible: boolean;
+  lyricsFontSize: LyricsFontSize;
   onFontThemeChange: (theme: FontTheme) => void;
+  onLyricsVisibleChange: (visible: boolean) => void;
+  onLyricsFontSizeChange: (size: LyricsFontSize) => void;
   onSystemAction: (type: SystemActionType, value?: number) => Promise<unknown>;
   onReturnAmbient: () => void;
 }
@@ -18,7 +22,7 @@ interface QuickSettingsOverlayProps {
 type CardTone = "cyan" | "gold" | "neutral" | "warn" | "danger";
 type ActionableCardKey = "library_scan" | "reboot" | "shutdown";
 type SettingsSectionKey = "home" | "network" | "output" | "system";
-type SettingsDetailView = "display" | "font" | null;
+type SettingsDetailView = "display" | "font" | "lyrics" | null;
 
 interface BaseCard {
   key: string;
@@ -45,16 +49,26 @@ interface FontCard extends BaseCard {
   kind: "font";
 }
 
+interface LyricsCard extends BaseCard {
+  kind: "lyrics";
+}
+
 interface DisplayCard extends BaseCard {
   kind: "display";
 }
 
-type SettingsCard = ReadOnlyCard | ActionCard | FontCard | DisplayCard;
+type SettingsCard = ReadOnlyCard | ActionCard | FontCard | LyricsCard | DisplayCard;
 
 const fontChoices: Array<{ id: FontTheme; label: string; sample: string }> = [
   { id: "sans", label: "Modern Sans", sample: "Balanced UI default" },
   { id: "serif", label: "Editorial Serif", sample: "Warmer reading tone" },
   { id: "mono", label: "Mono Grid", sample: "Sharper technical look" }
+];
+
+const lyricsSizeChoices: Array<{ id: LyricsFontSize; label: string; sample: string }> = [
+  { id: "small", label: "Small", sample: "Low profile" },
+  { id: "medium", label: "Medium", sample: "Balanced" },
+  { id: "large", label: "Large", sample: "Readable distance" }
 ];
 
 const sectionCopy: Record<SettingsSectionKey, { label: string; description: string }> = {
@@ -82,7 +96,11 @@ export function QuickSettingsOverlay({
   runtime,
   status,
   fontTheme,
+  lyricsVisible,
+  lyricsFontSize,
   onFontThemeChange,
+  onLyricsVisibleChange,
+  onLyricsFontSizeChange,
   onSystemAction,
   onReturnAmbient
 }: QuickSettingsOverlayProps) {
@@ -175,6 +193,16 @@ export function QuickSettingsOverlay({
         tone: "cyan"
       },
       {
+        kind: "lyrics",
+        key: "lyrics",
+        section: "output",
+        icon: Captions,
+        title: "Lyrics",
+        value: lyricsVisible ? "Shown" : "Hidden",
+        meta: `Font: ${lyricsSizeChoices.find((choice) => choice.id === lyricsFontSize)?.label ?? "Medium"}`,
+        tone: lyricsVisible ? "gold" : "neutral"
+      },
+      {
         kind: "display",
         key: "display",
         section: "output",
@@ -223,12 +251,12 @@ export function QuickSettingsOverlay({
         confirmLabel: "Tap again to power off"
       }
     ],
-    [fontTheme, runtime.kioskWindow, runtime.requestedRenderer, status.error, status.source, system.cpuTemp, system.display.brightnessPercent, system.display.controllable, system.dspState.enabled, system.dspState.preset, system.library.scanning, system.library.source, system.library.trackCount, system.network.ip, system.network.label, system.network.speed, system.outputDevice.detail, system.outputDevice.label, system.uptime]
+    [fontTheme, lyricsFontSize, lyricsVisible, runtime.kioskWindow, runtime.requestedRenderer, status.error, status.source, system.cpuTemp, system.display.brightnessPercent, system.display.controllable, system.dspState.enabled, system.dspState.preset, system.library.scanning, system.library.source, system.library.trackCount, system.network.ip, system.network.label, system.network.speed, system.outputDevice.detail, system.outputDevice.label, system.uptime]
   );
 
   const visibleCards = useMemo(() => {
     if (activeSection === "home") {
-      return settingsCards.filter((card) => ["network", "output", "display", "library", "system", "font"].includes(card.key));
+      return settingsCards.filter((card) => ["network", "output", "display", "lyrics", "library", "system", "font"].includes(card.key));
     }
     return settingsCards.filter((card) => card.section === activeSection);
   }, [activeSection, settingsCards]);
@@ -322,6 +350,56 @@ export function QuickSettingsOverlay({
               <span>{choice.sample}</span>
             </button>
           ))}
+        </div>
+      </section>
+    );
+  }
+
+  function renderLyricsDetail() {
+    return (
+      <section className="settings-detail-panel" aria-label="Lyrics detail" data-settings-detail="lyrics">
+        <div className="settings-detail-header">
+          <button className="settings-detail-back" type="button" onClick={() => setDetailView(null)}>
+            Back
+          </button>
+          <div>
+            <span>Output</span>
+            <strong>Lyrics</strong>
+            <p>{lyricsVisible ? "Ambient lyrics visible" : "Ambient lyrics hidden"}</p>
+          </div>
+        </div>
+
+        <div className="lyrics-settings-panel lyrics-settings-panel-detail">
+          <button
+            className={`lyrics-visibility-toggle ${lyricsVisible ? "is-active" : ""}`}
+            type="button"
+            aria-pressed={lyricsVisible}
+            onClick={() => onLyricsVisibleChange(!lyricsVisible)}
+          >
+            <span className="lyrics-visibility-icon">
+              {lyricsVisible ? <Eye size={28} /> : <EyeOff size={28} />}
+            </span>
+            <span>
+              <strong>{lyricsVisible ? "Show Lyrics" : "Hide Lyrics"}</strong>
+              <em>{lyricsVisible ? "Visible on Ambient" : "Hidden on Ambient"}</em>
+            </span>
+            <i>{lyricsVisible ? "On" : "Off"}</i>
+          </button>
+
+          <div className="lyrics-size-options" role="group" aria-label="Lyrics font size">
+            {lyricsSizeChoices.map((choice) => (
+              <button
+                key={choice.id}
+                className={`lyrics-size-option lyrics-size-option-${choice.id} ${lyricsFontSize === choice.id ? "is-active" : ""}`}
+                type="button"
+                aria-pressed={lyricsFontSize === choice.id}
+                onClick={() => onLyricsFontSizeChange(choice.id)}
+              >
+                <strong>{choice.label}</strong>
+                <span>{choice.sample}</span>
+              </button>
+            ))}
+          </div>
         </div>
       </section>
     );
@@ -430,6 +508,8 @@ export function QuickSettingsOverlay({
             ? renderDisplayDetail()
             : detailView === "font"
               ? renderFontDetail()
+              : detailView === "lyrics"
+                ? renderLyricsDetail()
               : (
           <div className="settings-grid" data-settings-section={activeSection}>
             {visibleCards.map((card) => {
@@ -466,6 +546,27 @@ export function QuickSettingsOverlay({
                       <strong>{card.value}</strong>
                       <p>{card.meta}</p>
                       <em className="settings-card-action">Open font presets</em>
+                    </div>
+                  </button>
+                );
+              }
+
+              if (card.kind === "lyrics") {
+                return (
+                  <button
+                    className={`settings-card settings-card-button settings-card-summary settings-card-lyrics tone-${card.tone}`}
+                    key={card.key}
+                    type="button"
+                    onClick={() => openDetail("lyrics")}
+                  >
+                    <div className="settings-icon">
+                      <Captions size={32} />
+                    </div>
+                    <div>
+                      <span>{card.title}</span>
+                      <strong>{card.value}</strong>
+                      <p>{card.meta}</p>
+                      <em className="settings-card-action">Open lyric settings</em>
                     </div>
                   </button>
                 );

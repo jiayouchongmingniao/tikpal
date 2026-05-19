@@ -1,5 +1,6 @@
 export type AppMode = "ambient" | "player" | "quickSettings" | "quickMenu";
 export type FontTheme = "sans" | "serif" | "mono";
+export type LyricsFontSize = "small" | "medium" | "large";
 
 export type PlaybackState = "playing" | "paused" | "stopped";
 
@@ -135,10 +136,21 @@ export interface PlaybackSummary {
   album: string | null;
   elapsedSeconds: number | null;
   durationSeconds: number | null;
+  timingDiagnostics: PlaybackTimingDiagnostics | null;
   currentTrackIndex: number;
   queueLength: number;
   favorite: boolean;
   queuePreview: QueueEntrySummary[];
+}
+
+export interface PlaybackTimingDiagnostics {
+  metadataMtimeMs: number | null;
+  airplayStartedAtMs: number | null;
+  airplayStoppedAtMs: number | null;
+  clockStartMs: number | null;
+  clockLeadMs: number | null;
+  effectiveClockStartMs: number | null;
+  clockStartReason: "airplay_event" | "metadata_mtime" | string | null;
 }
 
 export interface QueueEntrySummary {
@@ -176,7 +188,7 @@ export type LyricsTimingStrategy =
 
 export interface LyricsState {
   status: "idle" | "recognizing" | "ready" | "not_found" | "error";
-  sourceScope: "local_playback" | "bluetooth_input";
+  sourceScope: "local_playback" | "bluetooth_input" | "airplay_input";
   providerMode: "online";
   recognitionMode: "metadata" | "fingerprint" | null;
   recognitionProvider: "lrclib" | "acrcloud" | null;

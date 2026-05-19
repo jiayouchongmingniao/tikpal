@@ -9,6 +9,7 @@ export const playback: PlaybackSummary = {
   album: "Random Access Memories",
   elapsedSeconds: 84,
   durationSeconds: 369,
+  timingDiagnostics: null,
   currentTrackIndex: 1,
   queueLength: 13,
   favorite: false,
