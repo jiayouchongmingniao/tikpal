@@ -20,6 +20,7 @@ const MIME_TYPES = new Map([
   [".png", "image/png"],
   [".jpg", "image/jpeg"],
   [".jpeg", "image/jpeg"],
+  [".mp4", "video/mp4"],
   [".webp", "image/webp"],
   [".ico", "image/x-icon"],
   [".woff", "font/woff"],
@@ -117,10 +118,11 @@ const server = http.createServer(async (request, response) => {
 
   const extension = path.extname(file.filePath);
   const isAsset = file.filePath.includes(`${path.sep}assets${path.sep}`);
+  const isMutableMedia = extension === ".mp4";
   response.writeHead(200, {
     "Content-Type": MIME_TYPES.get(extension) ?? "application/octet-stream",
     "Content-Length": file.info.size,
-    "Cache-Control": isAsset ? "public, max-age=31536000, immutable" : "no-store"
+    "Cache-Control": isMutableMedia ? "no-store" : isAsset ? "public, max-age=31536000, immutable" : "no-store"
   });
 
   if (request.method === "HEAD") {

@@ -147,176 +147,22 @@ button {
   user-select: none;
 }
 
-.flame-particle-layer {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-}
-
-.flame-scene canvas {
+.flame-video {
   position: absolute;
   inset: 0;
   display: block;
   width: 100%;
   height: 100%;
+  filter: brightness(1.03) saturate(1.08) contrast(1.02);
+  object-fit: cover;
+  object-position: center center;
+  pointer-events: none;
+  user-select: none;
 }
 
-.flame-scene.is-fallback {
-  display: grid;
-  place-items: center;
-}
-
-.flame-scene.is-low-power .fireplace-backdrop {
-  filter: brightness(0.92) saturate(1.04) contrast(1.02) sepia(0.06);
-}
-
-.flame-scene.is-low-power .flame-particle-layer {
-  display: none;
-}
-
-.flame-fallback {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  max-width: none;
-  height: 100%;
-  overflow: hidden;
-  opacity: 0.8;
-  filter: blur(0.2px);
-  background:
-    radial-gradient(ellipse at 41% 84%, rgba(255, 112, 34, 0.18), transparent 0 11%, transparent 29%),
-    radial-gradient(ellipse at 49% 81%, rgba(255, 159, 44, 0.24), transparent 0 10%, transparent 28%),
-    radial-gradient(ellipse at 57% 81%, rgba(255, 138, 36, 0.22), transparent 0 10%, transparent 27%),
-    radial-gradient(ellipse at 66% 85%, rgba(229, 74, 22, 0.13), transparent 0 10%, transparent 28%),
-    radial-gradient(ellipse at 31% 87%, rgba(190, 54, 18, 0.1), transparent 0 8%, transparent 24%);
-}
-
-.flame-fallback::before,
-.flame-fallback::after {
-  content: "";
-  position: absolute;
-  left: 50%;
-  bottom: 8.5%;
-  width: min(70vw, 1540px);
-  height: 7.8vh;
-  border-radius: 999px;
-  background:
-    radial-gradient(circle at 42% 52%, rgba(255, 112, 28, 0.3), transparent 0 8%, transparent 18%),
-    radial-gradient(circle at 51% 46%, rgba(255, 190, 74, 0.24), transparent 0 7%, transparent 16%),
-    radial-gradient(circle at 58% 48%, rgba(255, 144, 42, 0.22), transparent 0 7%, transparent 17%),
-    radial-gradient(circle at 67% 54%, rgba(218, 64, 19, 0.16), transparent 0 7%, transparent 18%),
-    linear-gradient(180deg, rgba(74, 26, 10, 0.42), rgba(10, 3, 2, 0.38) 62%, rgba(1, 1, 1, 0.28));
-  box-shadow:
-    inset 0 1.8vh 2.4vh rgba(0, 0, 0, 0.72),
-    0 2.2vh 6vh rgba(0, 0, 0, 0.72),
-    0 -1.1vh 7vh rgba(255, 91, 15, 0.2);
-}
-
-.flame-fallback::before {
-  transform: translateX(-53%) rotate(6deg);
-}
-
-.flame-fallback::after {
-  transform: translateX(-46%) translateY(-2vh) rotate(-11deg);
-}
-
-.flame-fallback span {
-  position: absolute;
-  bottom: 11.5%;
-  width: 9%;
-  height: 21%;
-  --flame-low: 0.04;
-  --flame-high: 0.34;
-  border-radius: 50% 50% 46% 46%;
-  background:
-    radial-gradient(circle at 50% 80%, rgba(255, 214, 91, 0.54), transparent 0 13%, transparent 30%),
-    radial-gradient(circle at 50% 58%, rgba(234, 83, 20, 0.44), transparent 0 28%, transparent 56%),
-    radial-gradient(circle at 48% 34%, rgba(83, 22, 7, 0.36), transparent 0 38%, transparent 72%);
-  mix-blend-mode: screen;
-  opacity: 0.32;
-  transform-origin: 50% 100%;
-  animation: fallbackFlame 5.4s ease-in-out infinite;
-}
-
-.flame-fallback span:nth-child(1) {
-  left: 31%;
-  height: 15%;
-  --flame-high: 0.24;
-  animation-delay: -0.4s;
-  animation-duration: 6.4s;
-  transform: scaleX(0.52) rotate(-13deg);
-}
-
-.flame-fallback span:nth-child(2) {
-  left: 41%;
-  height: 20%;
-  --flame-high: 0.3;
-  animation-delay: -1.3s;
-  animation-duration: 4.8s;
-  transform: scaleX(0.66) rotate(-4deg);
-}
-
-.flame-fallback span:nth-child(3) {
-  left: 48%;
-  height: 34%;
-  animation-delay: -2.1s;
-  animation-duration: 5.7s;
-  --flame-low: 0.14;
-  --flame-high: 0.44;
-  opacity: 0.42;
-  transform: scaleX(0.74) rotate(7deg);
-}
-
-.flame-fallback span:nth-child(4) {
-  left: 57%;
-  height: 29%;
-  animation-delay: -3s;
-  animation-duration: 4.3s;
-  --flame-low: 0.1;
-  --flame-high: 0.4;
-  opacity: 0.38;
-  transform: scaleX(0.64) rotate(-9deg);
-}
-
-.flame-fallback span:nth-child(5) {
-  left: 67%;
-  height: 16%;
-  --flame-high: 0.26;
-  animation-delay: -3.7s;
-  animation-duration: 6.9s;
-  transform: scaleX(0.5) rotate(9deg);
-}
-
-@keyframes fallbackFlame {
-  0% {
-    translate: 0 7px;
-    scale: 0.82 0.52;
-    opacity: var(--flame-low);
-  }
-
-  18% {
-    translate: -2px -4px;
-    scale: 1.02 1.08;
-    opacity: var(--flame-high);
-  }
-
-  38% {
-    translate: 1px 5px;
-    scale: 0.78 0.58;
-    opacity: calc(var(--flame-low) + 0.04);
-  }
-
-  62% {
-    translate: 2px -9px;
-    scale: 1.08 1.16;
-    opacity: calc(var(--flame-high) + 0.04);
-  }
-
-  100% {
-    translate: 0 6px;
-    scale: 0.86 0.6;
-    opacity: var(--flame-low);
-  }
+.flame-scene.is-low-power .fireplace-backdrop,
+.flame-scene.is-low-power .flame-video {
+  filter: brightness(0.98) saturate(1.02) contrast(1.01);
 }
 
 @keyframes source-spin {
