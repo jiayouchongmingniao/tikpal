@@ -10,7 +10,7 @@ import { useTikpalState } from "./hooks/useTikpalState";
 import type { AppMode, FontTheme, LyricsFontSize } from "./types";
 
 const FONT_THEME_STORAGE_KEY = "tikpal.fontTheme";
-const LYRICS_VISIBLE_STORAGE_KEY = "tikpal.lyricsVisible";
+const LYRICS_VISIBLE_STORAGE_KEY = "tikpal.lyricsVisible.v2";
 const LYRICS_FONT_SIZE_STORAGE_KEY = "tikpal.lyricsFontSize";
 
 const dateFormatter = new Intl.DateTimeFormat("en-US", {
@@ -40,7 +40,7 @@ function readInitialFontTheme(): FontTheme {
 }
 
 function readInitialLyricsVisible() {
-  return window.localStorage.getItem(LYRICS_VISIBLE_STORAGE_KEY) !== "false";
+  return window.localStorage.getItem(LYRICS_VISIBLE_STORAGE_KEY) === "true";
 }
 
 function readInitialLyricsFontSize(): LyricsFontSize {
@@ -116,6 +116,7 @@ export default function App() {
         audio={tikpalState.audio}
         system={tikpalState.system}
         status={tikpalStatus}
+        fontTheme={fontTheme}
         onPlaybackAction={sendPlaybackAction}
         onSourceSwitch={sendSourceSwitch}
         onReturnAmbient={returnAmbient}

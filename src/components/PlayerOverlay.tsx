@@ -1,34 +1,40 @@
-import { useDeferredValue, useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Bluetooth,
   Cast,
   Check,
+  Clock,
+  HardDrive,
   Heart,
   LibraryBig,
   ListMusic,
   LoaderCircle,
   Minus,
+  Music2,
   Pause,
   Play,
   Plus,
-  Radio,
+  Radio as RadioIcon,
   Search,
+  Server,
   SkipBack,
   SkipForward,
-  Volume2
+  Usb
 } from "lucide-react";
-import { fetchRadioCatalog } from "../api/tikpalClient";
+import type { LucideIcon } from "lucide-react";
+import { fetchAudioLibrary, fetchRadioCatalog } from "../api/tikpalClient";
 import { buildGeneratedCoverArtUrl } from "../coverArt";
 import type { TikpalDataStatus } from "../hooks/useTikpalState";
-import { formatDuration, formatSampleRate } from "../mockState";
+import { formatDuration } from "../mockState";
 import { useOverlayReturnGesture } from "../hooks/useOverlayReturnGesture";
 import type {
+  AudioLibraryCategoryId,
+  AudioLibraryTrackSummary,
   AudioState,
+  FontTheme,
   PlaybackActionType,
   PlaybackSummary,
-  RadioCatalogResponse,
   RadioStationSummary,
-  SourceSummary,
   SourceSwitchTarget,
   SystemState,
   TikpalState
@@ -40,74 +46,56 @@ interface PlayerOverlayProps {
   audio: AudioState;
   system: SystemState;
   status: TikpalDataStatus;
+  fontTheme: FontTheme;
   onPlaybackAction: (type: PlaybackActionType, value?: number) => Promise<TikpalState>;
   onSourceSwitch: (target: SourceSwitchTarget, radioStationId?: string) => Promise<TikpalState>;
   onReturnAmbient: () => void;
 }
 
-const primarySourceTargets: SourceSwitchTarget[] = ["mpd", "radio", "bluetooth", "airplay"];
+type PrimaryPanelId = "library" | "radio" | "spotify" | "airplay" | "bluetooth";
+type ExternalPanelId = Exclude<PrimaryPanelId, "library" | "radio">;
+type LibraryFilterId = "local" | "nas" | "usb" | "favorites" | "recently_added";
 
-const EMPTY_RADIO_CATALOG: RadioCatalogResponse = {
-  stations: [],
-  total: 0,
-  genres: [],
-  bitrates: [],
-  filters: {
-    q: "",
-    genre: "",
-    bitrate: "",
-    limit: 120,
-    offset: 0
-  },
-  updatedAt: ""
-};
+interface LocalCategory {
+  id: AudioLibraryCategoryId;
+  label: string;
+}
 
-function sourceActionLabel(source: SourceSummary) {
+const primaryPanels: Array<{ id: PrimaryPanelId; label: string; Icon: LucideIcon }> = [
+  { id: "library", label: "Library", Icon: LibraryBig },
+  { id: "radio", label: "Radio", Icon: RadioIcon },
+  { id: "spotify", label: "Spotify", Icon: Music2 },
+  { id: "airplay", label: "AirPlay", Icon: Cast },
+  { id: "bluetooth", label: "Bluetooth", Icon: Bluetooth }
+];
+
+const storageTabs: Array<{ id: LibraryFilterId; label: string; Icon: LucideIcon }> = [
+  { id: "local", label: "Local", Icon: HardDrive },
+  { id: "nas", label: "NAS", Icon: Server },
+  { id: "usb", label: "USB", Icon: Usb },
+  { id: "favorites", label: "Favorites", Icon: Heart },
+  { id: "recently_added", label: "Recently Added", Icon: Clock }
+];
+
+const localCategories: LocalCategory[] = [
+  { id: "focus", label: "Focus" },
+  { id: "meditation", label: "Meditation" },
+  { id: "rest", label: "Rest" }
+];
+
+function categoryLabel(categoryId: AudioLibraryCategoryId) {
+  return localCategories.find((category) => category.id === categoryId)?.label ?? "Library";
+}
+
+function sourceStatusLabel(source: AudioState["currentSource"] | undefined, pending: boolean) {
+  if (pending) return "Opening";
+  if (!source) return "Unavailable";
   if (source.active) return "Active";
-  if (source.id === "radio") return "Browse";
-  if (source.connectionState === "armed") return "Armed";
   if (source.connectionState === "connected") return "Connected";
-  if (source.controllability === "status-only") return "Locked";
-  return "Select";
-}
-
-function sourceActionCopy(source: SourceSummary) {
-  switch (source.id) {
-    case "bluetooth":
-      return source.active ? "Pairing Open" : "Open Pairing";
-    case "airplay":
-      return source.active ? "AirPlay Open" : "Open AirPlay";
-    case "radio":
-      return source.active ? "Live Radio" : "Browse Radios";
-    case "mpd":
-    default:
-      return source.active ? "In Library" : "Return to Library";
-  }
-}
-
-function sourceIcon(source: SourceSummary) {
-  switch (source.id) {
-    case "radio":
-      return Radio;
-    case "bluetooth":
-      return Bluetooth;
-    case "airplay":
-      return Cast;
-    case "mpd":
-    default:
-      return LibraryBig;
-  }
-}
-
-function findSource(audio: AudioState, target: SourceSwitchTarget) {
-  return audio.sources.find((source): source is SourceSummary & { id: SourceSwitchTarget } => source.id === target);
-}
-
-function sourceDiscoveryCopy(source: SourceSummary) {
-  if (!source.advertisedLabel) return null;
-  return source.id === "bluetooth"
-    ? `Look for ${source.advertisedLabel} in your phone's Bluetooth list.`
-    : `Look for ${source.advertisedLabel} in your AirPlay target list.`;
+  if (source.connectionState === "armed") return "Ready";
+  if (source.connectionState === "blocked") return "Closed";
+  if (source.availability === "unavailable") return "Unavailable";
+  return "Ready";
 }
 
 export function PlayerOverlay({
@@ -116,119 +104,234 @@ export function PlayerOverlay({
   audio,
   system,
   status,
+  fontTheme,
   onPlaybackAction,
   onSourceSwitch,
   onReturnAmbient
 }: PlayerOverlayProps) {
   const overlayReturnGesture = useOverlayReturnGesture(onReturnAmbient);
   const [queuePanelOpen, setQueuePanelOpen] = useState(false);
-  const [selectedSource, setSelectedSource] = useState<SourceSwitchTarget>("mpd");
-  const [pendingSource, setPendingSource] = useState<SourceSwitchTarget | null>(null);
-  const [pendingRadioStationId, setPendingRadioStationId] = useState<string | null>(null);
-  const [sourceError, setSourceError] = useState<string | null>(null);
-  const [sourceHint, setSourceHint] = useState<string | null>(null);
   const [seekDraftSeconds, setSeekDraftSeconds] = useState<number | null>(null);
   const [seekPendingSeconds, setSeekPendingSeconds] = useState<number | null>(null);
   const [seekError, setSeekError] = useState<string | null>(null);
+  const [selectedPrimaryPanel, setSelectedPrimaryPanel] = useState<PrimaryPanelId>("library");
+  const [selectedLibraryStorage, setSelectedLibraryStorage] = useState<LibraryFilterId>("local");
+  const [selectedLocalCategory, setSelectedLocalCategory] = useState<AudioLibraryCategoryId>("focus");
+  const [selectedLocalSubCategory, setSelectedLocalSubCategory] = useState("all");
+  const [selectedLibraryTrackId, setSelectedLibraryTrackId] = useState<string | null>(null);
+  const [manualPanelSelection, setManualPanelSelection] = useState(false);
+  const [localLibraryTracks, setLocalLibraryTracks] = useState<AudioLibraryTrackSummary[]>([]);
+  const [libraryLoading, setLibraryLoading] = useState(false);
+  const [libraryError, setLibraryError] = useState<string | null>(null);
+  const [radioStations, setRadioStations] = useState<RadioStationSummary[]>([]);
+  const [radioTotal, setRadioTotal] = useState(0);
+  const [radioGenres, setRadioGenres] = useState<string[]>([]);
+  const [radioBitrates, setRadioBitrates] = useState<string[]>([]);
   const [radioQuery, setRadioQuery] = useState("");
-  const [radioGenre, setRadioGenre] = useState("");
-  const [radioBitrate, setRadioBitrate] = useState("");
-  const [radioCatalog, setRadioCatalog] = useState<RadioCatalogResponse>(EMPTY_RADIO_CATALOG);
+  const [selectedRadioGenre, setSelectedRadioGenre] = useState("");
+  const [selectedRadioBitrate, setSelectedRadioBitrate] = useState("");
   const [radioLoading, setRadioLoading] = useState(false);
   const [radioError, setRadioError] = useState<string | null>(null);
-  const deferredRadioQuery = useDeferredValue(radioQuery);
+  const [pendingSource, setPendingSource] = useState<SourceSwitchTarget | null>(null);
+  const [sourceError, setSourceError] = useState<string | null>(null);
+  const [sourceHint, setSourceHint] = useState<string | null>(null);
   const title = playback.title ?? "Not Playing";
   const artist = playback.artist ?? "Unknown Artist";
   const album = playback.album ?? "No Album";
   const elapsedSeconds = playback.elapsedSeconds ?? 0;
   const durationSeconds = playback.durationSeconds ?? 0;
-  const seekSupported = playback.source === "mpd" && durationSeconds > 0;
-  const displayedElapsedSeconds = seekDraftSeconds ?? seekPendingSeconds ?? elapsedSeconds;
-  const progress = durationSeconds > 0 ? Math.min(1, displayedElapsedSeconds / durationSeconds) : 0;
   const isPlaying = playback.state === "playing";
   const currentSource = audio.currentSource;
-  const selectedSourceSummary = findSource(audio, selectedSource) ?? audio.currentSource;
-  const coverLabel = album
-    .split(/\s+/)
-    .map((word) => word[0])
-    .join("")
-    .slice(0, 3)
-    .toUpperCase();
-  const coverArtUrl = playback.albumArtUrl ?? buildGeneratedCoverArtUrl(title, artist, album);
-  const statusCards = [
-    {
-      label: "AUDIO",
-      value: `${system.audioFormat.codec} ${system.bitDepth}bit / ${formatSampleRate(system.sampleRate)}`,
-      meta: system.audioFormat.container
-    },
-    {
-      label: "OUTPUT",
-      value: system.outputDevice.label,
-      meta: system.outputDevice.detail
-    },
-    {
-      label: "VOLUME",
-      value: `${system.volume.db.toFixed(1)} dB`,
-      meta: `${system.volume.percent}%`
-    },
-    {
-      label: "NETWORK",
-      value: `${system.network.label} - ${system.network.speed}`,
-      meta: system.network.ip
+  const selectedPanelConfig = primaryPanels.find((panel) => panel.id === selectedPrimaryPanel) ?? primaryPanels[0];
+  const selectedStorageConfig = storageTabs.find((storage) => storage.id === selectedLibraryStorage) ?? storageTabs[0];
+  const selectedExternalSource = selectedPrimaryPanel !== "library"
+    ? audio.sources.find((source) => source.id === selectedPrimaryPanel)
+    : undefined;
+  const nasLibraryTracks = useMemo<AudioLibraryTrackSummary[]>(() => (
+    playback.queuePreview.map((entry) => ({
+      id: `nas-${entry.id}`,
+      title: entry.title,
+      artist: entry.artist,
+      album: entry.album || "NAS Library",
+      categoryId: "nas",
+      subCategory: entry.active ? "Now Playing" : "Queue",
+      durationSeconds: entry.durationSeconds,
+      path: null,
+      active: entry.active,
+      storage: "nas"
+    }))
+  ), [playback.queuePreview]);
+  const localCategoryCounts = useMemo(() => (
+    localLibraryTracks.reduce<Record<AudioLibraryCategoryId, number>>(
+      (counts, track) => {
+        if (track.categoryId === "focus" || track.categoryId === "meditation" || track.categoryId === "rest") {
+          counts[track.categoryId] += 1;
+        }
+        return counts;
+      },
+      { focus: 0, meditation: 0, rest: 0 }
+    )
+  ), [localLibraryTracks]);
+  const localCategoryTracks = useMemo(() => (
+    localLibraryTracks.filter((track) => track.categoryId === selectedLocalCategory)
+  ), [localLibraryTracks, selectedLocalCategory]);
+  const localSubCategoryTabs = useMemo(() => {
+    const counts = new Map<string, number>();
+    localCategoryTracks.forEach((track) => {
+      counts.set(track.subCategory, (counts.get(track.subCategory) ?? 0) + 1);
+    });
+    return Array.from(counts.entries()).map(([label, count]) => ({ label, count }));
+  }, [localCategoryTracks]);
+  const selectedSubCategoryIsAvailable = selectedLocalSubCategory === "all"
+    || localSubCategoryTabs.some((tab) => tab.label === selectedLocalSubCategory);
+  const selectedLocalTracks = useMemo(() => (
+    selectedLocalSubCategory === "all" || !selectedSubCategoryIsAvailable
+      ? localCategoryTracks
+      : localCategoryTracks.filter((track) => track.subCategory === selectedLocalSubCategory)
+  ), [localCategoryTracks, selectedLocalSubCategory, selectedSubCategoryIsAvailable]);
+  const visibleLibraryTracks = useMemo(() => {
+    switch (selectedLibraryStorage) {
+      case "nas":
+        return nasLibraryTracks;
+      case "local":
+        return selectedLocalTracks;
+      case "usb":
+      case "favorites":
+      case "recently_added":
+        return [];
+      default:
+        return localLibraryTracks;
     }
-  ];
+  }, [nasLibraryTracks, selectedLibraryStorage, selectedLocalTracks]);
+  const selectedLibraryTrack = visibleLibraryTracks.find((track) => track.id === selectedLibraryTrackId) ?? null;
+  const externalPanelActive = selectedPrimaryPanel === playback.source;
+  const libraryPanelActive = selectedPrimaryPanel === "library";
+  const nasActiveTrackSelected = libraryPanelActive
+    && selectedLibraryStorage === "nas"
+    && Boolean(selectedLibraryTrack?.active)
+    && playback.source === "mpd";
+  const externalPlaybackSelected = selectedPrimaryPanel !== "library" && externalPanelActive;
+  const seekSupported = nasActiveTrackSelected && durationSeconds > 0;
+  const displayedElapsedSeconds = seekSupported
+    ? seekDraftSeconds ?? seekPendingSeconds ?? elapsedSeconds
+    : externalPlaybackSelected
+      ? elapsedSeconds
+      : 0;
+  const displayedDurationSeconds = seekSupported
+    ? durationSeconds
+    : externalPlaybackSelected
+      ? durationSeconds || null
+      : selectedLibraryTrack?.durationSeconds ?? null;
+  const progress = displayedDurationSeconds && displayedDurationSeconds > 0
+    ? Math.min(1, displayedElapsedSeconds / displayedDurationSeconds)
+    : 0;
+
+  const selectedLocalCategoryLabel = categoryLabel(selectedLocalCategory);
+  const selectedLocalScopeLabel = selectedLocalSubCategory === "all" ? selectedLocalCategoryLabel : selectedLocalSubCategory;
+  const displayTitle = libraryPanelActive
+    ? selectedLibraryTrack?.title ?? (selectedLibraryStorage === "local" ? selectedLocalScopeLabel : selectedLibraryStorage === "nas" ? "NAS Library" : selectedStorageConfig.label)
+    : selectedPanelConfig.label;
+  const displayArtist = libraryPanelActive
+    ? selectedLibraryTrack?.artist ?? (selectedLibraryStorage === "nas" ? system.library.source : "Library")
+    : selectedExternalSource?.connectedLabel ?? selectedExternalSource?.advertisedLabel ?? "Tikpal Speaker";
+  const displayAlbum = libraryPanelActive
+    ? selectedLibraryTrack?.album ?? (selectedLibraryStorage === "nas"
+      ? `${system.library.trackCount || nasLibraryTracks.length} network tracks`
+      : selectedLibraryStorage === "local"
+        ? `${visibleLibraryTracks.length} local tracks`
+        : `${visibleLibraryTracks.length} tracks`)
+    : selectedExternalSource?.secondaryStatus ?? "External input";
+  const sourceLine = libraryPanelActive
+    ? [
+      "Library",
+      selectedLibraryStorage === "local"
+        ? `Local / ${selectedLocalCategoryLabel}${selectedLocalSubCategory === "all" ? "" : ` / ${selectedLocalSubCategory}`}`
+        : selectedStorageConfig.label,
+      status.pending ? "Syncing" : status.source === "api" ? "API Confirmed" : "Fallback Data"
+    ]
+    : [
+      selectedPanelConfig.label,
+      sourceStatusLabel(selectedExternalSource, pendingSource === selectedPrimaryPanel),
+      status.pending ? "Syncing" : status.source === "api" ? "API Confirmed" : "Fallback Data"
+    ];
+  const usePlaybackArtwork = nasActiveTrackSelected && Boolean(playback.albumArtUrl);
+  const coverArtUrl = usePlaybackArtwork
+    ? playback.albumArtUrl!
+    : buildGeneratedCoverArtUrl(displayTitle, displayArtist, displayAlbum, fontTheme);
 
   useEffect(() => {
     if (!active) {
       setQueuePanelOpen(false);
-      setPendingSource(null);
-      setPendingRadioStationId(null);
-      setSourceError(null);
-      setSourceHint(null);
       setSeekDraftSeconds(null);
       setSeekPendingSeconds(null);
       setSeekError(null);
-      setRadioError(null);
-      setRadioLoading(false);
+      setPendingSource(null);
+      setSourceError(null);
+      setSourceHint(null);
+      setManualPanelSelection(false);
     }
   }, [active]);
 
   useEffect(() => {
-    if (primarySourceTargets.includes(currentSource.id as SourceSwitchTarget)) {
-      setSelectedSource(currentSource.id as SourceSwitchTarget);
+    if (!active || manualPanelSelection) return;
+
+    if (currentSource.id === "radio" || currentSource.id === "spotify" || currentSource.id === "bluetooth" || currentSource.id === "airplay") {
+      setSelectedPrimaryPanel(currentSource.id);
+      setSelectedLibraryTrackId(null);
+      return;
     }
-  }, [currentSource.id]);
+
+    if (currentSource.id === "mpd") {
+      setSelectedPrimaryPanel("library");
+    }
+  }, [active, currentSource.id, manualPanelSelection]);
 
   useEffect(() => {
-    if (!seekSupported) {
-      setSeekDraftSeconds(null);
-      setSeekPendingSeconds(null);
-      setSeekError(null);
-    }
-  }, [seekSupported]);
+    if (!active || localLibraryTracks.length > 0) return undefined;
+
+    const controller = new AbortController();
+    setLibraryLoading(true);
+    setLibraryError(null);
+
+    void fetchAudioLibrary({ storage: "local", limit: 500 }, controller.signal)
+      .then((library) => {
+        setLocalLibraryTracks(library.tracks.filter((track) => track.storage === "local"));
+      })
+      .catch((error) => {
+        if (controller.signal.aborted) return;
+        setLibraryError(error instanceof Error ? error.message : "Local music manifest is not available");
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setLibraryLoading(false);
+        }
+      });
+
+    return () => controller.abort();
+  }, [active, localLibraryTracks.length]);
 
   useEffect(() => {
-    if (!active || selectedSource !== "radio") return;
+    if (!active || selectedPrimaryPanel !== "radio") return undefined;
 
     const controller = new AbortController();
     setRadioLoading(true);
     setRadioError(null);
 
-    void fetchRadioCatalog(
-      {
-        q: deferredRadioQuery,
-        genre: radioGenre,
-        bitrate: radioBitrate,
-        limit: 120
-      },
-      controller.signal
-    )
+    void fetchRadioCatalog({
+      q: radioQuery,
+      genre: selectedRadioGenre || undefined,
+      bitrate: selectedRadioBitrate || undefined,
+      limit: 250
+    }, controller.signal)
       .then((catalog) => {
-        setRadioCatalog(catalog);
+        setRadioStations(catalog.stations);
+        setRadioTotal(catalog.total);
+        setRadioGenres(catalog.genres);
+        setRadioBitrates(catalog.bitrates);
       })
       .catch((error) => {
         if (controller.signal.aborted) return;
-        setRadioError(error instanceof Error ? error.message : "Radio catalog unavailable");
+        setRadioError(error instanceof Error ? error.message : "Radio catalog is not available");
       })
       .finally(() => {
         if (!controller.signal.aborted) {
@@ -237,46 +340,33 @@ export function PlayerOverlay({
       });
 
     return () => controller.abort();
-  }, [active, deferredRadioQuery, radioBitrate, radioGenre, selectedSource]);
+  }, [active, radioQuery, selectedPrimaryPanel, selectedRadioBitrate, selectedRadioGenre]);
 
-  async function handleSourceSwitch(target: SourceSwitchTarget, radioStation?: RadioStationSummary) {
-    if (status.pending || pendingSource) return;
-    setPendingSource(target);
-    setPendingRadioStationId(radioStation?.id ?? null);
-    setSourceError(null);
-    setSourceHint(null);
-    try {
-      const nextState = await onSourceSwitch(target, radioStation?.id);
-      const nextSource = findSource(nextState.audio, target);
-
-      if (target === "radio" && nextSource?.active) {
-        setSourceHint(`${radioStation?.label ?? nextSource.label} live.`);
-      } else if (target === "bluetooth" && nextSource) {
-        setSourceHint(
-          nextSource.connectedLabel
-            ? `Bluetooth: ${nextSource.connectedLabel}.`
-            : nextSource.advertisedLabel
-              ? `Bluetooth ready as ${nextSource.advertisedLabel}.`
-              : "Bluetooth ready."
-        );
-      } else if (target === "airplay" && nextSource) {
-        setSourceHint(
-          nextSource.connectedLabel
-            ? `AirPlay: ${nextSource.connectedLabel}.`
-            : nextSource.advertisedLabel
-              ? `AirPlay ready as ${nextSource.advertisedLabel}.`
-              : "AirPlay ready."
-        );
-      } else if (target === "mpd" && nextSource?.active) {
-        setSourceHint("Library ready.");
-      }
-    } catch (error) {
-      setSourceError(error instanceof Error ? error.message : "Source switch failed");
-    } finally {
-      setPendingSource(null);
-      setPendingRadioStationId(null);
+  useEffect(() => {
+    if (!selectedSubCategoryIsAvailable) {
+      setSelectedLocalSubCategory("all");
     }
-  }
+  }, [selectedSubCategoryIsAvailable]);
+
+  useEffect(() => {
+    if (!active || selectedPrimaryPanel !== "library") return;
+    const preferredTrack = visibleLibraryTracks.find((track) => track.active) ?? visibleLibraryTracks[0] ?? null;
+    if (!preferredTrack) {
+      if (selectedLibraryTrackId) setSelectedLibraryTrackId(null);
+      return;
+    }
+    if (!visibleLibraryTracks.some((track) => track.id === selectedLibraryTrackId)) {
+      setSelectedLibraryTrackId(preferredTrack.id);
+    }
+  }, [active, selectedLibraryTrackId, selectedPrimaryPanel, visibleLibraryTracks]);
+
+  useEffect(() => {
+    if (!seekSupported) {
+      setSeekDraftSeconds(null);
+      setSeekPendingSeconds(null);
+      setSeekError(null);
+    }
+  }, [seekSupported]);
 
   async function commitSeek(nextSeconds: number | null) {
     if (!seekSupported || nextSeconds === null || status.pending) {
@@ -303,122 +393,247 @@ export function PlayerOverlay({
     setSeekError(null);
   }
 
-  async function handleSourceRailPress(source: SourceSummary & { id: SourceSwitchTarget }) {
-    setSelectedSource(source.id);
-    if (source.id === "radio") {
-      if (!source.active) {
-        await handleSourceSwitch("radio");
+  function libraryFilterCount(filterId: LibraryFilterId) {
+    switch (filterId) {
+      case "local":
+        return localLibraryTracks.length;
+      case "nas":
+        return system.library.trackCount || nasLibraryTracks.length;
+      case "usb":
+      case "favorites":
+      case "recently_added":
+        return 0;
+      default:
+        return 0;
+    }
+  }
+
+  function panelMeta(panelId: PrimaryPanelId) {
+    if (panelId === "library") {
+      switch (selectedLibraryStorage) {
+        case "local":
+          return `${libraryFilterCount("local")} local`;
+        case "nas":
+          return `${libraryFilterCount("nas")} NAS`;
+        case "usb":
+          return `${libraryFilterCount("usb")} USB`;
+        case "favorites":
+          return `${libraryFilterCount("favorites")} saved`;
+        case "recently_added":
+          return `${libraryFilterCount("recently_added")} new`;
+        default:
+          return "";
       }
+    }
+
+    const source = audio.sources.find((entry) => entry.id === panelId);
+    return sourceStatusLabel(source, pendingSource === panelId);
+  }
+
+  async function switchSource(target: SourceSwitchTarget, radioStationId?: string) {
+    if (status.pending || pendingSource) return;
+    setPendingSource(target);
+    setSourceError(null);
+    setSourceHint(null);
+
+    try {
+      const nextState = await onSourceSwitch(target, radioStationId);
+      const nextSource = nextState.audio.sources.find((source) => source.id === target);
+      if (target === "mpd") {
+        setSourceHint("Library source ready.");
+      } else if (target === "radio") {
+        setSourceHint(`${nextSource?.secondaryStatus ?? "Radio ready."}`);
+      } else if (nextSource?.connectedLabel) {
+        setSourceHint(`${nextSource.label}: ${nextSource.connectedLabel}.`);
+      } else if (nextSource?.advertisedLabel) {
+        setSourceHint(`${nextSource.label} ready as ${nextSource.advertisedLabel}.`);
+      } else {
+        setSourceHint(`${nextSource?.label ?? target} ready.`);
+      }
+    } catch (error) {
+      setSourceError(error instanceof Error ? error.message : "Source switch failed");
+    } finally {
+      setPendingSource(null);
+    }
+  }
+
+  function handlePrimaryPanelSelect(panelId: PrimaryPanelId) {
+    setManualPanelSelection(true);
+    setSelectedPrimaryPanel(panelId);
+    setSelectedLibraryTrackId(null);
+    setSourceError(null);
+    setSourceHint(null);
+
+    if (panelId === "library") {
+      if (currentSource.id !== "mpd") void switchSource("mpd");
       return;
     }
 
-    await handleSourceSwitch(source.id);
+    void switchSource(panelId);
   }
 
-  function renderSourceWorkspaceContent() {
-    if (selectedSource === "radio") {
-      return (
-        <section className="source-workspace-content" aria-label="Radio catalog">
-          <div className="radio-filter-row">
-            <label className="source-search-field" data-radio-search>
-              <Search size={18} />
-              <input
-                type="search"
-                value={radioQuery}
-                placeholder="Search station name or genre"
-                onChange={(event) => setRadioQuery(event.currentTarget.value)}
-              />
-            </label>
-            <label className="source-filter-field">
-              <span>Genre</span>
-              <select value={radioGenre} onChange={(event) => setRadioGenre(event.currentTarget.value)}>
-                <option value="">All</option>
-                {radioCatalog.genres.map((genre) => (
-                  <option key={genre} value={genre}>{genre}</option>
-                ))}
-              </select>
-            </label>
-            <label className="source-filter-field">
-              <span>Bitrate</span>
-              <select value={radioBitrate} onChange={(event) => setRadioBitrate(event.currentTarget.value)}>
-                <option value="">All</option>
-                {radioCatalog.bitrates.map((bitrate) => (
-                  <option key={bitrate} value={bitrate}>{bitrate}</option>
-                ))}
-              </select>
-            </label>
-          </div>
-
-          <div className="source-result-meta">
-            <span>{radioLoading ? "Refreshing stations..." : `${radioCatalog.total} stations`}</span>
-            <span>{radioCatalog.filters.genre || "All genres"}</span>
-          </div>
-
-          {radioError ? <p className="source-panel-error">{radioError}</p> : null}
-
-          <div className="radio-catalog-list">
-            {radioCatalog.stations.map((station) => {
-              const stationPending = pendingRadioStationId === station.id;
-              return (
-                <button
-                  className={`radio-catalog-item ${station.active ? "is-active" : ""}`}
-                  key={station.id}
-                  type="button"
-                  disabled={status.pending || pendingSource !== null}
-                  data-radio-station={station.id}
-                  data-gesture-control
-                  onClick={() => void handleSourceSwitch("radio", station)}
-                >
-                  <div className="radio-catalog-copy">
-                    <strong>{station.label}</strong>
-                    <p>{stationPending ? "Switching station..." : station.secondaryStatus}</p>
-                  </div>
-                  <div className="radio-catalog-meta">
-                    <span>{station.genre || "Radio"}</span>
-                  </div>
-                  <div className="radio-station-state" aria-hidden="true">
-                    {stationPending ? <LoaderCircle size={16} className="is-spinning" /> : station.active ? <Check size={16} /> : null}
-                  </div>
-                </button>
-              );
-            })}
-            {!radioLoading && radioCatalog.stations.length === 0 ? (
-              <p className="queue-panel-empty">No stations matched the current filters.</p>
-            ) : null}
-          </div>
-        </section>
-      );
+  function handleStorageSelect(storageId: LibraryFilterId) {
+    setManualPanelSelection(true);
+    setSelectedLibraryStorage(storageId);
+    setSelectedLibraryTrackId(null);
+    setSelectedLocalSubCategory("all");
+    setSourceError(null);
+    setSourceHint(null);
+    if (storageId === "nas") {
+      void switchSource("mpd");
     }
+  }
 
-    const selectedIcon = sourceIcon(selectedSourceSummary);
-    const SourceIcon = selectedIcon;
-    const canSwitch = selectedSourceSummary.controllability !== "status-only" && selectedSourceSummary.availability !== "unavailable";
-    const isPending = pendingSource === selectedSource;
+  function externalSourceActionLabel(panelId: ExternalPanelId, sourceActive: boolean) {
+    if (sourceActive) return "Active";
+    if (panelId === "spotify") return "Enable Spotify";
+    if (panelId === "bluetooth") return "Enable pairing";
+    return "Enable AirPlay";
+  }
+
+  function renderRadioSourcePanel() {
+    const source = audio.sources.find((entry) => entry.id === "radio");
+    const sourcePending = pendingSource === "radio";
+    const canSwitch = source?.controllability !== "status-only" && source?.availability !== "unavailable";
 
     return (
-      <section className="source-workspace-content" aria-label={`${selectedSourceSummary.label} source`}>
+      <section className="source-panel" aria-label="Radio source">
         <div className="source-hero-card">
-          <div className="source-hero-icon">
-            <SourceIcon size={28} />
+          <div className="source-hero-icon" aria-hidden="true">
+            <RadioIcon size={28} />
           </div>
           <div className="source-hero-copy">
-            <span className="source-panel-kicker">{selectedSourceSummary.label}</span>
-            <strong>{selectedSourceSummary.secondaryStatus}</strong>
-            <p>
-              {selectedSourceSummary.id === "bluetooth" || selectedSourceSummary.id === "airplay"
-                ? sourceDiscoveryCopy(selectedSourceSummary) ?? selectedSourceSummary.secondaryStatus
-                : selectedSourceSummary.secondaryStatus}
-            </p>
+            <span className="source-panel-kicker">{source?.label ?? "Radio"}</span>
+            <strong>{sourceStatusLabel(source, sourcePending)}</strong>
+            <p>{source?.secondaryStatus ?? "Radio presets"}</p>
           </div>
           <button
-            className={`source-hero-action ${selectedSourceSummary.active ? "is-active" : ""}`}
+            className={`source-hero-action ${source?.active ? "is-active" : ""}`}
             type="button"
             disabled={status.pending || pendingSource !== null || !canSwitch}
             data-gesture-control
-            onClick={() => void handleSourceSwitch(selectedSource)}
+            onClick={() => void switchSource("radio")}
           >
-            {isPending ? <LoaderCircle size={18} className="is-spinning" /> : null}
-            <span>{sourceActionCopy(selectedSourceSummary)}</span>
+            {sourcePending ? <LoaderCircle size={18} className="is-spinning" /> : <RadioIcon size={18} />}
+            <span>{source?.active ? "Active" : "Enable Radio"}</span>
+          </button>
+        </div>
+
+        <div className="radio-filter-row">
+          <label className="source-search-field">
+            <Search size={18} aria-hidden="true" />
+            <input
+              value={radioQuery}
+              placeholder="Search stations"
+              aria-label="Search radio stations"
+              data-gesture-control
+              onChange={(event) => setRadioQuery(event.currentTarget.value)}
+            />
+          </label>
+          <label className="source-filter-field">
+            <span>Genre</span>
+            <select
+              value={selectedRadioGenre}
+              aria-label="Radio genre"
+              data-gesture-control
+              onChange={(event) => setSelectedRadioGenre(event.currentTarget.value)}
+            >
+              <option value="">All genres</option>
+              {radioGenres.map((genre) => (
+                <option value={genre} key={genre}>{genre}</option>
+              ))}
+            </select>
+          </label>
+          <label className="source-filter-field">
+            <span>Bitrate</span>
+            <select
+              value={selectedRadioBitrate}
+              aria-label="Radio bitrate"
+              data-gesture-control
+              onChange={(event) => setSelectedRadioBitrate(event.currentTarget.value)}
+            >
+              <option value="">All bitrates</option>
+              {radioBitrates.map((bitrate) => (
+                <option value={bitrate} key={bitrate}>{bitrate}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        <div className="source-result-meta">
+          <span>
+            {radioLoading
+              ? "Loading stations..."
+              : radioTotal > radioStations.length
+                ? `${radioStations.length} / ${radioTotal} stations`
+                : `${radioTotal || radioStations.length} stations`}
+          </span>
+          <span>{radioError ? "Catalog unavailable" : selectedRadioGenre || selectedRadioBitrate || "All presets"}</span>
+        </div>
+
+        {radioError ? <p className="source-panel-error">{radioError}</p> : null}
+
+        <div className="radio-catalog-list">
+          {radioStations.map((station) => {
+            const stationPending = sourcePending && !station.active;
+            return (
+              <button
+                className={`radio-catalog-item ${station.active ? "is-active" : ""}`}
+                key={station.id}
+                type="button"
+                disabled={status.pending || pendingSource !== null || !canSwitch}
+                data-gesture-control
+                onClick={() => void switchSource("radio", station.id)}
+              >
+                <span className="radio-catalog-copy">
+                  <strong>{station.label}</strong>
+                  <p>{station.secondaryStatus}</p>
+                </span>
+                <span className="radio-catalog-meta">
+                  {station.genre ? <span>{station.genre}</span> : null}
+                  {station.bitrateKbps ? <span>{station.bitrateKbps} kbps</span> : null}
+                </span>
+                <span className="radio-station-state" aria-hidden="true">
+                  {stationPending ? <LoaderCircle size={16} className="is-spinning" /> : station.active ? <Check size={16} /> : null}
+                </span>
+              </button>
+            );
+          })}
+          {!radioLoading && radioStations.length === 0 ? (
+            <p className="queue-panel-empty">No radio stations found.</p>
+          ) : null}
+        </div>
+      </section>
+    );
+  }
+
+  function renderExternalSourcePanel(panelId: ExternalPanelId) {
+    const source = audio.sources.find((entry) => entry.id === panelId);
+    const panel = primaryPanels.find((entry) => entry.id === panelId) ?? selectedPanelConfig;
+    const Icon = panel.Icon;
+    const sourcePending = pendingSource === panelId;
+    const canSwitch = source?.controllability !== "status-only" && source?.availability !== "unavailable";
+
+    return (
+      <section className="external-source-panel" aria-label={`${panelId} source`}>
+        <div className="external-source-card">
+          <div className="external-source-icon" aria-hidden="true">
+            <Icon size={28} />
+          </div>
+          <div className="external-source-copy">
+            <span className="source-panel-kicker">{source?.label ?? selectedPanelConfig.label}</span>
+            <strong>{sourceStatusLabel(source, sourcePending)}</strong>
+            <p>{source?.connectedLabel ?? source?.advertisedLabel ?? source?.secondaryStatus ?? panel.label}</p>
+          </div>
+          <button
+            className={`external-source-action ${source?.active ? "is-active" : ""}`}
+            type="button"
+            disabled={status.pending || pendingSource !== null || !canSwitch}
+            data-gesture-control
+            onClick={() => void switchSource(panelId)}
+          >
+            {sourcePending ? <LoaderCircle size={18} className="is-spinning" /> : <Icon size={18} />}
+            <span>{externalSourceActionLabel(panelId, Boolean(source?.active))}</span>
           </button>
         </div>
       </section>
@@ -432,73 +647,21 @@ export function PlayerOverlay({
         <div className="cover-zone">
           <div className="cover-art">
             <img src={coverArtUrl} alt="" />
-            {!playback.albumArtUrl ? (
-              <>
-                <div className="helmet-shine" />
-                <span>{coverLabel}</span>
-              </>
-            ) : null}
           </div>
         </div>
 
         <div className="playback-zone">
           <div className="source-line">
-            <span>{currentSource.label} {playback.state}</span>
-            <span>{currentSource.secondaryStatus}</span>
-            <span>{status.pending ? "Syncing" : status.source === "api" ? "API Confirmed" : "Fallback Data"}</span>
+            {sourceLine.map((line) => (
+              <span key={line}>{line}</span>
+            ))}
           </div>
 
           <div className="track-stack">
-            <h1>{title}</h1>
-            <p className="artist">{artist}</p>
-            <p>{album}</p>
-            <p>{playback.currentTrackIndex} of {playback.queueLength}</p>
-          </div>
-
-          <div className="source-panel source-workspace">
-            <div className="source-panel-header">
-              <div>
-                <span className="source-panel-kicker">Sources</span>
-                <strong>{currentSource.label}</strong>
-                <p>Tap once to switch.</p>
-              </div>
-            </div>
-
-              <div className="source-workspace-shell" data-source-workspace data-source-panel>
-                <nav className="source-rail" aria-label="Source categories">
-                  {audio.sources
-                    .filter((source): source is SourceSummary & { id: SourceSwitchTarget } => primarySourceTargets.includes(source.id as SourceSwitchTarget))
-                    .map((source) => {
-                      const Icon = sourceIcon(source);
-                      const isSelected = selectedSource === source.id;
-                      return (
-                        <button
-                          className={`source-rail-item ${isSelected ? "is-selected" : ""} ${source.active ? "is-active" : ""}`}
-                          key={source.id}
-                          type="button"
-                          data-source-item={source.id}
-                          data-gesture-control
-                          onClick={() => void handleSourceRailPress(source)}
-                        >
-                          <div className="source-item-icon">
-                            <Icon size={20} />
-                          </div>
-                          <div className="source-item-copy">
-                            <div className="source-item-title-row">
-                              <strong>{source.label}</strong>
-                              <span>{sourceActionLabel(source)}</span>
-                            </div>
-                          </div>
-                        </button>
-                      );
-                    })}
-                </nav>
-
-                {renderSourceWorkspaceContent()}
-              </div>
-
-            {sourceError ? <p className="source-panel-error">{sourceError}</p> : null}
-            {!sourceError && sourceHint ? <p className="source-panel-hint">{sourceHint}</p> : null}
+            <h1>{displayTitle}</h1>
+            <p className="artist">{displayArtist}</p>
+            <p>{displayAlbum}</p>
+            <p>{libraryPanelActive && selectedLibraryTrack ? selectedLibraryTrack.subCategory : `${playback.currentTrackIndex} of ${playback.queueLength}`}</p>
           </div>
 
           <div className="progress-row">
@@ -529,7 +692,7 @@ export function PlayerOverlay({
                 />
               ) : null}
             </div>
-            <span>{formatDuration(playback.durationSeconds)}</span>
+            <span>{formatDuration(displayedDurationSeconds)}</span>
           </div>
           {seekError ? <p className="player-inline-message is-error">{seekError}</p> : null}
           {!seekError && seekPendingSeconds !== null ? <p className="player-inline-message">Seeking to {formatDuration(seekPendingSeconds)}...</p> : null}
@@ -564,7 +727,7 @@ export function PlayerOverlay({
                 <div>
                   <span className="source-panel-kicker">Queue</span>
                   <strong>{playback.queueLength > 0 ? `${playback.currentTrackIndex} / ${playback.queueLength}` : "No active queue"}</strong>
-                  <p>{playback.source === "mpd" ? "Current and upcoming library entries" : "Queue preview is only available for local library playback"}</p>
+                  <p>{playback.source === "mpd" ? "Current and upcoming library entries" : "Queue preview is only available for library playback"}</p>
                 </div>
               </div>
               {playback.queuePreview.length > 0 ? (
@@ -574,7 +737,7 @@ export function PlayerOverlay({
                       <span className="queue-entry-position">{String(entry.position).padStart(2, "0")}</span>
                       <div className="queue-entry-copy">
                         <strong>{entry.title}</strong>
-                        <p>{entry.artist} · {entry.album}</p>
+                        <p>{entry.artist} - {entry.album}</p>
                       </div>
                       <span className="queue-entry-duration">{formatDuration(entry.durationSeconds)}</span>
                     </article>
@@ -591,31 +754,191 @@ export function PlayerOverlay({
           ) : null}
         </div>
 
-        <div className="status-zone">
-          {statusCards.map((card) => (
-            <article className="status-card" key={card.label}>
-              <span>{card.label}</span>
-              <strong>{card.value}</strong>
-              <p>{card.meta}</p>
-            </article>
-          ))}
-          <article className="status-card volume-card">
-            <span>LEVEL</span>
-            <strong>{system.volume.db.toFixed(1)} dB</strong>
-            <div className="mini-slider" aria-hidden="true">
-              <span style={{ width: `${system.volume.percent}%` }} />
+        <aside className="library-zone" aria-label="Audio source browser">
+          <div className="library-browser-header">
+            <div>
+              <span className="source-panel-kicker">Source</span>
+              <strong>{selectedPanelConfig.label}</strong>
             </div>
-            <div className="volume-actions">
+            <div className="library-volume-actions">
               <button type="button" aria-label="Volume down" title="Volume down" disabled={status.pending} onClick={() => void onPlaybackAction("volume_set", Math.max(0, system.volume.percent - 5))}>
                 <Minus size={18} />
               </button>
+              <span>{system.volume.percent}%</span>
               <button type="button" aria-label="Volume up" title="Volume up" disabled={status.pending} onClick={() => void onPlaybackAction("volume_set", Math.min(100, system.volume.percent + 5))}>
                 <Plus size={18} />
               </button>
             </div>
-            <Volume2 size={24} />
-          </article>
-        </div>
+          </div>
+
+          <nav className="library-primary-tabs" aria-label="Audio sources" data-source-panel>
+            {primaryPanels.map((panel) => {
+              const Icon = panel.Icon;
+              const isSelected = selectedPrimaryPanel === panel.id;
+              const isPending = pendingSource === panel.id;
+              return (
+                <button
+                  className={`library-primary-tab ${isSelected ? "is-selected" : ""} ${panel.id === currentSource.id || (panel.id === "library" && currentSource.id === "mpd") ? "is-active" : ""}`}
+                  key={panel.id}
+                  type="button"
+                  aria-pressed={isSelected}
+                  data-source-item={panel.id === "library" ? "mpd" : panel.id}
+                  data-gesture-control
+                  onClick={() => handlePrimaryPanelSelect(panel.id)}
+                >
+                  <Icon size={20} />
+                  <strong>{panel.label}</strong>
+                  <span>{isPending ? "Opening" : panelMeta(panel.id)}</span>
+                </button>
+              );
+            })}
+          </nav>
+
+          {selectedPrimaryPanel === "library" ? (
+            <>
+              <nav className="library-storage-tabs" aria-label="Library storage">
+                {storageTabs.map((storage) => {
+                  const Icon = storage.Icon;
+                  const isSelected = selectedLibraryStorage === storage.id;
+                  const count = libraryFilterCount(storage.id);
+                  return (
+                    <button
+                      className={`library-storage-tab ${isSelected ? "is-selected" : ""}`}
+                      key={storage.id}
+                      type="button"
+                      aria-pressed={isSelected}
+                      data-gesture-control
+                      onClick={() => handleStorageSelect(storage.id)}
+                    >
+                      <Icon size={18} />
+                      <strong>{storage.label}</strong>
+                      <span>{count}</span>
+                    </button>
+                  );
+                })}
+              </nav>
+
+              {selectedLibraryStorage === "local" ? (
+                <nav className="library-category-tabs" aria-label="Local library categories">
+                  {localCategories.map((category) => {
+                    const isSelected = selectedLocalCategory === category.id;
+                    return (
+                      <button
+                        className={`library-category-tab ${isSelected ? "is-selected" : ""}`}
+                        key={category.id}
+                        type="button"
+                        aria-pressed={isSelected}
+                        data-library-category={category.id}
+                        data-gesture-control
+                        onClick={() => {
+                          setManualPanelSelection(true);
+                          setSelectedLocalCategory(category.id);
+                          setSelectedLocalSubCategory("all");
+                          setSelectedLibraryTrackId(null);
+                          setSourceError(null);
+                          setSourceHint(null);
+                        }}
+                      >
+                        <strong>{category.label}</strong>
+                        <span>{localCategoryCounts[category.id]}</span>
+                      </button>
+                    );
+                  })}
+                </nav>
+              ) : null}
+
+              {selectedLibraryStorage === "local" && localSubCategoryTabs.length > 0 ? (
+                <nav className="library-subcategory-tabs" aria-label={`${selectedLocalCategoryLabel} subfolders`}>
+                  <button
+                    className={`library-subcategory-tab ${selectedLocalSubCategory === "all" ? "is-selected" : ""}`}
+                    type="button"
+                    aria-pressed={selectedLocalSubCategory === "all"}
+                    data-gesture-control
+                    onClick={() => {
+                      setManualPanelSelection(true);
+                      setSelectedLocalSubCategory("all");
+                      setSelectedLibraryTrackId(null);
+                    }}
+                  >
+                    <strong>All</strong>
+                    <span>{localCategoryTracks.length}</span>
+                  </button>
+                  {localSubCategoryTabs.map((subCategory) => {
+                    const isSelected = selectedLocalSubCategory === subCategory.label;
+                    return (
+                      <button
+                        className={`library-subcategory-tab ${isSelected ? "is-selected" : ""}`}
+                        key={subCategory.label}
+                        type="button"
+                        aria-pressed={isSelected}
+                        data-gesture-control
+                        onClick={() => {
+                          setManualPanelSelection(true);
+                          setSelectedLocalSubCategory(subCategory.label);
+                          setSelectedLibraryTrackId(null);
+                        }}
+                      >
+                        <strong>{subCategory.label}</strong>
+                        <span>{subCategory.count}</span>
+                      </button>
+                    );
+                  })}
+                </nav>
+              ) : null}
+
+              {libraryError && selectedLibraryStorage === "local" ? <p className="source-panel-error">{libraryError}</p> : null}
+
+              <div className="library-track-list" data-library-track-list>
+                {visibleLibraryTracks.map((track, index) => {
+                  const selected = selectedLibraryTrack?.id === track.id;
+                  return (
+                    <button
+                      className={`library-track-item ${selected ? "is-selected" : ""} ${track.active ? "is-active" : ""}`}
+                      key={track.id}
+                      type="button"
+                      aria-pressed={selected}
+                      data-library-track={track.id}
+                      data-gesture-control
+                      onClick={() => setSelectedLibraryTrackId(track.id)}
+                    >
+                      <span className="library-track-index">{String(index + 1).padStart(2, "0")}</span>
+                      <span className="library-track-copy">
+                        <strong>{track.title}</strong>
+                        <em>{track.artist}</em>
+                      </span>
+                      <span className="library-track-meta">
+                        <i>{track.subCategory}</i>
+                        <b>{formatDuration(track.durationSeconds)}</b>
+                      </span>
+                      <span className="library-track-state" aria-hidden="true">
+                        {selected || track.active ? <Check size={16} /> : null}
+                      </span>
+                    </button>
+                  );
+                })}
+                {libraryLoading && selectedLibraryStorage === "local" ? (
+                  <p className="queue-panel-empty">Loading local music library...</p>
+                ) : null}
+                {!libraryLoading && visibleLibraryTracks.length === 0 ? (
+                  <p className="queue-panel-empty">
+                    {selectedLibraryStorage === "nas"
+                      ? "NAS queue is empty."
+                      : selectedLibraryStorage === "usb"
+                        ? "USB library is empty."
+                        : selectedLibraryStorage === "favorites"
+                          ? "No favorite tracks yet."
+                          : selectedLibraryStorage === "recently_added"
+                            ? "No recently added tracks yet."
+                            : "No local tracks found."}
+                  </p>
+                ) : null}
+              </div>
+            </>
+          ) : selectedPrimaryPanel === "radio" ? renderRadioSourcePanel() : renderExternalSourcePanel(selectedPrimaryPanel)}
+
+          {sourceError ? <p className="source-panel-error">{sourceError}</p> : null}
+          {!sourceError && sourceHint ? <p className="source-panel-hint">{sourceHint}</p> : null}
+        </aside>
       </div>
     </section>
   );

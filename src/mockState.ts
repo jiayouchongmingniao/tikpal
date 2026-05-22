@@ -156,30 +156,56 @@ export const audioState: AudioState = {
       secondaryStatus: "Browse 240 stations"
     }),
     buildSourceSummary({
+      id: "audio",
+      label: "Audio",
+      kind: "audio",
+      availability: "available",
+      active: false,
+      controllability: "switchable",
+      armed: false,
+      connectionState: "idle",
+      connectedLabel: "USB Audio",
+      advertisedLabel: null,
+      secondaryStatus: "USB Audio / PCM 24bit 96 kHz"
+    }),
+    buildSourceSummary({
+      id: "spotify",
+      label: "Spotify Connect",
+      kind: "spotify",
+      availability: "waiting",
+      active: false,
+      controllability: "handoff",
+      armed: false,
+      connectionState: "blocked",
+      connectedLabel: null,
+      advertisedLabel: "Tikpal Speaker",
+      secondaryStatus: "Closed until you open Spotify Connect as Tikpal Speaker"
+    }),
+    buildSourceSummary({
       id: "bluetooth",
       label: "Bluetooth",
       kind: "bluetooth",
-      availability: "available",
+      availability: "waiting",
       active: false,
       controllability: "switchable",
       armed: false,
       connectionState: "blocked",
       connectedLabel: null,
       advertisedLabel: "Tikpal Speaker",
-      secondaryStatus: "Select to open pairing as Tikpal Speaker"
+      secondaryStatus: "Closed until you open pairing as Tikpal Speaker"
     }),
     buildSourceSummary({
       id: "airplay",
       label: "AirPlay",
       kind: "airplay",
-      availability: "available",
+      availability: "waiting",
       active: false,
       controllability: "switchable",
       armed: false,
       connectionState: "blocked",
       connectedLabel: null,
       advertisedLabel: "Tikpal Speaker",
-      secondaryStatus: "Select to allow AirPlay as Tikpal Speaker"
+      secondaryStatus: "Closed until you open AirPlay as Tikpal Speaker"
     })
   ]
 };

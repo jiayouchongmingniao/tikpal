@@ -11,8 +11,10 @@
     "preview": "vite preview --host 0.0.0.0",
     "start:api": "node server/index.mjs",
     "start:web": "node server/web.mjs",
+    "ota:resources": "node scripts/apply-resource-ota.mjs",
     "typecheck": "tsc -b",
     "test:api": "node scripts/api-smoke.mjs",
+    "test:ota:resources": "node scripts/resource-ota-smoke.mjs",
     "test:kiosk": "node scripts/kiosk-package-smoke.mjs",
     "test:interaction": "node scripts/interaction-smoke.mjs"
   },

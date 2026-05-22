@@ -131,9 +131,10 @@ Center playback zone:
 - Lower: progress and time.
 - Bottom: transport controls.
 - Source workspace: when opened, replace the old compact source list with a three-column workspace.
-  - Left rail: `Library`, `Radio`, `Bluetooth`, `AirPlay`.
+  - Left rail: `Library`, `Radio`, `Spotify`, `AirPlay`, `Bluetooth`.
   - Center pane: source-specific content, especially searchable radio catalog and large touch targets.
   - Right pane: source detail, connection policy, readiness, and active session label.
+- Library browsing should keep the storage tier distinct from local taxonomy: storage uses `Local`, `NAS`, `USB`, `Favorites`, and `Recently Added`; Local then exposes the larger `Focus`, `Meditation`, and `Rest` categories with smaller subfolder chips beneath them.
 - Radio browsing must support 200+ stations without feeling like a dense admin table.
   - Keep search and filters visible near the top of the workspace.
   - Use large row height, quick-scan metadata pills, and obvious active/pending state.

@@ -5,6 +5,7 @@ export type LyricsFontSize = "small" | "medium" | "large";
 export type PlaybackState = "playing" | "paused" | "stopped";
 
 export type SourceState =
+  | "audio"
   | "mpd"
   | "airplay"
   | "spotify"
@@ -15,7 +16,7 @@ export type SourceState =
 
 export type SourceAvailability = "available" | "waiting" | "unavailable";
 export type SourceControllability = "switchable" | "handoff" | "status-only";
-export type SourceSwitchTarget = "mpd" | "radio" | "bluetooth" | "airplay";
+export type SourceSwitchTarget = "mpd" | "audio" | "radio" | "spotify" | "bluetooth" | "airplay";
 export type SourceConnectionState = "idle" | "armed" | "connected" | "blocked";
 
 export interface RadioStationSummary {
@@ -65,6 +66,69 @@ export interface RadioCatalogResponse {
     q: string;
     genre: string;
     bitrate: string;
+    limit: number;
+    offset: number;
+  };
+  updatedAt: string;
+}
+
+export type AudioLibraryStorageId = "local" | "nas" | "usb" | "favorites" | "recently_added";
+export type AudioLibraryCategoryId = "focus" | "meditation" | "rest";
+export type AudioLibraryTrackCategoryId = AudioLibraryCategoryId | "nas";
+
+export interface AudioLibrarySubCategorySummary {
+  id: string;
+  label: string;
+  trackCount: number;
+}
+
+export interface AudioLibraryCategorySummary {
+  id: AudioLibraryCategoryId;
+  label: string;
+  trackCount: number;
+  subCategories: AudioLibrarySubCategorySummary[];
+}
+
+export interface AudioLibraryStorageSummary {
+  id: AudioLibraryStorageId;
+  label: string;
+  trackCount: number;
+  categories: AudioLibraryCategorySummary[];
+}
+
+export interface AudioLibraryTrackSummary {
+  id: string;
+  title: string;
+  artist: string;
+  album: string;
+  storage: AudioLibraryStorageId;
+  categoryId: AudioLibraryTrackCategoryId;
+  subCategory: string;
+  durationSeconds: number | null;
+  path: string | null;
+  active: boolean;
+}
+
+export interface AudioLibraryFilters {
+  storage?: AudioLibraryStorageId | "all";
+  category?: AudioLibraryCategoryId;
+  subCategory?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface AudioLibraryResponse {
+  sources: Array<{
+    id: "library" | "radio" | "spotify" | "airplay" | "bluetooth";
+    label: string;
+  }>;
+  storages: AudioLibraryStorageSummary[];
+  tracks: AudioLibraryTrackSummary[];
+  total: number;
+  filters: {
+    storage: AudioLibraryStorageId | "all";
+    category: AudioLibraryCategoryId | "";
+    subCategory: string;
     limit: number;
     offset: number;
   };

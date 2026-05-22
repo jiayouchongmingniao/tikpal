@@ -251,11 +251,23 @@ async function run() {
 
     const sources = await request("/api/v1/audio/sources");
     assert(sources.response.ok, "audio sources should return 200");
-    assert(Array.isArray(sources.body.sources) && sources.body.sources.length === 4, "audio sources should return Library, Radio, Bluetooth, and AirPlay");
+    assert(Array.isArray(sources.body.sources) && sources.body.sources.length === 6, "audio sources should return Library, Radio, Audio, Spotify Connect, Bluetooth, and AirPlay");
     assert(sources.body.currentSource.id === "mpd", "audio source payload should start on MPD");
+    assert(sources.body.sources.some((source) => source.id === "audio"), "audio sources payload should include audio");
+    assert(sources.body.sources.some((source) => source.id === "spotify"), "audio sources payload should include spotify connect");
     assert(sources.body.sources.some((source) => source.id === "bluetooth"), "audio sources payload should include bluetooth");
     assert(sources.body.sources.some((source) => source.id === "airplay"), "audio sources payload should include airplay");
+    assert(sources.body.sources.some((source) => source.id === "spotify" && source.connectionState === "blocked" && source.availability === "waiting"), "spotify should start closed until selected");
+    assert(sources.body.sources.some((source) => source.id === "bluetooth" && source.connectionState === "blocked" && source.availability === "waiting"), "bluetooth should start closed until selected");
+    assert(sources.body.sources.some((source) => source.id === "airplay" && source.connectionState === "blocked" && source.availability === "waiting"), "airplay should start closed until selected");
     assert(sources.body.sources.some((source) => source.id === "bluetooth" && source.advertisedLabel === "Tikpal Speaker"), "bluetooth source should expose advertised device name");
+
+    const localLibrary = await request("/api/v1/audio/library?storage=local&limit=5");
+    assert(localLibrary.response.ok, "local audio library should return 200");
+    assert(localLibrary.body.total > 0, "local audio library should load tracks from the manifest");
+    assert(localLibrary.body.storages.find((storage) => storage.id === "local")?.trackCount === localLibrary.body.total, "local storage track count should match manifest-backed total");
+    assert(localLibrary.body.tracks.every((track) => track.storage === "local"), "local audio library should only return local tracks when filtered");
+    assert(localLibrary.body.tracks[0]?.path, "local audio library tracks should expose manifest paths");
 
     const radios = await request("/api/v1/audio/radios?q=ambient&genre=Ambient");
     assert(radios.response.ok, "radio catalog should return 200");
@@ -307,6 +319,24 @@ async function run() {
     });
     assert(volume.response.ok, "volume_set action should return 200");
     assert(volume.body.system.volume.percent === 42, "volume_set should update volume percent");
+
+    const audio = await request("/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({ target: "audio" })
+    });
+    assert(audio.response.ok, "audio source switch should return 200");
+    assert(audio.body.audio.currentSource.id === "audio", "audio source switch should mark Audio as current in mock mode");
+    assert(audio.body.playback.source === "audio", "playback source should follow audio switch");
+
+    const spotify = await request("/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({ target: "spotify" })
+    });
+    assert(spotify.response.ok, "spotify connect source switch should return 200");
+    assert(spotify.body.audio.currentSource.id === "spotify", "spotify connect switch should activate spotify in mock mode");
+    assert(spotify.body.audio.currentSource.armed === true, "spotify connect switch should arm spotify handoff");
+    assert(spotify.body.audio.currentSource.advertisedLabel === "Tikpal Speaker", "spotify connect switch should keep advertised device name in state");
+    assert(spotify.body.playback.source === "spotify", "playback source should follow spotify connect switch");
 
     const bluetooth = await request("/api/v1/audio/source", {
       method: "POST",
