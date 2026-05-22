@@ -9,6 +9,8 @@ build/
 !.env.example
 .tikpal/
 coverage/
+public/assets/music/
+public/assets/output_2560x720-4k.mp4
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
