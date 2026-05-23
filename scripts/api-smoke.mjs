@@ -1,7 +1,9 @@
 import { spawn } from "node:child_process";
-import { rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import http from "node:http";
-import { resolve } from "node:path";
+import { tmpdir } from "node:os";
+import path, { resolve } from "node:path";
 
 const PORT = Number(process.env.TIKPAL_API_SMOKE_PORT ?? 18787);
 const HOST = "127.0.0.1";
@@ -205,6 +207,29 @@ async function waitForLyricsStatus(expectedStatuses) {
 }
 
 async function run() {
+  const apiAssetsRoot = await mkdtemp(path.join(tmpdir(), "tikpal-api-assets-"));
+  const sceneBytes = Buffer.from("000000 ftypisom tikpal rainy window api smoke mp4");
+  const sceneSha256 = createHash("sha256").update(sceneBytes).digest("hex");
+  await mkdir(path.join(apiAssetsRoot, "scenes", "_metadata"), { recursive: true });
+  await writeFile(path.join(apiAssetsRoot, "output_2560x720-4k.mp4"), Buffer.from("000000 ftypisom tikpal legacy scene mp4"));
+  await writeFile(path.join(apiAssetsRoot, "scenes", "Rainy-Window.mp4"), sceneBytes);
+  await writeFile(
+    path.join(apiAssetsRoot, "scenes", "_metadata", "scene_videos.json"),
+    `${JSON.stringify({
+      mode: "add",
+      videos: [
+        {
+          id: "rainy-window",
+          filename: "Rainy-Window.mp4",
+          label: "Rainy Window",
+          order: 30,
+          default: false,
+          sha256: sceneSha256
+        }
+      ]
+    }, null, 2)}\n`
+  );
+
   await writeFile(BLUETOOTH_SCENARIO_PATH, "BT_SUCCESS\n");
   await writeFile(BLUETOOTH_METADATA_PATH, "");
   const providerServer = createProviderServer();
@@ -215,6 +240,7 @@ async function run() {
       ...process.env,
       TIKPAL_API_HOST: HOST,
       TIKPAL_API_PORT: String(PORT),
+      TIKPAL_PUBLIC_ASSETS_ROOT: apiAssetsRoot,
       TIKPAL_RECOGNITION_PROVIDER: "acrcloud",
       TIKPAL_ACRCLOUD_HOST: PROVIDER_URL,
       TIKPAL_ACRCLOUD_ACCESS_KEY: "mock-key",
@@ -330,8 +356,13 @@ async function run() {
 
     const backgroundVideos = await request("/api/v1/media/background-videos");
     assert(backgroundVideos.response.ok, "background video catalog should return 200");
-    assert(backgroundVideos.body.total >= 1, "background video catalog should include at least one MP4");
+    assert(backgroundVideos.body.total >= 2, "background video catalog should include legacy and scene MP4s");
     assert(backgroundVideos.body.videos.every((video) => video.src.startsWith("/assets/") && video.src.endsWith(".mp4")), "background videos should expose asset MP4 URLs");
+    const rainyWindow = backgroundVideos.body.videos.find((video) => video.id === "rainy-window");
+    assert(rainyWindow?.src === "/assets/scenes/Rainy-Window.mp4", "background video catalog should include Rainy Window scene video");
+    assert(rainyWindow?.label === "Rainy Window", "background video catalog should use scene manifest labels");
+    assert(rainyWindow?.order === 30, "background video catalog should expose scene manifest order");
+    assert(backgroundVideos.body.catalogVersion, "background video catalog should expose a catalog version");
 
     const radios = await request("/api/v1/audio/radios?q=ambient&genre=Ambient");
     assert(radios.response.ok, "radio catalog should return 200");
@@ -643,6 +674,7 @@ async function run() {
     await new Promise((resolve) => providerServer.close(resolve));
     await rm(BLUETOOTH_SCENARIO_PATH, { force: true });
     await rm(BLUETOOTH_METADATA_PATH, { force: true });
+    await rm(apiAssetsRoot, { recursive: true, force: true });
   }
 }
 

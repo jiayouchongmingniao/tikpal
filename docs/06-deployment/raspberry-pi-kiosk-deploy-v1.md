@@ -151,13 +151,16 @@ moOde `cfg_radio` presets are now the primary Radio source list for the source p
 `TIKPAL_RADIO_DEFAULT_URI` stays as a fallback preset when moOde radio rows are unavailable, and `TIKPAL_RADIO_ACTIVATE_COMMAND` is only used when no switchable preset URI is available.
 If `mpc update` is not the right library refresh command on the device, also set `TIKPAL_LIBRARY_SCAN_COMMAND`.
 
-Resource-only OTA packages can update the local music library and the fireplace video without changing application code. Package layout defaults to:
+Resource-only OTA packages can update the local music library, add ambient scene videos, and still replace the legacy fireplace video without changing application code. Package layout defaults to:
 
 ```text
 resource-ota/
 ├─ manifest.json
 └─ assets
    ├─ output_2560x720-4k.mp4
+   ├─ scenes
+   │  ├─ _metadata/scene_videos.json
+   │  └─ Rainy-Window.mp4
    └─ music
       ├─ _metadata/library_manifest.csv
       ├─ Focus/folder.jpg
@@ -171,7 +174,15 @@ Apply it on the device from the app checkout:
 npm run ota:resources -- /path/to/resource-ota
 ```
 
-The script validates `assets/music/_metadata/library_manifest.csv`, checks that manifest track and optional cover paths are safe and present in the package or already installed library, validates the replacement MP4, writes `public/assets`, syncs `dist/assets` when a production build is present, and records `.tikpal/resource-ota-state.json`. Because the API reads the local music manifest on each `/api/v1/audio/library` request and the web server serves MP4 with `Cache-Control: no-store`, a page reload is enough for the new library list, cover art, and fireplace video to appear.
+To create scene-only packages from local MP4 files, run:
+
+```bash
+npm run ota:package:mp4 -- /path/to/mp4-scenes --recursive --bundle --default Forest-Cabin.mp4
+```
+
+The generator writes packages under `.tikpal/resource-ota-packages` unless `--output` is provided. Split mode creates one package per MP4; `--bundle` creates one package that installs the whole folder together. Each generated scene entry includes an id, filename, label, order, optional default marker, and `sha256`. If a source video has an audible or visible loop boundary, first run `npm run media:loop -- --input <mp4> --crossfade 0.9`; this requires `ffmpeg` / `ffprobe` and keeps an in-place backup under `.codex-artifacts/media-backups`.
+
+The script validates `assets/music/_metadata/library_manifest.csv`, checks that manifest track and optional cover paths are safe and present in the package or already installed library, validates scene MP4 `sha256` checksums from `assets/scenes/_metadata/scene_videos.json`, validates the legacy replacement MP4 when present, writes `public/assets`, syncs `dist/assets` when a production build is present, and records `.tikpal/resource-ota-state.json`. The API reads the local music manifest on each `/api/v1/audio/library` request and lists scene videos from both `public/assets/*.mp4` and `public/assets/scenes/_metadata/scene_videos.json`; Ambient refreshes that scene catalog every 30 seconds and when the page becomes visible, so newly added scene videos appear in the previous / next scene controls without a page reload.
 
 Install and restart API + web services:
 

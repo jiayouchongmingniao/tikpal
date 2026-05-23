@@ -101,8 +101,9 @@ Avoid:
 
 Ambient background videos:
 
-- `GET /api/v1/media/background-videos` lists MP4 files under `public/assets`.
+- `GET /api/v1/media/background-videos` lists legacy MP4 files under `public/assets` and OTA-managed scene MP4 files declared by `public/assets/scenes/_metadata/scene_videos.json`.
 - The frontend treats scene video as a looped ambience layer, not as a music video.
+- Scene entries may include `order`, `default`, and `source=scene`; the response also includes `catalogVersion` and `defaultVideoId` so Ambient can preserve the current scene while noticing newly installed OTA videos.
 - On scene switch, the incoming video should seek to `playback.elapsedSeconds % video.duration` before it is revealed.
 - The visual ambience layer can keep looping independently from music playback state; Scene Sound controls whether the active layer is audible.
 - The local web server must support `Range` requests for MP4 files so browser seeks can land on the requested frame instead of falling back to the first frame.
@@ -195,7 +196,7 @@ Current Batch 3 mock API contract:
 | `/api/v1/audio/radios` | `GET` | Searchable radio catalog with query filters for text, genre, bitrate, and paging window, sized for moOde catalogs with 200+ presets. |
 | `/api/v1/audio/library` | `GET` | Manifest-backed local music library plus NAS queue preview with storage, category, subcategory, limit, and offset filters. Storage values are `local`, `nas`, `usb`, `favorites`, and `recently_added`; `local` tracks keep `focus`, `meditation`, and `rest` category ids plus manifest subfolders. |
 | `/api/v1/audio/source` | `POST` | Switches source intake. `target=mpd` can include `localTrackPath` from the local library manifest to clear/queue/play that local track and immediately update playback metadata. `target=scene` can include the current background video id/label/src so Scene Sound metadata follows the active Ambient video. |
-| `/api/v1/media/background-videos` | `GET` | Lists MP4 fireplace/background videos found under `public/assets` so Ambient can switch the active background without a rebuild. |
+| `/api/v1/media/background-videos` | `GET` | Lists MP4 fireplace/background videos found under `public/assets` and scene OTA videos under `public/assets/scenes`, with optional `order`, `default`, and `catalogVersion` metadata so Ambient can switch the active background without a rebuild. |
 | `/api/v1/playback/status` | `GET` | Playback summary only. |
 | `/api/v1/system/status` | `GET` | System summary only. |
 | `/api/v1/system/runtime` | `GET` | Kiosk/runtime summary. |

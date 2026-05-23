@@ -146,12 +146,17 @@ export interface BackgroundVideoSummary {
   filename: string;
   label: string;
   src: string;
+  order?: number;
+  default?: boolean;
+  source?: "legacy" | "scene";
 }
 
 export interface BackgroundVideoCatalogResponse {
   videos: BackgroundVideoSummary[];
   total: number;
   updatedAt: string;
+  catalogVersion?: string | null;
+  defaultVideoId?: string | null;
 }
 
 export interface VolumeState {

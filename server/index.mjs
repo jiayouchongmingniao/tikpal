@@ -87,7 +87,9 @@ const LOCAL_LIBRARY_MANIFEST_PATH = process.env.TIKPAL_LOCAL_LIBRARY_MANIFEST_PA
 const LOCAL_LIBRARY_ROOT = resolve(dirname(LOCAL_LIBRARY_MANIFEST_PATH), "..");
 const LOCAL_LIBRARY_COVER_COLUMNS = ["cover_relative_path", "cover_path", "album_art_relative_path", "artwork_relative_path"];
 const LOCAL_LIBRARY_COVER_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp"];
-const PUBLIC_ASSETS_ROOT = resolve(process.cwd(), "public", "assets");
+const PUBLIC_ASSETS_ROOT = resolve(process.env.TIKPAL_PUBLIC_ASSETS_ROOT ?? resolve(process.cwd(), "public", "assets"));
+const PUBLIC_SCENES_ROOT = resolve(PUBLIC_ASSETS_ROOT, "scenes");
+const SCENE_VIDEO_MANIFEST_PATH = resolve(PUBLIC_SCENES_ROOT, "_metadata", "scene_videos.json");
 const AMBIENT_BACKGROUND_VIDEO_EXTENSIONS = new Set([".mp4"]);
 const PREFERRED_AMBIENT_BACKGROUND_VIDEOS = ["output_2560x720-4k.mp4", "output_2560x720.mp4"];
 const DEFAULT_SCENE_VIDEO = {
@@ -1768,7 +1770,25 @@ function localLibraryImageUrl(relativePath) {
   return `/api/v1/media/library-cover?path=${encodeURIComponent(relativePath)}`;
 }
 
+function encodeAssetRelativePath(relativePath) {
+  return relativePath.split("/").map((part) => encodeURIComponent(part)).join("/");
+}
+
+function ambientVideoOrder(video) {
+  if (Number.isFinite(video.order)) return video.order;
+  const preferredIndex = PREFERRED_AMBIENT_BACKGROUND_VIDEOS.indexOf(video.filename);
+  return preferredIndex === -1 ? null : preferredIndex;
+}
+
 function sortAmbientBackgroundVideos(first, second) {
+  const firstOrder = ambientVideoOrder(first);
+  const secondOrder = ambientVideoOrder(second);
+  if (firstOrder !== null || secondOrder !== null) {
+    if (firstOrder === null) return 1;
+    if (secondOrder === null) return -1;
+    if (firstOrder !== secondOrder) return firstOrder - secondOrder;
+  }
+
   const firstPreferredIndex = PREFERRED_AMBIENT_BACKGROUND_VIDEOS.indexOf(first.filename);
   const secondPreferredIndex = PREFERRED_AMBIENT_BACKGROUND_VIDEOS.indexOf(second.filename);
   if (firstPreferredIndex !== -1 || secondPreferredIndex !== -1) {
@@ -1780,6 +1800,46 @@ function sortAmbientBackgroundVideos(first, second) {
   return first.filename.localeCompare(second.filename);
 }
 
+async function readSceneBackgroundVideos() {
+  let manifest;
+  try {
+    manifest = JSON.parse(await readFile(SCENE_VIDEO_MANIFEST_PATH, "utf8"));
+  } catch {
+    return [];
+  }
+
+  if (!Array.isArray(manifest.videos)) return [];
+
+  const videos = [];
+  for (const video of manifest.videos) {
+    const filename = normalizeSafeRelativePath(video.filename);
+    if (!filename || !AMBIENT_BACKGROUND_VIDEO_EXTENSIONS.has(extname(filename).toLowerCase())) continue;
+
+    const absolutePath = resolve(PUBLIC_SCENES_ROOT, ...filename.split("/"));
+    if (absolutePath !== PUBLIC_SCENES_ROOT && !absolutePath.startsWith(`${PUBLIC_SCENES_ROOT}${sep}`)) continue;
+
+    try {
+      const info = await stat(absolutePath);
+      if (!info.isFile()) continue;
+    } catch {
+      continue;
+    }
+
+    const id = String(video.id ?? "").trim() || basename(filename, extname(filename));
+    videos.push({
+      id,
+      filename,
+      label: String(video.label ?? "").trim() || basename(filename, extname(filename)),
+      src: `/assets/scenes/${encodeAssetRelativePath(filename)}`,
+      ...(Number.isFinite(Number(video.order)) ? { order: Number(video.order) } : {}),
+      ...(video.default === true ? { default: true } : {}),
+      source: "scene"
+    });
+  }
+
+  return videos;
+}
+
 async function getAmbientBackgroundVideosPayload() {
   let entries = [];
   try {
@@ -1788,24 +1848,34 @@ async function getAmbientBackgroundVideosPayload() {
     return {
       videos: [],
       total: 0,
-      updatedAt: new Date().toISOString()
+      updatedAt: new Date().toISOString(),
+      catalogVersion: null,
+      defaultVideoId: null
     };
   }
 
-  const videos = entries
+  const legacyVideos = entries
     .filter((entry) => entry.isFile() && AMBIENT_BACKGROUND_VIDEO_EXTENSIONS.has(extname(entry.name).toLowerCase()))
     .map((entry) => ({
       id: basename(entry.name, extname(entry.name)),
       filename: entry.name,
       label: entry.name,
-      src: `/assets/${encodeURIComponent(entry.name)}`
-    }))
-    .sort(sortAmbientBackgroundVideos);
+      src: `/assets/${encodeURIComponent(entry.name)}`,
+      source: "legacy"
+    }));
+  const sceneVideos = await readSceneBackgroundVideos();
+  const videos = [...legacyVideos, ...sceneVideos].sort(sortAmbientBackgroundVideos);
+  const catalogVersion = createHash("sha1")
+    .update(videos.map((video) => `${video.id}:${video.src}:${video.label}:${video.order ?? ""}:${video.default ? "1" : "0"}`).join("|"))
+    .digest("hex")
+    .slice(0, 12);
 
   return {
     videos,
     total: videos.length,
-    updatedAt: new Date().toISOString()
+    updatedAt: new Date().toISOString(),
+    catalogVersion,
+    defaultVideoId: videos.find((video) => video.default)?.id ?? DEFAULT_SCENE_VIDEO.id
   };
 }
 

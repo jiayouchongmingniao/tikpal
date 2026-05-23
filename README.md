@@ -154,9 +154,17 @@ Quick Settings now includes local font presets and surface skin presets (`warm-g
 
 The Player and Ambient HUD both display playback truth from the active `playback.source` and current track metadata, rather than showing whichever Library item or source panel is selected for browsing. Generated fallback cover art still follows the selected font preset, while real playback artwork wins whenever the backend provides it.
 
-Ambient background videos are discovered from `public/assets/*.mp4` through `GET /api/v1/media/background-videos`. Scene changes mount the next video layer, seek it to `playback.elapsedSeconds % video.duration`, then crossfade; paused playback stays frozen on the new scene frame, while playing playback resumes the video after alignment. The web server serves MP4 files with byte-range support so browser video seeking works reliably.
+Ambient background videos are discovered from `public/assets/*.mp4` and OTA-managed `public/assets/scenes/*.mp4` through `GET /api/v1/media/background-videos`. Scene changes mount the next video layer, seek it to `playback.elapsedSeconds % video.duration`, then crossfade; paused playback stays frozen on the new scene frame, while playing playback resumes the video after alignment. The web server serves MP4 files with byte-range support so browser video seeking works reliably. Ambient refreshes the scene catalog every 30 seconds and whenever the page becomes visible, so newly applied scene OTA packages join the previous / next scene controls without a page reload.
 
-Resource OTA updates are handled by `npm run ota:resources -- <package-dir>`. A resource OTA package can replace `assets/music/_metadata/library_manifest.csv`, copy the referenced local music files under `assets/music/`, and replace the mutable fireplace video at `assets/output_2560x720-4k.mp4`. The script validates the music manifest and MP4 before writing, syncs `public/assets`, also syncs `dist/assets` when a production build exists, and records the result in `.tikpal/resource-ota-state.json`.
+Resource OTA updates are handled by `npm run ota:resources -- <package-dir>`. A resource OTA package can replace `assets/music/_metadata/library_manifest.csv`, copy the referenced local music files under `assets/music/`, add scene videos from `assets/scenes/` using `assets/scenes/_metadata/scene_videos.json`, and still replace the mutable fireplace video at `assets/output_2560x720-4k.mp4` for older packages. The script validates music paths, scene MP4 checksums, and MP4 headers before writing, syncs `public/assets`, also syncs `dist/assets` when a production build exists, and records the result in `.tikpal/resource-ota-state.json`.
+
+Scene MP4 OTA packages can be generated from a folder of `.mp4` files:
+
+```bash
+npm run ota:package:mp4 -- /path/to/mp4-scenes --recursive --bundle --default Forest-Cabin.mp4
+```
+
+By default the generator writes packages under `.tikpal/resource-ota-packages`, creates `assets/scenes/_metadata/scene_videos.json`, assigns stable scene ids from filenames, and records `sha256` checksums that `npm run ota:resources` verifies before installing. Use `npm run media:loop -- --input <mp4>` when a source scene needs a soft loop rewrite before packaging; the helper requires `ffmpeg` / `ffprobe` and writes a backup under `.codex-artifacts/media-backups` when it updates a file in place.
 
 ## Current Gaps
 

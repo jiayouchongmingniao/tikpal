@@ -482,10 +482,19 @@ select {
   background: rgba(3, 4, 6, 0.62);
   opacity: 0;
   pointer-events: none;
+  transition: opacity 760ms ease;
 }
 
-.flame-scene.is-transitioning .flame-video-fade {
+.flame-scene.is-scene-transitioning .flame-video-fade {
   animation: flame-video-dim 900ms ease both;
+}
+
+.flame-scene.is-sound-transitioning .flame-video-fade {
+  animation: flame-video-dim 1200ms ease both;
+}
+
+.flame-scene.is-loop-dimming .flame-video-fade {
+  opacity: 0.74;
 }
 
 .flame-scene.is-low-power .fireplace-backdrop,

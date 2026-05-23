@@ -31,6 +31,8 @@ interface AmbientScreenProps {
 }
 
 type AmbientAdjustChannel = "volume" | "brightness";
+const BACKGROUND_VIDEO_REFRESH_MS = 30_000;
+const BACKGROUND_VIDEO_REFRESH_EVENT = "tikpal:background-videos-refresh";
 
 interface DragState {
   channel: AmbientAdjustChannel;
@@ -208,6 +210,27 @@ export function AmbientScreen({
   const playMode = playbackSettings.playMode;
   const sceneAudioEnabled = sceneVideoEnabled && sceneSoundEnabled && playback.source === "scene" && playback.state === "playing";
 
+  const refreshBackgroundVideos = useCallback((signal?: AbortSignal) => {
+    void fetchBackgroundVideos(signal)
+      .then((payload) => {
+        if (payload.videos.length === 0) return;
+
+        const selectedSrc = selectedBackgroundVideoSrcRef.current;
+        const preferredIndex = payload.videos.findIndex((video) => video.src === selectedSrc);
+        const defaultIndex = payload.defaultVideoId
+          ? payload.videos.findIndex((video) => video.id === payload.defaultVideoId)
+          : -1;
+        const fallbackIndex = payload.videos.findIndex((video) => video.src === DEFAULT_BACKGROUND_VIDEO.src);
+        setBackgroundVideos(payload.videos);
+        setBackgroundVideoIndex(preferredIndex !== -1
+          ? preferredIndex
+          : Math.max(0, defaultIndex !== -1 ? defaultIndex : fallbackIndex));
+      })
+      .catch(() => {
+        // Keep the currently mounted video list when the API is temporarily unavailable.
+      });
+  }, []);
+
   useEffect(() => {
     selectedBackgroundVideoSrcRef.current = currentBackgroundVideo.src;
     onCurrentSceneVideoChange(currentBackgroundVideo);
@@ -215,23 +238,28 @@ export function AmbientScreen({
 
   useEffect(() => {
     const controller = new AbortController();
+    refreshBackgroundVideos(controller.signal);
 
-    void fetchBackgroundVideos(controller.signal)
-      .then((payload) => {
-        if (payload.videos.length === 0) return;
+    const refreshTimer = window.setInterval(() => {
+      refreshBackgroundVideos();
+    }, BACKGROUND_VIDEO_REFRESH_MS);
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        refreshBackgroundVideos();
+      }
+    };
+    const handleManualRefresh = () => refreshBackgroundVideos();
 
-        const selectedSrc = selectedBackgroundVideoSrcRef.current;
-        const preferredIndex = payload.videos.findIndex((video) => video.src === selectedSrc);
-        const fallbackIndex = payload.videos.findIndex((video) => video.src === DEFAULT_BACKGROUND_VIDEO.src);
-        setBackgroundVideos(payload.videos);
-        setBackgroundVideoIndex(preferredIndex !== -1 ? preferredIndex : Math.max(0, fallbackIndex));
-      })
-      .catch(() => {
-        // Keep the bundled default video when the API is not available.
-      });
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener(BACKGROUND_VIDEO_REFRESH_EVENT, handleManualRefresh);
 
-    return () => controller.abort();
-  }, []);
+    return () => {
+      controller.abort();
+      window.clearInterval(refreshTimer);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener(BACKGROUND_VIDEO_REFRESH_EVENT, handleManualRefresh);
+    };
+  }, [refreshBackgroundVideos]);
 
   function switchBackgroundVideo(direction: -1 | 1) {
     onHudActivity();

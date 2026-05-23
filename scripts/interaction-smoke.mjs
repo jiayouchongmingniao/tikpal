@@ -424,6 +424,59 @@ try {
     "document.querySelector('.ambient-transport button[aria-label=\"Favorite\"], .ambient-transport button[aria-label=\"Remove favorite\"]') !== null",
     "ambient transport favorite button renders"
   );
+  await evaluate(
+    client,
+    `
+      (() => {
+        const originalFetch = window.fetch.bind(window);
+        window.fetch = (input, init) => {
+          const url = String(input instanceof Request ? input.url : input);
+          if (url.includes('/api/v1/media/background-videos')) {
+            return Promise.resolve(new Response(JSON.stringify({
+              videos: [
+                {
+                  id: 'output_2560x720-4k',
+                  filename: 'output_2560x720-4k.mp4',
+                  label: 'output_2560x720-4k.mp4',
+                  src: '/assets/output_2560x720-4k.mp4',
+                  source: 'legacy'
+                },
+                {
+                  id: 'rainy-window',
+                  filename: 'Rainy-Window.mp4',
+                  label: 'Rainy Window',
+                  src: '/assets/output_2560x720-4k.mp4?ota=rainy',
+                  order: 30,
+                  source: 'scene'
+                }
+              ],
+              total: 2,
+              updatedAt: new Date().toISOString(),
+              catalogVersion: 'interaction-rainy',
+              defaultVideoId: 'output_2560x720-4k'
+            }), {
+              status: 200,
+              headers: { 'Content-Type': 'application/json' }
+            }));
+          }
+          return originalFetch(input, init);
+        };
+        window.dispatchEvent(new Event('tikpal:background-videos-refresh'));
+        return true;
+      })()
+    `
+  );
+  await expectEventually(client, "!document.querySelector('.ambient-transport-scene-next')?.disabled", "ambient scene catalog refresh enables OTA scene navigation");
+  await evaluate(
+    client,
+    `
+      (() => {
+        document.querySelector('.ambient-transport-scene-next')?.click();
+        return true;
+      })()
+    `
+  );
+  await expectEventually(client, "[...document.querySelectorAll('.flame-video')].some((video) => video.getAttribute('src')?.includes('ota=rainy'))", "ambient can mount OTA scene video after catalog refresh");
 
   await wait(5600);
   await expect(client, "document.querySelector('.ambient-screen.is-hud-hidden') !== null", "ambient HUD auto hides after tap show");
@@ -499,6 +552,66 @@ try {
     client,
     "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => state.playback.source === 'scene' && state.playback.state === 'playing')",
     "scene sound switches API source to scene"
+  );
+  await expectEventually(
+    client,
+    `
+      (() => {
+        const video = document.querySelector('.flame-video.is-active');
+        return video instanceof HTMLVideoElement
+          && Number.isFinite(video.duration)
+          && video.duration >= 2
+          && video.readyState >= 1;
+      })()
+    `,
+    "active scene video has metadata for seamless loop"
+  );
+  await evaluate(
+    client,
+    `
+      (() => {
+        const video = document.querySelector('.flame-video.is-active');
+        if (!(video instanceof HTMLVideoElement) || !Number.isFinite(video.duration)) return false;
+        video.currentTime = Math.max(0, video.duration - 0.8);
+        void video.play();
+        return true;
+      })()
+    `
+  );
+  await expectEventually(
+    client,
+    `
+      (() => {
+        const videos = [...document.querySelectorAll('.flame-video')];
+        const activeVideos = videos.filter((video) => video.classList.contains('is-active'));
+        const activeVideo = activeVideos[0];
+        return videos.length === 1
+          && activeVideos.length === 1
+          && activeVideo instanceof HTMLVideoElement
+          && activeVideo.loop === true
+          && activeVideo.getAttribute('data-loop-buffer') === null;
+      })()
+    `,
+    "native scene loop keeps one reusable active video layer"
+  );
+  await wait(1200);
+  await expectEventually(
+    client,
+    `
+      (() => {
+        const videos = [...document.querySelectorAll('.flame-video')];
+        const activeVideos = videos.filter((video) => video.classList.contains('is-active'));
+        const activeVideo = activeVideos[0];
+        return activeVideos.length === 1
+          && videos.length === 1
+          && activeVideo instanceof HTMLVideoElement
+          && activeVideo.loop === true
+          && activeVideo.paused === false
+          && activeVideo.muted === false
+          && activeVideo.currentTime < Math.max(1.6, activeVideo.duration - 0.2);
+      })()
+    `,
+    "native scene loop wraps without adding a standby layer"
   );
 
   await evaluate(

@@ -1,0 +1,33 @@
+{
+  "mode": "add",
+  "videos": [
+    {
+      "id": "aurora-snowfield",
+      "filename": "Aurora-Snowfield.mp4",
+      "label": "Aurora Snowfield",
+      "order": 100,
+      "sha256": "f51306e679afcf1d880f645f78e4b372772e9cb35d258af75f480ea3f44e0e48"
+    },
+    {
+      "id": "cloud-sunrise",
+      "filename": "Cloud-Sunrise.mp4",
+      "label": "Cloud Sunrise",
+      "order": 110,
+      "sha256": "9c706b4fb6ea0d3a7c877d4f0bb02d588d04ad567d9fc7245e7f0129bb20471d"
+    },
+    {
+      "id": "forest-cabin",
+      "filename": "Forest-Cabin.mp4",
+      "label": "Forest Cabin",
+      "order": 120,
+      "sha256": "27f9c60052af19c5e30b866fddd8fe956c21d5678a7e0dd0e9c117ccf185a168"
+    },
+    {
+      "id": "zen-courtyard",
+      "filename": "Zen-Courtyard.mp4",
+      "label": "Zen Courtyard",
+      "order": 130,
+      "sha256": "b0d9bf319fe0a6eab5022ab313dc3a508e0fe9ce8f36cbc7dd0d92a1245d7498"
+    }
+  ]
+}
