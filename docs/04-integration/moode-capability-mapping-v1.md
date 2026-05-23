@@ -108,6 +108,7 @@ Ambient background videos:
 - The local web server must support `Range` requests for MP4 files so browser seeks can land on the requested frame instead of falling back to the first frame.
 - Scene video can also become audible through the Quick Menu Scene Sound toggle. When enabled, the backend marks `scene` as the active source and the browser unmutes only the active video layer.
 - The active video element must set `video.volume = system.volume.percent / 100` so local browser audio matches the same global level shown by Ambient and Player. At `0%`, the video remains muted.
+- Turning Scene Sound off should switch back through `target=mpd` so Library playback resumes. Turning Scene Video off while Scene Sound is active follows the same Library resume path before hiding the video surface.
 
 ### Player Overlay
 
@@ -132,14 +133,9 @@ Avoid:
 
 Allowed:
 
-- Network overview and entry.
-- Audio output overview.
-- DSP overview.
-- Library update.
-- Display controls.
-- Font and surface skin presets.
-- System info.
-- Reboot/shutdown with confirmation.
+- Network: network summary and System/API status.
+- Preferences: audio output summary, DSP summary, display controls, font presets, surface skin presets, and lyrics settings.
+- System: library update plus reboot/shutdown with confirmation.
 
 Avoid:
 
@@ -206,7 +202,7 @@ Current Batch 3 mock API contract:
 | `/api/v1/playback/actions` | `POST` | Playback actions: `play_pause`, `play`, `pause`, `next`, `previous`, `seek`, `favorite_toggle`, `play_mode_set` with `mode=sequence\|repeat_one\|shuffle`, and global `volume_set`. For scene/external handoff sources, `volume_set` targets output volume truth rather than an MPD-only mixer. |
 | `/api/v1/system/actions` | `POST` | System actions including `library_scan`, `reboot`, `shutdown`, and `brightness_set`. |
 
-The mock API preserves the frontend contract while the real moOde / MPD adapter is still pending, and the `mpc` runtime now uses the same API shape for a first-pass source workspace. Local library browsing is backed by `public/assets/music/_metadata/library_manifest.csv`, which can be replaced by a resource OTA package together with the referenced audio files. The frontend renders Library as a storage tier first, then a Local category tier, then subfolder chips; those tiers should stay visually distinct because they mean different things in the backend contract. Category ids should come from the manifest category column rather than heuristic reclassification, so Rest folders do not leak into Meditation unless the manifest says so. Radio is modeled as a searchable station catalog with `radioStationId` direct switching and a default stream URI only as fallback. Scene Sound is modeled as an exclusive local source that closes external intakes and stops MPD while the active Ambient MP4 supplies browser audio. Bluetooth and AirPlay are modeled as armed-only intake paths: Tikpal only opens them for new connections while the user has explicitly selected that source, and switching away closes the intake again. The same local system surface now also carries display brightness state so the ambient right-edge gesture can talk to DDC/CI through the Node service instead of the browser pretending to own the monitor.
+The mock API preserves the frontend contract while the real moOde / MPD adapter is still pending, and the `mpc` runtime now uses the same API shape for a first-pass source workspace. Local library browsing is backed by `public/assets/music/_metadata/library_manifest.csv`, which can be replaced by a resource OTA package together with the referenced audio files. The frontend renders Library as a storage tier first, then a Local category tier, then subfolder chips; those tiers should stay visually distinct because they mean different things in the backend contract. Category ids should come from the manifest category column rather than heuristic reclassification, so Rest folders do not leak into Meditation unless the manifest says so. Radio is modeled as a searchable station catalog with `radioStationId` direct switching and a default stream URI only as fallback. Scene Sound is modeled as an exclusive local source that closes external intakes and stops MPD while the active Ambient MP4 supplies browser audio; closing Scene Sound returns to `target=mpd` so Library playback resumes instead of leaving playback stopped on `scene`. Bluetooth and AirPlay are modeled as armed-only intake paths: Tikpal only opens them for new connections while the user has explicitly selected that source, and switching away closes the intake again. The same local system surface now also carries display brightness state so the ambient right-edge gesture can talk to DDC/CI through the Node service instead of the browser pretending to own the monitor.
 
 Both Ambient and Player use the playback summary as display truth for now-playing title, artist, album, artwork, progress, source label, and queue position. Source-panel selection and Library browsing can change the user's workspace, but they should not replace the displayed current track unless a backend source switch or playback update confirms it.
 

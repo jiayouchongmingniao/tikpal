@@ -87,6 +87,7 @@ stateDiagram-v2
 - Tap does not open controls; it only toggles the weak playback HUD.
 - Startup should show the HUD briefly, then let the flame scene return to a quieter default after 5 seconds.
 - Scene controls stay inside the temporary HUD. They do not open a scene browser or playlist drawer.
+- Ambient progress is display-only. Seeking and draggable timeline controls belong in Player, not on the Ambient HUD.
 - Playback mode is a mutually exclusive three-state control: sequence, repeat-one, or shuffle.
 - Ambient must not show queue or playlist content; queue preview stays in the Player overlay.
 - The left edge band is reserved for live volume drag and should not fall through to the generic one-finger swipe-down player gesture.
@@ -108,7 +109,9 @@ stateDiagram-v2
 
 ### Quick Settings
 
-- Cards are overview-first.
+- Cards are summary-first.
+- Settings has no Home or Overview category and opens directly to Preferences.
+- The only categories are Network, Preferences, and System.
 - Swipe up returns to ambient even when the gesture starts inside the protected settings panel.
 - Button-sized taps inside the protected settings panel must remain local settings actions, not blank-tap returns.
 - Dangerous actions require a confirmation state inside the card or a modal.
@@ -121,7 +124,8 @@ stateDiagram-v2
 - It should close cleanly on cancel or after choosing an item.
 - Quick Menu may expose shallow scene toggles: Scene Video, Clock, and Scene Sound.
 - Turning Scene Sound on forces Scene Video on, switches playback source truth to `scene`, and unmutes only the active Ambient video layer.
-- Turning Scene Video off while Scene Sound is active also stops Scene Sound and returns the video surface to a black quiet state.
+- Turning Scene Sound off returns playback to Library/MPD.
+- Turning Scene Video off while Scene Sound is active also stops Scene Sound, returns playback to Library/MPD, and returns the video surface to a black quiet state.
 
 ## Input Compatibility
 

@@ -140,11 +140,11 @@ export default function App() {
     setSceneSoundEnabled(false);
     if (tikpalState.playback.source !== "scene") return;
     try {
-      await sendPlaybackAction("pause");
+      await sendSourceSwitch("mpd");
     } catch {
       // The local video is already muted; the next API refresh will reconcile source state.
     }
-  }, [sendPlaybackAction, tikpalState.playback.source]);
+  }, [sendSourceSwitch, tikpalState.playback.source]);
 
   async function handleSceneSoundEnabledChange(enabled: boolean) {
     if (sceneSoundPending) return;

@@ -437,6 +437,16 @@ async function run() {
     assert(scenePause.body.playback.source === "scene", "scene pause should keep scene as current source");
     assert(scenePause.body.playback.state === "stopped", "scene pause should stop scene audio without restoring music");
 
+    const libraryResume = await request("/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({ target: "mpd" })
+    });
+    assert(libraryResume.response.ok, "library source switch after scene should return 200");
+    assert(libraryResume.body.audio.currentSource.id === "mpd", "library resume should mark MPD as the current source");
+    assert(libraryResume.body.playback.source === "mpd", "library resume should leave scene playback");
+    assert(libraryResume.body.playback.state === "playing", "library resume should start library playback");
+    assert(libraryResume.body.audio.sources.some((source) => source.id === "scene" && source.active === false), "library resume should deactivate scene source");
+
     const audio = await request("/api/v1/audio/source", {
       method: "POST",
       body: JSON.stringify({ target: "audio" })

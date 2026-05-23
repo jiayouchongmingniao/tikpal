@@ -30,7 +30,7 @@ Tikpal should use a clear hierarchy:
 | --- | --- | --- |
 | Level 0 | `ambient` | Flame ambience screen with time, playback status, weak progress, and fallback settings entry. |
 | Level 1 | `player` | Playback control overlay with cover art, metadata, progress, transport, volume, and audio status. |
-| Level 2 | `quickSettings` | System quick settings overlay with network, output, DSP, library, display, and system actions. |
+| Level 2 | `quickSettings` | System quick settings overlay with Network, Preferences, and System categories. |
 | Level 3 | Advanced management | Advanced Web/admin surfaces outside the main touch UI. |
 
 ## Target Device
@@ -87,18 +87,13 @@ Required capabilities:
 
 ### Quick Settings Overlay
 
-The quick settings overlay is opened by two-finger swipe down. It should be a system overview, not a full configuration center.
+The quick settings overlay is opened by two-finger swipe down. It should be a compact system settings surface, not a full configuration center.
 
-Recommended cards:
+Settings has no Home or Overview category. It opens directly to Preferences, then lets the user switch between three fixed categories:
 
-- Network.
-- Audio output.
-- DSP / CamillaDSP.
-- Library update.
-- Display.
-- System information.
-- Reboot.
-- Shutdown.
+- Network: network state and System/API status.
+- Preferences: audio output, DSP / CamillaDSP, display, font, skin, and lyrics.
+- System: library update, reboot, and shutdown.
 
 Dangerous actions must require confirmation.
 

@@ -93,19 +93,19 @@ Batch 3 implementation note:
 
 ### Slice 6: Quick Settings
 
-- Add card grid for network, output, DSP, library, display, system info, reboot, shutdown.
+- Add card grid for Network, Preferences, and System categories covering network, audio output, DSP, display, font, skin, lyrics, library, system info, reboot, and shutdown.
 - Add confirmation flow for dangerous actions.
 - Add library update action where supported.
 
 Acceptance:
 
-- Network, output, DSP, library, display, and system cards render from backend or mock state.
+- Network, Preferences, and System cards render from backend or mock state.
 - Reboot and shutdown cannot run on first tap.
 - Dangerous confirmation is visually distinct.
 
 Current status note:
 
-- Quick Settings is implemented as an overview-first card grid with live backend/system state, reboot/shutdown confirmation, and local font and skin selectors.
+- Quick Settings is implemented as a fixed four-column 2560 x 720 card grid with no Home/Overview category; it opens directly to Preferences and keeps Network, Preferences, and System as the only categories.
 - Skin presets currently include `warm-gold`, `graphite-silver`, and `ivory-studio`.
 - Display brightness is reflected in system state and can now be adjusted both from the ambient right-edge gesture and from an in-panel Quick Settings control surface on DDC/CI-capable hardware.
 
@@ -164,7 +164,7 @@ Batch 4 deployment note:
 ### Quick Settings
 
 - Network state displays correctly.
-- Output state displays correctly.
+- Preferences output state displays correctly.
 - DSP state displays correctly.
 - Library update entry is available.
 - Display brightness state is visible.

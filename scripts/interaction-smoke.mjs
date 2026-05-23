@@ -59,10 +59,18 @@ function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function waitForExit(child) {
-  if (child.exitCode !== null || child.signalCode !== null) return;
-  await new Promise((resolve) => {
-    child.once("exit", resolve);
+async function waitForExit(child, timeoutMs = 5000) {
+  if (child.exitCode !== null || child.signalCode !== null) return true;
+  return await new Promise((resolve) => {
+    const handleExit = () => {
+      clearTimeout(timer);
+      resolve(true);
+    };
+    const timer = setTimeout(() => {
+      child.off("exit", handleExit);
+      resolve(false);
+    }, timeoutMs);
+    child.once("exit", handleExit);
   });
 }
 
@@ -247,6 +255,33 @@ function sourceHighlightExpression(theme) {
   `;
 }
 
+function settingsSummaryExpression(section, expectedTitles) {
+  return `
+    (() => {
+      const grid = document.querySelector('.settings-grid[data-settings-section="${section}"]');
+      if (!grid) return false;
+      const columns = window.getComputedStyle(grid).gridTemplateColumns.split(' ').filter(Boolean);
+      const cards = [...grid.querySelectorAll('.settings-card')];
+      const labels = cards.map((node) => node.querySelector('span')?.textContent?.trim());
+      const expected = ${JSON.stringify(expectedTitles)};
+      if (columns.length !== 4 || cards.length !== expected.length) return false;
+      if (!expected.every((title, index) => labels[index] === title)) return false;
+
+      const rects = cards.map((node) => node.getBoundingClientRect());
+      if (!rects.length) return false;
+      const first = rects[0];
+      const sameSize = rects.every((rect) => Math.abs(rect.width - first.width) < 1 && Math.abs(rect.height - first.height) < 1);
+      const fixedHeight = rects.every((rect) => Math.abs(rect.height - 132) < 1);
+      const noSpan = cards.every((node) => {
+        const style = window.getComputedStyle(node);
+        return style.gridColumnStart === 'auto' && style.gridColumnEnd === 'auto';
+      });
+
+      return sameSize && fixedHeight && noSpan && grid.scrollHeight <= grid.clientHeight + 1;
+    })()
+  `;
+}
+
 async function wheel(client, deltaY, modifiers = 0) {
   await client.send("Input.dispatchMouseEvent", {
     type: "mouseWheel",
@@ -364,6 +399,20 @@ try {
   await expect(client, "document.querySelector('.ambient-screen') !== null", "ambient root renders");
   await expect(client, "document.querySelector('.ambient-screen.is-hud-visible') !== null", "ambient HUD starts visible");
   await expect(client, "document.querySelector('[data-ambient-lyrics]') !== null", "ambient lyrics layer renders");
+  await expect(
+    client,
+    `
+      (() => {
+        const ambient = document.querySelector('.ambient-screen');
+        if (!ambient) return false;
+        const rangeInputs = [...ambient.querySelectorAll('input[type="range"]')];
+        return ambient.querySelector('.ambient-progress') !== null
+          && ambient.querySelector('.progress-slider') === null
+          && rangeInputs.length === 0;
+      })()
+    `,
+    "ambient progress is display-only and has no seek slider"
+  );
 
   await wait(5600);
   await expect(client, "document.querySelector('.ambient-screen.is-hud-hidden') !== null", "ambient HUD auto hides after startup");
@@ -456,6 +505,39 @@ try {
     client,
     `
       (() => {
+        document.querySelector('[data-quick-menu-toggle="scene-sound"]')?.click();
+        return true;
+      })()
+    `
+  );
+  await expectEventually(client, "document.querySelector('[data-quick-menu-toggle=\"scene-sound\"]')?.getAttribute('aria-pressed') === 'false'", "turning scene sound off clears the toggle");
+  await expectEventuallyEvaluate(
+    client,
+    "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => state.audio.currentSource.id === 'mpd' && state.playback.source === 'mpd' && state.playback.state === 'playing')",
+    "turning scene sound off resumes library playback"
+  );
+  await expectEventually(client, "document.querySelector('.flame-video.is-active') instanceof HTMLVideoElement && document.querySelector('.flame-video.is-active').muted === true", "turning scene sound off remutes the active video");
+
+  await evaluate(
+    client,
+    `
+      (() => {
+        document.querySelector('[data-quick-menu-toggle="scene-sound"]')?.click();
+        return true;
+      })()
+    `
+  );
+  await expectEventually(client, "document.querySelector('[data-quick-menu-toggle=\"scene-sound\"]')?.getAttribute('aria-pressed') === 'true'", "scene sound can turn back on before scene video off");
+  await expectEventuallyEvaluate(
+    client,
+    "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => state.playback.source === 'scene' && state.playback.state === 'playing')",
+    "scene sound switches API source to scene again"
+  );
+
+  await evaluate(
+    client,
+    `
+      (() => {
         document.querySelector('[data-quick-menu-toggle="scene-video"]')?.click();
         return true;
       })()
@@ -465,8 +547,8 @@ try {
   await expect(client, "document.querySelector('.flame-scene.is-video-off') !== null", "scene video off after scene sound returns to black background");
   await expectEventuallyEvaluate(
     client,
-    "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => state.playback.source === 'scene' && state.playback.state !== 'playing')",
-    "scene video off stops scene audio in the API"
+    "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => state.audio.currentSource.id === 'mpd' && state.playback.source === 'mpd' && state.playback.state === 'playing')",
+    "scene video off resumes library playback"
   );
 
   await evaluate(
@@ -512,7 +594,16 @@ try {
   await expect(client, "document.querySelector('.player-overlay.is-active') !== null", "protected player click stays in player");
 
   await expect(client, "document.querySelector('[data-source-panel]') !== null", "player source panel opens");
-  await expect(client, "document.querySelector('.track-stack h1')?.textContent === 'Get Lucky (feat. Pharrell Williams)'", "player now playing title follows playback truth");
+  await expectEventuallyEvaluate(
+    client,
+    `
+      fetch('/api/v1/system/state').then((response) => response.json()).then((state) => {
+        const title = document.querySelector('.track-stack h1')?.textContent?.trim();
+        return Boolean(state.playback.title) && title === state.playback.title;
+      })
+    `,
+    "player now playing title follows playback truth"
+  );
   await expect(
     client,
     `
@@ -703,6 +794,18 @@ try {
   await navigate(client, `${APP_URL}?mode=quickSettings`);
   await click(client, 1260, 210);
   await expect(client, "document.querySelector('.quick-settings.is-active') !== null", "protected settings click stays in settings");
+  await expect(client, "document.querySelector('[data-settings-section=\"output\"]') !== null", "settings defaults to Preferences");
+  await expect(
+    client,
+    `
+      (() => {
+        const labels = [...document.querySelectorAll('.settings-nav-item span')].map((node) => node.textContent?.trim());
+        return labels.join('|') === 'Network|Preferences|System' && !labels.includes('Home');
+      })()
+    `,
+    "settings nav has no Home section"
+  );
+  await expect(client, settingsSummaryExpression("output", ["Audio Output", "DSP", "Display", "Font", "Skin", "Lyrics"]), "settings Preferences summary keeps fixed four-column cards");
   await expect(
     client,
     `
@@ -719,14 +822,15 @@ try {
     client,
     `
       (() => {
-        const section = [...document.querySelectorAll('.settings-nav-item')].find((node) => node.textContent.includes('Output'));
+        const section = [...document.querySelectorAll('.settings-nav-item')].find((node) => node.textContent.includes('Preferences'));
         section?.click();
         return Boolean(section);
       })()
     `
   );
-  await expect(client, "document.querySelector('[data-settings-section=\"output\"]') !== null", "settings output section opens");
-  await expect(client, "document.querySelector('[data-settings-detail]') === null", "settings output overview stays summary-first");
+  await expect(client, "document.querySelector('[data-settings-section=\"output\"]') !== null", "settings Preferences section opens");
+  await expect(client, "document.querySelector('[data-settings-detail]') === null", "settings Preferences summary stays summary-first");
+  await expect(client, settingsSummaryExpression("output", ["Audio Output", "DSP", "Display", "Font", "Skin", "Lyrics"]), "settings Preferences remains a fixed four-column grid");
 
   await evaluate(
     client,
@@ -761,7 +865,7 @@ try {
       })()
     `
   );
-  await expect(client, "document.querySelector('[data-settings-detail]') === null", "settings display detail closes back to overview");
+  await expect(client, "document.querySelector('[data-settings-detail]') === null", "settings display detail closes back to summary");
 
   await evaluate(
     client,
@@ -796,7 +900,7 @@ try {
       })()
     `
   );
-  await expect(client, "document.querySelector('[data-settings-detail]') === null", "settings font detail closes back to overview");
+  await expect(client, "document.querySelector('[data-settings-detail]') === null", "settings font detail closes back to summary");
 
   await evaluate(
     client,
@@ -809,6 +913,7 @@ try {
     `
   );
   await expect(client, "document.querySelector('[data-settings-section=\"system\"]') !== null", "settings system section opens");
+  await expect(client, settingsSummaryExpression("system", ["Library", "Restart", "Shutdown"]), "settings system summary keeps fixed four-column cards");
 
   await evaluate(
     client,
@@ -833,15 +938,17 @@ try {
     `
   );
   await expect(client, "document.querySelector('[data-settings-section=\"network\"]') !== null", "settings network section opens");
+  await expect(client, settingsSummaryExpression("network", ["Network", "System"]), "settings network summary keeps fixed four-column cards");
   await expect(
     client,
     `
       (() => {
+        const shell = document.querySelector('.settings-shell');
         const content = document.querySelector('.settings-content');
-        return Boolean(content && content.scrollHeight <= content.clientHeight);
+        return Boolean(shell && content && shell.scrollHeight <= shell.clientHeight && content.scrollHeight <= content.clientHeight);
       })()
     `,
-    "settings network overview stays within kiosk height"
+    "settings network summary stays within kiosk height"
   );
 
   await evaluate(
@@ -859,8 +966,19 @@ try {
   await click(client, 10, 10);
   await expect(client, "document.querySelector('.quick-settings.is-active') === null", "settings backdrop click exits settings");
 } finally {
-  client?.close();
-  chrome.kill();
-  await waitForExit(chrome);
+  if (client) {
+    await Promise.race([
+      client.send("Browser.close").catch(() => undefined),
+      wait(1000)
+    ]);
+    client.close();
+  }
+  if (chrome.exitCode === null && chrome.signalCode === null) {
+    chrome.kill("SIGTERM");
+  }
+  if (!(await waitForExit(chrome))) {
+    chrome.kill("SIGKILL");
+    await waitForExit(chrome, 2000);
+  }
   await rm(profileDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 }

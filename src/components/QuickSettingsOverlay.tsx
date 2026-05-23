@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Captions, Cpu, Database, EthernetPort, Eye, EyeOff, Info, Monitor, Music2, Palette, Power, RotateCcw, SlidersHorizontal, Type, Volume2 } from "lucide-react";
+import { Captions, Cpu, Database, EthernetPort, Eye, EyeOff, Info, Monitor, Palette, Power, RotateCcw, SlidersHorizontal, Type, Volume2 } from "lucide-react";
 import type { TikpalDataStatus } from "../hooks/useTikpalState";
 import { useOverlayReturnGesture } from "../hooks/useOverlayReturnGesture";
 import type { FontTheme, LyricsFontSize, RuntimeState, SurfaceTheme, SystemActionType, SystemState } from "../types";
@@ -23,7 +23,7 @@ interface QuickSettingsOverlayProps {
 
 type CardTone = "cyan" | "gold" | "neutral" | "warn" | "danger";
 type ActionableCardKey = "library_scan" | "reboot" | "shutdown";
-type SettingsSectionKey = "home" | "network" | "output" | "system";
+type SettingsSectionKey = "network" | "output" | "system";
 type SettingsDetailView = "appearance" | "display" | "font" | "lyrics" | null;
 
 interface BaseCard {
@@ -84,16 +84,12 @@ const surfaceThemeChoices: Array<{ id: SurfaceTheme; label: string; sample: stri
 ];
 
 const sectionCopy: Record<SettingsSectionKey, { label: string; description: string }> = {
-  home: {
-    label: "Home",
-    description: "Overview-first controls across playback, display, and system status."
-  },
   network: {
     label: "Network",
     description: "Connectivity, API sync state, and kiosk runtime reachability."
   },
   output: {
-    label: "Output",
+    label: "Preferences",
     description: "Playback output, DSP, display brightness, and local typography."
   },
   system: {
@@ -119,7 +115,7 @@ export function QuickSettingsOverlay({
   onReturnAmbient
 }: QuickSettingsOverlayProps) {
   const overlayReturnGesture = useOverlayReturnGesture(onReturnAmbient);
-  const [activeSection, setActiveSection] = useState<SettingsSectionKey>("home");
+  const [activeSection, setActiveSection] = useState<SettingsSectionKey>("output");
   const [detailView, setDetailView] = useState<SettingsDetailView>(null);
   const [confirmAction, setConfirmAction] = useState<ActionableCardKey | null>(null);
   const [pendingAction, setPendingAction] = useState<ActionableCardKey | null>(null);
@@ -133,7 +129,7 @@ export function QuickSettingsOverlay({
 
   useEffect(() => {
     if (!active) {
-      setActiveSection("home");
+      setActiveSection("output");
       setDetailView(null);
       setConfirmAction(null);
       setPendingAction(null);
@@ -185,6 +181,18 @@ export function QuickSettingsOverlay({
         tone: "cyan"
       },
       {
+        kind: "display",
+        key: "display",
+        section: "output",
+        icon: Monitor,
+        title: "Display",
+        value: runtime.kioskWindow,
+        meta: system.display.controllable
+          ? `Renderer: ${runtime.requestedRenderer} · Live brightness ready`
+          : `Renderer: ${runtime.requestedRenderer} · DDC/CI unavailable`,
+        tone: "neutral"
+      },
+      {
         kind: "action",
         key: "library",
         section: "system",
@@ -227,18 +235,6 @@ export function QuickSettingsOverlay({
         tone: lyricsVisible ? "gold" : "neutral"
       },
       {
-        kind: "display",
-        key: "display",
-        section: "output",
-        icon: Monitor,
-        title: "Display",
-        value: runtime.kioskWindow,
-        meta: system.display.controllable
-          ? `Renderer: ${runtime.requestedRenderer} · Live brightness ready`
-          : `Renderer: ${runtime.requestedRenderer} · DDC/CI unavailable`,
-        tone: "neutral"
-      },
-      {
         kind: "readonly",
         key: "system",
         section: "network",
@@ -279,9 +275,6 @@ export function QuickSettingsOverlay({
   );
 
   const visibleCards = useMemo(() => {
-    if (activeSection === "home") {
-      return settingsCards.filter((card) => ["network", "output", "display", "lyrics", "library", "system", "font", "appearance"].includes(card.key));
-    }
     return settingsCards.filter((card) => card.section === activeSection);
   }, [activeSection, settingsCards]);
 
@@ -356,7 +349,7 @@ export function QuickSettingsOverlay({
             Back
           </button>
           <div>
-            <span>Output</span>
+            <span>Preferences</span>
             <strong>Skin Presets</strong>
             <p>Switch the glass shell, cards, and controls as one surface.</p>
           </div>
@@ -392,9 +385,9 @@ export function QuickSettingsOverlay({
             Back
           </button>
           <div>
-            <span>Output</span>
+            <span>Preferences</span>
             <strong>Font Presets</strong>
-            <p>Choose the kiosk typography without expanding the overview dashboard.</p>
+            <p>Choose the kiosk typography for this surface.</p>
           </div>
         </div>
 
@@ -423,7 +416,7 @@ export function QuickSettingsOverlay({
             Back
           </button>
           <div>
-            <span>Output</span>
+            <span>Preferences</span>
             <strong>Lyrics</strong>
             <p>{lyricsVisible ? "Ambient lyrics visible" : "Ambient lyrics hidden"}</p>
           </div>
@@ -478,7 +471,7 @@ export function QuickSettingsOverlay({
             Back
           </button>
           <div>
-            <span>Output</span>
+            <span>Preferences</span>
             <strong>Display Brightness</strong>
             <p>{brightnessError ?? (system.display.controllable ? "Live display brightness control" : "Brightness control unavailable on this display")}</p>
           </div>
@@ -540,17 +533,13 @@ export function QuickSettingsOverlay({
       <button className="overlay-backdrop" type="button" tabIndex={active ? 0 : -1} aria-label="Return to ambient" onClick={handleReturnAmbient} />
       <div className="settings-shell" role="dialog" aria-modal="true" data-gesture-protected {...overlayReturnGesture}>
         <aside className="settings-nav" aria-label="Settings sections">
-          <button className={`settings-nav-item ${activeSection === "home" ? "is-active" : ""}`} type="button" onClick={() => setActiveSection("home")}>
-            <Music2 size={24} />
-            <span>Home</span>
-          </button>
           <button className={`settings-nav-item ${activeSection === "network" ? "is-active" : ""}`} type="button" onClick={() => setActiveSection("network")}>
             <EthernetPort size={24} />
             <span>Network</span>
           </button>
           <button className={`settings-nav-item ${activeSection === "output" ? "is-active" : ""}`} type="button" onClick={() => setActiveSection("output")}>
             <Volume2 size={24} />
-            <span>Output</span>
+            <span>Preferences</span>
           </button>
           <button className={`settings-nav-item ${activeSection === "system" ? "is-active" : ""}`} type="button" onClick={() => setActiveSection("system")}>
             <Cpu size={24} />

@@ -185,18 +185,21 @@ The play / pause button should be visually dominant and easy to hit.
 
 ## Quick Settings Overlay
 
-Purpose: low-frequency system overview.
+Purpose: low-frequency system settings without a Home or Overview category.
 
-Use a two-row card grid:
+Settings opens directly to Preferences and uses a 2560 x 720 fixed kiosk layout. The summary card grid is always four columns wide; short categories leave empty cells instead of changing to two or three columns.
 
-| Row | Cards |
+| Category | Cards |
 | --- | --- |
-| Row 1 | Network, audio output, DSP, library update. |
-| Row 2 | Display, font, skin, system info, reboot, shutdown. |
+| Network | Network, System/API status. |
+| Preferences | Audio output, DSP, Display, Font, Skin, Lyrics. |
+| System | Library update, Reboot, Shutdown. |
 
 Design rules:
 
 - Show the current state first, not configuration lists.
+- Keep summary cards at a fixed width and height in the four-column grid.
+- Do not add vertical page scrolling to the shell or content area.
 - Cards can open detail panels later.
 - Dangerous actions show confirmation before execution.
 - Use warning/error color only for real warnings.
