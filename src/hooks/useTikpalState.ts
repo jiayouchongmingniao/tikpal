@@ -6,7 +6,7 @@ import {
   sendSystemAction as postSystemAction
 } from "../api/tikpalClient";
 import { fallbackTikpalState } from "../mockState";
-import type { PlaybackActionType, SourceSwitchTarget, SystemActionType, TikpalState } from "../types";
+import type { PlaybackActionType, PlaybackMode, SourceSwitchTarget, SystemActionType, TikpalState } from "../types";
 
 export interface TikpalDataStatus {
   source: "api" | "fallback";
@@ -56,10 +56,10 @@ export function useTikpalState() {
     };
   }, [refresh, state.playback.source, state.playback.state]);
 
-  const sendPlaybackAction = useCallback(async (type: PlaybackActionType, value?: number) => {
+  const sendPlaybackAction = useCallback(async (type: PlaybackActionType, value?: number, mode?: PlaybackMode) => {
     setStatus((current) => ({ ...current, pending: true, error: null }));
     try {
-      const nextState = await postPlaybackAction(type, value);
+      const nextState = await postPlaybackAction(type, value, mode);
       setState(nextState);
       setStatus({ source: "api", pending: false, error: null });
       return nextState;

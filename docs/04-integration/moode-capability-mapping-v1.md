@@ -78,18 +78,30 @@ Allowed:
 - Current track.
 - Artist.
 - Playback state.
+- Mutually exclusive playback mode: `sequence`, `repeat_one`, or `shuffle`.
 - Volume.
 - Audio spec.
 - Output device.
 - Weak progress.
 - Time.
+- Ambient scene previous / next controls.
+- Lyrics visibility toggle.
 
 Avoid:
 
 - Full queue.
+- Playlist browser.
 - Settings controls.
 - Dense source list.
 - Admin diagnostics.
+
+Ambient background videos:
+
+- `GET /api/v1/media/background-videos` lists MP4 files under `public/assets`.
+- The frontend treats scene video as a looped ambience layer, not as a music video.
+- On scene switch, the incoming video should seek to `playback.elapsedSeconds % video.duration` before it is revealed.
+- Paused playback keeps the incoming layer paused on that aligned frame; playing playback calls `play()` after alignment.
+- The local web server must support `Range` requests for MP4 files so browser seeks can land on the requested frame instead of falling back to the first frame.
 
 ### Player Overlay
 
@@ -180,11 +192,12 @@ Current Batch 3 mock API contract:
 | `/api/v1/audio/radios` | `GET` | Searchable radio catalog with query filters for text, genre, bitrate, and paging window, sized for moOde catalogs with 200+ presets. |
 | `/api/v1/audio/library` | `GET` | Manifest-backed local music library plus NAS queue preview with storage, category, subcategory, limit, and offset filters. Storage values are `local`, `nas`, `usb`, `favorites`, and `recently_added`; `local` tracks keep `focus`, `meditation`, and `rest` category ids plus manifest subfolders. |
 | `/api/v1/audio/source` | `POST` | Switches source intake. `target=mpd` can include `localTrackPath` from the local library manifest to clear/queue/play that local track and immediately update playback metadata. |
+| `/api/v1/media/background-videos` | `GET` | Lists MP4 fireplace/background videos found under `public/assets` so Ambient can switch the active background without a rebuild. |
 | `/api/v1/playback/status` | `GET` | Playback summary only. |
 | `/api/v1/system/status` | `GET` | System summary only. |
 | `/api/v1/system/runtime` | `GET` | Kiosk/runtime summary. |
 | `/api/v1/audio/source` | `POST` | Source switch action with truthful `available`, `waiting`, or `unavailable` semantics. |
-| `/api/v1/playback/actions` | `POST` | Playback actions: `play_pause`, `play`, `pause`, `next`, `previous`, `seek`, `favorite_toggle`, and `volume_set`. |
+| `/api/v1/playback/actions` | `POST` | Playback actions: `play_pause`, `play`, `pause`, `next`, `previous`, `seek`, `favorite_toggle`, `play_mode_set` with `mode=sequence\|repeat_one\|shuffle`, and `volume_set`. |
 | `/api/v1/system/actions` | `POST` | System actions including `library_scan`, `reboot`, `shutdown`, and `brightness_set`. |
 
 The mock API preserves the frontend contract while the real moOde / MPD adapter is still pending, and the `mpc` runtime now uses the same API shape for a first-pass source workspace. Local library browsing is backed by `public/assets/music/_metadata/library_manifest.csv`, which can be replaced by a resource OTA package together with the referenced audio files. The frontend renders Library as a storage tier first, then a Local category tier, then subfolder chips; those tiers should stay visually distinct because they mean different things in the backend contract. Radio is modeled as a searchable station catalog with `radioStationId` direct switching and a default stream URI only as fallback. Bluetooth and AirPlay are modeled as armed-only intake paths: Tikpal only opens them for new connections while the user has explicitly selected that source, and switching away closes the intake again. The same local system surface now also carries display brightness state so the ambient right-edge gesture can talk to DDC/CI through the Node service instead of the browser pretending to own the monitor.

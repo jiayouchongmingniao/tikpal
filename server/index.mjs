@@ -1,7 +1,7 @@
 import http from "node:http";
 import { execFile } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { mkdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, stat, unlink, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { basename, dirname, extname, posix, resolve, sep } from "node:path";
 import { promisify } from "node:util";
@@ -87,6 +87,10 @@ const LOCAL_LIBRARY_MANIFEST_PATH = process.env.TIKPAL_LOCAL_LIBRARY_MANIFEST_PA
 const LOCAL_LIBRARY_ROOT = resolve(dirname(LOCAL_LIBRARY_MANIFEST_PATH), "..");
 const LOCAL_LIBRARY_COVER_COLUMNS = ["cover_relative_path", "cover_path", "album_art_relative_path", "artwork_relative_path"];
 const LOCAL_LIBRARY_COVER_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp"];
+const PUBLIC_ASSETS_ROOT = resolve(process.cwd(), "public", "assets");
+const AMBIENT_BACKGROUND_VIDEO_EXTENSIONS = new Set([".mp4"]);
+const PREFERRED_AMBIENT_BACKGROUND_VIDEOS = ["output_2560x720-4k.mp4", "output_2560x720.mp4"];
+const PLAYBACK_MODES = new Set(["sequence", "repeat_one", "shuffle"]);
 const execFileAsync = promisify(execFile);
 
 const tracks = [
@@ -115,6 +119,7 @@ let mockSelectedLocalTrack = null;
 let playbackState = "playing";
 let elapsedSeconds = 84;
 let favorite = false;
+let playMode = "sequence";
 let lastTickAt = Date.now();
 let lastMockLibraryScanAt = 0;
 let lastSystemLibraryScanRequestedAt = 0;
@@ -269,6 +274,29 @@ function buildMockQueuePreview() {
   });
   const previewStart = Math.max(0, Math.min(queue.length - 5, trackIndex - 1));
   return queue.slice(previewStart, previewStart + 5);
+}
+
+function getPlaybackSettings() {
+  return {
+    playMode
+  };
+}
+
+function normalizePlaybackMode(mode) {
+  if (typeof mode === "string" && PLAYBACK_MODES.has(mode)) {
+    return mode;
+  }
+
+  throw new Error("play_mode_set requires mode sequence, repeat_one, or shuffle");
+}
+
+function randomMockTrackIndex(excludedIndex = trackIndex) {
+  if (tracks.length <= 1) return excludedIndex;
+  let nextIndex = excludedIndex;
+  while (nextIndex === excludedIndex) {
+    nextIndex = Math.floor(Math.random() * tracks.length);
+  }
+  return nextIndex;
 }
 
 function buildAudioState({ activeSource, armedSource = null, radioReady, radioActive, radioStations = [], audioSourceState, spotifyState, bluetoothState, airplayState }) {
@@ -434,15 +462,21 @@ function syncElapsed() {
   if (mockActiveSource === "mpd" && mockSelectedLocalTrack) {
     const durationSeconds = mockSelectedLocalTrack.durationSeconds;
     if (durationSeconds && elapsedSeconds >= durationSeconds) {
-      elapsedSeconds = durationSeconds;
-      playbackState = "stopped";
+      if (playMode === "repeat_one") {
+        elapsedSeconds %= durationSeconds;
+      } else {
+        elapsedSeconds = durationSeconds;
+        playbackState = "stopped";
+      }
     }
     return;
   }
 
   while (elapsedSeconds >= tracks[trackIndex].durationSeconds) {
     elapsedSeconds -= tracks[trackIndex].durationSeconds;
-    trackIndex = (trackIndex + 1) % tracks.length;
+    if (playMode !== "repeat_one") {
+      trackIndex = playMode === "shuffle" ? randomMockTrackIndex(trackIndex) : (trackIndex + 1) % tracks.length;
+    }
   }
 }
 
@@ -467,6 +501,7 @@ function getPlayback() {
       currentTrackIndex: trackIndex + 1,
       queueLength: 13,
       favorite,
+      settings: getPlaybackSettings(),
       queuePreview: buildMockQueuePreview()
     };
   }
@@ -484,6 +519,7 @@ function getPlayback() {
       currentTrackIndex: 0,
       queueLength: 0,
       favorite: false,
+      settings: getPlaybackSettings(),
       queuePreview: []
     };
   }
@@ -501,6 +537,7 @@ function getPlayback() {
       currentTrackIndex: 0,
       queueLength: 0,
       favorite: false,
+      settings: getPlaybackSettings(),
       queuePreview: []
     };
   }
@@ -518,6 +555,7 @@ function getPlayback() {
       currentTrackIndex: 0,
       queueLength: 0,
       favorite: false,
+      settings: getPlaybackSettings(),
       queuePreview: []
     };
   }
@@ -536,6 +574,7 @@ function getPlayback() {
       currentTrackIndex: 1,
       queueLength: 1,
       favorite: false,
+      settings: getPlaybackSettings(),
       queuePreview: [
         buildQueueEntrySummary({
           id: activeRadio?.id ?? "radio-active",
@@ -563,6 +602,7 @@ function getPlayback() {
       currentTrackIndex: 1,
       queueLength: 1,
       favorite,
+      settings: getPlaybackSettings(),
       queuePreview: buildMockQueuePreview()
     };
   }
@@ -580,6 +620,7 @@ function getPlayback() {
     currentTrackIndex: trackIndex + 1,
     queueLength: 13,
     favorite,
+    settings: getPlaybackSettings(),
     queuePreview: buildMockQueuePreview()
   };
 }
@@ -681,6 +722,9 @@ function parseMpcStatus(statusRaw) {
   const queueMatch = statusRaw.match(/#(\d+)\/(\d+)/);
   const progressMatch = statusRaw.match(/\s([0-9:]+)\/([0-9:]+)\s+\(/);
   const volumeMatch = statusRaw.match(/volume:\s*(\d+)%/);
+  const repeat = /repeat:\s*on/i.test(statusRaw);
+  const random = /random:\s*on/i.test(statusRaw);
+  const single = /single:\s*on/i.test(statusRaw);
   const scanning = /updating db/i.test(statusRaw);
 
   return {
@@ -690,6 +734,9 @@ function parseMpcStatus(statusRaw) {
     currentTrackIndex: queueMatch ? Number(queueMatch[1]) : 0,
     queueLength: queueMatch ? Number(queueMatch[2]) : 0,
     volumePercent: volumeMatch ? Number(volumeMatch[1]) : null,
+    settings: {
+      playMode: random ? "shuffle" : repeat && single ? "repeat_one" : "sequence"
+    },
     scanning
   };
 }
@@ -1658,6 +1705,47 @@ function localLibraryImageUrl(relativePath) {
   return `/api/v1/media/library-cover?path=${encodeURIComponent(relativePath)}`;
 }
 
+function sortAmbientBackgroundVideos(first, second) {
+  const firstPreferredIndex = PREFERRED_AMBIENT_BACKGROUND_VIDEOS.indexOf(first.filename);
+  const secondPreferredIndex = PREFERRED_AMBIENT_BACKGROUND_VIDEOS.indexOf(second.filename);
+  if (firstPreferredIndex !== -1 || secondPreferredIndex !== -1) {
+    if (firstPreferredIndex === -1) return 1;
+    if (secondPreferredIndex === -1) return -1;
+    return firstPreferredIndex - secondPreferredIndex;
+  }
+
+  return first.filename.localeCompare(second.filename);
+}
+
+async function getAmbientBackgroundVideosPayload() {
+  let entries = [];
+  try {
+    entries = await readdir(PUBLIC_ASSETS_ROOT, { withFileTypes: true });
+  } catch {
+    return {
+      videos: [],
+      total: 0,
+      updatedAt: new Date().toISOString()
+    };
+  }
+
+  const videos = entries
+    .filter((entry) => entry.isFile() && AMBIENT_BACKGROUND_VIDEO_EXTENSIONS.has(extname(entry.name).toLowerCase()))
+    .map((entry) => ({
+      id: basename(entry.name, extname(entry.name)),
+      filename: entry.name,
+      label: entry.name,
+      src: `/assets/${encodeURIComponent(entry.name)}`
+    }))
+    .sort(sortAmbientBackgroundVideos);
+
+  return {
+    videos,
+    total: videos.length,
+    updatedAt: new Date().toISOString()
+  };
+}
+
 function pushUniquePath(candidates, value) {
   const normalized = normalizeSafeRelativePath(value);
   if (normalized && !candidates.some((candidate) => candidate.path === normalized)) {
@@ -2303,6 +2391,7 @@ async function getMpcSnapshot() {
       currentTrackIndex: playbackSource === "mpd" ? status.currentTrackIndex : 0,
       queueLength: playbackSource === "mpd" ? status.queueLength : 0,
       favorite,
+      settings: status.settings,
       queuePreview: playbackSource === "mpd" ? queuePreview : []
     },
     system: {
@@ -2405,6 +2494,28 @@ async function switchToAirplaySource() {
   await runMpc(["stop"], { allowFailure: true });
 }
 
+async function applyMpcPlayMode(mode) {
+  switch (mode) {
+    case "sequence":
+      await runMpc(["random", "off"]);
+      await runMpc(["repeat", "off"]);
+      await runMpc(["single", "off"]);
+      break;
+    case "repeat_one":
+      await runMpc(["random", "off"]);
+      await runMpc(["repeat", "on"]);
+      await runMpc(["single", "on"]);
+      break;
+    case "shuffle":
+      await runMpc(["random", "on"]);
+      await runMpc(["repeat", "off"]);
+      await runMpc(["single", "off"]);
+      break;
+    default:
+      throw new Error(`Unsupported playback mode: ${mode}`);
+  }
+}
+
 async function applyMpcPlaybackAction(action) {
   switch (action.type) {
     case "play_pause": {
@@ -2439,6 +2550,11 @@ async function applyMpcPlaybackAction(action) {
     case "favorite_toggle":
       favorite = !favorite;
       break;
+    case "play_mode_set": {
+      const mode = normalizePlaybackMode(action.mode);
+      await applyMpcPlayMode(mode);
+      break;
+    }
     case "volume_set": {
       const percent = Number(action.value);
       if (!Number.isFinite(percent) || percent < 0 || percent > 100) {
@@ -3877,7 +3993,7 @@ function applyPlaybackAction(action) {
       break;
     case "next":
       mockSelectedLocalTrack = null;
-      trackIndex = (trackIndex + 1) % tracks.length;
+      trackIndex = playMode === "shuffle" ? randomMockTrackIndex(trackIndex) : (trackIndex + 1) % tracks.length;
       elapsedSeconds = 0;
       playbackState = "playing";
       lastTickAt = Date.now();
@@ -3901,6 +4017,9 @@ function applyPlaybackAction(action) {
     }
     case "favorite_toggle":
       favorite = !favorite;
+      break;
+    case "play_mode_set":
+      playMode = normalizePlaybackMode(action.mode);
       break;
     case "volume_set": {
       const percent = Number(action.value);
@@ -4179,6 +4298,11 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "GET" && url.pathname === "/api/v1/audio/library") {
       sendJson(response, 200, await getAudioLibraryPayload(url.searchParams));
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/v1/media/background-videos") {
+      sendJson(response, 200, await getAmbientBackgroundVideosPayload());
       return;
     }
 

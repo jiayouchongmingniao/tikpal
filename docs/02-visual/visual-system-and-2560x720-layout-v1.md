@@ -80,7 +80,7 @@ Purpose: long-dwell visual state.
 
 Layering:
 
-1. WebGL flame visual background.
+1. Full-viewport fireplace image and MP4 video background.
 2. Low-contrast vignette and readability layer.
 3. Playback HUD.
 4. Weak settings fallback entry.
@@ -94,7 +94,7 @@ Default HUD:
 
 Tap-boost HUD:
 
-- Increase opacity and information density for 3 seconds.
+- Increase opacity and information density for 5 seconds.
 - Fade in/out over 200-300ms.
 - Do not open player controls on tap.
 
@@ -104,6 +104,15 @@ Suggested composition:
 - Playback capsule or HUD sits low-left.
 - Time and date sit high-right or right-side depending on final composition.
 - Progress can stretch near the bottom edge without becoming a full player.
+- Temporary transport controls sit in one shallow horizontal row so the 720px height does not feel crowded.
+- The row can include scene previous/next, playback mode, previous/play/next, and lyrics visibility, but not queue or playlist content.
+- Playback mode should read as one segmented control with exactly one active state: sequence, repeat-one, or shuffle.
+
+Scene switching:
+
+- The incoming video should first seek to the current music elapsed time modulo its own duration.
+- Paused playback should freeze on the new scene frame after the seek.
+- Playing playback should resume video playback after the seek and crossfade from the previous scene.
 
 ## Player Control Overlay
 

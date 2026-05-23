@@ -161,6 +161,11 @@ export function useKioskGestures(options: GestureOptions): GestureHandlers & { g
       const primaryDeltaY = pointer.y - pointer.startY;
       const distance = Math.hypot(primaryDeltaX, primaryDeltaY);
 
+      if (pointer.protectedStart) {
+        resetPointers();
+        return;
+      }
+
       if (options.mode === "ambient") {
         if (pointers.length >= 2 && averageDeltaY > TWO_FINGER_DOWN_THRESHOLD) {
           options.onOpenSettings();

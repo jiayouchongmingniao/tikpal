@@ -28,7 +28,8 @@ type AppMode = "ambient" | "player" | "quickSettings" | "quickMenu";
 | Long press | Ambient | Open quick menu. |
 | Vertical drag in left ambient zone | Ambient | Live volume adjustment against moOde volume state. |
 | Vertical drag in right ambient zone | Ambient | Live display brightness adjustment through DDC/CI when available. |
-| Horizontal swipe | Ambient | Optional v2 ambience switch. |
+| Ambient control row buttons | Ambient HUD visible | Previous scene, play mode, previous track, play/pause, next track, lyrics, and next scene. |
+| Arrow keys | Ambient HUD visible | Up/down change scene, left/right change track, Space/Enter toggles play/pause. |
 
 ## Gesture Thresholds
 
@@ -84,6 +85,9 @@ stateDiagram-v2
 
 - Tap does not open controls; it only toggles the weak playback HUD.
 - Startup should show the HUD briefly, then let the flame scene return to a quieter default after 5 seconds.
+- Scene controls stay inside the temporary HUD. They do not open a scene browser or playlist drawer.
+- Playback mode is a mutually exclusive three-state control: sequence, repeat-one, or shuffle.
+- Ambient must not show queue or playlist content; queue preview stays in the Player overlay.
 - The left edge band is reserved for live volume drag and should not fall through to the generic one-finger swipe-down player gesture.
 - The right edge band is reserved for live brightness drag and should not fall through to the generic one-finger swipe-down player gesture.
 - If DDC/CI brightness is unavailable on the target display, the right-side control zone should show unavailable feedback instead of behaving like a normal ambient gesture lane.

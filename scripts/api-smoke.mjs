@@ -248,6 +248,7 @@ async function run() {
     assert(initial.response.ok, "system state should return 200");
     assert(initial.body.runtime.apiMode === "mock", "runtime should report mock API mode");
     assert(initial.body.playback.title, "playback title should be present");
+    assert(initial.body.playback.settings.playMode === "sequence", "playback should expose sequence mode by default");
     assert(initial.body.audio.currentSource.id === "mpd", "system state should expose current audio source");
     assert(initial.body.lyrics?.sourceScope === "local_playback", "system state should expose lyrics state");
 
@@ -289,6 +290,37 @@ async function run() {
     assert(localTrackSwitch.body.playback.title === localLibrary.body.tracks[0].title, "local track switch should update playback title");
     assert(localTrackSwitch.body.playback.artist === localLibrary.body.tracks[0].artist, "local track switch should update playback artist");
     assert(localTrackSwitch.body.playback.albumArtUrl === localLibrary.body.tracks[0].albumArtUrl, "local track switch should update playback cover art");
+
+    const repeatOne = await request("/api/v1/playback/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "play_mode_set", mode: "repeat_one" })
+    });
+    assert(repeatOne.response.ok, "repeat_one play mode should return 200");
+    assert(repeatOne.body.playback.settings.playMode === "repeat_one", "repeat_one should enable single-track repeat");
+    assert(repeatOne.body.playback.settings.playMode !== "shuffle", "repeat_one should not leave shuffle active");
+    const shuffleOn = await request("/api/v1/playback/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "play_mode_set", mode: "shuffle" })
+    });
+    assert(shuffleOn.response.ok, "shuffle play mode should return 200");
+    assert(shuffleOn.body.playback.settings.playMode === "shuffle", "shuffle should enable random playback");
+    assert(shuffleOn.body.playback.settings.playMode !== "repeat_one", "shuffle should turn repeat_one off");
+    const sequenceMode = await request("/api/v1/playback/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "play_mode_set", mode: "sequence" })
+    });
+    assert(sequenceMode.response.ok, "sequence play mode should return 200");
+    assert(sequenceMode.body.playback.settings.playMode === "sequence", "sequence should restore ordinary playback");
+    const invalidPlayMode = await request("/api/v1/playback/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "play_mode_set", mode: "bad_mode" })
+    });
+    assert(invalidPlayMode.response.status === 400, "invalid play mode should return 400");
+
+    const backgroundVideos = await request("/api/v1/media/background-videos");
+    assert(backgroundVideos.response.ok, "background video catalog should return 200");
+    assert(backgroundVideos.body.total >= 1, "background video catalog should include at least one MP4");
+    assert(backgroundVideos.body.videos.every((video) => video.src.startsWith("/assets/") && video.src.endsWith(".mp4")), "background videos should expose asset MP4 URLs");
 
     const radios = await request("/api/v1/audio/radios?q=ambient&genre=Ambient");
     assert(radios.response.ok, "radio catalog should return 200");

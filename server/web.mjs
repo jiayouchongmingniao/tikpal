@@ -37,6 +37,34 @@ function isInsideDist(filePath) {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
+function parseRangeHeader(rangeHeader, size) {
+  const match = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader ?? "");
+  if (!match) return null;
+
+  const [, rawStart, rawEnd] = match;
+  if (!rawStart && !rawEnd) return null;
+
+  if (!rawStart) {
+    const suffixLength = Number(rawEnd);
+    if (!Number.isInteger(suffixLength) || suffixLength <= 0) return null;
+    return {
+      start: Math.max(size - suffixLength, 0),
+      end: size - 1
+    };
+  }
+
+  const start = Number(rawStart);
+  const end = rawEnd ? Number(rawEnd) : size - 1;
+  if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start || start >= size) {
+    return null;
+  }
+
+  return {
+    start,
+    end: Math.min(end, size - 1)
+  };
+}
+
 async function resolveStaticFile(urlPathname) {
   const cleanPath = decodeURIComponent(urlPathname).replace(/^\/+/, "");
   const candidate = path.resolve(DIST_DIR, cleanPath || "index.html");
@@ -119,10 +147,44 @@ const server = http.createServer(async (request, response) => {
   const extension = path.extname(file.filePath);
   const isAsset = file.filePath.includes(`${path.sep}assets${path.sep}`);
   const isMutableMedia = extension === ".mp4";
-  response.writeHead(200, {
+  const commonHeaders = {
     "Content-Type": MIME_TYPES.get(extension) ?? "application/octet-stream",
-    "Content-Length": file.info.size,
     "Cache-Control": isMutableMedia ? "no-store" : isAsset ? "public, max-age=31536000, immutable" : "no-store"
+  };
+
+  if (isMutableMedia) {
+    commonHeaders["Accept-Ranges"] = "bytes";
+    const requestedRange = request.headers.range;
+    if (requestedRange) {
+      const range = parseRangeHeader(requestedRange, file.info.size);
+      if (!range) {
+        response.writeHead(416, {
+          ...commonHeaders,
+          "Content-Range": `bytes */${file.info.size}`
+        });
+        response.end();
+        return;
+      }
+
+      response.writeHead(206, {
+        ...commonHeaders,
+        "Content-Length": range.end - range.start + 1,
+        "Content-Range": `bytes ${range.start}-${range.end}/${file.info.size}`
+      });
+
+      if (request.method === "HEAD") {
+        response.end();
+        return;
+      }
+
+      createReadStream(file.filePath, range).pipe(response);
+      return;
+    }
+  }
+
+  response.writeHead(200, {
+    ...commonHeaders,
+    "Content-Length": file.info.size
   });
 
   if (request.method === "HEAD") {

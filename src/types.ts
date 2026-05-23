@@ -3,6 +3,7 @@ export type FontTheme = "sans" | "serif" | "mono";
 export type LyricsFontSize = "small" | "medium" | "large";
 
 export type PlaybackState = "playing" | "paused" | "stopped";
+export type PlaybackMode = "sequence" | "repeat_one" | "shuffle";
 
 export type SourceState =
   | "audio"
@@ -138,6 +139,19 @@ export interface AudioLibraryResponse {
   updatedAt: string;
 }
 
+export interface BackgroundVideoSummary {
+  id: string;
+  filename: string;
+  label: string;
+  src: string;
+}
+
+export interface BackgroundVideoCatalogResponse {
+  videos: BackgroundVideoSummary[];
+  total: number;
+  updatedAt: string;
+}
+
 export interface VolumeState {
   db: number;
   percent: number;
@@ -207,7 +221,12 @@ export interface PlaybackSummary {
   currentTrackIndex: number;
   queueLength: number;
   favorite: boolean;
+  settings: PlaybackSettings;
   queuePreview: QueueEntrySummary[];
+}
+
+export interface PlaybackSettings {
+  playMode: PlaybackMode;
 }
 
 export interface PlaybackTimingDiagnostics {
@@ -279,12 +298,22 @@ export interface TikpalState {
   lyrics: LyricsState;
 }
 
-export type PlaybackActionType = "play_pause" | "play" | "pause" | "next" | "previous" | "seek" | "favorite_toggle" | "volume_set";
+export type PlaybackActionType =
+  | "play_pause"
+  | "play"
+  | "pause"
+  | "next"
+  | "previous"
+  | "seek"
+  | "favorite_toggle"
+  | "play_mode_set"
+  | "volume_set";
 export type SystemActionType = "library_scan" | "reboot" | "shutdown" | "brightness_set";
 
 export interface PlaybackActionRequest {
   type: PlaybackActionType;
   value?: number;
+  mode?: PlaybackMode;
 }
 
 export interface SystemActionRequest {

@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
-import { Settings, SunMedium, Volume2 } from "lucide-react";
+import { Captions, CaptionsOff, GalleryHorizontalEnd, ListMusic, Pause, Play, Repeat1, Settings, Shuffle, SkipBack, SkipForward, SunMedium, Volume2 } from "lucide-react";
+import { fetchBackgroundVideos } from "../api/tikpalClient";
 import { FlameScene } from "./FlameScene";
 import { buildGeneratedCoverArtUrl } from "../coverArt";
 import { formatDuration, formatSampleRate } from "../mockState";
 import type { TikpalDataStatus } from "../hooks/useTikpalState";
-import type { AudioState, FontTheme, LyricsFontSize, LyricsState, PlaybackActionType, PlaybackSummary, SystemActionType, SystemState, TikpalState } from "../types";
+import type { AudioState, BackgroundVideoSummary, FontTheme, LyricsFontSize, LyricsState, PlaybackActionType, PlaybackMode, PlaybackSummary, SystemActionType, SystemState, TikpalState } from "../types";
 
 interface AmbientScreenProps {
   hudVisible: boolean;
@@ -18,8 +19,10 @@ interface AmbientScreenProps {
   audio: AudioState;
   system: SystemState;
   status: TikpalDataStatus;
-  onPlaybackAction: (type: PlaybackActionType, value?: number) => Promise<TikpalState>;
+  onPlaybackAction: (type: PlaybackActionType, value?: number, mode?: PlaybackMode) => Promise<TikpalState>;
   onSystemAction: (type: SystemActionType, value?: number) => Promise<TikpalState>;
+  onHudActivity: () => void;
+  onLyricsVisibleChange: (visible: boolean) => void;
   onOpenSettings: () => void;
 }
 
@@ -40,6 +43,12 @@ interface AdjustOverlayState {
 
 const DRAG_PIXELS_PER_PERCENT = 4;
 const WHEEL_PIXELS_PER_PERCENT = 9;
+const DEFAULT_BACKGROUND_VIDEO: BackgroundVideoSummary = {
+  id: "output_2560x720-4k",
+  filename: "output_2560x720-4k.mp4",
+  label: "output_2560x720-4k.mp4",
+  src: "/assets/output_2560x720-4k.mp4"
+};
 
 function clampPercent(value: number) {
   return Math.max(0, Math.min(100, Math.round(value)));
@@ -121,17 +130,23 @@ export function AmbientScreen({
   status,
   onPlaybackAction,
   onSystemAction,
+  onHudActivity,
+  onLyricsVisibleChange,
   onOpenSettings
 }: AmbientScreenProps) {
   const dragStateRef = useRef<DragState | null>(null);
   const adjustDismissTimerRef = useRef<number | null>(null);
+  const selectedBackgroundVideoSrcRef = useRef(DEFAULT_BACKGROUND_VIDEO.src);
   const requestStateRef = useRef<Record<AmbientAdjustChannel, { inFlight: boolean; queued: number | null; lastSent: number | null }>>({
     volume: { inFlight: false, queued: null, lastSent: null },
     brightness: { inFlight: false, queued: null, lastSent: null }
   });
   const [adjustOverlay, setAdjustOverlay] = useState<AdjustOverlayState | null>(null);
+  const [backgroundVideos, setBackgroundVideos] = useState<BackgroundVideoSummary[]>([DEFAULT_BACKGROUND_VIDEO]);
+  const [backgroundVideoIndex, setBackgroundVideoIndex] = useState(0);
   const [frozenLyricsLineIndex, setFrozenLyricsLineIndex] = useState<number | null>(null);
   const [staticLyricsLineIndex, setStaticLyricsLineIndex] = useState(0);
+  const currentBackgroundVideo = backgroundVideos[backgroundVideoIndex] ?? DEFAULT_BACKGROUND_VIDEO;
   const title = playback.title ?? "Not Playing";
   const artist = playback.artist ?? "Unknown Artist";
   const album = playback.album ?? "No Album";
@@ -182,6 +197,94 @@ export function AmbientScreen({
     ? ({ "--ambient-lyrics-marquee-duration": `${marqueeDurationSeconds}s` } as CSSProperties)
     : undefined;
   const showLyricsLayer = lyricsVisible && Boolean(tickerText);
+  const isPlaybackPending = status.pending;
+  const isPlaying = playback.state === "playing";
+  const playbackSettings = playback.settings ?? { playMode: "sequence" };
+  const playMode = playbackSettings.playMode;
+
+  useEffect(() => {
+    selectedBackgroundVideoSrcRef.current = currentBackgroundVideo.src;
+  }, [currentBackgroundVideo.src]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    void fetchBackgroundVideos(controller.signal)
+      .then((payload) => {
+        if (payload.videos.length === 0) return;
+
+        const selectedSrc = selectedBackgroundVideoSrcRef.current;
+        const preferredIndex = payload.videos.findIndex((video) => video.src === selectedSrc);
+        const fallbackIndex = payload.videos.findIndex((video) => video.src === DEFAULT_BACKGROUND_VIDEO.src);
+        setBackgroundVideos(payload.videos);
+        setBackgroundVideoIndex(preferredIndex !== -1 ? preferredIndex : Math.max(0, fallbackIndex));
+      })
+      .catch(() => {
+        // Keep the bundled default video when the API is not available.
+      });
+
+    return () => controller.abort();
+  }, []);
+
+  function switchBackgroundVideo(direction: -1 | 1) {
+    onHudActivity();
+    if (backgroundVideos.length <= 1) return;
+    setBackgroundVideoIndex((current) => (current + direction + backgroundVideos.length) % backgroundVideos.length);
+  }
+
+  function handleAmbientPlaybackAction(type: PlaybackActionType) {
+    onHudActivity();
+    if (isPlaybackPending) return;
+    void onPlaybackAction(type);
+  }
+
+  function handlePlayModeChange(mode: PlaybackMode) {
+    onHudActivity();
+    if (isPlaybackPending || mode === playMode) return;
+    void onPlaybackAction("play_mode_set", undefined, mode);
+  }
+
+  function toggleLyricsLayer() {
+    onHudActivity();
+    onLyricsVisibleChange(!lyricsVisible);
+  }
+
+  useEffect(() => {
+    if (!hudVisible) return undefined;
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.defaultPrevented) return;
+      if (event.target instanceof HTMLElement && event.target.closest("input, textarea, select, button")) return;
+
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        switchBackgroundVideo(-1);
+        return;
+      }
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        switchBackgroundVideo(1);
+        return;
+      }
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        handleAmbientPlaybackAction("previous");
+        return;
+      }
+      if (event.key === "ArrowRight") {
+        event.preventDefault();
+        handleAmbientPlaybackAction("next");
+        return;
+      }
+      if (event.key === " " || event.key === "Enter") {
+        event.preventDefault();
+        handleAmbientPlaybackAction("play_pause");
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [backgroundVideos.length, hudVisible, isPlaybackPending, onHudActivity, onPlaybackAction]);
 
   function clearAdjustDismissTimer() {
     if (adjustDismissTimerRef.current !== null) {
@@ -430,7 +533,7 @@ export function AmbientScreen({
 
   return (
     <section className={`ambient-screen ${hudVisible ? "is-hud-visible" : "is-hud-hidden"}`} aria-label="Ambient flame screen" onWheelCapture={handleAmbientWheelCapture}>
-      <FlameScene lowPower={audioProtectionMode} />
+      <FlameScene lowPower={audioProtectionMode} playback={playback} videoSrc={currentBackgroundVideo.src} />
       <div className="ambient-vignette" />
       <div
         className="ambient-adjust-zone ambient-adjust-zone-left"
@@ -453,9 +556,131 @@ export function AmbientScreen({
         onWheel={handleZoneWheel("brightness")}
       />
 
-      <button className="icon-button ambient-settings" type="button" onClick={onOpenSettings} aria-label="Open settings" title="Settings">
+      <button className="icon-button ambient-settings" type="button" data-gesture-protected onClick={onOpenSettings} aria-label="Open settings" title="Settings">
         <Settings size={26} strokeWidth={1.8} />
       </button>
+
+      <div
+        className="ambient-transport"
+        data-gesture-protected
+        aria-hidden={!hudVisible}
+        onClick={(event) => event.stopPropagation()}
+        onPointerDown={(event) => {
+          event.stopPropagation();
+          onHudActivity();
+        }}
+        onPointerMove={(event) => event.stopPropagation()}
+        onPointerUp={(event) => event.stopPropagation()}
+        onPointerCancel={(event) => event.stopPropagation()}
+        onWheel={(event) => event.stopPropagation()}
+      >
+        <div className="ambient-transport-main">
+          <button
+            className="ambient-transport-button ambient-transport-scene ambient-transport-scene-previous"
+            type="button"
+            aria-label="Previous scene"
+            title="Previous scene"
+            tabIndex={hudVisible ? 0 : -1}
+            disabled={backgroundVideos.length <= 1}
+            onClick={() => switchBackgroundVideo(-1)}
+          >
+            <GalleryHorizontalEnd size={30} strokeWidth={1.8} />
+          </button>
+          <div className="ambient-play-mode" role="group" aria-label="Playback mode">
+            <button
+              className={`ambient-play-mode-button ${playMode === "sequence" ? "is-active" : ""}`}
+              type="button"
+              aria-label="Sequence playback"
+              title="Sequence playback"
+              aria-pressed={playMode === "sequence"}
+              tabIndex={hudVisible ? 0 : -1}
+              disabled={isPlaybackPending}
+              onClick={() => handlePlayModeChange("sequence")}
+            >
+              <ListMusic size={22} strokeWidth={1.8} />
+            </button>
+            <button
+              className={`ambient-play-mode-button ${playMode === "repeat_one" ? "is-active" : ""}`}
+              type="button"
+              aria-label="Repeat current track"
+              title="Repeat current track"
+              aria-pressed={playMode === "repeat_one"}
+              tabIndex={hudVisible ? 0 : -1}
+              disabled={isPlaybackPending}
+              onClick={() => handlePlayModeChange("repeat_one")}
+            >
+              <Repeat1 size={22} strokeWidth={1.8} />
+            </button>
+            <button
+              className={`ambient-play-mode-button ${playMode === "shuffle" ? "is-active" : ""}`}
+              type="button"
+              aria-label="Shuffle playback"
+              title="Shuffle playback"
+              aria-pressed={playMode === "shuffle"}
+              tabIndex={hudVisible ? 0 : -1}
+              disabled={isPlaybackPending}
+              onClick={() => handlePlayModeChange("shuffle")}
+            >
+              <Shuffle size={22} strokeWidth={1.8} />
+            </button>
+          </div>
+          <button
+            className="ambient-transport-button ambient-transport-track ambient-transport-left"
+            type="button"
+            aria-label="Previous track"
+            title="Previous track"
+            tabIndex={hudVisible ? 0 : -1}
+            disabled={isPlaybackPending}
+            onClick={() => handleAmbientPlaybackAction("previous")}
+          >
+            <SkipBack size={33} fill="currentColor" strokeWidth={1.6} />
+          </button>
+          <button
+            className="ambient-transport-button ambient-transport-play"
+            type="button"
+            aria-label={isPlaying ? "Pause" : "Play"}
+            title={isPlaying ? "Pause" : "Play"}
+            tabIndex={hudVisible ? 0 : -1}
+            disabled={isPlaybackPending}
+            onClick={() => handleAmbientPlaybackAction("play_pause")}
+          >
+            {isPlaying ? <Pause size={34} fill="currentColor" strokeWidth={1.6} /> : <Play size={34} fill="currentColor" strokeWidth={1.6} />}
+          </button>
+          <button
+            className="ambient-transport-button ambient-transport-track ambient-transport-right"
+            type="button"
+            aria-label="Next track"
+            title="Next track"
+            tabIndex={hudVisible ? 0 : -1}
+            disabled={isPlaybackPending}
+            onClick={() => handleAmbientPlaybackAction("next")}
+          >
+            <SkipForward size={33} fill="currentColor" strokeWidth={1.6} />
+          </button>
+          <button
+            className={`ambient-transport-button ambient-transport-setting ${lyricsVisible ? "is-active" : ""}`}
+            type="button"
+            aria-label={lyricsVisible ? "Hide lyrics" : "Show lyrics"}
+            title={lyricsVisible ? "Hide lyrics" : "Show lyrics"}
+            aria-pressed={lyricsVisible}
+            tabIndex={hudVisible ? 0 : -1}
+            onClick={toggleLyricsLayer}
+          >
+            {lyricsVisible ? <Captions size={25} strokeWidth={1.8} /> : <CaptionsOff size={25} strokeWidth={1.8} />}
+          </button>
+          <button
+            className="ambient-transport-button ambient-transport-scene ambient-transport-scene-next"
+            type="button"
+            aria-label="Next scene"
+            title="Next scene"
+            tabIndex={hudVisible ? 0 : -1}
+            disabled={backgroundVideos.length <= 1}
+            onClick={() => switchBackgroundVideo(1)}
+          >
+            <GalleryHorizontalEnd size={30} strokeWidth={1.8} />
+          </button>
+        </div>
+      </div>
 
       <div className="ambient-clock" aria-label="Current time">
         <div className="ambient-time">{timeLabel}</div>

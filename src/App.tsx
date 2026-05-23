@@ -56,7 +56,7 @@ export default function App() {
   const [fontTheme, setFontTheme] = useState<FontTheme>(readInitialFontTheme);
   const [lyricsVisible, setLyricsVisible] = useState(readInitialLyricsVisible);
   const [lyricsFontSize, setLyricsFontSize] = useState<LyricsFontSize>(readInitialLyricsFontSize);
-  const { mode, hudVisible, idleTotalMs, idleRemainingMs, toggleHud, changeMode, returnAmbient, resetIdleTimer } = useAppMode(readInitialMode());
+  const { mode, hudVisible, idleTotalMs, idleRemainingMs, showHud, toggleHud, changeMode, returnAmbient, resetIdleTimer } = useAppMode(readInitialMode());
   const { state: tikpalState, status: tikpalStatus, sendPlaybackAction, sendSystemAction, sendSourceSwitch } = useTikpalState();
 
   useBrowserKioskGuard();
@@ -108,6 +108,8 @@ export default function App() {
         status={tikpalStatus}
         onPlaybackAction={sendPlaybackAction}
         onSystemAction={sendSystemAction}
+        onHudActivity={showHud}
+        onLyricsVisibleChange={setLyricsVisible}
         onOpenSettings={() => changeMode("quickSettings")}
       />
 

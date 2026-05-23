@@ -13,6 +13,9 @@ export const playback: PlaybackSummary = {
   currentTrackIndex: 1,
   queueLength: 13,
   favorite: false,
+  settings: {
+    playMode: "sequence"
+  },
   queuePreview: [
     {
       id: "mock-queue-1",

@@ -30,6 +30,16 @@ export function useAppMode(initialMode: AppMode = "ambient") {
     }
   }, []);
 
+  const scheduleHudAutoHide = useCallback(() => {
+    clearTimer(hudTimerRef);
+    hudTimerRef.current = window.setTimeout(() => setHudVisible(false), HUD_AUTO_HIDE_MS);
+  }, [clearTimer]);
+
+  const showHud = useCallback(() => {
+    setHudVisible(true);
+    scheduleHudAutoHide();
+  }, [scheduleHudAutoHide]);
+
   const resetIdleTimer = useCallback(
     (nextMode = mode) => {
       clearTimer(idleTimerRef);
@@ -103,6 +113,7 @@ export function useAppMode(initialMode: AppMode = "ambient") {
     hudVisible,
     idleTotalMs,
     idleRemainingMs,
+    showHud,
     toggleHud,
     changeMode,
     returnAmbient,

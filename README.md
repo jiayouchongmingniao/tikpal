@@ -150,7 +150,9 @@ The real moOde / MPD adapter remains the audio owner. In `mpc` mode, Tikpal keep
 
 Ambient lyrics now have two recognition paths behind the same `lyrics` state. Local `MPD` / `Radio` playback still resolves lyrics from metadata through LRCLIB, while Bluetooth first tries BlueZ / AVRCP title metadata and playback position, then can fall back to a short local PCM sample identified through ACRCloud before reusing the same LRCLIB lyrics lookup. The Bluetooth recognition path is only armed while Bluetooth is the selected source and the input is actually connected, and it keeps its own `bluetooth_input` scope so source truth stays separate from `audio.currentSource` and `playback.source`.
 
-Quick Settings now also includes a local font preset selector, and the ambient flame screen has split live-control zones: left for volume, right for DDC/CI brightness on supported displays.
+Quick Settings now also includes a local font preset selector, and the ambient flame screen has split live-control zones: left for volume, right for DDC/CI brightness on supported displays. When the Ambient HUD is visible, the center control row stays intentionally shallow for the 2560 x 720 kiosk layout: previous scene, playback mode, previous track, play/pause, next track, lyrics, and next scene. Playback mode is a single mutually exclusive `playMode` value: `sequence`, `repeat_one`, or `shuffle`.
+
+Ambient background videos are discovered from `public/assets/*.mp4` through `GET /api/v1/media/background-videos`. Scene changes mount the next video layer, seek it to `playback.elapsedSeconds % video.duration`, then crossfade; paused playback stays frozen on the new scene frame, while playing playback resumes the video after alignment. The web server serves MP4 files with byte-range support so browser video seeking works reliably.
 
 Resource OTA updates are handled by `npm run ota:resources -- <package-dir>`. A resource OTA package can replace `assets/music/_metadata/library_manifest.csv`, copy the referenced local music files under `assets/music/`, and replace the mutable fireplace video at `assets/output_2560x720-4k.mp4`. The script validates the music manifest and MP4 before writing, syncs `public/assets`, also syncs `dist/assets` when a production build exists, and records the result in `.tikpal/resource-ota-state.json`.
 
@@ -161,4 +163,4 @@ The repo is no longer mock-only, but a few visible pieces are still only partial
 - `npm run test:interaction` is still failing at the initial `ambient root renders` check, so browser-driven regression coverage is not yet trustworthy.
 - The source model is still intentionally focused. The UI now exposes `Library`, `Audio`, `Spotify Connect`, `Radio`, `Bluetooth`, and `AirPlay`, but not the full moOde management surface.
 - The ambient right-side brightness gesture depends on working DDC/CI on the target display. When `ddcutil` cannot read or set VCP `0x10`, Tikpal currently degrades to read-only/unavailable status instead of offering a fallback brightness path.
-- The player `Queue` button is still a placeholder entry point; there is no queue drawer or queue management surface implemented behind it yet.
+- Ambient deliberately does not expose playlist or queue UI; queue preview belongs in the Player overlay so the default 720px-high dwell screen stays calm.

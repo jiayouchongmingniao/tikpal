@@ -1,6 +1,8 @@
 import type {
   AudioLibraryFilters,
   AudioLibraryResponse,
+  BackgroundVideoCatalogResponse,
+  PlaybackMode,
   PlaybackActionRequest,
   PlaybackActionType,
   RadioCatalogFilters,
@@ -70,8 +72,18 @@ export async function fetchAudioLibrary(filters: AudioLibraryFilters = {}, signa
   return readJson<AudioLibraryResponse>(response);
 }
 
-export async function sendPlaybackAction(type: PlaybackActionType, value?: number): Promise<TikpalState> {
-  const body: PlaybackActionRequest = { type, value };
+export async function fetchBackgroundVideos(signal?: AbortSignal): Promise<BackgroundVideoCatalogResponse> {
+  const response = await fetch(`${API_ROOT}/media/background-videos`, {
+    headers: { Accept: "application/json" },
+    signal
+  });
+  return readJson<BackgroundVideoCatalogResponse>(response);
+}
+
+export async function sendPlaybackAction(type: PlaybackActionType, value?: number, mode?: PlaybackMode): Promise<TikpalState> {
+  const body: PlaybackActionRequest = { type };
+  if (typeof value === "number") body.value = value;
+  if (mode) body.mode = mode;
   const response = await fetch(`${API_ROOT}/playback/actions`, {
     method: "POST",
     headers: {
