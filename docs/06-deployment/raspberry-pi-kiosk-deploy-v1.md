@@ -160,6 +160,8 @@ resource-ota/
    ├─ output_2560x720-4k.mp4
    └─ music
       ├─ _metadata/library_manifest.csv
+      ├─ Focus/folder.jpg
+      ├─ Focus/.../folder.jpg
       └─ Focus/.../*.mp3
 ```
 
@@ -169,7 +171,7 @@ Apply it on the device from the app checkout:
 npm run ota:resources -- /path/to/resource-ota
 ```
 
-The script validates `assets/music/_metadata/library_manifest.csv`, checks that manifest track paths are safe and present in the package or already installed library, validates the replacement MP4, writes `public/assets`, syncs `dist/assets` when a production build is present, and records `.tikpal/resource-ota-state.json`. Because the API reads the local music manifest on each `/api/v1/audio/library` request and the web server serves MP4 with `Cache-Control: no-store`, a page reload is enough for the new library list and fireplace video to appear.
+The script validates `assets/music/_metadata/library_manifest.csv`, checks that manifest track and optional cover paths are safe and present in the package or already installed library, validates the replacement MP4, writes `public/assets`, syncs `dist/assets` when a production build is present, and records `.tikpal/resource-ota-state.json`. Because the API reads the local music manifest on each `/api/v1/audio/library` request and the web server serves MP4 with `Cache-Control: no-store`, a page reload is enough for the new library list, cover art, and fireplace video to appear.
 
 Install and restart API + web services:
 

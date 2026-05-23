@@ -96,8 +96,8 @@ export async function sendSystemAction(type: SystemActionType, value?: number): 
   return readJson<TikpalState>(response);
 }
 
-export async function sendSourceSwitch(target: SourceSwitchTarget, radioStationId?: string): Promise<TikpalState> {
-  const body: SourceSwitchRequest = { target, radioStationId };
+export async function sendSourceSwitch(target: SourceSwitchTarget, radioStationId?: string, localTrackPath?: string): Promise<TikpalState> {
+  const body: SourceSwitchRequest = { target, radioStationId, localTrackPath };
   const response = await fetch(`${API_ROOT}/audio/source`, {
     method: "POST",
     headers: {

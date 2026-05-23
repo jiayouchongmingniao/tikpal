@@ -106,6 +106,9 @@ export interface AudioLibraryTrackSummary {
   subCategory: string;
   durationSeconds: number | null;
   path: string | null;
+  albumArtUrl: string | null;
+  albumArtLabel: string | null;
+  albumArtScope: string | null;
   active: boolean;
 }
 
@@ -292,4 +295,5 @@ export interface SystemActionRequest {
 export interface SourceSwitchRequest {
   target: SourceSwitchTarget;
   radioStationId?: string;
+  localTrackPath?: string;
 }

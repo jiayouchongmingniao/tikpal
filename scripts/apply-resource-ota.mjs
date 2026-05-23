@@ -13,6 +13,8 @@ const DEFAULT_MUSIC_MANIFEST = "assets/music/_metadata/library_manifest.csv";
 const DEFAULT_FIREPLACE_VIDEO = "assets/output_2560x720-4k.mp4";
 const DEFAULT_FIREPLACE_VIDEO_TARGET = "output_2560x720-4k.mp4";
 const AUDIO_EXTENSIONS = new Set([".aac", ".flac", ".m4a", ".mp3", ".ogg", ".wav"]);
+const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".webp"]);
+const COVER_COLUMNS = ["cover_relative_path", "cover_path", "album_art_relative_path", "artwork_relative_path"];
 
 function usage() {
   return [
@@ -175,6 +177,7 @@ async function validateMusicManifest({ manifestPath, packageMusicRoot, publicMus
   }
 
   const missingFiles = [];
+  const missingCovers = [];
   const trackRows = [];
   for (const row of parsed.rows) {
     const relativePath = row.final_relative_path?.trim();
@@ -191,11 +194,32 @@ async function validateMusicManifest({ manifestPath, packageMusicRoot, publicMus
     if (!(await exists(packagePath)) && !(await exists(installedPath))) {
       missingFiles.push(relativePath);
     }
+
+    for (const column of COVER_COLUMNS) {
+      const coverPath = row[column]?.trim();
+      if (!coverPath) continue;
+      if (!isSafeRelativePath(coverPath)) {
+        throw new Error(`Music manifest contains unsafe cover path: ${coverPath}`);
+      }
+      if (!IMAGE_EXTENSIONS.has(path.extname(coverPath).toLowerCase())) {
+        throw new Error(`Music manifest cover path has unsupported image extension: ${coverPath}`);
+      }
+
+      const packageCoverPath = path.join(packageMusicRoot, coverPath);
+      const installedCoverPath = path.join(publicMusicRoot, coverPath);
+      if (!(await exists(packageCoverPath)) && !(await exists(installedCoverPath))) {
+        missingCovers.push(coverPath);
+      }
+    }
+
     trackRows.push(row);
   }
 
   if (missingFiles.length > 0) {
     throw new Error(`Music manifest references missing files: ${missingFiles.slice(0, 5).join(", ")}${missingFiles.length > 5 ? " ..." : ""}`);
+  }
+  if (missingCovers.length > 0) {
+    throw new Error(`Music manifest references missing cover files: ${missingCovers.slice(0, 5).join(", ")}${missingCovers.length > 5 ? " ..." : ""}`);
   }
 
   return {

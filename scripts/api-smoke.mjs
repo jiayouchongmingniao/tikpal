@@ -29,6 +29,12 @@ async function request(path, options = {}) {
   return { response, body };
 }
 
+async function requestBinary(path) {
+  const response = await fetch(`${BASE_URL}${path}`);
+  const body = Buffer.from(await response.arrayBuffer());
+  return { response, body };
+}
+
 function assert(condition, message) {
   if (!condition) {
     throw new Error(message);
@@ -268,6 +274,21 @@ async function run() {
     assert(localLibrary.body.storages.find((storage) => storage.id === "local")?.trackCount === localLibrary.body.total, "local storage track count should match manifest-backed total");
     assert(localLibrary.body.tracks.every((track) => track.storage === "local"), "local audio library should only return local tracks when filtered");
     assert(localLibrary.body.tracks[0]?.path, "local audio library tracks should expose manifest paths");
+    assert(localLibrary.body.tracks[0]?.albumArtUrl, "local audio library tracks should expose cover art URLs");
+    assert(localLibrary.body.tracks[0]?.albumArtLabel, "generic local library folder covers should expose overlay labels");
+    const localCover = await requestBinary(localLibrary.body.tracks[0].albumArtUrl);
+    assert(localCover.response.ok, "local library cover should return 200");
+    assert(localCover.response.headers.get("content-type")?.startsWith("image/"), "local library cover should be served as an image");
+    assert(localCover.body.length > 0, "local library cover should not be empty");
+    const localTrackSwitch = await request("/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({ target: "mpd", localTrackPath: localLibrary.body.tracks[0].path })
+    });
+    assert(localTrackSwitch.response.ok, "local track source switch should return 200");
+    assert(localTrackSwitch.body.audio.currentSource.id === "mpd", "local track switch should keep MPD as the current source");
+    assert(localTrackSwitch.body.playback.title === localLibrary.body.tracks[0].title, "local track switch should update playback title");
+    assert(localTrackSwitch.body.playback.artist === localLibrary.body.tracks[0].artist, "local track switch should update playback artist");
+    assert(localTrackSwitch.body.playback.albumArtUrl === localLibrary.body.tracks[0].albumArtUrl, "local track switch should update playback cover art");
 
     const radios = await request("/api/v1/audio/radios?q=ambient&genre=Ambient");
     assert(radios.response.ok, "radio catalog should return 200");

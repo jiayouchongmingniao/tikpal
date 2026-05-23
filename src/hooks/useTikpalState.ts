@@ -92,10 +92,10 @@ export function useTikpalState() {
     }
   }, []);
 
-  const sendSourceSwitch = useCallback(async (target: SourceSwitchTarget, radioStationId?: string) => {
+  const sendSourceSwitch = useCallback(async (target: SourceSwitchTarget, radioStationId?: string, localTrackPath?: string) => {
     setStatus((current) => ({ ...current, pending: true, error: null }));
     try {
-      const nextState = await postSourceSwitch(target, radioStationId);
+      const nextState = await postSourceSwitch(target, radioStationId, localTrackPath);
       setState(nextState);
       setStatus({ source: "api", pending: false, error: null });
       return nextState;

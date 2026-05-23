@@ -48,7 +48,7 @@ interface PlayerOverlayProps {
   status: TikpalDataStatus;
   fontTheme: FontTheme;
   onPlaybackAction: (type: PlaybackActionType, value?: number) => Promise<TikpalState>;
-  onSourceSwitch: (target: SourceSwitchTarget, radioStationId?: string) => Promise<TikpalState>;
+  onSourceSwitch: (target: SourceSwitchTarget, radioStationId?: string, localTrackPath?: string) => Promise<TikpalState>;
   onReturnAmbient: () => void;
 }
 
@@ -157,6 +157,9 @@ export function PlayerOverlay({
       subCategory: entry.active ? "Now Playing" : "Queue",
       durationSeconds: entry.durationSeconds,
       path: null,
+      albumArtUrl: null,
+      albumArtLabel: null,
+      albumArtScope: null,
       active: entry.active,
       storage: "nas"
     }))
@@ -254,10 +257,17 @@ export function PlayerOverlay({
       sourceStatusLabel(selectedExternalSource, pendingSource === selectedPrimaryPanel),
       status.pending ? "Syncing" : status.source === "api" ? "API Confirmed" : "Fallback Data"
     ];
+  const selectedLibraryArtworkUrl = libraryPanelActive ? selectedLibraryTrack?.albumArtUrl ?? null : null;
   const usePlaybackArtwork = nasActiveTrackSelected && Boolean(playback.albumArtUrl);
   const coverArtUrl = usePlaybackArtwork
     ? playback.albumArtUrl!
-    : buildGeneratedCoverArtUrl(displayTitle, displayArtist, displayAlbum, fontTheme);
+    : selectedLibraryArtworkUrl ?? buildGeneratedCoverArtUrl(displayTitle, displayArtist, displayAlbum, fontTheme);
+  const libraryCoverLabel = selectedLibraryArtworkUrl && selectedLibraryTrack?.albumArtLabel
+    ? {
+      title: selectedLibraryTrack.albumArtLabel,
+      scope: selectedLibraryTrack.albumArtScope ?? selectedLibraryTrack.album
+    }
+    : null;
 
   useEffect(() => {
     if (!active) {
@@ -430,16 +440,18 @@ export function PlayerOverlay({
     return sourceStatusLabel(source, pendingSource === panelId);
   }
 
-  async function switchSource(target: SourceSwitchTarget, radioStationId?: string) {
+  async function switchSource(target: SourceSwitchTarget, radioStationId?: string, localTrackPath?: string) {
     if (status.pending || pendingSource) return;
     setPendingSource(target);
     setSourceError(null);
     setSourceHint(null);
 
     try {
-      const nextState = await onSourceSwitch(target, radioStationId);
+      const nextState = await onSourceSwitch(target, radioStationId, localTrackPath);
       const nextSource = nextState.audio.sources.find((source) => source.id === target);
-      if (target === "mpd") {
+      if (target === "mpd" && localTrackPath) {
+        setSourceHint("Local track ready.");
+      } else if (target === "mpd") {
         setSourceHint("Library source ready.");
       } else if (target === "radio") {
         setSourceHint(`${nextSource?.secondaryStatus ?? "Radio ready."}`);
@@ -454,6 +466,13 @@ export function PlayerOverlay({
       setSourceError(error instanceof Error ? error.message : "Source switch failed");
     } finally {
       setPendingSource(null);
+    }
+  }
+
+  function handleLibraryTrackSelect(track: AudioLibraryTrackSummary) {
+    setSelectedLibraryTrackId(track.id);
+    if (track.storage === "local" && track.path) {
+      void switchSource("mpd", undefined, track.path);
     }
   }
 
@@ -645,8 +664,14 @@ export function PlayerOverlay({
       <button className="overlay-backdrop" type="button" tabIndex={active ? 0 : -1} aria-label="Return to ambient" onClick={onReturnAmbient} />
       <div className="player-shell" role="dialog" aria-modal="true" data-gesture-protected {...overlayReturnGesture}>
         <div className="cover-zone">
-          <div className="cover-art">
+          <div className={`cover-art ${libraryCoverLabel ? "has-library-cover-label" : ""}`}>
             <img src={coverArtUrl} alt="" />
+            {libraryCoverLabel ? (
+              <span className="cover-art-label" aria-hidden="true">
+                <strong>{libraryCoverLabel.title}</strong>
+                <em>{libraryCoverLabel.scope}</em>
+              </span>
+            ) : null}
           </div>
         </div>
 
@@ -899,9 +924,11 @@ export function PlayerOverlay({
                       aria-pressed={selected}
                       data-library-track={track.id}
                       data-gesture-control
-                      onClick={() => setSelectedLibraryTrackId(track.id)}
+                      onClick={() => handleLibraryTrackSelect(track)}
                     >
-                      <span className="library-track-index">{String(index + 1).padStart(2, "0")}</span>
+                      <span className="library-track-index">
+                        {track.albumArtUrl ? <img src={track.albumArtUrl} alt="" /> : String(index + 1).padStart(2, "0")}
+                      </span>
                       <span className="library-track-copy">
                         <strong>{track.title}</strong>
                         <em>{track.artist}</em>

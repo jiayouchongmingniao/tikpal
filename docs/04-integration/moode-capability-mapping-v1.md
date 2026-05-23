@@ -179,6 +179,7 @@ Current Batch 3 mock API contract:
 | `/api/v1/audio/sources` | `GET` | Compact source list plus current source summary for `mpd`, `audio`, `radio`, `spotify`, `bluetooth`, and `airplay`, including armed / connected state and any advertised receiver name that the frontend should surface during handoff or pairing. |
 | `/api/v1/audio/radios` | `GET` | Searchable radio catalog with query filters for text, genre, bitrate, and paging window, sized for moOde catalogs with 200+ presets. |
 | `/api/v1/audio/library` | `GET` | Manifest-backed local music library plus NAS queue preview with storage, category, subcategory, limit, and offset filters. Storage values are `local`, `nas`, `usb`, `favorites`, and `recently_added`; `local` tracks keep `focus`, `meditation`, and `rest` category ids plus manifest subfolders. |
+| `/api/v1/audio/source` | `POST` | Switches source intake. `target=mpd` can include `localTrackPath` from the local library manifest to clear/queue/play that local track and immediately update playback metadata. |
 | `/api/v1/playback/status` | `GET` | Playback summary only. |
 | `/api/v1/system/status` | `GET` | System summary only. |
 | `/api/v1/system/runtime` | `GET` | Kiosk/runtime summary. |

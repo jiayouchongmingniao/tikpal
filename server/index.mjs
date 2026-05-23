@@ -3,7 +3,7 @@ import { execFile } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { mkdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
-import { basename, dirname, posix, resolve, sep } from "node:path";
+import { basename, dirname, extname, posix, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { recognizeWithAcrCloud } from "./recognitionProviders/acrcloud.mjs";
 
@@ -84,6 +84,9 @@ const REMOTE_ARTWORK_CACHE_DIR = resolve(REMOTE_MEDIA_CACHE_ROOT, "artwork");
 const REMOTE_ARTWORK_INDEX_DIR = resolve(REMOTE_MEDIA_CACHE_ROOT, "artwork-index");
 const LOCAL_LIBRARY_MANIFEST_PATH = process.env.TIKPAL_LOCAL_LIBRARY_MANIFEST_PATH
   ?? resolve(process.cwd(), "public", "assets", "music", "_metadata", "library_manifest.csv");
+const LOCAL_LIBRARY_ROOT = resolve(dirname(LOCAL_LIBRARY_MANIFEST_PATH), "..");
+const LOCAL_LIBRARY_COVER_COLUMNS = ["cover_relative_path", "cover_path", "album_art_relative_path", "artwork_relative_path"];
+const LOCAL_LIBRARY_COVER_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp"];
 const execFileAsync = promisify(execFile);
 
 const tracks = [
@@ -108,6 +111,7 @@ const tracks = [
 ];
 
 let trackIndex = 0;
+let mockSelectedLocalTrack = null;
 let playbackState = "playing";
 let elapsedSeconds = 84;
 let favorite = false;
@@ -236,6 +240,20 @@ function buildQueueEntrySummary({ id, position, title, artist, album, durationSe
 }
 
 function buildMockQueuePreview() {
+  if (mockSelectedLocalTrack) {
+    return [
+      buildQueueEntrySummary({
+        id: `local-${mockSelectedLocalTrack.id}`,
+        position: 1,
+        title: mockSelectedLocalTrack.title,
+        artist: mockSelectedLocalTrack.artist,
+        album: mockSelectedLocalTrack.album,
+        durationSeconds: mockSelectedLocalTrack.durationSeconds,
+        active: true
+      })
+    ];
+  }
+
   const total = 13;
   const queue = Array.from({ length: total }, (_, index) => {
     const track = tracks[index % tracks.length];
@@ -413,6 +431,15 @@ function syncElapsed() {
   lastTickAt += deltaSeconds * 1000;
   elapsedSeconds += deltaSeconds;
 
+  if (mockActiveSource === "mpd" && mockSelectedLocalTrack) {
+    const durationSeconds = mockSelectedLocalTrack.durationSeconds;
+    if (durationSeconds && elapsedSeconds >= durationSeconds) {
+      elapsedSeconds = durationSeconds;
+      playbackState = "stopped";
+    }
+    return;
+  }
+
   while (elapsedSeconds >= tracks[trackIndex].durationSeconds) {
     elapsedSeconds -= tracks[trackIndex].durationSeconds;
     trackIndex = (trackIndex + 1) % tracks.length;
@@ -520,6 +547,23 @@ function getPlayback() {
           active: true
         })
       ]
+    };
+  }
+
+  if (mockSelectedLocalTrack) {
+    return {
+      state: playbackState,
+      source: "mpd",
+      albumArtUrl: mockSelectedLocalTrack.albumArtUrl,
+      title: mockSelectedLocalTrack.title,
+      artist: mockSelectedLocalTrack.artist,
+      album: mockSelectedLocalTrack.album,
+      elapsedSeconds,
+      durationSeconds: mockSelectedLocalTrack.durationSeconds,
+      currentTrackIndex: 1,
+      queueLength: 1,
+      favorite,
+      queuePreview: buildMockQueuePreview()
     };
   }
 
@@ -1010,6 +1054,47 @@ async function readArtworkBuffer(filePath) {
   } catch {
     return null;
   }
+}
+
+async function resolveExistingImagePath(absolutePath) {
+  const mimeType = imageMimeTypeFromPath(absolutePath);
+  if (!mimeType) return null;
+
+  try {
+    const info = await stat(absolutePath);
+    if (!info.isFile()) return null;
+    return {
+      absolutePath,
+      mimeType,
+      token: buildArtworkToken(absolutePath, info.mtimeMs)
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function resolveFolderArtworkForMedia(filePath) {
+  if (!filePath) return null;
+
+  const candidates = [];
+  const mediaDir = dirname(filePath);
+  const baseName = basename(filePath, extname(filePath));
+  for (const extension of LOCAL_LIBRARY_COVER_EXTENSIONS) {
+    candidates.push(resolve(mediaDir, `${baseName}${extension}`));
+  }
+  for (const extension of LOCAL_LIBRARY_COVER_EXTENSIONS) {
+    candidates.push(resolve(mediaDir, `folder${extension}`));
+  }
+  for (const extension of LOCAL_LIBRARY_COVER_EXTENSIONS) {
+    candidates.push(resolve(dirname(mediaDir), `folder${extension}`));
+  }
+
+  for (const candidate of candidates) {
+    const artwork = await resolveExistingImagePath(candidate);
+    if (artwork) return artwork;
+  }
+
+  return null;
 }
 
 function detectOutputKind(label) {
@@ -1515,6 +1600,125 @@ function parseCsvRows(text) {
   return dataRows.map((row) => Object.fromEntries(headers.map((header, index) => [header, row[index] ?? ""])));
 }
 
+function normalizeSafeRelativePath(value) {
+  const normalized = posix.normalize(String(value ?? "").trim().replaceAll("\\", "/")).replace(/^\/+/, "");
+  if (!normalized || normalized === "." || normalized === ".." || normalized.startsWith("../")) return null;
+  return normalized;
+}
+
+function resolveLocalLibraryAssetPath(relativePath) {
+  const safePath = normalizeSafeRelativePath(relativePath);
+  if (!safePath) return null;
+
+  const root = resolve(LOCAL_LIBRARY_ROOT);
+  const absolutePath = resolve(root, ...safePath.split("/"));
+  if (absolutePath !== root && !absolutePath.startsWith(`${root}${sep}`)) return null;
+
+  return {
+    relativePath: safePath,
+    absolutePath
+  };
+}
+
+function imageMimeTypeFromPath(filePath) {
+  switch (extname(filePath).toLowerCase()) {
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg";
+    case ".png":
+      return "image/png";
+    case ".webp":
+      return "image/webp";
+    default:
+      return null;
+  }
+}
+
+async function resolveExistingLocalLibraryImage(relativePath) {
+  const asset = resolveLocalLibraryAssetPath(relativePath);
+  if (!asset) return null;
+
+  const mimeType = imageMimeTypeFromPath(asset.absolutePath);
+  if (!mimeType) return null;
+
+  try {
+    const info = await stat(asset.absolutePath);
+    if (!info.isFile()) return null;
+    return {
+      ...asset,
+      mimeType,
+      token: buildArtworkToken(asset.absolutePath, info.mtimeMs)
+    };
+  } catch {
+    return null;
+  }
+}
+
+function localLibraryImageUrl(relativePath) {
+  return `/api/v1/media/library-cover?path=${encodeURIComponent(relativePath)}`;
+}
+
+function pushUniquePath(candidates, value) {
+  const normalized = normalizeSafeRelativePath(value);
+  if (normalized && !candidates.some((candidate) => candidate.path === normalized)) {
+    candidates.push({
+      path: normalized,
+      labelOverlay: posix.parse(normalized).name.toLowerCase() === "folder"
+    });
+  }
+}
+
+function explicitCoverLabelOverlay(row, cover) {
+  const mode = String(row.cover_label_mode ?? row.cover_text_mode ?? "").trim().toLowerCase();
+  if (["none", "off", "false", "hide", "hidden"].includes(mode)) return false;
+  if (["category", "label", "overlay", "show"].includes(mode)) return true;
+  return cover.labelOverlay;
+}
+
+async function resolveLocalLibraryCover(row, { categoryLabel, subCategory, trackPath }) {
+  const candidates = [];
+  for (const column of LOCAL_LIBRARY_COVER_COLUMNS) {
+    pushUniquePath(candidates, row[column]);
+  }
+
+  const safeTrackPath = normalizeSafeRelativePath(trackPath);
+  if (safeTrackPath) {
+    const parsedPath = posix.parse(safeTrackPath);
+    for (const extension of LOCAL_LIBRARY_COVER_EXTENSIONS) {
+      pushUniquePath(candidates, posix.join(parsedPath.dir, `${parsedPath.name}${extension}`));
+    }
+    for (const extension of LOCAL_LIBRARY_COVER_EXTENSIONS) {
+      pushUniquePath(candidates, posix.join(parsedPath.dir, `folder${extension}`));
+    }
+  }
+
+  const categoryPath = normalizeSafeRelativePath(categoryLabel);
+  const subCategoryPath = normalizeSafeRelativePath(subCategory);
+  if (categoryPath && subCategoryPath) {
+    for (const extension of LOCAL_LIBRARY_COVER_EXTENSIONS) {
+      pushUniquePath(candidates, posix.join(categoryPath, subCategoryPath, `folder${extension}`));
+    }
+  }
+
+  if (categoryPath) {
+    for (const extension of LOCAL_LIBRARY_COVER_EXTENSIONS) {
+      pushUniquePath(candidates, posix.join(categoryPath, `folder${extension}`));
+    }
+  }
+
+  for (const candidate of candidates) {
+    const cover = await resolveExistingLocalLibraryImage(candidate.path);
+    if (cover) {
+      return {
+        ...cover,
+        labelOverlay: explicitCoverLabelOverlay(row, candidate)
+      };
+    }
+  }
+
+  return null;
+}
+
 function resolveLocalLibraryCategory(row) {
   const baseCategory = normalizeLibraryCategoryId(row.category_level_1);
   if (!baseCategory) return null;
@@ -1555,8 +1759,8 @@ async function readLocalAudioLibraryTracks() {
     return [];
   }
 
-  return parseCsvRows(manifestText)
-    .map((row) => {
+  const tracks = await Promise.all(parseCsvRows(manifestText)
+    .map(async (row) => {
       const categoryId = resolveLocalLibraryCategory(row);
       if (!categoryId) return null;
 
@@ -1564,6 +1768,11 @@ async function readLocalAudioLibraryTracks() {
       const artist = row.artist_or_author?.trim() || "Unknown Artist";
       const subCategory = row.category_level_2?.trim() || libraryCategoryLabel(categoryId);
       const path = row.final_relative_path?.trim() || null;
+      const cover = await resolveLocalLibraryCover(row, {
+        categoryLabel: row.category_level_1?.trim() || libraryCategoryLabel(categoryId),
+        subCategory,
+        trackPath: path
+      });
 
       return {
         id: row.id?.trim() || path || `${categoryId}-${title}`,
@@ -1575,10 +1784,22 @@ async function readLocalAudioLibraryTracks() {
         subCategory,
         durationSeconds: parseDuration(row.duration_mm_ss),
         path,
+        albumArtUrl: cover ? localLibraryImageUrl(cover.relativePath) : null,
+        albumArtLabel: cover?.labelOverlay ? subCategory : null,
+        albumArtScope: cover?.labelOverlay ? libraryCategoryLabel(categoryId) : null,
         active: false
       };
-    })
-    .filter(Boolean);
+    }));
+
+  return tracks.filter(Boolean);
+}
+
+async function findLocalAudioLibraryTrackByPath(localTrackPath) {
+  const safePath = normalizeSafeRelativePath(localTrackPath);
+  if (!safePath) return null;
+
+  const tracks = await readLocalAudioLibraryTracks();
+  return tracks.find((track) => normalizeSafeRelativePath(track.path) === safePath) ?? null;
 }
 
 function buildNasAudioLibraryTracks(playback) {
@@ -1592,6 +1813,9 @@ function buildNasAudioLibraryTracks(playback) {
     subCategory: entry.active ? "Now Playing" : "Queue",
     durationSeconds: entry.durationSeconds,
     path: null,
+    albumArtUrl: null,
+    albumArtLabel: null,
+    albumArtScope: null,
     active: entry.active
   }));
 }
@@ -2120,6 +2344,18 @@ async function ensureMpcQueue() {
 
 async function switchToMpdSource() {
   await loadDefaultMpdQueue();
+  await runMpc(["play"]);
+}
+
+async function switchToLocalLibraryTrack(localTrackPath) {
+  const track = await findLocalAudioLibraryTrackByPath(localTrackPath);
+  if (!track?.path) {
+    throw new Error(`Unknown local library track: ${localTrackPath}`);
+  }
+
+  await enforceConnectionGate("mpd");
+  await runMpc(["clear"]);
+  await runMpc(["add", track.path]);
   await runMpc(["play"]);
 }
 
@@ -3044,6 +3280,22 @@ async function resolveCurrentArtworkState({ playbackSource, metadata, fallbackTi
     };
   }
 
+  if (metadata.absolutePath) {
+    const folderArtwork = await resolveFolderArtworkForMedia(metadata.absolutePath);
+    if (folderArtwork) {
+      return {
+        kind: "local-file",
+        token: folderArtwork.token,
+        mimeType: folderArtwork.mimeType,
+        localPath: folderArtwork.absolutePath,
+        absolutePath: null,
+        title,
+        artist,
+        album
+      };
+    }
+  }
+
   if (playbackSource === "mpd" && metadata.absolutePath) {
     const cacheKey = buildArtworkCacheKey({ artist, album });
     const remoteArtwork = cacheKey ? await readCachedRemoteArtwork(cacheKey) : null;
@@ -3624,12 +3876,14 @@ function applyPlaybackAction(action) {
       playbackState = "paused";
       break;
     case "next":
+      mockSelectedLocalTrack = null;
       trackIndex = (trackIndex + 1) % tracks.length;
       elapsedSeconds = 0;
       playbackState = "playing";
       lastTickAt = Date.now();
       break;
     case "previous":
+      mockSelectedLocalTrack = null;
       trackIndex = (trackIndex + tracks.length - 1) % tracks.length;
       elapsedSeconds = 0;
       playbackState = "playing";
@@ -3637,7 +3891,7 @@ function applyPlaybackAction(action) {
       break;
     case "seek": {
       const seconds = Number(action.value);
-      const durationSeconds = tracks[trackIndex].durationSeconds;
+      const durationSeconds = mockSelectedLocalTrack?.durationSeconds ?? tracks[trackIndex].durationSeconds;
       if (!Number.isFinite(seconds) || seconds < 0 || seconds > durationSeconds) {
         throw new Error(`seek requires value between 0 and ${durationSeconds}`);
       }
@@ -3731,9 +3985,19 @@ async function applySystemAction(action) {
   applyMockSystemAction(action);
 }
 
-function applyMockSourceSwitch(action) {
+async function applyMockSourceSwitch(action) {
   switch (action.target) {
-    case "mpd":
+    case "mpd": {
+      if (action.localTrackPath) {
+        const track = await findLocalAudioLibraryTrackByPath(action.localTrackPath);
+        if (!track) {
+          throw new Error(`Unknown local library track: ${action.localTrackPath}`);
+        }
+        mockSelectedLocalTrack = track;
+        elapsedSeconds = 0;
+      } else {
+        mockSelectedLocalTrack = null;
+      }
       mockArmedSource = null;
       mockActiveSource = "mpd";
       mockAudioArmedAt = 0;
@@ -3744,7 +4008,9 @@ function applyMockSourceSwitch(action) {
       playbackState = "playing";
       lastTickAt = Date.now();
       return;
+    }
     case "audio":
+      mockSelectedLocalTrack = null;
       mockArmedSource = null;
       mockActiveSource = "audio";
       mockAudioArmedAt = Date.now();
@@ -3756,6 +4022,7 @@ function applyMockSourceSwitch(action) {
       lastTickAt = Date.now();
       return;
     case "radio":
+      mockSelectedLocalTrack = null;
       mockArmedSource = null;
       if (action.radioStationId) {
         const station = getMockRadioStations().find((radio) => radio.id === action.radioStationId);
@@ -3773,6 +4040,7 @@ function applyMockSourceSwitch(action) {
       playbackState = "playing";
       return;
     case "spotify":
+      mockSelectedLocalTrack = null;
       mockArmedSource = "spotify";
       mockActiveSource = "spotify";
       mockAudioArmedAt = 0;
@@ -3783,6 +4051,7 @@ function applyMockSourceSwitch(action) {
       playbackState = "paused";
       return;
     case "bluetooth":
+      mockSelectedLocalTrack = null;
       mockArmedSource = "bluetooth";
       mockActiveSource = "bluetooth";
       mockAudioArmedAt = 0;
@@ -3793,6 +4062,7 @@ function applyMockSourceSwitch(action) {
       playbackState = "paused";
       return;
     case "airplay":
+      mockSelectedLocalTrack = null;
       mockArmedSource = "airplay";
       mockActiveSource = "airplay";
       mockAudioArmedAt = 0;
@@ -3812,8 +4082,12 @@ async function applyMpcSourceSwitch(action) {
     case "mpd":
       mockArmedSource = null;
       resetBluetoothRecognitionSession();
-      await enforceConnectionGate("mpd");
-      await switchToMpdSource();
+      if (action.localTrackPath) {
+        await switchToLocalLibraryTrack(action.localTrackPath);
+      } else {
+        await enforceConnectionGate("mpd");
+        await switchToMpdSource();
+      }
       return;
     case "audio":
       resetBluetoothRecognitionSession();
@@ -3851,7 +4125,7 @@ async function applySourceSwitch(action) {
     await applyMpcSourceSwitch(action);
     return;
   }
-  applyMockSourceSwitch(action);
+  await applyMockSourceSwitch(action);
 }
 
 const server = http.createServer(async (request, response) => {
@@ -3908,6 +4182,17 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "GET" && url.pathname === "/api/v1/media/library-cover") {
+      const cover = await resolveExistingLocalLibraryImage(url.searchParams.get("path"));
+      if (!cover) {
+        sendJson(response, 404, { error: "NOT_FOUND", path: url.pathname });
+        return;
+      }
+
+      sendBinary(response, 200, cover.mimeType, await readFile(cover.absolutePath));
+      return;
+    }
+
     if (request.method === "GET" && url.pathname === "/api/v1/media/artwork") {
       const trackToken = url.searchParams.get("track");
       await getTikpalState();
@@ -3932,6 +4217,16 @@ const server = http.createServer(async (request, response) => {
           return;
         } catch {
           // Fall back to generated artwork below if the cached file disappears.
+        }
+      }
+
+      if (currentArtworkState.kind === "local-file" && currentArtworkState.localPath) {
+        try {
+          const artwork = await readFile(currentArtworkState.localPath);
+          sendBinary(response, 200, currentArtworkState.mimeType, artwork);
+          return;
+        } catch {
+          // Fall back to generated artwork below if the local cover disappears.
         }
       }
 

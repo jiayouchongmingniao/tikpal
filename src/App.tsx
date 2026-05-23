@@ -102,6 +102,7 @@ export default function App() {
         lyrics={tikpalState.lyrics}
         lyricsVisible={lyricsVisible}
         lyricsFontSize={lyricsFontSize}
+        fontTheme={fontTheme}
         audio={tikpalState.audio}
         system={tikpalState.system}
         status={tikpalStatus}

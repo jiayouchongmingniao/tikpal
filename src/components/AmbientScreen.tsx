@@ -4,7 +4,7 @@ import { FlameScene } from "./FlameScene";
 import { buildGeneratedCoverArtUrl } from "../coverArt";
 import { formatDuration, formatSampleRate } from "../mockState";
 import type { TikpalDataStatus } from "../hooks/useTikpalState";
-import type { AudioState, LyricsFontSize, LyricsState, PlaybackActionType, PlaybackSummary, SystemActionType, SystemState, TikpalState } from "../types";
+import type { AudioState, FontTheme, LyricsFontSize, LyricsState, PlaybackActionType, PlaybackSummary, SystemActionType, SystemState, TikpalState } from "../types";
 
 interface AmbientScreenProps {
   hudVisible: boolean;
@@ -14,6 +14,7 @@ interface AmbientScreenProps {
   lyrics: LyricsState;
   lyricsVisible: boolean;
   lyricsFontSize: LyricsFontSize;
+  fontTheme: FontTheme;
   audio: AudioState;
   system: SystemState;
   status: TikpalDataStatus;
@@ -114,6 +115,7 @@ export function AmbientScreen({
   lyrics,
   lyricsVisible,
   lyricsFontSize,
+  fontTheme,
   audio,
   system,
   status,
@@ -142,7 +144,7 @@ export function AmbientScreen({
     .join("")
     .slice(0, 3)
     .toUpperCase();
-  const coverArtUrl = playback.albumArtUrl ?? buildGeneratedCoverArtUrl(title, artist, album);
+  const coverArtUrl = playback.albumArtUrl ?? buildGeneratedCoverArtUrl(title, artist, album, fontTheme);
   const brightnessPercent = system.display.brightnessPercent;
   const audioProtectionMode = playback.source === "airplay" && playback.state === "playing";
   const canAdvanceLyrics = lyrics.synced
