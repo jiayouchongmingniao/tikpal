@@ -174,6 +174,67 @@ async function evaluate(client, expression) {
   return result.result.value;
 }
 
+function sourceTabExpression(sourceId, { selected, active }) {
+  return `
+    (() => {
+      const target = document.querySelector('[data-source-item="${sourceId}"]');
+      return Boolean(
+        target
+        && target.classList.contains('library-primary-tab')
+        && target.classList.contains('is-selected') === ${selected}
+        && target.classList.contains('is-active') === ${active}
+      );
+    })()
+  `;
+}
+
+function sourceHighlightExpression(theme) {
+  return `
+    (() => {
+      const root = document.documentElement;
+      if (root.dataset.surfaceTheme !== ${JSON.stringify(theme)}) return false;
+      const idle = document.querySelector('[data-source-item="radio"]');
+      const selectedActive = document.querySelector('[data-source-item="mpd"]');
+      if (!idle || !selectedActive) return false;
+
+      const styleKey = (node) => {
+        const style = window.getComputedStyle(node);
+        return [
+          style.borderColor,
+          style.backgroundColor,
+          style.backgroundImage,
+          style.boxShadow,
+          style.color
+        ].join('|');
+      };
+
+      const makeProbe = (className) => {
+        const probe = idle.cloneNode(true);
+        probe.classList.remove('is-selected', 'is-active');
+        probe.classList.add(className);
+        probe.style.position = 'fixed';
+        probe.style.left = '-10000px';
+        probe.style.top = '-10000px';
+        probe.style.width = '120px';
+        probe.style.height = '60px';
+        document.body.appendChild(probe);
+        return probe;
+      };
+
+      const idleStyle = styleKey(idle);
+      const selectedStyle = styleKey(makeProbe('is-selected'));
+      const activeStyle = styleKey(makeProbe('is-active'));
+      const selectedActiveStyle = styleKey(selectedActive);
+      document.querySelectorAll('body > .library-primary-tab').forEach((node) => node.remove());
+
+      return selectedStyle !== idleStyle
+        && activeStyle !== idleStyle
+        && selectedActiveStyle !== idleStyle
+        && selectedActiveStyle !== activeStyle;
+    })()
+  `;
+}
+
 async function wheel(client, deltaY, modifiers = 0) {
   await client.send("Input.dispatchMouseEvent", {
     type: "mouseWheel",
@@ -296,15 +357,36 @@ try {
 
   await click(client, 1280, 280);
   await expect(client, "document.querySelector('.ambient-screen.is-hud-visible') !== null", "single tap shows ambient HUD");
+  await expect(
+    client,
+    "document.querySelector('.ambient-transport button[aria-label=\"Favorite\"], .ambient-transport button[aria-label=\"Remove favorite\"]') !== null",
+    "ambient transport favorite button renders"
+  );
 
   await wait(5600);
   await expect(client, "document.querySelector('.ambient-screen.is-hud-hidden') !== null", "ambient HUD auto hides after tap show");
+
+  await wheel(client, 220);
+  await expectEventually(client, "document.querySelector('.quick-settings.is-active') !== null", "ambient wheel down opens settings");
 
   await navigate(client, `${APP_URL}?mode=player`);
   await click(client, 1360, 600);
   await expect(client, "document.querySelector('.player-overlay.is-active') !== null", "protected player click stays in player");
 
   await expect(client, "document.querySelector('[data-source-panel]') !== null", "player source panel opens");
+  await expect(client, "document.querySelector('.track-stack h1')?.textContent === 'Get Lucky (feat. Pharrell Williams)'", "player now playing title follows playback truth");
+  await expect(
+    client,
+    `
+      (() => {
+        const expected = ['mpd', 'radio', 'spotify', 'airplay', 'bluetooth'];
+        return expected.every((sourceId) => document.querySelector(\`[data-source-item="\${sourceId}"]\`))
+          && document.querySelector('[data-source-item="audio"]') === null;
+      })()
+    `,
+    "player source tabs include five visible source categories"
+  );
+  await expect(client, sourceTabExpression("mpd", { selected: true, active: true }), "library source starts selected and active");
 
   await evaluate(
     client,
@@ -317,6 +399,7 @@ try {
     `
   );
   await expectEventually(client, "document.querySelector('.source-line span')?.textContent?.includes('Bluetooth') === true", "single tap on bluetooth source switches source");
+  await expectEventually(client, sourceTabExpression("bluetooth", { selected: true, active: true }), "bluetooth source is selected and active after tap");
 
   await evaluate(
     client,
@@ -329,6 +412,7 @@ try {
     `
   );
   await expectEventually(client, "document.querySelector('.source-line span')?.textContent?.includes('Library') === true", "single tap on library source returns to mpd");
+  await expectEventually(client, sourceTabExpression("mpd", { selected: true, active: true }), "library source is selected and active after return");
 
   await evaluate(
     client,
@@ -339,7 +423,39 @@ try {
       })()
     `
   );
-  await expect(client, "document.querySelector('.progress-slider') instanceof HTMLInputElement", "player seek slider renders");
+  await expect(client, "document.querySelector('.progress-slider') instanceof HTMLInputElement && !document.querySelector('.progress-slider').disabled && Number(document.querySelector('.progress-slider').max) > 0", "mpd playback renders an enabled seek slider");
+
+  await evaluate(
+    client,
+    `
+      (() => {
+        const target = [...document.querySelectorAll('.library-category-tab')].find((node) => node.textContent.includes('Meditation'));
+        target?.click();
+        return Boolean(target);
+      })()
+    `
+  );
+  await expect(
+    client,
+    `
+      (() => {
+        const container = document.querySelector('.library-subcategory-tabs');
+        if (!container) return false;
+        const labels = [...document.querySelectorAll('.library-subcategory-tab strong')]
+          .map((node) => node.textContent?.trim());
+        return container.scrollWidth <= container.clientWidth + 1
+          && window.getComputedStyle(container).overflowX !== 'auto'
+          && !labels.some((label) => ['Deep Sleep Long Tracks', 'Sleep', 'Rain'].includes(label));
+      })()
+    `,
+    "meditation subcategory tabs are organized without horizontal scrolling"
+  );
+
+  for (const theme of ["warm-gold", "graphite-silver", "ivory-studio"]) {
+    await evaluate(client, `window.localStorage.setItem('tikpal.surfaceTheme', ${JSON.stringify(theme)})`);
+    await navigate(client, `${APP_URL}?mode=player&surfaceTheme=${theme}`);
+    await expect(client, sourceHighlightExpression(theme), `${theme} source highlight states are visually distinct`);
+  }
 
   await evaluate(
     client,

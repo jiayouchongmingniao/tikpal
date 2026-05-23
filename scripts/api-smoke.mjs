@@ -272,11 +272,21 @@ async function run() {
     const localLibrary = await request("/api/v1/audio/library?storage=local&limit=5");
     assert(localLibrary.response.ok, "local audio library should return 200");
     assert(localLibrary.body.total > 0, "local audio library should load tracks from the manifest");
+    assert(Array.isArray(localLibrary.body.sources) && localLibrary.body.sources.length === 5, "library source metadata should expose five visible source categories");
+    assert(localLibrary.body.sources.every((source) => source.id !== "audio"), "library source metadata should not expose audio as a visible category");
     assert(localLibrary.body.storages.find((storage) => storage.id === "local")?.trackCount === localLibrary.body.total, "local storage track count should match manifest-backed total");
     assert(localLibrary.body.tracks.every((track) => track.storage === "local"), "local audio library should only return local tracks when filtered");
     assert(localLibrary.body.tracks[0]?.path, "local audio library tracks should expose manifest paths");
     assert(localLibrary.body.tracks[0]?.albumArtUrl, "local audio library tracks should expose cover art URLs");
     assert(localLibrary.body.tracks[0]?.albumArtLabel, "generic local library folder covers should expose overlay labels");
+    const meditationLibrary = await request("/api/v1/audio/library?storage=local&category=meditation&limit=500");
+    assert(meditationLibrary.response.ok, "meditation library should return 200");
+    assert(meditationLibrary.body.tracks.length > 0, "meditation library should include manifest-backed tracks");
+    assert(meditationLibrary.body.tracks.every((track) => track.categoryId === "meditation"), "meditation library should only include meditation category tracks");
+    assert(
+      meditationLibrary.body.tracks.every((track) => !["Deep Sleep Long Tracks", "Sleep", "Rain"].includes(track.subCategory)),
+      "meditation subcategories should not include rest folders"
+    );
     const localCover = await requestBinary(localLibrary.body.tracks[0].albumArtUrl);
     assert(localCover.response.ok, "local library cover should return 200");
     assert(localCover.response.headers.get("content-type")?.startsWith("image/"), "local library cover should be served as an image");

@@ -1,5 +1,6 @@
 export type AppMode = "ambient" | "player" | "quickSettings" | "quickMenu";
 export type FontTheme = "sans" | "serif" | "mono";
+export type SurfaceTheme = "warm-gold" | "graphite-silver" | "ivory-studio";
 export type LyricsFontSize = "small" | "medium" | "large";
 
 export type PlaybackState = "playing" | "paused" | "stopped";
@@ -250,8 +251,8 @@ export interface QueueEntrySummary {
 }
 
 export interface RuntimeState {
-  rendererType: "webgl" | "fallback" | "unknown";
-  requestedRenderer: "webgl";
+  rendererType: "media" | "webgl" | "fallback" | "unknown";
+  requestedRenderer: string;
   kioskWindow: "2560x720";
   appVersion: string;
   apiMode: "mock" | "mpc";

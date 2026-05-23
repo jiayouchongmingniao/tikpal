@@ -18,7 +18,7 @@ const MPD_DEFAULT_QUEUE_PATH = process.env.TIKPAL_MPD_DEFAULT_QUEUE_PATH ?? "Cod
 const MPD_STARTUP_VOLUME = Number(process.env.TIKPAL_MPD_STARTUP_VOLUME ?? 30);
 const MPD_MUSIC_ROOT = process.env.TIKPAL_MPD_MUSIC_ROOT ?? "/var/lib/mpd/music";
 const APP_VERSION = process.env.TIKPAL_APP_VERSION ?? "0.1.0";
-const REQUESTED_RENDERER = "webgl";
+const REQUESTED_RENDERER = (process.env.TIKPAL_RENDERER ?? "media").toLowerCase();
 const REQUESTED_KIOSK_WINDOW = process.env.TIKPAL_KIOSK_WINDOW ?? "2560x720";
 const LIBRARY_SCAN_COMMAND = process.env.TIKPAL_LIBRARY_SCAN_COMMAND ?? "";
 const SYSTEM_REBOOT_COMMAND = process.env.TIKPAL_SYSTEM_REBOOT_COMMAND ?? "systemctl reboot";
@@ -1401,8 +1401,8 @@ async function getRuntimeSnapshot() {
   const currentMatch = xrandrRaw.match(/current\s+(\d+)\s+x\s+(\d+)/i);
   const kioskWindow = currentMatch ? `${currentMatch[1]}x${currentMatch[2]}` : REQUESTED_KIOSK_WINDOW;
   return {
-    rendererType: REQUESTED_RENDERER === "webgl" ? "webgl" : "unknown",
-    requestedRenderer: "webgl",
+    rendererType: REQUESTED_RENDERER === "webgl" ? "webgl" : "media",
+    requestedRenderer: REQUESTED_RENDERER,
     kioskWindow,
     appVersion: APP_VERSION,
     apiMode: API_MODE,
@@ -1808,27 +1808,7 @@ async function resolveLocalLibraryCover(row, { categoryLabel, subCategory, track
 }
 
 function resolveLocalLibraryCategory(row) {
-  const baseCategory = normalizeLibraryCategoryId(row.category_level_1);
-  if (!baseCategory) return null;
-  if (baseCategory !== "rest") return baseCategory;
-
-  const searchableText = [
-    row.title,
-    row.category_level_2,
-    row.final_filename
-  ]
-    .join(" ")
-    .toLowerCase();
-
-  if (/\b(meditation|meditative|mindfulness|breath|breathing|yoga|mantra|singing bowl)\b/.test(searchableText)) {
-    return "meditation";
-  }
-
-  if (/\b(focus|study|writing|coding|work|concentration)\b/.test(searchableText)) {
-    return "focus";
-  }
-
-  return baseCategory;
+  return normalizeLibraryCategoryId(row.category_level_1);
 }
 
 function buildLibrarySubCategoryId(categoryId, subCategory) {
@@ -2666,8 +2646,8 @@ async function getTikpalState() {
   const runtime = API_MODE === "mpc"
     ? await getRuntimeSnapshot()
     : {
-        rendererType: "unknown",
-        requestedRenderer: "webgl",
+        rendererType: "media",
+        requestedRenderer: REQUESTED_RENDERER,
         kioskWindow: REQUESTED_KIOSK_WINDOW,
         appVersion: APP_VERSION,
         apiMode: API_MODE,

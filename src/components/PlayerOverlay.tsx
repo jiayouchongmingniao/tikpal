@@ -23,7 +23,7 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { fetchAudioLibrary, fetchRadioCatalog } from "../api/tikpalClient";
-import { buildGeneratedCoverArtUrl } from "../coverArt";
+import { getPlaybackDisplayTruth, getPlaybackSourceSummary } from "../playbackTruth";
 import type { TikpalDataStatus } from "../hooks/useTikpalState";
 import { formatDuration } from "../mockState";
 import { useOverlayReturnGesture } from "../hooks/useOverlayReturnGesture";
@@ -135,18 +135,13 @@ export function PlayerOverlay({
   const [pendingSource, setPendingSource] = useState<SourceSwitchTarget | null>(null);
   const [sourceError, setSourceError] = useState<string | null>(null);
   const [sourceHint, setSourceHint] = useState<string | null>(null);
-  const title = playback.title ?? "Not Playing";
-  const artist = playback.artist ?? "Unknown Artist";
-  const album = playback.album ?? "No Album";
-  const elapsedSeconds = playback.elapsedSeconds ?? 0;
-  const durationSeconds = playback.durationSeconds ?? 0;
+  const playbackTruth = getPlaybackDisplayTruth(playback, audio, fontTheme);
+  const elapsedSeconds = playbackTruth.elapsedSeconds ?? 0;
+  const durationSeconds = playbackTruth.durationSeconds ?? 0;
   const isPlaying = playback.state === "playing";
   const currentSource = audio.currentSource;
   const selectedPanelConfig = primaryPanels.find((panel) => panel.id === selectedPrimaryPanel) ?? primaryPanels[0];
-  const selectedStorageConfig = storageTabs.find((storage) => storage.id === selectedLibraryStorage) ?? storageTabs[0];
-  const selectedExternalSource = selectedPrimaryPanel !== "library"
-    ? audio.sources.find((source) => source.id === selectedPrimaryPanel)
-    : undefined;
+  const playbackSource = getPlaybackSourceSummary(playback, audio);
   const nasLibraryTracks = useMemo<AudioLibraryTrackSummary[]>(() => (
     playback.queuePreview.map((entry) => ({
       id: `nas-${entry.id}`,
@@ -207,67 +202,23 @@ export function PlayerOverlay({
     }
   }, [nasLibraryTracks, selectedLibraryStorage, selectedLocalTracks]);
   const selectedLibraryTrack = visibleLibraryTracks.find((track) => track.id === selectedLibraryTrackId) ?? null;
-  const externalPanelActive = selectedPrimaryPanel === playback.source;
-  const libraryPanelActive = selectedPrimaryPanel === "library";
-  const nasActiveTrackSelected = libraryPanelActive
-    && selectedLibraryStorage === "nas"
-    && Boolean(selectedLibraryTrack?.active)
-    && playback.source === "mpd";
-  const externalPlaybackSelected = selectedPrimaryPanel !== "library" && externalPanelActive;
-  const seekSupported = nasActiveTrackSelected && durationSeconds > 0;
+  const seekSupported = playback.source === "mpd" && durationSeconds > 0;
   const displayedElapsedSeconds = seekSupported
     ? seekDraftSeconds ?? seekPendingSeconds ?? elapsedSeconds
-    : externalPlaybackSelected
-      ? elapsedSeconds
-      : 0;
+    : playbackTruth.elapsedSeconds;
   const displayedDurationSeconds = seekSupported
     ? durationSeconds
-    : externalPlaybackSelected
-      ? durationSeconds || null
-      : selectedLibraryTrack?.durationSeconds ?? null;
-  const progress = displayedDurationSeconds && displayedDurationSeconds > 0
+    : playbackTruth.durationSeconds;
+  const progress = displayedElapsedSeconds !== null && displayedDurationSeconds && displayedDurationSeconds > 0
     ? Math.min(1, displayedElapsedSeconds / displayedDurationSeconds)
     : 0;
 
   const selectedLocalCategoryLabel = categoryLabel(selectedLocalCategory);
-  const selectedLocalScopeLabel = selectedLocalSubCategory === "all" ? selectedLocalCategoryLabel : selectedLocalSubCategory;
-  const displayTitle = libraryPanelActive
-    ? selectedLibraryTrack?.title ?? (selectedLibraryStorage === "local" ? selectedLocalScopeLabel : selectedLibraryStorage === "nas" ? "NAS Library" : selectedStorageConfig.label)
-    : selectedPanelConfig.label;
-  const displayArtist = libraryPanelActive
-    ? selectedLibraryTrack?.artist ?? (selectedLibraryStorage === "nas" ? system.library.source : "Library")
-    : selectedExternalSource?.connectedLabel ?? selectedExternalSource?.advertisedLabel ?? "Tikpal Speaker";
-  const displayAlbum = libraryPanelActive
-    ? selectedLibraryTrack?.album ?? (selectedLibraryStorage === "nas"
-      ? `${system.library.trackCount || nasLibraryTracks.length} network tracks`
-      : selectedLibraryStorage === "local"
-        ? `${visibleLibraryTracks.length} local tracks`
-        : `${visibleLibraryTracks.length} tracks`)
-    : selectedExternalSource?.secondaryStatus ?? "External input";
-  const sourceLine = libraryPanelActive
-    ? [
-      "Library",
-      selectedLibraryStorage === "local"
-        ? `Local / ${selectedLocalCategoryLabel}${selectedLocalSubCategory === "all" ? "" : ` / ${selectedLocalSubCategory}`}`
-        : selectedStorageConfig.label,
-      status.pending ? "Syncing" : status.source === "api" ? "API Confirmed" : "Fallback Data"
-    ]
-    : [
-      selectedPanelConfig.label,
-      sourceStatusLabel(selectedExternalSource, pendingSource === selectedPrimaryPanel),
-      status.pending ? "Syncing" : status.source === "api" ? "API Confirmed" : "Fallback Data"
-    ];
-  const selectedLibraryArtworkUrl = libraryPanelActive ? selectedLibraryTrack?.albumArtUrl ?? null : null;
-  const usePlaybackArtwork = nasActiveTrackSelected && Boolean(playback.albumArtUrl);
-  const coverArtUrl = usePlaybackArtwork
-    ? playback.albumArtUrl!
-    : selectedLibraryArtworkUrl ?? buildGeneratedCoverArtUrl(displayTitle, displayArtist, displayAlbum, fontTheme);
-  const libraryCoverLabel = selectedLibraryArtworkUrl && selectedLibraryTrack?.albumArtLabel
-    ? {
-      title: selectedLibraryTrack.albumArtLabel,
-      scope: selectedLibraryTrack.albumArtScope ?? selectedLibraryTrack.album
-    }
-    : null;
+  const sourceLine = [
+    playbackTruth.sourceLabel,
+    sourceStatusLabel(playbackSource, pendingSource === playback.source),
+    status.pending ? "Syncing" : status.source === "api" ? "API Confirmed" : "Fallback Data"
+  ];
 
   useEffect(() => {
     if (!active) {
@@ -664,14 +615,8 @@ export function PlayerOverlay({
       <button className="overlay-backdrop" type="button" tabIndex={active ? 0 : -1} aria-label="Return to ambient" onClick={onReturnAmbient} />
       <div className="player-shell" role="dialog" aria-modal="true" data-gesture-protected {...overlayReturnGesture}>
         <div className="cover-zone">
-          <div className={`cover-art ${libraryCoverLabel ? "has-library-cover-label" : ""}`}>
-            <img src={coverArtUrl} alt="" />
-            {libraryCoverLabel ? (
-              <span className="cover-art-label" aria-hidden="true">
-                <strong>{libraryCoverLabel.title}</strong>
-                <em>{libraryCoverLabel.scope}</em>
-              </span>
-            ) : null}
+          <div className="cover-art">
+            <img src={playbackTruth.albumArtUrl} alt="" />
           </div>
         </div>
 
@@ -683,10 +628,10 @@ export function PlayerOverlay({
           </div>
 
           <div className="track-stack">
-            <h1>{displayTitle}</h1>
-            <p className="artist">{displayArtist}</p>
-            <p>{displayAlbum}</p>
-            <p>{libraryPanelActive && selectedLibraryTrack ? selectedLibraryTrack.subCategory : `${playback.currentTrackIndex} of ${playback.queueLength}`}</p>
+            <h1>{playbackTruth.title}</h1>
+            <p className="artist">{playbackTruth.artist}</p>
+            <p>{playbackTruth.album}</p>
+            <p>{playbackTruth.queuePositionLabel}</p>
           </div>
 
           <div className="progress-row">

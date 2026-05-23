@@ -2,14 +2,14 @@
 
 Tikpal is a documentation-first product project for a Raspberry Pi 4 based moOde streamer touch UI. The target device is a 2560 x 720 ultra-wide kiosk screen that should feel like a quiet HiFi object first, and a playback controller only when the user asks for controls.
 
-The project started documentation-first and now includes the first runnable frontend scaffold: a Vite + React + TypeScript app with a Three.js/WebGL ambient layer, kiosk-safe dark startup, fixed 2560 x 720 design rules, and mock player/settings surfaces.
+The project started documentation-first and now includes a runnable Vite + React + TypeScript kiosk app with a local Node API, MP4 fireplace ambience, kiosk-safe dark startup, fixed 2560 x 720 design rules, and moOde-oriented player/settings surfaces.
 
 ## Product Direction
 
 - Target hardware: Raspberry Pi 4, touch screen, 2560 x 720 physical output.
 - Runtime: Chromium kiosk, full screen, no browser chrome.
 - Frontend baseline: Vite + React + TypeScript.
-- Visual rendering baseline: Three.js / WebGL for the ambient flame layer.
+- Visual rendering baseline: fireplace image plus local MP4 ambience with crossfaded scene changes; WebGL remains a future/experimental renderer track, not the current flame surface.
 - Audio backend baseline: moOde / MPD for playback, status, library, output, and system information.
 - Product posture: not a copy of the moOde Web UI; Tikpal is a dedicated HiFi ambience and control surface for a 32:9 touch device.
 
@@ -43,7 +43,7 @@ Key documents:
 - [Product brief](docs/00-product/product-brief-v1.md)
 - [Interaction and state model](docs/01-ux/interaction-and-state-model-v1.md)
 - [Visual system and 2560 x 720 layout](docs/02-visual/visual-system-and-2560x720-layout-v1.md)
-- [Pi4 kiosk WebGL architecture](docs/03-architecture/pi4-kiosk-webgl-architecture-v1.md)
+- [Pi4 kiosk runtime architecture](docs/03-architecture/pi4-kiosk-webgl-architecture-v1.md)
 - [moOde capability mapping](docs/04-integration/moode-capability-mapping-v1.md)
 - [MVP backlog and acceptance](docs/05-planning/mvp-backlog-and-acceptance-v1.md)
 - [Raspberry Pi kiosk deploy](docs/06-deployment/raspberry-pi-kiosk-deploy-v1.md)
@@ -129,13 +129,13 @@ With the dev server running, verify the Batch 2 kiosk interaction contract:
 npm run test:interaction
 ```
 
-The smoke test drives Chrome through the DevTools protocol and checks wheel/trackpad-style entry, overlay return, protected panel clicks, the Player source workspace, and the quick settings fallback path.
+The smoke test drives Chrome through the DevTools protocol and checks wheel/trackpad-style entry, ambient HUD controls, playback truth display, the Player source workspace, Library taxonomy, surface skin highlight states, overlay return, protected panel clicks, and Quick Settings detail panels.
 
 ## MVP Summary
 
 The first implementation milestone should deliver:
 
-- Ambient flame screen with clock and subtle playback HUD.
+- Ambient fireplace screen with clock and subtle playback HUD.
 - One-finger player overlay and two-finger quick settings overlay.
 - Playback state, cover art, transport controls, progress, volume, format, sample rate, bit depth, output device, and network status.
 - Quick settings cards for network, output, DSP, library update, display, system info, reboot, and shutdown.
@@ -144,13 +144,15 @@ The first implementation milestone should deliver:
 
 ## Repository Status
 
-The local API now exposes a first-class audio-source model for `Library`, `Audio`, `Radio`, `Spotify Connect`, `Bluetooth`, and `AirPlay`. The frontend reads current source summary from `/api/v1/system/state`, inspects compact source state through `GET /api/v1/audio/sources`, fetches the searchable radio catalog through `GET /api/v1/audio/radios`, fetches the manifest-backed local music library through `GET /api/v1/audio/library`, posts source switches to `POST /api/v1/audio/source`, and still uses `/api/v1/playback/actions` plus `/api/v1/system/actions` for transport and system cards.
+The local API exposes a first-class audio-source model for `Library`, internal `Audio`, `Radio`, `Spotify Connect`, `Bluetooth`, and `AirPlay`. The frontend reads current source summary from `/api/v1/system/state`, inspects compact source state through `GET /api/v1/audio/sources`, renders five visible source tabs (`Library`, `Radio`, `Spotify`, `AirPlay`, `Bluetooth`), fetches the searchable radio catalog through `GET /api/v1/audio/radios`, fetches the manifest-backed local music library through `GET /api/v1/audio/library`, posts source switches to `POST /api/v1/audio/source`, and still uses `/api/v1/playback/actions` plus `/api/v1/system/actions` for transport and system cards.
 
 The real moOde / MPD adapter remains the audio owner. In `mpc` mode, Tikpal keeps MPD/library control as the default path, treats Radio as a searchable station catalog with direct `radioStationId` switching, and now models Bluetooth / AirPlay as armed-only intake paths: they are connectable only while explicitly selected. The player source rail is ordered as `Library`, `Radio`, `Spotify`, `AirPlay`, and `Bluetooth`; Library then separates storage (`Local`, `NAS`, `USB`, `Favorites`, `Recently Added`) from Local taxonomy (`Focus`, `Meditation`, `Rest`, then subfolders). `TIKPAL_RADIO_DEFAULT_URI` stays as a fallback when moOde presets are unavailable, while Bluetooth / AirPlay gating is wired through environment-configured enable/disable and status commands. Bluetooth state now also carries the local advertised device name so the frontend can tell the user exactly what to look for on their phone while pairing.
 
 Ambient lyrics now have two recognition paths behind the same `lyrics` state. Local `MPD` / `Radio` playback still resolves lyrics from metadata through LRCLIB, while Bluetooth first tries BlueZ / AVRCP title metadata and playback position, then can fall back to a short local PCM sample identified through ACRCloud before reusing the same LRCLIB lyrics lookup. The Bluetooth recognition path is only armed while Bluetooth is the selected source and the input is actually connected, and it keeps its own `bluetooth_input` scope so source truth stays separate from `audio.currentSource` and `playback.source`.
 
-Quick Settings now also includes a local font preset selector, and the ambient flame screen has split live-control zones: left for volume, right for DDC/CI brightness on supported displays. When the Ambient HUD is visible, the center control row stays intentionally shallow for the 2560 x 720 kiosk layout: previous scene, playback mode, previous track, play/pause, next track, lyrics, and next scene. Playback mode is a single mutually exclusive `playMode` value: `sequence`, `repeat_one`, or `shuffle`.
+Quick Settings now includes local font presets and surface skin presets (`warm-gold`, `graphite-silver`, `ivory-studio`), and the ambient flame screen has split live-control zones: left for volume, right for DDC/CI brightness on supported displays. When the Ambient HUD is visible, the center control row stays intentionally shallow for the 2560 x 720 kiosk layout: previous scene, playback mode, previous track, play/pause, next track, favorite, lyrics, and next scene. Playback mode is a single mutually exclusive `playMode` value: `sequence`, `repeat_one`, or `shuffle`.
+
+The Player and Ambient HUD both display playback truth from the active `playback.source` and current track metadata, rather than showing whichever Library item or source panel is selected for browsing. Generated fallback cover art still follows the selected font preset, while real playback artwork wins whenever the backend provides it.
 
 Ambient background videos are discovered from `public/assets/*.mp4` through `GET /api/v1/media/background-videos`. Scene changes mount the next video layer, seek it to `playback.elapsedSeconds % video.duration`, then crossfade; paused playback stays frozen on the new scene frame, while playing playback resumes the video after alignment. The web server serves MP4 files with byte-range support so browser video seeking works reliably.
 
@@ -160,7 +162,6 @@ Resource OTA updates are handled by `npm run ota:resources -- <package-dir>`. A 
 
 The repo is no longer mock-only, but a few visible pieces are still only partial:
 
-- `npm run test:interaction` is still failing at the initial `ambient root renders` check, so browser-driven regression coverage is not yet trustworthy.
-- The source model is still intentionally focused. The UI now exposes `Library`, `Audio`, `Spotify Connect`, `Radio`, `Bluetooth`, and `AirPlay`, but not the full moOde management surface.
+- The source model is still intentionally focused. The UI exposes five frontstage tabs (`Library`, `Radio`, `Spotify`, `AirPlay`, `Bluetooth`), while internal `Audio` remains state/API truth rather than a visible browser category.
 - The ambient right-side brightness gesture depends on working DDC/CI on the target display. When `ddcutil` cannot read or set VCP `0x10`, Tikpal currently degrades to read-only/unavailable status instead of offering a fallback brightness path.
 - Ambient deliberately does not expose playlist or queue UI; queue preview belongs in the Player overlay so the default 720px-high dwell screen stays calm.

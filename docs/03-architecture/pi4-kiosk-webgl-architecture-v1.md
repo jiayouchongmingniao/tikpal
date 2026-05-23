@@ -1,8 +1,8 @@
-# Pi4 Kiosk WebGL Architecture v1
+# Pi4 Kiosk Runtime Architecture v1
 
 ## Summary
 
-Tikpal should run as a local web app on Raspberry Pi 4 and be displayed by Chromium in kiosk mode. The implementation should keep the physical screen at 2560 x 720 and control visual cost through render budgets, WebGL detail levels, and runtime diagnostics.
+Tikpal should run as a local web app on Raspberry Pi 4 and be displayed by Chromium in kiosk mode. The implementation should keep the physical screen at 2560 x 720 and control visual cost through media-layer discipline, runtime diagnostics, and optional renderer budgets for future visual modes.
 
 ## Target Runtime
 
@@ -13,7 +13,7 @@ Tikpal should run as a local web app on Raspberry Pi 4 and be displayed by Chrom
 | Display | HDMI touch screen, 2560 x 720 |
 | Browser | Stock Chromium, kiosk mode |
 | Frontend | Vite + React + TypeScript |
-| Visual renderer | Three.js / WebGL |
+| Visual renderer | Fireplace image plus local MP4 ambience layers |
 | Local service | Node.js HTTP API for playback/system/kiosk bridge |
 | Audio owner | moOde / MPD |
 
@@ -21,7 +21,7 @@ Tikpal should run as a local web app on Raspberry Pi 4 and be displayed by Chrom
 
 The first commit is documentation-only. The future implementation should keep these boundaries:
 
-- `src/`: React UI, Three.js/WebGL visual layer, touch state machine, and client data hooks.
+- `src/`: React UI, ambience media layer, touch state machine, player/settings overlays, and client data hooks.
 - `server/`: local API, moOde / MPD adapters, system state, kiosk diagnostics, and safe system actions.
 - `deploy/chromium/`: Chromium kiosk launcher, flags, managed policies, profile cleanup, and validation checks.
 - `deploy/systemd/`: API, web, and kiosk services.
@@ -57,8 +57,8 @@ TIKPAL_KIOSK_XRANDR_MODE=2560x720
 TIKPAL_CHROMIUM_BIN=/usr/lib/chromium-browser/chromium-browser
 TIKPAL_CHROMIUM_PROFILE_DIR=/home/moode/.config/tikpal-chromium-kiosk
 TIKPAL_CHROMIUM_COLOR_SCHEME=dark
-TIKPAL_RENDERER=webgl
-TIKPAL_RENDER_PROFILE=pi4-balanced
+TIKPAL_RENDERER=media
+TIKPAL_RENDER_PROFILE=pi4-media
 TIKPAL_PLAYER_BACKEND=mock
 TIKPAL_MPD_HOST=127.0.0.1
 TIKPAL_MPD_PORT=6600
@@ -67,20 +67,25 @@ TIKPAL_MPD_DEFAULT_QUEUE_PATH=Codex
 
 These names are now used by `deploy/chromium/env.kiosk.example`.
 
-## WebGL Policy
+## Ambience Renderer Policy
 
-WebGL should power the ambient flame visual, but the UI should not depend on an all-or-nothing renderer.
+The current ambient flame surface is media-backed: a fixed fireplace image under one or more muted looping MP4 layers. Scene changes mount the incoming video, align it to `playback.elapsedSeconds % video.duration`, and crossfade after the target frame is ready.
 
 Renderer requirements:
 
+- Support byte-range MP4 serving so browser seeks can land on the aligned frame.
+- Keep the fireplace image as the always-available visual base layer.
+- Keep HUD and controls readable while video metadata or seeking is settling.
+- Freeze the active scene when playback is paused and resume muted video when playback is playing.
+- Keep future WebGL/canvas visual modes optional and isolated from the player/settings shell.
+
+Future renderer requirements:
+
 - Prefer WebGL2 when available.
-- Fall back to lower-detail WebGL or a static/image ambience if initialization fails.
+- Fall back to lower-detail WebGL, canvas, image, or static ambience if initialization fails.
 - Report renderer type and fallback reason.
 - Handle context loss without crashing the whole UI.
 - Keep HUD and controls readable if the visual layer degrades.
-- Keep the fireplace image as the visual base layer and treat the GPU particle layer as an alpha overlay that can degrade independently.
-
-Three.js should be used for the primary flame scene because it provides a stable rendering layer and a familiar ecosystem for future visual modes.
 
 ## Performance Budget
 
@@ -90,7 +95,7 @@ Initial goals:
 
 | Surface | Target |
 | --- | --- |
-| Ambient flame | Stable 24-30fps minimum on Pi4 at 2560 x 720 output. |
+| Ambient flame/video | Stable 24-30fps minimum on Pi4 at 2560 x 720 output. |
 | Player overlay | Controls remain responsive under 100-150ms perceived input latency. |
 | Quick settings | No heavy continuous animation. |
 | Status polling | Low frequency, event-driven where possible. |
@@ -99,8 +104,9 @@ Initial goals:
 
 Performance controls:
 
-- Flame quality tier.
-- Particle count tier.
+- Video decode cost and asset bitrate.
+- Flame quality tier for future generated renderers.
+- Particle count tier for future generated renderers.
 - Internal render scale.
 - Frame-rate cap.
 - Reduced motion / low power mode.
@@ -111,9 +117,10 @@ Performance controls:
 The implementation should expose a debug/status surface for:
 
 - Effective render profile.
-- Renderer type: `webgl`, `webgl-low`, `image`, `static`, or fallback.
+- Renderer type: `media`, `webgl`, `webgl-low`, `image`, `static`, or fallback.
 - Average FPS, p10 FPS, and last frame interval.
-- WebGL init errors.
+- Media seek/metadata readiness for the active background video.
+- WebGL init errors for optional generated renderers.
 - Context lost count.
 - Current viewport and physical display size.
 - Chromium experiment/profile name.

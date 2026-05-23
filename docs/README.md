@@ -13,7 +13,7 @@ This directory is the source of truth for Tikpal product, UX, visual, architectu
 ## Current Scope
 
 - Tikpal targets a Raspberry Pi 4 running Chromium kiosk at 2560 x 720.
-- The first implementation should use Vite + React + TypeScript and Three.js / WebGL.
+- The current implementation uses Vite + React + TypeScript, a local Node API, and a fireplace image plus local MP4 ambience layer. WebGL remains an architecture/performance track for future renderers rather than the active flame surface.
 - The default screen is an ambient flame screen, not a conventional app homepage.
 - moOde / MPD remains the playback and system capability owner; Tikpal presents a focused touch UI over those capabilities.
 - Batch 3 now includes a local API bridge, frontend API read/write path, a repo-owned Chromium kiosk package, and an optional native MPD backend for moOde devices.
@@ -42,7 +42,7 @@ This directory is the source of truth for Tikpal product, UX, visual, architectu
 
 | Document | Status | Purpose |
 | --- | --- | --- |
-| [Pi4 kiosk WebGL architecture v1](03-architecture/pi4-kiosk-webgl-architecture-v1.md) | Current reference | Runtime topology, rendering policy, kiosk packaging, and performance budget. |
+| [Pi4 kiosk runtime architecture v1](03-architecture/pi4-kiosk-webgl-architecture-v1.md) | Current reference | Runtime topology, rendering policy, kiosk packaging, and performance budget. |
 
 ### Integration
 
@@ -75,8 +75,10 @@ The implementation exposes these concepts consistently across frontend state, lo
 
 ```ts
 type AppMode = "ambient" | "player" | "quickSettings" | "quickMenu";
+type SurfaceTheme = "warm-gold" | "graphite-silver" | "ivory-studio";
 type PlaybackState = "playing" | "paused" | "stopped";
 type SourceState =
+  | "audio"
   | "mpd"
   | "airplay"
   | "spotify"
@@ -84,6 +86,14 @@ type SourceState =
   | "roonbridge"
   | "upnp"
   | "radio";
+
+type SourceSwitchTarget =
+  | "mpd"
+  | "audio"
+  | "radio"
+  | "spotify"
+  | "bluetooth"
+  | "airplay";
 
 interface SystemState {
   network: NetworkState;
@@ -102,10 +112,11 @@ The local backend boundary should reserve endpoints or adapters for playback con
 ## Current Implementation Checkpoints
 
 - Root app: Vite + React + TypeScript.
-- Visual layer: Three.js/WebGL flame scene with CSS-backed fireplace art and CSS fallback when WebGL is unavailable.
+- Visual layer: image-backed fireplace with local MP4 video layers, playback-time alignment, and crossfaded scene changes.
 - State model: `ambient`, `player`, `quickSettings`, and `quickMenu`.
 - Validation routes: `/`, `/?mode=player`, `/?mode=quickSettings`.
 - Interaction validation: `npm run test:interaction` while the dev server is running.
 - Kiosk guard: root-level context menu, drag, selection, browser zoom, and multi-touch browser default suppression.
 - Ambient HUD: visible on startup, auto-hides after 5s, and can be shown again with a single tap.
 - Playback backend: `mock` by default, `mpc` when the Pi runtime sets `TIKPAL_PLAYER_BACKEND=mpc`.
+- Appearance: font presets and surface skin presets are persisted locally and applied across ambient, player, and settings surfaces.

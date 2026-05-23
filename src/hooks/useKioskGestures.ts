@@ -125,7 +125,7 @@ export function useKioskGestures(options: GestureOptions): GestureHandlers & { g
         if (averageDeltaY > TWO_FINGER_HINT_THRESHOLD) {
           setGesturePreview({
             kind: "quickSettings",
-            label: "Quick Settings",
+            label: "Settings",
             progress: clampProgress(averageDeltaY, TWO_FINGER_DOWN_THRESHOLD)
           });
         }
@@ -206,10 +206,10 @@ export function useKioskGestures(options: GestureOptions): GestureHandlers & { g
 
       const absDelta = Math.abs(wheelAccumulatorRef.current);
       if (options.mode === "ambient") {
-        const isSettingsGesture = event.shiftKey || wheelAccumulatorRef.current < -WHEEL_THRESHOLD;
+        const isSettingsGesture = event.shiftKey || wheelAccumulatorRef.current > 0;
         setGesturePreview({
           kind: isSettingsGesture ? "quickSettings" : "player",
-          label: isSettingsGesture ? "Quick Settings" : "Player",
+          label: isSettingsGesture ? "Settings" : "Player",
           progress: clampProgress(absDelta, WHEEL_THRESHOLD)
         });
 

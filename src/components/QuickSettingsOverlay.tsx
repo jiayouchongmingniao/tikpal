@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Captions, Cpu, Database, EthernetPort, Eye, EyeOff, Info, Monitor, Music2, Palette, Power, RotateCcw, SlidersHorizontal, Type, Volume2 } from "lucide-react";
 import type { TikpalDataStatus } from "../hooks/useTikpalState";
 import { useOverlayReturnGesture } from "../hooks/useOverlayReturnGesture";
-import type { FontTheme, LyricsFontSize, RuntimeState, SystemActionType, SystemState } from "../types";
+import type { FontTheme, LyricsFontSize, RuntimeState, SurfaceTheme, SystemActionType, SystemState } from "../types";
 
 interface QuickSettingsOverlayProps {
   active: boolean;
@@ -10,9 +10,11 @@ interface QuickSettingsOverlayProps {
   runtime: RuntimeState;
   status: TikpalDataStatus;
   fontTheme: FontTheme;
+  surfaceTheme: SurfaceTheme;
   lyricsVisible: boolean;
   lyricsFontSize: LyricsFontSize;
   onFontThemeChange: (theme: FontTheme) => void;
+  onSurfaceThemeChange: (theme: SurfaceTheme) => void;
   onLyricsVisibleChange: (visible: boolean) => void;
   onLyricsFontSizeChange: (size: LyricsFontSize) => void;
   onSystemAction: (type: SystemActionType, value?: number) => Promise<unknown>;
@@ -22,7 +24,7 @@ interface QuickSettingsOverlayProps {
 type CardTone = "cyan" | "gold" | "neutral" | "warn" | "danger";
 type ActionableCardKey = "library_scan" | "reboot" | "shutdown";
 type SettingsSectionKey = "home" | "network" | "output" | "system";
-type SettingsDetailView = "display" | "font" | "lyrics" | null;
+type SettingsDetailView = "appearance" | "display" | "font" | "lyrics" | null;
 
 interface BaseCard {
   key: string;
@@ -49,6 +51,10 @@ interface FontCard extends BaseCard {
   kind: "font";
 }
 
+interface AppearanceCard extends BaseCard {
+  kind: "appearance";
+}
+
 interface LyricsCard extends BaseCard {
   kind: "lyrics";
 }
@@ -57,7 +63,7 @@ interface DisplayCard extends BaseCard {
   kind: "display";
 }
 
-type SettingsCard = ReadOnlyCard | ActionCard | FontCard | LyricsCard | DisplayCard;
+type SettingsCard = ReadOnlyCard | ActionCard | FontCard | AppearanceCard | LyricsCard | DisplayCard;
 
 const fontChoices: Array<{ id: FontTheme; label: string; sample: string }> = [
   { id: "sans", label: "Modern Sans", sample: "Balanced UI default" },
@@ -69,6 +75,12 @@ const lyricsSizeChoices: Array<{ id: LyricsFontSize; label: string; sample: stri
   { id: "small", label: "Small", sample: "Low profile" },
   { id: "medium", label: "Medium", sample: "Balanced" },
   { id: "large", label: "Large", sample: "Readable distance" }
+];
+
+const surfaceThemeChoices: Array<{ id: SurfaceTheme; label: string; sample: string }> = [
+  { id: "warm-gold", label: "Warm Gold", sample: "Amber glass" },
+  { id: "graphite-silver", label: "Graphite Silver", sample: "Hi-Fi graphite" },
+  { id: "ivory-studio", label: "Ivory Studio", sample: "Soft studio" }
 ];
 
 const sectionCopy: Record<SettingsSectionKey, { label: string; description: string }> = {
@@ -96,9 +108,11 @@ export function QuickSettingsOverlay({
   runtime,
   status,
   fontTheme,
+  surfaceTheme,
   lyricsVisible,
   lyricsFontSize,
   onFontThemeChange,
+  onSurfaceThemeChange,
   onLyricsVisibleChange,
   onLyricsFontSizeChange,
   onSystemAction,
@@ -193,6 +207,16 @@ export function QuickSettingsOverlay({
         tone: "cyan"
       },
       {
+        kind: "appearance",
+        key: "appearance",
+        section: "output",
+        icon: Palette,
+        title: "Skin",
+        value: surfaceThemeChoices.find((choice) => choice.id === surfaceTheme)?.label ?? "Warm Gold",
+        meta: surfaceThemeChoices.find((choice) => choice.id === surfaceTheme)?.sample ?? "Amber glass",
+        tone: "gold"
+      },
+      {
         kind: "lyrics",
         key: "lyrics",
         section: "output",
@@ -251,12 +275,12 @@ export function QuickSettingsOverlay({
         confirmLabel: "Tap again to power off"
       }
     ],
-    [fontTheme, lyricsFontSize, lyricsVisible, runtime.kioskWindow, runtime.requestedRenderer, status.error, status.source, system.cpuTemp, system.display.brightnessPercent, system.display.controllable, system.dspState.enabled, system.dspState.preset, system.library.scanning, system.library.source, system.library.trackCount, system.network.ip, system.network.label, system.network.speed, system.outputDevice.detail, system.outputDevice.label, system.uptime]
+    [fontTheme, lyricsFontSize, lyricsVisible, runtime.kioskWindow, runtime.requestedRenderer, status.error, status.source, surfaceTheme, system.cpuTemp, system.display.brightnessPercent, system.display.controllable, system.dspState.enabled, system.dspState.preset, system.library.scanning, system.library.source, system.library.trackCount, system.network.ip, system.network.label, system.network.speed, system.outputDevice.detail, system.outputDevice.label, system.uptime]
   );
 
   const visibleCards = useMemo(() => {
     if (activeSection === "home") {
-      return settingsCards.filter((card) => ["network", "output", "display", "lyrics", "library", "system", "font"].includes(card.key));
+      return settingsCards.filter((card) => ["network", "output", "display", "lyrics", "library", "system", "font", "appearance"].includes(card.key));
     }
     return settingsCards.filter((card) => card.section === activeSection);
   }, [activeSection, settingsCards]);
@@ -322,6 +346,42 @@ export function QuickSettingsOverlay({
   function openDetail(nextDetail: Exclude<SettingsDetailView, null>) {
     setDetailView(nextDetail);
     setConfirmAction(null);
+  }
+
+  function renderAppearanceDetail() {
+    return (
+      <section className="settings-detail-panel" aria-label="Skin detail" data-settings-detail="appearance">
+        <div className="settings-detail-header">
+          <button className="settings-detail-back" type="button" onClick={() => setDetailView(null)}>
+            Back
+          </button>
+          <div>
+            <span>Output</span>
+            <strong>Skin Presets</strong>
+            <p>Switch the glass shell, cards, and controls as one surface.</p>
+          </div>
+        </div>
+
+        <div className="surface-theme-options" role="group" aria-label="Surface skin">
+          {surfaceThemeChoices.map((choice) => (
+            <button
+              key={choice.id}
+              className={`surface-theme-option surface-theme-option-${choice.id} ${surfaceTheme === choice.id ? "is-active" : ""}`}
+              type="button"
+              onClick={() => onSurfaceThemeChange(choice.id)}
+            >
+              <span className="surface-theme-swatch" aria-hidden="true">
+                <i />
+                <i />
+                <i />
+              </span>
+              <strong>{choice.label}</strong>
+              <span>{choice.sample}</span>
+            </button>
+          ))}
+        </div>
+      </section>
+    );
   }
 
   function renderFontDetail() {
@@ -504,7 +564,9 @@ export function QuickSettingsOverlay({
             <strong>{sectionCopy[activeSection].description}</strong>
           </header>
 
-          {detailView === "display"
+          {detailView === "appearance"
+            ? renderAppearanceDetail()
+            : detailView === "display"
             ? renderDisplayDetail()
             : detailView === "font"
               ? renderFontDetail()
@@ -539,13 +601,34 @@ export function QuickSettingsOverlay({
                     onClick={() => openDetail("font")}
                   >
                     <div className="settings-icon">
-                      <Palette size={32} />
+                      <Type size={32} />
                     </div>
                     <div>
                       <span>{card.title}</span>
                       <strong>{card.value}</strong>
                       <p>{card.meta}</p>
                       <em className="settings-card-action">Open font presets</em>
+                    </div>
+                  </button>
+                );
+              }
+
+              if (card.kind === "appearance") {
+                return (
+                  <button
+                    className={`settings-card settings-card-button settings-card-summary settings-card-appearance tone-${card.tone}`}
+                    key={card.key}
+                    type="button"
+                    onClick={() => openDetail("appearance")}
+                  >
+                    <div className="settings-icon">
+                      <Palette size={32} />
+                    </div>
+                    <div>
+                      <span>{card.title}</span>
+                      <strong>{card.value}</strong>
+                      <p>{card.meta}</p>
+                      <em className="settings-card-action">Open skin presets</em>
                     </div>
                   </button>
                 );

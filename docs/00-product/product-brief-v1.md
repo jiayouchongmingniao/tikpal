@@ -50,7 +50,7 @@ The ambient flame screen is the default and most important product surface.
 
 Required content:
 
-- Dynamic flame or fire-inspired WebGL visual.
+- Dynamic flame ambience: current implementation uses a fireplace image plus local MP4 video layers; future generated renderers can remain optional.
 - Current time.
 - Playback / pause / stopped status.
 - Volume.

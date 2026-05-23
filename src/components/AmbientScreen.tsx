@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
-import { Captions, CaptionsOff, GalleryHorizontalEnd, ListMusic, Pause, Play, Repeat1, Settings, Shuffle, SkipBack, SkipForward, SunMedium, Volume2 } from "lucide-react";
+import { Captions, CaptionsOff, GalleryHorizontalEnd, Heart, ListMusic, Pause, Play, Repeat1, Settings, Shuffle, SkipBack, SkipForward, SunMedium, Volume2 } from "lucide-react";
 import { fetchBackgroundVideos } from "../api/tikpalClient";
 import { FlameScene } from "./FlameScene";
-import { buildGeneratedCoverArtUrl } from "../coverArt";
 import { formatDuration, formatSampleRate } from "../mockState";
+import { getPlaybackDisplayTruth } from "../playbackTruth";
 import type { TikpalDataStatus } from "../hooks/useTikpalState";
 import type { AudioState, BackgroundVideoSummary, FontTheme, LyricsFontSize, LyricsState, PlaybackActionType, PlaybackMode, PlaybackSummary, SystemActionType, SystemState, TikpalState } from "../types";
 
@@ -147,19 +147,16 @@ export function AmbientScreen({
   const [frozenLyricsLineIndex, setFrozenLyricsLineIndex] = useState<number | null>(null);
   const [staticLyricsLineIndex, setStaticLyricsLineIndex] = useState(0);
   const currentBackgroundVideo = backgroundVideos[backgroundVideoIndex] ?? DEFAULT_BACKGROUND_VIDEO;
-  const title = playback.title ?? "Not Playing";
-  const artist = playback.artist ?? "Unknown Artist";
-  const album = playback.album ?? "No Album";
-  const elapsedSeconds = playback.elapsedSeconds ?? 0;
-  const durationSeconds = playback.durationSeconds ?? 0;
-  const progress = durationSeconds > 0 ? Math.min(1, elapsedSeconds / durationSeconds) : 0;
+  const playbackTruth = getPlaybackDisplayTruth(playback, audio, fontTheme);
+  const title = playbackTruth.title;
+  const artist = playbackTruth.artist;
+  const album = playbackTruth.album;
   const coverLabel = album
     .split(/\s+/)
     .map((word) => word[0])
     .join("")
     .slice(0, 3)
     .toUpperCase();
-  const coverArtUrl = playback.albumArtUrl ?? buildGeneratedCoverArtUrl(title, artist, album, fontTheme);
   const brightnessPercent = system.display.brightnessPercent;
   const audioProtectionMode = playback.source === "airplay" && playback.state === "playing";
   const canAdvanceLyrics = lyrics.synced
@@ -658,6 +655,18 @@ export function AmbientScreen({
             <SkipForward size={33} fill="currentColor" strokeWidth={1.6} />
           </button>
           <button
+            className={`ambient-transport-button ambient-transport-setting ${playback.favorite ? "is-active" : ""}`}
+            type="button"
+            aria-label={playback.favorite ? "Remove favorite" : "Favorite"}
+            title={playback.favorite ? "Remove favorite" : "Favorite"}
+            aria-pressed={playback.favorite}
+            tabIndex={hudVisible ? 0 : -1}
+            disabled={isPlaybackPending}
+            onClick={() => handleAmbientPlaybackAction("favorite_toggle")}
+          >
+            <Heart size={25} fill={playback.favorite ? "currentColor" : "none"} strokeWidth={1.8} />
+          </button>
+          <button
             className={`ambient-transport-button ambient-transport-setting ${lyricsVisible ? "is-active" : ""}`}
             type="button"
             aria-label={lyricsVisible ? "Hide lyrics" : "Show lyrics"}
@@ -706,8 +715,8 @@ export function AmbientScreen({
 
       <div className="ambient-hud" aria-label="Current playback">
         <div className="ambient-cover" aria-hidden="true">
-          <img src={coverArtUrl} alt="" />
-          {!playback.albumArtUrl ? <span>{coverLabel}</span> : null}
+          <img src={playbackTruth.albumArtUrl} alt="" />
+          {!playbackTruth.hasPlaybackArtwork ? <span>{coverLabel}</span> : null}
         </div>
         <div className="ambient-track">
           <strong>{title}</strong>
@@ -715,15 +724,15 @@ export function AmbientScreen({
         </div>
         <div className="ambient-status">
           <span className={`data-pill ${status.source === "api" ? "is-live" : "is-fallback"}`}>{status.pending ? "Syncing" : status.source === "api" ? "API" : "Fallback"}</span>
-          <span>{audio.currentSource.label}</span>
-          <span>{formatDuration(playback.elapsedSeconds)}</span>
+          <span>{playbackTruth.sourceLabel}</span>
+          <span>{formatDuration(playbackTruth.elapsedSeconds)}</span>
           <span>{system.audioFormat.codec} {system.bitDepth}bit / {formatSampleRate(system.sampleRate)}</span>
           <span>{system.outputDevice.label}</span>
           <span>{system.volume.db.toFixed(1)} dB</span>
           <span>{brightnessPercent}% Brightness</span>
         </div>
         <div className="ambient-progress" aria-hidden="true">
-          <span style={{ width: `${progress * 100}%` }} />
+          <span style={{ width: `${playbackTruth.progress * 100}%` }} />
         </div>
       </div>
 

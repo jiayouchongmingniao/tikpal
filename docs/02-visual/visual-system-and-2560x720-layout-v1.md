@@ -33,6 +33,18 @@ Reference board: [ui-reference-board.png](../assets/references/ui-reference-boar
 | Warning | `#F59E0B` | Warning state. |
 | Error | `#EF4444` | Dangerous and error state. |
 
+## Surface Skins
+
+The current UI supports three persisted surface skins:
+
+| Skin | Use |
+| --- | --- |
+| `warm-gold` | Default amber glass and warm HiFi highlights. |
+| `graphite-silver` | Cooler graphite controls with silver highlight contrast. |
+| `ivory-studio` | Softer light studio shell while retaining kiosk contrast. |
+
+Skin changes must affect the shell, cards, buttons, source highlight states, progress, and settings detail panels as one coordinated surface. Source tabs need distinct idle, selected, active, and selected-active states in every skin.
+
 ## Typography
 
 Preferred Chinese fonts:
@@ -105,8 +117,9 @@ Suggested composition:
 - Time and date sit high-right or right-side depending on final composition.
 - Progress can stretch near the bottom edge without becoming a full player.
 - Temporary transport controls sit in one shallow horizontal row so the 720px height does not feel crowded.
-- The row can include scene previous/next, playback mode, previous/play/next, and lyrics visibility, but not queue or playlist content.
+- The row can include scene previous/next, playback mode, previous/play/next, favorite, and lyrics visibility, but not queue or playlist content.
 - Playback mode should read as one segmented control with exactly one active state: sequence, repeat-one, or shuffle.
+- Ambient metadata, progress, and cover art should follow active playback truth from the backend. Source browsing state must not overwrite the long-dwell now-playing display.
 
 Scene switching:
 
@@ -141,9 +154,11 @@ Center playback zone:
 - Bottom: transport controls.
 - Source workspace: when opened, replace the old compact source list with a three-column workspace.
   - Left rail: `Library`, `Radio`, `Spotify`, `AirPlay`, `Bluetooth`.
+  - `Audio` can remain part of the backend state model, but it is not a visible primary tab in the source browser.
   - Center pane: source-specific content, especially searchable radio catalog and large touch targets.
   - Right pane: source detail, connection policy, readiness, and active session label.
 - Library browsing should keep the storage tier distinct from local taxonomy: storage uses `Local`, `NAS`, `USB`, `Favorites`, and `Recently Added`; Local then exposes the larger `Focus`, `Meditation`, and `Rest` categories with smaller subfolder chips beneath them.
+- Local category folders should remain manifest-backed. `Meditation` should not absorb Rest folders such as Sleep, Rain, or Deep Sleep long tracks unless the manifest itself categorizes them there.
 - Radio browsing must support 200+ stations without feeling like a dense admin table.
   - Keep search and filters visible near the top of the workspace.
   - Use large row height, quick-scan metadata pills, and obvious active/pending state.
@@ -177,7 +192,7 @@ Use a two-row card grid:
 | Row | Cards |
 | --- | --- |
 | Row 1 | Network, audio output, DSP, library update. |
-| Row 2 | Display, system info, reboot, shutdown. |
+| Row 2 | Display, font, skin, system info, reboot, shutdown. |
 
 Design rules:
 
@@ -185,6 +200,7 @@ Design rules:
 - Cards can open detail panels later.
 - Dangerous actions show confirmation before execution.
 - Use warning/error color only for real warnings.
+- Font and skin presets live in detail panels and must fit within the 720px kiosk height without requiring vertical page scrolling.
 
 ## Empty and Error States
 

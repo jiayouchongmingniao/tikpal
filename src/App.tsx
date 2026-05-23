@@ -7,9 +7,10 @@ import { useAppMode } from "./hooks/useAppMode";
 import { useBrowserKioskGuard } from "./hooks/useBrowserKioskGuard";
 import { useKioskGestures } from "./hooks/useKioskGestures";
 import { useTikpalState } from "./hooks/useTikpalState";
-import type { AppMode, FontTheme, LyricsFontSize } from "./types";
+import type { AppMode, FontTheme, LyricsFontSize, SurfaceTheme } from "./types";
 
 const FONT_THEME_STORAGE_KEY = "tikpal.fontTheme";
+const SURFACE_THEME_STORAGE_KEY = "tikpal.surfaceTheme";
 const LYRICS_VISIBLE_STORAGE_KEY = "tikpal.lyricsVisible.v2";
 const LYRICS_FONT_SIZE_STORAGE_KEY = "tikpal.lyricsFontSize";
 
@@ -39,6 +40,14 @@ function readInitialFontTheme(): FontTheme {
   return "sans";
 }
 
+function readInitialSurfaceTheme(): SurfaceTheme {
+  const savedTheme = window.localStorage.getItem(SURFACE_THEME_STORAGE_KEY);
+  if (savedTheme === "warm-gold" || savedTheme === "graphite-silver" || savedTheme === "ivory-studio") {
+    return savedTheme;
+  }
+  return "warm-gold";
+}
+
 function readInitialLyricsVisible() {
   return window.localStorage.getItem(LYRICS_VISIBLE_STORAGE_KEY) === "true";
 }
@@ -54,6 +63,7 @@ function readInitialLyricsFontSize(): LyricsFontSize {
 export default function App() {
   const [now, setNow] = useState(() => new Date());
   const [fontTheme, setFontTheme] = useState<FontTheme>(readInitialFontTheme);
+  const [surfaceTheme, setSurfaceTheme] = useState<SurfaceTheme>(readInitialSurfaceTheme);
   const [lyricsVisible, setLyricsVisible] = useState(readInitialLyricsVisible);
   const [lyricsFontSize, setLyricsFontSize] = useState<LyricsFontSize>(readInitialLyricsFontSize);
   const { mode, hudVisible, idleTotalMs, idleRemainingMs, showHud, toggleHud, changeMode, returnAmbient, resetIdleTimer } = useAppMode(readInitialMode());
@@ -70,6 +80,11 @@ export default function App() {
     document.documentElement.dataset.fontTheme = fontTheme;
     window.localStorage.setItem(FONT_THEME_STORAGE_KEY, fontTheme);
   }, [fontTheme]);
+
+  useEffect(() => {
+    document.documentElement.dataset.surfaceTheme = surfaceTheme;
+    window.localStorage.setItem(SURFACE_THEME_STORAGE_KEY, surfaceTheme);
+  }, [surfaceTheme]);
 
   useEffect(() => {
     window.localStorage.setItem(LYRICS_VISIBLE_STORAGE_KEY, lyricsVisible ? "true" : "false");
@@ -130,9 +145,11 @@ export default function App() {
         runtime={tikpalState.runtime}
         status={tikpalStatus}
         fontTheme={fontTheme}
+        surfaceTheme={surfaceTheme}
         lyricsVisible={lyricsVisible}
         lyricsFontSize={lyricsFontSize}
         onFontThemeChange={setFontTheme}
+        onSurfaceThemeChange={setSurfaceTheme}
         onLyricsVisibleChange={setLyricsVisible}
         onLyricsFontSizeChange={setLyricsFontSize}
         onSystemAction={sendSystemAction}

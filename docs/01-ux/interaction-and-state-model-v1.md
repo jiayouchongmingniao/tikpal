@@ -28,7 +28,7 @@ type AppMode = "ambient" | "player" | "quickSettings" | "quickMenu";
 | Long press | Ambient | Open quick menu. |
 | Vertical drag in left ambient zone | Ambient | Live volume adjustment against moOde volume state. |
 | Vertical drag in right ambient zone | Ambient | Live display brightness adjustment through DDC/CI when available. |
-| Ambient control row buttons | Ambient HUD visible | Previous scene, play mode, previous track, play/pause, next track, lyrics, and next scene. |
+| Ambient control row buttons | Ambient HUD visible | Previous scene, play mode, previous track, play/pause, next track, favorite, lyrics, and next scene. |
 | Arrow keys | Ambient HUD visible | Up/down change scene, left/right change track, Space/Enter toggles play/pause. |
 
 ## Gesture Thresholds
@@ -127,8 +127,9 @@ MVP is touch-first. The state model should still reserve clean mappings for:
 
 Current desktop validation mappings:
 
-- Wheel / trackpad down from ambient opens `player`.
-- Shift + wheel / trackpad down from ambient opens `quickSettings`.
+- Wheel / trackpad up from ambient opens `player`.
+- Wheel / trackpad down from ambient opens `quickSettings`.
+- Shift + wheel from ambient also opens `quickSettings`.
 - Wheel / trackpad up from an overlay returns to `ambient`.
 - Clicks inside protected overlay panels do not count as blank-tap return.
 - Drag / touch-swipe up inside protected player or settings panels returns to `ambient`.

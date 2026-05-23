@@ -3,7 +3,8 @@ import { useCallback, useRef } from "react";
 const TAP_MAX_DISTANCE = 10;
 const SWIPE_UP_THRESHOLD = -80;
 const HORIZONTAL_DRIFT_LIMIT = 72;
-const INTERACTIVE_SELECTOR = "button, input, select, textarea, a, [role='button'], [data-gesture-control]";
+const FORM_CONTROL_SELECTOR = "input, select, textarea";
+const CLICK_CONTROL_SELECTOR = "button, a, [role='button'], [data-gesture-control]";
 
 interface GestureState {
   pointerId: number;
@@ -11,14 +12,19 @@ interface GestureState {
   startY: number;
   currentX: number;
   currentY: number;
+  startedOnClickControl: boolean;
 }
 
 export function useOverlayReturnGesture(onReturnAmbient: () => void) {
   const gestureRef = useRef<GestureState | null>(null);
   const suppressClickRef = useRef(false);
 
-  const isInteractiveTarget = useCallback((target: EventTarget | null) => {
-    return target instanceof Element && target.closest(INTERACTIVE_SELECTOR) !== null;
+  const isFormControlTarget = useCallback((target: EventTarget | null) => {
+    return target instanceof Element && target.closest(FORM_CONTROL_SELECTOR) !== null;
+  }, []);
+
+  const isClickControlTarget = useCallback((target: EventTarget | null) => {
+    return target instanceof Element && target.closest(CLICK_CONTROL_SELECTOR) !== null;
   }, []);
 
   const clearSuppressClick = useCallback(() => {
@@ -32,19 +38,23 @@ export function useOverlayReturnGesture(onReturnAmbient: () => void) {
   }, []);
 
   const onPointerDown = useCallback<React.PointerEventHandler<HTMLElement>>((event) => {
-    if (isInteractiveTarget(event.target)) {
+    if (isFormControlTarget(event.target)) {
       gestureRef.current = null;
       return;
     }
+    const startedOnClickControl = isClickControlTarget(event.target);
     gestureRef.current = {
       pointerId: event.pointerId,
       startX: event.clientX,
       startY: event.clientY,
       currentX: event.clientX,
-      currentY: event.clientY
+      currentY: event.clientY,
+      startedOnClickControl
     };
-    event.currentTarget.setPointerCapture(event.pointerId);
-  }, [isInteractiveTarget]);
+    if (!startedOnClickControl) {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    }
+  }, [isClickControlTarget, isFormControlTarget]);
 
   const onPointerMove = useCallback<React.PointerEventHandler<HTMLElement>>((event) => {
     const gesture = gestureRef.current;

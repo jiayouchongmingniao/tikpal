@@ -9,7 +9,7 @@ This document turns the product design into buildable slices. The first repo com
 ### Slice 1: Project Scaffold
 
 - Create Vite + React + TypeScript app.
-- Add Three.js.
+- Add the ambient visual stack and keep future renderer hooks isolated from the shell.
 - Add fixed 2560 x 720 design viewport rules.
 - Add black startup background in HTML before React loads.
 - Add app mode state machine with `ambient`, `player`, `quickSettings`, and `quickMenu`.
@@ -22,7 +22,7 @@ Acceptance:
 
 ### Slice 2: Ambient Flame Screen
 
-- Implement WebGL flame visual using Three.js.
+- Implement the ambient flame visual. The current implementation uses a fireplace image plus local MP4 layers rather than generated WebGL flames.
 - Add time display.
 - Add weak playback HUD.
 - Add tap-to-boost HUD behavior.
@@ -32,7 +32,7 @@ Acceptance:
 
 - Default entry is ambient.
 - Flame animation is visible and does not obscure HUD text.
-- Tapping strengthens playback HUD for 3 seconds and fades back.
+- Tapping strengthens playback HUD for 5 seconds and fades back.
 - Renderer fallback keeps the page usable.
 
 ### Slice 3: Gesture State Machine
@@ -105,7 +105,8 @@ Acceptance:
 
 Current status note:
 
-- Quick Settings is implemented as an overview-first card grid with live backend/system state, reboot/shutdown confirmation, and a local font selector.
+- Quick Settings is implemented as an overview-first card grid with live backend/system state, reboot/shutdown confirmation, and local font and skin selectors.
+- Skin presets currently include `warm-gold`, `graphite-silver`, and `ivory-studio`.
 - Display brightness is reflected in system state and can now be adjusted both from the ambient right-edge gesture and from an in-panel Quick Settings control surface on DDC/CI-capable hardware.
 
 ### Slice 7: Pi4 Kiosk Package
@@ -182,7 +183,7 @@ Batch 4 deployment note:
 
 | Risk | Mitigation |
 | --- | --- |
-| WebGL cost is too high on Pi4 at 2560 x 720. | Add render scale, quality tier, frame cap, and static fallback from the first implementation. |
+| Ambient rendering cost is too high on Pi4 at 2560 x 720. | Keep media bitrate/decode cost bounded, retain the static fireplace image fallback, and reserve render scale / quality tier controls for future generated renderers. |
 | Browser startup shows white or restore UI. | Set black HTML background, use dark Chromium flags, dedicated profile, and profile cleanup. |
 | Two-finger gesture is hard to discover. | Add weak gear and long-press quick menu fallback. |
 | moOde data is inconsistent across sources. | Normalize source state and label passive renderers as status, not guaranteed switch actions. |
@@ -195,9 +196,8 @@ Batch 4 deployment note:
 
 These gaps are obvious from the current repo state and should be treated as follow-up work rather than assumed complete:
 
-- `npm run test:interaction` is still failing at `ambient root renders`, so end-to-end browser interaction regression coverage is not yet landed.
-- The player `Queue` button is still only a placeholder affordance; no queue drawer or queue management UI exists behind it yet.
-- The source model is intentionally incomplete relative to full moOde. `Library`, `Spotify`, and `Radio` are surfaced, but broader renderer/source administration is still outside the frontstage contract.
+- The player `Queue` button opens a preview panel, but queue management/editing is still outside the current kiosk contract.
+- The source model is intentionally incomplete relative to full moOde. Five frontstage tabs are surfaced (`Library`, `Radio`, `Spotify`, `AirPlay`, `Bluetooth`), but broader renderer/source administration is still outside the kiosk contract.
 
 ## Documentation Completeness Check
 
@@ -217,9 +217,9 @@ Before implementation starts, confirm:
 - App mode: `ambient`.
 - Player timeout: 15 seconds.
 - Quick settings timeout: 30 seconds.
-- Tap HUD boost: 3 seconds.
+- Tap HUD boost: 5 seconds.
 - Physical output: 2560 x 720.
 - Frontend stack: Vite + React + TypeScript.
-- Visual stack: Three.js / WebGL.
+- Visual stack: fireplace image plus local MP4 ambience layers; optional generated renderers remain future-facing.
 - Backend owner: local Node.js service.
 - Audio owner: moOde / MPD.
