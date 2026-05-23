@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { AmbientScreen } from "./components/AmbientScreen";
 import { PlayerOverlay } from "./components/PlayerOverlay";
 import { QuickMenu } from "./components/QuickMenu";
@@ -7,12 +7,21 @@ import { useAppMode } from "./hooks/useAppMode";
 import { useBrowserKioskGuard } from "./hooks/useBrowserKioskGuard";
 import { useKioskGestures } from "./hooks/useKioskGestures";
 import { useTikpalState } from "./hooks/useTikpalState";
-import type { AppMode, FontTheme, LyricsFontSize, SurfaceTheme } from "./types";
+import type { AppMode, BackgroundVideoSummary, FontTheme, LyricsFontSize, SurfaceTheme } from "./types";
 
 const FONT_THEME_STORAGE_KEY = "tikpal.fontTheme";
 const SURFACE_THEME_STORAGE_KEY = "tikpal.surfaceTheme";
 const LYRICS_VISIBLE_STORAGE_KEY = "tikpal.lyricsVisible.v2";
 const LYRICS_FONT_SIZE_STORAGE_KEY = "tikpal.lyricsFontSize";
+const SCENE_VIDEO_ENABLED_STORAGE_KEY = "tikpal.sceneVideoEnabled";
+const CLOCK_VISIBLE_STORAGE_KEY = "tikpal.clockVisible";
+
+const DEFAULT_SCENE_VIDEO: BackgroundVideoSummary = {
+  id: "output_2560x720-4k",
+  filename: "output_2560x720-4k.mp4",
+  label: "output_2560x720-4k.mp4",
+  src: "/assets/output_2560x720-4k.mp4"
+};
 
 const dateFormatter = new Intl.DateTimeFormat("en-US", {
   month: "2-digit",
@@ -60,12 +69,24 @@ function readInitialLyricsFontSize(): LyricsFontSize {
   return "medium";
 }
 
+function readStoredBoolean(key: string, fallback: boolean) {
+  const savedValue = window.localStorage.getItem(key);
+  if (savedValue === "true") return true;
+  if (savedValue === "false") return false;
+  return fallback;
+}
+
 export default function App() {
   const [now, setNow] = useState(() => new Date());
   const [fontTheme, setFontTheme] = useState<FontTheme>(readInitialFontTheme);
   const [surfaceTheme, setSurfaceTheme] = useState<SurfaceTheme>(readInitialSurfaceTheme);
   const [lyricsVisible, setLyricsVisible] = useState(readInitialLyricsVisible);
   const [lyricsFontSize, setLyricsFontSize] = useState<LyricsFontSize>(readInitialLyricsFontSize);
+  const [sceneVideoEnabled, setSceneVideoEnabled] = useState(() => readStoredBoolean(SCENE_VIDEO_ENABLED_STORAGE_KEY, true));
+  const [clockVisible, setClockVisible] = useState(() => readStoredBoolean(CLOCK_VISIBLE_STORAGE_KEY, true));
+  const [sceneSoundEnabled, setSceneSoundEnabled] = useState(false);
+  const [sceneSoundPending, setSceneSoundPending] = useState(false);
+  const [activeSceneVideo, setActiveSceneVideo] = useState<BackgroundVideoSummary>(DEFAULT_SCENE_VIDEO);
   const { mode, hudVisible, idleTotalMs, idleRemainingMs, showHud, toggleHud, changeMode, returnAmbient, resetIdleTimer } = useAppMode(readInitialMode());
   const { state: tikpalState, status: tikpalStatus, sendPlaybackAction, sendSystemAction, sendSourceSwitch } = useTikpalState();
 
@@ -94,8 +115,67 @@ export default function App() {
     window.localStorage.setItem(LYRICS_FONT_SIZE_STORAGE_KEY, lyricsFontSize);
   }, [lyricsFontSize]);
 
+  useEffect(() => {
+    window.localStorage.setItem(SCENE_VIDEO_ENABLED_STORAGE_KEY, sceneVideoEnabled ? "true" : "false");
+  }, [sceneVideoEnabled]);
+
+  useEffect(() => {
+    window.localStorage.setItem(CLOCK_VISIBLE_STORAGE_KEY, clockVisible ? "true" : "false");
+  }, [clockVisible]);
+
+  useEffect(() => {
+    if (sceneSoundEnabled && (tikpalState.playback.source !== "scene" || tikpalState.playback.state !== "playing")) {
+      setSceneSoundEnabled(false);
+    }
+  }, [sceneSoundEnabled, tikpalState.playback.source, tikpalState.playback.state]);
+
   const timeLabel = useMemo(() => timeFormatter.format(now), [now]);
   const dateLabel = useMemo(() => dateFormatter.format(now), [now]);
+
+  const handleCurrentSceneVideoChange = useCallback((video: BackgroundVideoSummary) => {
+    setActiveSceneVideo(video);
+  }, []);
+
+  const stopSceneSound = useCallback(async () => {
+    setSceneSoundEnabled(false);
+    if (tikpalState.playback.source !== "scene") return;
+    try {
+      await sendPlaybackAction("pause");
+    } catch {
+      // The local video is already muted; the next API refresh will reconcile source state.
+    }
+  }, [sendPlaybackAction, tikpalState.playback.source]);
+
+  async function handleSceneSoundEnabledChange(enabled: boolean) {
+    if (sceneSoundPending) return;
+    setSceneSoundPending(true);
+
+    try {
+      if (!enabled) {
+        await stopSceneSound();
+        return;
+      }
+
+      setSceneVideoEnabled(true);
+      const nextState = await sendSourceSwitch("scene", undefined, undefined, activeSceneVideo);
+      setSceneSoundEnabled(nextState.playback.source === "scene" && nextState.playback.state === "playing");
+    } catch {
+      setSceneSoundEnabled(false);
+    } finally {
+      setSceneSoundPending(false);
+    }
+  }
+
+  function handleSceneVideoEnabledChange(enabled: boolean) {
+    if (!enabled && sceneSoundEnabled) {
+      setSceneSoundEnabled(false);
+      setSceneVideoEnabled(false);
+      void stopSceneSound();
+      return;
+    }
+
+    setSceneVideoEnabled(enabled);
+  }
 
   const { gesturePreview, ...gestureHandlers } = useKioskGestures({
     mode,
@@ -121,10 +201,14 @@ export default function App() {
         audio={tikpalState.audio}
         system={tikpalState.system}
         status={tikpalStatus}
+        sceneVideoEnabled={sceneVideoEnabled}
+        sceneSoundEnabled={sceneSoundEnabled}
+        clockVisible={clockVisible}
         onPlaybackAction={sendPlaybackAction}
         onSystemAction={sendSystemAction}
         onHudActivity={showHud}
         onLyricsVisibleChange={setLyricsVisible}
+        onCurrentSceneVideoChange={handleCurrentSceneVideoChange}
         onOpenSettings={() => changeMode("quickSettings")}
       />
 
@@ -155,7 +239,17 @@ export default function App() {
         onSystemAction={sendSystemAction}
         onReturnAmbient={returnAmbient}
       />
-      <QuickMenu active={mode === "quickMenu"} onChoose={changeMode} onClose={returnAmbient} />
+      <QuickMenu
+        active={mode === "quickMenu"}
+        sceneVideoEnabled={sceneVideoEnabled}
+        clockVisible={clockVisible}
+        sceneSoundEnabled={sceneSoundEnabled}
+        sceneSoundPending={sceneSoundPending || tikpalStatus.pending}
+        onSceneVideoEnabledChange={handleSceneVideoEnabledChange}
+        onClockVisibleChange={setClockVisible}
+        onSceneSoundEnabledChange={(enabled) => void handleSceneSoundEnabledChange(enabled)}
+        onClose={returnAmbient}
+      />
 
       <div className={`gesture-cue ${gesturePreview ? "is-visible" : ""}`} aria-hidden={!gesturePreview}>
         <span>{gesturePreview?.label ?? ""}</span>

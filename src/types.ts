@@ -8,6 +8,7 @@ export type PlaybackMode = "sequence" | "repeat_one" | "shuffle";
 
 export type SourceState =
   | "audio"
+  | "scene"
   | "mpd"
   | "airplay"
   | "spotify"
@@ -18,7 +19,7 @@ export type SourceState =
 
 export type SourceAvailability = "available" | "waiting" | "unavailable";
 export type SourceControllability = "switchable" | "handoff" | "status-only";
-export type SourceSwitchTarget = "mpd" | "audio" | "radio" | "spotify" | "bluetooth" | "airplay";
+export type SourceSwitchTarget = "mpd" | "audio" | "scene" | "radio" | "spotify" | "bluetooth" | "airplay";
 export type SourceConnectionState = "idle" | "armed" | "connected" | "blocked";
 
 export interface RadioStationSummary {
@@ -326,4 +327,7 @@ export interface SourceSwitchRequest {
   target: SourceSwitchTarget;
   radioStationId?: string;
   localTrackPath?: string;
+  sceneVideoId?: string;
+  sceneVideoLabel?: string;
+  sceneVideoSrc?: string;
 }

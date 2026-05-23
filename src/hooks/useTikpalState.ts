@@ -6,7 +6,7 @@ import {
   sendSystemAction as postSystemAction
 } from "../api/tikpalClient";
 import { fallbackTikpalState } from "../mockState";
-import type { PlaybackActionType, PlaybackMode, SourceSwitchTarget, SystemActionType, TikpalState } from "../types";
+import type { BackgroundVideoSummary, PlaybackActionType, PlaybackMode, SourceSwitchTarget, SystemActionType, TikpalState } from "../types";
 
 export interface TikpalDataStatus {
   source: "api" | "fallback";
@@ -92,10 +92,10 @@ export function useTikpalState() {
     }
   }, []);
 
-  const sendSourceSwitch = useCallback(async (target: SourceSwitchTarget, radioStationId?: string, localTrackPath?: string) => {
+  const sendSourceSwitch = useCallback(async (target: SourceSwitchTarget, radioStationId?: string, localTrackPath?: string, sceneVideo?: BackgroundVideoSummary) => {
     setStatus((current) => ({ ...current, pending: true, error: null }));
     try {
-      const nextState = await postSourceSwitch(target, radioStationId, localTrackPath);
+      const nextState = await postSourceSwitch(target, radioStationId, localTrackPath, sceneVideo);
       setState(nextState);
       setStatus({ source: "api", pending: false, error: null });
       return nextState;

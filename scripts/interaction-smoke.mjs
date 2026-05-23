@@ -160,6 +160,18 @@ async function expectEventually(client, expression, label, attempts = 20, delayM
   throw new Error(`Failed: ${label}`);
 }
 
+async function expectEventuallyEvaluate(client, expression, label, attempts = 20, delayMs = 150) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (await evaluate(client, expression)) {
+      console.log(`ok - ${label}`);
+      return;
+    }
+    await wait(delayMs);
+  }
+
+  throw new Error(`Failed: ${label}`);
+}
+
 async function navigate(client, url) {
   await client.send("Page.navigate", { url });
   await wait(750);
@@ -332,6 +344,7 @@ const chrome = spawn(CHROME_BIN, [
   "--disable-gpu=false",
   "--enable-webgl",
   "--ignore-gpu-blocklist",
+  "--autoplay-policy=no-user-gesture-required",
   `--remote-debugging-port=${DEVTOOLS_PORT}`,
   `--user-data-dir=${profileDir}`,
   "--window-size=2560,720",
@@ -368,6 +381,131 @@ try {
 
   await wheel(client, 220);
   await expectEventually(client, "document.querySelector('.quick-settings.is-active') !== null", "ambient wheel down opens settings");
+
+  await navigate(client, `${APP_URL}?mode=quickMenu`);
+  await expect(client, "document.querySelector('.quick-menu.is-active') !== null", "quick menu opens");
+  await expect(
+    client,
+    `
+      (() => {
+        const text = document.querySelector('.quick-menu-panel')?.textContent ?? '';
+        return text.includes('Scene Video')
+          && text.includes('Clock')
+          && text.includes('Scene Sound')
+          && !text.includes('Flame')
+          && !text.includes('Screen Off');
+      })()
+    `,
+    "quick menu exposes scene toggles without stale labels"
+  );
+
+  await evaluate(
+    client,
+    `
+      (() => {
+        document.querySelector('[data-quick-menu-toggle="scene-video"]')?.click();
+        return true;
+      })()
+    `
+  );
+  await expect(client, "document.querySelector('.flame-scene.is-video-off') !== null", "scene video off makes ambient background black");
+  await expect(client, "document.querySelector('.fireplace-backdrop') === null && document.querySelector('.flame-video') === null", "scene video off removes fireplace media layers");
+  await expect(client, "document.querySelector('.ambient-clock') !== null", "clock remains independent while scene video is off");
+
+  await evaluate(
+    client,
+    `
+      (() => {
+        document.querySelector('[data-quick-menu-toggle="clock"]')?.click();
+        return true;
+      })()
+    `
+  );
+  await expect(client, "document.querySelector('.ambient-clock') === null", "quick menu clock toggle hides ambient clock");
+
+  await evaluate(
+    client,
+    `
+      (() => {
+        document.querySelector('[data-quick-menu-toggle="scene-sound"]')?.click();
+        return true;
+      })()
+    `
+  );
+  await expectEventually(client, "document.querySelector('[data-quick-menu-toggle=\"scene-sound\"]')?.getAttribute('aria-pressed') === 'true'", "scene sound toggle turns on");
+  await expectEventually(
+    client,
+    `
+      (() => {
+        const video = document.querySelector('.flame-video.is-active');
+        return video instanceof HTMLVideoElement
+          && !document.querySelector('.flame-scene.is-video-off')
+          && video.muted === false
+          && video.paused === false;
+      })()
+    `,
+    "scene sound forces video on and unmutes the active video"
+  );
+  await expectEventuallyEvaluate(
+    client,
+    "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => state.playback.source === 'scene' && state.playback.state === 'playing')",
+    "scene sound switches API source to scene"
+  );
+
+  await evaluate(
+    client,
+    `
+      (() => {
+        document.querySelector('[data-quick-menu-toggle="scene-video"]')?.click();
+        return true;
+      })()
+    `
+  );
+  await expectEventually(client, "document.querySelector('[data-quick-menu-toggle=\"scene-sound\"]')?.getAttribute('aria-pressed') === 'false'", "turning scene video off first disables scene sound");
+  await expect(client, "document.querySelector('.flame-scene.is-video-off') !== null", "scene video off after scene sound returns to black background");
+  await expectEventuallyEvaluate(
+    client,
+    "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => state.playback.source === 'scene' && state.playback.state !== 'playing')",
+    "scene video off stops scene audio in the API"
+  );
+
+  await evaluate(
+    client,
+    `
+      (() => {
+        document.querySelector('[data-quick-menu-toggle="scene-video"]')?.click();
+        document.querySelector('[data-quick-menu-toggle="clock"]')?.click();
+        return true;
+      })()
+    `
+  );
+  await expect(client, "document.querySelector('.ambient-clock') !== null", "quick menu clock toggle restores ambient clock");
+  await evaluate(
+    client,
+    `
+      (() => {
+        document.querySelector('[data-quick-menu-toggle="scene-sound"]')?.click();
+        return true;
+      })()
+    `
+  );
+  await expectEventually(client, "document.querySelector('.flame-video.is-active') instanceof HTMLVideoElement && document.querySelector('.flame-video.is-active').muted === false", "scene sound can be re-enabled before switching sources");
+  await navigate(client, `${APP_URL}?mode=player`);
+  await evaluate(
+    client,
+    `
+      (() => {
+        document.querySelector('[data-source-item="mpd"]')?.click();
+        return true;
+      })()
+    `
+  );
+  await expectEventually(client, "document.querySelector('.flame-video.is-active') instanceof HTMLVideoElement && document.querySelector('.flame-video.is-active').muted === true", "music source switch remutes the active video");
+  await expectEventuallyEvaluate(
+    client,
+    "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => state.playback.source !== 'scene')",
+    "switching to music deactivates scene source"
+  );
 
   await navigate(client, `${APP_URL}?mode=player`);
   await click(client, 1360, 600);
@@ -424,6 +562,95 @@ try {
     `
   );
   await expect(client, "document.querySelector('.progress-slider') instanceof HTMLInputElement && !document.querySelector('.progress-slider').disabled && Number(document.querySelector('.progress-slider').max) > 0", "mpd playback renders an enabled seek slider");
+  await expect(
+    client,
+    `
+      (() => {
+        const slider = document.querySelector('[data-player-volume-slider]');
+        return slider instanceof HTMLInputElement
+          && slider.type === 'range'
+          && slider.min === '0'
+          && slider.max === '100'
+          && slider.step === '1'
+          && document.querySelector('[aria-label="Volume down"]') === null
+          && document.querySelector('[aria-label="Volume up"]') === null;
+      })()
+    `,
+    "player volume renders a range slider instead of plus/minus buttons"
+  );
+
+  await evaluate(
+    client,
+    `
+      (() => {
+        const slider = document.querySelector('[data-player-volume-slider]');
+        if (!(slider instanceof HTMLInputElement)) return false;
+        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+        setter?.call(slider, '31');
+        slider.dispatchEvent(new Event('input', { bubbles: true }));
+        slider.dispatchEvent(new Event('change', { bubbles: true }));
+        return true;
+      })()
+    `
+  );
+  await expectEventually(
+    client,
+    `
+      (() => {
+        const slider = document.querySelector('[data-player-volume-slider]');
+        const label = document.querySelector('[data-player-volume-percent]');
+        return slider instanceof HTMLInputElement
+          && Number(slider.value) === 31
+          && label?.textContent?.trim() === '31%';
+      })()
+    `,
+    "player volume slider reflects the dragged value"
+  );
+  await expectEventuallyEvaluate(
+    client,
+    "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => state.system.volume.percent === 31)",
+    "player volume slider updates the global API volume"
+  );
+
+  await navigate(client, `${APP_URL}?mode=quickMenu`);
+  await evaluate(
+    client,
+    `
+      (() => {
+        document.querySelector('[data-quick-menu-toggle="scene-sound"]')?.click();
+        return true;
+      })()
+    `
+  );
+  await expectEventuallyEvaluate(
+    client,
+    `
+      fetch('/api/v1/system/state').then((response) => response.json()).then((state) => {
+        const video = document.querySelector('.flame-video.is-active');
+        return state.system.volume.percent === 31
+          && video instanceof HTMLVideoElement
+          && Math.abs(video.volume - 0.31) < 0.01
+          && video.muted === false;
+      })
+    `,
+    "scene video element volume follows the global volume"
+  );
+  await navigate(client, `${APP_URL}?mode=player`);
+  await evaluate(
+    client,
+    `
+      (() => {
+        const target = document.querySelector('[data-source-item="mpd"]');
+        target?.click();
+        return Boolean(target);
+      })()
+    `
+  );
+  await expectEventuallyEvaluate(
+    client,
+    "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => state.playback.source !== 'scene')",
+    "music source remains available after scene volume sync"
+  );
 
   await evaluate(
     client,

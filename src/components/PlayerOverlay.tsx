@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Bluetooth,
   Cast,
@@ -9,11 +9,9 @@ import {
   LibraryBig,
   ListMusic,
   LoaderCircle,
-  Minus,
   Music2,
   Pause,
   Play,
-  Plus,
   Radio as RadioIcon,
   Search,
   Server,
@@ -61,6 +59,12 @@ interface LocalCategory {
   label: string;
 }
 
+interface VolumeRequestState {
+  inFlight: boolean;
+  queued: number | null;
+  lastSent: number | null;
+}
+
 const primaryPanels: Array<{ id: PrimaryPanelId; label: string; Icon: LucideIcon }> = [
   { id: "library", label: "Library", Icon: LibraryBig },
   { id: "radio", label: "Radio", Icon: RadioIcon },
@@ -96,6 +100,11 @@ function sourceStatusLabel(source: AudioState["currentSource"] | undefined, pend
   if (source.connectionState === "blocked") return "Closed";
   if (source.availability === "unavailable") return "Unavailable";
   return "Ready";
+}
+
+function clampVolumePercent(value: number) {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(100, Math.round(value)));
 }
 
 export function PlayerOverlay({
@@ -135,6 +144,13 @@ export function PlayerOverlay({
   const [pendingSource, setPendingSource] = useState<SourceSwitchTarget | null>(null);
   const [sourceError, setSourceError] = useState<string | null>(null);
   const [sourceHint, setSourceHint] = useState<string | null>(null);
+  const [volumeDraftPercent, setVolumeDraftPercent] = useState<number | null>(null);
+  const [volumeError, setVolumeError] = useState<string | null>(null);
+  const volumeRequestStateRef = useRef<VolumeRequestState>({
+    inFlight: false,
+    queued: null,
+    lastSent: system.volume.percent
+  });
   const playbackTruth = getPlaybackDisplayTruth(playback, audio, fontTheme);
   const elapsedSeconds = playbackTruth.elapsedSeconds ?? 0;
   const durationSeconds = playbackTruth.durationSeconds ?? 0;
@@ -212,6 +228,7 @@ export function PlayerOverlay({
   const progress = displayedElapsedSeconds !== null && displayedDurationSeconds && displayedDurationSeconds > 0
     ? Math.min(1, displayedElapsedSeconds / displayedDurationSeconds)
     : 0;
+  const displayedVolumePercent = clampVolumePercent(volumeDraftPercent ?? system.volume.percent);
 
   const selectedLocalCategoryLabel = categoryLabel(selectedLocalCategory);
   const sourceLine = [
@@ -229,9 +246,69 @@ export function PlayerOverlay({
       setPendingSource(null);
       setSourceError(null);
       setSourceHint(null);
+      setVolumeDraftPercent(null);
+      setVolumeError(null);
       setManualPanelSelection(false);
     }
   }, [active]);
+
+  useEffect(() => {
+    const requestState = volumeRequestStateRef.current;
+    requestState.lastSent = system.volume.percent;
+    if (!requestState.inFlight && requestState.queued === null) {
+      setVolumeDraftPercent(null);
+    }
+  }, [system.volume.percent]);
+
+  const dispatchVolumeChange = useCallback(
+    (percent: number) => {
+      const nextPercent = clampVolumePercent(percent);
+      const requestState = volumeRequestStateRef.current;
+      requestState.queued = nextPercent;
+      setVolumeDraftPercent(nextPercent);
+      setVolumeError(null);
+
+      if (requestState.inFlight) return;
+
+      requestState.inFlight = true;
+
+      const sendNext = async () => {
+        const target = requestState.queued;
+        requestState.queued = null;
+
+        if (target === null || target === requestState.lastSent) {
+          requestState.inFlight = false;
+          setVolumeDraftPercent(null);
+          return;
+        }
+
+        try {
+          const nextState = await onPlaybackAction("volume_set", target);
+          requestState.lastSent = nextState.system.volume.percent;
+          setVolumeError(null);
+        } catch (error) {
+          setVolumeError(error instanceof Error ? error.message : "Volume adjustment failed");
+        }
+
+        if (requestState.queued !== null && requestState.queued !== requestState.lastSent) {
+          await sendNext();
+          return;
+        }
+
+        requestState.inFlight = false;
+        if (requestState.queued === null) {
+          setVolumeDraftPercent(null);
+        }
+      };
+
+      void sendNext();
+    },
+    [onPlaybackAction]
+  );
+
+  function handleVolumeSliderChange(value: string) {
+    dispatchVolumeChange(Number(value));
+  }
 
   useEffect(() => {
     if (!active || manualPanelSelection) return;
@@ -730,14 +807,27 @@ export function PlayerOverlay({
               <span className="source-panel-kicker">Source</span>
               <strong>{selectedPanelConfig.label}</strong>
             </div>
-            <div className="library-volume-actions">
-              <button type="button" aria-label="Volume down" title="Volume down" disabled={status.pending} onClick={() => void onPlaybackAction("volume_set", Math.max(0, system.volume.percent - 5))}>
-                <Minus size={18} />
-              </button>
-              <span>{system.volume.percent}%</span>
-              <button type="button" aria-label="Volume up" title="Volume up" disabled={status.pending} onClick={() => void onPlaybackAction("volume_set", Math.min(100, system.volume.percent + 5))}>
-                <Plus size={18} />
-              </button>
+            <div className="library-volume-actions" data-player-volume-control title={volumeError ?? "Volume"}>
+              <span className="library-volume-label">Volume</span>
+              <div className="library-volume-slider-control">
+                <div className="library-volume-track" aria-hidden="true">
+                  <span style={{ width: `${displayedVolumePercent}%` }} />
+                </div>
+                <input
+                  className="library-volume-slider"
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={1}
+                  value={displayedVolumePercent}
+                  aria-label="Volume"
+                  aria-valuetext={`${displayedVolumePercent}%`}
+                  data-player-volume-slider
+                  data-gesture-control
+                  onChange={(event) => handleVolumeSliderChange(event.currentTarget.value)}
+                />
+              </div>
+              <span className={`library-volume-percent ${volumeError ? "is-error" : ""}`} data-player-volume-percent>{displayedVolumePercent}%</span>
             </div>
           </div>
 

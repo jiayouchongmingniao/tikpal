@@ -30,6 +30,7 @@ type AppMode = "ambient" | "player" | "quickSettings" | "quickMenu";
 | Vertical drag in right ambient zone | Ambient | Live display brightness adjustment through DDC/CI when available. |
 | Ambient control row buttons | Ambient HUD visible | Previous scene, play mode, previous track, play/pause, next track, favorite, lyrics, and next scene. |
 | Arrow keys | Ambient HUD visible | Up/down change scene, left/right change track, Space/Enter toggles play/pause. |
+| Volume range slider | Player | Update the same global volume state used by Ambient and scene video audio. |
 
 ## Gesture Thresholds
 
@@ -102,6 +103,8 @@ stateDiagram-v2
 - Transport controls must never be smaller than 72 x 72px.
 - Play / pause should be the dominant control, 96-112px.
 - Queue, source, audio status, and volume can expand panels from within player.
+- Player volume uses a 0-100 range slider instead of step buttons. Dragging the slider should update UI immediately and send `volume_set` as the single global volume action.
+- The displayed volume percent should match `system.volume.percent`, including while Scene Sound is active.
 
 ### Quick Settings
 
@@ -116,6 +119,9 @@ stateDiagram-v2
 - Quick menu is a fallback, not a second navigation system.
 - It should never expose deep settings directly.
 - It should close cleanly on cancel or after choosing an item.
+- Quick Menu may expose shallow scene toggles: Scene Video, Clock, and Scene Sound.
+- Turning Scene Sound on forces Scene Video on, switches playback source truth to `scene`, and unmutes only the active Ambient video layer.
+- Turning Scene Video off while Scene Sound is active also stops Scene Sound and returns the video surface to a black quiet state.
 
 ## Input Compatibility
 

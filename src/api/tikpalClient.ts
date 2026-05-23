@@ -7,6 +7,7 @@ import type {
   PlaybackActionType,
   RadioCatalogFilters,
   RadioCatalogResponse,
+  BackgroundVideoSummary,
   SourceSwitchRequest,
   SourceSwitchTarget,
   SystemActionRequest,
@@ -108,8 +109,18 @@ export async function sendSystemAction(type: SystemActionType, value?: number): 
   return readJson<TikpalState>(response);
 }
 
-export async function sendSourceSwitch(target: SourceSwitchTarget, radioStationId?: string, localTrackPath?: string): Promise<TikpalState> {
+export async function sendSourceSwitch(
+  target: SourceSwitchTarget,
+  radioStationId?: string,
+  localTrackPath?: string,
+  sceneVideo?: BackgroundVideoSummary
+): Promise<TikpalState> {
   const body: SourceSwitchRequest = { target, radioStationId, localTrackPath };
+  if (sceneVideo) {
+    body.sceneVideoId = sceneVideo.id;
+    body.sceneVideoLabel = sceneVideo.label;
+    body.sceneVideoSrc = sceneVideo.src;
+  }
   const response = await fetch(`${API_ROOT}/audio/source`, {
     method: "POST",
     headers: {

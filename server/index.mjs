@@ -90,6 +90,11 @@ const LOCAL_LIBRARY_COVER_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp"];
 const PUBLIC_ASSETS_ROOT = resolve(process.cwd(), "public", "assets");
 const AMBIENT_BACKGROUND_VIDEO_EXTENSIONS = new Set([".mp4"]);
 const PREFERRED_AMBIENT_BACKGROUND_VIDEOS = ["output_2560x720-4k.mp4", "output_2560x720.mp4"];
+const DEFAULT_SCENE_VIDEO = {
+  id: "output_2560x720-4k",
+  label: "output_2560x720-4k.mp4",
+  src: "/assets/output_2560x720-4k.mp4"
+};
 const PLAYBACK_MODES = new Set(["sequence", "repeat_one", "shuffle"]);
 const execFileAsync = promisify(execFile);
 
@@ -128,6 +133,8 @@ let currentArtworkState = null;
 let mockActiveSource = "mpd";
 let mockActiveRadioStationId = "radio-1";
 let mockArmedSource = null;
+let scenePlaybackState = "stopped";
+let currentSceneVideo = { ...DEFAULT_SCENE_VIDEO };
 let mockAudioArmedAt = 0;
 let mockSpotifyArmedAt = 0;
 let mockBluetoothArmedAt = 0;
@@ -224,6 +231,29 @@ function buildSourceRuntimeState(overrides = {}) {
     advertisedLabel: null,
     ...overrides
   };
+}
+
+function normalizeSceneVideoSummary(action = {}) {
+  const rawSrc = String(action.sceneVideoSrc ?? "").trim();
+  const src = rawSrc.startsWith("/assets/") && rawSrc.toLowerCase().endsWith(".mp4")
+    ? rawSrc
+    : DEFAULT_SCENE_VIDEO.src;
+  const fallbackLabel = basename(decodeURIComponent(src).replace(/^\/assets\//, "")) || DEFAULT_SCENE_VIDEO.label;
+  const label = String(action.sceneVideoLabel ?? "").trim() || fallbackLabel;
+  const id = String(action.sceneVideoId ?? "").trim()
+    || label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")
+    || DEFAULT_SCENE_VIDEO.id;
+
+  return { id, label, src };
+}
+
+function activateSceneAudio(action = {}) {
+  currentSceneVideo = normalizeSceneVideoSummary(action);
+  scenePlaybackState = "playing";
+}
+
+function stopSceneAudio() {
+  scenePlaybackState = "stopped";
 }
 
 function clampPercent(value, fallback = 0) {
@@ -327,6 +357,16 @@ function buildAudioState({ activeSource, armedSource = null, radioReady, radioAc
           ? `Choose from ${radioStations.length || 1} presets`
           : "No radio route configured"
     }),
+    buildSourceSummary({
+      id: "scene",
+      label: "Scene Sound",
+      availability: "available",
+      active: activeSource === "scene",
+      controllability: "switchable",
+      secondaryStatus: activeSource === "scene"
+        ? `${currentSceneVideo.label} audio ${scenePlaybackState === "playing" ? "playing" : "stopped"}`
+        : "Use the current background video as an exclusive source"
+    }),
     {
       ...buildSourceSummary({
         id: "audio",
@@ -425,7 +465,7 @@ function buildAudioState({ activeSource, armedSource = null, radioReady, radioAc
     }
   ];
 
-  const preferredCurrentSource = armedSource && (armedSource === "audio" || armedSource === "spotify" || armedSource === "bluetooth" || armedSource === "airplay")
+  const preferredCurrentSource = armedSource && (armedSource === "scene" || armedSource === "audio" || armedSource === "spotify" || armedSource === "bluetooth" || armedSource === "airplay")
     ? sources.find((source) => source.id === armedSource)
     : null;
 
@@ -459,6 +499,11 @@ function syncElapsed() {
   lastTickAt += deltaSeconds * 1000;
   elapsedSeconds += deltaSeconds;
 
+  if (mockActiveSource === "scene") {
+    lastTickAt = now;
+    return;
+  }
+
   if (mockActiveSource === "mpd" && mockSelectedLocalTrack) {
     const durationSeconds = mockSelectedLocalTrack.durationSeconds;
     if (durationSeconds && elapsedSeconds >= durationSeconds) {
@@ -486,6 +531,24 @@ function getPlayback() {
   const mockBluetoothConnected = mockActiveSource === "bluetooth" && Date.now() - mockBluetoothArmedAt >= MOCK_BLUETOOTH_CONNECT_AFTER_MS;
   const mockAirplayConnected = mockActiveSource === "airplay" && Date.now() - mockAirplayArmedAt >= MOCK_AIRPLAY_CONNECT_AFTER_MS;
   const mockBluetoothMetadata = mockBluetoothConnected ? readMockBluetoothPlaybackMetadata() : null;
+
+  if (mockActiveSource === "scene") {
+    return {
+      state: scenePlaybackState,
+      source: "scene",
+      albumArtUrl: null,
+      title: "Scene Audio",
+      artist: currentSceneVideo.label,
+      album: currentSceneVideo.label,
+      elapsedSeconds: null,
+      durationSeconds: null,
+      currentTrackIndex: 0,
+      queueLength: 0,
+      favorite: false,
+      settings: getPlaybackSettings(),
+      queuePreview: []
+    };
+  }
 
   if (mockActiveSource === "audio") {
     const track = tracks[trackIndex];
@@ -2069,6 +2132,20 @@ async function enforceConnectionGate(nextSource) {
     return;
   }
 
+  if (nextSource === "scene") {
+    if (SPOTIFY_DISABLE_COMMAND) {
+      await runSystemActionCommand(SPOTIFY_DISABLE_COMMAND, "spotify connect disable");
+    }
+    if (BLUETOOTH_DISABLE_COMMAND) {
+      await runSystemActionCommand(BLUETOOTH_DISABLE_COMMAND, "bluetooth disable");
+    }
+    if (AIRPLAY_DISABLE_COMMAND) {
+      await runSystemActionCommand(AIRPLAY_DISABLE_COMMAND, "airplay disable");
+    }
+    await ensureAirplayReceiverState(false);
+    return;
+  }
+
   if (nextSource === "spotify") {
     if (!SPOTIFY_READY_COMMAND && !SPOTIFY_ACTIVE_COMMAND && !SPOTIFY_ACTIVATE_COMMAND && !SPOTIFY_LABEL_COMMAND) {
       throw new Error("spotify connect is unavailable in this runtime");
@@ -2181,7 +2258,9 @@ async function getMpcAudioSnapshot(currentFile) {
   ]);
   const radioReady = Boolean(RADIO_ACTIVATE_COMMAND || RADIO_DEFAULT_URI || radioStations.length > 0);
   const radioActive = isStreamUri(currentFile);
-  const activeSource = audioSourceState.connected
+  const activeSource = mockArmedSource === "scene"
+    ? "scene"
+    : audioSourceState.connected
     ? "audio"
     : spotifyState.connected
       ? "spotify"
@@ -2267,7 +2346,8 @@ async function getMpcSnapshot() {
   const queuePreview = await getMpcQueuePreview(status);
   const playbackSource = audio.sources.find((source) => source.active)?.id ?? audio.currentSource.id;
   const outputVolumePercent = await readOutputVolumePercent();
-  const isExternalHandoffSource = playbackSource === "spotify" || playbackSource === "bluetooth" || playbackSource === "airplay";
+  const isSceneSource = playbackSource === "scene";
+  const isExternalHandoffSource = playbackSource === "scene" || playbackSource === "spotify" || playbackSource === "bluetooth" || playbackSource === "airplay";
   const isMpdBackedSource = playbackSource === "mpd" || playbackSource === "audio";
   const volumePercent = isExternalHandoffSource
     ? (outputVolumePercent ?? status.volumePercent ?? system.volume.percent)
@@ -2306,7 +2386,9 @@ async function getMpcSnapshot() {
 
   return {
     playback: {
-      state: playbackSource === "bluetooth"
+      state: isSceneSource
+        ? scenePlaybackState
+        : playbackSource === "bluetooth"
         ? mapBluetoothPlaybackState(bluetoothPlaybackMetadata)
         : playbackSource === "airplay"
           ? audio.currentSource.connectionState === "connected" ? mapBluetoothPlaybackState(airplayPlaybackMetadata) : "stopped"
@@ -2315,7 +2397,9 @@ async function getMpcSnapshot() {
         : hasCurrentTrack ? status.state : "stopped",
       source: playbackSource,
       albumArtUrl: !isExternalHandoffSource && hasCurrentTrack ? `/api/v1/media/artwork?track=${encodeURIComponent(currentArtworkState?.token ?? "current")}` : null,
-      title: playbackSource === "radio"
+      title: isSceneSource
+          ? "Scene Audio"
+          : playbackSource === "radio"
           ? radioPlaybackMetadata?.title || metadata.title || title || RADIO_LABEL
           : playbackSource === "spotify"
             ? "Spotify Connect Ready"
@@ -2324,7 +2408,9 @@ async function getMpcSnapshot() {
             : playbackSource === "airplay"
               ? airplayPlaybackMetadata?.title || "AirPlay Ready"
           : hasCurrentTrack ? metadata.title || title || trackTitleFromFile(file) : null,
-      artist: playbackSource === "radio"
+      artist: isSceneSource
+          ? currentSceneVideo.label
+          : playbackSource === "radio"
           ? radioPlaybackMetadata?.artist || metadata.artist || artist || "Internet Radio"
           : playbackSource === "spotify"
             ? audio.currentSource.connectedLabel
@@ -2340,7 +2426,9 @@ async function getMpcSnapshot() {
                 : audio.currentSource.connectedLabel
                   || (audio.currentSource.advertisedLabel ? `Choose ${audio.currentSource.advertisedLabel} from AirPlay` : "Choose Tikpal from AirPlay"))
           : hasCurrentTrack ? metadata.artist || artist || "Unknown Artist" : null,
-      album: playbackSource === "radio"
+      album: isSceneSource
+          ? currentSceneVideo.label
+          : playbackSource === "radio"
           ? radioPlaybackMetadata?.album || metadata.album || album || "Radio"
           : playbackSource === "spotify"
             ? "Spotify Connect"
@@ -2349,14 +2437,18 @@ async function getMpcSnapshot() {
             : playbackSource === "airplay"
               ? airplayPlaybackMetadata?.album || "AirPlay Source"
           : hasCurrentTrack ? metadata.album || album || "MPD Queue" : null,
-      elapsedSeconds: playbackSource === "bluetooth"
+      elapsedSeconds: isSceneSource
+        ? null
+        : playbackSource === "bluetooth"
         ? millisecondsToSeconds(bluetoothPlaybackMetadata?.positionMs)
         : playbackSource === "airplay"
           ? millisecondsToSeconds(airplayPlaybackMetadata?.positionMs)
         : playbackSource === "spotify"
           ? null
         : isMpdBackedSource && hasCurrentTrack ? status.elapsedSeconds : null,
-      durationSeconds: playbackSource === "bluetooth"
+      durationSeconds: isSceneSource
+        ? null
+        : playbackSource === "bluetooth"
         ? millisecondsToSeconds(bluetoothPlaybackMetadata?.durationMs, { allowZero: false })
         : playbackSource === "airplay"
           ? millisecondsToSeconds(airplayPlaybackMetadata?.durationMs, { allowZero: false })
@@ -2474,6 +2566,12 @@ async function switchToAirplaySource() {
   await runMpc(["stop"], { allowFailure: true });
 }
 
+async function switchToSceneSource(action = {}) {
+  activateSceneAudio(action);
+  await enforceConnectionGate("scene");
+  await runMpc(["stop"], { allowFailure: true });
+}
+
 async function applyMpcPlayMode(mode) {
   switch (mode) {
     case "sequence":
@@ -2497,6 +2595,36 @@ async function applyMpcPlayMode(mode) {
 }
 
 async function applyMpcPlaybackAction(action) {
+  if (mockArmedSource === "scene") {
+    switch (action.type) {
+      case "play_pause":
+        scenePlaybackState = scenePlaybackState === "playing" ? "stopped" : "playing";
+        return;
+      case "play":
+        scenePlaybackState = "playing";
+        return;
+      case "pause":
+        scenePlaybackState = "stopped";
+        return;
+      case "next":
+      case "previous":
+      case "seek":
+      case "favorite_toggle":
+      case "play_mode_set":
+        return;
+      case "volume_set": {
+        const percent = Number(action.value);
+        if (!Number.isFinite(percent) || percent < 0 || percent > 100) {
+          throw new Error("volume_set requires value between 0 and 100");
+        }
+        await setOutputVolumePercent(percent);
+        return;
+      }
+      default:
+        throw new Error(`Unsupported playback action: ${action.type}`);
+    }
+  }
+
   switch (action.type) {
     case "play_pause": {
       await ensureMpcQueue();
@@ -2541,7 +2669,7 @@ async function applyMpcPlaybackAction(action) {
         throw new Error("volume_set requires value between 0 and 100");
       }
       const playbackSource = (await getTikpalState()).audio.currentSource.id;
-      if (playbackSource === "bluetooth" || playbackSource === "airplay") {
+      if (playbackSource === "scene" || playbackSource === "bluetooth" || playbackSource === "airplay") {
         await setOutputVolumePercent(percent);
       } else {
         await runMpc(["volume", String(Math.round(percent))]);
@@ -3961,6 +4089,37 @@ function readJson(request) {
 function applyPlaybackAction(action) {
   syncElapsed();
 
+  if (mockActiveSource === "scene") {
+    switch (action.type) {
+      case "play_pause":
+        scenePlaybackState = scenePlaybackState === "playing" ? "stopped" : "playing";
+        return;
+      case "play":
+        scenePlaybackState = "playing";
+        return;
+      case "pause":
+        scenePlaybackState = "stopped";
+        return;
+      case "next":
+      case "previous":
+      case "seek":
+      case "favorite_toggle":
+      case "play_mode_set":
+        return;
+      case "volume_set": {
+        const percent = Number(action.value);
+        if (!Number.isFinite(percent) || percent < 0 || percent > 100) {
+          throw new Error("volume_set requires value between 0 and 100");
+        }
+        system.volume.percent = Math.round(percent);
+        system.volume.db = Number((-72 + system.volume.percent * 0.68).toFixed(1));
+        return;
+      }
+      default:
+        throw new Error(`Unsupported playback action: ${action.type}`);
+    }
+  }
+
   switch (action.type) {
     case "play_pause":
       playbackState = playbackState === "playing" ? "paused" : "playing";
@@ -4103,6 +4262,7 @@ async function applyMockSourceSwitch(action) {
       mockSpotifyArmedAt = 0;
       mockBluetoothArmedAt = 0;
       mockAirplayArmedAt = 0;
+      stopSceneAudio();
       resetBluetoothRecognitionSession();
       playbackState = "playing";
       lastTickAt = Date.now();
@@ -4116,6 +4276,7 @@ async function applyMockSourceSwitch(action) {
       mockSpotifyArmedAt = 0;
       mockBluetoothArmedAt = 0;
       mockAirplayArmedAt = 0;
+      stopSceneAudio();
       resetBluetoothRecognitionSession();
       playbackState = "playing";
       lastTickAt = Date.now();
@@ -4135,8 +4296,22 @@ async function applyMockSourceSwitch(action) {
       mockSpotifyArmedAt = 0;
       mockBluetoothArmedAt = 0;
       mockAirplayArmedAt = 0;
+      stopSceneAudio();
       resetBluetoothRecognitionSession();
       playbackState = "playing";
+      return;
+    case "scene":
+      mockSelectedLocalTrack = null;
+      mockArmedSource = null;
+      mockActiveSource = "scene";
+      mockAudioArmedAt = 0;
+      mockSpotifyArmedAt = 0;
+      mockBluetoothArmedAt = 0;
+      mockAirplayArmedAt = 0;
+      activateSceneAudio(action);
+      resetBluetoothRecognitionSession();
+      playbackState = "paused";
+      lastTickAt = Date.now();
       return;
     case "spotify":
       mockSelectedLocalTrack = null;
@@ -4146,6 +4321,7 @@ async function applyMockSourceSwitch(action) {
       mockSpotifyArmedAt = Date.now();
       mockBluetoothArmedAt = 0;
       mockAirplayArmedAt = 0;
+      stopSceneAudio();
       resetBluetoothRecognitionSession();
       playbackState = "paused";
       return;
@@ -4157,6 +4333,7 @@ async function applyMockSourceSwitch(action) {
       mockSpotifyArmedAt = 0;
       mockBluetoothArmedAt = Date.now();
       mockAirplayArmedAt = 0;
+      stopSceneAudio();
       resetBluetoothRecognitionSession();
       playbackState = "paused";
       return;
@@ -4168,6 +4345,7 @@ async function applyMockSourceSwitch(action) {
       mockAirplayArmedAt = Date.now();
       mockSpotifyArmedAt = 0;
       mockBluetoothArmedAt = 0;
+      stopSceneAudio();
       resetBluetoothRecognitionSession();
       playbackState = "paused";
       return;
@@ -4180,6 +4358,7 @@ async function applyMpcSourceSwitch(action) {
   switch (action.target) {
     case "mpd":
       mockArmedSource = null;
+      stopSceneAudio();
       resetBluetoothRecognitionSession();
       if (action.localTrackPath) {
         await switchToLocalLibraryTrack(action.localTrackPath);
@@ -4189,27 +4368,37 @@ async function applyMpcSourceSwitch(action) {
       }
       return;
     case "audio":
+      stopSceneAudio();
       resetBluetoothRecognitionSession();
       await switchToAudioSource();
       mockArmedSource = "audio";
       return;
     case "radio":
       mockArmedSource = null;
+      stopSceneAudio();
       resetBluetoothRecognitionSession();
       await enforceConnectionGate("radio");
       await switchToRadioSource(action);
       return;
+    case "scene":
+      resetBluetoothRecognitionSession();
+      await switchToSceneSource(action);
+      mockArmedSource = "scene";
+      return;
     case "spotify":
+      stopSceneAudio();
       resetBluetoothRecognitionSession();
       await switchToSpotifySource();
       mockArmedSource = "spotify";
       return;
     case "bluetooth":
+      stopSceneAudio();
       resetBluetoothRecognitionSession();
       await switchToBluetoothSource();
       mockArmedSource = "bluetooth";
       return;
     case "airplay":
+      stopSceneAudio();
       resetBluetoothRecognitionSession();
       await switchToAirplaySource();
       mockArmedSource = "airplay";

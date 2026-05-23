@@ -16,6 +16,9 @@ interface FlameScenePlayback {
 interface FlameSceneProps {
   lowPower?: boolean;
   playback: FlameScenePlayback;
+  videoEnabled?: boolean;
+  audioEnabled?: boolean;
+  volumePercent?: number;
   videoSrc?: string;
 }
 
@@ -54,6 +57,11 @@ function getLoopAwareDrift(video: HTMLVideoElement, targetTime: number) {
   return Math.min(rawDrift, Math.abs(duration - rawDrift));
 }
 
+function normalizeVideoVolume(percent: number | undefined) {
+  if (!Number.isFinite(percent)) return 1;
+  return Math.max(0, Math.min(1, Math.round(percent ?? 100) / 100));
+}
+
 async function alignVideoWithPlayback(video: HTMLVideoElement, playback: FlameScenePlayback, forceSync: boolean) {
   if (video.readyState < 1) {
     const metadataReady = await waitForVideoEvent(video, "loadedmetadata", VIDEO_METADATA_SETTLE_MS);
@@ -72,18 +80,22 @@ async function alignVideoWithPlayback(video: HTMLVideoElement, playback: FlameSc
     }
   }
 
-  if (playback.state === "playing") {
-    await video.play().catch(() => {
-      // Muted inline video can still be blocked briefly while a new layer mounts.
-    });
-  } else {
-    video.pause();
+  const shouldRestoreAudible = !video.muted;
+  if (video.paused) {
+    video.muted = true;
   }
+  await video.play().then(() => {
+    if (shouldRestoreAudible && video.dataset.sceneAudible === "true") {
+      video.muted = false;
+    }
+  }).catch(() => {
+    // Inline scene video can still be blocked briefly while a new layer mounts.
+  });
 
   return true;
 }
 
-export function FlameScene({ lowPower = false, playback, videoSrc = DEFAULT_FLAME_VIDEO_SRC }: FlameSceneProps) {
+export function FlameScene({ lowPower = false, playback, videoEnabled = true, audioEnabled = false, volumePercent = 100, videoSrc = DEFAULT_FLAME_VIDEO_SRC }: FlameSceneProps) {
   const nextLayerIdRef = useRef(0);
   const activeVideoSrcRef = useRef(videoSrc);
   const activeLayerIdRef = useRef(0);
@@ -95,6 +107,7 @@ export function FlameScene({ lowPower = false, playback, videoSrc = DEFAULT_FLAM
   const [activeLayerId, setActiveLayerId] = useState(0);
   const [layers, setLayers] = useState<VideoLayer[]>([{ id: 0, src: videoSrc }]);
   const [transitioning, setTransitioning] = useState(false);
+  const videoVolume = normalizeVideoVolume(volumePercent);
 
   function clearTransitionCleanupTimer() {
     if (transitionCleanupTimerRef.current !== null) {
@@ -145,6 +158,7 @@ export function FlameScene({ lowPower = false, playback, videoSrc = DEFAULT_FLAM
   }, []);
 
   useEffect(() => {
+    if (!videoEnabled) return undefined;
     if (activeVideoSrcRef.current === videoSrc) return undefined;
     activeVideoSrcRef.current = videoSrc;
 
@@ -159,13 +173,54 @@ export function FlameScene({ lowPower = false, playback, videoSrc = DEFAULT_FLAM
       return activeLayer ? [activeLayer, nextLayer] : [nextLayer];
     });
     return undefined;
-  }, [videoSrc]);
+  }, [videoEnabled, videoSrc]);
 
   useEffect(() => {
+    if (!videoEnabled) return;
     videoRefs.current.forEach((_video, layerId) => {
       prepareVideoLayer(layerId);
     });
-  }, [layers, playback.elapsedSeconds, playback.state]);
+  }, [layers, playback.elapsedSeconds, playback.state, videoEnabled]);
+
+  useEffect(() => {
+    if (!videoEnabled) return;
+    videoRefs.current.forEach((video) => {
+      video.volume = videoVolume;
+      if (videoVolume <= 0) {
+        video.muted = true;
+      }
+    });
+  }, [layers, videoEnabled, videoVolume]);
+
+  useEffect(() => {
+    if (!videoEnabled) return;
+    videoRefs.current.forEach((video, layerId) => {
+      video.volume = videoVolume;
+      const isAudibleActiveLayer = audioEnabled && videoVolume > 0 && layerId === activeLayerId;
+      video.dataset.sceneAudible = isAudibleActiveLayer ? "true" : "false";
+      if (!isAudibleActiveLayer) {
+        video.muted = true;
+        return;
+      }
+
+      if (video.paused) {
+        video.muted = true;
+        void video.play().then(() => {
+          if (video.dataset.sceneAudible === "true") {
+            video.muted = false;
+          }
+        }).catch(() => {
+          video.muted = true;
+        });
+      } else {
+        video.muted = false;
+      }
+    });
+  }, [activeLayerId, audioEnabled, layers, videoEnabled, videoVolume]);
+
+  if (!videoEnabled) {
+    return <div className="flame-scene is-video-off" aria-hidden="true" />;
+  }
 
   return (
     <div className={`flame-scene ${lowPower ? "is-low-power" : ""} ${transitioning ? "is-transitioning" : ""}`} aria-hidden="true">
@@ -175,6 +230,7 @@ export function FlameScene({ lowPower = false, playback, videoSrc = DEFAULT_FLAM
           key={layer.id}
           ref={(node) => {
             if (node) {
+              node.volume = videoVolume;
               videoRefs.current.set(layer.id, node);
               prepareVideoLayer(layer.id, {
                 activatePending: true,
@@ -187,7 +243,7 @@ export function FlameScene({ lowPower = false, playback, videoSrc = DEFAULT_FLAM
           className={`flame-video ${layer.id === activeLayerId ? "is-active" : "is-exiting"}`}
           src={layer.src}
           poster={FIREPLACE_BACKGROUND_SRC}
-          autoPlay={playback.state === "playing"}
+          autoPlay
           loop
           muted
           playsInline

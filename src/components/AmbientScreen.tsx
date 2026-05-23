@@ -19,10 +19,14 @@ interface AmbientScreenProps {
   audio: AudioState;
   system: SystemState;
   status: TikpalDataStatus;
+  sceneVideoEnabled: boolean;
+  sceneSoundEnabled: boolean;
+  clockVisible: boolean;
   onPlaybackAction: (type: PlaybackActionType, value?: number, mode?: PlaybackMode) => Promise<TikpalState>;
   onSystemAction: (type: SystemActionType, value?: number) => Promise<TikpalState>;
   onHudActivity: () => void;
   onLyricsVisibleChange: (visible: boolean) => void;
+  onCurrentSceneVideoChange: (video: BackgroundVideoSummary) => void;
   onOpenSettings: () => void;
 }
 
@@ -128,10 +132,14 @@ export function AmbientScreen({
   audio,
   system,
   status,
+  sceneVideoEnabled,
+  sceneSoundEnabled,
+  clockVisible,
   onPlaybackAction,
   onSystemAction,
   onHudActivity,
   onLyricsVisibleChange,
+  onCurrentSceneVideoChange,
   onOpenSettings
 }: AmbientScreenProps) {
   const dragStateRef = useRef<DragState | null>(null);
@@ -198,10 +206,12 @@ export function AmbientScreen({
   const isPlaying = playback.state === "playing";
   const playbackSettings = playback.settings ?? { playMode: "sequence" };
   const playMode = playbackSettings.playMode;
+  const sceneAudioEnabled = sceneVideoEnabled && sceneSoundEnabled && playback.source === "scene" && playback.state === "playing";
 
   useEffect(() => {
     selectedBackgroundVideoSrcRef.current = currentBackgroundVideo.src;
-  }, [currentBackgroundVideo.src]);
+    onCurrentSceneVideoChange(currentBackgroundVideo);
+  }, [currentBackgroundVideo, onCurrentSceneVideoChange]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -530,8 +540,15 @@ export function AmbientScreen({
 
   return (
     <section className={`ambient-screen ${hudVisible ? "is-hud-visible" : "is-hud-hidden"}`} aria-label="Ambient flame screen" onWheelCapture={handleAmbientWheelCapture}>
-      <FlameScene lowPower={audioProtectionMode} playback={playback} videoSrc={currentBackgroundVideo.src} />
-      <div className="ambient-vignette" />
+      <FlameScene
+        lowPower={audioProtectionMode}
+        playback={playback}
+        videoSrc={currentBackgroundVideo.src}
+        videoEnabled={sceneVideoEnabled}
+        audioEnabled={sceneAudioEnabled}
+        volumePercent={system.volume.percent}
+      />
+      {sceneVideoEnabled ? <div className="ambient-vignette" /> : null}
       <div
         className="ambient-adjust-zone ambient-adjust-zone-left"
         data-gesture-protected
@@ -691,10 +708,12 @@ export function AmbientScreen({
         </div>
       </div>
 
-      <div className="ambient-clock" aria-label="Current time">
-        <div className="ambient-time">{timeLabel}</div>
-        <div className="ambient-date">{dateLabel}</div>
-      </div>
+      {clockVisible ? (
+        <div className="ambient-clock" aria-label="Current time">
+          <div className="ambient-time">{timeLabel}</div>
+          <div className="ambient-date">{dateLabel}</div>
+        </div>
+      ) : null}
 
       <div className={`ambient-lyrics-layer lyrics-size-${lyricsFontSize}`} aria-live={lyricsVisible ? "polite" : "off"} aria-hidden={!lyricsVisible} data-ambient-lyrics>
         {showLyricsLayer ? (

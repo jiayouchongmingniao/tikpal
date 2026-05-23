@@ -1,36 +1,65 @@
-import { MonitorOff, Music2, Palette, Settings, X } from "lucide-react";
-import type { AppMode } from "../types";
+import { Clock, Video, Volume2, VolumeX } from "lucide-react";
 
 interface QuickMenuProps {
   active: boolean;
-  onChoose: (mode: AppMode) => void;
+  sceneVideoEnabled: boolean;
+  clockVisible: boolean;
+  sceneSoundEnabled: boolean;
+  sceneSoundPending: boolean;
+  onSceneVideoEnabledChange: (enabled: boolean) => void;
+  onClockVisibleChange: (visible: boolean) => void;
+  onSceneSoundEnabledChange: (enabled: boolean) => void;
   onClose: () => void;
 }
 
-export function QuickMenu({ active, onChoose, onClose }: QuickMenuProps) {
+export function QuickMenu({
+  active,
+  sceneVideoEnabled,
+  clockVisible,
+  sceneSoundEnabled,
+  sceneSoundPending,
+  onSceneVideoEnabledChange,
+  onClockVisibleChange,
+  onSceneSoundEnabledChange,
+  onClose
+}: QuickMenuProps) {
   return (
     <section className={`quick-menu ${active ? "is-active" : ""}`} aria-label="Quick menu" aria-hidden={!active}>
       <button className="overlay-backdrop" type="button" tabIndex={active ? 0 : -1} aria-label="Close quick menu" onClick={onClose} />
       <div className="quick-menu-panel" role="dialog" aria-modal="true" data-gesture-protected>
-        <button type="button" onClick={() => onChoose("player")}>
-          <Music2 size={26} />
-          <span>Player</span>
+        <button
+          className={`quick-menu-toggle ${sceneVideoEnabled ? "is-on" : "is-off"}`}
+          type="button"
+          aria-pressed={sceneVideoEnabled}
+          data-quick-menu-toggle="scene-video"
+          onClick={() => onSceneVideoEnabledChange(!sceneVideoEnabled)}
+        >
+          <Video size={26} />
+          <strong>Scene Video</strong>
+          <span>{sceneVideoEnabled ? "On" : "Off"}</span>
         </button>
-        <button type="button" onClick={() => onChoose("quickSettings")}>
-          <Settings size={26} />
-          <span>Settings</span>
+        <button
+          className={`quick-menu-toggle ${clockVisible ? "is-on" : "is-off"}`}
+          type="button"
+          aria-pressed={clockVisible}
+          data-quick-menu-toggle="clock"
+          onClick={() => onClockVisibleChange(!clockVisible)}
+        >
+          <Clock size={26} />
+          <strong>Clock</strong>
+          <span>{clockVisible ? "Show" : "Hide"}</span>
         </button>
-        <button type="button">
-          <Palette size={26} />
-          <span>Flame</span>
-        </button>
-        <button type="button">
-          <MonitorOff size={26} />
-          <span>Screen Off</span>
-        </button>
-        <button type="button" onClick={onClose}>
-          <X size={26} />
-          <span>Close</span>
+        <button
+          className={`quick-menu-toggle ${sceneSoundEnabled ? "is-on" : "is-off"}`}
+          type="button"
+          aria-pressed={sceneSoundEnabled}
+          data-quick-menu-toggle="scene-sound"
+          disabled={sceneSoundPending}
+          onClick={() => onSceneSoundEnabledChange(!sceneSoundEnabled)}
+        >
+          {sceneSoundEnabled ? <Volume2 size={26} /> : <VolumeX size={26} />}
+          <strong>Scene Sound</strong>
+          <span>{sceneSoundPending ? "Syncing" : sceneSoundEnabled ? "On" : "Off"}</span>
         </button>
       </div>
     </section>

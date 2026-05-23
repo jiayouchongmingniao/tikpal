@@ -258,8 +258,9 @@ async function run() {
 
     const sources = await request("/api/v1/audio/sources");
     assert(sources.response.ok, "audio sources should return 200");
-    assert(Array.isArray(sources.body.sources) && sources.body.sources.length === 6, "audio sources should return Library, Radio, Audio, Spotify Connect, Bluetooth, and AirPlay");
+    assert(Array.isArray(sources.body.sources) && sources.body.sources.length === 7, "audio sources should return Library, Radio, Scene Sound, Audio, Spotify Connect, Bluetooth, and AirPlay");
     assert(sources.body.currentSource.id === "mpd", "audio source payload should start on MPD");
+    assert(sources.body.sources.some((source) => source.id === "scene"), "audio sources payload should include scene sound");
     assert(sources.body.sources.some((source) => source.id === "audio"), "audio sources payload should include audio");
     assert(sources.body.sources.some((source) => source.id === "spotify"), "audio sources payload should include spotify connect");
     assert(sources.body.sources.some((source) => source.id === "bluetooth"), "audio sources payload should include bluetooth");
@@ -383,6 +384,59 @@ async function run() {
     assert(volume.response.ok, "volume_set action should return 200");
     assert(volume.body.system.volume.percent === 42, "volume_set should update volume percent");
 
+    const scene = await request("/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({
+        target: "scene",
+        sceneVideoId: "fireplace-loop",
+        sceneVideoLabel: "Fireplace Loop",
+        sceneVideoSrc: "/assets/output_2560x720-4k.mp4"
+      })
+    });
+    assert(scene.response.ok, "scene source switch should return 200");
+    assert(scene.body.audio.currentSource.id === "scene", "scene switch should mark scene as current in mock mode");
+    assert(scene.body.playback.source === "scene", "playback source should follow scene switch");
+    assert(scene.body.playback.state === "playing", "scene switch should mark video audio as playing");
+    assert(scene.body.playback.title === "Scene Audio", "scene playback should expose Scene Audio title");
+    assert(scene.body.playback.artist === "Fireplace Loop", "scene playback artist should use the current scene label");
+    assert(scene.body.playback.album === "Fireplace Loop", "scene playback album should use the current scene label");
+    assert(Array.isArray(scene.body.playback.queuePreview) && scene.body.playback.queuePreview.length === 0, "scene playback should not expose a music queue");
+    assert(scene.body.audio.sources.some((source) => source.id === "scene" && source.active), "scene source should be active while scene audio is playing");
+    assert(scene.body.audio.sources.some((source) => source.id === "spotify" && source.armed === false), "scene switch should close spotify intake");
+    assert(scene.body.audio.sources.some((source) => source.id === "bluetooth" && source.armed === false), "scene switch should close bluetooth intake");
+    assert(scene.body.audio.sources.some((source) => source.id === "airplay" && source.armed === false), "scene switch should close airplay intake");
+
+    const sceneNext = await request("/api/v1/playback/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "next" })
+    });
+    assert(sceneNext.response.ok, "scene next action should return 200");
+    assert(sceneNext.body.playback.source === "scene", "scene next should not leave scene playback");
+    assert(sceneNext.body.playback.currentTrackIndex === 0, "scene next should not operate the music queue");
+
+    const sceneSeek = await request("/api/v1/playback/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "seek", value: 12 })
+    });
+    assert(sceneSeek.response.ok, "scene seek action should return 200");
+    assert(sceneSeek.body.playback.source === "scene", "scene seek should not leave scene playback");
+    assert(sceneSeek.body.playback.elapsedSeconds === null, "scene seek should not expose a music timeline");
+
+    const sceneVolume = await request("/api/v1/playback/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "volume_set", value: 37 })
+    });
+    assert(sceneVolume.response.ok, "scene volume_set action should return 200");
+    assert(sceneVolume.body.system.volume.percent === 37, "scene volume_set should update output volume percent");
+
+    const scenePause = await request("/api/v1/playback/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "pause" })
+    });
+    assert(scenePause.response.ok, "scene pause action should return 200");
+    assert(scenePause.body.playback.source === "scene", "scene pause should keep scene as current source");
+    assert(scenePause.body.playback.state === "stopped", "scene pause should stop scene audio without restoring music");
+
     const audio = await request("/api/v1/audio/source", {
       method: "POST",
       body: JSON.stringify({ target: "audio" })
@@ -390,6 +444,7 @@ async function run() {
     assert(audio.response.ok, "audio source switch should return 200");
     assert(audio.body.audio.currentSource.id === "audio", "audio source switch should mark Audio as current in mock mode");
     assert(audio.body.playback.source === "audio", "playback source should follow audio switch");
+    assert(audio.body.audio.sources.some((source) => source.id === "scene" && source.active === false), "audio source switch should deactivate scene");
 
     const spotify = await request("/api/v1/audio/source", {
       method: "POST",

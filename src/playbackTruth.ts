@@ -3,6 +3,7 @@ import type { AudioState, FontTheme, PlaybackSummary, SourceState, SourceSummary
 
 const SOURCE_LABELS: Record<SourceState, string> = {
   audio: "Audio",
+  scene: "Scene Sound",
   mpd: "Library",
   airplay: "AirPlay",
   spotify: "Spotify Connect",
