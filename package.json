@@ -12,6 +12,7 @@
     "start:api": "node server/index.mjs",
     "start:web": "node server/web.mjs",
     "media:loop": "node scripts/make-seamless-loop.mjs",
+    "scene:clear": "node scripts/clear-scene-videos.mjs",
     "ota:package:mp4": "node scripts/generate-mp4-resource-otas.mjs",
     "ota:resources": "node scripts/apply-resource-ota.mjs",
     "typecheck": "tsc -b",

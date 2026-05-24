@@ -6,28 +6,56 @@
       "filename": "Aurora-Snowfield.mp4",
       "label": "Aurora Snowfield",
       "order": 100,
-      "sha256": "f51306e679afcf1d880f645f78e4b372772e9cb35d258af75f480ea3f44e0e48"
+      "sha256": "0ee49df64468346a786bfba2ffbe786a9c50f6e65d1fc37232c83912faf3fea9"
     },
     {
       "id": "cloud-sunrise",
       "filename": "Cloud-Sunrise.mp4",
       "label": "Cloud Sunrise",
       "order": 110,
-      "sha256": "9c706b4fb6ea0d3a7c877d4f0bb02d588d04ad567d9fc7245e7f0129bb20471d"
+      "sha256": "77ab0e5ca766883cd7180bbaa06ee55a2d52587995e7c0f2c851085faaf252b8"
     },
     {
-      "id": "forest-cabin",
-      "filename": "Forest-Cabin.mp4",
-      "label": "Forest Cabin",
+      "id": "deep-blue-ocean",
+      "filename": "Deep-Blue-Ocean.mp4",
+      "label": "Deep Blue Ocean",
       "order": 120,
-      "sha256": "27f9c60052af19c5e30b866fddd8fe956c21d5678a7e0dd0e9c117ccf185a168"
+      "sha256": "e329ac800feb5d781b688d1a2f7bf66fef1f36db8c2820976fba84863a95e7a7"
+    },
+    {
+      "id": "midnight-library",
+      "filename": "Midnight-Library.mp4",
+      "label": "Midnight Library",
+      "order": 130,
+      "sha256": "dd4bdb892cbf07c578a2175d85ec7e05cd0ee8e3d888e434a7dea683ef3f4e76"
+    },
+    {
+      "id": "rainy-window",
+      "filename": "Rainy-Window.mp4",
+      "label": "Rainy Window",
+      "order": 140,
+      "sha256": "7e97424faa7e10077a68ac2ac0ba1a988c0b60e555ac045112e2dc84e3c08c08"
+    },
+    {
+      "id": "vinyl-lounge",
+      "filename": "Vinyl-Lounge.mp4",
+      "label": "Vinyl Lounge",
+      "order": 150,
+      "sha256": "2b60bbb1e9e3ed84f76b56af5ee6ff803116557ea40472539a32d6816d36784d"
+    },
+    {
+      "id": "warm-fireplace",
+      "filename": "Warm-Fireplace.mp4",
+      "label": "Warm Fireplace",
+      "order": 160,
+      "sha256": "9da00deaa70a938169a2e0584cdcc6e4c56076d4858c9558604a3029d3707fa5"
     },
     {
       "id": "zen-courtyard",
       "filename": "Zen-Courtyard.mp4",
       "label": "Zen Courtyard",
-      "order": 130,
-      "sha256": "b0d9bf319fe0a6eab5022ab313dc3a508e0fe9ce8f36cbc7dd0d92a1245d7498"
+      "order": 170,
+      "sha256": "2689a29a91f36b4dff77a013c3d90b4d7f75062f0b9516f113212c4342d59a55"
     }
   ]
 }

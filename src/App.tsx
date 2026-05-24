@@ -17,10 +17,10 @@ const SCENE_VIDEO_ENABLED_STORAGE_KEY = "tikpal.sceneVideoEnabled";
 const CLOCK_VISIBLE_STORAGE_KEY = "tikpal.clockVisible";
 
 const DEFAULT_SCENE_VIDEO: BackgroundVideoSummary = {
-  id: "output_2560x720-4k",
-  filename: "output_2560x720-4k.mp4",
-  label: "output_2560x720-4k.mp4",
-  src: "/assets/output_2560x720-4k.mp4"
+  id: "scene-empty",
+  filename: "",
+  label: "No scene video",
+  src: ""
 };
 
 const dateFormatter = new Intl.DateTimeFormat("en-US", {

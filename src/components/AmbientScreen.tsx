@@ -50,10 +50,10 @@ interface AdjustOverlayState {
 const DRAG_PIXELS_PER_PERCENT = 4;
 const WHEEL_PIXELS_PER_PERCENT = 9;
 const DEFAULT_BACKGROUND_VIDEO: BackgroundVideoSummary = {
-  id: "output_2560x720-4k",
-  filename: "output_2560x720-4k.mp4",
-  label: "output_2560x720-4k.mp4",
-  src: "/assets/output_2560x720-4k.mp4"
+  id: "scene-empty",
+  filename: "",
+  label: "No scene video",
+  src: ""
 };
 
 function clampPercent(value: number) {
@@ -157,6 +157,7 @@ export function AmbientScreen({
   const [frozenLyricsLineIndex, setFrozenLyricsLineIndex] = useState<number | null>(null);
   const [staticLyricsLineIndex, setStaticLyricsLineIndex] = useState(0);
   const currentBackgroundVideo = backgroundVideos[backgroundVideoIndex] ?? DEFAULT_BACKGROUND_VIDEO;
+  const hasSceneVideo = Boolean(currentBackgroundVideo.src);
   const playbackTruth = getPlaybackDisplayTruth(playback, audio, fontTheme);
   const title = playbackTruth.title;
   const artist = playbackTruth.artist;
@@ -208,12 +209,16 @@ export function AmbientScreen({
   const isPlaying = playback.state === "playing";
   const playbackSettings = playback.settings ?? { playMode: "sequence" };
   const playMode = playbackSettings.playMode;
-  const sceneAudioEnabled = sceneVideoEnabled && sceneSoundEnabled && playback.source === "scene" && playback.state === "playing";
+  const sceneAudioEnabled = hasSceneVideo && sceneVideoEnabled && sceneSoundEnabled && playback.source === "scene" && playback.state === "playing";
 
   const refreshBackgroundVideos = useCallback((signal?: AbortSignal) => {
     void fetchBackgroundVideos(signal)
       .then((payload) => {
-        if (payload.videos.length === 0) return;
+        if (payload.videos.length === 0) {
+          setBackgroundVideos([DEFAULT_BACKGROUND_VIDEO]);
+          setBackgroundVideoIndex(0);
+          return;
+        }
 
         const selectedSrc = selectedBackgroundVideoSrcRef.current;
         const preferredIndex = payload.videos.findIndex((video) => video.src === selectedSrc);
@@ -572,11 +577,11 @@ export function AmbientScreen({
         lowPower={audioProtectionMode}
         playback={playback}
         videoSrc={currentBackgroundVideo.src}
-        videoEnabled={sceneVideoEnabled}
+        videoEnabled={sceneVideoEnabled && hasSceneVideo}
         audioEnabled={sceneAudioEnabled}
         volumePercent={system.volume.percent}
       />
-      {sceneVideoEnabled ? <div className="ambient-vignette" /> : null}
+      {sceneVideoEnabled && hasSceneVideo ? <div className="ambient-vignette" /> : null}
       <div
         className="ambient-adjust-zone ambient-adjust-zone-left"
         data-gesture-protected

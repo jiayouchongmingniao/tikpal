@@ -1,12 +1,15 @@
 import { spawn } from "node:child_process";
 import { spawnSync } from "node:child_process";
-import { access } from "node:fs/promises";
+import { access, mkdir } from "node:fs/promises";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
 const APP_URL = process.env.TIKPAL_TEST_URL ?? "http://localhost:4173/";
 const DEVTOOLS_PORT = Number(process.env.TIKPAL_TEST_DEVTOOLS_PORT ?? 9222);
+const INTERACTION_SCENE_FIXTURE_DIR = path.resolve("public", "assets", ".interaction-smoke");
+const INTERACTION_SCENE_FIXTURE_PATH = path.join(INTERACTION_SCENE_FIXTURE_DIR, "scene.mp4");
+const INTERACTION_SCENE_FIXTURE_SRC = "/assets/.interaction-smoke/scene.mp4";
 
 async function canAccess(filePath) {
   try {
@@ -53,6 +56,36 @@ async function detectChromeBinary() {
   }
 
   throw new Error("No Chrome/Chromium binary found. Set CHROME_BIN to a valid browser executable.");
+}
+
+async function prepareInteractionSceneFixture() {
+  if (process.env.TIKPAL_INTERACTION_SCENE_VIDEO_SRC) {
+    return process.env.TIKPAL_INTERACTION_SCENE_VIDEO_SRC;
+  }
+
+  await mkdir(INTERACTION_SCENE_FIXTURE_DIR, { recursive: true });
+  const result = spawnSync("ffmpeg", [
+    "-y",
+    "-f", "lavfi",
+    "-i", "color=c=0xe65f22:s=160x90:r=12",
+    "-f", "lavfi",
+    "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+    "-t", "2.4",
+    "-c:v", "libx264",
+    "-preset", "ultrafast",
+    "-crf", "32",
+    "-pix_fmt", "yuv420p",
+    "-c:a", "aac",
+    "-b:a", "64k",
+    "-movflags", "+faststart",
+    INTERACTION_SCENE_FIXTURE_PATH
+  ], { encoding: "utf8" });
+
+  if (result.status !== 0) {
+    throw new Error(`Failed to generate interaction scene fixture with ffmpeg:\n${result.stdout ?? ""}${result.stderr ?? ""}`);
+  }
+
+  return INTERACTION_SCENE_FIXTURE_SRC;
 }
 
 function wait(ms) {
@@ -178,6 +211,102 @@ async function expectEventuallyEvaluate(client, expression, label, attempts = 20
   }
 
   throw new Error(`Failed: ${label}`);
+}
+
+async function sampleLoopVideoLuma(client) {
+  const sample = await evaluate(
+    client,
+    `
+      (() => {
+        const videos = [...document.querySelectorAll('.flame-video')];
+        const canvas = document.createElement('canvas');
+        const size = 32;
+        canvas.width = size;
+        canvas.height = size;
+        const context = canvas.getContext('2d', { willReadFrequently: true });
+        if (!context) return null;
+
+        let luma = 0;
+        let totalOpacity = 0;
+        const roles = [];
+
+        for (const video of videos) {
+          if (!(video instanceof HTMLVideoElement) || video.videoWidth <= 0 || video.videoHeight <= 0) continue;
+          const opacity = Math.max(0, Math.min(1, Number.parseFloat(getComputedStyle(video).opacity) || 0));
+          roles.push([
+            video.getAttribute('data-flame-loop-role'),
+            opacity.toFixed(2),
+            video.getAttribute('data-flame-frame-ready'),
+            video.getAttribute('data-flame-loop-phase')
+          ].join(':'));
+          if (opacity <= 0.01) continue;
+
+          const sourceSize = Math.max(8, Math.min(video.videoWidth, video.videoHeight, Math.floor(Math.min(video.videoWidth, video.videoHeight) * 0.5)));
+          const sx = Math.max(0, Math.floor((video.videoWidth - sourceSize) / 2));
+          const sy = Math.max(0, Math.floor((video.videoHeight - sourceSize) / 2));
+          context.clearRect(0, 0, size, size);
+          context.drawImage(video, sx, sy, sourceSize, sourceSize, 0, 0, size, size);
+          const pixels = context.getImageData(0, 0, size, size).data;
+          let videoLuma = 0;
+          for (let index = 0; index < pixels.length; index += 4) {
+            videoLuma += (0.2126 * pixels[index]) + (0.7152 * pixels[index + 1]) + (0.0722 * pixels[index + 2]);
+          }
+          luma += opacity * (videoLuma / (pixels.length / 4));
+          totalOpacity += opacity;
+        }
+
+        return { luma, totalOpacity, roles };
+      })()
+    `
+  );
+
+  if (!sample || !Number.isFinite(sample.luma)) {
+    throw new Error("Failed: scene loop luma sample is unavailable");
+  }
+  return sample;
+}
+
+async function sampleLoopAudioState(client) {
+  const sample = await evaluate(
+    client,
+    `
+      (() => {
+        const videos = [...document.querySelectorAll('.flame-video')];
+        const audibleVideos = videos
+          .filter((video) => video instanceof HTMLVideoElement)
+          .map((video) => ({
+            slot: video.getAttribute('data-flame-slot-index'),
+            loopRole: video.getAttribute('data-flame-loop-role'),
+            audioRole: video.getAttribute('data-flame-audio-role'),
+            audioSlot: video.getAttribute('data-flame-audio-slot'),
+            muted: video.muted,
+            paused: video.paused,
+            ended: video.ended,
+            volume: video.volume,
+            sceneVolume: Number.parseFloat(video.getAttribute('data-scene-volume') ?? '0'),
+            currentTime: video.currentTime,
+            duration: video.duration
+          }))
+          .filter((video) => !video.muted && video.sceneVolume > 0);
+        return {
+          audibleVideos,
+          activeCount: videos.filter((video) => video.getAttribute('data-flame-audio-slot') === 'active').length
+        };
+      })()
+    `
+  );
+
+  const audibleVideos = sample?.audibleVideos ?? [];
+  const hasInvalidAudible = audibleVideos.some((video) => video.paused || video.ended || video.volume <= 0 || video.sceneVolume <= 0);
+  const isValidSingle = audibleVideos.length === 1 && sample.activeCount === 1;
+  const isValidCrossfade = audibleVideos.length === 2
+    && audibleVideos.some((video) => video.audioRole === "crossfade-in")
+    && audibleVideos.some((video) => video.audioRole === "crossfade-out");
+
+  if (!sample || hasInvalidAudible || (!isValidSingle && !isValidCrossfade)) {
+    throw new Error(`Failed: scene loop audio active slot dropped out (${JSON.stringify(sample)})`);
+  }
+  return sample;
 }
 
 async function navigate(client, url) {
@@ -374,6 +503,7 @@ async function touchSwipe(client, fromX, fromY, toX, toY, steps = 8) {
 
 const CHROME_BIN = await detectChromeBinary();
 const profileDir = await mkdtemp(path.join(tmpdir(), "tikpal-chrome-"));
+const interactionSceneVideoSrc = await prepareInteractionSceneFixture();
 const chrome = spawn(CHROME_BIN, [
   "--headless=new",
   "--disable-gpu=false",
@@ -435,17 +565,17 @@ try {
             return Promise.resolve(new Response(JSON.stringify({
               videos: [
                 {
-                  id: 'output_2560x720-4k',
-                  filename: 'output_2560x720-4k.mp4',
-                  label: 'output_2560x720-4k.mp4',
-                  src: '/assets/output_2560x720-4k.mp4',
-                  source: 'legacy'
+                  id: 'interaction-scene',
+                  filename: 'Interaction-Scene.mp4',
+                  label: 'Interaction Scene',
+                  src: ${JSON.stringify(interactionSceneVideoSrc)},
+                  source: 'scene'
                 },
                 {
                   id: 'rainy-window',
                   filename: 'Rainy-Window.mp4',
                   label: 'Rainy Window',
-                  src: '/assets/output_2560x720-4k.mp4?ota=rainy',
+                  src: ${JSON.stringify(`${interactionSceneVideoSrc}?ota=rainy`)},
                   order: 30,
                   source: 'scene'
                 }
@@ -453,7 +583,7 @@ try {
               total: 2,
               updatedAt: new Date().toISOString(),
               catalogVersion: 'interaction-rainy',
-              defaultVideoId: 'output_2560x720-4k'
+              defaultVideoId: 'interaction-scene'
             }), {
               status: 200,
               headers: { 'Content-Type': 'application/json' }
@@ -557,21 +687,36 @@ try {
     client,
     `
       (() => {
-        const video = document.querySelector('.flame-video.is-active');
+        const video = document.querySelector('.flame-video[data-flame-loop-role="active"]');
+        const standby = [...document.querySelectorAll('.flame-video')]
+          .find((node) => node.getAttribute('data-flame-loop-role') === 'parked');
         return video instanceof HTMLVideoElement
+          && standby instanceof HTMLVideoElement
           && Number.isFinite(video.duration)
           && video.duration >= 2
-          && video.readyState >= 1;
+          && video.readyState >= 1
+          && video.loop === false
+          && standby.loop === false
+          && standby.muted === true
+          && standby.getAttribute('data-flame-audio-slot') === 'standby'
+          && standby.getAttribute('data-flame-frame-ready') === 'false'
+          && standby.getAttribute('data-flame-loop-phase') === 'parked'
+          && getComputedStyle(standby).opacity === '0';
       })()
     `,
-    "active scene video has metadata for seamless loop"
+    "dual scene loop slots are ready without native loop"
   );
   await evaluate(
     client,
     `
       (() => {
-        const video = document.querySelector('.flame-video.is-active');
+        const videos = [...document.querySelectorAll('.flame-video')];
+        const video = videos.find((node) => node.getAttribute('data-flame-loop-role') === 'active');
         if (!(video instanceof HTMLVideoElement) || !Number.isFinite(video.duration)) return false;
+        window.__tikpalLoopStartSlot = video.getAttribute('data-flame-slot-index');
+        videos.forEach((node) => {
+          if (node instanceof HTMLVideoElement) node.playbackRate = 0.25;
+        });
         video.currentTime = Math.max(0, video.duration - 0.8);
         void video.play();
         return true;
@@ -583,35 +728,136 @@ try {
     `
       (() => {
         const videos = [...document.querySelectorAll('.flame-video')];
-        const activeVideos = videos.filter((video) => video.classList.contains('is-active'));
-        const activeVideo = activeVideos[0];
-        return videos.length === 1
-          && activeVideos.length === 1
-          && activeVideo instanceof HTMLVideoElement
-          && activeVideo.loop === true
-          && activeVideo.getAttribute('data-loop-buffer') === null;
+        const standbyVideo = videos.find((video) => video.getAttribute('data-flame-slot-index') !== window.__tikpalLoopStartSlot);
+        return videos.length === 2
+          && standbyVideo instanceof HTMLVideoElement
+          && standbyVideo.getAttribute('data-flame-loop-role') === 'parked'
+          && standbyVideo.getAttribute('data-flame-frame-ready') === 'true'
+          && standbyVideo.getAttribute('data-flame-loop-phase') === 'ready'
+          && standbyVideo.getAttribute('data-flame-audio-slot') === 'standby'
+          && standbyVideo.muted === true
+          && !videos.some((video) => ['incoming', 'outgoing'].includes(video.getAttribute('data-flame-loop-role')));
       })()
     `,
-    "native scene loop keeps one reusable active video layer"
+    "standby scene loop slot decodes its first frame before handoff",
+    40,
+    50
   );
-  await wait(1200);
+  await evaluate(
+    client,
+    `
+      (() => {
+        const videos = [...document.querySelectorAll('.flame-video')];
+        const video = videos.find((node) => node.getAttribute('data-flame-slot-index') === window.__tikpalLoopStartSlot);
+        if (!(video instanceof HTMLVideoElement) || !Number.isFinite(video.duration)) return false;
+        videos.forEach((node) => {
+          if (node instanceof HTMLVideoElement) node.playbackRate = 1;
+        });
+        video.currentTime = Math.max(0, video.duration - 0.4);
+        void video.play();
+        video.dispatchEvent(new Event('timeupdate', { bubbles: true }));
+        video.dispatchEvent(new Event('seeked', { bubbles: true }));
+        return true;
+      })()
+    `
+  );
   await expectEventually(
     client,
     `
       (() => {
         const videos = [...document.querySelectorAll('.flame-video')];
-        const activeVideos = videos.filter((video) => video.classList.contains('is-active'));
-        const activeVideo = activeVideos[0];
-        return activeVideos.length === 1
-          && videos.length === 1
-          && activeVideo instanceof HTMLVideoElement
-          && activeVideo.loop === true
-          && activeVideo.paused === false
-          && activeVideo.muted === false
-          && activeVideo.currentTime < Math.max(1.6, activeVideo.duration - 0.2);
+        const outgoing = videos.find((video) => video.getAttribute('data-flame-loop-role') === 'outgoing');
+        const incoming = videos.find((video) => video.getAttribute('data-flame-loop-role') === 'incoming');
+        const fade = document.querySelector('.flame-video-fade');
+        if (!(outgoing instanceof HTMLVideoElement) || !(incoming instanceof HTMLVideoElement) || !(fade instanceof HTMLElement)) return false;
+        const audibleVideos = videos.filter((video) => video instanceof HTMLVideoElement && video.muted === false && Number.parseFloat(video.getAttribute('data-scene-volume') ?? '0') > 0);
+        const transitionDurations = getComputedStyle(incoming).transitionDuration.split(',').map((duration) => {
+          const trimmed = duration.trim();
+          return trimmed.endsWith('ms') ? Number.parseFloat(trimmed) : Number.parseFloat(trimmed) * 1000;
+        });
+        return incoming.getAttribute('data-flame-frame-ready') === 'true'
+          && incoming.getAttribute('data-flame-loop-phase') === 'handoff'
+          && outgoing.getAttribute('data-flame-loop-phase') === 'handoff'
+          && incoming.getAttribute('data-flame-audio-role') === 'crossfade-in'
+          && outgoing.getAttribute('data-flame-audio-role') === 'crossfade-out'
+          && audibleVideos.length >= 1
+          && audibleVideos.length <= 2
+          && audibleVideos.every((video) => ['crossfade-in', 'crossfade-out'].includes(video.getAttribute('data-flame-audio-role') ?? ''))
+          && Number.parseFloat(getComputedStyle(outgoing).opacity) >= 0.99
+          && Number.parseFloat(getComputedStyle(incoming).opacity) >= 0
+          && Number.parseFloat(getComputedStyle(incoming).opacity) <= 1
+          && transitionDurations.some((duration) => Math.abs(duration - 360) < 2)
+          && getComputedStyle(fade).opacity === '0'
+          && !document.querySelector('.flame-scene.is-loop-dimming, .flame-scene.is-sound-transitioning');
       })()
     `,
-    "native scene loop wraps without adding a standby layer"
+    "dual scene loop starts a ready-gated incoming fade while outgoing stays visible",
+    60,
+    35
+  );
+
+  const loopLumaSamples = [];
+  const loopAudioSamples = [];
+  for (let index = 0; index < 5; index += 1) {
+    loopLumaSamples.push(await sampleLoopVideoLuma(client));
+    loopAudioSamples.push(await sampleLoopAudioState(client));
+    await wait(55);
+  }
+  const loopLumas = loopLumaSamples.map((sample) => sample.luma);
+  const minLoopLuma = Math.min(...loopLumas);
+  const maxLoopLuma = Math.max(...loopLumas);
+  if (minLoopLuma < Math.max(45, maxLoopLuma * 0.45)) {
+    throw new Error(`Failed: scene loop center luma dropped near black (${loopLumas.map((value) => value.toFixed(1)).join(', ')}; ${loopLumaSamples.map((sample) => sample.roles.join('/')).join(' | ')})`);
+  }
+  console.log(`ok - scene loop center luma avoids black/transparent drop (${loopLumas.map((value) => value.toFixed(1)).join(', ')})`);
+  console.log(`ok - scene loop audio keeps live audible slots (${loopAudioSamples.map((sample) => sample.audibleVideos.map((video) => `${video.audioRole}:${video.currentTime.toFixed(2)}`).join('+')).join(', ')})`);
+
+  await expectEventually(
+    client,
+    `
+      (() => {
+        const videos = [...document.querySelectorAll('.flame-video')];
+        const activeVideo = videos.find((video) => video.getAttribute('data-flame-loop-role') === 'active');
+        const parkedVideo = videos.find((video) => video.getAttribute('data-flame-loop-role') === 'parked');
+        return videos.length === 2
+          && activeVideo instanceof HTMLVideoElement
+          && parkedVideo instanceof HTMLVideoElement
+          && activeVideo.getAttribute('data-flame-slot-index') !== window.__tikpalLoopStartSlot
+          && activeVideo.getAttribute('data-flame-audio-slot') === 'active'
+          && parkedVideo.getAttribute('data-flame-audio-slot') === 'standby'
+          && activeVideo.muted === false
+          && parkedVideo.muted === true
+          && activeVideo.loop === false
+          && parkedVideo.loop === false
+          && activeVideo.currentTime < 0.8
+          && parkedVideo.getAttribute('data-flame-loop-phase') === 'parked'
+          && parkedVideo.getAttribute('data-flame-frame-ready') === 'false'
+          && !videos.some((video) => ['incoming', 'outgoing'].includes(video.getAttribute('data-flame-loop-role')))
+          && document.querySelector('.flame-video-fade') instanceof HTMLElement
+          && getComputedStyle(document.querySelector('.flame-video-fade')).opacity === '0';
+      })()
+    `,
+    "dual scene loop completes with one audible active slot and one muted parked slot"
+  );
+  await expectEventually(
+    client,
+    `
+      (() => {
+        const videos = [...document.querySelectorAll('.flame-video')];
+        const activeVideos = videos.filter((video) => video.getAttribute('data-flame-audio-slot') === 'active');
+        const standbyVideos = videos.filter((video) => video.getAttribute('data-flame-audio-slot') === 'standby');
+        const activeVideo = activeVideos[0];
+        return videos.length === 2
+          && activeVideos.length === 1
+          && standbyVideos.length === 1
+          && activeVideo instanceof HTMLVideoElement
+          && activeVideo.paused === false
+          && activeVideo.muted === false
+          && standbyVideos.every((video) => video instanceof HTMLVideoElement && video.muted === true)
+          && videos.every((video) => video.getAttribute('data-scene-audio-fading') === null);
+      })()
+    `,
+    "scene loop keeps audio on one active layer only"
   );
 
   await evaluate(
@@ -1094,4 +1340,5 @@ try {
     await waitForExit(chrome, 2000);
   }
   await rm(profileDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  await rm(INTERACTION_SCENE_FIXTURE_DIR, { recursive: true, force: true });
 }

@@ -456,6 +456,22 @@ select {
   user-select: none;
 }
 
+.flame-video-layer {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  pointer-events: none;
+  user-select: none;
+  transition: opacity 900ms ease;
+}
+
+.flame-video-layer.is-active {
+  opacity: 1;
+}
+
 .flame-video {
   position: absolute;
   inset: 0;
@@ -468,11 +484,21 @@ select {
   object-position: center center;
   pointer-events: none;
   user-select: none;
-  transition: opacity 900ms ease;
+  transition: opacity 360ms linear;
 }
 
 .flame-video.is-active {
   opacity: 1;
+}
+
+.flame-video[data-flame-loop-role="active"],
+.flame-video[data-flame-loop-role="outgoing"],
+.flame-video[data-flame-loop-role="incoming"][data-flame-loop-phase="handoff"] {
+  opacity: 1;
+}
+
+.flame-video[data-flame-loop-role="outgoing"] {
+  transition: none;
 }
 
 .flame-video-fade {
@@ -487,14 +513,6 @@ select {
 
 .flame-scene.is-scene-transitioning .flame-video-fade {
   animation: flame-video-dim 900ms ease both;
-}
-
-.flame-scene.is-sound-transitioning .flame-video-fade {
-  animation: flame-video-dim 1200ms ease both;
-}
-
-.flame-scene.is-loop-dimming .flame-video-fade {
-  opacity: 0.74;
 }
 
 .flame-scene.is-low-power .fireplace-backdrop,

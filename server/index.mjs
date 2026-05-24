@@ -91,11 +91,11 @@ const PUBLIC_ASSETS_ROOT = resolve(process.env.TIKPAL_PUBLIC_ASSETS_ROOT ?? reso
 const PUBLIC_SCENES_ROOT = resolve(PUBLIC_ASSETS_ROOT, "scenes");
 const SCENE_VIDEO_MANIFEST_PATH = resolve(PUBLIC_SCENES_ROOT, "_metadata", "scene_videos.json");
 const AMBIENT_BACKGROUND_VIDEO_EXTENSIONS = new Set([".mp4"]);
-const PREFERRED_AMBIENT_BACKGROUND_VIDEOS = ["output_2560x720-4k.mp4", "output_2560x720.mp4"];
+const PREFERRED_AMBIENT_BACKGROUND_VIDEOS = [];
 const DEFAULT_SCENE_VIDEO = {
-  id: "output_2560x720-4k",
-  label: "output_2560x720-4k.mp4",
-  src: "/assets/output_2560x720-4k.mp4"
+  id: "scene-empty",
+  label: "No scene video",
+  src: ""
 };
 const PLAYBACK_MODES = new Set(["sequence", "repeat_one", "shuffle"]);
 const execFileAsync = promisify(execFile);
