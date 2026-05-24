@@ -19,7 +19,7 @@ export type SourceState =
 
 export type SourceAvailability = "available" | "waiting" | "unavailable";
 export type SourceControllability = "switchable" | "handoff" | "status-only";
-export type SourceSwitchTarget = "mpd" | "audio" | "scene" | "radio" | "spotify" | "bluetooth" | "airplay";
+export type SourceSwitchTarget = "mpd" | "audio" | "scene" | "radio" | "spotify" | "bluetooth" | "airplay" | "upnp";
 export type SourceConnectionState = "idle" | "armed" | "connected" | "blocked";
 
 export interface RadioStationSummary {
@@ -125,7 +125,7 @@ export interface AudioLibraryFilters {
 
 export interface AudioLibraryResponse {
   sources: Array<{
-    id: "library" | "radio" | "spotify" | "airplay" | "bluetooth";
+    id: "library" | "radio" | "spotify" | "airplay" | "bluetooth" | "upnp";
     label: string;
   }>;
   storages: AudioLibraryStorageSummary[];

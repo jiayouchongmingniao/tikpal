@@ -9,7 +9,7 @@ const SOURCE_LABELS: Record<SourceState, string> = {
   spotify: "Spotify Connect",
   bluetooth: "Bluetooth",
   roonbridge: "Roon Bridge",
-  upnp: "UPnP",
+  upnp: "DLNA",
   radio: "Radio"
 };
 

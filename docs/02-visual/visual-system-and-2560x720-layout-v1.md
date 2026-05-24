@@ -153,7 +153,7 @@ Center playback zone:
 - Lower: progress and time.
 - Bottom: transport controls.
 - Source workspace: when opened, replace the old compact source list with a three-column workspace.
-  - Left rail: `Library`, `Radio`, `Spotify`, `AirPlay`, `Bluetooth`.
+  - Left rail: `Library`, `Radio`, `Spotify`, `AirPlay`, `Bluetooth`, `DLNA`.
   - `Audio` can remain part of the backend state model, but it is not a visible primary tab in the source browser.
   - Center pane: source-specific content, especially searchable radio catalog and large touch targets.
   - Right pane: source detail, connection policy, readiness, and active session label.
@@ -163,7 +163,7 @@ Center playback zone:
 - Radio browsing must support 200+ stations without feeling like a dense admin table.
   - Keep search and filters visible near the top of the workspace.
   - Use large row height, quick-scan metadata pills, and obvious active/pending state.
-- Bluetooth and AirPlay should read like gated intake modes, not ordinary playlists.
+- Bluetooth, AirPlay, and DLNA should read like gated intake modes, not ordinary playlists.
   - Unselected: blocked for new connections.
   - Selected: armed and waiting, or connected when a device/session is present.
 

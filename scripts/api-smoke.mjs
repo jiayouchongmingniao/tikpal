@@ -284,23 +284,27 @@ async function run() {
 
     const sources = await request("/api/v1/audio/sources");
     assert(sources.response.ok, "audio sources should return 200");
-    assert(Array.isArray(sources.body.sources) && sources.body.sources.length === 7, "audio sources should return Library, Radio, Scene Sound, Audio, Spotify Connect, Bluetooth, and AirPlay");
+    assert(Array.isArray(sources.body.sources) && sources.body.sources.length === 8, "audio sources should return Library, Radio, Scene Sound, Audio, Spotify Connect, Bluetooth, AirPlay, and DLNA");
     assert(sources.body.currentSource.id === "mpd", "audio source payload should start on MPD");
     assert(sources.body.sources.some((source) => source.id === "scene"), "audio sources payload should include scene sound");
     assert(sources.body.sources.some((source) => source.id === "audio"), "audio sources payload should include audio");
     assert(sources.body.sources.some((source) => source.id === "spotify"), "audio sources payload should include spotify connect");
     assert(sources.body.sources.some((source) => source.id === "bluetooth"), "audio sources payload should include bluetooth");
     assert(sources.body.sources.some((source) => source.id === "airplay"), "audio sources payload should include airplay");
+    assert(sources.body.sources.some((source) => source.id === "upnp"), "audio sources payload should include dlna");
     assert(sources.body.sources.some((source) => source.id === "spotify" && source.connectionState === "blocked" && source.availability === "waiting"), "spotify should start closed until selected");
     assert(sources.body.sources.some((source) => source.id === "bluetooth" && source.connectionState === "blocked" && source.availability === "waiting"), "bluetooth should start closed until selected");
     assert(sources.body.sources.some((source) => source.id === "airplay" && source.connectionState === "blocked" && source.availability === "waiting"), "airplay should start closed until selected");
+    assert(sources.body.sources.some((source) => source.id === "upnp" && source.connectionState === "blocked" && source.availability === "waiting"), "dlna should start closed until selected");
     assert(sources.body.sources.some((source) => source.id === "bluetooth" && source.advertisedLabel === "Tikpal Speaker"), "bluetooth source should expose advertised device name");
+    assert(sources.body.sources.some((source) => source.id === "upnp" && source.advertisedLabel === "Tikpal Speaker"), "dlna source should expose advertised renderer name");
 
     const localLibrary = await request("/api/v1/audio/library?storage=local&limit=5");
     assert(localLibrary.response.ok, "local audio library should return 200");
     assert(localLibrary.body.total > 0, "local audio library should load tracks from the manifest");
-    assert(Array.isArray(localLibrary.body.sources) && localLibrary.body.sources.length === 5, "library source metadata should expose five visible source categories");
+    assert(Array.isArray(localLibrary.body.sources) && localLibrary.body.sources.length === 6, "library source metadata should expose six visible source categories");
     assert(localLibrary.body.sources.every((source) => source.id !== "audio"), "library source metadata should not expose audio as a visible category");
+    assert(localLibrary.body.sources.some((source) => source.id === "upnp" && source.label === "DLNA"), "library source metadata should expose DLNA as a visible category");
     assert(localLibrary.body.storages.find((storage) => storage.id === "local")?.trackCount === localLibrary.body.total, "local storage track count should match manifest-backed total");
     assert(localLibrary.body.tracks.every((track) => track.storage === "local"), "local audio library should only return local tracks when filtered");
     assert(localLibrary.body.tracks[0]?.path, "local audio library tracks should expose manifest paths");
@@ -452,6 +456,7 @@ async function run() {
     assert(scene.body.audio.sources.some((source) => source.id === "spotify" && source.armed === false), "scene switch should close spotify intake");
     assert(scene.body.audio.sources.some((source) => source.id === "bluetooth" && source.armed === false), "scene switch should close bluetooth intake");
     assert(scene.body.audio.sources.some((source) => source.id === "airplay" && source.armed === false), "scene switch should close airplay intake");
+    assert(scene.body.audio.sources.some((source) => source.id === "upnp" && source.armed === false), "scene switch should close dlna intake");
 
     const sceneNext = await request("/api/v1/playback/actions", {
       method: "POST",
@@ -572,6 +577,19 @@ async function run() {
     assert(airplay.body.audio.currentSource.armed === true, "airplay switch should arm airplay intake");
     assert(airplay.body.audio.sources.some((source) => source.id === "bluetooth" && source.armed === false), "airplay switch should disarm bluetooth");
 
+    const dlna = await request("/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({ target: "upnp" })
+    });
+    assert(dlna.response.ok, "dlna source switch should return 200");
+    assert(dlna.body.audio.currentSource.id === "upnp", "dlna switch should activate dlna in mock mode");
+    assert(dlna.body.audio.currentSource.armed === true, "dlna switch should arm dlna intake");
+    assert(dlna.body.audio.currentSource.advertisedLabel === "Tikpal Speaker", "dlna switch should keep advertised renderer name in state");
+    assert(dlna.body.playback.source === "upnp", "playback source should follow dlna switch");
+    assert(dlna.body.audio.sources.some((source) => source.id === "spotify" && source.armed === false), "dlna switch should disarm spotify");
+    assert(dlna.body.audio.sources.some((source) => source.id === "bluetooth" && source.armed === false), "dlna switch should disarm bluetooth");
+    assert(dlna.body.audio.sources.some((source) => source.id === "airplay" && source.armed === false), "dlna switch should disarm airplay");
+
     const radio = await request("/api/v1/audio/source", {
       method: "POST",
       body: JSON.stringify({ target: "radio", radioStationId: "radio-2" })
@@ -581,6 +599,7 @@ async function run() {
     assert(radio.body.playback.source === "radio", "playback source should follow radio switch");
     assert(radio.body.playback.title === "A.M. Ambient", "radio switch should surface the active preset label");
     assert(radio.body.audio.sources.some((source) => source.id === "airplay" && source.armed === false), "radio switch should close airplay intake");
+    assert(radio.body.audio.sources.some((source) => source.id === "upnp" && source.armed === false), "radio switch should close dlna intake");
     const radioLyrics = await waitForLyricsStatus(["ready"]);
     assert(radioLyrics.lines[0]?.text.includes("Midnight radio glow"), "radio metadata changes should resolve a new lyrics payload");
 

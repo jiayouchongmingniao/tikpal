@@ -197,7 +197,7 @@ Batch 4 deployment note:
 These gaps are obvious from the current repo state and should be treated as follow-up work rather than assumed complete:
 
 - The player `Queue` button opens a preview panel, but queue management/editing is still outside the current kiosk contract.
-- The source model is intentionally incomplete relative to full moOde. Five frontstage tabs are surfaced (`Library`, `Radio`, `Spotify`, `AirPlay`, `Bluetooth`), but broader renderer/source administration is still outside the kiosk contract.
+- The source model is intentionally incomplete relative to full moOde. Six frontstage tabs are surfaced (`Library`, `Radio`, `Spotify`, `AirPlay`, `Bluetooth`, `DLNA`), but broader renderer/source administration is still outside the kiosk contract.
 
 ## Documentation Completeness Check
 

@@ -10,6 +10,7 @@ import {
   ListMusic,
   LoaderCircle,
   Music2,
+  Network,
   Pause,
   Play,
   Radio as RadioIcon,
@@ -50,7 +51,7 @@ interface PlayerOverlayProps {
   onReturnAmbient: () => void;
 }
 
-type PrimaryPanelId = "library" | "radio" | "spotify" | "airplay" | "bluetooth";
+type PrimaryPanelId = "library" | "radio" | "spotify" | "airplay" | "bluetooth" | "upnp";
 type ExternalPanelId = Exclude<PrimaryPanelId, "library" | "radio">;
 type LibraryFilterId = "local" | "nas" | "usb" | "favorites" | "recently_added";
 
@@ -70,7 +71,8 @@ const primaryPanels: Array<{ id: PrimaryPanelId; label: string; Icon: LucideIcon
   { id: "radio", label: "Radio", Icon: RadioIcon },
   { id: "spotify", label: "Spotify", Icon: Music2 },
   { id: "airplay", label: "AirPlay", Icon: Cast },
-  { id: "bluetooth", label: "Bluetooth", Icon: Bluetooth }
+  { id: "bluetooth", label: "Bluetooth", Icon: Bluetooth },
+  { id: "upnp", label: "DLNA", Icon: Network }
 ];
 
 const storageTabs: Array<{ id: LibraryFilterId; label: string; Icon: LucideIcon }> = [
@@ -344,7 +346,7 @@ export function PlayerOverlay({
   useEffect(() => {
     if (!active || manualPanelSelection) return;
 
-    if (currentSource.id === "radio" || currentSource.id === "spotify" || currentSource.id === "bluetooth" || currentSource.id === "airplay") {
+    if (currentSource.id === "radio" || currentSource.id === "spotify" || currentSource.id === "bluetooth" || currentSource.id === "airplay" || currentSource.id === "upnp") {
       setSelectedPrimaryPanel(currentSource.id);
       setSelectedLibraryTrackId(null);
       return;
@@ -566,6 +568,7 @@ export function PlayerOverlay({
     if (sourceActive) return "Active";
     if (panelId === "spotify") return "Enable Spotify";
     if (panelId === "bluetooth") return "Enable pairing";
+    if (panelId === "upnp") return "Enable DLNA";
     return "Enable AirPlay";
   }
 

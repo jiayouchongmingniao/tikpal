@@ -967,12 +967,12 @@ try {
     client,
     `
       (() => {
-        const expected = ['mpd', 'radio', 'spotify', 'airplay', 'bluetooth'];
+        const expected = ['mpd', 'radio', 'spotify', 'airplay', 'bluetooth', 'upnp'];
         return expected.every((sourceId) => document.querySelector(\`[data-source-item="\${sourceId}"]\`))
           && document.querySelector('[data-source-item="audio"]') === null;
       })()
     `,
-    "player source tabs include five visible source categories"
+    "player source tabs include six visible source categories"
   );
   await expect(client, sourceTabExpression("mpd", { selected: true, active: true }), "library source starts selected and active");
 

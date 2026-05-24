@@ -209,6 +209,19 @@ export const audioState: AudioState = {
       connectedLabel: null,
       advertisedLabel: "Tikpal Speaker",
       secondaryStatus: "Closed until you open AirPlay as Tikpal Speaker"
+    }),
+    buildSourceSummary({
+      id: "upnp",
+      label: "DLNA",
+      kind: "upnp",
+      availability: "waiting",
+      active: false,
+      controllability: "switchable",
+      armed: false,
+      connectionState: "blocked",
+      connectedLabel: null,
+      advertisedLabel: "Tikpal Speaker",
+      secondaryStatus: "Closed until you open DLNA as Tikpal Speaker"
     })
   ]
 };

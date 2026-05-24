@@ -79,6 +79,7 @@ type SurfaceTheme = "warm-gold" | "graphite-silver" | "ivory-studio";
 type PlaybackState = "playing" | "paused" | "stopped";
 type SourceState =
   | "audio"
+  | "scene"
   | "mpd"
   | "airplay"
   | "spotify"
@@ -90,10 +91,12 @@ type SourceState =
 type SourceSwitchTarget =
   | "mpd"
   | "audio"
+  | "scene"
   | "radio"
   | "spotify"
   | "bluetooth"
-  | "airplay";
+  | "airplay"
+  | "upnp";
 
 interface SystemState {
   network: NetworkState;
@@ -120,4 +123,5 @@ The local backend boundary should reserve endpoints or adapters for playback con
 - Kiosk guard: root-level context menu, drag, selection, browser zoom, and multi-touch browser default suppression.
 - Ambient HUD: visible on startup, auto-hides after 5s, and can be shown again with a single tap.
 - Playback backend: `mock` by default, `mpc` when the Pi runtime sets `TIKPAL_PLAYER_BACKEND=mpc`.
+- Source workspace: visible tabs are Library, Radio, Spotify, AirPlay, Bluetooth, and DLNA; DLNA uses runtime source id `upnp` and means renderer intake, not media-server browsing.
 - Appearance: font presets and surface skin presets are persisted locally and applied across ambient, player, and settings surfaces.
