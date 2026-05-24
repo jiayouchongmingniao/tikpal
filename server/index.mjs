@@ -1660,6 +1660,33 @@ function libraryCategoryLabel(categoryId) {
   }
 }
 
+const LOCAL_LIBRARY_SUBCATEGORY_ORDER = {
+  focus: [
+    "Lo-fi / Ambient",
+    "Classical / Piano",
+    "Binaural / Alpha / Theta",
+    "White Noise / Brown Noise"
+  ],
+  meditation: [
+    "Guided Meditation",
+    "Breathing",
+    "Singing Bowl",
+    "Nature Sounds"
+  ],
+  rest: [
+    "Nap",
+    "Sleep",
+    "Rain / Ocean / Forest",
+    "Deep Sleep Long Tracks"
+  ]
+};
+
+function localLibrarySubCategoryOrder(categoryId, label) {
+  const order = LOCAL_LIBRARY_SUBCATEGORY_ORDER[categoryId] ?? [];
+  const index = order.indexOf(label);
+  return index === -1 ? order.length : index;
+}
+
 function parseCsvRows(text) {
   const rows = [];
   let currentRow = [];
@@ -2033,11 +2060,16 @@ function buildLocalLibraryCategories(localTracks) {
       id: categoryId,
       label: libraryCategoryLabel(categoryId),
       trackCount: categoryTracks.length,
-      subCategories: Array.from(subCategoryCounts.entries()).map(([label, trackCount]) => ({
-        id: buildLibrarySubCategoryId(categoryId, label),
-        label,
-        trackCount
-      }))
+      subCategories: Array.from(subCategoryCounts.entries())
+        .sort(([leftLabel], [rightLabel]) => (
+          localLibrarySubCategoryOrder(categoryId, leftLabel) - localLibrarySubCategoryOrder(categoryId, rightLabel)
+          || leftLabel.localeCompare(rightLabel)
+        ))
+        .map(([label, trackCount]) => ({
+          id: buildLibrarySubCategoryId(categoryId, label),
+          label,
+          trackCount
+        }))
     };
   });
 }

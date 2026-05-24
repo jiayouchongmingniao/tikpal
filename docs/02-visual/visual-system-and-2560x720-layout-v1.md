@@ -158,7 +158,8 @@ Center playback zone:
   - Center pane: source-specific content, especially searchable radio catalog and large touch targets.
   - Right pane: source detail, connection policy, readiness, and active session label.
 - Library browsing should keep the storage tier distinct from local taxonomy: storage uses `Local`, `NAS`, `USB`, `Favorites`, and `Recently Added`; Local then exposes the larger `Focus`, `Meditation`, and `Rest` categories with smaller subfolder chips beneath them.
-- Local category folders should remain manifest-backed. `Meditation` should not absorb Rest folders such as Sleep, Rain, or Deep Sleep long tracks unless the manifest itself categorizes them there.
+- Local subfolder chips use the manifest-backed curated order: `Focus` shows `Lo-fi / Ambient`, `Classical / Piano`, `Binaural / Alpha / Theta`, and `White Noise / Brown Noise`; `Meditation` shows `Guided Meditation`, `Breathing`, `Singing Bowl`, and `Nature Sounds`; `Rest` shows `Nap`, `Sleep`, `Rain / Ocean / Forest`, and `Deep Sleep Long Tracks`.
+- Local category folders should remain manifest-backed. `Meditation` should not absorb Rest folders such as Sleep, Rain, Ocean, Forest, Nap, or Deep Sleep long tracks unless the manifest itself categorizes them there.
 - Radio browsing must support 200+ stations without feeling like a dense admin table.
   - Keep search and filters visible near the top of the workspace.
   - Use large row height, quick-scan metadata pills, and obvious active/pending state.

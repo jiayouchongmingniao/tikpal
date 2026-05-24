@@ -87,8 +87,34 @@ const localCategories: LocalCategory[] = [
   { id: "rest", label: "Rest" }
 ];
 
+const localSubCategoryOrder: Record<AudioLibraryCategoryId, string[]> = {
+  focus: [
+    "Lo-fi / Ambient",
+    "Classical / Piano",
+    "Binaural / Alpha / Theta",
+    "White Noise / Brown Noise"
+  ],
+  meditation: [
+    "Guided Meditation",
+    "Breathing",
+    "Singing Bowl",
+    "Nature Sounds"
+  ],
+  rest: [
+    "Nap",
+    "Sleep",
+    "Rain / Ocean / Forest",
+    "Deep Sleep Long Tracks"
+  ]
+};
+
 function categoryLabel(categoryId: AudioLibraryCategoryId) {
   return localCategories.find((category) => category.id === categoryId)?.label ?? "Library";
+}
+
+function subCategorySortIndex(categoryId: AudioLibraryCategoryId, label: string) {
+  const index = localSubCategoryOrder[categoryId].indexOf(label);
+  return index === -1 ? localSubCategoryOrder[categoryId].length : index;
 }
 
 function sourceStatusLabel(source: AudioState["currentSource"] | undefined, pending: boolean) {
@@ -194,8 +220,13 @@ export function PlayerOverlay({
     localCategoryTracks.forEach((track) => {
       counts.set(track.subCategory, (counts.get(track.subCategory) ?? 0) + 1);
     });
-    return Array.from(counts.entries()).map(([label, count]) => ({ label, count }));
-  }, [localCategoryTracks]);
+    return Array.from(counts.entries())
+      .sort(([leftLabel], [rightLabel]) => (
+        subCategorySortIndex(selectedLocalCategory, leftLabel) - subCategorySortIndex(selectedLocalCategory, rightLabel)
+        || leftLabel.localeCompare(rightLabel)
+      ))
+      .map(([label, count]) => ({ label, count }));
+  }, [localCategoryTracks, selectedLocalCategory]);
   const selectedSubCategoryIsAvailable = selectedLocalSubCategory === "all"
     || localSubCategoryTabs.some((tab) => tab.label === selectedLocalSubCategory);
   const selectedLocalTracks = useMemo(() => (

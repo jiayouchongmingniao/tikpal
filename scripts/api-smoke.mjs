@@ -306,12 +306,28 @@ async function run() {
     assert(localLibrary.body.tracks[0]?.path, "local audio library tracks should expose manifest paths");
     assert(localLibrary.body.tracks[0]?.albumArtUrl, "local audio library tracks should expose cover art URLs");
     assert(localLibrary.body.tracks[0]?.albumArtLabel, "generic local library folder covers should expose overlay labels");
+    assert(localLibrary.body.total === 39, "local audio library should keep the 39-track manifest total");
+    const localStorage = localLibrary.body.storages.find((storage) => storage.id === "local");
+    assert(localStorage, "local storage metadata should exist");
+    const localCategoryIds = localStorage.categories.map((category) => category.id);
+    assert(JSON.stringify(localCategoryIds) === JSON.stringify(["focus", "meditation", "rest"]), "local category ids should stay focus, meditation, rest");
+    const expectedSubCategories = {
+      focus: ["Lo-fi / Ambient", "Classical / Piano", "Binaural / Alpha / Theta", "White Noise / Brown Noise"],
+      meditation: ["Guided Meditation", "Breathing", "Singing Bowl", "Nature Sounds"],
+      rest: ["Nap", "Sleep", "Rain / Ocean / Forest", "Deep Sleep Long Tracks"]
+    };
+    for (const category of localStorage.categories) {
+      assert(
+        JSON.stringify(category.subCategories.map((subCategory) => subCategory.label)) === JSON.stringify(expectedSubCategories[category.id]),
+        `${category.id} local subcategories should match the curated taxonomy order`
+      );
+    }
     const meditationLibrary = await request("/api/v1/audio/library?storage=local&category=meditation&limit=500");
     assert(meditationLibrary.response.ok, "meditation library should return 200");
     assert(meditationLibrary.body.tracks.length > 0, "meditation library should include manifest-backed tracks");
     assert(meditationLibrary.body.tracks.every((track) => track.categoryId === "meditation"), "meditation library should only include meditation category tracks");
     assert(
-      meditationLibrary.body.tracks.every((track) => !["Deep Sleep Long Tracks", "Sleep", "Rain"].includes(track.subCategory)),
+      meditationLibrary.body.tracks.every((track) => !["Deep Sleep Long Tracks", "Sleep", "Rain / Ocean / Forest", "Nap"].includes(track.subCategory)),
       "meditation subcategories should not include rest folders"
     );
     const localCover = await requestBinary(localLibrary.body.tracks[0].albumArtUrl);

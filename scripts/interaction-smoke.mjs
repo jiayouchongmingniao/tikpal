@@ -1102,31 +1102,40 @@ try {
     "music source remains available after scene volume sync"
   );
 
-  await evaluate(
-    client,
-    `
-      (() => {
-        const target = [...document.querySelectorAll('.library-category-tab')].find((node) => node.textContent.includes('Meditation'));
-        target?.click();
-        return Boolean(target);
-      })()
-    `
-  );
-  await expect(
-    client,
-    `
-      (() => {
-        const container = document.querySelector('.library-subcategory-tabs');
-        if (!container) return false;
-        const labels = [...document.querySelectorAll('.library-subcategory-tab strong')]
-          .map((node) => node.textContent?.trim());
-        return container.scrollWidth <= container.clientWidth + 1
-          && window.getComputedStyle(container).overflowX !== 'auto'
-          && !labels.some((label) => ['Deep Sleep Long Tracks', 'Sleep', 'Rain'].includes(label));
-      })()
-    `,
-    "meditation subcategory tabs are organized without horizontal scrolling"
-  );
+  for (const [categoryLabel, expectedLabels] of Object.entries({
+    Focus: ["Lo-fi / Ambient", "Classical / Piano", "Binaural / Alpha / Theta", "White Noise / Brown Noise"],
+    Meditation: ["Guided Meditation", "Breathing", "Singing Bowl", "Nature Sounds"],
+    Rest: ["Nap", "Sleep", "Rain / Ocean / Forest", "Deep Sleep Long Tracks"]
+  })) {
+    await evaluate(
+      client,
+      `
+        (() => {
+          const target = [...document.querySelectorAll('.library-category-tab')].find((node) => node.textContent.includes(${JSON.stringify(categoryLabel)}));
+          target?.click();
+          return Boolean(target);
+        })()
+      `
+    );
+    await expectEventually(
+      client,
+      `
+        (() => {
+          const container = document.querySelector('.library-subcategory-tabs');
+          if (!container) return false;
+          const labels = [...document.querySelectorAll('.library-subcategory-tab strong')]
+            .map((node) => node.textContent?.trim())
+            .filter((label) => label && label !== 'All');
+          return container.scrollWidth <= container.clientWidth + 1
+            && window.getComputedStyle(container).overflowX !== 'auto'
+            && JSON.stringify(labels) === ${JSON.stringify(JSON.stringify(expectedLabels))};
+        })()
+      `,
+      `${categoryLabel.toLowerCase()} subcategory tabs match the curated taxonomy order`,
+      20,
+      50
+    );
+  }
 
   for (const theme of ["warm-gold", "graphite-silver", "ivory-studio"]) {
     await evaluate(client, `window.localStorage.setItem('tikpal.surfaceTheme', ${JSON.stringify(theme)})`);

@@ -16,6 +16,7 @@
     "ota:package:mp4": "node scripts/generate-mp4-resource-otas.mjs",
     "ota:resources": "node scripts/apply-resource-ota.mjs",
     "typecheck": "tsc -b",
+    "test:library": "node scripts/library-taxonomy-smoke.mjs",
     "test:api": "node scripts/api-smoke.mjs",
     "test:ota:package:mp4": "node scripts/generate-mp4-resource-otas-smoke.mjs",
     "test:ota:resources": "node scripts/resource-ota-smoke.mjs",

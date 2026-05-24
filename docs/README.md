@@ -116,6 +116,7 @@ The local backend boundary should reserve endpoints or adapters for playback con
 - State model: `ambient`, `player`, `quickSettings`, and `quickMenu`.
 - Validation routes: `/`, `/?mode=player`, `/?mode=quickSettings`.
 - Interaction validation: `npm run test:interaction` while the dev server is running.
+- Local library validation: `npm run test:library` checks the ignored `public/assets/music` manifest, covers, playlists, and MP3 paths for the curated Focus / Meditation / Rest taxonomy.
 - Kiosk guard: root-level context menu, drag, selection, browser zoom, and multi-touch browser default suppression.
 - Ambient HUD: visible on startup, auto-hides after 5s, and can be shown again with a single tap.
 - Playback backend: `mock` by default, `mpc` when the Pi runtime sets `TIKPAL_PLAYER_BACKEND=mpc`.

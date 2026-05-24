@@ -162,9 +162,10 @@ resource-ota/
    │  └─ Rainy-Window.mp4
    └─ music
       ├─ _metadata/library_manifest.csv
-      ├─ Focus/folder.jpg
-      ├─ Focus/.../folder.jpg
-      └─ Focus/.../*.mp3
+      ├─ Focus/Lo-fi Ambient/folder.jpg
+      ├─ Focus/Lo-fi Ambient/*.mp3
+      ├─ Meditation/Breathing/*.mp3
+      └─ Rest/Rain Ocean Forest/*.mp3
 ```
 
 Apply it on the device from the app checkout:
