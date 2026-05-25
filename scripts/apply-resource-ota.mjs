@@ -9,7 +9,7 @@ const DEFAULT_PUBLIC_ASSETS_DIR = path.join(ROOT, "public", "assets");
 const DEFAULT_DIST_ASSETS_DIR = path.join(ROOT, "dist", "assets");
 const DEFAULT_STATE_DIR = path.join(ROOT, ".tikpal");
 const DEFAULT_MUSIC_ROOT = "assets/music";
-const DEFAULT_MUSIC_MANIFEST = "assets/music/_metadata/library_manifest.csv";
+const DEFAULT_MUSIC_MANIFEST = "assets/music/_metadata/library_manifest.json";
 const DEFAULT_FIREPLACE_VIDEO = "assets/output_2560x720-4k.mp4";
 const DEFAULT_FIREPLACE_VIDEO_TARGET = "output_2560x720-4k.mp4";
 const DEFAULT_SCENE_ROOT = "assets/scenes";
@@ -26,7 +26,7 @@ function usage() {
     "",
     "Package defaults:",
     "  manifest.json",
-    "  assets/music/_metadata/library_manifest.csv",
+    "  assets/music/_metadata/library_manifest.json",
     "  assets/music/**",
     "  assets/scenes/_metadata/scene_videos.json",
     "  assets/scenes/**.mp4",
@@ -89,58 +89,12 @@ async function exists(filePath) {
   }
 }
 
-function parseCsvRows(text) {
-  const rows = [];
-  let currentRow = [];
-  let currentCell = "";
-  let inQuotes = false;
-
-  for (let index = 0; index < text.length; index += 1) {
-    const char = text[index];
-    const nextChar = text[index + 1];
-
-    if (char === "\"") {
-      if (inQuotes && nextChar === "\"") {
-        currentCell += "\"";
-        index += 1;
-      } else {
-        inQuotes = !inQuotes;
-      }
-      continue;
-    }
-
-    if (char === "," && !inQuotes) {
-      currentRow.push(currentCell);
-      currentCell = "";
-      continue;
-    }
-
-    if ((char === "\n" || char === "\r") && !inQuotes) {
-      if (char === "\r" && nextChar === "\n") index += 1;
-      currentRow.push(currentCell);
-      if (currentRow.some((cell) => cell.trim().length > 0)) {
-        rows.push(currentRow);
-      }
-      currentRow = [];
-      currentCell = "";
-      continue;
-    }
-
-    currentCell += char;
+function parseJsonRows(text, label) {
+  const rows = JSON.parse(text.replace(/^\uFEFF/, ""));
+  if (!Array.isArray(rows)) {
+    throw new Error(`${label} must be a JSON array`);
   }
-
-  currentRow.push(currentCell);
-  if (currentRow.some((cell) => cell.trim().length > 0)) {
-    rows.push(currentRow);
-  }
-
-  const [headerRow, ...dataRows] = rows;
-  if (!headerRow) return { headers: [], rows: [] };
-  const headers = headerRow.map((header) => header.replace(/^\uFEFF/, "").trim());
-  return {
-    headers,
-    rows: dataRows.map((row) => Object.fromEntries(headers.map((header, index) => [header, row[index] ?? ""])))
-  };
+  return rows.filter((row) => row && typeof row === "object" && !Array.isArray(row));
 }
 
 async function readPackageManifest(packageDir) {
@@ -264,9 +218,10 @@ async function validateSceneVideosManifest({ manifestPath, packageSceneRoot }) {
 
 async function validateMusicManifest({ manifestPath, packageMusicRoot, publicMusicRoot }) {
   const raw = await readFile(manifestPath, "utf8");
-  const parsed = parseCsvRows(raw);
+  const rows = parseJsonRows(raw, "Music manifest");
   const requiredHeaders = ["id", "title", "category_level_1", "final_relative_path"];
-  const missingHeaders = requiredHeaders.filter((header) => !parsed.headers.includes(header));
+  const discoveredHeaders = new Set(rows.flatMap((row) => Object.keys(row)));
+  const missingHeaders = requiredHeaders.filter((header) => !discoveredHeaders.has(header));
   if (missingHeaders.length > 0) {
     throw new Error(`Music manifest is missing required columns: ${missingHeaders.join(", ")}`);
   }
@@ -274,7 +229,7 @@ async function validateMusicManifest({ manifestPath, packageMusicRoot, publicMus
   const missingFiles = [];
   const missingCovers = [];
   const trackRows = [];
-  for (const row of parsed.rows) {
+  for (const row of rows) {
     const relativePath = row.final_relative_path?.trim();
     if (!relativePath) continue;
     if (!isSafeRelativePath(relativePath)) {
@@ -463,8 +418,8 @@ async function syncToAssets({ packagePath, packageMusicRoot, scenePackage, publi
   await mkdir(publicAssetsDir, { recursive: true });
 
   if (packageHasMusicRoot) {
-    await backupFile(path.join(publicMusicRoot, "_metadata", "library_manifest.csv"), backupRoot, "public/assets/music/_metadata/library_manifest.csv")
-      .then((saved) => { if (saved) backups.push("public/assets/music/_metadata/library_manifest.csv"); });
+    await backupFile(path.join(publicMusicRoot, "_metadata", "library_manifest.json"), backupRoot, "public/assets/music/_metadata/library_manifest.json")
+      .then((saved) => { if (saved) backups.push("public/assets/music/_metadata/library_manifest.json"); });
     await cp(packageMusicRoot, publicMusicRoot, { recursive: true, force: true });
 
     if (distAssetsAvailable) {

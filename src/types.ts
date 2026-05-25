@@ -1,4 +1,4 @@
-export type AppMode = "ambient" | "player" | "quickSettings" | "quickMenu";
+export type AppMode = "ambient" | "player" | "playlist" | "quickSettings" | "quickMenu";
 export type FontTheme = "sans" | "serif" | "mono";
 export type SurfaceTheme = "warm-gold" | "graphite-silver" | "ivory-studio";
 export type LyricsFontSize = "small" | "medium" | "large";
@@ -113,6 +113,7 @@ export interface AudioLibraryTrackSummary {
   albumArtLabel: string | null;
   albumArtScope: string | null;
   active: boolean;
+  favorite: boolean;
 }
 
 export interface AudioLibraryFilters {
@@ -139,6 +140,69 @@ export interface AudioLibraryResponse {
     offset: number;
   };
   updatedAt: string;
+}
+
+export type AudioPlaylistSource = "user" | "curated";
+export type AudioPlaylistCoverType = "gradient" | "scene" | "collage" | "custom";
+
+export interface AudioPlaylistTrackSummary extends AudioLibraryTrackSummary {
+  position: number;
+}
+
+export interface AudioPlaylistSummary {
+  id: string;
+  name: string;
+  source: AudioPlaylistSource;
+  readOnly: boolean;
+  description?: string;
+  moodTags: string[];
+  coverType: AudioPlaylistCoverType;
+  coverValue?: string | null;
+  trackCount: number;
+  durationSeconds: number | null;
+  createdAt?: string | null;
+  updatedAt: string | null;
+  tracks: AudioPlaylistTrackSummary[];
+}
+
+export interface AudioPlaylistResponse {
+  playlists: AudioPlaylistSummary[];
+  updatedAt: string;
+}
+
+export type AudioPlaylistActionType =
+  | "rename"
+  | "delete"
+  | "add_track"
+  | "remove_track"
+  | "move_track"
+  | "replace_tracks"
+  | "duplicate"
+  | "update_metadata"
+  | "play";
+
+export interface AudioPlaylistActionRequest {
+  type: AudioPlaylistActionType;
+  playlistId: string;
+  name?: string;
+  description?: string;
+  moodTags?: string[];
+  coverType?: AudioPlaylistCoverType;
+  coverValue?: string | null;
+  trackPath?: string;
+  trackPaths?: string[];
+  fromIndex?: number;
+  toIndex?: number;
+  startIndex?: number;
+}
+
+export interface AudioPlaylistCreateRequest {
+  name: string;
+  description?: string;
+  moodTags?: string[];
+  coverType?: AudioPlaylistCoverType;
+  coverValue?: string | null;
+  trackPaths?: string[];
 }
 
 export interface BackgroundVideoSummary {

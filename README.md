@@ -21,12 +21,13 @@ Tikpal has three primary levels:
 | --- | --- | --- |
 | Level 0 | Ambient flame screen | Default long-dwell state with flame visual, time, and subtle playback HUD. |
 | Level 1 | Player control overlay | Daily playback controls, cover art, transport, progress, volume, audio status, and output state. |
+| Level 1 | Playlist page | Playlist creation, editing, ordering, local-track adds, and playlist playback. |
 | Level 2 | Quick settings overlay | Low-frequency system cards for network, output, DSP, library update, display, and system actions. |
 
 Primary gestures:
 
 - One-finger swipe down opens the player control overlay.
-- Two-finger swipe down opens quick settings.
+- Two-finger swipe down opens the playlist page.
 - Swipe up returns to the ambient flame screen.
 - Tap temporarily strengthens playback HUD information.
 - Long press opens a quick menu.
@@ -69,6 +70,7 @@ Validation entry points:
 
 - Ambient: [http://localhost:4173/](http://localhost:4173/)
 - Player overlay: [http://localhost:4173/?mode=player](http://localhost:4173/?mode=player)
+- Playlist page: [http://localhost:4173/?mode=playlist](http://localhost:4173/?mode=playlist)
 - Quick settings: [http://localhost:4173/?mode=quickSettings](http://localhost:4173/?mode=quickSettings)
 
 ## Build
@@ -129,14 +131,14 @@ With the dev server running, verify the Batch 2 kiosk interaction contract:
 npm run test:interaction
 ```
 
-The smoke test drives Chrome through the DevTools protocol and checks wheel/trackpad-style entry, ambient HUD controls, playback truth display, the Player source workspace, Library taxonomy, surface skin highlight states, overlay return, protected panel clicks, and Quick Settings detail panels.
+The smoke test drives Chrome through the DevTools protocol and checks wheel/trackpad-style playlist entry, ambient HUD controls, playback truth display, the Player source workspace, the three-column Playlist Hub create/add/reorder/delete-confirm flow, horizontal trackpad swipes for playlist/song quick actions, vertical trackpad scrolling inside Playlist without accidental exit, Library taxonomy, surface skin highlight states, overlay return, protected panel clicks, and Quick Settings detail panels.
 
 ## MVP Summary
 
 The first implementation milestone should deliver:
 
 - Ambient fireplace screen with clock and subtle playback HUD.
-- One-finger player overlay and two-finger quick settings overlay.
+- One-finger player overlay, two-finger playlist page, and explicit quick settings entry.
 - Playback state, cover art, transport controls, progress, volume, format, sample rate, bit depth, output device, and network status.
 - Quick settings cards for network, output, DSP, library update, display, system info, reboot, and shutdown.
 - Long-press quick menu and a weak top-right settings fallback.
@@ -144,9 +146,9 @@ The first implementation milestone should deliver:
 
 ## Repository Status
 
-The local API exposes a first-class audio-source model for `Library`, internal `Audio`, `Radio`, `Spotify Connect`, `Bluetooth`, `AirPlay`, and `DLNA`. The frontend reads current source summary from `/api/v1/system/state`, inspects compact source state through `GET /api/v1/audio/sources`, renders six visible source tabs (`Library`, `Radio`, `Spotify`, `AirPlay`, `Bluetooth`, `DLNA`), fetches the searchable radio catalog through `GET /api/v1/audio/radios`, fetches the manifest-backed local music library through `GET /api/v1/audio/library`, posts source switches to `POST /api/v1/audio/source`, and still uses `/api/v1/playback/actions` plus `/api/v1/system/actions` for transport and system cards.
+The local API exposes a first-class audio-source model for `Library`, internal `Audio`, `Radio`, `Spotify Connect`, `Bluetooth`, `AirPlay`, and `DLNA`. The frontend reads current source summary from `/api/v1/system/state`, inspects compact source state through `GET /api/v1/audio/sources`, renders six visible source tabs (`Library`, `Radio`, `Spotify`, `AirPlay`, `Bluetooth`, `DLNA`), fetches the searchable radio catalog through `GET /api/v1/audio/radios`, fetches the manifest-backed local music library through `GET /api/v1/audio/library`, manages the touch-first Playlist Hub through `/api/v1/audio/playlists` and `/api/v1/audio/playlist-actions`, posts source switches to `POST /api/v1/audio/source`, and still uses `/api/v1/playback/actions` plus `/api/v1/system/actions` for transport and system cards.
 
-The real moOde / MPD adapter remains the audio owner. In `mpc` mode, Tikpal keeps MPD/library control as the default path, treats Radio as a searchable station catalog with direct `radioStationId` switching, and now models Spotify Connect, Bluetooth, AirPlay, and DLNA as armed-only intake paths: they are connectable only while explicitly selected. The player source rail is ordered as `Library`, `Radio`, `Spotify`, `AirPlay`, `Bluetooth`, and `DLNA`; Library then separates storage (`Local`, `NAS`, `USB`, `Favorites`, `Recently Added`) from Local taxonomy (`Focus`, `Meditation`, `Rest`, then subfolders). The current Local tree is `Focus` -> `Lo-fi / Ambient`, `Classical / Piano`, `Binaural / Alpha / Theta`, `White Noise / Brown Noise`; `Meditation` -> `Guided Meditation`, `Breathing`, `Singing Bowl`, `Nature Sounds`; and `Rest` -> `Nap`, `Sleep`, `Rain / Ocean / Forest`, `Deep Sleep Long Tracks`. `TIKPAL_RADIO_DEFAULT_URI` stays as a fallback when moOde presets are unavailable, while Bluetooth / AirPlay / DLNA gating is wired through environment-configured enable/disable and status commands. DLNA means Tikpal/moOde acts as a UPnP/DLNA renderer for external casting, not as a DLNA media-server browser. Bluetooth state now also carries the local advertised device name so the frontend can tell the user exactly what to look for on their phone while pairing.
+The real moOde / MPD adapter remains the audio owner. In `mpc` mode, Tikpal keeps MPD/library control as the default path, treats Radio as a searchable station catalog with direct `radioStationId` switching, and now models Spotify Connect, Bluetooth, AirPlay, and DLNA as armed-only intake paths: they are connectable only while explicitly selected. The player source rail is ordered as `Library`, `Radio`, `Spotify`, `AirPlay`, `Bluetooth`, and `DLNA`; Playlist is a separate three-column management page opened from Player or Ambient. Playlist user state persists name, mood tags, cover type/value, description, and track order in `.tikpal/music-library-state.json`; curated playlists stay read-only and can be duplicated into editable user playlists. The Playlist page supports both touchscreen gestures and desktop trackpad use: horizontal two-finger swipes reveal card/song quick actions, while vertical trackpad scrolling stays inside the readable columns instead of returning to Ambient. Library then separates storage (`Local`, `NAS`, `USB`, `Favorites`, `Recently Added`) from Local taxonomy (`Focus`, `Meditation`, `Rest`, then subfolders). The current Local tree is `Focus` -> `Lo-fi / Ambient`, `Classical / Piano`, `Binaural / Alpha / Theta`, `White Noise / Brown Noise`; `Meditation` -> `Guided Meditation`, `Breathing`, `Singing Bowl`, `Nature Sounds`; and `Rest` -> `Nap`, `Sleep`, `Rain / Ocean / Forest`, `Deep Sleep Long Tracks`. `TIKPAL_RADIO_DEFAULT_URI` stays as a fallback when moOde presets are unavailable, while Bluetooth / AirPlay / DLNA gating is wired through environment-configured enable/disable and status commands. DLNA means Tikpal/moOde acts as a UPnP/DLNA renderer for external casting, not as a DLNA media-server browser. Bluetooth state now also carries the local advertised device name so the frontend can tell the user exactly what to look for on their phone while pairing.
 
 Ambient lyrics now have two recognition paths behind the same `lyrics` state. Local `MPD` / `Radio` playback still resolves lyrics from metadata through LRCLIB, while Bluetooth first tries BlueZ / AVRCP title metadata and playback position, then can fall back to a short local PCM sample identified through ACRCloud before reusing the same LRCLIB lyrics lookup. The Bluetooth recognition path is only armed while Bluetooth is the selected source and the input is actually connected, and it keeps its own `bluetooth_input` scope so source truth stays separate from `audio.currentSource` and `playback.source`.
 
@@ -156,7 +158,7 @@ The Player and Ambient HUD both display playback truth from the active `playback
 
 Ambient background videos are discovered from `public/assets/*.mp4` and OTA-managed `public/assets/scenes/*.mp4` through `GET /api/v1/media/background-videos`. Scene changes mount the next video layer, seek it to `playback.elapsedSeconds % video.duration`, then crossfade; paused playback stays frozen on the new scene frame, while playing playback resumes the video after alignment. Within one looping scene, `FlameScene` keeps two video slots: the standby slot is prepared about 1.2 seconds before the natural tail, revealed about 0.42 seconds before the tail, and held through a 360ms visual / 340ms Scene Sound crossfade so Chromium does not hit the native MP4 loop boundary first. The web server serves MP4 files with byte-range support so browser video seeking works reliably. Ambient refreshes the scene catalog every 30 seconds and whenever the page becomes visible, so newly applied scene OTA packages join the previous / next scene controls without a page reload.
 
-Resource OTA updates are handled by `npm run ota:resources -- <package-dir>`. A resource OTA package can replace `assets/music/_metadata/library_manifest.csv`, copy the referenced local music files under `assets/music/`, and add scene videos from `assets/scenes/` using `assets/scenes/_metadata/scene_videos.json`. Older packages may still include the legacy mutable fireplace video at `assets/output_2560x720-4k.mp4`, but the default Ambient scene catalog no longer depends on an `output*.mp4` file. The script validates music paths, scene MP4 checksums, and MP4 headers before writing, syncs `public/assets`, also syncs `dist/assets` when a production build exists, and records the result in `.tikpal/resource-ota-state.json`.
+Resource OTA updates are handled by `npm run ota:resources -- <package-dir>`. A resource OTA package must provide `assets/music/_metadata/library_manifest.json`, copy the referenced local music files under `assets/music/`, and can add scene videos from `assets/scenes/` using `assets/scenes/_metadata/scene_videos.json`. Older packages may still include the legacy mutable fireplace video at `assets/output_2560x720-4k.mp4`, but the default Ambient scene catalog no longer depends on an `output*.mp4` file. The script validates music paths, scene MP4 checksums, and MP4 headers before writing, syncs `public/assets`, also syncs `dist/assets` when a production build exists, and records the result in `.tikpal/resource-ota-state.json`.
 
 Scene MP4 OTA packages can be generated from a folder of `.mp4` files:
 
@@ -174,4 +176,4 @@ The repo is no longer mock-only, but a few visible pieces are still only partial
 
 - The source model is still intentionally focused. The UI exposes six frontstage tabs (`Library`, `Radio`, `Spotify`, `AirPlay`, `Bluetooth`, `DLNA`), while internal `Audio` remains state/API truth rather than a visible browser category.
 - The ambient right-side brightness gesture depends on working DDC/CI on the target display. When `ddcutil` cannot read or set VCP `0x10`, Tikpal currently degrades to read-only/unavailable status instead of offering a fallback brightness path.
-- Ambient deliberately does not expose playlist or queue UI; queue preview belongs in the Player overlay so the default 720px-high dwell screen stays calm.
+- Ambient deliberately does not render playlist or queue panels inline; playlist opens as its own page, and queue preview belongs in the Player overlay so the default 720px-high dwell screen stays calm.

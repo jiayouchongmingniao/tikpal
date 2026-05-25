@@ -3,7 +3,7 @@ import { execFile } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { mkdir, readFile, readdir, stat, unlink, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
-import { basename, dirname, extname, posix, resolve, sep } from "node:path";
+import { basename, dirname, extname, posix, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { recognizeWithAcrCloud } from "./recognitionProviders/acrcloud.mjs";
 
@@ -89,8 +89,11 @@ const REMOTE_MEDIA_CACHE_ROOT = resolve(process.cwd(), ".cache", "remote-media")
 const REMOTE_ARTWORK_CACHE_DIR = resolve(REMOTE_MEDIA_CACHE_ROOT, "artwork");
 const REMOTE_ARTWORK_INDEX_DIR = resolve(REMOTE_MEDIA_CACHE_ROOT, "artwork-index");
 const LOCAL_LIBRARY_MANIFEST_PATH = process.env.TIKPAL_LOCAL_LIBRARY_MANIFEST_PATH
-  ?? resolve(process.cwd(), "public", "assets", "music", "_metadata", "library_manifest.csv");
+  ?? resolve(process.cwd(), "public", "assets", "music", "_metadata", "library_manifest.json");
 const LOCAL_LIBRARY_ROOT = resolve(dirname(LOCAL_LIBRARY_MANIFEST_PATH), "..");
+const LOCAL_PLAYLIST_INDEX_PATH = resolve(LOCAL_LIBRARY_ROOT, "_metadata", "playlist_index.json");
+const LOCAL_PLAYLIST_ROOT = resolve(LOCAL_LIBRARY_ROOT, "_playlists");
+const MUSIC_LIBRARY_STATE_PATH = resolve(process.env.TIKPAL_MUSIC_LIBRARY_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "music-library-state.json"));
 const LOCAL_LIBRARY_COVER_COLUMNS = ["cover_relative_path", "cover_path", "album_art_relative_path", "artwork_relative_path"];
 const LOCAL_LIBRARY_COVER_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp"];
 const PUBLIC_ASSETS_ROOT = resolve(process.env.TIKPAL_PUBLIC_ASSETS_ROOT ?? resolve(process.cwd(), "public", "assets"));
@@ -103,6 +106,9 @@ const DEFAULT_SCENE_VIDEO = {
   label: "No scene video",
   src: ""
 };
+const PLAYLIST_NAME_MAX_LENGTH = 40;
+const PLAYLIST_MOOD_TAGS = new Set(["Focus", "Flow", "Calm", "Sleep", "Fireplace", "Meditation", "Reading", "Morning"]);
+const PLAYLIST_COVER_TYPES = new Set(["gradient", "scene", "collage", "custom"]);
 const PLAYBACK_MODES = new Set(["sequence", "repeat_one", "shuffle"]);
 const execFileAsync = promisify(execFile);
 
@@ -129,9 +135,10 @@ const tracks = [
 
 let trackIndex = 0;
 let mockSelectedLocalTrack = null;
+let mockLocalQueueTracks = [];
+let mockLocalQueueIndex = 0;
 let playbackState = "playing";
 let elapsedSeconds = 84;
-let favorite = false;
 let playMode = "sequence";
 let lastTickAt = Date.now();
 let lastMockLibraryScanAt = 0;
@@ -284,18 +291,18 @@ function buildQueueEntrySummary({ id, position, title, artist, album, durationSe
 }
 
 function buildMockQueuePreview() {
-  if (mockSelectedLocalTrack) {
-    return [
-      buildQueueEntrySummary({
-        id: `local-${mockSelectedLocalTrack.id}`,
-        position: 1,
-        title: mockSelectedLocalTrack.title,
-        artist: mockSelectedLocalTrack.artist,
-        album: mockSelectedLocalTrack.album,
-        durationSeconds: mockSelectedLocalTrack.durationSeconds,
-        active: true
-      })
-    ];
+  if (mockLocalQueueTracks.length > 0) {
+    const queue = mockLocalQueueTracks.map((track, index) => buildQueueEntrySummary({
+      id: `local-${track.id}`,
+      position: index + 1,
+      title: track.title,
+      artist: track.artist,
+      album: track.album,
+      durationSeconds: track.durationSeconds,
+      active: index === mockLocalQueueIndex
+    }));
+    const previewStart = Math.max(0, Math.min(queue.length - 5, mockLocalQueueIndex - 1));
+    return queue.slice(previewStart, previewStart + 5);
   }
 
   const total = 13;
@@ -313,6 +320,32 @@ function buildMockQueuePreview() {
   });
   const previewStart = Math.max(0, Math.min(queue.length - 5, trackIndex - 1));
   return queue.slice(previewStart, previewStart + 5);
+}
+
+function setMockLocalQueue(queueTracks, startIndex = 0) {
+  mockLocalQueueTracks = Array.isArray(queueTracks) ? queueTracks.filter(Boolean) : [];
+  mockLocalQueueIndex = Math.max(0, Math.min(mockLocalQueueTracks.length - 1, startIndex));
+  mockSelectedLocalTrack = mockLocalQueueTracks[mockLocalQueueIndex] ?? null;
+}
+
+function clearMockLocalQueue() {
+  mockLocalQueueTracks = [];
+  mockLocalQueueIndex = 0;
+  mockSelectedLocalTrack = null;
+}
+
+function advanceMockLocalQueue(delta) {
+  if (mockLocalQueueTracks.length === 0) return false;
+  if (playMode === "shuffle") {
+    mockLocalQueueIndex = Math.floor(Math.random() * mockLocalQueueTracks.length);
+  } else {
+    mockLocalQueueIndex = (mockLocalQueueIndex + delta + mockLocalQueueTracks.length) % mockLocalQueueTracks.length;
+  }
+  mockSelectedLocalTrack = mockLocalQueueTracks[mockLocalQueueIndex] ?? null;
+  elapsedSeconds = 0;
+  playbackState = "playing";
+  lastTickAt = Date.now();
+  return true;
 }
 
 function getPlaybackSettings() {
@@ -543,6 +576,10 @@ function syncElapsed() {
     if (durationSeconds && elapsedSeconds >= durationSeconds) {
       if (playMode === "repeat_one") {
         elapsedSeconds %= durationSeconds;
+      } else if (mockLocalQueueTracks.length > 1 && mockLocalQueueIndex < mockLocalQueueTracks.length - 1) {
+        mockLocalQueueIndex += 1;
+        mockSelectedLocalTrack = mockLocalQueueTracks[mockLocalQueueIndex] ?? null;
+        elapsedSeconds = 0;
       } else {
         elapsedSeconds = durationSeconds;
         playbackState = "stopped";
@@ -561,6 +598,7 @@ function syncElapsed() {
 
 function getPlayback() {
   syncElapsed();
+  const musicState = readMusicLibraryStateSync();
   const mockSpotifyConnected = mockActiveSource === "spotify" && Date.now() - mockSpotifyArmedAt >= MOCK_SPOTIFY_CONNECT_AFTER_MS;
   const mockBluetoothConnected = mockActiveSource === "bluetooth" && Date.now() - mockBluetoothArmedAt >= MOCK_BLUETOOTH_CONNECT_AFTER_MS;
   const mockAirplayConnected = mockActiveSource === "airplay" && Date.now() - mockAirplayArmedAt >= MOCK_AIRPLAY_CONNECT_AFTER_MS;
@@ -598,7 +636,7 @@ function getPlayback() {
       durationSeconds: track.durationSeconds,
       currentTrackIndex: trackIndex + 1,
       queueLength: 13,
-      favorite,
+      favorite: false,
       settings: getPlaybackSettings(),
       queuePreview: buildMockQueuePreview()
     };
@@ -706,6 +744,7 @@ function getPlayback() {
   }
 
   if (mockSelectedLocalTrack) {
+    const queueLength = mockLocalQueueTracks.length || 1;
     return {
       state: playbackState,
       source: "mpd",
@@ -715,9 +754,9 @@ function getPlayback() {
       album: mockSelectedLocalTrack.album,
       elapsedSeconds,
       durationSeconds: mockSelectedLocalTrack.durationSeconds,
-      currentTrackIndex: 1,
-      queueLength: 1,
-      favorite,
+      currentTrackIndex: mockLocalQueueIndex + 1,
+      queueLength,
+      favorite: isFavoriteTrackPath(mockSelectedLocalTrack.path, musicState),
       settings: getPlaybackSettings(),
       queuePreview: buildMockQueuePreview()
     };
@@ -735,7 +774,7 @@ function getPlayback() {
     durationSeconds: track.durationSeconds,
     currentTrackIndex: trackIndex + 1,
     queueLength: 13,
-    favorite,
+    favorite: false,
     settings: getPlaybackSettings(),
     queuePreview: buildMockQueuePreview()
   };
@@ -1738,62 +1777,183 @@ function localLibrarySubCategoryOrder(categoryId, label) {
   return index === -1 ? order.length : index;
 }
 
-function parseCsvRows(text) {
-  const rows = [];
-  let currentRow = [];
-  let currentCell = "";
-  let inQuotes = false;
-
-  for (let index = 0; index < text.length; index += 1) {
-    const char = text[index];
-    const nextChar = text[index + 1];
-
-    if (char === "\"") {
-      if (inQuotes && nextChar === "\"") {
-        currentCell += "\"";
-        index += 1;
-      } else {
-        inQuotes = !inQuotes;
-      }
-      continue;
-    }
-
-    if (char === "," && !inQuotes) {
-      currentRow.push(currentCell);
-      currentCell = "";
-      continue;
-    }
-
-    if ((char === "\n" || char === "\r") && !inQuotes) {
-      if (char === "\r" && nextChar === "\n") index += 1;
-      currentRow.push(currentCell);
-      if (currentRow.some((cell) => cell.trim().length > 0)) {
-        rows.push(currentRow);
-      }
-      currentRow = [];
-      currentCell = "";
-      continue;
-    }
-
-    currentCell += char;
+function readJsonRowsFromText(text, label) {
+  const parsed = JSON.parse(text.replace(/^\uFEFF/, ""));
+  if (!Array.isArray(parsed)) {
+    throw new Error(`${label} must be a JSON array`);
   }
-
-  currentRow.push(currentCell);
-  if (currentRow.some((cell) => cell.trim().length > 0)) {
-    rows.push(currentRow);
-  }
-
-  const [headerRow, ...dataRows] = rows;
-  if (!headerRow) return [];
-
-  const headers = headerRow.map((header) => header.replace(/^\uFEFF/, "").trim());
-  return dataRows.map((row) => Object.fromEntries(headers.map((header, index) => [header, row[index] ?? ""])));
+  return parsed.filter((row) => row && typeof row === "object" && !Array.isArray(row));
 }
 
 function normalizeSafeRelativePath(value) {
   const normalized = posix.normalize(String(value ?? "").trim().replaceAll("\\", "/")).replace(/^\/+/, "");
   if (!normalized || normalized === "." || normalized === ".." || normalized.startsWith("../")) return null;
   return normalized;
+}
+
+function emptyMusicLibraryState() {
+  return {
+    version: 2,
+    favorites: { trackPaths: [] },
+    playlists: []
+  };
+}
+
+function uniqueSafeTrackPaths(values = []) {
+  const paths = [];
+  const seen = new Set();
+  for (const value of values) {
+    const safePath = normalizeSafeRelativePath(value);
+    if (!safePath || seen.has(safePath)) continue;
+    seen.add(safePath);
+    paths.push(safePath);
+  }
+  return paths;
+}
+
+function normalizePlaylistMoodTags(values = []) {
+  const tags = [];
+  const seen = new Set();
+  const sourceValues = Array.isArray(values) ? values : [];
+  for (const value of sourceValues) {
+    const tag = String(value ?? "").trim();
+    const knownTag = Array.from(PLAYLIST_MOOD_TAGS).find((candidate) => candidate.toLowerCase() === tag.toLowerCase());
+    if (!knownTag || seen.has(knownTag)) continue;
+    seen.add(knownTag);
+    tags.push(knownTag);
+  }
+  return tags.length > 0 ? tags.slice(0, 4) : ["Focus"];
+}
+
+function inferPlaylistMoodTags(name, tracks = []) {
+  const text = [
+    name,
+    ...tracks.flatMap((track) => [track?.categoryId, track?.subCategory, track?.album])
+  ].filter(Boolean).join(" ").toLowerCase();
+
+  const tags = [];
+  if (text.includes("sleep") || text.includes("rest") || text.includes("nap")) tags.push("Sleep");
+  if (text.includes("meditation") || text.includes("breath") || text.includes("bowl")) tags.push("Meditation");
+  if (text.includes("rain") || text.includes("ocean") || text.includes("forest") || text.includes("calm")) tags.push("Calm");
+  if (text.includes("fireplace") || text.includes("fire") || text.includes("warm")) tags.push("Fireplace");
+  if (text.includes("morning")) tags.push("Morning");
+  if (text.includes("flow")) tags.push("Flow");
+  if (text.includes("reading")) tags.push("Reading");
+  if (text.includes("focus") || text.includes("work") || tags.length === 0) tags.push("Focus");
+
+  return normalizePlaylistMoodTags(tags);
+}
+
+function normalizePlaylistCoverType(value) {
+  const coverType = String(value ?? "").trim().toLowerCase();
+  return PLAYLIST_COVER_TYPES.has(coverType) ? coverType : "gradient";
+}
+
+function normalizePlaylistCoverValue(value) {
+  const coverValue = String(value ?? "").trim();
+  return coverValue ? coverValue.slice(0, 80) : null;
+}
+
+function normalizePlaylistDescription(value) {
+  const description = String(value ?? "").trim();
+  return description ? description.slice(0, 160) : "";
+}
+
+function buildDefaultPlaylistCoverValue(name, moodTags = []) {
+  const tag = moodTags[0] ?? "Focus";
+  return `${tag.toLowerCase()}-${String(name ?? "playlist").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 24) || "mix"}`;
+}
+
+function normalizePlaylistMetadata(playlist = {}, fallbackName = "Playlist", fallbackTracks = []) {
+  const moodTags = normalizePlaylistMoodTags(
+    Array.isArray(playlist.moodTags) && playlist.moodTags.length > 0
+      ? playlist.moodTags
+      : inferPlaylistMoodTags(fallbackName, fallbackTracks)
+  );
+  const coverType = normalizePlaylistCoverType(playlist.coverType);
+  const coverValue = normalizePlaylistCoverValue(playlist.coverValue) ?? buildDefaultPlaylistCoverValue(fallbackName, moodTags);
+
+  return {
+    description: normalizePlaylistDescription(playlist.description),
+    moodTags,
+    coverType,
+    coverValue
+  };
+}
+
+function normalizeMusicLibraryState(raw) {
+  const state = emptyMusicLibraryState();
+  const favorites = raw?.favorites?.trackPaths ?? [];
+  state.favorites.trackPaths = uniqueSafeTrackPaths(Array.isArray(favorites) ? favorites : []);
+  const playlists = Array.isArray(raw?.playlists) ? raw.playlists : [];
+  const seenIds = new Set();
+  for (const playlist of playlists) {
+    const id = String(playlist?.id ?? "").trim();
+    const name = String(playlist?.name ?? "").trim();
+    if (!id || !name || seenIds.has(id)) continue;
+    seenIds.add(id);
+    const metadata = normalizePlaylistMetadata(playlist, name);
+    state.playlists.push({
+      id,
+      name,
+      description: metadata.description,
+      moodTags: metadata.moodTags,
+      coverType: metadata.coverType,
+      coverValue: metadata.coverValue,
+      trackPaths: uniqueSafeTrackPaths(Array.isArray(playlist.trackPaths) ? playlist.trackPaths : []),
+      createdAt: String(playlist.createdAt ?? playlist.updatedAt ?? new Date(0).toISOString()),
+      updatedAt: String(playlist.updatedAt ?? playlist.createdAt ?? new Date(0).toISOString())
+    });
+  }
+  return state;
+}
+
+function readMusicLibraryStateSync() {
+  try {
+    return normalizeMusicLibraryState(JSON.parse(readFileSync(MUSIC_LIBRARY_STATE_PATH, "utf8")));
+  } catch {
+    return emptyMusicLibraryState();
+  }
+}
+
+async function readMusicLibraryState() {
+  try {
+    return normalizeMusicLibraryState(JSON.parse(await readFile(MUSIC_LIBRARY_STATE_PATH, "utf8")));
+  } catch {
+    return emptyMusicLibraryState();
+  }
+}
+
+async function writeMusicLibraryState(state) {
+  const normalized = normalizeMusicLibraryState(state);
+  await mkdir(dirname(MUSIC_LIBRARY_STATE_PATH), { recursive: true });
+  await writeFile(MUSIC_LIBRARY_STATE_PATH, `${JSON.stringify(normalized, null, 2)}\n`);
+  return normalized;
+}
+
+function isFavoriteTrackPath(trackPath, state = readMusicLibraryStateSync()) {
+  const safePath = normalizeSafeRelativePath(trackPath);
+  return Boolean(safePath && state.favorites.trackPaths.includes(safePath));
+}
+
+async function setFavoriteTrackPath(trackPath, nextFavorite) {
+  const safePath = normalizeSafeRelativePath(trackPath);
+  if (!safePath) return await readMusicLibraryState();
+  const state = await readMusicLibraryState();
+  const current = new Set(state.favorites.trackPaths);
+  if (nextFavorite) {
+    current.add(safePath);
+  } else {
+    current.delete(safePath);
+  }
+  state.favorites.trackPaths = Array.from(current);
+  return await writeMusicLibraryState(state);
+}
+
+async function toggleFavoriteTrackPath(trackPath) {
+  const safePath = normalizeSafeRelativePath(trackPath);
+  if (!safePath) return await readMusicLibraryState();
+  return await setFavoriteTrackPath(safePath, !isFavoriteTrackPath(safePath));
 }
 
 function resolveLocalLibraryAssetPath(relativePath) {
@@ -2030,15 +2190,17 @@ function buildLibrarySubCategoryId(categoryId, subCategory) {
     .replace(/^-|-$/g, "") || "library"}`;
 }
 
-async function readLocalAudioLibraryTracks() {
-  let manifestText = "";
+async function readLocalAudioLibraryTracks(options = {}) {
+  let manifestRows = [];
+  const musicState = options.musicState ?? readMusicLibraryStateSync();
   try {
-    manifestText = await readFile(LOCAL_LIBRARY_MANIFEST_PATH, "utf8");
+    manifestRows = readJsonRowsFromText(await readFile(LOCAL_LIBRARY_MANIFEST_PATH, "utf8"), "Music library manifest");
   } catch {
     return [];
   }
+  const favoritePaths = new Set(musicState.favorites.trackPaths);
 
-  const tracks = await Promise.all(parseCsvRows(manifestText)
+  const tracks = await Promise.all(manifestRows
     .map(async (row) => {
       const categoryId = resolveLocalLibraryCategory(row);
       if (!categoryId) return null;
@@ -2066,7 +2228,8 @@ async function readLocalAudioLibraryTracks() {
         albumArtUrl: cover ? localLibraryImageUrl(cover.relativePath) : null,
         albumArtLabel: cover?.labelOverlay ? subCategory : null,
         albumArtScope: cover?.labelOverlay ? libraryCategoryLabel(categoryId) : null,
-        active: false
+        active: false,
+        favorite: Boolean(path && favoritePaths.has(path))
       };
     }));
 
@@ -2095,7 +2258,8 @@ function buildNasAudioLibraryTracks(playback) {
     albumArtUrl: null,
     albumArtLabel: null,
     albumArtScope: null,
-    active: entry.active
+    active: entry.active,
+    favorite: false
   }));
 }
 
@@ -2169,9 +2333,27 @@ function filterAudioLibraryTracks(tracks, filters) {
 async function getAudioLibraryPayload(searchParams) {
   const filters = normalizeAudioLibraryFilters(searchParams);
   const state = await getTikpalState();
-  const localTracks = await readLocalAudioLibraryTracks();
+  const musicState = readMusicLibraryStateSync();
+  const localTracks = await readLocalAudioLibraryTracks({ musicState });
   const nasTracks = buildNasAudioLibraryTracks(state.playback);
-  const tracks = [...localTracks, ...nasTracks];
+  const favoriteTracks = localTracks
+    .filter((track) => track.favorite)
+    .map((track) => ({ ...track, storage: "favorites" }));
+  const recentlyAddedTracks = localTracks
+    .slice(0, 12)
+    .map((track) => ({ ...track, storage: "recently_added", subCategory: "Recently Added" }));
+  const sourceTracks = filters.storage === "local"
+    ? localTracks
+    : filters.storage === "nas"
+      ? nasTracks
+      : filters.storage === "favorites"
+        ? favoriteTracks
+        : filters.storage === "recently_added"
+          ? recentlyAddedTracks
+          : filters.storage === "usb"
+            ? []
+            : [...localTracks, ...nasTracks, ...favoriteTracks, ...recentlyAddedTracks];
+  const tracks = sourceTracks;
   const filtered = filterAudioLibraryTracks(tracks, filters);
   const paged = filtered.slice(filters.offset, filters.offset + filters.limit);
 
@@ -2206,13 +2388,13 @@ async function getAudioLibraryPayload(searchParams) {
       {
         id: "favorites",
         label: "Favorites",
-        trackCount: 0,
+        trackCount: favoriteTracks.length,
         categories: []
       },
       {
         id: "recently_added",
         label: "Recently Added",
-        trackCount: 0,
+        trackCount: recentlyAddedTracks.length,
         categories: []
       }
     ],
@@ -2221,6 +2403,327 @@ async function getAudioLibraryPayload(searchParams) {
     filters,
     updatedAt: state.runtime.updatedAt
   };
+}
+
+function buildPlaylistId(name) {
+  const slug = String(name ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "")
+    || "playlist";
+  return `${slug}-${Date.now().toString(36)}`;
+}
+
+function buildDuplicatePlaylistName(name) {
+  const suffix = " Copy";
+  const base = String(name ?? "Playlist").trim() || "Playlist";
+  if (base.length + suffix.length <= PLAYLIST_NAME_MAX_LENGTH) return `${base}${suffix}`;
+  return `${base.slice(0, PLAYLIST_NAME_MAX_LENGTH - suffix.length).trimEnd()}${suffix}`;
+}
+
+function normalizePlaylistName(name) {
+  const normalized = String(name ?? "").trim();
+  if (!normalized) throw new Error("playlist name is required");
+  if (normalized.length > PLAYLIST_NAME_MAX_LENGTH) throw new Error(`playlist name must be ${PLAYLIST_NAME_MAX_LENGTH} characters or fewer`);
+  return normalized;
+}
+
+function clonePlaylistTrack(track, position, storage = track.storage) {
+  return {
+    ...track,
+    storage,
+    position
+  };
+}
+
+function playlistDurationSeconds(tracks) {
+  let total = 0;
+  let hasAny = false;
+  for (const track of tracks) {
+    if (typeof track.durationSeconds !== "number") return null;
+    total += track.durationSeconds;
+    hasAny = true;
+  }
+  return hasAny ? total : null;
+}
+
+async function readCuratedPlaylistIndexRows() {
+  try {
+    return readJsonRowsFromText(await readFile(LOCAL_PLAYLIST_INDEX_PATH, "utf8"), "Playlist index");
+  } catch {
+    return [];
+  }
+}
+
+function playlistTrackPathFromM3uLine(line) {
+  const entry = line.trim();
+  if (!entry || entry.startsWith("#")) return null;
+  const absolutePath = resolve(LOCAL_PLAYLIST_ROOT, ...entry.split(/[\\/]+/));
+  const relation = relative(LOCAL_LIBRARY_ROOT, absolutePath).split(sep).join("/");
+  return normalizeSafeRelativePath(relation);
+}
+
+async function readCuratedPlaylistTrackPaths(fileName) {
+  const safeFileName = basename(String(fileName ?? ""));
+  if (!safeFileName || !safeFileName.endsWith(".m3u")) return [];
+  const playlistPath = resolve(LOCAL_PLAYLIST_ROOT, safeFileName);
+  if (playlistPath !== LOCAL_PLAYLIST_ROOT && !playlistPath.startsWith(`${LOCAL_PLAYLIST_ROOT}${sep}`)) return [];
+  try {
+    return uniqueSafeTrackPaths((await readFile(playlistPath, "utf8"))
+      .split(/\r?\n/)
+      .map(playlistTrackPathFromM3uLine)
+      .filter(Boolean));
+  } catch {
+    return [];
+  }
+}
+
+function tracksForPaths(trackPaths, trackMap, storage = "local") {
+  return trackPaths
+    .map((trackPath, index) => {
+      const track = trackMap.get(normalizeSafeRelativePath(trackPath));
+      return track ? clonePlaylistTrack(track, index + 1, storage) : null;
+    })
+    .filter(Boolean);
+}
+
+async function buildAudioPlaylistsPayload() {
+  const musicState = readMusicLibraryStateSync();
+  const localTracks = await readLocalAudioLibraryTracks({ musicState });
+  const trackMap = new Map(localTracks.map((track) => [normalizeSafeRelativePath(track.path), track]));
+  const userPlaylists = musicState.playlists.map((playlist) => {
+    const tracks = tracksForPaths(playlist.trackPaths, trackMap, "local");
+    const metadata = normalizePlaylistMetadata(playlist, playlist.name, tracks);
+    return {
+      id: playlist.id,
+      name: playlist.name,
+      source: "user",
+      readOnly: false,
+      description: metadata.description,
+      moodTags: metadata.moodTags,
+      coverType: metadata.coverType,
+      coverValue: metadata.coverValue,
+      trackCount: tracks.length,
+      durationSeconds: playlistDurationSeconds(tracks),
+      createdAt: playlist.createdAt,
+      updatedAt: playlist.updatedAt,
+      tracks
+    };
+  });
+
+  const curatedRows = await readCuratedPlaylistIndexRows();
+  const curatedPlaylists = await Promise.all(curatedRows.map(async (row) => {
+    const trackPaths = await readCuratedPlaylistTrackPaths(row.file_name);
+    const tracks = tracksForPaths(trackPaths, trackMap, "local");
+    const name = row.playlist_name?.trim() || row.file_name?.replace(/\.m3u$/i, "") || "Curated Playlist";
+    const metadata = normalizePlaylistMetadata({
+      description: row.description,
+      moodTags: row.category ? [row.category] : undefined,
+      coverType: "collage",
+      coverValue: row.category?.trim() || null
+    }, name, tracks);
+    return {
+      id: `curated:${row.file_name}`,
+      name,
+      source: "curated",
+      readOnly: true,
+      description: metadata.description,
+      moodTags: metadata.moodTags,
+      coverType: metadata.coverType,
+      coverValue: metadata.coverValue,
+      trackCount: tracks.length,
+      durationSeconds: playlistDurationSeconds(tracks),
+      createdAt: null,
+      updatedAt: null,
+      tracks
+    };
+  }));
+
+  return {
+    playlists: [...userPlaylists, ...curatedPlaylists],
+    updatedAt: new Date().toISOString()
+  };
+}
+
+async function createAudioPlaylist(payload) {
+  const name = normalizePlaylistName(payload?.name);
+  const now = new Date().toISOString();
+  const state = await readMusicLibraryState();
+  const trackPaths = uniqueSafeTrackPaths(Array.isArray(payload?.trackPaths) ? payload.trackPaths : []);
+  const metadata = normalizePlaylistMetadata(payload, name);
+  state.playlists.push({
+    id: buildPlaylistId(name),
+    name,
+    description: metadata.description,
+    moodTags: metadata.moodTags,
+    coverType: metadata.coverType,
+    coverValue: metadata.coverValue,
+    trackPaths,
+    createdAt: now,
+    updatedAt: now
+  });
+  await writeMusicLibraryState(state);
+}
+
+async function findPlaylistTemplate(playlistId) {
+  const state = await readMusicLibraryState();
+  const userPlaylist = state.playlists.find((playlist) => playlist.id === playlistId);
+  if (userPlaylist) return { ...userPlaylist, readOnly: false };
+
+  if (String(playlistId ?? "").startsWith("curated:")) {
+    const fileName = String(playlistId).slice("curated:".length);
+    const rows = await readCuratedPlaylistIndexRows();
+    const row = rows.find((entry) => entry.file_name === fileName);
+    const name = row?.playlist_name?.trim() || fileName.replace(/\.m3u$/i, "") || "Curated Playlist";
+    const trackPaths = await readCuratedPlaylistTrackPaths(fileName);
+    return {
+      id: playlistId,
+      name,
+      description: normalizePlaylistDescription(row?.description),
+      moodTags: normalizePlaylistMoodTags(row?.category ? [row.category] : inferPlaylistMoodTags(name)),
+      coverType: "collage",
+      coverValue: normalizePlaylistCoverValue(row?.category) ?? buildDefaultPlaylistCoverValue(name, [row?.category].filter(Boolean)),
+      trackPaths,
+      createdAt: null,
+      updatedAt: null,
+      readOnly: true
+    };
+  }
+  return null;
+}
+
+async function findPlaylistTrackPaths(playlistId) {
+  const state = await readMusicLibraryState();
+  const userPlaylist = state.playlists.find((playlist) => playlist.id === playlistId);
+  if (userPlaylist) return userPlaylist.trackPaths;
+
+  if (String(playlistId ?? "").startsWith("curated:")) {
+    const fileName = String(playlistId).slice("curated:".length);
+    return await readCuratedPlaylistTrackPaths(fileName);
+  }
+  return null;
+}
+
+async function playTrackPaths(trackPaths, startIndex = 0) {
+  const safePaths = uniqueSafeTrackPaths(trackPaths);
+  if (safePaths.length === 0) throw new Error("playlist has no playable tracks");
+  const safeStartIndex = Math.max(0, Math.min(safePaths.length - 1, Number.isInteger(Number(startIndex)) ? Number(startIndex) : 0));
+  await enforceConnectionGate("mpd");
+  if (API_MODE === "mpc") {
+    await runMpc(["clear"]);
+    for (const trackPath of safePaths) {
+      await runMpc(["add", trackPath]);
+    }
+    await runMpc(["play", String(safeStartIndex + 1)]);
+    return;
+  }
+  const trackMap = new Map((await readLocalAudioLibraryTracks()).map((track) => [normalizeSafeRelativePath(track.path), track]));
+  const playableTracks = safePaths.map((trackPath) => trackMap.get(trackPath)).filter(Boolean);
+  if (playableTracks.length === 0) throw new Error("playlist has no playable tracks");
+  setMockLocalQueue(playableTracks, safeStartIndex);
+  mockArmedSource = "mpd";
+  mockActiveSource = "mpd";
+  playbackState = "playing";
+  elapsedSeconds = 0;
+  lastTickAt = Date.now();
+}
+
+async function applyAudioPlaylistAction(action) {
+  if (action?.type === "play") {
+    const trackPaths = await findPlaylistTrackPaths(action.playlistId);
+    if (!trackPaths) throw new Error("playlist not found");
+    await playTrackPaths(trackPaths, action.startIndex);
+    return;
+  }
+
+  if (action?.type === "duplicate") {
+    const template = await findPlaylistTemplate(action.playlistId);
+    if (!template) throw new Error("playlist not found");
+    const state = await readMusicLibraryState();
+    const now = new Date().toISOString();
+    const name = normalizePlaylistName(action.name || buildDuplicatePlaylistName(template.name));
+    const metadata = normalizePlaylistMetadata({
+      description: action.description ?? template.description,
+      moodTags: action.moodTags ?? template.moodTags,
+      coverType: action.coverType ?? template.coverType,
+      coverValue: action.coverValue ?? template.coverValue
+    }, name);
+    state.playlists.push({
+      id: buildPlaylistId(name),
+      name,
+      description: metadata.description,
+      moodTags: metadata.moodTags,
+      coverType: metadata.coverType,
+      coverValue: metadata.coverValue,
+      trackPaths: uniqueSafeTrackPaths(template.trackPaths),
+      createdAt: now,
+      updatedAt: now
+    });
+    await writeMusicLibraryState(state);
+    return;
+  }
+
+  const state = await readMusicLibraryState();
+  const playlist = state.playlists.find((entry) => entry.id === action?.playlistId);
+  if (!playlist) throw new Error("editable playlist not found");
+  const now = new Date().toISOString();
+
+  switch (action.type) {
+    case "rename":
+      playlist.name = normalizePlaylistName(action.name);
+      break;
+    case "update_metadata": {
+      if (typeof action.name === "string") {
+        playlist.name = normalizePlaylistName(action.name);
+      }
+      const metadata = normalizePlaylistMetadata({
+        description: action.description ?? playlist.description,
+        moodTags: action.moodTags ?? playlist.moodTags,
+        coverType: action.coverType ?? playlist.coverType,
+        coverValue: action.coverValue ?? playlist.coverValue
+      }, playlist.name);
+      playlist.description = metadata.description;
+      playlist.moodTags = metadata.moodTags;
+      playlist.coverType = metadata.coverType;
+      playlist.coverValue = metadata.coverValue;
+      break;
+    }
+    case "delete":
+      state.playlists = state.playlists.filter((entry) => entry.id !== playlist.id);
+      await writeMusicLibraryState(state);
+      return;
+    case "add_track": {
+      const trackPath = normalizeSafeRelativePath(action.trackPath);
+      if (!trackPath) throw new Error("trackPath is required");
+      playlist.trackPaths = uniqueSafeTrackPaths([...playlist.trackPaths, trackPath]);
+      break;
+    }
+    case "remove_track": {
+      const trackPath = normalizeSafeRelativePath(action.trackPath);
+      if (!trackPath) throw new Error("trackPath is required");
+      playlist.trackPaths = playlist.trackPaths.filter((entry) => entry !== trackPath);
+      break;
+    }
+    case "move_track": {
+      const fromIndex = Number(action.fromIndex);
+      const toIndex = Number(action.toIndex);
+      if (!Number.isInteger(fromIndex) || !Number.isInteger(toIndex)) throw new Error("move_track requires integer indexes");
+      if (fromIndex < 0 || fromIndex >= playlist.trackPaths.length) throw new Error("fromIndex is out of range");
+      const boundedToIndex = Math.max(0, Math.min(playlist.trackPaths.length - 1, toIndex));
+      const [trackPath] = playlist.trackPaths.splice(fromIndex, 1);
+      playlist.trackPaths.splice(boundedToIndex, 0, trackPath);
+      break;
+    }
+    case "replace_tracks":
+      playlist.trackPaths = uniqueSafeTrackPaths(Array.isArray(action.trackPaths) ? action.trackPaths : []);
+      break;
+    default:
+      throw new Error(`Unsupported playlist action: ${action?.type}`);
+  }
+
+  playlist.updatedAt = now;
+  await writeMusicLibraryState(state);
 }
 
 async function getSourceStatusFromCommands({ readyCommand, activeCommand, labelCommand, armed, supported, gateConnectionUntilArmed = false }) {
@@ -2682,7 +3185,7 @@ async function getMpcSnapshot() {
           : null,
       currentTrackIndex: playbackSource === "mpd" ? status.currentTrackIndex : 0,
       queueLength: playbackSource === "mpd" ? status.queueLength : 0,
-      favorite,
+      favorite: isMpdBackedSource && hasCurrentTrack ? isFavoriteTrackPath(file) : false,
       settings: status.settings,
       queuePreview: playbackSource === "mpd" ? queuePreview : []
     },
@@ -2880,9 +3383,11 @@ async function applyMpcPlaybackAction(action) {
       await runMpc(["seek", formatMpcSeek(seconds)]);
       break;
     }
-    case "favorite_toggle":
-      favorite = !favorite;
+    case "favorite_toggle": {
+      const currentFile = (await runMpc(["--format", "%file%", "current"], { allowFailure: true })).trim();
+      await toggleFavoriteTrackPath(currentFile);
       break;
+    }
     case "play_mode_set": {
       const mode = normalizePlaybackMode(action.mode);
       await applyMpcPlayMode(mode);
@@ -4320,7 +4825,7 @@ function readJson(request) {
   });
 }
 
-function applyPlaybackAction(action) {
+async function applyPlaybackAction(action) {
   syncElapsed();
 
   if (mockActiveSource === "scene") {
@@ -4365,14 +4870,16 @@ function applyPlaybackAction(action) {
       playbackState = "paused";
       break;
     case "next":
-      mockSelectedLocalTrack = null;
+      if (advanceMockLocalQueue(1)) break;
+      clearMockLocalQueue();
       trackIndex = playMode === "shuffle" ? randomMockTrackIndex(trackIndex) : (trackIndex + 1) % tracks.length;
       elapsedSeconds = 0;
       playbackState = "playing";
       lastTickAt = Date.now();
       break;
     case "previous":
-      mockSelectedLocalTrack = null;
+      if (advanceMockLocalQueue(-1)) break;
+      clearMockLocalQueue();
       trackIndex = (trackIndex + tracks.length - 1) % tracks.length;
       elapsedSeconds = 0;
       playbackState = "playing";
@@ -4389,7 +4896,7 @@ function applyPlaybackAction(action) {
       break;
     }
     case "favorite_toggle":
-      favorite = !favorite;
+      await toggleFavoriteTrackPath(mockSelectedLocalTrack?.path);
       break;
     case "play_mode_set":
       playMode = normalizePlaybackMode(action.mode);
@@ -4485,10 +4992,10 @@ async function applyMockSourceSwitch(action) {
         if (!track) {
           throw new Error(`Unknown local library track: ${action.localTrackPath}`);
         }
-        mockSelectedLocalTrack = track;
+        setMockLocalQueue([track], 0);
         elapsedSeconds = 0;
       } else {
-        mockSelectedLocalTrack = null;
+        clearMockLocalQueue();
       }
       mockArmedSource = null;
       mockActiveSource = "mpd";
@@ -4504,7 +5011,7 @@ async function applyMockSourceSwitch(action) {
       return;
     }
     case "audio":
-      mockSelectedLocalTrack = null;
+      clearMockLocalQueue();
       mockArmedSource = null;
       mockActiveSource = "audio";
       mockAudioArmedAt = Date.now();
@@ -4518,7 +5025,7 @@ async function applyMockSourceSwitch(action) {
       lastTickAt = Date.now();
       return;
     case "radio":
-      mockSelectedLocalTrack = null;
+      clearMockLocalQueue();
       mockArmedSource = null;
       if (action.radioStationId) {
         const station = getMockRadioStations().find((radio) => radio.id === action.radioStationId);
@@ -4538,7 +5045,7 @@ async function applyMockSourceSwitch(action) {
       playbackState = "playing";
       return;
     case "scene":
-      mockSelectedLocalTrack = null;
+      clearMockLocalQueue();
       mockArmedSource = null;
       mockActiveSource = "scene";
       mockAudioArmedAt = 0;
@@ -4552,7 +5059,7 @@ async function applyMockSourceSwitch(action) {
       lastTickAt = Date.now();
       return;
     case "spotify":
-      mockSelectedLocalTrack = null;
+      clearMockLocalQueue();
       mockArmedSource = "spotify";
       mockActiveSource = "spotify";
       mockAudioArmedAt = 0;
@@ -4565,7 +5072,7 @@ async function applyMockSourceSwitch(action) {
       playbackState = "paused";
       return;
     case "bluetooth":
-      mockSelectedLocalTrack = null;
+      clearMockLocalQueue();
       mockArmedSource = "bluetooth";
       mockActiveSource = "bluetooth";
       mockAudioArmedAt = 0;
@@ -4578,7 +5085,7 @@ async function applyMockSourceSwitch(action) {
       playbackState = "paused";
       return;
     case "airplay":
-      mockSelectedLocalTrack = null;
+      clearMockLocalQueue();
       mockArmedSource = "airplay";
       mockActiveSource = "airplay";
       mockAudioArmedAt = 0;
@@ -4591,7 +5098,7 @@ async function applyMockSourceSwitch(action) {
       playbackState = "paused";
       return;
     case "upnp":
-      mockSelectedLocalTrack = null;
+      clearMockLocalQueue();
       mockArmedSource = "upnp";
       mockActiveSource = "upnp";
       mockAudioArmedAt = 0;
@@ -4730,6 +5237,11 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "GET" && url.pathname === "/api/v1/audio/playlists") {
+      sendJson(response, 200, await buildAudioPlaylistsPayload());
+      return;
+    }
+
     if (request.method === "GET" && url.pathname === "/api/v1/media/background-videos") {
       sendJson(response, 200, await getAmbientBackgroundVideosPayload());
       return;
@@ -4793,7 +5305,7 @@ const server = http.createServer(async (request, response) => {
       if (API_MODE === "mpc") {
         await applyMpcPlaybackAction(action);
       } else {
-        applyPlaybackAction(action);
+        await applyPlaybackAction(action);
       }
       sendJson(response, 200, await getTikpalState());
       return;
@@ -4817,6 +5329,25 @@ const server = http.createServer(async (request, response) => {
       const action = await readJson(request);
       await applySourceSwitch(action);
       sendJson(response, 200, await getTikpalState());
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/v1/audio/favorites") {
+      const action = await readJson(request);
+      await setFavoriteTrackPath(action.trackPath, action.favorite !== false);
+      sendJson(response, 200, await getTikpalState());
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/v1/audio/playlists") {
+      await createAudioPlaylist(await readJson(request));
+      sendJson(response, 200, await buildAudioPlaylistsPayload());
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/v1/audio/playlist-actions") {
+      await applyAudioPlaylistAction(await readJson(request));
+      sendJson(response, 200, await buildAudioPlaylistsPayload());
       return;
     }
 

@@ -21,7 +21,7 @@ import {
   Usb
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { fetchAudioLibrary, fetchRadioCatalog } from "../api/tikpalClient";
+import { fetchAudioLibrary, fetchRadioCatalog, sendFavoriteTrack } from "../api/tikpalClient";
 import { getPlaybackDisplayTruth, getPlaybackSourceSummary } from "../playbackTruth";
 import type { TikpalDataStatus } from "../hooks/useTikpalState";
 import { formatDuration } from "../mockState";
@@ -48,6 +48,7 @@ interface PlayerOverlayProps {
   fontTheme: FontTheme;
   onPlaybackAction: (type: PlaybackActionType, value?: number) => Promise<TikpalState>;
   onSourceSwitch: (target: SourceSwitchTarget, radioStationId?: string, localTrackPath?: string) => Promise<TikpalState>;
+  onOpenPlaylist: () => void;
   onReturnAmbient: () => void;
 }
 
@@ -144,10 +145,10 @@ export function PlayerOverlay({
   fontTheme,
   onPlaybackAction,
   onSourceSwitch,
+  onOpenPlaylist,
   onReturnAmbient
 }: PlayerOverlayProps) {
   const overlayReturnGesture = useOverlayReturnGesture(onReturnAmbient);
-  const [queuePanelOpen, setQueuePanelOpen] = useState(false);
   const [seekDraftSeconds, setSeekDraftSeconds] = useState<number | null>(null);
   const [seekPendingSeconds, setSeekPendingSeconds] = useState<number | null>(null);
   const [seekError, setSeekError] = useState<string | null>(null);
@@ -160,6 +161,7 @@ export function PlayerOverlay({
   const [localLibraryTracks, setLocalLibraryTracks] = useState<AudioLibraryTrackSummary[]>([]);
   const [libraryLoading, setLibraryLoading] = useState(false);
   const [libraryError, setLibraryError] = useState<string | null>(null);
+  const [favoriteBusy, setFavoriteBusy] = useState(false);
   const [radioStations, setRadioStations] = useState<RadioStationSummary[]>([]);
   const [radioTotal, setRadioTotal] = useState(0);
   const [radioGenres, setRadioGenres] = useState<string[]>([]);
@@ -200,7 +202,8 @@ export function PlayerOverlay({
       albumArtLabel: null,
       albumArtScope: null,
       active: entry.active,
-      storage: "nas"
+      storage: "nas",
+      favorite: false
     }))
   ), [playback.queuePreview]);
   const localCategoryCounts = useMemo(() => (
@@ -243,13 +246,14 @@ export function PlayerOverlay({
       case "local":
         return selectedLocalTracks;
       case "usb":
-      case "favorites":
       case "recently_added":
-        return [];
+        return localLibraryTracks.slice(0, 12);
+      case "favorites":
+        return localLibraryTracks.filter((track) => track.favorite);
       default:
         return localLibraryTracks;
     }
-  }, [nasLibraryTracks, selectedLibraryStorage, selectedLocalTracks]);
+  }, [localLibraryTracks, nasLibraryTracks, selectedLibraryStorage, selectedLocalTracks]);
   const selectedLibraryTrack = visibleLibraryTracks.find((track) => track.id === selectedLibraryTrackId) ?? null;
   const seekSupported = playback.source === "mpd" && durationSeconds > 0;
   const displayedElapsedSeconds = seekSupported
@@ -272,7 +276,6 @@ export function PlayerOverlay({
 
   useEffect(() => {
     if (!active) {
-      setQueuePanelOpen(false);
       setSeekDraftSeconds(null);
       setSeekPendingSeconds(null);
       setSeekError(null);
@@ -357,29 +360,35 @@ export function PlayerOverlay({
     }
   }, [active, currentSource.id, manualPanelSelection]);
 
-  useEffect(() => {
-    if (!active || localLibraryTracks.length > 0) return undefined;
-
+  const refreshLocalLibrary = useCallback((signal?: AbortSignal) => {
     const controller = new AbortController();
     setLibraryLoading(true);
     setLibraryError(null);
 
-    void fetchAudioLibrary({ storage: "local", limit: 500 }, controller.signal)
+    const requestSignal = signal ?? controller.signal;
+    void fetchAudioLibrary({ storage: "local", limit: 500 }, requestSignal)
       .then((library) => {
         setLocalLibraryTracks(library.tracks.filter((track) => track.storage === "local"));
       })
       .catch((error) => {
-        if (controller.signal.aborted) return;
+        if (requestSignal.aborted) return;
         setLibraryError(error instanceof Error ? error.message : "Local music manifest is not available");
       })
       .finally(() => {
-        if (!controller.signal.aborted) {
+        if (!requestSignal.aborted) {
           setLibraryLoading(false);
         }
       });
 
+    return controller;
+  }, []);
+
+  useEffect(() => {
+    if (!active) return undefined;
+    const controller = new AbortController();
+    refreshLocalLibrary(controller.signal);
     return () => controller.abort();
-  }, [active, localLibraryTracks.length]);
+  }, [active, playback.favorite, refreshLocalLibrary]);
 
   useEffect(() => {
     if (!active || selectedPrimaryPanel !== "radio") return undefined;
@@ -471,9 +480,11 @@ export function PlayerOverlay({
       case "nas":
         return system.library.trackCount || nasLibraryTracks.length;
       case "usb":
-      case "favorites":
-      case "recently_added":
         return 0;
+      case "favorites":
+        return localLibraryTracks.filter((track) => track.favorite).length;
+      case "recently_added":
+        return Math.min(12, localLibraryTracks.length);
       default:
         return 0;
     }
@@ -496,7 +507,6 @@ export function PlayerOverlay({
           return "";
       }
     }
-
     const source = audio.sources.find((entry) => entry.id === panelId);
     return sourceStatusLabel(source, pendingSource === panelId);
   }
@@ -562,6 +572,27 @@ export function PlayerOverlay({
     if (storageId === "nas") {
       void switchSource("mpd");
     }
+  }
+
+  async function handleFavoriteTrack(track: AudioLibraryTrackSummary) {
+    if (!track.path || favoriteBusy) return;
+    setFavoriteBusy(true);
+    setSourceError(null);
+    setSourceHint(null);
+    try {
+      await sendFavoriteTrack(track.path, !track.favorite);
+      refreshLocalLibrary();
+      setSourceHint(!track.favorite ? "Added to Favorites." : "Removed from Favorites.");
+    } catch (error) {
+      setSourceError(error instanceof Error ? error.message : "Favorite update failed");
+    } finally {
+      setFavoriteBusy(false);
+    }
+  }
+
+  async function handlePlayerFavoriteAction() {
+    await onPlaybackAction("favorite_toggle");
+    refreshLocalLibrary();
   }
 
   function externalSourceActionLabel(panelId: ExternalPanelId, sourceActive: boolean) {
@@ -780,12 +811,13 @@ export function PlayerOverlay({
 
           <div className="transport-row" aria-label="Playback controls">
             <button
-              className={`icon-button ${queuePanelOpen ? "is-active" : ""}`}
+              className="icon-button"
               type="button"
-              aria-label="Queue"
-              title="Queue"
-              aria-expanded={queuePanelOpen}
-              onClick={() => setQueuePanelOpen((current) => !current)}
+              aria-label="Open playlist"
+              title="Playlist"
+              data-player-playlist-entry
+              data-gesture-control
+              onClick={onOpenPlaylist}
             >
               <ListMusic size={30} />
             </button>
@@ -798,48 +830,27 @@ export function PlayerOverlay({
             <button className="icon-button" type="button" aria-label="Next" title="Next" disabled={status.pending} onClick={() => void onPlaybackAction("next")}>
               <SkipForward size={34} fill="currentColor" />
             </button>
-            <button className="icon-button" type="button" aria-label="Favorite" title="Favorite" disabled={status.pending} onClick={() => void onPlaybackAction("favorite_toggle")}>
+            <button
+              className={`icon-button ${playback.favorite ? "is-active" : ""}`}
+              type="button"
+              aria-label={playback.favorite ? "Remove favorite" : "Favorite"}
+              title={playback.favorite ? "Remove favorite" : "Favorite"}
+              aria-pressed={playback.favorite}
+              disabled={status.pending}
+              onClick={() => void handlePlayerFavoriteAction()}
+            >
               <Heart size={30} fill={playback.favorite ? "currentColor" : "none"} />
             </button>
           </div>
-          {queuePanelOpen ? (
-            <section className="queue-panel" aria-label="Playback queue" data-queue-panel>
-              <div className="queue-panel-header">
-                <div>
-                  <span className="source-panel-kicker">Queue</span>
-                  <strong>{playback.queueLength > 0 ? `${playback.currentTrackIndex} / ${playback.queueLength}` : "No active queue"}</strong>
-                  <p>{playback.source === "mpd" ? "Current and upcoming library entries" : "Queue preview is only available for library playback"}</p>
-                </div>
-              </div>
-              {playback.queuePreview.length > 0 ? (
-                <div className="queue-list">
-                  {playback.queuePreview.map((entry) => (
-                    <article className={`queue-entry ${entry.active ? "is-active" : ""}`} key={entry.id}>
-                      <span className="queue-entry-position">{String(entry.position).padStart(2, "0")}</span>
-                      <div className="queue-entry-copy">
-                        <strong>{entry.title}</strong>
-                        <p>{entry.artist} - {entry.album}</p>
-                      </div>
-                      <span className="queue-entry-duration">{formatDuration(entry.durationSeconds)}</span>
-                    </article>
-                  ))}
-                </div>
-              ) : (
-                <p className="queue-panel-empty">
-                  {playback.source === "mpd"
-                    ? "Queue preview is temporarily unavailable."
-                    : "Switch back to Library to inspect the active queue."}
-                </p>
-              )}
-            </section>
-          ) : null}
         </div>
 
         <aside className="library-zone" aria-label="Audio source browser">
           <div className="library-browser-header">
-            <div>
-              <span className="source-panel-kicker">Source</span>
-              <strong>{selectedPanelConfig.label}</strong>
+            <div className="library-browser-title">
+              <div>
+                <span className="source-panel-kicker">Source</span>
+                <strong>{selectedPanelConfig.label}</strong>
+              </div>
             </div>
             <div className="library-volume-actions" data-player-volume-control title={volumeError ?? "Volume"}>
               <span className="library-volume-label">Volume</span>
@@ -986,30 +997,46 @@ export function PlayerOverlay({
                 {visibleLibraryTracks.map((track, index) => {
                   const selected = selectedLibraryTrack?.id === track.id;
                   return (
-                    <button
+                    <article
                       className={`library-track-item ${selected ? "is-selected" : ""} ${track.active ? "is-active" : ""}`}
                       key={track.id}
-                      type="button"
-                      aria-pressed={selected}
                       data-library-track={track.id}
-                      data-gesture-control
-                      onClick={() => handleLibraryTrackSelect(track)}
                     >
-                      <span className="library-track-index">
-                        {track.albumArtUrl ? <img src={track.albumArtUrl} alt="" /> : String(index + 1).padStart(2, "0")}
-                      </span>
-                      <span className="library-track-copy">
-                        <strong>{track.title}</strong>
-                        <em>{track.artist}</em>
-                      </span>
-                      <span className="library-track-meta">
-                        <i>{track.subCategory}</i>
-                        <b>{formatDuration(track.durationSeconds)}</b>
-                      </span>
-                      <span className="library-track-state" aria-hidden="true">
-                        {selected || track.active ? <Check size={16} /> : null}
-                      </span>
-                    </button>
+                      <button
+                        className="library-track-main"
+                        type="button"
+                        aria-pressed={selected}
+                        data-gesture-control
+                        onClick={() => handleLibraryTrackSelect(track)}
+                      >
+                        <span className="library-track-index">
+                          {track.albumArtUrl ? <img src={track.albumArtUrl} alt="" /> : String(index + 1).padStart(2, "0")}
+                        </span>
+                        <span className="library-track-copy">
+                          <strong>{track.title}</strong>
+                          <em>{track.artist}</em>
+                        </span>
+                        <span className="library-track-meta">
+                          <i>{track.subCategory}</i>
+                          <b>{formatDuration(track.durationSeconds)}</b>
+                        </span>
+                        <span className="library-track-state" aria-hidden="true">
+                          {selected || track.active ? <Check size={16} /> : null}
+                        </span>
+                      </button>
+                      <button
+                        className={`library-track-favorite ${track.favorite ? "is-active" : ""}`}
+                        type="button"
+                        aria-label={track.favorite ? `Remove ${track.title} from favorites` : `Add ${track.title} to favorites`}
+                        title={track.favorite ? "Remove favorite" : "Favorite"}
+                        aria-pressed={track.favorite}
+                        disabled={favoriteBusy || !track.path}
+                        data-gesture-control
+                        onClick={() => void handleFavoriteTrack(track)}
+                      >
+                        <Heart size={17} fill={track.favorite ? "currentColor" : "none"} />
+                      </button>
+                    </article>
                   );
                 })}
                 {libraryLoading && selectedLibraryStorage === "local" ? (

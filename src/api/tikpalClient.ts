@@ -1,6 +1,9 @@
 import type {
   AudioLibraryFilters,
   AudioLibraryResponse,
+  AudioPlaylistActionRequest,
+  AudioPlaylistCreateRequest,
+  AudioPlaylistResponse,
   BackgroundVideoCatalogResponse,
   PlaybackMode,
   PlaybackActionRequest,
@@ -73,6 +76,38 @@ export async function fetchAudioLibrary(filters: AudioLibraryFilters = {}, signa
   return readJson<AudioLibraryResponse>(response);
 }
 
+export async function fetchAudioPlaylists(signal?: AbortSignal): Promise<AudioPlaylistResponse> {
+  const response = await fetch(`${API_ROOT}/audio/playlists`, {
+    headers: { Accept: "application/json" },
+    signal
+  });
+  return readJson<AudioPlaylistResponse>(response);
+}
+
+export async function createAudioPlaylist(playlist: string | AudioPlaylistCreateRequest): Promise<AudioPlaylistResponse> {
+  const response = await fetch(`${API_ROOT}/audio/playlists`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(typeof playlist === "string" ? { name: playlist } : playlist)
+  });
+  return readJson<AudioPlaylistResponse>(response);
+}
+
+export async function sendAudioPlaylistAction(action: AudioPlaylistActionRequest): Promise<AudioPlaylistResponse> {
+  const response = await fetch(`${API_ROOT}/audio/playlist-actions`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(action)
+  });
+  return readJson<AudioPlaylistResponse>(response);
+}
+
 export async function fetchBackgroundVideos(signal?: AbortSignal): Promise<BackgroundVideoCatalogResponse> {
   const response = await fetch(`${API_ROOT}/media/background-videos`, {
     headers: { Accept: "application/json" },
@@ -92,6 +127,18 @@ export async function sendPlaybackAction(type: PlaybackActionType, value?: numbe
       "Content-Type": "application/json"
     },
     body: JSON.stringify(body)
+  });
+  return readJson<TikpalState>(response);
+}
+
+export async function sendFavoriteTrack(trackPath: string, favorite: boolean): Promise<TikpalState> {
+  const response = await fetch(`${API_ROOT}/audio/favorites`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ trackPath, favorite })
   });
   return readJson<TikpalState>(response);
 }

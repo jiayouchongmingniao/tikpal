@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AmbientScreen } from "./components/AmbientScreen";
 import { PlayerOverlay } from "./components/PlayerOverlay";
+import { PlaylistOverlay } from "./components/PlaylistOverlay";
 import { QuickMenu } from "./components/QuickMenu";
 import { QuickSettingsOverlay } from "./components/QuickSettingsOverlay";
 import { useAppMode } from "./hooks/useAppMode";
@@ -37,7 +38,7 @@ const timeFormatter = new Intl.DateTimeFormat("en-US", {
 
 function readInitialMode(): AppMode {
   const mode = new URLSearchParams(window.location.search).get("mode");
-  if (mode === "player" || mode === "quickSettings" || mode === "quickMenu") return mode;
+  if (mode === "player" || mode === "playlist" || mode === "quickSettings" || mode === "quickMenu") return mode;
   return "ambient";
 }
 
@@ -88,7 +89,7 @@ export default function App() {
   const [sceneSoundPending, setSceneSoundPending] = useState(false);
   const [activeSceneVideo, setActiveSceneVideo] = useState<BackgroundVideoSummary>(DEFAULT_SCENE_VIDEO);
   const { mode, hudVisible, idleTotalMs, idleRemainingMs, showHud, toggleHud, changeMode, returnAmbient, resetIdleTimer } = useAppMode(readInitialMode());
-  const { state: tikpalState, status: tikpalStatus, sendPlaybackAction, sendSystemAction, sendSourceSwitch } = useTikpalState();
+  const { state: tikpalState, status: tikpalStatus, refresh, sendPlaybackAction, sendSystemAction, sendSourceSwitch } = useTikpalState();
 
   useBrowserKioskGuard();
 
@@ -180,7 +181,7 @@ export default function App() {
   const { gesturePreview, ...gestureHandlers } = useKioskGestures({
     mode,
     onOpenPlayer: () => changeMode("player"),
-    onOpenSettings: () => changeMode("quickSettings"),
+    onOpenPlaylist: () => changeMode("playlist"),
     onOpenMenu: () => changeMode("quickMenu"),
     onReturnAmbient: returnAmbient,
     onToggleHud: toggleHud,
@@ -221,6 +222,14 @@ export default function App() {
         fontTheme={fontTheme}
         onPlaybackAction={sendPlaybackAction}
         onSourceSwitch={sendSourceSwitch}
+        onOpenPlaylist={() => changeMode("playlist")}
+        onReturnAmbient={returnAmbient}
+      />
+      <PlaylistOverlay
+        active={mode === "playlist"}
+        playback={tikpalState.playback}
+        status={tikpalStatus}
+        onPlaybackRefresh={() => refresh()}
         onReturnAmbient={returnAmbient}
       />
       <QuickSettingsOverlay

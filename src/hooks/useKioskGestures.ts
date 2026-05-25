@@ -12,7 +12,7 @@ interface GestureHandlers {
 interface GestureOptions {
   mode: AppMode;
   onOpenPlayer: () => void;
-  onOpenSettings: () => void;
+  onOpenPlaylist: () => void;
   onOpenMenu: () => void;
   onReturnAmbient: () => void;
   onToggleHud: () => void;
@@ -30,7 +30,7 @@ interface PointerSnapshot {
 }
 
 export interface GesturePreview {
-  kind: "player" | "quickSettings" | "return" | "menu";
+  kind: "player" | "playlist" | "return" | "menu";
   label: string;
   progress: number;
 }
@@ -49,6 +49,10 @@ function clampProgress(value: number, threshold: number): number {
 
 function isProtectedTarget(target: EventTarget | null): boolean {
   return target instanceof Element && Boolean(target.closest("[data-gesture-protected]"));
+}
+
+function isPlaylistPageTarget(target: EventTarget | null): boolean {
+  return target instanceof Element && Boolean(target.closest("[data-playlist-page]"));
 }
 
 export function useKioskGestures(options: GestureOptions): GestureHandlers & { gesturePreview: GesturePreview | null } {
@@ -124,8 +128,8 @@ export function useKioskGestures(options: GestureOptions): GestureHandlers & { g
         const averageDeltaY = pointers.reduce((sum, item) => sum + item.y - item.startY, 0) / pointers.length;
         if (averageDeltaY > TWO_FINGER_HINT_THRESHOLD) {
           setGesturePreview({
-            kind: "quickSettings",
-            label: "Settings",
+            kind: "playlist",
+            label: "Playlist",
             progress: clampProgress(averageDeltaY, TWO_FINGER_DOWN_THRESHOLD)
           });
         }
@@ -168,7 +172,7 @@ export function useKioskGestures(options: GestureOptions): GestureHandlers & { g
 
       if (options.mode === "ambient") {
         if (pointers.length >= 2 && averageDeltaY > TWO_FINGER_DOWN_THRESHOLD) {
-          options.onOpenSettings();
+          options.onOpenPlaylist();
         } else if (pointers.length === 1 && primaryDeltaY > ONE_FINGER_DOWN_THRESHOLD) {
           options.onOpenPlayer();
         } else if (pointers.length === 1 && distance <= TAP_MAX_DISTANCE) {
@@ -185,6 +189,12 @@ export function useKioskGestures(options: GestureOptions): GestureHandlers & { g
 
   const onWheel = useCallback<React.WheelEventHandler<HTMLElement>>(
     (event) => {
+      const verticalWheel = Math.abs(event.deltaY) >= Math.abs(event.deltaX);
+      if (options.mode === "playlist" && verticalWheel && isPlaylistPageTarget(event.target)) {
+        options.onActivity();
+        return;
+      }
+
       if (isProtectedTarget(event.target)) {
         options.onActivity();
         if (options.mode === "ambient" || event.deltaY >= 0) {
@@ -206,16 +216,16 @@ export function useKioskGestures(options: GestureOptions): GestureHandlers & { g
 
       const absDelta = Math.abs(wheelAccumulatorRef.current);
       if (options.mode === "ambient") {
-        const isSettingsGesture = event.shiftKey || wheelAccumulatorRef.current > 0;
+        const isPlaylistGesture = wheelAccumulatorRef.current > 0;
         setGesturePreview({
-          kind: isSettingsGesture ? "quickSettings" : "player",
-          label: isSettingsGesture ? "Settings" : "Player",
+          kind: isPlaylistGesture ? "playlist" : "player",
+          label: isPlaylistGesture ? "Playlist" : "Player",
           progress: clampProgress(absDelta, WHEEL_THRESHOLD)
         });
 
         if (absDelta > WHEEL_THRESHOLD) {
-          if (isSettingsGesture) {
-            options.onOpenSettings();
+          if (isPlaylistGesture) {
+            options.onOpenPlaylist();
           } else {
             options.onOpenPlayer();
           }

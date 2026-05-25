@@ -31,7 +31,7 @@ async function run() {
   const targetDistAssets = path.join(workspace, "target-dist", "assets");
   const stateDir = path.join(workspace, "state");
   const trackPath = path.join(packageMusicDir, "Focus", "Lo-fi", "Smoke Track.mp3");
-  const manifestPath = path.join(packageMusicDir, "_metadata", "library_manifest.csv");
+  const manifestPath = path.join(packageMusicDir, "_metadata", "library_manifest.json");
   const videoPath = path.join(packageDir, "assets", "output_2560x720-4k.mp4");
   const sceneVideoPath = path.join(packageDir, "assets", "scenes", "Rainy-Window.mp4");
   const sceneManifestPath = path.join(packageDir, "assets", "scenes", "_metadata", "scene_videos.json");
@@ -48,10 +48,17 @@ async function run() {
     await writeFile(trackPath, "fake mp3 bytes");
     await writeFile(
       manifestPath,
-      [
-        "id,title,artist_or_author,category_level_1,category_level_2,duration_mm_ss,final_relative_path",
-        "SMOKE-001,Smoke Track,Tikpal,Focus,Lo-fi,00:10,Focus/Lo-fi/Smoke Track.mp3"
-      ].join("\n")
+      `${JSON.stringify([
+        {
+          id: "SMOKE-001",
+          title: "Smoke Track",
+          artist_or_author: "Tikpal",
+          category_level_1: "Focus",
+          category_level_2: "Lo-fi",
+          duration_mm_ss: "00:10",
+          final_relative_path: "Focus/Lo-fi/Smoke Track.mp3"
+        }
+      ], null, 2)}\n`
     );
     await writeFile(videoPath, Buffer.from("000000 ftypisom tikpal smoke mp4"));
     const sceneBytes = Buffer.from("000000 ftypisom tikpal rainy window smoke mp4");
@@ -94,7 +101,7 @@ async function run() {
     assert(summary.sync.publicSynced === true, "resource OTA should sync public assets");
     assert(summary.sync.distSynced === true, "resource OTA should sync dist assets when present");
     assert(summary.sync.sceneSynced === true, "resource OTA should sync scene assets");
-    assert(await exists(path.join(targetPublicAssets, "music", "_metadata", "library_manifest.csv")), "public music manifest should be copied");
+    assert(await exists(path.join(targetPublicAssets, "music", "_metadata", "library_manifest.json")), "public music manifest should be copied");
     assert(await exists(path.join(targetPublicAssets, "music", "Focus", "Lo-fi", "Smoke Track.mp3")), "public music file should be copied");
     assert(await exists(path.join(targetDistAssets, "music", "Focus", "Lo-fi", "Smoke Track.mp3")), "dist music file should be copied");
     assert(await exists(path.join(targetPublicAssets, "output_2560x720-4k.mp4")), "public fireplace video should be copied");

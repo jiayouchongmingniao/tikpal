@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import http from "node:http";
 import { tmpdir } from "node:os";
 import path, { resolve } from "node:path";
@@ -208,6 +208,8 @@ async function waitForLyricsStatus(expectedStatuses) {
 
 async function run() {
   const apiAssetsRoot = await mkdtemp(path.join(tmpdir(), "tikpal-api-assets-"));
+  const apiStateRoot = await mkdtemp(path.join(tmpdir(), "tikpal-api-state-"));
+  const musicLibraryStatePath = path.join(apiStateRoot, "music-library-state.json");
   const sceneBytes = Buffer.from("000000 ftypisom tikpal rainy window api smoke mp4");
   const sceneSha256 = createHash("sha256").update(sceneBytes).digest("hex");
   await mkdir(path.join(apiAssetsRoot, "scenes", "_metadata"), { recursive: true });
@@ -241,6 +243,7 @@ async function run() {
       TIKPAL_API_HOST: HOST,
       TIKPAL_API_PORT: String(PORT),
       TIKPAL_PUBLIC_ASSETS_ROOT: apiAssetsRoot,
+      TIKPAL_MUSIC_LIBRARY_STATE_PATH: musicLibraryStatePath,
       TIKPAL_RECOGNITION_PROVIDER: "acrcloud",
       TIKPAL_ACRCLOUD_HOST: PROVIDER_URL,
       TIKPAL_ACRCLOUD_ACCESS_KEY: "mock-key",
@@ -303,7 +306,9 @@ async function run() {
     assert(localLibrary.response.ok, "local audio library should return 200");
     assert(localLibrary.body.total > 0, "local audio library should load tracks from the manifest");
     assert(Array.isArray(localLibrary.body.sources) && localLibrary.body.sources.length === 6, "library source metadata should expose six visible source categories");
+    assert(JSON.stringify(localLibrary.body.sources.map((source) => source.label)) === JSON.stringify(["Library", "Radio", "Spotify", "AirPlay", "Bluetooth", "DLNA"]), "library source metadata should expose the visible Player rail order");
     assert(localLibrary.body.sources.every((source) => source.id !== "audio"), "library source metadata should not expose audio as a visible category");
+    assert(localLibrary.body.sources.every((source) => source.id !== "playlist"), "library source metadata should not expose playlist as a Player source category");
     assert(localLibrary.body.sources.some((source) => source.id === "upnp" && source.label === "DLNA"), "library source metadata should expose DLNA as a visible category");
     assert(localLibrary.body.storages.find((storage) => storage.id === "local")?.trackCount === localLibrary.body.total, "local storage track count should match manifest-backed total");
     assert(localLibrary.body.tracks.every((track) => track.storage === "local"), "local audio library should only return local tracks when filtered");
@@ -347,6 +352,159 @@ async function run() {
     assert(localTrackSwitch.body.playback.title === localLibrary.body.tracks[0].title, "local track switch should update playback title");
     assert(localTrackSwitch.body.playback.artist === localLibrary.body.tracks[0].artist, "local track switch should update playback artist");
     assert(localTrackSwitch.body.playback.albumArtUrl === localLibrary.body.tracks[0].albumArtUrl, "local track switch should update playback cover art");
+
+    const favoriteToggle = await request("/api/v1/playback/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "favorite_toggle" })
+    });
+    assert(favoriteToggle.response.ok, "favorite_toggle should return 200 for the current local track");
+    assert(favoriteToggle.body.playback.favorite === true, "favorite_toggle should mark the current local track as favorite");
+    const favorites = await request("/api/v1/audio/library?storage=favorites&limit=50");
+    assert(favorites.response.ok, "favorites library should return 200");
+    assert(favorites.body.total === 1, "favorites library should include the saved local track");
+    assert(favorites.body.tracks[0]?.path === localLibrary.body.tracks[0].path, "favorites library should return the favorited track path");
+    assert(favorites.body.tracks[0]?.favorite === true, "favorites library tracks should expose favorite=true");
+
+    const favoriteRemove = await request("/api/v1/audio/favorites", {
+      method: "POST",
+      body: JSON.stringify({ trackPath: localLibrary.body.tracks[0].path, favorite: false })
+    });
+    assert(favoriteRemove.response.ok, "favorite remove endpoint should return 200");
+    assert(favoriteRemove.body.playback.favorite === false, "favorite remove endpoint should update playback favorite state");
+    const favoriteAdd = await request("/api/v1/audio/favorites", {
+      method: "POST",
+      body: JSON.stringify({ trackPath: localLibrary.body.tracks[0].path, favorite: true })
+    });
+    assert(favoriteAdd.response.ok, "favorite add endpoint should return 200");
+    assert(favoriteAdd.body.playback.favorite === true, "favorite add endpoint should update playback favorite state");
+    const persistedState = JSON.parse(await readFile(musicLibraryStatePath, "utf8"));
+    assert(persistedState.favorites.trackPaths.includes(localLibrary.body.tracks[0].path), "favorites should persist to the music library state file");
+
+    const initialPlaylists = await request("/api/v1/audio/playlists");
+    assert(initialPlaylists.response.ok, "playlists endpoint should return 200");
+    assert(initialPlaylists.body.playlists.filter((playlist) => playlist.source === "curated").length >= 15, "playlists endpoint should expose curated readonly playlists");
+    assert(initialPlaylists.body.playlists.every((playlist) => playlist.source !== "curated" || playlist.readOnly === true), "curated playlists should be readonly");
+    assert(initialPlaylists.body.playlists.every((playlist) => Array.isArray(playlist.moodTags)), "playlists should expose mood tags");
+    assert(initialPlaylists.body.playlists.every((playlist) => typeof playlist.coverType === "string"), "playlists should expose cover type");
+    const playlistCreate = await request("/api/v1/audio/playlists", {
+      method: "POST",
+      body: JSON.stringify({
+        name: "Smoke List",
+        moodTags: ["Calm"],
+        coverType: "scene",
+        coverValue: "rain",
+        trackPaths: [localLibrary.body.tracks[0].path]
+      })
+    });
+    assert(playlistCreate.response.ok, "playlist creation should return 200");
+    const createdPlaylist = playlistCreate.body.playlists.find((playlist) => playlist.source === "user" && playlist.name === "Smoke List");
+    assert(createdPlaylist, "playlist creation should return the new user playlist");
+    assert(createdPlaylist.trackCount === 1, "playlist creation should accept initial tracks");
+    assert(createdPlaylist.moodTags.includes("Calm"), "playlist creation should persist mood tags");
+    assert(createdPlaylist.coverType === "scene" && createdPlaylist.coverValue === "rain", "playlist creation should persist cover metadata");
+    const playlistRename = await request("/api/v1/audio/playlist-actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "rename", playlistId: createdPlaylist.id, name: "Smoke Renamed" })
+    });
+    assert(playlistRename.response.ok, "playlist rename should return 200");
+    assert(playlistRename.body.playlists.some((playlist) => playlist.id === createdPlaylist.id && playlist.name === "Smoke Renamed"), "playlist rename should update the user playlist");
+    const playlistMetadata = await request("/api/v1/audio/playlist-actions", {
+      method: "POST",
+      body: JSON.stringify({
+        type: "update_metadata",
+        playlistId: createdPlaylist.id,
+        name: "Smoke Updated",
+        description: "Smoke metadata update",
+        moodTags: ["Sleep", "Fireplace"],
+        coverType: "collage",
+        coverValue: "album-collage"
+      })
+    });
+    assert(playlistMetadata.response.ok, "playlist update_metadata should return 200");
+    const metadataPlaylist = playlistMetadata.body.playlists.find((playlist) => playlist.id === createdPlaylist.id);
+    assert(metadataPlaylist.name === "Smoke Updated", "playlist update_metadata should update name");
+    assert(metadataPlaylist.description === "Smoke metadata update", "playlist update_metadata should update description");
+    assert(metadataPlaylist.moodTags.includes("Sleep") && metadataPlaylist.moodTags.includes("Fireplace"), "playlist update_metadata should update mood tags");
+    assert(metadataPlaylist.coverType === "collage" && metadataPlaylist.coverValue === "album-collage", "playlist update_metadata should update cover metadata");
+    const playlistAddSecond = await request("/api/v1/audio/playlist-actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "add_track", playlistId: createdPlaylist.id, trackPath: localLibrary.body.tracks[1].path })
+    });
+    assert(playlistAddSecond.response.ok, "playlist add_track should accept a second track");
+    assert(playlistAddSecond.body.playlists.find((playlist) => playlist.id === createdPlaylist.id)?.trackCount === 2, "playlist should expose added track count");
+    const playlistMove = await request("/api/v1/audio/playlist-actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "move_track", playlistId: createdPlaylist.id, fromIndex: 1, toIndex: 0 })
+    });
+    assert(playlistMove.response.ok, "playlist move_track should return 200");
+    assert(playlistMove.body.playlists.find((playlist) => playlist.id === createdPlaylist.id)?.tracks[0]?.path === localLibrary.body.tracks[1].path, "playlist move_track should reorder tracks");
+    const playlistDuplicate = await request("/api/v1/audio/playlist-actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "duplicate", playlistId: createdPlaylist.id })
+    });
+    assert(playlistDuplicate.response.ok, "playlist duplicate should return 200");
+    const duplicatedPlaylist = playlistDuplicate.body.playlists.find((playlist) => playlist.source === "user" && playlist.name === "Smoke Updated Copy");
+    assert(duplicatedPlaylist, "playlist duplicate should create an editable copy");
+    assert(duplicatedPlaylist.readOnly === false && duplicatedPlaylist.trackCount === 2, "playlist duplicate should preserve tracks as editable");
+    assert(duplicatedPlaylist.coverType === "collage", "playlist duplicate should preserve cover metadata");
+    const curatedPlaylist = initialPlaylists.body.playlists.find((playlist) => playlist.source === "curated");
+    const curatedDuplicate = await request("/api/v1/audio/playlist-actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "duplicate", playlistId: curatedPlaylist.id, name: "Curated Copy" })
+    });
+    assert(curatedDuplicate.response.ok, "curated playlist duplicate should return 200");
+    const curatedCopy = curatedDuplicate.body.playlists.find((playlist) => playlist.source === "user" && playlist.name === "Curated Copy");
+    assert(curatedCopy && curatedCopy.readOnly === false, "curated playlist duplicate should create an editable user playlist");
+    const playlistPlay = await request("/api/v1/audio/playlist-actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "play", playlistId: createdPlaylist.id })
+    });
+    assert(playlistPlay.response.ok, "playlist play should return 200");
+    const playlistPlayback = await request("/api/v1/system/state");
+    assert(playlistPlayback.response.ok, "system state after playlist play should return 200");
+    assert(playlistPlayback.body.audio.currentSource.id === "mpd", "playlist play should keep MPD as the active source");
+    assert(playlistPlayback.body.playback.queueLength === 2, "playlist play should load a mock local queue");
+    assert(playlistPlayback.body.playback.title === localLibrary.body.tracks[1].title, "playlist play should start from the reordered first track");
+    const playlistPlaySecond = await request("/api/v1/audio/playlist-actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "play", playlistId: createdPlaylist.id, startIndex: 1 })
+    });
+    assert(playlistPlaySecond.response.ok, "playlist play should accept startIndex");
+    const playlistSecondPlayback = await request("/api/v1/system/state");
+    assert(playlistSecondPlayback.response.ok, "system state after playlist startIndex play should return 200");
+    assert(playlistSecondPlayback.body.playback.currentTrackIndex === 2, "playlist play startIndex should set the playback queue index");
+    assert(playlistSecondPlayback.body.playback.title === localLibrary.body.tracks[0].title, "playlist play startIndex should start from the requested song");
+    const playlistRemove = await request("/api/v1/audio/playlist-actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "remove_track", playlistId: createdPlaylist.id, trackPath: localLibrary.body.tracks[1].path })
+    });
+    assert(playlistRemove.response.ok, "playlist remove_track should return 200");
+    assert(playlistRemove.body.playlists.find((playlist) => playlist.id === createdPlaylist.id)?.trackCount === 1, "playlist remove_track should reduce track count");
+    const playlistDelete = await request("/api/v1/audio/playlist-actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "delete", playlistId: createdPlaylist.id })
+    });
+    assert(playlistDelete.response.ok, "playlist delete should return 200");
+    assert(!playlistDelete.body.playlists.some((playlist) => playlist.id === createdPlaylist.id), "playlist delete should remove the user playlist");
+    const playbackAfterDelete = await request("/api/v1/system/state");
+    assert(playbackAfterDelete.response.ok, "system state after playlist delete should return 200");
+    assert(playbackAfterDelete.body.playback.queueLength === 2, "playlist delete should not stop the already loaded playback queue");
+    const duplicateDelete = await request("/api/v1/audio/playlist-actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "delete", playlistId: duplicatedPlaylist.id })
+    });
+    assert(duplicateDelete.response.ok, "playlist duplicate cleanup should return 200");
+    const curatedCopyDelete = await request("/api/v1/audio/playlist-actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "delete", playlistId: curatedCopy.id })
+    });
+    assert(curatedCopyDelete.response.ok, "curated copy cleanup should return 200");
+    const defaultLibraryResume = await request("/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({ target: "mpd" })
+    });
+    assert(defaultLibraryResume.response.ok, "default MPD resume after playlist smoke should return 200");
+    assert(defaultLibraryResume.body.playback.title === "Get Lucky (feat. Pharrell Williams)", "default MPD resume should restore the mock library queue");
 
     const repeatOne = await request("/api/v1/playback/actions", {
       method: "POST",
@@ -710,6 +868,7 @@ async function run() {
     await rm(BLUETOOTH_SCENARIO_PATH, { force: true });
     await rm(BLUETOOTH_METADATA_PATH, { force: true });
     await rm(apiAssetsRoot, { recursive: true, force: true });
+    await rm(apiStateRoot, { recursive: true, force: true });
   }
 }
 

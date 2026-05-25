@@ -3,9 +3,9 @@ import path from "node:path";
 
 const ROOT = process.cwd();
 const MUSIC_ROOT = path.join(ROOT, "public", "assets", "music");
-const MANIFEST_PATH = path.join(MUSIC_ROOT, "_metadata", "library_manifest.csv");
+const MANIFEST_PATH = path.join(MUSIC_ROOT, "_metadata", "library_manifest.json");
 const PLAYLIST_DIR = path.join(MUSIC_ROOT, "_playlists");
-const PLAYLIST_INDEX_PATH = path.join(MUSIC_ROOT, "_metadata", "playlist_index.csv");
+const PLAYLIST_INDEX_PATH = path.join(MUSIC_ROOT, "_metadata", "playlist_index.json");
 
 const TAXONOMY = {
   Focus: {
@@ -32,50 +32,10 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
-function parseCsvRows(text) {
-  const rows = [];
-  let currentRow = [];
-  let currentCell = "";
-  let inQuotes = false;
-
-  for (let index = 0; index < text.length; index += 1) {
-    const char = text[index];
-    const nextChar = text[index + 1];
-
-    if (char === "\"") {
-      if (inQuotes && nextChar === "\"") {
-        currentCell += "\"";
-        index += 1;
-      } else {
-        inQuotes = !inQuotes;
-      }
-      continue;
-    }
-
-    if (char === "," && !inQuotes) {
-      currentRow.push(currentCell);
-      currentCell = "";
-      continue;
-    }
-
-    if ((char === "\n" || char === "\r") && !inQuotes) {
-      if (char === "\r" && nextChar === "\n") index += 1;
-      currentRow.push(currentCell);
-      if (currentRow.some((cell) => cell.trim().length > 0)) rows.push(currentRow);
-      currentRow = [];
-      currentCell = "";
-      continue;
-    }
-
-    currentCell += char;
-  }
-
-  currentRow.push(currentCell);
-  if (currentRow.some((cell) => cell.trim().length > 0)) rows.push(currentRow);
-
-  const [headerRow, ...dataRows] = rows;
-  const headers = headerRow.map((header) => header.replace(/^\uFEFF/, "").trim());
-  return dataRows.map((row) => Object.fromEntries(headers.map((header, index) => [header, row[index] ?? ""])));
+function readJsonRows(text, label) {
+  const parsed = JSON.parse(text.replace(/^\uFEFF/, ""));
+  assert(Array.isArray(parsed), `${label} should be a JSON array`);
+  return parsed;
 }
 
 async function assertFile(relativePath, label) {
@@ -86,7 +46,7 @@ async function assertFile(relativePath, label) {
 }
 
 async function main() {
-  const manifestRows = parseCsvRows(await readFile(MANIFEST_PATH, "utf8"));
+  const manifestRows = readJsonRows(await readFile(MANIFEST_PATH, "utf8"), "library_manifest.json");
   assert(manifestRows.length === 39, `expected 39 local tracks, found ${manifestRows.length}`);
 
   for (const row of manifestRows) {
@@ -100,11 +60,11 @@ async function main() {
     await assertFile(row.cover_relative_path, `${row.id} cover_relative_path`);
   }
 
-  const playlistIndexRows = parseCsvRows(await readFile(PLAYLIST_INDEX_PATH, "utf8"));
+  const playlistIndexRows = readJsonRows(await readFile(PLAYLIST_INDEX_PATH, "utf8"), "playlist_index.json");
   const indexedPlaylists = new Set(playlistIndexRows.map((row) => row.file_name));
   const playlistFiles = (await readdir(PLAYLIST_DIR)).filter((file) => file.endsWith(".m3u"));
   for (const file of playlistFiles) {
-    assert(indexedPlaylists.has(file), `playlist is missing from playlist_index.csv: ${file}`);
+    assert(indexedPlaylists.has(file), `playlist is missing from playlist_index.json: ${file}`);
     const playlistText = await readFile(path.join(PLAYLIST_DIR, file), "utf8");
     for (const line of playlistText.split(/\r?\n/)) {
       const entry = line.trim();
