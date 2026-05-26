@@ -1,7 +1,11 @@
 export type AppMode = "ambient" | "player" | "playlist" | "quickSettings" | "quickMenu";
-export type FontTheme = "sans" | "serif" | "mono";
+export type FontTheme = "system" | "hardware" | "precision" | "sans" | "serif" | "mono";
 export type SurfaceTheme = "warm-gold" | "graphite-silver" | "ivory-studio";
 export type LyricsFontSize = "small" | "medium" | "large";
+export type RoomMode = "focus" | "calm" | "sleep" | "hifi";
+export type RoomSessionPhase = "idle" | "preparing" | "active" | "windDown";
+export type HifiEqPresetId = "flat" | "warm" | "vocal";
+export type HifiVisualPresetId = "spectrum-bars" | "waveform" | "dual-vu";
 
 export type PlaybackState = "playing" | "paused" | "stopped";
 export type PlaybackMode = "sequence" | "repeat_one" | "shuffle";
@@ -50,6 +54,17 @@ export interface SourceSummary {
 export interface AudioState {
   currentSource: SourceSummary;
   sources: SourceSummary[];
+}
+
+export interface AudioSpectrumFrame {
+  bands: number[];
+  peaks: {
+    left: number;
+    right: number;
+  };
+  source: "mock" | "command" | "fallback";
+  bandCount: number;
+  updatedAt: string;
 }
 
 export interface RadioCatalogFilters {
@@ -213,6 +228,7 @@ export interface BackgroundVideoSummary {
   order?: number;
   default?: boolean;
   source?: "legacy" | "scene";
+  roomModes?: RoomMode[];
 }
 
 export interface BackgroundVideoCatalogResponse {
@@ -255,9 +271,21 @@ export interface AudioFormatState {
   container: string;
 }
 
+export interface HifiEqPresetSummary {
+  id: HifiEqPresetId;
+  label: string;
+  intent: string;
+  hifiVisualPresetId: HifiVisualPresetId;
+}
+
 export interface DspState {
   enabled: boolean;
   preset: string;
+  presetId: HifiEqPresetId;
+  presetLabel: string;
+  controllable: boolean;
+  controlTransport: "mock" | "command" | "unavailable";
+  availablePresets: HifiEqPresetSummary[];
 }
 
 export interface SystemState {
@@ -367,6 +395,59 @@ export interface TikpalState {
   runtime: RuntimeState;
   audio: AudioState;
   lyrics: LyricsState;
+}
+
+export interface RoomExperienceState {
+  mode: RoomMode;
+  phase: RoomSessionPhase;
+  presetId: string;
+  sceneVideoId: string;
+  hifiEqPresetId: HifiEqPresetId;
+  hifiVisualPresetId: HifiVisualPresetId;
+  sceneSoundEnabled: boolean;
+  playlistId: string | null;
+  volumePercent: number;
+  brightnessPercent: number;
+  timerMinutes: number | null;
+  timerEndsAt: string | null;
+  nightSchedule: NightScheduleState;
+  updatedAt: string;
+}
+
+export interface NightScheduleState {
+  enabled: boolean;
+  timeZone: string;
+  start: string;
+  end: string;
+  brightnessPercent: number;
+  active: boolean;
+  preNightBrightnessPercent: number | null;
+}
+
+export type RoomExperienceActionType =
+  | "set_mode"
+  | "start_session"
+  | "stop_session"
+  | "update_timer"
+  | "apply_preset"
+  | "set_hifi_eq"
+  | "set_hifi_visual"
+  | "update_night_schedule";
+
+export interface RoomExperienceActionRequest {
+  type: RoomExperienceActionType;
+  mode?: RoomMode;
+  presetId?: string;
+  sceneVideoId?: string;
+  hifiEqPresetId?: HifiEqPresetId;
+  hifiVisualPresetId?: HifiVisualPresetId;
+  sceneSoundEnabled?: boolean;
+  playlistId?: string | null;
+  volumePercent?: number;
+  brightnessPercent?: number;
+  timerMinutes?: number | null;
+  timerEndsAt?: string | null;
+  nightSchedule?: Partial<NightScheduleState>;
 }
 
 export type PlaybackActionType =

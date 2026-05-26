@@ -98,7 +98,16 @@ export const systemState: SystemState = {
   cpuTemp: 48,
   dspState: {
     enabled: true,
-    preset: "Jazz"
+    preset: "Flat",
+    presetId: "flat",
+    presetLabel: "Flat",
+    controllable: true,
+    controlTransport: "mock",
+    availablePresets: [
+      { id: "flat", label: "Flat", intent: "Reference response", hifiVisualPresetId: "spectrum-bars" },
+      { id: "warm", label: "Warm", intent: "Gentle low-mid lift", hifiVisualPresetId: "waveform" },
+      { id: "vocal", label: "Vocal", intent: "Clearer midrange presence", hifiVisualPresetId: "dual-vu" }
+    ]
   },
   library: {
     source: "NAS",

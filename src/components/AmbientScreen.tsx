@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
-import { Captions, CaptionsOff, GalleryHorizontalEnd, Heart, ListMusic, Pause, Play, Repeat1, Settings, Shuffle, SkipBack, SkipForward, SunMedium, Volume2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { Captions, CaptionsOff, GalleryHorizontalEnd, Heart, ListMusic, Moon, Pause, Play, Repeat1, Settings, Shuffle, SkipBack, SkipForward, SlidersHorizontal, SunMedium, Target, Volume2, VolumeX, Waves } from "lucide-react";
 import { fetchBackgroundVideos } from "../api/tikpalClient";
+import { EqVisualScene } from "./EqVisualScene";
 import { FlameScene } from "./FlameScene";
-import { formatDuration, formatSampleRate } from "../mockState";
-import { getPlaybackDisplayTruth } from "../playbackTruth";
+import { hifiEqPresets } from "../hifiVisualPresets";
+import { roomModeOptions } from "../roomExperienceTruth";
 import type { TikpalDataStatus } from "../hooks/useTikpalState";
-import type { AudioState, BackgroundVideoSummary, FontTheme, LyricsFontSize, LyricsState, PlaybackActionType, PlaybackMode, PlaybackSummary, SystemActionType, SystemState, TikpalState } from "../types";
+import type { AudioState, BackgroundVideoSummary, FontTheme, LyricsFontSize, LyricsState, PlaybackActionType, PlaybackMode, PlaybackSummary, RoomExperienceActionRequest, RoomExperienceState, RoomMode, SystemActionType, SystemState, TikpalState } from "../types";
 
 interface AmbientScreenProps {
   hudVisible: boolean;
@@ -21,13 +22,17 @@ interface AmbientScreenProps {
   status: TikpalDataStatus;
   sceneVideoEnabled: boolean;
   sceneSoundEnabled: boolean;
+  sceneSoundPending: boolean;
   clockVisible: boolean;
   onPlaybackAction: (type: PlaybackActionType, value?: number, mode?: PlaybackMode) => Promise<TikpalState>;
   onSystemAction: (type: SystemActionType, value?: number) => Promise<TikpalState>;
   onHudActivity: () => void;
   onLyricsVisibleChange: (visible: boolean) => void;
   onCurrentSceneVideoChange: (video: BackgroundVideoSummary) => void;
+  onSceneSoundEnabledChange: (enabled: boolean) => void;
   onOpenSettings: () => void;
+  roomExperience: RoomExperienceState;
+  onExperienceAction: (action: RoomExperienceActionRequest) => Promise<RoomExperienceState>;
 }
 
 type AmbientAdjustChannel = "volume" | "brightness";
@@ -56,8 +61,19 @@ const DEFAULT_BACKGROUND_VIDEO: BackgroundVideoSummary = {
   src: ""
 };
 
+const roomModeIcons = {
+  focus: Target,
+  calm: Waves,
+  sleep: Moon,
+  hifi: SlidersHorizontal
+} satisfies Record<RoomMode, typeof Target>;
+
 function clampPercent(value: number) {
   return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function videoBelongsToRoomMode(video: BackgroundVideoSummary, mode: RoomMode) {
+  return mode !== "hifi" && Boolean(video.src) && Array.isArray(video.roomModes) && video.roomModes.includes(mode);
 }
 
 function findActiveLyricsLineIndex(lyrics: LyricsState, elapsedSeconds: number | null) {
@@ -136,16 +152,21 @@ export function AmbientScreen({
   status,
   sceneVideoEnabled,
   sceneSoundEnabled,
+  sceneSoundPending,
   clockVisible,
   onPlaybackAction,
   onSystemAction,
   onHudActivity,
   onLyricsVisibleChange,
   onCurrentSceneVideoChange,
-  onOpenSettings
+  onSceneSoundEnabledChange,
+  onOpenSettings,
+  roomExperience,
+  onExperienceAction
 }: AmbientScreenProps) {
   const dragStateRef = useRef<DragState | null>(null);
   const adjustDismissTimerRef = useRef<number | null>(null);
+  const lastRoomSceneIdRef = useRef<string | null>(null);
   const selectedBackgroundVideoSrcRef = useRef(DEFAULT_BACKGROUND_VIDEO.src);
   const requestStateRef = useRef<Record<AmbientAdjustChannel, { inFlight: boolean; queued: number | null; lastSent: number | null }>>({
     volume: { inFlight: false, queued: null, lastSent: null },
@@ -157,17 +178,14 @@ export function AmbientScreen({
   const [frozenLyricsLineIndex, setFrozenLyricsLineIndex] = useState<number | null>(null);
   const [staticLyricsLineIndex, setStaticLyricsLineIndex] = useState(0);
   const currentBackgroundVideo = backgroundVideos[backgroundVideoIndex] ?? DEFAULT_BACKGROUND_VIDEO;
+  const isHifiMode = roomExperience.mode === "hifi";
+  const modeBackgroundVideos = useMemo(() => (
+    backgroundVideos.filter((video) => videoBelongsToRoomMode(video, roomExperience.mode))
+  ), [backgroundVideos, roomExperience.mode]);
+  const switchableBackgroundVideos = modeBackgroundVideos.length > 0
+    ? modeBackgroundVideos
+    : backgroundVideos.filter((video) => Boolean(video.src));
   const hasSceneVideo = Boolean(currentBackgroundVideo.src);
-  const playbackTruth = getPlaybackDisplayTruth(playback, audio, fontTheme);
-  const title = playbackTruth.title;
-  const artist = playbackTruth.artist;
-  const album = playbackTruth.album;
-  const coverLabel = album
-    .split(/\s+/)
-    .map((word) => word[0])
-    .join("")
-    .slice(0, 3)
-    .toUpperCase();
   const brightnessPercent = system.display.brightnessPercent;
   const audioProtectionMode = playback.source === "airplay" && playback.state === "playing";
   const canAdvanceLyrics = lyrics.synced
@@ -180,6 +198,8 @@ export function AmbientScreen({
   const staticLyricsText = staticLyricsLines.length > 0
     ? staticLyricsLines[staticLyricsLineIndex % staticLyricsLines.length] ?? ""
     : "";
+  const roomModeLabel = roomModeOptions.find((option) => option.mode === roomExperience.mode)?.label ?? "Calm";
+  const roomModeIntent = roomModeOptions.find((option) => option.mode === roomExperience.mode)?.intent ?? "Unwind & relax";
   const showSyncedLyrics = lyrics.status === "ready" && lyrics.synced && canAdvanceLyrics && Boolean(activeLyricsLine);
   const showStaticLyrics = lyrics.status === "ready" && Boolean(staticLyricsText) && (!lyrics.synced || !canAdvanceLyrics);
   const showIdentifiedTrack = (lyrics.status === "not_found" || lyrics.status === "error") && Boolean(lyrics.title || lyrics.artist);
@@ -204,7 +224,8 @@ export function AmbientScreen({
   const tickerStyle = shouldScrollTicker
     ? ({ "--ambient-lyrics-marquee-duration": `${marqueeDurationSeconds}s` } as CSSProperties)
     : undefined;
-  const showLyricsLayer = lyricsVisible && Boolean(tickerText);
+  const canShowLyricsLayer = isHifiMode && lyricsVisible;
+  const showLyricsLayer = canShowLyricsLayer && Boolean(tickerText);
   const isPlaybackPending = status.pending;
   const isPlaying = playback.state === "playing";
   const playbackSettings = playback.settings ?? { playMode: "sequence" };
@@ -242,6 +263,25 @@ export function AmbientScreen({
   }, [currentBackgroundVideo, onCurrentSceneVideoChange]);
 
   useEffect(() => {
+    if (!roomExperience.sceneVideoId || roomExperience.sceneVideoId === lastRoomSceneIdRef.current) return;
+    const preferredIndex = backgroundVideos.findIndex((video) => video.id === roomExperience.sceneVideoId);
+    if (preferredIndex === -1) return;
+    lastRoomSceneIdRef.current = roomExperience.sceneVideoId;
+    setBackgroundVideoIndex(preferredIndex);
+  }, [backgroundVideos, roomExperience.sceneVideoId]);
+
+  useEffect(() => {
+    if (isHifiMode || modeBackgroundVideos.length === 0) return;
+    if (modeBackgroundVideos.some((video) => video.id === currentBackgroundVideo.id)) return;
+
+    const preferredVideo = modeBackgroundVideos.find((video) => video.id === roomExperience.sceneVideoId) ?? modeBackgroundVideos[0];
+    const preferredIndex = backgroundVideos.findIndex((video) => video.id === preferredVideo?.id);
+    if (preferredIndex !== -1) {
+      setBackgroundVideoIndex(preferredIndex);
+    }
+  }, [backgroundVideos, currentBackgroundVideo.id, isHifiMode, modeBackgroundVideos, roomExperience.sceneVideoId]);
+
+  useEffect(() => {
     const controller = new AbortController();
     refreshBackgroundVideos(controller.signal);
 
@@ -266,10 +306,26 @@ export function AmbientScreen({
     };
   }, [refreshBackgroundVideos]);
 
+  function switchHifiEqPreset(direction: -1 | 1) {
+    const currentIndex = Math.max(0, hifiEqPresets.findIndex((preset) => preset.id === roomExperience.hifiEqPresetId));
+    const nextPreset = hifiEqPresets[(currentIndex + direction + hifiEqPresets.length) % hifiEqPresets.length];
+    if (!nextPreset || nextPreset.id === roomExperience.hifiEqPresetId) return;
+    void onExperienceAction({ type: "set_hifi_eq", hifiEqPresetId: nextPreset.id });
+  }
+
   function switchBackgroundVideo(direction: -1 | 1) {
     onHudActivity();
-    if (backgroundVideos.length <= 1) return;
-    setBackgroundVideoIndex((current) => (current + direction + backgroundVideos.length) % backgroundVideos.length);
+    if (isHifiMode) {
+      switchHifiEqPreset(direction);
+      return;
+    }
+    if (switchableBackgroundVideos.length <= 1) return;
+    const currentIndex = Math.max(0, switchableBackgroundVideos.findIndex((video) => video.id === currentBackgroundVideo.id));
+    const nextVideo = switchableBackgroundVideos[(currentIndex + direction + switchableBackgroundVideos.length) % switchableBackgroundVideos.length];
+    const nextIndex = backgroundVideos.findIndex((video) => video.id === nextVideo?.id);
+    if (nextIndex !== -1) {
+      setBackgroundVideoIndex(nextIndex);
+    }
   }
 
   function handleAmbientPlaybackAction(type: PlaybackActionType) {
@@ -282,6 +338,18 @@ export function AmbientScreen({
     onHudActivity();
     if (isPlaybackPending || mode === playMode) return;
     void onPlaybackAction("play_mode_set", undefined, mode);
+  }
+
+  function handleSceneSoundToggle() {
+    onHudActivity();
+    if (sceneSoundPending || !hasSceneVideo) return;
+    onSceneSoundEnabledChange(!sceneSoundEnabled);
+  }
+
+  function handleRoomModeChange(mode: RoomMode) {
+    onHudActivity();
+    if (mode === roomExperience.mode) return;
+    void onExperienceAction({ type: "set_mode", mode });
   }
 
   function toggleLyricsLayer() {
@@ -308,23 +376,35 @@ export function AmbientScreen({
       }
       if (event.key === "ArrowLeft") {
         event.preventDefault();
+        if (!isHifiMode) {
+          switchBackgroundVideo(-1);
+          return;
+        }
         handleAmbientPlaybackAction("previous");
         return;
       }
       if (event.key === "ArrowRight") {
         event.preventDefault();
+        if (!isHifiMode) {
+          switchBackgroundVideo(1);
+          return;
+        }
         handleAmbientPlaybackAction("next");
         return;
       }
       if (event.key === " " || event.key === "Enter") {
         event.preventDefault();
+        if (!isHifiMode) {
+          handleSceneSoundToggle();
+          return;
+        }
         handleAmbientPlaybackAction("play_pause");
       }
     }
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [backgroundVideos.length, hudVisible, isPlaybackPending, onHudActivity, onPlaybackAction]);
+  }, [backgroundVideos.length, currentBackgroundVideo.id, hasSceneVideo, hudVisible, isHifiMode, isPlaybackPending, onHudActivity, onPlaybackAction, onSceneSoundEnabledChange, roomExperience.hifiEqPresetId, sceneSoundEnabled, sceneSoundPending, switchableBackgroundVideos.length]);
 
   function clearAdjustDismissTimer() {
     if (adjustDismissTimerRef.current !== null) {
@@ -572,16 +652,31 @@ export function AmbientScreen({
   }, []);
 
   return (
-    <section className={`ambient-screen ${hudVisible ? "is-hud-visible" : "is-hud-hidden"}`} aria-label="Ambient flame screen" onWheelCapture={handleAmbientWheelCapture}>
-      <FlameScene
-        lowPower={audioProtectionMode}
-        playback={playback}
-        videoSrc={currentBackgroundVideo.src}
-        videoEnabled={sceneVideoEnabled && hasSceneVideo}
-        audioEnabled={sceneAudioEnabled}
-        volumePercent={system.volume.percent}
-      />
-      {sceneVideoEnabled && hasSceneVideo ? <div className="ambient-vignette" /> : null}
+    <section
+      className={`ambient-screen ${hudVisible ? "is-hud-visible" : "is-hud-hidden"}`}
+      data-room-mode={roomExperience.mode}
+      aria-label="Ambient flame screen"
+      onWheelCapture={handleAmbientWheelCapture}
+    >
+      {isHifiMode ? (
+        <EqVisualScene
+          presetId={roomExperience.hifiEqPresetId}
+          playback={playback}
+          audio={audio}
+          system={system}
+          fontTheme={fontTheme}
+        />
+      ) : (
+        <FlameScene
+          lowPower={audioProtectionMode}
+          playback={playback}
+          videoSrc={currentBackgroundVideo.src}
+          videoEnabled={sceneVideoEnabled && hasSceneVideo}
+          audioEnabled={sceneAudioEnabled}
+          volumePercent={system.volume.percent}
+        />
+      )}
+      {!isHifiMode && sceneVideoEnabled && hasSceneVideo ? <div className="ambient-vignette" /> : null}
       <div
         className="ambient-adjust-zone ambient-adjust-zone-left"
         data-gesture-protected
@@ -608,7 +703,7 @@ export function AmbientScreen({
       </button>
 
       <div
-        className="ambient-transport"
+        className={`ambient-transport ${isHifiMode ? "is-hifi" : "is-room-mode"}`}
         data-gesture-protected
         aria-hidden={!hudVisible}
         onClick={(event) => event.stopPropagation()}
@@ -625,115 +720,138 @@ export function AmbientScreen({
           <button
             className="ambient-transport-button ambient-transport-scene ambient-transport-scene-previous"
             type="button"
-            aria-label="Previous scene"
-            title="Previous scene"
+            aria-label={isHifiMode ? "Previous Hi-Fi EQ preset" : "Previous scene"}
+            title={isHifiMode ? "Previous Hi-Fi EQ preset" : "Previous scene"}
             tabIndex={hudVisible ? 0 : -1}
-            disabled={backgroundVideos.length <= 1}
+            disabled={isHifiMode ? hifiEqPresets.length <= 1 : switchableBackgroundVideos.length <= 1}
             onClick={() => switchBackgroundVideo(-1)}
           >
             <GalleryHorizontalEnd size={30} strokeWidth={1.8} />
           </button>
-          <div className="ambient-play-mode" role="group" aria-label="Playback mode">
-            <button
-              className={`ambient-play-mode-button ${playMode === "sequence" ? "is-active" : ""}`}
-              type="button"
-              aria-label="Sequence playback"
-              title="Sequence playback"
-              aria-pressed={playMode === "sequence"}
-              tabIndex={hudVisible ? 0 : -1}
-              disabled={isPlaybackPending}
-              onClick={() => handlePlayModeChange("sequence")}
-            >
-              <ListMusic size={22} strokeWidth={1.8} />
-            </button>
-            <button
-              className={`ambient-play-mode-button ${playMode === "repeat_one" ? "is-active" : ""}`}
-              type="button"
-              aria-label="Repeat current track"
-              title="Repeat current track"
-              aria-pressed={playMode === "repeat_one"}
-              tabIndex={hudVisible ? 0 : -1}
-              disabled={isPlaybackPending}
-              onClick={() => handlePlayModeChange("repeat_one")}
-            >
-              <Repeat1 size={22} strokeWidth={1.8} />
-            </button>
-            <button
-              className={`ambient-play-mode-button ${playMode === "shuffle" ? "is-active" : ""}`}
-              type="button"
-              aria-label="Shuffle playback"
-              title="Shuffle playback"
-              aria-pressed={playMode === "shuffle"}
-              tabIndex={hudVisible ? 0 : -1}
-              disabled={isPlaybackPending}
-              onClick={() => handlePlayModeChange("shuffle")}
-            >
-              <Shuffle size={22} strokeWidth={1.8} />
-            </button>
-          </div>
-          <button
-            className="ambient-transport-button ambient-transport-track ambient-transport-left"
-            type="button"
-            aria-label="Previous track"
-            title="Previous track"
-            tabIndex={hudVisible ? 0 : -1}
-            disabled={isPlaybackPending}
-            onClick={() => handleAmbientPlaybackAction("previous")}
-          >
-            <SkipBack size={33} fill="currentColor" strokeWidth={1.6} />
-          </button>
-          <button
-            className="ambient-transport-button ambient-transport-play"
-            type="button"
-            aria-label={isPlaying ? "Pause" : "Play"}
-            title={isPlaying ? "Pause" : "Play"}
-            tabIndex={hudVisible ? 0 : -1}
-            disabled={isPlaybackPending}
-            onClick={() => handleAmbientPlaybackAction("play_pause")}
-          >
-            {isPlaying ? <Pause size={34} fill="currentColor" strokeWidth={1.6} /> : <Play size={34} fill="currentColor" strokeWidth={1.6} />}
-          </button>
-          <button
-            className="ambient-transport-button ambient-transport-track ambient-transport-right"
-            type="button"
-            aria-label="Next track"
-            title="Next track"
-            tabIndex={hudVisible ? 0 : -1}
-            disabled={isPlaybackPending}
-            onClick={() => handleAmbientPlaybackAction("next")}
-          >
-            <SkipForward size={33} fill="currentColor" strokeWidth={1.6} />
-          </button>
-          <button
-            className={`ambient-transport-button ambient-transport-setting ${playback.favorite ? "is-active" : ""}`}
-            type="button"
-            aria-label={playback.favorite ? "Remove favorite" : "Favorite"}
-            title={playback.favorite ? "Remove favorite" : "Favorite"}
-            aria-pressed={playback.favorite}
-            tabIndex={hudVisible ? 0 : -1}
-            disabled={isPlaybackPending}
-            onClick={() => handleAmbientPlaybackAction("favorite_toggle")}
-          >
-            <Heart size={25} fill={playback.favorite ? "currentColor" : "none"} strokeWidth={1.8} />
-          </button>
-          <button
-            className={`ambient-transport-button ambient-transport-setting ${lyricsVisible ? "is-active" : ""}`}
-            type="button"
-            aria-label={lyricsVisible ? "Hide lyrics" : "Show lyrics"}
-            title={lyricsVisible ? "Hide lyrics" : "Show lyrics"}
-            aria-pressed={lyricsVisible}
-            tabIndex={hudVisible ? 0 : -1}
-            onClick={toggleLyricsLayer}
-          >
-            {lyricsVisible ? <Captions size={25} strokeWidth={1.8} /> : <CaptionsOff size={25} strokeWidth={1.8} />}
-          </button>
+          {isHifiMode ? (
+            <>
+              <div className="ambient-play-mode" role="group" aria-label="Playback mode">
+                <button
+                  className={`ambient-play-mode-button ${playMode === "sequence" ? "is-active" : ""}`}
+                  type="button"
+                  aria-label="Sequence playback"
+                  title="Sequence playback"
+                  aria-pressed={playMode === "sequence"}
+                  tabIndex={hudVisible ? 0 : -1}
+                  disabled={isPlaybackPending}
+                  onClick={() => handlePlayModeChange("sequence")}
+                >
+                  <ListMusic size={22} strokeWidth={1.8} />
+                </button>
+                <button
+                  className={`ambient-play-mode-button ${playMode === "repeat_one" ? "is-active" : ""}`}
+                  type="button"
+                  aria-label="Repeat current track"
+                  title="Repeat current track"
+                  aria-pressed={playMode === "repeat_one"}
+                  tabIndex={hudVisible ? 0 : -1}
+                  disabled={isPlaybackPending}
+                  onClick={() => handlePlayModeChange("repeat_one")}
+                >
+                  <Repeat1 size={22} strokeWidth={1.8} />
+                </button>
+                <button
+                  className={`ambient-play-mode-button ${playMode === "shuffle" ? "is-active" : ""}`}
+                  type="button"
+                  aria-label="Shuffle playback"
+                  title="Shuffle playback"
+                  aria-pressed={playMode === "shuffle"}
+                  tabIndex={hudVisible ? 0 : -1}
+                  disabled={isPlaybackPending}
+                  onClick={() => handlePlayModeChange("shuffle")}
+                >
+                  <Shuffle size={22} strokeWidth={1.8} />
+                </button>
+              </div>
+              <button
+                className="ambient-transport-button ambient-transport-track ambient-transport-left"
+                type="button"
+                aria-label="Previous track"
+                title="Previous track"
+                tabIndex={hudVisible ? 0 : -1}
+                disabled={isPlaybackPending}
+                onClick={() => handleAmbientPlaybackAction("previous")}
+              >
+                <SkipBack size={33} fill="currentColor" strokeWidth={1.6} />
+              </button>
+              <button
+                className="ambient-transport-button ambient-transport-play"
+                type="button"
+                aria-label={isPlaying ? "Pause" : "Play"}
+                title={isPlaying ? "Pause" : "Play"}
+                tabIndex={hudVisible ? 0 : -1}
+                disabled={isPlaybackPending}
+                onClick={() => handleAmbientPlaybackAction("play_pause")}
+              >
+                {isPlaying ? <Pause size={34} fill="currentColor" strokeWidth={1.6} /> : <Play size={34} fill="currentColor" strokeWidth={1.6} />}
+              </button>
+              <button
+                className="ambient-transport-button ambient-transport-track ambient-transport-right"
+                type="button"
+                aria-label="Next track"
+                title="Next track"
+                tabIndex={hudVisible ? 0 : -1}
+                disabled={isPlaybackPending}
+                onClick={() => handleAmbientPlaybackAction("next")}
+              >
+                <SkipForward size={33} fill="currentColor" strokeWidth={1.6} />
+              </button>
+              <button
+                className={`ambient-transport-button ambient-transport-setting ${playback.favorite ? "is-active" : ""}`}
+                type="button"
+                aria-label={playback.favorite ? "Remove favorite" : "Favorite"}
+                title={playback.favorite ? "Remove favorite" : "Favorite"}
+                aria-pressed={playback.favorite}
+                tabIndex={hudVisible ? 0 : -1}
+                disabled={isPlaybackPending}
+                onClick={() => handleAmbientPlaybackAction("favorite_toggle")}
+              >
+                <Heart size={25} fill={playback.favorite ? "currentColor" : "none"} strokeWidth={1.8} />
+              </button>
+              <button
+                className={`ambient-transport-button ambient-transport-setting ${lyricsVisible ? "is-active" : ""}`}
+                type="button"
+                aria-label={lyricsVisible ? "Hide lyrics" : "Show lyrics"}
+                title={lyricsVisible ? "Hide lyrics" : "Show lyrics"}
+                aria-pressed={lyricsVisible}
+                tabIndex={hudVisible ? 0 : -1}
+                onClick={toggleLyricsLayer}
+              >
+                {lyricsVisible ? <Captions size={25} strokeWidth={1.8} /> : <CaptionsOff size={25} strokeWidth={1.8} />}
+              </button>
+            </>
+          ) : (
+            <>
+              <div className="ambient-transport-mode-copy" aria-live="polite">
+                <strong>{roomModeLabel}</strong>
+                <span>{roomModeIntent}</span>
+              </div>
+              <button
+                className={`ambient-transport-button ambient-transport-setting ambient-transport-sound ${sceneSoundEnabled ? "is-active" : ""}`}
+                type="button"
+                aria-label={sceneSoundEnabled ? "Mute scene sound" : "Unmute scene sound"}
+                title={sceneSoundEnabled ? "Mute scene sound" : "Unmute scene sound"}
+                aria-pressed={sceneSoundEnabled}
+                tabIndex={hudVisible ? 0 : -1}
+                disabled={sceneSoundPending || !hasSceneVideo}
+                onClick={handleSceneSoundToggle}
+              >
+                {sceneSoundEnabled ? <Volume2 size={27} strokeWidth={1.8} /> : <VolumeX size={27} strokeWidth={1.8} />}
+              </button>
+            </>
+          )}
           <button
             className="ambient-transport-button ambient-transport-scene ambient-transport-scene-next"
             type="button"
-            aria-label="Next scene"
-            title="Next scene"
+            aria-label={isHifiMode ? "Next Hi-Fi EQ preset" : "Next scene"}
+            title={isHifiMode ? "Next Hi-Fi EQ preset" : "Next scene"}
             tabIndex={hudVisible ? 0 : -1}
-            disabled={backgroundVideos.length <= 1}
+            disabled={isHifiMode ? hifiEqPresets.length <= 1 : switchableBackgroundVideos.length <= 1}
             onClick={() => switchBackgroundVideo(1)}
           >
             <GalleryHorizontalEnd size={30} strokeWidth={1.8} />
@@ -748,7 +866,7 @@ export function AmbientScreen({
         </div>
       ) : null}
 
-      <div className={`ambient-lyrics-layer lyrics-size-${lyricsFontSize}`} aria-live={lyricsVisible ? "polite" : "off"} aria-hidden={!lyricsVisible} data-ambient-lyrics>
+      <div className={`ambient-lyrics-layer lyrics-size-${lyricsFontSize}`} aria-live={showLyricsLayer ? "polite" : "off"} aria-hidden={!showLyricsLayer} data-ambient-lyrics>
         {showLyricsLayer ? (
           <div
             className={`ambient-lyrics-ticker ${shouldScrollTicker ? "is-scrolling" : "is-static"} ${lyrics.status === "error" ? "is-error" : ""}`}
@@ -765,26 +883,29 @@ export function AmbientScreen({
         ) : null}
       </div>
 
-      <div className="ambient-hud" aria-label="Current playback">
-        <div className="ambient-cover" aria-hidden="true">
-          <img src={playbackTruth.albumArtUrl} alt="" />
-          {!playbackTruth.hasPlaybackArtwork ? <span>{coverLabel}</span> : null}
-        </div>
-        <div className="ambient-track">
-          <strong>{title}</strong>
-          <span>{artist} - {album}</span>
-        </div>
-        <div className="ambient-status">
-          <span className={`data-pill ${status.source === "api" ? "is-live" : "is-fallback"}`}>{status.pending ? "Syncing" : status.source === "api" ? "API" : "Fallback"}</span>
-          <span>{playbackTruth.sourceLabel}</span>
-          <span>{formatDuration(playbackTruth.elapsedSeconds)}</span>
-          <span>{system.audioFormat.codec} {system.bitDepth}bit / {formatSampleRate(system.sampleRate)}</span>
-          <span>{system.outputDevice.label}</span>
-          <span>{system.volume.db.toFixed(1)} dB</span>
-          <span>{brightnessPercent}% Brightness</span>
-        </div>
-        <div className="ambient-progress" aria-hidden="true">
-          <span style={{ width: `${playbackTruth.progress * 100}%` }} />
+      <div className="ambient-hud" aria-label="Mood switcher" data-room-mode={roomExperience.mode}>
+        <div className="ambient-room-mode" aria-label="Mood">
+          <div className="ambient-room-mode-buttons" role="group" aria-label="Choose room mode">
+            {roomModeOptions.map((option) => {
+              const Icon = roomModeIcons[option.mode];
+              return (
+                <button
+                  className={roomExperience.mode === option.mode ? "is-active" : ""}
+                  data-gesture-protected
+                  key={option.mode}
+                  type="button"
+                  aria-label={`${option.label} room mode`}
+                  aria-pressed={roomExperience.mode === option.mode}
+                  title={`${option.label} - ${option.intent}`}
+                  tabIndex={hudVisible ? 0 : -1}
+                  onClick={() => handleRoomModeChange(option.mode)}
+                >
+                  <Icon size={18} strokeWidth={1.8} />
+                  <span>{option.label}</span>
+                </button>
+              );
+            })}
+          </div>
         </div>
       </div>
 

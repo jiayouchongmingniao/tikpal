@@ -4,11 +4,13 @@ import { PlayerOverlay } from "./components/PlayerOverlay";
 import { PlaylistOverlay } from "./components/PlaylistOverlay";
 import { QuickMenu } from "./components/QuickMenu";
 import { QuickSettingsOverlay } from "./components/QuickSettingsOverlay";
+import { StartupModeChooser } from "./components/StartupModeChooser";
 import { useAppMode } from "./hooks/useAppMode";
 import { useBrowserKioskGuard } from "./hooks/useBrowserKioskGuard";
 import { useKioskGestures } from "./hooks/useKioskGestures";
+import { useRoomExperience } from "./hooks/useRoomExperience";
 import { useTikpalState } from "./hooks/useTikpalState";
-import type { AppMode, BackgroundVideoSummary, FontTheme, LyricsFontSize, SurfaceTheme } from "./types";
+import type { AppMode, BackgroundVideoSummary, FontTheme, LyricsFontSize, RoomExperienceActionRequest, RoomMode, SurfaceTheme } from "./types";
 
 const FONT_THEME_STORAGE_KEY = "tikpal.fontTheme";
 const SURFACE_THEME_STORAGE_KEY = "tikpal.surfaceTheme";
@@ -24,18 +26,6 @@ const DEFAULT_SCENE_VIDEO: BackgroundVideoSummary = {
   src: ""
 };
 
-const dateFormatter = new Intl.DateTimeFormat("en-US", {
-  month: "2-digit",
-  day: "2-digit",
-  weekday: "long"
-});
-
-const timeFormatter = new Intl.DateTimeFormat("en-US", {
-  hour: "2-digit",
-  minute: "2-digit",
-  hour12: false
-});
-
 function readInitialMode(): AppMode {
   const mode = new URLSearchParams(window.location.search).get("mode");
   if (mode === "player" || mode === "playlist" || mode === "quickSettings" || mode === "quickMenu") return mode;
@@ -44,10 +34,17 @@ function readInitialMode(): AppMode {
 
 function readInitialFontTheme(): FontTheme {
   const savedTheme = window.localStorage.getItem(FONT_THEME_STORAGE_KEY);
-  if (savedTheme === "sans" || savedTheme === "serif" || savedTheme === "mono") {
+  if (
+    savedTheme === "system"
+    || savedTheme === "hardware"
+    || savedTheme === "precision"
+    || savedTheme === "sans"
+    || savedTheme === "serif"
+    || savedTheme === "mono"
+  ) {
     return savedTheme;
   }
-  return "sans";
+  return "system";
 }
 
 function readInitialSurfaceTheme(): SurfaceTheme {
@@ -87,9 +84,11 @@ export default function App() {
   const [clockVisible, setClockVisible] = useState(() => readStoredBoolean(CLOCK_VISIBLE_STORAGE_KEY, true));
   const [sceneSoundEnabled, setSceneSoundEnabled] = useState(false);
   const [sceneSoundPending, setSceneSoundPending] = useState(false);
+  const [startupChooserVisible, setStartupChooserVisible] = useState(() => readInitialMode() === "ambient");
   const [activeSceneVideo, setActiveSceneVideo] = useState<BackgroundVideoSummary>(DEFAULT_SCENE_VIDEO);
   const { mode, hudVisible, idleTotalMs, idleRemainingMs, showHud, toggleHud, changeMode, returnAmbient, resetIdleTimer } = useAppMode(readInitialMode());
   const { state: tikpalState, status: tikpalStatus, refresh, sendPlaybackAction, sendSystemAction, sendSourceSwitch } = useTikpalState();
+  const { experience: roomExperience, sendExperienceAction } = useRoomExperience();
 
   useBrowserKioskGuard();
 
@@ -125,13 +124,30 @@ export default function App() {
   }, [clockVisible]);
 
   useEffect(() => {
-    if (sceneSoundEnabled && (tikpalState.playback.source !== "scene" || tikpalState.playback.state !== "playing")) {
+    if (tikpalState.playback.source === "scene" && tikpalState.playback.state === "playing") {
+      setSceneSoundEnabled(roomExperience.mode !== "hifi");
+      return;
+    }
+    if (sceneSoundEnabled) {
       setSceneSoundEnabled(false);
     }
-  }, [sceneSoundEnabled, tikpalState.playback.source, tikpalState.playback.state]);
+  }, [roomExperience.mode, sceneSoundEnabled, tikpalState.playback.source, tikpalState.playback.state]);
 
-  const timeLabel = useMemo(() => timeFormatter.format(now), [now]);
-  const dateLabel = useMemo(() => dateFormatter.format(now), [now]);
+  const activeTimeZone = roomExperience.nightSchedule.timeZone;
+  const timeFormatter = useMemo(() => new Intl.DateTimeFormat("en-US", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZone: activeTimeZone
+  }), [activeTimeZone]);
+  const dateFormatter = useMemo(() => new Intl.DateTimeFormat("en-US", {
+    month: "2-digit",
+    day: "2-digit",
+    weekday: "long",
+    timeZone: activeTimeZone
+  }), [activeTimeZone]);
+  const timeLabel = useMemo(() => timeFormatter.format(now), [now, timeFormatter]);
+  const dateLabel = useMemo(() => dateFormatter.format(now), [dateFormatter, now]);
 
   const handleCurrentSceneVideoChange = useCallback((video: BackgroundVideoSummary) => {
     setActiveSceneVideo(video);
@@ -149,6 +165,10 @@ export default function App() {
 
   async function handleSceneSoundEnabledChange(enabled: boolean) {
     if (sceneSoundPending) return;
+    if (enabled && roomExperience.mode === "hifi") {
+      setSceneSoundEnabled(false);
+      return;
+    }
     setSceneSoundPending(true);
 
     try {
@@ -178,6 +198,27 @@ export default function App() {
     setSceneVideoEnabled(enabled);
   }
 
+  const handleRoomExperienceAction = useCallback(
+    async (action: RoomExperienceActionRequest) => {
+      const nextExperience = await sendExperienceAction(action);
+      await refresh();
+      return nextExperience;
+    },
+    [refresh, sendExperienceAction]
+  );
+
+  const handleStartupModeSelect = useCallback(async (nextMode: RoomMode) => {
+    setStartupChooserVisible(false);
+    if (nextMode === "hifi") {
+      setSceneSoundEnabled(false);
+    }
+    try {
+      await handleRoomExperienceAction({ type: "set_mode", mode: nextMode });
+    } catch {
+      setStartupChooserVisible(true);
+    }
+  }, [handleRoomExperienceAction]);
+
   const { gesturePreview, ...gestureHandlers } = useKioskGestures({
     mode,
     onOpenPlayer: () => changeMode("player"),
@@ -204,13 +245,23 @@ export default function App() {
         status={tikpalStatus}
         sceneVideoEnabled={sceneVideoEnabled}
         sceneSoundEnabled={sceneSoundEnabled}
+        sceneSoundPending={sceneSoundPending || tikpalStatus.pending}
         clockVisible={clockVisible}
         onPlaybackAction={sendPlaybackAction}
         onSystemAction={sendSystemAction}
         onHudActivity={showHud}
         onLyricsVisibleChange={setLyricsVisible}
         onCurrentSceneVideoChange={handleCurrentSceneVideoChange}
+        onSceneSoundEnabledChange={(enabled) => void handleSceneSoundEnabledChange(enabled)}
         onOpenSettings={() => changeMode("quickSettings")}
+        roomExperience={roomExperience}
+        onExperienceAction={handleRoomExperienceAction}
+      />
+      <StartupModeChooser
+        active={startupChooserVisible && mode === "ambient"}
+        pending={tikpalStatus.pending}
+        selectedMode={roomExperience.mode}
+        onSelectMode={handleStartupModeSelect}
       />
 
       <PlayerOverlay
@@ -228,7 +279,9 @@ export default function App() {
       <PlaylistOverlay
         active={mode === "playlist"}
         playback={tikpalState.playback}
+        roomExperience={roomExperience}
         status={tikpalStatus}
+        onExperienceAction={handleRoomExperienceAction}
         onPlaybackRefresh={() => refresh()}
         onReturnAmbient={returnAmbient}
       />
@@ -241,10 +294,12 @@ export default function App() {
         surfaceTheme={surfaceTheme}
         lyricsVisible={lyricsVisible}
         lyricsFontSize={lyricsFontSize}
+        roomExperience={roomExperience}
         onFontThemeChange={setFontTheme}
         onSurfaceThemeChange={setSurfaceTheme}
         onLyricsVisibleChange={setLyricsVisible}
         onLyricsFontSizeChange={setLyricsFontSize}
+        onExperienceAction={handleRoomExperienceAction}
         onSystemAction={sendSystemAction}
         onReturnAmbient={returnAmbient}
       />
@@ -254,6 +309,7 @@ export default function App() {
         clockVisible={clockVisible}
         sceneSoundEnabled={sceneSoundEnabled}
         sceneSoundPending={sceneSoundPending || tikpalStatus.pending}
+        roomMode={roomExperience.mode}
         onSceneVideoEnabledChange={handleSceneVideoEnabledChange}
         onClockVisibleChange={setClockVisible}
         onSceneSoundEnabledChange={(enabled) => void handleSceneSoundEnabledChange(enabled)}

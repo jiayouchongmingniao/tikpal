@@ -1,6 +1,9 @@
 import type { FontTheme } from "./types";
 
 const COVER_FONT_FAMILIES: Record<FontTheme, string> = {
+  system: "SF Pro Display, SF Pro Text, Inter, Helvetica Neue, PingFang SC, sans-serif",
+  hardware: "Avenir Next, DIN Alternate, DIN Condensed, SF Pro Display, PingFang SC, sans-serif",
+  precision: "SF Mono, Roboto Mono, IBM Plex Mono, JetBrains Mono, PingFang SC, monospace",
   sans: "Inter, SF Pro Display, Helvetica Neue, PingFang SC, Hiragino Sans GB, Microsoft YaHei, sans-serif",
   serif: "Iowan Old Style, Palatino Linotype, Book Antiqua, Georgia, Times New Roman, Songti SC, serif",
   mono: "SF Mono, IBM Plex Mono, JetBrains Mono, Cascadia Mono, Fira Code, Source Han Mono SC, monospace"
@@ -23,7 +26,7 @@ function escapeXml(value: string) {
     .replaceAll("'", "&apos;");
 }
 
-export function buildGeneratedCoverArtUrl(title: string, artist: string, album: string, fontTheme: FontTheme = "sans") {
+export function buildGeneratedCoverArtUrl(title: string, artist: string, album: string, fontTheme: FontTheme = "system") {
   const seed = hashSeed(`${title}|${artist}|${album}`);
   const hueA = seed % 360;
   const hueB = (hueA + 72 + (seed % 90)) % 360;

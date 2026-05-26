@@ -4,6 +4,7 @@ import type {
   AudioPlaylistActionRequest,
   AudioPlaylistCreateRequest,
   AudioPlaylistResponse,
+  AudioSpectrumFrame,
   BackgroundVideoCatalogResponse,
   PlaybackMode,
   PlaybackActionRequest,
@@ -11,6 +12,8 @@ import type {
   RadioCatalogFilters,
   RadioCatalogResponse,
   BackgroundVideoSummary,
+  RoomExperienceActionRequest,
+  RoomExperienceState,
   SourceSwitchRequest,
   SourceSwitchTarget,
   SystemActionRequest,
@@ -84,6 +87,14 @@ export async function fetchAudioPlaylists(signal?: AbortSignal): Promise<AudioPl
   return readJson<AudioPlaylistResponse>(response);
 }
 
+export async function fetchAudioSpectrum(signal?: AbortSignal): Promise<AudioSpectrumFrame> {
+  const response = await fetch(`${API_ROOT}/audio/spectrum`, {
+    headers: { Accept: "application/json" },
+    signal
+  });
+  return readJson<AudioSpectrumFrame>(response);
+}
+
 export async function createAudioPlaylist(playlist: string | AudioPlaylistCreateRequest): Promise<AudioPlaylistResponse> {
   const response = await fetch(`${API_ROOT}/audio/playlists`, {
     method: "POST",
@@ -114,6 +125,26 @@ export async function fetchBackgroundVideos(signal?: AbortSignal): Promise<Backg
     signal
   });
   return readJson<BackgroundVideoCatalogResponse>(response);
+}
+
+export async function fetchRoomExperienceState(signal?: AbortSignal): Promise<RoomExperienceState> {
+  const response = await fetch(`${API_ROOT}/experience/state`, {
+    headers: { Accept: "application/json" },
+    signal
+  });
+  return readJson<RoomExperienceState>(response);
+}
+
+export async function sendRoomExperienceAction(action: RoomExperienceActionRequest): Promise<RoomExperienceState> {
+  const response = await fetch(`${API_ROOT}/experience/actions`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(action)
+  });
+  return readJson<RoomExperienceState>(response);
 }
 
 export async function sendPlaybackAction(type: PlaybackActionType, value?: number, mode?: PlaybackMode): Promise<TikpalState> {

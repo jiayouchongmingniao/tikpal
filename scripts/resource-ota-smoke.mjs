@@ -74,6 +74,7 @@ async function run() {
             filename: "Rainy-Window.mp4",
             label: "Rainy Window",
             order: 30,
+            roomModes: ["calm"],
             default: false,
             sha256: sceneSha256
           }
@@ -98,6 +99,7 @@ async function run() {
     assert(summary.fireplaceVideo.bytes > 0, "resource OTA should report fireplace video bytes");
     assert(summary.scenes.videoCount === 1, "resource OTA should report one scene video");
     assert(summary.scenes.videos[0].id === "rainy-window", "resource OTA should preserve scene video id");
+    assert(JSON.stringify(summary.scenes.videos[0].roomModes) === JSON.stringify(["calm"]), "resource OTA should preserve scene room modes");
     assert(summary.sync.publicSynced === true, "resource OTA should sync public assets");
     assert(summary.sync.distSynced === true, "resource OTA should sync dist assets when present");
     assert(summary.sync.sceneSynced === true, "resource OTA should sync scene assets");
@@ -113,6 +115,7 @@ async function run() {
     const state = JSON.parse(await readFile(path.join(stateDir, "resource-ota-state.json"), "utf8"));
     assert(state.version === "smoke", "resource OTA state should persist package version");
     assert(state.scenes.videos[0].sha256 === sceneSha256, "resource OTA state should persist scene checksum");
+    assert(JSON.stringify(state.scenes.videos[0].roomModes) === JSON.stringify(["calm"]), "resource OTA state should persist scene room modes");
     const videoInfo = await stat(path.join(targetPublicAssets, "output_2560x720-4k.mp4"));
     assert(videoInfo.size === summary.fireplaceVideo.bytes, "copied video size should match summary");
     const sceneInfo = await stat(path.join(targetPublicAssets, "scenes", "Rainy-Window.mp4"));

@@ -61,6 +61,8 @@ const UPNP_DISABLE_COMMAND = process.env.TIKPAL_UPNP_DISABLE_COMMAND ?? "";
 const UPNP_LABEL_COMMAND = process.env.TIKPAL_UPNP_LABEL_COMMAND ?? "";
 const OUTPUT_VOLUME_GET_COMMAND = process.env.TIKPAL_OUTPUT_VOLUME_GET_COMMAND ?? "amixer get PCM";
 const OUTPUT_VOLUME_SET_COMMAND = process.env.TIKPAL_OUTPUT_VOLUME_SET_COMMAND ?? "amixer sset PCM %VALUE%%";
+const HIFI_EQ_APPLY_COMMAND = process.env.TIKPAL_HIFI_EQ_APPLY_COMMAND ?? "";
+const HIFI_SPECTRUM_COMMAND = process.env.TIKPAL_HIFI_SPECTRUM_COMMAND ?? "";
 const RECOGNITION_PROVIDER = (process.env.TIKPAL_RECOGNITION_PROVIDER ?? "").trim().toLowerCase();
 const ACRCLOUD_HOST = process.env.TIKPAL_ACRCLOUD_HOST ?? "";
 const ACRCLOUD_ACCESS_KEY = process.env.TIKPAL_ACRCLOUD_ACCESS_KEY ?? "";
@@ -94,6 +96,7 @@ const LOCAL_LIBRARY_ROOT = resolve(dirname(LOCAL_LIBRARY_MANIFEST_PATH), "..");
 const LOCAL_PLAYLIST_INDEX_PATH = resolve(LOCAL_LIBRARY_ROOT, "_metadata", "playlist_index.json");
 const LOCAL_PLAYLIST_ROOT = resolve(LOCAL_LIBRARY_ROOT, "_playlists");
 const MUSIC_LIBRARY_STATE_PATH = resolve(process.env.TIKPAL_MUSIC_LIBRARY_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "music-library-state.json"));
+const ROOM_EXPERIENCE_STATE_PATH = resolve(process.env.TIKPAL_ROOM_EXPERIENCE_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "room-experience-state.json"));
 const LOCAL_LIBRARY_COVER_COLUMNS = ["cover_relative_path", "cover_path", "album_art_relative_path", "artwork_relative_path"];
 const LOCAL_LIBRARY_COVER_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp"];
 const PUBLIC_ASSETS_ROOT = resolve(process.env.TIKPAL_PUBLIC_ASSETS_ROOT ?? resolve(process.cwd(), "public", "assets"));
@@ -110,6 +113,80 @@ const PLAYLIST_NAME_MAX_LENGTH = 40;
 const PLAYLIST_MOOD_TAGS = new Set(["Focus", "Flow", "Calm", "Sleep", "Fireplace", "Meditation", "Reading", "Morning"]);
 const PLAYLIST_COVER_TYPES = new Set(["gradient", "scene", "collage", "custom"]);
 const PLAYBACK_MODES = new Set(["sequence", "repeat_one", "shuffle"]);
+const ROOM_MODES = new Set(["focus", "calm", "sleep", "hifi"]);
+const ROOM_SESSION_PHASES = new Set(["idle", "preparing", "active", "windDown"]);
+const HIFI_EQ_PRESETS = [
+  { id: "flat", label: "Flat", intent: "Reference response", hifiVisualPresetId: "spectrum-bars" },
+  { id: "warm", label: "Warm", intent: "Gentle low-mid lift", hifiVisualPresetId: "waveform" },
+  { id: "vocal", label: "Vocal", intent: "Clearer midrange presence", hifiVisualPresetId: "dual-vu" }
+];
+const HIFI_EQ_PRESET_IDS = new Set(HIFI_EQ_PRESETS.map((preset) => preset.id));
+const HIFI_VISUAL_PRESETS = new Set(["spectrum-bars", "waveform", "dual-vu"]);
+const DEFAULT_HIFI_EQ_PRESET_ID = "flat";
+const DEFAULT_HIFI_VISUAL_PRESET_ID = "spectrum-bars";
+const DEFAULT_NIGHT_SCHEDULE = {
+  enabled: true,
+  timeZone: normalizeTimeZone(process.env.TZ) || "Asia/Shanghai",
+  start: "22:30",
+  end: "06:30",
+  brightnessPercent: 5,
+  active: false,
+  preNightBrightnessPercent: null
+};
+const ROOM_MODE_PRESETS = {
+  focus: {
+    presetId: "focus-library-flow",
+    sceneVideoId: "midnight-library",
+    sceneVideoLabel: "Midnight Library",
+    sceneVideoSrc: "/assets/scenes/Midnight-Library.mp4",
+    hifiEqPresetId: DEFAULT_HIFI_EQ_PRESET_ID,
+    hifiVisualPresetId: DEFAULT_HIFI_VISUAL_PRESET_ID,
+    sceneSoundEnabled: true,
+    playlistId: null,
+    volumePercent: 42,
+    brightnessPercent: 64,
+    timerMinutes: 50
+  },
+  calm: {
+    presetId: "calm-rain-room",
+    sceneVideoId: "rainy-window",
+    sceneVideoLabel: "Rainy Window",
+    sceneVideoSrc: "/assets/scenes/Rainy-Window.mp4",
+    hifiEqPresetId: DEFAULT_HIFI_EQ_PRESET_ID,
+    hifiVisualPresetId: DEFAULT_HIFI_VISUAL_PRESET_ID,
+    sceneSoundEnabled: true,
+    playlistId: null,
+    volumePercent: 38,
+    brightnessPercent: 48,
+    timerMinutes: 45
+  },
+  sleep: {
+    presetId: "sleep-ocean-dim",
+    sceneVideoId: "deep-blue-ocean",
+    sceneVideoLabel: "Deep Blue Ocean",
+    sceneVideoSrc: "/assets/scenes/Deep-Blue-Ocean.mp4",
+    hifiEqPresetId: DEFAULT_HIFI_EQ_PRESET_ID,
+    hifiVisualPresetId: DEFAULT_HIFI_VISUAL_PRESET_ID,
+    sceneSoundEnabled: true,
+    playlistId: null,
+    volumePercent: 26,
+    brightnessPercent: 22,
+    timerMinutes: 90
+  },
+  hifi: {
+    presetId: "hifi-eq-console",
+    sceneVideoId: "scene-empty",
+    sceneVideoLabel: "Hi-Fi EQ",
+    sceneVideoSrc: "",
+    hifiEqPresetId: DEFAULT_HIFI_EQ_PRESET_ID,
+    hifiVisualPresetId: DEFAULT_HIFI_VISUAL_PRESET_ID,
+    sceneSoundEnabled: false,
+    playlistId: null,
+    volumePercent: 58,
+    brightnessPercent: 72,
+    timerMinutes: null
+  }
+};
 const execFileAsync = promisify(execFile);
 
 const tracks = [
@@ -197,7 +274,12 @@ const system = {
   cpuTemp: 48,
   dspState: {
     enabled: true,
-    preset: "Jazz"
+    preset: "Flat",
+    presetId: "flat",
+    presetLabel: "Flat",
+    controllable: true,
+    controlTransport: "mock",
+    availablePresets: HIFI_EQ_PRESETS
   },
   library: {
     source: "NAS",
@@ -276,6 +358,192 @@ function clampPercent(value, fallback = 0) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return fallback;
   return Math.max(0, Math.min(100, Math.round(numeric)));
+}
+
+function normalizeTimeZone(value) {
+  const timeZone = String(value ?? "").trim();
+  if (!timeZone) return null;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone }).format(new Date());
+    return timeZone;
+  } catch {
+    return null;
+  }
+}
+
+function assertValidTimeZone(value) {
+  const timeZone = normalizeTimeZone(value);
+  if (!timeZone) {
+    throw new Error("nightSchedule.timeZone must be a valid IANA timezone");
+  }
+  return timeZone;
+}
+
+function normalizeClockTime(value, fallback) {
+  const raw = String(value ?? "").trim();
+  const match = raw.match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) return fallback;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (!Number.isInteger(hour) || !Number.isInteger(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+    return fallback;
+  }
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
+function clockTimeToMinutes(value) {
+  const [hour, minute] = String(value).split(":").map(Number);
+  return hour * 60 + minute;
+}
+
+function getLocalMinutesForTimeZone(date, timeZone) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  }).formatToParts(date);
+  const hour = Number(parts.find((part) => part.type === "hour")?.value ?? 0) % 24;
+  const minute = Number(parts.find((part) => part.type === "minute")?.value ?? 0);
+  return hour * 60 + minute;
+}
+
+function isWithinNightWindow(date, schedule) {
+  if (!schedule.enabled) return false;
+  const nowMinutes = getLocalMinutesForTimeZone(date, schedule.timeZone);
+  const startMinutes = clockTimeToMinutes(schedule.start);
+  const endMinutes = clockTimeToMinutes(schedule.end);
+  if (startMinutes === endMinutes) return false;
+  if (startMinutes < endMinutes) return nowMinutes >= startMinutes && nowMinutes < endMinutes;
+  return nowMinutes >= startMinutes || nowMinutes < endMinutes;
+}
+
+function normalizeHifiVisualPresetId(value, fallback = DEFAULT_HIFI_VISUAL_PRESET_ID) {
+  const id = String(value ?? "").trim();
+  return HIFI_VISUAL_PRESETS.has(id) ? id : fallback;
+}
+
+function getHifiEqPreset(id = DEFAULT_HIFI_EQ_PRESET_ID) {
+  return HIFI_EQ_PRESETS.find((preset) => preset.id === id) ?? HIFI_EQ_PRESETS[0];
+}
+
+function normalizeHifiEqPresetId(value, fallback = DEFAULT_HIFI_EQ_PRESET_ID) {
+  const id = String(value ?? "").trim();
+  return HIFI_EQ_PRESET_IDS.has(id) ? id : fallback;
+}
+
+function getHifiEqPresetIdForVisualPresetId(value, fallback = DEFAULT_HIFI_EQ_PRESET_ID) {
+  const visualPresetId = normalizeHifiVisualPresetId(value, "");
+  return HIFI_EQ_PRESETS.find((preset) => preset.hifiVisualPresetId === visualPresetId)?.id ?? fallback;
+}
+
+function buildHifiEqPatch(action = {}, fallbackEqPresetId = DEFAULT_HIFI_EQ_PRESET_ID) {
+  const visualFallback = getHifiEqPresetIdForVisualPresetId(action.hifiVisualPresetId, fallbackEqPresetId);
+  const hifiEqPresetId = normalizeHifiEqPresetId(action.hifiEqPresetId, visualFallback);
+  const preset = getHifiEqPreset(hifiEqPresetId);
+  return {
+    hifiEqPresetId: preset.id,
+    hifiVisualPresetId: preset.hifiVisualPresetId
+  };
+}
+
+function buildDspState(experience, { enabled, controllable, controlTransport }) {
+  const preset = getHifiEqPreset(experience.hifiEqPresetId);
+  return {
+    enabled,
+    preset: preset.label,
+    presetId: preset.id,
+    presetLabel: preset.label,
+    controllable,
+    controlTransport,
+    availablePresets: HIFI_EQ_PRESETS
+  };
+}
+
+function normalizeNightSchedule(raw = {}, fallback = DEFAULT_NIGHT_SCHEDULE) {
+  return {
+    enabled: raw?.enabled === undefined ? fallback.enabled : raw.enabled !== false,
+    timeZone: normalizeTimeZone(raw?.timeZone) ?? fallback.timeZone,
+    start: normalizeClockTime(raw?.start, fallback.start),
+    end: normalizeClockTime(raw?.end, fallback.end),
+    brightnessPercent: clampPercent(raw?.brightnessPercent, fallback.brightnessPercent),
+    active: raw?.active === true,
+    preNightBrightnessPercent: Number.isFinite(Number(raw?.preNightBrightnessPercent))
+      ? clampPercent(raw.preNightBrightnessPercent, fallback.preNightBrightnessPercent ?? 50)
+      : null
+  };
+}
+
+function normalizeRoomMode(value) {
+  const mode = String(value ?? "").trim().toLowerCase();
+  if (ROOM_MODES.has(mode)) return mode;
+  return "calm";
+}
+
+function normalizeRoomSessionPhase(value) {
+  const phase = String(value ?? "").trim();
+  return ROOM_SESSION_PHASES.has(phase) ? phase : "idle";
+}
+
+function normalizeTimerMinutes(value, fallback) {
+  if (value === null) return null;
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.max(5, Math.min(180, Math.round(numeric)));
+}
+
+function normalizeTimerEndsAt(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return null;
+  return date.toISOString();
+}
+
+function buildTimerEndsAt(timerMinutes, now = new Date()) {
+  if (typeof timerMinutes !== "number") return null;
+  return new Date(now.getTime() + timerMinutes * 60_000).toISOString();
+}
+
+function buildDefaultRoomExperienceState(mode = "calm") {
+  const normalizedMode = normalizeRoomMode(mode);
+  const preset = ROOM_MODE_PRESETS[normalizedMode];
+  return {
+    mode: normalizedMode,
+    phase: "idle",
+    presetId: preset.presetId,
+    sceneVideoId: preset.sceneVideoId,
+    ...buildHifiEqPatch({ hifiEqPresetId: preset.hifiEqPresetId }, preset.hifiEqPresetId),
+    sceneSoundEnabled: preset.sceneSoundEnabled,
+    playlistId: preset.playlistId,
+    volumePercent: preset.volumePercent,
+    brightnessPercent: preset.brightnessPercent,
+    timerMinutes: preset.timerMinutes,
+    timerEndsAt: null,
+    nightSchedule: { ...DEFAULT_NIGHT_SCHEDULE },
+    updatedAt: new Date().toISOString()
+  };
+}
+
+function normalizeRoomExperienceState(raw) {
+  const base = buildDefaultRoomExperienceState(raw?.mode);
+  const preset = ROOM_MODE_PRESETS[base.mode];
+  const timerMinutes = normalizeTimerMinutes(raw?.timerMinutes, preset.timerMinutes);
+  const hifiEqPatch = buildHifiEqPatch(raw, preset.hifiEqPresetId);
+  return {
+    ...base,
+    phase: normalizeRoomSessionPhase(raw?.phase),
+    presetId: String(raw?.presetId ?? preset.presetId).trim() || preset.presetId,
+    sceneVideoId: String(raw?.sceneVideoId ?? preset.sceneVideoId).trim() || preset.sceneVideoId,
+    ...hifiEqPatch,
+    sceneSoundEnabled: raw?.sceneSoundEnabled === true,
+    playlistId: raw?.playlistId === null || raw?.playlistId === undefined ? null : String(raw.playlistId).trim() || null,
+    volumePercent: clampPercent(raw?.volumePercent, preset.volumePercent),
+    brightnessPercent: clampPercent(raw?.brightnessPercent, preset.brightnessPercent),
+    timerMinutes,
+    timerEndsAt: normalizeTimerEndsAt(raw?.timerEndsAt),
+    nightSchedule: normalizeNightSchedule(raw?.nightSchedule, DEFAULT_NIGHT_SCHEDULE),
+    updatedAt: String(raw?.updatedAt ?? base.updatedAt)
+  };
 }
 
 function buildQueueEntrySummary({ id, position, title, artist, album, durationSeconds, active }) {
@@ -855,6 +1123,28 @@ async function commandSucceeds(command, options = {}) {
   } catch {
     return false;
   }
+}
+
+function shellQuote(value) {
+  return `'${String(value).replaceAll("'", "'\\''")}'`;
+}
+
+function expandHifiEqCommand(command, preset) {
+  return command
+    .replaceAll("%PRESET%", shellQuote(preset.id))
+    .replaceAll("%LABEL%", shellQuote(preset.label))
+    .replaceAll("%VISUAL%", shellQuote(preset.hifiVisualPresetId));
+}
+
+async function applyHifiEqPreset(presetId) {
+  const preset = getHifiEqPreset(presetId);
+  if (API_MODE !== "mpc") {
+    return;
+  }
+  if (!HIFI_EQ_APPLY_COMMAND.trim()) {
+    throw new Error("TIKPAL_HIFI_EQ_APPLY_COMMAND is required before Hi-Fi EQ can be controlled in mpc mode");
+  }
+  await runCommand(expandHifiEqCommand(HIFI_EQ_APPLY_COMMAND, preset), { allowFailure: false, timeout: 8000 });
 }
 
 async function runMpc(args, options = {}) {
@@ -1479,10 +1769,12 @@ async function getUptimeSnapshot() {
 async function getDspSnapshot() {
   const activeRaw = await runCommand("systemctl is-active camilladsp 2>/dev/null || true", { allowFailure: true });
   const enabled = activeRaw === "active";
-  return {
+  const experience = await readRoomExperienceState();
+  return buildDspState(experience, {
     enabled,
-    preset: enabled ? DSP_PRESET : "Inactive"
-  };
+    controllable: Boolean(HIFI_EQ_APPLY_COMMAND.trim()),
+    controlTransport: HIFI_EQ_APPLY_COMMAND.trim() ? "command" : "unavailable"
+  });
 }
 
 function ddcutilArgs(args) {
@@ -1931,6 +2223,105 @@ async function writeMusicLibraryState(state) {
   return normalized;
 }
 
+async function readRoomExperienceState() {
+  try {
+    return normalizeRoomExperienceState(JSON.parse(await readFile(ROOM_EXPERIENCE_STATE_PATH, "utf8")));
+  } catch {
+    return buildDefaultRoomExperienceState("calm");
+  }
+}
+
+async function writeRoomExperienceState(state) {
+  const normalized = normalizeRoomExperienceState({
+    ...state,
+    updatedAt: new Date().toISOString()
+  });
+  await mkdir(dirname(ROOM_EXPERIENCE_STATE_PATH), { recursive: true });
+  await writeFile(ROOM_EXPERIENCE_STATE_PATH, `${JSON.stringify(normalized, null, 2)}\n`);
+  return normalized;
+}
+
+async function applyBrightnessSafely(percent) {
+  try {
+    await applySystemAction({ type: "brightness_set", value: percent });
+  } catch {
+    // Night mode remains visible in state even when the display cannot be controlled.
+  }
+}
+
+async function stopSceneSourceSafely() {
+  try {
+    const state = await getTikpalState({ skipExperienceReconcile: true });
+    if (state.audio.currentSource.id === "scene") {
+      await applySourceSwitch({ target: "mpd" });
+    }
+  } catch {
+    // The browser-side video is muted by state; the next playback refresh will reconcile the source.
+  }
+}
+
+async function reconcileRoomExperienceState(state) {
+  const now = new Date();
+  let next = normalizeRoomExperienceState(state);
+  let changed = false;
+  let shouldStopScene = false;
+
+  if (next.timerEndsAt && new Date(next.timerEndsAt).getTime() <= now.getTime()) {
+    shouldStopScene = next.sceneSoundEnabled;
+    next = {
+      ...next,
+      phase: "windDown",
+      sceneSoundEnabled: false,
+      timerEndsAt: null,
+      nightSchedule: {
+        ...next.nightSchedule,
+        active: true,
+        preNightBrightnessPercent: next.nightSchedule.preNightBrightnessPercent ?? system.display.brightnessPercent
+      }
+    };
+    await applyBrightnessSafely(next.nightSchedule.brightnessPercent);
+    changed = true;
+  }
+
+  const inNightWindow = isWithinNightWindow(now, next.nightSchedule);
+  if (next.nightSchedule.enabled && inNightWindow && !next.nightSchedule.active) {
+    next = {
+      ...next,
+      nightSchedule: {
+        ...next.nightSchedule,
+        active: true,
+        preNightBrightnessPercent: system.display.brightnessPercent
+      }
+    };
+    await applyBrightnessSafely(next.nightSchedule.brightnessPercent);
+    changed = true;
+  } else if ((!next.nightSchedule.enabled || !inNightWindow) && next.nightSchedule.active && next.phase !== "windDown") {
+    const restorePercent = next.nightSchedule.preNightBrightnessPercent;
+    next = {
+      ...next,
+      nightSchedule: {
+        ...next.nightSchedule,
+        active: false,
+        preNightBrightnessPercent: null
+      }
+    };
+    if (Number.isFinite(restorePercent)) {
+      await applyBrightnessSafely(restorePercent);
+    }
+    changed = true;
+  }
+
+  if (shouldStopScene) {
+    await stopSceneSourceSafely();
+  }
+
+  return changed ? await writeRoomExperienceState(next) : next;
+}
+
+async function getRoomExperienceState() {
+  return await reconcileRoomExperienceState(await readRoomExperienceState());
+}
+
 function isFavoriteTrackPath(trackPath, state = readMusicLibraryStateSync()) {
   const safePath = normalizeSafeRelativePath(trackPath);
   return Boolean(safePath && state.favorites.trackPaths.includes(safePath));
@@ -2038,6 +2429,19 @@ function sortAmbientBackgroundVideos(first, second) {
   return first.filename.localeCompare(second.filename);
 }
 
+function normalizeSceneVideoRoomModes(value) {
+  if (!Array.isArray(value)) return [];
+
+  const modes = [];
+  for (const entry of value) {
+    const mode = String(entry ?? "").trim().toLowerCase();
+    if (mode === "hifi" || !ROOM_MODES.has(mode) || modes.includes(mode)) continue;
+    modes.push(mode);
+  }
+
+  return modes;
+}
+
 async function readSceneBackgroundVideos() {
   let manifest;
   try {
@@ -2064,6 +2468,7 @@ async function readSceneBackgroundVideos() {
     }
 
     const id = String(video.id ?? "").trim() || basename(filename, extname(filename));
+    const roomModes = normalizeSceneVideoRoomModes(video.roomModes);
     videos.push({
       id,
       filename,
@@ -2071,6 +2476,7 @@ async function readSceneBackgroundVideos() {
       src: `/assets/scenes/${encodeAssetRelativePath(filename)}`,
       ...(Number.isFinite(Number(video.order)) ? { order: Number(video.order) } : {}),
       ...(video.default === true ? { default: true } : {}),
+      ...(roomModes.length > 0 ? { roomModes } : {}),
       source: "scene"
     });
   }
@@ -2104,7 +2510,7 @@ async function getAmbientBackgroundVideosPayload() {
   const sceneVideos = await readSceneBackgroundVideos();
   const videos = [...legacyVideos, ...sceneVideos].sort(sortAmbientBackgroundVideos);
   const catalogVersion = createHash("sha1")
-    .update(videos.map((video) => `${video.id}:${video.src}:${video.label}:${video.order ?? ""}:${video.default ? "1" : "0"}`).join("|"))
+    .update(videos.map((video) => `${video.id}:${video.src}:${video.label}:${video.order ?? ""}:${video.default ? "1" : "0"}:${(video.roomModes ?? []).join(",")}`).join("|"))
     .digest("hex")
     .slice(0, 12);
 
@@ -3490,11 +3896,17 @@ function getMockAudioSnapshot() {
 }
 
 async function getMockSystemSnapshot() {
+  const experience = await readRoomExperienceState();
   return {
     ...system,
     display: {
       ...system.display
     },
+    dspState: buildDspState(experience, {
+      enabled: true,
+      controllable: true,
+      controlTransport: "mock"
+    }),
     library: {
       ...system.library,
       scanning: Date.now() - lastMockLibraryScanAt < 2000
@@ -3502,7 +3914,11 @@ async function getMockSystemSnapshot() {
   };
 }
 
-async function getTikpalState() {
+async function getTikpalState(options = {}) {
+  if (!options.skipExperienceReconcile) {
+    await reconcileRoomExperienceState(await readRoomExperienceState());
+  }
+
   const snapshot = API_MODE === "mpc"
     ? await getMpcSnapshot()
     : {
@@ -3538,6 +3954,62 @@ async function getAudioSourcesPayload() {
     sources: state.audio.sources,
     updatedAt: state.runtime.updatedAt
   };
+}
+
+function normalizeSpectrumBands(value) {
+  const bands = Array.isArray(value) ? value.slice(0, 32).map((band) => {
+    const numeric = Number(band);
+    return Number.isFinite(numeric) ? Math.max(0, Math.min(1, numeric)) : 0;
+  }) : [];
+  while (bands.length < 32) {
+    bands.push(0);
+  }
+  return bands;
+}
+
+function normalizeAudioSpectrumFrame(raw, source) {
+  const bands = normalizeSpectrumBands(raw?.bands ?? raw);
+  const peaks = raw?.peaks ?? {};
+  const left = Number(peaks.left ?? raw?.leftPeak ?? raw?.peakLeft ?? bands[8] ?? 0);
+  const right = Number(peaks.right ?? raw?.rightPeak ?? raw?.peakRight ?? bands[23] ?? 0);
+  return {
+    bands,
+    peaks: {
+      left: Number.isFinite(left) ? Math.max(0, Math.min(1, left)) : 0,
+      right: Number.isFinite(right) ? Math.max(0, Math.min(1, right)) : 0
+    },
+    source,
+    bandCount: 32,
+    updatedAt: new Date().toISOString()
+  };
+}
+
+async function buildMockAudioSpectrumFrame() {
+  const experience = await readRoomExperienceState();
+  const preset = getHifiEqPreset(experience.hifiEqPresetId);
+  const now = Date.now() / 1000;
+  const volumeGain = 0.42 + Math.max(0, Math.min(1, system.volume.percent / 100)) * 0.42;
+  const bands = Array.from({ length: 32 }, (_, index) => {
+    const position = index / 31;
+    const wave = (Math.sin(now * 2.1 + index * 0.47) + Math.cos(now * 1.4 + index * 0.23) + 2) / 4;
+    const eqShape = preset.id === "warm"
+      ? 1.14 - position * 0.24
+      : preset.id === "vocal"
+        ? 0.82 + Math.exp(-Math.pow((position - 0.56) / 0.24, 2)) * 0.42
+        : 0.92 + position * 0.08;
+    return Math.max(0, Math.min(1, (0.18 + wave * 0.72) * eqShape * volumeGain));
+  });
+  const left = Math.max(...bands.slice(0, 16));
+  const right = Math.max(...bands.slice(16));
+  return normalizeAudioSpectrumFrame({ bands, peaks: { left, right } }, "mock");
+}
+
+async function getAudioSpectrumFrame() {
+  if (HIFI_SPECTRUM_COMMAND.trim()) {
+    const raw = await runCommand(HIFI_SPECTRUM_COMMAND, { allowFailure: false, timeout: 3000 });
+    return normalizeAudioSpectrumFrame(JSON.parse(raw), "command");
+  }
+  return await buildMockAudioSpectrumFrame();
 }
 
 function sendJson(response, status, body) {
@@ -5183,6 +5655,194 @@ async function applySourceSwitch(action) {
   await applyMockSourceSwitch(action);
 }
 
+function getRoomModePreset(mode) {
+  return ROOM_MODE_PRESETS[normalizeRoomMode(mode)];
+}
+
+function getRoomModeFromPresetId(presetId, fallbackMode) {
+  const normalizedPresetId = String(presetId ?? "").trim();
+  const found = Object.entries(ROOM_MODE_PRESETS).find(([, preset]) => preset.presetId === normalizedPresetId);
+  return found?.[0] ?? normalizeRoomMode(fallbackMode);
+}
+
+async function applyRoomExperienceSideEffects(experience, { applyScene = false, applyLevels = true } = {}) {
+  if (applyLevels) {
+    try {
+      const volumeAction = { type: "volume_set", value: experience.volumePercent };
+      if (API_MODE === "mpc") {
+        await applyMpcPlaybackAction(volumeAction);
+      } else {
+        await applyPlaybackAction(volumeAction);
+      }
+    } catch {
+      // Room mode remains useful even when the current audio backend rejects volume changes.
+    }
+
+    try {
+      await applySystemAction({ type: "brightness_set", value: experience.brightnessPercent });
+    } catch {
+      // Some target displays do not expose DDC/CI brightness control.
+    }
+  }
+
+  if (applyScene && experience.sceneSoundEnabled) {
+    const preset = getRoomModePreset(experience.mode);
+    await applySourceSwitch({
+      target: "scene",
+      sceneVideoId: experience.sceneVideoId,
+      sceneVideoLabel: preset.sceneVideoLabel,
+      sceneVideoSrc: preset.sceneVideoSrc
+    });
+  }
+}
+
+async function applyRoomExperienceAction(action) {
+  const current = await readRoomExperienceState();
+  const type = String(action?.type ?? "");
+  let next = current;
+  let applyScene = false;
+  let applyLevels = true;
+  let stopScene = false;
+
+  switch (type) {
+    case "set_mode": {
+      const mode = normalizeRoomMode(action.mode);
+      const preset = getRoomModePreset(mode);
+      const timerMinutes = normalizeTimerMinutes(action.timerMinutes, preset.timerMinutes);
+      const hifiEqPatch = buildHifiEqPatch(action, current.hifiEqPresetId ?? preset.hifiEqPresetId);
+      next = {
+        ...current,
+        mode,
+        phase: "idle",
+        presetId: preset.presetId,
+        sceneVideoId: preset.sceneVideoId,
+        ...hifiEqPatch,
+        sceneSoundEnabled: mode === "hifi" ? false : action.sceneSoundEnabled === true ? true : preset.sceneSoundEnabled,
+        playlistId: action.playlistId === undefined ? preset.playlistId : action.playlistId,
+        volumePercent: clampPercent(action.volumePercent, preset.volumePercent),
+        brightnessPercent: clampPercent(action.brightnessPercent, preset.brightnessPercent),
+        timerMinutes,
+        timerEndsAt: null
+      };
+      applyScene = mode !== "hifi";
+      applyLevels = mode !== "hifi";
+      stopScene = mode === "hifi";
+      break;
+    }
+    case "apply_preset": {
+      const mode = getRoomModeFromPresetId(action.presetId, action.mode ?? current.mode);
+      const preset = getRoomModePreset(mode);
+      const timerMinutes = normalizeTimerMinutes(action.timerMinutes, preset.timerMinutes);
+      const hifiEqPatch = buildHifiEqPatch(action, current.hifiEqPresetId ?? preset.hifiEqPresetId);
+      next = {
+        ...current,
+        mode,
+        phase: "preparing",
+        presetId: preset.presetId,
+        sceneVideoId: String(action.sceneVideoId ?? preset.sceneVideoId).trim() || preset.sceneVideoId,
+        ...hifiEqPatch,
+        sceneSoundEnabled: mode === "hifi" ? false : action.sceneSoundEnabled === true ? true : preset.sceneSoundEnabled,
+        playlistId: action.playlistId === undefined ? preset.playlistId : action.playlistId,
+        volumePercent: clampPercent(action.volumePercent, preset.volumePercent),
+        brightnessPercent: clampPercent(action.brightnessPercent, preset.brightnessPercent),
+        timerMinutes,
+        timerEndsAt: null
+      };
+      applyScene = mode !== "hifi";
+      applyLevels = mode !== "hifi";
+      stopScene = mode === "hifi";
+      break;
+    }
+    case "start_session": {
+      const mode = normalizeRoomMode(action.mode ?? current.mode);
+      const preset = getRoomModePreset(mode);
+      const timerMinutes = normalizeTimerMinutes(action.timerMinutes, current.timerMinutes);
+      const hifiEqPatch = buildHifiEqPatch(action, current.hifiEqPresetId ?? preset.hifiEqPresetId);
+      next = {
+        ...current,
+        mode,
+        phase: "active",
+        presetId: preset.presetId,
+        sceneVideoId: String(action.sceneVideoId ?? current.sceneVideoId ?? preset.sceneVideoId).trim() || preset.sceneVideoId,
+        ...hifiEqPatch,
+        sceneSoundEnabled: mode === "hifi" ? false : action.sceneSoundEnabled === undefined ? current.sceneSoundEnabled : action.sceneSoundEnabled === true,
+        playlistId: action.playlistId === undefined ? current.playlistId : action.playlistId,
+        volumePercent: clampPercent(action.volumePercent, current.volumePercent),
+        brightnessPercent: clampPercent(action.brightnessPercent, current.brightnessPercent),
+        timerMinutes,
+        timerEndsAt: buildTimerEndsAt(timerMinutes)
+      };
+      applyScene = mode !== "hifi";
+      applyLevels = mode !== "hifi";
+      stopScene = mode === "hifi";
+      break;
+    }
+    case "stop_session":
+      next = {
+        ...current,
+        phase: "idle",
+        sceneSoundEnabled: false,
+        timerEndsAt: null
+      };
+      stopScene = true;
+      break;
+    case "update_timer": {
+      const timerMinutes = normalizeTimerMinutes(action.timerMinutes, current.timerMinutes);
+      next = {
+        ...current,
+        timerMinutes,
+        timerEndsAt: normalizeTimerEndsAt(action.timerEndsAt)
+      };
+      break;
+    }
+    case "set_hifi_eq": {
+      const hifiEqPatch = buildHifiEqPatch(action, current.hifiEqPresetId);
+      await applyHifiEqPreset(hifiEqPatch.hifiEqPresetId);
+      next = {
+        ...current,
+        ...hifiEqPatch
+      };
+      applyLevels = false;
+      break;
+    }
+    case "set_hifi_visual": {
+      const hifiEqPatch = buildHifiEqPatch(action, current.hifiEqPresetId);
+      await applyHifiEqPreset(hifiEqPatch.hifiEqPresetId);
+      next = {
+        ...current,
+        ...hifiEqPatch
+      };
+      applyLevels = false;
+      break;
+    }
+    case "update_night_schedule": {
+      const patch = action.nightSchedule ?? {};
+      const merged = {
+        ...current.nightSchedule,
+        ...patch,
+        ...(patch.timeZone !== undefined ? { timeZone: assertValidTimeZone(patch.timeZone) } : {})
+      };
+      next = {
+        ...current,
+        nightSchedule: normalizeNightSchedule(merged, current.nightSchedule)
+      };
+      applyLevels = false;
+      break;
+    }
+    default:
+      throw new Error(`Unsupported experience action: ${type}`);
+  }
+
+  const saved = await writeRoomExperienceState(next);
+  await applyRoomExperienceSideEffects(saved, { applyScene, applyLevels });
+
+  if (stopScene) {
+    await stopSceneSourceSafely();
+  }
+
+  return await getRoomExperienceState();
+}
+
 const server = http.createServer(async (request, response) => {
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? `${HOST}:${PORT}`}`);
 
@@ -5199,6 +5859,11 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "GET" && url.pathname === "/api/v1/system/state") {
       sendJson(response, 200, await getTikpalState());
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/v1/experience/state") {
+      sendJson(response, 200, await getRoomExperienceState());
       return;
     }
 
@@ -5224,6 +5889,11 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "GET" && url.pathname === "/api/v1/audio/sources") {
       sendJson(response, 200, await getAudioSourcesPayload());
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/v1/audio/spectrum") {
+      sendJson(response, 200, await getAudioSpectrumFrame());
       return;
     }
 
@@ -5315,6 +5985,11 @@ const server = http.createServer(async (request, response) => {
       const action = await readJson(request);
       await applySystemAction(action);
       sendJson(response, 200, await getTikpalState());
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/v1/experience/actions") {
+      sendJson(response, 200, await applyRoomExperienceAction(await readJson(request)));
       return;
     }
 

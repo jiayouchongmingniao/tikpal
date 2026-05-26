@@ -30,8 +30,10 @@ import {
   X
 } from "lucide-react";
 import { createAudioPlaylist, fetchAudioLibrary, fetchAudioPlaylists, sendAudioPlaylistAction } from "../api/tikpalClient";
+import { hifiEqPresets } from "../hifiVisualPresets";
 import type { TikpalDataStatus } from "../hooks/useTikpalState";
 import { formatDuration } from "../mockState";
+import { getRoomModeIntent, getRoomModeLabel, roomModeOptions } from "../roomExperienceTruth";
 import { useOverlayReturnGesture } from "../hooks/useOverlayReturnGesture";
 import type {
   AudioLibraryTrackSummary,
@@ -39,7 +41,10 @@ import type {
   AudioPlaylistCoverType,
   AudioPlaylistSummary,
   AudioPlaylistTrackSummary,
-  PlaybackSummary
+  PlaybackSummary,
+  RoomExperienceActionRequest,
+  RoomExperienceState,
+  RoomMode
 } from "../types";
 
 type PlaylistPageMode =
@@ -117,7 +122,9 @@ type PlaylistUiAction =
 interface PlaylistOverlayProps {
   active: boolean;
   playback: PlaybackSummary;
+  roomExperience: RoomExperienceState;
   status: TikpalDataStatus;
+  onExperienceAction: (action: RoomExperienceActionRequest) => Promise<RoomExperienceState>;
   onPlaybackRefresh: () => Promise<void>;
   onReturnAmbient: () => void;
 }
@@ -351,6 +358,14 @@ function playlistMatchesQuery(playlist: AudioPlaylistSummary, query: string) {
   ].some((value) => value.toLowerCase().includes(normalized));
 }
 
+function playlistMatchesRoomMode(playlist: AudioPlaylistSummary, mode: RoomMode) {
+  const tags = playlist.moodTags.map((tag) => tag.toLowerCase());
+  if (mode === "focus") return tags.some((tag) => ["focus", "flow", "reading", "morning"].includes(tag));
+  if (mode === "calm") return tags.some((tag) => ["calm", "meditation", "fireplace"].includes(tag));
+  if (mode === "hifi") return tags.some((tag) => ["hifi", "focus", "flow", "reading"].includes(tag));
+  return tags.some((tag) => ["sleep", "rest"].includes(tag));
+}
+
 function buildQueueTracks(playback: PlaybackSummary, libraryTracks: AudioLibraryTrackSummary[]): AudioLibraryTrackSummary[] {
   return playback.queuePreview.map((entry) => {
     const matchedLocalTrack = libraryTracks.find((track) => (
@@ -384,7 +399,9 @@ function buildQueueTracks(playback: PlaybackSummary, libraryTracks: AudioLibrary
 export function PlaylistOverlay({
   active,
   playback,
+  roomExperience,
   status,
+  onExperienceAction,
   onPlaybackRefresh,
   onReturnAmbient
 }: PlaylistOverlayProps) {
@@ -428,13 +445,20 @@ export function PlaylistOverlay({
     playlists.filter((playlist) => playlistMatchesQuery(playlist, ui.searchQuery))
   ), [playlists, ui.searchQuery]);
 
+  const roomModePlaylists = filteredPlaylists.filter((playlist) => playlist.source === "curated" && playlistMatchesRoomMode(playlist, roomExperience.mode));
+  const roomModePlaylistIds = new Set(roomModePlaylists.map((playlist) => playlist.id));
   const myPlaylists = filteredPlaylists.filter((playlist) => playlist.source === "user");
   const scenePlaylists = filteredPlaylists.filter((playlist) => (
     playlist.source === "curated"
+    && !roomModePlaylistIds.has(playlist.id)
     && playlist.moodTags.some((tag) => ["Fireplace", "Calm", "Sleep"].includes(tag))
   ));
   const scenePlaylistIds = new Set(scenePlaylists.map((playlist) => playlist.id));
-  const curatedPlaylists = filteredPlaylists.filter((playlist) => playlist.source === "curated" && !scenePlaylistIds.has(playlist.id));
+  const curatedPlaylists = filteredPlaylists.filter((playlist) => (
+    playlist.source === "curated"
+    && !scenePlaylistIds.has(playlist.id)
+    && !roomModePlaylistIds.has(playlist.id)
+  ));
 
   const favoriteTracks = useMemo(() => libraryTracks.filter((track) => track.favorite && track.path), [libraryTracks]);
   const localTracks = useMemo(() => libraryTracks.filter((track) => track.storage === "local" && track.path), [libraryTracks]);
@@ -926,6 +950,49 @@ export function PlaylistOverlay({
           <b>{items.length}</b>
         </div>
         {items.map(renderPlaylistCard)}
+      </section>
+    );
+  }
+
+  function renderRoomRituals() {
+    const activeModeLabel = getRoomModeLabel(roomExperience.mode);
+    return (
+      <section className="playlist-room-rituals" data-room-mode={roomExperience.mode} aria-label="Scene Library and Ritual Builder">
+        <div className="playlist-group-title">
+          <span>Scene Library / Ritual Builder</span>
+          <b>{activeModeLabel}</b>
+        </div>
+        <div className="playlist-room-mode-grid" role="group" aria-label="Choose ritual mode">
+          {roomModeOptions.map((option) => (
+            <button
+              className={roomExperience.mode === option.mode ? "is-active" : ""}
+              key={option.mode}
+              type="button"
+              aria-pressed={roomExperience.mode === option.mode}
+              onClick={() => void onExperienceAction({ type: "set_mode", mode: option.mode })}
+            >
+              <strong>{option.label}</strong>
+              <span>{option.intent}</span>
+              <em>{option.description}</em>
+            </button>
+          ))}
+        </div>
+        {roomExperience.mode === "hifi" ? (
+          <div className="playlist-hifi-eq-grid" role="group" aria-label="Choose Hi-Fi EQ preset">
+            {hifiEqPresets.map((preset) => (
+              <button
+                className={roomExperience.hifiEqPresetId === preset.id ? "is-active" : ""}
+                key={preset.id}
+                type="button"
+                aria-pressed={roomExperience.hifiEqPresetId === preset.id}
+                onClick={() => void onExperienceAction({ type: "set_hifi_eq", hifiEqPresetId: preset.id })}
+              >
+                <strong>{preset.label}</strong>
+                <span>{preset.intent}</span>
+              </button>
+            ))}
+          </div>
+        ) : null}
       </section>
     );
   }
@@ -1468,8 +1535,9 @@ export function PlaylistOverlay({
       <div className="playlist-shell" role="dialog" aria-modal="true" data-gesture-protected data-playlist-page {...overlayReturnGesture}>
         <header className="playlist-page-header">
           <div>
-            <span className="source-panel-kicker">Playlist Hub</span>
-            <strong>Music Lists</strong>
+            <span className="source-panel-kicker">Scene Library</span>
+            <strong>Ritual Builder</strong>
+            <p>{getRoomModeLabel(roomExperience.mode)} - {getRoomModeIntent(roomExperience.mode)}</p>
           </div>
           <label className="playlist-search-field">
             <Search size={19} aria-hidden="true" />
@@ -1552,6 +1620,8 @@ export function PlaylistOverlay({
                   </article>
                 </section>
               ) : null}
+              {renderRoomRituals()}
+              {renderPlaylistGroup(`${getRoomModeLabel(roomExperience.mode)} Rituals`, roomModePlaylists)}
               {renderPlaylistGroup("My Playlists", myPlaylists)}
               {renderPlaylistGroup("Scene Playlists", scenePlaylists)}
               {renderPlaylistGroup("Curated", curatedPlaylists)}

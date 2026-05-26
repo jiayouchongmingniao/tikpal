@@ -1,4 +1,5 @@
 import { Clock, Video, Volume2, VolumeX } from "lucide-react";
+import type { RoomMode } from "../types";
 
 interface QuickMenuProps {
   active: boolean;
@@ -6,6 +7,7 @@ interface QuickMenuProps {
   clockVisible: boolean;
   sceneSoundEnabled: boolean;
   sceneSoundPending: boolean;
+  roomMode: RoomMode;
   onSceneVideoEnabledChange: (enabled: boolean) => void;
   onClockVisibleChange: (visible: boolean) => void;
   onSceneSoundEnabledChange: (enabled: boolean) => void;
@@ -18,11 +20,14 @@ export function QuickMenu({
   clockVisible,
   sceneSoundEnabled,
   sceneSoundPending,
+  roomMode,
   onSceneVideoEnabledChange,
   onClockVisibleChange,
   onSceneSoundEnabledChange,
   onClose
 }: QuickMenuProps) {
+  const hifiMode = roomMode === "hifi";
+
   return (
     <section className={`quick-menu ${active ? "is-active" : ""}`} aria-label="Quick menu" aria-hidden={!active}>
       <button className="overlay-backdrop" type="button" tabIndex={active ? 0 : -1} aria-label="Close quick menu" onClick={onClose} />
@@ -32,11 +37,12 @@ export function QuickMenu({
           type="button"
           aria-pressed={sceneVideoEnabled}
           data-quick-menu-toggle="scene-video"
+          disabled={hifiMode}
           onClick={() => onSceneVideoEnabledChange(!sceneVideoEnabled)}
         >
           <Video size={26} />
           <strong>Scene Video</strong>
-          <span>{sceneVideoEnabled ? "On" : "Off"}</span>
+          <span>{hifiMode ? "EQ" : sceneVideoEnabled ? "On" : "Off"}</span>
         </button>
         <button
           className={`quick-menu-toggle ${clockVisible ? "is-on" : "is-off"}`}
@@ -54,12 +60,12 @@ export function QuickMenu({
           type="button"
           aria-pressed={sceneSoundEnabled}
           data-quick-menu-toggle="scene-sound"
-          disabled={sceneSoundPending}
+          disabled={sceneSoundPending || hifiMode}
           onClick={() => onSceneSoundEnabledChange(!sceneSoundEnabled)}
         >
           {sceneSoundEnabled ? <Volume2 size={26} /> : <VolumeX size={26} />}
           <strong>Scene Sound</strong>
-          <span>{sceneSoundPending ? "Syncing" : sceneSoundEnabled ? "On" : "Off"}</span>
+          <span>{hifiMode ? "Hi-Fi" : sceneSoundPending ? "Syncing" : sceneSoundEnabled ? "On" : "Off"}</span>
         </button>
       </div>
     </section>

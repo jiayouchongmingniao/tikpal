@@ -6,6 +6,9 @@
       "filename": "Aurora-Snowfield.mp4",
       "label": "Aurora Snowfield",
       "order": 100,
+      "roomModes": [
+        "sleep"
+      ],
       "sha256": "0ee49df64468346a786bfba2ffbe786a9c50f6e65d1fc37232c83912faf3fea9"
     },
     {
@@ -13,6 +16,9 @@
       "filename": "Cloud-Sunrise.mp4",
       "label": "Cloud Sunrise",
       "order": 110,
+      "roomModes": [
+        "focus"
+      ],
       "sha256": "77ab0e5ca766883cd7180bbaa06ee55a2d52587995e7c0f2c851085faaf252b8"
     },
     {
@@ -20,6 +26,9 @@
       "filename": "Deep-Blue-Ocean.mp4",
       "label": "Deep Blue Ocean",
       "order": 120,
+      "roomModes": [
+        "sleep"
+      ],
       "sha256": "e329ac800feb5d781b688d1a2f7bf66fef1f36db8c2820976fba84863a95e7a7"
     },
     {
@@ -27,6 +36,9 @@
       "filename": "Midnight-Library.mp4",
       "label": "Midnight Library",
       "order": 130,
+      "roomModes": [
+        "focus"
+      ],
       "sha256": "dd4bdb892cbf07c578a2175d85ec7e05cd0ee8e3d888e434a7dea683ef3f4e76"
     },
     {
@@ -34,6 +46,9 @@
       "filename": "Rainy-Window.mp4",
       "label": "Rainy Window",
       "order": 140,
+      "roomModes": [
+        "calm"
+      ],
       "sha256": "7e97424faa7e10077a68ac2ac0ba1a988c0b60e555ac045112e2dc84e3c08c08"
     },
     {
@@ -48,6 +63,9 @@
       "filename": "Warm-Fireplace.mp4",
       "label": "Warm Fireplace",
       "order": 160,
+      "roomModes": [
+        "calm"
+      ],
       "sha256": "9da00deaa70a938169a2e0584cdcc6e4c56076d4858c9558604a3029d3707fa5"
     },
     {
@@ -55,6 +73,9 @@
       "filename": "Zen-Courtyard.mp4",
       "label": "Zen Courtyard",
       "order": 170,
+      "roomModes": [
+        "calm"
+      ],
       "sha256": "2689a29a91f36b4dff77a013c3d90b4d7f75062f0b9516f113212c4342d59a55"
     }
   ]

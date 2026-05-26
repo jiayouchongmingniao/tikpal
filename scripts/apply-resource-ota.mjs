@@ -19,6 +19,7 @@ const AUDIO_EXTENSIONS = new Set([".aac", ".flac", ".m4a", ".mp3", ".ogg", ".wav
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".webp"]);
 const SCENE_VIDEO_EXTENSIONS = new Set([".mp4"]);
 const COVER_COLUMNS = ["cover_relative_path", "cover_path", "album_art_relative_path", "artwork_relative_path"];
+const SCENE_ROOM_MODES = new Set(["focus", "calm", "sleep"]);
 
 function usage() {
   return [
@@ -59,6 +60,17 @@ function parseArgs(argv) {
     ...options,
     packageDir: path.resolve(options.packageDir)
   };
+}
+
+function normalizeSceneRoomModes(value) {
+  if (!Array.isArray(value)) return [];
+  const modes = [];
+  for (const entry of value) {
+    const mode = String(entry ?? "").trim().toLowerCase();
+    if (!SCENE_ROOM_MODES.has(mode) || modes.includes(mode)) continue;
+    modes.push(mode);
+  }
+  return modes;
 }
 
 function isSafeRelativePath(value) {
@@ -191,12 +203,14 @@ async function validateSceneVideosManifest({ manifestPath, packageSceneRoot }) {
     if (isDefault) defaultCount += 1;
     ids.add(id);
     filenames.add(filename);
+    const roomModes = normalizeSceneRoomModes(video.roomModes);
     videos.push({
       id,
       filename,
       label: String(video.label ?? "").trim() || path.basename(filename, path.extname(filename)),
       order: normalizeSceneVideoOrder(video.order),
       default: isDefault,
+      roomModes,
       sha256: mp4.sha256,
       bytes: mp4.bytes,
       sourcePath
@@ -294,6 +308,7 @@ function toSceneManifestVideo(video) {
     label: video.label,
     ...(video.order !== null ? { order: video.order } : {}),
     ...(video.default ? { default: true } : {}),
+    ...(video.roomModes?.length ? { roomModes: video.roomModes } : {}),
     sha256: video.sha256
   };
 }
@@ -322,6 +337,7 @@ function mergeSceneManifests(installedManifest, scenePackage) {
       label: String(video.label ?? "").trim() || path.basename(filename, path.extname(filename)),
       ...(Number.isFinite(Number(video.order)) ? { order: Number(video.order) } : {}),
       ...(video.default === true ? { default: true } : {}),
+      ...(normalizeSceneRoomModes(video.roomModes).length ? { roomModes: normalizeSceneRoomModes(video.roomModes) } : {}),
       ...(typeof video.sha256 === "string" && video.sha256 ? { sha256: video.sha256 } : {})
     });
   }
@@ -523,6 +539,7 @@ async function run() {
         label: video.label,
         order: video.order,
         default: video.default,
+        roomModes: video.roomModes,
         bytes: video.bytes,
         sha256: video.sha256
       }))

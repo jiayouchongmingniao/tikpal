@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { Captions, Cpu, Database, EthernetPort, Eye, EyeOff, Info, Monitor, Palette, Power, RotateCcw, SlidersHorizontal, Type, Volume2 } from "lucide-react";
+import { Captions, Clock3, Cpu, Database, EthernetPort, Eye, EyeOff, Info, Monitor, Palette, Power, RotateCcw, SlidersHorizontal, Type, Volume2 } from "lucide-react";
 import type { TikpalDataStatus } from "../hooks/useTikpalState";
 import { useOverlayReturnGesture } from "../hooks/useOverlayReturnGesture";
-import type { FontTheme, LyricsFontSize, RuntimeState, SurfaceTheme, SystemActionType, SystemState } from "../types";
+import type { FontTheme, LyricsFontSize, NightScheduleState, RoomExperienceActionRequest, RoomExperienceState, RuntimeState, SurfaceTheme, SystemActionType, SystemState } from "../types";
 
 interface QuickSettingsOverlayProps {
   active: boolean;
@@ -13,10 +13,12 @@ interface QuickSettingsOverlayProps {
   surfaceTheme: SurfaceTheme;
   lyricsVisible: boolean;
   lyricsFontSize: LyricsFontSize;
+  roomExperience: RoomExperienceState;
   onFontThemeChange: (theme: FontTheme) => void;
   onSurfaceThemeChange: (theme: SurfaceTheme) => void;
   onLyricsVisibleChange: (visible: boolean) => void;
   onLyricsFontSizeChange: (size: LyricsFontSize) => void;
+  onExperienceAction: (action: RoomExperienceActionRequest) => Promise<RoomExperienceState>;
   onSystemAction: (type: SystemActionType, value?: number) => Promise<unknown>;
   onReturnAmbient: () => void;
 }
@@ -24,7 +26,7 @@ interface QuickSettingsOverlayProps {
 type CardTone = "cyan" | "gold" | "neutral" | "warn" | "danger";
 type ActionableCardKey = "library_scan" | "reboot" | "shutdown";
 type SettingsSectionKey = "network" | "output" | "system";
-type SettingsDetailView = "appearance" | "display" | "font" | "lyrics" | null;
+type SettingsDetailView = "appearance" | "display" | "font" | "lyrics" | "night" | null;
 
 interface BaseCard {
   key: string;
@@ -63,12 +65,19 @@ interface DisplayCard extends BaseCard {
   kind: "display";
 }
 
-type SettingsCard = ReadOnlyCard | ActionCard | FontCard | AppearanceCard | LyricsCard | DisplayCard;
+interface NightCard extends BaseCard {
+  kind: "night";
+}
+
+type SettingsCard = ReadOnlyCard | ActionCard | FontCard | AppearanceCard | LyricsCard | DisplayCard | NightCard;
 
 const fontChoices: Array<{ id: FontTheme; label: string; sample: string }> = [
+  { id: "system", label: "System Neo", sample: "Clean device UI" },
+  { id: "hardware", label: "Hardware UI", sample: "Modern equipment feel" },
+  { id: "precision", label: "Precision Mono", sample: "Technical but quiet" },
   { id: "sans", label: "Modern Sans", sample: "Balanced UI default" },
-  { id: "serif", label: "Editorial Serif", sample: "Warmer reading tone" },
-  { id: "mono", label: "Mono Grid", sample: "Sharper technical look" }
+  { id: "mono", label: "Mono Grid", sample: "Sharper technical look" },
+  { id: "serif", label: "Editorial Serif", sample: "Warmer reading tone" }
 ];
 
 const lyricsSizeChoices: Array<{ id: LyricsFontSize; label: string; sample: string }> = [
@@ -81,6 +90,17 @@ const surfaceThemeChoices: Array<{ id: SurfaceTheme; label: string; sample: stri
   { id: "warm-gold", label: "Warm Gold", sample: "Amber glass" },
   { id: "graphite-silver", label: "Graphite Silver", sample: "Hi-Fi graphite" },
   { id: "ivory-studio", label: "Ivory Studio", sample: "Soft studio" }
+];
+
+const timeZoneChoices = [
+  "Asia/Shanghai",
+  "America/Los_Angeles",
+  "America/New_York",
+  "Europe/London",
+  "Europe/Paris",
+  "Asia/Tokyo",
+  "Australia/Sydney",
+  "UTC"
 ];
 
 const sectionCopy: Record<SettingsSectionKey, { label: string; description: string }> = {
@@ -107,10 +127,12 @@ export function QuickSettingsOverlay({
   surfaceTheme,
   lyricsVisible,
   lyricsFontSize,
+  roomExperience,
   onFontThemeChange,
   onSurfaceThemeChange,
   onLyricsVisibleChange,
   onLyricsFontSizeChange,
+  onExperienceAction,
   onSystemAction,
   onReturnAmbient
 }: QuickSettingsOverlayProps) {
@@ -120,12 +142,14 @@ export function QuickSettingsOverlay({
   const [confirmAction, setConfirmAction] = useState<ActionableCardKey | null>(null);
   const [pendingAction, setPendingAction] = useState<ActionableCardKey | null>(null);
   const [pendingBrightness, setPendingBrightness] = useState<number | null>(null);
+  const [pendingNight, setPendingNight] = useState(false);
   const [actionError, setActionError] = useState<Record<ActionableCardKey, string | null>>({
     library_scan: null,
     reboot: null,
     shutdown: null
   });
   const [brightnessError, setBrightnessError] = useState<string | null>(null);
+  const [nightError, setNightError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!active) {
@@ -134,12 +158,14 @@ export function QuickSettingsOverlay({
       setConfirmAction(null);
       setPendingAction(null);
       setPendingBrightness(null);
+      setPendingNight(false);
       setActionError({
         library_scan: null,
         reboot: null,
         shutdown: null
       });
       setBrightnessError(null);
+      setNightError(null);
     }
   }, [active]);
 
@@ -176,8 +202,8 @@ export function QuickSettingsOverlay({
         section: "output",
         icon: SlidersHorizontal,
         title: "DSP",
-        value: system.dspState.enabled ? "Enabled" : "Disabled",
-        meta: `Preset: ${system.dspState.preset}`,
+        value: system.dspState.controllable ? "EQ Ready" : system.dspState.enabled ? "Enabled" : "Disabled",
+        meta: `${system.dspState.presetLabel} · ${system.dspState.controlTransport}`,
         tone: "cyan"
       },
       {
@@ -191,6 +217,16 @@ export function QuickSettingsOverlay({
           ? `Renderer: ${runtime.requestedRenderer} · Live brightness ready`
           : `Renderer: ${runtime.requestedRenderer} · DDC/CI unavailable`,
         tone: "neutral"
+      },
+      {
+        kind: "night",
+        key: "night",
+        section: "output",
+        icon: Clock3,
+        title: "Time & Night",
+        value: roomExperience.nightSchedule.active ? "Night" : roomExperience.nightSchedule.enabled ? "Auto" : "Manual",
+        meta: `${roomExperience.nightSchedule.timeZone} · ${roomExperience.nightSchedule.start}-${roomExperience.nightSchedule.end}`,
+        tone: roomExperience.nightSchedule.active ? "cyan" : "neutral"
       },
       {
         kind: "action",
@@ -210,7 +246,7 @@ export function QuickSettingsOverlay({
         section: "output",
         icon: Type,
         title: "Font",
-        value: fontChoices.find((choice) => choice.id === fontTheme)?.label ?? "Modern Sans",
+        value: fontChoices.find((choice) => choice.id === fontTheme)?.label ?? "System Neo",
         meta: "Choose the kiosk typography",
         tone: "cyan"
       },
@@ -271,7 +307,7 @@ export function QuickSettingsOverlay({
         confirmLabel: "Tap again to power off"
       }
     ],
-    [fontTheme, lyricsFontSize, lyricsVisible, runtime.kioskWindow, runtime.requestedRenderer, status.error, status.source, surfaceTheme, system.cpuTemp, system.display.brightnessPercent, system.display.controllable, system.dspState.enabled, system.dspState.preset, system.library.scanning, system.library.source, system.library.trackCount, system.network.ip, system.network.label, system.network.speed, system.outputDevice.detail, system.outputDevice.label, system.uptime]
+    [fontTheme, lyricsFontSize, lyricsVisible, roomExperience.nightSchedule.active, roomExperience.nightSchedule.enabled, roomExperience.nightSchedule.end, roomExperience.nightSchedule.start, roomExperience.nightSchedule.timeZone, runtime.kioskWindow, runtime.requestedRenderer, status.error, status.source, surfaceTheme, system.cpuTemp, system.display.brightnessPercent, system.display.controllable, system.dspState.controllable, system.dspState.controlTransport, system.dspState.enabled, system.dspState.presetLabel, system.library.scanning, system.library.source, system.library.trackCount, system.network.ip, system.network.label, system.network.speed, system.outputDevice.detail, system.outputDevice.label, system.uptime]
   );
 
   const visibleCards = useMemo(() => {
@@ -293,6 +329,26 @@ export function QuickSettingsOverlay({
       setBrightnessError(error instanceof Error ? error.message : "Brightness update failed");
     } finally {
       setPendingBrightness(null);
+    }
+  }
+
+  async function handleNightScheduleChange(patch: Partial<NightScheduleState>) {
+    if (pendingNight) return;
+    setPendingNight(true);
+    setNightError(null);
+
+    try {
+      await onExperienceAction({
+        type: "update_night_schedule",
+        nightSchedule: {
+          ...roomExperience.nightSchedule,
+          ...patch
+        }
+      });
+    } catch (error) {
+      setNightError(error instanceof Error ? error.message : "Night schedule update failed");
+    } finally {
+      setPendingNight(false);
     }
   }
 
@@ -528,6 +584,93 @@ export function QuickSettingsOverlay({
     );
   }
 
+  function renderNightDetail() {
+    const schedule = roomExperience.nightSchedule;
+    const zones = timeZoneChoices.includes(schedule.timeZone)
+      ? timeZoneChoices
+      : [schedule.timeZone, ...timeZoneChoices];
+    const brightnessLevels = [5, 10, 20, 35];
+
+    return (
+      <section className="settings-detail-panel" aria-label="Time and Night detail" data-settings-detail="night">
+        <div className="settings-detail-header">
+          <button className="settings-detail-back" type="button" onClick={() => setDetailView(null)}>
+            Back
+          </button>
+          <div>
+            <span>Preferences</span>
+            <strong>Time & Night</strong>
+            <p>{nightError ?? `${schedule.timeZone} · ${schedule.active ? "Night active" : "Day mode"}`}</p>
+          </div>
+        </div>
+
+        <div className="night-settings-panel">
+          <button
+            className={`night-toggle ${schedule.enabled ? "is-active" : ""}`}
+            type="button"
+            aria-pressed={schedule.enabled}
+            disabled={pendingNight}
+            onClick={() => void handleNightScheduleChange({ enabled: !schedule.enabled })}
+          >
+            <Clock3 size={26} />
+            <span>
+              <strong>Auto Night</strong>
+              <em>{schedule.enabled ? "On" : "Off"}</em>
+            </span>
+          </button>
+
+          <label className="night-field">
+            <span>Time Zone</span>
+            <select
+              value={schedule.timeZone}
+              disabled={pendingNight}
+              onChange={(event) => void handleNightScheduleChange({ timeZone: event.currentTarget.value })}
+            >
+              {zones.map((zone) => (
+                <option key={zone} value={zone}>{zone}</option>
+              ))}
+            </select>
+          </label>
+
+          <div className="night-time-fields">
+            <label className="night-field">
+              <span>Start</span>
+              <input
+                type="time"
+                value={schedule.start}
+                disabled={pendingNight}
+                onChange={(event) => void handleNightScheduleChange({ start: event.currentTarget.value })}
+              />
+            </label>
+            <label className="night-field">
+              <span>End</span>
+              <input
+                type="time"
+                value={schedule.end}
+                disabled={pendingNight}
+                onChange={(event) => void handleNightScheduleChange({ end: event.currentTarget.value })}
+              />
+            </label>
+          </div>
+
+          <div className="display-brightness-presets night-brightness-presets" role="group" aria-label="Night brightness presets">
+            {brightnessLevels.map((level) => (
+              <button
+                key={level}
+                className={`display-brightness-preset ${schedule.brightnessPercent === level ? "is-active" : ""}`}
+                type="button"
+                disabled={pendingNight}
+                onClick={() => void handleNightScheduleChange({ brightnessPercent: level })}
+              >
+                {level}%
+              </button>
+            ))}
+          </div>
+        </div>
+      </section>
+    );
+  }
+
   return (
     <section className={`overlay quick-settings ${active ? "is-active" : ""}`} aria-label="Quick settings" aria-hidden={!active}>
       <button className="overlay-backdrop" type="button" tabIndex={active ? 0 : -1} aria-label="Return to ambient" onClick={handleReturnAmbient} />
@@ -561,6 +704,8 @@ export function QuickSettingsOverlay({
               ? renderFontDetail()
               : detailView === "lyrics"
                 ? renderLyricsDetail()
+                : detailView === "night"
+                  ? renderNightDetail()
               : (
           <div className="settings-grid" data-settings-section={activeSection}>
             {visibleCards.map((card) => {
@@ -664,6 +809,27 @@ export function QuickSettingsOverlay({
                           ? `${system.display.brightnessPercent}% brightness`
                           : "Open display status"}
                       </em>
+                    </div>
+                  </button>
+                );
+              }
+
+              if (card.kind === "night") {
+                return (
+                  <button
+                    className={`settings-card settings-card-button settings-card-summary settings-card-night tone-${card.tone}`}
+                    key={card.key}
+                    type="button"
+                    onClick={() => openDetail("night")}
+                  >
+                    <div className="settings-icon">
+                      <Clock3 size={32} />
+                    </div>
+                    <div>
+                      <span>{card.title}</span>
+                      <strong>{card.value}</strong>
+                      <p>{card.meta}</p>
+                      <em className="settings-card-action">{roomExperience.nightSchedule.brightnessPercent}% night brightness</em>
                     </div>
                   </button>
                 );

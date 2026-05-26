@@ -33,6 +33,19 @@ interface PlaybackSummary {
   source: SourceState;
 }
 
+type HifiEqPresetId = "flat" | "warm" | "vocal";
+
+interface AudioSpectrumFrame {
+  bands: number[];
+  peaks: {
+    left: number;
+    right: number;
+  };
+  source: "mock" | "command" | "fallback";
+  bandCount: 32;
+  updatedAt: string;
+}
+
 interface SystemState {
   network: NetworkState;
   display: {
@@ -67,7 +80,7 @@ Exact wire shapes should be finalized during implementation, but these concepts 
 | Scene ambience audio | Quick menu, Ambient video layer, Player current source | Scene Sound is an exclusive source backed by the active background MP4; switching away remutes the browser video and returns source truth to music/input playback. |
 | Network | Player status, quick settings | Ethernet/Wi-Fi, IP, connection state. |
 | Display brightness | Ambient edge gesture, quick settings display card | DDC/CI brightness percent when the monitor exposes VCP `0x10`. |
-| DSP / CamillaDSP | Player status, quick settings | ON/OFF, preset. |
+| DSP / CamillaDSP | Player status, quick settings, Hi-Fi room mode | ON/OFF, selected EQ preset id/label, controllability, and available `flat` / `warm` / `vocal` preset summaries. |
 | Library scan | Quick settings | Update/rescan status and progress. |
 | System info | Quick settings | Version, uptime, CPU temperature, storage. |
 | Power actions | Quick settings | Reboot and shutdown with confirmation. |
@@ -135,7 +148,7 @@ Avoid:
 Allowed:
 
 - Network: network summary and System/API status.
-- Preferences: audio output summary, DSP summary, display controls, font presets, surface skin presets, and lyrics settings.
+- Preferences: audio output summary, DSP summary, display controls, Time & Night, font presets, surface skin presets, and lyrics settings.
 - System: library update plus reboot/shutdown with confirmation.
 
 Avoid:
@@ -194,10 +207,13 @@ Current Batch 3 mock API contract:
 | `/api/v1/health` | `GET` | Local API health and mode. |
 | `/api/v1/system/state` | `GET` | Combined playback, system, and runtime state for the UI. |
 | `/api/v1/audio/sources` | `GET` | Compact source list plus current source summary for `mpd`, `scene`, `audio`, `radio`, `spotify`, `bluetooth`, `airplay`, and `upnp`, including armed / connected state and any advertised receiver name that the frontend should surface during handoff or pairing. The Player source browser renders `mpd`, `radio`, `spotify`, `airplay`, `bluetooth`, and `upnp` as the six visible primary tabs; `scene` and `audio` remain internal/status state. |
+| `/api/v1/audio/spectrum` | `GET` | Returns one real-spectrum-ready frame with 32 normalized bands plus normalized L/R peaks. It is mock-backed by default and can later be replaced by `TIKPAL_HIFI_SPECTRUM_COMMAND` without changing the UI. |
 | `/api/v1/audio/radios` | `GET` | Searchable radio catalog with query filters for text, genre, bitrate, and paging window, sized for moOde catalogs with 200+ presets. |
 | `/api/v1/audio/library` | `GET` | Manifest-backed local music library plus NAS queue preview with storage, category, subcategory, limit, and offset filters. Storage values are `local`, `nas`, `usb`, `favorites`, and `recently_added`; `local` tracks keep `focus`, `meditation`, and `rest` category ids plus ordered manifest subfolders. |
 | `/api/v1/audio/playlists` | `GET` / `POST` | Lists curated and user playlists, including mood tags, description, cover metadata, created/updated timestamps, and track summaries. `POST` creates user playlists with optional metadata and initial track paths. Playlist is a separate management page, not a Player source tab. |
 | `/api/v1/audio/playlist-actions` | `POST` | Renames, updates metadata, duplicates, deletes, adds tracks, removes tracks, reorders tracks, replaces tracks, and plays playlists. Playing a playlist loads the MPD/local queue; deleting playlist metadata does not stop an already loaded playback queue. |
+| `/api/v1/experience/state` | `GET` | Returns room mode, scene video id, Hi-Fi EQ preset id plus derived compatibility visual preset, timer state, and Auto Night schedule with selected IANA timezone. |
+| `/api/v1/experience/actions` | `POST` | Changes room modes, starts/stops timers, applies Hi-Fi EQ presets with `set_hifi_eq`, and updates Auto Night schedule. Focus/Calm/Sleep may switch to Scene Sound; Hi-Fi never switches to `scene`. |
 | `/api/v1/audio/source` | `POST` | Switches source intake. `target=mpd` can include `localTrackPath` from the local library manifest to clear/queue/play that local track and immediately update playback metadata. `target=scene` can include the current background video id/label/src so Scene Sound metadata follows the active Ambient video. |
 | `/api/v1/media/background-videos` | `GET` | Lists MP4 fireplace/background videos found under `public/assets` and scene OTA videos under `public/assets/scenes`, with optional `order`, `default`, and `catalogVersion` metadata so Ambient can switch the active background without a rebuild. |
 | `/api/v1/playback/status` | `GET` | Playback summary only. |
@@ -206,7 +222,7 @@ Current Batch 3 mock API contract:
 | `/api/v1/playback/actions` | `POST` | Playback actions: `play_pause`, `play`, `pause`, `next`, `previous`, `seek`, `favorite_toggle`, `play_mode_set` with `mode=sequence\|repeat_one\|shuffle`, and global `volume_set`. For scene/external handoff sources, `volume_set` targets output volume truth rather than an MPD-only mixer. |
 | `/api/v1/system/actions` | `POST` | System actions including `library_scan`, `reboot`, `shutdown`, and `brightness_set`. |
 
-The mock API preserves the frontend contract while the real moOde / MPD adapter is still pending, and the `mpc` runtime now uses the same API shape for a first-pass source workspace. Local library browsing is backed by `public/assets/music/_metadata/library_manifest.json`, which can be replaced by a resource OTA package together with the referenced audio files. The frontend renders Library as a storage tier first, then a Local category tier, then subfolder chips; those tiers should stay visually distinct because they mean different things in the backend contract. Playlist lives on a separate three-column touch overlay page opened from the Player header or Ambient down gesture; playlist is a management surface, not an audio source, and user playlists persist name, mood tags, description, cover metadata, and ordered track paths in `.tikpal/music-library-state.json` while curated playlist metadata stays read-only in `public/assets/music/_metadata/playlist_index.json`. Curated playlists can be duplicated into editable user playlists. Playlist input supports both touchscreen pointer gestures and desktop trackpad wheel events: horizontal trackpad deltas open the same card/song quick actions as a left swipe, and vertical trackpad deltas scroll the column content without bubbling into the app-level return gesture. Category ids should come from the manifest category column rather than heuristic reclassification, so Rest folders do not leak into Meditation unless the manifest says so. The curated subfolder contract is `Focus`: `Lo-fi / Ambient`, `Classical / Piano`, `Binaural / Alpha / Theta`, `White Noise / Brown Noise`; `Meditation`: `Guided Meditation`, `Breathing`, `Singing Bowl`, `Nature Sounds`; and `Rest`: `Nap`, `Sleep`, `Rain / Ocean / Forest`, `Deep Sleep Long Tracks`. Radio is modeled as a searchable station catalog with `radioStationId` direct switching and a default stream URI only as fallback. Scene Sound is modeled as an exclusive local source that closes external intakes and stops MPD while the active Ambient MP4 supplies browser audio; closing Scene Sound returns to `target=mpd` so Library playback resumes instead of leaving playback stopped on `scene`. Spotify Connect, Bluetooth, AirPlay, and DLNA are modeled as armed-only intake paths: Tikpal only opens them for new connections while the user has explicitly selected that source, and switching away closes the intake again. DLNA uses runtime id `upnp` and means renderer intake, not DLNA media-server browsing. The same local system surface now also carries display brightness state so the ambient right-edge gesture can talk to DDC/CI through the Node service instead of the browser pretending to own the monitor.
+The mock API preserves the frontend contract while the real moOde / MPD adapter is still pending, and the `mpc` runtime now uses the same API shape for a first-pass source workspace. Local library browsing is backed by `public/assets/music/_metadata/library_manifest.json`, which can be replaced by a resource OTA package together with the referenced audio files. The frontend renders Library as a storage tier first, then a Local category tier, then subfolder chips; those tiers should stay visually distinct because they mean different things in the backend contract. Playlist lives on a separate three-column touch overlay page opened from the Player header or Ambient down gesture; playlist is a management surface, not an audio source, and user playlists persist name, mood tags, description, cover metadata, and ordered track paths in `.tikpal/music-library-state.json` while curated playlist metadata stays read-only in `public/assets/music/_metadata/playlist_index.json`. Curated playlists can be duplicated into editable user playlists. Playlist input supports both touchscreen pointer gestures and desktop trackpad wheel events: horizontal trackpad deltas open the same card/song quick actions as a left swipe, and vertical trackpad deltas scroll the column content without bubbling into the app-level return gesture. Category ids should come from the manifest category column rather than heuristic reclassification, so Rest folders do not leak into Meditation unless the manifest says so. The curated subfolder contract is `Focus`: `Lo-fi / Ambient`, `Classical / Piano`, `Binaural / Alpha / Theta`, `White Noise / Brown Noise`; `Meditation`: `Guided Meditation`, `Breathing`, `Singing Bowl`, `Nature Sounds`; and `Rest`: `Nap`, `Sleep`, `Rain / Ocean / Forest`, `Deep Sleep Long Tracks`. Radio is modeled as a searchable station catalog with `radioStationId` direct switching and a default stream URI only as fallback. Scene Sound is modeled as an exclusive local source that closes external intakes and stops MPD while the active Ambient MP4 supplies browser audio; closing Scene Sound returns to `target=mpd` so Library playback resumes instead of leaving playback stopped on `scene`. Hi-Fi is an EQ mode over the current music source: `flat`, `warm`, and `vocal` are real preset ids, `hifiVisualPresetId` is retained only as the derived presentation style, and it does not mount scene MP4s or switch to Scene Sound. Auto Night stores an IANA timezone and lowers display brightness only; it must not switch source or mode. Spotify Connect, Bluetooth, AirPlay, and DLNA are modeled as armed-only intake paths: Tikpal only opens them for new connections while the user has explicitly selected that source, and switching away closes the intake again. DLNA uses runtime id `upnp` and means renderer intake, not DLNA media-server browsing. The same local system surface now also carries display brightness state so the ambient right-edge gesture can talk to DDC/CI through the Node service instead of the browser pretending to own the monitor.
 
 Both Ambient and Player use the playback summary as display truth for now-playing title, artist, album, artwork, progress, source label, and queue position. Source-panel selection and Library browsing can change the user's workspace, but they should not replace the displayed current track unless a backend source switch or playback update confirms it.
 

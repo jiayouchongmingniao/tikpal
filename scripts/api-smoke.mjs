@@ -31,6 +31,19 @@ async function request(path, options = {}) {
   return { response, body };
 }
 
+async function requestFrom(baseUrl, path, options = {}) {
+  const response = await fetch(`${baseUrl}${path}`, {
+    ...options,
+    headers: {
+      Accept: "application/json",
+      ...(options.body ? { "Content-Type": "application/json" } : {}),
+      ...options.headers
+    }
+  });
+  const body = await response.json();
+  return { response, body };
+}
+
 async function requestBinary(path) {
   const response = await fetch(`${BASE_URL}${path}`);
   const body = Buffer.from(await response.arrayBuffer());
@@ -41,6 +54,33 @@ function assert(condition, message) {
   if (!condition) {
     throw new Error(message);
   }
+}
+
+function localMinutesForTimeZone(timeZone, date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  }).formatToParts(date);
+  const hour = Number(parts.find((part) => part.type === "hour")?.value ?? 0) % 24;
+  const minute = Number(parts.find((part) => part.type === "minute")?.value ?? 0);
+  return hour * 60 + minute;
+}
+
+function withinNightWindow(minutes, start = "22:30", end = "06:30") {
+  const [startHour, startMinute] = start.split(":").map(Number);
+  const [endHour, endMinute] = end.split(":").map(Number);
+  const startMinutes = startHour * 60 + startMinute;
+  const endMinutes = endHour * 60 + endMinute;
+  return minutes >= startMinutes || minutes < endMinutes;
+}
+
+function findCurrentNightTimeZone() {
+  const candidates = typeof Intl.supportedValuesOf === "function"
+    ? Intl.supportedValuesOf("timeZone")
+    : ["Asia/Shanghai", "America/Los_Angeles", "America/New_York", "Europe/London", "Pacific/Honolulu", "Pacific/Kiritimati"];
+  return candidates.find((timeZone) => withinNightWindow(localMinutesForTimeZone(timeZone))) ?? "UTC";
 }
 
 async function waitForHealth() {
@@ -54,6 +94,19 @@ async function waitForHealth() {
     await wait(100);
   }
   throw new Error("API did not become healthy");
+}
+
+async function waitForHealthAt(baseUrl) {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    try {
+      const { response, body } = await requestFrom(baseUrl, "/api/v1/health");
+      if (response.ok && body.ok === true) return;
+    } catch {
+      // Server is still starting.
+    }
+    await wait(100);
+  }
+  throw new Error(`API did not become healthy at ${baseUrl}`);
 }
 
 async function waitForOutput(text) {
@@ -206,10 +259,48 @@ async function waitForLyricsStatus(expectedStatuses) {
   throw new Error(`Lyrics state did not reach one of: ${expectedStatuses.join(", ")}`);
 }
 
+async function runMpcHifiEqUnsupportedSmoke(roomExperienceStatePath) {
+  const port = PORT + 10;
+  const baseUrl = `http://${HOST}:${port}`;
+  const server = spawn(process.execPath, ["server/index.mjs"], {
+    env: {
+      ...process.env,
+      TIKPAL_API_HOST: HOST,
+      TIKPAL_API_PORT: String(port),
+      TIKPAL_PLAYER_BACKEND: "mpc",
+      TIKPAL_ROOM_EXPERIENCE_STATE_PATH: roomExperienceStatePath,
+      TIKPAL_HIFI_EQ_APPLY_COMMAND: ""
+    },
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+
+  try {
+    await waitForHealthAt(baseUrl);
+    const unsupported = await requestFrom(baseUrl, "/api/v1/experience/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "set_hifi_eq", hifiEqPresetId: "warm" })
+    });
+    assert(unsupported.response.status === 400, "mpc set_hifi_eq without command hook should return 400");
+    assert(
+      String(unsupported.body.message ?? "").includes("TIKPAL_HIFI_EQ_APPLY_COMMAND"),
+      "mpc set_hifi_eq without command hook should explain the missing command"
+    );
+  } finally {
+    if (server.exitCode === null && server.signalCode === null) {
+      server.kill("SIGTERM");
+      await Promise.race([
+        new Promise((resolve) => server.once("exit", resolve)),
+        wait(1000)
+      ]);
+    }
+  }
+}
+
 async function run() {
   const apiAssetsRoot = await mkdtemp(path.join(tmpdir(), "tikpal-api-assets-"));
   const apiStateRoot = await mkdtemp(path.join(tmpdir(), "tikpal-api-state-"));
   const musicLibraryStatePath = path.join(apiStateRoot, "music-library-state.json");
+  const roomExperienceStatePath = path.join(apiStateRoot, "room-experience-state.json");
   const sceneBytes = Buffer.from("000000 ftypisom tikpal rainy window api smoke mp4");
   const sceneSha256 = createHash("sha256").update(sceneBytes).digest("hex");
   await mkdir(path.join(apiAssetsRoot, "scenes", "_metadata"), { recursive: true });
@@ -225,10 +316,37 @@ async function run() {
           filename: "Rainy-Window.mp4",
           label: "Rainy Window",
           order: 30,
+          roomModes: ["calm"],
           default: false,
           sha256: sceneSha256
         }
       ]
+    }, null, 2)}\n`
+  );
+  await writeFile(
+    roomExperienceStatePath,
+    `${JSON.stringify({
+      mode: "calm",
+      phase: "idle",
+      presetId: "calm-rain-room",
+      sceneVideoId: "rainy-window",
+      hifiEqPresetId: "flat",
+      hifiVisualPresetId: "spectrum-bars",
+      sceneSoundEnabled: false,
+      playlistId: null,
+      volumePercent: 38,
+      brightnessPercent: 48,
+      timerMinutes: 45,
+      timerEndsAt: null,
+      nightSchedule: {
+        enabled: false,
+        timeZone: "Asia/Shanghai",
+        start: "22:30",
+        end: "06:30",
+        brightnessPercent: 5,
+        active: false,
+        preNightBrightnessPercent: null
+      }
     }, null, 2)}\n`
   );
 
@@ -244,6 +362,7 @@ async function run() {
       TIKPAL_API_PORT: String(PORT),
       TIKPAL_PUBLIC_ASSETS_ROOT: apiAssetsRoot,
       TIKPAL_MUSIC_LIBRARY_STATE_PATH: musicLibraryStatePath,
+      TIKPAL_ROOM_EXPERIENCE_STATE_PATH: roomExperienceStatePath,
       TIKPAL_RECOGNITION_PROVIDER: "acrcloud",
       TIKPAL_ACRCLOUD_HOST: PROVIDER_URL,
       TIKPAL_ACRCLOUD_ACCESS_KEY: "mock-key",
@@ -281,6 +400,101 @@ async function run() {
     assert(initial.body.audio.currentSource.id === "mpd", "system state should expose current audio source");
     assert(initial.body.lyrics?.sourceScope === "local_playback", "system state should expose lyrics state");
 
+    const initialExperience = await request("/api/v1/experience/state");
+    assert(initialExperience.response.ok, "room experience state should return 200");
+    assert(initialExperience.body.mode === "calm", "room experience should default to calm");
+    assert(initialExperience.body.phase === "idle", "room experience should start idle");
+    assert(initialExperience.body.sceneVideoId === "rainy-window", "calm room experience should bind Rainy Window");
+    assert(initialExperience.body.hifiEqPresetId === "flat", "room experience should expose the default Hi-Fi EQ preset");
+    assert(initialExperience.body.hifiVisualPresetId === "spectrum-bars", "room experience should expose the default Hi-Fi visual preset");
+    assert(initialExperience.body.sceneSoundEnabled === false, "room experience should not force scene sound on by default");
+    assert(initialExperience.body.nightSchedule.timeZone === "Asia/Shanghai", "room experience should expose night timezone");
+    assert(initial.body.system.dspState.presetId === "flat", "DSP state should reflect the default Hi-Fi EQ preset id");
+    assert(initial.body.system.dspState.presetLabel === "Flat", "DSP state should reflect the default Hi-Fi EQ preset label");
+    assert(initial.body.system.dspState.controllable === true, "mock DSP state should be controllable");
+    assert(initial.body.system.dspState.availablePresets.length === 3, "DSP state should expose the three built-in Hi-Fi EQ presets");
+
+    const focusExperience = await request("/api/v1/experience/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "set_mode", mode: "focus" })
+    });
+    assert(focusExperience.response.ok, "set_mode experience action should return 200");
+    assert(focusExperience.body.mode === "focus", "set_mode should switch room mode");
+    assert(focusExperience.body.presetId === "focus-library-flow", "set_mode should apply focus preset");
+    assert(focusExperience.body.sceneVideoId === "midnight-library", "focus preset should bind Midnight Library");
+    assert(focusExperience.body.sceneSoundEnabled === true, "focus preset should enable scene sound");
+    const persistedExperience = JSON.parse(await readFile(roomExperienceStatePath, "utf8"));
+    assert(persistedExperience.mode === "focus", "room experience should persist to the state file");
+    const stateAfterFocus = await request("/api/v1/system/state");
+    assert(stateAfterFocus.body.audio.currentSource.id === "scene", "focus room mode should switch to Scene Sound");
+    assert(stateAfterFocus.body.system.volume.percent === focusExperience.body.volumePercent, "room mode should apply volume through playback actions");
+    assert(stateAfterFocus.body.system.display.brightnessPercent === focusExperience.body.brightnessPercent, "room mode should apply brightness through system actions");
+
+    const hifiExperience = await request("/api/v1/experience/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "set_mode", mode: "hifi" })
+    });
+    assert(hifiExperience.response.ok, "hifi room mode action should return 200");
+    assert(hifiExperience.body.mode === "hifi", "hifi action should switch room mode");
+    assert(hifiExperience.body.sceneSoundEnabled === false, "hifi should keep scene sound disabled");
+    assert(hifiExperience.body.hifiEqPresetId === "flat", "hifi should keep the existing EQ preset");
+    assert(hifiExperience.body.hifiVisualPresetId === "spectrum-bars", "hifi should keep the default visual preset");
+    const stateAfterHifi = await request("/api/v1/system/state");
+    assert(stateAfterHifi.body.audio.currentSource.id === "mpd", "hifi should return from Scene Sound to MPD without selecting scene");
+
+    const hifiEq = await request("/api/v1/experience/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "set_hifi_eq", hifiEqPresetId: "warm" })
+    });
+    assert(hifiEq.response.ok, "set_hifi_eq should return 200 in mock mode");
+    assert(hifiEq.body.hifiEqPresetId === "warm", "set_hifi_eq should persist the selected EQ preset");
+    assert(hifiEq.body.hifiVisualPresetId === "waveform", "set_hifi_eq should derive the compatibility visual preset");
+    const stateAfterHifiEq = await request("/api/v1/system/state");
+    assert(stateAfterHifiEq.body.system.dspState.presetId === "warm", "DSP state should reflect set_hifi_eq preset id");
+    assert(stateAfterHifiEq.body.system.dspState.presetLabel === "Warm", "DSP state should reflect set_hifi_eq preset label");
+    assert(stateAfterHifiEq.body.system.dspState.availablePresets.map((preset) => preset.id).join(",") === "flat,warm,vocal", "DSP state should list flat, warm, and vocal presets");
+
+    const spectrum = await request("/api/v1/audio/spectrum");
+    assert(spectrum.response.ok, "audio spectrum should return 200");
+    assert(Array.isArray(spectrum.body.bands) && spectrum.body.bands.length === 32, "audio spectrum should expose 32 normalized bands");
+    assert(spectrum.body.bands.every((band) => typeof band === "number" && band >= 0 && band <= 1), "audio spectrum bands should be normalized");
+    assert(typeof spectrum.body.peaks?.left === "number" && spectrum.body.peaks.left >= 0 && spectrum.body.peaks.left <= 1, "audio spectrum should expose normalized left peak");
+    assert(typeof spectrum.body.peaks?.right === "number" && spectrum.body.peaks.right >= 0 && spectrum.body.peaks.right <= 1, "audio spectrum should expose normalized right peak");
+    assert(spectrum.body.source === "mock", "audio spectrum should be mock-backed by default");
+
+    const nightTimeZone = findCurrentNightTimeZone();
+    const nightEntry = await request("/api/v1/experience/actions", {
+      method: "POST",
+      body: JSON.stringify({
+        type: "update_night_schedule",
+        nightSchedule: {
+          enabled: true,
+          timeZone: nightTimeZone,
+          start: "22:30",
+          end: "06:30",
+          brightnessPercent: 5
+        }
+      })
+    });
+    assert(nightEntry.response.ok, "night schedule update should return 200");
+    assert(nightEntry.body.nightSchedule.active === true, "night schedule should enter night in a timezone currently inside the cross-midnight window");
+    const stateDuringNight = await request("/api/v1/system/state");
+    assert(stateDuringNight.body.system.display.brightnessPercent === 5, "auto night should lower brightness");
+    assert(stateDuringNight.body.audio.currentSource.id === "mpd", "auto night should not switch audio source");
+    const invalidTimeZone = await request("/api/v1/experience/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "update_night_schedule", nightSchedule: { timeZone: "Mars/Olympus" } })
+    });
+    assert(invalidTimeZone.response.status === 400, "invalid timezone should return 400");
+    const nightExit = await request("/api/v1/experience/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "update_night_schedule", nightSchedule: { enabled: false } })
+    });
+    assert(nightExit.response.ok, "disabling night schedule should return 200");
+    assert(nightExit.body.nightSchedule.active === false, "disabling night schedule should exit night mode");
+    const stateAfterNight = await request("/api/v1/system/state");
+    assert(stateAfterNight.body.system.display.brightnessPercent === stateAfterHifi.body.system.display.brightnessPercent, "auto night should restore the prior brightness when disabled");
+
     const initialLyrics = await waitForLyricsStatus(["ready"]);
     assert(initialLyrics.synced === true, "initial MPD track should resolve synced lyrics");
     assert(initialLyrics.lines.length >= 2, "synced lyrics should include lines");
@@ -288,7 +502,7 @@ async function run() {
     const sources = await request("/api/v1/audio/sources");
     assert(sources.response.ok, "audio sources should return 200");
     assert(Array.isArray(sources.body.sources) && sources.body.sources.length === 8, "audio sources should return Library, Radio, Scene Sound, Audio, Spotify Connect, Bluetooth, AirPlay, and DLNA");
-    assert(sources.body.currentSource.id === "mpd", "audio source payload should start on MPD");
+    assert(sources.body.currentSource.id === "mpd", "audio source payload should be on MPD after Hi-Fi and night checks");
     assert(sources.body.sources.some((source) => source.id === "scene"), "audio sources payload should include scene sound");
     assert(sources.body.sources.some((source) => source.id === "audio"), "audio sources payload should include audio");
     assert(sources.body.sources.some((source) => source.id === "spotify"), "audio sources payload should include spotify connect");
@@ -540,6 +754,7 @@ async function run() {
     assert(rainyWindow?.src === "/assets/scenes/Rainy-Window.mp4", "background video catalog should include Rainy Window scene video");
     assert(rainyWindow?.label === "Rainy Window", "background video catalog should use scene manifest labels");
     assert(rainyWindow?.order === 30, "background video catalog should expose scene manifest order");
+    assert(JSON.stringify(rainyWindow?.roomModes) === JSON.stringify(["calm"]), "background video catalog should expose scene room modes");
     assert(backgroundVideos.body.catalogVersion, "background video catalog should expose a catalog version");
 
     const radios = await request("/api/v1/audio/radios?q=ambient&genre=Ambient");
@@ -860,6 +1075,8 @@ async function run() {
     const invalidRadioQuery = await request("/api/v1/audio/radios?limit=500");
     assert(invalidRadioQuery.response.status === 400, "invalid radio query should return 400");
     assert(invalidRadioQuery.body.error === "BAD_REQUEST", "invalid radio query should return BAD_REQUEST");
+
+    await runMpcHifiEqUnsupportedSmoke(roomExperienceStatePath);
 
     console.log("api smoke passed");
   } finally {

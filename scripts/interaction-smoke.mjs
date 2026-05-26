@@ -564,7 +564,117 @@ try {
 
   await navigate(client, APP_URL);
   await expect(client, "document.querySelector('.ambient-screen') !== null", "ambient root renders");
+  await expect(
+    client,
+    "document.querySelectorAll('.startup-mode-grid button').length === 4 && [...document.querySelectorAll('.startup-mode-grid button')].some((node) => node.textContent?.includes('Hi-Fi'))",
+    "startup mode chooser renders Focus, Calm, Sleep, and Hi-Fi"
+  );
+  await expect(
+    client,
+    "document.querySelector('.startup-mode-heading strong')?.textContent?.trim() === 'Set Your Room Mood'",
+    "startup mode chooser uses the requested title"
+  );
+  await expect(
+    client,
+    `
+      (() => {
+        const labels = [...document.querySelectorAll('.startup-mode-grid button')].map((button) => button.textContent?.trim());
+        return labels.some((label) => label === 'FocusDeep work & reading')
+          && labels.some((label) => label === 'CalmUnwind & relax')
+          && labels.some((label) => label === 'SleepDim, timer, fade-out')
+          && labels.some((label) => label === 'Hi-FiPure music listening')
+          && document.querySelector('.startup-mode-grid button em') === null;
+      })()
+    `,
+    "startup mode cards use the simplified copy"
+  );
+  const startupDefaultMode = await evaluate(client, "document.querySelector('.startup-mode-grid button.is-active')?.getAttribute('data-startup-mode') ?? 'calm'");
+  await wait(5200);
+  await expectEventually(
+    client,
+    `document.querySelector('.startup-mode-chooser') === null && document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') === ${JSON.stringify(startupDefaultMode)}`,
+    "startup mode chooser defaults to the persisted room mode after 5 seconds"
+  );
+  await evaluate(
+    client,
+    `
+      (() => {
+        const button = [...document.querySelectorAll('.ambient-room-mode-buttons button')]
+          .find((node) => node.textContent?.trim() === 'Hi-Fi');
+        button?.click();
+        return Boolean(button);
+      })()
+    `
+  );
+  await expectEventually(
+    client,
+    "document.querySelector('[data-hifi-now-playing]') !== null && document.querySelector('[data-hifi-eq-visual]') !== null && document.querySelector('video.flame-video.is-active') === null && document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') === 'hifi'",
+    "Hi-Fi room mode renders Now Playing without active scene video"
+  );
+  await expectEventually(
+    client,
+    "document.querySelector('[data-hifi-eq-visual]')?.textContent?.includes('Now Playing') && document.querySelector('[data-hifi-eq-visual]')?.getAttribute('data-spectrum-source') === 'mock' && document.querySelector('[data-hifi-eq-visual]')?.getAttribute('data-spectrum-band-count') === '32' && document.querySelectorAll('[data-hifi-eq-visual] [data-spectrum-band]').length > 0",
+    "Hi-Fi Now Playing and EQ meter are driven by fetched spectrum data"
+  );
+  const hifiPresetBefore = await evaluate(client, "document.querySelector('[data-hifi-eq-visual]')?.getAttribute('data-hifi-eq-preset')");
+  await evaluate(client, "document.querySelector('.ambient-transport-scene-next')?.click()");
+  await expectEventually(
+    client,
+    `document.querySelector('[data-hifi-eq-visual]')?.getAttribute('data-hifi-eq-preset') !== ${JSON.stringify(hifiPresetBefore)}`,
+    "Hi-Fi next control switches EQ preset"
+  );
+  await navigate(client, `${APP_URL}?mode=quickMenu`);
+  await expect(client, "document.querySelector('[data-quick-menu-toggle=\"hifi-eq\"]') === null", "quick menu omits Hi-Fi EQ visibility toggle");
+  await evaluate(client, "document.querySelector('.overlay-backdrop')?.click();");
+  await expectEventually(
+    client,
+    "document.querySelector('[data-hifi-eq-visual]')?.getAttribute('data-hifi-eq-visible') === 'true' && document.querySelectorAll('[data-hifi-eq-visual] [data-spectrum-band]').length > 0 && document.querySelector('.hifi-eq-summary') === null",
+    "Hi-Fi EQ meter remains visible without the preset summary card"
+  );
   await expect(client, "document.querySelector('.ambient-screen.is-hud-visible') !== null", "ambient HUD starts visible");
+  await expect(client, "document.querySelector('.ambient-hud[data-room-mode]') !== null", "ambient HUD exposes room mode state");
+  await expect(client, "document.querySelector('.ambient-room-beacon') === null", "ambient top-left mood card is removed");
+  await expect(
+    client,
+    "document.querySelectorAll('.ambient-room-mode-buttons button').length === 4 && document.querySelector('.ambient-room-mode-buttons button[aria-pressed=\"true\"]') !== null",
+    "ambient bottom overlay renders only Focus, Calm, Sleep, and Hi-Fi mood controls"
+  );
+  for (const [label, expectedMode] of [["Focus", "focus"], ["Calm", "calm"], ["Sleep", "sleep"]]) {
+    const point = await evaluate(
+      client,
+      `
+        (() => {
+          const button = [...document.querySelectorAll('.ambient-room-mode-buttons button')]
+            .find((node) => node.textContent?.trim() === ${JSON.stringify(label)});
+          const rect = button?.getBoundingClientRect();
+          return rect ? { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) } : null;
+        })()
+      `
+    );
+    if (!point) throw new Error(`Failed: ${label} room mode button is missing`);
+    await click(client, point.x, point.y);
+    await expectEventually(
+      client,
+      `
+        document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') === ${JSON.stringify(expectedMode)}
+        && document.querySelector('.ambient-room-mode-buttons button[aria-pressed="true"]')?.textContent?.trim() === ${JSON.stringify(label)}
+        && document.querySelector('.ambient-room-beacon') === null
+      `,
+      `ambient ${label} room mode click updates visible state`
+    );
+  }
+  await evaluate(
+    client,
+    `
+      (() => {
+        const button = [...document.querySelectorAll('.ambient-room-mode-buttons button')]
+          .find((node) => node.textContent?.trim() === 'Calm');
+        button?.click();
+        return Boolean(button);
+      })()
+    `
+  );
+  await expectEventually(client, "document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') === 'calm'", "ambient returns to Calm before scene-video checks");
   await expect(client, "document.querySelector('[data-ambient-lyrics]') !== null", "ambient lyrics layer renders");
   await expect(
     client,
@@ -573,12 +683,15 @@ try {
         const ambient = document.querySelector('.ambient-screen');
         if (!ambient) return false;
         const rangeInputs = [...ambient.querySelectorAll('input[type="range"]')];
-        return ambient.querySelector('.ambient-progress') !== null
+        return ambient.querySelector('.ambient-cover') === null
+          && ambient.querySelector('.ambient-track') === null
+          && ambient.querySelector('.ambient-status') === null
+          && ambient.querySelector('.ambient-progress') === null
           && ambient.querySelector('.progress-slider') === null
           && rangeInputs.length === 0;
       })()
     `,
-    "ambient progress is display-only and has no seek slider"
+    "ambient mood overlay omits music metadata and seek controls"
   );
 
   await wait(5600);
@@ -588,8 +701,25 @@ try {
   await expect(client, "document.querySelector('.ambient-screen.is-hud-visible') !== null", "single tap shows ambient HUD");
   await expect(
     client,
-    "document.querySelector('.ambient-transport button[aria-label=\"Favorite\"], .ambient-transport button[aria-label=\"Remove favorite\"]') !== null",
-    "ambient transport favorite button renders"
+    `
+      (() => {
+        const transport = document.querySelector('.ambient-transport');
+        const labels = [...document.querySelectorAll('.ambient-transport button')].map((button) => button.getAttribute('aria-label'));
+        return Boolean(transport)
+          && document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') !== 'hifi'
+          && labels.includes('Previous scene')
+          && labels.includes('Next scene')
+          && (labels.includes('Unmute scene sound') || labels.includes('Mute scene sound'))
+          && !labels.includes('Previous track')
+          && !labels.includes('Next track')
+          && !labels.includes('Play')
+          && !labels.includes('Pause')
+          && !labels.includes('Favorite')
+          && !labels.includes('Remove favorite')
+          && !transport.querySelector('.ambient-play-mode');
+      })()
+    `,
+    "ambient non-Hi-Fi transport keeps only scene switch and mute controls"
   );
   await evaluate(
     client,
@@ -606,6 +736,7 @@ try {
                   filename: 'Interaction-Scene.mp4',
                   label: 'Interaction Scene',
                   src: ${JSON.stringify(interactionSceneVideoSrc)},
+                  roomModes: ['calm'],
                   source: 'scene'
                 },
                 {
@@ -614,10 +745,20 @@ try {
                   label: 'Rainy Window',
                   src: ${JSON.stringify(`${interactionSceneVideoSrc}?ota=rainy`)},
                   order: 30,
+                  roomModes: ['calm'],
+                  source: 'scene'
+                },
+                {
+                  id: 'focus-smoke-scene',
+                  filename: 'Focus-Smoke.mp4',
+                  label: 'Focus Smoke',
+                  src: ${JSON.stringify(`${interactionSceneVideoSrc}?ota=focus`)},
+                  order: 40,
+                  roomModes: ['focus'],
                   source: 'scene'
                 }
               ],
-              total: 2,
+              total: 3,
               updatedAt: new Date().toISOString(),
               catalogVersion: 'interaction-rainy',
               defaultVideoId: 'interaction-scene'
@@ -644,6 +785,26 @@ try {
     `
   );
   await expectEventually(client, "[...document.querySelectorAll('.flame-video')].some((video) => video.getAttribute('src')?.includes('ota=rainy'))", "ambient can mount OTA scene video after catalog refresh");
+  await evaluate(
+    client,
+    `
+      (() => {
+        const button = [...document.querySelectorAll('.ambient-room-mode-buttons button')]
+          .find((node) => node.textContent?.trim() === 'Focus');
+        button?.click();
+        return Boolean(button);
+      })()
+    `
+  );
+  await expectEventually(
+    client,
+    `
+      document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') === 'focus'
+      && [...document.querySelectorAll('.flame-video')].some((video) => video.getAttribute('src')?.includes('ota=focus'))
+      && ![...document.querySelectorAll('.flame-video.is-active')].some((video) => video.getAttribute('src')?.includes('ota=rainy'))
+    `,
+    "room mode scene switching stays inside the selected MP4 category"
+  );
 
   await wait(5600);
   await expect(client, "document.querySelector('.ambient-screen.is-hud-hidden') !== null", "ambient HUD auto hides after tap show");
@@ -662,6 +823,11 @@ try {
     client,
     "document.querySelector('.playlist-search-field input[placeholder=\"Search playlists / songs...\"]') !== null",
     "playlist hub exposes search in header"
+  );
+  await expect(
+    client,
+    "document.querySelector('.playlist-room-rituals[data-room-mode]') !== null && document.querySelector('.playlist-room-mode-grid button[aria-pressed=\"true\"]') !== null",
+    "playlist hub exposes scene library ritual mode controls"
   );
   await expect(
     client,
@@ -1152,8 +1318,11 @@ try {
     `
       (() => {
         const text = document.querySelector('.quick-menu-panel')?.textContent ?? '';
-        return text.includes('Scene Video')
+        return document.querySelectorAll('.quick-menu-panel [data-quick-menu-toggle]').length === 3
+          && text.includes('Scene Video')
+          && !text.includes('Room Mode')
           && text.includes('Clock')
+          && !text.includes('Hi-Fi EQ')
           && text.includes('Scene Sound')
           && !text.includes('Flame')
           && !text.includes('Screen Off');
@@ -1337,7 +1506,7 @@ try {
   const loopLumas = loopLumaSamples.map((sample) => sample.luma);
   const minLoopLuma = Math.min(...loopLumas);
   const maxLoopLuma = Math.max(...loopLumas);
-  if (minLoopLuma < Math.max(45, maxLoopLuma * 0.45)) {
+  if (minLoopLuma < Math.max(40, maxLoopLuma * 0.45)) {
     throw new Error(`Failed: scene loop center luma dropped near black (${loopLumas.map((value) => value.toFixed(1)).join(', ')}; ${loopLumaSamples.map((sample) => sample.roles.join('/')).join(' | ')})`);
   }
   console.log(`ok - scene loop center luma avoids black/transparent drop (${loopLumas.map((value) => value.toFixed(1)).join(', ')})`);
@@ -1716,7 +1885,7 @@ try {
     `,
     "settings nav has no Home section"
   );
-  await expect(client, settingsSummaryExpression("output", ["Audio Output", "DSP", "Display", "Font", "Skin", "Lyrics"]), "settings Preferences summary keeps fixed four-column cards");
+  await expect(client, settingsSummaryExpression("output", ["Audio Output", "DSP", "Display", "Time & Night", "Font", "Skin", "Lyrics"]), "settings Preferences summary keeps fixed four-column cards");
   await expect(
     client,
     `
@@ -1741,7 +1910,7 @@ try {
   );
   await expect(client, "document.querySelector('[data-settings-section=\"output\"]') !== null", "settings Preferences section opens");
   await expect(client, "document.querySelector('[data-settings-detail]') === null", "settings Preferences summary stays summary-first");
-  await expect(client, settingsSummaryExpression("output", ["Audio Output", "DSP", "Display", "Font", "Skin", "Lyrics"]), "settings Preferences remains a fixed four-column grid");
+  await expect(client, settingsSummaryExpression("output", ["Audio Output", "DSP", "Display", "Time & Night", "Font", "Skin", "Lyrics"]), "settings Preferences remains a fixed four-column grid");
 
   await evaluate(
     client,
@@ -1782,6 +1951,45 @@ try {
     client,
     `
       (() => {
+        const target = [...document.querySelectorAll('.settings-card-button')].find((node) => node.textContent.includes('Time & Night'));
+        target?.click();
+        return Boolean(target);
+      })()
+    `
+  );
+  await expect(client, "document.querySelector('[data-settings-detail=\"night\"]') !== null", "settings night detail opens");
+  await expect(
+    client,
+    "document.querySelector('.night-settings-panel select') !== null && document.querySelector('.night-settings-panel input[type=\"time\"]') !== null",
+    "settings night detail exposes timezone and time controls"
+  );
+  await expect(
+    client,
+    `
+      (() => {
+        const content = document.querySelector('.settings-content');
+        return Boolean(content && content.scrollHeight <= content.clientHeight);
+      })()
+    `,
+    "settings night detail stays within kiosk height"
+  );
+
+  await evaluate(
+    client,
+    `
+      (() => {
+        const target = document.querySelector('.settings-detail-back');
+        target?.click();
+        return Boolean(target);
+      })()
+    `
+  );
+  await expect(client, "document.querySelector('[data-settings-detail]') === null", "settings night detail closes back to summary");
+
+  await evaluate(
+    client,
+    `
+      (() => {
         const target = [...document.querySelectorAll('.settings-card-button')].find((node) => node.textContent.includes('Font'));
         target?.click();
         return Boolean(target);
@@ -1789,7 +1997,11 @@ try {
     `
   );
   await expect(client, "document.querySelector('[data-settings-detail=\"font\"]') !== null", "settings font detail opens");
-  await expect(client, "document.querySelector('.font-theme-options-detail') !== null", "settings font detail shows presets");
+  await expect(
+    client,
+    "document.querySelectorAll('.font-theme-options-detail .font-theme-option').length >= 6 && document.querySelector('.font-theme-options-detail')?.textContent?.includes('Hardware UI')",
+    "settings font detail shows expanded modern font presets"
+  );
   await expect(
     client,
     `

@@ -74,7 +74,7 @@ This directory is the source of truth for Tikpal product, UX, visual, architectu
 The implementation exposes these concepts consistently across frontend state, local backend state, telemetry, and documentation:
 
 ```ts
-type AppMode = "ambient" | "player" | "quickSettings" | "quickMenu";
+type AppMode = "ambient" | "player" | "playlist" | "quickSettings" | "quickMenu";
 type SurfaceTheme = "warm-gold" | "graphite-silver" | "ivory-studio";
 type PlaybackState = "playing" | "paused" | "stopped";
 type SourceState =
@@ -122,6 +122,8 @@ The local backend boundary should reserve endpoints or adapters for playback con
 - Local library validation: `npm run test:library` checks the ignored `public/assets/music` manifest, covers, playlists, and MP3 paths for the curated Focus / Meditation / Rest taxonomy.
 - Kiosk guard: root-level context menu, drag, selection, browser zoom, and multi-touch browser default suppression.
 - Ambient HUD: visible on startup, auto-hides after 5s, and can be shown again with a single tap.
+- Ambient Room Canvas: Focus, Calm, and Sleep center controls show only scene previous/next, Scene Sound, and the content-sized mode label/intent strip; they do not show music transport or lyrics. Hi-Fi keeps music transport and lyrics.
 - Playback backend: `mock` by default, `mpc` when the Pi runtime sets `TIKPAL_PLAYER_BACKEND=mpc`.
 - Source workspace: visible tabs are Library, Radio, Spotify, AirPlay, Bluetooth, and DLNA; DLNA uses runtime source id `upnp` and means renderer intake, not media-server browsing.
 - Appearance: font presets and surface skin presets are persisted locally and applied across ambient, player, and settings surfaces.
+- Room experience: startup offers Focus, Calm, Sleep, and Hi-Fi; Hi-Fi applies `flat`, `warm`, or `vocal` EQ presets when the Pi command hook is configured, uses `/api/v1/audio/spectrum` for its visual meter, and never enables Scene Sound. Auto Night dims by selected timezone without changing sources.
