@@ -481,3 +481,98 @@ export interface SourceSwitchRequest {
   sceneVideoLabel?: string;
   sceneVideoSrc?: string;
 }
+
+export type RemoteActionType =
+  | "playback.play_pause"
+  | "playback.play"
+  | "playback.pause"
+  | "playback.next"
+  | "playback.previous"
+  | "playback.seek"
+  | "playback.play_mode_set"
+  | "volume_set"
+  | "source.set"
+  | "room.set_mode"
+  | "room.start_session"
+  | "room.stop_session"
+  | "room.update_timer"
+  | "scene.set"
+  | "scene.sound_set"
+  | "hifi.eq_set"
+  | "display.brightness_set"
+  | "lyrics.refresh";
+
+export interface RemoteActionRequest {
+  type: RemoteActionType;
+  value?: number;
+  mode?: RoomMode;
+  playbackMode?: PlaybackMode;
+  target?: Exclude<SourceSwitchTarget, "audio" | "scene">;
+  radioStationId?: string;
+  localTrackPath?: string;
+  sceneVideoId?: string;
+  sceneVideoLabel?: string;
+  sceneVideoSrc?: string;
+  sceneSoundEnabled?: boolean;
+  enabled?: boolean;
+  hifiEqPresetId?: HifiEqPresetId;
+  timerMinutes?: number | null;
+  timerEndsAt?: string | null;
+}
+
+export interface RemoteStateResponse {
+  playback: PlaybackSummary;
+  volume: VolumeState;
+  room: {
+    mode: RoomMode;
+    phase: RoomSessionPhase;
+    presetId: string;
+    timerMinutes: number | null;
+    timerEndsAt: string | null;
+    updatedAt: string;
+  };
+  scene: {
+    videoId: string;
+    video: BackgroundVideoSummary | null;
+    sceneSoundEnabled: boolean;
+    availableCount: number;
+    catalogVersion: string | null;
+  };
+  source: {
+    current: SourceSummary;
+    sources: SourceSummary[];
+  };
+  display: DisplayState;
+  hifi: {
+    eqPresetId: HifiEqPresetId;
+    visualPresetId: HifiVisualPresetId;
+    availablePresets: HifiEqPresetSummary[];
+    controllable: boolean;
+    controlTransport: DspState["controlTransport"];
+  };
+  runtime: RuntimeState;
+  updatedAt: string;
+}
+
+export interface RemoteCatalogResponse {
+  allowedActions: RemoteActionType[];
+  playbackModes: PlaybackMode[];
+  sourceTargets: Array<Exclude<SourceSwitchTarget, "audio" | "scene">>;
+  sources: SourceSummary[];
+  roomModes: Array<{
+    id: RoomMode;
+    label: string;
+    presetId: string;
+    sceneVideoId: string;
+    sceneVideoLabel: string;
+    hifiEqPresetId: HifiEqPresetId;
+    hifiVisualPresetId: HifiVisualPresetId;
+    sceneSoundEnabled: boolean;
+    volumePercent: number;
+    brightnessPercent: number;
+    timerMinutes: number | null;
+  }>;
+  sceneVideos: BackgroundVideoSummary[];
+  hifiEqPresets: HifiEqPresetSummary[];
+  updatedAt: string;
+}

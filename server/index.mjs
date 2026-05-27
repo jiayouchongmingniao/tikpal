@@ -5,10 +5,13 @@ import { mkdir, readFile, readdir, stat, unlink, writeFile } from "node:fs/promi
 import { createHash } from "node:crypto";
 import { basename, dirname, extname, posix, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
+import { buildAccessDeniedBody, getTikpalApiAccessDecision, hasValidTikpalKey } from "./accessControl.mjs";
+import { buildOpenApiDocsHtml, buildOpenApiDocument } from "./openapi.mjs";
 import { recognizeWithAcrCloud } from "./recognitionProviders/acrcloud.mjs";
 
 const PORT = Number(process.env.TIKPAL_API_PORT ?? 8787);
 const HOST = process.env.TIKPAL_API_HOST ?? "127.0.0.1";
+const PORTABLE_API_KEY = process.env.TIKPAL_PORTABLE_API_KEY ?? "";
 const PLAYER_BACKEND = (process.env.TIKPAL_PLAYER_BACKEND ?? "mock").toLowerCase();
 const API_MODE = PLAYER_BACKEND === "mpc" ? "mpc" : "mock";
 const MPD_HOST = process.env.TIKPAL_MPD_HOST ?? "127.0.0.1";
@@ -26,6 +29,14 @@ const SYSTEM_SHUTDOWN_COMMAND = process.env.TIKPAL_SYSTEM_SHUTDOWN_COMMAND ?? "s
 const DSP_PRESET = process.env.TIKPAL_DSP_PRESET ?? "Unknown";
 const DDCUTIL_BIN = process.env.TIKPAL_DDCUTIL_BIN ?? "ddcutil";
 const DDCUTIL_DISPLAY = process.env.TIKPAL_DDCUTIL_DISPLAY ?? "";
+const DDCUTIL_READ_CACHE_MS_RAW = Number(process.env.TIKPAL_DDCUTIL_READ_CACHE_MS ?? 300_000);
+const DDCUTIL_READ_CACHE_MS = Number.isFinite(DDCUTIL_READ_CACHE_MS_RAW) && DDCUTIL_READ_CACHE_MS_RAW >= 0
+  ? DDCUTIL_READ_CACHE_MS_RAW
+  : 300_000;
+const DDCUTIL_READ_TIMEOUT_MS_RAW = Number(process.env.TIKPAL_DDCUTIL_READ_TIMEOUT_MS ?? 3500);
+const DDCUTIL_READ_TIMEOUT_MS = Number.isFinite(DDCUTIL_READ_TIMEOUT_MS_RAW) && DDCUTIL_READ_TIMEOUT_MS_RAW > 0
+  ? DDCUTIL_READ_TIMEOUT_MS_RAW
+  : 3500;
 const FFPROBE_BIN = process.env.TIKPAL_FFPROBE_BIN ?? "ffprobe";
 const FFMPEG_BIN = process.env.TIKPAL_FFMPEG_BIN ?? "ffmpeg";
 const RADIO_ACTIVATE_COMMAND = process.env.TIKPAL_RADIO_ACTIVATE_COMMAND ?? "";
@@ -115,6 +126,27 @@ const PLAYLIST_COVER_TYPES = new Set(["gradient", "scene", "collage", "custom"])
 const PLAYBACK_MODES = new Set(["sequence", "repeat_one", "shuffle"]);
 const ROOM_MODES = new Set(["focus", "calm", "sleep", "hifi"]);
 const ROOM_SESSION_PHASES = new Set(["idle", "preparing", "active", "windDown"]);
+const REMOTE_SOURCE_TARGETS = new Set(["mpd", "radio", "spotify", "bluetooth", "airplay", "upnp"]);
+const REMOTE_ALLOWED_ACTIONS = [
+  "playback.play_pause",
+  "playback.play",
+  "playback.pause",
+  "playback.next",
+  "playback.previous",
+  "playback.seek",
+  "playback.play_mode_set",
+  "volume_set",
+  "source.set",
+  "room.set_mode",
+  "room.start_session",
+  "room.stop_session",
+  "room.update_timer",
+  "scene.set",
+  "scene.sound_set",
+  "hifi.eq_set",
+  "display.brightness_set",
+  "lyrics.refresh"
+];
 const HIFI_EQ_PRESETS = [
   { id: "flat", label: "Flat", intent: "Reference response", hifiVisualPresetId: "spectrum-bars" },
   { id: "warm", label: "Warm", intent: "Gentle low-mid lift", hifiVisualPresetId: "waveform" },
@@ -240,6 +272,7 @@ const remoteArtworkCache = new Map();
 const remoteArtworkInFlight = new Map();
 let bluetoothRecognitionSession = buildBluetoothRecognitionSession();
 let displayBrightnessSnapshotCache = null;
+let displayBrightnessRefreshPromise = null;
 
 const system = {
   network: {
@@ -1781,44 +1814,65 @@ function ddcutilArgs(args) {
   return DDCUTIL_DISPLAY ? ["--display", DDCUTIL_DISPLAY, ...args] : args;
 }
 
-async function readDisplayBrightnessSnapshot() {
-  if (displayBrightnessSnapshotCache && Date.now() - displayBrightnessSnapshotCache.updatedAtMs < 10_000) {
-    return displayBrightnessSnapshotCache.value;
-  }
+function buildUnavailableDisplayBrightnessSnapshot() {
+  return {
+    brightnessPercent: system.display.brightnessPercent,
+    controllable: false,
+    transport: "unavailable"
+  };
+}
 
-  const raw = await runCommand(`${DDCUTIL_BIN} ${ddcutilArgs(["getvcp", "10", "--brief"]).join(" ")}`, { allowFailure: true, timeout: 3500 });
+function parseDisplayBrightnessSnapshot(raw) {
   const current = raw.match(/current value =\s*(\d+)/i)?.[1] ?? raw.match(/^VCP\s+10\s+\S+\s+(\d+)\s+(\d+)/i)?.[1];
   const max = raw.match(/max value =\s*(\d+)/i)?.[1] ?? raw.match(/^VCP\s+10\s+\S+\s+(\d+)\s+(\d+)/i)?.[2];
 
   if (!current || !max) {
-    const unavailable = {
-      brightnessPercent: system.display.brightnessPercent,
-      controllable: false,
-      transport: "unavailable"
-    };
-    displayBrightnessSnapshotCache = { value: unavailable, updatedAtMs: Date.now() };
-    return unavailable;
+    return buildUnavailableDisplayBrightnessSnapshot();
   }
 
   const currentNumber = Number(current);
   const maxNumber = Number(max);
   if (!Number.isFinite(currentNumber) || !Number.isFinite(maxNumber) || maxNumber <= 0) {
-    const unavailable = {
-      brightnessPercent: system.display.brightnessPercent,
-      controllable: false,
-      transport: "unavailable"
-    };
-    displayBrightnessSnapshotCache = { value: unavailable, updatedAtMs: Date.now() };
-    return unavailable;
+    return buildUnavailableDisplayBrightnessSnapshot();
   }
 
-  const snapshot = {
+  return {
     brightnessPercent: clampPercent((currentNumber / maxNumber) * 100, system.display.brightnessPercent),
     controllable: true,
     transport: "ddcci"
   };
+}
+
+async function refreshDisplayBrightnessSnapshot() {
+  const raw = await runCommand(
+    `${DDCUTIL_BIN} ${ddcutilArgs(["getvcp", "10", "--brief"]).join(" ")}`,
+    { allowFailure: true, timeout: DDCUTIL_READ_TIMEOUT_MS }
+  );
+  const snapshot = parseDisplayBrightnessSnapshot(raw);
   displayBrightnessSnapshotCache = { value: snapshot, updatedAtMs: Date.now() };
+  system.display = snapshot;
   return snapshot;
+}
+
+function scheduleDisplayBrightnessRefresh() {
+  if (!displayBrightnessRefreshPromise) {
+    displayBrightnessRefreshPromise = refreshDisplayBrightnessSnapshot()
+      .catch(() => buildUnavailableDisplayBrightnessSnapshot())
+      .finally(() => {
+        displayBrightnessRefreshPromise = null;
+      });
+  }
+  return displayBrightnessRefreshPromise;
+}
+
+async function readDisplayBrightnessSnapshot() {
+  const now = Date.now();
+  if (displayBrightnessSnapshotCache && now - displayBrightnessSnapshotCache.updatedAtMs < DDCUTIL_READ_CACHE_MS) {
+    return displayBrightnessSnapshotCache.value;
+  }
+
+  void scheduleDisplayBrightnessRefresh();
+  return displayBrightnessSnapshotCache?.value ?? system.display;
 }
 
 async function setDisplayBrightnessPercent(percent) {
@@ -1841,6 +1895,7 @@ async function setDisplayBrightnessPercent(percent) {
     },
     updatedAtMs: Date.now()
   };
+  system.display = displayBrightnessSnapshotCache.value;
 }
 
 async function getRuntimeSnapshot() {
@@ -4018,7 +4073,7 @@ function sendJson(response, status, body) {
     "Cache-Control": "no-store",
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type,Accept"
+    "Access-Control-Allow-Headers": "Content-Type,Accept,X-Tikpal-Key,X-Tikpal-Local-Ui"
   });
 
   if (status === 204) {
@@ -4029,12 +4084,24 @@ function sendJson(response, status, body) {
   response.end(JSON.stringify(body));
 }
 
+function sendHtml(response, status, body) {
+  response.writeHead(status, {
+    "Content-Type": "text/html; charset=utf-8",
+    "Cache-Control": "no-store",
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET,OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type,Accept,X-Tikpal-Key,X-Tikpal-Local-Ui"
+  });
+  response.end(body);
+}
+
 function sendBinary(response, status, contentType, body) {
   response.writeHead(status, {
     "Content-Type": contentType,
     "Cache-Control": "no-store",
     "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET,OPTIONS"
+    "Access-Control-Allow-Methods": "GET,OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type,Accept,X-Tikpal-Key,X-Tikpal-Local-Ui"
   });
   response.end(body);
 }
@@ -5843,6 +5910,269 @@ async function applyRoomExperienceAction(action) {
   return await getRoomExperienceState();
 }
 
+async function applyPlaybackActionForCurrentBackend(action) {
+  if (API_MODE === "mpc") {
+    await applyMpcPlaybackAction(action);
+    return;
+  }
+  await applyPlaybackAction(action);
+}
+
+function requireRemoteNumber(value, label) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    throw new Error(`${label} requires a numeric value`);
+  }
+  return numeric;
+}
+
+function requireRemoteRoomMode(value) {
+  const mode = String(value ?? "").trim().toLowerCase();
+  if (!ROOM_MODES.has(mode)) {
+    throw new Error("room mode must be focus, calm, sleep, or hifi");
+  }
+  return mode;
+}
+
+function requireRemoteSourceTarget(value) {
+  const target = String(value ?? "").trim().toLowerCase();
+  if (!REMOTE_SOURCE_TARGETS.has(target)) {
+    throw new Error("source.set requires target mpd, radio, spotify, bluetooth, airplay, or upnp");
+  }
+  return target;
+}
+
+function requireRemoteHifiEqPresetId(value) {
+  const presetId = String(value ?? "").trim();
+  if (!HIFI_EQ_PRESET_IDS.has(presetId)) {
+    throw new Error("hifi.eq_set requires hifiEqPresetId flat, warm, or vocal");
+  }
+  return presetId;
+}
+
+function requireRemoteBoolean(value, label) {
+  if (typeof value !== "boolean") {
+    throw new Error(`${label} requires a boolean value`);
+  }
+  return value;
+}
+
+function buildRoomModeCatalog() {
+  return Object.entries(ROOM_MODE_PRESETS).map(([id, preset]) => ({
+    id,
+    label: id === "hifi" ? "Hi-Fi" : `${id.slice(0, 1).toUpperCase()}${id.slice(1)}`,
+    presetId: preset.presetId,
+    sceneVideoId: preset.sceneVideoId,
+    sceneVideoLabel: preset.sceneVideoLabel,
+    hifiEqPresetId: preset.hifiEqPresetId,
+    hifiVisualPresetId: preset.hifiVisualPresetId,
+    sceneSoundEnabled: preset.sceneSoundEnabled,
+    volumePercent: preset.volumePercent,
+    brightnessPercent: preset.brightnessPercent,
+    timerMinutes: preset.timerMinutes
+  }));
+}
+
+async function buildRemoteStateResponse() {
+  const [state, experience, sceneCatalog] = await Promise.all([
+    getTikpalState(),
+    getRoomExperienceState(),
+    getAmbientBackgroundVideosPayload()
+  ]);
+  const activeSceneVideo = sceneCatalog.videos.find((video) => video.id === experience.sceneVideoId) ?? null;
+
+  return {
+    playback: state.playback,
+    volume: state.system.volume,
+    room: {
+      mode: experience.mode,
+      phase: experience.phase,
+      presetId: experience.presetId,
+      timerMinutes: experience.timerMinutes,
+      timerEndsAt: experience.timerEndsAt,
+      updatedAt: experience.updatedAt
+    },
+    scene: {
+      videoId: experience.sceneVideoId,
+      video: activeSceneVideo,
+      sceneSoundEnabled: experience.sceneSoundEnabled,
+      availableCount: sceneCatalog.total,
+      catalogVersion: sceneCatalog.catalogVersion ?? null
+    },
+    source: {
+      current: state.audio.currentSource,
+      sources: state.audio.sources
+    },
+    display: state.system.display,
+    hifi: {
+      eqPresetId: experience.hifiEqPresetId,
+      visualPresetId: experience.hifiVisualPresetId,
+      availablePresets: state.system.dspState.availablePresets,
+      controllable: state.system.dspState.controllable,
+      controlTransport: state.system.dspState.controlTransport
+    },
+    runtime: state.runtime,
+    updatedAt: state.runtime.updatedAt
+  };
+}
+
+async function buildRemoteCatalogResponse() {
+  const [state, sceneCatalog] = await Promise.all([
+    getTikpalState(),
+    getAmbientBackgroundVideosPayload()
+  ]);
+
+  return {
+    allowedActions: REMOTE_ALLOWED_ACTIONS,
+    playbackModes: Array.from(PLAYBACK_MODES),
+    sourceTargets: Array.from(REMOTE_SOURCE_TARGETS),
+    sources: state.audio.sources.filter((source) => REMOTE_SOURCE_TARGETS.has(source.id)),
+    roomModes: buildRoomModeCatalog(),
+    sceneVideos: sceneCatalog.videos,
+    hifiEqPresets: state.system.dspState.availablePresets,
+    updatedAt: new Date().toISOString()
+  };
+}
+
+async function findRemoteSceneVideo(sceneVideoId) {
+  const catalog = await getAmbientBackgroundVideosPayload();
+  const id = String(sceneVideoId ?? "").trim();
+  const video = catalog.videos.find((entry) => entry.id === id);
+  if (!video) {
+    throw new Error("scene.set requires a known sceneVideoId from /api/v1/remote/catalog");
+  }
+  return video;
+}
+
+async function setRemoteSceneVideo(action) {
+  const video = await findRemoteSceneVideo(action.sceneVideoId);
+  const current = await readRoomExperienceState();
+  const saved = await writeRoomExperienceState({
+    ...current,
+    sceneVideoId: video.id
+  });
+
+  if (saved.mode !== "hifi" && saved.sceneSoundEnabled) {
+    await applySourceSwitch({
+      target: "scene",
+      sceneVideoId: video.id,
+      sceneVideoLabel: video.label,
+      sceneVideoSrc: video.src
+    });
+  }
+}
+
+async function setRemoteSceneSound(action) {
+  const enabled = requireRemoteBoolean(action.enabled ?? action.sceneSoundEnabled, "scene.sound_set");
+  const current = await readRoomExperienceState();
+  if (enabled && current.mode === "hifi") {
+    throw new Error("scene.sound_set is not available in Hi-Fi mode");
+  }
+
+  const saved = await writeRoomExperienceState({
+    ...current,
+    sceneSoundEnabled: enabled
+  });
+
+  if (!enabled) {
+    await stopSceneSourceSafely();
+    return;
+  }
+
+  const video = await findRemoteSceneVideo(saved.sceneVideoId);
+  await applySourceSwitch({
+    target: "scene",
+    sceneVideoId: video.id,
+    sceneVideoLabel: video.label,
+    sceneVideoSrc: video.src
+  });
+}
+
+async function applyRemoteAction(action) {
+  const type = String(action?.type ?? "");
+
+  switch (type) {
+    case "playback.play_pause":
+      await applyPlaybackActionForCurrentBackend({ type: "play_pause" });
+      break;
+    case "playback.play":
+      await applyPlaybackActionForCurrentBackend({ type: "play" });
+      break;
+    case "playback.pause":
+      await applyPlaybackActionForCurrentBackend({ type: "pause" });
+      break;
+    case "playback.next":
+      await applyPlaybackActionForCurrentBackend({ type: "next" });
+      break;
+    case "playback.previous":
+      await applyPlaybackActionForCurrentBackend({ type: "previous" });
+      break;
+    case "playback.seek":
+      await applyPlaybackActionForCurrentBackend({ type: "seek", value: requireRemoteNumber(action.value, "playback.seek") });
+      break;
+    case "playback.play_mode_set":
+      await applyPlaybackActionForCurrentBackend({ type: "play_mode_set", mode: normalizePlaybackMode(action.playbackMode ?? action.mode) });
+      break;
+    case "volume_set":
+      await applyPlaybackActionForCurrentBackend({ type: "volume_set", value: requireRemoteNumber(action.value, "volume_set") });
+      break;
+    case "source.set":
+      await applySourceSwitch({
+        target: requireRemoteSourceTarget(action.target),
+        radioStationId: action.radioStationId,
+        localTrackPath: action.localTrackPath
+      });
+      break;
+    case "room.set_mode":
+      await applyRoomExperienceAction({ type: "set_mode", mode: requireRemoteRoomMode(action.mode), sceneSoundEnabled: action.sceneSoundEnabled });
+      break;
+    case "room.start_session":
+      await applyRoomExperienceAction({
+        type: "start_session",
+        mode: action.mode === undefined ? undefined : requireRemoteRoomMode(action.mode),
+        sceneSoundEnabled: action.sceneSoundEnabled,
+        timerMinutes: action.timerMinutes
+      });
+      break;
+    case "room.stop_session":
+      await applyRoomExperienceAction({ type: "stop_session" });
+      break;
+    case "room.update_timer":
+      await applyRoomExperienceAction({ type: "update_timer", timerMinutes: action.timerMinutes, timerEndsAt: action.timerEndsAt });
+      break;
+    case "scene.set":
+      await setRemoteSceneVideo(action);
+      break;
+    case "scene.sound_set":
+      await setRemoteSceneSound(action);
+      break;
+    case "hifi.eq_set":
+      await applyRoomExperienceAction({ type: "set_hifi_eq", hifiEqPresetId: requireRemoteHifiEqPresetId(action.hifiEqPresetId) });
+      break;
+    case "display.brightness_set":
+      await applySystemAction({ type: "brightness_set", value: requireRemoteNumber(action.value, "display.brightness_set") });
+      break;
+    case "lyrics.refresh": {
+      const state = await getTikpalState();
+      scheduleLyricsRecognition(state, { force: true });
+      break;
+    }
+    default:
+      throw new Error(`Unsupported remote action: ${type || "missing type"}`);
+  }
+
+  return await buildRemoteStateResponse();
+}
+
+function buildPortableKeyRequiredBody() {
+  return {
+    error: "FORBIDDEN",
+    message: PORTABLE_API_KEY.trim()
+      ? "X-Tikpal-Key is required for portable remote actions"
+      : "TIKPAL_PORTABLE_API_KEY is not configured on this device"
+  };
+}
+
 const server = http.createServer(async (request, response) => {
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? `${HOST}:${PORT}`}`);
 
@@ -5851,7 +6181,49 @@ const server = http.createServer(async (request, response) => {
     return;
   }
 
+  const accessDecision = getTikpalApiAccessDecision({
+    method: request.method,
+    pathname: url.pathname,
+    headers: request.headers,
+    remoteAddress: request.socket.remoteAddress,
+    portableApiKey: PORTABLE_API_KEY
+  });
+
+  if (!accessDecision.allowed) {
+    sendJson(response, accessDecision.status ?? 403, buildAccessDeniedBody(accessDecision));
+    return;
+  }
+
   try {
+    if (request.method === "GET" && (url.pathname === "/api/v1/openapi.json" || url.pathname === "/api/v1/swagger.json")) {
+      sendJson(response, 200, buildOpenApiDocument({ appVersion: APP_VERSION }));
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/v1/docs") {
+      sendHtml(response, 200, buildOpenApiDocsHtml());
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/v1/remote/state") {
+      sendJson(response, 200, await buildRemoteStateResponse());
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/v1/remote/catalog") {
+      sendJson(response, 200, await buildRemoteCatalogResponse());
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/v1/remote/actions") {
+      if (!hasValidTikpalKey(request.headers, PORTABLE_API_KEY)) {
+        sendJson(response, 403, buildPortableKeyRequiredBody());
+        return;
+      }
+      sendJson(response, 200, await applyRemoteAction(await readJson(request)));
+      return;
+    }
+
     if (request.method === "GET" && (url.pathname === "/api/v1/health" || url.pathname === "/api/v1/system/health")) {
       sendJson(response, 200, { ok: true, service: "tikpal-api", mode: API_MODE });
       return;

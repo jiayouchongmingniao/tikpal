@@ -43,7 +43,7 @@ The kiosk must:
 - Hide browser chrome and restore prompts.
 - Preserve `http://localhost` access.
 - Start with a black background before CSS and JS load.
-- Avoid showing tty/login artifacts during normal boot.
+- Avoid showing kernel, systemd, udev, cursor, or tty/login artifacts during normal boot and reboot.
 - Use a dedicated Chromium profile.
 - Expose a `--check` style validation path before launch.
 

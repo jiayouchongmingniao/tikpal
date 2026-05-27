@@ -102,6 +102,8 @@ TIKPAL_HIFI_EQ_APPLY_COMMAND=""
 TIKPAL_HIFI_SPECTRUM_COMMAND=""
 TIKPAL_DDCUTIL_BIN=ddcutil
 TIKPAL_DDCUTIL_DISPLAY=""
+TIKPAL_DDCUTIL_READ_CACHE_MS=300000
+TIKPAL_DDCUTIL_READ_TIMEOUT_MS=3500
 TIKPAL_SPOTIFY_READY_COMMAND=""
 TIKPAL_SPOTIFY_ACTIVE_COMMAND=""
 TIKPAL_SPOTIFY_ACTIVATE_COMMAND=""
@@ -141,6 +143,7 @@ TIKPAL_RADIO_LABEL="Last Station"
 TIKPAL_SYSTEM_REBOOT_COMMAND="sudo systemctl reboot"
 TIKPAL_SYSTEM_SHUTDOWN_COMMAND="sudo systemctl poweroff"
 TIKPAL_DSP_PRESET=Unknown
+TIKPAL_PORTABLE_API_KEY="CHANGE_ME_LONG_RANDOM_REMOTE_KEY"
 EOF
 ```
 
@@ -148,7 +151,8 @@ EOF
 `TIKPAL_MPD_STARTUP_VOLUME=30` makes Tikpal set MPD to 30% before auto-resuming playback when the API starts and playback is not already running.
 `TIKPAL_HIFI_EQ_APPLY_COMMAND` enables real Hi-Fi EQ preset control in `mpc` mode. Until this is set, `set_hifi_eq` is intentionally rejected on the Pi instead of pretending the DSP changed. The command receives `%PRESET%`, `%LABEL%`, and `%VISUAL%` placeholders, so a future Pi hook can map `flat`, `warm`, and `vocal` to local CamillaDSP configs. A CamillaDSP-based hook may use the official WebSocket control path, where `SetConfigName` selects a config and `Reload` applies it: [CamillaDSP WebSocket docs](https://www.camilladsp.com/docs/camilladsp/1.0.1/websocket/).
 `TIKPAL_HIFI_SPECTRUM_COMMAND` is reserved for a Pi-side audio analyzer that emits one JSON frame with `bands` as 32 normalized values and `peaks.left` / `peaks.right` in the `0..1` range. Leave it unset for this slice; `/api/v1/audio/spectrum` will return mock-but-protocol-real frames so the UI contract is already stable.
-`TIKPAL_DDCUTIL_BIN` and optional `TIKPAL_DDCUTIL_DISPLAY` control the ambient right-edge brightness gesture path when the display exposes DDC/CI VCP `0x10`.
+`TIKPAL_DDCUTIL_BIN` and optional `TIKPAL_DDCUTIL_DISPLAY` control the ambient right-edge brightness gesture path when the display exposes DDC/CI VCP `0x10`. `TIKPAL_DDCUTIL_READ_CACHE_MS` keeps status polling from blocking the kiosk on frequent I2C reads; brightness writes still apply immediately.
+`TIKPAL_PORTABLE_API_KEY` protects portable-controller writes through `POST /api/v1/remote/actions`. Keep `tikpal-api.service` bound to `127.0.0.1` and let portable controllers enter through the production web service at `http://<pi>:4173/api/v1/remote/*`; the web proxy blocks external clients from calling the full internal kiosk API.
 `TIKPAL_SPOTIFY_*` lets the Pi expose Spotify Connect as a truthful ready/active handoff target without using Spotify Web API. Leave it closed by default and provide activate/disable commands when Spotify should only accept connections after the user selects that source.
 `TIKPAL_BLUETOOTH_*`, `TIKPAL_AIRPLAY_*`, and `TIKPAL_UPNP_*` let Tikpal enforce the armed-only source gate against moOde's renderer services. On moOde, the checked-in `deploy/moode/tikpal-bluetooth-enable.sh` script is the preferred Bluetooth enable path because it both enables the renderer and re-arms the controller to `power on`, `discoverable on`, and `pairable on`. `deploy/moode/tikpal-airplay-enable.sh` is the preferred AirPlay enable path because it enables the renderer and then nudges `shairport-sync.service` into the running state that actually advertises the receiver. `deploy/moode/tikpal-bluetooth-label.sh` reads the current broadcast name from `bluetoothctl show` so the frontend can tell the user what name to search for on their phone. `TIKPAL_UPNP_*` should point at the target moOde UPnP/DLNA renderer controls; Tikpal treats this as DLNA casting intake, not media-server browsing. `moodeutl -Ro --bluetooth off` and `moodeutl -Ro --airplay off` remain the practical disable commands, while `cfg_system` values `btsvc`, `btactive`, `airplaysvc`, and `aplactive` plus `TIKPAL_AIRPLAY_RECEIVER_ACTIVE_COMMAND` keep the UI honest about whether AirPlay is really up.
 `TIKPAL_BLUETOOTH_METADATA_COMMAND` points to the BlueZ / AVRCP metadata probe. Tikpal uses this first when Bluetooth is connected, so phones that expose title / artist metadata can resolve lyrics through LRCLIB without audio fingerprint credentials. When BlueZ also exposes `Position` and `Duration`, Tikpal maps those into playback progress so synced LRCLIB lyrics can follow Bluetooth playback timing instead of falling back to a fixed text rotation.
@@ -251,6 +255,18 @@ curl -fsS http://127.0.0.1:8787/api/v1/system/status
 curl -fsS http://127.0.0.1:8787/api/v1/system/runtime
 ```
 
+Verify the portable remote facade locally and through the LAN-facing web proxy:
+
+```bash
+curl -fsS http://127.0.0.1:8787/api/v1/openapi.json
+curl -fsS http://127.0.0.1:8787/api/v1/remote/state
+curl -fsS http://127.0.0.1:4173/api/v1/remote/catalog
+curl -fsS -X POST http://127.0.0.1:4173/api/v1/remote/actions \
+  -H "Content-Type: application/json" \
+  -H "X-Tikpal-Key: $TIKPAL_PORTABLE_API_KEY" \
+  --data '{"type":"playback.play_pause"}'
+```
+
 Verify Quick Settings actions from the API before relying on the kiosk UI:
 
 ```bash
@@ -272,6 +288,29 @@ curl -fsS http://127.0.0.1:8787/api/v1/system/state
 ```
 
 Success means `/api/v1/health` reports `mode:"mpc"`, `/api/v1/system/status` reports `display.controllable=true` and `display.transport="ddcci"`, and `ddcutil getvcp 10 --brief` returns the same brightness value after the API action. If `/dev/i2c-*` is absent or VCP `0x10` is unreadable, reboot once after the helper writes `dtparam=i2c_arm=on`, then re-run the probe before assuming the display lacks DDC/CI.
+
+## Quiet Boot And Reboot
+
+To keep the HDMI kiosk screen from showing kernel, systemd, udev, cursor, or `tty1 login` text while the Raspberry Pi boots or reboots, run the repo-owned quiet boot helper on the Pi:
+
+```bash
+cd /home/moode/code/tikpal
+sudo deploy/moode/tikpal-quiet-boot-enable.sh
+```
+
+The helper backs up the detected cmdline file (`/boot/firmware/cmdline.txt` or `/boot/cmdline.txt`), removes visible `tty1` console routing, adds quiet boot flags, writes a systemd manager drop-in with `ShowStatus=no`, writes a quiet console `sysctl` drop-in, and disables `getty@tty1.service`. SSH remains available.
+
+Verify the installed quiet boot state:
+
+```bash
+grep -E 'quiet|console=tty3|systemd.show_status=false|vt.global_cursor_default=0' /boot/firmware/cmdline.txt /boot/cmdline.txt 2>/dev/null
+systemctl is-enabled getty@tty1.service || true
+systemctl is-active getty@tty1.service || true
+cat /etc/systemd/system.conf.d/tikpal-quiet-boot.conf
+cat /etc/sysctl.d/99-tikpal-quiet-console.conf
+```
+
+Reboot once for the cmdline changes to take effect. Emergency kernel failures can still show critical text; normal boot and reboot should stay visually quiet until Chromium takes over.
 
 ## Enable Kiosk
 

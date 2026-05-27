@@ -4,10 +4,12 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import http from "node:http";
 import { tmpdir } from "node:os";
 import path, { resolve } from "node:path";
+import { getTikpalApiAccessDecision, hasValidTikpalKey } from "../server/accessControl.mjs";
 
 const PORT = Number(process.env.TIKPAL_API_SMOKE_PORT ?? 18787);
 const HOST = "127.0.0.1";
 const BASE_URL = `http://${HOST}:${PORT}`;
+const PORTABLE_API_KEY = "api-smoke-portable-key";
 const SERVER_READY_TEXT = "tikpal-api mock listening";
 const PROVIDER_PORT = Number(process.env.TIKPAL_PROVIDER_SMOKE_PORT ?? 18788);
 const PROVIDER_URL = `http://${HOST}:${PROVIDER_PORT}`;
@@ -50,10 +52,80 @@ async function requestBinary(path) {
   return { response, body };
 }
 
+async function requestText(path, options = {}) {
+  const response = await fetch(`${BASE_URL}${path}`, {
+    ...options,
+    headers: {
+      Accept: "text/html,application/json",
+      ...options.headers
+    }
+  });
+  const body = await response.text();
+  return { response, body };
+}
+
 function assert(condition, message) {
   if (!condition) {
     throw new Error(message);
   }
+}
+
+function runAccessControlHelperSmoke() {
+  assert(
+    getTikpalApiAccessDecision({
+      method: "GET",
+      pathname: "/api/v1/remote/state",
+      remoteAddress: "192.168.10.44",
+      portableApiKey: PORTABLE_API_KEY
+    }).allowed === true,
+    "external portable remote safe reads should be allowed"
+  );
+  assert(
+    getTikpalApiAccessDecision({
+      method: "POST",
+      pathname: "/api/v1/playback/actions",
+      remoteAddress: "192.168.10.44",
+      portableApiKey: PORTABLE_API_KEY
+    }).allowed === false,
+    "external legacy writes should be blocked"
+  );
+  assert(
+    getTikpalApiAccessDecision({
+      method: "POST",
+      pathname: "/api/v1/remote/actions",
+      headers: { "x-tikpal-key": "wrong" },
+      remoteAddress: "192.168.10.44",
+      portableApiKey: PORTABLE_API_KEY
+    }).allowed === false,
+    "external remote writes should reject wrong keys"
+  );
+  assert(
+    getTikpalApiAccessDecision({
+      method: "POST",
+      pathname: "/api/v1/remote/actions",
+      headers: { "x-tikpal-key": PORTABLE_API_KEY },
+      remoteAddress: "192.168.10.44",
+      portableApiKey: PORTABLE_API_KEY
+    }).allowed === true,
+    "external keyed remote writes should be allowed"
+  );
+  assert(
+    getTikpalApiAccessDecision({
+      method: "POST",
+      pathname: "/api/v1/system/actions",
+      remoteAddress: "::ffff:127.0.0.1",
+      portableApiKey: PORTABLE_API_KEY
+    }).allowed === true,
+    "loopback kiosk UI writes should stay allowed"
+  );
+  assert(
+    hasValidTikpalKey({ "x-tikpal-key": PORTABLE_API_KEY }, PORTABLE_API_KEY) === true,
+    "X-Tikpal-Key helper should accept the configured key"
+  );
+  assert(
+    hasValidTikpalKey({ "x-tikpal-key": PORTABLE_API_KEY }, "") === false,
+    "X-Tikpal-Key helper should reject writes when no device key is configured"
+  );
 }
 
 function localMinutesForTimeZone(timeZone, date = new Date()) {
@@ -297,6 +369,8 @@ async function runMpcHifiEqUnsupportedSmoke(roomExperienceStatePath) {
 }
 
 async function run() {
+  runAccessControlHelperSmoke();
+
   const apiAssetsRoot = await mkdtemp(path.join(tmpdir(), "tikpal-api-assets-"));
   const apiStateRoot = await mkdtemp(path.join(tmpdir(), "tikpal-api-state-"));
   const musicLibraryStatePath = path.join(apiStateRoot, "music-library-state.json");
@@ -360,6 +434,7 @@ async function run() {
       ...process.env,
       TIKPAL_API_HOST: HOST,
       TIKPAL_API_PORT: String(PORT),
+      TIKPAL_PORTABLE_API_KEY: PORTABLE_API_KEY,
       TIKPAL_PUBLIC_ASSETS_ROOT: apiAssetsRoot,
       TIKPAL_MUSIC_LIBRARY_STATE_PATH: musicLibraryStatePath,
       TIKPAL_ROOM_EXPERIENCE_STATE_PATH: roomExperienceStatePath,
@@ -413,6 +488,49 @@ async function run() {
     assert(initial.body.system.dspState.presetLabel === "Flat", "DSP state should reflect the default Hi-Fi EQ preset label");
     assert(initial.body.system.dspState.controllable === true, "mock DSP state should be controllable");
     assert(initial.body.system.dspState.availablePresets.length === 3, "DSP state should expose the three built-in Hi-Fi EQ presets");
+
+    const openapi = await request("/api/v1/openapi.json");
+    assert(openapi.response.ok, "OpenAPI JSON should return 200");
+    assert(openapi.response.headers.get("content-type")?.includes("application/json"), "OpenAPI JSON should return JSON");
+    assert(openapi.body.openapi === "3.0.3", "OpenAPI JSON should expose OpenAPI 3.0.3");
+    assert(openapi.body.paths?.["/remote/actions"]?.post, "OpenAPI JSON should describe remote actions");
+    const swagger = await request("/api/v1/swagger.json");
+    assert(swagger.response.ok, "Swagger JSON should return 200");
+    assert(JSON.stringify(swagger.body.paths) === JSON.stringify(openapi.body.paths), "swagger.json should mirror openapi.json paths");
+    const docs = await requestText("/api/v1/docs");
+    assert(docs.response.ok, "API docs should return 200");
+    assert(docs.response.headers.get("content-type")?.includes("text/html"), "API docs should return HTML");
+    assert(docs.body.includes("/api/v1/openapi.json"), "API docs should link to OpenAPI JSON");
+
+    const remoteState = await request("/api/v1/remote/state");
+    assert(remoteState.response.ok, "remote state should return 200");
+    assert(remoteState.body.playback.title, "remote state should expose playback");
+    assert(typeof remoteState.body.volume.percent === "number", "remote state should expose volume");
+    assert(remoteState.body.room.mode === "calm", "remote state should expose room mode");
+    assert(remoteState.body.scene.videoId === "rainy-window", "remote state should expose scene video id");
+    assert(remoteState.body.source.current.id === "mpd", "remote state should expose current source");
+    assert(remoteState.body.hifi.eqPresetId === "flat", "remote state should expose Hi-Fi EQ");
+    assert(remoteState.body.display.transport === "mock", "remote state should expose display transport");
+    const remoteCatalog = await request("/api/v1/remote/catalog");
+    assert(remoteCatalog.response.ok, "remote catalog should return 200");
+    assert(remoteCatalog.body.allowedActions.includes("playback.play_pause"), "remote catalog should expose allowed action ids");
+    assert(remoteCatalog.body.sourceTargets.includes("mpd") && !remoteCatalog.body.sourceTargets.includes("scene"), "remote catalog should expose only portable source targets");
+    assert(remoteCatalog.body.roomModes.some((mode) => mode.id === "hifi"), "remote catalog should expose room modes");
+    assert(remoteCatalog.body.sceneVideos.some((video) => video.id === "rainy-window"), "remote catalog should expose scene videos");
+    assert(remoteCatalog.body.hifiEqPresets.map((preset) => preset.id).join(",") === "flat,warm,vocal", "remote catalog should expose Hi-Fi EQ presets");
+
+    const remoteMissingKey = await request("/api/v1/remote/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "playback.play_pause" })
+    });
+    assert(remoteMissingKey.response.status === 403, "remote actions should require X-Tikpal-Key");
+    assert(remoteMissingKey.body.error === "FORBIDDEN", "remote actions without key should return FORBIDDEN");
+    const remoteWrongKey = await request("/api/v1/remote/actions", {
+      method: "POST",
+      headers: { "X-Tikpal-Key": "wrong" },
+      body: JSON.stringify({ type: "playback.play_pause" })
+    });
+    assert(remoteWrongKey.response.status === 403, "remote actions should reject wrong X-Tikpal-Key");
 
     const focusExperience = await request("/api/v1/experience/actions", {
       method: "POST",
@@ -1075,6 +1193,88 @@ async function run() {
     const invalidRadioQuery = await request("/api/v1/audio/radios?limit=500");
     assert(invalidRadioQuery.response.status === 400, "invalid radio query should return 400");
     assert(invalidRadioQuery.body.error === "BAD_REQUEST", "invalid radio query should return BAD_REQUEST");
+
+    const remoteHeaders = { "X-Tikpal-Key": PORTABLE_API_KEY };
+    const remotePlay = await request("/api/v1/remote/actions", {
+      method: "POST",
+      headers: remoteHeaders,
+      body: JSON.stringify({ type: "playback.play" })
+    });
+    assert(remotePlay.response.ok, "remote playback.play should return 200");
+    assert(remotePlay.body.playback.state === "playing", "remote playback.play should start playback");
+    const remoteVolume = await request("/api/v1/remote/actions", {
+      method: "POST",
+      headers: remoteHeaders,
+      body: JSON.stringify({ type: "volume_set", value: 33 })
+    });
+    assert(remoteVolume.response.ok, "remote volume_set should return 200");
+    assert(remoteVolume.body.volume.percent === 33, "remote volume_set should update volume");
+    const remoteSource = await request("/api/v1/remote/actions", {
+      method: "POST",
+      headers: remoteHeaders,
+      body: JSON.stringify({ type: "source.set", target: "radio", radioStationId: "radio-2" })
+    });
+    assert(remoteSource.response.ok, "remote source.set should return 200");
+    assert(remoteSource.body.source.current.id === "radio", "remote source.set should switch source");
+    const remoteRoom = await request("/api/v1/remote/actions", {
+      method: "POST",
+      headers: remoteHeaders,
+      body: JSON.stringify({ type: "room.set_mode", mode: "calm" })
+    });
+    assert(remoteRoom.response.ok, "remote room.set_mode should return 200");
+    assert(remoteRoom.body.room.mode === "calm", "remote room.set_mode should update room mode");
+    const remoteScene = await request("/api/v1/remote/actions", {
+      method: "POST",
+      headers: remoteHeaders,
+      body: JSON.stringify({ type: "scene.set", sceneVideoId: "rainy-window" })
+    });
+    assert(remoteScene.response.ok, "remote scene.set should return 200");
+    assert(remoteScene.body.scene.videoId === "rainy-window", "remote scene.set should update scene");
+    const remoteSceneSound = await request("/api/v1/remote/actions", {
+      method: "POST",
+      headers: remoteHeaders,
+      body: JSON.stringify({ type: "scene.sound_set", enabled: false })
+    });
+    assert(remoteSceneSound.response.ok, "remote scene.sound_set should return 200");
+    assert(remoteSceneSound.body.scene.sceneSoundEnabled === false, "remote scene.sound_set should update scene sound");
+    const remoteHifi = await request("/api/v1/remote/actions", {
+      method: "POST",
+      headers: remoteHeaders,
+      body: JSON.stringify({ type: "hifi.eq_set", hifiEqPresetId: "vocal" })
+    });
+    assert(remoteHifi.response.ok, "remote hifi.eq_set should return 200");
+    assert(remoteHifi.body.hifi.eqPresetId === "vocal", "remote hifi.eq_set should update Hi-Fi EQ");
+    const remoteBrightness = await request("/api/v1/remote/actions", {
+      method: "POST",
+      headers: remoteHeaders,
+      body: JSON.stringify({ type: "display.brightness_set", value: 44 })
+    });
+    assert(remoteBrightness.response.ok, "remote display.brightness_set should return 200");
+    assert(remoteBrightness.body.display.brightnessPercent === 44, "remote display.brightness_set should update brightness");
+    const remoteLyrics = await request("/api/v1/remote/actions", {
+      method: "POST",
+      headers: remoteHeaders,
+      body: JSON.stringify({ type: "lyrics.refresh" })
+    });
+    assert(remoteLyrics.response.ok, "remote lyrics.refresh should return 200");
+    const remoteUnsupportedSystem = await request("/api/v1/remote/actions", {
+      method: "POST",
+      headers: remoteHeaders,
+      body: JSON.stringify({ type: "system.reboot" })
+    });
+    assert(remoteUnsupportedSystem.response.status === 400, "remote actions should not expose reboot");
+    const remoteUnsupportedLibrary = await request("/api/v1/remote/actions", {
+      method: "POST",
+      headers: remoteHeaders,
+      body: JSON.stringify({ type: "library_scan" })
+    });
+    assert(remoteUnsupportedLibrary.response.status === 400, "remote actions should not expose library scan");
+    const remoteUnsupportedPlaylist = await request("/api/v1/remote/actions", {
+      method: "POST",
+      headers: remoteHeaders,
+      body: JSON.stringify({ type: "playlist.create", name: "Nope" })
+    });
+    assert(remoteUnsupportedPlaylist.response.status === 400, "remote actions should not expose playlist CRUD");
 
     await runMpcHifiEqUnsupportedSmoke(roomExperienceStatePath);
 

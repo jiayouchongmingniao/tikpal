@@ -1,7 +1,9 @@
 import { access, readFile, stat } from "node:fs/promises";
 import { constants } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
 import path from "node:path";
+import { mkdtempSync, writeFileSync } from "node:fs";
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 
@@ -13,6 +15,7 @@ const requiredFiles = [
   "deploy/chromium/chromium-flags.conf",
   "deploy/chromium/managed-policies.json",
   "deploy/chromium/env.kiosk.example",
+  "deploy/moode/tikpal-quiet-boot-enable.sh",
   "deploy/systemd/tikpal-api.service",
   "deploy/systemd/tikpal-web.service",
   "deploy/systemd/tikpal-kiosk.service",
@@ -37,6 +40,7 @@ async function run() {
 
   await assertExecutable("deploy/chromium/launch-tikpal-kiosk.sh");
   await assertExecutable("deploy/chromium/start-tikpal-kiosk-session.sh");
+  await assertExecutable("deploy/moode/tikpal-quiet-boot-enable.sh");
   await assertExecutable("deploy/systemd/install-systemd-services.sh");
 
   const apiUnit = await readFile(path.join(ROOT, "deploy/systemd/tikpal-api.service"), "utf8");
@@ -63,6 +67,29 @@ async function run() {
   assert(check.stdout.includes("check passed"), "launcher --check should report success");
   assert(check.stdout.includes("chromium window: 2560,720"), "launcher should normalize Chromium window size");
   assert(check.stdout.includes("window position: 0,0"), "launcher should pin Chromium to the top-left display origin");
+
+  const quietBootDir = mkdtempSync(path.join(tmpdir(), "tikpal-quiet-boot-"));
+  const quietBootCmdline = path.join(quietBootDir, "cmdline.txt");
+  writeFileSync(
+    quietBootCmdline,
+    "console=serial0,115200 console=tty1 root=PARTUUID=abc rootfstype=ext4 fsck.repair=yes rootwait\n"
+  );
+  const quietBootCheck = spawnSync("bash", [
+    "deploy/moode/tikpal-quiet-boot-enable.sh",
+    "--dry-run",
+    "--cmdline",
+    quietBootCmdline
+  ], {
+    cwd: ROOT,
+    encoding: "utf8"
+  });
+
+  assert(quietBootCheck.status === 0, `quiet boot dry-run failed:\n${quietBootCheck.stdout}\n${quietBootCheck.stderr}`);
+  const nextCmdline = quietBootCheck.stdout.match(/next cmdline: (.+)/)?.[1] ?? "";
+  assert(nextCmdline.includes("console=tty3"), "quiet boot should move visible console away from tty1");
+  assert(!nextCmdline.includes("console=tty1"), "quiet boot should remove tty1 from the kernel console");
+  assert(nextCmdline.includes("systemd.show_status=false"), "quiet boot should hide systemd status lines");
+  assert(nextCmdline.includes("vt.global_cursor_default=0"), "quiet boot should hide the text cursor");
 
   console.log("kiosk package smoke passed");
 }

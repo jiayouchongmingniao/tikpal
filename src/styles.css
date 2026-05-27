@@ -744,18 +744,20 @@ select {
   border-radius: 999px 999px 6px 6px;
   background:
     linear-gradient(180deg, rgba(255, 244, 185, 0.94), rgba(117, 199, 236, 0.76) 54%, rgba(91, 127, 209, 0.58));
-  box-shadow:
-    0 0 22px rgba(242, 211, 107, 0.22),
-    0 18px 70px rgba(0, 0, 0, 0.32);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.26);
+  opacity: 0.84;
+  transform: scaleY(0.9);
   transform-origin: bottom center;
-  animation: eq-bar-pulse 1.38s ease-in-out infinite;
-  animation-delay: var(--eq-delay);
-  animation-play-state: paused;
+  transition:
+    height 260ms ease,
+    opacity 260ms ease,
+    transform 260ms ease;
 }
 
 .eq-visual-scene.is-playing .eq-spectrum span,
 .eq-visual-scene.is-playing .eq-waveform span {
-  animation-play-state: running;
+  opacity: 1;
+  transform: scaleY(1);
 }
 
 .eq-waveform {
@@ -832,19 +834,6 @@ select {
   font-size: clamp(34px, 3vw, 58px);
   font-weight: 560;
   line-height: 1;
-}
-
-@keyframes eq-bar-pulse {
-  0%,
-  100% {
-    transform: scaleY(0.56);
-    opacity: 0.74;
-  }
-
-  44% {
-    transform: scaleY(1.12);
-    opacity: 1;
-  }
 }
 
 @keyframes eq-vu-sweep {

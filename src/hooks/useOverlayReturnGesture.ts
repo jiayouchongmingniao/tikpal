@@ -2,7 +2,8 @@ import { useCallback, useRef } from "react";
 
 const TAP_MAX_DISTANCE = 10;
 const SWIPE_UP_THRESHOLD = -80;
-const HORIZONTAL_DRIFT_LIMIT = 72;
+const MIN_HORIZONTAL_DRIFT_LIMIT = 72;
+const HORIZONTAL_DRIFT_RATIO = 0.65;
 const FORM_CONTROL_SELECTOR = "input, select, textarea";
 const CLICK_CONTROL_SELECTOR = "button, a, [role='button'], [data-gesture-control]";
 
@@ -35,6 +36,13 @@ export function useOverlayReturnGesture(onReturnAmbient: () => void) {
 
   const resetGesture = useCallback(() => {
     gestureRef.current = null;
+  }, []);
+
+  const isIntentionalSwipeUp = useCallback((deltaX: number, deltaY: number) => {
+    if (deltaY >= SWIPE_UP_THRESHOLD) return false;
+    const upwardDistance = Math.abs(deltaY);
+    const horizontalDriftLimit = Math.max(MIN_HORIZONTAL_DRIFT_LIMIT, upwardDistance * HORIZONTAL_DRIFT_RATIO);
+    return Math.abs(deltaX) <= horizontalDriftLimit;
   }, []);
 
   const onPointerDown = useCallback<React.PointerEventHandler<HTMLElement>>((event) => {
@@ -74,9 +82,8 @@ export function useOverlayReturnGesture(onReturnAmbient: () => void) {
       const deltaX = gesture.currentX - gesture.startX;
       const deltaY = gesture.currentY - gesture.startY;
       const distance = Math.hypot(deltaX, deltaY);
-      const isIntentionalSwipeUp = deltaY < SWIPE_UP_THRESHOLD && Math.abs(deltaX) < HORIZONTAL_DRIFT_LIMIT;
 
-      if (isIntentionalSwipeUp) {
+      if (isIntentionalSwipeUp(deltaX, deltaY)) {
         suppressClickRef.current = true;
         event.preventDefault();
         event.stopPropagation();
@@ -89,7 +96,7 @@ export function useOverlayReturnGesture(onReturnAmbient: () => void) {
 
       resetGesture();
     },
-    [clearSuppressClick, onReturnAmbient, resetGesture]
+    [clearSuppressClick, isIntentionalSwipeUp, onReturnAmbient, resetGesture]
   );
 
   const onPointerCancel = useCallback<React.PointerEventHandler<HTMLElement>>(() => {

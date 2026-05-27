@@ -89,6 +89,21 @@ npm run test:api
 
 The smoke test starts a temporary mock API, checks state endpoints, verifies playback actions, validates source/library contracts, and confirms invalid action handling. For local music taxonomy-only changes, run `npm run test:library` as well; it checks that the ignored `public/assets/music` manifest, covers, MP3 paths, and playlists still match the curated Local tree.
 
+## Portable Remote API
+
+Portable controllers should use the safe facade instead of the kiosk's full internal API:
+
+```bash
+curl -fsS http://127.0.0.1:8787/api/v1/openapi.json
+curl -fsS http://127.0.0.1:8787/api/v1/remote/state
+curl -fsS -X POST http://127.0.0.1:8787/api/v1/remote/actions \
+  -H "Content-Type: application/json" \
+  -H "X-Tikpal-Key: $TIKPAL_PORTABLE_API_KEY" \
+  --data '{"type":"playback.play_pause"}'
+```
+
+`GET /api/v1/remote/state` and `GET /api/v1/remote/catalog` expose playback, volume, room mode, scene, source, display, Hi-Fi EQ, and runtime state for a portable remote. `POST /api/v1/remote/actions` is the only portable write path and requires `TIKPAL_PORTABLE_API_KEY` through the `X-Tikpal-Key` header. Reboot, shutdown, library scan, and playlist CRUD stay local-only. Swagger-compatible JSON is available at `/api/v1/openapi.json` and `/api/v1/swagger.json`; `/api/v1/docs` is a lightweight local documentation page.
+
 ## Kiosk Package Smoke Test
 
 Validate the Raspberry Pi service and Chromium kiosk package:
@@ -119,10 +134,13 @@ npm run build
 cp -n deploy/chromium/env.kiosk.example .env.kiosk
 sudo deploy/moode/tikpal-ddcci-enable.sh
 deploy/chromium/launch-tikpal-kiosk.sh --check
+sudo deploy/moode/tikpal-quiet-boot-enable.sh
 sudo deploy/systemd/install-systemd-services.sh --app-dir /home/moode/code/tikpal --user moode --enable-kiosk --restart
 ```
 
 `deploy/moode/tikpal-ddcci-enable.sh` installs `ddcutil` / `i2c-tools`, enables `i2c-dev`, grants the service user access to `/dev/i2c-*`, writes `TIKPAL_DDCUTIL_*` into `.env`, and probes VCP `0x10`. Reboot if the script cannot see `/dev/i2c-*` after first install.
+
+`deploy/moode/tikpal-quiet-boot-enable.sh` suppresses normal boot/reboot console text on the HDMI kiosk display by quieting the kernel/systemd console path and disabling the visible `tty1` login prompt.
 
 See the full deploy and rollback runbook in [docs/06-deployment/raspberry-pi-kiosk-deploy-v1.md](docs/06-deployment/raspberry-pi-kiosk-deploy-v1.md).
 
@@ -149,7 +167,7 @@ The first implementation milestone should deliver:
 
 ## Repository Status
 
-The local API exposes a first-class audio-source model for `Library`, internal `Audio`, `Radio`, `Spotify Connect`, `Bluetooth`, `AirPlay`, and `DLNA`. The frontend reads current source summary from `/api/v1/system/state`, inspects compact source state through `GET /api/v1/audio/sources`, renders six visible source tabs (`Library`, `Radio`, `Spotify`, `AirPlay`, `Bluetooth`, `DLNA`), fetches the searchable radio catalog through `GET /api/v1/audio/radios`, fetches the manifest-backed local music library through `GET /api/v1/audio/library`, manages the touch-first Playlist Hub through `/api/v1/audio/playlists` and `/api/v1/audio/playlist-actions`, posts source switches to `POST /api/v1/audio/source`, and still uses `/api/v1/playback/actions` plus `/api/v1/system/actions` for transport and system cards.
+The local API exposes a first-class audio-source model for `Library`, internal `Audio`, `Radio`, `Spotify Connect`, `Bluetooth`, `AirPlay`, and `DLNA`. The frontend reads current source summary from `/api/v1/system/state`, inspects compact source state through `GET /api/v1/audio/sources`, renders six visible source tabs (`Library`, `Radio`, `Spotify`, `AirPlay`, `Bluetooth`, `DLNA`), fetches the searchable radio catalog through `GET /api/v1/audio/radios`, fetches the manifest-backed local music library through `GET /api/v1/audio/library`, manages the touch-first Playlist Hub through `/api/v1/audio/playlists` and `/api/v1/audio/playlist-actions`, posts source switches to `POST /api/v1/audio/source`, and still uses `/api/v1/playback/actions` plus `/api/v1/system/actions` for transport and system cards. Portable remotes use `/api/v1/remote/*` plus `X-Tikpal-Key` for safe LAN control; the full internal API remains local-kiosk-only when accessed through the production web proxy.
 
 The real moOde / MPD adapter remains the audio owner. In `mpc` mode, Tikpal keeps MPD/library control as the default path, treats Radio as a searchable station catalog with direct `radioStationId` switching, and now models Spotify Connect, Bluetooth, AirPlay, and DLNA as armed-only intake paths: they are connectable only while explicitly selected. The player source rail is ordered as `Library`, `Radio`, `Spotify`, `AirPlay`, `Bluetooth`, and `DLNA`; Playlist is a separate three-column management page opened from Player or Ambient. Playlist user state persists name, mood tags, cover type/value, description, and track order in `.tikpal/music-library-state.json`; curated playlists stay read-only and can be duplicated into editable user playlists. The Playlist page supports both touchscreen gestures and desktop trackpad use: horizontal two-finger swipes reveal card/song quick actions, while vertical trackpad scrolling stays inside the readable columns instead of returning to Ambient. Library then separates storage (`Local`, `NAS`, `USB`, `Favorites`, `Recently Added`) from Local taxonomy (`Focus`, `Meditation`, `Rest`, then subfolders). The current Local tree is `Focus` -> `Lo-fi / Ambient`, `Classical / Piano`, `Binaural / Alpha / Theta`, `White Noise / Brown Noise`; `Meditation` -> `Guided Meditation`, `Breathing`, `Singing Bowl`, `Nature Sounds`; and `Rest` -> `Nap`, `Sleep`, `Rain / Ocean / Forest`, `Deep Sleep Long Tracks`. `TIKPAL_RADIO_DEFAULT_URI` stays as a fallback when moOde presets are unavailable, while Bluetooth / AirPlay / DLNA gating is wired through environment-configured enable/disable and status commands. DLNA means Tikpal/moOde acts as a UPnP/DLNA renderer for external casting, not as a DLNA media-server browser. Bluetooth state now also carries the local advertised device name so the frontend can tell the user exactly what to look for on their phone while pairing.
 

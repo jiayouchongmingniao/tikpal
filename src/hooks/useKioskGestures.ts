@@ -42,6 +42,7 @@ const TWO_FINGER_DOWN_THRESHOLD = 130;
 const SWIPE_UP_THRESHOLD = -80;
 const LONG_PRESS_MS = 850;
 const WHEEL_THRESHOLD = 180;
+const GESTURE_PROGRESS_STEP = 0.05;
 
 function clampProgress(value: number, threshold: number): number {
   return Math.max(0, Math.min(1, value / threshold));
@@ -60,6 +61,8 @@ export function useKioskGestures(options: GestureOptions): GestureHandlers & { g
   const longPressTimerRef = useRef<number | null>(null);
   const wheelAccumulatorRef = useRef(0);
   const wheelResetTimerRef = useRef<number | null>(null);
+  const gesturePreviewRef = useRef<GesturePreview | null>(null);
+  const gesturePreviewFrameRef = useRef<number | null>(null);
   const [gesturePreview, setGesturePreview] = useState<GesturePreview | null>(null);
 
   const clearLongPress = useCallback(() => {
@@ -71,14 +74,49 @@ export function useKioskGestures(options: GestureOptions): GestureHandlers & { g
 
   const resetPointers = useCallback(() => {
     pointersRef.current.clear();
+    gesturePreviewRef.current = null;
+    if (gesturePreviewFrameRef.current !== null) {
+      window.cancelAnimationFrame(gesturePreviewFrameRef.current);
+      gesturePreviewFrameRef.current = null;
+    }
     setGesturePreview(null);
     clearLongPress();
   }, [clearLongPress]);
+
+  const updateGesturePreview = useCallback((preview: GesturePreview | null) => {
+    const nextPreview = preview
+      ? {
+          ...preview,
+          progress: Math.round(preview.progress / GESTURE_PROGRESS_STEP) * GESTURE_PROGRESS_STEP
+        }
+      : null;
+    const currentPreview = gesturePreviewRef.current;
+    if (
+      currentPreview?.kind === nextPreview?.kind
+      && currentPreview?.label === nextPreview?.label
+      && currentPreview?.progress === nextPreview?.progress
+    ) {
+      return;
+    }
+
+    gesturePreviewRef.current = nextPreview;
+    if (gesturePreviewFrameRef.current !== null) return;
+
+    gesturePreviewFrameRef.current = window.requestAnimationFrame(() => {
+      gesturePreviewFrameRef.current = null;
+      setGesturePreview(gesturePreviewRef.current);
+    });
+  }, []);
 
   const onPointerDown = useCallback<React.PointerEventHandler<HTMLElement>>(
     (event) => {
       options.onActivity();
       const protectedStart = isProtectedTarget(event.target);
+      if (protectedStart) {
+        resetPointers();
+        return;
+      }
+
       pointersRef.current.set(event.pointerId, {
         id: event.pointerId,
         x: event.clientX,
@@ -86,20 +124,14 @@ export function useKioskGestures(options: GestureOptions): GestureHandlers & { g
         startX: event.clientX,
         startY: event.clientY,
         startedAt: performance.now(),
-        protectedStart
+        protectedStart: false
       });
-
-      if (protectedStart) {
-        clearLongPress();
-        setGesturePreview(null);
-        return;
-      }
 
       event.currentTarget.setPointerCapture(event.pointerId);
 
       if (pointersRef.current.size === 1 && options.mode === "ambient") {
         clearLongPress();
-        setGesturePreview({ kind: "menu", label: "Quick Menu", progress: 0 });
+        updateGesturePreview({ kind: "menu", label: "Quick Menu", progress: 0 });
         longPressTimerRef.current = window.setTimeout(() => {
           options.onOpenMenu();
           resetPointers();
@@ -108,13 +140,14 @@ export function useKioskGestures(options: GestureOptions): GestureHandlers & { g
         clearLongPress();
       }
     },
-    [clearLongPress, options, resetPointers]
+    [clearLongPress, options, resetPointers, updateGesturePreview]
   );
 
   const onPointerMove = useCallback<React.PointerEventHandler<HTMLElement>>(
     (event) => {
       const pointer = pointersRef.current.get(event.pointerId);
       if (!pointer) return;
+      if (pointer.protectedStart) return;
       pointer.x = event.clientX;
       pointer.y = event.clientY;
 
@@ -127,27 +160,27 @@ export function useKioskGestures(options: GestureOptions): GestureHandlers & { g
       if (options.mode === "ambient" && pointers.length >= 2) {
         const averageDeltaY = pointers.reduce((sum, item) => sum + item.y - item.startY, 0) / pointers.length;
         if (averageDeltaY > TWO_FINGER_HINT_THRESHOLD) {
-          setGesturePreview({
+          updateGesturePreview({
             kind: "playlist",
             label: "Playlist",
             progress: clampProgress(averageDeltaY, TWO_FINGER_DOWN_THRESHOLD)
           });
         }
       } else if (options.mode === "ambient" && pointers.length === 1 && pointer.y - pointer.startY > 16) {
-        setGesturePreview({
+        updateGesturePreview({
           kind: "player",
           label: "Player",
           progress: clampProgress(pointer.y - pointer.startY, ONE_FINGER_DOWN_THRESHOLD)
         });
       } else if (options.mode !== "ambient" && pointers.length === 1 && pointer.y - pointer.startY < -12) {
-        setGesturePreview({
+        updateGesturePreview({
           kind: "return",
           label: "Ambient",
           progress: clampProgress(Math.abs(pointer.y - pointer.startY), Math.abs(SWIPE_UP_THRESHOLD))
         });
       }
     },
-    [clearLongPress, options.mode]
+    [clearLongPress, options.mode, updateGesturePreview]
   );
 
   const onPointerUp = useCallback<React.PointerEventHandler<HTMLElement>>(
@@ -211,13 +244,13 @@ export function useKioskGestures(options: GestureOptions): GestureHandlers & { g
       }
       wheelResetTimerRef.current = window.setTimeout(() => {
         wheelAccumulatorRef.current = 0;
-        setGesturePreview(null);
+        updateGesturePreview(null);
       }, 320);
 
       const absDelta = Math.abs(wheelAccumulatorRef.current);
       if (options.mode === "ambient") {
         const isPlaylistGesture = wheelAccumulatorRef.current > 0;
-        setGesturePreview({
+        updateGesturePreview({
           kind: isPlaylistGesture ? "playlist" : "player",
           label: isPlaylistGesture ? "Playlist" : "Player",
           progress: clampProgress(absDelta, WHEEL_THRESHOLD)
@@ -230,20 +263,20 @@ export function useKioskGestures(options: GestureOptions): GestureHandlers & { g
             options.onOpenPlayer();
           }
           wheelAccumulatorRef.current = 0;
-          setGesturePreview(null);
+          updateGesturePreview(null);
         }
       } else if (wheelAccumulatorRef.current < -WHEEL_THRESHOLD) {
-        setGesturePreview({
+        updateGesturePreview({
           kind: "return",
           label: "Ambient",
           progress: 1
         });
         options.onReturnAmbient();
         wheelAccumulatorRef.current = 0;
-        setGesturePreview(null);
+        updateGesturePreview(null);
       }
     },
-    [options]
+    [options, updateGesturePreview]
   );
 
   return {

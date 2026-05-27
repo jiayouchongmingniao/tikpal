@@ -7,7 +7,7 @@ import type { CSSProperties } from "react";
 import type { AudioSpectrumFrame, AudioState, FontTheme, HifiEqPresetId, PlaybackSummary, SystemState } from "../types";
 
 const BAND_COUNT = 32;
-const SPECTRUM_REFRESH_MS = 420;
+const SPECTRUM_REFRESH_MS = 400;
 
 interface EqVisualSceneProps {
   presetId: HifiEqPresetId;
@@ -110,6 +110,8 @@ export function EqVisualScene({ presetId, playback, audio, system, fontTheme }: 
   }, [fallbackSpectrum]);
 
   const bars = spectrum.bands;
+  const spectrumBars = bars;
+  const waveformBars = bars.filter((_, index) => index % 2 === 0).slice(0, 12);
 
   return (
     <section
@@ -120,7 +122,7 @@ export function EqVisualScene({ presetId, playback, audio, system, fontTheme }: 
       data-hifi-preset={visualPresetId}
       data-hifi-eq-visible="true"
       data-spectrum-source={spectrum.source}
-      data-spectrum-band-count={bars.length}
+      data-spectrum-band-count={spectrum.bandCount}
       data-spectrum-left-peak={spectrum.peaks.left.toFixed(3)}
       data-spectrum-right-peak={spectrum.peaks.right.toFixed(3)}
       aria-label={`Hi-Fi EQ: ${preset.label}`}
@@ -147,7 +149,7 @@ export function EqVisualScene({ presetId, playback, audio, system, fontTheme }: 
 
       {visualPresetId === "waveform" ? (
         <div className="eq-waveform hifi-eq-meter" aria-hidden="true">
-          {bars.slice(0, 24).map((band, index) => (
+          {waveformBars.map((band, index) => (
             <span
               data-spectrum-band={band.toFixed(3)}
               key={index}
@@ -172,7 +174,7 @@ export function EqVisualScene({ presetId, playback, audio, system, fontTheme }: 
           </div>
         ) : (
         <div className="eq-spectrum hifi-eq-meter" aria-hidden="true">
-          {bars.map((band, index) => (
+          {spectrumBars.map((band, index) => (
             <span
               data-spectrum-band={band.toFixed(3)}
               key={index}

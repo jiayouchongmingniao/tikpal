@@ -3,6 +3,7 @@ import { stat } from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildAccessDeniedBody, getTikpalApiAccessDecision } from "./accessControl.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const APP_DIR = path.resolve(__dirname, "..");
@@ -10,6 +11,7 @@ const DIST_DIR = path.resolve(process.env.TIKPAL_WEB_DIST_DIR ?? path.join(APP_D
 const HOST = process.env.TIKPAL_WEB_HOST ?? "0.0.0.0";
 const PORT = Number(process.env.TIKPAL_WEB_PORT ?? 4173);
 const API_ORIGIN = new URL(process.env.TIKPAL_API_ORIGIN ?? "http://127.0.0.1:8787");
+const PORTABLE_API_KEY = process.env.TIKPAL_PORTABLE_API_KEY ?? "";
 
 const MIME_TYPES = new Map([
   [".html", "text/html; charset=utf-8"],
@@ -88,6 +90,30 @@ async function resolveStaticFile(urlPathname) {
 
 function proxyApi(request, response) {
   const target = new URL(request.url ?? "/", API_ORIGIN);
+  const accessDecision = getTikpalApiAccessDecision({
+    method: request.method,
+    pathname: target.pathname,
+    headers: request.headers,
+    remoteAddress: request.socket.remoteAddress,
+    portableApiKey: PORTABLE_API_KEY
+  });
+
+  if (!accessDecision.allowed) {
+    send(
+      response,
+      accessDecision.status ?? 403,
+      JSON.stringify(buildAccessDeniedBody(accessDecision)),
+      {
+        "Content-Type": "application/json; charset=utf-8",
+        "Cache-Control": "no-store",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type,Accept,X-Tikpal-Key,X-Tikpal-Local-Ui"
+      }
+    );
+    return;
+  }
+
   target.protocol = API_ORIGIN.protocol;
   target.hostname = API_ORIGIN.hostname;
   target.port = API_ORIGIN.port;

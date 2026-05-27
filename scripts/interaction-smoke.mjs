@@ -88,6 +88,23 @@ async function prepareInteractionSceneFixture() {
   return INTERACTION_SCENE_FIXTURE_SRC;
 }
 
+async function resetInteractionRoomExperience() {
+  const actionsUrl = new URL("/api/v1/experience/actions", APP_URL);
+  for (const body of [
+    { type: "set_hifi_eq", hifiEqPresetId: "flat" },
+    { type: "set_mode", mode: "calm" }
+  ]) {
+    const response = await fetch(actionsUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to reset room experience for interaction smoke: ${response.status}`);
+    }
+  }
+}
+
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -509,6 +526,41 @@ async function drag(client, fromX, fromY, toX, toY, steps = 8) {
   await wait(300);
 }
 
+async function dragUntilHold(client, fromX, fromY, toX, toY, steps = 4) {
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    x: fromX,
+    y: fromY,
+    button: "left",
+    clickCount: 1
+  });
+
+  for (let index = 1; index <= steps; index += 1) {
+    const progress = index / steps;
+    await client.send("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: fromX + (toX - fromX) * progress,
+      y: fromY + (toY - fromY) * progress,
+      button: "left",
+      buttons: 1
+    });
+    await wait(16);
+  }
+
+  await wait(80);
+}
+
+async function releaseDrag(client, x, y) {
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    x,
+    y,
+    button: "left",
+    clickCount: 1
+  });
+  await wait(300);
+}
+
 async function touchSwipe(client, fromX, fromY, toX, toY, steps = 8) {
   await client.send("Input.dispatchTouchEvent", {
     type: "touchStart",
@@ -541,6 +593,7 @@ async function touchSwipe(client, fromX, fromY, toX, toY, steps = 8) {
 const CHROME_BIN = await detectChromeBinary();
 const profileDir = await mkdtemp(path.join(tmpdir(), "tikpal-chrome-"));
 const interactionSceneVideoSrc = await prepareInteractionSceneFixture();
+await resetInteractionRoomExperience();
 const chrome = spawn(CHROME_BIN, [
   "--headless=new",
   "--disable-gpu=false",
@@ -613,7 +666,7 @@ try {
   );
   await expectEventually(
     client,
-    "document.querySelector('[data-hifi-eq-visual]')?.textContent?.includes('Now Playing') && document.querySelector('[data-hifi-eq-visual]')?.getAttribute('data-spectrum-source') === 'mock' && document.querySelector('[data-hifi-eq-visual]')?.getAttribute('data-spectrum-band-count') === '32' && document.querySelectorAll('[data-hifi-eq-visual] [data-spectrum-band]').length > 0",
+    "document.querySelector('[data-hifi-eq-visual]')?.textContent?.includes('Now Playing') && document.querySelector('[data-hifi-eq-visual]')?.getAttribute('data-spectrum-source') === 'mock' && document.querySelector('[data-hifi-eq-visual]')?.getAttribute('data-spectrum-band-count') === '32' && document.querySelectorAll('[data-hifi-eq-visual] .eq-spectrum [data-spectrum-band]').length === 32",
     "Hi-Fi Now Playing and EQ meter are driven by fetched spectrum data"
   );
   const hifiPresetBefore = await evaluate(client, "document.querySelector('[data-hifi-eq-visual]')?.getAttribute('data-hifi-eq-preset')");
@@ -1680,6 +1733,18 @@ try {
   await navigate(client, `${APP_URL}?mode=player`);
   await click(client, 1360, 600);
   await expect(client, "document.querySelector('.player-overlay.is-active') !== null", "protected player click stays in player");
+  await dragUntilHold(client, 100, 600, 100, 540);
+  await expect(client, "document.querySelector('.gesture-cue.is-visible') === null", "protected player swipe does not show the global gesture cue");
+  await releaseDrag(client, 100, 540);
+  await expect(client, "document.querySelector('.player-overlay.is-active') !== null", "short protected player swipe stays in player");
+  await dragUntilHold(client, 100, 600, 200, 430, 8);
+  await releaseDrag(client, 200, 430);
+  await expectEventually(
+    client,
+    "document.querySelector('.player-overlay.is-active') === null && document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') === 'calm'",
+    "slightly angled protected player swipe returns smoothly to Calm ambient"
+  );
+  await navigate(client, `${APP_URL}?mode=player`);
 
   await expect(client, "document.querySelector('[data-source-panel]') !== null", "player source panel opens");
   await expectEventuallyEvaluate(
