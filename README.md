@@ -117,9 +117,12 @@ cd /home/moode/code/tikpal
 npm ci
 npm run build
 cp -n deploy/chromium/env.kiosk.example .env.kiosk
+sudo deploy/moode/tikpal-ddcci-enable.sh
 deploy/chromium/launch-tikpal-kiosk.sh --check
 sudo deploy/systemd/install-systemd-services.sh --app-dir /home/moode/code/tikpal --user moode --enable-kiosk --restart
 ```
+
+`deploy/moode/tikpal-ddcci-enable.sh` installs `ddcutil` / `i2c-tools`, enables `i2c-dev`, grants the service user access to `/dev/i2c-*`, writes `TIKPAL_DDCUTIL_*` into `.env`, and probes VCP `0x10`. Reboot if the script cannot see `/dev/i2c-*` after first install.
 
 See the full deploy and rollback runbook in [docs/06-deployment/raspberry-pi-kiosk-deploy-v1.md](docs/06-deployment/raspberry-pi-kiosk-deploy-v1.md).
 
@@ -152,7 +155,7 @@ The real moOde / MPD adapter remains the audio owner. In `mpc` mode, Tikpal keep
 
 Ambient lyrics now have two recognition paths behind the same `lyrics` state. Local `MPD` / `Radio` playback still resolves lyrics from metadata through LRCLIB, while Bluetooth first tries BlueZ / AVRCP title metadata and playback position, then can fall back to a short local PCM sample identified through ACRCloud before reusing the same LRCLIB lyrics lookup. The Bluetooth recognition path is only armed while Bluetooth is the selected source and the input is actually connected, and it keeps its own `bluetooth_input` scope so source truth stays separate from `audio.currentSource` and `playback.source`.
 
-Quick Settings now includes local font presets and surface skin presets (`warm-gold`, `graphite-silver`, `ivory-studio`), and the ambient flame screen has split live-control zones: left for volume, right for DDC/CI brightness on supported displays. When the Ambient HUD is visible, the center control row stays intentionally shallow for the 2560 x 720 kiosk layout: previous scene, playback mode, previous track, play/pause, next track, favorite, lyrics, and next scene. Playback mode is a single mutually exclusive `playMode` value: `sequence`, `repeat_one`, or `shuffle`.
+Quick Settings now includes local font presets and surface skin presets (`warm-gold`, `graphite-silver`, `ivory-studio`), and the ambient flame screen has split live-control zones: left for volume, right for DDC/CI brightness on supported displays. The Pi deploy path includes a repo-owned DDC/CI helper that installs `ddcutil`, enables I2C access, and lets `mpc` mode report `display.transport: "ddcci"` when the monitor exposes VCP `0x10`. When the Ambient HUD is visible, the Hi-Fi center row includes music transport, favorite, playlist, lyrics, and EQ preset switching; Focus, Calm, and Sleep stay on the lighter scene strip.
 
 The Player and Ambient HUD both display playback truth from the active `playback.source` and current track metadata, rather than showing whichever Library item or source panel is selected for browsing. Generated fallback cover art still follows the selected font preset, while real playback artwork wins whenever the backend provides it.
 
@@ -175,5 +178,5 @@ Use `npm run scene:clear` to remove installed Ambient scene videos from `public/
 The repo is no longer mock-only, but a few visible pieces are still only partial:
 
 - The source model is still intentionally focused. The UI exposes six frontstage tabs (`Library`, `Radio`, `Spotify`, `AirPlay`, `Bluetooth`, `DLNA`), while internal `Audio` remains state/API truth rather than a visible browser category.
-- The ambient right-side brightness gesture depends on working DDC/CI on the target display. When `ddcutil` cannot read or set VCP `0x10`, Tikpal currently degrades to read-only/unavailable status instead of offering a fallback brightness path.
+- The ambient right-side brightness gesture depends on working DDC/CI on the target display. The validated XENEON EDGE target reports `VCP 10 C 80 100`; when `ddcutil` cannot read or set VCP `0x10`, Tikpal degrades to read-only/unavailable status instead of offering a fallback brightness path.
 - Ambient deliberately does not render playlist or queue panels inline; playlist opens as its own page, and queue preview belongs in the Player overlay so the default 720px-high dwell screen stays calm.

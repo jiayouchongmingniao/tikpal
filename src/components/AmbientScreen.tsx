@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { Captions, CaptionsOff, GalleryHorizontalEnd, Heart, ListMusic, Moon, Pause, Play, Repeat1, Settings, Shuffle, SkipBack, SkipForward, SlidersHorizontal, SunMedium, Target, Volume2, VolumeX, Waves } from "lucide-react";
+import { Captions, CaptionsOff, GalleryHorizontalEnd, Heart, ListMusic, ListPlus, Moon, Pause, Play, Repeat1, Settings, Shuffle, SkipBack, SkipForward, SlidersHorizontal, SunMedium, Target, Volume2, VolumeX, Waves } from "lucide-react";
 import { fetchBackgroundVideos } from "../api/tikpalClient";
 import { EqVisualScene } from "./EqVisualScene";
 import { FlameScene } from "./FlameScene";
@@ -31,6 +31,7 @@ interface AmbientScreenProps {
   onCurrentSceneVideoChange: (video: BackgroundVideoSummary) => void;
   onSceneSoundEnabledChange: (enabled: boolean) => void;
   onOpenSettings: () => void;
+  onOpenPlaylist: () => void;
   roomExperience: RoomExperienceState;
   onExperienceAction: (action: RoomExperienceActionRequest) => Promise<RoomExperienceState>;
 }
@@ -161,6 +162,7 @@ export function AmbientScreen({
   onCurrentSceneVideoChange,
   onSceneSoundEnabledChange,
   onOpenSettings,
+  onOpenPlaylist,
   roomExperience,
   onExperienceAction
 }: AmbientScreenProps) {
@@ -812,6 +814,20 @@ export function AmbientScreen({
                 onClick={() => handleAmbientPlaybackAction("favorite_toggle")}
               >
                 <Heart size={25} fill={playback.favorite ? "currentColor" : "none"} strokeWidth={1.8} />
+              </button>
+              <button
+                className="ambient-transport-button ambient-transport-setting"
+                type="button"
+                aria-label="Open playlist"
+                title="Playlist"
+                data-hifi-playlist-entry
+                tabIndex={hudVisible ? 0 : -1}
+                onClick={() => {
+                  onHudActivity();
+                  onOpenPlaylist();
+                }}
+              >
+                <ListPlus size={25} strokeWidth={1.8} />
               </button>
               <button
                 className={`ambient-transport-button ambient-transport-setting ${lyricsVisible ? "is-active" : ""}`}

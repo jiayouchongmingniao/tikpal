@@ -254,6 +254,7 @@ export default function App() {
         onCurrentSceneVideoChange={handleCurrentSceneVideoChange}
         onSceneSoundEnabledChange={(enabled) => void handleSceneSoundEnabledChange(enabled)}
         onOpenSettings={() => changeMode("quickSettings")}
+        onOpenPlaylist={() => changeMode("playlist")}
         roomExperience={roomExperience}
         onExperienceAction={handleRoomExperienceAction}
       />

@@ -30,7 +30,7 @@ type AppMode = "ambient" | "player" | "playlist" | "quickSettings" | "quickMenu"
 | Vertical drag in left ambient zone | Ambient | Live volume adjustment against moOde volume state. |
 | Vertical drag in right ambient zone | Ambient | Live display brightness adjustment through DDC/CI when available. |
 | Non-Hi-Fi Ambient center controls | Ambient HUD visible | Previous scene, Focus/Calm/Sleep label plus intent, Scene Sound mute/unmute, and next scene. The strip width should follow its content rather than a fixed playback-control width. |
-| Hi-Fi Ambient center controls | Ambient HUD visible | Play mode, previous track, play/pause, next track, favorite, lyrics, and Hi-Fi EQ preset switching. |
+| Hi-Fi Ambient center controls | Ambient HUD visible | Play mode, previous track, play/pause, next track, favorite, playlist, lyrics, and Hi-Fi EQ preset switching. |
 | Arrow keys | Ambient HUD visible | In Focus/Calm/Sleep, up/down/left/right change scene and Space/Enter toggles Scene Sound. In Hi-Fi, scene arrows switch EQ presets and track arrows keep playback behavior. |
 | Volume range slider | Player | Update the same global volume state used by Ambient and scene video audio. |
 
@@ -94,7 +94,7 @@ stateDiagram-v2
 - The bottom HUD is a mode switcher for Focus, Calm, Sleep, and Hi-Fi.
 - Focus, Calm, and Sleep use a content-sized center strip with the mode name and intent: `Focus / Deep work & reading`, `Calm / Unwind & relax`, and `Sleep / Dim, timer, fade-out`.
 - Focus, Calm, and Sleep do not show music playback buttons, favorite, playlist, queue, seek progress, or lyrics on Ambient. Lyrics remain a Hi-Fi playback affordance only.
-- Hi-Fi uses the larger playback center controls: playback mode, previous/next, play/pause, favorite, lyrics, and EQ preset switching.
+- Hi-Fi uses the larger playback center controls: playback mode, previous/next, play/pause, favorite, playlist, lyrics, and EQ preset switching.
 - Ambient must not show queue or playlist content; queue preview stays in the Player overlay.
 - The left edge band is reserved for live volume drag and should not fall through to the generic one-finger swipe-down player gesture.
 - The right edge band is reserved for live brightness drag and should not fall through to the generic one-finger swipe-down player gesture.

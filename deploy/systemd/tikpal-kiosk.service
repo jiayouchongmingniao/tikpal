@@ -8,8 +8,8 @@ Type=simple
 User=@SERVICE_USER@
 WorkingDirectory=@APP_DIR@
 EnvironmentFile=-@APP_DIR@/.env.kiosk
-TTYPath=/dev/tty1
-StandardInput=tty
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=/home/@SERVICE_USER@/.Xauthority
 StandardOutput=journal
 StandardError=journal
 ExecStart=/usr/bin/startx @APP_DIR@/deploy/chromium/start-tikpal-kiosk-session.sh -- :0 -br -nocursor

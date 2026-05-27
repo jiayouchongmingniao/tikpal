@@ -160,6 +160,34 @@ moOde `cfg_radio` presets are now the primary Radio source list for the source p
 `TIKPAL_RADIO_DEFAULT_URI` stays as a fallback preset when moOde radio rows are unavailable, and `TIKPAL_RADIO_ACTIVATE_COMMAND` is only used when no switchable preset URI is available.
 If `mpc update` is not the right library refresh command on the device, also set `TIKPAL_LIBRARY_SCAN_COMMAND`.
 
+## DDC/CI Brightness Setup
+
+Real display brightness writes require `TIKPAL_PLAYER_BACKEND=mpc`; in mock mode Tikpal only updates the local API state. After `.env` exists, run the repo-owned DDC/CI helper on the Pi:
+
+```bash
+cd /home/moode/code/tikpal
+sudo deploy/moode/tikpal-ddcci-enable.sh
+sudo systemctl restart tikpal-api.service
+```
+
+The helper installs `ddcutil` and `i2c-tools`, loads `i2c-dev`, persists `dtparam=i2c_arm=on`, grants the service user access to `/dev/i2c-*`, writes `TIKPAL_DDCUTIL_BIN` and `TIKPAL_DDCUTIL_DISPLAY` into `.env`, and probes VCP `0x10`.
+
+If the display should be selected explicitly, pass the display id observed from `ddcutil detect --brief`:
+
+```bash
+sudo TIKPAL_DDCUTIL_DISPLAY=1 deploy/moode/tikpal-ddcci-enable.sh
+```
+
+Validated target evidence from the current Raspberry Pi path:
+
+```text
+Display 1
+   I2C bus:          /dev/i2c-20
+   DRM connector:    card1-HDMI-A-1
+   Monitor:          CRX:XENEON EDGE:207726065656
+VCP 10 C 80 100
+```
+
 Resource-only OTA packages can update the local music library and add ambient scene videos without changing application code. Package layout defaults to:
 
 ```text
@@ -234,12 +262,16 @@ curl -fsS -X POST http://127.0.0.1:8787/api/v1/system/actions \
 If ambient brightness gestures should work on the target display, also verify the DDC/CI path explicitly:
 
 ```bash
+systemctl show tikpal-api.service -p Environment --no-pager
 ddcutil getvcp 10 --brief
 curl -fsS http://127.0.0.1:8787/api/v1/system/status
 curl -fsS -X POST http://127.0.0.1:8787/api/v1/system/actions \
   -H 'Content-Type: application/json' \
   -d '{"type":"brightness_set","value":80}'
+curl -fsS http://127.0.0.1:8787/api/v1/system/state
 ```
+
+Success means `/api/v1/health` reports `mode:"mpc"`, `/api/v1/system/status` reports `display.controllable=true` and `display.transport="ddcci"`, and `ddcutil getvcp 10 --brief` returns the same brightness value after the API action. If `/dev/i2c-*` is absent or VCP `0x10` is unreadable, reboot once after the helper writes `dtparam=i2c_arm=on`, then re-run the probe before assuming the display lacks DDC/CI.
 
 ## Enable Kiosk
 

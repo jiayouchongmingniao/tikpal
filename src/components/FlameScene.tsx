@@ -162,6 +162,11 @@ function waitForDrawableVideoFrame(video: HTMLVideoElement, timeoutMs: number) {
 
     const timeout = window.setTimeout(() => finish(false), timeoutMs);
 
+    if (video.readyState >= 2) {
+      window.requestAnimationFrame(() => finish(true));
+      return;
+    }
+
     if (frameVideo.requestVideoFrameCallback) {
       frameCallbackId = frameVideo.requestVideoFrameCallback(() => finish(video.readyState >= 2));
       return;

@@ -623,6 +623,24 @@ try {
     `document.querySelector('[data-hifi-eq-visual]')?.getAttribute('data-hifi-eq-preset') !== ${JSON.stringify(hifiPresetBefore)}`,
     "Hi-Fi next control switches EQ preset"
   );
+  await expect(
+    client,
+    "document.querySelector('.ambient-transport [data-hifi-playlist-entry][aria-label=\"Open playlist\"]') !== null",
+    "Hi-Fi ambient transport exposes playlist entry"
+  );
+  await evaluate(
+    client,
+    `
+      (() => {
+        const target = document.querySelector('.ambient-transport [data-hifi-playlist-entry]');
+        target?.click();
+        return Boolean(target);
+      })()
+    `
+  );
+  await expectEventually(client, "document.querySelector('.playlist-overlay.is-active') !== null", "Hi-Fi ambient playlist entry opens playlist page");
+  await evaluate(client, "document.querySelector('.overlay-backdrop')?.click();");
+  await expectEventually(client, "document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') === 'hifi' && document.querySelector('.playlist-overlay.is-active') === null", "Hi-Fi ambient playlist entry returns to Ambient after backdrop");
   await navigate(client, `${APP_URL}?mode=quickMenu`);
   await expect(client, "document.querySelector('[data-quick-menu-toggle=\"hifi-eq\"]') === null", "quick menu omits Hi-Fi EQ visibility toggle");
   await evaluate(client, "document.querySelector('.overlay-backdrop')?.click();");
@@ -1311,8 +1329,19 @@ try {
   await click(client, 10, 10);
   await expect(client, "document.querySelector('.playlist-overlay.is-active') === null", "playlist backdrop click exits to ambient");
 
+  await evaluate(
+    client,
+    `
+      fetch('/api/v1/experience/actions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'set_mode', mode: 'calm' })
+      }).then(() => true)
+    `
+  );
   await navigate(client, `${APP_URL}?mode=quickMenu`);
   await expect(client, "document.querySelector('.quick-menu.is-active') !== null", "quick menu opens");
+  await expectEventually(client, "document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') === 'calm'", "quick menu scene checks run outside Hi-Fi mode");
   await expect(
     client,
     `
