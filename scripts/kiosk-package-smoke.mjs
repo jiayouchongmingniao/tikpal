@@ -15,6 +15,7 @@ const requiredFiles = [
   "deploy/chromium/chromium-flags.conf",
   "deploy/chromium/managed-policies.json",
   "deploy/chromium/env.kiosk.example",
+  "deploy/moode/tikpal-snd-aloop-enable.sh",
   "deploy/moode/tikpal-quiet-boot-enable.sh",
   "deploy/systemd/tikpal-api.service",
   "deploy/systemd/tikpal-web.service",
@@ -40,6 +41,7 @@ async function run() {
 
   await assertExecutable("deploy/chromium/launch-tikpal-kiosk.sh");
   await assertExecutable("deploy/chromium/start-tikpal-kiosk-session.sh");
+  await assertExecutable("deploy/moode/tikpal-snd-aloop-enable.sh");
   await assertExecutable("deploy/moode/tikpal-quiet-boot-enable.sh");
   await assertExecutable("deploy/systemd/install-systemd-services.sh");
 

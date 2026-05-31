@@ -1,10 +1,10 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import http from "node:http";
 import { tmpdir } from "node:os";
 import path, { resolve } from "node:path";
-import { getTikpalApiAccessDecision, hasValidTikpalKey } from "../server/accessControl.mjs";
+import { getTikpalApiAccessDecision, getTikpalWebProxyApiAccessDecision, hasValidTikpalKey } from "../server/accessControl.mjs";
 
 const PORT = Number(process.env.TIKPAL_API_SMOKE_PORT ?? 18787);
 const HOST = "127.0.0.1";
@@ -117,6 +117,35 @@ function runAccessControlHelperSmoke() {
       portableApiKey: PORTABLE_API_KEY
     }).allowed === true,
     "loopback kiosk UI writes should stay allowed"
+  );
+  assert(
+    getTikpalApiAccessDecision({
+      method: "POST",
+      pathname: "/api/v1/audio/source",
+      remoteAddress: "192.168.10.44",
+      portableApiKey: PORTABLE_API_KEY
+    }).allowed === false,
+    "direct 8787 remote access should keep blocking full kiosk writes"
+  );
+  assert(
+    getTikpalWebProxyApiAccessDecision({
+      method: "POST",
+      pathname: "/api/v1/audio/source",
+      remoteAddress: "192.168.10.44",
+      portableApiKey: PORTABLE_API_KEY,
+      allowRemoteUiApi: "0"
+    }).allowed === false,
+    "web proxy should reuse portable remote limits until remote UI API is enabled"
+  );
+  assert(
+    getTikpalWebProxyApiAccessDecision({
+      method: "POST",
+      pathname: "/api/v1/audio/source",
+      remoteAddress: "192.168.10.44",
+      portableApiKey: PORTABLE_API_KEY,
+      allowRemoteUiApi: "1"
+    }).reason === "web_remote_ui",
+    "web proxy should allow full kiosk API when TIKPAL_WEB_ALLOW_REMOTE_UI_API=1"
   );
   assert(
     hasValidTikpalKey({ "x-tikpal-key": PORTABLE_API_KEY }, PORTABLE_API_KEY) === true,
@@ -331,7 +360,7 @@ async function waitForLyricsStatus(expectedStatuses) {
   throw new Error(`Lyrics state did not reach one of: ${expectedStatuses.join(", ")}`);
 }
 
-async function runMpcHifiEqUnsupportedSmoke(roomExperienceStatePath) {
+async function runMpcHifiCommandGuardSmoke(roomExperienceStatePath) {
   const port = PORT + 10;
   const baseUrl = `http://${HOST}:${port}`;
   const server = spawn(process.execPath, ["server/index.mjs"], {
@@ -341,7 +370,8 @@ async function runMpcHifiEqUnsupportedSmoke(roomExperienceStatePath) {
       TIKPAL_API_PORT: String(port),
       TIKPAL_PLAYER_BACKEND: "mpc",
       TIKPAL_ROOM_EXPERIENCE_STATE_PATH: roomExperienceStatePath,
-      TIKPAL_HIFI_EQ_APPLY_COMMAND: ""
+      TIKPAL_HIFI_EQ_APPLY_COMMAND: "",
+      TIKPAL_HIFI_SPECTRUM_COMMAND: ""
     },
     stdio: ["ignore", "pipe", "pipe"]
   });
@@ -357,6 +387,12 @@ async function runMpcHifiEqUnsupportedSmoke(roomExperienceStatePath) {
       String(unsupported.body.message ?? "").includes("TIKPAL_HIFI_EQ_APPLY_COMMAND"),
       "mpc set_hifi_eq without command hook should explain the missing command"
     );
+    const missingSpectrum = await requestFrom(baseUrl, "/api/v1/audio/spectrum");
+    assert(missingSpectrum.response.status === 400, "mpc audio spectrum without command hook should return 400");
+    assert(
+      String(missingSpectrum.body.message ?? "").includes("TIKPAL_HIFI_SPECTRUM_COMMAND"),
+      "mpc audio spectrum without command hook should explain the missing command"
+    );
   } finally {
     if (server.exitCode === null && server.signalCode === null) {
       server.kill("SIGTERM");
@@ -365,6 +401,251 @@ async function runMpcHifiEqUnsupportedSmoke(roomExperienceStatePath) {
         wait(1000)
       ]);
     }
+  }
+}
+
+async function runHifiSpectrumCommandSmoke(roomExperienceStatePath) {
+  const port = PORT + 11;
+  const baseUrl = `http://${HOST}:${port}`;
+  const spectrumFramePath = resolve(tmpdir(), `tikpal-spectrum-frame-${process.pid}.json`);
+  await writeFile(spectrumFramePath, JSON.stringify({
+    bands: Array.from({ length: 32 }, (_, index) => index / 31),
+    peaks: { left: 0.25, right: 0.75 }
+  }));
+  const server = spawn(process.execPath, ["server/index.mjs"], {
+    env: {
+      ...process.env,
+      TIKPAL_API_HOST: HOST,
+      TIKPAL_API_PORT: String(port),
+      TIKPAL_PLAYER_BACKEND: "mock",
+      TIKPAL_ROOM_EXPERIENCE_STATE_PATH: roomExperienceStatePath,
+      TIKPAL_HIFI_SPECTRUM_COMMAND: `cat ${JSON.stringify(spectrumFramePath)}`
+    },
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+
+  try {
+    await waitForHealthAt(baseUrl);
+    const spectrum = await requestFrom(baseUrl, "/api/v1/audio/spectrum");
+    assert(spectrum.response.ok, "audio spectrum command hook should return 200");
+    assert(spectrum.body.source === "command", "audio spectrum command hook should mark source as command");
+    assert(spectrum.body.bands.length === 32, "audio spectrum command hook should expose 32 bands");
+    assert(spectrum.body.bands[0] === 0, "audio spectrum command hook should preserve normalized low band");
+    assert(spectrum.body.bands[31] === 1, "audio spectrum command hook should preserve normalized high band");
+    assert(spectrum.body.peaks.left === 0.25, "audio spectrum command hook should preserve left peak");
+    assert(spectrum.body.peaks.right === 0.75, "audio spectrum command hook should preserve right peak");
+  } finally {
+    if (server.exitCode === null && server.signalCode === null) {
+      server.kill("SIGTERM");
+      await Promise.race([
+        new Promise((resolve) => server.once("exit", resolve)),
+        wait(1000)
+      ]);
+    }
+    await rm(spectrumFramePath, { force: true });
+  }
+}
+
+async function runMpcLocalLibraryPathSmoke(roomExperienceStatePath) {
+  const port = PORT + 12;
+  const baseUrl = `http://${HOST}:${port}`;
+  const workspace = await mkdtemp(path.join(tmpdir(), "tikpal-mpc-library-"));
+  const fakeMpcPath = path.join(workspace, "mpc-fake.mjs");
+  const fakeMpcLogPath = path.join(workspace, "mpc.log");
+  const fakeMpcStatePath = path.join(workspace, "mpc-state.json");
+  const fakeMpcTracks = [
+    "Codex/Focus/Lo-fi Ambient/FASSounds - Good Night - Lofi Cozy Chill Music - 02m27s - Lo-fi.mp3",
+    "Codex/Focus/Lo-fi Ambient/FASSounds - Lofi Study - Calm Peaceful Chill Hop - 02m27s - Lo-fi.mp3",
+    "Codex/Focus/Lo-fi Ambient/AtlasAudio - Ambient Soundscapes - 04m56s - Ambient.mp3"
+  ];
+
+  await writeFile(fakeMpcPath, `#!/usr/bin/env node
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+
+const logPath = process.env.TIKPAL_FAKE_MPC_LOG;
+const statePath = process.env.TIKPAL_FAKE_MPC_STATE;
+const libraryTracks = JSON.parse(process.env.TIKPAL_FAKE_MPC_TRACKS ?? "[]");
+const positionalPlayStaysPaused = process.env.TIKPAL_FAKE_MPC_POSITIONAL_PLAY_STAYS_PAUSED === "1";
+const rawArgs = process.argv.slice(2);
+const args = [];
+
+for (let index = 0; index < rawArgs.length; index += 1) {
+  if (rawArgs[index] === "--host" || rawArgs[index] === "--port" || rawArgs[index] === "--format") {
+    index += 1;
+    continue;
+  }
+  args.push(rawArgs[index]);
+}
+
+function readState() {
+  try {
+    return JSON.parse(readFileSync(statePath, "utf8"));
+  } catch {
+    return { queue: [], current: 0, state: "stopped", volume: 30 };
+  }
+}
+
+function writeState(state) {
+  writeFileSync(statePath, JSON.stringify(state));
+}
+
+function output(text) {
+  process.stdout.write(text);
+}
+
+function fail(message) {
+  process.stderr.write(message + "\\n");
+  process.exit(1);
+}
+
+if (logPath) appendFileSync(logPath, args.join("\\t") + "\\n");
+
+const [command, ...rest] = args;
+const state = readState();
+
+switch (command) {
+  case "listall": {
+    const target = rest[0] ?? "";
+    if (target === "Codex") output(libraryTracks.join("\\n") + "\\n");
+    else if (libraryTracks.includes(target)) output(target + "\\n");
+    else fail("MPD error: No such directory");
+    break;
+  }
+  case "clear":
+    state.queue = [];
+    state.current = 0;
+    state.state = "stopped";
+    writeState(state);
+    break;
+  case "add": {
+    const target = rest[0] ?? "";
+    if (target === "Codex") state.queue.push(...libraryTracks);
+    else if (libraryTracks.includes(target)) state.queue.push(target);
+    else fail("MPD error: No such song");
+    writeState(state);
+    break;
+  }
+  case "next":
+    state.current = Math.min(state.queue.length - 1, state.current + 1);
+    writeState(state);
+    break;
+  case "play":
+    if (rest[0]) state.current = Math.max(0, Number(rest[0]) - 1);
+    state.state = positionalPlayStaysPaused && rest[0] ? "paused" : "playing";
+    writeState(state);
+    break;
+  case "current": {
+    const file = state.queue[state.current] ?? "";
+    if (file) output("Fake Title\\tFake Artist\\tFake Album\\t" + file + "\\t02:27\\n");
+    break;
+  }
+  case "status":
+    if (state.queue.length > 0) {
+      output("[" + state.state + "] #" + (state.current + 1) + "/" + state.queue.length + " 0:01/2:27 (0%)\\n");
+    }
+    output("volume:" + state.volume + "%   repeat: off   random: off   single: off   consume: off\\n");
+    break;
+  case "stats":
+    output("Artists: 1\\nAlbums: 1\\nSongs: " + state.queue.length + "\\nDB Updated: fake\\n");
+    break;
+  case "playlist":
+    output(state.queue.map((file, index) => index + "\\tFake Title\\tFake Artist\\tFake Album\\t02:27\\t" + file).join("\\n"));
+    if (state.queue.length > 0) output("\\n");
+    break;
+  case "volume":
+    if (rest[0]) {
+      state.volume = Number(rest[0]);
+      writeState(state);
+    }
+    break;
+  case "pause":
+    state.state = "paused";
+    writeState(state);
+    break;
+  case "random":
+  case "repeat":
+  case "single":
+    break;
+  default:
+    break;
+}
+`);
+  await chmod(fakeMpcPath, 0o755);
+  await writeFile(fakeMpcLogPath, "");
+
+  const server = spawn(process.execPath, ["server/index.mjs"], {
+    env: {
+      ...process.env,
+      TIKPAL_API_HOST: HOST,
+      TIKPAL_API_PORT: String(port),
+      TIKPAL_PLAYER_BACKEND: "mpc",
+      TIKPAL_MPC_BIN: fakeMpcPath,
+      TIKPAL_MPD_HOST: "127.0.0.1",
+      TIKPAL_MPD_PORT: "6600",
+      TIKPAL_MPD_DEFAULT_QUEUE_PATH: "Codex",
+      TIKPAL_OUTPUT_VOLUME_GET_COMMAND: "",
+      TIKPAL_ROOM_EXPERIENCE_STATE_PATH: roomExperienceStatePath,
+      TIKPAL_FAKE_MPC_LOG: fakeMpcLogPath,
+      TIKPAL_FAKE_MPC_STATE: fakeMpcStatePath,
+      TIKPAL_FAKE_MPC_TRACKS: JSON.stringify(fakeMpcTracks),
+      TIKPAL_FAKE_MPC_POSITIONAL_PLAY_STAYS_PAUSED: "1"
+    },
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+
+  try {
+    await waitForHealthAt(baseUrl);
+    await writeFile(fakeMpcLogPath, "");
+
+    const library = await requestFrom(baseUrl, "/api/v1/audio/library?storage=local&limit=1");
+    assert(library.response.ok, "mpc local library path smoke should read the local library");
+    const localTrackPath = library.body.tracks[0]?.path;
+    assert(localTrackPath && !localTrackPath.startsWith("Codex/"), "local library should expose manifest-relative track paths");
+
+    const switched = await requestFrom(baseUrl, "/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({ target: "mpd", localTrackPath })
+    });
+    assert(switched.response.ok, "mpc local library source switch should return 200");
+    assert(
+      switched.body.playback.queueLength >= fakeMpcTracks.length,
+      `mpc local library switch should load the library queue, got ${switched.body.playback.queueLength}`
+    );
+    const log = await readFile(fakeMpcLogPath, "utf8");
+    assert(
+      switched.body.playback.state === "playing",
+      `mpc local library switch should force playback out of paused state, got ${switched.body.playback.state}; log: ${log}`
+    );
+    assert(log.includes("listall\tCodex"), "mpc local library switch should read the prefixed MPD library once");
+    assert(log.includes("add\tCodex"), "mpc local library switch should add the prefixed MPD library as a queue");
+    assert(log.includes("play\t1"), "mpc local library switch should start the requested MPD queue position");
+    assert(log.includes("play\n"), "mpc local library switch should retry playback when MPD stayed paused");
+    assert(!log.includes(`add\t${localTrackPath}\n`), "mpc local library switch should not add the raw manifest path first");
+
+    await requestFrom(baseUrl, "/api/v1/playback/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "pause" })
+    });
+    await writeFile(fakeMpcLogPath, "");
+    const next = await requestFrom(baseUrl, "/api/v1/playback/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "next" })
+    });
+    assert(next.response.ok, "mpc local library next should return 200");
+    assert(next.body.playback.state === "playing", "mpc local library next should resume playback when MPD stayed paused");
+    assert(next.body.playback.currentTrackIndex === 2, "mpc local library next should advance within the loaded queue");
+    const nextLog = await readFile(fakeMpcLogPath, "utf8");
+    assert(nextLog.includes("next"), "mpc local library next should issue next");
+    assert(nextLog.includes("play"), "mpc local library next should explicitly resume MPD after advancing");
+  } finally {
+    if (server.exitCode === null && server.signalCode === null) {
+      server.kill("SIGTERM");
+      await Promise.race([
+        new Promise((resolve) => server.once("exit", resolve)),
+        wait(1000)
+      ]);
+    }
+    await rm(workspace, { recursive: true, force: true });
   }
 }
 
@@ -1276,7 +1557,9 @@ async function run() {
     });
     assert(remoteUnsupportedPlaylist.response.status === 400, "remote actions should not expose playlist CRUD");
 
-    await runMpcHifiEqUnsupportedSmoke(roomExperienceStatePath);
+    await runMpcHifiCommandGuardSmoke(roomExperienceStatePath);
+    await runHifiSpectrumCommandSmoke(roomExperienceStatePath);
+    await runMpcLocalLibraryPathSmoke(roomExperienceStatePath);
 
     console.log("api smoke passed");
   } finally {

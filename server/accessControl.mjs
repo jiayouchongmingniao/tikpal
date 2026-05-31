@@ -104,6 +104,27 @@ export function getTikpalApiAccessDecision({
   };
 }
 
+export function getTikpalWebProxyApiAccessDecision({
+  method,
+  pathname,
+  headers,
+  remoteAddress,
+  portableApiKey = process.env.TIKPAL_PORTABLE_API_KEY ?? "",
+  allowRemoteUiApi = process.env.TIKPAL_WEB_ALLOW_REMOTE_UI_API ?? "0"
+}) {
+  if (String(allowRemoteUiApi ?? "0").trim() === "1") {
+    return { allowed: true, reason: "web_remote_ui", local: false };
+  }
+
+  return getTikpalApiAccessDecision({
+    method,
+    pathname,
+    headers,
+    remoteAddress,
+    portableApiKey
+  });
+}
+
 export function buildAccessDeniedBody(decision) {
   return {
     error: decision?.error ?? "FORBIDDEN",

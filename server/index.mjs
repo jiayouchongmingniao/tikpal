@@ -74,6 +74,10 @@ const OUTPUT_VOLUME_GET_COMMAND = process.env.TIKPAL_OUTPUT_VOLUME_GET_COMMAND ?
 const OUTPUT_VOLUME_SET_COMMAND = process.env.TIKPAL_OUTPUT_VOLUME_SET_COMMAND ?? "amixer sset PCM %VALUE%%";
 const HIFI_EQ_APPLY_COMMAND = process.env.TIKPAL_HIFI_EQ_APPLY_COMMAND ?? "";
 const HIFI_SPECTRUM_COMMAND = process.env.TIKPAL_HIFI_SPECTRUM_COMMAND ?? "";
+const HIFI_SPECTRUM_CACHE_MS_RAW = Number(process.env.TIKPAL_HIFI_SPECTRUM_CACHE_MS ?? 900);
+const HIFI_SPECTRUM_CACHE_MS = Number.isFinite(HIFI_SPECTRUM_CACHE_MS_RAW) && HIFI_SPECTRUM_CACHE_MS_RAW >= 0
+  ? HIFI_SPECTRUM_CACHE_MS_RAW
+  : 900;
 const RECOGNITION_PROVIDER = (process.env.TIKPAL_RECOGNITION_PROVIDER ?? "").trim().toLowerCase();
 const ACRCLOUD_HOST = process.env.TIKPAL_ACRCLOUD_HOST ?? "";
 const ACRCLOUD_ACCESS_KEY = process.env.TIKPAL_ACRCLOUD_ACCESS_KEY ?? "";
@@ -1219,6 +1223,16 @@ function parseMpcStatus(statusRaw) {
   };
 }
 
+let mpcMutationQueue = Promise.resolve();
+
+// Keep multi-command MPD writes from interleaving with startup priming or user actions.
+async function withMpcMutationLock(task) {
+  const previous = mpcMutationQueue.catch(() => {});
+  const next = previous.then(task);
+  mpcMutationQueue = next.catch(() => {});
+  return await next;
+}
+
 function parseOutputVolumePercent(raw) {
   const matches = Array.from(String(raw ?? "").matchAll(/\[(\d{1,3})%\]/g));
   const lastMatch = matches.at(-1);
@@ -2138,6 +2152,18 @@ function normalizeSafeRelativePath(value) {
   return normalized;
 }
 
+function normalizeLocalLibraryStateTrackPath(value) {
+  const safePath = normalizeSafeRelativePath(value);
+  if (!safePath) return null;
+
+  const mpdPrefix = normalizeSafeRelativePath(MPD_DEFAULT_QUEUE_PATH);
+  if (mpdPrefix && safePath.startsWith(`${mpdPrefix}/`)) {
+    return safePath.slice(mpdPrefix.length + 1);
+  }
+
+  return safePath;
+}
+
 function emptyMusicLibraryState() {
   return {
     version: 2,
@@ -2150,7 +2176,7 @@ function uniqueSafeTrackPaths(values = []) {
   const paths = [];
   const seen = new Set();
   for (const value of values) {
-    const safePath = normalizeSafeRelativePath(value);
+    const safePath = normalizeLocalLibraryStateTrackPath(value);
     if (!safePath || seen.has(safePath)) continue;
     seen.add(safePath);
     paths.push(safePath);
@@ -2378,12 +2404,12 @@ async function getRoomExperienceState() {
 }
 
 function isFavoriteTrackPath(trackPath, state = readMusicLibraryStateSync()) {
-  const safePath = normalizeSafeRelativePath(trackPath);
+  const safePath = normalizeLocalLibraryStateTrackPath(trackPath);
   return Boolean(safePath && state.favorites.trackPaths.includes(safePath));
 }
 
 async function setFavoriteTrackPath(trackPath, nextFavorite) {
-  const safePath = normalizeSafeRelativePath(trackPath);
+  const safePath = normalizeLocalLibraryStateTrackPath(trackPath);
   if (!safePath) return await readMusicLibraryState();
   const state = await readMusicLibraryState();
   const current = new Set(state.favorites.trackPaths);
@@ -2397,7 +2423,7 @@ async function setFavoriteTrackPath(trackPath, nextFavorite) {
 }
 
 async function toggleFavoriteTrackPath(trackPath) {
-  const safePath = normalizeSafeRelativePath(trackPath);
+  const safePath = normalizeLocalLibraryStateTrackPath(trackPath);
   if (!safePath) return await readMusicLibraryState();
   return await setFavoriteTrackPath(safePath, !isFavoriteTrackPath(safePath));
 }
@@ -2698,11 +2724,65 @@ async function readLocalAudioLibraryTracks(options = {}) {
 }
 
 async function findLocalAudioLibraryTrackByPath(localTrackPath) {
-  const safePath = normalizeSafeRelativePath(localTrackPath);
+  const safePath = normalizeLocalLibraryStateTrackPath(localTrackPath);
   if (!safePath) return null;
 
   const tracks = await readLocalAudioLibraryTracks();
   return tracks.find((track) => normalizeSafeRelativePath(track.path) === safePath) ?? null;
+}
+
+function buildMpdLocalLibraryTrackPathCandidates(localTrackPath) {
+  const safePath = normalizeLocalLibraryStateTrackPath(localTrackPath);
+  if (!safePath) return [];
+
+  const candidates = [];
+  const seen = new Set();
+  const pushCandidate = (candidate) => {
+    const safeCandidate = normalizeSafeRelativePath(candidate);
+    if (!safeCandidate || seen.has(safeCandidate)) return;
+    seen.add(safeCandidate);
+    candidates.push(safeCandidate);
+  };
+
+  const mpdPrefix = normalizeSafeRelativePath(MPD_DEFAULT_QUEUE_PATH);
+  if (mpdPrefix && !safePath.startsWith(`${mpdPrefix}/`)) {
+    pushCandidate(posix.join(mpdPrefix, safePath));
+  }
+  pushCandidate(safePath);
+  return candidates;
+}
+
+async function resolveMpdLocalLibraryTrackPath(localTrackPath) {
+  const candidates = buildMpdLocalLibraryTrackPathCandidates(localTrackPath);
+  for (const candidate of candidates) {
+    const listed = await runMpc(["listall", candidate], { allowFailure: true });
+    if (listed.split("\n").map((line) => line.trim()).includes(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+async function resolveMpdLocalLibraryQueue(startTrackPath) {
+  const safeStartPath = normalizeLocalLibraryStateTrackPath(startTrackPath);
+  if (!safeStartPath) return null;
+
+  const mpdPrefix = normalizeSafeRelativePath(MPD_DEFAULT_QUEUE_PATH);
+  const listedTracks = (await runMpc(mpdPrefix ? ["listall", mpdPrefix] : ["listall"], { allowFailure: true }))
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (listedTracks.length === 0) return null;
+
+  const listedTrackSet = new Set(listedTracks);
+  const startTrack = buildMpdLocalLibraryTrackPathCandidates(safeStartPath).find((candidate) => listedTrackSet.has(candidate));
+  if (!startTrack) return null;
+
+  return {
+    addRootPath: mpdPrefix,
+    mpdTrackPaths: listedTracks,
+    startIndex: listedTracks.indexOf(startTrack)
+  };
 }
 
 function buildNasAudioLibraryTracks(playback) {
@@ -3072,11 +3152,20 @@ async function playTrackPaths(trackPaths, startIndex = 0) {
   const safeStartIndex = Math.max(0, Math.min(safePaths.length - 1, Number.isInteger(Number(startIndex)) ? Number(startIndex) : 0));
   await enforceConnectionGate("mpd");
   if (API_MODE === "mpc") {
-    await runMpc(["clear"]);
-    for (const trackPath of safePaths) {
-      await runMpc(["add", trackPath]);
-    }
-    await runMpc(["play", String(safeStartIndex + 1)]);
+    await withMpcMutationLock(async () => {
+      const mpdTrackPaths = [];
+      for (const trackPath of safePaths) {
+        const mpdTrackPath = await resolveMpdLocalLibraryTrackPath(trackPath);
+        if (!mpdTrackPath) throw new Error(`Local library track is not available in MPD: ${trackPath}`);
+        mpdTrackPaths.push(mpdTrackPath);
+      }
+
+      await runMpc(["clear"]);
+      for (const trackPath of mpdTrackPaths) {
+        await runMpc(["add", trackPath]);
+      }
+      await ensureMpcPlaybackStarted(safeStartIndex + 1);
+    });
     return;
   }
   const trackMap = new Map((await readLocalAudioLibraryTracks()).map((track) => [normalizeSafeRelativePath(track.path), track]));
@@ -3687,9 +3776,24 @@ async function ensureMpcQueue() {
   await loadDefaultMpdQueue();
 }
 
+async function ensureMpcPlaybackStarted(position = null) {
+  const playArgs = position === null ? ["play"] : ["play", String(position)];
+  await runMpc(playArgs);
+
+  let status = parseMpcStatus(await runMpc(["status"], { allowFailure: true }));
+  if (status.queueLength > 0 && status.state !== "playing") {
+    await runMpc(["play"]);
+    status = parseMpcStatus(await runMpc(["status"], { allowFailure: true }));
+  }
+
+  if (status.queueLength > 0 && status.state !== "playing") {
+    throw new Error("MPD did not enter playing state after playback start");
+  }
+}
+
 async function switchToMpdSource() {
   await loadDefaultMpdQueue();
-  await runMpc(["play"]);
+  await ensureMpcPlaybackStarted();
 }
 
 async function switchToLocalLibraryTrack(localTrackPath) {
@@ -3698,10 +3802,21 @@ async function switchToLocalLibraryTrack(localTrackPath) {
     throw new Error(`Unknown local library track: ${localTrackPath}`);
   }
 
+  const queue = await resolveMpdLocalLibraryQueue(track.path);
+  if (!queue) {
+    throw new Error(`Local library track is not available in MPD: ${track.path}`);
+  }
+
   await enforceConnectionGate("mpd");
   await runMpc(["clear"]);
-  await runMpc(["add", track.path]);
-  await runMpc(["play"]);
+  if (queue.addRootPath) {
+    await runMpc(["add", queue.addRootPath]);
+  } else {
+    for (const mpdTrackPath of queue.mpdTrackPaths.slice(0, 250)) {
+      await runMpc(["add", mpdTrackPath]);
+    }
+  }
+  await ensureMpcPlaybackStarted(queue.startIndex + 1);
 }
 
 async function switchToAudioSource() {
@@ -3732,7 +3847,7 @@ async function switchToRadioSource(action = {}) {
 
   await runMpc(["clear"]);
   await runMpc(["add", targetUri]);
-  await runMpc(["play"]);
+  await ensureMpcPlaybackStarted();
 }
 
 async function switchToSpotifySource() {
@@ -3783,7 +3898,7 @@ async function applyMpcPlayMode(mode) {
   }
 }
 
-async function applyMpcPlaybackAction(action) {
+async function applyMpcPlaybackActionUnlocked(action) {
   if (mockArmedSource === "scene") {
     switch (action.type) {
       case "play_pause":
@@ -3818,12 +3933,16 @@ async function applyMpcPlaybackAction(action) {
     case "play_pause": {
       await ensureMpcQueue();
       const status = parseMpcStatus(await runMpc(["status"], { allowFailure: true }));
-      await runMpc([status.state === "playing" ? "pause" : "play"]);
+      if (status.state === "playing") {
+        await runMpc(["pause"]);
+      } else {
+        await ensureMpcPlaybackStarted();
+      }
       break;
     }
     case "play":
       await ensureMpcQueue();
-      await runMpc(["play"]);
+      await ensureMpcPlaybackStarted();
       break;
     case "pause":
       await runMpc(["pause"]);
@@ -3831,10 +3950,12 @@ async function applyMpcPlaybackAction(action) {
     case "next":
       await ensureMpcQueue();
       await runMpc(["next"]);
+      await ensureMpcPlaybackStarted();
       break;
     case "previous":
       await ensureMpcQueue();
       await runMpc(["prev"]);
+      await ensureMpcPlaybackStarted();
       break;
     case "seek": {
       const seconds = Number(action.value);
@@ -3859,8 +3980,7 @@ async function applyMpcPlaybackAction(action) {
       if (!Number.isFinite(percent) || percent < 0 || percent > 100) {
         throw new Error("volume_set requires value between 0 and 100");
       }
-      const playbackSource = (await getTikpalState()).audio.currentSource.id;
-      if (playbackSource === "scene" || playbackSource === "bluetooth" || playbackSource === "airplay" || playbackSource === "upnp") {
+      if (mockArmedSource === "scene" || mockArmedSource === "bluetooth" || mockArmedSource === "airplay" || mockArmedSource === "upnp") {
         await setOutputVolumePercent(percent);
       } else {
         await runMpc(["volume", String(Math.round(percent))]);
@@ -3872,16 +3992,22 @@ async function applyMpcPlaybackAction(action) {
   }
 }
 
+async function applyMpcPlaybackAction(action) {
+  return await withMpcMutationLock(() => applyMpcPlaybackActionUnlocked(action));
+}
+
 async function primeMpcPlayback() {
   try {
-    await ensureMpcQueue();
-    const status = parseMpcStatus(await runMpc(["status"], { allowFailure: true }));
-    if (status.state !== "playing" || status.queueLength === 0) {
-      if (Number.isFinite(MPD_STARTUP_VOLUME) && MPD_STARTUP_VOLUME >= 0 && MPD_STARTUP_VOLUME <= 100) {
-        await runMpc(["volume", String(Math.round(MPD_STARTUP_VOLUME))]);
+    await withMpcMutationLock(async () => {
+      await ensureMpcQueue();
+      const status = parseMpcStatus(await runMpc(["status"], { allowFailure: true }));
+      if (status.state !== "playing" || status.queueLength === 0) {
+        if (Number.isFinite(MPD_STARTUP_VOLUME) && MPD_STARTUP_VOLUME >= 0 && MPD_STARTUP_VOLUME <= 100) {
+          await runMpc(["volume", String(Math.round(MPD_STARTUP_VOLUME))]);
+        }
+        await ensureMpcPlaybackStarted();
       }
-      await runMpc(["play"]);
-    }
+    });
   } catch (error) {
     console.warn(`tikpal-api mpc prime failed: ${error instanceof Error ? error.message : "unknown error"}`);
   }
@@ -4059,10 +4185,44 @@ async function buildMockAudioSpectrumFrame() {
   return normalizeAudioSpectrumFrame({ bands, peaks: { left, right } }, "mock");
 }
 
+let audioSpectrumCommandCache = null;
+let audioSpectrumCommandInFlight = null;
+
+async function getCommandAudioSpectrumFrame() {
+  const now = Date.now();
+  if (audioSpectrumCommandCache && now - audioSpectrumCommandCache.cachedAtMs < HIFI_SPECTRUM_CACHE_MS) {
+    return audioSpectrumCommandCache.frame;
+  }
+  if (audioSpectrumCommandInFlight) {
+    if (audioSpectrumCommandCache) {
+      return audioSpectrumCommandCache.frame;
+    }
+    return await audioSpectrumCommandInFlight;
+  }
+
+  audioSpectrumCommandInFlight = (async () => {
+    const raw = await runCommand(HIFI_SPECTRUM_COMMAND, { allowFailure: false, timeout: 3000 });
+    const frame = normalizeAudioSpectrumFrame(JSON.parse(raw), "command");
+    audioSpectrumCommandCache = {
+      frame,
+      cachedAtMs: Date.now()
+    };
+    return frame;
+  })();
+
+  try {
+    return await audioSpectrumCommandInFlight;
+  } finally {
+    audioSpectrumCommandInFlight = null;
+  }
+}
+
 async function getAudioSpectrumFrame() {
   if (HIFI_SPECTRUM_COMMAND.trim()) {
-    const raw = await runCommand(HIFI_SPECTRUM_COMMAND, { allowFailure: false, timeout: 3000 });
-    return normalizeAudioSpectrumFrame(JSON.parse(raw), "command");
+    return await getCommandAudioSpectrumFrame();
+  }
+  if (API_MODE === "mpc") {
+    throw new Error("TIKPAL_HIFI_SPECTRUM_COMMAND is required before Hi-Fi spectrum can be sampled in mpc mode");
   }
   return await buildMockAudioSpectrumFrame();
 }
@@ -5654,7 +5814,7 @@ async function applyMockSourceSwitch(action) {
   }
 }
 
-async function applyMpcSourceSwitch(action) {
+async function applyMpcSourceSwitchUnlocked(action) {
   switch (action.target) {
     case "mpd":
       mockArmedSource = null;
@@ -5712,6 +5872,10 @@ async function applyMpcSourceSwitch(action) {
     default:
       throw new Error(`Unsupported source target: ${action.target}`);
   }
+}
+
+async function applyMpcSourceSwitch(action) {
+  return await withMpcMutationLock(() => applyMpcSourceSwitchUnlocked(action));
 }
 
 async function applySourceSwitch(action) {

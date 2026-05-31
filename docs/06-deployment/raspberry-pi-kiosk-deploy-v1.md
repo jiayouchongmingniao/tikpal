@@ -98,8 +98,12 @@ TIKPAL_MPD_DEFAULT_QUEUE_PATH=Codex
 TIKPAL_MPD_STARTUP_VOLUME=30
 TIKPAL_OUTPUT_VOLUME_GET_COMMAND="amixer get PCM"
 TIKPAL_OUTPUT_VOLUME_SET_COMMAND="amixer sset PCM %VALUE%%"
+TIKPAL_WEB_ALLOW_REMOTE_UI_API=1
 TIKPAL_HIFI_EQ_APPLY_COMMAND=""
-TIKPAL_HIFI_SPECTRUM_COMMAND=""
+TIKPAL_HIFI_SPECTRUM_COMMAND="./deploy/moode/tikpal-hifi-spectrum-capture.sh"
+TIKPAL_HIFI_SPECTRUM_DEVICE=""
+TIKPAL_HIFI_SPECTRUM_CAPTURE_COMMAND=""
+TIKPAL_HIFI_SPECTRUM_CACHE_MS=900
 TIKPAL_DDCUTIL_BIN=ddcutil
 TIKPAL_DDCUTIL_DISPLAY=""
 TIKPAL_DDCUTIL_READ_CACHE_MS=300000
@@ -149,8 +153,9 @@ EOF
 
 `TIKPAL_MPD_DEFAULT_QUEUE_PATH=Codex` tells the backend which local library path to queue first when MPD is empty.
 `TIKPAL_MPD_STARTUP_VOLUME=30` makes Tikpal set MPD to 30% before auto-resuming playback when the API starts and playback is not already running.
+`TIKPAL_WEB_ALLOW_REMOTE_UI_API=1` lets the production web proxy serve the full kiosk UI from `http://<pi-ip>:4173/` on a trusted LAN. Direct access to the API service on `8787` remains loopback-only for full kiosk paths; portable controllers should still use `/api/v1/remote/*`.
 `TIKPAL_HIFI_EQ_APPLY_COMMAND` enables real Hi-Fi EQ preset control in `mpc` mode. Until this is set, `set_hifi_eq` is intentionally rejected on the Pi instead of pretending the DSP changed. The command receives `%PRESET%`, `%LABEL%`, and `%VISUAL%` placeholders, so a future Pi hook can map `flat`, `warm`, and `vocal` to local CamillaDSP configs. A CamillaDSP-based hook may use the official WebSocket control path, where `SetConfigName` selects a config and `Reload` applies it: [CamillaDSP WebSocket docs](https://www.camilladsp.com/docs/camilladsp/1.0.1/websocket/).
-`TIKPAL_HIFI_SPECTRUM_COMMAND` is reserved for a Pi-side audio analyzer that emits one JSON frame with `bands` as 32 normalized values and `peaks.left` / `peaks.right` in the `0..1` range. Leave it unset for this slice; `/api/v1/audio/spectrum` will return mock-but-protocol-real frames so the UI contract is already stable.
+`TIKPAL_HIFI_SPECTRUM_COMMAND` enables real Hi-Fi meter sampling. The checked-in `deploy/moode/tikpal-hifi-spectrum-capture.sh` helper captures a short PCM window from a readable ALSA device, calculates 32 normalized spectrum bands plus normalized `peaks.left` / `peaks.right`, and returns the JSON frame consumed by `/api/v1/audio/spectrum`. The helper first honors `TIKPAL_HIFI_SPECTRUM_CAPTURE_COMMAND` when a custom Pi pipeline is needed; otherwise it tries `TIKPAL_HIFI_SPECTRUM_DEVICE` / `TIKPAL_HIFI_SPECTRUM_DEVICES` and then common ALSA loopback devices such as `plughw:Loopback,1,0`. `TIKPAL_HIFI_SPECTRUM_CACHE_MS` keeps the API from launching overlapping analyzer commands while the Hi-Fi UI polls the meter. In `mpc` mode Tikpal now rejects the spectrum endpoint when this command is unset, so the Pi does not silently show mock EQ data. Validate the device path with `./deploy/moode/tikpal-hifi-spectrum-capture.sh | jq .` before restarting `tikpal-api.service`.
 `TIKPAL_DDCUTIL_BIN` and optional `TIKPAL_DDCUTIL_DISPLAY` control the ambient right-edge brightness gesture path when the display exposes DDC/CI VCP `0x10`. `TIKPAL_DDCUTIL_READ_CACHE_MS` keeps status polling from blocking the kiosk on frequent I2C reads; brightness writes still apply immediately.
 `TIKPAL_PORTABLE_API_KEY` protects portable-controller writes through `POST /api/v1/remote/actions`. Keep `tikpal-api.service` bound to `127.0.0.1` and let portable controllers enter through the production web service at `http://<pi>:4173/api/v1/remote/*`; the web proxy blocks external clients from calling the full internal kiosk API.
 `TIKPAL_SPOTIFY_*` lets the Pi expose Spotify Connect as a truthful ready/active handoff target without using Spotify Web API. Leave it closed by default and provide activate/disable commands when Spotify should only accept connections after the user selects that source.
@@ -250,10 +255,16 @@ When `TIKPAL_PLAYER_BACKEND=mpc` is active, also verify the real device path:
 systemctl show tikpal-api.service -p Environment --no-pager
 mpc status
 mpc current
+curl -fsS -X POST http://127.0.0.1:8787/api/v1/playback/actions \
+  -H "Content-Type: application/json" \
+  --data '{"type":"next"}'
+mpc status
 curl -fsS http://127.0.0.1:8787/api/v1/playback/status
 curl -fsS http://127.0.0.1:8787/api/v1/system/status
 curl -fsS http://127.0.0.1:8787/api/v1/system/runtime
 ```
+
+`next`, `previous`, playlist play, local track switch, and startup queue priming are serialized through the API and verify MPD reaches `[playing]` after `play`, so a status line that remains `[paused]` after one of those actions is a real regression to investigate before accepting the deploy. If MPD reports `Failed to open ALSA device "_audioout"`, verify `snd-aloop` is loaded when `/etc/alsa/conf.d/_sndaloop.conf` is active, then restart `mpd.service`.
 
 Verify the portable remote facade locally and through the LAN-facing web proxy:
 
