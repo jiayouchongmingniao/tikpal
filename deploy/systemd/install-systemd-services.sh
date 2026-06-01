@@ -83,6 +83,8 @@ install_unit "$SCRIPT_DIR/tikpal-web.service"
 
 if [[ "$INSTALL_KIOSK" -eq 1 ]]; then
   install_unit "$SCRIPT_DIR/tikpal-kiosk.service"
+  install_unit "$SCRIPT_DIR/tikpal-kiosk-viewer.service"
+  install_unit "$SCRIPT_DIR/tikpal-kiosk-devtools.service"
   if [[ ! -f "$APP_DIR/.env.kiosk" ]]; then
     cp "$APP_DIR/deploy/chromium/env.kiosk.example" "$APP_DIR/.env.kiosk"
     chown "$SERVICE_USER":"$SERVICE_USER" "$APP_DIR/.env.kiosk" || true
@@ -101,7 +103,7 @@ systemctl daemon-reload
 systemctl enable tikpal-api.service tikpal-web.service
 
 if [[ "$INSTALL_KIOSK" -eq 1 ]]; then
-  systemctl enable tikpal-kiosk.service
+  systemctl enable tikpal-kiosk.service tikpal-kiosk-viewer.service tikpal-kiosk-devtools.service
   if systemctl is-active --quiet kiosk.service; then
     echo "WARN: legacy kiosk.service is active. Inspect it before enabling Tikpal as the only screen owner." >&2
   fi
@@ -112,6 +114,8 @@ if [[ "$RESTART_SERVICES" -eq 1 ]]; then
   systemctl restart tikpal-web.service
   if [[ "$INSTALL_KIOSK" -eq 1 ]]; then
     systemctl restart tikpal-kiosk.service
+    systemctl restart tikpal-kiosk-viewer.service
+    systemctl restart tikpal-kiosk-devtools.service
   fi
 fi
 
@@ -123,4 +127,6 @@ echo "  curl -fsSI http://127.0.0.1:4173/"
 if [[ "$INSTALL_KIOSK" -eq 1 ]]; then
   echo "  $APP_DIR/deploy/chromium/launch-tikpal-kiosk.sh --check"
   echo "  systemctl status tikpal-kiosk.service"
+  echo "  systemctl status tikpal-kiosk-viewer.service"
+  echo "  systemctl status tikpal-kiosk-devtools.service"
 fi

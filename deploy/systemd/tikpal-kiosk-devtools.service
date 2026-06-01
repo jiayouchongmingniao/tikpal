@@ -1,0 +1,19 @@
+[Unit]
+Description=Tikpal kiosk Chromium DevTools LAN proxy
+After=network.target tikpal-kiosk.service
+Wants=network.target tikpal-kiosk.service
+PartOf=tikpal-kiosk.service
+
+[Service]
+Type=simple
+User=@SERVICE_USER@
+WorkingDirectory=@APP_DIR@
+EnvironmentFile=-@APP_DIR@/.env.kiosk
+StandardOutput=journal
+StandardError=journal
+ExecStart=@APP_DIR@/deploy/chromium/start-tikpal-kiosk-devtools-proxy.sh
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

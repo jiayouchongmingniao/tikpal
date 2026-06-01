@@ -1,7 +1,8 @@
 [Unit]
-Description=Tikpal Chromium kiosk
-After=network.target tikpal-api.service tikpal-web.service
-Wants=network.target tikpal-api.service tikpal-web.service
+Description=Tikpal kiosk noVNC viewer
+After=network.target tikpal-kiosk.service
+Wants=network.target tikpal-kiosk.service
+PartOf=tikpal-kiosk.service
 
 [Service]
 Type=simple
@@ -12,7 +13,7 @@ Environment=DISPLAY=:0
 Environment=XAUTHORITY=/home/@SERVICE_USER@/.Xauthority
 StandardOutput=journal
 StandardError=journal
-ExecStart=@APP_DIR@/deploy/chromium/start-tikpal-kiosk-display.sh
+ExecStart=@APP_DIR@/deploy/chromium/start-tikpal-kiosk-viewer.sh
 Restart=on-failure
 RestartSec=3
 

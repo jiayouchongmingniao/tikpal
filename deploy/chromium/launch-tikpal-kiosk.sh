@@ -17,11 +17,19 @@ fi
 : "${TIKPAL_KIOSK_WINDOW:=2560x720}"
 : "${TIKPAL_KIOSK_WINDOW_POSITION:=0,0}"
 : "${TIKPAL_KIOSK_DISPLAY:=:0}"
+: "${TIKPAL_KIOSK_DISPLAY_MODE:=auto}"
+: "${TIKPAL_KIOSK_ACTIVE_DISPLAY_MODE:=$TIKPAL_KIOSK_DISPLAY_MODE}"
 : "${TIKPAL_KIOSK_XRANDR_MODE:=2560x720}"
 : "${TIKPAL_KIOSK_XRANDR_OUTPUT:=}"
 : "${TIKPAL_CHROMIUM_BIN:=/usr/lib/chromium-browser/chromium-browser}"
 : "${TIKPAL_CHROMIUM_PROFILE_DIR:=$HOME/.config/tikpal-chromium-kiosk}"
 : "${TIKPAL_CHROMIUM_COLOR_SCHEME:=dark}"
+: "${TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE:=}"
+: "${TIKPAL_KIOSK_REMOTE_DEBUG:=0}"
+: "${TIKPAL_KIOSK_REMOTE_DEBUG_ADDRESS:=127.0.0.1}"
+: "${TIKPAL_KIOSK_REMOTE_DEBUG_PORT:=9222}"
+: "${TIKPAL_KIOSK_REMOTE_DEBUG_CHROMIUM_ADDRESS:=127.0.0.1}"
+: "${TIKPAL_KIOSK_REMOTE_DEBUG_CHROMIUM_PORT:=$TIKPAL_KIOSK_REMOTE_DEBUG_PORT}"
 
 MODE="launch"
 if [[ "${1:-}" == "--check" ]]; then
@@ -35,6 +43,19 @@ log() {
 fail() {
   log "ERROR: $*"
   exit 1
+}
+
+is_enabled() {
+  local value
+  value="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+  case "$value" in
+    1|true|yes|on|enabled)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
 }
 
 normalize_chromium_window_size() {
@@ -111,8 +132,15 @@ check_runtime() {
   log "chromium window: $CHROMIUM_WINDOW_SIZE"
   log "window position: $TIKPAL_KIOSK_WINDOW_POSITION"
   log "display: $TIKPAL_KIOSK_DISPLAY"
+  log "display mode: $TIKPAL_KIOSK_ACTIVE_DISPLAY_MODE"
   log "chromium: $TIKPAL_CHROMIUM_BIN"
   log "profile: $TIKPAL_CHROMIUM_PROFILE_DIR"
+  log "alsa output device: ${TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE:-default}"
+  if is_enabled "$TIKPAL_KIOSK_REMOTE_DEBUG"; then
+    log "remote debug: ${TIKPAL_KIOSK_REMOTE_DEBUG_ADDRESS}:${TIKPAL_KIOSK_REMOTE_DEBUG_PORT} -> ${TIKPAL_KIOSK_REMOTE_DEBUG_CHROMIUM_ADDRESS}:${TIKPAL_KIOSK_REMOTE_DEBUG_CHROMIUM_PORT}"
+  else
+    log "remote debug: off"
+  fi
   log "flags: $FLAGS_FILE"
 
   [[ -f "$FLAGS_FILE" ]] || fail "Chromium flags file is missing"
@@ -140,7 +168,7 @@ reset_chromium_profile_state
 
 export DISPLAY="$TIKPAL_KIOSK_DISPLAY"
 
-if [[ "$TIKPAL_KIOSK_XRANDR_MODE" != "none" ]] && command -v xrandr >/dev/null 2>&1; then
+if [[ "$TIKPAL_KIOSK_ACTIVE_DISPLAY_MODE" != "virtual" && "$TIKPAL_KIOSK_XRANDR_MODE" != "none" ]] && command -v xrandr >/dev/null 2>&1; then
   if [[ -n "$TIKPAL_KIOSK_XRANDR_OUTPUT" ]]; then
     xrandr --output "$TIKPAL_KIOSK_XRANDR_OUTPUT" --mode "$TIKPAL_KIOSK_XRANDR_MODE" || log "WARN: xrandr mode set failed"
   else
@@ -170,6 +198,17 @@ ARGS=(
 
 if [[ "$TIKPAL_CHROMIUM_COLOR_SCHEME" == "dark" ]]; then
   ARGS+=("--force-dark-mode" "--enable-features=WebUIDarkMode")
+fi
+
+if [[ -n "$TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE" ]]; then
+  ARGS+=("--alsa-output-device=$TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE")
+fi
+
+if is_enabled "$TIKPAL_KIOSK_REMOTE_DEBUG"; then
+  ARGS+=(
+    "--remote-debugging-address=$TIKPAL_KIOSK_REMOTE_DEBUG_CHROMIUM_ADDRESS"
+    "--remote-debugging-port=$TIKPAL_KIOSK_REMOTE_DEBUG_CHROMIUM_PORT"
+  )
 fi
 
 log "launching Chromium"

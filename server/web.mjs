@@ -1,9 +1,14 @@
 import { createReadStream } from "node:fs";
-import { stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildAccessDeniedBody, getTikpalWebProxyApiAccessDecision } from "./accessControl.mjs";
+import {
+  TIKPAL_KEY_HEADER,
+  buildAccessDeniedBody,
+  getTikpalWebProxyApiAccessDecision,
+  isLoopbackRemoteAddress
+} from "./accessControl.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const APP_DIR = path.resolve(__dirname, "..");
@@ -13,6 +18,7 @@ const PORT = Number(process.env.TIKPAL_WEB_PORT ?? 4173);
 const API_ORIGIN = new URL(process.env.TIKPAL_API_ORIGIN ?? "http://127.0.0.1:8787");
 const PORTABLE_API_KEY = process.env.TIKPAL_PORTABLE_API_KEY ?? "";
 const ALLOW_REMOTE_UI_API = process.env.TIKPAL_WEB_ALLOW_REMOTE_UI_API ?? "0";
+const REMOTE_MODE_INJECTION = "<script>window.__TIKPAL_REMOTE_MODE__=true;</script>";
 
 const MIME_TYPES = new Map([
   [".html", "text/html; charset=utf-8"],
@@ -33,6 +39,61 @@ const MIME_TYPES = new Map([
 function send(response, status, body, headers = {}) {
   response.writeHead(status, headers);
   response.end(body);
+}
+
+function getRequestHostName(request) {
+  const rawHost = String(request.headers.host ?? "").trim().toLowerCase();
+  if (!rawHost) return "";
+
+  if (rawHost.startsWith("[")) {
+    const closeIndex = rawHost.indexOf("]");
+    return (closeIndex === -1 ? rawHost.slice(1) : rawHost.slice(1, closeIndex)).replace(/\.$/, "");
+  }
+
+  const lastColonIndex = rawHost.lastIndexOf(":");
+  const hasSingleColon = lastColonIndex !== -1 && rawHost.indexOf(":") === lastColonIndex;
+  return (hasSingleColon ? rawHost.slice(0, lastColonIndex) : rawHost).replace(/\.$/, "");
+}
+
+function isRemoteBrowserClient(request) {
+  const hostName = getRequestHostName(request);
+  return !isLoopbackRemoteAddress(request.socket.remoteAddress)
+    || (hostName !== "" && !isLoopbackRemoteAddress(hostName));
+}
+
+function getAccessControlRemoteAddress(request) {
+  if (!isLoopbackRemoteAddress(request.socket.remoteAddress)) return request.socket.remoteAddress;
+
+  const hostName = getRequestHostName(request);
+  return hostName !== "" && !isLoopbackRemoteAddress(hostName)
+    ? hostName
+    : request.socket.remoteAddress;
+}
+
+function allowsFullRemoteUi() {
+  return String(ALLOW_REMOTE_UI_API ?? "0").trim() === "1";
+}
+
+function shouldServeRemoteControl(request) {
+  return isRemoteBrowserClient(request) && !allowsFullRemoteUi();
+}
+
+function isRemoteActionProxyRequest(request, pathname) {
+  return isRemoteBrowserClient(request)
+    && String(request.method ?? "").toUpperCase() === "POST"
+    && pathname === "/api/v1/remote/actions";
+}
+
+function maybeInjectPortableKey(request, pathname) {
+  const headers = { ...request.headers };
+  if (
+    isRemoteActionProxyRequest(request, pathname)
+    && PORTABLE_API_KEY.trim()
+    && !headers[TIKPAL_KEY_HEADER]
+  ) {
+    headers[TIKPAL_KEY_HEADER] = PORTABLE_API_KEY.trim();
+  }
+  return headers;
 }
 
 function isInsideDist(filePath) {
@@ -91,11 +152,12 @@ async function resolveStaticFile(urlPathname) {
 
 function proxyApi(request, response) {
   const target = new URL(request.url ?? "/", API_ORIGIN);
+  const proxyHeaders = maybeInjectPortableKey(request, target.pathname);
   const accessDecision = getTikpalWebProxyApiAccessDecision({
     method: request.method,
     pathname: target.pathname,
-    headers: request.headers,
-    remoteAddress: request.socket.remoteAddress,
+    headers: proxyHeaders,
+    remoteAddress: getAccessControlRemoteAddress(request),
     portableApiKey: PORTABLE_API_KEY,
     allowRemoteUiApi: ALLOW_REMOTE_UI_API
   });
@@ -125,7 +187,7 @@ function proxyApi(request, response) {
     {
       method: request.method,
       headers: {
-        ...request.headers,
+        ...proxyHeaders,
         host: API_ORIGIN.host
       }
     },
@@ -148,6 +210,28 @@ function proxyApi(request, response) {
   });
 
   request.pipe(proxyRequest);
+}
+
+async function sendHtmlEntry(request, response, file, commonHeaders) {
+  let body = await readFile(file.filePath, "utf8");
+  if (shouldServeRemoteControl(request)) {
+    body = body.includes("</head>")
+      ? body.replace("</head>", `${REMOTE_MODE_INJECTION}</head>`)
+      : `${REMOTE_MODE_INJECTION}${body}`;
+  }
+
+  const payload = Buffer.from(body);
+  response.writeHead(200, {
+    ...commonHeaders,
+    "Content-Length": payload.length
+  });
+
+  if (request.method === "HEAD") {
+    response.end();
+    return;
+  }
+
+  response.end(payload);
 }
 
 const server = http.createServer(async (request, response) => {
@@ -179,6 +263,11 @@ const server = http.createServer(async (request, response) => {
     "Content-Type": MIME_TYPES.get(extension) ?? "application/octet-stream",
     "Cache-Control": isMutableMedia ? "no-store" : isAsset ? "public, max-age=31536000, immutable" : "no-store"
   };
+
+  if (extension === ".html") {
+    await sendHtmlEntry(request, response, file, commonHeaders);
+    return;
+  }
 
   if (isMutableMedia) {
     commonHeaders["Accept-Ranges"] = "bytes";

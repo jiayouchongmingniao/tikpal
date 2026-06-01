@@ -4,13 +4,15 @@
 
 Deploy Tikpal to a Raspberry Pi 4 running moOde so the device boots into the local 2560 x 720 Chromium kiosk experience.
 
-This package installs three local services:
+This package installs five local services when kiosk diagnostics are enabled:
 
 | Service | Port | Purpose |
 | --- | --- | --- |
 | `tikpal-api.service` | `8787` | Local Tikpal API and future moOde / MPD bridge. |
 | `tikpal-web.service` | `4173` | Production static web server for `dist/`, with `/api` proxied to the API service. |
 | `tikpal-kiosk.service` | display `:0` | Chromium kiosk session for the touch screen. |
+| `tikpal-kiosk-viewer.service` | `6080` | Optional noVNC viewer for the full kiosk display. |
+| `tikpal-kiosk-devtools.service` | `9222` | Optional LAN proxy for Chromium DevTools. |
 
 ## Local Preflight
 
@@ -74,6 +76,8 @@ SSH into the Pi, then:
 
 ```bash
 cd /home/moode/code/tikpal
+sudo apt-get update
+sudo apt-get install -y xvfb x11vnc novnc websockify socat
 npm ci
 npm run build
 cp -n deploy/chromium/env.kiosk.example .env.kiosk
@@ -83,6 +87,9 @@ Inspect `.env.kiosk` and adjust the Chromium binary or display output if needed:
 
 ```bash
 nano .env.kiosk
+deploy/chromium/start-tikpal-kiosk-display.sh --check
+deploy/chromium/start-tikpal-kiosk-viewer.sh --check
+deploy/chromium/start-tikpal-kiosk-devtools-proxy.sh --check
 deploy/chromium/launch-tikpal-kiosk.sh --check
 ```
 
@@ -98,7 +105,7 @@ TIKPAL_MPD_DEFAULT_QUEUE_PATH=Codex
 TIKPAL_MPD_STARTUP_VOLUME=30
 TIKPAL_OUTPUT_VOLUME_GET_COMMAND="amixer get PCM"
 TIKPAL_OUTPUT_VOLUME_SET_COMMAND="amixer sset PCM %VALUE%%"
-TIKPAL_WEB_ALLOW_REMOTE_UI_API=1
+TIKPAL_WEB_ALLOW_REMOTE_UI_API=0
 TIKPAL_HIFI_EQ_APPLY_COMMAND=""
 TIKPAL_HIFI_SPECTRUM_COMMAND="./deploy/moode/tikpal-hifi-spectrum-capture.sh"
 TIKPAL_HIFI_SPECTRUM_DEVICE=""
@@ -153,11 +160,13 @@ EOF
 
 `TIKPAL_MPD_DEFAULT_QUEUE_PATH=Codex` tells the backend which local library path to queue first when MPD is empty.
 `TIKPAL_MPD_STARTUP_VOLUME=30` makes Tikpal set MPD to 30% before auto-resuming playback when the API starts and playback is not already running.
-`TIKPAL_WEB_ALLOW_REMOTE_UI_API=1` lets the production web proxy serve the full kiosk UI from `http://<pi-ip>:4173/` on a trusted LAN. Direct access to the API service on `8787` remains loopback-only for full kiosk paths; portable controllers should still use `/api/v1/remote/*`.
+Keep `TIKPAL_WEB_ALLOW_REMOTE_UI_API=0` for the normal Pi install: the production web service serves the full kiosk UI to loopback clients such as the Pi browser, while LAN browsers opening `http://<pi-ip>:4173/` receive the portable remote UI and are limited to `/api/v1/remote/*`. Remote mode is selected when the socket remote address is not loopback or when the HTTP `Host` is not `localhost`, `127.0.0.1`, or `[::1]`, so SSH tunnels, reverse proxies, and port mappings still receive the portable remote UI when the browser uses the Pi IP or a public domain as the Host. Set it to `1` only when trusted LAN clients should receive the full kiosk API surface.
+Kiosk display diagnostics are separate from `4173`: `TIKPAL_KIOSK_REMOTE_DEBUG=1` exposes Chromium DevTools on `TIKPAL_KIOSK_REMOTE_DEBUG_ADDRESS:TIKPAL_KIOSK_REMOTE_DEBUG_PORT`, proxying to Chromium's local `TIKPAL_KIOSK_REMOTE_DEBUG_CHROMIUM_ADDRESS:TIKPAL_KIOSK_REMOTE_DEBUG_CHROMIUM_PORT`, and `TIKPAL_KIOSK_VIEWER=novnc` exposes the full kiosk screen through noVNC on `TIKPAL_KIOSK_NOVNC_ADDRESS:TIKPAL_KIOSK_NOVNC_PORT`. These ports should only be open on a trusted LAN; DevTools can inspect and control the kiosk browser.
+`TIKPAL_KIOSK_DISPLAY_MODE=auto` starts a physical `startx` session when a DRM display is connected and falls back to `Xvfb` when the Pi is headless. Set it to `physical` or `virtual` only when you need to force one path.
 `TIKPAL_HIFI_EQ_APPLY_COMMAND` enables real Hi-Fi EQ preset control in `mpc` mode. Until this is set, `set_hifi_eq` is intentionally rejected on the Pi instead of pretending the DSP changed. The command receives `%PRESET%`, `%LABEL%`, and `%VISUAL%` placeholders, so a future Pi hook can map `flat`, `warm`, and `vocal` to local CamillaDSP configs. A CamillaDSP-based hook may use the official WebSocket control path, where `SetConfigName` selects a config and `Reload` applies it: [CamillaDSP WebSocket docs](https://www.camilladsp.com/docs/camilladsp/1.0.1/websocket/).
 `TIKPAL_HIFI_SPECTRUM_COMMAND` enables real Hi-Fi meter sampling. The checked-in `deploy/moode/tikpal-hifi-spectrum-capture.sh` helper captures a short PCM window from a readable ALSA device, calculates 32 normalized spectrum bands plus normalized `peaks.left` / `peaks.right`, and returns the JSON frame consumed by `/api/v1/audio/spectrum`. The helper first honors `TIKPAL_HIFI_SPECTRUM_CAPTURE_COMMAND` when a custom Pi pipeline is needed; otherwise it tries `TIKPAL_HIFI_SPECTRUM_DEVICE` / `TIKPAL_HIFI_SPECTRUM_DEVICES` and then common ALSA loopback devices such as `plughw:Loopback,1,0`. `TIKPAL_HIFI_SPECTRUM_CACHE_MS` keeps the API from launching overlapping analyzer commands while the Hi-Fi UI polls the meter. In `mpc` mode Tikpal now rejects the spectrum endpoint when this command is unset, so the Pi does not silently show mock EQ data. Validate the device path with `./deploy/moode/tikpal-hifi-spectrum-capture.sh | jq .` before restarting `tikpal-api.service`.
 `TIKPAL_DDCUTIL_BIN` and optional `TIKPAL_DDCUTIL_DISPLAY` control the ambient right-edge brightness gesture path when the display exposes DDC/CI VCP `0x10`. `TIKPAL_DDCUTIL_READ_CACHE_MS` keeps status polling from blocking the kiosk on frequent I2C reads; brightness writes still apply immediately.
-`TIKPAL_PORTABLE_API_KEY` protects portable-controller writes through `POST /api/v1/remote/actions`. Keep `tikpal-api.service` bound to `127.0.0.1` and let portable controllers enter through the production web service at `http://<pi>:4173/api/v1/remote/*`; the web proxy blocks external clients from calling the full internal kiosk API.
+`TIKPAL_PORTABLE_API_KEY` protects portable-controller writes through `POST /api/v1/remote/actions`. Keep `tikpal-api.service` bound to `127.0.0.1` and let portable controllers enter through the production web service at `http://<pi>:4173/api/v1/remote/*`; the web proxy blocks external clients from calling the full internal kiosk API. When the key is configured, the LAN-facing remote UI can submit safe remote actions through the web proxy without exposing the full kiosk API.
 `TIKPAL_SPOTIFY_*` lets the Pi expose Spotify Connect as a truthful ready/active handoff target without using Spotify Web API. Leave it closed by default and provide activate/disable commands when Spotify should only accept connections after the user selects that source.
 `TIKPAL_BLUETOOTH_*`, `TIKPAL_AIRPLAY_*`, and `TIKPAL_UPNP_*` let Tikpal enforce the armed-only source gate against moOde's renderer services. On moOde, the checked-in `deploy/moode/tikpal-bluetooth-enable.sh` script is the preferred Bluetooth enable path because it both enables the renderer and re-arms the controller to `power on`, `discoverable on`, and `pairable on`. `deploy/moode/tikpal-airplay-enable.sh` is the preferred AirPlay enable path because it enables the renderer and then nudges `shairport-sync.service` into the running state that actually advertises the receiver. `deploy/moode/tikpal-bluetooth-label.sh` reads the current broadcast name from `bluetoothctl show` so the frontend can tell the user what name to search for on their phone. `TIKPAL_UPNP_*` should point at the target moOde UPnP/DLNA renderer controls; Tikpal treats this as DLNA casting intake, not media-server browsing. `moodeutl -Ro --bluetooth off` and `moodeutl -Ro --airplay off` remain the practical disable commands, while `cfg_system` values `btsvc`, `btactive`, `airplaysvc`, and `aplactive` plus `TIKPAL_AIRPLAY_RECEIVER_ACTIVE_COMMAND` keep the UI honest about whether AirPlay is really up.
 `TIKPAL_BLUETOOTH_METADATA_COMMAND` points to the BlueZ / AVRCP metadata probe. Tikpal uses this first when Bluetooth is connected, so phones that expose title / artist metadata can resolve lyrics through LRCLIB without audio fingerprint credentials. When BlueZ also exposes `Position` and `Duration`, Tikpal maps those into playback progress so synced LRCLIB lyrics can follow Bluetooth playback timing instead of falling back to a fixed text rotation.
@@ -272,6 +281,7 @@ Verify the portable remote facade locally and through the LAN-facing web proxy:
 curl -fsS http://127.0.0.1:8787/api/v1/openapi.json
 curl -fsS http://127.0.0.1:8787/api/v1/remote/state
 curl -fsS http://127.0.0.1:4173/api/v1/remote/catalog
+curl -fsS -H "Host: <pi-ip>:4173" http://127.0.0.1:4173/ | grep __TIKPAL_REMOTE_MODE__
 curl -fsS -X POST http://127.0.0.1:4173/api/v1/remote/actions \
   -H "Content-Type: application/json" \
   -H "X-Tikpal-Key: $TIKPAL_PORTABLE_API_KEY" \
@@ -348,9 +358,13 @@ Verify the live display path:
 
 ```bash
 systemctl status tikpal-kiosk.service --no-pager
+systemctl status tikpal-kiosk-viewer.service --no-pager
+systemctl status tikpal-kiosk-devtools.service --no-pager
 journalctl -u tikpal-kiosk.service -n 80 --no-pager
+journalctl -u tikpal-kiosk-viewer.service -n 80 --no-pager
+journalctl -u tikpal-kiosk-devtools.service -n 80 --no-pager
 ps -ef | grep '[c]hrom'
-xrandr --query
+xrandr --query || true
 ```
 
 The effective Chromium command line should include these window flags:
@@ -361,18 +375,33 @@ The effective Chromium command line should include these window flags:
 
 The launcher accepts `TIKPAL_KIOSK_WINDOW=2560x720` in `.env.kiosk`, but normalizes it to Chromium's `2560,720` format during launch.
 
+## Remote Kiosk Diagnostics
+
+When `.env.kiosk` enables `TIKPAL_KIOSK_REMOTE_DEBUG=1` and `TIKPAL_KIOSK_VIEWER=novnc`, use these checks from the Pi:
+
+```bash
+curl -fsS http://127.0.0.1:9222/json/version
+curl -fsSI http://127.0.0.1:6080/
+```
+
+From a trusted LAN browser, open `http://<pi-ip>:6080/` to view and operate the full kiosk UI. For DOM, console, network, and media debugging, add `<pi-ip>:9222` in Chrome's `chrome://inspect`.
+
+`http://<pi-ip>:4173/` remains the portable remote controller and intentionally does not expose the full kiosk API surface while `TIKPAL_WEB_ALLOW_REMOTE_UI_API=0`.
+
+To verify the no-screen path without unplugging hardware, temporarily set `TIKPAL_KIOSK_DISPLAY_MODE=virtual`, restart `tikpal-kiosk.service`, `tikpal-kiosk-viewer.service`, and `tikpal-kiosk-devtools.service`, then open noVNC again. Restore `auto` after the test unless the device should always run headless.
+
 ## Rollback
 
 Stop Tikpal kiosk without removing API/web:
 
 ```bash
-sudo systemctl disable --now tikpal-kiosk.service
+sudo systemctl disable --now tikpal-kiosk-devtools.service tikpal-kiosk-viewer.service tikpal-kiosk.service
 ```
 
 Stop all Tikpal services:
 
 ```bash
-sudo systemctl disable --now tikpal-kiosk.service tikpal-web.service tikpal-api.service
+sudo systemctl disable --now tikpal-kiosk-devtools.service tikpal-kiosk-viewer.service tikpal-kiosk.service tikpal-web.service tikpal-api.service
 ```
 
 The Chromium profile is dedicated to Tikpal and defaults to:
