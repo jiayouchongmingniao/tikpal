@@ -5618,7 +5618,7 @@ async function runSystemActionCommand(command, label) {
   if (!command.trim()) {
     throw new Error(`${label} is not supported in this runtime`);
   }
-  await runCommand(command, { allowFailure: false, timeout: 5000 });
+  await runCommand(command, { allowFailure: false, timeout: 30000 });
 }
 
 function applyMockSystemAction(action) {

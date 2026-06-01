@@ -125,6 +125,7 @@ TIKPAL_BLUETOOTH_ACTIVE_COMMAND="[ \"$(sqlite3 /var/local/www/db/moode-sqlite3.d
 TIKPAL_BLUETOOTH_ENABLE_COMMAND="./deploy/moode/tikpal-bluetooth-enable.sh"
 TIKPAL_BLUETOOTH_DISABLE_COMMAND="moodeutl -Ro --bluetooth off"
 TIKPAL_BLUETOOTH_LABEL_COMMAND="./deploy/moode/tikpal-bluetooth-label.sh"
+TIKPAL_BLUETOOTH_LABEL_TIMEOUT_SECONDS=2
 TIKPAL_BLUETOOTH_METADATA_COMMAND="./deploy/moode/tikpal-bluetooth-metadata.sh"
 TIKPAL_BLUETOOTH_CAPTURE_COMMAND="./deploy/moode/tikpal-bluetooth-capture.sh"
 TIKPAL_BLUETOOTH_CAPTURE_DURATION_SECONDS=10
@@ -161,14 +162,14 @@ EOF
 `TIKPAL_MPD_DEFAULT_QUEUE_PATH=Codex` tells the backend which local library path to queue first when MPD is empty.
 `TIKPAL_MPD_STARTUP_VOLUME=30` makes Tikpal set MPD to 30% before auto-resuming playback when the API starts and playback is not already running.
 Keep `TIKPAL_WEB_ALLOW_REMOTE_UI_API=0` for the normal Pi install: the production web service serves the full kiosk UI to loopback clients such as the Pi browser, while LAN browsers opening `http://<pi-ip>:4173/` receive the portable remote UI and are limited to `/api/v1/remote/*`. Remote mode is selected when the socket remote address is not loopback or when the HTTP `Host` is not `localhost`, `127.0.0.1`, or `[::1]`, so SSH tunnels, reverse proxies, and port mappings still receive the portable remote UI when the browser uses the Pi IP or a public domain as the Host. Set it to `1` only when trusted LAN clients should receive the full kiosk API surface.
-Kiosk display diagnostics are separate from `4173`: `TIKPAL_KIOSK_REMOTE_DEBUG=1` exposes Chromium DevTools on `TIKPAL_KIOSK_REMOTE_DEBUG_ADDRESS:TIKPAL_KIOSK_REMOTE_DEBUG_PORT`, proxying to Chromium's local `TIKPAL_KIOSK_REMOTE_DEBUG_CHROMIUM_ADDRESS:TIKPAL_KIOSK_REMOTE_DEBUG_CHROMIUM_PORT`, and `TIKPAL_KIOSK_VIEWER=novnc` exposes the full kiosk screen through noVNC on `TIKPAL_KIOSK_NOVNC_ADDRESS:TIKPAL_KIOSK_NOVNC_PORT`. These ports should only be open on a trusted LAN; DevTools can inspect and control the kiosk browser.
-`TIKPAL_KIOSK_DISPLAY_MODE=auto` starts a physical `startx` session when a DRM display is connected and falls back to `Xvfb` when the Pi is headless. Set it to `physical` or `virtual` only when you need to force one path.
+Kiosk display diagnostics are separate from `4173`: `TIKPAL_KIOSK_REMOTE_DEBUG=1` exposes Chromium DevTools on `TIKPAL_KIOSK_REMOTE_DEBUG_ADDRESS:TIKPAL_KIOSK_REMOTE_DEBUG_PORT`, proxying to Chromium's local `TIKPAL_KIOSK_REMOTE_DEBUG_CHROMIUM_ADDRESS:TIKPAL_KIOSK_REMOTE_DEBUG_CHROMIUM_PORT`, and `TIKPAL_KIOSK_VIEWER=novnc` exposes the full kiosk screen through noVNC on `TIKPAL_KIOSK_NOVNC_ADDRESS:TIKPAL_KIOSK_NOVNC_PORT`. Keep `TIKPAL_KIOSK_REMOTE_DEBUG=0` for normal use and enable it only while actively debugging; DevTools can inspect and control the kiosk browser.
+`TIKPAL_KIOSK_DISPLAY_MODE=auto` starts a physical `startx` session when a DRM display is connected, or when `ddcutil detect --brief` can see a local monitor even though KMS reports HDMI as disconnected, and falls back to `Xvfb` when the Pi is headless. Set `TIKPAL_KIOSK_LOCAL_SCREEN=1` or `0` only for devices where detection is wrong and you need to force the auto decision without changing the broader display mode.
 `TIKPAL_HIFI_EQ_APPLY_COMMAND` enables real Hi-Fi EQ preset control in `mpc` mode. Until this is set, `set_hifi_eq` is intentionally rejected on the Pi instead of pretending the DSP changed. The command receives `%PRESET%`, `%LABEL%`, and `%VISUAL%` placeholders, so a future Pi hook can map `flat`, `warm`, and `vocal` to local CamillaDSP configs. A CamillaDSP-based hook may use the official WebSocket control path, where `SetConfigName` selects a config and `Reload` applies it: [CamillaDSP WebSocket docs](https://www.camilladsp.com/docs/camilladsp/1.0.1/websocket/).
 `TIKPAL_HIFI_SPECTRUM_COMMAND` enables real Hi-Fi meter sampling. The checked-in `deploy/moode/tikpal-hifi-spectrum-capture.sh` helper captures a short PCM window from a readable ALSA device, calculates 32 normalized spectrum bands plus normalized `peaks.left` / `peaks.right`, and returns the JSON frame consumed by `/api/v1/audio/spectrum`. The helper first honors `TIKPAL_HIFI_SPECTRUM_CAPTURE_COMMAND` when a custom Pi pipeline is needed; otherwise it tries `TIKPAL_HIFI_SPECTRUM_DEVICE` / `TIKPAL_HIFI_SPECTRUM_DEVICES` and then common ALSA loopback devices such as `plughw:Loopback,1,0`. `TIKPAL_HIFI_SPECTRUM_CACHE_MS` keeps the API from launching overlapping analyzer commands while the Hi-Fi UI polls the meter. In `mpc` mode Tikpal now rejects the spectrum endpoint when this command is unset, so the Pi does not silently show mock EQ data. Validate the device path with `./deploy/moode/tikpal-hifi-spectrum-capture.sh | jq .` before restarting `tikpal-api.service`.
 `TIKPAL_DDCUTIL_BIN` and optional `TIKPAL_DDCUTIL_DISPLAY` control the ambient right-edge brightness gesture path when the display exposes DDC/CI VCP `0x10`. `TIKPAL_DDCUTIL_READ_CACHE_MS` keeps status polling from blocking the kiosk on frequent I2C reads; brightness writes still apply immediately.
 `TIKPAL_PORTABLE_API_KEY` protects portable-controller writes through `POST /api/v1/remote/actions`. Keep `tikpal-api.service` bound to `127.0.0.1` and let portable controllers enter through the production web service at `http://<pi>:4173/api/v1/remote/*`; the web proxy blocks external clients from calling the full internal kiosk API. When the key is configured, the LAN-facing remote UI can submit safe remote actions through the web proxy without exposing the full kiosk API.
 `TIKPAL_SPOTIFY_*` lets the Pi expose Spotify Connect as a truthful ready/active handoff target without using Spotify Web API. Leave it closed by default and provide activate/disable commands when Spotify should only accept connections after the user selects that source.
-`TIKPAL_BLUETOOTH_*`, `TIKPAL_AIRPLAY_*`, and `TIKPAL_UPNP_*` let Tikpal enforce the armed-only source gate against moOde's renderer services. On moOde, the checked-in `deploy/moode/tikpal-bluetooth-enable.sh` script is the preferred Bluetooth enable path because it both enables the renderer and re-arms the controller to `power on`, `discoverable on`, and `pairable on`. `deploy/moode/tikpal-airplay-enable.sh` is the preferred AirPlay enable path because it enables the renderer and then nudges `shairport-sync.service` into the running state that actually advertises the receiver. `deploy/moode/tikpal-bluetooth-label.sh` reads the current broadcast name from `bluetoothctl show` so the frontend can tell the user what name to search for on their phone. `TIKPAL_UPNP_*` should point at the target moOde UPnP/DLNA renderer controls; Tikpal treats this as DLNA casting intake, not media-server browsing. `moodeutl -Ro --bluetooth off` and `moodeutl -Ro --airplay off` remain the practical disable commands, while `cfg_system` values `btsvc`, `btactive`, `airplaysvc`, and `aplactive` plus `TIKPAL_AIRPLAY_RECEIVER_ACTIVE_COMMAND` keep the UI honest about whether AirPlay is really up.
+`TIKPAL_BLUETOOTH_*`, `TIKPAL_AIRPLAY_*`, and `TIKPAL_UPNP_*` let Tikpal enforce the armed-only source gate against moOde's renderer services. On moOde, the checked-in `deploy/moode/tikpal-bluetooth-enable.sh` script is the preferred Bluetooth enable path because it both enables the renderer and re-arms the controller to `power on`, `discoverable on`, and `pairable on`. `deploy/moode/tikpal-airplay-enable.sh` is the preferred AirPlay enable path because it enables the renderer and then nudges `shairport-sync.service` into the running state that actually advertises the receiver. `deploy/moode/tikpal-bluetooth-label.sh` reads the current broadcast name from `bluetoothctl show` so the frontend can tell the user what name to search for on their phone; `TIKPAL_BLUETOOTH_LABEL_TIMEOUT_SECONDS` keeps a stuck BlueZ client from accumulating orphaned `bluetoothctl` processes during frequent runtime polling. `TIKPAL_UPNP_*` should point at the target moOde UPnP/DLNA renderer controls; Tikpal treats this as DLNA casting intake, not media-server browsing. `moodeutl -Ro --bluetooth off` and `moodeutl -Ro --airplay off` remain the practical disable commands, while `cfg_system` values `btsvc`, `btactive`, `airplaysvc`, and `aplactive` plus `TIKPAL_AIRPLAY_RECEIVER_ACTIVE_COMMAND` keep the UI honest about whether AirPlay is really up.
 `TIKPAL_BLUETOOTH_METADATA_COMMAND` points to the BlueZ / AVRCP metadata probe. Tikpal uses this first when Bluetooth is connected, so phones that expose title / artist metadata can resolve lyrics through LRCLIB without audio fingerprint credentials. When BlueZ also exposes `Position` and `Duration`, Tikpal maps those into playback progress so synced LRCLIB lyrics can follow Bluetooth playback timing instead of falling back to a fixed text rotation.
 `TIKPAL_AIRPLAY_METADATA_COMMAND` points to moOde's AirPlay metadata bridge. The checked-in `deploy/moode/tikpal-airplay-metadata.sh` reads `/var/local/www/aplmeta.txt`, which is maintained by moOde's `aplmeta-reader.sh` process, and emits title / artist / album fields that Tikpal can use for LRCLIB lyrics lookup. `TIKPAL_AIRPLAY_METADATA_CLOCK_LEAD_MS` compensates for moOde's metadata file write delay when Tikpal has to infer AirPlay progress from the metadata mtime.
 `TIKPAL_BLUETOOTH_CAPTURE_COMMAND` points to the local PCM capture script used for Bluetooth fingerprint recognition when Bluetooth metadata is unavailable. The checked-in `deploy/moode/tikpal-bluetooth-capture.sh` first tries `ffmpeg` against the connected BlueALSA device and then falls back to `arecord`; if moOde exposes a different ALSA capture path, override `TIKPAL_BLUETOOTH_CAPTURE_DEVICE` in the service environment before restarting `tikpal-api.service`.
@@ -389,6 +390,62 @@ From a trusted LAN browser, open `http://<pi-ip>:6080/` to view and operate the 
 `http://<pi-ip>:4173/` remains the portable remote controller and intentionally does not expose the full kiosk API surface while `TIKPAL_WEB_ALLOW_REMOTE_UI_API=0`.
 
 To verify the no-screen path without unplugging hardware, temporarily set `TIKPAL_KIOSK_DISPLAY_MODE=virtual`, restart `tikpal-kiosk.service`, `tikpal-kiosk-viewer.service`, and `tikpal-kiosk-devtools.service`, then open noVNC again. Restore `auto` after the test unless the device should always run headless.
+
+Disable DevTools again after a diagnostic session:
+
+```bash
+cd /home/moode/code/tikpal
+sed -i 's/^TIKPAL_KIOSK_REMOTE_DEBUG=.*/TIKPAL_KIOSK_REMOTE_DEBUG=0/' .env.kiosk
+sudo systemctl disable --now tikpal-kiosk-devtools.service
+sudo systemctl restart tikpal-kiosk.service
+ss -ltnp | grep -E ':(9222|9223)\b' || true
+```
+
+If Chromium or Xorg does not exit cleanly, first confirm `tikpal-kiosk.service` is stuck in `deactivating`, then kill only that service cgroup before starting it again:
+
+```bash
+sudo systemctl kill -s SIGKILL tikpal-kiosk.service
+sudo systemctl reset-failed tikpal-kiosk.service tikpal-kiosk-devtools.service
+sudo systemctl start tikpal-kiosk.service
+```
+
+## Pi Resource Triage
+
+When the kiosk becomes very slow, capture CPU, thermal, GPU, I/O, and service state before changing application code:
+
+```bash
+uptime
+vcgencmd measure_temp
+vcgencmd get_throttled
+vmstat 1 5
+ps -eo pid,ppid,user,stat,pcpu,pmem,rss,comm,args --sort=-pcpu | head -30
+journalctl -b -p warning --no-pager -n 120
+journalctl -u tikpal-kiosk.service -b --since '10 minutes ago' --no-pager | tail -120
+df -hT
+curl --max-time 3 -fsS http://127.0.0.1:8787/api/v1/health
+curl --max-time 5 -fsS http://127.0.0.1:8787/api/v1/system/runtime
+pgrep -af 'bluetoothctl|tikpal-bluetooth-label.sh' | tail -40
+```
+
+Interpret the common high-signal findings this way:
+
+- `vcgencmd get_throttled` values with `0x8` set mean the CPU is currently under soft temperature limiting; values with `0x2`, `0x4`, or `0x6` in the historical bits mean the Pi already hit frequency or thermal caps earlier in the boot.
+- Repeated `v3d ... Resetting GPU for hang`, `gbm_wrapper`, or `GpuControl.CreateCommandBuffer` messages point at Chromium / GPU instability. Stop DevTools first, then reboot once if the kiosk is still stuck with Xorg but no Chromium process.
+- Hundreds of `tikpal-bluetooth-label.sh` or `bluetoothctl` processes mean the Bluetooth label probe is wedged. Confirm `TIKPAL_BLUETOOTH_LABEL_TIMEOUT_SECONDS` is set, deploy the current script, and reboot to clear already-orphaned processes.
+- Plenty of free memory and zero swap means the slowdown is not memory pressure; focus on Chromium CPU, temperature, GPU logs, process leaks, and storage pressure.
+- A root filesystem above roughly 90% full is not usually the first cause of UI jank, but it should be cleaned before long unattended kiosk sessions.
+
+After rebooting for resource recovery, verify the Pi came back cleanly:
+
+```bash
+systemctl is-active tikpal-api.service tikpal-web.service tikpal-kiosk.service
+systemctl is-active tikpal-kiosk-devtools.service || true
+ss -ltnp | grep -E ':(4173|8787|9222|9223)\b' || true
+curl -fsS http://127.0.0.1:8787/api/v1/health
+curl --max-time 5 -fsS http://127.0.0.1:8787/api/v1/system/runtime
+vcgencmd measure_temp
+vcgencmd get_throttled
+```
 
 ## Rollback
 

@@ -69,7 +69,7 @@ async function run() {
   assert(kioskViewerUnit.includes("PartOf=tikpal-kiosk.service"), "kiosk viewer should follow kiosk service lifecycle");
 
   const kioskEnv = await readFile(path.join(ROOT, "deploy/chromium/env.kiosk.example"), "utf8");
-  assert(kioskEnv.includes("TIKPAL_KIOSK_REMOTE_DEBUG=1"), "kiosk env should document remote debugging");
+  assert(kioskEnv.includes("TIKPAL_KIOSK_REMOTE_DEBUG=0"), "kiosk env should default remote debugging off");
   assert(kioskEnv.includes("TIKPAL_KIOSK_VIEWER=novnc"), "kiosk env should document noVNC viewer mode");
   assert(kioskEnv.includes("TIKPAL_KIOSK_DISPLAY_MODE=auto"), "kiosk env should document automatic physical/virtual display selection");
 

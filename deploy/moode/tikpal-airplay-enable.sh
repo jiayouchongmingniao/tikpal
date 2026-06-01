@@ -9,7 +9,19 @@ if [ -d /var/local/www/imagesw/airplay-covers ]; then
 fi
 
 if command -v systemctl >/dev/null 2>&1; then
-  systemctl start shairport-sync.service >/dev/null 2>&1 || true
+  systemctl start nqptp.service >/dev/null 2>&1 \
+    || sudo -n systemctl start nqptp.service >/dev/null 2>&1 \
+    || true
+
+  sleep 2
+  if ! systemctl is-active --quiet shairport-sync.service >/dev/null 2>&1; then
+    systemctl reset-failed shairport-sync.service >/dev/null 2>&1 \
+      || sudo -n systemctl reset-failed shairport-sync.service >/dev/null 2>&1 \
+      || true
+    systemctl start shairport-sync.service >/dev/null 2>&1 \
+      || sudo -n systemctl start shairport-sync.service >/dev/null 2>&1 \
+      || true
+  fi
 fi
 
 if command -v pgrep >/dev/null 2>&1 && command -v renice >/dev/null 2>&1; then
