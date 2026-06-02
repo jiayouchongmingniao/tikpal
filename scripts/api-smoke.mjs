@@ -906,13 +906,26 @@ async function run() {
     assert(focusExperience.body.mode === "focus", "set_mode should switch room mode");
     assert(focusExperience.body.presetId === "focus-library-flow", "set_mode should apply focus preset");
     assert(focusExperience.body.sceneVideoId === "midnight-library", "focus preset should bind Midnight Library");
-    assert(focusExperience.body.sceneSoundEnabled === true, "focus preset should enable scene sound");
+    assert(focusExperience.body.sceneSoundEnabled === false, "focus preset should leave scene sound off by default");
     const persistedExperience = JSON.parse(await readFile(roomExperienceStatePath, "utf8"));
     assert(persistedExperience.mode === "focus", "room experience should persist to the state file");
     const stateAfterFocus = await request("/api/v1/system/state");
-    assert(stateAfterFocus.body.audio.currentSource.id === "scene", "focus room mode should switch to Scene Sound");
+    assert(stateAfterFocus.body.audio.currentSource.id === "mpd", "focus room mode should keep the current music source");
     assert(stateAfterFocus.body.system.volume.percent === focusExperience.body.volumePercent, "room mode should apply volume through playback actions");
     assert(stateAfterFocus.body.system.display.brightnessPercent === focusExperience.body.brightnessPercent, "room mode should apply brightness through system actions");
+
+    const focusSceneSound = await request("/api/v1/experience/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "set_scene_sound", sceneSoundEnabled: true, sceneVideoId: "rainy-window" })
+    });
+    assert(focusSceneSound.response.ok, "set_scene_sound should return 200");
+    assert(focusSceneSound.body.sceneSoundEnabled === true, "explicit scene sound should persist on");
+    const stateAfterSceneSound = await request("/api/v1/system/state");
+    assert(stateAfterSceneSound.body.audio.currentSource.id === "scene", "explicit scene sound should switch to Scene Sound");
+    assert(stateAfterSceneSound.body.audio.sources.some((source) => source.id === "spotify" && source.armed === false), "scene sound should close spotify intake");
+    assert(stateAfterSceneSound.body.audio.sources.some((source) => source.id === "bluetooth" && source.armed === false), "scene sound should close bluetooth intake");
+    assert(stateAfterSceneSound.body.audio.sources.some((source) => source.id === "airplay" && source.armed === false), "scene sound should close airplay intake");
+    assert(stateAfterSceneSound.body.audio.sources.some((source) => source.id === "upnp" && source.armed === false), "scene sound should close dlna intake");
 
     const hifiExperience = await request("/api/v1/experience/actions", {
       method: "POST",
@@ -1292,6 +1305,13 @@ async function run() {
     assert(volume.response.ok, "volume_set action should return 200");
     assert(volume.body.system.volume.percent === 42, "volume_set should update volume percent");
 
+    const calmBeforeScene = await request("/api/v1/experience/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "set_mode", mode: "calm" })
+    });
+    assert(calmBeforeScene.response.ok, "calm room mode before scene source switch should return 200");
+    assert(calmBeforeScene.body.sceneSoundEnabled === false, "calm room mode should not auto-enable scene sound before direct source switch");
+
     const scene = await request("/api/v1/audio/source", {
       method: "POST",
       body: JSON.stringify({
@@ -1314,6 +1334,8 @@ async function run() {
     assert(scene.body.audio.sources.some((source) => source.id === "bluetooth" && source.armed === false), "scene switch should close bluetooth intake");
     assert(scene.body.audio.sources.some((source) => source.id === "airplay" && source.armed === false), "scene switch should close airplay intake");
     assert(scene.body.audio.sources.some((source) => source.id === "upnp" && source.armed === false), "scene switch should close dlna intake");
+    const experienceAfterDirectScene = await request("/api/v1/experience/state");
+    assert(experienceAfterDirectScene.body.sceneSoundEnabled === true, "direct scene source switch should mark scene sound enabled");
 
     const sceneNext = await request("/api/v1/playback/actions", {
       method: "POST",
@@ -1355,6 +1377,8 @@ async function run() {
     assert(libraryResume.body.playback.source === "mpd", "library resume should leave scene playback");
     assert(libraryResume.body.playback.state === "playing", "library resume should start library playback");
     assert(libraryResume.body.audio.sources.some((source) => source.id === "scene" && source.active === false), "library resume should deactivate scene source");
+    const experienceAfterLibraryResume = await request("/api/v1/experience/state");
+    assert(experienceAfterLibraryResume.body.sceneSoundEnabled === false, "music source switch should clear persisted scene sound");
 
     const audio = await request("/api/v1/audio/source", {
       method: "POST",

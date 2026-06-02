@@ -10,7 +10,7 @@ import { useBrowserKioskGuard } from "./hooks/useBrowserKioskGuard";
 import { useKioskGestures } from "./hooks/useKioskGestures";
 import { useRoomExperience } from "./hooks/useRoomExperience";
 import { useTikpalState } from "./hooks/useTikpalState";
-import type { AppMode, BackgroundVideoSummary, FontTheme, LyricsFontSize, RoomExperienceActionRequest, RoomMode, SurfaceTheme } from "./types";
+import type { AppMode, BackgroundVideoSummary, FontTheme, LyricsFontSize, RoomExperienceActionRequest, RoomMode, SourceSwitchTarget, SurfaceTheme } from "./types";
 
 const FONT_THEME_STORAGE_KEY = "tikpal.fontTheme";
 const SURFACE_THEME_STORAGE_KEY = "tikpal.surfaceTheme";
@@ -82,13 +82,14 @@ export default function App() {
   const [lyricsFontSize, setLyricsFontSize] = useState<LyricsFontSize>(readInitialLyricsFontSize);
   const [sceneVideoEnabled, setSceneVideoEnabled] = useState(() => readStoredBoolean(SCENE_VIDEO_ENABLED_STORAGE_KEY, true));
   const [clockVisible, setClockVisible] = useState(() => readStoredBoolean(CLOCK_VISIBLE_STORAGE_KEY, true));
-  const [sceneSoundEnabled, setSceneSoundEnabled] = useState(false);
   const [sceneSoundPending, setSceneSoundPending] = useState(false);
+  const [ambientSourcePickerRequest, setAmbientSourcePickerRequest] = useState(0);
+  const [ambientSourcePickerOpen, setAmbientSourcePickerOpen] = useState(false);
   const [startupChooserVisible, setStartupChooserVisible] = useState(() => readInitialMode() === "ambient");
   const [activeSceneVideo, setActiveSceneVideo] = useState<BackgroundVideoSummary>(DEFAULT_SCENE_VIDEO);
   const { mode, hudVisible, idleTotalMs, idleRemainingMs, showHud, toggleHud, changeMode, returnAmbient, resetIdleTimer } = useAppMode(readInitialMode());
   const { state: tikpalState, status: tikpalStatus, refresh, sendPlaybackAction, sendSystemAction, sendSourceSwitch } = useTikpalState();
-  const { experience: roomExperience, sendExperienceAction } = useRoomExperience();
+  const { experience: roomExperience, refresh: refreshRoomExperience, sendExperienceAction } = useRoomExperience();
 
   useBrowserKioskGuard();
 
@@ -123,16 +124,6 @@ export default function App() {
     window.localStorage.setItem(CLOCK_VISIBLE_STORAGE_KEY, clockVisible ? "true" : "false");
   }, [clockVisible]);
 
-  useEffect(() => {
-    if (tikpalState.playback.source === "scene" && tikpalState.playback.state === "playing") {
-      setSceneSoundEnabled(roomExperience.mode !== "hifi");
-      return;
-    }
-    if (sceneSoundEnabled) {
-      setSceneSoundEnabled(false);
-    }
-  }, [roomExperience.mode, sceneSoundEnabled, tikpalState.playback.source, tikpalState.playback.state]);
-
   const activeTimeZone = roomExperience.nightSchedule.timeZone;
   const timeFormatter = useMemo(() => new Intl.DateTimeFormat("en-US", {
     hour: "2-digit",
@@ -153,45 +144,46 @@ export default function App() {
     setActiveSceneVideo(video);
   }, []);
 
-  const stopSceneSound = useCallback(async () => {
-    setSceneSoundEnabled(false);
-    if (tikpalState.playback.source !== "scene") return;
-    try {
-      await sendSourceSwitch("mpd");
-    } catch {
-      // The local video is already muted; the next API refresh will reconcile source state.
+  const handleSourceSwitch = useCallback(async (
+    target: SourceSwitchTarget,
+    radioStationId?: string,
+    localTrackPath?: string,
+    sceneVideo?: BackgroundVideoSummary
+  ) => {
+    const nextState = await sendSourceSwitch(target, radioStationId, localTrackPath, sceneVideo);
+    if (target !== "scene") {
+      await refreshRoomExperience();
     }
-  }, [sendSourceSwitch, tikpalState.playback.source]);
+    return nextState;
+  }, [refreshRoomExperience, sendSourceSwitch]);
 
   async function handleSceneSoundEnabledChange(enabled: boolean) {
     if (sceneSoundPending) return;
     if (enabled && roomExperience.mode === "hifi") {
-      setSceneSoundEnabled(false);
       return;
     }
     setSceneSoundPending(true);
 
     try {
-      if (!enabled) {
-        await stopSceneSound();
-        return;
+      if (enabled) {
+        setSceneVideoEnabled(true);
       }
-
-      setSceneVideoEnabled(true);
-      const nextState = await sendSourceSwitch("scene", undefined, undefined, activeSceneVideo);
-      setSceneSoundEnabled(nextState.playback.source === "scene" && nextState.playback.state === "playing");
+      await handleRoomExperienceAction({
+        type: "set_scene_sound",
+        sceneSoundEnabled: enabled,
+        sceneVideoId: activeSceneVideo.id
+      });
     } catch {
-      setSceneSoundEnabled(false);
+      // The next API refresh will surface the backend error state if the Pi rejects the switch.
     } finally {
       setSceneSoundPending(false);
     }
   }
 
   function handleSceneVideoEnabledChange(enabled: boolean) {
-    if (!enabled && sceneSoundEnabled) {
-      setSceneSoundEnabled(false);
+    if (!enabled && roomExperience.sceneSoundEnabled) {
       setSceneVideoEnabled(false);
-      void stopSceneSound();
+      void handleSceneSoundEnabledChange(false);
       return;
     }
 
@@ -209,9 +201,6 @@ export default function App() {
 
   const handleStartupModeSelect = useCallback(async (nextMode: RoomMode) => {
     setStartupChooserVisible(false);
-    if (nextMode === "hifi") {
-      setSceneSoundEnabled(false);
-    }
     try {
       await handleRoomExperienceAction({ type: "set_mode", mode: nextMode });
     } catch {
@@ -219,13 +208,25 @@ export default function App() {
     }
   }, [handleRoomExperienceAction]);
 
+  const handleAmbientTap = useCallback(() => {
+    if (mode === "ambient" && roomExperience.mode !== "hifi") {
+      showHud();
+      if (!ambientSourcePickerOpen) {
+        setAmbientSourcePickerRequest((request) => request + 1);
+      }
+      return;
+    }
+
+    toggleHud();
+  }, [ambientSourcePickerOpen, mode, roomExperience.mode, showHud, toggleHud]);
+
   const { gesturePreview, ...gestureHandlers } = useKioskGestures({
     mode,
     onOpenPlayer: () => changeMode("player"),
     onOpenPlaylist: () => changeMode("playlist"),
     onOpenMenu: () => changeMode("quickMenu"),
     onReturnAmbient: returnAmbient,
-    onToggleHud: toggleHud,
+    onToggleHud: handleAmbientTap,
     onActivity: () => resetIdleTimer(mode)
   });
 
@@ -244,11 +245,14 @@ export default function App() {
         system={tikpalState.system}
         status={tikpalStatus}
         sceneVideoEnabled={sceneVideoEnabled}
-        sceneSoundEnabled={sceneSoundEnabled}
+        sceneSoundEnabled={roomExperience.sceneSoundEnabled}
         sceneSoundPending={sceneSoundPending || tikpalStatus.pending}
+        sourcePickerOpenRequest={ambientSourcePickerRequest}
         clockVisible={clockVisible}
         onPlaybackAction={sendPlaybackAction}
         onSystemAction={sendSystemAction}
+        onSourceSwitch={handleSourceSwitch}
+        onSourcePickerOpenChange={setAmbientSourcePickerOpen}
         onHudActivity={showHud}
         onLyricsVisibleChange={setLyricsVisible}
         onCurrentSceneVideoChange={handleCurrentSceneVideoChange}
@@ -273,7 +277,7 @@ export default function App() {
         status={tikpalStatus}
         fontTheme={fontTheme}
         onPlaybackAction={sendPlaybackAction}
-        onSourceSwitch={sendSourceSwitch}
+        onSourceSwitch={handleSourceSwitch}
         onOpenPlaylist={() => changeMode("playlist")}
         onReturnAmbient={returnAmbient}
       />
@@ -308,7 +312,7 @@ export default function App() {
         active={mode === "quickMenu"}
         sceneVideoEnabled={sceneVideoEnabled}
         clockVisible={clockVisible}
-        sceneSoundEnabled={sceneSoundEnabled}
+        sceneSoundEnabled={roomExperience.sceneSoundEnabled}
         sceneSoundPending={sceneSoundPending || tikpalStatus.pending}
         roomMode={roomExperience.mode}
         onSceneVideoEnabledChange={handleSceneVideoEnabledChange}

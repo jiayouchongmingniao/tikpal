@@ -609,10 +609,9 @@ select {
 .eq-visual-scene {
   position: absolute;
   inset: 0;
-  --hifi-meter-bottom: 168px;
-  --hifi-meter-height: clamp(82px, 16vh, 124px);
   overflow: hidden;
   background:
+    radial-gradient(circle at 50% 44%, rgba(242, 211, 107, 0.13), transparent 34%),
     linear-gradient(180deg, rgba(8, 10, 14, 0.98), rgba(3, 5, 8, 0.94)),
     #05070a;
   color: var(--room-accent-strong);
@@ -622,29 +621,34 @@ select {
   position: absolute;
   inset: 0;
   background:
-    linear-gradient(90deg, rgba(242, 211, 107, 0.11), transparent 24%, rgba(139, 211, 255, 0.09) 52%, transparent 78%, rgba(145, 216, 178, 0.1)),
-    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.035) 0 1px, transparent 1px 92px);
-  opacity: 0.82;
+    linear-gradient(90deg, rgba(242, 211, 107, 0.08), transparent 30%, rgba(139, 211, 255, 0.06) 52%, transparent 74%, rgba(145, 216, 178, 0.07)),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.045), transparent 24%, rgba(0, 0, 0, 0.28));
+  opacity: 0.9;
 }
 
 .hifi-now-playing-surface {
   position: absolute;
   z-index: 2;
-  top: 72px;
+  top: 50%;
   left: 50%;
-  width: min(1680px, calc(100vw - 144px));
-  transform: translateX(-50%);
+  width: min(760px, calc(100vw - 96px));
+  transform: translate(-50%, -50%);
   display: grid;
-  grid-template-columns: 260px minmax(0, 1fr);
-  align-items: center;
-  gap: 34px;
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: center;
+  gap: 22px;
+  text-align: center;
+  transition:
+    top 220ms ease,
+    transform 220ms ease,
+    width 220ms ease;
 }
 
 .hifi-cover-art {
   position: relative;
   display: grid;
   place-items: center;
-  width: 260px;
+  width: clamp(210px, 22vw, 300px);
   aspect-ratio: 1;
   overflow: hidden;
   border: 1px solid rgba(255, 255, 255, 0.18);
@@ -673,8 +677,10 @@ select {
 
 .hifi-now-playing-copy {
   display: grid;
+  justify-items: center;
   min-width: 0;
-  gap: 12px;
+  width: 100%;
+  gap: 10px;
 }
 
 .hifi-now-playing-copy > span {
@@ -687,7 +693,8 @@ select {
 .hifi-now-playing-copy strong {
   overflow: hidden;
   color: var(--theme-text);
-  font-size: clamp(42px, 4.4vw, 82px);
+  max-width: 100%;
+  font-size: clamp(34px, 4vw, 68px);
   font-weight: 620;
   line-height: 0.98;
   text-overflow: ellipsis;
@@ -697,7 +704,8 @@ select {
 .hifi-now-playing-copy em {
   overflow: hidden;
   color: var(--theme-text-soft);
-  font-size: clamp(19px, 1.35vw, 28px);
+  max-width: 100%;
+  font-size: clamp(18px, 1.25vw, 25px);
   font-style: normal;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -706,6 +714,7 @@ select {
 .hifi-now-playing-meta {
   display: flex;
   flex-wrap: wrap;
+  justify-content: center;
   gap: 8px;
   margin-top: 8px;
 }
@@ -719,6 +728,32 @@ select {
   font-size: 13px;
   font-weight: 650;
   text-transform: uppercase;
+}
+
+.ambient-screen[data-room-mode="hifi"].is-hud-visible .hifi-now-playing-surface {
+  top: 30px;
+  width: min(980px, calc(100vw - 120px));
+  grid-template-columns: 128px minmax(0, 1fr);
+  justify-items: start;
+  gap: 18px;
+  text-align: left;
+  transform: translateX(-50%);
+}
+
+.ambient-screen[data-room-mode="hifi"].is-hud-visible .hifi-cover-art {
+  width: 128px;
+}
+
+.ambient-screen[data-room-mode="hifi"].is-hud-visible .hifi-now-playing-copy {
+  justify-items: start;
+}
+
+.ambient-screen[data-room-mode="hifi"].is-hud-visible .hifi-now-playing-copy strong {
+  font-size: clamp(28px, 2.5vw, 42px);
+}
+
+.ambient-screen[data-room-mode="hifi"].is-hud-visible .hifi-now-playing-meta {
+  display: none;
 }
 
 .eq-spectrum,
@@ -1252,6 +1287,146 @@ select {
 .ambient-transport-scene {
   border-color: var(--surface-control-border-hover);
   color: var(--theme-accent-strong);
+}
+
+.ambient-source-picker {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ambient-transport.is-room-mode .ambient-source-picker {
+  position: static;
+}
+
+.ambient-source-toggle.is-active {
+  border-color: var(--room-accent);
+  color: var(--room-accent-strong);
+}
+
+.ambient-source-picker-popover {
+  position: absolute;
+  bottom: calc(100% + 18px);
+  left: 50%;
+  z-index: 12;
+  display: grid;
+  gap: 10px;
+  width: min(720px, calc(100vw - 96px));
+  padding: 10px;
+  border: 1px solid var(--surface-control-border-hover);
+  border-radius: 8px;
+  background: var(--transport-shell-bg);
+  box-shadow: var(--transport-shell-shadow);
+  transform: translateX(-50%);
+  backdrop-filter: var(--surface-blur);
+  -webkit-backdrop-filter: var(--surface-blur);
+}
+
+.ambient-transport.is-room-mode .ambient-source-picker-popover {
+  position: absolute;
+  bottom: calc(100% + 42px);
+  left: 50%;
+  width: min(760px, calc(100vw - 160px));
+  padding: 12px;
+  transform: translateX(-50%);
+}
+
+.ambient-source-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.ambient-source-option {
+  display: grid;
+  grid-template-rows: 34px auto auto;
+  justify-items: center;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  min-height: 108px;
+  padding: 10px 8px;
+  border: 1px solid var(--surface-control-border);
+  border-radius: 8px;
+  background: var(--surface-control-bg);
+  color: var(--surface-control-text);
+  font: inherit;
+  cursor: pointer;
+  transition:
+    border-color 160ms ease,
+    background 160ms ease,
+    color 160ms ease,
+    transform 160ms ease;
+}
+
+.ambient-source-option:hover,
+.ambient-source-option:focus-visible {
+  border-color: var(--surface-control-border-hover);
+  background: var(--surface-control-bg-hover);
+  color: var(--transport-button-text-hover);
+  outline: none;
+  transform: translateY(-1px);
+}
+
+.ambient-source-option:disabled {
+  cursor: default;
+  opacity: 0.42;
+  transform: none;
+}
+
+.ambient-source-option.is-active {
+  border-color: var(--room-accent);
+  background:
+    linear-gradient(135deg, var(--room-accent-muted), rgba(255, 255, 255, 0.05)),
+    var(--surface-control-bg-active);
+  color: var(--room-accent-strong);
+  box-shadow: 0 0 20px var(--room-accent-muted);
+}
+
+.ambient-source-option-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: var(--surface-control-bg-hover);
+}
+
+.ambient-source-option strong {
+  overflow: hidden;
+  max-width: 100%;
+  color: inherit;
+  font-size: 13px;
+  font-weight: 820;
+  line-height: 1.1;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ambient-source-option span:last-child {
+  overflow: hidden;
+  max-width: 100%;
+  color: var(--theme-text-muted);
+  font-size: 11px;
+  font-weight: 720;
+  line-height: 1.1;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ambient-source-error {
+  min-height: 28px;
+  padding: 6px 10px;
+  border: 1px solid var(--warning);
+  border-radius: 8px;
+  color: var(--warning);
+  font-size: 12px;
+  font-weight: 720;
+  line-height: 1.2;
 }
 
 .ambient-transport-play {
@@ -4664,14 +4839,38 @@ select {
 
 @media (max-width: 900px) {
   .hifi-now-playing-surface {
-    top: 48px;
+    top: 50%;
     width: calc(100vw - 40px);
-    grid-template-columns: 112px minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
     gap: 14px;
   }
 
   .hifi-cover-art {
-    width: 112px;
+    width: 132px;
+  }
+
+  .ambient-screen[data-room-mode="hifi"].is-hud-visible .hifi-now-playing-surface {
+    top: 36px;
+    width: calc(100vw - 40px);
+    grid-template-columns: 96px minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  .ambient-screen[data-room-mode="hifi"].is-hud-visible .hifi-cover-art {
+    width: 96px;
+  }
+
+  .ambient-source-picker-popover {
+    width: min(380px, calc(100vw - 40px));
+  }
+
+  .ambient-transport.is-room-mode .ambient-source-picker-popover {
+    bottom: calc(100% + 28px);
+    width: min(440px, calc(100vw - 40px));
+  }
+
+  .ambient-source-picker-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .ambient-lyrics-layer {

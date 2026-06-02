@@ -430,6 +430,7 @@ export type RoomExperienceActionType =
   | "stop_session"
   | "update_timer"
   | "apply_preset"
+  | "set_scene_sound"
   | "set_hifi_eq"
   | "set_hifi_visual"
   | "update_night_schedule";

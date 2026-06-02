@@ -25,12 +25,12 @@ type AppMode = "ambient" | "player" | "playlist" | "quickSettings" | "quickMenu"
 | One-finger swipe down | Ambient | Open player overlay. |
 | Two-finger swipe down | Ambient | Open playlist / Scene Library overlay. |
 | Swipe up | Player, playlist, or quick settings | Return to ambient, including swipes that start inside the overlay panel. |
-| Tap | Ambient | Toggle the weak playback HUD. When shown, the HUD auto-hides after 5 seconds. |
+| Tap | Ambient | In Focus/Calm/Sleep, show the HUD and open the lightweight source picker; in Hi-Fi, toggle the HUD. The HUD and picker auto-hide after 5 seconds without input. |
 | Long press | Ambient | Open quick menu. |
 | Vertical drag in left ambient zone | Ambient | Live volume adjustment against moOde volume state. |
 | Vertical drag in right ambient zone | Ambient | Live display brightness adjustment through DDC/CI when available. |
-| Non-Hi-Fi Ambient center controls | Ambient HUD visible | Previous scene, Focus/Calm/Sleep label plus intent, Scene Sound mute/unmute, and next scene. The strip width should follow its content rather than a fixed playback-control width. |
-| Hi-Fi Ambient center controls | Ambient HUD visible | Play mode, previous track, play/pause, next track, favorite, playlist, lyrics, and Hi-Fi EQ preset switching. |
+| Non-Hi-Fi Ambient center controls | Ambient HUD visible | Previous scene, Focus/Calm/Sleep label plus intent, lightweight source picker, Scene Sound mute/unmute, and next scene. The strip width should follow its content rather than a fixed playback-control width. |
+| Hi-Fi Ambient center controls | Ambient HUD visible | Play mode, lightweight source picker, previous track, play/pause, next track, favorite, playlist, and lyrics. |
 | Arrow keys | Ambient HUD visible | In Focus/Calm/Sleep, up/down/left/right change scene and Space/Enter toggles Scene Sound. In Hi-Fi, scene arrows switch EQ presets and track arrows keep playback behavior. |
 | Volume range slider | Player | Update the same global volume state used by Ambient and scene video audio. |
 
@@ -88,14 +88,17 @@ stateDiagram-v2
 
 ### Ambient
 
-- Tap does not open controls; it only toggles the weak playback HUD.
+- In Focus/Calm/Sleep, a tap shows the HUD and opens a lightweight source picker with six music/input choices: `Library`, `Radio`, `Spotify`, `AirPlay`, `Bluetooth`, and `DLNA`.
+- The source picker floats centered above the temporary center strip, closes after a successful selection, outside click, Escape, or 5 seconds without interaction, and must show active, pending, and unavailable/error state.
+- Source picker labels map internal source ids to user language: `mpd` is `Library`, and `upnp` is `DLNA`. It does not expose `scene` or `audio` as selectable music sources.
 - Startup should show the HUD briefly, then let the flame scene return to a quieter default after 5 seconds.
 - Scene controls stay inside the temporary HUD. They do not open a scene browser or playlist drawer.
 - The bottom HUD is a mode switcher for Focus, Calm, Sleep, and Hi-Fi.
 - Focus, Calm, and Sleep use a content-sized center strip with the mode name and intent: `Focus / Deep work & reading`, `Calm / Unwind & relax`, and `Sleep / Dim, timer, fade-out`.
 - Focus, Calm, and Sleep do not show music playback buttons, favorite, playlist, queue, seek progress, or lyrics on Ambient. Lyrics remain a Hi-Fi playback affordance only.
-- Hi-Fi uses the larger playback center controls: playback mode, previous/next, play/pause, favorite, playlist, lyrics, and EQ preset switching.
+- Hi-Fi uses the larger playback center controls: playback mode, source picker, previous/next, play/pause, favorite, playlist, and lyrics.
 - Ambient must not show queue or playlist content; queue preview stays in the Player overlay.
+- Choosing any non-scene source from Ambient immediately switches through `/api/v1/audio/source`, keeps the current scene video visible in Focus/Calm/Sleep, and clears persisted `sceneSoundEnabled` so browser scene audio stays muted.
 - The left edge band is reserved for live volume drag and should not fall through to the generic one-finger swipe-down player gesture.
 - The right edge band is reserved for live brightness drag and should not fall through to the generic one-finger swipe-down player gesture.
 - If DDC/CI brightness is unavailable on the target display, the right-side control zone should show unavailable feedback instead of behaving like a normal ambient gesture lane.
@@ -132,7 +135,7 @@ stateDiagram-v2
 - Turning Scene Sound on forces Scene Video on, switches playback source truth to `scene`, and unmutes only the active Ambient video layer.
 - Turning Scene Sound off returns playback to Library/MPD.
 - Turning Scene Video off while Scene Sound is active also stops Scene Sound, returns playback to Library/MPD, and returns the video surface to a black quiet state.
-- Hi-Fi mode disables Scene Video and Scene Sound controls; the Ambient scene previous/next controls switch real Hi-Fi EQ presets instead of mounting MP4 scenes.
+- Hi-Fi mode disables Scene Video and Scene Sound controls and does not mount MP4 scenes.
 - Auto Night uses the selected timezone to lower display brightness only. It must not switch modes, start Scene Sound, or interrupt Hi-Fi playback.
 
 ## Input Compatibility

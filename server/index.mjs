@@ -182,7 +182,7 @@ const ROOM_MODE_PRESETS = {
     sceneVideoSrc: "/assets/scenes/Midnight-Library.mp4",
     hifiEqPresetId: DEFAULT_HIFI_EQ_PRESET_ID,
     hifiVisualPresetId: DEFAULT_HIFI_VISUAL_PRESET_ID,
-    sceneSoundEnabled: true,
+    sceneSoundEnabled: false,
     playlistId: null,
     volumePercent: 42,
     brightnessPercent: 64,
@@ -195,7 +195,7 @@ const ROOM_MODE_PRESETS = {
     sceneVideoSrc: "/assets/scenes/Rainy-Window.mp4",
     hifiEqPresetId: DEFAULT_HIFI_EQ_PRESET_ID,
     hifiVisualPresetId: DEFAULT_HIFI_VISUAL_PRESET_ID,
-    sceneSoundEnabled: true,
+    sceneSoundEnabled: false,
     playlistId: null,
     volumePercent: 38,
     brightnessPercent: 48,
@@ -208,7 +208,7 @@ const ROOM_MODE_PRESETS = {
     sceneVideoSrc: "/assets/scenes/Deep-Blue-Ocean.mp4",
     hifiEqPresetId: DEFAULT_HIFI_EQ_PRESET_ID,
     hifiVisualPresetId: DEFAULT_HIFI_VISUAL_PRESET_ID,
-    sceneSoundEnabled: true,
+    sceneSoundEnabled: false,
     playlistId: null,
     volumePercent: 26,
     brightnessPercent: 22,
@@ -6165,12 +6165,36 @@ async function applyMpcSourceSwitch(action) {
   return await withMpcMutationLock(() => applyMpcSourceSwitchUnlocked(action));
 }
 
-async function applySourceSwitch(action) {
-  if (API_MODE === "mpc") {
-    await applyMpcSourceSwitch(action);
+async function syncRoomSceneSoundForSource(target) {
+  const current = await readRoomExperienceState();
+  const nextTarget = String(target ?? "");
+
+  if (nextTarget === "scene") {
+    if (current.mode === "hifi" || current.sceneSoundEnabled) return;
+    await writeRoomExperienceState({
+      ...current,
+      sceneSoundEnabled: true
+    });
     return;
   }
-  await applyMockSourceSwitch(action);
+
+  if (!current.sceneSoundEnabled) return;
+  await writeRoomExperienceState({
+    ...current,
+    sceneSoundEnabled: false
+  });
+}
+
+async function applySourceSwitch(action, { syncSceneSoundState = true } = {}) {
+  if (API_MODE === "mpc") {
+    await applyMpcSourceSwitch(action);
+  } else {
+    await applyMockSourceSwitch(action);
+  }
+
+  if (syncSceneSoundState) {
+    await syncRoomSceneSoundForSource(action?.target);
+  }
 }
 
 function getRoomModePreset(mode) {
@@ -6181,6 +6205,31 @@ function getRoomModeFromPresetId(presetId, fallbackMode) {
   const normalizedPresetId = String(presetId ?? "").trim();
   const found = Object.entries(ROOM_MODE_PRESETS).find(([, preset]) => preset.presetId === normalizedPresetId);
   return found?.[0] ?? normalizeRoomMode(fallbackMode);
+}
+
+async function resolveSceneAudioVideo(experience) {
+  const preset = getRoomModePreset(experience.mode);
+  const fallbackVideo = {
+    id: preset.sceneVideoId,
+    label: preset.sceneVideoLabel,
+    src: preset.sceneVideoSrc
+  };
+
+  try {
+    const catalog = await getAmbientBackgroundVideosPayload();
+    const matchedVideo = catalog.videos.find((video) => video.id === experience.sceneVideoId);
+    if (matchedVideo?.src) {
+      return matchedVideo;
+    }
+  } catch {
+    // Fall through to the room preset scene; switching will still fail if no video exists.
+  }
+
+  if (fallbackVideo.src) {
+    return fallbackVideo;
+  }
+
+  throw new Error("scene sound requires a scene video");
 }
 
 async function applyRoomExperienceSideEffects(experience, { applyScene = false, applyLevels = true } = {}) {
@@ -6204,12 +6253,12 @@ async function applyRoomExperienceSideEffects(experience, { applyScene = false, 
   }
 
   if (applyScene && experience.sceneSoundEnabled) {
-    const preset = getRoomModePreset(experience.mode);
+    const sceneVideo = await resolveSceneAudioVideo(experience);
     await applySourceSwitch({
       target: "scene",
-      sceneVideoId: experience.sceneVideoId,
-      sceneVideoLabel: preset.sceneVideoLabel,
-      sceneVideoSrc: preset.sceneVideoSrc
+      sceneVideoId: sceneVideo.id,
+      sceneVideoLabel: sceneVideo.label,
+      sceneVideoSrc: sceneVideo.src
     });
   }
 }
@@ -6313,6 +6362,24 @@ async function applyRoomExperienceAction(action) {
       };
       break;
     }
+    case "set_scene_sound": {
+      const enabled = action.sceneSoundEnabled === true;
+      if (enabled && current.mode === "hifi") {
+        throw new Error("scene sound is not available in Hi-Fi mode");
+      }
+      next = {
+        ...current,
+        sceneVideoId: String(action.sceneVideoId ?? current.sceneVideoId).trim() || current.sceneVideoId,
+        sceneSoundEnabled: enabled
+      };
+      if (enabled) {
+        await resolveSceneAudioVideo(next);
+      }
+      applyScene = enabled;
+      applyLevels = false;
+      stopScene = !enabled;
+      break;
+    }
     case "set_hifi_eq": {
       const hifiEqPatch = buildHifiEqPatch(action, current.hifiEqPresetId);
       await applyHifiEqPreset(hifiEqPatch.hifiEqPresetId);
@@ -6352,7 +6419,17 @@ async function applyRoomExperienceAction(action) {
   }
 
   const saved = await writeRoomExperienceState(next);
-  await applyRoomExperienceSideEffects(saved, { applyScene, applyLevels });
+  try {
+    await applyRoomExperienceSideEffects(saved, { applyScene, applyLevels });
+  } catch (error) {
+    if (applyScene && saved.sceneSoundEnabled) {
+      await writeRoomExperienceState({
+        ...saved,
+        sceneSoundEnabled: false
+      });
+    }
+    throw error;
+  }
 
   if (stopScene) {
     await stopSceneSourceSafely();
@@ -6515,27 +6592,9 @@ async function setRemoteSceneVideo(action) {
 
 async function setRemoteSceneSound(action) {
   const enabled = requireRemoteBoolean(action.enabled ?? action.sceneSoundEnabled, "scene.sound_set");
-  const current = await readRoomExperienceState();
-  if (enabled && current.mode === "hifi") {
-    throw new Error("scene.sound_set is not available in Hi-Fi mode");
-  }
-
-  const saved = await writeRoomExperienceState({
-    ...current,
+  await applyRoomExperienceAction({
+    type: "set_scene_sound",
     sceneSoundEnabled: enabled
-  });
-
-  if (!enabled) {
-    await stopSceneSourceSafely();
-    return;
-  }
-
-  const video = await findRemoteSceneVideo(saved.sceneVideoId);
-  await applySourceSwitch({
-    target: "scene",
-    sceneVideoId: video.id,
-    sceneVideoLabel: video.label,
-    sceneVideoSrc: video.src
   });
 }
 

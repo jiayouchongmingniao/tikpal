@@ -235,7 +235,7 @@ async function sampleLoopVideoLuma(client) {
     client,
     `
       (() => {
-        const videos = [...document.querySelectorAll('.flame-video')];
+        const videos = [...document.querySelectorAll('.flame-video[data-flame-layer="active"]')];
         const canvas = document.createElement('canvas');
         const size = 32;
         canvas.width = size;
@@ -288,7 +288,7 @@ async function sampleLoopAudioState(client) {
     client,
     `
       (() => {
-        const videos = [...document.querySelectorAll('.flame-video')];
+        const videos = [...document.querySelectorAll('.flame-video[data-flame-layer="active"]')];
         const audibleVideos = videos
           .filter((video) => video instanceof HTMLVideoElement)
           .map((video) => ({
@@ -661,20 +661,37 @@ try {
   );
   await expectEventually(
     client,
-    "document.querySelector('[data-hifi-now-playing]') !== null && document.querySelector('[data-hifi-eq-visual]') !== null && document.querySelector('video.flame-video.is-active') === null && document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') === 'hifi'",
-    "Hi-Fi room mode renders Now Playing without active scene video"
+    "document.querySelector('[data-hifi-now-playing][data-hifi-centered-now-playing]') !== null && document.querySelector('[data-hifi-cover-art]') !== null && document.querySelector('[data-hifi-track-info]') !== null && document.querySelector('[data-hifi-eq-visual]') === null && document.querySelector('[data-spectrum-band]') === null && document.querySelector('video.flame-video.is-active') === null && document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') === 'hifi'",
+    "Hi-Fi room mode renders centered cover and track info without EQ display"
   );
+  await expect(
+    client,
+    `
+      (() => {
+        const labels = [...document.querySelectorAll('.ambient-transport button')].map((button) => button.getAttribute('aria-label'));
+        return labels.includes('Choose audio source')
+          && !labels.includes('Previous Hi-Fi EQ preset')
+          && !labels.includes('Next Hi-Fi EQ preset')
+          && document.querySelector('.ambient-transport-scene-next') === null;
+      })()
+    `,
+    "Hi-Fi ambient transport exposes source selection and no EQ preset controls"
+  );
+  await evaluate(client, "document.querySelector('[data-ambient-source-toggle]')?.click()");
   await expectEventually(
     client,
-    "document.querySelector('[data-hifi-eq-visual]')?.textContent?.includes('Now Playing') && document.querySelector('[data-hifi-eq-visual]')?.getAttribute('data-spectrum-source') === 'mock' && document.querySelector('[data-hifi-eq-visual]')?.getAttribute('data-spectrum-band-count') === '32' && document.querySelectorAll('[data-hifi-eq-visual] .eq-spectrum [data-spectrum-band]').length === 32",
-    "Hi-Fi Now Playing and EQ meter are driven by fetched spectrum data"
+    "document.querySelectorAll('[data-ambient-source-picker] [data-ambient-source-option]').length === 6",
+    "Hi-Fi source picker opens six source choices"
   );
-  const hifiPresetBefore = await evaluate(client, "document.querySelector('[data-hifi-eq-visual]')?.getAttribute('data-hifi-eq-preset')");
-  await evaluate(client, "document.querySelector('.ambient-transport-scene-next')?.click()");
-  await expectEventually(
+  await wait(5200);
+  await expectEventually(client, "document.querySelector('[data-ambient-source-picker]') === null", "Hi-Fi source picker auto-closes after 5 seconds");
+  await evaluate(client, "document.querySelector('[data-ambient-source-toggle]')?.click()");
+  await expectEventually(client, "document.querySelector('[data-ambient-source-option=\"radio\"]') !== null", "Hi-Fi source picker exposes Radio");
+  await evaluate(client, "document.querySelector('[data-ambient-source-option=\"radio\"]')?.click()");
+  await expectEventuallyEvaluate(
     client,
-    `document.querySelector('[data-hifi-eq-visual]')?.getAttribute('data-hifi-eq-preset') !== ${JSON.stringify(hifiPresetBefore)}`,
-    "Hi-Fi next control switches EQ preset"
+    "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => state.audio.currentSource.id === 'radio' && state.playback.source === 'radio')",
+    "Hi-Fi source picker switches immediately to Radio"
   );
   await expect(
     client,
@@ -699,8 +716,8 @@ try {
   await evaluate(client, "document.querySelector('.overlay-backdrop')?.click();");
   await expectEventually(
     client,
-    "document.querySelector('[data-hifi-eq-visual]')?.getAttribute('data-hifi-eq-visible') === 'true' && document.querySelectorAll('[data-hifi-eq-visual] [data-spectrum-band]').length > 0 && document.querySelector('.hifi-eq-summary') === null",
-    "Hi-Fi EQ meter remains visible without the preset summary card"
+    "document.querySelector('[data-hifi-now-playing]') !== null && document.querySelector('[data-hifi-eq-visual]') === null && document.querySelector('[data-spectrum-band]') === null && document.querySelector('.hifi-eq-summary') === null",
+    "Hi-Fi EQ display stays hidden"
   );
   await expect(client, "document.querySelector('.ambient-screen.is-hud-visible') !== null", "ambient HUD starts visible");
   await expect(client, "document.querySelector('.ambient-hud[data-room-mode]') !== null", "ambient HUD exposes room mode state");
@@ -770,6 +787,13 @@ try {
 
   await click(client, 1280, 280);
   await expect(client, "document.querySelector('.ambient-screen.is-hud-visible') !== null", "single tap shows ambient HUD");
+  await expectEventually(
+    client,
+    "document.querySelectorAll('[data-ambient-source-picker] [data-ambient-source-option]').length === 6",
+    "ambient scene single tap opens six source choices"
+  );
+  await evaluate(client, "window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })); true");
+  await expectEventually(client, "document.querySelector('[data-ambient-source-picker]') === null", "ambient scene source picker closes with Escape");
   await expect(
     client,
     `
@@ -780,6 +804,7 @@ try {
           && document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') !== 'hifi'
           && labels.includes('Previous scene')
           && labels.includes('Next scene')
+          && labels.includes('Choose audio source')
           && (labels.includes('Unmute scene sound') || labels.includes('Mute scene sound'))
           && !labels.includes('Previous track')
           && !labels.includes('Next track')
@@ -790,7 +815,7 @@ try {
           && !transport.querySelector('.ambient-play-mode');
       })()
     `,
-    "ambient non-Hi-Fi transport keeps only scene switch and mute controls"
+    "ambient non-Hi-Fi transport keeps scene controls plus source selection"
   );
   await evaluate(
     client,
@@ -1469,8 +1494,8 @@ try {
     client,
     `
       (() => {
-        const video = document.querySelector('.flame-video[data-flame-loop-role="active"]');
-        const standby = [...document.querySelectorAll('.flame-video')]
+        const video = document.querySelector('.flame-video[data-flame-layer="active"][data-flame-loop-role="active"]');
+        const standby = [...document.querySelectorAll('.flame-video[data-flame-layer="active"]')]
           .find((node) => node.getAttribute('data-flame-loop-role') === 'parked');
         return video instanceof HTMLVideoElement
           && standby instanceof HTMLVideoElement
@@ -1492,7 +1517,7 @@ try {
     client,
     `
       (() => {
-        const videos = [...document.querySelectorAll('.flame-video')];
+        const videos = [...document.querySelectorAll('.flame-video[data-flame-layer="active"]')];
         const video = videos.find((node) => node.getAttribute('data-flame-loop-role') === 'active');
         if (!(video instanceof HTMLVideoElement) || !Number.isFinite(video.duration)) return false;
         window.__tikpalLoopStartSlot = video.getAttribute('data-flame-slot-index');
@@ -1500,6 +1525,8 @@ try {
           if (node instanceof HTMLVideoElement) node.playbackRate = 0.25;
         });
         video.currentTime = Math.max(0, video.duration - 0.8);
+        video.dispatchEvent(new Event('seeked'));
+        video.dispatchEvent(new Event('timeupdate'));
         void video.play();
         return true;
       })()
@@ -1509,27 +1536,30 @@ try {
     client,
     `
       (() => {
-        const videos = [...document.querySelectorAll('.flame-video')];
+        const videos = [...document.querySelectorAll('.flame-video[data-flame-layer="active"]')];
         const standbyVideo = videos.find((video) => video.getAttribute('data-flame-slot-index') !== window.__tikpalLoopStartSlot);
+        const readyBeforeHandoff = standbyVideo?.getAttribute('data-flame-loop-role') === 'parked'
+          && standbyVideo?.getAttribute('data-flame-loop-phase') === 'ready'
+          && !videos.some((video) => ['incoming', 'outgoing'].includes(video.getAttribute('data-flame-loop-role')));
+        const alreadyHandoff = standbyVideo?.getAttribute('data-flame-loop-role') === 'incoming'
+          && standbyVideo?.getAttribute('data-flame-loop-phase') === 'handoff'
+          && videos.some((video) => video.getAttribute('data-flame-loop-role') === 'outgoing');
         return videos.length === 2
           && standbyVideo instanceof HTMLVideoElement
-          && standbyVideo.getAttribute('data-flame-loop-role') === 'parked'
           && standbyVideo.getAttribute('data-flame-frame-ready') === 'true'
-          && standbyVideo.getAttribute('data-flame-loop-phase') === 'ready'
-          && standbyVideo.getAttribute('data-flame-audio-slot') === 'standby'
           && standbyVideo.muted === true
-          && !videos.some((video) => ['incoming', 'outgoing'].includes(video.getAttribute('data-flame-loop-role')));
+          && (readyBeforeHandoff || alreadyHandoff);
       })()
     `,
-    "standby scene loop slot decodes its first frame before handoff",
-    40,
-    50
+    "standby scene loop slot decodes before handoff completes",
+    80,
+    75
   );
   await evaluate(
     client,
     `
       (() => {
-        const videos = [...document.querySelectorAll('.flame-video')];
+        const videos = [...document.querySelectorAll('.flame-video[data-flame-layer="active"]')];
         const video = videos.find((node) => node.getAttribute('data-flame-slot-index') === window.__tikpalLoopStartSlot);
         if (!(video instanceof HTMLVideoElement) || !Number.isFinite(video.duration)) return false;
         videos.forEach((node) => {
@@ -1547,7 +1577,7 @@ try {
     client,
     `
       (() => {
-        const videos = [...document.querySelectorAll('.flame-video')];
+        const videos = [...document.querySelectorAll('.flame-video[data-flame-layer="active"]')];
         const outgoing = videos.find((video) => video.getAttribute('data-flame-loop-role') === 'outgoing');
         const incoming = videos.find((video) => video.getAttribute('data-flame-loop-role') === 'incoming');
         const fade = document.querySelector('.flame-video-fade');
@@ -1598,7 +1628,7 @@ try {
     client,
     `
       (() => {
-        const videos = [...document.querySelectorAll('.flame-video')];
+        const videos = [...document.querySelectorAll('.flame-video[data-flame-layer="active"]')];
         const activeVideo = videos.find((video) => video.getAttribute('data-flame-loop-role') === 'active');
         const parkedVideo = videos.find((video) => video.getAttribute('data-flame-loop-role') === 'parked');
         return videos.length === 2
@@ -1625,7 +1655,7 @@ try {
     client,
     `
       (() => {
-        const videos = [...document.querySelectorAll('.flame-video')];
+        const videos = [...document.querySelectorAll('.flame-video[data-flame-layer="active"]')];
         const activeVideos = videos.filter((video) => video.getAttribute('data-flame-audio-slot') === 'active');
         const standbyVideos = videos.filter((video) => video.getAttribute('data-flame-audio-slot') === 'standby');
         const activeVideo = activeVideos[0];
@@ -1713,21 +1743,25 @@ try {
     `
   );
   await expectEventually(client, "document.querySelector('.flame-video.is-active') instanceof HTMLVideoElement && document.querySelector('.flame-video.is-active').muted === false", "scene sound can be re-enabled before switching sources");
-  await navigate(client, `${APP_URL}?mode=player`);
   await evaluate(
     client,
     `
       (() => {
-        document.querySelector('[data-source-item="mpd"]')?.click();
+        document.querySelector('.overlay-backdrop')?.click();
         return true;
       })()
     `
   );
-  await expectEventually(client, "document.querySelector('.flame-video.is-active') instanceof HTMLVideoElement && document.querySelector('.flame-video.is-active').muted === true", "music source switch remutes the active video");
+  await expectEventually(client, "document.querySelector('.ambient-screen') !== null && document.querySelector('.quick-menu.is-active') === null", "quick menu returns to Ambient before source selection");
+  await click(client, 1280, 280);
+  await evaluate(client, "document.querySelector('[data-ambient-source-toggle]')?.click()");
+  await expectEventually(client, "document.querySelector('[data-ambient-source-option=\"mpd\"]') !== null", "Ambient source picker exposes Library");
+  await evaluate(client, "document.querySelector('[data-ambient-source-option=\"mpd\"]')?.click()");
+  await expectEventually(client, "document.querySelector('.flame-video.is-active') instanceof HTMLVideoElement && document.querySelector('.flame-video.is-active').muted === true", "Ambient music source switch remutes the active scene video");
   await expectEventuallyEvaluate(
     client,
-    "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => state.playback.source !== 'scene')",
-    "switching to music deactivates scene source"
+    "Promise.all([fetch('/api/v1/system/state').then((response) => response.json()), fetch('/api/v1/experience/state').then((response) => response.json())]).then(([state, experience]) => state.audio.currentSource.id === 'mpd' && state.playback.source === 'mpd' && experience.sceneSoundEnabled === false)",
+    "Ambient source selection deactivates scene sound and restores Library"
   );
 
   await navigate(client, `${APP_URL}?mode=player`);

@@ -45,7 +45,7 @@ type RoomMode = "focus" | "calm" | "sleep" | "hifi";
 type RoomSessionPhase = "idle" | "preparing" | "active" | "windDown";
 ```
 
-Focus, Calm, and Sleep bind a scene video, optional scene sound, preferred playlist, volume level, brightness level, and timer. Hi-Fi binds a real EQ preset (`flat`, `warm`, or `vocal`) instead of a scene video and never turns on Scene Sound; its visual style is derived from that EQ preset for compatibility. The same state also owns the user-selected timezone and Auto Night window so the room can dim itself without interrupting the current source. This state is exposed by `/api/v1/experience/state` and changed through `/api/v1/experience/actions`. The API may apply volume, brightness, scene-source, and configured Pi EQ command-hook changes through existing playback/source/system actions, but playback truth remains owned by the playback state model.
+Focus, Calm, and Sleep bind a scene video, optional scene sound, preferred playlist, volume level, brightness level, and timer. Hi-Fi binds a real EQ preset (`flat`, `warm`, or `vocal`) instead of a scene video and never turns on Scene Sound; the derived `hifiVisualPresetId` remains a compatibility field, not a separate scene source. The same state also owns the user-selected timezone and Auto Night window so the room can dim itself without interrupting the current source. This state is exposed by `/api/v1/experience/state` and changed through `/api/v1/experience/actions`. The API may apply volume, brightness, scene-source, and configured Pi EQ command-hook changes through existing playback/source/system actions, but playback truth remains owned by the playback state model.
 
 This model is wellness-oriented but non-medical. Tikpal should not claim to diagnose sleep, mood, stress, or health. Personalization can later come from portable voice capture, user mood, inspiration notes, and conversation memory, not from imaginary biometric sensors.
 
@@ -86,7 +86,9 @@ Optional content:
 
 The HUD should be subtle by default and become stronger for a short time after a tap.
 
-For Focus, Calm, and Sleep, the temporary center strip is a room control, not a music transport. It shows only scene previous/next, Scene Sound, and the mode copy (`Focus / Deep work & reading`, `Calm / Unwind & relax`, or `Sleep / Dim, timer, fade-out`). Its width follows the content so the strip does not read like a full playback bar. Lyrics, favorite, play/pause, and track controls stay out of these modes on the Room Canvas and remain part of Hi-Fi playback.
+For Focus, Calm, and Sleep, the temporary center strip is a room control, not a music transport. A tap opens a centered, lightweight source picker with `Library`, `Radio`, `Spotify`, `AirPlay`, `Bluetooth`, and `DLNA`, plus scene previous/next, Scene Sound, and the mode copy (`Focus / Deep work & reading`, `Calm / Unwind & relax`, or `Sleep / Dim, timer, fade-out`). Its width follows the content so the strip does not read like a full playback bar. Lyrics, favorite, play/pause, and track controls stay out of these modes on the Room Canvas and remain part of Hi-Fi playback.
+
+Scene video and music source are independent unless Scene Sound is explicitly enabled. Focus, Calm, and Sleep default to scene video only: selecting a music/input source keeps the selected scene visible but mutes scene audio; turning Scene Sound on makes the scene MP4 the exclusive `scene` source and closes other intakes.
 
 ### Hi-Fi Console
 
@@ -128,13 +130,11 @@ Dangerous actions must require confirmation.
 
 Long press on the ambient screen opens a quick menu with discoverable fallback controls:
 
-- Player controls.
-- System settings.
-- Ambient effect switch.
-- Screen off.
-- Return to ambient.
+- Scene Video.
+- Clock.
+- Scene Sound.
 
-The quick menu lowers the learning cost for hidden gestures.
+The quick menu lowers the learning cost for hidden gestures without becoming a second settings tree.
 
 ## MVP Scope
 
