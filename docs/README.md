@@ -128,3 +128,4 @@ The local backend boundary should reserve endpoints or adapters for playback con
 - Appearance: font presets and surface skin presets are persisted locally and applied across ambient, player, and settings surfaces.
 - Room experience: startup offers Focus, Calm, Sleep, and Hi-Fi; Hi-Fi applies `flat`, `warm`, or `vocal` EQ presets when the Pi command hook is configured, uses `/api/v1/audio/spectrum` for its visual meter, and never enables Scene Sound. Auto Night dims by selected timezone without changing sources.
 - Device brightness: DDC/CI-capable displays are prepared by `deploy/moode/tikpal-ddcci-enable.sh`; `mpc` mode reports `display.transport="ddcci"` when `ddcutil getvcp 10 --brief` can read VCP `0x10`.
+- Pi status reads: in `mpc` mode, combined state, playback status, system status, runtime, audio source, and portable remote reads return the latest in-memory runtime snapshot while slow probes run in a low-frequency background collector.

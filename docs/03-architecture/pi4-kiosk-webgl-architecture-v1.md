@@ -142,6 +142,10 @@ The UI should not shell out directly or call moOde internals from the browser. B
 
 For moOde deployments, the backend may switch from `mock` to `mpc` through `.env`. In that mode the server owns queue seeding, real transport actions, and passive playback reads through `mpc`, while the browser contract stays unchanged.
 
+In `mpc` mode, status reads should be stale-while-refresh. The API keeps an in-memory Tikpal state snapshot and refreshes slow runtime facts in a background collector controlled by `TIKPAL_STATE_SNAPSHOT_REFRESH_MS`. Read endpoints such as `/api/v1/system/state`, `/api/v1/playback/status`, `/api/v1/system/status`, `/api/v1/system/runtime`, `/api/v1/audio/sources`, and the portable remote state should return the cached snapshot immediately. Slow probes such as `systemctl`, `ddcutil`, source status commands, and external metadata helpers must not sit in the browser request path.
+
+Write endpoints still execute the required control command synchronously when the user asks for an action, then update a lightweight snapshot from fast playback state and let the full collector catch up. This keeps transport, volume, source, and brightness actions honest without letting a blocked diagnostics command freeze the whole kiosk page.
+
 ## Startup Experience
 
 Startup should feel intentional:
