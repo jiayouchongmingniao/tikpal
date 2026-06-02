@@ -649,6 +649,91 @@ switch (command) {
   }
 }
 
+async function runMpcCachedStateSmoke(roomExperienceStatePath) {
+  const port = PORT + 13;
+  const baseUrl = `http://${HOST}:${port}`;
+  const workspace = await mkdtemp(path.join(tmpdir(), "tikpal-mpc-cached-state-"));
+  const fakeMpcPath = path.join(workspace, "mpc-fake.mjs");
+  const slowCommandPath = path.join(workspace, "slow-command.sh");
+
+  await writeFile(fakeMpcPath, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+while (args[0]?.startsWith("--")) {
+  args.shift();
+  if (args[0] && !args[0].startsWith("--")) args.shift();
+}
+const command = args[0];
+function output(value) { process.stdout.write(value); }
+switch (command) {
+  case "current":
+    output("Smoke Title\\tSmoke Artist\\tSmoke Album\\tCodex/Smoke.mp3\\t02:00\\n");
+    break;
+  case "status":
+    output("[playing] #1/1 0:01/2:00 (0%)\\nvolume:50%   repeat: off   random: off   single: off   consume: off\\n");
+    break;
+  case "stats":
+    output("Artists: 1\\nAlbums: 1\\nSongs: 1\\nDB Updated: fake\\n");
+    break;
+  case "playlist":
+    output("0\\tSmoke Title\\tSmoke Artist\\tSmoke Album\\t02:00\\tCodex/Smoke.mp3\\n");
+    break;
+  case "outputs":
+    output("Output 1 (ALSA default): enabled\\n");
+    break;
+  default:
+    break;
+}
+`);
+  await chmod(fakeMpcPath, 0o755);
+  await writeFile(slowCommandPath, "#!/bin/sh\nsleep 4\necho 'slow command finished'\n");
+  await chmod(slowCommandPath, 0o755);
+
+  const server = spawn(process.execPath, ["server/index.mjs"], {
+    env: {
+      ...process.env,
+      TIKPAL_API_HOST: HOST,
+      TIKPAL_API_PORT: String(port),
+      TIKPAL_PLAYER_BACKEND: "mpc",
+      TIKPAL_MPC_BIN: fakeMpcPath,
+      TIKPAL_MPD_HOST: "127.0.0.1",
+      TIKPAL_MPD_PORT: "6600",
+      TIKPAL_ROOM_EXPERIENCE_STATE_PATH: roomExperienceStatePath,
+      TIKPAL_STATE_SNAPSHOT_REFRESH_MS: "60000",
+      TIKPAL_DDCUTIL_BIN: slowCommandPath,
+      TIKPAL_OUTPUT_VOLUME_GET_COMMAND: `${slowCommandPath} volume`,
+      TIKPAL_AUDIO_ACTIVE_COMMAND: `${slowCommandPath} audio-active`,
+      TIKPAL_SPOTIFY_ACTIVE_COMMAND: `${slowCommandPath} spotify-active`,
+      TIKPAL_BLUETOOTH_ACTIVE_COMMAND: `${slowCommandPath} bluetooth-active`,
+      TIKPAL_AIRPLAY_ACTIVE_COMMAND: `${slowCommandPath} airplay-active`,
+      TIKPAL_AIRPLAY_RECEIVER_ACTIVE_COMMAND: `${slowCommandPath} airplay-receiver`,
+      TIKPAL_UPNP_ACTIVE_COMMAND: `${slowCommandPath} upnp-active`
+    },
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+
+  try {
+    await waitForHealthAt(baseUrl);
+    const startedAt = Date.now();
+    const state = await requestFrom(baseUrl, "/api/v1/system/state");
+    const elapsedMs = Date.now() - startedAt;
+    assert(state.response.ok, "cached mpc state should return 200");
+    assert(
+      elapsedMs < 1000,
+      `cached mpc state should not wait for slow system commands, took ${elapsedMs}ms`
+    );
+    assert(state.body.runtime.apiMode === "mpc", "cached mpc state should still report mpc mode");
+  } finally {
+    if (server.exitCode === null && server.signalCode === null) {
+      server.kill("SIGTERM");
+      await Promise.race([
+        new Promise((resolve) => server.once("exit", resolve)),
+        wait(1000)
+      ]);
+    }
+    await rm(workspace, { recursive: true, force: true });
+  }
+}
+
 async function run() {
   runAccessControlHelperSmoke();
 
@@ -1560,6 +1645,7 @@ async function run() {
     await runMpcHifiCommandGuardSmoke(roomExperienceStatePath);
     await runHifiSpectrumCommandSmoke(roomExperienceStatePath);
     await runMpcLocalLibraryPathSmoke(roomExperienceStatePath);
+    await runMpcCachedStateSmoke(roomExperienceStatePath);
 
     console.log("api smoke passed");
   } finally {

@@ -10,6 +10,7 @@ const SAFE_REMOTE_GET_PATHS = new Set([
   "/api/v1/openapi.json",
   "/api/v1/swagger.json",
   "/api/v1/docs",
+  "/api/v1/media/airplay-artwork",
   "/api/v1/media/artwork",
   "/api/v1/media/library-cover"
 ]);

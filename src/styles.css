@@ -631,8 +631,9 @@ select {
   position: absolute;
   z-index: 2;
   top: 72px;
-  left: 72px;
-  right: 72px;
+  left: 50%;
+  width: min(1680px, calc(100vw - 144px));
+  transform: translateX(-50%);
   display: grid;
   grid-template-columns: 260px minmax(0, 1fr);
   align-items: center;
@@ -4662,6 +4663,17 @@ select {
 }
 
 @media (max-width: 900px) {
+  .hifi-now-playing-surface {
+    top: 48px;
+    width: calc(100vw - 40px);
+    grid-template-columns: 112px minmax(0, 1fr);
+    gap: 14px;
+  }
+
+  .hifi-cover-art {
+    width: 112px;
+  }
+
   .ambient-lyrics-layer {
     left: 20px;
     right: 20px;

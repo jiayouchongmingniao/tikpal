@@ -7,7 +7,7 @@ import type { CSSProperties } from "react";
 import type { AudioSpectrumFrame, AudioState, FontTheme, HifiEqPresetId, PlaybackSummary, SystemState } from "../types";
 
 const BAND_COUNT = 32;
-const SPECTRUM_REFRESH_MS = 400;
+const SPECTRUM_REFRESH_MS = 2500;
 
 interface EqVisualSceneProps {
   presetId: HifiEqPresetId;
@@ -42,6 +42,19 @@ function buildFallbackSpectrum(volumePercent: number): AudioSpectrumFrame {
   };
 }
 
+function buildUnavailableSpectrum(): AudioSpectrumFrame {
+  return {
+    bands: Array.from({ length: BAND_COUNT }, () => 0),
+    peaks: {
+      left: 0,
+      right: 0
+    },
+    source: "fallback",
+    bandCount: BAND_COUNT,
+    updatedAt: new Date().toISOString()
+  };
+}
+
 function normalizeSpectrumFrame(frame: AudioSpectrumFrame, fallback: AudioSpectrumFrame): AudioSpectrumFrame {
   const bands = Array.isArray(frame.bands)
     ? frame.bands.slice(0, BAND_COUNT).map((band) => clampUnit(band))
@@ -69,7 +82,7 @@ function bandToLevel(band: number, isPlaying: boolean) {
 
 export function EqVisualScene({ presetId, playback, audio, system, fontTheme }: EqVisualSceneProps) {
   const fallbackSpectrum = useMemo(() => buildFallbackSpectrum(system.volume.percent), [system.volume.percent]);
-  const [spectrum, setSpectrum] = useState<AudioSpectrumFrame>(fallbackSpectrum);
+  const [spectrum, setSpectrum] = useState<AudioSpectrumFrame>(() => buildUnavailableSpectrum());
   const isPlaying = playback.state === "playing";
   const preset = getHifiEqPreset(presetId);
   const visualPresetId = preset.hifiVisualPresetId;
@@ -95,7 +108,9 @@ export function EqVisualScene({ presetId, playback, audio, system, fontTheme }: 
         }
       } catch {
         if (active) {
-          setSpectrum(fallbackSpectrum);
+          setSpectrum((current) => current.source === "command" || current.source === "mock"
+            ? current
+            : buildUnavailableSpectrum());
         }
       }
     }

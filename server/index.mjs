@@ -78,12 +78,17 @@ const HIFI_SPECTRUM_CACHE_MS_RAW = Number(process.env.TIKPAL_HIFI_SPECTRUM_CACHE
 const HIFI_SPECTRUM_CACHE_MS = Number.isFinite(HIFI_SPECTRUM_CACHE_MS_RAW) && HIFI_SPECTRUM_CACHE_MS_RAW >= 0
   ? HIFI_SPECTRUM_CACHE_MS_RAW
   : 900;
+const STATE_SNAPSHOT_REFRESH_MS_RAW = Number(process.env.TIKPAL_STATE_SNAPSHOT_REFRESH_MS ?? 3000);
+const STATE_SNAPSHOT_REFRESH_MS = Number.isFinite(STATE_SNAPSHOT_REFRESH_MS_RAW) && STATE_SNAPSHOT_REFRESH_MS_RAW >= 1000
+  ? STATE_SNAPSHOT_REFRESH_MS_RAW
+  : 3000;
 const RECOGNITION_PROVIDER = (process.env.TIKPAL_RECOGNITION_PROVIDER ?? "").trim().toLowerCase();
 const ACRCLOUD_HOST = process.env.TIKPAL_ACRCLOUD_HOST ?? "";
 const ACRCLOUD_ACCESS_KEY = process.env.TIKPAL_ACRCLOUD_ACCESS_KEY ?? "";
 const ACRCLOUD_ACCESS_SECRET = process.env.TIKPAL_ACRCLOUD_ACCESS_SECRET ?? "";
 const BLUETOOTH_CAPTURE_COMMAND = process.env.TIKPAL_BLUETOOTH_CAPTURE_COMMAND ?? "";
 const AIRPLAY_CAPTURE_COMMAND = process.env.TIKPAL_AIRPLAY_CAPTURE_COMMAND ?? "";
+const AIRPLAY_ARTWORK_ROOT = resolve(process.env.TIKPAL_AIRPLAY_ARTWORK_ROOT ?? "/var/local/www/imagesw/airplay-covers");
 const BLUETOOTH_CAPTURE_DURATION_SECONDS = Number(process.env.TIKPAL_BLUETOOTH_CAPTURE_DURATION_SECONDS ?? 10);
 const BLUETOOTH_RECOGNITION_SETTLE_MS = Number(process.env.TIKPAL_BLUETOOTH_RECOGNITION_SETTLE_MS ?? 4000);
 const BLUETOOTH_RECOGNITION_RETRY_MS = Number(process.env.TIKPAL_BLUETOOTH_RECOGNITION_RETRY_MS ?? 45000);
@@ -277,6 +282,9 @@ const remoteArtworkInFlight = new Map();
 let bluetoothRecognitionSession = buildBluetoothRecognitionSession();
 let displayBrightnessSnapshotCache = null;
 let displayBrightnessRefreshPromise = null;
+let tikpalStateSnapshotCache = null;
+let tikpalStateSnapshotRefreshPromise = null;
+let tikpalStateSnapshotRefreshTimer = null;
 
 const system = {
   network: {
@@ -1384,6 +1392,31 @@ function parsePlaybackTimingDiagnostics(metadata) {
   return hasTimingValue ? diagnostics : null;
 }
 
+function metadataArtworkUrl(metadata) {
+  const artworkMtimeMs = readMetadataNumber(metadata, ["artworkmtimems", "artworkMtimeMs", "artwork_mtime_ms"]);
+  const artworkVersion = Number.isFinite(artworkMtimeMs) && artworkMtimeMs > 0
+    ? `&v=${encodeURIComponent(String(Math.round(artworkMtimeMs)))}`
+    : "";
+  const artworkPath = normalizeMetadataValue(metadata.artworkpath ?? metadata.artworkPath ?? metadata.artwork_path);
+  if (artworkPath) {
+    return `/api/v1/media/airplay-artwork?path=${encodeURIComponent(artworkPath)}${artworkVersion}`;
+  }
+
+  const artworkUrl = normalizeMetadataValue(
+    metadata.artworkurl
+      ?? metadata.artworkUrl
+      ?? metadata.artwork_url
+      ?? metadata.albumarturl
+      ?? metadata.albumArtUrl
+      ?? metadata.album_art_url
+  );
+  if (!artworkUrl) return null;
+  if (artworkUrl.startsWith("file:///var/local/www/imagesw/airplay-covers/")) {
+    return `/api/v1/media/airplay-artwork?path=${encodeURIComponent(artworkUrl.slice("file://".length))}${artworkVersion}`;
+  }
+  return artworkUrl;
+}
+
 function parseBluetoothMetadataOutput(raw) {
   const value = String(raw ?? "").trim();
   if (!value) return null;
@@ -1411,6 +1444,7 @@ function parseBluetoothMetadataOutput(raw) {
     status: status || null,
     positionMs: Number.isFinite(positionMs) ? positionMs : null,
     durationMs: Number.isFinite(durationMs) ? durationMs : null,
+    artworkUrl: metadataArtworkUrl(metadata),
     timingDiagnostics: parsePlaybackTimingDiagnostics(metadata)
   };
 }
@@ -1912,10 +1946,7 @@ async function setDisplayBrightnessPercent(percent) {
   system.display = displayBrightnessSnapshotCache.value;
 }
 
-async function getRuntimeSnapshot() {
-  const xrandrRaw = await runCommand("xrandr --query", { allowFailure: true });
-  const currentMatch = xrandrRaw.match(/current\s+(\d+)\s+x\s+(\d+)/i);
-  const kioskWindow = currentMatch ? `${currentMatch[1]}x${currentMatch[2]}` : REQUESTED_KIOSK_WINDOW;
+function buildRuntimeSnapshot(kioskWindow = REQUESTED_KIOSK_WINDOW) {
   return {
     rendererType: REQUESTED_RENDERER === "webgl" ? "webgl" : "media",
     requestedRenderer: REQUESTED_RENDERER,
@@ -1924,6 +1955,17 @@ async function getRuntimeSnapshot() {
     apiMode: API_MODE,
     updatedAt: new Date().toISOString()
   };
+}
+
+function getCachedRuntimeSnapshot() {
+  return tikpalStateSnapshotCache?.state?.runtime ?? buildRuntimeSnapshot();
+}
+
+async function getRuntimeSnapshot() {
+  const xrandrRaw = await runCommand("xrandr --query", { allowFailure: true });
+  const currentMatch = xrandrRaw.match(/current\s+(\d+)\s+x\s+(\d+)/i);
+  const kioskWindow = currentMatch ? `${currentMatch[1]}x${currentMatch[2]}` : REQUESTED_KIOSK_WINDOW;
+  return buildRuntimeSnapshot(kioskWindow);
 }
 
 async function getOutputDeviceSnapshot() {
@@ -1958,6 +2000,24 @@ async function getMpcSystemSnapshot(statusRaw, statsRaw) {
     dspState,
     library: {
       ...system.library,
+      source: "MPD",
+      trackCount: stats.trackCount,
+      lastScan: stats.lastScan,
+      scanning: status.scanning || scanRecentlyRequested
+    }
+  };
+}
+
+function getCachedMpcSystemSnapshot(statusRaw, statsRaw) {
+  const cachedSystem = tikpalStateSnapshotCache?.state?.system ?? system;
+  const status = parseMpcStatus(statusRaw);
+  const stats = parseMpcStats(statsRaw);
+  const scanRecentlyRequested = Date.now() - lastSystemLibraryScanRequestedAt < 15000;
+
+  return {
+    ...cachedSystem,
+    library: {
+      ...cachedSystem.library,
       source: "MPD",
       trackCount: stats.trackCount,
       lastScan: stats.lastScan,
@@ -2470,6 +2530,32 @@ async function resolveExistingLocalLibraryImage(relativePath) {
       ...asset,
       mimeType,
       token: buildArtworkToken(asset.absolutePath, info.mtimeMs)
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function resolveExistingAirplayArtwork(rawPath) {
+  const value = normalizeMetadataValue(rawPath);
+  if (!value) return null;
+
+  const absolutePath = resolve(value.startsWith("/imagesw/airplay-covers/")
+    ? resolve("/var/local/www", value.replace(/^\/+/, ""))
+    : value);
+  if (absolutePath !== AIRPLAY_ARTWORK_ROOT && !absolutePath.startsWith(`${AIRPLAY_ARTWORK_ROOT}${sep}`)) {
+    return null;
+  }
+
+  const mimeType = imageMimeTypeFromPath(absolutePath);
+  if (!mimeType) return null;
+
+  try {
+    const info = await stat(absolutePath);
+    if (!info.isFile()) return null;
+    return {
+      absolutePath,
+      mimeType
     };
   } catch {
     return null;
@@ -3559,6 +3645,70 @@ async function getMpcAudioSnapshot(currentFile) {
   });
 }
 
+function commandSourceSupported(commands) {
+  return commands.some((command) => Boolean(command));
+}
+
+function buildCachedSourceRuntimeState(source, supported, advertisedLabel = null) {
+  const armed = mockArmedSource === source;
+  return {
+    supported,
+    available: supported,
+    armed,
+    connected: false,
+    connectedLabel: null,
+    advertisedLabel
+  };
+}
+
+function buildMinimalMpcAudioSnapshot(currentFile = "") {
+  const radioActive = isStreamUri(currentFile);
+  const activeSource = mockArmedSource === "scene"
+    ? "scene"
+    : mockArmedSource && ["audio", "spotify", "bluetooth", "airplay", "upnp"].includes(mockArmedSource)
+      ? mockArmedSource
+      : radioActive
+        ? "radio"
+        : "mpd";
+
+  return buildAudioState({
+    activeSource,
+    armedSource: mockArmedSource,
+    radioReady: Boolean(RADIO_ACTIVATE_COMMAND || RADIO_DEFAULT_URI),
+    radioActive,
+    radioStations: [],
+    audioSourceState: buildCachedSourceRuntimeState("audio", true),
+    spotifyState: buildCachedSourceRuntimeState("spotify", commandSourceSupported([
+      SPOTIFY_READY_COMMAND,
+      SPOTIFY_ACTIVE_COMMAND,
+      SPOTIFY_ACTIVATE_COMMAND,
+      SPOTIFY_DISABLE_COMMAND,
+      SPOTIFY_LABEL_COMMAND
+    ]), tikpalStateSnapshotCache?.state?.audio?.sources?.find((source) => source.id === "spotify")?.advertisedLabel ?? null),
+    bluetoothState: buildCachedSourceRuntimeState("bluetooth", commandSourceSupported([
+      BLUETOOTH_READY_COMMAND,
+      BLUETOOTH_ACTIVE_COMMAND,
+      BLUETOOTH_LABEL_COMMAND,
+      BLUETOOTH_ENABLE_COMMAND,
+      BLUETOOTH_DISABLE_COMMAND
+    ]), tikpalStateSnapshotCache?.state?.audio?.sources?.find((source) => source.id === "bluetooth")?.advertisedLabel ?? null),
+    airplayState: buildCachedSourceRuntimeState("airplay", commandSourceSupported([
+      AIRPLAY_READY_COMMAND,
+      AIRPLAY_ACTIVE_COMMAND,
+      AIRPLAY_LABEL_COMMAND,
+      AIRPLAY_ENABLE_COMMAND,
+      AIRPLAY_DISABLE_COMMAND
+    ]), tikpalStateSnapshotCache?.state?.audio?.sources?.find((source) => source.id === "airplay")?.advertisedLabel ?? null),
+    upnpState: buildCachedSourceRuntimeState("upnp", commandSourceSupported([
+      UPNP_READY_COMMAND,
+      UPNP_ACTIVE_COMMAND,
+      UPNP_LABEL_COMMAND,
+      UPNP_ENABLE_COMMAND,
+      UPNP_DISABLE_COMMAND
+    ]), tikpalStateSnapshotCache?.state?.audio?.sources?.find((source) => source.id === "upnp")?.advertisedLabel ?? null)
+  });
+}
+
 async function getMpcQueuePreview(status) {
   if (!status.queueLength) return [];
 
@@ -3592,7 +3742,19 @@ async function getMpcQueuePreview(status) {
   return queue.slice(previewStart, previewStart + 6);
 }
 
-async function getMpcSnapshot() {
+function buildFastTrackMetadata({ title, artist, album, file }) {
+  return {
+    title: title?.trim() || trackTitleFromFile(file),
+    artist: artist?.trim() || "Unknown Artist",
+    album: album?.trim() || albumLabelFromFile(file),
+    artworkMimeType: null,
+    artworkToken: null,
+    absolutePath: null
+  };
+}
+
+async function getMpcSnapshot(options = {}) {
+  const includeSlowRuntimeStatus = options.includeSlowRuntimeStatus !== false;
   const [currentRaw, statusRaw, statsRaw] = await Promise.all([
     runMpc(["--format", "%title%\t%artist%\t%album%\t%file%\t%time%", "current"], { allowFailure: true }),
     runMpc(["status"], { allowFailure: true }),
@@ -3603,11 +3765,15 @@ async function getMpcSnapshot() {
   const [title, artist, album, file, duration] = currentRaw.split("\t");
   const hasCurrentTrack = Boolean(currentRaw.trim());
   const durationSeconds = parseDuration(duration) ?? status.durationSeconds;
-  const nextSystem = await getMpcSystemSnapshot(statusRaw, statsRaw);
-  const audio = await getMpcAudioSnapshot(file);
+  const nextSystem = includeSlowRuntimeStatus
+    ? await getMpcSystemSnapshot(statusRaw, statsRaw)
+    : getCachedMpcSystemSnapshot(statusRaw, statsRaw);
+  const audio = includeSlowRuntimeStatus
+    ? await getMpcAudioSnapshot(file)
+    : buildMinimalMpcAudioSnapshot(file);
   const queuePreview = await getMpcQueuePreview(status);
   const playbackSource = audio.sources.find((source) => source.active)?.id ?? audio.currentSource.id;
-  const outputVolumePercent = await readOutputVolumePercent();
+  const outputVolumePercent = includeSlowRuntimeStatus ? await readOutputVolumePercent() : null;
   const isSceneSource = playbackSource === "scene";
   const isExternalHandoffSource = playbackSource === "scene" || playbackSource === "spotify" || playbackSource === "bluetooth" || playbackSource === "airplay" || playbackSource === "upnp";
   const isMpdBackedSource = playbackSource === "mpd" || playbackSource === "audio";
@@ -3617,16 +3783,18 @@ async function getMpcSnapshot() {
   const radioPlaybackMetadata = playbackSource === "radio"
     ? normalizeRadioPlaybackMetadata({ title, artist, album, file, audio })
     : null;
-  const bluetoothPlaybackMetadata = playbackSource === "bluetooth"
+  const bluetoothPlaybackMetadata = includeSlowRuntimeStatus && playbackSource === "bluetooth"
     ? await readBluetoothPlaybackMetadata()
     : null;
-  const airplayPlaybackMetadata = playbackSource === "airplay"
+  const airplayPlaybackMetadata = includeSlowRuntimeStatus && playbackSource === "airplay"
     ? await readAirplayPlaybackMetadata()
     : null;
   const hasBluetoothTrackMetadata = Boolean(bluetoothPlaybackMetadata?.title);
   const hasAirplayTrackMetadata = Boolean(airplayPlaybackMetadata?.title);
   const metadata = hasCurrentTrack
-    ? await readMediaMetadata(file)
+    ? includeSlowRuntimeStatus
+      ? await readMediaMetadata(file)
+      : buildFastTrackMetadata({ title, artist, album, file })
     : {
         title: null,
         artist: null,
@@ -3636,15 +3804,17 @@ async function getMpcSnapshot() {
         absolutePath: null
       };
 
-  currentArtworkState = hasCurrentTrack
-    ? await resolveCurrentArtworkState({
-        playbackSource,
-        metadata,
-        fallbackTitle: radioPlaybackMetadata?.title || title || trackTitleFromFile(file),
-        fallbackArtist: radioPlaybackMetadata?.artist || artist || "Unknown Artist",
-        fallbackAlbum: radioPlaybackMetadata?.album || album || "MPD Queue"
-      })
-    : null;
+  if (includeSlowRuntimeStatus) {
+    currentArtworkState = hasCurrentTrack
+      ? await resolveCurrentArtworkState({
+          playbackSource,
+          metadata,
+          fallbackTitle: radioPlaybackMetadata?.title || title || trackTitleFromFile(file),
+          fallbackArtist: radioPlaybackMetadata?.artist || artist || "Unknown Artist",
+          fallbackAlbum: radioPlaybackMetadata?.album || album || "MPD Queue"
+        })
+      : null;
+  }
 
   return {
     playback: {
@@ -3660,7 +3830,11 @@ async function getMpcSnapshot() {
           ? audio.currentSource.connectionState === "connected" ? "playing" : "stopped"
         : hasCurrentTrack ? status.state : "stopped",
       source: playbackSource,
-      albumArtUrl: !isExternalHandoffSource && hasCurrentTrack ? `/api/v1/media/artwork?track=${encodeURIComponent(currentArtworkState?.token ?? "current")}` : null,
+      albumArtUrl: playbackSource === "bluetooth"
+        ? bluetoothPlaybackMetadata?.artworkUrl ?? null
+        : playbackSource === "airplay"
+          ? airplayPlaybackMetadata?.artworkUrl ?? null
+          : !isExternalHandoffSource && hasCurrentTrack && includeSlowRuntimeStatus && currentArtworkState ? `/api/v1/media/artwork?track=${encodeURIComponent(currentArtworkState.token)}` : null,
       title: isSceneSource
           ? "Scene Audio"
           : playbackSource === "radio"
@@ -4015,7 +4189,7 @@ async function primeMpcPlayback() {
 
 async function getPlaybackSnapshot() {
   if (API_MODE === "mpc") {
-    return (await getMpcSnapshot()).playback;
+    return (await getTikpalState()).playback;
   }
   return getPlayback();
 }
@@ -4095,28 +4269,76 @@ async function getMockSystemSnapshot() {
   };
 }
 
-async function getTikpalState(options = {}) {
+function buildMockRuntimeSnapshot() {
+  return buildRuntimeSnapshot(REQUESTED_KIOSK_WINDOW);
+}
+
+function buildFallbackMpcStateSnapshot() {
+  const audio = buildMinimalMpcAudioSnapshot();
+  const playback = {
+    ...getPlayback(),
+    state: mockArmedSource === "scene" ? scenePlaybackState : "stopped",
+    source: audio.currentSource.id,
+    albumArtUrl: null,
+    elapsedSeconds: null,
+    durationSeconds: null,
+    currentTrackIndex: 0,
+    queueLength: 0,
+    favorite: false,
+    queuePreview: []
+  };
+
+  return {
+    playback,
+    system: {
+      ...system,
+      library: {
+        ...system.library,
+        source: "MPD"
+      }
+    },
+    runtime: buildRuntimeSnapshot(),
+    audio,
+    lyrics: lyricsState
+  };
+}
+
+function withCurrentVolatileState(state) {
+  return {
+    ...state,
+    lyrics: lyricsState
+  };
+}
+
+function readCachedTikpalState() {
+  return withCurrentVolatileState(tikpalStateSnapshotCache?.state ?? buildFallbackMpcStateSnapshot());
+}
+
+function cacheTikpalStateSnapshot(state) {
+  tikpalStateSnapshotCache = {
+    state: withCurrentVolatileState(state),
+    updatedAtMs: Date.now(),
+    error: null
+  };
+  return readCachedTikpalState();
+}
+
+async function collectTikpalStateSnapshot(options = {}) {
   if (!options.skipExperienceReconcile) {
     await reconcileRoomExperienceState(await readRoomExperienceState());
   }
 
+  const includeSlowRuntimeStatus = options.includeSlowRuntimeStatus !== false;
   const snapshot = API_MODE === "mpc"
-    ? await getMpcSnapshot()
+    ? await getMpcSnapshot({ includeSlowRuntimeStatus })
     : {
         playback: getPlayback(),
         system: await getMockSystemSnapshot(),
         audio: getMockAudioSnapshot()
       };
   const runtime = API_MODE === "mpc"
-    ? await getRuntimeSnapshot()
-    : {
-        rendererType: "media",
-        requestedRenderer: REQUESTED_RENDERER,
-        kioskWindow: REQUESTED_KIOSK_WINDOW,
-        appVersion: APP_VERSION,
-        apiMode: API_MODE,
-        updatedAt: new Date().toISOString()
-      };
+    ? includeSlowRuntimeStatus ? await getRuntimeSnapshot() : getCachedRuntimeSnapshot()
+    : buildMockRuntimeSnapshot();
   const lyrics = scheduleLyricsRecognition(snapshot);
 
   return {
@@ -4126,6 +4348,71 @@ async function getTikpalState(options = {}) {
     audio: snapshot.audio,
     lyrics
   };
+}
+
+function requestTikpalStateSnapshotRefresh({ force = false } = {}) {
+  if (API_MODE !== "mpc") return null;
+  const now = Date.now();
+  if (!force && tikpalStateSnapshotCache && now - tikpalStateSnapshotCache.updatedAtMs < STATE_SNAPSHOT_REFRESH_MS) {
+    return null;
+  }
+  if (tikpalStateSnapshotRefreshPromise) {
+    return tikpalStateSnapshotRefreshPromise;
+  }
+
+  tikpalStateSnapshotRefreshPromise = collectTikpalStateSnapshot({ includeSlowRuntimeStatus: true })
+    .then((state) => cacheTikpalStateSnapshot(state))
+    .catch((error) => {
+      const message = error instanceof Error ? error.message : "unknown error";
+      console.warn(`tikpal-api state snapshot refresh failed: ${message}`);
+      if (tikpalStateSnapshotCache) {
+        tikpalStateSnapshotCache.error = message;
+      }
+      return readCachedTikpalState();
+    })
+    .finally(() => {
+      tikpalStateSnapshotRefreshPromise = null;
+    });
+
+  return tikpalStateSnapshotRefreshPromise;
+}
+
+async function refreshTikpalStateSnapshotAfterMutation() {
+  if (API_MODE !== "mpc") {
+    return await collectTikpalStateSnapshot();
+  }
+
+  try {
+    const state = await collectTikpalStateSnapshot({
+      includeSlowRuntimeStatus: false,
+      skipExperienceReconcile: true
+    });
+    cacheTikpalStateSnapshot(state);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "unknown error";
+    console.warn(`tikpal-api fast state refresh failed: ${message}`);
+  }
+
+  void requestTikpalStateSnapshotRefresh({ force: true });
+  return readCachedTikpalState();
+}
+
+async function getTikpalState(options = {}) {
+  if (API_MODE !== "mpc") {
+    return await collectTikpalStateSnapshot(options);
+  }
+
+  void requestTikpalStateSnapshotRefresh();
+  return readCachedTikpalState();
+}
+
+function startTikpalStateSnapshotCollector() {
+  if (API_MODE !== "mpc" || tikpalStateSnapshotRefreshTimer) return;
+  void requestTikpalStateSnapshotRefresh({ force: true });
+  tikpalStateSnapshotRefreshTimer = setInterval(() => {
+    void requestTikpalStateSnapshotRefresh({ force: true });
+  }, STATE_SNAPSHOT_REFRESH_MS);
+  tikpalStateSnapshotRefreshTimer.unref?.();
 }
 
 async function getAudioSourcesPayload() {
@@ -6325,6 +6612,7 @@ async function applyRemoteAction(action) {
       throw new Error(`Unsupported remote action: ${type || "missing type"}`);
   }
 
+  await refreshTikpalStateSnapshotAfterMutation();
   return await buildRemoteStateResponse();
 }
 
@@ -6464,6 +6752,17 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "GET" && url.pathname === "/api/v1/media/airplay-artwork") {
+      const artwork = await resolveExistingAirplayArtwork(url.searchParams.get("path"));
+      if (!artwork) {
+        sendJson(response, 404, { error: "NOT_FOUND", path: url.pathname });
+        return;
+      }
+
+      sendBinary(response, 200, artwork.mimeType, await readFile(artwork.absolutePath));
+      return;
+    }
+
     if (request.method === "GET" && url.pathname === "/api/v1/media/artwork") {
       const trackToken = url.searchParams.get("track");
       await getTikpalState();
@@ -6513,14 +6812,14 @@ const server = http.createServer(async (request, response) => {
       } else {
         await applyPlaybackAction(action);
       }
-      sendJson(response, 200, await getTikpalState());
+      sendJson(response, 200, await refreshTikpalStateSnapshotAfterMutation());
       return;
     }
 
     if (request.method === "POST" && url.pathname === "/api/v1/system/actions") {
       const action = await readJson(request);
       await applySystemAction(action);
-      sendJson(response, 200, await getTikpalState());
+      sendJson(response, 200, await refreshTikpalStateSnapshotAfterMutation());
       return;
     }
 
@@ -6539,14 +6838,14 @@ const server = http.createServer(async (request, response) => {
     if (request.method === "POST" && url.pathname === "/api/v1/audio/source") {
       const action = await readJson(request);
       await applySourceSwitch(action);
-      sendJson(response, 200, await getTikpalState());
+      sendJson(response, 200, await refreshTikpalStateSnapshotAfterMutation());
       return;
     }
 
     if (request.method === "POST" && url.pathname === "/api/v1/audio/favorites") {
       const action = await readJson(request);
       await setFavoriteTrackPath(action.trackPath, action.favorite !== false);
-      sendJson(response, 200, await getTikpalState());
+      sendJson(response, 200, await refreshTikpalStateSnapshotAfterMutation());
       return;
     }
 
@@ -6574,6 +6873,8 @@ const server = http.createServer(async (request, response) => {
 server.listen(PORT, HOST, () => {
   console.log(`tikpal-api ${API_MODE} listening on http://${HOST}:${PORT}`);
   if (API_MODE === "mpc") {
-    void primeMpcPlayback();
+    void primeMpcPlayback().finally(() => {
+      startTikpalStateSnapshotCollector();
+    });
   }
 });

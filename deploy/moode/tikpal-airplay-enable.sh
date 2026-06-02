@@ -1,11 +1,69 @@
 #!/bin/sh
 set -eu
 
+run_as_root() {
+  if [ "$(id -u)" -eq 0 ]; then
+    "$@"
+  elif command -v sudo >/dev/null 2>&1; then
+    sudo -n "$@"
+  else
+    "$@"
+  fi
+}
+
+ensure_loopback_output() {
+  if [ -f /etc/alsa/conf.d/_sndaloop.conf ]; then
+    run_as_root sed -i '0,/_audioout__ {/s//_audioout {/' /etc/alsa/conf.d/_sndaloop.conf || true
+    run_as_root modprobe snd-aloop >/dev/null 2>&1 || true
+  fi
+}
+
+shairport_config_changed=0
+
+write_shairport_output_config() {
+  config_path="$1"
+  output_device="$2"
+  tmp_path="$(mktemp)"
+
+  awk -v output_device="$output_device" '
+    !updated && $0 ~ /^[[:space:]]*(\/\/[[:space:]]*)?output_device[[:space:]]*=/ {
+      print "\toutput_device = \"" output_device "\";";
+      updated = 1;
+      next;
+    }
+    { print }
+  ' "$config_path" > "$tmp_path" || {
+    rm -f "$tmp_path"
+    return 1
+  }
+
+  run_as_root cp "$tmp_path" "$config_path"
+  rm -f "$tmp_path"
+}
+
+ensure_shairport_output() {
+  config_path="${TIKPAL_SHAIRPORT_SYNC_CONFIG:-/etc/shairport-sync.conf}"
+  output_device="${TIKPAL_AIRPLAY_ALSA_OUTPUT_DEVICE:-_audioout}"
+
+  [ -f "$config_path" ] || return 0
+  if grep -Eq "^[[:space:]]*output_device[[:space:]]*=[[:space:]]*\"${output_device}\";" "$config_path"; then
+    return 0
+  fi
+
+  if grep -Eq '^[[:space:]]*(//[[:space:]]*)?output_device[[:space:]]*=' "$config_path"; then
+    write_shairport_output_config "$config_path" "$output_device" || return 0
+    shairport_config_changed=1
+  fi
+}
+
+ensure_loopback_output
+ensure_shairport_output
+
 moodeutl -Ro --airplay on
 
 if [ -d /var/local/www/imagesw/airplay-covers ]; then
-  chown -R shairport-sync:shairport-sync /var/local/www/imagesw/airplay-covers >/dev/null 2>&1 || true
-  chmod 775 /var/local/www/imagesw/airplay-covers >/dev/null 2>&1 || true
+  run_as_root chown -R shairport-sync:shairport-sync /var/local/www/imagesw/airplay-covers >/dev/null 2>&1 || true
+  run_as_root chmod 775 /var/local/www/imagesw/airplay-covers >/dev/null 2>&1 || true
 fi
 
 if command -v systemctl >/dev/null 2>&1; then
@@ -14,7 +72,11 @@ if command -v systemctl >/dev/null 2>&1; then
     || true
 
   sleep 2
-  if ! systemctl is-active --quiet shairport-sync.service >/dev/null 2>&1; then
+  if [ "$shairport_config_changed" -eq 1 ]; then
+    systemctl restart shairport-sync.service >/dev/null 2>&1 \
+      || sudo -n systemctl restart shairport-sync.service >/dev/null 2>&1 \
+      || true
+  elif ! systemctl is-active --quiet shairport-sync.service >/dev/null 2>&1; then
     systemctl reset-failed shairport-sync.service >/dev/null 2>&1 \
       || sudo -n systemctl reset-failed shairport-sync.service >/dev/null 2>&1 \
       || true

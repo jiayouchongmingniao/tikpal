@@ -215,7 +215,8 @@ function analyzePcm(inputBuffer, options) {
   const nyquist = sampleRate / 2;
   const minHz = readNumber("TIKPAL_HIFI_SPECTRUM_MIN_HZ", 45, { min: 1, max: nyquist });
   const maxHz = Math.max(minHz, Math.min(readNumber("TIKPAL_HIFI_SPECTRUM_MAX_HZ", 18_000, { min: minHz, max: nyquist }), nyquist));
-  const magnitudes = real.slice(0, fftSize / 2).map((value, index) => Math.hypot(value, imag[index]) / (fftSize / 2));
+  const levelGain = readNumber("TIKPAL_HIFI_SPECTRUM_GAIN", 12, { min: 0.1, max: 500 });
+  const magnitudes = real.slice(0, fftSize / 2).map((value, index) => (Math.hypot(value, imag[index]) / (fftSize / 2)) * levelGain);
   const bands = [];
   for (let band = 0; band < options.bandCount; band += 1) {
     const low = minHz * Math.pow(maxHz / minHz, band / options.bandCount);
@@ -235,8 +236,8 @@ function analyzePcm(inputBuffer, options) {
   return {
     bands,
     peaks: {
-      left: clampUnit(leftPeak),
-      right: clampUnit(rightPeak)
+      left: clampUnit(leftPeak * levelGain),
+      right: clampUnit(rightPeak * levelGain)
     },
     bandCount: options.bandCount,
     updatedAt: new Date().toISOString()
