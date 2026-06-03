@@ -424,6 +424,28 @@ export interface NightScheduleState {
   preNightBrightnessPercent: number | null;
 }
 
+export type SceneDayPart = "morning" | "afternoon" | "evening" | "night";
+export type SceneWeatherCondition = "clear" | "cloudy" | "foggy" | "rainy" | "snowy" | "stormy";
+
+export interface SceneWeatherSummary {
+  condition: SceneWeatherCondition;
+  label: string;
+  weatherCode: number | null;
+  precipitation: number;
+  source: "ip_weather";
+}
+
+export interface SceneContextSummary {
+  timeZone: string;
+  dayPart: SceneDayPart;
+  localHour: number;
+  locationLabel: string | null;
+  countryCode: string | null;
+  weather: SceneWeatherSummary | null;
+  source: "ip" | "timezone" | "fallback";
+  updatedAt: string;
+}
+
 export type RoomExperienceActionType =
   | "set_mode"
   | "start_session"

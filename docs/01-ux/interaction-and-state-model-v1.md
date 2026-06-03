@@ -91,10 +91,12 @@ stateDiagram-v2
 - In Focus/Calm/Sleep, a tap shows the HUD and opens a lightweight source picker with six music/input choices: `Library`, `Radio`, `Spotify`, `AirPlay`, `Bluetooth`, and `DLNA`.
 - The source picker floats centered above the temporary center strip, closes after a successful selection, outside click, Escape, or 5 seconds without interaction, and must show active, pending, and unavailable/error state.
 - Source picker labels map internal source ids to user language: `mpd` is `Library`, and `upnp` is `DLNA`. It does not expose `scene` or `audio` as selectable music sources.
+- Selecting `Spotify`, `AirPlay`, `Bluetooth`, or `DLNA` enters the same external handoff state in Ambient and Player: hide the normal source choices, show a "Waiting for connection" card with the advertised receiver name when available, keep polling the shared source state, and close only when `connectionState` becomes `connected` or the handoff times out and rolls back to the previous playable source.
 - Startup should show the HUD briefly, then let the flame scene return to a quieter default after 5 seconds.
 - Scene controls stay inside the temporary HUD. They do not open a scene browser or playlist drawer.
 - The bottom HUD is a mode switcher for Focus, Calm, Sleep, and Hi-Fi.
 - Focus, Calm, and Sleep use a content-sized center strip with the mode name and intent: `Focus / Deep work & reading`, `Calm / Unwind & relax`, and `Sleep / Dim, timer, fade-out`.
+- When the clock is visible, the weak Ambient caption may include daypart, scene, and weather/location context from `/api/v1/scene/context`, but it remains decorative copy and must not change room mode, source, timer, or Auto Night behavior.
 - Focus, Calm, and Sleep do not show music playback buttons, favorite, playlist, queue, seek progress, or lyrics on Ambient. Lyrics remain a Hi-Fi playback affordance only.
 - Hi-Fi uses the larger playback center controls: playback mode, source picker, previous/next, play/pause, favorite, playlist, and lyrics.
 - Ambient must not show queue or playlist content; queue preview stays in the Player overlay.
@@ -113,6 +115,7 @@ stateDiagram-v2
 - Transport controls must never be smaller than 72 x 72px.
 - Play / pause should be the dominant control, 96-112px.
 - Queue, source, audio status, and volume can expand panels from within player.
+- Player source tabs use the same external handoff rule as Ambient for Spotify Connect, AirPlay, Bluetooth, and DLNA. A pending handoff replaces the source tabs with the waiting card so the user does not see a source as selected on one surface and merely armed on another.
 - Player volume uses a 0-100 range slider instead of step buttons. Dragging the slider should update UI immediately and send `volume_set` as the single global volume action.
 - The displayed volume percent should match `system.volume.percent`, including while Scene Sound is active.
 

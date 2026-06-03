@@ -30,13 +30,15 @@ export function useTikpalState() {
       const nextState = await fetchTikpalState(signal);
       setState(nextState);
       setStatus({ source: "api", pending: false, error: null });
+      return nextState;
     } catch (error) {
-      if (signal?.aborted) return;
+      if (signal?.aborted) return null;
       setStatus({
         source: "fallback",
         pending: false,
         error: error instanceof Error ? error.message : "Tikpal API unavailable"
       });
+      return null;
     }
   }, []);
 

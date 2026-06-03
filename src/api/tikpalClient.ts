@@ -14,6 +14,7 @@ import type {
   BackgroundVideoSummary,
   RoomExperienceActionRequest,
   RoomExperienceState,
+  SceneContextSummary,
   SourceSwitchRequest,
   SourceSwitchTarget,
   SystemActionRequest,
@@ -133,6 +134,17 @@ export async function fetchRoomExperienceState(signal?: AbortSignal): Promise<Ro
     signal
   });
   return readJson<RoomExperienceState>(response);
+}
+
+export async function fetchSceneContext(timeZone: string, signal?: AbortSignal): Promise<SceneContextSummary> {
+  const params = new URLSearchParams();
+  if (timeZone) params.set("timeZone", timeZone);
+  const search = params.toString();
+  const response = await fetch(`${API_ROOT}/scene/context${search ? `?${search}` : ""}`, {
+    headers: { Accept: "application/json" },
+    signal
+  });
+  return readJson<SceneContextSummary>(response);
 }
 
 export async function sendRoomExperienceAction(action: RoomExperienceActionRequest): Promise<RoomExperienceState> {

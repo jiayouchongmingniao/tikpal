@@ -232,6 +232,31 @@ function createProviderServer() {
   return http.createServer((request, response) => {
     const url = new URL(request.url ?? "/", PROVIDER_URL);
 
+    if (request.method === "GET" && url.pathname === "/geo") {
+      sendProviderJson(response, 200, {
+        city: "Shanghai",
+        region: "Shanghai",
+        country_code: "CN",
+        timezone: "Asia/Shanghai",
+        latitude: 31.2304,
+        longitude: 121.4737
+      });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/forecast") {
+      sendProviderJson(response, 200, {
+        current: {
+          weather_code: 61,
+          precipitation: 1.2,
+          rain: 1.2,
+          showers: 0,
+          snowfall: 0
+        }
+      });
+      return;
+    }
+
     if (request.method === "GET" && url.pathname === "/api/search") {
       const track = url.searchParams.get("track_name");
 
@@ -734,6 +759,95 @@ switch (command) {
   }
 }
 
+async function runMpcAirplayHandoffRefreshSmoke(roomExperienceStatePath) {
+  const port = PORT + 14;
+  const baseUrl = `http://${HOST}:${port}`;
+  const workspace = await mkdtemp(path.join(tmpdir(), "tikpal-mpc-airplay-"));
+  const fakeMpcPath = path.join(workspace, "mpc-fake.mjs");
+
+  await writeFile(fakeMpcPath, `#!/usr/bin/env node
+const rawArgs = process.argv.slice(2);
+const args = [];
+
+for (let index = 0; index < rawArgs.length; index += 1) {
+  if (rawArgs[index] === "--host" || rawArgs[index] === "--port" || rawArgs[index] === "--format") {
+    index += 1;
+    continue;
+  }
+  args.push(rawArgs[index]);
+}
+
+const command = args[0] ?? "";
+switch (command) {
+  case "status":
+    process.stdout.write("volume:30%   repeat: off   random: off   single: off   consume: off\\n");
+    break;
+  case "stats":
+    process.stdout.write("Artists: 0\\nAlbums: 0\\nSongs: 0\\nDB Updated: fake\\n");
+    break;
+  case "current":
+  case "playlist":
+  case "stop":
+  default:
+    break;
+}
+`);
+  await chmod(fakeMpcPath, 0o755);
+
+  const server = spawn(process.execPath, ["server/index.mjs"], {
+    env: {
+      ...process.env,
+      TIKPAL_API_HOST: HOST,
+      TIKPAL_API_PORT: String(port),
+      TIKPAL_PLAYER_BACKEND: "mpc",
+      TIKPAL_MPC_BIN: fakeMpcPath,
+      TIKPAL_MPD_HOST: "127.0.0.1",
+      TIKPAL_MPD_PORT: "6600",
+      TIKPAL_ROOM_EXPERIENCE_STATE_PATH: roomExperienceStatePath,
+      TIKPAL_STATE_SNAPSHOT_REFRESH_MS: "60000",
+      TIKPAL_OUTPUT_VOLUME_GET_COMMAND: "",
+      TIKPAL_AIRPLAY_ENABLE_COMMAND: "true",
+      TIKPAL_AIRPLAY_READY_COMMAND: "true",
+      TIKPAL_AIRPLAY_ACTIVE_COMMAND: "true",
+      TIKPAL_AIRPLAY_RECEIVER_ACTIVE_COMMAND: "false",
+      TIKPAL_AIRPLAY_LABEL_COMMAND: "printf 'Tikpal Speaker'"
+    },
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+
+  try {
+    await waitForHealthAt(baseUrl);
+    const switched = await requestFrom(baseUrl, "/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({ target: "airplay" })
+    });
+    assert(switched.response.ok, "mpc airplay source switch should return 200");
+    assert(switched.body.audio.currentSource.id === "airplay", "mpc airplay switch should mark AirPlay current");
+    assert(switched.body.audio.currentSource.armed === true, "mpc airplay switch should arm AirPlay");
+    assert(
+      switched.body.audio.currentSource.connectionState === "connected",
+      `mpc airplay switch should refresh command-backed connection state, got ${switched.body.audio.currentSource.connectionState}`
+    );
+    assert(switched.body.playback.source === "airplay", "mpc airplay playback source should be AirPlay");
+
+    const cached = await requestFrom(baseUrl, "/api/v1/system/state");
+    assert(cached.response.ok, "cached mpc airplay state should return 200");
+    assert(
+      cached.body.audio.currentSource.connectionState === "connected",
+      `cached mpc airplay state should preserve connected after source switch, got ${cached.body.audio.currentSource.connectionState}`
+    );
+  } finally {
+    if (server.exitCode === null && server.signalCode === null) {
+      server.kill("SIGTERM");
+      await Promise.race([
+        new Promise((resolve) => server.once("exit", resolve)),
+        wait(1000)
+      ]);
+    }
+    await rm(workspace, { recursive: true, force: true });
+  }
+}
+
 async function run() {
   runAccessControlHelperSmoke();
 
@@ -808,6 +922,8 @@ async function run() {
       TIKPAL_ACRCLOUD_HOST: PROVIDER_URL,
       TIKPAL_ACRCLOUD_ACCESS_KEY: "mock-key",
       TIKPAL_ACRCLOUD_ACCESS_SECRET: "mock-secret",
+      TIKPAL_SCENE_CONTEXT_GEO_URL: `${PROVIDER_URL}/geo`,
+      TIKPAL_SCENE_CONTEXT_WEATHER_URL: `${PROVIDER_URL}/forecast`,
       TIKPAL_BLUETOOTH_CAPTURE_COMMAND: "./deploy/moode/tikpal-bluetooth-capture.sh",
       TIKPAL_BLUETOOTH_CAPTURE_MOCK: "1",
       TIKPAL_BLUETOOTH_CAPTURE_MOCK_FILE: BLUETOOTH_SCENARIO_PATH,
@@ -854,6 +970,15 @@ async function run() {
     assert(initial.body.system.dspState.presetLabel === "Flat", "DSP state should reflect the default Hi-Fi EQ preset label");
     assert(initial.body.system.dspState.controllable === true, "mock DSP state should be controllable");
     assert(initial.body.system.dspState.availablePresets.length === 3, "DSP state should expose the three built-in Hi-Fi EQ presets");
+
+    const sceneContext = await request("/api/v1/scene/context?timeZone=Europe/London");
+    assert(sceneContext.response.ok, "scene context should return 200");
+    assert(sceneContext.body.timeZone === "Asia/Shanghai", "scene context should prefer IP timezone over a conflicting requested timezone");
+    assert(sceneContext.body.locationLabel === "Shanghai", "scene context should expose IP-derived city");
+    assert(sceneContext.body.countryCode === "CN", "scene context should expose IP-derived country code");
+    assert(sceneContext.body.weather?.condition === "rainy", "scene context should expose IP-location weather");
+    assert(sceneContext.body.weather?.label === "Rainy", "scene context should expose a weather label for ambient copy");
+    assert(["morning", "afternoon", "evening", "night"].includes(sceneContext.body.dayPart), "scene context should expose a daypart");
 
     const openapi = await request("/api/v1/openapi.json");
     assert(openapi.response.ok, "OpenAPI JSON should return 200");
@@ -1396,6 +1521,7 @@ async function run() {
     assert(spotify.response.ok, "spotify connect source switch should return 200");
     assert(spotify.body.audio.currentSource.id === "spotify", "spotify connect switch should activate spotify in mock mode");
     assert(spotify.body.audio.currentSource.armed === true, "spotify connect switch should arm spotify handoff");
+    assert(spotify.body.audio.currentSource.connectionState === "armed", "spotify connect source should initially wait for a connected input");
     assert(spotify.body.audio.currentSource.advertisedLabel === "Tikpal Speaker", "spotify connect switch should keep advertised device name in state");
     assert(spotify.body.playback.source === "spotify", "playback source should follow spotify connect switch");
 
@@ -1456,6 +1582,7 @@ async function run() {
     assert(airplay.response.ok, "airplay source switch should return 200");
     assert(airplay.body.audio.currentSource.id === "airplay", "airplay switch should activate airplay in mock mode");
     assert(airplay.body.audio.currentSource.armed === true, "airplay switch should arm airplay intake");
+    assert(airplay.body.audio.currentSource.connectionState === "armed", "airplay source should initially wait for a connected input");
     assert(airplay.body.audio.sources.some((source) => source.id === "bluetooth" && source.armed === false), "airplay switch should disarm bluetooth");
 
     const dlna = await request("/api/v1/audio/source", {
@@ -1465,6 +1592,7 @@ async function run() {
     assert(dlna.response.ok, "dlna source switch should return 200");
     assert(dlna.body.audio.currentSource.id === "upnp", "dlna switch should activate dlna in mock mode");
     assert(dlna.body.audio.currentSource.armed === true, "dlna switch should arm dlna intake");
+    assert(dlna.body.audio.currentSource.connectionState === "armed", "dlna source should initially wait for a connected input");
     assert(dlna.body.audio.currentSource.advertisedLabel === "Tikpal Speaker", "dlna switch should keep advertised renderer name in state");
     assert(dlna.body.playback.source === "upnp", "playback source should follow dlna switch");
     assert(dlna.body.audio.sources.some((source) => source.id === "spotify" && source.armed === false), "dlna switch should disarm spotify");
@@ -1670,6 +1798,7 @@ async function run() {
     await runHifiSpectrumCommandSmoke(roomExperienceStatePath);
     await runMpcLocalLibraryPathSmoke(roomExperienceStatePath);
     await runMpcCachedStateSmoke(roomExperienceStatePath);
+    await runMpcAirplayHandoffRefreshSmoke(roomExperienceStatePath);
 
     console.log("api smoke passed");
   } finally {

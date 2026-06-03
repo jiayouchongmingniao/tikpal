@@ -10,7 +10,7 @@ import { useBrowserKioskGuard } from "./hooks/useBrowserKioskGuard";
 import { useKioskGestures } from "./hooks/useKioskGestures";
 import { useRoomExperience } from "./hooks/useRoomExperience";
 import { useTikpalState } from "./hooks/useTikpalState";
-import type { AppMode, BackgroundVideoSummary, FontTheme, LyricsFontSize, RoomExperienceActionRequest, RoomMode, SourceSwitchTarget, SurfaceTheme } from "./types";
+import type { AppMode, BackgroundVideoSummary, FontTheme, LyricsFontSize, RoomExperienceActionRequest, RoomMode, SourceSwitchTarget, SurfaceTheme, TikpalState } from "./types";
 
 const FONT_THEME_STORAGE_KEY = "tikpal.fontTheme";
 const SURFACE_THEME_STORAGE_KEY = "tikpal.surfaceTheme";
@@ -18,6 +18,10 @@ const LYRICS_VISIBLE_STORAGE_KEY = "tikpal.lyricsVisible.v2";
 const LYRICS_FONT_SIZE_STORAGE_KEY = "tikpal.lyricsFontSize";
 const SCENE_VIDEO_ENABLED_STORAGE_KEY = "tikpal.sceneVideoEnabled";
 const CLOCK_VISIBLE_STORAGE_KEY = "tikpal.clockVisible";
+const EXTERNAL_HANDOFF_TIMEOUT_MS = 60_000;
+const EXTERNAL_HANDOFF_POLL_MS = 1_000;
+const SOURCE_SWITCH_TARGETS = new Set<SourceSwitchTarget>(["mpd", "audio", "scene", "radio", "spotify", "bluetooth", "airplay", "upnp"]);
+const EXTERNAL_HANDOFF_TARGETS = new Set<SourceSwitchTarget>(["spotify", "bluetooth", "airplay", "upnp"]);
 
 const DEFAULT_SCENE_VIDEO: BackgroundVideoSummary = {
   id: "scene-empty",
@@ -72,6 +76,53 @@ function readStoredBoolean(key: string, fallback: boolean) {
   if (savedValue === "true") return true;
   if (savedValue === "false") return false;
   return fallback;
+}
+
+function delay(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function isSourceSwitchTarget(sourceId: string): sourceId is SourceSwitchTarget {
+  return SOURCE_SWITCH_TARGETS.has(sourceId as SourceSwitchTarget);
+}
+
+function getSourceLabel(sourceId: SourceSwitchTarget) {
+  switch (sourceId) {
+    case "mpd":
+      return "Library";
+    case "audio":
+      return "Audio";
+    case "scene":
+      return "Scene Sound";
+    case "radio":
+      return "Radio";
+    case "spotify":
+      return "Spotify Connect";
+    case "bluetooth":
+      return "Bluetooth";
+    case "airplay":
+      return "AirPlay";
+    case "upnp":
+      return "DLNA";
+    default:
+      return "source";
+  }
+}
+
+function isExternalHandoffTarget(sourceId: SourceSwitchTarget): boolean {
+  return EXTERNAL_HANDOFF_TARGETS.has(sourceId);
+}
+
+function isSourceHandoffReady(state: TikpalState, sourceId: SourceSwitchTarget) {
+  const source = state.audio.sources.find((entry) => entry.id === sourceId);
+  return source?.connectionState === "connected";
+}
+
+function getRollbackSourceTarget(state: TikpalState): SourceSwitchTarget {
+  const currentSource = state.audio.currentSource;
+  if (!isSourceSwitchTarget(currentSource.id)) return "mpd";
+  if (isExternalHandoffTarget(currentSource.id) && currentSource.connectionState !== "connected") return "mpd";
+  return currentSource.id;
 }
 
 export default function App() {
@@ -150,12 +201,41 @@ export default function App() {
     localTrackPath?: string,
     sceneVideo?: BackgroundVideoSummary
   ) => {
+    const previousTarget = getRollbackSourceTarget(tikpalState);
     const nextState = await sendSourceSwitch(target, radioStationId, localTrackPath, sceneVideo);
+
+    if (isExternalHandoffTarget(target) && !isSourceHandoffReady(nextState, target)) {
+      const deadline = Date.now() + EXTERNAL_HANDOFF_TIMEOUT_MS;
+      let latestState = nextState;
+
+      while (Date.now() < deadline) {
+        await delay(EXTERNAL_HANDOFF_POLL_MS);
+        const refreshedState = await refresh();
+        if (!refreshedState) continue;
+        latestState = refreshedState;
+        if (isSourceHandoffReady(latestState, target)) {
+          await refreshRoomExperience();
+          return latestState;
+        }
+      }
+
+      try {
+        await sendSourceSwitch(previousTarget);
+        if (previousTarget !== "scene") {
+          await refreshRoomExperience();
+        }
+      } catch {
+        await refresh();
+      }
+
+      throw new Error(`No ${getSourceLabel(target)} connection detected. Returned to ${getSourceLabel(previousTarget)}.`);
+    }
+
     if (target !== "scene") {
       await refreshRoomExperience();
     }
     return nextState;
-  }, [refreshRoomExperience, sendSourceSwitch]);
+  }, [refresh, refreshRoomExperience, sendSourceSwitch, tikpalState.audio.currentSource.connectionState, tikpalState.audio.currentSource.id]);
 
   async function handleSceneSoundEnabledChange(enabled: boolean) {
     if (sceneSoundPending) return;
@@ -287,7 +367,9 @@ export default function App() {
         roomExperience={roomExperience}
         status={tikpalStatus}
         onExperienceAction={handleRoomExperienceAction}
-        onPlaybackRefresh={() => refresh()}
+        onPlaybackRefresh={async () => {
+          await refresh();
+        }}
         onReturnAmbient={returnAmbient}
       />
       <QuickSettingsOverlay

@@ -89,6 +89,24 @@ const ACRCLOUD_ACCESS_SECRET = process.env.TIKPAL_ACRCLOUD_ACCESS_SECRET ?? "";
 const BLUETOOTH_CAPTURE_COMMAND = process.env.TIKPAL_BLUETOOTH_CAPTURE_COMMAND ?? "";
 const AIRPLAY_CAPTURE_COMMAND = process.env.TIKPAL_AIRPLAY_CAPTURE_COMMAND ?? "";
 const AIRPLAY_ARTWORK_ROOT = resolve(process.env.TIKPAL_AIRPLAY_ARTWORK_ROOT ?? "/var/local/www/imagesw/airplay-covers");
+const SCENE_CONTEXT_GEO_URL = (process.env.TIKPAL_SCENE_CONTEXT_GEO_URL ?? "https://ipapi.co/json/").trim();
+const SCENE_CONTEXT_GEO_TIMEOUT_MS_RAW = Number(process.env.TIKPAL_SCENE_CONTEXT_GEO_TIMEOUT_MS ?? 3000);
+const SCENE_CONTEXT_GEO_TIMEOUT_MS = Number.isFinite(SCENE_CONTEXT_GEO_TIMEOUT_MS_RAW) && SCENE_CONTEXT_GEO_TIMEOUT_MS_RAW > 0
+  ? SCENE_CONTEXT_GEO_TIMEOUT_MS_RAW
+  : 3000;
+const SCENE_CONTEXT_GEO_CACHE_MS_RAW = Number(process.env.TIKPAL_SCENE_CONTEXT_GEO_CACHE_MS ?? 3_600_000);
+const SCENE_CONTEXT_GEO_CACHE_MS = Number.isFinite(SCENE_CONTEXT_GEO_CACHE_MS_RAW) && SCENE_CONTEXT_GEO_CACHE_MS_RAW >= 60_000
+  ? SCENE_CONTEXT_GEO_CACHE_MS_RAW
+  : 3_600_000;
+const SCENE_CONTEXT_WEATHER_URL = (process.env.TIKPAL_SCENE_CONTEXT_WEATHER_URL ?? "https://api.open-meteo.com/v1/forecast").trim();
+const SCENE_CONTEXT_WEATHER_TIMEOUT_MS_RAW = Number(process.env.TIKPAL_SCENE_CONTEXT_WEATHER_TIMEOUT_MS ?? 3000);
+const SCENE_CONTEXT_WEATHER_TIMEOUT_MS = Number.isFinite(SCENE_CONTEXT_WEATHER_TIMEOUT_MS_RAW) && SCENE_CONTEXT_WEATHER_TIMEOUT_MS_RAW > 0
+  ? SCENE_CONTEXT_WEATHER_TIMEOUT_MS_RAW
+  : 3000;
+const SCENE_CONTEXT_WEATHER_CACHE_MS_RAW = Number(process.env.TIKPAL_SCENE_CONTEXT_WEATHER_CACHE_MS ?? 900_000);
+const SCENE_CONTEXT_WEATHER_CACHE_MS = Number.isFinite(SCENE_CONTEXT_WEATHER_CACHE_MS_RAW) && SCENE_CONTEXT_WEATHER_CACHE_MS_RAW >= 60_000
+  ? SCENE_CONTEXT_WEATHER_CACHE_MS_RAW
+  : 900_000;
 const BLUETOOTH_CAPTURE_DURATION_SECONDS = Number(process.env.TIKPAL_BLUETOOTH_CAPTURE_DURATION_SECONDS ?? 10);
 const BLUETOOTH_RECOGNITION_SETTLE_MS = Number(process.env.TIKPAL_BLUETOOTH_RECOGNITION_SETTLE_MS ?? 4000);
 const BLUETOOTH_RECOGNITION_RETRY_MS = Number(process.env.TIKPAL_BLUETOOTH_RECOGNITION_RETRY_MS ?? 45000);
@@ -136,6 +154,7 @@ const PLAYBACK_MODES = new Set(["sequence", "repeat_one", "shuffle"]);
 const ROOM_MODES = new Set(["focus", "calm", "sleep", "hifi"]);
 const ROOM_SESSION_PHASES = new Set(["idle", "preparing", "active", "windDown"]);
 const REMOTE_SOURCE_TARGETS = new Set(["mpd", "radio", "spotify", "bluetooth", "airplay", "upnp"]);
+const COMMAND_HANDOFF_SOURCE_TARGETS = new Set(["spotify", "bluetooth", "airplay", "upnp"]);
 const REMOTE_ALLOWED_ACTIONS = [
   "playback.play_pause",
   "playback.play",
@@ -285,6 +304,12 @@ let displayBrightnessRefreshPromise = null;
 let tikpalStateSnapshotCache = null;
 let tikpalStateSnapshotRefreshPromise = null;
 let tikpalStateSnapshotRefreshTimer = null;
+let tikpalStateSnapshotRefreshQueued = false;
+let tikpalStateSnapshotGeneration = 0;
+let sceneContextGeoCache = null;
+let sceneContextGeoRefreshPromise = null;
+let sceneContextWeatherCache = null;
+let sceneContextWeatherRefreshPromise = null;
 
 const system = {
   network: {
@@ -451,6 +476,221 @@ function getLocalMinutesForTimeZone(date, timeZone) {
   const hour = Number(parts.find((part) => part.type === "hour")?.value ?? 0) % 24;
   const minute = Number(parts.find((part) => part.type === "minute")?.value ?? 0);
   return hour * 60 + minute;
+}
+
+function getSceneDayPart(hour) {
+  if (hour >= 5 && hour < 12) return "morning";
+  if (hour >= 12 && hour < 17) return "afternoon";
+  if (hour >= 17 && hour < 22) return "evening";
+  return "night";
+}
+
+function normalizeGeoText(value, maxLength = 48) {
+  const text = String(value ?? "").trim().replace(/\s+/g, " ");
+  return text ? text.slice(0, maxLength) : "";
+}
+
+function normalizeCoordinate(value, { min, max }) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < min || numeric > max) return null;
+  return numeric;
+}
+
+function normalizeIpGeoBody(body) {
+  if (!body || body.success === false || body.status === "fail") return null;
+
+  const city = normalizeGeoText(body.city);
+  const region = normalizeGeoText(body.region ?? body.regionName);
+  const country = normalizeGeoText(body.country_name ?? body.country);
+  const countryCode = normalizeGeoText(body.country_code ?? body.countryCode, 8).toUpperCase() || null;
+  const timeZone = normalizeTimeZone(body.timezone ?? body.time_zone);
+  const latitude = normalizeCoordinate(body.latitude ?? body.lat, { min: -90, max: 90 });
+  const longitude = normalizeCoordinate(body.longitude ?? body.lon, { min: -180, max: 180 });
+  const locationLabel = city || region || country || null;
+
+  if (!locationLabel && !countryCode && !timeZone && latitude === null && longitude === null) return null;
+  return {
+    locationLabel,
+    countryCode,
+    timeZone,
+    latitude,
+    longitude
+  };
+}
+
+function getWeatherConditionFromCode(code, precipitation) {
+  if (Number.isFinite(precipitation) && precipitation > 0.1) return "rainy";
+  if (!Number.isFinite(code)) return null;
+  if (code >= 95) return "stormy";
+  if (code >= 71 && code <= 86) return "snowy";
+  if ((code >= 51 && code <= 67) || (code >= 80 && code <= 82)) return "rainy";
+  if (code === 45 || code === 48) return "foggy";
+  if (code >= 1 && code <= 3) return "cloudy";
+  if (code === 0) return "clear";
+  return null;
+}
+
+function getWeatherLabel(condition) {
+  switch (condition) {
+    case "clear":
+      return "Clear";
+    case "cloudy":
+      return "Cloudy";
+    case "foggy":
+      return "Foggy";
+    case "rainy":
+      return "Rainy";
+    case "snowy":
+      return "Snowy";
+    case "stormy":
+      return "Stormy";
+    default:
+      return null;
+  }
+}
+
+function normalizeWeatherBody(body) {
+  const current = body?.current ?? body?.current_weather ?? {};
+  const weatherCode = Number(current.weather_code ?? current.weathercode);
+  const precipitationValues = [
+    current.precipitation,
+    current.rain,
+    current.showers,
+    current.snowfall
+  ].map(Number).filter(Number.isFinite);
+  const precipitation = precipitationValues.reduce((total, value) => total + value, 0);
+  const condition = getWeatherConditionFromCode(weatherCode, precipitation);
+  const label = getWeatherLabel(condition);
+  if (!condition || !label) return null;
+  return {
+    condition,
+    label,
+    weatherCode: Number.isFinite(weatherCode) ? weatherCode : null,
+    precipitation,
+    source: "ip_weather"
+  };
+}
+
+function buildWeatherUrl(latitude, longitude, timeZone) {
+  const url = new URL(SCENE_CONTEXT_WEATHER_URL);
+  url.searchParams.set("latitude", latitude.toFixed(4));
+  url.searchParams.set("longitude", longitude.toFixed(4));
+  url.searchParams.set("current", "weather_code,precipitation,rain,showers,snowfall");
+  url.searchParams.set("timezone", timeZone || "auto");
+  return url.toString();
+}
+
+async function resolveSceneContextGeo() {
+  const now = Date.now();
+  if (sceneContextGeoCache && sceneContextGeoCache.expiresAt > now) {
+    return sceneContextGeoCache.value;
+  }
+  if (sceneContextGeoRefreshPromise) {
+    return sceneContextGeoRefreshPromise;
+  }
+  if (!SCENE_CONTEXT_GEO_URL) {
+    return null;
+  }
+
+  sceneContextGeoRefreshPromise = (async () => {
+    try {
+      const { response, body } = await fetchJsonWithTimeout(SCENE_CONTEXT_GEO_URL, {
+        timeoutMs: SCENE_CONTEXT_GEO_TIMEOUT_MS,
+        headers: {
+          Accept: "application/json",
+          "User-Agent": `Tikpal/${APP_VERSION}`
+        }
+      });
+      const value = response.ok ? normalizeIpGeoBody(body) : null;
+      sceneContextGeoCache = {
+        expiresAt: now + SCENE_CONTEXT_GEO_CACHE_MS,
+        value
+      };
+      return value;
+    } catch {
+      sceneContextGeoCache = {
+        expiresAt: now + Math.min(SCENE_CONTEXT_GEO_CACHE_MS, 600_000),
+        value: null
+      };
+      return null;
+    } finally {
+      sceneContextGeoRefreshPromise = null;
+    }
+  })();
+
+  return sceneContextGeoRefreshPromise;
+}
+
+async function resolveSceneContextWeather(geo, timeZone) {
+  if (!geo || geo.latitude === null || geo.longitude === null || !SCENE_CONTEXT_WEATHER_URL) {
+    return null;
+  }
+
+  const cacheKey = [
+    geo.latitude.toFixed(2),
+    geo.longitude.toFixed(2),
+    timeZone
+  ].join(":");
+  const now = Date.now();
+  if (sceneContextWeatherCache?.key === cacheKey && sceneContextWeatherCache.expiresAt > now) {
+    return sceneContextWeatherCache.value;
+  }
+  if (sceneContextWeatherRefreshPromise?.key === cacheKey) {
+    return sceneContextWeatherRefreshPromise.promise;
+  }
+
+  const promise = (async () => {
+    try {
+      const { response, body } = await fetchJsonWithTimeout(buildWeatherUrl(geo.latitude, geo.longitude, timeZone), {
+        timeoutMs: SCENE_CONTEXT_WEATHER_TIMEOUT_MS,
+        headers: {
+          Accept: "application/json",
+          "User-Agent": `Tikpal/${APP_VERSION}`
+        }
+      });
+      const value = response.ok ? normalizeWeatherBody(body) : null;
+      sceneContextWeatherCache = {
+        key: cacheKey,
+        expiresAt: now + SCENE_CONTEXT_WEATHER_CACHE_MS,
+        value
+      };
+      return value;
+    } catch {
+      sceneContextWeatherCache = {
+        key: cacheKey,
+        expiresAt: now + Math.min(SCENE_CONTEXT_WEATHER_CACHE_MS, 300_000),
+        value: null
+      };
+      return null;
+    } finally {
+      sceneContextWeatherRefreshPromise = null;
+    }
+  })();
+
+  sceneContextWeatherRefreshPromise = { key: cacheKey, promise };
+  return promise;
+}
+
+async function buildSceneContextPayload(searchParams = new URLSearchParams()) {
+  const requestedTimeZone = normalizeTimeZone(searchParams.get("timeZone"));
+  const geo = await resolveSceneContextGeo();
+  const timeZone = geo?.timeZone ?? requestedTimeZone ?? DEFAULT_NIGHT_SCHEDULE.timeZone;
+  const localMinutes = getLocalMinutesForTimeZone(new Date(), timeZone);
+  const localHour = Math.floor(localMinutes / 60);
+  const locationLabel = geo?.locationLabel ?? null;
+  const source = locationLabel ? "ip" : requestedTimeZone ? "timezone" : "fallback";
+  const weather = await resolveSceneContextWeather(geo, timeZone);
+
+  return {
+    timeZone,
+    dayPart: getSceneDayPart(localHour),
+    localHour,
+    locationLabel,
+    countryCode: geo?.countryCode ?? null,
+    weather,
+    source,
+    updatedAt: new Date().toISOString()
+  };
 }
 
 function isWithinNightWindow(date, schedule) {
@@ -3394,7 +3634,7 @@ async function getAirplaySourceStatus({ readyCommand, activeCommand, labelComman
     supported,
     available: supported ? (armed ? ready || receiverActive || rendererActive || armed : true) : false,
     armed: airplayArmed,
-    connected: armed && receiverActive && rendererActive,
+    connected: armed && rendererActive,
     connectedLabel: null,
     advertisedLabel: label.trim() || null
   };
@@ -3755,6 +3995,7 @@ function buildFastTrackMetadata({ title, artist, album, file }) {
 
 async function getMpcSnapshot(options = {}) {
   const includeSlowRuntimeStatus = options.includeSlowRuntimeStatus !== false;
+  const includeSourceRuntimeStatus = options.includeSourceRuntimeStatus ?? includeSlowRuntimeStatus;
   const [currentRaw, statusRaw, statsRaw] = await Promise.all([
     runMpc(["--format", "%title%\t%artist%\t%album%\t%file%\t%time%", "current"], { allowFailure: true }),
     runMpc(["status"], { allowFailure: true }),
@@ -3768,7 +4009,7 @@ async function getMpcSnapshot(options = {}) {
   const nextSystem = includeSlowRuntimeStatus
     ? await getMpcSystemSnapshot(statusRaw, statsRaw)
     : getCachedMpcSystemSnapshot(statusRaw, statsRaw);
-  const audio = includeSlowRuntimeStatus
+  const audio = includeSourceRuntimeStatus
     ? await getMpcAudioSnapshot(file)
     : buildMinimalMpcAudioSnapshot(file);
   const queuePreview = await getMpcQueuePreview(status);
@@ -4329,8 +4570,9 @@ async function collectTikpalStateSnapshot(options = {}) {
   }
 
   const includeSlowRuntimeStatus = options.includeSlowRuntimeStatus !== false;
+  const includeSourceRuntimeStatus = options.includeSourceRuntimeStatus ?? includeSlowRuntimeStatus;
   const snapshot = API_MODE === "mpc"
-    ? await getMpcSnapshot({ includeSlowRuntimeStatus })
+    ? await getMpcSnapshot({ includeSlowRuntimeStatus, includeSourceRuntimeStatus })
     : {
         playback: getPlayback(),
         system: await getMockSystemSnapshot(),
@@ -4357,11 +4599,20 @@ function requestTikpalStateSnapshotRefresh({ force = false } = {}) {
     return null;
   }
   if (tikpalStateSnapshotRefreshPromise) {
+    if (force) {
+      tikpalStateSnapshotRefreshQueued = true;
+    }
     return tikpalStateSnapshotRefreshPromise;
   }
 
+  const refreshGeneration = tikpalStateSnapshotGeneration;
   tikpalStateSnapshotRefreshPromise = collectTikpalStateSnapshot({ includeSlowRuntimeStatus: true })
-    .then((state) => cacheTikpalStateSnapshot(state))
+    .then((state) => {
+      if (refreshGeneration !== tikpalStateSnapshotGeneration) {
+        return readCachedTikpalState();
+      }
+      return cacheTikpalStateSnapshot(state);
+    })
     .catch((error) => {
       const message = error instanceof Error ? error.message : "unknown error";
       console.warn(`tikpal-api state snapshot refresh failed: ${message}`);
@@ -4372,19 +4623,25 @@ function requestTikpalStateSnapshotRefresh({ force = false } = {}) {
     })
     .finally(() => {
       tikpalStateSnapshotRefreshPromise = null;
+      if (tikpalStateSnapshotRefreshQueued) {
+        tikpalStateSnapshotRefreshQueued = false;
+        void requestTikpalStateSnapshotRefresh({ force: true });
+      }
     });
 
   return tikpalStateSnapshotRefreshPromise;
 }
 
-async function refreshTikpalStateSnapshotAfterMutation() {
+async function refreshTikpalStateSnapshotAfterMutation(options = {}) {
   if (API_MODE !== "mpc") {
     return await collectTikpalStateSnapshot();
   }
 
+  tikpalStateSnapshotGeneration += 1;
   try {
     const state = await collectTikpalStateSnapshot({
       includeSlowRuntimeStatus: false,
+      includeSourceRuntimeStatus: options.includeSourceRuntimeStatus === true,
       skipExperienceReconcile: true
     });
     cacheTikpalStateSnapshot(state);
@@ -6750,6 +7007,11 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "GET" && url.pathname === "/api/v1/scene/context") {
+      sendJson(response, 200, await buildSceneContextPayload(url.searchParams));
+      return;
+    }
+
     if (request.method === "GET" && url.pathname === "/api/v1/playback/status") {
       sendJson(response, 200, await getPlaybackSnapshot());
       return;
@@ -6897,7 +7159,9 @@ const server = http.createServer(async (request, response) => {
     if (request.method === "POST" && url.pathname === "/api/v1/audio/source") {
       const action = await readJson(request);
       await applySourceSwitch(action);
-      sendJson(response, 200, await refreshTikpalStateSnapshotAfterMutation());
+      sendJson(response, 200, await refreshTikpalStateSnapshotAfterMutation({
+        includeSourceRuntimeStatus: COMMAND_HANDOFF_SOURCE_TARGETS.has(action?.target)
+      }));
       return;
     }
 

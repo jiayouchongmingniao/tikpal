@@ -354,6 +354,31 @@ function sourceTabExpression(sourceId, { selected, active }) {
   `;
 }
 
+function sourceHandoffExpression(sourceId) {
+  return `
+    (() => {
+      const card = document.querySelector('[data-source-handoff-waiting="${sourceId}"]');
+      return Boolean(card && card.textContent?.includes('Waiting for connection'));
+    })()
+  `;
+}
+
+async function switchPlayerSourceAndExpectHandoff(client, sourceId, sourceLabel) {
+  await evaluate(
+    client,
+    `
+      (() => {
+        const target = document.querySelector('[data-source-item="${sourceId}"]');
+        target?.click();
+        return Boolean(target);
+      })()
+    `
+  );
+  await expectEventually(client, sourceHandoffExpression(sourceId), `${sourceLabel} source shows waiting handoff card`);
+  await expectEventually(client, `document.querySelector('.source-line span')?.textContent?.includes('${sourceLabel}') === true`, `${sourceLabel} source connects after handoff`);
+  await expectEventually(client, sourceTabExpression(sourceId, { selected: true, active: true }), `${sourceLabel} source is selected and active after handoff`);
+}
+
 function sourceHighlightExpression(theme) {
   return `
     (() => {
@@ -1822,18 +1847,10 @@ try {
   await navigate(client, `${APP_URL}?mode=player`);
   await expect(client, sourceTabExpression("mpd", { selected: true, active: true }), "library source starts selected and active");
 
-  await evaluate(
-    client,
-    `
-      (() => {
-        const target = document.querySelector('[data-source-item="bluetooth"]');
-        target?.click();
-        return Boolean(target);
-      })()
-    `
-  );
-  await expectEventually(client, "document.querySelector('.source-line span')?.textContent?.includes('Bluetooth') === true", "single tap on bluetooth source switches source");
-  await expectEventually(client, sourceTabExpression("bluetooth", { selected: true, active: true }), "bluetooth source is selected and active after tap");
+  await switchPlayerSourceAndExpectHandoff(client, "spotify", "Spotify");
+  await switchPlayerSourceAndExpectHandoff(client, "airplay", "AirPlay");
+  await switchPlayerSourceAndExpectHandoff(client, "bluetooth", "Bluetooth");
+  await switchPlayerSourceAndExpectHandoff(client, "upnp", "DLNA");
 
   await evaluate(
     client,

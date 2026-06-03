@@ -75,6 +75,7 @@ const primaryPanels: Array<{ id: PrimaryPanelId; label: string; Icon: LucideIcon
   { id: "bluetooth", label: "Bluetooth", Icon: Bluetooth },
   { id: "upnp", label: "DLNA", Icon: Network }
 ];
+const handoffSourceIds = new Set(["spotify", "airplay", "bluetooth", "upnp"]);
 
 const storageTabs: Array<{ id: LibraryFilterId; label: string; Icon: LucideIcon }> = [
   { id: "local", label: "Local", Icon: HardDrive },
@@ -121,6 +122,7 @@ function subCategorySortIndex(categoryId: AudioLibraryCategoryId, label: string)
 }
 
 function sourceStatusLabel(source: AudioState["currentSource"] | undefined, pending: boolean) {
+  if (pending && isHandoffSourceId(source?.id)) return "Waiting for connection";
   if (pending) return "Opening";
   if (!source) return "Unavailable";
   if (source.active) return "Active";
@@ -129,6 +131,22 @@ function sourceStatusLabel(source: AudioState["currentSource"] | undefined, pend
   if (source.connectionState === "blocked") return "Closed";
   if (source.availability === "unavailable") return "Unavailable";
   return "Ready";
+}
+
+function isHandoffSourceId(sourceId: string | null | undefined): sourceId is ExternalPanelId {
+  return Boolean(sourceId && handoffSourceIds.has(sourceId));
+}
+
+function getHandoffSourceLabel(panelId: ExternalPanelId, source: AudioState["currentSource"] | undefined) {
+  if (source?.label) return source.label;
+  return primaryPanels.find((entry) => entry.id === panelId)?.label ?? "Source";
+}
+
+function getPanelForSourceId(sourceId: string): PrimaryPanelId {
+  if (sourceId === "radio" || sourceId === "spotify" || sourceId === "airplay" || sourceId === "bluetooth" || sourceId === "upnp") {
+    return sourceId;
+  }
+  return "library";
 }
 
 function clampVolumePercent(value: number) {
@@ -513,6 +531,7 @@ export function PlayerOverlay({
 
   async function switchSource(target: SourceSwitchTarget, radioStationId?: string, localTrackPath?: string) {
     if (status.pending || pendingSource) return;
+    const rollbackPanel = getPanelForSourceId(currentSource.id);
     setPendingSource(target);
     setSourceError(null);
     setSourceHint(null);
@@ -534,6 +553,9 @@ export function PlayerOverlay({
         setSourceHint(`${nextSource?.label ?? target} ready.`);
       }
     } catch (error) {
+      if (isHandoffSourceId(target)) {
+        setSelectedPrimaryPanel(rollbackPanel);
+      }
       setSourceError(error instanceof Error ? error.message : "Source switch failed");
     } finally {
       setPendingSource(null);
@@ -745,12 +767,37 @@ export function PlayerOverlay({
             onClick={() => void switchSource(panelId)}
           >
             {sourcePending ? <LoaderCircle size={18} className="is-spinning" /> : <Icon size={18} />}
-            <span>{externalSourceActionLabel(panelId, Boolean(source?.active))}</span>
+            <span>{sourcePending && isHandoffSourceId(panelId) ? "Waiting" : externalSourceActionLabel(panelId, Boolean(source?.active))}</span>
           </button>
         </div>
       </section>
     );
   }
+
+  function renderHandoffPanel(panelId: ExternalPanelId) {
+    const source = audio.sources.find((entry) => entry.id === panelId);
+    const sourceLabel = getHandoffSourceLabel(panelId, source);
+
+    return (
+      <section className="external-source-panel" aria-label={`${sourceLabel} connection handoff`}>
+        <div
+          className="dlna-handoff-card player-dlna-handoff-card"
+          role="status"
+          data-source-handoff-waiting={panelId}
+          data-dlna-handoff-waiting={panelId === "upnp" ? "" : undefined}
+        >
+          <span className="dlna-handoff-icon" aria-hidden="true">
+            <LoaderCircle size={26} className="is-spinning" />
+          </span>
+          <span className="source-panel-kicker">{sourceLabel}</span>
+          <strong>Waiting for connection</strong>
+          <p>Tikpal is open for {sourceLabel}. This panel will return when the device connects or the handoff times out.</p>
+        </div>
+      </section>
+    );
+  }
+
+  const handoffPendingPanel = isHandoffSourceId(pendingSource) ? pendingSource : null;
 
   return (
     <section className={`overlay player-overlay ${active ? "is-active" : ""}`} aria-label="Player controls" aria-hidden={!active}>
@@ -876,30 +923,32 @@ export function PlayerOverlay({
             </div>
           </div>
 
-          <nav className="library-primary-tabs" aria-label="Audio sources" data-source-panel>
-            {primaryPanels.map((panel) => {
-              const Icon = panel.Icon;
-              const isSelected = selectedPrimaryPanel === panel.id;
-              const isPending = pendingSource === panel.id;
-              return (
-                <button
-                  className={`library-primary-tab ${isSelected ? "is-selected" : ""} ${panel.id === currentSource.id || (panel.id === "library" && currentSource.id === "mpd") ? "is-active" : ""}`}
-                  key={panel.id}
-                  type="button"
-                  aria-pressed={isSelected}
-                  data-source-item={panel.id === "library" ? "mpd" : panel.id}
-                  data-gesture-control
-                  onClick={() => handlePrimaryPanelSelect(panel.id)}
-                >
-                  <Icon size={20} />
-                  <strong>{panel.label}</strong>
-                  <span>{isPending ? "Opening" : panelMeta(panel.id)}</span>
-                </button>
-              );
-            })}
-          </nav>
+          {!handoffPendingPanel ? (
+            <nav className="library-primary-tabs" aria-label="Audio sources" data-source-panel>
+              {primaryPanels.map((panel) => {
+                const Icon = panel.Icon;
+                const isSelected = selectedPrimaryPanel === panel.id;
+                const isPending = pendingSource === panel.id;
+                return (
+                  <button
+                    className={`library-primary-tab ${isSelected ? "is-selected" : ""} ${panel.id === currentSource.id || (panel.id === "library" && currentSource.id === "mpd") ? "is-active" : ""}`}
+                    key={panel.id}
+                    type="button"
+                    aria-pressed={isSelected}
+                    data-source-item={panel.id === "library" ? "mpd" : panel.id}
+                    data-gesture-control
+                    onClick={() => handlePrimaryPanelSelect(panel.id)}
+                  >
+                    <Icon size={20} />
+                    <strong>{panel.label}</strong>
+                    <span>{isPending ? "Opening" : panelMeta(panel.id)}</span>
+                  </button>
+                );
+              })}
+            </nav>
+          ) : null}
 
-          {selectedPrimaryPanel === "library" ? (
+          {handoffPendingPanel ? renderHandoffPanel(handoffPendingPanel) : selectedPrimaryPanel === "library" ? (
             <>
               <nav className="library-storage-tabs" aria-label="Library storage">
                 {storageTabs.map((storage) => {

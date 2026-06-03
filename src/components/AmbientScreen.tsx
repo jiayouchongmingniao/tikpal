@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Bluetooth, Captions, CaptionsOff, Cast, GalleryHorizontalEnd, Heart, LibraryBig, ListMusic, ListPlus, LoaderCircle, Moon, Music2, Network, Pause, Play, Radio as RadioIcon, Repeat1, Settings, Shuffle, SkipBack, SkipForward, SlidersHorizontal, SunMedium, Target, Volume2, VolumeX, Waves } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { fetchBackgroundVideos } from "../api/tikpalClient";
+import { fetchBackgroundVideos, fetchSceneContext } from "../api/tikpalClient";
 import { EqVisualScene } from "./EqVisualScene";
 import { FlameScene } from "./FlameScene";
 import { roomModeOptions } from "../roomExperienceTruth";
 import type { TikpalDataStatus } from "../hooks/useTikpalState";
-import type { AudioState, BackgroundVideoSummary, FontTheme, LyricsFontSize, LyricsState, PlaybackActionType, PlaybackMode, PlaybackSummary, RoomExperienceActionRequest, RoomExperienceState, RoomMode, SourceSwitchTarget, SystemActionType, SystemState, TikpalState } from "../types";
+import type { AudioState, BackgroundVideoSummary, FontTheme, LyricsFontSize, LyricsState, PlaybackActionType, PlaybackMode, PlaybackSummary, RoomExperienceActionRequest, RoomExperienceState, RoomMode, SceneContextSummary, SceneDayPart, SourceSwitchTarget, SystemActionType, SystemState, TikpalState } from "../types";
 
 interface AmbientScreenProps {
   hudVisible: boolean;
@@ -43,6 +43,7 @@ type AmbientAdjustChannel = "volume" | "brightness";
 type AmbientMusicSourceTarget = Exclude<SourceSwitchTarget, "audio" | "scene">;
 const BACKGROUND_VIDEO_REFRESH_MS = 30_000;
 const BACKGROUND_VIDEO_REFRESH_EVENT = "tikpal:background-videos-refresh";
+const SCENE_CONTEXT_REFRESH_MS = 30 * 60_000;
 const SOURCE_PICKER_AUTO_CLOSE_MS = 5_000;
 
 interface DragState {
@@ -82,6 +83,16 @@ const ambientMusicSources: Array<{ id: AmbientMusicSourceTarget; label: string; 
   { id: "bluetooth", label: "Bluetooth", Icon: Bluetooth },
   { id: "upnp", label: "DLNA", Icon: Network }
 ];
+const ambientHandoffSourceTargets = new Set<AmbientMusicSourceTarget>(["spotify", "airplay", "bluetooth", "upnp"]);
+
+const ambientClockModeWord = {
+  focus: "focused",
+  calm: "calm",
+  sleep: "quiet",
+  hifi: "listening room"
+} satisfies Record<RoomMode, string>;
+
+const sceneCopyStopWords = new Set(["loop", "room", "scene", "video", "window"]);
 
 function clampPercent(value: number) {
   return Math.max(0, Math.min(100, Math.round(value)));
@@ -92,6 +103,7 @@ function getAmbientSourceLabel(sourceId: SourceSwitchTarget) {
 }
 
 function getAmbientSourceStatusLabel(source: AudioState["currentSource"] | undefined, pending: boolean) {
+  if (pending && source?.id && ambientHandoffSourceTargets.has(source.id as AmbientMusicSourceTarget)) return "Waiting for connection";
   if (pending) return "Opening";
   if (!source) return "Unavailable";
   if (source.active) return "Active";
@@ -102,8 +114,73 @@ function getAmbientSourceStatusLabel(source: AudioState["currentSource"] | undef
   return "Ready";
 }
 
+function isAmbientHandoffSourceTarget(sourceId: AmbientMusicSourceTarget | null): sourceId is AmbientMusicSourceTarget {
+  return sourceId !== null && ambientHandoffSourceTargets.has(sourceId);
+}
+
+function getAmbientHandoffSourceLabel(sourceId: AmbientMusicSourceTarget, source: AudioState["currentSource"] | undefined) {
+  if (source?.label) return source.label;
+  if (sourceId === "spotify") return "Spotify Connect";
+  return getAmbientSourceLabel(sourceId);
+}
+
 function videoBelongsToRoomMode(video: BackgroundVideoSummary, mode: RoomMode) {
   return mode !== "hifi" && Boolean(video.src) && Array.isArray(video.roomModes) && video.roomModes.includes(mode);
+}
+
+function getSceneCopyKeyword(video: BackgroundVideoSummary) {
+  if (!video.src) return "";
+
+  const keyword = video.label
+    .replace(/[_-]+/g, " ")
+    .split(/\s+/)
+    .map((word) => word.trim())
+    .find((word) => word && !sceneCopyStopWords.has(word.toLowerCase()));
+
+  if (!keyword) return "";
+  return `${keyword.charAt(0).toUpperCase()}${keyword.slice(1).toLowerCase()}`;
+}
+
+function getSceneDayPartForHour(hour: number): SceneDayPart {
+  if (hour >= 5 && hour < 12) return "morning";
+  if (hour >= 12 && hour < 17) return "afternoon";
+  if (hour >= 17 && hour < 22) return "evening";
+  return "night";
+}
+
+function getLocalHourForTimeZone(timeZone: string) {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      hour: "2-digit",
+      hour12: false
+    }).formatToParts(new Date());
+    return Number(parts.find((part) => part.type === "hour")?.value ?? new Date().getHours()) % 24;
+  } catch {
+    return new Date().getHours();
+  }
+}
+
+function getSceneDayPart(sceneContext: SceneContextSummary | null, timeZone: string) {
+  return sceneContext?.dayPart ?? getSceneDayPartForHour(getLocalHourForTimeZone(timeZone));
+}
+
+function getAmbientClockSceneCopy(
+  video: BackgroundVideoSummary,
+  mode: RoomMode,
+  sceneContext: SceneContextSummary | null,
+  timeZone: string
+) {
+  const dayPart = getSceneDayPart(sceneContext, timeZone);
+  const contextKeyword = sceneContext?.weather?.label ?? getSceneCopyKeyword(video);
+
+  if (mode === "hifi") {
+    return contextKeyword ? `${contextKeyword} Hi-Fi listening ${dayPart}` : `Hi-Fi listening ${dayPart}`;
+  }
+
+  const modeCopy = ambientClockModeWord[mode];
+  if (contextKeyword) return `${contextKeyword} ${modeCopy} ${dayPart}`;
+  return `${modeCopy.charAt(0).toUpperCase()}${modeCopy.slice(1)} ${dayPart}`;
 }
 
 function findActiveLyricsLineIndex(lyrics: LyricsState, elapsedSeconds: number | null) {
@@ -216,8 +293,11 @@ export function AmbientScreen({
   const [backgroundVideoIndex, setBackgroundVideoIndex] = useState(0);
   const [frozenLyricsLineIndex, setFrozenLyricsLineIndex] = useState<number | null>(null);
   const [staticLyricsLineIndex, setStaticLyricsLineIndex] = useState(0);
+  const [sceneContext, setSceneContext] = useState<SceneContextSummary | null>(null);
   const currentBackgroundVideo = backgroundVideos[backgroundVideoIndex] ?? DEFAULT_BACKGROUND_VIDEO;
   const isHifiMode = roomExperience.mode === "hifi";
+  const activeTimeZone = roomExperience.nightSchedule.timeZone;
+  const ambientClockSceneCopy = getAmbientClockSceneCopy(currentBackgroundVideo, roomExperience.mode, sceneContext, activeTimeZone);
   const modeBackgroundVideos = useMemo(() => (
     backgroundVideos.filter((video) => videoBelongsToRoomMode(video, roomExperience.mode))
   ), [backgroundVideos, roomExperience.mode]);
@@ -281,6 +361,14 @@ export function AmbientScreen({
   const currentAmbientSourceLabel = currentAmbientSource
     ? getAmbientSourceLabel(currentAmbientSource)
     : audio.currentSource.label;
+  const handoffPendingSource = isAmbientHandoffSourceTarget(pendingAmbientSource) ? pendingAmbientSource : null;
+  const handoffPendingSourceSummary = handoffPendingSource
+    ? audio.sources.find((entry) => entry.id === handoffPendingSource)
+    : undefined;
+  const handoffPendingSourceLabel = handoffPendingSource
+    ? getAmbientHandoffSourceLabel(handoffPendingSource, handoffPendingSourceSummary)
+    : "";
+  const ambientHudVisible = hudVisible || handoffPendingSource !== null;
 
   const refreshBackgroundVideos = useCallback((signal?: AbortSignal) => {
     void fetchBackgroundVideos(signal)
@@ -306,6 +394,30 @@ export function AmbientScreen({
         // Keep the currently mounted video list when the API is temporarily unavailable.
       });
   }, []);
+
+  useEffect(() => {
+    let active = true;
+    const controller = new AbortController();
+
+    setSceneContext(null);
+    const refreshSceneContext = (signal?: AbortSignal) => {
+      void fetchSceneContext(activeTimeZone, signal)
+        .then((payload) => {
+          if (active) setSceneContext(payload);
+        })
+        .catch(() => {
+          if (active) setSceneContext(null);
+        });
+    };
+
+    refreshSceneContext(controller.signal);
+    const interval = window.setInterval(() => refreshSceneContext(), SCENE_CONTEXT_REFRESH_MS);
+    return () => {
+      active = false;
+      controller.abort();
+      window.clearInterval(interval);
+    };
+  }, [activeTimeZone]);
 
   useEffect(() => {
     selectedBackgroundVideoSrcRef.current = currentBackgroundVideo.src;
@@ -496,7 +608,7 @@ export function AmbientScreen({
   }, [isHifiMode, sourcePickerOpenRequest]);
 
   useEffect(() => {
-    if (!sourcePickerOpen) return undefined;
+    if (!sourcePickerOpen || handoffPendingSource) return undefined;
 
     function handleDocumentPointerDown(event: PointerEvent) {
       if (sourcePickerRef.current?.contains(event.target as Node)) return;
@@ -515,7 +627,7 @@ export function AmbientScreen({
       document.removeEventListener("pointerdown", handleDocumentPointerDown);
       window.removeEventListener("keydown", handleSourcePickerKeyDown);
     };
-  }, [sourcePickerOpen]);
+  }, [handoffPendingSource, sourcePickerOpen]);
 
   function clearAdjustDismissTimer() {
     if (adjustDismissTimerRef.current !== null) {
@@ -771,7 +883,7 @@ export function AmbientScreen({
         title={`Source: ${currentAmbientSourceLabel}`}
         aria-expanded={sourcePickerOpen}
         data-ambient-source-toggle
-        tabIndex={hudVisible ? 0 : -1}
+        tabIndex={ambientHudVisible ? 0 : -1}
         disabled={status.pending || pendingAmbientSource !== null}
         onClick={handleAmbientSourceToggle}
       >
@@ -779,35 +891,51 @@ export function AmbientScreen({
       </button>
       {sourcePickerOpen ? (
         <div className="ambient-source-picker-popover" role="menu" aria-label="Audio source picker" data-ambient-source-picker>
-          <div className="ambient-source-picker-grid">
-            {ambientMusicSources.map(({ id, label, Icon }) => {
-              const source = audio.sources.find((entry) => entry.id === id);
-              const pending = pendingAmbientSource === id;
-              const active = audio.currentSource.id === id;
-              const disabled = status.pending
-                || pendingAmbientSource !== null
-                || source?.availability === "unavailable"
-                || source?.controllability === "status-only";
-              return (
-                <button
-                  className={`ambient-source-option ${active ? "is-active" : ""}`}
-                  type="button"
-                  role="menuitemradio"
-                  aria-checked={active}
-                  disabled={disabled}
-                  data-ambient-source-option={id}
-                  key={id}
-                  onClick={() => void handleAmbientSourceSelect(id)}
-                >
-                  <span className="ambient-source-option-icon" aria-hidden="true">
-                    {pending ? <LoaderCircle size={23} className="is-spinning" /> : <Icon size={23} strokeWidth={1.8} />}
-                  </span>
-                  <strong>{label}</strong>
-                  <span>{getAmbientSourceStatusLabel(source, pending)}</span>
-                </button>
-              );
-            })}
-          </div>
+          {handoffPendingSource ? (
+            <div
+              className="dlna-handoff-card ambient-dlna-handoff-card"
+              role="status"
+              data-source-handoff-waiting={handoffPendingSource}
+              data-dlna-handoff-waiting={handoffPendingSource === "upnp" ? "" : undefined}
+            >
+              <span className="dlna-handoff-icon" aria-hidden="true">
+                <LoaderCircle size={24} className="is-spinning" />
+              </span>
+              <span className="source-panel-kicker">{handoffPendingSourceLabel}</span>
+              <strong>Waiting for connection</strong>
+              <p>Tikpal is open for {handoffPendingSourceLabel}. This will close when the device connects or the handoff times out.</p>
+            </div>
+          ) : (
+            <div className="ambient-source-picker-grid">
+              {ambientMusicSources.map(({ id, label, Icon }) => {
+                const source = audio.sources.find((entry) => entry.id === id);
+                const pending = pendingAmbientSource === id;
+                const active = audio.currentSource.id === id;
+                const disabled = status.pending
+                  || pendingAmbientSource !== null
+                  || source?.availability === "unavailable"
+                  || source?.controllability === "status-only";
+                return (
+                  <button
+                    className={`ambient-source-option ${active ? "is-active" : ""}`}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={active}
+                    disabled={disabled}
+                    data-ambient-source-option={id}
+                    key={id}
+                    onClick={() => void handleAmbientSourceSelect(id)}
+                  >
+                    <span className="ambient-source-option-icon" aria-hidden="true">
+                      {pending ? <LoaderCircle size={23} className="is-spinning" /> : <Icon size={23} strokeWidth={1.8} />}
+                    </span>
+                    <strong>{label}</strong>
+                    <span>{getAmbientSourceStatusLabel(source, pending)}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
           {ambientSourceError ? <div className="ambient-source-error" role="status">{ambientSourceError}</div> : null}
         </div>
       ) : null}
@@ -816,7 +944,7 @@ export function AmbientScreen({
 
   return (
     <section
-      className={`ambient-screen ${hudVisible ? "is-hud-visible" : "is-hud-hidden"}`}
+      className={`ambient-screen ${ambientHudVisible ? "is-hud-visible" : "is-hud-hidden"}`}
       data-room-mode={roomExperience.mode}
       aria-label="Ambient flame screen"
       onWheelCapture={handleAmbientWheelCapture}
@@ -868,7 +996,7 @@ export function AmbientScreen({
       <div
         className={`ambient-transport ${isHifiMode ? "is-hifi" : "is-room-mode"}`}
         data-gesture-protected
-        aria-hidden={!hudVisible}
+        aria-hidden={!ambientHudVisible}
         onClick={(event) => event.stopPropagation()}
         onPointerDown={(event) => {
           event.stopPropagation();
@@ -886,7 +1014,7 @@ export function AmbientScreen({
               type="button"
               aria-label="Previous scene"
               title="Previous scene"
-              tabIndex={hudVisible ? 0 : -1}
+              tabIndex={ambientHudVisible ? 0 : -1}
               disabled={switchableBackgroundVideos.length <= 1}
               onClick={() => switchBackgroundVideo(-1)}
             >
@@ -902,7 +1030,7 @@ export function AmbientScreen({
                   aria-label="Sequence playback"
                   title="Sequence playback"
                   aria-pressed={playMode === "sequence"}
-                  tabIndex={hudVisible ? 0 : -1}
+                  tabIndex={ambientHudVisible ? 0 : -1}
                   disabled={isPlaybackPending}
                   onClick={() => handlePlayModeChange("sequence")}
                 >
@@ -914,7 +1042,7 @@ export function AmbientScreen({
                   aria-label="Repeat current track"
                   title="Repeat current track"
                   aria-pressed={playMode === "repeat_one"}
-                  tabIndex={hudVisible ? 0 : -1}
+                  tabIndex={ambientHudVisible ? 0 : -1}
                   disabled={isPlaybackPending}
                   onClick={() => handlePlayModeChange("repeat_one")}
                 >
@@ -926,7 +1054,7 @@ export function AmbientScreen({
                   aria-label="Shuffle playback"
                   title="Shuffle playback"
                   aria-pressed={playMode === "shuffle"}
-                  tabIndex={hudVisible ? 0 : -1}
+                  tabIndex={ambientHudVisible ? 0 : -1}
                   disabled={isPlaybackPending}
                   onClick={() => handlePlayModeChange("shuffle")}
                 >
@@ -939,7 +1067,7 @@ export function AmbientScreen({
                 type="button"
                 aria-label="Previous track"
                 title="Previous track"
-                tabIndex={hudVisible ? 0 : -1}
+                tabIndex={ambientHudVisible ? 0 : -1}
                 disabled={isPlaybackPending}
                 onClick={() => handleAmbientPlaybackAction("previous")}
               >
@@ -950,7 +1078,7 @@ export function AmbientScreen({
                 type="button"
                 aria-label={isPlaying ? "Pause" : "Play"}
                 title={isPlaying ? "Pause" : "Play"}
-                tabIndex={hudVisible ? 0 : -1}
+                tabIndex={ambientHudVisible ? 0 : -1}
                 disabled={isPlaybackPending}
                 onClick={() => handleAmbientPlaybackAction("play_pause")}
               >
@@ -961,7 +1089,7 @@ export function AmbientScreen({
                 type="button"
                 aria-label="Next track"
                 title="Next track"
-                tabIndex={hudVisible ? 0 : -1}
+                tabIndex={ambientHudVisible ? 0 : -1}
                 disabled={isPlaybackPending}
                 onClick={() => handleAmbientPlaybackAction("next")}
               >
@@ -973,7 +1101,7 @@ export function AmbientScreen({
                 aria-label={playback.favorite ? "Remove favorite" : "Favorite"}
                 title={playback.favorite ? "Remove favorite" : "Favorite"}
                 aria-pressed={playback.favorite}
-                tabIndex={hudVisible ? 0 : -1}
+                tabIndex={ambientHudVisible ? 0 : -1}
                 disabled={isPlaybackPending}
                 onClick={() => handleAmbientPlaybackAction("favorite_toggle")}
               >
@@ -985,7 +1113,7 @@ export function AmbientScreen({
                 aria-label="Open playlist"
                 title="Playlist"
                 data-hifi-playlist-entry
-                tabIndex={hudVisible ? 0 : -1}
+                tabIndex={ambientHudVisible ? 0 : -1}
                 onClick={() => {
                   onHudActivity();
                   onOpenPlaylist();
@@ -999,7 +1127,7 @@ export function AmbientScreen({
                 aria-label={lyricsVisible ? "Hide lyrics" : "Show lyrics"}
                 title={lyricsVisible ? "Hide lyrics" : "Show lyrics"}
                 aria-pressed={lyricsVisible}
-                tabIndex={hudVisible ? 0 : -1}
+                tabIndex={ambientHudVisible ? 0 : -1}
                 onClick={toggleLyricsLayer}
               >
                 {lyricsVisible ? <Captions size={25} strokeWidth={1.8} /> : <CaptionsOff size={25} strokeWidth={1.8} />}
@@ -1018,7 +1146,7 @@ export function AmbientScreen({
                 aria-label={sceneSoundEnabled ? "Mute scene sound" : "Unmute scene sound"}
                 title={sceneSoundEnabled ? "Mute scene sound" : "Unmute scene sound"}
                 aria-pressed={sceneSoundEnabled}
-                tabIndex={hudVisible ? 0 : -1}
+                tabIndex={ambientHudVisible ? 0 : -1}
                 disabled={sceneSoundPending || !hasSceneVideo}
                 onClick={handleSceneSoundToggle}
               >
@@ -1032,7 +1160,7 @@ export function AmbientScreen({
               type="button"
               aria-label="Next scene"
               title="Next scene"
-              tabIndex={hudVisible ? 0 : -1}
+              tabIndex={ambientHudVisible ? 0 : -1}
               disabled={switchableBackgroundVideos.length <= 1}
               onClick={() => switchBackgroundVideo(1)}
             >
@@ -1046,6 +1174,7 @@ export function AmbientScreen({
         <div className="ambient-clock" aria-label="Current time">
           <div className="ambient-time">{timeLabel}</div>
           <div className="ambient-date">{dateLabel}</div>
+          <div className="ambient-scene-copy">{ambientClockSceneCopy}</div>
         </div>
       ) : null}
 
@@ -1080,7 +1209,7 @@ export function AmbientScreen({
                   aria-label={`${option.label} room mode`}
                   aria-pressed={roomExperience.mode === option.mode}
                   title={`${option.label} - ${option.intent}`}
-                  tabIndex={hudVisible ? 0 : -1}
+                  tabIndex={ambientHudVisible ? 0 : -1}
                   onClick={() => handleRoomModeChange(option.mode)}
                 >
                   <Icon size={18} strokeWidth={1.8} />

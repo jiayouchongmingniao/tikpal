@@ -449,9 +449,9 @@ select {
 }
 
 .ambient-screen[data-room-mode="calm"] {
-  --room-accent: #91d8b2;
-  --room-accent-strong: #d9f6e7;
-  --room-accent-muted: rgba(68, 164, 116, 0.22);
+  --room-accent: #b2d8c4;
+  --room-accent-strong: #e5f3eb;
+  --room-accent-muted: rgba(103, 154, 127, 0.13);
 }
 
 .ambient-screen[data-room-mode="sleep"] {
@@ -602,7 +602,7 @@ select {
   pointer-events: none;
   background:
     radial-gradient(circle at 50% 68%, rgba(255, 118, 28, 0.12) 0 18%, rgba(35, 10, 2, 0.1) 44%, rgba(0, 0, 0, 0.52) 100%),
-    linear-gradient(90deg, rgba(0, 0, 0, 0.5), transparent 24%, transparent 74%, rgba(0, 0, 0, 0.48)),
+    linear-gradient(90deg, rgba(0, 0, 0, 0.5), transparent 24%, transparent 78%, rgba(0, 0, 0, 0.28)),
     linear-gradient(180deg, rgba(0, 0, 0, 0.44), transparent 28%, rgba(36, 9, 2, 0.5));
 }
 
@@ -1025,8 +1025,8 @@ select {
 .ambient-settings {
   position: absolute;
   z-index: 3;
-  top: 24px;
-  right: 24px;
+  top: 36px;
+  right: 92px;
   width: 56px;
   height: 56px;
   color: var(--theme-text-weak);
@@ -1338,6 +1338,52 @@ select {
   gap: 8px;
 }
 
+.dlna-handoff-card {
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 8px;
+  min-height: 174px;
+  padding: 18px;
+  border: 1px solid var(--surface-control-border-hover);
+  border-radius: 8px;
+  background:
+    radial-gradient(circle at top, var(--theme-info-muted), transparent 56%),
+    var(--surface-control-bg-active);
+  color: var(--surface-control-text);
+  text-align: center;
+}
+
+.dlna-handoff-icon {
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  background: var(--surface-icon-bg);
+  color: var(--theme-info-strong);
+}
+
+.dlna-handoff-card strong {
+  color: var(--text);
+  font-size: clamp(21px, 1.25vw, 28px);
+  font-weight: 650;
+  line-height: 1.1;
+}
+
+.dlna-handoff-card p {
+  max-width: 420px;
+  margin: 0;
+  color: var(--muted);
+  font-size: clamp(13px, 0.85vw, 17px);
+  line-height: 1.35;
+}
+
+.ambient-dlna-handoff-card {
+  min-height: 132px;
+  padding: 16px;
+}
+
 .ambient-source-option {
   display: grid;
   grid-template-rows: 34px auto auto;
@@ -1451,10 +1497,10 @@ select {
   position: absolute;
   z-index: 2;
   top: 52px;
-  right: 104px;
+  right: 168px;
   display: grid;
   justify-items: end;
-  gap: 4px;
+  gap: 5px;
   color: var(--theme-text-soft);
   text-shadow: 0 12px 40px rgba(0, 0, 0, 0.8);
 }
@@ -1468,6 +1514,18 @@ select {
 .ambient-date {
   font-size: clamp(13px, 0.82vw, 18px);
   color: var(--theme-text-muted);
+}
+
+.ambient-scene-copy {
+  max-width: 320px;
+  overflow: hidden;
+  color: var(--theme-text-soft);
+  font-size: 15px;
+  font-weight: 540;
+  line-height: 1.2;
+  opacity: 0.86;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ambient-lyrics-layer {
@@ -1576,18 +1634,25 @@ select {
   z-index: 5;
   left: 50%;
   right: auto;
-  bottom: 34px;
+  bottom: 56px;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: min(680px, calc(100vw - 112px));
-  padding: 12px;
-  border: 1px solid color-mix(in srgb, var(--room-accent) 44%, var(--surface-card-border));
-  border-radius: 8px;
-  background: var(--surface-panel-bg);
+  width: min(620px, calc(100vw - 112px));
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--room-accent) 15%, transparent);
+  border-radius: 999px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.035)),
+    radial-gradient(circle at 50% 0%, color-mix(in srgb, var(--room-accent) 12%, transparent), transparent 62%),
+    rgba(6, 7, 9, 0.52);
   box-shadow:
-    0 24px 90px rgba(0, 0, 0, 0.45),
-    0 0 42px var(--room-accent-muted);
+    inset 0 1px 0 rgba(255, 255, 255, 0.13),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.035),
+    0 18px 52px rgba(0, 0, 0, 0.34),
+    0 0 14px color-mix(in srgb, var(--room-accent-muted) 70%, transparent);
+  backdrop-filter: blur(18px) saturate(1.12);
+  -webkit-backdrop-filter: blur(18px) saturate(1.12);
   opacity: 0.66;
   pointer-events: none;
   transform: translateX(-50%);
@@ -1599,13 +1664,16 @@ select {
 
 .ambient-screen.is-hud-visible .ambient-hud {
   opacity: 0.92;
-  background: var(--surface-card-bg-hover);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0.045)),
+    radial-gradient(circle at 50% 0%, color-mix(in srgb, var(--room-accent) 15%, transparent), transparent 64%),
+    rgba(6, 7, 9, 0.62);
   transform: translate(-50%, -2px);
 }
 
 .ambient-screen.is-hud-hidden .ambient-hud {
   opacity: 0;
-  transform: translate(-50%, 18px);
+  transform: translate(-50%, 14px);
 }
 
 .cover-art span {
@@ -1665,7 +1733,7 @@ select {
 .ambient-room-mode-buttons {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
+  gap: 8px;
   pointer-events: auto;
 }
 
@@ -1675,39 +1743,61 @@ select {
   place-items: center;
   gap: 6px;
   min-width: 0;
-  min-height: 58px;
-  padding: 0 14px;
-  border: 1px solid var(--surface-control-border);
-  border-radius: 8px;
-  background: var(--surface-control-bg);
+  min-height: 50px;
+  padding: 0 16px;
+  border: 1px solid color-mix(in srgb, var(--surface-control-border) 22%, transparent);
+  border-radius: 999px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.058), rgba(255, 255, 255, 0.018)),
+    color-mix(in srgb, var(--surface-control-bg) 52%, transparent);
   color: var(--surface-control-text);
   font: inherit;
   font-size: 14px;
-  font-weight: 820;
+  font-weight: 760;
   cursor: pointer;
   pointer-events: auto;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  transition:
+    border-color 180ms ease,
+    background 180ms ease,
+    box-shadow 180ms ease,
+    color 180ms ease;
 }
 
 .ambient-room-mode-buttons button:hover,
 .ambient-room-mode-buttons button:focus-visible {
-  border-color: var(--surface-control-border-hover);
-  background: var(--surface-control-bg-hover);
+  border-color: color-mix(in srgb, var(--surface-control-border-hover) 44%, transparent);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.075), rgba(255, 255, 255, 0.026)),
+    color-mix(in srgb, var(--surface-control-bg-hover) 58%, transparent);
   outline: none;
 }
 
 .ambient-room-mode-buttons button.is-active {
-  border-color: var(--room-accent);
+  border-color: color-mix(in srgb, var(--room-accent) 32%, rgba(255, 255, 255, 0.14));
   background:
-    linear-gradient(135deg, var(--room-accent-muted), rgba(255, 255, 255, 0.04)),
-    var(--surface-control-bg-active);
+    linear-gradient(135deg, color-mix(in srgb, var(--room-accent) 17%, transparent), rgba(255, 255, 255, 0.05)),
+    radial-gradient(circle at 50% 0%, color-mix(in srgb, var(--room-accent) 13%, transparent), transparent 68%),
+    rgba(255, 255, 255, 0.045);
   color: var(--room-accent-strong);
   box-shadow:
-    inset 0 0 0 1px color-mix(in srgb, var(--room-accent) 38%, transparent),
-    0 0 22px var(--room-accent-muted);
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 0 10px color-mix(in srgb, var(--room-accent-muted) 46%, transparent);
+}
+
+.ambient-room-mode-buttons button svg {
+  width: 17px;
+  height: 17px;
+  opacity: 0.82;
+}
+
+.ambient-room-mode-buttons button.is-active svg {
+  opacity: 1;
 }
 
 .ambient-room-mode-buttons button span {
   overflow: hidden;
+  line-height: 1;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -4740,16 +4830,17 @@ select {
   }
 
   .ambient-hud {
-    width: min(620px, calc(100vw - 48px));
-    padding: 10px;
+    width: min(600px, calc(100vw - 48px));
+    bottom: 52px;
+    padding: 7px;
   }
 
   .ambient-room-mode-buttons {
-    gap: 8px;
+    gap: 7px;
   }
 
   .ambient-room-mode-buttons button {
-    min-height: 52px;
+    min-height: 46px;
     padding: 0 12px;
     font-size: 13px;
   }
@@ -4920,8 +5011,9 @@ select {
   .ambient-hud {
     left: 20px;
     right: 20px;
-    bottom: 20px;
+    bottom: 32px;
     width: auto;
+    padding: 7px;
     transform: none;
   }
 
@@ -4930,7 +5022,7 @@ select {
   }
 
   .ambient-screen.is-hud-hidden .ambient-hud {
-    transform: translateY(18px);
+    transform: translateY(14px);
   }
 
   .ambient-room-mode-buttons {
@@ -4939,7 +5031,7 @@ select {
 
   .ambient-room-mode-buttons button {
     grid-template-columns: minmax(0, 1fr);
-    min-height: 50px;
+    min-height: 44px;
     padding: 0 8px;
     font-size: 12px;
   }
