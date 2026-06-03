@@ -103,8 +103,8 @@ TIKPAL_MPD_PORT=6600
 TIKPAL_MPC_BIN=mpc
 TIKPAL_MPD_DEFAULT_QUEUE_PATH=Codex
 TIKPAL_MPD_STARTUP_VOLUME=30
-TIKPAL_OUTPUT_VOLUME_GET_COMMAND="amixer get PCM"
-TIKPAL_OUTPUT_VOLUME_SET_COMMAND="amixer sset PCM %VALUE%%"
+TIKPAL_OUTPUT_VOLUME_GET_COMMAND="./deploy/moode/tikpal-output-volume.sh get"
+TIKPAL_OUTPUT_VOLUME_SET_COMMAND="./deploy/moode/tikpal-output-volume.sh set %VALUE%"
 TIKPAL_WEB_ALLOW_REMOTE_UI_API=0
 TIKPAL_SCENE_CONTEXT_GEO_URL=https://ipapi.co/json/
 TIKPAL_SCENE_CONTEXT_GEO_TIMEOUT_MS=3000
@@ -171,6 +171,7 @@ EOF
 
 `TIKPAL_MPD_DEFAULT_QUEUE_PATH=Codex` tells the backend which local library path to queue first when MPD is empty.
 `TIKPAL_MPD_STARTUP_VOLUME=30` makes Tikpal set MPD to 30% before auto-resuming playback when the API starts and playback is not already running.
+`TIKPAL_OUTPUT_VOLUME_GET_COMMAND` and `TIKPAL_OUTPUT_VOLUME_SET_COMMAND` should control the physical `_audioout` card, not only ALSA Loopback. On moOde installs with ALSA Loopback enabled, the checked-in `deploy/moode/tikpal-output-volume.sh` helper reads the current `/etc/alsa/conf.d/_sndaloop.conf` / `_audioout.conf` route, gets volume from the physical card, and mirrors writes to Loopback so Bluetooth, AirPlay, Scene Sound, and Hi-Fi spectrum use the same level. Avoid bare `amixer get PCM` on these installs because it can hit the Loopback card while the USB DAC remains at 100%.
 Keep `TIKPAL_WEB_ALLOW_REMOTE_UI_API=0` for the normal Pi install: the production web service serves the full kiosk UI to loopback clients such as the Pi browser, while LAN browsers opening `http://<pi-ip>:4173/` receive the portable remote UI and are limited to `/api/v1/remote/*`. Remote mode is selected when the socket remote address is not loopback or when the HTTP `Host` is not `localhost`, `127.0.0.1`, or `[::1]`, so SSH tunnels, reverse proxies, and port mappings still receive the portable remote UI when the browser uses the Pi IP or a public domain as the Host. Set it to `1` only when trusted LAN clients should receive the full kiosk API surface.
 `TIKPAL_SCENE_CONTEXT_GEO_*` and `TIKPAL_SCENE_CONTEXT_WEATHER_*` control the cached `/api/v1/scene/context` lookups used for weak Ambient clock copy. The endpoint prefers IP-derived timezone/location when available, falls back to the caller's `timeZone` query or the room-experience default when unavailable, and caches provider failures briefly so a slow network cannot stall normal state reads.
 Kiosk display diagnostics are separate from `4173`: `TIKPAL_KIOSK_REMOTE_DEBUG=1` exposes Chromium DevTools on `TIKPAL_KIOSK_REMOTE_DEBUG_ADDRESS:TIKPAL_KIOSK_REMOTE_DEBUG_PORT`, proxying to Chromium's local `TIKPAL_KIOSK_REMOTE_DEBUG_CHROMIUM_ADDRESS:TIKPAL_KIOSK_REMOTE_DEBUG_CHROMIUM_PORT`, and `TIKPAL_KIOSK_VIEWER=novnc` exposes the full kiosk screen through noVNC on `TIKPAL_KIOSK_NOVNC_ADDRESS:TIKPAL_KIOSK_NOVNC_PORT`. Keep `TIKPAL_KIOSK_REMOTE_DEBUG=0` for normal use and enable it only while actively debugging; DevTools can inspect and control the kiosk browser.
@@ -302,6 +303,21 @@ curl -fsS -X POST http://127.0.0.1:4173/api/v1/remote/actions \
   -H "Content-Type: application/json" \
   -H "X-Tikpal-Key: $TIKPAL_PORTABLE_API_KEY" \
   --data '{"type":"playback.play_pause"}'
+```
+
+For multi-surface sync, validate volume and source writes from both the local API and the LAN-facing remote facade. `system.volume.percent` should match after each write, and external intake sources should keep the same `armed` / `connected` state in `/api/v1/system/state`, `/api/v1/audio/sources`, and `/api/v1/remote/state`:
+
+```bash
+curl -fsS -X POST http://127.0.0.1:8787/api/v1/playback/actions \
+  -H "Content-Type: application/json" \
+  --data '{"type":"volume_set","value":44}' | jq '.system.volume.percent,.audio.currentSource'
+curl -fsS -X POST http://127.0.0.1:4173/api/v1/remote/actions \
+  -H "Content-Type: application/json" \
+  -H "X-Tikpal-Key: $TIKPAL_PORTABLE_API_KEY" \
+  --data '{"type":"volume_set","value":43}' | jq '.volume.percent,.source'
+curl -fsS http://127.0.0.1:8787/api/v1/system/state | jq '.system.volume.percent,.audio.currentSource'
+curl -fsS http://127.0.0.1:8787/api/v1/audio/sources | jq '.currentSource'
+curl -fsS http://127.0.0.1:4173/api/v1/remote/state | jq '.volume.percent,.source'
 ```
 
 Verify Quick Settings actions from the API before relying on the kiosk UI:

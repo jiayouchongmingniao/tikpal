@@ -73,7 +73,7 @@ Exact wire shapes should be finalized during implementation, but these concepts 
 | Album cover | Player left zone | Large cover art with dark/blurred support background. |
 | Playback state | Ambient HUD, player controls | Playing / paused / stopped status and play button state. |
 | Progress | Ambient weak progress, player full progress | 1Hz update is enough. |
-| Volume | Ambient status, player source header, volume panel | `system.volume.percent` is the global truth; Ambient edge gestures, Player range slider, and scene video audio all sync through `volume_set`. |
+| Volume | Ambient status, player source header, volume panel, portable remote | `system.volume.percent` is the global truth; Ambient edge gestures, Player and Remote range sliders, and scene video audio all sync through `volume_set`. |
 | Audio format | Player status card | Format, bit depth, sample rate. |
 | Output device | Player status card, quick settings | USB, I2S, HDMI, DAC name, volume mode. |
 | Playback source / renderer | Ambient source picker, Player top state, source workspace | Six visible frontstage choices: Library, Radio, Spotify, AirPlay, Bluetooth, DLNA; internal Audio remains backend/status truth. |
@@ -233,6 +233,8 @@ Current Batch 3 mock API contract:
 | `/api/v1/system/actions` | `POST` | System actions including `library_scan`, `reboot`, `shutdown`, and `brightness_set`. |
 
 In `mpc` mode, the read endpoints above use a cached runtime snapshot instead of shelling out for every request. `/api/v1/system/state`, `/api/v1/playback/status`, `/api/v1/system/status`, `/api/v1/system/runtime`, `/api/v1/audio/sources`, `/api/v1/remote/state`, and `/api/v1/remote/catalog` should return from memory and schedule background refresh work when needed. The background collector is allowed to run slower probes such as `systemctl`, `ddcutil`, source ready/active commands, AirPlay/Bluetooth metadata helpers, network checks, and media-artwork resolution.
+
+`volume_set` must stay multi-surface. Local kiosk actions and portable remote actions both write through the backend, then refresh output volume status when the active source is `scene`, Spotify Connect, Bluetooth, AirPlay, or DLNA. The response should carry the freshly read `system.volume.percent` so Ambient, Player, Remote, and browser Scene Sound do not drift into separate local slider state.
 
 Action endpoints are different: playback, source, room, display, library scan, reboot, shutdown, playlist, and remote-action writes still run the command or persistence change needed for the requested action. After a successful source write, Spotify Connect, AirPlay, Bluetooth, and DLNA refresh source-runtime status immediately enough for the UI to know whether the intake is already `connected`; otherwise the client keeps the shared waiting handoff state until a later cached refresh reports `connected` or the client times out and rolls back. The user-facing tradeoff is intentional: status cards may lag by one snapshot interval, but a stuck monitor, renderer, or metadata probe should not make the kiosk UI appear frozen.
 

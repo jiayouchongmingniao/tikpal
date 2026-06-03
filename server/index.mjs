@@ -3608,12 +3608,13 @@ async function getSourceStatusFromCommands({ readyCommand, activeCommand, labelC
     commandSucceeds(activeCommand, { timeout: 2500 }),
     labelCommand.trim() ? runCommand(labelCommand, { allowFailure: true, timeout: 2500 }) : Promise.resolve("")
   ]);
-  const connected = gateConnectionUntilArmed ? armed && rawConnected : rawConnected;
+  const nextArmed = gateConnectionUntilArmed && rawConnected ? true : armed;
+  const connected = gateConnectionUntilArmed ? nextArmed && rawConnected : rawConnected;
 
   return {
     supported,
-    available: supported ? (armed ? ready || rawConnected || armed : true) : false,
-    armed,
+    available: supported ? (nextArmed ? ready || rawConnected || nextArmed : true) : false,
+    armed: nextArmed,
     connected,
     connectedLabel: null,
     advertisedLabel: label.trim() || null
@@ -3628,13 +3629,13 @@ async function getAirplaySourceStatus({ readyCommand, activeCommand, labelComman
     labelCommand.trim() ? runCommand(labelCommand, { allowFailure: true, timeout: 2500 }) : Promise.resolve("")
   ]);
 
-  const airplayArmed = armed && (ready || rendererActive || receiverActive || armed);
+  const airplayArmed = (armed || rendererActive) && (ready || rendererActive || receiverActive || armed);
 
   return {
     supported,
-    available: supported ? (armed ? ready || receiverActive || rendererActive || armed : true) : false,
+    available: supported ? (airplayArmed ? ready || receiverActive || rendererActive || airplayArmed : true) : false,
     armed: airplayArmed,
-    connected: armed && rendererActive,
+    connected: airplayArmed && rendererActive,
     connectedLabel: null,
     advertisedLabel: label.trim() || null
   };
@@ -3866,6 +3867,9 @@ async function getMpcAudioSnapshot(currentFile) {
                     : radioActive
                       ? "radio"
                       : "mpd";
+  if (!mockArmedSource && COMMAND_HANDOFF_SOURCE_TARGETS.has(activeSource)) {
+    mockArmedSource = activeSource;
+  }
   const nextRadioStations = radioStations.map((station) => ({
     ...station,
     active: radioActive && station.uri === currentFile
@@ -3891,13 +3895,15 @@ function commandSourceSupported(commands) {
 
 function buildCachedSourceRuntimeState(source, supported, advertisedLabel = null) {
   const armed = mockArmedSource === source;
+  const cachedSource = tikpalStateSnapshotCache?.state?.audio?.sources?.find((entry) => entry.id === source) ?? null;
+  const connected = armed && cachedSource?.connectionState === "connected";
   return {
     supported,
     available: supported,
     armed,
-    connected: false,
-    connectedLabel: null,
-    advertisedLabel
+    connected,
+    connectedLabel: connected ? cachedSource?.connectedLabel ?? null : null,
+    advertisedLabel: advertisedLabel ?? cachedSource?.advertisedLabel ?? null
   };
 }
 
@@ -3993,9 +3999,18 @@ function buildFastTrackMetadata({ title, artist, album, file }) {
   };
 }
 
+function shouldUseOutputVolumeForMpcAction() {
+  const cachedSource = tikpalStateSnapshotCache?.state?.audio?.currentSource?.id
+    ?? tikpalStateSnapshotCache?.state?.playback?.source
+    ?? null;
+  const source = mockArmedSource ?? cachedSource;
+  return source === "scene" || COMMAND_HANDOFF_SOURCE_TARGETS.has(source);
+}
+
 async function getMpcSnapshot(options = {}) {
   const includeSlowRuntimeStatus = options.includeSlowRuntimeStatus !== false;
   const includeSourceRuntimeStatus = options.includeSourceRuntimeStatus ?? includeSlowRuntimeStatus;
+  const includeOutputVolumeStatus = options.includeOutputVolumeStatus ?? includeSlowRuntimeStatus;
   const [currentRaw, statusRaw, statsRaw] = await Promise.all([
     runMpc(["--format", "%title%\t%artist%\t%album%\t%file%\t%time%", "current"], { allowFailure: true }),
     runMpc(["status"], { allowFailure: true }),
@@ -4014,7 +4029,7 @@ async function getMpcSnapshot(options = {}) {
     : buildMinimalMpcAudioSnapshot(file);
   const queuePreview = await getMpcQueuePreview(status);
   const playbackSource = audio.sources.find((source) => source.active)?.id ?? audio.currentSource.id;
-  const outputVolumePercent = includeSlowRuntimeStatus ? await readOutputVolumePercent() : null;
+  const outputVolumePercent = includeOutputVolumeStatus ? await readOutputVolumePercent() : null;
   const isSceneSource = playbackSource === "scene";
   const isExternalHandoffSource = playbackSource === "scene" || playbackSource === "spotify" || playbackSource === "bluetooth" || playbackSource === "airplay" || playbackSource === "upnp";
   const isMpdBackedSource = playbackSource === "mpd" || playbackSource === "audio";
@@ -4395,7 +4410,7 @@ async function applyMpcPlaybackActionUnlocked(action) {
       if (!Number.isFinite(percent) || percent < 0 || percent > 100) {
         throw new Error("volume_set requires value between 0 and 100");
       }
-      if (mockArmedSource === "scene" || mockArmedSource === "bluetooth" || mockArmedSource === "airplay" || mockArmedSource === "upnp") {
+      if (shouldUseOutputVolumeForMpcAction()) {
         await setOutputVolumePercent(percent);
       } else {
         await runMpc(["volume", String(Math.round(percent))]);
@@ -4571,8 +4586,9 @@ async function collectTikpalStateSnapshot(options = {}) {
 
   const includeSlowRuntimeStatus = options.includeSlowRuntimeStatus !== false;
   const includeSourceRuntimeStatus = options.includeSourceRuntimeStatus ?? includeSlowRuntimeStatus;
+  const includeOutputVolumeStatus = options.includeOutputVolumeStatus ?? includeSlowRuntimeStatus;
   const snapshot = API_MODE === "mpc"
-    ? await getMpcSnapshot({ includeSlowRuntimeStatus, includeSourceRuntimeStatus })
+    ? await getMpcSnapshot({ includeSlowRuntimeStatus, includeSourceRuntimeStatus, includeOutputVolumeStatus })
     : {
         playback: getPlayback(),
         system: await getMockSystemSnapshot(),
@@ -4642,6 +4658,7 @@ async function refreshTikpalStateSnapshotAfterMutation(options = {}) {
     const state = await collectTikpalStateSnapshot({
       includeSlowRuntimeStatus: false,
       includeSourceRuntimeStatus: options.includeSourceRuntimeStatus === true,
+      includeOutputVolumeStatus: options.includeOutputVolumeStatus === true,
       skipExperienceReconcile: true
     });
     cacheTikpalStateSnapshot(state);
@@ -6857,6 +6874,7 @@ async function setRemoteSceneSound(action) {
 
 async function applyRemoteAction(action) {
   const type = String(action?.type ?? "");
+  const refreshOptions = {};
 
   switch (type) {
     case "playback.play_pause":
@@ -6882,14 +6900,19 @@ async function applyRemoteAction(action) {
       break;
     case "volume_set":
       await applyPlaybackActionForCurrentBackend({ type: "volume_set", value: requireRemoteNumber(action.value, "volume_set") });
+      refreshOptions.includeOutputVolumeStatus = true;
       break;
-    case "source.set":
+    case "source.set": {
+      const target = requireRemoteSourceTarget(action.target);
       await applySourceSwitch({
-        target: requireRemoteSourceTarget(action.target),
+        target,
         radioStationId: action.radioStationId,
         localTrackPath: action.localTrackPath
       });
+      refreshOptions.includeSourceRuntimeStatus = COMMAND_HANDOFF_SOURCE_TARGETS.has(target);
+      refreshOptions.includeOutputVolumeStatus = target === "scene" || COMMAND_HANDOFF_SOURCE_TARGETS.has(target);
       break;
+    }
     case "room.set_mode":
       await applyRoomExperienceAction({ type: "set_mode", mode: requireRemoteRoomMode(action.mode), sceneSoundEnabled: action.sceneSoundEnabled });
       break;
@@ -6928,7 +6951,7 @@ async function applyRemoteAction(action) {
       throw new Error(`Unsupported remote action: ${type || "missing type"}`);
   }
 
-  await refreshTikpalStateSnapshotAfterMutation();
+  await refreshTikpalStateSnapshotAfterMutation(refreshOptions);
   return await buildRemoteStateResponse();
 }
 
@@ -7133,7 +7156,9 @@ const server = http.createServer(async (request, response) => {
       } else {
         await applyPlaybackAction(action);
       }
-      sendJson(response, 200, await refreshTikpalStateSnapshotAfterMutation());
+      sendJson(response, 200, await refreshTikpalStateSnapshotAfterMutation({
+        includeOutputVolumeStatus: action?.type === "volume_set"
+      }));
       return;
     }
 
@@ -7160,7 +7185,8 @@ const server = http.createServer(async (request, response) => {
       const action = await readJson(request);
       await applySourceSwitch(action);
       sendJson(response, 200, await refreshTikpalStateSnapshotAfterMutation({
-        includeSourceRuntimeStatus: COMMAND_HANDOFF_SOURCE_TARGETS.has(action?.target)
+        includeSourceRuntimeStatus: COMMAND_HANDOFF_SOURCE_TARGETS.has(action?.target),
+        includeOutputVolumeStatus: action?.target === "scene" || COMMAND_HANDOFF_SOURCE_TARGETS.has(action?.target)
       }));
       return;
     }

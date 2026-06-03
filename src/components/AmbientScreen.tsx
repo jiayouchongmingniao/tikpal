@@ -45,6 +45,8 @@ const BACKGROUND_VIDEO_REFRESH_MS = 30_000;
 const BACKGROUND_VIDEO_REFRESH_EVENT = "tikpal:background-videos-refresh";
 const SCENE_CONTEXT_REFRESH_MS = 30 * 60_000;
 const SOURCE_PICKER_AUTO_CLOSE_MS = 5_000;
+const SCENE_VIDEO_THERMAL_PAUSE_C = 76;
+const SCENE_VIDEO_THERMAL_RESUME_C = 68;
 
 interface DragState {
   channel: AmbientAdjustChannel;
@@ -294,6 +296,7 @@ export function AmbientScreen({
   const [frozenLyricsLineIndex, setFrozenLyricsLineIndex] = useState<number | null>(null);
   const [staticLyricsLineIndex, setStaticLyricsLineIndex] = useState(0);
   const [sceneContext, setSceneContext] = useState<SceneContextSummary | null>(null);
+  const [sceneVideoThermalPaused, setSceneVideoThermalPaused] = useState(false);
   const currentBackgroundVideo = backgroundVideos[backgroundVideoIndex] ?? DEFAULT_BACKGROUND_VIDEO;
   const isHifiMode = roomExperience.mode === "hifi";
   const activeTimeZone = roomExperience.nightSchedule.timeZone;
@@ -307,6 +310,9 @@ export function AmbientScreen({
   const hasSceneVideo = Boolean(currentBackgroundVideo.src);
   const brightnessPercent = system.display.brightnessPercent;
   const audioProtectionMode = playback.source === "airplay" && playback.state === "playing";
+  const sceneVideoThermalGuardActive = sceneVideoThermalPaused && !isHifiMode;
+  const shouldRenderSceneVideo = sceneVideoEnabled && hasSceneVideo && !sceneVideoThermalGuardActive;
+  const sceneVisualLowPower = audioProtectionMode || sceneVideoThermalGuardActive;
   const canAdvanceLyrics = lyrics.synced
     && (playback.source === "mpd" || playback.source === "radio" || playback.source === "bluetooth" || playback.source === "airplay")
     && playback.state === "playing";
@@ -349,7 +355,7 @@ export function AmbientScreen({
   const isPlaying = playback.state === "playing";
   const playbackSettings = playback.settings ?? { playMode: "sequence" };
   const playMode = playbackSettings.playMode;
-  const sceneAudioEnabled = hasSceneVideo && sceneVideoEnabled && sceneSoundEnabled && playback.source === "scene" && playback.state === "playing";
+  const sceneAudioEnabled = shouldRenderSceneVideo && sceneSoundEnabled && playback.source === "scene" && playback.state === "playing";
   const currentAmbientSource = audio.currentSource.id === "upnp"
     || audio.currentSource.id === "mpd"
     || audio.currentSource.id === "radio"
@@ -394,6 +400,17 @@ export function AmbientScreen({
         // Keep the currently mounted video list when the API is temporarily unavailable.
       });
   }, []);
+
+  useEffect(() => {
+    const cpuTemp = system.cpuTemp;
+    if (cpuTemp === null || !Number.isFinite(cpuTemp)) return;
+
+    setSceneVideoThermalPaused((paused) => {
+      if (cpuTemp >= SCENE_VIDEO_THERMAL_PAUSE_C) return true;
+      if (paused && cpuTemp <= SCENE_VIDEO_THERMAL_RESUME_C) return false;
+      return paused;
+    });
+  }, [system.cpuTemp]);
 
   useEffect(() => {
     let active = true;
@@ -959,10 +976,11 @@ export function AmbientScreen({
         />
       ) : (
         <FlameScene
-          lowPower={audioProtectionMode}
+          lowPower={sceneVisualLowPower}
           playback={playback}
           videoSrc={currentBackgroundVideo.src}
-          videoEnabled={sceneVideoEnabled && hasSceneVideo}
+          staticOnly={sceneVideoThermalGuardActive && sceneVideoEnabled && hasSceneVideo}
+          videoEnabled={shouldRenderSceneVideo}
           audioEnabled={sceneAudioEnabled}
           volumePercent={system.volume.percent}
         />

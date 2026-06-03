@@ -23,6 +23,7 @@ interface FlameScenePlayback {
 interface FlameSceneProps {
   lowPower?: boolean;
   playback: FlameScenePlayback;
+  staticOnly?: boolean;
   videoEnabled?: boolean;
   audioEnabled?: boolean;
   volumePercent?: number;
@@ -209,7 +210,7 @@ async function alignVideoWithPlayback(video: HTMLVideoElement, playback: FlameSc
   return true;
 }
 
-export function FlameScene({ lowPower = false, playback, videoEnabled = true, audioEnabled = false, volumePercent = 100, videoSrc = DEFAULT_FLAME_VIDEO_SRC }: FlameSceneProps) {
+export function FlameScene({ lowPower = false, playback, staticOnly = false, videoEnabled = true, audioEnabled = false, volumePercent = 100, videoSrc = DEFAULT_FLAME_VIDEO_SRC }: FlameSceneProps) {
   const nextLayerIdRef = useRef(0);
   const activeVideoSrcRef = useRef(videoSrc);
   const activeLayerIdRef = useRef(0);
@@ -703,7 +704,7 @@ export function FlameScene({ lowPower = false, playback, videoEnabled = true, au
   }, []);
 
   useEffect(() => {
-    if (!videoEnabled) return undefined;
+    if (!videoEnabled || staticOnly) return undefined;
     if (activeVideoSrcRef.current === videoSrc) return undefined;
     activeVideoSrcRef.current = videoSrc;
     clearLoopMonitor();
@@ -741,10 +742,10 @@ export function FlameScene({ lowPower = false, playback, videoEnabled = true, au
       return currentActiveLayer ? [currentActiveLayer, nextLayer] : [nextLayer];
     });
     return undefined;
-  }, [layers, videoEnabled, videoSrc]);
+  }, [layers, staticOnly, videoEnabled, videoSrc]);
 
   useEffect(() => {
-    if (videoEnabled) return undefined;
+    if (videoEnabled && !staticOnly) return undefined;
     clearLoopMonitor();
     clearLoopHandoffTimer();
     clearLoopAudioCrossfadeFrame();
@@ -756,10 +757,10 @@ export function FlameScene({ lowPower = false, playback, videoEnabled = true, au
       video.muted = true;
     });
     return undefined;
-  }, [videoEnabled]);
+  }, [staticOnly, videoEnabled]);
 
   useEffect(() => {
-    if (!videoEnabled) return;
+    if (!videoEnabled || staticOnly) return;
     layers.forEach((layer) => {
       const isPendingLayer = pendingLayerIdRef.current === layer.id;
       const visibleSlot = getLayerSlot(loopVisibleSlotsRef.current, layer.id);
@@ -768,18 +769,27 @@ export function FlameScene({ lowPower = false, playback, videoEnabled = true, au
         forceSync: isPendingLayer
       });
     });
-  }, [layers, playback.state, videoEnabled]);
+  }, [layers, playback.state, staticOnly, videoEnabled]);
 
   useEffect(() => {
-    if (!videoEnabled) return;
+    if (!videoEnabled || staticOnly) return;
     clearLoopAudioCrossfadeFrame();
     syncSceneAudio();
-  }, [activeLayerId, audioEnabled, layers, loopAudibleSlots, videoEnabled, videoVolume]);
+  }, [activeLayerId, audioEnabled, layers, loopAudibleSlots, staticOnly, videoEnabled, videoVolume]);
 
   useEffect(() => {
+    if (staticOnly) return clearLoopMonitor;
     scheduleLoopMonitor();
     return clearLoopMonitor;
-  }, [activeLayerId, layers, loopVisibleSlots, videoEnabled, videoSrc]);
+  }, [activeLayerId, layers, loopVisibleSlots, staticOnly, videoEnabled, videoSrc]);
+
+  if (staticOnly && videoSrc) {
+    return (
+      <div className="flame-scene is-low-power is-static-only" aria-hidden="true">
+        <img className="fireplace-backdrop" src={FIREPLACE_BACKGROUND_SRC} alt="" draggable={false} />
+      </div>
+    );
+  }
 
   if (!videoEnabled || !videoSrc) {
     return <div className="flame-scene is-video-off" aria-hidden="true" />;

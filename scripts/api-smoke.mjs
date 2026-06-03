@@ -764,6 +764,8 @@ async function runMpcAirplayHandoffRefreshSmoke(roomExperienceStatePath) {
   const baseUrl = `http://${HOST}:${port}`;
   const workspace = await mkdtemp(path.join(tmpdir(), "tikpal-mpc-airplay-"));
   const fakeMpcPath = path.join(workspace, "mpc-fake.mjs");
+  const fakeVolumePath = path.join(workspace, "volume-fake.mjs");
+  const fakeVolumeStatePath = path.join(workspace, "volume-state.txt");
 
   await writeFile(fakeMpcPath, `#!/usr/bin/env node
 const rawArgs = process.argv.slice(2);
@@ -793,6 +795,29 @@ switch (command) {
 }
 `);
   await chmod(fakeMpcPath, 0o755);
+  await writeFile(fakeVolumeStatePath, "28");
+  await writeFile(fakeVolumePath, `#!/usr/bin/env node
+import { readFileSync, writeFileSync } from "node:fs";
+
+const statePath = ${JSON.stringify(fakeVolumeStatePath)};
+const command = process.argv[2] ?? "get";
+
+if (command === "set") {
+  const value = Math.max(0, Math.min(100, Math.round(Number(process.argv[3]))));
+  writeFileSync(statePath, String(value));
+  process.exit(0);
+}
+
+const value = Number(readFileSync(statePath, "utf8"));
+process.stdout.write(\`Simple mixer control 'PCM',0
+  Capabilities: pvolume
+  Playback channels: Front Left - Front Right
+  Limits: Playback 0 - 255
+  Front Left: Playback 0 [\${value}%] [-0.00dB]
+  Front Right: Playback 0 [\${value}%] [-0.00dB]
+\`);
+`);
+  await chmod(fakeVolumePath, 0o755);
 
   const server = spawn(process.execPath, ["server/index.mjs"], {
     env: {
@@ -805,7 +830,8 @@ switch (command) {
       TIKPAL_MPD_PORT: "6600",
       TIKPAL_ROOM_EXPERIENCE_STATE_PATH: roomExperienceStatePath,
       TIKPAL_STATE_SNAPSHOT_REFRESH_MS: "60000",
-      TIKPAL_OUTPUT_VOLUME_GET_COMMAND: "",
+      TIKPAL_OUTPUT_VOLUME_GET_COMMAND: `${process.execPath} ${fakeVolumePath} get`,
+      TIKPAL_OUTPUT_VOLUME_SET_COMMAND: `${process.execPath} ${fakeVolumePath} set %VALUE%`,
       TIKPAL_AIRPLAY_ENABLE_COMMAND: "true",
       TIKPAL_AIRPLAY_READY_COMMAND: "true",
       TIKPAL_AIRPLAY_ACTIVE_COMMAND: "true",
@@ -817,6 +843,33 @@ switch (command) {
 
   try {
     await waitForHealthAt(baseUrl);
+    let recovered = null;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const initial = await requestFrom(baseUrl, "/api/v1/system/state");
+      if (
+        initial.response.ok
+        && initial.body.audio.currentSource.id === "airplay"
+        && initial.body.audio.currentSource.connectionState === "connected"
+      ) {
+        recovered = initial;
+        break;
+      }
+      await wait(200);
+    }
+    assert(recovered, "mpc active external source should recover as current after API startup");
+    assert(recovered.body.system.volume.percent === 28, "mpc recovered external source should report output volume");
+
+    const recoveredVolume = await requestFrom(baseUrl, "/api/v1/playback/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "volume_set", value: 43 })
+    });
+    assert(recoveredVolume.response.ok, "mpc recovered external volume_set should return 200");
+    assert(recoveredVolume.body.system.volume.percent === 43, "mpc recovered external volume_set should use output volume");
+    assert(
+      recoveredVolume.body.audio.currentSource.connectionState === "connected",
+      `mpc recovered external volume_set should keep connected, got ${recoveredVolume.body.audio.currentSource.connectionState}`
+    );
+
     const switched = await requestFrom(baseUrl, "/api/v1/audio/source", {
       method: "POST",
       body: JSON.stringify({ target: "airplay" })
@@ -829,12 +882,32 @@ switch (command) {
       `mpc airplay switch should refresh command-backed connection state, got ${switched.body.audio.currentSource.connectionState}`
     );
     assert(switched.body.playback.source === "airplay", "mpc airplay playback source should be AirPlay");
+    assert(switched.body.system.volume.percent === 43, "mpc external source switch should return the current output volume");
 
     const cached = await requestFrom(baseUrl, "/api/v1/system/state");
     assert(cached.response.ok, "cached mpc airplay state should return 200");
     assert(
       cached.body.audio.currentSource.connectionState === "connected",
       `cached mpc airplay state should preserve connected after source switch, got ${cached.body.audio.currentSource.connectionState}`
+    );
+
+    const volume = await requestFrom(baseUrl, "/api/v1/playback/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "volume_set", value: 44 })
+    });
+    assert(volume.response.ok, "mpc external volume_set should return 200");
+    assert(volume.body.system.volume.percent === 44, "mpc external volume_set should return the freshly written output volume");
+    assert(
+      volume.body.audio.currentSource.connectionState === "connected",
+      `mpc external volume_set should preserve connected source state, got ${volume.body.audio.currentSource.connectionState}`
+    );
+
+    const afterVolume = await requestFrom(baseUrl, "/api/v1/system/state");
+    assert(afterVolume.response.ok, "cached mpc airplay state after volume should return 200");
+    assert(afterVolume.body.system.volume.percent === 44, "cached mpc state should keep the output volume after external volume_set");
+    assert(
+      afterVolume.body.audio.currentSource.connectionState === "connected",
+      `cached mpc state should keep connected after external volume_set, got ${afterVolume.body.audio.currentSource.connectionState}`
     );
   } finally {
     if (server.exitCode === null && server.signalCode === null) {
