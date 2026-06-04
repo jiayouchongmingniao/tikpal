@@ -121,6 +121,14 @@ Suggested composition:
 - Playback mode should read as one segmented control with exactly one active state: sequence, repeat-one, or shuffle.
 - Ambient metadata, progress, and cover art should follow active playback truth from the backend. Source browsing state must not overwrite the long-dwell now-playing display.
 
+Hi-Fi visual rules:
+
+- Default Hi-Fi should stay as a centered now-playing composition with cover art, metadata, source, time, format, and volume.
+- Ready lyrics may switch Hi-Fi into a left-cover / right-lyrics wall. The lyrics wall is a main visual state, not a second overlay stacked on the bottom ticker.
+- If lyrics are not ready, empty, or hidden, Hi-Fi returns to the centered now-playing composition.
+- Real `albumArtUrl` always wins. Bluetooth may use a deterministic generated record poster only when it is the active playback source and no real artwork is available.
+- Hi-Fi background waves, particles, and sampled theme colors are decorative and non-interactive; they must stay below the transport and text layers and respect reduced-motion preferences.
+
 Scene switching:
 
 - The incoming video should first seek to the current music elapsed time modulo its own duration.

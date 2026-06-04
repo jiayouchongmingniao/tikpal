@@ -340,6 +340,10 @@ async function evaluate(client, expression) {
   return result.result.value;
 }
 
+async function setStatePatchMode(client, mode) {
+  await evaluate(client, `window.__tikpalSmokeStatePatchMode = ${JSON.stringify(mode)}; true`);
+}
+
 function sourceTabExpression(sourceId, { selected, active }) {
   return `
     (() => {
@@ -639,6 +643,161 @@ try {
   await client.open();
   await client.send("Page.enable");
   await client.send("Runtime.enable");
+  await client.send("Page.addScriptToEvaluateOnNewDocument", {
+    source: `
+      (() => {
+        const nativeFetch = window.fetch.bind(window);
+        const realBluetoothCover = "data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22120%22%20height%3D%22120%22%3E%3Crect%20width%3D%22120%22%20height%3D%22120%22%20fill%3D%22%2318405a%22%2F%3E%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2232%22%20fill%3D%22%23f2d36b%22%2F%3E%3C%2Fsvg%3E";
+
+        function clone(value) {
+          return JSON.parse(JSON.stringify(value));
+        }
+
+        function withSource(state, sourceId) {
+          const next = clone(state);
+          next.audio.sources = next.audio.sources.map((source) => ({
+            ...source,
+            active: source.id === sourceId,
+            availability: source.id === sourceId ? "available" : source.availability,
+            armed: false,
+            connectionState: source.id === sourceId ? "connected" : "idle",
+            connectedLabel: source.id === sourceId ? (sourceId === "bluetooth" ? "Tikpal Demo Phone" : source.connectedLabel) : null
+          }));
+          next.audio.currentSource = next.audio.sources.find((source) => source.id === sourceId) ?? next.audio.currentSource;
+          return next;
+        }
+
+        function applyPatch(state) {
+          const mode = window.__tikpalSmokeStatePatchMode ?? "";
+          if (mode === "syncedLyrics") {
+            const next = clone(state);
+            next.playback = {
+              ...next.playback,
+              source: "mpd",
+              albumArtUrl: null,
+              title: "Synced Lyric Study",
+              artist: "Tikpal Smoke",
+              album: "Wall Text",
+              elapsedSeconds: 2.2,
+              durationSeconds: 180
+            };
+            next.lyrics = {
+              ...next.lyrics,
+              status: "ready",
+              trackKey: "smoke-synced-lyrics",
+              synced: true,
+              activeLineIndex: null,
+              title: "Synced Lyric Study",
+              artist: "Tikpal Smoke",
+              lines: [
+                { text: "Synced line one", startMs: 0, endMs: 1000 },
+                { text: "Synced line two", startMs: 1000, endMs: 2000 },
+                { text: "Synced line three", startMs: 2000, endMs: 3000 },
+                { text: "Synced line four", startMs: 3000, endMs: 4000 },
+                { text: "Synced line five", startMs: 4000, endMs: 5000 }
+              ],
+              message: null,
+              updatedAt: new Date().toISOString()
+            };
+            return next;
+          }
+
+          if (mode === "staticLyrics") {
+            const next = clone(state);
+            next.playback = {
+              ...next.playback,
+              source: "mpd",
+              albumArtUrl: null,
+              title: "Static Lyric Study",
+              artist: "Tikpal Smoke",
+              album: "Wall Text",
+              elapsedSeconds: null,
+              durationSeconds: null
+            };
+            next.lyrics = {
+              ...next.lyrics,
+              status: "ready",
+              trackKey: "smoke-static-lyrics",
+              synced: false,
+              activeLineIndex: null,
+              title: "Static Lyric Study",
+              artist: "Tikpal Smoke",
+              lines: [
+                { text: "Static line one", startMs: null, endMs: null },
+                { text: "Static line two", startMs: null, endMs: null },
+                { text: "Static line three", startMs: null, endMs: null },
+                { text: "Static line four", startMs: null, endMs: null },
+                { text: "Static line five", startMs: null, endMs: null }
+              ],
+              message: null,
+              updatedAt: new Date().toISOString()
+            };
+            return next;
+          }
+
+          if (mode === "noReadyLyrics") {
+            const next = clone(state);
+            next.lyrics = {
+              ...next.lyrics,
+              status: "not_found",
+              trackKey: "smoke-no-ready-lyrics",
+              synced: false,
+              activeLineIndex: null,
+              lines: [],
+              message: "No lyrics found",
+              updatedAt: new Date().toISOString()
+            };
+            return next;
+          }
+
+          if (mode === "bluetoothFallback" || mode === "bluetoothRealCover") {
+            const next = withSource(state, "bluetooth");
+            next.playback = {
+              ...next.playback,
+              state: "playing",
+              source: "bluetooth",
+              albumArtUrl: mode === "bluetoothRealCover" ? realBluetoothCover : null,
+              title: "Pocket Signal",
+              artist: "Tikpal Phone",
+              album: "Bluetooth Session",
+              elapsedSeconds: 12,
+              durationSeconds: 188,
+              currentTrackIndex: 0,
+              queueLength: 0,
+              favorite: false,
+              queuePreview: []
+            };
+            return next;
+          }
+
+          return state;
+        }
+
+        window.__tikpalSmokeStatePatchMode = "";
+        window.fetch = async (input, init) => {
+          const response = await nativeFetch(input, init);
+          const rawUrl = typeof input === "string" ? input : input?.url;
+          const pathname = rawUrl ? new URL(rawUrl, window.location.href).pathname : "";
+          if (pathname !== "/api/v1/system/state" || !window.__tikpalSmokeStatePatchMode) {
+            return response;
+          }
+
+          try {
+            const body = await response.clone().json();
+            const headers = new Headers(response.headers);
+            headers.set("content-type", "application/json");
+            return new Response(JSON.stringify(applyPatch(body)), {
+              status: response.status,
+              statusText: response.statusText,
+              headers
+            });
+          } catch {
+            return response;
+          }
+        };
+      })();
+    `
+  });
 
   await navigate(client, APP_URL);
   await expect(client, "document.querySelector('.ambient-screen') !== null", "ambient root renders");
@@ -693,6 +852,24 @@ try {
     client,
     `
       (() => {
+        const visuals = document.querySelector('[data-hifi-ambient-visuals]');
+        const surface = document.querySelector('.hifi-now-playing-surface');
+        if (!visuals || !surface) return false;
+
+        const visualsStyle = getComputedStyle(visuals);
+        const surfaceStyle = getComputedStyle(surface);
+        return document.querySelectorAll('[data-hifi-wave-line]').length >= 7
+          && document.querySelectorAll('[data-hifi-particle]').length >= 24
+          && visualsStyle.pointerEvents === 'none'
+          && Number.parseInt(visualsStyle.zIndex, 10) < Number.parseInt(surfaceStyle.zIndex, 10);
+      })()
+    `,
+    "Hi-Fi centered background renders lightweight non-blocking waves and particles"
+  );
+  await expect(
+    client,
+    `
+      (() => {
         const labels = [...document.querySelectorAll('.ambient-transport button')].map((button) => button.getAttribute('aria-label'));
         return labels.includes('Choose audio source')
           && !labels.includes('Previous Hi-Fi EQ preset')
@@ -702,6 +879,86 @@ try {
     `,
     "Hi-Fi ambient transport exposes source selection and no EQ preset controls"
   );
+  await setStatePatchMode(client, "syncedLyrics");
+  await wait(3300);
+  await evaluate(
+    client,
+    `
+      (() => {
+        const button = document.querySelector('.ambient-transport button[aria-label="Show lyrics"]');
+        button?.click();
+        return Boolean(button);
+      })()
+    `
+  );
+  await expectEventually(
+    client,
+    `
+      (() => {
+        const panel = document.querySelector('[data-hifi-lyrics-panel]');
+        const activeLine = document.querySelector('[data-hifi-lyrics-line][data-hifi-lyrics-active]');
+        return panel !== null
+          && document.querySelector('[data-hifi-centered-now-playing]') === null
+          && document.querySelectorAll('[data-hifi-lyrics-line]').length >= 4
+          && activeLine?.classList.contains('is-active') === true
+          && (activeLine?.textContent?.trim().length ?? 0) > 0
+          && document.querySelector('[data-ambient-lyrics]')?.getAttribute('aria-hidden') === 'true'
+          && document.querySelector('.ambient-lyrics-ticker') === null;
+      })()
+    `,
+    "Hi-Fi ready synced lyrics render left-cover lyrics panel and hide bottom ticker"
+  );
+  await wait(1500);
+  await expectEventually(
+    client,
+    `
+      (() => {
+        const activeLine = document.querySelector('[data-hifi-lyrics-line][data-hifi-lyrics-active]');
+        const text = activeLine?.textContent?.trim() ?? "";
+        return text === "Synced line four" || text === "Synced line five";
+      })()
+    `,
+    "Hi-Fi synced lyrics advance from the local playback clock between state refreshes"
+  );
+  await setStatePatchMode(client, "staticLyrics");
+  await wait(3300);
+  await expectEventually(
+    client,
+    `
+      (() => {
+        const panel = document.querySelector('[data-hifi-lyrics-panel]');
+        const activeLine = document.querySelector('[data-hifi-lyrics-line][data-hifi-lyrics-active]');
+        return panel !== null
+          && document.querySelectorAll('[data-hifi-lyrics-line]').length === 5
+          && activeLine?.textContent?.includes('Static line');
+      })()
+    `,
+    "Hi-Fi static ready lyrics use the lyrics wall active line"
+  );
+  await setStatePatchMode(client, "noReadyLyrics");
+  await wait(3300);
+  await expectEventually(
+    client,
+    "document.querySelector('[data-hifi-now-playing][data-hifi-centered-now-playing]') !== null && document.querySelector('[data-hifi-lyrics-panel]') === null",
+    "Hi-Fi without ready lyrics returns to centered now-playing"
+  );
+  await setStatePatchMode(client, "bluetoothFallback");
+  await wait(3300);
+  await expectEventually(
+    client,
+    "document.querySelector('[data-bluetooth-generated-cover]') !== null && document.querySelector('[data-hifi-track-info]')?.textContent?.includes('Pocket Signal')",
+    "Bluetooth without real artwork uses generated record poster"
+  );
+  await setStatePatchMode(client, "bluetoothRealCover");
+  await wait(3300);
+  await expectEventually(
+    client,
+    "document.querySelector('[data-bluetooth-generated-cover]') === null && document.querySelector('[data-hifi-cover-art] img')?.getAttribute('src')?.startsWith('data:image/svg+xml')",
+    "Bluetooth real artwork is not replaced by generated poster"
+  );
+  await evaluate(client, "document.querySelector('.ambient-transport button[aria-label=\"Hide lyrics\"]')?.click(); true");
+  await setStatePatchMode(client, "");
+  await wait(3300);
   await evaluate(client, "document.querySelector('[data-ambient-source-toggle]')?.click()");
   await expectEventually(
     client,

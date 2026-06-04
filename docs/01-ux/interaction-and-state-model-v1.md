@@ -99,6 +99,8 @@ stateDiagram-v2
 - When the clock is visible, the weak Ambient caption may include daypart, scene, and weather/location context from `/api/v1/scene/context`, but it remains decorative copy and must not change room mode, source, timer, or Auto Night behavior.
 - Focus, Calm, and Sleep do not show music playback buttons, favorite, playlist, queue, seek progress, or lyrics on Ambient. Lyrics remain a Hi-Fi playback affordance only.
 - Hi-Fi uses the larger playback center controls: playback mode, source picker, previous/next, play/pause, favorite, playlist, and lyrics.
+- Hi-Fi defaults to centered now-playing artwork and metadata. When the lyrics toggle is on and `lyrics.status === "ready"` with at least one non-empty line, the main visual may switch to a cover-plus-lyrics wall; when lyrics are unavailable or not ready, it must return to centered now-playing instead of showing an empty lyrics surface.
+- Synced Hi-Fi lyrics should project the active line from the shared `playback.elapsedSeconds` clock between backend snapshot refreshes, then re-anchor on the next playback update. Static lyrics can rotate locally, but both paths must derive from the same `lyrics` object so Ambient, Player, and portable remote state do not invent separate track truth.
 - Ambient must not show queue or playlist content; queue preview stays in the Player overlay.
 - Choosing any non-scene source from Ambient immediately switches through `/api/v1/audio/source`, keeps the current scene video visible in Focus/Calm/Sleep, and clears persisted `sceneSoundEnabled` so browser scene audio stays muted.
 - The left edge band is reserved for live volume drag and should not fall through to the generic one-finger swipe-down player gesture.
@@ -118,6 +120,7 @@ stateDiagram-v2
 - Player source tabs use the same external handoff rule as Ambient for Spotify Connect, AirPlay, Bluetooth, and DLNA. A pending handoff replaces the source tabs with the waiting card so the user does not see a source as selected on one surface and merely armed on another.
 - Player volume uses a 0-100 range slider instead of step buttons. Dragging the slider should update UI immediately and send `volume_set` as the single global volume action.
 - The displayed volume percent should match `system.volume.percent`, including while Scene Sound is active.
+- Player, Ambient Hi-Fi, and portable remote summaries must keep now-playing title, artist, album, artwork, source label, progress, favorite state, and queue position aligned with backend playback truth. Browsing a source, arming an external intake, or previewing a playlist must not overwrite the displayed track until the backend confirms playback/source truth.
 
 ### Quick Settings
 

@@ -1,4 +1,5 @@
 import { buildGeneratedCoverArtUrl } from "./coverArt";
+import { buildBluetoothGeneratedCoverArtUrl } from "./hifiLyricsVisual";
 import type { AudioState, FontTheme, PlaybackSummary, SourceState, SourceSummary } from "./types";
 
 const SOURCE_LABELS: Record<SourceState, string> = {
@@ -20,6 +21,7 @@ export interface PlaybackDisplayTruth {
   sourceLabel: string;
   albumArtUrl: string;
   hasPlaybackArtwork: boolean;
+  isGeneratedBluetoothCover: boolean;
   elapsedSeconds: number | null;
   durationSeconds: number | null;
   progress: number;
@@ -37,6 +39,7 @@ export function getPlaybackDisplayTruth(playback: PlaybackSummary, audio: AudioS
   const album = playback.album ?? "No Album";
   const sourceLabel = getPlaybackSourceSummary(playback, audio)?.label ?? SOURCE_LABELS[playback.source] ?? "Unknown Source";
   const hasPlaybackArtwork = Boolean(playback.albumArtUrl);
+  const isGeneratedBluetoothCover = playback.source === "bluetooth" && !hasPlaybackArtwork;
   const elapsedSeconds = Number.isFinite(playback.elapsedSeconds) ? playback.elapsedSeconds : null;
   const durationSeconds = Number.isFinite(playback.durationSeconds) && (playback.durationSeconds ?? 0) > 0
     ? playback.durationSeconds
@@ -50,8 +53,12 @@ export function getPlaybackDisplayTruth(playback: PlaybackSummary, audio: AudioS
     artist,
     album,
     sourceLabel,
-    albumArtUrl: playback.albumArtUrl ?? buildGeneratedCoverArtUrl(title, artist, album, fontTheme),
+    albumArtUrl: playback.albumArtUrl
+      ?? (isGeneratedBluetoothCover
+        ? buildBluetoothGeneratedCoverArtUrl(title, artist, album)
+        : buildGeneratedCoverArtUrl(title, artist, album, fontTheme)),
     hasPlaybackArtwork,
+    isGeneratedBluetoothCover,
     elapsedSeconds,
     durationSeconds,
     progress,

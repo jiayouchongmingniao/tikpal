@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties }
 import { Bluetooth, Captions, CaptionsOff, Cast, GalleryHorizontalEnd, Heart, LibraryBig, ListMusic, ListPlus, LoaderCircle, Moon, Music2, Network, Pause, Play, Radio as RadioIcon, Repeat1, Settings, Shuffle, SkipBack, SkipForward, SlidersHorizontal, SunMedium, Target, Volume2, VolumeX, Waves } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { fetchBackgroundVideos, fetchSceneContext } from "../api/tikpalClient";
-import { EqVisualScene } from "./EqVisualScene";
+import { EqVisualScene, type HifiLyricsPanel } from "./EqVisualScene";
 import { FlameScene } from "./FlameScene";
 import { roomModeOptions } from "../roomExperienceTruth";
 import type { TikpalDataStatus } from "../hooks/useTikpalState";
@@ -47,6 +47,8 @@ const SCENE_CONTEXT_REFRESH_MS = 30 * 60_000;
 const SOURCE_PICKER_AUTO_CLOSE_MS = 5_000;
 const SCENE_VIDEO_THERMAL_PAUSE_C = 76;
 const SCENE_VIDEO_THERMAL_RESUME_C = 68;
+const LYRICS_CLOCK_TICK_MS = 250;
+const LYRICS_CLOCK_REWIND_TOLERANCE_SECONDS = 4;
 
 interface DragState {
   channel: AmbientAdjustChannel;
@@ -59,6 +61,12 @@ interface AdjustOverlayState {
   channel: AmbientAdjustChannel;
   percent: number;
   error: string | null;
+}
+
+interface LyricsClockAnchor {
+  key: string;
+  elapsedSeconds: number;
+  capturedAtMs: number;
 }
 
 const DRAG_PIXELS_PER_PERCENT = 4;
@@ -295,10 +303,27 @@ export function AmbientScreen({
   const [backgroundVideoIndex, setBackgroundVideoIndex] = useState(0);
   const [frozenLyricsLineIndex, setFrozenLyricsLineIndex] = useState<number | null>(null);
   const [staticLyricsLineIndex, setStaticLyricsLineIndex] = useState(0);
+  const [lyricsClockNowMs, setLyricsClockNowMs] = useState(() => Date.now());
+  const [lyricsClockAnchor, setLyricsClockAnchor] = useState<LyricsClockAnchor | null>(null);
   const [sceneContext, setSceneContext] = useState<SceneContextSummary | null>(null);
   const [sceneVideoThermalPaused, setSceneVideoThermalPaused] = useState(false);
   const currentBackgroundVideo = backgroundVideos[backgroundVideoIndex] ?? DEFAULT_BACKGROUND_VIDEO;
   const isHifiMode = roomExperience.mode === "hifi";
+  const playbackClockKey = useMemo(() => [
+    playback.source,
+    playback.title ?? "",
+    playback.artist ?? "",
+    playback.album ?? "",
+    playback.currentTrackIndex,
+    playback.durationSeconds ?? ""
+  ].join("|"), [
+    playback.album,
+    playback.artist,
+    playback.currentTrackIndex,
+    playback.durationSeconds,
+    playback.source,
+    playback.title
+  ]);
   const activeTimeZone = roomExperience.nightSchedule.timeZone;
   const ambientClockSceneCopy = getAmbientClockSceneCopy(currentBackgroundVideo, roomExperience.mode, sceneContext, activeTimeZone);
   const modeBackgroundVideos = useMemo(() => (
@@ -316,13 +341,49 @@ export function AmbientScreen({
   const canAdvanceLyrics = lyrics.synced
     && (playback.source === "mpd" || playback.source === "radio" || playback.source === "bluetooth" || playback.source === "airplay")
     && playback.state === "playing";
-  const computedLyricsLineIndex = canAdvanceLyrics ? findActiveLyricsLineIndex(lyrics, playback.elapsedSeconds) : null;
+  const lyricsElapsedSeconds = useMemo(() => {
+    if (!canAdvanceLyrics || lyricsClockAnchor?.key !== playbackClockKey) return playback.elapsedSeconds;
+
+    const projectedSeconds = lyricsClockAnchor.elapsedSeconds + Math.max(0, lyricsClockNowMs - lyricsClockAnchor.capturedAtMs) / 1000;
+    if (Number.isFinite(playback.durationSeconds)) {
+      return Math.min(Math.max(0, projectedSeconds), playback.durationSeconds ?? projectedSeconds);
+    }
+
+    return Math.max(0, projectedSeconds);
+  }, [canAdvanceLyrics, lyricsClockAnchor, lyricsClockNowMs, playback.durationSeconds, playback.elapsedSeconds, playbackClockKey]);
+  const computedLyricsLineIndex = canAdvanceLyrics ? findActiveLyricsLineIndex(lyrics, lyricsElapsedSeconds) : null;
   const activeLyricsLineIndex = canAdvanceLyrics ? computedLyricsLineIndex : frozenLyricsLineIndex;
   const activeLyricsLine = activeLyricsLineIndex !== null ? lyrics.lines[activeLyricsLineIndex] ?? null : null;
   const staticLyricsLines = lyrics.lines.map((line) => line.text.trim()).filter(Boolean);
   const staticLyricsText = staticLyricsLines.length > 0
     ? staticLyricsLines[staticLyricsLineIndex % staticLyricsLines.length] ?? ""
     : "";
+  const hifiLyricsPanel = useMemo<HifiLyricsPanel | null>(() => {
+    if (!lyricsVisible || lyrics.status !== "ready" || lyrics.lines.length === 0) return null;
+
+    const lyricEntries = lyrics.lines
+      .map((line, index) => ({ index, text: line.text.trim() }))
+      .filter((line) => Boolean(line.text));
+    if (lyricEntries.length === 0) return null;
+
+    const syncedActiveIndex = lyrics.synced && activeLyricsLineIndex !== null
+      ? lyricEntries.findIndex((line) => line.index === activeLyricsLineIndex)
+      : -1;
+    const activeIndex = syncedActiveIndex >= 0
+      ? syncedActiveIndex
+      : staticLyricsLineIndex % lyricEntries.length;
+
+    return {
+      activeIndex,
+      synced: syncedActiveIndex >= 0,
+      lines: lyricEntries.map((line, index) => ({
+        id: `${lyrics.trackKey ?? "lyrics"}-${line.index}`,
+        text: line.text,
+        active: index === activeIndex,
+        distance: Math.abs(index - activeIndex)
+      }))
+    };
+  }, [activeLyricsLineIndex, lyrics.lines, lyrics.status, lyrics.synced, lyrics.trackKey, lyricsVisible, staticLyricsLineIndex]);
   const roomModeLabel = roomModeOptions.find((option) => option.mode === roomExperience.mode)?.label ?? "Calm";
   const roomModeIntent = roomModeOptions.find((option) => option.mode === roomExperience.mode)?.intent ?? "Unwind & relax";
   const showSyncedLyrics = lyrics.status === "ready" && lyrics.synced && canAdvanceLyrics && Boolean(activeLyricsLine);
@@ -350,7 +411,7 @@ export function AmbientScreen({
     ? ({ "--ambient-lyrics-marquee-duration": `${marqueeDurationSeconds}s` } as CSSProperties)
     : undefined;
   const canShowLyricsLayer = isHifiMode && lyricsVisible;
-  const showLyricsLayer = canShowLyricsLayer && Boolean(tickerText);
+  const showLyricsLayer = canShowLyricsLayer && !hifiLyricsPanel && Boolean(tickerText);
   const isPlaybackPending = status.pending;
   const isPlaying = playback.state === "playing";
   const playbackSettings = playback.settings ?? { playMode: "sequence" };
@@ -666,6 +727,41 @@ export function AmbientScreen({
   }, []);
 
   useEffect(() => {
+    if (!Number.isFinite(playback.elapsedSeconds)) {
+      setLyricsClockAnchor(null);
+      return;
+    }
+
+    const capturedAtMs = Date.now();
+    const nextElapsedSeconds = Math.max(0, playback.elapsedSeconds ?? 0);
+    setLyricsClockAnchor((current) => {
+      if (!current || current.key !== playbackClockKey || playback.state !== "playing") {
+        return { key: playbackClockKey, elapsedSeconds: nextElapsedSeconds, capturedAtMs };
+      }
+
+      const projectedSeconds = current.elapsedSeconds + Math.max(0, capturedAtMs - current.capturedAtMs) / 1000;
+      const rewindSeconds = projectedSeconds - nextElapsedSeconds;
+      const shouldKeepLocalClock = rewindSeconds > 0 && rewindSeconds <= LYRICS_CLOCK_REWIND_TOLERANCE_SECONDS;
+      return {
+        key: playbackClockKey,
+        elapsedSeconds: shouldKeepLocalClock ? projectedSeconds : nextElapsedSeconds,
+        capturedAtMs
+      };
+    });
+  }, [playback.elapsedSeconds, playback.state, playbackClockKey]);
+
+  useEffect(() => {
+    if (!canAdvanceLyrics || lyricsClockAnchor?.key !== playbackClockKey) return undefined;
+
+    setLyricsClockNowMs(Date.now());
+    const interval = window.setInterval(() => {
+      setLyricsClockNowMs(Date.now());
+    }, LYRICS_CLOCK_TICK_MS);
+
+    return () => window.clearInterval(interval);
+  }, [canAdvanceLyrics, lyricsClockAnchor?.key, playbackClockKey]);
+
+  useEffect(() => {
     if (computedLyricsLineIndex !== null) {
       setFrozenLyricsLineIndex(computedLyricsLineIndex);
       return;
@@ -973,6 +1069,7 @@ export function AmbientScreen({
           audio={audio}
           system={system}
           fontTheme={fontTheme}
+          lyricsPanel={hifiLyricsPanel}
         />
       ) : (
         <FlameScene
