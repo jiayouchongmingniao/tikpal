@@ -47,7 +47,11 @@ async function requestFrom(baseUrl, path, options = {}) {
 }
 
 async function requestBinary(path) {
-  const response = await fetch(`${BASE_URL}${path}`);
+  return await requestBinaryFrom(BASE_URL, path);
+}
+
+async function requestBinaryFrom(baseUrl, path) {
+  const response = await fetch(`${baseUrl}${path}`);
   const body = Buffer.from(await response.arrayBuffer());
   return { response, body };
 }
@@ -220,6 +224,14 @@ async function waitForOutput(text) {
 
 let outputBuffer = "";
 
+function mpcFocusedSmokeEnv(overrides = {}) {
+  return {
+    ...process.env,
+    ...overrides,
+    TIKPAL_STARTUP_SCENE_SOUND_ENABLED: "0"
+  };
+}
+
 function sendProviderJson(response, status, body) {
   response.writeHead(status, {
     "Content-Type": "application/json; charset=utf-8",
@@ -375,8 +387,12 @@ function createProviderServer() {
 }
 
 async function waitForLyricsStatus(expectedStatuses) {
+  return await waitForLyricsStatusAt(BASE_URL, expectedStatuses);
+}
+
+async function waitForLyricsStatusAt(baseUrl, expectedStatuses) {
   for (let attempt = 0; attempt < 40; attempt += 1) {
-    const { response, body } = await request("/api/v1/lyrics/status");
+    const { response, body } = await requestFrom(baseUrl, "/api/v1/lyrics/status");
     if (response.ok && expectedStatuses.includes(body.status)) {
       return body;
     }
@@ -766,6 +782,15 @@ async function runMpcAirplayHandoffRefreshSmoke(roomExperienceStatePath) {
   const fakeMpcPath = path.join(workspace, "mpc-fake.mjs");
   const fakeVolumePath = path.join(workspace, "volume-fake.mjs");
   const fakeVolumeStatePath = path.join(workspace, "volume-state.txt");
+  const fakeAirplayMetadataPath = path.join(workspace, "airplay-metadata.json");
+  const fakeAirplayMetadataCommandPath = path.join(workspace, "airplay-metadata.mjs");
+  const airplayArtworkRoot = path.join(workspace, "airplay-covers");
+  const firstAirplayArtworkPath = path.join(airplayArtworkRoot, "this-city.png");
+  const secondAirplayArtworkPath = path.join(airplayArtworkRoot, "instant-crush.png");
+  const pngPixel = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMB/azU1wAAAABJRU5ErkJggg==", "base64");
+  const writeAirplayMetadata = async (metadata) => {
+    await writeFile(fakeAirplayMetadataPath, `${JSON.stringify(metadata, null, 2)}\n`);
+  };
 
   await writeFile(fakeMpcPath, `#!/usr/bin/env node
 const rawArgs = process.argv.slice(2);
@@ -818,10 +843,32 @@ process.stdout.write(\`Simple mixer control 'PCM',0
 \`);
 `);
   await chmod(fakeVolumePath, 0o755);
+  await mkdir(airplayArtworkRoot, { recursive: true });
+  await writeFile(firstAirplayArtworkPath, pngPixel);
+  await writeFile(secondAirplayArtworkPath, pngPixel);
+  await writeFile(fakeAirplayMetadataCommandPath, `#!/usr/bin/env node
+import { readFileSync } from "node:fs";
+
+const metadata = JSON.parse(readFileSync(process.env.TIKPAL_FAKE_AIRPLAY_METADATA_PATH, "utf8"));
+for (const [key, value] of Object.entries(metadata)) {
+  if (value === null || value === undefined || value === "") continue;
+  process.stdout.write(\`\${key}=\${String(value)}\\n\`);
+}
+`);
+  await chmod(fakeAirplayMetadataCommandPath, 0o755);
+  await writeAirplayMetadata({
+    title: "This City",
+    artist: "Sam Fischer",
+    album: "Not a Hobby",
+    status: "playing",
+    positionMs: 45000,
+    durationMs: 60000,
+    artworkPath: firstAirplayArtworkPath,
+    artworkMtimeMs: 111000
+  });
 
   const server = spawn(process.execPath, ["server/index.mjs"], {
-    env: {
-      ...process.env,
+    env: mpcFocusedSmokeEnv({
       TIKPAL_API_HOST: HOST,
       TIKPAL_API_PORT: String(port),
       TIKPAL_PLAYER_BACKEND: "mpc",
@@ -836,8 +883,12 @@ process.stdout.write(\`Simple mixer control 'PCM',0
       TIKPAL_AIRPLAY_READY_COMMAND: "true",
       TIKPAL_AIRPLAY_ACTIVE_COMMAND: "true",
       TIKPAL_AIRPLAY_RECEIVER_ACTIVE_COMMAND: "false",
-      TIKPAL_AIRPLAY_LABEL_COMMAND: "printf 'Tikpal Speaker'"
-    },
+      TIKPAL_AIRPLAY_LABEL_COMMAND: "printf 'Tikpal Speaker'",
+      TIKPAL_AIRPLAY_METADATA_COMMAND: `${process.execPath} ${fakeAirplayMetadataCommandPath}`,
+      TIKPAL_FAKE_AIRPLAY_METADATA_PATH: fakeAirplayMetadataPath,
+      TIKPAL_AIRPLAY_ARTWORK_ROOT: airplayArtworkRoot,
+      TIKPAL_LRCLIB_BASE_URL: PROVIDER_URL
+    }),
     stdio: ["ignore", "pipe", "pipe"]
   });
 
@@ -858,6 +909,20 @@ process.stdout.write(\`Simple mixer control 'PCM',0
     }
     assert(recovered, "mpc active external source should recover as current after API startup");
     assert(recovered.body.system.volume.percent === 28, "mpc recovered external source should report output volume");
+    assert(recovered.body.playback.title === "This City", "mpc recovered AirPlay state should expose metadata title");
+    assert(recovered.body.playback.artist === "Sam Fischer", "mpc recovered AirPlay state should expose metadata artist");
+    assert(recovered.body.playback.elapsedSeconds === 45, "mpc recovered AirPlay state should expose metadata position");
+    assert(
+      recovered.body.playback.albumArtUrl?.startsWith("/api/v1/media/airplay-artwork?path="),
+      "mpc recovered AirPlay state should expose proxied artwork"
+    );
+    assert(
+      recovered.body.playback.albumArtUrl.includes("v=111000"),
+      "mpc recovered AirPlay artwork should be versioned by artwork mtime"
+    );
+    const recoveredArtwork = await requestBinaryFrom(baseUrl, recovered.body.playback.albumArtUrl);
+    assert(recoveredArtwork.response.ok, "mpc recovered AirPlay artwork endpoint should return the fake cover");
+    assert(recoveredArtwork.body.length > 0, "mpc recovered AirPlay artwork endpoint should return bytes");
 
     const recoveredVolume = await requestFrom(baseUrl, "/api/v1/playback/actions", {
       method: "POST",
@@ -883,6 +948,23 @@ process.stdout.write(\`Simple mixer control 'PCM',0
     );
     assert(switched.body.playback.source === "airplay", "mpc airplay playback source should be AirPlay");
     assert(switched.body.system.volume.percent === 43, "mpc external source switch should return the current output volume");
+    assert(switched.body.playback.title === "This City", "mpc airplay switch should preserve fresh AirPlay metadata");
+    assert(
+      switched.body.playback.albumArtUrl?.includes("v=111000"),
+      "mpc airplay switch should preserve versioned AirPlay artwork"
+    );
+
+    const airplayLyricsRefresh = await requestFrom(baseUrl, "/api/v1/lyrics/refresh", {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    assert(airplayLyricsRefresh.response.ok, "mpc airplay lyrics refresh should return 200");
+    const thisCityLyrics = await waitForLyricsStatusAt(baseUrl, ["ready"]);
+    assert(thisCityLyrics.sourceScope === "airplay_input", "AirPlay metadata lyrics should keep airplay scope");
+    assert(thisCityLyrics.recognitionMode === "metadata", "trusted AirPlay metadata should use metadata lyrics lookup");
+    assert(thisCityLyrics.title === "This City", "AirPlay lyrics should resolve the current metadata track");
+    assert(thisCityLyrics.synced === true, "AirPlay lyrics should stay synced when playback position is available");
+    assert(thisCityLyrics.lines.some((line) => line.text.includes("crowded rooms")), "AirPlay lyrics should expose current track lyrics");
 
     const cached = await requestFrom(baseUrl, "/api/v1/system/state");
     assert(cached.response.ok, "cached mpc airplay state should return 200");
@@ -908,6 +990,35 @@ process.stdout.write(\`Simple mixer control 'PCM',0
     assert(
       afterVolume.body.audio.currentSource.connectionState === "connected",
       `cached mpc state should keep connected after external volume_set, got ${afterVolume.body.audio.currentSource.connectionState}`
+    );
+
+    await writeAirplayMetadata({
+      title: "Instant Crush",
+      artist: "Daft Punk",
+      album: "Random Access Memories",
+      status: "playing",
+      positionMs: 12000,
+      durationMs: 337000,
+      artworkPath: secondAirplayArtworkPath,
+      artworkMtimeMs: 222000
+    });
+    const secondLyricsRefresh = await requestFrom(baseUrl, "/api/v1/lyrics/refresh", {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    assert(secondLyricsRefresh.response.ok, "mpc airplay lyrics refresh after track change should return 200");
+    const instantCrushLyrics = await waitForLyricsStatusAt(baseUrl, ["ready"]);
+    assert(instantCrushLyrics.sourceScope === "airplay_input", "changed AirPlay lyrics should keep airplay scope");
+    assert(instantCrushLyrics.recognitionMode === "metadata", "changed AirPlay lyrics should still use metadata lookup");
+    assert(instantCrushLyrics.title === "Instant Crush", "AirPlay lyrics should switch to the changed metadata track");
+    assert(instantCrushLyrics.trackKey !== thisCityLyrics.trackKey, "AirPlay track change should not keep the old lyrics key");
+    assert(instantCrushLyrics.lines.some((line) => line.text.includes("forget")), "AirPlay track change should expose the new lyrics");
+    const afterTrackChange = await requestFrom(baseUrl, "/api/v1/system/state");
+    assert(afterTrackChange.response.ok, "cached mpc airplay state after track change should return 200");
+    assert(afterTrackChange.body.playback.title === "Instant Crush", "AirPlay state should switch to the changed metadata title");
+    assert(
+      afterTrackChange.body.playback.albumArtUrl?.includes("v=222000"),
+      "AirPlay artwork should switch to the changed cover version"
     );
   } finally {
     if (server.exitCode === null && server.signalCode === null) {

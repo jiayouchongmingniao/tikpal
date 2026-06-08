@@ -82,6 +82,7 @@ const STATE_SNAPSHOT_REFRESH_MS_RAW = Number(process.env.TIKPAL_STATE_SNAPSHOT_R
 const STATE_SNAPSHOT_REFRESH_MS = Number.isFinite(STATE_SNAPSHOT_REFRESH_MS_RAW) && STATE_SNAPSHOT_REFRESH_MS_RAW >= 1000
   ? STATE_SNAPSHOT_REFRESH_MS_RAW
   : 3000;
+const AIRPLAY_DIRECT_METADATA_REFRESH_MIN_MS = 2500;
 const RECOGNITION_PROVIDER = (process.env.TIKPAL_RECOGNITION_PROVIDER ?? "").trim().toLowerCase();
 const ACRCLOUD_HOST = process.env.TIKPAL_ACRCLOUD_HOST ?? "";
 const ACRCLOUD_ACCESS_KEY = process.env.TIKPAL_ACRCLOUD_ACCESS_KEY ?? "";
@@ -306,6 +307,8 @@ let tikpalStateSnapshotRefreshPromise = null;
 let tikpalStateSnapshotRefreshTimer = null;
 let tikpalStateSnapshotRefreshQueued = false;
 let tikpalStateSnapshotGeneration = 0;
+let airplayDirectMetadataRefreshPromise = null;
+let airplayDirectMetadataRefreshAtMs = 0;
 let sceneContextGeoCache = null;
 let sceneContextGeoRefreshPromise = null;
 let sceneContextWeatherCache = null;
@@ -1699,6 +1702,60 @@ async function readAirplayPlaybackMetadata() {
   if (!AIRPLAY_METADATA_COMMAND.trim()) return null;
   const raw = await runCommand(AIRPLAY_METADATA_COMMAND, { allowFailure: true, timeout: 3500 });
   return parseBluetoothMetadataOutput(raw);
+}
+
+function getAirplaySourceSummaryFromState(state) {
+  if (state?.audio?.currentSource?.id === "airplay") {
+    return state.audio.currentSource;
+  }
+  return Array.isArray(state?.audio?.sources)
+    ? state.audio.sources.find((source) => source.id === "airplay") ?? null
+    : null;
+}
+
+function shouldRefreshAirplayPlaybackMetadata(state, { force = false } = {}) {
+  if (API_MODE !== "mpc" || !AIRPLAY_METADATA_COMMAND.trim()) return false;
+  if (state?.playback?.source !== "airplay") return false;
+
+  const airplaySource = getAirplaySourceSummaryFromState(state);
+  if (airplaySource?.connectionState !== "connected") return false;
+  if (force) return true;
+
+  return !state.playback.albumArtUrl
+    || !Number.isFinite(state.playback.elapsedSeconds)
+    || looksLikeUntrustedTrackMetadata({
+      title: state.playback.title,
+      artist: state.playback.artist,
+      album: state.playback.album
+    });
+}
+
+function mergeAirplayPlaybackMetadata(state, metadata) {
+  if (!metadata?.title) return state;
+
+  const airplaySource = getAirplaySourceSummaryFromState(state);
+  if (airplaySource?.connectionState !== "connected") return state;
+
+  const playback = {
+    ...state.playback,
+    state: mapBluetoothPlaybackState(metadata),
+    albumArtUrl: metadata.artworkUrl ?? null,
+    title: metadata.title,
+    artist: metadata.artist || null,
+    album: metadata.album || "AirPlay Source",
+    elapsedSeconds: millisecondsToSeconds(metadata.positionMs),
+    durationSeconds: millisecondsToSeconds(metadata.durationMs, { allowZero: false }),
+    timingDiagnostics: metadata.timingDiagnostics ?? null
+  };
+  const nextState = {
+    ...state,
+    playback
+  };
+
+  return {
+    ...nextState,
+    lyrics: scheduleLyricsRecognition(nextState)
+  };
 }
 
 function readMockBluetoothPlaybackMetadata() {
@@ -4579,6 +4636,37 @@ function cacheTikpalStateSnapshot(state) {
   return readCachedTikpalState();
 }
 
+async function refreshAirplayPlaybackMetadataForState(state, { force = false } = {}) {
+  if (!shouldRefreshAirplayPlaybackMetadata(state, { force })) {
+    return state;
+  }
+
+  if (airplayDirectMetadataRefreshPromise) {
+    return await airplayDirectMetadataRefreshPromise;
+  }
+
+  const now = Date.now();
+  if (!force && now - airplayDirectMetadataRefreshAtMs < AIRPLAY_DIRECT_METADATA_REFRESH_MIN_MS) {
+    return state;
+  }
+  airplayDirectMetadataRefreshAtMs = now;
+
+  airplayDirectMetadataRefreshPromise = (async () => {
+    const metadata = await readAirplayPlaybackMetadata();
+    if (!metadata?.title) return state;
+    return cacheTikpalStateSnapshot(mergeAirplayPlaybackMetadata(state, metadata));
+  })()
+    .catch((error) => {
+      console.warn(`tikpal-api airplay metadata refresh failed: ${error instanceof Error ? error.message : "unknown error"}`);
+      return state;
+    })
+    .finally(() => {
+      airplayDirectMetadataRefreshPromise = null;
+    });
+
+  return await airplayDirectMetadataRefreshPromise;
+}
+
 async function collectTikpalStateSnapshot(options = {}) {
   if (!options.skipExperienceReconcile) {
     await reconcileRoomExperienceState(await readRoomExperienceState());
@@ -4668,7 +4756,11 @@ async function refreshTikpalStateSnapshotAfterMutation(options = {}) {
   }
 
   void requestTikpalStateSnapshotRefresh({ force: true });
-  return readCachedTikpalState();
+  const cachedState = readCachedTikpalState();
+  return await refreshAirplayPlaybackMetadataForState(cachedState, {
+    force: options.forceFreshAirplayMetadata === true
+      || shouldRefreshAirplayPlaybackMetadata(cachedState)
+  });
 }
 
 async function getTikpalState(options = {}) {
@@ -4677,7 +4769,9 @@ async function getTikpalState(options = {}) {
   }
 
   void requestTikpalStateSnapshotRefresh();
-  return readCachedTikpalState();
+  return await refreshAirplayPlaybackMetadataForState(readCachedTikpalState(), {
+    force: options.forceFreshAirplayMetadata === true
+  });
 }
 
 function startTikpalStateSnapshotCollector() {
@@ -5016,6 +5110,16 @@ function getLyricsCandidate(snapshot) {
     });
     if (metadataCandidate.trackKey && !looksLikeUntrustedTrackMetadata(metadataCandidate)) {
       return metadataCandidate;
+    }
+
+    if (!getProxyInputCaptureCommand(source).trim()) {
+      return {
+        supported: false,
+        sourceScope,
+        recognitionMode: null,
+        recognitionProvider: null,
+        reason: `${sourceLabel} metadata unavailable for lyrics`
+      };
     }
 
     return {
@@ -6042,8 +6146,8 @@ function scheduleLyricsRecognition(snapshot, options = {}) {
     return updateLyricsState(buildLyricsState({
       status: "idle",
       sourceScope: candidate.sourceScope ?? "local_playback",
-      recognitionMode: isProxyInputSourceScope(candidate.sourceScope) ? "fingerprint" : null,
-      recognitionProvider: isProxyInputSourceScope(candidate.sourceScope) ? "acrcloud" : null,
+      recognitionMode: candidate.recognitionMode ?? (isProxyInputSourceScope(candidate.sourceScope) ? "fingerprint" : null),
+      recognitionProvider: candidate.recognitionProvider ?? (isProxyInputSourceScope(candidate.sourceScope) ? "acrcloud" : null),
       trackKey: null,
       title: normalizeMetadataValue(snapshot.playback?.title) || null,
       artist: normalizeMetadataValue(snapshot.playback?.artist) || null,
@@ -6943,8 +7047,9 @@ async function applyRemoteAction(action) {
       await applySystemAction({ type: "brightness_set", value: requireRemoteNumber(action.value, "display.brightness_set") });
       break;
     case "lyrics.refresh": {
-      const state = await getTikpalState();
+      const state = await getTikpalState({ forceFreshAirplayMetadata: true });
       scheduleLyricsRecognition(state, { force: true });
+      refreshOptions.forceFreshAirplayMetadata = state.playback?.source === "airplay";
       break;
     }
     default:
@@ -7175,7 +7280,7 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "POST" && url.pathname === "/api/v1/lyrics/refresh") {
-      const state = await getTikpalState();
+      const state = await getTikpalState({ forceFreshAirplayMetadata: true });
       const lyrics = scheduleLyricsRecognition(state, { force: true });
       sendJson(response, 200, lyrics);
       return;

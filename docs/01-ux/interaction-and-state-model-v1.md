@@ -101,6 +101,7 @@ stateDiagram-v2
 - Hi-Fi uses the larger playback center controls: playback mode, source picker, previous/next, play/pause, favorite, playlist, and lyrics.
 - Hi-Fi defaults to centered now-playing artwork and metadata. When the lyrics toggle is on and `lyrics.status === "ready"` with at least one non-empty line, the main visual may switch to a cover-plus-lyrics wall; when lyrics are unavailable or not ready, it must return to centered now-playing instead of showing an empty lyrics surface.
 - Synced Hi-Fi lyrics should project the active line from the shared `playback.elapsedSeconds` clock between backend snapshot refreshes, then re-anchor on the next playback update. Static lyrics can rotate locally, but both paths must derive from the same `lyrics` object so Ambient, Player, and portable remote state do not invent separate track truth.
+- AirPlay playback must refresh title, artist, album, cover art, elapsed time, and lyrics from the same backend metadata snapshot. When the AirPlay track changes, all surfaces should prefer a temporary no-cover or recognizing state over showing stale cover art or old lyrics with the new title.
 - Ambient must not show queue or playlist content; queue preview stays in the Player overlay.
 - Choosing any non-scene source from Ambient immediately switches through `/api/v1/audio/source`, keeps the current scene video visible in Focus/Calm/Sleep, and clears persisted `sceneSoundEnabled` so browser scene audio stays muted.
 - The left edge band is reserved for live volume drag and should not fall through to the generic one-finger swipe-down player gesture.
@@ -121,6 +122,7 @@ stateDiagram-v2
 - Player volume uses a 0-100 range slider instead of step buttons. Dragging the slider should update UI immediately and send `volume_set` as the single global volume action.
 - The displayed volume percent should match `system.volume.percent`, including while Scene Sound is active.
 - Player, Ambient Hi-Fi, and portable remote summaries must keep now-playing title, artist, album, artwork, source label, progress, favorite state, and queue position aligned with backend playback truth. Browsing a source, arming an external intake, or previewing a playlist must not overwrite the displayed track until the backend confirms playback/source truth.
+- AirPlay metadata-backed lyrics use `sourceScope: "airplay_input"` and the shared playback clock, so portable remote refreshes and the kiosk Hi-Fi wall stay anchored to the same track.
 
 ### Quick Settings
 
