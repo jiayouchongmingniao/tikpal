@@ -14,7 +14,7 @@ import type { AppMode, BackgroundVideoSummary, FontTheme, LyricsFontSize, RoomEx
 
 const FONT_THEME_STORAGE_KEY = "tikpal.fontTheme";
 const SURFACE_THEME_STORAGE_KEY = "tikpal.surfaceTheme";
-const LYRICS_VISIBLE_STORAGE_KEY = "tikpal.lyricsVisible.v2";
+const LYRICS_VISIBLE_STORAGE_KEY = "tikpal.lyricsVisible.v3";
 const LYRICS_FONT_SIZE_STORAGE_KEY = "tikpal.lyricsFontSize";
 const SCENE_VIDEO_ENABLED_STORAGE_KEY = "tikpal.sceneVideoEnabled";
 const CLOCK_VISIBLE_STORAGE_KEY = "tikpal.clockVisible";
@@ -60,7 +60,7 @@ function readInitialSurfaceTheme(): SurfaceTheme {
 }
 
 function readInitialLyricsVisible() {
-  return window.localStorage.getItem(LYRICS_VISIBLE_STORAGE_KEY) === "true";
+  return readStoredBoolean(LYRICS_VISIBLE_STORAGE_KEY, true);
 }
 
 function readInitialLyricsFontSize(): LyricsFontSize {
