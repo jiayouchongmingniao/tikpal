@@ -61,6 +61,43 @@ def clean(value):
     return " ".join(str(value or "").split())
 
 
+def comparable(value):
+    return clean(value).casefold()
+
+
+def same_track(left, right):
+    if not left or not right:
+        return False
+    left_title = comparable(left.get("title"))
+    right_title = comparable(right.get("title"))
+    if not left_title or left_title != right_title:
+        return False
+
+    left_artist = comparable(left.get("artist"))
+    right_artist = comparable(right.get("artist"))
+    if left_artist and right_artist and left_artist != right_artist and left_artist not in right_artist and right_artist not in left_artist:
+        return False
+    return True
+
+
+def supplement_payload(primary, fallback):
+    if not primary or not same_track(primary, fallback):
+        return primary
+    for key in (
+        "artist",
+        "album",
+        "duration_ms",
+        "artwork_url",
+        "artwork_path",
+        "format",
+        "status",
+        "raw_position_ms",
+    ):
+        if not clean(primary.get(key)) and clean(fallback.get(key)):
+            primary[key] = fallback.get(key)
+    return primary
+
+
 def stat_mtime(path):
     try:
         return int(os.stat(path).st_mtime)
@@ -144,6 +181,7 @@ def read_txt_metadata():
                     "format": parts[5] if len(parts) > 5 else "",
                     "status": "playing",
                     "source_mtime": stat_mtime(metadata_file),
+                    "metadata_source": "txt",
                     "raw_position_ms": "",
                 }
     return None
@@ -215,6 +253,7 @@ def read_mpris_metadata():
         "format": "",
         "status": status,
         "source_mtime": source_mtime,
+        "metadata_source": "mpris",
         "raw_position_ms": raw_position_ms,
     }
 
@@ -238,33 +277,42 @@ def read_json_metadata():
         "format": clean(metadata.get("sformat") or metadata.get("oformat")),
         "status": "playing",
         "source_mtime": stat_mtime(metadata_json_file),
+        "metadata_source": "json",
         "raw_position_ms": "",
     }
 
 
-for reader in (read_txt_metadata, read_mpris_metadata, read_json_metadata):
+payloads = []
+for reader in (read_mpris_metadata, read_json_metadata, read_txt_metadata):
     try:
         payload = reader()
     except (OSError, json.JSONDecodeError):
         payload = None
     if payload:
-        payload = with_fresh_artwork(payload)
-        emit(
-            [
-                ("title", payload["title"]),
-                ("artist", payload["artist"]),
-                ("album", payload["album"]),
-                ("durationMs", payload["duration_ms"]),
-                ("artworkUrl", payload["artwork_url"]),
-                ("artworkPath", payload["artwork_path"]),
-                ("artworkMtimeMs", payload["artwork_mtime_ms"]),
-                ("format", payload["format"]),
-                ("status", payload["status"]),
-                ("metadataSourceMtimeSeconds", payload["source_mtime"]),
-                ("rawPositionMs", payload["raw_position_ms"]),
-            ]
-        )
-        raise SystemExit(0)
+        payloads.append(payload)
+
+if payloads:
+    payload = payloads[0]
+    for fallback in payloads[1:]:
+        payload = supplement_payload(payload, fallback)
+    payload = with_fresh_artwork(payload)
+    emit(
+        [
+            ("title", payload["title"]),
+            ("artist", payload["artist"]),
+            ("album", payload["album"]),
+            ("durationMs", payload["duration_ms"]),
+            ("artworkUrl", payload["artwork_url"]),
+            ("artworkPath", payload["artwork_path"]),
+            ("artworkMtimeMs", payload["artwork_mtime_ms"]),
+            ("format", payload["format"]),
+            ("status", payload["status"]),
+            ("metadataSource", payload["metadata_source"]),
+            ("metadataSourceMtimeSeconds", payload["source_mtime"]),
+            ("rawPositionMs", payload["raw_position_ms"]),
+        ]
+    )
+    raise SystemExit(0)
 
 raise SystemExit(1)
 PY

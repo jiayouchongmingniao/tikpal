@@ -276,10 +276,33 @@ function createProviderServer() {
         sendProviderJson(response, 200, [
           {
             trackName: track,
+            artistName: "Wrong Singer",
+            albumName: "Wrong Album",
+            duration: 60,
+            syncedLyrics: "[00:05.00]Wrong city in the wrong song",
+            plainLyrics: "Wrong city in the wrong song"
+          },
+          {
+            trackName: track,
             artistName: "Sam Fischer",
             albumName: "Not a Hobby",
+            duration: 60,
             syncedLyrics: "[00:05.00]I've been seeing lonely people in crowded rooms\n[00:21.00]Covering their old heartbreaks with new tattoos\n[00:42.00]It's all about smoke screens and cigarettes\n[01:14.00]This city is gonna break my heart\n[01:46.00]This city is gonna love me then leave me alone",
             plainLyrics: "I've been seeing lonely people in crowded rooms\nCovering their old heartbreaks with new tattoos\nIt's all about smoke screens and cigarettes\nThis city is gonna break my heart"
+          }
+        ]);
+        return;
+      }
+
+      if (track === "Duration Drift") {
+        sendProviderJson(response, 200, [
+          {
+            trackName: track,
+            artistName: "Clock Source",
+            albumName: "Unreliable Metadata",
+            duration: 245,
+            syncedLyrics: "[00:05.00]AirPlay said this song was short\n[01:20.00]The provider still has the real lyric clock\n[03:40.00]Keep the correct title and artist alive",
+            plainLyrics: "AirPlay said this song was short\nThe provider still has the real lyric clock\nKeep the correct title and artist alive"
           }
         ]);
         return;
@@ -291,6 +314,12 @@ function createProviderServer() {
 
     if (request.method === "GET" && url.pathname === "/api/get") {
       const track = url.searchParams.get("track_name");
+      const duration = Number(url.searchParams.get("duration"));
+
+      if (Number.isFinite(duration) && duration > 1000) {
+        sendProviderJson(response, 400, { error: "duration should be seconds" });
+        return;
+      }
 
       if (track === "Get Lucky (feat. Pharrell Williams)") {
         sendProviderJson(response, 200, {
@@ -308,9 +337,15 @@ function createProviderServer() {
           trackName: track,
           artistName: "Daft Punk",
           albumName: "Random Access Memories",
+          duration: 337,
           syncedLyrics: null,
           plainLyrics: "I didn't want to be the one to forget\n\nI thought of everything I'd never regret"
         });
+        return;
+      }
+
+      if (track === "Duration Drift") {
+        sendProviderJson(response, 404, { error: "not found" });
         return;
       }
 
@@ -399,6 +434,22 @@ async function waitForLyricsStatusAt(baseUrl, expectedStatuses) {
     await wait(100);
   }
   throw new Error(`Lyrics state did not reach one of: ${expectedStatuses.join(", ")}`);
+}
+
+async function waitForLyricsTrackAt(baseUrl, { title, artist, statuses = ["ready"] }) {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const { response, body } = await requestFrom(baseUrl, "/api/v1/lyrics/status");
+    if (
+      response.ok
+      && statuses.includes(body.status)
+      && body.title === title
+      && (artist === undefined || body.artist === artist)
+    ) {
+      return body;
+    }
+    await wait(100);
+  }
+  throw new Error(`Lyrics state did not reach ${title} by ${artist ?? "any artist"}`);
 }
 
 async function runMpcHifiCommandGuardSmoke(roomExperienceStatePath) {
@@ -981,7 +1032,8 @@ for (const [key, value] of Object.entries(metadata)) {
     positionMs: 45000,
     durationMs: 60000,
     artworkPath: firstAirplayArtworkPath,
-    artworkMtimeMs: 111000
+    artworkMtimeMs: 111000,
+    metadataSource: "mpris"
   });
 
   const server = spawn(process.execPath, ["server/index.mjs"], {
@@ -1004,6 +1056,7 @@ for (const [key, value] of Object.entries(metadata)) {
       TIKPAL_AIRPLAY_METADATA_COMMAND: `${process.execPath} ${fakeAirplayMetadataCommandPath}`,
       TIKPAL_FAKE_AIRPLAY_METADATA_PATH: fakeAirplayMetadataPath,
       TIKPAL_AIRPLAY_ARTWORK_ROOT: airplayArtworkRoot,
+      TIKPAL_AIRPLAY_DIRECT_METADATA_REFRESH_MIN_MS: "1000",
       TIKPAL_LRCLIB_BASE_URL: PROVIDER_URL
     }),
     stdio: ["ignore", "pipe", "pipe"]
@@ -1029,6 +1082,7 @@ for (const [key, value] of Object.entries(metadata)) {
     assert(recovered.body.playback.title === "This City", "mpc recovered AirPlay state should expose metadata title");
     assert(recovered.body.playback.artist === "Sam Fischer", "mpc recovered AirPlay state should expose metadata artist");
     assert(recovered.body.playback.elapsedSeconds === 45, "mpc recovered AirPlay state should expose metadata position");
+    assert(recovered.body.playback.timingDiagnostics?.metadataSource === "mpris", "mpc recovered AirPlay state should expose metadata source diagnostics");
     assert(
       recovered.body.playback.albumArtUrl?.startsWith("/api/v1/media/airplay-artwork?path="),
       "mpc recovered AirPlay state should expose proxied artwork"
@@ -1080,8 +1134,10 @@ for (const [key, value] of Object.entries(metadata)) {
     assert(thisCityLyrics.sourceScope === "airplay_input", "AirPlay metadata lyrics should keep airplay scope");
     assert(thisCityLyrics.recognitionMode === "metadata", "trusted AirPlay metadata should use metadata lyrics lookup");
     assert(thisCityLyrics.title === "This City", "AirPlay lyrics should resolve the current metadata track");
+    assert(thisCityLyrics.artist === "Sam Fischer", "AirPlay lyrics should skip same-title results from the wrong artist");
     assert(thisCityLyrics.synced === true, "AirPlay lyrics should stay synced when playback position is available");
     assert(thisCityLyrics.lines.some((line) => line.text.includes("crowded rooms")), "AirPlay lyrics should expose current track lyrics");
+    assert(!thisCityLyrics.lines.some((line) => line.text.includes("Wrong city")), "AirPlay lyrics should not expose wrong-artist same-title lyrics");
 
     const cached = await requestFrom(baseUrl, "/api/v1/system/state");
     assert(cached.response.ok, "cached mpc airplay state should return 200");
@@ -1117,7 +1173,8 @@ for (const [key, value] of Object.entries(metadata)) {
       positionMs: 12000,
       durationMs: 337000,
       artworkPath: secondAirplayArtworkPath,
-      artworkMtimeMs: 222000
+      artworkMtimeMs: 222000,
+      metadataSource: "json"
     });
     const secondLyricsRefresh = await requestFrom(baseUrl, "/api/v1/lyrics/refresh", {
       method: "POST",
@@ -1133,10 +1190,58 @@ for (const [key, value] of Object.entries(metadata)) {
     const afterTrackChange = await requestFrom(baseUrl, "/api/v1/system/state");
     assert(afterTrackChange.response.ok, "cached mpc airplay state after track change should return 200");
     assert(afterTrackChange.body.playback.title === "Instant Crush", "AirPlay state should switch to the changed metadata title");
+    assert(afterTrackChange.body.lyrics.title === afterTrackChange.body.playback.title, "AirPlay cached state should keep lyrics and playback title aligned after track change");
+    assert(afterTrackChange.body.lyrics.artist === afterTrackChange.body.playback.artist, "AirPlay cached state should keep lyrics and playback artist aligned after track change");
     assert(
       afterTrackChange.body.playback.albumArtUrl?.includes("v=222000"),
       "AirPlay artwork should switch to the changed cover version"
     );
+
+    await writeAirplayMetadata({
+      title: "Duration Drift",
+      artist: "Clock Source",
+      album: "Unreliable Metadata",
+      status: "playing",
+      positionMs: 29000,
+      durationMs: 29954,
+      artworkPath: secondAirplayArtworkPath,
+      artworkMtimeMs: 333000,
+      metadataSource: "mpris"
+    });
+    const durationDriftLyricsRefresh = await requestFrom(baseUrl, "/api/v1/lyrics/refresh", {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    assert(durationDriftLyricsRefresh.response.ok, "mpc airplay lyrics refresh with unreliable duration should return 200");
+    const durationDriftLyrics = await waitForLyricsTrackAt(baseUrl, {
+      title: "Duration Drift",
+      artist: "Clock Source"
+    });
+    assert(durationDriftLyrics.sourceScope === "airplay_input", "duration-drift AirPlay lyrics should keep airplay scope");
+    assert(durationDriftLyrics.recognitionMode === "metadata", "duration-drift AirPlay lyrics should still use metadata lookup");
+    assert(durationDriftLyrics.synced === true, "AirPlay metadata lyrics should stay synced when only duration is unreliable");
+    assert(durationDriftLyrics.timingStrategy === "provider_synced", "AirPlay lyrics should prefer provider timing when metadata duration drifts");
+    assert(
+      durationDriftLyrics.lines.some((line) => line.text.includes("real lyric clock")),
+      "AirPlay lyrics should not disappear when trusted title and artist have a mismatched duration"
+    );
+
+    await writeAirplayMetadata({
+      title: "AirPlay Ready",
+      artist: "Choose Tikpal from AirPlay",
+      album: "AirPlay Source",
+      status: "playing",
+      positionMs: 0,
+      durationMs: 0,
+      metadataSource: "mpris"
+    });
+    const missingMetadataLyricsRefresh = await requestFrom(baseUrl, "/api/v1/lyrics/refresh", {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    assert(missingMetadataLyricsRefresh.response.ok, "mpc airplay lyrics refresh without usable metadata should return 200");
+    assert(missingMetadataLyricsRefresh.body.status === "idle", "AirPlay without usable metadata and capture should not stay in fingerprint recognizing");
+    assert(missingMetadataLyricsRefresh.body.recognitionMode === null, "AirPlay without capture should not advertise fingerprint recognition");
   } finally {
     if (server.exitCode === null && server.signalCode === null) {
       server.kill("SIGTERM");
@@ -1231,6 +1336,8 @@ async function run() {
       TIKPAL_BLUETOOTH_RECOGNITION_SETTLE_MS: "700",
       TIKPAL_BLUETOOTH_RECOGNITION_RETRY_MS: "45000",
       TIKPAL_BLUETOOTH_RECOGNITION_NOT_FOUND_RETRY_MS: "300",
+      TIKPAL_AIRPLAY_RECOGNITION_SETTLE_MS: "1",
+      TIKPAL_AIRPLAY_CAPTURE_DURATION_SECONDS: "1",
       TIKPAL_MOCK_BLUETOOTH_CONNECT_AFTER_MS: "150",
       TIKPAL_MOCK_BLUETOOTH_METADATA_FILE: BLUETOOTH_METADATA_PATH,
       TIKPAL_LRCLIB_BASE_URL: PROVIDER_URL,

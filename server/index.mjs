@@ -83,7 +83,10 @@ const STATE_SNAPSHOT_REFRESH_MS_RAW = Number(process.env.TIKPAL_STATE_SNAPSHOT_R
 const STATE_SNAPSHOT_REFRESH_MS = Number.isFinite(STATE_SNAPSHOT_REFRESH_MS_RAW) && STATE_SNAPSHOT_REFRESH_MS_RAW >= 1000
   ? STATE_SNAPSHOT_REFRESH_MS_RAW
   : 3000;
-const AIRPLAY_DIRECT_METADATA_REFRESH_MIN_MS = 2500;
+const AIRPLAY_DIRECT_METADATA_REFRESH_MIN_MS_RAW = Number(process.env.TIKPAL_AIRPLAY_DIRECT_METADATA_REFRESH_MIN_MS ?? 1000);
+const AIRPLAY_DIRECT_METADATA_REFRESH_MIN_MS = Number.isFinite(AIRPLAY_DIRECT_METADATA_REFRESH_MIN_MS_RAW) && AIRPLAY_DIRECT_METADATA_REFRESH_MIN_MS_RAW >= 250
+  ? AIRPLAY_DIRECT_METADATA_REFRESH_MIN_MS_RAW
+  : 1000;
 const RECOGNITION_PROVIDER = (process.env.TIKPAL_RECOGNITION_PROVIDER ?? "").trim().toLowerCase();
 const ACRCLOUD_HOST = process.env.TIKPAL_ACRCLOUD_HOST ?? "";
 const ACRCLOUD_ACCESS_KEY = process.env.TIKPAL_ACRCLOUD_ACCESS_KEY ?? "";
@@ -110,7 +113,9 @@ const SCENE_CONTEXT_WEATHER_CACHE_MS = Number.isFinite(SCENE_CONTEXT_WEATHER_CAC
   ? SCENE_CONTEXT_WEATHER_CACHE_MS_RAW
   : 900_000;
 const BLUETOOTH_CAPTURE_DURATION_SECONDS = Number(process.env.TIKPAL_BLUETOOTH_CAPTURE_DURATION_SECONDS ?? 10);
+const AIRPLAY_CAPTURE_DURATION_SECONDS = Number(process.env.TIKPAL_AIRPLAY_CAPTURE_DURATION_SECONDS ?? 6);
 const BLUETOOTH_RECOGNITION_SETTLE_MS = Number(process.env.TIKPAL_BLUETOOTH_RECOGNITION_SETTLE_MS ?? 4000);
+const AIRPLAY_RECOGNITION_SETTLE_MS = Number(process.env.TIKPAL_AIRPLAY_RECOGNITION_SETTLE_MS ?? 1000);
 const BLUETOOTH_RECOGNITION_RETRY_MS = Number(process.env.TIKPAL_BLUETOOTH_RECOGNITION_RETRY_MS ?? 45000);
 const BLUETOOTH_RECOGNITION_NOT_FOUND_RETRY_MS = Number(process.env.TIKPAL_BLUETOOTH_RECOGNITION_NOT_FOUND_RETRY_MS ?? 30000);
 const MOCK_BLUETOOTH_CONNECT_AFTER_MS = Number(process.env.TIKPAL_MOCK_BLUETOOTH_CONNECT_AFTER_MS ?? 1200);
@@ -1632,11 +1637,12 @@ function parsePlaybackTimingDiagnostics(metadata) {
     clockStartMs: readMetadataNumber(metadata, ["clockstartms", "clockStartMs", "clock_start_ms"]),
     clockLeadMs: readMetadataNumber(metadata, ["clockleadms", "clockLeadMs", "clock_lead_ms"]),
     effectiveClockStartMs: readMetadataNumber(metadata, ["effectiveclockstartms", "effectiveClockStartMs", "effective_clock_start_ms"]),
-    clockStartReason: normalizeMetadataValue(metadata.clockstartreason ?? metadata.clockStartReason ?? metadata.clock_start_reason) || null
+    clockStartReason: normalizeMetadataValue(metadata.clockstartreason ?? metadata.clockStartReason ?? metadata.clock_start_reason) || null,
+    metadataSource: normalizeMetadataValue(metadata.metadatasource ?? metadata.metadataSource ?? metadata.metadata_source) || null
   };
 
   const hasTimingValue = Object.entries(diagnostics).some(([key, value]) => (
-    key === "clockStartReason" ? Boolean(value) : Number.isFinite(value)
+    key === "clockStartReason" || key === "metadataSource" ? Boolean(value) : Number.isFinite(value)
   ));
   return hasTimingValue ? diagnostics : null;
 }
@@ -1726,6 +1732,7 @@ function shouldRefreshAirplayPlaybackMetadata(state, { force = false } = {}) {
   const airplaySource = getAirplaySourceSummaryFromState(state);
   if (airplaySource?.connectionState !== "connected") return false;
   if (force) return true;
+  if (Date.now() - airplayDirectMetadataRefreshAtMs >= AIRPLAY_DIRECT_METADATA_REFRESH_MIN_MS) return true;
 
   return !state.playback.albumArtUrl
     || !Number.isFinite(state.playback.elapsedSeconds)
@@ -5558,6 +5565,54 @@ function buildArtworkIndexPath(cacheKey) {
   return resolve(REMOTE_ARTWORK_INDEX_DIR, `${cacheKey}.json`);
 }
 
+function normalizeLyricsMatchValue(value) {
+  return normalizeMetadataValue(value)
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/['’`]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function providerLyricsDurationMs(lyricsBody) {
+  const durationSeconds = Number(lyricsBody?.duration ?? lyricsBody?.durationSeconds);
+  return Number.isFinite(durationSeconds) && durationSeconds > 0 ? Math.round(durationSeconds * 1000) : null;
+}
+
+function strictLyricsProviderMatch(candidate, lyricsBody) {
+  const expectedTitle = normalizeLyricsMatchValue(candidate.title);
+  const actualTitle = normalizeLyricsMatchValue(lyricsBody?.trackName ?? lyricsBody?.title);
+  if (!expectedTitle || actualTitle !== expectedTitle) return false;
+
+  const expectedArtist = normalizeLyricsMatchValue(candidate.artist);
+  if (expectedArtist) {
+    const actualArtist = normalizeLyricsMatchValue(lyricsBody?.artistName ?? lyricsBody?.artist);
+    if (!actualArtist) return false;
+    if (actualArtist !== expectedArtist && !actualArtist.includes(expectedArtist) && !expectedArtist.includes(actualArtist)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function shouldUseStrictLyricsProviderMatch(candidate) {
+  return isProxyInputSourceScope(candidate?.sourceScope) && candidate?.recognitionMode === "metadata";
+}
+
+function shouldUseProviderLyricsDuration(candidate, providerDurationMs) {
+  if (candidate?.sourceScope !== "airplay_input") return false;
+  if (!Number.isFinite(providerDurationMs) || providerDurationMs < 30_000) return false;
+
+  const candidateDurationMs = Number(candidate.durationMs);
+  if (!Number.isFinite(candidateDurationMs) || candidateDurationMs <= 0) return true;
+
+  const toleranceMs = Math.max(8_000, Math.round(providerDurationMs * 0.12));
+  return Math.abs(candidateDurationMs - providerDurationMs) > toleranceMs;
+}
+
 async function readCachedRemoteArtwork(cacheKey) {
   if (!cacheKey) return null;
   if (remoteArtworkCache.has(cacheKey)) return remoteArtworkCache.get(cacheKey);
@@ -5712,6 +5767,11 @@ async function resolveCurrentArtworkState({ playbackSource, metadata, fallbackTi
 }
 
 async function fetchLyricsFromProvider(candidate) {
+  const useStrictMatch = shouldUseStrictLyricsProviderMatch(candidate);
+  const acceptsLyricsBody = (lyricsBody) => (
+    lyricsBody && (!useStrictMatch || strictLyricsProviderMatch(candidate, lyricsBody))
+  );
+
   const fetchSearchVariant = async (params) => {
     const searchUrl = new URL("/api/search", LRCLIB_BASE_URL);
     for (const [key, value] of Object.entries(params)) {
@@ -5726,7 +5786,27 @@ async function fetchLyricsFromProvider(candidate) {
     if (!response.ok) {
       throw new Error(`LRCLIB search failed: ${response.status}`);
     }
-    return Array.isArray(body) && body.length > 0 ? body[0] : null;
+    return Array.isArray(body) ? body.find(acceptsLyricsBody) ?? null : null;
+  };
+
+  const fetchExactLyrics = async () => {
+    const exactUrl = new URL("/api/get", LRCLIB_BASE_URL);
+    exactUrl.searchParams.set("track_name", candidate.title);
+    if (candidate.artist) exactUrl.searchParams.set("artist_name", candidate.artist);
+    if (candidate.album) exactUrl.searchParams.set("album_name", candidate.album);
+    if (candidate.durationMs) exactUrl.searchParams.set("duration", String(Math.round(candidate.durationMs / 1000)));
+
+    const exactResponse = await fetchJsonWithTimeout(exactUrl, {
+      timeoutMs: Math.max(LRCLIB_TIMEOUT_MS, 12_000)
+    });
+
+    if (exactResponse.response.ok) {
+      return acceptsLyricsBody(exactResponse.body) ? exactResponse.body : null;
+    }
+    if (exactResponse.response.status !== 404) {
+      throw new Error(`LRCLIB request failed: ${exactResponse.response.status}`);
+    }
+    return null;
   };
 
   const searchVariants = [
@@ -5739,41 +5819,9 @@ async function fetchLyricsFromProvider(candidate) {
     }
   ];
 
-  let lyricsBody = null;
-  const shouldPreferSearch = isProxyInputSourceScope(candidate.sourceScope);
-
-  if (shouldPreferSearch) {
-    for (const params of searchVariants) {
-      try {
-        lyricsBody = await fetchSearchVariant(params);
-      } catch (error) {
-        if (lyricsErrorMessage(error) !== "Lyrics lookup timed out") {
-          throw error;
-        }
-      }
-      if (lyricsBody) break;
-    }
-  }
+  let lyricsBody = await fetchExactLyrics();
 
   if (!lyricsBody) {
-    const exactUrl = new URL("/api/get", LRCLIB_BASE_URL);
-    exactUrl.searchParams.set("track_name", candidate.title);
-    if (candidate.artist) exactUrl.searchParams.set("artist_name", candidate.artist);
-    if (candidate.album) exactUrl.searchParams.set("album_name", candidate.album);
-    if (candidate.durationMs) exactUrl.searchParams.set("duration", String(candidate.durationMs));
-
-    const exactResponse = await fetchJsonWithTimeout(exactUrl, {
-      timeoutMs: Math.max(LRCLIB_TIMEOUT_MS, 12_000)
-    });
-
-    if (exactResponse.response.ok) {
-      lyricsBody = exactResponse.body;
-    } else if (exactResponse.response.status !== 404) {
-      throw new Error(`LRCLIB request failed: ${exactResponse.response.status}`);
-    }
-  }
-
-  if (!lyricsBody && !shouldPreferSearch) {
     for (const params of searchVariants) {
       lyricsBody = await fetchSearchVariant(params);
       if (lyricsBody) break;
@@ -5790,15 +5838,16 @@ async function fetchLyricsFromProvider(candidate) {
     });
   }
 
-  const providerDurationSeconds = Number(lyricsBody?.duration ?? lyricsBody?.durationSeconds);
-  const candidateWithProviderDuration = Number.isFinite(candidate.durationMs)
-    ? candidate
-    : {
-        ...candidate,
-        durationMs: Number.isFinite(providerDurationSeconds) && providerDurationSeconds > 0
-          ? Math.round(providerDurationSeconds * 1000)
-          : candidate.durationMs
-      };
+  const providerDurationMs = providerLyricsDurationMs(lyricsBody);
+  const candidateDurationMs = Number(candidate.durationMs);
+  const candidateWithProviderDuration = {
+    ...candidate,
+    durationMs: shouldUseProviderLyricsDuration(candidate, providerDurationMs)
+      ? providerDurationMs
+      : Number.isFinite(candidateDurationMs)
+        ? candidateDurationMs
+        : providerDurationMs ?? candidate.durationMs
+  };
   const { synced, timingStrategy, lines } = buildDisplayableLyricsLines(lyricsBody, candidateWithProviderDuration);
 
   if (lines.length === 0) {
@@ -5827,6 +5876,14 @@ function getProxyInputCaptureCommand(source) {
   return source === "airplay" ? AIRPLAY_CAPTURE_COMMAND : BLUETOOTH_CAPTURE_COMMAND;
 }
 
+function getProxyInputCaptureDurationSeconds(source) {
+  return source === "airplay" ? AIRPLAY_CAPTURE_DURATION_SECONDS : BLUETOOTH_CAPTURE_DURATION_SECONDS;
+}
+
+function getProxyInputRecognitionSettleMs(source) {
+  return source === "airplay" ? AIRPLAY_RECOGNITION_SETTLE_MS : BLUETOOTH_RECOGNITION_SETTLE_MS;
+}
+
 async function captureBluetoothSample(source = "bluetooth") {
   const captureCommand = getProxyInputCaptureCommand(source);
   const sourceLabel = getProxyInputLabel(source);
@@ -5834,7 +5891,7 @@ async function captureBluetoothSample(source = "bluetooth") {
     throw new Error(`${sourceLabel} capture command is not configured`);
   }
 
-  const durationSeconds = Math.max(1, Math.round(BLUETOOTH_CAPTURE_DURATION_SECONDS));
+  const durationSeconds = Math.max(1, Math.round(getProxyInputCaptureDurationSeconds(source)));
   const cacheDir = resolve(REMOTE_MEDIA_CACHE_ROOT, `${source}-capture`);
   await mkdir(cacheDir, { recursive: true });
   const fileName = `${source}-capture-${Date.now()}-${Math.random().toString(16).slice(2)}.wav`;
@@ -5847,7 +5904,7 @@ async function captureBluetoothSample(source = "bluetooth") {
     });
     const buffer = await readFile(outputPath);
     if (buffer.length === 0) {
-      throw new Error("Bluetooth capture returned no audio");
+      throw new Error(`${sourceLabel} capture returned no audio`);
     }
     return {
       buffer,
@@ -6156,7 +6213,7 @@ function scheduleBluetoothLyricsRecognition(snapshot, candidate, options = {}) {
     bluetoothRecognitionSession.resolvedState = null;
   }
 
-  const settleUntil = bluetoothRecognitionSession.connectedAtMs + BLUETOOTH_RECOGNITION_SETTLE_MS;
+  const settleUntil = bluetoothRecognitionSession.connectedAtMs + getProxyInputRecognitionSettleMs(source);
   if (!shouldForce && Date.now() < settleUntil) {
     return updateLyricsState(buildBluetoothRecognizingState(candidate));
   }
@@ -6202,8 +6259,8 @@ function scheduleLyricsRecognition(snapshot, options = {}) {
     return updateLyricsState(buildLyricsState({
       status: "idle",
       sourceScope: candidate.sourceScope ?? "local_playback",
-      recognitionMode: candidate.recognitionMode ?? (isProxyInputSourceScope(candidate.sourceScope) ? "fingerprint" : null),
-      recognitionProvider: candidate.recognitionProvider ?? (isProxyInputSourceScope(candidate.sourceScope) ? "acrcloud" : null),
+      recognitionMode: candidate.recognitionMode ?? null,
+      recognitionProvider: candidate.recognitionProvider ?? null,
       trackKey: null,
       title: normalizeMetadataValue(snapshot.playback?.title) || null,
       artist: normalizeMetadataValue(snapshot.playback?.artist) || null,
