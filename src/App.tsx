@@ -325,6 +325,7 @@ export default function App() {
         system={tikpalState.system}
         status={tikpalStatus}
         sceneVideoEnabled={sceneVideoEnabled}
+        sceneVideoStableLoop={tikpalState.runtime.apiMode === "mpc"}
         sceneSoundEnabled={roomExperience.sceneSoundEnabled}
         sceneSoundPending={sceneSoundPending || tikpalStatus.pending}
         sourcePickerOpenRequest={ambientSourcePickerRequest}

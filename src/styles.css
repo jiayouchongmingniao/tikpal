@@ -577,6 +577,11 @@ select {
   filter: brightness(0.98) saturate(1.02) contrast(1.01);
 }
 
+.flame-scene.is-single-loop .fireplace-backdrop,
+.flame-scene.is-single-loop .flame-video {
+  filter: none;
+}
+
 @keyframes source-spin {
   from {
     transform: rotate(0deg);

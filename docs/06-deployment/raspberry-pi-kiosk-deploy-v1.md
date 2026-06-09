@@ -103,6 +103,8 @@ TIKPAL_MPD_PORT=6600
 TIKPAL_MPC_BIN=mpc
 TIKPAL_MPD_DEFAULT_QUEUE_PATH=Codex
 TIKPAL_MPD_STARTUP_VOLUME=30
+TIKPAL_STARTUP_SCENE_SOUND_ENABLED=1
+TIKPAL_ALSA_LOOPBACK_ALLOW_HDMI=0
 TIKPAL_OUTPUT_VOLUME_GET_COMMAND="./deploy/moode/tikpal-output-volume.sh get"
 TIKPAL_OUTPUT_VOLUME_SET_COMMAND="./deploy/moode/tikpal-output-volume.sh set %VALUE%"
 TIKPAL_WEB_ALLOW_REMOTE_UI_API=0
@@ -171,7 +173,9 @@ EOF
 
 `TIKPAL_MPD_DEFAULT_QUEUE_PATH=Codex` tells the backend which local library path to queue first when MPD is empty.
 `TIKPAL_MPD_STARTUP_VOLUME=30` makes Tikpal set MPD to 30% before auto-resuming playback when the API starts and playback is not already running.
-`TIKPAL_OUTPUT_VOLUME_GET_COMMAND` and `TIKPAL_OUTPUT_VOLUME_SET_COMMAND` should control the physical `_audioout` card, not only ALSA Loopback. On moOde installs with ALSA Loopback enabled, the checked-in `deploy/moode/tikpal-output-volume.sh` helper reads the current `/etc/alsa/conf.d/_sndaloop.conf` / `_audioout.conf` route, gets volume from the physical card, and mirrors writes to Loopback so Bluetooth, AirPlay, Scene Sound, and Hi-Fi spectrum use the same level. Avoid bare `amixer get PCM` on these installs because it can hit the Loopback card while the USB DAC remains at 100%.
+`TIKPAL_STARTUP_SCENE_SOUND_ENABLED=1` makes the Pi open Scene Sound as the default startup source for Focus, Calm, and Sleep room modes. The startup path writes `sceneSoundEnabled=true` when needed and switches to `target=scene`; choosing Library, Radio, Bluetooth, AirPlay, Spotify, or DLNA later still clears Scene Sound for that session.
+`TIKPAL_ALSA_LOOPBACK_ALLOW_HDMI=0` keeps Tikpal from re-enabling a stale moOde ALSA Loopback override when `_audioout` routes only to HDMI. Most Tikpal installs should select the USB speaker or USB amplifier in moOde first, then let `_audioout` follow that current output while mirroring to Loopback for Scene Sound, AirPlay, Bluetooth, and Hi-Fi spectrum. Set this to `1` only for an intentional HDMI-output install.
+`TIKPAL_OUTPUT_VOLUME_GET_COMMAND` and `TIKPAL_OUTPUT_VOLUME_SET_COMMAND` should control the physical `_audioout` output, not only ALSA Loopback. On moOde installs with ALSA Loopback enabled, the checked-in `deploy/moode/tikpal-output-volume.sh` helper reads the current `/etc/alsa/conf.d/_sndaloop.conf` / `_audioout.conf` route, gets volume from the physical output, and mirrors writes to Loopback so Bluetooth, AirPlay, Scene Sound, and Hi-Fi spectrum use the same level. Avoid bare `amixer get PCM` on these installs because it can hit the Loopback card while the USB output remains at 100%.
 Keep `TIKPAL_WEB_ALLOW_REMOTE_UI_API=0` for the normal Pi install: the production web service serves the full kiosk UI to loopback clients such as the Pi browser, while LAN browsers opening `http://<pi-ip>:4173/` receive the portable remote UI and are limited to `/api/v1/remote/*`. Remote mode is selected when the socket remote address is not loopback or when the HTTP `Host` is not `localhost`, `127.0.0.1`, or `[::1]`, so SSH tunnels, reverse proxies, and port mappings still receive the portable remote UI when the browser uses the Pi IP or a public domain as the Host. Set it to `1` only when trusted LAN clients should receive the full kiosk API surface.
 `TIKPAL_SCENE_CONTEXT_GEO_*` and `TIKPAL_SCENE_CONTEXT_WEATHER_*` control the cached `/api/v1/scene/context` lookups used for weak Ambient clock copy. The endpoint prefers IP-derived timezone/location when available, falls back to the caller's `timeZone` query or the room-experience default when unavailable, and caches provider failures briefly so a slow network cannot stall normal state reads.
 Kiosk display diagnostics are separate from `4173`: `TIKPAL_KIOSK_REMOTE_DEBUG=1` exposes Chromium DevTools on `TIKPAL_KIOSK_REMOTE_DEBUG_ADDRESS:TIKPAL_KIOSK_REMOTE_DEBUG_PORT`, proxying to Chromium's local `TIKPAL_KIOSK_REMOTE_DEBUG_CHROMIUM_ADDRESS:TIKPAL_KIOSK_REMOTE_DEBUG_CHROMIUM_PORT`, and `TIKPAL_KIOSK_VIEWER=novnc` exposes the full kiosk screen through noVNC on `TIKPAL_KIOSK_NOVNC_ADDRESS:TIKPAL_KIOSK_NOVNC_PORT`. Keep `TIKPAL_KIOSK_REMOTE_DEBUG=0` for normal use and enable it only while actively debugging; DevTools can inspect and control the kiosk browser.
@@ -272,6 +276,20 @@ curl -fsS http://127.0.0.1:8787/api/v1/health
 curl -fsSI http://127.0.0.1:4173/
 ```
 
+### Validated Proxy Deploy Checkpoint
+
+2026-06-09 validation on `192.168.2.141` used the SOCKS proxy SSH route with `moode@192.168.2.141` and confirmed the live service tree before syncing:
+
+```text
+ProxyCommand: nc -X 5 -x 127.0.0.1:7897 %h %p
+WorkingDirectory: /home/moode/code/tikpal
+tikpal-api.service: active
+tikpal-web.service: active
+tikpal-kiosk.service: active
+```
+
+The deploy synced the current workspace mirror, including `public/` and the local `dist/` build, while preserving device-local `.env`, `.env.*`, and `.tikpal/` state. Post-restart validation returned `{"ok":true,"service":"tikpal-api","mode":"mpc"}`, reported `kioskWindow:"2560x720"` from `/api/v1/system/runtime`, returned `/api/v1/system/state` in about `0.041s`, served `http://127.0.0.1:4173/` with `200 OK`, and served `http://192.168.2.141:4173/` through the proxy with `__TIKPAL_REMOTE_MODE__=true`.
+
 When `TIKPAL_PLAYER_BACKEND=mpc` is active, also verify the real device path:
 
 ```bash
@@ -288,7 +306,7 @@ curl -fsS http://127.0.0.1:8787/api/v1/system/runtime
 curl -fsS -o /tmp/tikpal-state.json -w '%{time_total}\n' http://127.0.0.1:8787/api/v1/system/state
 ```
 
-`next`, `previous`, playlist play, local track switch, and startup queue priming are serialized through the API and verify MPD reaches `[playing]` after `play`, so a status line that remains `[paused]` after one of those actions is a real regression to investigate before accepting the deploy. If MPD reports `Failed to open ALSA device "_audioout"`, verify `snd-aloop` is loaded when `/etc/alsa/conf.d/_sndaloop.conf` is active, then restart `mpd.service`.
+`next`, `previous`, playlist play, local track switch, and startup queue priming are serialized through the API and verify MPD reaches `[playing]` after `play`, so a status line that remains `[paused]` after one of those actions is a real regression to investigate before accepting the deploy. If MPD reports `Failed to open ALSA device "_audioout"`, verify that moOde sees the USB speaker or amplifier in `aplay -l`, that moOde's selected output is that USB output, and that `snd-aloop` is loaded when `/etc/alsa/conf.d/_sndaloop.conf` is active. Tikpal's Loopback helpers refuse HDMI-only `_audioout` routes by default; set `TIKPAL_ALSA_LOOPBACK_ALLOW_HDMI=1` only when HDMI output is deliberate.
 
 For Pi responsiveness, the timed `/api/v1/system/state` check should return from the in-memory snapshot instead of waiting for slow runtime probes. If it takes seconds, inspect whether a read endpoint is still executing `systemctl`, `ddcutil`, source status commands, AirPlay/Bluetooth metadata helpers, or media metadata probes in the request path. A background collector may still be running those commands, but repeated state reads should not increase stuck helper process counts.
 

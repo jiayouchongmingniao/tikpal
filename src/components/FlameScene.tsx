@@ -23,6 +23,7 @@ interface FlameScenePlayback {
 interface FlameSceneProps {
   lowPower?: boolean;
   playback: FlameScenePlayback;
+  singleLoop?: boolean;
   staticOnly?: boolean;
   videoEnabled?: boolean;
   audioEnabled?: boolean;
@@ -210,7 +211,7 @@ async function alignVideoWithPlayback(video: HTMLVideoElement, playback: FlameSc
   return true;
 }
 
-export function FlameScene({ lowPower = false, playback, staticOnly = false, videoEnabled = true, audioEnabled = false, volumePercent = 100, videoSrc = DEFAULT_FLAME_VIDEO_SRC }: FlameSceneProps) {
+export function FlameScene({ lowPower = false, playback, singleLoop = false, staticOnly = false, videoEnabled = true, audioEnabled = false, volumePercent = 100, videoSrc = DEFAULT_FLAME_VIDEO_SRC }: FlameSceneProps) {
   const nextLayerIdRef = useRef(0);
   const activeVideoSrcRef = useRef(videoSrc);
   const activeLayerIdRef = useRef(0);
@@ -226,6 +227,7 @@ export function FlameScene({ lowPower = false, playback, staticOnly = false, vid
   const loopMonitorRef = useRef<LoopMonitorHandle | null>(null);
   const loopHandoffInProgressRef = useRef(false);
   const loopPrepareTokensRef = useRef(new Map<string, number>());
+  const singleVideoRef = useRef<HTMLVideoElement | null>(null);
   const videoRefs = useRef(new Map<string, HTMLVideoElement>());
   const loopVisibleSlotsRef = useRef<LoopSlotMap>({ 0: 0 });
   const loopAudibleSlotsRef = useRef<LoopSlotMap>({ 0: 0 });
@@ -237,6 +239,7 @@ export function FlameScene({ lowPower = false, playback, staticOnly = false, vid
   const [loopVisibleSlots, setLoopVisibleSlots] = useState<LoopSlotMap>({ 0: 0 });
   const [loopAudibleSlots, setLoopAudibleSlots] = useState<LoopSlotMap>({ 0: 0 });
   const [loopSlotStatuses, setLoopSlotStatuses] = useState<Record<string, LoopSlotStatus>>({});
+  const [singleVideoFrameReady, setSingleVideoFrameReady] = useState(false);
   const videoVolume = normalizeVideoVolume(volumePercent);
 
   function clearTransitionCleanupTimer() {
@@ -438,6 +441,28 @@ export function FlameScene({ lowPower = false, playback, staticOnly = false, vid
     });
   }
 
+  function syncSingleLoopVideo() {
+    const video = singleVideoRef.current;
+    if (!video) return;
+
+    const shouldBeAudible = videoEnabledRef.current && audioEnabledRef.current && videoVolumeRef.current > 0;
+    video.dataset.sceneAudible = shouldBeAudible ? "true" : "false";
+    setSceneVideoVolume(video, shouldBeAudible ? videoVolumeRef.current : 0);
+    video.muted = true;
+
+    void alignVideoWithPlayback(video, playbackRef.current, false)
+      .then(() => {
+        if (singleVideoRef.current !== video) return;
+        if (video.dataset.sceneAudible === "true") {
+          setSceneVideoVolume(video, videoVolumeRef.current);
+          video.muted = false;
+        }
+      })
+      .catch(() => {
+        video.muted = true;
+      });
+  }
+
   function isSlotFrameReady(layerId: number, slot: LoopSlot) {
     const key = slotKey(layerId, slot);
     const video = getSlotVideo(layerId, slot);
@@ -623,7 +648,7 @@ export function FlameScene({ lowPower = false, playback, staticOnly = false, vid
   }
 
   function checkLoopHandoff(layerId: number, slot: LoopSlot) {
-    if (!videoEnabled || loopHandoffInProgressRef.current) return;
+    if (singleLoop || !videoEnabled || loopHandoffInProgressRef.current) return;
     if (layerId !== activeLayerIdRef.current || slot !== getLayerSlot(loopVisibleSlotsRef.current, layerId)) return;
 
     const video = getSlotVideo(layerId, slot);
@@ -649,7 +674,7 @@ export function FlameScene({ lowPower = false, playback, staticOnly = false, vid
 
   function scheduleLoopMonitor(delayMs = 0) {
     clearLoopMonitor();
-    if (!videoEnabled || !videoSrc || loopHandoffInProgressRef.current) return;
+    if (singleLoop || !videoEnabled || !videoSrc || loopHandoffInProgressRef.current) return;
 
     const layerId = activeLayerIdRef.current;
     const slot = getLayerSlot(loopVisibleSlotsRef.current, layerId);
@@ -693,6 +718,22 @@ export function FlameScene({ lowPower = false, playback, staticOnly = false, vid
   }, [audioEnabled, videoEnabled, videoVolume]);
 
   useEffect(() => {
+    if (!singleLoop) return undefined;
+    clearLoopMonitor();
+    clearLoopHandoffTimer();
+    clearLoopAudioCrossfadeFrame();
+    loopHandoffInProgressRef.current = false;
+    setLoopHandoff(null);
+    videoRefs.current.forEach((video) => {
+      video.dataset.sceneAudible = "false";
+      setSceneVideoVolume(video, 0);
+      video.muted = true;
+      video.pause();
+    });
+    return undefined;
+  }, [singleLoop]);
+
+  useEffect(() => {
     activeLayerIdRef.current = activeLayerId;
   }, [activeLayerId]);
 
@@ -704,7 +745,17 @@ export function FlameScene({ lowPower = false, playback, staticOnly = false, vid
   }, []);
 
   useEffect(() => {
-    if (!videoEnabled || staticOnly) return undefined;
+    if (!singleLoop) return;
+    setSingleVideoFrameReady(false);
+  }, [singleLoop, videoSrc]);
+
+  useEffect(() => {
+    if (!singleLoop || staticOnly || !videoEnabled || !videoSrc) return;
+    syncSingleLoopVideo();
+  }, [audioEnabled, playback.state, singleLoop, staticOnly, videoEnabled, videoSrc, videoVolume]);
+
+  useEffect(() => {
+    if (singleLoop || !videoEnabled || staticOnly) return undefined;
     if (activeVideoSrcRef.current === videoSrc) return undefined;
     activeVideoSrcRef.current = videoSrc;
     clearLoopMonitor();
@@ -742,10 +793,10 @@ export function FlameScene({ lowPower = false, playback, staticOnly = false, vid
       return currentActiveLayer ? [currentActiveLayer, nextLayer] : [nextLayer];
     });
     return undefined;
-  }, [layers, staticOnly, videoEnabled, videoSrc]);
+  }, [layers, singleLoop, staticOnly, videoEnabled, videoSrc]);
 
   useEffect(() => {
-    if (videoEnabled && !staticOnly) return undefined;
+    if (!singleLoop && videoEnabled && !staticOnly) return undefined;
     clearLoopMonitor();
     clearLoopHandoffTimer();
     clearLoopAudioCrossfadeFrame();
@@ -757,10 +808,10 @@ export function FlameScene({ lowPower = false, playback, staticOnly = false, vid
       video.muted = true;
     });
     return undefined;
-  }, [staticOnly, videoEnabled]);
+  }, [singleLoop, staticOnly, videoEnabled]);
 
   useEffect(() => {
-    if (!videoEnabled || staticOnly) return;
+    if (singleLoop || !videoEnabled || staticOnly) return;
     layers.forEach((layer) => {
       const isPendingLayer = pendingLayerIdRef.current === layer.id;
       const visibleSlot = getLayerSlot(loopVisibleSlotsRef.current, layer.id);
@@ -769,19 +820,19 @@ export function FlameScene({ lowPower = false, playback, staticOnly = false, vid
         forceSync: isPendingLayer
       });
     });
-  }, [layers, playback.state, staticOnly, videoEnabled]);
+  }, [layers, playback.state, singleLoop, staticOnly, videoEnabled]);
 
   useEffect(() => {
-    if (!videoEnabled || staticOnly) return;
+    if (singleLoop || !videoEnabled || staticOnly) return;
     clearLoopAudioCrossfadeFrame();
     syncSceneAudio();
-  }, [activeLayerId, audioEnabled, layers, loopAudibleSlots, staticOnly, videoEnabled, videoVolume]);
+  }, [activeLayerId, audioEnabled, layers, loopAudibleSlots, singleLoop, staticOnly, videoEnabled, videoVolume]);
 
   useEffect(() => {
-    if (staticOnly) return clearLoopMonitor;
+    if (singleLoop || staticOnly) return clearLoopMonitor;
     scheduleLoopMonitor();
     return clearLoopMonitor;
-  }, [activeLayerId, layers, loopVisibleSlots, staticOnly, videoEnabled, videoSrc]);
+  }, [activeLayerId, layers, loopVisibleSlots, singleLoop, staticOnly, videoEnabled, videoSrc]);
 
   if (staticOnly && videoSrc) {
     return (
@@ -793,6 +844,58 @@ export function FlameScene({ lowPower = false, playback, staticOnly = false, vid
 
   if (!videoEnabled || !videoSrc) {
     return <div className="flame-scene is-video-off" aria-hidden="true" />;
+  }
+
+  if (singleLoop) {
+    const audioActive = audioEnabled && videoVolume > 0;
+
+    return (
+      <div
+        className={`flame-scene ${lowPower ? "is-low-power" : ""} is-single-loop`}
+        aria-hidden="true"
+        data-flame-transition="none"
+        data-flame-loop-mode="single"
+      >
+        <img className="fireplace-backdrop" src={FIREPLACE_BACKGROUND_SRC} alt="" draggable={false} />
+        <div
+          className="flame-video-layer is-active"
+          data-flame-layer="active"
+          data-flame-loop-handoff="none"
+        >
+          <video
+            ref={(node) => {
+              singleVideoRef.current = node;
+              if (node) {
+                if (!node.dataset.sceneVolume) {
+                  setSceneVideoVolume(node, 0);
+                  node.dataset.sceneAudible = "false";
+                  node.muted = true;
+                }
+              }
+            }}
+            className="flame-video is-active"
+            data-flame-layer="active"
+            data-flame-slot-index="0"
+            data-flame-loop-slot="active"
+            data-flame-loop-role="active"
+            data-flame-frame-ready={singleVideoFrameReady ? "true" : "false"}
+            data-flame-loop-phase="active"
+            data-flame-audio-slot={audioActive ? "active" : "standby"}
+            data-flame-audio-role={audioActive ? "active" : "muted"}
+            src={videoSrc}
+            poster={FIREPLACE_BACKGROUND_SRC}
+            autoPlay
+            loop
+            muted
+            playsInline
+            preload="auto"
+            onLoadedMetadata={() => syncSingleLoopVideo()}
+            onLoadedData={() => setSingleVideoFrameReady(true)}
+          />
+        </div>
+        <span className="flame-video-fade" />
+      </div>
+    );
   }
 
   return (

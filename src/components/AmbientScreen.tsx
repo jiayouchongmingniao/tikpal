@@ -21,6 +21,7 @@ interface AmbientScreenProps {
   system: SystemState;
   status: TikpalDataStatus;
   sceneVideoEnabled: boolean;
+  sceneVideoStableLoop: boolean;
   sceneSoundEnabled: boolean;
   sceneSoundPending: boolean;
   sourcePickerOpenRequest: number;
@@ -268,6 +269,7 @@ export function AmbientScreen({
   system,
   status,
   sceneVideoEnabled,
+  sceneVideoStableLoop,
   sceneSoundEnabled,
   sceneSoundPending,
   sourcePickerOpenRequest,
@@ -338,6 +340,9 @@ export function AmbientScreen({
   const sceneVideoThermalGuardActive = sceneVideoThermalPaused && !isHifiMode;
   const shouldRenderSceneVideo = sceneVideoEnabled && hasSceneVideo && !sceneVideoThermalGuardActive;
   const sceneVisualLowPower = audioProtectionMode || sceneVideoThermalGuardActive;
+  const sceneAudioEnabled = shouldRenderSceneVideo && sceneSoundEnabled && playback.source === "scene" && playback.state === "playing";
+  const useStableSceneLoop = sceneVideoStableLoop && shouldRenderSceneVideo && sceneAudioEnabled && !isHifiMode;
+  const useStableSceneStill = sceneVideoStableLoop && shouldRenderSceneVideo && !sceneAudioEnabled && !isHifiMode;
   const canAdvanceLyrics = lyrics.synced
     && (playback.source === "mpd" || playback.source === "radio" || playback.source === "bluetooth" || playback.source === "airplay")
     && playback.state === "playing";
@@ -416,7 +421,6 @@ export function AmbientScreen({
   const isPlaying = playback.state === "playing";
   const playbackSettings = playback.settings ?? { playMode: "sequence" };
   const playMode = playbackSettings.playMode;
-  const sceneAudioEnabled = shouldRenderSceneVideo && sceneSoundEnabled && playback.source === "scene" && playback.state === "playing";
   const currentAmbientSource = audio.currentSource.id === "upnp"
     || audio.currentSource.id === "mpd"
     || audio.currentSource.id === "radio"
@@ -1073,10 +1077,11 @@ export function AmbientScreen({
         />
       ) : (
         <FlameScene
-          lowPower={sceneVisualLowPower}
+          lowPower={sceneVisualLowPower || useStableSceneLoop || useStableSceneStill}
           playback={playback}
+          singleLoop={useStableSceneLoop}
           videoSrc={currentBackgroundVideo.src}
-          staticOnly={sceneVideoThermalGuardActive && sceneVideoEnabled && hasSceneVideo}
+          staticOnly={(sceneVideoThermalGuardActive || useStableSceneStill) && sceneVideoEnabled && hasSceneVideo}
           videoEnabled={shouldRenderSceneVideo}
           audioEnabled={sceneAudioEnabled}
           volumePercent={system.volume.percent}

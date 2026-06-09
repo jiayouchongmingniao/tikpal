@@ -13,10 +13,11 @@ discover_cards_from_config() {
     awk '
       {
         line = $0
-        while (match(line, /(plug)?hw:[^" ,)]+/)) {
+        while (match(line, /((plug)?hw|default):[^" ,)]+/)) {
           token = substr(line, RSTART, RLENGTH)
           sub(/^plughw:/, "", token)
           sub(/^hw:/, "", token)
+          sub(/^default:/, "", token)
           sub(/,.*/, "", token)
           if (token != "" && token != "Loopback") print token
           line = substr(line, RSTART + RLENGTH)

@@ -19,6 +19,7 @@ const MPD_PORT = process.env.TIKPAL_MPD_PORT ?? "6600";
 const MPC_BIN = process.env.TIKPAL_MPC_BIN ?? "mpc";
 const MPD_DEFAULT_QUEUE_PATH = process.env.TIKPAL_MPD_DEFAULT_QUEUE_PATH ?? "Codex";
 const MPD_STARTUP_VOLUME = Number(process.env.TIKPAL_MPD_STARTUP_VOLUME ?? 30);
+const STARTUP_SCENE_SOUND_ENABLED = parseEnvBoolean(process.env.TIKPAL_STARTUP_SCENE_SOUND_ENABLED ?? "1");
 const MPD_MUSIC_ROOT = process.env.TIKPAL_MPD_MUSIC_ROOT ?? "/var/lib/mpd/music";
 const APP_VERSION = process.env.TIKPAL_APP_VERSION ?? "0.1.0";
 const REQUESTED_RENDERER = (process.env.TIKPAL_RENDERER ?? "media").toLowerCase();
@@ -202,7 +203,7 @@ const ROOM_MODE_PRESETS = {
     sceneVideoSrc: "/assets/scenes/Midnight-Library.mp4",
     hifiEqPresetId: DEFAULT_HIFI_EQ_PRESET_ID,
     hifiVisualPresetId: DEFAULT_HIFI_VISUAL_PRESET_ID,
-    sceneSoundEnabled: false,
+    sceneSoundEnabled: true,
     playlistId: null,
     volumePercent: 42,
     brightnessPercent: 64,
@@ -215,7 +216,7 @@ const ROOM_MODE_PRESETS = {
     sceneVideoSrc: "/assets/scenes/Rainy-Window.mp4",
     hifiEqPresetId: DEFAULT_HIFI_EQ_PRESET_ID,
     hifiVisualPresetId: DEFAULT_HIFI_VISUAL_PRESET_ID,
-    sceneSoundEnabled: false,
+    sceneSoundEnabled: true,
     playlistId: null,
     volumePercent: 38,
     brightnessPercent: 48,
@@ -228,7 +229,7 @@ const ROOM_MODE_PRESETS = {
     sceneVideoSrc: "/assets/scenes/Deep-Blue-Ocean.mp4",
     hifiEqPresetId: DEFAULT_HIFI_EQ_PRESET_ID,
     hifiVisualPresetId: DEFAULT_HIFI_VISUAL_PRESET_ID,
-    sceneSoundEnabled: false,
+    sceneSoundEnabled: true,
     playlistId: null,
     volumePercent: 26,
     brightnessPercent: 22,
@@ -249,6 +250,11 @@ const ROOM_MODE_PRESETS = {
   }
 };
 const execFileAsync = promisify(execFile);
+
+function parseEnvBoolean(value) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return ["1", "true", "yes", "on", "enabled"].includes(normalized);
+}
 
 const tracks = [
   {
@@ -4500,6 +4506,56 @@ async function primeMpcPlayback() {
   }
 }
 
+async function startStartupSceneSoundPlayback() {
+  if (!STARTUP_SCENE_SOUND_ENABLED) return false;
+
+  try {
+    const current = await readRoomExperienceState();
+    if (current.mode === "hifi") return false;
+
+    const sceneVideo = await resolveSceneAudioVideo(current);
+    if (!current.sceneSoundEnabled) {
+      await writeRoomExperienceState({
+        ...current,
+        sceneSoundEnabled: true
+      });
+    }
+    await applySourceSwitch({
+      target: "scene",
+      sceneVideoId: sceneVideo.id,
+      sceneVideoLabel: sceneVideo.label,
+      sceneVideoSrc: sceneVideo.src
+    });
+    return true;
+  } catch (error) {
+    console.warn(`tikpal-api startup scene sound failed: ${error instanceof Error ? error.message : "unknown error"}`);
+    return false;
+  }
+}
+
+async function getConnectedStartupExternalSource() {
+  try {
+    const snapshot = await getMpcSnapshot({
+      includeSlowRuntimeStatus: false,
+      includeSourceRuntimeStatus: true,
+      includeOutputVolumeStatus: false
+    });
+    const currentSource = snapshot.audio.currentSource;
+    if (COMMAND_HANDOFF_SOURCE_TARGETS.has(currentSource.id) && currentSource.connectionState === "connected") {
+      return currentSource;
+    }
+  } catch (error) {
+    console.warn(`tikpal-api startup source check failed: ${error instanceof Error ? error.message : "unknown error"}`);
+  }
+  return null;
+}
+
+async function applyStartupPlaybackPolicy() {
+  if (await getConnectedStartupExternalSource()) return;
+  if (await startStartupSceneSoundPlayback()) return;
+  await primeMpcPlayback();
+}
+
 async function getPlaybackSnapshot() {
   if (API_MODE === "mpc") {
     return (await getTikpalState()).playback;
@@ -7327,7 +7383,7 @@ const server = http.createServer(async (request, response) => {
 server.listen(PORT, HOST, () => {
   console.log(`tikpal-api ${API_MODE} listening on http://${HOST}:${PORT}`);
   if (API_MODE === "mpc") {
-    void primeMpcPlayback().finally(() => {
+    void applyStartupPlaybackPolicy().finally(() => {
       startTikpalStateSnapshotCollector();
     });
   }

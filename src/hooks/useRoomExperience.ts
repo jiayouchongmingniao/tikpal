@@ -14,7 +14,7 @@ export const fallbackRoomExperienceState: RoomExperienceState = {
   sceneVideoId: "rainy-window",
   hifiEqPresetId: "flat",
   hifiVisualPresetId: "spectrum-bars",
-  sceneSoundEnabled: false,
+  sceneSoundEnabled: true,
   playlistId: null,
   volumePercent: 38,
   brightnessPercent: 48,

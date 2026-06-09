@@ -6,6 +6,11 @@ set -euo pipefail
 
 MODULES_LOAD_PATH="${MODULES_LOAD_PATH:-/etc/modules-load.d/tikpal-snd-aloop.conf}"
 ALSALOOP_CONF="${ALSALOOP_CONF:-/etc/alsa/conf.d/_sndaloop.conf}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+TIKPAL_ALSA_LOG_PREFIX="${TIKPAL_ALSA_LOG_PREFIX:-tikpal-snd-aloop}"
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/tikpal-alsa-loopback.sh"
 
 log() {
   printf '[tikpal-snd-aloop] %s\n' "$*"
@@ -20,14 +25,7 @@ if [[ "$(id -u)" -ne 0 ]]; then
   exit 1
 fi
 
-if [[ -f "$ALSALOOP_CONF" ]]; then
-  sed -i '0,/_audioout__ {/s//_audioout {/' "$ALSALOOP_CONF" || true
-  log "ensured $ALSALOOP_CONF overrides _audioout"
-else
-  warn "$ALSALOOP_CONF is not present; loading snd-aloop is still safe"
-fi
-
-modprobe snd-aloop
+tikpal_enable_alsa_loopback_output "$ALSALOOP_CONF"
 printf 'snd-aloop\n' >"$MODULES_LOAD_PATH"
 chmod 0644 "$MODULES_LOAD_PATH"
 

@@ -18,6 +18,8 @@ const requiredFiles = [
   "deploy/chromium/chromium-flags.conf",
   "deploy/chromium/managed-policies.json",
   "deploy/chromium/env.kiosk.example",
+  "deploy/moode/tikpal-alsa-loopback.sh",
+  "deploy/moode/tikpal-output-volume.sh",
   "deploy/moode/tikpal-snd-aloop-enable.sh",
   "deploy/moode/tikpal-quiet-boot-enable.sh",
   "deploy/systemd/tikpal-api.service",
@@ -49,6 +51,8 @@ async function run() {
   await assertExecutable("deploy/chromium/start-tikpal-kiosk-display.sh");
   await assertExecutable("deploy/chromium/start-tikpal-kiosk-session.sh");
   await assertExecutable("deploy/chromium/start-tikpal-kiosk-viewer.sh");
+  await assertExecutable("deploy/moode/tikpal-alsa-loopback.sh");
+  await assertExecutable("deploy/moode/tikpal-output-volume.sh");
   await assertExecutable("deploy/moode/tikpal-snd-aloop-enable.sh");
   await assertExecutable("deploy/moode/tikpal-quiet-boot-enable.sh");
   await assertExecutable("deploy/systemd/install-systemd-services.sh");
@@ -72,6 +76,30 @@ async function run() {
   assert(kioskEnv.includes("TIKPAL_KIOSK_REMOTE_DEBUG=0"), "kiosk env should default remote debugging off");
   assert(kioskEnv.includes("TIKPAL_KIOSK_VIEWER=novnc"), "kiosk env should document noVNC viewer mode");
   assert(kioskEnv.includes("TIKPAL_KIOSK_DISPLAY_MODE=auto"), "kiosk env should document automatic physical/virtual display selection");
+
+  const loopbackGuardDir = mkdtempSync(path.join(tmpdir(), "tikpal-loopback-guard-"));
+  const hdmiLoopbackConfig = path.join(loopbackGuardDir, "_sndaloop-hdmi.conf");
+  const externalLoopbackConfig = path.join(loopbackGuardDir, "_sndaloop-external.conf");
+  writeFileSync(
+    hdmiLoopbackConfig,
+    'pcm.!_audioout {\n  type plug\n  slave.pcm {\n    type multi\n    slaves {\n      a { channels 2 pcm "default:vc4hdmi0" }\n      b { channels 2 pcm "hw:Loopback,0" }\n    }\n  }\n}\n'
+  );
+  writeFileSync(
+    externalLoopbackConfig,
+    'pcm.!_audioout {\n  type plug\n  slave.pcm {\n    type multi\n    slaves {\n      a { channels 2 pcm "hw:TikpalSpeaker,0" }\n      b { channels 2 pcm "hw:Loopback,0" }\n    }\n  }\n}\n'
+  );
+  const hdmiGuardCheck = spawnSync("sh", ["-c", ". ./deploy/moode/tikpal-alsa-loopback.sh; tikpal_validate_alsa_loopback_config \"$1\"", "sh", hdmiLoopbackConfig], {
+    cwd: ROOT,
+    encoding: "utf8"
+  });
+  assert(hdmiGuardCheck.status !== 0, "ALSA Loopback guard should reject HDMI-only physical output by default");
+  assert(hdmiGuardCheck.stderr.includes("HDMI"), "ALSA Loopback guard should explain HDMI-only rejection");
+
+  const externalGuardCheck = spawnSync("sh", ["-c", ". ./deploy/moode/tikpal-alsa-loopback.sh; tikpal_validate_alsa_loopback_config \"$1\"", "sh", externalLoopbackConfig], {
+    cwd: ROOT,
+    encoding: "utf8"
+  });
+  assert(externalGuardCheck.status === 0, `ALSA Loopback guard should accept non-HDMI physical output:\n${externalGuardCheck.stdout}\n${externalGuardCheck.stderr}`);
 
   const check = spawnSync("bash", ["deploy/chromium/launch-tikpal-kiosk.sh", "--check"], {
     cwd: ROOT,

@@ -405,15 +405,14 @@ async function runMpcHifiCommandGuardSmoke(roomExperienceStatePath) {
   const port = PORT + 10;
   const baseUrl = `http://${HOST}:${port}`;
   const server = spawn(process.execPath, ["server/index.mjs"], {
-    env: {
-      ...process.env,
+    env: mpcFocusedSmokeEnv({
       TIKPAL_API_HOST: HOST,
       TIKPAL_API_PORT: String(port),
       TIKPAL_PLAYER_BACKEND: "mpc",
       TIKPAL_ROOM_EXPERIENCE_STATE_PATH: roomExperienceStatePath,
       TIKPAL_HIFI_EQ_APPLY_COMMAND: "",
       TIKPAL_HIFI_SPECTRUM_COMMAND: ""
-    },
+    }),
     stdio: ["ignore", "pipe", "pipe"]
   });
 
@@ -484,6 +483,126 @@ async function runHifiSpectrumCommandSmoke(roomExperienceStatePath) {
       ]);
     }
     await rm(spectrumFramePath, { force: true });
+  }
+}
+
+async function runMpcStartupSceneDefaultSmoke() {
+  const port = PORT + 15;
+  const baseUrl = `http://${HOST}:${port}`;
+  const workspace = await mkdtemp(path.join(tmpdir(), "tikpal-mpc-startup-scene-"));
+  const fakeMpcPath = path.join(workspace, "mpc-fake.mjs");
+  const roomExperienceStatePath = path.join(workspace, "room-experience-state.json");
+
+  await writeFile(fakeMpcPath, `#!/usr/bin/env node
+const rawArgs = process.argv.slice(2);
+const args = [];
+
+for (let index = 0; index < rawArgs.length; index += 1) {
+  if (rawArgs[index] === "--host" || rawArgs[index] === "--port" || rawArgs[index] === "--format") {
+    index += 1;
+    continue;
+  }
+  args.push(rawArgs[index]);
+}
+
+const command = args[0] ?? "";
+switch (command) {
+  case "status":
+    process.stdout.write("volume:30%   repeat: off   random: off   single: off   consume: off\\n");
+    break;
+  case "stats":
+    process.stdout.write("Artists: 0\\nAlbums: 0\\nSongs: 0\\nDB Updated: fake\\n");
+    break;
+  case "current":
+  case "playlist":
+  case "stop":
+  default:
+    break;
+}
+`);
+  await chmod(fakeMpcPath, 0o755);
+  await writeFile(
+    roomExperienceStatePath,
+    `${JSON.stringify({
+      mode: "calm",
+      phase: "idle",
+      presetId: "calm-rain-room",
+      sceneVideoId: "rainy-window",
+      hifiEqPresetId: "flat",
+      hifiVisualPresetId: "spectrum-bars",
+      sceneSoundEnabled: false,
+      playlistId: null,
+      volumePercent: 38,
+      brightnessPercent: 48,
+      timerMinutes: 45,
+      timerEndsAt: null,
+      nightSchedule: {
+        enabled: false,
+        timeZone: "Asia/Shanghai",
+        start: "22:30",
+        end: "06:30",
+        brightnessPercent: 5,
+        active: false,
+        preNightBrightnessPercent: null
+      }
+    }, null, 2)}\n`
+  );
+
+  const server = spawn(process.execPath, ["server/index.mjs"], {
+    env: {
+      ...process.env,
+      TIKPAL_API_HOST: HOST,
+      TIKPAL_API_PORT: String(port),
+      TIKPAL_PLAYER_BACKEND: "mpc",
+      TIKPAL_MPC_BIN: fakeMpcPath,
+      TIKPAL_MPD_HOST: "127.0.0.1",
+      TIKPAL_MPD_PORT: "6600",
+      TIKPAL_ROOM_EXPERIENCE_STATE_PATH: roomExperienceStatePath,
+      TIKPAL_OUTPUT_VOLUME_GET_COMMAND: "",
+      TIKPAL_STARTUP_SCENE_SOUND_ENABLED: "1"
+    },
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+
+  try {
+    await waitForHealthAt(baseUrl);
+    let startupSceneState = null;
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const [state, experience] = await Promise.all([
+        requestFrom(baseUrl, "/api/v1/system/state"),
+        requestFrom(baseUrl, "/api/v1/experience/state")
+      ]);
+      if (
+        state.response.ok
+        && experience.response.ok
+        && state.body.audio.currentSource.id === "scene"
+        && state.body.playback.source === "scene"
+        && experience.body.sceneSoundEnabled === true
+      ) {
+        startupSceneState = { state, experience };
+        break;
+      }
+      await wait(200);
+    }
+
+    assert(startupSceneState, "mpc startup should keep product default Scene Sound enabled");
+    assert(
+      startupSceneState.state.body.playback.title === "Scene Audio",
+      "mpc startup scene should expose Scene Audio playback"
+    );
+    assert(
+      startupSceneState.experience.body.sceneVideoId === "rainy-window",
+      "mpc startup scene should keep the calm room scene video"
+    );
+  } finally {
+    if (server.exitCode === null && server.signalCode === null) {
+      server.kill("SIGTERM");
+      await Promise.race([
+        new Promise((resolve) => server.once("exit", resolve)),
+        wait(1000)
+      ]);
+    }
+    await rm(workspace, { recursive: true, force: true });
   }
 }
 
@@ -615,8 +734,7 @@ switch (command) {
   await writeFile(fakeMpcLogPath, "");
 
   const server = spawn(process.execPath, ["server/index.mjs"], {
-    env: {
-      ...process.env,
+    env: mpcFocusedSmokeEnv({
       TIKPAL_API_HOST: HOST,
       TIKPAL_API_PORT: String(port),
       TIKPAL_PLAYER_BACKEND: "mpc",
@@ -630,7 +748,7 @@ switch (command) {
       TIKPAL_FAKE_MPC_STATE: fakeMpcStatePath,
       TIKPAL_FAKE_MPC_TRACKS: JSON.stringify(fakeMpcTracks),
       TIKPAL_FAKE_MPC_POSITIONAL_PLAY_STAYS_PAUSED: "1"
-    },
+    }),
     stdio: ["ignore", "pipe", "pipe"]
   });
 
@@ -730,8 +848,7 @@ switch (command) {
   await chmod(slowCommandPath, 0o755);
 
   const server = spawn(process.execPath, ["server/index.mjs"], {
-    env: {
-      ...process.env,
+    env: mpcFocusedSmokeEnv({
       TIKPAL_API_HOST: HOST,
       TIKPAL_API_PORT: String(port),
       TIKPAL_PLAYER_BACKEND: "mpc",
@@ -748,7 +865,7 @@ switch (command) {
       TIKPAL_AIRPLAY_ACTIVE_COMMAND: `${slowCommandPath} airplay-active`,
       TIKPAL_AIRPLAY_RECEIVER_ACTIVE_COMMAND: `${slowCommandPath} airplay-receiver`,
       TIKPAL_UPNP_ACTIVE_COMMAND: `${slowCommandPath} upnp-active`
-    },
+    }),
     stdio: ["ignore", "pipe", "pipe"]
   });
 
@@ -1148,7 +1265,7 @@ async function run() {
     assert(initialExperience.body.sceneVideoId === "rainy-window", "calm room experience should bind Rainy Window");
     assert(initialExperience.body.hifiEqPresetId === "flat", "room experience should expose the default Hi-Fi EQ preset");
     assert(initialExperience.body.hifiVisualPresetId === "spectrum-bars", "room experience should expose the default Hi-Fi visual preset");
-    assert(initialExperience.body.sceneSoundEnabled === false, "room experience should not force scene sound on by default");
+    assert(initialExperience.body.sceneSoundEnabled === false, "mock room experience should preserve persisted scene sound off");
     assert(initialExperience.body.nightSchedule.timeZone === "Asia/Shanghai", "room experience should expose night timezone");
     assert(initial.body.system.dspState.presetId === "flat", "DSP state should reflect the default Hi-Fi EQ preset id");
     assert(initial.body.system.dspState.presetLabel === "Flat", "DSP state should reflect the default Hi-Fi EQ preset label");
@@ -1215,11 +1332,12 @@ async function run() {
     assert(focusExperience.body.mode === "focus", "set_mode should switch room mode");
     assert(focusExperience.body.presetId === "focus-library-flow", "set_mode should apply focus preset");
     assert(focusExperience.body.sceneVideoId === "midnight-library", "focus preset should bind Midnight Library");
-    assert(focusExperience.body.sceneSoundEnabled === false, "focus preset should leave scene sound off by default");
+    assert(focusExperience.body.sceneSoundEnabled === true, "focus preset should enable scene sound by default");
     const persistedExperience = JSON.parse(await readFile(roomExperienceStatePath, "utf8"));
     assert(persistedExperience.mode === "focus", "room experience should persist to the state file");
     const stateAfterFocus = await request("/api/v1/system/state");
-    assert(stateAfterFocus.body.audio.currentSource.id === "mpd", "focus room mode should keep the current music source");
+    assert(stateAfterFocus.body.audio.currentSource.id === "scene", "focus room mode should switch to Scene Sound");
+    assert(stateAfterFocus.body.playback.source === "scene", "focus room mode playback should follow Scene Sound");
     assert(stateAfterFocus.body.system.volume.percent === focusExperience.body.volumePercent, "room mode should apply volume through playback actions");
     assert(stateAfterFocus.body.system.display.brightnessPercent === focusExperience.body.brightnessPercent, "room mode should apply brightness through system actions");
 
@@ -1619,7 +1737,9 @@ async function run() {
       body: JSON.stringify({ type: "set_mode", mode: "calm" })
     });
     assert(calmBeforeScene.response.ok, "calm room mode before scene source switch should return 200");
-    assert(calmBeforeScene.body.sceneSoundEnabled === false, "calm room mode should not auto-enable scene sound before direct source switch");
+    assert(calmBeforeScene.body.sceneSoundEnabled === true, "calm room mode should enable scene sound by default");
+    const stateAfterCalmBeforeScene = await request("/api/v1/system/state");
+    assert(stateAfterCalmBeforeScene.body.audio.currentSource.id === "scene", "calm room mode should switch to Scene Sound by default");
 
     const scene = await request("/api/v1/audio/source", {
       method: "POST",
@@ -1978,8 +2098,9 @@ async function run() {
     });
     assert(remoteUnsupportedPlaylist.response.status === 400, "remote actions should not expose playlist CRUD");
 
-    await runMpcHifiCommandGuardSmoke(roomExperienceStatePath);
     await runHifiSpectrumCommandSmoke(roomExperienceStatePath);
+    await runMpcStartupSceneDefaultSmoke();
+    await runMpcHifiCommandGuardSmoke(roomExperienceStatePath);
     await runMpcLocalLibraryPathSmoke(roomExperienceStatePath);
     await runMpcCachedStateSmoke(roomExperienceStatePath);
     await runMpcAirplayHandoffRefreshSmoke(roomExperienceStatePath);

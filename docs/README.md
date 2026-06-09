@@ -1,6 +1,6 @@
 # Tikpal Docs
 
-This directory is the source of truth for Tikpal product, UX, visual, architecture, integration, and delivery planning.
+This directory is the source of truth for Tikpal product, UX, visual, architecture, integration, marketing, and delivery planning.
 
 ## Status Labels
 
@@ -61,6 +61,13 @@ This directory is the source of truth for Tikpal product, UX, visual, architectu
 | Document | Status | Purpose |
 | --- | --- | --- |
 | [Raspberry Pi kiosk deploy v1](06-deployment/raspberry-pi-kiosk-deploy-v1.md) | Current reference | Pi sync, systemd install, Chromium kiosk launch, verification, and rollback. |
+
+### Marketing
+
+| Document | Status | Purpose |
+| --- | --- | --- |
+| [Facebook homepage content kit](07-marketing/facebook-homepage-content-kit.md) | Current marketing draft | Facebook Page bio, voice guide, 30-day content calendar, reusable post templates, crowdfunding series, and Meta scheduling CSV guidance. |
+| [Meta Business Suite calendar CSV](07-marketing/meta-business-suite-calendar.csv) | Current marketing draft | 30-day Facebook scheduling export with post copy, media briefs, CTAs, timing defaults, and review status. |
 
 ### Source Assets
 
@@ -126,7 +133,7 @@ The local backend boundary should reserve endpoints or adapters for playback con
 - Playback backend: `mock` by default, `mpc` when the Pi runtime sets `TIKPAL_PLAYER_BACKEND=mpc`.
 - Source workspace: visible tabs are Library, Radio, Spotify, AirPlay, Bluetooth, and DLNA; DLNA uses runtime source id `upnp` and means renderer intake, not media-server browsing. Spotify Connect, AirPlay, Bluetooth, and DLNA share one handoff rule across Ambient, Player, Remote, and Pi API state: `armed` waits, `connected` completes.
 - Appearance: font presets and surface skin presets are persisted locally and applied across ambient, player, and settings surfaces.
-- Room experience: startup offers Focus, Calm, Sleep, and Hi-Fi; Focus/Calm/Sleep default Scene Sound off, and selecting a music/input source keeps the scene video visible while muting scene audio. Hi-Fi applies `flat`, `warm`, or `vocal` EQ presets when the Pi command hook is configured, centers now-playing artwork and metadata, and never enables Scene Sound. Auto Night dims by selected timezone without changing sources.
+- Room experience: startup offers Focus, Calm, Sleep, and Hi-Fi; Focus/Calm/Sleep open Scene Sound by default on boot, and selecting a music/input source keeps the scene video visible while muting scene audio. Hi-Fi applies `flat`, `warm`, or `vocal` EQ presets when the Pi command hook is configured, centers now-playing artwork and metadata, and never enables Scene Sound. Auto Night dims by selected timezone without changing sources.
 - Device brightness: DDC/CI-capable displays are prepared by `deploy/moode/tikpal-ddcci-enable.sh`; `mpc` mode reports `display.transport="ddcci"` when `ddcutil getvcp 10 --brief` can read VCP `0x10`.
 - Pi status reads: in `mpc` mode, combined state, playback status, system status, runtime, audio source, and portable remote reads return the latest in-memory runtime snapshot while slow probes run in a low-frequency background collector.
 - AirPlay playback truth: title metadata, versioned cover art, elapsed position, and `airplay_input` lyrics refresh from the same backend snapshot so Ambient, Player, Hi-Fi, and portable remote stay aligned on the active AirPlay track.
