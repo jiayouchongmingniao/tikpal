@@ -227,12 +227,16 @@ Current Batch 3 mock API contract:
 | `/api/v1/audio/source` | `POST` | Switches source intake. `target=mpd` can include `localTrackPath` from the local library manifest to clear/queue/play that local track and immediately update playback metadata. `target=scene` can include the current background video id/label/src so Scene Sound metadata follows the active Ambient video. Switching to any non-scene target clears persisted `sceneSoundEnabled`. |
 | `/api/v1/media/background-videos` | `GET` | Lists MP4 fireplace/background videos found under `public/assets` and scene OTA videos under `public/assets/scenes`, with optional `order`, `default`, and `catalogVersion` metadata so Ambient can switch the active background without a rebuild. |
 | `/api/v1/playback/status` | `GET` | Playback summary only. |
+| `/api/v1/lyrics/status` | `GET` | Current lyrics summary. For AirPlay and Bluetooth input scopes this must stay tied to the same title/artist/source truth as playback state. |
+| `/api/v1/lyrics/refresh` | `POST` | Forces lyrics recognition/lookup for the current playback candidate. AirPlay normally uses trusted metadata first; fingerprint capture is only a fallback when configured. |
 | `/api/v1/system/status` | `GET` | System summary only. |
 | `/api/v1/system/runtime` | `GET` | Kiosk/runtime summary. |
 | `/api/v1/playback/actions` | `POST` | Playback actions: `play_pause`, `play`, `pause`, `next`, `previous`, `seek`, `favorite_toggle`, `play_mode_set` with `mode=sequence\|repeat_one\|shuffle`, and global `volume_set`. For scene/external handoff sources, `volume_set` targets output volume truth rather than an MPD-only mixer. |
 | `/api/v1/system/actions` | `POST` | System actions including `library_scan`, `reboot`, `shutdown`, and `brightness_set`. |
 
 In `mpc` mode, the read endpoints above use a cached runtime snapshot instead of shelling out for every request. `/api/v1/system/state`, `/api/v1/playback/status`, `/api/v1/system/status`, `/api/v1/system/runtime`, `/api/v1/audio/sources`, `/api/v1/remote/state`, and `/api/v1/remote/catalog` should return from memory and schedule background refresh work when needed. The background collector is allowed to run slower probes such as `systemctl`, `ddcutil`, source ready/active commands, AirPlay/Bluetooth metadata helpers, network checks, and media-artwork resolution.
+
+AirPlay lyrics are identity-strict: the metadata path may return `ready` only when LRCLIB matches the normalized title and artist for the current AirPlay playback snapshot. Duration is timing guidance, not an identity veto. If the current song has no trusted lyrics, `not_found` is correct and preferable to displaying same-title lyrics from a different artist.
 
 `volume_set` must stay multi-surface. Local kiosk actions and portable remote actions both write through the backend, then refresh output volume status when the active source is `scene`, Spotify Connect, Bluetooth, AirPlay, or DLNA. The response should carry the freshly read `system.volume.percent` so Ambient, Player, Remote, and browser Scene Sound do not drift into separate local slider state.
 

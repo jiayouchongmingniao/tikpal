@@ -124,8 +124,9 @@ Suggested composition:
 Hi-Fi visual rules:
 
 - Default Hi-Fi should stay as a centered now-playing composition with cover art, metadata, source, time, format, and volume.
-- Ready lyrics may switch Hi-Fi into a left-cover / right-lyrics wall. The lyrics wall is a main visual state, not a second overlay stacked on the bottom ticker.
-- If lyrics are not ready, empty, or hidden, Hi-Fi returns to the centered now-playing composition.
+- Ready lyrics with at least one displayable line may switch Hi-Fi into a left-cover / right-lyrics wall. The lyrics wall is a main visual state, not a second overlay stacked on the bottom ticker.
+- If synced lyrics cannot project an active line from playback time, the wall remains visible and uses the static rotation active index instead of disappearing.
+- If lyrics are not ready, empty, or explicitly hidden, Hi-Fi returns to the centered now-playing composition.
 - Real `albumArtUrl` always wins. Bluetooth may use a deterministic generated record poster only when it is the active playback source and no real artwork is available.
 - AirPlay cover art must arrive through the backend `albumArtUrl` truth, using the versioned `/api/v1/media/airplay-artwork` URL when available. Hi-Fi, Ambient HUD, Player, and portable remote should all show the same AirPlay artwork state for the active track.
 - Hi-Fi background waves, particles, and sampled theme colors are decorative and non-interactive; they must stay below the transport and text layers and respect reduced-motion preferences.
