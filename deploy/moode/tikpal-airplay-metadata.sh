@@ -36,11 +36,6 @@ fi
 active_started_at="${active_started_at:-0}"
 active_stopped_at="${active_stopped_at:-0}"
 
-if [ "$has_event_clock" -eq 1 ] && [ "$active_started_at" -le "$active_stopped_at" ]; then
-  rm -f "$clock_state_file" >/dev/null 2>&1 || true
-  exit 1
-fi
-
 metadata_payload="$(
   python3 - "$metadata_file" "$metadata_json_file" "$max_age_seconds" "$artwork_max_lag_seconds" "$now" "$mpris_service" "$mpris_path" "$mpris_interface" <<'PY'
 import json
@@ -321,6 +316,10 @@ PY
 file_mtime="$(printf '%s\n' "$metadata_payload" | awk -F '=' '$1 == "metadataSourceMtimeSeconds" { print $2; exit }')"
 file_mtime="${file_mtime:-0}"
 raw_position_ms="$(printf '%s\n' "$metadata_payload" | awk -F '=' '$1 == "rawPositionMs" { print $2; exit }')"
+if [ "$has_event_clock" -eq 1 ] && [ "$active_started_at" -lt "$active_stopped_at" ] && [ "$file_mtime" -le "$active_stopped_at" ]; then
+  rm -f "$clock_state_file" >/dev/null 2>&1 || true
+  exit 1
+fi
 metadata_key="$(
   printf '%s\n' "$metadata_payload" | awk -F '=' '
     $1 == "title" { title = substr($0, index($0, "=") + 1) }
