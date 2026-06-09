@@ -363,8 +363,9 @@ export function AmbientScreen({
   const staticLyricsText = staticLyricsLines.length > 0
     ? staticLyricsLines[staticLyricsLineIndex % staticLyricsLines.length] ?? ""
     : "";
+  const hasReadyLyrics = lyrics.status === "ready" && lyrics.lines.length > 0;
   const hifiLyricsPanel = useMemo<HifiLyricsPanel | null>(() => {
-    if (!lyricsVisible || lyrics.status !== "ready" || lyrics.lines.length === 0) return null;
+    if (!lyricsVisible || !hasReadyLyrics) return null;
 
     const lyricEntries = lyrics.lines
       .map((line, index) => ({ index, text: line.text.trim() }))
@@ -388,11 +389,11 @@ export function AmbientScreen({
         distance: Math.abs(index - activeIndex)
       }))
     };
-  }, [activeLyricsLineIndex, lyrics.lines, lyrics.status, lyrics.synced, lyrics.trackKey, lyricsVisible, staticLyricsLineIndex]);
+  }, [activeLyricsLineIndex, hasReadyLyrics, lyrics.lines, lyrics.synced, lyrics.trackKey, lyricsVisible, staticLyricsLineIndex]);
   const roomModeLabel = roomModeOptions.find((option) => option.mode === roomExperience.mode)?.label ?? "Calm";
   const roomModeIntent = roomModeOptions.find((option) => option.mode === roomExperience.mode)?.intent ?? "Unwind & relax";
-  const showSyncedLyrics = lyrics.status === "ready" && lyrics.synced && canAdvanceLyrics && Boolean(activeLyricsLine);
-  const showStaticLyrics = lyrics.status === "ready" && Boolean(staticLyricsText) && (!lyrics.synced || !canAdvanceLyrics);
+  const showSyncedLyrics = hasReadyLyrics && lyrics.synced && canAdvanceLyrics && Boolean(activeLyricsLine);
+  const showStaticLyrics = hasReadyLyrics && Boolean(staticLyricsText) && (!lyrics.synced || !canAdvanceLyrics || !activeLyricsLine);
   const showIdentifiedTrack = (lyrics.status === "not_found" || lyrics.status === "error") && Boolean(lyrics.title || lyrics.artist);
   const recognizingMessage = isProxyInputLyricsSource(lyrics.sourceScope)
     ? `Listening to ${lyrics.sourceScope === "airplay_input" ? "AirPlay" : "Bluetooth"} audio...`

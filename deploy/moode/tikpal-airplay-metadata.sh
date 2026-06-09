@@ -347,14 +347,17 @@ clock_lead_ms=0
 if [ "$active_started_at" -gt "$active_stopped_at" ]; then
   clock_start="$active_started_at"
   clock_start_reason="airplay_event"
-  if [ "$file_mtime" -gt "$clock_start" ]; then
-    clock_start="$file_mtime"
-    clock_start_reason="metadata_mtime"
-    if printf '%s\n' "$metadata_clock_lead_ms" | grep -Eq '^[0-9]+$'; then
-      clock_lead_ms="$metadata_clock_lead_ms"
-    fi
-  fi
+fi
 
+if [ "$file_mtime" -gt 0 ] && { [ "$clock_start" -eq 0 ] || [ "$file_mtime" -gt "$clock_start" ]; }; then
+  clock_start="$file_mtime"
+  clock_start_reason="metadata_mtime"
+  if printf '%s\n' "$metadata_clock_lead_ms" | grep -Eq '^[0-9]+$'; then
+    clock_lead_ms="$metadata_clock_lead_ms"
+  fi
+fi
+
+if [ "$clock_start" -gt 0 ]; then
   state_key_hash=""
   state_clock_start=0
   state_started_at=0
@@ -378,7 +381,7 @@ if [ "$active_started_at" -gt "$active_stopped_at" ]; then
       && [ "$clock_start_reason" != "airplay_event" ]; then
       clock_lead_ms="$metadata_clock_lead_ms"
     fi
-  elif [ -n "$metadata_key_hash" ] && [ "$clock_start" -gt 0 ]; then
+  elif [ -n "$metadata_key_hash" ]; then
     printf '%s %s %s %s\n' "$metadata_key_hash" "$clock_start" "$active_started_at" "$clock_start_reason" > "$clock_state_file" 2>/dev/null || true
   fi
 

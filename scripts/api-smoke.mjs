@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import http from "node:http";
 import { tmpdir } from "node:os";
 import path, { resolve } from "node:path";
@@ -72,6 +72,47 @@ function assert(condition, message) {
   if (!condition) {
     throw new Error(message);
   }
+}
+
+function formatMoodeEventTimestamp(epochSeconds) {
+  const date = new Date(epochSeconds * 1000);
+  const pad = (value) => String(value).padStart(2, "0");
+  return [
+    date.getFullYear(),
+    pad(date.getMonth() + 1),
+    pad(date.getDate())
+  ].join("") + ` ${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
+}
+
+function parseKeyValueOutput(output) {
+  const fields = new Map();
+  for (const line of output.split(/\r?\n/)) {
+    const separator = line.indexOf("=");
+    if (separator <= 0) continue;
+    fields.set(line.slice(0, separator), line.slice(separator + 1));
+  }
+  return fields;
+}
+
+function runProcess(command, args, options = {}) {
+  return new Promise((resolve) => {
+    const child = spawn(command, args, {
+      cwd: options.cwd ?? process.cwd(),
+      env: options.env ?? process.env,
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout?.on("data", (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr?.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.on("close", (code, signal) => {
+      resolve({ code, signal, stdout, stderr });
+    });
+  });
 }
 
 function runAccessControlHelperSmoke() {
@@ -159,6 +200,62 @@ function runAccessControlHelperSmoke() {
     hasValidTikpalKey({ "x-tikpal-key": PORTABLE_API_KEY }, "") === false,
     "X-Tikpal-Key helper should reject writes when no device key is configured"
   );
+}
+
+async function runAirplayMetadataHelperClockSmoke() {
+  const workspace = await mkdtemp(path.join(tmpdir(), "tikpal-airplay-helper-"));
+  const metadataJsonPath = path.join(workspace, "aplmeta.json");
+  const metadataTxtPath = path.join(workspace, "missing-aplmeta.txt");
+  const eventLogPath = path.join(workspace, "moode_spsevent.log");
+  const clockStatePath = path.join(workspace, "clock-state");
+  const eventSeconds = Math.floor(Date.now() / 1000) - 12;
+  const metadataSeconds = eventSeconds + 6;
+  const eventStamp = formatMoodeEventTimestamp(eventSeconds);
+
+  try {
+    await writeFile(
+      eventLogPath,
+      [
+        `${eventStamp} Event: Run spspre.sh`,
+        `${eventStamp} Event: Run spspost.sh`
+      ].join("\n") + "\n"
+    );
+    await writeFile(
+      metadataJsonPath,
+      `${JSON.stringify({
+        fecmd: "update_aplmeta",
+        title: "Same Second Clock",
+        artist: "AirPlay Tester",
+        album: "Helper Smoke",
+        duration: "188000",
+        sformat: "AAC 24/48K 2ch"
+      })}\n`
+    );
+    await utimes(metadataJsonPath, metadataSeconds, metadataSeconds);
+
+    const result = await runProcess("sh", ["deploy/moode/tikpal-airplay-metadata.sh"], {
+      env: {
+        ...process.env,
+        TIKPAL_AIRPLAY_EVENT_LOG: eventLogPath,
+        TIKPAL_AIRPLAY_METADATA_FILE: metadataTxtPath,
+        TIKPAL_AIRPLAY_METADATA_JSON_FILE: metadataJsonPath,
+        TIKPAL_AIRPLAY_CLOCK_STATE_FILE: clockStatePath,
+        TIKPAL_AIRPLAY_MPRIS_SERVICE: "org.invalid.ShairportSync",
+        TIKPAL_AIRPLAY_METADATA_CLOCK_LEAD_MS: "1000"
+      }
+    });
+
+    assert(result.code === 0, `AirPlay metadata helper should read fresh same-second metadata, stderr: ${result.stderr}`);
+    const fields = parseKeyValueOutput(result.stdout);
+    assert(fields.get("title") === "Same Second Clock", "AirPlay helper should output fresh metadata title");
+    assert(fields.get("artist") === "AirPlay Tester", "AirPlay helper should output fresh metadata artist");
+    assert(fields.get("metadataSource") === "json", "AirPlay helper should use json fallback in the smoke");
+    assert(fields.get("clockStartReason") === "metadata_mtime", "AirPlay helper should use metadata mtime when events start/stop in the same second");
+    assert(Number(fields.get("clockStartMs")) === metadataSeconds * 1000, "AirPlay helper should anchor the clock to metadata mtime");
+    assert(Number(fields.get("positionMs")) > 0, "AirPlay helper should emit a positive inferred position");
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
 }
 
 function localMinutesForTimeZone(timeZone, date = new Date()) {
@@ -1256,6 +1353,7 @@ for (const [key, value] of Object.entries(metadata)) {
 
 async function run() {
   runAccessControlHelperSmoke();
+  await runAirplayMetadataHelperClockSmoke();
 
   const apiAssetsRoot = await mkdtemp(path.join(tmpdir(), "tikpal-api-assets-"));
   const apiStateRoot = await mkdtemp(path.join(tmpdir(), "tikpal-api-state-"));
