@@ -791,7 +791,7 @@ select {
   top: 72px;
   right: clamp(88px, 8vw, 180px);
   bottom: 132px;
-  left: clamp(760px, 50vw, 1280px);
+  left: clamp(640px, 42vw, 1080px);
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   row-gap: 54px;
@@ -1027,7 +1027,7 @@ select {
   top: 72px;
   right: clamp(88px, 8vw, 180px);
   bottom: 132px;
-  left: clamp(760px, 50vw, 1280px);
+  left: clamp(640px, 42vw, 1080px);
   opacity: 1;
 }
 
