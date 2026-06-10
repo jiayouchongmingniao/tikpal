@@ -4,11 +4,19 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 ENV_FILE="${TIKPAL_KIOSK_ENV_FILE:-$APP_DIR/.env.kiosk}"
+VIEWER_ENV_FILE="${TIKPAL_KIOSK_VIEWER_ENV_FILE:-$APP_DIR/.env.kiosk.viewer}"
 
 if [[ -f "$ENV_FILE" ]]; then
   set -a
   # shellcheck disable=SC1090
   source "$ENV_FILE"
+  set +a
+fi
+
+if [[ -f "$VIEWER_ENV_FILE" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$VIEWER_ENV_FILE"
   set +a
 fi
 
@@ -84,6 +92,7 @@ NOVNC_WEB_ROOT="$(find_novnc_web_root || true)"
 if [[ "$MODE" == "check" ]]; then
   log "app dir: $APP_DIR"
   log "env file: $ENV_FILE"
+  log "viewer env file: $VIEWER_ENV_FILE"
   log "viewer: $TIKPAL_KIOSK_VIEWER"
   log "display: $TIKPAL_KIOSK_DISPLAY"
   log "vnc: ${TIKPAL_KIOSK_VNC_ADDRESS}:${TIKPAL_KIOSK_VNC_PORT}"

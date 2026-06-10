@@ -203,6 +203,14 @@ export function PlayerOverlay({
   const elapsedSeconds = playbackTruth.elapsedSeconds ?? 0;
   const durationSeconds = playbackTruth.durationSeconds ?? 0;
   const isPlaying = playback.state === "playing";
+  const transportCapabilities = playback.transportCapabilities;
+  const transportUnavailableTitle = transportCapabilities?.reason ?? "Playback control unavailable";
+  const previousDisabled = status.pending || transportCapabilities?.previous === false;
+  const playPauseDisabled = status.pending || transportCapabilities?.playPause === false;
+  const nextDisabled = status.pending || transportCapabilities?.next === false;
+  const previousTitle = transportCapabilities?.previous === false ? transportUnavailableTitle : "Previous";
+  const playPauseTitle = transportCapabilities?.playPause === false ? transportUnavailableTitle : isPlaying ? "Pause" : "Play";
+  const nextTitle = transportCapabilities?.next === false ? transportUnavailableTitle : "Next";
   const currentSource = audio.currentSource;
   const selectedPanelConfig = primaryPanels.find((panel) => panel.id === selectedPrimaryPanel) ?? primaryPanels[0];
   const playbackSource = getPlaybackSourceSummary(playback, audio);
@@ -273,7 +281,7 @@ export function PlayerOverlay({
     }
   }, [localLibraryTracks, nasLibraryTracks, selectedLibraryStorage, selectedLocalTracks]);
   const selectedLibraryTrack = visibleLibraryTracks.find((track) => track.id === selectedLibraryTrackId) ?? null;
-  const seekSupported = playback.source === "mpd" && durationSeconds > 0;
+  const seekSupported = playback.source === "mpd" && durationSeconds > 0 && transportCapabilities?.seek !== false;
   const displayedElapsedSeconds = seekSupported
     ? seekDraftSeconds ?? seekPendingSeconds ?? elapsedSeconds
     : playbackTruth.elapsedSeconds;
@@ -868,13 +876,13 @@ export function PlayerOverlay({
             >
               <ListMusic size={30} />
             </button>
-            <button className="icon-button" type="button" aria-label="Previous" title="Previous" disabled={status.pending} onClick={() => void onPlaybackAction("previous")}>
+            <button className="icon-button" type="button" aria-label="Previous" title={previousTitle} disabled={previousDisabled} onClick={() => void onPlaybackAction("previous")}>
               <SkipBack size={34} fill="currentColor" />
             </button>
-            <button className="play-button" type="button" aria-label={isPlaying ? "Pause" : "Play"} title={isPlaying ? "Pause" : "Play"} disabled={status.pending} onClick={() => void onPlaybackAction("play_pause")}>
+            <button className="play-button" type="button" aria-label={isPlaying ? "Pause" : "Play"} title={playPauseTitle} disabled={playPauseDisabled} onClick={() => void onPlaybackAction("play_pause")}>
               {isPlaying ? <Pause size={40} fill="currentColor" /> : <Play size={40} fill="currentColor" />}
             </button>
-            <button className="icon-button" type="button" aria-label="Next" title="Next" disabled={status.pending} onClick={() => void onPlaybackAction("next")}>
+            <button className="icon-button" type="button" aria-label="Next" title={nextTitle} disabled={nextDisabled} onClick={() => void onPlaybackAction("next")}>
               <SkipForward size={34} fill="currentColor" />
             </button>
             <button

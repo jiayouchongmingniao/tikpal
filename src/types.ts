@@ -229,6 +229,7 @@ export interface BackgroundVideoSummary {
   default?: boolean;
   source?: "legacy" | "scene";
   roomModes?: RoomMode[];
+  audioGainDb?: number;
 }
 
 export interface BackgroundVideoCatalogResponse {
@@ -322,6 +323,17 @@ export interface PlaybackSummary {
   favorite: boolean;
   settings: PlaybackSettings;
   queuePreview: QueueEntrySummary[];
+  transportCapabilities?: PlaybackTransportCapabilities;
+}
+
+export interface PlaybackTransportCapabilities {
+  playPause: boolean;
+  play: boolean;
+  pause: boolean;
+  next: boolean;
+  previous: boolean;
+  seek: boolean;
+  reason: string | null;
 }
 
 export interface PlaybackSettings {

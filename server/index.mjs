@@ -66,6 +66,12 @@ const AIRPLAY_DISABLE_COMMAND = process.env.TIKPAL_AIRPLAY_DISABLE_COMMAND ?? ""
 const AIRPLAY_LABEL_COMMAND = process.env.TIKPAL_AIRPLAY_LABEL_COMMAND ?? "";
 const AIRPLAY_RECEIVER_ACTIVE_COMMAND = process.env.TIKPAL_AIRPLAY_RECEIVER_ACTIVE_COMMAND ?? "systemctl is-active --quiet shairport-sync.service";
 const AIRPLAY_METADATA_COMMAND = process.env.TIKPAL_AIRPLAY_METADATA_COMMAND ?? "";
+const AIRPLAY_TRANSPORT_AVAILABLE_COMMAND = process.env.TIKPAL_AIRPLAY_TRANSPORT_AVAILABLE_COMMAND ?? "./deploy/moode/tikpal-airplay-transport.sh available";
+const AIRPLAY_PLAY_PAUSE_COMMAND = process.env.TIKPAL_AIRPLAY_PLAY_PAUSE_COMMAND ?? "./deploy/moode/tikpal-airplay-transport.sh play-pause";
+const AIRPLAY_PLAY_COMMAND = process.env.TIKPAL_AIRPLAY_PLAY_COMMAND ?? "./deploy/moode/tikpal-airplay-transport.sh play";
+const AIRPLAY_PAUSE_COMMAND = process.env.TIKPAL_AIRPLAY_PAUSE_COMMAND ?? "./deploy/moode/tikpal-airplay-transport.sh pause";
+const AIRPLAY_NEXT_COMMAND = process.env.TIKPAL_AIRPLAY_NEXT_COMMAND ?? "./deploy/moode/tikpal-airplay-transport.sh next";
+const AIRPLAY_PREVIOUS_COMMAND = process.env.TIKPAL_AIRPLAY_PREVIOUS_COMMAND ?? "./deploy/moode/tikpal-airplay-transport.sh previous";
 const UPNP_READY_COMMAND = process.env.TIKPAL_UPNP_READY_COMMAND ?? "";
 const UPNP_ACTIVE_COMMAND = process.env.TIKPAL_UPNP_ACTIVE_COMMAND ?? "";
 const UPNP_ENABLE_COMMAND = process.env.TIKPAL_UPNP_ENABLE_COMMAND ?? "";
@@ -148,6 +154,8 @@ const PUBLIC_ASSETS_ROOT = resolve(process.env.TIKPAL_PUBLIC_ASSETS_ROOT ?? reso
 const PUBLIC_SCENES_ROOT = resolve(PUBLIC_ASSETS_ROOT, "scenes");
 const SCENE_VIDEO_MANIFEST_PATH = resolve(PUBLIC_SCENES_ROOT, "_metadata", "scene_videos.json");
 const AMBIENT_BACKGROUND_VIDEO_EXTENSIONS = new Set([".mp4"]);
+const SCENE_AUDIO_GAIN_MIN_DB = -24;
+const SCENE_AUDIO_GAIN_MAX_DB = 12;
 const PREFERRED_AMBIENT_BACKGROUND_VIDEOS = [];
 const DEFAULT_SCENE_VIDEO = {
   id: "scene-empty",
@@ -1422,6 +1430,82 @@ async function commandSucceeds(command, options = {}) {
   } catch {
     return false;
   }
+}
+
+const AIRPLAY_REMOTE_UNAVAILABLE_REASON = "AirPlay remote control is unavailable from this sender";
+
+function buildPlaybackTransportCapabilities(source, options = {}) {
+  const base = {
+    playPause: true,
+    play: true,
+    pause: true,
+    next: true,
+    previous: true,
+    seek: true,
+    reason: null
+  };
+
+  if (source === "airplay") {
+    const available = options.airplayRemoteControlAvailable === true;
+    return {
+      playPause: available,
+      play: available,
+      pause: available,
+      next: available,
+      previous: available,
+      seek: false,
+      reason: available ? null : AIRPLAY_REMOTE_UNAVAILABLE_REASON
+    };
+  }
+
+  if (source === "scene") {
+    return {
+      ...base,
+      next: false,
+      previous: false,
+      seek: false,
+      reason: null
+    };
+  }
+
+  if (source === "radio") {
+    return {
+      ...base,
+      seek: false
+    };
+  }
+
+  if (source === "spotify" || source === "bluetooth" || source === "upnp") {
+    return {
+      playPause: false,
+      play: false,
+      pause: false,
+      next: false,
+      previous: false,
+      seek: false,
+      reason: `${source} transport is controlled by the sender`
+    };
+  }
+
+  return base;
+}
+
+function getCachedAirplayTransportAvailable() {
+  const cachedPlayback = tikpalStateSnapshotCache?.state?.playback;
+  if (cachedPlayback?.source !== "airplay") return null;
+  const capabilities = cachedPlayback.transportCapabilities;
+  if (!capabilities) return null;
+  return capabilities.playPause === true
+    && capabilities.next === true
+    && capabilities.previous === true;
+}
+
+async function readAirplayTransportAvailable(includeSlowRuntimeStatus) {
+  if (!AIRPLAY_TRANSPORT_AVAILABLE_COMMAND.trim()) return false;
+  if (!includeSlowRuntimeStatus) {
+    return getCachedAirplayTransportAvailable() === true;
+  }
+  return await commandSucceeds(AIRPLAY_TRANSPORT_AVAILABLE_COMMAND, { timeout: 2500 });
 }
 
 function shellQuote(value) {
@@ -2919,6 +3003,14 @@ function normalizeSceneVideoRoomModes(value) {
   return modes;
 }
 
+function normalizeSceneAudioGainDb(value) {
+  if (value === undefined || value === null || value === "") return null;
+  const gainDb = Number(value);
+  if (!Number.isFinite(gainDb)) return null;
+  const clamped = Math.max(SCENE_AUDIO_GAIN_MIN_DB, Math.min(SCENE_AUDIO_GAIN_MAX_DB, gainDb));
+  return Number(clamped.toFixed(1));
+}
+
 async function readSceneBackgroundVideos() {
   let manifest;
   try {
@@ -2946,6 +3038,7 @@ async function readSceneBackgroundVideos() {
 
     const id = String(video.id ?? "").trim() || basename(filename, extname(filename));
     const roomModes = normalizeSceneVideoRoomModes(video.roomModes);
+    const audioGainDb = normalizeSceneAudioGainDb(video.audioGainDb);
     videos.push({
       id,
       filename,
@@ -2954,6 +3047,7 @@ async function readSceneBackgroundVideos() {
       ...(Number.isFinite(Number(video.order)) ? { order: Number(video.order) } : {}),
       ...(video.default === true ? { default: true } : {}),
       ...(roomModes.length > 0 ? { roomModes } : {}),
+      ...(audioGainDb !== null ? { audioGainDb } : {}),
       source: "scene"
     });
   }
@@ -2987,7 +3081,7 @@ async function getAmbientBackgroundVideosPayload() {
   const sceneVideos = await readSceneBackgroundVideos();
   const videos = [...legacyVideos, ...sceneVideos].sort(sortAmbientBackgroundVideos);
   const catalogVersion = createHash("sha1")
-    .update(videos.map((video) => `${video.id}:${video.src}:${video.label}:${video.order ?? ""}:${video.default ? "1" : "0"}:${(video.roomModes ?? []).join(",")}`).join("|"))
+    .update(videos.map((video) => `${video.id}:${video.src}:${video.label}:${video.order ?? ""}:${video.default ? "1" : "0"}:${(video.roomModes ?? []).join(",")}:${video.audioGainDb ?? ""}`).join("|"))
     .digest("hex")
     .slice(0, 12);
 
@@ -4077,6 +4171,72 @@ function shouldUseOutputVolumeForMpcAction() {
   return source === "scene" || COMMAND_HANDOFF_SOURCE_TARGETS.has(source);
 }
 
+function getCurrentMpcSourceId() {
+  return mockArmedSource
+    ?? tikpalStateSnapshotCache?.state?.audio?.currentSource?.id
+    ?? tikpalStateSnapshotCache?.state?.playback?.source
+    ?? null;
+}
+
+function isCurrentMpcSourceAirplay() {
+  return getCurrentMpcSourceId() === "airplay";
+}
+
+function isAirplayTransportPlaybackAction(action) {
+  return ["play_pause", "play", "pause", "next", "previous"].includes(String(action?.type ?? ""));
+}
+
+function getAirplayTransportCommand(action) {
+  switch (action.type) {
+    case "play_pause":
+      return { command: AIRPLAY_PLAY_PAUSE_COMMAND, label: "play/pause" };
+    case "play":
+      return { command: AIRPLAY_PLAY_COMMAND, label: "play" };
+    case "pause":
+      return { command: AIRPLAY_PAUSE_COMMAND, label: "pause" };
+    case "next":
+      return { command: AIRPLAY_NEXT_COMMAND, label: "next" };
+    case "previous":
+      return { command: AIRPLAY_PREVIOUS_COMMAND, label: "previous" };
+    default:
+      return null;
+  }
+}
+
+async function applyMpcAirplayPlaybackAction(action) {
+  switch (action.type) {
+    case "play_pause":
+    case "play":
+    case "pause":
+    case "next":
+    case "previous": {
+      const transport = getAirplayTransportCommand(action);
+      if (!transport?.command?.trim()) {
+        throw new Error(`AirPlay ${transport?.label ?? action.type} transport is not configured`);
+      }
+      if (!await readAirplayTransportAvailable(true)) {
+        throw new Error(AIRPLAY_REMOTE_UNAVAILABLE_REASON);
+      }
+      await runCommand(transport.command, { allowFailure: false, timeout: 5000 });
+      return;
+    }
+    case "seek":
+    case "favorite_toggle":
+    case "play_mode_set":
+      return;
+    case "volume_set": {
+      const percent = Number(action.value);
+      if (!Number.isFinite(percent) || percent < 0 || percent > 100) {
+        throw new Error("volume_set requires value between 0 and 100");
+      }
+      await setOutputVolumePercent(percent);
+      return;
+    }
+    default:
+      throw new Error(`Unsupported playback action: ${action.type}`);
+  }
+}
+
 async function getMpcSnapshot(options = {}) {
   const includeSlowRuntimeStatus = options.includeSlowRuntimeStatus !== false;
   const includeSourceRuntimeStatus = options.includeSourceRuntimeStatus ?? includeSlowRuntimeStatus;
@@ -4114,6 +4274,9 @@ async function getMpcSnapshot(options = {}) {
     : null;
   const airplayPlaybackMetadata = includeSlowRuntimeStatus && playbackSource === "airplay"
     ? await readAirplayPlaybackMetadata()
+    : null;
+  const airplayTransportAvailable = playbackSource === "airplay"
+    ? await readAirplayTransportAvailable(includeSlowRuntimeStatus)
     : null;
   const hasBluetoothTrackMetadata = Boolean(bluetoothPlaybackMetadata?.title);
   const hasAirplayTrackMetadata = Boolean(airplayPlaybackMetadata?.title);
@@ -4233,6 +4396,7 @@ async function getMpcSnapshot(options = {}) {
         : playbackSource === "airplay"
           ? airplayPlaybackMetadata?.timingDiagnostics ?? null
           : null,
+      transportCapabilities: buildPlaybackTransportCapabilities(playbackSource, { airplayRemoteControlAvailable: airplayTransportAvailable }),
       currentTrackIndex: playbackSource === "mpd" ? status.currentTrackIndex : 0,
       queueLength: playbackSource === "mpd" ? status.queueLength : 0,
       favorite: isMpdBackedSource && hasCurrentTrack ? isFavoriteTrackPath(file) : false,
@@ -4427,6 +4591,11 @@ async function applyMpcPlaybackActionUnlocked(action) {
       default:
         throw new Error(`Unsupported playback action: ${action.type}`);
     }
+  }
+
+  if (isCurrentMpcSourceAirplay()) {
+    await applyMpcAirplayPlaybackAction(action);
+    return;
   }
 
   switch (action.type) {
@@ -6937,6 +7106,17 @@ async function applyPlaybackActionForCurrentBackend(action) {
   await applyPlaybackAction(action);
 }
 
+function buildPlaybackMutationRefreshOptions(action) {
+  const isAirplayTransport = API_MODE === "mpc"
+    && isCurrentMpcSourceAirplay()
+    && isAirplayTransportPlaybackAction(action);
+  return {
+    includeOutputVolumeStatus: action?.type === "volume_set",
+    includeSourceRuntimeStatus: isAirplayTransport,
+    forceFreshAirplayMetadata: isAirplayTransport
+  };
+}
+
 function requireRemoteNumber(value, label) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) {
@@ -7096,24 +7276,31 @@ async function applyRemoteAction(action) {
   switch (type) {
     case "playback.play_pause":
       await applyPlaybackActionForCurrentBackend({ type: "play_pause" });
+      Object.assign(refreshOptions, buildPlaybackMutationRefreshOptions({ type: "play_pause" }));
       break;
     case "playback.play":
       await applyPlaybackActionForCurrentBackend({ type: "play" });
+      Object.assign(refreshOptions, buildPlaybackMutationRefreshOptions({ type: "play" }));
       break;
     case "playback.pause":
       await applyPlaybackActionForCurrentBackend({ type: "pause" });
+      Object.assign(refreshOptions, buildPlaybackMutationRefreshOptions({ type: "pause" }));
       break;
     case "playback.next":
       await applyPlaybackActionForCurrentBackend({ type: "next" });
+      Object.assign(refreshOptions, buildPlaybackMutationRefreshOptions({ type: "next" }));
       break;
     case "playback.previous":
       await applyPlaybackActionForCurrentBackend({ type: "previous" });
+      Object.assign(refreshOptions, buildPlaybackMutationRefreshOptions({ type: "previous" }));
       break;
     case "playback.seek":
       await applyPlaybackActionForCurrentBackend({ type: "seek", value: requireRemoteNumber(action.value, "playback.seek") });
+      Object.assign(refreshOptions, buildPlaybackMutationRefreshOptions({ type: "seek" }));
       break;
     case "playback.play_mode_set":
       await applyPlaybackActionForCurrentBackend({ type: "play_mode_set", mode: normalizePlaybackMode(action.playbackMode ?? action.mode) });
+      Object.assign(refreshOptions, buildPlaybackMutationRefreshOptions({ type: "play_mode_set" }));
       break;
     case "volume_set":
       await applyPlaybackActionForCurrentBackend({ type: "volume_set", value: requireRemoteNumber(action.value, "volume_set") });
@@ -7374,9 +7561,7 @@ const server = http.createServer(async (request, response) => {
       } else {
         await applyPlaybackAction(action);
       }
-      sendJson(response, 200, await refreshTikpalStateSnapshotAfterMutation({
-        includeOutputVolumeStatus: action?.type === "volume_set"
-      }));
+      sendJson(response, 200, await refreshTikpalStateSnapshotAfterMutation(buildPlaybackMutationRefreshOptions(action)));
       return;
     }
 

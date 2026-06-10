@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { spawn } from "node:child_process";
 import { createReadStream } from "node:fs";
 import { constants } from "node:fs";
 import { access, cp, mkdir, open, readdir, rm, stat, writeFile } from "node:fs/promises";
@@ -11,6 +12,11 @@ const DEFAULT_SCENE_ROOT = "assets/scenes";
 const DEFAULT_SCENE_MANIFEST = "assets/scenes/_metadata/scene_videos.json";
 const DEFAULT_ORDER_START = 100;
 const DEFAULT_ORDER_STEP = 10;
+const AUDIO_GAIN_TARGET_MEAN_DB = -24;
+const AUDIO_GAIN_PEAK_CEILING_DB = -1;
+const AUDIO_GAIN_MIN_DB = -24;
+const AUDIO_GAIN_MAX_DB = 12;
+const AUDIO_GAIN_ANALYSIS_TIMEOUT_MS = 15_000;
 
 function usage() {
   return [
@@ -199,6 +205,74 @@ async function readSha256(filePath) {
   return hash.digest("hex");
 }
 
+function roundAudioGainDb(value) {
+  const rounded = Number(value.toFixed(1));
+  return Object.is(rounded, -0) ? 0 : rounded;
+}
+
+function computeAudioGainDb({ meanVolumeDb, maxVolumeDb }) {
+  const targetGainDb = AUDIO_GAIN_TARGET_MEAN_DB - meanVolumeDb;
+  const peakLimitedGainDb = AUDIO_GAIN_PEAK_CEILING_DB - maxVolumeDb;
+  const gainDb = Math.max(
+    AUDIO_GAIN_MIN_DB,
+    Math.min(AUDIO_GAIN_MAX_DB, targetGainDb, peakLimitedGainDb)
+  );
+  return roundAudioGainDb(gainDb);
+}
+
+function parseVolumedetectOutput(output) {
+  const meanMatch = output.match(/mean_volume:\s*(-?\d+(?:\.\d+)?)\s*dB/i);
+  const maxMatch = output.match(/max_volume:\s*(-?\d+(?:\.\d+)?)\s*dB/i);
+  if (!meanMatch || !maxMatch) return null;
+
+  const meanVolumeDb = Number(meanMatch[1]);
+  const maxVolumeDb = Number(maxMatch[1]);
+  if (!Number.isFinite(meanVolumeDb) || !Number.isFinite(maxVolumeDb)) return null;
+  return { meanVolumeDb, maxVolumeDb };
+}
+
+async function analyzeAudioGainDb(filePath) {
+  return await new Promise((resolve) => {
+    let settled = false;
+    let stderr = "";
+    const child = spawn("ffmpeg", [
+      "-hide_banner",
+      "-nostats",
+      "-t",
+      "12",
+      "-i",
+      filePath,
+      "-af",
+      "volumedetect",
+      "-f",
+      "null",
+      "-"
+    ], { stdio: ["ignore", "ignore", "pipe"] });
+
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      resolve(value);
+    };
+
+    const timeout = setTimeout(() => {
+      child.kill("SIGKILL");
+      finish(null);
+    }, AUDIO_GAIN_ANALYSIS_TIMEOUT_MS);
+
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("error", () => finish(null));
+    child.on("close", () => {
+      const analysis = parseVolumedetectOutput(stderr);
+      finish(analysis ? computeAudioGainDb(analysis) : null);
+    });
+  });
+}
+
 async function scanMp4Files({ inputDir, outputDir, recursive }) {
   const inputInfo = await stat(inputDir);
   if (!inputInfo.isDirectory()) {
@@ -264,7 +338,8 @@ async function buildVideoEntries(options) {
       order: options.startOrder + (index * options.orderStep),
       default: false,
       bytes: info.size,
-      sha256: await readSha256(filePath)
+      sha256: await readSha256(filePath),
+      audioGainDb: await analyzeAudioGainDb(filePath)
     });
   }
 
@@ -284,6 +359,7 @@ function toSceneManifest(videos) {
       label: video.label,
       order: video.order,
       ...(video.default ? { default: true } : {}),
+      ...(video.audioGainDb !== null ? { audioGainDb: video.audioGainDb } : {}),
       sha256: video.sha256
     }))
   };
@@ -338,6 +414,7 @@ async function writePackage({ packageDir, version, videos, options }) {
       order: video.order,
       default: video.default,
       bytes: video.bytes,
+      ...(video.audioGainDb !== null ? { audioGainDb: video.audioGainDb } : {}),
       sha256: video.sha256
     }))
   };

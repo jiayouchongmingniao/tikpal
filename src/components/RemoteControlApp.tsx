@@ -144,6 +144,14 @@ export function RemoteControlApp() {
 
   const isPlaying = remoteState?.playback.state === "playing";
   const busy = pendingAction !== null;
+  const transportCapabilities = remoteState?.playback.transportCapabilities;
+  const transportUnavailableTitle = transportCapabilities?.reason ?? "Playback control unavailable";
+  const previousDisabled = busy || transportCapabilities?.previous === false;
+  const playPauseDisabled = busy || transportCapabilities?.playPause === false;
+  const nextDisabled = busy || transportCapabilities?.next === false;
+  const previousTitle = transportCapabilities?.previous === false ? transportUnavailableTitle : "Previous";
+  const playPauseTitle = transportCapabilities?.playPause === false ? transportUnavailableTitle : isPlaying ? "Pause" : "Play";
+  const nextTitle = transportCapabilities?.next === false ? transportUnavailableTitle : "Next";
 
   return (
     <main className="remote-root">
@@ -166,20 +174,20 @@ export function RemoteControlApp() {
         </section>
 
         <section className="remote-transport" aria-label="Playback controls">
-          <button className="remote-icon-button" type="button" title="Previous" aria-label="Previous" disabled={busy} onClick={() => void applyAction({ type: "playback.previous" })}>
+          <button className="remote-icon-button" type="button" title={previousTitle} aria-label="Previous" disabled={previousDisabled} onClick={() => void applyAction({ type: "playback.previous" })}>
             <SkipBack aria-hidden="true" />
           </button>
           <button
             className="remote-play-button"
             type="button"
-            title={isPlaying ? "Pause" : "Play"}
+            title={playPauseTitle}
             aria-label={isPlaying ? "Pause" : "Play"}
-            disabled={busy}
+            disabled={playPauseDisabled}
             onClick={() => void applyAction({ type: "playback.play_pause" })}
           >
             {isPlaying ? <Pause aria-hidden="true" /> : <Play aria-hidden="true" />}
           </button>
-          <button className="remote-icon-button" type="button" title="Next" aria-label="Next" disabled={busy} onClick={() => void applyAction({ type: "playback.next" })}>
+          <button className="remote-icon-button" type="button" title={nextTitle} aria-label="Next" disabled={nextDisabled} onClick={() => void applyAction({ type: "playback.next" })}>
             <SkipForward aria-hidden="true" />
           </button>
         </section>

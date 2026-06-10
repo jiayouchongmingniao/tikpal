@@ -9,6 +9,7 @@
       "roomModes": [
         "sleep"
       ],
+      "audioGainDb": -5.8,
       "sha256": "0ee49df64468346a786bfba2ffbe786a9c50f6e65d1fc37232c83912faf3fea9"
     },
     {
@@ -19,6 +20,7 @@
       "roomModes": [
         "focus"
       ],
+      "audioGainDb": -4.7,
       "sha256": "77ab0e5ca766883cd7180bbaa06ee55a2d52587995e7c0f2c851085faaf252b8"
     },
     {
@@ -29,6 +31,7 @@
       "roomModes": [
         "sleep"
       ],
+      "audioGainDb": -7.1,
       "sha256": "e329ac800feb5d781b688d1a2f7bf66fef1f36db8c2820976fba84863a95e7a7"
     },
     {
@@ -39,6 +42,7 @@
       "roomModes": [
         "focus"
       ],
+      "audioGainDb": -6.2,
       "sha256": "dd4bdb892cbf07c578a2175d85ec7e05cd0ee8e3d888e434a7dea683ef3f4e76"
     },
     {
@@ -49,6 +53,7 @@
       "roomModes": [
         "calm"
       ],
+      "audioGainDb": 11.1,
       "sha256": "7e97424faa7e10077a68ac2ac0ba1a988c0b60e555ac045112e2dc84e3c08c08"
     },
     {
@@ -56,6 +61,7 @@
       "filename": "Vinyl-Lounge.mp4",
       "label": "Vinyl Lounge",
       "order": 150,
+      "audioGainDb": -11,
       "sha256": "2b60bbb1e9e3ed84f76b56af5ee6ff803116557ea40472539a32d6816d36784d"
     },
     {
@@ -66,6 +72,7 @@
       "roomModes": [
         "calm"
       ],
+      "audioGainDb": 1,
       "sha256": "9da00deaa70a938169a2e0584cdcc6e4c56076d4858c9558604a3029d3707fa5"
     },
     {
@@ -76,6 +83,7 @@
       "roomModes": [
         "calm"
       ],
+      "audioGainDb": -5.2,
       "sha256": "2689a29a91f36b4dff77a013c3d90b4d7f75062f0b9516f113212c4342d59a55"
     }
   ]

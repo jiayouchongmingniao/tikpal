@@ -16,6 +16,15 @@ export const playback: PlaybackSummary = {
   settings: {
     playMode: "sequence"
   },
+  transportCapabilities: {
+    playPause: true,
+    play: true,
+    pause: true,
+    next: true,
+    previous: true,
+    seek: true,
+    reason: null
+  },
   queuePreview: [
     {
       id: "mock-queue-1",

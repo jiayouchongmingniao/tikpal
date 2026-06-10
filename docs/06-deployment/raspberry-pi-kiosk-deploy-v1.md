@@ -149,6 +149,12 @@ TIKPAL_AIRPLAY_DISABLE_COMMAND="moodeutl -Ro --airplay off"
 TIKPAL_AIRPLAY_RECEIVER_ACTIVE_COMMAND="systemctl is-active --quiet shairport-sync.service"
 TIKPAL_AIRPLAY_ALSA_OUTPUT_DEVICE=_audioout
 TIKPAL_AIRPLAY_METADATA_COMMAND="./deploy/moode/tikpal-airplay-metadata.sh"
+TIKPAL_AIRPLAY_TRANSPORT_AVAILABLE_COMMAND="./deploy/moode/tikpal-airplay-transport.sh available"
+TIKPAL_AIRPLAY_PLAY_PAUSE_COMMAND="./deploy/moode/tikpal-airplay-transport.sh play-pause"
+TIKPAL_AIRPLAY_PLAY_COMMAND="./deploy/moode/tikpal-airplay-transport.sh play"
+TIKPAL_AIRPLAY_PAUSE_COMMAND="./deploy/moode/tikpal-airplay-transport.sh pause"
+TIKPAL_AIRPLAY_NEXT_COMMAND="./deploy/moode/tikpal-airplay-transport.sh next"
+TIKPAL_AIRPLAY_PREVIOUS_COMMAND="./deploy/moode/tikpal-airplay-transport.sh previous"
 TIKPAL_AIRPLAY_METADATA_MAX_AGE_SECONDS=3600
 TIKPAL_AIRPLAY_ARTWORK_MAX_LAG_SECONDS=1
 TIKPAL_AIRPLAY_METADATA_CLOCK_LEAD_MS=1000
@@ -193,6 +199,7 @@ Kiosk display diagnostics are separate from `4173`: `TIKPAL_KIOSK_REMOTE_DEBUG=1
 `TIKPAL_BLUETOOTH_*`, `TIKPAL_AIRPLAY_*`, and `TIKPAL_UPNP_*` let Tikpal enforce the armed-only source gate against moOde's renderer services. On moOde, the checked-in `deploy/moode/tikpal-bluetooth-enable.sh` script is the preferred Bluetooth enable path because it both enables the renderer and re-arms the controller to `power on`, `discoverable on`, and `pairable on`. `deploy/moode/tikpal-airplay-enable.sh` is the preferred AirPlay enable path because it enables the renderer and then nudges `shairport-sync.service` into the running state that actually advertises the receiver. `deploy/moode/tikpal-bluetooth-label.sh` reads the current broadcast name from `bluetoothctl show` so the frontend can tell the user what name to search for on their phone; `TIKPAL_BLUETOOTH_LABEL_TIMEOUT_SECONDS` keeps a stuck BlueZ client from accumulating orphaned `bluetoothctl` processes during frequent runtime polling. `TIKPAL_UPNP_*` should point at the target moOde UPnP/DLNA renderer controls; Tikpal treats this as DLNA casting intake, not media-server browsing. For all four external intake surfaces, `*_READY_COMMAND` means the receiver can be opened, `*_ACTIVE_COMMAND` means a real client is connected, and the UI keeps Ambient, Player, and Remote consistent by showing `armed` as waiting until `connected` is true. `moodeutl -Ro --bluetooth off` and `moodeutl -Ro --airplay off` remain the practical disable commands, while `cfg_system` values `btsvc`, `btactive`, `airplaysvc`, and `aplactive` plus `TIKPAL_AIRPLAY_RECEIVER_ACTIVE_COMMAND` keep the UI honest about whether AirPlay is really up.
 `TIKPAL_BLUETOOTH_METADATA_COMMAND` points to the BlueZ / AVRCP metadata probe. Tikpal uses this first when Bluetooth is connected, so phones that expose title / artist metadata can resolve lyrics through LRCLIB without audio fingerprint credentials. When BlueZ also exposes `Position` and `Duration`, Tikpal maps those into playback progress so synced LRCLIB lyrics can follow Bluetooth playback timing instead of falling back to a fixed text rotation.
 `TIKPAL_AIRPLAY_METADATA_COMMAND` points to moOde's AirPlay metadata bridge. The checked-in `deploy/moode/tikpal-airplay-metadata.sh` treats Shairport Sync MPRIS as the current playback truth on moOde 5, then uses fresh `/var/local/www/aplmeta.json` or legacy `/var/local/www/aplmeta.txt` only to fill missing fields for the same title / artist. It emits title / artist / album / artwork fields plus `metadataSource` diagnostics that Tikpal can use for playback truth and LRCLIB lyrics lookup. AirPlay lyrics should be fast but strict about identity: metadata lookup must not return `ready` lyrics when LRCLIB only finds the same title from a different artist. AirPlay duration is treated as timing guidance instead of an identity gate because some Shairport/MPRIS sessions report unreliable durations; once title and artist are trusted, Tikpal may prefer LRCLIB's duration for lyric line timing. `TIKPAL_AIRPLAY_DIRECT_METADATA_REFRESH_MIN_MS=1000` keeps connected AirPlay metadata fresh without returning to per-request heavy polling. `TIKPAL_AIRPLAY_METADATA_CLOCK_LEAD_MS` compensates for moOde's metadata write delay when Tikpal has to infer AirPlay progress from metadata mtime; when moOde logs `spspre` and `spspost` in the same second but metadata is fresh, `clockStartReason=metadata_mtime` or `persisted_metadata_mtime` and advancing `positionMs` are valid. `TIKPAL_AIRPLAY_ARTWORK_MAX_LAG_SECONDS` prevents stale cover files from being paired with a newer title. `TIKPAL_AIRPLAY_ALSA_OUTPUT_DEVICE` defaults AirPlay to moOde's `_audioout` chain, so Shairport Sync reaches the physical output while the Loopback mirror remains available for the real Hi-Fi spectrum meter.
+`TIKPAL_AIRPLAY_TRANSPORT_AVAILABLE_COMMAND`, `TIKPAL_AIRPLAY_PLAY_PAUSE_COMMAND`, `TIKPAL_AIRPLAY_PLAY_COMMAND`, `TIKPAL_AIRPLAY_PAUSE_COMMAND`, `TIKPAL_AIRPLAY_NEXT_COMMAND`, and `TIKPAL_AIRPLAY_PREVIOUS_COMMAND` route Tikpal transport buttons to the AirPlay sender while AirPlay is the current source. The checked-in `deploy/moode/tikpal-airplay-transport.sh` helper probes Shairport Sync's native D-Bus `org.gnome.ShairportSync.RemoteControl.Available` property before calling `PlayPause`, `Play`, `Pause`, `Next`, or `Previous`. Some AirPlay 2 senders expose metadata but no DACP remote-control channel; in that case Tikpal disables previous / play-pause / next instead of returning a fake-success action that cannot change the sender's queue.
 `TIKPAL_BLUETOOTH_CAPTURE_COMMAND` points to the local PCM capture script used for Bluetooth fingerprint recognition when Bluetooth metadata is unavailable. The checked-in `deploy/moode/tikpal-bluetooth-capture.sh` first tries `ffmpeg` against the connected BlueALSA device and then falls back to `arecord`; if moOde exposes a different ALSA capture path, override `TIKPAL_BLUETOOTH_CAPTURE_DEVICE` in the service environment before restarting `tikpal-api.service`.
 `TIKPAL_RECOGNITION_PROVIDER=acrcloud` plus the `TIKPAL_ACRCLOUD_*` credentials enable the online fingerprint fallback. Tikpal waits `TIKPAL_BLUETOOTH_RECOGNITION_SETTLE_MS` after the Bluetooth connection becomes active, captures `TIKPAL_BLUETOOTH_CAPTURE_DURATION_SECONDS` seconds of audio, sends it to ACRCloud, and then reuses the same LRCLIB lyrics path once a track is identified. AirPlay should normally resolve from metadata; if `TIKPAL_AIRPLAY_CAPTURE_COMMAND` is configured as a fallback, it uses its own faster `TIKPAL_AIRPLAY_RECOGNITION_SETTLE_MS` and `TIKPAL_AIRPLAY_CAPTURE_DURATION_SECONDS` values so Bluetooth recognition stability is not changed. When AirPlay capture is unset, Tikpal reports metadata unavailable instead of staying in a long fingerprint-recognition state. `TIKPAL_BLUETOOTH_RECOGNITION_NOT_FOUND_RETRY_MS` keeps the receiver trying again when the first sample catches silence or a transition instead of permanently pinning Ambient to "not found".
 moOde `cfg_radio` presets are now the primary Radio source list for the source panel, and `POST /api/v1/audio/source` can switch directly by `radioStationId`.
@@ -442,14 +449,29 @@ The launcher accepts `TIKPAL_KIOSK_WINDOW=2560x720` in `.env.kiosk`, but normali
 
 ## Remote Kiosk Diagnostics
 
-When `.env.kiosk` enables `TIKPAL_KIOSK_REMOTE_DEBUG=1` and `TIKPAL_KIOSK_VIEWER=novnc`, use these checks from the Pi:
+noVNC adds CPU and network load, so keep it off by default and only enable it while recording or debugging. Use the viewer control helper on the Pi:
 
 ```bash
-curl -fsS http://127.0.0.1:9222/json/version
+cd /home/moode/code/tikpal
+sudo deploy/chromium/tikpal-kiosk-viewerctl.sh start
+sudo deploy/chromium/tikpal-kiosk-viewerctl.sh status
+```
+
+When noVNC is enabled, use these checks from the Pi:
+
+```bash
 curl -fsSI http://127.0.0.1:6080/
 ```
 
-From a trusted LAN browser, open `http://<pi-ip>:6080/` to view and operate the full kiosk UI. For DOM, console, network, and media debugging, add `<pi-ip>:9222` in Chrome's `chrome://inspect`.
+From a trusted LAN browser, open `http://<pi-ip>:6080/` to view and operate the full kiosk UI. After recording, disable noVNC again:
+
+```bash
+cd /home/moode/code/tikpal
+sudo deploy/chromium/tikpal-kiosk-viewerctl.sh stop
+sudo deploy/chromium/tikpal-kiosk-viewerctl.sh status
+```
+
+For DOM, console, network, and media debugging, separately enable `TIKPAL_KIOSK_REMOTE_DEBUG=1`, restart `tikpal-kiosk-devtools.service`, verify `curl -fsS http://127.0.0.1:9222/json/version`, and add `<pi-ip>:9222` in Chrome's `chrome://inspect`.
 
 `http://<pi-ip>:4173/` remains the portable remote controller and intentionally does not expose the full kiosk API surface while `TIKPAL_WEB_ALLOW_REMOTE_UI_API=0`.
 

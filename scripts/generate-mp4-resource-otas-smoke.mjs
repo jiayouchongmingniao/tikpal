@@ -34,17 +34,53 @@ function runNode(args, env = {}) {
   });
 }
 
+function canRunFfmpeg() {
+  const result = spawnSync("ffmpeg", ["-version"], { encoding: "utf8" });
+  return result.status === 0;
+}
+
+function writeSmokeMp4(filePath, { color, frequency }) {
+  return spawnSync("ffmpeg", [
+    "-y",
+    "-f", "lavfi",
+    "-i", `color=c=${color}:s=96x54:r=12`,
+    "-f", "lavfi",
+    "-i", `sine=frequency=${frequency}:sample_rate=44100`,
+    "-t", "0.8",
+    "-c:v", "libx264",
+    "-preset", "ultrafast",
+    "-crf", "35",
+    "-pix_fmt", "yuv420p",
+    "-c:a", "aac",
+    "-b:a", "48k",
+    "-movflags", "+faststart",
+    filePath
+  ], { encoding: "utf8" });
+}
+
 async function run() {
   const workspace = await mkdtemp(path.join(tmpdir(), "tikpal-mp4-ota-generator-"));
   const inputDir = path.join(workspace, "input");
   const outputDir = path.join(workspace, "packages");
-  const firstVideo = Buffer.from("000000 ftypisom tikpal calm fireplace smoke mp4");
-  const secondVideo = Buffer.from("000000 ftypisom tikpal rainy window smoke mp4");
+  let firstVideo = Buffer.from("000000 ftypisom tikpal calm fireplace smoke mp4");
+  let secondVideo = Buffer.from("000000 ftypisom tikpal rainy window smoke mp4");
+  const shouldExpectAudioGain = canRunFfmpeg();
 
   try {
     await mkdir(path.join(inputDir, "Nested"), { recursive: true });
-    await writeFile(path.join(inputDir, "Calm Fireplace.mp4"), firstVideo);
-    await writeFile(path.join(inputDir, "Nested", "Rainy_Window.mp4"), secondVideo);
+    const firstVideoPath = path.join(inputDir, "Calm Fireplace.mp4");
+    const secondVideoPath = path.join(inputDir, "Nested", "Rainy_Window.mp4");
+    if (shouldExpectAudioGain) {
+      const firstWrite = writeSmokeMp4(firstVideoPath, { color: "0xe65f22", frequency: 440 });
+      const secondWrite = writeSmokeMp4(secondVideoPath, { color: "0x335c8a", frequency: 660 });
+      assert(firstWrite.status === 0, `Failed to create first smoke MP4:\n${firstWrite.stdout}\n${firstWrite.stderr}`);
+      assert(secondWrite.status === 0, `Failed to create second smoke MP4:\n${secondWrite.stdout}\n${secondWrite.stderr}`);
+      firstVideo = await readFile(firstVideoPath);
+      secondVideo = await readFile(secondVideoPath);
+    } else {
+      await writeFile(firstVideoPath, firstVideo);
+      await writeFile(secondVideoPath, secondVideo);
+    }
 
     const generate = runNode([
       "scripts/generate-mp4-resource-otas.mjs",
@@ -72,6 +108,12 @@ async function run() {
     assert(firstPackage.videos[0].default === true, "generator should mark the requested default scene");
     assert(firstPackage.videos[0].sha256 === createHash("sha256").update(firstVideo).digest("hex"), "first checksum should match");
     assert(secondPackage.videos[0].order === 50, "scene order should increment by the configured step");
+    if (shouldExpectAudioGain) {
+      assert(Number.isFinite(firstPackage.videos[0].audioGainDb), "generator should analyze and report first scene audio gain");
+      assert(Number.isFinite(secondPackage.videos[0].audioGainDb), "generator should analyze and report second scene audio gain");
+    } else {
+      assert(!("audioGainDb" in firstPackage.videos[0]), "generator should omit audio gain when analysis is unavailable");
+    }
 
     for (const packageSummary of summary.packages) {
       assert(await exists(path.join(packageSummary.packageDir, "manifest.json")), "package should include manifest.json");
@@ -89,6 +131,11 @@ async function run() {
 
     const sceneManifest = JSON.parse(await readFile(path.join(firstPackage.packageDir, "assets", "scenes", "_metadata", "scene_videos.json"), "utf8"));
     assert(sceneManifest.videos[0].id === "calm-fireplace", "scene id should be slugged from the filename");
+    if (shouldExpectAudioGain) {
+      assert(sceneManifest.videos[0].audioGainDb === firstPackage.videos[0].audioGainDb, "package manifest should include analyzed scene audio gain");
+    } else {
+      assert(!("audioGainDb" in sceneManifest.videos[0]), "package manifest should omit audio gain when analysis fails");
+    }
 
     console.log("mp4 resource ota generator smoke passed");
   } finally {

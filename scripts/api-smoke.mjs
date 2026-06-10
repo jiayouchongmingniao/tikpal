@@ -1049,6 +1049,8 @@ async function runMpcAirplayHandoffRefreshSmoke(roomExperienceStatePath) {
   const fakeVolumeStatePath = path.join(workspace, "volume-state.txt");
   const fakeAirplayMetadataPath = path.join(workspace, "airplay-metadata.json");
   const fakeAirplayMetadataCommandPath = path.join(workspace, "airplay-metadata.mjs");
+  const fakeAirplayTransportLogPath = path.join(workspace, "airplay-transport.log");
+  const fakeAirplayTransportCommandPath = path.join(workspace, "airplay-transport.mjs");
   const airplayArtworkRoot = path.join(workspace, "airplay-covers");
   const firstAirplayArtworkPath = path.join(airplayArtworkRoot, "this-city.png");
   const secondAirplayArtworkPath = path.join(airplayArtworkRoot, "instant-crush.png");
@@ -1121,6 +1123,13 @@ for (const [key, value] of Object.entries(metadata)) {
 }
 `);
   await chmod(fakeAirplayMetadataCommandPath, 0o755);
+  await writeFile(fakeAirplayTransportLogPath, "");
+  await writeFile(fakeAirplayTransportCommandPath, `#!/usr/bin/env node
+import { appendFileSync } from "node:fs";
+
+appendFileSync(${JSON.stringify(fakeAirplayTransportLogPath)}, process.argv[2] + "\\n");
+`);
+  await chmod(fakeAirplayTransportCommandPath, 0o755);
   await writeAirplayMetadata({
     title: "This City",
     artist: "Sam Fischer",
@@ -1151,6 +1160,12 @@ for (const [key, value] of Object.entries(metadata)) {
       TIKPAL_AIRPLAY_RECEIVER_ACTIVE_COMMAND: "false",
       TIKPAL_AIRPLAY_LABEL_COMMAND: "printf 'Tikpal Speaker'",
       TIKPAL_AIRPLAY_METADATA_COMMAND: `${process.execPath} ${fakeAirplayMetadataCommandPath}`,
+      TIKPAL_AIRPLAY_TRANSPORT_AVAILABLE_COMMAND: "true",
+      TIKPAL_AIRPLAY_PLAY_PAUSE_COMMAND: `${process.execPath} ${fakeAirplayTransportCommandPath} play-pause`,
+      TIKPAL_AIRPLAY_PLAY_COMMAND: `${process.execPath} ${fakeAirplayTransportCommandPath} play`,
+      TIKPAL_AIRPLAY_PAUSE_COMMAND: `${process.execPath} ${fakeAirplayTransportCommandPath} pause`,
+      TIKPAL_AIRPLAY_NEXT_COMMAND: `${process.execPath} ${fakeAirplayTransportCommandPath} next`,
+      TIKPAL_AIRPLAY_PREVIOUS_COMMAND: `${process.execPath} ${fakeAirplayTransportCommandPath} previous`,
       TIKPAL_FAKE_AIRPLAY_METADATA_PATH: fakeAirplayMetadataPath,
       TIKPAL_AIRPLAY_ARTWORK_ROOT: airplayArtworkRoot,
       TIKPAL_AIRPLAY_DIRECT_METADATA_REFRESH_MIN_MS: "1000",
@@ -1179,6 +1194,7 @@ for (const [key, value] of Object.entries(metadata)) {
     assert(recovered.body.playback.title === "This City", "mpc recovered AirPlay state should expose metadata title");
     assert(recovered.body.playback.artist === "Sam Fischer", "mpc recovered AirPlay state should expose metadata artist");
     assert(recovered.body.playback.elapsedSeconds === 45, "mpc recovered AirPlay state should expose metadata position");
+    assert(recovered.body.playback.transportCapabilities?.next === true, "mpc recovered AirPlay state should expose transport capability");
     assert(recovered.body.playback.timingDiagnostics?.metadataSource === "mpris", "mpc recovered AirPlay state should expose metadata source diagnostics");
     assert(
       recovered.body.playback.albumArtUrl?.startsWith("/api/v1/media/airplay-artwork?path="),
@@ -1215,11 +1231,37 @@ for (const [key, value] of Object.entries(metadata)) {
       `mpc airplay switch should refresh command-backed connection state, got ${switched.body.audio.currentSource.connectionState}`
     );
     assert(switched.body.playback.source === "airplay", "mpc airplay playback source should be AirPlay");
+    assert(switched.body.playback.transportCapabilities?.previous === true, "mpc airplay switch should preserve transport capability");
     assert(switched.body.system.volume.percent === 43, "mpc external source switch should return the current output volume");
     assert(switched.body.playback.title === "This City", "mpc airplay switch should preserve fresh AirPlay metadata");
     assert(
       switched.body.playback.albumArtUrl?.includes("v=111000"),
       "mpc airplay switch should preserve versioned AirPlay artwork"
+    );
+
+    const airplayNext = await requestFrom(baseUrl, "/api/v1/playback/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "next" })
+    });
+    assert(airplayNext.response.ok, "mpc airplay next action should return 200");
+    assert(airplayNext.body.playback.source === "airplay", "mpc airplay next should keep AirPlay as playback source");
+    const airplayPrevious = await requestFrom(baseUrl, "/api/v1/playback/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "previous" })
+    });
+    assert(airplayPrevious.response.ok, "mpc airplay previous action should return 200");
+    assert(airplayPrevious.body.playback.source === "airplay", "mpc airplay previous should keep AirPlay as playback source");
+    const airplayPlayPause = await requestFrom(baseUrl, "/api/v1/playback/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "play_pause" })
+    });
+    assert(airplayPlayPause.response.ok, "mpc airplay play_pause action should return 200");
+    const airplayTransportLog = await readFile(fakeAirplayTransportLogPath, "utf8");
+    assert(
+      airplayTransportLog.includes("next\n")
+        && airplayTransportLog.includes("previous\n")
+        && airplayTransportLog.includes("play-pause\n"),
+      `mpc airplay transport should call AirPlay commands, got ${JSON.stringify(airplayTransportLog)}`
     );
 
     const airplayLyricsRefresh = await requestFrom(baseUrl, "/api/v1/lyrics/refresh", {
@@ -1375,6 +1417,7 @@ async function run() {
           label: "Rainy Window",
           order: 30,
           roomModes: ["calm"],
+          audioGainDb: 11.1,
           default: false,
           sha256: sceneSha256
         }
@@ -1884,6 +1927,7 @@ async function run() {
     assert(rainyWindow?.label === "Rainy Window", "background video catalog should use scene manifest labels");
     assert(rainyWindow?.order === 30, "background video catalog should expose scene manifest order");
     assert(JSON.stringify(rainyWindow?.roomModes) === JSON.stringify(["calm"]), "background video catalog should expose scene room modes");
+    assert(rainyWindow?.audioGainDb === 11.1, "background video catalog should expose scene audio gain");
     assert(backgroundVideos.body.catalogVersion, "background video catalog should expose a catalog version");
 
     const radios = await request("/api/v1/audio/radios?q=ambient&genre=Ambient");

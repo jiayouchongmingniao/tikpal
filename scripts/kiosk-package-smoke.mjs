@@ -15,10 +15,12 @@ const requiredFiles = [
   "deploy/chromium/start-tikpal-kiosk-display.sh",
   "deploy/chromium/start-tikpal-kiosk-session.sh",
   "deploy/chromium/start-tikpal-kiosk-viewer.sh",
+  "deploy/chromium/tikpal-kiosk-viewerctl.sh",
   "deploy/chromium/chromium-flags.conf",
   "deploy/chromium/managed-policies.json",
   "deploy/chromium/env.kiosk.example",
   "deploy/moode/tikpal-alsa-loopback.sh",
+  "deploy/moode/tikpal-airplay-transport.sh",
   "deploy/moode/tikpal-output-volume.sh",
   "deploy/moode/tikpal-snd-aloop-enable.sh",
   "deploy/moode/tikpal-quiet-boot-enable.sh",
@@ -51,7 +53,9 @@ async function run() {
   await assertExecutable("deploy/chromium/start-tikpal-kiosk-display.sh");
   await assertExecutable("deploy/chromium/start-tikpal-kiosk-session.sh");
   await assertExecutable("deploy/chromium/start-tikpal-kiosk-viewer.sh");
+  await assertExecutable("deploy/chromium/tikpal-kiosk-viewerctl.sh");
   await assertExecutable("deploy/moode/tikpal-alsa-loopback.sh");
+  await assertExecutable("deploy/moode/tikpal-airplay-transport.sh");
   await assertExecutable("deploy/moode/tikpal-output-volume.sh");
   await assertExecutable("deploy/moode/tikpal-snd-aloop-enable.sh");
   await assertExecutable("deploy/moode/tikpal-quiet-boot-enable.sh");
@@ -70,11 +74,12 @@ async function run() {
   assert(kioskUnit.includes("start-tikpal-kiosk-display.sh"), "kiosk unit should launch the display-mode wrapper");
   assert(!kioskUnit.includes("/usr/bin/startx"), "kiosk unit should leave physical versus virtual X startup to the wrapper");
   assert(kioskViewerUnit.includes("start-tikpal-kiosk-viewer.sh"), "kiosk viewer unit should launch the noVNC wrapper");
+  assert(kioskViewerUnit.includes(".env.kiosk.viewer"), "kiosk viewer unit should load the viewer-only switch file");
   assert(kioskViewerUnit.includes("PartOf=tikpal-kiosk.service"), "kiosk viewer should follow kiosk service lifecycle");
 
   const kioskEnv = await readFile(path.join(ROOT, "deploy/chromium/env.kiosk.example"), "utf8");
   assert(kioskEnv.includes("TIKPAL_KIOSK_REMOTE_DEBUG=0"), "kiosk env should default remote debugging off");
-  assert(kioskEnv.includes("TIKPAL_KIOSK_VIEWER=novnc"), "kiosk env should document noVNC viewer mode");
+  assert(kioskEnv.includes("TIKPAL_KIOSK_VIEWER=none"), "kiosk env should default noVNC viewer off");
   assert(kioskEnv.includes("TIKPAL_KIOSK_DISPLAY_MODE=auto"), "kiosk env should document automatic physical/virtual display selection");
 
   const loopbackGuardDir = mkdtempSync(path.join(tmpdir(), "tikpal-loopback-guard-"));
@@ -159,6 +164,18 @@ async function run() {
   assert(viewerCheck.status === 0, `viewer wrapper --check failed:\n${viewerCheck.stdout}\n${viewerCheck.stderr}`);
   assert(viewerCheck.stdout.includes("viewer: novnc"), "viewer wrapper should report noVNC mode");
   assert(viewerCheck.stdout.includes("novnc: 0.0.0.0:6080"), "viewer wrapper should report noVNC endpoint");
+
+  const viewerCtlCheck = spawnSync("bash", ["deploy/chromium/tikpal-kiosk-viewerctl.sh", "--check"], {
+    cwd: ROOT,
+    env: {
+      ...process.env,
+      TIKPAL_KIOSK_VIEWER_ENV_FILE: path.join(tmpdir(), "tikpal-kiosk-viewer-smoke.env")
+    },
+    encoding: "utf8"
+  });
+  assert(viewerCtlCheck.status === 0, `viewerctl --check failed:\n${viewerCtlCheck.stdout}\n${viewerCtlCheck.stderr}`);
+  assert(viewerCtlCheck.stdout.includes("novnc endpoint: 0.0.0.0:6080"), "viewerctl should report the default noVNC endpoint");
+  assert(viewerCtlCheck.stdout.includes("check passed"), "viewerctl --check should report success");
 
   const quietBootDir = mkdtempSync(path.join(tmpdir(), "tikpal-quiet-boot-"));
   const quietBootCmdline = path.join(quietBootDir, "cmdline.txt");

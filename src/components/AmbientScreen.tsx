@@ -341,8 +341,7 @@ export function AmbientScreen({
   const shouldRenderSceneVideo = sceneVideoEnabled && hasSceneVideo && !sceneVideoThermalGuardActive;
   const sceneVisualLowPower = audioProtectionMode || sceneVideoThermalGuardActive;
   const sceneAudioEnabled = shouldRenderSceneVideo && sceneSoundEnabled && playback.source === "scene" && playback.state === "playing";
-  const useStableSceneLoop = sceneVideoStableLoop && shouldRenderSceneVideo && sceneAudioEnabled && !isHifiMode;
-  const useStableSceneStill = sceneVideoStableLoop && shouldRenderSceneVideo && !sceneAudioEnabled && !isHifiMode;
+  const useStableSceneLoop = sceneVideoStableLoop && shouldRenderSceneVideo && !isHifiMode;
   const canAdvanceLyrics = lyrics.synced
     && (playback.source === "mpd" || playback.source === "radio" || playback.source === "bluetooth" || playback.source === "airplay")
     && playback.state === "playing";
@@ -420,6 +419,14 @@ export function AmbientScreen({
   const showLyricsLayer = canShowLyricsLayer && !hifiLyricsPanel && Boolean(tickerText);
   const isPlaybackPending = status.pending;
   const isPlaying = playback.state === "playing";
+  const transportCapabilities = playback.transportCapabilities;
+  const transportUnavailableTitle = transportCapabilities?.reason ?? "Playback control unavailable";
+  const previousTrackDisabled = isPlaybackPending || transportCapabilities?.previous === false;
+  const playPauseDisabled = isPlaybackPending || transportCapabilities?.playPause === false;
+  const nextTrackDisabled = isPlaybackPending || transportCapabilities?.next === false;
+  const previousTrackTitle = transportCapabilities?.previous === false ? transportUnavailableTitle : "Previous track";
+  const playPauseTitle = transportCapabilities?.playPause === false ? transportUnavailableTitle : isPlaying ? "Pause" : "Play";
+  const nextTrackTitle = transportCapabilities?.next === false ? transportUnavailableTitle : "Next track";
   const playbackSettings = playback.settings ?? { playMode: "sequence" };
   const playMode = playbackSettings.playMode;
   const currentAmbientSource = audio.currentSource.id === "upnp"
@@ -568,6 +575,9 @@ export function AmbientScreen({
   function handleAmbientPlaybackAction(type: PlaybackActionType) {
     onHudActivity();
     if (isPlaybackPending) return;
+    if (type === "previous" && transportCapabilities?.previous === false) return;
+    if (type === "next" && transportCapabilities?.next === false) return;
+    if (type === "play_pause" && transportCapabilities?.playPause === false) return;
     void onPlaybackAction(type);
   }
 
@@ -665,7 +675,7 @@ export function AmbientScreen({
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [backgroundVideos.length, currentBackgroundVideo.id, hasSceneVideo, hudVisible, isHifiMode, isPlaybackPending, onHudActivity, onPlaybackAction, onSceneSoundEnabledChange, sceneSoundEnabled, sceneSoundPending, switchableBackgroundVideos.length]);
+  }, [backgroundVideos.length, currentBackgroundVideo.id, hasSceneVideo, hudVisible, isHifiMode, isPlaybackPending, nextTrackDisabled, onHudActivity, onPlaybackAction, onSceneSoundEnabledChange, playPauseDisabled, previousTrackDisabled, sceneSoundEnabled, sceneSoundPending, switchableBackgroundVideos.length]);
 
   useEffect(() => {
     if (!sourcePickerOpen || pendingAmbientSource || ambientSourceError) return undefined;
@@ -1078,14 +1088,15 @@ export function AmbientScreen({
         />
       ) : (
         <FlameScene
-          lowPower={sceneVisualLowPower || useStableSceneLoop || useStableSceneStill}
+          lowPower={sceneVisualLowPower || useStableSceneLoop}
           playback={playback}
           singleLoop={useStableSceneLoop}
           videoSrc={currentBackgroundVideo.src}
-          staticOnly={(sceneVideoThermalGuardActive || useStableSceneStill) && sceneVideoEnabled && hasSceneVideo}
+          staticOnly={sceneVideoThermalGuardActive && sceneVideoEnabled && hasSceneVideo}
           videoEnabled={shouldRenderSceneVideo}
           audioEnabled={sceneAudioEnabled}
           volumePercent={system.volume.percent}
+          audioGainDb={currentBackgroundVideo.audioGainDb}
         />
       )}
       {!isHifiMode && sceneVideoEnabled && hasSceneVideo ? <div className="ambient-vignette" /> : null}
@@ -1187,9 +1198,9 @@ export function AmbientScreen({
                 className="ambient-transport-button ambient-transport-track ambient-transport-left"
                 type="button"
                 aria-label="Previous track"
-                title="Previous track"
+                title={previousTrackTitle}
                 tabIndex={ambientHudVisible ? 0 : -1}
-                disabled={isPlaybackPending}
+                disabled={previousTrackDisabled}
                 onClick={() => handleAmbientPlaybackAction("previous")}
               >
                 <SkipBack size={33} fill="currentColor" strokeWidth={1.6} />
@@ -1198,9 +1209,9 @@ export function AmbientScreen({
                 className="ambient-transport-button ambient-transport-play"
                 type="button"
                 aria-label={isPlaying ? "Pause" : "Play"}
-                title={isPlaying ? "Pause" : "Play"}
+                title={playPauseTitle}
                 tabIndex={ambientHudVisible ? 0 : -1}
-                disabled={isPlaybackPending}
+                disabled={playPauseDisabled}
                 onClick={() => handleAmbientPlaybackAction("play_pause")}
               >
                 {isPlaying ? <Pause size={34} fill="currentColor" strokeWidth={1.6} /> : <Play size={34} fill="currentColor" strokeWidth={1.6} />}
@@ -1209,9 +1220,9 @@ export function AmbientScreen({
                 className="ambient-transport-button ambient-transport-track ambient-transport-right"
                 type="button"
                 aria-label="Next track"
-                title="Next track"
+                title={nextTrackTitle}
                 tabIndex={ambientHudVisible ? 0 : -1}
-                disabled={isPlaybackPending}
+                disabled={nextTrackDisabled}
                 onClick={() => handleAmbientPlaybackAction("next")}
               >
                 <SkipForward size={33} fill="currentColor" strokeWidth={1.6} />
