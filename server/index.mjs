@@ -38,6 +38,16 @@ const DDCUTIL_READ_TIMEOUT_MS_RAW = Number(process.env.TIKPAL_DDCUTIL_READ_TIMEO
 const DDCUTIL_READ_TIMEOUT_MS = Number.isFinite(DDCUTIL_READ_TIMEOUT_MS_RAW) && DDCUTIL_READ_TIMEOUT_MS_RAW > 0
   ? DDCUTIL_READ_TIMEOUT_MS_RAW
   : 3500;
+const DDCUTIL_UNAVAILABLE_BACKOFF_MS_RAW = Number(process.env.TIKPAL_DDCUTIL_UNAVAILABLE_BACKOFF_MS ?? 1_800_000);
+const DDCUTIL_UNAVAILABLE_BACKOFF_MS = Number.isFinite(DDCUTIL_UNAVAILABLE_BACKOFF_MS_RAW) && DDCUTIL_UNAVAILABLE_BACKOFF_MS_RAW >= DDCUTIL_READ_CACHE_MS
+  ? DDCUTIL_UNAVAILABLE_BACKOFF_MS_RAW
+  : Math.max(1_800_000, DDCUTIL_READ_CACHE_MS);
+const DDCUTIL_SUPPRESS_READ_WARNINGS = parseEnvBoolean(process.env.TIKPAL_DDCUTIL_SUPPRESS_READ_WARNINGS ?? "1");
+const DDCUTIL_SUPPRESS_SYSLOG = parseEnvBoolean(process.env.TIKPAL_DDCUTIL_SUPPRESS_SYSLOG ?? "1");
+const RUNTIME_DRM_MODE_TIMEOUT_MS_RAW = Number(process.env.TIKPAL_RUNTIME_DRM_MODE_TIMEOUT_MS ?? 500);
+const RUNTIME_DRM_MODE_TIMEOUT_MS = Number.isFinite(RUNTIME_DRM_MODE_TIMEOUT_MS_RAW) && RUNTIME_DRM_MODE_TIMEOUT_MS_RAW > 0
+  ? RUNTIME_DRM_MODE_TIMEOUT_MS_RAW
+  : 500;
 const FFPROBE_BIN = process.env.TIKPAL_FFPROBE_BIN ?? "ffprobe";
 const FFMPEG_BIN = process.env.TIKPAL_FFMPEG_BIN ?? "ffmpeg";
 const RADIO_ACTIVATE_COMMAND = process.env.TIKPAL_RADIO_ACTIVATE_COMMAND ?? "";
@@ -321,6 +331,7 @@ const remoteArtworkInFlight = new Map();
 let bluetoothRecognitionSession = buildBluetoothRecognitionSession();
 let displayBrightnessSnapshotCache = null;
 let displayBrightnessRefreshPromise = null;
+let displayBrightnessUnavailableUntilMs = 0;
 let tikpalStateSnapshotCache = null;
 let tikpalStateSnapshotRefreshPromise = null;
 let tikpalStateSnapshotRefreshTimer = null;
@@ -2253,7 +2264,13 @@ async function getDspSnapshot() {
 }
 
 function ddcutilArgs(args) {
-  return DDCUTIL_DISPLAY ? ["--display", DDCUTIL_DISPLAY, ...args] : args;
+  const prefix = DDCUTIL_SUPPRESS_SYSLOG ? ["--syslog=NEVER"] : [];
+  return DDCUTIL_DISPLAY ? [...prefix, "--display", DDCUTIL_DISPLAY, ...args] : [...prefix, ...args];
+}
+
+function ddcutilReadCommand(args) {
+  const command = `${DDCUTIL_BIN} ${ddcutilArgs(args).join(" ")}`;
+  return DDCUTIL_SUPPRESS_READ_WARNINGS ? `${command} 2>/dev/null` : command;
 }
 
 function buildUnavailableDisplayBrightnessSnapshot() {
@@ -2287,16 +2304,24 @@ function parseDisplayBrightnessSnapshot(raw) {
 
 async function refreshDisplayBrightnessSnapshot() {
   const raw = await runCommand(
-    `${DDCUTIL_BIN} ${ddcutilArgs(["getvcp", "10", "--brief"]).join(" ")}`,
+    ddcutilReadCommand(["getvcp", "10", "--brief"]),
     { allowFailure: true, timeout: DDCUTIL_READ_TIMEOUT_MS }
   );
   const snapshot = parseDisplayBrightnessSnapshot(raw);
+  if (snapshot.controllable) {
+    displayBrightnessUnavailableUntilMs = 0;
+  } else {
+    displayBrightnessUnavailableUntilMs = Date.now() + DDCUTIL_UNAVAILABLE_BACKOFF_MS;
+  }
   displayBrightnessSnapshotCache = { value: snapshot, updatedAtMs: Date.now() };
   system.display = snapshot;
   return snapshot;
 }
 
 function scheduleDisplayBrightnessRefresh() {
+  if (displayBrightnessSnapshotCache?.value?.controllable === false && Date.now() < displayBrightnessUnavailableUntilMs) {
+    return Promise.resolve(displayBrightnessSnapshotCache.value);
+  }
   if (!displayBrightnessRefreshPromise) {
     displayBrightnessRefreshPromise = refreshDisplayBrightnessSnapshot()
       .catch(() => buildUnavailableDisplayBrightnessSnapshot())
@@ -2310,6 +2335,9 @@ function scheduleDisplayBrightnessRefresh() {
 async function readDisplayBrightnessSnapshot() {
   const now = Date.now();
   if (displayBrightnessSnapshotCache && now - displayBrightnessSnapshotCache.updatedAtMs < DDCUTIL_READ_CACHE_MS) {
+    return displayBrightnessSnapshotCache.value;
+  }
+  if (displayBrightnessSnapshotCache?.value?.controllable === false && now < displayBrightnessUnavailableUntilMs) {
     return displayBrightnessSnapshotCache.value;
   }
 
@@ -2337,6 +2365,7 @@ async function setDisplayBrightnessPercent(percent) {
     },
     updatedAtMs: Date.now()
   };
+  displayBrightnessUnavailableUntilMs = 0;
   system.display = displayBrightnessSnapshotCache.value;
 }
 
@@ -2355,11 +2384,17 @@ function getCachedRuntimeSnapshot() {
   return tikpalStateSnapshotCache?.state?.runtime ?? buildRuntimeSnapshot();
 }
 
+function normalizeKioskWindow(value) {
+  const match = String(value ?? "").trim().match(/^(\d{3,5})x(\d{3,5})$/i);
+  return match ? `${Number(match[1])}x${Number(match[2])}` : null;
+}
+
 async function getRuntimeSnapshot() {
-  const xrandrRaw = await runCommand("xrandr --query", { allowFailure: true });
-  const currentMatch = xrandrRaw.match(/current\s+(\d+)\s+x\s+(\d+)/i);
-  const kioskWindow = currentMatch ? `${currentMatch[1]}x${currentMatch[2]}` : REQUESTED_KIOSK_WINDOW;
-  return buildRuntimeSnapshot(kioskWindow);
+  const drmMode = await runCommand(
+    "for status in /sys/class/drm/card*-*/status; do [ -f \"$status\" ] || continue; if grep -qx connected \"$status\"; then modes=\"${status%/status}/modes\"; [ -s \"$modes\" ] && sed -n '1p' \"$modes\" && exit 0; fi; done",
+    { allowFailure: true, timeout: RUNTIME_DRM_MODE_TIMEOUT_MS }
+  );
+  return buildRuntimeSnapshot(normalizeKioskWindow(drmMode) ?? normalizeKioskWindow(REQUESTED_KIOSK_WINDOW) ?? REQUESTED_KIOSK_WINDOW);
 }
 
 async function getOutputDeviceSnapshot() {
@@ -4072,8 +4107,10 @@ function buildCachedSourceRuntimeState(source, supported, advertisedLabel = null
 }
 
 function buildMinimalMpcAudioSnapshot(currentFile = "") {
+  const cachedSource = getCachedMpcPlaybackSource();
   const radioActive = isStreamUri(currentFile);
   const activeSource = mockArmedSource === "scene"
+    || (!mockArmedSource && cachedSource === "scene")
     ? "scene"
     : mockArmedSource && ["audio", "spotify", "bluetooth", "airplay", "upnp"].includes(mockArmedSource)
       ? mockArmedSource
@@ -4117,6 +4154,18 @@ function buildMinimalMpcAudioSnapshot(currentFile = "") {
       UPNP_DISABLE_COMMAND
     ]), tikpalStateSnapshotCache?.state?.audio?.sources?.find((source) => source.id === "upnp")?.advertisedLabel ?? null)
   });
+}
+
+function getCachedMpcPlaybackSource() {
+  return tikpalStateSnapshotCache?.state?.audio?.currentSource?.id
+    ?? tikpalStateSnapshotCache?.state?.playback?.source
+    ?? null;
+}
+
+function shouldUseCachedSceneSourceRuntimeStatus() {
+  const cachedSource = getCachedMpcPlaybackSource();
+  return (mockArmedSource === "scene" || cachedSource === "scene")
+    && !COMMAND_HANDOFF_SOURCE_TARGETS.has(mockArmedSource);
 }
 
 async function getMpcQueuePreview(status) {
@@ -4254,7 +4303,8 @@ async function getMpcSnapshot(options = {}) {
   const nextSystem = includeSlowRuntimeStatus
     ? await getMpcSystemSnapshot(statusRaw, statsRaw)
     : getCachedMpcSystemSnapshot(statusRaw, statsRaw);
-  const audio = includeSourceRuntimeStatus
+  const useCachedSceneSourceRuntimeStatus = includeSourceRuntimeStatus && shouldUseCachedSceneSourceRuntimeStatus();
+  const audio = includeSourceRuntimeStatus && !useCachedSceneSourceRuntimeStatus
     ? await getMpcAudioSnapshot(file)
     : buildMinimalMpcAudioSnapshot(file);
   const queuePreview = await getMpcQueuePreview(status);
@@ -4695,6 +4745,14 @@ async function startStartupSceneSoundPlayback() {
         ...current,
         sceneSoundEnabled: true
       });
+    } else if (getCurrentMpcSourceId() === "scene") {
+      activateSceneAudio({
+        sceneVideoId: sceneVideo.id,
+        sceneVideoLabel: sceneVideo.label,
+        sceneVideoSrc: sceneVideo.src
+      });
+      mockArmedSource = "scene";
+      return true;
     }
     await applySourceSwitch({
       target: "scene",

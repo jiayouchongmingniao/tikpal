@@ -1,0 +1,13 @@
+[Unit]
+Description=Run Tikpal kiosk display watchdog
+
+[Timer]
+OnBootSec=90s
+OnUnitActiveSec=75s
+RandomizedDelaySec=10s
+AccuracySec=15s
+Persistent=false
+Unit=tikpal-kiosk-watchdog.service
+
+[Install]
+WantedBy=timers.target

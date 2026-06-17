@@ -39,6 +39,55 @@ function canRunFfmpeg() {
   return result.status === 0;
 }
 
+function canRunFfprobe() {
+  const result = spawnSync("ffprobe", ["-version"], { encoding: "utf8" });
+  return result.status === 0;
+}
+
+function readRatio(value) {
+  const [numeratorRaw, denominatorRaw] = String(value ?? "").split("/");
+  const numerator = Number(numeratorRaw);
+  const denominator = Number(denominatorRaw);
+  if (!Number.isFinite(numerator) || !Number.isFinite(denominator) || denominator === 0) return null;
+  return numerator / denominator;
+}
+
+function probeVideo(filePath) {
+  const result = spawnSync("ffprobe", [
+    "-v",
+    "error",
+    "-select_streams",
+    "v:0",
+    "-show_entries",
+    "stream=codec_name,profile,level,width,height,pix_fmt,r_frame_rate,avg_frame_rate,bit_rate,has_b_frames",
+    "-show_entries",
+    "format=bit_rate",
+    "-of",
+    "json",
+    filePath
+  ], { encoding: "utf8" });
+  assert(result.status === 0, `ffprobe failed for ${filePath}:\n${result.stdout}\n${result.stderr}`);
+  return JSON.parse(result.stdout);
+}
+
+function assertPiFriendlySceneVideo(filePath) {
+  const probe = probeVideo(filePath);
+  const stream = probe.streams?.[0] ?? {};
+  const frameRate = readRatio(stream.avg_frame_rate) ?? readRatio(stream.r_frame_rate);
+  const bitRate = Number(stream.bit_rate ?? probe.format?.bit_rate);
+  assert(stream.codec_name === "h264", "packaged scene video should use H.264");
+  assert(String(stream.profile).toLowerCase() === "main", `packaged scene video should use H.264 Main profile, got ${stream.profile}`);
+  assert(Number(stream.level) <= 41, `packaged scene video should use H.264 Level 4.1 or lower, got ${stream.level}`);
+  assert(Number(stream.width) === 2560, `packaged scene video width should be 2560, got ${stream.width}`);
+  assert(Number(stream.height) === 720, `packaged scene video height should be 720, got ${stream.height}`);
+  assert(stream.pix_fmt === "yuv420p", `packaged scene video should use yuv420p, got ${stream.pix_fmt}`);
+  assert(Math.abs((frameRate ?? 0) - 24) < 0.01, `packaged scene video should be 24fps, got ${stream.avg_frame_rate || stream.r_frame_rate}`);
+  assert(Number(stream.has_b_frames ?? 0) === 0, "packaged scene video should not use B-frames");
+  if (Number.isFinite(bitRate) && bitRate > 0) {
+    assert(bitRate <= 4_500_000, `packaged scene video bitrate should not exceed 4500k, got ${bitRate}`);
+  }
+}
+
 function writeSmokeMp4(filePath, { color, frequency }) {
   return spawnSync("ffmpeg", [
     "-y",
@@ -65,6 +114,7 @@ async function run() {
   let firstVideo = Buffer.from("000000 ftypisom tikpal calm fireplace smoke mp4");
   let secondVideo = Buffer.from("000000 ftypisom tikpal rainy window smoke mp4");
   const shouldExpectAudioGain = canRunFfmpeg();
+  const shouldProbeNormalizedVideo = shouldExpectAudioGain && canRunFfprobe();
 
   try {
     await mkdir(path.join(inputDir, "Nested"), { recursive: true });
@@ -93,7 +143,8 @@ async function run() {
       "--start-order",
       "40",
       "--default",
-      "Calm Fireplace.mp4"
+      "Calm Fireplace.mp4",
+      ...(!shouldExpectAudioGain ? ["--copy-original"] : [])
     ]);
 
     assert(generate.status === 0, `MP4 OTA generation failed:\n${generate.stdout}\n${generate.stderr}`);
@@ -106,7 +157,20 @@ async function run() {
     assert(firstPackage, "generator should report the first package");
     assert(secondPackage, "generator should preserve nested scene filenames");
     assert(firstPackage.videos[0].default === true, "generator should mark the requested default scene");
-    assert(firstPackage.videos[0].sha256 === createHash("sha256").update(firstVideo).digest("hex"), "first checksum should match");
+    const firstPackagedVideoPath = path.join(firstPackage.packageDir, "assets", "scenes", "Calm Fireplace.mp4");
+    const secondPackagedVideoPath = path.join(secondPackage.packageDir, "assets", "scenes", "Nested", "Rainy_Window.mp4");
+    const firstPackagedVideo = await readFile(firstPackagedVideoPath);
+    const secondPackagedVideo = await readFile(secondPackagedVideoPath);
+    assert(firstPackage.videos[0].sha256 === createHash("sha256").update(firstPackagedVideo).digest("hex"), "first checksum should match packaged output");
+    assert(secondPackage.videos[0].sha256 === createHash("sha256").update(secondPackagedVideo).digest("hex"), "second checksum should match packaged output");
+    if (!shouldExpectAudioGain) {
+      assert(firstPackagedVideo.equals(firstVideo), "copy-original fallback should preserve first MP4 bytes");
+      assert(secondPackagedVideo.equals(secondVideo), "copy-original fallback should preserve second MP4 bytes");
+    }
+    if (shouldProbeNormalizedVideo) {
+      assertPiFriendlySceneVideo(firstPackagedVideoPath);
+      assertPiFriendlySceneVideo(secondPackagedVideoPath);
+    }
     assert(secondPackage.videos[0].order === 50, "scene order should increment by the configured step");
     if (shouldExpectAudioGain) {
       assert(Number.isFinite(firstPackage.videos[0].audioGainDb), "generator should analyze and report first scene audio gain");

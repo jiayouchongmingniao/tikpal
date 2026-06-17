@@ -416,7 +416,7 @@ export function AmbientScreen({
     ? ({ "--ambient-lyrics-marquee-duration": `${marqueeDurationSeconds}s` } as CSSProperties)
     : undefined;
   const canShowLyricsLayer = isHifiMode && lyricsVisible;
-  const showLyricsLayer = canShowLyricsLayer && !hifiLyricsPanel && Boolean(tickerText);
+  const showLyricsLayer = canShowLyricsLayer && hasReadyLyrics && Boolean(tickerText);
   const isPlaybackPending = status.pending;
   const isPlaying = playback.state === "playing";
   const transportCapabilities = playback.transportCapabilities;

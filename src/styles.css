@@ -1568,10 +1568,6 @@ select {
   display: none;
 }
 
-.ambient-screen[data-room-mode="hifi"] .eq-visual-scene.has-lyrics-panel ~ .ambient-lyrics-layer {
-  display: none;
-}
-
 .ambient-transport-track {
   width: 92px;
   height: 92px;
@@ -1876,6 +1872,14 @@ select {
 }
 
 .ambient-screen[data-room-mode="hifi"].is-hud-hidden .ambient-lyrics-layer {
+  bottom: 72px;
+}
+
+.ambient-screen[data-room-mode="hifi"].is-hud-visible .eq-visual-scene.has-lyrics-panel ~ .ambient-lyrics-layer {
+  bottom: 244px;
+}
+
+.ambient-screen[data-room-mode="hifi"].is-hud-hidden .eq-visual-scene.has-lyrics-panel ~ .ambient-lyrics-layer {
   bottom: 72px;
 }
 
@@ -5144,6 +5148,14 @@ select {
     bottom: 70px;
   }
 
+  .ambient-screen[data-room-mode="hifi"].is-hud-visible .eq-visual-scene.has-lyrics-panel ~ .ambient-lyrics-layer {
+    bottom: 216px;
+  }
+
+  .ambient-screen[data-room-mode="hifi"].is-hud-hidden .eq-visual-scene.has-lyrics-panel ~ .ambient-lyrics-layer {
+    bottom: 70px;
+  }
+
   .ambient-hud {
     width: min(600px, calc(100vw - 48px));
     bottom: 52px;
@@ -5349,6 +5361,14 @@ select {
   }
 
   .ambient-screen[data-room-mode="hifi"].is-hud-hidden .ambient-lyrics-layer {
+    bottom: 68px;
+  }
+
+  .ambient-screen[data-room-mode="hifi"].is-hud-visible .eq-visual-scene.has-lyrics-panel ~ .ambient-lyrics-layer {
+    bottom: 198px;
+  }
+
+  .ambient-screen[data-room-mode="hifi"].is-hud-hidden .eq-visual-scene.has-lyrics-panel ~ .ambient-lyrics-layer {
     bottom: 68px;
   }
 

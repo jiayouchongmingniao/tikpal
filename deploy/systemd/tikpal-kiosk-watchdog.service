@@ -1,0 +1,14 @@
+[Unit]
+Description=Tikpal kiosk display watchdog
+After=network.target tikpal-api.service tikpal-web.service tikpal-kiosk.service
+Wants=network.target tikpal-api.service tikpal-web.service tikpal-kiosk.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=@APP_DIR@
+EnvironmentFile=-@APP_DIR@/.env.kiosk
+Environment=TIKPAL_KIOSK_SERVICE_USER=@SERVICE_USER@
+StandardOutput=journal
+StandardError=journal
+ExecStart=@APP_DIR@/deploy/chromium/tikpal-kiosk-healthcheck.sh

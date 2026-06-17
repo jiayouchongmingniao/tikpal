@@ -17,6 +17,12 @@ const LOOP_CROSSFADE_MS = 360;
 const LOOP_AUDIO_CROSSFADE_MS = 340;
 const MIN_DUAL_LOOP_DURATION_SECONDS = 1.5;
 const LOOP_SLOTS = [0, 1] as const;
+const SINGLE_LOOP_WATCHDOG_MS = 1250;
+const SINGLE_LOOP_STALL_MS = 2800;
+const SINGLE_LOOP_STALL_RETRY_LIMIT = 2;
+const SINGLE_LOOP_STALL_FALLBACK_LIMIT = 3;
+const SINGLE_LOOP_STALL_RESET_MS = 60000;
+const SINGLE_LOOP_PROGRESS_EPSILON_SECONDS = 0.04;
 
 interface FlameScenePlayback {
   elapsedSeconds: number | null;
@@ -51,6 +57,7 @@ type LoopSlotRole = "active" | "incoming" | "outgoing" | "parked";
 type LoopAudioRole = "active" | "crossfade-in" | "crossfade-out" | "muted";
 type SceneTransitionPhase = "idle" | "dimming" | "revealing";
 type SceneAudioEnvelopeTarget = "current" | "target" | number;
+type SingleLoopVideoHealth = "ok" | "recovering" | "stalled" | "fallback";
 
 interface LoopSlotStatus {
   frameReady: boolean;
@@ -62,6 +69,15 @@ interface LoopHandoffState {
   outgoingSlot: LoopSlot;
   incomingSlot: LoopSlot;
   revealing: boolean;
+}
+
+interface SingleLoopWatchdogState {
+  currentTime: number;
+  sampledAtMs: number;
+  stalledSinceMs: number | null;
+  stallCount: number;
+  lastStallAtMs: number;
+  recovering: boolean;
 }
 
 type VideoFrameElement = HTMLVideoElement & {
@@ -349,6 +365,16 @@ export function FlameScene({ lowPower = false, playback, singleLoop = false, sta
   const loopHandoffInProgressRef = useRef(false);
   const loopPrepareTokensRef = useRef(new Map<string, number>());
   const singleVideoRef = useRef<HTMLVideoElement | null>(null);
+  const singleVideoHealthRef = useRef<SingleLoopVideoHealth>("ok");
+  const singleLoopWatchdogTimerRef = useRef<number | null>(null);
+  const singleLoopWatchdogRef = useRef<SingleLoopWatchdogState>({
+    currentTime: 0,
+    sampledAtMs: 0,
+    stalledSinceMs: null,
+    stallCount: 0,
+    lastStallAtMs: 0,
+    recovering: false
+  });
   const videoRefs = useRef(new Map<string, HTMLVideoElement>());
   const loopVisibleSlotsRef = useRef<LoopSlotMap>({ 0: 0 });
   const loopAudibleSlotsRef = useRef<LoopSlotMap>({ 0: 0 });
@@ -365,7 +391,9 @@ export function FlameScene({ lowPower = false, playback, singleLoop = false, sta
   const [singleVideoSrc, setSingleVideoSrc] = useState(videoSrc);
   const [singleVideoGainDb, setSingleVideoGainDb] = useState(normalizedAudioGainDb);
   const [singleVideoFrameReady, setSingleVideoFrameReady] = useState(false);
+  const [singleVideoHealth, setSingleVideoHealth] = useState<SingleLoopVideoHealth>("ok");
   const videoVolume = normalizeVideoVolume(volumePercent);
+  const singleLoopFallbackActive = singleVideoHealth === "fallback";
 
   function clearTransitionTimers() {
     if (transitionActivateTimerRef.current !== null) {
@@ -411,6 +439,98 @@ export function FlameScene({ lowPower = false, playback, singleLoop = false, sta
       window.cancelAnimationFrame(monitor.id);
     }
     loopMonitorRef.current = null;
+  }
+
+  function clearSingleLoopWatchdog() {
+    if (singleLoopWatchdogTimerRef.current !== null) {
+      window.clearTimeout(singleLoopWatchdogTimerRef.current);
+      singleLoopWatchdogTimerRef.current = null;
+    }
+  }
+
+  function patchSingleLoopVideoHealth(health: SingleLoopVideoHealth) {
+    singleVideoHealthRef.current = health;
+    setSingleVideoHealth((current) => current === health ? current : health);
+    if (singleVideoRef.current) {
+      singleVideoRef.current.dataset.flameVideoHealth = health;
+    }
+  }
+
+  function resetSingleLoopWatchdog(health: SingleLoopVideoHealth = "ok") {
+    const video = singleVideoRef.current;
+    const now = window.performance.now();
+    singleLoopWatchdogRef.current = {
+      currentTime: video?.currentTime ?? 0,
+      sampledAtMs: now,
+      stalledSinceMs: null,
+      stallCount: 0,
+      lastStallAtMs: 0,
+      recovering: false
+    };
+    patchSingleLoopVideoHealth(health);
+  }
+
+  function markSingleLoopVideoProgress(video: HTMLVideoElement, health: SingleLoopVideoHealth = "ok") {
+    const now = window.performance.now();
+    const watchdog = singleLoopWatchdogRef.current;
+    if (watchdog.stallCount > 0 && now - watchdog.lastStallAtMs > SINGLE_LOOP_STALL_RESET_MS) {
+      watchdog.stallCount = 0;
+      watchdog.lastStallAtMs = 0;
+    }
+    watchdog.currentTime = video.currentTime;
+    watchdog.sampledAtMs = now;
+    watchdog.stalledSinceMs = null;
+    watchdog.recovering = false;
+    if (singleVideoHealthRef.current !== "fallback") {
+      patchSingleLoopVideoHealth(health);
+    }
+  }
+
+  function fallBackSingleLoopVideo(video: HTMLVideoElement) {
+    clearSingleLoopWatchdog();
+    video.dataset.sceneAudible = "false";
+    setSceneVideoVolume(video, 0);
+    video.muted = true;
+    video.pause();
+    patchSingleLoopVideoHealth("fallback");
+  }
+
+  function recoverSingleLoopVideo(video: HTMLVideoElement, stallCount: number) {
+    if (singleVideoRef.current !== video) return;
+    const watchdog = singleLoopWatchdogRef.current;
+    if (watchdog.recovering) return;
+    watchdog.recovering = true;
+    patchSingleLoopVideoHealth(stallCount >= SINGLE_LOOP_STALL_RETRY_LIMIT ? "stalled" : "recovering");
+
+    void (async () => {
+      video.dataset.sceneAudible = "false";
+      setSceneVideoVolume(video, 0);
+      video.muted = true;
+      try {
+        video.pause();
+        video.load();
+        const aligned = await alignVideoWithPlayback(video, playbackRef.current, true);
+        const frameReady = aligned
+          ? await waitForDrawableVideoFrame(video, VIDEO_FRAME_READY_SETTLE_MS)
+          : false;
+        if (singleVideoRef.current !== video || singleVideoHealthRef.current === "fallback") return;
+        setSingleVideoFrameReady(frameReady);
+        if (frameReady) {
+          markSingleLoopVideoProgress(video);
+          syncSingleLoopVideo();
+        } else {
+          patchSingleLoopVideoHealth("stalled");
+        }
+      } catch {
+        if (singleVideoRef.current === video && singleVideoHealthRef.current !== "fallback") {
+          patchSingleLoopVideoHealth("stalled");
+        }
+      } finally {
+        if (singleVideoRef.current === video) {
+          singleLoopWatchdogRef.current.recovering = false;
+        }
+      }
+    })();
   }
 
   function patchLoopSlotStatus(key: string, patch: Partial<LoopSlotStatus>) {
@@ -674,6 +794,7 @@ export function FlameScene({ lowPower = false, playback, singleLoop = false, sta
   function syncSingleLoopVideo() {
     const video = singleVideoRef.current;
     if (!video) return;
+    if (singleVideoHealthRef.current === "fallback") return;
 
     const shouldBeAudible = videoEnabledRef.current && audioEnabledRef.current && videoVolumeRef.current > 0;
     video.dataset.sceneAudible = shouldBeAudible ? "true" : "false";
@@ -981,6 +1102,8 @@ export function FlameScene({ lowPower = false, playback, singleLoop = false, sta
     clearLoopMonitor();
     clearLoopHandoffTimer();
     clearLoopAudioCrossfadeFrame();
+    clearSingleLoopWatchdog();
+    resetSingleLoopWatchdog();
     loopHandoffInProgressRef.current = false;
     setLoopHandoff(null);
     videoRefs.current.forEach((video) => {
@@ -1002,6 +1125,7 @@ export function FlameScene({ lowPower = false, playback, singleLoop = false, sta
     clearLoopHandoffTimer();
     clearLoopAudioCrossfadeFrame();
     clearLoopMonitor();
+    clearSingleLoopWatchdog();
   }, []);
 
   useEffect(() => {
@@ -1041,6 +1165,63 @@ export function FlameScene({ lowPower = false, playback, singleLoop = false, sta
     if (!singleLoop || staticOnly || !videoEnabled || !singleVideoSrc) return;
     syncSingleLoopVideo();
   }, [audioEnabled, playback.state, singleLoop, singleVideoGainDb, singleVideoSrc, staticOnly, videoEnabled, videoVolume]);
+
+  useEffect(() => {
+    if (!singleLoop) return undefined;
+    clearSingleLoopWatchdog();
+    resetSingleLoopWatchdog();
+    setSingleVideoFrameReady(false);
+    return clearSingleLoopWatchdog;
+  }, [singleLoop, singleVideoSrc, staticOnly, videoEnabled]);
+
+  useEffect(() => {
+    clearSingleLoopWatchdog();
+    if (!singleLoop || staticOnly || !videoEnabled || !singleVideoSrc || singleLoopFallbackActive) {
+      return clearSingleLoopWatchdog;
+    }
+
+    const scheduleWatchdog = (delayMs = SINGLE_LOOP_WATCHDOG_MS) => {
+      singleLoopWatchdogTimerRef.current = window.setTimeout(tick, delayMs);
+    };
+
+    const tick = () => {
+      singleLoopWatchdogTimerRef.current = null;
+      const video = singleVideoRef.current;
+      if (!video || singleVideoHealthRef.current === "fallback") return;
+
+      const watchdog = singleLoopWatchdogRef.current;
+      const now = window.performance.now();
+      const currentTime = Number.isFinite(video.currentTime) ? video.currentTime : 0;
+      const hasProgress = Math.abs(currentTime - watchdog.currentTime) > SINGLE_LOOP_PROGRESS_EPSILON_SECONDS;
+
+      if (video.readyState < 2 || video.seeking) {
+        scheduleWatchdog();
+        return;
+      }
+
+      if (hasProgress) {
+        markSingleLoopVideoProgress(video, singleVideoHealthRef.current === "stalled" ? "recovering" : "ok");
+        scheduleWatchdog();
+        return;
+      }
+
+      watchdog.stalledSinceMs ??= now;
+      if (now - watchdog.stalledSinceMs >= SINGLE_LOOP_STALL_MS && !watchdog.recovering) {
+        watchdog.stallCount += 1;
+        watchdog.lastStallAtMs = now;
+        if (watchdog.stallCount >= SINGLE_LOOP_STALL_FALLBACK_LIMIT) {
+          fallBackSingleLoopVideo(video);
+          return;
+        }
+        recoverSingleLoopVideo(video, watchdog.stallCount);
+      }
+
+      scheduleWatchdog();
+    };
+
+    scheduleWatchdog(0);
+    return clearSingleLoopWatchdog;
+  }, [singleLoop, singleLoopFallbackActive, singleVideoSrc, staticOnly, videoEnabled]);
 
   useEffect(() => {
     if (singleLoop || staticOnly || !videoEnabled) return;
@@ -1151,51 +1332,87 @@ export function FlameScene({ lowPower = false, playback, singleLoop = false, sta
 
     return (
       <div
-        className={`flame-scene ${lowPower ? "is-low-power" : ""} is-single-loop ${sceneTransitioning ? "is-transitioning is-scene-transitioning" : ""}`}
+        className={`flame-scene ${lowPower ? "is-low-power" : ""} is-single-loop ${singleLoopFallbackActive ? "is-video-fallback" : ""} ${sceneTransitioning ? "is-transitioning is-scene-transitioning" : ""}`}
         aria-hidden="true"
         data-flame-transition={sceneTransitioning ? "scene" : "none"}
         data-flame-transition-phase={sceneTransitionPhase}
         data-flame-loop-mode="single"
+        data-flame-video-health={singleVideoHealth}
       >
         <SceneLogoBackdrop />
-        <div
-          className="flame-video-layer is-active"
-          data-flame-layer="active"
-          data-flame-loop-handoff="none"
-        >
-          <video
-            ref={(node) => {
-              singleVideoRef.current = node;
-              if (node) {
-                node.dataset.sceneGainDb = singleVideoGainDb.toFixed(1);
-                if (!node.dataset.sceneVolume) {
-                  setSceneVideoVolume(node, 0);
-                  node.dataset.sceneAudible = "false";
-                  node.muted = true;
-                }
-              }
-            }}
-            className="flame-video is-active"
+        {!singleLoopFallbackActive ? (
+          <div
+            className="flame-video-layer is-active"
             data-flame-layer="active"
-            data-flame-slot-index="0"
-            data-flame-loop-slot="active"
-            data-flame-loop-role="active"
-            data-flame-frame-ready={singleVideoFrameReady ? "true" : "false"}
-            data-flame-loop-phase="active"
-            data-flame-audio-slot={audioActive ? "active" : "standby"}
-            data-flame-audio-role={audioActive ? "active" : "muted"}
-            data-scene-gain-db={singleVideoGainDb.toFixed(1)}
-            src={singleVideoSrc}
-            autoPlay
-            loop
-            muted
-            playsInline
-            preload="auto"
-            onLoadedMetadata={() => syncSingleLoopVideo()}
-            onLoadedData={(event) => handleSingleLoopFrameReady(event.currentTarget)}
-            onCanPlay={(event) => handleSingleLoopFrameReady(event.currentTarget)}
-          />
-        </div>
+            data-flame-loop-handoff="none"
+          >
+            <video
+              ref={(node) => {
+                singleVideoRef.current = node;
+                if (node) {
+                  node.dataset.sceneGainDb = singleVideoGainDb.toFixed(1);
+                  node.dataset.flameVideoHealth = singleVideoHealthRef.current;
+                  if (!node.dataset.sceneVolume) {
+                    setSceneVideoVolume(node, 0);
+                    node.dataset.sceneAudible = "false";
+                    node.muted = true;
+                  }
+                }
+              }}
+              className="flame-video is-active"
+              data-flame-layer="active"
+              data-flame-slot-index="0"
+              data-flame-loop-slot="active"
+              data-flame-loop-role="active"
+              data-flame-frame-ready={singleVideoFrameReady ? "true" : "false"}
+              data-flame-loop-phase="active"
+              data-flame-audio-slot={audioActive ? "active" : "standby"}
+              data-flame-audio-role={audioActive ? "active" : "muted"}
+              data-flame-video-health={singleVideoHealth}
+              data-scene-gain-db={singleVideoGainDb.toFixed(1)}
+              src={singleVideoSrc}
+              autoPlay
+              loop
+              muted
+              playsInline
+              preload="auto"
+              onLoadedMetadata={(event) => {
+                markSingleLoopVideoProgress(event.currentTarget);
+                syncSingleLoopVideo();
+              }}
+              onLoadedData={(event) => {
+                markSingleLoopVideoProgress(event.currentTarget);
+                handleSingleLoopFrameReady(event.currentTarget);
+              }}
+              onCanPlay={(event) => handleSingleLoopFrameReady(event.currentTarget)}
+              onPlaying={(event) => markSingleLoopVideoProgress(event.currentTarget)}
+              onTimeUpdate={(event) => markSingleLoopVideoProgress(event.currentTarget)}
+              onStalled={() => {
+                if (singleVideoHealthRef.current !== "fallback") {
+                  patchSingleLoopVideoHealth("recovering");
+                }
+              }}
+              onWaiting={() => {
+                if (singleVideoHealthRef.current !== "fallback") {
+                  patchSingleLoopVideoHealth("recovering");
+                }
+              }}
+              onError={(event) => {
+                if (singleVideoHealthRef.current !== "fallback") {
+                  const watchdog = singleLoopWatchdogRef.current;
+                  watchdog.stallCount += 1;
+                  watchdog.lastStallAtMs = window.performance.now();
+                  patchSingleLoopVideoHealth("stalled");
+                  if (watchdog.stallCount >= SINGLE_LOOP_STALL_FALLBACK_LIMIT) {
+                    fallBackSingleLoopVideo(event.currentTarget);
+                  } else {
+                    recoverSingleLoopVideo(event.currentTarget, watchdog.stallCount);
+                  }
+                }
+              }}
+            />
+          </div>
+        ) : null}
         <span className="flame-video-fade" />
       </div>
     );

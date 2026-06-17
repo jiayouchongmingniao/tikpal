@@ -371,6 +371,7 @@ async function installSceneTransitionObserver(client) {
             activeSrcs: videos
               .filter((video) => video.getAttribute('data-flame-layer') === 'active')
               .map((video) => video.getAttribute('src') ?? ''),
+            allSrcs: videos.map((video) => video.getAttribute('src') ?? ''),
             activeGainDbs: videos
               .filter((video) => video.getAttribute('data-flame-layer') === 'active')
               .map((video) => Number.parseFloat(video.getAttribute('data-scene-gain-db') ?? 'NaN')),
@@ -394,7 +395,26 @@ async function installSceneTransitionObserver(client) {
 }
 
 async function setStatePatchMode(client, mode) {
-  await evaluate(client, `window.__tikpalSmokeStatePatchMode = ${JSON.stringify(mode)}; true`);
+  return await evaluate(
+    client,
+    `
+      (() => {
+        window.__tikpalSmokeStatePatchMode = ${JSON.stringify(mode)};
+        return window.__tikpalSmokePatchedStateVersion ?? 0;
+      })()
+    `
+  );
+}
+
+async function waitForStatePatchRefresh(client, previousVersion, label) {
+  await expectEventually(
+    client,
+    `(window.__tikpalSmokePatchedStateVersion ?? 0) > ${Number(previousVersion)}`,
+    label,
+    35,
+    150
+  );
+  await wait(120);
 }
 
 function sourceTabExpression(sourceId, { selected, active }) {
@@ -699,6 +719,7 @@ try {
   await client.send("Page.addScriptToEvaluateOnNewDocument", {
     source: `
       (() => {
+        window.localStorage.setItem('tikpal.lyricsVisible.v3', 'false');
         const nativeFetch = window.fetch.bind(window);
         const realBluetoothCover = "data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22120%22%20height%3D%22120%22%3E%3Crect%20width%3D%22120%22%20height%3D%22120%22%20fill%3D%22%2318405a%22%2F%3E%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2232%22%20fill%3D%22%23f2d36b%22%2F%3E%3C%2Fsvg%3E";
 
@@ -745,9 +766,9 @@ try {
               lines: [
                 { text: "Synced line one", startMs: 0, endMs: 1000 },
                 { text: "Synced line two", startMs: 1000, endMs: 2000 },
-                { text: "Synced line three", startMs: 2000, endMs: 3000 },
-                { text: "Synced line four", startMs: 3000, endMs: 4000 },
-                { text: "Synced line five", startMs: 4000, endMs: 5000 }
+                { text: "Synced line three carries a longer phrase for the rolling lyrics ticker", startMs: 2000, endMs: 3000 },
+                { text: "Synced line four carries a longer phrase for the rolling lyrics ticker", startMs: 3000, endMs: 4000 },
+                { text: "Synced line five carries a longer phrase for the rolling lyrics ticker", startMs: 4000, endMs: 5000 }
               ],
               message: null,
               updatedAt: new Date().toISOString()
@@ -827,6 +848,7 @@ try {
         }
 
         window.__tikpalSmokeStatePatchMode = "";
+        window.__tikpalSmokePatchedStateVersion = 0;
         window.fetch = async (input, init) => {
           const response = await nativeFetch(input, init);
           const rawUrl = typeof input === "string" ? input : input?.url;
@@ -839,7 +861,9 @@ try {
             const body = await response.clone().json();
             const headers = new Headers(response.headers);
             headers.set("content-type", "application/json");
-            return new Response(JSON.stringify(applyPatch(body)), {
+            const patchedBody = applyPatch(body);
+            window.__tikpalSmokePatchedStateVersion = (window.__tikpalSmokePatchedStateVersion ?? 0) + 1;
+            return new Response(JSON.stringify(patchedBody), {
               status: response.status,
               statusText: response.statusText,
               headers
@@ -890,7 +914,9 @@ try {
   await expectEventually(
     client,
     "document.querySelector('[data-hifi-now-playing][data-hifi-centered-now-playing]') !== null && document.querySelector('[data-hifi-cover-art]') !== null && document.querySelector('[data-hifi-track-info]') !== null && document.querySelector('[data-hifi-eq-visual]') === null && document.querySelector('[data-spectrum-band]') === null && document.querySelector('video.flame-video.is-active') === null && document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') === 'hifi'",
-    "Hi-Fi room mode renders centered cover and track info without EQ display"
+    "Hi-Fi room mode renders centered cover and track info without EQ display",
+    50,
+    150
   );
   await expect(
     client,
@@ -922,9 +948,9 @@ try {
       })()
     `,
     "Hi-Fi ambient transport exposes source selection and no EQ preset controls"
-    );
-    await setStatePatchMode(client, "syncedLyrics");
-    await wait(4800);
+  );
+  const syncedLyricsPatchVersion = await setStatePatchMode(client, "syncedLyrics");
+  await waitForStatePatchRefresh(client, syncedLyricsPatchVersion, "Hi-Fi synced lyrics fixture refreshes");
   await evaluate(
     client,
     `
@@ -941,16 +967,23 @@ try {
       (() => {
         const panel = document.querySelector('[data-hifi-lyrics-panel]');
         const activeLine = document.querySelector('[data-hifi-lyrics-line][data-hifi-lyrics-active]');
+        const ticker = document.querySelector('.ambient-lyrics-ticker');
+        const tickerLine = document.querySelector('.ambient-lyrics-ticker .ambient-lyrics-text');
+        const activeText = activeLine?.textContent?.trim() ?? "";
+        const tickerText = tickerLine?.textContent?.trim() ?? "";
         return panel !== null
           && document.querySelector('[data-hifi-centered-now-playing]') === null
           && document.querySelectorAll('[data-hifi-lyrics-line]').length >= 4
           && activeLine?.classList.contains('is-active') === true
-          && (activeLine?.textContent?.trim().length ?? 0) > 0
-          && document.querySelector('[data-ambient-lyrics]')?.getAttribute('aria-hidden') === 'true'
-          && document.querySelector('.ambient-lyrics-ticker') === null;
+          && activeText.length > 0
+          && document.querySelector('[data-ambient-lyrics]')?.getAttribute('aria-hidden') === 'false'
+          && ticker !== null
+          && ticker.classList.contains('is-scrolling')
+          && document.querySelectorAll('.ambient-lyrics-ticker .ambient-lyrics-text').length === 2
+          && tickerText === activeText;
       })()
     `,
-    "Hi-Fi ready synced lyrics render left-cover lyrics panel and hide bottom ticker"
+    "Hi-Fi ready synced lyrics render lyrics wall and rolling ticker together"
   );
   await wait(1500);
   await expectEventually(
@@ -958,47 +991,75 @@ try {
     `
       (() => {
         const activeLine = document.querySelector('[data-hifi-lyrics-line][data-hifi-lyrics-active]');
+        const tickerLine = document.querySelector('.ambient-lyrics-ticker .ambient-lyrics-text');
         const text = activeLine?.textContent?.trim() ?? "";
-        return text === "Synced line four" || text === "Synced line five";
+        const tickerText = tickerLine?.textContent?.trim() ?? "";
+        return (text.includes("Synced line four") || text.includes("Synced line five"))
+          && tickerText === text;
       })()
     `,
-    "Hi-Fi synced lyrics advance from the local playback clock between state refreshes"
+    "Hi-Fi synced lyrics advance wall and ticker from the local playback clock between state refreshes"
   );
-  await setStatePatchMode(client, "staticLyrics");
-  await wait(3300);
+  await wait(4200);
+  await expectEventually(
+    client,
+    `
+      (() => {
+        const activeLine = document.querySelector('[data-hifi-lyrics-line][data-hifi-lyrics-active]');
+        const tickerLine = document.querySelector('.ambient-lyrics-ticker .ambient-lyrics-text');
+        return document.querySelector('.ambient-screen.is-hud-hidden') !== null
+          && document.querySelector('[data-hifi-lyrics-panel]') !== null
+          && document.querySelector('.ambient-transport') !== null
+          && getComputedStyle(document.querySelector('.ambient-transport')).pointerEvents === 'none'
+          && (activeLine?.textContent?.trim() ?? "") === (tickerLine?.textContent?.trim() ?? "")
+          && (tickerLine?.textContent?.trim().length ?? 0) > 0;
+      })()
+    `,
+    "Hi-Fi HUD auto hides while lyrics wall and rolling ticker remain visible"
+  );
+  const staticLyricsPatchVersion = await setStatePatchMode(client, "staticLyrics");
+  await waitForStatePatchRefresh(client, staticLyricsPatchVersion, "Hi-Fi static lyrics fixture refreshes");
   await expectEventually(
     client,
     `
       (() => {
         const panel = document.querySelector('[data-hifi-lyrics-panel]');
         const activeLine = document.querySelector('[data-hifi-lyrics-line][data-hifi-lyrics-active]');
+        const ticker = document.querySelector('.ambient-lyrics-ticker');
+        const tickerLine = document.querySelector('.ambient-lyrics-ticker .ambient-lyrics-text');
+        const activeText = activeLine?.textContent?.trim() ?? "";
         return panel !== null
           && document.querySelectorAll('[data-hifi-lyrics-line]').length === 5
-          && activeLine?.textContent?.includes('Static line');
+          && activeText.includes('Static line')
+          && ticker !== null
+          && ticker.classList.contains('is-static')
+          && tickerLine?.textContent?.trim() === activeText;
       })()
     `,
-    "Hi-Fi static ready lyrics use the lyrics wall active line"
+    "Hi-Fi static ready lyrics render lyrics wall and ticker together"
   );
-  await setStatePatchMode(client, "noReadyLyrics");
-  await wait(3300);
+  const noReadyLyricsPatchVersion = await setStatePatchMode(client, "noReadyLyrics");
+  await waitForStatePatchRefresh(client, noReadyLyricsPatchVersion, "Hi-Fi no-ready lyrics fixture refreshes");
   await expectEventually(
     client,
-    "document.querySelector('[data-hifi-now-playing][data-hifi-centered-now-playing]') !== null && document.querySelector('[data-hifi-lyrics-panel]') === null",
+    "document.querySelector('[data-hifi-now-playing][data-hifi-centered-now-playing]') !== null && document.querySelector('[data-hifi-lyrics-panel]') === null && document.querySelector('.ambient-lyrics-ticker') === null && document.querySelector('[data-ambient-lyrics]')?.getAttribute('aria-hidden') === 'true'",
     "Hi-Fi without ready lyrics returns to centered now-playing"
   );
-  await setStatePatchMode(client, "bluetoothFallback");
-  await wait(3300);
+  const bluetoothFallbackPatchVersion = await setStatePatchMode(client, "bluetoothFallback");
+  await waitForStatePatchRefresh(client, bluetoothFallbackPatchVersion, "Bluetooth fallback fixture refreshes");
   await expectEventually(
     client,
     "document.querySelector('[data-bluetooth-generated-cover]') !== null && document.querySelector('[data-hifi-track-info]')?.textContent?.includes('Pocket Signal')",
     "Bluetooth without real artwork uses generated record poster"
   );
-  await setStatePatchMode(client, "bluetoothRealCover");
-  await wait(3300);
+  const bluetoothRealCoverPatchVersion = await setStatePatchMode(client, "bluetoothRealCover");
+  await waitForStatePatchRefresh(client, bluetoothRealCoverPatchVersion, "Bluetooth real cover fixture refreshes");
   await expectEventually(
     client,
     "document.querySelector('[data-bluetooth-generated-cover]') === null && document.querySelector('[data-hifi-cover-art] img')?.getAttribute('src')?.startsWith('data:image/svg+xml')",
-    "Bluetooth real artwork is not replaced by generated poster"
+    "Bluetooth real artwork is not replaced by generated poster",
+    50,
+    150
   );
   await evaluate(client, "document.querySelector('.ambient-transport button[aria-label=\"Hide lyrics\"]')?.click(); true");
   await setStatePatchMode(client, "");
@@ -1019,7 +1080,7 @@ try {
     "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => state.audio.currentSource.id === 'radio' && state.playback.source === 'radio')",
     "Hi-Fi source picker switches immediately to Radio"
   );
-  await expect(
+  await expectEventually(
     client,
     "document.querySelector('.ambient-transport [data-hifi-playlist-entry][aria-label=\"Open playlist\"]') !== null",
     "Hi-Fi ambient transport exposes playlist entry"
@@ -1213,6 +1274,24 @@ try {
     `,
     "scene fallback uses loaded Tikpal logo without fireplace backdrop"
   );
+  await expectEventually(
+    client,
+    `
+      (() => {
+        const activeVideo = [...document.querySelectorAll('.flame-video[data-flame-layer="active"]')]
+          .find((video) => video instanceof HTMLVideoElement
+            && Boolean(video.getAttribute('src'))
+            && !video.getAttribute('src')?.includes('ota=rainy')
+            && video.getAttribute('data-flame-loop-role') === 'active');
+        return activeVideo instanceof HTMLVideoElement
+          && activeVideo.readyState >= 2
+          && activeVideo.videoWidth > 0;
+      })()
+    `,
+    "ambient active scene is drawable before scene switch",
+    50,
+    150
+  );
   await installSceneTransitionObserver(client);
   await evaluate(
     client,
@@ -1231,7 +1310,7 @@ try {
         const snapshots = window.__tikpalSceneTransitionSnapshots ?? [];
         return snapshots.some((snapshot) => snapshot.phase === 'dimming'
             && snapshot.layerCount >= 2
-            && snapshot.activeSrcs.some((src) => src && !src.includes('ota=rainy')))
+            && (snapshot.allSrcs ?? snapshot.activeSrcs).some((src) => src && !src.includes('ota=rainy')))
           && snapshots.some((snapshot) => snapshot.phase === 'revealing'
             && snapshot.activeSrcs.some((src) => src.includes('ota=rainy')));
       })()

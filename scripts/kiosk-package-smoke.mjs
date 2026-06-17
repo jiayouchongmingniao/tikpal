@@ -15,6 +15,7 @@ const requiredFiles = [
   "deploy/chromium/start-tikpal-kiosk-display.sh",
   "deploy/chromium/start-tikpal-kiosk-session.sh",
   "deploy/chromium/start-tikpal-kiosk-viewer.sh",
+  "deploy/chromium/tikpal-kiosk-healthcheck.sh",
   "deploy/chromium/tikpal-kiosk-viewerctl.sh",
   "deploy/chromium/chromium-flags.conf",
   "deploy/chromium/managed-policies.json",
@@ -29,6 +30,8 @@ const requiredFiles = [
   "deploy/systemd/tikpal-kiosk-devtools.service",
   "deploy/systemd/tikpal-kiosk.service",
   "deploy/systemd/tikpal-kiosk-viewer.service",
+  "deploy/systemd/tikpal-kiosk-watchdog.service",
+  "deploy/systemd/tikpal-kiosk-watchdog.timer",
   "deploy/systemd/install-systemd-services.sh"
 ];
 
@@ -53,6 +56,7 @@ async function run() {
   await assertExecutable("deploy/chromium/start-tikpal-kiosk-display.sh");
   await assertExecutable("deploy/chromium/start-tikpal-kiosk-session.sh");
   await assertExecutable("deploy/chromium/start-tikpal-kiosk-viewer.sh");
+  await assertExecutable("deploy/chromium/tikpal-kiosk-healthcheck.sh");
   await assertExecutable("deploy/chromium/tikpal-kiosk-viewerctl.sh");
   await assertExecutable("deploy/moode/tikpal-alsa-loopback.sh");
   await assertExecutable("deploy/moode/tikpal-airplay-transport.sh");
@@ -66,6 +70,9 @@ async function run() {
   const kioskDevtoolsUnit = await readFile(path.join(ROOT, "deploy/systemd/tikpal-kiosk-devtools.service"), "utf8");
   const kioskUnit = await readFile(path.join(ROOT, "deploy/systemd/tikpal-kiosk.service"), "utf8");
   const kioskViewerUnit = await readFile(path.join(ROOT, "deploy/systemd/tikpal-kiosk-viewer.service"), "utf8");
+  const kioskWatchdogUnit = await readFile(path.join(ROOT, "deploy/systemd/tikpal-kiosk-watchdog.service"), "utf8");
+  const kioskWatchdogTimer = await readFile(path.join(ROOT, "deploy/systemd/tikpal-kiosk-watchdog.timer"), "utf8");
+  const systemdInstaller = await readFile(path.join(ROOT, "deploy/systemd/install-systemd-services.sh"), "utf8");
   assert(apiUnit.includes("network.target"), "api unit should use network.target");
   assert(!apiUnit.includes("network-online.target"), "api unit should not wait for network-online.target");
   assert(webUnit.includes("server/web.mjs"), "web unit should use the production static server");
@@ -76,11 +83,21 @@ async function run() {
   assert(kioskViewerUnit.includes("start-tikpal-kiosk-viewer.sh"), "kiosk viewer unit should launch the noVNC wrapper");
   assert(kioskViewerUnit.includes(".env.kiosk.viewer"), "kiosk viewer unit should load the viewer-only switch file");
   assert(kioskViewerUnit.includes("PartOf=tikpal-kiosk.service"), "kiosk viewer should follow kiosk service lifecycle");
+  assert(kioskWatchdogUnit.includes("tikpal-kiosk-healthcheck.sh"), "kiosk watchdog unit should launch the healthcheck script");
+  assert(kioskWatchdogUnit.includes("User=root"), "kiosk watchdog should run as root so it can restart the kiosk service");
+  assert(!kioskWatchdogUnit.includes("PartOf=tikpal-kiosk.service"), "kiosk watchdog should survive kiosk restarts");
+  assert(kioskWatchdogTimer.includes("OnUnitActiveSec=75s"), "kiosk watchdog timer should run inside the 60-90s cadence");
+  assert(kioskWatchdogTimer.includes("tikpal-kiosk-watchdog.service"), "kiosk watchdog timer should target the watchdog service");
+  assert(systemdInstaller.includes("tikpal-kiosk-watchdog.service"), "systemd installer should install the kiosk watchdog service");
+  assert(systemdInstaller.includes("tikpal-kiosk-watchdog.timer"), "systemd installer should install and enable the kiosk watchdog timer");
 
   const kioskEnv = await readFile(path.join(ROOT, "deploy/chromium/env.kiosk.example"), "utf8");
   assert(kioskEnv.includes("TIKPAL_KIOSK_REMOTE_DEBUG=0"), "kiosk env should default remote debugging off");
   assert(kioskEnv.includes("TIKPAL_KIOSK_VIEWER=none"), "kiosk env should default noVNC viewer off");
   assert(kioskEnv.includes("TIKPAL_KIOSK_DISPLAY_MODE=auto"), "kiosk env should document automatic physical/virtual display selection");
+  assert(kioskEnv.includes("TIKPAL_KIOSK_WATCHDOG_ENABLED=1"), "kiosk env should default the display watchdog on");
+  assert(kioskEnv.includes("TIKPAL_KIOSK_WATCHDOG_GPU_LOG_SCAN=1"), "kiosk env should enable GPU reset log scanning");
+  assert(kioskEnv.includes("TIKPAL_KIOSK_WATCHDOG_REBOOT_AFTER_RESTARTS=3"), "kiosk env should document persistent display-failure reboot escalation");
 
   const loopbackGuardDir = mkdtempSync(path.join(tmpdir(), "tikpal-loopback-guard-"));
   const hdmiLoopbackConfig = path.join(loopbackGuardDir, "_sndaloop-hdmi.conf");
@@ -125,6 +142,18 @@ async function run() {
   assert(check.stdout.includes("chromium window: 2560,720"), "launcher should normalize Chromium window size");
   assert(check.stdout.includes("window position: 0,0"), "launcher should pin Chromium to the top-left display origin");
   assert(check.stdout.includes("remote debug: 0.0.0.0:9222 -> 127.0.0.1:9223"), "launcher should report remote debugging proxy target");
+
+  const watchdogCheck = spawnSync("bash", ["deploy/chromium/tikpal-kiosk-healthcheck.sh", "--check"], {
+    cwd: ROOT,
+    env: {
+      ...process.env,
+      TIKPAL_KIOSK_WATCHDOG_STATE_DIR: mkdtempSync(path.join(tmpdir(), "tikpal-kiosk-watchdog-smoke-"))
+    },
+    encoding: "utf8"
+  });
+  assert(watchdogCheck.status === 0, `watchdog --check failed:\n${watchdogCheck.stdout}\n${watchdogCheck.stderr}`);
+  assert(watchdogCheck.stdout.includes("watchdog enabled: 1"), "watchdog --check should report that it is enabled");
+  assert(watchdogCheck.stdout.includes("check passed"), "watchdog --check should report success");
 
   const devtoolsCheck = spawnSync("bash", ["deploy/chromium/start-tikpal-kiosk-devtools-proxy.sh", "--check"], {
     cwd: ROOT,

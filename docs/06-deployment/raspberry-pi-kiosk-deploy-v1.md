@@ -4,15 +4,17 @@
 
 Deploy Tikpal to a Raspberry Pi 4 running moOde so the device boots into the local 2560 x 720 Chromium kiosk experience.
 
-This package installs five local services when kiosk diagnostics are enabled:
+This package installs API/web plus kiosk support units when kiosk diagnostics are enabled:
 
-| Service | Port | Purpose |
+| Unit | Port | Purpose |
 | --- | --- | --- |
 | `tikpal-api.service` | `8787` | Local Tikpal API and future moOde / MPD bridge. |
 | `tikpal-web.service` | `4173` | Production static web server for `dist/`, with `/api` proxied to the API service. |
 | `tikpal-kiosk.service` | display `:0` | Chromium kiosk session for the touch screen. |
 | `tikpal-kiosk-viewer.service` | `6080` | Optional noVNC viewer for the full kiosk display. |
 | `tikpal-kiosk-devtools.service` | `9222` | Optional LAN proxy for Chromium DevTools. |
+| `tikpal-kiosk-watchdog.service` | local only | One-shot healthcheck that can restart only the kiosk display service. |
+| `tikpal-kiosk-watchdog.timer` | local only | Runs the display watchdog every 60-90 seconds. |
 
 ## Local Preflight
 
@@ -23,6 +25,7 @@ npm ci
 npm run typecheck
 npm run test:api
 npm run test:kiosk
+npm run test:ota:package:mp4
 npm run build
 ```
 
@@ -90,6 +93,7 @@ nano .env.kiosk
 deploy/chromium/start-tikpal-kiosk-display.sh --check
 deploy/chromium/start-tikpal-kiosk-viewer.sh --check
 deploy/chromium/start-tikpal-kiosk-devtools-proxy.sh --check
+deploy/chromium/tikpal-kiosk-healthcheck.sh --check
 deploy/chromium/launch-tikpal-kiosk.sh --check
 ```
 
@@ -125,6 +129,8 @@ TIKPAL_DDCUTIL_BIN=ddcutil
 TIKPAL_DDCUTIL_DISPLAY=""
 TIKPAL_DDCUTIL_READ_CACHE_MS=300000
 TIKPAL_DDCUTIL_READ_TIMEOUT_MS=3500
+TIKPAL_DDCUTIL_SUPPRESS_READ_WARNINGS=1
+TIKPAL_DDCUTIL_SUPPRESS_SYSLOG=1
 TIKPAL_SPOTIFY_READY_COMMAND=""
 TIKPAL_SPOTIFY_ACTIVE_COMMAND=""
 TIKPAL_SPOTIFY_ACTIVATE_COMMAND=""
@@ -193,7 +199,7 @@ Kiosk display diagnostics are separate from `4173`: `TIKPAL_KIOSK_REMOTE_DEBUG=1
 `TIKPAL_HIFI_EQ_APPLY_COMMAND` enables real Hi-Fi EQ preset control in `mpc` mode. Until this is set, `set_hifi_eq` is intentionally rejected on the Pi instead of pretending the DSP changed. The command receives `%PRESET%`, `%LABEL%`, and `%VISUAL%` placeholders, so a future Pi hook can map `flat`, `warm`, and `vocal` to local CamillaDSP configs. A CamillaDSP-based hook may use the official WebSocket control path, where `SetConfigName` selects a config and `Reload` applies it: [CamillaDSP WebSocket docs](https://www.camilladsp.com/docs/camilladsp/1.0.1/websocket/).
 `TIKPAL_HIFI_SPECTRUM_COMMAND` enables real Hi-Fi spectrum sampling for the `/api/v1/audio/spectrum` backend contract. The checked-in `deploy/moode/tikpal-hifi-spectrum-capture.sh` helper captures a short PCM window from a readable ALSA device, calculates 32 normalized spectrum bands plus normalized `peaks.left` / `peaks.right`, and returns JSON for any future meter surface that consumes that endpoint. The helper first honors `TIKPAL_HIFI_SPECTRUM_CAPTURE_COMMAND` when a custom Pi pipeline is needed; otherwise it tries `TIKPAL_HIFI_SPECTRUM_DEVICE` / `TIKPAL_HIFI_SPECTRUM_DEVICES` and then common ALSA loopback devices such as `plughw:Loopback,1,0`. `TIKPAL_HIFI_SPECTRUM_CACHE_MS` keeps the API from launching overlapping analyzer commands, and `TIKPAL_HIFI_SPECTRUM_GAIN` raises low Loopback PCM levels without substituting mock data. In `mpc` mode Tikpal rejects the spectrum endpoint when this command is unset, so the Pi does not silently show mock EQ data. Validate the device path with `./deploy/moode/tikpal-hifi-spectrum-capture.sh | jq .` before restarting `tikpal-api.service`.
 `TIKPAL_STATE_SNAPSHOT_REFRESH_MS` controls the background runtime snapshot collector. In `mpc` mode, read APIs such as `/api/v1/system/state`, `/api/v1/playback/status`, `/api/v1/system/status`, `/api/v1/audio/sources`, and the portable remote state return the latest in-memory snapshot instead of running `systemctl`, `ddcutil`, metadata, or source-status probes in the request path. Keep the interval low enough that status cards feel fresh, but high enough that slow Pi probes cannot pile up; `3000` ms is the current default.
-`TIKPAL_DDCUTIL_BIN` and optional `TIKPAL_DDCUTIL_DISPLAY` control the ambient right-edge brightness gesture path when the display exposes DDC/CI VCP `0x10`. `TIKPAL_DDCUTIL_READ_CACHE_MS` keeps status polling from blocking the kiosk on frequent I2C reads; brightness writes still apply immediately.
+`TIKPAL_DDCUTIL_BIN` and optional `TIKPAL_DDCUTIL_DISPLAY` control the ambient right-edge brightness gesture path when the display exposes DDC/CI VCP `0x10`. `TIKPAL_DDCUTIL_READ_CACHE_MS` keeps status polling from blocking the kiosk on frequent I2C reads, `TIKPAL_DDCUTIL_SUPPRESS_READ_WARNINGS=1` keeps repeated ddcutil stderr warnings out of normal service logs, `TIKPAL_DDCUTIL_SUPPRESS_SYSLOG=1` adds `--syslog=NEVER` for ddcutil versions that otherwise log every probe to journald, and brightness writes still apply immediately.
 `TIKPAL_PORTABLE_API_KEY` protects portable-controller writes through `POST /api/v1/remote/actions`. Keep `tikpal-api.service` bound to `127.0.0.1` and let portable controllers enter through the production web service at `http://<pi>:4173/api/v1/remote/*`; the web proxy blocks external clients from calling the full internal kiosk API. When the key is configured, the LAN-facing remote UI can submit safe remote actions through the web proxy without exposing the full kiosk API.
 `TIKPAL_SPOTIFY_*` lets the Pi expose Spotify Connect as a truthful ready/active handoff target without using Spotify Web API. Leave it closed by default and provide activate/disable commands when Spotify should only accept connections after the user selects that source.
 `TIKPAL_BLUETOOTH_*`, `TIKPAL_AIRPLAY_*`, and `TIKPAL_UPNP_*` let Tikpal enforce the armed-only source gate against moOde's renderer services. On moOde, the checked-in `deploy/moode/tikpal-bluetooth-enable.sh` script is the preferred Bluetooth enable path because it both enables the renderer and re-arms the controller to `power on`, `discoverable on`, and `pairable on`. `deploy/moode/tikpal-airplay-enable.sh` is the preferred AirPlay enable path because it enables the renderer and then nudges `shairport-sync.service` into the running state that actually advertises the receiver. `deploy/moode/tikpal-bluetooth-label.sh` reads the current broadcast name from `bluetoothctl show` so the frontend can tell the user what name to search for on their phone; `TIKPAL_BLUETOOTH_LABEL_TIMEOUT_SECONDS` keeps a stuck BlueZ client from accumulating orphaned `bluetoothctl` processes during frequent runtime polling. `TIKPAL_UPNP_*` should point at the target moOde UPnP/DLNA renderer controls; Tikpal treats this as DLNA casting intake, not media-server browsing. For all four external intake surfaces, `*_READY_COMMAND` means the receiver can be opened, `*_ACTIVE_COMMAND` means a real client is connected, and the UI keeps Ambient, Player, and Remote consistent by showing `armed` as waiting until `connected` is true. `moodeutl -Ro --bluetooth off` and `moodeutl -Ro --airplay off` remain the practical disable commands, while `cfg_system` values `btsvc`, `btactive`, `airplaysvc`, and `aplactive` plus `TIKPAL_AIRPLAY_RECEIVER_ACTIVE_COMMAND` keep the UI honest about whether AirPlay is really up.
@@ -264,7 +270,7 @@ To create scene-only packages from local MP4 files, run:
 npm run ota:package:mp4 -- /path/to/mp4-scenes --recursive --bundle --default Forest-Cabin.mp4
 ```
 
-The generator writes packages under `.tikpal/resource-ota-packages` unless `--output` is provided. Split mode creates one package per MP4; `--bundle` creates one package that installs the whole folder together. Each generated scene entry includes an id, filename, label, order, optional default marker, and `sha256`. If a source video has an audible or visible loop boundary, first run `npm run media:loop -- --input <mp4> --crossfade 0.9`; this requires `ffmpeg` / `ffprobe` and keeps an in-place backup under `.codex-artifacts/media-backups`. At runtime, `FlameScene` also uses two video slots for each looping scene, preparing the standby slot about 1.2 seconds before the tail and revealing it about 0.42 seconds before the tail with a 360ms visual / 340ms Scene Sound crossfade.
+The generator writes packages under `.tikpal/resource-ota-packages` unless `--output` is provided. Split mode creates one package per MP4; `--bundle` creates one package that installs the whole folder together. Each generated scene entry includes an id, filename, label, order, optional default marker, and `sha256`. The generator normalizes scene MP4s for the Pi kiosk path: keep the physical `2560x720` target, use H.264 Main Profile Level 4.1, `yuv420p`, a closed GOP around 48 frames, no B-frames, bounded video bitrate around `4500k`, AAC stereo around `96k`, and `+faststart`. If a source video has an audible or visible loop boundary, first run `npm run media:loop -- --input <mp4> --crossfade 0.9`; this requires `ffmpeg` / `ffprobe` and keeps an in-place backup under `.codex-artifacts/media-backups`. At runtime, `FlameScene` also uses two video slots for each looping scene, preparing the standby slot about 1.2 seconds before the tail and revealing it about 0.42 seconds before the tail with a 360ms visual / 340ms Scene Sound crossfade. The video element watchdog can recover ordinary playback stalls and exposes `data-flame-video-health`; if the full X/Chromium/V3D display stack stops responding, the systemd kiosk watchdog handles recovery by restarting only `tikpal-kiosk.service`.
 
 The script validates `assets/music/_metadata/library_manifest.json`, checks that manifest track and optional cover paths are safe and present in the package or already installed library, validates scene MP4 `sha256` checksums from `assets/scenes/_metadata/scene_videos.json`, validates the legacy replacement MP4 when present, writes `public/assets`, syncs `dist/assets` when a production build is present, and records `.tikpal/resource-ota-state.json`. The API reads the local music manifest on each `/api/v1/audio/library` request and lists scene videos from both `public/assets/*.mp4` and `public/assets/scenes/_metadata/scene_videos.json`; Ambient refreshes that scene catalog every 30 seconds and when the page becomes visible, so newly added scene videos appear in the previous / next scene controls without a page reload. The default Ambient scene catalog no longer depends on a bundled `output*.mp4`; when the scene catalog is empty, the scene video layer stays off until a new scene package is installed.
 
@@ -432,11 +438,14 @@ Verify the live display path:
 systemctl status tikpal-kiosk.service --no-pager
 systemctl status tikpal-kiosk-viewer.service --no-pager
 systemctl status tikpal-kiosk-devtools.service --no-pager
+systemctl status tikpal-kiosk-watchdog.timer --no-pager
 journalctl -u tikpal-kiosk.service -n 80 --no-pager
 journalctl -u tikpal-kiosk-viewer.service -n 80 --no-pager
 journalctl -u tikpal-kiosk-devtools.service -n 80 --no-pager
+journalctl -u tikpal-kiosk-watchdog.service -n 80 --no-pager
 ps -ef | grep '[c]hrom'
-xrandr --query || true
+timeout -k 2s 5s env DISPLAY=:0 xdpyinfo >/dev/null && echo "X display responsive"
+deploy/chromium/tikpal-kiosk-healthcheck.sh --check
 ```
 
 The effective Chromium command line should include these window flags:
@@ -493,6 +502,44 @@ If Chromium or Xorg does not exit cleanly, first confirm `tikpal-kiosk.service` 
 sudo systemctl kill -s SIGKILL tikpal-kiosk.service
 sudo systemctl reset-failed tikpal-kiosk.service tikpal-kiosk-devtools.service
 sudo systemctl start tikpal-kiosk.service
+```
+
+## Long-Run Scene Video Freeze Recovery
+
+If Scene Video is still `playing` in the API but the physical kiosk frame is frozen after hours of unattended playback, treat it as a display-stack problem before changing React video code. The high-signal pattern is: API reads stay fast, temperature and memory are normal, `xdpyinfo` on `DISPLAY=:0` times out, and kernel logs show `v3d`, `drm_sched_job_timedout`, or `Resetting GPU for hang`.
+
+Use bounded probes only; avoid periodic `xrandr --query` or `ffmpeg x11grab` because they can hang behind the same X/V3D failure:
+
+```bash
+curl --max-time 3 -fsS http://127.0.0.1:8787/api/v1/health
+curl --max-time 5 -fsS http://127.0.0.1:8787/api/v1/system/runtime
+curl --max-time 5 -fsS http://127.0.0.1:8787/api/v1/playback/status
+timeout -k 2s 5s env DISPLAY=:0 xdpyinfo >/dev/null && echo "X display responsive"
+dmesg -T | grep -Ei 'v3d|drm_sched|gpu reset|Resetting GPU' | tail -40
+journalctl -u tikpal-kiosk-watchdog.service -u tikpal-kiosk.service -b --no-pager | tail -120
+pgrep -af 'ffmpeg .*x11grab|xdpyinfo|xrandr' || true
+```
+
+The watchdog timer is installed with `--enable-kiosk` and should stay enabled for unattended scene playback:
+
+```bash
+systemctl is-active tikpal-kiosk-watchdog.timer
+systemctl list-timers tikpal-kiosk-watchdog.timer
+sudo systemctl start tikpal-kiosk-watchdog.service
+journalctl -u tikpal-kiosk-watchdog.service -n 80 --no-pager
+```
+
+When the watchdog finds `x-unresponsive`, `chromium-missing`, `web-unhealthy`, `api-unhealthy`, or a new `v3d-reset`, it first restarts only `tikpal-kiosk.service`. If the normal restart times out because Chromium or Xorg is stuck in `deactivating`, it kills that service cgroup, resets the failed state, and starts the kiosk again. API, web, MPD, and moOde audio services are left alone during normal display recovery, so Scene Sound and source truth survive a kiosk restart.
+
+If the kernel GPU/KMS state is wedged hard enough that Xorg restarts but never reaches Chromium, repeated kiosk restarts are not enough. `TIKPAL_KIOSK_WATCHDOG_REBOOT_AFTER_RESTARTS=3` allows the watchdog to reboot the Pi only after repeated `x-unresponsive` or `v3d-reset` display-stack failures within `TIKPAL_KIOSK_WATCHDOG_REBOOT_WINDOW_SECONDS=900`. Set it to `0` to disable reboot escalation while debugging.
+
+After a watchdog recovery, confirm the display path is clean and no diagnostic helpers were left behind:
+
+```bash
+systemctl is-active tikpal-api.service tikpal-web.service tikpal-kiosk.service tikpal-kiosk-watchdog.timer
+timeout -k 2s 5s env DISPLAY=:0 xdpyinfo >/dev/null && echo "X display responsive"
+pgrep -af 'ffmpeg .*x11grab|xdpyinfo|xrandr' || true
+curl --max-time 5 -fsS http://127.0.0.1:8787/api/v1/playback/status
 ```
 
 ## Pi Resource Triage
