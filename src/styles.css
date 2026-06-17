@@ -512,6 +512,10 @@ select {
   user-select: none;
 }
 
+.flame-scene:not(.is-static-only):not(.is-video-fallback) .scene-logo-backdrop {
+  opacity: 0;
+}
+
 .scene-logo-mark {
   display: block;
   width: min(34vw, 440px);
@@ -2149,11 +2153,11 @@ select {
 }
 
 .ambient-adjust-volume {
-  left: 42px;
+  right: 42px;
 }
 
 .ambient-adjust-brightness {
-  right: 42px;
+  left: 42px;
 }
 
 .ambient-adjust-indicator-icon {

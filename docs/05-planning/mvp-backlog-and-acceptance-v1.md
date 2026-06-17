@@ -112,7 +112,7 @@ Current status note:
 
 - Quick Settings is implemented as a fixed four-column 2560 x 720 card grid with no Home/Overview category; it opens directly to Preferences and keeps Network, Preferences, and System as the only categories.
 - Skin presets currently include `warm-gold`, `graphite-silver`, and `ivory-studio`.
-- Display brightness is reflected in system state and can now be adjusted both from the ambient right-edge gesture and from an in-panel Quick Settings control surface on DDC/CI-capable hardware. The Pi deploy helper `deploy/moode/tikpal-ddcci-enable.sh` installs `ddcutil`, enables I2C access, writes `TIKPAL_DDCUTIL_*`, and has been validated on the XENEON EDGE target with `display.transport="ddcci"`.
+- Display brightness is reflected in system state and can now be adjusted both from the ambient left-edge gesture and from an in-panel Quick Settings control surface on DDC/CI-capable hardware. The Pi deploy helper `deploy/moode/tikpal-ddcci-enable.sh` installs `ddcutil`, enables I2C access, writes `TIKPAL_DDCUTIL_*`, and has been validated on the XENEON EDGE target with `display.transport="ddcci"`.
 
 ### Slice 7: Pi4 Kiosk Package
 

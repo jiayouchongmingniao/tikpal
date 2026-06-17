@@ -27,8 +27,8 @@ type AppMode = "ambient" | "player" | "playlist" | "quickSettings" | "quickMenu"
 | Swipe up | Player, playlist, or quick settings | Return to ambient, including swipes that start inside the overlay panel. |
 | Tap | Ambient | In Focus/Calm/Sleep, show the HUD and open the lightweight source picker; in Hi-Fi, toggle the HUD. The HUD and picker auto-hide after 5 seconds without input. |
 | Long press | Ambient | Open quick menu. |
-| Vertical drag in left ambient zone | Ambient | Live volume adjustment against moOde volume state. |
-| Vertical drag in right ambient zone | Ambient | Live display brightness adjustment through DDC/CI when available. |
+| Vertical drag in left ambient zone | Ambient | Live display brightness adjustment through DDC/CI when available. |
+| Vertical drag in right ambient zone | Ambient | Live volume adjustment against moOde volume state. |
 | Non-Hi-Fi Ambient center controls | Ambient HUD visible | Previous scene, Focus/Calm/Sleep label plus intent, lightweight source picker, Scene Sound mute/unmute, and next scene. The strip width should follow its content rather than a fixed playback-control width. |
 | Hi-Fi Ambient center controls | Ambient HUD visible | Play mode, lightweight source picker, previous track, play/pause, next track, favorite, playlist, and lyrics. |
 | Arrow keys | Ambient HUD visible | In Focus/Calm/Sleep, up/down/left/right change scene and Space/Enter toggles Scene Sound. In Hi-Fi, scene arrows switch EQ presets and track arrows keep playback behavior. |
@@ -104,9 +104,9 @@ stateDiagram-v2
 - AirPlay playback must refresh title, artist, album, cover art, elapsed time, and lyrics from the same backend metadata snapshot. When the AirPlay track changes, all surfaces should prefer a temporary no-cover, recognizing, or `not_found` state over showing stale cover art, old lyrics, or same-title lyrics from a different artist with the new title.
 - Ambient must not show queue or playlist content; queue preview stays in the Player overlay.
 - Choosing any non-scene source from Ambient immediately switches through `/api/v1/audio/source`, keeps the current scene video visible in Focus/Calm/Sleep, and clears persisted `sceneSoundEnabled` so browser scene audio stays muted.
-- The left edge band is reserved for live volume drag and should not fall through to the generic one-finger swipe-down player gesture.
-- The right edge band is reserved for live brightness drag and should not fall through to the generic one-finger swipe-down player gesture.
-- If DDC/CI brightness is unavailable on the target display, the right-side control zone should show unavailable feedback instead of behaving like a normal ambient gesture lane.
+- The left edge band is reserved for live brightness drag and should not fall through to the generic one-finger swipe-down player gesture.
+- The right edge band is reserved for live volume drag and should not fall through to the generic one-finger swipe-down player gesture.
+- If DDC/CI brightness is unavailable on the target display, the left-side control zone should show unavailable feedback instead of behaving like a normal ambient gesture lane.
 - Horizontal swipe is reserved for ambience mode switching after MVP.
 - The weak top-right settings entry should be visible enough to discover but not visually compete with the flame scene.
 

@@ -203,6 +203,17 @@ function setSceneVideoVolume(video: HTMLVideoElement, volume: number) {
   syncSceneAudioGain(video);
 }
 
+function muteSceneVideo(video: HTMLVideoElement) {
+  video.defaultMuted = true;
+  video.muted = true;
+  syncSceneAudioGain(video);
+}
+
+function unmuteSceneVideo(video: HTMLVideoElement) {
+  video.muted = false;
+  syncSceneAudioGain(video);
+}
+
 function getOppositeSlot(slot: LoopSlot): LoopSlot {
   return slot === 0 ? 1 : 0;
 }
@@ -314,11 +325,11 @@ async function alignVideoWithPlayback(video: HTMLVideoElement, playback: FlameSc
 
   const shouldRestoreAudible = !video.muted;
   if (video.paused) {
-    video.muted = true;
+    muteSceneVideo(video);
   }
   await video.play().then(() => {
     if (shouldRestoreAudible && video.dataset.sceneAudible === "true") {
-      video.muted = false;
+      unmuteSceneVideo(video);
     }
   }).catch(() => {
     // Inline scene video can still be blocked briefly while a new layer mounts.
@@ -490,7 +501,7 @@ export function FlameScene({ lowPower = false, playback, singleLoop = false, sta
     clearSingleLoopWatchdog();
     video.dataset.sceneAudible = "false";
     setSceneVideoVolume(video, 0);
-    video.muted = true;
+    muteSceneVideo(video);
     video.pause();
     patchSingleLoopVideoHealth("fallback");
   }
@@ -505,7 +516,7 @@ export function FlameScene({ lowPower = false, playback, singleLoop = false, sta
     void (async () => {
       video.dataset.sceneAudible = "false";
       setSceneVideoVolume(video, 0);
-      video.muted = true;
+      muteSceneVideo(video);
       try {
         video.pause();
         video.load();
@@ -595,8 +606,12 @@ export function FlameScene({ lowPower = false, playback, singleLoop = false, sta
   function applySceneAudioVolume(video: HTMLVideoElement, overrideVolume?: number) {
     const keepsAudioPath = video.dataset.sceneAudible === "true";
     const nextVolume = keepsAudioPath ? overrideVolume ?? videoVolumeRef.current : 0;
-    video.muted = !keepsAudioPath;
     setSceneVideoVolume(video, nextVolume);
+    if (keepsAudioPath) {
+      unmuteSceneVideo(video);
+    } else {
+      muteSceneVideo(video);
+    }
   }
 
   function getAudibleVideoForLayer(layerId: number) {
@@ -647,7 +662,11 @@ export function FlameScene({ lowPower = false, playback, singleLoop = false, sta
         const shouldBeAudible = videoEnabledRef.current && audioEnabledRef.current && targetVolume > 0;
         entry.video.dataset.sceneAudible = shouldBeAudible ? "true" : "false";
         setSceneVideoVolume(entry.video, shouldBeAudible ? nextVolume : 0);
-        entry.video.muted = !shouldBeAudible;
+        if (shouldBeAudible) {
+          unmuteSceneVideo(entry.video);
+        } else {
+          muteSceneVideo(entry.video);
+        }
         if (shouldBeAudible && entry.video.paused) {
           void entry.video.play().catch(() => undefined);
         }
@@ -668,7 +687,7 @@ export function FlameScene({ lowPower = false, playback, singleLoop = false, sta
   function resetStandbyVideo(video: HTMLVideoElement) {
     video.dataset.sceneAudible = "false";
     setSceneVideoVolume(video, 0);
-    video.muted = true;
+    muteSceneVideo(video);
     video.pause();
     try {
       if (video.readyState >= 1) {
@@ -702,7 +721,11 @@ export function FlameScene({ lowPower = false, playback, singleLoop = false, sta
       if (nextVideo) {
         nextVideo.dataset.sceneAudible = videoEnabledRef.current && audioEnabledRef.current && videoVolumeRef.current > 0 ? "true" : "false";
         setSceneVideoVolume(nextVideo, 0);
-        nextVideo.muted = nextVideo.dataset.sceneAudible !== "true";
+        if (nextVideo.dataset.sceneAudible === "true") {
+          unmuteSceneVideo(nextVideo);
+        } else {
+          muteSceneVideo(nextVideo);
+        }
         void nextVideo.play().catch(() => undefined);
         startSceneAudioEnvelope([nextVideo], 0, "target", SCENE_REVEAL_MS, () => {
           sceneTransitionAudioActiveRef.current = false;
@@ -766,28 +789,28 @@ export function FlameScene({ lowPower = false, playback, singleLoop = false, sta
       applySceneAudioVolume(video, transitionEnvelopeActive && shouldBeAudible ? 0 : undefined);
 
       if (!isActiveLayer) {
-        video.muted = true;
+        muteSceneVideo(video);
         return;
       }
 
       if (shouldBeAudible) {
         if (video.paused) {
-          video.muted = true;
+          muteSceneVideo(video);
           void video.play().then(() => {
             if (video.dataset.sceneAudible === "true") {
               applySceneAudioVolume(video, sceneTransitionAudioActiveRef.current ? 0 : undefined);
-              video.muted = false;
+              unmuteSceneVideo(video);
             }
           }).catch(() => {
-            video.muted = true;
+            muteSceneVideo(video);
           });
         } else {
-          video.muted = false;
+          unmuteSceneVideo(video);
         }
         return;
       }
 
-      video.muted = true;
+      muteSceneVideo(video);
     });
   }
 
@@ -799,18 +822,18 @@ export function FlameScene({ lowPower = false, playback, singleLoop = false, sta
     const shouldBeAudible = videoEnabledRef.current && audioEnabledRef.current && videoVolumeRef.current > 0;
     video.dataset.sceneAudible = shouldBeAudible ? "true" : "false";
     setSceneVideoVolume(video, shouldBeAudible ? (sceneTransitionAudioActiveRef.current ? 0 : videoVolumeRef.current) : 0);
-    video.muted = true;
+    muteSceneVideo(video);
 
     void alignVideoWithPlayback(video, playbackRef.current, false)
       .then(() => {
         if (singleVideoRef.current !== video) return;
         if (video.dataset.sceneAudible === "true") {
           setSceneVideoVolume(video, sceneTransitionAudioActiveRef.current ? 0 : videoVolumeRef.current);
-          video.muted = false;
+          unmuteSceneVideo(video);
         }
       })
       .catch(() => {
-        video.muted = true;
+        muteSceneVideo(video);
       });
   }
 
@@ -868,7 +891,7 @@ export function FlameScene({ lowPower = false, playback, singleLoop = false, sta
 
     standbyVideo.dataset.sceneAudible = "false";
     setSceneVideoVolume(standbyVideo, 0);
-    standbyVideo.muted = true;
+    muteSceneVideo(standbyVideo);
 
     void (async () => {
       if (standbyVideo.readyState < 1) {
@@ -983,9 +1006,9 @@ export function FlameScene({ lowPower = false, playback, singleLoop = false, sta
         const startedAt = window.performance.now();
         activeVideo.dataset.sceneAudible = "true";
         standbyVideo.dataset.sceneAudible = "true";
-        activeVideo.muted = false;
-        standbyVideo.muted = false;
         setSceneVideoVolume(standbyVideo, 0);
+        unmuteSceneVideo(activeVideo);
+        unmuteSceneVideo(standbyVideo);
 
         const step = (now: number) => {
           if (
@@ -1001,8 +1024,8 @@ export function FlameScene({ lowPower = false, playback, singleLoop = false, sta
           const progress = Math.max(0, Math.min(1, (now - startedAt) / LOOP_AUDIO_CROSSFADE_MS));
           setSceneVideoVolume(activeVideo, targetVolume * (1 - progress));
           setSceneVideoVolume(standbyVideo, targetVolume * progress);
-          activeVideo.muted = false;
-          standbyVideo.muted = false;
+          unmuteSceneVideo(activeVideo);
+          unmuteSceneVideo(standbyVideo);
 
           if (progress < 1) {
             loopAudioCrossfadeFrameRef.current = window.requestAnimationFrame(step);
@@ -1109,7 +1132,7 @@ export function FlameScene({ lowPower = false, playback, singleLoop = false, sta
     videoRefs.current.forEach((video) => {
       video.dataset.sceneAudible = "false";
       setSceneVideoVolume(video, 0);
-      video.muted = true;
+      muteSceneVideo(video);
       video.pause();
     });
     return undefined;
@@ -1286,7 +1309,7 @@ export function FlameScene({ lowPower = false, playback, singleLoop = false, sta
     videoRefs.current.forEach((video) => {
       video.dataset.sceneAudible = "false";
       setSceneVideoVolume(video, 0);
-      video.muted = true;
+      muteSceneVideo(video);
     });
     return undefined;
   }, [singleLoop, staticOnly, videoEnabled]);
@@ -1355,7 +1378,7 @@ export function FlameScene({ lowPower = false, playback, singleLoop = false, sta
                   if (!node.dataset.sceneVolume) {
                     setSceneVideoVolume(node, 0);
                     node.dataset.sceneAudible = "false";
-                    node.muted = true;
+                    muteSceneVideo(node);
                   }
                 }
               }}
@@ -1373,7 +1396,6 @@ export function FlameScene({ lowPower = false, playback, singleLoop = false, sta
               src={singleVideoSrc}
               autoPlay
               loop
-              muted
               playsInline
               preload="auto"
               onLoadedMetadata={(event) => {
@@ -1460,7 +1482,7 @@ export function FlameScene({ lowPower = false, playback, singleLoop = false, sta
                       if (!node.dataset.sceneVolume) {
                         setSceneVideoVolume(node, 0);
                         node.dataset.sceneAudible = "false";
-                        node.muted = true;
+                        muteSceneVideo(node);
                       }
                       videoRefs.current.set(key, node);
                     } else {
@@ -1479,7 +1501,6 @@ export function FlameScene({ lowPower = false, playback, singleLoop = false, sta
                   data-scene-gain-db={layer.audioGainDb.toFixed(1)}
                   src={layer.src}
                   autoPlay={isVisibleSlot}
-                  muted
                   playsInline
                   preload="auto"
                   onLoadedMetadata={(event) => {

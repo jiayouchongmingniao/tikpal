@@ -943,11 +943,11 @@ export function AmbientScreen({
     const edgeWidth = Math.min(560, Math.max(120, rect.width * 0.32));
     const localX = event.clientX - rect.left;
     if (localX <= edgeWidth) {
-      applyWheelAdjust("volume", event);
+      applyWheelAdjust("brightness", event);
       return;
     }
     if (localX >= rect.width - edgeWidth) {
-      applyWheelAdjust("brightness", event);
+      applyWheelAdjust("volume", event);
     }
   }
 
@@ -1101,17 +1101,8 @@ export function AmbientScreen({
       )}
       {!isHifiMode && sceneVideoEnabled && hasSceneVideo ? <div className="ambient-vignette" /> : null}
       <div
-        className="ambient-adjust-zone ambient-adjust-zone-left"
-        data-gesture-protected
-        aria-label="Swipe or scroll to change volume"
-        onPointerDown={handleZonePointerDown("volume")}
-        onPointerMove={handleZonePointerMove}
-        onPointerUp={handleZonePointerUp}
-        onPointerCancel={handleZonePointerCancel}
-        onWheel={handleZoneWheel("volume")}
-      />
-      <div
-        className={`ambient-adjust-zone ambient-adjust-zone-right ${system.display.controllable ? "" : "is-disabled"}`}
+        className={`ambient-adjust-zone ambient-adjust-zone-left ${system.display.controllable ? "" : "is-disabled"}`}
+        data-ambient-adjust-zone="brightness"
         data-gesture-protected
         aria-label="Swipe or scroll to change brightness"
         onPointerDown={handleZonePointerDown("brightness")}
@@ -1119,6 +1110,17 @@ export function AmbientScreen({
         onPointerUp={handleZonePointerUp}
         onPointerCancel={handleZonePointerCancel}
         onWheel={handleZoneWheel("brightness")}
+      />
+      <div
+        className="ambient-adjust-zone ambient-adjust-zone-right"
+        data-ambient-adjust-zone="volume"
+        data-gesture-protected
+        aria-label="Swipe or scroll to change volume"
+        onPointerDown={handleZonePointerDown("volume")}
+        onPointerMove={handleZonePointerMove}
+        onPointerUp={handleZonePointerUp}
+        onPointerCancel={handleZonePointerCancel}
+        onWheel={handleZoneWheel("volume")}
       />
 
       <button className="icon-button ambient-settings" type="button" data-gesture-protected onClick={onOpenSettings} aria-label="Open settings" title="Settings">

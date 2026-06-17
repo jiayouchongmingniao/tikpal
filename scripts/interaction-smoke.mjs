@@ -880,6 +880,20 @@ try {
   await expect(client, "document.querySelector('.ambient-screen') !== null", "ambient root renders");
   await expect(
     client,
+    `
+      (() => {
+        const left = document.querySelector('.ambient-adjust-zone-left');
+        const right = document.querySelector('.ambient-adjust-zone-right');
+        return left?.getAttribute('data-ambient-adjust-zone') === 'brightness'
+          && right?.getAttribute('data-ambient-adjust-zone') === 'volume'
+          && (left.getAttribute('aria-label') ?? '').includes('brightness')
+          && (right.getAttribute('aria-label') ?? '').includes('volume');
+      })()
+    `,
+    "ambient edge controls map brightness left and volume right"
+  );
+  await expect(
+    client,
     "document.querySelectorAll('.startup-mode-grid button').length === 4 && [...document.querySelectorAll('.startup-mode-grid button')].some((node) => node.textContent?.includes('Hi-Fi'))",
     "startup mode chooser renders Focus, Calm, Sleep, and Hi-Fi"
   );
