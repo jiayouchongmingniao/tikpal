@@ -19,7 +19,7 @@ Tikpal should run as a local web app on Raspberry Pi 4 and be displayed by Chrom
 
 ## Repository Boundary
 
-The first commit is documentation-only. The future implementation should keep these boundaries:
+The repo now contains the local app, API, deploy package, and smoke tests. Keep these boundaries:
 
 - `src/`: React UI, ambience media layer, touch state machine, player/settings overlays, and client data hooks.
 - `server/`: local API, moOde / MPD adapters, system state, kiosk diagnostics, and safe system actions.
@@ -33,7 +33,8 @@ Current deployment package:
 - `server/web.mjs`: production static server for `dist/`, with `/api` proxied to the API service.
 - `deploy/chromium/launch-tikpal-kiosk.sh`: Chromium launcher with `--check`, dedicated profile cleanup, dark startup flags, and display mode hooks.
 - `deploy/chromium/start-tikpal-kiosk-session.sh`: X-session entrypoint for systemd `startx`.
-- `deploy/systemd/install-systemd-services.sh`: installs `tikpal-api.service`, `tikpal-web.service`, and optionally `tikpal-kiosk.service`.
+- `deploy/chromium/tikpal-kiosk-healthcheck.sh`: bounded X/Chromium/web/API/GPU-reset healthcheck used by the system watchdog.
+- `deploy/systemd/install-systemd-services.sh`: installs `tikpal-api.service`, `tikpal-web.service`, and optionally `tikpal-kiosk.service`, kiosk diagnostics, and the kiosk watchdog timer.
 
 ## Kiosk Launch Goals
 
@@ -57,6 +58,7 @@ TIKPAL_KIOSK_XRANDR_MODE=2560x720
 TIKPAL_CHROMIUM_BIN=/usr/lib/chromium-browser/chromium-browser
 TIKPAL_CHROMIUM_PROFILE_DIR=/home/moode/.config/tikpal-chromium-kiosk
 TIKPAL_CHROMIUM_COLOR_SCHEME=dark
+TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE=dmix:CARD=BT66,DEV=0
 TIKPAL_RENDERER=media
 TIKPAL_RENDER_PROFILE=pi4-media
 TIKPAL_PLAYER_BACKEND=mock
@@ -69,14 +71,16 @@ These names are now used by `deploy/chromium/env.kiosk.example`.
 
 ## Ambience Renderer Policy
 
-The current ambient flame surface is media-backed: a fixed fireplace image under one or more muted looping MP4 layers. Scene changes mount the incoming video, align it to `playback.elapsedSeconds % video.duration`, and crossfade after the target frame is ready.
+The current ambient scene surface is media-backed: a static logo/fallback surface under local MP4 scene layers. Scene changes mount the incoming video, align it to `playback.elapsedSeconds % video.duration`, and reveal only after a drawable frame is ready. During normal playback the static logo/backdrop is hidden so a source change cannot expose a white/bright fallback frame; it is visible only for static-only and repeated-stall fallback states.
 
 Renderer requirements:
 
 - Support byte-range MP4 serving so browser seeks can land on the aligned frame.
-- Keep the fireplace image as the always-available visual base layer.
+- Keep the logo/static surface as the always-available degraded visual state.
 - Keep HUD and controls readable while video metadata or seeking is settling.
-- Freeze the active scene when playback is paused and resume muted video when playback is playing.
+- Keep scene video rendering independent from music source playback; Scene Sound decides whether the active scene layer is audible.
+- Unmute only the active video layer when `scene` is the playback source, and keep volume synced to `system.volume.percent`.
+- On Pi, use the single-loop/stable scene path and `data-flame-video-health` to recover ordinary video-element stalls. Full X/Chromium/V3D hangs are outside React's recovery boundary and belong to the systemd kiosk watchdog.
 - Keep future WebGL/canvas visual modes optional and isolated from the player/settings shell.
 
 Future renderer requirements:
@@ -105,6 +109,8 @@ Initial goals:
 Performance controls:
 
 - Video decode cost and asset bitrate.
+- Pi-friendly MP4 encoding: H.264 Main Profile Level 4.1, `yuv420p`, closed GOP, no B-frames, bounded bitrate, AAC stereo, and `+faststart`.
+- Avoiding Chromium native short-MP4 loop boundaries through prepared standby frames or the Pi stable-loop fallback.
 - Flame quality tier for future generated renderers.
 - Particle count tier for future generated renderers.
 - Internal render scale.
@@ -120,12 +126,14 @@ The implementation should expose a debug/status surface for:
 - Renderer type: `media`, `webgl`, `webgl-low`, `image`, `static`, or fallback.
 - Average FPS, p10 FPS, and last frame interval.
 - Media seek/metadata readiness for the active background video.
+- Scene video health through `data-flame-video-health`, frame-ready state, loop role, and active audio role.
 - WebGL init errors for optional generated renderers.
 - Context lost count.
 - Current viewport and physical display size.
 - Chromium experiment/profile name.
 - Kiosk URL and launch mode.
 - API/web/kiosk service status when available.
+- Kiosk Chromium ALSA output device and recent `PcmOpen` errors when Scene Sound appears silent.
 
 ## Local API Boundary
 

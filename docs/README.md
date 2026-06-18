@@ -122,7 +122,7 @@ The local backend boundary should reserve endpoints or adapters for playback con
 ## Current Implementation Checkpoints
 
 - Root app: Vite + React + TypeScript.
-- Visual layer: image-backed fireplace with local MP4 video layers, playback-time alignment, and crossfaded scene changes.
+- Visual layer: image-backed scene fallback with local MP4 video layers, playback-time alignment, crossfaded scene changes, no-logo normal playback, and stall/fallback health via `data-flame-video-health`.
 - State model: `ambient`, `player`, `quickSettings`, and `quickMenu`.
 - Validation routes: `/`, `/?mode=player`, `/?mode=quickSettings`.
 - Interaction validation: `npm run test:interaction` while the dev server is running.
@@ -134,7 +134,8 @@ The local backend boundary should reserve endpoints or adapters for playback con
 - Source workspace: visible tabs are Library, Radio, Spotify, AirPlay, Bluetooth, and DLNA; DLNA uses runtime source id `upnp` and means renderer intake, not media-server browsing. Spotify Connect, AirPlay, Bluetooth, and DLNA share one handoff rule across Ambient, Player, Remote, and Pi API state: `armed` waits, `connected` completes.
 - Appearance: font presets and surface skin presets are persisted locally and applied across ambient, player, and settings surfaces.
 - Room experience: startup offers Focus, Calm, Sleep, and Hi-Fi; Focus/Calm/Sleep open Scene Sound by default on boot, and selecting a music/input source keeps the scene video visible while muting scene audio. Hi-Fi applies `flat`, `warm`, or `vocal` EQ presets when the Pi command hook is configured, centers now-playing artwork and metadata, and never enables Scene Sound. Auto Night dims by selected timezone without changing sources.
-- Device brightness: DDC/CI-capable displays are prepared by `deploy/moode/tikpal-ddcci-enable.sh`; `mpc` mode reports `display.transport="ddcci"` when `ddcutil getvcp 10 --brief` can read VCP `0x10`.
+- Device brightness: DDC/CI-capable displays are prepared by `deploy/moode/tikpal-ddcci-enable.sh`; `mpc` mode reports `display.transport="ddcci"` when `ddcutil getvcp 10 --brief` can read VCP `0x10`, and the Ambient left edge is the brightness gesture lane.
+- Scene Sound on Pi: the active browser video supplies scene audio, so Chromium should route directly to the physical USB `dmix` device through `TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE`; moOde `_audioout` / Loopback remains for MPD, renderer intakes, and spectrum capture.
 - Pi status reads: in `mpc` mode, combined state, playback status, system status, runtime, audio source, and portable remote reads return the latest in-memory runtime snapshot while slow probes run in a low-frequency background collector.
 - AirPlay playback truth: title metadata, versioned cover art, elapsed position, and `airplay_input` lyrics refresh from the same backend snapshot so Ambient, Player, Hi-Fi, and portable remote stay aligned on the active AirPlay track. AirPlay lyrics use strict LRCLIB title/artist matching, and Hi-Fi lyrics visibility defaults on with `tikpal.lyricsVisible.v3` so stale older local storage cannot hide a ready lyrics wall.
 - Scene context reads: `/api/v1/scene/context` returns cached timezone/daypart/location/weather copy for Ambient without changing Auto Night, room mode, source, or playback truth.

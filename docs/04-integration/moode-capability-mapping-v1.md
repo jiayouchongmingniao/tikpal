@@ -77,7 +77,7 @@ Exact wire shapes should be finalized during implementation, but these concepts 
 | Audio format | Player status card | Format, bit depth, sample rate. |
 | Output device | Player status card, quick settings | USB, I2S, HDMI, DAC name, volume mode. |
 | Playback source / renderer | Ambient source picker, Player top state, source workspace | Six visible frontstage choices: Library, Radio, Spotify, AirPlay, Bluetooth, DLNA; internal Audio remains backend/status truth. |
-| Scene ambience audio | Quick menu, Ambient video layer, Player current source | Scene Sound is an exclusive source backed by the active background MP4; switching to any music/input source remutes the browser video and returns source truth to music/input playback. |
+| Scene ambience audio | Quick menu, Ambient video layer, Player current source | Scene Sound is an exclusive source backed by the active background MP4; switching to any music/input source remutes the browser video and returns source truth to music/input playback. On Pi, Chromium should route this browser audio directly to the physical USB `dmix` device rather than Loopback-backed `_audioout`. |
 | Network | Player status, quick settings | Ethernet/Wi-Fi, IP, connection state. |
 | Display brightness | Ambient edge gesture, quick settings display card | DDC/CI brightness percent when the monitor exposes VCP `0x10`. |
 | DSP / CamillaDSP | Player status, quick settings, Hi-Fi room mode | ON/OFF, selected EQ preset id/label, controllability, and available `flat` / `warm` / `vocal` preset summaries. |
@@ -121,12 +121,15 @@ Ambient background videos:
 - Scene entries may include `order`, `default`, and `source=scene`; the response also includes `catalogVersion` and `defaultVideoId` so Ambient can preserve the current scene while noticing newly installed OTA videos.
 - `GET /api/v1/scene/context` may add IP-derived timezone, daypart, coarse location label, country code, and weather label for weak Ambient clock copy. This is context for wording only; Auto Night still follows the stored room-experience timezone and the endpoint must cache provider reads so a slow network lookup does not block the normal state snapshot path.
 - On scene switch, the incoming video should seek to `playback.elapsedSeconds % video.duration` before it is revealed.
+- Normal video playback should not expose the static logo/backdrop during scene switches; that surface is reserved for static-only mode and repeated-stall fallback.
 - The visual ambience layer can keep looping independently from music playback state; Scene Sound controls whether the active layer is audible.
 - The local web server must support `Range` requests for MP4 files so browser seeks can land on the requested frame instead of falling back to the first frame.
 - Scene video can become audible through the Quick Menu Scene Sound toggle or the local `set_scene_sound` experience action. When enabled, the backend marks `scene` as the active source and the browser unmutes only the active video layer.
 - The active video element must set `video.volume = system.volume.percent / 100` so local browser audio matches the same global level shown by Ambient and Player. At `0%`, the video remains muted.
+- The active video element should own unmute at runtime rather than relying on JSX `muted` attributes; repeated React renders must not accidentally re-mute a healthy Scene Sound path.
 - Turning Scene Sound off should switch back through `target=mpd` so Library playback resumes. Turning Scene Video off while Scene Sound is active follows the same Library resume path before hiding the video surface.
 - Selecting any Ambient music/input source uses the existing `/api/v1/audio/source` contract, clears persisted `sceneSoundEnabled`, keeps Focus/Calm/Sleep scene video visible, and closes Scene Sound as the audible source.
+- External renderer intake commands should be closed when leaving those sources. In particular, a running `librespot --device _audioout` process can keep the physical output busy even after `playback.source` has returned to `scene`, so the Spotify disable command is part of Scene Sound reliability.
 
 ### Player Overlay
 
@@ -238,7 +241,7 @@ In `mpc` mode, the read endpoints above use a cached runtime snapshot instead of
 
 AirPlay lyrics are identity-strict: the metadata path may return `ready` only when LRCLIB matches the normalized title and artist for the current AirPlay playback snapshot. Duration is timing guidance, not an identity veto. If the current song has no trusted lyrics, `not_found` is correct and preferable to displaying same-title lyrics from a different artist.
 
-`volume_set` must stay multi-surface. Local kiosk actions and portable remote actions both write through the backend, then refresh output volume status when the active source is `scene`, Spotify Connect, Bluetooth, AirPlay, or DLNA. The response should carry the freshly read `system.volume.percent` so Ambient, Player, Remote, and browser Scene Sound do not drift into separate local slider state.
+`volume_set` must stay multi-surface. Local kiosk actions and portable remote actions both write through the backend, then refresh output volume status when the active source is `scene`, Spotify Connect, Bluetooth, AirPlay, or DLNA. The response should carry the freshly read `system.volume.percent` so Ambient, Player, Remote, and browser Scene Sound do not drift into separate local slider state. On Pi, this percent controls both the system output helper and the active scene video element; audible failure should be diagnosed as an output-route problem only after the DOM video is confirmed `muted=false`, `paused=false`, and `data-scene-volume` is nonzero.
 
 Action endpoints are different: playback, source, room, display, library scan, reboot, shutdown, playlist, and remote-action writes still run the command or persistence change needed for the requested action. After a successful source write, Spotify Connect, AirPlay, Bluetooth, and DLNA refresh source-runtime status immediately enough for the UI to know whether the intake is already `connected`; otherwise the client keeps the shared waiting handoff state until a later cached refresh reports `connected` or the client times out and rolls back. The user-facing tradeoff is intentional: status cards may lag by one snapshot interval, but a stuck monitor, renderer, or metadata probe should not make the kiosk UI appear frozen.
 
@@ -256,7 +259,8 @@ Both Ambient and Player use the playback summary as display truth for now-playin
 | Network offline | Show weak ambient warning and highlighted network card. |
 | Library scanning | Show progress but do not block playback. |
 | System overheated | Show warning state and non-blocking prompt. |
-| DDC/CI brightness unavailable | Keep the right ambient control lane non-destructive and show unavailable feedback instead of silently acting like a generic ambient swipe. |
+| DDC/CI brightness unavailable | Keep the left ambient control lane non-destructive and show unavailable feedback instead of silently acting like a generic ambient swipe. |
+| Scene Sound enabled but silent | Keep Scene Sound state honest, then diagnose Chromium ALSA output, `_audioout` / Loopback, and competing renderer processes instead of showing fake playback success. |
 
 ## Non-Goals
 

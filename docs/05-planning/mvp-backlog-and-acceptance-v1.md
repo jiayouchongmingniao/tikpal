@@ -194,8 +194,9 @@ Batch 4 deployment note:
 | Two-finger gesture is hard to discover. | Keep a visible Playlist entry in Player and a weak gear for Quick Settings. |
 | moOde data is inconsistent across sources. | Normalize source state and label passive renderers as status, not guaranteed switch actions. |
 | Dangerous system actions are triggered accidentally. | Require explicit confirmation and separate dangerous actions visually. |
-| Ambient live-control zones conflict with shell gestures. | Reserve protected left/right ambient edge bands so volume and brightness drags do not fall through to generic swipe-down navigation. |
+| Ambient live-control zones conflict with shell gestures. | Reserve protected edge bands so left brightness and right volume drags do not fall through to generic swipe-down navigation. |
 | DDC/CI behavior differs across displays. | Treat brightness as capability-detected state, parse monitor-specific `ddcutil` output carefully, and degrade to unavailable feedback instead of issuing blind writes. |
+| Scene Sound is enabled but silent on Pi. | Confirm the DOM video is unmuted and decoding, then verify Chromium is routed to the physical USB `dmix` output, `snd-aloop` is loaded for Loopback users, and external renderers such as `librespot` are closed when leaving their source. |
 | Physical screen geometry is wrong. | Validate Chromium window size, xrandr output, and actual viewport on-device. |
 
 ## Visible Gaps

@@ -97,6 +97,16 @@ deploy/chromium/tikpal-kiosk-healthcheck.sh --check
 deploy/chromium/launch-tikpal-kiosk.sh --check
 ```
 
+For Scene Sound, set Chromium to the physical USB output instead of moOde's Loopback-backed `_audioout`. Find the card name with `aplay -l`, then use the USB card's `dmix` device:
+
+```bash
+aplay -l
+sed -i 's|^TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE=.*|TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE=dmix:CARD=BT66,DEV=0|' .env.kiosk
+deploy/chromium/launch-tikpal-kiosk.sh --check
+```
+
+Replace `BT66` with the card name shown by the target Pi. Keep `_audioout` available for moOde/MPD and renderer services; Chromium Scene Sound should use the physical `dmix` route so it can keep an audible browser audio stream open.
+
 If the Pi should control real moOde playback instead of the local mock bridge, create `.env` with native MPD settings before restarting the API service:
 
 ```bash
@@ -191,7 +201,7 @@ EOF
 `TIKPAL_MPD_STARTUP_VOLUME=30` makes Tikpal set MPD to 30% before auto-resuming playback when the API starts and playback is not already running.
 `TIKPAL_STARTUP_SCENE_SOUND_ENABLED=1` makes the Pi open Scene Sound as the default startup source for Focus, Calm, and Sleep room modes. The startup path writes `sceneSoundEnabled=true` when needed and switches to `target=scene`; choosing Library, Radio, Bluetooth, AirPlay, Spotify, or DLNA later still clears Scene Sound for that session.
 `TIKPAL_ALSA_LOOPBACK_ALLOW_HDMI=0` keeps Tikpal from re-enabling a stale moOde ALSA Loopback override when `_audioout` routes only to HDMI. Most Tikpal installs should select the USB speaker or USB amplifier in moOde first, then let `_audioout` follow that current output while mirroring to Loopback for AirPlay, Bluetooth, and Hi-Fi spectrum. Set this to `1` only for an intentional HDMI-output install. For Chromium Scene Sound, prefer a direct physical USB `dmix` device in `.env.kiosk`, for example `TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE=dmix:CARD=BT66,DEV=0`; Loopback-backed `_audioout` can make Chromium log `PcmOpen: _audioout,Device or resource busy` and decode AAC without audible output.
-`TIKPAL_OUTPUT_VOLUME_GET_COMMAND` and `TIKPAL_OUTPUT_VOLUME_SET_COMMAND` should control the physical `_audioout` output, not only ALSA Loopback. On moOde installs with ALSA Loopback enabled, the checked-in `deploy/moode/tikpal-output-volume.sh` helper reads the current `/etc/alsa/conf.d/_sndaloop.conf` / `_audioout.conf` route, gets volume from the physical output, and mirrors writes to Loopback so Bluetooth, AirPlay, Scene Sound, and Hi-Fi spectrum use the same level. Avoid bare `amixer get PCM` on these installs because it can hit the Loopback card while the USB output remains at 100%.
+`TIKPAL_OUTPUT_VOLUME_GET_COMMAND` and `TIKPAL_OUTPUT_VOLUME_SET_COMMAND` should control the physical `_audioout` output, not only ALSA Loopback. On moOde installs with ALSA Loopback enabled, the checked-in `deploy/moode/tikpal-output-volume.sh` helper reads the current `/etc/alsa/conf.d/_sndaloop.conf` / `_audioout.conf` route, gets volume from the physical output, and mirrors writes to Loopback so renderer intakes and Hi-Fi spectrum use the same level. Browser Scene Sound reaches the same physical output through Chromium's `dmix` route. Avoid bare `amixer get PCM` on these installs because it can hit the Loopback card while the USB output remains at 100%.
 Keep `TIKPAL_WEB_ALLOW_REMOTE_UI_API=0` for the normal Pi install: the production web service serves the full kiosk UI to loopback clients such as the Pi browser, while LAN browsers opening `http://<pi-ip>:4173/` receive the portable remote UI and are limited to `/api/v1/remote/*`. Remote mode is selected when the socket remote address is not loopback or when the HTTP `Host` is not `localhost`, `127.0.0.1`, or `[::1]`, so SSH tunnels, reverse proxies, and port mappings still receive the portable remote UI when the browser uses the Pi IP or a public domain as the Host. Set it to `1` only when trusted LAN clients should receive the full kiosk API surface.
 `TIKPAL_SCENE_CONTEXT_GEO_*` and `TIKPAL_SCENE_CONTEXT_WEATHER_*` control the cached `/api/v1/scene/context` lookups used for weak Ambient clock copy. The endpoint prefers IP-derived timezone/location when available, falls back to the caller's `timeZone` query or the room-experience default when unavailable, and caches provider failures briefly so a slow network cannot stall normal state reads.
 Kiosk display diagnostics are separate from `4173`: `TIKPAL_KIOSK_REMOTE_DEBUG=1` exposes Chromium DevTools on `TIKPAL_KIOSK_REMOTE_DEBUG_ADDRESS:TIKPAL_KIOSK_REMOTE_DEBUG_PORT`, proxying to Chromium's local `TIKPAL_KIOSK_REMOTE_DEBUG_CHROMIUM_ADDRESS:TIKPAL_KIOSK_REMOTE_DEBUG_CHROMIUM_PORT`, and `TIKPAL_KIOSK_VIEWER=novnc` exposes the full kiosk screen through noVNC on `TIKPAL_KIOSK_NOVNC_ADDRESS:TIKPAL_KIOSK_NOVNC_PORT`. Keep `TIKPAL_KIOSK_REMOTE_DEBUG=0` for normal use and enable it only while actively debugging; DevTools can inspect and control the kiosk browser.
@@ -387,6 +397,51 @@ curl -fsS http://127.0.0.1:8787/api/v1/system/state
 ```
 
 Success means `/api/v1/health` reports `mode:"mpc"`, `/api/v1/system/status` reports `display.controllable=true` and `display.transport="ddcci"`, and `ddcutil getvcp 10 --brief` returns the same brightness value after the API action. If `/dev/i2c-*` is absent or VCP `0x10` is unreadable, reboot once after the helper writes `dtparam=i2c_arm=on`, then re-run the probe before assuming the display lacks DDC/CI.
+
+## Scene Sound Audio Verification
+
+Scene Sound is browser audio from the active Ambient MP4, not MPD audio. If Scene Sound is on, the video is moving, and the API reports `source:"scene"` but the speaker is silent, split the diagnosis into frontend state, Chromium ALSA output, moOde `_audioout`, and competing renderer ownership.
+
+First confirm the Pi source state and basic audio devices:
+
+```bash
+curl -fsS http://127.0.0.1:8787/api/v1/playback/status
+curl -fsS http://127.0.0.1:8787/api/v1/system/state
+aplay -l
+aplay -L | grep -E '^(_audioout|dmix|default|plughw|hw)' -A2
+grep -E '^TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE|^TIKPAL_KIOSK_REMOTE_DEBUG' /home/moode/code/tikpal/.env.kiosk
+```
+
+Then inspect the kiosk log. `PcmOpen: _audioout,No such device` means `_sndaloop.conf` expects Loopback but `snd-aloop` is missing. `PcmOpen: _audioout,Device or resource busy` means Chromium reached ALSA but could not use the Loopback-backed composite route reliably or another renderer is holding the device:
+
+```bash
+journalctl -u tikpal-kiosk.service --since '10 minutes ago' --no-pager \
+  | grep -Ei 'PcmOpen|alsa output|_audioout|dmix|Loopback|alsa' || true
+cat /proc/asound/cards
+lsmod | grep -E 'snd_aloop|snd_usb_audio' || true
+fuser -v /dev/snd/* 2>&1 || true
+pgrep -af 'librespot|shairport|bluealsa|upmpd|squeezelite' || true
+```
+
+Recovery rules:
+
+- If Loopback is missing while `/etc/alsa/conf.d/_sndaloop.conf` references `hw:Loopback,0`, run `sudo ./deploy/moode/tikpal-snd-aloop-enable.sh`, then restart the affected service.
+- If `librespot --device _audioout` is still running after the source is `scene`, run `moodeutl -Ro --spotify off`, set `TIKPAL_SPOTIFY_DISABLE_COMMAND="moodeutl -Ro --spotify off"`, and restart `tikpal-api.service`.
+- If Chromium logs `PcmOpen: _audioout,Device or resource busy`, set `TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE=dmix:CARD=<USB_CARD>,DEV=0` in `.env.kiosk`, keep DevTools disabled, and restart `tikpal-kiosk.service`.
+- If MPD reports `Failed to open ALSA device "_audioout"`, fix `_audioout` separately before judging Scene Sound; MPD and Chromium can fail for different reasons.
+
+After recovery, success looks like this:
+
+```bash
+systemctl is-active tikpal-api.service tikpal-web.service tikpal-kiosk.service tikpal-kiosk-watchdog.timer
+curl -fsS http://127.0.0.1:8787/api/v1/playback/status
+journalctl -u tikpal-kiosk.service --since '2 minutes ago' --no-pager \
+  | grep -Ei 'PcmOpen|alsa output|_audioout|dmix|alsa' || true
+for f in /proc/asound/<USB_CARD>/pcm0p/sub*/status; do echo "---$f"; cat "$f"; done
+pgrep -x librespot >/dev/null && echo 'Spotify still owns output' || echo 'Spotify renderer closed'
+```
+
+The USB PCM status should be `RUNNING` while Scene Sound is active, and recent kiosk logs should show the selected `dmix:CARD=...` output without new `PcmOpen` errors. If the DOM video needs inspection, enable `TIKPAL_KIOSK_REMOTE_DEBUG=1` only temporarily, inspect the active `video.flame-video` for `muted=false`, `paused=false`, `readyState>=2`, and nonzero `data-scene-volume`, then turn DevTools back off.
 
 ## Quiet Boot And Reboot
 
