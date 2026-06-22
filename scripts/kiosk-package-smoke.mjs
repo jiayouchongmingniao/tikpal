@@ -1,6 +1,6 @@
 import { access, readFile, stat } from "node:fs/promises";
 import { constants } from "node:fs";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { mkdtempSync, writeFileSync } from "node:fs";
@@ -97,6 +97,8 @@ async function run() {
   assert(kioskEnv.includes("TIKPAL_KIOSK_DISPLAY_MODE=auto"), "kiosk env should document automatic physical/virtual display selection");
   assert(kioskEnv.includes("TIKPAL_KIOSK_WATCHDOG_ENABLED=1"), "kiosk env should default the display watchdog on");
   assert(kioskEnv.includes("TIKPAL_KIOSK_WATCHDOG_GPU_LOG_SCAN=1"), "kiosk env should enable GPU reset log scanning");
+  assert(kioskEnv.includes("TIKPAL_KIOSK_WATCHDOG_PAGE_HEARTBEAT_ENABLED=1"), "kiosk env should enable page heartbeat scanning");
+  assert(kioskEnv.includes("TIKPAL_KIOSK_WATCHDOG_PAGE_HEARTBEAT_URL=http://127.0.0.1:8787/api/v1/kiosk/heartbeat"), "kiosk env should point the watchdog at the loopback page heartbeat API");
   assert(kioskEnv.includes("TIKPAL_KIOSK_WATCHDOG_REBOOT_AFTER_RESTARTS=3"), "kiosk env should document persistent display-failure reboot escalation");
   assert(kioskEnv.includes("TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE="), "kiosk env should expose Chromium ALSA output selection");
   assert(!kioskEnv.includes("TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE=_audioout"), "kiosk env should not default Chromium Scene Sound to Loopback-backed _audioout");
@@ -156,7 +158,69 @@ async function run() {
   });
   assert(watchdogCheck.status === 0, `watchdog --check failed:\n${watchdogCheck.stdout}\n${watchdogCheck.stderr}`);
   assert(watchdogCheck.stdout.includes("watchdog enabled: 1"), "watchdog --check should report that it is enabled");
+  assert(watchdogCheck.stdout.includes("page heartbeat enabled: 1"), "watchdog --check should report page heartbeat scanning");
+  assert(watchdogCheck.stdout.includes("/api/v1/kiosk/heartbeat"), "watchdog --check should report the heartbeat endpoint");
   assert(watchdogCheck.stdout.includes("check passed"), "watchdog --check should report success");
+
+  const heartbeatSmokeDir = mkdtempSync(path.join(tmpdir(), "tikpal-heartbeat-smoke-"));
+  const heartbeatSmokePortFile = path.join(heartbeatSmokeDir, "port");
+  const heartbeatSmokeServer = spawn(process.execPath, [
+    "-e",
+    `
+      const fs = require("node:fs");
+      const http = require("node:http");
+      const server = http.createServer((_request, response) => {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({
+          ok: true,
+          healthy: false,
+          status: "unhealthy",
+          reasons: ["pending-stuck:source:mpd"]
+        }));
+      });
+      server.listen(0, "127.0.0.1", () => {
+        fs.writeFileSync(process.argv[1], String(server.address().port));
+      });
+      process.on("SIGTERM", () => server.close(() => process.exit(0)));
+    `,
+    heartbeatSmokePortFile
+  ], {
+    stdio: "ignore"
+  });
+  try {
+    let heartbeatSmokePort = "";
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      try {
+        heartbeatSmokePort = (await readFile(heartbeatSmokePortFile, "utf8")).trim();
+      } catch {
+        // The child writes the port after listen().
+      }
+      if (heartbeatSmokePort) break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert(/^[0-9]+$/.test(heartbeatSmokePort), "heartbeat smoke server should expose a port");
+    const watchdogDryRun = spawnSync("bash", ["deploy/chromium/tikpal-kiosk-healthcheck.sh"], {
+      cwd: ROOT,
+      env: {
+        ...process.env,
+        TIKPAL_KIOSK_WATCHDOG_STATE_DIR: mkdtempSync(path.join(tmpdir(), "tikpal-kiosk-watchdog-dry-run-")),
+        TIKPAL_KIOSK_WATCHDOG_DRY_RUN: "1",
+        TIKPAL_KIOSK_WATCHDOG_X_DISPLAY_SCAN: "0",
+        TIKPAL_KIOSK_WATCHDOG_CHROMIUM_PROCESS_SCAN: "0",
+        TIKPAL_KIOSK_WATCHDOG_WEB_URL_SCAN: "0",
+        TIKPAL_KIOSK_WATCHDOG_API_URL_SCAN: "0",
+        TIKPAL_KIOSK_WATCHDOG_GPU_LOG_SCAN: "0",
+        TIKPAL_KIOSK_WATCHDOG_PAGE_HEARTBEAT_URL: `http://127.0.0.1:${heartbeatSmokePort}/heartbeat`
+      },
+      encoding: "utf8"
+    });
+    assert(watchdogDryRun.status === 0, `watchdog dry-run unhealthy page smoke failed:\n${watchdogDryRun.stdout}\n${watchdogDryRun.stderr}`);
+    assert(watchdogDryRun.stdout.includes("page-unhealthy:pending-stuck:source:mpd"), "watchdog dry-run should include the page-unhealthy reason");
+    assert(watchdogDryRun.stdout.includes("dry-run restart suppressed"), "watchdog dry-run should suppress the real service restart");
+  } finally {
+    heartbeatSmokeServer.kill("SIGTERM");
+    await new Promise((resolve) => heartbeatSmokeServer.once("exit", resolve));
+  }
 
   const devtoolsCheck = spawnSync("bash", ["deploy/chromium/start-tikpal-kiosk-devtools-proxy.sh", "--check"], {
     cwd: ROOT,

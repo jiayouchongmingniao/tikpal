@@ -59,6 +59,8 @@ TIKPAL_CHROMIUM_BIN=/usr/lib/chromium-browser/chromium-browser
 TIKPAL_CHROMIUM_PROFILE_DIR=/home/moode/.config/tikpal-chromium-kiosk
 TIKPAL_CHROMIUM_COLOR_SCHEME=dark
 TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE=dmix:CARD=BT66,DEV=0
+TIKPAL_KIOSK_WATCHDOG_PAGE_HEARTBEAT_ENABLED=1
+TIKPAL_KIOSK_WATCHDOG_PAGE_HEARTBEAT_URL=http://127.0.0.1:8787/api/v1/kiosk/heartbeat
 TIKPAL_RENDERER=media
 TIKPAL_RENDER_PROFILE=pi4-media
 TIKPAL_PLAYER_BACKEND=mock
@@ -81,6 +83,7 @@ Renderer requirements:
 - Keep scene video rendering independent from music source playback; Scene Sound decides whether the active scene layer is audible.
 - Unmute only the active video layer when `scene` is the playback source, and keep volume synced to `system.volume.percent`.
 - On Pi, use the single-loop/stable scene path and `data-flame-video-health` to recover ordinary video-element stalls. Full X/Chromium/V3D hangs are outside React's recovery boundary and belong to the systemd kiosk watchdog.
+- Post a local kiosk heartbeat from the page and keep `/api/v1/kiosk/heartbeat` loopback-only. The watchdog can use stale heartbeats, stuck pending actions, event-loop lag, and scene-video health as a page-runtime signal without exposing that state to the portable remote API.
 - Keep future WebGL/canvas visual modes optional and isolated from the player/settings shell.
 
 Future renderer requirements:

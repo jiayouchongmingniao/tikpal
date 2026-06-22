@@ -99,6 +99,18 @@ const STATE_SNAPSHOT_REFRESH_MS_RAW = Number(process.env.TIKPAL_STATE_SNAPSHOT_R
 const STATE_SNAPSHOT_REFRESH_MS = Number.isFinite(STATE_SNAPSHOT_REFRESH_MS_RAW) && STATE_SNAPSHOT_REFRESH_MS_RAW >= 1000
   ? STATE_SNAPSHOT_REFRESH_MS_RAW
   : 3000;
+const KIOSK_HEARTBEAT_STALE_MS_RAW = Number(process.env.TIKPAL_KIOSK_HEARTBEAT_STALE_MS ?? 30_000);
+const KIOSK_HEARTBEAT_STALE_MS = Number.isFinite(KIOSK_HEARTBEAT_STALE_MS_RAW) && KIOSK_HEARTBEAT_STALE_MS_RAW >= 1_000
+  ? KIOSK_HEARTBEAT_STALE_MS_RAW
+  : 30_000;
+const KIOSK_HEARTBEAT_PENDING_STUCK_MS_RAW = Number(process.env.TIKPAL_KIOSK_HEARTBEAT_PENDING_STUCK_MS ?? 45_000);
+const KIOSK_HEARTBEAT_PENDING_STUCK_MS = Number.isFinite(KIOSK_HEARTBEAT_PENDING_STUCK_MS_RAW) && KIOSK_HEARTBEAT_PENDING_STUCK_MS_RAW >= 10_000
+  ? KIOSK_HEARTBEAT_PENDING_STUCK_MS_RAW
+  : 45_000;
+const KIOSK_HEARTBEAT_EVENT_LOOP_LAG_MS_RAW = Number(process.env.TIKPAL_KIOSK_HEARTBEAT_EVENT_LOOP_LAG_MS ?? 5_000);
+const KIOSK_HEARTBEAT_EVENT_LOOP_LAG_MS = Number.isFinite(KIOSK_HEARTBEAT_EVENT_LOOP_LAG_MS_RAW) && KIOSK_HEARTBEAT_EVENT_LOOP_LAG_MS_RAW >= 1_000
+  ? KIOSK_HEARTBEAT_EVENT_LOOP_LAG_MS_RAW
+  : 5_000;
 const AIRPLAY_DIRECT_METADATA_REFRESH_MIN_MS_RAW = Number(process.env.TIKPAL_AIRPLAY_DIRECT_METADATA_REFRESH_MIN_MS ?? 1000);
 const AIRPLAY_DIRECT_METADATA_REFRESH_MIN_MS = Number.isFinite(AIRPLAY_DIRECT_METADATA_REFRESH_MIN_MS_RAW) && AIRPLAY_DIRECT_METADATA_REFRESH_MIN_MS_RAW >= 250
   ? AIRPLAY_DIRECT_METADATA_REFRESH_MIN_MS_RAW
@@ -317,6 +329,7 @@ let mockActiveRadioStationId = "radio-1";
 let mockArmedSource = null;
 let scenePlaybackState = "stopped";
 let currentSceneVideo = { ...DEFAULT_SCENE_VIDEO };
+let kioskHeartbeat = null;
 let mockAudioArmedAt = 0;
 let mockSpotifyArmedAt = 0;
 let mockBluetoothArmedAt = 0;
@@ -455,6 +468,97 @@ function activateSceneAudio(action = {}) {
 
 function stopSceneAudio() {
   scenePlaybackState = "stopped";
+}
+
+function asPlainObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+function finiteNumber(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function setKioskHeartbeat(payload) {
+  kioskHeartbeat = {
+    receivedAtMs: Date.now(),
+    payload: asPlainObject(payload)
+  };
+  return buildKioskHeartbeatStatus();
+}
+
+function buildKioskHeartbeatStatus(now = Date.now()) {
+  const thresholds = {
+    staleMs: KIOSK_HEARTBEAT_STALE_MS,
+    pendingStuckMs: KIOSK_HEARTBEAT_PENDING_STUCK_MS,
+    eventLoopLagMs: KIOSK_HEARTBEAT_EVENT_LOOP_LAG_MS
+  };
+
+  if (!kioskHeartbeat) {
+    return {
+      ok: true,
+      healthy: false,
+      status: "unseen",
+      ageMs: null,
+      reasons: ["heartbeat-unseen"],
+      thresholds,
+      receivedAt: null,
+      heartbeat: null
+    };
+  }
+
+  const payload = asPlainObject(kioskHeartbeat.payload);
+  const ageMs = now - kioskHeartbeat.receivedAtMs;
+  const reasons = [];
+  if (ageMs > KIOSK_HEARTBEAT_STALE_MS) {
+    reasons.push("heartbeat-stale");
+  }
+
+  const status = asPlainObject(payload.status);
+  const pending = asPlainObject(status.pending);
+  const pendingDurationMs = finiteNumber(pending.durationMs);
+  if (pending.active === true && pendingDurationMs !== null && pendingDurationMs > KIOSK_HEARTBEAT_PENDING_STUCK_MS) {
+    reasons.push(`pending-stuck:${String(pending.kind ?? "unknown")}`);
+  }
+
+  const eventLoop = asPlainObject(payload.eventLoop);
+  const eventLoopLagMs = finiteNumber(eventLoop.lagMs);
+  if (eventLoopLagMs !== null && eventLoopLagMs > KIOSK_HEARTBEAT_EVENT_LOOP_LAG_MS) {
+    reasons.push("event-loop-lag");
+  }
+
+  const playback = asPlainObject(payload.playback);
+  const scene = asPlainObject(payload.scene);
+  const activeSceneVideo = asPlainObject(payload.activeSceneVideo);
+  if (playback.source === "scene" && scene.sceneVideoEnabled === true) {
+    const sceneTransitionActive = activeSceneVideo.transition === "scene"
+      && activeSceneVideo.transitionPhase
+      && activeSceneVideo.transitionPhase !== "idle";
+    if (activeSceneVideo.present === false && !sceneTransitionActive) {
+      reasons.push("scene-video-missing");
+    }
+
+    const sceneVideoHealth = String(activeSceneVideo.health ?? "");
+    if (sceneVideoHealth === "stalled" || sceneVideoHealth === "fallback" || sceneVideoHealth === "error") {
+      reasons.push(`scene-video-${sceneVideoHealth}`);
+    }
+
+    const readyState = finiteNumber(activeSceneVideo.readyState);
+    if (scene.sceneSoundEnabled === true && readyState !== null && readyState < 2) {
+      reasons.push("scene-video-not-ready");
+    }
+  }
+
+  return {
+    ok: true,
+    healthy: reasons.length === 0,
+    status: reasons.length === 0 ? "fresh" : reasons.includes("heartbeat-stale") ? "stale" : "unhealthy",
+    ageMs,
+    reasons,
+    thresholds,
+    receivedAt: new Date(kioskHeartbeat.receivedAtMs).toISOString(),
+    heartbeat: payload
+  };
 }
 
 function clampPercent(value, fallback = 0) {
@@ -6964,7 +7068,14 @@ async function applyRoomExperienceSideEffects(experience, { applyScene = false, 
     }
 
     try {
-      await applySystemAction({ type: "brightness_set", value: experience.brightnessPercent });
+      const brightnessTask = applySystemAction({ type: "brightness_set", value: experience.brightnessPercent });
+      if (API_MODE === "mpc") {
+        void brightnessTask.catch(() => {
+          // Room-mode changes should not wait on noisy or unsupported DDC/CI paths.
+        });
+      } else {
+        await brightnessTask;
+      }
     } catch {
       // Some target displays do not expose DDC/CI brightness control.
     }
@@ -7480,6 +7591,16 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "GET" && (url.pathname === "/api/v1/health" || url.pathname === "/api/v1/system/health")) {
       sendJson(response, 200, { ok: true, service: "tikpal-api", mode: API_MODE });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/v1/kiosk/heartbeat") {
+      sendJson(response, 200, setKioskHeartbeat(await readJson(request)));
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/v1/kiosk/heartbeat") {
+      sendJson(response, 200, buildKioskHeartbeatStatus());
       return;
     }
 

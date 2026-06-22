@@ -24,6 +24,13 @@ fi
 : "${TIKPAL_KIOSK_WATCHDOG_LOG_TIMEOUT_SECONDS:=3}"
 : "${TIKPAL_KIOSK_WATCHDOG_RESTART_TIMEOUT_SECONDS:=20}"
 : "${TIKPAL_KIOSK_WATCHDOG_GPU_LOG_SCAN:=1}"
+: "${TIKPAL_KIOSK_WATCHDOG_X_DISPLAY_SCAN:=1}"
+: "${TIKPAL_KIOSK_WATCHDOG_CHROMIUM_PROCESS_SCAN:=1}"
+: "${TIKPAL_KIOSK_WATCHDOG_WEB_URL_SCAN:=1}"
+: "${TIKPAL_KIOSK_WATCHDOG_API_URL_SCAN:=1}"
+: "${TIKPAL_KIOSK_WATCHDOG_PAGE_HEARTBEAT_ENABLED:=1}"
+: "${TIKPAL_KIOSK_WATCHDOG_PAGE_HEARTBEAT_URL:=http://127.0.0.1:8787/api/v1/kiosk/heartbeat}"
+: "${TIKPAL_KIOSK_WATCHDOG_DRY_RUN:=0}"
 : "${TIKPAL_KIOSK_WATCHDOG_SERVICE:=tikpal-kiosk.service}"
 : "${TIKPAL_KIOSK_WATCHDOG_API_URL:=http://127.0.0.1:8787/api/v1/health}"
 : "${TIKPAL_KIOSK_URL:=http://localhost:4173/}"
@@ -76,6 +83,13 @@ print_check() {
   log "reboot after restarts: $TIKPAL_KIOSK_WATCHDOG_REBOOT_AFTER_RESTARTS"
   log "reboot window: ${TIKPAL_KIOSK_WATCHDOG_REBOOT_WINDOW_SECONDS}s"
   log "gpu log scan: $TIKPAL_KIOSK_WATCHDOG_GPU_LOG_SCAN"
+  log "x display scan: $TIKPAL_KIOSK_WATCHDOG_X_DISPLAY_SCAN"
+  log "chromium process scan: $TIKPAL_KIOSK_WATCHDOG_CHROMIUM_PROCESS_SCAN"
+  log "web url scan: $TIKPAL_KIOSK_WATCHDOG_WEB_URL_SCAN"
+  log "api url scan: $TIKPAL_KIOSK_WATCHDOG_API_URL_SCAN"
+  log "page heartbeat enabled: $TIKPAL_KIOSK_WATCHDOG_PAGE_HEARTBEAT_ENABLED"
+  log "page heartbeat url: $TIKPAL_KIOSK_WATCHDOG_PAGE_HEARTBEAT_URL"
+  log "dry run: $TIKPAL_KIOSK_WATCHDOG_DRY_RUN"
 
   [[ -d "$APP_DIR/deploy/chromium" ]] || {
     log "ERROR: missing deploy/chromium under $APP_DIR"
@@ -194,6 +208,59 @@ check_http_url() {
     curl -fsS --max-time "$TIKPAL_KIOSK_WATCHDOG_WEB_TIMEOUT_SECONDS" "$url" >/dev/null 2>&1
 }
 
+sanitize_reason_detail() {
+  printf '%s' "$1" | tr -c 'A-Za-z0-9_.:-' '_' | cut -c 1-120
+}
+
+page_heartbeat_detail=""
+check_page_heartbeat() {
+  page_heartbeat_detail=""
+  is_enabled "$TIKPAL_KIOSK_WATCHDOG_PAGE_HEARTBEAT_ENABLED" || return 0
+  command -v curl >/dev/null 2>&1 || return 0
+
+  local body
+  if ! body="$(
+    run_with_timeout "$TIKPAL_KIOSK_WATCHDOG_WEB_TIMEOUT_SECONDS" \
+      curl -fsS --max-time "$TIKPAL_KIOSK_WATCHDOG_WEB_TIMEOUT_SECONDS" \
+      "$TIKPAL_KIOSK_WATCHDOG_PAGE_HEARTBEAT_URL" 2>/dev/null
+  )"; then
+    page_heartbeat_detail="heartbeat-request-failed"
+    return 1
+  fi
+
+  if command -v node >/dev/null 2>&1; then
+    local result
+    local status
+    set +e
+    result="$(
+      PAGE_HEARTBEAT_BODY="$body" node -e '
+        const data = JSON.parse(process.env.PAGE_HEARTBEAT_BODY || "{}");
+        if (data.healthy === true) {
+          console.log("healthy");
+          process.exit(0);
+        }
+        const reasons = Array.isArray(data.reasons) ? data.reasons.join("+") : "";
+        console.log(reasons || data.status || "heartbeat-unhealthy");
+        process.exit(1);
+      ' 2>/dev/null
+    )"
+    status="$?"
+    set -e
+    if [[ "$status" -eq 0 ]]; then
+      return 0
+    fi
+    page_heartbeat_detail="$(sanitize_reason_detail "$result")"
+    return 1
+  fi
+
+  if printf '%s\n' "$body" | grep -Eq '"healthy"[[:space:]]*:[[:space:]]*true'; then
+    return 0
+  fi
+
+  page_heartbeat_detail="heartbeat-unhealthy"
+  return 1
+}
+
 check_gpu_log() {
   is_enabled "$TIKPAL_KIOSK_WATCHDOG_GPU_LOG_SCAN" || return 0
   command -v journalctl >/dev/null 2>&1 || return 0
@@ -229,12 +296,17 @@ restart_kiosk() {
   local now
   now="$(date +%s)"
 
+  write_state_number "$TIKPAL_KIOSK_WATCHDOG_STATE_DIR/last-restart-epoch" "$now"
+  if is_enabled "$TIKPAL_KIOSK_WATCHDOG_DRY_RUN"; then
+    log "dry-run restart suppressed for $service: $reason"
+    return 0
+  fi
+
   if ! command -v systemctl >/dev/null 2>&1; then
     log "unhealthy: $reason; systemctl is unavailable"
     return 1
   fi
 
-  write_state_number "$TIKPAL_KIOSK_WATCHDOG_STATE_DIR/last-restart-epoch" "$now"
   log "restarting $service: $reason"
 
   if run_with_timeout "$TIKPAL_KIOSK_WATCHDOG_RESTART_TIMEOUT_SECONDS" systemctl restart "$service"; then
@@ -301,10 +373,19 @@ maybe_reboot_for_persistent_display_failure() {
 
 reasons=()
 
-check_x_display || reasons+=("x-unresponsive")
-check_chromium_process || reasons+=("chromium-missing")
-check_http_url "$TIKPAL_KIOSK_URL" || reasons+=("web-unhealthy")
-check_http_url "$TIKPAL_KIOSK_WATCHDOG_API_URL" || reasons+=("api-unhealthy")
+if is_enabled "$TIKPAL_KIOSK_WATCHDOG_X_DISPLAY_SCAN"; then
+  check_x_display || reasons+=("x-unresponsive")
+fi
+if is_enabled "$TIKPAL_KIOSK_WATCHDOG_CHROMIUM_PROCESS_SCAN"; then
+  check_chromium_process || reasons+=("chromium-missing")
+fi
+if is_enabled "$TIKPAL_KIOSK_WATCHDOG_WEB_URL_SCAN"; then
+  check_http_url "$TIKPAL_KIOSK_URL" || reasons+=("web-unhealthy")
+fi
+if is_enabled "$TIKPAL_KIOSK_WATCHDOG_API_URL_SCAN"; then
+  check_http_url "$TIKPAL_KIOSK_WATCHDOG_API_URL" || reasons+=("api-unhealthy")
+fi
+check_page_heartbeat || reasons+=("page-unhealthy${page_heartbeat_detail:+:$page_heartbeat_detail}")
 check_gpu_log || reasons+=("v3d-reset")
 
 failure_file="$TIKPAL_KIOSK_WATCHDOG_STATE_DIR/failure-count"

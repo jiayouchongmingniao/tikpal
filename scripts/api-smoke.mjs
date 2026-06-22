@@ -173,6 +173,33 @@ function runAccessControlHelperSmoke() {
     "direct 8787 remote access should keep blocking full kiosk writes"
   );
   assert(
+    getTikpalApiAccessDecision({
+      method: "GET",
+      pathname: "/api/v1/kiosk/heartbeat",
+      remoteAddress: "192.168.10.44",
+      portableApiKey: PORTABLE_API_KEY
+    }).allowed === false,
+    "direct 8787 remote access should block kiosk heartbeat reads"
+  );
+  assert(
+    getTikpalApiAccessDecision({
+      method: "POST",
+      pathname: "/api/v1/kiosk/heartbeat",
+      remoteAddress: "192.168.10.44",
+      portableApiKey: PORTABLE_API_KEY
+    }).allowed === false,
+    "direct 8787 remote access should block kiosk heartbeat writes"
+  );
+  assert(
+    getTikpalApiAccessDecision({
+      method: "POST",
+      pathname: "/api/v1/kiosk/heartbeat",
+      remoteAddress: "::ffff:127.0.0.1",
+      portableApiKey: PORTABLE_API_KEY
+    }).allowed === true,
+    "loopback kiosk heartbeat writes should stay allowed"
+  );
+  assert(
     getTikpalWebProxyApiAccessDecision({
       method: "POST",
       pathname: "/api/v1/audio/source",
@@ -181,6 +208,16 @@ function runAccessControlHelperSmoke() {
       allowRemoteUiApi: "0"
     }).allowed === false,
     "web proxy should reuse portable remote limits until remote UI API is enabled"
+  );
+  assert(
+    getTikpalWebProxyApiAccessDecision({
+      method: "GET",
+      pathname: "/api/v1/kiosk/heartbeat",
+      remoteAddress: "192.168.10.44",
+      portableApiKey: PORTABLE_API_KEY,
+      allowRemoteUiApi: "0"
+    }).allowed === false,
+    "web proxy should not expose kiosk heartbeat to portable clients"
   );
   assert(
     getTikpalWebProxyApiAccessDecision({
@@ -1462,6 +1499,7 @@ async function run() {
       TIKPAL_API_HOST: HOST,
       TIKPAL_API_PORT: String(PORT),
       TIKPAL_PORTABLE_API_KEY: PORTABLE_API_KEY,
+      TIKPAL_KIOSK_HEARTBEAT_STALE_MS: "1000",
       TIKPAL_PUBLIC_ASSETS_ROOT: apiAssetsRoot,
       TIKPAL_MUSIC_LIBRARY_STATE_PATH: musicLibraryStatePath,
       TIKPAL_ROOM_EXPERIENCE_STATE_PATH: roomExperienceStatePath,
@@ -1519,6 +1557,98 @@ async function run() {
     assert(initial.body.system.dspState.presetLabel === "Flat", "DSP state should reflect the default Hi-Fi EQ preset label");
     assert(initial.body.system.dspState.controllable === true, "mock DSP state should be controllable");
     assert(initial.body.system.dspState.availablePresets.length === 3, "DSP state should expose the three built-in Hi-Fi EQ presets");
+
+    const unseenHeartbeat = await request("/api/v1/kiosk/heartbeat");
+    assert(unseenHeartbeat.response.ok, "kiosk heartbeat read should return 200 before the first heartbeat");
+    assert(unseenHeartbeat.body.status === "unseen", "kiosk heartbeat should start unseen");
+    assert(unseenHeartbeat.body.healthy === false, "unseen kiosk heartbeat should be unhealthy");
+    assert(unseenHeartbeat.body.reasons.includes("heartbeat-unseen"), "unseen kiosk heartbeat should explain the missing page heartbeat");
+
+    const healthyHeartbeatPayload = {
+      clientSentAtMs: Date.now(),
+      pageMode: "ambient",
+      room: { mode: "calm", phase: "idle" },
+      playback: { source: "scene", state: "playing", title: "Scene Audio" },
+      source: { current: "scene" },
+      scene: {
+        videoId: "rainy-window",
+        activeVideoId: "rainy-window",
+        sceneSoundEnabled: true,
+        sceneVideoEnabled: true
+      },
+      status: {
+        lastSystemStateSuccessAtMs: Date.now(),
+        lastRoomStateSuccessAtMs: Date.now(),
+        pending: { active: false, kind: null, sinceMs: null, durationMs: null }
+      },
+      eventLoop: { lagMs: 4 },
+      activeSceneVideo: {
+        present: true,
+        src: "/assets/scenes/Rainy-Window.mp4",
+        currentTime: 2.4,
+        readyState: 4,
+        health: "ok",
+        frameReady: "true"
+      }
+    };
+    const postedHeartbeat = await request("/api/v1/kiosk/heartbeat", {
+      method: "POST",
+      body: JSON.stringify(healthyHeartbeatPayload)
+    });
+    assert(postedHeartbeat.response.ok, "kiosk heartbeat write should return 200");
+    assert(postedHeartbeat.body.status === "fresh", "fresh kiosk heartbeat should report fresh");
+    assert(postedHeartbeat.body.healthy === true, "healthy kiosk heartbeat should be healthy");
+    const freshHeartbeat = await request("/api/v1/kiosk/heartbeat");
+    assert(freshHeartbeat.body.healthy === true, "kiosk heartbeat read should return the latest healthy heartbeat");
+
+    const pendingHeartbeat = await request("/api/v1/kiosk/heartbeat", {
+      method: "POST",
+      body: JSON.stringify({
+        ...healthyHeartbeatPayload,
+        status: {
+          ...healthyHeartbeatPayload.status,
+          pending: { active: true, kind: "source:mpd", sinceMs: Date.now() - 60000, durationMs: 60000 }
+        }
+      })
+    });
+    assert(pendingHeartbeat.body.healthy === false, "stuck pending kiosk heartbeat should be unhealthy");
+    assert(pendingHeartbeat.body.reasons.some((reason) => reason.startsWith("pending-stuck:source:mpd")), "stuck pending heartbeat should include the action kind");
+
+    const fallbackHeartbeat = await request("/api/v1/kiosk/heartbeat", {
+      method: "POST",
+      body: JSON.stringify({
+        ...healthyHeartbeatPayload,
+        activeSceneVideo: {
+          ...healthyHeartbeatPayload.activeSceneVideo,
+          health: "fallback"
+        }
+      })
+    });
+    assert(fallbackHeartbeat.body.healthy === false, "scene fallback heartbeat should be unhealthy");
+    assert(fallbackHeartbeat.body.reasons.includes("scene-video-fallback"), "scene fallback heartbeat should expose scene-video-fallback");
+
+    const transitionHeartbeat = await request("/api/v1/kiosk/heartbeat", {
+      method: "POST",
+      body: JSON.stringify({
+        ...healthyHeartbeatPayload,
+        activeSceneVideo: {
+          present: false,
+          scenePresent: true,
+          transition: "scene",
+          transitionPhase: "dimming"
+        }
+      })
+    });
+    assert(transitionHeartbeat.body.healthy === true, "scene transition heartbeat should not be treated as a missing-video failure");
+
+    await request("/api/v1/kiosk/heartbeat", {
+      method: "POST",
+      body: JSON.stringify(healthyHeartbeatPayload)
+    });
+    await wait(1100);
+    const staleHeartbeat = await request("/api/v1/kiosk/heartbeat");
+    assert(staleHeartbeat.body.status === "stale", "old kiosk heartbeat should become stale");
+    assert(staleHeartbeat.body.reasons.includes("heartbeat-stale"), "stale kiosk heartbeat should expose heartbeat-stale");
 
     const sceneContext = await request("/api/v1/scene/context?timeZone=Europe/London");
     assert(sceneContext.response.ok, "scene context should return 200");

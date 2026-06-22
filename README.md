@@ -114,6 +114,12 @@ npm run test:kiosk
 
 The smoke test checks the production static server path, systemd templates, kiosk launcher, watchdog timer, managed policy files, and `launch-tikpal-kiosk.sh --check`.
 
+## Scene Video Stability
+
+Scene Video is optimized for the Pi kiosk path: imported scene MP4s are normalized to Pi-friendly H.264, the foreground video layer waits for a drawable frame before reveal, and `FlameScene` exposes `data-flame-video-health` for ordinary video-element stalls. The browser page also posts a loopback-only kiosk heartbeat to `POST /api/v1/kiosk/heartbeat` about every 10 seconds with room mode, playback/source state, pending actions, event-loop lag, and active scene-video health.
+
+`GET /api/v1/kiosk/heartbeat` is intentionally local-only and is not part of the portable remote API. The systemd kiosk watchdog reads it from `127.0.0.1`; stale heartbeats, stuck pending actions, high page event-loop lag, or scene-video stall/fallback health are treated as `page-unhealthy` and recover by restarting only `tikpal-kiosk.service`.
+
 ## Raspberry Pi Deploy
 
 Build locally, sync the repo to the Pi, and install the services from the repo-owned deploy package:

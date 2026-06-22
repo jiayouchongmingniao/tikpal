@@ -563,17 +563,29 @@ sudo systemctl start tikpal-kiosk.service
 
 If Scene Video is still `playing` in the API but the physical kiosk frame is frozen after hours of unattended playback, treat it as a display-stack problem before changing React video code. The high-signal pattern is: API reads stay fast, temperature and memory are normal, `xdpyinfo` on `DISPLAY=:0` times out, and kernel logs show `v3d`, `drm_sched_job_timedout`, or `Resetting GPU for hang`.
 
+There is one separate long-run failure mode: X11 and Chromium are still alive, but the React page stops consuming state or events. In that case `/api/v1/health`, `/api/v1/system/runtime`, and `xdpyinfo` can all look healthy while source changes, Focus/Calm/Sleep/Hi-Fi, or scene switching no longer work. The kiosk page reports a loopback-only heartbeat so the watchdog can distinguish this page-semi-dead state from a full display-stack hang.
+
 Use bounded probes only; avoid periodic `xrandr --query` or `ffmpeg x11grab` because they can hang behind the same X/V3D failure:
 
 ```bash
 curl --max-time 3 -fsS http://127.0.0.1:8787/api/v1/health
 curl --max-time 5 -fsS http://127.0.0.1:8787/api/v1/system/runtime
 curl --max-time 5 -fsS http://127.0.0.1:8787/api/v1/playback/status
+curl --max-time 3 -fsS http://127.0.0.1:8787/api/v1/kiosk/heartbeat | jq '{healthy,status,ageMs,reasons,scene:.heartbeat.scene,statusDetail:.heartbeat.status,eventLoop:.heartbeat.eventLoop,video:.heartbeat.activeSceneVideo}'
 timeout -k 2s 5s env DISPLAY=:0 xdpyinfo >/dev/null && echo "X display responsive"
 dmesg -T | grep -Ei 'v3d|drm_sched|gpu reset|Resetting GPU' | tail -40
 journalctl -u tikpal-kiosk-watchdog.service -u tikpal-kiosk.service -b --no-pager | tail -120
 pgrep -af 'ffmpeg .*x11grab|xdpyinfo|xrandr' || true
 ```
+
+Interpret the heartbeat this way:
+
+- `status:"unseen"` means the API has not received a page heartbeat since restart. This is expected briefly while Chromium starts, but not after the kiosk has been visible for more than about 30 seconds.
+- `status:"stale"` or reason `heartbeat-stale` means the page stopped posting heartbeats. If X is still responsive, this is the typical Chromium page semi-dead signature.
+- `pending-stuck:<kind>` means the page believes a source, room, playback, system, or Scene Sound action has been pending past the watchdog threshold.
+- `event-loop-lag` means the page event loop is badly delayed even though the process still exists.
+- `scene-video-stalled`, `scene-video-fallback`, or `scene-video-error` means the front-end video watchdog already detected a local media failure and the kiosk watchdog should refresh the page process if it persists.
+- Remote LAN or portable-controller callers should not be able to read this endpoint; it is intentionally loopback-only and outside `/api/v1/remote/*`.
 
 The watchdog timer is installed with `--enable-kiosk` and should stay enabled for unattended scene playback:
 
@@ -581,10 +593,13 @@ The watchdog timer is installed with `--enable-kiosk` and should stay enabled fo
 systemctl is-active tikpal-kiosk-watchdog.timer
 systemctl list-timers tikpal-kiosk-watchdog.timer
 sudo systemctl start tikpal-kiosk-watchdog.service
+sudo deploy/chromium/tikpal-kiosk-healthcheck.sh --check
 journalctl -u tikpal-kiosk-watchdog.service -n 80 --no-pager
 ```
 
-When the watchdog finds `x-unresponsive`, `chromium-missing`, `web-unhealthy`, `api-unhealthy`, or a new `v3d-reset`, it first restarts only `tikpal-kiosk.service`. If the normal restart times out because Chromium or Xorg is stuck in `deactivating`, it kills that service cgroup, resets the failed state, and starts the kiosk again. API, web, MPD, and moOde audio services are left alone during normal display recovery, so Scene Sound and source truth survive a kiosk restart.
+When the watchdog finds `x-unresponsive`, `chromium-missing`, `web-unhealthy`, `api-unhealthy`, `page-unhealthy:<reason>`, or a new `v3d-reset`, it first restarts only `tikpal-kiosk.service`. If the normal restart times out because Chromium or Xorg is stuck in `deactivating`, it kills that service cgroup, resets the failed state, and starts the kiosk again. API, web, MPD, and moOde audio services are left alone during normal display/page recovery, so Scene Sound and source truth survive a kiosk restart.
+
+`page-unhealthy` is intentionally kiosk-only recovery. It does not trigger reboot escalation by itself because it points at a page runtime failure, not a wedged KMS/GPU stack.
 
 If the kernel GPU/KMS state is wedged hard enough that Xorg restarts but never reaches Chromium, repeated kiosk restarts are not enough. `TIKPAL_KIOSK_WATCHDOG_REBOOT_AFTER_RESTARTS=3` allows the watchdog to reboot the Pi only after repeated `x-unresponsive` or `v3d-reset` display-stack failures within `TIKPAL_KIOSK_WATCHDOG_REBOOT_WINDOW_SECONDS=900`. Set it to `0` to disable reboot escalation while debugging.
 
@@ -595,6 +610,7 @@ systemctl is-active tikpal-api.service tikpal-web.service tikpal-kiosk.service t
 timeout -k 2s 5s env DISPLAY=:0 xdpyinfo >/dev/null && echo "X display responsive"
 pgrep -af 'ffmpeg .*x11grab|xdpyinfo|xrandr' || true
 curl --max-time 5 -fsS http://127.0.0.1:8787/api/v1/playback/status
+curl --max-time 3 -fsS http://127.0.0.1:8787/api/v1/kiosk/heartbeat | jq '{healthy,status,ageMs,reasons}'
 ```
 
 ## Pi Resource Triage

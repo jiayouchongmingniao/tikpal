@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AmbientScreen } from "./components/AmbientScreen";
 import { PlayerOverlay } from "./components/PlayerOverlay";
 import { PlaylistOverlay } from "./components/PlaylistOverlay";
@@ -10,6 +10,7 @@ import { useBrowserKioskGuard } from "./hooks/useBrowserKioskGuard";
 import { useKioskGestures } from "./hooks/useKioskGestures";
 import { useRoomExperience } from "./hooks/useRoomExperience";
 import { useTikpalState } from "./hooks/useTikpalState";
+import { sendKioskHeartbeat } from "./api/tikpalClient";
 import type { AppMode, BackgroundVideoSummary, FontTheme, LyricsFontSize, RoomExperienceActionRequest, RoomMode, SourceSwitchTarget, SurfaceTheme, TikpalState } from "./types";
 
 const FONT_THEME_STORAGE_KEY = "tikpal.fontTheme";
@@ -20,6 +21,8 @@ const SCENE_VIDEO_ENABLED_STORAGE_KEY = "tikpal.sceneVideoEnabled";
 const CLOCK_VISIBLE_STORAGE_KEY = "tikpal.clockVisible";
 const EXTERNAL_HANDOFF_TIMEOUT_MS = 60_000;
 const EXTERNAL_HANDOFF_POLL_MS = 1_000;
+const KIOSK_HEARTBEAT_MS = 10_000;
+const EVENT_LOOP_LAG_SAMPLE_MS = 1_000;
 const SOURCE_SWITCH_TARGETS = new Set<SourceSwitchTarget>(["mpd", "audio", "scene", "radio", "spotify", "bluetooth", "airplay", "upnp"]);
 const EXTERNAL_HANDOFF_TARGETS = new Set<SourceSwitchTarget>(["spotify", "bluetooth", "airplay", "upnp"]);
 
@@ -125,6 +128,40 @@ function getRollbackSourceTarget(state: TikpalState): SourceSwitchTarget {
   return currentSource.id;
 }
 
+function readActiveSceneVideoSnapshot() {
+  const scene = document.querySelector(".flame-scene");
+  const video = document.querySelector("video.flame-video.is-active")
+    ?? document.querySelector("video.flame-video[data-flame-layer=\"active\"][data-flame-loop-role=\"active\"]")
+    ?? document.querySelector(".flame-video-layer.is-active video.flame-video");
+  if (!(video instanceof HTMLVideoElement)) {
+    return {
+      present: false,
+      scenePresent: Boolean(scene),
+      transition: scene?.getAttribute("data-flame-transition") ?? null,
+      transitionPhase: scene?.getAttribute("data-flame-transition-phase") ?? null,
+      sceneClass: scene?.className ?? null
+    };
+  }
+
+  return {
+    present: true,
+    scenePresent: Boolean(scene),
+    transition: scene?.getAttribute("data-flame-transition") ?? null,
+    transitionPhase: scene?.getAttribute("data-flame-transition-phase") ?? null,
+    src: video.currentSrc || video.src || null,
+    currentTime: Number.isFinite(video.currentTime) ? video.currentTime : null,
+    duration: Number.isFinite(video.duration) ? video.duration : null,
+    readyState: video.readyState,
+    networkState: video.networkState,
+    paused: video.paused,
+    ended: video.ended,
+    muted: video.muted,
+    health: video.dataset.flameVideoHealth ?? null,
+    frameReady: video.dataset.flameFrameReady ?? null,
+    sceneVolume: Number.isFinite(Number(video.dataset.sceneVolume)) ? Number(video.dataset.sceneVolume) : null
+  };
+}
+
 export default function App() {
   const [now, setNow] = useState(() => new Date());
   const [fontTheme, setFontTheme] = useState<FontTheme>(readInitialFontTheme);
@@ -138,15 +175,157 @@ export default function App() {
   const [ambientSourcePickerOpen, setAmbientSourcePickerOpen] = useState(false);
   const [startupChooserVisible, setStartupChooserVisible] = useState(() => readInitialMode() === "ambient");
   const [activeSceneVideo, setActiveSceneVideo] = useState<BackgroundVideoSummary>(DEFAULT_SCENE_VIDEO);
+  const sceneSoundPendingSinceRef = useRef<number | null>(null);
+  const eventLoopLagRef = useRef(0);
+  const heartbeatStateRef = useRef<Record<string, unknown>>({});
   const { mode, hudVisible, idleTotalMs, idleRemainingMs, showHud, toggleHud, changeMode, returnAmbient, resetIdleTimer } = useAppMode(readInitialMode());
   const { state: tikpalState, status: tikpalStatus, refresh, sendPlaybackAction, sendSystemAction, sendSourceSwitch } = useTikpalState();
-  const { experience: roomExperience, refresh: refreshRoomExperience, sendExperienceAction } = useRoomExperience();
+  const { experience: roomExperience, status: roomExperienceStatus, refresh: refreshRoomExperience, sendExperienceAction } = useRoomExperience();
 
   useBrowserKioskGuard();
 
   useEffect(() => {
     const interval = window.setInterval(() => setNow(new Date()), 1000);
     return () => window.clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    let expectedAt = window.performance.now() + EVENT_LOOP_LAG_SAMPLE_MS;
+    const interval = window.setInterval(() => {
+      const nowMs = window.performance.now();
+      eventLoopLagRef.current = Math.max(0, nowMs - expectedAt);
+      expectedAt = nowMs + EVENT_LOOP_LAG_SAMPLE_MS;
+    }, EVENT_LOOP_LAG_SAMPLE_MS);
+
+    return () => window.clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    heartbeatStateRef.current = {
+      mode,
+      roomMode: roomExperience.mode,
+      roomPhase: roomExperience.phase,
+      roomUpdatedAt: roomExperience.updatedAt,
+      sceneVideoId: roomExperience.sceneVideoId,
+      sceneSoundEnabled: roomExperience.sceneSoundEnabled,
+      sceneVideoEnabled,
+      playbackSource: tikpalState.playback.source,
+      playbackState: tikpalState.playback.state,
+      playbackTitle: tikpalState.playback.title,
+      audioSourceId: tikpalState.audio.currentSource.id,
+      activeSceneVideoId: activeSceneVideo.id,
+      activeSceneVideoLabel: activeSceneVideo.label,
+      activeSceneVideoSrc: activeSceneVideo.src,
+      tikpalStatus,
+      roomExperienceStatus,
+      sceneSoundPending,
+      sceneSoundPendingSinceMs: sceneSoundPendingSinceRef.current
+    };
+  });
+
+  useEffect(() => {
+    function buildPendingSnapshot(nowMs: number) {
+      const snapshot = heartbeatStateRef.current;
+      const sceneSoundPendingSnapshot = snapshot.sceneSoundPending === true;
+      const sceneSoundPendingSinceMs = typeof snapshot.sceneSoundPendingSinceMs === "number"
+        ? snapshot.sceneSoundPendingSinceMs
+        : null;
+      const tikpalStatusSnapshot = snapshot.tikpalStatus as typeof tikpalStatus | undefined;
+      const roomStatusSnapshot = snapshot.roomExperienceStatus as typeof roomExperienceStatus | undefined;
+
+      if (sceneSoundPendingSnapshot) {
+        return {
+          active: true,
+          kind: "scene_sound",
+          sinceMs: sceneSoundPendingSinceMs,
+          durationMs: sceneSoundPendingSinceMs ? nowMs - sceneSoundPendingSinceMs : null
+        };
+      }
+
+      if (tikpalStatusSnapshot?.pending) {
+        const sinceMs = tikpalStatusSnapshot.pendingSinceMs;
+        return {
+          active: true,
+          kind: tikpalStatusSnapshot.pendingAction ?? "tikpal",
+          sinceMs,
+          durationMs: sinceMs ? nowMs - sinceMs : null
+        };
+      }
+
+      if (roomStatusSnapshot?.pending) {
+        const sinceMs = roomStatusSnapshot.pendingSinceMs;
+        return {
+          active: true,
+          kind: roomStatusSnapshot.pendingAction ?? "experience",
+          sinceMs,
+          durationMs: sinceMs ? nowMs - sinceMs : null
+        };
+      }
+
+      return {
+        active: false,
+        kind: null,
+        sinceMs: null,
+        durationMs: null
+      };
+    }
+
+    function postHeartbeat() {
+      const nowMs = Date.now();
+      const snapshot = heartbeatStateRef.current;
+      const tikpalStatusSnapshot = snapshot.tikpalStatus as typeof tikpalStatus | undefined;
+      const roomStatusSnapshot = snapshot.roomExperienceStatus as typeof roomExperienceStatus | undefined;
+
+      void sendKioskHeartbeat({
+        clientSentAtMs: nowMs,
+        path: window.location.pathname,
+        visibility: document.visibilityState,
+        pageMode: snapshot.mode ?? "ambient",
+        room: {
+          mode: snapshot.roomMode ?? "calm",
+          phase: snapshot.roomPhase ?? "idle",
+          updatedAt: snapshot.roomUpdatedAt ?? null
+        },
+        playback: {
+          source: snapshot.playbackSource ?? null,
+          state: snapshot.playbackState ?? null,
+          title: snapshot.playbackTitle ?? null
+        },
+        source: {
+          current: snapshot.audioSourceId ?? null
+        },
+        scene: {
+          videoId: snapshot.sceneVideoId ?? null,
+          activeVideoId: snapshot.activeSceneVideoId ?? null,
+          activeVideoLabel: snapshot.activeSceneVideoLabel ?? null,
+          activeVideoSrc: snapshot.activeSceneVideoSrc ?? null,
+          sceneSoundEnabled: snapshot.sceneSoundEnabled === true,
+          sceneVideoEnabled: snapshot.sceneVideoEnabled === true
+        },
+        status: {
+          systemStateSource: tikpalStatusSnapshot?.source ?? "fallback",
+          systemStateError: tikpalStatusSnapshot?.error ?? null,
+          lastSystemStateSuccessAtMs: tikpalStatusSnapshot?.lastSuccessAtMs ?? null,
+          roomStateSource: roomStatusSnapshot?.source ?? "fallback",
+          roomStateError: roomStatusSnapshot?.error ?? null,
+          lastRoomStateSuccessAtMs: roomStatusSnapshot?.lastSuccessAtMs ?? null,
+          pending: buildPendingSnapshot(nowMs)
+        },
+        eventLoop: {
+          lagMs: eventLoopLagRef.current
+        },
+        activeSceneVideo: readActiveSceneVideoSnapshot()
+      }).catch(() => {
+        // The kiosk watchdog treats stale heartbeats as unhealthy; the UI should not surface this.
+      });
+    }
+
+    const initialTimer = window.setTimeout(postHeartbeat, 1500);
+    const interval = window.setInterval(postHeartbeat, KIOSK_HEARTBEAT_MS);
+    return () => {
+      window.clearTimeout(initialTimer);
+      window.clearInterval(interval);
+    };
   }, []);
 
   useEffect(() => {
@@ -242,6 +421,7 @@ export default function App() {
     if (enabled && roomExperience.mode === "hifi") {
       return;
     }
+    sceneSoundPendingSinceRef.current = Date.now();
     setSceneSoundPending(true);
 
     try {
@@ -256,6 +436,7 @@ export default function App() {
     } catch {
       // The next API refresh will surface the backend error state if the Pi rejects the switch.
     } finally {
+      sceneSoundPendingSinceRef.current = null;
       setSceneSoundPending(false);
     }
   }

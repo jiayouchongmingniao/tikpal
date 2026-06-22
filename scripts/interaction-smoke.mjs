@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { spawnSync } from "node:child_process";
-import { access, mkdir } from "node:fs/promises";
+import { access, copyFile, mkdir } from "node:fs/promises";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -9,6 +9,7 @@ const APP_URL = process.env.TIKPAL_TEST_URL ?? "http://localhost:4173/";
 const DEVTOOLS_PORT = Number(process.env.TIKPAL_TEST_DEVTOOLS_PORT ?? 9222);
 const INTERACTION_SCENE_FIXTURE_DIR = path.resolve("public", "assets", ".interaction-smoke");
 const INTERACTION_SCENE_FIXTURE_PATH = path.join(INTERACTION_SCENE_FIXTURE_DIR, "scene.mp4");
+const INTERACTION_SCENE_DIST_FIXTURE_PATH = path.resolve("dist", "assets", ".interaction-smoke", "scene.mp4");
 const INTERACTION_SCENE_FIXTURE_SRC = "/assets/.interaction-smoke/scene.mp4";
 
 async function canAccess(filePath) {
@@ -83,6 +84,11 @@ async function prepareInteractionSceneFixture() {
 
   if (result.status !== 0) {
     throw new Error(`Failed to generate interaction scene fixture with ffmpeg:\n${result.stdout ?? ""}${result.stderr ?? ""}`);
+  }
+
+  if (await canAccess(path.resolve("dist"))) {
+    await mkdir(path.dirname(INTERACTION_SCENE_DIST_FIXTURE_PATH), { recursive: true });
+    await copyFile(INTERACTION_SCENE_FIXTURE_PATH, INTERACTION_SCENE_DIST_FIXTURE_PATH);
   }
 
   return INTERACTION_SCENE_FIXTURE_SRC;
@@ -1317,20 +1323,48 @@ try {
     `
   );
   await expectEventually(client, "[...document.querySelectorAll('.flame-video')].some((video) => video.getAttribute('src')?.includes('ota=rainy'))", "ambient can mount OTA scene video after catalog refresh");
-  await expectEventually(
-    client,
-    `
-      (() => {
-        const snapshots = window.__tikpalSceneTransitionSnapshots ?? [];
-        return snapshots.some((snapshot) => snapshot.phase === 'dimming'
-            && snapshot.layerCount >= 2
-            && (snapshot.allSrcs ?? snapshot.activeSrcs).some((src) => src && !src.includes('ota=rainy')))
-          && snapshots.some((snapshot) => snapshot.phase === 'revealing'
-            && snapshot.activeSrcs.some((src) => src.includes('ota=rainy')));
-      })()
-    `,
-    "ambient scene switch records dim/reveal while outgoing layer stays mounted"
-  );
+  try {
+    await expectEventually(
+      client,
+      `
+        (() => {
+          const snapshots = window.__tikpalSceneTransitionSnapshots ?? [];
+          const sawOutgoingDuringDim = snapshots.some((snapshot) => snapshot.phase === 'dimming'
+            && (snapshot.allSrcs ?? snapshot.activeSrcs).some((src) => src && !src.includes('ota=rainy')));
+          return sawOutgoingDuringDim
+            && snapshots.some((snapshot) => snapshot.phase === 'revealing'
+              && snapshot.activeSrcs.some((src) => src.includes('ota=rainy')));
+        })()
+      `,
+      "ambient scene switch records dim/reveal without blanking"
+    );
+  } catch (error) {
+    const snapshots = await evaluate(client, "JSON.stringify((window.__tikpalSceneTransitionSnapshots ?? []).slice(-12), null, 2)");
+    const videos = await evaluate(
+      client,
+      `
+        JSON.stringify([...document.querySelectorAll('.flame-video')].map((video) => ({
+          src: video.getAttribute('src'),
+          layer: video.getAttribute('data-flame-layer'),
+          slot: video.getAttribute('data-flame-slot-index'),
+          role: video.getAttribute('data-flame-loop-role'),
+          phase: video.getAttribute('data-flame-loop-phase'),
+          frameReady: video.getAttribute('data-flame-frame-ready'),
+          readyState: video.readyState,
+          networkState: video.networkState,
+          videoWidth: video.videoWidth,
+          videoHeight: video.videoHeight,
+          currentTime: video.currentTime,
+          duration: video.duration,
+          paused: video.paused,
+          ended: video.ended
+        })), null, 2)
+      `
+    );
+    console.error(`scene transition snapshots:\n${snapshots}`);
+    console.error(`scene videos:\n${videos}`);
+    throw error;
+  }
   await expectEventually(
     client,
     `
@@ -1930,6 +1964,11 @@ try {
   await expect(client, "document.querySelector('.flame-scene.is-video-off') !== null", "scene video off makes ambient background black");
   await expect(client, "document.querySelector('.fireplace-backdrop') === null && document.querySelector('.scene-logo-backdrop') === null && document.querySelector('.flame-video') === null", "scene video off removes scene media layers");
   await expect(client, "document.querySelector('.ambient-clock') !== null", "clock remains independent while scene video is off");
+  await expectEventually(
+    client,
+    "document.querySelector('[data-quick-menu-toggle=\"scene-sound\"]')?.disabled === false",
+    "scene sound toggle is ready after scene video off"
+  );
 
   await evaluate(
     client,

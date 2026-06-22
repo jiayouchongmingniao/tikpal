@@ -36,6 +36,9 @@ export interface RoomExperienceStatus {
   source: "api" | "fallback";
   pending: boolean;
   error: string | null;
+  lastSuccessAtMs: number | null;
+  pendingAction: string | null;
+  pendingSinceMs: number | null;
 }
 
 export function useRoomExperience() {
@@ -43,21 +46,30 @@ export function useRoomExperience() {
   const [status, setStatus] = useState<RoomExperienceStatus>({
     source: "fallback",
     pending: false,
-    error: null
+    error: null,
+    lastSuccessAtMs: null,
+    pendingAction: null,
+    pendingSinceMs: null
   });
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
     try {
       const nextExperience = await fetchRoomExperienceState(signal);
+      const lastSuccessAtMs = Date.now();
       setExperience(nextExperience);
-      setStatus({ source: "api", pending: false, error: null });
+      setStatus((current) => ({
+        ...current,
+        source: "api",
+        error: null,
+        lastSuccessAtMs
+      }));
     } catch (error) {
       if (signal?.aborted) return;
-      setStatus({
+      setStatus((current) => ({
+        ...current,
         source: "fallback",
-        pending: false,
         error: error instanceof Error ? error.message : "Tikpal experience API unavailable"
-      });
+      }));
     }
   }, []);
 
@@ -75,17 +87,21 @@ export function useRoomExperience() {
   }, [refresh]);
 
   const sendExperienceAction = useCallback(async (action: RoomExperienceActionRequest) => {
-    setStatus((current) => ({ ...current, pending: true, error: null }));
+    const pendingSinceMs = Date.now();
+    setStatus((current) => ({ ...current, pending: true, pendingAction: `experience:${action.type}`, pendingSinceMs, error: null }));
     try {
       const nextExperience = await postRoomExperienceAction(action);
+      const lastSuccessAtMs = Date.now();
       setExperience(nextExperience);
-      setStatus({ source: "api", pending: false, error: null });
+      setStatus({ source: "api", pending: false, error: null, lastSuccessAtMs, pendingAction: null, pendingSinceMs: null });
       return nextExperience;
     } catch (error) {
       const message = error instanceof Error ? error.message : "Experience action failed";
       setStatus((current) => ({
         ...current,
         pending: false,
+        pendingAction: null,
+        pendingSinceMs: null,
         error: message
       }));
       throw new Error(message);

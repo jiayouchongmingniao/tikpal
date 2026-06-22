@@ -12,6 +12,9 @@ export interface TikpalDataStatus {
   source: "api" | "fallback";
   pending: boolean;
   error: string | null;
+  lastSuccessAtMs: number | null;
+  pendingAction: string | null;
+  pendingSinceMs: number | null;
 }
 
 const REFRESH_MS = 3000;
@@ -22,22 +25,31 @@ export function useTikpalState() {
   const [status, setStatus] = useState<TikpalDataStatus>({
     source: "fallback",
     pending: false,
-    error: null
+    error: null,
+    lastSuccessAtMs: null,
+    pendingAction: null,
+    pendingSinceMs: null
   });
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
     try {
       const nextState = await fetchTikpalState(signal);
+      const lastSuccessAtMs = Date.now();
       setState(nextState);
-      setStatus({ source: "api", pending: false, error: null });
+      setStatus((current) => ({
+        ...current,
+        source: "api",
+        error: null,
+        lastSuccessAtMs
+      }));
       return nextState;
     } catch (error) {
       if (signal?.aborted) return null;
-      setStatus({
+      setStatus((current) => ({
+        ...current,
         source: "fallback",
-        pending: false,
         error: error instanceof Error ? error.message : "Tikpal API unavailable"
-      });
+      }));
       return null;
     }
   }, []);
@@ -59,17 +71,21 @@ export function useTikpalState() {
   }, [refresh, state.playback.source, state.playback.state]);
 
   const sendPlaybackAction = useCallback(async (type: PlaybackActionType, value?: number, mode?: PlaybackMode) => {
-    setStatus((current) => ({ ...current, pending: true, error: null }));
+    const pendingSinceMs = Date.now();
+    setStatus((current) => ({ ...current, pending: true, pendingAction: `playback:${type}`, pendingSinceMs, error: null }));
     try {
       const nextState = await postPlaybackAction(type, value, mode);
+      const lastSuccessAtMs = Date.now();
       setState(nextState);
-      setStatus({ source: "api", pending: false, error: null });
+      setStatus({ source: "api", pending: false, error: null, lastSuccessAtMs, pendingAction: null, pendingSinceMs: null });
       return nextState;
     } catch (error) {
       const message = error instanceof Error ? error.message : "Playback action failed";
       setStatus((current) => ({
         ...current,
         pending: false,
+        pendingAction: null,
+        pendingSinceMs: null,
         error: message
       }));
       throw error;
@@ -77,17 +93,21 @@ export function useTikpalState() {
   }, []);
 
   const sendSystemAction = useCallback(async (type: SystemActionType, value?: number) => {
-    setStatus((current) => ({ ...current, pending: true, error: null }));
+    const pendingSinceMs = Date.now();
+    setStatus((current) => ({ ...current, pending: true, pendingAction: `system:${type}`, pendingSinceMs, error: null }));
     try {
       const nextState = await postSystemAction(type, value);
+      const lastSuccessAtMs = Date.now();
       setState(nextState);
-      setStatus({ source: "api", pending: false, error: null });
+      setStatus({ source: "api", pending: false, error: null, lastSuccessAtMs, pendingAction: null, pendingSinceMs: null });
       return nextState;
     } catch (error) {
       const message = error instanceof Error ? error.message : "System action failed";
       setStatus((current) => ({
         ...current,
         pending: false,
+        pendingAction: null,
+        pendingSinceMs: null,
         error: message
       }));
       throw new Error(message);
@@ -95,17 +115,21 @@ export function useTikpalState() {
   }, []);
 
   const sendSourceSwitch = useCallback(async (target: SourceSwitchTarget, radioStationId?: string, localTrackPath?: string, sceneVideo?: BackgroundVideoSummary) => {
-    setStatus((current) => ({ ...current, pending: true, error: null }));
+    const pendingSinceMs = Date.now();
+    setStatus((current) => ({ ...current, pending: true, pendingAction: `source:${target}`, pendingSinceMs, error: null }));
     try {
       const nextState = await postSourceSwitch(target, radioStationId, localTrackPath, sceneVideo);
+      const lastSuccessAtMs = Date.now();
       setState(nextState);
-      setStatus({ source: "api", pending: false, error: null });
+      setStatus({ source: "api", pending: false, error: null, lastSuccessAtMs, pendingAction: null, pendingSinceMs: null });
       return nextState;
     } catch (error) {
       const message = error instanceof Error ? error.message : "Source switch failed";
       setStatus((current) => ({
         ...current,
         pending: false,
+        pendingAction: null,
+        pendingSinceMs: null,
         error: message
       }));
       throw new Error(message);
