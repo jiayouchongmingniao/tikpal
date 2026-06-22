@@ -280,7 +280,7 @@ To create scene-only packages from local MP4 files, run:
 npm run ota:package:mp4 -- /path/to/mp4-scenes --recursive --bundle --default Forest-Cabin.mp4
 ```
 
-The generator writes packages under `.tikpal/resource-ota-packages` unless `--output` is provided. Split mode creates one package per MP4; `--bundle` creates one package that installs the whole folder together. Each generated scene entry includes an id, filename, label, order, optional default marker, and `sha256`. The generator normalizes scene MP4s for the Pi kiosk path: keep the physical `2560x720` target, use H.264 Main Profile Level 4.1, `yuv420p`, a closed GOP around 48 frames, no B-frames, bounded video bitrate around `4500k`, AAC stereo around `96k`, and `+faststart`. If a source video has an audible or visible loop boundary, first run `npm run media:loop -- --input <mp4> --crossfade 0.9`; this requires `ffmpeg` / `ffprobe` and keeps an in-place backup under `.codex-artifacts/media-backups`. At runtime, `FlameScene` also uses two video slots for each looping scene, preparing the standby slot about 1.2 seconds before the tail and revealing it about 0.42 seconds before the tail with a 360ms visual / 340ms Scene Sound crossfade. The video element watchdog can recover ordinary playback stalls and exposes `data-flame-video-health`; if the full X/Chromium/V3D display stack stops responding, the systemd kiosk watchdog handles recovery by restarting only `tikpal-kiosk.service`.
+The generator writes packages under `.tikpal/resource-ota-packages` unless `--output` is provided. Split mode creates one package per MP4; `--bundle` creates one package that installs the whole folder together. Each generated scene entry includes an id, filename, label, order, optional default marker, and `sha256`. The generator normalizes scene MP4s for the Pi kiosk path: keep the physical `2560x720` target, use H.264 Main Profile Level 4.1, `yuv420p`, a closed GOP around 48 frames, no B-frames, bounded video bitrate around `4500k`, AAC stereo around `96k`, and `+faststart`. If a source video has an audible or visible loop boundary, first run `npm run media:loop -- --input <mp4> --crossfade 0.9`; this requires `ffmpeg` / `ffprobe` and keeps an in-place backup under `.codex-artifacts/media-backups`. At runtime, `FlameScene` also uses two video slots for each looping scene, preparing the standby slot about 1.2 seconds before the tail and revealing it about 0.42 seconds before the tail with a 360ms visual / 340ms Scene Sound crossfade. In Pi `mpc` stable-loop mode, loop playback stays on the single-video path, but scene switches still mount a separate incoming layer and keep the outgoing scene visible until the incoming layer is drawable. The video element watchdog can recover ordinary playback stalls and exposes `data-flame-video-health`; if the full X/Chromium/V3D display stack stops responding, the systemd kiosk watchdog handles recovery by restarting only `tikpal-kiosk.service`.
 
 The script validates `assets/music/_metadata/library_manifest.json`, checks that manifest track and optional cover paths are safe and present in the package or already installed library, validates scene MP4 `sha256` checksums from `assets/scenes/_metadata/scene_videos.json`, validates the legacy replacement MP4 when present, writes `public/assets`, syncs `dist/assets` when a production build is present, and records `.tikpal/resource-ota-state.json`. The API reads the local music manifest on each `/api/v1/audio/library` request and lists scene videos from both `public/assets/*.mp4` and `public/assets/scenes/_metadata/scene_videos.json`; Ambient refreshes that scene catalog every 30 seconds and when the page becomes visible, so newly added scene videos appear in the previous / next scene controls without a page reload. The default Ambient scene catalog no longer depends on a bundled `output*.mp4`; when the scene catalog is empty, the scene video layer stays off until a new scene package is installed.
 
@@ -442,6 +442,32 @@ pgrep -x librespot >/dev/null && echo 'Spotify still owns output' || echo 'Spoti
 ```
 
 The USB PCM status should be `RUNNING` while Scene Sound is active, and recent kiosk logs should show the selected `dmix:CARD=...` output without new `PcmOpen` errors. If the DOM video needs inspection, enable `TIKPAL_KIOSK_REMOTE_DEBUG=1` only temporarily, inspect the active `video.flame-video` for `muted=false`, `paused=false`, `readyState>=2`, and nonzero `data-scene-volume`, then turn DevTools back off.
+
+For visual scene-switch verification on the physical kiosk, prefer a frame capture on `DISPLAY=:0` instead of relying only on API state. This is the high-signal check for the white-flash class of bugs:
+
+```bash
+RUN_DIR=$(mktemp -d /tmp/tikpal-scene-verify.XXXXXX)
+mkdir -p "$RUN_DIR/frames"
+DISPLAY=:0 ffmpeg -y -hide_banner -loglevel error \
+  -f x11grab -video_size 2560x720 -framerate 4 -t 40 -i :0.0 \
+  "$RUN_DIR/frames/frame-%03d.png" &
+FFMPEG_PID=$!
+
+curl -fsS -H 'Content-Type: application/json' \
+  -d '{"type":"set_mode","mode":"focus"}' \
+  http://127.0.0.1:8787/api/v1/experience/actions >/dev/null
+sleep 6
+curl -fsS -H 'Content-Type: application/json' \
+  -d '{"type":"set_mode","mode":"calm"}' \
+  http://127.0.0.1:8787/api/v1/experience/actions >/dev/null
+sleep 6
+curl -fsS -H 'Content-Type: application/json' \
+  -d '{"type":"set_mode","mode":"sleep"}' \
+  http://127.0.0.1:8787/api/v1/experience/actions >/dev/null
+wait "$FFMPEG_PID"
+```
+
+Then analyze the captured PNGs with Pillow or a similar image tool. A healthy run should have no high-ratio white frames; recent Pi validation on `192.168.10.178` captured 158 frames while cycling room modes and scene ids, with `max_white ratio=0.0000`, `max_mean=134.4`, and the darkest frames corresponding to the intentional black dim/reveal transition rather than browser-white exposure. Keep the temporary frame directory only long enough to inspect failures.
 
 ## Quiet Boot And Reboot
 

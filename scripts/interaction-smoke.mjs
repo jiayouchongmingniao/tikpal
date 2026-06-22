@@ -367,16 +367,25 @@ async function installSceneTransitionObserver(client) {
       (() => {
         window.__tikpalSceneTransitionObserver?.disconnect?.();
         window.__tikpalSceneTransitionSnapshots = [];
-        const record = () => {
-          const scene = document.querySelector('.flame-scene');
-          const videos = [...document.querySelectorAll('.flame-video')];
-          window.__tikpalSceneTransitionSnapshots.push({
-            phase: scene?.getAttribute('data-flame-transition-phase') ?? 'missing',
-            transition: scene?.getAttribute('data-flame-transition') ?? 'missing',
-            layerCount: document.querySelectorAll('.flame-video-layer').length,
-            activeSrcs: videos
-              .filter((video) => video.getAttribute('data-flame-layer') === 'active')
-              .map((video) => video.getAttribute('src') ?? ''),
+	        const record = () => {
+	          const scene = document.querySelector('.flame-scene');
+	          const videos = [...document.querySelectorAll('.flame-video')];
+	          const videoLayers = videos.map((video) => ({
+	            src: video.getAttribute('src') ?? '',
+	            layer: video.getAttribute('data-flame-layer') ?? '',
+	            role: video.getAttribute('data-flame-loop-role') ?? '',
+	            phase: video.getAttribute('data-flame-loop-phase') ?? '',
+	            frameReady: video.getAttribute('data-flame-frame-ready') ?? ''
+	          }));
+	          window.__tikpalSceneTransitionSnapshots.push({
+	            phase: scene?.getAttribute('data-flame-transition-phase') ?? 'missing',
+	            transition: scene?.getAttribute('data-flame-transition') ?? 'missing',
+	            loopMode: scene?.getAttribute('data-flame-loop-mode') ?? 'dual',
+	            layerCount: document.querySelectorAll('.flame-video-layer').length,
+	            videoLayers,
+	            activeSrcs: videos
+	              .filter((video) => video.getAttribute('data-flame-layer') === 'active')
+	              .map((video) => video.getAttribute('src') ?? ''),
             allSrcs: videos.map((video) => video.getAttribute('src') ?? ''),
             activeGainDbs: videos
               .filter((video) => video.getAttribute('data-flame-layer') === 'active')
@@ -850,6 +859,38 @@ try {
             return next;
           }
 
+          if (mode === "singleLoopScene") {
+            const next = withSource(state, "scene");
+            next.runtime = {
+              ...next.runtime,
+              apiMode: "mpc"
+            };
+            next.playback = {
+              ...next.playback,
+              state: "playing",
+              source: "scene",
+              title: "Scene Audio",
+              artist: "Interaction Scene",
+              album: "Interaction Scene",
+              elapsedSeconds: 2.4,
+              durationSeconds: null,
+              currentTrackIndex: 0,
+              queueLength: 0,
+              favorite: false,
+              queuePreview: [],
+              transportCapabilities: {
+                playPause: true,
+                play: true,
+                pause: true,
+                next: false,
+                previous: false,
+                seek: false,
+                reason: null
+              }
+            };
+            return next;
+          }
+
           return state;
         }
 
@@ -1253,21 +1294,31 @@ try {
                   audioGainDb: 11.1,
                   source: 'scene'
                 },
-                {
-                  id: 'focus-smoke-scene',
-                  filename: 'Focus-Smoke.mp4',
-                  label: 'Focus Smoke',
-                  src: ${JSON.stringify(`${interactionSceneVideoSrc}?ota=focus`)},
-                  order: 40,
-                  roomModes: ['focus'],
-                  audioGainDb: -6.2,
-                  source: 'scene'
-                }
-              ],
-              total: 3,
-              updatedAt: new Date().toISOString(),
-              catalogVersion: 'interaction-rainy',
-              defaultVideoId: 'interaction-scene'
+	                {
+	                  id: 'focus-smoke-scene',
+	                  filename: 'Focus-Smoke.mp4',
+	                  label: 'Focus Smoke',
+	                  src: ${JSON.stringify(`${interactionSceneVideoSrc}?ota=focus`)},
+	                  order: 40,
+	                  roomModes: ['focus'],
+	                  audioGainDb: -6.2,
+	                  source: 'scene'
+	                },
+	                {
+	                  id: 'sleep-smoke-scene',
+	                  filename: 'Sleep-Smoke.mp4',
+	                  label: 'Sleep Smoke',
+	                  src: ${JSON.stringify(`${interactionSceneVideoSrc}?ota=sleep`)},
+	                  order: 50,
+	                  roomModes: ['sleep'],
+	                  audioGainDb: -8.4,
+	                  source: 'scene'
+	                }
+	              ],
+	              total: 4,
+	              updatedAt: new Date().toISOString(),
+	              catalogVersion: 'interaction-rainy',
+	              defaultVideoId: 'interaction-scene'
             }), {
               status: 200,
               headers: { 'Content-Type': 'application/json' }
@@ -1279,11 +1330,14 @@ try {
         return true;
       })()
     `
-  );
-  await expectEventually(client, "!document.querySelector('.ambient-transport-scene-next')?.disabled", "ambient scene catalog refresh enables OTA scene navigation");
-  await expect(
-    client,
-    `
+	  );
+	  await expectEventually(client, "!document.querySelector('.ambient-transport-scene-next')?.disabled", "ambient scene catalog refresh enables OTA scene navigation");
+	  const singleLoopPatchVersion = await setStatePatchMode(client, "singleLoopScene");
+	  await waitForStatePatchRefresh(client, singleLoopPatchVersion, "single-loop scene fixture refreshes");
+	  await expectEventually(client, "document.querySelector('.flame-scene')?.getAttribute('data-flame-loop-mode') === 'single'", "ambient scene test runs through single-loop mode");
+	  await expect(
+	    client,
+	    `
       (() => {
         const logo = document.querySelector('.scene-logo-backdrop .scene-logo-mark');
         return logo instanceof HTMLImageElement
@@ -1327,14 +1381,19 @@ try {
     await expectEventually(
       client,
       `
-        (() => {
-          const snapshots = window.__tikpalSceneTransitionSnapshots ?? [];
-          const sawOutgoingDuringDim = snapshots.some((snapshot) => snapshot.phase === 'dimming'
-            && (snapshot.allSrcs ?? snapshot.activeSrcs).some((src) => src && !src.includes('ota=rainy')));
-          return sawOutgoingDuringDim
-            && snapshots.some((snapshot) => snapshot.phase === 'revealing'
-              && snapshot.activeSrcs.some((src) => src.includes('ota=rainy')));
-        })()
+	        (() => {
+	          const snapshots = window.__tikpalSceneTransitionSnapshots ?? [];
+	          const sawOutgoingDuringDim = snapshots.some((snapshot) => snapshot.phase === 'dimming'
+	            && (snapshot.allSrcs ?? snapshot.activeSrcs).some((src) => src && !src.includes('ota=rainy')));
+	          const sawPreparedIncoming = snapshots.some((snapshot) => snapshot.loopMode === 'single'
+	            && snapshot.phase === 'dimming'
+	            && snapshot.videoLayers?.some((video) => video.layer === 'active' && video.src && !video.src.includes('ota=rainy'))
+	            && snapshot.videoLayers?.some((video) => video.layer === 'incoming' && video.src?.includes('ota=rainy') && video.frameReady === 'true'));
+	          return sawOutgoingDuringDim
+	            && sawPreparedIncoming
+	            && snapshots.some((snapshot) => snapshot.phase === 'revealing'
+	              && snapshot.activeSrcs.some((src) => src.includes('ota=rainy')));
+	        })()
       `,
       "ambient scene switch records dim/reveal without blanking"
     );
@@ -1384,19 +1443,19 @@ try {
     `,
     "ambient scene switch reveals decoded OTA video with gain and without poster fallback"
   );
-  await evaluate(
-    client,
-    `
-      (() => {
-        const button = [...document.querySelectorAll('.ambient-room-mode-buttons button')]
-          .find((node) => node.textContent?.trim() === 'Focus');
-        button?.click();
-        return Boolean(button);
-      })()
-    `
-  );
-  await expectEventually(
-    client,
+	  await evaluate(
+	    client,
+	    `
+	      (() => {
+	        const button = [...document.querySelectorAll('.ambient-room-mode-buttons button')]
+	          .find((node) => node.textContent?.trim() === 'Focus');
+	        button?.click();
+	        return Boolean(button);
+	      })()
+	    `
+	  );
+	  await expectEventually(
+	    client,
     `
       (() => {
         const activeSceneVideo = [...document.querySelectorAll('.flame-video[data-flame-layer="active"]')]
@@ -1411,12 +1470,77 @@ try {
           && document.querySelector('.fireplace-backdrop') === null;
       })()
     `,
-    "room mode scene switching keeps a decoded active scene with gain",
-    40,
-    150
-  );
+	    "room mode scene switching keeps a decoded active scene with gain",
+	    40,
+	    150
+	  );
+	  await installSceneTransitionObserver(client);
+	  await evaluate(
+	    client,
+	    `
+	      (() => {
+	        const button = [...document.querySelectorAll('.ambient-room-mode-buttons button')]
+	          .find((node) => node.textContent?.trim() === 'Sleep');
+	        button?.click();
+	        return Boolean(button);
+	      })()
+	    `
+	  );
+	  await expectEventually(
+	    client,
+	    `
+	      (() => {
+	        const activeVideo = [...document.querySelectorAll('.flame-video[data-flame-layer="active"]')]
+	          .find((video) => video instanceof HTMLVideoElement
+	            && video.getAttribute('data-flame-loop-role') === 'active');
+	        const snapshots = window.__tikpalSceneTransitionSnapshots ?? [];
+	        return document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') === 'sleep'
+	          && activeVideo instanceof HTMLVideoElement
+	          && activeVideo.getAttribute('src')?.includes('ota=sleep')
+	          && activeVideo.readyState >= 2
+	          && activeVideo.getAttribute('data-flame-frame-ready') === 'true'
+	          && snapshots.some((snapshot) => snapshot.loopMode === 'single'
+	            && snapshot.phase === 'dimming'
+	            && snapshot.videoLayers?.some((video) => video.layer === 'active' && video.src && !video.src.includes('ota=sleep'))
+	            && snapshot.videoLayers?.some((video) => video.layer === 'incoming' && video.src?.includes('ota=sleep') && video.frameReady === 'true'));
+	      })()
+	    `,
+	    "single-loop Sleep mode keeps outgoing scene until incoming is drawable",
+	    50,
+	    150
+	  );
+	  await evaluate(
+	    client,
+	    `
+	      (() => {
+	        const button = [...document.querySelectorAll('.ambient-room-mode-buttons button')]
+	          .find((node) => node.textContent?.trim() === 'Calm');
+	        button?.click();
+	        return Boolean(button);
+	      })()
+	    `
+	  );
+	  await expectEventually(
+	    client,
+	    `
+	      (() => {
+	        const activeVideo = [...document.querySelectorAll('.flame-video[data-flame-layer="active"]')]
+	          .find((video) => video instanceof HTMLVideoElement
+	            && video.getAttribute('data-flame-loop-role') === 'active');
+	        return document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') === 'calm'
+	          && activeVideo instanceof HTMLVideoElement
+	          && activeVideo.readyState >= 2
+	          && activeVideo.getAttribute('data-flame-frame-ready') === 'true'
+	          && activeVideo.getAttribute('src')?.includes('ota=rainy');
+	      })()
+	    `,
+	    "single-loop Calm mode returns to a decoded scene",
+	    50,
+	    150
+	  );
+	  await setStatePatchMode(client, "");
 
-  await wait(5600);
+	  await wait(5600);
   await expect(client, "document.querySelector('.ambient-screen.is-hud-hidden') !== null", "ambient HUD auto hides after tap show");
 
   await wheel(client, 220);
