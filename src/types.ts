@@ -33,6 +33,13 @@ export interface RadioStationSummary {
   genre: string;
   bitrateKbps: number | null;
   codec: string | null;
+  category: string | null;
+  categoryLabel: string | null;
+  tags: string[];
+  broadcaster: string | null;
+  logoUrl: string | null;
+  catalogSource: "tikpal" | "moode" | "fallback";
+  sortOrder: number | null;
   secondaryStatus: string;
   active: boolean;
 }
@@ -71,6 +78,8 @@ export interface RadioCatalogFilters {
   q?: string;
   genre?: string;
   bitrate?: string;
+  category?: string;
+  scope?: "tikpal" | "all";
   limit?: number;
   offset?: number;
 }
@@ -79,14 +88,22 @@ export interface RadioCatalogResponse {
   stations: RadioStationSummary[];
   total: number;
   genres: string[];
+  categories: Array<{
+    id: string;
+    label: string;
+    count: number;
+  }>;
   bitrates: string[];
   filters: {
     q: string;
     genre: string;
     bitrate: string;
+    category: string | null;
+    scope: "tikpal" | "all";
     limit: number;
     offset: number;
   };
+  scope: "tikpal" | "all";
   updatedAt: string;
 }
 

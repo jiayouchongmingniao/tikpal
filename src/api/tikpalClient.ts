@@ -89,6 +89,8 @@ export async function fetchRadioCatalog(filters: RadioCatalogFilters = {}, signa
   if (filters.q) params.set("q", filters.q);
   if (filters.genre) params.set("genre", filters.genre);
   if (filters.bitrate) params.set("bitrate", filters.bitrate);
+  if (filters.category) params.set("category", filters.category);
+  if (filters.scope) params.set("scope", filters.scope);
   if (typeof filters.limit === "number") params.set("limit", String(filters.limit));
   if (typeof filters.offset === "number") params.set("offset", String(filters.offset));
 

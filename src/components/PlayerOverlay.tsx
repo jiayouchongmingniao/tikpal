@@ -184,11 +184,15 @@ export function PlayerOverlay({
   const [radioTotal, setRadioTotal] = useState(0);
   const [radioGenres, setRadioGenres] = useState<string[]>([]);
   const [radioBitrates, setRadioBitrates] = useState<string[]>([]);
+  const [radioCategories, setRadioCategories] = useState<Array<{ id: string; label: string; count: number }>>([]);
+  const [radioScope, setRadioScope] = useState<"tikpal" | "all">("tikpal");
   const [radioQuery, setRadioQuery] = useState("");
+  const [selectedRadioCategory, setSelectedRadioCategory] = useState("");
   const [selectedRadioGenre, setSelectedRadioGenre] = useState("");
   const [selectedRadioBitrate, setSelectedRadioBitrate] = useState("");
   const [radioLoading, setRadioLoading] = useState(false);
   const [radioError, setRadioError] = useState<string | null>(null);
+  const [failedRadioLogoIds, setFailedRadioLogoIds] = useState<Set<string>>(() => new Set());
   const [pendingSource, setPendingSource] = useState<SourceSwitchTarget | null>(null);
   const [sourceError, setSourceError] = useState<string | null>(null);
   const [sourceHint, setSourceHint] = useState<string | null>(null);
@@ -200,6 +204,11 @@ export function PlayerOverlay({
     lastSent: system.volume.percent
   });
   const playbackTruth = getPlaybackDisplayTruth(playback, audio, fontTheme);
+  const [failedAlbumArtUrl, setFailedAlbumArtUrl] = useState<string | null>(null);
+  const displayedAlbumArtUrl = playbackTruth.hasPlaybackArtwork && failedAlbumArtUrl === playbackTruth.albumArtUrl
+    ? playbackTruth.fallbackAlbumArtUrl
+    : playbackTruth.albumArtUrl;
+  const usingGeneratedCoverFallback = !playbackTruth.hasPlaybackArtwork || displayedAlbumArtUrl === playbackTruth.fallbackAlbumArtUrl;
   const elapsedSeconds = playbackTruth.elapsedSeconds ?? 0;
   const durationSeconds = playbackTruth.durationSeconds ?? 0;
   const isPlaying = playback.state === "playing";
@@ -425,6 +434,8 @@ export function PlayerOverlay({
 
     void fetchRadioCatalog({
       q: radioQuery,
+      scope: radioScope,
+      category: selectedRadioCategory || undefined,
       genre: selectedRadioGenre || undefined,
       bitrate: selectedRadioBitrate || undefined,
       limit: 250
@@ -433,6 +444,7 @@ export function PlayerOverlay({
         setRadioStations(catalog.stations);
         setRadioTotal(catalog.total);
         setRadioGenres(catalog.genres);
+        setRadioCategories(catalog.categories);
         setRadioBitrates(catalog.bitrates);
       })
       .catch((error) => {
@@ -446,7 +458,11 @@ export function PlayerOverlay({
       });
 
     return () => controller.abort();
-  }, [active, radioQuery, selectedPrimaryPanel, selectedRadioBitrate, selectedRadioGenre]);
+  }, [active, radioQuery, radioScope, selectedPrimaryPanel, selectedRadioBitrate, selectedRadioCategory, selectedRadioGenre]);
+
+  useEffect(() => {
+    setFailedRadioLogoIds(new Set());
+  }, [radioScope, selectedRadioCategory, selectedRadioGenre, selectedRadioBitrate, radioQuery]);
 
   useEffect(() => {
     if (!selectedSubCategoryIsAvailable) {
@@ -661,6 +677,58 @@ export function PlayerOverlay({
           </button>
         </div>
 
+        <div className="radio-scope-control" role="tablist" aria-label="Radio catalog scope">
+          {[
+            { id: "tikpal" as const, label: "Tikpal" },
+            { id: "all" as const, label: "All moOde" }
+          ].map((scope) => (
+            <button
+              key={scope.id}
+              className={radioScope === scope.id ? "is-active" : ""}
+              type="button"
+              role="tab"
+              aria-selected={radioScope === scope.id}
+              data-gesture-control
+              data-radio-scope={scope.id}
+              onClick={() => {
+                setRadioScope(scope.id);
+                setSelectedRadioCategory("");
+                setSelectedRadioGenre("");
+              }}
+            >
+              {scope.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="radio-category-tabs" role="tablist" aria-label="Radio categories">
+          <button
+            className={selectedRadioCategory === "" ? "is-active" : ""}
+            type="button"
+            role="tab"
+            aria-selected={selectedRadioCategory === ""}
+            data-gesture-control
+            data-radio-category="all"
+            onClick={() => setSelectedRadioCategory("")}
+          >
+            All
+          </button>
+          {radioCategories.map((category) => (
+            <button
+              className={selectedRadioCategory === category.id ? "is-active" : ""}
+              key={category.id}
+              type="button"
+              role="tab"
+              aria-selected={selectedRadioCategory === category.id}
+              data-gesture-control
+              data-radio-category={category.id}
+              onClick={() => setSelectedRadioCategory(category.id)}
+            >
+              {category.label}
+            </button>
+          ))}
+        </div>
+
         <div className="radio-filter-row">
           <label className="source-search-field">
             <Search size={18} aria-hidden="true" />
@@ -710,7 +778,7 @@ export function PlayerOverlay({
                 ? `${radioStations.length} / ${radioTotal} stations`
                 : `${radioTotal || radioStations.length} stations`}
           </span>
-          <span>{radioError ? "Catalog unavailable" : selectedRadioGenre || selectedRadioBitrate || "All presets"}</span>
+          <span>{radioError ? "Catalog unavailable" : selectedRadioCategory || selectedRadioGenre || selectedRadioBitrate || (radioScope === "tikpal" ? "Tikpal curated" : "All moOde")}</span>
         </div>
 
         {radioError ? <p className="source-panel-error">{radioError}</p> : null}
@@ -718,6 +786,7 @@ export function PlayerOverlay({
         <div className="radio-catalog-list">
           {radioStations.map((station) => {
             const stationPending = sourcePending && !station.active;
+            const showLogo = Boolean(station.logoUrl) && !failedRadioLogoIds.has(station.id);
             return (
               <button
                 className={`radio-catalog-item ${station.active ? "is-active" : ""}`}
@@ -727,13 +796,33 @@ export function PlayerOverlay({
                 data-gesture-control
                 onClick={() => void switchSource("radio", station.id)}
               >
+                <span className="radio-station-logo" aria-hidden="true">
+                  {showLogo ? (
+                    <img
+                      src={station.logoUrl ?? ""}
+                      alt=""
+                      data-radio-station-logo={station.id}
+                      onError={() => {
+                        setFailedRadioLogoIds((current) => {
+                          const next = new Set(current);
+                          next.add(station.id);
+                          return next;
+                        });
+                      }}
+                    />
+                  ) : (
+                    <span>{(station.categoryLabel ?? station.label).slice(0, 2).toUpperCase()}</span>
+                  )}
+                </span>
                 <span className="radio-catalog-copy">
                   <strong>{station.label}</strong>
-                  <p>{station.secondaryStatus}</p>
+                  <p>{station.broadcaster || station.secondaryStatus}</p>
                 </span>
                 <span className="radio-catalog-meta">
-                  {station.genre ? <span>{station.genre}</span> : null}
+                  {station.categoryLabel ? <span data-radio-station-category={station.category}>{station.categoryLabel}</span> : null}
+                  {station.tags?.[0] ? <span>{station.tags[0]}</span> : null}
                   {station.bitrateKbps ? <span>{station.bitrateKbps} kbps</span> : null}
+                  {station.codec ? <span>{station.codec}</span> : null}
                 </span>
                 <span className="radio-station-state" aria-hidden="true">
                   {stationPending ? <LoaderCircle size={16} className="is-spinning" /> : station.active ? <Check size={16} /> : null}
@@ -812,8 +901,17 @@ export function PlayerOverlay({
       <button className="overlay-backdrop" type="button" tabIndex={active ? 0 : -1} aria-label="Return to ambient" onClick={onReturnAmbient} />
       <div className="player-shell" role="dialog" aria-modal="true" data-gesture-protected {...overlayReturnGesture}>
         <div className="cover-zone">
-          <div className="cover-art">
-            <img src={playbackTruth.albumArtUrl} alt="" />
+          <div className="cover-art" data-generated-cover-fallback={usingGeneratedCoverFallback ? true : undefined}>
+            <img
+              src={displayedAlbumArtUrl}
+              alt=""
+              data-generated-cover-fallback={usingGeneratedCoverFallback ? true : undefined}
+              onError={() => {
+                if (playbackTruth.hasPlaybackArtwork) {
+                  setFailedAlbumArtUrl(playbackTruth.albumArtUrl);
+                }
+              }}
+            />
           </div>
         </div>
 

@@ -859,6 +859,25 @@ try {
             return next;
           }
 
+          if (mode === "brokenArtwork") {
+            const next = withSource(state, "mpd");
+            next.playback = {
+              ...next.playback,
+              state: "playing",
+              source: "mpd",
+              albumArtUrl: "/api/v1/media/artwork?track=missing-smoke-cover",
+              title: "Broken Artwork Study",
+              artist: "Tikpal Smoke",
+              album: "Generated Fallback",
+              elapsedSeconds: 24,
+              durationSeconds: 188,
+              currentTrackIndex: 1,
+              queueLength: 3,
+              favorite: false
+            };
+            return next;
+          }
+
           if (mode === "singleLoopScene") {
             const next = withSource(state, "scene");
             next.runtime = {
@@ -1105,6 +1124,13 @@ try {
     client,
     "document.querySelector('[data-hifi-now-playing][data-hifi-centered-now-playing]') !== null && document.querySelector('[data-hifi-lyrics-panel]') === null && document.querySelector('.ambient-lyrics-ticker') === null && document.querySelector('[data-ambient-lyrics]')?.getAttribute('aria-hidden') === 'true'",
     "Hi-Fi without ready lyrics returns to centered now-playing"
+  );
+  const brokenArtworkPatchVersion = await setStatePatchMode(client, "brokenArtwork");
+  await waitForStatePatchRefresh(client, brokenArtworkPatchVersion, "broken artwork fixture refreshes");
+  await expectEventually(
+    client,
+    "document.querySelector('[data-hifi-cover-art][data-generated-cover-fallback=\"true\"] img')?.getAttribute('src')?.startsWith('data:image/svg+xml') === true && document.querySelector('[data-hifi-track-info]')?.textContent?.includes('Broken Artwork Study')",
+    "Hi-Fi broken artwork URL falls back to generated cover"
   );
   const bluetoothFallbackPatchVersion = await setStatePatchMode(client, "bluetoothFallback");
   await waitForStatePatchRefresh(client, bluetoothFallbackPatchVersion, "Bluetooth fallback fixture refreshes");
@@ -2499,6 +2525,13 @@ try {
   );
 
   await navigate(client, `${APP_URL}?mode=player`);
+  const playerBrokenArtworkPatchVersion = await setStatePatchMode(client, "brokenArtwork");
+  await waitForStatePatchRefresh(client, playerBrokenArtworkPatchVersion, "Player broken artwork fixture refreshes");
+  await expectEventually(
+    client,
+    "document.querySelector('.player-overlay .cover-art[data-generated-cover-fallback=\"true\"] img')?.getAttribute('src')?.startsWith('data:image/svg+xml') === true",
+    "Player broken artwork URL falls back to generated cover"
+  );
   await click(client, 1360, 600);
   await expect(client, "document.querySelector('.player-overlay.is-active') !== null", "protected player click stays in player");
   await dragUntilHold(client, 100, 600, 100, 540);
@@ -2525,6 +2558,8 @@ try {
     `,
     "player now playing title follows playback truth"
   );
+  await setStatePatchMode(client, "");
+  await wait(500);
   await expect(
     client,
     `
@@ -2537,6 +2572,29 @@ try {
     `,
     "player source tabs include six visible source categories"
   );
+  await evaluate(client, "document.querySelector('[data-source-item=\"radio\"]')?.click(); true");
+  await expectEventually(
+    client,
+    "document.querySelector('[data-radio-scope=\"tikpal\"][aria-selected=\"true\"]') !== null",
+    "Radio panel defaults to Tikpal curated scope"
+  );
+  await expectEventually(
+    client,
+    "document.querySelector('[data-radio-category=\"all\"][aria-selected=\"true\"]') !== null && document.querySelector('[data-radio-category=\"focus\"]') !== null && document.querySelector('[data-radio-category=\"calm\"]') !== null",
+    "Radio panel exposes Tikpal category tabs"
+  );
+  await expectEventually(
+    client,
+    "document.querySelector('[data-radio-station-logo]') instanceof HTMLImageElement && document.querySelector('[data-radio-station-logo]')?.complete === true && document.querySelector('[data-radio-station-logo]')?.naturalWidth > 0",
+    "Radio panel renders station logo images"
+  );
+  await evaluate(client, "document.querySelector('[data-radio-category=\"calm\"]')?.click(); true");
+  await expectEventually(
+    client,
+    "Array.from(document.querySelectorAll('[data-radio-station-category]')).length > 0 && Array.from(document.querySelectorAll('[data-radio-station-category]')).every((node) => node.getAttribute('data-radio-station-category') === 'calm')",
+    "Radio panel category filter shows Calm stations only"
+  );
+  await evaluate(client, "document.querySelector('[data-source-item=\"mpd\"]')?.click(); true");
   await expect(
     client,
     "document.querySelector('.transport-row [data-player-playlist-entry][aria-label=\"Open playlist\"]') !== null && document.querySelector('.library-browser-title [data-player-playlist-entry]') === null",

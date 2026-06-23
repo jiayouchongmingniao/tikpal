@@ -53,7 +53,12 @@ const FFMPEG_BIN = process.env.TIKPAL_FFMPEG_BIN ?? "ffmpeg";
 const RADIO_ACTIVATE_COMMAND = process.env.TIKPAL_RADIO_ACTIVATE_COMMAND ?? "";
 const RADIO_DEFAULT_URI = process.env.TIKPAL_RADIO_DEFAULT_URI ?? "";
 const RADIO_LABEL = process.env.TIKPAL_RADIO_LABEL ?? "Last Station";
-const RADIO_PRESET_LIMIT = Number(process.env.TIKPAL_RADIO_PRESET_LIMIT ?? 250);
+const SQLITE_BIN = process.env.TIKPAL_SQLITE_BIN ?? "sqlite3";
+const RADIO_LOGO_DIR = resolve(process.env.TIKPAL_RADIO_LOGO_DIR ?? "/var/local/www/imagesw/radio-logos");
+const RADIO_VOLUME_DEFAULT_PERCENT_RAW = Number(process.env.TIKPAL_RADIO_VOLUME_DEFAULT_PERCENT ?? 35);
+const RADIO_VOLUME_DEFAULT_PERCENT = Number.isFinite(RADIO_VOLUME_DEFAULT_PERCENT_RAW)
+  ? Math.max(1, Math.min(100, Math.round(RADIO_VOLUME_DEFAULT_PERCENT_RAW)))
+  : 35;
 const AUDIO_READY_COMMAND = process.env.TIKPAL_AUDIO_READY_COMMAND ?? "";
 const AUDIO_ACTIVE_COMMAND = process.env.TIKPAL_AUDIO_ACTIVE_COMMAND ?? "";
 const AUDIO_ACTIVATE_COMMAND = process.env.TIKPAL_AUDIO_ACTIVATE_COMMAND ?? "";
@@ -170,6 +175,7 @@ const LOCAL_PLAYLIST_INDEX_PATH = resolve(LOCAL_LIBRARY_ROOT, "_metadata", "play
 const LOCAL_PLAYLIST_ROOT = resolve(LOCAL_LIBRARY_ROOT, "_playlists");
 const MUSIC_LIBRARY_STATE_PATH = resolve(process.env.TIKPAL_MUSIC_LIBRARY_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "music-library-state.json"));
 const ROOM_EXPERIENCE_STATE_PATH = resolve(process.env.TIKPAL_ROOM_EXPERIENCE_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "room-experience-state.json"));
+const AUDIO_VOLUME_STATE_PATH = resolve(process.env.TIKPAL_AUDIO_VOLUME_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "audio-volume-state.json"));
 const LOCAL_LIBRARY_COVER_COLUMNS = ["cover_relative_path", "cover_path", "album_art_relative_path", "artwork_relative_path"];
 const LOCAL_LIBRARY_COVER_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp"];
 const PUBLIC_ASSETS_ROOT = resolve(process.env.TIKPAL_PUBLIC_ASSETS_ROOT ?? resolve(process.cwd(), "public", "assets"));
@@ -217,6 +223,49 @@ const HIFI_EQ_PRESETS = [
   { id: "warm", label: "Warm", intent: "Gentle low-mid lift", hifiVisualPresetId: "waveform" },
   { id: "vocal", label: "Vocal", intent: "Clearer midrange presence", hifiVisualPresetId: "dual-vu" }
 ];
+const RADIO_CATEGORY_ORDER = ["focus", "calm", "sleep", "hifi", "jazz", "classical", "news"];
+const RADIO_CATEGORY_LABELS = {
+  focus: "Focus",
+  calm: "Calm",
+  sleep: "Sleep",
+  hifi: "Hi-Fi",
+  jazz: "Jazz",
+  classical: "Classical",
+  news: "News"
+};
+const RADIO_LOGO_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp"];
+const MOCK_RADIO_LOGO_URL = "data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22120%22%20height%3D%22120%22%3E%3Crect%20width%3D%22120%22%20height%3D%22120%22%20fill%3D%22%231f2937%22%2F%3E%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2238%22%20fill%3D%22%23d6b761%22%2F%3E%3Ctext%20x%3D%2260%22%20y%3D%2268%22%20font-family%3D%22Arial%22%20font-size%3D%2228%22%20font-weight%3D%22700%22%20text-anchor%3D%22middle%22%20fill%3D%22%231f2937%22%3ER%3C%2Ftext%3E%3C%2Fsvg%3E";
+const RADIO_LOGO_ALIASES = new Map([
+  ["Tikpal Focus - Radio Paradise Main", "Radio Paradise - Main Mix.jpg"],
+  ["Tikpal Focus - FIP", "France Inter Paris (FIP).jpg"],
+  ["Tikpal Focus - BBC 6 Music", "BBC Radio 6 music (320K).jpg"],
+  ["Tikpal Focus - KEXP Seattle", "KEXP 90.3 FM Seattle.jpg"],
+  ["Tikpal Focus - NTS Live 1", "NTS Live 1.jpg"],
+  ["Tikpal Focus - Groove Salad", "Soma FM - Groove Salad.jpg"],
+  ["Tikpal Focus - Beat Blender", "Soma FM - Beat Blender.jpg"],
+  ["Tikpal Focus - Naim Radio", "Naim Radio.jpg"],
+  ["Tikpal Calm - FluxFM Chillout", "FluxFM - Chillout Radio.jpg"],
+  ["Tikpal Calm - Hi On Line Lounge", "Hi On Line - Lounge.jpg"],
+  ["Tikpal Sleep - Ambient Sleeping Pill", "Ambient Sleeping Pill.jpg"],
+  ["Tikpal Sleep - Mission Control", "Soma FM - Mission Control.jpg"],
+  ["Tikpal HiFi - Hi On Line Pop FLAC", "Hi On Line - Pop (FLAC).jpg"],
+  ["Tikpal HiFi - Linn Radio", "Linn Radio.jpg"],
+  ["Tikpal HiFi - Linn Classical", "Linn Classical.jpg"],
+  ["Tikpal HiFi - Linn Jazz", "Linn Jazz.jpg"],
+  ["Tikpal HiFi - Naim Classical", "Naim Classical.jpg"],
+  ["Tikpal HiFi - Naim Jazz", "Naim Jazz.jpg"],
+  ["Tikpal Jazz - SmoothJazz Global", "SmoothJazz Global.jpg"],
+  ["Tikpal Jazz - SwissGroove", "SwissGroove.jpg"],
+  ["Tikpal Jazz - France Musique Jazz", "France Musique La Jazz.jpg"],
+  ["Tikpal Jazz - DR P8 Jazz", "DR P8 Jazz (320K).jpg"],
+  ["Tikpal Jazz - Sonic Universe", "Soma FM - Sonic Universe.jpg"],
+  ["Tikpal Classical - WQXR New York", "WQXR New York - Classical Music.jpg"],
+  ["Tikpal Classical - Positivly Baroque", "Positivly Baroque.jpg"],
+  ["Tikpal News - BBC Radio 4", "BBC Radio 4 FM (320K).jpg"],
+  ["Tikpal News - France Culture", "France Culture Live.jpg"],
+  ["Tikpal News - DR P1", "DR P1.jpg"],
+  ["Tikpal News - Radio SRF 4 News", "Radio SRF 4 News.jpg"]
+]);
 const HIFI_EQ_PRESET_IDS = new Set(HIFI_EQ_PRESETS.map((preset) => preset.id));
 const HIFI_VISUAL_PRESETS = new Set(["spectrum-bars", "waveform", "dual-vu"]);
 const DEFAULT_HIFI_EQ_PRESET_ID = "flat";
@@ -422,7 +471,23 @@ function buildSourceSummary({ id, label, availability, active, controllability, 
   };
 }
 
-function buildRadioStationSummary({ id, label, uri, genre, bitrateKbps, codec, secondaryStatus, active }) {
+function buildRadioStationSummary({
+  id,
+  label,
+  uri,
+  genre,
+  bitrateKbps,
+  codec,
+  secondaryStatus,
+  active,
+  category = null,
+  categoryLabel = null,
+  tags = [],
+  broadcaster = null,
+  logoUrl = null,
+  catalogSource = "moode",
+  sortOrder = null
+}) {
   return {
     id,
     label,
@@ -430,6 +495,13 @@ function buildRadioStationSummary({ id, label, uri, genre, bitrateKbps, codec, s
     genre: genre ?? "",
     bitrateKbps: bitrateKbps ?? null,
     codec: codec ?? null,
+    category,
+    categoryLabel,
+    tags,
+    broadcaster,
+    logoUrl,
+    catalogSource,
+    sortOrder,
     secondaryStatus,
     active
   };
@@ -1474,32 +1546,53 @@ function getMockRadioStations() {
   return [
     buildRadioStationSummary({
       id: "radio-1",
-      label: "1.FM - Blues Radio",
-      uri: "http://strm112.1.fm/blues_mobile_mp3",
-      genre: "Blues",
-      bitrateKbps: 192,
+      label: "Tikpal Focus - Groove Salad",
+      uri: "http://ice1.somafm.com/groovesalad-128-aac",
+      genre: "Focus, Electronica, Ambient, Down-Tempo",
+      bitrateKbps: 128,
       codec: "MP3",
-      secondaryStatus: "Blues · 192 kbps MP3",
+      category: "focus",
+      categoryLabel: "Focus",
+      tags: ["Electronica", "Ambient", "Down-Tempo"],
+      broadcaster: "Soma FM",
+      logoUrl: MOCK_RADIO_LOGO_URL,
+      catalogSource: "tikpal",
+      sortOrder: 1,
+      secondaryStatus: "Focus · Soma FM · 128 kbps · MP3",
       active: mockActiveSource === "radio" && mockActiveRadioStationId === "radio-1"
     }),
     buildRadioStationSummary({
       id: "radio-2",
-      label: "A.M. Ambient",
+      label: "Tikpal Calm - Radio Paradise Mellow",
       uri: "http://radio.stereoscenic.com/ama-h",
-      genre: "Ambient",
+      genre: "Calm, Rock, Mellow Rock",
       bitrateKbps: 256,
       codec: "MP3",
-      secondaryStatus: "Ambient · 256 kbps MP3",
+      category: "calm",
+      categoryLabel: "Calm",
+      tags: ["Rock", "Mellow Rock"],
+      broadcaster: "Radio Paradise",
+      logoUrl: MOCK_RADIO_LOGO_URL,
+      catalogSource: "tikpal",
+      sortOrder: 2,
+      secondaryStatus: "Calm · Radio Paradise · 256 kbps · MP3",
       active: mockActiveSource === "radio" && mockActiveRadioStationId === "radio-2"
     }),
     buildRadioStationSummary({
       id: "radio-3",
-      label: "6forty Radio",
+      label: "1.FM - Blues Radio",
       uri: "http://radio.6forty.com:8000/6forty",
-      genre: "Alternative",
+      genre: "Blues",
       bitrateKbps: 192,
       codec: "MP3",
-      secondaryStatus: "Alternative · 192 kbps MP3",
+      category: null,
+      categoryLabel: null,
+      tags: ["Blues"],
+      broadcaster: "1.FM",
+      logoUrl: null,
+      catalogSource: "moode",
+      sortOrder: 3,
+      secondaryStatus: "Blues · 1.FM · 192 kbps · MP3",
       active: mockActiveSource === "radio" && mockActiveRadioStationId === "radio-3"
     })
   ];
@@ -1718,6 +1811,21 @@ async function setOutputVolumePercent(percent) {
   }
   const command = OUTPUT_VOLUME_SET_COMMAND.replace(/%VALUE%/g, String(normalized));
   await runCommand(command, { allowFailure: false, timeout: 2500 });
+  if (normalized > 0) {
+    await rememberNonZeroVolumePercent(normalized);
+  }
+}
+
+async function restoreMpcRadioVolumeIfMuted() {
+  const status = parseMpcStatus(await runMpc(["status"], { allowFailure: true }));
+  if (status.volumePercent && status.volumePercent > 0) {
+    await rememberNonZeroVolumePercent(status.volumePercent);
+    return;
+  }
+  if (status.volumePercent !== 0) return;
+  const nextVolume = await getRadioResumeVolumePercent();
+  await runMpc(["volume", String(nextVolume)]);
+  await rememberNonZeroVolumePercent(nextVolume);
 }
 
 function isStreamUri(value) {
@@ -2559,34 +2667,109 @@ function getCachedMpcSystemSnapshot(statusRaw, statsRaw) {
   };
 }
 
+function normalizeRadioCategory(value) {
+  const normalized = String(value ?? "").trim().toLowerCase().replace(/[-_\s]+/g, "");
+  if (normalized === "hifi" || normalized === "hi-fi") return "hifi";
+  if (normalized === "focus") return "focus";
+  if (normalized === "calm") return "calm";
+  if (normalized === "sleep") return "sleep";
+  if (normalized === "jazz") return "jazz";
+  if (normalized === "classical") return "classical";
+  if (normalized === "news") return "news";
+  return null;
+}
+
+function parseRadioGenreParts(genre) {
+  return String(genre ?? "")
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function radioCategoryFromStation(label, genreParts) {
+  const labelMatch = String(label ?? "").match(/^Tikpal\s+(.+?)\s*-\s*/i);
+  return normalizeRadioCategory(labelMatch?.[1]) ?? normalizeRadioCategory(genreParts[0]);
+}
+
+function radioCategoryOrder(category) {
+  const index = RADIO_CATEGORY_ORDER.indexOf(category);
+  return index === -1 ? RADIO_CATEGORY_ORDER.length : index;
+}
+
+function buildRadioLogoUrl(stationId, logo) {
+  if (!stationId || !String(logo ?? "").trim()) return null;
+  return `/api/v1/media/radio-logo?stationId=${encodeURIComponent(stationId)}`;
+}
+
+function buildMpcRadioStationSummary(row) {
+  const [rawId, rawName, rawStation, rawGenre, rawBroadcaster, rawBitrate, rawFormat, rawLogo] = row;
+  const numericId = Number(rawId);
+  const stationId = `radio-${rawId}`;
+  const label = rawName || `Radio ${rawId}`;
+  const genreParts = parseRadioGenreParts(rawGenre);
+  const category = radioCategoryFromStation(label, genreParts);
+  const categoryLabel = category ? RADIO_CATEGORY_LABELS[category] : null;
+  const isTikpalStation = /^Tikpal\s+/i.test(label);
+  const tags = genreParts.filter((part, index) => {
+    if (index === 0 && normalizeRadioCategory(part) === category) return false;
+    return part !== categoryLabel;
+  });
+  const bitrateKbps = Number.isFinite(Number(rawBitrate)) ? Number(rawBitrate) : null;
+  const codec = rawFormat || null;
+  const statusBits = [];
+  if (categoryLabel) statusBits.push(categoryLabel);
+  if (rawBroadcaster) statusBits.push(rawBroadcaster);
+  if (bitrateKbps) statusBits.push(`${bitrateKbps} kbps`);
+  if (codec) statusBits.push(codec);
+  const sourceOrder = isTikpalStation ? 0 : 1;
+  const categorySort = isTikpalStation ? radioCategoryOrder(category) : RADIO_CATEGORY_ORDER.length;
+
+  return buildRadioStationSummary({
+    id: stationId,
+    label,
+    uri: rawStation,
+    genre: rawGenre || "Unknown",
+    bitrateKbps,
+    codec,
+    category,
+    categoryLabel,
+    tags,
+    broadcaster: rawBroadcaster || null,
+    logoUrl: buildRadioLogoUrl(stationId, rawLogo),
+    catalogSource: isTikpalStation ? "tikpal" : "moode",
+    sortOrder: Number.isFinite(numericId) ? numericId : null,
+    secondaryStatus: statusBits.join(" · ") || "Radio preset",
+    active: false,
+    _sourceOrder: sourceOrder,
+    _categorySort: categorySort
+  });
+}
+
+function sortRadioStations(stations) {
+  return [...stations].sort((left, right) => {
+    if (left.catalogSource !== right.catalogSource) {
+      return left.catalogSource === "tikpal" ? -1 : 1;
+    }
+    if (left.catalogSource === "tikpal") {
+      const categoryDelta = radioCategoryOrder(left.category) - radioCategoryOrder(right.category);
+      if (categoryDelta !== 0) return categoryDelta;
+    }
+    return (left.sortOrder ?? 0) - (right.sortOrder ?? 0);
+  });
+}
+
 async function readMpcRadioStations() {
-  const query = "SELECT id, name, station, genre, bitrate, format FROM cfg_radio ORDER BY id LIMIT " + (Number.isFinite(RADIO_PRESET_LIMIT) && RADIO_PRESET_LIMIT > 0 ? Math.round(RADIO_PRESET_LIMIT) : 8);
-  const raw = await runCommand(`sqlite3 -separator '|' /var/local/www/db/moode-sqlite3.db "${query}"`, { allowFailure: true });
+  const query = "SELECT id, name, station, genre, broadcaster, bitrate, format, logo FROM cfg_radio ORDER BY id";
+  const raw = await runCommand(`${shellQuote(SQLITE_BIN)} -separator '|' /var/local/www/db/moode-sqlite3.db "${query}"`, { allowFailure: true });
   if (!raw) {
     return [];
   }
 
-  return raw
+  return sortRadioStations(raw
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean)
-    .map((line) => {
-      const [id, name, station, genre, bitrate, format] = line.split("|");
-      const bits = [];
-      if (genre) bits.push(genre);
-      if (bitrate) bits.push(`${bitrate} kbps`);
-      if (format) bits.push(format);
-      return buildRadioStationSummary({
-        id: `radio-${id}`,
-        label: name || `Radio ${id}`,
-        uri: station,
-        genre: genre || "Unknown",
-        bitrateKbps: Number.isFinite(Number(bitrate)) ? Number(bitrate) : null,
-        codec: format || null,
-        secondaryStatus: bits.join(" · ") || "Radio preset",
-        active: false
-      });
-    });
+    .map((line) => buildMpcRadioStationSummary(line.split("|"))));
 }
 
 function fallbackRadioStations() {
@@ -2599,6 +2782,13 @@ function fallbackRadioStations() {
           genre: "Unknown",
           bitrateKbps: null,
           codec: null,
+          category: null,
+          categoryLabel: null,
+          tags: [],
+          broadcaster: null,
+          logoUrl: null,
+          catalogSource: "fallback",
+          sortOrder: null,
           secondaryStatus: "Fallback preset",
           active: false
         })
@@ -2606,19 +2796,70 @@ function fallbackRadioStations() {
     : [];
 }
 
-async function getAvailableRadioStations() {
+async function getAvailableRadioStations(scope = "all") {
   if (API_MODE !== "mpc") {
-    return getMockRadioStations();
+    const stations = getMockRadioStations();
+    return scope === "tikpal" ? stations.filter((station) => station.catalogSource === "tikpal") : stations;
   }
 
   const radioStations = await readMpcRadioStations();
-  return radioStations.length > 0 ? radioStations : fallbackRadioStations();
+  const scopedStations = scope === "tikpal"
+    ? radioStations.filter((station) => station.catalogSource === "tikpal")
+    : radioStations;
+  return scopedStations.length > 0 ? scopedStations : fallbackRadioStations();
+}
+
+async function findRadioStationByUri(uri) {
+  if (!uri) return null;
+  const stations = await getAvailableRadioStations("all");
+  return stations.find((station) => station.uri === uri) ?? null;
+}
+
+async function resolveRadioLogoCandidate(fileName) {
+  const cleanName = String(fileName ?? "").trim();
+  if (!cleanName || basename(cleanName) !== cleanName) return null;
+  const mimeType = imageMimeTypeFromPath(cleanName);
+  if (!mimeType) return null;
+  const root = resolve(RADIO_LOGO_DIR);
+  const absolutePath = resolve(root, cleanName);
+  if (absolutePath !== root && !absolutePath.startsWith(`${root}${sep}`)) return null;
+  try {
+    const info = await stat(absolutePath);
+    if (!info.isFile()) return null;
+    return { absolutePath, mimeType };
+  } catch {
+    return null;
+  }
+}
+
+async function resolveRadioLogo(stationId) {
+  const id = String(stationId ?? "").trim();
+  if (!/^radio-\d+$/.test(id)) return null;
+  const stations = await getAvailableRadioStations("all");
+  const station = stations.find((entry) => entry.id === id);
+  if (!station) return null;
+
+  for (const extension of RADIO_LOGO_EXTENSIONS) {
+    const exact = await resolveRadioLogoCandidate(`${station.label}${extension}`);
+    if (exact) return exact;
+  }
+
+  const alias = RADIO_LOGO_ALIASES.get(station.label);
+  if (alias) {
+    const aliased = await resolveRadioLogoCandidate(alias);
+    if (aliased) return aliased;
+  }
+
+  return null;
 }
 
 function normalizeRadioFilters(searchParams) {
   const q = (searchParams.get("q") ?? "").trim();
   const genre = (searchParams.get("genre") ?? "").trim();
   const bitrate = (searchParams.get("bitrate") ?? "").trim();
+  const category = normalizeRadioCategory(searchParams.get("category"));
+  const scopeParam = (searchParams.get("scope") ?? "tikpal").trim().toLowerCase();
+  const scope = scopeParam === "all" ? "all" : "tikpal";
   const limitRaw = Number(searchParams.get("limit") ?? 120);
   const offsetRaw = Number(searchParams.get("offset") ?? 0);
 
@@ -2634,6 +2875,8 @@ function normalizeRadioFilters(searchParams) {
     q,
     genre,
     bitrate,
+    category,
+    scope,
     limit: Math.round(limitRaw),
     offset: Math.round(offsetRaw)
   };
@@ -2642,8 +2885,12 @@ function normalizeRadioFilters(searchParams) {
 function filterRadioStations(stations, filters) {
   return stations.filter((station) => {
     if (filters.q) {
-      const haystack = `${station.label} ${station.secondaryStatus} ${station.genre}`.toLowerCase();
+      const haystack = `${station.label} ${station.secondaryStatus} ${station.genre} ${station.categoryLabel ?? ""} ${station.broadcaster ?? ""} ${(station.tags ?? []).join(" ")}`.toLowerCase();
       if (!haystack.includes(filters.q.toLowerCase())) return false;
+    }
+
+    if (filters.category && station.category !== filters.category) {
+      return false;
     }
 
     if (filters.genre && station.genre !== filters.genre) {
@@ -2661,8 +2908,15 @@ function filterRadioStations(stations, filters) {
 
 async function getRadioCatalogPayload(searchParams) {
   const filters = normalizeRadioFilters(searchParams);
-  const stations = await getAvailableRadioStations();
+  const stations = await getAvailableRadioStations(filters.scope);
   const genres = Array.from(new Set(stations.map((station) => station.genre).filter(Boolean))).sort((left, right) => left.localeCompare(right));
+  const categories = RADIO_CATEGORY_ORDER
+    .map((category) => ({
+      id: category,
+      label: RADIO_CATEGORY_LABELS[category],
+      count: stations.filter((station) => station.category === category).length
+    }))
+    .filter((category) => category.count > 0);
   const bitrates = Array.from(
     new Set(
       stations
@@ -2677,8 +2931,10 @@ async function getRadioCatalogPayload(searchParams) {
     stations: paged,
     total: filtered.length,
     genres,
+    categories,
     bitrates,
     filters,
+    scope: filters.scope,
     updatedAt: new Date().toISOString()
   };
 }
@@ -2913,6 +3169,61 @@ async function writeRoomExperienceState(state) {
   await mkdir(dirname(ROOM_EXPERIENCE_STATE_PATH), { recursive: true });
   await writeFile(ROOM_EXPERIENCE_STATE_PATH, `${JSON.stringify(normalized, null, 2)}\n`);
   return normalized;
+}
+
+let audioVolumeStateCache = null;
+
+function normalizeAudioVolumeState(raw = {}) {
+  const lastNonZeroPercent = clampPercent(raw.lastNonZeroPercent, null);
+  return {
+    version: 1,
+    lastNonZeroPercent: lastNonZeroPercent && lastNonZeroPercent > 0 ? lastNonZeroPercent : null,
+    updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : null
+  };
+}
+
+async function readAudioVolumeState() {
+  if (audioVolumeStateCache) return audioVolumeStateCache;
+  try {
+    audioVolumeStateCache = normalizeAudioVolumeState(JSON.parse(await readFile(AUDIO_VOLUME_STATE_PATH, "utf8")));
+  } catch {
+    audioVolumeStateCache = normalizeAudioVolumeState();
+  }
+  return audioVolumeStateCache;
+}
+
+async function writeAudioVolumeState(state) {
+  const saved = {
+    ...normalizeAudioVolumeState(state),
+    updatedAt: new Date().toISOString()
+  };
+  await mkdir(dirname(AUDIO_VOLUME_STATE_PATH), { recursive: true });
+  await writeFile(AUDIO_VOLUME_STATE_PATH, `${JSON.stringify(saved, null, 2)}\n`);
+  audioVolumeStateCache = saved;
+  return saved;
+}
+
+async function rememberNonZeroVolumePercent(percent) {
+  const normalized = clampPercent(percent, null);
+  if (!normalized || normalized <= 0) return;
+  const current = await readAudioVolumeState();
+  if (current.lastNonZeroPercent === normalized) return;
+  await writeAudioVolumeState({
+    ...current,
+    lastNonZeroPercent: normalized
+  });
+}
+
+async function getRadioResumeVolumePercent() {
+  const volumeState = await readAudioVolumeState();
+  if (volumeState.lastNonZeroPercent && volumeState.lastNonZeroPercent > 0) {
+    return volumeState.lastNonZeroPercent;
+  }
+  const experience = await readRoomExperienceState();
+  if (experience.volumePercent > 0) {
+    return experience.volumePercent;
+  }
+  return RADIO_VOLUME_DEFAULT_PERCENT;
 }
 
 async function applyBrightnessSafely(percent) {
@@ -4212,20 +4523,24 @@ function buildCachedSourceRuntimeState(source, supported, advertisedLabel = null
 
 function buildMinimalMpcAudioSnapshot(currentFile = "") {
   const cachedSource = getCachedMpcPlaybackSource();
+  const cachedRadioSource = tikpalStateSnapshotCache?.state?.audio?.sources?.find((entry) => entry.id === "radio") ?? null;
+  const cachedRadioReady = cachedRadioSource?.availability === "available"
+    || cachedRadioSource?.controllability === "switchable";
   const radioActive = isStreamUri(currentFile);
   const activeSource = mockArmedSource === "scene"
-    || (!mockArmedSource && cachedSource === "scene")
     ? "scene"
     : mockArmedSource && ["audio", "spotify", "bluetooth", "airplay", "upnp"].includes(mockArmedSource)
       ? mockArmedSource
       : radioActive
         ? "radio"
-        : "mpd";
+        : !mockArmedSource && cachedSource === "scene"
+          ? "scene"
+          : "mpd";
 
   return buildAudioState({
     activeSource,
     armedSource: mockArmedSource,
-    radioReady: Boolean(RADIO_ACTIVATE_COMMAND || RADIO_DEFAULT_URI),
+    radioReady: Boolean(RADIO_ACTIVATE_COMMAND || RADIO_DEFAULT_URI || cachedRadioReady),
     radioActive,
     radioStations: [],
     audioSourceState: buildCachedSourceRuntimeState("audio", true),
@@ -4266,7 +4581,8 @@ function getCachedMpcPlaybackSource() {
     ?? null;
 }
 
-function shouldUseCachedSceneSourceRuntimeStatus() {
+function shouldUseCachedSceneSourceRuntimeStatus(currentFile = "") {
+  if (isStreamUri(currentFile)) return false;
   const cachedSource = getCachedMpcPlaybackSource();
   return (mockArmedSource === "scene" || cachedSource === "scene")
     && !COMMAND_HANDOFF_SOURCE_TARGETS.has(mockArmedSource);
@@ -4335,8 +4651,16 @@ function isCurrentMpcSourceAirplay() {
   return getCurrentMpcSourceId() === "airplay";
 }
 
+function isCurrentMpcSourceRadio() {
+  return getCurrentMpcSourceId() === "radio";
+}
+
 function isAirplayTransportPlaybackAction(action) {
   return ["play_pause", "play", "pause", "next", "previous"].includes(String(action?.type ?? ""));
+}
+
+function isRadioStationTransportAction(action) {
+  return ["next", "previous"].includes(String(action?.type ?? ""));
 }
 
 function getAirplayTransportCommand(action) {
@@ -4407,7 +4731,7 @@ async function getMpcSnapshot(options = {}) {
   const nextSystem = includeSlowRuntimeStatus
     ? await getMpcSystemSnapshot(statusRaw, statsRaw)
     : getCachedMpcSystemSnapshot(statusRaw, statsRaw);
-  const useCachedSceneSourceRuntimeStatus = includeSourceRuntimeStatus && shouldUseCachedSceneSourceRuntimeStatus();
+  const useCachedSceneSourceRuntimeStatus = includeSourceRuntimeStatus && shouldUseCachedSceneSourceRuntimeStatus(file);
   const audio = includeSourceRuntimeStatus && !useCachedSceneSourceRuntimeStatus
     ? await getMpcAudioSnapshot(file)
     : buildMinimalMpcAudioSnapshot(file);
@@ -4420,8 +4744,14 @@ async function getMpcSnapshot(options = {}) {
   const volumePercent = isExternalHandoffSource
     ? (outputVolumePercent ?? status.volumePercent ?? system.volume.percent)
     : (status.volumePercent ?? outputVolumePercent ?? system.volume.percent);
+  if (volumePercent > 0) {
+    void rememberNonZeroVolumePercent(volumePercent).catch(() => null);
+  }
   const radioPlaybackMetadata = playbackSource === "radio"
     ? normalizeRadioPlaybackMetadata({ title, artist, album, file, audio })
+    : null;
+  const activeRadioStation = playbackSource === "radio"
+    ? await findRadioStationByUri(file)
     : null;
   const bluetoothPlaybackMetadata = includeSlowRuntimeStatus && playbackSource === "bluetooth"
     ? await readBluetoothPlaybackMetadata()
@@ -4477,6 +4807,8 @@ async function getMpcSnapshot(options = {}) {
         ? bluetoothPlaybackMetadata?.artworkUrl ?? null
         : playbackSource === "airplay"
           ? airplayPlaybackMetadata?.artworkUrl ?? null
+          : playbackSource === "radio" && activeRadioStation?.logoUrl
+            ? activeRadioStation.logoUrl
           : !isExternalHandoffSource && hasCurrentTrack && includeSlowRuntimeStatus && currentArtworkState ? `/api/v1/media/artwork?track=${encodeURIComponent(currentArtworkState.token)}` : null,
       title: isSceneSource
           ? "Scene Audio"
@@ -4665,7 +4997,33 @@ async function switchToRadioSource(action = {}) {
 
   await runMpc(["clear"]);
   await runMpc(["add", targetUri]);
+  await restoreMpcRadioVolumeIfMuted();
   await ensureMpcPlaybackStarted();
+}
+
+async function switchRadioStationByOffset(offset) {
+  const currentFile = (await runMpc(["--format", "%file%", "current"], { allowFailure: true })).trim();
+  if (!isCurrentMpcSourceRadio() && !isStreamUri(currentFile)) return false;
+
+  const tikpalStations = await getAvailableRadioStations("tikpal");
+  const tikpalIndex = tikpalStations.findIndex((station) => station.uri === currentFile);
+  const allStations = tikpalIndex >= 0 ? tikpalStations : await getAvailableRadioStations("all");
+  const allIndex = tikpalIndex >= 0 ? tikpalIndex : allStations.findIndex((station) => station.uri === currentFile);
+  const stations = tikpalIndex >= 0 || allIndex < 0 || allStations[allIndex]?.catalogSource === "tikpal"
+    ? tikpalStations
+    : allStations;
+  if (stations.length === 0) return false;
+
+  const currentIndex = stations.findIndex((station) => station.uri === currentFile);
+  const fallbackIndex = offset > 0 ? 0 : stations.length - 1;
+  const nextIndex = currentIndex >= 0
+    ? (currentIndex + offset + stations.length) % stations.length
+    : fallbackIndex;
+  const nextStation = stations[nextIndex];
+  if (!nextStation?.id) return false;
+
+  await switchToRadioSource({ radioStationId: nextStation.id });
+  return true;
 }
 
 async function switchToSpotifySource() {
@@ -4771,11 +5129,13 @@ async function applyMpcPlaybackActionUnlocked(action) {
       await runMpc(["pause"]);
       break;
     case "next":
+      if (await switchRadioStationByOffset(1)) break;
       await ensureMpcQueue();
       await runMpc(["next"]);
       await ensureMpcPlaybackStarted();
       break;
     case "previous":
+      if (await switchRadioStationByOffset(-1)) break;
       await ensureMpcQueue();
       await runMpc(["prev"]);
       await ensureMpcPlaybackStarted();
@@ -4807,6 +5167,9 @@ async function applyMpcPlaybackActionUnlocked(action) {
         await setOutputVolumePercent(percent);
       } else {
         await runMpc(["volume", String(Math.round(percent))]);
+        if (percent > 0) {
+          await rememberNonZeroVolumePercent(percent);
+        }
       }
       break;
     }
@@ -7279,9 +7642,12 @@ function buildPlaybackMutationRefreshOptions(action) {
   const isAirplayTransport = API_MODE === "mpc"
     && isCurrentMpcSourceAirplay()
     && isAirplayTransportPlaybackAction(action);
+  const isRadioTransport = API_MODE === "mpc"
+    && isCurrentMpcSourceRadio()
+    && isRadioStationTransportAction(action);
   return {
     includeOutputVolumeStatus: action?.type === "volume_set",
-    includeSourceRuntimeStatus: isAirplayTransport,
+    includeSourceRuntimeStatus: isAirplayTransport || isRadioTransport,
     forceFreshAirplayMetadata: isAirplayTransport
   };
 }
@@ -7482,7 +7848,7 @@ async function applyRemoteAction(action) {
         radioStationId: action.radioStationId,
         localTrackPath: action.localTrackPath
       });
-      refreshOptions.includeSourceRuntimeStatus = COMMAND_HANDOFF_SOURCE_TARGETS.has(target);
+      refreshOptions.includeSourceRuntimeStatus = target === "radio" || COMMAND_HANDOFF_SOURCE_TARGETS.has(target);
       refreshOptions.includeOutputVolumeStatus = target === "scene" || COMMAND_HANDOFF_SOURCE_TARGETS.has(target);
       break;
     }
@@ -7691,6 +8057,17 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "GET" && url.pathname === "/api/v1/media/radio-logo") {
+      const logo = await resolveRadioLogo(url.searchParams.get("stationId"));
+      if (!logo) {
+        sendJson(response, 404, { error: "NOT_FOUND", path: url.pathname });
+        return;
+      }
+
+      sendBinary(response, 200, logo.mimeType, await readFile(logo.absolutePath));
+      return;
+    }
+
     if (request.method === "GET" && url.pathname === "/api/v1/media/artwork") {
       const trackToken = url.searchParams.get("track");
       await getTikpalState();
@@ -7767,7 +8144,7 @@ const server = http.createServer(async (request, response) => {
       const action = await readJson(request);
       await applySourceSwitch(action);
       sendJson(response, 200, await refreshTikpalStateSnapshotAfterMutation({
-        includeSourceRuntimeStatus: COMMAND_HANDOFF_SOURCE_TARGETS.has(action?.target),
+        includeSourceRuntimeStatus: action?.target === "radio" || COMMAND_HANDOFF_SOURCE_TARGETS.has(action?.target),
         includeOutputVolumeStatus: action?.target === "scene" || COMMAND_HANDOFF_SOURCE_TARGETS.has(action?.target)
       }));
       return;

@@ -20,6 +20,7 @@ export interface PlaybackDisplayTruth {
   album: string;
   sourceLabel: string;
   albumArtUrl: string;
+  fallbackAlbumArtUrl: string;
   hasPlaybackArtwork: boolean;
   isGeneratedBluetoothCover: boolean;
   elapsedSeconds: number | null;
@@ -40,6 +41,9 @@ export function getPlaybackDisplayTruth(playback: PlaybackSummary, audio: AudioS
   const sourceLabel = getPlaybackSourceSummary(playback, audio)?.label ?? SOURCE_LABELS[playback.source] ?? "Unknown Source";
   const hasPlaybackArtwork = Boolean(playback.albumArtUrl);
   const isGeneratedBluetoothCover = playback.source === "bluetooth" && !hasPlaybackArtwork;
+  const fallbackAlbumArtUrl = isGeneratedBluetoothCover
+    ? buildBluetoothGeneratedCoverArtUrl(title, artist, album)
+    : buildGeneratedCoverArtUrl(title, artist, album, fontTheme);
   const elapsedSeconds = Number.isFinite(playback.elapsedSeconds) ? playback.elapsedSeconds : null;
   const durationSeconds = Number.isFinite(playback.durationSeconds) && (playback.durationSeconds ?? 0) > 0
     ? playback.durationSeconds
@@ -53,10 +57,8 @@ export function getPlaybackDisplayTruth(playback: PlaybackSummary, audio: AudioS
     artist,
     album,
     sourceLabel,
-    albumArtUrl: playback.albumArtUrl
-      ?? (isGeneratedBluetoothCover
-        ? buildBluetoothGeneratedCoverArtUrl(title, artist, album)
-        : buildGeneratedCoverArtUrl(title, artist, album, fontTheme)),
+    albumArtUrl: playback.albumArtUrl ?? fallbackAlbumArtUrl,
+    fallbackAlbumArtUrl,
     hasPlaybackArtwork,
     isGeneratedBluetoothCover,
     elapsedSeconds,

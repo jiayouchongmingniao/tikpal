@@ -150,6 +150,11 @@ function createHifiAmbientVisuals(seed: number) {
 export function EqVisualScene({ playback, audio, system, fontTheme, lyricsPanel }: EqVisualSceneProps) {
   const isPlaying = playback.state === "playing";
   const playbackTruth = getPlaybackDisplayTruth(playback, audio, fontTheme);
+  const [failedAlbumArtUrl, setFailedAlbumArtUrl] = useState<string | null>(null);
+  const displayedAlbumArtUrl = playbackTruth.hasPlaybackArtwork && failedAlbumArtUrl === playbackTruth.albumArtUrl
+    ? playbackTruth.fallbackAlbumArtUrl
+    : playbackTruth.albumArtUrl;
+  const usingGeneratedCoverFallback = !playbackTruth.hasPlaybackArtwork || displayedAlbumArtUrl === playbackTruth.fallbackAlbumArtUrl;
   const hasLyricsPanel = Boolean(lyricsPanel?.lines.length);
   const themeSeedParts = useMemo(
     () => [
@@ -188,14 +193,14 @@ export function EqVisualScene({ playback, audio, system, fontTheme, lyricsPanel 
     const fallbackTheme = buildHifiSeedTheme(themeSeedParts);
     setThemePalette(fallbackTheme);
 
-    void buildHifiCoverTheme(playbackTruth.albumArtUrl, themeSeedParts).then((nextTheme) => {
+    void buildHifiCoverTheme(displayedAlbumArtUrl, themeSeedParts).then((nextTheme) => {
       if (!cancelled) setThemePalette(nextTheme);
     });
 
     return () => {
       cancelled = true;
     };
-  }, [playbackTruth.albumArtUrl, themeSeedParts]);
+  }, [displayedAlbumArtUrl, themeSeedParts]);
 
   return (
     <section
@@ -248,10 +253,20 @@ export function EqVisualScene({ playback, audio, system, fontTheme, lyricsPanel 
           className="hifi-cover-art"
           aria-hidden="true"
           data-bluetooth-generated-cover={playbackTruth.isGeneratedBluetoothCover ? true : undefined}
+          data-generated-cover-fallback={usingGeneratedCoverFallback ? true : undefined}
           data-hifi-cover-art
         >
-          <img src={playbackTruth.albumArtUrl} alt="" />
-          {!playbackTruth.hasPlaybackArtwork ? <span>{coverLabel}</span> : null}
+          <img
+            src={displayedAlbumArtUrl}
+            alt=""
+            data-generated-cover-fallback={usingGeneratedCoverFallback ? true : undefined}
+            onError={() => {
+              if (playbackTruth.hasPlaybackArtwork) {
+                setFailedAlbumArtUrl(playbackTruth.albumArtUrl);
+              }
+            }}
+          />
+          {usingGeneratedCoverFallback ? <span>{coverLabel}</span> : null}
         </div>
         {!hasLyricsPanel ? (
           <div className="hifi-now-playing-copy" data-hifi-track-info>

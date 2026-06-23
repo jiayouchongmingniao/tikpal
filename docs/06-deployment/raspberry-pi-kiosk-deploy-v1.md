@@ -190,6 +190,8 @@ TIKPAL_ACRCLOUD_ACCESS_SECRET="YOUR_ACCESS_SECRET"
 TIKPAL_RADIO_ACTIVATE_COMMAND=""
 TIKPAL_RADIO_DEFAULT_URI=""
 TIKPAL_RADIO_LABEL="Last Station"
+TIKPAL_RADIO_LOGO_DIR="/var/local/www/imagesw/radio-logos"
+TIKPAL_RADIO_VOLUME_DEFAULT_PERCENT=35
 TIKPAL_SYSTEM_REBOOT_COMMAND="sudo systemctl reboot"
 TIKPAL_SYSTEM_SHUTDOWN_COMMAND="sudo systemctl poweroff"
 TIKPAL_DSP_PRESET=Unknown
@@ -218,9 +220,9 @@ Kiosk display diagnostics are separate from `4173`: `TIKPAL_KIOSK_REMOTE_DEBUG=1
 `TIKPAL_AIRPLAY_TRANSPORT_AVAILABLE_COMMAND`, `TIKPAL_AIRPLAY_PLAY_PAUSE_COMMAND`, `TIKPAL_AIRPLAY_PLAY_COMMAND`, `TIKPAL_AIRPLAY_PAUSE_COMMAND`, `TIKPAL_AIRPLAY_NEXT_COMMAND`, and `TIKPAL_AIRPLAY_PREVIOUS_COMMAND` route Tikpal transport buttons to the AirPlay sender while AirPlay is the current source. The checked-in `deploy/moode/tikpal-airplay-transport.sh` helper probes Shairport Sync's native D-Bus `org.gnome.ShairportSync.RemoteControl.Available` property before calling `PlayPause`, `Play`, `Pause`, `Next`, or `Previous`. Some AirPlay 2 senders expose metadata but no DACP remote-control channel; in that case Tikpal disables previous / play-pause / next instead of returning a fake-success action that cannot change the sender's queue.
 `TIKPAL_BLUETOOTH_CAPTURE_COMMAND` points to the local PCM capture script used for Bluetooth fingerprint recognition when Bluetooth metadata is unavailable. The checked-in `deploy/moode/tikpal-bluetooth-capture.sh` first tries `ffmpeg` against the connected BlueALSA device and then falls back to `arecord`; if moOde exposes a different ALSA capture path, override `TIKPAL_BLUETOOTH_CAPTURE_DEVICE` in the service environment before restarting `tikpal-api.service`.
 `TIKPAL_RECOGNITION_PROVIDER=acrcloud` plus the `TIKPAL_ACRCLOUD_*` credentials enable the online fingerprint fallback. Tikpal waits `TIKPAL_BLUETOOTH_RECOGNITION_SETTLE_MS` after the Bluetooth connection becomes active, captures `TIKPAL_BLUETOOTH_CAPTURE_DURATION_SECONDS` seconds of audio, sends it to ACRCloud, and then reuses the same LRCLIB lyrics path once a track is identified. AirPlay should normally resolve from metadata; if `TIKPAL_AIRPLAY_CAPTURE_COMMAND` is configured as a fallback, it uses its own faster `TIKPAL_AIRPLAY_RECOGNITION_SETTLE_MS` and `TIKPAL_AIRPLAY_CAPTURE_DURATION_SECONDS` values so Bluetooth recognition stability is not changed. When AirPlay capture is unset, Tikpal reports metadata unavailable instead of staying in a long fingerprint-recognition state. `TIKPAL_BLUETOOTH_RECOGNITION_NOT_FOUND_RETRY_MS` keeps the receiver trying again when the first sample catches silence or a transition instead of permanently pinning Ambient to "not found".
-moOde `cfg_radio` presets are now the primary Radio source list for the source panel, and `POST /api/v1/audio/source` can switch directly by `radioStationId`.
-`TIKPAL_RADIO_PRESET_LIMIT` caps how many moOde radio presets Tikpal reads into the panel. Keep it at `250` on the Raspberry Pi so Tikpal can expose the real moOde network-radio catalog instead of only a small demo subset.
-`TIKPAL_RADIO_DEFAULT_URI` stays as a fallback preset when moOde radio rows are unavailable, and `TIKPAL_RADIO_ACTIVATE_COMMAND` is only used when no switchable preset URI is available.
+moOde `cfg_radio` presets are still the Radio source list, and `POST /api/v1/audio/source` can switch directly by `radioStationId`. Tikpal reads the full moOde table, then defaults `/api/v1/audio/radios` to `scope=tikpal`, which returns the curated Tikpal rows grouped as `Focus`, `Calm`, `Sleep`, `Hi-Fi`, `Jazz`, `Classical`, and `News`. Use `scope=all` when the Player needs the full moOde catalog; Tikpal rows remain first.
+`TIKPAL_RADIO_LOGO_DIR` points at moOde's local station-logo folder. `/api/v1/media/radio-logo?stationId=radio-<id>` serves only known station ids, first by exact station-name logo file and then by the repo-owned alias map for curated Tikpal station names. Radio playback uses this official logo URL as `playback.albumArtUrl` when available; generated cover art remains only the fallback when the local logo is missing or fails to load.
+Radio uses MPD's software mixer. If `mpc status` shows `volume: 0%`, Tikpal restores the last nonzero MPD volume recorded in `.tikpal/audio-volume-state.json` before starting Radio. If that state does not exist yet, it falls back to the current room-mode volume and then to `TIKPAL_RADIO_VOLUME_DEFAULT_PERCENT`. While Radio is active, playback `next` and `previous` select adjacent Tikpal station ids through the API instead of asking MPD to advance a one-item stream queue. `TIKPAL_MPD_STARTUP_VOLUME` still applies only to startup priming, and `TIKPAL_RADIO_DEFAULT_URI` stays as a fallback preset when moOde radio rows are unavailable.
 If `mpc update` is not the right library refresh command on the device, also set `TIKPAL_LIBRARY_SCAN_COMMAND`.
 
 ## DDC/CI Brightness Setup
@@ -375,6 +377,29 @@ curl -fsS http://127.0.0.1:8787/api/v1/system/state | jq '.system.volume.percent
 curl -fsS http://127.0.0.1:8787/api/v1/audio/sources | jq '.currentSource'
 curl -fsS http://127.0.0.1:4173/api/v1/remote/state | jq '.volume.percent,.source'
 ```
+
+Validate the curated Radio path after importing or editing moOde presets:
+
+```bash
+curl -fsS 'http://127.0.0.1:8787/api/v1/audio/radios?limit=80' \
+  | jq '.scope,.total,.categories,.stations[0:5] | .'
+curl -fsS 'http://127.0.0.1:8787/api/v1/audio/radios?scope=all&limit=5' \
+  | jq '.total,.stations[].catalogSource'
+curl -I -fsS 'http://127.0.0.1:8787/api/v1/media/radio-logo?stationId=radio-511'
+curl -fsS -X POST http://127.0.0.1:8787/api/v1/audio/source \
+  -H "Content-Type: application/json" \
+  --data '{"target":"radio","radioStationId":"radio-511"}' \
+  | jq '.system.volume,.playback.source,.playback.albumArtUrl,.audio.currentSource'
+curl -fsS -X POST http://127.0.0.1:8787/api/v1/playback/actions \
+  -H "Content-Type: application/json" \
+  --data '{"type":"next"}' \
+  | jq '.audio.currentSource.secondaryStatus,.playback.albumArtUrl'
+mpc current -f '%file%'
+mpc status
+curl -fsS http://127.0.0.1:8787/api/v1/audio/spectrum | jq '.source,.bands[0:8]'
+```
+
+Expected result: the default Radio catalog reports the curated Tikpal count and categories, `scope=all` still exposes moOde rows, the radio-logo endpoint returns an image, MPD volume is nonzero after the Radio switch, Radio `next` changes the active station, logo, and `mpc current -f '%file%'`, and spectrum bands are nonzero when the station is audible.
 
 Verify Quick Settings actions from the API before relying on the kiosk UI:
 

@@ -172,7 +172,9 @@ Center playback zone:
 - Local category folders should remain manifest-backed. `Meditation` should not absorb Rest folders such as Sleep, Rain, Ocean, Forest, Nap, or Deep Sleep long tracks unless the manifest itself categorizes them there.
 - Radio browsing must support 200+ stations without feeling like a dense admin table.
   - Keep search and filters visible near the top of the workspace.
-  - Use large row height, quick-scan metadata pills, and obvious active/pending state.
+  - Default to the Tikpal curated catalog with `Focus`, `Calm`, `Sleep`, `Hi-Fi`, `Jazz`, `Classical`, and `News` tabs, while keeping an `All moOde` scope for the full station table.
+  - Use official station logo thumbnails when the backend exposes `logoUrl`; generated covers are only a fallback when the logo file is unavailable.
+  - Use large row height, broadcaster copy, quick-scan metadata pills, and obvious active/pending state.
 - Bluetooth, AirPlay, and DLNA should read like gated intake modes, not ordinary playlists.
   - Unselected: blocked for new connections.
   - Selected: armed and waiting, or connected when a device/session is present.

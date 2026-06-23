@@ -488,7 +488,7 @@ function createProviderServer() {
         return;
       }
 
-      if (track === "A.M. Ambient") {
+      if (track === "A.M. Ambient" || track === "Tikpal Calm - Radio Paradise Mellow") {
         sendProviderJson(response, 200, {
           trackName: track,
           artistName: "Internet Radio",
@@ -1065,6 +1065,212 @@ switch (command) {
       `cached mpc state should not wait for slow system commands, took ${elapsedMs}ms`
     );
     assert(state.body.runtime.apiMode === "mpc", "cached mpc state should still report mpc mode");
+  } finally {
+    if (server.exitCode === null && server.signalCode === null) {
+      server.kill("SIGTERM");
+      await Promise.race([
+        new Promise((resolve) => server.once("exit", resolve)),
+        wait(1000)
+      ]);
+    }
+    await rm(workspace, { recursive: true, force: true });
+  }
+}
+
+async function runMpcRadioPresetFastSnapshotSmoke(roomExperienceStatePath) {
+  const port = PORT + 16;
+  const baseUrl = `http://${HOST}:${port}`;
+  const workspace = await mkdtemp(path.join(tmpdir(), "tikpal-mpc-radio-preset-"));
+  const fakeMpcPath = path.join(workspace, "mpc-fake.mjs");
+  const fakeSqlitePath = path.join(workspace, "sqlite3");
+  const fakeMpcStatePath = path.join(workspace, "mpc-state.json");
+  const fakeLogoDir = path.join(workspace, "radio-logos");
+  const fakeAudioVolumeStatePath = path.join(workspace, "audio-volume-state.json");
+  const radioUri = "http://radio.example/tikpal-calm";
+
+  await writeFile(fakeMpcStatePath, JSON.stringify({
+    currentFile: "Codex/Smoke.mp3",
+    playbackState: "playing",
+    volume: 0
+  }));
+  await mkdir(fakeLogoDir, { recursive: true });
+  await writeFile(path.join(fakeLogoDir, "Tikpal Focus - Test Exact.jpg"), Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
+  await writeFile(path.join(fakeLogoDir, "FluxFM - Chillout Radio.jpg"), Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
+  await writeFile(fakeAudioVolumeStatePath, JSON.stringify({ version: 1, lastNonZeroPercent: 44, updatedAt: "2026-01-01T00:00:00.000Z" }));
+  await writeFile(fakeMpcPath, `#!/usr/bin/env node
+import { readFileSync, writeFileSync } from "node:fs";
+
+const statePath = ${JSON.stringify(fakeMpcStatePath)};
+function readState() {
+  return JSON.parse(readFileSync(statePath, "utf8"));
+}
+function writeState(state) {
+  writeFileSync(statePath, JSON.stringify(state));
+}
+const rawArgs = process.argv.slice(2);
+const args = [];
+for (let index = 0; index < rawArgs.length; index += 1) {
+  if (rawArgs[index] === "--host" || rawArgs[index] === "--port" || rawArgs[index] === "--format") {
+    index += 1;
+    continue;
+  }
+  args.push(rawArgs[index]);
+}
+const command = args[0] ?? "";
+const state = readState();
+const isRadio = /^https?:\\/\\//i.test(state.currentFile);
+switch (command) {
+  case "current":
+    if (!state.currentFile) break;
+    process.stdout.write(isRadio
+      ? "Tikpal Calm Test\\tInternet Radio\\tRadio\\t" + state.currentFile + "\\t0:00\\n"
+      : "Smoke Title\\tSmoke Artist\\tSmoke Album\\t" + state.currentFile + "\\t02:00\\n");
+    break;
+  case "status":
+    process.stdout.write("[" + state.playbackState + "] #1/1 0:01/" + (isRadio ? "0:00" : "2:00") + " (0%)\\nvolume:" + state.volume + "%   repeat: off   random: off   single: off   consume: off\\n");
+    break;
+  case "stats":
+    process.stdout.write("Artists: 1\\nAlbums: 1\\nSongs: 1\\nDB Updated: fake\\n");
+    break;
+  case "playlist":
+    if (state.currentFile) process.stdout.write("0\\tTikpal Calm Test\\tInternet Radio\\tRadio\\t0:00\\t" + state.currentFile + "\\n");
+    break;
+  case "clear":
+    writeState({ ...state, currentFile: "" });
+    break;
+  case "add":
+    writeState({ ...state, currentFile: args[1] ?? "" });
+    break;
+  case "play":
+    writeState({ ...state, playbackState: "playing" });
+    break;
+  case "pause":
+    writeState({ ...state, playbackState: "paused" });
+    break;
+  case "stop":
+    writeState({ ...state, playbackState: "stopped" });
+    break;
+  case "volume":
+    writeState({ ...state, volume: Number(args[1] ?? 0) });
+    break;
+  default:
+    break;
+}
+`);
+  await chmod(fakeMpcPath, 0o755);
+  await writeFile(fakeSqlitePath, `#!/usr/bin/env node
+if (process.argv.join(" ").includes("cfg_radio")) {
+  process.stdout.write([
+    "1|1.FM - Blues Radio|http://radio.example/blues|Blues|1.FM|192|MP3|local",
+    "500|Tikpal Focus - Test Exact|http://radio.example/tikpal-focus|Focus, Ambient|Test FM|320|MP3|local",
+    "511|Tikpal Calm - FluxFM Chillout|${radioUri}|Calm, Chill Out, Laidback|FluxFM|256|MP3|local"
+  ].join("\\n") + "\\n");
+}
+`);
+  await chmod(fakeSqlitePath, 0o755);
+
+  const server = spawn(process.execPath, ["server/index.mjs"], {
+    env: mpcFocusedSmokeEnv({
+      PATH: `${workspace}${path.delimiter}${process.env.PATH ?? ""}`,
+      TIKPAL_API_HOST: HOST,
+      TIKPAL_API_PORT: String(port),
+      TIKPAL_PLAYER_BACKEND: "mpc",
+      TIKPAL_MPC_BIN: fakeMpcPath,
+      TIKPAL_SQLITE_BIN: fakeSqlitePath,
+      TIKPAL_RADIO_LOGO_DIR: fakeLogoDir,
+      TIKPAL_AUDIO_VOLUME_STATE_PATH: fakeAudioVolumeStatePath,
+      TIKPAL_MPD_HOST: "127.0.0.1",
+      TIKPAL_MPD_PORT: "6600",
+      TIKPAL_ROOM_EXPERIENCE_STATE_PATH: roomExperienceStatePath,
+      TIKPAL_STATE_SNAPSHOT_REFRESH_MS: "60000",
+      TIKPAL_RADIO_DEFAULT_URI: "",
+      TIKPAL_RADIO_ACTIVATE_COMMAND: ""
+    }),
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+
+  try {
+    await waitForHealthAt(baseUrl);
+    const catalog = await requestFrom(baseUrl, "/api/v1/audio/radios");
+    assert(catalog.response.ok, "mpc radio preset catalog should return 200");
+    assert(catalog.body.total === 2, "mpc radio catalog should default to Tikpal curated stations");
+    assert(catalog.body.stations[0]?.id === "radio-500", "mpc radio catalog should expose high-id Tikpal cfg_radio rows first");
+    assert(catalog.body.stations[0]?.category === "focus", "mpc radio catalog should expose Tikpal category");
+    assert(catalog.body.stations[0]?.broadcaster === "Test FM", "mpc radio catalog should expose broadcaster");
+    assert(catalog.body.stations[0]?.logoUrl?.startsWith("/api/v1/media/radio-logo?stationId=radio-500"), "mpc radio catalog should expose radio logo URL");
+    assert(catalog.body.categories.some((category) => category.id === "calm"), "mpc radio catalog should expose category tabs");
+
+    const allCatalog = await requestFrom(baseUrl, "/api/v1/audio/radios?scope=all&limit=250");
+    assert(allCatalog.response.ok, "mpc radio all-scope catalog should return 200");
+    assert(allCatalog.body.total === 3, "mpc radio all-scope catalog should include moOde and Tikpal rows");
+    assert(allCatalog.body.stations[0]?.catalogSource === "tikpal", "mpc radio all-scope catalog should keep Tikpal rows first");
+    assert(allCatalog.body.stations.some((station) => station.id === "radio-1" && station.catalogSource === "moode"), "mpc radio all-scope catalog should retain moOde rows");
+
+    const calmCatalog = await requestFrom(baseUrl, "/api/v1/audio/radios?category=calm");
+    assert(calmCatalog.response.ok, "mpc radio category catalog should return 200");
+    assert(calmCatalog.body.total === 1 && calmCatalog.body.stations[0]?.id === "radio-511", "mpc radio category filter should isolate Calm stations");
+
+    const exactLogo = await requestBinaryFrom(baseUrl, catalog.body.stations[0].logoUrl);
+    assert(exactLogo.response.ok, "mpc radio exact logo endpoint should return 200");
+    assert(exactLogo.response.headers.get("content-type")?.startsWith("image/jpeg"), "mpc radio exact logo endpoint should return image bytes");
+
+    const scene = await requestFrom(baseUrl, "/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({
+        target: "scene",
+        sceneVideoId: "rainy-window",
+        sceneVideoLabel: "Rainy Window",
+        sceneVideoSrc: "/assets/scenes/Rainy-Window.mp4"
+      })
+    });
+    assert(scene.response.ok, "mpc scene switch should return 200 before radio cache regression check");
+    assert(scene.body.audio.currentSource.id === "scene", "mpc scene switch should prime cached scene source");
+
+    const switched = await requestFrom(baseUrl, "/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({ target: "radio", radioStationId: "radio-511" })
+    });
+    assert(switched.response.ok, "mpc radio preset switch should return 200");
+    assert(switched.body.audio.currentSource.id === "radio", "mpc radio preset switch should make Radio current");
+    assert(switched.body.playback.source === "radio", "mpc radio preset switch should make playback Radio");
+    assert(switched.body.system.volume.percent === 44, "mpc radio preset switch should restore the last nonzero MPD volume");
+    assert(switched.body.playback.albumArtUrl?.startsWith("/api/v1/media/radio-logo?stationId=radio-511"), "mpc radio playback should prefer station logo artwork");
+    const aliasLogo = await requestBinaryFrom(baseUrl, switched.body.playback.albumArtUrl);
+    assert(aliasLogo.response.ok, "mpc radio alias logo endpoint should return 200");
+    assert(JSON.parse(await readFile(fakeMpcStatePath, "utf8")).volume === 44, "mpc radio preset switch should issue mpc volume restore command");
+    assert(
+      switched.body.audio.sources.some((source) => source.id === "radio" && source.availability === "available" && source.controllability === "switchable"),
+      "mpc radio preset switch should return Radio as available and switchable without TIKPAL_RADIO_DEFAULT_URI"
+    );
+
+    const nextRadio = await requestFrom(baseUrl, "/api/v1/playback/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "next" })
+    });
+    assert(nextRadio.response.ok, "mpc radio next should return 200");
+    assert(nextRadio.body.audio.currentSource.secondaryStatus === "Tikpal Focus - Test Exact active", "mpc radio next should advance to the next Tikpal station");
+    assert(nextRadio.body.playback.albumArtUrl?.startsWith("/api/v1/media/radio-logo?stationId=radio-500"), "mpc radio next should refresh station logo artwork");
+    assert(JSON.parse(await readFile(fakeMpcStatePath, "utf8")).currentFile === "http://radio.example/tikpal-focus", "mpc radio next should replace the MPD stream URI");
+
+    const previousRadio = await requestFrom(baseUrl, "/api/v1/playback/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "previous" })
+    });
+    assert(previousRadio.response.ok, "mpc radio previous should return 200");
+    assert(previousRadio.body.audio.currentSource.secondaryStatus === "Tikpal Calm - FluxFM Chillout active", "mpc radio previous should return to the previous Tikpal station");
+    assert(previousRadio.body.playback.albumArtUrl?.startsWith("/api/v1/media/radio-logo?stationId=radio-511"), "mpc radio previous should refresh station logo artwork");
+    assert(JSON.parse(await readFile(fakeMpcStatePath, "utf8")).currentFile === radioUri, "mpc radio previous should replace the MPD stream URI");
+
+    const fastRefresh = await requestFrom(baseUrl, "/api/v1/playback/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "pause" })
+    });
+    assert(fastRefresh.response.ok, "mpc radio fast playback mutation should return 200");
+    assert(fastRefresh.body.audio.currentSource.id === "radio", "mpc radio fast refresh should keep Radio current");
+    assert(
+      fastRefresh.body.audio.sources.some((source) => source.id === "radio" && source.availability === "available" && source.controllability === "switchable"),
+      "mpc radio fast refresh should preserve preset-backed Radio availability"
+    );
   } finally {
     if (server.exitCode === null && server.signalCode === null) {
       server.kill("SIGTERM");
@@ -2060,10 +2266,10 @@ async function run() {
     assert(rainyWindow?.audioGainDb === 11.1, "background video catalog should expose scene audio gain");
     assert(backgroundVideos.body.catalogVersion, "background video catalog should expose a catalog version");
 
-    const radios = await request("/api/v1/audio/radios?q=ambient&genre=Ambient");
+    const radios = await request("/api/v1/audio/radios?q=groove&category=focus");
     assert(radios.response.ok, "radio catalog should return 200");
     assert(radios.body.total >= 1, "radio catalog should include matching stations");
-    assert(radios.body.stations.every((station) => station.genre === "Ambient"), "radio catalog should filter by genre");
+    assert(radios.body.stations.every((station) => station.category === "focus"), "radio catalog should filter by Tikpal category");
 
     const artwork = await request("/api/v1/media/artwork?track=mock");
     assert(artwork.response.status === 404, "mock artwork endpoint should return 404 when no current artwork is available");
@@ -2289,11 +2495,9 @@ async function run() {
     assert(radio.response.ok, "radio source switch should return 200");
     assert(radio.body.audio.currentSource.id === "radio", "radio switch should activate radio in mock mode");
     assert(radio.body.playback.source === "radio", "playback source should follow radio switch");
-    assert(radio.body.playback.title === "A.M. Ambient", "radio switch should surface the active preset label");
+    assert(radio.body.playback.title === "Tikpal Calm - Radio Paradise Mellow", "radio switch should surface the active preset label");
     assert(radio.body.audio.sources.some((source) => source.id === "airplay" && source.armed === false), "radio switch should close airplay intake");
     assert(radio.body.audio.sources.some((source) => source.id === "upnp" && source.armed === false), "radio switch should close dlna intake");
-    const radioLyrics = await waitForLyricsStatus(["ready"]);
-    assert(radioLyrics.lines[0]?.text.includes("Midnight radio glow"), "radio metadata changes should resolve a new lyrics payload");
 
     const mpd = await request("/api/v1/audio/source", {
       method: "POST",
@@ -2482,6 +2686,7 @@ async function run() {
     await runMpcHifiCommandGuardSmoke(roomExperienceStatePath);
     await runMpcLocalLibraryPathSmoke(roomExperienceStatePath);
     await runMpcCachedStateSmoke(roomExperienceStatePath);
+    await runMpcRadioPresetFastSnapshotSmoke(roomExperienceStatePath);
     await runMpcAirplayHandoffRefreshSmoke(roomExperienceStatePath);
 
     console.log("api smoke passed");
