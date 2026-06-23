@@ -2508,6 +2508,51 @@ try {
     client,
     `
       (() => {
+        if (!document.querySelector('[data-ambient-source-option="radio"]')) {
+          document.querySelector('[data-ambient-source-toggle]')?.click();
+        }
+        return true;
+      })()
+    `
+  );
+  await expectEventually(client, "document.querySelector('[data-ambient-source-option=\"radio\"]') !== null", "Ambient source picker exposes Radio from Scene Sound");
+  await evaluate(
+    client,
+    `
+      (() => {
+        const originalFetch = window.fetch.bind(window);
+        window.fetch = (input, init) => {
+          const url = typeof input === 'string' ? input : input instanceof Request ? input.url : String(input);
+          if (url.includes('/api/v1/audio/source')) {
+            window.fetch = originalFetch;
+            return Promise.resolve(new Response(JSON.stringify({ error: 'SMOKE_SOURCE_SWITCH_FAILURE' }), {
+              status: 500,
+              headers: { 'Content-Type': 'application/json' }
+            }));
+          }
+          return originalFetch(input, init);
+        };
+        return true;
+      })()
+    `
+  );
+  await evaluate(client, "document.querySelector('[data-ambient-source-option=\"radio\"]')?.click()");
+  await wait(80);
+  await expect(client, "document.querySelector('.flame-video.is-active') instanceof HTMLVideoElement && document.querySelector('.flame-video.is-active').muted === true", "Ambient Radio failed switch first mutes scene video");
+  await expectEventually(client, "document.querySelector('.flame-video.is-active') instanceof HTMLVideoElement && document.querySelector('.flame-video.is-active').muted === false && document.querySelector('.ambient-source-error') !== null", "Ambient Radio failed switch restores scene audio");
+  await evaluate(client, "document.querySelector('[data-ambient-source-option=\"radio\"]')?.click()");
+  await wait(80);
+  await expect(client, "document.querySelector('.flame-video.is-active') instanceof HTMLVideoElement && document.querySelector('.flame-video.is-active').muted === true", "Ambient Radio source switch mutes scene video before backend switch");
+  await expectEventuallyEvaluate(
+    client,
+    "Promise.all([fetch('/api/v1/system/state').then((response) => response.json()), fetch('/api/v1/experience/state').then((response) => response.json())]).then(([state, experience]) => state.audio.currentSource.id === 'radio' && state.playback.source === 'radio' && experience.sceneSoundEnabled === false)",
+    "Ambient Radio source selection deactivates scene sound and starts Radio"
+  );
+  await click(client, 1280, 280);
+  await evaluate(
+    client,
+    `
+      (() => {
         if (!document.querySelector('[data-ambient-source-option="mpd"]')) {
           document.querySelector('[data-ambient-source-toggle]')?.click();
         }

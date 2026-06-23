@@ -59,6 +59,14 @@ const RADIO_VOLUME_DEFAULT_PERCENT_RAW = Number(process.env.TIKPAL_RADIO_VOLUME_
 const RADIO_VOLUME_DEFAULT_PERCENT = Number.isFinite(RADIO_VOLUME_DEFAULT_PERCENT_RAW)
   ? Math.max(1, Math.min(100, Math.round(RADIO_VOLUME_DEFAULT_PERCENT_RAW)))
   : 35;
+const RADIO_SWITCH_RETRY_DELAYS_MS = parseEnvIntegerList(process.env.TIKPAL_RADIO_SWITCH_RETRY_DELAYS_MS, [250, 1000, 2000]);
+const RADIO_START_VERIFY_WINDOW_MS = parseEnvPositiveInteger(process.env.TIKPAL_RADIO_START_VERIFY_WINDOW_MS, 5000);
+const RADIO_START_VERIFY_POLL_MS = parseEnvPositiveInteger(process.env.TIKPAL_RADIO_START_VERIFY_POLL_MS, 500);
+const RADIO_POST_START_SETTLE_MS = parseEnvPositiveInteger(process.env.TIKPAL_RADIO_POST_START_SETTLE_MS, 2000);
+const RADIO_POST_START_RECOVERY_PLAYS = parseEnvPositiveInteger(process.env.TIKPAL_RADIO_POST_START_RECOVERY_PLAYS, 3);
+const RADIO_LATE_PLAY_NUDGE_DELAYS_MS = parseEnvIntegerList(process.env.TIKPAL_RADIO_LATE_PLAY_NUDGE_DELAYS_MS, [2000, 5000, 9000, 15000]);
+const KIOSK_AUDIO_RELEASE_COMMAND = process.env.TIKPAL_KIOSK_AUDIO_RELEASE_COMMAND ?? "";
+const KIOSK_AUDIO_RELEASE_SETTLE_MS = parseEnvPositiveInteger(process.env.TIKPAL_KIOSK_AUDIO_RELEASE_SETTLE_MS, 250);
 const AUDIO_READY_COMMAND = process.env.TIKPAL_AUDIO_READY_COMMAND ?? "";
 const AUDIO_ACTIVE_COMMAND = process.env.TIKPAL_AUDIO_ACTIVE_COMMAND ?? "";
 const AUDIO_ACTIVATE_COMMAND = process.env.TIKPAL_AUDIO_ACTIVATE_COMMAND ?? "";
@@ -338,6 +346,20 @@ const execFileAsync = promisify(execFile);
 function parseEnvBoolean(value) {
   const normalized = String(value ?? "").trim().toLowerCase();
   return ["1", "true", "yes", "on", "enabled"].includes(normalized);
+}
+
+function parseEnvPositiveInteger(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : fallback;
+}
+
+function parseEnvIntegerList(value, fallback) {
+  if (!value) return fallback;
+  const parsed = String(value)
+    .split(",")
+    .map((entry) => parseEnvPositiveInteger(entry.trim(), null))
+    .filter((entry) => Number.isFinite(entry));
+  return parsed.length > 0 ? parsed : fallback;
 }
 
 const tracks = [
@@ -1718,6 +1740,10 @@ async function readAirplayTransportAvailable(includeSlowRuntimeStatus) {
 
 function shellQuote(value) {
   return `'${String(value).replaceAll("'", "'\\''")}'`;
+}
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function expandHifiEqCommand(command, preset) {
@@ -4262,6 +4288,14 @@ async function ensureAirplayReceiverState(enabled) {
   await runCommand(command, { allowFailure: true, timeout: 5000 });
 }
 
+async function releaseKioskAudioOutputForMpd(target) {
+  if (API_MODE !== "mpc" || !["mpd", "radio"].includes(target) || !KIOSK_AUDIO_RELEASE_COMMAND.trim()) return;
+  await runCommand(KIOSK_AUDIO_RELEASE_COMMAND, { allowFailure: true, timeout: 2500 });
+  if (KIOSK_AUDIO_RELEASE_SETTLE_MS > 0) {
+    await wait(KIOSK_AUDIO_RELEASE_SETTLE_MS);
+  }
+}
+
 async function enforceConnectionGate(nextSource) {
   if (nextSource === "audio") {
     if (AUDIO_ACTIVATE_COMMAND) {
@@ -4974,6 +5008,101 @@ async function switchToAudioSource() {
   await switchToMpdSource();
 }
 
+function getMpcRadioStartFailure(statusRaw, status, { requirePlaying = false } = {}) {
+  if (/Failed to open ALSA device|Device or resource busy|ERROR:/i.test(statusRaw)) {
+    return "MPD radio stream reported an ALSA output failure";
+  }
+  if (status.state && status.state !== "playing") {
+    return `MPD radio stream entered ${status.state}`;
+  }
+  if (requirePlaying && status.state !== "playing") {
+    return "MPD radio stream did not report playing";
+  }
+  return null;
+}
+
+async function readMpcRadioStartStatus(options = {}) {
+  const statusRaw = await runMpc(["status"], { allowFailure: true });
+  const status = parseMpcStatus(statusRaw);
+  return {
+    raw: statusRaw,
+    status,
+    failure: getMpcRadioStartFailure(statusRaw, status, options)
+  };
+}
+
+async function nudgeMpcPlaybackStart(position = null) {
+  const playArgs = position === null ? ["play"] : ["play", String(position)];
+  await runMpc(playArgs, { allowFailure: true });
+}
+
+async function verifyMpcRadioStartWindow() {
+  const deadline = Date.now() + RADIO_START_VERIFY_WINDOW_MS;
+  let lastStatusRaw = "";
+  let lastFailure = null;
+
+  while (Date.now() < deadline) {
+    await wait(RADIO_START_VERIFY_POLL_MS);
+    const statusSnapshot = await readMpcRadioStartStatus();
+    lastStatusRaw = statusSnapshot.raw;
+
+    if (statusSnapshot.status.state === "playing") {
+      return;
+    }
+
+    lastFailure = statusSnapshot.failure;
+    await nudgeMpcPlaybackStart();
+  }
+
+  throw new Error(lastFailure ?? `MPD radio stream did not report playing${lastStatusRaw ? `: ${lastStatusRaw}` : ""}`);
+}
+
+async function recoverLateMpcRadioStartFailure() {
+  let lastFailure = null;
+
+  for (let recovery = 0; recovery <= RADIO_POST_START_RECOVERY_PLAYS; recovery += 1) {
+    await wait(RADIO_POST_START_SETTLE_MS);
+    const statusSnapshot = await readMpcRadioStartStatus({ requirePlaying: true });
+    if (!statusSnapshot.failure) return;
+
+    lastFailure = statusSnapshot.failure;
+    if (recovery >= RADIO_POST_START_RECOVERY_PLAYS) break;
+
+    await nudgeMpcPlaybackStart();
+    await verifyMpcRadioStartWindow();
+  }
+
+  throw new Error(lastFailure ?? "MPD radio stream did not remain playing after recovery");
+}
+
+function scheduleMpcRadioLatePlayNudges(targetUri) {
+  for (const delayMs of RADIO_LATE_PLAY_NUDGE_DELAYS_MS) {
+    const timer = setTimeout(() => {
+      void (async () => {
+        const currentUri = (await runMpc(["--format", "%file%", "current"], { allowFailure: true })).trim();
+        if (currentUri !== targetUri) return;
+
+        const statusSnapshot = await readMpcRadioStartStatus({ requirePlaying: true });
+        if (!statusSnapshot.failure) return;
+
+        await nudgeMpcPlaybackStart();
+      })().catch(() => {
+        // A delayed nudge is best-effort; the source switch response already carried the real outcome.
+      });
+    }, delayMs);
+    timer.unref?.();
+  }
+}
+
+async function startRadioStreamUri(targetUri) {
+  await runMpc(["clear"]);
+  await runMpc(["add", targetUri]);
+  await restoreMpcRadioVolumeIfMuted();
+  await nudgeMpcPlaybackStart();
+  await verifyMpcRadioStartWindow();
+  await recoverLateMpcRadioStartFailure();
+}
+
 async function switchToRadioSource(action = {}) {
   const radioStations = await getAvailableRadioStations();
   const selectedStation = action.radioStationId
@@ -4995,10 +5124,24 @@ async function switchToRadioSource(action = {}) {
     throw new Error("radio is unavailable in this runtime");
   }
 
-  await runMpc(["clear"]);
-  await runMpc(["add", targetUri]);
-  await restoreMpcRadioVolumeIfMuted();
-  await ensureMpcPlaybackStarted();
+  let lastError = null;
+  try {
+    for (let attempt = 0; attempt <= RADIO_SWITCH_RETRY_DELAYS_MS.length; attempt += 1) {
+      if (attempt > 0) {
+        await wait(RADIO_SWITCH_RETRY_DELAYS_MS[attempt - 1]);
+      }
+      try {
+        await startRadioStreamUri(targetUri);
+        return;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    throw lastError ?? new Error("MPD radio stream did not remain playing");
+  } finally {
+    scheduleMpcRadioLatePlayNudges(targetUri);
+  }
 }
 
 async function switchRadioStationByOffset(offset) {
@@ -7293,9 +7436,11 @@ async function applyMpcSourceSwitchUnlocked(action) {
       stopSceneAudio();
       resetBluetoothRecognitionSession();
       if (action.localTrackPath) {
+        await releaseKioskAudioOutputForMpd("mpd");
         await switchToLocalLibraryTrack(action.localTrackPath);
       } else {
         await enforceConnectionGate("mpd");
+        await releaseKioskAudioOutputForMpd("mpd");
         await switchToMpdSource();
       }
       return;
@@ -7310,6 +7455,7 @@ async function applyMpcSourceSwitchUnlocked(action) {
       stopSceneAudio();
       resetBluetoothRecognitionSession();
       await enforceConnectionGate("radio");
+      await releaseKioskAudioOutputForMpd("radio");
       await switchToRadioSource(action);
       return;
     case "scene":
@@ -7371,14 +7517,20 @@ async function syncRoomSceneSoundForSource(target) {
 }
 
 async function applySourceSwitch(action, { syncSceneSoundState = true } = {}) {
+  const target = String(action?.target ?? "");
+  const syncSceneBeforeSwitch = syncSceneSoundState && target !== "scene";
+  if (syncSceneBeforeSwitch) {
+    await syncRoomSceneSoundForSource(target);
+  }
+
   if (API_MODE === "mpc") {
     await applyMpcSourceSwitch(action);
   } else {
     await applyMockSourceSwitch(action);
   }
 
-  if (syncSceneSoundState) {
-    await syncRoomSceneSoundForSource(action?.target);
+  if (syncSceneSoundState && !syncSceneBeforeSwitch) {
+    await syncRoomSceneSoundForSource(target);
   }
 }
 

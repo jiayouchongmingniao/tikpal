@@ -744,6 +744,11 @@ switch (command) {
       TIKPAL_MPD_PORT: "6600",
       TIKPAL_ROOM_EXPERIENCE_STATE_PATH: roomExperienceStatePath,
       TIKPAL_OUTPUT_VOLUME_GET_COMMAND: "",
+      TIKPAL_RADIO_START_VERIFY_WINDOW_MS: "40",
+      TIKPAL_RADIO_START_VERIFY_POLL_MS: "20",
+      TIKPAL_RADIO_POST_START_SETTLE_MS: "20",
+      TIKPAL_RADIO_POST_START_RECOVERY_PLAYS: "1",
+      TIKPAL_RADIO_SWITCH_RETRY_DELAYS_MS: "20,20,20",
       TIKPAL_STARTUP_SCENE_SOUND_ENABLED: "1"
     },
     stdio: ["ignore", "pipe", "pipe"]
@@ -1082,6 +1087,7 @@ async function runMpcRadioPresetFastSnapshotSmoke(roomExperienceStatePath) {
   const baseUrl = `http://${HOST}:${port}`;
   const workspace = await mkdtemp(path.join(tmpdir(), "tikpal-mpc-radio-preset-"));
   const fakeMpcPath = path.join(workspace, "mpc-fake.mjs");
+  const fakeKioskAudioReleasePath = path.join(workspace, "release-kiosk-audio.mjs");
   const fakeSqlitePath = path.join(workspace, "sqlite3");
   const fakeMpcStatePath = path.join(workspace, "mpc-state.json");
   const fakeLogoDir = path.join(workspace, "radio-logos");
@@ -1091,7 +1097,11 @@ async function runMpcRadioPresetFastSnapshotSmoke(roomExperienceStatePath) {
   await writeFile(fakeMpcStatePath, JSON.stringify({
     currentFile: "Codex/Smoke.mp3",
     playbackState: "playing",
-    volume: 0
+    volume: 0,
+    failNextAddForUri: radioUri,
+    addFailures: 0,
+    radioStartStatusFailures: 1,
+    observations: []
   }));
   await mkdir(fakeLogoDir, { recursive: true });
   await writeFile(path.join(fakeLogoDir, "Tikpal Focus - Test Exact.jpg"), Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
@@ -1101,11 +1111,28 @@ async function runMpcRadioPresetFastSnapshotSmoke(roomExperienceStatePath) {
 import { readFileSync, writeFileSync } from "node:fs";
 
 const statePath = ${JSON.stringify(fakeMpcStatePath)};
+const roomStatePath = ${JSON.stringify(roomExperienceStatePath)};
 function readState() {
   return JSON.parse(readFileSync(statePath, "utf8"));
 }
 function writeState(state) {
   writeFileSync(statePath, JSON.stringify(state));
+}
+function readRoomSceneSoundEnabled() {
+  try {
+    return JSON.parse(readFileSync(roomStatePath, "utf8")).sceneSoundEnabled === true;
+  } catch {
+    return null;
+  }
+}
+function recordObservation(state, command) {
+  return {
+    ...state,
+    observations: [
+      ...(Array.isArray(state.observations) ? state.observations : []),
+      { command, sceneSoundEnabled: readRoomSceneSoundEnabled() }
+    ]
+  };
 }
 const rawArgs = process.argv.slice(2);
 const args = [];
@@ -1127,6 +1154,15 @@ switch (command) {
       : "Smoke Title\\tSmoke Artist\\tSmoke Album\\t" + state.currentFile + "\\t02:00\\n");
     break;
   case "status":
+    if (isRadio && Number(state.radioStartStatusFailures ?? 0) > 0) {
+      writeState(recordObservation({
+        ...state,
+        radioStartStatusFailures: Number(state.radioStartStatusFailures ?? 0) - 1,
+        playbackState: "paused"
+      }, "status-busy"));
+      process.stdout.write("[" + "paused" + "] #1/1 0:00/" + "0:00" + " (0%)\\nvolume:" + state.volume + "%   repeat: off   random: off   single: off   consume: off\\nERROR: Failed to open \\"ALSA Default\\" (alsa); Failed to open ALSA device \\"_audioout\\": Device or resource busy\\n");
+      break;
+    }
     process.stdout.write("[" + state.playbackState + "] #1/1 0:01/" + (isRadio ? "0:00" : "2:00") + " (0%)\\nvolume:" + state.volume + "%   repeat: off   random: off   single: off   consume: off\\n");
     break;
   case "stats":
@@ -1136,13 +1172,22 @@ switch (command) {
     if (state.currentFile) process.stdout.write("0\\tTikpal Calm Test\\tInternet Radio\\tRadio\\t0:00\\t" + state.currentFile + "\\n");
     break;
   case "clear":
-    writeState({ ...state, currentFile: "" });
+    writeState(recordObservation({ ...state, currentFile: "" }, "clear"));
     break;
   case "add":
-    writeState({ ...state, currentFile: args[1] ?? "" });
+    if (state.failNextAddForUri && state.failNextAddForUri === args[1]) {
+      writeState(recordObservation({
+        ...state,
+        failNextAddForUri: null,
+        addFailures: Number(state.addFailures ?? 0) + 1
+      }, "add-failed"));
+      process.stderr.write("Failed to open ALSA device _audioout: Device or resource busy\\n");
+      process.exit(1);
+    }
+    writeState(recordObservation({ ...state, currentFile: args[1] ?? "" }, "add"));
     break;
   case "play":
-    writeState({ ...state, playbackState: "playing" });
+    writeState(recordObservation({ ...state, playbackState: "playing" }, "play"));
     break;
   case "pause":
     writeState({ ...state, playbackState: "paused" });
@@ -1158,6 +1203,27 @@ switch (command) {
 }
 `);
   await chmod(fakeMpcPath, 0o755);
+  await writeFile(fakeKioskAudioReleasePath, `#!/usr/bin/env node
+import { readFileSync, writeFileSync } from "node:fs";
+
+const statePath = ${JSON.stringify(fakeMpcStatePath)};
+const roomStatePath = ${JSON.stringify(roomExperienceStatePath)};
+const state = JSON.parse(readFileSync(statePath, "utf8"));
+let sceneSoundEnabled = null;
+try {
+  sceneSoundEnabled = JSON.parse(readFileSync(roomStatePath, "utf8")).sceneSoundEnabled === true;
+} catch {
+  sceneSoundEnabled = null;
+}
+writeFileSync(statePath, JSON.stringify({
+  ...state,
+  observations: [
+    ...(Array.isArray(state.observations) ? state.observations : []),
+    { command: "release-kiosk-audio", sceneSoundEnabled }
+  ]
+}));
+`);
+  await chmod(fakeKioskAudioReleasePath, 0o755);
   await writeFile(fakeSqlitePath, `#!/usr/bin/env node
 if (process.argv.join(" ").includes("cfg_radio")) {
   process.stdout.write([
@@ -1184,7 +1250,14 @@ if (process.argv.join(" ").includes("cfg_radio")) {
       TIKPAL_ROOM_EXPERIENCE_STATE_PATH: roomExperienceStatePath,
       TIKPAL_STATE_SNAPSHOT_REFRESH_MS: "60000",
       TIKPAL_RADIO_DEFAULT_URI: "",
-      TIKPAL_RADIO_ACTIVATE_COMMAND: ""
+      TIKPAL_RADIO_ACTIVATE_COMMAND: "",
+      TIKPAL_RADIO_START_VERIFY_WINDOW_MS: "120",
+      TIKPAL_RADIO_START_VERIFY_POLL_MS: "20",
+      TIKPAL_RADIO_POST_START_SETTLE_MS: "20",
+      TIKPAL_RADIO_POST_START_RECOVERY_PLAYS: "1",
+      TIKPAL_RADIO_SWITCH_RETRY_DELAYS_MS: "20,20,20",
+      TIKPAL_KIOSK_AUDIO_RELEASE_COMMAND: `${process.execPath} ${fakeKioskAudioReleasePath}`,
+      TIKPAL_KIOSK_AUDIO_RELEASE_SETTLE_MS: "1"
     }),
     stdio: ["ignore", "pipe", "pipe"]
   });
@@ -1225,6 +1298,8 @@ if (process.argv.join(" ").includes("cfg_radio")) {
     });
     assert(scene.response.ok, "mpc scene switch should return 200 before radio cache regression check");
     assert(scene.body.audio.currentSource.id === "scene", "mpc scene switch should prime cached scene source");
+    const stateAfterScene = JSON.parse(await readFile(fakeMpcStatePath, "utf8"));
+    await writeFile(fakeMpcStatePath, JSON.stringify({ ...stateAfterScene, observations: [] }));
 
     const switched = await requestFrom(baseUrl, "/api/v1/audio/source", {
       method: "POST",
@@ -1237,7 +1312,25 @@ if (process.argv.join(" ").includes("cfg_radio")) {
     assert(switched.body.playback.albumArtUrl?.startsWith("/api/v1/media/radio-logo?stationId=radio-511"), "mpc radio playback should prefer station logo artwork");
     const aliasLogo = await requestBinaryFrom(baseUrl, switched.body.playback.albumArtUrl);
     assert(aliasLogo.response.ok, "mpc radio alias logo endpoint should return 200");
-    assert(JSON.parse(await readFile(fakeMpcStatePath, "utf8")).volume === 44, "mpc radio preset switch should issue mpc volume restore command");
+    const fakeStateAfterRadio = JSON.parse(await readFile(fakeMpcStatePath, "utf8"));
+    assert(fakeStateAfterRadio.volume === 44, "mpc radio preset switch should issue mpc volume restore command");
+    assert(fakeStateAfterRadio.addFailures === 1, "mpc radio preset switch should retry once after a busy audio output add failure");
+    assert(fakeStateAfterRadio.radioStartStatusFailures === 0, "mpc radio preset switch should nudge through a transient ALSA busy status");
+    const releaseObservationIndex = fakeStateAfterRadio.observations.findIndex((entry) => entry.command === "release-kiosk-audio");
+    const firstMpcStartIndex = fakeStateAfterRadio.observations.findIndex((entry) => ["clear", "add-failed", "add", "play"].includes(entry.command));
+    assert(releaseObservationIndex >= 0, "mpc radio preset switch should run the kiosk audio release command");
+    assert(firstMpcStartIndex >= 0 && releaseObservationIndex < firstMpcStartIndex, "mpc radio preset switch should release kiosk audio before MPD start");
+    assert(fakeStateAfterRadio.observations[releaseObservationIndex]?.sceneSoundEnabled === false, "mpc radio preset switch should release kiosk audio after scene sound is disabled");
+    assert(
+      fakeStateAfterRadio.observations
+        .filter((entry) => ["clear", "add-failed", "add", "play"].includes(entry.command))
+        .every((entry) => entry.sceneSoundEnabled === false),
+      "mpc radio preset switch should clear scene sound state before starting MPD radio"
+    );
+    assert(
+      JSON.parse(await readFile(roomExperienceStatePath, "utf8")).sceneSoundEnabled === false,
+      "mpc radio preset switch should persist scene sound as disabled"
+    );
     assert(
       switched.body.audio.sources.some((source) => source.id === "radio" && source.availability === "available" && source.controllability === "switchable"),
       "mpc radio preset switch should return Radio as available and switchable without TIKPAL_RADIO_DEFAULT_URI"

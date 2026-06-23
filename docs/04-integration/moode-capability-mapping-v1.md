@@ -77,7 +77,7 @@ Exact wire shapes should be finalized during implementation, but these concepts 
 | Audio format | Player status card | Format, bit depth, sample rate. |
 | Output device | Player status card, quick settings | USB, I2S, HDMI, DAC name, volume mode. |
 | Playback source / renderer | Ambient source picker, Player top state, source workspace | Six visible frontstage choices: Library, Radio, Spotify, AirPlay, Bluetooth, DLNA; internal Audio remains backend/status truth. |
-| Scene ambience audio | Quick menu, Ambient video layer, Player current source | Scene Sound is an exclusive source backed by the active background MP4; switching to any music/input source remutes the browser video and returns source truth to music/input playback. On Pi, Chromium should route this browser audio directly to the physical USB `dmix` device rather than Loopback-backed `_audioout`. |
+| Scene ambience audio | Quick menu, Ambient video layer, Player current source | Scene Sound is an exclusive source backed by the active background MP4; switching to any music/input source remutes the browser video and returns source truth to music/input playback. On Pi, Chromium can use `_audioout`, but MPD-backed handoff must run the kiosk audio release command first so Chromium's `audio.mojom.AudioService` does not keep the ALSA output busy. |
 | Network | Player status, quick settings | Ethernet/Wi-Fi, IP, connection state. |
 | Display brightness | Ambient edge gesture, quick settings display card | DDC/CI brightness percent when the monitor exposes VCP `0x10`. |
 | DSP / CamillaDSP | Player status, quick settings, Hi-Fi room mode | ON/OFF, selected EQ preset id/label, controllability, and available `flat` / `warm` / `vocal` preset summaries. |

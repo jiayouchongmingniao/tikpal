@@ -97,15 +97,14 @@ deploy/chromium/tikpal-kiosk-healthcheck.sh --check
 deploy/chromium/launch-tikpal-kiosk.sh --check
 ```
 
-For Scene Sound, set Chromium to the physical USB output instead of moOde's Loopback-backed `_audioout`. Find the card name with `aplay -l`, then use the USB card's `dmix` device:
+For Scene Sound on the local kiosk, keep Chromium on the same `_audioout` route that moOde uses, and configure the API to release Chromium's AudioService before Tikpal starts MPD-backed sources such as Library or Radio:
 
 ```bash
-aplay -l
-sed -i 's|^TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE=.*|TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE=dmix:CARD=BT66,DEV=0|' .env.kiosk
+sed -i 's|^TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE=.*|TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE=_audioout|' .env.kiosk
 deploy/chromium/launch-tikpal-kiosk.sh --check
 ```
 
-Replace `BT66` with the card name shown by the target Pi. Keep `_audioout` available for moOde/MPD and renderer services; Chromium Scene Sound should use the physical `dmix` route so it can keep an audible browser audio stream open.
+Chromium may keep an ALSA `audio.mojom.AudioService` process open after the active scene video is muted. The API-side release command below is what prevents that stale browser process from leaving MPD Radio in `Device or resource busy`.
 
 If the Pi should control real moOde playback instead of the local mock bridge, create `.env` with native MPD settings before restarting the API service:
 
@@ -192,6 +191,8 @@ TIKPAL_RADIO_DEFAULT_URI=""
 TIKPAL_RADIO_LABEL="Last Station"
 TIKPAL_RADIO_LOGO_DIR="/var/local/www/imagesw/radio-logos"
 TIKPAL_RADIO_VOLUME_DEFAULT_PERCENT=35
+TIKPAL_KIOSK_AUDIO_RELEASE_COMMAND="./deploy/moode/tikpal-release-kiosk-audio.sh"
+TIKPAL_KIOSK_AUDIO_RELEASE_SETTLE_MS=500
 TIKPAL_SYSTEM_REBOOT_COMMAND="sudo systemctl reboot"
 TIKPAL_SYSTEM_SHUTDOWN_COMMAND="sudo systemctl poweroff"
 TIKPAL_DSP_PRESET=Unknown
@@ -202,7 +203,8 @@ EOF
 `TIKPAL_MPD_DEFAULT_QUEUE_PATH=Codex` tells the backend which local library path to queue first when MPD is empty.
 `TIKPAL_MPD_STARTUP_VOLUME=30` makes Tikpal set MPD to 30% before auto-resuming playback when the API starts and playback is not already running.
 `TIKPAL_STARTUP_SCENE_SOUND_ENABLED=1` makes the Pi open Scene Sound as the default startup source for Focus, Calm, and Sleep room modes. The startup path writes `sceneSoundEnabled=true` when needed and switches to `target=scene`; choosing Library, Radio, Bluetooth, AirPlay, Spotify, or DLNA later still clears Scene Sound for that session.
-`TIKPAL_ALSA_LOOPBACK_ALLOW_HDMI=0` keeps Tikpal from re-enabling a stale moOde ALSA Loopback override when `_audioout` routes only to HDMI. Most Tikpal installs should select the USB speaker or USB amplifier in moOde first, then let `_audioout` follow that current output while mirroring to Loopback for AirPlay, Bluetooth, and Hi-Fi spectrum. Set this to `1` only for an intentional HDMI-output install. For Chromium Scene Sound, prefer a direct physical USB `dmix` device in `.env.kiosk`, for example `TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE=dmix:CARD=BT66,DEV=0`; Loopback-backed `_audioout` can make Chromium log `PcmOpen: _audioout,Device or resource busy` and decode AAC without audible output.
+`TIKPAL_ALSA_LOOPBACK_ALLOW_HDMI=0` keeps Tikpal from re-enabling a stale moOde ALSA Loopback override when `_audioout` routes only to HDMI. Most Tikpal installs should select the USB speaker or USB amplifier in moOde first, then let `_audioout` follow that current output while mirroring to Loopback for AirPlay, Bluetooth, and Hi-Fi spectrum. Set this to `1` only for an intentional HDMI-output install. For Chromium Scene Sound, set `TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE=_audioout` and keep `TIKPAL_KIOSK_AUDIO_RELEASE_COMMAND` enabled; this lets scene ambience play through the same output while giving MPD/Radio a clean handoff when the user leaves Scene Sound.
+`TIKPAL_KIOSK_AUDIO_RELEASE_COMMAND` is run only before MPD-backed sources (`mpd` and `radio`) start. The checked-in `deploy/moode/tikpal-release-kiosk-audio.sh` helper kills Chromium's `audio.mojom.AudioService` utility process with a safe process pattern, then the backend waits `TIKPAL_KIOSK_AUDIO_RELEASE_SETTLE_MS` before issuing `mpc clear/add/play`. Use it on Pi installs where Scene Sound is browser audio and MPD Radio otherwise reports `_audioout: Device or resource busy`.
 `TIKPAL_OUTPUT_VOLUME_GET_COMMAND` and `TIKPAL_OUTPUT_VOLUME_SET_COMMAND` should control the physical `_audioout` output, not only ALSA Loopback. On moOde installs with ALSA Loopback enabled, the checked-in `deploy/moode/tikpal-output-volume.sh` helper reads the current `/etc/alsa/conf.d/_sndaloop.conf` / `_audioout.conf` route, gets volume from the physical output, and mirrors writes to Loopback so renderer intakes and Hi-Fi spectrum use the same level. Browser Scene Sound reaches the same physical output through Chromium's `dmix` route. Avoid bare `amixer get PCM` on these installs because it can hit the Loopback card while the USB output remains at 100%.
 Keep `TIKPAL_WEB_ALLOW_REMOTE_UI_API=0` for the normal Pi install: the production web service serves the full kiosk UI to loopback clients such as the Pi browser, while LAN browsers opening `http://<pi-ip>:4173/` receive the portable remote UI and are limited to `/api/v1/remote/*`. Remote mode is selected when the socket remote address is not loopback or when the HTTP `Host` is not `localhost`, `127.0.0.1`, or `[::1]`, so SSH tunnels, reverse proxies, and port mappings still receive the portable remote UI when the browser uses the Pi IP or a public domain as the Host. Set it to `1` only when trusted LAN clients should receive the full kiosk API surface.
 `TIKPAL_SCENE_CONTEXT_GEO_*` and `TIKPAL_SCENE_CONTEXT_WEATHER_*` control the cached `/api/v1/scene/context` lookups used for weak Ambient clock copy. The endpoint prefers IP-derived timezone/location when available, falls back to the caller's `timeZone` query or the room-experience default when unavailable, and caches provider failures briefly so a slow network cannot stall normal state reads.

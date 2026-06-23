@@ -36,6 +36,7 @@ interface FlameSceneProps {
   staticOnly?: boolean;
   videoEnabled?: boolean;
   audioEnabled?: boolean;
+  audioSuspended?: boolean;
   volumePercent?: number;
   videoSrc?: string;
   audioGainDb?: number;
@@ -358,7 +359,7 @@ function SceneLogoBackdrop() {
   );
 }
 
-export function FlameScene({ lowPower = false, playback, singleLoop = false, staticOnly = false, videoEnabled = true, audioEnabled = false, volumePercent = 100, videoSrc = DEFAULT_FLAME_VIDEO_SRC, audioGainDb = 0 }: FlameSceneProps) {
+export function FlameScene({ lowPower = false, playback, singleLoop = false, staticOnly = false, videoEnabled = true, audioEnabled = false, audioSuspended = false, volumePercent = 100, videoSrc = DEFAULT_FLAME_VIDEO_SRC, audioGainDb = 0 }: FlameSceneProps) {
   const nextLayerIdRef = useRef(0);
   const nextSingleLayerIdRef = useRef(0);
   const activeVideoSrcRef = useRef(videoSrc);
@@ -371,6 +372,7 @@ export function FlameScene({ lowPower = false, playback, singleLoop = false, sta
   const playbackRef = useRef(playback);
   const videoEnabledRef = useRef(videoEnabled);
   const audioEnabledRef = useRef(audioEnabled);
+  const audioSuspendedRef = useRef(audioSuspended);
   const videoVolumeRef = useRef(normalizeVideoVolume(volumePercent));
   const preparingVideoKeysRef = useRef(new Set<string>());
   const transitionActivateTimerRef = useRef<number | null>(null);
@@ -809,6 +811,14 @@ export function FlameScene({ lowPower = false, playback, singleLoop = false, sta
     const targetVolume = audioEnabledRef.current ? videoVolumeRef.current : 0;
     const transitionEnvelopeActive = sceneTransitionAudioActiveRef.current;
     videoRefs.current.forEach((video, key) => {
+      if (audioSuspendedRef.current) {
+        video.dataset.sceneAudible = "false";
+        setSceneVideoVolume(video, 0);
+        muteSceneVideo(video);
+        video.pause();
+        return;
+      }
+
       const [layerIdRaw, slotRaw] = key.split(":");
       const layerId = Number(layerIdRaw);
       const slot = Number(slotRaw) as LoopSlot;
@@ -852,6 +862,13 @@ export function FlameScene({ lowPower = false, playback, singleLoop = false, sta
     singleVideoRef.current = video;
     if (!video) return;
     if (singleVideoHealthRef.current === "fallback") return;
+    if (audioSuspendedRef.current) {
+      video.dataset.sceneAudible = "false";
+      setSceneVideoVolume(video, 0);
+      muteSceneVideo(video);
+      video.pause();
+      return;
+    }
 
     const shouldBeAudible = videoEnabledRef.current && audioEnabledRef.current && videoVolumeRef.current > 0;
     video.dataset.sceneAudible = shouldBeAudible ? "true" : "false";
@@ -1215,8 +1232,9 @@ export function FlameScene({ lowPower = false, playback, singleLoop = false, sta
   useEffect(() => {
     videoEnabledRef.current = videoEnabled;
     audioEnabledRef.current = audioEnabled;
+    audioSuspendedRef.current = audioSuspended;
     videoVolumeRef.current = videoVolume;
-  }, [audioEnabled, videoEnabled, videoVolume]);
+  }, [audioEnabled, audioSuspended, videoEnabled, videoVolume]);
 
   useEffect(() => {
     if (!singleLoop) return undefined;
@@ -1311,7 +1329,7 @@ export function FlameScene({ lowPower = false, playback, singleLoop = false, sta
   useEffect(() => {
     if (!singleLoop || staticOnly || !videoEnabled || !singleVideoSrc) return;
     syncSingleLoopVideo();
-  }, [audioEnabled, playback.state, singleActiveLayerId, singleLoop, singleVideoSrc, staticOnly, videoEnabled, videoVolume]);
+  }, [audioEnabled, audioSuspended, playback.state, singleActiveLayerId, singleLoop, singleVideoSrc, staticOnly, videoEnabled, videoVolume]);
 
   useEffect(() => {
     if (!singleLoop) return undefined;
@@ -1460,7 +1478,7 @@ export function FlameScene({ lowPower = false, playback, singleLoop = false, sta
     if (singleLoop || !videoEnabled || staticOnly) return;
     clearLoopAudioCrossfadeFrame();
     syncSceneAudio();
-  }, [activeLayerId, audioEnabled, layers, loopAudibleSlots, normalizedAudioGainDb, singleLoop, staticOnly, videoEnabled, videoVolume]);
+  }, [activeLayerId, audioEnabled, audioSuspended, layers, loopAudibleSlots, normalizedAudioGainDb, singleLoop, staticOnly, videoEnabled, videoVolume]);
 
   useEffect(() => {
     if (singleLoop || staticOnly) return clearLoopMonitor;
@@ -1481,7 +1499,7 @@ export function FlameScene({ lowPower = false, playback, singleLoop = false, sta
   }
 
   if (singleLoop) {
-    const audioActive = audioEnabled && videoVolume > 0;
+    const audioActive = audioEnabled && !audioSuspended && videoVolume > 0;
 
     return (
       <div
@@ -1641,7 +1659,7 @@ export function FlameScene({ lowPower = false, playback, singleLoop = false, sta
               const loopPhase = loopRole === "incoming" && layerHandoff && !layerHandoff.revealing
                 ? "ready"
                 : getVideoPhase(loopRole, slotStatus);
-              const audioRole = getAudioRole(isAudibleSlot, loopRole, layerHandoff, audioEnabled, videoVolume);
+              const audioRole = getAudioRole(isAudibleSlot, loopRole, layerHandoff, audioEnabled && !audioSuspended, videoVolume);
 
               return (
                 <video

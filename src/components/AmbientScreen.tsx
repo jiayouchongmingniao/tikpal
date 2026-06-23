@@ -46,6 +46,7 @@ const BACKGROUND_VIDEO_REFRESH_MS = 30_000;
 const BACKGROUND_VIDEO_REFRESH_EVENT = "tikpal:background-videos-refresh";
 const SCENE_CONTEXT_REFRESH_MS = 30 * 60_000;
 const SOURCE_PICKER_AUTO_CLOSE_MS = 5_000;
+const SOURCE_PICKER_SCENE_AUDIO_RELEASE_MS = 500;
 const SCENE_VIDEO_THERMAL_PAUSE_C = 76;
 const SCENE_VIDEO_THERMAL_RESUME_C = 68;
 const LYRICS_CLOCK_TICK_MS = 250;
@@ -256,6 +257,14 @@ function normalizeLyricsElapsedMs(lyrics: LyricsState, elapsedMs: number) {
   return elapsedMs % (timelineMs ?? elapsedMs);
 }
 
+function waitForSceneAudioRelease() {
+  return new Promise<void>((resolve) => {
+    window.requestAnimationFrame(() => {
+      window.setTimeout(resolve, SOURCE_PICKER_SCENE_AUDIO_RELEASE_MS);
+    });
+  });
+}
+
 export function AmbientScreen({
   hudVisible,
   timeLabel,
@@ -309,6 +318,7 @@ export function AmbientScreen({
   const [lyricsClockAnchor, setLyricsClockAnchor] = useState<LyricsClockAnchor | null>(null);
   const [sceneContext, setSceneContext] = useState<SceneContextSummary | null>(null);
   const [sceneVideoThermalPaused, setSceneVideoThermalPaused] = useState(false);
+  const [ambientSceneAudioSuppressed, setAmbientSceneAudioSuppressed] = useState(false);
   const currentBackgroundVideo = backgroundVideos[backgroundVideoIndex] ?? DEFAULT_BACKGROUND_VIDEO;
   const isHifiMode = roomExperience.mode === "hifi";
   const playbackClockKey = useMemo(() => [
@@ -340,7 +350,7 @@ export function AmbientScreen({
   const sceneVideoThermalGuardActive = sceneVideoThermalPaused && !isHifiMode;
   const shouldRenderSceneVideo = sceneVideoEnabled && hasSceneVideo && !sceneVideoThermalGuardActive;
   const sceneVisualLowPower = audioProtectionMode || sceneVideoThermalGuardActive;
-  const sceneAudioEnabled = shouldRenderSceneVideo && sceneSoundEnabled && playback.source === "scene" && playback.state === "playing";
+  const sceneAudioEnabled = shouldRenderSceneVideo && sceneSoundEnabled && !ambientSceneAudioSuppressed && playback.source === "scene" && playback.state === "playing";
   const useStableSceneLoop = sceneVideoStableLoop && shouldRenderSceneVideo && !isHifiMode;
   const canAdvanceLyrics = lyrics.synced
     && (playback.source === "mpd" || playback.source === "radio" || playback.source === "bluetooth" || playback.source === "airplay")
@@ -607,10 +617,18 @@ export function AmbientScreen({
 
     setPendingAmbientSource(sourceId);
     setAmbientSourceError(null);
+    const shouldReleaseSceneAudio = sceneAudioEnabled;
     try {
+      if (shouldReleaseSceneAudio) {
+        setAmbientSceneAudioSuppressed(true);
+        await waitForSceneAudioRelease();
+      }
       await onSourceSwitch(sourceId);
       setSourcePickerOpen(false);
     } catch (error) {
+      if (shouldReleaseSceneAudio) {
+        setAmbientSceneAudioSuppressed(false);
+      }
       setAmbientSourceError(error instanceof Error ? error.message : "Source switch failed");
     } finally {
       setPendingAmbientSource(null);
@@ -690,6 +708,13 @@ export function AmbientScreen({
   useEffect(() => {
     onSourcePickerOpenChange?.(sourcePickerOpen);
   }, [onSourcePickerOpenChange, sourcePickerOpen]);
+
+  useEffect(() => {
+    if (!ambientSceneAudioSuppressed) return;
+    if (playback.source !== "scene" || !sceneSoundEnabled) {
+      setAmbientSceneAudioSuppressed(false);
+    }
+  }, [ambientSceneAudioSuppressed, playback.source, sceneSoundEnabled]);
 
   useEffect(() => {
     if (sourcePickerOpenRequest === lastSourcePickerOpenRequestRef.current) return;
@@ -1095,6 +1120,7 @@ export function AmbientScreen({
           staticOnly={sceneVideoThermalGuardActive && sceneVideoEnabled && hasSceneVideo}
           videoEnabled={shouldRenderSceneVideo}
           audioEnabled={sceneAudioEnabled}
+          audioSuspended={ambientSceneAudioSuppressed}
           volumePercent={system.volume.percent}
           audioGainDb={currentBackgroundVideo.audioGainDb}
         />
