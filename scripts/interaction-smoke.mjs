@@ -2548,6 +2548,25 @@ try {
     "Promise.all([fetch('/api/v1/system/state').then((response) => response.json()), fetch('/api/v1/experience/state').then((response) => response.json())]).then(([state, experience]) => state.audio.currentSource.id === 'radio' && state.playback.source === 'radio' && experience.sceneSoundEnabled === false)",
     "Ambient Radio source selection deactivates scene sound and starts Radio"
   );
+  await expectEventually(
+    client,
+    `
+      (async () => {
+        const video = document.querySelector('.flame-video.is-active');
+        if (!(video instanceof HTMLVideoElement)) return false;
+        const before = video.currentTime;
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        return document.querySelector('.flame-scene.is-video-off') === null
+          && video.muted === true
+          && video.paused === false
+          && video.readyState >= 2
+          && Math.abs(video.currentTime - before) > 0.03;
+      })()
+    `,
+    "Ambient Radio switch keeps the scene video mounted and playing muted",
+    30,
+    150
+  );
   await click(client, 1280, 280);
   await evaluate(
     client,
@@ -2567,6 +2586,25 @@ try {
     client,
     "Promise.all([fetch('/api/v1/system/state').then((response) => response.json()), fetch('/api/v1/experience/state').then((response) => response.json())]).then(([state, experience]) => state.audio.currentSource.id === 'mpd' && state.playback.source === 'mpd' && experience.sceneSoundEnabled === false)",
     "Ambient source selection deactivates scene sound and restores Library"
+  );
+  await expectEventually(
+    client,
+    `
+      (async () => {
+        const video = document.querySelector('.flame-video.is-active');
+        if (!(video instanceof HTMLVideoElement)) return false;
+        const before = video.currentTime;
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        return document.querySelector('.flame-scene.is-video-off') === null
+          && video.muted === true
+          && video.paused === false
+          && video.readyState >= 2
+          && Math.abs(video.currentTime - before) > 0.03;
+      })()
+    `,
+    "Ambient Library switch keeps the scene video mounted and playing muted",
+    30,
+    150
   );
 
   await navigate(client, `${APP_URL}?mode=player`);

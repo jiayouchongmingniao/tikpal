@@ -656,6 +656,8 @@ When the watchdog finds `x-unresponsive`, `chromium-missing`, `web-unhealthy`, `
 
 If the kernel GPU/KMS state is wedged hard enough that Xorg restarts but never reaches Chromium, repeated kiosk restarts are not enough. `TIKPAL_KIOSK_WATCHDOG_REBOOT_AFTER_RESTARTS=3` allows the watchdog to reboot the Pi only after repeated `x-unresponsive` or `v3d-reset` display-stack failures within `TIKPAL_KIOSK_WATCHDOG_REBOOT_WINDOW_SECONDS=900`. Set it to `0` to disable reboot escalation while debugging.
 
+The kiosk session and launcher bound their own `xset` and `xrandr` calls with `TIKPAL_KIOSK_X_COMMAND_TIMEOUT_SECONDS=5`. This prevents a half-responsive X server from leaving `startx -> xinit -> Xorg` alive while Chromium never starts. If `/tmp/.X11-unix/X0` exists but `timeout 5 env DISPLAY=:0 xdpyinfo` hangs and `pgrep -af chromium-browser` is empty, treat the failure as display-stack wedged rather than a React page issue. First restart `tikpal-kiosk.service`; if X still accepts no clients after the restart, reboot the Pi to clear the KMS/Xorg state, then confirm Chromium and the heartbeat return.
+
 After a watchdog recovery, confirm the display path is clean and no diagnostic helpers were left behind:
 
 ```bash

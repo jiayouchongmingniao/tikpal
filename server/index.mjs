@@ -421,6 +421,8 @@ let tikpalStateSnapshotRefreshPromise = null;
 let tikpalStateSnapshotRefreshTimer = null;
 let tikpalStateSnapshotRefreshQueued = false;
 let tikpalStateSnapshotGeneration = 0;
+let mpcRadioCatalogReadyCache = false;
+let mpcRadioCatalogCountCache = 0;
 let airplayDirectMetadataRefreshPromise = null;
 let airplayDirectMetadataRefreshAtMs = 0;
 let sceneContextGeoCache = null;
@@ -2829,10 +2831,59 @@ async function getAvailableRadioStations(scope = "all") {
   }
 
   const radioStations = await readMpcRadioStations();
+  if (radioStations.length > 0) {
+    cacheMpcRadioCatalogReady(radioStations.length);
+  }
   const scopedStations = scope === "tikpal"
     ? radioStations.filter((station) => station.catalogSource === "tikpal")
     : radioStations;
   return scopedStations.length > 0 ? scopedStations : fallbackRadioStations();
+}
+
+function cacheMpcRadioCatalogReady(count) {
+  if (!Number.isFinite(count) || count <= 0) return;
+  mpcRadioCatalogReadyCache = true;
+  mpcRadioCatalogCountCache = Math.max(mpcRadioCatalogCountCache, count);
+}
+
+function applyMpcRadioCatalogReadyToState(state) {
+  if (API_MODE !== "mpc" || !mpcRadioCatalogReadyCache || mpcRadioCatalogCountCache <= 0) {
+    return state;
+  }
+  if (!state?.audio) return state;
+
+  const sources = Array.isArray(state?.audio?.sources) ? state.audio.sources : [];
+  let changed = false;
+  const nextSources = sources.map((source) => {
+    if (source?.id !== "radio") return source;
+    const nextSource = {
+      ...source,
+      availability: "available",
+      controllability: "switchable",
+      secondaryStatus: source.secondaryStatus === "No radio route configured"
+        ? `Choose from ${mpcRadioCatalogCountCache} presets`
+        : source.secondaryStatus
+    };
+    changed = changed
+      || nextSource.availability !== source.availability
+      || nextSource.controllability !== source.controllability
+      || nextSource.secondaryStatus !== source.secondaryStatus;
+    return nextSource;
+  });
+  if (!changed) return state;
+
+  const currentSource = state.audio.currentSource?.id === "radio"
+    ? nextSources.find((source) => source.id === "radio") ?? state.audio.currentSource
+    : state.audio.currentSource;
+
+  return {
+    ...state,
+    audio: {
+      ...state.audio,
+      currentSource,
+      sources: nextSources
+    }
+  };
 }
 
 async function findRadioStationByUri(uri) {
@@ -4560,6 +4611,7 @@ function buildMinimalMpcAudioSnapshot(currentFile = "") {
   const cachedRadioSource = tikpalStateSnapshotCache?.state?.audio?.sources?.find((entry) => entry.id === "radio") ?? null;
   const cachedRadioReady = cachedRadioSource?.availability === "available"
     || cachedRadioSource?.controllability === "switchable";
+  const catalogRadioReady = mpcRadioCatalogReadyCache && mpcRadioCatalogCountCache > 0;
   const radioActive = isStreamUri(currentFile);
   const activeSource = mockArmedSource === "scene"
     ? "scene"
@@ -4574,7 +4626,7 @@ function buildMinimalMpcAudioSnapshot(currentFile = "") {
   return buildAudioState({
     activeSource,
     armedSource: mockArmedSource,
-    radioReady: Boolean(RADIO_ACTIVATE_COMMAND || RADIO_DEFAULT_URI || cachedRadioReady),
+    radioReady: Boolean(RADIO_ACTIVATE_COMMAND || RADIO_DEFAULT_URI || cachedRadioReady || catalogRadioReady),
     radioActive,
     radioStations: [],
     audioSourceState: buildCachedSourceRuntimeState("audio", true),
@@ -5524,12 +5576,12 @@ function withCurrentVolatileState(state) {
 }
 
 function readCachedTikpalState() {
-  return withCurrentVolatileState(tikpalStateSnapshotCache?.state ?? buildFallbackMpcStateSnapshot());
+  return withCurrentVolatileState(applyMpcRadioCatalogReadyToState(tikpalStateSnapshotCache?.state ?? buildFallbackMpcStateSnapshot()));
 }
 
 function cacheTikpalStateSnapshot(state) {
   tikpalStateSnapshotCache = {
-    state: withCurrentVolatileState(state),
+    state: withCurrentVolatileState(applyMpcRadioCatalogReadyToState(state)),
     updatedAtMs: Date.now(),
     error: null
   };

@@ -13,12 +13,21 @@ if [[ -f "$ENV_FILE" ]]; then
 fi
 
 : "${TIKPAL_KIOSK_DISPLAY:=:0}"
+: "${TIKPAL_KIOSK_X_COMMAND_TIMEOUT_SECONDS:=5}"
 export DISPLAY="$TIKPAL_KIOSK_DISPLAY"
 
+run_x_command() {
+  if command -v timeout >/dev/null 2>&1; then
+    timeout -k 1s "${TIKPAL_KIOSK_X_COMMAND_TIMEOUT_SECONDS}s" "$@"
+    return
+  fi
+  "$@"
+}
+
 if command -v xset >/dev/null 2>&1; then
-  xset -dpms || true
-  xset s off || true
-  xset s noblank || true
+  run_x_command xset -dpms || true
+  run_x_command xset s off || true
+  run_x_command xset s noblank || true
 fi
 
 exec "$SCRIPT_DIR/launch-tikpal-kiosk.sh"

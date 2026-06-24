@@ -21,6 +21,7 @@ fi
 : "${TIKPAL_KIOSK_ACTIVE_DISPLAY_MODE:=$TIKPAL_KIOSK_DISPLAY_MODE}"
 : "${TIKPAL_KIOSK_XRANDR_MODE:=2560x720}"
 : "${TIKPAL_KIOSK_XRANDR_OUTPUT:=}"
+: "${TIKPAL_KIOSK_X_COMMAND_TIMEOUT_SECONDS:=5}"
 : "${TIKPAL_CHROMIUM_BIN:=/usr/lib/chromium-browser/chromium-browser}"
 : "${TIKPAL_CHROMIUM_PROFILE_DIR:=$HOME/.config/tikpal-chromium-kiosk}"
 : "${TIKPAL_CHROMIUM_COLOR_SCHEME:=dark}"
@@ -56,6 +57,14 @@ is_enabled() {
       return 1
       ;;
   esac
+}
+
+run_x_command() {
+  if command -v timeout >/dev/null 2>&1; then
+    timeout -k 1s "${TIKPAL_KIOSK_X_COMMAND_TIMEOUT_SECONDS}s" "$@"
+    return
+  fi
+  "$@"
 }
 
 normalize_chromium_window_size() {
@@ -170,16 +179,16 @@ export DISPLAY="$TIKPAL_KIOSK_DISPLAY"
 
 if [[ "$TIKPAL_KIOSK_ACTIVE_DISPLAY_MODE" != "virtual" && "$TIKPAL_KIOSK_XRANDR_MODE" != "none" ]] && command -v xrandr >/dev/null 2>&1; then
   if [[ -n "$TIKPAL_KIOSK_XRANDR_OUTPUT" ]]; then
-    xrandr --output "$TIKPAL_KIOSK_XRANDR_OUTPUT" --mode "$TIKPAL_KIOSK_XRANDR_MODE" || log "WARN: xrandr mode set failed"
+    run_x_command xrandr --output "$TIKPAL_KIOSK_XRANDR_OUTPUT" --mode "$TIKPAL_KIOSK_XRANDR_MODE" || log "WARN: xrandr mode set failed or timed out"
   else
-    xrandr -s "$TIKPAL_KIOSK_XRANDR_MODE" || log "WARN: xrandr mode set failed"
+    run_x_command xrandr -s "$TIKPAL_KIOSK_XRANDR_MODE" || log "WARN: xrandr mode set failed or timed out"
   fi
 fi
 
 if command -v xset >/dev/null 2>&1; then
-  xset -dpms || true
-  xset s off || true
-  xset s noblank || true
+  run_x_command xset -dpms || true
+  run_x_command xset s off || true
+  run_x_command xset s noblank || true
 fi
 
 if command -v unclutter >/dev/null 2>&1; then

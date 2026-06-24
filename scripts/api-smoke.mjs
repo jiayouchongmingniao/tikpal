@@ -1287,6 +1287,13 @@ if (process.argv.join(" ").includes("cfg_radio")) {
     assert(exactLogo.response.ok, "mpc radio exact logo endpoint should return 200");
     assert(exactLogo.response.headers.get("content-type")?.startsWith("image/jpeg"), "mpc radio exact logo endpoint should return image bytes");
 
+    const sourcesAfterCatalog = await requestFrom(baseUrl, "/api/v1/audio/sources");
+    assert(sourcesAfterCatalog.response.ok, "mpc audio sources should return 200 after radio catalog read");
+    assert(
+      sourcesAfterCatalog.body.sources.some((source) => source.id === "radio" && source.availability === "available" && source.controllability === "switchable"),
+      "mpc fast audio sources should keep Radio available from cfg_radio catalog without TIKPAL_RADIO_DEFAULT_URI"
+    );
+
     const scene = await requestFrom(baseUrl, "/api/v1/audio/source", {
       method: "POST",
       body: JSON.stringify({
@@ -1298,6 +1305,10 @@ if (process.argv.join(" ").includes("cfg_radio")) {
     });
     assert(scene.response.ok, "mpc scene switch should return 200 before radio cache regression check");
     assert(scene.body.audio.currentSource.id === "scene", "mpc scene switch should prime cached scene source");
+    assert(
+      scene.body.audio.sources.some((source) => source.id === "radio" && source.availability === "available" && source.controllability === "switchable"),
+      "mpc scene switch fast snapshot should keep Radio available from cached cfg_radio catalog"
+    );
     const stateAfterScene = JSON.parse(await readFile(fakeMpcStatePath, "utf8"));
     await writeFile(fakeMpcStatePath, JSON.stringify({ ...stateAfterScene, observations: [] }));
 

@@ -811,18 +811,21 @@ export function FlameScene({ lowPower = false, playback, singleLoop = false, sta
     const targetVolume = audioEnabledRef.current ? videoVolumeRef.current : 0;
     const transitionEnvelopeActive = sceneTransitionAudioActiveRef.current;
     videoRefs.current.forEach((video, key) => {
-      if (audioSuspendedRef.current) {
-        video.dataset.sceneAudible = "false";
-        setSceneVideoVolume(video, 0);
-        muteSceneVideo(video);
-        video.pause();
-        return;
-      }
-
       const [layerIdRaw, slotRaw] = key.split(":");
       const layerId = Number(layerIdRaw);
       const slot = Number(slotRaw) as LoopSlot;
       const isActiveLayer = layerId === activeLayerIdRef.current;
+
+      if (audioSuspendedRef.current) {
+        video.dataset.sceneAudible = "false";
+        setSceneVideoVolume(video, 0);
+        muteSceneVideo(video);
+        if (isActiveLayer && videoEnabledRef.current && video.paused) {
+          void video.play().catch(() => undefined);
+        }
+        return;
+      }
+
       const shouldBeAudible = videoEnabledRef.current
         && audioEnabledRef.current
         && targetVolume > 0
@@ -854,6 +857,9 @@ export function FlameScene({ lowPower = false, playback, singleLoop = false, sta
       }
 
       muteSceneVideo(video);
+      if (videoEnabledRef.current && video.paused) {
+        void video.play().catch(() => undefined);
+      }
     });
   }
 
@@ -866,7 +872,9 @@ export function FlameScene({ lowPower = false, playback, singleLoop = false, sta
       video.dataset.sceneAudible = "false";
       setSceneVideoVolume(video, 0);
       muteSceneVideo(video);
-      video.pause();
+      if (videoEnabledRef.current && video.paused) {
+        void video.play().catch(() => undefined);
+      }
       return;
     }
 
