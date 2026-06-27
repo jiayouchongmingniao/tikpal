@@ -564,6 +564,35 @@ The effective Chromium command line should include these window flags:
 
 The launcher accepts `TIKPAL_KIOSK_WINDOW=2560x720` in `.env.kiosk`, but normalizes it to Chromium's `2560,720` format during launch.
 
+If the physical panel suddenly shows a 4:3 view or a cropped Ambient scene, verify the actual X root window before changing React layout code:
+
+```bash
+timeout -k 2s 5s env DISPLAY=:0 xrandr --query
+timeout -k 2s 5s env DISPLAY=:0 xdpyinfo | grep -E 'dimensions|resolution'
+ps -eo pid,args | grep '[c]hromium-browser'
+grep -E '^TIKPAL_KIOSK_XRANDR_MODE|^TIKPAL_KIOSK_XRANDR_OUTPUT|^TIKPAL_KIOSK_X_COMMAND_TIMEOUT_SECONDS' \
+  /home/moode/code/tikpal/.env.kiosk /etc/tikpal-kiosk.env 2>/dev/null || true
+cat /proc/cmdline | tr ' ' '\n' | grep '^video=' || true
+```
+
+The high-signal failure pattern is `xrandr` reporting `current 1024 x 768` while `2560x720` is still listed as an available HDMI mode and Chromium was launched with `--window-size=2560,720`. In that case the display mode was not enforced after X started. On a physical HDMI kiosk, keep the Pi app env aligned with the system override:
+
+```bash
+cd /home/moode/code/tikpal
+cp .env.kiosk ".env.kiosk.bak-$(date +%Y%m%d-%H%M%S)"
+sed -i 's/^TIKPAL_KIOSK_XRANDR_MODE=.*/TIKPAL_KIOSK_XRANDR_MODE=2560x720/' .env.kiosk
+grep -q '^TIKPAL_KIOSK_XRANDR_OUTPUT=' .env.kiosk \
+  && sed -i 's/^TIKPAL_KIOSK_XRANDR_OUTPUT=.*/TIKPAL_KIOSK_XRANDR_OUTPUT=HDMI-1/' .env.kiosk \
+  || printf 'TIKPAL_KIOSK_XRANDR_OUTPUT=HDMI-1\n' >> .env.kiosk
+grep -q '^TIKPAL_KIOSK_X_COMMAND_TIMEOUT_SECONDS=' .env.kiosk \
+  && sed -i 's/^TIKPAL_KIOSK_X_COMMAND_TIMEOUT_SECONDS=.*/TIKPAL_KIOSK_X_COMMAND_TIMEOUT_SECONDS=5/' .env.kiosk \
+  || printf 'TIKPAL_KIOSK_X_COMMAND_TIMEOUT_SECONDS=5\n' >> .env.kiosk
+sudo systemctl restart tikpal-kiosk.service
+timeout -k 2s 5s env DISPLAY=:0 xrandr --query | sed -n '1,8p'
+```
+
+Do not leave `TIKPAL_KIOSK_XRANDR_MODE=none` on a physical-screen unit unless the display mode is intentionally managed somewhere else. The systemd kiosk unit sets `TIKPAL_KIOSK_SKIP_ENV_SOURCE=1` so a service-level drop-in such as `/etc/tikpal-kiosk.env` can override the app `.env.kiosk` once at process start; after changing the template, reinstall the systemd units before relying on that override order.
+
 ## Remote Kiosk Diagnostics
 
 noVNC adds CPU and network load, so keep it off by default and only enable it while recording or debugging. Use the viewer control helper on the Pi:
