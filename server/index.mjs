@@ -2810,6 +2810,7 @@ function syncCachedTikpalStateActiveRadioStation() {
   if (!cached || !state?.audio) return;
 
   const label = cached.station?.label ?? RADIO_LABEL;
+  const albumArtUrl = cached.station?.logoUrl ?? null;
   const radioSource = {
     ...(state.audio.sources?.find((source) => source.id === "radio") ?? buildSourceSummary({
       id: "radio",
@@ -2840,6 +2841,7 @@ function syncCachedTikpalStateActiveRadioStation() {
       playback: state.playback
         ? {
             ...state.playback,
+            albumArtUrl,
             source: "radio",
             title: label,
             station: label
@@ -5379,6 +5381,7 @@ async function switchToRadioSource(action = {}, options = {}) {
         await wait(retryDelaysMs[attempt - 1]);
       }
       try {
+        cacheActiveMpcRadioStation(targetStation, targetUri);
         await startRadioStreamUri(targetUri, options);
         cacheActiveMpcRadioStation(targetStation, targetUri);
         return;
@@ -5400,6 +5403,18 @@ async function switchToRadioSource(action = {}, options = {}) {
     throw lastError ?? new Error("MPD radio stream did not remain playing");
   } finally {
     scheduleMpcRadioLatePlayNudges(targetUri);
+  }
+}
+
+async function primeMpcRadioSourceCache(action = {}) {
+  const radioStations = await getAvailableRadioStations();
+  const selectedStation = action.radioStationId
+    ? radioStations.find((station) => station.id === action.radioStationId)
+    : null;
+  const targetUri = selectedStation?.uri ?? radioStations[0]?.uri ?? RADIO_DEFAULT_URI ?? "";
+  const targetStation = selectedStation ?? radioStations.find((station) => station.uri === targetUri) ?? null;
+  if (targetUri) {
+    cacheActiveMpcRadioStation(targetStation, targetUri);
   }
 }
 
@@ -6096,13 +6111,14 @@ function sendHtml(response, status, body) {
   response.end(body);
 }
 
-function sendBinary(response, status, contentType, body) {
+function sendBinary(response, status, contentType, body, headers = {}) {
   response.writeHead(status, {
     "Content-Type": contentType,
     "Cache-Control": "no-store",
     "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET,OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type,Accept,X-Tikpal-Key,X-Tikpal-Local-Ui"
+    "Access-Control-Allow-Methods": "GET,HEAD,OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type,Accept,X-Tikpal-Key,X-Tikpal-Local-Ui",
+    ...headers
   });
   response.end(body);
 }
@@ -7743,6 +7759,7 @@ async function applyMpcSourceSwitchUnlocked(action) {
       stopSceneAudio();
       resetBluetoothRecognitionSession();
       await enforceConnectionGate("radio");
+      await primeMpcRadioSourceCache(action);
       await releaseKioskAudioOutputForMpd("radio");
       await switchToRadioSource(action, { fallbackOnFailure: Boolean(action.radioStationId) });
       return;
@@ -8502,14 +8519,16 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    if (request.method === "GET" && url.pathname === "/api/v1/media/radio-logo") {
+    if ((request.method === "GET" || request.method === "HEAD") && url.pathname === "/api/v1/media/radio-logo") {
       const logo = await resolveRadioLogo(url.searchParams.get("stationId"));
       if (!logo) {
         sendJson(response, 404, { error: "NOT_FOUND", path: url.pathname });
         return;
       }
 
-      sendBinary(response, 200, logo.mimeType, await readFile(logo.absolutePath));
+      sendBinary(response, 200, logo.mimeType, request.method === "HEAD" ? null : await readFile(logo.absolutePath), {
+        "Cache-Control": "public, max-age=86400"
+      });
       return;
     }
 

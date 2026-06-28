@@ -19,6 +19,7 @@ export interface TikpalDataStatus {
 
 const REFRESH_MS = 3000;
 const AIRPLAY_REFRESH_MS = 2500;
+const RADIO_PENDING_REFRESH_MS = 700;
 
 export function useTikpalState() {
   const [state, setState] = useState<TikpalState>(fallbackTikpalState);
@@ -56,9 +57,13 @@ export function useTikpalState() {
 
   useEffect(() => {
     const controller = new AbortController();
-    const refreshMs = state.playback.source === "airplay" && state.playback.state === "playing"
-      ? AIRPLAY_REFRESH_MS
-      : REFRESH_MS;
+    const isRadioPendingRefresh = status.pendingAction === "source:radio"
+      || (state.playback.source === "radio" && (status.pendingAction === "playback:next" || status.pendingAction === "playback:previous"));
+    const refreshMs = isRadioPendingRefresh
+      ? RADIO_PENDING_REFRESH_MS
+      : state.playback.source === "airplay" && state.playback.state === "playing"
+        ? AIRPLAY_REFRESH_MS
+        : REFRESH_MS;
     void refresh(controller.signal);
     const interval = window.setInterval(() => {
       void refresh();
@@ -68,7 +73,7 @@ export function useTikpalState() {
       controller.abort();
       window.clearInterval(interval);
     };
-  }, [refresh, state.playback.source, state.playback.state]);
+  }, [refresh, state.playback.source, state.playback.state, status.pendingAction]);
 
   const sendPlaybackAction = useCallback(async (type: PlaybackActionType, value?: number, mode?: PlaybackMode) => {
     const pendingSinceMs = Date.now();

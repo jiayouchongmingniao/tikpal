@@ -1370,6 +1370,10 @@ if (getIndex >= 0) {
     const exactLogo = await requestBinaryFrom(baseUrl, catalog.body.stations[0].logoUrl);
     assert(exactLogo.response.ok, "mpc radio exact logo endpoint should return 200");
     assert(exactLogo.response.headers.get("content-type")?.startsWith("image/jpeg"), "mpc radio exact logo endpoint should return image bytes");
+    assert(
+      exactLogo.response.headers.get("cache-control")?.includes("max-age=86400"),
+      "mpc radio logo endpoint should allow browser caching for faster cover switches"
+    );
 
     const sourcesAfterCatalog = await requestFrom(baseUrl, "/api/v1/audio/sources");
     assert(sourcesAfterCatalog.response.ok, "mpc audio sources should return 200 after radio catalog read");
@@ -1528,6 +1532,10 @@ if (getIndex >= 0) {
       manualDeadStationFallback.body.audio.currentSource.secondaryStatus === "Tikpal Calm - FluxFM Chillout active",
       "mpc radio source switch should advance to the next station when the selected station cannot connect"
     );
+    assert(
+      manualDeadStationFallback.body.playback.albumArtUrl?.startsWith("/api/v1/media/radio-logo?stationId=radio-511"),
+      "mpc radio source switch fallback should refresh station logo artwork immediately"
+    );
     assert(JSON.parse(await readFile(fakeMpcStatePath, "utf8")).currentFile === radioUri, "mpc radio source switch fallback should replace the dead selected station URI");
 
     const stateBeforeDelayedStreamFailure = JSON.parse(await readFile(fakeMpcStatePath, "utf8"));
@@ -1561,6 +1569,10 @@ if (getIndex >= 0) {
         fakeFailedStreamUri: autoSkippedFakeState.failedStreamUri,
         fakeObservations: autoSkippedFakeState.observations?.slice(-8)
       })}`
+    );
+    assert(
+      autoSkippedDeadStation.body.playback.albumArtUrl?.startsWith("/api/v1/media/radio-logo?stationId=radio-511"),
+      "mpc radio late stream failure should refresh station logo artwork with the auto-advanced station"
     );
     assert(autoSkippedFakeState.currentFile === radioUri, "mpc radio late stream failure should replace the failed stream URI");
 
