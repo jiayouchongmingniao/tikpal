@@ -1787,6 +1787,7 @@ function parseMpcStatus(statusRaw) {
   const queueMatch = statusRaw.match(/#(\d+)\/(\d+)/);
   const progressMatch = statusRaw.match(/\s([0-9:]+)\/([0-9:]+)\s+\(/);
   const volumeMatch = statusRaw.match(/volume:\s*(\d+)%/);
+  const failedDecodeUri = statusRaw.match(/Failed to decode\s+"([^"]+)"/i)?.[1]?.trim() ?? null;
   const repeat = /repeat:\s*on/i.test(statusRaw);
   const random = /random:\s*on/i.test(statusRaw);
   const single = /single:\s*on/i.test(statusRaw);
@@ -1802,8 +1803,16 @@ function parseMpcStatus(statusRaw) {
     settings: {
       playMode: random ? "shuffle" : repeat && single ? "repeat_one" : "sequence"
     },
-    scanning
+    scanning,
+    failedStreamUri: failedDecodeUri && isStreamUri(failedDecodeUri) ? failedDecodeUri : null
   };
+}
+
+function getEffectiveMpcCurrentFile(currentFile, status) {
+  const normalizedFile = String(currentFile ?? "").trim();
+  if (normalizedFile) return normalizedFile;
+  const failedStreamUri = String(status?.failedStreamUri ?? "").trim();
+  return isStreamUri(failedStreamUri) ? failedStreamUri : "";
 }
 
 let mpcMutationQueue = Promise.resolve();
@@ -3031,9 +3040,13 @@ function filterRadioStations(stations, filters) {
 
 async function getRadioCatalogPayload(searchParams) {
   const filters = normalizeRadioFilters(searchParams);
-  const currentFile = API_MODE === "mpc"
-    ? (await runMpc(["--format", "%file%", "current"], { allowFailure: true })).trim()
-    : "";
+  const [currentFileRaw, statusRaw] = API_MODE === "mpc"
+    ? await Promise.all([
+      runMpc(["--format", "%file%", "current"], { allowFailure: true }),
+      runMpc(["status"], { allowFailure: true })
+    ])
+    : ["", ""];
+  const currentFile = getEffectiveMpcCurrentFile(currentFileRaw, parseMpcStatus(statusRaw));
   const stations = markActiveRadioStations(await getAvailableRadioStations(filters.scope), currentFile);
   const genres = Array.from(new Set(stations.map((station) => station.genre).filter(Boolean))).sort((left, right) => left.localeCompare(right));
   const categories = RADIO_CATEGORY_ORDER
@@ -4862,8 +4875,9 @@ async function getMpcSnapshot(options = {}) {
   ]);
 
   const status = parseMpcStatus(statusRaw);
-  const [title, artist, album, file, duration] = currentRaw.split("\t");
-  const hasCurrentTrack = Boolean(currentRaw.trim());
+  const [title, artist, album, rawFile, duration] = currentRaw.split("\t");
+  const file = getEffectiveMpcCurrentFile(rawFile, status);
+  const hasCurrentTrack = Boolean(currentRaw.trim()) || Boolean(file);
   const durationSeconds = parseDuration(duration) ?? status.durationSeconds;
   const nextSystem = includeSlowRuntimeStatus
     ? await getMpcSystemSnapshot(statusRaw, statsRaw)
@@ -5251,7 +5265,11 @@ async function switchToRadioSource(action = {}) {
 }
 
 async function switchRadioStationByOffset(offset) {
-  const currentFile = (await runMpc(["--format", "%file%", "current"], { allowFailure: true })).trim();
+  const [currentFileRaw, statusRaw] = await Promise.all([
+    runMpc(["--format", "%file%", "current"], { allowFailure: true }),
+    runMpc(["status"], { allowFailure: true })
+  ]);
+  const currentFile = getEffectiveMpcCurrentFile(currentFileRaw, parseMpcStatus(statusRaw));
   if (!isCurrentMpcSourceRadio() && !isStreamUri(currentFile)) return false;
 
   const tikpalStations = await getAvailableRadioStations("tikpal");
@@ -5271,16 +5289,28 @@ async function switchRadioStationByOffset(offset) {
     : allStations;
   if (stations.length === 0) return false;
 
-  const currentIndex = stations.findIndex((station) => station.uri === currentFile);
+  const activeStation = tikpalIndex >= 0 ? tikpalActiveStation : allActiveStation;
+  const currentIndex = activeStation
+    ? stations.findIndex((station) => station.id === activeStation.id)
+    : stations.findIndex((station) => station.uri === currentFile);
   const fallbackIndex = offset > 0 ? 0 : stations.length - 1;
-  const nextIndex = currentIndex >= 0
-    ? (currentIndex + offset + stations.length) % stations.length
-    : fallbackIndex;
-  const nextStation = stations[nextIndex];
-  if (!nextStation?.id) return false;
+  const step = offset < 0 ? -1 : 1;
+  const firstCandidateIndex = currentIndex >= 0 ? currentIndex + step : fallbackIndex;
+  let lastError = null;
+  for (let attempt = 0; attempt < stations.length; attempt += 1) {
+    const candidateIndex = ((firstCandidateIndex + step * attempt) % stations.length + stations.length) % stations.length;
+    const candidateStation = stations[candidateIndex];
+    if (!candidateStation?.id) continue;
 
-  await switchToRadioSource({ radioStationId: nextStation.id });
-  return true;
+    try {
+      await switchToRadioSource({ radioStationId: candidateStation.id });
+      return true;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError ?? new Error("No radio station could be started");
 }
 
 async function switchToSpotifySource() {

@@ -1098,6 +1098,7 @@ async function runMpcRadioPresetFastSnapshotSmoke(roomExperienceStatePath) {
 
   await writeFile(fakeMpcStatePath, JSON.stringify({
     currentFile: "Codex/Smoke.mp3",
+    failedStreamUri: null,
     playbackState: "playing",
     volume: 0,
     failNextAddForUri: radioUri,
@@ -1149,7 +1150,8 @@ for (let index = 0; index < rawArgs.length; index += 1) {
 }
 const command = args[0] ?? "";
 const state = readState();
-const isRadio = /^https?:\\/\\//i.test(state.currentFile);
+const statusFile = state.currentFile || state.failedStreamUri || "";
+const isRadio = /^https?:\\/\\//i.test(statusFile);
 switch (command) {
   case "current":
     if (!state.currentFile) break;
@@ -1162,6 +1164,10 @@ switch (command) {
       : "Smoke Title\\tSmoke Artist\\tSmoke Album\\t" + state.currentFile + "\\t02:00\\n");
     break;
   case "status":
+    if (state.failedStreamUri) {
+      process.stdout.write("volume:" + state.volume + "%   repeat: off   random: off   single: off   consume: off\\nERROR: Failed to decode \\"" + state.failedStreamUri + "\\"; Connection timed out after 10000 milliseconds: Timeout was reached\\n");
+      break;
+    }
     if (isRadio && Number(state.radioStartStatusFailures ?? 0) > 0) {
       writeState(recordObservation({
         ...state,
@@ -1180,7 +1186,7 @@ switch (command) {
     if (state.currentFile) process.stdout.write("0\\tTikpal Calm Test\\tInternet Radio\\tRadio\\t0:00\\t" + state.currentFile + "\\n");
     break;
   case "clear":
-    writeState(recordObservation({ ...state, currentFile: "" }, "clear"));
+    writeState(recordObservation({ ...state, currentFile: "", failedStreamUri: null }, "clear"));
     break;
   case "add":
     if (state.failNextAddForUri && state.failNextAddForUri === args[1]) {
@@ -1192,7 +1198,15 @@ switch (command) {
       process.stderr.write("Failed to open ALSA device _audioout: Device or resource busy\\n");
       process.exit(1);
     }
-    writeState(recordObservation({ ...state, currentFile: args[1] ?? "" }, "add"));
+    if (state.failAlwaysAddForUri && state.failAlwaysAddForUri === args[1]) {
+      writeState(recordObservation({
+        ...state,
+        addFailures: Number(state.addFailures ?? 0) + 1
+      }, "add-failed"));
+      process.stderr.write("Failed to open ALSA device _audioout: Device or resource busy\\n");
+      process.exit(1);
+    }
+    writeState(recordObservation({ ...state, currentFile: args[1] ?? "", failedStreamUri: null }, "add"));
     break;
   case "play":
     writeState(recordObservation({ ...state, playbackState: "playing" }, "play"));
@@ -1237,6 +1251,7 @@ if (process.argv.join(" ").includes("cfg_radio")) {
   process.stdout.write([
     "1|1.FM - Blues Radio|http://radio.example/blues|Blues|1.FM|192|MP3|local",
     "500|Tikpal Focus - Test Exact|http://radio.example/tikpal-focus|Focus, Ambient|Test FM|320|MP3|local",
+    "501|Tikpal Focus - Backup|http://radio.example/tikpal-focus-backup|Focus|Backup FM|320|MP3|local",
     "511|Tikpal Calm - FluxFM Chillout|${radioUri}|Calm, Chill Out, Laidback|FluxFM|256|MP3|local"
   ].join("\\n") + "\\n");
 }
@@ -1292,7 +1307,7 @@ if (getIndex >= 0) {
     await waitForHealthAt(baseUrl);
     const catalog = await requestFrom(baseUrl, "/api/v1/audio/radios");
     assert(catalog.response.ok, "mpc radio preset catalog should return 200");
-    assert(catalog.body.total === 2, "mpc radio catalog should default to Tikpal curated stations");
+    assert(catalog.body.total === 3, "mpc radio catalog should default to Tikpal curated stations");
     assert(catalog.body.stations[0]?.id === "radio-500", "mpc radio catalog should expose high-id Tikpal cfg_radio rows first");
     assert(catalog.body.stations[0]?.category === "focus", "mpc radio catalog should expose Tikpal category");
     assert(catalog.body.stations[0]?.broadcaster === "Test FM", "mpc radio catalog should expose broadcaster");
@@ -1301,7 +1316,7 @@ if (getIndex >= 0) {
 
     const allCatalog = await requestFrom(baseUrl, "/api/v1/audio/radios?scope=all&limit=250");
     assert(allCatalog.response.ok, "mpc radio all-scope catalog should return 200");
-    assert(allCatalog.body.total === 3, "mpc radio all-scope catalog should include moOde and Tikpal rows");
+    assert(allCatalog.body.total === 4, "mpc radio all-scope catalog should include moOde and Tikpal rows");
     assert(allCatalog.body.stations[0]?.catalogSource === "tikpal", "mpc radio all-scope catalog should keep Tikpal rows first");
     assert(allCatalog.body.stations.some((station) => station.id === "radio-1" && station.catalogSource === "moode"), "mpc radio all-scope catalog should retain moOde rows");
 
@@ -1411,6 +1426,42 @@ if (getIndex >= 0) {
       fastRefresh.body.audio.sources.some((source) => source.id === "radio" && source.availability === "available" && source.controllability === "switchable"),
       "mpc radio fast refresh should preserve preset-backed Radio availability"
     );
+
+    const stateBeforeFailedStream = JSON.parse(await readFile(fakeMpcStatePath, "utf8"));
+    await writeFile(fakeMpcStatePath, JSON.stringify({
+      ...stateBeforeFailedStream,
+      currentFile: "",
+      failedStreamUri: radioUri,
+      playbackState: "stopped",
+      failAlwaysAddForUri: "http://radio.example/tikpal-focus"
+    }));
+    const failedStreamRefresh = await requestFrom(baseUrl, "/api/v1/playback/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "pause" })
+    });
+    assert(failedStreamRefresh.response.ok, "mpc failed radio stream refresh should return 200");
+    assert(failedStreamRefresh.body.playback.source === "radio", "mpc failed radio stream should still report Radio source");
+    assert(failedStreamRefresh.body.playback.state === "stopped", "mpc failed radio stream should not be reported as playing");
+    assert(
+      failedStreamRefresh.body.audio.currentSource.secondaryStatus === "Tikpal Calm - FluxFM Chillout active",
+      "mpc failed radio stream should keep the failed station label"
+    );
+    const failedStreamCatalog = await requestFrom(baseUrl, "/api/v1/audio/radios?category=calm");
+    assert(
+      failedStreamCatalog.body.stations[0]?.id === "radio-511" && failedStreamCatalog.body.stations[0]?.active === true,
+      "mpc failed radio stream should keep the selected station active in the catalog"
+    );
+    const nextAfterFailedStream = await requestFrom(baseUrl, "/api/v1/playback/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "next" })
+    });
+    assert(nextAfterFailedStream.response.ok, "mpc radio next should recover from a failed stream");
+    assert(nextAfterFailedStream.body.playback.state === "playing", "mpc radio next recovery should start playback");
+    assert(
+      nextAfterFailedStream.body.audio.currentSource.secondaryStatus === "Tikpal Focus - Backup active",
+      "mpc radio next recovery should skip a failed candidate station"
+    );
+    assert(JSON.parse(await readFile(fakeMpcStatePath, "utf8")).currentFile === "http://radio.example/tikpal-focus-backup", "mpc radio next recovery should replace the failed MPD stream URI");
 
     const initialBrightness = await requestFrom(baseUrl, "/api/v1/system/state");
     assert(initialBrightness.response.ok, "mpc brightness preflight should return 200");
