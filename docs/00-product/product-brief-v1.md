@@ -86,7 +86,7 @@ Optional content:
 
 The HUD should be subtle by default and become stronger for a short time after a tap.
 
-For Focus, Calm, and Sleep, the temporary center strip is a room control, not a music transport. A tap opens a centered, lightweight source picker with `Library`, `Radio`, `Spotify`, `AirPlay`, `Bluetooth`, and `DLNA`, plus scene previous/next, Scene Sound, and the mode copy (`Focus / Deep work & reading`, `Calm / Unwind & relax`, or `Sleep / Dim, timer, fade-out`). Its width follows the content so the strip does not read like a full playback bar. Lyrics, favorite, play/pause, and track controls stay out of these modes on the Room Canvas and remain part of Hi-Fi playback.
+For Focus, Calm, and Sleep, the temporary center strip is a room control, not a music transport. A tap opens a centered, lightweight source picker with `Library`, `Radio`, `Spotify`, `AirPlay`, `Bluetooth`, and `DLNA`, plus scene previous/next, Scene Sound, and the mode copy (`Focus / Deep work & reading`, `Calm / Unwind & relax`, or `Sleep / Dim, timer, fade-out`). Its width follows the content so the strip does not read like a full playback bar. Lyrics, favorite, play/pause, and track controls stay out of these modes on the Room Canvas and remain part of Hi-Fi playback. Radio station changes should make the station identity and cover art feel immediate even when MPD needs longer to confirm the stream.
 
 Scene video and music source are independent unless Scene Sound is explicitly enabled. Focus, Calm, and Sleep default to scene video only: selecting a music/input source keeps the selected scene visible but mutes scene audio; turning Scene Sound on makes the scene MP4 the exclusive `scene` source and closes other intakes.
 

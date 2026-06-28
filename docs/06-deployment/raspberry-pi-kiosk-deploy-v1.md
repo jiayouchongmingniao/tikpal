@@ -392,6 +392,8 @@ curl -fsS 'http://127.0.0.1:8787/api/v1/audio/radios?limit=80' \
 curl -fsS 'http://127.0.0.1:8787/api/v1/audio/radios?scope=all&limit=5' \
   | jq '.total,.stations[].catalogSource'
 curl -I -fsS 'http://127.0.0.1:8787/api/v1/media/radio-logo?stationId=radio-511'
+curl -fsS -D - -o /dev/null 'http://127.0.0.1:8787/api/v1/media/radio-logo?stationId=radio-511' \
+  | grep -Ei 'cache-control|access-control-allow-methods'
 curl -fsS -X POST http://127.0.0.1:8787/api/v1/audio/source \
   -H "Content-Type: application/json" \
   --data '{"target":"radio","radioStationId":"radio-511"}' \
@@ -400,12 +402,14 @@ curl -fsS -X POST http://127.0.0.1:8787/api/v1/playback/actions \
   -H "Content-Type: application/json" \
   --data '{"type":"next"}' \
   | jq '.audio.currentSource.secondaryStatus,.playback.albumArtUrl'
+curl -fsS http://127.0.0.1:8787/api/v1/system/state \
+  | jq '.playback.source,.playback.state,.playback.albumArtUrl,.audio.currentSource.secondaryStatus'
 mpc current -f '%file%'
 mpc status
 curl -fsS http://127.0.0.1:8787/api/v1/audio/spectrum | jq '.source,.bands[0:8]'
 ```
 
-Expected result: the default Radio catalog reports the curated Tikpal count and categories, `scope=all` still exposes moOde rows, the radio-logo endpoint returns an image, MPD volume is nonzero after the Radio switch, the chosen station is `active:true` in `/api/v1/audio/radios`, Radio `next` changes the active station, logo, and `mpc current -f '%file%'`, a failed stream still recovers through Radio `next` instead of falling back to MPD `Not playing`, and spectrum bands are nonzero when the station is audible.
+Expected result: the default Radio catalog reports the curated Tikpal count and categories, `scope=all` still exposes moOde rows, the radio-logo endpoint returns an image with `Cache-Control: public, max-age=86400` and `GET,HEAD,OPTIONS` allowed, MPD volume is nonzero after the Radio switch, the chosen station is `active:true` in `/api/v1/audio/radios`, Radio `next` changes the active station, logo, and `mpc current -f '%file%'`, a failed stream still recovers through Radio `next` instead of falling back to MPD `Not playing`, `/api/v1/system/state` exposes the new Radio `albumArtUrl` as soon as the backend has primed the active station, and spectrum bands are nonzero when the station is audible.
 
 Verify Quick Settings actions from the API before relying on the kiosk UI:
 
