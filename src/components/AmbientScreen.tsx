@@ -47,6 +47,7 @@ const BACKGROUND_VIDEO_REFRESH_EVENT = "tikpal:background-videos-refresh";
 const SCENE_CONTEXT_REFRESH_MS = 30 * 60_000;
 const SOURCE_PICKER_AUTO_CLOSE_MS = 5_000;
 const SOURCE_PICKER_SCENE_AUDIO_RELEASE_MS = 150;
+const ADJUST_COMMIT_DELAY_MS = 140;
 const SCENE_VIDEO_THERMAL_PAUSE_C = 76;
 const SCENE_VIDEO_THERMAL_RESUME_C = 68;
 const LYRICS_CLOCK_TICK_MS = 250;
@@ -302,6 +303,10 @@ export function AmbientScreen({
   const lastSourcePickerOpenRequestRef = useRef(sourcePickerOpenRequest);
   const lastRoomSceneIdRef = useRef<string | null>(null);
   const selectedBackgroundVideoSrcRef = useRef(DEFAULT_BACKGROUND_VIDEO.src);
+  const adjustCommitTimersRef = useRef<Record<AmbientAdjustChannel, number | null>>({
+    volume: null,
+    brightness: null
+  });
   const requestStateRef = useRef<Record<AmbientAdjustChannel, { inFlight: boolean; queued: number | null; lastSent: number | null }>>({
     volume: { inFlight: false, queued: null, lastSent: null },
     brightness: { inFlight: false, queued: null, lastSent: null }
@@ -754,6 +759,14 @@ export function AmbientScreen({
     }
   }
 
+  function clearAdjustCommitTimer(channel: AmbientAdjustChannel) {
+    const timer = adjustCommitTimersRef.current[channel];
+    if (timer !== null) {
+      window.clearTimeout(timer);
+      adjustCommitTimersRef.current[channel] = null;
+    }
+  }
+
   function scheduleAdjustDismiss() {
     clearAdjustDismissTimer();
     adjustDismissTimerRef.current = window.setTimeout(() => {
@@ -764,6 +777,8 @@ export function AmbientScreen({
 
   useEffect(() => () => {
     clearAdjustDismissTimer();
+    clearAdjustCommitTimer("volume");
+    clearAdjustCommitTimer("brightness");
   }, []);
 
   useEffect(() => {
@@ -858,12 +873,12 @@ export function AmbientScreen({
         }
 
         try {
-          requestState.lastSent = target;
-          if (channel === "volume") {
-            await onPlaybackAction("volume_set", target);
-          } else {
-            await onSystemAction("brightness_set", target);
-          }
+          const nextState = channel === "volume"
+            ? await onPlaybackAction("volume_set", target)
+            : await onSystemAction("brightness_set", target);
+          requestState.lastSent = channel === "volume"
+            ? nextState.system.volume.percent
+            : nextState.system.display.brightnessPercent;
 
           setAdjustOverlay((current) => (
             current && current.channel === channel
@@ -892,6 +907,27 @@ export function AmbientScreen({
     [onPlaybackAction, onSystemAction]
   );
 
+  function scheduleAdjustDispatch(channel: AmbientAdjustChannel, percent: number) {
+    const nextPercent = clampPercent(percent);
+    requestStateRef.current[channel].queued = nextPercent;
+    clearAdjustCommitTimer(channel);
+    adjustCommitTimersRef.current[channel] = window.setTimeout(() => {
+      adjustCommitTimersRef.current[channel] = null;
+      const queued = requestStateRef.current[channel].queued;
+      if (queued !== null) {
+        dispatchAdjust(channel, queued);
+      }
+    }, ADJUST_COMMIT_DELAY_MS);
+  }
+
+  function flushAdjustDispatch(channel: AmbientAdjustChannel) {
+    clearAdjustCommitTimer(channel);
+    const queued = requestStateRef.current[channel].queued;
+    if (queued !== null) {
+      dispatchAdjust(channel, queued);
+    }
+  }
+
   function startAdjust(channel: AmbientAdjustChannel, pointerId: number, startY: number) {
     const startPercent = channel === "volume" ? system.volume.percent : brightnessPercent;
     clearAdjustDismissTimer();
@@ -918,10 +954,14 @@ export function AmbientScreen({
         ? { ...current, percent: nextPercent, error: null }
         : { channel: dragState.channel, percent: nextPercent, error: null }
     ));
-    dispatchAdjust(dragState.channel, nextPercent);
+    scheduleAdjustDispatch(dragState.channel, nextPercent);
   }
 
   function finishAdjust() {
+    const dragState = dragStateRef.current;
+    if (dragState) {
+      flushAdjustDispatch(dragState.channel);
+    }
     dragStateRef.current = null;
     scheduleAdjustDismiss();
   }
@@ -959,7 +999,7 @@ export function AmbientScreen({
       percent: nextPercent,
       error: null
     });
-    dispatchAdjust(channel, nextPercent);
+    scheduleAdjustDispatch(channel, nextPercent);
     scheduleAdjustDismiss();
   }
 

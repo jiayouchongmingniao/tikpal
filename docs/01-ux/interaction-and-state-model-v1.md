@@ -27,8 +27,8 @@ type AppMode = "ambient" | "player" | "playlist" | "quickSettings" | "quickMenu"
 | Swipe up | Player, playlist, or quick settings | Return to ambient, including swipes that start inside the overlay panel. |
 | Tap | Ambient | In Focus/Calm/Sleep, show the HUD and open the lightweight source picker; in Hi-Fi, toggle the HUD. The HUD and picker auto-hide after 5 seconds without input. |
 | Long press | Ambient | Open quick menu. |
-| Vertical drag in left ambient zone | Ambient | Live display brightness adjustment through DDC/CI when available. |
-| Vertical drag in right ambient zone | Ambient | Live volume adjustment against moOde volume state. |
+| Vertical drag in left ambient zone | Ambient | Live display brightness adjustment through DDC/CI when available. The overlay follows the hand immediately, but backend writes are coalesced to the final resting value. |
+| Vertical drag in right ambient zone | Ambient | Live volume adjustment against moOde volume state. The overlay follows the hand immediately, but backend writes are coalesced to the final resting value. |
 | Non-Hi-Fi Ambient center controls | Ambient HUD visible | Previous scene, Focus/Calm/Sleep label plus intent, lightweight source picker, Scene Sound mute/unmute, and next scene. The strip width should follow its content rather than a fixed playback-control width. |
 | Hi-Fi Ambient center controls | Ambient HUD visible | Play mode, lightweight source picker, previous track, play/pause, next track, favorite, playlist, and lyrics. |
 | Arrow keys | Ambient HUD visible | In Focus/Calm/Sleep, up/down/left/right change scene and Space/Enter toggles Scene Sound. In Hi-Fi, scene arrows switch EQ presets and track arrows keep playback behavior. |
@@ -41,7 +41,7 @@ type AppMode = "ambient" | "player" | "playlist" | "quickSettings" | "quickMenu"
 | One-finger swipe down | 80-120px vertical travel. |
 | Two-finger swipe down | 120-160px vertical travel. |
 | Long press | 800-1000ms. |
-| Ambient HUD default dwell | 5000ms from startup before auto-hide. |
+| Ambient HUD default dwell | 5000ms from startup before auto-hide. The startup room-mode chooser may auto-dismiss to the current persisted mode, but it must not re-send `set_mode` or replay room preset side effects unless the user taps a mode. |
 | Tap-shown HUD dwell | 5000ms before auto-hide. |
 | Player inactivity timeout | 15s. |
 | Quick settings inactivity timeout | 30s. |
@@ -119,7 +119,7 @@ stateDiagram-v2
 - Play / pause should be the dominant control, 96-112px.
 - Queue, source, audio status, and volume can expand panels from within player.
 - Player source tabs use the same external handoff rule as Ambient for Spotify Connect, AirPlay, Bluetooth, and DLNA. A pending handoff replaces the source tabs with the waiting card so the user does not see a source as selected on one surface and merely armed on another.
-- Player volume uses a 0-100 range slider instead of step buttons. Dragging the slider should update UI immediately and send `volume_set` as the single global volume action.
+- Player volume uses a 0-100 range slider instead of step buttons. Dragging the slider should update UI immediately, then send the final resting value through `volume_set` as the single global volume action.
 - The displayed volume percent should match `system.volume.percent`, including while Scene Sound is active.
 - Player, Ambient Hi-Fi, and portable remote summaries must keep now-playing title, artist, album, artwork, source label, progress, favorite state, and queue position aligned with backend playback truth. Browsing a source, arming an external intake, or previewing a playlist must not overwrite the displayed track until the backend confirms playback/source truth.
 - AirPlay metadata-backed lyrics use `sourceScope: "airplay_input"` and the shared playback clock, so portable remote refreshes and the kiosk Hi-Fi wall stay anchored to the same track. A ready AirPlay lyrics state must have the same title/artist identity as playback; if LRCLIB only has a same-title different-artist result, the UI should keep the centered now-playing state.

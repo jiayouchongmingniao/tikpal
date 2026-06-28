@@ -423,6 +423,7 @@ let tikpalStateSnapshotRefreshQueued = false;
 let tikpalStateSnapshotGeneration = 0;
 let mpcRadioCatalogReadyCache = false;
 let mpcRadioCatalogCountCache = 0;
+let activeMpcRadioStationCache = null;
 let airplayDirectMetadataRefreshPromise = null;
 let airplayDirectMetadataRefreshAtMs = 0;
 let sceneContextGeoCache = null;
@@ -2685,6 +2686,7 @@ function getCachedMpcSystemSnapshot(statusRaw, statsRaw) {
 
   return {
     ...cachedSystem,
+    display: system.display,
     library: {
       ...cachedSystem.library,
       source: "MPD",
@@ -2784,6 +2786,50 @@ function sortRadioStations(stations) {
     }
     return (left.sortOrder ?? 0) - (right.sortOrder ?? 0);
   });
+}
+
+function clearActiveMpcRadioStationCache() {
+  activeMpcRadioStationCache = null;
+}
+
+function cacheActiveMpcRadioStation(station, uri) {
+  const targetUri = String(uri ?? station?.uri ?? "").trim();
+  if (!targetUri && !station) {
+    clearActiveMpcRadioStationCache();
+    return;
+  }
+
+  activeMpcRadioStationCache = {
+    id: station?.id ?? null,
+    uri: targetUri,
+    station: station ? { ...station, active: true } : null,
+    updatedAtMs: Date.now()
+  };
+}
+
+function findActiveRadioStationFromList(currentFile, stations) {
+  const normalizedCurrentFile = String(currentFile ?? "").trim();
+  if (!isStreamUri(normalizedCurrentFile)) return null;
+
+  const exact = stations.find((station) => station.uri === normalizedCurrentFile);
+  if (exact) return exact;
+
+  const cached = activeMpcRadioStationCache;
+  if (!cached || Date.now() - cached.updatedAtMs > 12 * 60 * 60 * 1000) return null;
+  if (cached.id) {
+    const station = stations.find((entry) => entry.id === cached.id);
+    if (station) return station;
+  }
+
+  return cached.station;
+}
+
+function markActiveRadioStations(stations, currentFile) {
+  const activeStation = findActiveRadioStationFromList(currentFile, stations);
+  return stations.map((station) => ({
+    ...station,
+    active: Boolean(activeStation && station.id === activeStation.id)
+  }));
 }
 
 async function readMpcRadioStations() {
@@ -2889,7 +2935,7 @@ function applyMpcRadioCatalogReadyToState(state) {
 async function findRadioStationByUri(uri) {
   if (!uri) return null;
   const stations = await getAvailableRadioStations("all");
-  return stations.find((station) => station.uri === uri) ?? null;
+  return findActiveRadioStationFromList(uri, stations) ?? null;
 }
 
 async function resolveRadioLogoCandidate(fileName) {
@@ -2985,7 +3031,10 @@ function filterRadioStations(stations, filters) {
 
 async function getRadioCatalogPayload(searchParams) {
   const filters = normalizeRadioFilters(searchParams);
-  const stations = await getAvailableRadioStations(filters.scope);
+  const currentFile = API_MODE === "mpc"
+    ? (await runMpc(["--format", "%file%", "current"], { allowFailure: true })).trim()
+    : "";
+  const stations = markActiveRadioStations(await getAvailableRadioStations(filters.scope), currentFile);
   const genres = Array.from(new Set(stations.map((station) => station.genre).filter(Boolean))).sort((left, right) => left.localeCompare(right));
   const categories = RADIO_CATEGORY_ORDER
     .map((category) => ({
@@ -4569,10 +4618,9 @@ async function getMpcAudioSnapshot(currentFile) {
   if (!mockArmedSource && COMMAND_HANDOFF_SOURCE_TARGETS.has(activeSource)) {
     mockArmedSource = activeSource;
   }
-  const nextRadioStations = radioStations.map((station) => ({
-    ...station,
-    active: radioActive && station.uri === currentFile
-  }));
+  const nextRadioStations = radioActive
+    ? markActiveRadioStations(radioStations, currentFile)
+    : radioStations.map((station) => ({ ...station, active: false }));
 
   return buildAudioState({
     activeSource,
@@ -4613,6 +4661,9 @@ function buildMinimalMpcAudioSnapshot(currentFile = "") {
     || cachedRadioSource?.controllability === "switchable";
   const catalogRadioReady = mpcRadioCatalogReadyCache && mpcRadioCatalogCountCache > 0;
   const radioActive = isStreamUri(currentFile);
+  const cachedActiveRadioStation = radioActive && activeMpcRadioStationCache?.station
+    ? { ...activeMpcRadioStationCache.station, active: true }
+    : null;
   const activeSource = mockArmedSource === "scene"
     ? "scene"
     : mockArmedSource && ["audio", "spotify", "bluetooth", "airplay", "upnp"].includes(mockArmedSource)
@@ -4628,7 +4679,7 @@ function buildMinimalMpcAudioSnapshot(currentFile = "") {
     armedSource: mockArmedSource,
     radioReady: Boolean(RADIO_ACTIVATE_COMMAND || RADIO_DEFAULT_URI || cachedRadioReady || catalogRadioReady),
     radioActive,
-    radioStations: [],
+    radioStations: cachedActiveRadioStation ? [cachedActiveRadioStation] : [],
     audioSourceState: buildCachedSourceRuntimeState("audio", true),
     spotifyState: buildCachedSourceRuntimeState("spotify", commandSourceSupported([
       SPOTIFY_READY_COMMAND,
@@ -5166,9 +5217,11 @@ async function switchToRadioSource(action = {}) {
   }
 
   const targetUri = selectedStation?.uri ?? radioStations[0]?.uri ?? RADIO_DEFAULT_URI ?? "";
+  const targetStation = selectedStation ?? radioStations.find((station) => station.uri === targetUri) ?? null;
 
   if (!targetUri && RADIO_ACTIVATE_COMMAND) {
     await runSystemActionCommand(RADIO_ACTIVATE_COMMAND, "radio");
+    cacheActiveMpcRadioStation(null, "");
     return;
   }
 
@@ -5184,6 +5237,7 @@ async function switchToRadioSource(action = {}) {
       }
       try {
         await startRadioStreamUri(targetUri);
+        cacheActiveMpcRadioStation(targetStation, targetUri);
         return;
       } catch (error) {
         lastError = error;
@@ -5201,9 +5255,17 @@ async function switchRadioStationByOffset(offset) {
   if (!isCurrentMpcSourceRadio() && !isStreamUri(currentFile)) return false;
 
   const tikpalStations = await getAvailableRadioStations("tikpal");
-  const tikpalIndex = tikpalStations.findIndex((station) => station.uri === currentFile);
+  const tikpalActiveStation = findActiveRadioStationFromList(currentFile, tikpalStations);
+  const tikpalIndex = tikpalActiveStation
+    ? tikpalStations.findIndex((station) => station.id === tikpalActiveStation.id)
+    : -1;
   const allStations = tikpalIndex >= 0 ? tikpalStations : await getAvailableRadioStations("all");
-  const allIndex = tikpalIndex >= 0 ? tikpalIndex : allStations.findIndex((station) => station.uri === currentFile);
+  const allActiveStation = tikpalIndex >= 0 ? tikpalActiveStation : findActiveRadioStationFromList(currentFile, allStations);
+  const allIndex = tikpalIndex >= 0
+    ? tikpalIndex
+    : allActiveStation
+      ? allStations.findIndex((station) => station.id === allActiveStation.id)
+      : -1;
   const stations = tikpalIndex >= 0 || allIndex < 0 || allStations[allIndex]?.catalogSource === "tikpal"
     ? tikpalStations
     : allStations;
@@ -7485,6 +7547,7 @@ async function applyMpcSourceSwitchUnlocked(action) {
   switch (action.target) {
     case "mpd":
       mockArmedSource = null;
+      clearActiveMpcRadioStationCache();
       stopSceneAudio();
       resetBluetoothRecognitionSession();
       if (action.localTrackPath) {
@@ -7497,6 +7560,7 @@ async function applyMpcSourceSwitchUnlocked(action) {
       }
       return;
     case "audio":
+      clearActiveMpcRadioStationCache();
       stopSceneAudio();
       resetBluetoothRecognitionSession();
       await switchToAudioSource();
@@ -7511,29 +7575,34 @@ async function applyMpcSourceSwitchUnlocked(action) {
       await switchToRadioSource(action);
       return;
     case "scene":
+      clearActiveMpcRadioStationCache();
       resetBluetoothRecognitionSession();
       await switchToSceneSource(action);
       mockArmedSource = "scene";
       return;
     case "spotify":
+      clearActiveMpcRadioStationCache();
       stopSceneAudio();
       resetBluetoothRecognitionSession();
       await switchToSpotifySource();
       mockArmedSource = "spotify";
       return;
     case "bluetooth":
+      clearActiveMpcRadioStationCache();
       stopSceneAudio();
       resetBluetoothRecognitionSession();
       await switchToBluetoothSource();
       mockArmedSource = "bluetooth";
       return;
     case "airplay":
+      clearActiveMpcRadioStationCache();
       stopSceneAudio();
       resetBluetoothRecognitionSession();
       await switchToAirplaySource();
       mockArmedSource = "airplay";
       return;
     case "upnp":
+      clearActiveMpcRadioStationCache();
       stopSceneAudio();
       resetBluetoothRecognitionSession();
       await switchToUpnpSource();

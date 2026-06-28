@@ -1089,7 +1089,9 @@ async function runMpcRadioPresetFastSnapshotSmoke(roomExperienceStatePath) {
   const fakeMpcPath = path.join(workspace, "mpc-fake.mjs");
   const fakeKioskAudioReleasePath = path.join(workspace, "release-kiosk-audio.mjs");
   const fakeSqlitePath = path.join(workspace, "sqlite3");
+  const fakeDdcutilPath = path.join(workspace, "ddcutil");
   const fakeMpcStatePath = path.join(workspace, "mpc-state.json");
+  const fakeBrightnessStatePath = path.join(workspace, "brightness-state.txt");
   const fakeLogoDir = path.join(workspace, "radio-logos");
   const fakeAudioVolumeStatePath = path.join(workspace, "audio-volume-state.json");
   const radioUri = "http://radio.example/tikpal-calm";
@@ -1107,6 +1109,7 @@ async function runMpcRadioPresetFastSnapshotSmoke(roomExperienceStatePath) {
   await writeFile(path.join(fakeLogoDir, "Tikpal Focus - Test Exact.jpg"), Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
   await writeFile(path.join(fakeLogoDir, "FluxFM - Chillout Radio.jpg"), Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
   await writeFile(fakeAudioVolumeStatePath, JSON.stringify({ version: 1, lastNonZeroPercent: 44, updatedAt: "2026-01-01T00:00:00.000Z" }));
+  await writeFile(fakeBrightnessStatePath, "48\n");
   await writeFile(fakeMpcPath, `#!/usr/bin/env node
 import { readFileSync, writeFileSync } from "node:fs";
 
@@ -1135,6 +1138,7 @@ function recordObservation(state, command) {
   };
 }
 const rawArgs = process.argv.slice(2);
+const fileOnlyCurrent = rawArgs.includes("--format") && rawArgs[rawArgs.indexOf("--format") + 1] === "%file%";
 const args = [];
 for (let index = 0; index < rawArgs.length; index += 1) {
   if (rawArgs[index] === "--host" || rawArgs[index] === "--port" || rawArgs[index] === "--format") {
@@ -1149,6 +1153,10 @@ const isRadio = /^https?:\\/\\//i.test(state.currentFile);
 switch (command) {
   case "current":
     if (!state.currentFile) break;
+    if (fileOnlyCurrent) {
+      process.stdout.write(state.currentFile + "\\n");
+      break;
+    }
     process.stdout.write(isRadio
       ? "Tikpal Calm Test\\tInternet Radio\\tRadio\\t" + state.currentFile + "\\t0:00\\n"
       : "Smoke Title\\tSmoke Artist\\tSmoke Album\\t" + state.currentFile + "\\t02:00\\n");
@@ -1234,6 +1242,22 @@ if (process.argv.join(" ").includes("cfg_radio")) {
 }
 `);
   await chmod(fakeSqlitePath, 0o755);
+  await writeFile(fakeDdcutilPath, `#!/usr/bin/env node
+import { readFileSync, writeFileSync } from "node:fs";
+
+const statePath = ${JSON.stringify(fakeBrightnessStatePath)};
+const args = process.argv.slice(2);
+const getIndex = args.indexOf("getvcp");
+const setIndex = args.indexOf("setvcp");
+if (getIndex >= 0) {
+  process.stdout.write("VCP 10 C " + readFileSync(statePath, "utf8").trim() + " 100\\n");
+} else if (setIndex >= 0) {
+  writeFileSync(statePath, String(Number(args[setIndex + 2] ?? 0)) + "\\n");
+} else {
+  process.exit(1);
+}
+`);
+  await chmod(fakeDdcutilPath, 0o755);
 
   const server = spawn(process.execPath, ["server/index.mjs"], {
     env: mpcFocusedSmokeEnv({
@@ -1243,6 +1267,8 @@ if (process.argv.join(" ").includes("cfg_radio")) {
       TIKPAL_PLAYER_BACKEND: "mpc",
       TIKPAL_MPC_BIN: fakeMpcPath,
       TIKPAL_SQLITE_BIN: fakeSqlitePath,
+      TIKPAL_DDCUTIL_BIN: fakeDdcutilPath,
+      TIKPAL_DDCUTIL_READ_CACHE_MS: "60000",
       TIKPAL_RADIO_LOGO_DIR: fakeLogoDir,
       TIKPAL_AUDIO_VOLUME_STATE_PATH: fakeAudioVolumeStatePath,
       TIKPAL_MPD_HOST: "127.0.0.1",
@@ -1321,6 +1347,12 @@ if (process.argv.join(" ").includes("cfg_radio")) {
     assert(switched.body.playback.source === "radio", "mpc radio preset switch should make playback Radio");
     assert(switched.body.system.volume.percent === 44, "mpc radio preset switch should restore the last nonzero MPD volume");
     assert(switched.body.playback.albumArtUrl?.startsWith("/api/v1/media/radio-logo?stationId=radio-511"), "mpc radio playback should prefer station logo artwork");
+    const activeCalmCatalog = await requestFrom(baseUrl, "/api/v1/audio/radios?category=calm");
+    assert(activeCalmCatalog.response.ok, "mpc radio active catalog should return 200");
+    assert(
+      activeCalmCatalog.body.stations[0]?.id === "radio-511" && activeCalmCatalog.body.stations[0]?.active === true,
+      "mpc radio catalog should mark the selected station active"
+    );
     const aliasLogo = await requestBinaryFrom(baseUrl, switched.body.playback.albumArtUrl);
     assert(aliasLogo.response.ok, "mpc radio alias logo endpoint should return 200");
     const fakeStateAfterRadio = JSON.parse(await readFile(fakeMpcStatePath, "utf8"));
@@ -1372,9 +1404,26 @@ if (process.argv.join(" ").includes("cfg_radio")) {
     assert(fastRefresh.response.ok, "mpc radio fast playback mutation should return 200");
     assert(fastRefresh.body.audio.currentSource.id === "radio", "mpc radio fast refresh should keep Radio current");
     assert(
+      fastRefresh.body.audio.currentSource.secondaryStatus === "Tikpal Calm - FluxFM Chillout active",
+      "mpc radio fast refresh should keep the selected station label"
+    );
+    assert(
       fastRefresh.body.audio.sources.some((source) => source.id === "radio" && source.availability === "available" && source.controllability === "switchable"),
       "mpc radio fast refresh should preserve preset-backed Radio availability"
     );
+
+    const initialBrightness = await requestFrom(baseUrl, "/api/v1/system/state");
+    assert(initialBrightness.response.ok, "mpc brightness preflight should return 200");
+    assert(initialBrightness.body.system.display.brightnessPercent === 48, "mpc brightness preflight should read fake ddcutil state");
+    const brightness = await requestFrom(baseUrl, "/api/v1/system/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "brightness_set", value: 62 })
+    });
+    assert(brightness.response.ok, "mpc brightness_set should return 200");
+    assert(brightness.body.system.display.brightnessPercent === 62, "mpc brightness_set should return the written DDC brightness");
+    const brightnessAfterWrite = await requestFrom(baseUrl, "/api/v1/system/state");
+    assert(brightnessAfterWrite.response.ok, "mpc brightness post-write state should return 200");
+    assert(brightnessAfterWrite.body.system.display.brightnessPercent === 62, "mpc brightness post-write state should not restore the stale cached display snapshot");
   } finally {
     if (server.exitCode === null && server.signalCode === null) {
       server.kill("SIGTERM");

@@ -468,6 +468,9 @@ export default function App() {
       setStartupChooserVisible(true);
     }
   }, [handleRoomExperienceAction]);
+  const handleStartupModeAutoDismiss = useCallback(() => {
+    setStartupChooserVisible(false);
+  }, []);
 
   const handleAmbientTap = useCallback(() => {
     if (mode === "ambient" && roomExperience.mode !== "hifi") {
@@ -528,6 +531,7 @@ export default function App() {
         active={startupChooserVisible && mode === "ambient"}
         pending={tikpalStatus.pending}
         selectedMode={roomExperience.mode}
+        onAutoDismiss={handleStartupModeAutoDismiss}
         onSelectMode={handleStartupModeSelect}
       />
 

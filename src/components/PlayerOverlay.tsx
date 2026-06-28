@@ -76,6 +76,7 @@ const primaryPanels: Array<{ id: PrimaryPanelId; label: string; Icon: LucideIcon
   { id: "upnp", label: "DLNA", Icon: Network }
 ];
 const handoffSourceIds = new Set(["spotify", "airplay", "bluetooth", "upnp"]);
+const CONTROL_COMMIT_DELAY_MS = 140;
 
 const storageTabs: Array<{ id: LibraryFilterId; label: string; Icon: LucideIcon }> = [
   { id: "local", label: "Local", Icon: HardDrive },
@@ -203,6 +204,7 @@ export function PlayerOverlay({
     queued: null,
     lastSent: system.volume.percent
   });
+  const volumeCommitTimerRef = useRef<number | null>(null);
   const playbackTruth = getPlaybackDisplayTruth(playback, audio, fontTheme);
   const [failedAlbumArtUrl, setFailedAlbumArtUrl] = useState<string | null>(null);
   const displayedAlbumArtUrl = playbackTruth.hasPlaybackArtwork && failedAlbumArtUrl === playbackTruth.albumArtUrl
@@ -311,6 +313,11 @@ export function PlayerOverlay({
 
   useEffect(() => {
     if (!active) {
+      if (volumeCommitTimerRef.current !== null) {
+        window.clearTimeout(volumeCommitTimerRef.current);
+        volumeCommitTimerRef.current = null;
+      }
+      volumeRequestStateRef.current.queued = null;
       setSeekDraftSeconds(null);
       setSeekPendingSeconds(null);
       setSeekError(null);
@@ -331,14 +338,9 @@ export function PlayerOverlay({
     }
   }, [system.volume.percent]);
 
-  const dispatchVolumeChange = useCallback(
-    (percent: number) => {
-      const nextPercent = clampVolumePercent(percent);
+  const flushVolumeChange = useCallback(
+    () => {
       const requestState = volumeRequestStateRef.current;
-      requestState.queued = nextPercent;
-      setVolumeDraftPercent(nextPercent);
-      setVolumeError(null);
-
       if (requestState.inFlight) return;
 
       requestState.inFlight = true;
@@ -349,7 +351,9 @@ export function PlayerOverlay({
 
         if (target === null || target === requestState.lastSent) {
           requestState.inFlight = false;
-          setVolumeDraftPercent(null);
+          if (requestState.queued === null && volumeCommitTimerRef.current === null) {
+            setVolumeDraftPercent(null);
+          }
           return;
         }
 
@@ -367,7 +371,7 @@ export function PlayerOverlay({
         }
 
         requestState.inFlight = false;
-        if (requestState.queued === null) {
+        if (requestState.queued === null && volumeCommitTimerRef.current === null) {
           setVolumeDraftPercent(null);
         }
       };
@@ -377,8 +381,35 @@ export function PlayerOverlay({
     [onPlaybackAction]
   );
 
+  const scheduleVolumeChange = useCallback(
+    (percent: number) => {
+      const nextPercent = clampVolumePercent(percent);
+      const requestState = volumeRequestStateRef.current;
+      requestState.queued = nextPercent;
+      setVolumeDraftPercent(nextPercent);
+      setVolumeError(null);
+
+      if (volumeCommitTimerRef.current !== null) {
+        window.clearTimeout(volumeCommitTimerRef.current);
+      }
+      volumeCommitTimerRef.current = window.setTimeout(() => {
+        volumeCommitTimerRef.current = null;
+        flushVolumeChange();
+      }, CONTROL_COMMIT_DELAY_MS);
+    },
+    [flushVolumeChange]
+  );
+
+  const commitVolumeChange = useCallback(() => {
+    if (volumeCommitTimerRef.current !== null) {
+      window.clearTimeout(volumeCommitTimerRef.current);
+      volumeCommitTimerRef.current = null;
+    }
+    flushVolumeChange();
+  }, [flushVolumeChange]);
+
   function handleVolumeSliderChange(value: string) {
-    dispatchVolumeChange(Number(value));
+    scheduleVolumeChange(Number(value));
   }
 
   useEffect(() => {
@@ -1023,6 +1054,10 @@ export function PlayerOverlay({
                   data-player-volume-slider
                   data-gesture-control
                   onChange={(event) => handleVolumeSliderChange(event.currentTarget.value)}
+                  onPointerUp={commitVolumeChange}
+                  onTouchEnd={commitVolumeChange}
+                  onKeyUp={commitVolumeChange}
+                  onBlur={commitVolumeChange}
                 />
               </div>
               <span className={`library-volume-percent ${volumeError ? "is-error" : ""}`} data-player-volume-percent>{displayedVolumePercent}%</span>

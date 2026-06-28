@@ -7,6 +7,7 @@ interface StartupModeChooserProps {
   active: boolean;
   pending: boolean;
   selectedMode: RoomMode;
+  onAutoDismiss: () => void;
   onSelectMode: (mode: RoomMode) => void;
 }
 
@@ -17,16 +18,16 @@ const startupModeIcons = {
   hifi: SlidersHorizontal
 } satisfies Record<RoomMode, typeof Target>;
 
-export function StartupModeChooser({ active, pending, selectedMode, onSelectMode }: StartupModeChooserProps) {
+export function StartupModeChooser({ active, pending, selectedMode, onAutoDismiss, onSelectMode }: StartupModeChooserProps) {
   useEffect(() => {
     if (!active || pending) return undefined;
 
     const timer = window.setTimeout(() => {
-      onSelectMode(selectedMode);
+      onAutoDismiss();
     }, 5000);
 
     return () => window.clearTimeout(timer);
-  }, [active, onSelectMode, pending, selectedMode]);
+  }, [active, onAutoDismiss, pending]);
 
   if (!active) return null;
 
