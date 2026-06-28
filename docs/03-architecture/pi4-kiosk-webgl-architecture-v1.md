@@ -73,7 +73,7 @@ These names are now used by `deploy/chromium/env.kiosk.example`.
 
 ## Ambience Renderer Policy
 
-The current ambient scene surface is media-backed: a static logo/fallback surface under local MP4 scene layers. Scene changes mount the incoming video, align it to `playback.elapsedSeconds % video.duration`, and reveal only after a drawable frame is ready. During normal playback the static logo/backdrop is hidden so a source change cannot expose a white/bright fallback frame; it is visible only for static-only and repeated-stall fallback states.
+The current ambient scene surface is media-backed: a static logo/fallback surface under local MP4 scene layers. Scene changes mount the incoming video, align it to `playback.elapsedSeconds % video.duration`, and reveal only after a drawable frame is ready. During normal playback the static logo/backdrop is hidden so a source change cannot expose a white/bright fallback frame; it is visible only for static-only and repeated-stall fallback states. In the Pi single-loop path, that logo fallback is a temporary degradation state: the current scene retries after a short delay, and a new scene source must clear the fallback so Focus / Calm / Sleep switching can remount video without requiring a kiosk restart.
 
 Renderer requirements:
 
@@ -82,7 +82,7 @@ Renderer requirements:
 - Keep HUD and controls readable while video metadata or seeking is settling.
 - Keep scene video rendering independent from music source playback; Scene Sound decides whether the active scene layer is audible.
 - Unmute only the active video layer when `scene` is the playback source, and keep volume synced to `system.volume.percent`.
-- On Pi, use the single-loop/stable scene path and `data-flame-video-health` to recover ordinary video-element stalls. Full X/Chromium/V3D hangs are outside React's recovery boundary and belong to the systemd kiosk watchdog.
+- On Pi, use the single-loop/stable scene path and `data-flame-video-health` to recover ordinary video-element stalls. Repeated stalls may briefly show the logo fallback, but that state must retry video mounting and must be cleared by scene changes. Full X/Chromium/V3D hangs are outside React's recovery boundary and belong to the systemd kiosk watchdog.
 - Post a local kiosk heartbeat from the page and keep `/api/v1/kiosk/heartbeat` loopback-only. The watchdog can use stale heartbeats, stuck pending actions, event-loop lag, and scene-video health as a page-runtime signal without exposing that state to the portable remote API.
 - Keep future WebGL/canvas visual modes optional and isolated from the player/settings shell.
 

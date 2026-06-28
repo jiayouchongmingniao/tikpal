@@ -122,6 +122,7 @@ Ambient background videos:
 - `GET /api/v1/scene/context` may add IP-derived timezone, daypart, coarse location label, country code, and weather label for weak Ambient clock copy. This is context for wording only; Auto Night still follows the stored room-experience timezone and the endpoint must cache provider reads so a slow network lookup does not block the normal state snapshot path.
 - On scene switch, the incoming video should seek to `playback.elapsedSeconds % video.duration` before it is revealed.
 - Normal video playback should not expose the static logo/backdrop during scene switches; that surface is reserved for static-only mode and repeated-stall fallback.
+- On Pi `mpc` stable-loop playback, repeated-stall fallback is recoverable. The frontend should retry the current scene after briefly showing the logo, and changing the room scene through `/api/v1/experience/actions` must clear fallback state so the next Focus / Calm / Sleep video can mount.
 - The visual ambience layer can keep looping independently from music playback state; Scene Sound controls whether the active layer is audible.
 - The local web server must support `Range` requests for MP4 files so browser seeks can land on the requested frame instead of falling back to the first frame.
 - Scene video can become audible through the Quick Menu Scene Sound toggle or the local `set_scene_sound` experience action. When enabled, the backend marks `scene` as the active source and the browser unmutes only the active video layer.

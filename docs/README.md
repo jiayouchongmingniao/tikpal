@@ -122,7 +122,7 @@ The local backend boundary should reserve endpoints or adapters for playback con
 ## Current Implementation Checkpoints
 
 - Root app: Vite + React + TypeScript.
-- Visual layer: image-backed scene fallback with local MP4 video layers, playback-time alignment, crossfaded scene changes, Pi single-loop scene handoffs that keep the outgoing layer until the incoming frame is drawable, no-logo normal playback, and stall/fallback health via `data-flame-video-health`.
+- Visual layer: image-backed scene fallback with local MP4 video layers, playback-time alignment, crossfaded scene changes, Pi single-loop scene handoffs that keep the outgoing layer until the incoming frame is drawable, no-logo normal playback, recoverable logo fallback, and stall/fallback health via `data-flame-video-health`.
 - State model: `ambient`, `player`, `quickSettings`, and `quickMenu`.
 - Validation routes: `/`, `/?mode=player`, `/?mode=quickSettings`.
 - Interaction validation: `npm run test:interaction` while the dev server is running.

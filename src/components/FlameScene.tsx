@@ -21,6 +21,7 @@ const SINGLE_LOOP_WATCHDOG_MS = 1250;
 const SINGLE_LOOP_STALL_MS = 2800;
 const SINGLE_LOOP_STALL_RETRY_LIMIT = 2;
 const SINGLE_LOOP_STALL_FALLBACK_LIMIT = 3;
+const SINGLE_LOOP_FALLBACK_RETRY_MS = 1800;
 const SINGLE_LOOP_STALL_RESET_MS = 60000;
 const SINGLE_LOOP_PROGRESS_EPSILON_SECONDS = 0.04;
 
@@ -539,6 +540,12 @@ export function FlameScene({ lowPower = false, playback, singleLoop = false, sta
     muteSceneVideo(video);
     video.pause();
     patchSingleLoopVideoHealth("fallback");
+  }
+
+  function resetSingleLoopFallback(health: SingleLoopVideoHealth = "recovering") {
+    if (singleVideoHealthRef.current !== "fallback") return;
+    patchSingleLayerFrameReady(singleActiveLayerIdRef.current, false);
+    resetSingleLoopWatchdog(health);
   }
 
   function recoverSingleLoopVideo(video: HTMLVideoElement, stallCount: number) {
@@ -1287,6 +1294,7 @@ export function FlameScene({ lowPower = false, playback, singleLoop = false, sta
   useEffect(() => {
     if (!singleLoop) return;
     if (singleVideoSrcRef.current === videoSrc) {
+      resetSingleLoopFallback();
       setSingleLayers((current) => current.map((layer) => (
         layer.id === singleActiveLayerIdRef.current
           ? { ...layer, audioGainDb: normalizedAudioGainDb }
@@ -1295,6 +1303,7 @@ export function FlameScene({ lowPower = false, playback, singleLoop = false, sta
       return;
     }
 
+    resetSingleLoopFallback();
     if (!singleVideoSrcRef.current || !videoEnabled || staticOnly) {
       pendingSingleVideoSrcRef.current = null;
       patchSinglePendingLayerId(null);
@@ -1333,6 +1342,16 @@ export function FlameScene({ lowPower = false, playback, singleLoop = false, sta
       return activeLayer ? [activeLayer, nextLayer] : [nextLayer];
     });
   }, [normalizedAudioGainDb, singleLoop, staticOnly, videoEnabled, videoSrc]);
+
+  useEffect(() => {
+    if (!singleLoop || !singleLoopFallbackActive || staticOnly || !videoEnabled || !singleVideoSrc) return undefined;
+
+    const retryTimer = window.setTimeout(() => {
+      resetSingleLoopFallback();
+    }, SINGLE_LOOP_FALLBACK_RETRY_MS);
+
+    return () => window.clearTimeout(retryTimer);
+  }, [singleLoop, singleLoopFallbackActive, singleVideoSrc, staticOnly, videoEnabled]);
 
   useEffect(() => {
     if (!singleLoop || staticOnly || !videoEnabled || !singleVideoSrc) return;
