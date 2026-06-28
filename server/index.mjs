@@ -64,7 +64,10 @@ const RADIO_START_VERIFY_WINDOW_MS = parseEnvPositiveInteger(process.env.TIKPAL_
 const RADIO_START_VERIFY_POLL_MS = parseEnvPositiveInteger(process.env.TIKPAL_RADIO_START_VERIFY_POLL_MS, 500);
 const RADIO_POST_START_SETTLE_MS = parseEnvPositiveInteger(process.env.TIKPAL_RADIO_POST_START_SETTLE_MS, 2000);
 const RADIO_POST_START_RECOVERY_PLAYS = parseEnvPositiveInteger(process.env.TIKPAL_RADIO_POST_START_RECOVERY_PLAYS, 3);
-const RADIO_LATE_PLAY_NUDGE_DELAYS_MS = parseEnvIntegerList(process.env.TIKPAL_RADIO_LATE_PLAY_NUDGE_DELAYS_MS, [2000, 5000, 9000, 15000]);
+const RADIO_LATE_PLAY_NUDGE_DELAYS_MS = parseEnvIntegerList(process.env.TIKPAL_RADIO_LATE_PLAY_NUDGE_DELAYS_MS, [1500, 3000, 5000, 8000, 12000, 16000]);
+const RADIO_AUTO_SKIP_VERIFY_WINDOW_MS = parseEnvPositiveInteger(process.env.TIKPAL_RADIO_AUTO_SKIP_VERIFY_WINDOW_MS, 1500);
+const RADIO_AUTO_SKIP_POST_START_SETTLE_MS = parseEnvPositiveInteger(process.env.TIKPAL_RADIO_AUTO_SKIP_POST_START_SETTLE_MS, 500);
+const RADIO_AUTO_SKIP_RETRY_DELAYS_MS = parseEnvIntegerList(process.env.TIKPAL_RADIO_AUTO_SKIP_RETRY_DELAYS_MS, []);
 const KIOSK_AUDIO_RELEASE_COMMAND = process.env.TIKPAL_KIOSK_AUDIO_RELEASE_COMMAND ?? "";
 const KIOSK_AUDIO_RELEASE_SETTLE_MS = parseEnvPositiveInteger(process.env.TIKPAL_KIOSK_AUDIO_RELEASE_SETTLE_MS, 250);
 const AUDIO_READY_COMMAND = process.env.TIKPAL_AUDIO_READY_COMMAND ?? "";
@@ -2801,6 +2804,51 @@ function clearActiveMpcRadioStationCache() {
   activeMpcRadioStationCache = null;
 }
 
+function syncCachedTikpalStateActiveRadioStation() {
+  const cached = activeMpcRadioStationCache;
+  const state = tikpalStateSnapshotCache?.state;
+  if (!cached || !state?.audio) return;
+
+  const label = cached.station?.label ?? RADIO_LABEL;
+  const radioSource = {
+    ...(state.audio.sources?.find((source) => source.id === "radio") ?? buildSourceSummary({
+      id: "radio",
+      label: "Radio",
+      availability: "available",
+      active: true,
+      controllability: "switchable",
+      secondaryStatus: `${label} active`
+    })),
+    availability: "available",
+    active: true,
+    controllability: "switchable",
+    secondaryStatus: `${label} active`
+  };
+  const sources = Array.isArray(state.audio.sources)
+    ? state.audio.sources.map((source) => source.id === "radio" ? radioSource : { ...source, active: false })
+    : [radioSource];
+
+  tikpalStateSnapshotCache = {
+    ...tikpalStateSnapshotCache,
+    state: {
+      ...state,
+      audio: {
+        ...state.audio,
+        currentSource: radioSource,
+        sources
+      },
+      playback: state.playback
+        ? {
+            ...state.playback,
+            source: "radio",
+            title: label,
+            station: label
+          }
+        : state.playback
+    }
+  };
+}
+
 function cacheActiveMpcRadioStation(station, uri) {
   const targetUri = String(uri ?? station?.uri ?? "").trim();
   if (!targetUri && !station) {
@@ -2814,6 +2862,7 @@ function cacheActiveMpcRadioStation(station, uri) {
     station: station ? { ...station, active: true } : null,
     updatedAtMs: Date.now()
   };
+  syncCachedTikpalStateActiveRadioStation();
 }
 
 function findActiveRadioStationFromList(currentFile, stations) {
@@ -5125,9 +5174,27 @@ async function switchToAudioSource() {
   await switchToMpdSource();
 }
 
+function getMpcRadioStreamFailure(statusRaw) {
+  const raw = String(statusRaw ?? "");
+  if (/Failed to decode\s+"[^"]+"/i.test(raw)) {
+    return "MPD radio stream failed to decode";
+  }
+  if (/ERROR:.*(Connection timed out|Timeout was reached|Could not resolve|Name or service not known|Failed to connect|HTTP\s*[45]\d\d)/is.test(raw)) {
+    return "MPD radio stream could not connect";
+  }
+  return null;
+}
+
 function getMpcRadioStartFailure(statusRaw, status, { requirePlaying = false } = {}) {
-  if (/Failed to open ALSA device|Device or resource busy|ERROR:/i.test(statusRaw)) {
+  const streamFailure = getMpcRadioStreamFailure(statusRaw);
+  if (streamFailure) {
+    return streamFailure;
+  }
+  if (/Failed to open ALSA device|Device or resource busy/i.test(statusRaw)) {
     return "MPD radio stream reported an ALSA output failure";
+  }
+  if (/ERROR:/i.test(statusRaw)) {
+    return "MPD radio stream reported an error";
   }
   if (status.state && status.state !== "playing") {
     return `MPD radio stream entered ${status.state}`;
@@ -5153,13 +5220,29 @@ async function nudgeMpcPlaybackStart(position = null) {
   await runMpc(playArgs, { allowFailure: true });
 }
 
-async function verifyMpcRadioStartWindow() {
-  const deadline = Date.now() + RADIO_START_VERIFY_WINDOW_MS;
+function isLikelyRadioStationFailure(error) {
+  const message = String(error?.message ?? error ?? "");
+  return /failed to decode|could not connect|connection timed out|timeout was reached|failed to connect|did not report playing|entered stopped/i.test(message);
+}
+
+function getFastRadioSwitchOptions() {
+  return {
+    postStartRecoveryPlays: 0,
+    postStartSettleMs: RADIO_AUTO_SKIP_POST_START_SETTLE_MS,
+    retryDelaysMs: RADIO_AUTO_SKIP_RETRY_DELAYS_MS,
+    verifyWindowMs: RADIO_AUTO_SKIP_VERIFY_WINDOW_MS
+  };
+}
+
+async function verifyMpcRadioStartWindow(options = {}) {
+  const verifyWindowMs = options.verifyWindowMs ?? RADIO_START_VERIFY_WINDOW_MS;
+  const verifyPollMs = options.verifyPollMs ?? RADIO_START_VERIFY_POLL_MS;
+  const deadline = Date.now() + verifyWindowMs;
   let lastStatusRaw = "";
   let lastFailure = null;
 
   while (Date.now() < deadline) {
-    await wait(RADIO_START_VERIFY_POLL_MS);
+    await wait(verifyPollMs);
     const statusSnapshot = await readMpcRadioStartStatus();
     lastStatusRaw = statusSnapshot.raw;
 
@@ -5168,38 +5251,83 @@ async function verifyMpcRadioStartWindow() {
     }
 
     lastFailure = statusSnapshot.failure;
+    if (getMpcRadioStreamFailure(statusSnapshot.raw)) {
+      throw new Error(lastFailure ?? "MPD radio stream could not connect");
+    }
     await nudgeMpcPlaybackStart();
   }
 
   throw new Error(lastFailure ?? `MPD radio stream did not report playing${lastStatusRaw ? `: ${lastStatusRaw}` : ""}`);
 }
 
-async function recoverLateMpcRadioStartFailure() {
+async function recoverLateMpcRadioStartFailure(options = {}) {
+  const recoveryPlays = options.postStartRecoveryPlays ?? RADIO_POST_START_RECOVERY_PLAYS;
+  const settleMs = options.postStartSettleMs ?? RADIO_POST_START_SETTLE_MS;
   let lastFailure = null;
 
-  for (let recovery = 0; recovery <= RADIO_POST_START_RECOVERY_PLAYS; recovery += 1) {
-    await wait(RADIO_POST_START_SETTLE_MS);
+  for (let recovery = 0; recovery <= recoveryPlays; recovery += 1) {
+    await wait(settleMs);
     const statusSnapshot = await readMpcRadioStartStatus({ requirePlaying: true });
     if (!statusSnapshot.failure) return;
 
     lastFailure = statusSnapshot.failure;
-    if (recovery >= RADIO_POST_START_RECOVERY_PLAYS) break;
+    if (getMpcRadioStreamFailure(statusSnapshot.raw)) {
+      break;
+    }
+    if (recovery >= recoveryPlays) break;
 
     await nudgeMpcPlaybackStart();
-    await verifyMpcRadioStartWindow();
+    await verifyMpcRadioStartWindow(options);
   }
 
   throw new Error(lastFailure ?? "MPD radio stream did not remain playing after recovery");
+}
+
+let mpcRadioAutoAdvanceInFlight = false;
+
+async function tryAutoAdvanceFailedMpcRadio(targetUri, currentUri, statusRaw) {
+  if (currentUri !== targetUri || !getMpcRadioStreamFailure(statusRaw)) {
+    return false;
+  }
+  if (mpcRadioAutoAdvanceInFlight) {
+    return true;
+  }
+
+  mpcRadioAutoAdvanceInFlight = true;
+  try {
+    const advanced = await switchRadioStationByOffset(1, {
+      currentFileOverride: currentUri,
+      requireRadioContext: false,
+      switchOptions: getFastRadioSwitchOptions()
+    });
+    if (advanced) {
+      await refreshTikpalStateSnapshotAfterMutation({ includeSourceRuntimeStatus: true });
+    }
+    return advanced;
+  } finally {
+    mpcRadioAutoAdvanceInFlight = false;
+  }
 }
 
 function scheduleMpcRadioLatePlayNudges(targetUri) {
   for (const delayMs of RADIO_LATE_PLAY_NUDGE_DELAYS_MS) {
     const timer = setTimeout(() => {
       void (async () => {
-        const currentUri = (await runMpc(["--format", "%file%", "current"], { allowFailure: true })).trim();
+        const [currentFileRaw, statusRaw] = await Promise.all([
+          runMpc(["--format", "%file%", "current"], { allowFailure: true }),
+          runMpc(["status"], { allowFailure: true })
+        ]);
+        const status = parseMpcStatus(statusRaw);
+        const currentUri = getEffectiveMpcCurrentFile(currentFileRaw, status);
         if (currentUri !== targetUri) return;
 
-        const statusSnapshot = await readMpcRadioStartStatus({ requirePlaying: true });
+        if (await tryAutoAdvanceFailedMpcRadio(targetUri, currentUri, statusRaw)) return;
+
+        const statusSnapshot = {
+          raw: statusRaw,
+          status,
+          failure: getMpcRadioStartFailure(statusRaw, status, { requirePlaying: true })
+        };
         if (!statusSnapshot.failure) return;
 
         await nudgeMpcPlaybackStart();
@@ -5211,16 +5339,16 @@ function scheduleMpcRadioLatePlayNudges(targetUri) {
   }
 }
 
-async function startRadioStreamUri(targetUri) {
+async function startRadioStreamUri(targetUri, options = {}) {
   await runMpc(["clear"]);
   await runMpc(["add", targetUri]);
   await restoreMpcRadioVolumeIfMuted();
   await nudgeMpcPlaybackStart();
-  await verifyMpcRadioStartWindow();
-  await recoverLateMpcRadioStartFailure();
+  await verifyMpcRadioStartWindow(options);
+  await recoverLateMpcRadioStartFailure(options);
 }
 
-async function switchToRadioSource(action = {}) {
+async function switchToRadioSource(action = {}, options = {}) {
   const radioStations = await getAvailableRadioStations();
   const selectedStation = action.radioStationId
     ? radioStations.find((station) => station.id === action.radioStationId)
@@ -5244,17 +5372,28 @@ async function switchToRadioSource(action = {}) {
   }
 
   let lastError = null;
+  const retryDelaysMs = options.retryDelaysMs ?? RADIO_SWITCH_RETRY_DELAYS_MS;
   try {
-    for (let attempt = 0; attempt <= RADIO_SWITCH_RETRY_DELAYS_MS.length; attempt += 1) {
+    for (let attempt = 0; attempt <= retryDelaysMs.length; attempt += 1) {
       if (attempt > 0) {
-        await wait(RADIO_SWITCH_RETRY_DELAYS_MS[attempt - 1]);
+        await wait(retryDelaysMs[attempt - 1]);
       }
       try {
-        await startRadioStreamUri(targetUri);
+        await startRadioStreamUri(targetUri, options);
         cacheActiveMpcRadioStation(targetStation, targetUri);
         return;
       } catch (error) {
         lastError = error;
+      }
+    }
+
+    if (options.fallbackOnFailure && targetUri && isLikelyRadioStationFailure(lastError)) {
+      if (await switchRadioStationByOffset(1, {
+        currentFileOverride: targetUri,
+        requireRadioContext: false,
+        switchOptions: getFastRadioSwitchOptions()
+      })) {
+        return;
       }
     }
 
@@ -5264,13 +5403,16 @@ async function switchToRadioSource(action = {}) {
   }
 }
 
-async function switchRadioStationByOffset(offset) {
-  const [currentFileRaw, statusRaw] = await Promise.all([
-    runMpc(["--format", "%file%", "current"], { allowFailure: true }),
-    runMpc(["status"], { allowFailure: true })
-  ]);
-  const currentFile = getEffectiveMpcCurrentFile(currentFileRaw, parseMpcStatus(statusRaw));
-  if (!isCurrentMpcSourceRadio() && !isStreamUri(currentFile)) return false;
+async function switchRadioStationByOffset(offset, options = {}) {
+  let currentFile = String(options.currentFileOverride ?? "").trim();
+  if (!currentFile) {
+    const [currentFileRaw, statusRaw] = await Promise.all([
+      runMpc(["--format", "%file%", "current"], { allowFailure: true }),
+      runMpc(["status"], { allowFailure: true })
+    ]);
+    currentFile = getEffectiveMpcCurrentFile(currentFileRaw, parseMpcStatus(statusRaw));
+  }
+  if (options.requireRadioContext !== false && !isCurrentMpcSourceRadio() && !isStreamUri(currentFile)) return false;
 
   const tikpalStations = await getAvailableRadioStations("tikpal");
   const tikpalActiveStation = findActiveRadioStationFromList(currentFile, tikpalStations);
@@ -5303,7 +5445,7 @@ async function switchRadioStationByOffset(offset) {
     if (!candidateStation?.id) continue;
 
     try {
-      await switchToRadioSource({ radioStationId: candidateStation.id });
+      await switchToRadioSource({ radioStationId: candidateStation.id }, options.switchOptions ?? getFastRadioSwitchOptions());
       return true;
     } catch (error) {
       lastError = error;
@@ -7602,7 +7744,7 @@ async function applyMpcSourceSwitchUnlocked(action) {
       resetBluetoothRecognitionSession();
       await enforceConnectionGate("radio");
       await releaseKioskAudioOutputForMpd("radio");
-      await switchToRadioSource(action);
+      await switchToRadioSource(action, { fallbackOnFailure: Boolean(action.radioStationId) });
       return;
     case "scene":
       clearActiveMpcRadioStationCache();
