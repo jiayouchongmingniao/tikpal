@@ -149,6 +149,12 @@ export const audioState: AudioState = {
     advertisedLabel: null,
     secondaryStatus: "Local queue ready"
   }),
+  rememberedSource: {
+    target: "mpd",
+    localTrackPath: null,
+    radioStationId: null,
+    updatedAt: null
+  },
   sources: [
     buildSourceSummary({
       id: "mpd",

@@ -1094,6 +1094,7 @@ async function runMpcRadioPresetFastSnapshotSmoke(roomExperienceStatePath) {
   const fakeBrightnessStatePath = path.join(workspace, "brightness-state.txt");
   const fakeLogoDir = path.join(workspace, "radio-logos");
   const fakeAudioVolumeStatePath = path.join(workspace, "audio-volume-state.json");
+  const fakeAudioSourceMemoryStatePath = path.join(workspace, "audio-source-memory.json");
   const radioUri = "http://radio.example/tikpal-calm";
 
   await writeFile(fakeMpcStatePath, JSON.stringify({
@@ -1326,6 +1327,7 @@ if (getIndex >= 0) {
       TIKPAL_DDCUTIL_READ_CACHE_MS: "60000",
       TIKPAL_RADIO_LOGO_DIR: fakeLogoDir,
       TIKPAL_AUDIO_VOLUME_STATE_PATH: fakeAudioVolumeStatePath,
+      TIKPAL_AUDIO_SOURCE_MEMORY_STATE_PATH: fakeAudioSourceMemoryStatePath,
       TIKPAL_MPD_HOST: "127.0.0.1",
       TIKPAL_MPD_PORT: "6600",
       TIKPAL_ROOM_EXPERIENCE_STATE_PATH: roomExperienceStatePath,
@@ -1407,6 +1409,8 @@ if (getIndex >= 0) {
     assert(switched.response.ok, "mpc radio preset switch should return 200");
     assert(switched.body.audio.currentSource.id === "radio", "mpc radio preset switch should make Radio current");
     assert(switched.body.playback.source === "radio", "mpc radio preset switch should make playback Radio");
+    assert(switched.body.audio.rememberedSource?.target === "radio", "mpc radio preset switch should remember Radio");
+    assert(switched.body.audio.rememberedSource?.radioStationId === "radio-511", "mpc radio preset switch should remember the selected station");
     assert(switched.body.system.volume.percent === 44, "mpc radio preset switch should restore the last nonzero MPD volume");
     assert(switched.body.playback.albumArtUrl?.startsWith("/api/v1/media/radio-logo?stationId=radio-511"), "mpc radio playback should prefer station logo artwork");
     const activeCalmCatalog = await requestFrom(baseUrl, "/api/v1/audio/radios?category=calm");
@@ -1447,6 +1451,7 @@ if (getIndex >= 0) {
     });
     assert(nextRadio.response.ok, "mpc radio next should return 200");
     assert(nextRadio.body.audio.currentSource.secondaryStatus === "Tikpal Focus - Test Exact active", "mpc radio next should advance to the next Tikpal station");
+    assert(nextRadio.body.audio.rememberedSource?.radioStationId === "radio-500", "mpc radio next should remember the advanced station");
     assert(nextRadio.body.playback.albumArtUrl?.startsWith("/api/v1/media/radio-logo?stationId=radio-500"), "mpc radio next should refresh station logo artwork");
     assert(JSON.parse(await readFile(fakeMpcStatePath, "utf8")).currentFile === "http://radio.example/tikpal-focus", "mpc radio next should replace the MPD stream URI");
 
@@ -1456,6 +1461,7 @@ if (getIndex >= 0) {
     });
     assert(previousRadio.response.ok, "mpc radio previous should return 200");
     assert(previousRadio.body.audio.currentSource.secondaryStatus === "Tikpal Calm - FluxFM Chillout active", "mpc radio previous should return to the previous Tikpal station");
+    assert(previousRadio.body.audio.rememberedSource?.radioStationId === "radio-511", "mpc radio previous should remember the previous station");
     assert(previousRadio.body.playback.albumArtUrl?.startsWith("/api/v1/media/radio-logo?stationId=radio-511"), "mpc radio previous should refresh station logo artwork");
     assert(JSON.parse(await readFile(fakeMpcStatePath, "utf8")).currentFile === radioUri, "mpc radio previous should replace the MPD stream URI");
 
@@ -1533,6 +1539,10 @@ if (getIndex >= 0) {
       "mpc radio source switch should advance to the next station when the selected station cannot connect"
     );
     assert(
+      manualDeadStationFallback.body.audio.rememberedSource?.radioStationId === "radio-511",
+      "mpc radio source switch fallback should remember the recovered station instead of the dead station"
+    );
+    assert(
       manualDeadStationFallback.body.playback.albumArtUrl?.startsWith("/api/v1/media/radio-logo?stationId=radio-511"),
       "mpc radio source switch fallback should refresh station logo artwork immediately"
     );
@@ -1575,6 +1585,11 @@ if (getIndex >= 0) {
       "mpc radio late stream failure should refresh station logo artwork with the auto-advanced station"
     );
     assert(autoSkippedFakeState.currentFile === radioUri, "mpc radio late stream failure should replace the failed stream URI");
+    const rememberedAfterAutoSkip = JSON.parse(await readFile(fakeAudioSourceMemoryStatePath, "utf8"));
+    assert(
+      rememberedAfterAutoSkip.target === "radio" && rememberedAfterAutoSkip.radioStationId === "radio-511",
+      "mpc radio late stream failure should persist the auto-advanced station as remembered source"
+    );
 
     const initialBrightness = await requestFrom(baseUrl, "/api/v1/system/state");
     assert(initialBrightness.response.ok, "mpc brightness preflight should return 200");
@@ -1961,6 +1976,7 @@ async function run() {
   const apiStateRoot = await mkdtemp(path.join(tmpdir(), "tikpal-api-state-"));
   const musicLibraryStatePath = path.join(apiStateRoot, "music-library-state.json");
   const roomExperienceStatePath = path.join(apiStateRoot, "room-experience-state.json");
+  const audioSourceMemoryStatePath = path.join(apiStateRoot, "audio-source-memory.json");
   const sceneBytes = Buffer.from("000000 ftypisom tikpal rainy window api smoke mp4");
   const sceneSha256 = createHash("sha256").update(sceneBytes).digest("hex");
   await mkdir(path.join(apiAssetsRoot, "scenes", "_metadata"), { recursive: true });
@@ -2026,6 +2042,7 @@ async function run() {
       TIKPAL_PUBLIC_ASSETS_ROOT: apiAssetsRoot,
       TIKPAL_MUSIC_LIBRARY_STATE_PATH: musicLibraryStatePath,
       TIKPAL_ROOM_EXPERIENCE_STATE_PATH: roomExperienceStatePath,
+      TIKPAL_AUDIO_SOURCE_MEMORY_STATE_PATH: audioSourceMemoryStatePath,
       TIKPAL_RECOGNITION_PROVIDER: "acrcloud",
       TIKPAL_ACRCLOUD_HOST: PROVIDER_URL,
       TIKPAL_ACRCLOUD_ACCESS_KEY: "mock-key",
@@ -2065,6 +2082,7 @@ async function run() {
     assert(initial.body.playback.title, "playback title should be present");
     assert(initial.body.playback.settings.playMode === "sequence", "playback should expose sequence mode by default");
     assert(initial.body.audio.currentSource.id === "mpd", "system state should expose current audio source");
+    assert(initial.body.audio.rememberedSource === null, "system state should expose empty remembered source before source selection");
     assert(initial.body.lyrics?.sourceScope === "local_playback", "system state should expose lyrics state");
 
     const initialExperience = await request("/api/v1/experience/state");
@@ -2391,6 +2409,8 @@ async function run() {
     assert(localTrackSwitch.body.playback.title === localLibrary.body.tracks[0].title, "local track switch should update playback title");
     assert(localTrackSwitch.body.playback.artist === localLibrary.body.tracks[0].artist, "local track switch should update playback artist");
     assert(localTrackSwitch.body.playback.albumArtUrl === localLibrary.body.tracks[0].albumArtUrl, "local track switch should update playback cover art");
+    assert(localTrackSwitch.body.audio.rememberedSource?.target === "mpd", "local track switch should remember Library as the last source");
+    assert(localTrackSwitch.body.audio.rememberedSource?.localTrackPath === localLibrary.body.tracks[0].path, "local track switch should remember the selected library track");
 
     const favoriteToggle = await request("/api/v1/playback/actions", {
       method: "POST",
@@ -2661,6 +2681,7 @@ async function run() {
     assert(scene.body.playback.album === "Fireplace Loop", "scene playback album should use the current scene label");
     assert(Array.isArray(scene.body.playback.queuePreview) && scene.body.playback.queuePreview.length === 0, "scene playback should not expose a music queue");
     assert(scene.body.audio.sources.some((source) => source.id === "scene" && source.active), "scene source should be active while scene audio is playing");
+    assert(scene.body.audio.rememberedSource?.target === "mpd", "scene switch should not overwrite the remembered music source");
     assert(scene.body.audio.sources.some((source) => source.id === "spotify" && source.armed === false), "scene switch should close spotify intake");
     assert(scene.body.audio.sources.some((source) => source.id === "bluetooth" && source.armed === false), "scene switch should close bluetooth intake");
     assert(scene.body.audio.sources.some((source) => source.id === "airplay" && source.armed === false), "scene switch should close airplay intake");
@@ -2718,6 +2739,7 @@ async function run() {
     assert(audio.response.ok, "audio source switch should return 200");
     assert(audio.body.audio.currentSource.id === "audio", "audio source switch should mark Audio as current in mock mode");
     assert(audio.body.playback.source === "audio", "playback source should follow audio switch");
+    assert(audio.body.audio.rememberedSource?.target === "mpd", "internal Audio switch should not overwrite remembered visible source");
     assert(audio.body.audio.sources.some((source) => source.id === "scene" && source.active === false), "audio source switch should deactivate scene");
 
     const spotify = await request("/api/v1/audio/source", {
@@ -2730,6 +2752,7 @@ async function run() {
     assert(spotify.body.audio.currentSource.connectionState === "armed", "spotify connect source should initially wait for a connected input");
     assert(spotify.body.audio.currentSource.advertisedLabel === "Tikpal Speaker", "spotify connect switch should keep advertised device name in state");
     assert(spotify.body.playback.source === "spotify", "playback source should follow spotify connect switch");
+    assert(spotify.body.audio.rememberedSource?.target === "spotify", "spotify handoff should remember Spotify as the last visible source");
 
     const bluetooth = await request("/api/v1/audio/source", {
       method: "POST",
@@ -2801,6 +2824,7 @@ async function run() {
     assert(dlna.body.audio.currentSource.connectionState === "armed", "dlna source should initially wait for a connected input");
     assert(dlna.body.audio.currentSource.advertisedLabel === "Tikpal Speaker", "dlna switch should keep advertised renderer name in state");
     assert(dlna.body.playback.source === "upnp", "playback source should follow dlna switch");
+    assert(dlna.body.audio.rememberedSource?.target === "upnp", "dlna handoff should remember DLNA as the last visible source");
     assert(dlna.body.audio.sources.some((source) => source.id === "spotify" && source.armed === false), "dlna switch should disarm spotify");
     assert(dlna.body.audio.sources.some((source) => source.id === "bluetooth" && source.armed === false), "dlna switch should disarm bluetooth");
     assert(dlna.body.audio.sources.some((source) => source.id === "airplay" && source.armed === false), "dlna switch should disarm airplay");
@@ -2813,6 +2837,8 @@ async function run() {
     assert(radio.body.audio.currentSource.id === "radio", "radio switch should activate radio in mock mode");
     assert(radio.body.playback.source === "radio", "playback source should follow radio switch");
     assert(radio.body.playback.title === "Tikpal Calm - Radio Paradise Mellow", "radio switch should surface the active preset label");
+    assert(radio.body.audio.rememberedSource?.target === "radio", "radio switch should remember Radio as the last source");
+    assert(radio.body.audio.rememberedSource?.radioStationId === "radio-2", "radio switch should remember the selected station id");
     assert(radio.body.audio.sources.some((source) => source.id === "airplay" && source.armed === false), "radio switch should close airplay intake");
     assert(radio.body.audio.sources.some((source) => source.id === "upnp" && source.armed === false), "radio switch should close dlna intake");
 

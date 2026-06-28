@@ -11,7 +11,7 @@ import { useKioskGestures } from "./hooks/useKioskGestures";
 import { useRoomExperience } from "./hooks/useRoomExperience";
 import { useTikpalState } from "./hooks/useTikpalState";
 import { sendKioskHeartbeat } from "./api/tikpalClient";
-import type { AppMode, BackgroundVideoSummary, FontTheme, LyricsFontSize, RoomExperienceActionRequest, RoomMode, SourceSwitchTarget, SurfaceTheme, TikpalState } from "./types";
+import type { AppMode, BackgroundVideoSummary, FontTheme, LyricsFontSize, RememberedAudioSource, RoomExperienceActionRequest, RoomMode, SourceSwitchTarget, SurfaceTheme, TikpalState } from "./types";
 
 const FONT_THEME_STORAGE_KEY = "tikpal.fontTheme";
 const SURFACE_THEME_STORAGE_KEY = "tikpal.surfaceTheme";
@@ -118,6 +118,9 @@ function isExternalHandoffTarget(sourceId: SourceSwitchTarget): boolean {
 
 function isSourceHandoffReady(state: TikpalState, sourceId: SourceSwitchTarget) {
   const source = state.audio.sources.find((entry) => entry.id === sourceId);
+  if (sourceId === "upnp") {
+    return source?.connectionState === "connected" || source?.connectionState === "armed";
+  }
   return source?.connectionState === "connected";
 }
 
@@ -126,6 +129,23 @@ function getRollbackSourceTarget(state: TikpalState): SourceSwitchTarget {
   if (!isSourceSwitchTarget(currentSource.id)) return "mpd";
   if (isExternalHandoffTarget(currentSource.id) && currentSource.connectionState !== "connected") return "mpd";
   return currentSource.id;
+}
+
+function getRememberedSourceKey(source: RememberedAudioSource | null | undefined) {
+  if (!source) return "";
+  return [
+    source.target,
+    source.localTrackPath ?? "",
+    source.radioStationId ?? "",
+    source.updatedAt ?? ""
+  ].join("|");
+}
+
+function shouldRestoreRememberedSource(state: TikpalState, rememberedSource: RememberedAudioSource | null | undefined) {
+  if (!rememberedSource || !isSourceSwitchTarget(rememberedSource.target)) return false;
+  if (rememberedSource.target === "mpd" && rememberedSource.localTrackPath) return true;
+  if (state.audio.currentSource.id === rememberedSource.target) return false;
+  return true;
 }
 
 function readActiveSceneVideoSnapshot() {
@@ -178,6 +198,9 @@ export default function App() {
   const sceneSoundPendingSinceRef = useRef<number | null>(null);
   const eventLoopLagRef = useRef(0);
   const heartbeatStateRef = useRef<Record<string, unknown>>({});
+  const previousRoomModeRef = useRef<RoomMode | null>(null);
+  const hifiRestoreKeyRef = useRef<string>("");
+  const hifiRestoreInFlightRef = useRef(false);
   const { mode, hudVisible, idleTotalMs, idleRemainingMs, showHud, toggleHud, changeMode, returnAmbient, resetIdleTimer } = useAppMode(readInitialMode());
   const { state: tikpalState, status: tikpalStatus, refresh, sendPlaybackAction, sendSystemAction, sendSourceSwitch } = useTikpalState();
   const { experience: roomExperience, status: roomExperienceStatus, refresh: refreshRoomExperience, sendExperienceAction } = useRoomExperience();
@@ -415,6 +438,44 @@ export default function App() {
     }
     return nextState;
   }, [refresh, refreshRoomExperience, sendSourceSwitch, tikpalState.audio.currentSource.connectionState, tikpalState.audio.currentSource.id]);
+
+  useEffect(() => {
+    const previousMode = previousRoomModeRef.current;
+    previousRoomModeRef.current = roomExperience.mode;
+    if (roomExperience.mode !== "hifi") {
+      hifiRestoreKeyRef.current = "";
+      return;
+    }
+
+    const rememberedSource = tikpalState.audio.rememberedSource;
+    if (!rememberedSource) return;
+    const restoreKey = getRememberedSourceKey(rememberedSource);
+    const enteredHifi = previousMode !== "hifi";
+    if (!enteredHifi || !restoreKey || hifiRestoreKeyRef.current === restoreKey || hifiRestoreInFlightRef.current) return;
+    if (!shouldRestoreRememberedSource(tikpalState, rememberedSource)) return;
+
+    hifiRestoreKeyRef.current = restoreKey;
+    hifiRestoreInFlightRef.current = true;
+    void (async () => {
+      try {
+        await handleSourceSwitch(
+          rememberedSource.target,
+          rememberedSource.radioStationId ?? undefined,
+          rememberedSource.localTrackPath ?? undefined
+        );
+      } catch (error) {
+        if (rememberedSource.target === "mpd" && rememberedSource.localTrackPath) {
+          try {
+            await handleSourceSwitch("mpd");
+          } catch {
+            // The normal status refresh will surface any remaining backend problem.
+          }
+        }
+      } finally {
+        hifiRestoreInFlightRef.current = false;
+      }
+    })();
+  }, [handleSourceSwitch, roomExperience.mode, tikpalState]);
 
   async function handleSceneSoundEnabledChange(enabled: boolean) {
     if (sceneSoundPending) return;

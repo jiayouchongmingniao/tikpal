@@ -25,6 +25,7 @@ export type SourceAvailability = "available" | "waiting" | "unavailable";
 export type SourceControllability = "switchable" | "handoff" | "status-only";
 export type SourceSwitchTarget = "mpd" | "audio" | "scene" | "radio" | "spotify" | "bluetooth" | "airplay" | "upnp";
 export type SourceConnectionState = "idle" | "armed" | "connected" | "blocked";
+export type RememberedAudioSourceTarget = Exclude<SourceSwitchTarget, "audio" | "scene">;
 
 export interface RadioStationSummary {
   id: string;
@@ -58,9 +59,17 @@ export interface SourceSummary {
   secondaryStatus: string;
 }
 
+export interface RememberedAudioSource {
+  target: RememberedAudioSourceTarget;
+  localTrackPath?: string | null;
+  radioStationId?: string | null;
+  updatedAt: string | null;
+}
+
 export interface AudioState {
   currentSource: SourceSummary;
   sources: SourceSummary[];
+  rememberedSource?: RememberedAudioSource | null;
 }
 
 export interface AudioSpectrumFrame {

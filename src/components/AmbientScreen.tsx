@@ -137,6 +137,32 @@ function getAmbientHandoffSourceLabel(sourceId: AmbientMusicSourceTarget, source
   return getAmbientSourceLabel(sourceId);
 }
 
+function getAmbientSourceIcon(sourceId: AmbientMusicSourceTarget | null) {
+  return ambientMusicSources.find((source) => source.id === sourceId)?.Icon ?? Music2;
+}
+
+function getAmbientSourcePillDetail(
+  sourceId: AmbientMusicSourceTarget,
+  source: AudioState["currentSource"] | undefined,
+  playback: PlaybackSummary,
+  pending: boolean
+) {
+  const waiting = pending || (ambientHandoffSourceTargets.has(sourceId) && source?.connectionState === "armed");
+  if (waiting) {
+    return source?.advertisedLabel ? `Waiting as ${source.advertisedLabel}` : "Waiting for connection";
+  }
+
+  if (sourceId === "mpd" || sourceId === "radio") {
+    return [playback.title, playback.artist].filter(Boolean).join(" - ") || source?.secondaryStatus || "Playing";
+  }
+
+  if (source?.connectionState === "connected") {
+    return source.connectedLabel ? `Connected to ${source.connectedLabel}` : "Connected";
+  }
+
+  return source?.secondaryStatus || "Ready";
+}
+
 function videoBelongsToRoomMode(video: BackgroundVideoSummary, mode: RoomMode) {
   return mode !== "hifi" && Boolean(video.src) && Array.isArray(video.roomModes) && video.roomModes.includes(mode);
 }
@@ -462,7 +488,29 @@ export function AmbientScreen({
   const handoffPendingSourceLabel = handoffPendingSource
     ? getAmbientHandoffSourceLabel(handoffPendingSource, handoffPendingSourceSummary)
     : "";
-  const ambientHudVisible = hudVisible || handoffPendingSource !== null;
+  const ambientHudVisible = hudVisible || (isHifiMode && handoffPendingSource !== null);
+  const ambientSourcePillSourceId = !isHifiMode
+    ? handoffPendingSource ?? currentAmbientSource
+    : null;
+  const ambientSourcePillSource = ambientSourcePillSourceId
+    ? audio.sources.find((entry) => entry.id === ambientSourcePillSourceId)
+    : undefined;
+  const ambientSourcePillVisible = Boolean(
+    ambientSourcePillSourceId
+      && (handoffPendingSource !== null || (audio.currentSource.id !== "scene" && audio.currentSource.id !== "audio"))
+  );
+  const ambientSourcePillWaiting = Boolean(
+    ambientSourcePillSourceId
+      && (handoffPendingSource === ambientSourcePillSourceId
+        || (ambientHandoffSourceTargets.has(ambientSourcePillSourceId) && ambientSourcePillSource?.connectionState === "armed"))
+  );
+  const AmbientSourcePillIcon = getAmbientSourceIcon(ambientSourcePillSourceId);
+  const ambientSourcePillLabel = ambientSourcePillSourceId
+    ? getAmbientSourceLabel(ambientSourcePillSourceId)
+    : "";
+  const ambientSourcePillDetail = ambientSourcePillSourceId
+    ? getAmbientSourcePillDetail(ambientSourcePillSourceId, ambientSourcePillSource, playback, ambientSourcePillWaiting)
+    : "";
 
   const refreshBackgroundVideos = useCallback((signal?: AbortSignal) => {
     void fetchBackgroundVideos(signal)
@@ -623,16 +671,23 @@ export function AmbientScreen({
     setPendingAmbientSource(sourceId);
     setAmbientSourceError(null);
     const shouldReleaseSceneAudio = sceneAudioEnabled;
+    const shouldUseAmbientStatusPill = !isHifiMode && ambientHandoffSourceTargets.has(sourceId);
     try {
       if (shouldReleaseSceneAudio) {
         setAmbientSceneAudioSuppressed(true);
         await waitForSceneAudioRelease();
+      }
+      if (shouldUseAmbientStatusPill) {
+        setSourcePickerOpen(false);
       }
       await onSourceSwitch(sourceId);
       setSourcePickerOpen(false);
     } catch (error) {
       if (shouldReleaseSceneAudio) {
         setAmbientSceneAudioSuppressed(false);
+      }
+      if (shouldUseAmbientStatusPill) {
+        setSourcePickerOpen(true);
       }
       setAmbientSourceError(error instanceof Error ? error.message : "Source switch failed");
     } finally {
@@ -1394,6 +1449,24 @@ export function AmbientScreen({
           </div>
         ) : null}
       </div>
+
+      {ambientSourcePillVisible && ambientSourcePillSourceId ? (
+        <div
+          className={`ambient-source-status-pill ${ambientSourcePillWaiting ? "is-waiting" : ""}`}
+          role="status"
+          aria-live="polite"
+          data-ambient-source-status-pill
+          data-ambient-source-status-source={ambientSourcePillSourceId}
+        >
+          <span className="ambient-source-status-icon" aria-hidden="true">
+            {ambientSourcePillWaiting ? <LoaderCircle size={18} className="is-spinning" /> : <AmbientSourcePillIcon size={18} strokeWidth={1.9} />}
+          </span>
+          <span className="ambient-source-status-copy">
+            <strong>{ambientSourcePillLabel}</strong>
+            <span>{ambientSourcePillDetail}</span>
+          </span>
+        </div>
+      ) : null}
 
       <div className="ambient-hud" aria-label="Mood switcher" data-room-mode={roomExperience.mode}>
         <div className="ambient-room-mode" aria-label="Mood">

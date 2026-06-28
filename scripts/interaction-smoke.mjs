@@ -96,6 +96,7 @@ async function prepareInteractionSceneFixture() {
 
 async function resetInteractionRoomExperience() {
   const actionsUrl = new URL("/api/v1/experience/actions", APP_URL);
+  const sourceUrl = new URL("/api/v1/audio/source", APP_URL);
   for (const body of [
     { type: "set_hifi_eq", hifiEqPresetId: "flat" },
     { type: "set_mode", mode: "calm" }
@@ -108,6 +109,14 @@ async function resetInteractionRoomExperience() {
     if (!response.ok) {
       throw new Error(`Failed to reset room experience for interaction smoke: ${response.status}`);
     }
+  }
+  const sourceResponse = await fetch(sourceUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ target: "mpd" })
+  });
+  if (!sourceResponse.ok) {
+    throw new Error(`Failed to reset audio source for interaction smoke: ${sourceResponse.status}`);
   }
 }
 
@@ -1166,6 +1175,29 @@ try {
     client,
     "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => state.audio.currentSource.id === 'radio' && state.playback.source === 'radio')",
     "Hi-Fi source picker switches immediately to Radio"
+  );
+  await postExperienceAction(client, { type: "set_mode", mode: "focus" });
+  await navigate(client, APP_URL);
+  await expectEventually(
+    client,
+    "document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') === 'focus'",
+    "Focus room mode is active before Hi-Fi remembered-source restore"
+  );
+  await evaluate(
+    client,
+    `
+      (() => {
+        const button = [...document.querySelectorAll('.ambient-room-mode-buttons button')]
+          .find((node) => node.textContent?.trim() === 'Hi-Fi');
+        button?.click();
+        return Boolean(button);
+      })()
+    `
+  );
+  await expectEventuallyEvaluate(
+    client,
+    "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') === 'hifi' && state.audio.currentSource.id === 'radio' && state.playback.source === 'radio')",
+    "Hi-Fi entry restores the remembered Radio source"
   );
   await expectEventually(
     client,
@@ -2550,6 +2582,11 @@ try {
   );
   await expectEventually(
     client,
+    "document.querySelector('[data-ambient-source-picker]') === null && document.querySelector('[data-ambient-source-status-pill][data-ambient-source-status-source=\"radio\"]')?.textContent?.includes('Radio') === true",
+    "Ambient Radio source selection closes the picker and shows the corner source pill"
+  );
+  await expectEventually(
+    client,
     `
       (async () => {
         const video = document.querySelector('.flame-video.is-active');
@@ -2589,6 +2626,11 @@ try {
   );
   await expectEventually(
     client,
+    "document.querySelector('[data-ambient-source-picker]') === null && document.querySelector('[data-ambient-source-status-pill][data-ambient-source-status-source=\"mpd\"]')?.textContent?.includes('Library') === true",
+    "Ambient Library source selection closes the picker and shows the corner source pill"
+  );
+  await expectEventually(
+    client,
     `
       (async () => {
         const video = document.querySelector('.flame-video.is-active');
@@ -2605,6 +2647,60 @@ try {
     "Ambient Library switch keeps the scene video mounted and playing muted",
     30,
     150
+  );
+  await click(client, 1280, 280);
+  await evaluate(
+    client,
+    `
+      (() => {
+        if (!document.querySelector('[data-ambient-source-option="spotify"]')) {
+          document.querySelector('[data-ambient-source-toggle]')?.click();
+        }
+        return true;
+      })()
+    `
+  );
+  await expectEventually(client, "document.querySelector('[data-ambient-source-option=\"spotify\"]') !== null", "Ambient source picker exposes Spotify");
+  await evaluate(client, "document.querySelector('[data-ambient-source-option=\"spotify\"]')?.click()");
+  await expectEventually(
+    client,
+    "document.querySelector('[data-ambient-source-picker]') === null && document.querySelector('[data-source-handoff-waiting]') === null && document.querySelector('[data-ambient-source-status-pill][data-ambient-source-status-source=\"spotify\"]')?.textContent?.includes('Waiting') === true",
+    "Ambient external source handoff collapses to the corner waiting pill",
+    20,
+    75
+  );
+  await expectEventuallyEvaluate(
+    client,
+    "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => state.audio.currentSource.id === 'spotify' && state.audio.currentSource.connectionState === 'connected')",
+    "Ambient Spotify source handoff connects through shared source state",
+    35,
+    150
+  );
+  await expectEventually(
+    client,
+    "document.querySelector('[data-ambient-source-toggle]') instanceof HTMLButtonElement && document.querySelector('[data-ambient-source-toggle]').disabled === false",
+    "Ambient source picker control re-enables after external source handoff",
+    45,
+    150
+  );
+  await click(client, 1280, 280);
+  await evaluate(
+    client,
+    `
+      (() => {
+        if (!document.querySelector('[data-ambient-source-option="mpd"]')) {
+          document.querySelector('[data-ambient-source-toggle]')?.click();
+        }
+        return true;
+      })()
+    `
+  );
+  await expectEventually(client, "document.querySelector('[data-ambient-source-option=\"mpd\"]') !== null", "Ambient source picker exposes Library after external source");
+  await evaluate(client, "document.querySelector('[data-ambient-source-option=\"mpd\"]')?.click()");
+  await expectEventuallyEvaluate(
+    client,
+    "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => state.audio.currentSource.id === 'mpd' && state.playback.source === 'mpd')",
+    "Ambient returns to Library after external source pill check"
   );
 
   await navigate(client, `${APP_URL}?mode=player`);

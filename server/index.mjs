@@ -187,6 +187,7 @@ const LOCAL_PLAYLIST_ROOT = resolve(LOCAL_LIBRARY_ROOT, "_playlists");
 const MUSIC_LIBRARY_STATE_PATH = resolve(process.env.TIKPAL_MUSIC_LIBRARY_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "music-library-state.json"));
 const ROOM_EXPERIENCE_STATE_PATH = resolve(process.env.TIKPAL_ROOM_EXPERIENCE_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "room-experience-state.json"));
 const AUDIO_VOLUME_STATE_PATH = resolve(process.env.TIKPAL_AUDIO_VOLUME_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "audio-volume-state.json"));
+const AUDIO_SOURCE_MEMORY_STATE_PATH = resolve(process.env.TIKPAL_AUDIO_SOURCE_MEMORY_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "audio-source-memory.json"));
 const LOCAL_LIBRARY_COVER_COLUMNS = ["cover_relative_path", "cover_path", "album_art_relative_path", "artwork_relative_path"];
 const LOCAL_LIBRARY_COVER_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp"];
 const PUBLIC_ASSETS_ROOT = resolve(process.env.TIKPAL_PUBLIC_ASSETS_ROOT ?? resolve(process.cwd(), "public", "assets"));
@@ -208,6 +209,7 @@ const PLAYBACK_MODES = new Set(["sequence", "repeat_one", "shuffle"]);
 const ROOM_MODES = new Set(["focus", "calm", "sleep", "hifi"]);
 const ROOM_SESSION_PHASES = new Set(["idle", "preparing", "active", "windDown"]);
 const REMOTE_SOURCE_TARGETS = new Set(["mpd", "radio", "spotify", "bluetooth", "airplay", "upnp"]);
+const REMEMBERED_AUDIO_SOURCE_TARGETS = new Set(["mpd", "radio", "spotify", "bluetooth", "airplay", "upnp"]);
 const COMMAND_HANDOFF_SOURCE_TARGETS = new Set(["spotify", "bluetooth", "airplay", "upnp"]);
 const REMOTE_ALLOWED_ACTIONS = [
   "playback.play_pause",
@@ -427,6 +429,7 @@ let tikpalStateSnapshotGeneration = 0;
 let mpcRadioCatalogReadyCache = false;
 let mpcRadioCatalogCountCache = 0;
 let activeMpcRadioStationCache = null;
+let audioSourceMemoryStateCache = null;
 let airplayDirectMetadataRefreshPromise = null;
 let airplayDirectMetadataRefreshAtMs = 0;
 let sceneContextGeoCache = null;
@@ -1332,7 +1335,8 @@ function buildAudioState({ activeSource, armedSource = null, radioReady, radioAc
       ?? sources.find((source) => source.active)
       ?? sources.find((source) => source.id === armedSource)
       ?? sources[0],
-    sources
+    sources,
+    rememberedSource: getCachedRememberedAudioSource()
   };
 }
 
@@ -3363,6 +3367,77 @@ async function writeRoomExperienceState(state) {
 
 let audioVolumeStateCache = null;
 
+function normalizeRememberedAudioSource(raw = {}) {
+  const target = String(raw?.target ?? "").trim().toLowerCase();
+  if (!REMEMBERED_AUDIO_SOURCE_TARGETS.has(target)) return null;
+
+  const localTrackPath = target === "mpd"
+    ? normalizeLocalLibraryStateTrackPath(raw.localTrackPath)
+    : null;
+  const radioStationId = target === "radio" && typeof raw.radioStationId === "string" && raw.radioStationId.trim()
+    ? raw.radioStationId.trim()
+    : null;
+
+  return {
+    target,
+    ...(localTrackPath ? { localTrackPath } : { localTrackPath: null }),
+    ...(radioStationId ? { radioStationId } : { radioStationId: null }),
+    updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : null
+  };
+}
+
+function getCachedRememberedAudioSource() {
+  if (audioSourceMemoryStateCache !== null) return audioSourceMemoryStateCache;
+  try {
+    audioSourceMemoryStateCache = normalizeRememberedAudioSource(JSON.parse(readFileSync(AUDIO_SOURCE_MEMORY_STATE_PATH, "utf8")));
+  } catch {
+    audioSourceMemoryStateCache = null;
+  }
+  return audioSourceMemoryStateCache;
+}
+
+async function writeRememberedAudioSource(source) {
+  const normalized = normalizeRememberedAudioSource({
+    ...source,
+    updatedAt: new Date().toISOString()
+  });
+  if (!normalized) return null;
+
+  await mkdir(dirname(AUDIO_SOURCE_MEMORY_STATE_PATH), { recursive: true });
+  await writeFile(AUDIO_SOURCE_MEMORY_STATE_PATH, `${JSON.stringify(normalized, null, 2)}\n`);
+  audioSourceMemoryStateCache = normalized;
+  return normalized;
+}
+
+async function rememberAudioSourceSwitch(action, { allowMpcRadio = false } = {}) {
+  const target = String(action?.target ?? "").trim().toLowerCase();
+  if (!REMEMBERED_AUDIO_SOURCE_TARGETS.has(target)) return null;
+  if (target === "radio" && API_MODE === "mpc" && !allowMpcRadio) return null;
+
+  if (target === "mpd") {
+    return await writeRememberedAudioSource({
+      target,
+      localTrackPath: action.localTrackPath
+    });
+  }
+
+  if (target === "radio") {
+    return await writeRememberedAudioSource({
+      target,
+      radioStationId: action.radioStationId
+    });
+  }
+
+  return await writeRememberedAudioSource({ target });
+}
+
+async function rememberActiveRadioStationSource(station) {
+  return await writeRememberedAudioSource({
+    target: "radio",
+    radioStationId: station?.id
+  });
+}
+
 function normalizeAudioVolumeState(raw = {}) {
   const lastNonZeroPercent = clampPercent(raw.lastNonZeroPercent, null);
   return {
@@ -3428,7 +3503,7 @@ async function stopSceneSourceSafely() {
   try {
     const state = await getTikpalState({ skipExperienceReconcile: true });
     if (state.audio.currentSource.id === "scene") {
-      await applySourceSwitch({ target: "mpd" });
+      await applySourceSwitch({ target: "mpd" }, { rememberSource: false });
     }
   } catch {
     // The browser-side video is muted by state; the next playback refresh will reconcile the source.
@@ -4314,6 +4389,7 @@ async function applyAudioPlaylistAction(action) {
     const trackPaths = await findPlaylistTrackPaths(action.playlistId);
     if (!trackPaths) throw new Error("playlist not found");
     await playTrackPaths(trackPaths, action.startIndex);
+    await rememberAudioSourceSwitch({ target: "mpd" });
     return;
   }
 
@@ -5384,6 +5460,7 @@ async function switchToRadioSource(action = {}, options = {}) {
         cacheActiveMpcRadioStation(targetStation, targetUri);
         await startRadioStreamUri(targetUri, options);
         cacheActiveMpcRadioStation(targetStation, targetUri);
+        await rememberActiveRadioStationSource(targetStation);
         return;
       } catch (error) {
         lastError = error;
@@ -7826,7 +7903,7 @@ async function syncRoomSceneSoundForSource(target) {
   });
 }
 
-async function applySourceSwitch(action, { syncSceneSoundState = true } = {}) {
+async function applySourceSwitch(action, { syncSceneSoundState = true, rememberSource = true } = {}) {
   const target = String(action?.target ?? "");
   const syncSceneBeforeSwitch = syncSceneSoundState && target !== "scene";
   if (syncSceneBeforeSwitch) {
@@ -7841,6 +7918,10 @@ async function applySourceSwitch(action, { syncSceneSoundState = true } = {}) {
 
   if (syncSceneSoundState && !syncSceneBeforeSwitch) {
     await syncRoomSceneSoundForSource(target);
+  }
+
+  if (rememberSource) {
+    await rememberAudioSourceSwitch(action);
   }
 }
 
@@ -8197,7 +8278,8 @@ async function buildRemoteStateResponse() {
     },
     source: {
       current: state.audio.currentSource,
-      sources: state.audio.sources
+      sources: state.audio.sources,
+      rememberedSource: state.audio.rememberedSource ?? null
     },
     display: state.system.display,
     hifi: {

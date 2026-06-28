@@ -105,6 +105,21 @@ type SourceSwitchTarget =
   | "airplay"
   | "upnp";
 
+type RememberedAudioSourceTarget =
+  | "mpd"
+  | "radio"
+  | "spotify"
+  | "bluetooth"
+  | "airplay"
+  | "upnp";
+
+interface RememberedAudioSource {
+  target: RememberedAudioSourceTarget;
+  localTrackPath?: string | null;
+  radioStationId?: string | null;
+  updatedAt: string | null;
+}
+
 interface SystemState {
   network: NetworkState;
   outputDevice: OutputDeviceState;
@@ -129,11 +144,11 @@ The local backend boundary should reserve endpoints or adapters for playback con
 - Local library validation: `npm run test:library` checks the ignored `public/assets/music` manifest, covers, playlists, and MP3 paths for the curated Focus / Meditation / Rest taxonomy.
 - Kiosk guard: root-level context menu, drag, selection, browser zoom, and multi-touch browser default suppression.
 - Ambient HUD: visible on startup, auto-hides after 5s, and can be shown again with a single tap.
-- Ambient Room Canvas: Focus, Calm, and Sleep center controls show scene previous/next, a six-choice source picker, Scene Sound, contextual clock copy, and the content-sized mode label/intent strip; they do not show track transport or lyrics. Hi-Fi keeps music transport, lyrics, and the same source picker.
+- Ambient Room Canvas: Focus, Calm, and Sleep center controls show scene previous/next, a six-choice source picker, Scene Sound, contextual clock copy, and the content-sized mode label/intent strip; they do not show track transport or lyrics. After a Library, Radio, or external source selection, those room modes collapse source feedback into a small lower-left pill so scene video stays immersive. Hi-Fi keeps music transport, lyrics, and the same source picker.
 - Playback backend: `mock` by default, `mpc` when the Pi runtime sets `TIKPAL_PLAYER_BACKEND=mpc`.
-- Source workspace: visible tabs are Library, Radio, Spotify, AirPlay, Bluetooth, and DLNA; DLNA uses runtime source id `upnp` and means renderer intake, not media-server browsing. Spotify Connect, AirPlay, Bluetooth, and DLNA share one handoff rule across Ambient, Player, Remote, and Pi API state: `armed` waits, `connected` completes.
+- Source workspace: visible tabs are Library, Radio, Spotify, AirPlay, Bluetooth, and DLNA; DLNA uses runtime source id `upnp` and means renderer intake, not media-server browsing. Spotify Connect, AirPlay, Bluetooth, and DLNA share one handoff rule across Ambient, Player, Remote, and Pi API state: `armed` waits, `connected` completes; DLNA also treats an armed/open renderer as discoverable instead of waiting for an extra client signal.
 - Appearance: font presets and surface skin presets are persisted locally and applied across ambient, player, and settings surfaces.
-- Room experience: startup offers Focus, Calm, Sleep, and Hi-Fi; Focus/Calm/Sleep open Scene Sound by default on boot, and selecting a music/input source keeps the scene video visible while muting scene audio. Hi-Fi applies `flat`, `warm`, or `vocal` EQ presets when the Pi command hook is configured, centers now-playing artwork and metadata, and never enables Scene Sound. Auto Night dims by selected timezone without changing sources.
+- Room experience: startup offers Focus, Calm, Sleep, and Hi-Fi; Focus/Calm/Sleep open Scene Sound by default on boot, and selecting a music/input source keeps the scene video visible while muting scene audio. Hi-Fi applies `flat`, `warm`, or `vocal` EQ presets when the Pi command hook is configured, centers now-playing artwork and metadata, never enables Scene Sound, and restores `audio.rememberedSource` for the last Library track, Radio station, or external waiting source. Auto Night dims by selected timezone without changing sources.
 - Device brightness: DDC/CI-capable displays are prepared by `deploy/moode/tikpal-ddcci-enable.sh`; `mpc` mode reports `display.transport="ddcci"` when `ddcutil getvcp 10 --brief` can read VCP `0x10`, and the Ambient left edge is the brightness gesture lane.
 - Scene Sound on Pi: the active browser video supplies scene audio, so Chromium should route directly to the physical USB `dmix` device through `TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE`; moOde `_audioout` / Loopback remains for MPD, renderer intakes, and spectrum capture.
 - Pi status reads: in `mpc` mode, combined state, playback status, system status, runtime, audio source, and portable remote reads return the latest in-memory runtime snapshot while slow probes run in a low-frequency background collector.
