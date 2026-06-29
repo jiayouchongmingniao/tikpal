@@ -486,8 +486,8 @@ const system = {
   uptime: "2d 4h"
 };
 
-function buildSourceSummary({ id, label, availability, active, controllability, secondaryStatus }) {
-  return {
+function buildSourceSummary({ id, label, availability, active, controllability, secondaryStatus, radioStationId = null }) {
+  const summary = {
     id,
     label,
     kind: id,
@@ -500,6 +500,10 @@ function buildSourceSummary({ id, label, availability, active, controllability, 
     advertisedLabel: null,
     secondaryStatus
   };
+  if (id === "radio") {
+    summary.radioStationId = typeof radioStationId === "string" && radioStationId.trim() ? radioStationId.trim() : null;
+  }
+  return summary;
 }
 
 function buildRadioStationSummary({
@@ -1191,7 +1195,8 @@ function buildAudioState({ activeSource, armedSource = null, radioReady, radioAc
         ? `${activeRadio?.label ?? RADIO_LABEL} active`
         : radioReady
           ? `Choose from ${radioStations.length || 1} presets`
-          : "No radio route configured"
+          : "No radio route configured",
+      radioStationId: radioActive ? activeRadio?.id ?? null : null
     }),
     buildSourceSummary({
       id: "scene",
@@ -2827,7 +2832,8 @@ function syncCachedTikpalStateActiveRadioStation() {
     availability: "available",
     active: true,
     controllability: "switchable",
-    secondaryStatus: `${label} active`
+    secondaryStatus: `${label} active`,
+    radioStationId: cached.station?.id ?? cached.id ?? null
   };
   const sources = Array.isArray(state.audio.sources)
     ? state.audio.sources.map((source) => source.id === "radio" ? radioSource : { ...source, active: false })

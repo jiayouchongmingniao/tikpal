@@ -1408,6 +1408,7 @@ if (getIndex >= 0) {
     });
     assert(switched.response.ok, "mpc radio preset switch should return 200");
     assert(switched.body.audio.currentSource.id === "radio", "mpc radio preset switch should make Radio current");
+    assert(switched.body.audio.currentSource.radioStationId === "radio-511", "mpc radio preset switch should expose the selected station id on currentSource");
     assert(switched.body.playback.source === "radio", "mpc radio preset switch should make playback Radio");
     assert(switched.body.audio.rememberedSource?.target === "radio", "mpc radio preset switch should remember Radio");
     assert(switched.body.audio.rememberedSource?.radioStationId === "radio-511", "mpc radio preset switch should remember the selected station");
@@ -1451,6 +1452,7 @@ if (getIndex >= 0) {
     });
     assert(nextRadio.response.ok, "mpc radio next should return 200");
     assert(nextRadio.body.audio.currentSource.secondaryStatus === "Tikpal Focus - Test Exact active", "mpc radio next should advance to the next Tikpal station");
+    assert(nextRadio.body.audio.currentSource.radioStationId === "radio-500", "mpc radio next should expose the advanced station id on currentSource");
     assert(nextRadio.body.audio.rememberedSource?.radioStationId === "radio-500", "mpc radio next should remember the advanced station");
     assert(nextRadio.body.playback.albumArtUrl?.startsWith("/api/v1/media/radio-logo?stationId=radio-500"), "mpc radio next should refresh station logo artwork");
     assert(JSON.parse(await readFile(fakeMpcStatePath, "utf8")).currentFile === "http://radio.example/tikpal-focus", "mpc radio next should replace the MPD stream URI");
@@ -1461,6 +1463,7 @@ if (getIndex >= 0) {
     });
     assert(previousRadio.response.ok, "mpc radio previous should return 200");
     assert(previousRadio.body.audio.currentSource.secondaryStatus === "Tikpal Calm - FluxFM Chillout active", "mpc radio previous should return to the previous Tikpal station");
+    assert(previousRadio.body.audio.currentSource.radioStationId === "radio-511", "mpc radio previous should expose the previous station id on currentSource");
     assert(previousRadio.body.audio.rememberedSource?.radioStationId === "radio-511", "mpc radio previous should remember the previous station");
     assert(previousRadio.body.playback.albumArtUrl?.startsWith("/api/v1/media/radio-logo?stationId=radio-511"), "mpc radio previous should refresh station logo artwork");
     assert(JSON.parse(await readFile(fakeMpcStatePath, "utf8")).currentFile === radioUri, "mpc radio previous should replace the MPD stream URI");
@@ -1471,6 +1474,7 @@ if (getIndex >= 0) {
     });
     assert(fastRefresh.response.ok, "mpc radio fast playback mutation should return 200");
     assert(fastRefresh.body.audio.currentSource.id === "radio", "mpc radio fast refresh should keep Radio current");
+    assert(fastRefresh.body.audio.currentSource.radioStationId === "radio-511", "mpc radio fast refresh should keep the selected station id");
     assert(
       fastRefresh.body.audio.currentSource.secondaryStatus === "Tikpal Calm - FluxFM Chillout active",
       "mpc radio fast refresh should keep the selected station label"
@@ -1495,6 +1499,7 @@ if (getIndex >= 0) {
     assert(failedStreamRefresh.response.ok, "mpc failed radio stream refresh should return 200");
     assert(failedStreamRefresh.body.playback.source === "radio", "mpc failed radio stream should still report Radio source");
     assert(failedStreamRefresh.body.playback.state === "stopped", "mpc failed radio stream should not be reported as playing");
+    assert(failedStreamRefresh.body.audio.currentSource.radioStationId === "radio-511", "mpc failed radio stream should keep the failed station id on currentSource");
     assert(
       failedStreamRefresh.body.audio.currentSource.secondaryStatus === "Tikpal Calm - FluxFM Chillout active",
       "mpc failed radio stream should keep the failed station label"
@@ -1510,6 +1515,7 @@ if (getIndex >= 0) {
     });
     assert(nextAfterFailedStream.response.ok, "mpc radio next should recover from a failed stream");
     assert(nextAfterFailedStream.body.playback.state === "playing", "mpc radio next recovery should start playback");
+    assert(nextAfterFailedStream.body.audio.currentSource.radioStationId === "radio-501", "mpc radio next recovery should expose the recovered station id on currentSource");
     assert(
       nextAfterFailedStream.body.audio.currentSource.secondaryStatus === "Tikpal Focus - Backup active",
       "mpc radio next recovery should skip a failed candidate station"
@@ -1534,6 +1540,10 @@ if (getIndex >= 0) {
       body: JSON.stringify({ target: "radio", radioStationId: "radio-502" })
     });
     assert(manualDeadStationFallback.response.ok, "mpc radio source switch should recover from a dead selected station");
+    assert(
+      manualDeadStationFallback.body.audio.currentSource.radioStationId === "radio-511",
+      "mpc radio source switch fallback should expose the recovered station id on currentSource"
+    );
     assert(
       manualDeadStationFallback.body.audio.currentSource.secondaryStatus === "Tikpal Calm - FluxFM Chillout active",
       "mpc radio source switch should advance to the next station when the selected station cannot connect"
@@ -1565,6 +1575,10 @@ if (getIndex >= 0) {
     });
     assert(delayedDeadStation.response.ok, "mpc radio delayed dead stream switch should initially return 200");
     assert(
+      delayedDeadStation.body.audio.currentSource.radioStationId === "radio-502",
+      "mpc radio delayed dead stream should initially expose the selected station id"
+    );
+    assert(
       delayedDeadStation.body.audio.currentSource.secondaryStatus === "Tikpal Focus - Dead Link active",
       "mpc radio delayed dead stream should initially keep the selected station label"
     );
@@ -1579,6 +1593,10 @@ if (getIndex >= 0) {
         fakeFailedStreamUri: autoSkippedFakeState.failedStreamUri,
         fakeObservations: autoSkippedFakeState.observations?.slice(-8)
       })}`
+    );
+    assert(
+      autoSkippedDeadStation.body.audio.currentSource.radioStationId === "radio-511",
+      "mpc radio late stream failure should expose the auto-advanced station id on currentSource"
     );
     assert(
       autoSkippedDeadStation.body.playback.albumArtUrl?.startsWith("/api/v1/media/radio-logo?stationId=radio-511"),
@@ -2835,6 +2853,7 @@ async function run() {
     });
     assert(radio.response.ok, "radio source switch should return 200");
     assert(radio.body.audio.currentSource.id === "radio", "radio switch should activate radio in mock mode");
+    assert(radio.body.audio.currentSource.radioStationId === "radio-2", "radio switch should expose the selected mock station id on currentSource");
     assert(radio.body.playback.source === "radio", "playback source should follow radio switch");
     assert(radio.body.playback.title === "Tikpal Calm - Radio Paradise Mellow", "radio switch should surface the active preset label");
     assert(radio.body.audio.rememberedSource?.target === "radio", "radio switch should remember Radio as the last source");

@@ -144,6 +144,10 @@ function getRememberedSourceKey(source: RememberedAudioSource | null | undefined
 function shouldRestoreRememberedSource(state: TikpalState, rememberedSource: RememberedAudioSource | null | undefined) {
   if (!rememberedSource || !isSourceSwitchTarget(rememberedSource.target)) return false;
   if (rememberedSource.target === "mpd" && rememberedSource.localTrackPath) return true;
+  if (rememberedSource.target === "radio" && rememberedSource.radioStationId) {
+    if (state.audio.currentSource.id !== "radio") return true;
+    return state.audio.currentSource.radioStationId !== rememberedSource.radioStationId;
+  }
   if (state.audio.currentSource.id === rememberedSource.target) return false;
   return true;
 }

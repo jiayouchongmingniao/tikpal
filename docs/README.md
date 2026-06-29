@@ -120,6 +120,11 @@ interface RememberedAudioSource {
   updatedAt: string | null;
 }
 
+interface SourceSummary {
+  // Present for Radio so Hi-Fi can restore the remembered station, not just the source.
+  radioStationId?: string | null;
+}
+
 interface SystemState {
   network: NetworkState;
   outputDevice: OutputDeviceState;

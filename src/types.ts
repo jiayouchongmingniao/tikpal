@@ -57,6 +57,7 @@ export interface SourceSummary {
   connectedLabel: string | null;
   advertisedLabel: string | null;
   secondaryStatus: string;
+  radioStationId?: string | null;
 }
 
 export interface RememberedAudioSource {

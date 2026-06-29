@@ -751,16 +751,22 @@ try {
           return JSON.parse(JSON.stringify(value));
         }
 
-        function withSource(state, sourceId) {
+        function withSource(state, sourceId, options = {}) {
           const next = clone(state);
-          next.audio.sources = next.audio.sources.map((source) => ({
-            ...source,
-            active: source.id === sourceId,
-            availability: source.id === sourceId ? "available" : source.availability,
-            armed: false,
-            connectionState: source.id === sourceId ? "connected" : "idle",
-            connectedLabel: source.id === sourceId ? (sourceId === "bluetooth" ? "Tikpal Demo Phone" : source.connectedLabel) : null
-          }));
+          next.audio.sources = next.audio.sources.map((source) => {
+            const patched = {
+              ...source,
+              active: source.id === sourceId,
+              availability: source.id === sourceId ? "available" : source.availability,
+              armed: false,
+              connectionState: source.id === sourceId ? "connected" : "idle",
+              connectedLabel: source.id === sourceId ? (sourceId === "bluetooth" ? "Tikpal Demo Phone" : source.connectedLabel) : null
+            };
+            if (source.id === "radio") {
+              patched.radioStationId = sourceId === "radio" ? options.radioStationId ?? source.radioStationId ?? null : null;
+            }
+            return patched;
+          });
           next.audio.currentSource = next.audio.sources.find((source) => source.id === sourceId) ?? next.audio.currentSource;
           return next;
         }
@@ -883,6 +889,36 @@ try {
               currentTrackIndex: 1,
               queueLength: 3,
               favorite: false
+            };
+            return next;
+          }
+
+          if (mode === "hifiRememberedDifferentRadio" || mode === "hifiRememberedSameRadio") {
+            const currentStationId = mode === "hifiRememberedSameRadio" ? "radio-503" : "radio-500";
+            const next = withSource(state, "radio", { radioStationId: currentStationId });
+            const currentStationLabel = currentStationId === "radio-503"
+              ? "Tikpal Focus - KEXP Seattle"
+              : "Tikpal Focus - Radio Paradise Main";
+            next.audio.rememberedSource = {
+              target: "radio",
+              localTrackPath: null,
+              radioStationId: "radio-503",
+              updatedAt: "2026-06-30T00:00:00.000Z"
+            };
+            next.playback = {
+              ...next.playback,
+              state: "playing",
+              source: "radio",
+              albumArtUrl: '/api/v1/media/radio-logo?stationId=' + currentStationId,
+              title: currentStationLabel,
+              artist: "Internet Radio",
+              album: currentStationLabel,
+              elapsedSeconds: null,
+              durationSeconds: null,
+              currentTrackIndex: 0,
+              queueLength: 0,
+              favorite: false,
+              queuePreview: []
             };
             return next;
           }
@@ -1198,6 +1234,156 @@ try {
     client,
     "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') === 'hifi' && state.audio.currentSource.id === 'radio' && state.playback.source === 'radio')",
     "Hi-Fi entry restores the remembered Radio source"
+  );
+  await postExperienceAction(client, { type: "set_mode", mode: "focus" });
+  await navigate(client, APP_URL);
+  await expectEventually(
+    client,
+    "document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') === 'focus'",
+    "Focus room mode is active before Hi-Fi remembered station restore"
+  );
+  const differentRadioPatchVersion = await setStatePatchMode(client, "hifiRememberedDifferentRadio");
+  await waitForStatePatchRefresh(client, differentRadioPatchVersion, "Hi-Fi different remembered Radio fixture refreshes");
+  await evaluate(
+    client,
+    `
+      (() => {
+        window.__tikpalRememberedRadioRequests = [];
+        window.__tikpalRememberedRadioOriginalFetch = window.fetch.bind(window);
+        window.fetch = async (input, init) => {
+          const rawUrl = typeof input === 'string' ? input : input instanceof Request ? input.url : String(input);
+          const pathname = new URL(rawUrl, window.location.href).pathname;
+          if (pathname === '/api/v1/audio/source') {
+            const body = JSON.parse(String(init?.body ?? '{}'));
+            window.__tikpalRememberedRadioRequests.push(body);
+            if (body.target === 'radio') {
+              const response = await window.__tikpalRememberedRadioOriginalFetch('/api/v1/system/state');
+              const state = await response.json();
+              const next = JSON.parse(JSON.stringify(state));
+              next.audio.sources = next.audio.sources.map((source) => {
+                const patched = {
+                  ...source,
+                  active: source.id === 'radio',
+                  armed: false,
+                  connectionState: source.id === 'radio' ? 'idle' : source.connectionState,
+                  connectedLabel: null
+                };
+                if (source.id === 'radio') {
+                  patched.radioStationId = body.radioStationId ?? null;
+                  patched.secondaryStatus = 'Tikpal Focus - KEXP Seattle active';
+                }
+                return patched;
+              });
+              next.audio.currentSource = next.audio.sources.find((source) => source.id === 'radio') ?? next.audio.currentSource;
+              next.audio.rememberedSource = {
+                target: 'radio',
+                localTrackPath: null,
+                radioStationId: body.radioStationId ?? null,
+                updatedAt: new Date().toISOString()
+              };
+              next.playback = {
+                ...next.playback,
+                state: 'playing',
+                source: 'radio',
+                albumArtUrl: '/api/v1/media/radio-logo?stationId=' + encodeURIComponent(body.radioStationId ?? ''),
+                title: 'Tikpal Focus - KEXP Seattle',
+                artist: 'Internet Radio',
+                album: 'Tikpal Focus - KEXP Seattle'
+              };
+              return new Response(JSON.stringify(next), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' }
+              });
+            }
+          }
+          return window.__tikpalRememberedRadioOriginalFetch(input, init);
+        };
+        return true;
+      })()
+    `
+  );
+  await evaluate(
+    client,
+    `
+      (() => {
+        const button = [...document.querySelectorAll('.ambient-room-mode-buttons button')]
+          .find((node) => node.textContent?.trim() === 'Hi-Fi');
+        button?.click();
+        return Boolean(button);
+      })()
+    `
+  );
+  await expectEventually(
+    client,
+    "(window.__tikpalRememberedRadioRequests ?? []).some((body) => body.target === 'radio' && body.radioStationId === 'radio-503')",
+    "Hi-Fi entry restores the remembered Radio station when another Radio station is current",
+    45,
+    150
+  );
+  await evaluate(
+    client,
+    `
+      (() => {
+        if (window.__tikpalRememberedRadioOriginalFetch) {
+          window.fetch = window.__tikpalRememberedRadioOriginalFetch;
+          delete window.__tikpalRememberedRadioOriginalFetch;
+        }
+        return true;
+      })()
+    `
+  );
+  await postExperienceAction(client, { type: "set_mode", mode: "focus" });
+  await navigate(client, APP_URL);
+  const sameRadioPatchVersion = await setStatePatchMode(client, "hifiRememberedSameRadio");
+  await waitForStatePatchRefresh(client, sameRadioPatchVersion, "Hi-Fi same remembered Radio fixture refreshes");
+  await evaluate(
+    client,
+    `
+      (() => {
+        window.__tikpalRememberedRadioRequests = [];
+        window.__tikpalRememberedRadioOriginalFetch = window.fetch.bind(window);
+        window.fetch = async (input, init) => {
+          const rawUrl = typeof input === 'string' ? input : input instanceof Request ? input.url : String(input);
+          const pathname = new URL(rawUrl, window.location.href).pathname;
+          if (pathname === '/api/v1/audio/source') {
+            window.__tikpalRememberedRadioRequests.push(JSON.parse(String(init?.body ?? '{}')));
+          }
+          return window.__tikpalRememberedRadioOriginalFetch(input, init);
+        };
+        return true;
+      })()
+    `
+  );
+  await evaluate(
+    client,
+    `
+      (() => {
+        const button = [...document.querySelectorAll('.ambient-room-mode-buttons button')]
+          .find((node) => node.textContent?.trim() === 'Hi-Fi');
+        button?.click();
+        return Boolean(button);
+      })()
+    `
+  );
+  await wait(1800);
+  await expect(
+    client,
+    "!(window.__tikpalRememberedRadioRequests ?? []).some((body) => body.target === 'radio')",
+    "Hi-Fi entry does not repeat Radio restore when the remembered station is already current"
+  );
+  await evaluate(
+    client,
+    `
+      (() => {
+        if (window.__tikpalRememberedRadioOriginalFetch) {
+          window.fetch = window.__tikpalRememberedRadioOriginalFetch;
+          delete window.__tikpalRememberedRadioOriginalFetch;
+        }
+        window.__tikpalRememberedRadioRequests = [];
+        window.__tikpalSmokeStatePatchMode = "";
+        return true;
+      })()
+    `
   );
   await expectEventually(
     client,
@@ -2886,13 +3072,17 @@ try {
     `
       fetch('/api/v1/system/state').then((response) => response.json()).then((state) => {
         const video = document.querySelector('.flame-video.is-active');
+        const sceneVolume = Number.parseFloat(video?.getAttribute('data-scene-volume') ?? '0');
+        const sceneEffectiveVolume = Number.parseFloat(video?.getAttribute('data-scene-effective-volume') ?? '0');
         return state.system.volume.percent === 31
           && video instanceof HTMLVideoElement
-          && Math.abs(video.volume - 0.31) < 0.01
+          && Math.abs(sceneVolume - 0.31) < 0.01
+          && Math.abs(video.volume - sceneEffectiveVolume) < 0.01
+          && sceneEffectiveVolume > 0
           && video.muted === false;
       })
     `,
-    "scene video element volume follows the global volume"
+    "scene video source volume follows global volume with scene gain applied"
   );
   await navigate(client, `${APP_URL}?mode=player`);
   await evaluate(
