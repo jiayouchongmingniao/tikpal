@@ -10,8 +10,8 @@ import { useBrowserKioskGuard } from "./hooks/useBrowserKioskGuard";
 import { useKioskGestures } from "./hooks/useKioskGestures";
 import { useRoomExperience } from "./hooks/useRoomExperience";
 import { useTikpalState } from "./hooks/useTikpalState";
-import { sendKioskHeartbeat } from "./api/tikpalClient";
-import type { AppMode, BackgroundVideoSummary, FontTheme, LyricsFontSize, RememberedAudioSource, RoomExperienceActionRequest, RoomMode, SourceSwitchTarget, SurfaceTheme, TikpalState } from "./types";
+import { fetchRoomExperienceState, sendKioskHeartbeat } from "./api/tikpalClient";
+import type { AppMode, BackgroundVideoSummary, FontTheme, LyricsFontSize, RememberedAudioSource, RoomExperienceActionRequest, RoomExperienceState, RoomMode, SourceSwitchTarget, SurfaceTheme, TikpalState } from "./types";
 
 const FONT_THEME_STORAGE_KEY = "tikpal.fontTheme";
 const SURFACE_THEME_STORAGE_KEY = "tikpal.surfaceTheme";
@@ -201,11 +201,16 @@ export default function App() {
   const previousRoomModeRef = useRef<RoomMode | null>(null);
   const hifiRestoreKeyRef = useRef<string>("");
   const hifiRestoreInFlightRef = useRef(false);
+  const roomExperienceRef = useRef<RoomExperienceState | null>(null);
   const { mode, hudVisible, idleTotalMs, idleRemainingMs, showHud, toggleHud, changeMode, returnAmbient, resetIdleTimer } = useAppMode(readInitialMode());
   const { state: tikpalState, status: tikpalStatus, refresh, sendPlaybackAction, sendSystemAction, sendSourceSwitch } = useTikpalState();
   const { experience: roomExperience, status: roomExperienceStatus, refresh: refreshRoomExperience, sendExperienceAction } = useRoomExperience();
 
   useBrowserKioskGuard();
+
+  useEffect(() => {
+    roomExperienceRef.current = roomExperience;
+  }, [roomExperience]);
 
   useEffect(() => {
     const interval = window.setInterval(() => setNow(new Date()), 1000);
@@ -439,6 +444,30 @@ export default function App() {
     return nextState;
   }, [refresh, refreshRoomExperience, sendSourceSwitch, tikpalState.audio.currentSource.connectionState, tikpalState.audio.currentSource.id]);
 
+  const restoreSceneSoundAfterStaleHifiRestore = useCallback(async () => {
+    let latestRoom = roomExperienceRef.current;
+    try {
+      latestRoom = await fetchRoomExperienceState();
+      roomExperienceRef.current = latestRoom;
+    } catch {
+      // Use the latest local room snapshot if the direct refresh is briefly unavailable.
+    }
+
+    if (!latestRoom || latestRoom.mode === "hifi" || !latestRoom.sceneSoundEnabled) return;
+
+    try {
+      await sendExperienceAction({
+        type: "set_scene_sound",
+        sceneSoundEnabled: true,
+        sceneVideoId: latestRoom.sceneVideoId
+      });
+      await refresh();
+      await refreshRoomExperience();
+    } catch {
+      await refresh();
+    }
+  }, [refresh, refreshRoomExperience, sendExperienceAction]);
+
   useEffect(() => {
     const previousMode = previousRoomModeRef.current;
     previousRoomModeRef.current = roomExperience.mode;
@@ -472,10 +501,11 @@ export default function App() {
           }
         }
       } finally {
+        await restoreSceneSoundAfterStaleHifiRestore();
         hifiRestoreInFlightRef.current = false;
       }
     })();
-  }, [handleSourceSwitch, roomExperience.mode, tikpalState]);
+  }, [handleSourceSwitch, restoreSceneSoundAfterStaleHifiRestore, roomExperience.mode, tikpalState]);
 
   async function handleSceneSoundEnabledChange(enabled: boolean) {
     if (sceneSoundPending) return;

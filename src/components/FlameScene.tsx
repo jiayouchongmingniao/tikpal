@@ -189,7 +189,7 @@ function ensureSceneAudioNode(video: HTMLVideoElement) {
 function syncSceneAudioGain(video: HTMLVideoElement) {
   const gainDb = normalizeAudioGainDb(Number(video.dataset.sceneGainDb));
   const existing = sceneAudioNodes.get(video);
-  if (!existing && (gainDb === 0 || video.volume <= 0)) return;
+  if (!existing) return;
 
   const node = ensureSceneAudioNode(video);
   if (!node) return;
@@ -203,9 +203,10 @@ function syncSceneAudioGain(video: HTMLVideoElement) {
 function setSceneVideoVolume(video: HTMLVideoElement, volume: number) {
   const safeVolume = clampVideoVolume(volume);
   const gainDb = normalizeAudioGainDb(Number(video.dataset.sceneGainDb));
-  video.volume = safeVolume;
+  const effectiveVolume = clampVideoVolume(safeVolume * dbToLinearGain(gainDb));
+  video.volume = effectiveVolume;
   video.dataset.sceneVolume = safeVolume.toFixed(3);
-  video.dataset.sceneEffectiveVolume = (safeVolume * dbToLinearGain(gainDb)).toFixed(3);
+  video.dataset.sceneEffectiveVolume = effectiveVolume.toFixed(3);
   syncSceneAudioGain(video);
 }
 

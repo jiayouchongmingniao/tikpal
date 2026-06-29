@@ -350,7 +350,7 @@ export function AmbientScreen({
   const [sceneContext, setSceneContext] = useState<SceneContextSummary | null>(null);
   const [sceneVideoThermalPaused, setSceneVideoThermalPaused] = useState(false);
   const [ambientSceneAudioSuppressed, setAmbientSceneAudioSuppressed] = useState(false);
-  const currentBackgroundVideo = backgroundVideos[backgroundVideoIndex] ?? DEFAULT_BACKGROUND_VIDEO;
+  const indexedBackgroundVideo = backgroundVideos[backgroundVideoIndex] ?? DEFAULT_BACKGROUND_VIDEO;
   const isHifiMode = roomExperience.mode === "hifi";
   const playbackClockKey = useMemo(() => [
     playback.source,
@@ -368,10 +368,22 @@ export function AmbientScreen({
     playback.title
   ]);
   const activeTimeZone = roomExperience.nightSchedule.timeZone;
-  const ambientClockSceneCopy = getAmbientClockSceneCopy(currentBackgroundVideo, roomExperience.mode, sceneContext, activeTimeZone);
   const modeBackgroundVideos = useMemo(() => (
     backgroundVideos.filter((video) => videoBelongsToRoomMode(video, roomExperience.mode))
   ), [backgroundVideos, roomExperience.mode]);
+  const currentBackgroundVideo = useMemo(() => {
+    if (isHifiMode || videoBelongsToRoomMode(indexedBackgroundVideo, roomExperience.mode)) {
+      return indexedBackgroundVideo;
+    }
+
+    const roomSceneVideo = backgroundVideos.find((video) => video.id === roomExperience.sceneVideoId);
+    if (roomSceneVideo && videoBelongsToRoomMode(roomSceneVideo, roomExperience.mode)) {
+      return roomSceneVideo;
+    }
+
+    return modeBackgroundVideos[0] ?? indexedBackgroundVideo;
+  }, [backgroundVideos, indexedBackgroundVideo, isHifiMode, modeBackgroundVideos, roomExperience.mode, roomExperience.sceneVideoId]);
+  const ambientClockSceneCopy = getAmbientClockSceneCopy(currentBackgroundVideo, roomExperience.mode, sceneContext, activeTimeZone);
   const switchableBackgroundVideos = modeBackgroundVideos.length > 0
     ? modeBackgroundVideos
     : backgroundVideos.filter((video) => Boolean(video.src));
@@ -497,6 +509,7 @@ export function AmbientScreen({
     : undefined;
   const ambientSourcePillVisible = Boolean(
     ambientSourcePillSourceId
+      && !(sceneSoundEnabled && !isHifiMode)
       && (handoffPendingSource !== null || (audio.currentSource.id !== "scene" && audio.currentSource.id !== "audio"))
   );
   const ambientSourcePillWaiting = Boolean(
