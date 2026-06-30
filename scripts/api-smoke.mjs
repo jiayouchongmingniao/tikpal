@@ -74,6 +74,10 @@ function assert(condition, message) {
   }
 }
 
+function localTrackPathFromMpcFile(file) {
+  return String(file ?? "").replace(/^Codex\//, "");
+}
+
 function formatMoodeEventTimestamp(epochSeconds) {
   const date = new Date(epochSeconds * 1000);
   const pad = (value) => String(value).padStart(2, "0");
@@ -803,6 +807,7 @@ async function runMpcLocalLibraryPathSmoke(roomExperienceStatePath) {
   const fakeMpcPath = path.join(workspace, "mpc-fake.mjs");
   const fakeMpcLogPath = path.join(workspace, "mpc.log");
   const fakeMpcStatePath = path.join(workspace, "mpc-state.json");
+  const fakeAudioSourceMemoryStatePath = path.join(workspace, "audio-source-memory.json");
   const fakeMpcTracks = [
     "Codex/Focus/Lo-fi Ambient/FASSounds - Good Night - Lofi Cozy Chill Music - 02m27s - Lo-fi.mp3",
     "Codex/Focus/Lo-fi Ambient/FASSounds - Lofi Study - Calm Peaceful Chill Hop - 02m27s - Lo-fi.mp3",
@@ -879,6 +884,10 @@ switch (command) {
     state.current = Math.min(state.queue.length - 1, state.current + 1);
     writeState(state);
     break;
+  case "prev":
+    state.current = Math.max(0, state.current - 1);
+    writeState(state);
+    break;
   case "play":
     if (rest[0]) state.current = Math.max(0, Number(rest[0]) - 1);
     state.state = positionalPlayStaysPaused && rest[0] ? "paused" : "playing";
@@ -934,6 +943,7 @@ switch (command) {
       TIKPAL_MPD_DEFAULT_QUEUE_PATH: "Codex",
       TIKPAL_OUTPUT_VOLUME_GET_COMMAND: "",
       TIKPAL_ROOM_EXPERIENCE_STATE_PATH: roomExperienceStatePath,
+      TIKPAL_AUDIO_SOURCE_MEMORY_STATE_PATH: fakeAudioSourceMemoryStatePath,
       TIKPAL_FAKE_MPC_LOG: fakeMpcLogPath,
       TIKPAL_FAKE_MPC_STATE: fakeMpcStatePath,
       TIKPAL_FAKE_MPC_TRACKS: JSON.stringify(fakeMpcTracks),
@@ -950,6 +960,26 @@ switch (command) {
     assert(library.response.ok, "mpc local library path smoke should read the local library");
     const localTrackPath = library.body.tracks[0]?.path;
     assert(localTrackPath && !localTrackPath.startsWith("Codex/"), "local library should expose manifest-relative track paths");
+
+    const staleLocalTrackPath = "Removed/Old Library Track.mp3";
+    await writeFile(
+      fakeAudioSourceMemoryStatePath,
+      `${JSON.stringify({
+        target: "radio",
+        localTrackPath: staleLocalTrackPath,
+        radioStationId: "radio-503",
+        updatedAt: "2026-01-01T00:00:00.000Z"
+      }, null, 2)}\n`
+    );
+    const staleLibraryResume = await requestFrom(baseUrl, "/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({ target: "mpd" })
+    });
+    assert(staleLibraryResume.response.ok, "mpc Library resume with replaced-library stale memory should return 200");
+    assert(
+      staleLibraryResume.body.audio.rememberedSource?.localTrackPath !== staleLocalTrackPath,
+      "mpc Library resume should not write back a local track path missing from the current library manifest"
+    );
 
     const switched = await requestFrom(baseUrl, "/api/v1/audio/source", {
       method: "POST",
@@ -970,6 +1000,7 @@ switch (command) {
     assert(log.includes("play\t1"), "mpc local library switch should start the requested MPD queue position");
     assert(log.includes("play\n"), "mpc local library switch should retry playback when MPD stayed paused");
     assert(!log.includes(`add\t${localTrackPath}\n`), "mpc local library switch should not add the raw manifest path first");
+    assert(switched.body.audio.rememberedSource?.localTrackPath === localTrackPath, "mpc local library switch should remember the selected local track path");
 
     await requestFrom(baseUrl, "/api/v1/playback/actions", {
       method: "POST",
@@ -983,9 +1014,21 @@ switch (command) {
     assert(next.response.ok, "mpc local library next should return 200");
     assert(next.body.playback.state === "playing", "mpc local library next should resume playback when MPD stayed paused");
     assert(next.body.playback.currentTrackIndex === 2, "mpc local library next should advance within the loaded queue");
+    assert(next.body.audio.rememberedSource?.localTrackPath === localTrackPathFromMpcFile(fakeMpcTracks[1]), "mpc local library next should remember the advanced local track");
     const nextLog = await readFile(fakeMpcLogPath, "utf8");
     assert(nextLog.includes("next"), "mpc local library next should issue next");
     assert(nextLog.includes("play"), "mpc local library next should explicitly resume MPD after advancing");
+
+    await writeFile(fakeMpcLogPath, "");
+    const previous = await requestFrom(baseUrl, "/api/v1/playback/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "previous" })
+    });
+    assert(previous.response.ok, "mpc local library previous should return 200");
+    assert(previous.body.playback.currentTrackIndex === 1, "mpc local library previous should return to the first queue entry");
+    assert(previous.body.audio.rememberedSource?.localTrackPath === localTrackPath, "mpc local library previous should remember the previous local track");
+    const previousLog = await readFile(fakeMpcLogPath, "utf8");
+    assert(previousLog.includes("prev"), "mpc local library previous should issue prev");
   } finally {
     if (server.exitCode === null && server.signalCode === null) {
       server.kill("SIGTERM");
@@ -1158,6 +1201,9 @@ const state = readState();
 const statusFile = state.currentFile || state.failedStreamUri || "";
 const isRadio = /^https?:\\/\\//i.test(statusFile);
 switch (command) {
+  case "listall":
+    process.stdout.write("Codex/Smoke.mp3\\n");
+    break;
   case "current":
     if (!state.currentFile) break;
     if (fileOnlyCurrent) {
@@ -1399,6 +1445,30 @@ if (getIndex >= 0) {
       scene.body.audio.sources.some((source) => source.id === "radio" && source.availability === "available" && source.controllability === "switchable"),
       "mpc scene switch fast snapshot should keep Radio available from cached cfg_radio catalog"
     );
+
+    const libraryAfterScene = await requestFrom(baseUrl, "/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({ target: "mpd" })
+    });
+    assert(libraryAfterScene.response.ok, `mpc library switch after cached scene should return 200, got ${libraryAfterScene.response.status}: ${JSON.stringify(libraryAfterScene.body)}`);
+    assert(libraryAfterScene.body.audio.currentSource.id === "mpd", "mpc library switch after cached scene should not keep stale Scene Sound as current");
+    assert(libraryAfterScene.body.playback.source === "mpd", "mpc library switch after cached scene should expose Library playback");
+    assert(
+      libraryAfterScene.body.audio.sources.some((source) => source.id === "scene" && source.active === false),
+      "mpc library switch after cached scene should deactivate Scene Sound"
+    );
+
+    const sceneAgain = await requestFrom(baseUrl, "/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({
+        target: "scene",
+        sceneVideoId: "rainy-window",
+        sceneVideoLabel: "Rainy Window",
+        sceneVideoSrc: "/assets/scenes/Rainy-Window.mp4"
+      })
+    });
+    assert(sceneAgain.response.ok, "mpc scene switch should return 200 before radio release regression check");
+    assert(sceneAgain.body.audio.currentSource.id === "scene", "mpc scene switch should re-prime Scene Sound before radio release regression check");
     const stateAfterScene = JSON.parse(await readFile(fakeMpcStatePath, "utf8"));
     await writeFile(fakeMpcStatePath, JSON.stringify({ ...stateAfterScene, observations: [] }));
 
@@ -1467,6 +1537,23 @@ if (getIndex >= 0) {
     assert(previousRadio.body.audio.rememberedSource?.radioStationId === "radio-511", "mpc radio previous should remember the previous station");
     assert(previousRadio.body.playback.albumArtUrl?.startsWith("/api/v1/media/radio-logo?stationId=radio-511"), "mpc radio previous should refresh station logo artwork");
     assert(JSON.parse(await readFile(fakeMpcStatePath, "utf8")).currentFile === radioUri, "mpc radio previous should replace the MPD stream URI");
+
+    const libraryAfterRadioPreset = await requestFrom(baseUrl, "/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({ target: "mpd" })
+    });
+    assert(libraryAfterRadioPreset.response.ok, "mpc Library switch after Radio preset should return 200");
+    assert(libraryAfterRadioPreset.body.audio.currentSource.id === "mpd", "mpc Library switch after Radio preset should restore MPD");
+    assert(libraryAfterRadioPreset.body.audio.rememberedSource?.target === "mpd", "mpc Library switch after Radio preset should remember Library as the last source");
+    assert(libraryAfterRadioPreset.body.audio.rememberedSource?.radioStationId === "radio-511", "mpc Library switch after Radio preset should preserve the previous station bookmark");
+    const bareRadioAfterLibraryPreset = await requestFrom(baseUrl, "/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({ target: "radio" })
+    });
+    assert(bareRadioAfterLibraryPreset.response.ok, "mpc bare Radio switch after Library should return 200");
+    assert(bareRadioAfterLibraryPreset.body.audio.currentSource.id === "radio", "mpc bare Radio switch after Library should restore Radio");
+    assert(bareRadioAfterLibraryPreset.body.audio.currentSource.radioStationId === "radio-511", "mpc bare Radio switch after Library should restore the previous station");
+    assert(bareRadioAfterLibraryPreset.body.audio.rememberedSource?.radioStationId === "radio-511", "mpc bare Radio switch after Library should keep the restored station in memory");
 
     const fastRefresh = await requestFrom(baseUrl, "/api/v1/playback/actions", {
       method: "POST",
@@ -2430,6 +2517,39 @@ async function run() {
     assert(localTrackSwitch.body.audio.rememberedSource?.target === "mpd", "local track switch should remember Library as the last source");
     assert(localTrackSwitch.body.audio.rememberedSource?.localTrackPath === localLibrary.body.tracks[0].path, "local track switch should remember the selected library track");
 
+    const radioAfterLocalTrack = await request("/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({ target: "radio", radioStationId: "radio-2" })
+    });
+    assert(radioAfterLocalTrack.response.ok, "radio switch after local track should return 200");
+    assert(radioAfterLocalTrack.body.audio.rememberedSource?.target === "radio", "radio switch should remain the remembered visible source");
+    assert(radioAfterLocalTrack.body.audio.rememberedSource?.radioStationId === "radio-2", "radio switch should remember the selected station");
+    assert(radioAfterLocalTrack.body.audio.rememberedSource?.localTrackPath === localLibrary.body.tracks[0].path, "radio switch should preserve the last local library track path");
+    const libraryReturnAfterRadio = await request("/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({ target: "mpd" })
+    });
+    assert(libraryReturnAfterRadio.response.ok, "bare Library switch after Radio should return 200");
+    assert(libraryReturnAfterRadio.body.audio.currentSource.id === "mpd", "bare Library switch after Radio should restore MPD");
+    assert(libraryReturnAfterRadio.body.playback.title === localLibrary.body.tracks[0].title, "bare Library switch after Radio should restore the last local track");
+    assert(libraryReturnAfterRadio.body.audio.rememberedSource?.target === "mpd", "bare Library switch after Radio should remember Library as the last source");
+    assert(libraryReturnAfterRadio.body.audio.rememberedSource?.localTrackPath === localLibrary.body.tracks[0].path, "bare Library switch after Radio should remember the restored local track");
+    assert(libraryReturnAfterRadio.body.audio.rememberedSource?.radioStationId === "radio-2", "bare Library switch after Radio should preserve the previous station bookmark");
+    const radioReturnAfterLibrary = await request("/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({ target: "radio" })
+    });
+    assert(radioReturnAfterLibrary.response.ok, "bare Radio switch after Library should return 200");
+    assert(radioReturnAfterLibrary.body.audio.currentSource.id === "radio", "bare Radio switch after Library should restore Radio");
+    assert(radioReturnAfterLibrary.body.audio.currentSource.radioStationId === "radio-2", "bare Radio switch after Library should restore the previous station");
+    assert(radioReturnAfterLibrary.body.audio.rememberedSource?.radioStationId === "radio-2", "bare Radio switch after Library should keep the restored station in memory");
+    const libraryReturnAfterBareRadio = await request("/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({ target: "mpd" })
+    });
+    assert(libraryReturnAfterBareRadio.response.ok, "Library switch after bare Radio restore should return 200");
+    assert(libraryReturnAfterBareRadio.body.playback.title === localLibrary.body.tracks[0].title, "Library switch after bare Radio restore should return to the remembered local track");
+
     const favoriteToggle = await request("/api/v1/playback/actions", {
       method: "POST",
       body: JSON.stringify({ type: "favorite_toggle" })
@@ -2542,6 +2662,16 @@ async function run() {
     assert(playlistPlayback.body.audio.currentSource.id === "mpd", "playlist play should keep MPD as the active source");
     assert(playlistPlayback.body.playback.queueLength === 2, "playlist play should load a mock local queue");
     assert(playlistPlayback.body.playback.title === localLibrary.body.tracks[1].title, "playlist play should start from the reordered first track");
+    assert(playlistPlayback.body.audio.rememberedSource?.localTrackPath === localLibrary.body.tracks[1].path, "playlist play should remember the actual starting track");
+    assert(playlistPlayback.body.audio.rememberedSource?.radioStationId === "radio-2", "playlist play should preserve the last Radio station bookmark");
+    const playlistNext = await request("/api/v1/playback/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "next" })
+    });
+    assert(playlistNext.response.ok, "playlist-backed next should return 200");
+    assert(playlistNext.body.playback.currentTrackIndex === 2, "playlist-backed next should advance within the local queue");
+    assert(playlistNext.body.audio.rememberedSource?.localTrackPath === localLibrary.body.tracks[0].path, "playlist-backed next should remember the advanced local track");
+    assert(playlistNext.body.audio.rememberedSource?.radioStationId === "radio-2", "playlist-backed next should preserve the last Radio station bookmark");
     const playlistPlaySecond = await request("/api/v1/audio/playlist-actions", {
       method: "POST",
       body: JSON.stringify({ type: "play", playlistId: createdPlaylist.id, startIndex: 1 })
@@ -2551,6 +2681,14 @@ async function run() {
     assert(playlistSecondPlayback.response.ok, "system state after playlist startIndex play should return 200");
     assert(playlistSecondPlayback.body.playback.currentTrackIndex === 2, "playlist play startIndex should set the playback queue index");
     assert(playlistSecondPlayback.body.playback.title === localLibrary.body.tracks[0].title, "playlist play startIndex should start from the requested song");
+    assert(playlistSecondPlayback.body.audio.rememberedSource?.localTrackPath === localLibrary.body.tracks[0].path, "playlist play startIndex should remember the requested song");
+    const playlistPrevious = await request("/api/v1/playback/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "previous" })
+    });
+    assert(playlistPrevious.response.ok, "playlist-backed previous should return 200");
+    assert(playlistPrevious.body.playback.currentTrackIndex === 1, "playlist-backed previous should return to the prior local queue entry");
+    assert(playlistPrevious.body.audio.rememberedSource?.localTrackPath === localLibrary.body.tracks[1].path, "playlist-backed previous should remember the previous local track");
     const playlistRemove = await request("/api/v1/audio/playlist-actions", {
       method: "POST",
       body: JSON.stringify({ type: "remove_track", playlistId: createdPlaylist.id, trackPath: localLibrary.body.tracks[1].path })
@@ -2582,6 +2720,7 @@ async function run() {
     });
     assert(defaultLibraryResume.response.ok, "default MPD resume after playlist smoke should return 200");
     assert(defaultLibraryResume.body.playback.title === "Get Lucky (feat. Pharrell Williams)", "default MPD resume should restore the mock library queue");
+    assert(defaultLibraryResume.body.audio.rememberedSource?.localTrackPath === null, "default MPD resume while already in Library should not keep a stale local track path");
 
     const repeatOne = await request("/api/v1/playback/actions", {
       method: "POST",

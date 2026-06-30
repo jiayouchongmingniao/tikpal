@@ -141,9 +141,25 @@ function getRememberedSourceKey(source: RememberedAudioSource | null | undefined
   ].join("|");
 }
 
+function normalizeLibraryTrackPath(value: string | null | undefined) {
+  const normalized = String(value ?? "").trim().replaceAll("\\", "/").replace(/^\/+/, "");
+  return normalized.startsWith("Codex/") ? normalized.slice("Codex/".length) : normalized;
+}
+
+function isRememberedLibraryTrackCurrent(state: TikpalState, localTrackPath: string) {
+  const rememberedPath = normalizeLibraryTrackPath(localTrackPath);
+  if (!rememberedPath) return false;
+  return state.playback.queuePreview.some((entry) => (
+    entry.active && normalizeLibraryTrackPath(entry.id) === rememberedPath
+  ));
+}
+
 function shouldRestoreRememberedSource(state: TikpalState, rememberedSource: RememberedAudioSource | null | undefined) {
   if (!rememberedSource || !isSourceSwitchTarget(rememberedSource.target)) return false;
-  if (rememberedSource.target === "mpd" && rememberedSource.localTrackPath) return true;
+  if (rememberedSource.target === "mpd" && rememberedSource.localTrackPath) {
+    if (state.audio.currentSource.id !== "mpd") return true;
+    return !isRememberedLibraryTrackCurrent(state, rememberedSource.localTrackPath);
+  }
   if (rememberedSource.target === "radio" && rememberedSource.radioStationId) {
     if (state.audio.currentSource.id !== "radio") return true;
     return state.audio.currentSource.radioStationId !== rememberedSource.radioStationId;

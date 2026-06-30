@@ -115,7 +115,9 @@ type RememberedAudioSourceTarget =
 
 interface RememberedAudioSource {
   target: RememberedAudioSourceTarget;
+  // Last restorable local Library track; preserved even while Radio/external source is remembered.
   localTrackPath?: string | null;
+  // Last successful Radio station; preserved while Library/external source is remembered.
   radioStationId?: string | null;
   updatedAt: string | null;
 }
@@ -153,7 +155,7 @@ The local backend boundary should reserve endpoints or adapters for playback con
 - Playback backend: `mock` by default, `mpc` when the Pi runtime sets `TIKPAL_PLAYER_BACKEND=mpc`.
 - Source workspace: visible tabs are Library, Radio, Spotify, AirPlay, Bluetooth, and DLNA; DLNA uses runtime source id `upnp` and means renderer intake, not media-server browsing. Spotify Connect, AirPlay, Bluetooth, and DLNA share one handoff rule across Ambient, Player, Remote, and Pi API state: `armed` waits, `connected` completes; DLNA also treats an armed/open renderer as discoverable instead of waiting for an extra client signal.
 - Appearance: font presets and surface skin presets are persisted locally and applied across ambient, player, and settings surfaces.
-- Room experience: startup offers Focus, Calm, Sleep, and Hi-Fi; Focus/Calm/Sleep open Scene Sound by default on boot, and selecting a music/input source keeps the scene video visible while muting scene audio. Hi-Fi applies `flat`, `warm`, or `vocal` EQ presets when the Pi command hook is configured, centers now-playing artwork and metadata, never enables Scene Sound, and restores `audio.rememberedSource` for the last Library track, Radio station, or external waiting source. Auto Night dims by selected timezone without changing sources.
+- Room experience: startup offers Focus, Calm, Sleep, and Hi-Fi; Focus/Calm/Sleep open Scene Sound by default on boot, and selecting a music/input source keeps the scene video visible while muting scene audio. Hi-Fi applies `flat`, `warm`, or `vocal` EQ presets when the Pi command hook is configured, centers now-playing artwork and metadata, never enables Scene Sound, and restores `audio.rememberedSource` for the last Library track, Radio station, or external waiting source. `localTrackPath` follows the last actual local Library track, and `radioStationId` follows the last successful Radio station, so returning to either source can resume its own last position. Auto Night dims by selected timezone without changing sources.
 - Device brightness: DDC/CI-capable displays are prepared by `deploy/moode/tikpal-ddcci-enable.sh`; `mpc` mode reports `display.transport="ddcci"` when `ddcutil getvcp 10 --brief` can read VCP `0x10`, and the Ambient left edge is the brightness gesture lane.
 - Scene Sound on Pi: the active browser video supplies scene audio, so Chromium should route directly to the physical USB `dmix` device through `TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE`; moOde `_audioout` / Loopback remains for MPD, renderer intakes, and spectrum capture.
 - Pi status reads: in `mpc` mode, combined state, playback status, system status, runtime, audio source, and portable remote reads return the latest in-memory runtime snapshot while slow probes run in a low-frequency background collector.

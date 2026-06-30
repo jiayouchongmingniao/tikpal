@@ -2882,10 +2882,22 @@ function findActiveRadioStationFromList(currentFile, stations) {
   if (!isStreamUri(normalizedCurrentFile)) return null;
 
   const exact = stations.find((station) => station.uri === normalizedCurrentFile);
-  if (exact) return exact;
+  if (exact) {
+    const cached = activeMpcRadioStationCache;
+    if (!cached || cached.id !== exact.id || cached.uri !== normalizedCurrentFile) {
+      activeMpcRadioStationCache = {
+        id: exact.id ?? null,
+        uri: normalizedCurrentFile,
+        station: { ...exact, active: true },
+        updatedAtMs: Date.now()
+      };
+    }
+    return exact;
+  }
 
   const cached = activeMpcRadioStationCache;
   if (!cached || Date.now() - cached.updatedAtMs > 12 * 60 * 60 * 1000) return null;
+  if (cached.uri && cached.uri !== normalizedCurrentFile) return null;
   if (cached.id) {
     const station = stations.find((entry) => entry.id === cached.id);
     if (station) return station;
@@ -3377,12 +3389,8 @@ function normalizeRememberedAudioSource(raw = {}) {
   const target = String(raw?.target ?? "").trim().toLowerCase();
   if (!REMEMBERED_AUDIO_SOURCE_TARGETS.has(target)) return null;
 
-  const localTrackPath = target === "mpd"
-    ? normalizeLocalLibraryStateTrackPath(raw.localTrackPath)
-    : null;
-  const radioStationId = target === "radio" && typeof raw.radioStationId === "string" && raw.radioStationId.trim()
-    ? raw.radioStationId.trim()
-    : null;
+  const localTrackPath = normalizeLocalLibraryStateTrackPath(raw.localTrackPath);
+  const radioStationId = normalizeRememberedRadioStationId(raw.radioStationId);
 
   return {
     target,
@@ -3390,6 +3398,10 @@ function normalizeRememberedAudioSource(raw = {}) {
     ...(radioStationId ? { radioStationId } : { radioStationId: null }),
     updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : null
   };
+}
+
+function normalizeRememberedRadioStationId(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
 function getCachedRememberedAudioSource() {
@@ -3415,32 +3427,76 @@ async function writeRememberedAudioSource(source) {
   return normalized;
 }
 
+function getCachedRememberedLocalTrackPath() {
+  return normalizeLocalLibraryStateTrackPath(getCachedRememberedAudioSource()?.localTrackPath);
+}
+
+function getCachedRememberedRadioStationId() {
+  return normalizeRememberedRadioStationId(getCachedRememberedAudioSource()?.radioStationId);
+}
+
+async function resolveExistingRadioStationId(radioStationId) {
+  const safeRadioStationId = normalizeRememberedRadioStationId(radioStationId);
+  if (!safeRadioStationId) return null;
+  try {
+    const radioStations = await getAvailableRadioStations();
+    return radioStations.some((station) => station.id === safeRadioStationId) ? safeRadioStationId : null;
+  } catch {
+    return null;
+  }
+}
+
+async function resolveCurrentOrRememberedRadioStationId(radioStationId = null) {
+  const cachedCurrentSource = tikpalStateSnapshotCache?.state?.audio?.currentSource;
+  const currentRadioStationId = cachedCurrentSource?.id === "radio"
+    ? cachedCurrentSource.radioStationId
+    : null;
+  const mockRadioStationId = API_MODE !== "mpc" && mockActiveSource === "radio" ? mockActiveRadioStationId : null;
+  return await resolveExistingRadioStationId(radioStationId)
+    ?? await resolveExistingRadioStationId(currentRadioStationId)
+    ?? await resolveExistingRadioStationId(mockRadioStationId)
+    ?? await resolveExistingRadioStationId(getCachedRememberedRadioStationId());
+}
+
 async function rememberAudioSourceSwitch(action, { allowMpcRadio = false } = {}) {
   const target = String(action?.target ?? "").trim().toLowerCase();
   if (!REMEMBERED_AUDIO_SOURCE_TARGETS.has(target)) return null;
   if (target === "radio" && API_MODE === "mpc" && !allowMpcRadio) return null;
 
   if (target === "mpd") {
+    const localTrackPath = normalizeLocalLibraryStateTrackPath(action.localTrackPath)
+      ?? await resolveCurrentLocalLibraryTrackPath();
+    const radioStationId = await resolveCurrentOrRememberedRadioStationId(action.radioStationId);
     return await writeRememberedAudioSource({
       target,
-      localTrackPath: action.localTrackPath
+      localTrackPath,
+      radioStationId
     });
   }
+
+  const localTrackPath = await resolveExistingLocalLibraryTrackPath(action.localTrackPath)
+    ?? await resolveCurrentOrRememberedLocalLibraryTrackPath();
+  const radioStationId = await resolveCurrentOrRememberedRadioStationId(action.radioStationId);
 
   if (target === "radio") {
     return await writeRememberedAudioSource({
       target,
-      radioStationId: action.radioStationId
+      localTrackPath,
+      radioStationId
     });
   }
 
-  return await writeRememberedAudioSource({ target });
+  return await writeRememberedAudioSource({ target, localTrackPath, radioStationId });
 }
 
-async function rememberActiveRadioStationSource(station) {
+async function rememberActiveRadioStationSource(station, options = {}) {
+  const localTrackPath = await resolveExistingLocalLibraryTrackPath(options.localTrackPath)
+    ?? await resolveExistingLocalLibraryTrackPath(getCachedRememberedLocalTrackPath());
+  const radioStationId = await resolveExistingRadioStationId(station?.id);
   return await writeRememberedAudioSource({
     target: "radio",
-    radioStationId: station?.id
+    localTrackPath,
+    radioStationId
   });
 }
 
@@ -3942,6 +3998,55 @@ async function findLocalAudioLibraryTrackByPath(localTrackPath) {
   return tracks.find((track) => normalizeSafeRelativePath(track.path) === safePath) ?? null;
 }
 
+async function resolveExistingLocalLibraryTrackPath(localTrackPath) {
+  const track = await findLocalAudioLibraryTrackByPath(localTrackPath);
+  return normalizeLocalLibraryStateTrackPath(track?.path);
+}
+
+function extractMpcCurrentFile(raw) {
+  const line = String(raw ?? "").split("\n").map((entry) => entry.trim()).find(Boolean) ?? "";
+  if (!line.includes("\t")) return line;
+
+  const columns = line.split("\t").map((entry) => entry.trim()).filter(Boolean);
+  return columns.find((entry) => (
+    isStreamUri(entry)
+    || /\.(aac|aiff|alac|flac|m4a|mp3|ogg|opus|wav|wma)$/i.test(entry)
+  )) ?? columns.at(-1) ?? "";
+}
+
+async function resolveMpcCurrentLocalLibraryTrackPath() {
+  const raw = await runMpc(["--format", "%file%", "current"], { allowFailure: true });
+  const file = extractMpcCurrentFile(raw);
+  if (!file || isStreamUri(file)) return null;
+  return await resolveExistingLocalLibraryTrackPath(file);
+}
+
+async function resolveMockCurrentLocalLibraryTrackPath() {
+  return await resolveExistingLocalLibraryTrackPath(mockSelectedLocalTrack?.path);
+}
+
+async function resolveCurrentLocalLibraryTrackPath() {
+  return API_MODE === "mpc"
+    ? await resolveMpcCurrentLocalLibraryTrackPath()
+    : await resolveMockCurrentLocalLibraryTrackPath();
+}
+
+async function resolveCurrentOrRememberedLocalLibraryTrackPath() {
+  return await resolveCurrentLocalLibraryTrackPath()
+    ?? await resolveExistingLocalLibraryTrackPath(getCachedRememberedLocalTrackPath());
+}
+
+async function rememberCurrentLocalLibraryTrackSource({ allowNull = false } = {}) {
+  const localTrackPath = await resolveCurrentLocalLibraryTrackPath();
+  if (!localTrackPath && !allowNull) return null;
+  const radioStationId = await resolveCurrentOrRememberedRadioStationId();
+  return await writeRememberedAudioSource({
+    target: "mpd",
+    localTrackPath,
+    radioStationId
+  });
+}
+
 function buildMpdLocalLibraryTrackPathCandidates(localTrackPath) {
   const safePath = normalizeLocalLibraryStateTrackPath(localTrackPath);
   if (!safePath) return [];
@@ -4361,6 +4466,7 @@ async function playTrackPaths(trackPaths, startIndex = 0) {
   const safePaths = uniqueSafeTrackPaths(trackPaths);
   if (safePaths.length === 0) throw new Error("playlist has no playable tracks");
   const safeStartIndex = Math.max(0, Math.min(safePaths.length - 1, Number.isInteger(Number(startIndex)) ? Number(startIndex) : 0));
+  const selectedTrackPath = safePaths[safeStartIndex];
   await enforceConnectionGate("mpd");
   if (API_MODE === "mpc") {
     await withMpcMutationLock(async () => {
@@ -4377,7 +4483,7 @@ async function playTrackPaths(trackPaths, startIndex = 0) {
       }
       await ensureMpcPlaybackStarted(safeStartIndex + 1);
     });
-    return;
+    return selectedTrackPath;
   }
   const trackMap = new Map((await readLocalAudioLibraryTracks()).map((track) => [normalizeSafeRelativePath(track.path), track]));
   const playableTracks = safePaths.map((trackPath) => trackMap.get(trackPath)).filter(Boolean);
@@ -4388,14 +4494,15 @@ async function playTrackPaths(trackPaths, startIndex = 0) {
   playbackState = "playing";
   elapsedSeconds = 0;
   lastTickAt = Date.now();
+  return selectedTrackPath;
 }
 
 async function applyAudioPlaylistAction(action) {
   if (action?.type === "play") {
     const trackPaths = await findPlaylistTrackPaths(action.playlistId);
     if (!trackPaths) throw new Error("playlist not found");
-    await playTrackPaths(trackPaths, action.startIndex);
-    await rememberAudioSourceSwitch({ target: "mpd" });
+    const selectedTrackPath = await playTrackPaths(trackPaths, action.startIndex);
+    await rememberAudioSourceSwitch({ target: "mpd", localTrackPath: selectedTrackPath });
     return;
   }
 
@@ -4801,7 +4908,6 @@ function buildCachedSourceRuntimeState(source, supported, advertisedLabel = null
 }
 
 function buildMinimalMpcAudioSnapshot(currentFile = "") {
-  const cachedSource = getCachedMpcPlaybackSource();
   const cachedRadioSource = tikpalStateSnapshotCache?.state?.audio?.sources?.find((entry) => entry.id === "radio") ?? null;
   const cachedRadioReady = cachedRadioSource?.availability === "available"
     || cachedRadioSource?.controllability === "switchable";
@@ -4816,9 +4922,7 @@ function buildMinimalMpcAudioSnapshot(currentFile = "") {
       ? mockArmedSource
       : radioActive
         ? "radio"
-        : !mockArmedSource && cachedSource === "scene"
-          ? "scene"
-          : "mpd";
+        : "mpd";
 
   return buildAudioState({
     activeSource,
@@ -4866,9 +4970,7 @@ function getCachedMpcPlaybackSource() {
 
 function shouldUseCachedSceneSourceRuntimeStatus(currentFile = "") {
   if (isStreamUri(currentFile)) return false;
-  const cachedSource = getCachedMpcPlaybackSource();
-  return (mockArmedSource === "scene" || cachedSource === "scene")
-    && !COMMAND_HANDOFF_SOURCE_TARGETS.has(mockArmedSource);
+  return mockArmedSource === "scene";
 }
 
 async function getMpcQueuePreview(status) {
@@ -4880,22 +4982,28 @@ async function getMpcQueuePreview(status) {
     "%position%\t%title%\t%artist%\t%album%\t%time%\t%file%"
   ], { allowFailure: true });
 
-  const queue = playlistRaw
+  const playlistLines = playlistRaw
     .split("\n")
-    .filter(Boolean)
-    .map((line, index) => {
-      const [positionRaw, title, artist, album, duration, file] = line.split("\t");
-      const position = Number(positionRaw) + 1;
-      return buildQueueEntrySummary({
-        id: file || `mpd-queue-${position || index + 1}`,
-        position: Number.isFinite(position) ? position : index + 1,
-        title: title?.trim() || trackTitleFromFile(file) || `Track ${index + 1}`,
-        artist: artist?.trim() || "Unknown Artist",
-        album: album?.trim() || albumLabelFromFile(file),
-        durationSeconds: parseDuration(duration),
-        active: (Number.isFinite(position) ? position : index + 1) === status.currentTrackIndex
-      });
+    .filter(Boolean);
+  const firstPosition = playlistLines
+    .map((line) => Number(line.split("\t")[0]))
+    .find((position) => Number.isFinite(position));
+  const positionOffset = firstPosition === 0 ? 1 : 0;
+
+  const queue = playlistLines.map((line, index) => {
+    const [positionRaw, title, artist, album, duration, file] = line.split("\t");
+    const rawPosition = Number(positionRaw);
+    const position = Number.isFinite(rawPosition) ? rawPosition + positionOffset : null;
+    return buildQueueEntrySummary({
+      id: file || `mpd-queue-${position || index + 1}`,
+      position: Number.isFinite(position) ? position : index + 1,
+      title: title?.trim() || trackTitleFromFile(file) || `Track ${index + 1}`,
+      artist: artist?.trim() || "Unknown Artist",
+      album: album?.trim() || albumLabelFromFile(file),
+      durationSeconds: parseDuration(duration),
+      active: (Number.isFinite(position) ? position : index + 1) === status.currentTrackIndex
     });
+  });
 
   if (queue.length === 0) return [];
 
@@ -4995,6 +5103,7 @@ async function applyMpcAirplayPlaybackAction(action) {
     default:
       throw new Error(`Unsupported playback action: ${action.type}`);
   }
+
 }
 
 async function getMpcSnapshot(options = {}) {
@@ -5466,7 +5575,7 @@ async function switchToRadioSource(action = {}, options = {}) {
         cacheActiveMpcRadioStation(targetStation, targetUri);
         await startRadioStreamUri(targetUri, options);
         cacheActiveMpcRadioStation(targetStation, targetUri);
-        await rememberActiveRadioStationSource(targetStation);
+        await rememberActiveRadioStationSource(targetStation, { localTrackPath: action.localTrackPath });
         return;
       } catch (error) {
         lastError = error;
@@ -5702,6 +5811,13 @@ async function applyMpcPlaybackActionUnlocked(action) {
     }
     default:
       throw new Error(`Unsupported playback action: ${action.type}`);
+  }
+
+  if (["next", "previous"].includes(String(action.type))) {
+    const currentSource = getCurrentMpcSourceId();
+    if (!currentSource || currentSource === "mpd") {
+      await rememberCurrentLocalLibraryTrackSource();
+    }
   }
 }
 
@@ -7558,6 +7674,7 @@ async function applyPlaybackAction(action) {
     }
   }
 
+  let shouldRememberLibraryTrack = false;
   switch (action.type) {
     case "play_pause":
       playbackState = playbackState === "playing" ? "paused" : "playing";
@@ -7611,6 +7728,12 @@ async function applyPlaybackAction(action) {
     }
     default:
       throw new Error(`Unsupported playback action: ${action.type}`);
+  }
+  if (mockActiveSource === "mpd" && ["next", "previous"].includes(String(action.type))) {
+    shouldRememberLibraryTrack = true;
+  }
+  if (shouldRememberLibraryTrack) {
+    await rememberCurrentLocalLibraryTrackSource();
   }
 }
 
@@ -7686,13 +7809,21 @@ async function applySystemAction(action) {
 async function applyMockSourceSwitch(action) {
   switch (action.target) {
     case "mpd": {
-      if (action.localTrackPath) {
-        const track = await findLocalAudioLibraryTrackByPath(action.localTrackPath);
+      const requestedLocalTrackPath = normalizeLocalLibraryStateTrackPath(action.localTrackPath);
+      const rememberedSource = getCachedRememberedAudioSource();
+      const shouldRestoreRememberedTrack = mockActiveSource !== "mpd" || rememberedSource?.target !== "mpd";
+      const rememberedLocalTrackPath = requestedLocalTrackPath ?? (shouldRestoreRememberedTrack ? getCachedRememberedLocalTrackPath() : null);
+      if (rememberedLocalTrackPath) {
+        const track = await findLocalAudioLibraryTrackByPath(rememberedLocalTrackPath);
         if (!track) {
-          throw new Error(`Unknown local library track: ${action.localTrackPath}`);
+          if (requestedLocalTrackPath) {
+            throw new Error(`Unknown local library track: ${action.localTrackPath}`);
+          }
+          clearMockLocalQueue();
+        } else {
+          setMockLocalQueue([track], 0);
+          elapsedSeconds = 0;
         }
-        setMockLocalQueue([track], 0);
-        elapsedSeconds = 0;
       } else {
         clearMockLocalQueue();
       }
@@ -7825,8 +7956,22 @@ async function applyMpcSourceSwitchUnlocked(action) {
         await releaseKioskAudioOutputForMpd("mpd");
         await switchToLocalLibraryTrack(action.localTrackPath);
       } else {
+        const currentSource = getCurrentMpcSourceId();
+        const rememberedSource = getCachedRememberedAudioSource();
+        const shouldRestoreRememberedTrack = currentSource !== "mpd" || rememberedSource?.target !== "mpd";
+        const rememberedLocalTrackPath = shouldRestoreRememberedTrack
+          ? getCachedRememberedLocalTrackPath()
+          : null;
         await enforceConnectionGate("mpd");
         await releaseKioskAudioOutputForMpd("mpd");
+        if (rememberedLocalTrackPath) {
+          try {
+            await switchToLocalLibraryTrack(rememberedLocalTrackPath);
+            return;
+          } catch {
+            // Fall back to the default MPD queue when remembered local media was removed.
+          }
+        }
         await switchToMpdSource();
       }
       return;
@@ -7911,15 +8056,26 @@ async function syncRoomSceneSoundForSource(target) {
 
 async function applySourceSwitch(action, { syncSceneSoundState = true, rememberSource = true } = {}) {
   const target = String(action?.target ?? "");
+  const localTrackPathBeforeSwitch = rememberSource && target !== "mpd"
+    ? await resolveCurrentOrRememberedLocalLibraryTrackPath()
+    : null;
+  const radioStationIdBeforeSwitch = rememberSource && !normalizeRememberedRadioStationId(action.radioStationId)
+    ? await resolveCurrentOrRememberedRadioStationId()
+    : null;
+  const switchAction = {
+    ...action,
+    ...(localTrackPathBeforeSwitch ? { localTrackPath: action.localTrackPath ?? localTrackPathBeforeSwitch } : {}),
+    ...(radioStationIdBeforeSwitch ? { radioStationId: radioStationIdBeforeSwitch } : {})
+  };
   const syncSceneBeforeSwitch = syncSceneSoundState && target !== "scene";
   if (syncSceneBeforeSwitch) {
     await syncRoomSceneSoundForSource(target);
   }
 
   if (API_MODE === "mpc") {
-    await applyMpcSourceSwitch(action);
+    await applyMpcSourceSwitch(switchAction);
   } else {
-    await applyMockSourceSwitch(action);
+    await applyMockSourceSwitch(switchAction);
   }
 
   if (syncSceneSoundState && !syncSceneBeforeSwitch) {
@@ -7927,7 +8083,7 @@ async function applySourceSwitch(action, { syncSceneSoundState = true, rememberS
   }
 
   if (rememberSource) {
-    await rememberAudioSourceSwitch(action);
+    await rememberAudioSourceSwitch(switchAction);
   }
 }
 
@@ -8398,7 +8554,7 @@ async function applyRemoteAction(action) {
         radioStationId: action.radioStationId,
         localTrackPath: action.localTrackPath
       });
-      refreshOptions.includeSourceRuntimeStatus = target === "radio" || COMMAND_HANDOFF_SOURCE_TARGETS.has(target);
+      refreshOptions.includeSourceRuntimeStatus = target === "mpd" || target === "radio" || COMMAND_HANDOFF_SOURCE_TARGETS.has(target);
       refreshOptions.includeOutputVolumeStatus = target === "scene" || COMMAND_HANDOFF_SOURCE_TARGETS.has(target);
       break;
     }
@@ -8696,7 +8852,7 @@ const server = http.createServer(async (request, response) => {
       const action = await readJson(request);
       await applySourceSwitch(action);
       sendJson(response, 200, await refreshTikpalStateSnapshotAfterMutation({
-        includeSourceRuntimeStatus: action?.target === "radio" || COMMAND_HANDOFF_SOURCE_TARGETS.has(action?.target),
+        includeSourceRuntimeStatus: action?.target === "mpd" || action?.target === "radio" || COMMAND_HANDOFF_SOURCE_TARGETS.has(action?.target),
         includeOutputVolumeStatus: action?.target === "scene" || COMMAND_HANDOFF_SOURCE_TARGETS.has(action?.target)
       }));
       return;

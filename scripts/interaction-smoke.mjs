@@ -923,6 +923,45 @@ try {
             return next;
           }
 
+          if (mode === "hifiRememberedDifferentLibrary" || mode === "hifiRememberedSameLibrary") {
+            const rememberedTrackPath = "Focus/Lo-fi Ambient/FASSounds - Good Night - Lofi Cozy Chill Music - 02m27s - Lo-fi.mp3";
+            const next = mode === "hifiRememberedSameLibrary"
+              ? withSource(state, "mpd")
+              : withSource(state, "radio", { radioStationId: "radio-500" });
+            next.audio.rememberedSource = {
+              target: "mpd",
+              localTrackPath: rememberedTrackPath,
+              radioStationId: null,
+              updatedAt: "2026-06-30T00:00:00.000Z"
+            };
+            next.playback = {
+              ...next.playback,
+              state: "playing",
+              source: mode === "hifiRememberedSameLibrary" ? "mpd" : "radio",
+              albumArtUrl: mode === "hifiRememberedSameLibrary" ? "/api/v1/media/library-cover?track=smoke" : "/api/v1/media/radio-logo?stationId=radio-500",
+              title: mode === "hifiRememberedSameLibrary" ? "Good Night" : "Tikpal Focus - Radio Paradise Main",
+              artist: mode === "hifiRememberedSameLibrary" ? "FASSounds" : "Internet Radio",
+              album: mode === "hifiRememberedSameLibrary" ? "Lo-fi Ambient" : "Tikpal Focus - Radio Paradise Main",
+              elapsedSeconds: mode === "hifiRememberedSameLibrary" ? 42 : null,
+              durationSeconds: mode === "hifiRememberedSameLibrary" ? 147 : null,
+              currentTrackIndex: mode === "hifiRememberedSameLibrary" ? 1 : 0,
+              queueLength: mode === "hifiRememberedSameLibrary" ? 3 : 0,
+              favorite: false,
+              queuePreview: mode === "hifiRememberedSameLibrary"
+                ? [{
+                    id: "Codex/" + rememberedTrackPath,
+                    position: 1,
+                    title: "Good Night",
+                    artist: "FASSounds",
+                    album: "Lo-fi Ambient",
+                    durationSeconds: 147,
+                    active: true
+                  }]
+                : []
+            };
+            return next;
+          }
+
           if (mode === "singleLoopScene") {
             const next = withSource(state, "scene");
             next.runtime = {
@@ -1380,6 +1419,157 @@ try {
           delete window.__tikpalRememberedRadioOriginalFetch;
         }
         window.__tikpalRememberedRadioRequests = [];
+        window.__tikpalSmokeStatePatchMode = "";
+        return true;
+      })()
+    `
+  );
+  await postExperienceAction(client, { type: "set_mode", mode: "focus" });
+  await navigate(client, APP_URL);
+  const differentLibraryPatchVersion = await setStatePatchMode(client, "hifiRememberedDifferentLibrary");
+  await waitForStatePatchRefresh(client, differentLibraryPatchVersion, "Hi-Fi different remembered Library fixture refreshes");
+  await evaluate(
+    client,
+    `
+      (() => {
+        window.__tikpalRememberedLibraryRequests = [];
+        window.__tikpalRememberedLibraryOriginalFetch = window.fetch.bind(window);
+        window.fetch = async (input, init) => {
+          const rawUrl = typeof input === 'string' ? input : input instanceof Request ? input.url : String(input);
+          const pathname = new URL(rawUrl, window.location.href).pathname;
+          if (pathname === '/api/v1/audio/source') {
+            const body = JSON.parse(String(init?.body ?? '{}'));
+            window.__tikpalRememberedLibraryRequests.push(body);
+            if (body.target === 'mpd') {
+              const response = await window.__tikpalRememberedLibraryOriginalFetch('/api/v1/system/state');
+              const state = await response.json();
+              const next = JSON.parse(JSON.stringify(state));
+              next.audio.sources = next.audio.sources.map((source) => ({
+                ...source,
+                active: source.id === 'mpd',
+                armed: false,
+                connectionState: source.id === 'mpd' ? 'idle' : source.connectionState,
+                connectedLabel: null
+              }));
+              next.audio.currentSource = next.audio.sources.find((source) => source.id === 'mpd') ?? next.audio.currentSource;
+              next.audio.rememberedSource = {
+                target: 'mpd',
+                localTrackPath: body.localTrackPath ?? null,
+                radioStationId: null,
+                updatedAt: new Date().toISOString()
+              };
+              next.playback = {
+                ...next.playback,
+                state: 'playing',
+                source: 'mpd',
+                albumArtUrl: '/api/v1/media/library-cover?track=smoke',
+                title: 'Good Night',
+                artist: 'FASSounds',
+                album: 'Lo-fi Ambient',
+                elapsedSeconds: 0,
+                durationSeconds: 147,
+                currentTrackIndex: 1,
+                queueLength: 3,
+                queuePreview: [{
+                  id: 'Codex/' + String(body.localTrackPath ?? ''),
+                  position: 1,
+                  title: 'Good Night',
+                  artist: 'FASSounds',
+                  album: 'Lo-fi Ambient',
+                  durationSeconds: 147,
+                  active: true
+                }]
+              };
+              return new Response(JSON.stringify(next), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' }
+              });
+            }
+          }
+          return window.__tikpalRememberedLibraryOriginalFetch(input, init);
+        };
+        return true;
+      })()
+    `
+  );
+  await evaluate(
+    client,
+    `
+      (() => {
+        const button = [...document.querySelectorAll('.ambient-room-mode-buttons button')]
+          .find((node) => node.textContent?.trim() === 'Hi-Fi');
+        button?.click();
+        return Boolean(button);
+      })()
+    `
+  );
+  await expectEventually(
+    client,
+    "(window.__tikpalRememberedLibraryRequests ?? []).some((body) => body.target === 'mpd' && body.localTrackPath === 'Focus/Lo-fi Ambient/FASSounds - Good Night - Lofi Cozy Chill Music - 02m27s - Lo-fi.mp3')",
+    "Hi-Fi entry restores the remembered Library track when another source is current",
+    45,
+    150
+  );
+  await evaluate(
+    client,
+    `
+      (() => {
+        if (window.__tikpalRememberedLibraryOriginalFetch) {
+          window.fetch = window.__tikpalRememberedLibraryOriginalFetch;
+          delete window.__tikpalRememberedLibraryOriginalFetch;
+        }
+        return true;
+      })()
+    `
+  );
+  await postExperienceAction(client, { type: "set_mode", mode: "focus" });
+  await navigate(client, APP_URL);
+  const sameLibraryPatchVersion = await setStatePatchMode(client, "hifiRememberedSameLibrary");
+  await waitForStatePatchRefresh(client, sameLibraryPatchVersion, "Hi-Fi same remembered Library fixture refreshes");
+  await evaluate(
+    client,
+    `
+      (() => {
+        window.__tikpalRememberedLibraryRequests = [];
+        window.__tikpalRememberedLibraryOriginalFetch = window.fetch.bind(window);
+        window.fetch = async (input, init) => {
+          const rawUrl = typeof input === 'string' ? input : input instanceof Request ? input.url : String(input);
+          const pathname = new URL(rawUrl, window.location.href).pathname;
+          if (pathname === '/api/v1/audio/source') {
+            window.__tikpalRememberedLibraryRequests.push(JSON.parse(String(init?.body ?? '{}')));
+          }
+          return window.__tikpalRememberedLibraryOriginalFetch(input, init);
+        };
+        return true;
+      })()
+    `
+  );
+  await evaluate(
+    client,
+    `
+      (() => {
+        const button = [...document.querySelectorAll('.ambient-room-mode-buttons button')]
+          .find((node) => node.textContent?.trim() === 'Hi-Fi');
+        button?.click();
+        return Boolean(button);
+      })()
+    `
+  );
+  await wait(1800);
+  await expect(
+    client,
+    "!(window.__tikpalRememberedLibraryRequests ?? []).some((body) => body.target === 'mpd')",
+    "Hi-Fi entry does not repeat Library restore when the remembered track is already current"
+  );
+  await evaluate(
+    client,
+    `
+      (() => {
+        if (window.__tikpalRememberedLibraryOriginalFetch) {
+          window.fetch = window.__tikpalRememberedLibraryOriginalFetch;
+          delete window.__tikpalRememberedLibraryOriginalFetch;
+        }
+        window.__tikpalRememberedLibraryRequests = [];
         window.__tikpalSmokeStatePatchMode = "";
         return true;
       })()
@@ -2721,6 +2911,35 @@ try {
     `
   );
   await expectEventually(client, "document.querySelector('.ambient-screen') !== null && document.querySelector('.quick-menu.is-active') === null", "quick menu returns to Ambient before source selection");
+  await evaluate(
+    client,
+    `
+      (async () => {
+        const headers = { 'Content-Type': 'application/json' };
+        await fetch('/api/v1/audio/source', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ target: 'radio', radioStationId: 'radio-2' })
+        });
+        await fetch('/api/v1/audio/source', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ target: 'mpd' })
+        });
+        await fetch('/api/v1/experience/actions', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ type: 'set_scene_sound', sceneSoundEnabled: true })
+        });
+        return true;
+      })()
+    `
+  );
+  await expectEventuallyEvaluate(
+    client,
+    "Promise.all([fetch('/api/v1/system/state').then((response) => response.json()), fetch('/api/v1/experience/state').then((response) => response.json())]).then(([state, experience]) => state.audio.rememberedSource?.target === 'mpd' && state.audio.rememberedSource?.radioStationId === 'radio-2' && experience.sceneSoundEnabled === true)",
+    "Ambient Radio source selection precondition preserves previous station while back on Library"
+  );
   await click(client, 1280, 280);
   await evaluate(
     client,
@@ -2763,7 +2982,7 @@ try {
   await expect(client, "document.querySelector('.flame-video.is-active') instanceof HTMLVideoElement && document.querySelector('.flame-video.is-active').muted === true", "Ambient Radio source switch mutes scene video before backend switch");
   await expectEventuallyEvaluate(
     client,
-    "Promise.all([fetch('/api/v1/system/state').then((response) => response.json()), fetch('/api/v1/experience/state').then((response) => response.json())]).then(([state, experience]) => state.audio.currentSource.id === 'radio' && state.playback.source === 'radio' && experience.sceneSoundEnabled === false)",
+    "Promise.all([fetch('/api/v1/system/state').then((response) => response.json()), fetch('/api/v1/experience/state').then((response) => response.json())]).then(([state, experience]) => state.audio.currentSource.id === 'radio' && state.audio.currentSource.radioStationId === 'radio-2' && state.playback.source === 'radio' && experience.sceneSoundEnabled === false)",
     "Ambient Radio source selection deactivates scene sound and starts Radio"
   );
   await expectEventually(
