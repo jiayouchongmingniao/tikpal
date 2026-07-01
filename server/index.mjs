@@ -3563,10 +3563,36 @@ async function applyBrightnessSafely(percent) {
 
 async function stopSceneSourceSafely() {
   try {
-    const state = await getTikpalState({ skipExperienceReconcile: true });
-    if (state.audio.currentSource.id === "scene") {
-      await applySourceSwitch({ target: "mpd" }, { rememberSource: false });
+    const state = await collectTikpalStateSnapshot({
+      includeSlowRuntimeStatus: false,
+      includeSourceRuntimeStatus: true,
+      includeOutputVolumeStatus: false,
+      skipExperienceReconcile: true
+    });
+    const sourceIsScene = mockArmedSource === "scene" || state.audio.currentSource.id === "scene";
+    if (!sourceIsScene) return;
+
+    const rememberedSource = getCachedRememberedAudioSource();
+    const fallbackAction = { target: "mpd" };
+    const restoreAction = rememberedSource?.target
+      ? {
+          target: rememberedSource.target,
+          ...(rememberedSource.radioStationId ? { radioStationId: rememberedSource.radioStationId } : {}),
+          ...(rememberedSource.localTrackPath ? { localTrackPath: rememberedSource.localTrackPath } : {})
+        }
+      : fallbackAction;
+
+    try {
+      await applySourceSwitch(restoreAction, { rememberSource: false });
+    } catch {
+      if (restoreAction.target !== fallbackAction.target) {
+        await applySourceSwitch(fallbackAction, { rememberSource: false });
+      }
     }
+    await refreshTikpalStateSnapshotAfterMutation({
+      includeSourceRuntimeStatus: restoreAction.target === "mpd" || restoreAction.target === "radio" || COMMAND_HANDOFF_SOURCE_TARGETS.has(restoreAction.target),
+      includeOutputVolumeStatus: COMMAND_HANDOFF_SOURCE_TARGETS.has(restoreAction.target)
+    });
   } catch {
     // The browser-side video is muted by state; the next playback refresh will reconcile the source.
   }

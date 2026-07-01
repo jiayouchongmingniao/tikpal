@@ -1538,6 +1538,30 @@ if (getIndex >= 0) {
     assert(previousRadio.body.playback.albumArtUrl?.startsWith("/api/v1/media/radio-logo?stationId=radio-511"), "mpc radio previous should refresh station logo artwork");
     assert(JSON.parse(await readFile(fakeMpcStatePath, "utf8")).currentFile === radioUri, "mpc radio previous should replace the MPD stream URI");
 
+    const sceneAfterRadio = await requestFrom(baseUrl, "/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({
+        target: "scene",
+        sceneVideoId: "rainy-window",
+        sceneVideoLabel: "Rainy Window",
+        sceneVideoSrc: "/assets/scenes/Rainy-Window.mp4"
+      })
+    });
+    assert(sceneAfterRadio.response.ok, "mpc scene switch after Radio should return 200");
+    assert(sceneAfterRadio.body.audio.currentSource.id === "scene", "mpc scene switch after Radio should activate Scene Sound");
+    assert(sceneAfterRadio.body.audio.rememberedSource?.target === "radio", "mpc scene switch after Radio should preserve remembered Radio");
+    const sceneSoundOffAfterRadio = await requestFrom(baseUrl, "/api/v1/experience/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "set_scene_sound", sceneSoundEnabled: false })
+    });
+    assert(sceneSoundOffAfterRadio.response.ok, "mpc scene sound off after Radio should return 200");
+    assert(sceneSoundOffAfterRadio.body.sceneSoundEnabled === false, "mpc scene sound off after Radio should persist off");
+    const stateAfterSceneSoundOffRadio = await requestFrom(baseUrl, "/api/v1/system/state");
+    assert(stateAfterSceneSoundOffRadio.body.audio.currentSource.id === "radio", "mpc scene sound off after Radio should restore Radio");
+    assert(stateAfterSceneSoundOffRadio.body.audio.currentSource.radioStationId === "radio-511", "mpc scene sound off after Radio should restore the remembered station");
+    assert(stateAfterSceneSoundOffRadio.body.playback.source === "radio", "mpc scene sound off after Radio should expose Radio playback");
+    assert(stateAfterSceneSoundOffRadio.body.playback.state === "playing", "mpc scene sound off after Radio should not leave playback stopped");
+
     const libraryAfterRadioPreset = await requestFrom(baseUrl, "/api/v1/audio/source", {
       method: "POST",
       body: JSON.stringify({ target: "mpd" })
@@ -2999,6 +3023,30 @@ async function run() {
     assert(radio.body.audio.rememberedSource?.radioStationId === "radio-2", "radio switch should remember the selected station id");
     assert(radio.body.audio.sources.some((source) => source.id === "airplay" && source.armed === false), "radio switch should close airplay intake");
     assert(radio.body.audio.sources.some((source) => source.id === "upnp" && source.armed === false), "radio switch should close dlna intake");
+
+    const sceneAfterRadio = await request("/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({
+        target: "scene",
+        sceneVideoId: "rainy-window",
+        sceneVideoLabel: "Rainy Window",
+        sceneVideoSrc: "/assets/scenes/Rainy-Window.mp4"
+      })
+    });
+    assert(sceneAfterRadio.response.ok, "scene source switch after Radio should return 200");
+    assert(sceneAfterRadio.body.audio.currentSource.id === "scene", "scene source switch after Radio should activate Scene Sound");
+    assert(sceneAfterRadio.body.audio.rememberedSource?.target === "radio", "scene source switch should preserve remembered Radio");
+    const sceneSoundOffAfterRadio = await request("/api/v1/experience/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "set_scene_sound", sceneSoundEnabled: false })
+    });
+    assert(sceneSoundOffAfterRadio.response.ok, "turning scene sound off after Radio should return 200");
+    assert(sceneSoundOffAfterRadio.body.sceneSoundEnabled === false, "turning scene sound off after Radio should persist off");
+    const stateAfterSceneSoundOffRadio = await request("/api/v1/system/state");
+    assert(stateAfterSceneSoundOffRadio.body.audio.currentSource.id === "radio", "turning scene sound off after Radio should restore Radio");
+    assert(stateAfterSceneSoundOffRadio.body.audio.currentSource.radioStationId === "radio-2", "turning scene sound off after Radio should restore the remembered station");
+    assert(stateAfterSceneSoundOffRadio.body.playback.source === "radio", "turning scene sound off after Radio should expose Radio playback");
+    assert(stateAfterSceneSoundOffRadio.body.playback.state === "playing", "turning scene sound off after Radio should not leave playback stopped");
 
     const mpd = await request("/api/v1/audio/source", {
       method: "POST",
