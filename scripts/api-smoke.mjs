@@ -1717,7 +1717,13 @@ if (getIndex >= 0) {
     const rememberedAfterAutoSkip = JSON.parse(await readFile(fakeAudioSourceMemoryStatePath, "utf8"));
     assert(
       rememberedAfterAutoSkip.target === "radio" && rememberedAfterAutoSkip.radioStationId === "radio-511",
-      "mpc radio late stream failure should persist the auto-advanced station as remembered source"
+      `mpc radio late stream failure should persist the auto-advanced station as remembered source: ${JSON.stringify({
+        rememberedAfterAutoSkip,
+        currentSource: autoSkippedDeadStation.body.audio.currentSource,
+        fakeCurrentFile: autoSkippedFakeState.currentFile,
+        fakeFailedStreamUri: autoSkippedFakeState.failedStreamUri,
+        fakeObservations: autoSkippedFakeState.observations?.slice(-10)
+      })}`
     );
 
     const initialBrightness = await requestFrom(baseUrl, "/api/v1/system/state");

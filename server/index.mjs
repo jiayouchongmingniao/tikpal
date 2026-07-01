@@ -19,6 +19,9 @@ const MPD_PORT = process.env.TIKPAL_MPD_PORT ?? "6600";
 const MPC_BIN = process.env.TIKPAL_MPC_BIN ?? "mpc";
 const MPD_DEFAULT_QUEUE_PATH = process.env.TIKPAL_MPD_DEFAULT_QUEUE_PATH ?? "Codex";
 const MPD_STARTUP_VOLUME = Number(process.env.TIKPAL_MPD_STARTUP_VOLUME ?? 30);
+const MPD_RECOVERY_COMMAND = process.env.TIKPAL_MPD_RECOVERY_COMMAND ?? "";
+const MPD_RECOVERY_TIMEOUT_MS = parseEnvPositiveInteger(process.env.TIKPAL_MPD_RECOVERY_TIMEOUT_MS, 20_000);
+const MPD_RECOVERY_SETTLE_MS = parseEnvPositiveInteger(process.env.TIKPAL_MPD_RECOVERY_SETTLE_MS, 2500);
 const STARTUP_SCENE_SOUND_ENABLED = parseEnvBoolean(process.env.TIKPAL_STARTUP_SCENE_SOUND_ENABLED ?? "1");
 const MPD_MUSIC_ROOT = process.env.TIKPAL_MPD_MUSIC_ROOT ?? "/var/lib/mpd/music";
 const APP_VERSION = process.env.TIKPAL_APP_VERSION ?? "0.1.0";
@@ -426,6 +429,7 @@ let tikpalStateSnapshotRefreshPromise = null;
 let tikpalStateSnapshotRefreshTimer = null;
 let tikpalStateSnapshotRefreshQueued = false;
 let tikpalStateSnapshotGeneration = 0;
+let mpdRecoveryPromise = null;
 let mpcRadioCatalogReadyCache = false;
 let mpcRadioCatalogCountCache = 0;
 let activeMpcRadioStationCache = null;
@@ -1656,6 +1660,7 @@ async function runCommand(command, options = {}) {
   try {
     const { stdout } = await execFileAsync("sh", ["-lc", command], {
       timeout: options.timeout ?? 3500,
+      killSignal: "SIGKILL",
       maxBuffer: 1024 * 256
     });
     return stdout.trim();
@@ -1780,17 +1785,28 @@ async function applyHifiEqPreset(presetId) {
 }
 
 async function runMpc(args, options = {}) {
+  const timeout = options.timeout ?? 3500;
   try {
     const { stdout } = await execFileAsync(MPC_BIN, ["--host", MPD_HOST, "--port", MPD_PORT, ...args], {
-      timeout: options.timeout ?? 3500,
+      timeout,
+      killSignal: "SIGKILL",
       maxBuffer: 1024 * 256
     });
     return stdout.trimEnd();
   } catch (error) {
-    if (options.allowFailure) return "";
+    const stdout = typeof error?.stdout === "string" ? error.stdout.trimEnd() : "";
     const stderr = typeof error?.stderr === "string" ? error.stderr.trim() : "";
-    const message = stderr || (error instanceof Error ? error.message : "mpc command failed");
-    throw new Error(message);
+    if (options.allowFailure) return stdout;
+    const timedOut = error?.killed === true || error?.signal === "SIGKILL" || error?.code === "ETIMEDOUT";
+    const commandLabel = [MPC_BIN, "--host", MPD_HOST, "--port", MPD_PORT, ...args].join(" ");
+    const message = timedOut
+      ? `mpc command timed out after ${timeout}ms: ${commandLabel}`
+      : stderr || (error instanceof Error ? error.message : "mpc command failed");
+    const wrapped = new Error(message);
+    wrapped.stdout = stdout;
+    wrapped.stderr = stderr;
+    wrapped.timedOut = timedOut;
+    throw wrapped;
   }
 }
 
@@ -5172,6 +5188,13 @@ async function getMpcSnapshot(options = {}) {
   const activeRadioStation = playbackSource === "radio"
     ? await findRadioStationByUri(file)
     : null;
+  if (playbackSource === "radio"
+    && status.state === "playing"
+    && activeRadioStation?.id
+    && !getMpcRadioStreamFailure(statusRaw)
+    && getCachedRememberedAudioSource()?.radioStationId !== activeRadioStation.id) {
+    await rememberActiveRadioStationSource(activeRadioStation);
+  }
   const bluetoothPlaybackMetadata = includeSlowRuntimeStatus && playbackSource === "bluetooth"
     ? await readBluetoothPlaybackMetadata()
     : null;
@@ -5404,12 +5427,16 @@ function getMpcRadioStreamFailure(statusRaw) {
   return null;
 }
 
+function hasMpcAlsaOutputFailure(statusRaw) {
+  return /Failed to open ALSA device|Device or resource busy/i.test(String(statusRaw ?? ""));
+}
+
 function getMpcRadioStartFailure(statusRaw, status, { requirePlaying = false } = {}) {
   const streamFailure = getMpcRadioStreamFailure(statusRaw);
   if (streamFailure) {
     return streamFailure;
   }
-  if (/Failed to open ALSA device|Device or resource busy/i.test(statusRaw)) {
+  if (hasMpcAlsaOutputFailure(statusRaw)) {
     return "MPD radio stream reported an ALSA output failure";
   }
   if (/ERROR:/i.test(statusRaw)) {
@@ -5425,13 +5452,30 @@ function getMpcRadioStartFailure(statusRaw, status, { requirePlaying = false } =
 }
 
 async function readMpcRadioStartStatus(options = {}) {
-  const statusRaw = await runMpc(["status"], { allowFailure: true });
-  const status = parseMpcStatus(statusRaw);
-  return {
-    raw: statusRaw,
-    status,
-    failure: getMpcRadioStartFailure(statusRaw, status, options)
-  };
+  try {
+    const statusRaw = await runMpc(["status"]);
+    const status = parseMpcStatus(statusRaw);
+    return {
+      raw: statusRaw,
+      status,
+      failure: getMpcRadioStartFailure(statusRaw, status, options),
+      error: null
+    };
+  } catch (error) {
+    const raw = typeof error?.stdout === "string" && error.stdout.trim()
+      ? error.stdout.trimEnd()
+      : typeof error?.stderr === "string" && error.stderr.trim()
+        ? error.stderr.trim()
+        : "";
+    const status = parseMpcStatus(raw);
+    return {
+      raw,
+      status,
+      failure: getMpcRadioStartFailure(raw, status, options)
+        ?? (error instanceof Error ? error.message : "mpc status failed"),
+      error: raw ? null : error
+    };
+  }
 }
 
 async function nudgeMpcPlaybackStart(position = null) {
@@ -5441,7 +5485,34 @@ async function nudgeMpcPlaybackStart(position = null) {
 
 function isLikelyRadioStationFailure(error) {
   const message = String(error?.message ?? error ?? "");
-  return /failed to decode|could not connect|connection timed out|timeout was reached|failed to connect|did not report playing|entered stopped/i.test(message);
+  return /failed to decode|could not connect|connection timed out|timeout was reached|failed to connect|did not report playing|entered stopped|mpc command timed out|Timeout while connecting/i.test(message);
+}
+
+function isMpcCommunicationFailure(error) {
+  const message = String(error?.message ?? error ?? "");
+  return /mpc command timed out|Timeout while connecting|Connection refused|No route to host|Connection reset by peer|Broken pipe/i.test(message);
+}
+
+async function recoverMpdService(reason) {
+  if (!MPD_RECOVERY_COMMAND.trim()) return false;
+  if (mpdRecoveryPromise) return await mpdRecoveryPromise;
+
+  const reasonLabel = reason instanceof Error ? reason.message : String(reason ?? "unknown");
+  mpdRecoveryPromise = (async () => {
+    console.warn(`tikpal-api recovering MPD after mpc communication failure: ${reasonLabel}`);
+    await runCommand(MPD_RECOVERY_COMMAND, { allowFailure: false, timeout: MPD_RECOVERY_TIMEOUT_MS });
+    await wait(MPD_RECOVERY_SETTLE_MS);
+    return true;
+  })()
+    .catch((error) => {
+      console.warn(`tikpal-api MPD recovery failed: ${error instanceof Error ? error.message : "unknown error"}`);
+      return false;
+    })
+    .finally(() => {
+      mpdRecoveryPromise = null;
+    });
+
+  return await mpdRecoveryPromise;
 }
 
 function getFastRadioSwitchOptions() {
@@ -5470,8 +5541,14 @@ async function verifyMpcRadioStartWindow(options = {}) {
     }
 
     lastFailure = statusSnapshot.failure;
+    if (statusSnapshot.error && isMpcCommunicationFailure(statusSnapshot.error)) {
+      throw statusSnapshot.error;
+    }
     if (getMpcRadioStreamFailure(statusSnapshot.raw)) {
       throw new Error(lastFailure ?? "MPD radio stream could not connect");
+    }
+    if (hasMpcAlsaOutputFailure(statusSnapshot.raw)) {
+      await releaseKioskAudioOutputForMpd("radio");
     }
     await nudgeMpcPlaybackStart();
   }
@@ -5490,11 +5567,17 @@ async function recoverLateMpcRadioStartFailure(options = {}) {
     if (!statusSnapshot.failure) return;
 
     lastFailure = statusSnapshot.failure;
+    if (statusSnapshot.error && isMpcCommunicationFailure(statusSnapshot.error)) {
+      throw statusSnapshot.error;
+    }
     if (getMpcRadioStreamFailure(statusSnapshot.raw)) {
       break;
     }
     if (recovery >= recoveryPlays) break;
 
+    if (hasMpcAlsaOutputFailure(statusSnapshot.raw)) {
+      await releaseKioskAudioOutputForMpd("radio");
+    }
     await nudgeMpcPlaybackStart();
     await verifyMpcRadioStartWindow(options);
   }
@@ -5549,6 +5632,9 @@ function scheduleMpcRadioLatePlayNudges(targetUri) {
         };
         if (!statusSnapshot.failure) return;
 
+        if (hasMpcAlsaOutputFailure(statusRaw)) {
+          await releaseKioskAudioOutputForMpd("radio");
+        }
         await nudgeMpcPlaybackStart();
       })().catch(() => {
         // A delayed nudge is best-effort; the source switch response already carried the real outcome.
@@ -5558,13 +5644,32 @@ function scheduleMpcRadioLatePlayNudges(targetUri) {
   }
 }
 
-async function startRadioStreamUri(targetUri, options = {}) {
+async function startRadioStreamUriOnce(targetUri, options = {}) {
   await runMpc(["clear"]);
   await runMpc(["add", targetUri]);
   await restoreMpcRadioVolumeIfMuted();
   await nudgeMpcPlaybackStart();
   await verifyMpcRadioStartWindow(options);
   await recoverLateMpcRadioStartFailure(options);
+}
+
+async function startRadioStreamUri(targetUri, options = {}) {
+  try {
+    await startRadioStreamUriOnce(targetUri, options);
+  } catch (error) {
+    if (options.skipMpdRecovery || !isMpcCommunicationFailure(error)) {
+      throw error;
+    }
+
+    if (!await recoverMpdService(error)) {
+      throw error;
+    }
+
+    await startRadioStreamUriOnce(targetUri, {
+      ...options,
+      skipMpdRecovery: true
+    });
+  }
 }
 
 async function switchToRadioSource(action = {}, options = {}) {
@@ -5679,6 +5784,7 @@ async function switchRadioStationByOffset(offset, options = {}) {
 
     try {
       await switchToRadioSource({ radioStationId: candidateStation.id }, options.switchOptions ?? getFastRadioSwitchOptions());
+      await rememberActiveRadioStationSource(candidateStation);
       return true;
     } catch (error) {
       lastError = error;
