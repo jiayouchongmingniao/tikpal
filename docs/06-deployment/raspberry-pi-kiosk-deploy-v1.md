@@ -387,6 +387,8 @@ curl -fsS http://127.0.0.1:8787/api/v1/audio/sources | jq '.currentSource,.remem
 curl -fsS http://127.0.0.1:4173/api/v1/remote/state | jq '.volume.percent,.source'
 ```
 
+For a Hi-Fi `Not Playing` regression after service restart, verify persisted room mode and remembered source together: when `.tikpal/room-experience-state.json` has `mode:"hifi"`, `tikpal-api` startup must restore `.tikpal/audio-source-memory.json` before Scene Sound or MPD queue priming, and `/api/v1/system/state` should not publish an initial stale `stopped` snapshot while that restore is still running. A remembered Radio source should come back as `audio.currentSource.id == "radio"`, with matching `radioStationId` and `playback.state == "playing"` unless the station has failed and the normal Radio fallback advanced to the next playable station. A remembered Library track may fall back to the default MPD queue if the local library package was replaced and the saved `localTrackPath` no longer exists.
+
 Validate the curated Radio path after importing or editing moOde presets:
 
 ```bash

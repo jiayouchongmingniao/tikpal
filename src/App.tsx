@@ -220,6 +220,7 @@ export default function App() {
   const heartbeatStateRef = useRef<Record<string, unknown>>({});
   const previousRoomModeRef = useRef<RoomMode | null>(null);
   const hifiRestoreKeyRef = useRef<string>("");
+  const hifiInitialRestoreCheckedRef = useRef(false);
   const hifiRestoreInFlightRef = useRef(false);
   const roomExperienceRef = useRef<RoomExperienceState | null>(null);
   const { mode, hudVisible, idleTotalMs, idleRemainingMs, showHud, toggleHud, changeMode, returnAmbient, resetIdleTimer } = useAppMode(readInitialMode());
@@ -493,6 +494,7 @@ export default function App() {
     previousRoomModeRef.current = roomExperience.mode;
     if (roomExperience.mode !== "hifi") {
       hifiRestoreKeyRef.current = "";
+      hifiInitialRestoreCheckedRef.current = false;
       return;
     }
 
@@ -500,10 +502,15 @@ export default function App() {
     if (!rememberedSource) return;
     const restoreKey = getRememberedSourceKey(rememberedSource);
     const enteredHifi = previousMode !== "hifi";
-    if (!enteredHifi || !restoreKey || hifiRestoreKeyRef.current === restoreKey || hifiRestoreInFlightRef.current) return;
-    if (!shouldRestoreRememberedSource(tikpalState, rememberedSource)) return;
+    const shouldCheckInitialRestore = !hifiInitialRestoreCheckedRef.current;
+    if ((!enteredHifi && !shouldCheckInitialRestore) || !restoreKey || hifiRestoreKeyRef.current === restoreKey || hifiRestoreInFlightRef.current) return;
+    if (!shouldRestoreRememberedSource(tikpalState, rememberedSource)) {
+      hifiInitialRestoreCheckedRef.current = true;
+      return;
+    }
 
     hifiRestoreKeyRef.current = restoreKey;
+    hifiInitialRestoreCheckedRef.current = true;
     hifiRestoreInFlightRef.current = true;
     void (async () => {
       try {

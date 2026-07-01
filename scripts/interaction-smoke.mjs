@@ -893,18 +893,20 @@ try {
             return next;
           }
 
-          if (mode === "hifiRememberedDifferentRadio" || mode === "hifiRememberedSameRadio") {
+          if (mode === "hifiRememberedDifferentRadio" || mode === "hifiRememberedSameRadio" || mode === "hifiRememberedRadioPendingMemory") {
             const currentStationId = mode === "hifiRememberedSameRadio" ? "radio-503" : "radio-500";
             const next = withSource(state, "radio", { radioStationId: currentStationId });
             const currentStationLabel = currentStationId === "radio-503"
               ? "Tikpal Focus - KEXP Seattle"
               : "Tikpal Focus - Radio Paradise Main";
-            next.audio.rememberedSource = {
-              target: "radio",
-              localTrackPath: null,
-              radioStationId: "radio-503",
-              updatedAt: "2026-06-30T00:00:00.000Z"
-            };
+            next.audio.rememberedSource = mode === "hifiRememberedRadioPendingMemory"
+              ? null
+              : {
+                  target: "radio",
+                  localTrackPath: null,
+                  radioStationId: "radio-503",
+                  updatedAt: "2026-06-30T00:00:00.000Z"
+                };
             next.playback = {
               ...next.playback,
               state: "playing",
@@ -1367,6 +1369,108 @@ try {
           window.fetch = window.__tikpalRememberedRadioOriginalFetch;
           delete window.__tikpalRememberedRadioOriginalFetch;
         }
+        return true;
+      })()
+    `
+  );
+  await postExperienceAction(client, { type: "set_mode", mode: "focus" });
+  await navigate(client, APP_URL);
+  await expectEventually(
+    client,
+    "document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') === 'focus'",
+    "Focus room mode is active before delayed Hi-Fi remembered station restore"
+  );
+  const pendingRadioPatchVersion = await setStatePatchMode(client, "hifiRememberedRadioPendingMemory");
+  await waitForStatePatchRefresh(client, pendingRadioPatchVersion, "Hi-Fi pending remembered Radio fixture refreshes");
+  await evaluate(
+    client,
+    `
+      (() => {
+        window.__tikpalRememberedRadioRequests = [];
+        window.__tikpalRememberedRadioOriginalFetch = window.fetch.bind(window);
+        window.fetch = async (input, init) => {
+          const rawUrl = typeof input === 'string' ? input : input instanceof Request ? input.url : String(input);
+          const pathname = new URL(rawUrl, window.location.href).pathname;
+          if (pathname === '/api/v1/audio/source') {
+            const body = JSON.parse(String(init?.body ?? '{}'));
+            window.__tikpalRememberedRadioRequests.push(body);
+            if (body.target === 'radio') {
+              const response = await window.__tikpalRememberedRadioOriginalFetch('/api/v1/system/state');
+              const state = await response.json();
+              const next = JSON.parse(JSON.stringify(state));
+              next.audio.sources = next.audio.sources.map((source) => {
+                const patched = {
+                  ...source,
+                  active: source.id === 'radio',
+                  armed: false,
+                  connectionState: source.id === 'radio' ? 'idle' : source.connectionState,
+                  connectedLabel: null
+                };
+                if (source.id === 'radio') {
+                  patched.radioStationId = body.radioStationId ?? null;
+                  patched.secondaryStatus = 'Tikpal Focus - KEXP Seattle active';
+                }
+                return patched;
+              });
+              next.audio.currentSource = next.audio.sources.find((source) => source.id === 'radio') ?? next.audio.currentSource;
+              next.audio.rememberedSource = {
+                target: 'radio',
+                localTrackPath: null,
+                radioStationId: body.radioStationId ?? null,
+                updatedAt: new Date().toISOString()
+              };
+              next.playback = {
+                ...next.playback,
+                state: 'playing',
+                source: 'radio',
+                albumArtUrl: '/api/v1/media/radio-logo?stationId=' + encodeURIComponent(body.radioStationId ?? ''),
+                title: 'Tikpal Focus - KEXP Seattle',
+                artist: 'Internet Radio',
+                album: 'Tikpal Focus - KEXP Seattle'
+              };
+              return new Response(JSON.stringify(next), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' }
+              });
+            }
+          }
+          return window.__tikpalRememberedRadioOriginalFetch(input, init);
+        };
+        return true;
+      })()
+    `
+  );
+  await evaluate(
+    client,
+    `
+      (() => {
+        const button = [...document.querySelectorAll('.ambient-room-mode-buttons button')]
+          .find((node) => node.textContent?.trim() === 'Hi-Fi');
+        button?.click();
+        return Boolean(button);
+      })()
+    `
+  );
+  await wait(350);
+  const delayedRadioPatchVersion = await setStatePatchMode(client, "hifiRememberedDifferentRadio");
+  await waitForStatePatchRefresh(client, delayedRadioPatchVersion, "Hi-Fi delayed remembered Radio fixture refreshes");
+  await expectEventually(
+    client,
+    "(window.__tikpalRememberedRadioRequests ?? []).some((body) => body.target === 'radio' && body.radioStationId === 'radio-503')",
+    "Hi-Fi initial load restores Radio when rememberedSource arrives after the Hi-Fi edge",
+    45,
+    150
+  );
+  await evaluate(
+    client,
+    `
+      (() => {
+        if (window.__tikpalRememberedRadioOriginalFetch) {
+          window.fetch = window.__tikpalRememberedRadioOriginalFetch;
+          delete window.__tikpalRememberedRadioOriginalFetch;
+        }
+        window.__tikpalRememberedRadioRequests = [];
+        window.__tikpalSmokeStatePatchMode = "";
         return true;
       })()
     `

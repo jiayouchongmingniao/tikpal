@@ -429,6 +429,7 @@ let tikpalStateSnapshotRefreshPromise = null;
 let tikpalStateSnapshotRefreshTimer = null;
 let tikpalStateSnapshotRefreshQueued = false;
 let tikpalStateSnapshotGeneration = 0;
+let startupPlaybackPolicyPromise = null;
 let mpdRecoveryPromise = null;
 let mpcRadioCatalogReadyCache = false;
 let mpcRadioCatalogCountCache = 0;
@@ -3451,6 +3452,16 @@ function getCachedRememberedRadioStationId() {
   return normalizeRememberedRadioStationId(getCachedRememberedAudioSource()?.radioStationId);
 }
 
+function buildRememberedSourceSwitchAction() {
+  const rememberedSource = getCachedRememberedAudioSource();
+  if (!rememberedSource?.target) return null;
+  return {
+    target: rememberedSource.target,
+    ...(rememberedSource.radioStationId ? { radioStationId: rememberedSource.radioStationId } : {}),
+    ...(rememberedSource.localTrackPath ? { localTrackPath: rememberedSource.localTrackPath } : {})
+  };
+}
+
 async function resolveExistingRadioStationId(radioStationId) {
   const safeRadioStationId = normalizeRememberedRadioStationId(radioStationId);
   if (!safeRadioStationId) return null;
@@ -3588,15 +3599,8 @@ async function stopSceneSourceSafely() {
     const sourceIsScene = mockArmedSource === "scene" || state.audio.currentSource.id === "scene";
     if (!sourceIsScene) return;
 
-    const rememberedSource = getCachedRememberedAudioSource();
     const fallbackAction = { target: "mpd" };
-    const restoreAction = rememberedSource?.target
-      ? {
-          target: rememberedSource.target,
-          ...(rememberedSource.radioStationId ? { radioStationId: rememberedSource.radioStationId } : {}),
-          ...(rememberedSource.localTrackPath ? { localTrackPath: rememberedSource.localTrackPath } : {})
-        }
-      : fallbackAction;
+    const restoreAction = buildRememberedSourceSwitchAction() ?? fallbackAction;
 
     try {
       await applySourceSwitch(restoreAction, { rememberSource: false });
@@ -6026,8 +6030,63 @@ async function getConnectedStartupExternalSource() {
   return null;
 }
 
+function isRememberedSourceAlreadyPlaying(snapshot, action) {
+  if (snapshot?.playback?.state !== "playing") return false;
+  const currentSource = snapshot?.audio?.currentSource;
+  if (!currentSource || currentSource.id !== action.target) return false;
+
+  if (action.target === "radio" && action.radioStationId) {
+    return currentSource.radioStationId === action.radioStationId;
+  }
+
+  if (action.target === "mpd" && action.localTrackPath) {
+    const rememberedPath = normalizeLocalLibraryStateTrackPath(action.localTrackPath);
+    return Boolean(rememberedPath && snapshot.playback.queuePreview?.some((entry) => (
+      entry.active && normalizeLocalLibraryStateTrackPath(entry.id) === rememberedPath
+    )));
+  }
+
+  return action.target === "mpd";
+}
+
+async function restoreHifiRememberedSourcePlayback() {
+  try {
+    const experience = await readRoomExperienceState();
+    if (experience.mode !== "hifi") return false;
+
+    const restoreAction = buildRememberedSourceSwitchAction();
+    if (!restoreAction) return false;
+
+    const snapshot = await getMpcSnapshot({
+      includeSlowRuntimeStatus: false,
+      includeSourceRuntimeStatus: true,
+      includeOutputVolumeStatus: false
+    });
+    if (isRememberedSourceAlreadyPlaying(snapshot, restoreAction)) return true;
+
+    try {
+      await applySourceSwitch(restoreAction, { rememberSource: false });
+    } catch (error) {
+      if (restoreAction.target !== "mpd" || !restoreAction.localTrackPath) {
+        throw error;
+      }
+      await applySourceSwitch({ target: "mpd" }, { rememberSource: false });
+    }
+
+    await refreshTikpalStateSnapshotAfterMutation({
+      includeSourceRuntimeStatus: restoreAction.target === "mpd" || restoreAction.target === "radio" || COMMAND_HANDOFF_SOURCE_TARGETS.has(restoreAction.target),
+      includeOutputVolumeStatus: COMMAND_HANDOFF_SOURCE_TARGETS.has(restoreAction.target)
+    });
+    return true;
+  } catch (error) {
+    console.warn(`tikpal-api startup hifi restore failed: ${error instanceof Error ? error.message : "unknown error"}`);
+    return false;
+  }
+}
+
 async function applyStartupPlaybackPolicy() {
   if (await getConnectedStartupExternalSource()) return;
+  if (await restoreHifiRememberedSourcePlayback()) return;
   if (await startStartupSceneSoundPlayback()) return;
   await primeMpcPlayback();
 }
@@ -6295,11 +6354,24 @@ async function refreshTikpalStateSnapshotAfterMutation(options = {}) {
   });
 }
 
+async function shouldWaitForStartupPlaybackState() {
+  if (!startupPlaybackPolicyPromise || tikpalStateSnapshotCache) return false;
+  try {
+    const experience = await readRoomExperienceState();
+    return experience.mode === "hifi" && Boolean(buildRememberedSourceSwitchAction());
+  } catch {
+    return false;
+  }
+}
+
 async function getTikpalState(options = {}) {
   if (API_MODE !== "mpc") {
     return await collectTikpalStateSnapshot(options);
   }
 
+  if (await shouldWaitForStartupPlaybackState()) {
+    await startupPlaybackPolicyPromise;
+  }
   void requestTikpalStateSnapshotRefresh();
   return await refreshAirplayPlaybackMetadataForState(readCachedTikpalState(), {
     force: options.forceFreshAirplayMetadata === true
@@ -9021,8 +9093,10 @@ const server = http.createServer(async (request, response) => {
 server.listen(PORT, HOST, () => {
   console.log(`tikpal-api ${API_MODE} listening on http://${HOST}:${PORT}`);
   if (API_MODE === "mpc") {
-    void applyStartupPlaybackPolicy().finally(() => {
+    startupPlaybackPolicyPromise = applyStartupPlaybackPolicy().finally(() => {
+      startupPlaybackPolicyPromise = null;
       startTikpalStateSnapshotCollector();
     });
+    void startupPlaybackPolicyPromise;
   }
 });
