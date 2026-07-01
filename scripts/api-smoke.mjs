@@ -1693,9 +1693,22 @@ if (getIndex >= 0) {
       delayedDeadStation.body.audio.currentSource.secondaryStatus === "Tikpal Focus - Dead Link active",
       "mpc radio delayed dead stream should initially keep the selected station label"
     );
-    await wait(650);
-    const autoSkippedDeadStation = await requestFrom(baseUrl, "/api/v1/system/state");
-    const autoSkippedFakeState = JSON.parse(await readFile(fakeMpcStatePath, "utf8"));
+    let autoSkippedDeadStation = null;
+    let autoSkippedFakeState = null;
+    let rememberedAfterAutoSkip = null;
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      await wait(200);
+      autoSkippedDeadStation = await requestFrom(baseUrl, "/api/v1/system/state");
+      autoSkippedFakeState = JSON.parse(await readFile(fakeMpcStatePath, "utf8"));
+      rememberedAfterAutoSkip = JSON.parse(await readFile(fakeAudioSourceMemoryStatePath, "utf8"));
+      if (
+        autoSkippedDeadStation.body.audio.currentSource.radioStationId === "radio-511"
+        && autoSkippedFakeState.currentFile === radioUri
+        && rememberedAfterAutoSkip.radioStationId === "radio-511"
+      ) {
+        break;
+      }
+    }
     assert(
       autoSkippedDeadStation.body.audio.currentSource.secondaryStatus === "Tikpal Calm - FluxFM Chillout active",
       `mpc radio late stream failure should auto-advance to the next station: ${JSON.stringify({
@@ -1714,7 +1727,6 @@ if (getIndex >= 0) {
       "mpc radio late stream failure should refresh station logo artwork with the auto-advanced station"
     );
     assert(autoSkippedFakeState.currentFile === radioUri, "mpc radio late stream failure should replace the failed stream URI");
-    const rememberedAfterAutoSkip = JSON.parse(await readFile(fakeAudioSourceMemoryStatePath, "utf8"));
     assert(
       rememberedAfterAutoSkip.target === "radio" && rememberedAfterAutoSkip.radioStationId === "radio-511",
       `mpc radio late stream failure should persist the auto-advanced station as remembered source: ${JSON.stringify({
