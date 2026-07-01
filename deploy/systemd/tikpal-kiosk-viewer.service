@@ -9,6 +9,7 @@ Type=simple
 User=@SERVICE_USER@
 WorkingDirectory=@APP_DIR@
 EnvironmentFile=-@APP_DIR@/.env.kiosk
+EnvironmentFile=-@APP_DIR@/.env.kiosk.viewer
 Environment=DISPLAY=:0
 Environment=XAUTHORITY=/home/@SERVICE_USER@/.Xauthority
 StandardOutput=journal

@@ -14,7 +14,7 @@ Usage: sudo deploy/systemd/install-systemd-services.sh [options]
 Options:
   --app-dir PATH       App directory on the Pi (default: current repo root)
   --user NAME          Service user (default: current user)
-  --enable-kiosk       Install and enable tikpal-kiosk.service
+  --enable-kiosk       Install and enable tikpal-kiosk.service and watchdog timer
   --restart            Restart installed services after daemon-reload
   -h, --help           Show this help
 USAGE
@@ -85,6 +85,8 @@ if [[ "$INSTALL_KIOSK" -eq 1 ]]; then
   install_unit "$SCRIPT_DIR/tikpal-kiosk.service"
   install_unit "$SCRIPT_DIR/tikpal-kiosk-viewer.service"
   install_unit "$SCRIPT_DIR/tikpal-kiosk-devtools.service"
+  install_unit "$SCRIPT_DIR/tikpal-kiosk-watchdog.service"
+  install_unit "$SCRIPT_DIR/tikpal-kiosk-watchdog.timer"
   if [[ ! -f "$APP_DIR/.env.kiosk" ]]; then
     cp "$APP_DIR/deploy/chromium/env.kiosk.example" "$APP_DIR/.env.kiosk"
     chown "$SERVICE_USER":"$SERVICE_USER" "$APP_DIR/.env.kiosk" || true
@@ -103,7 +105,7 @@ systemctl daemon-reload
 systemctl enable tikpal-api.service tikpal-web.service
 
 if [[ "$INSTALL_KIOSK" -eq 1 ]]; then
-  systemctl enable tikpal-kiosk.service tikpal-kiosk-viewer.service tikpal-kiosk-devtools.service
+  systemctl enable tikpal-kiosk.service tikpal-kiosk-viewer.service tikpal-kiosk-devtools.service tikpal-kiosk-watchdog.timer
   if systemctl is-active --quiet kiosk.service; then
     echo "WARN: legacy kiosk.service is active. Inspect it before enabling Tikpal as the only screen owner." >&2
   fi
@@ -116,6 +118,7 @@ if [[ "$RESTART_SERVICES" -eq 1 ]]; then
     systemctl restart tikpal-kiosk.service
     systemctl restart tikpal-kiosk-viewer.service
     systemctl restart tikpal-kiosk-devtools.service
+    systemctl restart tikpal-kiosk-watchdog.timer
   fi
 fi
 
@@ -129,4 +132,6 @@ if [[ "$INSTALL_KIOSK" -eq 1 ]]; then
   echo "  systemctl status tikpal-kiosk.service"
   echo "  systemctl status tikpal-kiosk-viewer.service"
   echo "  systemctl status tikpal-kiosk-devtools.service"
+  echo "  systemctl status tikpal-kiosk-watchdog.timer"
+  echo "  $APP_DIR/deploy/chromium/tikpal-kiosk-healthcheck.sh --check"
 fi

@@ -19,6 +19,10 @@ const MPD_PORT = process.env.TIKPAL_MPD_PORT ?? "6600";
 const MPC_BIN = process.env.TIKPAL_MPC_BIN ?? "mpc";
 const MPD_DEFAULT_QUEUE_PATH = process.env.TIKPAL_MPD_DEFAULT_QUEUE_PATH ?? "Codex";
 const MPD_STARTUP_VOLUME = Number(process.env.TIKPAL_MPD_STARTUP_VOLUME ?? 30);
+const MPD_RECOVERY_COMMAND = process.env.TIKPAL_MPD_RECOVERY_COMMAND ?? "";
+const MPD_RECOVERY_TIMEOUT_MS = parseEnvPositiveInteger(process.env.TIKPAL_MPD_RECOVERY_TIMEOUT_MS, 20_000);
+const MPD_RECOVERY_SETTLE_MS = parseEnvPositiveInteger(process.env.TIKPAL_MPD_RECOVERY_SETTLE_MS, 2500);
+const STARTUP_SCENE_SOUND_ENABLED = parseEnvBoolean(process.env.TIKPAL_STARTUP_SCENE_SOUND_ENABLED ?? "1");
 const MPD_MUSIC_ROOT = process.env.TIKPAL_MPD_MUSIC_ROOT ?? "/var/lib/mpd/music";
 const APP_VERSION = process.env.TIKPAL_APP_VERSION ?? "0.1.0";
 const REQUESTED_RENDERER = (process.env.TIKPAL_RENDERER ?? "media").toLowerCase();
@@ -37,12 +41,38 @@ const DDCUTIL_READ_TIMEOUT_MS_RAW = Number(process.env.TIKPAL_DDCUTIL_READ_TIMEO
 const DDCUTIL_READ_TIMEOUT_MS = Number.isFinite(DDCUTIL_READ_TIMEOUT_MS_RAW) && DDCUTIL_READ_TIMEOUT_MS_RAW > 0
   ? DDCUTIL_READ_TIMEOUT_MS_RAW
   : 3500;
+const DDCUTIL_UNAVAILABLE_BACKOFF_MS_RAW = Number(process.env.TIKPAL_DDCUTIL_UNAVAILABLE_BACKOFF_MS ?? 1_800_000);
+const DDCUTIL_UNAVAILABLE_BACKOFF_MS = Number.isFinite(DDCUTIL_UNAVAILABLE_BACKOFF_MS_RAW) && DDCUTIL_UNAVAILABLE_BACKOFF_MS_RAW >= DDCUTIL_READ_CACHE_MS
+  ? DDCUTIL_UNAVAILABLE_BACKOFF_MS_RAW
+  : Math.max(1_800_000, DDCUTIL_READ_CACHE_MS);
+const DDCUTIL_SUPPRESS_READ_WARNINGS = parseEnvBoolean(process.env.TIKPAL_DDCUTIL_SUPPRESS_READ_WARNINGS ?? "1");
+const DDCUTIL_SUPPRESS_SYSLOG = parseEnvBoolean(process.env.TIKPAL_DDCUTIL_SUPPRESS_SYSLOG ?? "1");
+const RUNTIME_DRM_MODE_TIMEOUT_MS_RAW = Number(process.env.TIKPAL_RUNTIME_DRM_MODE_TIMEOUT_MS ?? 500);
+const RUNTIME_DRM_MODE_TIMEOUT_MS = Number.isFinite(RUNTIME_DRM_MODE_TIMEOUT_MS_RAW) && RUNTIME_DRM_MODE_TIMEOUT_MS_RAW > 0
+  ? RUNTIME_DRM_MODE_TIMEOUT_MS_RAW
+  : 500;
 const FFPROBE_BIN = process.env.TIKPAL_FFPROBE_BIN ?? "ffprobe";
 const FFMPEG_BIN = process.env.TIKPAL_FFMPEG_BIN ?? "ffmpeg";
 const RADIO_ACTIVATE_COMMAND = process.env.TIKPAL_RADIO_ACTIVATE_COMMAND ?? "";
 const RADIO_DEFAULT_URI = process.env.TIKPAL_RADIO_DEFAULT_URI ?? "";
 const RADIO_LABEL = process.env.TIKPAL_RADIO_LABEL ?? "Last Station";
-const RADIO_PRESET_LIMIT = Number(process.env.TIKPAL_RADIO_PRESET_LIMIT ?? 250);
+const SQLITE_BIN = process.env.TIKPAL_SQLITE_BIN ?? "sqlite3";
+const RADIO_LOGO_DIR = resolve(process.env.TIKPAL_RADIO_LOGO_DIR ?? "/var/local/www/imagesw/radio-logos");
+const RADIO_VOLUME_DEFAULT_PERCENT_RAW = Number(process.env.TIKPAL_RADIO_VOLUME_DEFAULT_PERCENT ?? 35);
+const RADIO_VOLUME_DEFAULT_PERCENT = Number.isFinite(RADIO_VOLUME_DEFAULT_PERCENT_RAW)
+  ? Math.max(1, Math.min(100, Math.round(RADIO_VOLUME_DEFAULT_PERCENT_RAW)))
+  : 35;
+const RADIO_SWITCH_RETRY_DELAYS_MS = parseEnvIntegerList(process.env.TIKPAL_RADIO_SWITCH_RETRY_DELAYS_MS, [250, 1000, 2000]);
+const RADIO_START_VERIFY_WINDOW_MS = parseEnvPositiveInteger(process.env.TIKPAL_RADIO_START_VERIFY_WINDOW_MS, 5000);
+const RADIO_START_VERIFY_POLL_MS = parseEnvPositiveInteger(process.env.TIKPAL_RADIO_START_VERIFY_POLL_MS, 500);
+const RADIO_POST_START_SETTLE_MS = parseEnvPositiveInteger(process.env.TIKPAL_RADIO_POST_START_SETTLE_MS, 2000);
+const RADIO_POST_START_RECOVERY_PLAYS = parseEnvPositiveInteger(process.env.TIKPAL_RADIO_POST_START_RECOVERY_PLAYS, 3);
+const RADIO_LATE_PLAY_NUDGE_DELAYS_MS = parseEnvIntegerList(process.env.TIKPAL_RADIO_LATE_PLAY_NUDGE_DELAYS_MS, [1500, 3000, 5000, 8000, 12000, 16000]);
+const RADIO_AUTO_SKIP_VERIFY_WINDOW_MS = parseEnvPositiveInteger(process.env.TIKPAL_RADIO_AUTO_SKIP_VERIFY_WINDOW_MS, 1500);
+const RADIO_AUTO_SKIP_POST_START_SETTLE_MS = parseEnvPositiveInteger(process.env.TIKPAL_RADIO_AUTO_SKIP_POST_START_SETTLE_MS, 500);
+const RADIO_AUTO_SKIP_RETRY_DELAYS_MS = parseEnvIntegerList(process.env.TIKPAL_RADIO_AUTO_SKIP_RETRY_DELAYS_MS, []);
+const KIOSK_AUDIO_RELEASE_COMMAND = process.env.TIKPAL_KIOSK_AUDIO_RELEASE_COMMAND ?? "";
+const KIOSK_AUDIO_RELEASE_SETTLE_MS = parseEnvPositiveInteger(process.env.TIKPAL_KIOSK_AUDIO_RELEASE_SETTLE_MS, 250);
 const AUDIO_READY_COMMAND = process.env.TIKPAL_AUDIO_READY_COMMAND ?? "";
 const AUDIO_ACTIVE_COMMAND = process.env.TIKPAL_AUDIO_ACTIVE_COMMAND ?? "";
 const AUDIO_ACTIVATE_COMMAND = process.env.TIKPAL_AUDIO_ACTIVATE_COMMAND ?? "";
@@ -65,6 +95,12 @@ const AIRPLAY_DISABLE_COMMAND = process.env.TIKPAL_AIRPLAY_DISABLE_COMMAND ?? ""
 const AIRPLAY_LABEL_COMMAND = process.env.TIKPAL_AIRPLAY_LABEL_COMMAND ?? "";
 const AIRPLAY_RECEIVER_ACTIVE_COMMAND = process.env.TIKPAL_AIRPLAY_RECEIVER_ACTIVE_COMMAND ?? "systemctl is-active --quiet shairport-sync.service";
 const AIRPLAY_METADATA_COMMAND = process.env.TIKPAL_AIRPLAY_METADATA_COMMAND ?? "";
+const AIRPLAY_TRANSPORT_AVAILABLE_COMMAND = process.env.TIKPAL_AIRPLAY_TRANSPORT_AVAILABLE_COMMAND ?? "./deploy/moode/tikpal-airplay-transport.sh available";
+const AIRPLAY_PLAY_PAUSE_COMMAND = process.env.TIKPAL_AIRPLAY_PLAY_PAUSE_COMMAND ?? "./deploy/moode/tikpal-airplay-transport.sh play-pause";
+const AIRPLAY_PLAY_COMMAND = process.env.TIKPAL_AIRPLAY_PLAY_COMMAND ?? "./deploy/moode/tikpal-airplay-transport.sh play";
+const AIRPLAY_PAUSE_COMMAND = process.env.TIKPAL_AIRPLAY_PAUSE_COMMAND ?? "./deploy/moode/tikpal-airplay-transport.sh pause";
+const AIRPLAY_NEXT_COMMAND = process.env.TIKPAL_AIRPLAY_NEXT_COMMAND ?? "./deploy/moode/tikpal-airplay-transport.sh next";
+const AIRPLAY_PREVIOUS_COMMAND = process.env.TIKPAL_AIRPLAY_PREVIOUS_COMMAND ?? "./deploy/moode/tikpal-airplay-transport.sh previous";
 const UPNP_READY_COMMAND = process.env.TIKPAL_UPNP_READY_COMMAND ?? "";
 const UPNP_ACTIVE_COMMAND = process.env.TIKPAL_UPNP_ACTIVE_COMMAND ?? "";
 const UPNP_ENABLE_COMMAND = process.env.TIKPAL_UPNP_ENABLE_COMMAND ?? "";
@@ -82,6 +118,22 @@ const STATE_SNAPSHOT_REFRESH_MS_RAW = Number(process.env.TIKPAL_STATE_SNAPSHOT_R
 const STATE_SNAPSHOT_REFRESH_MS = Number.isFinite(STATE_SNAPSHOT_REFRESH_MS_RAW) && STATE_SNAPSHOT_REFRESH_MS_RAW >= 1000
   ? STATE_SNAPSHOT_REFRESH_MS_RAW
   : 3000;
+const KIOSK_HEARTBEAT_STALE_MS_RAW = Number(process.env.TIKPAL_KIOSK_HEARTBEAT_STALE_MS ?? 30_000);
+const KIOSK_HEARTBEAT_STALE_MS = Number.isFinite(KIOSK_HEARTBEAT_STALE_MS_RAW) && KIOSK_HEARTBEAT_STALE_MS_RAW >= 1_000
+  ? KIOSK_HEARTBEAT_STALE_MS_RAW
+  : 30_000;
+const KIOSK_HEARTBEAT_PENDING_STUCK_MS_RAW = Number(process.env.TIKPAL_KIOSK_HEARTBEAT_PENDING_STUCK_MS ?? 45_000);
+const KIOSK_HEARTBEAT_PENDING_STUCK_MS = Number.isFinite(KIOSK_HEARTBEAT_PENDING_STUCK_MS_RAW) && KIOSK_HEARTBEAT_PENDING_STUCK_MS_RAW >= 10_000
+  ? KIOSK_HEARTBEAT_PENDING_STUCK_MS_RAW
+  : 45_000;
+const KIOSK_HEARTBEAT_EVENT_LOOP_LAG_MS_RAW = Number(process.env.TIKPAL_KIOSK_HEARTBEAT_EVENT_LOOP_LAG_MS ?? 5_000);
+const KIOSK_HEARTBEAT_EVENT_LOOP_LAG_MS = Number.isFinite(KIOSK_HEARTBEAT_EVENT_LOOP_LAG_MS_RAW) && KIOSK_HEARTBEAT_EVENT_LOOP_LAG_MS_RAW >= 1_000
+  ? KIOSK_HEARTBEAT_EVENT_LOOP_LAG_MS_RAW
+  : 5_000;
+const AIRPLAY_DIRECT_METADATA_REFRESH_MIN_MS_RAW = Number(process.env.TIKPAL_AIRPLAY_DIRECT_METADATA_REFRESH_MIN_MS ?? 1000);
+const AIRPLAY_DIRECT_METADATA_REFRESH_MIN_MS = Number.isFinite(AIRPLAY_DIRECT_METADATA_REFRESH_MIN_MS_RAW) && AIRPLAY_DIRECT_METADATA_REFRESH_MIN_MS_RAW >= 250
+  ? AIRPLAY_DIRECT_METADATA_REFRESH_MIN_MS_RAW
+  : 1000;
 const RECOGNITION_PROVIDER = (process.env.TIKPAL_RECOGNITION_PROVIDER ?? "").trim().toLowerCase();
 const ACRCLOUD_HOST = process.env.TIKPAL_ACRCLOUD_HOST ?? "";
 const ACRCLOUD_ACCESS_KEY = process.env.TIKPAL_ACRCLOUD_ACCESS_KEY ?? "";
@@ -89,8 +141,28 @@ const ACRCLOUD_ACCESS_SECRET = process.env.TIKPAL_ACRCLOUD_ACCESS_SECRET ?? "";
 const BLUETOOTH_CAPTURE_COMMAND = process.env.TIKPAL_BLUETOOTH_CAPTURE_COMMAND ?? "";
 const AIRPLAY_CAPTURE_COMMAND = process.env.TIKPAL_AIRPLAY_CAPTURE_COMMAND ?? "";
 const AIRPLAY_ARTWORK_ROOT = resolve(process.env.TIKPAL_AIRPLAY_ARTWORK_ROOT ?? "/var/local/www/imagesw/airplay-covers");
+const SCENE_CONTEXT_GEO_URL = (process.env.TIKPAL_SCENE_CONTEXT_GEO_URL ?? "https://ipapi.co/json/").trim();
+const SCENE_CONTEXT_GEO_TIMEOUT_MS_RAW = Number(process.env.TIKPAL_SCENE_CONTEXT_GEO_TIMEOUT_MS ?? 3000);
+const SCENE_CONTEXT_GEO_TIMEOUT_MS = Number.isFinite(SCENE_CONTEXT_GEO_TIMEOUT_MS_RAW) && SCENE_CONTEXT_GEO_TIMEOUT_MS_RAW > 0
+  ? SCENE_CONTEXT_GEO_TIMEOUT_MS_RAW
+  : 3000;
+const SCENE_CONTEXT_GEO_CACHE_MS_RAW = Number(process.env.TIKPAL_SCENE_CONTEXT_GEO_CACHE_MS ?? 3_600_000);
+const SCENE_CONTEXT_GEO_CACHE_MS = Number.isFinite(SCENE_CONTEXT_GEO_CACHE_MS_RAW) && SCENE_CONTEXT_GEO_CACHE_MS_RAW >= 60_000
+  ? SCENE_CONTEXT_GEO_CACHE_MS_RAW
+  : 3_600_000;
+const SCENE_CONTEXT_WEATHER_URL = (process.env.TIKPAL_SCENE_CONTEXT_WEATHER_URL ?? "https://api.open-meteo.com/v1/forecast").trim();
+const SCENE_CONTEXT_WEATHER_TIMEOUT_MS_RAW = Number(process.env.TIKPAL_SCENE_CONTEXT_WEATHER_TIMEOUT_MS ?? 3000);
+const SCENE_CONTEXT_WEATHER_TIMEOUT_MS = Number.isFinite(SCENE_CONTEXT_WEATHER_TIMEOUT_MS_RAW) && SCENE_CONTEXT_WEATHER_TIMEOUT_MS_RAW > 0
+  ? SCENE_CONTEXT_WEATHER_TIMEOUT_MS_RAW
+  : 3000;
+const SCENE_CONTEXT_WEATHER_CACHE_MS_RAW = Number(process.env.TIKPAL_SCENE_CONTEXT_WEATHER_CACHE_MS ?? 900_000);
+const SCENE_CONTEXT_WEATHER_CACHE_MS = Number.isFinite(SCENE_CONTEXT_WEATHER_CACHE_MS_RAW) && SCENE_CONTEXT_WEATHER_CACHE_MS_RAW >= 60_000
+  ? SCENE_CONTEXT_WEATHER_CACHE_MS_RAW
+  : 900_000;
 const BLUETOOTH_CAPTURE_DURATION_SECONDS = Number(process.env.TIKPAL_BLUETOOTH_CAPTURE_DURATION_SECONDS ?? 10);
+const AIRPLAY_CAPTURE_DURATION_SECONDS = Number(process.env.TIKPAL_AIRPLAY_CAPTURE_DURATION_SECONDS ?? 6);
 const BLUETOOTH_RECOGNITION_SETTLE_MS = Number(process.env.TIKPAL_BLUETOOTH_RECOGNITION_SETTLE_MS ?? 4000);
+const AIRPLAY_RECOGNITION_SETTLE_MS = Number(process.env.TIKPAL_AIRPLAY_RECOGNITION_SETTLE_MS ?? 1000);
 const BLUETOOTH_RECOGNITION_RETRY_MS = Number(process.env.TIKPAL_BLUETOOTH_RECOGNITION_RETRY_MS ?? 45000);
 const BLUETOOTH_RECOGNITION_NOT_FOUND_RETRY_MS = Number(process.env.TIKPAL_BLUETOOTH_RECOGNITION_NOT_FOUND_RETRY_MS ?? 30000);
 const MOCK_BLUETOOTH_CONNECT_AFTER_MS = Number(process.env.TIKPAL_MOCK_BLUETOOTH_CONNECT_AFTER_MS ?? 1200);
@@ -117,12 +189,16 @@ const LOCAL_PLAYLIST_INDEX_PATH = resolve(LOCAL_LIBRARY_ROOT, "_metadata", "play
 const LOCAL_PLAYLIST_ROOT = resolve(LOCAL_LIBRARY_ROOT, "_playlists");
 const MUSIC_LIBRARY_STATE_PATH = resolve(process.env.TIKPAL_MUSIC_LIBRARY_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "music-library-state.json"));
 const ROOM_EXPERIENCE_STATE_PATH = resolve(process.env.TIKPAL_ROOM_EXPERIENCE_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "room-experience-state.json"));
+const AUDIO_VOLUME_STATE_PATH = resolve(process.env.TIKPAL_AUDIO_VOLUME_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "audio-volume-state.json"));
+const AUDIO_SOURCE_MEMORY_STATE_PATH = resolve(process.env.TIKPAL_AUDIO_SOURCE_MEMORY_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "audio-source-memory.json"));
 const LOCAL_LIBRARY_COVER_COLUMNS = ["cover_relative_path", "cover_path", "album_art_relative_path", "artwork_relative_path"];
 const LOCAL_LIBRARY_COVER_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp"];
 const PUBLIC_ASSETS_ROOT = resolve(process.env.TIKPAL_PUBLIC_ASSETS_ROOT ?? resolve(process.cwd(), "public", "assets"));
 const PUBLIC_SCENES_ROOT = resolve(PUBLIC_ASSETS_ROOT, "scenes");
 const SCENE_VIDEO_MANIFEST_PATH = resolve(PUBLIC_SCENES_ROOT, "_metadata", "scene_videos.json");
 const AMBIENT_BACKGROUND_VIDEO_EXTENSIONS = new Set([".mp4"]);
+const SCENE_AUDIO_GAIN_MIN_DB = -24;
+const SCENE_AUDIO_GAIN_MAX_DB = 12;
 const PREFERRED_AMBIENT_BACKGROUND_VIDEOS = [];
 const DEFAULT_SCENE_VIDEO = {
   id: "scene-empty",
@@ -136,6 +212,8 @@ const PLAYBACK_MODES = new Set(["sequence", "repeat_one", "shuffle"]);
 const ROOM_MODES = new Set(["focus", "calm", "sleep", "hifi"]);
 const ROOM_SESSION_PHASES = new Set(["idle", "preparing", "active", "windDown"]);
 const REMOTE_SOURCE_TARGETS = new Set(["mpd", "radio", "spotify", "bluetooth", "airplay", "upnp"]);
+const REMEMBERED_AUDIO_SOURCE_TARGETS = new Set(["mpd", "radio", "spotify", "bluetooth", "airplay", "upnp"]);
+const COMMAND_HANDOFF_SOURCE_TARGETS = new Set(["spotify", "bluetooth", "airplay", "upnp"]);
 const REMOTE_ALLOWED_ACTIONS = [
   "playback.play_pause",
   "playback.play",
@@ -161,6 +239,49 @@ const HIFI_EQ_PRESETS = [
   { id: "warm", label: "Warm", intent: "Gentle low-mid lift", hifiVisualPresetId: "waveform" },
   { id: "vocal", label: "Vocal", intent: "Clearer midrange presence", hifiVisualPresetId: "dual-vu" }
 ];
+const RADIO_CATEGORY_ORDER = ["focus", "calm", "sleep", "hifi", "jazz", "classical", "news"];
+const RADIO_CATEGORY_LABELS = {
+  focus: "Focus",
+  calm: "Calm",
+  sleep: "Sleep",
+  hifi: "Hi-Fi",
+  jazz: "Jazz",
+  classical: "Classical",
+  news: "News"
+};
+const RADIO_LOGO_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp"];
+const MOCK_RADIO_LOGO_URL = "data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22120%22%20height%3D%22120%22%3E%3Crect%20width%3D%22120%22%20height%3D%22120%22%20fill%3D%22%231f2937%22%2F%3E%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2238%22%20fill%3D%22%23d6b761%22%2F%3E%3Ctext%20x%3D%2260%22%20y%3D%2268%22%20font-family%3D%22Arial%22%20font-size%3D%2228%22%20font-weight%3D%22700%22%20text-anchor%3D%22middle%22%20fill%3D%22%231f2937%22%3ER%3C%2Ftext%3E%3C%2Fsvg%3E";
+const RADIO_LOGO_ALIASES = new Map([
+  ["Tikpal Focus - Radio Paradise Main", "Radio Paradise - Main Mix.jpg"],
+  ["Tikpal Focus - FIP", "France Inter Paris (FIP).jpg"],
+  ["Tikpal Focus - BBC 6 Music", "BBC Radio 6 music (320K).jpg"],
+  ["Tikpal Focus - KEXP Seattle", "KEXP 90.3 FM Seattle.jpg"],
+  ["Tikpal Focus - NTS Live 1", "NTS Live 1.jpg"],
+  ["Tikpal Focus - Groove Salad", "Soma FM - Groove Salad.jpg"],
+  ["Tikpal Focus - Beat Blender", "Soma FM - Beat Blender.jpg"],
+  ["Tikpal Focus - Naim Radio", "Naim Radio.jpg"],
+  ["Tikpal Calm - FluxFM Chillout", "FluxFM - Chillout Radio.jpg"],
+  ["Tikpal Calm - Hi On Line Lounge", "Hi On Line - Lounge.jpg"],
+  ["Tikpal Sleep - Ambient Sleeping Pill", "Ambient Sleeping Pill.jpg"],
+  ["Tikpal Sleep - Mission Control", "Soma FM - Mission Control.jpg"],
+  ["Tikpal HiFi - Hi On Line Pop FLAC", "Hi On Line - Pop (FLAC).jpg"],
+  ["Tikpal HiFi - Linn Radio", "Linn Radio.jpg"],
+  ["Tikpal HiFi - Linn Classical", "Linn Classical.jpg"],
+  ["Tikpal HiFi - Linn Jazz", "Linn Jazz.jpg"],
+  ["Tikpal HiFi - Naim Classical", "Naim Classical.jpg"],
+  ["Tikpal HiFi - Naim Jazz", "Naim Jazz.jpg"],
+  ["Tikpal Jazz - SmoothJazz Global", "SmoothJazz Global.jpg"],
+  ["Tikpal Jazz - SwissGroove", "SwissGroove.jpg"],
+  ["Tikpal Jazz - France Musique Jazz", "France Musique La Jazz.jpg"],
+  ["Tikpal Jazz - DR P8 Jazz", "DR P8 Jazz (320K).jpg"],
+  ["Tikpal Jazz - Sonic Universe", "Soma FM - Sonic Universe.jpg"],
+  ["Tikpal Classical - WQXR New York", "WQXR New York - Classical Music.jpg"],
+  ["Tikpal Classical - Positivly Baroque", "Positivly Baroque.jpg"],
+  ["Tikpal News - BBC Radio 4", "BBC Radio 4 FM (320K).jpg"],
+  ["Tikpal News - France Culture", "France Culture Live.jpg"],
+  ["Tikpal News - DR P1", "DR P1.jpg"],
+  ["Tikpal News - Radio SRF 4 News", "Radio SRF 4 News.jpg"]
+]);
 const HIFI_EQ_PRESET_IDS = new Set(HIFI_EQ_PRESETS.map((preset) => preset.id));
 const HIFI_VISUAL_PRESETS = new Set(["spectrum-bars", "waveform", "dual-vu"]);
 const DEFAULT_HIFI_EQ_PRESET_ID = "flat";
@@ -230,6 +351,25 @@ const ROOM_MODE_PRESETS = {
 };
 const execFileAsync = promisify(execFile);
 
+function parseEnvBoolean(value) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return ["1", "true", "yes", "on", "enabled"].includes(normalized);
+}
+
+function parseEnvPositiveInteger(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : fallback;
+}
+
+function parseEnvIntegerList(value, fallback) {
+  if (!value) return fallback;
+  const parsed = String(value)
+    .split(",")
+    .map((entry) => parseEnvPositiveInteger(entry.trim(), null))
+    .filter((entry) => Number.isFinite(entry));
+  return parsed.length > 0 ? parsed : fallback;
+}
+
 const tracks = [
   {
     title: "Get Lucky (feat. Pharrell Williams)",
@@ -268,6 +408,7 @@ let mockActiveRadioStationId = "radio-1";
 let mockArmedSource = null;
 let scenePlaybackState = "stopped";
 let currentSceneVideo = { ...DEFAULT_SCENE_VIDEO };
+let kioskHeartbeat = null;
 let mockAudioArmedAt = 0;
 let mockSpotifyArmedAt = 0;
 let mockBluetoothArmedAt = 0;
@@ -282,9 +423,23 @@ const remoteArtworkInFlight = new Map();
 let bluetoothRecognitionSession = buildBluetoothRecognitionSession();
 let displayBrightnessSnapshotCache = null;
 let displayBrightnessRefreshPromise = null;
+let displayBrightnessUnavailableUntilMs = 0;
 let tikpalStateSnapshotCache = null;
 let tikpalStateSnapshotRefreshPromise = null;
 let tikpalStateSnapshotRefreshTimer = null;
+let tikpalStateSnapshotRefreshQueued = false;
+let tikpalStateSnapshotGeneration = 0;
+let mpdRecoveryPromise = null;
+let mpcRadioCatalogReadyCache = false;
+let mpcRadioCatalogCountCache = 0;
+let activeMpcRadioStationCache = null;
+let audioSourceMemoryStateCache = null;
+let airplayDirectMetadataRefreshPromise = null;
+let airplayDirectMetadataRefreshAtMs = 0;
+let sceneContextGeoCache = null;
+let sceneContextGeoRefreshPromise = null;
+let sceneContextWeatherCache = null;
+let sceneContextWeatherRefreshPromise = null;
 
 const system = {
   network: {
@@ -335,8 +490,8 @@ const system = {
   uptime: "2d 4h"
 };
 
-function buildSourceSummary({ id, label, availability, active, controllability, secondaryStatus }) {
-  return {
+function buildSourceSummary({ id, label, availability, active, controllability, secondaryStatus, radioStationId = null }) {
+  const summary = {
     id,
     label,
     kind: id,
@@ -349,9 +504,29 @@ function buildSourceSummary({ id, label, availability, active, controllability, 
     advertisedLabel: null,
     secondaryStatus
   };
+  if (id === "radio") {
+    summary.radioStationId = typeof radioStationId === "string" && radioStationId.trim() ? radioStationId.trim() : null;
+  }
+  return summary;
 }
 
-function buildRadioStationSummary({ id, label, uri, genre, bitrateKbps, codec, secondaryStatus, active }) {
+function buildRadioStationSummary({
+  id,
+  label,
+  uri,
+  genre,
+  bitrateKbps,
+  codec,
+  secondaryStatus,
+  active,
+  category = null,
+  categoryLabel = null,
+  tags = [],
+  broadcaster = null,
+  logoUrl = null,
+  catalogSource = "moode",
+  sortOrder = null
+}) {
   return {
     id,
     label,
@@ -359,6 +534,13 @@ function buildRadioStationSummary({ id, label, uri, genre, bitrateKbps, codec, s
     genre: genre ?? "",
     bitrateKbps: bitrateKbps ?? null,
     codec: codec ?? null,
+    category,
+    categoryLabel,
+    tags,
+    broadcaster,
+    logoUrl,
+    catalogSource,
+    sortOrder,
     secondaryStatus,
     active
   };
@@ -397,6 +579,97 @@ function activateSceneAudio(action = {}) {
 
 function stopSceneAudio() {
   scenePlaybackState = "stopped";
+}
+
+function asPlainObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+function finiteNumber(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function setKioskHeartbeat(payload) {
+  kioskHeartbeat = {
+    receivedAtMs: Date.now(),
+    payload: asPlainObject(payload)
+  };
+  return buildKioskHeartbeatStatus();
+}
+
+function buildKioskHeartbeatStatus(now = Date.now()) {
+  const thresholds = {
+    staleMs: KIOSK_HEARTBEAT_STALE_MS,
+    pendingStuckMs: KIOSK_HEARTBEAT_PENDING_STUCK_MS,
+    eventLoopLagMs: KIOSK_HEARTBEAT_EVENT_LOOP_LAG_MS
+  };
+
+  if (!kioskHeartbeat) {
+    return {
+      ok: true,
+      healthy: false,
+      status: "unseen",
+      ageMs: null,
+      reasons: ["heartbeat-unseen"],
+      thresholds,
+      receivedAt: null,
+      heartbeat: null
+    };
+  }
+
+  const payload = asPlainObject(kioskHeartbeat.payload);
+  const ageMs = now - kioskHeartbeat.receivedAtMs;
+  const reasons = [];
+  if (ageMs > KIOSK_HEARTBEAT_STALE_MS) {
+    reasons.push("heartbeat-stale");
+  }
+
+  const status = asPlainObject(payload.status);
+  const pending = asPlainObject(status.pending);
+  const pendingDurationMs = finiteNumber(pending.durationMs);
+  if (pending.active === true && pendingDurationMs !== null && pendingDurationMs > KIOSK_HEARTBEAT_PENDING_STUCK_MS) {
+    reasons.push(`pending-stuck:${String(pending.kind ?? "unknown")}`);
+  }
+
+  const eventLoop = asPlainObject(payload.eventLoop);
+  const eventLoopLagMs = finiteNumber(eventLoop.lagMs);
+  if (eventLoopLagMs !== null && eventLoopLagMs > KIOSK_HEARTBEAT_EVENT_LOOP_LAG_MS) {
+    reasons.push("event-loop-lag");
+  }
+
+  const playback = asPlainObject(payload.playback);
+  const scene = asPlainObject(payload.scene);
+  const activeSceneVideo = asPlainObject(payload.activeSceneVideo);
+  if (playback.source === "scene" && scene.sceneVideoEnabled === true) {
+    const sceneTransitionActive = activeSceneVideo.transition === "scene"
+      && activeSceneVideo.transitionPhase
+      && activeSceneVideo.transitionPhase !== "idle";
+    if (activeSceneVideo.present === false && !sceneTransitionActive) {
+      reasons.push("scene-video-missing");
+    }
+
+    const sceneVideoHealth = String(activeSceneVideo.health ?? "");
+    if (sceneVideoHealth === "stalled" || sceneVideoHealth === "fallback" || sceneVideoHealth === "error") {
+      reasons.push(`scene-video-${sceneVideoHealth}`);
+    }
+
+    const readyState = finiteNumber(activeSceneVideo.readyState);
+    if (scene.sceneSoundEnabled === true && readyState !== null && readyState < 2) {
+      reasons.push("scene-video-not-ready");
+    }
+  }
+
+  return {
+    ok: true,
+    healthy: reasons.length === 0,
+    status: reasons.length === 0 ? "fresh" : reasons.includes("heartbeat-stale") ? "stale" : "unhealthy",
+    ageMs,
+    reasons,
+    thresholds,
+    receivedAt: new Date(kioskHeartbeat.receivedAtMs).toISOString(),
+    heartbeat: payload
+  };
 }
 
 function clampPercent(value, fallback = 0) {
@@ -451,6 +724,221 @@ function getLocalMinutesForTimeZone(date, timeZone) {
   const hour = Number(parts.find((part) => part.type === "hour")?.value ?? 0) % 24;
   const minute = Number(parts.find((part) => part.type === "minute")?.value ?? 0);
   return hour * 60 + minute;
+}
+
+function getSceneDayPart(hour) {
+  if (hour >= 5 && hour < 12) return "morning";
+  if (hour >= 12 && hour < 17) return "afternoon";
+  if (hour >= 17 && hour < 22) return "evening";
+  return "night";
+}
+
+function normalizeGeoText(value, maxLength = 48) {
+  const text = String(value ?? "").trim().replace(/\s+/g, " ");
+  return text ? text.slice(0, maxLength) : "";
+}
+
+function normalizeCoordinate(value, { min, max }) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < min || numeric > max) return null;
+  return numeric;
+}
+
+function normalizeIpGeoBody(body) {
+  if (!body || body.success === false || body.status === "fail") return null;
+
+  const city = normalizeGeoText(body.city);
+  const region = normalizeGeoText(body.region ?? body.regionName);
+  const country = normalizeGeoText(body.country_name ?? body.country);
+  const countryCode = normalizeGeoText(body.country_code ?? body.countryCode, 8).toUpperCase() || null;
+  const timeZone = normalizeTimeZone(body.timezone ?? body.time_zone);
+  const latitude = normalizeCoordinate(body.latitude ?? body.lat, { min: -90, max: 90 });
+  const longitude = normalizeCoordinate(body.longitude ?? body.lon, { min: -180, max: 180 });
+  const locationLabel = city || region || country || null;
+
+  if (!locationLabel && !countryCode && !timeZone && latitude === null && longitude === null) return null;
+  return {
+    locationLabel,
+    countryCode,
+    timeZone,
+    latitude,
+    longitude
+  };
+}
+
+function getWeatherConditionFromCode(code, precipitation) {
+  if (Number.isFinite(precipitation) && precipitation > 0.1) return "rainy";
+  if (!Number.isFinite(code)) return null;
+  if (code >= 95) return "stormy";
+  if (code >= 71 && code <= 86) return "snowy";
+  if ((code >= 51 && code <= 67) || (code >= 80 && code <= 82)) return "rainy";
+  if (code === 45 || code === 48) return "foggy";
+  if (code >= 1 && code <= 3) return "cloudy";
+  if (code === 0) return "clear";
+  return null;
+}
+
+function getWeatherLabel(condition) {
+  switch (condition) {
+    case "clear":
+      return "Clear";
+    case "cloudy":
+      return "Cloudy";
+    case "foggy":
+      return "Foggy";
+    case "rainy":
+      return "Rainy";
+    case "snowy":
+      return "Snowy";
+    case "stormy":
+      return "Stormy";
+    default:
+      return null;
+  }
+}
+
+function normalizeWeatherBody(body) {
+  const current = body?.current ?? body?.current_weather ?? {};
+  const weatherCode = Number(current.weather_code ?? current.weathercode);
+  const precipitationValues = [
+    current.precipitation,
+    current.rain,
+    current.showers,
+    current.snowfall
+  ].map(Number).filter(Number.isFinite);
+  const precipitation = precipitationValues.reduce((total, value) => total + value, 0);
+  const condition = getWeatherConditionFromCode(weatherCode, precipitation);
+  const label = getWeatherLabel(condition);
+  if (!condition || !label) return null;
+  return {
+    condition,
+    label,
+    weatherCode: Number.isFinite(weatherCode) ? weatherCode : null,
+    precipitation,
+    source: "ip_weather"
+  };
+}
+
+function buildWeatherUrl(latitude, longitude, timeZone) {
+  const url = new URL(SCENE_CONTEXT_WEATHER_URL);
+  url.searchParams.set("latitude", latitude.toFixed(4));
+  url.searchParams.set("longitude", longitude.toFixed(4));
+  url.searchParams.set("current", "weather_code,precipitation,rain,showers,snowfall");
+  url.searchParams.set("timezone", timeZone || "auto");
+  return url.toString();
+}
+
+async function resolveSceneContextGeo() {
+  const now = Date.now();
+  if (sceneContextGeoCache && sceneContextGeoCache.expiresAt > now) {
+    return sceneContextGeoCache.value;
+  }
+  if (sceneContextGeoRefreshPromise) {
+    return sceneContextGeoRefreshPromise;
+  }
+  if (!SCENE_CONTEXT_GEO_URL) {
+    return null;
+  }
+
+  sceneContextGeoRefreshPromise = (async () => {
+    try {
+      const { response, body } = await fetchJsonWithTimeout(SCENE_CONTEXT_GEO_URL, {
+        timeoutMs: SCENE_CONTEXT_GEO_TIMEOUT_MS,
+        headers: {
+          Accept: "application/json",
+          "User-Agent": `Tikpal/${APP_VERSION}`
+        }
+      });
+      const value = response.ok ? normalizeIpGeoBody(body) : null;
+      sceneContextGeoCache = {
+        expiresAt: now + SCENE_CONTEXT_GEO_CACHE_MS,
+        value
+      };
+      return value;
+    } catch {
+      sceneContextGeoCache = {
+        expiresAt: now + Math.min(SCENE_CONTEXT_GEO_CACHE_MS, 600_000),
+        value: null
+      };
+      return null;
+    } finally {
+      sceneContextGeoRefreshPromise = null;
+    }
+  })();
+
+  return sceneContextGeoRefreshPromise;
+}
+
+async function resolveSceneContextWeather(geo, timeZone) {
+  if (!geo || geo.latitude === null || geo.longitude === null || !SCENE_CONTEXT_WEATHER_URL) {
+    return null;
+  }
+
+  const cacheKey = [
+    geo.latitude.toFixed(2),
+    geo.longitude.toFixed(2),
+    timeZone
+  ].join(":");
+  const now = Date.now();
+  if (sceneContextWeatherCache?.key === cacheKey && sceneContextWeatherCache.expiresAt > now) {
+    return sceneContextWeatherCache.value;
+  }
+  if (sceneContextWeatherRefreshPromise?.key === cacheKey) {
+    return sceneContextWeatherRefreshPromise.promise;
+  }
+
+  const promise = (async () => {
+    try {
+      const { response, body } = await fetchJsonWithTimeout(buildWeatherUrl(geo.latitude, geo.longitude, timeZone), {
+        timeoutMs: SCENE_CONTEXT_WEATHER_TIMEOUT_MS,
+        headers: {
+          Accept: "application/json",
+          "User-Agent": `Tikpal/${APP_VERSION}`
+        }
+      });
+      const value = response.ok ? normalizeWeatherBody(body) : null;
+      sceneContextWeatherCache = {
+        key: cacheKey,
+        expiresAt: now + SCENE_CONTEXT_WEATHER_CACHE_MS,
+        value
+      };
+      return value;
+    } catch {
+      sceneContextWeatherCache = {
+        key: cacheKey,
+        expiresAt: now + Math.min(SCENE_CONTEXT_WEATHER_CACHE_MS, 300_000),
+        value: null
+      };
+      return null;
+    } finally {
+      sceneContextWeatherRefreshPromise = null;
+    }
+  })();
+
+  sceneContextWeatherRefreshPromise = { key: cacheKey, promise };
+  return promise;
+}
+
+async function buildSceneContextPayload(searchParams = new URLSearchParams()) {
+  const requestedTimeZone = normalizeTimeZone(searchParams.get("timeZone"));
+  const geo = await resolveSceneContextGeo();
+  const timeZone = geo?.timeZone ?? requestedTimeZone ?? DEFAULT_NIGHT_SCHEDULE.timeZone;
+  const localMinutes = getLocalMinutesForTimeZone(new Date(), timeZone);
+  const localHour = Math.floor(localMinutes / 60);
+  const locationLabel = geo?.locationLabel ?? null;
+  const source = locationLabel ? "ip" : requestedTimeZone ? "timezone" : "fallback";
+  const weather = await resolveSceneContextWeather(geo, timeZone);
+
+  return {
+    timeZone,
+    dayPart: getSceneDayPart(localHour),
+    localHour,
+    locationLabel,
+    countryCode: geo?.countryCode ?? null,
+    weather,
+    source,
+    updatedAt: new Date().toISOString()
+  };
 }
 
 function isWithinNightWindow(date, schedule) {
@@ -711,7 +1199,8 @@ function buildAudioState({ activeSource, armedSource = null, radioReady, radioAc
         ? `${activeRadio?.label ?? RADIO_LABEL} active`
         : radioReady
           ? `Choose from ${radioStations.length || 1} presets`
-          : "No radio route configured"
+          : "No radio route configured",
+      radioStationId: radioActive ? activeRadio?.id ?? null : null
     }),
     buildSourceSummary({
       id: "scene",
@@ -855,7 +1344,8 @@ function buildAudioState({ activeSource, armedSource = null, radioReady, radioAc
       ?? sources.find((source) => source.active)
       ?? sources.find((source) => source.id === armedSource)
       ?? sources[0],
-    sources
+    sources,
+    rememberedSource: getCachedRememberedAudioSource()
   };
 }
 
@@ -1097,32 +1587,53 @@ function getMockRadioStations() {
   return [
     buildRadioStationSummary({
       id: "radio-1",
-      label: "1.FM - Blues Radio",
-      uri: "http://strm112.1.fm/blues_mobile_mp3",
-      genre: "Blues",
-      bitrateKbps: 192,
+      label: "Tikpal Focus - Groove Salad",
+      uri: "http://ice1.somafm.com/groovesalad-128-aac",
+      genre: "Focus, Electronica, Ambient, Down-Tempo",
+      bitrateKbps: 128,
       codec: "MP3",
-      secondaryStatus: "Blues · 192 kbps MP3",
+      category: "focus",
+      categoryLabel: "Focus",
+      tags: ["Electronica", "Ambient", "Down-Tempo"],
+      broadcaster: "Soma FM",
+      logoUrl: MOCK_RADIO_LOGO_URL,
+      catalogSource: "tikpal",
+      sortOrder: 1,
+      secondaryStatus: "Focus · Soma FM · 128 kbps · MP3",
       active: mockActiveSource === "radio" && mockActiveRadioStationId === "radio-1"
     }),
     buildRadioStationSummary({
       id: "radio-2",
-      label: "A.M. Ambient",
+      label: "Tikpal Calm - Radio Paradise Mellow",
       uri: "http://radio.stereoscenic.com/ama-h",
-      genre: "Ambient",
+      genre: "Calm, Rock, Mellow Rock",
       bitrateKbps: 256,
       codec: "MP3",
-      secondaryStatus: "Ambient · 256 kbps MP3",
+      category: "calm",
+      categoryLabel: "Calm",
+      tags: ["Rock", "Mellow Rock"],
+      broadcaster: "Radio Paradise",
+      logoUrl: MOCK_RADIO_LOGO_URL,
+      catalogSource: "tikpal",
+      sortOrder: 2,
+      secondaryStatus: "Calm · Radio Paradise · 256 kbps · MP3",
       active: mockActiveSource === "radio" && mockActiveRadioStationId === "radio-2"
     }),
     buildRadioStationSummary({
       id: "radio-3",
-      label: "6forty Radio",
+      label: "1.FM - Blues Radio",
       uri: "http://radio.6forty.com:8000/6forty",
-      genre: "Alternative",
+      genre: "Blues",
       bitrateKbps: 192,
       codec: "MP3",
-      secondaryStatus: "Alternative · 192 kbps MP3",
+      category: null,
+      categoryLabel: null,
+      tags: ["Blues"],
+      broadcaster: "1.FM",
+      logoUrl: null,
+      catalogSource: "moode",
+      sortOrder: 3,
+      secondaryStatus: "Blues · 1.FM · 192 kbps · MP3",
       active: mockActiveSource === "radio" && mockActiveRadioStationId === "radio-3"
     })
   ];
@@ -1149,6 +1660,7 @@ async function runCommand(command, options = {}) {
   try {
     const { stdout } = await execFileAsync("sh", ["-lc", command], {
       timeout: options.timeout ?? 3500,
+      killSignal: "SIGKILL",
       maxBuffer: 1024 * 256
     });
     return stdout.trim();
@@ -1170,8 +1682,88 @@ async function commandSucceeds(command, options = {}) {
   }
 }
 
+const AIRPLAY_REMOTE_UNAVAILABLE_REASON = "AirPlay remote control is unavailable from this sender";
+
+function buildPlaybackTransportCapabilities(source, options = {}) {
+  const base = {
+    playPause: true,
+    play: true,
+    pause: true,
+    next: true,
+    previous: true,
+    seek: true,
+    reason: null
+  };
+
+  if (source === "airplay") {
+    const available = options.airplayRemoteControlAvailable === true;
+    return {
+      playPause: available,
+      play: available,
+      pause: available,
+      next: available,
+      previous: available,
+      seek: false,
+      reason: available ? null : AIRPLAY_REMOTE_UNAVAILABLE_REASON
+    };
+  }
+
+  if (source === "scene") {
+    return {
+      ...base,
+      next: false,
+      previous: false,
+      seek: false,
+      reason: null
+    };
+  }
+
+  if (source === "radio") {
+    return {
+      ...base,
+      seek: false
+    };
+  }
+
+  if (source === "spotify" || source === "bluetooth" || source === "upnp") {
+    return {
+      playPause: false,
+      play: false,
+      pause: false,
+      next: false,
+      previous: false,
+      seek: false,
+      reason: `${source} transport is controlled by the sender`
+    };
+  }
+
+  return base;
+}
+
+function getCachedAirplayTransportAvailable() {
+  const cachedPlayback = tikpalStateSnapshotCache?.state?.playback;
+  if (cachedPlayback?.source !== "airplay") return null;
+  const capabilities = cachedPlayback.transportCapabilities;
+  if (!capabilities) return null;
+  return capabilities.playPause === true
+    && capabilities.next === true
+    && capabilities.previous === true;
+}
+
+async function readAirplayTransportAvailable(includeSlowRuntimeStatus) {
+  if (!AIRPLAY_TRANSPORT_AVAILABLE_COMMAND.trim()) return false;
+  if (!includeSlowRuntimeStatus) {
+    return getCachedAirplayTransportAvailable() === true;
+  }
+  return await commandSucceeds(AIRPLAY_TRANSPORT_AVAILABLE_COMMAND, { timeout: 2500 });
+}
+
 function shellQuote(value) {
   return `'${String(value).replaceAll("'", "'\\''")}'`;
+}
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function expandHifiEqCommand(command, preset) {
@@ -1193,17 +1785,28 @@ async function applyHifiEqPreset(presetId) {
 }
 
 async function runMpc(args, options = {}) {
+  const timeout = options.timeout ?? 3500;
   try {
     const { stdout } = await execFileAsync(MPC_BIN, ["--host", MPD_HOST, "--port", MPD_PORT, ...args], {
-      timeout: options.timeout ?? 3500,
+      timeout,
+      killSignal: "SIGKILL",
       maxBuffer: 1024 * 256
     });
     return stdout.trimEnd();
   } catch (error) {
-    if (options.allowFailure) return "";
+    const stdout = typeof error?.stdout === "string" ? error.stdout.trimEnd() : "";
     const stderr = typeof error?.stderr === "string" ? error.stderr.trim() : "";
-    const message = stderr || (error instanceof Error ? error.message : "mpc command failed");
-    throw new Error(message);
+    if (options.allowFailure) return stdout;
+    const timedOut = error?.killed === true || error?.signal === "SIGKILL" || error?.code === "ETIMEDOUT";
+    const commandLabel = [MPC_BIN, "--host", MPD_HOST, "--port", MPD_PORT, ...args].join(" ");
+    const message = timedOut
+      ? `mpc command timed out after ${timeout}ms: ${commandLabel}`
+      : stderr || (error instanceof Error ? error.message : "mpc command failed");
+    const wrapped = new Error(message);
+    wrapped.stdout = stdout;
+    wrapped.stderr = stderr;
+    wrapped.timedOut = timedOut;
+    throw wrapped;
   }
 }
 
@@ -1212,6 +1815,7 @@ function parseMpcStatus(statusRaw) {
   const queueMatch = statusRaw.match(/#(\d+)\/(\d+)/);
   const progressMatch = statusRaw.match(/\s([0-9:]+)\/([0-9:]+)\s+\(/);
   const volumeMatch = statusRaw.match(/volume:\s*(\d+)%/);
+  const failedDecodeUri = statusRaw.match(/Failed to decode\s+"([^"]+)"/i)?.[1]?.trim() ?? null;
   const repeat = /repeat:\s*on/i.test(statusRaw);
   const random = /random:\s*on/i.test(statusRaw);
   const single = /single:\s*on/i.test(statusRaw);
@@ -1227,8 +1831,16 @@ function parseMpcStatus(statusRaw) {
     settings: {
       playMode: random ? "shuffle" : repeat && single ? "repeat_one" : "sequence"
     },
-    scanning
+    scanning,
+    failedStreamUri: failedDecodeUri && isStreamUri(failedDecodeUri) ? failedDecodeUri : null
   };
+}
+
+function getEffectiveMpcCurrentFile(currentFile, status) {
+  const normalizedFile = String(currentFile ?? "").trim();
+  if (normalizedFile) return normalizedFile;
+  const failedStreamUri = String(status?.failedStreamUri ?? "").trim();
+  return isStreamUri(failedStreamUri) ? failedStreamUri : "";
 }
 
 let mpcMutationQueue = Promise.resolve();
@@ -1265,6 +1877,21 @@ async function setOutputVolumePercent(percent) {
   }
   const command = OUTPUT_VOLUME_SET_COMMAND.replace(/%VALUE%/g, String(normalized));
   await runCommand(command, { allowFailure: false, timeout: 2500 });
+  if (normalized > 0) {
+    await rememberNonZeroVolumePercent(normalized);
+  }
+}
+
+async function restoreMpcRadioVolumeIfMuted() {
+  const status = parseMpcStatus(await runMpc(["status"], { allowFailure: true }));
+  if (status.volumePercent && status.volumePercent > 0) {
+    await rememberNonZeroVolumePercent(status.volumePercent);
+    return;
+  }
+  if (status.volumePercent !== 0) return;
+  const nextVolume = await getRadioResumeVolumePercent();
+  await runMpc(["volume", String(nextVolume)]);
+  await rememberNonZeroVolumePercent(nextVolume);
 }
 
 function isStreamUri(value) {
@@ -1383,11 +2010,12 @@ function parsePlaybackTimingDiagnostics(metadata) {
     clockStartMs: readMetadataNumber(metadata, ["clockstartms", "clockStartMs", "clock_start_ms"]),
     clockLeadMs: readMetadataNumber(metadata, ["clockleadms", "clockLeadMs", "clock_lead_ms"]),
     effectiveClockStartMs: readMetadataNumber(metadata, ["effectiveclockstartms", "effectiveClockStartMs", "effective_clock_start_ms"]),
-    clockStartReason: normalizeMetadataValue(metadata.clockstartreason ?? metadata.clockStartReason ?? metadata.clock_start_reason) || null
+    clockStartReason: normalizeMetadataValue(metadata.clockstartreason ?? metadata.clockStartReason ?? metadata.clock_start_reason) || null,
+    metadataSource: normalizeMetadataValue(metadata.metadatasource ?? metadata.metadataSource ?? metadata.metadata_source) || null
   };
 
   const hasTimingValue = Object.entries(diagnostics).some(([key, value]) => (
-    key === "clockStartReason" ? Boolean(value) : Number.isFinite(value)
+    key === "clockStartReason" || key === "metadataSource" ? Boolean(value) : Number.isFinite(value)
   ));
   return hasTimingValue ? diagnostics : null;
 }
@@ -1459,6 +2087,61 @@ async function readAirplayPlaybackMetadata() {
   if (!AIRPLAY_METADATA_COMMAND.trim()) return null;
   const raw = await runCommand(AIRPLAY_METADATA_COMMAND, { allowFailure: true, timeout: 3500 });
   return parseBluetoothMetadataOutput(raw);
+}
+
+function getAirplaySourceSummaryFromState(state) {
+  if (state?.audio?.currentSource?.id === "airplay") {
+    return state.audio.currentSource;
+  }
+  return Array.isArray(state?.audio?.sources)
+    ? state.audio.sources.find((source) => source.id === "airplay") ?? null
+    : null;
+}
+
+function shouldRefreshAirplayPlaybackMetadata(state, { force = false } = {}) {
+  if (API_MODE !== "mpc" || !AIRPLAY_METADATA_COMMAND.trim()) return false;
+  if (state?.playback?.source !== "airplay") return false;
+
+  const airplaySource = getAirplaySourceSummaryFromState(state);
+  if (airplaySource?.connectionState !== "connected") return false;
+  if (force) return true;
+  if (Date.now() - airplayDirectMetadataRefreshAtMs >= AIRPLAY_DIRECT_METADATA_REFRESH_MIN_MS) return true;
+
+  return !state.playback.albumArtUrl
+    || !Number.isFinite(state.playback.elapsedSeconds)
+    || looksLikeUntrustedTrackMetadata({
+      title: state.playback.title,
+      artist: state.playback.artist,
+      album: state.playback.album
+    });
+}
+
+function mergeAirplayPlaybackMetadata(state, metadata) {
+  if (!metadata?.title) return state;
+
+  const airplaySource = getAirplaySourceSummaryFromState(state);
+  if (airplaySource?.connectionState !== "connected") return state;
+
+  const playback = {
+    ...state.playback,
+    state: mapBluetoothPlaybackState(metadata),
+    albumArtUrl: metadata.artworkUrl ?? null,
+    title: metadata.title,
+    artist: metadata.artist || null,
+    album: metadata.album || "AirPlay Source",
+    elapsedSeconds: millisecondsToSeconds(metadata.positionMs),
+    durationSeconds: millisecondsToSeconds(metadata.durationMs, { allowZero: false }),
+    timingDiagnostics: metadata.timingDiagnostics ?? null
+  };
+  const nextState = {
+    ...state,
+    playback
+  };
+
+  return {
+    ...nextState,
+    lyrics: scheduleLyricsRecognition(nextState)
+  };
 }
 
 function readMockBluetoothPlaybackMetadata() {
@@ -1859,7 +2542,13 @@ async function getDspSnapshot() {
 }
 
 function ddcutilArgs(args) {
-  return DDCUTIL_DISPLAY ? ["--display", DDCUTIL_DISPLAY, ...args] : args;
+  const prefix = DDCUTIL_SUPPRESS_SYSLOG ? ["--syslog=NEVER"] : [];
+  return DDCUTIL_DISPLAY ? [...prefix, "--display", DDCUTIL_DISPLAY, ...args] : [...prefix, ...args];
+}
+
+function ddcutilReadCommand(args) {
+  const command = `${DDCUTIL_BIN} ${ddcutilArgs(args).join(" ")}`;
+  return DDCUTIL_SUPPRESS_READ_WARNINGS ? `${command} 2>/dev/null` : command;
 }
 
 function buildUnavailableDisplayBrightnessSnapshot() {
@@ -1893,16 +2582,24 @@ function parseDisplayBrightnessSnapshot(raw) {
 
 async function refreshDisplayBrightnessSnapshot() {
   const raw = await runCommand(
-    `${DDCUTIL_BIN} ${ddcutilArgs(["getvcp", "10", "--brief"]).join(" ")}`,
+    ddcutilReadCommand(["getvcp", "10", "--brief"]),
     { allowFailure: true, timeout: DDCUTIL_READ_TIMEOUT_MS }
   );
   const snapshot = parseDisplayBrightnessSnapshot(raw);
+  if (snapshot.controllable) {
+    displayBrightnessUnavailableUntilMs = 0;
+  } else {
+    displayBrightnessUnavailableUntilMs = Date.now() + DDCUTIL_UNAVAILABLE_BACKOFF_MS;
+  }
   displayBrightnessSnapshotCache = { value: snapshot, updatedAtMs: Date.now() };
   system.display = snapshot;
   return snapshot;
 }
 
 function scheduleDisplayBrightnessRefresh() {
+  if (displayBrightnessSnapshotCache?.value?.controllable === false && Date.now() < displayBrightnessUnavailableUntilMs) {
+    return Promise.resolve(displayBrightnessSnapshotCache.value);
+  }
   if (!displayBrightnessRefreshPromise) {
     displayBrightnessRefreshPromise = refreshDisplayBrightnessSnapshot()
       .catch(() => buildUnavailableDisplayBrightnessSnapshot())
@@ -1916,6 +2613,9 @@ function scheduleDisplayBrightnessRefresh() {
 async function readDisplayBrightnessSnapshot() {
   const now = Date.now();
   if (displayBrightnessSnapshotCache && now - displayBrightnessSnapshotCache.updatedAtMs < DDCUTIL_READ_CACHE_MS) {
+    return displayBrightnessSnapshotCache.value;
+  }
+  if (displayBrightnessSnapshotCache?.value?.controllable === false && now < displayBrightnessUnavailableUntilMs) {
     return displayBrightnessSnapshotCache.value;
   }
 
@@ -1943,6 +2643,7 @@ async function setDisplayBrightnessPercent(percent) {
     },
     updatedAtMs: Date.now()
   };
+  displayBrightnessUnavailableUntilMs = 0;
   system.display = displayBrightnessSnapshotCache.value;
 }
 
@@ -1961,11 +2662,17 @@ function getCachedRuntimeSnapshot() {
   return tikpalStateSnapshotCache?.state?.runtime ?? buildRuntimeSnapshot();
 }
 
+function normalizeKioskWindow(value) {
+  const match = String(value ?? "").trim().match(/^(\d{3,5})x(\d{3,5})$/i);
+  return match ? `${Number(match[1])}x${Number(match[2])}` : null;
+}
+
 async function getRuntimeSnapshot() {
-  const xrandrRaw = await runCommand("xrandr --query", { allowFailure: true });
-  const currentMatch = xrandrRaw.match(/current\s+(\d+)\s+x\s+(\d+)/i);
-  const kioskWindow = currentMatch ? `${currentMatch[1]}x${currentMatch[2]}` : REQUESTED_KIOSK_WINDOW;
-  return buildRuntimeSnapshot(kioskWindow);
+  const drmMode = await runCommand(
+    "for status in /sys/class/drm/card*-*/status; do [ -f \"$status\" ] || continue; if grep -qx connected \"$status\"; then modes=\"${status%/status}/modes\"; [ -s \"$modes\" ] && sed -n '1p' \"$modes\" && exit 0; fi; done",
+    { allowFailure: true, timeout: RUNTIME_DRM_MODE_TIMEOUT_MS }
+  );
+  return buildRuntimeSnapshot(normalizeKioskWindow(drmMode) ?? normalizeKioskWindow(REQUESTED_KIOSK_WINDOW) ?? REQUESTED_KIOSK_WINDOW);
 }
 
 async function getOutputDeviceSnapshot() {
@@ -2016,6 +2723,7 @@ function getCachedMpcSystemSnapshot(statusRaw, statsRaw) {
 
   return {
     ...cachedSystem,
+    display: system.display,
     library: {
       ...cachedSystem.library,
       source: "MPD",
@@ -2026,34 +2734,214 @@ function getCachedMpcSystemSnapshot(statusRaw, statsRaw) {
   };
 }
 
+function normalizeRadioCategory(value) {
+  const normalized = String(value ?? "").trim().toLowerCase().replace(/[-_\s]+/g, "");
+  if (normalized === "hifi" || normalized === "hi-fi") return "hifi";
+  if (normalized === "focus") return "focus";
+  if (normalized === "calm") return "calm";
+  if (normalized === "sleep") return "sleep";
+  if (normalized === "jazz") return "jazz";
+  if (normalized === "classical") return "classical";
+  if (normalized === "news") return "news";
+  return null;
+}
+
+function parseRadioGenreParts(genre) {
+  return String(genre ?? "")
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function radioCategoryFromStation(label, genreParts) {
+  const labelMatch = String(label ?? "").match(/^Tikpal\s+(.+?)\s*-\s*/i);
+  return normalizeRadioCategory(labelMatch?.[1]) ?? normalizeRadioCategory(genreParts[0]);
+}
+
+function radioCategoryOrder(category) {
+  const index = RADIO_CATEGORY_ORDER.indexOf(category);
+  return index === -1 ? RADIO_CATEGORY_ORDER.length : index;
+}
+
+function buildRadioLogoUrl(stationId, logo) {
+  if (!stationId || !String(logo ?? "").trim()) return null;
+  return `/api/v1/media/radio-logo?stationId=${encodeURIComponent(stationId)}`;
+}
+
+function buildMpcRadioStationSummary(row) {
+  const [rawId, rawName, rawStation, rawGenre, rawBroadcaster, rawBitrate, rawFormat, rawLogo] = row;
+  const numericId = Number(rawId);
+  const stationId = `radio-${rawId}`;
+  const label = rawName || `Radio ${rawId}`;
+  const genreParts = parseRadioGenreParts(rawGenre);
+  const category = radioCategoryFromStation(label, genreParts);
+  const categoryLabel = category ? RADIO_CATEGORY_LABELS[category] : null;
+  const isTikpalStation = /^Tikpal\s+/i.test(label);
+  const tags = genreParts.filter((part, index) => {
+    if (index === 0 && normalizeRadioCategory(part) === category) return false;
+    return part !== categoryLabel;
+  });
+  const bitrateKbps = Number.isFinite(Number(rawBitrate)) ? Number(rawBitrate) : null;
+  const codec = rawFormat || null;
+  const statusBits = [];
+  if (categoryLabel) statusBits.push(categoryLabel);
+  if (rawBroadcaster) statusBits.push(rawBroadcaster);
+  if (bitrateKbps) statusBits.push(`${bitrateKbps} kbps`);
+  if (codec) statusBits.push(codec);
+  const sourceOrder = isTikpalStation ? 0 : 1;
+  const categorySort = isTikpalStation ? radioCategoryOrder(category) : RADIO_CATEGORY_ORDER.length;
+
+  return buildRadioStationSummary({
+    id: stationId,
+    label,
+    uri: rawStation,
+    genre: rawGenre || "Unknown",
+    bitrateKbps,
+    codec,
+    category,
+    categoryLabel,
+    tags,
+    broadcaster: rawBroadcaster || null,
+    logoUrl: buildRadioLogoUrl(stationId, rawLogo),
+    catalogSource: isTikpalStation ? "tikpal" : "moode",
+    sortOrder: Number.isFinite(numericId) ? numericId : null,
+    secondaryStatus: statusBits.join(" · ") || "Radio preset",
+    active: false,
+    _sourceOrder: sourceOrder,
+    _categorySort: categorySort
+  });
+}
+
+function sortRadioStations(stations) {
+  return [...stations].sort((left, right) => {
+    if (left.catalogSource !== right.catalogSource) {
+      return left.catalogSource === "tikpal" ? -1 : 1;
+    }
+    if (left.catalogSource === "tikpal") {
+      const categoryDelta = radioCategoryOrder(left.category) - radioCategoryOrder(right.category);
+      if (categoryDelta !== 0) return categoryDelta;
+    }
+    return (left.sortOrder ?? 0) - (right.sortOrder ?? 0);
+  });
+}
+
+function clearActiveMpcRadioStationCache() {
+  activeMpcRadioStationCache = null;
+}
+
+function syncCachedTikpalStateActiveRadioStation() {
+  const cached = activeMpcRadioStationCache;
+  const state = tikpalStateSnapshotCache?.state;
+  if (!cached || !state?.audio) return;
+
+  const label = cached.station?.label ?? RADIO_LABEL;
+  const albumArtUrl = cached.station?.logoUrl ?? null;
+  const radioSource = {
+    ...(state.audio.sources?.find((source) => source.id === "radio") ?? buildSourceSummary({
+      id: "radio",
+      label: "Radio",
+      availability: "available",
+      active: true,
+      controllability: "switchable",
+      secondaryStatus: `${label} active`
+    })),
+    availability: "available",
+    active: true,
+    controllability: "switchable",
+    secondaryStatus: `${label} active`,
+    radioStationId: cached.station?.id ?? cached.id ?? null
+  };
+  const sources = Array.isArray(state.audio.sources)
+    ? state.audio.sources.map((source) => source.id === "radio" ? radioSource : { ...source, active: false })
+    : [radioSource];
+
+  tikpalStateSnapshotCache = {
+    ...tikpalStateSnapshotCache,
+    state: {
+      ...state,
+      audio: {
+        ...state.audio,
+        currentSource: radioSource,
+        sources
+      },
+      playback: state.playback
+        ? {
+            ...state.playback,
+            albumArtUrl,
+            source: "radio",
+            title: label,
+            station: label
+          }
+        : state.playback
+    }
+  };
+}
+
+function cacheActiveMpcRadioStation(station, uri) {
+  const targetUri = String(uri ?? station?.uri ?? "").trim();
+  if (!targetUri && !station) {
+    clearActiveMpcRadioStationCache();
+    return;
+  }
+
+  activeMpcRadioStationCache = {
+    id: station?.id ?? null,
+    uri: targetUri,
+    station: station ? { ...station, active: true } : null,
+    updatedAtMs: Date.now()
+  };
+  syncCachedTikpalStateActiveRadioStation();
+}
+
+function findActiveRadioStationFromList(currentFile, stations) {
+  const normalizedCurrentFile = String(currentFile ?? "").trim();
+  if (!isStreamUri(normalizedCurrentFile)) return null;
+
+  const exact = stations.find((station) => station.uri === normalizedCurrentFile);
+  if (exact) {
+    const cached = activeMpcRadioStationCache;
+    if (!cached || cached.id !== exact.id || cached.uri !== normalizedCurrentFile) {
+      activeMpcRadioStationCache = {
+        id: exact.id ?? null,
+        uri: normalizedCurrentFile,
+        station: { ...exact, active: true },
+        updatedAtMs: Date.now()
+      };
+    }
+    return exact;
+  }
+
+  const cached = activeMpcRadioStationCache;
+  if (!cached || Date.now() - cached.updatedAtMs > 12 * 60 * 60 * 1000) return null;
+  if (cached.uri && cached.uri !== normalizedCurrentFile) return null;
+  if (cached.id) {
+    const station = stations.find((entry) => entry.id === cached.id);
+    if (station) return station;
+  }
+
+  return cached.station;
+}
+
+function markActiveRadioStations(stations, currentFile) {
+  const activeStation = findActiveRadioStationFromList(currentFile, stations);
+  return stations.map((station) => ({
+    ...station,
+    active: Boolean(activeStation && station.id === activeStation.id)
+  }));
+}
+
 async function readMpcRadioStations() {
-  const query = "SELECT id, name, station, genre, bitrate, format FROM cfg_radio ORDER BY id LIMIT " + (Number.isFinite(RADIO_PRESET_LIMIT) && RADIO_PRESET_LIMIT > 0 ? Math.round(RADIO_PRESET_LIMIT) : 8);
-  const raw = await runCommand(`sqlite3 -separator '|' /var/local/www/db/moode-sqlite3.db "${query}"`, { allowFailure: true });
+  const query = "SELECT id, name, station, genre, broadcaster, bitrate, format, logo FROM cfg_radio ORDER BY id";
+  const raw = await runCommand(`${shellQuote(SQLITE_BIN)} -separator '|' /var/local/www/db/moode-sqlite3.db "${query}"`, { allowFailure: true });
   if (!raw) {
     return [];
   }
 
-  return raw
+  return sortRadioStations(raw
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean)
-    .map((line) => {
-      const [id, name, station, genre, bitrate, format] = line.split("|");
-      const bits = [];
-      if (genre) bits.push(genre);
-      if (bitrate) bits.push(`${bitrate} kbps`);
-      if (format) bits.push(format);
-      return buildRadioStationSummary({
-        id: `radio-${id}`,
-        label: name || `Radio ${id}`,
-        uri: station,
-        genre: genre || "Unknown",
-        bitrateKbps: Number.isFinite(Number(bitrate)) ? Number(bitrate) : null,
-        codec: format || null,
-        secondaryStatus: bits.join(" · ") || "Radio preset",
-        active: false
-      });
-    });
+    .map((line) => buildMpcRadioStationSummary(line.split("|"))));
 }
 
 function fallbackRadioStations() {
@@ -2066,6 +2954,13 @@ function fallbackRadioStations() {
           genre: "Unknown",
           bitrateKbps: null,
           codec: null,
+          category: null,
+          categoryLabel: null,
+          tags: [],
+          broadcaster: null,
+          logoUrl: null,
+          catalogSource: "fallback",
+          sortOrder: null,
           secondaryStatus: "Fallback preset",
           active: false
         })
@@ -2073,19 +2968,119 @@ function fallbackRadioStations() {
     : [];
 }
 
-async function getAvailableRadioStations() {
+async function getAvailableRadioStations(scope = "all") {
   if (API_MODE !== "mpc") {
-    return getMockRadioStations();
+    const stations = getMockRadioStations();
+    return scope === "tikpal" ? stations.filter((station) => station.catalogSource === "tikpal") : stations;
   }
 
   const radioStations = await readMpcRadioStations();
-  return radioStations.length > 0 ? radioStations : fallbackRadioStations();
+  if (radioStations.length > 0) {
+    cacheMpcRadioCatalogReady(radioStations.length);
+  }
+  const scopedStations = scope === "tikpal"
+    ? radioStations.filter((station) => station.catalogSource === "tikpal")
+    : radioStations;
+  return scopedStations.length > 0 ? scopedStations : fallbackRadioStations();
+}
+
+function cacheMpcRadioCatalogReady(count) {
+  if (!Number.isFinite(count) || count <= 0) return;
+  mpcRadioCatalogReadyCache = true;
+  mpcRadioCatalogCountCache = Math.max(mpcRadioCatalogCountCache, count);
+}
+
+function applyMpcRadioCatalogReadyToState(state) {
+  if (API_MODE !== "mpc" || !mpcRadioCatalogReadyCache || mpcRadioCatalogCountCache <= 0) {
+    return state;
+  }
+  if (!state?.audio) return state;
+
+  const sources = Array.isArray(state?.audio?.sources) ? state.audio.sources : [];
+  let changed = false;
+  const nextSources = sources.map((source) => {
+    if (source?.id !== "radio") return source;
+    const nextSource = {
+      ...source,
+      availability: "available",
+      controllability: "switchable",
+      secondaryStatus: source.secondaryStatus === "No radio route configured"
+        ? `Choose from ${mpcRadioCatalogCountCache} presets`
+        : source.secondaryStatus
+    };
+    changed = changed
+      || nextSource.availability !== source.availability
+      || nextSource.controllability !== source.controllability
+      || nextSource.secondaryStatus !== source.secondaryStatus;
+    return nextSource;
+  });
+  if (!changed) return state;
+
+  const currentSource = state.audio.currentSource?.id === "radio"
+    ? nextSources.find((source) => source.id === "radio") ?? state.audio.currentSource
+    : state.audio.currentSource;
+
+  return {
+    ...state,
+    audio: {
+      ...state.audio,
+      currentSource,
+      sources: nextSources
+    }
+  };
+}
+
+async function findRadioStationByUri(uri) {
+  if (!uri) return null;
+  const stations = await getAvailableRadioStations("all");
+  return findActiveRadioStationFromList(uri, stations) ?? null;
+}
+
+async function resolveRadioLogoCandidate(fileName) {
+  const cleanName = String(fileName ?? "").trim();
+  if (!cleanName || basename(cleanName) !== cleanName) return null;
+  const mimeType = imageMimeTypeFromPath(cleanName);
+  if (!mimeType) return null;
+  const root = resolve(RADIO_LOGO_DIR);
+  const absolutePath = resolve(root, cleanName);
+  if (absolutePath !== root && !absolutePath.startsWith(`${root}${sep}`)) return null;
+  try {
+    const info = await stat(absolutePath);
+    if (!info.isFile()) return null;
+    return { absolutePath, mimeType };
+  } catch {
+    return null;
+  }
+}
+
+async function resolveRadioLogo(stationId) {
+  const id = String(stationId ?? "").trim();
+  if (!/^radio-\d+$/.test(id)) return null;
+  const stations = await getAvailableRadioStations("all");
+  const station = stations.find((entry) => entry.id === id);
+  if (!station) return null;
+
+  for (const extension of RADIO_LOGO_EXTENSIONS) {
+    const exact = await resolveRadioLogoCandidate(`${station.label}${extension}`);
+    if (exact) return exact;
+  }
+
+  const alias = RADIO_LOGO_ALIASES.get(station.label);
+  if (alias) {
+    const aliased = await resolveRadioLogoCandidate(alias);
+    if (aliased) return aliased;
+  }
+
+  return null;
 }
 
 function normalizeRadioFilters(searchParams) {
   const q = (searchParams.get("q") ?? "").trim();
   const genre = (searchParams.get("genre") ?? "").trim();
   const bitrate = (searchParams.get("bitrate") ?? "").trim();
+  const category = normalizeRadioCategory(searchParams.get("category"));
+  const scopeParam = (searchParams.get("scope") ?? "tikpal").trim().toLowerCase();
+  const scope = scopeParam === "all" ? "all" : "tikpal";
   const limitRaw = Number(searchParams.get("limit") ?? 120);
   const offsetRaw = Number(searchParams.get("offset") ?? 0);
 
@@ -2101,6 +3096,8 @@ function normalizeRadioFilters(searchParams) {
     q,
     genre,
     bitrate,
+    category,
+    scope,
     limit: Math.round(limitRaw),
     offset: Math.round(offsetRaw)
   };
@@ -2109,8 +3106,12 @@ function normalizeRadioFilters(searchParams) {
 function filterRadioStations(stations, filters) {
   return stations.filter((station) => {
     if (filters.q) {
-      const haystack = `${station.label} ${station.secondaryStatus} ${station.genre}`.toLowerCase();
+      const haystack = `${station.label} ${station.secondaryStatus} ${station.genre} ${station.categoryLabel ?? ""} ${station.broadcaster ?? ""} ${(station.tags ?? []).join(" ")}`.toLowerCase();
       if (!haystack.includes(filters.q.toLowerCase())) return false;
+    }
+
+    if (filters.category && station.category !== filters.category) {
+      return false;
     }
 
     if (filters.genre && station.genre !== filters.genre) {
@@ -2128,8 +3129,22 @@ function filterRadioStations(stations, filters) {
 
 async function getRadioCatalogPayload(searchParams) {
   const filters = normalizeRadioFilters(searchParams);
-  const stations = await getAvailableRadioStations();
+  const [currentFileRaw, statusRaw] = API_MODE === "mpc"
+    ? await Promise.all([
+      runMpc(["--format", "%file%", "current"], { allowFailure: true }),
+      runMpc(["status"], { allowFailure: true })
+    ])
+    : ["", ""];
+  const currentFile = getEffectiveMpcCurrentFile(currentFileRaw, parseMpcStatus(statusRaw));
+  const stations = markActiveRadioStations(await getAvailableRadioStations(filters.scope), currentFile);
   const genres = Array.from(new Set(stations.map((station) => station.genre).filter(Boolean))).sort((left, right) => left.localeCompare(right));
+  const categories = RADIO_CATEGORY_ORDER
+    .map((category) => ({
+      id: category,
+      label: RADIO_CATEGORY_LABELS[category],
+      count: stations.filter((station) => station.category === category).length
+    }))
+    .filter((category) => category.count > 0);
   const bitrates = Array.from(
     new Set(
       stations
@@ -2144,8 +3159,10 @@ async function getRadioCatalogPayload(searchParams) {
     stations: paged,
     total: filtered.length,
     genres,
+    categories,
     bitrates,
     filters,
+    scope: filters.scope,
     updatedAt: new Date().toISOString()
   };
 }
@@ -2382,6 +3399,176 @@ async function writeRoomExperienceState(state) {
   return normalized;
 }
 
+let audioVolumeStateCache = null;
+
+function normalizeRememberedAudioSource(raw = {}) {
+  const target = String(raw?.target ?? "").trim().toLowerCase();
+  if (!REMEMBERED_AUDIO_SOURCE_TARGETS.has(target)) return null;
+
+  const localTrackPath = normalizeLocalLibraryStateTrackPath(raw.localTrackPath);
+  const radioStationId = normalizeRememberedRadioStationId(raw.radioStationId);
+
+  return {
+    target,
+    ...(localTrackPath ? { localTrackPath } : { localTrackPath: null }),
+    ...(radioStationId ? { radioStationId } : { radioStationId: null }),
+    updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : null
+  };
+}
+
+function normalizeRememberedRadioStationId(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function getCachedRememberedAudioSource() {
+  if (audioSourceMemoryStateCache !== null) return audioSourceMemoryStateCache;
+  try {
+    audioSourceMemoryStateCache = normalizeRememberedAudioSource(JSON.parse(readFileSync(AUDIO_SOURCE_MEMORY_STATE_PATH, "utf8")));
+  } catch {
+    audioSourceMemoryStateCache = null;
+  }
+  return audioSourceMemoryStateCache;
+}
+
+async function writeRememberedAudioSource(source) {
+  const normalized = normalizeRememberedAudioSource({
+    ...source,
+    updatedAt: new Date().toISOString()
+  });
+  if (!normalized) return null;
+
+  await mkdir(dirname(AUDIO_SOURCE_MEMORY_STATE_PATH), { recursive: true });
+  await writeFile(AUDIO_SOURCE_MEMORY_STATE_PATH, `${JSON.stringify(normalized, null, 2)}\n`);
+  audioSourceMemoryStateCache = normalized;
+  return normalized;
+}
+
+function getCachedRememberedLocalTrackPath() {
+  return normalizeLocalLibraryStateTrackPath(getCachedRememberedAudioSource()?.localTrackPath);
+}
+
+function getCachedRememberedRadioStationId() {
+  return normalizeRememberedRadioStationId(getCachedRememberedAudioSource()?.radioStationId);
+}
+
+async function resolveExistingRadioStationId(radioStationId) {
+  const safeRadioStationId = normalizeRememberedRadioStationId(radioStationId);
+  if (!safeRadioStationId) return null;
+  try {
+    const radioStations = await getAvailableRadioStations();
+    return radioStations.some((station) => station.id === safeRadioStationId) ? safeRadioStationId : null;
+  } catch {
+    return null;
+  }
+}
+
+async function resolveCurrentOrRememberedRadioStationId(radioStationId = null) {
+  const cachedCurrentSource = tikpalStateSnapshotCache?.state?.audio?.currentSource;
+  const currentRadioStationId = cachedCurrentSource?.id === "radio"
+    ? cachedCurrentSource.radioStationId
+    : null;
+  const mockRadioStationId = API_MODE !== "mpc" && mockActiveSource === "radio" ? mockActiveRadioStationId : null;
+  return await resolveExistingRadioStationId(radioStationId)
+    ?? await resolveExistingRadioStationId(currentRadioStationId)
+    ?? await resolveExistingRadioStationId(mockRadioStationId)
+    ?? await resolveExistingRadioStationId(getCachedRememberedRadioStationId());
+}
+
+async function rememberAudioSourceSwitch(action, { allowMpcRadio = false } = {}) {
+  const target = String(action?.target ?? "").trim().toLowerCase();
+  if (!REMEMBERED_AUDIO_SOURCE_TARGETS.has(target)) return null;
+  if (target === "radio" && API_MODE === "mpc" && !allowMpcRadio) return null;
+
+  if (target === "mpd") {
+    const localTrackPath = normalizeLocalLibraryStateTrackPath(action.localTrackPath)
+      ?? await resolveCurrentLocalLibraryTrackPath();
+    const radioStationId = await resolveCurrentOrRememberedRadioStationId(action.radioStationId);
+    return await writeRememberedAudioSource({
+      target,
+      localTrackPath,
+      radioStationId
+    });
+  }
+
+  const localTrackPath = await resolveExistingLocalLibraryTrackPath(action.localTrackPath)
+    ?? await resolveCurrentOrRememberedLocalLibraryTrackPath();
+  const radioStationId = await resolveCurrentOrRememberedRadioStationId(action.radioStationId);
+
+  if (target === "radio") {
+    return await writeRememberedAudioSource({
+      target,
+      localTrackPath,
+      radioStationId
+    });
+  }
+
+  return await writeRememberedAudioSource({ target, localTrackPath, radioStationId });
+}
+
+async function rememberActiveRadioStationSource(station, options = {}) {
+  const localTrackPath = await resolveExistingLocalLibraryTrackPath(options.localTrackPath)
+    ?? await resolveExistingLocalLibraryTrackPath(getCachedRememberedLocalTrackPath());
+  const radioStationId = await resolveExistingRadioStationId(station?.id);
+  return await writeRememberedAudioSource({
+    target: "radio",
+    localTrackPath,
+    radioStationId
+  });
+}
+
+function normalizeAudioVolumeState(raw = {}) {
+  const lastNonZeroPercent = clampPercent(raw.lastNonZeroPercent, null);
+  return {
+    version: 1,
+    lastNonZeroPercent: lastNonZeroPercent && lastNonZeroPercent > 0 ? lastNonZeroPercent : null,
+    updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : null
+  };
+}
+
+async function readAudioVolumeState() {
+  if (audioVolumeStateCache) return audioVolumeStateCache;
+  try {
+    audioVolumeStateCache = normalizeAudioVolumeState(JSON.parse(await readFile(AUDIO_VOLUME_STATE_PATH, "utf8")));
+  } catch {
+    audioVolumeStateCache = normalizeAudioVolumeState();
+  }
+  return audioVolumeStateCache;
+}
+
+async function writeAudioVolumeState(state) {
+  const saved = {
+    ...normalizeAudioVolumeState(state),
+    updatedAt: new Date().toISOString()
+  };
+  await mkdir(dirname(AUDIO_VOLUME_STATE_PATH), { recursive: true });
+  await writeFile(AUDIO_VOLUME_STATE_PATH, `${JSON.stringify(saved, null, 2)}\n`);
+  audioVolumeStateCache = saved;
+  return saved;
+}
+
+async function rememberNonZeroVolumePercent(percent) {
+  const normalized = clampPercent(percent, null);
+  if (!normalized || normalized <= 0) return;
+  const current = await readAudioVolumeState();
+  if (current.lastNonZeroPercent === normalized) return;
+  await writeAudioVolumeState({
+    ...current,
+    lastNonZeroPercent: normalized
+  });
+}
+
+async function getRadioResumeVolumePercent() {
+  const volumeState = await readAudioVolumeState();
+  if (volumeState.lastNonZeroPercent && volumeState.lastNonZeroPercent > 0) {
+    return volumeState.lastNonZeroPercent;
+  }
+  const experience = await readRoomExperienceState();
+  if (experience.volumePercent > 0) {
+    return experience.volumePercent;
+  }
+  return RADIO_VOLUME_DEFAULT_PERCENT;
+}
+
 async function applyBrightnessSafely(percent) {
   try {
     await applySystemAction({ type: "brightness_set", value: percent });
@@ -2392,10 +3579,36 @@ async function applyBrightnessSafely(percent) {
 
 async function stopSceneSourceSafely() {
   try {
-    const state = await getTikpalState({ skipExperienceReconcile: true });
-    if (state.audio.currentSource.id === "scene") {
-      await applySourceSwitch({ target: "mpd" });
+    const state = await collectTikpalStateSnapshot({
+      includeSlowRuntimeStatus: false,
+      includeSourceRuntimeStatus: true,
+      includeOutputVolumeStatus: false,
+      skipExperienceReconcile: true
+    });
+    const sourceIsScene = mockArmedSource === "scene" || state.audio.currentSource.id === "scene";
+    if (!sourceIsScene) return;
+
+    const rememberedSource = getCachedRememberedAudioSource();
+    const fallbackAction = { target: "mpd" };
+    const restoreAction = rememberedSource?.target
+      ? {
+          target: rememberedSource.target,
+          ...(rememberedSource.radioStationId ? { radioStationId: rememberedSource.radioStationId } : {}),
+          ...(rememberedSource.localTrackPath ? { localTrackPath: rememberedSource.localTrackPath } : {})
+        }
+      : fallbackAction;
+
+    try {
+      await applySourceSwitch(restoreAction, { rememberSource: false });
+    } catch {
+      if (restoreAction.target !== fallbackAction.target) {
+        await applySourceSwitch(fallbackAction, { rememberSource: false });
+      }
     }
+    await refreshTikpalStateSnapshotAfterMutation({
+      includeSourceRuntimeStatus: restoreAction.target === "mpd" || restoreAction.target === "radio" || COMMAND_HANDOFF_SOURCE_TARGETS.has(restoreAction.target),
+      includeOutputVolumeStatus: COMMAND_HANDOFF_SOURCE_TARGETS.has(restoreAction.target)
+    });
   } catch {
     // The browser-side video is muted by state; the next playback refresh will reconcile the source.
   }
@@ -2609,6 +3822,14 @@ function normalizeSceneVideoRoomModes(value) {
   return modes;
 }
 
+function normalizeSceneAudioGainDb(value) {
+  if (value === undefined || value === null || value === "") return null;
+  const gainDb = Number(value);
+  if (!Number.isFinite(gainDb)) return null;
+  const clamped = Math.max(SCENE_AUDIO_GAIN_MIN_DB, Math.min(SCENE_AUDIO_GAIN_MAX_DB, gainDb));
+  return Number(clamped.toFixed(1));
+}
+
 async function readSceneBackgroundVideos() {
   let manifest;
   try {
@@ -2636,6 +3857,7 @@ async function readSceneBackgroundVideos() {
 
     const id = String(video.id ?? "").trim() || basename(filename, extname(filename));
     const roomModes = normalizeSceneVideoRoomModes(video.roomModes);
+    const audioGainDb = normalizeSceneAudioGainDb(video.audioGainDb);
     videos.push({
       id,
       filename,
@@ -2644,6 +3866,7 @@ async function readSceneBackgroundVideos() {
       ...(Number.isFinite(Number(video.order)) ? { order: Number(video.order) } : {}),
       ...(video.default === true ? { default: true } : {}),
       ...(roomModes.length > 0 ? { roomModes } : {}),
+      ...(audioGainDb !== null ? { audioGainDb } : {}),
       source: "scene"
     });
   }
@@ -2677,7 +3900,7 @@ async function getAmbientBackgroundVideosPayload() {
   const sceneVideos = await readSceneBackgroundVideos();
   const videos = [...legacyVideos, ...sceneVideos].sort(sortAmbientBackgroundVideos);
   const catalogVersion = createHash("sha1")
-    .update(videos.map((video) => `${video.id}:${video.src}:${video.label}:${video.order ?? ""}:${video.default ? "1" : "0"}:${(video.roomModes ?? []).join(",")}`).join("|"))
+    .update(videos.map((video) => `${video.id}:${video.src}:${video.label}:${video.order ?? ""}:${video.default ? "1" : "0"}:${(video.roomModes ?? []).join(",")}:${video.audioGainDb ?? ""}`).join("|"))
     .digest("hex")
     .slice(0, 12);
 
@@ -2815,6 +4038,55 @@ async function findLocalAudioLibraryTrackByPath(localTrackPath) {
 
   const tracks = await readLocalAudioLibraryTracks();
   return tracks.find((track) => normalizeSafeRelativePath(track.path) === safePath) ?? null;
+}
+
+async function resolveExistingLocalLibraryTrackPath(localTrackPath) {
+  const track = await findLocalAudioLibraryTrackByPath(localTrackPath);
+  return normalizeLocalLibraryStateTrackPath(track?.path);
+}
+
+function extractMpcCurrentFile(raw) {
+  const line = String(raw ?? "").split("\n").map((entry) => entry.trim()).find(Boolean) ?? "";
+  if (!line.includes("\t")) return line;
+
+  const columns = line.split("\t").map((entry) => entry.trim()).filter(Boolean);
+  return columns.find((entry) => (
+    isStreamUri(entry)
+    || /\.(aac|aiff|alac|flac|m4a|mp3|ogg|opus|wav|wma)$/i.test(entry)
+  )) ?? columns.at(-1) ?? "";
+}
+
+async function resolveMpcCurrentLocalLibraryTrackPath() {
+  const raw = await runMpc(["--format", "%file%", "current"], { allowFailure: true });
+  const file = extractMpcCurrentFile(raw);
+  if (!file || isStreamUri(file)) return null;
+  return await resolveExistingLocalLibraryTrackPath(file);
+}
+
+async function resolveMockCurrentLocalLibraryTrackPath() {
+  return await resolveExistingLocalLibraryTrackPath(mockSelectedLocalTrack?.path);
+}
+
+async function resolveCurrentLocalLibraryTrackPath() {
+  return API_MODE === "mpc"
+    ? await resolveMpcCurrentLocalLibraryTrackPath()
+    : await resolveMockCurrentLocalLibraryTrackPath();
+}
+
+async function resolveCurrentOrRememberedLocalLibraryTrackPath() {
+  return await resolveCurrentLocalLibraryTrackPath()
+    ?? await resolveExistingLocalLibraryTrackPath(getCachedRememberedLocalTrackPath());
+}
+
+async function rememberCurrentLocalLibraryTrackSource({ allowNull = false } = {}) {
+  const localTrackPath = await resolveCurrentLocalLibraryTrackPath();
+  if (!localTrackPath && !allowNull) return null;
+  const radioStationId = await resolveCurrentOrRememberedRadioStationId();
+  return await writeRememberedAudioSource({
+    target: "mpd",
+    localTrackPath,
+    radioStationId
+  });
 }
 
 function buildMpdLocalLibraryTrackPathCandidates(localTrackPath) {
@@ -3236,6 +4508,7 @@ async function playTrackPaths(trackPaths, startIndex = 0) {
   const safePaths = uniqueSafeTrackPaths(trackPaths);
   if (safePaths.length === 0) throw new Error("playlist has no playable tracks");
   const safeStartIndex = Math.max(0, Math.min(safePaths.length - 1, Number.isInteger(Number(startIndex)) ? Number(startIndex) : 0));
+  const selectedTrackPath = safePaths[safeStartIndex];
   await enforceConnectionGate("mpd");
   if (API_MODE === "mpc") {
     await withMpcMutationLock(async () => {
@@ -3252,7 +4525,7 @@ async function playTrackPaths(trackPaths, startIndex = 0) {
       }
       await ensureMpcPlaybackStarted(safeStartIndex + 1);
     });
-    return;
+    return selectedTrackPath;
   }
   const trackMap = new Map((await readLocalAudioLibraryTracks()).map((track) => [normalizeSafeRelativePath(track.path), track]));
   const playableTracks = safePaths.map((trackPath) => trackMap.get(trackPath)).filter(Boolean);
@@ -3263,13 +4536,15 @@ async function playTrackPaths(trackPaths, startIndex = 0) {
   playbackState = "playing";
   elapsedSeconds = 0;
   lastTickAt = Date.now();
+  return selectedTrackPath;
 }
 
 async function applyAudioPlaylistAction(action) {
   if (action?.type === "play") {
     const trackPaths = await findPlaylistTrackPaths(action.playlistId);
     if (!trackPaths) throw new Error("playlist not found");
-    await playTrackPaths(trackPaths, action.startIndex);
+    const selectedTrackPath = await playTrackPaths(trackPaths, action.startIndex);
+    await rememberAudioSourceSwitch({ target: "mpd", localTrackPath: selectedTrackPath });
     return;
   }
 
@@ -3368,12 +4643,13 @@ async function getSourceStatusFromCommands({ readyCommand, activeCommand, labelC
     commandSucceeds(activeCommand, { timeout: 2500 }),
     labelCommand.trim() ? runCommand(labelCommand, { allowFailure: true, timeout: 2500 }) : Promise.resolve("")
   ]);
-  const connected = gateConnectionUntilArmed ? armed && rawConnected : rawConnected;
+  const nextArmed = gateConnectionUntilArmed && rawConnected ? true : armed;
+  const connected = gateConnectionUntilArmed ? nextArmed && rawConnected : rawConnected;
 
   return {
     supported,
-    available: supported ? (armed ? ready || rawConnected || armed : true) : false,
-    armed,
+    available: supported ? (nextArmed ? ready || rawConnected || nextArmed : true) : false,
+    armed: nextArmed,
     connected,
     connectedLabel: null,
     advertisedLabel: label.trim() || null
@@ -3388,13 +4664,13 @@ async function getAirplaySourceStatus({ readyCommand, activeCommand, labelComman
     labelCommand.trim() ? runCommand(labelCommand, { allowFailure: true, timeout: 2500 }) : Promise.resolve("")
   ]);
 
-  const airplayArmed = armed && (ready || rendererActive || receiverActive || armed);
+  const airplayArmed = (armed || rendererActive) && (ready || rendererActive || receiverActive || armed);
 
   return {
     supported,
-    available: supported ? (armed ? ready || receiverActive || rendererActive || armed : true) : false,
+    available: supported ? (airplayArmed ? ready || receiverActive || rendererActive || airplayArmed : true) : false,
     armed: airplayArmed,
-    connected: armed && receiverActive && rendererActive,
+    connected: airplayArmed && rendererActive,
     connectedLabel: null,
     advertisedLabel: label.trim() || null
   };
@@ -3405,6 +4681,14 @@ async function ensureAirplayReceiverState(enabled) {
     ? "sh -lc 'systemctl start shairport-sync.service >/dev/null 2>&1 || sudo -n systemctl start shairport-sync.service >/dev/null 2>&1 || true'"
     : "sh -lc 'systemctl stop shairport-sync.service >/dev/null 2>&1 || sudo -n systemctl stop shairport-sync.service >/dev/null 2>&1 || true'";
   await runCommand(command, { allowFailure: true, timeout: 5000 });
+}
+
+async function releaseKioskAudioOutputForMpd(target) {
+  if (API_MODE !== "mpc" || !["mpd", "radio"].includes(target) || !KIOSK_AUDIO_RELEASE_COMMAND.trim()) return;
+  await runCommand(KIOSK_AUDIO_RELEASE_COMMAND, { allowFailure: true, timeout: 2500 });
+  if (KIOSK_AUDIO_RELEASE_SETTLE_MS > 0) {
+    await wait(KIOSK_AUDIO_RELEASE_SETTLE_MS);
+  }
 }
 
 async function enforceConnectionGate(nextSource) {
@@ -3626,10 +4910,12 @@ async function getMpcAudioSnapshot(currentFile) {
                     : radioActive
                       ? "radio"
                       : "mpd";
-  const nextRadioStations = radioStations.map((station) => ({
-    ...station,
-    active: radioActive && station.uri === currentFile
-  }));
+  if (!mockArmedSource && COMMAND_HANDOFF_SOURCE_TARGETS.has(activeSource)) {
+    mockArmedSource = activeSource;
+  }
+  const nextRadioStations = radioActive
+    ? markActiveRadioStations(radioStations, currentFile)
+    : radioStations.map((station) => ({ ...station, active: false }));
 
   return buildAudioState({
     activeSource,
@@ -3651,18 +4937,27 @@ function commandSourceSupported(commands) {
 
 function buildCachedSourceRuntimeState(source, supported, advertisedLabel = null) {
   const armed = mockArmedSource === source;
+  const cachedSource = tikpalStateSnapshotCache?.state?.audio?.sources?.find((entry) => entry.id === source) ?? null;
+  const connected = armed && cachedSource?.connectionState === "connected";
   return {
     supported,
     available: supported,
     armed,
-    connected: false,
-    connectedLabel: null,
-    advertisedLabel
+    connected,
+    connectedLabel: connected ? cachedSource?.connectedLabel ?? null : null,
+    advertisedLabel: advertisedLabel ?? cachedSource?.advertisedLabel ?? null
   };
 }
 
 function buildMinimalMpcAudioSnapshot(currentFile = "") {
+  const cachedRadioSource = tikpalStateSnapshotCache?.state?.audio?.sources?.find((entry) => entry.id === "radio") ?? null;
+  const cachedRadioReady = cachedRadioSource?.availability === "available"
+    || cachedRadioSource?.controllability === "switchable";
+  const catalogRadioReady = mpcRadioCatalogReadyCache && mpcRadioCatalogCountCache > 0;
   const radioActive = isStreamUri(currentFile);
+  const cachedActiveRadioStation = radioActive && activeMpcRadioStationCache?.station
+    ? { ...activeMpcRadioStationCache.station, active: true }
+    : null;
   const activeSource = mockArmedSource === "scene"
     ? "scene"
     : mockArmedSource && ["audio", "spotify", "bluetooth", "airplay", "upnp"].includes(mockArmedSource)
@@ -3674,9 +4969,9 @@ function buildMinimalMpcAudioSnapshot(currentFile = "") {
   return buildAudioState({
     activeSource,
     armedSource: mockArmedSource,
-    radioReady: Boolean(RADIO_ACTIVATE_COMMAND || RADIO_DEFAULT_URI),
+    radioReady: Boolean(RADIO_ACTIVATE_COMMAND || RADIO_DEFAULT_URI || cachedRadioReady || catalogRadioReady),
     radioActive,
-    radioStations: [],
+    radioStations: cachedActiveRadioStation ? [cachedActiveRadioStation] : [],
     audioSourceState: buildCachedSourceRuntimeState("audio", true),
     spotifyState: buildCachedSourceRuntimeState("spotify", commandSourceSupported([
       SPOTIFY_READY_COMMAND,
@@ -3709,6 +5004,17 @@ function buildMinimalMpcAudioSnapshot(currentFile = "") {
   });
 }
 
+function getCachedMpcPlaybackSource() {
+  return tikpalStateSnapshotCache?.state?.audio?.currentSource?.id
+    ?? tikpalStateSnapshotCache?.state?.playback?.source
+    ?? null;
+}
+
+function shouldUseCachedSceneSourceRuntimeStatus(currentFile = "") {
+  if (isStreamUri(currentFile)) return false;
+  return mockArmedSource === "scene";
+}
+
 async function getMpcQueuePreview(status) {
   if (!status.queueLength) return [];
 
@@ -3718,22 +5024,28 @@ async function getMpcQueuePreview(status) {
     "%position%\t%title%\t%artist%\t%album%\t%time%\t%file%"
   ], { allowFailure: true });
 
-  const queue = playlistRaw
+  const playlistLines = playlistRaw
     .split("\n")
-    .filter(Boolean)
-    .map((line, index) => {
-      const [positionRaw, title, artist, album, duration, file] = line.split("\t");
-      const position = Number(positionRaw) + 1;
-      return buildQueueEntrySummary({
-        id: file || `mpd-queue-${position || index + 1}`,
-        position: Number.isFinite(position) ? position : index + 1,
-        title: title?.trim() || trackTitleFromFile(file) || `Track ${index + 1}`,
-        artist: artist?.trim() || "Unknown Artist",
-        album: album?.trim() || albumLabelFromFile(file),
-        durationSeconds: parseDuration(duration),
-        active: (Number.isFinite(position) ? position : index + 1) === status.currentTrackIndex
-      });
+    .filter(Boolean);
+  const firstPosition = playlistLines
+    .map((line) => Number(line.split("\t")[0]))
+    .find((position) => Number.isFinite(position));
+  const positionOffset = firstPosition === 0 ? 1 : 0;
+
+  const queue = playlistLines.map((line, index) => {
+    const [positionRaw, title, artist, album, duration, file] = line.split("\t");
+    const rawPosition = Number(positionRaw);
+    const position = Number.isFinite(rawPosition) ? rawPosition + positionOffset : null;
+    return buildQueueEntrySummary({
+      id: file || `mpd-queue-${position || index + 1}`,
+      position: Number.isFinite(position) ? position : index + 1,
+      title: title?.trim() || trackTitleFromFile(file) || `Track ${index + 1}`,
+      artist: artist?.trim() || "Unknown Artist",
+      album: album?.trim() || albumLabelFromFile(file),
+      durationSeconds: parseDuration(duration),
+      active: (Number.isFinite(position) ? position : index + 1) === status.currentTrackIndex
     });
+  });
 
   if (queue.length === 0) return [];
 
@@ -3753,8 +5065,93 @@ function buildFastTrackMetadata({ title, artist, album, file }) {
   };
 }
 
+function shouldUseOutputVolumeForMpcAction() {
+  const cachedSource = tikpalStateSnapshotCache?.state?.audio?.currentSource?.id
+    ?? tikpalStateSnapshotCache?.state?.playback?.source
+    ?? null;
+  const source = mockArmedSource ?? cachedSource;
+  return source === "scene" || COMMAND_HANDOFF_SOURCE_TARGETS.has(source);
+}
+
+function getCurrentMpcSourceId() {
+  return mockArmedSource
+    ?? tikpalStateSnapshotCache?.state?.audio?.currentSource?.id
+    ?? tikpalStateSnapshotCache?.state?.playback?.source
+    ?? null;
+}
+
+function isCurrentMpcSourceAirplay() {
+  return getCurrentMpcSourceId() === "airplay";
+}
+
+function isCurrentMpcSourceRadio() {
+  return getCurrentMpcSourceId() === "radio";
+}
+
+function isAirplayTransportPlaybackAction(action) {
+  return ["play_pause", "play", "pause", "next", "previous"].includes(String(action?.type ?? ""));
+}
+
+function isRadioStationTransportAction(action) {
+  return ["next", "previous"].includes(String(action?.type ?? ""));
+}
+
+function getAirplayTransportCommand(action) {
+  switch (action.type) {
+    case "play_pause":
+      return { command: AIRPLAY_PLAY_PAUSE_COMMAND, label: "play/pause" };
+    case "play":
+      return { command: AIRPLAY_PLAY_COMMAND, label: "play" };
+    case "pause":
+      return { command: AIRPLAY_PAUSE_COMMAND, label: "pause" };
+    case "next":
+      return { command: AIRPLAY_NEXT_COMMAND, label: "next" };
+    case "previous":
+      return { command: AIRPLAY_PREVIOUS_COMMAND, label: "previous" };
+    default:
+      return null;
+  }
+}
+
+async function applyMpcAirplayPlaybackAction(action) {
+  switch (action.type) {
+    case "play_pause":
+    case "play":
+    case "pause":
+    case "next":
+    case "previous": {
+      const transport = getAirplayTransportCommand(action);
+      if (!transport?.command?.trim()) {
+        throw new Error(`AirPlay ${transport?.label ?? action.type} transport is not configured`);
+      }
+      if (!await readAirplayTransportAvailable(true)) {
+        throw new Error(AIRPLAY_REMOTE_UNAVAILABLE_REASON);
+      }
+      await runCommand(transport.command, { allowFailure: false, timeout: 5000 });
+      return;
+    }
+    case "seek":
+    case "favorite_toggle":
+    case "play_mode_set":
+      return;
+    case "volume_set": {
+      const percent = Number(action.value);
+      if (!Number.isFinite(percent) || percent < 0 || percent > 100) {
+        throw new Error("volume_set requires value between 0 and 100");
+      }
+      await setOutputVolumePercent(percent);
+      return;
+    }
+    default:
+      throw new Error(`Unsupported playback action: ${action.type}`);
+  }
+
+}
+
 async function getMpcSnapshot(options = {}) {
   const includeSlowRuntimeStatus = options.includeSlowRuntimeStatus !== false;
+  const includeSourceRuntimeStatus = options.includeSourceRuntimeStatus ?? includeSlowRuntimeStatus;
+  const includeOutputVolumeStatus = options.includeOutputVolumeStatus ?? includeSlowRuntimeStatus;
   const [currentRaw, statusRaw, statsRaw] = await Promise.all([
     runMpc(["--format", "%title%\t%artist%\t%album%\t%file%\t%time%", "current"], { allowFailure: true }),
     runMpc(["status"], { allowFailure: true }),
@@ -3762,32 +5159,50 @@ async function getMpcSnapshot(options = {}) {
   ]);
 
   const status = parseMpcStatus(statusRaw);
-  const [title, artist, album, file, duration] = currentRaw.split("\t");
-  const hasCurrentTrack = Boolean(currentRaw.trim());
+  const [title, artist, album, rawFile, duration] = currentRaw.split("\t");
+  const file = getEffectiveMpcCurrentFile(rawFile, status);
+  const hasCurrentTrack = Boolean(currentRaw.trim()) || Boolean(file);
   const durationSeconds = parseDuration(duration) ?? status.durationSeconds;
   const nextSystem = includeSlowRuntimeStatus
     ? await getMpcSystemSnapshot(statusRaw, statsRaw)
     : getCachedMpcSystemSnapshot(statusRaw, statsRaw);
-  const audio = includeSlowRuntimeStatus
+  const useCachedSceneSourceRuntimeStatus = includeSourceRuntimeStatus && shouldUseCachedSceneSourceRuntimeStatus(file);
+  const audio = includeSourceRuntimeStatus && !useCachedSceneSourceRuntimeStatus
     ? await getMpcAudioSnapshot(file)
     : buildMinimalMpcAudioSnapshot(file);
   const queuePreview = await getMpcQueuePreview(status);
   const playbackSource = audio.sources.find((source) => source.active)?.id ?? audio.currentSource.id;
-  const outputVolumePercent = includeSlowRuntimeStatus ? await readOutputVolumePercent() : null;
+  const outputVolumePercent = includeOutputVolumeStatus ? await readOutputVolumePercent() : null;
   const isSceneSource = playbackSource === "scene";
   const isExternalHandoffSource = playbackSource === "scene" || playbackSource === "spotify" || playbackSource === "bluetooth" || playbackSource === "airplay" || playbackSource === "upnp";
   const isMpdBackedSource = playbackSource === "mpd" || playbackSource === "audio";
   const volumePercent = isExternalHandoffSource
     ? (outputVolumePercent ?? status.volumePercent ?? system.volume.percent)
     : (status.volumePercent ?? outputVolumePercent ?? system.volume.percent);
+  if (volumePercent > 0) {
+    void rememberNonZeroVolumePercent(volumePercent).catch(() => null);
+  }
   const radioPlaybackMetadata = playbackSource === "radio"
     ? normalizeRadioPlaybackMetadata({ title, artist, album, file, audio })
     : null;
+  const activeRadioStation = playbackSource === "radio"
+    ? await findRadioStationByUri(file)
+    : null;
+  if (playbackSource === "radio"
+    && status.state === "playing"
+    && activeRadioStation?.id
+    && !getMpcRadioStreamFailure(statusRaw)
+    && getCachedRememberedAudioSource()?.radioStationId !== activeRadioStation.id) {
+    await rememberActiveRadioStationSource(activeRadioStation);
+  }
   const bluetoothPlaybackMetadata = includeSlowRuntimeStatus && playbackSource === "bluetooth"
     ? await readBluetoothPlaybackMetadata()
     : null;
   const airplayPlaybackMetadata = includeSlowRuntimeStatus && playbackSource === "airplay"
     ? await readAirplayPlaybackMetadata()
+    : null;
+  const airplayTransportAvailable = playbackSource === "airplay"
+    ? await readAirplayTransportAvailable(includeSlowRuntimeStatus)
     : null;
   const hasBluetoothTrackMetadata = Boolean(bluetoothPlaybackMetadata?.title);
   const hasAirplayTrackMetadata = Boolean(airplayPlaybackMetadata?.title);
@@ -3834,6 +5249,8 @@ async function getMpcSnapshot(options = {}) {
         ? bluetoothPlaybackMetadata?.artworkUrl ?? null
         : playbackSource === "airplay"
           ? airplayPlaybackMetadata?.artworkUrl ?? null
+          : playbackSource === "radio" && activeRadioStation?.logoUrl
+            ? activeRadioStation.logoUrl
           : !isExternalHandoffSource && hasCurrentTrack && includeSlowRuntimeStatus && currentArtworkState ? `/api/v1/media/artwork?track=${encodeURIComponent(currentArtworkState.token)}` : null,
       title: isSceneSource
           ? "Scene Audio"
@@ -3907,6 +5324,7 @@ async function getMpcSnapshot(options = {}) {
         : playbackSource === "airplay"
           ? airplayPlaybackMetadata?.timingDiagnostics ?? null
           : null,
+      transportCapabilities: buildPlaybackTransportCapabilities(playbackSource, { airplayRemoteControlAvailable: airplayTransportAvailable }),
       currentTrackIndex: playbackSource === "mpd" ? status.currentTrackIndex : 0,
       queueLength: playbackSource === "mpd" ? status.queueLength : 0,
       favorite: isMpdBackedSource && hasCurrentTrack ? isFavoriteTrackPath(file) : false,
@@ -3998,7 +5416,263 @@ async function switchToAudioSource() {
   await switchToMpdSource();
 }
 
-async function switchToRadioSource(action = {}) {
+function getMpcRadioStreamFailure(statusRaw) {
+  const raw = String(statusRaw ?? "");
+  if (/Failed to decode\s+"[^"]+"/i.test(raw)) {
+    return "MPD radio stream failed to decode";
+  }
+  if (/ERROR:.*(Connection timed out|Timeout was reached|Could not resolve|Name or service not known|Failed to connect|HTTP\s*[45]\d\d)/is.test(raw)) {
+    return "MPD radio stream could not connect";
+  }
+  return null;
+}
+
+function hasMpcAlsaOutputFailure(statusRaw) {
+  return /Failed to open ALSA device|Device or resource busy/i.test(String(statusRaw ?? ""));
+}
+
+function getMpcRadioStartFailure(statusRaw, status, { requirePlaying = false } = {}) {
+  const streamFailure = getMpcRadioStreamFailure(statusRaw);
+  if (streamFailure) {
+    return streamFailure;
+  }
+  if (hasMpcAlsaOutputFailure(statusRaw)) {
+    return "MPD radio stream reported an ALSA output failure";
+  }
+  if (/ERROR:/i.test(statusRaw)) {
+    return "MPD radio stream reported an error";
+  }
+  if (status.state && status.state !== "playing") {
+    return `MPD radio stream entered ${status.state}`;
+  }
+  if (requirePlaying && status.state !== "playing") {
+    return "MPD radio stream did not report playing";
+  }
+  return null;
+}
+
+async function readMpcRadioStartStatus(options = {}) {
+  try {
+    const statusRaw = await runMpc(["status"]);
+    const status = parseMpcStatus(statusRaw);
+    return {
+      raw: statusRaw,
+      status,
+      failure: getMpcRadioStartFailure(statusRaw, status, options),
+      error: null
+    };
+  } catch (error) {
+    const raw = typeof error?.stdout === "string" && error.stdout.trim()
+      ? error.stdout.trimEnd()
+      : typeof error?.stderr === "string" && error.stderr.trim()
+        ? error.stderr.trim()
+        : "";
+    const status = parseMpcStatus(raw);
+    return {
+      raw,
+      status,
+      failure: getMpcRadioStartFailure(raw, status, options)
+        ?? (error instanceof Error ? error.message : "mpc status failed"),
+      error: raw ? null : error
+    };
+  }
+}
+
+async function nudgeMpcPlaybackStart(position = null) {
+  const playArgs = position === null ? ["play"] : ["play", String(position)];
+  await runMpc(playArgs, { allowFailure: true });
+}
+
+function isLikelyRadioStationFailure(error) {
+  const message = String(error?.message ?? error ?? "");
+  return /failed to decode|could not connect|connection timed out|timeout was reached|failed to connect|did not report playing|entered stopped|mpc command timed out|Timeout while connecting/i.test(message);
+}
+
+function isMpcCommunicationFailure(error) {
+  const message = String(error?.message ?? error ?? "");
+  return /mpc command timed out|Timeout while connecting|Connection refused|No route to host|Connection reset by peer|Broken pipe/i.test(message);
+}
+
+async function recoverMpdService(reason) {
+  if (!MPD_RECOVERY_COMMAND.trim()) return false;
+  if (mpdRecoveryPromise) return await mpdRecoveryPromise;
+
+  const reasonLabel = reason instanceof Error ? reason.message : String(reason ?? "unknown");
+  mpdRecoveryPromise = (async () => {
+    console.warn(`tikpal-api recovering MPD after mpc communication failure: ${reasonLabel}`);
+    await runCommand(MPD_RECOVERY_COMMAND, { allowFailure: false, timeout: MPD_RECOVERY_TIMEOUT_MS });
+    await wait(MPD_RECOVERY_SETTLE_MS);
+    return true;
+  })()
+    .catch((error) => {
+      console.warn(`tikpal-api MPD recovery failed: ${error instanceof Error ? error.message : "unknown error"}`);
+      return false;
+    })
+    .finally(() => {
+      mpdRecoveryPromise = null;
+    });
+
+  return await mpdRecoveryPromise;
+}
+
+function getFastRadioSwitchOptions() {
+  return {
+    postStartRecoveryPlays: 0,
+    postStartSettleMs: RADIO_AUTO_SKIP_POST_START_SETTLE_MS,
+    retryDelaysMs: RADIO_AUTO_SKIP_RETRY_DELAYS_MS,
+    verifyWindowMs: RADIO_AUTO_SKIP_VERIFY_WINDOW_MS
+  };
+}
+
+async function verifyMpcRadioStartWindow(options = {}) {
+  const verifyWindowMs = options.verifyWindowMs ?? RADIO_START_VERIFY_WINDOW_MS;
+  const verifyPollMs = options.verifyPollMs ?? RADIO_START_VERIFY_POLL_MS;
+  const deadline = Date.now() + verifyWindowMs;
+  let lastStatusRaw = "";
+  let lastFailure = null;
+
+  while (Date.now() < deadline) {
+    await wait(verifyPollMs);
+    const statusSnapshot = await readMpcRadioStartStatus();
+    lastStatusRaw = statusSnapshot.raw;
+
+    if (statusSnapshot.status.state === "playing") {
+      return;
+    }
+
+    lastFailure = statusSnapshot.failure;
+    if (statusSnapshot.error && isMpcCommunicationFailure(statusSnapshot.error)) {
+      throw statusSnapshot.error;
+    }
+    if (getMpcRadioStreamFailure(statusSnapshot.raw)) {
+      throw new Error(lastFailure ?? "MPD radio stream could not connect");
+    }
+    if (hasMpcAlsaOutputFailure(statusSnapshot.raw)) {
+      await releaseKioskAudioOutputForMpd("radio");
+    }
+    await nudgeMpcPlaybackStart();
+  }
+
+  throw new Error(lastFailure ?? `MPD radio stream did not report playing${lastStatusRaw ? `: ${lastStatusRaw}` : ""}`);
+}
+
+async function recoverLateMpcRadioStartFailure(options = {}) {
+  const recoveryPlays = options.postStartRecoveryPlays ?? RADIO_POST_START_RECOVERY_PLAYS;
+  const settleMs = options.postStartSettleMs ?? RADIO_POST_START_SETTLE_MS;
+  let lastFailure = null;
+
+  for (let recovery = 0; recovery <= recoveryPlays; recovery += 1) {
+    await wait(settleMs);
+    const statusSnapshot = await readMpcRadioStartStatus({ requirePlaying: true });
+    if (!statusSnapshot.failure) return;
+
+    lastFailure = statusSnapshot.failure;
+    if (statusSnapshot.error && isMpcCommunicationFailure(statusSnapshot.error)) {
+      throw statusSnapshot.error;
+    }
+    if (getMpcRadioStreamFailure(statusSnapshot.raw)) {
+      break;
+    }
+    if (recovery >= recoveryPlays) break;
+
+    if (hasMpcAlsaOutputFailure(statusSnapshot.raw)) {
+      await releaseKioskAudioOutputForMpd("radio");
+    }
+    await nudgeMpcPlaybackStart();
+    await verifyMpcRadioStartWindow(options);
+  }
+
+  throw new Error(lastFailure ?? "MPD radio stream did not remain playing after recovery");
+}
+
+let mpcRadioAutoAdvanceInFlight = false;
+
+async function tryAutoAdvanceFailedMpcRadio(targetUri, currentUri, statusRaw) {
+  if (currentUri !== targetUri || !getMpcRadioStreamFailure(statusRaw)) {
+    return false;
+  }
+  if (mpcRadioAutoAdvanceInFlight) {
+    return true;
+  }
+
+  mpcRadioAutoAdvanceInFlight = true;
+  try {
+    const advanced = await switchRadioStationByOffset(1, {
+      currentFileOverride: currentUri,
+      requireRadioContext: false,
+      switchOptions: getFastRadioSwitchOptions()
+    });
+    if (advanced) {
+      await refreshTikpalStateSnapshotAfterMutation({ includeSourceRuntimeStatus: true });
+    }
+    return advanced;
+  } finally {
+    mpcRadioAutoAdvanceInFlight = false;
+  }
+}
+
+function scheduleMpcRadioLatePlayNudges(targetUri) {
+  for (const delayMs of RADIO_LATE_PLAY_NUDGE_DELAYS_MS) {
+    const timer = setTimeout(() => {
+      void (async () => {
+        const [currentFileRaw, statusRaw] = await Promise.all([
+          runMpc(["--format", "%file%", "current"], { allowFailure: true }),
+          runMpc(["status"], { allowFailure: true })
+        ]);
+        const status = parseMpcStatus(statusRaw);
+        const currentUri = getEffectiveMpcCurrentFile(currentFileRaw, status);
+        if (currentUri !== targetUri) return;
+
+        if (await tryAutoAdvanceFailedMpcRadio(targetUri, currentUri, statusRaw)) return;
+
+        const statusSnapshot = {
+          raw: statusRaw,
+          status,
+          failure: getMpcRadioStartFailure(statusRaw, status, { requirePlaying: true })
+        };
+        if (!statusSnapshot.failure) return;
+
+        if (hasMpcAlsaOutputFailure(statusRaw)) {
+          await releaseKioskAudioOutputForMpd("radio");
+        }
+        await nudgeMpcPlaybackStart();
+      })().catch(() => {
+        // A delayed nudge is best-effort; the source switch response already carried the real outcome.
+      });
+    }, delayMs);
+    timer.unref?.();
+  }
+}
+
+async function startRadioStreamUriOnce(targetUri, options = {}) {
+  await runMpc(["clear"]);
+  await runMpc(["add", targetUri]);
+  await restoreMpcRadioVolumeIfMuted();
+  await nudgeMpcPlaybackStart();
+  await verifyMpcRadioStartWindow(options);
+  await recoverLateMpcRadioStartFailure(options);
+}
+
+async function startRadioStreamUri(targetUri, options = {}) {
+  try {
+    await startRadioStreamUriOnce(targetUri, options);
+  } catch (error) {
+    if (options.skipMpdRecovery || !isMpcCommunicationFailure(error)) {
+      throw error;
+    }
+
+    if (!await recoverMpdService(error)) {
+      throw error;
+    }
+
+    await startRadioStreamUriOnce(targetUri, {
+      ...options,
+      skipMpdRecovery: true
+    });
+  }
+}
+
+async function switchToRadioSource(action = {}, options = {}) {
   const radioStations = await getAvailableRadioStations();
   const selectedStation = action.radioStationId
     ? radioStations.find((station) => station.id === action.radioStationId)
@@ -4009,9 +5683,11 @@ async function switchToRadioSource(action = {}) {
   }
 
   const targetUri = selectedStation?.uri ?? radioStations[0]?.uri ?? RADIO_DEFAULT_URI ?? "";
+  const targetStation = selectedStation ?? radioStations.find((station) => station.uri === targetUri) ?? null;
 
   if (!targetUri && RADIO_ACTIVATE_COMMAND) {
     await runSystemActionCommand(RADIO_ACTIVATE_COMMAND, "radio");
+    cacheActiveMpcRadioStation(null, "");
     return;
   }
 
@@ -4019,9 +5695,103 @@ async function switchToRadioSource(action = {}) {
     throw new Error("radio is unavailable in this runtime");
   }
 
-  await runMpc(["clear"]);
-  await runMpc(["add", targetUri]);
-  await ensureMpcPlaybackStarted();
+  let lastError = null;
+  const retryDelaysMs = options.retryDelaysMs ?? RADIO_SWITCH_RETRY_DELAYS_MS;
+  try {
+    for (let attempt = 0; attempt <= retryDelaysMs.length; attempt += 1) {
+      if (attempt > 0) {
+        await wait(retryDelaysMs[attempt - 1]);
+      }
+      try {
+        cacheActiveMpcRadioStation(targetStation, targetUri);
+        await startRadioStreamUri(targetUri, options);
+        cacheActiveMpcRadioStation(targetStation, targetUri);
+        await rememberActiveRadioStationSource(targetStation, { localTrackPath: action.localTrackPath });
+        return;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    if (options.fallbackOnFailure && targetUri && isLikelyRadioStationFailure(lastError)) {
+      if (await switchRadioStationByOffset(1, {
+        currentFileOverride: targetUri,
+        requireRadioContext: false,
+        switchOptions: getFastRadioSwitchOptions()
+      })) {
+        return;
+      }
+    }
+
+    throw lastError ?? new Error("MPD radio stream did not remain playing");
+  } finally {
+    scheduleMpcRadioLatePlayNudges(targetUri);
+  }
+}
+
+async function primeMpcRadioSourceCache(action = {}) {
+  const radioStations = await getAvailableRadioStations();
+  const selectedStation = action.radioStationId
+    ? radioStations.find((station) => station.id === action.radioStationId)
+    : null;
+  const targetUri = selectedStation?.uri ?? radioStations[0]?.uri ?? RADIO_DEFAULT_URI ?? "";
+  const targetStation = selectedStation ?? radioStations.find((station) => station.uri === targetUri) ?? null;
+  if (targetUri) {
+    cacheActiveMpcRadioStation(targetStation, targetUri);
+  }
+}
+
+async function switchRadioStationByOffset(offset, options = {}) {
+  let currentFile = String(options.currentFileOverride ?? "").trim();
+  if (!currentFile) {
+    const [currentFileRaw, statusRaw] = await Promise.all([
+      runMpc(["--format", "%file%", "current"], { allowFailure: true }),
+      runMpc(["status"], { allowFailure: true })
+    ]);
+    currentFile = getEffectiveMpcCurrentFile(currentFileRaw, parseMpcStatus(statusRaw));
+  }
+  if (options.requireRadioContext !== false && !isCurrentMpcSourceRadio() && !isStreamUri(currentFile)) return false;
+
+  const tikpalStations = await getAvailableRadioStations("tikpal");
+  const tikpalActiveStation = findActiveRadioStationFromList(currentFile, tikpalStations);
+  const tikpalIndex = tikpalActiveStation
+    ? tikpalStations.findIndex((station) => station.id === tikpalActiveStation.id)
+    : -1;
+  const allStations = tikpalIndex >= 0 ? tikpalStations : await getAvailableRadioStations("all");
+  const allActiveStation = tikpalIndex >= 0 ? tikpalActiveStation : findActiveRadioStationFromList(currentFile, allStations);
+  const allIndex = tikpalIndex >= 0
+    ? tikpalIndex
+    : allActiveStation
+      ? allStations.findIndex((station) => station.id === allActiveStation.id)
+      : -1;
+  const stations = tikpalIndex >= 0 || allIndex < 0 || allStations[allIndex]?.catalogSource === "tikpal"
+    ? tikpalStations
+    : allStations;
+  if (stations.length === 0) return false;
+
+  const activeStation = tikpalIndex >= 0 ? tikpalActiveStation : allActiveStation;
+  const currentIndex = activeStation
+    ? stations.findIndex((station) => station.id === activeStation.id)
+    : stations.findIndex((station) => station.uri === currentFile);
+  const fallbackIndex = offset > 0 ? 0 : stations.length - 1;
+  const step = offset < 0 ? -1 : 1;
+  const firstCandidateIndex = currentIndex >= 0 ? currentIndex + step : fallbackIndex;
+  let lastError = null;
+  for (let attempt = 0; attempt < stations.length; attempt += 1) {
+    const candidateIndex = ((firstCandidateIndex + step * attempt) % stations.length + stations.length) % stations.length;
+    const candidateStation = stations[candidateIndex];
+    if (!candidateStation?.id) continue;
+
+    try {
+      await switchToRadioSource({ radioStationId: candidateStation.id }, options.switchOptions ?? getFastRadioSwitchOptions());
+      await rememberActiveRadioStationSource(candidateStation);
+      return true;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError ?? new Error("No radio station could be started");
 }
 
 async function switchToSpotifySource() {
@@ -4103,6 +5873,11 @@ async function applyMpcPlaybackActionUnlocked(action) {
     }
   }
 
+  if (isCurrentMpcSourceAirplay()) {
+    await applyMpcAirplayPlaybackAction(action);
+    return;
+  }
+
   switch (action.type) {
     case "play_pause": {
       await ensureMpcQueue();
@@ -4122,11 +5897,13 @@ async function applyMpcPlaybackActionUnlocked(action) {
       await runMpc(["pause"]);
       break;
     case "next":
+      if (await switchRadioStationByOffset(1)) break;
       await ensureMpcQueue();
       await runMpc(["next"]);
       await ensureMpcPlaybackStarted();
       break;
     case "previous":
+      if (await switchRadioStationByOffset(-1)) break;
       await ensureMpcQueue();
       await runMpc(["prev"]);
       await ensureMpcPlaybackStarted();
@@ -4154,15 +5931,25 @@ async function applyMpcPlaybackActionUnlocked(action) {
       if (!Number.isFinite(percent) || percent < 0 || percent > 100) {
         throw new Error("volume_set requires value between 0 and 100");
       }
-      if (mockArmedSource === "scene" || mockArmedSource === "bluetooth" || mockArmedSource === "airplay" || mockArmedSource === "upnp") {
+      if (shouldUseOutputVolumeForMpcAction()) {
         await setOutputVolumePercent(percent);
       } else {
         await runMpc(["volume", String(Math.round(percent))]);
+        if (percent > 0) {
+          await rememberNonZeroVolumePercent(percent);
+        }
       }
       break;
     }
     default:
       throw new Error(`Unsupported playback action: ${action.type}`);
+  }
+
+  if (["next", "previous"].includes(String(action.type))) {
+    const currentSource = getCurrentMpcSourceId();
+    if (!currentSource || currentSource === "mpd") {
+      await rememberCurrentLocalLibraryTrackSource();
+    }
   }
 }
 
@@ -4185,6 +5972,64 @@ async function primeMpcPlayback() {
   } catch (error) {
     console.warn(`tikpal-api mpc prime failed: ${error instanceof Error ? error.message : "unknown error"}`);
   }
+}
+
+async function startStartupSceneSoundPlayback() {
+  if (!STARTUP_SCENE_SOUND_ENABLED) return false;
+
+  try {
+    const current = await readRoomExperienceState();
+    if (current.mode === "hifi") return false;
+
+    const sceneVideo = await resolveSceneAudioVideo(current);
+    if (!current.sceneSoundEnabled) {
+      await writeRoomExperienceState({
+        ...current,
+        sceneSoundEnabled: true
+      });
+    } else if (getCurrentMpcSourceId() === "scene") {
+      activateSceneAudio({
+        sceneVideoId: sceneVideo.id,
+        sceneVideoLabel: sceneVideo.label,
+        sceneVideoSrc: sceneVideo.src
+      });
+      mockArmedSource = "scene";
+      return true;
+    }
+    await applySourceSwitch({
+      target: "scene",
+      sceneVideoId: sceneVideo.id,
+      sceneVideoLabel: sceneVideo.label,
+      sceneVideoSrc: sceneVideo.src
+    });
+    return true;
+  } catch (error) {
+    console.warn(`tikpal-api startup scene sound failed: ${error instanceof Error ? error.message : "unknown error"}`);
+    return false;
+  }
+}
+
+async function getConnectedStartupExternalSource() {
+  try {
+    const snapshot = await getMpcSnapshot({
+      includeSlowRuntimeStatus: false,
+      includeSourceRuntimeStatus: true,
+      includeOutputVolumeStatus: false
+    });
+    const currentSource = snapshot.audio.currentSource;
+    if (COMMAND_HANDOFF_SOURCE_TARGETS.has(currentSource.id) && currentSource.connectionState === "connected") {
+      return currentSource;
+    }
+  } catch (error) {
+    console.warn(`tikpal-api startup source check failed: ${error instanceof Error ? error.message : "unknown error"}`);
+  }
+  return null;
+}
+
+async function applyStartupPlaybackPolicy() {
+  if (await getConnectedStartupExternalSource()) return;
+  if (await startStartupSceneSoundPlayback()) return;
+  await primeMpcPlayback();
 }
 
 async function getPlaybackSnapshot() {
@@ -4311,16 +6156,47 @@ function withCurrentVolatileState(state) {
 }
 
 function readCachedTikpalState() {
-  return withCurrentVolatileState(tikpalStateSnapshotCache?.state ?? buildFallbackMpcStateSnapshot());
+  return withCurrentVolatileState(applyMpcRadioCatalogReadyToState(tikpalStateSnapshotCache?.state ?? buildFallbackMpcStateSnapshot()));
 }
 
 function cacheTikpalStateSnapshot(state) {
   tikpalStateSnapshotCache = {
-    state: withCurrentVolatileState(state),
+    state: withCurrentVolatileState(applyMpcRadioCatalogReadyToState(state)),
     updatedAtMs: Date.now(),
     error: null
   };
   return readCachedTikpalState();
+}
+
+async function refreshAirplayPlaybackMetadataForState(state, { force = false } = {}) {
+  if (!shouldRefreshAirplayPlaybackMetadata(state, { force })) {
+    return state;
+  }
+
+  if (airplayDirectMetadataRefreshPromise) {
+    return await airplayDirectMetadataRefreshPromise;
+  }
+
+  const now = Date.now();
+  if (!force && now - airplayDirectMetadataRefreshAtMs < AIRPLAY_DIRECT_METADATA_REFRESH_MIN_MS) {
+    return state;
+  }
+  airplayDirectMetadataRefreshAtMs = now;
+
+  airplayDirectMetadataRefreshPromise = (async () => {
+    const metadata = await readAirplayPlaybackMetadata();
+    if (!metadata?.title) return state;
+    return cacheTikpalStateSnapshot(mergeAirplayPlaybackMetadata(state, metadata));
+  })()
+    .catch((error) => {
+      console.warn(`tikpal-api airplay metadata refresh failed: ${error instanceof Error ? error.message : "unknown error"}`);
+      return state;
+    })
+    .finally(() => {
+      airplayDirectMetadataRefreshPromise = null;
+    });
+
+  return await airplayDirectMetadataRefreshPromise;
 }
 
 async function collectTikpalStateSnapshot(options = {}) {
@@ -4329,8 +6205,10 @@ async function collectTikpalStateSnapshot(options = {}) {
   }
 
   const includeSlowRuntimeStatus = options.includeSlowRuntimeStatus !== false;
+  const includeSourceRuntimeStatus = options.includeSourceRuntimeStatus ?? includeSlowRuntimeStatus;
+  const includeOutputVolumeStatus = options.includeOutputVolumeStatus ?? includeSlowRuntimeStatus;
   const snapshot = API_MODE === "mpc"
-    ? await getMpcSnapshot({ includeSlowRuntimeStatus })
+    ? await getMpcSnapshot({ includeSlowRuntimeStatus, includeSourceRuntimeStatus, includeOutputVolumeStatus })
     : {
         playback: getPlayback(),
         system: await getMockSystemSnapshot(),
@@ -4357,11 +6235,20 @@ function requestTikpalStateSnapshotRefresh({ force = false } = {}) {
     return null;
   }
   if (tikpalStateSnapshotRefreshPromise) {
+    if (force) {
+      tikpalStateSnapshotRefreshQueued = true;
+    }
     return tikpalStateSnapshotRefreshPromise;
   }
 
+  const refreshGeneration = tikpalStateSnapshotGeneration;
   tikpalStateSnapshotRefreshPromise = collectTikpalStateSnapshot({ includeSlowRuntimeStatus: true })
-    .then((state) => cacheTikpalStateSnapshot(state))
+    .then((state) => {
+      if (refreshGeneration !== tikpalStateSnapshotGeneration) {
+        return readCachedTikpalState();
+      }
+      return cacheTikpalStateSnapshot(state);
+    })
     .catch((error) => {
       const message = error instanceof Error ? error.message : "unknown error";
       console.warn(`tikpal-api state snapshot refresh failed: ${message}`);
@@ -4372,19 +6259,26 @@ function requestTikpalStateSnapshotRefresh({ force = false } = {}) {
     })
     .finally(() => {
       tikpalStateSnapshotRefreshPromise = null;
+      if (tikpalStateSnapshotRefreshQueued) {
+        tikpalStateSnapshotRefreshQueued = false;
+        void requestTikpalStateSnapshotRefresh({ force: true });
+      }
     });
 
   return tikpalStateSnapshotRefreshPromise;
 }
 
-async function refreshTikpalStateSnapshotAfterMutation() {
+async function refreshTikpalStateSnapshotAfterMutation(options = {}) {
   if (API_MODE !== "mpc") {
     return await collectTikpalStateSnapshot();
   }
 
+  tikpalStateSnapshotGeneration += 1;
   try {
     const state = await collectTikpalStateSnapshot({
       includeSlowRuntimeStatus: false,
+      includeSourceRuntimeStatus: options.includeSourceRuntimeStatus === true,
+      includeOutputVolumeStatus: options.includeOutputVolumeStatus === true,
       skipExperienceReconcile: true
     });
     cacheTikpalStateSnapshot(state);
@@ -4394,7 +6288,11 @@ async function refreshTikpalStateSnapshotAfterMutation() {
   }
 
   void requestTikpalStateSnapshotRefresh({ force: true });
-  return readCachedTikpalState();
+  const cachedState = readCachedTikpalState();
+  return await refreshAirplayPlaybackMetadataForState(cachedState, {
+    force: options.forceFreshAirplayMetadata === true
+      || shouldRefreshAirplayPlaybackMetadata(cachedState)
+  });
 }
 
 async function getTikpalState(options = {}) {
@@ -4403,7 +6301,9 @@ async function getTikpalState(options = {}) {
   }
 
   void requestTikpalStateSnapshotRefresh();
-  return readCachedTikpalState();
+  return await refreshAirplayPlaybackMetadataForState(readCachedTikpalState(), {
+    force: options.forceFreshAirplayMetadata === true
+  });
 }
 
 function startTikpalStateSnapshotCollector() {
@@ -4542,13 +6442,14 @@ function sendHtml(response, status, body) {
   response.end(body);
 }
 
-function sendBinary(response, status, contentType, body) {
+function sendBinary(response, status, contentType, body, headers = {}) {
   response.writeHead(status, {
     "Content-Type": contentType,
     "Cache-Control": "no-store",
     "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET,OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type,Accept,X-Tikpal-Key,X-Tikpal-Local-Ui"
+    "Access-Control-Allow-Methods": "GET,HEAD,OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type,Accept,X-Tikpal-Key,X-Tikpal-Local-Ui",
+    ...headers
   });
   response.end(body);
 }
@@ -4742,6 +6643,16 @@ function getLyricsCandidate(snapshot) {
     });
     if (metadataCandidate.trackKey && !looksLikeUntrustedTrackMetadata(metadataCandidate)) {
       return metadataCandidate;
+    }
+
+    if (!getProxyInputCaptureCommand(source).trim()) {
+      return {
+        supported: false,
+        sourceScope,
+        recognitionMode: null,
+        recognitionProvider: null,
+        reason: `${sourceLabel} metadata unavailable for lyrics`
+      };
     }
 
     return {
@@ -5124,6 +7035,54 @@ function buildArtworkIndexPath(cacheKey) {
   return resolve(REMOTE_ARTWORK_INDEX_DIR, `${cacheKey}.json`);
 }
 
+function normalizeLyricsMatchValue(value) {
+  return normalizeMetadataValue(value)
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/['’`]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function providerLyricsDurationMs(lyricsBody) {
+  const durationSeconds = Number(lyricsBody?.duration ?? lyricsBody?.durationSeconds);
+  return Number.isFinite(durationSeconds) && durationSeconds > 0 ? Math.round(durationSeconds * 1000) : null;
+}
+
+function strictLyricsProviderMatch(candidate, lyricsBody) {
+  const expectedTitle = normalizeLyricsMatchValue(candidate.title);
+  const actualTitle = normalizeLyricsMatchValue(lyricsBody?.trackName ?? lyricsBody?.title);
+  if (!expectedTitle || actualTitle !== expectedTitle) return false;
+
+  const expectedArtist = normalizeLyricsMatchValue(candidate.artist);
+  if (expectedArtist) {
+    const actualArtist = normalizeLyricsMatchValue(lyricsBody?.artistName ?? lyricsBody?.artist);
+    if (!actualArtist) return false;
+    if (actualArtist !== expectedArtist && !actualArtist.includes(expectedArtist) && !expectedArtist.includes(actualArtist)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function shouldUseStrictLyricsProviderMatch(candidate) {
+  return isProxyInputSourceScope(candidate?.sourceScope) && candidate?.recognitionMode === "metadata";
+}
+
+function shouldUseProviderLyricsDuration(candidate, providerDurationMs) {
+  if (candidate?.sourceScope !== "airplay_input") return false;
+  if (!Number.isFinite(providerDurationMs) || providerDurationMs < 30_000) return false;
+
+  const candidateDurationMs = Number(candidate.durationMs);
+  if (!Number.isFinite(candidateDurationMs) || candidateDurationMs <= 0) return true;
+
+  const toleranceMs = Math.max(8_000, Math.round(providerDurationMs * 0.12));
+  return Math.abs(candidateDurationMs - providerDurationMs) > toleranceMs;
+}
+
 async function readCachedRemoteArtwork(cacheKey) {
   if (!cacheKey) return null;
   if (remoteArtworkCache.has(cacheKey)) return remoteArtworkCache.get(cacheKey);
@@ -5278,6 +7237,11 @@ async function resolveCurrentArtworkState({ playbackSource, metadata, fallbackTi
 }
 
 async function fetchLyricsFromProvider(candidate) {
+  const useStrictMatch = shouldUseStrictLyricsProviderMatch(candidate);
+  const acceptsLyricsBody = (lyricsBody) => (
+    lyricsBody && (!useStrictMatch || strictLyricsProviderMatch(candidate, lyricsBody))
+  );
+
   const fetchSearchVariant = async (params) => {
     const searchUrl = new URL("/api/search", LRCLIB_BASE_URL);
     for (const [key, value] of Object.entries(params)) {
@@ -5292,7 +7256,27 @@ async function fetchLyricsFromProvider(candidate) {
     if (!response.ok) {
       throw new Error(`LRCLIB search failed: ${response.status}`);
     }
-    return Array.isArray(body) && body.length > 0 ? body[0] : null;
+    return Array.isArray(body) ? body.find(acceptsLyricsBody) ?? null : null;
+  };
+
+  const fetchExactLyrics = async () => {
+    const exactUrl = new URL("/api/get", LRCLIB_BASE_URL);
+    exactUrl.searchParams.set("track_name", candidate.title);
+    if (candidate.artist) exactUrl.searchParams.set("artist_name", candidate.artist);
+    if (candidate.album) exactUrl.searchParams.set("album_name", candidate.album);
+    if (candidate.durationMs) exactUrl.searchParams.set("duration", String(Math.round(candidate.durationMs / 1000)));
+
+    const exactResponse = await fetchJsonWithTimeout(exactUrl, {
+      timeoutMs: Math.max(LRCLIB_TIMEOUT_MS, 12_000)
+    });
+
+    if (exactResponse.response.ok) {
+      return acceptsLyricsBody(exactResponse.body) ? exactResponse.body : null;
+    }
+    if (exactResponse.response.status !== 404) {
+      throw new Error(`LRCLIB request failed: ${exactResponse.response.status}`);
+    }
+    return null;
   };
 
   const searchVariants = [
@@ -5305,41 +7289,9 @@ async function fetchLyricsFromProvider(candidate) {
     }
   ];
 
-  let lyricsBody = null;
-  const shouldPreferSearch = isProxyInputSourceScope(candidate.sourceScope);
-
-  if (shouldPreferSearch) {
-    for (const params of searchVariants) {
-      try {
-        lyricsBody = await fetchSearchVariant(params);
-      } catch (error) {
-        if (lyricsErrorMessage(error) !== "Lyrics lookup timed out") {
-          throw error;
-        }
-      }
-      if (lyricsBody) break;
-    }
-  }
+  let lyricsBody = await fetchExactLyrics();
 
   if (!lyricsBody) {
-    const exactUrl = new URL("/api/get", LRCLIB_BASE_URL);
-    exactUrl.searchParams.set("track_name", candidate.title);
-    if (candidate.artist) exactUrl.searchParams.set("artist_name", candidate.artist);
-    if (candidate.album) exactUrl.searchParams.set("album_name", candidate.album);
-    if (candidate.durationMs) exactUrl.searchParams.set("duration", String(candidate.durationMs));
-
-    const exactResponse = await fetchJsonWithTimeout(exactUrl, {
-      timeoutMs: Math.max(LRCLIB_TIMEOUT_MS, 12_000)
-    });
-
-    if (exactResponse.response.ok) {
-      lyricsBody = exactResponse.body;
-    } else if (exactResponse.response.status !== 404) {
-      throw new Error(`LRCLIB request failed: ${exactResponse.response.status}`);
-    }
-  }
-
-  if (!lyricsBody && !shouldPreferSearch) {
     for (const params of searchVariants) {
       lyricsBody = await fetchSearchVariant(params);
       if (lyricsBody) break;
@@ -5356,15 +7308,16 @@ async function fetchLyricsFromProvider(candidate) {
     });
   }
 
-  const providerDurationSeconds = Number(lyricsBody?.duration ?? lyricsBody?.durationSeconds);
-  const candidateWithProviderDuration = Number.isFinite(candidate.durationMs)
-    ? candidate
-    : {
-        ...candidate,
-        durationMs: Number.isFinite(providerDurationSeconds) && providerDurationSeconds > 0
-          ? Math.round(providerDurationSeconds * 1000)
-          : candidate.durationMs
-      };
+  const providerDurationMs = providerLyricsDurationMs(lyricsBody);
+  const candidateDurationMs = Number(candidate.durationMs);
+  const candidateWithProviderDuration = {
+    ...candidate,
+    durationMs: shouldUseProviderLyricsDuration(candidate, providerDurationMs)
+      ? providerDurationMs
+      : Number.isFinite(candidateDurationMs)
+        ? candidateDurationMs
+        : providerDurationMs ?? candidate.durationMs
+  };
   const { synced, timingStrategy, lines } = buildDisplayableLyricsLines(lyricsBody, candidateWithProviderDuration);
 
   if (lines.length === 0) {
@@ -5393,6 +7346,14 @@ function getProxyInputCaptureCommand(source) {
   return source === "airplay" ? AIRPLAY_CAPTURE_COMMAND : BLUETOOTH_CAPTURE_COMMAND;
 }
 
+function getProxyInputCaptureDurationSeconds(source) {
+  return source === "airplay" ? AIRPLAY_CAPTURE_DURATION_SECONDS : BLUETOOTH_CAPTURE_DURATION_SECONDS;
+}
+
+function getProxyInputRecognitionSettleMs(source) {
+  return source === "airplay" ? AIRPLAY_RECOGNITION_SETTLE_MS : BLUETOOTH_RECOGNITION_SETTLE_MS;
+}
+
 async function captureBluetoothSample(source = "bluetooth") {
   const captureCommand = getProxyInputCaptureCommand(source);
   const sourceLabel = getProxyInputLabel(source);
@@ -5400,7 +7361,7 @@ async function captureBluetoothSample(source = "bluetooth") {
     throw new Error(`${sourceLabel} capture command is not configured`);
   }
 
-  const durationSeconds = Math.max(1, Math.round(BLUETOOTH_CAPTURE_DURATION_SECONDS));
+  const durationSeconds = Math.max(1, Math.round(getProxyInputCaptureDurationSeconds(source)));
   const cacheDir = resolve(REMOTE_MEDIA_CACHE_ROOT, `${source}-capture`);
   await mkdir(cacheDir, { recursive: true });
   const fileName = `${source}-capture-${Date.now()}-${Math.random().toString(16).slice(2)}.wav`;
@@ -5413,7 +7374,7 @@ async function captureBluetoothSample(source = "bluetooth") {
     });
     const buffer = await readFile(outputPath);
     if (buffer.length === 0) {
-      throw new Error("Bluetooth capture returned no audio");
+      throw new Error(`${sourceLabel} capture returned no audio`);
     }
     return {
       buffer,
@@ -5722,7 +7683,7 @@ function scheduleBluetoothLyricsRecognition(snapshot, candidate, options = {}) {
     bluetoothRecognitionSession.resolvedState = null;
   }
 
-  const settleUntil = bluetoothRecognitionSession.connectedAtMs + BLUETOOTH_RECOGNITION_SETTLE_MS;
+  const settleUntil = bluetoothRecognitionSession.connectedAtMs + getProxyInputRecognitionSettleMs(source);
   if (!shouldForce && Date.now() < settleUntil) {
     return updateLyricsState(buildBluetoothRecognizingState(candidate));
   }
@@ -5768,8 +7729,8 @@ function scheduleLyricsRecognition(snapshot, options = {}) {
     return updateLyricsState(buildLyricsState({
       status: "idle",
       sourceScope: candidate.sourceScope ?? "local_playback",
-      recognitionMode: isProxyInputSourceScope(candidate.sourceScope) ? "fingerprint" : null,
-      recognitionProvider: isProxyInputSourceScope(candidate.sourceScope) ? "acrcloud" : null,
+      recognitionMode: candidate.recognitionMode ?? null,
+      recognitionProvider: candidate.recognitionProvider ?? null,
       trackKey: null,
       title: normalizeMetadataValue(snapshot.playback?.title) || null,
       artist: normalizeMetadataValue(snapshot.playback?.artist) || null,
@@ -5845,6 +7806,7 @@ async function applyPlaybackAction(action) {
     }
   }
 
+  let shouldRememberLibraryTrack = false;
   switch (action.type) {
     case "play_pause":
       playbackState = playbackState === "playing" ? "paused" : "playing";
@@ -5898,6 +7860,12 @@ async function applyPlaybackAction(action) {
     }
     default:
       throw new Error(`Unsupported playback action: ${action.type}`);
+  }
+  if (mockActiveSource === "mpd" && ["next", "previous"].includes(String(action.type))) {
+    shouldRememberLibraryTrack = true;
+  }
+  if (shouldRememberLibraryTrack) {
+    await rememberCurrentLocalLibraryTrackSource();
   }
 }
 
@@ -5973,13 +7941,21 @@ async function applySystemAction(action) {
 async function applyMockSourceSwitch(action) {
   switch (action.target) {
     case "mpd": {
-      if (action.localTrackPath) {
-        const track = await findLocalAudioLibraryTrackByPath(action.localTrackPath);
+      const requestedLocalTrackPath = normalizeLocalLibraryStateTrackPath(action.localTrackPath);
+      const rememberedSource = getCachedRememberedAudioSource();
+      const shouldRestoreRememberedTrack = mockActiveSource !== "mpd" || rememberedSource?.target !== "mpd";
+      const rememberedLocalTrackPath = requestedLocalTrackPath ?? (shouldRestoreRememberedTrack ? getCachedRememberedLocalTrackPath() : null);
+      if (rememberedLocalTrackPath) {
+        const track = await findLocalAudioLibraryTrackByPath(rememberedLocalTrackPath);
         if (!track) {
-          throw new Error(`Unknown local library track: ${action.localTrackPath}`);
+          if (requestedLocalTrackPath) {
+            throw new Error(`Unknown local library track: ${action.localTrackPath}`);
+          }
+          clearMockLocalQueue();
+        } else {
+          setMockLocalQueue([track], 0);
+          elapsedSeconds = 0;
         }
-        setMockLocalQueue([track], 0);
-        elapsedSeconds = 0;
       } else {
         clearMockLocalQueue();
       }
@@ -6105,16 +8081,34 @@ async function applyMpcSourceSwitchUnlocked(action) {
   switch (action.target) {
     case "mpd":
       mockArmedSource = null;
+      clearActiveMpcRadioStationCache();
       stopSceneAudio();
       resetBluetoothRecognitionSession();
       if (action.localTrackPath) {
+        await releaseKioskAudioOutputForMpd("mpd");
         await switchToLocalLibraryTrack(action.localTrackPath);
       } else {
+        const currentSource = getCurrentMpcSourceId();
+        const rememberedSource = getCachedRememberedAudioSource();
+        const shouldRestoreRememberedTrack = currentSource !== "mpd" || rememberedSource?.target !== "mpd";
+        const rememberedLocalTrackPath = shouldRestoreRememberedTrack
+          ? getCachedRememberedLocalTrackPath()
+          : null;
         await enforceConnectionGate("mpd");
+        await releaseKioskAudioOutputForMpd("mpd");
+        if (rememberedLocalTrackPath) {
+          try {
+            await switchToLocalLibraryTrack(rememberedLocalTrackPath);
+            return;
+          } catch {
+            // Fall back to the default MPD queue when remembered local media was removed.
+          }
+        }
         await switchToMpdSource();
       }
       return;
     case "audio":
+      clearActiveMpcRadioStationCache();
       stopSceneAudio();
       resetBluetoothRecognitionSession();
       await switchToAudioSource();
@@ -6125,32 +8119,39 @@ async function applyMpcSourceSwitchUnlocked(action) {
       stopSceneAudio();
       resetBluetoothRecognitionSession();
       await enforceConnectionGate("radio");
-      await switchToRadioSource(action);
+      await primeMpcRadioSourceCache(action);
+      await releaseKioskAudioOutputForMpd("radio");
+      await switchToRadioSource(action, { fallbackOnFailure: Boolean(action.radioStationId) });
       return;
     case "scene":
+      clearActiveMpcRadioStationCache();
       resetBluetoothRecognitionSession();
       await switchToSceneSource(action);
       mockArmedSource = "scene";
       return;
     case "spotify":
+      clearActiveMpcRadioStationCache();
       stopSceneAudio();
       resetBluetoothRecognitionSession();
       await switchToSpotifySource();
       mockArmedSource = "spotify";
       return;
     case "bluetooth":
+      clearActiveMpcRadioStationCache();
       stopSceneAudio();
       resetBluetoothRecognitionSession();
       await switchToBluetoothSource();
       mockArmedSource = "bluetooth";
       return;
     case "airplay":
+      clearActiveMpcRadioStationCache();
       stopSceneAudio();
       resetBluetoothRecognitionSession();
       await switchToAirplaySource();
       mockArmedSource = "airplay";
       return;
     case "upnp":
+      clearActiveMpcRadioStationCache();
       stopSceneAudio();
       resetBluetoothRecognitionSession();
       await switchToUpnpSource();
@@ -6165,12 +8166,57 @@ async function applyMpcSourceSwitch(action) {
   return await withMpcMutationLock(() => applyMpcSourceSwitchUnlocked(action));
 }
 
-async function applySourceSwitch(action) {
-  if (API_MODE === "mpc") {
-    await applyMpcSourceSwitch(action);
+async function syncRoomSceneSoundForSource(target) {
+  const current = await readRoomExperienceState();
+  const nextTarget = String(target ?? "");
+
+  if (nextTarget === "scene") {
+    if (current.mode === "hifi" || current.sceneSoundEnabled) return;
+    await writeRoomExperienceState({
+      ...current,
+      sceneSoundEnabled: true
+    });
     return;
   }
-  await applyMockSourceSwitch(action);
+
+  if (!current.sceneSoundEnabled) return;
+  await writeRoomExperienceState({
+    ...current,
+    sceneSoundEnabled: false
+  });
+}
+
+async function applySourceSwitch(action, { syncSceneSoundState = true, rememberSource = true } = {}) {
+  const target = String(action?.target ?? "");
+  const localTrackPathBeforeSwitch = rememberSource && target !== "mpd"
+    ? await resolveCurrentOrRememberedLocalLibraryTrackPath()
+    : null;
+  const radioStationIdBeforeSwitch = rememberSource && !normalizeRememberedRadioStationId(action.radioStationId)
+    ? await resolveCurrentOrRememberedRadioStationId()
+    : null;
+  const switchAction = {
+    ...action,
+    ...(localTrackPathBeforeSwitch ? { localTrackPath: action.localTrackPath ?? localTrackPathBeforeSwitch } : {}),
+    ...(radioStationIdBeforeSwitch ? { radioStationId: radioStationIdBeforeSwitch } : {})
+  };
+  const syncSceneBeforeSwitch = syncSceneSoundState && target !== "scene";
+  if (syncSceneBeforeSwitch) {
+    await syncRoomSceneSoundForSource(target);
+  }
+
+  if (API_MODE === "mpc") {
+    await applyMpcSourceSwitch(switchAction);
+  } else {
+    await applyMockSourceSwitch(switchAction);
+  }
+
+  if (syncSceneSoundState && !syncSceneBeforeSwitch) {
+    await syncRoomSceneSoundForSource(target);
+  }
+
+  if (rememberSource) {
+    await rememberAudioSourceSwitch(switchAction);
+  }
 }
 
 function getRoomModePreset(mode) {
@@ -6181,6 +8227,31 @@ function getRoomModeFromPresetId(presetId, fallbackMode) {
   const normalizedPresetId = String(presetId ?? "").trim();
   const found = Object.entries(ROOM_MODE_PRESETS).find(([, preset]) => preset.presetId === normalizedPresetId);
   return found?.[0] ?? normalizeRoomMode(fallbackMode);
+}
+
+async function resolveSceneAudioVideo(experience) {
+  const preset = getRoomModePreset(experience.mode);
+  const fallbackVideo = {
+    id: preset.sceneVideoId,
+    label: preset.sceneVideoLabel,
+    src: preset.sceneVideoSrc
+  };
+
+  try {
+    const catalog = await getAmbientBackgroundVideosPayload();
+    const matchedVideo = catalog.videos.find((video) => video.id === experience.sceneVideoId);
+    if (matchedVideo?.src) {
+      return matchedVideo;
+    }
+  } catch {
+    // Fall through to the room preset scene; switching will still fail if no video exists.
+  }
+
+  if (fallbackVideo.src) {
+    return fallbackVideo;
+  }
+
+  throw new Error("scene sound requires a scene video");
 }
 
 async function applyRoomExperienceSideEffects(experience, { applyScene = false, applyLevels = true } = {}) {
@@ -6197,19 +8268,26 @@ async function applyRoomExperienceSideEffects(experience, { applyScene = false, 
     }
 
     try {
-      await applySystemAction({ type: "brightness_set", value: experience.brightnessPercent });
+      const brightnessTask = applySystemAction({ type: "brightness_set", value: experience.brightnessPercent });
+      if (API_MODE === "mpc") {
+        void brightnessTask.catch(() => {
+          // Room-mode changes should not wait on noisy or unsupported DDC/CI paths.
+        });
+      } else {
+        await brightnessTask;
+      }
     } catch {
       // Some target displays do not expose DDC/CI brightness control.
     }
   }
 
   if (applyScene && experience.sceneSoundEnabled) {
-    const preset = getRoomModePreset(experience.mode);
+    const sceneVideo = await resolveSceneAudioVideo(experience);
     await applySourceSwitch({
       target: "scene",
-      sceneVideoId: experience.sceneVideoId,
-      sceneVideoLabel: preset.sceneVideoLabel,
-      sceneVideoSrc: preset.sceneVideoSrc
+      sceneVideoId: sceneVideo.id,
+      sceneVideoLabel: sceneVideo.label,
+      sceneVideoSrc: sceneVideo.src
     });
   }
 }
@@ -6313,6 +8391,24 @@ async function applyRoomExperienceAction(action) {
       };
       break;
     }
+    case "set_scene_sound": {
+      const enabled = action.sceneSoundEnabled === true;
+      if (enabled && current.mode === "hifi") {
+        throw new Error("scene sound is not available in Hi-Fi mode");
+      }
+      next = {
+        ...current,
+        sceneVideoId: String(action.sceneVideoId ?? current.sceneVideoId).trim() || current.sceneVideoId,
+        sceneSoundEnabled: enabled
+      };
+      if (enabled) {
+        await resolveSceneAudioVideo(next);
+      }
+      applyScene = enabled;
+      applyLevels = false;
+      stopScene = !enabled;
+      break;
+    }
     case "set_hifi_eq": {
       const hifiEqPatch = buildHifiEqPatch(action, current.hifiEqPresetId);
       await applyHifiEqPreset(hifiEqPatch.hifiEqPresetId);
@@ -6352,7 +8448,17 @@ async function applyRoomExperienceAction(action) {
   }
 
   const saved = await writeRoomExperienceState(next);
-  await applyRoomExperienceSideEffects(saved, { applyScene, applyLevels });
+  try {
+    await applyRoomExperienceSideEffects(saved, { applyScene, applyLevels });
+  } catch (error) {
+    if (applyScene && saved.sceneSoundEnabled) {
+      await writeRoomExperienceState({
+        ...saved,
+        sceneSoundEnabled: false
+      });
+    }
+    throw error;
+  }
 
   if (stopScene) {
     await stopSceneSourceSafely();
@@ -6367,6 +8473,20 @@ async function applyPlaybackActionForCurrentBackend(action) {
     return;
   }
   await applyPlaybackAction(action);
+}
+
+function buildPlaybackMutationRefreshOptions(action) {
+  const isAirplayTransport = API_MODE === "mpc"
+    && isCurrentMpcSourceAirplay()
+    && isAirplayTransportPlaybackAction(action);
+  const isRadioTransport = API_MODE === "mpc"
+    && isCurrentMpcSourceRadio()
+    && isRadioStationTransportAction(action);
+  return {
+    includeOutputVolumeStatus: action?.type === "volume_set",
+    includeSourceRuntimeStatus: isAirplayTransport || isRadioTransport,
+    forceFreshAirplayMetadata: isAirplayTransport
+  };
 }
 
 function requireRemoteNumber(value, label) {
@@ -6452,7 +8572,8 @@ async function buildRemoteStateResponse() {
     },
     source: {
       current: state.audio.currentSource,
-      sources: state.audio.sources
+      sources: state.audio.sources,
+      rememberedSource: state.audio.rememberedSource ?? null
     },
     display: state.system.display,
     hifi: {
@@ -6515,65 +8636,60 @@ async function setRemoteSceneVideo(action) {
 
 async function setRemoteSceneSound(action) {
   const enabled = requireRemoteBoolean(action.enabled ?? action.sceneSoundEnabled, "scene.sound_set");
-  const current = await readRoomExperienceState();
-  if (enabled && current.mode === "hifi") {
-    throw new Error("scene.sound_set is not available in Hi-Fi mode");
-  }
-
-  const saved = await writeRoomExperienceState({
-    ...current,
+  await applyRoomExperienceAction({
+    type: "set_scene_sound",
     sceneSoundEnabled: enabled
-  });
-
-  if (!enabled) {
-    await stopSceneSourceSafely();
-    return;
-  }
-
-  const video = await findRemoteSceneVideo(saved.sceneVideoId);
-  await applySourceSwitch({
-    target: "scene",
-    sceneVideoId: video.id,
-    sceneVideoLabel: video.label,
-    sceneVideoSrc: video.src
   });
 }
 
 async function applyRemoteAction(action) {
   const type = String(action?.type ?? "");
+  const refreshOptions = {};
 
   switch (type) {
     case "playback.play_pause":
       await applyPlaybackActionForCurrentBackend({ type: "play_pause" });
+      Object.assign(refreshOptions, buildPlaybackMutationRefreshOptions({ type: "play_pause" }));
       break;
     case "playback.play":
       await applyPlaybackActionForCurrentBackend({ type: "play" });
+      Object.assign(refreshOptions, buildPlaybackMutationRefreshOptions({ type: "play" }));
       break;
     case "playback.pause":
       await applyPlaybackActionForCurrentBackend({ type: "pause" });
+      Object.assign(refreshOptions, buildPlaybackMutationRefreshOptions({ type: "pause" }));
       break;
     case "playback.next":
       await applyPlaybackActionForCurrentBackend({ type: "next" });
+      Object.assign(refreshOptions, buildPlaybackMutationRefreshOptions({ type: "next" }));
       break;
     case "playback.previous":
       await applyPlaybackActionForCurrentBackend({ type: "previous" });
+      Object.assign(refreshOptions, buildPlaybackMutationRefreshOptions({ type: "previous" }));
       break;
     case "playback.seek":
       await applyPlaybackActionForCurrentBackend({ type: "seek", value: requireRemoteNumber(action.value, "playback.seek") });
+      Object.assign(refreshOptions, buildPlaybackMutationRefreshOptions({ type: "seek" }));
       break;
     case "playback.play_mode_set":
       await applyPlaybackActionForCurrentBackend({ type: "play_mode_set", mode: normalizePlaybackMode(action.playbackMode ?? action.mode) });
+      Object.assign(refreshOptions, buildPlaybackMutationRefreshOptions({ type: "play_mode_set" }));
       break;
     case "volume_set":
       await applyPlaybackActionForCurrentBackend({ type: "volume_set", value: requireRemoteNumber(action.value, "volume_set") });
+      refreshOptions.includeOutputVolumeStatus = true;
       break;
-    case "source.set":
+    case "source.set": {
+      const target = requireRemoteSourceTarget(action.target);
       await applySourceSwitch({
-        target: requireRemoteSourceTarget(action.target),
+        target,
         radioStationId: action.radioStationId,
         localTrackPath: action.localTrackPath
       });
+      refreshOptions.includeSourceRuntimeStatus = target === "mpd" || target === "radio" || COMMAND_HANDOFF_SOURCE_TARGETS.has(target);
+      refreshOptions.includeOutputVolumeStatus = target === "scene" || COMMAND_HANDOFF_SOURCE_TARGETS.has(target);
       break;
+    }
     case "room.set_mode":
       await applyRoomExperienceAction({ type: "set_mode", mode: requireRemoteRoomMode(action.mode), sceneSoundEnabled: action.sceneSoundEnabled });
       break;
@@ -6604,15 +8720,16 @@ async function applyRemoteAction(action) {
       await applySystemAction({ type: "brightness_set", value: requireRemoteNumber(action.value, "display.brightness_set") });
       break;
     case "lyrics.refresh": {
-      const state = await getTikpalState();
+      const state = await getTikpalState({ forceFreshAirplayMetadata: true });
       scheduleLyricsRecognition(state, { force: true });
+      refreshOptions.forceFreshAirplayMetadata = state.playback?.source === "airplay";
       break;
     }
     default:
       throw new Error(`Unsupported remote action: ${type || "missing type"}`);
   }
 
-  await refreshTikpalStateSnapshotAfterMutation();
+  await refreshTikpalStateSnapshotAfterMutation(refreshOptions);
   return await buildRemoteStateResponse();
 }
 
@@ -6681,6 +8798,16 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "POST" && url.pathname === "/api/v1/kiosk/heartbeat") {
+      sendJson(response, 200, setKioskHeartbeat(await readJson(request)));
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/v1/kiosk/heartbeat") {
+      sendJson(response, 200, buildKioskHeartbeatStatus());
+      return;
+    }
+
     if (request.method === "GET" && url.pathname === "/api/v1/system/state") {
       sendJson(response, 200, await getTikpalState());
       return;
@@ -6688,6 +8815,11 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "GET" && url.pathname === "/api/v1/experience/state") {
       sendJson(response, 200, await getRoomExperienceState());
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/v1/scene/context") {
+      sendJson(response, 200, await buildSceneContextPayload(url.searchParams));
       return;
     }
 
@@ -6763,6 +8895,19 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if ((request.method === "GET" || request.method === "HEAD") && url.pathname === "/api/v1/media/radio-logo") {
+      const logo = await resolveRadioLogo(url.searchParams.get("stationId"));
+      if (!logo) {
+        sendJson(response, 404, { error: "NOT_FOUND", path: url.pathname });
+        return;
+      }
+
+      sendBinary(response, 200, logo.mimeType, request.method === "HEAD" ? null : await readFile(logo.absolutePath), {
+        "Cache-Control": "public, max-age=86400"
+      });
+      return;
+    }
+
     if (request.method === "GET" && url.pathname === "/api/v1/media/artwork") {
       const trackToken = url.searchParams.get("track");
       await getTikpalState();
@@ -6812,7 +8957,7 @@ const server = http.createServer(async (request, response) => {
       } else {
         await applyPlaybackAction(action);
       }
-      sendJson(response, 200, await refreshTikpalStateSnapshotAfterMutation());
+      sendJson(response, 200, await refreshTikpalStateSnapshotAfterMutation(buildPlaybackMutationRefreshOptions(action)));
       return;
     }
 
@@ -6829,7 +8974,7 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "POST" && url.pathname === "/api/v1/lyrics/refresh") {
-      const state = await getTikpalState();
+      const state = await getTikpalState({ forceFreshAirplayMetadata: true });
       const lyrics = scheduleLyricsRecognition(state, { force: true });
       sendJson(response, 200, lyrics);
       return;
@@ -6838,7 +8983,10 @@ const server = http.createServer(async (request, response) => {
     if (request.method === "POST" && url.pathname === "/api/v1/audio/source") {
       const action = await readJson(request);
       await applySourceSwitch(action);
-      sendJson(response, 200, await refreshTikpalStateSnapshotAfterMutation());
+      sendJson(response, 200, await refreshTikpalStateSnapshotAfterMutation({
+        includeSourceRuntimeStatus: action?.target === "mpd" || action?.target === "radio" || COMMAND_HANDOFF_SOURCE_TARGETS.has(action?.target),
+        includeOutputVolumeStatus: action?.target === "scene" || COMMAND_HANDOFF_SOURCE_TARGETS.has(action?.target)
+      }));
       return;
     }
 
@@ -6873,7 +9021,7 @@ const server = http.createServer(async (request, response) => {
 server.listen(PORT, HOST, () => {
   console.log(`tikpal-api ${API_MODE} listening on http://${HOST}:${PORT}`);
   if (API_MODE === "mpc") {
-    void primeMpcPlayback().finally(() => {
+    void applyStartupPlaybackPolicy().finally(() => {
       startTikpalStateSnapshotCollector();
     });
   }

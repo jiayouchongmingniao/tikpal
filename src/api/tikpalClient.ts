@@ -14,6 +14,7 @@ import type {
   BackgroundVideoSummary,
   RoomExperienceActionRequest,
   RoomExperienceState,
+  SceneContextSummary,
   SourceSwitchRequest,
   SourceSwitchTarget,
   SystemActionRequest,
@@ -22,6 +23,42 @@ import type {
 } from "../types";
 
 const API_ROOT = "/api/v1";
+const DEFAULT_GET_TIMEOUT_MS = 4500;
+const DEFAULT_POST_TIMEOUT_MS = 15000;
+const HEARTBEAT_TIMEOUT_MS = 2500;
+
+async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit = {}, timeoutMs = DEFAULT_GET_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const upstreamSignal = init.signal;
+  let timedOut = false;
+
+  const abortFromUpstream = () => controller.abort();
+  if (upstreamSignal?.aborted) {
+    controller.abort();
+  } else if (upstreamSignal) {
+    upstreamSignal.addEventListener("abort", abortFromUpstream, { once: true });
+  }
+
+  const timeoutId = window.setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+
+  try {
+    return await fetch(input, {
+      ...init,
+      signal: controller.signal
+    });
+  } catch (error) {
+    if (timedOut) {
+      throw new Error("Tikpal API request timed out");
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timeoutId);
+    upstreamSignal?.removeEventListener("abort", abortFromUpstream);
+  }
+}
 
 async function readJson<T>(response: Response): Promise<T> {
   if (!response.ok) {
@@ -40,10 +77,10 @@ async function readJson<T>(response: Response): Promise<T> {
 }
 
 export async function fetchTikpalState(signal?: AbortSignal): Promise<TikpalState> {
-  const response = await fetch(`${API_ROOT}/system/state`, {
+  const response = await fetchWithTimeout(`${API_ROOT}/system/state`, {
     headers: { Accept: "application/json" },
     signal
-  });
+  }, DEFAULT_GET_TIMEOUT_MS);
   return readJson<TikpalState>(response);
 }
 
@@ -52,14 +89,16 @@ export async function fetchRadioCatalog(filters: RadioCatalogFilters = {}, signa
   if (filters.q) params.set("q", filters.q);
   if (filters.genre) params.set("genre", filters.genre);
   if (filters.bitrate) params.set("bitrate", filters.bitrate);
+  if (filters.category) params.set("category", filters.category);
+  if (filters.scope) params.set("scope", filters.scope);
   if (typeof filters.limit === "number") params.set("limit", String(filters.limit));
   if (typeof filters.offset === "number") params.set("offset", String(filters.offset));
 
   const search = params.toString();
-  const response = await fetch(`${API_ROOT}/audio/radios${search ? `?${search}` : ""}`, {
+  const response = await fetchWithTimeout(`${API_ROOT}/audio/radios${search ? `?${search}` : ""}`, {
     headers: { Accept: "application/json" },
     signal
-  });
+  }, DEFAULT_GET_TIMEOUT_MS);
   return readJson<RadioCatalogResponse>(response);
 }
 
@@ -72,78 +111,89 @@ export async function fetchAudioLibrary(filters: AudioLibraryFilters = {}, signa
   if (typeof filters.offset === "number") params.set("offset", String(filters.offset));
 
   const search = params.toString();
-  const response = await fetch(`${API_ROOT}/audio/library${search ? `?${search}` : ""}`, {
+  const response = await fetchWithTimeout(`${API_ROOT}/audio/library${search ? `?${search}` : ""}`, {
     headers: { Accept: "application/json" },
     signal
-  });
+  }, DEFAULT_GET_TIMEOUT_MS);
   return readJson<AudioLibraryResponse>(response);
 }
 
 export async function fetchAudioPlaylists(signal?: AbortSignal): Promise<AudioPlaylistResponse> {
-  const response = await fetch(`${API_ROOT}/audio/playlists`, {
+  const response = await fetchWithTimeout(`${API_ROOT}/audio/playlists`, {
     headers: { Accept: "application/json" },
     signal
-  });
+  }, DEFAULT_GET_TIMEOUT_MS);
   return readJson<AudioPlaylistResponse>(response);
 }
 
 export async function fetchAudioSpectrum(signal?: AbortSignal): Promise<AudioSpectrumFrame> {
-  const response = await fetch(`${API_ROOT}/audio/spectrum`, {
+  const response = await fetchWithTimeout(`${API_ROOT}/audio/spectrum`, {
     headers: { Accept: "application/json" },
     signal
-  });
+  }, DEFAULT_GET_TIMEOUT_MS);
   return readJson<AudioSpectrumFrame>(response);
 }
 
 export async function createAudioPlaylist(playlist: string | AudioPlaylistCreateRequest): Promise<AudioPlaylistResponse> {
-  const response = await fetch(`${API_ROOT}/audio/playlists`, {
+  const response = await fetchWithTimeout(`${API_ROOT}/audio/playlists`, {
     method: "POST",
     headers: {
       Accept: "application/json",
       "Content-Type": "application/json"
     },
     body: JSON.stringify(typeof playlist === "string" ? { name: playlist } : playlist)
-  });
+  }, DEFAULT_POST_TIMEOUT_MS);
   return readJson<AudioPlaylistResponse>(response);
 }
 
 export async function sendAudioPlaylistAction(action: AudioPlaylistActionRequest): Promise<AudioPlaylistResponse> {
-  const response = await fetch(`${API_ROOT}/audio/playlist-actions`, {
+  const response = await fetchWithTimeout(`${API_ROOT}/audio/playlist-actions`, {
     method: "POST",
     headers: {
       Accept: "application/json",
       "Content-Type": "application/json"
     },
     body: JSON.stringify(action)
-  });
+  }, DEFAULT_POST_TIMEOUT_MS);
   return readJson<AudioPlaylistResponse>(response);
 }
 
 export async function fetchBackgroundVideos(signal?: AbortSignal): Promise<BackgroundVideoCatalogResponse> {
-  const response = await fetch(`${API_ROOT}/media/background-videos`, {
+  const response = await fetchWithTimeout(`${API_ROOT}/media/background-videos`, {
     headers: { Accept: "application/json" },
     signal
-  });
+  }, DEFAULT_GET_TIMEOUT_MS);
   return readJson<BackgroundVideoCatalogResponse>(response);
 }
 
 export async function fetchRoomExperienceState(signal?: AbortSignal): Promise<RoomExperienceState> {
-  const response = await fetch(`${API_ROOT}/experience/state`, {
+  const response = await fetchWithTimeout(`${API_ROOT}/experience/state`, {
     headers: { Accept: "application/json" },
     signal
-  });
+  }, DEFAULT_GET_TIMEOUT_MS);
   return readJson<RoomExperienceState>(response);
 }
 
+export async function fetchSceneContext(timeZone: string, signal?: AbortSignal): Promise<SceneContextSummary> {
+  const params = new URLSearchParams();
+  if (timeZone) params.set("timeZone", timeZone);
+  const search = params.toString();
+  const response = await fetchWithTimeout(`${API_ROOT}/scene/context${search ? `?${search}` : ""}`, {
+    headers: { Accept: "application/json" },
+    signal
+  }, DEFAULT_GET_TIMEOUT_MS);
+  return readJson<SceneContextSummary>(response);
+}
+
 export async function sendRoomExperienceAction(action: RoomExperienceActionRequest): Promise<RoomExperienceState> {
-  const response = await fetch(`${API_ROOT}/experience/actions`, {
+  const response = await fetchWithTimeout(`${API_ROOT}/experience/actions`, {
     method: "POST",
     headers: {
       Accept: "application/json",
       "Content-Type": "application/json"
     },
     body: JSON.stringify(action)
-  });
+  }, DEFAULT_POST_TIMEOUT_MS);
   return readJson<RoomExperienceState>(response);
 }
 
@@ -151,39 +201,39 @@ export async function sendPlaybackAction(type: PlaybackActionType, value?: numbe
   const body: PlaybackActionRequest = { type };
   if (typeof value === "number") body.value = value;
   if (mode) body.mode = mode;
-  const response = await fetch(`${API_ROOT}/playback/actions`, {
+  const response = await fetchWithTimeout(`${API_ROOT}/playback/actions`, {
     method: "POST",
     headers: {
       Accept: "application/json",
       "Content-Type": "application/json"
     },
     body: JSON.stringify(body)
-  });
+  }, DEFAULT_POST_TIMEOUT_MS);
   return readJson<TikpalState>(response);
 }
 
 export async function sendFavoriteTrack(trackPath: string, favorite: boolean): Promise<TikpalState> {
-  const response = await fetch(`${API_ROOT}/audio/favorites`, {
+  const response = await fetchWithTimeout(`${API_ROOT}/audio/favorites`, {
     method: "POST",
     headers: {
       Accept: "application/json",
       "Content-Type": "application/json"
     },
     body: JSON.stringify({ trackPath, favorite })
-  });
+  }, DEFAULT_POST_TIMEOUT_MS);
   return readJson<TikpalState>(response);
 }
 
 export async function sendSystemAction(type: SystemActionType, value?: number): Promise<TikpalState> {
   const body: SystemActionRequest = { type, value };
-  const response = await fetch(`${API_ROOT}/system/actions`, {
+  const response = await fetchWithTimeout(`${API_ROOT}/system/actions`, {
     method: "POST",
     headers: {
       Accept: "application/json",
       "Content-Type": "application/json"
     },
     body: JSON.stringify(body)
-  });
+  }, DEFAULT_POST_TIMEOUT_MS);
   return readJson<TikpalState>(response);
 }
 
@@ -199,13 +249,26 @@ export async function sendSourceSwitch(
     body.sceneVideoLabel = sceneVideo.label;
     body.sceneVideoSrc = sceneVideo.src;
   }
-  const response = await fetch(`${API_ROOT}/audio/source`, {
+  const response = await fetchWithTimeout(`${API_ROOT}/audio/source`, {
     method: "POST",
     headers: {
       Accept: "application/json",
       "Content-Type": "application/json"
     },
     body: JSON.stringify(body)
-  });
+  }, DEFAULT_POST_TIMEOUT_MS);
   return readJson<TikpalState>(response);
+}
+
+export async function sendKioskHeartbeat(payload: Record<string, unknown>, signal?: AbortSignal): Promise<void> {
+  const response = await fetchWithTimeout(`${API_ROOT}/kiosk/heartbeat`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload),
+    signal
+  }, HEARTBEAT_TIMEOUT_MS);
+  await readJson(response);
 }

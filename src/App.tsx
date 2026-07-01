@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AmbientScreen } from "./components/AmbientScreen";
 import { PlayerOverlay } from "./components/PlayerOverlay";
 import { PlaylistOverlay } from "./components/PlaylistOverlay";
@@ -10,14 +10,21 @@ import { useBrowserKioskGuard } from "./hooks/useBrowserKioskGuard";
 import { useKioskGestures } from "./hooks/useKioskGestures";
 import { useRoomExperience } from "./hooks/useRoomExperience";
 import { useTikpalState } from "./hooks/useTikpalState";
-import type { AppMode, BackgroundVideoSummary, FontTheme, LyricsFontSize, RoomExperienceActionRequest, RoomMode, SurfaceTheme } from "./types";
+import { fetchRoomExperienceState, sendKioskHeartbeat } from "./api/tikpalClient";
+import type { AppMode, BackgroundVideoSummary, FontTheme, LyricsFontSize, RememberedAudioSource, RoomExperienceActionRequest, RoomExperienceState, RoomMode, SourceSwitchTarget, SurfaceTheme, TikpalState } from "./types";
 
 const FONT_THEME_STORAGE_KEY = "tikpal.fontTheme";
 const SURFACE_THEME_STORAGE_KEY = "tikpal.surfaceTheme";
-const LYRICS_VISIBLE_STORAGE_KEY = "tikpal.lyricsVisible.v2";
+const LYRICS_VISIBLE_STORAGE_KEY = "tikpal.lyricsVisible.v3";
 const LYRICS_FONT_SIZE_STORAGE_KEY = "tikpal.lyricsFontSize";
 const SCENE_VIDEO_ENABLED_STORAGE_KEY = "tikpal.sceneVideoEnabled";
 const CLOCK_VISIBLE_STORAGE_KEY = "tikpal.clockVisible";
+const EXTERNAL_HANDOFF_TIMEOUT_MS = 60_000;
+const EXTERNAL_HANDOFF_POLL_MS = 1_000;
+const KIOSK_HEARTBEAT_MS = 10_000;
+const EVENT_LOOP_LAG_SAMPLE_MS = 1_000;
+const SOURCE_SWITCH_TARGETS = new Set<SourceSwitchTarget>(["mpd", "audio", "scene", "radio", "spotify", "bluetooth", "airplay", "upnp"]);
+const EXTERNAL_HANDOFF_TARGETS = new Set<SourceSwitchTarget>(["spotify", "bluetooth", "airplay", "upnp"]);
 
 const DEFAULT_SCENE_VIDEO: BackgroundVideoSummary = {
   id: "scene-empty",
@@ -56,7 +63,7 @@ function readInitialSurfaceTheme(): SurfaceTheme {
 }
 
 function readInitialLyricsVisible() {
-  return window.localStorage.getItem(LYRICS_VISIBLE_STORAGE_KEY) === "true";
+  return readStoredBoolean(LYRICS_VISIBLE_STORAGE_KEY, true);
 }
 
 function readInitialLyricsFontSize(): LyricsFontSize {
@@ -74,6 +81,127 @@ function readStoredBoolean(key: string, fallback: boolean) {
   return fallback;
 }
 
+function delay(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function isSourceSwitchTarget(sourceId: string): sourceId is SourceSwitchTarget {
+  return SOURCE_SWITCH_TARGETS.has(sourceId as SourceSwitchTarget);
+}
+
+function getSourceLabel(sourceId: SourceSwitchTarget) {
+  switch (sourceId) {
+    case "mpd":
+      return "Library";
+    case "audio":
+      return "Audio";
+    case "scene":
+      return "Scene Sound";
+    case "radio":
+      return "Radio";
+    case "spotify":
+      return "Spotify Connect";
+    case "bluetooth":
+      return "Bluetooth";
+    case "airplay":
+      return "AirPlay";
+    case "upnp":
+      return "DLNA";
+    default:
+      return "source";
+  }
+}
+
+function isExternalHandoffTarget(sourceId: SourceSwitchTarget): boolean {
+  return EXTERNAL_HANDOFF_TARGETS.has(sourceId);
+}
+
+function isSourceHandoffReady(state: TikpalState, sourceId: SourceSwitchTarget) {
+  const source = state.audio.sources.find((entry) => entry.id === sourceId);
+  if (sourceId === "upnp") {
+    return source?.connectionState === "connected" || source?.connectionState === "armed";
+  }
+  return source?.connectionState === "connected";
+}
+
+function getRollbackSourceTarget(state: TikpalState): SourceSwitchTarget {
+  const currentSource = state.audio.currentSource;
+  if (!isSourceSwitchTarget(currentSource.id)) return "mpd";
+  if (isExternalHandoffTarget(currentSource.id) && currentSource.connectionState !== "connected") return "mpd";
+  return currentSource.id;
+}
+
+function getRememberedSourceKey(source: RememberedAudioSource | null | undefined) {
+  if (!source) return "";
+  return [
+    source.target,
+    source.localTrackPath ?? "",
+    source.radioStationId ?? "",
+    source.updatedAt ?? ""
+  ].join("|");
+}
+
+function normalizeLibraryTrackPath(value: string | null | undefined) {
+  const normalized = String(value ?? "").trim().replaceAll("\\", "/").replace(/^\/+/, "");
+  return normalized.startsWith("Codex/") ? normalized.slice("Codex/".length) : normalized;
+}
+
+function isRememberedLibraryTrackCurrent(state: TikpalState, localTrackPath: string) {
+  const rememberedPath = normalizeLibraryTrackPath(localTrackPath);
+  if (!rememberedPath) return false;
+  return state.playback.queuePreview.some((entry) => (
+    entry.active && normalizeLibraryTrackPath(entry.id) === rememberedPath
+  ));
+}
+
+function shouldRestoreRememberedSource(state: TikpalState, rememberedSource: RememberedAudioSource | null | undefined) {
+  if (!rememberedSource || !isSourceSwitchTarget(rememberedSource.target)) return false;
+  if (rememberedSource.target === "mpd" && rememberedSource.localTrackPath) {
+    if (state.audio.currentSource.id !== "mpd") return true;
+    return !isRememberedLibraryTrackCurrent(state, rememberedSource.localTrackPath);
+  }
+  if (rememberedSource.target === "radio" && rememberedSource.radioStationId) {
+    if (state.audio.currentSource.id !== "radio") return true;
+    return state.audio.currentSource.radioStationId !== rememberedSource.radioStationId;
+  }
+  if (state.audio.currentSource.id === rememberedSource.target) return false;
+  return true;
+}
+
+function readActiveSceneVideoSnapshot() {
+  const scene = document.querySelector(".flame-scene");
+  const video = document.querySelector("video.flame-video.is-active")
+    ?? document.querySelector("video.flame-video[data-flame-layer=\"active\"][data-flame-loop-role=\"active\"]")
+    ?? document.querySelector(".flame-video-layer.is-active video.flame-video");
+  if (!(video instanceof HTMLVideoElement)) {
+    return {
+      present: false,
+      scenePresent: Boolean(scene),
+      transition: scene?.getAttribute("data-flame-transition") ?? null,
+      transitionPhase: scene?.getAttribute("data-flame-transition-phase") ?? null,
+      sceneClass: scene?.className ?? null
+    };
+  }
+
+  return {
+    present: true,
+    scenePresent: Boolean(scene),
+    transition: scene?.getAttribute("data-flame-transition") ?? null,
+    transitionPhase: scene?.getAttribute("data-flame-transition-phase") ?? null,
+    src: video.currentSrc || video.src || null,
+    currentTime: Number.isFinite(video.currentTime) ? video.currentTime : null,
+    duration: Number.isFinite(video.duration) ? video.duration : null,
+    readyState: video.readyState,
+    networkState: video.networkState,
+    paused: video.paused,
+    ended: video.ended,
+    muted: video.muted,
+    health: video.dataset.flameVideoHealth ?? null,
+    frameReady: video.dataset.flameFrameReady ?? null,
+    sceneVolume: Number.isFinite(Number(video.dataset.sceneVolume)) ? Number(video.dataset.sceneVolume) : null
+  };
+}
+
 export default function App() {
   const [now, setNow] = useState(() => new Date());
   const [fontTheme, setFontTheme] = useState<FontTheme>(readInitialFontTheme);
@@ -82,19 +210,170 @@ export default function App() {
   const [lyricsFontSize, setLyricsFontSize] = useState<LyricsFontSize>(readInitialLyricsFontSize);
   const [sceneVideoEnabled, setSceneVideoEnabled] = useState(() => readStoredBoolean(SCENE_VIDEO_ENABLED_STORAGE_KEY, true));
   const [clockVisible, setClockVisible] = useState(() => readStoredBoolean(CLOCK_VISIBLE_STORAGE_KEY, true));
-  const [sceneSoundEnabled, setSceneSoundEnabled] = useState(false);
   const [sceneSoundPending, setSceneSoundPending] = useState(false);
+  const [ambientSourcePickerRequest, setAmbientSourcePickerRequest] = useState(0);
+  const [ambientSourcePickerOpen, setAmbientSourcePickerOpen] = useState(false);
   const [startupChooserVisible, setStartupChooserVisible] = useState(() => readInitialMode() === "ambient");
   const [activeSceneVideo, setActiveSceneVideo] = useState<BackgroundVideoSummary>(DEFAULT_SCENE_VIDEO);
+  const sceneSoundPendingSinceRef = useRef<number | null>(null);
+  const eventLoopLagRef = useRef(0);
+  const heartbeatStateRef = useRef<Record<string, unknown>>({});
+  const previousRoomModeRef = useRef<RoomMode | null>(null);
+  const hifiRestoreKeyRef = useRef<string>("");
+  const hifiRestoreInFlightRef = useRef(false);
+  const roomExperienceRef = useRef<RoomExperienceState | null>(null);
   const { mode, hudVisible, idleTotalMs, idleRemainingMs, showHud, toggleHud, changeMode, returnAmbient, resetIdleTimer } = useAppMode(readInitialMode());
   const { state: tikpalState, status: tikpalStatus, refresh, sendPlaybackAction, sendSystemAction, sendSourceSwitch } = useTikpalState();
-  const { experience: roomExperience, sendExperienceAction } = useRoomExperience();
+  const { experience: roomExperience, status: roomExperienceStatus, refresh: refreshRoomExperience, sendExperienceAction } = useRoomExperience();
 
   useBrowserKioskGuard();
 
   useEffect(() => {
+    roomExperienceRef.current = roomExperience;
+  }, [roomExperience]);
+
+  useEffect(() => {
     const interval = window.setInterval(() => setNow(new Date()), 1000);
     return () => window.clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    let expectedAt = window.performance.now() + EVENT_LOOP_LAG_SAMPLE_MS;
+    const interval = window.setInterval(() => {
+      const nowMs = window.performance.now();
+      eventLoopLagRef.current = Math.max(0, nowMs - expectedAt);
+      expectedAt = nowMs + EVENT_LOOP_LAG_SAMPLE_MS;
+    }, EVENT_LOOP_LAG_SAMPLE_MS);
+
+    return () => window.clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    heartbeatStateRef.current = {
+      mode,
+      roomMode: roomExperience.mode,
+      roomPhase: roomExperience.phase,
+      roomUpdatedAt: roomExperience.updatedAt,
+      sceneVideoId: roomExperience.sceneVideoId,
+      sceneSoundEnabled: roomExperience.sceneSoundEnabled,
+      sceneVideoEnabled,
+      playbackSource: tikpalState.playback.source,
+      playbackState: tikpalState.playback.state,
+      playbackTitle: tikpalState.playback.title,
+      audioSourceId: tikpalState.audio.currentSource.id,
+      activeSceneVideoId: activeSceneVideo.id,
+      activeSceneVideoLabel: activeSceneVideo.label,
+      activeSceneVideoSrc: activeSceneVideo.src,
+      tikpalStatus,
+      roomExperienceStatus,
+      sceneSoundPending,
+      sceneSoundPendingSinceMs: sceneSoundPendingSinceRef.current
+    };
+  });
+
+  useEffect(() => {
+    function buildPendingSnapshot(nowMs: number) {
+      const snapshot = heartbeatStateRef.current;
+      const sceneSoundPendingSnapshot = snapshot.sceneSoundPending === true;
+      const sceneSoundPendingSinceMs = typeof snapshot.sceneSoundPendingSinceMs === "number"
+        ? snapshot.sceneSoundPendingSinceMs
+        : null;
+      const tikpalStatusSnapshot = snapshot.tikpalStatus as typeof tikpalStatus | undefined;
+      const roomStatusSnapshot = snapshot.roomExperienceStatus as typeof roomExperienceStatus | undefined;
+
+      if (sceneSoundPendingSnapshot) {
+        return {
+          active: true,
+          kind: "scene_sound",
+          sinceMs: sceneSoundPendingSinceMs,
+          durationMs: sceneSoundPendingSinceMs ? nowMs - sceneSoundPendingSinceMs : null
+        };
+      }
+
+      if (tikpalStatusSnapshot?.pending) {
+        const sinceMs = tikpalStatusSnapshot.pendingSinceMs;
+        return {
+          active: true,
+          kind: tikpalStatusSnapshot.pendingAction ?? "tikpal",
+          sinceMs,
+          durationMs: sinceMs ? nowMs - sinceMs : null
+        };
+      }
+
+      if (roomStatusSnapshot?.pending) {
+        const sinceMs = roomStatusSnapshot.pendingSinceMs;
+        return {
+          active: true,
+          kind: roomStatusSnapshot.pendingAction ?? "experience",
+          sinceMs,
+          durationMs: sinceMs ? nowMs - sinceMs : null
+        };
+      }
+
+      return {
+        active: false,
+        kind: null,
+        sinceMs: null,
+        durationMs: null
+      };
+    }
+
+    function postHeartbeat() {
+      const nowMs = Date.now();
+      const snapshot = heartbeatStateRef.current;
+      const tikpalStatusSnapshot = snapshot.tikpalStatus as typeof tikpalStatus | undefined;
+      const roomStatusSnapshot = snapshot.roomExperienceStatus as typeof roomExperienceStatus | undefined;
+
+      void sendKioskHeartbeat({
+        clientSentAtMs: nowMs,
+        path: window.location.pathname,
+        visibility: document.visibilityState,
+        pageMode: snapshot.mode ?? "ambient",
+        room: {
+          mode: snapshot.roomMode ?? "calm",
+          phase: snapshot.roomPhase ?? "idle",
+          updatedAt: snapshot.roomUpdatedAt ?? null
+        },
+        playback: {
+          source: snapshot.playbackSource ?? null,
+          state: snapshot.playbackState ?? null,
+          title: snapshot.playbackTitle ?? null
+        },
+        source: {
+          current: snapshot.audioSourceId ?? null
+        },
+        scene: {
+          videoId: snapshot.sceneVideoId ?? null,
+          activeVideoId: snapshot.activeSceneVideoId ?? null,
+          activeVideoLabel: snapshot.activeSceneVideoLabel ?? null,
+          activeVideoSrc: snapshot.activeSceneVideoSrc ?? null,
+          sceneSoundEnabled: snapshot.sceneSoundEnabled === true,
+          sceneVideoEnabled: snapshot.sceneVideoEnabled === true
+        },
+        status: {
+          systemStateSource: tikpalStatusSnapshot?.source ?? "fallback",
+          systemStateError: tikpalStatusSnapshot?.error ?? null,
+          lastSystemStateSuccessAtMs: tikpalStatusSnapshot?.lastSuccessAtMs ?? null,
+          roomStateSource: roomStatusSnapshot?.source ?? "fallback",
+          roomStateError: roomStatusSnapshot?.error ?? null,
+          lastRoomStateSuccessAtMs: roomStatusSnapshot?.lastSuccessAtMs ?? null,
+          pending: buildPendingSnapshot(nowMs)
+        },
+        eventLoop: {
+          lagMs: eventLoopLagRef.current
+        },
+        activeSceneVideo: readActiveSceneVideoSnapshot()
+      }).catch(() => {
+        // The kiosk watchdog treats stale heartbeats as unhealthy; the UI should not surface this.
+      });
+    }
+
+    const initialTimer = window.setTimeout(postHeartbeat, 1500);
+    const interval = window.setInterval(postHeartbeat, KIOSK_HEARTBEAT_MS);
+    return () => {
+      window.clearTimeout(initialTimer);
+      window.clearInterval(interval);
+    };
   }, []);
 
   useEffect(() => {
@@ -123,16 +402,6 @@ export default function App() {
     window.localStorage.setItem(CLOCK_VISIBLE_STORAGE_KEY, clockVisible ? "true" : "false");
   }, [clockVisible]);
 
-  useEffect(() => {
-    if (tikpalState.playback.source === "scene" && tikpalState.playback.state === "playing") {
-      setSceneSoundEnabled(roomExperience.mode !== "hifi");
-      return;
-    }
-    if (sceneSoundEnabled) {
-      setSceneSoundEnabled(false);
-    }
-  }, [roomExperience.mode, sceneSoundEnabled, tikpalState.playback.source, tikpalState.playback.state]);
-
   const activeTimeZone = roomExperience.nightSchedule.timeZone;
   const timeFormatter = useMemo(() => new Intl.DateTimeFormat("en-US", {
     hour: "2-digit",
@@ -153,45 +422,140 @@ export default function App() {
     setActiveSceneVideo(video);
   }, []);
 
-  const stopSceneSound = useCallback(async () => {
-    setSceneSoundEnabled(false);
-    if (tikpalState.playback.source !== "scene") return;
-    try {
-      await sendSourceSwitch("mpd");
-    } catch {
-      // The local video is already muted; the next API refresh will reconcile source state.
+  const handleSourceSwitch = useCallback(async (
+    target: SourceSwitchTarget,
+    radioStationId?: string,
+    localTrackPath?: string,
+    sceneVideo?: BackgroundVideoSummary
+  ) => {
+    const previousTarget = getRollbackSourceTarget(tikpalState);
+    const nextState = await sendSourceSwitch(target, radioStationId, localTrackPath, sceneVideo);
+
+    if (isExternalHandoffTarget(target) && !isSourceHandoffReady(nextState, target)) {
+      const deadline = Date.now() + EXTERNAL_HANDOFF_TIMEOUT_MS;
+      let latestState = nextState;
+
+      while (Date.now() < deadline) {
+        await delay(EXTERNAL_HANDOFF_POLL_MS);
+        const refreshedState = await refresh();
+        if (!refreshedState) continue;
+        latestState = refreshedState;
+        if (isSourceHandoffReady(latestState, target)) {
+          await refreshRoomExperience();
+          return latestState;
+        }
+      }
+
+      try {
+        await sendSourceSwitch(previousTarget);
+        if (previousTarget !== "scene") {
+          await refreshRoomExperience();
+        }
+      } catch {
+        await refresh();
+      }
+
+      throw new Error(`No ${getSourceLabel(target)} connection detected. Returned to ${getSourceLabel(previousTarget)}.`);
     }
-  }, [sendSourceSwitch, tikpalState.playback.source]);
+
+    if (target !== "scene") {
+      await refreshRoomExperience();
+    }
+    return nextState;
+  }, [refresh, refreshRoomExperience, sendSourceSwitch, tikpalState.audio.currentSource.connectionState, tikpalState.audio.currentSource.id]);
+
+  const restoreSceneSoundAfterStaleHifiRestore = useCallback(async () => {
+    let latestRoom = roomExperienceRef.current;
+    try {
+      latestRoom = await fetchRoomExperienceState();
+      roomExperienceRef.current = latestRoom;
+    } catch {
+      // Use the latest local room snapshot if the direct refresh is briefly unavailable.
+    }
+
+    if (!latestRoom || latestRoom.mode === "hifi" || !latestRoom.sceneSoundEnabled) return;
+
+    try {
+      await sendExperienceAction({
+        type: "set_scene_sound",
+        sceneSoundEnabled: true,
+        sceneVideoId: latestRoom.sceneVideoId
+      });
+      await refresh();
+      await refreshRoomExperience();
+    } catch {
+      await refresh();
+    }
+  }, [refresh, refreshRoomExperience, sendExperienceAction]);
+
+  useEffect(() => {
+    const previousMode = previousRoomModeRef.current;
+    previousRoomModeRef.current = roomExperience.mode;
+    if (roomExperience.mode !== "hifi") {
+      hifiRestoreKeyRef.current = "";
+      return;
+    }
+
+    const rememberedSource = tikpalState.audio.rememberedSource;
+    if (!rememberedSource) return;
+    const restoreKey = getRememberedSourceKey(rememberedSource);
+    const enteredHifi = previousMode !== "hifi";
+    if (!enteredHifi || !restoreKey || hifiRestoreKeyRef.current === restoreKey || hifiRestoreInFlightRef.current) return;
+    if (!shouldRestoreRememberedSource(tikpalState, rememberedSource)) return;
+
+    hifiRestoreKeyRef.current = restoreKey;
+    hifiRestoreInFlightRef.current = true;
+    void (async () => {
+      try {
+        await handleSourceSwitch(
+          rememberedSource.target,
+          rememberedSource.radioStationId ?? undefined,
+          rememberedSource.localTrackPath ?? undefined
+        );
+      } catch (error) {
+        if (rememberedSource.target === "mpd" && rememberedSource.localTrackPath) {
+          try {
+            await handleSourceSwitch("mpd");
+          } catch {
+            // The normal status refresh will surface any remaining backend problem.
+          }
+        }
+      } finally {
+        await restoreSceneSoundAfterStaleHifiRestore();
+        hifiRestoreInFlightRef.current = false;
+      }
+    })();
+  }, [handleSourceSwitch, restoreSceneSoundAfterStaleHifiRestore, roomExperience.mode, tikpalState]);
 
   async function handleSceneSoundEnabledChange(enabled: boolean) {
     if (sceneSoundPending) return;
     if (enabled && roomExperience.mode === "hifi") {
-      setSceneSoundEnabled(false);
       return;
     }
+    sceneSoundPendingSinceRef.current = Date.now();
     setSceneSoundPending(true);
 
     try {
-      if (!enabled) {
-        await stopSceneSound();
-        return;
+      if (enabled) {
+        setSceneVideoEnabled(true);
       }
-
-      setSceneVideoEnabled(true);
-      const nextState = await sendSourceSwitch("scene", undefined, undefined, activeSceneVideo);
-      setSceneSoundEnabled(nextState.playback.source === "scene" && nextState.playback.state === "playing");
+      await handleRoomExperienceAction({
+        type: "set_scene_sound",
+        sceneSoundEnabled: enabled,
+        sceneVideoId: activeSceneVideo.id
+      });
     } catch {
-      setSceneSoundEnabled(false);
+      // The next API refresh will surface the backend error state if the Pi rejects the switch.
     } finally {
+      sceneSoundPendingSinceRef.current = null;
       setSceneSoundPending(false);
     }
   }
 
   function handleSceneVideoEnabledChange(enabled: boolean) {
-    if (!enabled && sceneSoundEnabled) {
-      setSceneSoundEnabled(false);
+    if (!enabled && roomExperience.sceneSoundEnabled) {
       setSceneVideoEnabled(false);
-      void stopSceneSound();
+      void handleSceneSoundEnabledChange(false);
       return;
     }
 
@@ -209,15 +573,27 @@ export default function App() {
 
   const handleStartupModeSelect = useCallback(async (nextMode: RoomMode) => {
     setStartupChooserVisible(false);
-    if (nextMode === "hifi") {
-      setSceneSoundEnabled(false);
-    }
     try {
       await handleRoomExperienceAction({ type: "set_mode", mode: nextMode });
     } catch {
       setStartupChooserVisible(true);
     }
   }, [handleRoomExperienceAction]);
+  const handleStartupModeAutoDismiss = useCallback(() => {
+    setStartupChooserVisible(false);
+  }, []);
+
+  const handleAmbientTap = useCallback(() => {
+    if (mode === "ambient" && roomExperience.mode !== "hifi") {
+      showHud();
+      if (!ambientSourcePickerOpen) {
+        setAmbientSourcePickerRequest((request) => request + 1);
+      }
+      return;
+    }
+
+    toggleHud();
+  }, [ambientSourcePickerOpen, mode, roomExperience.mode, showHud, toggleHud]);
 
   const { gesturePreview, ...gestureHandlers } = useKioskGestures({
     mode,
@@ -225,7 +601,7 @@ export default function App() {
     onOpenPlaylist: () => changeMode("playlist"),
     onOpenMenu: () => changeMode("quickMenu"),
     onReturnAmbient: returnAmbient,
-    onToggleHud: toggleHud,
+    onToggleHud: handleAmbientTap,
     onActivity: () => resetIdleTimer(mode)
   });
 
@@ -244,11 +620,15 @@ export default function App() {
         system={tikpalState.system}
         status={tikpalStatus}
         sceneVideoEnabled={sceneVideoEnabled}
-        sceneSoundEnabled={sceneSoundEnabled}
+        sceneVideoStableLoop={tikpalState.runtime.apiMode === "mpc"}
+        sceneSoundEnabled={roomExperience.sceneSoundEnabled}
         sceneSoundPending={sceneSoundPending || tikpalStatus.pending}
+        sourcePickerOpenRequest={ambientSourcePickerRequest}
         clockVisible={clockVisible}
         onPlaybackAction={sendPlaybackAction}
         onSystemAction={sendSystemAction}
+        onSourceSwitch={handleSourceSwitch}
+        onSourcePickerOpenChange={setAmbientSourcePickerOpen}
         onHudActivity={showHud}
         onLyricsVisibleChange={setLyricsVisible}
         onCurrentSceneVideoChange={handleCurrentSceneVideoChange}
@@ -262,6 +642,7 @@ export default function App() {
         active={startupChooserVisible && mode === "ambient"}
         pending={tikpalStatus.pending}
         selectedMode={roomExperience.mode}
+        onAutoDismiss={handleStartupModeAutoDismiss}
         onSelectMode={handleStartupModeSelect}
       />
 
@@ -273,7 +654,7 @@ export default function App() {
         status={tikpalStatus}
         fontTheme={fontTheme}
         onPlaybackAction={sendPlaybackAction}
-        onSourceSwitch={sendSourceSwitch}
+        onSourceSwitch={handleSourceSwitch}
         onOpenPlaylist={() => changeMode("playlist")}
         onReturnAmbient={returnAmbient}
       />
@@ -283,7 +664,9 @@ export default function App() {
         roomExperience={roomExperience}
         status={tikpalStatus}
         onExperienceAction={handleRoomExperienceAction}
-        onPlaybackRefresh={() => refresh()}
+        onPlaybackRefresh={async () => {
+          await refresh();
+        }}
         onReturnAmbient={returnAmbient}
       />
       <QuickSettingsOverlay
@@ -308,7 +691,7 @@ export default function App() {
         active={mode === "quickMenu"}
         sceneVideoEnabled={sceneVideoEnabled}
         clockVisible={clockVisible}
-        sceneSoundEnabled={sceneSoundEnabled}
+        sceneSoundEnabled={roomExperience.sceneSoundEnabled}
         sceneSoundPending={sceneSoundPending || tikpalStatus.pending}
         roomMode={roomExperience.mode}
         onSceneVideoEnabledChange={handleSceneVideoEnabledChange}

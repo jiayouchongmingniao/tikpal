@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import http from "node:http";
 import { tmpdir } from "node:os";
 import path, { resolve } from "node:path";
@@ -47,7 +47,11 @@ async function requestFrom(baseUrl, path, options = {}) {
 }
 
 async function requestBinary(path) {
-  const response = await fetch(`${BASE_URL}${path}`);
+  return await requestBinaryFrom(BASE_URL, path);
+}
+
+async function requestBinaryFrom(baseUrl, path) {
+  const response = await fetch(`${baseUrl}${path}`);
   const body = Buffer.from(await response.arrayBuffer());
   return { response, body };
 }
@@ -68,6 +72,51 @@ function assert(condition, message) {
   if (!condition) {
     throw new Error(message);
   }
+}
+
+function localTrackPathFromMpcFile(file) {
+  return String(file ?? "").replace(/^Codex\//, "");
+}
+
+function formatMoodeEventTimestamp(epochSeconds) {
+  const date = new Date(epochSeconds * 1000);
+  const pad = (value) => String(value).padStart(2, "0");
+  return [
+    date.getFullYear(),
+    pad(date.getMonth() + 1),
+    pad(date.getDate())
+  ].join("") + ` ${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
+}
+
+function parseKeyValueOutput(output) {
+  const fields = new Map();
+  for (const line of output.split(/\r?\n/)) {
+    const separator = line.indexOf("=");
+    if (separator <= 0) continue;
+    fields.set(line.slice(0, separator), line.slice(separator + 1));
+  }
+  return fields;
+}
+
+function runProcess(command, args, options = {}) {
+  return new Promise((resolve) => {
+    const child = spawn(command, args, {
+      cwd: options.cwd ?? process.cwd(),
+      env: options.env ?? process.env,
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout?.on("data", (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr?.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.on("close", (code, signal) => {
+      resolve({ code, signal, stdout, stderr });
+    });
+  });
 }
 
 function runAccessControlHelperSmoke() {
@@ -128,6 +177,33 @@ function runAccessControlHelperSmoke() {
     "direct 8787 remote access should keep blocking full kiosk writes"
   );
   assert(
+    getTikpalApiAccessDecision({
+      method: "GET",
+      pathname: "/api/v1/kiosk/heartbeat",
+      remoteAddress: "192.168.10.44",
+      portableApiKey: PORTABLE_API_KEY
+    }).allowed === false,
+    "direct 8787 remote access should block kiosk heartbeat reads"
+  );
+  assert(
+    getTikpalApiAccessDecision({
+      method: "POST",
+      pathname: "/api/v1/kiosk/heartbeat",
+      remoteAddress: "192.168.10.44",
+      portableApiKey: PORTABLE_API_KEY
+    }).allowed === false,
+    "direct 8787 remote access should block kiosk heartbeat writes"
+  );
+  assert(
+    getTikpalApiAccessDecision({
+      method: "POST",
+      pathname: "/api/v1/kiosk/heartbeat",
+      remoteAddress: "::ffff:127.0.0.1",
+      portableApiKey: PORTABLE_API_KEY
+    }).allowed === true,
+    "loopback kiosk heartbeat writes should stay allowed"
+  );
+  assert(
     getTikpalWebProxyApiAccessDecision({
       method: "POST",
       pathname: "/api/v1/audio/source",
@@ -136,6 +212,16 @@ function runAccessControlHelperSmoke() {
       allowRemoteUiApi: "0"
     }).allowed === false,
     "web proxy should reuse portable remote limits until remote UI API is enabled"
+  );
+  assert(
+    getTikpalWebProxyApiAccessDecision({
+      method: "GET",
+      pathname: "/api/v1/kiosk/heartbeat",
+      remoteAddress: "192.168.10.44",
+      portableApiKey: PORTABLE_API_KEY,
+      allowRemoteUiApi: "0"
+    }).allowed === false,
+    "web proxy should not expose kiosk heartbeat to portable clients"
   );
   assert(
     getTikpalWebProxyApiAccessDecision({
@@ -155,6 +241,62 @@ function runAccessControlHelperSmoke() {
     hasValidTikpalKey({ "x-tikpal-key": PORTABLE_API_KEY }, "") === false,
     "X-Tikpal-Key helper should reject writes when no device key is configured"
   );
+}
+
+async function runAirplayMetadataHelperClockSmoke() {
+  const workspace = await mkdtemp(path.join(tmpdir(), "tikpal-airplay-helper-"));
+  const metadataJsonPath = path.join(workspace, "aplmeta.json");
+  const metadataTxtPath = path.join(workspace, "missing-aplmeta.txt");
+  const eventLogPath = path.join(workspace, "moode_spsevent.log");
+  const clockStatePath = path.join(workspace, "clock-state");
+  const eventSeconds = Math.floor(Date.now() / 1000) - 12;
+  const metadataSeconds = eventSeconds + 6;
+  const eventStamp = formatMoodeEventTimestamp(eventSeconds);
+
+  try {
+    await writeFile(
+      eventLogPath,
+      [
+        `${eventStamp} Event: Run spspre.sh`,
+        `${eventStamp} Event: Run spspost.sh`
+      ].join("\n") + "\n"
+    );
+    await writeFile(
+      metadataJsonPath,
+      `${JSON.stringify({
+        fecmd: "update_aplmeta",
+        title: "Same Second Clock",
+        artist: "AirPlay Tester",
+        album: "Helper Smoke",
+        duration: "188000",
+        sformat: "AAC 24/48K 2ch"
+      })}\n`
+    );
+    await utimes(metadataJsonPath, metadataSeconds, metadataSeconds);
+
+    const result = await runProcess("sh", ["deploy/moode/tikpal-airplay-metadata.sh"], {
+      env: {
+        ...process.env,
+        TIKPAL_AIRPLAY_EVENT_LOG: eventLogPath,
+        TIKPAL_AIRPLAY_METADATA_FILE: metadataTxtPath,
+        TIKPAL_AIRPLAY_METADATA_JSON_FILE: metadataJsonPath,
+        TIKPAL_AIRPLAY_CLOCK_STATE_FILE: clockStatePath,
+        TIKPAL_AIRPLAY_MPRIS_SERVICE: "org.invalid.ShairportSync",
+        TIKPAL_AIRPLAY_METADATA_CLOCK_LEAD_MS: "1000"
+      }
+    });
+
+    assert(result.code === 0, `AirPlay metadata helper should read fresh same-second metadata, stderr: ${result.stderr}`);
+    const fields = parseKeyValueOutput(result.stdout);
+    assert(fields.get("title") === "Same Second Clock", "AirPlay helper should output fresh metadata title");
+    assert(fields.get("artist") === "AirPlay Tester", "AirPlay helper should output fresh metadata artist");
+    assert(fields.get("metadataSource") === "json", "AirPlay helper should use json fallback in the smoke");
+    assert(fields.get("clockStartReason") === "metadata_mtime", "AirPlay helper should use metadata mtime when events start/stop in the same second");
+    assert(Number(fields.get("clockStartMs")) === metadataSeconds * 1000, "AirPlay helper should anchor the clock to metadata mtime");
+    assert(Number(fields.get("positionMs")) > 0, "AirPlay helper should emit a positive inferred position");
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
 }
 
 function localMinutesForTimeZone(timeZone, date = new Date()) {
@@ -220,6 +362,14 @@ async function waitForOutput(text) {
 
 let outputBuffer = "";
 
+function mpcFocusedSmokeEnv(overrides = {}) {
+  return {
+    ...process.env,
+    ...overrides,
+    TIKPAL_STARTUP_SCENE_SOUND_ENABLED: "0"
+  };
+}
+
 function sendProviderJson(response, status, body) {
   response.writeHead(status, {
     "Content-Type": "application/json; charset=utf-8",
@@ -232,6 +382,31 @@ function createProviderServer() {
   return http.createServer((request, response) => {
     const url = new URL(request.url ?? "/", PROVIDER_URL);
 
+    if (request.method === "GET" && url.pathname === "/geo") {
+      sendProviderJson(response, 200, {
+        city: "Shanghai",
+        region: "Shanghai",
+        country_code: "CN",
+        timezone: "Asia/Shanghai",
+        latitude: 31.2304,
+        longitude: 121.4737
+      });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/forecast") {
+      sendProviderJson(response, 200, {
+        current: {
+          weather_code: 61,
+          precipitation: 1.2,
+          rain: 1.2,
+          showers: 0,
+          snowfall: 0
+        }
+      });
+      return;
+    }
+
     if (request.method === "GET" && url.pathname === "/api/search") {
       const track = url.searchParams.get("track_name");
 
@@ -239,10 +414,33 @@ function createProviderServer() {
         sendProviderJson(response, 200, [
           {
             trackName: track,
+            artistName: "Wrong Singer",
+            albumName: "Wrong Album",
+            duration: 60,
+            syncedLyrics: "[00:05.00]Wrong city in the wrong song",
+            plainLyrics: "Wrong city in the wrong song"
+          },
+          {
+            trackName: track,
             artistName: "Sam Fischer",
             albumName: "Not a Hobby",
+            duration: 60,
             syncedLyrics: "[00:05.00]I've been seeing lonely people in crowded rooms\n[00:21.00]Covering their old heartbreaks with new tattoos\n[00:42.00]It's all about smoke screens and cigarettes\n[01:14.00]This city is gonna break my heart\n[01:46.00]This city is gonna love me then leave me alone",
             plainLyrics: "I've been seeing lonely people in crowded rooms\nCovering their old heartbreaks with new tattoos\nIt's all about smoke screens and cigarettes\nThis city is gonna break my heart"
+          }
+        ]);
+        return;
+      }
+
+      if (track === "Duration Drift") {
+        sendProviderJson(response, 200, [
+          {
+            trackName: track,
+            artistName: "Clock Source",
+            albumName: "Unreliable Metadata",
+            duration: 245,
+            syncedLyrics: "[00:05.00]AirPlay said this song was short\n[01:20.00]The provider still has the real lyric clock\n[03:40.00]Keep the correct title and artist alive",
+            plainLyrics: "AirPlay said this song was short\nThe provider still has the real lyric clock\nKeep the correct title and artist alive"
           }
         ]);
         return;
@@ -254,6 +452,12 @@ function createProviderServer() {
 
     if (request.method === "GET" && url.pathname === "/api/get") {
       const track = url.searchParams.get("track_name");
+      const duration = Number(url.searchParams.get("duration"));
+
+      if (Number.isFinite(duration) && duration > 1000) {
+        sendProviderJson(response, 400, { error: "duration should be seconds" });
+        return;
+      }
 
       if (track === "Get Lucky (feat. Pharrell Williams)") {
         sendProviderJson(response, 200, {
@@ -271,9 +475,15 @@ function createProviderServer() {
           trackName: track,
           artistName: "Daft Punk",
           albumName: "Random Access Memories",
+          duration: 337,
           syncedLyrics: null,
           plainLyrics: "I didn't want to be the one to forget\n\nI thought of everything I'd never regret"
         });
+        return;
+      }
+
+      if (track === "Duration Drift") {
+        sendProviderJson(response, 404, { error: "not found" });
         return;
       }
 
@@ -282,7 +492,7 @@ function createProviderServer() {
         return;
       }
 
-      if (track === "A.M. Ambient") {
+      if (track === "A.M. Ambient" || track === "Tikpal Calm - Radio Paradise Mellow") {
         sendProviderJson(response, 200, {
           trackName: track,
           artistName: "Internet Radio",
@@ -350,8 +560,12 @@ function createProviderServer() {
 }
 
 async function waitForLyricsStatus(expectedStatuses) {
+  return await waitForLyricsStatusAt(BASE_URL, expectedStatuses);
+}
+
+async function waitForLyricsStatusAt(baseUrl, expectedStatuses) {
   for (let attempt = 0; attempt < 40; attempt += 1) {
-    const { response, body } = await request("/api/v1/lyrics/status");
+    const { response, body } = await requestFrom(baseUrl, "/api/v1/lyrics/status");
     if (response.ok && expectedStatuses.includes(body.status)) {
       return body;
     }
@@ -360,19 +574,34 @@ async function waitForLyricsStatus(expectedStatuses) {
   throw new Error(`Lyrics state did not reach one of: ${expectedStatuses.join(", ")}`);
 }
 
+async function waitForLyricsTrackAt(baseUrl, { title, artist, statuses = ["ready"] }) {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const { response, body } = await requestFrom(baseUrl, "/api/v1/lyrics/status");
+    if (
+      response.ok
+      && statuses.includes(body.status)
+      && body.title === title
+      && (artist === undefined || body.artist === artist)
+    ) {
+      return body;
+    }
+    await wait(100);
+  }
+  throw new Error(`Lyrics state did not reach ${title} by ${artist ?? "any artist"}`);
+}
+
 async function runMpcHifiCommandGuardSmoke(roomExperienceStatePath) {
   const port = PORT + 10;
   const baseUrl = `http://${HOST}:${port}`;
   const server = spawn(process.execPath, ["server/index.mjs"], {
-    env: {
-      ...process.env,
+    env: mpcFocusedSmokeEnv({
       TIKPAL_API_HOST: HOST,
       TIKPAL_API_PORT: String(port),
       TIKPAL_PLAYER_BACKEND: "mpc",
       TIKPAL_ROOM_EXPERIENCE_STATE_PATH: roomExperienceStatePath,
       TIKPAL_HIFI_EQ_APPLY_COMMAND: "",
       TIKPAL_HIFI_SPECTRUM_COMMAND: ""
-    },
+    }),
     stdio: ["ignore", "pipe", "pipe"]
   });
 
@@ -446,6 +675,131 @@ async function runHifiSpectrumCommandSmoke(roomExperienceStatePath) {
   }
 }
 
+async function runMpcStartupSceneDefaultSmoke() {
+  const port = PORT + 15;
+  const baseUrl = `http://${HOST}:${port}`;
+  const workspace = await mkdtemp(path.join(tmpdir(), "tikpal-mpc-startup-scene-"));
+  const fakeMpcPath = path.join(workspace, "mpc-fake.mjs");
+  const roomExperienceStatePath = path.join(workspace, "room-experience-state.json");
+
+  await writeFile(fakeMpcPath, `#!/usr/bin/env node
+const rawArgs = process.argv.slice(2);
+const args = [];
+
+for (let index = 0; index < rawArgs.length; index += 1) {
+  if (rawArgs[index] === "--host" || rawArgs[index] === "--port" || rawArgs[index] === "--format") {
+    index += 1;
+    continue;
+  }
+  args.push(rawArgs[index]);
+}
+
+const command = args[0] ?? "";
+switch (command) {
+  case "status":
+    process.stdout.write("volume:30%   repeat: off   random: off   single: off   consume: off\\n");
+    break;
+  case "stats":
+    process.stdout.write("Artists: 0\\nAlbums: 0\\nSongs: 0\\nDB Updated: fake\\n");
+    break;
+  case "current":
+  case "playlist":
+  case "stop":
+  default:
+    break;
+}
+`);
+  await chmod(fakeMpcPath, 0o755);
+  await writeFile(
+    roomExperienceStatePath,
+    `${JSON.stringify({
+      mode: "calm",
+      phase: "idle",
+      presetId: "calm-rain-room",
+      sceneVideoId: "rainy-window",
+      hifiEqPresetId: "flat",
+      hifiVisualPresetId: "spectrum-bars",
+      sceneSoundEnabled: false,
+      playlistId: null,
+      volumePercent: 38,
+      brightnessPercent: 48,
+      timerMinutes: 45,
+      timerEndsAt: null,
+      nightSchedule: {
+        enabled: false,
+        timeZone: "Asia/Shanghai",
+        start: "22:30",
+        end: "06:30",
+        brightnessPercent: 5,
+        active: false,
+        preNightBrightnessPercent: null
+      }
+    }, null, 2)}\n`
+  );
+
+  const server = spawn(process.execPath, ["server/index.mjs"], {
+    env: {
+      ...process.env,
+      TIKPAL_API_HOST: HOST,
+      TIKPAL_API_PORT: String(port),
+      TIKPAL_PLAYER_BACKEND: "mpc",
+      TIKPAL_MPC_BIN: fakeMpcPath,
+      TIKPAL_MPD_HOST: "127.0.0.1",
+      TIKPAL_MPD_PORT: "6600",
+      TIKPAL_ROOM_EXPERIENCE_STATE_PATH: roomExperienceStatePath,
+      TIKPAL_OUTPUT_VOLUME_GET_COMMAND: "",
+      TIKPAL_RADIO_START_VERIFY_WINDOW_MS: "40",
+      TIKPAL_RADIO_START_VERIFY_POLL_MS: "20",
+      TIKPAL_RADIO_POST_START_SETTLE_MS: "20",
+      TIKPAL_RADIO_POST_START_RECOVERY_PLAYS: "1",
+      TIKPAL_RADIO_SWITCH_RETRY_DELAYS_MS: "20,20,20",
+      TIKPAL_STARTUP_SCENE_SOUND_ENABLED: "1"
+    },
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+
+  try {
+    await waitForHealthAt(baseUrl);
+    let startupSceneState = null;
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const [state, experience] = await Promise.all([
+        requestFrom(baseUrl, "/api/v1/system/state"),
+        requestFrom(baseUrl, "/api/v1/experience/state")
+      ]);
+      if (
+        state.response.ok
+        && experience.response.ok
+        && state.body.audio.currentSource.id === "scene"
+        && state.body.playback.source === "scene"
+        && experience.body.sceneSoundEnabled === true
+      ) {
+        startupSceneState = { state, experience };
+        break;
+      }
+      await wait(200);
+    }
+
+    assert(startupSceneState, "mpc startup should keep product default Scene Sound enabled");
+    assert(
+      startupSceneState.state.body.playback.title === "Scene Audio",
+      "mpc startup scene should expose Scene Audio playback"
+    );
+    assert(
+      startupSceneState.experience.body.sceneVideoId === "rainy-window",
+      "mpc startup scene should keep the calm room scene video"
+    );
+  } finally {
+    if (server.exitCode === null && server.signalCode === null) {
+      server.kill("SIGTERM");
+      await Promise.race([
+        new Promise((resolve) => server.once("exit", resolve)),
+        wait(1000)
+      ]);
+    }
+    await rm(workspace, { recursive: true, force: true });
+  }
+}
+
 async function runMpcLocalLibraryPathSmoke(roomExperienceStatePath) {
   const port = PORT + 12;
   const baseUrl = `http://${HOST}:${port}`;
@@ -453,6 +807,7 @@ async function runMpcLocalLibraryPathSmoke(roomExperienceStatePath) {
   const fakeMpcPath = path.join(workspace, "mpc-fake.mjs");
   const fakeMpcLogPath = path.join(workspace, "mpc.log");
   const fakeMpcStatePath = path.join(workspace, "mpc-state.json");
+  const fakeAudioSourceMemoryStatePath = path.join(workspace, "audio-source-memory.json");
   const fakeMpcTracks = [
     "Codex/Focus/Lo-fi Ambient/FASSounds - Good Night - Lofi Cozy Chill Music - 02m27s - Lo-fi.mp3",
     "Codex/Focus/Lo-fi Ambient/FASSounds - Lofi Study - Calm Peaceful Chill Hop - 02m27s - Lo-fi.mp3",
@@ -529,6 +884,10 @@ switch (command) {
     state.current = Math.min(state.queue.length - 1, state.current + 1);
     writeState(state);
     break;
+  case "prev":
+    state.current = Math.max(0, state.current - 1);
+    writeState(state);
+    break;
   case "play":
     if (rest[0]) state.current = Math.max(0, Number(rest[0]) - 1);
     state.state = positionalPlayStaysPaused && rest[0] ? "paused" : "playing";
@@ -574,8 +933,7 @@ switch (command) {
   await writeFile(fakeMpcLogPath, "");
 
   const server = spawn(process.execPath, ["server/index.mjs"], {
-    env: {
-      ...process.env,
+    env: mpcFocusedSmokeEnv({
       TIKPAL_API_HOST: HOST,
       TIKPAL_API_PORT: String(port),
       TIKPAL_PLAYER_BACKEND: "mpc",
@@ -585,11 +943,12 @@ switch (command) {
       TIKPAL_MPD_DEFAULT_QUEUE_PATH: "Codex",
       TIKPAL_OUTPUT_VOLUME_GET_COMMAND: "",
       TIKPAL_ROOM_EXPERIENCE_STATE_PATH: roomExperienceStatePath,
+      TIKPAL_AUDIO_SOURCE_MEMORY_STATE_PATH: fakeAudioSourceMemoryStatePath,
       TIKPAL_FAKE_MPC_LOG: fakeMpcLogPath,
       TIKPAL_FAKE_MPC_STATE: fakeMpcStatePath,
       TIKPAL_FAKE_MPC_TRACKS: JSON.stringify(fakeMpcTracks),
       TIKPAL_FAKE_MPC_POSITIONAL_PLAY_STAYS_PAUSED: "1"
-    },
+    }),
     stdio: ["ignore", "pipe", "pipe"]
   });
 
@@ -601,6 +960,26 @@ switch (command) {
     assert(library.response.ok, "mpc local library path smoke should read the local library");
     const localTrackPath = library.body.tracks[0]?.path;
     assert(localTrackPath && !localTrackPath.startsWith("Codex/"), "local library should expose manifest-relative track paths");
+
+    const staleLocalTrackPath = "Removed/Old Library Track.mp3";
+    await writeFile(
+      fakeAudioSourceMemoryStatePath,
+      `${JSON.stringify({
+        target: "radio",
+        localTrackPath: staleLocalTrackPath,
+        radioStationId: "radio-503",
+        updatedAt: "2026-01-01T00:00:00.000Z"
+      }, null, 2)}\n`
+    );
+    const staleLibraryResume = await requestFrom(baseUrl, "/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({ target: "mpd" })
+    });
+    assert(staleLibraryResume.response.ok, "mpc Library resume with replaced-library stale memory should return 200");
+    assert(
+      staleLibraryResume.body.audio.rememberedSource?.localTrackPath !== staleLocalTrackPath,
+      "mpc Library resume should not write back a local track path missing from the current library manifest"
+    );
 
     const switched = await requestFrom(baseUrl, "/api/v1/audio/source", {
       method: "POST",
@@ -621,6 +1000,7 @@ switch (command) {
     assert(log.includes("play\t1"), "mpc local library switch should start the requested MPD queue position");
     assert(log.includes("play\n"), "mpc local library switch should retry playback when MPD stayed paused");
     assert(!log.includes(`add\t${localTrackPath}\n`), "mpc local library switch should not add the raw manifest path first");
+    assert(switched.body.audio.rememberedSource?.localTrackPath === localTrackPath, "mpc local library switch should remember the selected local track path");
 
     await requestFrom(baseUrl, "/api/v1/playback/actions", {
       method: "POST",
@@ -634,9 +1014,21 @@ switch (command) {
     assert(next.response.ok, "mpc local library next should return 200");
     assert(next.body.playback.state === "playing", "mpc local library next should resume playback when MPD stayed paused");
     assert(next.body.playback.currentTrackIndex === 2, "mpc local library next should advance within the loaded queue");
+    assert(next.body.audio.rememberedSource?.localTrackPath === localTrackPathFromMpcFile(fakeMpcTracks[1]), "mpc local library next should remember the advanced local track");
     const nextLog = await readFile(fakeMpcLogPath, "utf8");
     assert(nextLog.includes("next"), "mpc local library next should issue next");
     assert(nextLog.includes("play"), "mpc local library next should explicitly resume MPD after advancing");
+
+    await writeFile(fakeMpcLogPath, "");
+    const previous = await requestFrom(baseUrl, "/api/v1/playback/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "previous" })
+    });
+    assert(previous.response.ok, "mpc local library previous should return 200");
+    assert(previous.body.playback.currentTrackIndex === 1, "mpc local library previous should return to the first queue entry");
+    assert(previous.body.audio.rememberedSource?.localTrackPath === localTrackPath, "mpc local library previous should remember the previous local track");
+    const previousLog = await readFile(fakeMpcLogPath, "utf8");
+    assert(previousLog.includes("prev"), "mpc local library previous should issue prev");
   } finally {
     if (server.exitCode === null && server.signalCode === null) {
       server.kill("SIGTERM");
@@ -689,8 +1081,7 @@ switch (command) {
   await chmod(slowCommandPath, 0o755);
 
   const server = spawn(process.execPath, ["server/index.mjs"], {
-    env: {
-      ...process.env,
+    env: mpcFocusedSmokeEnv({
       TIKPAL_API_HOST: HOST,
       TIKPAL_API_PORT: String(port),
       TIKPAL_PLAYER_BACKEND: "mpc",
@@ -707,7 +1098,7 @@ switch (command) {
       TIKPAL_AIRPLAY_ACTIVE_COMMAND: `${slowCommandPath} airplay-active`,
       TIKPAL_AIRPLAY_RECEIVER_ACTIVE_COMMAND: `${slowCommandPath} airplay-receiver`,
       TIKPAL_UPNP_ACTIVE_COMMAND: `${slowCommandPath} upnp-active`
-    },
+    }),
     stdio: ["ignore", "pipe", "pipe"]
   });
 
@@ -734,13 +1125,993 @@ switch (command) {
   }
 }
 
+async function runMpcRadioPresetFastSnapshotSmoke(roomExperienceStatePath) {
+  const port = PORT + 16;
+  const baseUrl = `http://${HOST}:${port}`;
+  const workspace = await mkdtemp(path.join(tmpdir(), "tikpal-mpc-radio-preset-"));
+  const fakeMpcPath = path.join(workspace, "mpc-fake.mjs");
+  const fakeKioskAudioReleasePath = path.join(workspace, "release-kiosk-audio.mjs");
+  const fakeSqlitePath = path.join(workspace, "sqlite3");
+  const fakeDdcutilPath = path.join(workspace, "ddcutil");
+  const fakeMpcStatePath = path.join(workspace, "mpc-state.json");
+  const fakeBrightnessStatePath = path.join(workspace, "brightness-state.txt");
+  const fakeLogoDir = path.join(workspace, "radio-logos");
+  const fakeAudioVolumeStatePath = path.join(workspace, "audio-volume-state.json");
+  const fakeAudioSourceMemoryStatePath = path.join(workspace, "audio-source-memory.json");
+  const radioUri = "http://radio.example/tikpal-calm";
+
+  await writeFile(fakeMpcStatePath, JSON.stringify({
+    currentFile: "Codex/Smoke.mp3",
+    failedStreamUri: null,
+    failDecodeAfterAddForUri: null,
+    failDecodeAfterCurrentUri: null,
+    failDecodeAfterStatusReads: 0,
+    failDecodeOnAddForUri: null,
+    playbackState: "playing",
+    volume: 0,
+    failNextAddForUri: radioUri,
+    addFailures: 0,
+    radioStartStatusFailures: 1,
+    observations: []
+  }));
+  await mkdir(fakeLogoDir, { recursive: true });
+  await writeFile(path.join(fakeLogoDir, "Tikpal Focus - Test Exact.jpg"), Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
+  await writeFile(path.join(fakeLogoDir, "FluxFM - Chillout Radio.jpg"), Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
+  await writeFile(fakeAudioVolumeStatePath, JSON.stringify({ version: 1, lastNonZeroPercent: 44, updatedAt: "2026-01-01T00:00:00.000Z" }));
+  await writeFile(fakeBrightnessStatePath, "48\n");
+  await writeFile(fakeMpcPath, `#!/usr/bin/env node
+import { readFileSync, writeFileSync } from "node:fs";
+
+const statePath = ${JSON.stringify(fakeMpcStatePath)};
+const roomStatePath = ${JSON.stringify(roomExperienceStatePath)};
+function readState() {
+  return JSON.parse(readFileSync(statePath, "utf8"));
+}
+function writeState(state) {
+  writeFileSync(statePath, JSON.stringify(state));
+}
+function readRoomSceneSoundEnabled() {
+  try {
+    return JSON.parse(readFileSync(roomStatePath, "utf8")).sceneSoundEnabled === true;
+  } catch {
+    return null;
+  }
+}
+function recordObservation(state, command) {
+  return {
+    ...state,
+    observations: [
+      ...(Array.isArray(state.observations) ? state.observations : []),
+      { command, sceneSoundEnabled: readRoomSceneSoundEnabled() }
+    ]
+  };
+}
+const rawArgs = process.argv.slice(2);
+const fileOnlyCurrent = rawArgs.includes("--format") && rawArgs[rawArgs.indexOf("--format") + 1] === "%file%";
+const args = [];
+for (let index = 0; index < rawArgs.length; index += 1) {
+  if (rawArgs[index] === "--host" || rawArgs[index] === "--port" || rawArgs[index] === "--format") {
+    index += 1;
+    continue;
+  }
+  args.push(rawArgs[index]);
+}
+const command = args[0] ?? "";
+const state = readState();
+const statusFile = state.currentFile || state.failedStreamUri || "";
+const isRadio = /^https?:\\/\\//i.test(statusFile);
+switch (command) {
+  case "listall":
+    process.stdout.write("Codex/Smoke.mp3\\n");
+    break;
+  case "current":
+    if (!state.currentFile) break;
+    if (fileOnlyCurrent) {
+      process.stdout.write(state.currentFile + "\\n");
+      break;
+    }
+    process.stdout.write(isRadio
+      ? "Tikpal Calm Test\\tInternet Radio\\tRadio\\t" + state.currentFile + "\\t0:00\\n"
+      : "Smoke Title\\tSmoke Artist\\tSmoke Album\\t" + state.currentFile + "\\t02:00\\n");
+    break;
+  case "status":
+    if (state.failedStreamUri) {
+      process.stdout.write("volume:" + state.volume + "%   repeat: off   random: off   single: off   consume: off\\nERROR: Failed to decode \\"" + state.failedStreamUri + "\\"; Connection timed out after 10000 milliseconds: Timeout was reached\\n");
+      break;
+    }
+    if (state.failDecodeAfterCurrentUri && state.currentFile === state.failDecodeAfterCurrentUri) {
+      const remaining = Number(state.failDecodeAfterStatusReads ?? 0);
+      if (remaining <= 0) {
+        writeState(recordObservation({
+          ...state,
+          currentFile: "",
+          failedStreamUri: state.failDecodeAfterCurrentUri,
+          playbackState: "stopped"
+        }, "status-stream-failed"));
+        process.stdout.write("volume:" + state.volume + "%   repeat: off   random: off   single: off   consume: off\\nERROR: Failed to decode \\"" + state.failDecodeAfterCurrentUri + "\\"; Connection timed out after 10000 milliseconds: Timeout was reached\\n");
+        break;
+      }
+      writeState(recordObservation({
+        ...state,
+        failDecodeAfterStatusReads: remaining - 1,
+        playbackState: "playing"
+      }, "status-stream-pending"));
+      process.stdout.write("[playing] #1/1 0:01/0:00 (0%)\\nvolume:" + state.volume + "%   repeat: off   random: off   single: off   consume: off\\n");
+      break;
+    }
+    if (isRadio && Number(state.radioStartStatusFailures ?? 0) > 0) {
+      writeState(recordObservation({
+        ...state,
+        radioStartStatusFailures: Number(state.radioStartStatusFailures ?? 0) - 1,
+        playbackState: "paused"
+      }, "status-busy"));
+      process.stdout.write("[" + "paused" + "] #1/1 0:00/" + "0:00" + " (0%)\\nvolume:" + state.volume + "%   repeat: off   random: off   single: off   consume: off\\nERROR: Failed to open \\"ALSA Default\\" (alsa); Failed to open ALSA device \\"_audioout\\": Device or resource busy\\n");
+      break;
+    }
+    process.stdout.write("[" + state.playbackState + "] #1/1 0:01/" + (isRadio ? "0:00" : "2:00") + " (0%)\\nvolume:" + state.volume + "%   repeat: off   random: off   single: off   consume: off\\n");
+    break;
+  case "stats":
+    process.stdout.write("Artists: 1\\nAlbums: 1\\nSongs: 1\\nDB Updated: fake\\n");
+    break;
+  case "playlist":
+    if (state.currentFile) process.stdout.write("0\\tTikpal Calm Test\\tInternet Radio\\tRadio\\t0:00\\t" + state.currentFile + "\\n");
+    break;
+  case "clear":
+    writeState(recordObservation({ ...state, currentFile: "", failedStreamUri: null }, "clear"));
+    break;
+  case "add":
+    if (state.failDecodeOnAddForUri && state.failDecodeOnAddForUri === args[1]) {
+      writeState(recordObservation({
+        ...state,
+        currentFile: "",
+        failedStreamUri: args[1],
+        playbackState: "stopped",
+        addFailures: Number(state.addFailures ?? 0) + 1
+      }, "add-failed-stream"));
+      break;
+    }
+    if (state.failNextAddForUri && state.failNextAddForUri === args[1]) {
+      writeState(recordObservation({
+        ...state,
+        failNextAddForUri: null,
+        addFailures: Number(state.addFailures ?? 0) + 1
+      }, "add-failed"));
+      process.stderr.write("Failed to open ALSA device _audioout: Device or resource busy\\n");
+      process.exit(1);
+    }
+    if (state.failAlwaysAddForUri && state.failAlwaysAddForUri === args[1]) {
+      writeState(recordObservation({
+        ...state,
+        addFailures: Number(state.addFailures ?? 0) + 1
+      }, "add-failed"));
+      process.stderr.write("Failed to open ALSA device _audioout: Device or resource busy\\n");
+      process.exit(1);
+    }
+    writeState(recordObservation({
+      ...state,
+      currentFile: args[1] ?? "",
+      failedStreamUri: null,
+      failDecodeAfterCurrentUri: state.failDecodeAfterAddForUri === args[1] ? args[1] : state.failDecodeAfterCurrentUri
+    }, "add"));
+    break;
+  case "play":
+    writeState(recordObservation({ ...state, playbackState: "playing" }, "play"));
+    break;
+  case "pause":
+    writeState({ ...state, playbackState: "paused" });
+    break;
+  case "stop":
+    writeState({ ...state, playbackState: "stopped" });
+    break;
+  case "volume":
+    writeState({ ...state, volume: Number(args[1] ?? 0) });
+    break;
+  default:
+    break;
+}
+`);
+  await chmod(fakeMpcPath, 0o755);
+  await writeFile(fakeKioskAudioReleasePath, `#!/usr/bin/env node
+import { readFileSync, writeFileSync } from "node:fs";
+
+const statePath = ${JSON.stringify(fakeMpcStatePath)};
+const roomStatePath = ${JSON.stringify(roomExperienceStatePath)};
+const state = JSON.parse(readFileSync(statePath, "utf8"));
+let sceneSoundEnabled = null;
+try {
+  sceneSoundEnabled = JSON.parse(readFileSync(roomStatePath, "utf8")).sceneSoundEnabled === true;
+} catch {
+  sceneSoundEnabled = null;
+}
+writeFileSync(statePath, JSON.stringify({
+  ...state,
+  observations: [
+    ...(Array.isArray(state.observations) ? state.observations : []),
+    { command: "release-kiosk-audio", sceneSoundEnabled }
+  ]
+}));
+`);
+  await chmod(fakeKioskAudioReleasePath, 0o755);
+  await writeFile(fakeSqlitePath, `#!/usr/bin/env node
+if (process.argv.join(" ").includes("cfg_radio")) {
+  process.stdout.write([
+    "1|1.FM - Blues Radio|http://radio.example/blues|Blues|1.FM|192|MP3|local",
+    "500|Tikpal Focus - Test Exact|http://radio.example/tikpal-focus|Focus, Ambient|Test FM|320|MP3|local",
+    "501|Tikpal Focus - Backup|http://radio.example/tikpal-focus-backup|Focus|Backup FM|320|MP3|local",
+    "502|Tikpal Focus - Dead Link|http://radio.example/tikpal-dead|Focus|Dead FM|320|MP3|local",
+    "511|Tikpal Calm - FluxFM Chillout|${radioUri}|Calm, Chill Out, Laidback|FluxFM|256|MP3|local"
+  ].join("\\n") + "\\n");
+}
+`);
+  await chmod(fakeSqlitePath, 0o755);
+  await writeFile(fakeDdcutilPath, `#!/usr/bin/env node
+import { readFileSync, writeFileSync } from "node:fs";
+
+const statePath = ${JSON.stringify(fakeBrightnessStatePath)};
+const args = process.argv.slice(2);
+const getIndex = args.indexOf("getvcp");
+const setIndex = args.indexOf("setvcp");
+if (getIndex >= 0) {
+  process.stdout.write("VCP 10 C " + readFileSync(statePath, "utf8").trim() + " 100\\n");
+} else if (setIndex >= 0) {
+  writeFileSync(statePath, String(Number(args[setIndex + 2] ?? 0)) + "\\n");
+} else {
+  process.exit(1);
+}
+`);
+  await chmod(fakeDdcutilPath, 0o755);
+
+  const server = spawn(process.execPath, ["server/index.mjs"], {
+    env: mpcFocusedSmokeEnv({
+      PATH: `${workspace}${path.delimiter}${process.env.PATH ?? ""}`,
+      TIKPAL_API_HOST: HOST,
+      TIKPAL_API_PORT: String(port),
+      TIKPAL_PLAYER_BACKEND: "mpc",
+      TIKPAL_MPC_BIN: fakeMpcPath,
+      TIKPAL_SQLITE_BIN: fakeSqlitePath,
+      TIKPAL_DDCUTIL_BIN: fakeDdcutilPath,
+      TIKPAL_DDCUTIL_READ_CACHE_MS: "60000",
+      TIKPAL_RADIO_LOGO_DIR: fakeLogoDir,
+      TIKPAL_AUDIO_VOLUME_STATE_PATH: fakeAudioVolumeStatePath,
+      TIKPAL_AUDIO_SOURCE_MEMORY_STATE_PATH: fakeAudioSourceMemoryStatePath,
+      TIKPAL_MPD_HOST: "127.0.0.1",
+      TIKPAL_MPD_PORT: "6600",
+      TIKPAL_ROOM_EXPERIENCE_STATE_PATH: roomExperienceStatePath,
+      TIKPAL_STATE_SNAPSHOT_REFRESH_MS: "60000",
+      TIKPAL_RADIO_DEFAULT_URI: "",
+      TIKPAL_RADIO_ACTIVATE_COMMAND: "",
+      TIKPAL_RADIO_START_VERIFY_WINDOW_MS: "120",
+      TIKPAL_RADIO_START_VERIFY_POLL_MS: "20",
+      TIKPAL_RADIO_POST_START_SETTLE_MS: "20",
+      TIKPAL_RADIO_POST_START_RECOVERY_PLAYS: "1",
+      TIKPAL_RADIO_SWITCH_RETRY_DELAYS_MS: "20,20,20",
+      TIKPAL_RADIO_AUTO_SKIP_POST_START_SETTLE_MS: "20",
+      TIKPAL_RADIO_AUTO_SKIP_VERIFY_WINDOW_MS: "80",
+      TIKPAL_RADIO_LATE_PLAY_NUDGE_DELAYS_MS: "80,160,260",
+      TIKPAL_KIOSK_AUDIO_RELEASE_COMMAND: `${process.execPath} ${fakeKioskAudioReleasePath}`,
+      TIKPAL_KIOSK_AUDIO_RELEASE_SETTLE_MS: "1"
+    }),
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+
+  try {
+    await waitForHealthAt(baseUrl);
+    const catalog = await requestFrom(baseUrl, "/api/v1/audio/radios");
+    assert(catalog.response.ok, "mpc radio preset catalog should return 200");
+    assert(catalog.body.total === 4, "mpc radio catalog should default to Tikpal curated stations");
+    assert(catalog.body.stations[0]?.id === "radio-500", "mpc radio catalog should expose high-id Tikpal cfg_radio rows first");
+    assert(catalog.body.stations[0]?.category === "focus", "mpc radio catalog should expose Tikpal category");
+    assert(catalog.body.stations[0]?.broadcaster === "Test FM", "mpc radio catalog should expose broadcaster");
+    assert(catalog.body.stations[0]?.logoUrl?.startsWith("/api/v1/media/radio-logo?stationId=radio-500"), "mpc radio catalog should expose radio logo URL");
+    assert(catalog.body.categories.some((category) => category.id === "calm"), "mpc radio catalog should expose category tabs");
+
+    const allCatalog = await requestFrom(baseUrl, "/api/v1/audio/radios?scope=all&limit=250");
+    assert(allCatalog.response.ok, "mpc radio all-scope catalog should return 200");
+    assert(allCatalog.body.total === 5, "mpc radio all-scope catalog should include moOde and Tikpal rows");
+    assert(allCatalog.body.stations[0]?.catalogSource === "tikpal", "mpc radio all-scope catalog should keep Tikpal rows first");
+    assert(allCatalog.body.stations.some((station) => station.id === "radio-1" && station.catalogSource === "moode"), "mpc radio all-scope catalog should retain moOde rows");
+
+    const calmCatalog = await requestFrom(baseUrl, "/api/v1/audio/radios?category=calm");
+    assert(calmCatalog.response.ok, "mpc radio category catalog should return 200");
+    assert(calmCatalog.body.total === 1 && calmCatalog.body.stations[0]?.id === "radio-511", "mpc radio category filter should isolate Calm stations");
+
+    const exactLogo = await requestBinaryFrom(baseUrl, catalog.body.stations[0].logoUrl);
+    assert(exactLogo.response.ok, "mpc radio exact logo endpoint should return 200");
+    assert(exactLogo.response.headers.get("content-type")?.startsWith("image/jpeg"), "mpc radio exact logo endpoint should return image bytes");
+    assert(
+      exactLogo.response.headers.get("cache-control")?.includes("max-age=86400"),
+      "mpc radio logo endpoint should allow browser caching for faster cover switches"
+    );
+
+    const sourcesAfterCatalog = await requestFrom(baseUrl, "/api/v1/audio/sources");
+    assert(sourcesAfterCatalog.response.ok, "mpc audio sources should return 200 after radio catalog read");
+    assert(
+      sourcesAfterCatalog.body.sources.some((source) => source.id === "radio" && source.availability === "available" && source.controllability === "switchable"),
+      "mpc fast audio sources should keep Radio available from cfg_radio catalog without TIKPAL_RADIO_DEFAULT_URI"
+    );
+
+    const scene = await requestFrom(baseUrl, "/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({
+        target: "scene",
+        sceneVideoId: "rainy-window",
+        sceneVideoLabel: "Rainy Window",
+        sceneVideoSrc: "/assets/scenes/Rainy-Window.mp4"
+      })
+    });
+    assert(scene.response.ok, "mpc scene switch should return 200 before radio cache regression check");
+    assert(scene.body.audio.currentSource.id === "scene", "mpc scene switch should prime cached scene source");
+    assert(
+      scene.body.audio.sources.some((source) => source.id === "radio" && source.availability === "available" && source.controllability === "switchable"),
+      "mpc scene switch fast snapshot should keep Radio available from cached cfg_radio catalog"
+    );
+
+    const libraryAfterScene = await requestFrom(baseUrl, "/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({ target: "mpd" })
+    });
+    assert(libraryAfterScene.response.ok, `mpc library switch after cached scene should return 200, got ${libraryAfterScene.response.status}: ${JSON.stringify(libraryAfterScene.body)}`);
+    assert(libraryAfterScene.body.audio.currentSource.id === "mpd", "mpc library switch after cached scene should not keep stale Scene Sound as current");
+    assert(libraryAfterScene.body.playback.source === "mpd", "mpc library switch after cached scene should expose Library playback");
+    assert(
+      libraryAfterScene.body.audio.sources.some((source) => source.id === "scene" && source.active === false),
+      "mpc library switch after cached scene should deactivate Scene Sound"
+    );
+
+    const sceneAgain = await requestFrom(baseUrl, "/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({
+        target: "scene",
+        sceneVideoId: "rainy-window",
+        sceneVideoLabel: "Rainy Window",
+        sceneVideoSrc: "/assets/scenes/Rainy-Window.mp4"
+      })
+    });
+    assert(sceneAgain.response.ok, "mpc scene switch should return 200 before radio release regression check");
+    assert(sceneAgain.body.audio.currentSource.id === "scene", "mpc scene switch should re-prime Scene Sound before radio release regression check");
+    const stateAfterScene = JSON.parse(await readFile(fakeMpcStatePath, "utf8"));
+    await writeFile(fakeMpcStatePath, JSON.stringify({ ...stateAfterScene, observations: [] }));
+
+    const switched = await requestFrom(baseUrl, "/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({ target: "radio", radioStationId: "radio-511" })
+    });
+    assert(switched.response.ok, "mpc radio preset switch should return 200");
+    assert(switched.body.audio.currentSource.id === "radio", "mpc radio preset switch should make Radio current");
+    assert(switched.body.audio.currentSource.radioStationId === "radio-511", "mpc radio preset switch should expose the selected station id on currentSource");
+    assert(switched.body.playback.source === "radio", "mpc radio preset switch should make playback Radio");
+    assert(switched.body.audio.rememberedSource?.target === "radio", "mpc radio preset switch should remember Radio");
+    assert(switched.body.audio.rememberedSource?.radioStationId === "radio-511", "mpc radio preset switch should remember the selected station");
+    assert(switched.body.system.volume.percent === 44, "mpc radio preset switch should restore the last nonzero MPD volume");
+    assert(switched.body.playback.albumArtUrl?.startsWith("/api/v1/media/radio-logo?stationId=radio-511"), "mpc radio playback should prefer station logo artwork");
+    const activeCalmCatalog = await requestFrom(baseUrl, "/api/v1/audio/radios?category=calm");
+    assert(activeCalmCatalog.response.ok, "mpc radio active catalog should return 200");
+    assert(
+      activeCalmCatalog.body.stations[0]?.id === "radio-511" && activeCalmCatalog.body.stations[0]?.active === true,
+      "mpc radio catalog should mark the selected station active"
+    );
+    const aliasLogo = await requestBinaryFrom(baseUrl, switched.body.playback.albumArtUrl);
+    assert(aliasLogo.response.ok, "mpc radio alias logo endpoint should return 200");
+    const fakeStateAfterRadio = JSON.parse(await readFile(fakeMpcStatePath, "utf8"));
+    assert(fakeStateAfterRadio.volume === 44, "mpc radio preset switch should issue mpc volume restore command");
+    assert(fakeStateAfterRadio.addFailures === 1, "mpc radio preset switch should retry once after a busy audio output add failure");
+    assert(fakeStateAfterRadio.radioStartStatusFailures === 0, "mpc radio preset switch should nudge through a transient ALSA busy status");
+    const releaseObservationIndex = fakeStateAfterRadio.observations.findIndex((entry) => entry.command === "release-kiosk-audio");
+    const firstMpcStartIndex = fakeStateAfterRadio.observations.findIndex((entry) => ["clear", "add-failed", "add", "play"].includes(entry.command));
+    assert(releaseObservationIndex >= 0, "mpc radio preset switch should run the kiosk audio release command");
+    assert(firstMpcStartIndex >= 0 && releaseObservationIndex < firstMpcStartIndex, "mpc radio preset switch should release kiosk audio before MPD start");
+    assert(fakeStateAfterRadio.observations[releaseObservationIndex]?.sceneSoundEnabled === false, "mpc radio preset switch should release kiosk audio after scene sound is disabled");
+    assert(
+      fakeStateAfterRadio.observations
+        .filter((entry) => ["clear", "add-failed", "add", "play"].includes(entry.command))
+        .every((entry) => entry.sceneSoundEnabled === false),
+      "mpc radio preset switch should clear scene sound state before starting MPD radio"
+    );
+    assert(
+      JSON.parse(await readFile(roomExperienceStatePath, "utf8")).sceneSoundEnabled === false,
+      "mpc radio preset switch should persist scene sound as disabled"
+    );
+    assert(
+      switched.body.audio.sources.some((source) => source.id === "radio" && source.availability === "available" && source.controllability === "switchable"),
+      "mpc radio preset switch should return Radio as available and switchable without TIKPAL_RADIO_DEFAULT_URI"
+    );
+
+    const nextRadio = await requestFrom(baseUrl, "/api/v1/playback/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "next" })
+    });
+    assert(nextRadio.response.ok, "mpc radio next should return 200");
+    assert(nextRadio.body.audio.currentSource.secondaryStatus === "Tikpal Focus - Test Exact active", "mpc radio next should advance to the next Tikpal station");
+    assert(nextRadio.body.audio.currentSource.radioStationId === "radio-500", "mpc radio next should expose the advanced station id on currentSource");
+    assert(nextRadio.body.audio.rememberedSource?.radioStationId === "radio-500", "mpc radio next should remember the advanced station");
+    assert(nextRadio.body.playback.albumArtUrl?.startsWith("/api/v1/media/radio-logo?stationId=radio-500"), "mpc radio next should refresh station logo artwork");
+    assert(JSON.parse(await readFile(fakeMpcStatePath, "utf8")).currentFile === "http://radio.example/tikpal-focus", "mpc radio next should replace the MPD stream URI");
+
+    const previousRadio = await requestFrom(baseUrl, "/api/v1/playback/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "previous" })
+    });
+    assert(previousRadio.response.ok, "mpc radio previous should return 200");
+    assert(previousRadio.body.audio.currentSource.secondaryStatus === "Tikpal Calm - FluxFM Chillout active", "mpc radio previous should return to the previous Tikpal station");
+    assert(previousRadio.body.audio.currentSource.radioStationId === "radio-511", "mpc radio previous should expose the previous station id on currentSource");
+    assert(previousRadio.body.audio.rememberedSource?.radioStationId === "radio-511", "mpc radio previous should remember the previous station");
+    assert(previousRadio.body.playback.albumArtUrl?.startsWith("/api/v1/media/radio-logo?stationId=radio-511"), "mpc radio previous should refresh station logo artwork");
+    assert(JSON.parse(await readFile(fakeMpcStatePath, "utf8")).currentFile === radioUri, "mpc radio previous should replace the MPD stream URI");
+
+    const sceneAfterRadio = await requestFrom(baseUrl, "/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({
+        target: "scene",
+        sceneVideoId: "rainy-window",
+        sceneVideoLabel: "Rainy Window",
+        sceneVideoSrc: "/assets/scenes/Rainy-Window.mp4"
+      })
+    });
+    assert(sceneAfterRadio.response.ok, "mpc scene switch after Radio should return 200");
+    assert(sceneAfterRadio.body.audio.currentSource.id === "scene", "mpc scene switch after Radio should activate Scene Sound");
+    assert(sceneAfterRadio.body.audio.rememberedSource?.target === "radio", "mpc scene switch after Radio should preserve remembered Radio");
+    const sceneSoundOffAfterRadio = await requestFrom(baseUrl, "/api/v1/experience/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "set_scene_sound", sceneSoundEnabled: false })
+    });
+    assert(sceneSoundOffAfterRadio.response.ok, "mpc scene sound off after Radio should return 200");
+    assert(sceneSoundOffAfterRadio.body.sceneSoundEnabled === false, "mpc scene sound off after Radio should persist off");
+    const stateAfterSceneSoundOffRadio = await requestFrom(baseUrl, "/api/v1/system/state");
+    assert(stateAfterSceneSoundOffRadio.body.audio.currentSource.id === "radio", "mpc scene sound off after Radio should restore Radio");
+    assert(stateAfterSceneSoundOffRadio.body.audio.currentSource.radioStationId === "radio-511", "mpc scene sound off after Radio should restore the remembered station");
+    assert(stateAfterSceneSoundOffRadio.body.playback.source === "radio", "mpc scene sound off after Radio should expose Radio playback");
+    assert(stateAfterSceneSoundOffRadio.body.playback.state === "playing", "mpc scene sound off after Radio should not leave playback stopped");
+
+    const libraryAfterRadioPreset = await requestFrom(baseUrl, "/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({ target: "mpd" })
+    });
+    assert(libraryAfterRadioPreset.response.ok, "mpc Library switch after Radio preset should return 200");
+    assert(libraryAfterRadioPreset.body.audio.currentSource.id === "mpd", "mpc Library switch after Radio preset should restore MPD");
+    assert(libraryAfterRadioPreset.body.audio.rememberedSource?.target === "mpd", "mpc Library switch after Radio preset should remember Library as the last source");
+    assert(libraryAfterRadioPreset.body.audio.rememberedSource?.radioStationId === "radio-511", "mpc Library switch after Radio preset should preserve the previous station bookmark");
+    const bareRadioAfterLibraryPreset = await requestFrom(baseUrl, "/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({ target: "radio" })
+    });
+    assert(bareRadioAfterLibraryPreset.response.ok, "mpc bare Radio switch after Library should return 200");
+    assert(bareRadioAfterLibraryPreset.body.audio.currentSource.id === "radio", "mpc bare Radio switch after Library should restore Radio");
+    assert(bareRadioAfterLibraryPreset.body.audio.currentSource.radioStationId === "radio-511", "mpc bare Radio switch after Library should restore the previous station");
+    assert(bareRadioAfterLibraryPreset.body.audio.rememberedSource?.radioStationId === "radio-511", "mpc bare Radio switch after Library should keep the restored station in memory");
+
+    const fastRefresh = await requestFrom(baseUrl, "/api/v1/playback/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "pause" })
+    });
+    assert(fastRefresh.response.ok, "mpc radio fast playback mutation should return 200");
+    assert(fastRefresh.body.audio.currentSource.id === "radio", "mpc radio fast refresh should keep Radio current");
+    assert(fastRefresh.body.audio.currentSource.radioStationId === "radio-511", "mpc radio fast refresh should keep the selected station id");
+    assert(
+      fastRefresh.body.audio.currentSource.secondaryStatus === "Tikpal Calm - FluxFM Chillout active",
+      "mpc radio fast refresh should keep the selected station label"
+    );
+    assert(
+      fastRefresh.body.audio.sources.some((source) => source.id === "radio" && source.availability === "available" && source.controllability === "switchable"),
+      "mpc radio fast refresh should preserve preset-backed Radio availability"
+    );
+
+    const stateBeforeFailedStream = JSON.parse(await readFile(fakeMpcStatePath, "utf8"));
+    await writeFile(fakeMpcStatePath, JSON.stringify({
+      ...stateBeforeFailedStream,
+      currentFile: "",
+      failedStreamUri: radioUri,
+      playbackState: "stopped",
+      failAlwaysAddForUri: "http://radio.example/tikpal-focus"
+    }));
+    const failedStreamRefresh = await requestFrom(baseUrl, "/api/v1/playback/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "pause" })
+    });
+    assert(failedStreamRefresh.response.ok, "mpc failed radio stream refresh should return 200");
+    assert(failedStreamRefresh.body.playback.source === "radio", "mpc failed radio stream should still report Radio source");
+    assert(failedStreamRefresh.body.playback.state === "stopped", "mpc failed radio stream should not be reported as playing");
+    assert(failedStreamRefresh.body.audio.currentSource.radioStationId === "radio-511", "mpc failed radio stream should keep the failed station id on currentSource");
+    assert(
+      failedStreamRefresh.body.audio.currentSource.secondaryStatus === "Tikpal Calm - FluxFM Chillout active",
+      "mpc failed radio stream should keep the failed station label"
+    );
+    const failedStreamCatalog = await requestFrom(baseUrl, "/api/v1/audio/radios?category=calm");
+    assert(
+      failedStreamCatalog.body.stations[0]?.id === "radio-511" && failedStreamCatalog.body.stations[0]?.active === true,
+      "mpc failed radio stream should keep the selected station active in the catalog"
+    );
+    const nextAfterFailedStream = await requestFrom(baseUrl, "/api/v1/playback/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "next" })
+    });
+    assert(nextAfterFailedStream.response.ok, "mpc radio next should recover from a failed stream");
+    assert(nextAfterFailedStream.body.playback.state === "playing", "mpc radio next recovery should start playback");
+    assert(nextAfterFailedStream.body.audio.currentSource.radioStationId === "radio-501", "mpc radio next recovery should expose the recovered station id on currentSource");
+    assert(
+      nextAfterFailedStream.body.audio.currentSource.secondaryStatus === "Tikpal Focus - Backup active",
+      "mpc radio next recovery should skip a failed candidate station"
+    );
+    const stateAfterFailedStreamNext = JSON.parse(await readFile(fakeMpcStatePath, "utf8"));
+    assert(stateAfterFailedStreamNext.currentFile === "http://radio.example/tikpal-focus-backup", "mpc radio next recovery should replace the failed MPD stream URI");
+    assert(
+      stateAfterFailedStreamNext.addFailures === Number(stateBeforeFailedStream.addFailures ?? 0) + 1,
+      "mpc radio next recovery should skip each failed candidate after one fast failed start"
+    );
+
+    await writeFile(fakeMpcStatePath, JSON.stringify({
+      ...stateAfterFailedStreamNext,
+      currentFile: "Codex/Smoke.mp3",
+      failedStreamUri: null,
+      failAlwaysAddForUri: null,
+      failDecodeOnAddForUri: "http://radio.example/tikpal-dead",
+      playbackState: "playing"
+    }));
+    const manualDeadStationFallback = await requestFrom(baseUrl, "/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({ target: "radio", radioStationId: "radio-502" })
+    });
+    assert(manualDeadStationFallback.response.ok, "mpc radio source switch should recover from a dead selected station");
+    assert(
+      manualDeadStationFallback.body.audio.currentSource.radioStationId === "radio-511",
+      "mpc radio source switch fallback should expose the recovered station id on currentSource"
+    );
+    assert(
+      manualDeadStationFallback.body.audio.currentSource.secondaryStatus === "Tikpal Calm - FluxFM Chillout active",
+      "mpc radio source switch should advance to the next station when the selected station cannot connect"
+    );
+    assert(
+      manualDeadStationFallback.body.audio.rememberedSource?.radioStationId === "radio-511",
+      "mpc radio source switch fallback should remember the recovered station instead of the dead station"
+    );
+    assert(
+      manualDeadStationFallback.body.playback.albumArtUrl?.startsWith("/api/v1/media/radio-logo?stationId=radio-511"),
+      "mpc radio source switch fallback should refresh station logo artwork immediately"
+    );
+    assert(JSON.parse(await readFile(fakeMpcStatePath, "utf8")).currentFile === radioUri, "mpc radio source switch fallback should replace the dead selected station URI");
+
+    const stateBeforeDelayedStreamFailure = JSON.parse(await readFile(fakeMpcStatePath, "utf8"));
+    await writeFile(fakeMpcStatePath, JSON.stringify({
+      ...stateBeforeDelayedStreamFailure,
+      currentFile: "Codex/Smoke.mp3",
+      failedStreamUri: null,
+      failDecodeAfterAddForUri: "http://radio.example/tikpal-dead",
+      failDecodeAfterCurrentUri: null,
+      failDecodeAfterStatusReads: 4,
+      failDecodeOnAddForUri: null,
+      playbackState: "playing"
+    }));
+    const delayedDeadStation = await requestFrom(baseUrl, "/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({ target: "radio", radioStationId: "radio-502" })
+    });
+    assert(delayedDeadStation.response.ok, "mpc radio delayed dead stream switch should initially return 200");
+    assert(
+      delayedDeadStation.body.audio.currentSource.radioStationId === "radio-502",
+      "mpc radio delayed dead stream should initially expose the selected station id"
+    );
+    assert(
+      delayedDeadStation.body.audio.currentSource.secondaryStatus === "Tikpal Focus - Dead Link active",
+      "mpc radio delayed dead stream should initially keep the selected station label"
+    );
+    await wait(650);
+    const autoSkippedDeadStation = await requestFrom(baseUrl, "/api/v1/system/state");
+    const autoSkippedFakeState = JSON.parse(await readFile(fakeMpcStatePath, "utf8"));
+    assert(
+      autoSkippedDeadStation.body.audio.currentSource.secondaryStatus === "Tikpal Calm - FluxFM Chillout active",
+      `mpc radio late stream failure should auto-advance to the next station: ${JSON.stringify({
+        currentSource: autoSkippedDeadStation.body.audio.currentSource,
+        fakeCurrentFile: autoSkippedFakeState.currentFile,
+        fakeFailedStreamUri: autoSkippedFakeState.failedStreamUri,
+        fakeObservations: autoSkippedFakeState.observations?.slice(-8)
+      })}`
+    );
+    assert(
+      autoSkippedDeadStation.body.audio.currentSource.radioStationId === "radio-511",
+      "mpc radio late stream failure should expose the auto-advanced station id on currentSource"
+    );
+    assert(
+      autoSkippedDeadStation.body.playback.albumArtUrl?.startsWith("/api/v1/media/radio-logo?stationId=radio-511"),
+      "mpc radio late stream failure should refresh station logo artwork with the auto-advanced station"
+    );
+    assert(autoSkippedFakeState.currentFile === radioUri, "mpc radio late stream failure should replace the failed stream URI");
+    const rememberedAfterAutoSkip = JSON.parse(await readFile(fakeAudioSourceMemoryStatePath, "utf8"));
+    assert(
+      rememberedAfterAutoSkip.target === "radio" && rememberedAfterAutoSkip.radioStationId === "radio-511",
+      `mpc radio late stream failure should persist the auto-advanced station as remembered source: ${JSON.stringify({
+        rememberedAfterAutoSkip,
+        currentSource: autoSkippedDeadStation.body.audio.currentSource,
+        fakeCurrentFile: autoSkippedFakeState.currentFile,
+        fakeFailedStreamUri: autoSkippedFakeState.failedStreamUri,
+        fakeObservations: autoSkippedFakeState.observations?.slice(-10)
+      })}`
+    );
+
+    const initialBrightness = await requestFrom(baseUrl, "/api/v1/system/state");
+    assert(initialBrightness.response.ok, "mpc brightness preflight should return 200");
+    assert(initialBrightness.body.system.display.brightnessPercent === 48, "mpc brightness preflight should read fake ddcutil state");
+    const brightness = await requestFrom(baseUrl, "/api/v1/system/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "brightness_set", value: 62 })
+    });
+    assert(brightness.response.ok, "mpc brightness_set should return 200");
+    assert(brightness.body.system.display.brightnessPercent === 62, "mpc brightness_set should return the written DDC brightness");
+    const brightnessAfterWrite = await requestFrom(baseUrl, "/api/v1/system/state");
+    assert(brightnessAfterWrite.response.ok, "mpc brightness post-write state should return 200");
+    assert(brightnessAfterWrite.body.system.display.brightnessPercent === 62, "mpc brightness post-write state should not restore the stale cached display snapshot");
+  } finally {
+    if (server.exitCode === null && server.signalCode === null) {
+      server.kill("SIGTERM");
+      await Promise.race([
+        new Promise((resolve) => server.once("exit", resolve)),
+        wait(1000)
+      ]);
+    }
+    await rm(workspace, { recursive: true, force: true });
+  }
+}
+
+async function runMpcAirplayHandoffRefreshSmoke(roomExperienceStatePath) {
+  const port = PORT + 14;
+  const baseUrl = `http://${HOST}:${port}`;
+  const workspace = await mkdtemp(path.join(tmpdir(), "tikpal-mpc-airplay-"));
+  const fakeMpcPath = path.join(workspace, "mpc-fake.mjs");
+  const fakeVolumePath = path.join(workspace, "volume-fake.mjs");
+  const fakeVolumeStatePath = path.join(workspace, "volume-state.txt");
+  const fakeAirplayMetadataPath = path.join(workspace, "airplay-metadata.json");
+  const fakeAirplayMetadataCommandPath = path.join(workspace, "airplay-metadata.mjs");
+  const fakeAirplayTransportLogPath = path.join(workspace, "airplay-transport.log");
+  const fakeAirplayTransportCommandPath = path.join(workspace, "airplay-transport.mjs");
+  const airplayArtworkRoot = path.join(workspace, "airplay-covers");
+  const firstAirplayArtworkPath = path.join(airplayArtworkRoot, "this-city.png");
+  const secondAirplayArtworkPath = path.join(airplayArtworkRoot, "instant-crush.png");
+  const pngPixel = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMB/azU1wAAAABJRU5ErkJggg==", "base64");
+  const writeAirplayMetadata = async (metadata) => {
+    await writeFile(fakeAirplayMetadataPath, `${JSON.stringify(metadata, null, 2)}\n`);
+  };
+
+  await writeFile(fakeMpcPath, `#!/usr/bin/env node
+const rawArgs = process.argv.slice(2);
+const args = [];
+
+for (let index = 0; index < rawArgs.length; index += 1) {
+  if (rawArgs[index] === "--host" || rawArgs[index] === "--port" || rawArgs[index] === "--format") {
+    index += 1;
+    continue;
+  }
+  args.push(rawArgs[index]);
+}
+
+const command = args[0] ?? "";
+switch (command) {
+  case "status":
+    process.stdout.write("volume:30%   repeat: off   random: off   single: off   consume: off\\n");
+    break;
+  case "stats":
+    process.stdout.write("Artists: 0\\nAlbums: 0\\nSongs: 0\\nDB Updated: fake\\n");
+    break;
+  case "current":
+  case "playlist":
+  case "stop":
+  default:
+    break;
+}
+`);
+  await chmod(fakeMpcPath, 0o755);
+  await writeFile(fakeVolumeStatePath, "28");
+  await writeFile(fakeVolumePath, `#!/usr/bin/env node
+import { readFileSync, writeFileSync } from "node:fs";
+
+const statePath = ${JSON.stringify(fakeVolumeStatePath)};
+const command = process.argv[2] ?? "get";
+
+if (command === "set") {
+  const value = Math.max(0, Math.min(100, Math.round(Number(process.argv[3]))));
+  writeFileSync(statePath, String(value));
+  process.exit(0);
+}
+
+const value = Number(readFileSync(statePath, "utf8"));
+process.stdout.write(\`Simple mixer control 'PCM',0
+  Capabilities: pvolume
+  Playback channels: Front Left - Front Right
+  Limits: Playback 0 - 255
+  Front Left: Playback 0 [\${value}%] [-0.00dB]
+  Front Right: Playback 0 [\${value}%] [-0.00dB]
+\`);
+`);
+  await chmod(fakeVolumePath, 0o755);
+  await mkdir(airplayArtworkRoot, { recursive: true });
+  await writeFile(firstAirplayArtworkPath, pngPixel);
+  await writeFile(secondAirplayArtworkPath, pngPixel);
+  await writeFile(fakeAirplayMetadataCommandPath, `#!/usr/bin/env node
+import { readFileSync } from "node:fs";
+
+const metadata = JSON.parse(readFileSync(process.env.TIKPAL_FAKE_AIRPLAY_METADATA_PATH, "utf8"));
+for (const [key, value] of Object.entries(metadata)) {
+  if (value === null || value === undefined || value === "") continue;
+  process.stdout.write(\`\${key}=\${String(value)}\\n\`);
+}
+`);
+  await chmod(fakeAirplayMetadataCommandPath, 0o755);
+  await writeFile(fakeAirplayTransportLogPath, "");
+  await writeFile(fakeAirplayTransportCommandPath, `#!/usr/bin/env node
+import { appendFileSync } from "node:fs";
+
+appendFileSync(${JSON.stringify(fakeAirplayTransportLogPath)}, process.argv[2] + "\\n");
+`);
+  await chmod(fakeAirplayTransportCommandPath, 0o755);
+  await writeAirplayMetadata({
+    title: "This City",
+    artist: "Sam Fischer",
+    album: "Not a Hobby",
+    status: "playing",
+    positionMs: 45000,
+    durationMs: 60000,
+    artworkPath: firstAirplayArtworkPath,
+    artworkMtimeMs: 111000,
+    metadataSource: "mpris"
+  });
+
+  const server = spawn(process.execPath, ["server/index.mjs"], {
+    env: mpcFocusedSmokeEnv({
+      TIKPAL_API_HOST: HOST,
+      TIKPAL_API_PORT: String(port),
+      TIKPAL_PLAYER_BACKEND: "mpc",
+      TIKPAL_MPC_BIN: fakeMpcPath,
+      TIKPAL_MPD_HOST: "127.0.0.1",
+      TIKPAL_MPD_PORT: "6600",
+      TIKPAL_ROOM_EXPERIENCE_STATE_PATH: roomExperienceStatePath,
+      TIKPAL_STATE_SNAPSHOT_REFRESH_MS: "60000",
+      TIKPAL_OUTPUT_VOLUME_GET_COMMAND: `${process.execPath} ${fakeVolumePath} get`,
+      TIKPAL_OUTPUT_VOLUME_SET_COMMAND: `${process.execPath} ${fakeVolumePath} set %VALUE%`,
+      TIKPAL_AIRPLAY_ENABLE_COMMAND: "true",
+      TIKPAL_AIRPLAY_READY_COMMAND: "true",
+      TIKPAL_AIRPLAY_ACTIVE_COMMAND: "true",
+      TIKPAL_AIRPLAY_RECEIVER_ACTIVE_COMMAND: "false",
+      TIKPAL_AIRPLAY_LABEL_COMMAND: "printf 'Tikpal Speaker'",
+      TIKPAL_AIRPLAY_METADATA_COMMAND: `${process.execPath} ${fakeAirplayMetadataCommandPath}`,
+      TIKPAL_AIRPLAY_TRANSPORT_AVAILABLE_COMMAND: "true",
+      TIKPAL_AIRPLAY_PLAY_PAUSE_COMMAND: `${process.execPath} ${fakeAirplayTransportCommandPath} play-pause`,
+      TIKPAL_AIRPLAY_PLAY_COMMAND: `${process.execPath} ${fakeAirplayTransportCommandPath} play`,
+      TIKPAL_AIRPLAY_PAUSE_COMMAND: `${process.execPath} ${fakeAirplayTransportCommandPath} pause`,
+      TIKPAL_AIRPLAY_NEXT_COMMAND: `${process.execPath} ${fakeAirplayTransportCommandPath} next`,
+      TIKPAL_AIRPLAY_PREVIOUS_COMMAND: `${process.execPath} ${fakeAirplayTransportCommandPath} previous`,
+      TIKPAL_FAKE_AIRPLAY_METADATA_PATH: fakeAirplayMetadataPath,
+      TIKPAL_AIRPLAY_ARTWORK_ROOT: airplayArtworkRoot,
+      TIKPAL_AIRPLAY_DIRECT_METADATA_REFRESH_MIN_MS: "1000",
+      TIKPAL_LRCLIB_BASE_URL: PROVIDER_URL
+    }),
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+
+  try {
+    await waitForHealthAt(baseUrl);
+    let recovered = null;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const initial = await requestFrom(baseUrl, "/api/v1/system/state");
+      if (
+        initial.response.ok
+        && initial.body.audio.currentSource.id === "airplay"
+        && initial.body.audio.currentSource.connectionState === "connected"
+      ) {
+        recovered = initial;
+        break;
+      }
+      await wait(200);
+    }
+    assert(recovered, "mpc active external source should recover as current after API startup");
+    assert(recovered.body.system.volume.percent === 28, "mpc recovered external source should report output volume");
+    assert(recovered.body.playback.title === "This City", "mpc recovered AirPlay state should expose metadata title");
+    assert(recovered.body.playback.artist === "Sam Fischer", "mpc recovered AirPlay state should expose metadata artist");
+    assert(recovered.body.playback.elapsedSeconds === 45, "mpc recovered AirPlay state should expose metadata position");
+    assert(recovered.body.playback.transportCapabilities?.next === true, "mpc recovered AirPlay state should expose transport capability");
+    assert(recovered.body.playback.timingDiagnostics?.metadataSource === "mpris", "mpc recovered AirPlay state should expose metadata source diagnostics");
+    assert(
+      recovered.body.playback.albumArtUrl?.startsWith("/api/v1/media/airplay-artwork?path="),
+      "mpc recovered AirPlay state should expose proxied artwork"
+    );
+    assert(
+      recovered.body.playback.albumArtUrl.includes("v=111000"),
+      "mpc recovered AirPlay artwork should be versioned by artwork mtime"
+    );
+    const recoveredArtwork = await requestBinaryFrom(baseUrl, recovered.body.playback.albumArtUrl);
+    assert(recoveredArtwork.response.ok, "mpc recovered AirPlay artwork endpoint should return the fake cover");
+    assert(recoveredArtwork.body.length > 0, "mpc recovered AirPlay artwork endpoint should return bytes");
+
+    const recoveredVolume = await requestFrom(baseUrl, "/api/v1/playback/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "volume_set", value: 43 })
+    });
+    assert(recoveredVolume.response.ok, "mpc recovered external volume_set should return 200");
+    assert(recoveredVolume.body.system.volume.percent === 43, "mpc recovered external volume_set should use output volume");
+    assert(
+      recoveredVolume.body.audio.currentSource.connectionState === "connected",
+      `mpc recovered external volume_set should keep connected, got ${recoveredVolume.body.audio.currentSource.connectionState}`
+    );
+
+    const switched = await requestFrom(baseUrl, "/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({ target: "airplay" })
+    });
+    assert(switched.response.ok, "mpc airplay source switch should return 200");
+    assert(switched.body.audio.currentSource.id === "airplay", "mpc airplay switch should mark AirPlay current");
+    assert(switched.body.audio.currentSource.armed === true, "mpc airplay switch should arm AirPlay");
+    assert(
+      switched.body.audio.currentSource.connectionState === "connected",
+      `mpc airplay switch should refresh command-backed connection state, got ${switched.body.audio.currentSource.connectionState}`
+    );
+    assert(switched.body.playback.source === "airplay", "mpc airplay playback source should be AirPlay");
+    assert(switched.body.playback.transportCapabilities?.previous === true, "mpc airplay switch should preserve transport capability");
+    assert(switched.body.system.volume.percent === 43, "mpc external source switch should return the current output volume");
+    assert(switched.body.playback.title === "This City", "mpc airplay switch should preserve fresh AirPlay metadata");
+    assert(
+      switched.body.playback.albumArtUrl?.includes("v=111000"),
+      "mpc airplay switch should preserve versioned AirPlay artwork"
+    );
+
+    const airplayNext = await requestFrom(baseUrl, "/api/v1/playback/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "next" })
+    });
+    assert(airplayNext.response.ok, "mpc airplay next action should return 200");
+    assert(airplayNext.body.playback.source === "airplay", "mpc airplay next should keep AirPlay as playback source");
+    const airplayPrevious = await requestFrom(baseUrl, "/api/v1/playback/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "previous" })
+    });
+    assert(airplayPrevious.response.ok, "mpc airplay previous action should return 200");
+    assert(airplayPrevious.body.playback.source === "airplay", "mpc airplay previous should keep AirPlay as playback source");
+    const airplayPlayPause = await requestFrom(baseUrl, "/api/v1/playback/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "play_pause" })
+    });
+    assert(airplayPlayPause.response.ok, "mpc airplay play_pause action should return 200");
+    const airplayTransportLog = await readFile(fakeAirplayTransportLogPath, "utf8");
+    assert(
+      airplayTransportLog.includes("next\n")
+        && airplayTransportLog.includes("previous\n")
+        && airplayTransportLog.includes("play-pause\n"),
+      `mpc airplay transport should call AirPlay commands, got ${JSON.stringify(airplayTransportLog)}`
+    );
+
+    const airplayLyricsRefresh = await requestFrom(baseUrl, "/api/v1/lyrics/refresh", {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    assert(airplayLyricsRefresh.response.ok, "mpc airplay lyrics refresh should return 200");
+    const thisCityLyrics = await waitForLyricsStatusAt(baseUrl, ["ready"]);
+    assert(thisCityLyrics.sourceScope === "airplay_input", "AirPlay metadata lyrics should keep airplay scope");
+    assert(thisCityLyrics.recognitionMode === "metadata", "trusted AirPlay metadata should use metadata lyrics lookup");
+    assert(thisCityLyrics.title === "This City", "AirPlay lyrics should resolve the current metadata track");
+    assert(thisCityLyrics.artist === "Sam Fischer", "AirPlay lyrics should skip same-title results from the wrong artist");
+    assert(thisCityLyrics.synced === true, "AirPlay lyrics should stay synced when playback position is available");
+    assert(thisCityLyrics.lines.some((line) => line.text.includes("crowded rooms")), "AirPlay lyrics should expose current track lyrics");
+    assert(!thisCityLyrics.lines.some((line) => line.text.includes("Wrong city")), "AirPlay lyrics should not expose wrong-artist same-title lyrics");
+
+    const cached = await requestFrom(baseUrl, "/api/v1/system/state");
+    assert(cached.response.ok, "cached mpc airplay state should return 200");
+    assert(
+      cached.body.audio.currentSource.connectionState === "connected",
+      `cached mpc airplay state should preserve connected after source switch, got ${cached.body.audio.currentSource.connectionState}`
+    );
+
+    const volume = await requestFrom(baseUrl, "/api/v1/playback/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "volume_set", value: 44 })
+    });
+    assert(volume.response.ok, "mpc external volume_set should return 200");
+    assert(volume.body.system.volume.percent === 44, "mpc external volume_set should return the freshly written output volume");
+    assert(
+      volume.body.audio.currentSource.connectionState === "connected",
+      `mpc external volume_set should preserve connected source state, got ${volume.body.audio.currentSource.connectionState}`
+    );
+
+    const afterVolume = await requestFrom(baseUrl, "/api/v1/system/state");
+    assert(afterVolume.response.ok, "cached mpc airplay state after volume should return 200");
+    assert(afterVolume.body.system.volume.percent === 44, "cached mpc state should keep the output volume after external volume_set");
+    assert(
+      afterVolume.body.audio.currentSource.connectionState === "connected",
+      `cached mpc state should keep connected after external volume_set, got ${afterVolume.body.audio.currentSource.connectionState}`
+    );
+
+    await writeAirplayMetadata({
+      title: "Instant Crush",
+      artist: "Daft Punk",
+      album: "Random Access Memories",
+      status: "playing",
+      positionMs: 12000,
+      durationMs: 337000,
+      artworkPath: secondAirplayArtworkPath,
+      artworkMtimeMs: 222000,
+      metadataSource: "json"
+    });
+    const secondLyricsRefresh = await requestFrom(baseUrl, "/api/v1/lyrics/refresh", {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    assert(secondLyricsRefresh.response.ok, "mpc airplay lyrics refresh after track change should return 200");
+    const instantCrushLyrics = await waitForLyricsStatusAt(baseUrl, ["ready"]);
+    assert(instantCrushLyrics.sourceScope === "airplay_input", "changed AirPlay lyrics should keep airplay scope");
+    assert(instantCrushLyrics.recognitionMode === "metadata", "changed AirPlay lyrics should still use metadata lookup");
+    assert(instantCrushLyrics.title === "Instant Crush", "AirPlay lyrics should switch to the changed metadata track");
+    assert(instantCrushLyrics.trackKey !== thisCityLyrics.trackKey, "AirPlay track change should not keep the old lyrics key");
+    assert(instantCrushLyrics.lines.some((line) => line.text.includes("forget")), "AirPlay track change should expose the new lyrics");
+    const afterTrackChange = await requestFrom(baseUrl, "/api/v1/system/state");
+    assert(afterTrackChange.response.ok, "cached mpc airplay state after track change should return 200");
+    assert(afterTrackChange.body.playback.title === "Instant Crush", "AirPlay state should switch to the changed metadata title");
+    assert(afterTrackChange.body.lyrics.title === afterTrackChange.body.playback.title, "AirPlay cached state should keep lyrics and playback title aligned after track change");
+    assert(afterTrackChange.body.lyrics.artist === afterTrackChange.body.playback.artist, "AirPlay cached state should keep lyrics and playback artist aligned after track change");
+    assert(
+      afterTrackChange.body.playback.albumArtUrl?.includes("v=222000"),
+      "AirPlay artwork should switch to the changed cover version"
+    );
+
+    await writeAirplayMetadata({
+      title: "Duration Drift",
+      artist: "Clock Source",
+      album: "Unreliable Metadata",
+      status: "playing",
+      positionMs: 29000,
+      durationMs: 29954,
+      artworkPath: secondAirplayArtworkPath,
+      artworkMtimeMs: 333000,
+      metadataSource: "mpris"
+    });
+    const durationDriftLyricsRefresh = await requestFrom(baseUrl, "/api/v1/lyrics/refresh", {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    assert(durationDriftLyricsRefresh.response.ok, "mpc airplay lyrics refresh with unreliable duration should return 200");
+    const durationDriftLyrics = await waitForLyricsTrackAt(baseUrl, {
+      title: "Duration Drift",
+      artist: "Clock Source"
+    });
+    assert(durationDriftLyrics.sourceScope === "airplay_input", "duration-drift AirPlay lyrics should keep airplay scope");
+    assert(durationDriftLyrics.recognitionMode === "metadata", "duration-drift AirPlay lyrics should still use metadata lookup");
+    assert(durationDriftLyrics.synced === true, "AirPlay metadata lyrics should stay synced when only duration is unreliable");
+    assert(durationDriftLyrics.timingStrategy === "provider_synced", "AirPlay lyrics should prefer provider timing when metadata duration drifts");
+    assert(
+      durationDriftLyrics.lines.some((line) => line.text.includes("real lyric clock")),
+      "AirPlay lyrics should not disappear when trusted title and artist have a mismatched duration"
+    );
+
+    await writeAirplayMetadata({
+      title: "AirPlay Ready",
+      artist: "Choose Tikpal from AirPlay",
+      album: "AirPlay Source",
+      status: "playing",
+      positionMs: 0,
+      durationMs: 0,
+      metadataSource: "mpris"
+    });
+    const missingMetadataLyricsRefresh = await requestFrom(baseUrl, "/api/v1/lyrics/refresh", {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    assert(missingMetadataLyricsRefresh.response.ok, "mpc airplay lyrics refresh without usable metadata should return 200");
+    assert(missingMetadataLyricsRefresh.body.status === "idle", "AirPlay without usable metadata and capture should not stay in fingerprint recognizing");
+    assert(missingMetadataLyricsRefresh.body.recognitionMode === null, "AirPlay without capture should not advertise fingerprint recognition");
+  } finally {
+    if (server.exitCode === null && server.signalCode === null) {
+      server.kill("SIGTERM");
+      await Promise.race([
+        new Promise((resolve) => server.once("exit", resolve)),
+        wait(1000)
+      ]);
+    }
+    await rm(workspace, { recursive: true, force: true });
+  }
+}
+
 async function run() {
   runAccessControlHelperSmoke();
+  await runAirplayMetadataHelperClockSmoke();
 
   const apiAssetsRoot = await mkdtemp(path.join(tmpdir(), "tikpal-api-assets-"));
   const apiStateRoot = await mkdtemp(path.join(tmpdir(), "tikpal-api-state-"));
   const musicLibraryStatePath = path.join(apiStateRoot, "music-library-state.json");
   const roomExperienceStatePath = path.join(apiStateRoot, "room-experience-state.json");
+  const audioSourceMemoryStatePath = path.join(apiStateRoot, "audio-source-memory.json");
   const sceneBytes = Buffer.from("000000 ftypisom tikpal rainy window api smoke mp4");
   const sceneSha256 = createHash("sha256").update(sceneBytes).digest("hex");
   await mkdir(path.join(apiAssetsRoot, "scenes", "_metadata"), { recursive: true });
@@ -757,6 +2128,7 @@ async function run() {
           label: "Rainy Window",
           order: 30,
           roomModes: ["calm"],
+          audioGainDb: 11.1,
           default: false,
           sha256: sceneSha256
         }
@@ -801,19 +2173,25 @@ async function run() {
       TIKPAL_API_HOST: HOST,
       TIKPAL_API_PORT: String(PORT),
       TIKPAL_PORTABLE_API_KEY: PORTABLE_API_KEY,
+      TIKPAL_KIOSK_HEARTBEAT_STALE_MS: "1000",
       TIKPAL_PUBLIC_ASSETS_ROOT: apiAssetsRoot,
       TIKPAL_MUSIC_LIBRARY_STATE_PATH: musicLibraryStatePath,
       TIKPAL_ROOM_EXPERIENCE_STATE_PATH: roomExperienceStatePath,
+      TIKPAL_AUDIO_SOURCE_MEMORY_STATE_PATH: audioSourceMemoryStatePath,
       TIKPAL_RECOGNITION_PROVIDER: "acrcloud",
       TIKPAL_ACRCLOUD_HOST: PROVIDER_URL,
       TIKPAL_ACRCLOUD_ACCESS_KEY: "mock-key",
       TIKPAL_ACRCLOUD_ACCESS_SECRET: "mock-secret",
+      TIKPAL_SCENE_CONTEXT_GEO_URL: `${PROVIDER_URL}/geo`,
+      TIKPAL_SCENE_CONTEXT_WEATHER_URL: `${PROVIDER_URL}/forecast`,
       TIKPAL_BLUETOOTH_CAPTURE_COMMAND: "./deploy/moode/tikpal-bluetooth-capture.sh",
       TIKPAL_BLUETOOTH_CAPTURE_MOCK: "1",
       TIKPAL_BLUETOOTH_CAPTURE_MOCK_FILE: BLUETOOTH_SCENARIO_PATH,
       TIKPAL_BLUETOOTH_RECOGNITION_SETTLE_MS: "700",
       TIKPAL_BLUETOOTH_RECOGNITION_RETRY_MS: "45000",
       TIKPAL_BLUETOOTH_RECOGNITION_NOT_FOUND_RETRY_MS: "300",
+      TIKPAL_AIRPLAY_RECOGNITION_SETTLE_MS: "1",
+      TIKPAL_AIRPLAY_CAPTURE_DURATION_SECONDS: "1",
       TIKPAL_MOCK_BLUETOOTH_CONNECT_AFTER_MS: "150",
       TIKPAL_MOCK_BLUETOOTH_METADATA_FILE: BLUETOOTH_METADATA_PATH,
       TIKPAL_LRCLIB_BASE_URL: PROVIDER_URL,
@@ -839,6 +2217,7 @@ async function run() {
     assert(initial.body.playback.title, "playback title should be present");
     assert(initial.body.playback.settings.playMode === "sequence", "playback should expose sequence mode by default");
     assert(initial.body.audio.currentSource.id === "mpd", "system state should expose current audio source");
+    assert(initial.body.audio.rememberedSource === null, "system state should expose empty remembered source before source selection");
     assert(initial.body.lyrics?.sourceScope === "local_playback", "system state should expose lyrics state");
 
     const initialExperience = await request("/api/v1/experience/state");
@@ -848,12 +2227,113 @@ async function run() {
     assert(initialExperience.body.sceneVideoId === "rainy-window", "calm room experience should bind Rainy Window");
     assert(initialExperience.body.hifiEqPresetId === "flat", "room experience should expose the default Hi-Fi EQ preset");
     assert(initialExperience.body.hifiVisualPresetId === "spectrum-bars", "room experience should expose the default Hi-Fi visual preset");
-    assert(initialExperience.body.sceneSoundEnabled === false, "room experience should not force scene sound on by default");
+    assert(initialExperience.body.sceneSoundEnabled === false, "mock room experience should preserve persisted scene sound off");
     assert(initialExperience.body.nightSchedule.timeZone === "Asia/Shanghai", "room experience should expose night timezone");
     assert(initial.body.system.dspState.presetId === "flat", "DSP state should reflect the default Hi-Fi EQ preset id");
     assert(initial.body.system.dspState.presetLabel === "Flat", "DSP state should reflect the default Hi-Fi EQ preset label");
     assert(initial.body.system.dspState.controllable === true, "mock DSP state should be controllable");
     assert(initial.body.system.dspState.availablePresets.length === 3, "DSP state should expose the three built-in Hi-Fi EQ presets");
+
+    const unseenHeartbeat = await request("/api/v1/kiosk/heartbeat");
+    assert(unseenHeartbeat.response.ok, "kiosk heartbeat read should return 200 before the first heartbeat");
+    assert(unseenHeartbeat.body.status === "unseen", "kiosk heartbeat should start unseen");
+    assert(unseenHeartbeat.body.healthy === false, "unseen kiosk heartbeat should be unhealthy");
+    assert(unseenHeartbeat.body.reasons.includes("heartbeat-unseen"), "unseen kiosk heartbeat should explain the missing page heartbeat");
+
+    const healthyHeartbeatPayload = {
+      clientSentAtMs: Date.now(),
+      pageMode: "ambient",
+      room: { mode: "calm", phase: "idle" },
+      playback: { source: "scene", state: "playing", title: "Scene Audio" },
+      source: { current: "scene" },
+      scene: {
+        videoId: "rainy-window",
+        activeVideoId: "rainy-window",
+        sceneSoundEnabled: true,
+        sceneVideoEnabled: true
+      },
+      status: {
+        lastSystemStateSuccessAtMs: Date.now(),
+        lastRoomStateSuccessAtMs: Date.now(),
+        pending: { active: false, kind: null, sinceMs: null, durationMs: null }
+      },
+      eventLoop: { lagMs: 4 },
+      activeSceneVideo: {
+        present: true,
+        src: "/assets/scenes/Rainy-Window.mp4",
+        currentTime: 2.4,
+        readyState: 4,
+        health: "ok",
+        frameReady: "true"
+      }
+    };
+    const postedHeartbeat = await request("/api/v1/kiosk/heartbeat", {
+      method: "POST",
+      body: JSON.stringify(healthyHeartbeatPayload)
+    });
+    assert(postedHeartbeat.response.ok, "kiosk heartbeat write should return 200");
+    assert(postedHeartbeat.body.status === "fresh", "fresh kiosk heartbeat should report fresh");
+    assert(postedHeartbeat.body.healthy === true, "healthy kiosk heartbeat should be healthy");
+    const freshHeartbeat = await request("/api/v1/kiosk/heartbeat");
+    assert(freshHeartbeat.body.healthy === true, "kiosk heartbeat read should return the latest healthy heartbeat");
+
+    const pendingHeartbeat = await request("/api/v1/kiosk/heartbeat", {
+      method: "POST",
+      body: JSON.stringify({
+        ...healthyHeartbeatPayload,
+        status: {
+          ...healthyHeartbeatPayload.status,
+          pending: { active: true, kind: "source:mpd", sinceMs: Date.now() - 60000, durationMs: 60000 }
+        }
+      })
+    });
+    assert(pendingHeartbeat.body.healthy === false, "stuck pending kiosk heartbeat should be unhealthy");
+    assert(pendingHeartbeat.body.reasons.some((reason) => reason.startsWith("pending-stuck:source:mpd")), "stuck pending heartbeat should include the action kind");
+
+    const fallbackHeartbeat = await request("/api/v1/kiosk/heartbeat", {
+      method: "POST",
+      body: JSON.stringify({
+        ...healthyHeartbeatPayload,
+        activeSceneVideo: {
+          ...healthyHeartbeatPayload.activeSceneVideo,
+          health: "fallback"
+        }
+      })
+    });
+    assert(fallbackHeartbeat.body.healthy === false, "scene fallback heartbeat should be unhealthy");
+    assert(fallbackHeartbeat.body.reasons.includes("scene-video-fallback"), "scene fallback heartbeat should expose scene-video-fallback");
+
+    const transitionHeartbeat = await request("/api/v1/kiosk/heartbeat", {
+      method: "POST",
+      body: JSON.stringify({
+        ...healthyHeartbeatPayload,
+        activeSceneVideo: {
+          present: false,
+          scenePresent: true,
+          transition: "scene",
+          transitionPhase: "dimming"
+        }
+      })
+    });
+    assert(transitionHeartbeat.body.healthy === true, "scene transition heartbeat should not be treated as a missing-video failure");
+
+    await request("/api/v1/kiosk/heartbeat", {
+      method: "POST",
+      body: JSON.stringify(healthyHeartbeatPayload)
+    });
+    await wait(1100);
+    const staleHeartbeat = await request("/api/v1/kiosk/heartbeat");
+    assert(staleHeartbeat.body.status === "stale", "old kiosk heartbeat should become stale");
+    assert(staleHeartbeat.body.reasons.includes("heartbeat-stale"), "stale kiosk heartbeat should expose heartbeat-stale");
+
+    const sceneContext = await request("/api/v1/scene/context?timeZone=Europe/London");
+    assert(sceneContext.response.ok, "scene context should return 200");
+    assert(sceneContext.body.timeZone === "Asia/Shanghai", "scene context should prefer IP timezone over a conflicting requested timezone");
+    assert(sceneContext.body.locationLabel === "Shanghai", "scene context should expose IP-derived city");
+    assert(sceneContext.body.countryCode === "CN", "scene context should expose IP-derived country code");
+    assert(sceneContext.body.weather?.condition === "rainy", "scene context should expose IP-location weather");
+    assert(sceneContext.body.weather?.label === "Rainy", "scene context should expose a weather label for ambient copy");
+    assert(["morning", "afternoon", "evening", "night"].includes(sceneContext.body.dayPart), "scene context should expose a daypart");
 
     const openapi = await request("/api/v1/openapi.json");
     assert(openapi.response.ok, "OpenAPI JSON should return 200");
@@ -906,13 +2386,27 @@ async function run() {
     assert(focusExperience.body.mode === "focus", "set_mode should switch room mode");
     assert(focusExperience.body.presetId === "focus-library-flow", "set_mode should apply focus preset");
     assert(focusExperience.body.sceneVideoId === "midnight-library", "focus preset should bind Midnight Library");
-    assert(focusExperience.body.sceneSoundEnabled === true, "focus preset should enable scene sound");
+    assert(focusExperience.body.sceneSoundEnabled === true, "focus preset should enable scene sound by default");
     const persistedExperience = JSON.parse(await readFile(roomExperienceStatePath, "utf8"));
     assert(persistedExperience.mode === "focus", "room experience should persist to the state file");
     const stateAfterFocus = await request("/api/v1/system/state");
     assert(stateAfterFocus.body.audio.currentSource.id === "scene", "focus room mode should switch to Scene Sound");
+    assert(stateAfterFocus.body.playback.source === "scene", "focus room mode playback should follow Scene Sound");
     assert(stateAfterFocus.body.system.volume.percent === focusExperience.body.volumePercent, "room mode should apply volume through playback actions");
     assert(stateAfterFocus.body.system.display.brightnessPercent === focusExperience.body.brightnessPercent, "room mode should apply brightness through system actions");
+
+    const focusSceneSound = await request("/api/v1/experience/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "set_scene_sound", sceneSoundEnabled: true, sceneVideoId: "rainy-window" })
+    });
+    assert(focusSceneSound.response.ok, "set_scene_sound should return 200");
+    assert(focusSceneSound.body.sceneSoundEnabled === true, "explicit scene sound should persist on");
+    const stateAfterSceneSound = await request("/api/v1/system/state");
+    assert(stateAfterSceneSound.body.audio.currentSource.id === "scene", "explicit scene sound should switch to Scene Sound");
+    assert(stateAfterSceneSound.body.audio.sources.some((source) => source.id === "spotify" && source.armed === false), "scene sound should close spotify intake");
+    assert(stateAfterSceneSound.body.audio.sources.some((source) => source.id === "bluetooth" && source.armed === false), "scene sound should close bluetooth intake");
+    assert(stateAfterSceneSound.body.audio.sources.some((source) => source.id === "airplay" && source.armed === false), "scene sound should close airplay intake");
+    assert(stateAfterSceneSound.body.audio.sources.some((source) => source.id === "upnp" && source.armed === false), "scene sound should close dlna intake");
 
     const hifiExperience = await request("/api/v1/experience/actions", {
       method: "POST",
@@ -1050,6 +2544,41 @@ async function run() {
     assert(localTrackSwitch.body.playback.title === localLibrary.body.tracks[0].title, "local track switch should update playback title");
     assert(localTrackSwitch.body.playback.artist === localLibrary.body.tracks[0].artist, "local track switch should update playback artist");
     assert(localTrackSwitch.body.playback.albumArtUrl === localLibrary.body.tracks[0].albumArtUrl, "local track switch should update playback cover art");
+    assert(localTrackSwitch.body.audio.rememberedSource?.target === "mpd", "local track switch should remember Library as the last source");
+    assert(localTrackSwitch.body.audio.rememberedSource?.localTrackPath === localLibrary.body.tracks[0].path, "local track switch should remember the selected library track");
+
+    const radioAfterLocalTrack = await request("/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({ target: "radio", radioStationId: "radio-2" })
+    });
+    assert(radioAfterLocalTrack.response.ok, "radio switch after local track should return 200");
+    assert(radioAfterLocalTrack.body.audio.rememberedSource?.target === "radio", "radio switch should remain the remembered visible source");
+    assert(radioAfterLocalTrack.body.audio.rememberedSource?.radioStationId === "radio-2", "radio switch should remember the selected station");
+    assert(radioAfterLocalTrack.body.audio.rememberedSource?.localTrackPath === localLibrary.body.tracks[0].path, "radio switch should preserve the last local library track path");
+    const libraryReturnAfterRadio = await request("/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({ target: "mpd" })
+    });
+    assert(libraryReturnAfterRadio.response.ok, "bare Library switch after Radio should return 200");
+    assert(libraryReturnAfterRadio.body.audio.currentSource.id === "mpd", "bare Library switch after Radio should restore MPD");
+    assert(libraryReturnAfterRadio.body.playback.title === localLibrary.body.tracks[0].title, "bare Library switch after Radio should restore the last local track");
+    assert(libraryReturnAfterRadio.body.audio.rememberedSource?.target === "mpd", "bare Library switch after Radio should remember Library as the last source");
+    assert(libraryReturnAfterRadio.body.audio.rememberedSource?.localTrackPath === localLibrary.body.tracks[0].path, "bare Library switch after Radio should remember the restored local track");
+    assert(libraryReturnAfterRadio.body.audio.rememberedSource?.radioStationId === "radio-2", "bare Library switch after Radio should preserve the previous station bookmark");
+    const radioReturnAfterLibrary = await request("/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({ target: "radio" })
+    });
+    assert(radioReturnAfterLibrary.response.ok, "bare Radio switch after Library should return 200");
+    assert(radioReturnAfterLibrary.body.audio.currentSource.id === "radio", "bare Radio switch after Library should restore Radio");
+    assert(radioReturnAfterLibrary.body.audio.currentSource.radioStationId === "radio-2", "bare Radio switch after Library should restore the previous station");
+    assert(radioReturnAfterLibrary.body.audio.rememberedSource?.radioStationId === "radio-2", "bare Radio switch after Library should keep the restored station in memory");
+    const libraryReturnAfterBareRadio = await request("/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({ target: "mpd" })
+    });
+    assert(libraryReturnAfterBareRadio.response.ok, "Library switch after bare Radio restore should return 200");
+    assert(libraryReturnAfterBareRadio.body.playback.title === localLibrary.body.tracks[0].title, "Library switch after bare Radio restore should return to the remembered local track");
 
     const favoriteToggle = await request("/api/v1/playback/actions", {
       method: "POST",
@@ -1163,6 +2692,16 @@ async function run() {
     assert(playlistPlayback.body.audio.currentSource.id === "mpd", "playlist play should keep MPD as the active source");
     assert(playlistPlayback.body.playback.queueLength === 2, "playlist play should load a mock local queue");
     assert(playlistPlayback.body.playback.title === localLibrary.body.tracks[1].title, "playlist play should start from the reordered first track");
+    assert(playlistPlayback.body.audio.rememberedSource?.localTrackPath === localLibrary.body.tracks[1].path, "playlist play should remember the actual starting track");
+    assert(playlistPlayback.body.audio.rememberedSource?.radioStationId === "radio-2", "playlist play should preserve the last Radio station bookmark");
+    const playlistNext = await request("/api/v1/playback/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "next" })
+    });
+    assert(playlistNext.response.ok, "playlist-backed next should return 200");
+    assert(playlistNext.body.playback.currentTrackIndex === 2, "playlist-backed next should advance within the local queue");
+    assert(playlistNext.body.audio.rememberedSource?.localTrackPath === localLibrary.body.tracks[0].path, "playlist-backed next should remember the advanced local track");
+    assert(playlistNext.body.audio.rememberedSource?.radioStationId === "radio-2", "playlist-backed next should preserve the last Radio station bookmark");
     const playlistPlaySecond = await request("/api/v1/audio/playlist-actions", {
       method: "POST",
       body: JSON.stringify({ type: "play", playlistId: createdPlaylist.id, startIndex: 1 })
@@ -1172,6 +2711,14 @@ async function run() {
     assert(playlistSecondPlayback.response.ok, "system state after playlist startIndex play should return 200");
     assert(playlistSecondPlayback.body.playback.currentTrackIndex === 2, "playlist play startIndex should set the playback queue index");
     assert(playlistSecondPlayback.body.playback.title === localLibrary.body.tracks[0].title, "playlist play startIndex should start from the requested song");
+    assert(playlistSecondPlayback.body.audio.rememberedSource?.localTrackPath === localLibrary.body.tracks[0].path, "playlist play startIndex should remember the requested song");
+    const playlistPrevious = await request("/api/v1/playback/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "previous" })
+    });
+    assert(playlistPrevious.response.ok, "playlist-backed previous should return 200");
+    assert(playlistPrevious.body.playback.currentTrackIndex === 1, "playlist-backed previous should return to the prior local queue entry");
+    assert(playlistPrevious.body.audio.rememberedSource?.localTrackPath === localLibrary.body.tracks[1].path, "playlist-backed previous should remember the previous local track");
     const playlistRemove = await request("/api/v1/audio/playlist-actions", {
       method: "POST",
       body: JSON.stringify({ type: "remove_track", playlistId: createdPlaylist.id, trackPath: localLibrary.body.tracks[1].path })
@@ -1203,6 +2750,7 @@ async function run() {
     });
     assert(defaultLibraryResume.response.ok, "default MPD resume after playlist smoke should return 200");
     assert(defaultLibraryResume.body.playback.title === "Get Lucky (feat. Pharrell Williams)", "default MPD resume should restore the mock library queue");
+    assert(defaultLibraryResume.body.audio.rememberedSource?.localTrackPath === null, "default MPD resume while already in Library should not keep a stale local track path");
 
     const repeatOne = await request("/api/v1/playback/actions", {
       method: "POST",
@@ -1239,12 +2787,13 @@ async function run() {
     assert(rainyWindow?.label === "Rainy Window", "background video catalog should use scene manifest labels");
     assert(rainyWindow?.order === 30, "background video catalog should expose scene manifest order");
     assert(JSON.stringify(rainyWindow?.roomModes) === JSON.stringify(["calm"]), "background video catalog should expose scene room modes");
+    assert(rainyWindow?.audioGainDb === 11.1, "background video catalog should expose scene audio gain");
     assert(backgroundVideos.body.catalogVersion, "background video catalog should expose a catalog version");
 
-    const radios = await request("/api/v1/audio/radios?q=ambient&genre=Ambient");
+    const radios = await request("/api/v1/audio/radios?q=groove&category=focus");
     assert(radios.response.ok, "radio catalog should return 200");
     assert(radios.body.total >= 1, "radio catalog should include matching stations");
-    assert(radios.body.stations.every((station) => station.genre === "Ambient"), "radio catalog should filter by genre");
+    assert(radios.body.stations.every((station) => station.category === "focus"), "radio catalog should filter by Tikpal category");
 
     const artwork = await request("/api/v1/media/artwork?track=mock");
     assert(artwork.response.status === 404, "mock artwork endpoint should return 404 when no current artwork is available");
@@ -1292,6 +2841,15 @@ async function run() {
     assert(volume.response.ok, "volume_set action should return 200");
     assert(volume.body.system.volume.percent === 42, "volume_set should update volume percent");
 
+    const calmBeforeScene = await request("/api/v1/experience/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "set_mode", mode: "calm" })
+    });
+    assert(calmBeforeScene.response.ok, "calm room mode before scene source switch should return 200");
+    assert(calmBeforeScene.body.sceneSoundEnabled === true, "calm room mode should enable scene sound by default");
+    const stateAfterCalmBeforeScene = await request("/api/v1/system/state");
+    assert(stateAfterCalmBeforeScene.body.audio.currentSource.id === "scene", "calm room mode should switch to Scene Sound by default");
+
     const scene = await request("/api/v1/audio/source", {
       method: "POST",
       body: JSON.stringify({
@@ -1310,10 +2868,13 @@ async function run() {
     assert(scene.body.playback.album === "Fireplace Loop", "scene playback album should use the current scene label");
     assert(Array.isArray(scene.body.playback.queuePreview) && scene.body.playback.queuePreview.length === 0, "scene playback should not expose a music queue");
     assert(scene.body.audio.sources.some((source) => source.id === "scene" && source.active), "scene source should be active while scene audio is playing");
+    assert(scene.body.audio.rememberedSource?.target === "mpd", "scene switch should not overwrite the remembered music source");
     assert(scene.body.audio.sources.some((source) => source.id === "spotify" && source.armed === false), "scene switch should close spotify intake");
     assert(scene.body.audio.sources.some((source) => source.id === "bluetooth" && source.armed === false), "scene switch should close bluetooth intake");
     assert(scene.body.audio.sources.some((source) => source.id === "airplay" && source.armed === false), "scene switch should close airplay intake");
     assert(scene.body.audio.sources.some((source) => source.id === "upnp" && source.armed === false), "scene switch should close dlna intake");
+    const experienceAfterDirectScene = await request("/api/v1/experience/state");
+    assert(experienceAfterDirectScene.body.sceneSoundEnabled === true, "direct scene source switch should mark scene sound enabled");
 
     const sceneNext = await request("/api/v1/playback/actions", {
       method: "POST",
@@ -1355,6 +2916,8 @@ async function run() {
     assert(libraryResume.body.playback.source === "mpd", "library resume should leave scene playback");
     assert(libraryResume.body.playback.state === "playing", "library resume should start library playback");
     assert(libraryResume.body.audio.sources.some((source) => source.id === "scene" && source.active === false), "library resume should deactivate scene source");
+    const experienceAfterLibraryResume = await request("/api/v1/experience/state");
+    assert(experienceAfterLibraryResume.body.sceneSoundEnabled === false, "music source switch should clear persisted scene sound");
 
     const audio = await request("/api/v1/audio/source", {
       method: "POST",
@@ -1363,6 +2926,7 @@ async function run() {
     assert(audio.response.ok, "audio source switch should return 200");
     assert(audio.body.audio.currentSource.id === "audio", "audio source switch should mark Audio as current in mock mode");
     assert(audio.body.playback.source === "audio", "playback source should follow audio switch");
+    assert(audio.body.audio.rememberedSource?.target === "mpd", "internal Audio switch should not overwrite remembered visible source");
     assert(audio.body.audio.sources.some((source) => source.id === "scene" && source.active === false), "audio source switch should deactivate scene");
 
     const spotify = await request("/api/v1/audio/source", {
@@ -1372,8 +2936,10 @@ async function run() {
     assert(spotify.response.ok, "spotify connect source switch should return 200");
     assert(spotify.body.audio.currentSource.id === "spotify", "spotify connect switch should activate spotify in mock mode");
     assert(spotify.body.audio.currentSource.armed === true, "spotify connect switch should arm spotify handoff");
+    assert(spotify.body.audio.currentSource.connectionState === "armed", "spotify connect source should initially wait for a connected input");
     assert(spotify.body.audio.currentSource.advertisedLabel === "Tikpal Speaker", "spotify connect switch should keep advertised device name in state");
     assert(spotify.body.playback.source === "spotify", "playback source should follow spotify connect switch");
+    assert(spotify.body.audio.rememberedSource?.target === "spotify", "spotify handoff should remember Spotify as the last visible source");
 
     const bluetooth = await request("/api/v1/audio/source", {
       method: "POST",
@@ -1432,6 +2998,7 @@ async function run() {
     assert(airplay.response.ok, "airplay source switch should return 200");
     assert(airplay.body.audio.currentSource.id === "airplay", "airplay switch should activate airplay in mock mode");
     assert(airplay.body.audio.currentSource.armed === true, "airplay switch should arm airplay intake");
+    assert(airplay.body.audio.currentSource.connectionState === "armed", "airplay source should initially wait for a connected input");
     assert(airplay.body.audio.sources.some((source) => source.id === "bluetooth" && source.armed === false), "airplay switch should disarm bluetooth");
 
     const dlna = await request("/api/v1/audio/source", {
@@ -1441,8 +3008,10 @@ async function run() {
     assert(dlna.response.ok, "dlna source switch should return 200");
     assert(dlna.body.audio.currentSource.id === "upnp", "dlna switch should activate dlna in mock mode");
     assert(dlna.body.audio.currentSource.armed === true, "dlna switch should arm dlna intake");
+    assert(dlna.body.audio.currentSource.connectionState === "armed", "dlna source should initially wait for a connected input");
     assert(dlna.body.audio.currentSource.advertisedLabel === "Tikpal Speaker", "dlna switch should keep advertised renderer name in state");
     assert(dlna.body.playback.source === "upnp", "playback source should follow dlna switch");
+    assert(dlna.body.audio.rememberedSource?.target === "upnp", "dlna handoff should remember DLNA as the last visible source");
     assert(dlna.body.audio.sources.some((source) => source.id === "spotify" && source.armed === false), "dlna switch should disarm spotify");
     assert(dlna.body.audio.sources.some((source) => source.id === "bluetooth" && source.armed === false), "dlna switch should disarm bluetooth");
     assert(dlna.body.audio.sources.some((source) => source.id === "airplay" && source.armed === false), "dlna switch should disarm airplay");
@@ -1453,12 +3022,37 @@ async function run() {
     });
     assert(radio.response.ok, "radio source switch should return 200");
     assert(radio.body.audio.currentSource.id === "radio", "radio switch should activate radio in mock mode");
+    assert(radio.body.audio.currentSource.radioStationId === "radio-2", "radio switch should expose the selected mock station id on currentSource");
     assert(radio.body.playback.source === "radio", "playback source should follow radio switch");
-    assert(radio.body.playback.title === "A.M. Ambient", "radio switch should surface the active preset label");
+    assert(radio.body.playback.title === "Tikpal Calm - Radio Paradise Mellow", "radio switch should surface the active preset label");
+    assert(radio.body.audio.rememberedSource?.target === "radio", "radio switch should remember Radio as the last source");
+    assert(radio.body.audio.rememberedSource?.radioStationId === "radio-2", "radio switch should remember the selected station id");
     assert(radio.body.audio.sources.some((source) => source.id === "airplay" && source.armed === false), "radio switch should close airplay intake");
     assert(radio.body.audio.sources.some((source) => source.id === "upnp" && source.armed === false), "radio switch should close dlna intake");
-    const radioLyrics = await waitForLyricsStatus(["ready"]);
-    assert(radioLyrics.lines[0]?.text.includes("Midnight radio glow"), "radio metadata changes should resolve a new lyrics payload");
+
+    const sceneAfterRadio = await request("/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({
+        target: "scene",
+        sceneVideoId: "rainy-window",
+        sceneVideoLabel: "Rainy Window",
+        sceneVideoSrc: "/assets/scenes/Rainy-Window.mp4"
+      })
+    });
+    assert(sceneAfterRadio.response.ok, "scene source switch after Radio should return 200");
+    assert(sceneAfterRadio.body.audio.currentSource.id === "scene", "scene source switch after Radio should activate Scene Sound");
+    assert(sceneAfterRadio.body.audio.rememberedSource?.target === "radio", "scene source switch should preserve remembered Radio");
+    const sceneSoundOffAfterRadio = await request("/api/v1/experience/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "set_scene_sound", sceneSoundEnabled: false })
+    });
+    assert(sceneSoundOffAfterRadio.response.ok, "turning scene sound off after Radio should return 200");
+    assert(sceneSoundOffAfterRadio.body.sceneSoundEnabled === false, "turning scene sound off after Radio should persist off");
+    const stateAfterSceneSoundOffRadio = await request("/api/v1/system/state");
+    assert(stateAfterSceneSoundOffRadio.body.audio.currentSource.id === "radio", "turning scene sound off after Radio should restore Radio");
+    assert(stateAfterSceneSoundOffRadio.body.audio.currentSource.radioStationId === "radio-2", "turning scene sound off after Radio should restore the remembered station");
+    assert(stateAfterSceneSoundOffRadio.body.playback.source === "radio", "turning scene sound off after Radio should expose Radio playback");
+    assert(stateAfterSceneSoundOffRadio.body.playback.state === "playing", "turning scene sound off after Radio should not leave playback stopped");
 
     const mpd = await request("/api/v1/audio/source", {
       method: "POST",
@@ -1642,10 +3236,13 @@ async function run() {
     });
     assert(remoteUnsupportedPlaylist.response.status === 400, "remote actions should not expose playlist CRUD");
 
-    await runMpcHifiCommandGuardSmoke(roomExperienceStatePath);
     await runHifiSpectrumCommandSmoke(roomExperienceStatePath);
+    await runMpcStartupSceneDefaultSmoke();
+    await runMpcHifiCommandGuardSmoke(roomExperienceStatePath);
     await runMpcLocalLibraryPathSmoke(roomExperienceStatePath);
     await runMpcCachedStateSmoke(roomExperienceStatePath);
+    await runMpcRadioPresetFastSnapshotSmoke(roomExperienceStatePath);
+    await runMpcAirplayHandoffRefreshSmoke(roomExperienceStatePath);
 
     console.log("api smoke passed");
   } finally {

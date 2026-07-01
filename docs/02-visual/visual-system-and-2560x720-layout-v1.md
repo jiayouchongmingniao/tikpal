@@ -121,6 +121,16 @@ Suggested composition:
 - Playback mode should read as one segmented control with exactly one active state: sequence, repeat-one, or shuffle.
 - Ambient metadata, progress, and cover art should follow active playback truth from the backend. Source browsing state must not overwrite the long-dwell now-playing display.
 
+Hi-Fi visual rules:
+
+- Default Hi-Fi should stay as a centered now-playing composition with cover art, metadata, source, time, format, and volume.
+- Ready lyrics with at least one displayable line may switch Hi-Fi into a left-cover / right-lyrics wall while keeping the rolling ticker visible in the lower safe area. The wall and ticker must show the same current lyric line.
+- If synced lyrics cannot project an active line from playback time, the wall remains visible and uses the static rotation active index instead of disappearing.
+- If lyrics are not ready, empty, or explicitly hidden, Hi-Fi returns to the centered now-playing composition and hides both lyrics surfaces.
+- Real `albumArtUrl` always wins. Bluetooth may use a deterministic generated record poster only when it is the active playback source and no real artwork is available. Radio uses official station logos as real artwork; during Radio source/next/previous pending states, Player and Hi-Fi should swap to the backend-primed station logo quickly instead of holding the previous station cover until MPD finishes stream verification.
+- AirPlay cover art must arrive through the backend `albumArtUrl` truth, using the versioned `/api/v1/media/airplay-artwork` URL when available. Hi-Fi, Ambient HUD, Player, and portable remote should all show the same AirPlay artwork state for the active track.
+- Hi-Fi background waves, particles, and sampled theme colors are decorative and non-interactive; they must stay below the transport and text layers and respect reduced-motion preferences.
+
 Scene switching:
 
 - The incoming video should first seek to the current music elapsed time modulo its own duration.
@@ -162,7 +172,9 @@ Center playback zone:
 - Local category folders should remain manifest-backed. `Meditation` should not absorb Rest folders such as Sleep, Rain, Ocean, Forest, Nap, or Deep Sleep long tracks unless the manifest itself categorizes them there.
 - Radio browsing must support 200+ stations without feeling like a dense admin table.
   - Keep search and filters visible near the top of the workspace.
-  - Use large row height, quick-scan metadata pills, and obvious active/pending state.
+  - Default to the Tikpal curated catalog with `Focus`, `Calm`, `Sleep`, `Hi-Fi`, `Jazz`, `Classical`, and `News` tabs, while keeping an `All moOde` scope for the full station table.
+  - Use official station logo thumbnails when the backend exposes `logoUrl`; generated covers are only a fallback when the logo file is unavailable.
+  - Use large row height, broadcaster copy, quick-scan metadata pills, and obvious active/pending state.
 - Bluetooth, AirPlay, and DLNA should read like gated intake modes, not ordinary playlists.
   - Unselected: blocked for new connections.
   - Selected: armed and waiting, or connected when a device/session is present.

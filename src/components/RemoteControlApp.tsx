@@ -1,9 +1,10 @@
 import { Airplay, Bluetooth, Music, Pause, Play, Radio, RefreshCw, SkipBack, SkipForward, SlidersHorizontal, Sun, Volume2, Wifi } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fetchRemoteCatalog, fetchRemoteState, readStoredRemoteKey, sendRemoteAction, storeRemoteKey } from "../api/remoteClient";
 import type { RemoteActionRequest, RemoteCatalogResponse, RemoteStateResponse, RoomMode, SourceState } from "../types";
 
 const REFRESH_MS = 2500;
+const REMOTE_SLIDER_COMMIT_MS = 300;
 
 function sourceIcon(source: SourceState) {
   switch (source) {
@@ -41,6 +42,10 @@ export function RemoteControlApp() {
   const [error, setError] = useState<string | null>(null);
   const [volumeDraft, setVolumeDraft] = useState(0);
   const [brightnessDraft, setBrightnessDraft] = useState(0);
+  const volumeDraftRef = useRef(volumeDraft);
+  const brightnessDraftRef = useRef(brightnessDraft);
+  const volumeCommitTimerRef = useRef<number | null>(null);
+  const brightnessCommitTimerRef = useRef<number | null>(null);
   const track = useMemo(() => formatTrack(remoteState), [remoteState]);
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
@@ -74,8 +79,15 @@ export function RemoteControlApp() {
   useEffect(() => {
     if (!remoteState) return;
     setVolumeDraft(remoteState.volume.percent);
+    volumeDraftRef.current = remoteState.volume.percent;
     setBrightnessDraft(remoteState.display.brightnessPercent);
+    brightnessDraftRef.current = remoteState.display.brightnessPercent;
   }, [remoteState]);
+
+  useEffect(() => () => {
+    if (volumeCommitTimerRef.current !== null) window.clearTimeout(volumeCommitTimerRef.current);
+    if (brightnessCommitTimerRef.current !== null) window.clearTimeout(brightnessCommitTimerRef.current);
+  }, []);
 
   const applyAction = useCallback(async (action: RemoteActionRequest) => {
     setPendingAction(action.type);
@@ -95,15 +107,51 @@ export function RemoteControlApp() {
   }, [remoteKey]);
 
   const commitVolume = useCallback(() => {
-    void applyAction({ type: "volume_set", value: volumeDraft });
-  }, [applyAction, volumeDraft]);
+    if (volumeCommitTimerRef.current !== null) {
+      window.clearTimeout(volumeCommitTimerRef.current);
+      volumeCommitTimerRef.current = null;
+    }
+    void applyAction({ type: "volume_set", value: volumeDraftRef.current });
+  }, [applyAction]);
 
   const commitBrightness = useCallback(() => {
-    void applyAction({ type: "display.brightness_set", value: brightnessDraft });
-  }, [applyAction, brightnessDraft]);
+    if (brightnessCommitTimerRef.current !== null) {
+      window.clearTimeout(brightnessCommitTimerRef.current);
+      brightnessCommitTimerRef.current = null;
+    }
+    void applyAction({ type: "display.brightness_set", value: brightnessDraftRef.current });
+  }, [applyAction]);
+
+  const handleVolumeDraftChange = useCallback((value: number) => {
+    volumeDraftRef.current = value;
+    setVolumeDraft(value);
+    if (volumeCommitTimerRef.current !== null) window.clearTimeout(volumeCommitTimerRef.current);
+    volumeCommitTimerRef.current = window.setTimeout(() => {
+      volumeCommitTimerRef.current = null;
+      void applyAction({ type: "volume_set", value: volumeDraftRef.current });
+    }, REMOTE_SLIDER_COMMIT_MS);
+  }, [applyAction]);
+
+  const handleBrightnessDraftChange = useCallback((value: number) => {
+    brightnessDraftRef.current = value;
+    setBrightnessDraft(value);
+    if (brightnessCommitTimerRef.current !== null) window.clearTimeout(brightnessCommitTimerRef.current);
+    brightnessCommitTimerRef.current = window.setTimeout(() => {
+      brightnessCommitTimerRef.current = null;
+      void applyAction({ type: "display.brightness_set", value: brightnessDraftRef.current });
+    }, REMOTE_SLIDER_COMMIT_MS);
+  }, [applyAction]);
 
   const isPlaying = remoteState?.playback.state === "playing";
   const busy = pendingAction !== null;
+  const transportCapabilities = remoteState?.playback.transportCapabilities;
+  const transportUnavailableTitle = transportCapabilities?.reason ?? "Playback control unavailable";
+  const previousDisabled = busy || transportCapabilities?.previous === false;
+  const playPauseDisabled = busy || transportCapabilities?.playPause === false;
+  const nextDisabled = busy || transportCapabilities?.next === false;
+  const previousTitle = transportCapabilities?.previous === false ? transportUnavailableTitle : "Previous";
+  const playPauseTitle = transportCapabilities?.playPause === false ? transportUnavailableTitle : isPlaying ? "Pause" : "Play";
+  const nextTitle = transportCapabilities?.next === false ? transportUnavailableTitle : "Next";
 
   return (
     <main className="remote-root">
@@ -126,20 +174,20 @@ export function RemoteControlApp() {
         </section>
 
         <section className="remote-transport" aria-label="Playback controls">
-          <button className="remote-icon-button" type="button" title="Previous" aria-label="Previous" disabled={busy} onClick={() => void applyAction({ type: "playback.previous" })}>
+          <button className="remote-icon-button" type="button" title={previousTitle} aria-label="Previous" disabled={previousDisabled} onClick={() => void applyAction({ type: "playback.previous" })}>
             <SkipBack aria-hidden="true" />
           </button>
           <button
             className="remote-play-button"
             type="button"
-            title={isPlaying ? "Pause" : "Play"}
+            title={playPauseTitle}
             aria-label={isPlaying ? "Pause" : "Play"}
-            disabled={busy}
+            disabled={playPauseDisabled}
             onClick={() => void applyAction({ type: "playback.play_pause" })}
           >
             {isPlaying ? <Pause aria-hidden="true" /> : <Play aria-hidden="true" />}
           </button>
-          <button className="remote-icon-button" type="button" title="Next" aria-label="Next" disabled={busy} onClick={() => void applyAction({ type: "playback.next" })}>
+          <button className="remote-icon-button" type="button" title={nextTitle} aria-label="Next" disabled={nextDisabled} onClick={() => void applyAction({ type: "playback.next" })}>
             <SkipForward aria-hidden="true" />
           </button>
         </section>
@@ -154,8 +202,11 @@ export function RemoteControlApp() {
             min="0"
             max="100"
             value={volumeDraft}
-            onChange={(event) => setVolumeDraft(Number(event.currentTarget.value))}
+            onChange={(event) => handleVolumeDraftChange(Number(event.currentTarget.value))}
             onPointerUp={commitVolume}
+            onTouchEnd={commitVolume}
+            onMouseUp={commitVolume}
+            onBlur={commitVolume}
             onKeyUp={(event) => {
               if (event.key === "Enter" || event.key.startsWith("Arrow")) commitVolume();
             }}
@@ -226,8 +277,11 @@ export function RemoteControlApp() {
             min="0"
             max="100"
             value={brightnessDraft}
-            onChange={(event) => setBrightnessDraft(Number(event.currentTarget.value))}
+            onChange={(event) => handleBrightnessDraftChange(Number(event.currentTarget.value))}
             onPointerUp={commitBrightness}
+            onTouchEnd={commitBrightness}
+            onMouseUp={commitBrightness}
+            onBlur={commitBrightness}
             onKeyUp={(event) => {
               if (event.key === "Enter" || event.key.startsWith("Arrow")) commitBrightness();
             }}

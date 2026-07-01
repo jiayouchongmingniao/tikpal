@@ -1,6 +1,8 @@
 #!/bin/sh
 set -eu
 
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+
 run_as_root() {
   if command -v sudo >/dev/null 2>&1; then
     sudo "$@"
@@ -10,10 +12,10 @@ run_as_root() {
 }
 
 ensure_loopback_output() {
-  if [ -f /etc/alsa/conf.d/_sndaloop.conf ]; then
-    run_as_root sed -i '0,/_audioout__ {/s//_audioout {/' /etc/alsa/conf.d/_sndaloop.conf || true
-    run_as_root modprobe snd-aloop >/dev/null 2>&1 || true
-  fi
+  TIKPAL_ALSA_LOG_PREFIX="${TIKPAL_ALSA_LOG_PREFIX:-tikpal-bluetooth}"
+  # shellcheck disable=SC1091
+  . "$SCRIPT_DIR/tikpal-alsa-loopback.sh"
+  tikpal_enable_alsa_loopback_output /etc/alsa/conf.d/_sndaloop.conf
 }
 
 ensure_loopback_output

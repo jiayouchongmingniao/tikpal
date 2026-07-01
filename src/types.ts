@@ -25,6 +25,7 @@ export type SourceAvailability = "available" | "waiting" | "unavailable";
 export type SourceControllability = "switchable" | "handoff" | "status-only";
 export type SourceSwitchTarget = "mpd" | "audio" | "scene" | "radio" | "spotify" | "bluetooth" | "airplay" | "upnp";
 export type SourceConnectionState = "idle" | "armed" | "connected" | "blocked";
+export type RememberedAudioSourceTarget = Exclude<SourceSwitchTarget, "audio" | "scene">;
 
 export interface RadioStationSummary {
   id: string;
@@ -33,6 +34,13 @@ export interface RadioStationSummary {
   genre: string;
   bitrateKbps: number | null;
   codec: string | null;
+  category: string | null;
+  categoryLabel: string | null;
+  tags: string[];
+  broadcaster: string | null;
+  logoUrl: string | null;
+  catalogSource: "tikpal" | "moode" | "fallback";
+  sortOrder: number | null;
   secondaryStatus: string;
   active: boolean;
 }
@@ -49,11 +57,20 @@ export interface SourceSummary {
   connectedLabel: string | null;
   advertisedLabel: string | null;
   secondaryStatus: string;
+  radioStationId?: string | null;
+}
+
+export interface RememberedAudioSource {
+  target: RememberedAudioSourceTarget;
+  localTrackPath?: string | null;
+  radioStationId?: string | null;
+  updatedAt: string | null;
 }
 
 export interface AudioState {
   currentSource: SourceSummary;
   sources: SourceSummary[];
+  rememberedSource?: RememberedAudioSource | null;
 }
 
 export interface AudioSpectrumFrame {
@@ -71,6 +88,8 @@ export interface RadioCatalogFilters {
   q?: string;
   genre?: string;
   bitrate?: string;
+  category?: string;
+  scope?: "tikpal" | "all";
   limit?: number;
   offset?: number;
 }
@@ -79,14 +98,22 @@ export interface RadioCatalogResponse {
   stations: RadioStationSummary[];
   total: number;
   genres: string[];
+  categories: Array<{
+    id: string;
+    label: string;
+    count: number;
+  }>;
   bitrates: string[];
   filters: {
     q: string;
     genre: string;
     bitrate: string;
+    category: string | null;
+    scope: "tikpal" | "all";
     limit: number;
     offset: number;
   };
+  scope: "tikpal" | "all";
   updatedAt: string;
 }
 
@@ -229,6 +256,7 @@ export interface BackgroundVideoSummary {
   default?: boolean;
   source?: "legacy" | "scene";
   roomModes?: RoomMode[];
+  audioGainDb?: number;
 }
 
 export interface BackgroundVideoCatalogResponse {
@@ -322,6 +350,17 @@ export interface PlaybackSummary {
   favorite: boolean;
   settings: PlaybackSettings;
   queuePreview: QueueEntrySummary[];
+  transportCapabilities?: PlaybackTransportCapabilities;
+}
+
+export interface PlaybackTransportCapabilities {
+  playPause: boolean;
+  play: boolean;
+  pause: boolean;
+  next: boolean;
+  previous: boolean;
+  seek: boolean;
+  reason: string | null;
 }
 
 export interface PlaybackSettings {
@@ -424,12 +463,35 @@ export interface NightScheduleState {
   preNightBrightnessPercent: number | null;
 }
 
+export type SceneDayPart = "morning" | "afternoon" | "evening" | "night";
+export type SceneWeatherCondition = "clear" | "cloudy" | "foggy" | "rainy" | "snowy" | "stormy";
+
+export interface SceneWeatherSummary {
+  condition: SceneWeatherCondition;
+  label: string;
+  weatherCode: number | null;
+  precipitation: number;
+  source: "ip_weather";
+}
+
+export interface SceneContextSummary {
+  timeZone: string;
+  dayPart: SceneDayPart;
+  localHour: number;
+  locationLabel: string | null;
+  countryCode: string | null;
+  weather: SceneWeatherSummary | null;
+  source: "ip" | "timezone" | "fallback";
+  updatedAt: string;
+}
+
 export type RoomExperienceActionType =
   | "set_mode"
   | "start_session"
   | "stop_session"
   | "update_timer"
   | "apply_preset"
+  | "set_scene_sound"
   | "set_hifi_eq"
   | "set_hifi_visual"
   | "update_night_schedule";

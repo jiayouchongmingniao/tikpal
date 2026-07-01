@@ -8,6 +8,7 @@ Type=simple
 User=@SERVICE_USER@
 WorkingDirectory=@APP_DIR@
 EnvironmentFile=-@APP_DIR@/.env.kiosk
+Environment=TIKPAL_KIOSK_SKIP_ENV_SOURCE=1
 Environment=DISPLAY=:0
 Environment=XAUTHORITY=/home/@SERVICE_USER@/.Xauthority
 StandardOutput=journal

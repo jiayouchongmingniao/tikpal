@@ -43,19 +43,6 @@ function buildCaptureCommands({ sampleRate, channels, seconds }) {
   const timeoutSeconds = Math.max(seconds + 0.15, 0.2).toFixed(2);
   return parseDevices().flatMap((device) => [
     {
-      label: `ffmpeg:${device}`,
-      command: [
-        `command -v ${shellQuote(ffmpegBin)} >/dev/null 2>&1 &&`,
-        `${shellQuote(ffmpegBin)} -hide_banner -loglevel error -nostdin`,
-        "-f alsa",
-        `-ac ${channels}`,
-        `-ar ${sampleRate}`,
-        `-i ${shellQuote(device)}`,
-        `-t ${seconds}`,
-        "-vn -f s16le -acodec pcm_s16le -"
-      ].join(" ")
-    },
-    {
       label: `arecord:${device}`,
       command: [
         "command -v timeout >/dev/null 2>&1 &&",
@@ -66,6 +53,19 @@ function buildCaptureCommands({ sampleRate, channels, seconds }) {
         `-c ${channels}`,
         `-r ${sampleRate}`,
         "-t raw"
+      ].join(" ")
+    },
+    {
+      label: `ffmpeg:${device}`,
+      command: [
+        `command -v ${shellQuote(ffmpegBin)} >/dev/null 2>&1 &&`,
+        `${shellQuote(ffmpegBin)} -hide_banner -loglevel error -nostdin`,
+        "-f alsa",
+        `-ac ${channels}`,
+        `-ar ${sampleRate}`,
+        `-i ${shellQuote(device)}`,
+        `-t ${seconds}`,
+        "-vn -f s16le -acodec pcm_s16le -"
       ].join(" ")
     }
   ]);

@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { spawnSync } from "node:child_process";
-import { access, mkdir } from "node:fs/promises";
+import { access, copyFile, mkdir } from "node:fs/promises";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -9,6 +9,7 @@ const APP_URL = process.env.TIKPAL_TEST_URL ?? "http://localhost:4173/";
 const DEVTOOLS_PORT = Number(process.env.TIKPAL_TEST_DEVTOOLS_PORT ?? 9222);
 const INTERACTION_SCENE_FIXTURE_DIR = path.resolve("public", "assets", ".interaction-smoke");
 const INTERACTION_SCENE_FIXTURE_PATH = path.join(INTERACTION_SCENE_FIXTURE_DIR, "scene.mp4");
+const INTERACTION_SCENE_DIST_FIXTURE_PATH = path.resolve("dist", "assets", ".interaction-smoke", "scene.mp4");
 const INTERACTION_SCENE_FIXTURE_SRC = "/assets/.interaction-smoke/scene.mp4";
 
 async function canAccess(filePath) {
@@ -85,11 +86,17 @@ async function prepareInteractionSceneFixture() {
     throw new Error(`Failed to generate interaction scene fixture with ffmpeg:\n${result.stdout ?? ""}${result.stderr ?? ""}`);
   }
 
+  if (await canAccess(path.resolve("dist"))) {
+    await mkdir(path.dirname(INTERACTION_SCENE_DIST_FIXTURE_PATH), { recursive: true });
+    await copyFile(INTERACTION_SCENE_FIXTURE_PATH, INTERACTION_SCENE_DIST_FIXTURE_PATH);
+  }
+
   return INTERACTION_SCENE_FIXTURE_SRC;
 }
 
 async function resetInteractionRoomExperience() {
   const actionsUrl = new URL("/api/v1/experience/actions", APP_URL);
+  const sourceUrl = new URL("/api/v1/audio/source", APP_URL);
   for (const body of [
     { type: "set_hifi_eq", hifiEqPresetId: "flat" },
     { type: "set_mode", mode: "calm" }
@@ -102,6 +109,14 @@ async function resetInteractionRoomExperience() {
     if (!response.ok) {
       throw new Error(`Failed to reset room experience for interaction smoke: ${response.status}`);
     }
+  }
+  const sourceResponse = await fetch(sourceUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ target: "mpd" })
+  });
+  if (!sourceResponse.ok) {
+    throw new Error(`Failed to reset audio source for interaction smoke: ${sourceResponse.status}`);
   }
 }
 
@@ -235,7 +250,7 @@ async function sampleLoopVideoLuma(client) {
     client,
     `
       (() => {
-        const videos = [...document.querySelectorAll('.flame-video')];
+        const videos = [...document.querySelectorAll('.flame-video[data-flame-layer="active"]')];
         const canvas = document.createElement('canvas');
         const size = 32;
         canvas.width = size;
@@ -288,7 +303,7 @@ async function sampleLoopAudioState(client) {
     client,
     `
       (() => {
-        const videos = [...document.querySelectorAll('.flame-video')];
+        const videos = [...document.querySelectorAll('.flame-video[data-flame-layer="active"]')];
         const audibleVideos = videos
           .filter((video) => video instanceof HTMLVideoElement)
           .map((video) => ({
@@ -340,6 +355,92 @@ async function evaluate(client, expression) {
   return result.result.value;
 }
 
+async function postExperienceAction(client, action) {
+  const ok = await evaluate(
+    client,
+    `
+      fetch('/api/v1/experience/actions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: ${JSON.stringify(JSON.stringify(action))}
+      }).then((response) => response.ok)
+    `
+  );
+  if (!ok) throw new Error(`Failed: experience action ${action.type} was rejected`);
+}
+
+async function installSceneTransitionObserver(client) {
+  await evaluate(
+    client,
+    `
+      (() => {
+        window.__tikpalSceneTransitionObserver?.disconnect?.();
+        window.__tikpalSceneTransitionSnapshots = [];
+	        const record = () => {
+	          const scene = document.querySelector('.flame-scene');
+	          const videos = [...document.querySelectorAll('.flame-video')];
+	          const videoLayers = videos.map((video) => ({
+	            src: video.getAttribute('src') ?? '',
+	            layer: video.getAttribute('data-flame-layer') ?? '',
+	            role: video.getAttribute('data-flame-loop-role') ?? '',
+	            phase: video.getAttribute('data-flame-loop-phase') ?? '',
+	            frameReady: video.getAttribute('data-flame-frame-ready') ?? ''
+	          }));
+	          window.__tikpalSceneTransitionSnapshots.push({
+	            phase: scene?.getAttribute('data-flame-transition-phase') ?? 'missing',
+	            transition: scene?.getAttribute('data-flame-transition') ?? 'missing',
+	            loopMode: scene?.getAttribute('data-flame-loop-mode') ?? 'dual',
+	            layerCount: document.querySelectorAll('.flame-video-layer').length,
+	            videoLayers,
+	            activeSrcs: videos
+	              .filter((video) => video.getAttribute('data-flame-layer') === 'active')
+	              .map((video) => video.getAttribute('src') ?? ''),
+            allSrcs: videos.map((video) => video.getAttribute('src') ?? ''),
+            activeGainDbs: videos
+              .filter((video) => video.getAttribute('data-flame-layer') === 'active')
+              .map((video) => Number.parseFloat(video.getAttribute('data-scene-gain-db') ?? 'NaN')),
+            activeVolumes: videos
+              .filter((video) => video.getAttribute('data-flame-layer') === 'active')
+              .map((video) => Number.parseFloat(video.getAttribute('data-scene-volume') ?? '0'))
+          });
+        };
+        const observer = new MutationObserver(record);
+        observer.observe(document.body, {
+          subtree: true,
+          attributes: true,
+          attributeFilter: ['class', 'data-flame-transition', 'data-flame-transition-phase', 'data-flame-layer', 'src', 'data-scene-volume']
+        });
+        window.__tikpalSceneTransitionObserver = observer;
+        record();
+        return true;
+      })()
+    `
+  );
+}
+
+async function setStatePatchMode(client, mode) {
+  return await evaluate(
+    client,
+    `
+      (() => {
+        window.__tikpalSmokeStatePatchMode = ${JSON.stringify(mode)};
+        return window.__tikpalSmokePatchedStateVersion ?? 0;
+      })()
+    `
+  );
+}
+
+async function waitForStatePatchRefresh(client, previousVersion, label) {
+  await expectEventually(
+    client,
+    `(window.__tikpalSmokePatchedStateVersion ?? 0) > ${Number(previousVersion)}`,
+    label,
+    35,
+    150
+  );
+  await wait(120);
+}
+
 function sourceTabExpression(sourceId, { selected, active }) {
   return `
     (() => {
@@ -352,6 +453,31 @@ function sourceTabExpression(sourceId, { selected, active }) {
       );
     })()
   `;
+}
+
+function sourceHandoffExpression(sourceId) {
+  return `
+    (() => {
+      const card = document.querySelector('[data-source-handoff-waiting="${sourceId}"]');
+      return Boolean(card && card.textContent?.includes('Waiting for connection'));
+    })()
+  `;
+}
+
+async function switchPlayerSourceAndExpectHandoff(client, sourceId, sourceLabel) {
+  await evaluate(
+    client,
+    `
+      (() => {
+        const target = document.querySelector('[data-source-item="${sourceId}"]');
+        target?.click();
+        return Boolean(target);
+      })()
+    `
+  );
+  await expectEventually(client, sourceHandoffExpression(sourceId), `${sourceLabel} source shows waiting handoff card`);
+  await expectEventually(client, `document.querySelector('.source-line span')?.textContent?.includes('${sourceLabel}') === true`, `${sourceLabel} source connects after handoff`);
+  await expectEventually(client, sourceTabExpression(sourceId, { selected: true, active: true }), `${sourceLabel} source is selected and active after handoff`);
 }
 
 function sourceHighlightExpression(theme) {
@@ -614,9 +740,308 @@ try {
   await client.open();
   await client.send("Page.enable");
   await client.send("Runtime.enable");
+  await client.send("Page.addScriptToEvaluateOnNewDocument", {
+    source: `
+      (() => {
+        window.localStorage.setItem('tikpal.lyricsVisible.v3', 'false');
+        const nativeFetch = window.fetch.bind(window);
+        const realBluetoothCover = "data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22120%22%20height%3D%22120%22%3E%3Crect%20width%3D%22120%22%20height%3D%22120%22%20fill%3D%22%2318405a%22%2F%3E%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2232%22%20fill%3D%22%23f2d36b%22%2F%3E%3C%2Fsvg%3E";
+
+        function clone(value) {
+          return JSON.parse(JSON.stringify(value));
+        }
+
+        function withSource(state, sourceId, options = {}) {
+          const next = clone(state);
+          next.audio.sources = next.audio.sources.map((source) => {
+            const patched = {
+              ...source,
+              active: source.id === sourceId,
+              availability: source.id === sourceId ? "available" : source.availability,
+              armed: false,
+              connectionState: source.id === sourceId ? "connected" : "idle",
+              connectedLabel: source.id === sourceId ? (sourceId === "bluetooth" ? "Tikpal Demo Phone" : source.connectedLabel) : null
+            };
+            if (source.id === "radio") {
+              patched.radioStationId = sourceId === "radio" ? options.radioStationId ?? source.radioStationId ?? null : null;
+            }
+            return patched;
+          });
+          next.audio.currentSource = next.audio.sources.find((source) => source.id === sourceId) ?? next.audio.currentSource;
+          return next;
+        }
+
+        function applyPatch(state) {
+          const mode = window.__tikpalSmokeStatePatchMode ?? "";
+          if (mode === "syncedLyrics") {
+            const next = clone(state);
+            next.playback = {
+              ...next.playback,
+              source: "mpd",
+              albumArtUrl: null,
+              title: "Synced Lyric Study",
+              artist: "Tikpal Smoke",
+              album: "Wall Text",
+              elapsedSeconds: 2.2,
+              durationSeconds: 180
+            };
+            next.lyrics = {
+              ...next.lyrics,
+              status: "ready",
+              trackKey: "smoke-synced-lyrics",
+              synced: true,
+              activeLineIndex: null,
+              title: "Synced Lyric Study",
+              artist: "Tikpal Smoke",
+              lines: [
+                { text: "Synced line one", startMs: 0, endMs: 1000 },
+                { text: "Synced line two", startMs: 1000, endMs: 2000 },
+                { text: "Synced line three carries a longer phrase for the rolling lyrics ticker", startMs: 2000, endMs: 3000 },
+                { text: "Synced line four carries a longer phrase for the rolling lyrics ticker", startMs: 3000, endMs: 4000 },
+                { text: "Synced line five carries a longer phrase for the rolling lyrics ticker", startMs: 4000, endMs: 5000 }
+              ],
+              message: null,
+              updatedAt: new Date().toISOString()
+            };
+            return next;
+          }
+
+          if (mode === "staticLyrics") {
+            const next = clone(state);
+            next.playback = {
+              ...next.playback,
+              source: "mpd",
+              albumArtUrl: null,
+              title: "Static Lyric Study",
+              artist: "Tikpal Smoke",
+              album: "Wall Text",
+              elapsedSeconds: null,
+              durationSeconds: null
+            };
+            next.lyrics = {
+              ...next.lyrics,
+              status: "ready",
+              trackKey: "smoke-static-lyrics",
+              synced: false,
+              activeLineIndex: null,
+              title: "Static Lyric Study",
+              artist: "Tikpal Smoke",
+              lines: [
+                { text: "Static line one", startMs: null, endMs: null },
+                { text: "Static line two", startMs: null, endMs: null },
+                { text: "Static line three", startMs: null, endMs: null },
+                { text: "Static line four", startMs: null, endMs: null },
+                { text: "Static line five", startMs: null, endMs: null }
+              ],
+              message: null,
+              updatedAt: new Date().toISOString()
+            };
+            return next;
+          }
+
+          if (mode === "noReadyLyrics") {
+            const next = clone(state);
+            next.lyrics = {
+              ...next.lyrics,
+              status: "not_found",
+              trackKey: "smoke-no-ready-lyrics",
+              synced: false,
+              activeLineIndex: null,
+              lines: [],
+              message: "No lyrics found",
+              updatedAt: new Date().toISOString()
+            };
+            return next;
+          }
+
+          if (mode === "bluetoothFallback" || mode === "bluetoothRealCover") {
+            const next = withSource(state, "bluetooth");
+            next.playback = {
+              ...next.playback,
+              state: "playing",
+              source: "bluetooth",
+              albumArtUrl: mode === "bluetoothRealCover" ? realBluetoothCover : null,
+              title: "Pocket Signal",
+              artist: "Tikpal Phone",
+              album: "Bluetooth Session",
+              elapsedSeconds: 12,
+              durationSeconds: 188,
+              currentTrackIndex: 0,
+              queueLength: 0,
+              favorite: false,
+              queuePreview: []
+            };
+            return next;
+          }
+
+          if (mode === "brokenArtwork") {
+            const next = withSource(state, "mpd");
+            next.playback = {
+              ...next.playback,
+              state: "playing",
+              source: "mpd",
+              albumArtUrl: "/api/v1/media/artwork?track=missing-smoke-cover",
+              title: "Broken Artwork Study",
+              artist: "Tikpal Smoke",
+              album: "Generated Fallback",
+              elapsedSeconds: 24,
+              durationSeconds: 188,
+              currentTrackIndex: 1,
+              queueLength: 3,
+              favorite: false
+            };
+            return next;
+          }
+
+          if (mode === "hifiRememberedDifferentRadio" || mode === "hifiRememberedSameRadio") {
+            const currentStationId = mode === "hifiRememberedSameRadio" ? "radio-503" : "radio-500";
+            const next = withSource(state, "radio", { radioStationId: currentStationId });
+            const currentStationLabel = currentStationId === "radio-503"
+              ? "Tikpal Focus - KEXP Seattle"
+              : "Tikpal Focus - Radio Paradise Main";
+            next.audio.rememberedSource = {
+              target: "radio",
+              localTrackPath: null,
+              radioStationId: "radio-503",
+              updatedAt: "2026-06-30T00:00:00.000Z"
+            };
+            next.playback = {
+              ...next.playback,
+              state: "playing",
+              source: "radio",
+              albumArtUrl: '/api/v1/media/radio-logo?stationId=' + currentStationId,
+              title: currentStationLabel,
+              artist: "Internet Radio",
+              album: currentStationLabel,
+              elapsedSeconds: null,
+              durationSeconds: null,
+              currentTrackIndex: 0,
+              queueLength: 0,
+              favorite: false,
+              queuePreview: []
+            };
+            return next;
+          }
+
+          if (mode === "hifiRememberedDifferentLibrary" || mode === "hifiRememberedSameLibrary") {
+            const rememberedTrackPath = "Focus/Lo-fi Ambient/FASSounds - Good Night - Lofi Cozy Chill Music - 02m27s - Lo-fi.mp3";
+            const next = mode === "hifiRememberedSameLibrary"
+              ? withSource(state, "mpd")
+              : withSource(state, "radio", { radioStationId: "radio-500" });
+            next.audio.rememberedSource = {
+              target: "mpd",
+              localTrackPath: rememberedTrackPath,
+              radioStationId: null,
+              updatedAt: "2026-06-30T00:00:00.000Z"
+            };
+            next.playback = {
+              ...next.playback,
+              state: "playing",
+              source: mode === "hifiRememberedSameLibrary" ? "mpd" : "radio",
+              albumArtUrl: mode === "hifiRememberedSameLibrary" ? "/api/v1/media/library-cover?track=smoke" : "/api/v1/media/radio-logo?stationId=radio-500",
+              title: mode === "hifiRememberedSameLibrary" ? "Good Night" : "Tikpal Focus - Radio Paradise Main",
+              artist: mode === "hifiRememberedSameLibrary" ? "FASSounds" : "Internet Radio",
+              album: mode === "hifiRememberedSameLibrary" ? "Lo-fi Ambient" : "Tikpal Focus - Radio Paradise Main",
+              elapsedSeconds: mode === "hifiRememberedSameLibrary" ? 42 : null,
+              durationSeconds: mode === "hifiRememberedSameLibrary" ? 147 : null,
+              currentTrackIndex: mode === "hifiRememberedSameLibrary" ? 1 : 0,
+              queueLength: mode === "hifiRememberedSameLibrary" ? 3 : 0,
+              favorite: false,
+              queuePreview: mode === "hifiRememberedSameLibrary"
+                ? [{
+                    id: "Codex/" + rememberedTrackPath,
+                    position: 1,
+                    title: "Good Night",
+                    artist: "FASSounds",
+                    album: "Lo-fi Ambient",
+                    durationSeconds: 147,
+                    active: true
+                  }]
+                : []
+            };
+            return next;
+          }
+
+          if (mode === "singleLoopScene") {
+            const next = withSource(state, "scene");
+            next.runtime = {
+              ...next.runtime,
+              apiMode: "mpc"
+            };
+            next.playback = {
+              ...next.playback,
+              state: "playing",
+              source: "scene",
+              title: "Scene Audio",
+              artist: "Interaction Scene",
+              album: "Interaction Scene",
+              elapsedSeconds: 2.4,
+              durationSeconds: null,
+              currentTrackIndex: 0,
+              queueLength: 0,
+              favorite: false,
+              queuePreview: [],
+              transportCapabilities: {
+                playPause: true,
+                play: true,
+                pause: true,
+                next: false,
+                previous: false,
+                seek: false,
+                reason: null
+              }
+            };
+            return next;
+          }
+
+          return state;
+        }
+
+        window.__tikpalSmokeStatePatchMode = "";
+        window.__tikpalSmokePatchedStateVersion = 0;
+        window.fetch = async (input, init) => {
+          const response = await nativeFetch(input, init);
+          const rawUrl = typeof input === "string" ? input : input?.url;
+          const pathname = rawUrl ? new URL(rawUrl, window.location.href).pathname : "";
+          if (pathname !== "/api/v1/system/state" || !window.__tikpalSmokeStatePatchMode) {
+            return response;
+          }
+
+          try {
+            const body = await response.clone().json();
+            const headers = new Headers(response.headers);
+            headers.set("content-type", "application/json");
+            const patchedBody = applyPatch(body);
+            window.__tikpalSmokePatchedStateVersion = (window.__tikpalSmokePatchedStateVersion ?? 0) + 1;
+            return new Response(JSON.stringify(patchedBody), {
+              status: response.status,
+              statusText: response.statusText,
+              headers
+            });
+          } catch {
+            return response;
+          }
+        };
+      })();
+    `
+  });
 
   await navigate(client, APP_URL);
   await expect(client, "document.querySelector('.ambient-screen') !== null", "ambient root renders");
+  await expect(
+    client,
+    `
+      (() => {
+        const left = document.querySelector('.ambient-adjust-zone-left');
+        const right = document.querySelector('.ambient-adjust-zone-right');
+        return left?.getAttribute('data-ambient-adjust-zone') === 'brightness'
+          && right?.getAttribute('data-ambient-adjust-zone') === 'volume'
+          && (left.getAttribute('aria-label') ?? '').includes('brightness')
+          && (right.getAttribute('aria-label') ?? '').includes('volume');
+      })()
+    `,
+    "ambient edge controls map brightness left and volume right"
+  );
   await expect(
     client,
     "document.querySelectorAll('.startup-mode-grid button').length === 4 && [...document.querySelectorAll('.startup-mode-grid button')].some((node) => node.textContent?.includes('Hi-Fi'))",
@@ -648,6 +1073,274 @@ try {
     `document.querySelector('.startup-mode-chooser') === null && document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') === ${JSON.stringify(startupDefaultMode)}`,
     "startup mode chooser defaults to the persisted room mode after 5 seconds"
   );
+  await postExperienceAction(client, { type: "set_mode", mode: "hifi" });
+  await navigate(client, APP_URL);
+  await expectEventually(
+    client,
+    "document.querySelector('[data-hifi-now-playing][data-hifi-centered-now-playing]') !== null && document.querySelector('[data-hifi-cover-art]') !== null && document.querySelector('[data-hifi-track-info]') !== null && document.querySelector('[data-hifi-eq-visual]') === null && document.querySelector('[data-spectrum-band]') === null && document.querySelector('video.flame-video.is-active') === null && document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') === 'hifi'",
+    "Hi-Fi room mode renders centered cover and track info without EQ display",
+    50,
+    150
+  );
+  await expect(
+    client,
+    `
+      (() => {
+        const visuals = document.querySelector('[data-hifi-ambient-visuals]');
+        const surface = document.querySelector('.hifi-now-playing-surface');
+        if (!visuals || !surface) return false;
+
+        const visualsStyle = getComputedStyle(visuals);
+        const surfaceStyle = getComputedStyle(surface);
+        return document.querySelectorAll('[data-hifi-wave-line]').length >= 7
+          && document.querySelectorAll('[data-hifi-particle]').length >= 24
+          && visualsStyle.pointerEvents === 'none'
+          && Number.parseInt(visualsStyle.zIndex, 10) < Number.parseInt(surfaceStyle.zIndex, 10);
+      })()
+    `,
+    "Hi-Fi centered background renders lightweight non-blocking waves and particles"
+  );
+  await expect(
+    client,
+    `
+      (() => {
+        const labels = [...document.querySelectorAll('.ambient-transport button')].map((button) => button.getAttribute('aria-label'));
+        return labels.includes('Choose audio source')
+          && !labels.includes('Previous Hi-Fi EQ preset')
+          && !labels.includes('Next Hi-Fi EQ preset')
+          && document.querySelector('.ambient-transport-scene-next') === null;
+      })()
+    `,
+    "Hi-Fi ambient transport exposes source selection and no EQ preset controls"
+  );
+  const syncedLyricsPatchVersion = await setStatePatchMode(client, "syncedLyrics");
+  await waitForStatePatchRefresh(client, syncedLyricsPatchVersion, "Hi-Fi synced lyrics fixture refreshes");
+  await evaluate(
+    client,
+    `
+      (() => {
+        const button = document.querySelector('.ambient-transport button[aria-label="Show lyrics"]');
+        button?.click();
+        return Boolean(button);
+      })()
+    `
+  );
+  await expectEventually(
+    client,
+    `
+      (() => {
+        const panel = document.querySelector('[data-hifi-lyrics-panel]');
+        const activeLine = document.querySelector('[data-hifi-lyrics-line][data-hifi-lyrics-active]');
+        const ticker = document.querySelector('.ambient-lyrics-ticker');
+        const tickerLine = document.querySelector('.ambient-lyrics-ticker .ambient-lyrics-text');
+        const activeText = activeLine?.textContent?.trim() ?? "";
+        const tickerText = tickerLine?.textContent?.trim() ?? "";
+        return panel !== null
+          && document.querySelector('[data-hifi-centered-now-playing]') === null
+          && document.querySelectorAll('[data-hifi-lyrics-line]').length >= 4
+          && activeLine?.classList.contains('is-active') === true
+          && activeText.length > 0
+          && document.querySelector('[data-ambient-lyrics]')?.getAttribute('aria-hidden') === 'false'
+          && ticker !== null
+          && ticker.classList.contains('is-scrolling')
+          && document.querySelectorAll('.ambient-lyrics-ticker .ambient-lyrics-text').length === 2
+          && tickerText === activeText;
+      })()
+    `,
+    "Hi-Fi ready synced lyrics render lyrics wall and rolling ticker together"
+  );
+  await wait(1500);
+  await expectEventually(
+    client,
+    `
+      (() => {
+        const activeLine = document.querySelector('[data-hifi-lyrics-line][data-hifi-lyrics-active]');
+        const tickerLine = document.querySelector('.ambient-lyrics-ticker .ambient-lyrics-text');
+        const text = activeLine?.textContent?.trim() ?? "";
+        const tickerText = tickerLine?.textContent?.trim() ?? "";
+        return (text.includes("Synced line four") || text.includes("Synced line five"))
+          && tickerText === text;
+      })()
+    `,
+    "Hi-Fi synced lyrics advance wall and ticker from the local playback clock between state refreshes"
+  );
+  await wait(4200);
+  await expectEventually(
+    client,
+    `
+      (() => {
+        const activeLine = document.querySelector('[data-hifi-lyrics-line][data-hifi-lyrics-active]');
+        const tickerLine = document.querySelector('.ambient-lyrics-ticker .ambient-lyrics-text');
+        return document.querySelector('.ambient-screen.is-hud-hidden') !== null
+          && document.querySelector('[data-hifi-lyrics-panel]') !== null
+          && document.querySelector('.ambient-transport') !== null
+          && getComputedStyle(document.querySelector('.ambient-transport')).pointerEvents === 'none'
+          && (activeLine?.textContent?.trim() ?? "") === (tickerLine?.textContent?.trim() ?? "")
+          && (tickerLine?.textContent?.trim().length ?? 0) > 0;
+      })()
+    `,
+    "Hi-Fi HUD auto hides while lyrics wall and rolling ticker remain visible"
+  );
+  const staticLyricsPatchVersion = await setStatePatchMode(client, "staticLyrics");
+  await waitForStatePatchRefresh(client, staticLyricsPatchVersion, "Hi-Fi static lyrics fixture refreshes");
+  await expectEventually(
+    client,
+    `
+      (() => {
+        const panel = document.querySelector('[data-hifi-lyrics-panel]');
+        const activeLine = document.querySelector('[data-hifi-lyrics-line][data-hifi-lyrics-active]');
+        const ticker = document.querySelector('.ambient-lyrics-ticker');
+        const tickerLine = document.querySelector('.ambient-lyrics-ticker .ambient-lyrics-text');
+        const activeText = activeLine?.textContent?.trim() ?? "";
+        return panel !== null
+          && document.querySelectorAll('[data-hifi-lyrics-line]').length === 5
+          && activeText.includes('Static line')
+          && ticker !== null
+          && ticker.classList.contains('is-static')
+          && tickerLine?.textContent?.trim() === activeText;
+      })()
+    `,
+    "Hi-Fi static ready lyrics render lyrics wall and ticker together"
+  );
+  const noReadyLyricsPatchVersion = await setStatePatchMode(client, "noReadyLyrics");
+  await waitForStatePatchRefresh(client, noReadyLyricsPatchVersion, "Hi-Fi no-ready lyrics fixture refreshes");
+  await expectEventually(
+    client,
+    "document.querySelector('[data-hifi-now-playing][data-hifi-centered-now-playing]') !== null && document.querySelector('[data-hifi-lyrics-panel]') === null && document.querySelector('.ambient-lyrics-ticker') === null && document.querySelector('[data-ambient-lyrics]')?.getAttribute('aria-hidden') === 'true'",
+    "Hi-Fi without ready lyrics returns to centered now-playing"
+  );
+  const brokenArtworkPatchVersion = await setStatePatchMode(client, "brokenArtwork");
+  await waitForStatePatchRefresh(client, brokenArtworkPatchVersion, "broken artwork fixture refreshes");
+  await expectEventually(
+    client,
+    "document.querySelector('[data-hifi-cover-art][data-generated-cover-fallback=\"true\"] img')?.getAttribute('src')?.startsWith('data:image/svg+xml') === true && document.querySelector('[data-hifi-track-info]')?.textContent?.includes('Broken Artwork Study')",
+    "Hi-Fi broken artwork URL falls back to generated cover"
+  );
+  const bluetoothFallbackPatchVersion = await setStatePatchMode(client, "bluetoothFallback");
+  await waitForStatePatchRefresh(client, bluetoothFallbackPatchVersion, "Bluetooth fallback fixture refreshes");
+  await expectEventually(
+    client,
+    "document.querySelector('[data-bluetooth-generated-cover]') !== null && document.querySelector('[data-hifi-track-info]')?.textContent?.includes('Pocket Signal')",
+    "Bluetooth without real artwork uses generated record poster"
+  );
+  const bluetoothRealCoverPatchVersion = await setStatePatchMode(client, "bluetoothRealCover");
+  await waitForStatePatchRefresh(client, bluetoothRealCoverPatchVersion, "Bluetooth real cover fixture refreshes");
+  await expectEventually(
+    client,
+    "document.querySelector('[data-bluetooth-generated-cover]') === null && document.querySelector('[data-hifi-cover-art] img')?.getAttribute('src')?.startsWith('data:image/svg+xml')",
+    "Bluetooth real artwork is not replaced by generated poster",
+    50,
+    150
+  );
+  await evaluate(client, "document.querySelector('.ambient-transport button[aria-label=\"Hide lyrics\"]')?.click(); true");
+  await setStatePatchMode(client, "");
+  await wait(3300);
+  await evaluate(client, "document.querySelector('[data-ambient-source-toggle]')?.click()");
+  await expectEventually(
+    client,
+    "document.querySelectorAll('[data-ambient-source-picker] [data-ambient-source-option]').length === 6",
+    "Hi-Fi source picker opens six source choices"
+  );
+  await wait(5200);
+  await expectEventually(client, "document.querySelector('[data-ambient-source-picker]') === null", "Hi-Fi source picker auto-closes after 5 seconds");
+  await evaluate(client, "document.querySelector('[data-ambient-source-toggle]')?.click()");
+  await expectEventually(client, "document.querySelector('[data-ambient-source-option=\"radio\"]') !== null", "Hi-Fi source picker exposes Radio");
+  await evaluate(client, "document.querySelector('[data-ambient-source-option=\"radio\"]')?.click()");
+  await expectEventuallyEvaluate(
+    client,
+    "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => state.audio.currentSource.id === 'radio' && state.playback.source === 'radio')",
+    "Hi-Fi source picker switches immediately to Radio"
+  );
+  await postExperienceAction(client, { type: "set_mode", mode: "focus" });
+  await navigate(client, APP_URL);
+  await expectEventually(
+    client,
+    "document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') === 'focus'",
+    "Focus room mode is active before Hi-Fi remembered-source restore"
+  );
+  await evaluate(
+    client,
+    `
+      (() => {
+        const button = [...document.querySelectorAll('.ambient-room-mode-buttons button')]
+          .find((node) => node.textContent?.trim() === 'Hi-Fi');
+        button?.click();
+        return Boolean(button);
+      })()
+    `
+  );
+  await expectEventuallyEvaluate(
+    client,
+    "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') === 'hifi' && state.audio.currentSource.id === 'radio' && state.playback.source === 'radio')",
+    "Hi-Fi entry restores the remembered Radio source"
+  );
+  await postExperienceAction(client, { type: "set_mode", mode: "focus" });
+  await navigate(client, APP_URL);
+  await expectEventually(
+    client,
+    "document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') === 'focus'",
+    "Focus room mode is active before Hi-Fi remembered station restore"
+  );
+  const differentRadioPatchVersion = await setStatePatchMode(client, "hifiRememberedDifferentRadio");
+  await waitForStatePatchRefresh(client, differentRadioPatchVersion, "Hi-Fi different remembered Radio fixture refreshes");
+  await evaluate(
+    client,
+    `
+      (() => {
+        window.__tikpalRememberedRadioRequests = [];
+        window.__tikpalRememberedRadioOriginalFetch = window.fetch.bind(window);
+        window.fetch = async (input, init) => {
+          const rawUrl = typeof input === 'string' ? input : input instanceof Request ? input.url : String(input);
+          const pathname = new URL(rawUrl, window.location.href).pathname;
+          if (pathname === '/api/v1/audio/source') {
+            const body = JSON.parse(String(init?.body ?? '{}'));
+            window.__tikpalRememberedRadioRequests.push(body);
+            if (body.target === 'radio') {
+              const response = await window.__tikpalRememberedRadioOriginalFetch('/api/v1/system/state');
+              const state = await response.json();
+              const next = JSON.parse(JSON.stringify(state));
+              next.audio.sources = next.audio.sources.map((source) => {
+                const patched = {
+                  ...source,
+                  active: source.id === 'radio',
+                  armed: false,
+                  connectionState: source.id === 'radio' ? 'idle' : source.connectionState,
+                  connectedLabel: null
+                };
+                if (source.id === 'radio') {
+                  patched.radioStationId = body.radioStationId ?? null;
+                  patched.secondaryStatus = 'Tikpal Focus - KEXP Seattle active';
+                }
+                return patched;
+              });
+              next.audio.currentSource = next.audio.sources.find((source) => source.id === 'radio') ?? next.audio.currentSource;
+              next.audio.rememberedSource = {
+                target: 'radio',
+                localTrackPath: null,
+                radioStationId: body.radioStationId ?? null,
+                updatedAt: new Date().toISOString()
+              };
+              next.playback = {
+                ...next.playback,
+                state: 'playing',
+                source: 'radio',
+                albumArtUrl: '/api/v1/media/radio-logo?stationId=' + encodeURIComponent(body.radioStationId ?? ''),
+                title: 'Tikpal Focus - KEXP Seattle',
+                artist: 'Internet Radio',
+                album: 'Tikpal Focus - KEXP Seattle'
+              };
+              return new Response(JSON.stringify(next), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' }
+              });
+            }
+          }
+          return window.__tikpalRememberedRadioOriginalFetch(input, init);
+        };
+        return true;
+      })()
+    `
+  );
   await evaluate(
     client,
     `
@@ -661,22 +1354,228 @@ try {
   );
   await expectEventually(
     client,
-    "document.querySelector('[data-hifi-now-playing]') !== null && document.querySelector('[data-hifi-eq-visual]') !== null && document.querySelector('video.flame-video.is-active') === null && document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') === 'hifi'",
-    "Hi-Fi room mode renders Now Playing without active scene video"
+    "(window.__tikpalRememberedRadioRequests ?? []).some((body) => body.target === 'radio' && body.radioStationId === 'radio-503')",
+    "Hi-Fi entry restores the remembered Radio station when another Radio station is current",
+    45,
+    150
   );
-  await expectEventually(
+  await evaluate(
     client,
-    "document.querySelector('[data-hifi-eq-visual]')?.textContent?.includes('Now Playing') && document.querySelector('[data-hifi-eq-visual]')?.getAttribute('data-spectrum-source') === 'mock' && document.querySelector('[data-hifi-eq-visual]')?.getAttribute('data-spectrum-band-count') === '32' && document.querySelectorAll('[data-hifi-eq-visual] .eq-spectrum [data-spectrum-band]').length === 32",
-    "Hi-Fi Now Playing and EQ meter are driven by fetched spectrum data"
+    `
+      (() => {
+        if (window.__tikpalRememberedRadioOriginalFetch) {
+          window.fetch = window.__tikpalRememberedRadioOriginalFetch;
+          delete window.__tikpalRememberedRadioOriginalFetch;
+        }
+        return true;
+      })()
+    `
   );
-  const hifiPresetBefore = await evaluate(client, "document.querySelector('[data-hifi-eq-visual]')?.getAttribute('data-hifi-eq-preset')");
-  await evaluate(client, "document.querySelector('.ambient-transport-scene-next')?.click()");
-  await expectEventually(
+  await postExperienceAction(client, { type: "set_mode", mode: "focus" });
+  await navigate(client, APP_URL);
+  const sameRadioPatchVersion = await setStatePatchMode(client, "hifiRememberedSameRadio");
+  await waitForStatePatchRefresh(client, sameRadioPatchVersion, "Hi-Fi same remembered Radio fixture refreshes");
+  await evaluate(
     client,
-    `document.querySelector('[data-hifi-eq-visual]')?.getAttribute('data-hifi-eq-preset') !== ${JSON.stringify(hifiPresetBefore)}`,
-    "Hi-Fi next control switches EQ preset"
+    `
+      (() => {
+        window.__tikpalRememberedRadioRequests = [];
+        window.__tikpalRememberedRadioOriginalFetch = window.fetch.bind(window);
+        window.fetch = async (input, init) => {
+          const rawUrl = typeof input === 'string' ? input : input instanceof Request ? input.url : String(input);
+          const pathname = new URL(rawUrl, window.location.href).pathname;
+          if (pathname === '/api/v1/audio/source') {
+            window.__tikpalRememberedRadioRequests.push(JSON.parse(String(init?.body ?? '{}')));
+          }
+          return window.__tikpalRememberedRadioOriginalFetch(input, init);
+        };
+        return true;
+      })()
+    `
   );
+  await evaluate(
+    client,
+    `
+      (() => {
+        const button = [...document.querySelectorAll('.ambient-room-mode-buttons button')]
+          .find((node) => node.textContent?.trim() === 'Hi-Fi');
+        button?.click();
+        return Boolean(button);
+      })()
+    `
+  );
+  await wait(1800);
   await expect(
+    client,
+    "!(window.__tikpalRememberedRadioRequests ?? []).some((body) => body.target === 'radio')",
+    "Hi-Fi entry does not repeat Radio restore when the remembered station is already current"
+  );
+  await evaluate(
+    client,
+    `
+      (() => {
+        if (window.__tikpalRememberedRadioOriginalFetch) {
+          window.fetch = window.__tikpalRememberedRadioOriginalFetch;
+          delete window.__tikpalRememberedRadioOriginalFetch;
+        }
+        window.__tikpalRememberedRadioRequests = [];
+        window.__tikpalSmokeStatePatchMode = "";
+        return true;
+      })()
+    `
+  );
+  await postExperienceAction(client, { type: "set_mode", mode: "focus" });
+  await navigate(client, APP_URL);
+  const differentLibraryPatchVersion = await setStatePatchMode(client, "hifiRememberedDifferentLibrary");
+  await waitForStatePatchRefresh(client, differentLibraryPatchVersion, "Hi-Fi different remembered Library fixture refreshes");
+  await evaluate(
+    client,
+    `
+      (() => {
+        window.__tikpalRememberedLibraryRequests = [];
+        window.__tikpalRememberedLibraryOriginalFetch = window.fetch.bind(window);
+        window.fetch = async (input, init) => {
+          const rawUrl = typeof input === 'string' ? input : input instanceof Request ? input.url : String(input);
+          const pathname = new URL(rawUrl, window.location.href).pathname;
+          if (pathname === '/api/v1/audio/source') {
+            const body = JSON.parse(String(init?.body ?? '{}'));
+            window.__tikpalRememberedLibraryRequests.push(body);
+            if (body.target === 'mpd') {
+              const response = await window.__tikpalRememberedLibraryOriginalFetch('/api/v1/system/state');
+              const state = await response.json();
+              const next = JSON.parse(JSON.stringify(state));
+              next.audio.sources = next.audio.sources.map((source) => ({
+                ...source,
+                active: source.id === 'mpd',
+                armed: false,
+                connectionState: source.id === 'mpd' ? 'idle' : source.connectionState,
+                connectedLabel: null
+              }));
+              next.audio.currentSource = next.audio.sources.find((source) => source.id === 'mpd') ?? next.audio.currentSource;
+              next.audio.rememberedSource = {
+                target: 'mpd',
+                localTrackPath: body.localTrackPath ?? null,
+                radioStationId: null,
+                updatedAt: new Date().toISOString()
+              };
+              next.playback = {
+                ...next.playback,
+                state: 'playing',
+                source: 'mpd',
+                albumArtUrl: '/api/v1/media/library-cover?track=smoke',
+                title: 'Good Night',
+                artist: 'FASSounds',
+                album: 'Lo-fi Ambient',
+                elapsedSeconds: 0,
+                durationSeconds: 147,
+                currentTrackIndex: 1,
+                queueLength: 3,
+                queuePreview: [{
+                  id: 'Codex/' + String(body.localTrackPath ?? ''),
+                  position: 1,
+                  title: 'Good Night',
+                  artist: 'FASSounds',
+                  album: 'Lo-fi Ambient',
+                  durationSeconds: 147,
+                  active: true
+                }]
+              };
+              return new Response(JSON.stringify(next), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' }
+              });
+            }
+          }
+          return window.__tikpalRememberedLibraryOriginalFetch(input, init);
+        };
+        return true;
+      })()
+    `
+  );
+  await evaluate(
+    client,
+    `
+      (() => {
+        const button = [...document.querySelectorAll('.ambient-room-mode-buttons button')]
+          .find((node) => node.textContent?.trim() === 'Hi-Fi');
+        button?.click();
+        return Boolean(button);
+      })()
+    `
+  );
+  await expectEventually(
+    client,
+    "(window.__tikpalRememberedLibraryRequests ?? []).some((body) => body.target === 'mpd' && body.localTrackPath === 'Focus/Lo-fi Ambient/FASSounds - Good Night - Lofi Cozy Chill Music - 02m27s - Lo-fi.mp3')",
+    "Hi-Fi entry restores the remembered Library track when another source is current",
+    45,
+    150
+  );
+  await evaluate(
+    client,
+    `
+      (() => {
+        if (window.__tikpalRememberedLibraryOriginalFetch) {
+          window.fetch = window.__tikpalRememberedLibraryOriginalFetch;
+          delete window.__tikpalRememberedLibraryOriginalFetch;
+        }
+        return true;
+      })()
+    `
+  );
+  await postExperienceAction(client, { type: "set_mode", mode: "focus" });
+  await navigate(client, APP_URL);
+  const sameLibraryPatchVersion = await setStatePatchMode(client, "hifiRememberedSameLibrary");
+  await waitForStatePatchRefresh(client, sameLibraryPatchVersion, "Hi-Fi same remembered Library fixture refreshes");
+  await evaluate(
+    client,
+    `
+      (() => {
+        window.__tikpalRememberedLibraryRequests = [];
+        window.__tikpalRememberedLibraryOriginalFetch = window.fetch.bind(window);
+        window.fetch = async (input, init) => {
+          const rawUrl = typeof input === 'string' ? input : input instanceof Request ? input.url : String(input);
+          const pathname = new URL(rawUrl, window.location.href).pathname;
+          if (pathname === '/api/v1/audio/source') {
+            window.__tikpalRememberedLibraryRequests.push(JSON.parse(String(init?.body ?? '{}')));
+          }
+          return window.__tikpalRememberedLibraryOriginalFetch(input, init);
+        };
+        return true;
+      })()
+    `
+  );
+  await evaluate(
+    client,
+    `
+      (() => {
+        const button = [...document.querySelectorAll('.ambient-room-mode-buttons button')]
+          .find((node) => node.textContent?.trim() === 'Hi-Fi');
+        button?.click();
+        return Boolean(button);
+      })()
+    `
+  );
+  await wait(1800);
+  await expect(
+    client,
+    "!(window.__tikpalRememberedLibraryRequests ?? []).some((body) => body.target === 'mpd')",
+    "Hi-Fi entry does not repeat Library restore when the remembered track is already current"
+  );
+  await evaluate(
+    client,
+    `
+      (() => {
+        if (window.__tikpalRememberedLibraryOriginalFetch) {
+          window.fetch = window.__tikpalRememberedLibraryOriginalFetch;
+          delete window.__tikpalRememberedLibraryOriginalFetch;
+        }
+        window.__tikpalRememberedLibraryRequests = [];
+        window.__tikpalSmokeStatePatchMode = "";
+        return true;
+      })()
+    `
+  );
+  await expectEventually(
     client,
     "document.querySelector('.ambient-transport [data-hifi-playlist-entry][aria-label=\"Open playlist\"]') !== null",
     "Hi-Fi ambient transport exposes playlist entry"
@@ -699,8 +1598,8 @@ try {
   await evaluate(client, "document.querySelector('.overlay-backdrop')?.click();");
   await expectEventually(
     client,
-    "document.querySelector('[data-hifi-eq-visual]')?.getAttribute('data-hifi-eq-visible') === 'true' && document.querySelectorAll('[data-hifi-eq-visual] [data-spectrum-band]').length > 0 && document.querySelector('.hifi-eq-summary') === null",
-    "Hi-Fi EQ meter remains visible without the preset summary card"
+    "document.querySelector('[data-hifi-now-playing]') !== null && document.querySelector('[data-hifi-eq-visual]') === null && document.querySelector('[data-spectrum-band]') === null && document.querySelector('.hifi-eq-summary') === null",
+    "Hi-Fi EQ display stays hidden"
   );
   await expect(client, "document.querySelector('.ambient-screen.is-hud-visible') !== null", "ambient HUD starts visible");
   await expect(client, "document.querySelector('.ambient-hud[data-room-mode]') !== null", "ambient HUD exposes room mode state");
@@ -770,6 +1669,13 @@ try {
 
   await click(client, 1280, 280);
   await expect(client, "document.querySelector('.ambient-screen.is-hud-visible') !== null", "single tap shows ambient HUD");
+  await expectEventually(
+    client,
+    "document.querySelectorAll('[data-ambient-source-picker] [data-ambient-source-option]').length === 6",
+    "ambient scene single tap opens six source choices"
+  );
+  await evaluate(client, "window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })); true");
+  await expectEventually(client, "document.querySelector('[data-ambient-source-picker]') === null", "ambient scene source picker closes with Escape");
   await expect(
     client,
     `
@@ -780,6 +1686,7 @@ try {
           && document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') !== 'hifi'
           && labels.includes('Previous scene')
           && labels.includes('Next scene')
+          && labels.includes('Choose audio source')
           && (labels.includes('Unmute scene sound') || labels.includes('Mute scene sound'))
           && !labels.includes('Previous track')
           && !labels.includes('Next track')
@@ -790,7 +1697,7 @@ try {
           && !transport.querySelector('.ambient-play-mode');
       })()
     `,
-    "ambient non-Hi-Fi transport keeps only scene switch and mute controls"
+    "ambient non-Hi-Fi transport keeps scene controls plus source selection"
   );
   await evaluate(
     client,
@@ -808,6 +1715,7 @@ try {
                   label: 'Interaction Scene',
                   src: ${JSON.stringify(interactionSceneVideoSrc)},
                   roomModes: ['calm'],
+                  audioGainDb: 0,
                   source: 'scene'
                 },
                 {
@@ -817,22 +1725,34 @@ try {
                   src: ${JSON.stringify(`${interactionSceneVideoSrc}?ota=rainy`)},
                   order: 30,
                   roomModes: ['calm'],
+                  audioGainDb: 11.1,
                   source: 'scene'
                 },
-                {
-                  id: 'focus-smoke-scene',
-                  filename: 'Focus-Smoke.mp4',
-                  label: 'Focus Smoke',
-                  src: ${JSON.stringify(`${interactionSceneVideoSrc}?ota=focus`)},
-                  order: 40,
-                  roomModes: ['focus'],
-                  source: 'scene'
-                }
-              ],
-              total: 3,
-              updatedAt: new Date().toISOString(),
-              catalogVersion: 'interaction-rainy',
-              defaultVideoId: 'interaction-scene'
+	                {
+	                  id: 'focus-smoke-scene',
+	                  filename: 'Focus-Smoke.mp4',
+	                  label: 'Focus Smoke',
+	                  src: ${JSON.stringify(`${interactionSceneVideoSrc}?ota=focus`)},
+	                  order: 40,
+	                  roomModes: ['focus'],
+	                  audioGainDb: -6.2,
+	                  source: 'scene'
+	                },
+	                {
+	                  id: 'sleep-smoke-scene',
+	                  filename: 'Sleep-Smoke.mp4',
+	                  label: 'Sleep Smoke',
+	                  src: ${JSON.stringify(`${interactionSceneVideoSrc}?ota=sleep`)},
+	                  order: 50,
+	                  roomModes: ['sleep'],
+	                  audioGainDb: -8.4,
+	                  source: 'scene'
+	                }
+	              ],
+	              total: 4,
+	              updatedAt: new Date().toISOString(),
+	              catalogVersion: 'interaction-rainy',
+	              defaultVideoId: 'interaction-scene'
             }), {
               status: 200,
               headers: { 'Content-Type': 'application/json' }
@@ -844,8 +1764,43 @@ try {
         return true;
       })()
     `
+	  );
+	  await expectEventually(client, "!document.querySelector('.ambient-transport-scene-next')?.disabled", "ambient scene catalog refresh enables OTA scene navigation");
+	  const singleLoopPatchVersion = await setStatePatchMode(client, "singleLoopScene");
+	  await waitForStatePatchRefresh(client, singleLoopPatchVersion, "single-loop scene fixture refreshes");
+	  await expectEventually(client, "document.querySelector('.flame-scene')?.getAttribute('data-flame-loop-mode') === 'single'", "ambient scene test runs through single-loop mode");
+	  await expect(
+	    client,
+	    `
+      (() => {
+        const logo = document.querySelector('.scene-logo-backdrop .scene-logo-mark');
+        return logo instanceof HTMLImageElement
+          && logo.complete
+          && logo.naturalWidth > 0
+          && document.querySelector('.fireplace-backdrop') === null;
+      })()
+    `,
+    "scene fallback uses loaded Tikpal logo without fireplace backdrop"
   );
-  await expectEventually(client, "!document.querySelector('.ambient-transport-scene-next')?.disabled", "ambient scene catalog refresh enables OTA scene navigation");
+  await expectEventually(
+    client,
+    `
+      (() => {
+        const activeVideo = [...document.querySelectorAll('.flame-video[data-flame-layer="active"]')]
+          .find((video) => video instanceof HTMLVideoElement
+            && Boolean(video.getAttribute('src'))
+            && !video.getAttribute('src')?.includes('ota=rainy')
+            && video.getAttribute('data-flame-loop-role') === 'active');
+        return activeVideo instanceof HTMLVideoElement
+          && activeVideo.readyState >= 2
+          && activeVideo.videoWidth > 0;
+      })()
+    `,
+    "ambient active scene is drawable before scene switch",
+    50,
+    150
+  );
+  await installSceneTransitionObserver(client);
   await evaluate(
     client,
     `
@@ -856,28 +1811,170 @@ try {
     `
   );
   await expectEventually(client, "[...document.querySelectorAll('.flame-video')].some((video) => video.getAttribute('src')?.includes('ota=rainy'))", "ambient can mount OTA scene video after catalog refresh");
-  await evaluate(
-    client,
-    `
-      (() => {
-        const button = [...document.querySelectorAll('.ambient-room-mode-buttons button')]
-          .find((node) => node.textContent?.trim() === 'Focus');
-        button?.click();
-        return Boolean(button);
-      })()
-    `
-  );
+  try {
+    await expectEventually(
+      client,
+      `
+	        (() => {
+	          const snapshots = window.__tikpalSceneTransitionSnapshots ?? [];
+	          const sawOutgoingDuringDim = snapshots.some((snapshot) => snapshot.phase === 'dimming'
+	            && (snapshot.allSrcs ?? snapshot.activeSrcs).some((src) => src && !src.includes('ota=rainy')));
+	          const sawPreparedIncoming = snapshots.some((snapshot) => snapshot.loopMode === 'single'
+	            && snapshot.phase === 'dimming'
+	            && snapshot.videoLayers?.some((video) => video.layer === 'active' && video.src && !video.src.includes('ota=rainy'))
+	            && snapshot.videoLayers?.some((video) => video.layer === 'incoming' && video.src?.includes('ota=rainy') && video.frameReady === 'true'));
+	          return sawOutgoingDuringDim
+	            && sawPreparedIncoming
+	            && snapshots.some((snapshot) => snapshot.phase === 'revealing'
+	              && snapshot.activeSrcs.some((src) => src.includes('ota=rainy')));
+	        })()
+      `,
+      "ambient scene switch records dim/reveal without blanking"
+    );
+  } catch (error) {
+    const snapshots = await evaluate(client, "JSON.stringify((window.__tikpalSceneTransitionSnapshots ?? []).slice(-12), null, 2)");
+    const videos = await evaluate(
+      client,
+      `
+        JSON.stringify([...document.querySelectorAll('.flame-video')].map((video) => ({
+          src: video.getAttribute('src'),
+          layer: video.getAttribute('data-flame-layer'),
+          slot: video.getAttribute('data-flame-slot-index'),
+          role: video.getAttribute('data-flame-loop-role'),
+          phase: video.getAttribute('data-flame-loop-phase'),
+          frameReady: video.getAttribute('data-flame-frame-ready'),
+          readyState: video.readyState,
+          networkState: video.networkState,
+          videoWidth: video.videoWidth,
+          videoHeight: video.videoHeight,
+          currentTime: video.currentTime,
+          duration: video.duration,
+          paused: video.paused,
+          ended: video.ended
+        })), null, 2)
+      `
+    );
+    console.error(`scene transition snapshots:\n${snapshots}`);
+    console.error(`scene videos:\n${videos}`);
+    throw error;
+  }
   await expectEventually(
     client,
     `
-      document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') === 'focus'
-      && [...document.querySelectorAll('.flame-video')].some((video) => video.getAttribute('src')?.includes('ota=focus'))
-      && ![...document.querySelectorAll('.flame-video.is-active')].some((video) => video.getAttribute('src')?.includes('ota=rainy'))
+      (() => {
+        const activeVideo = [...document.querySelectorAll('.flame-video[data-flame-layer="active"]')]
+          .find((video) => video instanceof HTMLVideoElement
+            && video.getAttribute('src')?.includes('ota=rainy')
+            && video.getAttribute('data-flame-loop-role') === 'active');
+        return activeVideo instanceof HTMLVideoElement
+          && activeVideo.readyState >= 2
+          && activeVideo.videoWidth > 0
+          && activeVideo.getAttribute('data-flame-frame-ready') === 'true'
+          && Number.parseFloat(activeVideo.getAttribute('data-scene-gain-db') ?? 'NaN') === 11.1
+          && document.querySelector('.flame-video[poster]') === null
+          && document.querySelector('.fireplace-backdrop') === null;
+      })()
     `,
-    "room mode scene switching stays inside the selected MP4 category"
+    "ambient scene switch reveals decoded OTA video with gain and without poster fallback"
   );
+	  await evaluate(
+	    client,
+	    `
+	      (() => {
+	        const button = [...document.querySelectorAll('.ambient-room-mode-buttons button')]
+	          .find((node) => node.textContent?.trim() === 'Focus');
+	        button?.click();
+	        return Boolean(button);
+	      })()
+	    `
+	  );
+	  await expectEventually(
+	    client,
+    `
+      (() => {
+        const activeSceneVideo = [...document.querySelectorAll('.flame-video[data-flame-layer="active"]')]
+          .find((video) => video instanceof HTMLVideoElement
+            && video.getAttribute('data-flame-loop-role') === 'active');
+        return document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') === 'focus'
+          && activeSceneVideo instanceof HTMLVideoElement
+          && activeSceneVideo.readyState >= 2
+          && activeSceneVideo.getAttribute('data-flame-frame-ready') === 'true'
+          && Number.isFinite(Number.parseFloat(activeSceneVideo.getAttribute('data-scene-gain-db') ?? 'NaN'))
+          && document.querySelector('.flame-video[poster]') === null
+          && document.querySelector('.fireplace-backdrop') === null;
+      })()
+    `,
+	    "room mode scene switching keeps a decoded active scene with gain",
+	    40,
+	    150
+	  );
+	  await installSceneTransitionObserver(client);
+	  await evaluate(
+	    client,
+	    `
+	      (() => {
+	        const button = [...document.querySelectorAll('.ambient-room-mode-buttons button')]
+	          .find((node) => node.textContent?.trim() === 'Sleep');
+	        button?.click();
+	        return Boolean(button);
+	      })()
+	    `
+	  );
+	  await expectEventually(
+	    client,
+	    `
+	      (() => {
+	        const activeVideo = [...document.querySelectorAll('.flame-video[data-flame-layer="active"]')]
+	          .find((video) => video instanceof HTMLVideoElement
+	            && video.getAttribute('data-flame-loop-role') === 'active');
+	        const snapshots = window.__tikpalSceneTransitionSnapshots ?? [];
+	        return document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') === 'sleep'
+	          && activeVideo instanceof HTMLVideoElement
+	          && activeVideo.getAttribute('src')?.includes('ota=sleep')
+	          && activeVideo.readyState >= 2
+	          && activeVideo.getAttribute('data-flame-frame-ready') === 'true'
+	          && snapshots.some((snapshot) => snapshot.loopMode === 'single'
+	            && snapshot.phase === 'dimming'
+	            && snapshot.videoLayers?.some((video) => video.layer === 'active' && video.src && !video.src.includes('ota=sleep'))
+	            && snapshot.videoLayers?.some((video) => video.layer === 'incoming' && video.src?.includes('ota=sleep') && video.frameReady === 'true'));
+	      })()
+	    `,
+	    "single-loop Sleep mode keeps outgoing scene until incoming is drawable",
+	    50,
+	    150
+	  );
+	  await evaluate(
+	    client,
+	    `
+	      (() => {
+	        const button = [...document.querySelectorAll('.ambient-room-mode-buttons button')]
+	          .find((node) => node.textContent?.trim() === 'Calm');
+	        button?.click();
+	        return Boolean(button);
+	      })()
+	    `
+	  );
+	  await expectEventually(
+	    client,
+	    `
+	      (() => {
+	        const activeVideo = [...document.querySelectorAll('.flame-video[data-flame-layer="active"]')]
+	          .find((video) => video instanceof HTMLVideoElement
+	            && video.getAttribute('data-flame-loop-role') === 'active');
+	        return document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') === 'calm'
+	          && activeVideo instanceof HTMLVideoElement
+	          && activeVideo.readyState >= 2
+	          && activeVideo.getAttribute('data-flame-frame-ready') === 'true'
+	          && activeVideo.getAttribute('src')?.includes('ota=rainy');
+	      })()
+	    `,
+	    "single-loop Calm mode returns to a decoded scene",
+	    50,
+	    150
+	  );
+	  await setStatePatchMode(client, "");
 
-  await wait(5600);
+	  await wait(5600);
   await expect(client, "document.querySelector('.ambient-screen.is-hud-hidden') !== null", "ambient HUD auto hides after tap show");
 
   await wheel(client, 220);
@@ -1423,8 +2520,13 @@ try {
     `
   );
   await expect(client, "document.querySelector('.flame-scene.is-video-off') !== null", "scene video off makes ambient background black");
-  await expect(client, "document.querySelector('.fireplace-backdrop') === null && document.querySelector('.flame-video') === null", "scene video off removes fireplace media layers");
+  await expect(client, "document.querySelector('.fireplace-backdrop') === null && document.querySelector('.scene-logo-backdrop') === null && document.querySelector('.flame-video') === null", "scene video off removes scene media layers");
   await expect(client, "document.querySelector('.ambient-clock') !== null", "clock remains independent while scene video is off");
+  await expectEventually(
+    client,
+    "document.querySelector('[data-quick-menu-toggle=\"scene-sound\"]')?.disabled === false",
+    "scene sound toggle is ready after scene video off"
+  );
 
   await evaluate(
     client,
@@ -1455,7 +2557,8 @@ try {
         return video instanceof HTMLVideoElement
           && !document.querySelector('.flame-scene.is-video-off')
           && video.muted === false
-          && video.paused === false;
+          && video.paused === false
+          && Number.isFinite(Number.parseFloat(video.getAttribute('data-scene-gain-db') ?? 'NaN'));
       })()
     `,
     "scene sound forces video on and unmutes the active video"
@@ -1469,16 +2572,79 @@ try {
     client,
     `
       (() => {
-        const video = document.querySelector('.flame-video[data-flame-loop-role="active"]');
-        const standby = [...document.querySelectorAll('.flame-video')]
-          .find((node) => node.getAttribute('data-flame-loop-role') === 'parked');
+        const video = document.querySelector('.flame-video[data-flame-layer="active"][data-flame-loop-role="active"]');
         return video instanceof HTMLVideoElement
-          && standby instanceof HTMLVideoElement
-          && Number.isFinite(video.duration)
-          && video.duration >= 2
-          && video.readyState >= 1
-          && video.loop === false
-          && standby.loop === false
+          && video.paused === false
+          && video.muted === false
+          && Number.parseFloat(video.getAttribute('data-scene-volume') ?? '0') > 0;
+      })()
+    `,
+    "scene sound active video has nonzero volume before scene switch"
+  );
+  await installSceneTransitionObserver(client);
+  await evaluate(
+    client,
+    `
+      (() => {
+        const activeVideo = document.querySelector('.flame-video[data-flame-layer="active"][data-flame-loop-role="active"]');
+        window.__tikpalSceneSoundSwitchBefore = {
+          volume: Number.parseFloat(activeVideo?.getAttribute('data-scene-volume') ?? '0'),
+          gainDb: Number.parseFloat(activeVideo?.getAttribute('data-scene-gain-db') ?? 'NaN'),
+          src: activeVideo?.getAttribute('src') ?? ''
+        };
+        document.querySelector('.ambient-transport-scene-next')?.click();
+        return true;
+      })()
+    `
+  );
+  await expectEventually(
+    client,
+    `
+      (() => {
+        const snapshots = window.__tikpalSceneTransitionSnapshots ?? [];
+        return snapshots.some((snapshot) => snapshot.phase === 'dimming')
+          && snapshots.some((snapshot) => snapshot.phase === 'revealing');
+      })()
+    `,
+    "scene sound scene switch enters dim/reveal transition"
+  );
+  await expectEventually(
+    client,
+    `
+      (() => {
+        const before = window.__tikpalSceneSoundSwitchBefore;
+        const video = document.querySelector('.flame-video[data-flame-layer="active"][data-flame-loop-role="active"]');
+        if (!(video instanceof HTMLVideoElement) || !before) return false;
+        const volume = Number.parseFloat(video.getAttribute('data-scene-volume') ?? '0');
+        const gainDb = Number.parseFloat(video.getAttribute('data-scene-gain-db') ?? 'NaN');
+        return document.querySelector('.flame-scene')?.getAttribute('data-flame-transition') === 'none'
+          && video.paused === false
+          && video.muted === false
+          && video.readyState >= 2
+          && Number.isFinite(gainDb)
+          && volume > 0
+          && Math.abs(volume - before.volume) < 0.06
+          && !document.querySelector('.flame-scene.is-static-only, .flame-scene.is-video-off');
+      })()
+    `,
+    "scene sound scene switch keeps playing with stable volume envelope and gain",
+    35,
+    150
+  );
+  await expectEventually(
+    client,
+    `
+      (() => {
+      const video = document.querySelector('.flame-video[data-flame-layer="active"][data-flame-loop-role="active"]');
+      const standby = [...document.querySelectorAll('.flame-video[data-flame-layer="active"]')]
+        .find((node) => node.getAttribute('data-flame-loop-role') === 'parked');
+      return video instanceof HTMLVideoElement
+        && standby instanceof HTMLVideoElement
+        && Number.isFinite(video.duration)
+        && video.duration >= 2
+        && video.readyState >= 1
+        && video.loop === false
+        && standby.loop === false
           && standby.muted === true
           && standby.getAttribute('data-flame-audio-slot') === 'standby'
           && standby.getAttribute('data-flame-frame-ready') === 'false'
@@ -1486,13 +2652,13 @@ try {
           && getComputedStyle(standby).opacity === '0';
       })()
     `,
-    "dual scene loop slots are ready without native loop"
+  "dual scene loop slots are ready without native loop"
   );
   await evaluate(
     client,
     `
       (() => {
-        const videos = [...document.querySelectorAll('.flame-video')];
+        const videos = [...document.querySelectorAll('.flame-video[data-flame-layer="active"]')];
         const video = videos.find((node) => node.getAttribute('data-flame-loop-role') === 'active');
         if (!(video instanceof HTMLVideoElement) || !Number.isFinite(video.duration)) return false;
         window.__tikpalLoopStartSlot = video.getAttribute('data-flame-slot-index');
@@ -1500,6 +2666,8 @@ try {
           if (node instanceof HTMLVideoElement) node.playbackRate = 0.25;
         });
         video.currentTime = Math.max(0, video.duration - 0.8);
+        video.dispatchEvent(new Event('seeked'));
+        video.dispatchEvent(new Event('timeupdate'));
         void video.play();
         return true;
       })()
@@ -1509,27 +2677,30 @@ try {
     client,
     `
       (() => {
-        const videos = [...document.querySelectorAll('.flame-video')];
+        const videos = [...document.querySelectorAll('.flame-video[data-flame-layer="active"]')];
         const standbyVideo = videos.find((video) => video.getAttribute('data-flame-slot-index') !== window.__tikpalLoopStartSlot);
+        const readyBeforeHandoff = standbyVideo?.getAttribute('data-flame-loop-role') === 'parked'
+          && standbyVideo?.getAttribute('data-flame-loop-phase') === 'ready'
+          && !videos.some((video) => ['incoming', 'outgoing'].includes(video.getAttribute('data-flame-loop-role')));
+        const alreadyHandoff = standbyVideo?.getAttribute('data-flame-loop-role') === 'incoming'
+          && standbyVideo?.getAttribute('data-flame-loop-phase') === 'handoff'
+          && videos.some((video) => video.getAttribute('data-flame-loop-role') === 'outgoing');
         return videos.length === 2
           && standbyVideo instanceof HTMLVideoElement
-          && standbyVideo.getAttribute('data-flame-loop-role') === 'parked'
           && standbyVideo.getAttribute('data-flame-frame-ready') === 'true'
-          && standbyVideo.getAttribute('data-flame-loop-phase') === 'ready'
-          && standbyVideo.getAttribute('data-flame-audio-slot') === 'standby'
           && standbyVideo.muted === true
-          && !videos.some((video) => ['incoming', 'outgoing'].includes(video.getAttribute('data-flame-loop-role')));
+          && (readyBeforeHandoff || alreadyHandoff);
       })()
     `,
-    "standby scene loop slot decodes its first frame before handoff",
-    40,
-    50
+    "standby scene loop slot decodes before handoff completes",
+    80,
+    75
   );
   await evaluate(
     client,
     `
       (() => {
-        const videos = [...document.querySelectorAll('.flame-video')];
+        const videos = [...document.querySelectorAll('.flame-video[data-flame-layer="active"]')];
         const video = videos.find((node) => node.getAttribute('data-flame-slot-index') === window.__tikpalLoopStartSlot);
         if (!(video instanceof HTMLVideoElement) || !Number.isFinite(video.duration)) return false;
         videos.forEach((node) => {
@@ -1547,7 +2718,7 @@ try {
     client,
     `
       (() => {
-        const videos = [...document.querySelectorAll('.flame-video')];
+        const videos = [...document.querySelectorAll('.flame-video[data-flame-layer="active"]')];
         const outgoing = videos.find((video) => video.getAttribute('data-flame-loop-role') === 'outgoing');
         const incoming = videos.find((video) => video.getAttribute('data-flame-loop-role') === 'incoming');
         const fade = document.querySelector('.flame-video-fade');
@@ -1598,7 +2769,7 @@ try {
     client,
     `
       (() => {
-        const videos = [...document.querySelectorAll('.flame-video')];
+        const videos = [...document.querySelectorAll('.flame-video[data-flame-layer="active"]')];
         const activeVideo = videos.find((video) => video.getAttribute('data-flame-loop-role') === 'active');
         const parkedVideo = videos.find((video) => video.getAttribute('data-flame-loop-role') === 'parked');
         return videos.length === 2
@@ -1625,7 +2796,7 @@ try {
     client,
     `
       (() => {
-        const videos = [...document.querySelectorAll('.flame-video')];
+        const videos = [...document.querySelectorAll('.flame-video[data-flame-layer="active"]')];
         const activeVideos = videos.filter((video) => video.getAttribute('data-flame-audio-slot') === 'active');
         const standbyVideos = videos.filter((video) => video.getAttribute('data-flame-audio-slot') === 'standby');
         const activeVideo = activeVideos[0];
@@ -1657,7 +2828,24 @@ try {
     "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => state.audio.currentSource.id === 'mpd' && state.playback.source === 'mpd' && state.playback.state === 'playing')",
     "turning scene sound off resumes library playback"
   );
-  await expectEventually(client, "document.querySelector('.flame-video.is-active') instanceof HTMLVideoElement && document.querySelector('.flame-video.is-active').muted === true", "turning scene sound off remutes the active video");
+  await expectEventually(
+    client,
+    `
+      (() => {
+        const scene = document.querySelector('.flame-scene');
+        const video = document.querySelector('.flame-video.is-active');
+        return scene instanceof HTMLElement
+          && video instanceof HTMLVideoElement
+          && !scene.classList.contains('is-video-off')
+          && !scene.classList.contains('is-static-only')
+            && video.muted === true
+            && video.paused === false
+            && video.getAttribute('data-flame-frame-ready') === 'true'
+            && Number.isFinite(Number.parseFloat(video.getAttribute('data-scene-gain-db') ?? 'NaN'));
+        })()
+      `,
+    "turning scene sound off keeps scene video playing muted"
+  );
 
   await evaluate(
     client,
@@ -1713,24 +2901,221 @@ try {
     `
   );
   await expectEventually(client, "document.querySelector('.flame-video.is-active') instanceof HTMLVideoElement && document.querySelector('.flame-video.is-active').muted === false", "scene sound can be re-enabled before switching sources");
-  await navigate(client, `${APP_URL}?mode=player`);
   await evaluate(
     client,
     `
       (() => {
-        document.querySelector('[data-source-item="mpd"]')?.click();
+        document.querySelector('.overlay-backdrop')?.click();
         return true;
       })()
     `
   );
-  await expectEventually(client, "document.querySelector('.flame-video.is-active') instanceof HTMLVideoElement && document.querySelector('.flame-video.is-active').muted === true", "music source switch remutes the active video");
+  await expectEventually(client, "document.querySelector('.ambient-screen') !== null && document.querySelector('.quick-menu.is-active') === null", "quick menu returns to Ambient before source selection");
+  await evaluate(
+    client,
+    `
+      (async () => {
+        const headers = { 'Content-Type': 'application/json' };
+        await fetch('/api/v1/audio/source', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ target: 'radio', radioStationId: 'radio-2' })
+        });
+        await fetch('/api/v1/audio/source', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ target: 'mpd' })
+        });
+        await fetch('/api/v1/experience/actions', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ type: 'set_scene_sound', sceneSoundEnabled: true })
+        });
+        return true;
+      })()
+    `
+  );
   await expectEventuallyEvaluate(
     client,
-    "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => state.playback.source !== 'scene')",
-    "switching to music deactivates scene source"
+    "Promise.all([fetch('/api/v1/system/state').then((response) => response.json()), fetch('/api/v1/experience/state').then((response) => response.json())]).then(([state, experience]) => state.audio.rememberedSource?.target === 'mpd' && state.audio.rememberedSource?.radioStationId === 'radio-2' && experience.sceneSoundEnabled === true)",
+    "Ambient Radio source selection precondition preserves previous station while back on Library"
+  );
+  await click(client, 1280, 280);
+  await evaluate(
+    client,
+    `
+      (() => {
+        if (!document.querySelector('[data-ambient-source-option="radio"]')) {
+          document.querySelector('[data-ambient-source-toggle]')?.click();
+        }
+        return true;
+      })()
+    `
+  );
+  await expectEventually(client, "document.querySelector('[data-ambient-source-option=\"radio\"]') !== null", "Ambient source picker exposes Radio from Scene Sound");
+  await evaluate(
+    client,
+    `
+      (() => {
+        const originalFetch = window.fetch.bind(window);
+        window.fetch = (input, init) => {
+          const url = typeof input === 'string' ? input : input instanceof Request ? input.url : String(input);
+          if (url.includes('/api/v1/audio/source')) {
+            window.fetch = originalFetch;
+            return Promise.resolve(new Response(JSON.stringify({ error: 'SMOKE_SOURCE_SWITCH_FAILURE' }), {
+              status: 500,
+              headers: { 'Content-Type': 'application/json' }
+            }));
+          }
+          return originalFetch(input, init);
+        };
+        return true;
+      })()
+    `
+  );
+  await evaluate(client, "document.querySelector('[data-ambient-source-option=\"radio\"]')?.click()");
+  await wait(80);
+  await expect(client, "document.querySelector('.flame-video.is-active') instanceof HTMLVideoElement && document.querySelector('.flame-video.is-active').muted === true", "Ambient Radio failed switch first mutes scene video");
+  await expectEventually(client, "document.querySelector('.flame-video.is-active') instanceof HTMLVideoElement && document.querySelector('.flame-video.is-active').muted === false && document.querySelector('.ambient-source-error') !== null", "Ambient Radio failed switch restores scene audio");
+  await evaluate(client, "document.querySelector('[data-ambient-source-option=\"radio\"]')?.click()");
+  await wait(80);
+  await expect(client, "document.querySelector('.flame-video.is-active') instanceof HTMLVideoElement && document.querySelector('.flame-video.is-active').muted === true", "Ambient Radio source switch mutes scene video before backend switch");
+  await expectEventuallyEvaluate(
+    client,
+    "Promise.all([fetch('/api/v1/system/state').then((response) => response.json()), fetch('/api/v1/experience/state').then((response) => response.json())]).then(([state, experience]) => state.audio.currentSource.id === 'radio' && state.audio.currentSource.radioStationId === 'radio-2' && state.playback.source === 'radio' && experience.sceneSoundEnabled === false)",
+    "Ambient Radio source selection deactivates scene sound and starts Radio"
+  );
+  await expectEventually(
+    client,
+    "document.querySelector('[data-ambient-source-picker]') === null && document.querySelector('[data-ambient-source-status-pill][data-ambient-source-status-source=\"radio\"]')?.textContent?.includes('Radio') === true",
+    "Ambient Radio source selection closes the picker and shows the corner source pill"
+  );
+  await expectEventually(
+    client,
+    `
+      (async () => {
+        const video = document.querySelector('.flame-video.is-active');
+        if (!(video instanceof HTMLVideoElement)) return false;
+        const before = video.currentTime;
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        return document.querySelector('.flame-scene.is-video-off') === null
+          && video.muted === true
+          && video.paused === false
+          && video.readyState >= 2
+          && Math.abs(video.currentTime - before) > 0.03;
+      })()
+    `,
+    "Ambient Radio switch keeps the scene video mounted and playing muted",
+    30,
+    150
+  );
+  await click(client, 1280, 280);
+  await evaluate(
+    client,
+    `
+      (() => {
+        if (!document.querySelector('[data-ambient-source-option="mpd"]')) {
+          document.querySelector('[data-ambient-source-toggle]')?.click();
+        }
+        return true;
+      })()
+    `
+  );
+  await expectEventually(client, "document.querySelector('[data-ambient-source-option=\"mpd\"]') !== null", "Ambient source picker exposes Library");
+  await evaluate(client, "document.querySelector('[data-ambient-source-option=\"mpd\"]')?.click()");
+  await expectEventually(client, "document.querySelector('.flame-video.is-active') instanceof HTMLVideoElement && document.querySelector('.flame-video.is-active').muted === true", "Ambient music source switch remutes the active scene video");
+  await expectEventuallyEvaluate(
+    client,
+    "Promise.all([fetch('/api/v1/system/state').then((response) => response.json()), fetch('/api/v1/experience/state').then((response) => response.json())]).then(([state, experience]) => state.audio.currentSource.id === 'mpd' && state.playback.source === 'mpd' && experience.sceneSoundEnabled === false)",
+    "Ambient source selection deactivates scene sound and restores Library"
+  );
+  await expectEventually(
+    client,
+    "document.querySelector('[data-ambient-source-picker]') === null && document.querySelector('[data-ambient-source-status-pill][data-ambient-source-status-source=\"mpd\"]')?.textContent?.includes('Library') === true",
+    "Ambient Library source selection closes the picker and shows the corner source pill"
+  );
+  await expectEventually(
+    client,
+    `
+      (async () => {
+        const video = document.querySelector('.flame-video.is-active');
+        if (!(video instanceof HTMLVideoElement)) return false;
+        const before = video.currentTime;
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        return document.querySelector('.flame-scene.is-video-off') === null
+          && video.muted === true
+          && video.paused === false
+          && video.readyState >= 2
+          && Math.abs(video.currentTime - before) > 0.03;
+      })()
+    `,
+    "Ambient Library switch keeps the scene video mounted and playing muted",
+    30,
+    150
+  );
+  await click(client, 1280, 280);
+  await evaluate(
+    client,
+    `
+      (() => {
+        if (!document.querySelector('[data-ambient-source-option="spotify"]')) {
+          document.querySelector('[data-ambient-source-toggle]')?.click();
+        }
+        return true;
+      })()
+    `
+  );
+  await expectEventually(client, "document.querySelector('[data-ambient-source-option=\"spotify\"]') !== null", "Ambient source picker exposes Spotify");
+  await evaluate(client, "document.querySelector('[data-ambient-source-option=\"spotify\"]')?.click()");
+  await expectEventually(
+    client,
+    "document.querySelector('[data-ambient-source-picker]') === null && document.querySelector('[data-source-handoff-waiting]') === null && document.querySelector('[data-ambient-source-status-pill][data-ambient-source-status-source=\"spotify\"]')?.textContent?.includes('Waiting') === true",
+    "Ambient external source handoff collapses to the corner waiting pill",
+    20,
+    75
+  );
+  await expectEventuallyEvaluate(
+    client,
+    "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => state.audio.currentSource.id === 'spotify' && state.audio.currentSource.connectionState === 'connected')",
+    "Ambient Spotify source handoff connects through shared source state",
+    35,
+    150
+  );
+  await expectEventually(
+    client,
+    "document.querySelector('[data-ambient-source-toggle]') instanceof HTMLButtonElement && document.querySelector('[data-ambient-source-toggle]').disabled === false",
+    "Ambient source picker control re-enables after external source handoff",
+    45,
+    150
+  );
+  await click(client, 1280, 280);
+  await evaluate(
+    client,
+    `
+      (() => {
+        if (!document.querySelector('[data-ambient-source-option="mpd"]')) {
+          document.querySelector('[data-ambient-source-toggle]')?.click();
+        }
+        return true;
+      })()
+    `
+  );
+  await expectEventually(client, "document.querySelector('[data-ambient-source-option=\"mpd\"]') !== null", "Ambient source picker exposes Library after external source");
+  await evaluate(client, "document.querySelector('[data-ambient-source-option=\"mpd\"]')?.click()");
+  await expectEventuallyEvaluate(
+    client,
+    "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => state.audio.currentSource.id === 'mpd' && state.playback.source === 'mpd')",
+    "Ambient returns to Library after external source pill check"
   );
 
   await navigate(client, `${APP_URL}?mode=player`);
+  const playerBrokenArtworkPatchVersion = await setStatePatchMode(client, "brokenArtwork");
+  await waitForStatePatchRefresh(client, playerBrokenArtworkPatchVersion, "Player broken artwork fixture refreshes");
+  await expectEventually(
+    client,
+    "document.querySelector('.player-overlay .cover-art[data-generated-cover-fallback=\"true\"] img')?.getAttribute('src')?.startsWith('data:image/svg+xml') === true",
+    "Player broken artwork URL falls back to generated cover"
+  );
   await click(client, 1360, 600);
   await expect(client, "document.querySelector('.player-overlay.is-active') !== null", "protected player click stays in player");
   await dragUntilHold(client, 100, 600, 100, 540);
@@ -1757,6 +3142,8 @@ try {
     `,
     "player now playing title follows playback truth"
   );
+  await setStatePatchMode(client, "");
+  await wait(500);
   await expect(
     client,
     `
@@ -1769,6 +3156,29 @@ try {
     `,
     "player source tabs include six visible source categories"
   );
+  await evaluate(client, "document.querySelector('[data-source-item=\"radio\"]')?.click(); true");
+  await expectEventually(
+    client,
+    "document.querySelector('[data-radio-scope=\"tikpal\"][aria-selected=\"true\"]') !== null",
+    "Radio panel defaults to Tikpal curated scope"
+  );
+  await expectEventually(
+    client,
+    "document.querySelector('[data-radio-category=\"all\"][aria-selected=\"true\"]') !== null && document.querySelector('[data-radio-category=\"focus\"]') !== null && document.querySelector('[data-radio-category=\"calm\"]') !== null",
+    "Radio panel exposes Tikpal category tabs"
+  );
+  await expectEventually(
+    client,
+    "document.querySelector('[data-radio-station-logo]') instanceof HTMLImageElement && document.querySelector('[data-radio-station-logo]')?.complete === true && document.querySelector('[data-radio-station-logo]')?.naturalWidth > 0",
+    "Radio panel renders station logo images"
+  );
+  await evaluate(client, "document.querySelector('[data-radio-category=\"calm\"]')?.click(); true");
+  await expectEventually(
+    client,
+    "Array.from(document.querySelectorAll('[data-radio-station-category]')).length > 0 && Array.from(document.querySelectorAll('[data-radio-station-category]')).every((node) => node.getAttribute('data-radio-station-category') === 'calm')",
+    "Radio panel category filter shows Calm stations only"
+  );
+  await evaluate(client, "document.querySelector('[data-source-item=\"mpd\"]')?.click(); true");
   await expect(
     client,
     "document.querySelector('.transport-row [data-player-playlist-entry][aria-label=\"Open playlist\"]') !== null && document.querySelector('.library-browser-title [data-player-playlist-entry]') === null",
@@ -1786,20 +3196,12 @@ try {
   );
   await expectEventually(client, "document.querySelector('.playlist-overlay.is-active') !== null", "player playlist entry opens playlist page");
   await navigate(client, `${APP_URL}?mode=player`);
-  await expect(client, sourceTabExpression("mpd", { selected: true, active: true }), "library source starts selected and active");
+  await expectEventually(client, sourceTabExpression("mpd", { selected: true, active: true }), "library source starts selected and active");
 
-  await evaluate(
-    client,
-    `
-      (() => {
-        const target = document.querySelector('[data-source-item="bluetooth"]');
-        target?.click();
-        return Boolean(target);
-      })()
-    `
-  );
-  await expectEventually(client, "document.querySelector('.source-line span')?.textContent?.includes('Bluetooth') === true", "single tap on bluetooth source switches source");
-  await expectEventually(client, sourceTabExpression("bluetooth", { selected: true, active: true }), "bluetooth source is selected and active after tap");
+  await switchPlayerSourceAndExpectHandoff(client, "spotify", "Spotify");
+  await switchPlayerSourceAndExpectHandoff(client, "airplay", "AirPlay");
+  await switchPlayerSourceAndExpectHandoff(client, "bluetooth", "Bluetooth");
+  await switchPlayerSourceAndExpectHandoff(client, "upnp", "DLNA");
 
   await evaluate(
     client,
@@ -1889,13 +3291,17 @@ try {
     `
       fetch('/api/v1/system/state').then((response) => response.json()).then((state) => {
         const video = document.querySelector('.flame-video.is-active');
+        const sceneVolume = Number.parseFloat(video?.getAttribute('data-scene-volume') ?? '0');
+        const sceneEffectiveVolume = Number.parseFloat(video?.getAttribute('data-scene-effective-volume') ?? '0');
         return state.system.volume.percent === 31
           && video instanceof HTMLVideoElement
-          && Math.abs(video.volume - 0.31) < 0.01
+          && Math.abs(sceneVolume - 0.31) < 0.01
+          && Math.abs(video.volume - sceneEffectiveVolume) < 0.01
+          && sceneEffectiveVolume > 0
           && video.muted === false;
       })
     `,
-    "scene video element volume follows the global volume"
+    "scene video source volume follows global volume with scene gain applied"
   );
   await navigate(client, `${APP_URL}?mode=player`);
   await evaluate(

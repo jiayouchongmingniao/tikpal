@@ -6,7 +6,20 @@ APP_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 ENV_FILE="${TIKPAL_KIOSK_ENV_FILE:-$APP_DIR/.env.kiosk}"
 FLAGS_FILE="${TIKPAL_CHROMIUM_FLAGS_FILE:-$SCRIPT_DIR/chromium-flags.conf}"
 
-if [[ -f "$ENV_FILE" ]]; then
+should_source_env_file() {
+  local value
+  value="$(printf '%s' "${TIKPAL_KIOSK_SKIP_ENV_SOURCE:-0}" | tr '[:upper:]' '[:lower:]')"
+  case "$value" in
+    1|true|yes|on)
+      return 1
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+}
+
+if should_source_env_file && [[ -f "$ENV_FILE" ]]; then
   set -a
   # shellcheck disable=SC1090
   source "$ENV_FILE"
@@ -21,6 +34,7 @@ fi
 : "${TIKPAL_KIOSK_ACTIVE_DISPLAY_MODE:=$TIKPAL_KIOSK_DISPLAY_MODE}"
 : "${TIKPAL_KIOSK_XRANDR_MODE:=2560x720}"
 : "${TIKPAL_KIOSK_XRANDR_OUTPUT:=}"
+: "${TIKPAL_KIOSK_X_COMMAND_TIMEOUT_SECONDS:=5}"
 : "${TIKPAL_CHROMIUM_BIN:=/usr/lib/chromium-browser/chromium-browser}"
 : "${TIKPAL_CHROMIUM_PROFILE_DIR:=$HOME/.config/tikpal-chromium-kiosk}"
 : "${TIKPAL_CHROMIUM_COLOR_SCHEME:=dark}"
@@ -56,6 +70,14 @@ is_enabled() {
       return 1
       ;;
   esac
+}
+
+run_x_command() {
+  if command -v timeout >/dev/null 2>&1; then
+    timeout -k 1s "${TIKPAL_KIOSK_X_COMMAND_TIMEOUT_SECONDS}s" "$@"
+    return
+  fi
+  "$@"
 }
 
 normalize_chromium_window_size() {
@@ -170,16 +192,16 @@ export DISPLAY="$TIKPAL_KIOSK_DISPLAY"
 
 if [[ "$TIKPAL_KIOSK_ACTIVE_DISPLAY_MODE" != "virtual" && "$TIKPAL_KIOSK_XRANDR_MODE" != "none" ]] && command -v xrandr >/dev/null 2>&1; then
   if [[ -n "$TIKPAL_KIOSK_XRANDR_OUTPUT" ]]; then
-    xrandr --output "$TIKPAL_KIOSK_XRANDR_OUTPUT" --mode "$TIKPAL_KIOSK_XRANDR_MODE" || log "WARN: xrandr mode set failed"
+    run_x_command xrandr --output "$TIKPAL_KIOSK_XRANDR_OUTPUT" --mode "$TIKPAL_KIOSK_XRANDR_MODE" || log "WARN: xrandr mode set failed or timed out"
   else
-    xrandr -s "$TIKPAL_KIOSK_XRANDR_MODE" || log "WARN: xrandr mode set failed"
+    run_x_command xrandr -s "$TIKPAL_KIOSK_XRANDR_MODE" || log "WARN: xrandr mode set failed or timed out"
   fi
 fi
 
 if command -v xset >/dev/null 2>&1; then
-  xset -dpms || true
-  xset s off || true
-  xset s noblank || true
+  run_x_command xset -dpms || true
+  run_x_command xset s off || true
+  run_x_command xset s noblank || true
 fi
 
 if command -v unclutter >/dev/null 2>&1; then

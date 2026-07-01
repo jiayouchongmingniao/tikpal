@@ -9,7 +9,8 @@
       "roomModes": [
         "sleep"
       ],
-      "sha256": "0ee49df64468346a786bfba2ffbe786a9c50f6e65d1fc37232c83912faf3fea9"
+      "audioGainDb": -5.8,
+      "sha256": "d45ad816f6802775c86e9d99b210a43adf98fd717a1fefaaedb4f9307f8214b3"
     },
     {
       "id": "cloud-sunrise",
@@ -19,7 +20,8 @@
       "roomModes": [
         "focus"
       ],
-      "sha256": "77ab0e5ca766883cd7180bbaa06ee55a2d52587995e7c0f2c851085faaf252b8"
+      "audioGainDb": -4.6,
+      "sha256": "01b1036adc87150df4166683d4d38f449754b93bc6aa6b32aa3411e0f9c397c8"
     },
     {
       "id": "deep-blue-ocean",
@@ -29,7 +31,8 @@
       "roomModes": [
         "sleep"
       ],
-      "sha256": "e329ac800feb5d781b688d1a2f7bf66fef1f36db8c2820976fba84863a95e7a7"
+      "audioGainDb": -7.1,
+      "sha256": "cb866b4eee904fb2f872a6187f892c8cd523cdfd0918b6b992ad549245cdcb8d"
     },
     {
       "id": "midnight-library",
@@ -39,7 +42,8 @@
       "roomModes": [
         "focus"
       ],
-      "sha256": "dd4bdb892cbf07c578a2175d85ec7e05cd0ee8e3d888e434a7dea683ef3f4e76"
+      "audioGainDb": -6.1,
+      "sha256": "84d4afba126356c5e16b59d60ba7e6e107fba07875dce7bb897457e8302df87d"
     },
     {
       "id": "rainy-window",
@@ -49,14 +53,16 @@
       "roomModes": [
         "calm"
       ],
-      "sha256": "7e97424faa7e10077a68ac2ac0ba1a988c0b60e555ac045112e2dc84e3c08c08"
+      "audioGainDb": 11.1,
+      "sha256": "401505d3f6f15ed2e0dcc2f2d0745ce0700c0390a19460798ecf40ce50149ca3"
     },
     {
       "id": "vinyl-lounge",
       "filename": "Vinyl-Lounge.mp4",
       "label": "Vinyl Lounge",
       "order": 150,
-      "sha256": "2b60bbb1e9e3ed84f76b56af5ee6ff803116557ea40472539a32d6816d36784d"
+      "audioGainDb": -10.9,
+      "sha256": "206bf921f7399c6cfdc6d95d125b1a0a5f042e47090749233d570443a7195415"
     },
     {
       "id": "warm-fireplace",
@@ -66,7 +72,8 @@
       "roomModes": [
         "calm"
       ],
-      "sha256": "9da00deaa70a938169a2e0584cdcc6e4c56076d4858c9558604a3029d3707fa5"
+      "audioGainDb": 1.3,
+      "sha256": "2ea598b8086a85e02aa93d7455af75b36d526ef14bc4ab5fca368379e6832d9f"
     },
     {
       "id": "zen-courtyard",
@@ -76,7 +83,8 @@
       "roomModes": [
         "calm"
       ],
-      "sha256": "2689a29a91f36b4dff77a013c3d90b4d7f75062f0b9516f113212c4342d59a55"
+      "audioGainDb": -5.1,
+      "sha256": "221bd1c402f157f4f51accf739de432354cbf1ed8e92f07261c569fcb78e472d"
     }
   ]
 }

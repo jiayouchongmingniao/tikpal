@@ -75,6 +75,8 @@ const primaryPanels: Array<{ id: PrimaryPanelId; label: string; Icon: LucideIcon
   { id: "bluetooth", label: "Bluetooth", Icon: Bluetooth },
   { id: "upnp", label: "DLNA", Icon: Network }
 ];
+const handoffSourceIds = new Set(["spotify", "airplay", "bluetooth", "upnp"]);
+const CONTROL_COMMIT_DELAY_MS = 140;
 
 const storageTabs: Array<{ id: LibraryFilterId; label: string; Icon: LucideIcon }> = [
   { id: "local", label: "Local", Icon: HardDrive },
@@ -121,6 +123,7 @@ function subCategorySortIndex(categoryId: AudioLibraryCategoryId, label: string)
 }
 
 function sourceStatusLabel(source: AudioState["currentSource"] | undefined, pending: boolean) {
+  if (pending && isHandoffSourceId(source?.id)) return "Waiting for connection";
   if (pending) return "Opening";
   if (!source) return "Unavailable";
   if (source.active) return "Active";
@@ -129,6 +132,22 @@ function sourceStatusLabel(source: AudioState["currentSource"] | undefined, pend
   if (source.connectionState === "blocked") return "Closed";
   if (source.availability === "unavailable") return "Unavailable";
   return "Ready";
+}
+
+function isHandoffSourceId(sourceId: string | null | undefined): sourceId is ExternalPanelId {
+  return Boolean(sourceId && handoffSourceIds.has(sourceId));
+}
+
+function getHandoffSourceLabel(panelId: ExternalPanelId, source: AudioState["currentSource"] | undefined) {
+  if (source?.label) return source.label;
+  return primaryPanels.find((entry) => entry.id === panelId)?.label ?? "Source";
+}
+
+function getPanelForSourceId(sourceId: string): PrimaryPanelId {
+  if (sourceId === "radio" || sourceId === "spotify" || sourceId === "airplay" || sourceId === "bluetooth" || sourceId === "upnp") {
+    return sourceId;
+  }
+  return "library";
 }
 
 function clampVolumePercent(value: number) {
@@ -166,11 +185,15 @@ export function PlayerOverlay({
   const [radioTotal, setRadioTotal] = useState(0);
   const [radioGenres, setRadioGenres] = useState<string[]>([]);
   const [radioBitrates, setRadioBitrates] = useState<string[]>([]);
+  const [radioCategories, setRadioCategories] = useState<Array<{ id: string; label: string; count: number }>>([]);
+  const [radioScope, setRadioScope] = useState<"tikpal" | "all">("tikpal");
   const [radioQuery, setRadioQuery] = useState("");
+  const [selectedRadioCategory, setSelectedRadioCategory] = useState("");
   const [selectedRadioGenre, setSelectedRadioGenre] = useState("");
   const [selectedRadioBitrate, setSelectedRadioBitrate] = useState("");
   const [radioLoading, setRadioLoading] = useState(false);
   const [radioError, setRadioError] = useState<string | null>(null);
+  const [failedRadioLogoIds, setFailedRadioLogoIds] = useState<Set<string>>(() => new Set());
   const [pendingSource, setPendingSource] = useState<SourceSwitchTarget | null>(null);
   const [sourceError, setSourceError] = useState<string | null>(null);
   const [sourceHint, setSourceHint] = useState<string | null>(null);
@@ -181,10 +204,24 @@ export function PlayerOverlay({
     queued: null,
     lastSent: system.volume.percent
   });
+  const volumeCommitTimerRef = useRef<number | null>(null);
   const playbackTruth = getPlaybackDisplayTruth(playback, audio, fontTheme);
+  const [failedAlbumArtUrl, setFailedAlbumArtUrl] = useState<string | null>(null);
+  const displayedAlbumArtUrl = playbackTruth.hasPlaybackArtwork && failedAlbumArtUrl === playbackTruth.albumArtUrl
+    ? playbackTruth.fallbackAlbumArtUrl
+    : playbackTruth.albumArtUrl;
+  const usingGeneratedCoverFallback = !playbackTruth.hasPlaybackArtwork || displayedAlbumArtUrl === playbackTruth.fallbackAlbumArtUrl;
   const elapsedSeconds = playbackTruth.elapsedSeconds ?? 0;
   const durationSeconds = playbackTruth.durationSeconds ?? 0;
   const isPlaying = playback.state === "playing";
+  const transportCapabilities = playback.transportCapabilities;
+  const transportUnavailableTitle = transportCapabilities?.reason ?? "Playback control unavailable";
+  const previousDisabled = status.pending || transportCapabilities?.previous === false;
+  const playPauseDisabled = status.pending || transportCapabilities?.playPause === false;
+  const nextDisabled = status.pending || transportCapabilities?.next === false;
+  const previousTitle = transportCapabilities?.previous === false ? transportUnavailableTitle : "Previous";
+  const playPauseTitle = transportCapabilities?.playPause === false ? transportUnavailableTitle : isPlaying ? "Pause" : "Play";
+  const nextTitle = transportCapabilities?.next === false ? transportUnavailableTitle : "Next";
   const currentSource = audio.currentSource;
   const selectedPanelConfig = primaryPanels.find((panel) => panel.id === selectedPrimaryPanel) ?? primaryPanels[0];
   const playbackSource = getPlaybackSourceSummary(playback, audio);
@@ -255,7 +292,7 @@ export function PlayerOverlay({
     }
   }, [localLibraryTracks, nasLibraryTracks, selectedLibraryStorage, selectedLocalTracks]);
   const selectedLibraryTrack = visibleLibraryTracks.find((track) => track.id === selectedLibraryTrackId) ?? null;
-  const seekSupported = playback.source === "mpd" && durationSeconds > 0;
+  const seekSupported = playback.source === "mpd" && durationSeconds > 0 && transportCapabilities?.seek !== false;
   const displayedElapsedSeconds = seekSupported
     ? seekDraftSeconds ?? seekPendingSeconds ?? elapsedSeconds
     : playbackTruth.elapsedSeconds;
@@ -276,6 +313,11 @@ export function PlayerOverlay({
 
   useEffect(() => {
     if (!active) {
+      if (volumeCommitTimerRef.current !== null) {
+        window.clearTimeout(volumeCommitTimerRef.current);
+        volumeCommitTimerRef.current = null;
+      }
+      volumeRequestStateRef.current.queued = null;
       setSeekDraftSeconds(null);
       setSeekPendingSeconds(null);
       setSeekError(null);
@@ -296,14 +338,9 @@ export function PlayerOverlay({
     }
   }, [system.volume.percent]);
 
-  const dispatchVolumeChange = useCallback(
-    (percent: number) => {
-      const nextPercent = clampVolumePercent(percent);
+  const flushVolumeChange = useCallback(
+    () => {
       const requestState = volumeRequestStateRef.current;
-      requestState.queued = nextPercent;
-      setVolumeDraftPercent(nextPercent);
-      setVolumeError(null);
-
       if (requestState.inFlight) return;
 
       requestState.inFlight = true;
@@ -314,7 +351,9 @@ export function PlayerOverlay({
 
         if (target === null || target === requestState.lastSent) {
           requestState.inFlight = false;
-          setVolumeDraftPercent(null);
+          if (requestState.queued === null && volumeCommitTimerRef.current === null) {
+            setVolumeDraftPercent(null);
+          }
           return;
         }
 
@@ -332,7 +371,7 @@ export function PlayerOverlay({
         }
 
         requestState.inFlight = false;
-        if (requestState.queued === null) {
+        if (requestState.queued === null && volumeCommitTimerRef.current === null) {
           setVolumeDraftPercent(null);
         }
       };
@@ -342,8 +381,35 @@ export function PlayerOverlay({
     [onPlaybackAction]
   );
 
+  const scheduleVolumeChange = useCallback(
+    (percent: number) => {
+      const nextPercent = clampVolumePercent(percent);
+      const requestState = volumeRequestStateRef.current;
+      requestState.queued = nextPercent;
+      setVolumeDraftPercent(nextPercent);
+      setVolumeError(null);
+
+      if (volumeCommitTimerRef.current !== null) {
+        window.clearTimeout(volumeCommitTimerRef.current);
+      }
+      volumeCommitTimerRef.current = window.setTimeout(() => {
+        volumeCommitTimerRef.current = null;
+        flushVolumeChange();
+      }, CONTROL_COMMIT_DELAY_MS);
+    },
+    [flushVolumeChange]
+  );
+
+  const commitVolumeChange = useCallback(() => {
+    if (volumeCommitTimerRef.current !== null) {
+      window.clearTimeout(volumeCommitTimerRef.current);
+      volumeCommitTimerRef.current = null;
+    }
+    flushVolumeChange();
+  }, [flushVolumeChange]);
+
   function handleVolumeSliderChange(value: string) {
-    dispatchVolumeChange(Number(value));
+    scheduleVolumeChange(Number(value));
   }
 
   useEffect(() => {
@@ -399,6 +465,8 @@ export function PlayerOverlay({
 
     void fetchRadioCatalog({
       q: radioQuery,
+      scope: radioScope,
+      category: selectedRadioCategory || undefined,
       genre: selectedRadioGenre || undefined,
       bitrate: selectedRadioBitrate || undefined,
       limit: 250
@@ -407,6 +475,7 @@ export function PlayerOverlay({
         setRadioStations(catalog.stations);
         setRadioTotal(catalog.total);
         setRadioGenres(catalog.genres);
+        setRadioCategories(catalog.categories);
         setRadioBitrates(catalog.bitrates);
       })
       .catch((error) => {
@@ -420,7 +489,11 @@ export function PlayerOverlay({
       });
 
     return () => controller.abort();
-  }, [active, radioQuery, selectedPrimaryPanel, selectedRadioBitrate, selectedRadioGenre]);
+  }, [active, radioQuery, radioScope, selectedPrimaryPanel, selectedRadioBitrate, selectedRadioCategory, selectedRadioGenre]);
+
+  useEffect(() => {
+    setFailedRadioLogoIds(new Set());
+  }, [radioScope, selectedRadioCategory, selectedRadioGenre, selectedRadioBitrate, radioQuery]);
 
   useEffect(() => {
     if (!selectedSubCategoryIsAvailable) {
@@ -513,6 +586,7 @@ export function PlayerOverlay({
 
   async function switchSource(target: SourceSwitchTarget, radioStationId?: string, localTrackPath?: string) {
     if (status.pending || pendingSource) return;
+    const rollbackPanel = getPanelForSourceId(currentSource.id);
     setPendingSource(target);
     setSourceError(null);
     setSourceHint(null);
@@ -534,6 +608,9 @@ export function PlayerOverlay({
         setSourceHint(`${nextSource?.label ?? target} ready.`);
       }
     } catch (error) {
+      if (isHandoffSourceId(target)) {
+        setSelectedPrimaryPanel(rollbackPanel);
+      }
       setSourceError(error instanceof Error ? error.message : "Source switch failed");
     } finally {
       setPendingSource(null);
@@ -631,6 +708,58 @@ export function PlayerOverlay({
           </button>
         </div>
 
+        <div className="radio-scope-control" role="tablist" aria-label="Radio catalog scope">
+          {[
+            { id: "tikpal" as const, label: "Tikpal" },
+            { id: "all" as const, label: "All moOde" }
+          ].map((scope) => (
+            <button
+              key={scope.id}
+              className={radioScope === scope.id ? "is-active" : ""}
+              type="button"
+              role="tab"
+              aria-selected={radioScope === scope.id}
+              data-gesture-control
+              data-radio-scope={scope.id}
+              onClick={() => {
+                setRadioScope(scope.id);
+                setSelectedRadioCategory("");
+                setSelectedRadioGenre("");
+              }}
+            >
+              {scope.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="radio-category-tabs" role="tablist" aria-label="Radio categories">
+          <button
+            className={selectedRadioCategory === "" ? "is-active" : ""}
+            type="button"
+            role="tab"
+            aria-selected={selectedRadioCategory === ""}
+            data-gesture-control
+            data-radio-category="all"
+            onClick={() => setSelectedRadioCategory("")}
+          >
+            All
+          </button>
+          {radioCategories.map((category) => (
+            <button
+              className={selectedRadioCategory === category.id ? "is-active" : ""}
+              key={category.id}
+              type="button"
+              role="tab"
+              aria-selected={selectedRadioCategory === category.id}
+              data-gesture-control
+              data-radio-category={category.id}
+              onClick={() => setSelectedRadioCategory(category.id)}
+            >
+              {category.label}
+            </button>
+          ))}
+        </div>
+
         <div className="radio-filter-row">
           <label className="source-search-field">
             <Search size={18} aria-hidden="true" />
@@ -680,7 +809,7 @@ export function PlayerOverlay({
                 ? `${radioStations.length} / ${radioTotal} stations`
                 : `${radioTotal || radioStations.length} stations`}
           </span>
-          <span>{radioError ? "Catalog unavailable" : selectedRadioGenre || selectedRadioBitrate || "All presets"}</span>
+          <span>{radioError ? "Catalog unavailable" : selectedRadioCategory || selectedRadioGenre || selectedRadioBitrate || (radioScope === "tikpal" ? "Tikpal curated" : "All moOde")}</span>
         </div>
 
         {radioError ? <p className="source-panel-error">{radioError}</p> : null}
@@ -688,6 +817,7 @@ export function PlayerOverlay({
         <div className="radio-catalog-list">
           {radioStations.map((station) => {
             const stationPending = sourcePending && !station.active;
+            const showLogo = Boolean(station.logoUrl) && !failedRadioLogoIds.has(station.id);
             return (
               <button
                 className={`radio-catalog-item ${station.active ? "is-active" : ""}`}
@@ -697,13 +827,33 @@ export function PlayerOverlay({
                 data-gesture-control
                 onClick={() => void switchSource("radio", station.id)}
               >
+                <span className="radio-station-logo" aria-hidden="true">
+                  {showLogo ? (
+                    <img
+                      src={station.logoUrl ?? ""}
+                      alt=""
+                      data-radio-station-logo={station.id}
+                      onError={() => {
+                        setFailedRadioLogoIds((current) => {
+                          const next = new Set(current);
+                          next.add(station.id);
+                          return next;
+                        });
+                      }}
+                    />
+                  ) : (
+                    <span>{(station.categoryLabel ?? station.label).slice(0, 2).toUpperCase()}</span>
+                  )}
+                </span>
                 <span className="radio-catalog-copy">
                   <strong>{station.label}</strong>
-                  <p>{station.secondaryStatus}</p>
+                  <p>{station.broadcaster || station.secondaryStatus}</p>
                 </span>
                 <span className="radio-catalog-meta">
-                  {station.genre ? <span>{station.genre}</span> : null}
+                  {station.categoryLabel ? <span data-radio-station-category={station.category}>{station.categoryLabel}</span> : null}
+                  {station.tags?.[0] ? <span>{station.tags[0]}</span> : null}
                   {station.bitrateKbps ? <span>{station.bitrateKbps} kbps</span> : null}
+                  {station.codec ? <span>{station.codec}</span> : null}
                 </span>
                 <span className="radio-station-state" aria-hidden="true">
                   {stationPending ? <LoaderCircle size={16} className="is-spinning" /> : station.active ? <Check size={16} /> : null}
@@ -745,20 +895,54 @@ export function PlayerOverlay({
             onClick={() => void switchSource(panelId)}
           >
             {sourcePending ? <LoaderCircle size={18} className="is-spinning" /> : <Icon size={18} />}
-            <span>{externalSourceActionLabel(panelId, Boolean(source?.active))}</span>
+            <span>{sourcePending && isHandoffSourceId(panelId) ? "Waiting" : externalSourceActionLabel(panelId, Boolean(source?.active))}</span>
           </button>
         </div>
       </section>
     );
   }
 
+  function renderHandoffPanel(panelId: ExternalPanelId) {
+    const source = audio.sources.find((entry) => entry.id === panelId);
+    const sourceLabel = getHandoffSourceLabel(panelId, source);
+
+    return (
+      <section className="external-source-panel" aria-label={`${sourceLabel} connection handoff`}>
+        <div
+          className="dlna-handoff-card player-dlna-handoff-card"
+          role="status"
+          data-source-handoff-waiting={panelId}
+          data-dlna-handoff-waiting={panelId === "upnp" ? "" : undefined}
+        >
+          <span className="dlna-handoff-icon" aria-hidden="true">
+            <LoaderCircle size={26} className="is-spinning" />
+          </span>
+          <span className="source-panel-kicker">{sourceLabel}</span>
+          <strong>Waiting for connection</strong>
+          <p>Tikpal is open for {sourceLabel}. This panel will return when the device connects or the handoff times out.</p>
+        </div>
+      </section>
+    );
+  }
+
+  const handoffPendingPanel = isHandoffSourceId(pendingSource) ? pendingSource : null;
+
   return (
     <section className={`overlay player-overlay ${active ? "is-active" : ""}`} aria-label="Player controls" aria-hidden={!active}>
       <button className="overlay-backdrop" type="button" tabIndex={active ? 0 : -1} aria-label="Return to ambient" onClick={onReturnAmbient} />
       <div className="player-shell" role="dialog" aria-modal="true" data-gesture-protected {...overlayReturnGesture}>
         <div className="cover-zone">
-          <div className="cover-art">
-            <img src={playbackTruth.albumArtUrl} alt="" />
+          <div className="cover-art" data-generated-cover-fallback={usingGeneratedCoverFallback ? true : undefined}>
+            <img
+              src={displayedAlbumArtUrl}
+              alt=""
+              data-generated-cover-fallback={usingGeneratedCoverFallback ? true : undefined}
+              onError={() => {
+                if (playbackTruth.hasPlaybackArtwork) {
+                  setFailedAlbumArtUrl(playbackTruth.albumArtUrl);
+                }
+              }}
+            />
           </div>
         </div>
 
@@ -821,13 +1005,13 @@ export function PlayerOverlay({
             >
               <ListMusic size={30} />
             </button>
-            <button className="icon-button" type="button" aria-label="Previous" title="Previous" disabled={status.pending} onClick={() => void onPlaybackAction("previous")}>
+            <button className="icon-button" type="button" aria-label="Previous" title={previousTitle} disabled={previousDisabled} onClick={() => void onPlaybackAction("previous")}>
               <SkipBack size={34} fill="currentColor" />
             </button>
-            <button className="play-button" type="button" aria-label={isPlaying ? "Pause" : "Play"} title={isPlaying ? "Pause" : "Play"} disabled={status.pending} onClick={() => void onPlaybackAction("play_pause")}>
+            <button className="play-button" type="button" aria-label={isPlaying ? "Pause" : "Play"} title={playPauseTitle} disabled={playPauseDisabled} onClick={() => void onPlaybackAction("play_pause")}>
               {isPlaying ? <Pause size={40} fill="currentColor" /> : <Play size={40} fill="currentColor" />}
             </button>
-            <button className="icon-button" type="button" aria-label="Next" title="Next" disabled={status.pending} onClick={() => void onPlaybackAction("next")}>
+            <button className="icon-button" type="button" aria-label="Next" title={nextTitle} disabled={nextDisabled} onClick={() => void onPlaybackAction("next")}>
               <SkipForward size={34} fill="currentColor" />
             </button>
             <button
@@ -870,36 +1054,42 @@ export function PlayerOverlay({
                   data-player-volume-slider
                   data-gesture-control
                   onChange={(event) => handleVolumeSliderChange(event.currentTarget.value)}
+                  onPointerUp={commitVolumeChange}
+                  onTouchEnd={commitVolumeChange}
+                  onKeyUp={commitVolumeChange}
+                  onBlur={commitVolumeChange}
                 />
               </div>
               <span className={`library-volume-percent ${volumeError ? "is-error" : ""}`} data-player-volume-percent>{displayedVolumePercent}%</span>
             </div>
           </div>
 
-          <nav className="library-primary-tabs" aria-label="Audio sources" data-source-panel>
-            {primaryPanels.map((panel) => {
-              const Icon = panel.Icon;
-              const isSelected = selectedPrimaryPanel === panel.id;
-              const isPending = pendingSource === panel.id;
-              return (
-                <button
-                  className={`library-primary-tab ${isSelected ? "is-selected" : ""} ${panel.id === currentSource.id || (panel.id === "library" && currentSource.id === "mpd") ? "is-active" : ""}`}
-                  key={panel.id}
-                  type="button"
-                  aria-pressed={isSelected}
-                  data-source-item={panel.id === "library" ? "mpd" : panel.id}
-                  data-gesture-control
-                  onClick={() => handlePrimaryPanelSelect(panel.id)}
-                >
-                  <Icon size={20} />
-                  <strong>{panel.label}</strong>
-                  <span>{isPending ? "Opening" : panelMeta(panel.id)}</span>
-                </button>
-              );
-            })}
-          </nav>
+          {!handoffPendingPanel ? (
+            <nav className="library-primary-tabs" aria-label="Audio sources" data-source-panel>
+              {primaryPanels.map((panel) => {
+                const Icon = panel.Icon;
+                const isSelected = selectedPrimaryPanel === panel.id;
+                const isPending = pendingSource === panel.id;
+                return (
+                  <button
+                    className={`library-primary-tab ${isSelected ? "is-selected" : ""} ${panel.id === currentSource.id || (panel.id === "library" && currentSource.id === "mpd") ? "is-active" : ""}`}
+                    key={panel.id}
+                    type="button"
+                    aria-pressed={isSelected}
+                    data-source-item={panel.id === "library" ? "mpd" : panel.id}
+                    data-gesture-control
+                    onClick={() => handlePrimaryPanelSelect(panel.id)}
+                  >
+                    <Icon size={20} />
+                    <strong>{panel.label}</strong>
+                    <span>{isPending ? "Opening" : panelMeta(panel.id)}</span>
+                  </button>
+                );
+              })}
+            </nav>
+          ) : null}
 
-          {selectedPrimaryPanel === "library" ? (
+          {handoffPendingPanel ? renderHandoffPanel(handoffPendingPanel) : selectedPrimaryPanel === "library" ? (
             <>
               <nav className="library-storage-tabs" aria-label="Library storage">
                 {storageTabs.map((storage) => {

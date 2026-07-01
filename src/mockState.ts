@@ -16,6 +16,15 @@ export const playback: PlaybackSummary = {
   settings: {
     playMode: "sequence"
   },
+  transportCapabilities: {
+    playPause: true,
+    play: true,
+    pause: true,
+    next: true,
+    previous: true,
+    seek: true,
+    reason: null
+  },
   queuePreview: [
     {
       id: "mock-queue-1",
@@ -140,6 +149,12 @@ export const audioState: AudioState = {
     advertisedLabel: null,
     secondaryStatus: "Local queue ready"
   }),
+  rememberedSource: {
+    target: "mpd",
+    localTrackPath: null,
+    radioStationId: null,
+    updatedAt: null
+  },
   sources: [
     buildSourceSummary({
       id: "mpd",
@@ -243,6 +258,13 @@ export const radioStations: RadioStationSummary[] = [
       genre: "Blues",
       bitrateKbps: 192,
       codec: "MP3",
+      category: null,
+      categoryLabel: null,
+      tags: ["Blues"],
+      broadcaster: "1.FM",
+      logoUrl: null,
+      catalogSource: "moode",
+      sortOrder: 1,
       secondaryStatus: "Blues · 192 kbps MP3",
       active: false
     }),
@@ -253,6 +275,13 @@ export const radioStations: RadioStationSummary[] = [
       genre: "Ambient",
       bitrateKbps: 256,
       codec: "MP3",
+      category: "sleep",
+      categoryLabel: "Sleep",
+      tags: ["Ambient"],
+      broadcaster: "Stereoscenic",
+      logoUrl: null,
+      catalogSource: "tikpal",
+      sortOrder: 2,
       secondaryStatus: "Ambient · 256 kbps MP3",
       active: false
     }),
@@ -263,6 +292,13 @@ export const radioStations: RadioStationSummary[] = [
       genre: "Alternative",
       bitrateKbps: 192,
       codec: "MP3",
+      category: null,
+      categoryLabel: null,
+      tags: ["Alternative"],
+      broadcaster: null,
+      logoUrl: null,
+      catalogSource: "moode",
+      sortOrder: 3,
       secondaryStatus: "Alternative · 192 kbps MP3",
       active: false
     })

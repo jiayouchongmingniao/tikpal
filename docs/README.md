@@ -1,6 +1,6 @@
 # Tikpal Docs
 
-This directory is the source of truth for Tikpal product, UX, visual, architecture, integration, and delivery planning.
+This directory is the source of truth for Tikpal product, UX, visual, architecture, integration, marketing, and delivery planning.
 
 ## Status Labels
 
@@ -62,6 +62,13 @@ This directory is the source of truth for Tikpal product, UX, visual, architectu
 | --- | --- | --- |
 | [Raspberry Pi kiosk deploy v1](06-deployment/raspberry-pi-kiosk-deploy-v1.md) | Current reference | Pi sync, systemd install, Chromium kiosk launch, verification, and rollback. |
 
+### Marketing
+
+| Document | Status | Purpose |
+| --- | --- | --- |
+| [Facebook homepage content kit](07-marketing/facebook-homepage-content-kit.md) | Current marketing draft | Facebook Page bio, voice guide, 30-day content calendar, reusable post templates, crowdfunding series, and Meta scheduling CSV guidance. |
+| [Meta Business Suite calendar CSV](07-marketing/meta-business-suite-calendar.csv) | Current marketing draft | 30-day Facebook scheduling export with post copy, media briefs, CTAs, timing defaults, and review status. |
+
 ### Source Assets
 
 | Asset | Status | Purpose |
@@ -98,6 +105,28 @@ type SourceSwitchTarget =
   | "airplay"
   | "upnp";
 
+type RememberedAudioSourceTarget =
+  | "mpd"
+  | "radio"
+  | "spotify"
+  | "bluetooth"
+  | "airplay"
+  | "upnp";
+
+interface RememberedAudioSource {
+  target: RememberedAudioSourceTarget;
+  // Last restorable local Library track; preserved even while Radio/external source is remembered.
+  localTrackPath?: string | null;
+  // Last successful Radio station; preserved while Library/external source is remembered.
+  radioStationId?: string | null;
+  updatedAt: string | null;
+}
+
+interface SourceSummary {
+  // Present for Radio so Hi-Fi can restore the remembered station, not just the source.
+  radioStationId?: string | null;
+}
+
 interface SystemState {
   network: NetworkState;
   outputDevice: OutputDeviceState;
@@ -115,17 +144,20 @@ The local backend boundary should reserve endpoints or adapters for playback con
 ## Current Implementation Checkpoints
 
 - Root app: Vite + React + TypeScript.
-- Visual layer: image-backed fireplace with local MP4 video layers, playback-time alignment, and crossfaded scene changes.
+- Visual layer: image-backed scene fallback with local MP4 video layers, playback-time alignment, crossfaded scene changes, Pi single-loop scene handoffs that keep the outgoing layer until the incoming frame is drawable, no-logo normal playback, recoverable logo fallback, and stall/fallback health via `data-flame-video-health`.
 - State model: `ambient`, `player`, `quickSettings`, and `quickMenu`.
 - Validation routes: `/`, `/?mode=player`, `/?mode=quickSettings`.
 - Interaction validation: `npm run test:interaction` while the dev server is running.
 - Local library validation: `npm run test:library` checks the ignored `public/assets/music` manifest, covers, playlists, and MP3 paths for the curated Focus / Meditation / Rest taxonomy.
 - Kiosk guard: root-level context menu, drag, selection, browser zoom, and multi-touch browser default suppression.
 - Ambient HUD: visible on startup, auto-hides after 5s, and can be shown again with a single tap.
-- Ambient Room Canvas: Focus, Calm, and Sleep center controls show only scene previous/next, Scene Sound, and the content-sized mode label/intent strip; they do not show music transport or lyrics. Hi-Fi keeps music transport and lyrics.
+- Ambient Room Canvas: Focus, Calm, and Sleep center controls show scene previous/next, a six-choice source picker, Scene Sound, contextual clock copy, and the content-sized mode label/intent strip; they do not show track transport or lyrics. After a Library, Radio, or external source selection, those room modes collapse source feedback into a small lower-left pill so scene video stays immersive. Hi-Fi keeps music transport, lyrics, and the same source picker.
 - Playback backend: `mock` by default, `mpc` when the Pi runtime sets `TIKPAL_PLAYER_BACKEND=mpc`.
-- Source workspace: visible tabs are Library, Radio, Spotify, AirPlay, Bluetooth, and DLNA; DLNA uses runtime source id `upnp` and means renderer intake, not media-server browsing.
+- Source workspace: visible tabs are Library, Radio, Spotify, AirPlay, Bluetooth, and DLNA; DLNA uses runtime source id `upnp` and means renderer intake, not media-server browsing. Spotify Connect, AirPlay, Bluetooth, and DLNA share one handoff rule across Ambient, Player, Remote, and Pi API state: `armed` waits, `connected` completes; DLNA also treats an armed/open renderer as discoverable instead of waiting for an extra client signal.
 - Appearance: font presets and surface skin presets are persisted locally and applied across ambient, player, and settings surfaces.
-- Room experience: startup offers Focus, Calm, Sleep, and Hi-Fi; Hi-Fi applies `flat`, `warm`, or `vocal` EQ presets when the Pi command hook is configured, uses `/api/v1/audio/spectrum` for its visual meter, and never enables Scene Sound. Auto Night dims by selected timezone without changing sources.
-- Device brightness: DDC/CI-capable displays are prepared by `deploy/moode/tikpal-ddcci-enable.sh`; `mpc` mode reports `display.transport="ddcci"` when `ddcutil getvcp 10 --brief` can read VCP `0x10`.
+- Room experience: startup offers Focus, Calm, Sleep, and Hi-Fi; Focus/Calm/Sleep open Scene Sound by default on boot, and selecting a music/input source keeps the scene video visible while muting scene audio. Hi-Fi applies `flat`, `warm`, or `vocal` EQ presets when the Pi command hook is configured, centers now-playing artwork and metadata, never enables Scene Sound, and restores `audio.rememberedSource` for the last Library track, Radio station, or external waiting source. `localTrackPath` follows the last actual local Library track, and `radioStationId` follows the last successful Radio station, so returning to either source can resume its own last position. Auto Night dims by selected timezone without changing sources.
+- Device brightness: DDC/CI-capable displays are prepared by `deploy/moode/tikpal-ddcci-enable.sh`; `mpc` mode reports `display.transport="ddcci"` when `ddcutil getvcp 10 --brief` can read VCP `0x10`, and the Ambient left edge is the brightness gesture lane.
+- Scene Sound on Pi: the active browser video supplies scene audio, so Chromium should route directly to the physical USB `dmix` device through `TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE`; moOde `_audioout` / Loopback remains for MPD, renderer intakes, and spectrum capture.
 - Pi status reads: in `mpc` mode, combined state, playback status, system status, runtime, audio source, and portable remote reads return the latest in-memory runtime snapshot while slow probes run in a low-frequency background collector.
+- AirPlay playback truth: title metadata, versioned cover art, elapsed position, and `airplay_input` lyrics refresh from the same backend snapshot so Ambient, Player, Hi-Fi, and portable remote stay aligned on the active AirPlay track. AirPlay lyrics use strict LRCLIB title/artist matching, and Hi-Fi lyrics visibility defaults on with `tikpal.lyricsVisible.v3` so stale older local storage cannot hide a ready lyrics wall.
+- Scene context reads: `/api/v1/scene/context` returns cached timezone/daypart/location/weather copy for Ambient without changing Auto Night, room mode, source, or playback truth.

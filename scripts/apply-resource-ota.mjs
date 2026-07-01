@@ -20,6 +20,8 @@ const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".webp"]);
 const SCENE_VIDEO_EXTENSIONS = new Set([".mp4"]);
 const COVER_COLUMNS = ["cover_relative_path", "cover_path", "album_art_relative_path", "artwork_relative_path"];
 const SCENE_ROOM_MODES = new Set(["focus", "calm", "sleep"]);
+const SCENE_AUDIO_GAIN_MIN_DB = -24;
+const SCENE_AUDIO_GAIN_MAX_DB = 12;
 
 function usage() {
   return [
@@ -156,6 +158,16 @@ function normalizeSceneVideoOrder(value) {
   return order;
 }
 
+function normalizeSceneAudioGainDb(value) {
+  if (value === undefined || value === null || value === "") return null;
+  const gainDb = Number(value);
+  if (!Number.isFinite(gainDb)) {
+    throw new Error(`Scene video audioGainDb must be a finite number: ${value}`);
+  }
+  const clamped = Math.max(SCENE_AUDIO_GAIN_MIN_DB, Math.min(SCENE_AUDIO_GAIN_MAX_DB, gainDb));
+  return Number(clamped.toFixed(1));
+}
+
 async function validateSceneVideosManifest({ manifestPath, packageSceneRoot }) {
   const raw = await readFile(manifestPath, "utf8");
   const parsed = JSON.parse(raw);
@@ -204,6 +216,7 @@ async function validateSceneVideosManifest({ manifestPath, packageSceneRoot }) {
     ids.add(id);
     filenames.add(filename);
     const roomModes = normalizeSceneRoomModes(video.roomModes);
+    const audioGainDb = normalizeSceneAudioGainDb(video.audioGainDb);
     videos.push({
       id,
       filename,
@@ -211,6 +224,7 @@ async function validateSceneVideosManifest({ manifestPath, packageSceneRoot }) {
       order: normalizeSceneVideoOrder(video.order),
       default: isDefault,
       roomModes,
+      audioGainDb,
       sha256: mp4.sha256,
       bytes: mp4.bytes,
       sourcePath
@@ -309,6 +323,7 @@ function toSceneManifestVideo(video) {
     ...(video.order !== null ? { order: video.order } : {}),
     ...(video.default ? { default: true } : {}),
     ...(video.roomModes?.length ? { roomModes: video.roomModes } : {}),
+    ...(video.audioGainDb !== null && video.audioGainDb !== undefined ? { audioGainDb: video.audioGainDb } : {}),
     sha256: video.sha256
   };
 }
@@ -338,6 +353,7 @@ function mergeSceneManifests(installedManifest, scenePackage) {
       ...(Number.isFinite(Number(video.order)) ? { order: Number(video.order) } : {}),
       ...(video.default === true ? { default: true } : {}),
       ...(normalizeSceneRoomModes(video.roomModes).length ? { roomModes: normalizeSceneRoomModes(video.roomModes) } : {}),
+      ...(normalizeSceneAudioGainDb(video.audioGainDb) !== null ? { audioGainDb: normalizeSceneAudioGainDb(video.audioGainDb) } : {}),
       ...(typeof video.sha256 === "string" && video.sha256 ? { sha256: video.sha256 } : {})
     });
   }
@@ -540,6 +556,7 @@ async function run() {
         order: video.order,
         default: video.default,
         roomModes: video.roomModes,
+        audioGainDb: video.audioGainDb,
         bytes: video.bytes,
         sha256: video.sha256
       }))

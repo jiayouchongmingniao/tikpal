@@ -1,19 +1,29 @@
 import { useEffect, useRef, useState } from "react";
 import type { PlaybackState } from "../types";
 
-const FIREPLACE_BACKGROUND_SRC = "/assets/fireplace-bg-2560x720.png";
+const SCENE_LOGO_SRC = "/assets/tikpal-scene-logo.png";
 const DEFAULT_FLAME_VIDEO_SRC = "";
-const VIDEO_FADE_MS = 900;
+const SCENE_DIM_MS = 420;
+const SCENE_REVEAL_MS = 760;
 const VIDEO_SYNC_TOLERANCE_SECONDS = 2;
 const VIDEO_SEEK_SETTLE_MS = 650;
 const VIDEO_METADATA_SETTLE_MS = 1200;
 const VIDEO_FRAME_READY_SETTLE_MS = 900;
+const SCENE_AUDIO_GAIN_MIN_DB = -24;
+const SCENE_AUDIO_GAIN_MAX_DB = 12;
 const LOOP_PREPARE_LEAD_SECONDS = 1.2;
 const LOOP_REVEAL_LEAD_SECONDS = 0.42;
 const LOOP_CROSSFADE_MS = 360;
 const LOOP_AUDIO_CROSSFADE_MS = 340;
 const MIN_DUAL_LOOP_DURATION_SECONDS = 1.5;
 const LOOP_SLOTS = [0, 1] as const;
+const SINGLE_LOOP_WATCHDOG_MS = 1250;
+const SINGLE_LOOP_STALL_MS = 2800;
+const SINGLE_LOOP_STALL_RETRY_LIMIT = 2;
+const SINGLE_LOOP_STALL_FALLBACK_LIMIT = 3;
+const SINGLE_LOOP_FALLBACK_RETRY_MS = 1800;
+const SINGLE_LOOP_STALL_RESET_MS = 60000;
+const SINGLE_LOOP_PROGRESS_EPSILON_SECONDS = 0.04;
 
 interface FlameScenePlayback {
   elapsedSeconds: number | null;
@@ -23,15 +33,24 @@ interface FlameScenePlayback {
 interface FlameSceneProps {
   lowPower?: boolean;
   playback: FlameScenePlayback;
+  singleLoop?: boolean;
+  staticOnly?: boolean;
   videoEnabled?: boolean;
   audioEnabled?: boolean;
+  audioSuspended?: boolean;
   volumePercent?: number;
   videoSrc?: string;
+  audioGainDb?: number;
 }
 
 interface VideoLayer {
   id: number;
   src: string;
+  audioGainDb: number;
+}
+
+interface SingleLoopLayer extends VideoLayer {
+  frameReady: boolean;
 }
 
 type LoopSlot = typeof LOOP_SLOTS[number];
@@ -42,6 +61,9 @@ type LoopMonitorHandle =
 type LoopSlotPhase = "active" | "preparing" | "ready" | "handoff" | "parked";
 type LoopSlotRole = "active" | "incoming" | "outgoing" | "parked";
 type LoopAudioRole = "active" | "crossfade-in" | "crossfade-out" | "muted";
+type SceneTransitionPhase = "idle" | "dimming" | "revealing";
+type SceneAudioEnvelopeTarget = "current" | "target" | number;
+type SingleLoopVideoHealth = "ok" | "recovering" | "stalled" | "fallback";
 
 interface LoopSlotStatus {
   frameReady: boolean;
@@ -55,10 +77,30 @@ interface LoopHandoffState {
   revealing: boolean;
 }
 
+interface SingleLoopWatchdogState {
+  currentTime: number;
+  sampledAtMs: number;
+  stalledSinceMs: number | null;
+  stallCount: number;
+  lastStallAtMs: number;
+  recovering: boolean;
+}
+
 type VideoFrameElement = HTMLVideoElement & {
   requestVideoFrameCallback?: (callback: (now: number) => void) => number;
   cancelVideoFrameCallback?: (handle: number) => void;
 };
+type BrowserAudioContext = typeof AudioContext;
+type WebKitWindow = Window & { webkitAudioContext?: BrowserAudioContext };
+
+interface SceneAudioNode {
+  context: AudioContext;
+  source: MediaElementAudioSourceNode;
+  gain: GainNode;
+}
+
+const sceneAudioNodes = new WeakMap<HTMLVideoElement, SceneAudioNode>();
+let sceneAudioContext: AudioContext | null = null;
 
 function waitForVideoEvent(video: HTMLVideoElement, eventName: keyof HTMLMediaElementEventMap, timeoutMs: number) {
   return new Promise<boolean>((resolve) => {
@@ -100,10 +142,83 @@ function clampVideoVolume(volume: number) {
   return Math.max(0, Math.min(1, volume));
 }
 
+function normalizeAudioGainDb(value: number | undefined) {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(SCENE_AUDIO_GAIN_MIN_DB, Math.min(SCENE_AUDIO_GAIN_MAX_DB, Math.round((value ?? 0) * 10) / 10));
+}
+
+function dbToLinearGain(db: number) {
+  return Math.pow(10, db / 20);
+}
+
+function getSceneAudioContext() {
+  if (typeof window === "undefined") return null;
+  if (sceneAudioContext) return sceneAudioContext;
+
+  const AudioContextConstructor = window.AudioContext ?? (window as WebKitWindow).webkitAudioContext;
+  if (!AudioContextConstructor) return null;
+
+  try {
+    sceneAudioContext = new AudioContextConstructor();
+    return sceneAudioContext;
+  } catch {
+    return null;
+  }
+}
+
+function ensureSceneAudioNode(video: HTMLVideoElement) {
+  const existing = sceneAudioNodes.get(video);
+  if (existing) return existing;
+
+  const context = getSceneAudioContext();
+  if (!context) return null;
+
+  try {
+    const source = context.createMediaElementSource(video);
+    const gain = context.createGain();
+    source.connect(gain);
+    gain.connect(context.destination);
+    const node = { context, source, gain };
+    sceneAudioNodes.set(video, node);
+    return node;
+  } catch {
+    return null;
+  }
+}
+
+function syncSceneAudioGain(video: HTMLVideoElement) {
+  const gainDb = normalizeAudioGainDb(Number(video.dataset.sceneGainDb));
+  const existing = sceneAudioNodes.get(video);
+  if (!existing) return;
+
+  const node = ensureSceneAudioNode(video);
+  if (!node) return;
+
+  node.gain.gain.value = dbToLinearGain(gainDb);
+  if (!video.muted && video.volume > 0 && node.context.state === "suspended") {
+    void node.context.resume().catch(() => undefined);
+  }
+}
+
 function setSceneVideoVolume(video: HTMLVideoElement, volume: number) {
   const safeVolume = clampVideoVolume(volume);
-  video.volume = safeVolume;
+  const gainDb = normalizeAudioGainDb(Number(video.dataset.sceneGainDb));
+  const effectiveVolume = clampVideoVolume(safeVolume * dbToLinearGain(gainDb));
+  video.volume = effectiveVolume;
   video.dataset.sceneVolume = safeVolume.toFixed(3);
+  video.dataset.sceneEffectiveVolume = effectiveVolume.toFixed(3);
+  syncSceneAudioGain(video);
+}
+
+function muteSceneVideo(video: HTMLVideoElement) {
+  video.defaultMuted = true;
+  video.muted = true;
+  syncSceneAudioGain(video);
+}
+
+function unmuteSceneVideo(video: HTMLVideoElement) {
+  video.muted = false;
+  syncSceneAudioGain(video);
 }
 
 function getOppositeSlot(slot: LoopSlot): LoopSlot {
@@ -149,30 +264,51 @@ function waitForDrawableVideoFrame(video: HTMLVideoElement, timeoutMs: number) {
     const frameVideo = video as VideoFrameElement;
     let settled = false;
     let frameCallbackId: number | null = null;
+    let animationFrameId: number | null = null;
+    let timeout: number;
 
-    const finish = (ready: boolean) => {
+    function finish(ready: boolean) {
       if (settled) return;
       settled = true;
       window.clearTimeout(timeout);
+      video.removeEventListener("loadeddata", handleReadyEvent);
+      video.removeEventListener("canplay", handleReadyEvent);
+      if (animationFrameId !== null) {
+        window.cancelAnimationFrame(animationFrameId);
+      }
       if (frameCallbackId !== null) {
         frameVideo.cancelVideoFrameCallback?.(frameCallbackId);
       }
       resolve(ready);
-    };
-
-    const timeout = window.setTimeout(() => finish(false), timeoutMs);
-
-    if (video.readyState >= 2) {
-      window.requestAnimationFrame(() => finish(true));
-      return;
     }
+
+    function checkReady() {
+      if (video.readyState < 2) return false;
+      window.requestAnimationFrame(() => finish(true));
+      return true;
+    }
+
+    function handleReadyEvent() {
+      checkReady();
+    }
+
+    function pollReady() {
+      if (checkReady()) return;
+      animationFrameId = window.requestAnimationFrame(pollReady);
+    }
+
+    timeout = window.setTimeout(() => finish(false), timeoutMs);
+
+    video.addEventListener("loadeddata", handleReadyEvent);
+    video.addEventListener("canplay", handleReadyEvent);
+    if (checkReady()) return;
 
     if (frameVideo.requestVideoFrameCallback) {
       frameCallbackId = frameVideo.requestVideoFrameCallback(() => finish(video.readyState >= 2));
       return;
     }
 
-    window.requestAnimationFrame(() => finish(video.readyState >= 2));
+    animationFrameId = window.requestAnimationFrame(pollReady);
   });
 }
 
@@ -196,11 +332,11 @@ async function alignVideoWithPlayback(video: HTMLVideoElement, playback: FlameSc
 
   const shouldRestoreAudible = !video.muted;
   if (video.paused) {
-    video.muted = true;
+    muteSceneVideo(video);
   }
   await video.play().then(() => {
     if (shouldRestoreAudible && video.dataset.sceneAudible === "true") {
-      video.muted = false;
+      unmuteSceneVideo(video);
     }
   }).catch(() => {
     // Inline scene video can still be blocked briefly while a new layer mounts.
@@ -209,39 +345,96 @@ async function alignVideoWithPlayback(video: HTMLVideoElement, playback: FlameSc
   return true;
 }
 
-export function FlameScene({ lowPower = false, playback, videoEnabled = true, audioEnabled = false, volumePercent = 100, videoSrc = DEFAULT_FLAME_VIDEO_SRC }: FlameSceneProps) {
+function SceneLogoBackdrop() {
+  return (
+    <div className="scene-logo-backdrop" aria-hidden="true">
+      <img
+        className="scene-logo-mark"
+        src={SCENE_LOGO_SRC}
+        alt=""
+        draggable={false}
+        onError={(event) => {
+          event.currentTarget.hidden = true;
+        }}
+      />
+    </div>
+  );
+}
+
+export function FlameScene({ lowPower = false, playback, singleLoop = false, staticOnly = false, videoEnabled = true, audioEnabled = false, audioSuspended = false, volumePercent = 100, videoSrc = DEFAULT_FLAME_VIDEO_SRC, audioGainDb = 0 }: FlameSceneProps) {
   const nextLayerIdRef = useRef(0);
+  const nextSingleLayerIdRef = useRef(0);
   const activeVideoSrcRef = useRef(videoSrc);
   const activeLayerIdRef = useRef(0);
   const pendingLayerIdRef = useRef<number | null>(null);
+  const pendingSingleVideoSrcRef = useRef<string | null>(null);
+  const singleVideoSrcRef = useRef(videoSrc);
+  const singleActiveLayerIdRef = useRef(0);
+  const singlePendingLayerIdRef = useRef<number | null>(null);
   const playbackRef = useRef(playback);
   const videoEnabledRef = useRef(videoEnabled);
   const audioEnabledRef = useRef(audioEnabled);
+  const audioSuspendedRef = useRef(audioSuspended);
   const videoVolumeRef = useRef(normalizeVideoVolume(volumePercent));
   const preparingVideoKeysRef = useRef(new Set<string>());
+  const transitionActivateTimerRef = useRef<number | null>(null);
   const transitionCleanupTimerRef = useRef<number | null>(null);
+  const sceneAudioEnvelopeFrameRef = useRef<number | null>(null);
+  const sceneTransitionAudioActiveRef = useRef(false);
   const loopHandoffTimerRef = useRef<number | null>(null);
   const loopAudioCrossfadeFrameRef = useRef<number | null>(null);
   const loopMonitorRef = useRef<LoopMonitorHandle | null>(null);
   const loopHandoffInProgressRef = useRef(false);
   const loopPrepareTokensRef = useRef(new Map<string, number>());
+  const singleVideoRef = useRef<HTMLVideoElement | null>(null);
+  const singleVideoHealthRef = useRef<SingleLoopVideoHealth>("ok");
+  const singleLoopWatchdogTimerRef = useRef<number | null>(null);
+  const singleLoopWatchdogRef = useRef<SingleLoopWatchdogState>({
+    currentTime: 0,
+    sampledAtMs: 0,
+    stalledSinceMs: null,
+    stallCount: 0,
+    lastStallAtMs: 0,
+    recovering: false
+  });
+  const singleVideoRefs = useRef(new Map<number, HTMLVideoElement>());
   const videoRefs = useRef(new Map<string, HTMLVideoElement>());
   const loopVisibleSlotsRef = useRef<LoopSlotMap>({ 0: 0 });
   const loopAudibleSlotsRef = useRef<LoopSlotMap>({ 0: 0 });
   const loopSlotStatusesRef = useRef<Record<string, LoopSlotStatus>>({});
   const [activeLayerId, setActiveLayerId] = useState(0);
-  const [layers, setLayers] = useState<VideoLayer[]>([{ id: 0, src: videoSrc }]);
+  const normalizedAudioGainDb = normalizeAudioGainDb(audioGainDb);
+  const [layers, setLayers] = useState<VideoLayer[]>([{ id: 0, src: videoSrc, audioGainDb: normalizedAudioGainDb }]);
   const [sceneTransitioning, setSceneTransitioning] = useState(false);
+  const [sceneTransitionPhase, setSceneTransitionPhase] = useState<SceneTransitionPhase>("idle");
   const [loopHandoff, setLoopHandoff] = useState<LoopHandoffState | null>(null);
   const [loopVisibleSlots, setLoopVisibleSlots] = useState<LoopSlotMap>({ 0: 0 });
   const [loopAudibleSlots, setLoopAudibleSlots] = useState<LoopSlotMap>({ 0: 0 });
   const [loopSlotStatuses, setLoopSlotStatuses] = useState<Record<string, LoopSlotStatus>>({});
+  const [singleActiveLayerId, setSingleActiveLayerId] = useState(0);
+  const [singlePendingLayerId, setSinglePendingLayerId] = useState<number | null>(null);
+  const [singleLayers, setSingleLayers] = useState<SingleLoopLayer[]>([{ id: 0, src: videoSrc, audioGainDb: normalizedAudioGainDb, frameReady: false }]);
+  const [singleVideoHealth, setSingleVideoHealth] = useState<SingleLoopVideoHealth>("ok");
   const videoVolume = normalizeVideoVolume(volumePercent);
+  const singleLoopFallbackActive = singleVideoHealth === "fallback";
+  const singleActiveLayer = singleLayers.find((layer) => layer.id === singleActiveLayerId) ?? singleLayers[0] ?? null;
+  const singleVideoSrc = singleActiveLayer?.src ?? "";
 
-  function clearTransitionCleanupTimer() {
+  function clearTransitionTimers() {
+    if (transitionActivateTimerRef.current !== null) {
+      window.clearTimeout(transitionActivateTimerRef.current);
+      transitionActivateTimerRef.current = null;
+    }
     if (transitionCleanupTimerRef.current !== null) {
       window.clearTimeout(transitionCleanupTimerRef.current);
       transitionCleanupTimerRef.current = null;
+    }
+  }
+
+  function clearSceneAudioEnvelopeFrame() {
+    if (sceneAudioEnvelopeFrameRef.current !== null) {
+      window.cancelAnimationFrame(sceneAudioEnvelopeFrameRef.current);
+      sceneAudioEnvelopeFrameRef.current = null;
     }
   }
 
@@ -271,6 +464,127 @@ export function FlameScene({ lowPower = false, playback, videoEnabled = true, au
       window.cancelAnimationFrame(monitor.id);
     }
     loopMonitorRef.current = null;
+  }
+
+  function clearSingleLoopWatchdog() {
+    if (singleLoopWatchdogTimerRef.current !== null) {
+      window.clearTimeout(singleLoopWatchdogTimerRef.current);
+      singleLoopWatchdogTimerRef.current = null;
+    }
+  }
+
+  function patchSingleLoopVideoHealth(health: SingleLoopVideoHealth) {
+    singleVideoHealthRef.current = health;
+    setSingleVideoHealth((current) => current === health ? current : health);
+    if (singleVideoRef.current) {
+      singleVideoRef.current.dataset.flameVideoHealth = health;
+    }
+  }
+
+  function getSingleLoopVideo(layerId = singleActiveLayerIdRef.current) {
+    return singleVideoRefs.current.get(layerId) ?? null;
+  }
+
+  function patchSingleLayerFrameReady(layerId: number, frameReady: boolean) {
+    setSingleLayers((current) => current.map((layer) => (
+      layer.id === layerId && layer.frameReady !== frameReady
+        ? { ...layer, frameReady }
+        : layer
+    )));
+  }
+
+  function patchSingleActiveLayerId(layerId: number) {
+    singleActiveLayerIdRef.current = layerId;
+    setSingleActiveLayerId(layerId);
+    singleVideoRef.current = getSingleLoopVideo(layerId);
+  }
+
+  function patchSinglePendingLayerId(layerId: number | null) {
+    singlePendingLayerIdRef.current = layerId;
+    setSinglePendingLayerId(layerId);
+  }
+
+  function resetSingleLoopWatchdog(health: SingleLoopVideoHealth = "ok") {
+    const video = singleVideoRef.current;
+    const now = window.performance.now();
+    singleLoopWatchdogRef.current = {
+      currentTime: video?.currentTime ?? 0,
+      sampledAtMs: now,
+      stalledSinceMs: null,
+      stallCount: 0,
+      lastStallAtMs: 0,
+      recovering: false
+    };
+    patchSingleLoopVideoHealth(health);
+  }
+
+  function markSingleLoopVideoProgress(video: HTMLVideoElement, health: SingleLoopVideoHealth = "ok") {
+    const now = window.performance.now();
+    const watchdog = singleLoopWatchdogRef.current;
+    if (watchdog.stallCount > 0 && now - watchdog.lastStallAtMs > SINGLE_LOOP_STALL_RESET_MS) {
+      watchdog.stallCount = 0;
+      watchdog.lastStallAtMs = 0;
+    }
+    watchdog.currentTime = video.currentTime;
+    watchdog.sampledAtMs = now;
+    watchdog.stalledSinceMs = null;
+    watchdog.recovering = false;
+    if (singleVideoHealthRef.current !== "fallback") {
+      patchSingleLoopVideoHealth(health);
+    }
+  }
+
+  function fallBackSingleLoopVideo(video: HTMLVideoElement) {
+    clearSingleLoopWatchdog();
+    video.dataset.sceneAudible = "false";
+    setSceneVideoVolume(video, 0);
+    muteSceneVideo(video);
+    video.pause();
+    patchSingleLoopVideoHealth("fallback");
+  }
+
+  function resetSingleLoopFallback(health: SingleLoopVideoHealth = "recovering") {
+    if (singleVideoHealthRef.current !== "fallback") return;
+    patchSingleLayerFrameReady(singleActiveLayerIdRef.current, false);
+    resetSingleLoopWatchdog(health);
+  }
+
+  function recoverSingleLoopVideo(video: HTMLVideoElement, stallCount: number) {
+    if (singleVideoRef.current !== video) return;
+    const watchdog = singleLoopWatchdogRef.current;
+    if (watchdog.recovering) return;
+    watchdog.recovering = true;
+    patchSingleLoopVideoHealth(stallCount >= SINGLE_LOOP_STALL_RETRY_LIMIT ? "stalled" : "recovering");
+
+    void (async () => {
+      video.dataset.sceneAudible = "false";
+      setSceneVideoVolume(video, 0);
+      muteSceneVideo(video);
+      try {
+        video.pause();
+        video.load();
+        const aligned = await alignVideoWithPlayback(video, playbackRef.current, true);
+        const frameReady = aligned
+          ? await waitForDrawableVideoFrame(video, VIDEO_FRAME_READY_SETTLE_MS)
+          : false;
+        if (singleVideoRef.current !== video || singleVideoHealthRef.current === "fallback") return;
+        patchSingleLayerFrameReady(singleActiveLayerIdRef.current, frameReady);
+        if (frameReady) {
+          markSingleLoopVideoProgress(video);
+          syncSingleLoopVideo();
+        } else {
+          patchSingleLoopVideoHealth("stalled");
+        }
+      } catch {
+        if (singleVideoRef.current === video && singleVideoHealthRef.current !== "fallback") {
+          patchSingleLoopVideoHealth("stalled");
+        }
+      } finally {
+        if (singleVideoRef.current === video) {
+          singleLoopWatchdogRef.current.recovering = false;
+        }
+      }
+    })();
   }
 
   function patchLoopSlotStatus(key: string, patch: Partial<LoopSlotStatus>) {
@@ -332,17 +646,91 @@ export function FlameScene({ lowPower = false, playback, videoEnabled = true, au
     setLoopSlotStatuses(nextStatuses);
   }
 
-  function applySceneAudioVolume(video: HTMLVideoElement) {
+  function applySceneAudioVolume(video: HTMLVideoElement, overrideVolume?: number) {
     const keepsAudioPath = video.dataset.sceneAudible === "true";
-    const nextVolume = keepsAudioPath ? videoVolumeRef.current : 0;
+    const nextVolume = keepsAudioPath ? overrideVolume ?? videoVolumeRef.current : 0;
     setSceneVideoVolume(video, nextVolume);
-    video.muted = !keepsAudioPath;
+    if (keepsAudioPath) {
+      unmuteSceneVideo(video);
+    } else {
+      muteSceneVideo(video);
+    }
+  }
+
+  function getAudibleVideoForLayer(layerId: number) {
+    return getSlotVideo(layerId, getLayerSlot(loopAudibleSlotsRef.current, layerId));
+  }
+
+  function resolveSceneAudioEnvelopeTarget(value: SceneAudioEnvelopeTarget, video: HTMLVideoElement) {
+    if (value === "current") {
+      return clampVideoVolume(Number.parseFloat(video.dataset.sceneVolume ?? "") || video.volume);
+    }
+    if (value === "target") {
+      return videoEnabledRef.current && audioEnabledRef.current ? videoVolumeRef.current : 0;
+    }
+    return clampVideoVolume(value);
+  }
+
+  function startSceneAudioEnvelope(
+    videos: Array<HTMLVideoElement | null>,
+    from: SceneAudioEnvelopeTarget,
+    to: SceneAudioEnvelopeTarget,
+    durationMs: number,
+    onComplete?: () => void
+  ) {
+    clearSceneAudioEnvelopeFrame();
+    const entries = videos
+      .filter((video): video is HTMLVideoElement => Boolean(video))
+      .map((video) => ({
+        video,
+        fromVolume: resolveSceneAudioEnvelopeTarget(from, video)
+      }));
+
+    if (entries.length === 0 || durationMs <= 0) {
+      onComplete?.();
+      return;
+    }
+
+    const startedAt = window.performance.now();
+    const step = (now: number) => {
+      if (!sceneTransitionAudioActiveRef.current) {
+        sceneAudioEnvelopeFrameRef.current = null;
+        return;
+      }
+
+      const progress = Math.max(0, Math.min(1, (now - startedAt) / durationMs));
+      for (const entry of entries) {
+        const targetVolume = resolveSceneAudioEnvelopeTarget(to, entry.video);
+        const nextVolume = entry.fromVolume + ((targetVolume - entry.fromVolume) * progress);
+        const shouldBeAudible = videoEnabledRef.current && audioEnabledRef.current && targetVolume > 0;
+        entry.video.dataset.sceneAudible = shouldBeAudible ? "true" : "false";
+        setSceneVideoVolume(entry.video, shouldBeAudible ? nextVolume : 0);
+        if (shouldBeAudible) {
+          unmuteSceneVideo(entry.video);
+        } else {
+          muteSceneVideo(entry.video);
+        }
+        if (shouldBeAudible && entry.video.paused) {
+          void entry.video.play().catch(() => undefined);
+        }
+      }
+
+      if (progress < 1) {
+        sceneAudioEnvelopeFrameRef.current = window.requestAnimationFrame(step);
+        return;
+      }
+
+      sceneAudioEnvelopeFrameRef.current = null;
+      onComplete?.();
+    };
+
+    sceneAudioEnvelopeFrameRef.current = window.requestAnimationFrame(step);
   }
 
   function resetStandbyVideo(video: HTMLVideoElement) {
     video.dataset.sceneAudible = "false";
     setSceneVideoVolume(video, 0);
-    video.muted = true;
+    muteSceneVideo(video);
     video.pause();
     try {
       if (video.readyState >= 1) {
@@ -359,17 +747,45 @@ export function FlameScene({ lowPower = false, playback, videoEnabled = true, au
   }
 
   function activatePreparedLayer(layerId: number) {
+    const previousLayerId = activeLayerIdRef.current;
+    const previousVideo = getAudibleVideoForLayer(previousLayerId);
     pendingLayerIdRef.current = null;
-    activeLayerIdRef.current = layerId;
-    clearTransitionCleanupTimer();
+    clearTransitionTimers();
+    sceneTransitionAudioActiveRef.current = true;
     setSceneTransitioning(true);
-    setActiveLayerId(layerId);
-    transitionCleanupTimerRef.current = window.setTimeout(() => {
-      setLayers((current) => current.filter((layer) => layer.id === layerId));
-      setSceneTransitioning(false);
-      pruneLoopSlots(layerId);
-      transitionCleanupTimerRef.current = null;
-    }, VIDEO_FADE_MS);
+    setSceneTransitionPhase("dimming");
+    startSceneAudioEnvelope([previousVideo], "current", 0, SCENE_DIM_MS);
+    transitionActivateTimerRef.current = window.setTimeout(() => {
+      transitionActivateTimerRef.current = null;
+      activeLayerIdRef.current = layerId;
+      setActiveLayerId(layerId);
+      setSceneTransitionPhase("revealing");
+      const nextVideo = getAudibleVideoForLayer(layerId);
+      if (nextVideo) {
+        nextVideo.dataset.sceneAudible = videoEnabledRef.current && audioEnabledRef.current && videoVolumeRef.current > 0 ? "true" : "false";
+        setSceneVideoVolume(nextVideo, 0);
+        if (nextVideo.dataset.sceneAudible === "true") {
+          unmuteSceneVideo(nextVideo);
+        } else {
+          muteSceneVideo(nextVideo);
+        }
+        void nextVideo.play().catch(() => undefined);
+        startSceneAudioEnvelope([nextVideo], 0, "target", SCENE_REVEAL_MS, () => {
+          sceneTransitionAudioActiveRef.current = false;
+          syncSceneAudio();
+        });
+      } else {
+        sceneTransitionAudioActiveRef.current = false;
+        syncSceneAudio();
+      }
+      transitionCleanupTimerRef.current = window.setTimeout(() => {
+        setLayers((current) => current.filter((layer) => layer.id === layerId));
+        setSceneTransitioning(false);
+        setSceneTransitionPhase("idle");
+        pruneLoopSlots(layerId);
+        transitionCleanupTimerRef.current = null;
+      }, SCENE_REVEAL_MS);
+    }, SCENE_DIM_MS);
   }
 
   function getSlotVideo(layerId: number, slot: LoopSlot) {
@@ -383,11 +799,14 @@ export function FlameScene({ lowPower = false, playback, videoEnabled = true, au
 
     preparingVideoKeysRef.current.add(key);
     void alignVideoWithPlayback(video, playbackRef.current, Boolean(options.forceSync))
-      .then((ready) => {
-        if (ready && videoRefs.current.get(key) === video) {
-          patchLoopSlotStatus(key, { frameReady: video.readyState >= 2, phase: slot === getLayerSlot(loopVisibleSlotsRef.current, layerId) ? "active" : "parked" });
+      .then(async (ready) => {
+        const frameReady = ready
+          ? await waitForDrawableVideoFrame(video, VIDEO_FRAME_READY_SETTLE_MS)
+          : false;
+        if (videoRefs.current.get(key) === video) {
+          patchLoopSlotStatus(key, { frameReady, phase: slot === getLayerSlot(loopVisibleSlotsRef.current, layerId) ? "active" : "parked" });
         }
-        if (ready && options.activatePending && pendingLayerIdRef.current === layerId) {
+        if (frameReady && options.activatePending && pendingLayerIdRef.current === layerId) {
           activatePreparedLayer(layerId);
         }
       })
@@ -398,43 +817,184 @@ export function FlameScene({ lowPower = false, playback, videoEnabled = true, au
 
   function syncSceneAudio(audibleSlots = loopAudibleSlotsRef.current) {
     const targetVolume = audioEnabledRef.current ? videoVolumeRef.current : 0;
+    const transitionEnvelopeActive = sceneTransitionAudioActiveRef.current;
     videoRefs.current.forEach((video, key) => {
       const [layerIdRaw, slotRaw] = key.split(":");
       const layerId = Number(layerIdRaw);
       const slot = Number(slotRaw) as LoopSlot;
       const isActiveLayer = layerId === activeLayerIdRef.current;
+
+      if (audioSuspendedRef.current) {
+        video.dataset.sceneAudible = "false";
+        setSceneVideoVolume(video, 0);
+        muteSceneVideo(video);
+        if (isActiveLayer && videoEnabledRef.current && video.paused) {
+          void video.play().catch(() => undefined);
+        }
+        return;
+      }
+
       const shouldBeAudible = videoEnabledRef.current
         && audioEnabledRef.current
         && targetVolume > 0
         && isActiveLayer
         && slot === getLayerSlot(audibleSlots, layerId);
       video.dataset.sceneAudible = shouldBeAudible ? "true" : "false";
-      applySceneAudioVolume(video);
+      applySceneAudioVolume(video, transitionEnvelopeActive && shouldBeAudible ? 0 : undefined);
 
       if (!isActiveLayer) {
-        video.muted = true;
+        muteSceneVideo(video);
         return;
       }
 
       if (shouldBeAudible) {
         if (video.paused) {
-          video.muted = true;
+          muteSceneVideo(video);
           void video.play().then(() => {
             if (video.dataset.sceneAudible === "true") {
-              applySceneAudioVolume(video);
-              video.muted = false;
+              applySceneAudioVolume(video, sceneTransitionAudioActiveRef.current ? 0 : undefined);
+              unmuteSceneVideo(video);
             }
           }).catch(() => {
-            video.muted = true;
+            muteSceneVideo(video);
           });
         } else {
-          video.muted = false;
+          unmuteSceneVideo(video);
         }
         return;
       }
 
-      video.muted = true;
+      muteSceneVideo(video);
+      if (videoEnabledRef.current && video.paused) {
+        void video.play().catch(() => undefined);
+      }
     });
+  }
+
+  function syncSingleLoopVideo() {
+    const video = getSingleLoopVideo();
+    singleVideoRef.current = video;
+    if (!video) return;
+    if (singleVideoHealthRef.current === "fallback") return;
+    if (audioSuspendedRef.current) {
+      video.dataset.sceneAudible = "false";
+      setSceneVideoVolume(video, 0);
+      muteSceneVideo(video);
+      if (videoEnabledRef.current && video.paused) {
+        void video.play().catch(() => undefined);
+      }
+      return;
+    }
+
+    const shouldBeAudible = videoEnabledRef.current && audioEnabledRef.current && videoVolumeRef.current > 0;
+    video.dataset.sceneAudible = shouldBeAudible ? "true" : "false";
+    setSceneVideoVolume(video, shouldBeAudible ? (sceneTransitionAudioActiveRef.current ? 0 : videoVolumeRef.current) : 0);
+    muteSceneVideo(video);
+
+    void alignVideoWithPlayback(video, playbackRef.current, false)
+      .then(() => {
+        if (getSingleLoopVideo() !== video) return;
+        if (video.dataset.sceneAudible === "true") {
+          setSceneVideoVolume(video, sceneTransitionAudioActiveRef.current ? 0 : videoVolumeRef.current);
+          unmuteSceneVideo(video);
+        }
+      })
+      .catch(() => {
+        muteSceneVideo(video);
+      });
+  }
+
+  function activatePreparedSingleLoopLayer(layerId: number) {
+    const nextVideo = getSingleLoopVideo(layerId);
+    const nextLayer = singleLayers.find((layer) => layer.id === layerId);
+    if (!nextVideo || !nextLayer) return;
+    if (singlePendingLayerIdRef.current !== layerId) return;
+    if (pendingSingleVideoSrcRef.current !== nextLayer.src) return;
+
+    const previousVideo = getSingleLoopVideo();
+    pendingSingleVideoSrcRef.current = null;
+    clearTransitionTimers();
+    sceneTransitionAudioActiveRef.current = true;
+    setSceneTransitioning(true);
+    setSceneTransitionPhase("dimming");
+    startSceneAudioEnvelope([previousVideo], "current", 0, SCENE_DIM_MS);
+
+    transitionActivateTimerRef.current = window.setTimeout(() => {
+      transitionActivateTimerRef.current = null;
+      singleVideoSrcRef.current = nextLayer.src;
+      patchSingleActiveLayerId(layerId);
+      setSceneTransitionPhase("revealing");
+
+      nextVideo.dataset.sceneAudible = videoEnabledRef.current && audioEnabledRef.current && videoVolumeRef.current > 0 ? "true" : "false";
+      setSceneVideoVolume(nextVideo, 0);
+      if (nextVideo.dataset.sceneAudible === "true") {
+        unmuteSceneVideo(nextVideo);
+      } else {
+        muteSceneVideo(nextVideo);
+      }
+      void nextVideo.play().catch(() => undefined);
+      startSceneAudioEnvelope([nextVideo], 0, "target", SCENE_REVEAL_MS, () => {
+        sceneTransitionAudioActiveRef.current = false;
+        syncSingleLoopVideo();
+      });
+
+      transitionCleanupTimerRef.current = window.setTimeout(() => {
+        setSingleLayers((current) => current.filter((layer) => layer.id === layerId));
+        patchSinglePendingLayerId(null);
+        setSceneTransitioning(false);
+        setSceneTransitionPhase("idle");
+        transitionCleanupTimerRef.current = null;
+      }, SCENE_REVEAL_MS);
+    }, SCENE_DIM_MS);
+  }
+
+  function prepareSingleLoopLayer(layerId: number, video: HTMLVideoElement, forceSync = false) {
+    const key = `single:${layerId}`;
+    if (preparingVideoKeysRef.current.has(key)) return;
+    preparingVideoKeysRef.current.add(key);
+
+    if (layerId !== singleActiveLayerIdRef.current) {
+      video.dataset.sceneAudible = "false";
+      setSceneVideoVolume(video, 0);
+      muteSceneVideo(video);
+    }
+
+    void alignVideoWithPlayback(video, playbackRef.current, forceSync)
+      .then(async (ready) => {
+        const frameReady = ready
+          ? await waitForDrawableVideoFrame(video, VIDEO_FRAME_READY_SETTLE_MS)
+          : false;
+        if (singleVideoRefs.current.get(layerId) !== video) return;
+        patchSingleLayerFrameReady(layerId, frameReady);
+        if (frameReady && singlePendingLayerIdRef.current === layerId) {
+          activatePreparedSingleLoopLayer(layerId);
+        }
+      })
+      .finally(() => {
+        preparingVideoKeysRef.current.delete(key);
+      });
+  }
+
+  function handleSingleLoopFrameReady(layerId: number, video: HTMLVideoElement, forceSync = false) {
+    if (singlePendingLayerIdRef.current === layerId) {
+      prepareSingleLoopLayer(layerId, video, forceSync);
+      return;
+    }
+
+    void waitForDrawableVideoFrame(video, VIDEO_FRAME_READY_SETTLE_MS).then((ready) => {
+      if (singleVideoRefs.current.get(layerId) !== video) return;
+      patchSingleLayerFrameReady(layerId, ready);
+    });
+  }
+
+  function dropPendingSingleLoopLayer(layerId: number) {
+    if (singlePendingLayerIdRef.current !== layerId) return;
+    pendingSingleVideoSrcRef.current = null;
+    patchSinglePendingLayerId(null);
+    transitionCleanupTimerRef.current = window.setTimeout(() => {
+      setSingleLayers((current) => current.filter((layer) => layer.id !== layerId));
+      transitionCleanupTimerRef.current = null;
+    }, 0);
   }
 
   function isSlotFrameReady(layerId: number, slot: LoopSlot) {
@@ -462,7 +1022,7 @@ export function FlameScene({ lowPower = false, playback, videoEnabled = true, au
 
     standbyVideo.dataset.sceneAudible = "false";
     setSceneVideoVolume(standbyVideo, 0);
-    standbyVideo.muted = true;
+    muteSceneVideo(standbyVideo);
 
     void (async () => {
       if (standbyVideo.readyState < 1) {
@@ -577,9 +1137,9 @@ export function FlameScene({ lowPower = false, playback, videoEnabled = true, au
         const startedAt = window.performance.now();
         activeVideo.dataset.sceneAudible = "true";
         standbyVideo.dataset.sceneAudible = "true";
-        activeVideo.muted = false;
-        standbyVideo.muted = false;
         setSceneVideoVolume(standbyVideo, 0);
+        unmuteSceneVideo(activeVideo);
+        unmuteSceneVideo(standbyVideo);
 
         const step = (now: number) => {
           if (
@@ -595,8 +1155,8 @@ export function FlameScene({ lowPower = false, playback, videoEnabled = true, au
           const progress = Math.max(0, Math.min(1, (now - startedAt) / LOOP_AUDIO_CROSSFADE_MS));
           setSceneVideoVolume(activeVideo, targetVolume * (1 - progress));
           setSceneVideoVolume(standbyVideo, targetVolume * progress);
-          activeVideo.muted = false;
-          standbyVideo.muted = false;
+          unmuteSceneVideo(activeVideo);
+          unmuteSceneVideo(standbyVideo);
 
           if (progress < 1) {
             loopAudioCrossfadeFrameRef.current = window.requestAnimationFrame(step);
@@ -622,7 +1182,7 @@ export function FlameScene({ lowPower = false, playback, videoEnabled = true, au
   }
 
   function checkLoopHandoff(layerId: number, slot: LoopSlot) {
-    if (!videoEnabled || loopHandoffInProgressRef.current) return;
+    if (singleLoop || !videoEnabled || loopHandoffInProgressRef.current) return;
     if (layerId !== activeLayerIdRef.current || slot !== getLayerSlot(loopVisibleSlotsRef.current, layerId)) return;
 
     const video = getSlotVideo(layerId, slot);
@@ -648,7 +1208,7 @@ export function FlameScene({ lowPower = false, playback, videoEnabled = true, au
 
   function scheduleLoopMonitor(delayMs = 0) {
     clearLoopMonitor();
-    if (!videoEnabled || !videoSrc || loopHandoffInProgressRef.current) return;
+    if (singleLoop || !videoEnabled || !videoSrc || loopHandoffInProgressRef.current) return;
 
     const layerId = activeLayerIdRef.current;
     const slot = getLayerSlot(loopVisibleSlotsRef.current, layerId);
@@ -688,22 +1248,189 @@ export function FlameScene({ lowPower = false, playback, videoEnabled = true, au
   useEffect(() => {
     videoEnabledRef.current = videoEnabled;
     audioEnabledRef.current = audioEnabled;
+    audioSuspendedRef.current = audioSuspended;
     videoVolumeRef.current = videoVolume;
-  }, [audioEnabled, videoEnabled, videoVolume]);
+  }, [audioEnabled, audioSuspended, videoEnabled, videoVolume]);
+
+  useEffect(() => {
+    if (!singleLoop) return undefined;
+    clearLoopMonitor();
+    clearLoopHandoffTimer();
+    clearLoopAudioCrossfadeFrame();
+    clearSingleLoopWatchdog();
+    resetSingleLoopWatchdog();
+    loopHandoffInProgressRef.current = false;
+    setLoopHandoff(null);
+    videoRefs.current.forEach((video) => {
+      video.dataset.sceneAudible = "false";
+      setSceneVideoVolume(video, 0);
+      muteSceneVideo(video);
+      video.pause();
+    });
+    return undefined;
+  }, [singleLoop]);
 
   useEffect(() => {
     activeLayerIdRef.current = activeLayerId;
   }, [activeLayerId]);
 
+  useEffect(() => {
+    singleActiveLayerIdRef.current = singleActiveLayerId;
+    singleVideoRef.current = getSingleLoopVideo(singleActiveLayerId);
+  }, [singleActiveLayerId, singleLayers]);
+
+  useEffect(() => {
+    singlePendingLayerIdRef.current = singlePendingLayerId;
+  }, [singlePendingLayerId]);
+
   useEffect(() => () => {
-    clearTransitionCleanupTimer();
+    clearTransitionTimers();
+    clearSceneAudioEnvelopeFrame();
     clearLoopHandoffTimer();
     clearLoopAudioCrossfadeFrame();
     clearLoopMonitor();
+    clearSingleLoopWatchdog();
   }, []);
 
   useEffect(() => {
-    if (!videoEnabled) return undefined;
+    if (!singleLoop) return;
+    if (singleVideoSrcRef.current === videoSrc) {
+      resetSingleLoopFallback();
+      setSingleLayers((current) => current.map((layer) => (
+        layer.id === singleActiveLayerIdRef.current
+          ? { ...layer, audioGainDb: normalizedAudioGainDb }
+          : layer
+      )));
+      return;
+    }
+
+    resetSingleLoopFallback();
+    if (!singleVideoSrcRef.current || !videoEnabled || staticOnly) {
+      pendingSingleVideoSrcRef.current = null;
+      patchSinglePendingLayerId(null);
+      singleVideoSrcRef.current = videoSrc;
+      const nextLayer = {
+        id: nextSingleLayerIdRef.current + 1,
+        src: videoSrc,
+        audioGainDb: normalizedAudioGainDb,
+        frameReady: false
+      };
+      nextSingleLayerIdRef.current = nextLayer.id;
+      patchSingleActiveLayerId(nextLayer.id);
+      setSingleLayers([nextLayer]);
+      setSceneTransitioning(false);
+      setSceneTransitionPhase("idle");
+      return;
+    }
+
+    clearTransitionTimers();
+    clearSceneAudioEnvelopeFrame();
+    sceneTransitionAudioActiveRef.current = false;
+    setSceneTransitioning(false);
+    setSceneTransitionPhase("idle");
+
+    const nextLayer = {
+      id: nextSingleLayerIdRef.current + 1,
+      src: videoSrc,
+      audioGainDb: normalizedAudioGainDb,
+      frameReady: false
+    };
+    nextSingleLayerIdRef.current = nextLayer.id;
+    pendingSingleVideoSrcRef.current = videoSrc;
+    patchSinglePendingLayerId(nextLayer.id);
+    setSingleLayers((current) => {
+      const activeLayer = current.find((layer) => layer.id === singleActiveLayerIdRef.current) ?? current[0];
+      return activeLayer ? [activeLayer, nextLayer] : [nextLayer];
+    });
+  }, [normalizedAudioGainDb, singleLoop, staticOnly, videoEnabled, videoSrc]);
+
+  useEffect(() => {
+    if (!singleLoop || !singleLoopFallbackActive || staticOnly || !videoEnabled || !singleVideoSrc) return undefined;
+
+    const retryTimer = window.setTimeout(() => {
+      resetSingleLoopFallback();
+    }, SINGLE_LOOP_FALLBACK_RETRY_MS);
+
+    return () => window.clearTimeout(retryTimer);
+  }, [singleLoop, singleLoopFallbackActive, singleVideoSrc, staticOnly, videoEnabled]);
+
+  useEffect(() => {
+    if (!singleLoop || staticOnly || !videoEnabled || !singleVideoSrc) return;
+    syncSingleLoopVideo();
+  }, [audioEnabled, audioSuspended, playback.state, singleActiveLayerId, singleLoop, singleVideoSrc, staticOnly, videoEnabled, videoVolume]);
+
+  useEffect(() => {
+    if (!singleLoop) return undefined;
+    clearSingleLoopWatchdog();
+    resetSingleLoopWatchdog();
+    return clearSingleLoopWatchdog;
+  }, [singleActiveLayerId, singleLoop, singleVideoSrc, staticOnly, videoEnabled]);
+
+  useEffect(() => {
+    clearSingleLoopWatchdog();
+    if (!singleLoop || staticOnly || !videoEnabled || !singleVideoSrc || singleLoopFallbackActive) {
+      return clearSingleLoopWatchdog;
+    }
+
+    const scheduleWatchdog = (delayMs = SINGLE_LOOP_WATCHDOG_MS) => {
+      singleLoopWatchdogTimerRef.current = window.setTimeout(tick, delayMs);
+    };
+
+    const tick = () => {
+      singleLoopWatchdogTimerRef.current = null;
+      const video = singleVideoRef.current;
+      if (!video || singleVideoHealthRef.current === "fallback") return;
+
+      const watchdog = singleLoopWatchdogRef.current;
+      const now = window.performance.now();
+      const currentTime = Number.isFinite(video.currentTime) ? video.currentTime : 0;
+      const hasProgress = Math.abs(currentTime - watchdog.currentTime) > SINGLE_LOOP_PROGRESS_EPSILON_SECONDS;
+
+      if (video.readyState < 2 || video.seeking) {
+        scheduleWatchdog();
+        return;
+      }
+
+      if (hasProgress) {
+        markSingleLoopVideoProgress(video, singleVideoHealthRef.current === "stalled" ? "recovering" : "ok");
+        scheduleWatchdog();
+        return;
+      }
+
+      watchdog.stalledSinceMs ??= now;
+      if (now - watchdog.stalledSinceMs >= SINGLE_LOOP_STALL_MS && !watchdog.recovering) {
+        watchdog.stallCount += 1;
+        watchdog.lastStallAtMs = now;
+        if (watchdog.stallCount >= SINGLE_LOOP_STALL_FALLBACK_LIMIT) {
+          fallBackSingleLoopVideo(video);
+          return;
+        }
+        recoverSingleLoopVideo(video, watchdog.stallCount);
+      }
+
+      scheduleWatchdog();
+    };
+
+    scheduleWatchdog(0);
+    return clearSingleLoopWatchdog;
+  }, [singleLoop, singleLoopFallbackActive, singleVideoSrc, staticOnly, videoEnabled]);
+
+  useEffect(() => {
+    if (!singleLoop || singlePendingLayerId === null) return;
+    const pendingVideo = getSingleLoopVideo(singlePendingLayerId);
+    if (!pendingVideo) return;
+    prepareSingleLoopLayer(singlePendingLayerId, pendingVideo, true);
+  }, [singleLoop, singlePendingLayerId, singleLayers]);
+
+  useEffect(() => {
+    if (singleLoop || staticOnly || !videoEnabled) return;
+    setLayers((current) => current.map((layer) => (
+      layer.src === videoSrc ? { ...layer, audioGainDb: normalizedAudioGainDb } : layer
+    )));
+  }, [normalizedAudioGainDb, singleLoop, staticOnly, videoEnabled, videoSrc]);
+
+  useEffect(() => {
+    if (singleLoop || !videoEnabled || staticOnly) return undefined;
     if (activeVideoSrcRef.current === videoSrc) return undefined;
     activeVideoSrcRef.current = videoSrc;
     clearLoopMonitor();
@@ -715,13 +1442,18 @@ export function FlameScene({ lowPower = false, playback, videoEnabled = true, au
 
     if (!videoSrc) {
       pendingLayerIdRef.current = null;
-      setLayers([{ id: activeLayerIdRef.current, src: "" }]);
+      clearTransitionTimers();
+      sceneTransitionAudioActiveRef.current = false;
+      setSceneTransitioning(false);
+      setSceneTransitionPhase("idle");
+      setLayers([{ id: activeLayerIdRef.current, src: "", audioGainDb: 0 }]);
       return undefined;
     }
 
     const nextLayer = {
       id: nextLayerIdRef.current + 1,
-      src: videoSrc
+      src: videoSrc,
+      audioGainDb: normalizedAudioGainDb
     };
     nextLayerIdRef.current = nextLayer.id;
     initializeLoopSlots(nextLayer.id);
@@ -741,10 +1473,10 @@ export function FlameScene({ lowPower = false, playback, videoEnabled = true, au
       return currentActiveLayer ? [currentActiveLayer, nextLayer] : [nextLayer];
     });
     return undefined;
-  }, [layers, videoEnabled, videoSrc]);
+  }, [layers, normalizedAudioGainDb, singleLoop, staticOnly, videoEnabled, videoSrc]);
 
   useEffect(() => {
-    if (videoEnabled) return undefined;
+    if (!singleLoop && videoEnabled && !staticOnly) return undefined;
     clearLoopMonitor();
     clearLoopHandoffTimer();
     clearLoopAudioCrossfadeFrame();
@@ -753,13 +1485,13 @@ export function FlameScene({ lowPower = false, playback, videoEnabled = true, au
     videoRefs.current.forEach((video) => {
       video.dataset.sceneAudible = "false";
       setSceneVideoVolume(video, 0);
-      video.muted = true;
+      muteSceneVideo(video);
     });
     return undefined;
-  }, [videoEnabled]);
+  }, [singleLoop, staticOnly, videoEnabled]);
 
   useEffect(() => {
-    if (!videoEnabled) return;
+    if (singleLoop || !videoEnabled || staticOnly) return;
     layers.forEach((layer) => {
       const isPendingLayer = pendingLayerIdRef.current === layer.id;
       const visibleSlot = getLayerSlot(loopVisibleSlotsRef.current, layer.id);
@@ -768,21 +1500,160 @@ export function FlameScene({ lowPower = false, playback, videoEnabled = true, au
         forceSync: isPendingLayer
       });
     });
-  }, [layers, playback.state, videoEnabled]);
+  }, [layers, playback.state, singleLoop, staticOnly, videoEnabled]);
 
   useEffect(() => {
-    if (!videoEnabled) return;
+    if (singleLoop || !videoEnabled || staticOnly) return;
     clearLoopAudioCrossfadeFrame();
     syncSceneAudio();
-  }, [activeLayerId, audioEnabled, layers, loopAudibleSlots, videoEnabled, videoVolume]);
+  }, [activeLayerId, audioEnabled, audioSuspended, layers, loopAudibleSlots, normalizedAudioGainDb, singleLoop, staticOnly, videoEnabled, videoVolume]);
 
   useEffect(() => {
+    if (singleLoop || staticOnly) return clearLoopMonitor;
     scheduleLoopMonitor();
     return clearLoopMonitor;
-  }, [activeLayerId, layers, loopVisibleSlots, videoEnabled, videoSrc]);
+  }, [activeLayerId, layers, loopVisibleSlots, singleLoop, staticOnly, videoEnabled, videoSrc]);
+
+  if (staticOnly && videoSrc) {
+    return (
+      <div className="flame-scene is-low-power is-static-only" aria-hidden="true">
+        <SceneLogoBackdrop />
+      </div>
+    );
+  }
 
   if (!videoEnabled || !videoSrc) {
     return <div className="flame-scene is-video-off" aria-hidden="true" />;
+  }
+
+  if (singleLoop) {
+    const audioActive = audioEnabled && !audioSuspended && videoVolume > 0;
+
+    return (
+      <div
+        className={`flame-scene ${lowPower ? "is-low-power" : ""} is-single-loop ${singleLoopFallbackActive ? "is-video-fallback" : ""} ${sceneTransitioning ? "is-transitioning is-scene-transitioning" : ""}`}
+        aria-hidden="true"
+        data-flame-transition={sceneTransitioning ? "scene" : "none"}
+        data-flame-transition-phase={sceneTransitionPhase}
+        data-flame-loop-mode="single"
+        data-flame-video-health={singleVideoHealth}
+      >
+        <SceneLogoBackdrop />
+        {!singleLoopFallbackActive ? singleLayers.filter((layer) => Boolean(layer.src)).map((layer) => {
+          const isActiveLayer = layer.id === singleActiveLayerId;
+          const isPendingLayer = layer.id === singlePendingLayerId;
+          const layerRole = isActiveLayer ? "active" : isPendingLayer ? "incoming" : "outgoing";
+          const loopPhase = isActiveLayer
+            ? "active"
+            : isPendingLayer
+            ? layer.frameReady ? "ready" : "preparing"
+            : "handoff";
+          const layerAudioActive = isActiveLayer && audioActive;
+
+          return (
+            <div
+              key={layer.id}
+              className={`flame-video-layer ${isActiveLayer ? "is-active" : isPendingLayer ? "is-pending" : "is-exiting"}`}
+              data-flame-layer={layerRole}
+              data-flame-loop-handoff={layerRole === "outgoing" || layerRole === "incoming" ? "active" : "none"}
+            >
+              <video
+                ref={(node) => {
+                  if (node) {
+                    singleVideoRefs.current.set(layer.id, node);
+                    if (isActiveLayer) {
+                      singleVideoRef.current = node;
+                    }
+                    node.dataset.sceneGainDb = layer.audioGainDb.toFixed(1);
+                    node.dataset.flameVideoHealth = singleVideoHealthRef.current;
+                    if (!node.dataset.sceneVolume) {
+                      setSceneVideoVolume(node, 0);
+                      node.dataset.sceneAudible = "false";
+                      muteSceneVideo(node);
+                    }
+                    return;
+                  }
+
+                  singleVideoRefs.current.delete(layer.id);
+                  if (singleActiveLayerIdRef.current === layer.id) {
+                    singleVideoRef.current = null;
+                  }
+                }}
+                className={`flame-video ${isActiveLayer ? "is-active" : "is-standby"}`}
+                data-flame-layer={layerRole}
+                data-flame-slot-index="0"
+                data-flame-loop-slot={isActiveLayer ? "active" : "standby"}
+                data-flame-loop-role={layerRole}
+                data-flame-frame-ready={layer.frameReady ? "true" : "false"}
+                data-flame-loop-phase={loopPhase}
+                data-flame-audio-slot={layerAudioActive ? "active" : "standby"}
+                data-flame-audio-role={layerAudioActive ? "active" : "muted"}
+                data-flame-video-health={singleVideoHealth}
+                data-scene-gain-db={layer.audioGainDb.toFixed(1)}
+                src={layer.src}
+                autoPlay={isActiveLayer || isPendingLayer}
+                loop
+                playsInline
+                preload="auto"
+                onLoadedMetadata={(event) => {
+                  if (isActiveLayer) {
+                    markSingleLoopVideoProgress(event.currentTarget);
+                    syncSingleLoopVideo();
+                  } else if (isPendingLayer) {
+                    prepareSingleLoopLayer(layer.id, event.currentTarget, true);
+                  }
+                }}
+                onLoadedData={(event) => {
+                  if (isActiveLayer) {
+                    markSingleLoopVideoProgress(event.currentTarget);
+                  }
+                  handleSingleLoopFrameReady(layer.id, event.currentTarget, isPendingLayer);
+                }}
+                onCanPlay={(event) => handleSingleLoopFrameReady(layer.id, event.currentTarget, isPendingLayer)}
+                onPlaying={(event) => {
+                  if (isActiveLayer) {
+                    markSingleLoopVideoProgress(event.currentTarget);
+                  }
+                }}
+                onTimeUpdate={(event) => {
+                  if (isActiveLayer) {
+                    markSingleLoopVideoProgress(event.currentTarget);
+                  }
+                }}
+                onStalled={() => {
+                  if (isActiveLayer && singleVideoHealthRef.current !== "fallback") {
+                    patchSingleLoopVideoHealth("recovering");
+                  }
+                }}
+                onWaiting={() => {
+                  if (isActiveLayer && singleVideoHealthRef.current !== "fallback") {
+                    patchSingleLoopVideoHealth("recovering");
+                  }
+                }}
+                onError={(event) => {
+                  if (!isActiveLayer) {
+                    dropPendingSingleLoopLayer(layer.id);
+                    return;
+                  }
+                  if (singleVideoHealthRef.current !== "fallback") {
+                    const watchdog = singleLoopWatchdogRef.current;
+                    watchdog.stallCount += 1;
+                    watchdog.lastStallAtMs = window.performance.now();
+                    patchSingleLoopVideoHealth("stalled");
+                    if (watchdog.stallCount >= SINGLE_LOOP_STALL_FALLBACK_LIMIT) {
+                      fallBackSingleLoopVideo(event.currentTarget);
+                    } else {
+                      recoverSingleLoopVideo(event.currentTarget, watchdog.stallCount);
+                    }
+                  }
+                }}
+              />
+            </div>
+          );
+        }) : null}
+        <span className="flame-video-fade" />
+      </div>
+    );
   }
 
   return (
@@ -790,8 +1661,9 @@ export function FlameScene({ lowPower = false, playback, videoEnabled = true, au
       className={`flame-scene ${lowPower ? "is-low-power" : ""} ${sceneTransitioning ? "is-transitioning is-scene-transitioning" : ""}`}
       aria-hidden="true"
       data-flame-transition={sceneTransitioning ? "scene" : "none"}
+      data-flame-transition-phase={sceneTransitionPhase}
     >
-      <img className="fireplace-backdrop" src={FIREPLACE_BACKGROUND_SRC} alt="" draggable={false} />
+      <SceneLogoBackdrop />
       {layers.filter((layer) => Boolean(layer.src)).map((layer) => {
         const visibleSlot = getLayerSlot(loopVisibleSlots, layer.id);
         const audibleSlot = getLayerSlot(loopAudibleSlots, layer.id);
@@ -815,17 +1687,18 @@ export function FlameScene({ lowPower = false, playback, videoEnabled = true, au
               const loopPhase = loopRole === "incoming" && layerHandoff && !layerHandoff.revealing
                 ? "ready"
                 : getVideoPhase(loopRole, slotStatus);
-              const audioRole = getAudioRole(isAudibleSlot, loopRole, layerHandoff, audioEnabled, videoVolume);
+              const audioRole = getAudioRole(isAudibleSlot, loopRole, layerHandoff, audioEnabled && !audioSuspended, videoVolume);
 
               return (
                 <video
                   key={slot}
                   ref={(node) => {
                     if (node) {
+                      node.dataset.sceneGainDb = layer.audioGainDb.toFixed(1);
                       if (!node.dataset.sceneVolume) {
                         setSceneVideoVolume(node, 0);
                         node.dataset.sceneAudible = "false";
-                        node.muted = true;
+                        muteSceneVideo(node);
                       }
                       videoRefs.current.set(key, node);
                     } else {
@@ -841,10 +1714,9 @@ export function FlameScene({ lowPower = false, playback, videoEnabled = true, au
                   data-flame-loop-phase={loopPhase}
                   data-flame-audio-slot={isAudibleSlot ? "active" : "standby"}
                   data-flame-audio-role={audioRole}
+                  data-scene-gain-db={layer.audioGainDb.toFixed(1)}
                   src={layer.src}
-                  poster={FIREPLACE_BACKGROUND_SRC}
                   autoPlay={isVisibleSlot}
-                  muted
                   playsInline
                   preload="auto"
                   onLoadedMetadata={(event) => {
