@@ -118,6 +118,7 @@ const STATE_SNAPSHOT_REFRESH_MS_RAW = Number(process.env.TIKPAL_STATE_SNAPSHOT_R
 const STATE_SNAPSHOT_REFRESH_MS = Number.isFinite(STATE_SNAPSHOT_REFRESH_MS_RAW) && STATE_SNAPSHOT_REFRESH_MS_RAW >= 1000
   ? STATE_SNAPSHOT_REFRESH_MS_RAW
   : 3000;
+const HIFI_RUNTIME_RECOVERY_COOLDOWN_MS = 10_000;
 const KIOSK_HEARTBEAT_STALE_MS_RAW = Number(process.env.TIKPAL_KIOSK_HEARTBEAT_STALE_MS ?? 30_000);
 const KIOSK_HEARTBEAT_STALE_MS = Number.isFinite(KIOSK_HEARTBEAT_STALE_MS_RAW) && KIOSK_HEARTBEAT_STALE_MS_RAW >= 1_000
   ? KIOSK_HEARTBEAT_STALE_MS_RAW
@@ -430,6 +431,9 @@ let tikpalStateSnapshotRefreshTimer = null;
 let tikpalStateSnapshotRefreshQueued = false;
 let tikpalStateSnapshotGeneration = 0;
 let startupPlaybackPolicyPromise = null;
+let hifiRuntimeRecoveryPromise = null;
+let hifiRuntimeRecoveryLastAttemptAtMs = 0;
+let sourceSwitchInFlightCount = 0;
 let mpdRecoveryPromise = null;
 let mpcRadioCatalogReadyCache = false;
 let mpcRadioCatalogCountCache = 0;
@@ -5626,6 +5630,7 @@ function scheduleMpcRadioLatePlayNudges(targetUri) {
         const status = parseMpcStatus(statusRaw);
         const currentUri = getEffectiveMpcCurrentFile(currentFileRaw, status);
         if (currentUri !== targetUri) return;
+        if (status.state === "paused") return;
 
         if (await tryAutoAdvanceFailedMpcRadio(targetUri, currentUri, statusRaw)) return;
 
@@ -6049,6 +6054,32 @@ function isRememberedSourceAlreadyPlaying(snapshot, action) {
   return action.target === "mpd";
 }
 
+function buildHifiRuntimeRecoveryAction(snapshot) {
+  const rememberedSource = snapshot?.audio?.rememberedSource ?? getCachedRememberedAudioSource();
+  const target = rememberedSource?.target;
+  if (target !== "mpd" && target !== "radio") return null;
+  return {
+    target,
+    ...(rememberedSource.radioStationId ? { radioStationId: rememberedSource.radioStationId } : {}),
+    ...(rememberedSource.localTrackPath ? { localTrackPath: rememberedSource.localTrackPath } : {})
+  };
+}
+
+function shouldRecoverHifiRuntimePlayback(snapshot, action) {
+  if (!snapshot || !action) return false;
+  if (snapshot.playback?.state === "paused") return false;
+  if (isRememberedSourceAlreadyPlaying(snapshot, action)) return false;
+
+  const currentSource = snapshot.audio?.currentSource;
+  if (currentSource && COMMAND_HANDOFF_SOURCE_TARGETS.has(currentSource.id) && currentSource.connectionState !== "idle") {
+    return false;
+  }
+
+  if (snapshot.playback?.state === "stopped") return true;
+  if (snapshot.playback?.state === "playing") return true;
+  return currentSource?.id !== action.target;
+}
+
 async function restoreHifiRememberedSourcePlayback() {
   try {
     const experience = await readRoomExperienceState();
@@ -6082,6 +6113,46 @@ async function restoreHifiRememberedSourcePlayback() {
     console.warn(`tikpal-api startup hifi restore failed: ${error instanceof Error ? error.message : "unknown error"}`);
     return false;
   }
+}
+
+function recoverHifiRuntimePlaybackIfNeeded(snapshot) {
+  if (API_MODE !== "mpc" || hifiRuntimeRecoveryPromise || sourceSwitchInFlightCount > 0) return null;
+
+  const action = buildHifiRuntimeRecoveryAction(snapshot);
+  if (!shouldRecoverHifiRuntimePlayback(snapshot, action)) return null;
+
+  hifiRuntimeRecoveryPromise = (async () => {
+    const experience = await readRoomExperienceState();
+    if (experience.mode !== "hifi") return false;
+    if (sourceSwitchInFlightCount > 0) return false;
+
+    const now = Date.now();
+    if (now - hifiRuntimeRecoveryLastAttemptAtMs < HIFI_RUNTIME_RECOVERY_COOLDOWN_MS) return false;
+    hifiRuntimeRecoveryLastAttemptAtMs = now;
+
+    try {
+      await applySourceSwitch(action, { rememberSource: false });
+    } catch (error) {
+      if (action.target !== "mpd" || !action.localTrackPath) {
+        throw error;
+      }
+      await applySourceSwitch({ target: "mpd" }, { rememberSource: false });
+    }
+
+    await refreshTikpalStateSnapshotAfterMutation({
+      includeSourceRuntimeStatus: true
+    });
+    return true;
+  })()
+    .catch((error) => {
+      console.warn(`tikpal-api hifi runtime recovery failed: ${error instanceof Error ? error.message : "unknown error"}`);
+      return false;
+    })
+    .finally(() => {
+      hifiRuntimeRecoveryPromise = null;
+    });
+
+  return hifiRuntimeRecoveryPromise;
 }
 
 async function applyStartupPlaybackPolicy() {
@@ -6306,7 +6377,9 @@ function requestTikpalStateSnapshotRefresh({ force = false } = {}) {
       if (refreshGeneration !== tikpalStateSnapshotGeneration) {
         return readCachedTikpalState();
       }
-      return cacheTikpalStateSnapshot(state);
+      const cachedState = cacheTikpalStateSnapshot(state);
+      void recoverHifiRuntimePlaybackIfNeeded(cachedState);
+      return cachedState;
     })
     .catch((error) => {
       const message = error instanceof Error ? error.message : "unknown error";
@@ -8259,35 +8332,40 @@ async function syncRoomSceneSoundForSource(target) {
 }
 
 async function applySourceSwitch(action, { syncSceneSoundState = true, rememberSource = true } = {}) {
-  const target = String(action?.target ?? "");
-  const localTrackPathBeforeSwitch = rememberSource && target !== "mpd"
-    ? await resolveCurrentOrRememberedLocalLibraryTrackPath()
-    : null;
-  const radioStationIdBeforeSwitch = rememberSource && !normalizeRememberedRadioStationId(action.radioStationId)
-    ? await resolveCurrentOrRememberedRadioStationId()
-    : null;
-  const switchAction = {
-    ...action,
-    ...(localTrackPathBeforeSwitch ? { localTrackPath: action.localTrackPath ?? localTrackPathBeforeSwitch } : {}),
-    ...(radioStationIdBeforeSwitch ? { radioStationId: radioStationIdBeforeSwitch } : {})
-  };
-  const syncSceneBeforeSwitch = syncSceneSoundState && target !== "scene";
-  if (syncSceneBeforeSwitch) {
-    await syncRoomSceneSoundForSource(target);
-  }
+  sourceSwitchInFlightCount += 1;
+  try {
+    const target = String(action?.target ?? "");
+    const localTrackPathBeforeSwitch = rememberSource && target !== "mpd"
+      ? await resolveCurrentOrRememberedLocalLibraryTrackPath()
+      : null;
+    const radioStationIdBeforeSwitch = rememberSource && !normalizeRememberedRadioStationId(action.radioStationId)
+      ? await resolveCurrentOrRememberedRadioStationId()
+      : null;
+    const switchAction = {
+      ...action,
+      ...(localTrackPathBeforeSwitch ? { localTrackPath: action.localTrackPath ?? localTrackPathBeforeSwitch } : {}),
+      ...(radioStationIdBeforeSwitch ? { radioStationId: radioStationIdBeforeSwitch } : {})
+    };
+    const syncSceneBeforeSwitch = syncSceneSoundState && target !== "scene";
+    if (syncSceneBeforeSwitch) {
+      await syncRoomSceneSoundForSource(target);
+    }
 
-  if (API_MODE === "mpc") {
-    await applyMpcSourceSwitch(switchAction);
-  } else {
-    await applyMockSourceSwitch(switchAction);
-  }
+    if (API_MODE === "mpc") {
+      await applyMpcSourceSwitch(switchAction);
+    } else {
+      await applyMockSourceSwitch(switchAction);
+    }
 
-  if (syncSceneSoundState && !syncSceneBeforeSwitch) {
-    await syncRoomSceneSoundForSource(target);
-  }
+    if (syncSceneSoundState && !syncSceneBeforeSwitch) {
+      await syncRoomSceneSoundForSource(target);
+    }
 
-  if (rememberSource) {
-    await rememberAudioSourceSwitch(switchAction);
+    if (rememberSource) {
+      await rememberAudioSourceSwitch(switchAction);
+    }
+  } finally {
+    sourceSwitchInFlightCount = Math.max(0, sourceSwitchInFlightCount - 1);
   }
 }
 

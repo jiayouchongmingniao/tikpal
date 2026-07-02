@@ -1108,6 +1108,270 @@ switch (command) {
   }
 }
 
+async function runMpcHifiRuntimePlaybackRecoverySmoke() {
+  const port = PORT + 19;
+  const baseUrl = `http://${HOST}:${port}`;
+  const workspace = await mkdtemp(path.join(tmpdir(), "tikpal-mpc-hifi-runtime-recovery-"));
+  const fakeMpcPath = path.join(workspace, "mpc-fake.mjs");
+  const fakeSqlitePath = path.join(workspace, "sqlite3");
+  const fakeMpcStatePath = path.join(workspace, "mpc-state.json");
+  const roomExperienceStatePath = path.join(workspace, "room-experience-state.json");
+  const audioSourceMemoryStatePath = path.join(workspace, "audio-source-memory.json");
+  const radioUri = "http://radio.example/runtime-restore";
+  const rememberedTrackPath = "Focus/Lo-fi Ambient/FASSounds - Good Night - Lofi Cozy Chill Music - 02m27s - Lo-fi.mp3";
+  const fakeMpcTracks = [
+    `Codex/${rememberedTrackPath}`,
+    "Codex/Focus/Lo-fi Ambient/AtlasAudio - Ambient Soundscapes - 04m56s - Ambient.mp3"
+  ];
+
+  await writeFile(fakeMpcPath, `#!/usr/bin/env node
+import { readFileSync, writeFileSync } from "node:fs";
+
+const statePath = ${JSON.stringify(fakeMpcStatePath)};
+const libraryTracks = ${JSON.stringify(fakeMpcTracks)};
+
+function readState() {
+  return JSON.parse(readFileSync(statePath, "utf8"));
+}
+function writeState(state) {
+  writeFileSync(statePath, JSON.stringify(state));
+}
+function currentFile(state) {
+  return state.currentFile || (Array.isArray(state.queue) ? state.queue[state.current ?? 0] ?? "" : "");
+}
+function writeCurrent(file, fileOnlyCurrent) {
+  if (!file) return;
+  if (fileOnlyCurrent) {
+    process.stdout.write(file + "\\n");
+    return;
+  }
+  if (/^https?:\\/\\//i.test(file)) {
+    process.stdout.write("Tikpal Runtime Restore\\tInternet Radio\\tRadio\\t" + file + "\\t0:00\\n");
+    return;
+  }
+  process.stdout.write("Runtime Recovery\\tFASSounds\\tLo-fi Ambient\\t" + file + "\\t02:27\\n");
+}
+
+const rawArgs = process.argv.slice(2);
+const fileOnlyCurrent = rawArgs.includes("--format") && rawArgs[rawArgs.indexOf("--format") + 1] === "%file%";
+const args = [];
+for (let index = 0; index < rawArgs.length; index += 1) {
+  if (rawArgs[index] === "--host" || rawArgs[index] === "--port" || rawArgs[index] === "--format") {
+    index += 1;
+    continue;
+  }
+  args.push(rawArgs[index]);
+}
+
+const command = args[0] ?? "";
+const state = readState();
+const file = currentFile(state);
+const queueLength = Array.isArray(state.queue) && state.queue.length > 0 ? state.queue.length : file ? 1 : 0;
+const isRadio = /^https?:\\/\\//i.test(file);
+
+switch (command) {
+  case "listall": {
+    const target = args[1] ?? "";
+    if (target === "Codex") process.stdout.write(libraryTracks.join("\\n") + "\\n");
+    else if (libraryTracks.includes(target)) process.stdout.write(target + "\\n");
+    break;
+  }
+  case "current":
+    writeCurrent(file, fileOnlyCurrent);
+    break;
+  case "status":
+    if (file) {
+      process.stdout.write("[" + state.playbackState + "] #" + ((state.current ?? 0) + 1) + "/" + queueLength + " 0:01/" + (isRadio ? "0:00" : "2:27") + " (0%)\\n");
+    }
+    process.stdout.write("volume:" + (state.volume ?? 30) + "%   repeat: off   random: off   single: off   consume: off\\n");
+    break;
+  case "stats":
+    process.stdout.write("Artists: 1\\nAlbums: 1\\nSongs: " + libraryTracks.length + "\\nDB Updated: fake\\n");
+    break;
+  case "playlist":
+    if (Array.isArray(state.queue) && state.queue.length > 0) {
+      process.stdout.write(state.queue.map((track, index) => index + "\\tRuntime Recovery\\tFASSounds\\tLo-fi Ambient\\t02:27\\t" + track).join("\\n") + "\\n");
+    } else if (state.currentFile) {
+      process.stdout.write("0\\tTikpal Runtime Restore\\tInternet Radio\\tRadio\\t0:00\\t" + state.currentFile + "\\n");
+    }
+    break;
+  case "clear":
+    writeState({ ...state, currentFile: "", queue: [], current: 0, playbackState: "stopped", switchCount: (state.switchCount ?? 0) + 1 });
+    break;
+  case "add": {
+    const target = args[1] ?? "";
+    if (/^https?:\\/\\//i.test(target)) {
+      writeState({ ...state, currentFile: target, queue: [], current: 0, playbackState: "stopped", switchCount: (state.switchCount ?? 0) + 1 });
+    } else {
+      const queue = target === "Codex" ? libraryTracks : libraryTracks.includes(target) ? [target] : [];
+      writeState({ ...state, currentFile: "", queue: [...(state.queue ?? []), ...queue], switchCount: (state.switchCount ?? 0) + 1 });
+    }
+    break;
+  }
+  case "play":
+    writeState({
+      ...state,
+      current: args[1] ? Math.max(0, Number(args[1]) - 1) : state.current ?? 0,
+      playbackState: "playing"
+    });
+    break;
+  case "pause":
+    writeState({ ...state, playbackState: "paused" });
+    break;
+  case "stop":
+    writeState({ ...state, playbackState: "stopped" });
+    break;
+  case "volume":
+    writeState({ ...state, volume: Number(args[1] ?? state.volume ?? 30) });
+    break;
+  default:
+    break;
+}
+`);
+  await chmod(fakeMpcPath, 0o755);
+  await writeFile(fakeSqlitePath, `#!/usr/bin/env node
+if (process.argv.join(" ").includes("cfg_radio")) {
+  process.stdout.write("505|Tikpal Focus - Runtime Restore|${radioUri}|Focus|Runtime FM|320|MP3|local\\n");
+}
+`);
+  await chmod(fakeSqlitePath, 0o755);
+
+  await writeFile(roomExperienceStatePath, `${JSON.stringify({ mode: "hifi", sceneSoundEnabled: false }, null, 2)}\n`);
+  await writeFile(audioSourceMemoryStatePath, `${JSON.stringify({
+    target: "radio",
+    localTrackPath: null,
+    radioStationId: "radio-505",
+    updatedAt: "2026-07-02T00:00:00.000Z"
+  }, null, 2)}\n`);
+  await writeFile(fakeMpcStatePath, JSON.stringify({
+    currentFile: "",
+    queue: [],
+    current: 0,
+    playbackState: "stopped",
+    volume: 30,
+    switchCount: 0
+  }));
+
+  const server = spawn(process.execPath, ["server/index.mjs"], {
+    env: mpcFocusedSmokeEnv({
+      PATH: `${workspace}${path.delimiter}${process.env.PATH ?? ""}`,
+      TIKPAL_API_HOST: HOST,
+      TIKPAL_API_PORT: String(port),
+      TIKPAL_PLAYER_BACKEND: "mpc",
+      TIKPAL_MPC_BIN: fakeMpcPath,
+      TIKPAL_SQLITE_BIN: fakeSqlitePath,
+      TIKPAL_MPD_HOST: "127.0.0.1",
+      TIKPAL_MPD_PORT: "6600",
+      TIKPAL_MPD_DEFAULT_QUEUE_PATH: "Codex",
+      TIKPAL_RADIO_DEFAULT_URI: "",
+      TIKPAL_RADIO_ACTIVATE_COMMAND: "",
+      TIKPAL_RADIO_START_VERIFY_WINDOW_MS: "40",
+      TIKPAL_RADIO_START_VERIFY_POLL_MS: "20",
+      TIKPAL_RADIO_POST_START_SETTLE_MS: "20",
+      TIKPAL_RADIO_POST_START_RECOVERY_PLAYS: "0",
+      TIKPAL_RADIO_LATE_PLAY_NUDGE_DELAYS_MS: "",
+      TIKPAL_ROOM_EXPERIENCE_STATE_PATH: roomExperienceStatePath,
+      TIKPAL_AUDIO_SOURCE_MEMORY_STATE_PATH: audioSourceMemoryStatePath,
+      TIKPAL_OUTPUT_VOLUME_GET_COMMAND: "",
+      TIKPAL_STATE_SNAPSHOT_REFRESH_MS: "1000"
+    }),
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+
+  try {
+    await waitForHealthAt(baseUrl);
+    let recoveredRadio = null;
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const state = await requestFrom(baseUrl, "/api/v1/system/state");
+      if (
+        state.response.ok
+        && state.body.audio.currentSource.id === "radio"
+        && state.body.audio.currentSource.radioStationId === "radio-505"
+        && state.body.playback.state === "playing"
+      ) {
+        recoveredRadio = state.body;
+        break;
+      }
+      await wait(150);
+    }
+    assert(recoveredRadio, "mpc Hi-Fi startup should restore Radio before the runtime recovery smoke");
+    let fakeState = JSON.parse(await readFile(fakeMpcStatePath, "utf8"));
+    assert(fakeState.currentFile === radioUri, "mpc Hi-Fi runtime recovery should start the remembered Radio URI");
+
+    await requestFrom(baseUrl, "/api/v1/playback/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "pause" })
+    });
+    await wait(2500);
+    fakeState = JSON.parse(await readFile(fakeMpcStatePath, "utf8"));
+    assert(fakeState.playbackState === "paused", "mpc Hi-Fi runtime recovery should not resume a user-paused Radio station");
+
+    await writeFile(fakeMpcStatePath, JSON.stringify({ ...fakeState, currentFile: "", queue: [], playbackState: "stopped" }));
+    recoveredRadio = null;
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const state = await requestFrom(baseUrl, "/api/v1/system/state");
+      if (
+        state.response.ok
+        && state.body.audio.currentSource.id === "radio"
+        && state.body.audio.currentSource.radioStationId === "radio-505"
+        && state.body.playback.state === "playing"
+      ) {
+        recoveredRadio = state.body;
+        break;
+      }
+      await wait(150);
+    }
+    assert(recoveredRadio, "mpc Hi-Fi runtime recovery should restore stopped remembered Radio without a restart");
+
+    const librarySwitch = await requestFrom(baseUrl, "/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({ target: "mpd", localTrackPath: rememberedTrackPath })
+    });
+    assert(
+      librarySwitch.response.ok,
+      `mpc Hi-Fi runtime recovery smoke should update remembered Library through the source API: ${librarySwitch.response.status} ${JSON.stringify(librarySwitch.body)}`
+    );
+    await writeFile(fakeMpcStatePath, JSON.stringify({
+      currentFile: "",
+      queue: [`Codex/${rememberedTrackPath}`],
+      current: 0,
+      playbackState: "paused",
+      volume: 30,
+      switchCount: 0
+    }));
+    await wait(2500);
+    fakeState = JSON.parse(await readFile(fakeMpcStatePath, "utf8"));
+    assert(fakeState.playbackState === "paused", "mpc Hi-Fi runtime recovery should not resume a user-paused Library track");
+    assert(fakeState.switchCount === 0, "mpc Hi-Fi runtime recovery should not reload Library while paused");
+
+    await writeFile(fakeMpcStatePath, JSON.stringify({ ...fakeState, currentFile: "", queue: [], current: 0, playbackState: "stopped" }));
+    let recoveredLibrary = null;
+    for (let attempt = 0; attempt < 80; attempt += 1) {
+      const state = await requestFrom(baseUrl, "/api/v1/system/state");
+      if (
+        state.response.ok
+        && state.body.audio.currentSource.id === "mpd"
+        && state.body.playback.state === "playing"
+        && state.body.playback.queuePreview.some((entry) => entry.active && entry.id === `Codex/${rememberedTrackPath}`)
+      ) {
+        recoveredLibrary = state.body;
+        break;
+      }
+      await wait(150);
+    }
+    assert(recoveredLibrary, "mpc Hi-Fi runtime recovery should restore stopped remembered Library playback");
+  } finally {
+    if (server.exitCode === null && server.signalCode === null) {
+      server.kill("SIGTERM");
+      await Promise.race([
+        new Promise((resolve) => server.once("exit", resolve)),
+        wait(1000)
+      ]);
+    }
+    await rm(workspace, { recursive: true, force: true });
+  }
+}
+
 async function runMpcLocalLibraryPathSmoke(roomExperienceStatePath) {
   const port = PORT + 12;
   const baseUrl = `http://${HOST}:${port}`;
@@ -3560,6 +3824,7 @@ async function run() {
     await runMpcStartupSceneDefaultSmoke();
     await runMpcHifiRememberedStartupRestoreSmoke();
     await runMpcHifiRememberedLibraryStartupRestoreSmoke();
+    await runMpcHifiRuntimePlaybackRecoverySmoke();
     await runMpcHifiCommandGuardSmoke(roomExperienceStatePath);
     await runMpcLocalLibraryPathSmoke(roomExperienceStatePath);
     await runMpcCachedStateSmoke(roomExperienceStatePath);
