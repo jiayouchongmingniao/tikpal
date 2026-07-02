@@ -1,7 +1,7 @@
 import http from "node:http";
 import { execFile } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { mkdir, readFile, readdir, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, readdir, stat, unlink, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { basename, dirname, extname, posix, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
@@ -22,6 +22,7 @@ const MPD_STARTUP_VOLUME = Number(process.env.TIKPAL_MPD_STARTUP_VOLUME ?? 30);
 const MPD_RECOVERY_COMMAND = process.env.TIKPAL_MPD_RECOVERY_COMMAND ?? "";
 const MPD_RECOVERY_TIMEOUT_MS = parseEnvPositiveInteger(process.env.TIKPAL_MPD_RECOVERY_TIMEOUT_MS, 20_000);
 const MPD_RECOVERY_SETTLE_MS = parseEnvPositiveInteger(process.env.TIKPAL_MPD_RECOVERY_SETTLE_MS, 2500);
+const MPD_LOG_PATH = process.env.TIKPAL_MPD_LOG_PATH ?? "/var/log/mpd/log";
 const STARTUP_SCENE_SOUND_ENABLED = parseEnvBoolean(process.env.TIKPAL_STARTUP_SCENE_SOUND_ENABLED ?? "1");
 const MPD_MUSIC_ROOT = process.env.TIKPAL_MPD_MUSIC_ROOT ?? "/var/lib/mpd/music";
 const APP_VERSION = process.env.TIKPAL_APP_VERSION ?? "0.1.0";
@@ -71,6 +72,10 @@ const RADIO_LATE_PLAY_NUDGE_DELAYS_MS = parseEnvIntegerList(process.env.TIKPAL_R
 const RADIO_AUTO_SKIP_VERIFY_WINDOW_MS = parseEnvPositiveInteger(process.env.TIKPAL_RADIO_AUTO_SKIP_VERIFY_WINDOW_MS, 1500);
 const RADIO_AUTO_SKIP_POST_START_SETTLE_MS = parseEnvPositiveInteger(process.env.TIKPAL_RADIO_AUTO_SKIP_POST_START_SETTLE_MS, 500);
 const RADIO_AUTO_SKIP_RETRY_DELAYS_MS = parseEnvIntegerList(process.env.TIKPAL_RADIO_AUTO_SKIP_RETRY_DELAYS_MS, []);
+const RADIO_XRUN_GRACE_MS = parseEnvPositiveInteger(process.env.TIKPAL_RADIO_XRUN_GRACE_MS, 15_000);
+const RADIO_XRUN_WINDOW_MS = parseEnvPositiveInteger(process.env.TIKPAL_RADIO_XRUN_WINDOW_MS, 45_000);
+const RADIO_XRUN_SKIP_THRESHOLD = parseEnvPositiveInteger(process.env.TIKPAL_RADIO_XRUN_SKIP_THRESHOLD, 4);
+const RADIO_XRUN_LOG_TAIL_BYTES = parseEnvPositiveInteger(process.env.TIKPAL_RADIO_XRUN_LOG_TAIL_BYTES, 32_768);
 const KIOSK_AUDIO_RELEASE_COMMAND = process.env.TIKPAL_KIOSK_AUDIO_RELEASE_COMMAND ?? "";
 const KIOSK_AUDIO_RELEASE_SETTLE_MS = parseEnvPositiveInteger(process.env.TIKPAL_KIOSK_AUDIO_RELEASE_SETTLE_MS, 250);
 const AUDIO_READY_COMMAND = process.env.TIKPAL_AUDIO_READY_COMMAND ?? "";
@@ -435,6 +440,8 @@ let hifiRuntimeRecoveryPromise = null;
 let hifiRuntimeRecoveryLastAttemptAtMs = 0;
 let sourceSwitchInFlightCount = 0;
 let mpdRecoveryPromise = null;
+let mpcRadioWeakNetworkRecoveryPromise = null;
+let mpcRadioWeakNetworkState = null;
 let mpcRadioCatalogReadyCache = false;
 let mpcRadioCatalogCountCache = 0;
 let activeMpcRadioStationCache = null;
@@ -5435,6 +5442,80 @@ function getMpcRadioStreamFailure(statusRaw) {
   return null;
 }
 
+function isMpcRadioXrunLine(line) {
+  return /Decoder is too slow|xrun/i.test(String(line ?? ""));
+}
+
+function radioWeakNetworkKey(stationId, uri) {
+  const id = String(stationId ?? "").trim();
+  const targetUri = String(uri ?? "").trim();
+  return `${id || "unknown"}|${targetUri}`;
+}
+
+function resetMpcRadioWeakNetworkMonitor(stationId, uri) {
+  const key = radioWeakNetworkKey(stationId, uri);
+  mpcRadioWeakNetworkState = {
+    key,
+    startedAtMs: Date.now(),
+    primed: false,
+    seenLines: new Set(),
+    events: []
+  };
+}
+
+async function readRecentMpcRadioXrunLines() {
+  if (!MPD_LOG_PATH || RADIO_XRUN_SKIP_THRESHOLD <= 0) return [];
+  let handle = null;
+  try {
+    const info = await stat(MPD_LOG_PATH);
+    if (!info.isFile() || info.size <= 0) return [];
+    const length = Math.min(info.size, RADIO_XRUN_LOG_TAIL_BYTES);
+    const buffer = Buffer.alloc(length);
+    handle = await open(MPD_LOG_PATH, "r");
+    await handle.read(buffer, 0, length, info.size - length);
+    return buffer
+      .toString("utf8")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(isMpcRadioXrunLine);
+  } catch {
+    return [];
+  } finally {
+    await handle?.close().catch(() => null);
+  }
+}
+
+function noteMpcRadioXrunLines(stationId, uri, lines) {
+  const key = radioWeakNetworkKey(stationId, uri);
+  if (!mpcRadioWeakNetworkState || mpcRadioWeakNetworkState.key !== key) {
+    resetMpcRadioWeakNetworkMonitor(stationId, uri);
+  }
+
+  const now = Date.now();
+  const state = mpcRadioWeakNetworkState;
+  if (!state.primed) {
+    for (const line of lines) {
+      state.seenLines.add(line);
+    }
+    state.primed = true;
+    return false;
+  }
+
+  for (const line of lines) {
+    if (state.seenLines.has(line)) continue;
+    state.seenLines.add(line);
+    state.events.push(now);
+  }
+
+  if (state.seenLines.size > 200) {
+    state.seenLines = new Set(Array.from(state.seenLines).slice(-100));
+  }
+  state.events = state.events.filter((eventAtMs) => now - eventAtMs <= RADIO_XRUN_WINDOW_MS);
+
+  if (now - state.startedAtMs < RADIO_XRUN_GRACE_MS) return false;
+  return state.events.length >= RADIO_XRUN_SKIP_THRESHOLD;
+}
+
 function hasMpcAlsaOutputFailure(statusRaw) {
   return /Failed to open ALSA device|Device or resource busy/i.test(String(statusRaw ?? ""));
 }
@@ -5595,16 +5676,14 @@ async function recoverLateMpcRadioStartFailure(options = {}) {
 
 let mpcRadioAutoAdvanceInFlight = false;
 
-async function tryAutoAdvanceFailedMpcRadio(targetUri, currentUri, statusRaw) {
-  if (currentUri !== targetUri || !getMpcRadioStreamFailure(statusRaw)) {
-    return false;
-  }
+async function autoAdvanceMpcRadioStation(currentUri, reason = "radio stream failure") {
   if (mpcRadioAutoAdvanceInFlight) {
     return true;
   }
 
   mpcRadioAutoAdvanceInFlight = true;
   try {
+    console.warn(`tikpal-api auto-advancing Radio after ${reason}`);
     const advanced = await switchRadioStationByOffset(1, {
       currentFileOverride: currentUri,
       requireRadioContext: false,
@@ -5617,6 +5696,13 @@ async function tryAutoAdvanceFailedMpcRadio(targetUri, currentUri, statusRaw) {
   } finally {
     mpcRadioAutoAdvanceInFlight = false;
   }
+}
+
+async function tryAutoAdvanceFailedMpcRadio(targetUri, currentUri, statusRaw) {
+  if (currentUri !== targetUri || !getMpcRadioStreamFailure(statusRaw)) {
+    return false;
+  }
+  return await autoAdvanceMpcRadioStation(currentUri, "stream decode/connect failure");
 }
 
 function scheduleMpcRadioLatePlayNudges(targetUri) {
@@ -5651,6 +5737,42 @@ function scheduleMpcRadioLatePlayNudges(targetUri) {
     }, delayMs);
     timer.unref?.();
   }
+}
+
+function recoverWeakNetworkMpcRadioIfNeeded(snapshot) {
+  if (
+    API_MODE !== "mpc"
+    || mpcRadioWeakNetworkRecoveryPromise
+    || mpcRadioAutoAdvanceInFlight
+    || sourceSwitchInFlightCount > 0
+  ) {
+    return null;
+  }
+  if (snapshot?.playback?.state !== "playing" || snapshot?.playback?.source !== "radio") return null;
+  if (snapshot?.audio?.currentSource?.id !== "radio") return null;
+
+  mpcRadioWeakNetworkRecoveryPromise = (async () => {
+    const currentFileRaw = await runMpc(["--format", "%file%", "current"], { allowFailure: true });
+    const currentUri = extractMpcCurrentFile(currentFileRaw);
+    if (!isStreamUri(currentUri)) return false;
+
+    const stationId = snapshot.audio.currentSource.radioStationId ?? activeMpcRadioStationCache?.id ?? null;
+    const xrunLines = await readRecentMpcRadioXrunLines();
+    if (xrunLines.length === 0) return false;
+    if (!noteMpcRadioXrunLines(stationId, currentUri, xrunLines)) return false;
+    if (sourceSwitchInFlightCount > 0) return false;
+
+    return await autoAdvanceMpcRadioStation(currentUri, "repeated decoder/xrun stalls");
+  })()
+    .catch((error) => {
+      console.warn(`tikpal-api radio weak-network recovery failed: ${error instanceof Error ? error.message : "unknown error"}`);
+      return false;
+    })
+    .finally(() => {
+      mpcRadioWeakNetworkRecoveryPromise = null;
+    });
+
+  return mpcRadioWeakNetworkRecoveryPromise;
 }
 
 async function startRadioStreamUriOnce(targetUri, options = {}) {
@@ -5715,6 +5837,7 @@ async function switchToRadioSource(action = {}, options = {}) {
         cacheActiveMpcRadioStation(targetStation, targetUri);
         await startRadioStreamUri(targetUri, options);
         cacheActiveMpcRadioStation(targetStation, targetUri);
+        resetMpcRadioWeakNetworkMonitor(targetStation?.id ?? null, targetUri);
         await rememberActiveRadioStationSource(targetStation, { localTrackPath: action.localTrackPath });
         return;
       } catch (error) {
@@ -6076,8 +6199,25 @@ function shouldRecoverHifiRuntimePlayback(snapshot, action) {
   }
 
   if (snapshot.playback?.state === "stopped") return true;
-  if (snapshot.playback?.state === "playing") return true;
-  return currentSource?.id !== action.target;
+  if (currentSource?.id !== action.target) return true;
+
+  if (snapshot.playback?.state === "playing") {
+    if (action.target === "radio") {
+      const expectedStationId = normalizeRememberedRadioStationId(action.radioStationId);
+      const currentStationId = normalizeRememberedRadioStationId(currentSource?.radioStationId);
+      return Boolean(expectedStationId && currentStationId && currentStationId !== expectedStationId);
+    }
+
+    if (action.target === "mpd" && action.localTrackPath) {
+      const rememberedPath = normalizeLocalLibraryStateTrackPath(action.localTrackPath);
+      if (!rememberedPath) return false;
+      return !snapshot.playback?.queuePreview?.some((entry) => (
+        entry.active && normalizeLocalLibraryStateTrackPath(entry.id) === rememberedPath
+      ));
+    }
+  }
+
+  return false;
 }
 
 async function restoreHifiRememberedSourcePlayback() {
@@ -6131,6 +6271,7 @@ function recoverHifiRuntimePlaybackIfNeeded(snapshot) {
     hifiRuntimeRecoveryLastAttemptAtMs = now;
 
     try {
+      console.warn(`tikpal-api hifi runtime recovery restoring ${action.target}${action.radioStationId ? `:${action.radioStationId}` : ""}${action.localTrackPath ? `:${action.localTrackPath}` : ""}`);
       await applySourceSwitch(action, { rememberSource: false });
     } catch (error) {
       if (action.target !== "mpd" || !action.localTrackPath) {
@@ -6378,6 +6519,7 @@ function requestTikpalStateSnapshotRefresh({ force = false } = {}) {
         return readCachedTikpalState();
       }
       const cachedState = cacheTikpalStateSnapshot(state);
+      void recoverWeakNetworkMpcRadioIfNeeded(cachedState);
       void recoverHifiRuntimePlaybackIfNeeded(cachedState);
       return cachedState;
     })

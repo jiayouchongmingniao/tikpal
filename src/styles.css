@@ -768,8 +768,8 @@ select {
   z-index: 0;
   top: 42%;
   left: 50%;
-  width: min(560px, 76vw);
-  height: min(360px, 44vw);
+  width: min(945px, 84vw);
+  height: min(620px, 55vw);
   border: 1px solid color-mix(in srgb, var(--hifi-theme-accent) 26%, transparent);
   border-radius: 999px;
   background:
@@ -988,11 +988,11 @@ select {
 
 @keyframes hifi-presence-breathe {
   from {
-    transform: translate(-50%, -50%) scale(0.96);
+    transform: translate(-50%, -50%) scale(0.98);
   }
 
   to {
-    transform: translate(-50%, -50%) scale(1.04);
+    transform: translate(-50%, -50%) scale(1.08);
   }
 }
 

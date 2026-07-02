@@ -1119,10 +1119,14 @@ try {
         const surfaceStyle = getComputedStyle(surface);
         const waveStyle = getComputedStyle(wave);
         const particleStyle = getComputedStyle(particle);
+        const presenceWidth = Number.parseFloat(presenceStyle.width);
+        const presenceHeight = Number.parseFloat(presenceStyle.height);
         return document.querySelectorAll('[data-hifi-wave-line]').length >= 7
           && document.querySelectorAll('[data-hifi-particle]').length >= 24
           && visualsStyle.pointerEvents === 'none'
           && presenceStyle.pointerEvents === 'none'
+          && presenceWidth >= 930
+          && presenceHeight >= 610
           && waveStyle.animationName !== 'none'
           && waveStyle.animationPlayState === 'running'
           && particleStyle.animationName !== 'none'

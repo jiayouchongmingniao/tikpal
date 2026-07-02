@@ -1115,9 +1115,11 @@ async function runMpcHifiRuntimePlaybackRecoverySmoke() {
   const fakeMpcPath = path.join(workspace, "mpc-fake.mjs");
   const fakeSqlitePath = path.join(workspace, "sqlite3");
   const fakeMpcStatePath = path.join(workspace, "mpc-state.json");
+  const fakeMpdLogPath = path.join(workspace, "mpd.log");
   const roomExperienceStatePath = path.join(workspace, "room-experience-state.json");
   const audioSourceMemoryStatePath = path.join(workspace, "audio-source-memory.json");
   const radioUri = "http://radio.example/runtime-restore";
+  const otherRadioUri = "http://radio.example/runtime-other";
   const rememberedTrackPath = "Focus/Lo-fi Ambient/FASSounds - Good Night - Lofi Cozy Chill Music - 02m27s - Lo-fi.mp3";
   const fakeMpcTracks = [
     `Codex/${rememberedTrackPath}`,
@@ -1228,15 +1230,19 @@ switch (command) {
     break;
 }
 `);
-  await chmod(fakeMpcPath, 0o755);
+await chmod(fakeMpcPath, 0o755);
   await writeFile(fakeSqlitePath, `#!/usr/bin/env node
 if (process.argv.join(" ").includes("cfg_radio")) {
-  process.stdout.write("505|Tikpal Focus - Runtime Restore|${radioUri}|Focus|Runtime FM|320|MP3|local\\n");
+  process.stdout.write([
+    "505|Tikpal Focus - Runtime Restore|${radioUri}|Focus|Runtime FM|320|MP3|local",
+    "506|Tikpal Focus - Runtime Other|${otherRadioUri}|Focus|Other FM|320|MP3|local"
+  ].join("\\n") + "\\n");
 }
 `);
   await chmod(fakeSqlitePath, 0o755);
 
   await writeFile(roomExperienceStatePath, `${JSON.stringify({ mode: "hifi", sceneSoundEnabled: false }, null, 2)}\n`);
+  await writeFile(fakeMpdLogPath, "");
   await writeFile(audioSourceMemoryStatePath, `${JSON.stringify({
     target: "radio",
     localTrackPath: null,
@@ -1262,6 +1268,7 @@ if (process.argv.join(" ").includes("cfg_radio")) {
       TIKPAL_SQLITE_BIN: fakeSqlitePath,
       TIKPAL_MPD_HOST: "127.0.0.1",
       TIKPAL_MPD_PORT: "6600",
+      TIKPAL_MPD_LOG_PATH: fakeMpdLogPath,
       TIKPAL_MPD_DEFAULT_QUEUE_PATH: "Codex",
       TIKPAL_RADIO_DEFAULT_URI: "",
       TIKPAL_RADIO_ACTIVATE_COMMAND: "",
@@ -1273,6 +1280,9 @@ if (process.argv.join(" ").includes("cfg_radio")) {
       TIKPAL_ROOM_EXPERIENCE_STATE_PATH: roomExperienceStatePath,
       TIKPAL_AUDIO_SOURCE_MEMORY_STATE_PATH: audioSourceMemoryStatePath,
       TIKPAL_OUTPUT_VOLUME_GET_COMMAND: "",
+      TIKPAL_RADIO_XRUN_GRACE_MS: "500",
+      TIKPAL_RADIO_XRUN_WINDOW_MS: "2000",
+      TIKPAL_RADIO_XRUN_SKIP_THRESHOLD: "3",
       TIKPAL_STATE_SNAPSHOT_REFRESH_MS: "1000"
     }),
     stdio: ["ignore", "pipe", "pipe"]
@@ -1322,6 +1332,64 @@ if (process.argv.join(" ").includes("cfg_radio")) {
       await wait(150);
     }
     assert(recoveredRadio, "mpc Hi-Fi runtime recovery should restore stopped remembered Radio without a restart");
+
+    await writeFile(fakeMpcStatePath, JSON.stringify({
+      currentFile: "http://radio.example/runtime-unknown",
+      queue: [],
+      current: 0,
+      playbackState: "playing",
+      volume: 30,
+      switchCount: 0
+    }));
+    await wait(2500);
+    fakeState = JSON.parse(await readFile(fakeMpcStatePath, "utf8"));
+    assert(fakeState.currentFile === "http://radio.example/runtime-unknown", "mpc Hi-Fi runtime recovery should not reload a playing Radio stream when station id is temporarily missing");
+    assert(fakeState.switchCount === 0, "mpc Hi-Fi runtime recovery should wait for station identity before restoring a playing Radio stream");
+
+    await writeFile(fakeMpcStatePath, JSON.stringify({
+      currentFile: radioUri,
+      queue: [],
+      current: 0,
+      playbackState: "playing",
+      volume: 30,
+      switchCount: 0
+    }));
+    await writeFile(fakeMpdLogPath, "2026-07-02T21:32:00 alsa_output: Decoder is too slow; playing silence to avoid xrun\n");
+    await wait(1500);
+    fakeState = JSON.parse(await readFile(fakeMpcStatePath, "utf8"));
+    assert(fakeState.currentFile === radioUri, "mpc Radio weak-network recovery should tolerate a short xrun burst");
+    assert(fakeState.switchCount === 0, "mpc Radio weak-network recovery should not reload during the xrun grace window");
+
+    await writeFile(fakeMpdLogPath, [
+      "2026-07-02T21:32:00 alsa_output: Decoder is too slow; playing silence to avoid xrun",
+      "2026-07-02T21:32:05 alsa_output: Decoder is too slow; playing silence to avoid xrun",
+      "2026-07-02T21:32:10 alsa_output: Decoder is too slow; playing silence to avoid xrun",
+      "2026-07-02T21:32:15 alsa_output: Decoder is too slow; playing silence to avoid xrun"
+    ].join("\n") + "\n");
+    let xrunSkippedRadio = null;
+    let rememberedAfterXrunSkip = null;
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const state = await requestFrom(baseUrl, "/api/v1/system/state");
+      fakeState = JSON.parse(await readFile(fakeMpcStatePath, "utf8"));
+      rememberedAfterXrunSkip = JSON.parse(await readFile(audioSourceMemoryStatePath, "utf8"));
+      if (
+        state.response.ok
+        && state.body.audio.currentSource.radioStationId === "radio-506"
+        && fakeState.currentFile === otherRadioUri
+        && rememberedAfterXrunSkip.radioStationId === "radio-506"
+      ) {
+        xrunSkippedRadio = state.body;
+        break;
+      }
+      await wait(150);
+    }
+    assert(
+      xrunSkippedRadio,
+      `mpc Radio weak-network recovery should auto-advance after repeated xrun stalls: ${JSON.stringify({
+        fakeState,
+        rememberedAfterXrunSkip
+      })}`
+    );
 
     const librarySwitch = await requestFrom(baseUrl, "/api/v1/audio/source", {
       method: "POST",
@@ -2268,7 +2336,7 @@ if (getIndex >= 0) {
     let autoSkippedDeadStation = null;
     let autoSkippedFakeState = null;
     let rememberedAfterAutoSkip = null;
-    for (let attempt = 0; attempt < 10; attempt += 1) {
+    for (let attempt = 0; attempt < 30; attempt += 1) {
       await wait(200);
       autoSkippedDeadStation = await requestFrom(baseUrl, "/api/v1/system/state");
       autoSkippedFakeState = JSON.parse(await readFile(fakeMpcStatePath, "utf8"));
