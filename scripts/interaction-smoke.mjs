@@ -1110,15 +1110,23 @@ try {
         const visuals = document.querySelector('[data-hifi-ambient-visuals]');
         const presence = document.querySelector('[data-hifi-playback-presence]');
         const surface = document.querySelector('.hifi-now-playing-surface');
-        if (!visuals || !presence || !surface) return false;
+        const wave = document.querySelector('[data-hifi-wave-line]');
+        const particle = document.querySelector('[data-hifi-particle]');
+        if (!visuals || !presence || !surface || !wave || !particle) return false;
 
         const visualsStyle = getComputedStyle(visuals);
         const presenceStyle = getComputedStyle(presence);
         const surfaceStyle = getComputedStyle(surface);
+        const waveStyle = getComputedStyle(wave);
+        const particleStyle = getComputedStyle(particle);
         return document.querySelectorAll('[data-hifi-wave-line]').length >= 7
           && document.querySelectorAll('[data-hifi-particle]').length >= 24
           && visualsStyle.pointerEvents === 'none'
           && presenceStyle.pointerEvents === 'none'
+          && waveStyle.animationName !== 'none'
+          && waveStyle.animationPlayState === 'running'
+          && particleStyle.animationName !== 'none'
+          && particleStyle.animationPlayState === 'running'
           && Number.parseInt(visualsStyle.zIndex, 10) < Number.parseInt(surfaceStyle.zIndex, 10);
       })()
     `,
@@ -1242,11 +1250,18 @@ try {
       (() => {
         const scene = document.querySelector('[data-hifi-now-playing][data-hifi-centered-now-playing]');
         const presence = document.querySelector('[data-hifi-playback-presence][data-hifi-playback-state="paused"]');
+        const wave = document.querySelector('[data-hifi-wave-line]');
+        const particle = document.querySelector('[data-hifi-particle]');
+        if (!wave || !particle) return false;
+        const waveStyle = getComputedStyle(wave);
+        const particleStyle = getComputedStyle(particle);
         return scene !== null
           && scene.classList.contains('is-paused')
           && !scene.classList.contains('is-playing')
           && presence !== null
           && getComputedStyle(presence).animationName === 'none'
+          && waveStyle.animationPlayState === 'paused'
+          && particleStyle.animationPlayState === 'paused'
           && document.querySelector('[data-hifi-lyrics-panel]') === null;
       })()
     `,

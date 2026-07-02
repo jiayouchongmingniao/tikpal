@@ -831,6 +831,20 @@ select {
   animation: hifi-presence-sweep 7s linear infinite;
 }
 
+.eq-visual-scene.is-playing .hifi-wave-line,
+.eq-visual-scene.is-playing .hifi-particle,
+.eq-visual-scene.is-playing .hifi-playback-presence,
+.eq-visual-scene.is-playing .hifi-playback-presence::after {
+  animation-play-state: running;
+}
+
+.eq-visual-scene.is-paused .hifi-wave-line,
+.eq-visual-scene.is-paused .hifi-particle,
+.eq-visual-scene.is-paused .hifi-playback-presence,
+.eq-visual-scene.is-paused .hifi-playback-presence::after {
+  animation-play-state: paused;
+}
+
 .eq-visual-scene.has-lyrics-panel .hifi-ambient-visuals {
   opacity: 0.22;
 }
