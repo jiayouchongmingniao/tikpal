@@ -249,6 +249,14 @@ export function EqVisualScene({ playback, audio, system, fontTheme, lyricsPanel 
         </div>
       </div>
       <div className="hifi-now-playing-surface">
+        {!hasLyricsPanel ? (
+          <span
+            aria-hidden="true"
+            className="hifi-playback-presence"
+            data-hifi-playback-presence
+            data-hifi-playback-state={playback.state}
+          />
+        ) : null}
         <div
           className="hifi-cover-art"
           aria-hidden="true"

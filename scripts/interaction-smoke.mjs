@@ -854,6 +854,25 @@ try {
             return next;
           }
 
+          if (mode === "pausedNoReadyLyrics") {
+            const next = clone(state);
+            next.playback = {
+              ...next.playback,
+              state: "paused"
+            };
+            next.lyrics = {
+              ...next.lyrics,
+              status: "not_found",
+              trackKey: "smoke-paused-no-ready-lyrics",
+              synced: false,
+              activeLineIndex: null,
+              lines: [],
+              message: "No lyrics found",
+              updatedAt: new Date().toISOString()
+            };
+            return next;
+          }
+
           if (mode === "bluetoothFallback" || mode === "bluetoothRealCover") {
             const next = withSource(state, "bluetooth");
             next.playback = {
@@ -1079,7 +1098,7 @@ try {
   await navigate(client, APP_URL);
   await expectEventually(
     client,
-    "document.querySelector('[data-hifi-now-playing][data-hifi-centered-now-playing]') !== null && document.querySelector('[data-hifi-cover-art]') !== null && document.querySelector('[data-hifi-track-info]') !== null && document.querySelector('[data-hifi-eq-visual]') === null && document.querySelector('[data-spectrum-band]') === null && document.querySelector('video.flame-video.is-active') === null && document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') === 'hifi'",
+    "document.querySelector('[data-hifi-now-playing][data-hifi-centered-now-playing]') !== null && document.querySelector('[data-hifi-cover-art]') !== null && document.querySelector('[data-hifi-track-info]') !== null && document.querySelector('[data-hifi-playback-presence][data-hifi-playback-state=\"playing\"]') !== null && document.querySelector('[data-hifi-eq-visual]') === null && document.querySelector('[data-spectrum-band]') === null && document.querySelector('video.flame-video.is-active') === null && document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') === 'hifi'",
     "Hi-Fi room mode renders centered cover and track info without EQ display",
     50,
     150
@@ -1089,18 +1108,21 @@ try {
     `
       (() => {
         const visuals = document.querySelector('[data-hifi-ambient-visuals]');
+        const presence = document.querySelector('[data-hifi-playback-presence]');
         const surface = document.querySelector('.hifi-now-playing-surface');
-        if (!visuals || !surface) return false;
+        if (!visuals || !presence || !surface) return false;
 
         const visualsStyle = getComputedStyle(visuals);
+        const presenceStyle = getComputedStyle(presence);
         const surfaceStyle = getComputedStyle(surface);
         return document.querySelectorAll('[data-hifi-wave-line]').length >= 7
           && document.querySelectorAll('[data-hifi-particle]').length >= 24
           && visualsStyle.pointerEvents === 'none'
+          && presenceStyle.pointerEvents === 'none'
           && Number.parseInt(visualsStyle.zIndex, 10) < Number.parseInt(surfaceStyle.zIndex, 10);
       })()
     `,
-    "Hi-Fi centered background renders lightweight non-blocking waves and particles"
+    "Hi-Fi centered background renders lightweight non-blocking waves, particles, and playback presence"
   );
   await expect(
     client,
@@ -1139,6 +1161,7 @@ try {
         const tickerText = tickerLine?.textContent?.trim() ?? "";
         return panel !== null
           && document.querySelector('[data-hifi-centered-now-playing]') === null
+          && document.querySelector('[data-hifi-playback-presence]') === null
           && document.querySelectorAll('[data-hifi-lyrics-line]').length >= 4
           && activeLine?.classList.contains('is-active') === true
           && activeText.length > 0
@@ -1208,8 +1231,26 @@ try {
   await waitForStatePatchRefresh(client, noReadyLyricsPatchVersion, "Hi-Fi no-ready lyrics fixture refreshes");
   await expectEventually(
     client,
-    "document.querySelector('[data-hifi-now-playing][data-hifi-centered-now-playing]') !== null && document.querySelector('[data-hifi-lyrics-panel]') === null && document.querySelector('.ambient-lyrics-ticker') === null && document.querySelector('[data-ambient-lyrics]')?.getAttribute('aria-hidden') === 'true'",
-    "Hi-Fi without ready lyrics returns to centered now-playing"
+    "document.querySelector('[data-hifi-now-playing][data-hifi-centered-now-playing]') !== null && document.querySelector('[data-hifi-playback-presence][data-hifi-playback-state=\"playing\"]') !== null && document.querySelector('[data-hifi-lyrics-panel]') === null && document.querySelector('.ambient-lyrics-ticker') === null && document.querySelector('[data-ambient-lyrics]')?.getAttribute('aria-hidden') === 'true'",
+    "Hi-Fi without ready lyrics returns to centered now-playing with playback presence"
+  );
+  const pausedNoReadyLyricsPatchVersion = await setStatePatchMode(client, "pausedNoReadyLyrics");
+  await waitForStatePatchRefresh(client, pausedNoReadyLyricsPatchVersion, "Hi-Fi paused no-ready lyrics fixture refreshes");
+  await expectEventually(
+    client,
+    `
+      (() => {
+        const scene = document.querySelector('[data-hifi-now-playing][data-hifi-centered-now-playing]');
+        const presence = document.querySelector('[data-hifi-playback-presence][data-hifi-playback-state="paused"]');
+        return scene !== null
+          && scene.classList.contains('is-paused')
+          && !scene.classList.contains('is-playing')
+          && presence !== null
+          && getComputedStyle(presence).animationName === 'none'
+          && document.querySelector('[data-hifi-lyrics-panel]') === null;
+      })()
+    `,
+    "Hi-Fi paused centered fallback keeps playback presence static"
   );
   const brokenArtworkPatchVersion = await setStatePatchMode(client, "brokenArtwork");
   await waitForStatePatchRefresh(client, brokenArtworkPatchVersion, "broken artwork fixture refreshes");

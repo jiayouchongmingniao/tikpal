@@ -763,6 +763,74 @@ select {
     width 220ms ease;
 }
 
+.hifi-playback-presence {
+  position: absolute;
+  z-index: 0;
+  top: 42%;
+  left: 50%;
+  width: min(560px, 76vw);
+  height: min(360px, 44vw);
+  border: 1px solid color-mix(in srgb, var(--hifi-theme-accent) 26%, transparent);
+  border-radius: 999px;
+  background:
+    radial-gradient(ellipse at 50% 46%, color-mix(in srgb, var(--hifi-theme-accent) 28%, transparent) 0%, transparent 58%),
+    radial-gradient(ellipse at 50% 54%, color-mix(in srgb, var(--hifi-theme-bg-b) 34%, transparent) 0%, transparent 68%);
+  box-shadow:
+    0 0 46px color-mix(in srgb, var(--hifi-theme-accent) 18%, transparent),
+    inset 0 0 44px rgba(255, 255, 255, 0.045);
+  filter: saturate(1.12);
+  opacity: 0.18;
+  pointer-events: none;
+  transform: translate(-50%, -50%) scale(0.96);
+}
+
+.hifi-playback-presence::after {
+  position: absolute;
+  inset: 9%;
+  border-radius: inherit;
+  background: conic-gradient(
+    from -18deg,
+    transparent 0deg,
+    color-mix(in srgb, var(--hifi-theme-accent) 34%, transparent) 46deg,
+    transparent 92deg,
+    transparent 196deg,
+    color-mix(in srgb, var(--hifi-theme-bg-b) 42%, rgba(117, 199, 236, 0.42)) 250deg,
+    transparent 306deg
+  );
+  content: "";
+  opacity: 0.42;
+}
+
+.eq-visual-scene[data-hifi-centered-now-playing].is-playing .hifi-ambient-visuals {
+  opacity: 0.98;
+}
+
+.eq-visual-scene[data-hifi-centered-now-playing].is-playing .hifi-wave-field {
+  filter:
+    drop-shadow(0 0 18px rgba(117, 199, 236, 0.22))
+    drop-shadow(0 0 32px var(--hifi-theme-accent-soft));
+  opacity: 0.96;
+}
+
+.eq-visual-scene[data-hifi-centered-now-playing].is-playing .hifi-wave-line {
+  stroke-width: 0.68;
+  animation-duration: calc(var(--hifi-wave-duration) - 6s);
+}
+
+.eq-visual-scene[data-hifi-centered-now-playing].is-playing .hifi-particle {
+  opacity: calc(var(--hifi-particle-opacity) + 0.12);
+  animation-duration: calc(var(--hifi-particle-duration) - 8s);
+}
+
+.eq-visual-scene[data-hifi-centered-now-playing].is-playing .hifi-playback-presence {
+  opacity: 0.54;
+  animation: hifi-presence-breathe 2.6s ease-in-out infinite alternate;
+}
+
+.eq-visual-scene[data-hifi-centered-now-playing].is-playing .hifi-playback-presence::after {
+  animation: hifi-presence-sweep 7s linear infinite;
+}
+
 .eq-visual-scene.has-lyrics-panel .hifi-ambient-visuals {
   opacity: 0.22;
 }
@@ -904,19 +972,42 @@ select {
   }
 }
 
+@keyframes hifi-presence-breathe {
+  from {
+    transform: translate(-50%, -50%) scale(0.96);
+  }
+
+  to {
+    transform: translate(-50%, -50%) scale(1.04);
+  }
+}
+
+@keyframes hifi-presence-sweep {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .hifi-wave-line,
-  .hifi-particle {
+  .hifi-particle,
+  .hifi-playback-presence,
+  .hifi-playback-presence::after {
     animation: none;
   }
 
   .hifi-ambient-visuals {
     opacity: 0.58;
   }
+
+  .eq-visual-scene[data-hifi-centered-now-playing].is-playing .hifi-playback-presence {
+    opacity: 0.44;
+  }
 }
 
 .hifi-cover-art {
   position: relative;
+  z-index: 1;
   display: grid;
   place-items: center;
   width: clamp(210px, 22vw, 300px);
@@ -947,6 +1038,8 @@ select {
 }
 
 .hifi-now-playing-copy {
+  position: relative;
+  z-index: 1;
   display: grid;
   justify-items: center;
   min-width: 0;
