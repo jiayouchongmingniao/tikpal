@@ -790,6 +790,13 @@ export function AmbientScreen({
   }, [ambientSceneAudioSuppressed, playback.source, sceneSoundEnabled]);
 
   useEffect(() => {
+    if (!isHifiMode || !pendingAmbientSource || status.pending) return;
+    if (audio.currentSource.id !== pendingAmbientSource) return;
+    setPendingAmbientSource(null);
+    setSourcePickerOpen(false);
+  }, [audio.currentSource.id, isHifiMode, pendingAmbientSource, status.pending]);
+
+  useEffect(() => {
     if (sourcePickerOpenRequest === lastSourcePickerOpenRequestRef.current) return;
     lastSourcePickerOpenRequestRef.current = sourcePickerOpenRequest;
     if (sourcePickerOpenRequest <= 0 || isHifiMode) return;

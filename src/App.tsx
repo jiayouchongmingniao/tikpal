@@ -16,6 +16,7 @@ import type { AppMode, BackgroundVideoSummary, FontTheme, LyricsFontSize, Rememb
 const FONT_THEME_STORAGE_KEY = "tikpal.fontTheme";
 const SURFACE_THEME_STORAGE_KEY = "tikpal.surfaceTheme";
 const LYRICS_VISIBLE_STORAGE_KEY = "tikpal.lyricsVisible.v3";
+const LYRICS_VISIBLE_AUTO_RESTORE_KEY = "tikpal.lyricsVisible.autoRestored.v1";
 const LYRICS_FONT_SIZE_STORAGE_KEY = "tikpal.lyricsFontSize";
 const SCENE_VIDEO_ENABLED_STORAGE_KEY = "tikpal.sceneVideoEnabled";
 const CLOCK_VISIBLE_STORAGE_KEY = "tikpal.clockVisible";
@@ -63,7 +64,13 @@ function readInitialSurfaceTheme(): SurfaceTheme {
 }
 
 function readInitialLyricsVisible() {
-  return readStoredBoolean(LYRICS_VISIBLE_STORAGE_KEY, true);
+  const visible = readStoredBoolean(LYRICS_VISIBLE_STORAGE_KEY, true);
+  if (!visible && window.localStorage.getItem(LYRICS_VISIBLE_AUTO_RESTORE_KEY) !== "true") {
+    window.localStorage.setItem(LYRICS_VISIBLE_AUTO_RESTORE_KEY, "true");
+    window.localStorage.setItem(LYRICS_VISIBLE_STORAGE_KEY, "true");
+    return true;
+  }
+  return visible;
 }
 
 function readInitialLyricsFontSize(): LyricsFontSize {
@@ -146,12 +153,39 @@ function normalizeLibraryTrackPath(value: string | null | undefined) {
   return normalized.startsWith("Codex/") ? normalized.slice("Codex/".length) : normalized;
 }
 
+function normalizeTrackIdentityText(value: string | null | undefined) {
+  return String(value ?? "").trim().toLocaleLowerCase();
+}
+
+function parseRememberedLibraryTrackIdentity(localTrackPath: string) {
+  const filename = normalizeLibraryTrackPath(localTrackPath).split("/").pop()?.replace(/\.[^.]+$/, "") ?? "";
+  const parts = filename.split(" - ").map((part) => part.trim()).filter(Boolean);
+  const durationMatch = filename.match(/(\d{1,2})m(\d{2})s/i);
+  const minutes = Number(durationMatch?.[1]);
+  const seconds = Number(durationMatch?.[2]);
+  return {
+    artist: parts[0] ?? "",
+    title: parts[1] ?? filename,
+    durationSeconds: Number.isFinite(minutes) && Number.isFinite(seconds) ? minutes * 60 + seconds : null
+  };
+}
+
 function isRememberedLibraryTrackCurrent(state: TikpalState, localTrackPath: string) {
   const rememberedPath = normalizeLibraryTrackPath(localTrackPath);
   if (!rememberedPath) return false;
-  return state.playback.queuePreview.some((entry) => (
-    entry.active && normalizeLibraryTrackPath(entry.id) === rememberedPath
-  ));
+  const activeEntry = state.playback.queuePreview.find((entry) => entry.active);
+  if (!activeEntry) return false;
+  if (normalizeLibraryTrackPath(activeEntry.id) === rememberedPath) return true;
+
+  const identity = parseRememberedLibraryTrackIdentity(rememberedPath);
+  const titleMatches = Boolean(identity.title)
+    && normalizeTrackIdentityText(activeEntry.title) === normalizeTrackIdentityText(identity.title);
+  const artistMatches = !identity.artist
+    || normalizeTrackIdentityText(activeEntry.artist) === normalizeTrackIdentityText(identity.artist);
+  const durationMatches = identity.durationSeconds === null
+    || activeEntry.durationSeconds === null
+    || Math.abs(activeEntry.durationSeconds - identity.durationSeconds) <= 2;
+  return titleMatches && artistMatches && durationMatches;
 }
 
 function shouldRestoreRememberedSource(state: TikpalState, rememberedSource: RememberedAudioSource | null | undefined) {
@@ -432,7 +466,9 @@ export default function App() {
     const previousTarget = getRollbackSourceTarget(tikpalState);
     const nextState = await sendSourceSwitch(target, radioStationId, localTrackPath, sceneVideo);
 
-    if (isExternalHandoffTarget(target) && !isSourceHandoffReady(nextState, target)) {
+    const isHifiRoomMode = roomExperience.mode === "hifi" || roomExperienceRef.current?.mode === "hifi";
+    const shouldWaitForExternalHandoff = isExternalHandoffTarget(target) && !isHifiRoomMode;
+    if (shouldWaitForExternalHandoff && !isSourceHandoffReady(nextState, target)) {
       const deadline = Date.now() + EXTERNAL_HANDOFF_TIMEOUT_MS;
       let latestState = nextState;
 
@@ -463,7 +499,7 @@ export default function App() {
       await refreshRoomExperience();
     }
     return nextState;
-  }, [refresh, refreshRoomExperience, sendSourceSwitch, tikpalState.audio.currentSource.connectionState, tikpalState.audio.currentSource.id]);
+  }, [refresh, refreshRoomExperience, roomExperience.mode, sendSourceSwitch, tikpalState.audio.currentSource.connectionState, tikpalState.audio.currentSource.id]);
 
   const restoreSceneSoundAfterStaleHifiRestore = useCallback(async () => {
     let latestRoom = roomExperienceRef.current;

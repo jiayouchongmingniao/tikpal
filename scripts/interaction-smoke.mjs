@@ -441,6 +441,44 @@ async function waitForStatePatchRefresh(client, previousVersion, label) {
   await wait(120);
 }
 
+async function restoreInteractionFetchMocks(client) {
+  await evaluate(
+    client,
+    `
+      (() => {
+        if (window.__tikpalRememberedLibraryOriginalFetch) {
+          window.fetch = window.__tikpalRememberedLibraryOriginalFetch;
+          delete window.__tikpalRememberedLibraryOriginalFetch;
+        }
+        if (window.__tikpalRememberedRadioOriginalFetch) {
+          window.fetch = window.__tikpalRememberedRadioOriginalFetch;
+          delete window.__tikpalRememberedRadioOriginalFetch;
+        }
+        window.__tikpalSmokeStatePatchMode = "";
+        return true;
+      })()
+    `
+  );
+}
+
+async function switchRoomModeAndNavigate(client, mode, label) {
+  await restoreInteractionFetchMocks(client);
+  await postExperienceAction(client, { type: "set_mode", mode });
+  await navigate(client, APP_URL);
+  await expectEventuallyEvaluate(
+    client,
+    `
+      Promise.all([
+        fetch('/api/v1/experience/state').then((response) => response.json()),
+        Promise.resolve(document.querySelector('.ambient-screen')?.getAttribute('data-room-mode'))
+      ]).then(([experience, domMode]) => experience.mode === ${JSON.stringify(mode)} && domMode === ${JSON.stringify(mode)})
+    `,
+    label,
+    45,
+    150
+  );
+}
+
 function sourceTabExpression(sourceId, { selected, active }) {
   return `
     (() => {
@@ -462,6 +500,68 @@ function sourceHandoffExpression(sourceId) {
       return Boolean(card && card.textContent?.includes('Waiting for connection'));
     })()
   `;
+}
+
+function hifiAmbientSourceSettledExpression(sourceId) {
+  const label = {
+    mpd: "Library",
+    radio: "Radio",
+    bluetooth: "Bluetooth",
+    airplay: "AirPlay"
+  }[sourceId] ?? sourceId;
+  return `
+    fetch('/api/v1/system/state')
+      .then((response) => response.json())
+      .then((state) => {
+        const toggleTitle = document.querySelector('[data-ambient-source-toggle]')?.getAttribute('title') ?? '';
+        return state.audio.currentSource.id === ${JSON.stringify(sourceId)}
+          && state.playback.source === ${JSON.stringify(sourceId)}
+          && toggleTitle.includes(${JSON.stringify(label)});
+      })
+  `;
+}
+
+async function waitForEvaluate(client, expression, attempts = 20, delayMs = 150) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (await evaluate(client, expression)) return true;
+    await wait(delayMs);
+  }
+  return false;
+}
+
+async function switchHifiAmbientSource(client, sourceId, exposeLabel, switchLabel) {
+  const optionExpression = `document.querySelector('[data-ambient-source-option="${sourceId}"]:not(:disabled)') !== null`;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await evaluate(
+      client,
+      `
+        (() => {
+          if (!document.querySelector('[data-ambient-source-picker]')) {
+            document.querySelector('[data-ambient-source-toggle]:not(:disabled)')?.click();
+          }
+          return true;
+        })()
+      `
+    );
+    if (!await waitForEvaluate(client, optionExpression, 20, 150)) continue;
+    if (attempt === 0) console.log(`ok - ${exposeLabel}`);
+    const clicked = await evaluate(
+      client,
+      `
+        (() => {
+          const target = document.querySelector('[data-ambient-source-option="${sourceId}"]:not(:disabled)');
+          target?.click();
+          return Boolean(target);
+        })()
+      `
+    );
+    if (!clicked) continue;
+    if (await waitForEvaluate(client, hifiAmbientSourceSettledExpression(sourceId), 20, 150)) {
+      console.log(`ok - ${switchLabel}`);
+      return;
+    }
+  }
+  throw new Error(`Failed: ${switchLabel}`);
 }
 
 async function switchPlayerSourceAndExpectHandoff(client, sourceId, sourceLabel) {
@@ -1051,6 +1151,11 @@ try {
   await expect(client, "document.querySelector('.ambient-screen') !== null", "ambient root renders");
   await expect(
     client,
+    "window.localStorage.getItem('tikpal.lyricsVisible.v3') === 'true' && window.localStorage.getItem('tikpal.lyricsVisible.autoRestored.v1') === 'true'",
+    "stale hidden lyrics visibility auto-restores once"
+  );
+  await expect(
+    client,
     `
       (() => {
         const left = document.querySelector('.ambient-adjust-zone-left');
@@ -1125,8 +1230,8 @@ try {
           && document.querySelectorAll('[data-hifi-particle]').length >= 24
           && visualsStyle.pointerEvents === 'none'
           && presenceStyle.pointerEvents === 'none'
-          && presenceWidth >= 930
-          && presenceHeight >= 610
+          && presenceWidth >= 870
+          && presenceHeight >= 570
           && waveStyle.animationName !== 'none'
           && waveStyle.animationPlayState === 'running'
           && particleStyle.animationName !== 'none'
@@ -1305,21 +1410,35 @@ try {
   );
   await wait(5200);
   await expectEventually(client, "document.querySelector('[data-ambient-source-picker]') === null", "Hi-Fi source picker auto-closes after 5 seconds");
-  await evaluate(client, "document.querySelector('[data-ambient-source-toggle]')?.click()");
-  await expectEventually(client, "document.querySelector('[data-ambient-source-option=\"radio\"]') !== null", "Hi-Fi source picker exposes Radio");
-  await evaluate(client, "document.querySelector('[data-ambient-source-option=\"radio\"]')?.click()");
+  await switchHifiAmbientSource(client, "radio", "Hi-Fi source picker exposes Radio", "Hi-Fi source picker switches immediately to Radio");
+  await expectEventually(client, "document.querySelector('[data-ambient-source-toggle]:not(:disabled)') !== null", "Hi-Fi source toggle is ready after Radio");
+  await switchHifiAmbientSource(client, "bluetooth", "Hi-Fi source picker exposes Bluetooth", "Hi-Fi source picker switches immediately to Bluetooth waiting state");
+  await expectEventually(client, "document.querySelector('[data-ambient-source-toggle]:not(:disabled)') !== null", "Hi-Fi source toggle is ready after Bluetooth");
+  await switchHifiAmbientSource(client, "airplay", "Hi-Fi source picker exposes AirPlay after Bluetooth", "Hi-Fi source picker switches from Bluetooth to AirPlay waiting state");
+  await expectEventually(client, "document.querySelector('[data-ambient-source-toggle]:not(:disabled)') !== null", "Hi-Fi source toggle is ready after AirPlay");
+  await switchHifiAmbientSource(client, "bluetooth", "Hi-Fi source picker exposes Bluetooth after AirPlay", "Hi-Fi source picker switches from AirPlay to Bluetooth waiting state");
+  await expectEventually(client, "document.querySelector('[data-ambient-source-toggle]:not(:disabled)') !== null", "Hi-Fi source toggle is ready after AirPlay-to-Bluetooth");
+  await switchHifiAmbientSource(client, "airplay", "Hi-Fi source picker exposes AirPlay after AirPlay-to-Bluetooth", "Hi-Fi source picker returns from Bluetooth to AirPlay waiting state");
+  await expectEventually(client, "document.querySelector('[data-ambient-source-toggle]:not(:disabled)') !== null", "Hi-Fi source toggle is ready after AirPlay return");
+  await switchHifiAmbientSource(client, "mpd", "Hi-Fi source picker exposes Library after AirPlay", "Hi-Fi source picker switches back to Library after AirPlay");
+  await expectEventually(client, "document.querySelector('[data-ambient-source-toggle]:not(:disabled)') !== null", "Hi-Fi source toggle is ready after Library");
+  await switchHifiAmbientSource(client, "bluetooth", "Hi-Fi source picker exposes Bluetooth after Library", "Hi-Fi source picker switches from Library to Bluetooth waiting state");
+  await evaluate(
+    client,
+    `
+      fetch('/api/v1/audio/source', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target: 'radio' })
+      }).then((response) => response.ok)
+    `
+  );
   await expectEventuallyEvaluate(
     client,
     "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => state.audio.currentSource.id === 'radio' && state.playback.source === 'radio')",
-    "Hi-Fi source picker switches immediately to Radio"
+    "Hi-Fi source picker regression restores Radio fixture for remembered-source checks"
   );
-  await postExperienceAction(client, { type: "set_mode", mode: "focus" });
-  await navigate(client, APP_URL);
-  await expectEventually(
-    client,
-    "document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') === 'focus'",
-    "Focus room mode is active before Hi-Fi remembered-source restore"
-  );
+  await switchRoomModeAndNavigate(client, "focus", "Focus room mode is active before Hi-Fi remembered-source restore");
   await evaluate(
     client,
     `
@@ -1336,13 +1455,7 @@ try {
     "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') === 'hifi' && state.audio.currentSource.id === 'radio' && state.playback.source === 'radio')",
     "Hi-Fi entry restores the remembered Radio source"
   );
-  await postExperienceAction(client, { type: "set_mode", mode: "focus" });
-  await navigate(client, APP_URL);
-  await expectEventually(
-    client,
-    "document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') === 'focus'",
-    "Focus room mode is active before Hi-Fi remembered station restore"
-  );
+  await switchRoomModeAndNavigate(client, "focus", "Focus room mode is active before Hi-Fi remembered station restore");
   const differentRadioPatchVersion = await setStatePatchMode(client, "hifiRememberedDifferentRadio");
   await waitForStatePatchRefresh(client, differentRadioPatchVersion, "Hi-Fi different remembered Radio fixture refreshes");
   await evaluate(
@@ -1433,13 +1546,7 @@ try {
       })()
     `
   );
-  await postExperienceAction(client, { type: "set_mode", mode: "focus" });
-  await navigate(client, APP_URL);
-  await expectEventually(
-    client,
-    "document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') === 'focus'",
-    "Focus room mode is active before delayed Hi-Fi remembered station restore"
-  );
+  await switchRoomModeAndNavigate(client, "focus", "Focus room mode is active before delayed Hi-Fi remembered station restore");
   const pendingRadioPatchVersion = await setStatePatchMode(client, "hifiRememberedRadioPendingMemory");
   await waitForStatePatchRefresh(client, pendingRadioPatchVersion, "Hi-Fi pending remembered Radio fixture refreshes");
   await evaluate(
@@ -1535,8 +1642,7 @@ try {
       })()
     `
   );
-  await postExperienceAction(client, { type: "set_mode", mode: "focus" });
-  await navigate(client, APP_URL);
+  await switchRoomModeAndNavigate(client, "focus", "Focus room mode is active before same Hi-Fi remembered station restore");
   const sameRadioPatchVersion = await setStatePatchMode(client, "hifiRememberedSameRadio");
   await waitForStatePatchRefresh(client, sameRadioPatchVersion, "Hi-Fi same remembered Radio fixture refreshes");
   await evaluate(
@@ -1588,8 +1694,7 @@ try {
       })()
     `
   );
-  await postExperienceAction(client, { type: "set_mode", mode: "focus" });
-  await navigate(client, APP_URL);
+  await switchRoomModeAndNavigate(client, "focus", "Focus room mode is active before Hi-Fi remembered Library restore");
   const differentLibraryPatchVersion = await setStatePatchMode(client, "hifiRememberedDifferentLibrary");
   await waitForStatePatchRefresh(client, differentLibraryPatchVersion, "Hi-Fi different remembered Library fixture refreshes");
   await evaluate(
@@ -1686,8 +1791,7 @@ try {
       })()
     `
   );
-  await postExperienceAction(client, { type: "set_mode", mode: "focus" });
-  await navigate(client, APP_URL);
+  await switchRoomModeAndNavigate(client, "focus", "Focus room mode is active before same Hi-Fi remembered Library restore");
   const sameLibraryPatchVersion = await setStatePatchMode(client, "hifiRememberedSameLibrary");
   await waitForStatePatchRefresh(client, sameLibraryPatchVersion, "Hi-Fi same remembered Library fixture refreshes");
   await evaluate(

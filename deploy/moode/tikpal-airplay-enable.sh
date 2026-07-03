@@ -58,6 +58,10 @@ ensure_shairport_output() {
   fi
 }
 
+shairport_receiver_running() {
+  pgrep -f '[s]hairport-sync' >/dev/null 2>&1
+}
+
 ensure_loopback_output
 ensure_shairport_output
 
@@ -74,7 +78,11 @@ if command -v systemctl >/dev/null 2>&1; then
     || true
 
   sleep 2
-  if [ "$shairport_config_changed" -eq 1 ]; then
+  if shairport_receiver_running; then
+    systemctl reset-failed shairport-sync.service >/dev/null 2>&1 \
+      || sudo -n systemctl reset-failed shairport-sync.service >/dev/null 2>&1 \
+      || true
+  elif [ "$shairport_config_changed" -eq 1 ]; then
     systemctl restart shairport-sync.service >/dev/null 2>&1 \
       || sudo -n systemctl restart shairport-sync.service >/dev/null 2>&1 \
       || true

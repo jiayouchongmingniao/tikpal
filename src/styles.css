@@ -768,8 +768,8 @@ select {
   z-index: 0;
   top: 42%;
   left: 50%;
-  width: min(945px, 84vw);
-  height: min(620px, 55vw);
+  width: min(885px, 84vw);
+  height: min(580px, 55vw);
   border: 1px solid color-mix(in srgb, var(--hifi-theme-accent) 26%, transparent);
   border-radius: 999px;
   background:

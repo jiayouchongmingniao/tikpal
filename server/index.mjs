@@ -98,7 +98,7 @@ const AIRPLAY_ACTIVE_COMMAND = process.env.TIKPAL_AIRPLAY_ACTIVE_COMMAND ?? "";
 const AIRPLAY_ENABLE_COMMAND = process.env.TIKPAL_AIRPLAY_ENABLE_COMMAND ?? "";
 const AIRPLAY_DISABLE_COMMAND = process.env.TIKPAL_AIRPLAY_DISABLE_COMMAND ?? "";
 const AIRPLAY_LABEL_COMMAND = process.env.TIKPAL_AIRPLAY_LABEL_COMMAND ?? "";
-const AIRPLAY_RECEIVER_ACTIVE_COMMAND = process.env.TIKPAL_AIRPLAY_RECEIVER_ACTIVE_COMMAND ?? "systemctl is-active --quiet shairport-sync.service";
+const AIRPLAY_RECEIVER_ACTIVE_COMMAND = process.env.TIKPAL_AIRPLAY_RECEIVER_ACTIVE_COMMAND ?? "sh -lc '(command -v ss >/dev/null 2>&1 && ss -ltn sport = :7000 | grep -q LISTEN) || systemctl is-active --quiet shairport-sync.service'";
 const AIRPLAY_METADATA_COMMAND = process.env.TIKPAL_AIRPLAY_METADATA_COMMAND ?? "";
 const AIRPLAY_TRANSPORT_AVAILABLE_COMMAND = process.env.TIKPAL_AIRPLAY_TRANSPORT_AVAILABLE_COMMAND ?? "./deploy/moode/tikpal-airplay-transport.sh available";
 const AIRPLAY_PLAY_PAUSE_COMMAND = process.env.TIKPAL_AIRPLAY_PLAY_PAUSE_COMMAND ?? "./deploy/moode/tikpal-airplay-transport.sh play-pause";
@@ -185,6 +185,8 @@ const REMOTE_METADATA_TIMEOUT_MS = Number(process.env.TIKPAL_REMOTE_METADATA_TIM
 const LYRICS_ERROR_BACKOFF_MS = Number(process.env.TIKPAL_LYRICS_ERROR_BACKOFF_MS ?? 90000);
 const BLUETOOTH_LYRICS_MIN_TIMED_DURATION_MS = 30_000;
 const BLUETOOTH_LYRICS_DURATION_GRACE_MS = 2_000;
+const AIRPLAY_METADATA_POSITION_GRACE_MS = 30_000;
+const AIRPLAY_LYRICS_UNRELIABLE_DURATION_MS = 45_000;
 const REMOTE_MEDIA_CACHE_ROOT = resolve(process.cwd(), ".cache", "remote-media");
 const REMOTE_ARTWORK_CACHE_DIR = resolve(REMOTE_MEDIA_CACHE_ROOT, "artwork");
 const REMOTE_ARTWORK_INDEX_DIR = resolve(REMOTE_MEDIA_CACHE_ROOT, "artwork-index");
@@ -2129,7 +2131,7 @@ function shouldRefreshAirplayPlaybackMetadata(state, { force = false } = {}) {
 }
 
 function mergeAirplayPlaybackMetadata(state, metadata) {
-  if (!metadata?.title) return state;
+  if (!isUsableAirplayPlaybackMetadata(metadata)) return clearAirplayPlaybackMetadata(state);
 
   const airplaySource = getAirplaySourceSummaryFromState(state);
   if (airplaySource?.connectionState !== "connected") return state;
@@ -2144,6 +2146,33 @@ function mergeAirplayPlaybackMetadata(state, metadata) {
     elapsedSeconds: millisecondsToSeconds(metadata.positionMs),
     durationSeconds: millisecondsToSeconds(metadata.durationMs, { allowZero: false }),
     timingDiagnostics: metadata.timingDiagnostics ?? null
+  };
+  const nextState = {
+    ...state,
+    playback
+  };
+
+  return {
+    ...nextState,
+    lyrics: scheduleLyricsRecognition(nextState)
+  };
+}
+
+function clearAirplayPlaybackMetadata(state) {
+  if (state?.playback?.source !== "airplay") return state;
+
+  const airplaySource = getAirplaySourceSummaryFromState(state);
+  const playback = {
+    ...state.playback,
+    state: "stopped",
+    albumArtUrl: null,
+    title: "AirPlay Ready",
+    artist: airplaySource?.connectedLabel
+      || (airplaySource?.advertisedLabel ? `Choose ${airplaySource.advertisedLabel} from AirPlay` : "Choose Tikpal from AirPlay"),
+    album: "AirPlay Source",
+    elapsedSeconds: null,
+    durationSeconds: null,
+    timingDiagnostics: null
   };
   const nextState = {
     ...state,
@@ -2178,6 +2207,25 @@ function mapBluetoothPlaybackState(metadata) {
     default:
       return metadata ? "playing" : "paused";
   }
+}
+
+function isUsableAirplayPlaybackMetadata(metadata) {
+  if (!metadata?.title) return false;
+  if (metadata.status === "stopped") return false;
+
+  const positionMs = Number(metadata.positionMs);
+  const durationMs = Number(metadata.durationMs);
+  if (
+    metadata.status === "playing"
+    && Number.isFinite(positionMs)
+    && Number.isFinite(durationMs)
+    && durationMs > 0
+    && positionMs > durationMs + AIRPLAY_METADATA_POSITION_GRACE_MS
+  ) {
+    return false;
+  }
+
+  return true;
 }
 
 function millisecondsToSeconds(value, { allowZero = true } = {}) {
@@ -4692,10 +4740,88 @@ async function getAirplaySourceStatus({ readyCommand, activeCommand, labelComman
 }
 
 async function ensureAirplayReceiverState(enabled) {
+  if (enabled && await commandSucceeds(AIRPLAY_RECEIVER_ACTIVE_COMMAND, { timeout: 2500 })) {
+    return;
+  }
   const command = enabled
     ? "sh -lc 'systemctl start shairport-sync.service >/dev/null 2>&1 || sudo -n systemctl start shairport-sync.service >/dev/null 2>&1 || true'"
-    : "sh -lc 'systemctl stop shairport-sync.service >/dev/null 2>&1 || sudo -n systemctl stop shairport-sync.service >/dev/null 2>&1 || true'";
+    : "sh -lc 'systemctl stop shairport-sync.service >/dev/null 2>&1 || sudo -n systemctl stop shairport-sync.service >/dev/null 2>&1 || true; systemctl reset-failed shairport-sync.service >/dev/null 2>&1 || sudo -n systemctl reset-failed shairport-sync.service >/dev/null 2>&1 || true'";
   await runCommand(command, { allowFailure: true, timeout: 5000 });
+}
+
+let externalSourceCleanupPromise = null;
+let externalSourceCleanupQueued = false;
+let externalSourceCleanupTarget = null;
+let externalAutoArmSuppressedUntilMs = 0;
+
+function suppressExternalHandoffAutoArm(ms = 10000) {
+  externalAutoArmSuppressedUntilMs = Date.now() + ms;
+  externalSourceCleanupTarget = null;
+}
+
+function allowExternalHandoffAutoArm() {
+  externalAutoArmSuppressedUntilMs = 0;
+}
+
+function shouldSkipExternalSourceCleanup(source, keepSource) {
+  return source === keepSource || source === externalSourceCleanupTarget || source === mockArmedSource;
+}
+
+async function disableExternalSourceForCleanup(source, keepSource) {
+  if (shouldSkipExternalSourceCleanup(source, keepSource)) return;
+
+  switch (source) {
+    case "spotify":
+      if (SPOTIFY_DISABLE_COMMAND) {
+        await runSystemActionCommand(SPOTIFY_DISABLE_COMMAND, "spotify connect cleanup");
+      }
+      return;
+    case "bluetooth":
+      if (BLUETOOTH_DISABLE_COMMAND) {
+        await runSystemActionCommand(BLUETOOTH_DISABLE_COMMAND, "bluetooth cleanup");
+      }
+      return;
+    case "airplay":
+      if (AIRPLAY_DISABLE_COMMAND) {
+        await runSystemActionCommand(AIRPLAY_DISABLE_COMMAND, "airplay cleanup");
+      }
+      await ensureAirplayReceiverState(false);
+      return;
+    case "upnp":
+      if (UPNP_DISABLE_COMMAND) {
+        await runSystemActionCommand(UPNP_DISABLE_COMMAND, "dlna cleanup");
+      }
+      return;
+    default:
+      return;
+  }
+}
+
+async function cleanupExternalSourcesExcept(keepSource) {
+  for (const source of COMMAND_HANDOFF_SOURCE_TARGETS) {
+    await disableExternalSourceForCleanup(source, keepSource);
+  }
+}
+
+function scheduleExternalSourceCleanup(keepSource) {
+  externalSourceCleanupTarget = keepSource;
+  if (externalSourceCleanupPromise) {
+    externalSourceCleanupQueued = true;
+    return;
+  }
+
+  externalSourceCleanupPromise = (async () => {
+    try {
+      do {
+        externalSourceCleanupQueued = false;
+        await cleanupExternalSourcesExcept(externalSourceCleanupTarget);
+      } while (externalSourceCleanupQueued);
+    } catch (error) {
+      console.warn(`tikpal-api external source cleanup failed: ${error instanceof Error ? error.message : "unknown error"}`);
+    } finally {
+      externalSourceCleanupPromise = null;
+    }
+  })();
 }
 
 async function releaseKioskAudioOutputForMpd(target) {
@@ -4720,10 +4846,10 @@ async function enforceConnectionGate(nextSource) {
     if (AIRPLAY_DISABLE_COMMAND) {
       await runSystemActionCommand(AIRPLAY_DISABLE_COMMAND, "airplay disable");
     }
+    await ensureAirplayReceiverState(false);
     if (UPNP_DISABLE_COMMAND) {
       await runSystemActionCommand(UPNP_DISABLE_COMMAND, "dlna disable");
     }
-    await ensureAirplayReceiverState(false);
     return;
   }
 
@@ -4751,16 +4877,7 @@ async function enforceConnectionGate(nextSource) {
     if (SPOTIFY_ACTIVATE_COMMAND) {
       await runSystemActionCommand(SPOTIFY_ACTIVATE_COMMAND, "spotify connect activate");
     }
-    if (BLUETOOTH_DISABLE_COMMAND) {
-      await runSystemActionCommand(BLUETOOTH_DISABLE_COMMAND, "bluetooth disable");
-    }
-    if (AIRPLAY_DISABLE_COMMAND) {
-      await runSystemActionCommand(AIRPLAY_DISABLE_COMMAND, "airplay disable");
-    }
-    if (UPNP_DISABLE_COMMAND) {
-      await runSystemActionCommand(UPNP_DISABLE_COMMAND, "dlna disable");
-    }
-    await ensureAirplayReceiverState(false);
+    scheduleExternalSourceCleanup("spotify");
     return;
   }
 
@@ -4769,15 +4886,7 @@ async function enforceConnectionGate(nextSource) {
       throw new Error("bluetooth gating is unavailable in this runtime");
     }
     await runSystemActionCommand(BLUETOOTH_ENABLE_COMMAND, "bluetooth enable");
-    if (SPOTIFY_DISABLE_COMMAND) {
-      await runSystemActionCommand(SPOTIFY_DISABLE_COMMAND, "spotify connect disable");
-    }
-    if (AIRPLAY_DISABLE_COMMAND) {
-      await runSystemActionCommand(AIRPLAY_DISABLE_COMMAND, "airplay disable");
-    }
-    if (UPNP_DISABLE_COMMAND) {
-      await runSystemActionCommand(UPNP_DISABLE_COMMAND, "dlna disable");
-    }
+    scheduleExternalSourceCleanup("bluetooth");
     return;
   }
 
@@ -4787,15 +4896,7 @@ async function enforceConnectionGate(nextSource) {
     }
     await runSystemActionCommand(AIRPLAY_ENABLE_COMMAND, "airplay enable");
     await ensureAirplayReceiverState(true);
-    if (SPOTIFY_DISABLE_COMMAND) {
-      await runSystemActionCommand(SPOTIFY_DISABLE_COMMAND, "spotify connect disable");
-    }
-    if (BLUETOOTH_DISABLE_COMMAND) {
-      await runSystemActionCommand(BLUETOOTH_DISABLE_COMMAND, "bluetooth disable");
-    }
-    if (UPNP_DISABLE_COMMAND) {
-      await runSystemActionCommand(UPNP_DISABLE_COMMAND, "dlna disable");
-    }
+    scheduleExternalSourceCleanup("airplay");
     return;
   }
 
@@ -4804,16 +4905,7 @@ async function enforceConnectionGate(nextSource) {
       throw new Error("dlna gating is unavailable in this runtime");
     }
     await runSystemActionCommand(UPNP_ENABLE_COMMAND, "dlna enable");
-    if (SPOTIFY_DISABLE_COMMAND) {
-      await runSystemActionCommand(SPOTIFY_DISABLE_COMMAND, "spotify connect disable");
-    }
-    if (BLUETOOTH_DISABLE_COMMAND) {
-      await runSystemActionCommand(BLUETOOTH_DISABLE_COMMAND, "bluetooth disable");
-    }
-    if (AIRPLAY_DISABLE_COMMAND) {
-      await runSystemActionCommand(AIRPLAY_DISABLE_COMMAND, "airplay disable");
-    }
-    await ensureAirplayReceiverState(false);
+    scheduleExternalSourceCleanup("upnp");
     return;
   }
 
@@ -4832,7 +4924,7 @@ async function enforceConnectionGate(nextSource) {
   await ensureAirplayReceiverState(false);
 }
 
-async function getMpcAudioSnapshot(currentFile) {
+async function getMpcAudioSnapshot(currentFile, status = null) {
   const radioStations = await getAvailableRadioStations();
   const [audioSourceState, spotifyState, bluetoothState, airplayState, upnpState] = await Promise.all([
     getSourceStatusFromCommands({
@@ -4900,41 +4992,63 @@ async function getMpcAudioSnapshot(currentFile) {
   ]);
   const radioReady = Boolean(RADIO_ACTIVATE_COMMAND || RADIO_DEFAULT_URI || radioStations.length > 0);
   const radioActive = isStreamUri(currentFile);
+  const mpcPlaybackState = String(status?.state ?? "").trim().toLowerCase();
+  const mpdPlaybackActive = Boolean(currentFile) && mpcPlaybackState !== "stopped";
+  const activeMpdSource = mpdPlaybackActive
+    ? radioActive
+      ? "radio"
+      : "mpd"
+    : null;
+  const canHonorExternalHandoff = Date.now() >= externalAutoArmSuppressedUntilMs;
+  const preferredHandoffSource = canHonorExternalHandoff && mockArmedSource && COMMAND_HANDOFF_SOURCE_TARGETS.has(mockArmedSource)
+    ? mockArmedSource
+    : null;
   const activeSource = mockArmedSource === "scene"
     ? "scene"
-    : audioSourceState.connected
-    ? "audio"
-    : spotifyState.connected
-      ? "spotify"
-      : bluetoothState.connected
-        ? "bluetooth"
-        : airplayState.connected
-          ? "airplay"
-          : upnpState.connected
-            ? "upnp"
-          : audioSourceState.armed
-            ? "audio"
-            : spotifyState.armed
-              ? "spotify"
-              : bluetoothState.armed
-                ? "bluetooth"
-                : airplayState.armed
-                  ? "airplay"
-                  : upnpState.armed
-                    ? "upnp"
-                    : radioActive
-                      ? "radio"
-                      : "mpd";
-  if (!mockArmedSource && COMMAND_HANDOFF_SOURCE_TARGETS.has(activeSource)) {
+    : preferredHandoffSource
+      ? preferredHandoffSource
+      : activeMpdSource
+        ? activeMpdSource
+      : audioSourceState.connected
+        ? "audio"
+        : spotifyState.connected
+          ? "spotify"
+          : bluetoothState.connected
+            ? "bluetooth"
+            : airplayState.connected
+              ? "airplay"
+              : upnpState.connected
+                ? "upnp"
+                : audioSourceState.armed
+                  ? "audio"
+                  : spotifyState.armed
+                    ? "spotify"
+                    : bluetoothState.armed
+                      ? "bluetooth"
+                      : airplayState.armed
+                        ? "airplay"
+                        : upnpState.armed
+                          ? "upnp"
+                          : radioActive
+                            ? "radio"
+                            : "mpd";
+  const connectedHandoffSource = (activeSource === "spotify" && spotifyState.connected)
+    || (activeSource === "bluetooth" && bluetoothState.connected)
+    || (activeSource === "airplay" && airplayState.connected)
+    || (activeSource === "upnp" && upnpState.connected);
+  if (canHonorExternalHandoff && !mockArmedSource && connectedHandoffSource) {
     mockArmedSource = activeSource;
   }
   const nextRadioStations = radioActive
     ? markActiveRadioStations(radioStations, currentFile)
     : radioStations.map((station) => ({ ...station, active: false }));
+  const reportedArmedSource = !canHonorExternalHandoff && COMMAND_HANDOFF_SOURCE_TARGETS.has(mockArmedSource)
+    ? null
+    : mockArmedSource;
 
   return buildAudioState({
     activeSource,
-    armedSource: mockArmedSource,
+    armedSource: reportedArmedSource,
     radioReady,
     radioActive,
     radioStations: nextRadioStations,
@@ -5174,7 +5288,11 @@ async function getMpcSnapshot(options = {}) {
   ]);
 
   const status = parseMpcStatus(statusRaw);
-  const [title, artist, album, rawFile, duration] = currentRaw.split("\t");
+  const currentColumns = currentRaw.split("\t");
+  const hasFormattedCurrent = currentColumns.length >= 4;
+  const [title, artist, album, rawFile, duration] = hasFormattedCurrent
+    ? currentColumns
+    : ["", "", "", extractMpcCurrentFile(currentRaw), ""];
   const file = getEffectiveMpcCurrentFile(rawFile, status);
   const hasCurrentTrack = Boolean(currentRaw.trim()) || Boolean(file);
   const durationSeconds = parseDuration(duration) ?? status.durationSeconds;
@@ -5183,7 +5301,7 @@ async function getMpcSnapshot(options = {}) {
     : getCachedMpcSystemSnapshot(statusRaw, statsRaw);
   const useCachedSceneSourceRuntimeStatus = includeSourceRuntimeStatus && shouldUseCachedSceneSourceRuntimeStatus(file);
   const audio = includeSourceRuntimeStatus && !useCachedSceneSourceRuntimeStatus
-    ? await getMpcAudioSnapshot(file)
+    ? await getMpcAudioSnapshot(file, status)
     : buildMinimalMpcAudioSnapshot(file);
   const queuePreview = await getMpcQueuePreview(status);
   const playbackSource = audio.sources.find((source) => source.active)?.id ?? audio.currentSource.id;
@@ -5220,7 +5338,11 @@ async function getMpcSnapshot(options = {}) {
     ? await readAirplayTransportAvailable(includeSlowRuntimeStatus)
     : null;
   const hasBluetoothTrackMetadata = Boolean(bluetoothPlaybackMetadata?.title);
-  const hasAirplayTrackMetadata = Boolean(airplayPlaybackMetadata?.title);
+  const airplayConnected = playbackSource === "airplay" && audio.currentSource.connectionState === "connected";
+  const trustedAirplayPlaybackMetadata = airplayConnected && isUsableAirplayPlaybackMetadata(airplayPlaybackMetadata)
+    ? airplayPlaybackMetadata
+    : null;
+  const hasAirplayTrackMetadata = Boolean(trustedAirplayPlaybackMetadata?.title);
   const metadata = hasCurrentTrack
     ? includeSlowRuntimeStatus
       ? await readMediaMetadata(file)
@@ -5253,7 +5375,7 @@ async function getMpcSnapshot(options = {}) {
         : playbackSource === "bluetooth"
         ? mapBluetoothPlaybackState(bluetoothPlaybackMetadata)
         : playbackSource === "airplay"
-          ? audio.currentSource.connectionState === "connected" ? mapBluetoothPlaybackState(airplayPlaybackMetadata) : "stopped"
+          ? trustedAirplayPlaybackMetadata ? mapBluetoothPlaybackState(trustedAirplayPlaybackMetadata) : "stopped"
         : playbackSource === "spotify"
           ? audio.currentSource.connectionState === "connected" ? "playing" : "stopped"
         : playbackSource === "upnp"
@@ -5263,7 +5385,7 @@ async function getMpcSnapshot(options = {}) {
       albumArtUrl: playbackSource === "bluetooth"
         ? bluetoothPlaybackMetadata?.artworkUrl ?? null
         : playbackSource === "airplay"
-          ? airplayPlaybackMetadata?.artworkUrl ?? null
+          ? trustedAirplayPlaybackMetadata?.artworkUrl ?? null
           : playbackSource === "radio" && activeRadioStation?.logoUrl
             ? activeRadioStation.logoUrl
           : !isExternalHandoffSource && hasCurrentTrack && includeSlowRuntimeStatus && currentArtworkState ? `/api/v1/media/artwork?track=${encodeURIComponent(currentArtworkState.token)}` : null,
@@ -5278,7 +5400,7 @@ async function getMpcSnapshot(options = {}) {
           : playbackSource === "bluetooth"
             ? bluetoothPlaybackMetadata?.title || "Bluetooth Ready"
             : playbackSource === "airplay"
-              ? airplayPlaybackMetadata?.title || "AirPlay Ready"
+              ? trustedAirplayPlaybackMetadata?.title || "AirPlay Ready"
           : hasCurrentTrack ? metadata.title || title || trackTitleFromFile(file) : null,
       artist: isSceneSource
           ? currentSceneVideo.label
@@ -5296,7 +5418,7 @@ async function getMpcSnapshot(options = {}) {
               : audio.currentSource.connectedLabel
                 || (audio.currentSource.advertisedLabel ? `Find ${audio.currentSource.advertisedLabel} in Bluetooth` : "Pair a device to start playback"))
           : playbackSource === "airplay"
-              ? airplayPlaybackMetadata?.artist || (hasAirplayTrackMetadata
+              ? trustedAirplayPlaybackMetadata?.artist || (hasAirplayTrackMetadata
                 ? null
                 : audio.currentSource.connectedLabel
                   || (audio.currentSource.advertisedLabel ? `Choose ${audio.currentSource.advertisedLabel} from AirPlay` : "Choose Tikpal from AirPlay"))
@@ -5312,14 +5434,14 @@ async function getMpcSnapshot(options = {}) {
           : playbackSource === "bluetooth"
             ? bluetoothPlaybackMetadata?.album || null
             : playbackSource === "airplay"
-              ? airplayPlaybackMetadata?.album || "AirPlay Source"
+              ? trustedAirplayPlaybackMetadata?.album || "AirPlay Source"
           : hasCurrentTrack ? metadata.album || album || "MPD Queue" : null,
       elapsedSeconds: isSceneSource
         ? null
         : playbackSource === "bluetooth"
         ? millisecondsToSeconds(bluetoothPlaybackMetadata?.positionMs)
         : playbackSource === "airplay"
-          ? millisecondsToSeconds(airplayPlaybackMetadata?.positionMs)
+          ? millisecondsToSeconds(trustedAirplayPlaybackMetadata?.positionMs)
         : playbackSource === "spotify"
           || playbackSource === "upnp"
           ? null
@@ -5329,7 +5451,7 @@ async function getMpcSnapshot(options = {}) {
         : playbackSource === "bluetooth"
         ? millisecondsToSeconds(bluetoothPlaybackMetadata?.durationMs, { allowZero: false })
         : playbackSource === "airplay"
-          ? millisecondsToSeconds(airplayPlaybackMetadata?.durationMs, { allowZero: false })
+          ? millisecondsToSeconds(trustedAirplayPlaybackMetadata?.durationMs, { allowZero: false })
         : playbackSource === "spotify"
           || playbackSource === "upnp"
           ? null
@@ -5337,7 +5459,7 @@ async function getMpcSnapshot(options = {}) {
       timingDiagnostics: playbackSource === "bluetooth"
         ? bluetoothPlaybackMetadata?.timingDiagnostics ?? null
         : playbackSource === "airplay"
-          ? airplayPlaybackMetadata?.timingDiagnostics ?? null
+          ? trustedAirplayPlaybackMetadata?.timingDiagnostics ?? null
           : null,
       transportCapabilities: buildPlaybackTransportCapabilities(playbackSource, { airplayRemoteControlAvailable: airplayTransportAvailable }),
       currentTrackIndex: playbackSource === "mpd" ? status.currentTrackIndex : 0,
@@ -5387,15 +5509,20 @@ async function ensureMpcPlaybackStarted(position = null) {
   const playArgs = position === null ? ["play"] : ["play", String(position)];
   await runMpc(playArgs);
 
-  let status = parseMpcStatus(await runMpc(["status"], { allowFailure: true }));
-  if (status.queueLength > 0 && status.state !== "playing") {
-    await runMpc(["play"]);
-    status = parseMpcStatus(await runMpc(["status"], { allowFailure: true }));
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    let status = parseMpcStatus(await runMpc(["status"], { allowFailure: true }));
+    let currentFile = extractMpcCurrentFile(await runMpc(["--format", "%file%", "current"], { allowFailure: true }));
+    if (status.queueLength > 0 && status.state === "playing" && currentFile) return;
+    if (status.queueLength > 0) {
+      await runMpc(["play"]);
+      status = parseMpcStatus(await runMpc(["status"], { allowFailure: true }));
+      currentFile = extractMpcCurrentFile(await runMpc(["--format", "%file%", "current"], { allowFailure: true }));
+      if (status.state === "playing" && currentFile) return;
+    }
+    await wait(150);
   }
 
-  if (status.queueLength > 0 && status.state !== "playing") {
-    throw new Error("MPD did not enter playing state after playback start");
-  }
+  throw new Error("MPD did not enter playing state after playback start");
 }
 
 async function switchToMpdSource() {
@@ -6456,7 +6583,7 @@ async function refreshAirplayPlaybackMetadataForState(state, { force = false } =
 
   airplayDirectMetadataRefreshPromise = (async () => {
     const metadata = await readAirplayPlaybackMetadata();
-    if (!metadata?.title) return state;
+    if (!metadata?.title) return cacheTikpalStateSnapshot(clearAirplayPlaybackMetadata(state));
     return cacheTikpalStateSnapshot(mergeAirplayPlaybackMetadata(state, metadata));
   })()
     .catch((error) => {
@@ -6847,6 +6974,13 @@ function buildPlaybackTrackKey({ source, title, artist, album, durationSeconds }
   return createHash("sha1").update(payload).digest("hex");
 }
 
+function isUnreliableAirplayLyricsDuration(sourceScope, durationMs) {
+  return sourceScope === "airplay_input"
+    && Number.isFinite(durationMs)
+    && durationMs > 0
+    && durationMs <= AIRPLAY_LYRICS_UNRELIABLE_DURATION_MS;
+}
+
 function cloneLyricsState(state, overrides = {}) {
   return buildLyricsState({
     ...state,
@@ -6868,17 +7002,23 @@ function decorateLyricsState(state, candidate, overrides = {}) {
 }
 
 function buildMetadataLyricsCandidate(playback, overrides = {}) {
+  const sourceScope = overrides.sourceScope ?? "local_playback";
+  const durationMs = Number.isFinite(playback.durationSeconds) ? Math.round(playback.durationSeconds * 1000) : null;
+  const trustedDurationMs = isUnreliableAirplayLyricsDuration(sourceScope, durationMs) ? null : durationMs;
   return {
     supported: true,
     source: playback.source,
-    sourceScope: overrides.sourceScope ?? "local_playback",
+    sourceScope,
     recognitionMode: "metadata",
     recognitionProvider: "lrclib",
-    trackKey: buildPlaybackTrackKey(playback),
+    trackKey: buildPlaybackTrackKey({
+      ...playback,
+      durationSeconds: Number.isFinite(trustedDurationMs) ? trustedDurationMs / 1000 : null
+    }),
     title: normalizeMetadataValue(playback.title),
     artist: normalizeMetadataValue(playback.artist),
     album: normalizeMetadataValue(playback.album),
-    durationMs: Number.isFinite(playback.durationSeconds) ? Math.round(playback.durationSeconds * 1000) : null,
+    durationMs: trustedDurationMs,
     playbackClock: Number.isFinite(playback.elapsedSeconds)
   };
 }
@@ -7576,14 +7716,18 @@ async function fetchLyricsFromProvider(candidate) {
     }
   ];
 
-  let lyricsBody = await fetchExactLyrics();
-
-  if (!lyricsBody) {
+  const fetchSearchLyrics = async () => {
     for (const params of searchVariants) {
-      lyricsBody = await fetchSearchVariant(params);
-      if (lyricsBody) break;
+      const lyricsBody = await fetchSearchVariant(params);
+      if (lyricsBody) return lyricsBody;
     }
-  }
+    return null;
+  };
+
+  const searchFirst = candidate.sourceScope === "airplay_input" && candidate.recognitionMode === "metadata";
+  let lyricsBody = searchFirst ? await fetchSearchLyrics() : null;
+  if (!lyricsBody) lyricsBody = await fetchExactLyrics();
+  if (!lyricsBody && !searchFirst) lyricsBody = await fetchSearchLyrics();
 
   if (!lyricsBody) {
     return buildLyricsState({
@@ -8367,10 +8511,12 @@ async function applyMockSourceSwitch(action) {
 async function applyMpcSourceSwitchUnlocked(action) {
   switch (action.target) {
     case "mpd":
+      suppressExternalHandoffAutoArm();
       mockArmedSource = null;
       clearActiveMpcRadioStationCache();
       stopSceneAudio();
       resetBluetoothRecognitionSession();
+      await enforceConnectionGate("mpd");
       if (action.localTrackPath) {
         await releaseKioskAudioOutputForMpd("mpd");
         await switchToLocalLibraryTrack(action.localTrackPath);
@@ -8381,7 +8527,6 @@ async function applyMpcSourceSwitchUnlocked(action) {
         const rememberedLocalTrackPath = shouldRestoreRememberedTrack
           ? getCachedRememberedLocalTrackPath()
           : null;
-        await enforceConnectionGate("mpd");
         await releaseKioskAudioOutputForMpd("mpd");
         if (rememberedLocalTrackPath) {
           try {
@@ -8402,6 +8547,7 @@ async function applyMpcSourceSwitchUnlocked(action) {
       mockArmedSource = "audio";
       return;
     case "radio":
+      suppressExternalHandoffAutoArm();
       mockArmedSource = null;
       stopSceneAudio();
       resetBluetoothRecognitionSession();
@@ -8417,6 +8563,7 @@ async function applyMpcSourceSwitchUnlocked(action) {
       mockArmedSource = "scene";
       return;
     case "spotify":
+      allowExternalHandoffAutoArm();
       clearActiveMpcRadioStationCache();
       stopSceneAudio();
       resetBluetoothRecognitionSession();
@@ -8424,6 +8571,7 @@ async function applyMpcSourceSwitchUnlocked(action) {
       mockArmedSource = "spotify";
       return;
     case "bluetooth":
+      allowExternalHandoffAutoArm();
       clearActiveMpcRadioStationCache();
       stopSceneAudio();
       resetBluetoothRecognitionSession();
@@ -8431,6 +8579,7 @@ async function applyMpcSourceSwitchUnlocked(action) {
       mockArmedSource = "bluetooth";
       return;
     case "airplay":
+      allowExternalHandoffAutoArm();
       clearActiveMpcRadioStationCache();
       stopSceneAudio();
       resetBluetoothRecognitionSession();
@@ -8438,6 +8587,7 @@ async function applyMpcSourceSwitchUnlocked(action) {
       mockArmedSource = "airplay";
       return;
     case "upnp":
+      allowExternalHandoffAutoArm();
       clearActiveMpcRadioStationCache();
       stopSceneAudio();
       resetBluetoothRecognitionSession();

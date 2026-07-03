@@ -20,6 +20,18 @@ function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function smokeTrackKey({ source, title, artist, album, durationSeconds = null }) {
+  return createHash("sha1")
+    .update([
+      source,
+      String(title ?? "").trim().replace(/\s+/g, " ").toLowerCase(),
+      String(artist ?? "").trim().replace(/\s+/g, " ").toLowerCase(),
+      String(album ?? "").trim().replace(/\s+/g, " ").toLowerCase(),
+      Number.isFinite(durationSeconds) ? String(Math.round(durationSeconds)) : ""
+    ].join("|"))
+    .digest("hex");
+}
+
 async function request(path, options = {}) {
   const response = await fetch(`${BASE_URL}${path}`, {
     ...options,
@@ -1447,6 +1459,8 @@ async function runMpcLocalLibraryPathSmoke(roomExperienceStatePath) {
   const fakeMpcPath = path.join(workspace, "mpc-fake.mjs");
   const fakeMpcLogPath = path.join(workspace, "mpc.log");
   const fakeMpcStatePath = path.join(workspace, "mpc-state.json");
+  const fakeExternalDisableLogPath = path.join(workspace, "external-disable.log");
+  const fakeExternalDisableCommandPath = path.join(workspace, "external-disable.mjs");
   const fakeAudioSourceMemoryStatePath = path.join(workspace, "audio-source-memory.json");
   const fakeMpcTracks = [
     "Codex/Focus/Lo-fi Ambient/FASSounds - Good Night - Lofi Cozy Chill Music - 02m27s - Lo-fi.mp3",
@@ -1461,6 +1475,7 @@ const logPath = process.env.TIKPAL_FAKE_MPC_LOG;
 const statePath = process.env.TIKPAL_FAKE_MPC_STATE;
 const libraryTracks = JSON.parse(process.env.TIKPAL_FAKE_MPC_TRACKS ?? "[]");
 const positionalPlayStaysPaused = process.env.TIKPAL_FAKE_MPC_POSITIONAL_PLAY_STAYS_PAUSED === "1";
+const currentFileOnly = process.env.TIKPAL_FAKE_MPC_CURRENT_FILE_ONLY === "1";
 const rawArgs = process.argv.slice(2);
 const args = [];
 
@@ -1535,7 +1550,7 @@ switch (command) {
     break;
   case "current": {
     const file = state.queue[state.current] ?? "";
-    if (file) output("Fake Title\\tFake Artist\\tFake Album\\t" + file + "\\t02:27\\n");
+    if (file) output(currentFileOnly ? file + "\\n" : "Fake Title\\tFake Artist\\tFake Album\\t" + file + "\\t02:27\\n");
     break;
   }
   case "status":
@@ -1571,6 +1586,13 @@ switch (command) {
 `);
   await chmod(fakeMpcPath, 0o755);
   await writeFile(fakeMpcLogPath, "");
+  await writeFile(fakeExternalDisableLogPath, "");
+  await writeFile(fakeExternalDisableCommandPath, `#!/usr/bin/env node
+import { appendFileSync } from "node:fs";
+
+appendFileSync(${JSON.stringify(fakeExternalDisableLogPath)}, (process.argv[2] ?? "disable") + "\\n");
+`);
+  await chmod(fakeExternalDisableCommandPath, 0o755);
 
   const server = spawn(process.execPath, ["server/index.mjs"], {
     env: mpcFocusedSmokeEnv({
@@ -1584,9 +1606,18 @@ switch (command) {
       TIKPAL_OUTPUT_VOLUME_GET_COMMAND: "",
       TIKPAL_ROOM_EXPERIENCE_STATE_PATH: roomExperienceStatePath,
       TIKPAL_AUDIO_SOURCE_MEMORY_STATE_PATH: fakeAudioSourceMemoryStatePath,
+      TIKPAL_SPOTIFY_ACTIVATE_COMMAND: `${process.execPath} ${fakeExternalDisableCommandPath} spotify-enable`,
+      TIKPAL_SPOTIFY_READY_COMMAND: "true",
+      TIKPAL_SPOTIFY_ACTIVE_COMMAND: "true",
+      TIKPAL_SPOTIFY_DISABLE_COMMAND: `${process.execPath} ${fakeExternalDisableCommandPath} spotify-disable`,
+      TIKPAL_BLUETOOTH_DISABLE_COMMAND: `${process.execPath} ${fakeExternalDisableCommandPath} bluetooth-disable`,
+      TIKPAL_AIRPLAY_DISABLE_COMMAND: `${process.execPath} ${fakeExternalDisableCommandPath} airplay-disable`,
+      TIKPAL_AIRPLAY_RECEIVER_ACTIVE_COMMAND: "true",
+      TIKPAL_UPNP_DISABLE_COMMAND: `${process.execPath} ${fakeExternalDisableCommandPath} upnp-disable`,
       TIKPAL_FAKE_MPC_LOG: fakeMpcLogPath,
       TIKPAL_FAKE_MPC_STATE: fakeMpcStatePath,
       TIKPAL_FAKE_MPC_TRACKS: JSON.stringify(fakeMpcTracks),
+      TIKPAL_FAKE_MPC_CURRENT_FILE_ONLY: "1",
       TIKPAL_FAKE_MPC_POSITIONAL_PLAY_STAYS_PAUSED: "1"
     }),
     stdio: ["ignore", "pipe", "pipe"]
@@ -1621,11 +1652,20 @@ switch (command) {
       "mpc Library resume should not write back a local track path missing from the current library manifest"
     );
 
+    const spotifyBeforeLibrary = await requestFrom(baseUrl, "/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({ target: "spotify" })
+    });
+    assert(spotifyBeforeLibrary.response.ok, "mpc spotify source preflight should return 200");
+    assert(spotifyBeforeLibrary.body.audio.currentSource.id === "spotify", "mpc spotify source preflight should mark Spotify current");
+
+    await writeFile(fakeExternalDisableLogPath, "");
     const switched = await requestFrom(baseUrl, "/api/v1/audio/source", {
       method: "POST",
       body: JSON.stringify({ target: "mpd", localTrackPath })
     });
     assert(switched.response.ok, "mpc local library source switch should return 200");
+    assert(switched.body.audio.currentSource.id === "mpd", "mpc local library source switch should keep Library current even if an old external active probe lingers");
     assert(
       switched.body.playback.queueLength >= fakeMpcTracks.length,
       `mpc local library switch should load the library queue, got ${switched.body.playback.queueLength}`
@@ -1641,6 +1681,14 @@ switch (command) {
     assert(log.includes("play\n"), "mpc local library switch should retry playback when MPD stayed paused");
     assert(!log.includes(`add\t${localTrackPath}\n`), "mpc local library switch should not add the raw manifest path first");
     assert(switched.body.audio.rememberedSource?.localTrackPath === localTrackPath, "mpc local library switch should remember the selected local track path");
+    const externalDisableLog = await readFile(fakeExternalDisableLogPath, "utf8");
+    assert(
+      externalDisableLog.includes("spotify-disable\n")
+        && externalDisableLog.includes("bluetooth-disable\n")
+        && externalDisableLog.includes("airplay-disable\n")
+        && externalDisableLog.includes("upnp-disable\n"),
+      `mpc local library switch with a concrete track should synchronously close external sources, got ${JSON.stringify(externalDisableLog)}`
+    );
 
     await requestFrom(baseUrl, "/api/v1/playback/actions", {
       method: "POST",
@@ -2413,12 +2461,24 @@ async function runMpcAirplayHandoffRefreshSmoke(roomExperienceStatePath) {
   const fakeAirplayMetadataCommandPath = path.join(workspace, "airplay-metadata.mjs");
   const fakeAirplayTransportLogPath = path.join(workspace, "airplay-transport.log");
   const fakeAirplayTransportCommandPath = path.join(workspace, "airplay-transport.mjs");
+  const fakeExternalCommandLogPath = path.join(workspace, "external-command.log");
+  const fakeExternalCommandPath = path.join(workspace, "external-command.mjs");
+  const fakeExternalStatePath = path.join(workspace, "external-state.json");
   const airplayArtworkRoot = path.join(workspace, "airplay-covers");
   const firstAirplayArtworkPath = path.join(airplayArtworkRoot, "this-city.png");
   const secondAirplayArtworkPath = path.join(airplayArtworkRoot, "instant-crush.png");
   const pngPixel = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMB/azU1wAAAABJRU5ErkJggg==", "base64");
   const writeAirplayMetadata = async (metadata) => {
     await writeFile(fakeAirplayMetadataPath, `${JSON.stringify(metadata, null, 2)}\n`);
+  };
+  const waitForExternalCommand = async (needle) => {
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const log = await readFile(fakeExternalCommandLogPath, "utf8").catch(() => "");
+      if (log.includes(`${needle}\n`)) return log;
+      await wait(50);
+    }
+    const log = await readFile(fakeExternalCommandLogPath, "utf8").catch(() => "");
+    throw new Error(`Timed out waiting for ${needle} in external command log: ${JSON.stringify(log)}`);
   };
 
   await writeFile(fakeMpcPath, `#!/usr/bin/env node
@@ -2472,6 +2532,25 @@ process.stdout.write(\`Simple mixer control 'PCM',0
 \`);
 `);
   await chmod(fakeVolumePath, 0o755);
+  await writeFile(fakeExternalCommandLogPath, "");
+  await writeFile(fakeExternalStatePath, `${JSON.stringify({
+    bluetoothActive: false,
+    spotifyActive: false,
+    upnpActive: false
+  }, null, 2)}\n`);
+  await writeFile(fakeExternalCommandPath, `#!/usr/bin/env node
+import { appendFileSync, readFileSync } from "node:fs";
+
+const action = process.argv[2] ?? "";
+if (action.endsWith("-active")) {
+  const state = JSON.parse(readFileSync(process.env.TIKPAL_FAKE_EXTERNAL_STATE_PATH, "utf8"));
+  const key = action.replace("-active", "Active").replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
+  process.exit(state[key] ? 0 : 1);
+}
+
+appendFileSync(${JSON.stringify(fakeExternalCommandLogPath)}, action + "\\n");
+`);
+  await chmod(fakeExternalCommandPath, 0o755);
   await mkdir(airplayArtworkRoot, { recursive: true });
   await writeFile(firstAirplayArtworkPath, pngPixel);
   await writeFile(secondAirplayArtworkPath, pngPixel);
@@ -2516,10 +2595,27 @@ appendFileSync(${JSON.stringify(fakeAirplayTransportLogPath)}, process.argv[2] +
       TIKPAL_STATE_SNAPSHOT_REFRESH_MS: "60000",
       TIKPAL_OUTPUT_VOLUME_GET_COMMAND: `${process.execPath} ${fakeVolumePath} get`,
       TIKPAL_OUTPUT_VOLUME_SET_COMMAND: `${process.execPath} ${fakeVolumePath} set %VALUE%`,
-      TIKPAL_AIRPLAY_ENABLE_COMMAND: "true",
+      TIKPAL_SPOTIFY_ACTIVATE_COMMAND: `${process.execPath} ${fakeExternalCommandPath} spotify-enable`,
+      TIKPAL_SPOTIFY_READY_COMMAND: "true",
+      TIKPAL_SPOTIFY_ACTIVE_COMMAND: `${process.execPath} ${fakeExternalCommandPath} spotify-active`,
+      TIKPAL_SPOTIFY_DISABLE_COMMAND: `${process.execPath} ${fakeExternalCommandPath} spotify-disable`,
+      TIKPAL_SPOTIFY_LABEL_COMMAND: "printf 'Tikpal Speaker'",
+      TIKPAL_BLUETOOTH_ENABLE_COMMAND: `${process.execPath} ${fakeExternalCommandPath} bluetooth-enable`,
+      TIKPAL_BLUETOOTH_READY_COMMAND: "true",
+      TIKPAL_BLUETOOTH_ACTIVE_COMMAND: `${process.execPath} ${fakeExternalCommandPath} bluetooth-active`,
+      TIKPAL_BLUETOOTH_DISABLE_COMMAND: `${process.execPath} ${fakeExternalCommandPath} bluetooth-disable`,
+      TIKPAL_BLUETOOTH_LABEL_COMMAND: "printf 'Tikpal Speaker'",
+      TIKPAL_UPNP_ENABLE_COMMAND: `${process.execPath} ${fakeExternalCommandPath} upnp-enable`,
+      TIKPAL_UPNP_READY_COMMAND: "true",
+      TIKPAL_UPNP_ACTIVE_COMMAND: `${process.execPath} ${fakeExternalCommandPath} upnp-active`,
+      TIKPAL_UPNP_DISABLE_COMMAND: `${process.execPath} ${fakeExternalCommandPath} upnp-disable`,
+      TIKPAL_UPNP_LABEL_COMMAND: "printf 'Tikpal Speaker'",
+      TIKPAL_FAKE_EXTERNAL_STATE_PATH: fakeExternalStatePath,
+      TIKPAL_AIRPLAY_ENABLE_COMMAND: `${process.execPath} ${fakeExternalCommandPath} airplay-enable`,
       TIKPAL_AIRPLAY_READY_COMMAND: "true",
       TIKPAL_AIRPLAY_ACTIVE_COMMAND: "true",
-      TIKPAL_AIRPLAY_RECEIVER_ACTIVE_COMMAND: "false",
+      TIKPAL_AIRPLAY_DISABLE_COMMAND: `${process.execPath} ${fakeExternalCommandPath} airplay-disable`,
+      TIKPAL_AIRPLAY_RECEIVER_ACTIVE_COMMAND: "true",
       TIKPAL_AIRPLAY_LABEL_COMMAND: "printf 'Tikpal Speaker'",
       TIKPAL_AIRPLAY_METADATA_COMMAND: `${process.execPath} ${fakeAirplayMetadataCommandPath}`,
       TIKPAL_AIRPLAY_TRANSPORT_AVAILABLE_COMMAND: "true",
@@ -2600,6 +2696,36 @@ appendFileSync(${JSON.stringify(fakeAirplayTransportLogPath)}, process.argv[2] +
       switched.body.playback.albumArtUrl?.includes("v=111000"),
       "mpc airplay switch should preserve versioned AirPlay artwork"
     );
+
+    await writeFile(fakeExternalCommandLogPath, "");
+    const bluetoothSwitch = await requestFrom(baseUrl, "/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({ target: "bluetooth" })
+    });
+    assert(bluetoothSwitch.response.ok, "mpc bluetooth source switch should return 200");
+    assert(bluetoothSwitch.body.audio.currentSource.id === "bluetooth", "mpc AirPlay-to-Bluetooth switch should return Bluetooth as current");
+    assert(bluetoothSwitch.body.audio.currentSource.armed === true, "mpc AirPlay-to-Bluetooth switch should arm Bluetooth");
+    assert(bluetoothSwitch.body.playback.source === "bluetooth", "mpc AirPlay-to-Bluetooth playback source should be Bluetooth");
+    const bluetoothSwitchLog = await waitForExternalCommand("upnp-disable");
+    assert(bluetoothSwitchLog.includes("bluetooth-enable\n"), "mpc AirPlay-to-Bluetooth switch should enable Bluetooth before cleanup finishes");
+    assert(bluetoothSwitchLog.includes("airplay-disable\n"), "mpc AirPlay-to-Bluetooth switch should clean up old AirPlay in the background");
+
+    await writeFile(fakeExternalStatePath, `${JSON.stringify({
+      bluetoothActive: true,
+      spotifyActive: false,
+      upnpActive: false
+    }, null, 2)}\n`);
+    await writeFile(fakeExternalCommandLogPath, "");
+    const airplayAfterBluetooth = await requestFrom(baseUrl, "/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({ target: "airplay" })
+    });
+    assert(airplayAfterBluetooth.response.ok, "mpc bluetooth-to-airplay source switch should return 200");
+    assert(airplayAfterBluetooth.body.audio.currentSource.id === "airplay", "mpc Bluetooth-to-AirPlay switch should return AirPlay as current");
+    assert(airplayAfterBluetooth.body.playback.source === "airplay", "mpc Bluetooth-to-AirPlay playback source should be AirPlay");
+    const airplayAfterBluetoothLog = await waitForExternalCommand("upnp-disable");
+    assert(airplayAfterBluetoothLog.includes("airplay-enable\n"), "mpc Bluetooth-to-AirPlay switch should enable AirPlay before cleanup finishes");
+    assert(airplayAfterBluetoothLog.includes("bluetooth-disable\n"), "mpc Bluetooth-to-AirPlay switch should clean up old Bluetooth in the background");
 
     const airplayNext = await requestFrom(baseUrl, "/api/v1/playback/actions", {
       method: "POST",
@@ -2723,9 +2849,43 @@ appendFileSync(${JSON.stringify(fakeAirplayTransportLogPath)}, process.argv[2] +
     assert(durationDriftLyrics.synced === true, "AirPlay metadata lyrics should stay synced when only duration is unreliable");
     assert(durationDriftLyrics.timingStrategy === "provider_synced", "AirPlay lyrics should prefer provider timing when metadata duration drifts");
     assert(
+      durationDriftLyrics.trackKey === smokeTrackKey({
+        source: "airplay",
+        title: "Duration Drift",
+        artist: "Clock Source",
+        album: "Unreliable Metadata",
+        durationSeconds: null
+      }),
+      "AirPlay lyrics should ignore unreliable short metadata duration in the track key"
+    );
+    assert(
       durationDriftLyrics.lines.some((line) => line.text.includes("real lyric clock")),
       "AirPlay lyrics should not disappear when trusted title and artist have a mismatched duration"
     );
+
+    await writeAirplayMetadata({
+      title: "Stale AirPlay Metadata",
+      artist: "Old Sender",
+      album: "Expired Snapshot",
+      status: "playing",
+      positionMs: 330000,
+      durationMs: 29954,
+      artworkPath: secondAirplayArtworkPath,
+      artworkMtimeMs: 444000,
+      metadataSource: "json"
+    });
+    const staleAirplayLyricsRefresh = await requestFrom(baseUrl, "/api/v1/lyrics/refresh", {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    assert(staleAirplayLyricsRefresh.response.ok, "stale AirPlay lyrics refresh should return 200");
+    assert(staleAirplayLyricsRefresh.body.status === "idle", "stale AirPlay metadata should not start lyrics recognition");
+    assert(staleAirplayLyricsRefresh.body.sourceScope === "airplay_input", "stale AirPlay lyrics idle state should keep airplay scope");
+    const staleAirplayState = await requestFrom(baseUrl, "/api/v1/system/state");
+    assert(staleAirplayState.response.ok, "stale AirPlay metadata state should return 200");
+    assert(staleAirplayState.body.playback.source === "airplay", "stale AirPlay metadata should keep AirPlay as source");
+    assert(staleAirplayState.body.playback.state === "stopped", "stale AirPlay metadata should not drive playing state");
+    assert(staleAirplayState.body.playback.title !== "Stale AirPlay Metadata", "stale AirPlay metadata should not replace now-playing title");
 
     await writeAirplayMetadata({
       title: "AirPlay Ready",
