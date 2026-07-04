@@ -2275,6 +2275,7 @@ function normalizeAirplayPlaybackMetadata(metadata) {
   if (!isUsableAirplayPlaybackMetadata(metadata)) return null;
   const positionMs = Number(metadata.positionMs);
   const durationMs = Number(metadata.durationMs);
+  const metadataSource = String(metadata?.timingDiagnostics?.metadataSource ?? "").trim().toLowerCase();
   if (
     metadata.status === "playing"
     && Number.isFinite(positionMs)
@@ -2283,6 +2284,13 @@ function normalizeAirplayPlaybackMetadata(metadata) {
     && positionMs > durationMs
   ) {
     if (positionMs > durationMs + AIRPLAY_METADATA_POSITION_GRACE_MS) {
+      if (metadataSource === "mpris") {
+        const wrappedPositionMs = positionMs % durationMs;
+        return {
+          ...metadata,
+          positionMs: Number.isFinite(wrappedPositionMs) ? wrappedPositionMs : null
+        };
+      }
       return null;
     }
     return {
@@ -5877,6 +5885,19 @@ async function recoverMpdService(reason) {
   return await mpdRecoveryPromise;
 }
 
+async function stopMpdForExternalSource(target) {
+  try {
+    await runMpc(["stop"], { timeout: 2500 });
+    return;
+  } catch (error) {
+    if (isMpcCommunicationFailure(error) && await recoverMpdService(error)) {
+      await runMpc(["stop"], { allowFailure: true, timeout: 2500 });
+      return;
+    }
+    console.warn(`tikpal-api could not stop MPD before switching to ${target}: ${error instanceof Error ? error.message : "unknown error"}`);
+  }
+}
+
 function getFastRadioSwitchOptions() {
   return {
     postStartRecoveryPlays: 0,
@@ -6201,28 +6222,28 @@ async function switchRadioStationByOffset(offset, options = {}) {
 
 async function switchToSpotifySource() {
   await enforceConnectionGate("spotify");
-  await runMpc(["stop"], { allowFailure: true });
+  await stopMpdForExternalSource("spotify");
 }
 
 async function switchToBluetoothSource() {
   await enforceConnectionGate("bluetooth");
-  await runMpc(["stop"], { allowFailure: true });
+  await stopMpdForExternalSource("bluetooth");
 }
 
 async function switchToAirplaySource() {
   await enforceConnectionGate("airplay");
-  await runMpc(["stop"], { allowFailure: true });
+  await stopMpdForExternalSource("airplay");
 }
 
 async function switchToUpnpSource() {
   await enforceConnectionGate("upnp");
-  await runMpc(["stop"], { allowFailure: true });
+  await stopMpdForExternalSource("upnp");
 }
 
 async function switchToSceneSource(action = {}) {
   activateSceneAudio(action);
   await enforceConnectionGate("scene");
-  await runMpc(["stop"], { allowFailure: true });
+  await stopMpdForExternalSource("scene");
 }
 
 async function applyMpcPlayMode(mode) {

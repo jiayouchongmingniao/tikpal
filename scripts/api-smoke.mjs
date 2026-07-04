@@ -3007,6 +3007,28 @@ appendFileSync(${JSON.stringify(fakeBluetoothTransportLogPath)}, action + "\\n")
     assert(overrunState.body.lyrics.title === "This City", "AirPlay metadata position overrun should keep lyrics tied to the current track");
 
     await writeAirplayMetadata({
+      title: "This City",
+      artist: "Sam Fischer",
+      album: "Not a Hobby",
+      status: "playing",
+      positionMs: 843000,
+      durationMs: 60000,
+      artworkPath: firstAirplayArtworkPath,
+      artworkMtimeMs: 113000,
+      metadataSource: "mpris"
+    });
+    const liveMprisOverrunRefresh = await requestFrom(baseUrl, "/api/v1/lyrics/refresh", {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    assert(liveMprisOverrunRefresh.response.ok, "mpc airplay lyrics refresh with live MPRIS overrun should return 200");
+    const liveMprisOverrunState = await requestFrom(baseUrl, "/api/v1/system/state");
+    assert(liveMprisOverrunState.response.ok, "cached mpc airplay live MPRIS overrun state should return 200");
+    assert(liveMprisOverrunState.body.playback.title === "This City", "live MPRIS overrun should not fall back to AirPlay Ready");
+    assert(liveMprisOverrunState.body.playback.state === "playing", "live MPRIS overrun should keep AirPlay playing");
+    assert(liveMprisOverrunState.body.playback.elapsedSeconds === 3, "live MPRIS overrun should wrap unreliable elapsed time into the track duration");
+
+    await writeAirplayMetadata({
       title: "Instant Crush",
       artist: "Daft Punk",
       album: "Random Access Memories",
