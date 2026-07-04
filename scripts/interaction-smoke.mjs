@@ -993,6 +993,84 @@ try {
             return next;
           }
 
+          if (mode === "bluetoothReadyLyrics") {
+            const next = withSource(state, "bluetooth");
+            next.playback = {
+              ...next.playback,
+              state: "playing",
+              source: "bluetooth",
+              albumArtUrl: null,
+              title: "Pocket Signal",
+              artist: "Tikpal Phone",
+              album: "Bluetooth Session",
+              elapsedSeconds: 42,
+              durationSeconds: 188,
+              currentTrackIndex: 0,
+              queueLength: 0,
+              favorite: false,
+              queuePreview: []
+            };
+            next.lyrics = {
+              ...next.lyrics,
+              status: "ready",
+              sourceScope: "bluetooth_input",
+              recognitionMode: "metadata",
+              trackKey: "smoke-bluetooth-ready-lyrics",
+              synced: true,
+              activeLineIndex: null,
+              title: "Pocket Signal",
+              artist: "Tikpal Phone",
+              lines: [
+                { text: "Bluetooth line one", startMs: 0, endMs: 18000 },
+                { text: "Bluetooth line two", startMs: 18000, endMs: 36000 },
+                { text: "Bluetooth chorus line glows through the shared lyrics wall", startMs: 36000, endMs: 54000 },
+                { text: "Bluetooth line four", startMs: 54000, endMs: 72000 }
+              ],
+              message: null,
+              updatedAt: new Date().toISOString()
+            };
+            return next;
+          }
+
+          if (mode === "airplayFallbackLyrics") {
+            const next = withSource(state, "airplay");
+            next.playback = {
+              ...next.playback,
+              state: "playing",
+              source: "airplay",
+              albumArtUrl: null,
+              title: "Fallback Song",
+              artist: "Fallback Artist",
+              album: "Fallback Album",
+              elapsedSeconds: 28,
+              durationSeconds: 180,
+              currentTrackIndex: 0,
+              queueLength: 0,
+              favorite: false,
+              queuePreview: []
+            };
+            next.lyrics = {
+              ...next.lyrics,
+              status: "ready",
+              sourceScope: "airplay_input",
+              recognitionMode: "metadata",
+              recognitionProvider: "lyricsovh",
+              trackKey: "smoke-airplay-fallback-lyrics",
+              synced: false,
+              activeLineIndex: null,
+              title: "Fallback Song",
+              artist: "Fallback Artist",
+              lines: [
+                { text: "AirPlay fallback line one", startMs: null, endMs: null },
+                { text: "AirPlay fallback line two", startMs: null, endMs: null },
+                { text: "AirPlay fallback chorus line", startMs: null, endMs: null }
+              ],
+              message: null,
+              updatedAt: new Date().toISOString()
+            };
+            return next;
+          }
+
           if (mode === "brokenArtwork") {
             const next = withSource(state, "mpd");
             next.playback = {
@@ -1273,23 +1351,22 @@ try {
         const panel = document.querySelector('[data-hifi-lyrics-panel]');
         const activeLine = document.querySelector('[data-hifi-lyrics-line][data-hifi-lyrics-active]');
         const ticker = document.querySelector('.ambient-lyrics-ticker');
-        const tickerLine = document.querySelector('.ambient-lyrics-ticker .ambient-lyrics-text');
+        const controls = document.querySelector('[data-hifi-lyrics-controls]');
+        const play = controls?.querySelector('button[aria-label="Pause"], button[aria-label="Play"]');
         const activeText = activeLine?.textContent?.trim() ?? "";
-        const tickerText = tickerLine?.textContent?.trim() ?? "";
         return panel !== null
           && document.querySelector('[data-hifi-centered-now-playing]') === null
           && document.querySelector('[data-hifi-playback-presence]') === null
           && document.querySelectorAll('[data-hifi-lyrics-line]').length >= 4
           && activeLine?.classList.contains('is-active') === true
           && activeText.length > 0
-          && document.querySelector('[data-ambient-lyrics]')?.getAttribute('aria-hidden') === 'false'
-          && ticker !== null
-          && ticker.classList.contains('is-scrolling')
-          && document.querySelectorAll('.ambient-lyrics-ticker .ambient-lyrics-text').length === 2
-          && tickerText === activeText;
+          && document.querySelector('[data-ambient-lyrics]')?.getAttribute('aria-hidden') === 'true'
+          && ticker === null
+          && controls !== null
+          && play !== null;
       })()
     `,
-    "Hi-Fi ready synced lyrics render lyrics wall and rolling ticker together"
+    "Hi-Fi ready synced lyrics render lyrics wall with footer controls and without ticker"
   );
   await wait(1500);
   await expectEventually(
@@ -1297,14 +1374,12 @@ try {
     `
       (() => {
         const activeLine = document.querySelector('[data-hifi-lyrics-line][data-hifi-lyrics-active]');
-        const tickerLine = document.querySelector('.ambient-lyrics-ticker .ambient-lyrics-text');
         const text = activeLine?.textContent?.trim() ?? "";
-        const tickerText = tickerLine?.textContent?.trim() ?? "";
         return (text.includes("Synced line four") || text.includes("Synced line five"))
-          && tickerText === text;
+          && document.querySelector('.ambient-lyrics-ticker') === null;
       })()
     `,
-    "Hi-Fi synced lyrics advance wall and ticker from the local playback clock between state refreshes"
+    "Hi-Fi synced lyrics advance wall from the local playback clock between state refreshes"
   );
   await wait(4200);
   await expectEventually(
@@ -1312,16 +1387,18 @@ try {
     `
       (() => {
         const activeLine = document.querySelector('[data-hifi-lyrics-line][data-hifi-lyrics-active]');
-        const tickerLine = document.querySelector('.ambient-lyrics-ticker .ambient-lyrics-text');
+        const footerPlay = document.querySelector('[data-hifi-lyrics-controls] button[aria-label="Pause"], [data-hifi-lyrics-controls] button[aria-label="Play"]');
         return document.querySelector('.ambient-screen.is-hud-hidden') !== null
           && document.querySelector('[data-hifi-lyrics-panel]') !== null
+          && document.querySelector('.ambient-lyrics-ticker') === null
           && document.querySelector('.ambient-transport') !== null
           && getComputedStyle(document.querySelector('.ambient-transport')).pointerEvents === 'none'
-          && (activeLine?.textContent?.trim() ?? "") === (tickerLine?.textContent?.trim() ?? "")
-          && (tickerLine?.textContent?.trim().length ?? 0) > 0;
+          && footerPlay !== null
+          && getComputedStyle(footerPlay).pointerEvents !== 'none'
+          && (activeLine?.textContent?.trim().length ?? 0) > 0;
       })()
     `,
-    "Hi-Fi HUD auto hides while lyrics wall and rolling ticker remain visible"
+    "Hi-Fi HUD auto hides while lyrics wall and footer controls remain visible"
   );
   const staticLyricsPatchVersion = await setStatePatchMode(client, "staticLyrics");
   await waitForStatePatchRefresh(client, staticLyricsPatchVersion, "Hi-Fi static lyrics fixture refreshes");
@@ -1332,17 +1409,15 @@ try {
         const panel = document.querySelector('[data-hifi-lyrics-panel]');
         const activeLine = document.querySelector('[data-hifi-lyrics-line][data-hifi-lyrics-active]');
         const ticker = document.querySelector('.ambient-lyrics-ticker');
-        const tickerLine = document.querySelector('.ambient-lyrics-ticker .ambient-lyrics-text');
         const activeText = activeLine?.textContent?.trim() ?? "";
         return panel !== null
           && document.querySelectorAll('[data-hifi-lyrics-line]').length === 5
           && activeText.includes('Static line')
-          && ticker !== null
-          && ticker.classList.contains('is-static')
-          && tickerLine?.textContent?.trim() === activeText;
+          && ticker === null
+          && document.querySelector('[data-hifi-lyrics-controls]') !== null;
       })()
     `,
-    "Hi-Fi static ready lyrics render lyrics wall and ticker together"
+    "Hi-Fi static ready lyrics render lyrics wall without ticker"
   );
   const noReadyLyricsPatchVersion = await setStatePatchMode(client, "noReadyLyrics");
   await waitForStatePatchRefresh(client, noReadyLyricsPatchVersion, "Hi-Fi no-ready lyrics fixture refreshes");
@@ -1398,6 +1473,65 @@ try {
     "Bluetooth real artwork is not replaced by generated poster",
     50,
     150
+  );
+  const bluetoothReadyLyricsPatchVersion = await setStatePatchMode(client, "bluetoothReadyLyrics");
+  await waitForStatePatchRefresh(client, bluetoothReadyLyricsPatchVersion, "Bluetooth ready lyrics fixture refreshes");
+  await expectEventually(
+    client,
+    `
+      (() => {
+        const panel = document.querySelector('[data-hifi-lyrics-panel]');
+        const activeLine = document.querySelector('[data-hifi-lyrics-line][data-hifi-lyrics-active]');
+        const footer = document.querySelector('[data-hifi-lyrics-footer]');
+        const miniEq = document.querySelector('[data-hifi-mini-eq]');
+        const firstBar = document.querySelector('[data-hifi-mini-eq-bar]');
+        const time = document.querySelector('[data-hifi-lyrics-time]');
+        const controls = document.querySelector('[data-hifi-lyrics-controls]');
+        const progressGroup = document.querySelector('[data-hifi-lyrics-progress-eq]');
+        const play = controls?.querySelector('button[aria-label="Pause"], button[aria-label="Play"]');
+        if (!panel || !activeLine || !footer || !miniEq || !firstBar || !time || !controls || !progressGroup || !play) return false;
+        const barStyle = getComputedStyle(firstBar);
+        const footerRect = footer.getBoundingClientRect();
+        const progressRect = progressGroup.getBoundingClientRect();
+        const controlsRect = controls.getBoundingClientRect();
+        const activeText = activeLine.textContent?.trim() ?? "";
+        return document.querySelector('[data-hifi-centered-now-playing]') === null
+          && document.querySelector('[data-hifi-playback-presence]') === null
+          && document.querySelector('[data-bluetooth-generated-cover]') !== null
+          && document.querySelectorAll('[data-hifi-mini-eq-bar]').length >= 24
+          && barStyle.animationName !== 'none'
+          && barStyle.animationPlayState === 'running'
+          && activeText.includes('Bluetooth chorus line')
+          && document.querySelector('.ambient-lyrics-ticker') === null
+          && footerRect.bottom < window.innerHeight - 56
+          && footerRect.top > window.innerHeight - 190
+          && progressGroup.contains(time)
+          && progressRect.width < window.innerWidth * 0.46
+          && controlsRect.left < window.innerWidth * 0.68
+          && time.textContent?.trim() === '0:42/3:08';
+      })()
+    `,
+    "Bluetooth ready lyrics use the shared Hi-Fi lyrics wall with lightweight footer"
+  );
+  const airplayFallbackLyricsPatchVersion = await setStatePatchMode(client, "airplayFallbackLyrics");
+  await waitForStatePatchRefresh(client, airplayFallbackLyricsPatchVersion, "AirPlay fallback lyrics fixture refreshes");
+  await expectEventually(
+    client,
+    `
+      (() => {
+        const panel = document.querySelector('[data-hifi-lyrics-panel]');
+        const activeLine = document.querySelector('[data-hifi-lyrics-line][data-hifi-lyrics-active]');
+        const controls = document.querySelector('[data-hifi-lyrics-controls]');
+        const activeText = activeLine?.textContent?.trim() ?? "";
+        return panel !== null
+          && document.querySelector('[data-hifi-centered-now-playing]') === null
+          && activeText.includes('AirPlay fallback')
+          && document.querySelector('.ambient-lyrics-ticker') === null
+          && document.querySelector('[data-ambient-lyrics]')?.getAttribute('aria-hidden') === 'true'
+          && controls !== null;
+      })()
+    `,
+    "AirPlay fallback plain lyrics use the shared Hi-Fi lyrics wall without ticker"
   );
   await evaluate(client, "document.querySelector('.ambient-transport button[aria-label=\"Hide lyrics\"]')?.click(); true");
   await setStatePatchMode(client, "");

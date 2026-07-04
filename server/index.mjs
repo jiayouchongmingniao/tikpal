@@ -87,12 +87,19 @@ const SPOTIFY_ACTIVE_COMMAND = process.env.TIKPAL_SPOTIFY_ACTIVE_COMMAND ?? "";
 const SPOTIFY_ACTIVATE_COMMAND = process.env.TIKPAL_SPOTIFY_ACTIVATE_COMMAND ?? "";
 const SPOTIFY_DISABLE_COMMAND = process.env.TIKPAL_SPOTIFY_DISABLE_COMMAND ?? "";
 const SPOTIFY_LABEL_COMMAND = process.env.TIKPAL_SPOTIFY_LABEL_COMMAND ?? "";
+const SPOTIFY_METADATA_FILE = process.env.TIKPAL_SPOTIFY_METADATA_FILE ?? "/var/local/www/spotmeta.json";
 const BLUETOOTH_READY_COMMAND = process.env.TIKPAL_BLUETOOTH_READY_COMMAND ?? "";
 const BLUETOOTH_ACTIVE_COMMAND = process.env.TIKPAL_BLUETOOTH_ACTIVE_COMMAND ?? "";
 const BLUETOOTH_ENABLE_COMMAND = process.env.TIKPAL_BLUETOOTH_ENABLE_COMMAND ?? "";
 const BLUETOOTH_DISABLE_COMMAND = process.env.TIKPAL_BLUETOOTH_DISABLE_COMMAND ?? "";
 const BLUETOOTH_LABEL_COMMAND = process.env.TIKPAL_BLUETOOTH_LABEL_COMMAND ?? "";
 const BLUETOOTH_METADATA_COMMAND = process.env.TIKPAL_BLUETOOTH_METADATA_COMMAND ?? "";
+const BLUETOOTH_TRANSPORT_AVAILABLE_COMMAND = process.env.TIKPAL_BLUETOOTH_TRANSPORT_AVAILABLE_COMMAND ?? "./deploy/moode/tikpal-bluetooth-transport.sh available";
+const BLUETOOTH_PLAY_PAUSE_COMMAND = process.env.TIKPAL_BLUETOOTH_PLAY_PAUSE_COMMAND ?? "./deploy/moode/tikpal-bluetooth-transport.sh play-pause";
+const BLUETOOTH_PLAY_COMMAND = process.env.TIKPAL_BLUETOOTH_PLAY_COMMAND ?? "./deploy/moode/tikpal-bluetooth-transport.sh play";
+const BLUETOOTH_PAUSE_COMMAND = process.env.TIKPAL_BLUETOOTH_PAUSE_COMMAND ?? "./deploy/moode/tikpal-bluetooth-transport.sh pause";
+const BLUETOOTH_NEXT_COMMAND = process.env.TIKPAL_BLUETOOTH_NEXT_COMMAND ?? "./deploy/moode/tikpal-bluetooth-transport.sh next";
+const BLUETOOTH_PREVIOUS_COMMAND = process.env.TIKPAL_BLUETOOTH_PREVIOUS_COMMAND ?? "./deploy/moode/tikpal-bluetooth-transport.sh previous";
 const AIRPLAY_READY_COMMAND = process.env.TIKPAL_AIRPLAY_READY_COMMAND ?? "";
 const AIRPLAY_ACTIVE_COMMAND = process.env.TIKPAL_AIRPLAY_ACTIVE_COMMAND ?? "";
 const AIRPLAY_ENABLE_COMMAND = process.env.TIKPAL_AIRPLAY_ENABLE_COMMAND ?? "";
@@ -179,10 +186,23 @@ const MOCK_AIRPLAY_CONNECT_AFTER_MS = Number(process.env.TIKPAL_MOCK_AIRPLAY_CON
 const MOCK_UPNP_CONNECT_AFTER_MS = Number(process.env.TIKPAL_MOCK_UPNP_CONNECT_AFTER_MS ?? 1200);
 const LRCLIB_BASE_URL = process.env.TIKPAL_LRCLIB_BASE_URL ?? "https://lrclib.net";
 const LRCLIB_TIMEOUT_MS = Number(process.env.TIKPAL_LRCLIB_TIMEOUT_MS ?? 7000);
+const LYRICS_OVH_BASE_URL = process.env.TIKPAL_LYRICS_OVH_BASE_URL ?? "https://api.lyrics.ovh";
+const LYRICS_CUSTOM_URL_TEMPLATE = process.env.TIKPAL_LYRICS_CUSTOM_URL_TEMPLATE ?? "";
+const LYRICS_CUSTOM_AUTH_HEADER = process.env.TIKPAL_LYRICS_CUSTOM_AUTH_HEADER ?? "";
 const THEAUDIODB_BASE_URL = process.env.TIKPAL_THEAUDIODB_BASE_URL ?? "https://www.theaudiodb.com";
 const THEAUDIODB_API_KEY = process.env.TIKPAL_THEAUDIODB_API_KEY ?? "123";
 const REMOTE_METADATA_TIMEOUT_MS = Number(process.env.TIKPAL_REMOTE_METADATA_TIMEOUT_MS ?? 4500);
 const LYRICS_ERROR_BACKOFF_MS = Number(process.env.TIKPAL_LYRICS_ERROR_BACKOFF_MS ?? 90000);
+const SUPPORTED_LYRICS_PROVIDERS = new Set(["lrclib", "custom", "lyricsovh"]);
+const LYRICS_PROVIDER_CHAIN = normalizeLyricsProviderChain(process.env.TIKPAL_LYRICS_PROVIDER_CHAIN ?? "lrclib,lyricsovh");
+const LYRICS_PROVIDER_CACHE_VERSION = createHash("sha1")
+  .update(JSON.stringify({
+    chain: LYRICS_PROVIDER_CHAIN,
+    lyricsOvhBaseUrl: LYRICS_OVH_BASE_URL,
+    customUrlTemplate: LYRICS_CUSTOM_URL_TEMPLATE
+  }))
+  .digest("hex")
+  .slice(0, 12);
 const BLUETOOTH_LYRICS_MIN_TIMED_DURATION_MS = 30_000;
 const BLUETOOTH_LYRICS_DURATION_GRACE_MS = 2_000;
 const AIRPLAY_METADATA_POSITION_GRACE_MS = 30_000;
@@ -1697,6 +1717,7 @@ async function commandSucceeds(command, options = {}) {
 }
 
 const AIRPLAY_REMOTE_UNAVAILABLE_REASON = "AirPlay remote control is unavailable from this sender";
+const BLUETOOTH_REMOTE_UNAVAILABLE_REASON = "Bluetooth AVRCP control is unavailable from this sender";
 
 function buildPlaybackTransportCapabilities(source, options = {}) {
   const base = {
@@ -1722,6 +1743,19 @@ function buildPlaybackTransportCapabilities(source, options = {}) {
     };
   }
 
+  if (source === "bluetooth") {
+    const available = options.bluetoothRemoteControlAvailable === true;
+    return {
+      playPause: available,
+      play: available,
+      pause: available,
+      next: available,
+      previous: available,
+      seek: false,
+      reason: available ? null : BLUETOOTH_REMOTE_UNAVAILABLE_REASON
+    };
+  }
+
   if (source === "scene") {
     return {
       ...base,
@@ -1739,7 +1773,7 @@ function buildPlaybackTransportCapabilities(source, options = {}) {
     };
   }
 
-  if (source === "spotify" || source === "bluetooth" || source === "upnp") {
+  if (source === "spotify" || source === "upnp") {
     return {
       playPause: false,
       play: false,
@@ -1752,6 +1786,24 @@ function buildPlaybackTransportCapabilities(source, options = {}) {
   }
 
   return base;
+}
+
+function getCachedBluetoothTransportAvailable() {
+  const cachedPlayback = tikpalStateSnapshotCache?.state?.playback;
+  if (cachedPlayback?.source !== "bluetooth") return null;
+  const capabilities = cachedPlayback.transportCapabilities;
+  if (!capabilities) return null;
+  return capabilities.playPause === true
+    && capabilities.next === true
+    && capabilities.previous === true;
+}
+
+async function readBluetoothTransportAvailable(includeSlowRuntimeStatus) {
+  if (!BLUETOOTH_TRANSPORT_AVAILABLE_COMMAND.trim()) return false;
+  if (!includeSlowRuntimeStatus) {
+    return getCachedBluetoothTransportAvailable() === true;
+  }
+  return await commandSucceeds(BLUETOOTH_TRANSPORT_AVAILABLE_COMMAND, { timeout: 2500 });
 }
 
 function getCachedAirplayTransportAvailable() {
@@ -2051,6 +2103,9 @@ function metadataArtworkUrl(metadata) {
       ?? metadata.albumarturl
       ?? metadata.albumArtUrl
       ?? metadata.album_art_url
+      ?? metadata.coverurl
+      ?? metadata.coverUrl
+      ?? metadata.cover_url
   );
   if (!artworkUrl) return null;
   if (artworkUrl.startsWith("file:///var/local/www/imagesw/airplay-covers/")) {
@@ -2131,21 +2186,22 @@ function shouldRefreshAirplayPlaybackMetadata(state, { force = false } = {}) {
 }
 
 function mergeAirplayPlaybackMetadata(state, metadata) {
-  if (!isUsableAirplayPlaybackMetadata(metadata)) return clearAirplayPlaybackMetadata(state);
+  const usableMetadata = normalizeAirplayPlaybackMetadata(metadata);
+  if (!usableMetadata) return clearAirplayPlaybackMetadata(state);
 
   const airplaySource = getAirplaySourceSummaryFromState(state);
   if (airplaySource?.connectionState !== "connected") return state;
 
   const playback = {
     ...state.playback,
-    state: mapBluetoothPlaybackState(metadata),
-    albumArtUrl: metadata.artworkUrl ?? null,
-    title: metadata.title,
-    artist: metadata.artist || null,
-    album: metadata.album || "AirPlay Source",
-    elapsedSeconds: millisecondsToSeconds(metadata.positionMs),
-    durationSeconds: millisecondsToSeconds(metadata.durationMs, { allowZero: false }),
-    timingDiagnostics: metadata.timingDiagnostics ?? null
+    state: mapBluetoothPlaybackState(usableMetadata),
+    albumArtUrl: usableMetadata.artworkUrl ?? null,
+    title: usableMetadata.title,
+    artist: usableMetadata.artist || null,
+    album: usableMetadata.album || "AirPlay Source",
+    elapsedSeconds: millisecondsToSeconds(usableMetadata.positionMs),
+    durationSeconds: millisecondsToSeconds(usableMetadata.durationMs, { allowZero: false }),
+    timingDiagnostics: usableMetadata.timingDiagnostics ?? null
   };
   const nextState = {
     ...state,
@@ -2212,7 +2268,11 @@ function mapBluetoothPlaybackState(metadata) {
 function isUsableAirplayPlaybackMetadata(metadata) {
   if (!metadata?.title) return false;
   if (metadata.status === "stopped") return false;
+  return true;
+}
 
+function normalizeAirplayPlaybackMetadata(metadata) {
+  if (!isUsableAirplayPlaybackMetadata(metadata)) return null;
   const positionMs = Number(metadata.positionMs);
   const durationMs = Number(metadata.durationMs);
   if (
@@ -2220,12 +2280,17 @@ function isUsableAirplayPlaybackMetadata(metadata) {
     && Number.isFinite(positionMs)
     && Number.isFinite(durationMs)
     && durationMs > 0
-    && positionMs > durationMs + AIRPLAY_METADATA_POSITION_GRACE_MS
+    && positionMs > durationMs
   ) {
-    return false;
+    if (positionMs > durationMs + AIRPLAY_METADATA_POSITION_GRACE_MS) {
+      return null;
+    }
+    return {
+      ...metadata,
+      positionMs: durationMs
+    };
   }
-
-  return true;
+  return metadata;
 }
 
 function millisecondsToSeconds(value, { allowZero = true } = {}) {
@@ -5213,11 +5278,19 @@ function isCurrentMpcSourceAirplay() {
   return getCurrentMpcSourceId() === "airplay";
 }
 
+function isCurrentMpcSourceBluetooth() {
+  return getCurrentMpcSourceId() === "bluetooth";
+}
+
 function isCurrentMpcSourceRadio() {
   return getCurrentMpcSourceId() === "radio";
 }
 
 function isAirplayTransportPlaybackAction(action) {
+  return ["play_pause", "play", "pause", "next", "previous"].includes(String(action?.type ?? ""));
+}
+
+function isBluetoothTransportPlaybackAction(action) {
   return ["play_pause", "play", "pause", "next", "previous"].includes(String(action?.type ?? ""));
 }
 
@@ -5237,6 +5310,23 @@ function getAirplayTransportCommand(action) {
       return { command: AIRPLAY_NEXT_COMMAND, label: "next" };
     case "previous":
       return { command: AIRPLAY_PREVIOUS_COMMAND, label: "previous" };
+    default:
+      return null;
+  }
+}
+
+function getBluetoothTransportCommand(action) {
+  switch (action.type) {
+    case "play_pause":
+      return { command: BLUETOOTH_PLAY_PAUSE_COMMAND, label: "play/pause" };
+    case "play":
+      return { command: BLUETOOTH_PLAY_COMMAND, label: "play" };
+    case "pause":
+      return { command: BLUETOOTH_PAUSE_COMMAND, label: "pause" };
+    case "next":
+      return { command: BLUETOOTH_NEXT_COMMAND, label: "next" };
+    case "previous":
+      return { command: BLUETOOTH_PREVIOUS_COMMAND, label: "previous" };
     default:
       return null;
   }
@@ -5275,6 +5365,40 @@ async function applyMpcAirplayPlaybackAction(action) {
       throw new Error(`Unsupported playback action: ${action.type}`);
   }
 
+}
+
+async function applyMpcBluetoothPlaybackAction(action) {
+  switch (action.type) {
+    case "play_pause":
+    case "play":
+    case "pause":
+    case "next":
+    case "previous": {
+      const transport = getBluetoothTransportCommand(action);
+      if (!transport?.command?.trim()) {
+        throw new Error(`Bluetooth ${transport?.label ?? action.type} transport is not configured`);
+      }
+      if (!await readBluetoothTransportAvailable(true)) {
+        throw new Error(BLUETOOTH_REMOTE_UNAVAILABLE_REASON);
+      }
+      await runCommand(transport.command, { allowFailure: false, timeout: 5000 });
+      return;
+    }
+    case "seek":
+    case "favorite_toggle":
+    case "play_mode_set":
+      return;
+    case "volume_set": {
+      const percent = Number(action.value);
+      if (!Number.isFinite(percent) || percent < 0 || percent > 100) {
+        throw new Error("volume_set requires value between 0 and 100");
+      }
+      await setOutputVolumePercent(percent);
+      return;
+    }
+    default:
+      throw new Error(`Unsupported playback action: ${action.type}`);
+  }
 }
 
 async function getMpcSnapshot(options = {}) {
@@ -5331,6 +5455,9 @@ async function getMpcSnapshot(options = {}) {
   const bluetoothPlaybackMetadata = includeSlowRuntimeStatus && playbackSource === "bluetooth"
     ? await readBluetoothPlaybackMetadata()
     : null;
+  const bluetoothTransportAvailable = playbackSource === "bluetooth"
+    ? await readBluetoothTransportAvailable(includeSlowRuntimeStatus)
+    : null;
   const airplayPlaybackMetadata = includeSlowRuntimeStatus && playbackSource === "airplay"
     ? await readAirplayPlaybackMetadata()
     : null;
@@ -5339,10 +5466,26 @@ async function getMpcSnapshot(options = {}) {
     : null;
   const hasBluetoothTrackMetadata = Boolean(bluetoothPlaybackMetadata?.title);
   const airplayConnected = playbackSource === "airplay" && audio.currentSource.connectionState === "connected";
-  const trustedAirplayPlaybackMetadata = airplayConnected && isUsableAirplayPlaybackMetadata(airplayPlaybackMetadata)
-    ? airplayPlaybackMetadata
+  const trustedAirplayPlaybackMetadata = airplayConnected
+    ? normalizeAirplayPlaybackMetadata(airplayPlaybackMetadata)
     : null;
   const hasAirplayTrackMetadata = Boolean(trustedAirplayPlaybackMetadata?.title);
+  const bluetoothRemoteArtworkUrl = playbackSource === "bluetooth" && bluetoothPlaybackMetadata?.title && !bluetoothPlaybackMetadata.artworkUrl
+    ? await resolveRemotePlaybackArtworkUrl({
+        playbackSource,
+        title: bluetoothPlaybackMetadata.title,
+        artist: bluetoothPlaybackMetadata.artist,
+        album: bluetoothPlaybackMetadata.album
+      })
+    : null;
+  const airplayRemoteArtworkUrl = playbackSource === "airplay" && trustedAirplayPlaybackMetadata?.title && !trustedAirplayPlaybackMetadata.artworkUrl
+    ? await resolveRemotePlaybackArtworkUrl({
+        playbackSource,
+        title: trustedAirplayPlaybackMetadata.title,
+        artist: trustedAirplayPlaybackMetadata.artist,
+        album: trustedAirplayPlaybackMetadata.album
+      })
+    : null;
   const metadata = hasCurrentTrack
     ? includeSlowRuntimeStatus
       ? await readMediaMetadata(file)
@@ -5383,9 +5526,9 @@ async function getMpcSnapshot(options = {}) {
         : hasCurrentTrack ? status.state : "stopped",
       source: playbackSource,
       albumArtUrl: playbackSource === "bluetooth"
-        ? bluetoothPlaybackMetadata?.artworkUrl ?? null
+        ? bluetoothPlaybackMetadata?.artworkUrl ?? bluetoothRemoteArtworkUrl
         : playbackSource === "airplay"
-          ? trustedAirplayPlaybackMetadata?.artworkUrl ?? null
+          ? trustedAirplayPlaybackMetadata?.artworkUrl ?? airplayRemoteArtworkUrl
           : playbackSource === "radio" && activeRadioStation?.logoUrl
             ? activeRadioStation.logoUrl
           : !isExternalHandoffSource && hasCurrentTrack && includeSlowRuntimeStatus && currentArtworkState ? `/api/v1/media/artwork?track=${encodeURIComponent(currentArtworkState.token)}` : null,
@@ -5461,7 +5604,10 @@ async function getMpcSnapshot(options = {}) {
         : playbackSource === "airplay"
           ? trustedAirplayPlaybackMetadata?.timingDiagnostics ?? null
           : null,
-      transportCapabilities: buildPlaybackTransportCapabilities(playbackSource, { airplayRemoteControlAvailable: airplayTransportAvailable }),
+      transportCapabilities: buildPlaybackTransportCapabilities(playbackSource, {
+        airplayRemoteControlAvailable: airplayTransportAvailable,
+        bluetoothRemoteControlAvailable: bluetoothTransportAvailable
+      }),
       currentTrackIndex: playbackSource === "mpd" ? status.currentTrackIndex : 0,
       queueLength: playbackSource === "mpd" ? status.queueLength : 0,
       favorite: isMpdBackedSource && hasCurrentTrack ? isFavoriteTrackPath(file) : false,
@@ -6134,6 +6280,11 @@ async function applyMpcPlaybackActionUnlocked(action) {
 
   if (isCurrentMpcSourceAirplay()) {
     await applyMpcAirplayPlaybackAction(action);
+    return;
+  }
+
+  if (isCurrentMpcSourceBluetooth()) {
+    await applyMpcBluetoothPlaybackAction(action);
     return;
   }
 
@@ -6961,6 +7112,31 @@ function normalizeMetadataValue(value) {
   return String(value ?? "").trim().replace(/\s+/g, " ");
 }
 
+function normalizeLyricsProviderChain(value) {
+  const providers = String(value ?? "")
+    .split(",")
+    .map((entry) => entry.trim().toLowerCase())
+    .filter((entry) => SUPPORTED_LYRICS_PROVIDERS.has(entry));
+  const deduped = [];
+  for (const provider of providers) {
+    if (!deduped.includes(provider)) deduped.push(provider);
+  }
+  return deduped.length > 0 ? deduped : ["lrclib", "lyricsovh"];
+}
+
+function lyricsProviderChainLabel() {
+  return LYRICS_PROVIDER_CHAIN.join(", ");
+}
+
+function buildLyricsCacheKey(candidate) {
+  return [
+    candidate?.trackKey ?? "",
+    candidate?.sourceScope ?? "",
+    candidate?.recognitionMode ?? "",
+    LYRICS_PROVIDER_CACHE_VERSION
+  ].join("|");
+}
+
 function buildPlaybackTrackKey({ source, title, artist, album, durationSeconds }) {
   const normalizedTitle = normalizeMetadataValue(title);
   if (!normalizedTitle) return null;
@@ -6995,7 +7171,7 @@ function decorateLyricsState(state, candidate, overrides = {}) {
     artist: state.artist ?? candidate.artist ?? null,
     sourceScope: candidate.sourceScope,
     recognitionMode: candidate.recognitionMode ?? null,
-    recognitionProvider: candidate.recognitionProvider ?? null,
+    recognitionProvider: state.recognitionProvider ?? candidate.recognitionProvider ?? null,
     recognitionConfidence: candidate.recognitionConfidence ?? null,
     ...overrides
   });
@@ -7010,7 +7186,7 @@ function buildMetadataLyricsCandidate(playback, overrides = {}) {
     source: playback.source,
     sourceScope,
     recognitionMode: "metadata",
-    recognitionProvider: "lrclib",
+    recognitionProvider: LYRICS_PROVIDER_CHAIN[0] ?? "lrclib",
     trackKey: buildPlaybackTrackKey({
       ...playback,
       durationSeconds: Number.isFinite(trustedDurationMs) ? trustedDurationMs / 1000 : null
@@ -7473,21 +7649,69 @@ function normalizeLyricsMatchValue(value) {
     .trim();
 }
 
+function uniqueLyricsLookupValues(values) {
+  const results = [];
+  const seen = new Set();
+  for (const value of values) {
+    const normalized = normalizeMetadataValue(value);
+    const key = normalizeLyricsMatchValue(normalized);
+    if (!normalized || !key || seen.has(key)) continue;
+    seen.add(key);
+    results.push(normalized);
+  }
+  return results;
+}
+
+function buildLyricsTitleLookupValues(title) {
+  const normalized = normalizeMetadataValue(title);
+  const featuredBase = normalized
+    .replace(/\s*[\[(]\s*(?:feat\.?|ft\.?|featuring|with)\b[^\])]*[\])]\s*/gi, " ")
+    .replace(/\s+(?:feat\.?|ft\.?|featuring|with)\b.*$/i, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return uniqueLyricsLookupValues([normalized, featuredBase]);
+}
+
+function buildLyricsArtistLookupValues(artist) {
+  const normalized = normalizeMetadataValue(artist);
+  const splitArtists = normalized
+    .split(/\s*(?:,|&|\band\b|\bfeat\.?\b|\bft\.?\b|\bfeaturing\b|\bwith\b|\bx\b)\s*/i)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length >= 2);
+  return uniqueLyricsLookupValues([normalized, ...splitArtists]);
+}
+
+function buildNormalizedLyricsTitleCandidates(value) {
+  return buildLyricsTitleLookupValues(value).map(normalizeLyricsMatchValue).filter(Boolean);
+}
+
+function buildNormalizedLyricsArtistCandidates(value) {
+  return buildLyricsArtistLookupValues(value).map(normalizeLyricsMatchValue).filter(Boolean);
+}
+
 function providerLyricsDurationMs(lyricsBody) {
   const durationSeconds = Number(lyricsBody?.duration ?? lyricsBody?.durationSeconds);
   return Number.isFinite(durationSeconds) && durationSeconds > 0 ? Math.round(durationSeconds * 1000) : null;
 }
 
 function strictLyricsProviderMatch(candidate, lyricsBody) {
-  const expectedTitle = normalizeLyricsMatchValue(candidate.title);
+  const expectedTitles = buildNormalizedLyricsTitleCandidates(candidate.title);
   const actualTitle = normalizeLyricsMatchValue(lyricsBody?.trackName ?? lyricsBody?.title);
-  if (!expectedTitle || actualTitle !== expectedTitle) return false;
+  if (expectedTitles.length === 0 || !actualTitle || !expectedTitles.includes(actualTitle)) return false;
 
   const expectedArtist = normalizeLyricsMatchValue(candidate.artist);
   if (expectedArtist) {
     const actualArtist = normalizeLyricsMatchValue(lyricsBody?.artistName ?? lyricsBody?.artist);
     if (!actualArtist) return false;
-    if (actualArtist !== expectedArtist && !actualArtist.includes(expectedArtist) && !expectedArtist.includes(actualArtist)) {
+    const expectedArtists = buildNormalizedLyricsArtistCandidates(candidate.artist);
+    const actualArtists = buildNormalizedLyricsArtistCandidates(lyricsBody?.artistName ?? lyricsBody?.artist);
+    const hasArtistMatch = actualArtist === expectedArtist
+      || actualArtist.includes(expectedArtist)
+      || expectedArtist.includes(actualArtist)
+      || expectedArtists.some((expectedEntry) => actualArtists.some((actualEntry) => (
+        actualEntry === expectedEntry || actualEntry.includes(expectedEntry) || expectedEntry.includes(actualEntry)
+      )));
+    if (!hasArtistMatch) {
       return false;
     }
   }
@@ -7598,6 +7822,30 @@ async function fetchRemoteArtworkForAlbum({ artist, album }) {
   }
 }
 
+async function resolveRemotePlaybackArtworkUrl({ playbackSource, title, artist, album }) {
+  if (!["bluetooth", "airplay"].includes(playbackSource)) return null;
+  const cacheKey = buildArtworkCacheKey({ artist, album });
+  if (!cacheKey) return null;
+
+  const cached = await readCachedRemoteArtwork(cacheKey);
+  if (cached) {
+    currentArtworkState = {
+      kind: "remote",
+      token: cached.token,
+      mimeType: cached.contentType,
+      remotePath: cached.filePath,
+      absolutePath: null,
+      title: title || "External Audio",
+      artist: artist || "Unknown Artist",
+      album: album || "External Source"
+    };
+    return `/api/v1/media/artwork?track=${encodeURIComponent(cached.token)}`;
+  }
+
+  void fetchRemoteArtworkForAlbum({ artist, album }).catch(() => null);
+  return null;
+}
+
 async function resolveCurrentArtworkState({ playbackSource, metadata, fallbackTitle, fallbackArtist, fallbackAlbum }) {
   const title = metadata.title || fallbackTitle || trackTitleFromFile("") || "Not Playing";
   const artist = metadata.artist || fallbackArtist || "Unknown Artist";
@@ -7663,11 +7911,43 @@ async function resolveCurrentArtworkState({ playbackSource, metadata, fallbackTi
   };
 }
 
-async function fetchLyricsFromProvider(candidate) {
+function normalizeProviderLyricsBody(candidate, lyricsBody, provider, fallback = {}) {
+  if (!lyricsBody) return null;
+
+  if (typeof lyricsBody.lyrics === "string" && !lyricsBody.plainLyrics && !lyricsBody.syncedLyrics) {
+    const plainLyrics = lyricsBody.lyrics.trim();
+    if (!plainLyrics) return null;
+    return {
+      trackName: fallback.title ?? candidate.title,
+      artistName: fallback.artist ?? candidate.artist,
+      albumName: fallback.album ?? candidate.album,
+      duration: Number.isFinite(Number(candidate.durationMs)) ? Math.round(Number(candidate.durationMs) / 1000) : undefined,
+      syncedLyrics: null,
+      plainLyrics
+    };
+  }
+
+  const hasLyrics = Boolean(normalizeMetadataValue(lyricsBody.plainLyrics) || normalizeMetadataValue(lyricsBody.syncedLyrics));
+  if (!hasLyrics) return null;
+  if ((lyricsBody.trackName || lyricsBody.title || lyricsBody.artistName || lyricsBody.artist) && !strictLyricsProviderMatch(candidate, lyricsBody)) {
+    return null;
+  }
+
+  return {
+    ...lyricsBody,
+    trackName: lyricsBody.trackName ?? lyricsBody.title ?? fallback.title ?? candidate.title,
+    artistName: lyricsBody.artistName ?? lyricsBody.artist ?? fallback.artist ?? candidate.artist,
+    albumName: lyricsBody.albumName ?? lyricsBody.album ?? fallback.album ?? candidate.album,
+    provider
+  };
+}
+
+async function fetchLyricsBodyFromLrclib(candidate) {
   const useStrictMatch = shouldUseStrictLyricsProviderMatch(candidate);
   const acceptsLyricsBody = (lyricsBody) => (
     lyricsBody && (!useStrictMatch || strictLyricsProviderMatch(candidate, lyricsBody))
   );
+  const lookupTimeoutMs = Math.max(1_500, LRCLIB_TIMEOUT_MS);
 
   const fetchSearchVariant = async (params) => {
     const searchUrl = new URL("/api/search", LRCLIB_BASE_URL);
@@ -7675,59 +7955,187 @@ async function fetchLyricsFromProvider(candidate) {
       if (value) searchUrl.searchParams.set(key, value);
     }
     const { response, body } = await fetchJsonWithTimeout(searchUrl, {
-      timeoutMs: Math.max(LRCLIB_TIMEOUT_MS, 12_000)
+      timeoutMs: lookupTimeoutMs
     });
     if (response.status === 404) {
-      return null;
+      return { lyricsBody: null, noMatch: true };
     }
     if (!response.ok) {
       throw new Error(`LRCLIB search failed: ${response.status}`);
     }
-    return Array.isArray(body) ? body.find(acceptsLyricsBody) ?? null : null;
+    return {
+      lyricsBody: Array.isArray(body) ? body.find(acceptsLyricsBody) ?? null : null,
+      noMatch: true
+    };
   };
 
-  const fetchExactLyrics = async () => {
+  const fetchExactLyrics = async (params = {}) => {
     const exactUrl = new URL("/api/get", LRCLIB_BASE_URL);
-    exactUrl.searchParams.set("track_name", candidate.title);
-    if (candidate.artist) exactUrl.searchParams.set("artist_name", candidate.artist);
-    if (candidate.album) exactUrl.searchParams.set("album_name", candidate.album);
+    exactUrl.searchParams.set("track_name", params.title ?? candidate.title);
+    if (params.artist ?? candidate.artist) exactUrl.searchParams.set("artist_name", params.artist ?? candidate.artist);
+    if (params.album ?? candidate.album) exactUrl.searchParams.set("album_name", params.album ?? candidate.album);
     if (candidate.durationMs) exactUrl.searchParams.set("duration", String(Math.round(candidate.durationMs / 1000)));
 
     const exactResponse = await fetchJsonWithTimeout(exactUrl, {
-      timeoutMs: Math.max(LRCLIB_TIMEOUT_MS, 12_000)
+      timeoutMs: lookupTimeoutMs
     });
 
     if (exactResponse.response.ok) {
-      return acceptsLyricsBody(exactResponse.body) ? exactResponse.body : null;
+      return {
+        lyricsBody: acceptsLyricsBody(exactResponse.body) ? exactResponse.body : null,
+        noMatch: true
+      };
     }
     if (exactResponse.response.status !== 404) {
       throw new Error(`LRCLIB request failed: ${exactResponse.response.status}`);
     }
+    return { lyricsBody: null, noMatch: true };
+  };
+
+  const titleVariants = buildLyricsTitleLookupValues(candidate.title);
+  const artistVariants = buildLyricsArtistLookupValues(candidate.artist);
+  const primaryTitle = titleVariants[0] ?? candidate.title;
+  const primaryArtist = artistVariants[0] ?? candidate.artist;
+  const lookupTasks = [];
+  const lookupKeys = new Set();
+  const pushLookupTask = (kind, params) => {
+    const key = `${kind}:${JSON.stringify(params)}`;
+    if (lookupKeys.has(key)) return;
+    lookupKeys.add(key);
+    lookupTasks.push(kind === "exact"
+      ? () => fetchExactLyrics(params)
+      : () => fetchSearchVariant(params));
+  };
+
+  for (const title of titleVariants.slice(0, 2)) {
+    if (primaryArtist) pushLookupTask("exact", { title, artist: primaryArtist });
+    pushLookupTask("exact", { title });
+  }
+
+  for (const title of titleVariants.slice(0, 2)) {
+    if (primaryArtist) pushLookupTask("search", { track_name: title, artist_name: primaryArtist });
+    if (artistVariants[1]) pushLookupTask("search", { track_name: title, artist_name: artistVariants[1] });
+    pushLookupTask("search", { track_name: title });
+  }
+
+  if (primaryTitle && primaryArtist) {
+    pushLookupTask("search", { q: `${primaryTitle} ${primaryArtist}` });
+  }
+
+  const fetchLookupBatch = async (tasks) => {
+    const results = await Promise.all(tasks.map(async (task) => {
+      try {
+        return await task();
+      } catch (error) {
+        return { lyricsBody: null, noMatch: false, error };
+      }
+    }));
+    const matched = results.find((result) => result.lyricsBody)?.lyricsBody;
+    if (matched) return matched;
+    if (results.some((result) => result.noMatch)) return null;
+    const error = results.find((result) => result.error)?.error;
+    if (error) throw error;
     return null;
   };
 
-  const searchVariants = [
-    {
-      track_name: candidate.title,
-      ...(candidate.artist ? { artist_name: candidate.artist } : {})
-    },
-    {
-      track_name: candidate.title
-    }
-  ];
+  const lyricsBody = await fetchLookupBatch(lookupTasks);
+  return lyricsBody ? normalizeProviderLyricsBody(candidate, lyricsBody, "lrclib") : null;
+}
 
-  const fetchSearchLyrics = async () => {
-    for (const params of searchVariants) {
-      const lyricsBody = await fetchSearchVariant(params);
-      if (lyricsBody) return lyricsBody;
+function buildLyricsRequestVariants(candidate) {
+  const titleVariants = buildLyricsTitleLookupValues(candidate.title).slice(0, 2);
+  const artistVariants = buildLyricsArtistLookupValues(candidate.artist).slice(0, 2);
+  const variants = [];
+  const seen = new Set();
+
+  for (const title of titleVariants) {
+    for (const artist of artistVariants) {
+      if (!title || !artist) continue;
+      const key = `${normalizeLyricsMatchValue(artist)}|${normalizeLyricsMatchValue(title)}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      variants.push({ title, artist, album: candidate.album });
     }
-    return null;
+  }
+  return variants;
+}
+
+async function fetchLyricsBodyFromLyricsOvh(candidate) {
+  for (const variant of buildLyricsRequestVariants(candidate)) {
+    const lyricsUrl = new URL(
+      `/v1/${encodeURIComponent(variant.artist)}/${encodeURIComponent(variant.title)}`,
+      LYRICS_OVH_BASE_URL
+    );
+    const { response, body } = await fetchJsonWithTimeout(lyricsUrl, {
+      timeoutMs: Math.max(1_500, LRCLIB_TIMEOUT_MS)
+    });
+    if (response.status === 404) continue;
+    if (!response.ok) throw new Error(`lyrics.ovh request failed: ${response.status}`);
+    const normalized = normalizeProviderLyricsBody(candidate, body, "lyricsovh", variant);
+    if (normalized) return normalized;
+  }
+  return null;
+}
+
+function renderLyricsCustomUrl(template, variant, candidate) {
+  const values = {
+    title: variant.title,
+    artist: variant.artist,
+    album: variant.album ?? "",
+    duration: Number.isFinite(Number(candidate.durationMs)) ? String(Math.round(Number(candidate.durationMs) / 1000)) : ""
   };
+  let rendered = template;
+  for (const [key, value] of Object.entries(values)) {
+    rendered = rendered.replaceAll(`{${key}}`, encodeURIComponent(value));
+  }
+  return rendered;
+}
 
-  const searchFirst = candidate.sourceScope === "airplay_input" && candidate.recognitionMode === "metadata";
-  let lyricsBody = searchFirst ? await fetchSearchLyrics() : null;
-  if (!lyricsBody) lyricsBody = await fetchExactLyrics();
-  if (!lyricsBody && !searchFirst) lyricsBody = await fetchSearchLyrics();
+function parseLyricsCustomAuthHeader() {
+  const separatorIndex = LYRICS_CUSTOM_AUTH_HEADER.indexOf(":");
+  if (separatorIndex <= 0) return null;
+  const key = LYRICS_CUSTOM_AUTH_HEADER.slice(0, separatorIndex).trim();
+  const value = LYRICS_CUSTOM_AUTH_HEADER.slice(separatorIndex + 1).trim();
+  return key && value ? { [key]: value } : null;
+}
+
+async function fetchLyricsBodyFromCustom(candidate) {
+  if (!LYRICS_CUSTOM_URL_TEMPLATE.trim()) return null;
+  const headers = parseLyricsCustomAuthHeader();
+  const seenUrls = new Set();
+  for (const variant of buildLyricsRequestVariants(candidate)) {
+    const renderedUrl = renderLyricsCustomUrl(LYRICS_CUSTOM_URL_TEMPLATE, variant, candidate);
+    if (!renderedUrl || seenUrls.has(renderedUrl)) continue;
+    seenUrls.add(renderedUrl);
+    const { response, body } = await fetchJsonWithTimeout(new URL(renderedUrl), {
+      timeoutMs: Math.max(1_500, LRCLIB_TIMEOUT_MS),
+      ...(headers ? { headers } : {})
+    });
+    if (response.status === 404) continue;
+    if (!response.ok) throw new Error(`custom lyrics request failed: ${response.status}`);
+    const normalized = normalizeProviderLyricsBody(candidate, body, "custom", variant);
+    if (normalized) return normalized;
+  }
+  return null;
+}
+
+async function fetchLyricsBodyFromProvider(provider, candidate) {
+  switch (provider) {
+    case "lrclib":
+      return await fetchLyricsBodyFromLrclib(candidate);
+    case "lyricsovh":
+      return await fetchLyricsBodyFromLyricsOvh(candidate);
+    case "custom":
+      return await fetchLyricsBodyFromCustom(candidate);
+    default:
+      return null;
+  }
+}
+
+function buildLyricsStateFromProviderBody(candidate, lyricsBody, provider) {
+  const recognitionProvider = candidate.recognitionMode === "fingerprint"
+    ? candidate.recognitionProvider ?? provider
+    : provider;
 
   if (!lyricsBody) {
     return buildLyricsState({
@@ -7735,7 +8143,7 @@ async function fetchLyricsFromProvider(candidate) {
       trackKey: candidate.trackKey,
       title: candidate.title,
       artist: candidate.artist || null,
-      message: "Lyrics unavailable for this track"
+      message: `Lyrics unavailable from ${lyricsProviderChainLabel()}`
     });
   }
 
@@ -7757,7 +8165,8 @@ async function fetchLyricsFromProvider(candidate) {
       trackKey: candidate.trackKey,
       title: candidate.title,
       artist: candidate.artist || null,
-      message: "Lyrics unavailable for this track"
+      recognitionProvider,
+      message: `Lyrics unavailable from ${lyricsProviderChainLabel()}`
     });
   }
 
@@ -7766,11 +8175,30 @@ async function fetchLyricsFromProvider(candidate) {
     trackKey: candidate.trackKey,
     title: normalizeMetadataValue(lyricsBody?.trackName ?? candidate.title) || candidate.title,
     artist: normalizeMetadataValue(lyricsBody?.artistName ?? candidate.artist) || candidate.artist || null,
+    recognitionProvider,
     synced,
     timingStrategy,
     lines,
     message: null
   });
+}
+
+async function fetchLyricsFromProvider(candidate) {
+  let sawNoMatch = false;
+  let firstError = null;
+
+  for (const provider of LYRICS_PROVIDER_CHAIN) {
+    try {
+      const lyricsBody = await fetchLyricsBodyFromProvider(provider, candidate);
+      if (lyricsBody) return buildLyricsStateFromProviderBody(candidate, lyricsBody, provider);
+      sawNoMatch = true;
+    } catch (error) {
+      firstError ??= error;
+    }
+  }
+
+  if (!sawNoMatch && firstError) throw firstError;
+  return buildLyricsStateFromProviderBody(candidate, null, LYRICS_PROVIDER_CHAIN.at(-1) ?? "lrclib");
 }
 
 function getProxyInputCaptureCommand(source) {
@@ -7895,16 +8323,18 @@ async function resolveLyricsCandidate(candidate, { force = false, updateCurrentS
     });
   }
 
-  if (!force && lyricsInFlight.has(candidate.trackKey)) {
-    const inFlightResult = await lyricsInFlight.get(candidate.trackKey);
+  const cacheKey = buildLyricsCacheKey(candidate);
+
+  if (!force && lyricsInFlight.has(cacheKey)) {
+    const inFlightResult = await lyricsInFlight.get(cacheKey);
     return decorateLyricsState(inFlightResult, candidate);
   }
 
   const pending = (async () => {
     try {
       const result = await fetchLyricsFromProvider(candidate);
-      lyricsResultCache.set(candidate.trackKey, result);
-      lyricsRetryAfter.delete(candidate.trackKey);
+      lyricsResultCache.set(cacheKey, result);
+      lyricsRetryAfter.delete(cacheKey);
       return result;
     } catch (error) {
       const fallback = buildLyricsState({
@@ -7914,15 +8344,15 @@ async function resolveLyricsCandidate(candidate, { force = false, updateCurrentS
         artist: candidate.artist || null,
         message: lyricsErrorMessage(error)
       });
-      lyricsResultCache.set(candidate.trackKey, fallback);
-      lyricsRetryAfter.set(candidate.trackKey, Date.now() + LYRICS_ERROR_BACKOFF_MS);
+      lyricsResultCache.set(cacheKey, fallback);
+      lyricsRetryAfter.set(cacheKey, Date.now() + LYRICS_ERROR_BACKOFF_MS);
       return fallback;
     } finally {
-      lyricsInFlight.delete(candidate.trackKey);
+      lyricsInFlight.delete(cacheKey);
     }
   })();
 
-  lyricsInFlight.set(candidate.trackKey, pending);
+  lyricsInFlight.set(cacheKey, pending);
   const result = decorateLyricsState(await pending, candidate);
   if (updateCurrentState && shouldUpdateActiveLyricsState(candidate, { force })) {
     updateLyricsState(result);
@@ -7954,8 +8384,9 @@ function scheduleMetadataLyricsRecognition(candidate, options = {}) {
     }), candidate));
   }
 
-  const cached = lyricsResultCache.get(candidate.trackKey);
-  const retryAfter = lyricsRetryAfter.get(candidate.trackKey) ?? 0;
+  const cacheKey = buildLyricsCacheKey(candidate);
+  const cached = lyricsResultCache.get(cacheKey);
+  const retryAfter = lyricsRetryAfter.get(cacheKey) ?? 0;
   const shouldForce = options.force === true;
   const canRetry = shouldForce || retryAfter <= Date.now();
 
@@ -7967,7 +8398,7 @@ function scheduleMetadataLyricsRecognition(candidate, options = {}) {
     return updateLyricsState(decorateLyricsState(cached, candidate));
   }
 
-  if (lyricsInFlight.has(candidate.trackKey) && !shouldForce) {
+  if (lyricsInFlight.has(cacheKey) && !shouldForce) {
     return updateLyricsState(buildLyricsState({
       status: "recognizing",
       sourceScope: candidate.sourceScope,
@@ -8921,12 +9352,15 @@ function buildPlaybackMutationRefreshOptions(action) {
   const isAirplayTransport = API_MODE === "mpc"
     && isCurrentMpcSourceAirplay()
     && isAirplayTransportPlaybackAction(action);
+  const isBluetoothTransport = API_MODE === "mpc"
+    && isCurrentMpcSourceBluetooth()
+    && isBluetoothTransportPlaybackAction(action);
   const isRadioTransport = API_MODE === "mpc"
     && isCurrentMpcSourceRadio()
     && isRadioStationTransportAction(action);
   return {
     includeOutputVolumeStatus: action?.type === "volume_set",
-    includeSourceRuntimeStatus: isAirplayTransport || isRadioTransport,
+    includeSourceRuntimeStatus: isAirplayTransport || isBluetoothTransport || isRadioTransport,
     forceFreshAirplayMetadata: isAirplayTransport
   };
 }

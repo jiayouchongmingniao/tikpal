@@ -468,7 +468,7 @@ export function AmbientScreen({
   const tickerStyle = shouldScrollTicker
     ? ({ "--ambient-lyrics-marquee-duration": `${marqueeDurationSeconds}s` } as CSSProperties)
     : undefined;
-  const canShowLyricsLayer = isHifiMode && lyricsVisible;
+  const canShowLyricsLayer = !isHifiMode && lyricsVisible;
   const showLyricsLayer = canShowLyricsLayer && hasReadyLyrics && Boolean(tickerText);
   const isPlaybackPending = status.pending;
   const isPlaying = playback.state === "playing";
@@ -674,6 +674,41 @@ export function AmbientScreen({
     setAmbientSourceError(null);
     setSourcePickerOpen((open) => !open);
   }
+
+  const hifiLyricsControls = isHifiMode && hifiLyricsPanel ? (
+    <>
+      <button
+        className="hifi-lyrics-control"
+        type="button"
+        aria-label="Previous track"
+        title={previousTrackTitle}
+        disabled={previousTrackDisabled}
+        onClick={() => handleAmbientPlaybackAction("previous")}
+      >
+        <SkipBack size={34} fill="currentColor" strokeWidth={1.6} />
+      </button>
+      <button
+        className="hifi-lyrics-control hifi-lyrics-control-play"
+        type="button"
+        aria-label={isPlaying ? "Pause" : "Play"}
+        title={playPauseTitle}
+        disabled={playPauseDisabled}
+        onClick={() => handleAmbientPlaybackAction("play_pause")}
+      >
+        {isPlaying ? <Pause size={42} fill="currentColor" strokeWidth={1.5} /> : <Play size={42} fill="currentColor" strokeWidth={1.5} />}
+      </button>
+      <button
+        className="hifi-lyrics-control"
+        type="button"
+        aria-label="Next track"
+        title={nextTrackTitle}
+        disabled={nextTrackDisabled}
+        onClick={() => handleAmbientPlaybackAction("next")}
+      >
+        <SkipForward size={34} fill="currentColor" strokeWidth={1.6} />
+      </button>
+    </>
+  ) : null;
 
   async function handleAmbientSourceSelect(sourceId: AmbientMusicSourceTarget) {
     onHudActivity();
@@ -1225,6 +1260,7 @@ export function AmbientScreen({
           system={system}
           fontTheme={fontTheme}
           lyricsPanel={hifiLyricsPanel}
+          lyricsControls={hifiLyricsControls}
         />
       ) : (
         <FlameScene

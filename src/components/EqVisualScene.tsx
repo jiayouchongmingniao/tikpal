@@ -1,4 +1,4 @@
-import { type CSSProperties, useEffect, useMemo, useState } from "react";
+import { type CSSProperties, type ReactNode, useEffect, useMemo, useState } from "react";
 import { buildHifiCoverTheme, buildHifiSeedTheme, hifiThemeToCssVariables } from "../hifiLyricsVisual";
 import { formatDuration, formatSampleRate } from "../mockState";
 import { getPlaybackDisplayTruth } from "../playbackTruth";
@@ -24,6 +24,7 @@ interface EqVisualSceneProps {
   system: SystemState;
   fontTheme: FontTheme;
   lyricsPanel?: HifiLyricsPanel | null;
+  lyricsControls?: ReactNode;
 }
 
 interface WaveLane {
@@ -67,6 +68,13 @@ const WAVE_LANES: WaveLane[] = [
   { x: 54, y: 75, width: 62, amplitude: 5.5, variance: 7, tone: "green" },
   { x: 2, y: 91, width: 96, amplitude: 4.2, variance: 4, tone: "warm" },
   { x: 12, y: 84, width: 76, amplitude: 3.8, variance: 5, tone: "cool" }
+];
+
+const MINI_EQ_BARS = [
+  0.18, 0.24, 0.31, 0.42, 0.58, 0.72, 0.86, 0.7,
+  0.52, 0.46, 0.61, 0.78, 0.9, 0.82, 0.68, 0.55,
+  0.44, 0.5, 0.64, 0.73, 0.66, 0.49, 0.36, 0.28,
+  0.22, 0.2, 0.18, 0.16
 ];
 
 function hashSeed(parts: string[]) {
@@ -147,15 +155,26 @@ function createHifiAmbientVisuals(seed: number) {
   return { waves, particles };
 }
 
-export function EqVisualScene({ playback, audio, system, fontTheme, lyricsPanel }: EqVisualSceneProps) {
+export function EqVisualScene({ playback, audio, system, fontTheme, lyricsPanel, lyricsControls }: EqVisualSceneProps) {
   const isPlaying = playback.state === "playing";
+  const visibleLyricsPanel = useMemo(() => {
+    if (!lyricsPanel?.lines.length) return null;
+    const visibleLineCount = 6;
+    const activeIndex = Math.max(0, Math.min(lyricsPanel.activeIndex, lyricsPanel.lines.length - 1));
+    const start = Math.max(0, activeIndex - 2);
+    return {
+      ...lyricsPanel,
+      activeIndex: activeIndex - start,
+      lines: lyricsPanel.lines.slice(start, start + visibleLineCount)
+    };
+  }, [lyricsPanel]);
   const playbackTruth = getPlaybackDisplayTruth(playback, audio, fontTheme);
   const [failedAlbumArtUrl, setFailedAlbumArtUrl] = useState<string | null>(null);
   const displayedAlbumArtUrl = playbackTruth.hasPlaybackArtwork && failedAlbumArtUrl === playbackTruth.albumArtUrl
     ? playbackTruth.fallbackAlbumArtUrl
     : playbackTruth.albumArtUrl;
   const usingGeneratedCoverFallback = !playbackTruth.hasPlaybackArtwork || displayedAlbumArtUrl === playbackTruth.fallbackAlbumArtUrl;
-  const hasLyricsPanel = Boolean(lyricsPanel?.lines.length);
+  const hasLyricsPanel = Boolean(visibleLyricsPanel?.lines.length);
   const themeSeedParts = useMemo(
     () => [
       playbackTruth.title,
@@ -187,6 +206,8 @@ export function EqVisualScene({ playback, audio, system, fontTheme, lyricsPanel 
     .slice(0, 3)
     .toUpperCase();
   const trackHeading = [playbackTruth.title, playbackTruth.artist].filter(Boolean).join(" - ");
+  const lyricsProgressPercent = `${Math.round(playbackTruth.progress * 1000) / 10}%`;
+  const lyricsTimeLabel = `${formatDuration(playbackTruth.elapsedSeconds)}/${formatDuration(playbackTruth.durationSeconds)}`;
 
   useEffect(() => {
     let cancelled = false;
@@ -291,16 +312,16 @@ export function EqVisualScene({ playback, audio, system, fontTheme, lyricsPanel 
           </div>
         ) : null}
       </div>
-      {hasLyricsPanel && lyricsPanel ? (
-        <aside className={`hifi-lyrics-panel ${lyricsPanel.synced ? "is-synced" : "is-static"}`} aria-label="Lyrics" data-hifi-lyrics-panel>
+      {hasLyricsPanel && visibleLyricsPanel ? (
+        <aside className={`hifi-lyrics-panel ${visibleLyricsPanel.synced ? "is-synced" : "is-static"}`} aria-label="Lyrics" data-hifi-lyrics-panel>
           <header className="hifi-lyrics-heading" data-hifi-track-info>
             <strong>{trackHeading}</strong>
           </header>
           <div
             className="hifi-lyrics-wall"
-            style={{ "--hifi-lyrics-active-index": lyricsPanel.activeIndex } as CSSProperties}
+            style={{ "--hifi-lyrics-active-index": visibleLyricsPanel.activeIndex } as CSSProperties}
           >
-            {lyricsPanel.lines.map((line) => (
+            {visibleLyricsPanel.lines.map((line) => (
               <p
                 className={`hifi-lyrics-line ${line.active ? "is-active" : ""}`}
                 data-hifi-lyrics-line
@@ -316,6 +337,35 @@ export function EqVisualScene({ playback, audio, system, fontTheme, lyricsPanel 
             ))}
           </div>
         </aside>
+      ) : null}
+      {hasLyricsPanel ? (
+        <div className="hifi-lyrics-footer" data-hifi-lyrics-footer>
+          <div className="hifi-lyrics-progress-eq" data-hifi-lyrics-progress-eq aria-hidden="true">
+            <div className="hifi-mini-eq" data-hifi-mini-eq>
+              {MINI_EQ_BARS.map((height, index) => (
+                <span
+                  key={`${height}-${index}`}
+                  data-hifi-mini-eq-bar
+                  style={{
+                    "--hifi-mini-eq-height": height,
+                    "--hifi-mini-eq-delay": `${index * -0.07}s`
+                  } as CSSProperties}
+                />
+              ))}
+            </div>
+            <div className="hifi-lyrics-progress-row">
+              <div className="hifi-lyrics-progress-track">
+                <span style={{ width: lyricsProgressPercent }} />
+              </div>
+              <span className="hifi-lyrics-time" data-hifi-lyrics-time>{lyricsTimeLabel}</span>
+            </div>
+          </div>
+          {lyricsControls ? (
+            <div className="hifi-lyrics-controls" aria-label="Playback controls" data-hifi-lyrics-controls>
+              {lyricsControls}
+            </div>
+          ) : null}
+        </div>
       ) : null}
     </section>
   );

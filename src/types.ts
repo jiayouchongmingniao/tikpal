@@ -415,7 +415,7 @@ export interface LyricsState {
   sourceScope: "local_playback" | "bluetooth_input" | "airplay_input";
   providerMode: "online";
   recognitionMode: "metadata" | "fingerprint" | null;
-  recognitionProvider: "lrclib" | "acrcloud" | null;
+  recognitionProvider: "lrclib" | "lyricsovh" | "custom" | "acrcloud" | null;
   recognitionConfidence: number | null;
   trackKey: string | null;
   title: string | null;

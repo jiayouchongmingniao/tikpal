@@ -390,6 +390,10 @@ function sendProviderJson(response, status, body) {
   response.end(JSON.stringify(body));
 }
 
+function sendProviderJsonAfter(response, delayMs, status, body) {
+  setTimeout(() => sendProviderJson(response, status, body), delayMs);
+}
+
 function createProviderServer() {
   return http.createServer((request, response) => {
     const url = new URL(request.url ?? "/", PROVIDER_URL);
@@ -419,8 +423,75 @@ function createProviderServer() {
       return;
     }
 
+    if (request.method === "GET" && url.pathname === "/custom-lyrics") {
+      const track = url.searchParams.get("title");
+      if (track === "Custom Plain") {
+        sendProviderJson(response, 200, {
+          lyrics: "Custom provider line one\nCustom provider line two"
+        });
+        return;
+      }
+      if (track === "Fallback Song") {
+        sendProviderJson(response, 401, { error: "unauthorized" });
+        return;
+      }
+      sendProviderJson(response, 404, { error: "not found" });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname.startsWith("/v1/")) {
+      const [, , encodedArtist, encodedTitle] = url.pathname.split("/");
+      const artist = decodeURIComponent(encodedArtist ?? "");
+      const track = decodeURIComponent(encodedTitle ?? "");
+      if (artist === "Fallback Artist" && track === "Fallback Song") {
+        sendProviderJson(response, 200, {
+          lyrics: "Fallback provider line one\nFallback provider line two"
+        });
+        return;
+      }
+      sendProviderJson(response, 404, { error: "No lyrics found" });
+      return;
+    }
+
     if (request.method === "GET" && url.pathname === "/api/search") {
       const track = url.searchParams.get("track_name");
+
+      if (track === "Fallback Song") {
+        sendProviderJson(response, 200, [
+          {
+            trackName: track,
+            artistName: "Wrong Singer",
+            albumName: "Wrong Album",
+            duration: 180,
+            syncedLyrics: "[00:05.00]Wrong fallback line",
+            plainLyrics: "Wrong fallback line"
+          }
+        ]);
+        return;
+      }
+
+      if (track === "Walter White") {
+        sendProviderJson(response, 200, [
+          {
+            trackName: track,
+            artistName: "Epic Rap Battles of History",
+            albumName: "Wrong Album",
+            duration: 136,
+            syncedLyrics: "[00:05.00]Wrong Walter line",
+            plainLyrics: "Wrong Walter line"
+          }
+        ]);
+        return;
+      }
+
+      if (track === "Slow Empty") {
+        if (!url.searchParams.get("artist_name")) {
+          sendProviderJsonAfter(response, 700, 200, []);
+          return;
+        }
+        sendProviderJson(response, 200, []);
+        return;
+      }
 
       if (track === "This City") {
         sendProviderJson(response, 200, [
@@ -500,6 +571,16 @@ function createProviderServer() {
       }
 
       if (track === "Lose Yourself to Dance") {
+        sendProviderJson(response, 404, { error: "not found" });
+        return;
+      }
+
+      if (track === "Slow Empty") {
+        sendProviderJson(response, 404, { error: "not found" });
+        return;
+      }
+
+      if (track === "Fallback Song" || track === "Custom Plain" || track === "Walter White") {
         sendProviderJson(response, 404, { error: "not found" });
         return;
       }
@@ -2461,6 +2542,10 @@ async function runMpcAirplayHandoffRefreshSmoke(roomExperienceStatePath) {
   const fakeAirplayMetadataCommandPath = path.join(workspace, "airplay-metadata.mjs");
   const fakeAirplayTransportLogPath = path.join(workspace, "airplay-transport.log");
   const fakeAirplayTransportCommandPath = path.join(workspace, "airplay-transport.mjs");
+  const fakeBluetoothMetadataPath = path.join(workspace, "bluetooth-metadata.txt");
+  const fakeBluetoothMetadataCommandPath = path.join(workspace, "bluetooth-metadata.mjs");
+  const fakeBluetoothTransportLogPath = path.join(workspace, "bluetooth-transport.log");
+  const fakeBluetoothTransportCommandPath = path.join(workspace, "bluetooth-transport.mjs");
   const fakeExternalCommandLogPath = path.join(workspace, "external-command.log");
   const fakeExternalCommandPath = path.join(workspace, "external-command.mjs");
   const fakeExternalStatePath = path.join(workspace, "external-state.json");
@@ -2535,6 +2620,7 @@ process.stdout.write(\`Simple mixer control 'PCM',0
   await writeFile(fakeExternalCommandLogPath, "");
   await writeFile(fakeExternalStatePath, `${JSON.stringify({
     bluetoothActive: false,
+    bluetoothTransportAvailable: true,
     spotifyActive: false,
     upnpActive: false
   }, null, 2)}\n`);
@@ -2571,6 +2657,32 @@ import { appendFileSync } from "node:fs";
 appendFileSync(${JSON.stringify(fakeAirplayTransportLogPath)}, process.argv[2] + "\\n");
 `);
   await chmod(fakeAirplayTransportCommandPath, 0o755);
+  await writeFile(fakeBluetoothMetadataPath, "title=Pocket Signal\nartist=Tikpal Phone\nalbum=AVRCP Smoke\nstatus=playing\npositionMs=12000\ndurationMs=180000\n");
+  await writeFile(fakeBluetoothMetadataCommandPath, `#!/usr/bin/env node
+import { readFileSync } from "node:fs";
+
+process.stdout.write(readFileSync(process.env.TIKPAL_FAKE_BLUETOOTH_METADATA_PATH, "utf8"));
+`);
+  await chmod(fakeBluetoothMetadataCommandPath, 0o755);
+  await writeFile(fakeBluetoothTransportLogPath, "");
+  await writeFile(fakeBluetoothTransportCommandPath, `#!/usr/bin/env node
+import { appendFileSync, readFileSync } from "node:fs";
+
+const action = process.argv[2] ?? "";
+const state = JSON.parse(readFileSync(process.env.TIKPAL_FAKE_EXTERNAL_STATE_PATH, "utf8"));
+
+if (action === "available") {
+  process.exit(state.bluetoothTransportAvailable ? 0 : 1);
+}
+
+if (!state.bluetoothTransportAvailable) {
+  process.stderr.write("Bluetooth AVRCP player is unavailable from this sender\\n");
+  process.exit(3);
+}
+
+appendFileSync(${JSON.stringify(fakeBluetoothTransportLogPath)}, action + "\\n");
+`);
+  await chmod(fakeBluetoothTransportCommandPath, 0o755);
   await writeAirplayMetadata({
     title: "This City",
     artist: "Sam Fischer",
@@ -2605,12 +2717,20 @@ appendFileSync(${JSON.stringify(fakeAirplayTransportLogPath)}, process.argv[2] +
       TIKPAL_BLUETOOTH_ACTIVE_COMMAND: `${process.execPath} ${fakeExternalCommandPath} bluetooth-active`,
       TIKPAL_BLUETOOTH_DISABLE_COMMAND: `${process.execPath} ${fakeExternalCommandPath} bluetooth-disable`,
       TIKPAL_BLUETOOTH_LABEL_COMMAND: "printf 'Tikpal Speaker'",
+      TIKPAL_BLUETOOTH_METADATA_COMMAND: `${process.execPath} ${fakeBluetoothMetadataCommandPath}`,
+      TIKPAL_BLUETOOTH_TRANSPORT_AVAILABLE_COMMAND: `${process.execPath} ${fakeBluetoothTransportCommandPath} available`,
+      TIKPAL_BLUETOOTH_PLAY_PAUSE_COMMAND: `${process.execPath} ${fakeBluetoothTransportCommandPath} play-pause`,
+      TIKPAL_BLUETOOTH_PLAY_COMMAND: `${process.execPath} ${fakeBluetoothTransportCommandPath} play`,
+      TIKPAL_BLUETOOTH_PAUSE_COMMAND: `${process.execPath} ${fakeBluetoothTransportCommandPath} pause`,
+      TIKPAL_BLUETOOTH_NEXT_COMMAND: `${process.execPath} ${fakeBluetoothTransportCommandPath} next`,
+      TIKPAL_BLUETOOTH_PREVIOUS_COMMAND: `${process.execPath} ${fakeBluetoothTransportCommandPath} previous`,
       TIKPAL_UPNP_ENABLE_COMMAND: `${process.execPath} ${fakeExternalCommandPath} upnp-enable`,
       TIKPAL_UPNP_READY_COMMAND: "true",
       TIKPAL_UPNP_ACTIVE_COMMAND: `${process.execPath} ${fakeExternalCommandPath} upnp-active`,
       TIKPAL_UPNP_DISABLE_COMMAND: `${process.execPath} ${fakeExternalCommandPath} upnp-disable`,
       TIKPAL_UPNP_LABEL_COMMAND: "printf 'Tikpal Speaker'",
       TIKPAL_FAKE_EXTERNAL_STATE_PATH: fakeExternalStatePath,
+      TIKPAL_FAKE_BLUETOOTH_METADATA_PATH: fakeBluetoothMetadataPath,
       TIKPAL_AIRPLAY_ENABLE_COMMAND: `${process.execPath} ${fakeExternalCommandPath} airplay-enable`,
       TIKPAL_AIRPLAY_READY_COMMAND: "true",
       TIKPAL_AIRPLAY_ACTIVE_COMMAND: "true",
@@ -2627,6 +2747,11 @@ appendFileSync(${JSON.stringify(fakeAirplayTransportLogPath)}, process.argv[2] +
       TIKPAL_FAKE_AIRPLAY_METADATA_PATH: fakeAirplayMetadataPath,
       TIKPAL_AIRPLAY_ARTWORK_ROOT: airplayArtworkRoot,
       TIKPAL_AIRPLAY_DIRECT_METADATA_REFRESH_MIN_MS: "1000",
+      TIKPAL_LYRICS_PROVIDER_CHAIN: "lrclib,custom,lyricsovh",
+      TIKPAL_LYRICS_CUSTOM_URL_TEMPLATE: `${PROVIDER_URL}/custom-lyrics?artist={artist}&title={title}`,
+      TIKPAL_LYRICS_CUSTOM_AUTH_HEADER: "Authorization: Bearer smoke",
+      TIKPAL_LYRICS_OVH_BASE_URL: PROVIDER_URL,
+      TIKPAL_LRCLIB_TIMEOUT_MS: "250",
       TIKPAL_LRCLIB_BASE_URL: PROVIDER_URL
     }),
     stdio: ["ignore", "pipe", "pipe"]
@@ -2712,6 +2837,7 @@ appendFileSync(${JSON.stringify(fakeAirplayTransportLogPath)}, process.argv[2] +
 
     await writeFile(fakeExternalStatePath, `${JSON.stringify({
       bluetoothActive: true,
+      bluetoothTransportAvailable: true,
       spotifyActive: false,
       upnpActive: false
     }, null, 2)}\n`);
@@ -2726,6 +2852,71 @@ appendFileSync(${JSON.stringify(fakeAirplayTransportLogPath)}, process.argv[2] +
     const airplayAfterBluetoothLog = await waitForExternalCommand("upnp-disable");
     assert(airplayAfterBluetoothLog.includes("airplay-enable\n"), "mpc Bluetooth-to-AirPlay switch should enable AirPlay before cleanup finishes");
     assert(airplayAfterBluetoothLog.includes("bluetooth-disable\n"), "mpc Bluetooth-to-AirPlay switch should clean up old Bluetooth in the background");
+
+    await writeFile(fakeExternalStatePath, `${JSON.stringify({
+      bluetoothActive: true,
+      bluetoothTransportAvailable: true,
+      spotifyActive: false,
+      upnpActive: false
+    }, null, 2)}\n`);
+    await writeFile(fakeBluetoothTransportLogPath, "");
+    const bluetoothForTransport = await requestFrom(baseUrl, "/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({ target: "bluetooth" })
+    });
+    assert(bluetoothForTransport.response.ok, "mpc bluetooth transport source switch should return 200");
+    let bluetoothState = null;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      bluetoothState = await requestFrom(baseUrl, "/api/v1/system/state");
+      if (bluetoothState.body.playback?.transportCapabilities?.next === true) break;
+      await wait(100);
+    }
+    assert(bluetoothState.response.ok, "mpc bluetooth transport state should return 200");
+    assert(bluetoothState.body.playback.source === "bluetooth", "mpc bluetooth transport state should keep Bluetooth source");
+    assert(bluetoothState.body.playback.transportCapabilities?.next === true, "mpc bluetooth state should expose AVRCP capability");
+    const bluetoothNext = await requestFrom(baseUrl, "/api/v1/playback/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "next" })
+    });
+    assert(bluetoothNext.response.ok, "mpc bluetooth next action should return 200");
+    assert(bluetoothNext.body.playback.source === "bluetooth", "mpc bluetooth next should keep Bluetooth as playback source");
+    const bluetoothPlayPause = await requestFrom(baseUrl, "/api/v1/playback/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "play_pause" })
+    });
+    assert(bluetoothPlayPause.response.ok, "mpc bluetooth play_pause action should return 200");
+    const bluetoothTransportLog = await readFile(fakeBluetoothTransportLogPath, "utf8");
+    assert(
+      bluetoothTransportLog.includes("next\n") && bluetoothTransportLog.includes("play-pause\n"),
+      `mpc bluetooth transport should call Bluetooth commands, got ${JSON.stringify(bluetoothTransportLog)}`
+    );
+    await writeFile(fakeExternalStatePath, `${JSON.stringify({
+      bluetoothActive: true,
+      bluetoothTransportAvailable: false,
+      spotifyActive: false,
+      upnpActive: false
+    }, null, 2)}\n`);
+    const unavailableBluetoothNext = await requestFrom(baseUrl, "/api/v1/playback/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "next" })
+    });
+    assert(unavailableBluetoothNext.response.status === 400, "mpc bluetooth next should fail honestly when AVRCP is unavailable");
+    assert(
+      unavailableBluetoothNext.body.message === "Bluetooth AVRCP control is unavailable from this sender",
+      "mpc bluetooth unavailable transport should return a clear reason"
+    );
+
+    await writeFile(fakeExternalStatePath, `${JSON.stringify({
+      bluetoothActive: false,
+      bluetoothTransportAvailable: true,
+      spotifyActive: false,
+      upnpActive: false
+    }, null, 2)}\n`);
+    const airplayForTransport = await requestFrom(baseUrl, "/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({ target: "airplay" })
+    });
+    assert(airplayForTransport.response.ok, "mpc airplay source should recover after Bluetooth transport checks");
 
     const airplayNext = await requestFrom(baseUrl, "/api/v1/playback/actions", {
       method: "POST",
@@ -2791,6 +2982,29 @@ appendFileSync(${JSON.stringify(fakeAirplayTransportLogPath)}, process.argv[2] +
       afterVolume.body.audio.currentSource.connectionState === "connected",
       `cached mpc state should keep connected after external volume_set, got ${afterVolume.body.audio.currentSource.connectionState}`
     );
+
+    await writeAirplayMetadata({
+      title: "This City",
+      artist: "Sam Fischer",
+      album: "Not a Hobby",
+      status: "playing",
+      positionMs: 65000,
+      durationMs: 60000,
+      artworkPath: firstAirplayArtworkPath,
+      artworkMtimeMs: 112000,
+      metadataSource: "mpris"
+    });
+    const overrunLyricsRefresh = await requestFrom(baseUrl, "/api/v1/lyrics/refresh", {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    assert(overrunLyricsRefresh.response.ok, "mpc airplay lyrics refresh with overrun position should return 200");
+    const overrunState = await requestFrom(baseUrl, "/api/v1/system/state");
+    assert(overrunState.response.ok, "cached mpc airplay overrun state should return 200");
+    assert(overrunState.body.playback.title === "This City", "AirPlay metadata position overrun should not clear the current track");
+    assert(overrunState.body.playback.state === "playing", "AirPlay metadata position overrun should keep playing state");
+    assert(overrunState.body.playback.elapsedSeconds === 60, "AirPlay metadata position overrun should clamp elapsed time to duration");
+    assert(overrunState.body.lyrics.title === "This City", "AirPlay metadata position overrun should keep lyrics tied to the current track");
 
     await writeAirplayMetadata({
       title: "Instant Crush",
@@ -2862,6 +3076,100 @@ appendFileSync(${JSON.stringify(fakeAirplayTransportLogPath)}, process.argv[2] +
       durationDriftLyrics.lines.some((line) => line.text.includes("real lyric clock")),
       "AirPlay lyrics should not disappear when trusted title and artist have a mismatched duration"
     );
+
+    await writeAirplayMetadata({
+      title: "Slow Empty",
+      artist: "Timeout Artist",
+      album: "Provider Edge",
+      status: "playing",
+      positionMs: 8000,
+      durationMs: 180000,
+      artworkPath: secondAirplayArtworkPath,
+      artworkMtimeMs: 334000,
+      metadataSource: "mpris"
+    });
+    const slowEmptyLyricsRefresh = await requestFrom(baseUrl, "/api/v1/lyrics/refresh", {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    assert(slowEmptyLyricsRefresh.response.ok, "mpc airplay lyrics refresh with one slow empty branch should return 200");
+    const slowEmptyLyrics = await waitForLyricsTrackAt(baseUrl, {
+      title: "Slow Empty",
+      artist: "Timeout Artist",
+      statuses: ["not_found"]
+    });
+    assert(slowEmptyLyrics.message.includes("lrclib") && slowEmptyLyrics.message.includes("lyricsovh"), "AirPlay slow empty lookup should report the provider chain");
+
+    await writeAirplayMetadata({
+      title: "Fallback Song",
+      artist: "Fallback Artist",
+      album: "Fallback Album",
+      status: "playing",
+      positionMs: 12000,
+      durationMs: 180000,
+      artworkPath: secondAirplayArtworkPath,
+      artworkMtimeMs: 335000,
+      metadataSource: "mpris"
+    });
+    const fallbackLyricsRefresh = await requestFrom(baseUrl, "/api/v1/lyrics/refresh", {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    assert(fallbackLyricsRefresh.response.ok, "mpc airplay fallback lyrics refresh should return 200");
+    const fallbackLyrics = await waitForLyricsTrackAt(baseUrl, {
+      title: "Fallback Song",
+      artist: "Fallback Artist"
+    });
+    assert(fallbackLyrics.recognitionProvider === "lyricsovh", "AirPlay fallback lyrics should report lyricsovh provider");
+    assert(fallbackLyrics.lines.some((line) => line.text.includes("Fallback provider line one")), "AirPlay fallback lyrics should expose lyrics.ovh plain lyrics");
+    assert(!fallbackLyrics.lines.some((line) => line.text.includes("Wrong fallback line")), "AirPlay fallback lyrics should still reject wrong-artist LRCLIB results");
+
+    await writeAirplayMetadata({
+      title: "Custom Plain",
+      artist: "Custom Artist",
+      album: "Custom Album",
+      status: "playing",
+      positionMs: 15000,
+      durationMs: 120000,
+      artworkPath: secondAirplayArtworkPath,
+      artworkMtimeMs: 336000,
+      metadataSource: "mpris"
+    });
+    const customLyricsRefresh = await requestFrom(baseUrl, "/api/v1/lyrics/refresh", {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    assert(customLyricsRefresh.response.ok, "mpc airplay custom lyrics refresh should return 200");
+    const customLyrics = await waitForLyricsTrackAt(baseUrl, {
+      title: "Custom Plain",
+      artist: "Custom Artist"
+    });
+    assert(customLyrics.recognitionProvider === "custom", "AirPlay custom lyrics should report custom provider");
+    assert(customLyrics.lines.some((line) => line.text.includes("Custom provider line one")), "AirPlay custom lyrics should expose plain custom lyrics");
+
+    await writeAirplayMetadata({
+      title: "Walter White",
+      artist: "Junior Simba, Manz",
+      album: "Walter White",
+      status: "playing",
+      positionMs: 6000,
+      durationMs: 205000,
+      artworkPath: secondAirplayArtworkPath,
+      artworkMtimeMs: 337000,
+      metadataSource: "mpris"
+    });
+    const walterLyricsRefresh = await requestFrom(baseUrl, "/api/v1/lyrics/refresh", {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    assert(walterLyricsRefresh.response.ok, "mpc airplay wrong-title-only lyrics refresh should return 200");
+    const walterLyrics = await waitForLyricsTrackAt(baseUrl, {
+      title: "Walter White",
+      artist: "Junior Simba, Manz",
+      statuses: ["not_found"]
+    });
+    assert(walterLyrics.lines.length === 0, "AirPlay missing fallback lyrics should not expose title-only wrong artist lyrics");
+    assert(walterLyrics.message.includes("lrclib") && walterLyrics.message.includes("lyricsovh"), "AirPlay missing fallback lyrics should report the provider chain");
 
     await writeAirplayMetadata({
       title: "Stale AirPlay Metadata",
@@ -3625,7 +3933,11 @@ async function run() {
       body: JSON.stringify({ type: "next" })
     });
     assert(nextToNotFound.response.ok, "second next action should return 200");
-    const missingLyrics = await waitForLyricsStatus(["not_found", "ready"]);
+    const missingLyrics = await waitForLyricsTrackAt(BASE_URL, {
+      title: nextToNotFound.body.playback.title,
+      artist: nextToNotFound.body.playback.artist,
+      statuses: ["not_found", "ready"]
+    });
     if (missingLyrics.status === "not_found") {
       assert(missingLyrics.message, "missing lyrics should produce a lightweight message");
     } else {
@@ -3873,7 +4185,11 @@ async function run() {
     assert(mpd.response.ok, "mpd source switch should return 200");
     assert(mpd.body.audio.currentSource.id === "mpd", "mpd switch should return to library in mock mode");
     assert(mpd.body.audio.sources.some((source) => source.id === "bluetooth" && source.armed === false), "mpd switch should keep bluetooth blocked");
-    const cachedLyrics = await waitForLyricsStatus(["not_found"]);
+    const cachedLyrics = await waitForLyricsTrackAt(BASE_URL, {
+      title: mpd.body.playback.title,
+      artist: mpd.body.playback.artist,
+      statuses: ["not_found", "ready"]
+    });
     assert(cachedLyrics.trackKey === missingLyrics.trackKey, "repeat track should reuse cached lyrics result");
 
     const refreshLyrics = await request("/api/v1/lyrics/refresh", {
