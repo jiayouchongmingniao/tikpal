@@ -1503,11 +1503,14 @@ try {
           && barStyle.animationPlayState === 'running'
           && activeText.includes('Bluetooth chorus line')
           && document.querySelector('.ambient-lyrics-ticker') === null
+          && footerRect.left >= 250
+          && footerRect.left <= 330
           && footerRect.bottom < window.innerHeight - 56
           && footerRect.top > window.innerHeight - 190
           && progressGroup.contains(time)
           && progressRect.width < window.innerWidth * 0.46
           && controlsRect.left < window.innerWidth * 0.68
+          && controlsRect.right < window.innerWidth - 320
           && time.textContent?.trim() === '0:42/3:08';
       })()
     `,

@@ -965,10 +965,11 @@ select {
 }
 
 .hifi-lyrics-footer {
+  --hifi-lyrics-footer-shift-x: clamp(72px, 4vw, 100px);
   position: absolute;
   z-index: 2;
-  left: clamp(104px, 7vw, 180px);
-  width: min(1180px, calc(100vw - 280px));
+  left: calc(clamp(104px, 7vw, 180px) + var(--hifi-lyrics-footer-shift-x));
+  width: min(1180px, calc(100vw - 280px - var(--hifi-lyrics-footer-shift-x)));
   bottom: clamp(76px, 12vh, 96px);
   display: grid;
   grid-template-columns: minmax(520px, 720px) auto;
@@ -5748,6 +5749,7 @@ select {
   }
 
   .hifi-lyrics-footer {
+    --hifi-lyrics-footer-shift-x: 0px;
     left: 24px;
     right: auto;
     bottom: 22px;
