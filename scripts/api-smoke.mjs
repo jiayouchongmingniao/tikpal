@@ -3531,6 +3531,13 @@ async function run() {
     });
     assert(remoteWrongKey.response.status === 403, "remote actions should reject wrong X-Tikpal-Key");
 
+    const explicitRoomModeVolume = await request("/api/v1/playback/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "volume_set", value: 31 })
+    });
+    assert(explicitRoomModeVolume.response.ok, "explicit volume_set before room mode should return 200");
+    assert(explicitRoomModeVolume.body.system.volume.percent === 31, "explicit volume_set should establish global volume before room mode");
+
     const focusExperience = await request("/api/v1/experience/actions", {
       method: "POST",
       body: JSON.stringify({ type: "set_mode", mode: "focus" })
@@ -3545,7 +3552,7 @@ async function run() {
     const stateAfterFocus = await request("/api/v1/system/state");
     assert(stateAfterFocus.body.audio.currentSource.id === "scene", "focus room mode should switch to Scene Sound");
     assert(stateAfterFocus.body.playback.source === "scene", "focus room mode playback should follow Scene Sound");
-    assert(stateAfterFocus.body.system.volume.percent === focusExperience.body.volumePercent, "room mode should apply volume through playback actions");
+    assert(stateAfterFocus.body.system.volume.percent === 31, "room mode should preserve explicit global volume");
     assert(stateAfterFocus.body.system.display.brightnessPercent === focusExperience.body.brightnessPercent, "room mode should apply brightness through system actions");
 
     const focusSceneSound = await request("/api/v1/experience/actions", {
@@ -4344,6 +4351,7 @@ async function run() {
     });
     assert(remoteRoom.response.ok, "remote room.set_mode should return 200");
     assert(remoteRoom.body.room.mode === "calm", "remote room.set_mode should update room mode");
+    assert(remoteRoom.body.volume.percent === 33, "remote room.set_mode should preserve explicit global volume");
     const remoteScene = await request("/api/v1/remote/actions", {
       method: "POST",
       headers: remoteHeaders,

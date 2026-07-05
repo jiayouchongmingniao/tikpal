@@ -3705,9 +3705,9 @@ async function getRadioResumeVolumePercent() {
   if (volumeState.lastNonZeroPercent && volumeState.lastNonZeroPercent > 0) {
     return volumeState.lastNonZeroPercent;
   }
-  const experience = await readRoomExperienceState();
-  if (experience.volumePercent > 0) {
-    return experience.volumePercent;
+  const globalVolumePercent = clampPercent(system.volume?.percent, null);
+  if (globalVolumePercent && globalVolumePercent > 0) {
+    return globalVolumePercent;
   }
   return RADIO_VOLUME_DEFAULT_PERCENT;
 }
@@ -9174,17 +9174,6 @@ async function resolveSceneAudioVideo(experience) {
 
 async function applyRoomExperienceSideEffects(experience, { applyScene = false, applyLevels = true } = {}) {
   if (applyLevels) {
-    try {
-      const volumeAction = { type: "volume_set", value: experience.volumePercent };
-      if (API_MODE === "mpc") {
-        await applyMpcPlaybackAction(volumeAction);
-      } else {
-        await applyPlaybackAction(volumeAction);
-      }
-    } catch {
-      // Room mode remains useful even when the current audio backend rejects volume changes.
-    }
-
     try {
       const brightnessTask = applySystemAction({ type: "brightness_set", value: experience.brightnessPercent });
       if (API_MODE === "mpc") {

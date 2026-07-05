@@ -3212,6 +3212,52 @@ try {
     "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => state.system.volume.percent === 31)",
     "player volume slider updates the global API volume"
   );
+  for (const roomMode of ["focus", "calm", "sleep"]) {
+    await postExperienceAction(client, { type: "set_mode", mode: roomMode });
+    await expectEventuallyEvaluate(
+      client,
+      `
+        Promise.all([
+          fetch('/api/v1/experience/state').then((response) => response.json()),
+          fetch('/api/v1/system/state').then((response) => response.json())
+        ]).then(([experience, state]) => (
+          experience.mode === ${JSON.stringify(roomMode)}
+            && state.system.volume.percent === 31
+        ))
+      `,
+      `${roomMode} room mode preserves the explicit global volume`
+    );
+  }
+  await postExperienceAction(client, { type: "set_scene_sound", sceneSoundEnabled: false });
+  await evaluate(
+    client,
+    `
+      fetch('/api/v1/audio/source', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target: 'mpd' })
+      }).then(() => true)
+    `
+  );
+  await expectEventuallyEvaluate(
+    client,
+    "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => state.audio.currentSource.id === 'mpd' && state.system.volume.percent === 31)",
+    "Library restore after room-mode volume checks keeps global volume"
+  );
+  await navigate(client, `${APP_URL}?mode=player`);
+  await expectEventually(
+    client,
+    `
+      (() => {
+        const slider = document.querySelector('[data-player-volume-slider]');
+        const label = document.querySelector('[data-player-volume-percent]');
+        return slider instanceof HTMLInputElement
+          && Number(slider.value) === 31
+          && label?.textContent?.trim() === '31%';
+      })()
+    `,
+    "player volume display stays on the global volume after room mode changes"
+  );
 
   await navigate(client, `${APP_URL}?mode=quickMenu`);
   await evaluate(
