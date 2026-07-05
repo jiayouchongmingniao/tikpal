@@ -1,4 +1,4 @@
-export type AppMode = "ambient" | "player" | "playlist" | "quickSettings" | "quickMenu";
+export type AppMode = "ambient" | "player" | "quickSettings" | "quickMenu";
 export type FontTheme = "system" | "hardware" | "precision" | "sans" | "serif" | "mono";
 export type SurfaceTheme = "warm-gold" | "graphite-silver" | "ivory-studio";
 export type LyricsFontSize = "small" | "medium" | "large";

@@ -23,7 +23,7 @@ The product should feel high-end, calm, restrained, and warm. It should make the
 | --- | --- |
 | Room Canvas | The default surface transforms the room with scene video, subtle status, and short-lived controls. |
 | Hi-Fi Console | Playback controls stay fast and precise, but they are temporary overlays rather than the product center. |
-| Scene Library / Ritual Builder | Playlists and curated content are organized around Focus, Calm, and Sleep rituals. |
+| Library Browsing | Local/NAS music selection stays direct and playback-oriented, without a separate playlist-editing surface in the kiosk UI. |
 | Device Settings | System operations are separate, lower-frequency, fixed-grid, and never the daily home surface. |
 
 Tikpal should use a clear hierarchy:
@@ -32,7 +32,6 @@ Tikpal should use a clear hierarchy:
 | --- | --- | --- |
 | Level 0 | `ambient` / Room Canvas | Scene ambience screen with room mode, time, playback status, weak progress, and fallback settings entry. |
 | Level 1 | `player` / Hi-Fi Console | Playback control overlay with cover art, metadata, progress, transport, volume, source, and audio status. |
-| Level 1 | `playlist` / Scene Library | Playlist and ritual management organized around Focus, Calm, and Sleep. |
 | Level 2 | `quickSettings` / Device Settings | System quick settings overlay with Network, Preferences, and System categories. |
 | Level 3 | Advanced management | Advanced Web/admin surfaces outside the main touch UI. |
 
@@ -45,7 +44,7 @@ type RoomMode = "focus" | "calm" | "sleep" | "hifi";
 type RoomSessionPhase = "idle" | "preparing" | "active" | "windDown";
 ```
 
-Focus, Calm, and Sleep bind a scene video, optional scene sound, preferred playlist, volume level, brightness level, and timer. Hi-Fi binds a real EQ preset (`flat`, `warm`, or `vocal`) instead of a scene video and never turns on Scene Sound; the derived `hifiVisualPresetId` remains a compatibility field, not a separate scene source. The same state also owns the user-selected timezone and Auto Night window so the room can dim itself without interrupting the current source. This state is exposed by `/api/v1/experience/state` and changed through `/api/v1/experience/actions`. The API may apply volume, brightness, scene-source, and configured Pi EQ command-hook changes through existing playback/source/system actions, but playback truth remains owned by the playback state model.
+Focus, Calm, and Sleep bind a scene video, optional scene sound, preferred music/source intent, volume level, brightness level, and timer. Hi-Fi binds a real EQ preset (`flat`, `warm`, or `vocal`) instead of a scene video and never turns on Scene Sound; the derived `hifiVisualPresetId` remains a compatibility field, not a separate scene source. The same state also owns the user-selected timezone and Auto Night window so the room can dim itself without interrupting the current source. This state is exposed by `/api/v1/experience/state` and changed through `/api/v1/experience/actions`. The API may apply volume, brightness, scene-source, and configured Pi EQ command-hook changes through existing playback/source/system actions, but playback truth remains owned by the playback state model.
 
 This model is wellness-oriented but non-medical. Tikpal should not claim to diagnose sleep, mood, stress, or health. Personalization can later come from portable voice capture, user mood, inspiration notes, and conversation memory, not from imaginary biometric sensors.
 
@@ -106,11 +105,11 @@ Required capabilities:
 - Output device.
 - Favorite / like action when supported.
 
-Playlist management stays outside the Hi-Fi Console. The Console may keep a compact playlist entry, but it should not absorb queue and playlist editing into the main source rail.
+Playlist management is not part of the kiosk Hi-Fi Console. The Console should keep source switching, transport, lyrics, and Library single-track selection fast instead of exposing queue or playlist editing.
 
-### Scene Library / Ritual Builder
+### Library Browsing
 
-The Playlist surface is the ritual management surface for room modes. It should recommend curated Focus, Calm, Sleep, and Hi-Fi content, preserve user playlists, and keep large touch targets for creating, duplicating, editing, and playing lists. Hi-Fi EQ presets are selectable here as audio presets, not as playable scene sources.
+The kiosk UI does not ship a playlist-editing or ritual-builder surface. Library browsing remains available in Player for selecting a specific local/NAS track to play, while playlist CRUD stays a backend compatibility capability for local tools or future non-kiosk management.
 
 The local music taxonomy remains manifest-backed: `Focus`, `Meditation`, and `Rest` are library categories, while `Focus`, `Calm`, `Sleep`, and `Hi-Fi` are experience modes.
 
@@ -144,7 +143,7 @@ The first runnable implementation must include:
 - Current time.
 - Weak current playback information.
 - One-finger swipe down to player overlay.
-- Two-finger swipe down to Scene Library / Ritual Builder.
+- Two-finger swipe down to quick settings.
 - Settings reachable through the weak gear and quick menu fallback.
 - Play / pause / previous / next.
 - Playback progress.

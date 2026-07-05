@@ -81,7 +81,7 @@ This directory is the source of truth for Tikpal product, UX, visual, architectu
 The implementation exposes these concepts consistently across frontend state, local backend state, telemetry, and documentation:
 
 ```ts
-type AppMode = "ambient" | "player" | "playlist" | "quickSettings" | "quickMenu";
+type AppMode = "ambient" | "player" | "quickSettings" | "quickMenu";
 type SurfaceTheme = "warm-gold" | "graphite-silver" | "ivory-studio";
 type PlaybackState = "playing" | "paused" | "stopped";
 type SourceState =

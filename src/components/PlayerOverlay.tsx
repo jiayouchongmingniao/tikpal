@@ -7,7 +7,6 @@ import {
   HardDrive,
   Heart,
   LibraryBig,
-  ListMusic,
   LoaderCircle,
   Music2,
   Network,
@@ -48,7 +47,6 @@ interface PlayerOverlayProps {
   fontTheme: FontTheme;
   onPlaybackAction: (type: PlaybackActionType, value?: number) => Promise<TikpalState>;
   onSourceSwitch: (target: SourceSwitchTarget, radioStationId?: string, localTrackPath?: string) => Promise<TikpalState>;
-  onOpenPlaylist: () => void;
   onReturnAmbient: () => void;
 }
 
@@ -164,7 +162,6 @@ export function PlayerOverlay({
   fontTheme,
   onPlaybackAction,
   onSourceSwitch,
-  onOpenPlaylist,
   onReturnAmbient
 }: PlayerOverlayProps) {
   const overlayReturnGesture = useOverlayReturnGesture(onReturnAmbient);
@@ -994,17 +991,6 @@ export function PlayerOverlay({
           {!seekError && seekPendingSeconds !== null ? <p className="player-inline-message">Seeking to {formatDuration(seekPendingSeconds)}...</p> : null}
 
           <div className="transport-row" aria-label="Playback controls">
-            <button
-              className="icon-button"
-              type="button"
-              aria-label="Open playlist"
-              title="Playlist"
-              data-player-playlist-entry
-              data-gesture-control
-              onClick={onOpenPlaylist}
-            >
-              <ListMusic size={30} />
-            </button>
             <button className="icon-button" type="button" aria-label="Previous" title={previousTitle} disabled={previousDisabled} onClick={() => void onPlaybackAction("previous")}>
               <SkipBack size={34} fill="currentColor" />
             </button>
@@ -1102,6 +1088,7 @@ export function PlayerOverlay({
                       key={storage.id}
                       type="button"
                       aria-pressed={isSelected}
+                      data-library-storage={storage.id}
                       data-gesture-control
                       onClick={() => handleStorageSelect(storage.id)}
                     >

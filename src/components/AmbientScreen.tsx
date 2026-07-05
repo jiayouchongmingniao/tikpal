@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { Bluetooth, Captions, CaptionsOff, Cast, GalleryHorizontalEnd, Heart, LibraryBig, ListMusic, ListPlus, LoaderCircle, Moon, Music2, Network, Pause, Play, Radio as RadioIcon, Repeat1, Settings, Shuffle, SkipBack, SkipForward, SlidersHorizontal, SunMedium, Target, Volume2, VolumeX, Waves } from "lucide-react";
+import { Bluetooth, Captions, CaptionsOff, Cast, GalleryHorizontalEnd, Heart, LibraryBig, ListMusic, LoaderCircle, Moon, Music2, Network, Pause, Play, Radio as RadioIcon, Repeat1, Settings, Shuffle, SkipBack, SkipForward, SlidersHorizontal, SunMedium, Target, Volume2, VolumeX, Waves } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { fetchBackgroundVideos, fetchSceneContext } from "../api/tikpalClient";
 import { EqVisualScene, type HifiLyricsPanel } from "./EqVisualScene";
@@ -35,7 +35,6 @@ interface AmbientScreenProps {
   onCurrentSceneVideoChange: (video: BackgroundVideoSummary) => void;
   onSceneSoundEnabledChange: (enabled: boolean) => void;
   onOpenSettings: () => void;
-  onOpenPlaylist: () => void;
   roomExperience: RoomExperienceState;
   onExperienceAction: (action: RoomExperienceActionRequest) => Promise<RoomExperienceState>;
 }
@@ -319,7 +318,6 @@ export function AmbientScreen({
   onCurrentSceneVideoChange,
   onSceneSoundEnabledChange,
   onOpenSettings,
-  onOpenPlaylist,
   roomExperience,
   onExperienceAction
 }: AmbientScreenProps) {
@@ -1417,20 +1415,6 @@ export function AmbientScreen({
                 onClick={() => handleAmbientPlaybackAction("favorite_toggle")}
               >
                 <Heart size={25} fill={playback.favorite ? "currentColor" : "none"} strokeWidth={1.8} />
-              </button>
-              <button
-                className="ambient-transport-button ambient-transport-setting"
-                type="button"
-                aria-label="Open playlist"
-                title="Playlist"
-                data-hifi-playlist-entry
-                tabIndex={ambientHudVisible ? 0 : -1}
-                onClick={() => {
-                  onHudActivity();
-                  onOpenPlaylist();
-                }}
-              >
-                <ListPlus size={25} strokeWidth={1.8} />
               </button>
               <button
                 className={`ambient-transport-button ambient-transport-setting ${lyricsVisible ? "is-active" : ""}`}

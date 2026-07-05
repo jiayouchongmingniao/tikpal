@@ -1,9 +1,6 @@
 import type {
   AudioLibraryFilters,
   AudioLibraryResponse,
-  AudioPlaylistActionRequest,
-  AudioPlaylistCreateRequest,
-  AudioPlaylistResponse,
   AudioSpectrumFrame,
   BackgroundVideoCatalogResponse,
   PlaybackMode,
@@ -118,44 +115,12 @@ export async function fetchAudioLibrary(filters: AudioLibraryFilters = {}, signa
   return readJson<AudioLibraryResponse>(response);
 }
 
-export async function fetchAudioPlaylists(signal?: AbortSignal): Promise<AudioPlaylistResponse> {
-  const response = await fetchWithTimeout(`${API_ROOT}/audio/playlists`, {
-    headers: { Accept: "application/json" },
-    signal
-  }, DEFAULT_GET_TIMEOUT_MS);
-  return readJson<AudioPlaylistResponse>(response);
-}
-
 export async function fetchAudioSpectrum(signal?: AbortSignal): Promise<AudioSpectrumFrame> {
   const response = await fetchWithTimeout(`${API_ROOT}/audio/spectrum`, {
     headers: { Accept: "application/json" },
     signal
   }, DEFAULT_GET_TIMEOUT_MS);
   return readJson<AudioSpectrumFrame>(response);
-}
-
-export async function createAudioPlaylist(playlist: string | AudioPlaylistCreateRequest): Promise<AudioPlaylistResponse> {
-  const response = await fetchWithTimeout(`${API_ROOT}/audio/playlists`, {
-    method: "POST",
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify(typeof playlist === "string" ? { name: playlist } : playlist)
-  }, DEFAULT_POST_TIMEOUT_MS);
-  return readJson<AudioPlaylistResponse>(response);
-}
-
-export async function sendAudioPlaylistAction(action: AudioPlaylistActionRequest): Promise<AudioPlaylistResponse> {
-  const response = await fetchWithTimeout(`${API_ROOT}/audio/playlist-actions`, {
-    method: "POST",
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify(action)
-  }, DEFAULT_POST_TIMEOUT_MS);
-  return readJson<AudioPlaylistResponse>(response);
 }
 
 export async function fetchBackgroundVideos(signal?: AbortSignal): Promise<BackgroundVideoCatalogResponse> {

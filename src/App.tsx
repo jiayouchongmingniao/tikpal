@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AmbientScreen } from "./components/AmbientScreen";
 import { PlayerOverlay } from "./components/PlayerOverlay";
-import { PlaylistOverlay } from "./components/PlaylistOverlay";
 import { QuickMenu } from "./components/QuickMenu";
 import { QuickSettingsOverlay } from "./components/QuickSettingsOverlay";
 import { StartupModeChooser } from "./components/StartupModeChooser";
@@ -36,7 +35,7 @@ const DEFAULT_SCENE_VIDEO: BackgroundVideoSummary = {
 
 function readInitialMode(): AppMode {
   const mode = new URLSearchParams(window.location.search).get("mode");
-  if (mode === "player" || mode === "playlist" || mode === "quickSettings" || mode === "quickMenu") return mode;
+  if (mode === "player" || mode === "quickSettings" || mode === "quickMenu") return mode;
   return "ambient";
 }
 
@@ -641,7 +640,7 @@ export default function App() {
   const { gesturePreview, ...gestureHandlers } = useKioskGestures({
     mode,
     onOpenPlayer: () => changeMode("player"),
-    onOpenPlaylist: () => changeMode("playlist"),
+    onOpenSettings: () => changeMode("quickSettings"),
     onOpenMenu: () => changeMode("quickMenu"),
     onReturnAmbient: returnAmbient,
     onToggleHud: handleAmbientTap,
@@ -677,7 +676,6 @@ export default function App() {
         onCurrentSceneVideoChange={handleCurrentSceneVideoChange}
         onSceneSoundEnabledChange={(enabled) => void handleSceneSoundEnabledChange(enabled)}
         onOpenSettings={() => changeMode("quickSettings")}
-        onOpenPlaylist={() => changeMode("playlist")}
         roomExperience={roomExperience}
         onExperienceAction={handleRoomExperienceAction}
       />
@@ -698,18 +696,6 @@ export default function App() {
         fontTheme={fontTheme}
         onPlaybackAction={sendPlaybackAction}
         onSourceSwitch={handleSourceSwitch}
-        onOpenPlaylist={() => changeMode("playlist")}
-        onReturnAmbient={returnAmbient}
-      />
-      <PlaylistOverlay
-        active={mode === "playlist"}
-        playback={tikpalState.playback}
-        roomExperience={roomExperience}
-        status={tikpalStatus}
-        onExperienceAction={handleRoomExperienceAction}
-        onPlaybackRefresh={async () => {
-          await refresh();
-        }}
         onReturnAmbient={returnAmbient}
       />
       <QuickSettingsOverlay

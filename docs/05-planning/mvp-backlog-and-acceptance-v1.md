@@ -38,7 +38,7 @@ Acceptance:
 ### Slice 3: Gesture State Machine
 
 - Implement one-finger swipe down to player.
-- Implement two-finger swipe down to playlist with threshold hint.
+- Implement two-finger swipe down to quick settings with threshold hint.
 - Implement swipe up return.
 - Implement long-press quick menu.
 - Implement inactivity timers.
@@ -46,16 +46,12 @@ Acceptance:
 Acceptance:
 
 - One-finger swipe reliably opens player.
-- Two-finger swipe reliably opens playlist.
-- Releasing below threshold cancels playlist.
-- Swipe up returns from player, playlist, and quick settings, including gestures that start inside protected overlay panels.
-- Playlist opens as a 2560 x 720 touch-first three-column hub with current songs, playlist library, and contextual actions.
-- Playlist create/add/reorder/remove/rename/cover/duplicate/delete-confirm flows use large touch targets and do not depend on hover, right-click, or double-click.
-- Playlist also works with desktop trackpads: horizontal two-finger swipes reveal the same card/song quick actions, and vertical trackpad scrolling stays inside the hub instead of returning to Ambient.
-- Playlist metadata persists mood tags and cover settings; curated playlists remain read-only but can be duplicated into editable user playlists.
+- Two-finger swipe reliably opens quick settings.
+- Releasing below threshold cancels quick settings.
+- Swipe up returns from player and quick settings, including gestures that start inside protected overlay panels.
+- The kiosk UI does not expose playlist editing or ritual-builder flows; Library browsing remains the direct track-selection path.
 - Protected panel taps remain local control/settings clicks and do not count as blank-tap return.
 - Player returns after 15 seconds idle.
-- Playlist returns after 30 seconds idle.
 - Quick settings returns after 30 seconds idle.
 - Long press opens quick menu.
 
@@ -150,9 +146,8 @@ Batch 4 deployment note:
 ### Gestures
 
 - One-finger swipe down opens player.
-- Two-finger swipe down opens playlist.
+- Two-finger swipe down opens quick settings.
 - Two-finger swipe has mistake prevention threshold feedback.
-- Horizontal trackpad swipes open Playlist quick actions without requiring debug-mode toggles.
 - Swipe up returns to ambient.
 - Long press opens quick menu.
 - Inactivity returns to ambient.
@@ -191,7 +186,7 @@ Batch 4 deployment note:
 | --- | --- |
 | Ambient rendering cost is too high on Pi4 at 2560 x 720. | Keep media bitrate/decode cost bounded, retain the static fireplace image fallback, and reserve render scale / quality tier controls for future generated renderers. |
 | Browser startup shows white or restore UI. | Set black HTML background, use dark Chromium flags, dedicated profile, and profile cleanup. |
-| Two-finger gesture is hard to discover. | Keep a visible Playlist entry in Player and a weak gear for Quick Settings. |
+| Two-finger gesture is hard to discover. | Keep the weak gear and long-press quick menu as visible settings fallbacks. |
 | moOde data is inconsistent across sources. | Normalize source state and label passive renderers as status, not guaranteed switch actions. |
 | Dangerous system actions are triggered accidentally. | Require explicit confirmation and separate dangerous actions visually. |
 | Ambient live-control zones conflict with shell gestures. | Reserve protected edge bands so left brightness and right volume drags do not fall through to generic swipe-down navigation. |
@@ -223,7 +218,6 @@ Before implementation starts, confirm:
 
 - App mode: `ambient`.
 - Player timeout: 15 seconds.
-- Playlist timeout: 30 seconds.
 - Quick settings timeout: 30 seconds.
 - Tap HUD boost: 5 seconds.
 - Physical output: 2560 x 720.

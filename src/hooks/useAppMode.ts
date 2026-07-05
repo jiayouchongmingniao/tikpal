@@ -7,7 +7,7 @@ const HUD_AUTO_HIDE_MS = 5000;
 
 function getIdleTotalMs(mode: AppMode): number | null {
   if (mode === "player") return PLAYER_IDLE_MS;
-  if (mode === "playlist" || mode === "quickSettings") return SETTINGS_IDLE_MS;
+  if (mode === "quickSettings") return SETTINGS_IDLE_MS;
   return null;
 }
 

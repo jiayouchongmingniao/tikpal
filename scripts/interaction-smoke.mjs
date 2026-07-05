@@ -1980,24 +1980,11 @@ try {
       })()
     `
   );
-  await expectEventually(
+  await expect(
     client,
-    "document.querySelector('.ambient-transport [data-hifi-playlist-entry][aria-label=\"Open playlist\"]') !== null",
-    "Hi-Fi ambient transport exposes playlist entry"
+    "document.querySelector('.ambient-transport [data-hifi-playlist-entry]') === null && document.querySelector('.playlist-overlay') === null",
+    "Hi-Fi ambient transport omits playlist editing entry"
   );
-  await evaluate(
-    client,
-    `
-      (() => {
-        const target = document.querySelector('.ambient-transport [data-hifi-playlist-entry]');
-        target?.click();
-        return Boolean(target);
-      })()
-    `
-  );
-  await expectEventually(client, "document.querySelector('.playlist-overlay.is-active') !== null", "Hi-Fi ambient playlist entry opens playlist page");
-  await evaluate(client, "document.querySelector('.overlay-backdrop')?.click();");
-  await expectEventually(client, "document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') === 'hifi' && document.querySelector('.playlist-overlay.is-active') === null", "Hi-Fi ambient playlist entry returns to Ambient after backdrop");
   await navigate(client, `${APP_URL}?mode=quickMenu`);
   await expect(client, "document.querySelector('[data-quick-menu-toggle=\"hifi-eq\"]') === null", "quick menu omits Hi-Fi EQ visibility toggle");
   await evaluate(client, "document.querySelector('.overlay-backdrop')?.click();");
@@ -2379,510 +2366,24 @@ try {
 	  );
 	  await setStatePatchMode(client, "");
 
-	  await wait(5600);
+  await wait(5600);
   await expect(client, "document.querySelector('.ambient-screen.is-hud-hidden') !== null", "ambient HUD auto hides after tap show");
 
   await wheel(client, 220);
-  await expectEventually(client, "document.querySelector('.playlist-overlay.is-active') !== null", "ambient wheel down opens playlist");
+  await expectEventually(
+    client,
+    "document.querySelector('.quick-settings.is-active') !== null && document.querySelector('.playlist-overlay') === null",
+    "ambient wheel down opens Quick Settings instead of playlist"
+  );
+  await evaluate(client, "document.querySelector('.overlay-backdrop')?.click();");
+  await expectEventually(client, "document.querySelector('.quick-settings.is-active') === null", "Quick Settings backdrop exits to ambient");
 
   await navigate(client, `${APP_URL}?mode=playlist`);
-  await expect(client, "document.querySelector('.playlist-overlay.is-active [data-playlist-page]') !== null", "playlist direct mode renders");
-  await expectEventually(
-    client,
-    "document.querySelector('[data-playlist-left]') !== null && document.querySelector('[data-playlist-library]') !== null && document.querySelector('[data-playlist-actions]') !== null",
-    "playlist hub renders three touch columns"
-  );
   await expect(
     client,
-    "document.querySelector('.playlist-search-field input[placeholder=\"Search playlists / songs...\"]') !== null",
-    "playlist hub exposes search in header"
+    "document.querySelector('.ambient-screen') !== null && document.querySelector('.playlist-overlay') === null",
+    "legacy playlist URL falls back to Ambient"
   );
-  await expect(
-    client,
-    "document.querySelector('.playlist-room-rituals[data-room-mode]') !== null && document.querySelector('.playlist-room-mode-grid button[aria-pressed=\"true\"]') !== null",
-    "playlist hub exposes scene library ritual mode controls"
-  );
-  await expect(
-    client,
-    "!document.body.textContent.includes('Touch Mode') && !document.body.textContent.includes('Trackpad Debug') && !document.body.textContent.includes('Mouse Debug') && document.querySelector('.playlist-input-mode') === null",
-    "playlist header hides touch and pointer debug controls"
-  );
-  await expect(
-    client,
-    `
-      (() => {
-        const layout = document.querySelector('.playlist-hub-layout');
-        const left = document.querySelector('[data-playlist-left]');
-        const library = document.querySelector('[data-playlist-library]');
-        const actions = document.querySelector('[data-playlist-actions]');
-        if (!layout || !left || !library || !actions) return false;
-        const widths = [left, library, actions].map((node) => node.getBoundingClientRect().width);
-        return layout.getAttribute('data-layout-focus') === 'library'
-          && widths[0] >= 540
-          && widths[1] >= 1000
-          && widths[2] >= 540
-          && document.documentElement.scrollWidth <= window.innerWidth + 1;
-      })()
-    `,
-    "playlist browse layout focuses library while all columns remain readable"
-  );
-  await expect(
-    client,
-    `
-      (() => {
-        const controls = [...document.querySelectorAll('.playlist-touch-icon, .playlist-primary-button, .playlist-secondary-button, .playlist-danger-button, .playlist-action-button')];
-        return controls.length > 0 && controls.every((control) => {
-          const rect = control.getBoundingClientRect();
-          return rect.width >= 56 && rect.height >= 56;
-        });
-      })()
-    `,
-    "playlist primary controls keep 56px touch targets"
-  );
-  const playlistScrollPoint = await evaluate(
-    client,
-    `
-      (() => {
-        const scroller = document.querySelector('.playlist-library-scroll');
-        const rect = scroller?.getBoundingClientRect();
-        if (!rect) return null;
-        return {
-          x: Math.round(rect.left + rect.width / 2),
-          y: Math.round(rect.top + Math.min(rect.height - 24, 120))
-        };
-      })()
-    `
-  );
-  if (!playlistScrollPoint) throw new Error("Failed: playlist library scroll area is missing");
-  await wheelAt(client, playlistScrollPoint.x, playlistScrollPoint.y, 0, -260);
-  await expect(
-    client,
-    `
-      (() => {
-        const overlay = document.querySelector('.playlist-overlay.is-active');
-        const layout = document.querySelector('.playlist-hub-layout');
-        return Boolean(overlay)
-          && layout?.getAttribute('data-layout-focus') === 'library'
-          && document.documentElement.scrollWidth <= window.innerWidth + 1;
-      })()
-    `,
-    "playlist vertical trackpad scroll stays inside hub without closing or overflowing"
-  );
-  await clickButtonContaining(client, "body", "New Playlist");
-  await expectEventually(client, "document.querySelector('[data-playlist-mode=\"create\"]') !== null", "playlist new playlist opens create flow");
-  await expect(
-    client,
-    `
-      (() => {
-        const layout = document.querySelector('.playlist-hub-layout');
-        const left = document.querySelector('[data-playlist-left]');
-        const library = document.querySelector('[data-playlist-library]');
-        const actions = document.querySelector('[data-playlist-actions]');
-        if (!layout || !left || !library || !actions) return false;
-        const widths = [left, library, actions].map((node) => node.getBoundingClientRect().width);
-        return layout.getAttribute('data-layout-focus') === 'actions'
-          && widths[0] >= 540
-          && widths[1] >= 540
-          && widths[2] >= 1000;
-      })()
-    `,
-    "playlist task layout focuses actions while side columns remain readable"
-  );
-  const playlistSmokeName = `Touch Smoke ${Date.now().toString(36).slice(-5)}`;
-  const playlistRenamedName = `${playlistSmokeName} Renamed`;
-  await evaluate(client, `window.__playlistSmoke = { name: ${JSON.stringify(playlistSmokeName)}, renamedName: ${JSON.stringify(playlistRenamedName)} }`);
-  await setInputValue(client, '[data-playlist-mode="create"] input', playlistSmokeName);
-  await clickButtonContaining(client, '[data-playlist-mode="create"]', "Next");
-  await expectEventually(client, "document.querySelector('[data-playlist-mode=\"create\"]')?.textContent?.includes('Step 2 of 3')", "playlist create advances to mood step");
-  await clickButtonContaining(client, '[data-playlist-mode="create"]', "Sleep");
-  await clickButtonContaining(client, '[data-playlist-mode="create"]', "Next");
-  await expectEventually(client, "document.querySelector('[data-playlist-mode=\"create\"]')?.textContent?.includes('Step 3 of 3')", "playlist create advances to add songs step");
-  await expectEventually(client, "document.querySelectorAll('[data-playlist-mode=\"create\"] .playlist-song-row').length >= 2", "playlist create shows local songs from real library");
-  await evaluate(
-    client,
-    `
-      (() => {
-        const rows = [...document.querySelectorAll('[data-playlist-mode="create"] .playlist-song-row')].slice(0, 2);
-        rows.forEach((row) => row.click());
-        return rows.length === 2;
-      })()
-    `
-  );
-  await expectEventually(client, "document.querySelectorAll('[data-playlist-mode=\"create\"] .playlist-song-row.is-selected').length >= 2", "playlist create selects songs before submit");
-  await clickButtonContaining(client, '[data-playlist-mode="create"]', "Create Playlist");
-  await expectEventually(client, "document.querySelector('[data-playlist-mode=\"created\"]') !== null", "playlist create completes with created state");
-  await expectEventuallyEvaluate(
-    client,
-    `
-      fetch('/api/v1/audio/playlists').then((response) => response.json()).then((payload) => {
-        const selectedId = document.querySelector('.playlist-card.is-selected')?.getAttribute('data-playlist-card');
-        const playlist = payload.playlists.find((item) => item.id === selectedId && item.name === window.__playlistSmoke.name);
-        if (!playlist || playlist.trackCount !== 2) return false;
-        window.__playlistSmoke.originalId = playlist.id;
-        window.__playlistSmoke.trackCount = playlist.trackCount;
-        return true;
-      })
-    `,
-    "playlist create persists selected songs through API"
-  );
-  await clickButtonContaining(client, '[data-playlist-mode="created"]', "Keep Editing");
-  await expectEventually(client, "document.querySelector('[data-playlist-mode=\"actions\"]') !== null", "playlist created item returns to actions");
-  await expect(
-    client,
-    "document.querySelector('[data-playlist-actions]')?.textContent?.includes('Add Songs') && document.querySelector('[data-playlist-actions]')?.textContent?.includes('Duplicate')",
-    "playlist actions expose touch task entries"
-  );
-  await expectEventually(client, "document.querySelectorAll('[data-playlist-left] .playlist-song-row').length >= 2", "playlist selected songs render in current column");
-  await evaluate(
-    client,
-    `
-      (() => {
-        const rows = [...document.querySelectorAll('[data-playlist-left] .playlist-song-row')];
-        window.__playlistSmoke.secondTrackTitle = rows[1]?.querySelector('strong')?.textContent?.trim();
-        rows[1]?.click();
-        return Boolean(window.__playlistSmoke.secondTrackTitle);
-      })()
-    `
-  );
-  await expectEventuallyEvaluate(
-    client,
-    "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => state.playback.title === window.__playlistSmoke.secondTrackTitle && state.playback.currentTrackIndex === 2)",
-    "playlist song row click plays the requested song"
-  );
-  await clickButtonContaining(client, '[data-playlist-mode="actions"]', "Add Songs");
-  await expectEventually(
-    client,
-    "document.querySelector('[data-playlist-mode=\"addSongs\"]')?.textContent?.includes('Local Library') && document.querySelector('[data-playlist-mode=\"addSongs\"]')?.textContent?.includes('AI Generated Tracks')",
-    "playlist add songs exposes real and unavailable source buckets"
-  );
-  await evaluate(
-    client,
-    `
-      (() => {
-        const row = document.querySelector('[data-playlist-mode="addSongs"] .playlist-song-row');
-        row?.click();
-        return Boolean(row);
-      })()
-    `
-  );
-  await expectEventually(client, "document.querySelector('[data-playlist-mode=\"addSongs\"] .playlist-song-row.is-selected') !== null", "playlist add songs selects a real track");
-  await clickButtonContaining(client, '[data-playlist-mode="addSongs"]', "Done");
-  await expectEventually(client, "document.querySelector('[data-playlist-mode=\"actions\"]') !== null", "playlist add songs done returns to actions");
-  await expectEventuallyEvaluate(
-    client,
-    `
-      fetch('/api/v1/audio/playlists').then((response) => response.json()).then((payload) => {
-        const playlist = payload.playlists.find((item) => item.id === window.__playlistSmoke.originalId);
-        if (!playlist || playlist.trackCount !== 3) return false;
-        window.__playlistSmoke.trackCount = playlist.trackCount;
-        return true;
-      })
-    `,
-    "playlist add songs done saves replace_tracks through API"
-  );
-  await clickButtonContaining(client, '[data-playlist-mode="actions"]', "Reorder Songs");
-  await expectEventually(client, "document.querySelector('[data-playlist-mode=\"reorderSongs\"]') !== null", "playlist reorder task opens");
-  await evaluate(
-    client,
-    `
-      fetch('/api/v1/audio/playlists').then((response) => response.json()).then((payload) => {
-        const playlist = payload.playlists.find((item) => item.id === window.__playlistSmoke.originalId);
-        window.__playlistSmoke.reorderFirstPath = playlist?.tracks[0]?.path;
-        window.__playlistSmoke.reorderSecondPath = playlist?.tracks[1]?.path;
-        return true;
-      })
-    `
-  );
-  const reorderPoints = await evaluate(
-    client,
-    `
-      (() => {
-        const rows = [...document.querySelectorAll('[data-playlist-mode="reorderSongs"] .playlist-reorder-row')];
-        if (rows.length < 2) return null;
-        const first = rows[0].getBoundingClientRect();
-        const second = rows[1].getBoundingClientRect();
-        return {
-          fromX: Math.round(first.left + first.width / 2),
-          fromY: Math.round(first.top + first.height / 2),
-          toX: Math.round(second.left + second.width / 2),
-          toY: Math.round(second.top + second.height / 2)
-        };
-      })()
-    `
-  );
-  if (!reorderPoints) throw new Error("Failed: playlist reorder rows are missing");
-  await client.send("Input.dispatchMouseEvent", { type: "mousePressed", x: reorderPoints.fromX, y: reorderPoints.fromY, button: "left", buttons: 1, clickCount: 1 });
-  await wait(650);
-  for (let step = 1; step <= 8; step += 1) {
-    const progress = step / 8;
-    await client.send("Input.dispatchMouseEvent", {
-      type: "mouseMoved",
-      x: reorderPoints.fromX + (reorderPoints.toX - reorderPoints.fromX) * progress,
-      y: reorderPoints.fromY + (reorderPoints.toY - reorderPoints.fromY) * progress,
-      button: "left",
-      buttons: 1
-    });
-    await wait(35);
-  }
-  await client.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: reorderPoints.toX, y: reorderPoints.toY, button: "left", clickCount: 1 });
-  await wait(250);
-  await clickButtonContaining(client, '[data-playlist-mode="reorderSongs"]', "Done");
-  await expectEventually(client, "document.querySelector('[data-playlist-mode=\"actions\"]') !== null", "playlist reorder done returns to actions");
-  await expectEventuallyEvaluate(
-    client,
-    `
-      fetch('/api/v1/audio/playlists').then((response) => response.json()).then((payload) => {
-        const playlist = payload.playlists.find((item) => item.id === window.__playlistSmoke.originalId);
-        return playlist?.tracks[0]?.path === window.__playlistSmoke.reorderSecondPath
-          && playlist?.tracks[1]?.path === window.__playlistSmoke.reorderFirstPath;
-      })
-    `,
-    "playlist reorder done saves new order through API"
-  );
-  await clickButtonContaining(client, '[data-playlist-mode="actions"]', "Rename");
-  await expectEventually(client, "document.querySelector('[data-playlist-mode=\"rename\"]') !== null", "playlist rename task opens");
-  await setInputValue(client, '[data-playlist-mode="rename"] input', playlistRenamedName);
-  await clickButtonContaining(client, '[data-playlist-mode="rename"]', "Save");
-  await expectEventuallyEvaluate(
-    client,
-    `
-      fetch('/api/v1/audio/playlists').then((response) => response.json()).then((payload) => {
-        const playlist = payload.playlists.find((item) => item.id === window.__playlistSmoke.originalId);
-        return playlist?.name === window.__playlistSmoke.renamedName;
-      })
-    `,
-    "playlist rename save persists through API"
-  );
-  await clickButtonContaining(client, '[data-playlist-mode="actions"]', "Change Cover");
-  await expectEventually(client, "document.querySelector('[data-playlist-mode=\"changeCover\"]') !== null", "playlist cover task opens");
-  await clickButtonContaining(client, '[data-playlist-mode="changeCover"]', "Fireplace");
-  await clickButtonContaining(client, '[data-playlist-mode="changeCover"]', "Save");
-  await expectEventuallyEvaluate(
-    client,
-    `
-      fetch('/api/v1/audio/playlists').then((response) => response.json()).then((payload) => {
-        const playlist = payload.playlists.find((item) => item.id === window.__playlistSmoke.originalId);
-        return playlist?.coverType === 'scene' && playlist?.coverValue === 'fireplace';
-      })
-    `,
-    "playlist cover save persists through API"
-  );
-  const cardSwipePoints = await evaluate(
-    client,
-    `
-      (() => {
-        const card = document.querySelector('.playlist-card.is-selected');
-        card?.scrollIntoView({ block: 'center' });
-        const rect = card?.getBoundingClientRect();
-        if (!rect) return null;
-        return {
-          fromX: Math.round(rect.right - 34),
-          fromY: Math.round(rect.top + rect.height / 2),
-          toX: Math.round(rect.left + 80),
-          toY: Math.round(rect.top + rect.height / 2)
-        };
-      })()
-    `
-  );
-  if (!cardSwipePoints) throw new Error("Failed: selected playlist card is missing");
-  await drag(client, cardSwipePoints.fromX, cardSwipePoints.fromY, cardSwipePoints.toX, cardSwipePoints.toY);
-  await expectEventually(
-    client,
-    "document.querySelector('.playlist-card.has-actions .playlist-card-swipe-actions')?.textContent?.includes('Edit') && document.querySelector('.playlist-card.has-actions .playlist-card-swipe-actions')?.textContent?.includes('Duplicate') && document.querySelector('.playlist-card.has-actions .playlist-card-swipe-actions')?.textContent?.includes('Delete')",
-    "playlist card left swipe reveals edit duplicate delete"
-  );
-  const clearedCardSwipe = await evaluate(
-    client,
-    `
-      (() => {
-        const button = document.querySelector('.playlist-card.is-selected .playlist-card-main');
-        button?.click();
-        button?.click();
-        return Boolean(button);
-      })()
-    `
-  );
-  if (!clearedCardSwipe) throw new Error("Failed: selected playlist card main button is missing");
-  await expectEventually(client, "document.querySelector('.playlist-card.has-actions') === null", "playlist card swipe can be cleared by selecting the card");
-  const cardTrackpadPoint = await evaluate(
-    client,
-    `
-      (() => {
-        const card = document.querySelector('.playlist-card.is-selected');
-        card?.scrollIntoView({ block: 'center' });
-        const rect = card?.getBoundingClientRect();
-        if (!rect) return null;
-        return {
-          x: Math.round(rect.left + rect.width / 2),
-          y: Math.round(rect.top + rect.height / 2)
-        };
-      })()
-    `
-  );
-  if (!cardTrackpadPoint) throw new Error("Failed: selected playlist card is missing for trackpad swipe");
-  await wheelAt(client, cardTrackpadPoint.x, cardTrackpadPoint.y, -240, 0);
-  await expectEventually(
-    client,
-    "document.querySelector('.playlist-card.has-actions .playlist-card-swipe-actions')?.textContent?.includes('Edit') && document.querySelector('.playlist-card.has-actions .playlist-card-swipe-actions')?.textContent?.includes('Duplicate') && document.querySelector('.playlist-card.has-actions .playlist-card-swipe-actions')?.textContent?.includes('Delete')",
-    "playlist card trackpad left swipe reveals edit duplicate delete"
-  );
-  await clickButtonContaining(client, '.playlist-card.has-actions .playlist-card-swipe-actions', "Duplicate");
-  await expectEventuallyEvaluate(
-    client,
-    `
-      fetch('/api/v1/audio/playlists').then((response) => response.json()).then((payload) => {
-        const duplicate = payload.playlists.find((item) => item.name === window.__playlistSmoke.renamedName + ' Copy');
-        if (!duplicate || duplicate.trackCount !== 3 || duplicate.coverType !== 'scene') return false;
-        window.__playlistSmoke.duplicateId = duplicate.id;
-        return document.querySelector('.playlist-card.is-selected')?.getAttribute('data-playlist-card') === duplicate.id;
-      })
-    `,
-    "playlist duplicate creates and selects an editable copy"
-  );
-  const longPressPoints = await evaluate(
-    client,
-    `
-      (() => {
-        const card = document.querySelector('.playlist-card.is-selected');
-        card?.scrollIntoView({ block: 'center' });
-        const rect = card?.getBoundingClientRect();
-        if (!rect) return null;
-        return {
-          x: Math.round(rect.left + rect.width / 2),
-          y: Math.round(rect.top + rect.height / 2)
-        };
-      })()
-    `
-  );
-  if (!longPressPoints) throw new Error("Failed: duplicate playlist card is missing");
-  await client.send("Input.dispatchMouseEvent", { type: "mousePressed", x: longPressPoints.x, y: longPressPoints.y, button: "left", buttons: 1, clickCount: 1 });
-  await wait(650);
-  await client.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: longPressPoints.x, y: longPressPoints.y, button: "left", clickCount: 1 });
-  await wait(250);
-  await expectEventually(client, "document.querySelector('.playlist-card.has-actions .playlist-card-swipe-actions') !== null", "playlist card long press opens quick actions");
-  await expectEventually(client, "document.querySelectorAll('[data-playlist-left] .playlist-song-row').length >= 3", "playlist duplicate keeps songs visible");
-  const rowSwipePoints = await evaluate(
-    client,
-    `
-      (() => {
-        const row = document.querySelector('[data-playlist-left] .playlist-song-row');
-        const rect = row?.getBoundingClientRect();
-        if (!rect) return null;
-        return {
-          fromX: Math.round(rect.right - 24),
-          fromY: Math.round(rect.top + rect.height / 2),
-          toX: Math.round(rect.left + 80),
-          toY: Math.round(rect.top + rect.height / 2)
-        };
-      })()
-    `
-  );
-  if (!rowSwipePoints) throw new Error("Failed: playlist song row is missing");
-  await drag(client, rowSwipePoints.fromX, rowSwipePoints.fromY, rowSwipePoints.toX, rowSwipePoints.toY);
-  await expectEventually(
-    client,
-    "document.querySelector('.playlist-song-row-wrap.has-actions .playlist-song-swipe-actions')?.textContent?.includes('Remove') && document.querySelector('.playlist-song-row-wrap.has-actions .playlist-song-swipe-actions')?.textContent?.includes('More')",
-    "playlist song left swipe reveals remove and more"
-  );
-  await clickButtonContaining(client, '.playlist-song-row-wrap.has-actions .playlist-song-swipe-actions', "More");
-  await expectEventually(client, "document.querySelector('[data-playlist-mode=\"removeSongs\"]') !== null", "playlist song more opens remove task");
-  await evaluate(
-    client,
-    `
-      (() => {
-        document.querySelector('[data-playlist-mode="removeSongs"] .playlist-touch-icon')?.click();
-        return true;
-      })()
-    `
-  );
-  await expectEventually(client, "document.querySelector('[data-playlist-mode=\"actions\"]') !== null", "playlist remove task back returns to actions");
-  const rowTrackpadPoint = await evaluate(
-    client,
-    `
-      (() => {
-        const row = document.querySelector('[data-playlist-left] .playlist-song-row');
-        const rect = row?.getBoundingClientRect();
-        if (!rect) return null;
-        return {
-          x: Math.round(rect.left + rect.width / 2),
-          y: Math.round(rect.top + rect.height / 2)
-        };
-      })()
-    `
-  );
-  if (!rowTrackpadPoint) throw new Error("Failed: playlist song row is missing for trackpad swipe");
-  await wheelAt(client, rowTrackpadPoint.x, rowTrackpadPoint.y, -220, 0);
-  await expectEventually(
-    client,
-    "document.querySelector('.playlist-song-row-wrap.has-actions .playlist-song-swipe-actions')?.textContent?.includes('Remove') && document.querySelector('.playlist-song-row-wrap.has-actions .playlist-song-swipe-actions')?.textContent?.includes('More')",
-    "playlist song trackpad left swipe reveals remove and more"
-  );
-  await clickButtonContaining(client, '.playlist-song-row-wrap.has-actions .playlist-song-swipe-actions', "Remove");
-  await expectEventuallyEvaluate(
-    client,
-    `
-      fetch('/api/v1/audio/playlists').then((response) => response.json()).then((payload) => {
-        const duplicate = payload.playlists.find((item) => item.id === window.__playlistSmoke.duplicateId);
-        if (!duplicate || duplicate.trackCount !== 2) return false;
-        window.__playlistSmoke.trackCount = duplicate.trackCount;
-        return true;
-      })
-    `,
-    "playlist row remove saves remove_track through API"
-  );
-  await clickButtonContaining(client, '[data-playlist-mode="actions"]', "Remove Songs");
-  await expectEventually(client, "document.querySelector('[data-playlist-mode=\"removeSongs\"]') !== null", "playlist remove selected task opens");
-  await evaluate(
-    client,
-    `
-      (() => {
-        const row = document.querySelector('[data-playlist-mode="removeSongs"] .playlist-song-row');
-        row?.click();
-        return Boolean(row);
-      })()
-    `
-  );
-  await expectEventually(client, "document.querySelector('[data-playlist-mode=\"removeSongs\"] .playlist-song-row.is-selected') !== null", "playlist remove selected marks a real song");
-  await clickButtonContaining(client, '[data-playlist-mode="removeSongs"]', "Remove Selected");
-  await expectEventuallyEvaluate(
-    client,
-    `
-      fetch('/api/v1/audio/playlists').then((response) => response.json()).then((payload) => {
-        const duplicate = payload.playlists.find((item) => item.id === window.__playlistSmoke.duplicateId);
-        return duplicate?.trackCount === 1;
-      })
-    `,
-    "playlist remove selected saves through API"
-  );
-  await clickButtonContaining(client, '[data-playlist-mode="actions"]', "Delete Playlist");
-  await expectEventually(client, "document.querySelector('[data-playlist-mode=\"confirmDelete\"]') !== null", "playlist delete opens confirmation");
-  await clickButtonContaining(client, '[data-playlist-mode="confirmDelete"]', "Delete");
-  await expectEventually(client, "document.querySelector('[data-playlist-mode=\"browse\"]') !== null", "playlist delete confirms and returns to empty actions");
-  await expectEventuallyEvaluate(
-    client,
-    `
-      fetch('/api/v1/audio/playlists').then((response) => response.json()).then((payload) => (
-        !payload.playlists.some((item) => item.id === window.__playlistSmoke.duplicateId)
-      ))
-    `,
-    "playlist delete removes duplicated smoke playlist"
-  );
-  await evaluate(
-    client,
-    `
-      fetch('/api/v1/audio/playlist-actions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type: 'delete', playlistId: window.__playlistSmoke.originalId })
-      }).then(() => true)
-    `
-  );
-  await drag(client, 1280, 610, 1280, 430);
-  await expectEventually(client, "document.querySelector('.playlist-overlay.is-active') === null", "playlist swipe up exits to ambient");
-
-  await navigate(client, `${APP_URL}?mode=playlist`);
-  await click(client, 10, 10);
-  await expect(client, "document.querySelector('.playlist-overlay.is-active') === null", "playlist backdrop click exits to ambient");
 
   await evaluate(
     client,
@@ -2891,8 +2392,24 @@ try {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ type: 'set_mode', mode: 'calm' })
-      }).then(() => true)
+      })
+        .then(() => fetch('/api/v1/experience/actions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ type: 'set_scene_sound', sceneSoundEnabled: false })
+        }))
+        .then(() => fetch('/api/v1/audio/source', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ target: 'mpd' })
+        }))
+        .then(() => true)
     `
+  );
+  await expectEventuallyEvaluate(
+    client,
+    "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => state.audio.currentSource.id === 'mpd' && state.playback.source === 'mpd' && state.audio.rememberedSource?.target === 'mpd')",
+    "quick menu scene checks start from remembered Library playback"
   );
   await navigate(client, `${APP_URL}?mode=quickMenu`);
   await expect(client, "document.querySelector('.quick-menu.is-active') !== null", "quick menu opens");
@@ -3586,21 +3103,36 @@ try {
   await evaluate(client, "document.querySelector('[data-source-item=\"mpd\"]')?.click(); true");
   await expect(
     client,
-    "document.querySelector('.transport-row [data-player-playlist-entry][aria-label=\"Open playlist\"]') !== null && document.querySelector('.library-browser-title [data-player-playlist-entry]') === null",
-    "player exposes playlist entry beside transport controls only"
+    "document.querySelector('[data-player-playlist-entry]') === null && document.querySelector('.playlist-overlay') === null",
+    "player omits playlist editing entry"
   );
+  await expectEventually(client, "document.querySelector('[data-library-storage=\"local\"]') !== null", "player Library exposes local storage tab");
+  await evaluate(client, "document.querySelector('[data-library-storage=\"local\"]')?.click(); true");
+  await expectEventually(client, "document.querySelector('[data-library-storage=\"local\"].is-selected') !== null", "player Library local storage tab is selected");
+  await expectEventually(client, "document.querySelector('[data-library-track-list] [data-library-track] .library-track-main') !== null", "player Library keeps selectable tracks");
   await evaluate(
     client,
     `
       (() => {
-        const target = document.querySelector('.transport-row [data-player-playlist-entry]');
+        const buttons = [...document.querySelectorAll('[data-library-track-list] [data-library-track] .library-track-main')];
+        const target = buttons.find((button) => button.getAttribute('aria-pressed') !== 'true') ?? buttons[0];
         target?.click();
         return Boolean(target);
       })()
     `
   );
-  await expectEventually(client, "document.querySelector('.playlist-overlay.is-active') !== null", "player playlist entry opens playlist page");
-  await navigate(client, `${APP_URL}?mode=player`);
+  await expectEventuallyEvaluate(
+    client,
+    `
+      fetch('/api/v1/system/state').then((response) => response.json()).then((state) => (
+        state.audio?.currentSource?.id === 'mpd'
+          && state.audio?.rememberedSource?.target === 'mpd'
+          && typeof state.audio?.rememberedSource?.localTrackPath === 'string'
+          && state.audio.rememberedSource.localTrackPath.length > 0
+      ))
+    `,
+    "Library track selection switches MPD with a concrete localTrackPath"
+  );
   await expectEventually(client, sourceTabExpression("mpd", { selected: true, active: true }), "library source starts selected and active");
 
   await switchPlayerSourceAndExpectHandoff(client, "spotify", "Spotify");
