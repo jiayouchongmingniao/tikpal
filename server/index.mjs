@@ -5898,6 +5898,30 @@ async function stopMpdForExternalSource(target) {
   }
 }
 
+async function isCurrentExternalSourceOpen(target) {
+  try {
+    const state = await collectTikpalStateSnapshot({
+      includeSlowRuntimeStatus: false,
+      includeSourceRuntimeStatus: true,
+      includeOutputVolumeStatus: false,
+      skipExperienceReconcile: true
+    });
+    const connectionState = state.audio.currentSource.connectionState;
+    return state.audio.currentSource.id === target
+      && (connectionState === "armed" || connectionState === "connected");
+  } catch {
+    return false;
+  }
+}
+
+async function openExternalSourceIfNeeded(target) {
+  if (await isCurrentExternalSourceOpen(target)) {
+    scheduleExternalSourceCleanup(target);
+    return;
+  }
+  await enforceConnectionGate(target);
+}
+
 function getFastRadioSwitchOptions() {
   return {
     postStartRecoveryPlays: 0,
@@ -6221,22 +6245,22 @@ async function switchRadioStationByOffset(offset, options = {}) {
 }
 
 async function switchToSpotifySource() {
-  await enforceConnectionGate("spotify");
+  await openExternalSourceIfNeeded("spotify");
   await stopMpdForExternalSource("spotify");
 }
 
 async function switchToBluetoothSource() {
-  await enforceConnectionGate("bluetooth");
+  await openExternalSourceIfNeeded("bluetooth");
   await stopMpdForExternalSource("bluetooth");
 }
 
 async function switchToAirplaySource() {
-  await enforceConnectionGate("airplay");
+  await openExternalSourceIfNeeded("airplay");
   await stopMpdForExternalSource("airplay");
 }
 
 async function switchToUpnpSource() {
-  await enforceConnectionGate("upnp");
+  await openExternalSourceIfNeeded("upnp");
   await stopMpdForExternalSource("upnp");
 }
 

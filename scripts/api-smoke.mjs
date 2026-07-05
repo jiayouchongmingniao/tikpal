@@ -2823,6 +2823,17 @@ appendFileSync(${JSON.stringify(fakeBluetoothTransportLogPath)}, action + "\\n")
     );
 
     await writeFile(fakeExternalCommandLogPath, "");
+    const repeatedAirplaySwitch = await requestFrom(baseUrl, "/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({ target: "airplay" })
+    });
+    assert(repeatedAirplaySwitch.response.ok, "mpc repeated airplay source switch should return 200");
+    assert(repeatedAirplaySwitch.body.audio.currentSource.connectionState === "connected", "mpc repeated AirPlay switch should preserve the active session");
+    assert(repeatedAirplaySwitch.body.playback.title === "This City", "mpc repeated AirPlay switch should keep current AirPlay metadata");
+    const repeatedAirplayLog = await readFile(fakeExternalCommandLogPath, "utf8").catch(() => "");
+    assert(!repeatedAirplayLog.includes("airplay-enable\n"), "mpc repeated AirPlay switch should not reopen the receiver");
+
+    await writeFile(fakeExternalCommandLogPath, "");
     const bluetoothSwitch = await requestFrom(baseUrl, "/api/v1/audio/source", {
       method: "POST",
       body: JSON.stringify({ target: "bluetooth" })
