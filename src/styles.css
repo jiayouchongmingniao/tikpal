@@ -965,10 +965,15 @@ select {
 }
 
 .hifi-lyrics-footer {
+  --hifi-lyrics-cover-half: min(212px, 29.5vh);
+  --hifi-lyrics-cover-left: clamp(176px, 12.5vw, 320px);
+  --hifi-lyrics-footer-left-base: clamp(104px, 7vw, 180px);
   --hifi-lyrics-footer-shift-x: clamp(72px, 4vw, 100px);
+  --hifi-mini-eq-half: min(90px, 14vw);
+  --hifi-mini-eq-width: min(180px, 28vw);
   position: absolute;
   z-index: 2;
-  left: calc(clamp(104px, 7vw, 180px) + var(--hifi-lyrics-footer-shift-x));
+  left: calc(var(--hifi-lyrics-footer-left-base) + var(--hifi-lyrics-footer-shift-x));
   width: min(1180px, calc(100vw - 280px - var(--hifi-lyrics-footer-shift-x)));
   bottom: clamp(76px, 12vh, 96px);
   display: grid;
@@ -983,20 +988,21 @@ select {
 .hifi-lyrics-progress-eq {
   position: relative;
   min-width: 0;
-  height: 58px;
+  height: 96px;
 }
 
 .hifi-mini-eq {
   position: absolute;
-  right: 31%;
-  bottom: 11px;
-  left: 18%;
+  right: auto;
+  bottom: 56px;
+  left: calc(var(--hifi-lyrics-cover-left) + var(--hifi-lyrics-cover-half) - var(--hifi-mini-eq-half) - var(--hifi-lyrics-footer-left-base) - var(--hifi-lyrics-footer-shift-x));
   display: flex;
   align-items: end;
   justify-content: center;
   gap: 2px;
   height: 34px;
   opacity: 0.78;
+  width: var(--hifi-mini-eq-width);
 }
 
 .hifi-mini-eq span {
@@ -1006,12 +1012,13 @@ select {
   border-radius: 999px 999px 0 0;
   background: color-mix(in srgb, var(--hifi-theme-title) 74%, transparent);
   box-shadow: 0 0 12px color-mix(in srgb, var(--hifi-theme-accent) 20%, transparent);
-  opacity: 0.76;
+  opacity: var(--hifi-mini-eq-opacity-low, 0.76);
   transform-origin: bottom;
+  transform: translateX(var(--hifi-mini-eq-x, 0)) scaleY(var(--hifi-mini-eq-low, 0.58));
 }
 
 .eq-visual-scene.is-playing .hifi-mini-eq span {
-  animation: hifi-mini-eq-pulse 1.28s ease-in-out infinite alternate;
+  animation: hifi-mini-eq-pulse var(--hifi-mini-eq-duration, 1.28s) cubic-bezier(0.37, 0, 0.28, 1) infinite alternate;
   animation-delay: var(--hifi-mini-eq-delay);
 }
 
@@ -1158,13 +1165,13 @@ select {
 
 @keyframes hifi-mini-eq-pulse {
   from {
-    transform: scaleY(0.58);
-    opacity: 0.46;
+    transform: translateX(var(--hifi-mini-eq-x, 0)) scaleY(var(--hifi-mini-eq-low, 0.58));
+    opacity: var(--hifi-mini-eq-opacity-low, 0.46);
   }
 
   to {
-    transform: scaleY(1.08);
-    opacity: 0.92;
+    transform: translateX(var(--hifi-mini-eq-x, 0)) scaleY(var(--hifi-mini-eq-high, 1.08));
+    opacity: var(--hifi-mini-eq-opacity-high, 0.92);
   }
 }
 
@@ -4946,6 +4953,12 @@ select {
 
   .hifi-lyrics-progress-row {
     gap: 12px;
+  }
+
+  .hifi-mini-eq {
+    right: 31%;
+    left: 18%;
+    width: auto;
   }
 
   .hifi-lyrics-time {

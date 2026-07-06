@@ -1482,32 +1482,46 @@ try {
       (() => {
         const panel = document.querySelector('[data-hifi-lyrics-panel]');
         const activeLine = document.querySelector('[data-hifi-lyrics-line][data-hifi-lyrics-active]');
+        const cover = document.querySelector('[data-hifi-cover-art]');
         const footer = document.querySelector('[data-hifi-lyrics-footer]');
         const miniEq = document.querySelector('[data-hifi-mini-eq]');
         const firstBar = document.querySelector('[data-hifi-mini-eq-bar]');
         const time = document.querySelector('[data-hifi-lyrics-time]');
         const controls = document.querySelector('[data-hifi-lyrics-controls]');
         const progressGroup = document.querySelector('[data-hifi-lyrics-progress-eq]');
+        const progressRow = document.querySelector('.hifi-lyrics-progress-row');
         const play = controls?.querySelector('button[aria-label="Pause"], button[aria-label="Play"]');
-        if (!panel || !activeLine || !footer || !miniEq || !firstBar || !time || !controls || !progressGroup || !play) return false;
+        if (!panel || !activeLine || !cover || !footer || !miniEq || !firstBar || !time || !controls || !progressGroup || !progressRow || !play) return false;
+        const bars = Array.from(document.querySelectorAll('[data-hifi-mini-eq-bar]'));
         const barStyle = getComputedStyle(firstBar);
+        const barDurations = new Set(bars.map((bar) => getComputedStyle(bar).animationDuration));
+        const barPeaks = new Set(bars.map((bar) => getComputedStyle(bar).getPropertyValue('--hifi-mini-eq-high').trim()));
+        const coverRect = cover.getBoundingClientRect();
         const footerRect = footer.getBoundingClientRect();
         const progressRect = progressGroup.getBoundingClientRect();
+        const miniEqRect = miniEq.getBoundingClientRect();
+        const progressRowRect = progressRow.getBoundingClientRect();
         const controlsRect = controls.getBoundingClientRect();
+        const coverCenterX = coverRect.left + coverRect.width / 2;
+        const miniEqCenterX = miniEqRect.left + miniEqRect.width / 2;
         const activeText = activeLine.textContent?.trim() ?? "";
         return document.querySelector('[data-hifi-centered-now-playing]') === null
           && document.querySelector('[data-hifi-playback-presence]') === null
           && document.querySelector('[data-bluetooth-generated-cover]') !== null
-          && document.querySelectorAll('[data-hifi-mini-eq-bar]').length >= 24
+          && bars.length >= 24
           && barStyle.animationName !== 'none'
           && barStyle.animationPlayState === 'running'
+          && barDurations.size >= 5
+          && barPeaks.size >= 5
           && activeText.includes('Bluetooth chorus line')
           && document.querySelector('.ambient-lyrics-ticker') === null
           && footerRect.left >= 250
           && footerRect.left <= 330
           && footerRect.bottom < window.innerHeight - 56
-          && footerRect.top > window.innerHeight - 190
+          && footerRect.top > window.innerHeight - 215
           && progressGroup.contains(time)
+          && Math.abs(miniEqCenterX - coverCenterX) <= 18
+          && miniEqRect.bottom <= progressRowRect.top - 2
           && progressRect.width < window.innerWidth * 0.46
           && controlsRect.left < window.innerWidth * 0.68
           && controlsRect.right < window.innerWidth - 320

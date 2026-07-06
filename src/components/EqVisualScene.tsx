@@ -77,6 +77,21 @@ const MINI_EQ_BARS = [
   0.22, 0.2, 0.18, 0.16
 ];
 
+const MINI_EQ_BAR_PROFILES = MINI_EQ_BARS.map((height, index) => {
+  const scatter = (index * 37) % 11;
+  const sway = ((index * 5) % 7) - 3;
+  return {
+    height,
+    delay: `${-((index * 113) % 900) / 1000}s`,
+    duration: `${0.86 + scatter * 0.055}s`,
+    low: Math.max(0.34, 0.48 - height * 0.16 + ((index % 3) - 1) * 0.04).toFixed(2),
+    high: Math.min(1.16, 0.84 + height * 0.32 + ((index % 5) - 2) * 0.03).toFixed(2),
+    opacityLow: Math.max(0.34, 0.5 - height * 0.08 + (index % 2) * 0.06).toFixed(2),
+    opacityHigh: Math.min(0.96, 0.72 + height * 0.24 + (scatter % 3) * 0.04).toFixed(2),
+    x: `${sway * 0.18}px`
+  };
+});
+
 function hashSeed(parts: string[]) {
   let hash = 2166136261;
   for (const part of parts) {
@@ -342,13 +357,19 @@ export function EqVisualScene({ playback, audio, system, fontTheme, lyricsPanel,
         <div className="hifi-lyrics-footer" data-hifi-lyrics-footer>
           <div className="hifi-lyrics-progress-eq" data-hifi-lyrics-progress-eq aria-hidden="true">
             <div className="hifi-mini-eq" data-hifi-mini-eq>
-              {MINI_EQ_BARS.map((height, index) => (
+              {MINI_EQ_BAR_PROFILES.map((bar, index) => (
                 <span
-                  key={`${height}-${index}`}
+                  key={`${bar.height}-${index}`}
                   data-hifi-mini-eq-bar
                   style={{
-                    "--hifi-mini-eq-height": height,
-                    "--hifi-mini-eq-delay": `${index * -0.07}s`
+                    "--hifi-mini-eq-height": bar.height,
+                    "--hifi-mini-eq-delay": bar.delay,
+                    "--hifi-mini-eq-duration": bar.duration,
+                    "--hifi-mini-eq-low": bar.low,
+                    "--hifi-mini-eq-high": bar.high,
+                    "--hifi-mini-eq-opacity-low": bar.opacityLow,
+                    "--hifi-mini-eq-opacity-high": bar.opacityHigh,
+                    "--hifi-mini-eq-x": bar.x
                   } as CSSProperties}
                 />
               ))}
