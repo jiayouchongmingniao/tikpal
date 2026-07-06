@@ -261,8 +261,12 @@ async function runAirplayMetadataHelperClockSmoke() {
   const metadataTxtPath = path.join(workspace, "missing-aplmeta.txt");
   const eventLogPath = path.join(workspace, "moode_spsevent.log");
   const clockStatePath = path.join(workspace, "clock-state");
+  const mprisClockStatePath = path.join(workspace, "mpris-clock-state");
+  const fakeBusctlPath = path.join(workspace, "busctl");
+  const coverPath = path.join(workspace, "airplay-cover.jpg");
   const eventSeconds = Math.floor(Date.now() / 1000) - 12;
   const metadataSeconds = eventSeconds + 6;
+  const oldCoverSeconds = metadataSeconds - 600;
   const eventStamp = formatMoodeEventTimestamp(eventSeconds);
 
   try {
@@ -306,6 +310,61 @@ async function runAirplayMetadataHelperClockSmoke() {
     assert(fields.get("clockStartReason") === "metadata_mtime", "AirPlay helper should use metadata mtime when events start/stop in the same second");
     assert(Number(fields.get("clockStartMs")) === metadataSeconds * 1000, "AirPlay helper should anchor the clock to metadata mtime");
     assert(Number(fields.get("positionMs")) > 0, "AirPlay helper should emit a positive inferred position");
+
+    await writeFile(coverPath, "fake-cover");
+    await utimes(coverPath, oldCoverSeconds, oldCoverSeconds);
+    await writeFile(
+      metadataJsonPath,
+      `${JSON.stringify({
+        fecmd: "update_aplmeta",
+        title: "Shared Cover Track",
+        artist: "AirPlay Tester",
+        album: "Helper Smoke",
+        duration: "204000",
+        cover_url: coverPath,
+        sformat: "ALAC 16/44.1K 2ch"
+      })}\n`
+    );
+    await utimes(metadataJsonPath, metadataSeconds, metadataSeconds);
+    await writeFile(fakeBusctlPath, `#!/usr/bin/env node
+const property = process.argv.at(-1);
+if (property === "Metadata") {
+  process.stdout.write(JSON.stringify({ type: "a{sv}", data: {
+    "mpris:artUrl": { type: "s", data: "file://${coverPath}" },
+    "mpris:trackid": { type: "o", data: "/org/gnome/ShairportSync/smoke" },
+    "xesam:title": { type: "s", data: "Shared Cover Track" },
+    "xesam:album": { type: "s", data: "Helper Smoke" },
+    "xesam:artist": { type: "as", data: ["AirPlay Tester"] },
+    "mpris:length": { type: "x", data: 204000000 }
+  } }) + "\\n");
+} else if (property === "PlaybackStatus") {
+  process.stdout.write(JSON.stringify({ type: "s", data: "Playing" }) + "\\n");
+} else if (property === "Position") {
+  process.stdout.write(JSON.stringify({ type: "x", data: 0 }) + "\\n");
+} else {
+  process.exit(1);
+}
+`);
+    await chmod(fakeBusctlPath, 0o755);
+
+    const mprisResult = await runProcess("sh", ["deploy/moode/tikpal-airplay-metadata.sh"], {
+      env: {
+        ...process.env,
+        PATH: `${workspace}:${process.env.PATH}`,
+        TIKPAL_AIRPLAY_EVENT_LOG: eventLogPath,
+        TIKPAL_AIRPLAY_METADATA_FILE: metadataTxtPath,
+        TIKPAL_AIRPLAY_METADATA_JSON_FILE: metadataJsonPath,
+        TIKPAL_AIRPLAY_CLOCK_STATE_FILE: mprisClockStatePath,
+        TIKPAL_AIRPLAY_METADATA_CLOCK_LEAD_MS: "1000"
+      }
+    });
+
+    assert(mprisResult.code === 0, `AirPlay helper should read MPRIS metadata with json clock fallback, stderr: ${mprisResult.stderr}`);
+    const mprisFields = parseKeyValueOutput(mprisResult.stdout);
+    assert(mprisFields.get("metadataSource") === "mpris", "AirPlay helper should keep MPRIS as playback truth");
+    assert(Number(mprisFields.get("metadataMtimeMs")) === metadataSeconds * 1000, "MPRIS clock should use matching json metadata mtime");
+    assert(Number(mprisFields.get("clockStartMs")) === metadataSeconds * 1000, "MPRIS clock should not use stale shared artwork mtime");
+    assert(Number(mprisFields.get("positionMs")) < 30_000, "MPRIS inferred position should start near the current track, not the old cover mtime");
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
@@ -3037,7 +3096,8 @@ appendFileSync(${JSON.stringify(fakeBluetoothTransportLogPath)}, action + "\\n")
     assert(liveMprisOverrunState.response.ok, "cached mpc airplay live MPRIS overrun state should return 200");
     assert(liveMprisOverrunState.body.playback.title === "This City", "live MPRIS overrun should not fall back to AirPlay Ready");
     assert(liveMprisOverrunState.body.playback.state === "playing", "live MPRIS overrun should keep AirPlay playing");
-    assert(liveMprisOverrunState.body.playback.elapsedSeconds === 3, "live MPRIS overrun should wrap unreliable elapsed time into the track duration");
+    assert(liveMprisOverrunState.body.playback.elapsedSeconds === null, "live MPRIS overrun should drop unreliable elapsed time instead of wrapping it");
+    assert(liveMprisOverrunState.body.lyrics.synced === false, "live MPRIS overrun should keep lyrics static instead of highlighting the wrong line");
 
     await writeAirplayMetadata({
       title: "Instant Crush",

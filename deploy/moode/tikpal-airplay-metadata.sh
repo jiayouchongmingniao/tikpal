@@ -90,6 +90,8 @@ def supplement_payload(primary, fallback):
     ):
         if not clean(primary.get(key)) and clean(fallback.get(key)):
             primary[key] = fallback.get(key)
+    if primary.get("metadata_source") == "mpris" and clean(fallback.get("source_mtime")):
+        primary["source_mtime"] = fallback.get("source_mtime")
     return primary
 
 
@@ -148,7 +150,7 @@ def emit(fields):
 
 def with_fresh_artwork(payload):
     artwork = payload.get("artwork_path", "")
-    source_mtime = int(payload.get("source_mtime") or 0)
+    source_mtime = 0 if payload.get("metadata_source") == "mpris" else int(payload.get("source_mtime") or 0)
     artwork_mtime = stat_mtime(artwork) if artwork else 0
     if artwork and (artwork_mtime <= 0 or (artwork_max_lag > 0 and source_mtime > 0 and artwork_mtime + artwork_max_lag < source_mtime)):
         payload["artwork_url"] = ""
@@ -227,7 +229,6 @@ def read_mpris_metadata():
     artist = ", ".join(clean(part) for part in artists if clean(part)) if isinstance(artists, list) else clean(artists)
     art = clean(variant_value(metadata, "mpris:artUrl"))
     local_artwork_path = artwork_path(art)
-    source_mtime = stat_mtime(local_artwork_path) or now
     status = clean(busctl_json("PlaybackStatus")).lower() or "playing"
     position = busctl_json("Position")
     try:
@@ -247,7 +248,7 @@ def read_mpris_metadata():
         "artwork_path": local_artwork_path,
         "format": "",
         "status": status,
-        "source_mtime": source_mtime,
+        "source_mtime": "",
         "metadata_source": "mpris",
         "raw_position_ms": raw_position_ms,
     }
@@ -316,6 +317,7 @@ PY
 file_mtime="$(printf '%s\n' "$metadata_payload" | awk -F '=' '$1 == "metadataSourceMtimeSeconds" { print $2; exit }')"
 file_mtime="${file_mtime:-0}"
 raw_position_ms="$(printf '%s\n' "$metadata_payload" | awk -F '=' '$1 == "rawPositionMs" { print $2; exit }')"
+metadata_source="$(printf '%s\n' "$metadata_payload" | awk -F '=' '$1 == "metadataSource" { print $2; exit }')"
 if [ "$has_event_clock" -eq 1 ] && [ "$active_started_at" -lt "$active_stopped_at" ] && [ "$file_mtime" -le "$active_stopped_at" ]; then
   rm -f "$clock_state_file" >/dev/null 2>&1 || true
   exit 1
@@ -357,6 +359,11 @@ if [ "$file_mtime" -gt 0 ] && { [ "$clock_start" -eq 0 ] || [ "$file_mtime" -gt 
   fi
 fi
 
+if [ "$clock_start" -eq 0 ] && [ "$metadata_source" = "mpris" ]; then
+  clock_start="$now"
+  clock_start_reason="mpris_seen"
+fi
+
 if [ "$clock_start" -gt 0 ]; then
   state_key_hash=""
   state_clock_start=0
@@ -370,7 +377,8 @@ if [ "$clock_start" -gt 0 ]; then
   if [ "$metadata_key_hash" = "$state_key_hash" ] \
     && [ "$active_started_at" -eq "$state_started_at" ] \
     && [ "$state_clock_start" -gt 0 ] \
-    && [ "$state_clock_start" -le "$now" ]; then
+    && [ "$state_clock_start" -le "$now" ] \
+    && { [ "$clock_start_reason" = "mpris_seen" ] || [ "$state_clock_start" -eq "$clock_start" ]; }; then
     clock_start="$state_clock_start"
     if [ "$state_clock_reason" = "metadata_mtime" ] || [ "$state_clock_reason" = "persisted_metadata_mtime" ]; then
       clock_start_reason="persisted_metadata_mtime"

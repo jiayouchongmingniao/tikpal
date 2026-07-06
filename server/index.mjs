@@ -2285,10 +2285,9 @@ function normalizeAirplayPlaybackMetadata(metadata) {
   ) {
     if (positionMs > durationMs + AIRPLAY_METADATA_POSITION_GRACE_MS) {
       if (metadataSource === "mpris") {
-        const wrappedPositionMs = positionMs % durationMs;
         return {
           ...metadata,
-          positionMs: Number.isFinite(wrappedPositionMs) ? wrappedPositionMs : null
+          positionMs: null
         };
       }
       return null;
