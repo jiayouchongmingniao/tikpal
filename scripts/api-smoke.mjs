@@ -2751,6 +2751,7 @@ appendFileSync(${JSON.stringify(fakeBluetoothTransportLogPath)}, action + "\\n")
     durationMs: 60000,
     artworkPath: firstAirplayArtworkPath,
     artworkMtimeMs: 111000,
+    positionTrusted: true,
     metadataSource: "mpris"
   });
 
@@ -2836,6 +2837,7 @@ appendFileSync(${JSON.stringify(fakeBluetoothTransportLogPath)}, action + "\\n")
     assert(recovered.body.playback.title === "This City", "mpc recovered AirPlay state should expose metadata title");
     assert(recovered.body.playback.artist === "Sam Fischer", "mpc recovered AirPlay state should expose metadata artist");
     assert(recovered.body.playback.elapsedSeconds === 45, "mpc recovered AirPlay state should expose metadata position");
+    assert(recovered.body.playback.timingDiagnostics?.positionTrusted === true, "mpc recovered AirPlay state should mark MPRIS position trusted");
     assert(recovered.body.playback.transportCapabilities?.next === true, "mpc recovered AirPlay state should expose transport capability");
     assert(recovered.body.playback.timingDiagnostics?.metadataSource === "mpris", "mpc recovered AirPlay state should expose metadata source diagnostics");
     assert(
@@ -3062,6 +3064,7 @@ appendFileSync(${JSON.stringify(fakeBluetoothTransportLogPath)}, action + "\\n")
       durationMs: 60000,
       artworkPath: firstAirplayArtworkPath,
       artworkMtimeMs: 112000,
+      positionTrusted: true,
       metadataSource: "mpris"
     });
     const overrunLyricsRefresh = await requestFrom(baseUrl, "/api/v1/lyrics/refresh", {
@@ -3085,6 +3088,7 @@ appendFileSync(${JSON.stringify(fakeBluetoothTransportLogPath)}, action + "\\n")
       durationMs: 60000,
       artworkPath: firstAirplayArtworkPath,
       artworkMtimeMs: 113000,
+      positionTrusted: true,
       metadataSource: "mpris"
     });
     const liveMprisOverrunRefresh = await requestFrom(baseUrl, "/api/v1/lyrics/refresh", {
@@ -3097,7 +3101,32 @@ appendFileSync(${JSON.stringify(fakeBluetoothTransportLogPath)}, action + "\\n")
     assert(liveMprisOverrunState.body.playback.title === "This City", "live MPRIS overrun should not fall back to AirPlay Ready");
     assert(liveMprisOverrunState.body.playback.state === "playing", "live MPRIS overrun should keep AirPlay playing");
     assert(liveMprisOverrunState.body.playback.elapsedSeconds === null, "live MPRIS overrun should drop unreliable elapsed time instead of wrapping it");
+    assert(liveMprisOverrunState.body.playback.timingDiagnostics?.positionTrusted === false, "live MPRIS overrun should mark position untrusted");
     assert(liveMprisOverrunState.body.lyrics.synced === false, "live MPRIS overrun should keep lyrics static instead of highlighting the wrong line");
+
+    await writeAirplayMetadata({
+      title: "This City",
+      artist: "Sam Fischer",
+      album: "Not a Hobby",
+      status: "playing",
+      positionMs: 32000,
+      durationMs: 60000,
+      artworkPath: firstAirplayArtworkPath,
+      artworkMtimeMs: 114000,
+      positionTrusted: false,
+      metadataSource: "mpris"
+    });
+    const untrustedClockRefresh = await requestFrom(baseUrl, "/api/v1/lyrics/refresh", {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    assert(untrustedClockRefresh.response.ok, "mpc airplay lyrics refresh with untrusted position should return 200");
+    const untrustedClockState = await requestFrom(baseUrl, "/api/v1/system/state");
+    assert(untrustedClockState.response.ok, "cached mpc airplay untrusted clock state should return 200");
+    assert(untrustedClockState.body.playback.elapsedSeconds === 32, "untrusted AirPlay clock may still expose progress for display");
+    assert(untrustedClockState.body.playback.timingDiagnostics?.positionTrusted === false, "untrusted AirPlay clock should be marked in diagnostics");
+    assert(untrustedClockState.body.lyrics.title === "This City", "untrusted AirPlay clock should keep the correct lyrics identity");
+    assert(untrustedClockState.body.lyrics.synced === false, "untrusted AirPlay clock should keep lyrics static instead of synced highlighting");
 
     await writeAirplayMetadata({
       title: "Instant Crush",
@@ -3140,6 +3169,7 @@ appendFileSync(${JSON.stringify(fakeBluetoothTransportLogPath)}, action + "\\n")
       durationMs: 29954,
       artworkPath: secondAirplayArtworkPath,
       artworkMtimeMs: 333000,
+      positionTrusted: true,
       metadataSource: "mpris"
     });
     const durationDriftLyricsRefresh = await requestFrom(baseUrl, "/api/v1/lyrics/refresh", {

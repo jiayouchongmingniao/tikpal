@@ -2068,6 +2068,17 @@ function readMetadataNumber(metadata, keys) {
   return null;
 }
 
+function readMetadataBoolean(metadata, keys) {
+  for (const key of keys) {
+    const value = metadata[key];
+    if (value === true || value === false) return value;
+    const normalized = String(value ?? "").trim().toLowerCase();
+    if (["true", "1", "yes"].includes(normalized)) return true;
+    if (["false", "0", "no"].includes(normalized)) return false;
+  }
+  return null;
+}
+
 function parsePlaybackTimingDiagnostics(metadata) {
   const diagnostics = {
     metadataMtimeMs: readMetadataNumber(metadata, ["metadatamtimems", "metadataMtimeMs", "metadata_mtime_ms"]),
@@ -2077,11 +2088,12 @@ function parsePlaybackTimingDiagnostics(metadata) {
     clockLeadMs: readMetadataNumber(metadata, ["clockleadms", "clockLeadMs", "clock_lead_ms"]),
     effectiveClockStartMs: readMetadataNumber(metadata, ["effectiveclockstartms", "effectiveClockStartMs", "effective_clock_start_ms"]),
     clockStartReason: normalizeMetadataValue(metadata.clockstartreason ?? metadata.clockStartReason ?? metadata.clock_start_reason) || null,
-    metadataSource: normalizeMetadataValue(metadata.metadatasource ?? metadata.metadataSource ?? metadata.metadata_source) || null
+    metadataSource: normalizeMetadataValue(metadata.metadatasource ?? metadata.metadataSource ?? metadata.metadata_source) || null,
+    positionTrusted: readMetadataBoolean(metadata, ["positiontrusted", "positionTrusted", "position_trusted"])
   };
 
   const hasTimingValue = Object.entries(diagnostics).some(([key, value]) => (
-    key === "clockStartReason" || key === "metadataSource" ? Boolean(value) : Number.isFinite(value)
+    key === "clockStartReason" || key === "metadataSource" ? Boolean(value) : Number.isFinite(value) || typeof value === "boolean"
   ));
   return hasTimingValue ? diagnostics : null;
 }
@@ -2133,6 +2145,7 @@ function parseBluetoothMetadataOutput(raw) {
   const positionMs = Number(metadata.positionms ?? metadata.position_ms ?? metadata.position);
   const durationMs = Number(metadata.durationms ?? metadata.duration_ms ?? metadata.duration);
   const status = normalizeMetadataValue(metadata.status).toLowerCase();
+  const timingDiagnostics = parsePlaybackTimingDiagnostics(metadata);
 
   return {
     title,
@@ -2142,7 +2155,8 @@ function parseBluetoothMetadataOutput(raw) {
     positionMs: Number.isFinite(positionMs) ? positionMs : null,
     durationMs: Number.isFinite(durationMs) ? durationMs : null,
     artworkUrl: metadataArtworkUrl(metadata),
-    timingDiagnostics: parsePlaybackTimingDiagnostics(metadata)
+    positionTrusted: timingDiagnostics?.positionTrusted === true,
+    timingDiagnostics
   };
 }
 
@@ -2287,7 +2301,12 @@ function normalizeAirplayPlaybackMetadata(metadata) {
       if (metadataSource === "mpris") {
         return {
           ...metadata,
-          positionMs: null
+          positionMs: null,
+          positionTrusted: false,
+          timingDiagnostics: {
+            ...(metadata.timingDiagnostics ?? {}),
+            positionTrusted: false
+          }
         };
       }
       return null;
@@ -7225,6 +7244,7 @@ function buildMetadataLyricsCandidate(playback, overrides = {}) {
   const sourceScope = overrides.sourceScope ?? "local_playback";
   const durationMs = Number.isFinite(playback.durationSeconds) ? Math.round(playback.durationSeconds * 1000) : null;
   const trustedDurationMs = isUnreliableAirplayLyricsDuration(sourceScope, durationMs) ? null : durationMs;
+  const playbackClock = overrides.playbackClock ?? Number.isFinite(playback.elapsedSeconds);
   return {
     supported: true,
     source: playback.source,
@@ -7239,7 +7259,7 @@ function buildMetadataLyricsCandidate(playback, overrides = {}) {
     artist: normalizeMetadataValue(playback.artist),
     album: normalizeMetadataValue(playback.album),
     durationMs: trustedDurationMs,
-    playbackClock: Number.isFinite(playback.elapsedSeconds)
+    playbackClock
   };
 }
 
@@ -7285,8 +7305,12 @@ function getLyricsCandidate(snapshot) {
       };
     }
 
+    const positionTrusted = source === "airplay"
+      ? playback.timingDiagnostics?.positionTrusted === true
+      : Number.isFinite(playback.elapsedSeconds);
     const metadataCandidate = buildMetadataLyricsCandidate(playback, {
-      sourceScope
+      sourceScope,
+      playbackClock: positionTrusted && Number.isFinite(playback.elapsedSeconds)
     });
     if (metadataCandidate.trackKey && !looksLikeUntrustedTrackMetadata(metadataCandidate)) {
       return metadataCandidate;
@@ -7314,7 +7338,7 @@ function getLyricsCandidate(snapshot) {
       artist: sourceSummary.connectedLabel ?? playback.artist ?? null,
       album: null,
       durationMs: Number.isFinite(playback.durationSeconds) ? Math.round(playback.durationSeconds * 1000) : null,
-      playbackClock: Number.isFinite(playback.elapsedSeconds)
+      playbackClock: positionTrusted && Number.isFinite(playback.elapsedSeconds)
     };
   }
 

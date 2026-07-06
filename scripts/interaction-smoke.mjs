@@ -1071,6 +1071,50 @@ try {
             return next;
           }
 
+          if (mode === "airplayUntrustedSyncedLyrics") {
+            const next = withSource(state, "airplay");
+            next.playback = {
+              ...next.playback,
+              state: "playing",
+              source: "airplay",
+              albumArtUrl: null,
+              title: "Untrusted AirPlay Clock",
+              artist: "Tikpal Smoke",
+              album: "Wall Text",
+              elapsedSeconds: 42,
+              durationSeconds: 120,
+              timingDiagnostics: {
+                ...(next.playback.timingDiagnostics ?? {}),
+                metadataSource: "mpris",
+                positionTrusted: false
+              },
+              currentTrackIndex: 0,
+              queueLength: 0,
+              favorite: false,
+              queuePreview: []
+            };
+            next.lyrics = {
+              ...next.lyrics,
+              status: "ready",
+              sourceScope: "airplay_input",
+              recognitionMode: "metadata",
+              recognitionProvider: "lrclib",
+              trackKey: "smoke-airplay-untrusted-synced-lyrics",
+              synced: true,
+              activeLineIndex: null,
+              title: "Untrusted AirPlay Clock",
+              artist: "Tikpal Smoke",
+              lines: [
+                { text: "Untrusted AirPlay line one", startMs: 0, endMs: 10000 },
+                { text: "Untrusted AirPlay line two", startMs: 10000, endMs: 20000 },
+                { text: "Untrusted AirPlay line three should not become active from stale elapsed", startMs: 40000, endMs: 60000 }
+              ],
+              message: null,
+              updatedAt: new Date().toISOString()
+            };
+            return next;
+          }
+
           if (mode === "brokenArtwork") {
             const next = withSource(state, "mpd");
             next.playback = {
@@ -1549,6 +1593,36 @@ try {
       })()
     `,
     "AirPlay fallback plain lyrics use the shared Hi-Fi lyrics wall without ticker"
+  );
+  const airplayUntrustedSyncedLyricsPatchVersion = await setStatePatchMode(client, "airplayUntrustedSyncedLyrics");
+  await waitForStatePatchRefresh(client, airplayUntrustedSyncedLyricsPatchVersion, "AirPlay untrusted synced lyrics fixture refreshes");
+  await expectEventually(
+    client,
+    `
+      (() => {
+        const panel = document.querySelector('[data-hifi-lyrics-panel]');
+        const activeLine = document.querySelector('[data-hifi-lyrics-line][data-hifi-lyrics-active]');
+        const activeText = activeLine?.textContent?.trim() ?? "";
+        return panel !== null
+          && document.querySelector('[data-hifi-centered-now-playing]') === null
+          && activeText.includes('Untrusted AirPlay line one')
+          && document.querySelector('.ambient-lyrics-ticker') === null;
+      })()
+    `,
+    "Hi-Fi AirPlay lyrics with an untrusted clock stay on a static safe line"
+  );
+  await wait(1500);
+  await expect(
+    client,
+    `
+      (() => {
+        const activeLine = document.querySelector('[data-hifi-lyrics-line][data-hifi-lyrics-active]');
+        const activeText = activeLine?.textContent?.trim() ?? "";
+        return activeText.includes('Untrusted AirPlay line one')
+          && !activeText.includes('line three');
+      })()
+    `,
+    "Hi-Fi AirPlay lyrics do not advance from an untrusted elapsed clock"
   );
   await evaluate(client, "document.querySelector('.ambient-transport button[aria-label=\"Hide lyrics\"]')?.click(); true");
   await setStatePatchMode(client, "");

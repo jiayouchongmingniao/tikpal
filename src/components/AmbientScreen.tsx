@@ -69,6 +69,7 @@ interface LyricsClockAnchor {
   key: string;
   elapsedSeconds: number;
   capturedAtMs: number;
+  playing: boolean;
 }
 
 const DRAG_PIXELS_PER_PERCENT = 4;
@@ -393,9 +394,12 @@ export function AmbientScreen({
   const sceneVisualLowPower = audioProtectionMode || sceneVideoThermalGuardActive;
   const sceneAudioEnabled = shouldRenderSceneVideo && sceneSoundEnabled && !ambientSceneAudioSuppressed && playback.source === "scene" && playback.state === "playing";
   const useStableSceneLoop = sceneVideoStableLoop && shouldRenderSceneVideo && !isHifiMode;
+  const playbackLyricsClockTrusted = Number.isFinite(playback.elapsedSeconds)
+    && (playback.source !== "airplay" || playback.timingDiagnostics?.positionTrusted === true);
   const canAdvanceLyrics = lyrics.synced
     && (playback.source === "mpd" || playback.source === "radio" || playback.source === "bluetooth" || playback.source === "airplay")
-    && playback.state === "playing";
+    && playback.state === "playing"
+    && playbackLyricsClockTrusted;
   const lyricsElapsedSeconds = useMemo(() => {
     if (!canAdvanceLyrics || lyricsClockAnchor?.key !== playbackClockKey) return playback.elapsedSeconds;
 
@@ -890,16 +894,17 @@ export function AmbientScreen({
   }, []);
 
   useEffect(() => {
-    if (!Number.isFinite(playback.elapsedSeconds)) {
+    if (!playbackLyricsClockTrusted) {
       setLyricsClockAnchor(null);
       return;
     }
 
     const capturedAtMs = Date.now();
     const nextElapsedSeconds = Math.max(0, playback.elapsedSeconds ?? 0);
+    const isPlaying = playback.state === "playing";
     setLyricsClockAnchor((current) => {
-      if (!current || current.key !== playbackClockKey || playback.state !== "playing") {
-        return { key: playbackClockKey, elapsedSeconds: nextElapsedSeconds, capturedAtMs };
+      if (!current || current.key !== playbackClockKey || !isPlaying || current.playing !== true) {
+        return { key: playbackClockKey, elapsedSeconds: nextElapsedSeconds, capturedAtMs, playing: isPlaying };
       }
 
       const projectedSeconds = current.elapsedSeconds + Math.max(0, capturedAtMs - current.capturedAtMs) / 1000;
@@ -908,10 +913,11 @@ export function AmbientScreen({
       return {
         key: playbackClockKey,
         elapsedSeconds: shouldKeepLocalClock ? projectedSeconds : nextElapsedSeconds,
-        capturedAtMs
+        capturedAtMs,
+        playing: true
       };
     });
-  }, [playback.elapsedSeconds, playback.state, playbackClockKey]);
+  }, [playback.elapsedSeconds, playback.state, playbackClockKey, playbackLyricsClockTrusted]);
 
   useEffect(() => {
     if (!canAdvanceLyrics || lyricsClockAnchor?.key !== playbackClockKey) return undefined;

@@ -318,6 +318,7 @@ file_mtime="$(printf '%s\n' "$metadata_payload" | awk -F '=' '$1 == "metadataSou
 file_mtime="${file_mtime:-0}"
 raw_position_ms="$(printf '%s\n' "$metadata_payload" | awk -F '=' '$1 == "rawPositionMs" { print $2; exit }')"
 metadata_source="$(printf '%s\n' "$metadata_payload" | awk -F '=' '$1 == "metadataSource" { print $2; exit }')"
+metadata_status="$(printf '%s\n' "$metadata_payload" | awk -F '=' '$1 == "status" { print tolower($2); exit }')"
 if [ "$has_event_clock" -eq 1 ] && [ "$active_started_at" -lt "$active_stopped_at" ] && [ "$file_mtime" -le "$active_stopped_at" ]; then
   rm -f "$clock_state_file" >/dev/null 2>&1 || true
   exit 1
@@ -343,6 +344,7 @@ else
 fi
 
 position_ms=""
+position_trusted=false
 clock_start=0
 clock_start_reason=""
 clock_lead_ms=0
@@ -398,14 +400,20 @@ if [ "$clock_start" -gt 0 ]; then
   fi
 fi
 
+if [ "$metadata_status" != "playing" ]; then
+  position_ms=""
+fi
+
 if printf '%s\n' "$raw_position_ms" | grep -Eq '^[0-9]+$' && [ "$raw_position_ms" -gt 0 ]; then
   position_ms="$raw_position_ms"
+  position_trusted=true
 fi
 
 printf '%s\n' "$metadata_payload" | awk -F '=' '
   $1 != "metadataSourceMtimeSeconds" && $1 != "rawPositionMs" { print }
 '
 printf 'positionMs=%s\n' "$position_ms"
+printf 'positionTrusted=%s\n' "$position_trusted"
 printf 'metadataMtimeMs=%s\n' "$((file_mtime * 1000))"
 printf 'airplayStartedAtMs=%s\n' "$((active_started_at * 1000))"
 printf 'airplayStoppedAtMs=%s\n' "$((active_stopped_at * 1000))"

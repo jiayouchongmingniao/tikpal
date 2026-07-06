@@ -375,6 +375,8 @@ export interface PlaybackTimingDiagnostics {
   clockLeadMs: number | null;
   effectiveClockStartMs: number | null;
   clockStartReason: "airplay_event" | "metadata_mtime" | string | null;
+  metadataSource?: string | null;
+  positionTrusted?: boolean | null;
 }
 
 export interface QueueEntrySummary {
