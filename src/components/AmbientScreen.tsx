@@ -394,8 +394,10 @@ export function AmbientScreen({
   const sceneVisualLowPower = audioProtectionMode || sceneVideoThermalGuardActive;
   const sceneAudioEnabled = shouldRenderSceneVideo && sceneSoundEnabled && !ambientSceneAudioSuppressed && playback.source === "scene" && playback.state === "playing";
   const useStableSceneLoop = sceneVideoStableLoop && shouldRenderSceneVideo && !isHifiMode;
+  const airplayLyricsClockUsable = playback.timingDiagnostics?.positionTrusted === true
+    || playback.timingDiagnostics?.positionConfidence === "estimated";
   const playbackLyricsClockTrusted = Number.isFinite(playback.elapsedSeconds)
-    && (playback.source !== "airplay" || playback.timingDiagnostics?.positionTrusted === true);
+    && (playback.source !== "airplay" || airplayLyricsClockUsable);
   const canAdvanceLyrics = lyrics.synced
     && (playback.source === "mpd" || playback.source === "radio" || playback.source === "bluetooth" || playback.source === "airplay")
     && playback.state === "playing"
@@ -645,8 +647,9 @@ export function AmbientScreen({
     const currentIndex = Math.max(0, switchableBackgroundVideos.findIndex((video) => video.id === currentBackgroundVideo.id));
     const nextVideo = switchableBackgroundVideos[(currentIndex + direction + switchableBackgroundVideos.length) % switchableBackgroundVideos.length];
     const nextIndex = backgroundVideos.findIndex((video) => video.id === nextVideo?.id);
-    if (nextIndex !== -1) {
+    if (nextVideo && nextIndex !== -1) {
       setBackgroundVideoIndex(nextIndex);
+      void onExperienceAction({ type: "set_scene", sceneVideoId: nextVideo.id });
     }
   }
 
@@ -803,7 +806,7 @@ export function AmbientScreen({
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [backgroundVideos.length, currentBackgroundVideo.id, hasSceneVideo, hudVisible, isHifiMode, isPlaybackPending, nextTrackDisabled, onHudActivity, onPlaybackAction, onSceneSoundEnabledChange, playPauseDisabled, previousTrackDisabled, sceneSoundEnabled, sceneSoundPending, switchableBackgroundVideos.length]);
+  }, [backgroundVideos.length, currentBackgroundVideo.id, hasSceneVideo, hudVisible, isHifiMode, isPlaybackPending, nextTrackDisabled, onExperienceAction, onHudActivity, onPlaybackAction, onSceneSoundEnabledChange, playPauseDisabled, previousTrackDisabled, sceneSoundEnabled, sceneSoundPending, switchableBackgroundVideos.length]);
 
   useEffect(() => {
     if (!sourcePickerOpen || pendingAmbientSource || ambientSourceError) return undefined;

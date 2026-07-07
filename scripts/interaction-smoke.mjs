@@ -1115,6 +1115,51 @@ try {
             return next;
           }
 
+          if (mode === "airplayEstimatedSyncedLyrics") {
+            const next = withSource(state, "airplay");
+            next.playback = {
+              ...next.playback,
+              state: "playing",
+              source: "airplay",
+              albumArtUrl: null,
+              title: "Estimated AirPlay Clock",
+              artist: "Tikpal Smoke",
+              album: "Wall Text",
+              elapsedSeconds: 18,
+              durationSeconds: 120,
+              timingDiagnostics: {
+                ...(next.playback.timingDiagnostics ?? {}),
+                metadataSource: "mpris",
+                positionTrusted: false,
+                positionConfidence: "estimated"
+              },
+              currentTrackIndex: 0,
+              queueLength: 0,
+              favorite: false,
+              queuePreview: []
+            };
+            next.lyrics = {
+              ...next.lyrics,
+              status: "ready",
+              sourceScope: "airplay_input",
+              recognitionMode: "metadata",
+              recognitionProvider: "lrclib",
+              trackKey: "smoke-airplay-estimated-synced-lyrics",
+              synced: true,
+              activeLineIndex: null,
+              title: "Estimated AirPlay Clock",
+              artist: "Tikpal Smoke",
+              lines: [
+                { text: "Estimated AirPlay line one", startMs: 0, endMs: 10000 },
+                { text: "Estimated AirPlay line two follows the estimated clock", startMs: 10000, endMs: 20000 },
+                { text: "Estimated AirPlay line three advances locally", startMs: 20000, endMs: 60000 }
+              ],
+              message: null,
+              updatedAt: new Date().toISOString()
+            };
+            return next;
+          }
+
           if (mode === "brokenArtwork") {
             const next = withSource(state, "mpd");
             next.playback = {
@@ -1623,6 +1668,32 @@ try {
       })()
     `,
     "Hi-Fi AirPlay lyrics do not advance from an untrusted elapsed clock"
+  );
+  const airplayEstimatedSyncedLyricsPatchVersion = await setStatePatchMode(client, "airplayEstimatedSyncedLyrics");
+  await waitForStatePatchRefresh(client, airplayEstimatedSyncedLyricsPatchVersion, "AirPlay estimated synced lyrics fixture refreshes");
+  await expectEventually(
+    client,
+    `
+      (() => {
+        const activeLine = document.querySelector('[data-hifi-lyrics-line][data-hifi-lyrics-active]');
+        const activeText = activeLine?.textContent?.trim() ?? "";
+        return activeText.includes('Estimated AirPlay line two')
+          && document.querySelector('.ambient-lyrics-ticker') === null;
+      })()
+    `,
+    "Hi-Fi AirPlay lyrics accept an estimated clock for active line selection"
+  );
+  await wait(2600);
+  await expectEventually(
+    client,
+    `
+      (() => {
+        const activeLine = document.querySelector('[data-hifi-lyrics-line][data-hifi-lyrics-active]');
+        const activeText = activeLine?.textContent?.trim() ?? "";
+        return activeText.includes('Estimated AirPlay line three');
+      })()
+    `,
+    "Hi-Fi AirPlay estimated lyrics advance from the local clock"
   );
   await evaluate(client, "document.querySelector('.ambient-transport button[aria-label=\"Hide lyrics\"]')?.click(); true");
   await setStatePatchMode(client, "");
@@ -2595,9 +2666,11 @@ try {
   await evaluate(
     client,
     `
-      (() => {
+      (async () => {
         const activeVideo = document.querySelector('.flame-video[data-flame-layer="active"][data-flame-loop-role="active"]');
+        const experience = await fetch('/api/v1/experience/state').then((response) => response.json());
         window.__tikpalSceneSoundSwitchBefore = {
+          sceneVideoId: experience.sceneVideoId,
           volume: Number.parseFloat(activeVideo?.getAttribute('data-scene-volume') ?? '0'),
           gainDb: Number.parseFloat(activeVideo?.getAttribute('data-scene-gain-db') ?? 'NaN'),
           src: activeVideo?.getAttribute('src') ?? ''
@@ -2606,6 +2679,11 @@ try {
         return true;
       })()
     `
+  );
+  await expectEventuallyEvaluate(
+    client,
+    "fetch('/api/v1/experience/state').then((response) => response.json()).then((experience) => experience.sceneVideoId !== window.__tikpalSceneSoundSwitchBefore?.sceneVideoId && experience.sceneVideoByMode?.calm === experience.sceneVideoId)",
+    "Ambient next scene persists the calm scene selection"
   );
   await expectEventually(
     client,

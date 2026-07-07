@@ -2749,11 +2749,12 @@ appendFileSync(${JSON.stringify(fakeBluetoothTransportLogPath)}, action + "\\n")
     status: "playing",
     positionMs: 45000,
     durationMs: 60000,
-    artworkPath: firstAirplayArtworkPath,
-    artworkMtimeMs: 111000,
-    positionTrusted: true,
-    metadataSource: "mpris"
-  });
+      artworkPath: firstAirplayArtworkPath,
+      artworkMtimeMs: 111000,
+      positionTrusted: true,
+      positionConfidence: "trusted",
+      metadataSource: "mpris"
+    });
 
   const server = spawn(process.execPath, ["server/index.mjs"], {
     env: mpcFocusedSmokeEnv({
@@ -2838,6 +2839,7 @@ appendFileSync(${JSON.stringify(fakeBluetoothTransportLogPath)}, action + "\\n")
     assert(recovered.body.playback.artist === "Sam Fischer", "mpc recovered AirPlay state should expose metadata artist");
     assert(recovered.body.playback.elapsedSeconds === 45, "mpc recovered AirPlay state should expose metadata position");
     assert(recovered.body.playback.timingDiagnostics?.positionTrusted === true, "mpc recovered AirPlay state should mark MPRIS position trusted");
+    assert(recovered.body.playback.timingDiagnostics?.positionConfidence === "trusted", "mpc recovered AirPlay state should expose trusted position confidence");
     assert(recovered.body.playback.transportCapabilities?.next === true, "mpc recovered AirPlay state should expose transport capability");
     assert(recovered.body.playback.timingDiagnostics?.metadataSource === "mpris", "mpc recovered AirPlay state should expose metadata source diagnostics");
     assert(
@@ -3065,6 +3067,7 @@ appendFileSync(${JSON.stringify(fakeBluetoothTransportLogPath)}, action + "\\n")
       artworkPath: firstAirplayArtworkPath,
       artworkMtimeMs: 112000,
       positionTrusted: true,
+      positionConfidence: "trusted",
       metadataSource: "mpris"
     });
     const overrunLyricsRefresh = await requestFrom(baseUrl, "/api/v1/lyrics/refresh", {
@@ -3089,6 +3092,7 @@ appendFileSync(${JSON.stringify(fakeBluetoothTransportLogPath)}, action + "\\n")
       artworkPath: firstAirplayArtworkPath,
       artworkMtimeMs: 113000,
       positionTrusted: true,
+      positionConfidence: "trusted",
       metadataSource: "mpris"
     });
     const liveMprisOverrunRefresh = await requestFrom(baseUrl, "/api/v1/lyrics/refresh", {
@@ -3127,6 +3131,30 @@ appendFileSync(${JSON.stringify(fakeBluetoothTransportLogPath)}, action + "\\n")
     assert(untrustedClockState.body.playback.timingDiagnostics?.positionTrusted === false, "untrusted AirPlay clock should be marked in diagnostics");
     assert(untrustedClockState.body.lyrics.title === "This City", "untrusted AirPlay clock should keep the correct lyrics identity");
     assert(untrustedClockState.body.lyrics.synced === false, "untrusted AirPlay clock should keep lyrics static instead of synced highlighting");
+
+    await writeAirplayMetadata({
+      title: "This City",
+      artist: "Sam Fischer",
+      album: "Not a Hobby",
+      status: "playing",
+      positionMs: 33000,
+      durationMs: 60000,
+      artworkPath: firstAirplayArtworkPath,
+      artworkMtimeMs: 115000,
+      positionTrusted: false,
+      positionConfidence: "estimated",
+      metadataSource: "mpris"
+    });
+    const estimatedClockRefresh = await requestFrom(baseUrl, "/api/v1/lyrics/refresh", {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    assert(estimatedClockRefresh.response.ok, "mpc airplay lyrics refresh with estimated position should return 200");
+    const estimatedClockState = await requestFrom(baseUrl, "/api/v1/system/state");
+    assert(estimatedClockState.response.ok, "cached mpc airplay estimated clock state should return 200");
+    assert(estimatedClockState.body.playback.timingDiagnostics?.positionConfidence === "estimated", "estimated AirPlay clock should be marked in diagnostics");
+    assert(estimatedClockState.body.lyrics.title === "This City", "estimated AirPlay clock should keep the correct lyrics identity");
+    assert(estimatedClockState.body.lyrics.synced === true, "estimated AirPlay clock should drive synced lyrics");
 
     await writeAirplayMetadata({
       title: "Instant Crush",
@@ -3170,6 +3198,7 @@ appendFileSync(${JSON.stringify(fakeBluetoothTransportLogPath)}, action + "\\n")
       artworkPath: secondAirplayArtworkPath,
       artworkMtimeMs: 333000,
       positionTrusted: true,
+      positionConfidence: "trusted",
       metadataSource: "mpris"
     });
     const durationDriftLyricsRefresh = await requestFrom(baseUrl, "/api/v1/lyrics/refresh", {
@@ -3357,9 +3386,12 @@ async function run() {
   const audioSourceMemoryStatePath = path.join(apiStateRoot, "audio-source-memory.json");
   const sceneBytes = Buffer.from("000000 ftypisom tikpal rainy window api smoke mp4");
   const sceneSha256 = createHash("sha256").update(sceneBytes).digest("hex");
+  const warmSceneBytes = Buffer.from("000000 ftypisom tikpal warm fireplace api smoke mp4");
+  const warmSceneSha256 = createHash("sha256").update(warmSceneBytes).digest("hex");
   await mkdir(path.join(apiAssetsRoot, "scenes", "_metadata"), { recursive: true });
   await writeFile(path.join(apiAssetsRoot, "output_2560x720-4k.mp4"), Buffer.from("000000 ftypisom tikpal legacy scene mp4"));
   await writeFile(path.join(apiAssetsRoot, "scenes", "Rainy-Window.mp4"), sceneBytes);
+  await writeFile(path.join(apiAssetsRoot, "scenes", "Warm-Fireplace.mp4"), warmSceneBytes);
   await writeFile(
     path.join(apiAssetsRoot, "scenes", "_metadata", "scene_videos.json"),
     `${JSON.stringify({
@@ -3374,6 +3406,16 @@ async function run() {
           audioGainDb: 11.1,
           default: false,
           sha256: sceneSha256
+        },
+        {
+          id: "warm-fireplace",
+          filename: "Warm-Fireplace.mp4",
+          label: "Warm Fireplace",
+          order: 40,
+          roomModes: ["calm"],
+          audioGainDb: 1.3,
+          default: false,
+          sha256: warmSceneSha256
         }
       ]
     }, null, 2)}\n`
@@ -3644,6 +3686,50 @@ async function run() {
     assert(stateAfterFocus.body.playback.source === "scene", "focus room mode playback should follow Scene Sound");
     assert(stateAfterFocus.body.system.volume.percent === 31, "room mode should preserve explicit global volume");
     assert(stateAfterFocus.body.system.display.brightnessPercent === focusExperience.body.brightnessPercent, "room mode should apply brightness through system actions");
+
+    const calmSceneDefault = await request("/api/v1/experience/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "set_mode", mode: "calm" })
+    });
+    assert(calmSceneDefault.response.ok, "calm mode before scene memory check should return 200");
+    assert(calmSceneDefault.body.sceneVideoId === "rainy-window", "calm should start from the preset scene before user scene memory");
+    const warmSceneMemory = await request("/api/v1/experience/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "set_scene", sceneVideoId: "warm-fireplace" })
+    });
+    assert(warmSceneMemory.response.ok, "set_scene should return 200 for a calm scene");
+    assert(warmSceneMemory.body.sceneVideoId === "warm-fireplace", "set_scene should persist the selected scene");
+    assert(warmSceneMemory.body.sceneVideoByMode?.calm === "warm-fireplace", "set_scene should remember the selected calm scene");
+    const stateAfterWarmScene = await request("/api/v1/system/state");
+    assert(stateAfterWarmScene.body.playback.artist === "Warm Fireplace", "set_scene should update active Scene Sound playback");
+    assert(stateAfterWarmScene.body.audio.currentSource.secondaryStatus === "Warm Fireplace audio playing", "set_scene should update active Scene Sound status");
+    const hifiAfterWarmScene = await request("/api/v1/experience/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "set_mode", mode: "hifi" })
+    });
+    assert(hifiAfterWarmScene.response.ok, "hifi mode after warm scene should return 200");
+    const calmAfterWarmScene = await request("/api/v1/experience/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "set_mode", mode: "calm" })
+    });
+    assert(calmAfterWarmScene.response.ok, "calm mode after hifi should return 200");
+    assert(calmAfterWarmScene.body.sceneVideoId === "warm-fireplace", "calm should restore the remembered warm fireplace scene");
+    const legacyCalmState = { ...calmAfterWarmScene.body };
+    delete legacyCalmState.sceneVideoByMode;
+    await writeFile(roomExperienceStatePath, `${JSON.stringify(legacyCalmState, null, 2)}\n`);
+    const legacyCalmRepeat = await request("/api/v1/experience/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "set_mode", mode: "calm" })
+    });
+    assert(legacyCalmRepeat.response.ok, "legacy calm repeat set_mode should return 200");
+    assert(legacyCalmRepeat.body.sceneVideoId === "warm-fireplace", "legacy calm state without sceneVideoByMode should preserve the current scene");
+    assert(legacyCalmRepeat.body.sceneVideoByMode?.calm === "warm-fireplace", "legacy calm repeat should backfill sceneVideoByMode");
+    const focusBeforeSceneSound = await request("/api/v1/experience/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "set_mode", mode: "focus" })
+    });
+    assert(focusBeforeSceneSound.response.ok, "focus mode after scene memory check should return 200");
+    assert(focusBeforeSceneSound.body.sceneVideoId === "midnight-library", "focus should keep its own scene after calm scene memory");
 
     const focusSceneSound = await request("/api/v1/experience/actions", {
       method: "POST",
@@ -4445,10 +4531,23 @@ async function run() {
     const remoteScene = await request("/api/v1/remote/actions", {
       method: "POST",
       headers: remoteHeaders,
-      body: JSON.stringify({ type: "scene.set", sceneVideoId: "rainy-window" })
+      body: JSON.stringify({ type: "scene.set", sceneVideoId: "warm-fireplace" })
     });
     assert(remoteScene.response.ok, "remote scene.set should return 200");
-    assert(remoteScene.body.scene.videoId === "rainy-window", "remote scene.set should update scene");
+    assert(remoteScene.body.scene.videoId === "warm-fireplace", "remote scene.set should update scene");
+    const remoteHifiAfterScene = await request("/api/v1/remote/actions", {
+      method: "POST",
+      headers: remoteHeaders,
+      body: JSON.stringify({ type: "room.set_mode", mode: "hifi" })
+    });
+    assert(remoteHifiAfterScene.response.ok, "remote room.set_mode hifi after scene.set should return 200");
+    const remoteCalmAfterScene = await request("/api/v1/remote/actions", {
+      method: "POST",
+      headers: remoteHeaders,
+      body: JSON.stringify({ type: "room.set_mode", mode: "calm" })
+    });
+    assert(remoteCalmAfterScene.response.ok, "remote room.set_mode calm after scene.set should return 200");
+    assert(remoteCalmAfterScene.body.scene.videoId === "warm-fireplace", "remote room.set_mode should restore remembered calm scene");
     const remoteSceneSound = await request("/api/v1/remote/actions", {
       method: "POST",
       headers: remoteHeaders,

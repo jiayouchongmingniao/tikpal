@@ -377,6 +377,7 @@ export interface PlaybackTimingDiagnostics {
   clockStartReason: "airplay_event" | "metadata_mtime" | string | null;
   metadataSource?: string | null;
   positionTrusted?: boolean | null;
+  positionConfidence?: "trusted" | "estimated" | "none" | string | null;
 }
 
 export interface QueueEntrySummary {
@@ -443,6 +444,7 @@ export interface RoomExperienceState {
   phase: RoomSessionPhase;
   presetId: string;
   sceneVideoId: string;
+  sceneVideoByMode?: Partial<Record<Exclude<RoomMode, "hifi">, string>>;
   hifiEqPresetId: HifiEqPresetId;
   hifiVisualPresetId: HifiVisualPresetId;
   sceneSoundEnabled: boolean;
@@ -493,6 +495,7 @@ export type RoomExperienceActionType =
   | "stop_session"
   | "update_timer"
   | "apply_preset"
+  | "set_scene"
   | "set_scene_sound"
   | "set_hifi_eq"
   | "set_hifi_visual"

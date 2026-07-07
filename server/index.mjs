@@ -314,6 +314,7 @@ const HIFI_EQ_PRESET_IDS = new Set(HIFI_EQ_PRESETS.map((preset) => preset.id));
 const HIFI_VISUAL_PRESETS = new Set(["spectrum-bars", "waveform", "dual-vu"]);
 const DEFAULT_HIFI_EQ_PRESET_ID = "flat";
 const DEFAULT_HIFI_VISUAL_PRESET_ID = "spectrum-bars";
+const SCENE_MEMORY_ROOM_MODES = new Set(["focus", "calm", "sleep"]);
 const DEFAULT_NIGHT_SCHEDULE = {
   enabled: true,
   timeZone: normalizeTimeZone(process.env.TZ) || "Asia/Shanghai",
@@ -1071,6 +1072,38 @@ function buildTimerEndsAt(timerMinutes, now = new Date()) {
   return new Date(now.getTime() + timerMinutes * 60_000).toISOString();
 }
 
+function normalizeSceneVideoByMode(raw, mode, sceneVideoId) {
+  const source = asPlainObject(raw?.sceneVideoByMode);
+  const byMode = {};
+  for (const roomMode of SCENE_MEMORY_ROOM_MODES) {
+    const id = String(source[roomMode] ?? "").trim();
+    if (id) byMode[roomMode] = id;
+  }
+
+  const normalizedMode = normalizeRoomMode(mode);
+  const normalizedSceneVideoId = String(sceneVideoId ?? "").trim();
+  if (SCENE_MEMORY_ROOM_MODES.has(normalizedMode) && normalizedSceneVideoId) {
+    byMode[normalizedMode] = byMode[normalizedMode] ?? normalizedSceneVideoId;
+  }
+
+  return byMode;
+}
+
+function rememberSceneVideoForRoomMode(state, mode = state?.mode, sceneVideoId = state?.sceneVideoId) {
+  const normalizedMode = normalizeRoomMode(mode);
+  const normalizedSceneVideoId = String(sceneVideoId ?? "").trim();
+  if (!SCENE_MEMORY_ROOM_MODES.has(normalizedMode) || !normalizedSceneVideoId) {
+    return state;
+  }
+  return {
+    ...state,
+    sceneVideoByMode: {
+      ...asPlainObject(state?.sceneVideoByMode),
+      [normalizedMode]: normalizedSceneVideoId
+    }
+  };
+}
+
 function buildDefaultRoomExperienceState(mode = "calm") {
   const normalizedMode = normalizeRoomMode(mode);
   const preset = ROOM_MODE_PRESETS[normalizedMode];
@@ -1101,6 +1134,7 @@ function normalizeRoomExperienceState(raw) {
     phase: normalizeRoomSessionPhase(raw?.phase),
     presetId: String(raw?.presetId ?? preset.presetId).trim() || preset.presetId,
     sceneVideoId: String(raw?.sceneVideoId ?? preset.sceneVideoId).trim() || preset.sceneVideoId,
+    sceneVideoByMode: normalizeSceneVideoByMode(raw, base.mode, raw?.sceneVideoId ?? preset.sceneVideoId),
     ...hifiEqPatch,
     sceneSoundEnabled: raw?.sceneSoundEnabled === true,
     playlistId: raw?.playlistId === null || raw?.playlistId === undefined ? null : String(raw.playlistId).trim() || null,
@@ -2080,6 +2114,9 @@ function readMetadataBoolean(metadata, keys) {
 }
 
 function parsePlaybackTimingDiagnostics(metadata) {
+  const positionConfidence = normalizeMetadataValue(
+    metadata.positionconfidence ?? metadata.positionConfidence ?? metadata.position_confidence
+  ).toLowerCase();
   const diagnostics = {
     metadataMtimeMs: readMetadataNumber(metadata, ["metadatamtimems", "metadataMtimeMs", "metadata_mtime_ms"]),
     airplayStartedAtMs: readMetadataNumber(metadata, ["airplaystartedatms", "airplayStartedAtMs", "airplay_started_at_ms"]),
@@ -2089,11 +2126,14 @@ function parsePlaybackTimingDiagnostics(metadata) {
     effectiveClockStartMs: readMetadataNumber(metadata, ["effectiveclockstartms", "effectiveClockStartMs", "effective_clock_start_ms"]),
     clockStartReason: normalizeMetadataValue(metadata.clockstartreason ?? metadata.clockStartReason ?? metadata.clock_start_reason) || null,
     metadataSource: normalizeMetadataValue(metadata.metadatasource ?? metadata.metadataSource ?? metadata.metadata_source) || null,
-    positionTrusted: readMetadataBoolean(metadata, ["positiontrusted", "positionTrusted", "position_trusted"])
+    positionTrusted: readMetadataBoolean(metadata, ["positiontrusted", "positionTrusted", "position_trusted"]),
+    positionConfidence: ["trusted", "estimated", "none"].includes(positionConfidence) ? positionConfidence : null
   };
 
   const hasTimingValue = Object.entries(diagnostics).some(([key, value]) => (
-    key === "clockStartReason" || key === "metadataSource" ? Boolean(value) : Number.isFinite(value) || typeof value === "boolean"
+    key === "clockStartReason" || key === "metadataSource" || key === "positionConfidence"
+      ? Boolean(value)
+      : Number.isFinite(value) || typeof value === "boolean"
   ));
   return hasTimingValue ? diagnostics : null;
 }
@@ -2305,7 +2345,8 @@ function normalizeAirplayPlaybackMetadata(metadata) {
           positionTrusted: false,
           timingDiagnostics: {
             ...(metadata.timingDiagnostics ?? {}),
-            positionTrusted: false
+            positionTrusted: false,
+            positionConfidence: "none"
           }
         };
       }
@@ -7196,6 +7237,7 @@ function buildLyricsCacheKey(candidate) {
     candidate?.trackKey ?? "",
     candidate?.sourceScope ?? "",
     candidate?.recognitionMode ?? "",
+    candidate?.playbackClock === true ? "clock" : "static",
     LYRICS_PROVIDER_CACHE_VERSION
   ].join("|");
 }
@@ -7305,12 +7347,12 @@ function getLyricsCandidate(snapshot) {
       };
     }
 
-    const positionTrusted = source === "airplay"
-      ? playback.timingDiagnostics?.positionTrusted === true
+    const hasPlaybackClock = source === "airplay"
+      ? playback.timingDiagnostics?.positionTrusted === true || playback.timingDiagnostics?.positionConfidence === "estimated"
       : Number.isFinite(playback.elapsedSeconds);
     const metadataCandidate = buildMetadataLyricsCandidate(playback, {
       sourceScope,
-      playbackClock: positionTrusted && Number.isFinite(playback.elapsedSeconds)
+      playbackClock: hasPlaybackClock && Number.isFinite(playback.elapsedSeconds)
     });
     if (metadataCandidate.trackKey && !looksLikeUntrustedTrackMetadata(metadataCandidate)) {
       return metadataCandidate;
@@ -7338,7 +7380,7 @@ function getLyricsCandidate(snapshot) {
       artist: sourceSummary.connectedLabel ?? playback.artist ?? null,
       album: null,
       durationMs: Number.isFinite(playback.durationSeconds) ? Math.round(playback.durationSeconds * 1000) : null,
-      playbackClock: positionTrusted && Number.isFinite(playback.elapsedSeconds)
+      playbackClock: hasPlaybackClock && Number.isFinite(playback.elapsedSeconds)
     };
   }
 
@@ -9164,6 +9206,76 @@ function getRoomModePreset(mode) {
   return ROOM_MODE_PRESETS[normalizeRoomMode(mode)];
 }
 
+function sceneVideoBelongsToRoomMode(video, mode) {
+  return normalizeRoomMode(mode) !== "hifi"
+    && Boolean(video?.src)
+    && Array.isArray(video.roomModes)
+    && video.roomModes.includes(normalizeRoomMode(mode));
+}
+
+async function isSceneVideoUsableForRoomMode(sceneVideoId, mode) {
+  const id = String(sceneVideoId ?? "").trim();
+  if (!id) return false;
+
+  const normalizedMode = normalizeRoomMode(mode);
+  if (normalizedMode === "hifi") {
+    return id === ROOM_MODE_PRESETS.hifi.sceneVideoId;
+  }
+
+  try {
+    const catalog = await getAmbientBackgroundVideosPayload();
+    const video = catalog.videos.find((entry) => entry.id === id);
+    if (!video?.src) return false;
+
+    const modeHasSceneVideos = catalog.videos.some((entry) => sceneVideoBelongsToRoomMode(entry, normalizedMode));
+    return modeHasSceneVideos ? sceneVideoBelongsToRoomMode(video, normalizedMode) : true;
+  } catch {
+    return true;
+  }
+}
+
+async function resolveRoomModeSceneVideoId(current, mode, explicitSceneVideoId) {
+  const normalizedMode = normalizeRoomMode(mode);
+  const preset = getRoomModePreset(normalizedMode);
+  if (normalizedMode === "hifi") return preset.sceneVideoId;
+
+  const rememberedSceneVideoId = asPlainObject(current?.sceneVideoByMode)[normalizedMode];
+  const sameModeSceneVideoId = current?.mode === normalizedMode ? current.sceneVideoId : null;
+  const candidates = [
+    explicitSceneVideoId,
+    rememberedSceneVideoId,
+    sameModeSceneVideoId,
+    preset.sceneVideoId
+  ];
+
+  for (const candidate of candidates) {
+    const sceneVideoId = String(candidate ?? "").trim();
+    if (sceneVideoId && await isSceneVideoUsableForRoomMode(sceneVideoId, normalizedMode)) {
+      return sceneVideoId;
+    }
+  }
+
+  return preset.sceneVideoId;
+}
+
+async function findSceneVideoForRoomMode(sceneVideoId, mode) {
+  const catalog = await getAmbientBackgroundVideosPayload();
+  const id = String(sceneVideoId ?? "").trim();
+  const video = catalog.videos.find((entry) => entry.id === id);
+  if (!video?.src) {
+    throw new Error("set_scene requires a known sceneVideoId");
+  }
+
+  const normalizedMode = normalizeRoomMode(mode);
+  const modeHasSceneVideos = normalizedMode !== "hifi"
+    && catalog.videos.some((entry) => sceneVideoBelongsToRoomMode(entry, normalizedMode));
+  if (modeHasSceneVideos && !sceneVideoBelongsToRoomMode(video, normalizedMode)) {
+    throw new Error(`set_scene requires a ${normalizedMode} sceneVideoId`);
+  }
+
+  return video;
+}
+
 function getRoomModeFromPresetId(presetId, fallbackMode) {
   const normalizedPresetId = String(presetId ?? "").trim();
   const found = Object.entries(ROOM_MODE_PRESETS).find(([, preset]) => preset.presetId === normalizedPresetId);
@@ -9236,12 +9348,15 @@ async function applyRoomExperienceAction(action) {
       const preset = getRoomModePreset(mode);
       const timerMinutes = normalizeTimerMinutes(action.timerMinutes, preset.timerMinutes);
       const hifiEqPatch = buildHifiEqPatch(action, current.hifiEqPresetId ?? preset.hifiEqPresetId);
+      const rememberedCurrent = rememberSceneVideoForRoomMode(current);
+      const sceneVideoId = await resolveRoomModeSceneVideoId(rememberedCurrent, mode, action.sceneVideoId);
       next = {
-        ...current,
+        ...rememberedCurrent,
         mode,
         phase: "idle",
         presetId: preset.presetId,
-        sceneVideoId: preset.sceneVideoId,
+        sceneVideoId,
+        sceneVideoByMode: rememberSceneVideoForRoomMode(rememberedCurrent, mode, sceneVideoId).sceneVideoByMode,
         ...hifiEqPatch,
         sceneSoundEnabled: mode === "hifi" ? false : action.sceneSoundEnabled === true ? true : preset.sceneSoundEnabled,
         playlistId: action.playlistId === undefined ? preset.playlistId : action.playlistId,
@@ -9260,12 +9375,15 @@ async function applyRoomExperienceAction(action) {
       const preset = getRoomModePreset(mode);
       const timerMinutes = normalizeTimerMinutes(action.timerMinutes, preset.timerMinutes);
       const hifiEqPatch = buildHifiEqPatch(action, current.hifiEqPresetId ?? preset.hifiEqPresetId);
+      const rememberedCurrent = rememberSceneVideoForRoomMode(current);
+      const sceneVideoId = await resolveRoomModeSceneVideoId(rememberedCurrent, mode, action.sceneVideoId);
       next = {
-        ...current,
+        ...rememberedCurrent,
         mode,
         phase: "preparing",
         presetId: preset.presetId,
-        sceneVideoId: String(action.sceneVideoId ?? preset.sceneVideoId).trim() || preset.sceneVideoId,
+        sceneVideoId,
+        sceneVideoByMode: rememberSceneVideoForRoomMode(rememberedCurrent, mode, sceneVideoId).sceneVideoByMode,
         ...hifiEqPatch,
         sceneSoundEnabled: mode === "hifi" ? false : action.sceneSoundEnabled === true ? true : preset.sceneSoundEnabled,
         playlistId: action.playlistId === undefined ? preset.playlistId : action.playlistId,
@@ -9284,12 +9402,15 @@ async function applyRoomExperienceAction(action) {
       const preset = getRoomModePreset(mode);
       const timerMinutes = normalizeTimerMinutes(action.timerMinutes, current.timerMinutes);
       const hifiEqPatch = buildHifiEqPatch(action, current.hifiEqPresetId ?? preset.hifiEqPresetId);
+      const rememberedCurrent = rememberSceneVideoForRoomMode(current);
+      const sceneVideoId = await resolveRoomModeSceneVideoId(rememberedCurrent, mode, action.sceneVideoId);
       next = {
-        ...current,
+        ...rememberedCurrent,
         mode,
         phase: "active",
         presetId: preset.presetId,
-        sceneVideoId: String(action.sceneVideoId ?? current.sceneVideoId ?? preset.sceneVideoId).trim() || preset.sceneVideoId,
+        sceneVideoId,
+        sceneVideoByMode: rememberSceneVideoForRoomMode(rememberedCurrent, mode, sceneVideoId).sceneVideoByMode,
         ...hifiEqPatch,
         sceneSoundEnabled: mode === "hifi" ? false : action.sceneSoundEnabled === undefined ? current.sceneSoundEnabled : action.sceneSoundEnabled === true,
         playlistId: action.playlistId === undefined ? current.playlistId : action.playlistId,
@@ -9319,6 +9440,19 @@ async function applyRoomExperienceAction(action) {
         timerMinutes,
         timerEndsAt: normalizeTimerEndsAt(action.timerEndsAt)
       };
+      break;
+    }
+    case "set_scene": {
+      if (current.mode === "hifi") {
+        throw new Error("set_scene is not available in Hi-Fi mode");
+      }
+      const sceneVideo = await findSceneVideoForRoomMode(action.sceneVideoId, current.mode);
+      next = rememberSceneVideoForRoomMode({
+        ...current,
+        sceneVideoId: sceneVideo.id
+      }, current.mode, sceneVideo.id);
+      applyScene = current.sceneSoundEnabled;
+      applyLevels = false;
       break;
     }
     case "set_scene_sound": {
@@ -9550,21 +9684,11 @@ async function findRemoteSceneVideo(sceneVideoId) {
 }
 
 async function setRemoteSceneVideo(action) {
-  const video = await findRemoteSceneVideo(action.sceneVideoId);
-  const current = await readRoomExperienceState();
-  const saved = await writeRoomExperienceState({
-    ...current,
-    sceneVideoId: video.id
+  await findRemoteSceneVideo(action.sceneVideoId);
+  await applyRoomExperienceAction({
+    type: "set_scene",
+    sceneVideoId: action.sceneVideoId
   });
-
-  if (saved.mode !== "hifi" && saved.sceneSoundEnabled) {
-    await applySourceSwitch({
-      target: "scene",
-      sceneVideoId: video.id,
-      sceneVideoLabel: video.label,
-      sceneVideoSrc: video.src
-    });
-  }
 }
 
 async function setRemoteSceneSound(action) {
