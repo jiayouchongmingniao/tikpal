@@ -203,6 +203,21 @@ close_side_panel() {
   pkill -f -- "--user-data-dir=$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel" >/dev/null 2>&1 || true
 }
 
+window_guard_pid_file() {
+  printf '%s\n' "$TIKPAL_WEB_MODE_PROFILE_ROOT/window-guard.pid"
+}
+
+stop_window_guard() {
+  local pid_file pid
+  pid_file="$(window_guard_pid_file)"
+  [[ -r "$pid_file" ]] || return 0
+  pid="$(cat "$pid_file" 2>/dev/null || true)"
+  if [[ "$pid" =~ ^[0-9]+$ ]]; then
+    kill "$pid" >/dev/null 2>&1 || true
+  fi
+  rm -f "$pid_file"
+}
+
 qq_auto_confirm_pid_file() {
   printf '%s\n' "$TIKPAL_WEB_MODE_PROFILE_ROOT/qq-confirm.pid"
 }
@@ -219,6 +234,7 @@ stop_qq_auto_confirm() {
 }
 
 close_provider_windows() {
+  stop_window_guard
   stop_qq_auto_confirm
   pkill -f -- "--user-data-dir=$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/" >/dev/null 2>&1 || true
 }
@@ -336,12 +352,21 @@ start_window_guard() {
   local panel_profile="$2"
   [[ -n "$provider_profile" ]] || return 0
 
-  (
-    while profile_process_exists "$provider_profile"; do
-      tile_visible_web_mode_windows "$provider_profile" "$panel_profile"
-      sleep 0.25
-    done
-  ) >/dev/null 2>&1 &
+  stop_window_guard
+  mkdir -p "$TIKPAL_WEB_MODE_PROFILE_ROOT"
+  nohup "$SCRIPT_DIR/tikpal-web-mode.sh" guard "$provider_profile" "$panel_profile" >/dev/null 2>&1 &
+  printf '%s\n' "$!" > "$(window_guard_pid_file)"
+}
+
+run_window_guard() {
+  local provider_profile="$1"
+  local panel_profile="$2"
+  [[ -n "$provider_profile" ]] || return 0
+
+  while profile_process_exists "$provider_profile"; do
+    tile_visible_web_mode_windows "$provider_profile" "$panel_profile"
+    sleep 0.25
+  done
 }
 
 start_qq_auto_confirm() {
@@ -465,6 +490,9 @@ case "${1:-open}" in
     close_side_panel
     write_runtime_provider_state ""
     log "closed"
+    ;;
+  guard)
+    run_window_guard "${2:-}" "${3:-}"
     ;;
   keyboard)
     check_runtime

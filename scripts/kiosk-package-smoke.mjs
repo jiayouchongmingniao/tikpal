@@ -113,11 +113,14 @@ async function run() {
   assert(kioskEnv.includes("TIKPAL_WEB_MODE_QQ_AUTO_CONFIRM=1"), "kiosk env should enable safe QQ Music auto-confirm by default");
   const kioskLauncher = await readFile(path.join(ROOT, "deploy/chromium/launch-tikpal-kiosk.sh"), "utf8");
   const kioskSession = await readFile(path.join(ROOT, "deploy/chromium/start-tikpal-kiosk-session.sh"), "utf8");
+  const webModeScript = await readFile(path.join(ROOT, "deploy/chromium/tikpal-web-mode.sh"), "utf8");
   assert(kioskLauncher.includes("TIKPAL_KIOSK_X_COMMAND_TIMEOUT_SECONDS"), "kiosk launcher should expose an X command timeout");
   assert(kioskLauncher.includes("run_x_command xrandr"), "kiosk launcher should bound xrandr commands");
   assert(kioskLauncher.includes("run_x_command xset"), "kiosk launcher should bound xset commands");
   assert(kioskSession.includes("TIKPAL_KIOSK_X_COMMAND_TIMEOUT_SECONDS"), "kiosk session should expose an X command timeout");
   assert(kioskSession.includes("run_x_command xset"), "kiosk session should bound xset commands");
+  assert(webModeScript.includes("nohup \"$SCRIPT_DIR/tikpal-web-mode.sh\" guard"), "web mode should keep the window guard alive after the launcher exits");
+  assert(webModeScript.includes("window-guard.pid"), "web mode should track the persistent window guard pid");
 
   const loopbackGuardDir = mkdtempSync(path.join(tmpdir(), "tikpal-loopback-guard-"));
   const hdmiLoopbackConfig = path.join(loopbackGuardDir, "_sndaloop-hdmi.conf");
