@@ -115,6 +115,7 @@ export function WebModeSidePanel() {
 
   async function openProvider(providerId: WebModeProviderId) {
     if (pendingProvider || pendingAction) return;
+    if (activeProvider === providerId) return;
     setPendingProvider(providerId);
     setError(null);
     try {
