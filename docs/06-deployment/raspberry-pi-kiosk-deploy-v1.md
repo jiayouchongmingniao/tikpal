@@ -130,6 +130,8 @@ The QQ helper is an allowlist for ordinary prompts only. It may click visible `ç
 
 The Web Mode launcher keeps a separate Chromium profile for each provider so login state can survive provider switches. It is not a Tikpal source: opening it pauses Tikpal playback and does not change `.tikpal/audio-source-memory.json`. For 2560 x 720 validation, `xdotool search --onlyvisible --class chromium` should show the main kiosk window, one 1920 x 720 provider window at `0,0`, and one 640 x 720 side-panel window at `1920,0`; it should not show two visible provider windows after a site opens a playback page.
 
+While a Web Mode provider window is active, the main kiosk page may be hidden and its heartbeat can briefly look stale. The kiosk watchdog should not restart X or `tikpal-kiosk.service` for `page-unhealthy` in that state, because doing so kills the left provider window and stops web-player audio. Leave `TIKPAL_KIOSK_WATCHDOG_WEB_MODE_HEARTBEAT_BYPASS=1` enabled unless you are debugging the watchdog itself; X, Chromium-process, API, web URL, and GPU-reset checks still run. The bypass detects provider Chromium processes by their `--user-data-dir=.../providers/...` argument and includes the moOde user profile path, so it still works when the watchdog runs as root under systemd.
+
 If the Pi should control real moOde playback instead of the local mock bridge, create `.env` with native MPD settings before restarting the API service:
 
 ```bash

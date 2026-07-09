@@ -30,12 +30,14 @@ fi
 : "${TIKPAL_KIOSK_WATCHDOG_API_URL_SCAN:=1}"
 : "${TIKPAL_KIOSK_WATCHDOG_PAGE_HEARTBEAT_ENABLED:=1}"
 : "${TIKPAL_KIOSK_WATCHDOG_PAGE_HEARTBEAT_URL:=http://127.0.0.1:8787/api/v1/kiosk/heartbeat}"
+: "${TIKPAL_KIOSK_WATCHDOG_WEB_MODE_HEARTBEAT_BYPASS:=1}"
 : "${TIKPAL_KIOSK_WATCHDOG_DRY_RUN:=0}"
 : "${TIKPAL_KIOSK_WATCHDOG_SERVICE:=tikpal-kiosk.service}"
 : "${TIKPAL_KIOSK_WATCHDOG_API_URL:=http://127.0.0.1:8787/api/v1/health}"
 : "${TIKPAL_KIOSK_URL:=http://localhost:4173/}"
 : "${TIKPAL_KIOSK_DISPLAY:=:0}"
 : "${TIKPAL_KIOSK_SERVICE_USER:=moode}"
+: "${TIKPAL_WEB_MODE_PROFILE_ROOT:=$HOME/.config/tikpal-web-mode}"
 
 MODE="run"
 if [[ "${1:-}" == "--check" ]]; then
@@ -89,6 +91,8 @@ print_check() {
   log "api url scan: $TIKPAL_KIOSK_WATCHDOG_API_URL_SCAN"
   log "page heartbeat enabled: $TIKPAL_KIOSK_WATCHDOG_PAGE_HEARTBEAT_ENABLED"
   log "page heartbeat url: $TIKPAL_KIOSK_WATCHDOG_PAGE_HEARTBEAT_URL"
+  log "web mode heartbeat bypass: $TIKPAL_KIOSK_WATCHDOG_WEB_MODE_HEARTBEAT_BYPASS"
+  log "web mode profile root: $TIKPAL_WEB_MODE_PROFILE_ROOT"
   log "dry run: $TIKPAL_KIOSK_WATCHDOG_DRY_RUN"
 
   [[ -d "$APP_DIR/deploy/chromium" ]] || {
@@ -213,10 +217,32 @@ sanitize_reason_detail() {
 }
 
 page_heartbeat_detail=""
+web_mode_provider_active_for_root() {
+  local root="$1"
+  [[ -n "$root" ]] || return 1
+  pgrep -af -- "--user-data-dir=$root/providers/" >/dev/null 2>&1
+}
+
+web_mode_provider_active() {
+  is_enabled "$TIKPAL_KIOSK_WATCHDOG_WEB_MODE_HEARTBEAT_BYPASS" || return 1
+  command -v pgrep >/dev/null 2>&1 || return 1
+
+  local root
+  for root in \
+    "$TIKPAL_WEB_MODE_PROFILE_ROOT" \
+    "/home/$TIKPAL_KIOSK_SERVICE_USER/.config/tikpal-web-mode" \
+    "/home/moode/.config/tikpal-web-mode"; do
+    web_mode_provider_active_for_root "$root" && return 0
+  done
+
+  return 1
+}
+
 check_page_heartbeat() {
   page_heartbeat_detail=""
   is_enabled "$TIKPAL_KIOSK_WATCHDOG_PAGE_HEARTBEAT_ENABLED" || return 0
   command -v curl >/dev/null 2>&1 || return 0
+  web_mode_provider_active && return 0
 
   local body
   if ! body="$(
