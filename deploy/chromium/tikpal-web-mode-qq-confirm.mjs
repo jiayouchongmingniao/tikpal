@@ -36,6 +36,16 @@ function isQqMusicPage(target) {
   }
 }
 
+function isQqMusicPlayerPage(target) {
+  if (!isQqMusicPage(target)) return false;
+  try {
+    const url = new URL(target.url || "");
+    return url.pathname.startsWith("/n/ryqq");
+  } catch {
+    return false;
+  }
+}
+
 function evaluate(wsUrl, expression) {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(wsUrl);
@@ -71,6 +81,35 @@ function evaluate(wsUrl, expression) {
       reject(new Error("CDP websocket failed"));
     });
   });
+}
+
+async function closeTarget(target) {
+  if (!target?.id) return;
+  await fetch(`http://127.0.0.1:${port}/json/close/${encodeURIComponent(target.id)}`, {
+    signal: AbortSignal.timeout(800)
+  }).catch(() => {});
+}
+
+async function pruneDuplicatePlayerPages(targets) {
+  const pages = targets.filter(isQqMusicPlayerPage);
+  if (pages.length <= 1) return;
+
+  const pageStateExpression = "({visibility:document.visibilityState,focus:document.hasFocus()})";
+  const states = await Promise.all(pages.map(async (target, index) => ({
+    target,
+    index,
+    state: await evaluate(target.webSocketDebuggerUrl, pageStateExpression).catch(() => null)
+  })));
+  const keep =
+    states.find((entry) => entry.state?.focus === true) ||
+    states.find((entry) => entry.state?.visibility === "visible") ||
+    states[0];
+
+  for (const entry of states) {
+    if (entry === keep) continue;
+    await closeTarget(entry.target);
+    console.log(`[tikpal-web-mode-qq-confirm] closed duplicate player page ${entry.target.id}`);
+  }
 }
 
 const autoConfirmExpression = `(() => {
@@ -136,7 +175,9 @@ async function confirmOnce() {
     return;
   }
   const targets = await readTargets();
-  const target = targets.find(isQqMusicPage);
+  await pruneDuplicatePlayerPages(targets);
+  const nextTargets = await readTargets();
+  const target = nextTargets.find(isQqMusicPage);
   if (!target) return;
   const result = await evaluate(target.webSocketDebuggerUrl, autoConfirmExpression);
   if (result?.clicked) {
@@ -148,6 +189,7 @@ if (process.argv.includes("--check")) {
   console.log("[tikpal-web-mode-qq-confirm] check passed");
   console.log(`[tikpal-web-mode-qq-confirm] port: ${Number.isFinite(port) ? port : 9234}`);
   console.log(`[tikpal-web-mode-qq-confirm] safe labels: ${safeLabels.join(",")}`);
+  console.log("[tikpal-web-mode-qq-confirm] duplicate player pruning: 1");
   process.exit(0);
 }
 
