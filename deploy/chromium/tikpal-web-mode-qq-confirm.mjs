@@ -3,8 +3,9 @@ import { spawnSync } from "node:child_process";
 
 const port = Number.parseInt(process.env.TIKPAL_WEB_MODE_PROVIDER_DEBUG_PORT || "9234", 10);
 const profile = process.env.TIKPAL_WEB_MODE_PROVIDER_PROFILE || "";
-const pollMs = 1000;
+const pollMs = 250;
 const safeLabels = ["确定", "确认", "取消", "知道了", "我知道了", "好的", "好", "开始播放", "继续播放"];
+const injectedTargets = new Set();
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -47,22 +48,26 @@ function isQqMusicPlayerPage(target) {
 }
 
 function evaluate(wsUrl, expression) {
+  return cdpCommand(wsUrl, "Runtime.evaluate", {
+    expression,
+    awaitPromise: true,
+    returnByValue: true
+  }).then((result) => result?.result?.value || null);
+}
+
+function cdpCommand(wsUrl, method, params = {}) {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(wsUrl);
     const timer = setTimeout(() => {
       try { ws.close(); } catch {}
-      reject(new Error("CDP evaluate timed out"));
+      reject(new Error("CDP command timed out"));
     }, 1200);
 
     ws.addEventListener("open", () => {
       ws.send(JSON.stringify({
         id: 1,
-        method: "Runtime.evaluate",
-        params: {
-          expression,
-          awaitPromise: true,
-          returnByValue: true
-        }
+        method,
+        params
       }));
     });
     ws.addEventListener("message", (event) => {
@@ -71,16 +76,65 @@ function evaluate(wsUrl, expression) {
       clearTimeout(timer);
       ws.close();
       if (message.error) {
-        reject(new Error(message.error.message || "CDP evaluate failed"));
+        reject(new Error(message.error.message || "CDP command failed"));
         return;
       }
-      resolve(message.result?.result?.value || null);
+      resolve(message.result || null);
     });
     ws.addEventListener("error", () => {
       clearTimeout(timer);
       reject(new Error("CDP websocket failed"));
     });
   });
+}
+
+const singlePaneScript = `(() => {
+  if (window.__tikpalSinglePaneInstalled) {
+    document.querySelectorAll("a[target]").forEach((link) => {
+      if (link instanceof HTMLAnchorElement) link.target = "_self";
+    });
+    return;
+  }
+  window.__tikpalSinglePaneInstalled = true;
+  const isQqMusicUrl = (value) => {
+    try {
+      const url = new URL(value, location.href);
+      return url.hostname === "y.qq.com" || url.hostname.endsWith(".y.qq.com");
+    } catch {
+      return false;
+    }
+  };
+  const openInPlace = (value) => {
+    if (!value || !isQqMusicUrl(value)) return null;
+    location.href = new URL(value, location.href).href;
+    return window;
+  };
+  const nativeOpen = window.open.bind(window);
+  window.open = (url, target, features) => openInPlace(url) || nativeOpen(url, target, features);
+  document.addEventListener("click", (event) => {
+    const link = event.target && event.target.closest ? event.target.closest("a[href]") : null;
+    if (!(link instanceof HTMLAnchorElement) || !isQqMusicUrl(link.href)) return;
+    link.target = "_self";
+    if (event.defaultPrevented) return;
+    if (link.target && link.target !== "_self") {
+      event.preventDefault();
+      location.href = link.href;
+    }
+  }, true);
+  document.querySelectorAll("a[target]").forEach((link) => {
+    if (link instanceof HTMLAnchorElement) link.target = "_self";
+  });
+})()`;
+
+async function installSinglePaneNavigation(target) {
+  if (!target?.webSocketDebuggerUrl) return;
+  if (!injectedTargets.has(target.id)) {
+    await cdpCommand(target.webSocketDebuggerUrl, "Page.addScriptToEvaluateOnNewDocument", {
+      source: singlePaneScript
+    }).catch(() => {});
+    injectedTargets.add(target.id);
+  }
+  await evaluate(target.webSocketDebuggerUrl, singlePaneScript).catch(() => {});
 }
 
 async function closeTarget(target) {
@@ -179,6 +233,7 @@ async function confirmOnce() {
   const nextTargets = await readTargets();
   const target = nextTargets.find(isQqMusicPage);
   if (!target) return;
+  await installSinglePaneNavigation(target);
   const result = await evaluate(target.webSocketDebuggerUrl, autoConfirmExpression);
   if (result?.clicked) {
     console.log(`[tikpal-web-mode-qq-confirm] clicked ${result.label}`);
@@ -190,6 +245,7 @@ if (process.argv.includes("--check")) {
   console.log(`[tikpal-web-mode-qq-confirm] port: ${Number.isFinite(port) ? port : 9234}`);
   console.log(`[tikpal-web-mode-qq-confirm] safe labels: ${safeLabels.join(",")}`);
   console.log("[tikpal-web-mode-qq-confirm] duplicate player pruning: 1");
+  console.log("[tikpal-web-mode-qq-confirm] single pane navigation: 1");
   process.exit(0);
 }
 

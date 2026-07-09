@@ -212,6 +212,7 @@ async function run() {
   assert(qqConfirmCheck.stdout.includes("check passed"), "QQ auto-confirm helper should report check passed");
   assert(qqConfirmCheck.stdout.includes("取消"), "QQ auto-confirm helper should include safe cancel prompts");
   assert(qqConfirmCheck.stdout.includes("duplicate player pruning: 1"), "QQ auto-confirm helper should prune duplicate player pages");
+  assert(qqConfirmCheck.stdout.includes("single pane navigation: 1"), "QQ auto-confirm helper should keep QQ links in the left pane");
 
   const watchdogCheck = spawnSync("bash", ["deploy/chromium/tikpal-kiosk-healthcheck.sh", "--check"], {
     cwd: ROOT,
