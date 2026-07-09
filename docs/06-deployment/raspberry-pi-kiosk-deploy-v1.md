@@ -126,7 +126,7 @@ deploy/chromium/tikpal-web-mode.sh keyboard
 deploy/chromium/tikpal-web-mode.sh close
 ```
 
-The QQ helper is an allowlist for ordinary prompts only. It may click visible `确定`, `确认`, `知道了`, `我知道了`, `好的`, `好`, `开始播放`, or `继续播放` buttons inside `y.qq.com` dialogs, but it must not click dialogs mentioning login, payment, purchase, authorization, privacy/agreement, VIP, recharge, or subscription. It is not a generic ad blocker or blind coordinate clicker.
+The QQ helper is an allowlist for ordinary prompts only. It may click visible `确定`, `确认`, `取消`, `知道了`, `我知道了`, `好的`, `好`, `开始播放`, or `继续播放` buttons inside `y.qq.com` dialogs, but it must not click dialogs mentioning login, payment, purchase, authorization, privacy/agreement, VIP, recharge, or subscription. It is not a generic ad blocker or blind coordinate clicker.
 
 The Web Mode launcher keeps a separate Chromium profile for each provider so login state can survive provider switches. It is not a Tikpal source: opening it pauses Tikpal playback and does not change `.tikpal/audio-source-memory.json`. For 2560 x 720 validation, `xdotool search --onlyvisible --class chromium` should show the main kiosk window, one 1920 x 720 provider window at `0,0`, and one 640 x 720 side-panel window at `1920,0`; it should not show two visible provider windows after a site opens a playback page.
 

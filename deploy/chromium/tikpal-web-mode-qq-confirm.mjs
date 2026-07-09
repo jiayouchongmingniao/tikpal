@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 const port = Number.parseInt(process.env.TIKPAL_WEB_MODE_PROVIDER_DEBUG_PORT || "9234", 10);
 const profile = process.env.TIKPAL_WEB_MODE_PROVIDER_PROFILE || "";
 const pollMs = 1000;
-const safeLabels = ["确定", "确认", "知道了", "我知道了", "好的", "好", "开始播放", "继续播放"];
+const safeLabels = ["确定", "确认", "取消", "知道了", "我知道了", "好的", "好", "开始播放", "继续播放"];
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));

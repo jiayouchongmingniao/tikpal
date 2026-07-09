@@ -207,6 +207,7 @@ async function run() {
   });
   assert(qqConfirmCheck.status === 0, `QQ auto-confirm helper --check failed:\n${qqConfirmCheck.stdout}\n${qqConfirmCheck.stderr}`);
   assert(qqConfirmCheck.stdout.includes("check passed"), "QQ auto-confirm helper should report check passed");
+  assert(qqConfirmCheck.stdout.includes("取消"), "QQ auto-confirm helper should include safe cancel prompts");
 
   const watchdogCheck = spawnSync("bash", ["deploy/chromium/tikpal-kiosk-healthcheck.sh", "--check"], {
     cwd: ROOT,
