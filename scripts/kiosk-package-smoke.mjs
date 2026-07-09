@@ -18,6 +18,7 @@ const requiredFiles = [
   "deploy/chromium/tikpal-kiosk-healthcheck.sh",
   "deploy/chromium/tikpal-kiosk-viewerctl.sh",
   "deploy/chromium/tikpal-web-mode.sh",
+  "deploy/chromium/tikpal-web-mode-qq-confirm.mjs",
   "deploy/chromium/chromium-flags.conf",
   "deploy/chromium/managed-policies.json",
   "deploy/chromium/env.kiosk.example",
@@ -107,6 +108,8 @@ async function run() {
   assert(kioskEnv.includes("TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE="), "kiosk env should expose Chromium ALSA output selection");
   assert(!kioskEnv.includes("TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE=_audioout"), "kiosk env should not default Chromium Scene Sound to Loopback-backed _audioout");
   assert(kioskEnv.includes("dmix:CARD="), "kiosk env should document physical USB dmix output for Chromium Scene Sound");
+  assert(kioskEnv.includes("TIKPAL_WEB_MODE_PROVIDER_DEBUG_PORT=9234"), "kiosk env should document the Web Mode provider local CDP port");
+  assert(kioskEnv.includes("TIKPAL_WEB_MODE_QQ_AUTO_CONFIRM=1"), "kiosk env should enable safe QQ Music auto-confirm by default");
   const kioskLauncher = await readFile(path.join(ROOT, "deploy/chromium/launch-tikpal-kiosk.sh"), "utf8");
   const kioskSession = await readFile(path.join(ROOT, "deploy/chromium/start-tikpal-kiosk-session.sh"), "utf8");
   assert(kioskLauncher.includes("TIKPAL_KIOSK_X_COMMAND_TIMEOUT_SECONDS"), "kiosk launcher should expose an X command timeout");
@@ -192,8 +195,17 @@ async function run() {
   assert(webModeCheck.stdout.includes("panel: 1920,0 640,720"), "web mode should keep the Tikpal panel on the right");
   assert(webModeCheck.stdout.includes("single provider window: 1"), "web mode should guard against multiple visible provider windows");
   assert(webModeCheck.stdout.includes("popup blocking: 1"), "web mode should enable provider popup blocking by default");
-  assert(webModeCheck.stdout.includes("web-mode-extension"), "web mode should report the bundled navigation guard extension");
+  assert(webModeCheck.stdout.includes("extension: 0"), "web mode should keep the unpacked extension disabled by default");
+  assert(webModeCheck.stdout.includes("provider debug: 127.0.0.1:9234"), "web mode should expose only a local provider CDP port");
+  assert(webModeCheck.stdout.includes("qq auto confirm: 1"), "web mode should enable safe QQ Music auto-confirm by default");
   assert(webModeCheck.stdout.includes("proxy: enabled http://192.168.10.140:7897"), "web mode should default to the HTTP development proxy");
+
+  const qqConfirmCheck = spawnSync(process.execPath, ["deploy/chromium/tikpal-web-mode-qq-confirm.mjs", "--check"], {
+    cwd: ROOT,
+    encoding: "utf8"
+  });
+  assert(qqConfirmCheck.status === 0, `QQ auto-confirm helper --check failed:\n${qqConfirmCheck.stdout}\n${qqConfirmCheck.stderr}`);
+  assert(qqConfirmCheck.stdout.includes("check passed"), "QQ auto-confirm helper should report check passed");
 
   const watchdogCheck = spawnSync("bash", ["deploy/chromium/tikpal-kiosk-healthcheck.sh", "--check"], {
     cwd: ROOT,
@@ -338,10 +350,12 @@ async function run() {
 
   assert(quietBootCheck.status === 0, `quiet boot dry-run failed:\n${quietBootCheck.stdout}\n${quietBootCheck.stderr}`);
   const nextCmdline = quietBootCheck.stdout.match(/next cmdline: (.+)/)?.[1] ?? "";
-  assert(nextCmdline.includes("console=tty3"), "quiet boot should move visible console away from tty1");
-  assert(!nextCmdline.includes("console=tty1"), "quiet boot should remove tty1 from the kernel console");
+  assert(!/\bconsole=tty[0-9]*\b/.test(nextCmdline), "quiet boot should remove visible tty consoles from the kernel cmdline");
   assert(nextCmdline.includes("systemd.show_status=false"), "quiet boot should hide systemd status lines");
   assert(nextCmdline.includes("vt.global_cursor_default=0"), "quiet boot should hide the text cursor");
+  assert(quietBootCheck.stdout.includes("planned: mask getty@tty1.service"), "quiet boot should mask tty1 getty");
+  assert(quietBootCheck.stdout.includes("planned: mask getty@tty2.service"), "quiet boot should mask tty2 getty");
+  assert(quietBootCheck.stdout.includes("planned: mask getty@tty3.service"), "quiet boot should mask tty3 getty");
 
   console.log("kiosk package smoke passed");
 }

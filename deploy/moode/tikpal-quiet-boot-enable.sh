@@ -81,7 +81,6 @@ build_quiet_cmdline() {
     "logo.nologo"
     "splash"
     "plymouth.ignore-serial-consoles"
-    "console=tty3"
   )
 
   read -r -a tokens <<< "$current"
@@ -116,8 +115,9 @@ NEXT_CMDLINE="$(build_quiet_cmdline "$CURRENT_CMDLINE")"
 log "cmdline: $CMDLINE_PATH"
 log "current cmdline: $CURRENT_CMDLINE"
 log "next cmdline: $NEXT_CMDLINE"
-log "planned: disable getty@tty1.service"
+log "planned: mask getty@tty1.service"
 log "planned: mask getty@tty2.service"
+log "planned: mask getty@tty3.service"
 log "planned: write /etc/systemd/system.conf.d/tikpal-quiet-boot.conf"
 log "planned: write /etc/systemd/logind.conf.d/tikpal-quiet-vts.conf"
 log "planned: write /etc/sysctl.d/99-tikpal-quiet-console.conf"
@@ -148,8 +148,8 @@ log "installed /etc/systemd/system.conf.d/tikpal-quiet-boot.conf"
 mkdir -p /etc/systemd/logind.conf.d
 cat > /etc/systemd/logind.conf.d/tikpal-quiet-vts.conf <<'EOF'
 [Login]
-NAutoVTs=1
-ReserveVT=1
+NAutoVTs=0
+ReserveVT=0
 EOF
 chmod 0644 /etc/systemd/logind.conf.d/tikpal-quiet-vts.conf
 log "installed /etc/systemd/logind.conf.d/tikpal-quiet-vts.conf"
@@ -163,9 +163,10 @@ log "installed /etc/sysctl.d/99-tikpal-quiet-console.conf"
 
 sysctl -w kernel.printk="1 4 1 7" >/dev/null || warn "could not update kernel.printk for the current boot"
 
-systemctl disable --now getty@tty1.service >/dev/null 2>&1 || warn "could not disable getty@tty1.service"
-systemctl mask --now getty@tty2.service >/dev/null 2>&1 || warn "could not mask getty@tty2.service"
-pkill -t tty2 agetty >/dev/null 2>&1 || true
+for tty in tty1 tty2 tty3; do
+  systemctl mask --now "getty@${tty}.service" >/dev/null 2>&1 || warn "could not mask getty@${tty}.service"
+  pkill -t "$tty" agetty >/dev/null 2>&1 || true
+done
 systemctl daemon-reexec || warn "systemd daemon-reexec failed; quiet status still applies after next boot"
 
 log "quiet boot is installed. Reboot once to apply cmdline changes."

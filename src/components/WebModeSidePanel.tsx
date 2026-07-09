@@ -2,7 +2,31 @@ import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { Apple, Cloud, Gem, Globe2, Keyboard, LogOut, Music2, ShoppingBag, SquarePlay, Volume2 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { fetchTikpalState, fetchWebModeState, sendPlaybackAction, sendWebModeAction } from "../api/tikpalClient";
-import type { TikpalState, WebModeProviderId, WebModeState } from "../types";
+import type { TikpalState, WebModeProviderId, WebModeProviderSummary, WebModeState } from "../types";
+
+const providerOrder: WebModeProviderId[] = [
+  "spotify",
+  "youtube_music",
+  "apple_music",
+  "tidal",
+  "qobuz",
+  "deezer",
+  "amazon_music",
+  "qq_music",
+  "netease_music"
+];
+
+const providerLabels: Record<WebModeProviderId, string> = {
+  spotify: "Spotify",
+  youtube_music: "YouTube Music",
+  apple_music: "Apple Music",
+  tidal: "TIDAL",
+  qobuz: "Qobuz",
+  deezer: "Deezer",
+  amazon_music: "Amazon Music",
+  qq_music: "QQ Music",
+  netease_music: "NetEase Cloud Music"
+};
 
 const providerIcons: Record<WebModeProviderId, LucideIcon> = {
   spotify: Music2,
@@ -37,10 +61,23 @@ export function WebModeSidePanel() {
   const activeProvider = webMode?.activeProvider ?? null;
   const volumePercent = tikpalState?.system.volume.percent ?? 0;
 
+  const providers = useMemo<WebModeProviderSummary[]>(() => {
+    const byId = new Map(webMode?.providers.map((provider) => [provider.id, provider]) ?? []);
+    return providerOrder.map((id) => {
+      const provider = byId.get(id);
+      return {
+        id,
+        label: providerLabels[id],
+        url: provider?.url ?? "",
+        experimental: provider?.experimental ?? (id === "youtube_music" || id === "netease_music")
+      };
+    });
+  }, [webMode?.providers]);
+
   const activeProviderLabel = useMemo(() => {
     if (!activeProvider) return "No web player";
-    return webMode?.providers.find((provider) => provider.id === activeProvider)?.label ?? "Web player";
-  }, [activeProvider, webMode?.providers]);
+    return providerLabels[activeProvider] ?? "Web player";
+  }, [activeProvider]);
 
   async function refresh() {
     const [nextWebMode, nextTikpalState] = await Promise.all([
@@ -161,7 +198,7 @@ export function WebModeSidePanel() {
       </section>
 
       <section className="web-mode-provider-grid" aria-label="Music web players">
-        {webMode?.providers.map((provider) => {
+        {providers.map((provider) => {
           const Icon = providerIcons[provider.id] ?? Music2;
           const selected = activeProvider === provider.id;
           const pending = pendingProvider === provider.id;

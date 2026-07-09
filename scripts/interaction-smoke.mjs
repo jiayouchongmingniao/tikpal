@@ -3870,6 +3870,19 @@ try {
   await navigate(client, new URL("/side-panel", APP_URL).toString());
   await expect(client, "document.querySelector('[data-web-mode-panel]') !== null && document.querySelector('.app-root') === null", "Web Mode side panel renders without the main kiosk app");
   await expect(client, "document.querySelectorAll('[data-web-mode-provider]').length >= 9", "Web Mode side panel exposes common web player providers");
+  await expect(
+    client,
+    `
+      (() => {
+        const ids = [...document.querySelectorAll('[data-web-mode-provider]')].map((node) => node.dataset.webModeProvider);
+        return ids.length === new Set(ids).size
+          && ids.filter((id) => id === 'qq_music').length === 1
+          && document.querySelector('[data-web-mode-provider="amazon_music"] strong')?.textContent === 'Amazon Music'
+          && document.querySelector('[data-web-mode-provider="qq_music"] strong')?.textContent === 'QQ Music';
+      })()
+    `,
+    "Web Mode side panel keeps provider cards unique with canonical labels"
+  );
   await evaluate(
     client,
     `

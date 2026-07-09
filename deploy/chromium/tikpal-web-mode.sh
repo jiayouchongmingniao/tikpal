@@ -26,6 +26,7 @@ fi
 : "${TIKPAL_WEB_MODE_SETTINGS_PATH:=$APP_DIR/.tikpal/web-mode-settings.json}"
 : "${TIKPAL_WEB_MODE_STATE_PATH:=$APP_DIR/.tikpal/web-mode-state.json}"
 : "${TIKPAL_WEB_MODE_EXTENSION_DIR:=$SCRIPT_DIR/web-mode-extension}"
+: "${TIKPAL_WEB_MODE_EXTENSION_ENABLED:=0}"
 : "${TIKPAL_WEB_MODE_LEFT_WINDOW:=1920x720}"
 : "${TIKPAL_WEB_MODE_LEFT_POSITION:=0,0}"
 : "${TIKPAL_WEB_MODE_PANEL_WINDOW:=640x720}"
@@ -37,6 +38,8 @@ fi
 : "${TIKPAL_WEB_MODE_WINDOW_GUARD:=1}"
 : "${TIKPAL_WEB_MODE_SINGLE_PROVIDER_WINDOW:=1}"
 : "${TIKPAL_WEB_MODE_POPUP_BLOCKING:=1}"
+: "${TIKPAL_WEB_MODE_PROVIDER_DEBUG_PORT:=9234}"
+: "${TIKPAL_WEB_MODE_QQ_AUTO_CONFIRM:=1}"
 
 log() {
   printf '[tikpal-web-mode] %s\n' "$*"
@@ -196,12 +199,28 @@ ensure_onboard() {
   fi
 }
 
-close_provider_windows() {
-  pkill -f -- "--user-data-dir=$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/" >/dev/null 2>&1 || true
-}
-
 close_side_panel() {
   pkill -f -- "--user-data-dir=$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel" >/dev/null 2>&1 || true
+}
+
+qq_auto_confirm_pid_file() {
+  printf '%s\n' "$TIKPAL_WEB_MODE_PROFILE_ROOT/qq-confirm.pid"
+}
+
+stop_qq_auto_confirm() {
+  local pid_file pid
+  pid_file="$(qq_auto_confirm_pid_file)"
+  [[ -r "$pid_file" ]] || return 0
+  pid="$(cat "$pid_file" 2>/dev/null || true)"
+  if [[ "$pid" =~ ^[0-9]+$ ]]; then
+    kill "$pid" >/dev/null 2>&1 || true
+  fi
+  rm -f "$pid_file"
+}
+
+close_provider_windows() {
+  stop_qq_auto_confirm
+  pkill -f -- "--user-data-dir=$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/" >/dev/null 2>&1 || true
 }
 
 process_tree_uses_profile() {
@@ -312,6 +331,29 @@ start_window_guard() {
   ) >/dev/null 2>&1 &
 }
 
+start_qq_auto_confirm() {
+  local provider="$1"
+  local provider_profile="$2"
+  local helper="$SCRIPT_DIR/tikpal-web-mode-qq-confirm.mjs"
+  [[ "$provider" == "qq_music" ]] || return 0
+  is_enabled "$TIKPAL_WEB_MODE_QQ_AUTO_CONFIRM" || return 0
+  [[ -f "$helper" ]] || {
+    log "WARN: QQ auto-confirm helper missing: $helper"
+    return 0
+  }
+  command -v node >/dev/null 2>&1 || {
+    log "WARN: node not found; QQ auto-confirm disabled"
+    return 0
+  }
+
+  stop_qq_auto_confirm
+  mkdir -p "$TIKPAL_WEB_MODE_PROFILE_ROOT"
+  TIKPAL_WEB_MODE_PROVIDER_PROFILE="$provider_profile" \
+  TIKPAL_WEB_MODE_PROVIDER_DEBUG_PORT="$TIKPAL_WEB_MODE_PROVIDER_DEBUG_PORT" \
+    node "$helper" >/dev/null 2>&1 &
+  printf '%s\n' "$!" > "$(qq_auto_confirm_pid_file)"
+}
+
 launch_side_panel() {
   local panel_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"
   if pgrep -f -- "--user-data-dir=$panel_profile" >/dev/null 2>&1; then
@@ -354,11 +396,13 @@ open_provider() {
     "${base_args[@]}"
     "--app=$url"
     "--user-data-dir=$provider_profile"
+    "--remote-debugging-address=127.0.0.1"
+    "--remote-debugging-port=$TIKPAL_WEB_MODE_PROVIDER_DEBUG_PORT"
     "--window-position=$TIKPAL_WEB_MODE_LEFT_POSITION"
     "--window-size=$(normalize_window_size "$TIKPAL_WEB_MODE_LEFT_WINDOW")"
   )
 
-  if [[ -f "$TIKPAL_WEB_MODE_EXTENSION_DIR/manifest.json" ]]; then
+  if is_enabled "$TIKPAL_WEB_MODE_EXTENSION_ENABLED" && [[ -f "$TIKPAL_WEB_MODE_EXTENSION_DIR/manifest.json" ]]; then
     args+=("--load-extension=$TIKPAL_WEB_MODE_EXTENSION_DIR")
   fi
   if [[ -n "$TIKPAL_WEB_MODE_ALSA_OUTPUT_DEVICE" ]]; then
@@ -372,6 +416,7 @@ open_provider() {
   launch_side_panel
   write_runtime_provider_state "$provider"
   start_window_guard "$provider_profile" "$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"
+  start_qq_auto_confirm "$provider" "$provider_profile"
   log "opened $provider"
 }
 
@@ -385,7 +430,9 @@ check_runtime() {
   log "window guard: $TIKPAL_WEB_MODE_WINDOW_GUARD"
   log "single provider window: $TIKPAL_WEB_MODE_SINGLE_PROVIDER_WINDOW"
   log "popup blocking: $TIKPAL_WEB_MODE_POPUP_BLOCKING"
-  log "extension: $TIKPAL_WEB_MODE_EXTENSION_DIR"
+  log "extension: $TIKPAL_WEB_MODE_EXTENSION_ENABLED $TIKPAL_WEB_MODE_EXTENSION_DIR"
+  log "provider debug: 127.0.0.1:$TIKPAL_WEB_MODE_PROVIDER_DEBUG_PORT"
+  log "qq auto confirm: $TIKPAL_WEB_MODE_QQ_AUTO_CONFIRM"
   log "settings: $TIKPAL_WEB_MODE_SETTINGS_PATH"
   read_proxy_settings | awk -F '\t' '{ printf("[tikpal-web-mode] proxy: %s %s\n", $1 == "1" ? "enabled" : "disabled", $2) }'
   [[ -x "$TIKPAL_CHROMIUM_BIN" ]] || fail "Chromium binary is missing or not executable"

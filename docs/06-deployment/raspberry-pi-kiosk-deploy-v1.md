@@ -113,15 +113,20 @@ deploy/chromium/launch-tikpal-kiosk.sh --check
 
 Chromium may keep an ALSA `audio.mojom.AudioService` process open after the active scene video is muted. If it is routed to `_audioout`, MPD Radio can later land in `paused` with `Failed to open audio output`; treat that as an output-route/runtime-env problem before blaming the radio station.
 
-Web Mode opens official music web players in a separate left Chromium window and a Tikpal `/side-panel` in the right 640px column. The provider window uses `.tikpal/web-mode-settings.json` for proxy configuration; the default development value is HTTP `http://192.168.10.140:7897`, while the Tikpal side panel stays local on `localhost:4173` and should not use that proxy. The launcher keeps one visible provider window, loads `deploy/chromium/web-mode-extension` to keep common new-window links inside the left pane, enables Chromium popup/ad content blocking for the provider profile, and writes `.tikpal/web-mode-state.json` so the side panel highlight follows the actual provider:
+Web Mode opens official music web players in a separate left Chromium window and a Tikpal `/side-panel` in the right 640px column. The provider window uses `.tikpal/web-mode-settings.json` for proxy configuration; the default development value is HTTP `http://192.168.10.140:7897`, while the Tikpal side panel stays local on `localhost:4173` and should not use that proxy. The launcher keeps one visible provider window, enables Chromium popup/ad content blocking for the provider profile, and writes `.tikpal/web-mode-state.json` so the side panel highlight follows the actual provider. The bundled `deploy/chromium/web-mode-extension` can keep common new-window links inside the left pane when `TIKPAL_WEB_MODE_EXTENSION_ENABLED=1`, but leave it disabled on managed Chromium builds that reject unpacked extensions. The provider window, not the side panel, exposes local-only CDP at `127.0.0.1:9234` by default so QQ Music can run a conservative confirmation helper:
 
 ```bash
 cat .tikpal/web-mode-settings.json 2>/dev/null || true
 deploy/chromium/tikpal-web-mode.sh --check
 deploy/chromium/tikpal-web-mode.sh open spotify
+deploy/chromium/tikpal-web-mode.sh open qq_music
+curl -fsS http://127.0.0.1:9234/json | head
+node deploy/chromium/tikpal-web-mode-qq-confirm.mjs --check
 deploy/chromium/tikpal-web-mode.sh keyboard
 deploy/chromium/tikpal-web-mode.sh close
 ```
+
+The QQ helper is an allowlist for ordinary prompts only. It may click visible `确定`, `确认`, `知道了`, `我知道了`, `好的`, `好`, `开始播放`, or `继续播放` buttons inside `y.qq.com` dialogs, but it must not click dialogs mentioning login, payment, purchase, authorization, privacy/agreement, VIP, recharge, or subscription. It is not a generic ad blocker or blind coordinate clicker.
 
 The Web Mode launcher keeps a separate Chromium profile for each provider so login state can survive provider switches. It is not a Tikpal source: opening it pauses Tikpal playback and does not change `.tikpal/audio-source-memory.json`. For 2560 x 720 validation, `xdotool search --onlyvisible --class chromium` should show the main kiosk window, one 1920 x 720 provider window at `0,0`, and one 640 x 720 side-panel window at `1920,0`; it should not show two visible provider windows after a site opens a playback page.
 
@@ -552,16 +557,19 @@ cd /home/moode/code/tikpal
 sudo deploy/moode/tikpal-quiet-boot-enable.sh
 ```
 
-The helper backs up the detected cmdline file (`/boot/firmware/cmdline.txt` or `/boot/cmdline.txt`), removes visible `tty1` console routing, adds quiet boot flags, writes a systemd manager drop-in with `ShowStatus=no`, writes a quiet console `sysctl` drop-in, disables `getty@tty1.service`, and masks `getty@tty2.service` so the physical screen does not fall back to a visible `tty2 login` prompt. SSH remains available.
+The helper backs up the detected cmdline file (`/boot/firmware/cmdline.txt` or `/boot/cmdline.txt`), removes visible `console=tty*` routing from the kernel command line, adds quiet boot flags, writes a systemd manager drop-in with `ShowStatus=no`, writes a quiet console `sysctl` drop-in, disables automatic VT allocation, and masks `getty@tty1.service`, `getty@tty2.service`, and `getty@tty3.service`. This keeps the physical HDMI screen from falling back to `tty1`, `tty2`, or `tty3` text during boot or reboot; SSH remains available.
 
 Verify the installed quiet boot state:
 
 ```bash
-grep -E 'quiet|console=tty3|systemd.show_status=false|vt.global_cursor_default=0' /boot/firmware/cmdline.txt /boot/cmdline.txt 2>/dev/null
+grep -E 'quiet|systemd.show_status=false|vt.global_cursor_default=0' /boot/firmware/cmdline.txt /boot/cmdline.txt 2>/dev/null
+grep -E 'console=tty[0-9]*' /boot/firmware/cmdline.txt /boot/cmdline.txt 2>/dev/null && echo "unexpected visible tty console"
 systemctl is-enabled getty@tty1.service || true
 systemctl is-active getty@tty1.service || true
 systemctl is-enabled getty@tty2.service || true
 systemctl is-active getty@tty2.service || true
+systemctl is-enabled getty@tty3.service || true
+systemctl is-active getty@tty3.service || true
 cat /etc/systemd/system.conf.d/tikpal-quiet-boot.conf
 cat /etc/systemd/logind.conf.d/tikpal-quiet-vts.conf
 cat /etc/sysctl.d/99-tikpal-quiet-console.conf
