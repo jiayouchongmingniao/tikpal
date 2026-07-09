@@ -264,7 +264,20 @@ tile_window() {
   y="$(position_y "$position")"
   width="$(window_width "$size")"
   height="$(window_height "$size")"
-  DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowmove "$window" "$x" "$y" windowsize "$window" "$width" "$height" >/dev/null 2>&1 || true
+  if command -v wmctrl >/dev/null 2>&1; then
+    DISPLAY="$TIKPAL_KIOSK_DISPLAY" wmctrl -i -r "$window" -b remove,fullscreen,maximized_vert,maximized_horz >/dev/null 2>&1 || true
+  fi
+  DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool \
+    windowmove --sync "$window" "$x" "$y" \
+    windowsize --sync "$window" "$width" "$height" \
+    windowmove "$window" "$x" "$y" >/dev/null 2>&1 || true
+}
+
+visible_chromium_windows() {
+  {
+    DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool search --onlyvisible --class chromium 2>/dev/null || true
+    DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool search --onlyvisible --class Chromium-browser 2>/dev/null || true
+  } | awk 'NF && !seen[$0]++'
 }
 
 tile_visible_web_mode_windows() {
@@ -295,7 +308,7 @@ tile_visible_web_mode_windows() {
       tile_window "$window" "$TIKPAL_WEB_MODE_LEFT_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
       provider_windows+=("$window")
     fi
-  done < <(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool search --onlyvisible --class chromium 2>/dev/null || true)
+  done < <(visible_chromium_windows)
 
   is_enabled "$TIKPAL_WEB_MODE_SINGLE_PROVIDER_WINDOW" || return 0
   [[ "${#provider_windows[@]}" -gt 1 ]] || return 0
@@ -326,7 +339,7 @@ start_window_guard() {
   (
     while profile_process_exists "$provider_profile"; do
       tile_visible_web_mode_windows "$provider_profile" "$panel_profile"
-      sleep 1
+      sleep 0.25
     done
   ) >/dev/null 2>&1 &
 }
