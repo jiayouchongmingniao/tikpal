@@ -250,14 +250,14 @@ const REMEMBERED_AUDIO_SOURCE_TARGETS = new Set(["mpd", "radio", "spotify", "blu
 const COMMAND_HANDOFF_SOURCE_TARGETS = new Set(["spotify", "bluetooth", "airplay", "upnp"]);
 const WEB_MODE_PROVIDERS = [
   { id: "spotify", label: "Spotify", url: "https://open.spotify.com/", experimental: false },
-  { id: "youtube_music", label: "YouTube Music", url: "https://music.youtube.com/", experimental: true },
+  { id: "youtube_music", label: "YouTube Music", url: "https://music.youtube.com/", experimental: false },
   { id: "apple_music", label: "Apple Music", url: "https://music.apple.com/", experimental: false },
   { id: "tidal", label: "TIDAL", url: "https://listen.tidal.com/", experimental: false },
   { id: "qobuz", label: "Qobuz", url: "https://play.qobuz.com/", experimental: false },
-  { id: "deezer", label: "Deezer", url: "https://www.deezer.com/", experimental: false },
+  { id: "deezer", label: "Deezer", url: "https://www.deezer.com/en/channels/explore/", experimental: false },
   { id: "amazon_music", label: "Amazon Music", url: "https://music.amazon.com/", experimental: false },
   { id: "qq_music", label: "QQ Music", url: "https://y.qq.com/n/ryqq/player", experimental: false },
-  { id: "netease_music", label: "NetEase Cloud Music", url: "https://music.163.com/st/webplayer", experimental: true }
+  { id: "netease_music", label: "NetEase Cloud Music", url: "https://music.163.com/st/webplayer", experimental: false }
 ];
 const WEB_MODE_PROVIDER_IDS = new Set(WEB_MODE_PROVIDERS.map((provider) => provider.id));
 const REMOTE_ALLOWED_ACTIONS = [
@@ -1753,7 +1753,11 @@ async function runCommand(command, options = {}) {
   } catch (error) {
     if (options.allowFailure) return "";
     const stderr = typeof error?.stderr === "string" ? error.stderr.trim() : "";
-    const message = stderr || (error instanceof Error ? error.message : `Command failed: ${command}`);
+    const stdout = options.includeStdoutOnFailure && typeof error?.stdout === "string" ? error.stdout.trim() : "";
+    const fallback = error instanceof Error ? error.message : `Command failed: ${command}`;
+    const message = options.includeStdoutOnFailure
+      ? [stderr, stdout, fallback].filter(Boolean).join("\n")
+      : stderr || fallback;
     throw new Error(message);
   }
 }
@@ -3620,10 +3624,10 @@ function normalizeWebModeProxyUrl(value) {
   try {
     parsed = new URL(proxyUrl);
   } catch {
-    throw new Error("Web Mode proxy URL must be http://host:port, https://host:port, or socks5://host:port");
+    throw new Error("Explore proxy URL must be http://host:port, https://host:port, or socks5://host:port");
   }
   if (!["http:", "https:", "socks5:"].includes(parsed.protocol) || !parsed.hostname || !parsed.port) {
-    throw new Error("Web Mode proxy URL must be http://host:port, https://host:port, or socks5://host:port");
+    throw new Error("Explore proxy URL must be http://host:port, https://host:port, or socks5://host:port");
   }
   parsed.username = "";
   parsed.password = "";
@@ -9663,14 +9667,33 @@ async function runWebModeCommand(action, providerId = "") {
   const command = providerId
     ? `${WEB_MODE_COMMAND} ${shellQuote(action)} ${shellQuote(providerId)}`
     : `${WEB_MODE_COMMAND} ${shellQuote(action)}`;
-  await runCommand(command, { allowFailure: false, timeout: 10_000 });
+  await runCommand(command, { allowFailure: false, timeout: 45_000, includeStdoutOnFailure: true });
+}
+
+function webModeProviderLabel(providerId) {
+  return WEB_MODE_PROVIDERS.find((provider) => provider.id === providerId)?.label ?? "Explore";
+}
+
+function formatWebModeCommandError(error, action, providerId = "") {
+  const raw = error instanceof Error ? error.message : String(error ?? "");
+  const firstLine = raw.split(/\r?\n/).find((line) => line.trim())?.trim() ?? "";
+  if (/Explore is already switching/i.test(raw)) return "Explore is already switching";
+  if (action === "open") {
+    if (/did not open|did not appear|timed out|SIGKILL|Command failed|\[tikpal-web-mode\]/i.test(raw)) {
+      return `${webModeProviderLabel(providerId)} did not open`;
+    }
+    return firstLine.slice(0, 160) || `${webModeProviderLabel(providerId)} did not open`;
+  }
+  if (action === "close") return firstLine.slice(0, 160) || "Explore close failed";
+  if (action === "keyboard") return firstLine.slice(0, 160) || "Keyboard open failed";
+  return firstLine.slice(0, 160) || "Explore action failed";
 }
 
 async function pauseTikpalForWebMode() {
   try {
     await applyPlaybackActionForCurrentBackend({ type: "pause" });
   } catch {
-    // Web Mode is a browser wrapper; a failed pause should not block opening the login/player page.
+    // Explore is a browser wrapper; a failed pause should not block opening the login/player page.
   }
 
   try {
@@ -9694,7 +9717,7 @@ async function applyWebModeAction(action) {
       await runWebModeCommand("close");
       await writeWebModeRuntimeState({ activeProvider: null, lastError: null });
     } catch (error) {
-      await writeWebModeRuntimeState({ lastError: error instanceof Error ? error.message : "Web Mode close failed" });
+      await writeWebModeRuntimeState({ lastError: formatWebModeCommandError(error, "close") });
     }
     return await buildWebModeState();
   }
@@ -9704,14 +9727,15 @@ async function applyWebModeAction(action) {
       await runWebModeCommand("keyboard");
       await writeWebModeRuntimeState({ lastError: null });
     } catch (error) {
-      await writeWebModeRuntimeState({ lastError: error instanceof Error ? error.message : "Keyboard open failed" });
-      throw error;
+      const message = formatWebModeCommandError(error, "keyboard");
+      await writeWebModeRuntimeState({ lastError: message });
+      throw new Error(message);
     }
     return await buildWebModeState();
   }
 
   if (type !== "open") {
-    throw new Error("Web Mode action type must be open, close, or keyboard");
+    throw new Error("Explore action type must be open, close, or keyboard");
   }
 
   const providerId = normalizeWebModeProviderId(action.provider);
@@ -9720,8 +9744,9 @@ async function applyWebModeAction(action) {
     await runWebModeCommand("open", providerId);
     await writeWebModeRuntimeState({ activeProvider: providerId, lastError: null });
   } catch (error) {
-    await writeWebModeRuntimeState({ activeProvider: providerId, lastError: error instanceof Error ? error.message : "Web Mode open failed" });
-    throw error;
+    const message = formatWebModeCommandError(error, "open", providerId);
+    await writeWebModeRuntimeState({ lastError: message });
+    throw new Error(message);
   }
   return await buildWebModeState();
 }
@@ -9741,7 +9766,7 @@ async function patchWebModeSettings(patch) {
 async function testWebModeProxy() {
   const settings = await readWebModeSettings();
   if (!settings.proxyEnabled) {
-    return { ok: true, message: "Web Mode proxy is disabled", proxyUrl: settings.proxyUrl };
+    return { ok: true, message: "Explore proxy is disabled", proxyUrl: settings.proxyUrl };
   }
   const proxyUrl = normalizeWebModeProxyUrl(settings.proxyUrl);
   if (!WEB_MODE_PROXY_TEST_NETWORK) {

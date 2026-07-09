@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Apple, Cloud, Gem, Globe2, Keyboard, LogOut, Music2, ShoppingBag, SquarePlay, Volume2 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { fetchTikpalState, fetchWebModeState, sendPlaybackAction, sendWebModeAction } from "../api/tikpalClient";
+import { fetchTikpalState, fetchWebModeState, sendPlaybackAction, sendWebModeAction, updateWebModeSettings } from "../api/tikpalClient";
 import type { TikpalState, WebModeProviderId, WebModeProviderSummary, WebModeState } from "../types";
 
 const providerOrder: WebModeProviderId[] = [
@@ -56,8 +56,9 @@ export function WebModeSidePanel() {
   const [webMode, setWebMode] = useState<WebModeState | null>(null);
   const [tikpalState, setTikpalState] = useState<TikpalState | null>(null);
   const [pendingProvider, setPendingProvider] = useState<WebModeProviderId | null>(null);
-  const [pendingAction, setPendingAction] = useState<"close" | "keyboard" | null>(null);
+  const [pendingAction, setPendingAction] = useState<"close" | "keyboard" | "proxy" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const actionLockRef = useRef(false);
   const activeProvider = webMode?.activeProvider ?? null;
   const volumePercent = tikpalState?.system.volume.percent ?? 0;
 
@@ -69,7 +70,7 @@ export function WebModeSidePanel() {
         id,
         label: providerLabels[id],
         url: provider?.url ?? "",
-        experimental: provider?.experimental ?? (id === "youtube_music" || id === "netease_music")
+        experimental: provider?.experimental ?? false
       };
     });
   }, [webMode?.providers]);
@@ -102,7 +103,7 @@ export function WebModeSidePanel() {
         setTikpalState(nextTikpalState);
         setError(nextWebMode.lastError);
       } catch (nextError) {
-        if (!cancelled) setError(nextError instanceof Error ? nextError.message : "Web Mode unavailable");
+        if (!cancelled) setError(nextError instanceof Error ? nextError.message : "Explore unavailable");
       }
     }
     void tick();
@@ -114,8 +115,9 @@ export function WebModeSidePanel() {
   }, []);
 
   async function openProvider(providerId: WebModeProviderId) {
-    if (pendingProvider || pendingAction) return;
+    if (actionLockRef.current || pendingProvider || pendingAction) return;
     if (activeProvider === providerId) return;
+    actionLockRef.current = true;
     setPendingProvider(providerId);
     setError(null);
     try {
@@ -126,11 +128,13 @@ export function WebModeSidePanel() {
     } finally {
       setPendingProvider(null);
       await refresh().catch(() => undefined);
+      actionLockRef.current = false;
     }
   }
 
   async function closeWebMode() {
-    if (pendingAction || pendingProvider) return;
+    if (actionLockRef.current || pendingAction || pendingProvider) return;
+    actionLockRef.current = true;
     setPendingAction("close");
     setError(null);
     try {
@@ -140,11 +144,33 @@ export function WebModeSidePanel() {
       setError(nextError instanceof Error ? nextError.message : "Close failed");
     } finally {
       setPendingAction(null);
+      actionLockRef.current = false;
+    }
+  }
+
+  async function toggleProxy() {
+    if (!webMode || actionLockRef.current || pendingAction || pendingProvider) return;
+    actionLockRef.current = true;
+    setPendingAction("proxy");
+    setError(null);
+    try {
+      let next = await updateWebModeSettings({ proxyEnabled: !webMode.settings.proxyEnabled });
+      if (activeProvider) {
+        next = await sendWebModeAction({ type: "open", provider: activeProvider });
+      }
+      setWebMode(next);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "Proxy update failed");
+    } finally {
+      setPendingAction(null);
+      await refresh().catch(() => undefined);
+      actionLockRef.current = false;
     }
   }
 
   async function showKeyboard() {
-    if (pendingAction || pendingProvider) return;
+    if (actionLockRef.current || pendingAction || pendingProvider) return;
+    actionLockRef.current = true;
     setPendingAction("keyboard");
     setError(null);
     try {
@@ -154,6 +180,7 @@ export function WebModeSidePanel() {
       setError(nextError instanceof Error ? nextError.message : "Keyboard unavailable");
     } finally {
       setPendingAction(null);
+      actionLockRef.current = false;
     }
   }
 
@@ -181,12 +208,32 @@ export function WebModeSidePanel() {
     <main className="web-mode-panel" data-web-mode-panel>
       <header className="web-mode-panel-header">
         <div>
-          <span>Web Mode</span>
+          <span>Explore</span>
           <strong>{activeProviderLabel}</strong>
         </div>
-        <span className={`web-mode-proxy-chip ${webMode?.settings.proxyEnabled ? "is-proxy" : ""}`}>
-          {webMode?.settings.proxyEnabled ? "Proxy" : "Direct"}
-        </span>
+        <div className="web-mode-header-actions">
+          <button
+            className={`web-mode-proxy-chip ${webMode?.settings.proxyEnabled ? "is-proxy" : ""}`}
+            type="button"
+            aria-pressed={Boolean(webMode?.settings.proxyEnabled)}
+            disabled={!webMode || Boolean(pendingAction || pendingProvider)}
+            data-web-mode-proxy-toggle
+            onClick={() => void toggleProxy()}
+          >
+            <Globe2 size={17} />
+            <span>{pendingAction === "proxy" ? "Saving" : webMode?.settings.proxyEnabled ? "Proxy" : "Direct"}</span>
+          </button>
+          <button
+            className="web-mode-top-back"
+            type="button"
+            disabled={Boolean(pendingAction || pendingProvider)}
+            data-web-mode-top-back
+            onClick={() => void closeWebMode()}
+          >
+            <LogOut size={17} />
+            <span>{pendingAction === "close" ? "Closing" : "Back"}</span>
+          </button>
+        </div>
       </header>
 
       <section className="web-mode-active-card" aria-label="Active web player">
@@ -202,14 +249,13 @@ export function WebModeSidePanel() {
         {providers.map((provider) => {
           const Icon = providerIcons[provider.id] ?? Music2;
           const selected = activeProvider === provider.id;
-          const pending = pendingProvider === provider.id;
+          const opening = pendingProvider === provider.id;
           return (
             <button
               key={provider.id}
-              className={`web-mode-provider ${selected ? "is-active" : ""}`}
+              className={`web-mode-provider ${selected ? "is-active" : ""} ${opening ? "is-opening" : ""}`}
               type="button"
               style={{ "--provider-tone": providerTones[provider.id] } as CSSProperties}
-              disabled={Boolean(pendingProvider || pendingAction)}
               data-web-mode-provider={provider.id}
               onClick={() => void openProvider(provider.id)}
             >
@@ -217,7 +263,7 @@ export function WebModeSidePanel() {
                 <Icon size={24} />
               </span>
               <strong>{provider.label}</strong>
-              <em>{pending ? "Opening" : provider.experimental ? "Experimental" : selected ? "Active" : "Open"}</em>
+              <em>{provider.experimental ? "Experimental" : opening ? "Opening" : selected ? "Active" : "Open"}</em>
             </button>
           );
         })}
@@ -248,7 +294,7 @@ export function WebModeSidePanel() {
       </section>
 
       <footer className="web-mode-panel-footer" role="status">
-        {error ?? "Use the official player on the left. Tikpal controls stay here."}
+        {error ?? (pendingProvider ? `Opening ${providerLabels[pendingProvider]}...` : "Use the official player on the left. Tikpal controls stay here.")}
       </footer>
     </main>
   );

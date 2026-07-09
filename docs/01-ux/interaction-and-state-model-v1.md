@@ -152,15 +152,18 @@ stateDiagram-v2
 - Hi-Fi mode disables Scene Video and Scene Sound controls and does not mount MP4 scenes.
 - Auto Night uses the selected timezone to lower display brightness only. It must not switch modes, start Scene Sound, or interrupt Hi-Fi playback.
 
-### Web Mode
+### Explore
 
-- Web Mode is the only deliberate multi-window exception: the official web player opens on the left 1920 x 720 area, while Tikpal keeps a 640 x 720 side panel on the right.
-- Ambient and Player expose a single Web Mode entry. The side panel, not the source picker, handles provider switching among Spotify, YouTube Music, Apple Music, TIDAL, Qobuz, Deezer, Amazon Music, QQ Music, and NetEase Cloud Music.
+- Explore is the only deliberate multi-window exception: the official web player opens on the left 1920 x 720 area, while Tikpal keeps a 640 x 720 side panel on the right.
+- Ambient and Player expose a single Explore entry. The side panel, not the source picker, handles provider switching among Spotify, YouTube Music, Apple Music, TIDAL, Qobuz, Deezer, Amazon Music, QQ Music, and NetEase Cloud Music.
 - Only one official-provider window should remain visible at a time. Sites that try to open a new playback page should be redirected into the same left pane, and any extra provider window should be closed so two pages cannot keep playing in parallel.
 - The side panel's active provider highlight follows `.tikpal/web-mode-state.json`. It must not invent Spotify as a fallback when runtime state is missing; stale state is worse than no active highlight.
-- Entering Web Mode pauses Tikpal playback and closes audible Scene Sound so browser audio does not overlap MPD or scene audio.
-- Web Mode does not show Tikpal lyrics, artwork truth, or fake transport controls for the third-party site. It only offers provider switching, global volume, proxy status, Keyboard, and Back.
-- Console Link owns Web Mode proxy settings. Focusing the proxy URL field or pressing Keyboard should surface `onboard`; Chromium login pages use the same manual Keyboard fallback when auto-show is unreliable.
+- Entering Explore pauses Tikpal playback and closes audible Scene Sound so browser audio does not overlap MPD or scene audio.
+- Explore does not show Tikpal lyrics, artwork truth, or fake transport controls for the third-party site. It only offers provider switching, global volume, proxy status, Keyboard, and Back.
+- Console Link owns Explore proxy settings. Focusing the proxy URL field or pressing Keyboard should surface `onboard`; Chromium login pages use the same manual Keyboard fallback when auto-show is unreliable.
+- The left provider pane must not expose Chromium-native error pages. If a provider fails to load, show the local Tikpal Explore error page with provider name, Proxy/Direct state, and a short retry hint.
+- The left provider pane should feel kiosk-like, not desktop-browser-like: disable right-click context menus, drag/select affordances, and common zoom/refresh shortcuts while preserving normal touch, scrolling, login input, and playback clicks.
+- QQ Music may show trial or VIP upsell reminders while playback continues. Explore can auto-dismiss those with visible `取消`, `关闭`, or similar close buttons, but it must never auto-accept login, purchase, membership, authorization, agreement, recharge, or subscription prompts.
 
 ## Input Compatibility
 
@@ -180,7 +183,7 @@ Current desktop validation mappings:
 
 ## Non-Goals
 
-- No multi-window navigation except Web Mode's deliberate official-player-plus-side-panel layout.
+- No multi-window navigation except Explore's deliberate official-player-plus-side-panel layout.
 - No stacked player and Console overlays.
 - No full moOde admin surface in the kiosk UI.
 - No dangerous operation on first tap.

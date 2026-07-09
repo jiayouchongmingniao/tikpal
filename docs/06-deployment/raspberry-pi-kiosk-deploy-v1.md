@@ -86,7 +86,7 @@ npm run build
 cp -n deploy/chromium/env.kiosk.example .env.kiosk
 ```
 
-If this device will use Web Mode login or proxy editing on the touch screen, also install the on-screen keyboard helpers:
+If this device will use Explore login or proxy editing on the touch screen, also install the on-screen keyboard helpers:
 
 ```bash
 sudo apt-get install -y onboard wmctrl
@@ -113,7 +113,7 @@ deploy/chromium/launch-tikpal-kiosk.sh --check
 
 Chromium may keep an ALSA `audio.mojom.AudioService` process open after the active scene video is muted. If it is routed to `_audioout`, MPD Radio can later land in `paused` with `Failed to open audio output`; treat that as an output-route/runtime-env problem before blaming the radio station.
 
-Web Mode opens official music web players in a separate left Chromium window and a Tikpal `/side-panel` in the right 640px column. The provider window uses `.tikpal/web-mode-settings.json` for proxy configuration; the default development value is HTTP `http://192.168.10.140:7897`, while the Tikpal side panel stays local on `localhost:4173` and should not use that proxy. The launcher keeps one visible provider window, enables Chromium popup/ad content blocking for the provider profile, and writes `.tikpal/web-mode-state.json` so the side panel highlight follows the actual provider. The bundled `deploy/chromium/web-mode-extension` can keep common new-window links inside the left pane when `TIKPAL_WEB_MODE_EXTENSION_ENABLED=1`, but leave it disabled on managed Chromium builds that reject unpacked extensions. The provider window, not the side panel, exposes local-only CDP at `127.0.0.1:9234` by default so QQ Music can run a conservative confirmation helper:
+Explore opens official music web players in a separate left Chromium window and a Tikpal `/side-panel` in the right 640px column. The provider window uses `.tikpal/web-mode-settings.json` for proxy configuration; the default development value is HTTP `http://192.168.10.140:7897`, while the Tikpal side panel stays local on `localhost:4173` and should not use that proxy. The launcher keeps one visible provider window, enables Chromium popup/ad content blocking for the provider profile, and writes `.tikpal/web-mode-state.json` so the side panel highlight follows the actual provider. The bundled `deploy/chromium/web-mode-extension` can keep common new-window links inside the left pane when `TIKPAL_WEB_MODE_EXTENSION_ENABLED=1`, but leave it disabled on managed Chromium builds that reject unpacked extensions. The provider window, not the side panel, exposes local-only CDP at `127.0.0.1:9234` by default so `deploy/chromium/tikpal-web-mode-guard.mjs` can disable right-click/browser shortcuts, replace Chromium-native load failures with the local `/web-mode-error.html` page, and run QQ Music's conservative confirmation helper:
 
 ```bash
 cat .tikpal/web-mode-settings.json 2>/dev/null || true
@@ -121,16 +121,18 @@ deploy/chromium/tikpal-web-mode.sh --check
 deploy/chromium/tikpal-web-mode.sh open spotify
 deploy/chromium/tikpal-web-mode.sh open qq_music
 curl -fsS http://127.0.0.1:9234/json | head
-node deploy/chromium/tikpal-web-mode-qq-confirm.mjs --check
+node deploy/chromium/tikpal-web-mode-guard.mjs --check
 deploy/chromium/tikpal-web-mode.sh keyboard
 deploy/chromium/tikpal-web-mode.sh close
 ```
 
-The QQ helper is an allowlist for ordinary prompts only. It may click visible `确定`, `确认`, `取消`, `知道了`, `我知道了`, `好的`, `好`, `开始播放`, or `继续播放` buttons inside `y.qq.com` dialogs, but it must not click dialogs mentioning login, payment, purchase, authorization, privacy/agreement, VIP, recharge, or subscription. It also keeps QQ Music station links in the existing left pane by retargeting `y.qq.com` `window.open` and `_blank` links, then closes hidden duplicate QQ player pages if the site still opens more than one `y.qq.com/n/ryqq...` target. This prevents two web players from playing at once and avoids small non-fullscreen QQ windows. It is not a generic ad blocker or blind coordinate clicker.
+The provider guard is not a generic ad blocker and does not promise every web player can load. Proxy only changes the network path; Amazon Music, YouTube Music, Apple Music, and regional providers may still fail because of region, TLS, DRM, account, proxy, or Chromium policy. When a provider reaches a Chromium error page such as `ERR_CONNECTION_CLOSED`, the guard should redirect the left pane to Tikpal's friendly error page with provider name and Proxy/Direct state, leaving retry/provider switching to the right side panel.
 
-The Web Mode launcher keeps a separate Chromium profile for each provider so login state can survive provider switches. It is not a Tikpal source: opening it pauses Tikpal playback and does not change `.tikpal/audio-source-memory.json`. For 2560 x 720 validation, `xdotool search --onlyvisible --class chromium` should show the main kiosk window, one 1920 x 720 provider window at `0,0`, and one 640 x 720 side-panel window at `1920,0`; it should not show two visible provider windows after a site opens a playback page.
+The QQ helper features inside the guard are allowlisted for ordinary prompts only. They may click visible `确定`, `确认`, `取消`, `关闭`, `知道了`, `我知道了`, `好的`, `好`, `开始播放`, or `继续播放` buttons inside `y.qq.com` dialogs. Dialogs mentioning login, payment, purchase, authorization, privacy/agreement, VIP, recharge, or subscription must not be accepted automatically; only dismiss-style buttons such as `取消`, `关闭`, or `知道了` may be clicked in those contexts. This lets Tikpal close QQ trial/VIP upsell reminders without consenting to membership, purchase, authorization, or account changes. QQ links are retargeted into the existing left pane by rewriting `y.qq.com` `window.open` and `_blank` navigation, then hidden duplicate QQ player pages are closed if the site still opens more than one `y.qq.com/n/ryqq...` target. This prevents two web players from playing at once and avoids small non-fullscreen QQ windows. It is not a blind coordinate clicker.
 
-While a Web Mode provider window is active, the main kiosk page may be hidden and its heartbeat can briefly look stale. The kiosk watchdog should not restart X or `tikpal-kiosk.service` for `page-unhealthy` in that state, because doing so kills the left provider window and stops web-player audio. Leave `TIKPAL_KIOSK_WATCHDOG_WEB_MODE_HEARTBEAT_BYPASS=1` enabled unless you are debugging the watchdog itself; X, Chromium-process, API, web URL, and GPU-reset checks still run. The bypass detects provider Chromium processes by their `--user-data-dir=.../providers/...` argument and includes the moOde user profile path, so it still works when the watchdog runs as root under systemd.
+The Explore launcher keeps a separate Chromium profile for each provider so login state can survive provider switches. It is not a Tikpal source: opening it pauses Tikpal playback and does not change `.tikpal/audio-source-memory.json`. For 2560 x 720 validation, `xdotool search --onlyvisible --class chromium` should show the main kiosk window, one 1920 x 720 provider window at `0,0`, and one 640 x 720 side-panel window at `1920,0`; it should not show two visible provider windows after a site opens a playback page.
+
+While an Explore provider window is active, the main kiosk page may be hidden and its heartbeat can briefly look stale. The kiosk watchdog should not restart X or `tikpal-kiosk.service` for `page-unhealthy` in that state, because doing so kills the left provider window and stops web-player audio. Leave `TIKPAL_KIOSK_WATCHDOG_WEB_MODE_HEARTBEAT_BYPASS=1` enabled unless you are debugging the watchdog itself; X, Chromium-process, API, web URL, and GPU-reset checks still run. The bypass detects provider Chromium processes by their `--user-data-dir=.../providers/...` argument and includes the moOde user profile path, so it still works when the watchdog runs as root under systemd.
 
 If the Pi should control real moOde playback instead of the local mock bridge, create `.env` with native MPD settings before restarting the API service:
 

@@ -258,7 +258,7 @@ export function QuickSettingsOverlay({
         setWebModeProxyUrl(nextState.settings.proxyUrl);
       })
       .catch((error) => {
-        if (!cancelled) setWebModeError(error instanceof Error ? error.message : "Web Mode settings unavailable");
+        if (!cancelled) setWebModeError(error instanceof Error ? error.message : "Explore settings unavailable");
       });
     return () => {
       cancelled = true;
@@ -422,7 +422,7 @@ export function QuickSettingsOverlay({
         key: "web-mode",
         section: "network",
         icon: Globe2,
-        title: "Web Mode",
+        title: "Explore",
         value: webModeProxyEnabled ? "HTTP Proxy" : "Direct",
         meta: webModeProxyEnabled ? webModeProxyUrl : "Official web players",
         tone: webModeProxyEnabled ? "cyan" : "neutral"
@@ -513,7 +513,7 @@ export function QuickSettingsOverlay({
       setWebModeProxyUrl(nextState.settings.proxyUrl);
       setWebModeError("Saved");
     } catch (error) {
-      setWebModeError(error instanceof Error ? error.message : "Web Mode settings save failed");
+      setWebModeError(error instanceof Error ? error.message : "Explore settings save failed");
     } finally {
       setPendingWebModeSettings(null);
     }
@@ -775,14 +775,14 @@ export function QuickSettingsOverlay({
       ?? (webModeState?.settings.proxyEnabled ? webModeState.settings.proxyUrl : "Direct browser access");
 
     return (
-      <section className="settings-detail-panel" aria-label="Web Mode detail" data-settings-detail="web-mode">
+      <section className="settings-detail-panel" aria-label="Explore detail" data-settings-detail="web-mode">
         <div className="settings-detail-header">
           <button className="settings-detail-back" type="button" onClick={() => setDetailView(null)}>
             Back
           </button>
           <div>
             <span>Link</span>
-            <strong>Web Mode</strong>
+            <strong>Explore</strong>
             <p>{statusText}</p>
           </div>
         </div>
@@ -815,7 +815,7 @@ export function QuickSettingsOverlay({
             />
           </label>
 
-          <div className="display-brightness-controls web-mode-settings-actions" role="group" aria-label="Web Mode controls">
+          <div className="display-brightness-controls web-mode-settings-actions" role="group" aria-label="Explore controls">
             <button className="display-brightness-step" type="button" disabled={busy} onClick={() => void handleWebModeSettingsSave()}>
               {pendingWebModeSettings === "save" ? "Saving..." : "Save"}
             </button>

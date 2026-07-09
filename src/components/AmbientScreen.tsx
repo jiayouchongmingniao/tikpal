@@ -761,7 +761,7 @@ export function AmbientScreen({
       setSourcePickerOpen(false);
       onSourcePickerOpenChange?.(false);
     } catch (error) {
-      setAmbientSourceError(error instanceof Error ? error.message : "Web Mode failed to open");
+      setAmbientSourceError(error instanceof Error ? error.message : "Explore failed to open");
     } finally {
       setWebModePending(false);
     }
@@ -1274,7 +1274,7 @@ export function AmbientScreen({
                 <span className="ambient-source-option-icon" aria-hidden="true">
                   {webModePending ? <LoaderCircle size={23} className="is-spinning" /> : <Globe2 size={23} strokeWidth={1.8} />}
                 </span>
-                <strong>Web Mode</strong>
+                <strong>Explore</strong>
                 <span>{webModePending ? "Opening" : "Web players"}</span>
               </button>
             </div>

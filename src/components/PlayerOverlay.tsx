@@ -625,7 +625,7 @@ export function PlayerOverlay({
     try {
       await onOpenWebMode();
     } catch (error) {
-      setSourceError(error instanceof Error ? error.message : "Web Mode failed to open");
+      setSourceError(error instanceof Error ? error.message : "Explore failed to open");
     } finally {
       setWebModePending(false);
     }
@@ -1098,7 +1098,7 @@ export function PlayerOverlay({
                 onClick={() => void openWebMode()}
               >
                 <Globe2 size={20} />
-                <strong>Web Mode</strong>
+                <strong>Explore</strong>
                 <span>{webModePending ? "Opening" : "Web players"}</span>
               </button>
             </nav>

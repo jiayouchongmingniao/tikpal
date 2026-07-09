@@ -1706,8 +1706,8 @@ try {
   await evaluate(client, "document.querySelector('[data-ambient-source-toggle]')?.click()");
   await expectEventually(
     client,
-    "document.querySelectorAll('[data-ambient-source-picker] [data-ambient-source-option]').length === 7 && document.querySelector('[data-ambient-source-option=\"web-mode\"]') !== null",
-    "Hi-Fi source picker opens six source choices plus Web Mode"
+    "document.querySelectorAll('[data-ambient-source-picker] [data-ambient-source-option]').length === 7 && document.querySelector('[data-ambient-source-option=\"web-mode\"] strong')?.textContent === 'Explore'",
+    "Hi-Fi source picker opens six source choices plus Explore"
   );
   await expect(
     client,
@@ -1719,7 +1719,7 @@ try {
         return Math.max(...tops) - Math.min(...tops) < 2;
       })()
     `,
-    "Hi-Fi source picker keeps Web Mode on the first row"
+    "Hi-Fi source picker keeps Explore on the first row"
   );
   await wait(5200);
   await expectEventually(client, "document.querySelector('[data-ambient-source-picker]') === null", "Hi-Fi source picker auto-closes after 5 seconds");
@@ -2239,8 +2239,8 @@ try {
   await expect(client, "document.querySelector('.ambient-screen.is-hud-visible') !== null", "single tap shows ambient HUD");
   await expectEventually(
     client,
-    "document.querySelectorAll('[data-ambient-source-picker] [data-ambient-source-option]').length === 7 && document.querySelector('[data-ambient-source-option=\"web-mode\"]') !== null",
-    "ambient scene single tap opens six source choices plus Web Mode"
+    "document.querySelectorAll('[data-ambient-source-picker] [data-ambient-source-option]').length === 7 && document.querySelector('[data-ambient-source-option=\"web-mode\"] strong')?.textContent === 'Explore'",
+    "ambient scene single tap opens six source choices plus Explore"
   );
   await expect(
     client,
@@ -2252,7 +2252,7 @@ try {
         return Math.max(...tops) - Math.min(...tops) < 2;
       })()
     `,
-    "ambient source picker keeps Web Mode on the first row"
+    "ambient source picker keeps Explore on the first row"
   );
   await evaluate(client, "window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })); true");
   await expectEventually(client, "document.querySelector('[data-ambient-source-picker]') === null", "ambient scene source picker closes with Escape");
@@ -3271,7 +3271,7 @@ try {
           && document.querySelector('[data-source-item="audio"]') === null;
       })()
     `,
-    "player source tabs include six visible source categories plus Web Mode"
+    "player source tabs include six visible source categories plus Explore"
   );
   await evaluate(client, "document.querySelector('[data-source-item=\"radio\"]')?.click(); true");
   await expectEventually(
@@ -3811,7 +3811,7 @@ try {
     `
   );
   await expect(client, "document.querySelector('[data-settings-section=\"network\"]') !== null", "Console Link section opens");
-  await expect(client, settingsSummaryExpression("network", ["Network", "System", "Web Mode"]), "Console Link summary keeps fixed hardware tiles");
+  await expect(client, settingsSummaryExpression("network", ["Network", "System", "Explore"]), "Console Link summary keeps fixed hardware tiles");
   await expect(
     client,
     `
@@ -3828,17 +3828,17 @@ try {
     client,
     `
       (() => {
-        const target = [...document.querySelectorAll('.settings-card-button')].find((node) => node.textContent.includes('Web Mode'));
+        const target = [...document.querySelectorAll('.settings-card-button')].find((node) => node.textContent.includes('Explore'));
         target?.click();
         return Boolean(target);
       })()
     `
   );
-  await expect(client, "document.querySelector('[data-settings-detail=\"web-mode\"]') !== null", "Console Web Mode drawer opens");
+  await expect(client, "document.querySelector('[data-settings-detail=\"web-mode\"]') !== null", "Console Explore drawer opens");
   await expect(
     client,
     "document.querySelector('.web-mode-proxy-field input')?.value === 'http://192.168.10.140:7897' && document.querySelector('.web-mode-settings-actions button') !== null",
-    "Console Web Mode drawer exposes HTTP proxy setting and actions"
+    "Console Explore drawer exposes HTTP proxy setting and actions"
   );
   await evaluate(
     client,
@@ -3850,7 +3850,7 @@ try {
       })()
     `
   );
-  await expect(client, "document.querySelector('[data-settings-detail]') === null", "Console Web Mode drawer closes back to summary");
+  await expect(client, "document.querySelector('[data-settings-detail]') === null", "Console Explore drawer closes back to summary");
 
   await evaluate(
     client,
@@ -3868,8 +3868,13 @@ try {
   await expect(client, "document.querySelector('.quick-settings.is-active') === null", "Console backdrop click exits Console");
 
   await navigate(client, new URL("/side-panel", APP_URL).toString());
-  await expect(client, "document.querySelector('[data-web-mode-panel]') !== null && document.querySelector('.app-root') === null", "Web Mode side panel renders without the main kiosk app");
-  await expect(client, "document.querySelectorAll('[data-web-mode-provider]').length >= 9", "Web Mode side panel exposes common web player providers");
+  await expect(client, "document.querySelector('[data-web-mode-panel]') !== null && document.querySelector('.app-root') === null", "Explore side panel renders without the main kiosk app");
+  await expect(client, "document.querySelectorAll('[data-web-mode-provider]').length >= 9", "Explore side panel exposes common web player providers");
+  await expect(
+    client,
+    "document.querySelector('[data-web-mode-proxy-toggle]')?.tagName === 'BUTTON' && document.querySelector('[data-web-mode-top-back]') !== null",
+    "Explore side panel exposes top proxy toggle and Back button"
+  );
   await expect(
     client,
     `
@@ -3877,11 +3882,13 @@ try {
         const ids = [...document.querySelectorAll('[data-web-mode-provider]')].map((node) => node.dataset.webModeProvider);
         return ids.length === new Set(ids).size
           && ids.filter((id) => id === 'qq_music').length === 1
+          && document.querySelector('[data-web-mode-provider][disabled]') === null
           && document.querySelector('[data-web-mode-provider="amazon_music"] strong')?.textContent === 'Amazon Music'
-          && document.querySelector('[data-web-mode-provider="qq_music"] strong')?.textContent === 'QQ Music';
+          && document.querySelector('[data-web-mode-provider="qq_music"] strong')?.textContent === 'QQ Music'
+          && document.querySelector('[data-web-mode-provider="youtube_music"] em')?.textContent !== 'Experimental';
       })()
     `,
-    "Web Mode side panel keeps provider cards unique with canonical labels"
+    "Explore side panel keeps provider cards unique with canonical labels"
   );
   await evaluate(
     client,
@@ -3893,7 +3900,7 @@ try {
       })()
     `
   );
-  await expectEventually(client, "document.querySelector('[data-web-mode-provider=\"youtube_music\"]')?.classList.contains('is-active')", "Web Mode side panel switches provider state");
+  await expectEventually(client, "document.querySelector('[data-web-mode-provider=\"youtube_music\"]')?.classList.contains('is-active')", "Explore side panel switches provider state");
 } finally {
   if (client) {
     await Promise.race([

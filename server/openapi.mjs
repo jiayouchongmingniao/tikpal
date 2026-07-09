@@ -94,16 +94,16 @@ export function buildOpenApiDocument({ appVersion = "0.1.0" } = {}) {
       "/web-mode/state": {
         get: {
           tags: ["web-mode"],
-          summary: "Read Web Mode provider and proxy state",
+          summary: "Read Explore provider and proxy state",
           responses: {
-            200: jsonResponse("Web Mode state", "WebModeState")
+            200: jsonResponse("Explore state", "WebModeState")
           }
         }
       },
       "/web-mode/actions": {
         post: {
           tags: ["web-mode"],
-          summary: "Open, close, or surface Web Mode keyboard",
+          summary: "Open, close, or surface Explore keyboard",
           requestBody: {
             required: true,
             content: {
@@ -113,7 +113,7 @@ export function buildOpenApiDocument({ appVersion = "0.1.0" } = {}) {
             }
           },
           responses: {
-            200: jsonResponse("Web Mode state", "WebModeState"),
+            200: jsonResponse("Explore state", "WebModeState"),
             400: jsonResponse("Bad request", "ErrorResponse")
           }
         }
@@ -121,7 +121,7 @@ export function buildOpenApiDocument({ appVersion = "0.1.0" } = {}) {
       "/web-mode/settings": {
         patch: {
           tags: ["web-mode"],
-          summary: "Update Web Mode proxy settings",
+          summary: "Update Explore proxy settings",
           requestBody: {
             required: true,
             content: {
@@ -131,7 +131,7 @@ export function buildOpenApiDocument({ appVersion = "0.1.0" } = {}) {
             }
           },
           responses: {
-            200: jsonResponse("Web Mode state", "WebModeState"),
+            200: jsonResponse("Explore state", "WebModeState"),
             400: jsonResponse("Bad request", "ErrorResponse")
           }
         }
@@ -139,7 +139,7 @@ export function buildOpenApiDocument({ appVersion = "0.1.0" } = {}) {
       "/web-mode/proxy-test": {
         post: {
           tags: ["web-mode"],
-          summary: "Validate Web Mode proxy configuration",
+          summary: "Validate Explore proxy configuration",
           responses: {
             200: jsonResponse("Proxy test result", "WebModeProxyTestResponse"),
             400: jsonResponse("Bad request", "ErrorResponse")

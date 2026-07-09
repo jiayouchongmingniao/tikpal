@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Tikpal Explore</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        background: #05070c;
+        color: #f7fbff;
+        font-family:
+          Inter,
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+        -webkit-user-drag: none;
+      }
+
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+        -webkit-touch-callout: none;
+      }
+
+      body {
+        display: grid;
+        place-items: center;
+        background:
+          radial-gradient(circle at 22% 28%, rgba(42, 145, 255, 0.24), transparent 34%),
+          radial-gradient(circle at 72% 70%, rgba(77, 255, 205, 0.13), transparent 32%),
+          linear-gradient(135deg, #05070c 0%, #101733 55%, #070910 100%);
+        user-select: none;
+      }
+
+      .shell {
+        width: min(960px, 72vw);
+        padding: 54px 62px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 28px;
+        background: rgba(5, 8, 16, 0.72);
+        box-shadow: 0 28px 80px rgba(0, 0, 0, 0.34);
+      }
+
+      .eyebrow {
+        margin: 0 0 18px;
+        color: rgba(174, 218, 255, 0.76);
+        font-size: 18px;
+        font-weight: 800;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      h1 {
+        margin: 0;
+        max-width: 780px;
+        color: #ffffff;
+        font-size: 58px;
+        line-height: 1.02;
+        letter-spacing: 0;
+      }
+
+      p {
+        max-width: 720px;
+        margin: 24px 0 0;
+        color: rgba(232, 242, 255, 0.76);
+        font-size: 24px;
+        line-height: 1.45;
+      }
+
+      .chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-top: 34px;
+      }
+
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        min-height: 44px;
+        padding: 0 18px;
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.08);
+        color: rgba(250, 253, 255, 0.9);
+        font-size: 18px;
+        font-weight: 800;
+      }
+
+      @media (max-width: 900px) {
+        .shell {
+          width: min(560px, calc(100vw - 44px));
+          padding: 36px;
+          border-radius: 22px;
+        }
+
+        h1 {
+          font-size: 38px;
+        }
+
+        p {
+          font-size: 19px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="shell" aria-live="polite">
+      <p class="eyebrow">Explore</p>
+      <h1><span id="provider-label">This music service</span> did not respond</h1>
+      <p>
+        The official web player could not be reached from this device. Use the Proxy switch on the right,
+        choose another provider, or try again later.
+      </p>
+      <div class="chips" aria-label="Connection details">
+        <span class="chip" id="proxy-chip">Direct</span>
+        <span class="chip" id="reason-chip">load_failed</span>
+      </div>
+    </main>
+    <script>
+      (() => {
+        const params = new URLSearchParams(location.search);
+        const providerLabel = params.get("label") || params.get("provider") || "This music service";
+        const proxy = params.get("proxy") === "proxy" ? "Proxy On" : "Direct";
+        const reason = params.get("reason") || "load_failed";
+        document.getElementById("provider-label").textContent = providerLabel;
+        document.getElementById("proxy-chip").textContent = proxy;
+        document.getElementById("reason-chip").textContent = reason;
+
+        const block = (event) => event.preventDefault();
+        document.addEventListener("contextmenu", block, true);
+        document.addEventListener("dragstart", block, true);
+        document.addEventListener("selectstart", block, true);
+        document.addEventListener("keydown", (event) => {
+          const key = String(event.key || "").toLowerCase();
+          if ((event.ctrlKey || event.metaKey) && ["+", "-", "=", "0", "r"].includes(key)) {
+            event.preventDefault();
+            event.stopPropagation();
+          }
+        }, true);
+      })();
+    </script>
+  </body>
+</html>

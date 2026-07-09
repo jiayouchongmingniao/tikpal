@@ -110,7 +110,7 @@ Current status note:
 - Console is implemented as a fixed 2560 x 720 listening console with no Home/Overview category; it opens directly to Signal, uses Signal / Library / Link / Care chips, and keeps the internal `quickSettings` route for compatibility.
 - Skin presets currently include `warm-gold`, `graphite-silver`, and `ivory-studio`.
 - Display brightness is reflected in system state and can now be adjusted both from the ambient left-edge gesture and from an in-panel Console drawer on DDC/CI-capable hardware. The Pi deploy helper `deploy/moode/tikpal-ddcci-enable.sh` installs `ddcutil`, enables I2C access, writes `TIKPAL_DDCUTIL_*`, and has been validated on the XENEON EDGE target with `display.transport="ddcci"`.
-- Console Link now owns Web Mode proxy and Keyboard setup. Web Mode itself is a browser wrapper with a 1920 x 720 provider window plus 640 x 720 side panel, and it deliberately does not become a Tikpal source or remembered playback state.
+- Console Link now owns Explore proxy and Keyboard setup. Explore itself is a browser wrapper with a 1920 x 720 provider window plus 640 x 720 side panel, and it deliberately does not become a Tikpal source or remembered playback state.
 
 ### Slice 7: Pi4 Kiosk Package
 
@@ -131,8 +131,8 @@ Acceptance:
 Batch 4 deployment note:
 
 - Repo-owned Chromium launcher, flags, managed policy, and `.env.kiosk` example are implemented under `deploy/chromium/`.
-- `deploy/chromium/tikpal-web-mode.sh` launches optional Web Mode provider/side-panel windows, reads `.tikpal/web-mode-settings.json`, writes `.tikpal/web-mode-state.json`, applies the configured HTTP proxy to the provider window only, and surfaces `onboard` for login/password input.
-- Web Mode acceptance: one visible provider window at 1920 x 720, one side panel at 640 x 720, no stale provider highlight, and no persistent second provider page after a site tries to open playback in a new window. The bundled Web Mode extension should keep common `_blank` links in the left pane; Chromium popup/ad settings are a best-effort guard, not a promise to remove every site promotion.
+- `deploy/chromium/tikpal-web-mode.sh` launches optional Explore provider/side-panel windows, reads `.tikpal/web-mode-settings.json`, writes `.tikpal/web-mode-state.json`, applies the configured HTTP proxy to the provider window only, and surfaces `onboard` for login/password input.
+- Explore acceptance: one visible provider window at 1920 x 720, one side panel at 640 x 720, no stale provider highlight, and no persistent second provider page after a site tries to open playback in a new window. The bundled Explore extension should keep common `_blank` links in the left pane; Chromium popup/ad settings are a best-effort guard, not a promise to remove every site promotion.
 - API, production web, and kiosk service templates plus installer are implemented under `deploy/systemd/`.
 - `server/web.mjs` serves `dist/` on port `4173` and proxies `/api` to the local API on port `8787`, so the Pi does not need the Vite dev server.
 - `npm run test:kiosk` validates the local packaging contract; real fullscreen/window-size acceptance still requires the target Pi display.

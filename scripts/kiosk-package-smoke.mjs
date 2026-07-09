@@ -18,10 +18,12 @@ const requiredFiles = [
   "deploy/chromium/tikpal-kiosk-healthcheck.sh",
   "deploy/chromium/tikpal-kiosk-viewerctl.sh",
   "deploy/chromium/tikpal-web-mode.sh",
+  "deploy/chromium/tikpal-web-mode-guard.mjs",
   "deploy/chromium/tikpal-web-mode-qq-confirm.mjs",
   "deploy/chromium/chromium-flags.conf",
   "deploy/chromium/managed-policies.json",
   "deploy/chromium/env.kiosk.example",
+  "public/web-mode-error.html",
   "deploy/moode/tikpal-alsa-loopback.sh",
   "deploy/moode/tikpal-airplay-transport.sh",
   "deploy/moode/tikpal-output-volume.sh",
@@ -104,12 +106,17 @@ async function run() {
   assert(kioskEnv.includes("TIKPAL_KIOSK_WATCHDOG_GPU_LOG_SCAN=1"), "kiosk env should enable GPU reset log scanning");
   assert(kioskEnv.includes("TIKPAL_KIOSK_WATCHDOG_PAGE_HEARTBEAT_ENABLED=1"), "kiosk env should enable page heartbeat scanning");
   assert(kioskEnv.includes("TIKPAL_KIOSK_WATCHDOG_PAGE_HEARTBEAT_URL=http://127.0.0.1:8787/api/v1/kiosk/heartbeat"), "kiosk env should point the watchdog at the loopback page heartbeat API");
-  assert(kioskEnv.includes("TIKPAL_KIOSK_WATCHDOG_WEB_MODE_HEARTBEAT_BYPASS=1"), "kiosk env should not restart the kiosk for stale page heartbeat while Web Mode is active");
+  assert(kioskEnv.includes("TIKPAL_KIOSK_WATCHDOG_WEB_MODE_HEARTBEAT_BYPASS=1"), "kiosk env should not restart the kiosk for stale page heartbeat while Explore is active");
   assert(kioskEnv.includes("TIKPAL_KIOSK_WATCHDOG_REBOOT_AFTER_RESTARTS=3"), "kiosk env should document persistent display-failure reboot escalation");
   assert(kioskEnv.includes("TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE="), "kiosk env should expose Chromium ALSA output selection");
   assert(!kioskEnv.includes("TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE=_audioout"), "kiosk env should not default Chromium Scene Sound to Loopback-backed _audioout");
   assert(kioskEnv.includes("dmix:CARD="), "kiosk env should document physical USB dmix output for Chromium Scene Sound");
-  assert(kioskEnv.includes("TIKPAL_WEB_MODE_PROVIDER_DEBUG_PORT=9234"), "kiosk env should document the Web Mode provider local CDP port");
+  assert(kioskEnv.includes("TIKPAL_WEB_MODE_PROVIDER_DEBUG_PORT=9234"), "kiosk env should document the Explore provider local CDP port");
+  assert(kioskEnv.includes("TIKPAL_WEB_MODE_PROVIDER_GUARD=1"), "kiosk env should enable the Explore provider guard by default");
+  assert(kioskEnv.includes("TIKPAL_WEB_MODE_ERROR_PAGE_URL=http://127.0.0.1:4173/web-mode-error.html"), "kiosk env should point provider guard at the local friendly error page");
+  assert(kioskEnv.includes("TIKPAL_WEB_MODE_TRANSITION_URL=http://127.0.0.1:4173/web-mode-transition.html"), "kiosk env should point staged Explore switches at the local transition page");
+  assert(kioskEnv.includes("TIKPAL_WEB_MODE_STAGE_POSITION=2560,0"), "kiosk env should stage provider windows offscreen");
+  assert(kioskEnv.includes("TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS=2"), "kiosk env should bound Explore provider switch locking");
   assert(kioskEnv.includes("TIKPAL_WEB_MODE_QQ_AUTO_CONFIRM=1"), "kiosk env should enable safe QQ Music auto-confirm by default");
   const kioskLauncher = await readFile(path.join(ROOT, "deploy/chromium/launch-tikpal-kiosk.sh"), "utf8");
   const kioskSession = await readFile(path.join(ROOT, "deploy/chromium/start-tikpal-kiosk-session.sh"), "utf8");
@@ -121,6 +128,8 @@ async function run() {
   assert(kioskSession.includes("run_x_command xset"), "kiosk session should bound xset commands");
   assert(webModeScript.includes("nohup \"$SCRIPT_DIR/tikpal-web-mode.sh\" guard"), "web mode should keep the window guard alive after the launcher exits");
   assert(webModeScript.includes("window-guard.pid"), "web mode should track the persistent window guard pid");
+  assert(webModeScript.includes('flock -x -w "$TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS"'), "web mode should not wait forever on provider switch locks");
+  assert(webModeScript.includes("9>&- &"), "web mode background children should not inherit the provider switch lock");
 
   const loopbackGuardDir = mkdtempSync(path.join(tmpdir(), "tikpal-loopback-guard-"));
   const hdmiLoopbackConfig = path.join(loopbackGuardDir, "_sndaloop-hdmi.conf");
@@ -201,18 +210,39 @@ async function run() {
   assert(webModeCheck.stdout.includes("popup blocking: 1"), "web mode should enable provider popup blocking by default");
   assert(webModeCheck.stdout.includes("extension: 0"), "web mode should keep the unpacked extension disabled by default");
   assert(webModeCheck.stdout.includes("provider debug: 127.0.0.1:9234"), "web mode should expose only a local provider CDP port");
-  assert(webModeCheck.stdout.includes("qq auto confirm: 1"), "web mode should enable safe QQ Music auto-confirm by default");
+  assert(webModeCheck.stdout.includes("provider debug stride: per-provider"), "web mode should avoid CDP port clashes during staged provider switches");
+  assert(webModeCheck.stdout.includes("provider guard: 1"), "web mode should enable the provider guard by default");
+  assert(webModeCheck.stdout.includes("switch lock timeout: 2s"), "web mode should report the bounded provider switch lock timeout");
+  assert(webModeCheck.stdout.includes("error page: http://127.0.0.1:4173/web-mode-error.html"), "web mode should report the friendly error page URL");
+  assert(webModeCheck.stdout.includes("transition page: http://127.0.0.1:4173/web-mode-transition.html"), "web mode should report the staged switch transition page");
+  assert(webModeCheck.stdout.includes("qq scoped auto confirm: 1"), "web mode should keep QQ auto-confirm scoped inside the provider guard");
   assert(webModeCheck.stdout.includes("proxy: enabled http://192.168.10.140:7897"), "web mode should default to the HTTP development proxy");
 
-  const qqConfirmCheck = spawnSync(process.execPath, ["deploy/chromium/tikpal-web-mode-qq-confirm.mjs", "--check"], {
+  const providerGuardCheck = spawnSync(process.execPath, ["deploy/chromium/tikpal-web-mode-guard.mjs", "--check"], {
     cwd: ROOT,
     encoding: "utf8"
   });
-  assert(qqConfirmCheck.status === 0, `QQ auto-confirm helper --check failed:\n${qqConfirmCheck.stdout}\n${qqConfirmCheck.stderr}`);
-  assert(qqConfirmCheck.stdout.includes("check passed"), "QQ auto-confirm helper should report check passed");
-  assert(qqConfirmCheck.stdout.includes("取消"), "QQ auto-confirm helper should include safe cancel prompts");
-  assert(qqConfirmCheck.stdout.includes("duplicate player pruning: 1"), "QQ auto-confirm helper should prune duplicate player pages");
-  assert(qqConfirmCheck.stdout.includes("single pane navigation: 1"), "QQ auto-confirm helper should keep QQ links in the left pane");
+  assert(providerGuardCheck.status === 0, `provider guard --check failed:\n${providerGuardCheck.stdout}\n${providerGuardCheck.stderr}`);
+  assert(providerGuardCheck.stdout.includes("check passed"), "provider guard should report check passed");
+  assert(providerGuardCheck.stdout.includes("kiosk interaction blocking: 1"), "provider guard should disable browser-like context gestures");
+  assert(providerGuardCheck.stdout.includes("friendly error redirect: 1"), "provider guard should redirect Chromium error pages");
+  assert(providerGuardCheck.stdout.includes("empty page timeout: 18s"), "provider guard should redirect long-running blank provider pages");
+  assert(providerGuardCheck.stdout.includes("取消"), "provider guard should include safe QQ cancel prompts");
+  assert(providerGuardCheck.stdout.includes("关闭"), "provider guard should include safe QQ close prompts");
+  assert(providerGuardCheck.stdout.includes("dismiss labels:"), "provider guard should allow safe dismiss prompts without accepting upsells");
+  assert(providerGuardCheck.stdout.includes("duplicate player pruning: 1"), "provider guard should prune duplicate QQ player pages");
+  assert(providerGuardCheck.stdout.includes("single pane navigation: 1"), "provider guard should keep QQ links in the left pane");
+  const providerGuardSource = await readFile(path.join(ROOT, "deploy/chromium/tikpal-web-mode-guard.mjs"), "utf8");
+  assert(providerGuardSource.includes("querySelectorAll(\"iframe\")"), "provider guard should scan same-origin QQ modal iframes");
+  assert(providerGuardSource.includes("[class*='confirm']"), "provider guard should recognize QQ confirm-style modal containers");
+
+  const webModeErrorPage = await readFile(path.join(ROOT, "public/web-mode-error.html"), "utf8");
+  assert(webModeErrorPage.includes("did not respond"), "friendly Explore error page should avoid native Chromium error copy");
+  assert(webModeErrorPage.includes("Proxy switch"), "friendly Explore error page should point users to the side-panel proxy switch");
+  assert(!webModeErrorPage.includes("sendKioskHeartbeat"), "friendly Explore error page should not post kiosk heartbeats");
+  const webModeTransitionPage = await readFile(path.join(ROOT, "public/web-mode-transition.html"), "utf8");
+  assert(webModeTransitionPage.includes("Opening Explore"), "Explore transition page should provide a local staged-switch veil");
+  assert(!webModeTransitionPage.includes("sendKioskHeartbeat"), "Explore transition page should not post kiosk heartbeats");
 
   const watchdogCheck = spawnSync("bash", ["deploy/chromium/tikpal-kiosk-healthcheck.sh", "--check"], {
     cwd: ROOT,
@@ -226,7 +256,7 @@ async function run() {
   assert(watchdogCheck.stdout.includes("watchdog enabled: 1"), "watchdog --check should report that it is enabled");
   assert(watchdogCheck.stdout.includes("page heartbeat enabled: 1"), "watchdog --check should report page heartbeat scanning");
   assert(watchdogCheck.stdout.includes("/api/v1/kiosk/heartbeat"), "watchdog --check should report the heartbeat endpoint");
-  assert(watchdogCheck.stdout.includes("web mode profile root:"), "watchdog --check should report the Web Mode profile root used for heartbeat bypass");
+  assert(watchdogCheck.stdout.includes("web mode profile root:"), "watchdog --check should report the Explore profile root used for heartbeat bypass");
   assert(watchdogCheck.stdout.includes("check passed"), "watchdog --check should report success");
 
   const heartbeatSmokeDir = mkdtempSync(path.join(tmpdir(), "tikpal-heartbeat-smoke-"));
@@ -311,9 +341,9 @@ async function run() {
         },
         encoding: "utf8"
       });
-      assert(watchdogWebModeBypass.status === 0, `watchdog should bypass stale heartbeat while Web Mode provider is active:\n${watchdogWebModeBypass.stdout}\n${watchdogWebModeBypass.stderr}`);
-      assert(!watchdogWebModeBypass.stdout.includes("page-unhealthy"), "watchdog should not report page-unhealthy while Web Mode provider is active");
-      assert(!watchdogWebModeBypass.stdout.includes("dry-run restart suppressed"), "watchdog should not restart while Web Mode provider is active");
+      assert(watchdogWebModeBypass.status === 0, `watchdog should bypass stale heartbeat while Explore provider is active:\n${watchdogWebModeBypass.stdout}\n${watchdogWebModeBypass.stderr}`);
+      assert(!watchdogWebModeBypass.stdout.includes("page-unhealthy"), "watchdog should not report page-unhealthy while Explore provider is active");
+      assert(!watchdogWebModeBypass.stdout.includes("dry-run restart suppressed"), "watchdog should not restart while Explore provider is active");
     } finally {
       fakeProvider.kill("SIGTERM");
       await new Promise((resolve) => fakeProvider.once("exit", resolve));

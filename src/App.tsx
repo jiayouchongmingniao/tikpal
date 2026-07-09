@@ -9,7 +9,7 @@ import { useBrowserKioskGuard } from "./hooks/useBrowserKioskGuard";
 import { useKioskGestures } from "./hooks/useKioskGestures";
 import { useRoomExperience } from "./hooks/useRoomExperience";
 import { useTikpalState } from "./hooks/useTikpalState";
-import { fetchRoomExperienceState, sendKioskHeartbeat, sendWebModeAction } from "./api/tikpalClient";
+import { fetchRoomExperienceState, fetchWebModeState, sendKioskHeartbeat, sendWebModeAction } from "./api/tikpalClient";
 import type { AppMode, BackgroundVideoSummary, FontTheme, LyricsFontSize, RememberedAudioSource, RoomExperienceActionRequest, RoomExperienceState, RoomMode, SourceSwitchTarget, SurfaceTheme, TikpalState } from "./types";
 
 const FONT_THEME_STORAGE_KEY = "tikpal.fontTheme";
@@ -501,10 +501,12 @@ export default function App() {
   }, [refresh, refreshRoomExperience, roomExperience.mode, sendSourceSwitch, tikpalState.audio.currentSource.connectionState, tikpalState.audio.currentSource.id]);
 
   const handleOpenWebMode = useCallback(async () => {
-    await sendWebModeAction({ type: "open", provider: "spotify" });
+    const webMode = await fetchWebModeState().catch(() => null);
+    await sendWebModeAction({ type: "open", provider: webMode?.activeProvider ?? "spotify" });
     await refresh();
     await refreshRoomExperience();
-  }, [refresh, refreshRoomExperience]);
+    returnAmbient();
+  }, [refresh, refreshRoomExperience, returnAmbient]);
 
   const restoreSceneSoundAfterStaleHifiRestore = useCallback(async () => {
     let latestRoom = roomExperienceRef.current;

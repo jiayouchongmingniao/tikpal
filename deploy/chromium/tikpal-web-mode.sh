@@ -32,6 +32,10 @@ fi
 : "${TIKPAL_WEB_MODE_PANEL_WINDOW:=640x720}"
 : "${TIKPAL_WEB_MODE_PANEL_POSITION:=1920,0}"
 : "${TIKPAL_WEB_MODE_SIDE_PANEL_URL:=http://localhost:4173/side-panel}"
+: "${TIKPAL_WEB_MODE_TRANSITION_URL:=http://127.0.0.1:4173/web-mode-transition.html}"
+: "${TIKPAL_WEB_MODE_STAGE_POSITION:=2560,0}"
+: "${TIKPAL_WEB_MODE_STAGE_REVEAL_MS:=650}"
+: "${TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS:=2}"
 : "${TIKPAL_WEB_MODE_DEFAULT_PROXY_URL:=http://192.168.10.140:7897}"
 : "${TIKPAL_WEB_MODE_ONBOARD:=1}"
 : "${TIKPAL_WEB_MODE_ALSA_OUTPUT_DEVICE:=${TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE:-}}"
@@ -39,6 +43,8 @@ fi
 : "${TIKPAL_WEB_MODE_SINGLE_PROVIDER_WINDOW:=1}"
 : "${TIKPAL_WEB_MODE_POPUP_BLOCKING:=1}"
 : "${TIKPAL_WEB_MODE_PROVIDER_DEBUG_PORT:=9234}"
+: "${TIKPAL_WEB_MODE_PROVIDER_GUARD:=1}"
+: "${TIKPAL_WEB_MODE_ERROR_PAGE_URL:=http://127.0.0.1:4173/web-mode-error.html}"
 : "${TIKPAL_WEB_MODE_QQ_AUTO_CONFIRM:=1}"
 
 log() {
@@ -48,6 +54,18 @@ log() {
 fail() {
   log "ERROR: $*"
   exit 1
+}
+
+with_web_mode_lock() {
+  mkdir -p "$TIKPAL_WEB_MODE_PROFILE_ROOT"
+  if command -v flock >/dev/null 2>&1; then
+    (
+      flock -x -w "$TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS" 9 || fail "Explore is already switching"
+      "$@"
+    ) 9>"$TIKPAL_WEB_MODE_PROFILE_ROOT/web-mode.lock"
+    return
+  fi
+  "$@"
 }
 
 is_enabled() {
@@ -93,12 +111,45 @@ provider_url() {
     apple_music) printf '%s\n' "${TIKPAL_WEB_MODE_APPLE_MUSIC_URL:-https://music.apple.com/}" ;;
     tidal) printf '%s\n' "${TIKPAL_WEB_MODE_TIDAL_URL:-https://listen.tidal.com/}" ;;
     qobuz) printf '%s\n' "${TIKPAL_WEB_MODE_QOBUZ_URL:-https://play.qobuz.com/}" ;;
-    deezer) printf '%s\n' "${TIKPAL_WEB_MODE_DEEZER_URL:-https://www.deezer.com/}" ;;
+    deezer) printf '%s\n' "${TIKPAL_WEB_MODE_DEEZER_URL:-https://www.deezer.com/en/channels/explore/}" ;;
     amazon_music) printf '%s\n' "${TIKPAL_WEB_MODE_AMAZON_MUSIC_URL:-https://music.amazon.com/}" ;;
     qq_music) printf '%s\n' "${TIKPAL_WEB_MODE_QQ_MUSIC_URL:-https://y.qq.com/n/ryqq/player}" ;;
     netease_music) printf '%s\n' "${TIKPAL_WEB_MODE_NETEASE_MUSIC_URL:-https://music.163.com/st/webplayer}" ;;
-    *) fail "Unknown Web Mode provider '$1'" ;;
+    *) fail "Unknown Explore provider '$1'" ;;
   esac
+}
+
+provider_label() {
+  case "$1" in
+    spotify) printf '%s\n' "Spotify" ;;
+    youtube_music) printf '%s\n' "YouTube Music" ;;
+    apple_music) printf '%s\n' "Apple Music" ;;
+    tidal) printf '%s\n' "TIDAL" ;;
+    qobuz) printf '%s\n' "Qobuz" ;;
+    deezer) printf '%s\n' "Deezer" ;;
+    amazon_music) printf '%s\n' "Amazon Music" ;;
+    qq_music) printf '%s\n' "QQ Music" ;;
+    netease_music) printf '%s\n' "NetEase Cloud Music" ;;
+    *) printf '%s\n' "$1" ;;
+  esac
+}
+
+provider_debug_port() {
+  local base="$TIKPAL_WEB_MODE_PROVIDER_DEBUG_PORT"
+  local offset=0
+  [[ "$base" =~ ^[0-9]+$ ]] || base=9234
+  case "$1" in
+    spotify) offset=0 ;;
+    youtube_music) offset=1 ;;
+    apple_music) offset=2 ;;
+    tidal) offset=3 ;;
+    qobuz) offset=4 ;;
+    deezer) offset=5 ;;
+    amazon_music) offset=6 ;;
+    qq_music) offset=7 ;;
+    netease_music) offset=8 ;;
+  esac
+  printf '%s\n' "$((base + offset))"
 }
 
 read_flags() {
@@ -169,6 +220,17 @@ fs.writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`);
 NODE
 }
 
+read_runtime_active_provider() {
+  node - "$TIKPAL_WEB_MODE_STATE_PATH" <<'NODE'
+const fs = require("node:fs");
+const [statePath] = process.argv.slice(2);
+try {
+  const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
+  process.stdout.write(String(state.activeProvider || ""));
+} catch {}
+NODE
+}
+
 chromium_base_args() {
   printf '%s\n' \
     "--force-dark-mode" \
@@ -190,7 +252,7 @@ ensure_onboard() {
   fi
 
   if ! pgrep -u "$(id -u)" -x onboard >/dev/null 2>&1; then
-    DISPLAY="$TIKPAL_KIOSK_DISPLAY" onboard >/dev/null 2>&1 &
+    (DISPLAY="$TIKPAL_KIOSK_DISPLAY" onboard >/dev/null 2>&1 || true) 9>&- &
     sleep 0.8
   fi
 
@@ -201,6 +263,20 @@ ensure_onboard() {
 
 close_side_panel() {
   pkill -f -- "--user-data-dir=$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel" >/dev/null 2>&1 || true
+}
+
+side_panel_window_visible() {
+  local panel_profile="$1"
+  local window pid
+  command -v xdotool >/dev/null 2>&1 || return 1
+  while IFS= read -r window; do
+    [[ -n "$window" ]] || continue
+    pid="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool getwindowpid "$window" 2>/dev/null || true)"
+    if process_tree_uses_profile "$pid" "$panel_profile"; then
+      return 0
+    fi
+  done < <(visible_chromium_windows)
+  return 1
 }
 
 window_guard_pid_file() {
@@ -218,25 +294,53 @@ stop_window_guard() {
   rm -f "$pid_file"
 }
 
-qq_auto_confirm_pid_file() {
-  printf '%s\n' "$TIKPAL_WEB_MODE_PROFILE_ROOT/qq-confirm.pid"
+provider_guard_pid_file() {
+  printf '%s\n' "$TIKPAL_WEB_MODE_PROFILE_ROOT/provider-guard.pid"
 }
 
-stop_qq_auto_confirm() {
+stop_provider_guard() {
   local pid_file pid
-  pid_file="$(qq_auto_confirm_pid_file)"
-  [[ -r "$pid_file" ]] || return 0
-  pid="$(cat "$pid_file" 2>/dev/null || true)"
-  if [[ "$pid" =~ ^[0-9]+$ ]]; then
-    kill "$pid" >/dev/null 2>&1 || true
-  fi
-  rm -f "$pid_file"
+  for pid_file in "$(provider_guard_pid_file)" "$TIKPAL_WEB_MODE_PROFILE_ROOT/qq-confirm.pid"; do
+    [[ -r "$pid_file" ]] || {
+      rm -f "$pid_file"
+      continue
+    }
+    pid="$(cat "$pid_file" 2>/dev/null || true)"
+    if [[ "$pid" =~ ^[0-9]+$ ]]; then
+      kill "$pid" >/dev/null 2>&1 || true
+    fi
+    rm -f "$pid_file"
+  done
 }
 
 close_provider_windows() {
   stop_window_guard
-  stop_qq_auto_confirm
+  stop_provider_guard
   pkill -f -- "--user-data-dir=$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/" >/dev/null 2>&1 || true
+}
+
+close_web_mode() {
+  close_provider_windows
+  close_side_panel
+  close_transition_veil
+  write_runtime_provider_state ""
+}
+
+close_provider_profile() {
+  local provider_profile="$1"
+  [[ -n "$provider_profile" ]] || return 0
+  pkill -f -- "--user-data-dir=$provider_profile" >/dev/null 2>&1 || true
+}
+
+close_other_provider_profiles() {
+  local keep_profile="$1"
+  local profile
+  [[ -d "$TIKPAL_WEB_MODE_PROFILE_ROOT/providers" ]] || return 0
+  for profile in "$TIKPAL_WEB_MODE_PROFILE_ROOT"/providers/*; do
+    [[ -d "$profile" ]] || continue
+    [[ "$profile" == "$keep_profile" ]] && continue
+    close_provider_profile "$profile"
+  done
 }
 
 process_tree_uses_profile() {
@@ -289,10 +393,64 @@ tile_window() {
     windowmove "$window" "$x" "$y" >/dev/null 2>&1 || true
 }
 
+raise_window() {
+  local window="$1"
+  [[ -n "$window" ]] || return 0
+  DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowraise "$window" windowactivate "$window" >/dev/null 2>&1 || true
+}
+
+first_window_for_profile() {
+  local profile="$1"
+  local window pid geometry width height area best_window="" best_area=0
+  command -v xdotool >/dev/null 2>&1 || return 1
+  while IFS= read -r window; do
+    [[ -n "$window" ]] || continue
+    pid="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool getwindowpid "$window" 2>/dev/null || true)"
+    process_tree_uses_profile "$pid" "$profile" || continue
+    geometry="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool getwindowgeometry "$window" 2>/dev/null || true)"
+    width="$(printf '%s\n' "$geometry" | awk -F'[ x]+' '/Geometry:/{print $3}')"
+    height="$(printf '%s\n' "$geometry" | awk -F'[ x]+' '/Geometry:/{print $4}')"
+    [[ "$width" =~ ^[0-9]+$ && "$height" =~ ^[0-9]+$ ]] || continue
+    area=$((width * height))
+    if [[ "$area" -gt "$best_area" ]]; then
+      best_area="$area"
+      best_window="$window"
+    fi
+  done < <(all_chromium_windows)
+  if [[ -n "$best_window" && "$best_area" -gt 100000 ]]; then
+    printf '%s\n' "$best_window"
+    return 0
+  fi
+  return 1
+}
+
+wait_for_profile_window() {
+  local profile="$1"
+  local attempts="${2:-50}"
+  local window
+  while [[ "$attempts" -gt 0 ]]; do
+    window="$(first_window_for_profile "$profile" || true)"
+    if [[ -n "$window" ]]; then
+      printf '%s\n' "$window"
+      return 0
+    fi
+    sleep 0.1
+    attempts=$((attempts - 1))
+  done
+  return 1
+}
+
 visible_chromium_windows() {
   {
     DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool search --onlyvisible --class chromium 2>/dev/null || true
     DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool search --onlyvisible --class Chromium-browser 2>/dev/null || true
+  } | awk 'NF && !seen[$0]++'
+}
+
+all_chromium_windows() {
+  {
+    DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool search --class chromium 2>/dev/null || true
+    DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool search --class Chromium-browser 2>/dev/null || true
   } | awk 'NF && !seen[$0]++'
 }
 
@@ -354,7 +512,7 @@ start_window_guard() {
 
   stop_window_guard
   mkdir -p "$TIKPAL_WEB_MODE_PROFILE_ROOT"
-  nohup "$SCRIPT_DIR/tikpal-web-mode.sh" guard "$provider_profile" "$panel_profile" >/dev/null 2>&1 &
+  nohup "$SCRIPT_DIR/tikpal-web-mode.sh" guard "$provider_profile" "$panel_profile" >/dev/null 2>&1 9>&- &
   printf '%s\n' "$!" > "$(window_guard_pid_file)"
 }
 
@@ -369,34 +527,68 @@ run_window_guard() {
   done
 }
 
-start_qq_auto_confirm() {
+start_provider_guard() {
   local provider="$1"
   local provider_profile="$2"
-  local helper="$SCRIPT_DIR/tikpal-web-mode-qq-confirm.mjs"
-  [[ "$provider" == "qq_music" ]] || return 0
-  is_enabled "$TIKPAL_WEB_MODE_QQ_AUTO_CONFIRM" || return 0
+  local provider_url_value="$3"
+  local proxy_enabled="$4"
+  local provider_port="${5:-$TIKPAL_WEB_MODE_PROVIDER_DEBUG_PORT}"
+  local helper="$SCRIPT_DIR/tikpal-web-mode-guard.mjs"
+  local proxy_mode="direct"
+  is_enabled "$TIKPAL_WEB_MODE_PROVIDER_GUARD" || return 0
   [[ -f "$helper" ]] || {
-    log "WARN: QQ auto-confirm helper missing: $helper"
+    log "WARN: Explore provider guard missing: $helper"
     return 0
   }
   command -v node >/dev/null 2>&1 || {
-    log "WARN: node not found; QQ auto-confirm disabled"
+    log "WARN: node not found; Explore provider guard disabled"
     return 0
   }
+  [[ "$proxy_enabled" == "1" ]] && proxy_mode="proxy"
 
-  stop_qq_auto_confirm
+  stop_provider_guard
   mkdir -p "$TIKPAL_WEB_MODE_PROFILE_ROOT"
+  TIKPAL_WEB_MODE_PROVIDER_ID="$provider" \
+  TIKPAL_WEB_MODE_PROVIDER_LABEL="$(provider_label "$provider")" \
   TIKPAL_WEB_MODE_PROVIDER_PROFILE="$provider_profile" \
-  TIKPAL_WEB_MODE_PROVIDER_DEBUG_PORT="$TIKPAL_WEB_MODE_PROVIDER_DEBUG_PORT" \
-    node "$helper" >/dev/null 2>&1 &
-  printf '%s\n' "$!" > "$(qq_auto_confirm_pid_file)"
+  TIKPAL_WEB_MODE_PROVIDER_URL="$provider_url_value" \
+  TIKPAL_WEB_MODE_PROXY_MODE="$proxy_mode" \
+  TIKPAL_WEB_MODE_ERROR_PAGE_URL="$TIKPAL_WEB_MODE_ERROR_PAGE_URL" \
+  TIKPAL_WEB_MODE_PROVIDER_DEBUG_PORT="$provider_port" \
+  TIKPAL_WEB_MODE_QQ_AUTO_CONFIRM="$TIKPAL_WEB_MODE_QQ_AUTO_CONFIRM" \
+    node "$helper" >/dev/null 2>&1 9>&- &
+  printf '%s\n' "$!" > "$(provider_guard_pid_file)"
+}
+
+close_transition_veil() {
+  pkill -f -- "--user-data-dir=$TIKPAL_WEB_MODE_PROFILE_ROOT/transition" >/dev/null 2>&1 || true
+}
+
+launch_transition_veil() {
+  local transition_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/transition"
+  local window
+  close_transition_veil
+  mkdir -p "$transition_profile"
+  ensure_chromium_profile_prefs "$transition_profile"
+  mapfile -t flags < <(read_flags)
+  mapfile -t base_args < <(chromium_base_args)
+  DISPLAY="$TIKPAL_KIOSK_DISPLAY" "$TIKPAL_CHROMIUM_BIN" \
+    "${flags[@]}" \
+    "${base_args[@]}" \
+    "--app=$TIKPAL_WEB_MODE_TRANSITION_URL" \
+    "--user-data-dir=$transition_profile" \
+    "--window-position=$TIKPAL_WEB_MODE_LEFT_POSITION" \
+    "--window-size=$(normalize_window_size "$TIKPAL_WEB_MODE_LEFT_WINDOW")" \
+    >/dev/null 2>&1 9>&- &
+  window="$(wait_for_profile_window "$transition_profile" 20 || true)"
+  if [[ -n "$window" ]]; then
+    tile_window "$window" "$TIKPAL_WEB_MODE_LEFT_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
+    raise_window "$window"
+  fi
 }
 
 launch_side_panel() {
   local panel_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"
-  if pgrep -f -- "--user-data-dir=$panel_profile" >/dev/null 2>&1; then
-    return 0
-  fi
   mkdir -p "$panel_profile"
   ensure_chromium_profile_prefs "$panel_profile"
   mapfile -t flags < <(read_flags)
@@ -408,24 +600,45 @@ launch_side_panel() {
     "--user-data-dir=$panel_profile" \
     "--window-position=$TIKPAL_WEB_MODE_PANEL_POSITION" \
     "--window-size=$(normalize_window_size "$TIKPAL_WEB_MODE_PANEL_WINDOW")" \
-    >/dev/null 2>&1 &
+    >/dev/null 2>&1 9>&- &
+}
+
+ensure_side_panel() {
+  local panel_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"
+  if side_panel_window_visible "$panel_profile"; then
+    return 0
+  fi
+  close_side_panel
+  launch_side_panel
 }
 
 open_provider() {
   local provider="$1"
   local url
   local provider_profile
+  local provider_port
+  local current_provider
+  local current_profile
+  local target_window
   local proxy_line proxy_enabled proxy_url
   url="$(provider_url "$provider")"
   provider_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/$provider"
+  provider_port="$(provider_debug_port "$provider")"
+  current_provider="$(read_runtime_active_provider)"
+  current_profile=""
+  if [[ -n "$current_provider" ]]; then
+    current_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/$current_provider"
+  fi
   proxy_line="$(read_proxy_settings)"
   proxy_enabled="${proxy_line%%$'\t'*}"
   proxy_url="${proxy_line#*$'\t'}"
 
   mkdir -p "$provider_profile"
   ensure_chromium_profile_prefs "$provider_profile"
-  close_provider_windows
-  ensure_onboard
+  stop_window_guard
+  close_provider_profile "$provider_profile"
+  sleep 0.2
+  launch_transition_veil
   mapfile -t flags < <(read_flags)
   mapfile -t base_args < <(chromium_base_args)
 
@@ -435,8 +648,8 @@ open_provider() {
     "--app=$url"
     "--user-data-dir=$provider_profile"
     "--remote-debugging-address=127.0.0.1"
-    "--remote-debugging-port=$TIKPAL_WEB_MODE_PROVIDER_DEBUG_PORT"
-    "--window-position=$TIKPAL_WEB_MODE_LEFT_POSITION"
+    "--remote-debugging-port=$provider_port"
+    "--window-position=$TIKPAL_WEB_MODE_STAGE_POSITION"
     "--window-size=$(normalize_window_size "$TIKPAL_WEB_MODE_LEFT_WINDOW")"
   )
 
@@ -448,13 +661,28 @@ open_provider() {
   fi
   if [[ "$proxy_enabled" == "1" && -n "$proxy_url" ]]; then
     args+=("--proxy-server=$proxy_url")
+    args+=("--proxy-bypass-list=localhost;127.0.0.1;<local>")
   fi
 
-  DISPLAY="$TIKPAL_KIOSK_DISPLAY" "$TIKPAL_CHROMIUM_BIN" "${args[@]}" >/dev/null 2>&1 &
-  launch_side_panel
+  DISPLAY="$TIKPAL_KIOSK_DISPLAY" "$TIKPAL_CHROMIUM_BIN" "${args[@]}" >/dev/null 2>&1 9>&- &
+  start_provider_guard "$provider" "$provider_profile" "$url" "$proxy_enabled" "$provider_port"
+  ensure_side_panel
+  target_window="$(wait_for_profile_window "$provider_profile" 70 || true)"
+  if [[ -z "$target_window" ]]; then
+    close_transition_veil
+    close_provider_profile "$provider_profile"
+    [[ -n "$current_profile" ]] && start_window_guard "$current_profile" "$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"
+    fail "$(provider_label "$provider") did not open"
+  fi
+  tile_window "$target_window" "$TIKPAL_WEB_MODE_LEFT_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
+  raise_window "$target_window"
+  sleep "$(awk "BEGIN { printf \"%.3f\", $TIKPAL_WEB_MODE_STAGE_REVEAL_MS / 1000 }")"
+  close_other_provider_profiles "$provider_profile"
+  close_transition_veil
+  tile_window "$target_window" "$TIKPAL_WEB_MODE_LEFT_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
+  raise_window "$target_window"
   write_runtime_provider_state "$provider"
   start_window_guard "$provider_profile" "$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"
-  start_qq_auto_confirm "$provider" "$provider_profile"
   log "opened $provider"
 }
 
@@ -463,6 +691,7 @@ check_runtime() {
   log "display: $TIKPAL_KIOSK_DISPLAY"
   log "chromium: $TIKPAL_CHROMIUM_BIN"
   log "left: $TIKPAL_WEB_MODE_LEFT_POSITION $(normalize_window_size "$TIKPAL_WEB_MODE_LEFT_WINDOW")"
+  log "stage: $TIKPAL_WEB_MODE_STAGE_POSITION"
   log "panel: $TIKPAL_WEB_MODE_PANEL_POSITION $(normalize_window_size "$TIKPAL_WEB_MODE_PANEL_WINDOW")"
   log "audio: ${TIKPAL_WEB_MODE_ALSA_OUTPUT_DEVICE:-default}"
   log "window guard: $TIKPAL_WEB_MODE_WINDOW_GUARD"
@@ -470,7 +699,12 @@ check_runtime() {
   log "popup blocking: $TIKPAL_WEB_MODE_POPUP_BLOCKING"
   log "extension: $TIKPAL_WEB_MODE_EXTENSION_ENABLED $TIKPAL_WEB_MODE_EXTENSION_DIR"
   log "provider debug: 127.0.0.1:$TIKPAL_WEB_MODE_PROVIDER_DEBUG_PORT"
-  log "qq auto confirm: $TIKPAL_WEB_MODE_QQ_AUTO_CONFIRM"
+  log "provider debug stride: per-provider"
+  log "provider guard: $TIKPAL_WEB_MODE_PROVIDER_GUARD"
+  log "switch lock timeout: ${TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS}s"
+  log "error page: $TIKPAL_WEB_MODE_ERROR_PAGE_URL"
+  log "transition page: $TIKPAL_WEB_MODE_TRANSITION_URL"
+  log "qq scoped auto confirm: $TIKPAL_WEB_MODE_QQ_AUTO_CONFIRM"
   log "settings: $TIKPAL_WEB_MODE_SETTINGS_PATH"
   read_proxy_settings | awk -F '\t' '{ printf("[tikpal-web-mode] proxy: %s %s\n", $1 == "1" ? "enabled" : "disabled", $2) }'
   [[ -x "$TIKPAL_CHROMIUM_BIN" ]] || fail "Chromium binary is missing or not executable"
@@ -483,12 +717,10 @@ case "${1:-open}" in
     ;;
   open)
     check_runtime
-    open_provider "${2:-spotify}"
+    with_web_mode_lock open_provider "${2:-spotify}"
     ;;
   close)
-    close_provider_windows
-    close_side_panel
-    write_runtime_provider_state ""
+    with_web_mode_lock close_web_mode
     log "closed"
     ;;
   guard)

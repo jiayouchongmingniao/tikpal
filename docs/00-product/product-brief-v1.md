@@ -121,12 +121,12 @@ Console has no Home or Overview category. It opens directly to Signal, shows a l
 
 - Signal: audio output, DSP / CamillaDSP, display, Time & Night, font, skin, and lyrics.
 - Library: local library health, NAS source status, USB readiness, and library scan.
-- Link: network state, System/API status, and Web Mode proxy/keyboard setup.
+- Link: network state, System/API status, and Explore proxy/keyboard setup.
 - Care: reboot and shutdown.
 
 The Console surface is a refined listening panel, not a full NAS administration console. Kiosk NAS controls show current source health and can point users toward Library Scan, but complex SMB/NFS setup, credentials, mount editing, and scan logs belong to authenticated remote/admin flows.
 
-Web Mode is a convenience wrapper for official web players, not a Tikpal audio source. It opens providers such as Spotify, YouTube Music, Apple Music, TIDAL, Qobuz, Deezer, Amazon Music, QQ Music, and NetEase Cloud Music in a left browser window while a 640 x 720 Tikpal panel stays on the right for provider switching, global volume, proxy status, and Keyboard. Entering Web Mode pauses Tikpal playback and does not update `audio.rememberedSource`. Web access uses the configured HTTP proxy by default, with `http://192.168.10.140:7897` as the development value.
+Explore is a convenience wrapper for official web players, not a Tikpal audio source. It opens providers such as Spotify, YouTube Music, Apple Music, TIDAL, Qobuz, Deezer, Amazon Music, QQ Music, and NetEase Cloud Music in a left browser window while a 640 x 720 Tikpal panel stays on the right for provider switching, global volume, proxy status, and Keyboard. Entering Explore pauses Tikpal playback and does not update `audio.rememberedSource`. Web access uses the configured HTTP proxy by default, with `http://192.168.10.140:7897` as the development value.
 
 Dangerous actions must require confirmation.
 
