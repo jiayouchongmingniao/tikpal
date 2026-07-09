@@ -565,11 +565,16 @@ async function switchHifiAmbientSource(client, sourceId, exposeLabel, switchLabe
 }
 
 async function switchPlayerSourceAndExpectHandoff(client, sourceId, sourceLabel) {
+  await expectEventually(
+    client,
+    `document.querySelector('[data-source-item="${sourceId}"]:not(:disabled)') !== null`,
+    `${sourceLabel} source tab is ready`
+  );
   await evaluate(
     client,
     `
       (() => {
-        const target = document.querySelector('[data-source-item="${sourceId}"]');
+        const target = document.querySelector('[data-source-item="${sourceId}"]:not(:disabled)');
         target?.click();
         return Boolean(target);
       })()
@@ -643,7 +648,7 @@ function settingsSummaryExpression(section, expectedTitles) {
       if (!rects.length) return false;
       const first = rects[0];
       const sameSize = rects.every((rect) => Math.abs(rect.width - first.width) < 1 && Math.abs(rect.height - first.height) < 1);
-      const fixedHeight = rects.every((rect) => Math.abs(rect.height - 132) < 1);
+      const fixedHeight = rects.every((rect) => Math.abs(rect.height - 118) < 1);
       const noSpan = cards.every((node) => {
         const style = window.getComputedStyle(node);
         return style.gridColumnStart === 'auto' && style.gridColumnEnd === 'auto';
@@ -1701,8 +1706,20 @@ try {
   await evaluate(client, "document.querySelector('[data-ambient-source-toggle]')?.click()");
   await expectEventually(
     client,
-    "document.querySelectorAll('[data-ambient-source-picker] [data-ambient-source-option]').length === 6",
-    "Hi-Fi source picker opens six source choices"
+    "document.querySelectorAll('[data-ambient-source-picker] [data-ambient-source-option]').length === 7 && document.querySelector('[data-ambient-source-option=\"web-mode\"]') !== null",
+    "Hi-Fi source picker opens six source choices plus Web Mode"
+  );
+  await expect(
+    client,
+    `
+      (() => {
+        const options = [...document.querySelectorAll('[data-ambient-source-picker] [data-ambient-source-option]')];
+        if (options.length !== 7) return false;
+        const tops = options.map((option) => option.getBoundingClientRect().top);
+        return Math.max(...tops) - Math.min(...tops) < 2;
+      })()
+    `,
+    "Hi-Fi source picker keeps Web Mode on the first row"
   );
   await wait(5200);
   await expectEventually(client, "document.querySelector('[data-ambient-source-picker]') === null", "Hi-Fi source picker auto-closes after 5 seconds");
@@ -2222,8 +2239,20 @@ try {
   await expect(client, "document.querySelector('.ambient-screen.is-hud-visible') !== null", "single tap shows ambient HUD");
   await expectEventually(
     client,
-    "document.querySelectorAll('[data-ambient-source-picker] [data-ambient-source-option]').length === 6",
-    "ambient scene single tap opens six source choices"
+    "document.querySelectorAll('[data-ambient-source-picker] [data-ambient-source-option]').length === 7 && document.querySelector('[data-ambient-source-option=\"web-mode\"]') !== null",
+    "ambient scene single tap opens six source choices plus Web Mode"
+  );
+  await expect(
+    client,
+    `
+      (() => {
+        const options = [...document.querySelectorAll('[data-ambient-source-picker] [data-ambient-source-option]')];
+        if (options.length !== 7) return false;
+        const tops = options.map((option) => option.getBoundingClientRect().top);
+        return Math.max(...tops) - Math.min(...tops) < 2;
+      })()
+    `,
+    "ambient source picker keeps Web Mode on the first row"
   );
   await evaluate(client, "window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })); true");
   await expectEventually(client, "document.querySelector('[data-ambient-source-picker]') === null", "ambient scene source picker closes with Escape");
@@ -2532,10 +2561,10 @@ try {
   await expectEventually(
     client,
     "document.querySelector('.quick-settings.is-active') !== null && document.querySelector('.playlist-overlay') === null",
-    "ambient wheel down opens Quick Settings instead of playlist"
+    "ambient wheel down opens Console instead of playlist"
   );
   await evaluate(client, "document.querySelector('.overlay-backdrop')?.click();");
-  await expectEventually(client, "document.querySelector('.quick-settings.is-active') === null", "Quick Settings backdrop exits to ambient");
+  await expectEventually(client, "document.querySelector('.quick-settings.is-active') === null", "Console backdrop exits to ambient");
 
   await navigate(client, `${APP_URL}?mode=playlist`);
   await expect(
@@ -3236,13 +3265,13 @@ try {
     client,
     `
       (() => {
-        const expected = ['mpd', 'radio', 'spotify', 'airplay', 'bluetooth', 'upnp'];
+        const expected = ['mpd', 'radio', 'spotify', 'airplay', 'bluetooth', 'upnp', 'web-mode'];
         return expected.every((sourceId) => document.querySelector(\`[data-source-item="\${sourceId}"]\`))
           && document.querySelector('[data-source-item="playlist"]') === null
           && document.querySelector('[data-source-item="audio"]') === null;
       })()
     `,
-    "player source tabs include six visible source categories"
+    "player source tabs include six visible source categories plus Web Mode"
   );
   await evaluate(client, "document.querySelector('[data-source-item=\"radio\"]')?.click(); true");
   await expectEventually(
@@ -3521,20 +3550,42 @@ try {
   await expect(client, "document.querySelector('.player-overlay.is-active') === null", "backdrop click exits player");
 
   await navigate(client, `${APP_URL}?mode=quickSettings`);
-  await click(client, 1260, 210);
-  await expect(client, "document.querySelector('.quick-settings.is-active') !== null", "protected settings click stays in settings");
-  await expect(client, "document.querySelector('[data-settings-section=\"output\"]') !== null", "settings defaults to Preferences");
+  await click(client, 1260, 86);
+  await expect(client, "document.querySelector('.quick-settings.is-active') !== null", "protected Console click stays in Console");
+  await expect(client, "document.querySelector('[data-settings-section=\"output\"]') !== null", "Console defaults to Signal");
+  await expect(
+    client,
+    "document.querySelector('.console-title-block')?.textContent?.includes('Console') && document.querySelector('[data-console-now-playing]') !== null",
+    "Console shows the listening status header"
+  );
   await expect(
     client,
     `
       (() => {
-        const labels = [...document.querySelectorAll('.settings-nav-item span')].map((node) => node.textContent?.trim());
-        return labels.join('|') === 'Network|Preferences|System' && !labels.includes('Home');
+        const labels = [...document.querySelectorAll('.settings-top-tab span')].map((node) => node.textContent?.trim());
+        return !document.querySelector('.settings-nav')
+          && labels.join('|') === 'Signal|Library|Link|Care'
+          && !labels.includes('Home');
       })()
     `,
-    "settings nav has no Home section"
+    "Console chips replace the left nav without a Home section"
   );
-  await expect(client, settingsSummaryExpression("output", ["Audio Output", "DSP", "Display", "Time & Night", "Font", "Skin", "Lyrics"]), "settings Preferences summary keeps fixed four-column cards");
+  await expect(
+    client,
+    `
+      (() => {
+        const shell = document.querySelector('.quick-settings .settings-shell');
+        const backdrop = document.querySelector('.quick-settings .overlay-backdrop');
+        const shellStyle = shell ? getComputedStyle(shell) : null;
+        const backdropStyle = backdrop ? getComputedStyle(backdrop) : null;
+        const shellFilter = shellStyle?.backdropFilter || shellStyle?.webkitBackdropFilter || 'none';
+        const backdropFilter = backdropStyle?.backdropFilter || backdropStyle?.webkitBackdropFilter || 'none';
+        return shellFilter === 'none' && backdropFilter === 'none';
+      })()
+    `,
+    "Console avoids heavy backdrop blur"
+  );
+  await expect(client, settingsSummaryExpression("output", ["Audio Output", "DSP", "Display", "Time & Night", "Font", "Skin", "Lyrics"]), "Console Signal summary keeps fixed hardware tiles");
   await expect(
     client,
     `
@@ -3544,22 +3595,22 @@ try {
         return Boolean(shell && content && shell.scrollHeight <= shell.clientHeight && content.scrollHeight <= content.clientHeight);
       })()
     `,
-    "settings shell stays within kiosk height"
+    "Console shell stays within kiosk height"
   );
 
   await evaluate(
     client,
     `
       (() => {
-        const section = [...document.querySelectorAll('.settings-nav-item')].find((node) => node.textContent.includes('Preferences'));
+        const section = document.querySelector('[data-settings-tab="output"]');
         section?.click();
         return Boolean(section);
       })()
     `
   );
-  await expect(client, "document.querySelector('[data-settings-section=\"output\"]') !== null", "settings Preferences section opens");
-  await expect(client, "document.querySelector('[data-settings-detail]') === null", "settings Preferences summary stays summary-first");
-  await expect(client, settingsSummaryExpression("output", ["Audio Output", "DSP", "Display", "Time & Night", "Font", "Skin", "Lyrics"]), "settings Preferences remains a fixed four-column grid");
+  await expect(client, "document.querySelector('[data-settings-section=\"output\"]') !== null", "Console Signal section opens");
+  await expect(client, "document.querySelector('[data-settings-detail]') === null", "Console Signal summary stays summary-first");
+  await expect(client, settingsSummaryExpression("output", ["Audio Output", "DSP", "Display", "Time & Night", "Font", "Skin", "Lyrics"]), "Console Signal remains a fixed hardware tile grid");
 
   await evaluate(
     client,
@@ -3571,8 +3622,8 @@ try {
       })()
     `
   );
-  await expect(client, "document.querySelector('[data-settings-detail=\"display\"]') !== null", "settings display detail opens");
-  await expect(client, "document.querySelector('.display-brightness-panel-detail') !== null", "settings display detail shows brightness controls");
+  await expect(client, "document.querySelector('[data-settings-detail=\"display\"]') !== null", "Console display drawer opens");
+  await expect(client, "document.querySelector('.display-brightness-panel-detail') !== null", "Console display drawer shows brightness controls");
   await expect(
     client,
     `
@@ -3581,7 +3632,7 @@ try {
         return Boolean(content && content.scrollHeight <= content.clientHeight);
       })()
     `,
-    "settings display detail stays within kiosk height"
+    "Console display drawer stays within kiosk height"
   );
 
   await evaluate(
@@ -3594,7 +3645,7 @@ try {
       })()
     `
   );
-  await expect(client, "document.querySelector('[data-settings-detail]') === null", "settings display detail closes back to summary");
+  await expect(client, "document.querySelector('[data-settings-detail]') === null", "Console display drawer closes back to summary");
 
   await evaluate(
     client,
@@ -3606,11 +3657,11 @@ try {
       })()
     `
   );
-  await expect(client, "document.querySelector('[data-settings-detail=\"night\"]') !== null", "settings night detail opens");
+  await expect(client, "document.querySelector('[data-settings-detail=\"night\"]') !== null", "Console night drawer opens");
   await expect(
     client,
     "document.querySelector('.night-settings-panel select') !== null && document.querySelector('.night-settings-panel input[type=\"time\"]') !== null",
-    "settings night detail exposes timezone and time controls"
+    "Console night drawer exposes timezone and time controls"
   );
   await expect(
     client,
@@ -3620,7 +3671,7 @@ try {
         return Boolean(content && content.scrollHeight <= content.clientHeight);
       })()
     `,
-    "settings night detail stays within kiosk height"
+    "Console night drawer stays within kiosk height"
   );
 
   await evaluate(
@@ -3633,7 +3684,7 @@ try {
       })()
     `
   );
-  await expect(client, "document.querySelector('[data-settings-detail]') === null", "settings night detail closes back to summary");
+  await expect(client, "document.querySelector('[data-settings-detail]') === null", "Console night drawer closes back to summary");
 
   await evaluate(
     client,
@@ -3645,11 +3696,11 @@ try {
       })()
     `
   );
-  await expect(client, "document.querySelector('[data-settings-detail=\"font\"]') !== null", "settings font detail opens");
+  await expect(client, "document.querySelector('[data-settings-detail=\"font\"]') !== null", "Console font drawer opens");
   await expect(
     client,
     "document.querySelectorAll('.font-theme-options-detail .font-theme-option').length >= 6 && document.querySelector('.font-theme-options-detail')?.textContent?.includes('Hardware UI')",
-    "settings font detail shows expanded modern font presets"
+    "Console font drawer shows expanded modern font presets"
   );
   await expect(
     client,
@@ -3659,7 +3710,7 @@ try {
         return Boolean(content && content.scrollHeight <= content.clientHeight);
       })()
     `,
-    "settings font detail stays within kiosk height"
+    "Console font drawer stays within kiosk height"
   );
 
   await evaluate(
@@ -3672,20 +3723,70 @@ try {
       })()
     `
   );
-  await expect(client, "document.querySelector('[data-settings-detail]') === null", "settings font detail closes back to summary");
+  await expect(client, "document.querySelector('[data-settings-detail]') === null", "Console font drawer closes back to summary");
 
   await evaluate(
     client,
     `
       (() => {
-        const section = [...document.querySelectorAll('.settings-nav-item')].find((node) => node.textContent.includes('System'));
+        const section = document.querySelector('[data-settings-tab="library"]');
         section?.click();
         return Boolean(section);
       })()
     `
   );
-  await expect(client, "document.querySelector('[data-settings-section=\"system\"]') !== null", "settings system section opens");
-  await expect(client, settingsSummaryExpression("system", ["Library", "Restart", "Shutdown"]), "settings system summary keeps fixed four-column cards");
+  await expect(client, "document.querySelector('[data-settings-section=\"library\"]') !== null", "Console Library section opens");
+  await expect(client, settingsSummaryExpression("library", ["Local Library", "NAS Sources", "USB", "Library Scan"]), "Console Library summary keeps fixed hardware tiles");
+  await evaluate(
+    client,
+    `
+      (() => {
+        const target = [...document.querySelectorAll('.settings-card-button')].find((node) => node.textContent.includes('NAS Sources'));
+        target?.click();
+        return Boolean(target);
+      })()
+    `
+  );
+  await expect(client, "document.querySelector('[data-settings-detail=\"nas\"]') !== null", "Console NAS drawer opens");
+  await expect(client, "document.querySelector('.nas-source-detail') !== null", "Console NAS drawer shows source status");
+  await expect(
+    client,
+    `
+      (() => {
+        const content = document.querySelector('.settings-content');
+        return Boolean(content && content.scrollHeight <= content.clientHeight);
+      })()
+    `,
+    "Console NAS drawer stays within kiosk height"
+  );
+  await evaluate(
+    client,
+    `
+      (() => {
+        const target = document.querySelector('.settings-detail-back');
+        target?.click();
+        return Boolean(target);
+      })()
+    `
+  );
+
+  await evaluate(
+    client,
+    `
+      (() => {
+        const section = document.querySelector('[data-settings-tab="system"]');
+        section?.click();
+        return Boolean(section);
+      })()
+    `
+  );
+  await expect(client, "document.querySelector('[data-settings-section=\"system\"]') !== null", "Console Care section opens");
+  await expect(
+    client,
+    "[...document.querySelectorAll('.settings-top-tab.is-active')].length === 1 && document.querySelector('.settings-top-tab.is-active')?.textContent?.trim() === 'Care'",
+    "Console only highlights the active Care chip"
+  );
+  await expect(client, settingsSummaryExpression("system", ["Restart", "Shutdown"]), "Console Care summary keeps fixed hardware tiles");
 
   await evaluate(
     client,
@@ -3697,20 +3798,20 @@ try {
       })()
     `
   );
-  await expect(client, "document.querySelector('.settings-card-button.is-confirming') !== null", "restart requires a confirm step");
+  await expect(client, "document.querySelector('.settings-card-button.is-confirming') !== null", "Console restart requires a confirm step");
 
   await evaluate(
     client,
     `
       (() => {
-        const section = [...document.querySelectorAll('.settings-nav-item')].find((node) => node.textContent.includes('Network'));
+        const section = document.querySelector('[data-settings-tab="network"]');
         section?.click();
         return Boolean(section);
       })()
     `
   );
-  await expect(client, "document.querySelector('[data-settings-section=\"network\"]') !== null", "settings network section opens");
-  await expect(client, settingsSummaryExpression("network", ["Network", "System"]), "settings network summary keeps fixed four-column cards");
+  await expect(client, "document.querySelector('[data-settings-section=\"network\"]') !== null", "Console Link section opens");
+  await expect(client, settingsSummaryExpression("network", ["Network", "System", "Web Mode"]), "Console Link summary keeps fixed hardware tiles");
   await expect(
     client,
     `
@@ -3720,8 +3821,36 @@ try {
         return Boolean(shell && content && shell.scrollHeight <= shell.clientHeight && content.scrollHeight <= content.clientHeight);
       })()
     `,
-    "settings network summary stays within kiosk height"
+    "Console Link summary stays within kiosk height"
   );
+
+  await evaluate(
+    client,
+    `
+      (() => {
+        const target = [...document.querySelectorAll('.settings-card-button')].find((node) => node.textContent.includes('Web Mode'));
+        target?.click();
+        return Boolean(target);
+      })()
+    `
+  );
+  await expect(client, "document.querySelector('[data-settings-detail=\"web-mode\"]') !== null", "Console Web Mode drawer opens");
+  await expect(
+    client,
+    "document.querySelector('.web-mode-proxy-field input')?.value === 'http://192.168.10.140:7897' && document.querySelector('.web-mode-settings-actions button') !== null",
+    "Console Web Mode drawer exposes HTTP proxy setting and actions"
+  );
+  await evaluate(
+    client,
+    `
+      (() => {
+        const target = document.querySelector('.settings-detail-back');
+        target?.click();
+        return Boolean(target);
+      })()
+    `
+  );
+  await expect(client, "document.querySelector('[data-settings-detail]') === null", "Console Web Mode drawer closes back to summary");
 
   await evaluate(
     client,
@@ -3733,10 +3862,25 @@ try {
       })()
     `
   );
-  await expect(client, "document.querySelector('.settings-card-button.is-confirming') === null", "confirm state clears when another card is tapped");
+  await expect(client, "document.querySelector('.settings-card-button.is-confirming') === null", "Console confirm state clears when another card is tapped");
 
   await click(client, 10, 10);
-  await expect(client, "document.querySelector('.quick-settings.is-active') === null", "settings backdrop click exits settings");
+  await expect(client, "document.querySelector('.quick-settings.is-active') === null", "Console backdrop click exits Console");
+
+  await navigate(client, new URL("/side-panel", APP_URL).toString());
+  await expect(client, "document.querySelector('[data-web-mode-panel]') !== null && document.querySelector('.app-root') === null", "Web Mode side panel renders without the main kiosk app");
+  await expect(client, "document.querySelectorAll('[data-web-mode-provider]').length >= 9", "Web Mode side panel exposes common web player providers");
+  await evaluate(
+    client,
+    `
+      (() => {
+        const target = document.querySelector('[data-web-mode-provider="youtube_music"]');
+        target?.click();
+        return Boolean(target);
+      })()
+    `
+  );
+  await expectEventually(client, "document.querySelector('[data-web-mode-provider=\"youtube_music\"]')?.classList.contains('is-active')", "Web Mode side panel switches provider state");
 } finally {
   if (client) {
     await Promise.race([

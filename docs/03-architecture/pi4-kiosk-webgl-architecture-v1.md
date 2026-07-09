@@ -32,6 +32,7 @@ Current deployment package:
 - `server/index.mjs`: local API with mock-by-default playback plus optional native `mpc` backend for moOde devices.
 - `server/web.mjs`: production static server for `dist/`, with `/api` proxied to the API service.
 - `deploy/chromium/launch-tikpal-kiosk.sh`: Chromium launcher with `--check`, dedicated profile cleanup, dark startup flags, and display mode hooks.
+- `deploy/chromium/tikpal-web-mode.sh`: optional Web Mode launcher for left-side official web players, right-side Tikpal panel, provider profiles, proxy flags, and `onboard` setup.
 - `deploy/chromium/start-tikpal-kiosk-session.sh`: X-session entrypoint for systemd `startx`.
 - `deploy/chromium/tikpal-kiosk-healthcheck.sh`: bounded X/Chromium/web/API/GPU-reset healthcheck used by the system watchdog.
 - `deploy/systemd/install-systemd-services.sh`: installs `tikpal-api.service`, `tikpal-web.service`, and optionally `tikpal-kiosk.service`, kiosk diagnostics, and the kiosk watchdog timer.
@@ -63,6 +64,9 @@ TIKPAL_KIOSK_WATCHDOG_PAGE_HEARTBEAT_ENABLED=1
 TIKPAL_KIOSK_WATCHDOG_PAGE_HEARTBEAT_URL=http://127.0.0.1:8787/api/v1/kiosk/heartbeat
 TIKPAL_RENDERER=media
 TIKPAL_RENDER_PROFILE=pi4-media
+TIKPAL_WEB_MODE_DEFAULT_PROXY_URL=http://192.168.10.140:7897
+TIKPAL_WEB_MODE_LEFT_WINDOW=1920x720
+TIKPAL_WEB_MODE_PANEL_WINDOW=640x720
 TIKPAL_PLAYER_BACKEND=mock
 TIKPAL_MPD_HOST=127.0.0.1
 TIKPAL_MPD_PORT=6600
@@ -70,6 +74,12 @@ TIKPAL_MPD_DEFAULT_QUEUE_PATH=Codex
 ```
 
 These names are now used by `deploy/chromium/env.kiosk.example`.
+
+## Web Mode Runtime
+
+Web Mode is browser orchestration, not an audio source backend. The API stores provider/proxy state in `.tikpal/web-mode-state.json` and `.tikpal/web-mode-settings.json`, then calls `deploy/chromium/tikpal-web-mode.sh` to open or close the provider and side-panel windows. The launcher also writes runtime provider state after direct script actions, so `/side-panel` does not get stuck highlighting an old provider. The left provider Chromium gets `--proxy-server=<proxyUrl>` when proxy is enabled; the right `/side-panel` Chromium stays local and does not use the Web Mode proxy.
+
+The side panel is a separate React root at `/side-panel`, not the main kiosk `App`, so it must not post kiosk heartbeats. Opening Web Mode pauses current Tikpal playback and disables audible Scene Sound, but does not change `audio.currentSource` or `audio.rememberedSource`. Provider profiles load the small `deploy/chromium/web-mode-extension` helper to retarget common `_blank` links into the current left pane. The launcher keeps the provider profile to one visible window, tiles it to 1920 x 720, closes obvious ad/popup windows, and keeps the side panel at 640 x 720. `onboard` is started as a floating always-on-top keyboard, with a manual Keyboard action because Chromium input fields may not reliably trigger auto-show.
 
 ## Ambience Renderer Policy
 
@@ -104,7 +114,7 @@ Initial goals:
 | --- | --- |
 | Ambient flame/video | Stable 24-30fps minimum on Pi4 at 2560 x 720 output. |
 | Player overlay | Controls remain responsive under 100-150ms perceived input latency. |
-| Quick settings | No heavy continuous animation. |
+| Console | No heavy continuous animation. |
 | Status polling | Low frequency, event-driven where possible. |
 | Progress bar | 1Hz update is enough. |
 | Audio/system status | Refresh on change or slow interval, not high-frequency polling. |

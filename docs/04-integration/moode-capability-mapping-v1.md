@@ -4,7 +4,7 @@
 
 moOde / MPD owns playback and system capabilities. Tikpal owns a focused frontstage UI that displays and controls the subset appropriate for a 2560 x 720 touch device.
 
-Tikpal should not copy the complete moOde Web UI. It should map high-frequency audio and system capabilities into ambient HUD, player overlay, quick settings, and future detail panels.
+Tikpal should not copy the complete moOde Web UI. It should map high-frequency audio and system capabilities into ambient HUD, player overlay, Console, and future detail panels.
 
 ## Public State Draft
 
@@ -75,15 +75,15 @@ Exact wire shapes should be finalized during implementation, but these concepts 
 | Progress | Ambient weak progress, player full progress | 1Hz update is enough. |
 | Volume | Ambient status, player source header, volume panel, portable remote | `system.volume.percent` is the global truth; Ambient edge gestures, Player and Remote range sliders, and scene video audio all sync through `volume_set`. |
 | Audio format | Player status card | Format, bit depth, sample rate. |
-| Output device | Player status card, quick settings | USB, I2S, HDMI, DAC name, volume mode. |
+| Output device | Player status card, Console | USB, I2S, HDMI, DAC name, volume mode. |
 | Playback source / renderer | Ambient source picker, Player top state, source workspace | Six visible frontstage choices: Library, Radio, Spotify, AirPlay, Bluetooth, DLNA; internal Audio remains backend/status truth. |
 | Scene ambience audio | Quick menu, Ambient video layer, Player current source | Scene Sound is an exclusive source backed by the active background MP4; switching to any music/input source remutes the browser video and returns source truth to music/input playback. On Pi, Chromium should use the physical USB `dmix` output, while moOde/MPD keeps `_audioout` for Library, Radio, renderer intakes, and Hi-Fi capture. |
-| Network | Player status, quick settings | Ethernet/Wi-Fi, IP, connection state. |
-| Display brightness | Ambient edge gesture, quick settings display card | DDC/CI brightness percent when the monitor exposes VCP `0x10`. |
-| DSP / CamillaDSP | Player status, quick settings, Hi-Fi room mode | ON/OFF, selected EQ preset id/label, controllability, and available `flat` / `warm` / `vocal` preset summaries. |
-| Library scan | Quick settings | Update/rescan status and progress. |
-| System info | Quick settings | Version, uptime, CPU temperature, storage. |
-| Power actions | Quick settings | Reboot and shutdown with confirmation. |
+| Network | Player status, Console Link | Ethernet/Wi-Fi, IP, connection state. |
+| Display brightness | Ambient edge gesture, Console Signal display tile | DDC/CI brightness percent when the monitor exposes VCP `0x10`. |
+| DSP / CamillaDSP | Player status, Console Signal, Hi-Fi room mode | ON/OFF, selected EQ preset id/label, controllability, and available `flat` / `warm` / `vocal` preset summaries. |
+| Library scan | Console Library | Update/rescan status and progress. |
+| System info | Console Link | Version, uptime, CPU temperature, storage. |
+| Power actions | Console Care | Reboot and shutdown with confirmation. |
 
 ## Frontend Surface Rules
 
@@ -110,7 +110,7 @@ Avoid:
 
 - Full queue.
 - Library browser for direct track selection.
-- Settings controls.
+- Console controls.
 - Dense source list.
 - Admin diagnostics.
 
@@ -152,13 +152,18 @@ Avoid:
 - Complex MPD configuration.
 - Full CamillaDSP editing.
 
-### Quick Settings
+### Console
 
 Allowed:
 
-- Network: network summary and System/API status.
-- Preferences: audio output summary, DSP summary, display controls, Time & Night, font presets, surface skin presets, and lyrics settings.
-- System: library update plus reboot/shutdown with confirmation.
+- Console keeps the internal `quickSettings` route but presents Signal, Library, Link, and Care chips rather than a left sidebar.
+- Signal: audio output summary, DSP summary, display controls, Time & Night, font presets, surface skin presets, and lyrics settings.
+- Library: local library health, NAS source status, USB readiness, and library scan.
+- Link: network summary, System/API status, and Web Mode proxy/keyboard state.
+- Care: reboot/shutdown with confirmation.
+- The top status band may show current source, playback state, artwork/glyph, and audio format using existing state only.
+- NAS on the kiosk is status-first. Console can show the current library source and send users to the existing Library Scan action, but complex SMB/NFS setup, credentials, mount editing, and logs belong to authenticated remote/admin flows.
+- Web Mode controls in Console are limited to provider/proxy/keyboard support. Third-party music account login and playback stay inside the official web player window.
 
 Avoid:
 
@@ -220,6 +225,10 @@ Current Batch 3 mock API contract:
 | `/api/v1/remote/catalog` | `GET` | Safe portable-controller catalog: allowed action ids, playback modes, source targets, source summaries, room-mode presets, scene videos, and Hi-Fi EQ presets. `sourceTargets` intentionally remains limited to `mpd`, `radio`, `spotify`, `bluetooth`, `airplay`, and `upnp`; `scene` is controlled through scene sound actions instead. |
 | `/api/v1/remote/actions` | `POST` | Single portable-controller write path protected by `X-Tikpal-Key`. It supports playback transport, seek, play mode, volume, source selection, room mode/session/timer, scene selection/sound, Hi-Fi EQ, display brightness, and lyrics refresh. It does not expose reboot, shutdown, library scan, or playlist CRUD. |
 | `/api/v1/system/state` | `GET` | Combined playback, system, and runtime state for the UI. |
+| `/api/v1/web-mode/state` | `GET` | Web Mode provider catalog, active provider, last error, and proxy settings. Web Mode is a browser wrapper and is intentionally separate from audio source truth; the launcher also writes the same runtime state so `/side-panel` does not highlight a stale provider after direct script actions. |
+| `/api/v1/web-mode/actions` | `POST` | Opens, closes, or surfaces the Web Mode keyboard. `open` pauses Tikpal playback and launches the provider browser plus `/side-panel`; it does not write `audio.rememberedSource` or change `audio.currentSource`. The runtime keeps one visible provider window and retargets common new-window navigation into the left pane. |
+| `/api/v1/web-mode/settings` | `PATCH` | Persists Web Mode proxy settings in `.tikpal/web-mode-settings.json`. The default development proxy is HTTP `http://192.168.10.140:7897`. |
+| `/api/v1/web-mode/proxy-test` | `POST` | Validates the configured Web Mode proxy URL and, when explicitly enabled in runtime env, performs a light connectivity check. |
 | `/api/v1/audio/sources` | `GET` | Compact source list plus current source summary for `mpd`, `scene`, `audio`, `radio`, `spotify`, `bluetooth`, `airplay`, and `upnp`, including armed / connected state, `rememberedSource`, and any advertised receiver name that the frontend should surface during handoff or pairing. The Radio source summary carries `radioStationId` when a concrete station is active so Hi-Fi restore can compare stations instead of only comparing `source.id`. The Player source browser renders `mpd`, `radio`, `spotify`, `airplay`, `bluetooth`, and `upnp` as the six visible primary tabs; `scene` and `audio` remain internal/status state. |
 | `/api/v1/scene/context` | `GET` | Cached ambient context for copy: timezone, daypart, local hour, optional location/country, and optional weather condition. A `timeZone` query parameter is only a fallback when IP geolocation has no timezone. |
 | `/api/v1/audio/spectrum` | `GET` | Returns one frame with 32 normalized bands plus normalized L/R peaks. Mock mode remains mock-backed for local UI development; `mpc` mode requires `TIKPAL_HIFI_SPECTRUM_COMMAND`, which can point at `deploy/moode/tikpal-hifi-spectrum-capture.sh` to capture the Pi's real PCM stream without changing the UI. |
@@ -229,7 +238,7 @@ Current Batch 3 mock API contract:
 | `/api/v1/audio/playlist-actions` | `POST` | Backend-compatible playlist actions, including play, edit, duplicate, reorder, and delete. Playing a playlist still loads the MPD/local queue, but kiosk track selection should prefer `/api/v1/audio/library` plus `POST /api/v1/audio/source { target:"mpd", localTrackPath }`. |
 | `/api/v1/experience/state` | `GET` | Returns room mode, scene video id, optional per-mode `sceneVideoByMode`, Hi-Fi EQ preset id plus derived compatibility visual preset, timer state, and Auto Night schedule with selected IANA timezone. |
 | `/api/v1/experience/actions` | `POST` | Changes room modes, starts/stops timers, persists the current scene with `set_scene`, applies Hi-Fi EQ presets with `set_hifi_eq`, updates Scene Sound with `set_scene_sound`, and updates Auto Night schedule. Focus/Calm/Sleep enable Scene Sound by default and switch to `scene`; Hi-Fi never switches to `scene` and must not clear saved scene choices for the other modes. |
-| `/api/v1/audio/source` | `POST` | Switches source intake. `target=mpd` can include `localTrackPath` from the current local library manifest to clear/queue/play that local track and immediately update playback metadata. A bare `target=mpd` coming back from a non-Library source should retry the remembered `localTrackPath` first and fall back to the ordinary MPD queue if the file is gone. Stale paths from a replaced Library package are treated only as candidates and must not be written back after manifest validation fails. `target=radio` can include `radioStationId`; a bare `target=radio` should retry the remembered station first, then fall back through the normal catalog/default route. If the selected station fails and fallback advances, `rememberedSource.radioStationId` must be the recovered station. When the MPD snapshot later confirms a concrete Radio station is actually `playing`, state collection also syncs `rememberedSource.radioStationId` to that station so the UI and Hi-Fi restore do not drift from playback truth. `target=scene` can include the current background video id/label/src so Scene Sound metadata follows the active Ambient video. Switching to any non-scene target clears persisted `sceneSoundEnabled`; only visible source targets update `.tikpal/audio-source-memory.json`. |
+| `/api/v1/audio/source` | `POST` | Switches source intake. `target=mpd` can include `localTrackPath` from the current local library manifest to clear/queue/play that local track and immediately update playback metadata. A bare `target=mpd` coming back from a non-Library source should retry the remembered `localTrackPath` first and fall back to the ordinary MPD queue if the file is gone. Stale paths from a replaced Library package are treated only as candidates and must not be written back after manifest validation fails. `target=radio` can include `radioStationId`; a bare `target=radio` should retry the remembered station first, then fall back through the normal catalog/default route. If the selected station fails and fallback advances, `rememberedSource.radioStationId` must be the recovered station. When the MPD snapshot later confirms a concrete Radio station is actually `playing`, state collection also syncs `rememberedSource.radioStationId` to that station so the UI and Hi-Fi restore do not drift from playback truth. `target=scene` can include the current background video id/label/src so Scene Sound metadata follows the active Ambient video. Switching to any non-scene target clears persisted `sceneSoundEnabled`; only visible source targets update `.tikpal/audio-source-memory.json`. Web Mode is intentionally not a source target; it uses `/api/v1/web-mode/*` and leaves this source state untouched. |
 | `/api/v1/media/background-videos` | `GET` | Lists MP4 fireplace/background videos found under `public/assets` and scene OTA videos under `public/assets/scenes`, with optional `order`, `default`, and `catalogVersion` metadata so Ambient can switch the active background without a rebuild. |
 | `/api/v1/media/radio-logo` | `GET` / `HEAD` | Serves official local radio logos by `stationId=radio-<id>`. The API resolves only known moOde station ids, first by exact station-name image file and then by a repo-owned alias map for curated Tikpal station names. It never accepts arbitrary filesystem paths. Successful responses should be cacheable for one day so repeated Radio cover switches can reuse local artwork quickly. |
 | `/api/v1/playback/status` | `GET` | Playback summary only. |

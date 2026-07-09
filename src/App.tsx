@@ -9,7 +9,7 @@ import { useBrowserKioskGuard } from "./hooks/useBrowserKioskGuard";
 import { useKioskGestures } from "./hooks/useKioskGestures";
 import { useRoomExperience } from "./hooks/useRoomExperience";
 import { useTikpalState } from "./hooks/useTikpalState";
-import { fetchRoomExperienceState, sendKioskHeartbeat } from "./api/tikpalClient";
+import { fetchRoomExperienceState, sendKioskHeartbeat, sendWebModeAction } from "./api/tikpalClient";
 import type { AppMode, BackgroundVideoSummary, FontTheme, LyricsFontSize, RememberedAudioSource, RoomExperienceActionRequest, RoomExperienceState, RoomMode, SourceSwitchTarget, SurfaceTheme, TikpalState } from "./types";
 
 const FONT_THEME_STORAGE_KEY = "tikpal.fontTheme";
@@ -500,6 +500,12 @@ export default function App() {
     return nextState;
   }, [refresh, refreshRoomExperience, roomExperience.mode, sendSourceSwitch, tikpalState.audio.currentSource.connectionState, tikpalState.audio.currentSource.id]);
 
+  const handleOpenWebMode = useCallback(async () => {
+    await sendWebModeAction({ type: "open", provider: "spotify" });
+    await refresh();
+    await refreshRoomExperience();
+  }, [refresh, refreshRoomExperience]);
+
   const restoreSceneSoundAfterStaleHifiRestore = useCallback(async () => {
     let latestRoom = roomExperienceRef.current;
     try {
@@ -670,6 +676,7 @@ export default function App() {
         onPlaybackAction={sendPlaybackAction}
         onSystemAction={sendSystemAction}
         onSourceSwitch={handleSourceSwitch}
+        onOpenWebMode={handleOpenWebMode}
         onSourcePickerOpenChange={setAmbientSourcePickerOpen}
         onHudActivity={showHud}
         onLyricsVisibleChange={setLyricsVisible}
@@ -696,10 +703,13 @@ export default function App() {
         fontTheme={fontTheme}
         onPlaybackAction={sendPlaybackAction}
         onSourceSwitch={handleSourceSwitch}
+        onOpenWebMode={handleOpenWebMode}
         onReturnAmbient={returnAmbient}
       />
       <QuickSettingsOverlay
         active={mode === "quickSettings"}
+        audio={tikpalState.audio}
+        playback={tikpalState.playback}
         system={tikpalState.system}
         runtime={tikpalState.runtime}
         status={tikpalStatus}

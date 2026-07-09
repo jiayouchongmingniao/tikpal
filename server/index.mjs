@@ -219,6 +219,12 @@ const MUSIC_LIBRARY_STATE_PATH = resolve(process.env.TIKPAL_MUSIC_LIBRARY_STATE_
 const ROOM_EXPERIENCE_STATE_PATH = resolve(process.env.TIKPAL_ROOM_EXPERIENCE_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "room-experience-state.json"));
 const AUDIO_VOLUME_STATE_PATH = resolve(process.env.TIKPAL_AUDIO_VOLUME_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "audio-volume-state.json"));
 const AUDIO_SOURCE_MEMORY_STATE_PATH = resolve(process.env.TIKPAL_AUDIO_SOURCE_MEMORY_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "audio-source-memory.json"));
+const WEB_MODE_SETTINGS_PATH = resolve(process.env.TIKPAL_WEB_MODE_SETTINGS_PATH ?? resolve(process.cwd(), ".tikpal", "web-mode-settings.json"));
+const WEB_MODE_STATE_PATH = resolve(process.env.TIKPAL_WEB_MODE_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "web-mode-state.json"));
+const WEB_MODE_COMMAND = process.env.TIKPAL_WEB_MODE_COMMAND ?? (API_MODE === "mpc" ? "./deploy/chromium/tikpal-web-mode.sh" : "");
+const WEB_MODE_PROXY_TEST_URL = process.env.TIKPAL_WEB_MODE_PROXY_TEST_URL ?? "https://open.spotify.com/";
+const WEB_MODE_DEFAULT_PROXY_URL = process.env.TIKPAL_WEB_MODE_DEFAULT_PROXY_URL ?? "http://192.168.10.140:7897";
+const WEB_MODE_PROXY_TEST_NETWORK = parseEnvBoolean(process.env.TIKPAL_WEB_MODE_PROXY_TEST_NETWORK ?? "0");
 const LOCAL_LIBRARY_COVER_COLUMNS = ["cover_relative_path", "cover_path", "album_art_relative_path", "artwork_relative_path"];
 const LOCAL_LIBRARY_COVER_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp"];
 const PUBLIC_ASSETS_ROOT = resolve(process.env.TIKPAL_PUBLIC_ASSETS_ROOT ?? resolve(process.cwd(), "public", "assets"));
@@ -242,6 +248,18 @@ const ROOM_SESSION_PHASES = new Set(["idle", "preparing", "active", "windDown"])
 const REMOTE_SOURCE_TARGETS = new Set(["mpd", "radio", "spotify", "bluetooth", "airplay", "upnp"]);
 const REMEMBERED_AUDIO_SOURCE_TARGETS = new Set(["mpd", "radio", "spotify", "bluetooth", "airplay", "upnp"]);
 const COMMAND_HANDOFF_SOURCE_TARGETS = new Set(["spotify", "bluetooth", "airplay", "upnp"]);
+const WEB_MODE_PROVIDERS = [
+  { id: "spotify", label: "Spotify", url: "https://open.spotify.com/", experimental: false },
+  { id: "youtube_music", label: "YouTube Music", url: "https://music.youtube.com/", experimental: true },
+  { id: "apple_music", label: "Apple Music", url: "https://music.apple.com/", experimental: false },
+  { id: "tidal", label: "TIDAL", url: "https://listen.tidal.com/", experimental: false },
+  { id: "qobuz", label: "Qobuz", url: "https://play.qobuz.com/", experimental: false },
+  { id: "deezer", label: "Deezer", url: "https://www.deezer.com/", experimental: false },
+  { id: "amazon_music", label: "Amazon Music", url: "https://music.amazon.com/", experimental: false },
+  { id: "qq_music", label: "QQ Music", url: "https://y.qq.com/n/ryqq/player", experimental: false },
+  { id: "netease_music", label: "NetEase Cloud Music", url: "https://music.163.com/st/webplayer", experimental: true }
+];
+const WEB_MODE_PROVIDER_IDS = new Set(WEB_MODE_PROVIDERS.map((provider) => provider.id));
 const REMOTE_ALLOWED_ACTIONS = [
   "playback.play_pause",
   "playback.play",
@@ -3589,6 +3607,107 @@ async function writeRoomExperienceState(state) {
   await mkdir(dirname(ROOM_EXPERIENCE_STATE_PATH), { recursive: true });
   await writeFile(ROOM_EXPERIENCE_STATE_PATH, `${JSON.stringify(normalized, null, 2)}\n`);
   return normalized;
+}
+
+function normalizeWebModeProviderId(value, fallback = "spotify") {
+  const id = String(value ?? "").trim().toLowerCase();
+  return WEB_MODE_PROVIDER_IDS.has(id) ? id : fallback;
+}
+
+function normalizeWebModeProxyUrl(value) {
+  const proxyUrl = String(value ?? "").trim();
+  let parsed;
+  try {
+    parsed = new URL(proxyUrl);
+  } catch {
+    throw new Error("Web Mode proxy URL must be http://host:port, https://host:port, or socks5://host:port");
+  }
+  if (!["http:", "https:", "socks5:"].includes(parsed.protocol) || !parsed.hostname || !parsed.port) {
+    throw new Error("Web Mode proxy URL must be http://host:port, https://host:port, or socks5://host:port");
+  }
+  parsed.username = "";
+  parsed.password = "";
+  parsed.pathname = "";
+  parsed.search = "";
+  parsed.hash = "";
+  return parsed.toString().replace(/\/$/, "");
+}
+
+function normalizeWebModeSettings(raw = {}) {
+  let proxyUrl = WEB_MODE_DEFAULT_PROXY_URL;
+  try {
+    proxyUrl = normalizeWebModeProxyUrl(raw.proxyUrl ?? WEB_MODE_DEFAULT_PROXY_URL);
+  } catch {
+    proxyUrl = normalizeWebModeProxyUrl(WEB_MODE_DEFAULT_PROXY_URL);
+  }
+  return {
+    proxyEnabled: typeof raw.proxyEnabled === "boolean" ? raw.proxyEnabled : true,
+    proxyUrl,
+    updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : null
+  };
+}
+
+function normalizeWebModeRuntimeState(raw = {}) {
+  return {
+    activeProvider: raw.activeProvider ? normalizeWebModeProviderId(raw.activeProvider, null) : null,
+    lastError: typeof raw.lastError === "string" && raw.lastError.trim() ? raw.lastError.trim() : null,
+    updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : null
+  };
+}
+
+async function readWebModeSettings() {
+  try {
+    return normalizeWebModeSettings(JSON.parse(await readFile(WEB_MODE_SETTINGS_PATH, "utf8")));
+  } catch {
+    return normalizeWebModeSettings();
+  }
+}
+
+async function writeWebModeSettings(patch) {
+  const current = await readWebModeSettings();
+  const next = normalizeWebModeSettings({
+    ...current,
+    ...patch,
+    updatedAt: new Date().toISOString()
+  });
+  await mkdir(dirname(WEB_MODE_SETTINGS_PATH), { recursive: true });
+  await writeFile(WEB_MODE_SETTINGS_PATH, `${JSON.stringify(next, null, 2)}\n`);
+  return next;
+}
+
+async function readWebModeRuntimeState() {
+  try {
+    return normalizeWebModeRuntimeState(JSON.parse(await readFile(WEB_MODE_STATE_PATH, "utf8")));
+  } catch {
+    return normalizeWebModeRuntimeState();
+  }
+}
+
+async function writeWebModeRuntimeState(patch) {
+  const current = await readWebModeRuntimeState();
+  const next = normalizeWebModeRuntimeState({
+    ...current,
+    ...patch,
+    updatedAt: new Date().toISOString()
+  });
+  await mkdir(dirname(WEB_MODE_STATE_PATH), { recursive: true });
+  await writeFile(WEB_MODE_STATE_PATH, `${JSON.stringify(next, null, 2)}\n`);
+  return next;
+}
+
+async function buildWebModeState() {
+  const [settings, runtimeState] = await Promise.all([
+    readWebModeSettings(),
+    readWebModeRuntimeState()
+  ]);
+  return {
+    enabled: true,
+    activeProvider: runtimeState.activeProvider,
+    providers: WEB_MODE_PROVIDERS,
+    settings,
+    lastError: runtimeState.lastError,
+    updatedAt: runtimeState.updatedAt ?? settings.updatedAt ?? new Date(0).toISOString()
+  };
 }
 
 let audioVolumeStateCache = null;
@@ -7088,7 +7207,7 @@ function sendJson(response, status, body) {
     "Content-Type": "application/json; charset=utf-8",
     "Cache-Control": "no-store",
     "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+    "Access-Control-Allow-Methods": "GET,POST,PATCH,OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type,Accept,X-Tikpal-Key,X-Tikpal-Local-Ui"
   });
 
@@ -9539,6 +9658,106 @@ async function applyPlaybackActionForCurrentBackend(action) {
   await applyPlaybackAction(action);
 }
 
+async function runWebModeCommand(action, providerId = "") {
+  if (!WEB_MODE_COMMAND.trim()) return;
+  const command = providerId
+    ? `${WEB_MODE_COMMAND} ${shellQuote(action)} ${shellQuote(providerId)}`
+    : `${WEB_MODE_COMMAND} ${shellQuote(action)}`;
+  await runCommand(command, { allowFailure: false, timeout: 10_000 });
+}
+
+async function pauseTikpalForWebMode() {
+  try {
+    await applyPlaybackActionForCurrentBackend({ type: "pause" });
+  } catch {
+    // Web Mode is a browser wrapper; a failed pause should not block opening the login/player page.
+  }
+
+  try {
+    const room = await readRoomExperienceState();
+    if (room.sceneSoundEnabled) {
+      await applyRoomExperienceAction({
+        type: "set_scene_sound",
+        sceneSoundEnabled: false,
+        sceneVideoId: room.sceneVideoId
+      });
+    }
+  } catch {
+    // The source truth remains owned by the normal room experience refresh.
+  }
+}
+
+async function applyWebModeAction(action) {
+  const type = String(action?.type ?? "").trim().toLowerCase();
+  if (type === "close") {
+    try {
+      await runWebModeCommand("close");
+      await writeWebModeRuntimeState({ activeProvider: null, lastError: null });
+    } catch (error) {
+      await writeWebModeRuntimeState({ lastError: error instanceof Error ? error.message : "Web Mode close failed" });
+    }
+    return await buildWebModeState();
+  }
+
+  if (type === "keyboard") {
+    try {
+      await runWebModeCommand("keyboard");
+      await writeWebModeRuntimeState({ lastError: null });
+    } catch (error) {
+      await writeWebModeRuntimeState({ lastError: error instanceof Error ? error.message : "Keyboard open failed" });
+      throw error;
+    }
+    return await buildWebModeState();
+  }
+
+  if (type !== "open") {
+    throw new Error("Web Mode action type must be open, close, or keyboard");
+  }
+
+  const providerId = normalizeWebModeProviderId(action.provider);
+  await pauseTikpalForWebMode();
+  try {
+    await runWebModeCommand("open", providerId);
+    await writeWebModeRuntimeState({ activeProvider: providerId, lastError: null });
+  } catch (error) {
+    await writeWebModeRuntimeState({ activeProvider: providerId, lastError: error instanceof Error ? error.message : "Web Mode open failed" });
+    throw error;
+  }
+  return await buildWebModeState();
+}
+
+async function patchWebModeSettings(patch) {
+  const next = {};
+  if (typeof patch?.proxyEnabled === "boolean") {
+    next.proxyEnabled = patch.proxyEnabled;
+  }
+  if (Object.prototype.hasOwnProperty.call(patch ?? {}, "proxyUrl")) {
+    next.proxyUrl = normalizeWebModeProxyUrl(patch.proxyUrl);
+  }
+  await writeWebModeSettings(next);
+  return await buildWebModeState();
+}
+
+async function testWebModeProxy() {
+  const settings = await readWebModeSettings();
+  if (!settings.proxyEnabled) {
+    return { ok: true, message: "Web Mode proxy is disabled", proxyUrl: settings.proxyUrl };
+  }
+  const proxyUrl = normalizeWebModeProxyUrl(settings.proxyUrl);
+  if (!WEB_MODE_PROXY_TEST_NETWORK) {
+    return { ok: true, message: "Proxy URL format accepted", proxyUrl };
+  }
+  try {
+    await runCommand(
+      `command -v curl >/dev/null 2>&1 && curl -I -L -m 5 -x ${shellQuote(proxyUrl)} ${shellQuote(WEB_MODE_PROXY_TEST_URL)} >/dev/null`,
+      { allowFailure: false, timeout: 7000 }
+    );
+    return { ok: true, message: "Proxy connectivity check passed", proxyUrl };
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : "Proxy connectivity check failed", proxyUrl };
+  }
+}
+
 function buildPlaybackMutationRefreshOptions(action) {
   const isAirplayTransport = API_MODE === "mpc"
     && isCurrentMpcSourceAirplay()
@@ -9862,6 +10081,26 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "GET" && url.pathname === "/api/v1/kiosk/heartbeat") {
       sendJson(response, 200, buildKioskHeartbeatStatus());
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/v1/web-mode/state") {
+      sendJson(response, 200, await buildWebModeState());
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/v1/web-mode/actions") {
+      sendJson(response, 200, await applyWebModeAction(await readJson(request)));
+      return;
+    }
+
+    if (request.method === "PATCH" && url.pathname === "/api/v1/web-mode/settings") {
+      sendJson(response, 200, await patchWebModeSettings(await readJson(request)));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/v1/web-mode/proxy-test") {
+      sendJson(response, 200, await testWebModeProxy());
       return;
     }
 

@@ -26,6 +26,48 @@ export type SourceControllability = "switchable" | "handoff" | "status-only";
 export type SourceSwitchTarget = "mpd" | "audio" | "scene" | "radio" | "spotify" | "bluetooth" | "airplay" | "upnp";
 export type SourceConnectionState = "idle" | "armed" | "connected" | "blocked";
 export type RememberedAudioSourceTarget = Exclude<SourceSwitchTarget, "audio" | "scene">;
+export type WebModeProviderId =
+  | "spotify"
+  | "youtube_music"
+  | "apple_music"
+  | "tidal"
+  | "qobuz"
+  | "deezer"
+  | "amazon_music"
+  | "qq_music"
+  | "netease_music";
+
+export interface WebModeProviderSummary {
+  id: WebModeProviderId;
+  label: string;
+  url: string;
+  experimental: boolean;
+}
+
+export interface WebModeSettings {
+  proxyEnabled: boolean;
+  proxyUrl: string;
+  updatedAt: string | null;
+}
+
+export interface WebModeState {
+  enabled: boolean;
+  activeProvider: WebModeProviderId | null;
+  providers: WebModeProviderSummary[];
+  settings: WebModeSettings;
+  lastError: string | null;
+  updatedAt: string;
+}
+
+export interface WebModeActionRequest {
+  type: "open" | "close" | "keyboard";
+  provider?: WebModeProviderId;
+}
+
+export interface WebModeSettingsPatch {
+  proxyEnabled?: boolean;
+  proxyUrl?: string;
+}
 
 export interface RadioStationSummary {
   id: string;

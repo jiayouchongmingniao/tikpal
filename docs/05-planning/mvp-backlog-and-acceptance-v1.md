@@ -38,7 +38,7 @@ Acceptance:
 ### Slice 3: Gesture State Machine
 
 - Implement one-finger swipe down to player.
-- Implement two-finger swipe down to quick settings with threshold hint.
+- Implement two-finger swipe down to Console with threshold hint.
 - Implement swipe up return.
 - Implement long-press quick menu.
 - Implement inactivity timers.
@@ -46,13 +46,13 @@ Acceptance:
 Acceptance:
 
 - One-finger swipe reliably opens player.
-- Two-finger swipe reliably opens quick settings.
-- Releasing below threshold cancels quick settings.
-- Swipe up returns from player and quick settings, including gestures that start inside protected overlay panels.
+- Two-finger swipe reliably opens Console.
+- Releasing below threshold cancels Console.
+- Swipe up returns from player and Console, including gestures that start inside protected overlay panels.
 - The kiosk UI does not expose playlist editing or ritual-builder flows; Library browsing remains the direct track-selection path.
-- Protected panel taps remain local control/settings clicks and do not count as blank-tap return.
+- Protected panel taps remain local control/Console clicks and do not count as blank-tap return.
 - Player returns after 15 seconds idle.
-- Quick settings returns after 30 seconds idle.
+- Console returns after 30 seconds idle.
 - Long press opens quick menu.
 
 ### Slice 4: Player Overlay
@@ -92,23 +92,25 @@ Batch 3 implementation note:
 - Real MPD/moOde adapter wiring remains required before this slice is fully device-accepted.
 - The current repo has moved beyond this note: `mpc` mode is live on the Pi, radio presets are wired into the source panel, and ambient edge gestures now issue live `volume_set` updates against the same API contract.
 
-### Slice 6: Quick Settings
+### Slice 6: Console
 
-- Add card grid for Network, Preferences, and System categories covering network, audio output, DSP, display, font, skin, lyrics, library, system info, reboot, and shutdown.
+- Add listening-first Console with Signal, Library, Link, and Care chips covering audio output, DSP, display, font, skin, lyrics, library/NAS status, network, system info, reboot, and shutdown.
 - Add confirmation flow for dangerous actions.
 - Add library update action where supported.
 
 Acceptance:
 
-- Network, Preferences, and System cards render from backend or mock state.
+- Signal, Library, Link, and Care tiles render from backend or mock state.
+- Console shows current source/playback and audio format using existing state.
 - Reboot and shutdown cannot run on first tap.
 - Dangerous confirmation is visually distinct.
 
 Current status note:
 
-- Quick Settings is implemented as a fixed four-column 2560 x 720 card grid with no Home/Overview category; it opens directly to Preferences and keeps Network, Preferences, and System as the only categories.
+- Console is implemented as a fixed 2560 x 720 listening console with no Home/Overview category; it opens directly to Signal, uses Signal / Library / Link / Care chips, and keeps the internal `quickSettings` route for compatibility.
 - Skin presets currently include `warm-gold`, `graphite-silver`, and `ivory-studio`.
-- Display brightness is reflected in system state and can now be adjusted both from the ambient left-edge gesture and from an in-panel Quick Settings control surface on DDC/CI-capable hardware. The Pi deploy helper `deploy/moode/tikpal-ddcci-enable.sh` installs `ddcutil`, enables I2C access, writes `TIKPAL_DDCUTIL_*`, and has been validated on the XENEON EDGE target with `display.transport="ddcci"`.
+- Display brightness is reflected in system state and can now be adjusted both from the ambient left-edge gesture and from an in-panel Console drawer on DDC/CI-capable hardware. The Pi deploy helper `deploy/moode/tikpal-ddcci-enable.sh` installs `ddcutil`, enables I2C access, writes `TIKPAL_DDCUTIL_*`, and has been validated on the XENEON EDGE target with `display.transport="ddcci"`.
+- Console Link now owns Web Mode proxy and Keyboard setup. Web Mode itself is a browser wrapper with a 1920 x 720 provider window plus 640 x 720 side panel, and it deliberately does not become a Tikpal source or remembered playback state.
 
 ### Slice 7: Pi4 Kiosk Package
 
@@ -129,6 +131,8 @@ Acceptance:
 Batch 4 deployment note:
 
 - Repo-owned Chromium launcher, flags, managed policy, and `.env.kiosk` example are implemented under `deploy/chromium/`.
+- `deploy/chromium/tikpal-web-mode.sh` launches optional Web Mode provider/side-panel windows, reads `.tikpal/web-mode-settings.json`, writes `.tikpal/web-mode-state.json`, applies the configured HTTP proxy to the provider window only, and surfaces `onboard` for login/password input.
+- Web Mode acceptance: one visible provider window at 1920 x 720, one side panel at 640 x 720, no stale provider highlight, and no persistent second provider page after a site tries to open playback in a new window. The bundled Web Mode extension should keep common `_blank` links in the left pane; Chromium popup/ad settings are a best-effort guard, not a promise to remove every site promotion.
 - API, production web, and kiosk service templates plus installer are implemented under `deploy/systemd/`.
 - `server/web.mjs` serves `dist/` on port `4173` and proxies `/api` to the local API on port `8787`, so the Pi does not need the Vite dev server.
 - `npm run test:kiosk` validates the local packaging contract; real fullscreen/window-size acceptance still requires the target Pi display.
@@ -146,7 +150,7 @@ Batch 4 deployment note:
 ### Gestures
 
 - One-finger swipe down opens player.
-- Two-finger swipe down opens quick settings.
+- Two-finger swipe down opens Console.
 - Two-finger swipe has mistake prevention threshold feedback.
 - Swipe up returns to ambient.
 - Long press opens quick menu.
@@ -162,20 +166,20 @@ Batch 4 deployment note:
 - Format, sample rate, and bit depth display correctly.
 - Output device displays correctly.
 
-### Quick Settings
+### Console
 
 - Network state displays correctly.
-- Preferences output state displays correctly.
+- Signal output state displays correctly.
 - DSP state displays correctly.
 - Library update entry is available.
 - Display brightness state is visible.
 - Reboot and shutdown require confirmation.
-- Settings cannot accidentally trigger dangerous operations.
+- Console cannot accidentally trigger dangerous operations.
 
 ### Experience
 
 - Daily playback does not require entering settings.
-- Settings are reachable through at least two paths.
+- Console is reachable through at least two paths.
 - Device returns to ambient after inactivity.
 - Main screen remains readable from a distance.
 - UI does not feel like a complex configuration center.
@@ -218,7 +222,7 @@ Before implementation starts, confirm:
 
 - App mode: `ambient`.
 - Player timeout: 15 seconds.
-- Quick settings timeout: 30 seconds.
+- Console timeout: 30 seconds.
 - Tap HUD boost: 5 seconds.
 - Physical output: 2560 x 720.
 - Frontend stack: Vite + React + TypeScript.

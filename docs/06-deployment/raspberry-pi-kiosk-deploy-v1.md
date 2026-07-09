@@ -86,6 +86,12 @@ npm run build
 cp -n deploy/chromium/env.kiosk.example .env.kiosk
 ```
 
+If this device will use Web Mode login or proxy editing on the touch screen, also install the on-screen keyboard helpers:
+
+```bash
+sudo apt-get install -y onboard wmctrl
+```
+
 Inspect `.env.kiosk` and adjust the Chromium binary or display output if needed:
 
 ```bash
@@ -95,6 +101,7 @@ deploy/chromium/start-tikpal-kiosk-viewer.sh --check
 deploy/chromium/start-tikpal-kiosk-devtools-proxy.sh --check
 deploy/chromium/tikpal-kiosk-healthcheck.sh --check
 deploy/chromium/launch-tikpal-kiosk.sh --check
+deploy/chromium/tikpal-web-mode.sh --check
 ```
 
 For Scene Sound on the local kiosk, route Chromium to the physical USB `dmix` output instead of moOde's Loopback-backed `_audioout`. MPD, AirPlay, Bluetooth, Spotify, and Hi-Fi capture can keep using `_audioout`; browser Scene Sound should not hold that device while Tikpal starts MPD-backed sources such as Library or Radio:
@@ -105,6 +112,18 @@ deploy/chromium/launch-tikpal-kiosk.sh --check
 ```
 
 Chromium may keep an ALSA `audio.mojom.AudioService` process open after the active scene video is muted. If it is routed to `_audioout`, MPD Radio can later land in `paused` with `Failed to open audio output`; treat that as an output-route/runtime-env problem before blaming the radio station.
+
+Web Mode opens official music web players in a separate left Chromium window and a Tikpal `/side-panel` in the right 640px column. The provider window uses `.tikpal/web-mode-settings.json` for proxy configuration; the default development value is HTTP `http://192.168.10.140:7897`, while the Tikpal side panel stays local on `localhost:4173` and should not use that proxy. The launcher keeps one visible provider window, loads `deploy/chromium/web-mode-extension` to keep common new-window links inside the left pane, enables Chromium popup/ad content blocking for the provider profile, and writes `.tikpal/web-mode-state.json` so the side panel highlight follows the actual provider:
+
+```bash
+cat .tikpal/web-mode-settings.json 2>/dev/null || true
+deploy/chromium/tikpal-web-mode.sh --check
+deploy/chromium/tikpal-web-mode.sh open spotify
+deploy/chromium/tikpal-web-mode.sh keyboard
+deploy/chromium/tikpal-web-mode.sh close
+```
+
+The Web Mode launcher keeps a separate Chromium profile for each provider so login state can survive provider switches. It is not a Tikpal source: opening it pauses Tikpal playback and does not change `.tikpal/audio-source-memory.json`. For 2560 x 720 validation, `xdotool search --onlyvisible --class chromium` should show the main kiosk window, one 1920 x 720 provider window at `0,0`, and one 640 x 720 side-panel window at `1920,0`; it should not show two visible provider windows after a site opens a playback page.
 
 If the Pi should control real moOde playback instead of the local mock bridge, create `.env` with native MPD settings before restarting the API service:
 
@@ -431,7 +450,7 @@ curl -fsS http://127.0.0.1:8787/api/v1/audio/spectrum | jq '.source,.bands[0:8]'
 
 Expected result: the default Radio catalog reports the curated Tikpal count and categories, `scope=all` still exposes moOde rows, the radio-logo endpoint returns an image with `Cache-Control: public, max-age=86400` and `GET,HEAD,OPTIONS` allowed, MPD volume is nonzero after the Radio switch, the chosen station is `active:true` in `/api/v1/audio/radios`, Radio `next` changes the active station, logo, and `mpc current -f '%file%'`, a failed stream still recovers through Radio `next` instead of falling back to MPD `Not playing`, `/api/v1/system/state` exposes the new Radio `albumArtUrl` as soon as the backend has primed the active station, and spectrum bands are nonzero when the station is audible.
 
-Verify Quick Settings actions from the API before relying on the kiosk UI:
+Verify Console actions from the API before relying on the kiosk UI:
 
 ```bash
 curl -fsS -X POST http://127.0.0.1:8787/api/v1/system/actions \

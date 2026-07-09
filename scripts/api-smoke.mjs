@@ -3384,6 +3384,8 @@ async function run() {
   const musicLibraryStatePath = path.join(apiStateRoot, "music-library-state.json");
   const roomExperienceStatePath = path.join(apiStateRoot, "room-experience-state.json");
   const audioSourceMemoryStatePath = path.join(apiStateRoot, "audio-source-memory.json");
+  const webModeSettingsPath = path.join(apiStateRoot, "web-mode-settings.json");
+  const webModeStatePath = path.join(apiStateRoot, "web-mode-state.json");
   const sceneBytes = Buffer.from("000000 ftypisom tikpal rainy window api smoke mp4");
   const sceneSha256 = createHash("sha256").update(sceneBytes).digest("hex");
   const warmSceneBytes = Buffer.from("000000 ftypisom tikpal warm fireplace api smoke mp4");
@@ -3463,6 +3465,8 @@ async function run() {
       TIKPAL_MUSIC_LIBRARY_STATE_PATH: musicLibraryStatePath,
       TIKPAL_ROOM_EXPERIENCE_STATE_PATH: roomExperienceStatePath,
       TIKPAL_AUDIO_SOURCE_MEMORY_STATE_PATH: audioSourceMemoryStatePath,
+      TIKPAL_WEB_MODE_SETTINGS_PATH: webModeSettingsPath,
+      TIKPAL_WEB_MODE_STATE_PATH: webModeStatePath,
       TIKPAL_RECOGNITION_PROVIDER: "acrcloud",
       TIKPAL_ACRCLOUD_HOST: PROVIDER_URL,
       TIKPAL_ACRCLOUD_ACCESS_KEY: "mock-key",
@@ -3504,6 +3508,49 @@ async function run() {
     assert(initial.body.audio.currentSource.id === "mpd", "system state should expose current audio source");
     assert(initial.body.audio.rememberedSource === null, "system state should expose empty remembered source before source selection");
     assert(initial.body.lyrics?.sourceScope === "local_playback", "system state should expose lyrics state");
+
+    const webMode = await request("/api/v1/web-mode/state");
+    assert(webMode.response.ok, "web mode state should return 200");
+    assert(webMode.body.settings.proxyEnabled === true, "web mode should enable the development HTTP proxy by default");
+    assert(webMode.body.settings.proxyUrl === "http://192.168.10.140:7897", "web mode should default to the HTTP development proxy");
+    assert(webMode.body.providers.some((provider) => provider.id === "spotify"), "web mode should expose Spotify provider");
+
+    const savedWebMode = await request("/api/v1/web-mode/settings", {
+      method: "PATCH",
+      body: JSON.stringify({ proxyEnabled: true, proxyUrl: "http://192.168.10.140:7897" })
+    });
+    assert(savedWebMode.response.ok, "web mode settings patch should return 200");
+    assert(savedWebMode.body.settings.proxyUrl === "http://192.168.10.140:7897", "web mode settings patch should persist HTTP proxy URL");
+
+    const invalidWebModeProxy = await request("/api/v1/web-mode/settings", {
+      method: "PATCH",
+      body: JSON.stringify({ proxyEnabled: true, proxyUrl: "ftp://192.168.10.140:7897" })
+    });
+    assert(invalidWebModeProxy.response.status === 400, "web mode settings should reject unsupported proxy protocols");
+
+    const openedWebMode = await request("/api/v1/web-mode/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "open", provider: "spotify" })
+    });
+    assert(openedWebMode.response.ok, "web mode open should return 200");
+    assert(openedWebMode.body.activeProvider === "spotify", "web mode open should remember active provider");
+    const afterWebModeOpen = await request("/api/v1/system/state");
+    assert(afterWebModeOpen.body.audio.currentSource.id === "mpd", "web mode should not change audio source truth");
+    assert(afterWebModeOpen.body.audio.rememberedSource === null, "web mode should not write remembered source");
+
+    const switchedWebMode = await request("/api/v1/web-mode/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "open", provider: "youtube_music" })
+    });
+    assert(switchedWebMode.response.ok, "web mode provider switch should return 200");
+    assert(switchedWebMode.body.activeProvider === "youtube_music", "web mode provider switch should update active provider");
+
+    const closedWebMode = await request("/api/v1/web-mode/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "close" })
+    });
+    assert(closedWebMode.response.ok, "web mode close should return 200");
+    assert(closedWebMode.body.activeProvider === null, "web mode close should clear active provider");
 
     const initialExperience = await request("/api/v1/experience/state");
     assert(initialExperience.response.ok, "room experience state should return 200");

@@ -71,7 +71,7 @@ Recommended sizes:
 | Album metadata | 26-32px |
 | Status label | 18-22px |
 | Status value | 32-44px |
-| Quick settings title | 32-40px |
+| Console title | 34-48px |
 | List row text | 24-30px |
 
 ## Layout Rules
@@ -86,6 +86,20 @@ Recommended sizes:
 - Avoid tall vertical lists in primary surfaces.
 - Avoid dense admin UI on the kiosk screen.
 
+## Web Mode Wrapper
+
+Web Mode is the only approved third-party web-player wrapper for the 2560 x 720 kiosk. It should not open official music sites full-width because most web players are designed for ordinary laptop aspect ratios and become cramped on a 720px-tall 32:9 screen.
+
+Use a split-window composition:
+
+- Left provider browser: 1920 x 720 at `0,0`.
+- Right Tikpal side panel: 640 x 720 at `1920,0`.
+- The side panel uses Tikpal-native controls only: provider grid, global volume, Keyboard, proxy state, and Back/Close.
+- Provider navigation remains inside the left pane. New official-player windows should be pulled back to 1920 x 720 or closed in favor of the latest provider window, so the right panel remains stable and the user never sees two web players competing.
+- The active provider tile is a runtime indicator, not a default decoration: no provider should be highlighted until Web Mode state says it is active.
+- Provider icons should use generic local glyphs plus brand-color accents, not downloaded official logos.
+- Web Mode must not show Tikpal lyrics, fake transport controls, or third-party artwork truth.
+
 ## Ambient Flame Screen
 
 Purpose: long-dwell visual state.
@@ -95,7 +109,7 @@ Layering:
 1. Full-viewport fireplace image and MP4 video background.
 2. Low-contrast vignette and readability layer.
 3. Playback HUD.
-4. Weak settings fallback entry.
+4. Weak Console fallback entry.
 
 Default HUD:
 
@@ -198,24 +212,28 @@ Transport controls:
 
 The play / pause button should be visually dominant and easy to hit.
 
-## Quick Settings Overlay
+## Console Overlay
 
-Purpose: low-frequency system settings without a Home or Overview category.
+Purpose: low-frequency signal, library, link, and device-care controls without a Home or Overview category.
 
-Settings opens directly to Preferences and uses a 2560 x 720 fixed kiosk layout. The summary card grid is always four columns wide; short categories leave empty cells instead of changing to two or three columns.
+Console opens directly to Signal and uses a 2560 x 720 fixed kiosk layout. The internal route remains `quickSettings`, but the visible surface is a listening console: a top status band shows current source/playback truth, source artwork or glyph, API health, and audio format before the user reaches device controls. It uses Signal, Library, Link, and Care chips instead of a left sidebar, so the surface reads like a Hi-Fi device panel rather than a desktop settings app. The summary tile grid is always four columns wide; short categories leave empty cells instead of changing to two or three columns.
 
 | Category | Cards |
 | --- | --- |
-| Network | Network, System/API status. |
-| Preferences | Audio output, DSP, Display, Font, Skin, Lyrics. |
-| System | Library update, Reboot, Shutdown. |
+| Signal | Audio output, DSP, Display, Time & Night, Font, Skin, Lyrics. |
+| Library | Local Library, NAS Sources, USB, Library Scan. |
+| Link | Network, System/API status. |
+| Care | Reboot, Shutdown. |
 
 Design rules:
 
 - Show the current state first, not configuration lists.
-- Keep summary cards at a fixed width and height in the four-column grid.
+- Keep summary tiles at a fixed width and height in the four-column grid.
+- Do not use heavy backdrop blur; Pi responsiveness is more important than glass effects.
+- Touch hover/focus must not make more than one section chip look active.
 - Do not add vertical page scrolling to the shell or content area.
 - Cards can open detail panels later.
+- NAS detail panels can show status and the remote/admin boundary, but must not become credential-heavy forms on the kiosk surface.
 - Dangerous actions show confirmation before execution.
 - Use warning/error color only for real warnings.
 - Font and skin presets live in detail panels and must fit within the 720px kiosk height without requiring vertical page scrolling.
@@ -230,7 +248,7 @@ No playback:
 Network offline:
 
 - Ambient: weak "Network Offline" status.
-- Quick settings: network card highlighted.
+- Console: Link chip and network tile highlighted.
 
 No DAC:
 
@@ -239,7 +257,7 @@ No DAC:
 
 Library scanning:
 
-- Show progress in quick settings or player status.
+- Show progress in Console or player status.
 - Do not block playback.
 
 Thermal warning:

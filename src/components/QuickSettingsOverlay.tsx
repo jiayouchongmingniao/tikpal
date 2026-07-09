@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
-import { Captions, Clock3, Cpu, Database, EthernetPort, Eye, EyeOff, Info, Monitor, Palette, Power, RotateCcw, SlidersHorizontal, Type, Volume2 } from "lucide-react";
+import { Airplay, Bluetooth, Captions, Cast, Clock3, Cpu, Database, EthernetPort, Eye, EyeOff, Globe2, HardDrive, Info, Keyboard, Monitor, Music2, Palette, Power, Radio as RadioIcon, RotateCcw, Server, SlidersHorizontal, Type, Usb, Volume2 } from "lucide-react";
+import { fetchWebModeState, sendWebModeAction, testWebModeProxy, updateWebModeSettings } from "../api/tikpalClient";
 import type { TikpalDataStatus } from "../hooks/useTikpalState";
 import { useOverlayReturnGesture } from "../hooks/useOverlayReturnGesture";
-import type { FontTheme, LyricsFontSize, NightScheduleState, RoomExperienceActionRequest, RoomExperienceState, RuntimeState, SurfaceTheme, SystemActionType, SystemState } from "../types";
+import type { AudioState, FontTheme, LyricsFontSize, NightScheduleState, PlaybackSummary, RoomExperienceActionRequest, RoomExperienceState, RuntimeState, SurfaceTheme, SystemActionType, SystemState, WebModeState } from "../types";
 
 interface QuickSettingsOverlayProps {
   active: boolean;
+  audio: AudioState;
+  playback: PlaybackSummary;
   system: SystemState;
   runtime: RuntimeState;
   status: TikpalDataStatus;
@@ -25,8 +28,8 @@ interface QuickSettingsOverlayProps {
 
 type CardTone = "cyan" | "gold" | "neutral" | "warn" | "danger";
 type ActionableCardKey = "library_scan" | "reboot" | "shutdown";
-type SettingsSectionKey = "network" | "output" | "system";
-type SettingsDetailView = "appearance" | "display" | "font" | "lyrics" | "night" | null;
+type SettingsSectionKey = "output" | "library" | "network" | "system";
+type SettingsDetailView = "appearance" | "display" | "font" | "lyrics" | "nas" | "night" | "webMode" | null;
 
 interface BaseCard {
   key: string;
@@ -69,7 +72,15 @@ interface NightCard extends BaseCard {
   kind: "night";
 }
 
-type SettingsCard = ReadOnlyCard | ActionCard | FontCard | AppearanceCard | LyricsCard | DisplayCard | NightCard;
+interface NasCard extends BaseCard {
+  kind: "nas";
+}
+
+interface WebModeCard extends BaseCard {
+  kind: "webMode";
+}
+
+type SettingsCard = ReadOnlyCard | ActionCard | FontCard | AppearanceCard | LyricsCard | DisplayCard | NightCard | NasCard | WebModeCard;
 
 const fontChoices: Array<{ id: FontTheme; label: string; sample: string }> = [
   { id: "system", label: "System Neo", sample: "Clean device UI" },
@@ -104,22 +115,64 @@ const timeZoneChoices = [
 ];
 
 const sectionCopy: Record<SettingsSectionKey, { label: string; description: string }> = {
+  output: {
+    label: "Signal",
+    description: "Output path, DSP, display, typography, and listening overlays."
+  },
+  library: {
+    label: "Library",
+    description: "Storage health, NAS status, USB readiness, and library scanning."
+  },
   network: {
-    label: "Network",
+    label: "Link",
     description: "Connectivity, API sync state, and kiosk runtime reachability."
   },
-  output: {
-    label: "Preferences",
-    description: "Playback output, DSP, display brightness, and local typography."
-  },
   system: {
-    label: "System",
-    description: "Library maintenance plus guarded restart and shutdown actions."
+    label: "Care",
+    description: "Guarded restart and shutdown actions."
   }
 };
 
+const settingsTabs: Array<{ id: SettingsSectionKey; label: string; Icon: typeof Database }> = [
+  { id: "output", label: "Signal", Icon: Volume2 },
+  { id: "library", label: "Library", Icon: Database },
+  { id: "network", label: "Link", Icon: EthernetPort },
+  { id: "system", label: "Care", Icon: Cpu }
+];
+
+function getConsoleSourceIcon(sourceId: AudioState["currentSource"]["id"]) {
+  if (sourceId === "airplay") return Airplay;
+  if (sourceId === "bluetooth") return Bluetooth;
+  if (sourceId === "radio") return RadioIcon;
+  if (sourceId === "spotify" || sourceId === "upnp") return Cast;
+  return Music2;
+}
+
+function getConsoleStateLabel(playback: PlaybackSummary, source: AudioState["currentSource"]) {
+  if (playback.state === "playing") return "Playing";
+  if (playback.state === "paused") return "Paused";
+  if (source.connectionState === "connected") return "Connected";
+  if (source.connectionState === "armed") return "Ready";
+  if (source.connectionState === "blocked") return "Blocked";
+  return "Stopped";
+}
+
+function getConsoleStateClass(playback: PlaybackSummary, source: AudioState["currentSource"]) {
+  if (playback.state === "playing") return "is-playing";
+  if (playback.state === "paused") return "is-paused";
+  if (source.connectionState === "armed" || source.connectionState === "connected") return "is-ready";
+  return "is-stopped";
+}
+
+function formatConsoleSampleRate(rate: number | null) {
+  if (!rate) return null;
+  return rate >= 1000 ? `${Math.round(rate / 100) / 10} kHz` : `${rate} Hz`;
+}
+
 export function QuickSettingsOverlay({
   active,
+  audio,
+  playback,
   system,
   runtime,
   status,
@@ -143,6 +196,11 @@ export function QuickSettingsOverlay({
   const [pendingAction, setPendingAction] = useState<ActionableCardKey | null>(null);
   const [pendingBrightness, setPendingBrightness] = useState<number | null>(null);
   const [pendingNight, setPendingNight] = useState(false);
+  const [webModeState, setWebModeState] = useState<WebModeState | null>(null);
+  const [webModeProxyEnabled, setWebModeProxyEnabled] = useState(true);
+  const [webModeProxyUrl, setWebModeProxyUrl] = useState("http://192.168.10.140:7897");
+  const [pendingWebModeSettings, setPendingWebModeSettings] = useState<"save" | "test" | "keyboard" | null>(null);
+  const [webModeError, setWebModeError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<Record<ActionableCardKey, string | null>>({
     library_scan: null,
     reboot: null,
@@ -150,6 +208,24 @@ export function QuickSettingsOverlay({
   });
   const [brightnessError, setBrightnessError] = useState<string | null>(null);
   const [nightError, setNightError] = useState<string | null>(null);
+  const currentSource = audio.currentSource;
+  const ConsoleSourceIcon = getConsoleSourceIcon(currentSource.id);
+  const consoleStateLabel = getConsoleStateLabel(playback, currentSource);
+  const consoleStateClass = getConsoleStateClass(playback, currentSource);
+  const consoleTitle = playback.title?.trim()
+    || currentSource.connectedLabel
+    || currentSource.advertisedLabel
+    || currentSource.secondaryStatus
+    || currentSource.label;
+  const consoleSubtitle = [
+    playback.artist?.trim() || playback.album?.trim() || currentSource.secondaryStatus || currentSource.label,
+    `${currentSource.label} ${consoleStateLabel}`
+  ].filter(Boolean).join(" · ");
+  const consoleFormatLabel = [
+    system.audioFormat.codec,
+    system.bitDepth ? `${system.bitDepth}bit` : null,
+    formatConsoleSampleRate(system.sampleRate)
+  ].filter(Boolean).join(" / ") || "Signal unknown";
 
   useEffect(() => {
     if (!active) {
@@ -159,6 +235,7 @@ export function QuickSettingsOverlay({
       setPendingAction(null);
       setPendingBrightness(null);
       setPendingNight(false);
+      setPendingWebModeSettings(null);
       setActionError({
         library_scan: null,
         reboot: null,
@@ -166,13 +243,43 @@ export function QuickSettingsOverlay({
       });
       setBrightnessError(null);
       setNightError(null);
+      setWebModeError(null);
     }
+  }, [active]);
+
+  useEffect(() => {
+    if (!active) return undefined;
+    let cancelled = false;
+    void fetchWebModeState()
+      .then((nextState) => {
+        if (cancelled) return;
+        setWebModeState(nextState);
+        setWebModeProxyEnabled(nextState.settings.proxyEnabled);
+        setWebModeProxyUrl(nextState.settings.proxyUrl);
+      })
+      .catch((error) => {
+        if (!cancelled) setWebModeError(error instanceof Error ? error.message : "Web Mode settings unavailable");
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [active]);
 
   useEffect(() => {
     setConfirmAction(null);
     setDetailView(null);
   }, [activeSection]);
+
+  const librarySourceKind = system.library.source.trim().toLowerCase();
+  const libraryTrackCount = Math.max(0, system.library.trackCount);
+  const localTrackCount = librarySourceKind === "nas" || librarySourceKind === "usb" ? 0 : libraryTrackCount;
+  const nasTrackCount = librarySourceKind === "nas" ? libraryTrackCount : 0;
+  const usbTrackCount = librarySourceKind === "usb" ? libraryTrackCount : 0;
+  const nasCardTone: CardTone = nasTrackCount > 0 ? "cyan" : "neutral";
+  const nasCardValue = nasTrackCount > 0 ? "Mounted" : "Remote Admin";
+  const nasCardMeta = nasTrackCount > 0
+    ? `${nasTrackCount.toLocaleString()} tracks · ${system.library.lastScan}`
+    : "SMB/NFS setup stays outside kiosk";
 
   const settingsCards = useMemo<SettingsCard[]>(
     () => [
@@ -229,11 +336,41 @@ export function QuickSettingsOverlay({
         tone: roomExperience.nightSchedule.active ? "cyan" : "neutral"
       },
       {
+        kind: "readonly",
+        key: "local-library",
+        section: "library",
+        icon: HardDrive,
+        title: "Local Library",
+        value: `${localTrackCount.toLocaleString()} tracks`,
+        meta: "Manifest-backed music",
+        tone: "gold"
+      },
+      {
+        kind: "nas",
+        key: "nas-sources",
+        section: "library",
+        icon: Server,
+        title: "NAS Sources",
+        value: nasCardValue,
+        meta: nasCardMeta,
+        tone: nasCardTone
+      },
+      {
+        kind: "readonly",
+        key: "usb-library",
+        section: "library",
+        icon: Usb,
+        title: "USB",
+        value: usbTrackCount > 0 ? `${usbTrackCount.toLocaleString()} tracks` : "Not mounted",
+        meta: "Portable storage",
+        tone: "neutral"
+      },
+      {
         kind: "action",
         key: "library",
-        section: "system",
+        section: "library",
         icon: Database,
-        title: "Library",
+        title: "Library Scan",
         value: system.library.source,
         meta: system.library.scanning ? "Scan in progress" : `${system.library.trackCount.toLocaleString()} tracks`,
         tone: "gold",
@@ -281,6 +418,16 @@ export function QuickSettingsOverlay({
         tone: status.source === "api" ? "neutral" : "warn"
       },
       {
+        kind: "webMode",
+        key: "web-mode",
+        section: "network",
+        icon: Globe2,
+        title: "Web Mode",
+        value: webModeProxyEnabled ? "HTTP Proxy" : "Direct",
+        meta: webModeProxyEnabled ? webModeProxyUrl : "Official web players",
+        tone: webModeProxyEnabled ? "cyan" : "neutral"
+      },
+      {
         kind: "action",
         key: "restart",
         section: "system",
@@ -307,7 +454,7 @@ export function QuickSettingsOverlay({
         confirmLabel: "Tap again to power off"
       }
     ],
-    [fontTheme, lyricsFontSize, lyricsVisible, roomExperience.nightSchedule.active, roomExperience.nightSchedule.enabled, roomExperience.nightSchedule.end, roomExperience.nightSchedule.start, roomExperience.nightSchedule.timeZone, runtime.kioskWindow, runtime.requestedRenderer, status.error, status.source, surfaceTheme, system.cpuTemp, system.display.brightnessPercent, system.display.controllable, system.dspState.controllable, system.dspState.controlTransport, system.dspState.enabled, system.dspState.presetLabel, system.library.scanning, system.library.source, system.library.trackCount, system.network.ip, system.network.label, system.network.speed, system.outputDevice.detail, system.outputDevice.label, system.uptime]
+    [fontTheme, localTrackCount, lyricsFontSize, lyricsVisible, nasCardMeta, nasCardTone, nasCardValue, roomExperience.nightSchedule.active, roomExperience.nightSchedule.enabled, roomExperience.nightSchedule.end, roomExperience.nightSchedule.start, roomExperience.nightSchedule.timeZone, runtime.kioskWindow, runtime.requestedRenderer, status.error, status.source, surfaceTheme, system.cpuTemp, system.display.brightnessPercent, system.display.controllable, system.dspState.controllable, system.dspState.controlTransport, system.dspState.enabled, system.dspState.presetLabel, system.library.scanning, system.library.source, system.library.trackCount, system.network.ip, system.network.label, system.network.speed, system.outputDevice.detail, system.outputDevice.label, system.uptime, usbTrackCount, webModeProxyEnabled, webModeProxyUrl]
   );
 
   const visibleCards = useMemo(() => {
@@ -349,6 +496,54 @@ export function QuickSettingsOverlay({
       setNightError(error instanceof Error ? error.message : "Night schedule update failed");
     } finally {
       setPendingNight(false);
+    }
+  }
+
+  async function handleWebModeSettingsSave() {
+    if (pendingWebModeSettings) return;
+    setPendingWebModeSettings("save");
+    setWebModeError(null);
+    try {
+      const nextState = await updateWebModeSettings({
+        proxyEnabled: webModeProxyEnabled,
+        proxyUrl: webModeProxyUrl
+      });
+      setWebModeState(nextState);
+      setWebModeProxyEnabled(nextState.settings.proxyEnabled);
+      setWebModeProxyUrl(nextState.settings.proxyUrl);
+      setWebModeError("Saved");
+    } catch (error) {
+      setWebModeError(error instanceof Error ? error.message : "Web Mode settings save failed");
+    } finally {
+      setPendingWebModeSettings(null);
+    }
+  }
+
+  async function handleWebModeProxyTest() {
+    if (pendingWebModeSettings) return;
+    setPendingWebModeSettings("test");
+    setWebModeError(null);
+    try {
+      const result = await testWebModeProxy();
+      setWebModeError(result.message);
+    } catch (error) {
+      setWebModeError(error instanceof Error ? error.message : "Proxy test failed");
+    } finally {
+      setPendingWebModeSettings(null);
+    }
+  }
+
+  async function handleWebModeKeyboard() {
+    if (pendingWebModeSettings) return;
+    setPendingWebModeSettings("keyboard");
+    setWebModeError(null);
+    try {
+      await sendWebModeAction({ type: "keyboard" });
+      setWebModeError("Keyboard ready");
+    } catch (error) {
+      setWebModeError(error instanceof Error ? error.message : "Keyboard unavailable");
+    } finally {
+      setPendingWebModeSettings(null);
     }
   }
 
@@ -514,6 +709,129 @@ export function QuickSettingsOverlay({
     );
   }
 
+  function renderNasDetail() {
+    const hasNas = nasTrackCount > 0;
+    const sourceStatus = hasNas
+      ? `${nasTrackCount.toLocaleString()} tracks · Last scan ${system.library.lastScan}`
+      : "Add or edit SMB/NFS shares from remote admin";
+
+    return (
+      <section className="settings-detail-panel" aria-label="NAS sources detail" data-settings-detail="nas">
+        <div className="settings-detail-header">
+          <button className="settings-detail-back" type="button" onClick={() => setDetailView(null)}>
+            Back
+          </button>
+          <div>
+            <span>Library</span>
+            <strong>NAS Sources</strong>
+            <p>{sourceStatus}</p>
+          </div>
+        </div>
+
+        <div className="nas-source-detail">
+          <article className={`nas-source-card tone-${hasNas ? "cyan" : "neutral"}`}>
+            <div className="settings-icon">
+              <Server size={32} />
+            </div>
+            <div className="nas-source-copy">
+              <span>{hasNas ? "Detected NAS" : "Remote Admin"}</span>
+              <strong>{hasNas ? system.library.source : "No NAS configured"}</strong>
+              <p>{hasNas ? "Current MPD library source" : "Kiosk shows health only; credentials and mounts belong in remote/admin."}</p>
+              <dl>
+                <div>
+                  <dt>Status</dt>
+                  <dd>{hasNas ? "mounted" : "not configured"}</dd>
+                </div>
+                <div>
+                  <dt>Tracks</dt>
+                  <dd>{nasTrackCount.toLocaleString()}</dd>
+                </div>
+                <div>
+                  <dt>Last Scan</dt>
+                  <dd>{system.library.lastScan}</dd>
+                </div>
+              </dl>
+            </div>
+          </article>
+
+          <article className="nas-source-card tone-neutral">
+            <div className="settings-icon">
+              <Info size={32} />
+            </div>
+            <div className="nas-source-copy">
+              <span>Boundary</span>
+              <strong>Console stays lightweight</strong>
+              <p>Use Library Scan here for maintenance. Add, edit, credentials, SMB/NFS options, and logs stay out of this kiosk surface.</p>
+            </div>
+          </article>
+        </div>
+      </section>
+    );
+  }
+
+  function renderWebModeDetail() {
+    const busy = pendingWebModeSettings !== null;
+    const statusText = webModeError
+      ?? (webModeState?.settings.proxyEnabled ? webModeState.settings.proxyUrl : "Direct browser access");
+
+    return (
+      <section className="settings-detail-panel" aria-label="Web Mode detail" data-settings-detail="web-mode">
+        <div className="settings-detail-header">
+          <button className="settings-detail-back" type="button" onClick={() => setDetailView(null)}>
+            Back
+          </button>
+          <div>
+            <span>Link</span>
+            <strong>Web Mode</strong>
+            <p>{statusText}</p>
+          </div>
+        </div>
+
+        <div className="web-mode-settings-panel">
+          <button
+            className={`night-toggle ${webModeProxyEnabled ? "is-active" : ""}`}
+            type="button"
+            aria-pressed={webModeProxyEnabled}
+            disabled={busy}
+            onClick={() => setWebModeProxyEnabled((enabled) => !enabled)}
+          >
+            <Globe2 size={26} />
+            <span>
+              <strong>Web Proxy</strong>
+              <em>{webModeProxyEnabled ? "HTTP proxy enabled" : "Direct"}</em>
+            </span>
+          </button>
+
+          <label className="night-field web-mode-proxy-field">
+            <span>Proxy URL</span>
+            <input
+              type="url"
+              value={webModeProxyUrl}
+              disabled={busy}
+              inputMode="url"
+              spellCheck={false}
+              onFocus={() => void handleWebModeKeyboard()}
+              onChange={(event) => setWebModeProxyUrl(event.currentTarget.value)}
+            />
+          </label>
+
+          <div className="display-brightness-controls web-mode-settings-actions" role="group" aria-label="Web Mode controls">
+            <button className="display-brightness-step" type="button" disabled={busy} onClick={() => void handleWebModeSettingsSave()}>
+              {pendingWebModeSettings === "save" ? "Saving..." : "Save"}
+            </button>
+            <button className="display-brightness-step" type="button" disabled={busy} onClick={() => void handleWebModeProxyTest()}>
+              {pendingWebModeSettings === "test" ? "Testing..." : "Test"}
+            </button>
+            <button className="display-brightness-step" type="button" disabled={busy} onClick={() => void handleWebModeKeyboard()}>
+              <Keyboard size={16} />
+              {pendingWebModeSettings === "keyboard" ? "Opening..." : "Keyboard"}
+            </button>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
   function renderDisplayDetail() {
     const brightnessPercent = pendingBrightness ?? system.display.brightnessPercent;
     const brightnessBusy = pendingBrightness !== null;
@@ -672,23 +990,59 @@ export function QuickSettingsOverlay({
   }
 
   return (
-    <section className={`overlay quick-settings ${active ? "is-active" : ""}`} aria-label="Quick settings" aria-hidden={!active}>
+    <section className={`overlay quick-settings ${active ? "is-active" : ""}`} aria-label="Console" aria-hidden={!active}>
       <button className="overlay-backdrop" type="button" tabIndex={active ? 0 : -1} aria-label="Return to ambient" onClick={handleReturnAmbient} />
       <div className="settings-shell" role="dialog" aria-modal="true" data-gesture-protected {...overlayReturnGesture}>
-        <aside className="settings-nav" aria-label="Settings sections">
-          <button className={`settings-nav-item ${activeSection === "network" ? "is-active" : ""}`} type="button" onClick={() => setActiveSection("network")}>
-            <EthernetPort size={24} />
-            <span>Network</span>
-          </button>
-          <button className={`settings-nav-item ${activeSection === "output" ? "is-active" : ""}`} type="button" onClick={() => setActiveSection("output")}>
-            <Volume2 size={24} />
-            <span>Preferences</span>
-          </button>
-          <button className={`settings-nav-item ${activeSection === "system" ? "is-active" : ""}`} type="button" onClick={() => setActiveSection("system")}>
-            <Cpu size={24} />
-            <span>System</span>
-          </button>
-        </aside>
+        <header
+          className="console-hero"
+          data-console-source={currentSource.id}
+          data-console-playback={playback.state}
+          data-console-connection={currentSource.connectionState}
+        >
+          <div className="console-title-block">
+            <i className={`console-status-dot ${consoleStateClass}`} aria-hidden="true" />
+            <div>
+              <span>Console</span>
+              <strong>{sectionCopy[activeSection].label}</strong>
+            </div>
+          </div>
+
+          <div className="console-now-playing" data-console-now-playing>
+            <div className="console-source-art">
+              {playback.albumArtUrl ? <img src={playback.albumArtUrl} alt="" /> : <ConsoleSourceIcon size={30} strokeWidth={1.8} />}
+            </div>
+            <div>
+              <span>{currentSource.label} · {consoleStateLabel}</span>
+              <strong>{consoleTitle}</strong>
+              <p>{consoleSubtitle}</p>
+            </div>
+          </div>
+
+          <div className="console-status-stack" aria-label="Console status">
+            <span className="console-chip">{status.source === "api" ? "API Online" : "Fallback State"}</span>
+            <span className="console-chip">{consoleFormatLabel}</span>
+          </div>
+        </header>
+
+        <nav className="settings-top-tabs" aria-label="Console sections">
+          {settingsTabs.map((tab) => {
+            const Icon = tab.Icon;
+            const selected = activeSection === tab.id;
+            return (
+              <button
+                key={tab.id}
+                className={`settings-top-tab ${selected ? "is-active" : ""}`}
+                type="button"
+                aria-pressed={selected}
+                data-settings-tab={tab.id}
+                onClick={() => setActiveSection(tab.id)}
+              >
+                <Icon size={21} />
+                <span>{tab.label}</span>
+              </button>
+            );
+          })}
+        </nav>
 
         <div className="settings-content">
           <header className="settings-section-header">
@@ -704,8 +1058,12 @@ export function QuickSettingsOverlay({
               ? renderFontDetail()
               : detailView === "lyrics"
                 ? renderLyricsDetail()
+              : detailView === "nas"
+                  ? renderNasDetail()
                 : detailView === "night"
                   ? renderNightDetail()
+                  : detailView === "webMode"
+                    ? renderWebModeDetail()
               : (
           <div className="settings-grid" data-settings-section={activeSection}>
             {visibleCards.map((card) => {
@@ -741,7 +1099,7 @@ export function QuickSettingsOverlay({
                       <span>{card.title}</span>
                       <strong>{card.value}</strong>
                       <p>{card.meta}</p>
-                      <em className="settings-card-action">Open font presets</em>
+                      <em className="settings-card-action">Adjust type</em>
                     </div>
                   </button>
                 );
@@ -762,7 +1120,7 @@ export function QuickSettingsOverlay({
                       <span>{card.title}</span>
                       <strong>{card.value}</strong>
                       <p>{card.meta}</p>
-                      <em className="settings-card-action">Open skin presets</em>
+                      <em className="settings-card-action">Switch skin</em>
                     </div>
                   </button>
                 );
@@ -783,7 +1141,7 @@ export function QuickSettingsOverlay({
                       <span>{card.title}</span>
                       <strong>{card.value}</strong>
                       <p>{card.meta}</p>
-                      <em className="settings-card-action">Open lyric settings</em>
+                      <em className="settings-card-action">Tune lyrics</em>
                     </div>
                   </button>
                 );
@@ -807,7 +1165,7 @@ export function QuickSettingsOverlay({
                       <em className="settings-card-action">
                         {system.display.controllable
                           ? `${system.display.brightnessPercent}% brightness`
-                          : "Open display status"}
+                          : "Display status"}
                       </em>
                     </div>
                   </button>
@@ -830,6 +1188,48 @@ export function QuickSettingsOverlay({
                       <strong>{card.value}</strong>
                       <p>{card.meta}</p>
                       <em className="settings-card-action">{roomExperience.nightSchedule.brightnessPercent}% night brightness</em>
+                    </div>
+                  </button>
+                );
+              }
+
+              if (card.kind === "nas") {
+                return (
+                  <button
+                    className={`settings-card settings-card-button settings-card-summary settings-card-nas tone-${card.tone}`}
+                    key={card.key}
+                    type="button"
+                    onClick={() => openDetail("nas")}
+                  >
+                    <div className="settings-icon">
+                      <Server size={32} />
+                    </div>
+                    <div>
+                      <span>{card.title}</span>
+                      <strong>{card.value}</strong>
+                      <p>{card.meta}</p>
+                      <em className="settings-card-action">NAS status</em>
+                    </div>
+                  </button>
+                );
+              }
+
+              if (card.kind === "webMode") {
+                return (
+                  <button
+                    className={`settings-card settings-card-button settings-card-summary settings-card-web-mode tone-${card.tone}`}
+                    key={card.key}
+                    type="button"
+                    onClick={() => openDetail("webMode")}
+                  >
+                    <div className="settings-icon">
+                      <Globe2 size={32} />
+                    </div>
+                    <div>
+                      <span>{card.title}</span>
+                      <strong>{card.value}</strong>
+                      <p>{card.meta}</p>
+                      <em className="settings-card-action">Proxy & keyboard</em>
                     </div>
                   </button>
                 );

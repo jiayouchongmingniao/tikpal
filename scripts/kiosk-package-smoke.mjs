@@ -17,6 +17,7 @@ const requiredFiles = [
   "deploy/chromium/start-tikpal-kiosk-viewer.sh",
   "deploy/chromium/tikpal-kiosk-healthcheck.sh",
   "deploy/chromium/tikpal-kiosk-viewerctl.sh",
+  "deploy/chromium/tikpal-web-mode.sh",
   "deploy/chromium/chromium-flags.conf",
   "deploy/chromium/managed-policies.json",
   "deploy/chromium/env.kiosk.example",
@@ -58,6 +59,7 @@ async function run() {
   await assertExecutable("deploy/chromium/start-tikpal-kiosk-viewer.sh");
   await assertExecutable("deploy/chromium/tikpal-kiosk-healthcheck.sh");
   await assertExecutable("deploy/chromium/tikpal-kiosk-viewerctl.sh");
+  await assertExecutable("deploy/chromium/tikpal-web-mode.sh");
   await assertExecutable("deploy/moode/tikpal-alsa-loopback.sh");
   await assertExecutable("deploy/moode/tikpal-airplay-transport.sh");
   await assertExecutable("deploy/moode/tikpal-output-volume.sh");
@@ -175,6 +177,23 @@ async function run() {
   });
   assert(skipEnvCheck.status === 0, `launcher skip-env --check failed:\n${skipEnvCheck.stdout}\n${skipEnvCheck.stderr}`);
   assert(skipEnvCheck.stdout.includes("window: 2560x720"), "launcher should preserve systemd-provided window when env sourcing is skipped");
+
+  const webModeCheck = spawnSync("bash", ["deploy/chromium/tikpal-web-mode.sh", "--check"], {
+    cwd: ROOT,
+    env: {
+      ...process.env,
+      TIKPAL_CHROMIUM_BIN: process.execPath,
+      TIKPAL_KIOSK_XRANDR_MODE: "none"
+    },
+    encoding: "utf8"
+  });
+  assert(webModeCheck.status === 0, `web mode --check failed:\n${webModeCheck.stdout}\n${webModeCheck.stderr}`);
+  assert(webModeCheck.stdout.includes("left: 0,0 1920,720"), "web mode should keep the provider window on the left");
+  assert(webModeCheck.stdout.includes("panel: 1920,0 640,720"), "web mode should keep the Tikpal panel on the right");
+  assert(webModeCheck.stdout.includes("single provider window: 1"), "web mode should guard against multiple visible provider windows");
+  assert(webModeCheck.stdout.includes("popup blocking: 1"), "web mode should enable provider popup blocking by default");
+  assert(webModeCheck.stdout.includes("web-mode-extension"), "web mode should report the bundled navigation guard extension");
+  assert(webModeCheck.stdout.includes("proxy: enabled http://192.168.10.140:7897"), "web mode should default to the HTTP development proxy");
 
   const watchdogCheck = spawnSync("bash", ["deploy/chromium/tikpal-kiosk-healthcheck.sh", "--check"], {
     cwd: ROOT,

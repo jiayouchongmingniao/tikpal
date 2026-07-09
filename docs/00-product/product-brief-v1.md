@@ -24,7 +24,7 @@ The product should feel high-end, calm, restrained, and warm. It should make the
 | Room Canvas | The default surface transforms the room with scene video, subtle status, and short-lived controls. |
 | Hi-Fi Console | Playback controls stay fast and precise, but they are temporary overlays rather than the product center. |
 | Library Browsing | Local/NAS music selection stays direct and playback-oriented, without a separate playlist-editing surface in the kiosk UI. |
-| Device Settings | System operations are separate, lower-frequency, fixed-grid, and never the daily home surface. |
+| Console | Low-frequency device care stays separate from daily playback, but the surface still feels like a Hi-Fi control panel rather than a backend admin page. |
 
 Tikpal should use a clear hierarchy:
 
@@ -32,7 +32,7 @@ Tikpal should use a clear hierarchy:
 | --- | --- | --- |
 | Level 0 | `ambient` / Room Canvas | Scene ambience screen with room mode, time, playback status, weak progress, and fallback settings entry. |
 | Level 1 | `player` / Hi-Fi Console | Playback control overlay with cover art, metadata, progress, transport, volume, source, and audio status. |
-| Level 2 | `quickSettings` / Device Settings | System quick settings overlay with Network, Preferences, and System categories. |
+| Level 2 | `quickSettings` / Console | Listening-first device console with Signal, Library, Link, and Care sections. |
 | Level 3 | Advanced management | Advanced Web/admin surfaces outside the main touch UI. |
 
 ## Room Experience Model
@@ -113,15 +113,20 @@ The kiosk UI does not ship a playlist-editing or ritual-builder surface. Library
 
 The local music taxonomy remains manifest-backed: `Focus`, `Meditation`, and `Rest` are library categories, while `Focus`, `Calm`, `Sleep`, and `Hi-Fi` are experience modes.
 
-### Quick Settings Overlay
+### Console Overlay
 
-The quick settings overlay is a compact Device Settings surface, not a full configuration center and not a daily home view.
+The Console overlay is a compact device surface, not a full configuration center and not a daily home view. The internal route and app mode remain `quickSettings` for compatibility, but the visible product language is Console.
 
-Settings has no Home or Overview category. It opens directly to Preferences, then lets the user switch between three fixed categories:
+Console has no Home or Overview category. It opens directly to Signal, shows a listening status header with current source/playback truth, then lets the user switch between four fixed chips:
 
-- Network: network state and System/API status.
-- Preferences: audio output, DSP / CamillaDSP, display, Time & Night, font, skin, and lyrics.
-- System: library update, reboot, and shutdown.
+- Signal: audio output, DSP / CamillaDSP, display, Time & Night, font, skin, and lyrics.
+- Library: local library health, NAS source status, USB readiness, and library scan.
+- Link: network state, System/API status, and Web Mode proxy/keyboard setup.
+- Care: reboot and shutdown.
+
+The Console surface is a refined listening panel, not a full NAS administration console. Kiosk NAS controls show current source health and can point users toward Library Scan, but complex SMB/NFS setup, credentials, mount editing, and scan logs belong to authenticated remote/admin flows.
+
+Web Mode is a convenience wrapper for official web players, not a Tikpal audio source. It opens providers such as Spotify, YouTube Music, Apple Music, TIDAL, Qobuz, Deezer, Amazon Music, QQ Music, and NetEase Cloud Music in a left browser window while a 640 x 720 Tikpal panel stays on the right for provider switching, global volume, proxy status, and Keyboard. Entering Web Mode pauses Tikpal playback and does not update `audio.rememberedSource`. Web access uses the configured HTTP proxy by default, with `http://192.168.10.140:7897` as the development value.
 
 Dangerous actions must require confirmation.
 
@@ -143,8 +148,8 @@ The first runnable implementation must include:
 - Current time.
 - Weak current playback information.
 - One-finger swipe down to player overlay.
-- Two-finger swipe down to quick settings.
-- Settings reachable through the weak gear and quick menu fallback.
+- Two-finger swipe down to Console.
+- Console reachable through the weak gear and quick menu fallback.
 - Play / pause / previous / next.
 - Playback progress.
 - Volume display and adjustment.

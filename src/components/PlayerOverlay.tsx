@@ -4,6 +4,7 @@ import {
   Cast,
   Check,
   Clock,
+  Globe2,
   HardDrive,
   Heart,
   LibraryBig,
@@ -47,6 +48,7 @@ interface PlayerOverlayProps {
   fontTheme: FontTheme;
   onPlaybackAction: (type: PlaybackActionType, value?: number) => Promise<TikpalState>;
   onSourceSwitch: (target: SourceSwitchTarget, radioStationId?: string, localTrackPath?: string) => Promise<TikpalState>;
+  onOpenWebMode: () => Promise<void>;
   onReturnAmbient: () => void;
 }
 
@@ -162,6 +164,7 @@ export function PlayerOverlay({
   fontTheme,
   onPlaybackAction,
   onSourceSwitch,
+  onOpenWebMode,
   onReturnAmbient
 }: PlayerOverlayProps) {
   const overlayReturnGesture = useOverlayReturnGesture(onReturnAmbient);
@@ -192,6 +195,7 @@ export function PlayerOverlay({
   const [radioError, setRadioError] = useState<string | null>(null);
   const [failedRadioLogoIds, setFailedRadioLogoIds] = useState<Set<string>>(() => new Set());
   const [pendingSource, setPendingSource] = useState<SourceSwitchTarget | null>(null);
+  const [webModePending, setWebModePending] = useState(false);
   const [sourceError, setSourceError] = useState<string | null>(null);
   const [sourceHint, setSourceHint] = useState<string | null>(null);
   const [volumeDraftPercent, setVolumeDraftPercent] = useState<number | null>(null);
@@ -611,6 +615,19 @@ export function PlayerOverlay({
       setSourceError(error instanceof Error ? error.message : "Source switch failed");
     } finally {
       setPendingSource(null);
+    }
+  }
+
+  async function openWebMode() {
+    if (pendingSource || webModePending) return;
+    setWebModePending(true);
+    setSourceError(null);
+    try {
+      await onOpenWebMode();
+    } catch (error) {
+      setSourceError(error instanceof Error ? error.message : "Web Mode failed to open");
+    } finally {
+      setWebModePending(false);
     }
   }
 
@@ -1072,6 +1089,18 @@ export function PlayerOverlay({
                   </button>
                 );
               })}
+              <button
+                className={`library-primary-tab ${webModePending ? "is-selected" : ""}`}
+                type="button"
+                data-source-item="web-mode"
+                data-gesture-control
+                disabled={Boolean(pendingSource || webModePending)}
+                onClick={() => void openWebMode()}
+              >
+                <Globe2 size={20} />
+                <strong>Web Mode</strong>
+                <span>{webModePending ? "Opening" : "Web players"}</span>
+              </button>
             </nav>
           ) : null}
 

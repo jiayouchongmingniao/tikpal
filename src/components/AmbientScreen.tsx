@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { Bluetooth, Captions, CaptionsOff, Cast, GalleryHorizontalEnd, Heart, LibraryBig, ListMusic, LoaderCircle, Moon, Music2, Network, Pause, Play, Radio as RadioIcon, Repeat1, Settings, Shuffle, SkipBack, SkipForward, SlidersHorizontal, SunMedium, Target, Volume2, VolumeX, Waves } from "lucide-react";
+import { Bluetooth, Captions, CaptionsOff, Cast, GalleryHorizontalEnd, Globe2, Heart, LibraryBig, ListMusic, LoaderCircle, Moon, Music2, Network, Pause, Play, Radio as RadioIcon, Repeat1, Settings, Shuffle, SkipBack, SkipForward, SlidersHorizontal, SunMedium, Target, Volume2, VolumeX, Waves } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { fetchBackgroundVideos, fetchSceneContext } from "../api/tikpalClient";
 import { EqVisualScene, type HifiLyricsPanel } from "./EqVisualScene";
@@ -29,6 +29,7 @@ interface AmbientScreenProps {
   onPlaybackAction: (type: PlaybackActionType, value?: number, mode?: PlaybackMode) => Promise<TikpalState>;
   onSystemAction: (type: SystemActionType, value?: number) => Promise<TikpalState>;
   onSourceSwitch: (target: SourceSwitchTarget) => Promise<TikpalState>;
+  onOpenWebMode: () => Promise<void>;
   onSourcePickerOpenChange?: (open: boolean) => void;
   onHudActivity: () => void;
   onLyricsVisibleChange: (visible: boolean) => void;
@@ -313,6 +314,7 @@ export function AmbientScreen({
   onPlaybackAction,
   onSystemAction,
   onSourceSwitch,
+  onOpenWebMode,
   onSourcePickerOpenChange,
   onHudActivity,
   onLyricsVisibleChange,
@@ -339,6 +341,7 @@ export function AmbientScreen({
   const [adjustOverlay, setAdjustOverlay] = useState<AdjustOverlayState | null>(null);
   const [sourcePickerOpen, setSourcePickerOpen] = useState(false);
   const [pendingAmbientSource, setPendingAmbientSource] = useState<AmbientMusicSourceTarget | null>(null);
+  const [webModePending, setWebModePending] = useState(false);
   const [ambientSourceError, setAmbientSourceError] = useState<string | null>(null);
   const [backgroundVideos, setBackgroundVideos] = useState<BackgroundVideoSummary[]>([DEFAULT_BACKGROUND_VIDEO]);
   const [backgroundVideoIndex, setBackgroundVideoIndex] = useState(0);
@@ -745,6 +748,22 @@ export function AmbientScreen({
       setAmbientSourceError(error instanceof Error ? error.message : "Source switch failed");
     } finally {
       setPendingAmbientSource(null);
+    }
+  }
+
+  async function handleOpenWebModeClick() {
+    onHudActivity();
+    if (status.pending || pendingAmbientSource || webModePending) return;
+    setWebModePending(true);
+    setAmbientSourceError(null);
+    try {
+      await onOpenWebMode();
+      setSourcePickerOpen(false);
+      onSourcePickerOpenChange?.(false);
+    } catch (error) {
+      setAmbientSourceError(error instanceof Error ? error.message : "Web Mode failed to open");
+    } finally {
+      setWebModePending(false);
     }
   }
 
@@ -1244,6 +1263,20 @@ export function AmbientScreen({
                   </button>
                 );
               })}
+              <button
+                className="ambient-source-option ambient-source-option-web"
+                type="button"
+                role="menuitem"
+                disabled={status.pending || pendingAmbientSource !== null || webModePending}
+                data-ambient-source-option="web-mode"
+                onClick={() => void handleOpenWebModeClick()}
+              >
+                <span className="ambient-source-option-icon" aria-hidden="true">
+                  {webModePending ? <LoaderCircle size={23} className="is-spinning" /> : <Globe2 size={23} strokeWidth={1.8} />}
+                </span>
+                <strong>Web Mode</strong>
+                <span>{webModePending ? "Opening" : "Web players"}</span>
+              </button>
             </div>
           )}
           {ambientSourceError ? <div className="ambient-source-error" role="status">{ambientSourceError}</div> : null}
@@ -1307,7 +1340,7 @@ export function AmbientScreen({
         onWheel={handleZoneWheel("volume")}
       />
 
-      <button className="icon-button ambient-settings" type="button" data-gesture-protected onClick={onOpenSettings} aria-label="Open settings" title="Settings">
+      <button className="icon-button ambient-settings" type="button" data-gesture-protected onClick={onOpenSettings} aria-label="Open console" title="Console">
         <Settings size={26} strokeWidth={1.8} />
       </button>
 

@@ -23,6 +23,8 @@ const ROOM_MODES = ["focus", "calm", "sleep", "hifi"];
 const PLAYBACK_MODES = ["sequence", "repeat_one", "shuffle"];
 const SOURCE_TARGETS = ["mpd", "radio", "spotify", "bluetooth", "airplay", "upnp"];
 const HIFI_EQ_PRESETS = ["flat", "warm", "vocal"];
+const WEB_MODE_PROVIDERS = ["spotify", "youtube_music", "apple_music", "tidal", "qobuz", "deezer", "amazon_music", "qq_music", "netease_music"];
+const WEB_MODE_ACTION_TYPES = ["open", "close", "keyboard"];
 
 function ref(name) {
   return { $ref: `#/components/schemas/${name}` };
@@ -89,6 +91,61 @@ export function buildOpenApiDocument({ appVersion = "0.1.0" } = {}) {
           }
         }
       },
+      "/web-mode/state": {
+        get: {
+          tags: ["web-mode"],
+          summary: "Read Web Mode provider and proxy state",
+          responses: {
+            200: jsonResponse("Web Mode state", "WebModeState")
+          }
+        }
+      },
+      "/web-mode/actions": {
+        post: {
+          tags: ["web-mode"],
+          summary: "Open, close, or surface Web Mode keyboard",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: ref("WebModeActionRequest")
+              }
+            }
+          },
+          responses: {
+            200: jsonResponse("Web Mode state", "WebModeState"),
+            400: jsonResponse("Bad request", "ErrorResponse")
+          }
+        }
+      },
+      "/web-mode/settings": {
+        patch: {
+          tags: ["web-mode"],
+          summary: "Update Web Mode proxy settings",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: ref("WebModeSettingsPatch")
+              }
+            }
+          },
+          responses: {
+            200: jsonResponse("Web Mode state", "WebModeState"),
+            400: jsonResponse("Bad request", "ErrorResponse")
+          }
+        }
+      },
+      "/web-mode/proxy-test": {
+        post: {
+          tags: ["web-mode"],
+          summary: "Validate Web Mode proxy configuration",
+          responses: {
+            200: jsonResponse("Proxy test result", "WebModeProxyTestResponse"),
+            400: jsonResponse("Bad request", "ErrorResponse")
+          }
+        }
+      },
       "/openapi.json": {
         get: {
           tags: ["docs"],
@@ -143,6 +200,66 @@ export function buildOpenApiDocument({ appVersion = "0.1.0" } = {}) {
           properties: {
             error: { type: "string" },
             message: { type: "string" }
+          }
+        },
+        WebModeProvider: {
+          type: "object",
+          required: ["id", "label", "url", "experimental"],
+          properties: {
+            id: { type: "string", enum: WEB_MODE_PROVIDERS },
+            label: { type: "string" },
+            url: { type: "string", format: "uri" },
+            experimental: { type: "boolean" }
+          }
+        },
+        WebModeSettings: {
+          type: "object",
+          required: ["proxyEnabled", "proxyUrl", "updatedAt"],
+          properties: {
+            proxyEnabled: { type: "boolean" },
+            proxyUrl: { type: "string" },
+            updatedAt: { type: "string", nullable: true }
+          }
+        },
+        WebModeState: {
+          type: "object",
+          required: ["enabled", "activeProvider", "providers", "settings", "lastError", "updatedAt"],
+          properties: {
+            enabled: { type: "boolean" },
+            activeProvider: { type: "string", enum: WEB_MODE_PROVIDERS, nullable: true },
+            providers: {
+              type: "array",
+              items: ref("WebModeProvider")
+            },
+            settings: ref("WebModeSettings"),
+            lastError: { type: "string", nullable: true },
+            updatedAt: { type: "string", format: "date-time", nullable: true }
+          }
+        },
+        WebModeActionRequest: {
+          type: "object",
+          required: ["type"],
+          properties: {
+            type: { type: "string", enum: WEB_MODE_ACTION_TYPES },
+            provider: { type: "string", enum: WEB_MODE_PROVIDERS }
+          },
+          additionalProperties: false
+        },
+        WebModeSettingsPatch: {
+          type: "object",
+          properties: {
+            proxyEnabled: { type: "boolean" },
+            proxyUrl: { type: "string" }
+          },
+          additionalProperties: false
+        },
+        WebModeProxyTestResponse: {
+          type: "object",
+          required: ["ok", "message", "proxyUrl"],
+          properties: {
+            ok: { type: "boolean" },
+            message: { type: "string" },
+            proxyUrl: { type: "string" }
           }
         },
         RemoteStateResponse: {

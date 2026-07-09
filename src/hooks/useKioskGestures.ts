@@ -158,7 +158,7 @@ export function useKioskGestures(options: GestureOptions): GestureHandlers & { g
         if (averageDeltaY > TWO_FINGER_HINT_THRESHOLD) {
           updateGesturePreview({
             kind: "settings",
-            label: "Settings",
+            label: "Console",
             progress: clampProgress(averageDeltaY, TWO_FINGER_DOWN_THRESHOLD)
           });
         }
@@ -242,7 +242,7 @@ export function useKioskGestures(options: GestureOptions): GestureHandlers & { g
         const isSettingsGesture = wheelAccumulatorRef.current > 0;
         updateGesturePreview({
           kind: isSettingsGesture ? "settings" : "player",
-          label: isSettingsGesture ? "Settings" : "Player",
+          label: isSettingsGesture ? "Console" : "Player",
           progress: clampProgress(absDelta, WHEEL_THRESHOLD)
         });
 

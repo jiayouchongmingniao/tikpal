@@ -16,7 +16,10 @@ import type {
   SourceSwitchTarget,
   SystemActionRequest,
   SystemActionType,
-  TikpalState
+  TikpalState,
+  WebModeActionRequest,
+  WebModeSettingsPatch,
+  WebModeState
 } from "../types";
 
 const API_ROOT = "/api/v1";
@@ -223,6 +226,50 @@ export async function sendSourceSwitch(
     body: JSON.stringify(body)
   }, DEFAULT_POST_TIMEOUT_MS);
   return readJson<TikpalState>(response);
+}
+
+export async function fetchWebModeState(signal?: AbortSignal): Promise<WebModeState> {
+  const response = await fetchWithTimeout(`${API_ROOT}/web-mode/state`, {
+    headers: { Accept: "application/json" },
+    signal
+  }, DEFAULT_GET_TIMEOUT_MS);
+  return readJson<WebModeState>(response);
+}
+
+export async function sendWebModeAction(action: WebModeActionRequest): Promise<WebModeState> {
+  const response = await fetchWithTimeout(`${API_ROOT}/web-mode/actions`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(action)
+  }, DEFAULT_POST_TIMEOUT_MS);
+  return readJson<WebModeState>(response);
+}
+
+export async function updateWebModeSettings(patch: WebModeSettingsPatch): Promise<WebModeState> {
+  const response = await fetchWithTimeout(`${API_ROOT}/web-mode/settings`, {
+    method: "PATCH",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(patch)
+  }, DEFAULT_POST_TIMEOUT_MS);
+  return readJson<WebModeState>(response);
+}
+
+export async function testWebModeProxy(): Promise<{ ok: boolean; message: string; proxyUrl: string }> {
+  const response = await fetchWithTimeout(`${API_ROOT}/web-mode/proxy-test`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({})
+  }, DEFAULT_POST_TIMEOUT_MS);
+  return readJson<{ ok: boolean; message: string; proxyUrl: string }>(response);
 }
 
 export async function sendKioskHeartbeat(payload: Record<string, unknown>, signal?: AbortSignal): Promise<void> {

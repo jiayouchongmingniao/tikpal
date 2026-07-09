@@ -14,7 +14,7 @@ type AppMode = "ambient" | "player" | "quickSettings" | "quickMenu";
 | --- | --- | --- |
 | `ambient` | Default startup and timeout state. | One-finger swipe down, two-finger swipe down, long press, tap, optional horizontal swipe. |
 | `player` | One-finger swipe down from `ambient`; quick menu item. | Swipe up, blank tap, 15s inactivity. |
-| `quickSettings` | Two-finger swipe down from `ambient`; weak gear; quick menu item. | Swipe up, 30s inactivity, confirmed action completion. |
+| `quickSettings` | Two-finger swipe down from `ambient`; weak Console gear; quick menu item. | Swipe up, 30s inactivity, confirmed action completion. |
 | `quickMenu` | Long press on `ambient`. | Select item, cancel, blank tap. |
 
 ## Gesture Contract
@@ -22,8 +22,8 @@ type AppMode = "ambient" | "player" | "quickSettings" | "quickMenu";
 | Gesture | Target | Behavior |
 | --- | --- | --- |
 | One-finger swipe down | Ambient | Open player overlay. |
-| Two-finger swipe down | Ambient | Open quick settings. |
-| Swipe up | Player or quick settings | Return to ambient, including swipes that start inside the overlay panel. |
+| Two-finger swipe down | Ambient | Open Console. |
+| Swipe up | Player or Console | Return to ambient, including swipes that start inside the overlay panel. |
 | Tap | Ambient | In Focus/Calm/Sleep, show the HUD and open the lightweight source picker; in Hi-Fi, toggle the HUD. The HUD and picker auto-hide after 5 seconds without input. |
 | Long press | Ambient | Open quick menu. |
 | Vertical drag in left ambient zone | Ambient | Live display brightness adjustment through DDC/CI when available. The overlay follows the hand immediately, but backend writes are coalesced to the final resting value. |
@@ -43,22 +43,22 @@ type AppMode = "ambient" | "player" | "quickSettings" | "quickMenu";
 | Ambient HUD default dwell | 5000ms from startup before auto-hide. The startup room-mode chooser may auto-dismiss to the current persisted mode, but it must not re-send `set_mode` or replay room preset side effects unless the user taps a mode. |
 | Tap-shown HUD dwell | 5000ms before auto-hide. |
 | Player inactivity timeout | 15s. |
-| Quick settings inactivity timeout | 30s. |
+| Console inactivity timeout | 30s. |
 | Dangerous confirmation timeout | No auto-close, or extend to 60s. |
 
 ## Two-Finger Mistake Prevention
 
-The two-finger quick-settings gesture must have process feedback:
+The two-finger Console gesture must have process feedback:
 
-- At about 40px travel, show a subtle top hint: continue down for settings.
-- At about 130px travel, commit to quick settings.
+- At about 40px travel, show a subtle top hint: continue down for Console.
+- At about 130px travel, commit to Console.
 - If released before the threshold, cancel and return to ambient.
 
-This keeps settings discoverable without letting accidental two-finger contact feel like a mode jump.
+This keeps Console discoverable without letting accidental two-finger contact feel like a mode jump.
 
 ## Fallback Entries
 
-System settings must not rely only on a hidden two-finger gesture. The product must support additional entries:
+Console must not rely only on a hidden two-finger gesture. The product must support additional entries:
 
 - Weak gear icon in the top-right corner.
 - Long-press quick menu.
@@ -77,7 +77,7 @@ stateDiagram-v2
   player --> ambient: swipe up / blank tap / 15s idle
   quickSettings --> ambient: swipe up / 30s idle
   quickMenu --> player: choose player
-  quickMenu --> quickSettings: choose settings
+  quickMenu --> quickSettings: choose Console
   quickMenu --> ambient: cancel / choose ambient
 ```
 
@@ -127,20 +127,23 @@ stateDiagram-v2
 - Player, Ambient Hi-Fi, and portable remote summaries must keep now-playing title, artist, album, artwork, source label, progress, favorite state, and queue position aligned with backend playback truth. Browsing a source or arming an external intake must not overwrite the displayed track until the backend confirms playback/source truth. Radio is the exception for station-level presentation only: a backend-primed station switch can update the Radio label and logo early, while final playback state still waits for MPD verification.
 - Bluetooth and AirPlay metadata-backed lyrics use `sourceScope: "bluetooth_input"` / `"airplay_input"` and the shared playback clock, so portable remote refreshes and the kiosk Hi-Fi wall stay anchored to the same track. AirPlay may use `positionConfidence:"estimated"` when true MPRIS position is unavailable; paused/stopped states must freeze or clear that clock rather than advancing through silence. Ready external-input lyrics must have the same title/artist identity as playback; if LRCLIB only has a same-title different-artist result, the UI should keep the centered now-playing state.
 
-### Quick Settings
+### Console
 
 - Cards are summary-first.
-- Settings has no Home or Overview category and opens directly to Preferences.
-- The only categories are Network, Preferences, and System.
-- Swipe up returns to ambient even when the gesture starts inside the protected settings panel.
-- Button-sized taps inside the protected settings panel must remain local settings actions, not blank-tap returns.
+- The visible surface is Console, while the internal app mode remains `quickSettings` for compatibility.
+- Console has no Home or Overview category and opens directly to Signal.
+- The only chips are Signal, Library, Link, and Care, rendered as a listening console rather than a left sidebar.
+- The header shows current source/playback truth so AirPlay/Bluetooth ready states stay readable and do not bleed through the background.
+- Library/NAS controls stay status-first on the kiosk; complex SMB/NFS setup and credentials belong to remote/admin flows.
+- Swipe up returns to ambient even when the gesture starts inside the protected Console panel.
+- Button-sized taps inside the protected Console panel must remain local Console actions, not blank-tap returns.
 - Dangerous actions require a confirmation state inside the card or a modal.
 - Reboot, shutdown, database rebuild, audio output switch, network reset, and reset defaults are dangerous.
 
 ### Quick Menu
 
 - Quick menu is a fallback, not a second navigation system.
-- It should never expose deep settings directly.
+- It should never expose deep Console drawers directly.
 - It should close cleanly on cancel or after choosing an item.
 - Quick Menu may expose shallow scene toggles: Scene Video, Clock, and Scene Sound.
 - Turning Scene Sound on forces Scene Video on, switches playback source truth to `scene`, and unmutes only the active Ambient video layer.
@@ -148,6 +151,16 @@ stateDiagram-v2
 - Turning Scene Video off while Scene Sound is active also stops Scene Sound, follows the same remembered-source resume path, and returns the video surface to a black quiet state.
 - Hi-Fi mode disables Scene Video and Scene Sound controls and does not mount MP4 scenes.
 - Auto Night uses the selected timezone to lower display brightness only. It must not switch modes, start Scene Sound, or interrupt Hi-Fi playback.
+
+### Web Mode
+
+- Web Mode is the only deliberate multi-window exception: the official web player opens on the left 1920 x 720 area, while Tikpal keeps a 640 x 720 side panel on the right.
+- Ambient and Player expose a single Web Mode entry. The side panel, not the source picker, handles provider switching among Spotify, YouTube Music, Apple Music, TIDAL, Qobuz, Deezer, Amazon Music, QQ Music, and NetEase Cloud Music.
+- Only one official-provider window should remain visible at a time. Sites that try to open a new playback page should be redirected into the same left pane, and any extra provider window should be closed so two pages cannot keep playing in parallel.
+- The side panel's active provider highlight follows `.tikpal/web-mode-state.json`. It must not invent Spotify as a fallback when runtime state is missing; stale state is worse than no active highlight.
+- Entering Web Mode pauses Tikpal playback and closes audible Scene Sound so browser audio does not overlap MPD or scene audio.
+- Web Mode does not show Tikpal lyrics, artwork truth, or fake transport controls for the third-party site. It only offers provider switching, global volume, proxy status, Keyboard, and Back.
+- Console Link owns Web Mode proxy settings. Focusing the proxy URL field or pressing Keyboard should surface `onboard`; Chromium login pages use the same manual Keyboard fallback when auto-show is unreliable.
 
 ## Input Compatibility
 
@@ -160,14 +173,14 @@ MVP is touch-first. The state model should still reserve clean mappings for:
 Current desktop validation mappings:
 
 - Wheel / trackpad up from ambient opens `player`.
-- Wheel / trackpad down from ambient opens `quickSettings`.
+- Wheel / trackpad down from ambient opens `quickSettings` / Console.
 - Wheel / trackpad up from an overlay returns to `ambient`.
 - Clicks inside protected overlay panels do not count as blank-tap return.
-- Drag / touch-swipe up inside protected player or settings panels returns to `ambient`.
+- Drag / touch-swipe up inside protected player or Console panels returns to `ambient`.
 
 ## Non-Goals
 
-- No multi-window navigation.
-- No stacked player and settings overlays.
+- No multi-window navigation except Web Mode's deliberate official-player-plus-side-panel layout.
+- No stacked player and Console overlays.
 - No full moOde admin surface in the kiosk UI.
 - No dangerous operation on first tap.
