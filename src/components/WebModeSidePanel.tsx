@@ -5,6 +5,7 @@ import { fetchTikpalState, fetchWebModeState, sendPlaybackAction, sendWebModeAct
 import type { TikpalState, WebModeProviderId, WebModeProviderSummary, WebModeState } from "../types";
 
 const providerOrder: WebModeProviderId[] = [
+  "suno",
   "spotify",
   "youtube_music",
   "apple_music",
@@ -17,6 +18,7 @@ const providerOrder: WebModeProviderId[] = [
 ];
 
 const providerLabels: Record<WebModeProviderId, string> = {
+  suno: "Suno",
   spotify: "Spotify",
   youtube_music: "YouTube Music",
   apple_music: "Apple Music",
@@ -29,6 +31,7 @@ const providerLabels: Record<WebModeProviderId, string> = {
 };
 
 const providerIcons: Record<WebModeProviderId, LucideIcon> = {
+  suno: Music2,
   spotify: Music2,
   youtube_music: SquarePlay,
   apple_music: Apple,
@@ -41,6 +44,7 @@ const providerIcons: Record<WebModeProviderId, LucideIcon> = {
 };
 
 const providerTones: Record<WebModeProviderId, string> = {
+  suno: "#ff7a59",
   spotify: "#1ed760",
   youtube_music: "#ff0033",
   apple_music: "#f5f5f7",
@@ -263,7 +267,7 @@ export function WebModeSidePanel() {
                 <Icon size={24} />
               </span>
               <strong>{provider.label}</strong>
-              <em>{provider.experimental ? "Experimental" : opening ? "Opening" : selected ? "Active" : "Open"}</em>
+              <em>{provider.experimental ? "Experimental" : opening ? "Opening" : selected ? "Active" : "Ready"}</em>
             </button>
           );
         })}

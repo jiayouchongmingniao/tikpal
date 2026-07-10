@@ -6071,31 +6071,40 @@ select {
 
 .web-mode-provider.is-active {
   border-color: var(--provider-tone);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.18),
+    0 0 14px color-mix(in srgb, var(--provider-tone) 15%, transparent);
 }
 
 .web-mode-provider.is-opening {
-  border-color: color-mix(in srgb, var(--provider-tone) 48%, rgba(180, 210, 230, 0.14));
-  box-shadow: 0 0 18px color-mix(in srgb, var(--provider-tone) 20%, transparent);
+  border-color: rgba(180, 210, 230, 0.16);
+  box-shadow: 0 0 16px color-mix(in srgb, var(--provider-tone) 12%, transparent);
+}
+
+.web-mode-provider.is-opening em {
+  color: color-mix(in srgb, var(--provider-tone) 74%, #ffffff);
 }
 
 .web-mode-provider.is-opening::after {
   content: "";
   position: absolute;
   inset: -1px;
-  padding: 2px;
+  padding: 3px;
   border-radius: inherit;
   background: conic-gradient(
     from 0deg,
     transparent 0deg,
-    transparent 214deg,
-    color-mix(in srgb, var(--provider-tone) 48%, transparent) 248deg,
-    var(--provider-tone) 286deg,
-    transparent 326deg,
+    transparent 176deg,
+    color-mix(in srgb, var(--provider-tone) 24%, transparent) 218deg,
+    color-mix(in srgb, var(--provider-tone) 86%, #ffffff) 262deg,
+    #ffffff 284deg,
+    color-mix(in srgb, var(--provider-tone) 72%, transparent) 306deg,
+    transparent 342deg,
     transparent 360deg
   );
   pointer-events: none;
-  animation: webModeProviderOpeningSpin 1.8s linear infinite;
+  filter: drop-shadow(0 0 8px color-mix(in srgb, var(--provider-tone) 54%, transparent));
+  animation: webModeProviderOpeningSpin 1.35s linear infinite;
   -webkit-mask:
     linear-gradient(#000 0 0) content-box,
     linear-gradient(#000 0 0);

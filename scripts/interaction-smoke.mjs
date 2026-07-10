@@ -3869,7 +3869,7 @@ try {
 
   await navigate(client, new URL("/side-panel", APP_URL).toString());
   await expect(client, "document.querySelector('[data-web-mode-panel]') !== null && document.querySelector('.app-root') === null", "Explore side panel renders without the main kiosk app");
-  await expect(client, "document.querySelectorAll('[data-web-mode-provider]').length >= 9", "Explore side panel exposes common web player providers");
+  await expect(client, "document.querySelectorAll('[data-web-mode-provider]').length >= 10", "Explore side panel exposes common web player providers");
   await expect(
     client,
     "document.querySelector('[data-web-mode-proxy-toggle]')?.tagName === 'BUTTON' && document.querySelector('[data-web-mode-top-back]') !== null",
@@ -3881,7 +3881,9 @@ try {
       (() => {
         const ids = [...document.querySelectorAll('[data-web-mode-provider]')].map((node) => node.dataset.webModeProvider);
         return ids.length === new Set(ids).size
+          && ids[0] === 'suno'
           && ids.filter((id) => id === 'qq_music').length === 1
+          && document.querySelector('[data-web-mode-provider="suno"] strong')?.textContent === 'Suno'
           && document.querySelector('[data-web-mode-provider][disabled]') === null
           && document.querySelector('[data-web-mode-provider="amazon_music"] strong')?.textContent === 'Amazon Music'
           && document.querySelector('[data-web-mode-provider="qq_music"] strong')?.textContent === 'QQ Music'

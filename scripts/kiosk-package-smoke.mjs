@@ -1,6 +1,8 @@
 import { access, readFile, stat } from "node:fs/promises";
 import { constants } from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
+import { request as httpRequest } from "node:http";
+import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { mkdtempSync, writeFileSync } from "node:fs";
@@ -49,6 +51,51 @@ async function assertExecutable(file) {
   await access(path.join(ROOT, file), constants.X_OK);
 }
 
+async function getFreePorts(count) {
+  const servers = Array.from({ length: count }, () => createNetServer());
+  await Promise.all(servers.map((server) => new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  })));
+  const ports = servers.map((server) => server.address().port);
+  await Promise.all(servers.map((server) => new Promise((resolve, reject) => {
+    server.close((error) => error ? reject(error) : resolve());
+  })));
+  return ports;
+}
+
+function requestWeb(port, pathname = "/", method = "GET") {
+  return new Promise((resolve, reject) => {
+    const request = httpRequest({
+      hostname: "127.0.0.1",
+      port,
+      path: pathname,
+      method,
+      headers: { Host: `192.0.2.10:${port}` }
+    }, (response) => {
+      const chunks = [];
+      response.on("data", (chunk) => chunks.push(chunk));
+      response.on("end", () => resolve({
+        status: response.statusCode,
+        body: Buffer.concat(chunks).toString("utf8")
+      }));
+    });
+    request.once("error", reject);
+    request.end();
+  });
+}
+
+async function waitForWeb(port) {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    try {
+      return await requestWeb(port);
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+  throw new Error(`web server did not start on port ${port}`);
+}
+
 async function run() {
   for (const file of requiredFiles) {
     const info = await stat(path.join(ROOT, file));
@@ -81,6 +128,7 @@ async function run() {
   assert(apiUnit.includes("network.target"), "api unit should use network.target");
   assert(!apiUnit.includes("network-online.target"), "api unit should not wait for network-online.target");
   assert(webUnit.includes("server/web.mjs"), "web unit should use the production static server");
+  assert(webUnit.includes("TIKPAL_WEB_REMOTE_PORT=4174"), "web unit should expose portable remote control separately from the kiosk UI");
   assert(kioskDevtoolsUnit.includes("start-tikpal-kiosk-devtools-proxy.sh"), "kiosk DevTools unit should launch the LAN proxy");
   assert(kioskDevtoolsUnit.includes("PartOf=tikpal-kiosk.service"), "kiosk DevTools proxy should follow kiosk service lifecycle");
   assert(kioskUnit.includes("start-tikpal-kiosk-display.sh"), "kiosk unit should launch the display-mode wrapper");
@@ -96,6 +144,43 @@ async function run() {
   assert(systemdInstaller.includes("tikpal-kiosk-watchdog.service"), "systemd installer should install the kiosk watchdog service");
   assert(systemdInstaller.includes("tikpal-kiosk-watchdog.timer"), "systemd installer should install and enable the kiosk watchdog timer");
   assert(kioskUnit.includes("TIKPAL_KIOSK_SKIP_ENV_SOURCE=1"), "kiosk unit should preserve systemd EnvironmentFile override order");
+
+  const webSmokeDir = mkdtempSync(path.join(tmpdir(), "tikpal-web-surfaces-"));
+  writeFileSync(path.join(webSmokeDir, "index.html"), "<!doctype html><html><head></head><body>Tikpal</body></html>");
+  const [kioskPort, remotePort, unusedApiPort] = await getFreePorts(3);
+  const webProcess = spawn(process.execPath, ["server/web.mjs"], {
+    cwd: ROOT,
+    env: {
+      ...process.env,
+      TIKPAL_WEB_HOST: "127.0.0.1",
+      TIKPAL_WEB_PORT: String(kioskPort),
+      TIKPAL_WEB_REMOTE_PORT: String(remotePort),
+      TIKPAL_WEB_DIST_DIR: webSmokeDir,
+      TIKPAL_API_ORIGIN: `http://127.0.0.1:${unusedApiPort}`
+    },
+    stdio: "ignore"
+  });
+
+  try {
+    await waitForWeb(kioskPort);
+    const kioskPage = await requestWeb(kioskPort);
+    const remotePage = await requestWeb(remotePort);
+    assert(kioskPage.status === 200, "kiosk web port should serve the full UI to LAN hosts");
+    assert(!kioskPage.body.includes("__TIKPAL_REMOTE_MODE__"), "kiosk web port should not inject portable remote mode");
+    assert(remotePage.body.includes("__TIKPAL_REMOTE_MODE__=true"), "remote web port should inject portable remote mode");
+
+    const kioskApi = await requestWeb(kioskPort, "/api/v1/system/state");
+    const remoteApi = await requestWeb(remotePort, "/api/v1/system/state");
+    const remoteHeartbeat = await requestWeb(kioskPort, "/api/v1/kiosk/heartbeat", "POST");
+    assert(kioskApi.status === 502, "kiosk web port should allow the LAN full-UI API through to its configured origin");
+    assert(remoteApi.status === 403, "remote web port should block the full kiosk API");
+    assert(remoteHeartbeat.status === 403, "LAN kiosk views should not overwrite the physical kiosk heartbeat");
+  } finally {
+    if (webProcess.exitCode === null) {
+      webProcess.kill("SIGTERM");
+      await new Promise((resolve) => webProcess.once("exit", resolve));
+    }
+  }
 
   const kioskEnv = await readFile(path.join(ROOT, "deploy/chromium/env.kiosk.example"), "utf8");
   assert(kioskEnv.includes("TIKPAL_KIOSK_REMOTE_DEBUG=0"), "kiosk env should default remote debugging off");
@@ -130,6 +215,15 @@ async function run() {
   assert(webModeScript.includes("window-guard.pid"), "web mode should track the persistent window guard pid");
   assert(webModeScript.includes('flock -x -w "$TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS"'), "web mode should not wait forever on provider switch locks");
   assert(webModeScript.includes("9>&- &"), "web mode background children should not inherit the provider switch lock");
+  const openProviderBody = webModeScript.slice(
+    webModeScript.indexOf("open_provider()"),
+    webModeScript.indexOf("check_runtime()")
+  );
+  assert(
+    openProviderBody.indexOf("ensure_side_panel") >= 0 &&
+      openProviderBody.indexOf("ensure_side_panel") < openProviderBody.indexOf("launch_transition_veil"),
+    "web mode should show the right provider panel before the left loading veil"
+  );
 
   const loopbackGuardDir = mkdtempSync(path.join(tmpdir(), "tikpal-loopback-guard-"));
   const hdmiLoopbackConfig = path.join(loopbackGuardDir, "_sndaloop-hdmi.conf");
@@ -212,9 +306,12 @@ async function run() {
   assert(webModeCheck.stdout.includes("provider debug: 127.0.0.1:9234"), "web mode should expose only a local provider CDP port");
   assert(webModeCheck.stdout.includes("provider debug stride: per-provider"), "web mode should avoid CDP port clashes during staged provider switches");
   assert(webModeCheck.stdout.includes("provider guard: 1"), "web mode should enable the provider guard by default");
+  assert(webModeCheck.stdout.includes("provider hang monitor: 1"), "web mode should suppress provider unresponsive dialogs");
   assert(webModeCheck.stdout.includes("switch lock timeout: 2s"), "web mode should report the bounded provider switch lock timeout");
   assert(webModeCheck.stdout.includes("error page: http://127.0.0.1:4173/web-mode-error.html"), "web mode should report the friendly error page URL");
   assert(webModeCheck.stdout.includes("transition page: http://127.0.0.1:4173/web-mode-transition.html"), "web mode should report the staged switch transition page");
+  assert(webModeCheck.stdout.includes("onboard: 500,420 900,280"), "web mode should place the full Onboard keyboard near provider login inputs");
+  assert(webModeCheck.stdout.includes("onboard input focus: 1"), "web mode should enable input-focus keyboard activation");
   assert(webModeCheck.stdout.includes("qq scoped auto confirm: 1"), "web mode should keep QQ auto-confirm scoped inside the provider guard");
   assert(webModeCheck.stdout.includes("proxy: enabled http://192.168.10.140:7897"), "web mode should default to the HTTP development proxy");
 
@@ -226,8 +323,14 @@ async function run() {
   assert(providerGuardCheck.stdout.includes("check passed"), "provider guard should report check passed");
   assert(providerGuardCheck.stdout.includes("kiosk interaction blocking: 1"), "provider guard should disable browser-like context gestures");
   assert(providerGuardCheck.stdout.includes("friendly error redirect: 1"), "provider guard should redirect Chromium error pages");
+  assert(providerGuardCheck.stdout.includes("provider native failure redirect: 1"), "provider guard should redirect provider-native failure pages");
+  assert(providerGuardCheck.stdout.includes("oauth navigation abort ignored: 1"), "provider guard should not redirect normal OAuth navigation aborts");
+  assert(providerGuardCheck.stdout.includes("safe consent auto confirm: 1"), "provider guard should auto-confirm safe cookie consent prompts");
+  assert(providerGuardCheck.stdout.includes("input focus keyboard: 1"), "provider guard should raise Onboard when provider inputs receive focus");
   assert(providerGuardCheck.stdout.includes("empty page timeout: 18s"), "provider guard should redirect long-running blank provider pages");
   assert(providerGuardCheck.stdout.includes("取消"), "provider guard should include safe QQ cancel prompts");
+  assert(providerGuardCheck.stdout.includes("youtube safe dismiss: 1"), "provider guard should dismiss safe YouTube prompts");
+  assert(providerGuardCheck.stdout.includes("no, thanks"), "provider guard should include the YouTube no-thanks prompt");
   assert(providerGuardCheck.stdout.includes("关闭"), "provider guard should include safe QQ close prompts");
   assert(providerGuardCheck.stdout.includes("dismiss labels:"), "provider guard should allow safe dismiss prompts without accepting upsells");
   assert(providerGuardCheck.stdout.includes("duplicate player pruning: 1"), "provider guard should prune duplicate QQ player pages");
@@ -235,6 +338,13 @@ async function run() {
   const providerGuardSource = await readFile(path.join(ROOT, "deploy/chromium/tikpal-web-mode-guard.mjs"), "utf8");
   assert(providerGuardSource.includes("querySelectorAll(\"iframe\")"), "provider guard should scan same-origin QQ modal iframes");
   assert(providerGuardSource.includes("[class*='confirm']"), "provider guard should recognize QQ confirm-style modal containers");
+  assert(providerGuardSource.includes("unsupported_browser"), "provider guard should classify unsupported-browser provider failures");
+  assert(providerGuardSource.includes("region_unavailable"), "provider guard should classify region-blocked provider failures");
+  assert(providerGuardSource.includes("Number(diagnostics?.visibleCount || 0) <= 3"), "provider guard should not classify a populated provider loading shell as empty");
+  assert(providerGuardSource.includes("diagnostics?.resourceCount || 0"), "provider guard should reset the empty-page timeout while provider resources are still loading");
+  assert(providerGuardSource.includes("__tikpalInputFocusGuardInstalled"), "provider guard should hot-install input focus handling on existing provider pages");
+  assert(webModeScript.includes('args+=("--disable-hang-monitor")'), "provider Chromium should not block Explore return on a page-unresponsive dialog");
+  assert(webModeScript.includes('pkill -KILL -f -- "--user-data-dir=$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/"'), "Explore close should force-exit an unresponsive provider after the grace period");
 
   const webModeErrorPage = await readFile(path.join(ROOT, "public/web-mode-error.html"), "utf8");
   assert(webModeErrorPage.includes("did not respond"), "friendly Explore error page should avoid native Chromium error copy");

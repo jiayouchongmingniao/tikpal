@@ -30,7 +30,7 @@ The repo now contains the local app, API, deploy package, and smoke tests. Keep 
 Current deployment package:
 
 - `server/index.mjs`: local API with mock-by-default playback plus optional native `mpc` backend for moOde devices.
-- `server/web.mjs`: production static server for `dist/`, with `/api` proxied to the API service.
+- `server/web.mjs`: production static server for `dist/`, with a full kiosk listener on `4173`, a portable remote listener on `4174`, and `/api` proxied to the API service under listener-specific access rules.
 - `deploy/chromium/launch-tikpal-kiosk.sh`: Chromium launcher with `--check`, dedicated profile cleanup, dark startup flags, and display mode hooks.
 - `deploy/chromium/tikpal-web-mode.sh`: optional Explore launcher for left-side official web players, right-side Tikpal panel, provider profiles, proxy flags, and `onboard` setup.
 - `deploy/chromium/start-tikpal-kiosk-session.sh`: X-session entrypoint for systemd `startx`.
@@ -53,6 +53,7 @@ Recommended future environment names:
 
 ```bash
 TIKPAL_KIOSK_URL=http://localhost:4173/
+TIKPAL_WEB_REMOTE_PORT=4174
 TIKPAL_KIOSK_WINDOW=2560x720
 TIKPAL_KIOSK_DISPLAY=:0
 TIKPAL_KIOSK_XRANDR_MODE=2560x720
@@ -75,11 +76,17 @@ TIKPAL_MPD_DEFAULT_QUEUE_PATH=Codex
 
 These names are now used by `deploy/chromium/env.kiosk.example`.
 
+`server/web.mjs` owns two fixed production listeners. Port `4173` always serves the full kiosk UI and trusted full API proxy; port `4174` always injects portable remote mode and limits its proxy to `/api/v1/remote/*`. This replaces Host/address-based UI selection, and `TIKPAL_WEB_REMOTE_PORT` must differ from `TIKPAL_WEB_PORT`.
+
 ## Explore Runtime
 
 Explore is browser orchestration, not an audio source backend. The API stores provider/proxy state in `.tikpal/web-mode-state.json` and `.tikpal/web-mode-settings.json`, then calls `deploy/chromium/tikpal-web-mode.sh` to open or close the provider and side-panel windows. The launcher also writes runtime provider state after direct script actions, so `/side-panel` does not get stuck highlighting an old provider. The left provider Chromium gets `--proxy-server=<proxyUrl>` when proxy is enabled; the right `/side-panel` Chromium stays local and does not use the Explore proxy.
 
-The side panel is a separate React root at `/side-panel`, not the main kiosk `App`, so it must not post kiosk heartbeats. Opening Explore pauses current Tikpal playback and disables audible Scene Sound, but does not change `audio.currentSource` or `audio.rememberedSource`. The launcher keeps the provider profile to one visible window, tiles it to 1920 x 720, closes obvious ad/popup windows, and keeps the side panel at 640 x 720. The small `deploy/chromium/web-mode-extension` helper can retarget common `_blank` links into the current left pane, but it is disabled by default because managed Chromium builds may forbid unpacked extensions. The provider window alone exposes a loopback Chrome DevTools Protocol endpoint at `127.0.0.1:9234` by default via `TIKPAL_WEB_MODE_PROVIDER_DEBUG_PORT`; the side panel does not. `deploy/chromium/tikpal-web-mode-guard.mjs` uses that local CDP endpoint for all providers to disable browser-like context menus, drag/select gestures, and common zoom/refresh shortcuts, and it redirects Chromium-native load failures to `/web-mode-error.html` so the left pane stays in Tikpal visual language. QQ Music gets extra scoped behavior inside the same guard: allowlisted ordinary confirmation prompts on `y.qq.com` can be clicked, QQ links are retargeted into the existing left pane, and hidden duplicate QQ player targets are closed so background tabs do not keep playing. Upsell, VIP, payment, authorization, agreement, subscription, and recharge prompts are still not accepted automatically; only dismiss buttons such as `取消`, `关闭`, or `知道了` may be clicked inside those dialogs. `onboard` is started as a floating always-on-top keyboard, with a manual Keyboard action because Chromium input fields may not reliably trigger auto-show.
+The side panel is a separate React root at `/side-panel`, not the main kiosk `App`, so it must not post kiosk heartbeats. Opening Explore pauses current Tikpal playback and disables audible Scene Sound, but does not change `audio.currentSource` or `audio.rememberedSource`. The side panel is opened first and remains alive while the target provider starts behind a left-screen transition veil; only the last successful target becomes `Active`. The launcher keeps one visible 1920 x 720 provider after the staged switch, closes the old provider so it cannot keep playing, and leaves the 640 x 720 side panel untouched.
+
+Each provider gets its own loopback Chrome DevTools Protocol port derived from `TIKPAL_WEB_MODE_PROVIDER_DEBUG_PORT`; the side panel has no CDP endpoint. `deploy/chromium/tikpal-web-mode-guard.mjs` blocks browser-like context menus and shortcuts, safely accepts ordinary cookie/consent prompts, ignores normal OAuth navigation aborts, and redirects clear Chromium or provider failures to `/web-mode-error.html`. A short or blank SPA shell is redirected only after 18 seconds without DOM, resource, visible-element, or text progress, preventing slow Amazon Music and Deezer startup from being classified as `empty_page_timeout`. QQ Music additionally gets allowlisted prompt handling, same-pane navigation, and duplicate player pruning. Login, payment, purchase, membership, authorization, agreement, recharge, and subscription actions remain manual.
+
+Provider input focus is observed through the same guard. A click or focus on an editable field calls the existing launcher `keyboard` action, maps the full `onboard` window to the configured size and position, and keeps it above Chromium; the side-panel Keyboard button remains the fallback. Provider Chromium uses `--disable-hang-monitor`, and Explore close force-terminates a provider that remains after a 200ms normal-exit grace period, so returning to Tikpal cannot stall on a `Page Unresponsive` dialog.
 
 ## Ambience Renderer Policy
 

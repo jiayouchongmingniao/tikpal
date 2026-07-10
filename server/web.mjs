@@ -15,9 +15,9 @@ const APP_DIR = path.resolve(__dirname, "..");
 const DIST_DIR = path.resolve(process.env.TIKPAL_WEB_DIST_DIR ?? path.join(APP_DIR, "dist"));
 const HOST = process.env.TIKPAL_WEB_HOST ?? "0.0.0.0";
 const PORT = Number(process.env.TIKPAL_WEB_PORT ?? 4173);
+const REMOTE_PORT = Number(process.env.TIKPAL_WEB_REMOTE_PORT ?? 4174);
 const API_ORIGIN = new URL(process.env.TIKPAL_API_ORIGIN ?? "http://127.0.0.1:8787");
 const PORTABLE_API_KEY = process.env.TIKPAL_PORTABLE_API_KEY ?? "";
-const ALLOW_REMOTE_UI_API = process.env.TIKPAL_WEB_ALLOW_REMOTE_UI_API ?? "0";
 const REMOTE_MODE_INJECTION = "<script>window.__TIKPAL_REMOTE_MODE__=true;</script>";
 
 const MIME_TYPES = new Map([
@@ -68,14 +68,6 @@ function getAccessControlRemoteAddress(request) {
   return hostName !== "" && !isLoopbackRemoteAddress(hostName)
     ? hostName
     : request.socket.remoteAddress;
-}
-
-function allowsFullRemoteUi() {
-  return String(ALLOW_REMOTE_UI_API ?? "0").trim() === "1";
-}
-
-function shouldServeRemoteControl(request) {
-  return isRemoteBrowserClient(request) && !allowsFullRemoteUi();
 }
 
 function isRemoteActionProxyRequest(request, pathname) {
@@ -150,16 +142,19 @@ async function resolveStaticFile(urlPathname) {
   }
 }
 
-function proxyApi(request, response) {
+function proxyApi(request, response, fullUi) {
   const target = new URL(request.url ?? "/", API_ORIGIN);
   const proxyHeaders = maybeInjectPortableKey(request, target.pathname);
+  const allowFullRemoteUiApi = fullUi
+    && isRemoteBrowserClient(request)
+    && target.pathname !== "/api/v1/kiosk/heartbeat";
   const accessDecision = getTikpalWebProxyApiAccessDecision({
     method: request.method,
     pathname: target.pathname,
     headers: proxyHeaders,
     remoteAddress: getAccessControlRemoteAddress(request),
     portableApiKey: PORTABLE_API_KEY,
-    allowRemoteUiApi: ALLOW_REMOTE_UI_API
+    allowRemoteUiApi: allowFullRemoteUiApi ? "1" : "0"
   });
 
   if (!accessDecision.allowed) {
@@ -212,9 +207,9 @@ function proxyApi(request, response) {
   request.pipe(proxyRequest);
 }
 
-async function sendHtmlEntry(request, response, file, commonHeaders) {
+async function sendHtmlEntry(request, response, file, commonHeaders, remoteControl) {
   let body = await readFile(file.filePath, "utf8");
-  if (shouldServeRemoteControl(request)) {
+  if (remoteControl) {
     body = body.includes("</head>")
       ? body.replace("</head>", `${REMOTE_MODE_INJECTION}</head>`)
       : `${REMOTE_MODE_INJECTION}${body}`;
@@ -234,85 +229,96 @@ async function sendHtmlEntry(request, response, file, commonHeaders) {
   response.end(payload);
 }
 
-const server = http.createServer(async (request, response) => {
-  const url = new URL(request.url ?? "/", `http://${request.headers.host ?? `${HOST}:${PORT}`}`);
+function createRequestHandler({ port, remoteControl }) {
+  return async (request, response) => {
+    const url = new URL(request.url ?? "/", `http://${request.headers.host ?? `${HOST}:${port}`}`);
 
-  if (url.pathname.startsWith("/api/")) {
-    proxyApi(request, response);
-    return;
-  }
-
-  if (request.method !== "GET" && request.method !== "HEAD") {
-    send(response, 405, "Method Not Allowed", { Allow: "GET, HEAD" });
-    return;
-  }
-
-  const file = await resolveStaticFile(url.pathname);
-  if (!file) {
-    send(response, 503, "Tikpal web build is missing. Run npm run build first.", {
-      "Content-Type": "text/plain; charset=utf-8",
-      "Cache-Control": "no-store"
-    });
-    return;
-  }
-
-  const extension = path.extname(file.filePath);
-  const isAsset = file.filePath.includes(`${path.sep}assets${path.sep}`);
-  const isMutableMedia = extension === ".mp4";
-  const commonHeaders = {
-    "Content-Type": MIME_TYPES.get(extension) ?? "application/octet-stream",
-    "Cache-Control": isMutableMedia ? "no-store" : isAsset ? "public, max-age=31536000, immutable" : "no-store"
-  };
-
-  if (extension === ".html") {
-    await sendHtmlEntry(request, response, file, commonHeaders);
-    return;
-  }
-
-  if (isMutableMedia) {
-    commonHeaders["Accept-Ranges"] = "bytes";
-    const requestedRange = request.headers.range;
-    if (requestedRange) {
-      const range = parseRangeHeader(requestedRange, file.info.size);
-      if (!range) {
-        response.writeHead(416, {
-          ...commonHeaders,
-          "Content-Range": `bytes */${file.info.size}`
-        });
-        response.end();
-        return;
-      }
-
-      response.writeHead(206, {
-        ...commonHeaders,
-        "Content-Length": range.end - range.start + 1,
-        "Content-Range": `bytes ${range.start}-${range.end}/${file.info.size}`
-      });
-
-      if (request.method === "HEAD") {
-        response.end();
-        return;
-      }
-
-      createReadStream(file.filePath, range).pipe(response);
+    if (url.pathname.startsWith("/api/")) {
+      proxyApi(request, response, !remoteControl);
       return;
     }
-  }
 
-  response.writeHead(200, {
-    ...commonHeaders,
-    "Content-Length": file.info.size
+    if (request.method !== "GET" && request.method !== "HEAD") {
+      send(response, 405, "Method Not Allowed", { Allow: "GET, HEAD" });
+      return;
+    }
+
+    const file = await resolveStaticFile(url.pathname);
+    if (!file) {
+      send(response, 503, "Tikpal web build is missing. Run npm run build first.", {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Cache-Control": "no-store"
+      });
+      return;
+    }
+
+    const extension = path.extname(file.filePath);
+    const isAsset = file.filePath.includes(`${path.sep}assets${path.sep}`);
+    const isMutableMedia = extension === ".mp4";
+    const commonHeaders = {
+      "Content-Type": MIME_TYPES.get(extension) ?? "application/octet-stream",
+      "Cache-Control": isMutableMedia ? "no-store" : isAsset ? "public, max-age=31536000, immutable" : "no-store"
+    };
+
+    if (extension === ".html") {
+      await sendHtmlEntry(request, response, file, commonHeaders, remoteControl);
+      return;
+    }
+
+    if (isMutableMedia) {
+      commonHeaders["Accept-Ranges"] = "bytes";
+      const requestedRange = request.headers.range;
+      if (requestedRange) {
+        const range = parseRangeHeader(requestedRange, file.info.size);
+        if (!range) {
+          response.writeHead(416, {
+            ...commonHeaders,
+            "Content-Range": `bytes */${file.info.size}`
+          });
+          response.end();
+          return;
+        }
+
+        response.writeHead(206, {
+          ...commonHeaders,
+          "Content-Length": range.end - range.start + 1,
+          "Content-Range": `bytes ${range.start}-${range.end}/${file.info.size}`
+        });
+
+        if (request.method === "HEAD") {
+          response.end();
+          return;
+        }
+
+        createReadStream(file.filePath, range).pipe(response);
+        return;
+      }
+    }
+
+    response.writeHead(200, {
+      ...commonHeaders,
+      "Content-Length": file.info.size
+    });
+
+    if (request.method === "HEAD") {
+      response.end();
+      return;
+    }
+
+    createReadStream(file.filePath).pipe(response);
+  };
+}
+
+if (PORT === REMOTE_PORT) {
+  throw new Error("TIKPAL_WEB_PORT and TIKPAL_WEB_REMOTE_PORT must be different");
+}
+
+for (const listener of [
+  { port: PORT, remoteControl: false, label: "kiosk" },
+  { port: REMOTE_PORT, remoteControl: true, label: "remote control" }
+]) {
+  http.createServer(createRequestHandler(listener)).listen(listener.port, HOST, () => {
+    console.log(`tikpal-web ${listener.label} serving ${DIST_DIR} on http://${HOST}:${listener.port}`);
   });
-
-  if (request.method === "HEAD") {
-    response.end();
-    return;
-  }
-
-  createReadStream(file.filePath).pipe(response);
-});
-
-server.listen(PORT, HOST, () => {
-  console.log(`tikpal-web serving ${DIST_DIR} on http://${HOST}:${PORT}`);
-  console.log(`tikpal-web proxying /api to ${API_ORIGIN.origin}`);
-});
+}
+console.log(`tikpal-web proxying /api to ${API_ORIGIN.origin}`);

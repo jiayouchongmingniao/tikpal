@@ -127,6 +127,7 @@ echo "Verify with:"
 echo "  systemctl is-active tikpal-api.service tikpal-web.service"
 echo "  curl -fsS http://127.0.0.1:8787/api/v1/health"
 echo "  curl -fsSI http://127.0.0.1:4173/"
+echo "  curl -fsSI http://127.0.0.1:4174/"
 if [[ "$INSTALL_KIOSK" -eq 1 ]]; then
   echo "  $APP_DIR/deploy/chromium/launch-tikpal-kiosk.sh --check"
   echo "  systemctl status tikpal-kiosk.service"

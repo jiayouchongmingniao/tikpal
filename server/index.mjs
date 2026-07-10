@@ -249,6 +249,7 @@ const REMOTE_SOURCE_TARGETS = new Set(["mpd", "radio", "spotify", "bluetooth", "
 const REMEMBERED_AUDIO_SOURCE_TARGETS = new Set(["mpd", "radio", "spotify", "bluetooth", "airplay", "upnp"]);
 const COMMAND_HANDOFF_SOURCE_TARGETS = new Set(["spotify", "bluetooth", "airplay", "upnp"]);
 const WEB_MODE_PROVIDERS = [
+  { id: "suno", label: "Suno", url: "https://suno.com/explore", experimental: false },
   { id: "spotify", label: "Spotify", url: "https://open.spotify.com/", experimental: false },
   { id: "youtube_music", label: "YouTube Music", url: "https://music.youtube.com/", experimental: false },
   { id: "apple_music", label: "Apple Music", url: "https://music.apple.com/", experimental: false },

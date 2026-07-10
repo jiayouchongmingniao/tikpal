@@ -27,6 +27,7 @@ export type SourceSwitchTarget = "mpd" | "audio" | "scene" | "radio" | "spotify"
 export type SourceConnectionState = "idle" | "armed" | "connected" | "blocked";
 export type RememberedAudioSourceTarget = Exclude<SourceSwitchTarget, "audio" | "scene">;
 export type WebModeProviderId =
+  | "suno"
   | "spotify"
   | "youtube_music"
   | "apple_music"

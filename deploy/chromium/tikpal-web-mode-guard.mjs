@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
 const port = Number.parseInt(process.env.TIKPAL_WEB_MODE_PROVIDER_DEBUG_PORT || "9234", 10);
 const profile = process.env.TIKPAL_WEB_MODE_PROVIDER_PROFILE || "";
@@ -8,15 +9,40 @@ const providerLabel = process.env.TIKPAL_WEB_MODE_PROVIDER_LABEL || providerId |
 const proxyMode = process.env.TIKPAL_WEB_MODE_PROXY_MODE === "proxy" ? "proxy" : "direct";
 const errorPageBaseUrl = process.env.TIKPAL_WEB_MODE_ERROR_PAGE_URL || "http://127.0.0.1:4173/web-mode-error.html";
 const qqAutoConfirm = /^(1|true|yes|on|enabled)$/i.test(process.env.TIKPAL_WEB_MODE_QQ_AUTO_CONFIRM || "1");
+const onboardAutoFocus = /^(1|true|yes|on|enabled)$/i.test(process.env.TIKPAL_WEB_MODE_ONBOARD_AUTO_FOCUS || "1");
+const launcherPath = fileURLToPath(new URL("./tikpal-web-mode.sh", import.meta.url));
 const emptyPageTimeoutMs = Math.max(5, Number.parseInt(process.env.TIKPAL_WEB_MODE_EMPTY_PAGE_ERROR_SECONDS || "18", 10) || 18) * 1000;
 const pollMs = 250;
-const safeLabels = ["确定", "确认", "取消", "关闭", "知道了", "我知道了", "好的", "好", "开始播放", "继续播放"];
-const dismissLabels = ["取消", "关闭", "知道了", "我知道了", "好的", "好"];
+const safeLabels = ["确定", "确认", "取消", "关闭", "知道了", "我知道了", "好的", "好", "开始播放", "继续播放", "不用了，谢谢", "不了，谢谢", "no, thanks", "no thanks"];
+const dismissLabels = ["取消", "关闭", "知道了", "我知道了", "好的", "好", "不用了，谢谢", "不了，谢谢", "no, thanks", "no thanks"];
+const consentLabels = [
+  "accept",
+  "accept all",
+  "accept cookies",
+  "allow all",
+  "allow all cookies",
+  "agree",
+  "i agree",
+  "ok",
+  "got it",
+  "accept and continue",
+  "agree and continue",
+  "同意",
+  "我同意",
+  "接受",
+  "接受全部",
+  "全部接受",
+  "确定",
+  "好的",
+  "知道了"
+];
 const kioskInjectedTargets = new Set();
 const qqInjectedTargets = new Set();
 const earlyRedirectTargets = new Set();
 const redirectedTargets = new Set();
-const targetFirstSeenAt = new Map();
+const targetProgressState = new Map();
+const inputFocusRequests = new Map();
+const providerNativeFailureIds = new Set(["amazon_music", "qobuz", "deezer"]);
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -148,15 +174,58 @@ const kioskGuardScript = `(() => {
   document.documentElement.appendChild(style);
 })()`;
 
+const inputFocusGuardScript = `(() => {
+  if (window.__tikpalInputFocusGuardInstalled) return;
+  window.__tikpalInputFocusGuardInstalled = true;
+  window.__tikpalInputFocusRequest = 0;
+  const selector = "input, textarea, select, [contenteditable='true'], [role='textbox']";
+  const isEditable = (target) => Boolean(target && target.closest && target.closest(selector));
+  const requestKeyboard = (event) => {
+    const path = typeof event.composedPath === "function" ? event.composedPath() : [event.target];
+    if (path.some(isEditable)) window.__tikpalInputFocusRequest += 1;
+  };
+  document.addEventListener("pointerdown", requestKeyboard, true);
+  document.addEventListener("focusin", requestKeyboard, true);
+})()`;
+
+const inputFocusExpression = `(() => ({
+  request: Number(window.__tikpalInputFocusRequest || 0),
+  focused: Boolean(document.activeElement && document.activeElement.matches && document.activeElement.matches("input, textarea, select, [contenteditable='true'], [role='textbox'], iframe"))
+}))()`;
+
+function showOnboard() {
+  const child = spawn("bash", [launcherPath, "keyboard"], {
+    detached: true,
+    stdio: "ignore",
+    env: process.env
+  });
+  child.unref();
+}
+
+async function runInputFocusKeyboard(targets) {
+  if (!onboardAutoFocus) return;
+  for (const target of targets.filter(isProviderWebPage)) {
+    const state = await evaluate(target.webSocketDebuggerUrl, inputFocusExpression).catch(() => null);
+    if (!state) continue;
+    const previous = inputFocusRequests.get(target.id) || 0;
+    if (state.request > previous || (state.focused && !inputFocusRequests.has(target.id))) showOnboard();
+    inputFocusRequests.set(target.id, state.request);
+  }
+}
+
 async function installKioskGuard(target) {
   if (!isPageTarget(target)) return;
   if (!kioskInjectedTargets.has(target.id)) {
     await cdpCommand(target.webSocketDebuggerUrl, "Page.addScriptToEvaluateOnNewDocument", {
       source: kioskGuardScript
     }).catch(() => {});
+    await cdpCommand(target.webSocketDebuggerUrl, "Page.addScriptToEvaluateOnNewDocument", {
+      source: inputFocusGuardScript
+    }).catch(() => {});
     kioskInjectedTargets.add(target.id);
   }
   await evaluate(target.webSocketDebuggerUrl, kioskGuardScript).catch(() => {});
+  await evaluate(target.webSocketDebuggerUrl, inputFocusGuardScript).catch(() => {});
 }
 
 function errorPageUrl(reason) {
@@ -168,8 +237,28 @@ function errorPageUrl(reason) {
   return url.href;
 }
 
-function parseErrorReason(text, title) {
+function providerNativeFailureReason(text, title, href) {
+  if (!providerNativeFailureIds.has(providerId)) return "";
+  const value = String(`${href || ""} ${title || ""} ${text || ""}`);
+  if (/unsupported browser|browser (?:is )?not supported|update your browser/i.test(value)) {
+    return "unsupported_browser";
+  }
+  if (/not available in (?:your|this) (?:country|region|location)|not available in your area|unavailable in (?:your|this) (?:country|region)/i.test(value)) {
+    return "region_unavailable";
+  }
+  if (/access denied|403 forbidden|request blocked|blocked by|permission denied/i.test(value)) {
+    return "provider_blocked";
+  }
+  if (/something went wrong|oops[,.! ]+(?:something went wrong|an error occurred)|unable to load|failed to load|temporarily unavailable|try again later|the page you requested cannot be found/i.test(value)) {
+    return "provider_unavailable";
+  }
+  return "";
+}
+
+function parseErrorReason(text, title, href) {
   if (String(`${title || ""} ${text || ""}`).includes("empty_page_timeout")) return "empty_page_timeout";
+  const nativeReason = providerNativeFailureReason(text, title, href);
+  if (nativeReason) return nativeReason;
   const match = String(`${title || ""} ${text || ""}`).match(/\b(?:ERR|DNS)_[A-Z0-9_]+\b/);
   if (match) return match[0];
   if (/no healthy upstream|upstream connect error|bad gateway|service unavailable|gateway timeout/i.test(`${title || ""} ${text || ""}`)) {
@@ -208,7 +297,9 @@ function attachEarlyErrorRedirect(target) {
       return;
     }
     if (message.method === "Page.loadingFailed" && message.params?.type === "Document") {
-      redirect(parseErrorReason(message.params?.errorText, message.params?.blockedReason));
+      const errorText = String(message.params?.errorText || "");
+      if (/ERR_ABORTED|NS_BINDING_ABORTED/i.test(errorText)) return;
+      redirect(parseErrorReason(errorText, message.params?.blockedReason));
       return;
     }
     if (message.method === "Page.frameNavigated") {
@@ -226,7 +317,6 @@ function attachEarlyErrorRedirect(target) {
 
 async function maybeRedirectErrorPage(target) {
   if (!isPageTarget(target) || isFriendlyErrorPage(target) || redirectedTargets.has(target.id)) return;
-  if (!targetFirstSeenAt.has(target.id)) targetFirstSeenAt.set(target.id, Date.now());
   const targetUrl = String(target.url || "");
   let looksLikeError = targetUrl.startsWith("chrome-error://");
   let diagnostics = null;
@@ -237,6 +327,8 @@ async function maybeRedirectErrorPage(target) {
       title: document.title || "",
       readyState: document.readyState,
       text: document.body ? document.body.innerText.slice(0, 1600) : "",
+      htmlLength: document.documentElement ? document.documentElement.innerHTML.length : 0,
+      resourceCount: performance.getEntriesByType("resource").length,
       visibleCount: Array.from(document.body ? document.body.querySelectorAll("*") : []).slice(0, 200).filter((element) => {
         const rect = element.getBoundingClientRect();
         const style = getComputedStyle(element);
@@ -253,9 +345,31 @@ async function maybeRedirectErrorPage(target) {
     }))()`).catch(() => null);
     const diagnosticText = `${diagnostics?.href || ""} ${diagnostics?.title || ""} ${diagnostics?.text || ""}`;
     looksLikeError = /chrome-error:\/\/chromewebdata|This site can.?t be reached|ERR_[A-Z0-9_]+|DNS_[A-Z0-9_]+|unexpectedly closed the connection|no healthy upstream|upstream connect error|bad gateway|service unavailable|gateway timeout|无法访问/i.test(diagnosticText);
-    const waitedLongEnough = Date.now() - (targetFirstSeenAt.get(target.id) || Date.now()) >= emptyPageTimeoutMs;
+    looksLikeError = looksLikeError || Boolean(providerNativeFailureReason(diagnostics?.text, diagnostics?.title, diagnostics?.href));
     const visibleText = String(diagnostics?.text || "").trim();
-    if (!looksLikeError && waitedLongEnough && isProviderWebPage(target) && visibleText.length < 12 && Number(diagnostics?.visibleCount || 0) <= 3) {
+    const progressSignature = [
+      diagnostics?.href || targetUrl,
+      diagnostics?.htmlLength || 0,
+      diagnostics?.resourceCount || 0,
+      diagnostics?.visibleCount || 0,
+      visibleText.length
+    ].join(":");
+    const previousProgress = targetProgressState.get(target.id);
+    if (!previousProgress || previousProgress.signature !== progressSignature) {
+      targetProgressState.set(target.id, { signature: progressSignature, at: Date.now() });
+    }
+    const waitedLongEnough = Date.now() - (targetProgressState.get(target.id)?.at || Date.now()) >= emptyPageTimeoutMs;
+    const providerBlankPage =
+      providerNativeFailureIds.has(providerId) &&
+      String(diagnostics?.readyState || "") === "complete" &&
+      visibleText.length < 24 &&
+      Number(diagnostics?.visibleCount || 0) <= 3;
+    if (
+      !looksLikeError &&
+      waitedLongEnough &&
+      isProviderWebPage(target) &&
+      providerBlankPage
+    ) {
       looksLikeError = true;
       diagnostics = { ...(diagnostics || {}), title: "empty_page_timeout", text: "empty_page_timeout" };
     }
@@ -268,7 +382,7 @@ async function maybeRedirectErrorPage(target) {
       text: document.body ? document.body.innerText.slice(0, 1600) : ""
     }))()`).catch(() => null);
   }
-  const reason = parseErrorReason(diagnostics?.text, diagnostics?.title || target.title);
+  const reason = parseErrorReason(diagnostics?.text, diagnostics?.title || target.title, diagnostics?.href || target.url);
   redirectedTargets.add(target.id);
   await cdpCommand(target.webSocketDebuggerUrl, "Page.navigate", {
     url: errorPageUrl(reason)
@@ -476,16 +590,96 @@ const autoConfirmExpression = `(() => {
   return { clicked: false };
 })()`;
 
-async function runQqFeatures(targets) {
-  if (providerId !== "qq_music" || !qqAutoConfirm) return;
-  await pruneDuplicatePlayerPages(targets);
-  const qqTargets = targets.filter(isQqMusicPage);
-  await Promise.all(qqTargets.map((target) => installSinglePaneNavigation(target).catch(() => {})));
-  const target = qqTargets.find(Boolean);
+const consentConfirmExpression = `(() => {
+  const safeLabels = new Set(${JSON.stringify(consentLabels.map((label) => label.replace(/\s+/g, "").toLowerCase()))});
+  const consentText = /(cookie|cookies|consent|privacy|gdpr|personal data|tracking|プライバシー|個人情報|쿠키|隐私|隱私|数据|資料|同意|接受)/i;
+  const dangerText = /(log in|login|sign in|payment|purchase|subscribe|membership|premium|vip|authorization|authorize|登录|登入|支付|购买|購買|开通|開通|授权|授權|会员|會員|充值|订阅|訂閱|ログイン|サインイン|支払い|購入)/i;
+  const buttonSelectors = [
+    "button",
+    "a",
+    "[role='button']",
+    "input[type='button']",
+    "input[type='submit']",
+    "[class*='btn']",
+    "[class*='button']"
+  ].join(",");
+  const modalSelectors = [
+    "[role='dialog']",
+    "[aria-modal='true']",
+    "[id*='cookie' i]",
+    "[class*='cookie' i]",
+    "[id*='consent' i]",
+    "[class*='consent' i]",
+    "[id*='privacy' i]",
+    "[class*='privacy' i]",
+    "[class*='modal' i]",
+    "[class*='dialog' i]",
+    "[class*='popup' i]",
+    "[class*='banner' i]"
+  ].join(",");
+  const textOf = (element) => String(element?.value || element?.innerText || element?.textContent || "").replace(/\\s+/g, " ").trim();
+  const keyOf = (value) => String(value || "").replace(/\\s+/g, "").toLowerCase();
+  const visible = (element) => {
+    const rect = element.getBoundingClientRect();
+    const view = element.ownerDocument?.defaultView || window;
+    const style = view.getComputedStyle(element);
+    return rect.width >= 12 &&
+      rect.height >= 12 &&
+      rect.right > 0 &&
+      rect.bottom > 0 &&
+      rect.left < view.innerWidth &&
+      rect.top < view.innerHeight &&
+      style.display !== "none" &&
+      style.visibility !== "hidden" &&
+      Number(style.opacity || "1") > 0.05;
+  };
+  const docs = [document];
+  for (const frame of Array.from(document.querySelectorAll("iframe"))) {
+    try {
+      if (frame.contentDocument) docs.push(frame.contentDocument);
+    } catch {}
+  }
+  for (const doc of docs) {
+    for (const element of Array.from(doc.querySelectorAll(buttonSelectors))) {
+      if (!visible(element)) continue;
+      const label = textOf(element);
+      if (!safeLabels.has(keyOf(label))) continue;
+      const container = element.closest(modalSelectors) || element.parentElement;
+      const context = textOf(container || element).slice(0, 1200);
+      if (!consentText.test(context)) continue;
+      if (dangerText.test(context)) continue;
+      element.click();
+      return { clicked: true, label };
+    }
+  }
+  return { clicked: false };
+})()`;
+
+async function runConsentFeatures(targets) {
+  const providerTargets = targets.filter((target) => isProviderWebPage(target) && !isFriendlyErrorPage(target));
+  for (const target of providerTargets) {
+    const result = await evaluate(target.webSocketDebuggerUrl, consentConfirmExpression).catch(() => null);
+    if (result?.clicked) {
+      console.log(`[tikpal-web-mode-guard] clicked consent ${providerId} ${result.label}`);
+      return;
+    }
+  }
+}
+
+async function runSafePromptFeatures(targets) {
+  let providerTargets = targets.filter(isProviderWebPage);
+  if (providerId === "qq_music" && qqAutoConfirm) {
+    await pruneDuplicatePlayerPages(targets);
+    providerTargets = targets.filter(isQqMusicPage);
+    await Promise.all(providerTargets.map((target) => installSinglePaneNavigation(target).catch(() => {})));
+  } else if (providerId !== "youtube_music") {
+    return;
+  }
+  const target = providerTargets.find(Boolean);
   if (!target) return;
   const result = await evaluate(target.webSocketDebuggerUrl, autoConfirmExpression).catch(() => null);
   if (result?.clicked) {
-    console.log(`[tikpal-web-mode-guard] clicked QQ ${result.label}`);
+    console.log(`[tikpal-web-mode-guard] clicked prompt ${providerId} ${result.label}`);
   }
 }
 
@@ -497,7 +691,9 @@ async function guardOnce() {
     await installKioskGuard(target);
     await maybeRedirectErrorPage(target);
   }));
-  await runQqFeatures(targets);
+  await runInputFocusKeyboard(targets);
+  await runConsentFeatures(targets);
+  await runSafePromptFeatures(targets);
 }
 
 if (process.argv.includes("--check")) {
@@ -505,9 +701,14 @@ if (process.argv.includes("--check")) {
   console.log(`[tikpal-web-mode-guard] port: ${Number.isFinite(port) ? port : 9234}`);
   console.log("[tikpal-web-mode-guard] kiosk interaction blocking: 1");
   console.log("[tikpal-web-mode-guard] friendly error redirect: 1");
+  console.log("[tikpal-web-mode-guard] provider native failure redirect: 1");
   console.log("[tikpal-web-mode-guard] early load-failure redirect: 1");
+  console.log("[tikpal-web-mode-guard] oauth navigation abort ignored: 1");
+  console.log("[tikpal-web-mode-guard] safe consent auto confirm: 1");
+  console.log(`[tikpal-web-mode-guard] input focus keyboard: ${onboardAutoFocus ? "1" : "0"}`);
   console.log(`[tikpal-web-mode-guard] empty page timeout: ${Math.round(emptyPageTimeoutMs / 1000)}s`);
   console.log(`[tikpal-web-mode-guard] qq auto confirm: ${qqAutoConfirm ? "1" : "0"}`);
+  console.log("[tikpal-web-mode-guard] youtube safe dismiss: 1");
   console.log(`[tikpal-web-mode-guard] safe labels: ${safeLabels.join(",")}`);
   console.log(`[tikpal-web-mode-guard] dismiss labels: ${dismissLabels.join(",")}`);
   console.log("[tikpal-web-mode-guard] duplicate player pruning: 1");

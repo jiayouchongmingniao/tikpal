@@ -10,6 +10,7 @@ WorkingDirectory=@APP_DIR@
 Environment=NODE_ENV=production
 Environment=TIKPAL_WEB_HOST=0.0.0.0
 Environment=TIKPAL_WEB_PORT=4173
+Environment=TIKPAL_WEB_REMOTE_PORT=4174
 Environment=TIKPAL_API_ORIGIN=http://127.0.0.1:8787
 EnvironmentFile=-@APP_DIR@/.env
 ExecStart=/usr/bin/node @APP_DIR@/server/web.mjs

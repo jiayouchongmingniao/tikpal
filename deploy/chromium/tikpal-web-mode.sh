@@ -38,12 +38,16 @@ fi
 : "${TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS:=2}"
 : "${TIKPAL_WEB_MODE_DEFAULT_PROXY_URL:=http://192.168.10.140:7897}"
 : "${TIKPAL_WEB_MODE_ONBOARD:=1}"
+: "${TIKPAL_WEB_MODE_ONBOARD_AUTO_FOCUS:=1}"
+: "${TIKPAL_WEB_MODE_ONBOARD_WINDOW:=900x280}"
+: "${TIKPAL_WEB_MODE_ONBOARD_POSITION:=500,420}"
 : "${TIKPAL_WEB_MODE_ALSA_OUTPUT_DEVICE:=${TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE:-}}"
 : "${TIKPAL_WEB_MODE_WINDOW_GUARD:=1}"
 : "${TIKPAL_WEB_MODE_SINGLE_PROVIDER_WINDOW:=1}"
 : "${TIKPAL_WEB_MODE_POPUP_BLOCKING:=1}"
 : "${TIKPAL_WEB_MODE_PROVIDER_DEBUG_PORT:=9234}"
 : "${TIKPAL_WEB_MODE_PROVIDER_GUARD:=1}"
+: "${TIKPAL_WEB_MODE_DISABLE_HANG_MONITOR:=1}"
 : "${TIKPAL_WEB_MODE_ERROR_PAGE_URL:=http://127.0.0.1:4173/web-mode-error.html}"
 : "${TIKPAL_WEB_MODE_QQ_AUTO_CONFIRM:=1}"
 
@@ -106,6 +110,7 @@ position_y() {
 
 provider_url() {
   case "$1" in
+    suno) printf '%s\n' "${TIKPAL_WEB_MODE_SUNO_URL:-https://suno.com/explore}" ;;
     spotify) printf '%s\n' "${TIKPAL_WEB_MODE_SPOTIFY_URL:-https://open.spotify.com/}" ;;
     youtube_music) printf '%s\n' "${TIKPAL_WEB_MODE_YOUTUBE_MUSIC_URL:-https://music.youtube.com/}" ;;
     apple_music) printf '%s\n' "${TIKPAL_WEB_MODE_APPLE_MUSIC_URL:-https://music.apple.com/}" ;;
@@ -121,6 +126,7 @@ provider_url() {
 
 provider_label() {
   case "$1" in
+    suno) printf '%s\n' "Suno" ;;
     spotify) printf '%s\n' "Spotify" ;;
     youtube_music) printf '%s\n' "YouTube Music" ;;
     apple_music) printf '%s\n' "Apple Music" ;;
@@ -139,6 +145,7 @@ provider_debug_port() {
   local offset=0
   [[ "$base" =~ ^[0-9]+$ ]] || base=9234
   case "$1" in
+    suno) offset=9 ;;
     spotify) offset=0 ;;
     youtube_music) offset=1 ;;
     apple_music) offset=2 ;;
@@ -239,6 +246,7 @@ chromium_base_args() {
 }
 
 ensure_onboard() {
+  local area height keyboard_area=0 keyboard_window="" session_bus window width
   is_enabled "$TIKPAL_WEB_MODE_ONBOARD" || return 0
   command -v onboard >/dev/null 2>&1 || {
     log "WARN: onboard not found"
@@ -256,8 +264,37 @@ ensure_onboard() {
     sleep 0.8
   fi
 
-  if command -v wmctrl >/dev/null 2>&1; then
-    DISPLAY="$TIKPAL_KIOSK_DISPLAY" wmctrl -r Onboard -b add,above >/dev/null 2>&1 || true
+  session_bus="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/user/$(id -u)/bus}"
+  if command -v gdbus >/dev/null 2>&1; then
+    DISPLAY="$TIKPAL_KIOSK_DISPLAY" DBUS_SESSION_BUS_ADDRESS="$session_bus" \
+      gdbus call --session --dest org.onboard.Onboard \
+        --object-path /org/onboard/Onboard/Keyboard \
+        --method org.onboard.Onboard.Keyboard.Show >/dev/null 2>&1 || true
+    sleep 0.2
+  fi
+
+  if command -v xdotool >/dev/null 2>&1; then
+    while IFS= read -r window; do
+      width="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool getwindowgeometry --shell "$window" 2>/dev/null | awk -F= '$1 == "WIDTH" { print $2 }')"
+      height="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool getwindowgeometry --shell "$window" 2>/dev/null | awk -F= '$1 == "HEIGHT" { print $2 }')"
+      area=$(( ${width:-0} * ${height:-0} ))
+      if (( area > keyboard_area )); then
+        keyboard_window="$window"
+        keyboard_area="$area"
+      fi
+    done < <(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool search --name Onboard 2>/dev/null || true)
+    if [[ -n "$keyboard_window" ]]; then
+      DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowmap "$keyboard_window" >/dev/null 2>&1 || true
+      DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowsize "$keyboard_window" \
+        "$(window_width "$TIKPAL_WEB_MODE_ONBOARD_WINDOW")" "$(window_height "$TIKPAL_WEB_MODE_ONBOARD_WINDOW")" >/dev/null 2>&1 || true
+      DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowmove "$keyboard_window" \
+        "$(position_x "$TIKPAL_WEB_MODE_ONBOARD_POSITION")" "$(position_y "$TIKPAL_WEB_MODE_ONBOARD_POSITION")" >/dev/null 2>&1 || true
+      DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowraise "$keyboard_window" >/dev/null 2>&1 || true
+    fi
+  fi
+
+  if command -v wmctrl >/dev/null 2>&1 && [[ -n "$keyboard_window" ]]; then
+    DISPLAY="$TIKPAL_KIOSK_DISPLAY" wmctrl -i -r "$keyboard_window" -b add,above >/dev/null 2>&1 || true
   fi
 }
 
@@ -317,6 +354,8 @@ close_provider_windows() {
   stop_window_guard
   stop_provider_guard
   pkill -f -- "--user-data-dir=$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/" >/dev/null 2>&1 || true
+  sleep 0.2
+  pkill -KILL -f -- "--user-data-dir=$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/" >/dev/null 2>&1 || true
 }
 
 close_web_mode() {
@@ -556,6 +595,8 @@ start_provider_guard() {
   TIKPAL_WEB_MODE_ERROR_PAGE_URL="$TIKPAL_WEB_MODE_ERROR_PAGE_URL" \
   TIKPAL_WEB_MODE_PROVIDER_DEBUG_PORT="$provider_port" \
   TIKPAL_WEB_MODE_QQ_AUTO_CONFIRM="$TIKPAL_WEB_MODE_QQ_AUTO_CONFIRM" \
+  TIKPAL_WEB_MODE_ONBOARD_AUTO_FOCUS="$TIKPAL_WEB_MODE_ONBOARD_AUTO_FOCUS" \
+  TIKPAL_KIOSK_DISPLAY="$TIKPAL_KIOSK_DISPLAY" \
     node "$helper" >/dev/null 2>&1 9>&- &
   printf '%s\n' "$!" > "$(provider_guard_pid_file)"
 }
@@ -589,6 +630,7 @@ launch_transition_veil() {
 
 launch_side_panel() {
   local panel_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"
+  local window
   mkdir -p "$panel_profile"
   ensure_chromium_profile_prefs "$panel_profile"
   mapfile -t flags < <(read_flags)
@@ -601,6 +643,11 @@ launch_side_panel() {
     "--window-position=$TIKPAL_WEB_MODE_PANEL_POSITION" \
     "--window-size=$(normalize_window_size "$TIKPAL_WEB_MODE_PANEL_WINDOW")" \
     >/dev/null 2>&1 9>&- &
+  window="$(wait_for_profile_window "$panel_profile" 20 || true)"
+  if [[ -n "$window" ]]; then
+    tile_window "$window" "$TIKPAL_WEB_MODE_PANEL_POSITION" "$TIKPAL_WEB_MODE_PANEL_WINDOW"
+    raise_window "$window"
+  fi
 }
 
 ensure_side_panel() {
@@ -638,6 +685,7 @@ open_provider() {
   stop_window_guard
   close_provider_profile "$provider_profile"
   sleep 0.2
+  ensure_side_panel
   launch_transition_veil
   mapfile -t flags < <(read_flags)
   mapfile -t base_args < <(chromium_base_args)
@@ -653,6 +701,10 @@ open_provider() {
     "--window-size=$(normalize_window_size "$TIKPAL_WEB_MODE_LEFT_WINDOW")"
   )
 
+  if is_enabled "$TIKPAL_WEB_MODE_DISABLE_HANG_MONITOR"; then
+    args+=("--disable-hang-monitor")
+  fi
+
   if is_enabled "$TIKPAL_WEB_MODE_EXTENSION_ENABLED" && [[ -f "$TIKPAL_WEB_MODE_EXTENSION_DIR/manifest.json" ]]; then
     args+=("--load-extension=$TIKPAL_WEB_MODE_EXTENSION_DIR")
   fi
@@ -666,7 +718,6 @@ open_provider() {
 
   DISPLAY="$TIKPAL_KIOSK_DISPLAY" "$TIKPAL_CHROMIUM_BIN" "${args[@]}" >/dev/null 2>&1 9>&- &
   start_provider_guard "$provider" "$provider_profile" "$url" "$proxy_enabled" "$provider_port"
-  ensure_side_panel
   target_window="$(wait_for_profile_window "$provider_profile" 70 || true)"
   if [[ -z "$target_window" ]]; then
     close_transition_veil
@@ -701,9 +752,12 @@ check_runtime() {
   log "provider debug: 127.0.0.1:$TIKPAL_WEB_MODE_PROVIDER_DEBUG_PORT"
   log "provider debug stride: per-provider"
   log "provider guard: $TIKPAL_WEB_MODE_PROVIDER_GUARD"
+  log "provider hang monitor: $TIKPAL_WEB_MODE_DISABLE_HANG_MONITOR"
   log "switch lock timeout: ${TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS}s"
   log "error page: $TIKPAL_WEB_MODE_ERROR_PAGE_URL"
   log "transition page: $TIKPAL_WEB_MODE_TRANSITION_URL"
+  log "onboard: $TIKPAL_WEB_MODE_ONBOARD_POSITION $(normalize_window_size "$TIKPAL_WEB_MODE_ONBOARD_WINDOW")"
+  log "onboard input focus: $TIKPAL_WEB_MODE_ONBOARD_AUTO_FOCUS"
   log "qq scoped auto confirm: $TIKPAL_WEB_MODE_QQ_AUTO_CONFIRM"
   log "settings: $TIKPAL_WEB_MODE_SETTINGS_PATH"
   read_proxy_settings | awk -F '\t' '{ printf("[tikpal-web-mode] proxy: %s %s\n", $1 == "1" ? "enabled" : "disabled", $2) }'
