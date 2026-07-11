@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Apple, Cloud, Gem, Globe2, Keyboard, LogOut, Music2, ShoppingBag, SquarePlay, Volume2 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { fetchTikpalState, fetchWebModeState, sendPlaybackAction, sendWebModeAction, updateWebModeSettings } from "../api/tikpalClient";
+import { fetchTikpalState, fetchWebModeState, sendPlaybackAction, sendWebModeAction } from "../api/tikpalClient";
 import type { TikpalState, WebModeProviderId, WebModeProviderSummary, WebModeState } from "../types";
 
 const providerOrder: WebModeProviderId[] = [
@@ -56,10 +56,16 @@ const providerTones: Record<WebModeProviderId, string> = {
   netease_music: "#e64040"
 };
 
+function readInitialOpeningProvider(): WebModeProviderId | null {
+  if (typeof window === "undefined") return null;
+  const value = new URLSearchParams(window.location.search).get("opening") as WebModeProviderId | null;
+  return value && providerOrder.includes(value) ? value : null;
+}
+
 export function WebModeSidePanel() {
   const [webMode, setWebMode] = useState<WebModeState | null>(null);
   const [tikpalState, setTikpalState] = useState<TikpalState | null>(null);
-  const [pendingProvider, setPendingProvider] = useState<WebModeProviderId | null>(null);
+  const [pendingProvider, setPendingProvider] = useState<WebModeProviderId | null>(readInitialOpeningProvider);
   const [pendingAction, setPendingAction] = useState<"close" | "keyboard" | "proxy" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const actionLockRef = useRef(false);
@@ -84,14 +90,23 @@ export function WebModeSidePanel() {
     return providerLabels[activeProvider] ?? "Web player";
   }, [activeProvider]);
 
+  const displayProviderLabel = pendingProvider ? providerLabels[pendingProvider] : activeProviderLabel;
+
+  function applyWebModeState(next: WebModeState) {
+    setWebMode(next);
+    setError(next.lastError);
+    setPendingProvider((current) => (
+      current && (next.activeProvider === current || next.lastError) ? null : current
+    ));
+  }
+
   async function refresh() {
     const [nextWebMode, nextTikpalState] = await Promise.all([
       fetchWebModeState(),
       fetchTikpalState()
     ]);
-    setWebMode(nextWebMode);
+    applyWebModeState(nextWebMode);
     setTikpalState(nextTikpalState);
-    setError(nextWebMode.lastError);
   }
 
   useEffect(() => {
@@ -103,9 +118,8 @@ export function WebModeSidePanel() {
           fetchTikpalState()
         ]);
         if (cancelled) return;
-        setWebMode(nextWebMode);
+        applyWebModeState(nextWebMode);
         setTikpalState(nextTikpalState);
-        setError(nextWebMode.lastError);
       } catch (nextError) {
         if (!cancelled) setError(nextError instanceof Error ? nextError.message : "Explore unavailable");
       }
@@ -126,8 +140,9 @@ export function WebModeSidePanel() {
     setError(null);
     try {
       const next = await sendWebModeAction({ type: "open", provider: providerId });
-      setWebMode(next);
+      applyWebModeState(next);
     } catch (nextError) {
+      setPendingProvider(null);
       setError(nextError instanceof Error ? nextError.message : "Provider switch failed");
     } finally {
       setPendingProvider(null);
@@ -158,10 +173,7 @@ export function WebModeSidePanel() {
     setPendingAction("proxy");
     setError(null);
     try {
-      let next = await updateWebModeSettings({ proxyEnabled: !webMode.settings.proxyEnabled });
-      if (activeProvider) {
-        next = await sendWebModeAction({ type: "open", provider: activeProvider });
-      }
+      const next = await sendWebModeAction({ type: "proxy", enabled: !webMode.settings.proxyEnabled });
       setWebMode(next);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "Proxy update failed");
@@ -172,7 +184,7 @@ export function WebModeSidePanel() {
     }
   }
 
-  async function showKeyboard() {
+  async function toggleKeyboard() {
     if (actionLockRef.current || pendingAction || pendingProvider) return;
     actionLockRef.current = true;
     setPendingAction("keyboard");
@@ -213,7 +225,7 @@ export function WebModeSidePanel() {
       <header className="web-mode-panel-header">
         <div>
           <span>Explore</span>
-          <strong>{activeProviderLabel}</strong>
+          <strong>{displayProviderLabel}</strong>
         </div>
         <div className="web-mode-header-actions">
           <button
@@ -244,8 +256,8 @@ export function WebModeSidePanel() {
         <Globe2 size={30} />
         <div>
           <span>Left display</span>
-          <strong>{activeProviderLabel}</strong>
-          <p>{activeProvider ? (webMode?.settings.proxyEnabled ? webMode.settings.proxyUrl : "Direct browser access") : "Choose a web player below"}</p>
+          <strong>{displayProviderLabel}</strong>
+          <p>{pendingProvider ? "Connecting on the left display" : activeProvider ? (webMode?.settings.proxyEnabled ? webMode.settings.proxyUrl : "Direct browser access") : "Choose a web player below"}</p>
         </div>
       </section>
 
@@ -253,13 +265,16 @@ export function WebModeSidePanel() {
         {providers.map((provider) => {
           const Icon = providerIcons[provider.id] ?? Music2;
           const selected = activeProvider === provider.id;
-          const opening = pendingProvider === provider.id;
+          const connecting = pendingProvider === provider.id;
+          const current = selected && Boolean(pendingProvider) && !connecting;
+          const active = selected && !pendingProvider;
           return (
             <button
               key={provider.id}
-              className={`web-mode-provider ${selected ? "is-active" : ""} ${opening ? "is-opening" : ""}`}
+              className={`web-mode-provider ${active ? "is-active" : ""} ${current ? "is-current" : ""} ${connecting ? "is-connecting" : ""}`}
               type="button"
               style={{ "--provider-tone": providerTones[provider.id] } as CSSProperties}
+              aria-busy={connecting}
               data-web-mode-provider={provider.id}
               onClick={() => void openProvider(provider.id)}
             >
@@ -267,7 +282,7 @@ export function WebModeSidePanel() {
                 <Icon size={24} />
               </span>
               <strong>{provider.label}</strong>
-              <em>{provider.experimental ? "Experimental" : opening ? "Opening" : selected ? "Active" : "Ready"}</em>
+              <em>{connecting ? "Connecting" : current ? "Current" : active ? "Active" : provider.experimental ? "Experimental" : "Ready"}</em>
             </button>
           );
         })}
@@ -286,9 +301,16 @@ export function WebModeSidePanel() {
           />
         </label>
         <div className="web-mode-actions">
-          <button type="button" onClick={() => void showKeyboard()} disabled={Boolean(pendingAction || pendingProvider)}>
-            <Keyboard size={19} />
-            <span>{pendingAction === "keyboard" ? "Opening" : "Keyboard"}</span>
+          <button
+            className="web-mode-keyboard-toggle"
+            type="button"
+            aria-label="Show or hide keyboard"
+            title="Show or hide keyboard"
+            data-web-mode-keyboard-toggle
+            onClick={() => void toggleKeyboard()}
+            disabled={Boolean(pendingAction || pendingProvider)}
+          >
+            <Keyboard size={15} />
           </button>
           <button type="button" onClick={() => void closeWebMode()} disabled={Boolean(pendingAction || pendingProvider)}>
             <LogOut size={19} />
@@ -298,7 +320,7 @@ export function WebModeSidePanel() {
       </section>
 
       <footer className="web-mode-panel-footer" role="status">
-        {error ?? (pendingProvider ? `Opening ${providerLabels[pendingProvider]}...` : "Use the official player on the left. Tikpal controls stay here.")}
+        {error ?? (pendingProvider ? `Connecting to ${providerLabels[pendingProvider]}` : "Use the official player on the left. Tikpal controls stay here.")}
       </footer>
     </main>
   );

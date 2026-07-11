@@ -279,6 +279,9 @@ const REMOTE_ALLOWED_ACTIONS = [
   "scene.sound_set",
   "hifi.eq_set",
   "display.brightness_set",
+  "explore.open",
+  "explore.close",
+  "explore.proxy_set",
   "lyrics.refresh"
 ];
 const HIFI_EQ_PRESETS = [
@@ -3656,6 +3659,7 @@ function normalizeWebModeRuntimeState(raw = {}) {
   return {
     activeProvider: raw.activeProvider ? normalizeWebModeProviderId(raw.activeProvider, null) : null,
     lastError: typeof raw.lastError === "string" && raw.lastError.trim() ? raw.lastError.trim() : null,
+    proxyAppliedSettingsUpdatedAt: typeof raw.proxyAppliedSettingsUpdatedAt === "string" ? raw.proxyAppliedSettingsUpdatedAt : null,
     updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : null
   };
 }
@@ -3666,6 +3670,11 @@ async function readWebModeSettings() {
   } catch {
     return normalizeWebModeSettings();
   }
+}
+
+async function ensureWebModeSettings() {
+  const settings = await readWebModeSettings();
+  return settings.updatedAt ? settings : await writeWebModeSettings(settings);
 }
 
 async function writeWebModeSettings(patch) {
@@ -3702,7 +3711,7 @@ async function writeWebModeRuntimeState(patch) {
 
 async function buildWebModeState() {
   const [settings, runtimeState] = await Promise.all([
-    readWebModeSettings(),
+    ensureWebModeSettings(),
     readWebModeRuntimeState()
   ]);
   return {
@@ -9686,7 +9695,8 @@ function formatWebModeCommandError(error, action, providerId = "") {
     return firstLine.slice(0, 160) || `${webModeProviderLabel(providerId)} did not open`;
   }
   if (action === "close") return firstLine.slice(0, 160) || "Explore close failed";
-  if (action === "keyboard") return firstLine.slice(0, 160) || "Keyboard open failed";
+  if (action === "keyboard") return firstLine.slice(0, 160) || "Keyboard update failed";
+  if (action === "proxy") return firstLine.slice(0, 160) || "Explore proxy was not applied within 5 seconds";
   return firstLine.slice(0, 160) || "Explore action failed";
 }
 
@@ -9724,8 +9734,12 @@ async function applyWebModeAction(action) {
   }
 
   if (type === "keyboard") {
+    if (action?.enabled !== undefined && typeof action.enabled !== "boolean") {
+      throw new Error("Explore keyboard enabled value must be boolean");
+    }
+    const keyboardMode = action.enabled === true ? "show" : action.enabled === false ? "hide" : "toggle";
     try {
-      await runWebModeCommand("keyboard");
+      await runWebModeCommand("keyboard", keyboardMode);
       await writeWebModeRuntimeState({ lastError: null });
     } catch (error) {
       const message = formatWebModeCommandError(error, "keyboard");
@@ -9735,8 +9749,33 @@ async function applyWebModeAction(action) {
     return await buildWebModeState();
   }
 
+  if (type === "proxy") {
+    if (typeof action?.enabled !== "boolean") {
+      throw new Error("Explore proxy action requires a boolean enabled value");
+    }
+    const previousSettings = await ensureWebModeSettings();
+    const runtimeState = await readWebModeRuntimeState();
+    await writeWebModeSettings({ proxyEnabled: action.enabled });
+    await writeWebModeRuntimeState({ proxyAppliedSettingsUpdatedAt: null, lastError: null });
+    if (!runtimeState.activeProvider) return await buildWebModeState();
+
+    try {
+      await runWebModeCommand("proxy", runtimeState.activeProvider);
+      await writeWebModeRuntimeState({ lastError: null });
+    } catch (error) {
+      await writeWebModeSettings({
+        proxyEnabled: previousSettings.proxyEnabled,
+        proxyUrl: previousSettings.proxyUrl
+      });
+      const message = formatWebModeCommandError(error, "proxy", runtimeState.activeProvider);
+      await writeWebModeRuntimeState({ proxyAppliedSettingsUpdatedAt: null, lastError: message });
+      throw new Error(message);
+    }
+    return await buildWebModeState();
+  }
+
   if (type !== "open") {
-    throw new Error("Explore action type must be open, close, or keyboard");
+    throw new Error("Explore action type must be open, close, keyboard, or proxy");
   }
 
   const providerId = normalizeWebModeProviderId(action.provider);
@@ -9762,6 +9801,16 @@ async function patchWebModeSettings(patch) {
   }
   await writeWebModeSettings(next);
   return await buildWebModeState();
+}
+
+async function confirmWebModeProxyApplied(payload) {
+  const settings = await ensureWebModeSettings();
+  const settingsUpdatedAt = typeof payload?.settingsUpdatedAt === "string" ? payload.settingsUpdatedAt : "";
+  if (!settingsUpdatedAt || settingsUpdatedAt !== settings.updatedAt) {
+    throw new Error("Explore proxy confirmation does not match the current settings revision");
+  }
+  await writeWebModeRuntimeState({ proxyAppliedSettingsUpdatedAt: settingsUpdatedAt });
+  return { ok: true, settingsUpdatedAt };
 }
 
 async function testWebModeProxy() {
@@ -9857,10 +9906,11 @@ function buildRoomModeCatalog() {
 }
 
 async function buildRemoteStateResponse() {
-  const [state, experience, sceneCatalog] = await Promise.all([
+  const [state, experience, sceneCatalog, webMode] = await Promise.all([
     getTikpalState(),
     getRoomExperienceState(),
-    getAmbientBackgroundVideosPayload()
+    getAmbientBackgroundVideosPayload(),
+    buildWebModeState()
   ]);
   const activeSceneVideo = sceneCatalog.videos.find((video) => video.id === experience.sceneVideoId) ?? null;
 
@@ -9894,6 +9944,12 @@ async function buildRemoteStateResponse() {
       availablePresets: state.system.dspState.availablePresets,
       controllable: state.system.dspState.controllable,
       controlTransport: state.system.dspState.controlTransport
+    },
+    explore: {
+      activeProvider: webMode.activeProvider,
+      activeProviderLabel: webMode.activeProvider ? webModeProviderLabel(webMode.activeProvider) : null,
+      proxyEnabled: webMode.settings.proxyEnabled,
+      lastError: webMode.lastError
     },
     runtime: state.runtime,
     updatedAt: state.runtime.updatedAt
@@ -10021,6 +10077,19 @@ async function applyRemoteAction(action) {
     case "display.brightness_set":
       await applySystemAction({ type: "brightness_set", value: requireRemoteNumber(action.value, "display.brightness_set") });
       break;
+    case "explore.open":
+      await applyWebModeAction({ type: "open", provider: "spotify" });
+      break;
+    case "explore.close":
+      await applyWebModeAction({ type: "close" });
+      break;
+    case "explore.proxy_set": {
+      await applyWebModeAction({
+        type: "proxy",
+        enabled: requireRemoteBoolean(action.enabled, "explore.proxy_set")
+      });
+      break;
+    }
     case "lyrics.refresh": {
       const state = await getTikpalState({ forceFreshAirplayMetadata: true });
       scheduleLyricsRecognition(state, { force: true });
@@ -10117,6 +10186,11 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "POST" && url.pathname === "/api/v1/web-mode/actions") {
       sendJson(response, 200, await applyWebModeAction(await readJson(request)));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/v1/web-mode/proxy-applied") {
+      sendJson(response, 200, await confirmWebModeProxyApplied(await readJson(request)));
       return;
     }
 

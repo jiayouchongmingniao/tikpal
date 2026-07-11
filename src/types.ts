@@ -61,8 +61,9 @@ export interface WebModeState {
 }
 
 export interface WebModeActionRequest {
-  type: "open" | "close" | "keyboard";
+  type: "open" | "close" | "keyboard" | "proxy";
   provider?: WebModeProviderId;
+  enabled?: boolean;
 }
 
 export interface WebModeSettingsPatch {
@@ -610,6 +611,9 @@ export type RemoteActionType =
   | "scene.sound_set"
   | "hifi.eq_set"
   | "display.brightness_set"
+  | "explore.open"
+  | "explore.close"
+  | "explore.proxy_set"
   | "lyrics.refresh";
 
 export interface RemoteActionRequest {
@@ -659,6 +663,12 @@ export interface RemoteStateResponse {
     availablePresets: HifiEqPresetSummary[];
     controllable: boolean;
     controlTransport: DspState["controlTransport"];
+  };
+  explore: {
+    activeProvider: WebModeProviderId | null;
+    activeProviderLabel: string | null;
+    proxyEnabled: boolean;
+    lastError: string | null;
   };
   runtime: RuntimeState;
   updatedAt: string;

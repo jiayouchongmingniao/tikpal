@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { Airplay, Bluetooth, Captions, Cast, Clock3, Cpu, Database, EthernetPort, Eye, EyeOff, Globe2, HardDrive, Info, Keyboard, Monitor, Music2, Palette, Power, Radio as RadioIcon, RotateCcw, Server, SlidersHorizontal, Type, Usb, Volume2 } from "lucide-react";
-import { fetchWebModeState, sendWebModeAction, testWebModeProxy, updateWebModeSettings } from "../api/tikpalClient";
+import { Airplay, Bluetooth, Captions, Cast, Clock3, Cpu, Database, EthernetPort, Eye, EyeOff, Globe2, HardDrive, Info, Monitor, Music2, Palette, Power, Radio as RadioIcon, RotateCcw, Server, SlidersHorizontal, Type, Usb, Volume2 } from "lucide-react";
+import { fetchWebModeState, testWebModeProxy, updateWebModeSettings } from "../api/tikpalClient";
 import type { TikpalDataStatus } from "../hooks/useTikpalState";
 import { useOverlayReturnGesture } from "../hooks/useOverlayReturnGesture";
 import type { AudioState, FontTheme, LyricsFontSize, NightScheduleState, PlaybackSummary, RoomExperienceActionRequest, RoomExperienceState, RuntimeState, SurfaceTheme, SystemActionType, SystemState, WebModeState } from "../types";
@@ -199,7 +199,7 @@ export function QuickSettingsOverlay({
   const [webModeState, setWebModeState] = useState<WebModeState | null>(null);
   const [webModeProxyEnabled, setWebModeProxyEnabled] = useState(true);
   const [webModeProxyUrl, setWebModeProxyUrl] = useState("http://192.168.10.140:7897");
-  const [pendingWebModeSettings, setPendingWebModeSettings] = useState<"save" | "test" | "keyboard" | null>(null);
+  const [pendingWebModeSettings, setPendingWebModeSettings] = useState<"save" | "test" | null>(null);
   const [webModeError, setWebModeError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<Record<ActionableCardKey, string | null>>({
     library_scan: null,
@@ -533,20 +533,6 @@ export function QuickSettingsOverlay({
     }
   }
 
-  async function handleWebModeKeyboard() {
-    if (pendingWebModeSettings) return;
-    setPendingWebModeSettings("keyboard");
-    setWebModeError(null);
-    try {
-      await sendWebModeAction({ type: "keyboard" });
-      setWebModeError("Keyboard ready");
-    } catch (error) {
-      setWebModeError(error instanceof Error ? error.message : "Keyboard unavailable");
-    } finally {
-      setPendingWebModeSettings(null);
-    }
-  }
-
   async function handleAction(card: ActionCard) {
     if (pendingAction) return;
 
@@ -820,10 +806,6 @@ export function QuickSettingsOverlay({
             </button>
             <button className="display-brightness-step" type="button" disabled={busy} onClick={() => void handleWebModeProxyTest()}>
               {pendingWebModeSettings === "test" ? "Testing..." : "Test"}
-            </button>
-            <button className="display-brightness-step" type="button" disabled={busy} onClick={() => void handleWebModeKeyboard()}>
-              <Keyboard size={16} />
-              {pendingWebModeSettings === "keyboard" ? "Opening..." : "Keyboard"}
             </button>
           </div>
         </div>

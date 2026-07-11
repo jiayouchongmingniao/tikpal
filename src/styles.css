@@ -5677,6 +5677,7 @@ select {
 .remote-status-band,
 .remote-slider-panel,
 .remote-grid-panel,
+.remote-key-panel,
 .remote-error {
   border: 1px solid rgba(122, 167, 199, 0.18);
   border-radius: 8px;
@@ -5777,8 +5778,31 @@ select {
 
 .remote-slider-panel,
 .remote-grid-panel,
+.remote-key-panel,
 .remote-error {
   padding: 14px;
+}
+
+.remote-key-panel {
+  display: flex;
+  align-items: end;
+  gap: 12px;
+}
+
+.remote-key-panel label {
+  flex: 1;
+  display: grid;
+  gap: 8px;
+  color: var(--theme-text-muted);
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.remote-key-panel strong {
+  padding-bottom: 12px;
+  color: var(--theme-info-strong);
+  font-size: 0.78rem;
+  text-transform: uppercase;
 }
 
 .remote-slider-panel label {
@@ -5807,6 +5831,13 @@ select {
   font-size: 0.86rem;
   text-transform: uppercase;
   letter-spacing: 0;
+}
+
+.remote-explore-error {
+  margin: 10px 0 0;
+  color: #ffd0d0;
+  font-size: 0.82rem;
+  line-height: 1.4;
 }
 
 .remote-button-grid {
@@ -5843,6 +5874,10 @@ select {
     rgba(13, 26, 31, 0.9);
 }
 
+.remote-button-grid .remote-proxy-toggle {
+  grid-column: 1 / -1;
+}
+
 .remote-error {
   display: grid;
   gap: 12px;
@@ -5858,15 +5893,7 @@ select {
   line-height: 1.4;
 }
 
-.remote-error label {
-  display: grid;
-  gap: 8px;
-  color: var(--theme-text-muted);
-  font-size: 0.82rem;
-  font-weight: 800;
-}
-
-.remote-error input {
+.remote-key-panel input {
   width: 100%;
   box-sizing: border-box;
   border: 1px solid rgba(220, 230, 238, 0.18);
@@ -5889,12 +5916,12 @@ select {
 
 .web-mode-panel {
   width: 100vw;
-  min-height: 100vh;
+  height: 100vh;
   box-sizing: border-box;
   display: grid;
   grid-template-rows: auto auto 1fr auto auto;
-  gap: 14px;
-  padding: 24px;
+  gap: 8px;
+  padding: 16px;
   color: #eef7fb;
   background:
     linear-gradient(145deg, rgba(18, 26, 31, 0.96), rgba(7, 10, 13, 0.98)),
@@ -5916,7 +5943,7 @@ select {
 }
 
 .web-mode-panel-header {
-  min-height: 78px;
+  min-height: 64px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -5993,12 +6020,12 @@ select {
 }
 
 .web-mode-active-card {
-  min-height: 100px;
+  min-height: 76px;
   display: grid;
   grid-template-columns: 54px 1fr;
   align-items: center;
   gap: 14px;
-  padding: 18px;
+  padding: 12px 16px;
 }
 
 .web-mode-active-card svg {
@@ -6018,19 +6045,19 @@ select {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   align-content: start;
-  gap: 10px;
-  overflow: auto;
+  gap: 8px;
+  overflow: hidden;
 }
 
 .web-mode-provider {
   position: relative;
-  min-height: 86px;
+  min-height: 64px;
   display: grid;
-  grid-template-columns: 42px 1fr;
+  grid-template-columns: 34px 1fr;
   grid-template-rows: auto auto;
   align-items: center;
   column-gap: 10px;
-  padding: 12px;
+  padding: 8px 10px;
   border: 1px solid rgba(180, 210, 230, 0.14);
   border-radius: 8px;
   color: #eef7fb;
@@ -6044,8 +6071,8 @@ select {
 
 .web-mode-provider span {
   grid-row: 1 / span 2;
-  width: 42px;
-  height: 42px;
+  width: 34px;
+  height: 34px;
   display: grid;
   place-items: center;
   border-radius: 8px;
@@ -6071,63 +6098,56 @@ select {
 
 .web-mode-provider.is-active {
   border-color: var(--provider-tone);
-  box-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, 0.18),
-    0 0 14px color-mix(in srgb, var(--provider-tone) 15%, transparent);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16);
 }
 
-.web-mode-provider.is-opening {
+.web-mode-provider.is-current {
   border-color: rgba(180, 210, 230, 0.16);
-  box-shadow: 0 0 16px color-mix(in srgb, var(--provider-tone) 12%, transparent);
+  opacity: 0.58;
 }
 
-.web-mode-provider.is-opening em {
+.web-mode-provider.is-connecting {
+  border-color: rgba(180, 210, 230, 0.18);
+}
+
+.web-mode-provider.is-connecting em {
   color: color-mix(in srgb, var(--provider-tone) 74%, #ffffff);
 }
 
-.web-mode-provider.is-opening::after {
+.web-mode-provider.is-connecting::after {
   content: "";
   position: absolute;
-  inset: -1px;
-  padding: 3px;
-  border-radius: inherit;
-  background: conic-gradient(
-    from 0deg,
-    transparent 0deg,
-    transparent 176deg,
-    color-mix(in srgb, var(--provider-tone) 24%, transparent) 218deg,
-    color-mix(in srgb, var(--provider-tone) 86%, #ffffff) 262deg,
-    #ffffff 284deg,
-    color-mix(in srgb, var(--provider-tone) 72%, transparent) 306deg,
-    transparent 342deg,
-    transparent 360deg
-  );
+  top: 0;
+  left: 0;
+  width: 28%;
+  height: 2px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, transparent, var(--provider-tone));
   pointer-events: none;
-  filter: drop-shadow(0 0 8px color-mix(in srgb, var(--provider-tone) 54%, transparent));
-  animation: webModeProviderOpeningSpin 1.35s linear infinite;
-  -webkit-mask:
-    linear-gradient(#000 0 0) content-box,
-    linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  mask-composite: exclude;
+  transform: translateX(-100%);
+  animation: webModeProviderSignalTrace 1.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
 }
 
-@keyframes webModeProviderOpeningSpin {
-  to {
-    transform: rotate(360deg);
-  }
+@keyframes webModeProviderSignalTrace {
+  from { opacity: 0.3; transform: translateX(-100%); }
+  48% { opacity: 1; }
+  to { opacity: 0.42; transform: translateX(460%); }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .web-mode-provider.is-opening::after {
+  .web-mode-provider.is-connecting::after {
     animation: none;
+    opacity: 0.82;
+    transform: translateX(128%);
   }
 }
 
 .web-mode-control-stack {
   display: grid;
-  gap: 14px;
-  padding: 16px;
+  grid-template-columns: minmax(0, 1fr) 220px;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
 }
 
 .web-mode-volume {
@@ -6156,12 +6176,13 @@ select {
 
 .web-mode-actions {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 40px 1fr;
   gap: 10px;
+  align-items: center;
 }
 
 .web-mode-actions button {
-  min-height: 54px;
+  min-height: 44px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -6174,6 +6195,13 @@ select {
   font-weight: 850;
 }
 
+.web-mode-actions .web-mode-keyboard-toggle {
+  width: 40px;
+  min-height: 40px;
+  height: 40px;
+  padding: 0;
+}
+
 .web-mode-provider:disabled,
 .web-mode-proxy-chip:disabled,
 .web-mode-top-back:disabled,
@@ -6182,7 +6210,7 @@ select {
 }
 
 .web-mode-panel-footer {
-  min-height: 46px;
+  min-height: 36px;
   display: flex;
   align-items: center;
   padding: 0 14px;

@@ -173,6 +173,25 @@ function runAccessControlHelperSmoke() {
   assert(
     getTikpalApiAccessDecision({
       method: "POST",
+      pathname: "/api/v1/web-mode/actions",
+      headers: { "x-tikpal-key": PORTABLE_API_KEY },
+      remoteAddress: "192.168.10.44",
+      portableApiKey: PORTABLE_API_KEY
+    }).allowed === false,
+    "external remote clients should not bypass the portable facade for Explore"
+  );
+  assert(
+    getTikpalApiAccessDecision({
+      method: "POST",
+      pathname: "/api/v1/web-mode/proxy-applied",
+      remoteAddress: "192.168.10.44",
+      portableApiKey: PORTABLE_API_KEY
+    }).allowed === false,
+    "external clients should not confirm Explore proxy application"
+  );
+  assert(
+    getTikpalApiAccessDecision({
+      method: "POST",
       pathname: "/api/v1/system/actions",
       remoteAddress: "::ffff:127.0.0.1",
       portableApiKey: PORTABLE_API_KEY
@@ -3513,6 +3532,7 @@ async function run() {
     assert(webMode.response.ok, "web mode state should return 200");
     assert(webMode.body.settings.proxyEnabled === true, "web mode should enable the development HTTP proxy by default");
     assert(webMode.body.settings.proxyUrl === "http://192.168.10.140:7897", "web mode should default to the HTTP development proxy");
+    assert(typeof webMode.body.settings.updatedAt === "string", "web mode settings should always expose a revision for the extension");
     assert(webMode.body.providers.some((provider) => provider.id === "spotify"), "web mode should expose Spotify provider");
 
     const savedWebMode = await request("/api/v1/web-mode/settings", {
@@ -3544,6 +3564,46 @@ async function run() {
     });
     assert(switchedWebMode.response.ok, "web mode provider switch should return 200");
     assert(switchedWebMode.body.activeProvider === "youtube_music", "web mode provider switch should update active provider");
+
+    const directProxyAction = await request("/api/v1/web-mode/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "proxy", enabled: false })
+    });
+    assert(directProxyAction.response.ok, "shared web mode proxy action should return 200");
+    assert(directProxyAction.body.settings.proxyEnabled === false, "shared web mode proxy action should update the proxy setting");
+    assert(directProxyAction.body.activeProvider === "youtube_music", "shared web mode proxy action should preserve the active provider");
+
+    const invalidProxyAction = await request("/api/v1/web-mode/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "proxy" })
+    });
+    assert(invalidProxyAction.response.status === 400, "shared web mode proxy action should require a boolean enabled value");
+
+    const mismatchedProxyConfirmation = await request("/api/v1/web-mode/proxy-applied", {
+      method: "POST",
+      body: JSON.stringify({ settingsUpdatedAt: "2000-01-01T00:00:00.000Z" })
+    });
+    assert(mismatchedProxyConfirmation.response.status === 400, "proxy confirmation should reject stale settings revisions");
+
+    const appliedProxyConfirmation = await request("/api/v1/web-mode/proxy-applied", {
+      method: "POST",
+      body: JSON.stringify({ settingsUpdatedAt: directProxyAction.body.settings.updatedAt })
+    });
+    assert(appliedProxyConfirmation.response.ok, "loopback extension should confirm the current proxy settings revision");
+    assert(appliedProxyConfirmation.body.settingsUpdatedAt === directProxyAction.body.settings.updatedAt, "proxy confirmation should return the applied revision");
+
+    for (const enabled of [true, false, undefined]) {
+      const keyboardAction = await request("/api/v1/web-mode/actions", {
+        method: "POST",
+        body: JSON.stringify({ type: "keyboard", ...(enabled === undefined ? {} : { enabled }) })
+      });
+      assert(keyboardAction.response.ok, `web mode keyboard ${enabled === undefined ? "toggle" : enabled ? "show" : "hide"} should return 200`);
+    }
+    const invalidKeyboardAction = await request("/api/v1/web-mode/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "keyboard", enabled: "yes" })
+    });
+    assert(invalidKeyboardAction.response.status === 400, "web mode keyboard should reject non-boolean enabled values");
 
     const closedWebMode = await request("/api/v1/web-mode/actions", {
       method: "POST",
@@ -3672,6 +3732,7 @@ async function run() {
     assert(openapi.response.headers.get("content-type")?.includes("application/json"), "OpenAPI JSON should return JSON");
     assert(openapi.body.openapi === "3.0.3", "OpenAPI JSON should expose OpenAPI 3.0.3");
     assert(openapi.body.paths?.["/remote/actions"]?.post, "OpenAPI JSON should describe remote actions");
+    assert(JSON.stringify(openapi.body.components?.schemas?.RemoteActionRequest).includes("explore.proxy_set"), "OpenAPI JSON should describe remote Explore actions");
     const swagger = await request("/api/v1/swagger.json");
     assert(swagger.response.ok, "Swagger JSON should return 200");
     assert(JSON.stringify(swagger.body.paths) === JSON.stringify(openapi.body.paths), "swagger.json should mirror openapi.json paths");
@@ -3689,9 +3750,13 @@ async function run() {
     assert(remoteState.body.source.current.id === "mpd", "remote state should expose current source");
     assert(remoteState.body.hifi.eqPresetId === "flat", "remote state should expose Hi-Fi EQ");
     assert(remoteState.body.display.transport === "mock", "remote state should expose display transport");
+    assert(remoteState.body.explore.activeProvider === null, "remote state should expose inactive Explore state");
+    assert(remoteState.body.explore.proxyEnabled === false, "remote state should expose the current Explore proxy status without its URL");
+    assert(remoteState.body.explore.proxyUrl === undefined, "remote state should not expose the Explore proxy URL");
     const remoteCatalog = await request("/api/v1/remote/catalog");
     assert(remoteCatalog.response.ok, "remote catalog should return 200");
     assert(remoteCatalog.body.allowedActions.includes("playback.play_pause"), "remote catalog should expose allowed action ids");
+    assert(remoteCatalog.body.allowedActions.includes("explore.open") && remoteCatalog.body.allowedActions.includes("explore.close") && remoteCatalog.body.allowedActions.includes("explore.proxy_set"), "remote catalog should expose Explore actions");
     assert(remoteCatalog.body.sourceTargets.includes("mpd") && !remoteCatalog.body.sourceTargets.includes("scene"), "remote catalog should expose only portable source targets");
     assert(remoteCatalog.body.roomModes.some((mode) => mode.id === "hifi"), "remote catalog should expose room modes");
     assert(remoteCatalog.body.sceneVideos.some((video) => video.id === "rainy-window"), "remote catalog should expose scene videos");
@@ -4546,6 +4611,42 @@ async function run() {
     assert(invalidRadioQuery.body.error === "BAD_REQUEST", "invalid radio query should return BAD_REQUEST");
 
     const remoteHeaders = { "X-Tikpal-Key": PORTABLE_API_KEY };
+    const remoteExploreOpen = await request("/api/v1/remote/actions", {
+      method: "POST",
+      headers: remoteHeaders,
+      body: JSON.stringify({ type: "explore.open" })
+    });
+    assert(remoteExploreOpen.response.ok, "remote explore.open should return 200");
+    assert(remoteExploreOpen.body.explore.activeProvider === "spotify", "remote explore.open should default to Spotify");
+    assert(remoteExploreOpen.body.explore.activeProviderLabel === "Spotify", "remote explore.open should expose the active provider label");
+    const remoteProxyOff = await request("/api/v1/remote/actions", {
+      method: "POST",
+      headers: remoteHeaders,
+      body: JSON.stringify({ type: "explore.proxy_set", enabled: false })
+    });
+    assert(remoteProxyOff.response.ok, "remote explore.proxy_set should return 200");
+    assert(remoteProxyOff.body.explore.proxyEnabled === false, "remote explore.proxy_set should disable the proxy");
+    assert(remoteProxyOff.body.explore.activeProvider === "spotify", "remote proxy changes should preserve the active provider without reopening it");
+    const remoteProxyOn = await request("/api/v1/remote/actions", {
+      method: "POST",
+      headers: remoteHeaders,
+      body: JSON.stringify({ type: "explore.proxy_set", enabled: true })
+    });
+    assert(remoteProxyOn.response.ok, "remote explore.proxy_set should re-enable the proxy");
+    assert(remoteProxyOn.body.explore.proxyEnabled === true, "remote explore.proxy_set should expose the updated proxy status");
+    const invalidRemoteProxy = await request("/api/v1/remote/actions", {
+      method: "POST",
+      headers: remoteHeaders,
+      body: JSON.stringify({ type: "explore.proxy_set" })
+    });
+    assert(invalidRemoteProxy.response.status === 400, "remote explore.proxy_set should require a boolean enabled value");
+    const remoteExploreClose = await request("/api/v1/remote/actions", {
+      method: "POST",
+      headers: remoteHeaders,
+      body: JSON.stringify({ type: "explore.close" })
+    });
+    assert(remoteExploreClose.response.ok, "remote explore.close should return 200");
+    assert(remoteExploreClose.body.explore.activeProvider === null, "remote explore.close should clear the active provider");
     const remotePlay = await request("/api/v1/remote/actions", {
       method: "POST",
       headers: remoteHeaders,

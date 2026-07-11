@@ -25,4 +25,43 @@
       subtree: true
     });
   });
+
+  if (window.top !== window) return;
+
+  const bootstrapUrl = "http://127.0.0.1:4173/web-mode-transition.html";
+  let initialRevision = null;
+  let syncing = false;
+
+  const syncProxy = async () => {
+    if (syncing) return;
+    syncing = true;
+    try {
+      const isBootstrap = window.location.href.startsWith(bootstrapUrl);
+      const providerId = isBootstrap ? new URL(window.location.href).searchParams.get("provider") : null;
+      const result = await new Promise((resolve) => {
+        chrome.runtime.sendMessage({ type: "sync-proxy", providerId }, resolve);
+      });
+      if (!result?.ok) return;
+
+      if (isBootstrap) {
+        const provider = result.providers?.find((item) => item.id === providerId);
+        if (provider?.url) window.location.replace(provider.url);
+        return;
+      }
+
+      if (initialRevision === null) {
+        initialRevision = result.revision;
+      } else if (result.revision !== initialRevision) {
+        initialRevision = result.revision;
+        window.location.reload();
+      }
+    } catch {
+      // The launcher reports a bounded error if the extension cannot confirm the change.
+    } finally {
+      syncing = false;
+    }
+  };
+
+  void syncProxy();
+  window.setInterval(() => void syncProxy(), 750);
 })();

@@ -562,7 +562,6 @@ export function FlameScene({ lowPower = false, playback, singleLoop = false, sta
       muteSceneVideo(video);
       try {
         video.pause();
-        video.load();
         const aligned = await alignVideoWithPlayback(video, playbackRef.current, true);
         const frameReady = aligned
           ? await waitForDrawableVideoFrame(video, VIDEO_FRAME_READY_SETTLE_MS)

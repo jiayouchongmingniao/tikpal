@@ -96,6 +96,7 @@ fi
 
 for policy_dir in /etc/chromium/policies/managed /etc/chromium-browser/policies/managed; do
   mkdir -p "$policy_dir"
+  rm -f "$policy_dir/tikpal-kiosk-managed.json"
   cp "$APP_DIR/deploy/chromium/managed-policies.json" "$policy_dir/tikpal-kiosk.json"
   chmod 0644 "$policy_dir/tikpal-kiosk.json"
   echo "installed $policy_dir/tikpal-kiosk.json"

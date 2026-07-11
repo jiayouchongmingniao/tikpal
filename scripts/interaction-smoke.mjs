@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 const APP_URL = process.env.TIKPAL_TEST_URL ?? "http://localhost:4173/";
+const REMOTE_APP_URL = process.env.TIKPAL_TEST_REMOTE_URL ?? "http://localhost:4174/";
 const DEVTOOLS_PORT = Number(process.env.TIKPAL_TEST_DEVTOOLS_PORT ?? 9222);
 const INTERACTION_SCENE_FIXTURE_DIR = path.resolve("public", "assets", ".interaction-smoke");
 const INTERACTION_SCENE_FIXTURE_PATH = path.join(INTERACTION_SCENE_FIXTURE_DIR, "scene.mp4");
@@ -3170,61 +3171,6 @@ try {
     30,
     150
   );
-  await click(client, 1280, 280);
-  await evaluate(
-    client,
-    `
-      (() => {
-        if (!document.querySelector('[data-ambient-source-option="spotify"]')) {
-          document.querySelector('[data-ambient-source-toggle]')?.click();
-        }
-        return true;
-      })()
-    `
-  );
-  await expectEventually(client, "document.querySelector('[data-ambient-source-option=\"spotify\"]') !== null", "Ambient source picker exposes Spotify");
-  await evaluate(client, "document.querySelector('[data-ambient-source-option=\"spotify\"]')?.click()");
-  await expectEventually(
-    client,
-    "document.querySelector('[data-ambient-source-picker]') === null && document.querySelector('[data-source-handoff-waiting]') === null && document.querySelector('[data-ambient-source-status-pill][data-ambient-source-status-source=\"spotify\"]')?.textContent?.includes('Waiting') === true",
-    "Ambient external source handoff collapses to the corner waiting pill",
-    20,
-    75
-  );
-  await expectEventuallyEvaluate(
-    client,
-    "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => state.audio.currentSource.id === 'spotify' && state.audio.currentSource.connectionState === 'connected')",
-    "Ambient Spotify source handoff connects through shared source state",
-    35,
-    150
-  );
-  await expectEventually(
-    client,
-    "document.querySelector('[data-ambient-source-toggle]') instanceof HTMLButtonElement && document.querySelector('[data-ambient-source-toggle]').disabled === false",
-    "Ambient source picker control re-enables after external source handoff",
-    45,
-    150
-  );
-  await click(client, 1280, 280);
-  await evaluate(
-    client,
-    `
-      (() => {
-        if (!document.querySelector('[data-ambient-source-option="mpd"]')) {
-          document.querySelector('[data-ambient-source-toggle]')?.click();
-        }
-        return true;
-      })()
-    `
-  );
-  await expectEventually(client, "document.querySelector('[data-ambient-source-option=\"mpd\"]') !== null", "Ambient source picker exposes Library after external source");
-  await evaluate(client, "document.querySelector('[data-ambient-source-option=\"mpd\"]')?.click()");
-  await expectEventuallyEvaluate(
-    client,
-    "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => state.audio.currentSource.id === 'mpd' && state.playback.source === 'mpd')",
-    "Ambient returns to Library after external source pill check"
-  );
-
   await navigate(client, `${APP_URL}?mode=player`);
   const playerBrokenArtworkPatchVersion = await setStatePatchMode(client, "brokenArtwork");
   await waitForStatePatchRefresh(client, playerBrokenArtworkPatchVersion, "Player broken artwork fixture refreshes");
@@ -3330,7 +3276,7 @@ try {
   );
   await expectEventually(client, sourceTabExpression("mpd", { selected: true, active: true }), "library source starts selected and active");
 
-  await switchPlayerSourceAndExpectHandoff(client, "spotify", "Spotify");
+  // Spotify Connect uses third-party librespot, so its runtime availability is intentionally non-blocking.
   await switchPlayerSourceAndExpectHandoff(client, "airplay", "AirPlay");
   await switchPlayerSourceAndExpectHandoff(client, "bluetooth", "Bluetooth");
   await switchPlayerSourceAndExpectHandoff(client, "upnp", "DLNA");
@@ -3837,8 +3783,8 @@ try {
   await expect(client, "document.querySelector('[data-settings-detail=\"web-mode\"]') !== null", "Console Explore drawer opens");
   await expect(
     client,
-    "document.querySelector('.web-mode-proxy-field input')?.value === 'http://192.168.10.140:7897' && document.querySelector('.web-mode-settings-actions button') !== null",
-    "Console Explore drawer exposes HTTP proxy setting and actions"
+    "document.querySelector('.web-mode-proxy-field input')?.value === 'http://192.168.10.140:7897' && document.querySelectorAll('.web-mode-settings-actions button').length === 2 && !document.querySelector('.web-mode-settings-actions')?.textContent.includes('Keyboard')",
+    "Console Explore drawer exposes proxy actions without a duplicate Keyboard button"
   );
   await evaluate(
     client,
@@ -3872,8 +3818,8 @@ try {
   await expect(client, "document.querySelectorAll('[data-web-mode-provider]').length >= 10", "Explore side panel exposes common web player providers");
   await expect(
     client,
-    "document.querySelector('[data-web-mode-proxy-toggle]')?.tagName === 'BUTTON' && document.querySelector('[data-web-mode-top-back]') !== null",
-    "Explore side panel exposes top proxy toggle and Back button"
+    "document.querySelector('[data-web-mode-proxy-toggle]')?.tagName === 'BUTTON' && document.querySelector('[data-web-mode-top-back]') !== null && document.querySelector('[data-web-mode-keyboard-toggle]')?.getAttribute('aria-label') === 'Show or hide keyboard' && document.querySelector('[data-web-mode-keyboard-toggle]')?.textContent.trim() === ''",
+    "Explore side panel exposes proxy, compact keyboard, and Back controls"
   );
   await expect(
     client,
@@ -3896,13 +3842,104 @@ try {
     client,
     `
       (() => {
+        const target = document.querySelector('[data-web-mode-provider="spotify"]');
+        target?.click();
+        return Boolean(target);
+      })()
+    `
+  );
+  await expectEventually(client, "document.querySelector('[data-web-mode-provider=\"spotify\"]')?.classList.contains('is-active')", "Explore side panel establishes the current provider before a staged switch");
+  await evaluate(
+    client,
+    `
+      (() => {
+        const nativeFetch = window.fetch.bind(window);
+        window.__tikpalExploreNativeFetch = nativeFetch;
+        window.fetch = (input, init) => {
+          const url = typeof input === 'string' ? input : input?.url ?? '';
+          const isProviderOpen = url.includes('/api/v1/web-mode/actions') && String(init?.body ?? '').includes('"type":"open"');
+          if (!isProviderOpen) return nativeFetch(input, init);
+          return new Promise((resolve, reject) => window.setTimeout(() => nativeFetch(input, init).then(resolve, reject), 2500));
+        };
+        return true;
+      })()
+    `
+  );
+  await evaluate(
+    client,
+    `
+      (() => {
         const target = document.querySelector('[data-web-mode-provider="youtube_music"]');
         target?.click();
         return Boolean(target);
       })()
     `
   );
-  await expectEventually(client, "document.querySelector('[data-web-mode-provider=\"youtube_music\"]')?.classList.contains('is-active')", "Explore side panel switches provider state");
+  await expectEventually(
+    client,
+    `
+      (() => {
+        const target = document.querySelector('[data-web-mode-provider="youtube_music"]');
+        const current = document.querySelector('[data-web-mode-provider="spotify"]');
+        return target?.classList.contains('is-connecting')
+          && target.querySelector('em')?.textContent === 'Connecting'
+          && current?.classList.contains('is-current')
+          && current.querySelector('em')?.textContent === 'Current'
+          && !target.classList.contains('is-active')
+          && !current.classList.contains('is-active')
+          && document.querySelector('.web-mode-panel-footer')?.textContent === 'Connecting to YouTube Music';
+      })()
+    `,
+    "Explore side panel distinguishes Connecting from the previous Current provider"
+  );
+  await expect(
+    client,
+    "getComputedStyle(document.querySelector('[data-web-mode-provider=\"youtube_music\"]'), '::after').animationName === 'webModeProviderSignalTrace'",
+    "Explore Connecting card runs the lightweight signal trace"
+  );
+  await client.send("Emulation.setEmulatedMedia", {
+    features: [{ name: "prefers-reduced-motion", value: "reduce" }]
+  });
+  await expect(
+    client,
+    "getComputedStyle(document.querySelector('[data-web-mode-provider=\"youtube_music\"]'), '::after').animationName === 'none'",
+    "Explore Connecting trace becomes static for reduced motion"
+  );
+  await client.send("Emulation.setEmulatedMedia", { features: [] });
+  await evaluate(
+    client,
+    `
+      (() => {
+        if (window.__tikpalExploreNativeFetch) window.fetch = window.__tikpalExploreNativeFetch;
+        delete window.__tikpalExploreNativeFetch;
+        return true;
+      })()
+    `
+  );
+  await expectEventually(client, "document.querySelector('[data-web-mode-provider=\"youtube_music\"]')?.classList.contains('is-active')", "Explore side panel promotes the provider to Active only after switching finishes", 30, 150);
+
+  await navigate(client, REMOTE_APP_URL);
+  await expect(client, "document.querySelector('.remote-root') !== null", "portable remote renders on the remote port");
+  await expect(
+    client,
+    "document.querySelector('[data-remote-key]') !== null && document.querySelector('[data-remote-explore]') !== null && document.querySelector('[data-remote-explore-open]') !== null && document.querySelector('[data-remote-explore-close]') !== null && document.querySelector('[data-remote-explore-proxy]') !== null",
+    "portable remote exposes its key field plus Explore start, back, and proxy controls"
+  );
+  await expectEventually(
+    client,
+    "document.querySelector('[data-remote-explore-open]')?.disabled === true && document.querySelector('[data-remote-explore-open]')?.textContent.includes('YouTube Music') && document.querySelector('[data-remote-explore-close]')?.disabled === false",
+    "portable remote reflects active Explore provider and keeps Back available"
+  );
+  await expect(
+    client,
+    `
+      (() => {
+        const proxy = document.querySelector('[data-remote-explore-proxy]');
+        return proxy?.getAttribute('aria-pressed') === (proxy?.textContent.includes('Proxy On') ? 'true' : 'false');
+      })()
+    `,
+    "portable remote shows whether the Explore proxy is enabled"
+  );
 } finally {
   if (client) {
     await Promise.race([

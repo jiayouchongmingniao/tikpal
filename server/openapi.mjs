@@ -16,6 +16,9 @@ const REMOTE_ACTION_TYPES = [
   "scene.sound_set",
   "hifi.eq_set",
   "display.brightness_set",
+  "explore.open",
+  "explore.close",
+  "explore.proxy_set",
   "lyrics.refresh"
 ];
 
@@ -24,7 +27,7 @@ const PLAYBACK_MODES = ["sequence", "repeat_one", "shuffle"];
 const SOURCE_TARGETS = ["mpd", "radio", "spotify", "bluetooth", "airplay", "upnp"];
 const HIFI_EQ_PRESETS = ["flat", "warm", "vocal"];
 const WEB_MODE_PROVIDERS = ["suno", "spotify", "youtube_music", "apple_music", "tidal", "qobuz", "deezer", "amazon_music", "qq_music", "netease_music"];
-const WEB_MODE_ACTION_TYPES = ["open", "close", "keyboard"];
+const WEB_MODE_ACTION_TYPES = ["open", "close", "keyboard", "proxy"];
 
 function ref(name) {
   return { $ref: `#/components/schemas/${name}` };
@@ -103,7 +106,7 @@ export function buildOpenApiDocument({ appVersion = "0.1.0" } = {}) {
       "/web-mode/actions": {
         post: {
           tags: ["web-mode"],
-          summary: "Open, close, or surface Explore keyboard",
+          summary: "Open or close Explore, show/hide/toggle its keyboard, or switch its proxy",
           requestBody: {
             required: true,
             content: {
@@ -241,7 +244,8 @@ export function buildOpenApiDocument({ appVersion = "0.1.0" } = {}) {
           required: ["type"],
           properties: {
             type: { type: "string", enum: WEB_MODE_ACTION_TYPES },
-            provider: { type: "string", enum: WEB_MODE_PROVIDERS }
+            provider: { type: "string", enum: WEB_MODE_PROVIDERS },
+            enabled: { type: "boolean" }
           },
           additionalProperties: false
         },
@@ -264,7 +268,7 @@ export function buildOpenApiDocument({ appVersion = "0.1.0" } = {}) {
         },
         RemoteStateResponse: {
           type: "object",
-          required: ["playback", "volume", "room", "scene", "source", "display", "hifi", "runtime", "updatedAt"],
+          required: ["playback", "volume", "room", "scene", "source", "display", "hifi", "explore", "runtime", "updatedAt"],
           properties: {
             playback: { type: "object", additionalProperties: true },
             volume: { type: "object", additionalProperties: true },
@@ -273,6 +277,16 @@ export function buildOpenApiDocument({ appVersion = "0.1.0" } = {}) {
             source: { type: "object", additionalProperties: true },
             display: { type: "object", additionalProperties: true },
             hifi: { type: "object", additionalProperties: true },
+            explore: {
+              type: "object",
+              required: ["activeProvider", "activeProviderLabel", "proxyEnabled", "lastError"],
+              properties: {
+                activeProvider: { type: "string", enum: WEB_MODE_PROVIDERS, nullable: true },
+                activeProviderLabel: { type: "string", nullable: true },
+                proxyEnabled: { type: "boolean" },
+                lastError: { type: "string", nullable: true }
+              }
+            },
             runtime: { type: "object", additionalProperties: true },
             updatedAt: { type: "string", format: "date-time" }
           }

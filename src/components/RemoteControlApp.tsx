@@ -1,4 +1,4 @@
-import { Airplay, Bluetooth, Music, Pause, Play, Radio, RefreshCw, SkipBack, SkipForward, SlidersHorizontal, Sun, Volume2, Wifi } from "lucide-react";
+import { Airplay, Bluetooth, Globe2, LogOut, Music, Pause, Play, Radio, RefreshCw, SkipBack, SkipForward, SlidersHorizontal, Sun, Volume2, Wifi } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fetchRemoteCatalog, fetchRemoteState, readStoredRemoteKey, sendRemoteAction, storeRemoteKey } from "../api/remoteClient";
 import type { RemoteActionRequest, RemoteCatalogResponse, RemoteStateResponse, RoomMode, SourceState } from "../types";
@@ -39,7 +39,8 @@ export function RemoteControlApp() {
   const [catalog, setCatalog] = useState<RemoteCatalogResponse | null>(null);
   const [remoteKey, setRemoteKey] = useState(readStoredRemoteKey);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [volumeDraft, setVolumeDraft] = useState(0);
   const [brightnessDraft, setBrightnessDraft] = useState(0);
   const volumeDraftRef = useRef(volumeDraft);
@@ -56,10 +57,10 @@ export function RemoteControlApp() {
       ]);
       setRemoteState(nextState);
       setCatalog(nextCatalog);
-      setError(null);
+      setRefreshError(null);
     } catch (caught) {
       if (signal?.aborted) return;
-      setError(caught instanceof Error ? caught.message : "Tikpal Remote unavailable");
+      setRefreshError(caught instanceof Error ? caught.message : "Tikpal Remote unavailable");
     }
   }, []);
 
@@ -90,13 +91,19 @@ export function RemoteControlApp() {
   }, []);
 
   const applyAction = useCallback(async (action: RemoteActionRequest) => {
+    const actionKey = remoteKey.trim();
+    if (!actionKey) {
+      setActionError("Enter the Remote key before using controls");
+      return;
+    }
+    storeRemoteKey(actionKey);
     setPendingAction(action.type);
-    setError(null);
+    setActionError(null);
     try {
-      const nextState = await sendRemoteAction(action, remoteKey);
+      const nextState = await sendRemoteAction(action, actionKey);
       setRemoteState(nextState);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Remote action failed");
+      setActionError(caught instanceof Error ? caught.message : "Remote action failed");
     } finally {
       setPendingAction(null);
     }
@@ -144,6 +151,7 @@ export function RemoteControlApp() {
 
   const isPlaying = remoteState?.playback.state === "playing";
   const busy = pendingAction !== null;
+  const visibleError = actionError ?? refreshError;
   const transportCapabilities = remoteState?.playback.transportCapabilities;
   const transportUnavailableTitle = transportCapabilities?.reason ?? "Playback control unavailable";
   const previousDisabled = busy || transportCapabilities?.previous === false;
@@ -172,6 +180,31 @@ export function RemoteControlApp() {
           <span>{remoteState?.source.current.label ?? "Source"}</span>
           <span>{remoteState ? roomLabel(remoteState.room.mode) : "Room"}</span>
         </section>
+
+        <section className="remote-key-panel">
+          <label>
+            <span>Remote key</span>
+            <input
+              data-remote-key
+              type="password"
+              autoComplete="current-password"
+              value={remoteKey}
+              onChange={(event) => setRemoteKey(event.currentTarget.value)}
+              onBlur={handleKeySave}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") handleKeySave();
+              }}
+              placeholder="X-Tikpal-Key"
+            />
+          </label>
+          <strong>{remoteKey.trim() ? "Ready" : "Required"}</strong>
+        </section>
+
+        {visibleError ? (
+          <section className="remote-error" role="alert">
+            <p>{visibleError}</p>
+          </section>
+        ) : null}
 
         <section className="remote-transport" aria-label="Playback controls">
           <button className="remote-icon-button" type="button" title={previousTitle} aria-label="Previous" disabled={previousDisabled} onClick={() => void applyAction({ type: "playback.previous" })}>
@@ -211,6 +244,43 @@ export function RemoteControlApp() {
               if (event.key === "Enter" || event.key.startsWith("Arrow")) commitVolume();
             }}
           />
+        </section>
+
+        <section className="remote-grid-panel" data-remote-explore>
+          <h2>Explore</h2>
+          <div className="remote-button-grid">
+            <button
+              type="button"
+              className={remoteState?.explore.activeProvider ? "is-active" : ""}
+              disabled={busy || Boolean(remoteState?.explore.activeProvider)}
+              data-remote-explore-open
+              onClick={() => void applyAction({ type: "explore.open" })}
+            >
+              <Globe2 aria-hidden="true" />
+              <span>{pendingAction === "explore.open" ? "Opening" : remoteState?.explore.activeProviderLabel ?? "Start Explore"}</span>
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              data-remote-explore-close
+              onClick={() => void applyAction({ type: "explore.close" })}
+            >
+              <LogOut aria-hidden="true" />
+              <span>{pendingAction === "explore.close" ? "Closing" : "Back to Tikpal"}</span>
+            </button>
+            <button
+              type="button"
+              className={`remote-proxy-toggle ${remoteState?.explore.proxyEnabled ? "is-active" : ""}`}
+              aria-pressed={Boolean(remoteState?.explore.proxyEnabled)}
+              disabled={busy}
+              data-remote-explore-proxy
+              onClick={() => void applyAction({ type: "explore.proxy_set", enabled: !remoteState?.explore.proxyEnabled })}
+            >
+              <Wifi aria-hidden="true" />
+              <span>{pendingAction === "explore.proxy_set" ? "Saving" : remoteState?.explore.proxyEnabled ? "Proxy On" : "Proxy Off"}</span>
+            </button>
+          </div>
+          {remoteState?.explore.lastError ? <p className="remote-explore-error" role="alert">{remoteState.explore.lastError}</p> : null}
         </section>
 
         <section className="remote-grid-panel">
@@ -307,15 +377,6 @@ export function RemoteControlApp() {
           </div>
         </section>
 
-        {error ? (
-          <section className="remote-error">
-            <p>{error}</p>
-            <label>
-              <span>Remote key</span>
-              <input value={remoteKey} onChange={(event) => setRemoteKey(event.currentTarget.value)} onBlur={handleKeySave} placeholder="X-Tikpal-Key" />
-            </label>
-          </section>
-        ) : null}
       </section>
     </main>
   );

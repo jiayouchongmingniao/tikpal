@@ -6,6 +6,7 @@ import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { mkdtempSync, writeFileSync } from "node:fs";
+import { buildProxyConfig } from "../deploy/chromium/web-mode-extension/background.js";
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 
@@ -22,6 +23,9 @@ const requiredFiles = [
   "deploy/chromium/tikpal-web-mode.sh",
   "deploy/chromium/tikpal-web-mode-guard.mjs",
   "deploy/chromium/tikpal-web-mode-qq-confirm.mjs",
+  "deploy/chromium/web-mode-extension/manifest.json",
+  "deploy/chromium/web-mode-extension/background.js",
+  "deploy/chromium/web-mode-extension/content.js",
   "deploy/chromium/chromium-flags.conf",
   "deploy/chromium/managed-policies.json",
   "deploy/chromium/env.kiosk.example",
@@ -45,6 +49,15 @@ function assert(condition, message) {
   if (!condition) {
     throw new Error(message);
   }
+}
+
+function assertThrows(callback, message) {
+  try {
+    callback();
+  } catch {
+    return;
+  }
+  throw new Error(message);
 }
 
 async function assertExecutable(file) {
@@ -102,6 +115,19 @@ async function run() {
     assert(info.isFile(), `${file} should be a file`);
   }
 
+  assert(buildProxyConfig({ proxyEnabled: false }).mode === "direct", "extension should apply direct mode when the proxy is off");
+  for (const [proxyUrl, expectedScheme] of [
+    ["http://proxy.local:8080", "http"],
+    ["https://proxy.local:8443", "https"],
+    ["socks5://proxy.local:1080", "socks5"]
+  ]) {
+    const config = buildProxyConfig({ proxyEnabled: true, proxyUrl });
+    assert(config.mode === "fixed_servers", `${expectedScheme} proxy should use fixed_servers`);
+    assert(config.rules.singleProxy.scheme === expectedScheme, `${expectedScheme} proxy should preserve its scheme`);
+    assert(config.rules.bypassList.includes("localhost") && config.rules.bypassList.includes("127.0.0.1") && config.rules.bypassList.includes("<local>"), "extension proxy should bypass loopback hosts");
+  }
+  assertThrows(() => buildProxyConfig({ proxyEnabled: true, proxyUrl: "ftp://proxy.local:21" }), "extension should reject unsupported proxy protocols");
+
   await assertExecutable("deploy/chromium/launch-tikpal-kiosk.sh");
   await assertExecutable("deploy/chromium/start-tikpal-kiosk-devtools-proxy.sh");
   await assertExecutable("deploy/chromium/start-tikpal-kiosk-display.sh");
@@ -143,6 +169,7 @@ async function run() {
   assert(kioskWatchdogTimer.includes("tikpal-kiosk-watchdog.service"), "kiosk watchdog timer should target the watchdog service");
   assert(systemdInstaller.includes("tikpal-kiosk-watchdog.service"), "systemd installer should install the kiosk watchdog service");
   assert(systemdInstaller.includes("tikpal-kiosk-watchdog.timer"), "systemd installer should install and enable the kiosk watchdog timer");
+  assert(systemdInstaller.includes('rm -f "$policy_dir/tikpal-kiosk-managed.json"'), "systemd installer should remove the legacy Tikpal extension-blocking policy file");
   assert(kioskUnit.includes("TIKPAL_KIOSK_SKIP_ENV_SOURCE=1"), "kiosk unit should preserve systemd EnvironmentFile override order");
 
   const webSmokeDir = mkdtempSync(path.join(tmpdir(), "tikpal-web-surfaces-"));
@@ -171,9 +198,11 @@ async function run() {
 
     const kioskApi = await requestWeb(kioskPort, "/api/v1/system/state");
     const remoteApi = await requestWeb(remotePort, "/api/v1/system/state");
+    const remoteWebModeAction = await requestWeb(remotePort, "/api/v1/web-mode/actions", "POST");
     const remoteHeartbeat = await requestWeb(kioskPort, "/api/v1/kiosk/heartbeat", "POST");
     assert(kioskApi.status === 502, "kiosk web port should allow the LAN full-UI API through to its configured origin");
     assert(remoteApi.status === 403, "remote web port should block the full kiosk API");
+    assert(remoteWebModeAction.status === 403, "remote web port should keep direct Explore actions behind the portable facade");
     assert(remoteHeartbeat.status === 403, "LAN kiosk views should not overwrite the physical kiosk heartbeat");
   } finally {
     if (webProcess.exitCode === null) {
@@ -203,9 +232,36 @@ async function run() {
   assert(kioskEnv.includes("TIKPAL_WEB_MODE_STAGE_POSITION=2560,0"), "kiosk env should stage provider windows offscreen");
   assert(kioskEnv.includes("TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS=2"), "kiosk env should bound Explore provider switch locking");
   assert(kioskEnv.includes("TIKPAL_WEB_MODE_QQ_AUTO_CONFIRM=1"), "kiosk env should enable safe QQ Music auto-confirm by default");
+  assert(kioskEnv.includes("TIKPAL_WEB_MODE_EXTENSION_ENABLED=1"), "kiosk env should enable the dynamic Explore proxy extension by default");
+  assert(kioskEnv.includes("TIKPAL_WEB_MODE_PROXY_APPLY_TIMEOUT_SECONDS=5"), "kiosk env should bound dynamic proxy confirmation");
+  assert(kioskEnv.includes("TIKPAL_WEB_MODE_PROVIDER_BOOTSTRAP_TIMEOUT_SECONDS=7"), "kiosk env should bound provider bootstrap navigation");
   const kioskLauncher = await readFile(path.join(ROOT, "deploy/chromium/launch-tikpal-kiosk.sh"), "utf8");
   const kioskSession = await readFile(path.join(ROOT, "deploy/chromium/start-tikpal-kiosk-session.sh"), "utf8");
   const webModeScript = await readFile(path.join(ROOT, "deploy/chromium/tikpal-web-mode.sh"), "utf8");
+  const extensionManifest = JSON.parse(await readFile(path.join(ROOT, "deploy/chromium/web-mode-extension/manifest.json"), "utf8"));
+  const extensionContent = await readFile(path.join(ROOT, "deploy/chromium/web-mode-extension/content.js"), "utf8");
+  const extensionBackground = await readFile(path.join(ROOT, "deploy/chromium/web-mode-extension/background.js"), "utf8");
+  const sidePanelSource = await readFile(path.join(ROOT, "src/components/WebModeSidePanel.tsx"), "utf8");
+  const quickSettingsSource = await readFile(path.join(ROOT, "src/components/QuickSettingsOverlay.tsx"), "utf8");
+  const remoteControlSource = await readFile(path.join(ROOT, "src/components/RemoteControlApp.tsx"), "utf8");
+  const flameSceneSource = await readFile(path.join(ROOT, "src/components/FlameScene.tsx"), "utf8");
+  const stylesSource = await readFile(path.join(ROOT, "src/styles.css"), "utf8");
+  assert(extensionManifest.permissions.includes("proxy"), "Explore extension should declare the proxy permission");
+  assert(extensionManifest.key, "Explore extension should use a stable id for managed-policy allowlisting");
+  assert(extensionManifest.host_permissions.includes("http://127.0.0.1:8787/*"), "Explore extension should only call the loopback API");
+  assert(extensionManifest.host_permissions.includes("http://127.0.0.1:4173/*"), "Explore extension should be able to leave the local provider bootstrap page");
+  assert(extensionManifest.background?.service_worker === "background.js" && extensionManifest.background?.type === "module", "Explore extension should use its MV3 module service worker");
+  assert(extensionContent.includes("window.setInterval(() => void syncProxy(), 750)"), "provider pages should poll the proxy settings revision every 750ms");
+  assert(extensionContent.includes("window.location.reload()"), "provider pages should refresh after a proxy revision change");
+  assert(extensionContent.includes("window.location.replace(provider.url)"), "provider bootstrap should navigate only after proxy sync succeeds");
+  assert(extensionBackground.includes("chrome.tabs.update(sender.tab.id, { url: provider.url })"), "extension background should navigate the bootstrap tab after proxy sync");
+  assert(sidePanelSource.includes('sendWebModeAction({ type: "proxy", enabled:'), "Explore side panel should use the shared proxy action");
+  assert(!sidePanelSource.includes("updateWebModeSettings"), "Explore side panel should not reopen the provider to switch proxy mode");
+  assert(sidePanelSource.includes("data-web-mode-keyboard-toggle") && sidePanelSource.includes("<Keyboard size={15}"), "Explore side panel should expose only a compact keyboard icon toggle");
+  assert(!quickSettingsSource.includes("handleWebModeKeyboard"), "Console should rely on input-focus keyboard behavior instead of a duplicate button");
+  assert(remoteControlSource.includes("data-remote-key") && !remoteControlSource.includes("window.prompt"), "portable remote should keep its key field visible instead of relying on a browser prompt");
+  assert(remoteControlSource.includes("setActionError") && remoteControlSource.includes("setRefreshError"), "portable remote should keep action errors visible across state polling");
+  assert(!flameSceneSource.includes("video.load()"), "single-loop recovery should not leak Chromium media decoders by reloading the video element");
   assert(kioskLauncher.includes("TIKPAL_KIOSK_X_COMMAND_TIMEOUT_SECONDS"), "kiosk launcher should expose an X command timeout");
   assert(kioskLauncher.includes("run_x_command xrandr"), "kiosk launcher should bound xrandr commands");
   assert(kioskLauncher.includes("run_x_command xset"), "kiosk launcher should bound xset commands");
@@ -216,15 +272,22 @@ async function run() {
   assert(webModeScript.includes('flock -x -w "$TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS"'), "web mode should not wait forever on provider switch locks");
   assert(webModeScript.includes("9>&- &"), "web mode background children should not inherit the provider switch lock");
   assert(
-    webModeScript.indexOf('export DBUS_SESSION_BUS_ADDRESS="$session_bus"') < webModeScript.indexOf('(DISPLAY="$TIKPAL_KIOSK_DISPLAY" onboard'),
+    webModeScript.indexOf('export DBUS_SESSION_BUS_ADDRESS="$session_bus"') < webModeScript.indexOf('DISPLAY="$TIKPAL_KIOSK_DISPLAY" onboard </dev/null'),
     "web mode should bind Onboard to the existing user DBus session before launch"
   );
+  assert(webModeScript.includes('disown "$!"'), "web mode should detach Onboard from the launcher shell");
   assert(webModeScript.includes("timeout 1 gdbus call"), "web mode should retry Onboard Show while its DBus service starts");
+  assert(webModeScript.includes("Onboard.Keyboard.$method"), "web mode should share Onboard DBus Show, Hide, and ToggleVisible calls");
+  assert(webModeScript.includes("call_onboard_method Hide"), "web mode should hide Onboard without terminating it");
+  assert(webModeScript.includes("call_onboard_method ToggleVisible"), "web mode should support the compact keyboard toggle");
+  assert(webModeScript.includes('pkill -KILL -f -- "--user-data-dir=$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"'), "Explore close should force-exit a side panel that ignores graceful shutdown");
   assert(webModeScript.includes("org.onboard.auto-show enabled false"), "Tikpal focus events should own Onboard visibility");
   assert(webModeScript.includes('"$((width - 1))" "$((height - 1))"'), "Onboard cold start should force one redraw before its final size");
   const mainSource = await readFile(path.join(ROOT, "src/main.tsx"), "utf8");
   assert(mainSource.includes("onboardInputSelector"), "local kiosk text inputs should share automatic Onboard activation");
   assert(mainSource.includes("localKioskHosts.has(window.location.hostname)"), "automatic Onboard activation should stay on the physical kiosk host");
+  assert(mainSource.includes('sendWebModeAction({ type: "keyboard", enabled })'), "local kiosk inputs should explicitly show and hide Onboard");
+  assert(mainSource.includes('document.addEventListener("focusout"'), "local kiosk inputs should hide Onboard after focus leaves text input");
   const openProviderBody = webModeScript.slice(
     webModeScript.indexOf("open_provider()"),
     webModeScript.indexOf("check_runtime()")
@@ -234,6 +297,15 @@ async function run() {
       openProviderBody.indexOf("ensure_side_panel") < openProviderBody.indexOf("launch_transition_veil"),
     "web mode should show the right provider panel before the left loading veil"
   );
+  assert(openProviderBody.includes('ensure_side_panel "$provider"'), "initial Explore should tell the side panel which provider is opening");
+  assert(openProviderBody.includes('launch_transition_veil "$provider"'), "the visible Explore veil should receive the target provider");
+  assert(webModeScript.includes('panel_url="$panel_url?opening=$opening_provider"'), "initial side panel URL should carry its pending provider");
+  assert(webModeScript.includes('transition_url="$transition_url?provider=$provider"'), "transition veil URL should carry its provider identity");
+  assert(openProviderBody.includes('launch_url="$TIKPAL_WEB_MODE_TRANSITION_URL?provider=$provider"'), "extension-enabled providers should start on the local bootstrap page");
+  assert(openProviderBody.includes('if [[ "$extension_enabled" != "1" && "$proxy_enabled" == "1"'), "command-line proxy switches should remain only in the extension-disabled fallback");
+  assert(webModeScript.includes('target.type === "page"') && openProviderBody.includes("wait_for_real_provider_url"), "provider switches should wait for a real HTTPS page rather than a stale service worker");
+  assert(webModeScript.includes("wait_for_proxy_applied"), "dynamic proxy actions should wait for extension confirmation");
+  assert(webModeScript.includes('log "proxy applied without restarting $provider"'), "dynamic proxy actions should preserve the provider process");
 
   const loopbackGuardDir = mkdtempSync(path.join(tmpdir(), "tikpal-loopback-guard-"));
   const hdmiLoopbackConfig = path.join(loopbackGuardDir, "_sndaloop-hdmi.conf");
@@ -303,7 +375,9 @@ async function run() {
     env: {
       ...process.env,
       TIKPAL_CHROMIUM_BIN: process.execPath,
-      TIKPAL_KIOSK_XRANDR_MODE: "none"
+      TIKPAL_KIOSK_XRANDR_MODE: "none",
+      TIKPAL_KIOSK_SKIP_ENV_SOURCE: "1",
+      TIKPAL_WEB_MODE_EXTENSION_ENABLED: "1"
     },
     encoding: "utf8"
   });
@@ -312,7 +386,9 @@ async function run() {
   assert(webModeCheck.stdout.includes("panel: 1920,0 640,720"), "web mode should keep the Tikpal panel on the right");
   assert(webModeCheck.stdout.includes("single provider window: 1"), "web mode should guard against multiple visible provider windows");
   assert(webModeCheck.stdout.includes("popup blocking: 1"), "web mode should enable provider popup blocking by default");
-  assert(webModeCheck.stdout.includes("extension: 0"), "web mode should keep the unpacked extension disabled by default");
+  assert(webModeCheck.stdout.includes("extension: 1"), "web mode should enable the dynamic proxy extension by default");
+  assert(webModeCheck.stdout.includes("proxy apply timeout: 5s"), "web mode should report its dynamic proxy confirmation timeout");
+  assert(webModeCheck.stdout.includes("provider bootstrap timeout: 7s"), "web mode should report its provider bootstrap timeout");
   assert(webModeCheck.stdout.includes("provider debug: 127.0.0.1:9234"), "web mode should expose only a local provider CDP port");
   assert(webModeCheck.stdout.includes("provider debug stride: per-provider"), "web mode should avoid CDP port clashes during staged provider switches");
   assert(webModeCheck.stdout.includes("provider guard: 1"), "web mode should enable the provider guard by default");
@@ -357,6 +433,8 @@ async function run() {
   assert(providerGuardSource.includes("input[type='search']"), "provider guard should recognize text-like inputs that need Onboard");
   assert(providerGuardSource.includes("const onboardInputSelector"), "provider focus polling should share one text-input selector");
   assert(providerGuardSource.includes("state.focused && !previous.focused"), "provider navigation should surface Onboard when text focus arrives before listener installation");
+  assert(providerGuardSource.includes("__tikpalInputFocusHideRequest"), "provider input blur and submit should request Onboard Hide");
+  assert(providerGuardSource.includes('enabled ? "show" : "hide"'), "provider focus guard should use explicit keyboard show/hide actions");
   assert(providerGuardSource.includes("__tikpalQqClientPromptRetried"), "QQ client prompt retries should stop after one playback attempt");
   assert(providerGuardSource.includes(".yqq-dialog-close"), "QQ client prompt handling should use the explicit close control");
   assert(webModeScript.includes('args+=("--disable-hang-monitor")'), "provider Chromium should not block Explore return on a page-unresponsive dialog");
@@ -367,8 +445,18 @@ async function run() {
   assert(webModeErrorPage.includes("Proxy switch"), "friendly Explore error page should point users to the side-panel proxy switch");
   assert(!webModeErrorPage.includes("sendKioskHeartbeat"), "friendly Explore error page should not post kiosk heartbeats");
   const webModeTransitionPage = await readFile(path.join(ROOT, "public/web-mode-transition.html"), "utf8");
-  assert(webModeTransitionPage.includes("Opening Explore"), "Explore transition page should provide a local staged-switch veil");
+  assert(webModeTransitionPage.includes("Connecting"), "Explore transition page should show a concise connecting state");
+  for (const providerId of ["suno", "spotify", "youtube_music", "apple_music", "tidal", "qobuz", "deezer", "amazon_music", "qq_music", "netease_music"]) {
+    assert(webModeTransitionPage.includes(`${providerId}:`), `Explore transition page should map ${providerId}`);
+  }
+  assert(webModeTransitionPage.includes("tikpalSignalExpand"), "Explore transition page should use the center-out signal animation");
+  assert(!webModeTransitionPage.includes("radial-gradient"), "Explore transition page should not use the old radial glow");
+  assert(!webModeTransitionPage.includes("tikpalExplorePulse"), "Explore transition page should not use the old circular pulse");
   assert(!webModeTransitionPage.includes("sendKioskHeartbeat"), "Explore transition page should not post kiosk heartbeats");
+  assert(sidePanelSource.includes('new URLSearchParams(window.location.search).get("opening")'), "Explore side panel should read its initial pending provider");
+  assert(sidePanelSource.includes('connecting ? "Connecting" : current ? "Current"'), "Explore side panel should distinguish Connecting from Current");
+  assert(stylesSource.includes("webModeProviderSignalTrace"), "Explore provider cards should use the short signal trace");
+  assert(!stylesSource.includes("webModeProviderOpeningSpin"), "Explore provider cards should remove the full rotating border");
 
   const watchdogCheck = spawnSync("bash", ["deploy/chromium/tikpal-kiosk-healthcheck.sh", "--check"], {
     cwd: ROOT,

@@ -30,10 +30,28 @@ const onboardInputSelector = [
 ].join(",");
 
 if (!window.__TIKPAL_REMOTE_MODE__ && localKioskHosts.has(window.location.hostname)) {
+  const setOnboardVisible = (enabled: boolean) => {
+    void sendWebModeAction({ type: "keyboard", enabled }).catch(() => undefined);
+  };
+  const activeTextInput = () => document.activeElement instanceof HTMLElement
+    && Boolean(document.activeElement.closest(onboardInputSelector));
+  const isMultilineInput = (target: HTMLElement) => target.matches("textarea,[contenteditable='true']")
+    || target.getAttribute("aria-multiline") === "true";
+
   document.addEventListener("focusin", (event) => {
-    if (event.target instanceof HTMLElement && event.target.matches(onboardInputSelector)) {
-      void sendWebModeAction({ type: "keyboard" }).catch(() => undefined);
+    if (event.target instanceof HTMLElement && event.target.closest(onboardInputSelector)) {
+      setOnboardVisible(true);
     }
+  }, true);
+  document.addEventListener("focusout", () => {
+    window.setTimeout(() => {
+      if (!activeTextInput()) setOnboardVisible(false);
+    }, 0);
+  }, true);
+  document.addEventListener("submit", () => setOnboardVisible(false), true);
+  document.addEventListener("keydown", (event) => {
+    const target = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>(onboardInputSelector) : null;
+    if (event.key === "Enter" && target && !isMultilineInput(target)) setOnboardVisible(false);
   }, true);
 }
 

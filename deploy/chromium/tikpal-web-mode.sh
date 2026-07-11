@@ -26,7 +26,9 @@ fi
 : "${TIKPAL_WEB_MODE_SETTINGS_PATH:=$APP_DIR/.tikpal/web-mode-settings.json}"
 : "${TIKPAL_WEB_MODE_STATE_PATH:=$APP_DIR/.tikpal/web-mode-state.json}"
 : "${TIKPAL_WEB_MODE_EXTENSION_DIR:=$SCRIPT_DIR/web-mode-extension}"
-: "${TIKPAL_WEB_MODE_EXTENSION_ENABLED:=0}"
+: "${TIKPAL_WEB_MODE_EXTENSION_ENABLED:=1}"
+: "${TIKPAL_WEB_MODE_PROXY_APPLY_TIMEOUT_SECONDS:=5}"
+: "${TIKPAL_WEB_MODE_PROVIDER_BOOTSTRAP_TIMEOUT_SECONDS:=7}"
 : "${TIKPAL_WEB_MODE_LEFT_WINDOW:=1920x720}"
 : "${TIKPAL_WEB_MODE_LEFT_POSITION:=0,0}"
 : "${TIKPAL_WEB_MODE_PANEL_WINDOW:=640x720}"
@@ -185,6 +187,42 @@ console.log(`${enabled ? "1" : "0"}\t${proxyUrl}`);
 NODE
 }
 
+proxy_revision_applied() {
+  node - "$TIKPAL_WEB_MODE_SETTINGS_PATH" "$TIKPAL_WEB_MODE_STATE_PATH" <<'NODE'
+const fs = require("node:fs");
+const [settingsPath, statePath] = process.argv.slice(2);
+let settings = {};
+let state = {};
+try { settings = JSON.parse(fs.readFileSync(settingsPath, "utf8")); } catch {}
+try { state = JSON.parse(fs.readFileSync(statePath, "utf8")); } catch {}
+process.exit(settings.updatedAt && settings.updatedAt === state.proxyAppliedSettingsUpdatedAt ? 0 : 1);
+NODE
+}
+
+wait_for_proxy_applied() {
+  local attempts=$((TIKPAL_WEB_MODE_PROXY_APPLY_TIMEOUT_SECONDS * 10))
+  while [[ "$attempts" -gt 0 ]]; do
+    proxy_revision_applied && return 0
+    sleep 0.1
+    attempts=$((attempts - 1))
+  done
+  return 1
+}
+
+wait_for_real_provider_url() {
+  local provider_port="$1"
+  local attempts=$((TIKPAL_WEB_MODE_PROVIDER_BOOTSTRAP_TIMEOUT_SECONDS * 10))
+  while [[ "$attempts" -gt 0 ]]; do
+    if curl --noproxy '*' -sf "http://127.0.0.1:$provider_port/json/list" 2>/dev/null \
+      | node -e 'let body=""; process.stdin.on("data", chunk => body += chunk); process.stdin.on("end", () => { try { process.exit(JSON.parse(body).some(target => target.type === "page" && String(target.url || "").startsWith("https://")) ? 0 : 1); } catch { process.exit(1); } });'; then
+      return 0
+    fi
+    sleep 0.1
+    attempts=$((attempts - 1))
+  done
+  return 1
+}
+
 ensure_chromium_profile_prefs() {
   local profile_dir="$1"
   node - "$profile_dir" "$TIKPAL_WEB_MODE_POPUP_BLOCKING" <<'NODE'
@@ -245,6 +283,24 @@ chromium_base_args() {
     "--default-background-color=000000"
 }
 
+call_onboard_method() {
+  local method="$1"
+  local session_bus="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/user/$(id -u)/bus}"
+  local _
+  command -v gdbus >/dev/null 2>&1 || return 1
+  export DBUS_SESSION_BUS_ADDRESS="$session_bus"
+  for _ in 1 2 3 4 5; do
+    if DISPLAY="$TIKPAL_KIOSK_DISPLAY" DBUS_SESSION_BUS_ADDRESS="$session_bus" \
+      timeout 1 gdbus call --session --dest org.onboard.Onboard \
+        --object-path /org/onboard/Onboard/Keyboard \
+        --method "org.onboard.Onboard.Keyboard.$method" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.2
+  done
+  return 1
+}
+
 ensure_onboard() {
   local area height keyboard_area=0 keyboard_window="" session_bus window width
   is_enabled "$TIKPAL_WEB_MODE_ONBOARD" || return 0
@@ -263,20 +319,12 @@ ensure_onboard() {
   fi
 
   if ! pgrep -u "$(id -u)" -x onboard >/dev/null 2>&1; then
-    (DISPLAY="$TIKPAL_KIOSK_DISPLAY" onboard >/dev/null 2>&1 || true) 9>&- &
+    DISPLAY="$TIKPAL_KIOSK_DISPLAY" onboard </dev/null >/dev/null 2>&1 9>&- &
+    disown "$!" 2>/dev/null || true
     sleep 0.8
   fi
 
-  if command -v gdbus >/dev/null 2>&1; then
-    for _ in 1 2 3 4 5; do
-      if DISPLAY="$TIKPAL_KIOSK_DISPLAY" DBUS_SESSION_BUS_ADDRESS="$session_bus" \
-        timeout 1 gdbus call --session --dest org.onboard.Onboard \
-          --object-path /org/onboard/Onboard/Keyboard \
-          --method org.onboard.Onboard.Keyboard.Show >/dev/null 2>&1; then
-        break
-      fi
-      sleep 0.2
-    done
+  if call_onboard_method Show; then
     sleep 0.3
   fi
 
@@ -309,8 +357,25 @@ ensure_onboard() {
   fi
 }
 
+hide_onboard() {
+  is_enabled "$TIKPAL_WEB_MODE_ONBOARD" || return 0
+  pgrep -u "$(id -u)" -x onboard >/dev/null 2>&1 || return 0
+  call_onboard_method Hide || true
+}
+
+toggle_onboard() {
+  is_enabled "$TIKPAL_WEB_MODE_ONBOARD" || return 0
+  if ! pgrep -u "$(id -u)" -x onboard >/dev/null 2>&1; then
+    ensure_onboard
+    return
+  fi
+  call_onboard_method ToggleVisible || ensure_onboard
+}
+
 close_side_panel() {
   pkill -f -- "--user-data-dir=$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel" >/dev/null 2>&1 || true
+  sleep 0.2
+  pkill -KILL -f -- "--user-data-dir=$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel" >/dev/null 2>&1 || true
 }
 
 side_panel_window_visible() {
@@ -370,6 +435,7 @@ close_provider_windows() {
 }
 
 close_web_mode() {
+  hide_onboard
   close_provider_windows
   close_side_panel
   close_transition_veil
@@ -617,8 +683,11 @@ close_transition_veil() {
 }
 
 launch_transition_veil() {
+  local provider="${1:-}"
   local transition_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/transition"
+  local transition_url="$TIKPAL_WEB_MODE_TRANSITION_URL"
   local window
+  [[ -n "$provider" ]] && transition_url="$transition_url?provider=$provider"
   close_transition_veil
   mkdir -p "$transition_profile"
   ensure_chromium_profile_prefs "$transition_profile"
@@ -627,7 +696,7 @@ launch_transition_veil() {
   DISPLAY="$TIKPAL_KIOSK_DISPLAY" "$TIKPAL_CHROMIUM_BIN" \
     "${flags[@]}" \
     "${base_args[@]}" \
-    "--app=$TIKPAL_WEB_MODE_TRANSITION_URL" \
+    "--app=$transition_url" \
     "--user-data-dir=$transition_profile" \
     "--window-position=$TIKPAL_WEB_MODE_LEFT_POSITION" \
     "--window-size=$(normalize_window_size "$TIKPAL_WEB_MODE_LEFT_WINDOW")" \
@@ -640,8 +709,11 @@ launch_transition_veil() {
 }
 
 launch_side_panel() {
+  local opening_provider="${1:-}"
   local panel_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"
+  local panel_url="$TIKPAL_WEB_MODE_SIDE_PANEL_URL"
   local window
+  [[ -n "$opening_provider" ]] && panel_url="$panel_url?opening=$opening_provider"
   mkdir -p "$panel_profile"
   ensure_chromium_profile_prefs "$panel_profile"
   mapfile -t flags < <(read_flags)
@@ -649,7 +721,7 @@ launch_side_panel() {
   DISPLAY="$TIKPAL_KIOSK_DISPLAY" "$TIKPAL_CHROMIUM_BIN" \
     "${flags[@]}" \
     "${base_args[@]}" \
-    "--app=$TIKPAL_WEB_MODE_SIDE_PANEL_URL" \
+    "--app=$panel_url" \
     "--user-data-dir=$panel_profile" \
     "--window-position=$TIKPAL_WEB_MODE_PANEL_POSITION" \
     "--window-size=$(normalize_window_size "$TIKPAL_WEB_MODE_PANEL_WINDOW")" \
@@ -662,12 +734,13 @@ launch_side_panel() {
 }
 
 ensure_side_panel() {
+  local opening_provider="${1:-}"
   local panel_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"
   if side_panel_window_visible "$panel_profile"; then
     return 0
   fi
   close_side_panel
-  launch_side_panel
+  launch_side_panel "$opening_provider"
 }
 
 open_provider() {
@@ -677,7 +750,7 @@ open_provider() {
   local provider_port
   local current_provider
   local current_profile
-  local target_window
+  local target_window launch_url extension_enabled=0
   local proxy_line proxy_enabled proxy_url
   url="$(provider_url "$provider")"
   provider_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/$provider"
@@ -690,21 +763,27 @@ open_provider() {
   proxy_line="$(read_proxy_settings)"
   proxy_enabled="${proxy_line%%$'\t'*}"
   proxy_url="${proxy_line#*$'\t'}"
+  launch_url="$url"
+  if is_enabled "$TIKPAL_WEB_MODE_EXTENSION_ENABLED" && [[ -f "$TIKPAL_WEB_MODE_EXTENSION_DIR/manifest.json" ]]; then
+    extension_enabled=1
+    launch_url="$TIKPAL_WEB_MODE_TRANSITION_URL?provider=$provider"
+  fi
 
   mkdir -p "$provider_profile"
   ensure_chromium_profile_prefs "$provider_profile"
+  hide_onboard
   stop_window_guard
   close_provider_profile "$provider_profile"
   sleep 0.2
-  ensure_side_panel
-  launch_transition_veil
+  ensure_side_panel "$provider"
+  launch_transition_veil "$provider"
   mapfile -t flags < <(read_flags)
   mapfile -t base_args < <(chromium_base_args)
 
   local args=(
     "${flags[@]}"
     "${base_args[@]}"
-    "--app=$url"
+    "--app=$launch_url"
     "--user-data-dir=$provider_profile"
     "--remote-debugging-address=127.0.0.1"
     "--remote-debugging-port=$provider_port"
@@ -716,19 +795,18 @@ open_provider() {
     args+=("--disable-hang-monitor")
   fi
 
-  if is_enabled "$TIKPAL_WEB_MODE_EXTENSION_ENABLED" && [[ -f "$TIKPAL_WEB_MODE_EXTENSION_DIR/manifest.json" ]]; then
+  if [[ "$extension_enabled" == "1" ]]; then
     args+=("--load-extension=$TIKPAL_WEB_MODE_EXTENSION_DIR")
   fi
   if [[ -n "$TIKPAL_WEB_MODE_ALSA_OUTPUT_DEVICE" ]]; then
     args+=("--alsa-output-device=$TIKPAL_WEB_MODE_ALSA_OUTPUT_DEVICE")
   fi
-  if [[ "$proxy_enabled" == "1" && -n "$proxy_url" ]]; then
+  if [[ "$extension_enabled" != "1" && "$proxy_enabled" == "1" && -n "$proxy_url" ]]; then
     args+=("--proxy-server=$proxy_url")
     args+=("--proxy-bypass-list=localhost;127.0.0.1;<local>")
   fi
 
   DISPLAY="$TIKPAL_KIOSK_DISPLAY" "$TIKPAL_CHROMIUM_BIN" "${args[@]}" >/dev/null 2>&1 9>&- &
-  start_provider_guard "$provider" "$provider_profile" "$url" "$proxy_enabled" "$provider_port"
   target_window="$(wait_for_profile_window "$provider_profile" 70 || true)"
   if [[ -z "$target_window" ]]; then
     close_transition_veil
@@ -736,6 +814,16 @@ open_provider() {
     [[ -n "$current_profile" ]] && start_window_guard "$current_profile" "$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"
     fail "$(provider_label "$provider") did not open"
   fi
+  if [[ "$extension_enabled" == "1" ]] && ! wait_for_real_provider_url "$provider_port"; then
+    close_transition_veil
+    close_provider_profile "$provider_profile"
+    if [[ -n "$current_provider" && "$current_profile" != "$provider_profile" ]]; then
+      start_provider_guard "$current_provider" "$current_profile" "$(provider_url "$current_provider")" "$proxy_enabled" "$(provider_debug_port "$current_provider")"
+      start_window_guard "$current_profile" "$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"
+    fi
+    fail "$(provider_label "$provider") did not enter the provider page within ${TIKPAL_WEB_MODE_PROVIDER_BOOTSTRAP_TIMEOUT_SECONDS}s"
+  fi
+  start_provider_guard "$provider" "$provider_profile" "$url" "$proxy_enabled" "$provider_port"
   tile_window "$target_window" "$TIKPAL_WEB_MODE_LEFT_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
   raise_window "$target_window"
   sleep "$(awk "BEGIN { printf \"%.3f\", $TIKPAL_WEB_MODE_STAGE_REVEAL_MS / 1000 }")"
@@ -746,6 +834,22 @@ open_provider() {
   write_runtime_provider_state "$provider"
   start_window_guard "$provider_profile" "$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"
   log "opened $provider"
+}
+
+apply_proxy_settings() {
+  local provider="$1"
+  local provider_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/$provider"
+  local proxy_line proxy_enabled
+  if is_enabled "$TIKPAL_WEB_MODE_EXTENSION_ENABLED" && [[ -f "$TIKPAL_WEB_MODE_EXTENSION_DIR/manifest.json" ]]; then
+    profile_process_exists "$provider_profile" || fail "Explore provider process is not running"
+    wait_for_proxy_applied || fail "Explore proxy was not applied within ${TIKPAL_WEB_MODE_PROXY_APPLY_TIMEOUT_SECONDS}s"
+    proxy_line="$(read_proxy_settings)"
+    proxy_enabled="${proxy_line%%$'\t'*}"
+    start_provider_guard "$provider" "$provider_profile" "$(provider_url "$provider")" "$proxy_enabled" "$(provider_debug_port "$provider")"
+    log "proxy applied without restarting $provider"
+    return
+  fi
+  open_provider "$provider"
 }
 
 check_runtime() {
@@ -760,6 +864,8 @@ check_runtime() {
   log "single provider window: $TIKPAL_WEB_MODE_SINGLE_PROVIDER_WINDOW"
   log "popup blocking: $TIKPAL_WEB_MODE_POPUP_BLOCKING"
   log "extension: $TIKPAL_WEB_MODE_EXTENSION_ENABLED $TIKPAL_WEB_MODE_EXTENSION_DIR"
+  log "proxy apply timeout: ${TIKPAL_WEB_MODE_PROXY_APPLY_TIMEOUT_SECONDS}s"
+  log "provider bootstrap timeout: ${TIKPAL_WEB_MODE_PROVIDER_BOOTSTRAP_TIMEOUT_SECONDS}s"
   log "provider debug: 127.0.0.1:$TIKPAL_WEB_MODE_PROVIDER_DEBUG_PORT"
   log "provider debug stride: per-provider"
   log "provider guard: $TIKPAL_WEB_MODE_PROVIDER_GUARD"
@@ -793,10 +899,19 @@ case "${1:-open}" in
     ;;
   keyboard)
     check_runtime
-    ensure_onboard
-    log "keyboard ready"
+    case "${2:-toggle}" in
+      show) ensure_onboard ;;
+      hide) hide_onboard ;;
+      toggle) toggle_onboard ;;
+      *) fail "Keyboard mode must be show, hide, or toggle" ;;
+    esac
+    log "keyboard ${2:-toggle} ready"
+    ;;
+  proxy)
+    check_runtime
+    with_web_mode_lock apply_proxy_settings "${2:-spotify}"
     ;;
   *)
-    fail "Usage: $0 open <provider>|close|keyboard|--check"
+    fail "Usage: $0 open <provider>|close|keyboard [show|hide|toggle]|proxy <provider>|--check"
     ;;
 esac

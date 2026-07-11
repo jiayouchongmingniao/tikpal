@@ -190,27 +190,40 @@ const kioskGuardScript = `(() => {
 const inputFocusGuardScript = `(() => {
   if (window.__tikpalInputFocusGuardInstalled) return;
   window.__tikpalInputFocusGuardInstalled = true;
-  window.__tikpalInputFocusRequest = 0;
+  window.__tikpalInputFocusShowRequest = 0;
+  window.__tikpalInputFocusHideRequest = 0;
   const selector = ${JSON.stringify(onboardInputSelector)};
   const isEditable = (target) => Boolean(target && target.closest && target.closest(selector));
-  const requestKeyboard = (event) => {
+  const isMultiline = (target) => Boolean(target && (target.matches("textarea,[contenteditable='true']") || target.getAttribute("aria-multiline") === "true"));
+  const requestShow = (event) => {
     const path = typeof event.composedPath === "function" ? event.composedPath() : [event.target];
-    if (path.some(isEditable)) window.__tikpalInputFocusRequest += 1;
+    if (path.some(isEditable)) window.__tikpalInputFocusShowRequest += 1;
   };
-  document.addEventListener("pointerdown", requestKeyboard, true);
-  document.addEventListener("focusin", requestKeyboard, true);
+  document.addEventListener("pointerdown", requestShow, true);
+  document.addEventListener("focusin", requestShow, true);
+  document.addEventListener("focusout", () => {
+    setTimeout(() => {
+      if (!isEditable(document.activeElement) && document.activeElement?.tagName !== "IFRAME") window.__tikpalInputFocusHideRequest += 1;
+    }, 0);
+  }, true);
+  document.addEventListener("submit", () => window.__tikpalInputFocusHideRequest += 1, true);
+  document.addEventListener("keydown", (event) => {
+    const target = event.target?.closest?.(selector);
+    if (event.key === "Enter" && target && !isMultiline(target)) window.__tikpalInputFocusHideRequest += 1;
+  }, true);
 })()`;
 
 const inputFocusExpression = `(() => {
   const selector = ${JSON.stringify(onboardInputSelector)};
   return {
-    request: Number(window.__tikpalInputFocusRequest || 0),
+    showRequest: Number(window.__tikpalInputFocusShowRequest || 0),
+    hideRequest: Number(window.__tikpalInputFocusHideRequest || 0),
     focused: Boolean(document.activeElement && document.activeElement.matches && (document.activeElement.matches(selector) || document.activeElement.matches("iframe")))
   };
 })()`;
 
-function showOnboard() {
-  const child = spawn("bash", [launcherPath, "keyboard"], {
+function setOnboardVisible(enabled) {
+  const child = spawn("bash", [launcherPath, "keyboard", enabled ? "show" : "hide"], {
     detached: true,
     stdio: "ignore",
     env: process.env
@@ -220,13 +233,29 @@ function showOnboard() {
 
 async function runInputFocusKeyboard(targets) {
   if (!onboardAutoFocus) return;
+  const currentTargetIds = new Set();
+  let anyFocused = false;
+  let wasFocused = false;
+  let shouldShow = false;
+  let shouldHide = false;
   for (const target of targets.filter(isProviderWebPage)) {
+    currentTargetIds.add(target.id);
     const state = await evaluate(target.webSocketDebuggerUrl, inputFocusExpression).catch(() => null);
     if (!state) continue;
-    const previous = inputFocusRequests.get(target.id) || { request: 0, focused: false };
-    if (state.request > previous.request || (state.focused && !previous.focused)) showOnboard();
-    inputFocusRequests.set(target.id, state);
+    const previous = inputFocusRequests.get(target.id) || { showRequest: 0, hideRequest: 0, focused: false, url: target.url };
+    anyFocused ||= state.focused;
+    wasFocused ||= previous.focused;
+    shouldShow ||= state.showRequest > previous.showRequest || (state.focused && !previous.focused);
+    shouldHide ||= state.hideRequest > previous.hideRequest || (previous.url !== target.url && !state.focused);
+    inputFocusRequests.set(target.id, { ...state, url: target.url });
   }
+  for (const [targetId, previous] of inputFocusRequests) {
+    if (currentTargetIds.has(targetId)) continue;
+    wasFocused ||= previous.focused;
+    inputFocusRequests.delete(targetId);
+  }
+  if (shouldShow) setOnboardVisible(true);
+  else if (shouldHide || (wasFocused && !anyFocused)) setOnboardVisible(false);
 }
 
 async function installKioskGuard(target) {
