@@ -810,7 +810,6 @@ export function QuickSettingsOverlay({
               disabled={busy}
               inputMode="url"
               spellCheck={false}
-              onFocus={() => void handleWebModeKeyboard()}
               onChange={(event) => setWebModeProxyUrl(event.currentTarget.value)}
             />
           </label>

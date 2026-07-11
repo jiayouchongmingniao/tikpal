@@ -215,6 +215,16 @@ async function run() {
   assert(webModeScript.includes("window-guard.pid"), "web mode should track the persistent window guard pid");
   assert(webModeScript.includes('flock -x -w "$TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS"'), "web mode should not wait forever on provider switch locks");
   assert(webModeScript.includes("9>&- &"), "web mode background children should not inherit the provider switch lock");
+  assert(
+    webModeScript.indexOf('export DBUS_SESSION_BUS_ADDRESS="$session_bus"') < webModeScript.indexOf('(DISPLAY="$TIKPAL_KIOSK_DISPLAY" onboard'),
+    "web mode should bind Onboard to the existing user DBus session before launch"
+  );
+  assert(webModeScript.includes("timeout 1 gdbus call"), "web mode should retry Onboard Show while its DBus service starts");
+  assert(webModeScript.includes("org.onboard.auto-show enabled false"), "Tikpal focus events should own Onboard visibility");
+  assert(webModeScript.includes('"$((width - 1))" "$((height - 1))"'), "Onboard cold start should force one redraw before its final size");
+  const mainSource = await readFile(path.join(ROOT, "src/main.tsx"), "utf8");
+  assert(mainSource.includes("onboardInputSelector"), "local kiosk text inputs should share automatic Onboard activation");
+  assert(mainSource.includes("localKioskHosts.has(window.location.hostname)"), "automatic Onboard activation should stay on the physical kiosk host");
   const openProviderBody = webModeScript.slice(
     webModeScript.indexOf("open_provider()"),
     webModeScript.indexOf("check_runtime()")
@@ -335,6 +345,7 @@ async function run() {
   assert(providerGuardCheck.stdout.includes("dismiss labels:"), "provider guard should allow safe dismiss prompts without accepting upsells");
   assert(providerGuardCheck.stdout.includes("duplicate player pruning: 1"), "provider guard should prune duplicate QQ player pages");
   assert(providerGuardCheck.stdout.includes("single pane navigation: 1"), "provider guard should keep QQ links in the left pane");
+  assert(providerGuardCheck.stdout.includes("qq client prompt close/retry: 1"), "provider guard should close QQ client prompts before one playback retry");
   const providerGuardSource = await readFile(path.join(ROOT, "deploy/chromium/tikpal-web-mode-guard.mjs"), "utf8");
   assert(providerGuardSource.includes("querySelectorAll(\"iframe\")"), "provider guard should scan same-origin QQ modal iframes");
   assert(providerGuardSource.includes("[class*='confirm']"), "provider guard should recognize QQ confirm-style modal containers");
@@ -343,6 +354,11 @@ async function run() {
   assert(providerGuardSource.includes("Number(diagnostics?.visibleCount || 0) <= 3"), "provider guard should not classify a populated provider loading shell as empty");
   assert(providerGuardSource.includes("diagnostics?.resourceCount || 0"), "provider guard should reset the empty-page timeout while provider resources are still loading");
   assert(providerGuardSource.includes("__tikpalInputFocusGuardInstalled"), "provider guard should hot-install input focus handling on existing provider pages");
+  assert(providerGuardSource.includes("input[type='search']"), "provider guard should recognize text-like inputs that need Onboard");
+  assert(providerGuardSource.includes("const onboardInputSelector"), "provider focus polling should share one text-input selector");
+  assert(providerGuardSource.includes("state.focused && !previous.focused"), "provider navigation should surface Onboard when text focus arrives before listener installation");
+  assert(providerGuardSource.includes("__tikpalQqClientPromptRetried"), "QQ client prompt retries should stop after one playback attempt");
+  assert(providerGuardSource.includes(".yqq-dialog-close"), "QQ client prompt handling should use the explicit close control");
   assert(webModeScript.includes('args+=("--disable-hang-monitor")'), "provider Chromium should not block Explore return on a page-unresponsive dialog");
   assert(webModeScript.includes('pkill -KILL -f -- "--user-data-dir=$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/"'), "Explore close should force-exit an unresponsive provider after the grace period");
 

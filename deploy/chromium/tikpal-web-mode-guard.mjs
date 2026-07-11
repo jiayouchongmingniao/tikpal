@@ -13,6 +13,19 @@ const onboardAutoFocus = /^(1|true|yes|on|enabled)$/i.test(process.env.TIKPAL_WE
 const launcherPath = fileURLToPath(new URL("./tikpal-web-mode.sh", import.meta.url));
 const emptyPageTimeoutMs = Math.max(5, Number.parseInt(process.env.TIKPAL_WEB_MODE_EMPTY_PAGE_ERROR_SECONDS || "18", 10) || 18) * 1000;
 const pollMs = 250;
+const onboardInputSelector = [
+  "textarea",
+  "[contenteditable='true']",
+  "[role='textbox']",
+  "input:not([type])",
+  "input[type='text']",
+  "input[type='search']",
+  "input[type='url']",
+  "input[type='email']",
+  "input[type='password']",
+  "input[type='tel']",
+  "input[type='number']"
+].join(",");
 const safeLabels = ["确定", "确认", "取消", "关闭", "知道了", "我知道了", "好的", "好", "开始播放", "继续播放", "不用了，谢谢", "不了，谢谢", "no, thanks", "no thanks"];
 const dismissLabels = ["取消", "关闭", "知道了", "我知道了", "好的", "好", "不用了，谢谢", "不了，谢谢", "no, thanks", "no thanks"];
 const consentLabels = [
@@ -178,7 +191,7 @@ const inputFocusGuardScript = `(() => {
   if (window.__tikpalInputFocusGuardInstalled) return;
   window.__tikpalInputFocusGuardInstalled = true;
   window.__tikpalInputFocusRequest = 0;
-  const selector = "input, textarea, select, [contenteditable='true'], [role='textbox']";
+  const selector = ${JSON.stringify(onboardInputSelector)};
   const isEditable = (target) => Boolean(target && target.closest && target.closest(selector));
   const requestKeyboard = (event) => {
     const path = typeof event.composedPath === "function" ? event.composedPath() : [event.target];
@@ -188,10 +201,13 @@ const inputFocusGuardScript = `(() => {
   document.addEventListener("focusin", requestKeyboard, true);
 })()`;
 
-const inputFocusExpression = `(() => ({
-  request: Number(window.__tikpalInputFocusRequest || 0),
-  focused: Boolean(document.activeElement && document.activeElement.matches && document.activeElement.matches("input, textarea, select, [contenteditable='true'], [role='textbox'], iframe"))
-}))()`;
+const inputFocusExpression = `(() => {
+  const selector = ${JSON.stringify(onboardInputSelector)};
+  return {
+    request: Number(window.__tikpalInputFocusRequest || 0),
+    focused: Boolean(document.activeElement && document.activeElement.matches && (document.activeElement.matches(selector) || document.activeElement.matches("iframe")))
+  };
+})()`;
 
 function showOnboard() {
   const child = spawn("bash", [launcherPath, "keyboard"], {
@@ -207,9 +223,9 @@ async function runInputFocusKeyboard(targets) {
   for (const target of targets.filter(isProviderWebPage)) {
     const state = await evaluate(target.webSocketDebuggerUrl, inputFocusExpression).catch(() => null);
     if (!state) continue;
-    const previous = inputFocusRequests.get(target.id) || 0;
-    if (state.request > previous || (state.focused && !inputFocusRequests.has(target.id))) showOnboard();
-    inputFocusRequests.set(target.id, state.request);
+    const previous = inputFocusRequests.get(target.id) || { request: 0, focused: false };
+    if (state.request > previous.request || (state.focused && !previous.focused)) showOnboard();
+    inputFocusRequests.set(target.id, state);
   }
 }
 
@@ -427,15 +443,77 @@ const singlePaneScript = `(() => {
   });
 })()`;
 
+const qqClientPromptGuardScript = `(() => {
+  if (window.__tikpalQqClientPromptGuardInstalled) return;
+  window.__tikpalQqClientPromptGuardInstalled = true;
+  window.__tikpalQqClientPromptRetried = false;
+  const textOf = (element) => String(element?.innerText || element?.textContent || "").replace(/\\s+/g, "").trim();
+  const playAction = (target) => {
+    const action = target?.closest?.("a,button,[role='button']");
+    if (!action) return null;
+    const label = textOf(action);
+    return action.matches(".list_menu__play,[title='播放']") || label === "播放" || label === "播放全部"
+      ? action
+      : null;
+  };
+  document.addEventListener("click", (event) => {
+    if (!event.isTrusted) return;
+    const action = playAction(event.target);
+    if (!action) return;
+    window.__tikpalLastQqPlayTarget = action;
+    window.__tikpalQqClientPromptRetried = false;
+  }, true);
+})()`;
+
+const qqClientPromptExpression = `(() => {
+  const textOf = (element) => String(element?.innerText || element?.textContent || "").replace(/\\s+/g, "").trim();
+  const visible = (element) => {
+    if (!element) return false;
+    const rect = element.getBoundingClientRect();
+    const style = getComputedStyle(element);
+    return rect.width >= 8 &&
+      rect.height >= 8 &&
+      rect.right > 0 &&
+      rect.bottom > 0 &&
+      rect.left < innerWidth &&
+      rect.top < innerHeight &&
+      style.display !== "none" &&
+      style.visibility !== "hidden" &&
+      Number(style.opacity || "1") > 0.05;
+  };
+  const dialog = Array.from(document.querySelectorAll(".yqq-dialog,[role='dialog'],.mod_popup"))
+    .find((element) => visible(element) && textOf(element).includes("打开客户端") && textOf(element).includes("下载客户端"));
+  if (!dialog) return { handled: false };
+
+  const close = Array.from(dialog.querySelectorAll(".yqq-dialog-close,[aria-label='Close'],[class*='close']")).find(visible);
+  if (!close) return { handled: false };
+
+  const remembered = window.__tikpalLastQqPlayTarget;
+  const fallback = Array.from(document.querySelectorAll("a.mod_btn,button.mod_btn,.list_menu__play,[title='播放']"))
+    .find((element) => visible(element) && ["播放", "播放全部"].includes(textOf(element)));
+  const play = remembered?.isConnected && visible(remembered) ? remembered : fallback;
+  const retried = Boolean(play) && window.__tikpalQqClientPromptRetried !== true;
+  close.click();
+  if (retried) {
+    window.__tikpalQqClientPromptRetried = true;
+    setTimeout(() => play.click(), 150);
+  }
+  return { handled: true, closed: true, retried };
+})()`;
+
 async function installSinglePaneNavigation(target) {
   if (!isQqMusicPage(target)) return;
   if (!qqInjectedTargets.has(target.id)) {
     await cdpCommand(target.webSocketDebuggerUrl, "Page.addScriptToEvaluateOnNewDocument", {
       source: singlePaneScript
     }).catch(() => {});
+    await cdpCommand(target.webSocketDebuggerUrl, "Page.addScriptToEvaluateOnNewDocument", {
+      source: qqClientPromptGuardScript
+    }).catch(() => {});
     qqInjectedTargets.add(target.id);
   }
   await evaluate(target.webSocketDebuggerUrl, singlePaneScript).catch(() => {});
+  await evaluate(target.webSocketDebuggerUrl, qqClientPromptGuardScript).catch(() => {});
 }
 
 async function closeTarget(target) {
@@ -677,6 +755,13 @@ async function runSafePromptFeatures(targets) {
   }
   const target = providerTargets.find(Boolean);
   if (!target) return;
+  if (providerId === "qq_music") {
+    const clientPrompt = await evaluate(target.webSocketDebuggerUrl, qqClientPromptExpression).catch(() => null);
+    if (clientPrompt?.handled) {
+      console.log(`[tikpal-web-mode-guard] closed QQ client prompt retry=${clientPrompt.retried ? "1" : "0"}`);
+      return;
+    }
+  }
   const result = await evaluate(target.webSocketDebuggerUrl, autoConfirmExpression).catch(() => null);
   if (result?.clicked) {
     console.log(`[tikpal-web-mode-guard] clicked prompt ${providerId} ${result.label}`);
@@ -713,6 +798,7 @@ if (process.argv.includes("--check")) {
   console.log(`[tikpal-web-mode-guard] dismiss labels: ${dismissLabels.join(",")}`);
   console.log("[tikpal-web-mode-guard] duplicate player pruning: 1");
   console.log("[tikpal-web-mode-guard] single pane navigation: 1");
+  console.log("[tikpal-web-mode-guard] qq client prompt close/retry: 1");
   process.exit(0);
 }
 

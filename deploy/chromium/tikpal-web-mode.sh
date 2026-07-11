@@ -253,10 +253,13 @@ ensure_onboard() {
     return 0
   }
 
+  session_bus="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/user/$(id -u)/bus}"
+  export DBUS_SESSION_BUS_ADDRESS="$session_bus"
+
   if command -v gsettings >/dev/null 2>&1; then
     gsettings set org.onboard.window docking-enabled false >/dev/null 2>&1 || true
     gsettings set org.onboard.window force-to-top true >/dev/null 2>&1 || true
-    gsettings set org.onboard.auto-show enabled true >/dev/null 2>&1 || true
+    gsettings set org.onboard.auto-show enabled false >/dev/null 2>&1 || true
   fi
 
   if ! pgrep -u "$(id -u)" -x onboard >/dev/null 2>&1; then
@@ -264,13 +267,17 @@ ensure_onboard() {
     sleep 0.8
   fi
 
-  session_bus="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/user/$(id -u)/bus}"
   if command -v gdbus >/dev/null 2>&1; then
-    DISPLAY="$TIKPAL_KIOSK_DISPLAY" DBUS_SESSION_BUS_ADDRESS="$session_bus" \
-      gdbus call --session --dest org.onboard.Onboard \
-        --object-path /org/onboard/Onboard/Keyboard \
-        --method org.onboard.Onboard.Keyboard.Show >/dev/null 2>&1 || true
-    sleep 0.2
+    for _ in 1 2 3 4 5; do
+      if DISPLAY="$TIKPAL_KIOSK_DISPLAY" DBUS_SESSION_BUS_ADDRESS="$session_bus" \
+        timeout 1 gdbus call --session --dest org.onboard.Onboard \
+          --object-path /org/onboard/Onboard/Keyboard \
+          --method org.onboard.Onboard.Keyboard.Show >/dev/null 2>&1; then
+        break
+      fi
+      sleep 0.2
+    done
+    sleep 0.3
   fi
 
   if command -v xdotool >/dev/null 2>&1; then
@@ -284,9 +291,13 @@ ensure_onboard() {
       fi
     done < <(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool search --name Onboard 2>/dev/null || true)
     if [[ -n "$keyboard_window" ]]; then
+      width="$(window_width "$TIKPAL_WEB_MODE_ONBOARD_WINDOW")"
+      height="$(window_height "$TIKPAL_WEB_MODE_ONBOARD_WINDOW")"
       DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowmap "$keyboard_window" >/dev/null 2>&1 || true
       DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowsize "$keyboard_window" \
-        "$(window_width "$TIKPAL_WEB_MODE_ONBOARD_WINDOW")" "$(window_height "$TIKPAL_WEB_MODE_ONBOARD_WINDOW")" >/dev/null 2>&1 || true
+        "$((width - 1))" "$((height - 1))" >/dev/null 2>&1 || true
+      sleep 0.2
+      DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowsize "$keyboard_window" "$width" "$height" >/dev/null 2>&1 || true
       DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowmove "$keyboard_window" \
         "$(position_x "$TIKPAL_WEB_MODE_ONBOARD_POSITION")" "$(position_y "$TIKPAL_WEB_MODE_ONBOARD_POSITION")" >/dev/null 2>&1 || true
       DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowraise "$keyboard_window" >/dev/null 2>&1 || true
