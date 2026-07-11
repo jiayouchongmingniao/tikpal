@@ -131,8 +131,8 @@ stateDiagram-v2
 
 - Cards are summary-first.
 - The visible surface is Console, while the internal app mode remains `quickSettings` for compatibility.
-- Console has no Home or Overview category and opens directly to Signal.
-- The only chips are Signal, Library, Link, and Care, rendered as a listening console rather than a left sidebar.
+- Console has no Home or Overview category and opens directly to Preferences.
+- The only chips are Preferences, Library, Link, and Care, rendered as a listening console rather than a left sidebar.
 - The header shows current source/playback truth so AirPlay/Bluetooth ready states stay readable and do not bleed through the background.
 - Library/NAS controls stay status-first on the kiosk; complex SMB/NFS setup and credentials belong to remote/admin flows.
 - Swipe up returns to ambient even when the gesture starts inside the protected Console panel.

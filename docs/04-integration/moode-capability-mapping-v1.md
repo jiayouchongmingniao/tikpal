@@ -79,8 +79,8 @@ Exact wire shapes should be finalized during implementation, but these concepts 
 | Playback source / renderer | Ambient source picker, Player top state, source workspace | Six visible frontstage choices: Library, Radio, Spotify, AirPlay, Bluetooth, DLNA; internal Audio remains backend/status truth. |
 | Scene ambience audio | Quick menu, Ambient video layer, Player current source | Scene Sound is an exclusive source backed by the active background MP4; switching to any music/input source remutes the browser video and returns source truth to music/input playback. On Pi, Chromium should use the physical USB `dmix` output, while moOde/MPD keeps `_audioout` for Library, Radio, renderer intakes, and Hi-Fi capture. |
 | Network | Player status, Console Link | Ethernet/Wi-Fi, IP, connection state. |
-| Display brightness | Ambient edge gesture, Console Signal display tile | DDC/CI brightness percent when the monitor exposes VCP `0x10`. |
-| DSP / CamillaDSP | Player status, Console Signal, Hi-Fi room mode | ON/OFF, selected EQ preset id/label, controllability, and available `flat` / `warm` / `vocal` preset summaries. |
+| Display brightness | Ambient edge gesture, Console Preferences display tile | DDC/CI brightness percent when the monitor exposes VCP `0x10`. |
+| DSP / CamillaDSP | Player status, Console Preferences, Hi-Fi room mode | ON/OFF, selected EQ preset id/label, controllability, and available `flat` / `warm` / `vocal` preset summaries. |
 | Library scan | Console Library | Update/rescan status and progress. |
 | System info | Console Link | Version, uptime, CPU temperature, storage. |
 | Power actions | Console Care | Reboot and shutdown with confirmation. |
@@ -156,8 +156,8 @@ Avoid:
 
 Allowed:
 
-- Console keeps the internal `quickSettings` route but presents Signal, Library, Link, and Care chips rather than a left sidebar.
-- Signal: audio output summary, DSP summary, display controls, Time & Night, font presets, surface skin presets, and lyrics settings.
+- Console keeps the internal `quickSettings` route but presents Preferences, Library, Link, and Care chips rather than a left sidebar.
+- Preferences: audio output summary, DSP summary, display controls, Time & Night, font presets, surface skin presets, and lyrics settings.
 - Library: local library health, NAS source status, USB readiness, and library scan.
 - Link: network summary, System/API status, and Explore proxy state; text inputs summon Onboard automatically.
 - Care: reboot/shutdown with confirmation.

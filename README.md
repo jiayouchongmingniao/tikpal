@@ -173,7 +173,7 @@ The first implementation milestone should deliver:
 - Ambient fireplace screen with clock and subtle playback HUD.
 - One-finger player overlay and explicit Console entry through gesture and weak gear fallback.
 - Playback state, cover art, transport controls, progress, volume, format, sample rate, bit depth, output device, and network status.
-- Console chips for Signal, Library, Link, and Care, with listening status, output, DSP, display, library/NAS status, API health, reboot, and shutdown.
+- Console chips for Preferences, Library, Link, and Care, with listening status, output, DSP, display, library/NAS status, API health, reboot, and shutdown.
 - Long-press quick menu and a weak top-right Console fallback.
 - Kiosk-safe behavior on Raspberry Pi 4 with 2560 x 720 fullscreen output.
 

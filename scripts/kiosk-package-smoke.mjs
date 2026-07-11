@@ -281,6 +281,8 @@ async function run() {
   assert(webModeScript.includes("call_onboard_method Hide"), "web mode should hide Onboard without terminating it");
   assert(webModeScript.includes("windowunmap"), "web mode should fall back to unmapping Onboard when DBus Hide leaves it visible");
   assert(webModeScript.includes("onboard_visible_windows"), "web mode should toggle the Keyboard button from visible X windows");
+  assert(webModeScript.includes("xdotool windowfocus"), "web mode should return X focus to the input owner after showing Onboard");
+  assert(webModeScript.includes("focused_browser_window"), "web mode should recover browser focus even when X has no active window");
   assert(webModeScript.includes('pkill -KILL -f -- "--user-data-dir=$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"'), "Explore close should force-exit a side panel that ignores graceful shutdown");
   assert(webModeScript.includes("org.onboard.auto-show enabled false"), "Tikpal focus events should own Onboard visibility");
   assert(webModeScript.includes('"$((width - 1))" "$((height - 1))"'), "Onboard cold start should force one redraw before its final size");
@@ -288,6 +290,9 @@ async function run() {
   assert(mainSource.includes("onboardInputSelector"), "local kiosk text inputs should share automatic Onboard activation");
   assert(mainSource.includes("localKioskHosts.has(window.location.hostname)"), "automatic Onboard activation should stay on the physical kiosk host");
   assert(mainSource.includes('sendWebModeAction({ type: "keyboard", enabled })'), "local kiosk inputs should explicitly show and hide Onboard");
+  assert(mainSource.includes("keepTextInputFocus"), "local kiosk inputs should keep focus when Onboard appears");
+  assert(mainSource.includes("outsidePointerDown"), "local kiosk inputs should still hide Onboard when the user taps outside");
+  assert(mainSource.includes("tikpal:keyboard-context-clear"), "local kiosk should clear input focus state when Settings closes");
   assert(mainSource.includes('document.addEventListener("focusout"'), "local kiosk inputs should hide Onboard after focus leaves text input");
   const openProviderBody = webModeScript.slice(
     webModeScript.indexOf("open_provider()"),

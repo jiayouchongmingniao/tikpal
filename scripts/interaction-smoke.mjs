@@ -3498,7 +3498,7 @@ try {
   await navigate(client, `${APP_URL}?mode=quickSettings`);
   await click(client, 1260, 86);
   await expect(client, "document.querySelector('.quick-settings.is-active') !== null", "protected Console click stays in Console");
-  await expect(client, "document.querySelector('[data-settings-section=\"output\"]') !== null", "Console defaults to Signal");
+  await expect(client, "document.querySelector('[data-settings-section=\"output\"]') !== null", "Console defaults to Preferences");
   await expect(
     client,
     "document.querySelector('.console-title-block')?.textContent?.includes('Console') && document.querySelector('[data-console-now-playing]') !== null",
@@ -3510,7 +3510,7 @@ try {
       (() => {
         const labels = [...document.querySelectorAll('.settings-top-tab span')].map((node) => node.textContent?.trim());
         return !document.querySelector('.settings-nav')
-          && labels.join('|') === 'Signal|Library|Link|Care'
+          && labels.join('|') === 'Preferences|Library|Link|Care'
           && !labels.includes('Home');
       })()
     `,
@@ -3531,7 +3531,7 @@ try {
     `,
     "Console avoids heavy backdrop blur"
   );
-  await expect(client, settingsSummaryExpression("output", ["Audio Output", "DSP", "Display", "Time & Night", "Font", "Skin", "Lyrics"]), "Console Signal summary keeps fixed hardware tiles");
+  await expect(client, settingsSummaryExpression("output", ["Audio Output", "DSP", "Display", "Time & Night", "Font", "Skin", "Lyrics"]), "Console Preferences summary keeps fixed hardware tiles");
   await expect(
     client,
     `
@@ -3554,9 +3554,9 @@ try {
       })()
     `
   );
-  await expect(client, "document.querySelector('[data-settings-section=\"output\"]') !== null", "Console Signal section opens");
-  await expect(client, "document.querySelector('[data-settings-detail]') === null", "Console Signal summary stays summary-first");
-  await expect(client, settingsSummaryExpression("output", ["Audio Output", "DSP", "Display", "Time & Night", "Font", "Skin", "Lyrics"]), "Console Signal remains a fixed hardware tile grid");
+  await expect(client, "document.querySelector('[data-settings-section=\"output\"]') !== null", "Console Preferences section opens");
+  await expect(client, "document.querySelector('[data-settings-detail]') === null", "Console Preferences summary stays summary-first");
+  await expect(client, settingsSummaryExpression("output", ["Audio Output", "DSP", "Display", "Time & Night", "Font", "Skin", "Lyrics"]), "Console Preferences remains a fixed hardware tile grid");
 
   await evaluate(
     client,

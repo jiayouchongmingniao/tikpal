@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Airplay, Bluetooth, Captions, Cast, Clock3, Cpu, Database, EthernetPort, Eye, EyeOff, Globe2, HardDrive, Info, Monitor, Music2, Palette, Power, Radio as RadioIcon, RotateCcw, Server, SlidersHorizontal, Type, Usb, Volume2 } from "lucide-react";
-import { fetchWebModeState, testWebModeProxy, updateWebModeSettings } from "../api/tikpalClient";
+import { fetchWebModeState, sendWebModeAction, testWebModeProxy, updateWebModeSettings } from "../api/tikpalClient";
 import type { TikpalDataStatus } from "../hooks/useTikpalState";
 import { useOverlayReturnGesture } from "../hooks/useOverlayReturnGesture";
 import type { AudioState, FontTheme, LyricsFontSize, NightScheduleState, PlaybackSummary, RoomExperienceActionRequest, RoomExperienceState, RuntimeState, SurfaceTheme, SystemActionType, SystemState, WebModeState } from "../types";
@@ -116,7 +116,7 @@ const timeZoneChoices = [
 
 const sectionCopy: Record<SettingsSectionKey, { label: string; description: string }> = {
   output: {
-    label: "Signal",
+    label: "Preferences",
     description: "Output path, DSP, display, typography, and listening overlays."
   },
   library: {
@@ -134,11 +134,18 @@ const sectionCopy: Record<SettingsSectionKey, { label: string; description: stri
 };
 
 const settingsTabs: Array<{ id: SettingsSectionKey; label: string; Icon: typeof Database }> = [
-  { id: "output", label: "Signal", Icon: Volume2 },
+  { id: "output", label: "Preferences", Icon: Volume2 },
   { id: "library", label: "Library", Icon: Database },
   { id: "network", label: "Link", Icon: EthernetPort },
   { id: "system", label: "Care", Icon: Cpu }
 ];
+const localKioskHosts = new Set(["localhost", "127.0.0.1", "::1"]);
+
+function hideLocalKeyboard() {
+  if (!localKioskHosts.has(window.location.hostname) || window.__TIKPAL_REMOTE_MODE__) return;
+  window.dispatchEvent(new Event("tikpal:keyboard-context-clear"));
+  void sendWebModeAction({ type: "keyboard", enabled: false }).catch(() => undefined);
+}
 
 function getConsoleSourceIcon(sourceId: AudioState["currentSource"]["id"]) {
   if (sourceId === "airplay") return Airplay;
@@ -225,10 +232,11 @@ export function QuickSettingsOverlay({
     system.audioFormat.codec,
     system.bitDepth ? `${system.bitDepth}bit` : null,
     formatConsoleSampleRate(system.sampleRate)
-  ].filter(Boolean).join(" / ") || "Signal unknown";
+  ].filter(Boolean).join(" / ") || "Format unknown";
 
   useEffect(() => {
     if (!active) {
+      hideLocalKeyboard();
       setActiveSection("output");
       setDetailView(null);
       setConfirmAction(null);
@@ -264,11 +272,6 @@ export function QuickSettingsOverlay({
       cancelled = true;
     };
   }, [active]);
-
-  useEffect(() => {
-    setConfirmAction(null);
-    setDetailView(null);
-  }, [activeSection]);
 
   const librarySourceKind = system.library.source.trim().toLowerCase();
   const libraryTrackCount = Math.max(0, system.library.trackCount);
@@ -460,6 +463,12 @@ export function QuickSettingsOverlay({
   const visibleCards = useMemo(() => {
     return settingsCards.filter((card) => card.section === activeSection);
   }, [activeSection, settingsCards]);
+
+  function handleSectionSelect(section: SettingsSectionKey) {
+    setConfirmAction(null);
+    setDetailView(null);
+    setActiveSection(section);
+  }
 
   async function handleBrightnessAdjust(nextPercent: number) {
     if (pendingAction || pendingBrightness !== null || !system.display.controllable) return;
@@ -1016,7 +1025,8 @@ export function QuickSettingsOverlay({
                 type="button"
                 aria-pressed={selected}
                 data-settings-tab={tab.id}
-                onClick={() => setActiveSection(tab.id)}
+                onPointerDown={() => handleSectionSelect(tab.id)}
+                onClick={() => handleSectionSelect(tab.id)}
               >
                 <Icon size={21} />
                 <span>{tab.label}</span>

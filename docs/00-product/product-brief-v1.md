@@ -32,7 +32,7 @@ Tikpal should use a clear hierarchy:
 | --- | --- | --- |
 | Level 0 | `ambient` / Room Canvas | Scene ambience screen with room mode, time, playback status, weak progress, and fallback settings entry. |
 | Level 1 | `player` / Hi-Fi Console | Playback control overlay with cover art, metadata, progress, transport, volume, source, and audio status. |
-| Level 2 | `quickSettings` / Console | Listening-first device console with Signal, Library, Link, and Care sections. |
+| Level 2 | `quickSettings` / Console | Listening-first device console with Preferences, Library, Link, and Care sections. |
 | Level 3 | Advanced management | Advanced Web/admin surfaces outside the main touch UI. |
 
 ## Room Experience Model
@@ -117,9 +117,9 @@ The local music taxonomy remains manifest-backed: `Focus`, `Meditation`, and `Re
 
 The Console overlay is a compact device surface, not a full configuration center and not a daily home view. The internal route and app mode remain `quickSettings` for compatibility, but the visible product language is Console.
 
-Console has no Home or Overview category. It opens directly to Signal, shows a listening status header with current source/playback truth, then lets the user switch between four fixed chips:
+Console has no Home or Overview category. It opens directly to Preferences, shows a listening status header with current source/playback truth, then lets the user switch between four fixed chips:
 
-- Signal: audio output, DSP / CamillaDSP, display, Time & Night, font, skin, and lyrics.
+- Preferences: audio output, DSP / CamillaDSP, display, Time & Night, font, skin, and lyrics.
 - Library: local library health, NAS source status, USB readiness, and library scan.
 - Link: network state, System/API status, and Explore proxy/keyboard setup.
 - Care: reboot and shutdown.

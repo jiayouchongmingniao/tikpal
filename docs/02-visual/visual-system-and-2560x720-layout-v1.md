@@ -216,11 +216,11 @@ The play / pause button should be visually dominant and easy to hit.
 
 Purpose: low-frequency signal, library, link, and device-care controls without a Home or Overview category.
 
-Console opens directly to Signal and uses a 2560 x 720 fixed kiosk layout. The internal route remains `quickSettings`, but the visible surface is a listening console: a top status band shows current source/playback truth, source artwork or glyph, API health, and audio format before the user reaches device controls. It uses Signal, Library, Link, and Care chips instead of a left sidebar, so the surface reads like a Hi-Fi device panel rather than a desktop settings app. The summary tile grid is always four columns wide; short categories leave empty cells instead of changing to two or three columns.
+Console opens directly to Preferences and uses a 2560 x 720 fixed kiosk layout. The internal route remains `quickSettings`, but the visible surface is a listening console: a top status band shows current source/playback truth, source artwork or glyph, API health, and audio format before the user reaches device controls. It uses Preferences, Library, Link, and Care chips instead of a left sidebar, so the surface reads like a Hi-Fi device panel rather than a desktop settings app. The summary tile grid is always four columns wide; short categories leave empty cells instead of changing to two or three columns.
 
 | Category | Cards |
 | --- | --- |
-| Signal | Audio output, DSP, Display, Time & Night, Font, Skin, Lyrics. |
+| Preferences | Audio output, DSP, Display, Time & Night, Font, Skin, Lyrics. |
 | Library | Local Library, NAS Sources, USB, Library Scan. |
 | Link | Network, System/API status. |
 | Care | Reboot, Shutdown. |

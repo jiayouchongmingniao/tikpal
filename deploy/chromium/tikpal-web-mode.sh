@@ -326,7 +326,6 @@ position_onboard() {
       DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowsize "$keyboard_window" "$width" "$height" >/dev/null 2>&1 || true
       DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowmove "$keyboard_window" \
         "$(position_x "$TIKPAL_WEB_MODE_ONBOARD_POSITION")" "$(position_y "$TIKPAL_WEB_MODE_ONBOARD_POSITION")" >/dev/null 2>&1 || true
-      DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowraise "$keyboard_window" >/dev/null 2>&1 || true
     fi
   fi
 
@@ -340,12 +339,38 @@ onboard_visible_windows() {
   DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool search --onlyvisible --name Onboard 2>/dev/null || true
 }
 
+focused_browser_window() {
+  local area best_area=0 best_window="" height window width
+  command -v xdotool >/dev/null 2>&1 || return 1
+  window="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool getactivewindow 2>/dev/null || true)"
+  if [[ -n "$window" ]]; then
+    printf '%s\n' "$window"
+    return 0
+  fi
+  while IFS= read -r window; do
+    [[ -n "$window" ]] || continue
+    width="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool getwindowgeometry --shell "$window" 2>/dev/null | awk -F= '$1 == "WIDTH" { print $2 }')"
+    height="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool getwindowgeometry --shell "$window" 2>/dev/null | awk -F= '$1 == "HEIGHT" { print $2 }')"
+    area=$(( ${width:-0} * ${height:-0} ))
+    if (( area > best_area )); then
+      best_window="$window"
+      best_area="$area"
+    fi
+  done < <(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool search --onlyvisible --class chromium 2>/dev/null || true)
+  [[ -n "$best_window" ]] && printf '%s\n' "$best_window"
+}
+
 ensure_onboard() {
+  local active_window=""
   is_enabled "$TIKPAL_WEB_MODE_ONBOARD" || return 0
   command -v onboard >/dev/null 2>&1 || {
     log "WARN: onboard not found"
     return 0
   }
+
+  if command -v xdotool >/dev/null 2>&1; then
+    active_window="$(focused_browser_window || true)"
+  fi
 
   if ! pgrep -u "$(id -u)" -x onboard >/dev/null 2>&1; then
     local session_bus="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/user/$(id -u)/bus}"
@@ -364,6 +389,12 @@ ensure_onboard() {
     sleep 0.3
   fi
   position_onboard
+  if [[ -n "$active_window" ]] && command -v xdotool >/dev/null 2>&1; then
+    DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowfocus "$active_window" >/dev/null 2>&1 || true
+    if [[ -z "$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool getactivewindow 2>/dev/null || true)" ]]; then
+      DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowactivate "$active_window" >/dev/null 2>&1 || true
+    fi
+  fi
 }
 
 hide_onboard() {

@@ -94,20 +94,20 @@ Batch 3 implementation note:
 
 ### Slice 6: Console
 
-- Add listening-first Console with Signal, Library, Link, and Care chips covering audio output, DSP, display, font, skin, lyrics, library/NAS status, network, system info, reboot, and shutdown.
+- Add listening-first Console with Preferences, Library, Link, and Care chips covering audio output, DSP, display, font, skin, lyrics, library/NAS status, network, system info, reboot, and shutdown.
 - Add confirmation flow for dangerous actions.
 - Add library update action where supported.
 
 Acceptance:
 
-- Signal, Library, Link, and Care tiles render from backend or mock state.
+- Preferences, Library, Link, and Care tiles render from backend or mock state.
 - Console shows current source/playback and audio format using existing state.
 - Reboot and shutdown cannot run on first tap.
 - Dangerous confirmation is visually distinct.
 
 Current status note:
 
-- Console is implemented as a fixed 2560 x 720 listening console with no Home/Overview category; it opens directly to Signal, uses Signal / Library / Link / Care chips, and keeps the internal `quickSettings` route for compatibility.
+- Console is implemented as a fixed 2560 x 720 listening console with no Home/Overview category; it opens directly to Preferences, uses Preferences / Library / Link / Care chips, and keeps the internal `quickSettings` route for compatibility.
 - Skin presets currently include `warm-gold`, `graphite-silver`, and `ivory-studio`.
 - Display brightness is reflected in system state and can now be adjusted both from the ambient left-edge gesture and from an in-panel Console drawer on DDC/CI-capable hardware. The Pi deploy helper `deploy/moode/tikpal-ddcci-enable.sh` installs `ddcutil`, enables I2C access, writes `TIKPAL_DDCUTIL_*`, and has been validated on the XENEON EDGE target with `display.transport="ddcci"`.
 - Console Link now owns Explore proxy and Keyboard setup. Explore itself is a browser wrapper with a 1920 x 720 provider window plus 640 x 720 side panel, and it deliberately does not become a Tikpal source or remembered playback state.
@@ -169,7 +169,7 @@ Batch 4 deployment note:
 ### Console
 
 - Network state displays correctly.
-- Signal output state displays correctly.
+- Preferences output state displays correctly.
 - DSP state displays correctly.
 - Library update entry is available.
 - Display brightness state is visible.
