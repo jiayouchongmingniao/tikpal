@@ -301,32 +301,10 @@ call_onboard_method() {
   return 1
 }
 
-ensure_onboard() {
-  local area height keyboard_area=0 keyboard_window="" session_bus window width
+position_onboard() {
+  local area height keyboard_area=0 keyboard_window="" window width
   is_enabled "$TIKPAL_WEB_MODE_ONBOARD" || return 0
-  command -v onboard >/dev/null 2>&1 || {
-    log "WARN: onboard not found"
-    return 0
-  }
-
-  session_bus="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/user/$(id -u)/bus}"
-  export DBUS_SESSION_BUS_ADDRESS="$session_bus"
-
-  if command -v gsettings >/dev/null 2>&1; then
-    gsettings set org.onboard.window docking-enabled false >/dev/null 2>&1 || true
-    gsettings set org.onboard.window force-to-top true >/dev/null 2>&1 || true
-    gsettings set org.onboard.auto-show enabled false >/dev/null 2>&1 || true
-  fi
-
-  if ! pgrep -u "$(id -u)" -x onboard >/dev/null 2>&1; then
-    DISPLAY="$TIKPAL_KIOSK_DISPLAY" onboard </dev/null >/dev/null 2>&1 9>&- &
-    disown "$!" 2>/dev/null || true
-    sleep 0.8
-  fi
-
-  if call_onboard_method Show; then
-    sleep 0.3
-  fi
+  pgrep -u "$(id -u)" -x onboard >/dev/null 2>&1 || return 0
 
   if command -v xdotool >/dev/null 2>&1; then
     while IFS= read -r window; do
@@ -357,19 +335,56 @@ ensure_onboard() {
   fi
 }
 
+onboard_visible_windows() {
+  command -v xdotool >/dev/null 2>&1 || return 1
+  DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool search --onlyvisible --name Onboard 2>/dev/null || true
+}
+
+ensure_onboard() {
+  is_enabled "$TIKPAL_WEB_MODE_ONBOARD" || return 0
+  command -v onboard >/dev/null 2>&1 || {
+    log "WARN: onboard not found"
+    return 0
+  }
+
+  if ! pgrep -u "$(id -u)" -x onboard >/dev/null 2>&1; then
+    local session_bus="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/user/$(id -u)/bus}"
+    export DBUS_SESSION_BUS_ADDRESS="$session_bus"
+    if command -v gsettings >/dev/null 2>&1; then
+      gsettings set org.onboard.window docking-enabled false >/dev/null 2>&1 || true
+      gsettings set org.onboard.window force-to-top true >/dev/null 2>&1 || true
+      gsettings set org.onboard.auto-show enabled false >/dev/null 2>&1 || true
+    fi
+    DISPLAY="$TIKPAL_KIOSK_DISPLAY" onboard </dev/null >/dev/null 2>&1 9>&- &
+    disown "$!" 2>/dev/null || true
+    sleep 0.8
+  fi
+
+  if call_onboard_method Show; then
+    sleep 0.3
+  fi
+  position_onboard
+}
+
 hide_onboard() {
+  local window
   is_enabled "$TIKPAL_WEB_MODE_ONBOARD" || return 0
   pgrep -u "$(id -u)" -x onboard >/dev/null 2>&1 || return 0
   call_onboard_method Hide || true
+  sleep 0.2
+  while IFS= read -r window; do
+    [[ -n "$window" ]] || continue
+    DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowunmap "$window" >/dev/null 2>&1 || true
+  done < <(onboard_visible_windows)
 }
 
 toggle_onboard() {
   is_enabled "$TIKPAL_WEB_MODE_ONBOARD" || return 0
-  if ! pgrep -u "$(id -u)" -x onboard >/dev/null 2>&1; then
+  if ! pgrep -u "$(id -u)" -x onboard >/dev/null 2>&1 || [[ -z "$(onboard_visible_windows)" ]]; then
     ensure_onboard
     return
   fi
-  call_onboard_method ToggleVisible || ensure_onboard
+  hide_onboard
 }
 
 close_side_panel() {

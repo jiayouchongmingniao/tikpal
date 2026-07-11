@@ -215,10 +215,32 @@ const inputFocusGuardScript = `(() => {
 
 const inputFocusExpression = `(() => {
   const selector = ${JSON.stringify(onboardInputSelector)};
+  const activeEditable = (doc) => {
+    let active = doc?.activeElement || null;
+    for (let depth = 0; active && depth < 8; depth += 1) {
+      if (active.matches?.(selector)) return true;
+      if (active.shadowRoot?.activeElement) {
+        active = active.shadowRoot.activeElement;
+        continue;
+      }
+      if (active.tagName === "IFRAME") {
+        try {
+          active = active.contentDocument?.activeElement || null;
+          continue;
+        } catch {}
+      }
+      break;
+    }
+    try {
+      return Array.from(doc?.querySelectorAll?.("iframe") || []).some((frame) => activeEditable(frame.contentDocument));
+    } catch {
+      return false;
+    }
+  };
   return {
     showRequest: Number(window.__tikpalInputFocusShowRequest || 0),
     hideRequest: Number(window.__tikpalInputFocusHideRequest || 0),
-    focused: Boolean(document.activeElement && document.activeElement.matches && (document.activeElement.matches(selector) || document.activeElement.matches("iframe")))
+    focused: activeEditable(document)
   };
 })()`;
 

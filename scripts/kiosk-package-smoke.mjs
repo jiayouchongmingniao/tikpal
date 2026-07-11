@@ -257,7 +257,7 @@ async function run() {
   assert(extensionBackground.includes("chrome.tabs.update(sender.tab.id, { url: provider.url })"), "extension background should navigate the bootstrap tab after proxy sync");
   assert(sidePanelSource.includes('sendWebModeAction({ type: "proxy", enabled:'), "Explore side panel should use the shared proxy action");
   assert(!sidePanelSource.includes("updateWebModeSettings"), "Explore side panel should not reopen the provider to switch proxy mode");
-  assert(sidePanelSource.includes("data-web-mode-keyboard-toggle") && sidePanelSource.includes("<Keyboard size={15}"), "Explore side panel should expose only a compact keyboard icon toggle");
+  assert(sidePanelSource.includes("data-web-mode-keyboard-toggle") && sidePanelSource.includes("<span>{pendingAction === \"keyboard\" ? \"Opening\" : \"Keyboard\"}</span>"), "Explore side panel should expose a visible Keyboard toggle");
   assert(!quickSettingsSource.includes("handleWebModeKeyboard"), "Console should rely on input-focus keyboard behavior instead of a duplicate button");
   assert(remoteControlSource.includes("data-remote-key") && !remoteControlSource.includes("window.prompt"), "portable remote should keep its key field visible instead of relying on a browser prompt");
   assert(remoteControlSource.includes("setActionError") && remoteControlSource.includes("setRefreshError"), "portable remote should keep action errors visible across state polling");
@@ -277,9 +277,10 @@ async function run() {
   );
   assert(webModeScript.includes('disown "$!"'), "web mode should detach Onboard from the launcher shell");
   assert(webModeScript.includes("timeout 1 gdbus call"), "web mode should retry Onboard Show while its DBus service starts");
-  assert(webModeScript.includes("Onboard.Keyboard.$method"), "web mode should share Onboard DBus Show, Hide, and ToggleVisible calls");
+  assert(webModeScript.includes("Onboard.Keyboard.$method"), "web mode should share Onboard DBus Show and Hide calls");
   assert(webModeScript.includes("call_onboard_method Hide"), "web mode should hide Onboard without terminating it");
-  assert(webModeScript.includes("call_onboard_method ToggleVisible"), "web mode should support the compact keyboard toggle");
+  assert(webModeScript.includes("windowunmap"), "web mode should fall back to unmapping Onboard when DBus Hide leaves it visible");
+  assert(webModeScript.includes("onboard_visible_windows"), "web mode should toggle the Keyboard button from visible X windows");
   assert(webModeScript.includes('pkill -KILL -f -- "--user-data-dir=$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"'), "Explore close should force-exit a side panel that ignores graceful shutdown");
   assert(webModeScript.includes("org.onboard.auto-show enabled false"), "Tikpal focus events should own Onboard visibility");
   assert(webModeScript.includes('"$((width - 1))" "$((height - 1))"'), "Onboard cold start should force one redraw before its final size");
@@ -432,6 +433,8 @@ async function run() {
   assert(providerGuardSource.includes("__tikpalInputFocusGuardInstalled"), "provider guard should hot-install input focus handling on existing provider pages");
   assert(providerGuardSource.includes("input[type='search']"), "provider guard should recognize text-like inputs that need Onboard");
   assert(providerGuardSource.includes("const onboardInputSelector"), "provider focus polling should share one text-input selector");
+  assert(providerGuardSource.includes("active.shadowRoot?.activeElement"), "provider focus polling should see focused text inputs inside shadow DOM");
+  assert(providerGuardSource.includes('querySelectorAll?.("iframe")'), "provider focus polling should scan same-origin iframe focus");
   assert(providerGuardSource.includes("state.focused && !previous.focused"), "provider navigation should surface Onboard when text focus arrives before listener installation");
   assert(providerGuardSource.includes("__tikpalInputFocusHideRequest"), "provider input blur and submit should request Onboard Hide");
   assert(providerGuardSource.includes('enabled ? "show" : "hide"'), "provider focus guard should use explicit keyboard show/hide actions");

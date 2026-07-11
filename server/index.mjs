@@ -1,5 +1,5 @@
 import http from "node:http";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { mkdir, open, readFile, readdir, stat, unlink, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
@@ -8981,6 +8981,17 @@ async function runSystemActionCommand(command, label) {
   await runCommand(command, { allowFailure: false, timeout: 30000 });
 }
 
+function scheduleSystemPowerCommand(command, label) {
+  if (!command.trim()) {
+    throw new Error(`${label} is not supported in this runtime`);
+  }
+  const child = spawn("sh", ["-lc", `sleep 0.2; ${command}`], {
+    detached: true,
+    stdio: "ignore"
+  });
+  child.unref();
+}
+
 function applyMockSystemAction(action) {
   switch (action.type) {
     case "library_scan":
@@ -9017,10 +9028,10 @@ async function applyMpcSystemAction(action) {
       }
       return;
     case "reboot":
-      await runSystemActionCommand(SYSTEM_REBOOT_COMMAND, "reboot");
+      scheduleSystemPowerCommand(SYSTEM_REBOOT_COMMAND, "reboot");
       return;
     case "shutdown":
-      await runSystemActionCommand(SYSTEM_SHUTDOWN_COMMAND, "shutdown");
+      scheduleSystemPowerCommand(SYSTEM_SHUTDOWN_COMMAND, "shutdown");
       return;
     case "brightness_set": {
       const percent = Number(action.value);
