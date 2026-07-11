@@ -11,6 +11,7 @@ const errorPageBaseUrl = process.env.TIKPAL_WEB_MODE_ERROR_PAGE_URL || "http://1
 const qqAutoConfirm = /^(1|true|yes|on|enabled)$/i.test(process.env.TIKPAL_WEB_MODE_QQ_AUTO_CONFIRM || "1");
 const onboardAutoFocus = /^(1|true|yes|on|enabled)$/i.test(process.env.TIKPAL_WEB_MODE_ONBOARD_AUTO_FOCUS || "1");
 const launcherPath = fileURLToPath(new URL("./tikpal-web-mode.sh", import.meta.url));
+const keyboardActionUrl = `http://127.0.0.1:${process.env.TIKPAL_API_PORT || "8787"}/api/v1/web-mode/actions`;
 const emptyPageTimeoutMs = Math.max(5, Number.parseInt(process.env.TIKPAL_WEB_MODE_EMPTY_PAGE_ERROR_SECONDS || "18", 10) || 18) * 1000;
 const pollMs = 250;
 const onboardInputSelector = [
@@ -55,6 +56,8 @@ const earlyRedirectTargets = new Set();
 const redirectedTargets = new Set();
 const targetProgressState = new Map();
 const inputFocusRequests = new Map();
+let lastOnboardVisible = null;
+let lastOnboardActionMs = 0;
 const providerNativeFailureIds = new Set(["amazon_music", "qobuz", "deezer"]);
 
 function sleep(ms) {
@@ -193,23 +196,77 @@ const inputFocusGuardScript = `(() => {
   window.__tikpalInputFocusShowRequest = 0;
   window.__tikpalInputFocusHideRequest = 0;
   const selector = ${JSON.stringify(onboardInputSelector)};
-  const isEditable = (target) => Boolean(target && target.closest && target.closest(selector));
+  const keyboardActionUrl = ${JSON.stringify(keyboardActionUrl)};
+  let lastEditable = null;
+  let lastKeyboardEnabled = null;
+  let lastKeyboardRequestMs = 0;
+  let outsidePointerDown = false;
+  const editableTarget = (target) => target?.closest?.(selector) || null;
+  const isEditable = (target) => Boolean(editableTarget(target));
+  const activeEditable = () => editableTarget(document.activeElement);
+  const refocusEditable = (target) => {
+    if (!target?.isConnected) return;
+    target.focus({ preventScroll: true });
+  };
+  const keepEditableFocus = (target) => {
+    for (const delay of [80, 260, 620, 1200, 1800]) {
+      setTimeout(() => {
+        if (lastEditable === target && !outsidePointerDown) refocusEditable(target);
+      }, delay);
+    }
+  };
+  const requestKeyboard = (enabled) => {
+    const now = Date.now();
+    if (lastKeyboardEnabled === enabled && now - lastKeyboardRequestMs < 1500) return;
+    lastKeyboardEnabled = enabled;
+    lastKeyboardRequestMs = now;
+    fetch(keyboardActionUrl, {
+      method: "POST",
+      mode: "no-cors",
+      body: JSON.stringify({ type: "keyboard", enabled })
+    }).catch(() => {});
+  };
   const isMultiline = (target) => Boolean(target && (target.matches("textarea,[contenteditable='true']") || target.getAttribute("aria-multiline") === "true"));
   const requestShow = (event) => {
     const path = typeof event.composedPath === "function" ? event.composedPath() : [event.target];
-    if (path.some(isEditable)) window.__tikpalInputFocusShowRequest += 1;
+    const target = path.map(editableTarget).find(Boolean);
+    if (!target) return;
+    outsidePointerDown = false;
+    lastEditable = target;
+    window.__tikpalInputFocusShowRequest += 1;
+    requestKeyboard(true);
+    keepEditableFocus(target);
   };
+  document.addEventListener("pointerdown", (event) => {
+    const path = typeof event.composedPath === "function" ? event.composedPath() : [event.target];
+    outsidePointerDown = !path.some(isEditable);
+    if (outsidePointerDown) lastEditable = null;
+  }, true);
   document.addEventListener("pointerdown", requestShow, true);
   document.addEventListener("focusin", requestShow, true);
   document.addEventListener("focusout", () => {
     setTimeout(() => {
-      if (!isEditable(document.activeElement) && document.activeElement?.tagName !== "IFRAME") window.__tikpalInputFocusHideRequest += 1;
-    }, 0);
+      if (activeEditable() || document.activeElement?.tagName === "IFRAME") return;
+      if (lastEditable && !outsidePointerDown) {
+        refocusEditable(lastEditable);
+        return;
+      }
+      window.__tikpalInputFocusHideRequest += 1;
+      requestKeyboard(false);
+    }, 80);
   }, true);
-  document.addEventListener("submit", () => window.__tikpalInputFocusHideRequest += 1, true);
+  document.addEventListener("submit", () => {
+    lastEditable = null;
+    window.__tikpalInputFocusHideRequest += 1;
+    requestKeyboard(false);
+  }, true);
   document.addEventListener("keydown", (event) => {
     const target = event.target?.closest?.(selector);
-    if (event.key === "Enter" && target && !isMultiline(target)) window.__tikpalInputFocusHideRequest += 1;
+    if (event.key === "Enter" && target && !isMultiline(target)) {
+      lastEditable = null;
+      window.__tikpalInputFocusHideRequest += 1;
+      requestKeyboard(false);
+    }
   }, true);
 })()`;
 
@@ -245,6 +302,10 @@ const inputFocusExpression = `(() => {
 })()`;
 
 function setOnboardVisible(enabled) {
+  const now = Date.now();
+  if (lastOnboardVisible === enabled && now - lastOnboardActionMs < 1500) return;
+  lastOnboardVisible = enabled;
+  lastOnboardActionMs = now;
   const child = spawn("bash", [launcherPath, "keyboard", enabled ? "show" : "hide"], {
     detached: true,
     stdio: "ignore",
@@ -276,7 +337,7 @@ async function runInputFocusKeyboard(targets) {
     wasFocused ||= previous.focused;
     inputFocusRequests.delete(targetId);
   }
-  if (shouldShow) setOnboardVisible(true);
+  if (anyFocused || shouldShow) setOnboardVisible(true);
   else if (shouldHide || (wasFocused && !anyFocused)) setOnboardVisible(false);
 }
 

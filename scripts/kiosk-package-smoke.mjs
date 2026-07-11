@@ -441,6 +441,12 @@ async function run() {
   assert(providerGuardSource.includes("active.shadowRoot?.activeElement"), "provider focus polling should see focused text inputs inside shadow DOM");
   assert(providerGuardSource.includes('querySelectorAll?.("iframe")'), "provider focus polling should scan same-origin iframe focus");
   assert(providerGuardSource.includes("state.focused && !previous.focused"), "provider navigation should surface Onboard when text focus arrives before listener installation");
+  assert(providerGuardSource.includes("keepEditableFocus"), "provider focus guard should keep Spotify-style inputs focused after Onboard opens");
+  assert(providerGuardSource.includes("outsidePointerDown"), "provider focus guard should still hide Onboard when tapping outside inputs");
+  assert(providerGuardSource.includes("lastOnboardActionMs"), "provider focus guard should throttle repeated keyboard show while inputs stay focused");
+  assert(providerGuardSource.includes("anyFocused || shouldShow"), "provider focus guard should keep Onboard visible while provider inputs stay focused");
+  assert(providerGuardSource.includes("mode: \"no-cors\""), "provider focus guard should request local keyboard actions without cross-origin response access");
+  assert(providerGuardSource.includes("keyboardActionUrl"), "provider focus guard should use the loopback keyboard action as its primary path");
   assert(providerGuardSource.includes("__tikpalInputFocusHideRequest"), "provider input blur and submit should request Onboard Hide");
   assert(providerGuardSource.includes('enabled ? "show" : "hide"'), "provider focus guard should use explicit keyboard show/hide actions");
   assert(providerGuardSource.includes("__tikpalQqClientPromptRetried"), "QQ client prompt retries should stop after one playback attempt");
