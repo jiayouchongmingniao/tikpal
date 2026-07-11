@@ -597,10 +597,10 @@ const qqClientPromptExpression = `(() => {
   const dialog = Array.from(document.querySelectorAll(".yqq-dialog,[role='dialog'],.mod_popup"))
     .find((element) => {
       const text = textOf(element);
-      return visible(element) && (
-        text.includes("下载客户端体验更多内容") ||
-        (text.includes("打开客户端") && text.includes("下载客户端"))
-      );
+      return visible(element) &&
+        !text.includes("下载客户端体验更多内容") &&
+        text.includes("打开客户端") &&
+        text.includes("下载客户端");
     });
   if (!dialog) return { handled: false };
 
@@ -611,14 +611,13 @@ const qqClientPromptExpression = `(() => {
   const fallback = Array.from(document.querySelectorAll("a.mod_btn,button.mod_btn,.list_menu__play,[title='播放']"))
     .find((element) => visible(element) && ["播放", "播放全部"].includes(textOf(element)));
   const play = remembered?.isConnected && visible(remembered) ? remembered : fallback;
-  const closeOnly = textOf(dialog).includes("下载客户端体验更多内容");
-  const retried = !closeOnly && Boolean(play) && window.__tikpalQqClientPromptRetried !== true;
+  const retried = Boolean(play) && window.__tikpalQqClientPromptRetried !== true;
   close.click();
   if (retried) {
     window.__tikpalQqClientPromptRetried = true;
     setTimeout(() => play.click(), 150);
   }
-  return { handled: true, closed: true, closeOnly, retried };
+  return { handled: true, closed: true, retried };
 })()`;
 
 async function installSinglePaneNavigation(target) {
@@ -878,7 +877,7 @@ async function runSafePromptFeatures(targets) {
   if (providerId === "qq_music") {
     const clientPrompt = await evaluate(target.webSocketDebuggerUrl, qqClientPromptExpression).catch(() => null);
     if (clientPrompt?.handled) {
-      console.log(`[tikpal-web-mode-guard] closed QQ client prompt closeOnly=${clientPrompt.closeOnly ? "1" : "0"} retry=${clientPrompt.retried ? "1" : "0"}`);
+      console.log(`[tikpal-web-mode-guard] closed QQ client prompt retry=${clientPrompt.retried ? "1" : "0"}`);
       return;
     }
   }
@@ -919,7 +918,7 @@ if (process.argv.includes("--check")) {
   console.log("[tikpal-web-mode-guard] duplicate player pruning: 1");
   console.log("[tikpal-web-mode-guard] single pane navigation: 1");
   console.log("[tikpal-web-mode-guard] qq client prompt close/retry: 1");
-  console.log("[tikpal-web-mode-guard] qq download-client prompt close only: 1");
+  console.log("[tikpal-web-mode-guard] qq login prompt preserve: 1");
   process.exit(0);
 }
 

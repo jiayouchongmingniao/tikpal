@@ -164,7 +164,7 @@ stateDiagram-v2
 - The left provider pane must not expose Chromium-native error pages. If a provider fails to load, show the local Tikpal Explore error page with provider name, Proxy/Direct state, and a short retry hint.
 - The left provider pane should feel kiosk-like, not desktop-browser-like: disable right-click context menus, drag/select affordances, and common zoom/refresh shortcuts while preserving normal touch, scrolling, login input, and playback clicks.
 - QQ Music may show trial or VIP upsell reminders while playback continues. Explore can auto-dismiss those with visible `取消`, `关闭`, or similar close buttons, but it must never auto-accept login, purchase, membership, authorization, agreement, recharge, or subscription prompts.
-- QQ Music's `下载客户端体验更多内容` prompt is a separate close-only case: close it through its explicit close control without retrying Play or clicking the download/open-client actions.
+- QQ Music's `下载客户端体验更多内容` prompt requires login and must remain visible for user action; Explore must not auto-dismiss or click it.
 
 ## Input Compatibility
 
