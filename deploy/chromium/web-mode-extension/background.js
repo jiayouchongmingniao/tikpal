@@ -62,6 +62,16 @@ async function syncProxy() {
   return { ok: true, revision, providers: state.providers || [] };
 }
 
+async function setKeyboardVisible(enabled) {
+  const response = await fetch(`${API_ROOT}/web-mode/actions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ type: "keyboard", enabled })
+  });
+  if (!response.ok) throw new Error(`Explore keyboard action returned ${response.status}`);
+  return { ok: true };
+}
+
 function queueSync() {
   if (!syncPromise) syncPromise = syncProxy().finally(() => { syncPromise = null; });
   return syncPromise;
@@ -69,6 +79,12 @@ function queueSync() {
 
 if (globalThis.chrome?.runtime?.onMessage) {
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message?.type === "keyboard") {
+      setKeyboardVisible(message.enabled === true)
+        .then(sendResponse)
+        .catch((error) => sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) }));
+      return true;
+    }
     if (message?.type !== "sync-proxy") return false;
     queueSync()
       .then((result) => {

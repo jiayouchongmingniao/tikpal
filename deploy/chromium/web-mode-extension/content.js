@@ -1,4 +1,49 @@
 (() => {
+  const inputSelector = [
+    "textarea",
+    "[contenteditable='true']",
+    "[role='textbox']",
+    "input:not([type])",
+    "input[type='text']",
+    "input[type='search']",
+    "input[type='url']",
+    "input[type='email']",
+    "input[type='password']",
+    "input[type='tel']",
+    "input[type='number']"
+  ].join(",");
+  let lastKeyboardEnabled = null;
+  let lastKeyboardRequestMs = 0;
+  const editableTarget = (target) => target?.closest?.(inputSelector) || null;
+  const requestKeyboard = (enabled) => {
+    const now = Date.now();
+    if (lastKeyboardEnabled === enabled && now - lastKeyboardRequestMs < 250) return;
+    lastKeyboardEnabled = enabled;
+    lastKeyboardRequestMs = now;
+    chrome.runtime.sendMessage({ type: "keyboard", enabled }, () => undefined);
+  };
+  const requestShow = (event) => {
+    const path = typeof event.composedPath === "function" ? event.composedPath() : [event.target];
+    if (path.some(editableTarget)) requestKeyboard(true);
+  };
+  const isMultiline = (target) => Boolean(target && (target.matches("textarea,[contenteditable='true']") || target.getAttribute("aria-multiline") === "true"));
+
+  document.addEventListener("pointerdown", requestShow, true);
+  document.addEventListener("focusin", requestShow, true);
+  document.addEventListener("focusout", () => {
+    setTimeout(() => {
+      if (!editableTarget(document.activeElement) && document.activeElement?.tagName !== "IFRAME") requestKeyboard(false);
+    }, 80);
+  }, true);
+  document.addEventListener("submit", () => requestKeyboard(false), true);
+  document.addEventListener("keydown", (event) => {
+    const target = editableTarget(event.target);
+    if (event.key === "Enter" && target && !isMultiline(target)) requestKeyboard(false);
+  }, true);
+  window.setInterval(() => {
+    if (editableTarget(document.activeElement)) requestKeyboard(true);
+  }, 250);
+
   const retarget = (root = document) => {
     root.querySelectorAll?.('a[target="_blank"]').forEach((link) => {
       link.target = "_self";

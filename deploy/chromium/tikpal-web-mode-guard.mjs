@@ -217,12 +217,13 @@ const inputFocusGuardScript = `(() => {
   };
   const requestKeyboard = (enabled) => {
     const now = Date.now();
-    if (lastKeyboardEnabled === enabled && now - lastKeyboardRequestMs < 1500) return;
+    if (lastKeyboardEnabled === enabled && now - lastKeyboardRequestMs < 250) return;
     lastKeyboardEnabled = enabled;
     lastKeyboardRequestMs = now;
     fetch(keyboardActionUrl, {
       method: "POST",
       mode: "no-cors",
+      headers: { "Content-Type": "text/plain;charset=UTF-8" },
       body: JSON.stringify({ type: "keyboard", enabled })
     }).catch(() => {});
   };
@@ -303,7 +304,7 @@ const inputFocusExpression = `(() => {
 
 function setOnboardVisible(enabled) {
   const now = Date.now();
-  if (lastOnboardVisible === enabled && now - lastOnboardActionMs < 1500) return;
+  if (lastOnboardVisible === enabled && now - lastOnboardActionMs < 250) return;
   lastOnboardVisible = enabled;
   lastOnboardActionMs = now;
   const child = spawn("bash", [launcherPath, "keyboard", enabled ? "show" : "hide"], {
@@ -594,7 +595,13 @@ const qqClientPromptExpression = `(() => {
       Number(style.opacity || "1") > 0.05;
   };
   const dialog = Array.from(document.querySelectorAll(".yqq-dialog,[role='dialog'],.mod_popup"))
-    .find((element) => visible(element) && textOf(element).includes("打开客户端") && textOf(element).includes("下载客户端"));
+    .find((element) => {
+      const text = textOf(element);
+      return visible(element) && (
+        text.includes("下载客户端体验更多内容") ||
+        (text.includes("打开客户端") && text.includes("下载客户端"))
+      );
+    });
   if (!dialog) return { handled: false };
 
   const close = Array.from(dialog.querySelectorAll(".yqq-dialog-close,[aria-label='Close'],[class*='close']")).find(visible);
@@ -604,13 +611,14 @@ const qqClientPromptExpression = `(() => {
   const fallback = Array.from(document.querySelectorAll("a.mod_btn,button.mod_btn,.list_menu__play,[title='播放']"))
     .find((element) => visible(element) && ["播放", "播放全部"].includes(textOf(element)));
   const play = remembered?.isConnected && visible(remembered) ? remembered : fallback;
-  const retried = Boolean(play) && window.__tikpalQqClientPromptRetried !== true;
+  const closeOnly = textOf(dialog).includes("下载客户端体验更多内容");
+  const retried = !closeOnly && Boolean(play) && window.__tikpalQqClientPromptRetried !== true;
   close.click();
   if (retried) {
     window.__tikpalQqClientPromptRetried = true;
     setTimeout(() => play.click(), 150);
   }
-  return { handled: true, closed: true, retried };
+  return { handled: true, closed: true, closeOnly, retried };
 })()`;
 
 async function installSinglePaneNavigation(target) {
@@ -870,7 +878,7 @@ async function runSafePromptFeatures(targets) {
   if (providerId === "qq_music") {
     const clientPrompt = await evaluate(target.webSocketDebuggerUrl, qqClientPromptExpression).catch(() => null);
     if (clientPrompt?.handled) {
-      console.log(`[tikpal-web-mode-guard] closed QQ client prompt retry=${clientPrompt.retried ? "1" : "0"}`);
+      console.log(`[tikpal-web-mode-guard] closed QQ client prompt closeOnly=${clientPrompt.closeOnly ? "1" : "0"} retry=${clientPrompt.retried ? "1" : "0"}`);
       return;
     }
   }
@@ -911,6 +919,7 @@ if (process.argv.includes("--check")) {
   console.log("[tikpal-web-mode-guard] duplicate player pruning: 1");
   console.log("[tikpal-web-mode-guard] single pane navigation: 1");
   console.log("[tikpal-web-mode-guard] qq client prompt close/retry: 1");
+  console.log("[tikpal-web-mode-guard] qq download-client prompt close only: 1");
   process.exit(0);
 }
 

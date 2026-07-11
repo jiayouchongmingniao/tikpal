@@ -341,9 +341,18 @@ onboard_visible_windows() {
 
 configure_onboard() {
   command -v gsettings >/dev/null 2>&1 || return 0
+  local height width x y
+  width="$(window_width "$TIKPAL_WEB_MODE_ONBOARD_WINDOW")"
+  height="$(window_height "$TIKPAL_WEB_MODE_ONBOARD_WINDOW")"
+  x="$(position_x "$TIKPAL_WEB_MODE_ONBOARD_POSITION")"
+  y="$(position_y "$TIKPAL_WEB_MODE_ONBOARD_POSITION")"
   gsettings set org.onboard.window docking-enabled false >/dev/null 2>&1 || true
   gsettings set org.onboard.window force-to-top true >/dev/null 2>&1 || true
   gsettings set org.onboard.auto-show enabled false >/dev/null 2>&1 || true
+  gsettings set org.onboard.window.landscape width "$width" >/dev/null 2>&1 || true
+  gsettings set org.onboard.window.landscape height "$height" >/dev/null 2>&1 || true
+  gsettings set org.onboard.window.landscape x "$x" >/dev/null 2>&1 || true
+  gsettings set org.onboard.window.landscape y "$y" >/dev/null 2>&1 || true
   gsettings set org.onboard.keyboard input-event-source GTK >/dev/null 2>&1 || true
   gsettings set org.onboard.keyboard key-synth XTest >/dev/null 2>&1 || true
 }
@@ -413,9 +422,9 @@ ensure_onboard() {
   if command -v xdotool >/dev/null 2>&1; then
     active_window="$(focused_browser_window || true)"
   fi
-  configure_onboard
 
   if ! pgrep -u "$(id -u)" -x onboard >/dev/null 2>&1; then
+    configure_onboard
     local session_bus="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/user/$(id -u)/bus}"
     export DBUS_SESSION_BUS_ADDRESS="$session_bus"
     DISPLAY="$TIKPAL_KIOSK_DISPLAY" onboard </dev/null >/dev/null 2>&1 9>&- &
@@ -424,16 +433,18 @@ ensure_onboard() {
   fi
 
   focus_window "$active_window"
-  if call_onboard_method Show; then
-    sleep 0.3
-  fi
   position_onboard
+  if [[ -z "$(onboard_visible_windows)" ]]; then
+    call_onboard_method Show || true
+    position_onboard
+  fi
   focus_window "$active_window"
 }
 
 hide_onboard() {
   local window
   is_enabled "$TIKPAL_WEB_MODE_ONBOARD" || return 0
+  configure_onboard
   pgrep -u "$(id -u)" -x onboard >/dev/null 2>&1 || return 0
   call_onboard_method Hide || true
   sleep 0.2
@@ -978,7 +989,6 @@ case "${1:-open}" in
     run_window_guard "${2:-}" "${3:-}"
     ;;
   keyboard)
-    check_runtime
     case "${2:-toggle}" in
       show) ensure_onboard ;;
       hide) hide_onboard ;;
