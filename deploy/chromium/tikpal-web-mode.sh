@@ -339,9 +339,41 @@ onboard_visible_windows() {
   DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool search --onlyvisible --name Onboard 2>/dev/null || true
 }
 
+configure_onboard() {
+  command -v gsettings >/dev/null 2>&1 || return 0
+  gsettings set org.onboard.window docking-enabled false >/dev/null 2>&1 || true
+  gsettings set org.onboard.window force-to-top true >/dev/null 2>&1 || true
+  gsettings set org.onboard.auto-show enabled false >/dev/null 2>&1 || true
+  gsettings set org.onboard.keyboard input-event-source GTK >/dev/null 2>&1 || true
+  gsettings set org.onboard.keyboard key-synth XTest >/dev/null 2>&1 || true
+}
+
+window_uses_profile() {
+  local cmdline pid profile="$1" window="$2"
+  [[ -n "$profile" ]] || return 1
+  pid="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool getwindowpid "$window" 2>/dev/null || true)"
+  [[ -n "$pid" ]] || return 1
+  cmdline="$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null || true)"
+  [[ "$cmdline" == *"--user-data-dir=$profile"* ]]
+}
+
 focused_browser_window() {
-  local area best_area=0 best_window="" height window width
+  local active_provider area best_area=0 best_window="" height profile window width
   command -v xdotool >/dev/null 2>&1 || return 1
+  profile="${TIKPAL_WEB_MODE_PROVIDER_PROFILE:-}"
+  if [[ -z "$profile" ]]; then
+    active_provider="$(read_runtime_active_provider)"
+    [[ -n "$active_provider" ]] && profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/$active_provider"
+  fi
+  if [[ -n "$profile" ]]; then
+    while IFS= read -r window; do
+      [[ -n "$window" ]] || continue
+      if window_uses_profile "$profile" "$window"; then
+        printf '%s\n' "$window"
+        return 0
+      fi
+    done < <(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool search --onlyvisible --class chromium 2>/dev/null || true)
+  fi
   window="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool getactivewindow 2>/dev/null || true)"
   if [[ -n "$window" ]]; then
     printf '%s\n' "$window"
@@ -360,6 +392,16 @@ focused_browser_window() {
   [[ -n "$best_window" ]] && printf '%s\n' "$best_window"
 }
 
+focus_window() {
+  local window="$1"
+  [[ -n "$window" ]] || return 0
+  command -v xdotool >/dev/null 2>&1 || return 0
+  DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowfocus "$window" >/dev/null 2>&1 || true
+  if [[ -z "$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool getactivewindow 2>/dev/null || true)" ]]; then
+    DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowactivate "$window" >/dev/null 2>&1 || true
+  fi
+}
+
 ensure_onboard() {
   local active_window=""
   is_enabled "$TIKPAL_WEB_MODE_ONBOARD" || return 0
@@ -371,30 +413,22 @@ ensure_onboard() {
   if command -v xdotool >/dev/null 2>&1; then
     active_window="$(focused_browser_window || true)"
   fi
+  configure_onboard
 
   if ! pgrep -u "$(id -u)" -x onboard >/dev/null 2>&1; then
     local session_bus="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/user/$(id -u)/bus}"
     export DBUS_SESSION_BUS_ADDRESS="$session_bus"
-    if command -v gsettings >/dev/null 2>&1; then
-      gsettings set org.onboard.window docking-enabled false >/dev/null 2>&1 || true
-      gsettings set org.onboard.window force-to-top true >/dev/null 2>&1 || true
-      gsettings set org.onboard.auto-show enabled false >/dev/null 2>&1 || true
-    fi
     DISPLAY="$TIKPAL_KIOSK_DISPLAY" onboard </dev/null >/dev/null 2>&1 9>&- &
     disown "$!" 2>/dev/null || true
     sleep 0.8
   fi
 
+  focus_window "$active_window"
   if call_onboard_method Show; then
     sleep 0.3
   fi
   position_onboard
-  if [[ -n "$active_window" ]] && command -v xdotool >/dev/null 2>&1; then
-    DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowfocus "$active_window" >/dev/null 2>&1 || true
-    if [[ -z "$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool getactivewindow 2>/dev/null || true)" ]]; then
-      DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowactivate "$active_window" >/dev/null 2>&1 || true
-    fi
-  fi
+  focus_window "$active_window"
 }
 
 hide_onboard() {

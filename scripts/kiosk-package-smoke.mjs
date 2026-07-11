@@ -283,8 +283,14 @@ async function run() {
   assert(webModeScript.includes("onboard_visible_windows"), "web mode should toggle the Keyboard button from visible X windows");
   assert(webModeScript.includes("xdotool windowfocus"), "web mode should return X focus to the input owner after showing Onboard");
   assert(webModeScript.includes("focused_browser_window"), "web mode should recover browser focus even when X has no active window");
+  assert(webModeScript.includes("window_uses_profile"), "web mode should return keyboard focus to the active provider window, not the kiosk window");
+  assert(webModeScript.includes("read_runtime_active_provider"), "manual Keyboard toggle should find the active provider window");
+  assert(webModeScript.indexOf('focus_window "$active_window"') < webModeScript.indexOf("call_onboard_method Show"), "web mode should focus the provider before showing Onboard");
   assert(webModeScript.includes('pkill -KILL -f -- "--user-data-dir=$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"'), "Explore close should force-exit a side panel that ignores graceful shutdown");
   assert(webModeScript.includes("org.onboard.auto-show enabled false"), "Tikpal focus events should own Onboard visibility");
+  assert(webModeScript.includes("configure_onboard"), "web mode should normalize Onboard settings before every show");
+  assert(webModeScript.includes("org.onboard.keyboard input-event-source GTK"), "Onboard should use GTK input events for Chromium provider typing");
+  assert(webModeScript.includes("org.onboard.keyboard key-synth XTest"), "Onboard should synthesize keys through XTest for Chromium provider typing");
   assert(webModeScript.includes('"$((width - 1))" "$((height - 1))"'), "Onboard cold start should force one redraw before its final size");
   const mainSource = await readFile(path.join(ROOT, "src/main.tsx"), "utf8");
   assert(mainSource.includes("onboardInputSelector"), "local kiosk text inputs should share automatic Onboard activation");
