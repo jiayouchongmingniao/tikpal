@@ -3860,15 +3860,15 @@ select {
 
 .console-hero {
   display: grid;
-  grid-template-columns: minmax(260px, 0.72fr) minmax(420px, 1.28fr) minmax(210px, 0.46fr);
+  grid-template-columns: minmax(220px, 0.55fr) minmax(360px, 1fr) minmax(680px, 1.05fr);
   align-items: stretch;
   gap: 14px;
-  min-height: 122px;
+  min-height: 112px;
 }
 
 .console-title-block,
 .console-now-playing,
-.console-status-stack {
+.console-room-switcher {
   min-width: 0;
   border: 1px solid color-mix(in srgb, var(--surface-card-border) 88%, transparent);
   border-radius: 8px;
@@ -3882,8 +3882,8 @@ select {
   display: grid;
   grid-template-columns: 14px minmax(0, 1fr);
   align-items: center;
-  gap: 14px;
-  padding: 20px;
+  gap: 12px;
+  padding: 16px;
 }
 
 .console-title-block > div {
@@ -3907,7 +3907,7 @@ select {
 .console-title-block strong {
   overflow: hidden;
   color: var(--theme-text);
-  font-size: clamp(34px, 2vw, 48px);
+  font-size: clamp(30px, 1.7vw, 42px);
   font-weight: 560;
   line-height: 0.98;
   text-overflow: ellipsis;
@@ -3939,17 +3939,17 @@ select {
 
 .console-now-playing {
   display: grid;
-  grid-template-columns: 84px minmax(0, 1fr);
+  grid-template-columns: 72px minmax(0, 1fr);
   align-items: center;
-  gap: 18px;
-  padding: 18px;
+  gap: 14px;
+  padding: 14px;
 }
 
 .console-source-art {
   display: grid;
   place-items: center;
-  width: 84px;
-  height: 84px;
+  width: 72px;
+  height: 72px;
   overflow: hidden;
   border: 1px solid var(--surface-card-border);
   border-radius: 8px;
@@ -3990,26 +3990,62 @@ select {
   white-space: nowrap;
 }
 
-.console-status-stack {
+.console-room-switcher {
   display: grid;
-  align-content: center;
-  gap: 10px;
-  padding: 18px;
+  grid-template-rows: minmax(0, 1fr) 14px;
+  gap: 6px;
+  padding: 10px;
 }
 
-.console-chip {
+.console-room-switcher-buttons {
   display: grid;
-  align-items: center;
-  min-height: 34px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 6px;
   min-width: 0;
-  overflow: hidden;
-  padding: 0 12px;
+}
+
+.console-room-shortcut {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 8px 5px;
   border: 1px solid var(--surface-control-border);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.045);
-  color: var(--theme-text-soft);
-  font-size: 13px;
-  font-weight: 680;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--theme-accent-strong);
+  font: inherit;
+  cursor: pointer;
+}
+
+.console-room-shortcut span {
+  overflow: hidden;
+  max-width: 100%;
+  font-size: 12px;
+  font-weight: 720;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.console-room-shortcut.is-active {
+  border-color: color-mix(in srgb, var(--theme-accent-strong) 72%, transparent);
+  background: color-mix(in srgb, var(--theme-accent-muted) 76%, rgba(255, 255, 255, 0.045));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--theme-accent-strong) 18%, transparent);
+}
+
+.console-room-shortcut:disabled {
+  cursor: wait;
+  opacity: 0.58;
+}
+
+.console-room-switcher-error {
+  overflow: hidden;
+  color: var(--theme-danger);
+  font-size: 11px;
+  line-height: 14px;
+  text-align: center;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -6144,7 +6180,7 @@ select {
 
 .web-mode-control-stack {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 220px;
+  grid-template-columns: minmax(0, 1fr) 132px;
   align-items: center;
   gap: 12px;
   padding: 10px 12px;
@@ -6176,7 +6212,7 @@ select {
 
 .web-mode-actions {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr;
   gap: 10px;
   align-items: center;
 }

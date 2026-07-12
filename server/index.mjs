@@ -483,6 +483,7 @@ let tikpalStateSnapshotGeneration = 0;
 let startupPlaybackPolicyPromise = null;
 let hifiRuntimeRecoveryPromise = null;
 let hifiRuntimeRecoveryLastAttemptAtMs = 0;
+let webModeOpenInFlight = false;
 let sourceSwitchInFlightCount = 0;
 let mpdRecoveryPromise = null;
 let mpcRadioWeakNetworkRecoveryPromise = null;
@@ -6771,12 +6772,14 @@ async function restoreHifiRememberedSourcePlayback() {
 }
 
 function recoverHifiRuntimePlaybackIfNeeded(snapshot) {
-  if (API_MODE !== "mpc" || hifiRuntimeRecoveryPromise || sourceSwitchInFlightCount > 0) return null;
+  if (API_MODE !== "mpc" || hifiRuntimeRecoveryPromise || sourceSwitchInFlightCount > 0 || webModeOpenInFlight) return null;
 
   const action = buildHifiRuntimeRecoveryAction(snapshot);
   if (!shouldRecoverHifiRuntimePlayback(snapshot, action)) return null;
 
   hifiRuntimeRecoveryPromise = (async () => {
+    const webModeRuntime = await readWebModeRuntimeState();
+    if (webModeRuntime.activeProvider) return false;
     const experience = await readRoomExperienceState();
     if (experience.mode !== "hifi") return false;
     if (sourceSwitchInFlightCount > 0) return false;
@@ -9712,24 +9715,32 @@ function formatWebModeCommandError(error, action, providerId = "") {
 }
 
 async function pauseTikpalForWebMode() {
-  try {
-    await applyPlaybackActionForCurrentBackend({ type: "pause" });
-  } catch {
-    // Explore is a browser wrapper; a failed pause should not block opening the login/player page.
+  const room = await readRoomExperienceState();
+  if (room.sceneSoundEnabled) {
+    await applyRoomExperienceAction({
+      type: "set_scene_sound",
+      sceneSoundEnabled: false,
+      sceneVideoId: room.sceneVideoId
+    });
   }
 
-  try {
-    const room = await readRoomExperienceState();
-    if (room.sceneSoundEnabled) {
-      await applyRoomExperienceAction({
-        type: "set_scene_sound",
-        sceneSoundEnabled: false,
-        sceneVideoId: room.sceneVideoId
-      });
-    }
-  } catch {
-    // The source truth remains owned by the normal room experience refresh.
+  if (API_MODE === "mpc") {
+    await withMpcMutationLock(async () => {
+      const before = parseMpcStatus(await runMpc(["status"], { timeout: 2500 }));
+      if (before.state === "playing") {
+        await runMpc(["pause"], { timeout: 2500 });
+      }
+      const after = parseMpcStatus(await runMpc(["status"], { timeout: 2500 }));
+      if (after.state === "playing") {
+        throw new Error("Tikpal playback did not pause before Explore opened");
+      }
+    });
+    suppressExternalHandoffAutoArm(60 * 60 * 1000);
+    await enforceConnectionGate("web_mode");
+    return;
   }
+
+  await applyPlaybackActionForCurrentBackend({ type: "pause" });
 }
 
 async function applyWebModeAction(action) {
@@ -9748,9 +9759,13 @@ async function applyWebModeAction(action) {
     if (action?.enabled !== undefined && typeof action.enabled !== "boolean") {
       throw new Error("Explore keyboard enabled value must be boolean");
     }
+    if (action?.force !== undefined && typeof action.force !== "boolean") {
+      throw new Error("Explore keyboard force value must be boolean");
+    }
     const keyboardMode = action.enabled === true ? "show" : action.enabled === false ? "hide" : "toggle";
+    const keyboardCommand = keyboardMode === "show" && action.force === true ? "show-force" : keyboardMode;
     try {
-      await runWebModeCommand("keyboard", keyboardMode);
+      await runWebModeCommand("keyboard", keyboardCommand);
       await writeWebModeRuntimeState({ lastError: null });
     } catch (error) {
       const message = formatWebModeCommandError(error, "keyboard");
@@ -9790,14 +9805,17 @@ async function applyWebModeAction(action) {
   }
 
   const providerId = normalizeWebModeProviderId(action.provider);
-  await pauseTikpalForWebMode();
+  webModeOpenInFlight = true;
   try {
+    await pauseTikpalForWebMode();
     await runWebModeCommand("open", providerId);
     await writeWebModeRuntimeState({ activeProvider: providerId, lastError: null });
   } catch (error) {
     const message = formatWebModeCommandError(error, "open", providerId);
     await writeWebModeRuntimeState({ lastError: message });
     throw new Error(message);
+  } finally {
+    webModeOpenInFlight = false;
   }
   return await buildWebModeState();
 }
@@ -10089,7 +10107,7 @@ async function applyRemoteAction(action) {
       await applySystemAction({ type: "brightness_set", value: requireRemoteNumber(action.value, "display.brightness_set") });
       break;
     case "explore.open":
-      await applyWebModeAction({ type: "open", provider: "spotify" });
+      await applyWebModeAction({ type: "open", provider: "qq_music" });
       break;
     case "explore.close":
       await applyWebModeAction({ type: "close" });

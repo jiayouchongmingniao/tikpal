@@ -284,7 +284,7 @@ If `mpc update` is not the right library refresh command on the device, also set
 
 ### Explore Onboard runtime notes
 
-The MV3 extension forwards provider focus changes to the loopback keyboard action immediately, while the provider guard keeps a polling fallback. The launcher fixes Onboard at the configured `500,420 900,280` default and uses GTK/XTest input delivery so provider fields receive keys without the keyboard jumping to its old default position.
+The MV3 extension forwards provider focus changes to the loopback keyboard action immediately, while the provider guard keeps a polling fallback. The launcher fixes Onboard at the configured `500,420 900,280` default and uses GTK/XTest input delivery so provider fields receive keys without the keyboard jumping to its old default position. Kiosk installation enables systemd user lingering for the service user so the hidden Onboard process remains available between API calls; `Hide` uses DBus only and does not unmap or reconfigure the live window. Onboard's own status icon and floating icon palette are disabled; the Explore side panel keeps its separate `Keyboard` text control and only the top-right Back button. Explore must not open until MPD, renderer intakes, and Scene Sound have released audio, and Hi-Fi recovery must not restart playback behind an active provider.
 
 ## DDC/CI Brightness Setup
 

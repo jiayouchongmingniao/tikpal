@@ -245,7 +245,8 @@ export function buildOpenApiDocument({ appVersion = "0.1.0" } = {}) {
           properties: {
             type: { type: "string", enum: WEB_MODE_ACTION_TYPES },
             provider: { type: "string", enum: WEB_MODE_PROVIDERS },
-            enabled: { type: "boolean" }
+            enabled: { type: "boolean" },
+            force: { type: "boolean" }
           },
           additionalProperties: false
         },

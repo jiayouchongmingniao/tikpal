@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { Airplay, Bluetooth, Captions, Cast, Clock3, Cpu, Database, EthernetPort, Eye, EyeOff, Globe2, HardDrive, Info, Monitor, Music2, Palette, Power, Radio as RadioIcon, RotateCcw, Server, SlidersHorizontal, Type, Usb, Volume2 } from "lucide-react";
+import { Airplay, Bluetooth, Captions, Cast, Clock3, Cpu, Database, EthernetPort, Eye, EyeOff, Globe2, HardDrive, Info, Monitor, Moon, Music2, Palette, Power, Radio as RadioIcon, RotateCcw, Server, SlidersHorizontal, Target, Type, Usb, Volume2, Waves } from "lucide-react";
 import { fetchWebModeState, sendWebModeAction, testWebModeProxy, updateWebModeSettings } from "../api/tikpalClient";
 import type { TikpalDataStatus } from "../hooks/useTikpalState";
 import { useOverlayReturnGesture } from "../hooks/useOverlayReturnGesture";
-import type { AudioState, FontTheme, LyricsFontSize, NightScheduleState, PlaybackSummary, RoomExperienceActionRequest, RoomExperienceState, RuntimeState, SurfaceTheme, SystemActionType, SystemState, WebModeState } from "../types";
+import type { AudioState, FontTheme, LyricsFontSize, NightScheduleState, PlaybackSummary, RoomExperienceActionRequest, RoomExperienceState, RoomMode, RuntimeState, SurfaceTheme, SystemActionType, SystemState, WebModeState } from "../types";
 
 interface QuickSettingsOverlayProps {
   active: boolean;
@@ -22,6 +22,7 @@ interface QuickSettingsOverlayProps {
   onLyricsVisibleChange: (visible: boolean) => void;
   onLyricsFontSizeChange: (size: LyricsFontSize) => void;
   onExperienceAction: (action: RoomExperienceActionRequest) => Promise<RoomExperienceState>;
+  onOpenWebMode: () => Promise<void>;
   onSystemAction: (type: SystemActionType, value?: number) => Promise<unknown>;
   onReturnAmbient: () => void;
 }
@@ -139,6 +140,13 @@ const settingsTabs: Array<{ id: SettingsSectionKey; label: string; Icon: typeof 
   { id: "network", label: "Link", Icon: EthernetPort },
   { id: "system", label: "Care", Icon: Cpu }
 ];
+const roomShortcuts: Array<{ id: RoomMode | "explore"; label: string; Icon: typeof Target }> = [
+  { id: "focus", label: "Focus", Icon: Target },
+  { id: "calm", label: "Calm", Icon: Waves },
+  { id: "sleep", label: "Sleep", Icon: Moon },
+  { id: "hifi", label: "Hi-Fi", Icon: SlidersHorizontal },
+  { id: "explore", label: "Explore", Icon: Globe2 }
+];
 const localKioskHosts = new Set(["localhost", "127.0.0.1", "::1"]);
 
 function hideLocalKeyboard() {
@@ -171,11 +179,6 @@ function getConsoleStateClass(playback: PlaybackSummary, source: AudioState["cur
   return "is-stopped";
 }
 
-function formatConsoleSampleRate(rate: number | null) {
-  if (!rate) return null;
-  return rate >= 1000 ? `${Math.round(rate / 100) / 10} kHz` : `${rate} Hz`;
-}
-
 export function QuickSettingsOverlay({
   active,
   audio,
@@ -193,6 +196,7 @@ export function QuickSettingsOverlay({
   onLyricsVisibleChange,
   onLyricsFontSizeChange,
   onExperienceAction,
+  onOpenWebMode,
   onSystemAction,
   onReturnAmbient
 }: QuickSettingsOverlayProps) {
@@ -208,6 +212,8 @@ export function QuickSettingsOverlay({
   const [webModeProxyUrl, setWebModeProxyUrl] = useState("http://192.168.10.140:7897");
   const [pendingWebModeSettings, setPendingWebModeSettings] = useState<"save" | "test" | null>(null);
   const [webModeError, setWebModeError] = useState<string | null>(null);
+  const [pendingRoomShortcut, setPendingRoomShortcut] = useState<RoomMode | "explore" | null>(null);
+  const [roomShortcutError, setRoomShortcutError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<Record<ActionableCardKey, string | null>>({
     library_scan: null,
     reboot: null,
@@ -228,12 +234,6 @@ export function QuickSettingsOverlay({
     playback.artist?.trim() || playback.album?.trim() || currentSource.secondaryStatus || currentSource.label,
     `${currentSource.label} ${consoleStateLabel}`
   ].filter(Boolean).join(" · ");
-  const consoleFormatLabel = [
-    system.audioFormat.codec,
-    system.bitDepth ? `${system.bitDepth}bit` : null,
-    formatConsoleSampleRate(system.sampleRate)
-  ].filter(Boolean).join(" / ") || "Format unknown";
-
   useEffect(() => {
     if (!active) {
       hideLocalKeyboard();
@@ -252,6 +252,8 @@ export function QuickSettingsOverlay({
       setBrightnessError(null);
       setNightError(null);
       setWebModeError(null);
+      setPendingRoomShortcut(null);
+      setRoomShortcutError(null);
     }
   }, [active]);
 
@@ -580,6 +582,30 @@ export function QuickSettingsOverlay({
     setConfirmAction(null);
     setDetailView(null);
     onReturnAmbient();
+  }
+
+  async function handleRoomShortcut(destination: RoomMode | "explore") {
+    if (pendingRoomShortcut) return;
+    setRoomShortcutError(null);
+
+    if (destination !== "explore" && destination === roomExperience.mode) {
+      handleReturnAmbient();
+      return;
+    }
+
+    setPendingRoomShortcut(destination);
+    try {
+      if (destination === "explore") {
+        await onOpenWebMode();
+      } else {
+        await onExperienceAction({ type: "set_mode", mode: destination });
+        handleReturnAmbient();
+      }
+    } catch (error) {
+      setRoomShortcutError(error instanceof Error ? error.message : "Room switch failed");
+    } finally {
+      setPendingRoomShortcut(null);
+    }
   }
 
   function openDetail(nextDetail: Exclude<SettingsDetailView, null>) {
@@ -1008,9 +1034,31 @@ export function QuickSettingsOverlay({
             </div>
           </div>
 
-          <div className="console-status-stack" aria-label="Console status">
-            <span className="console-chip">{status.source === "api" ? "API Online" : "Fallback State"}</span>
-            <span className="console-chip">{consoleFormatLabel}</span>
+          <div className="console-room-switcher" aria-label="Room shortcuts">
+            <div className="console-room-switcher-buttons" role="group" aria-label="Choose room state">
+              {roomShortcuts.map((shortcut) => {
+                const Icon = shortcut.Icon;
+                const activeShortcut = shortcut.id === "explore"
+                  ? Boolean(webModeState?.activeProvider)
+                  : roomExperience.mode === shortcut.id;
+                const pendingShortcut = pendingRoomShortcut === shortcut.id;
+                return (
+                  <button
+                    className={`console-room-shortcut ${activeShortcut ? "is-active" : ""}`}
+                    data-room-shortcut={shortcut.id}
+                    key={shortcut.id}
+                    type="button"
+                    aria-pressed={activeShortcut}
+                    disabled={pendingRoomShortcut !== null}
+                    onClick={() => void handleRoomShortcut(shortcut.id)}
+                  >
+                    <Icon size={18} strokeWidth={1.8} />
+                    <span>{pendingShortcut ? shortcut.id === "explore" ? "Opening" : "Switching" : shortcut.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <span className="console-room-switcher-error" role="alert">{roomShortcutError ?? ""}</span>
           </div>
         </header>
 

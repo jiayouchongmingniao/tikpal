@@ -169,6 +169,7 @@ async function run() {
   assert(kioskWatchdogTimer.includes("tikpal-kiosk-watchdog.service"), "kiosk watchdog timer should target the watchdog service");
   assert(systemdInstaller.includes("tikpal-kiosk-watchdog.service"), "systemd installer should install the kiosk watchdog service");
   assert(systemdInstaller.includes("tikpal-kiosk-watchdog.timer"), "systemd installer should install and enable the kiosk watchdog timer");
+  assert(systemdInstaller.includes('loginctl enable-linger "$SERVICE_USER"'), "systemd installer should keep the Onboard user service alive between API calls");
   assert(systemdInstaller.includes('rm -f "$policy_dir/tikpal-kiosk-managed.json"'), "systemd installer should remove the legacy Tikpal extension-blocking policy file");
   assert(kioskUnit.includes("TIKPAL_KIOSK_SKIP_ENV_SOURCE=1"), "kiosk unit should preserve systemd EnvironmentFile override order");
 
@@ -254,14 +255,22 @@ async function run() {
   assert(extensionContent.includes("window.setInterval(() => void syncProxy(), 750)"), "provider pages should poll the proxy settings revision every 750ms");
   assert(extensionContent.includes("window.location.reload()"), "provider pages should refresh after a proxy revision change");
   assert(extensionContent.includes("window.location.replace(provider.url)"), "provider bootstrap should navigate only after proxy sync succeeds");
-  assert(extensionContent.includes('chrome.runtime.sendMessage({ type: "keyboard", enabled }'), "Explore extension should send provider input focus keyboard actions");
+  assert(extensionContent.includes('chrome.runtime.sendMessage({ type: "keyboard", enabled, force }'), "Explore extension should distinguish new input focus from periodic keyboard polling");
   assert(extensionContent.includes("editableTarget(document.activeElement)"), "Explore extension should poll focused provider inputs as a keyboard fallback");
+  assert(extensionContent.includes("document.hasFocus() && editableTarget(document.activeElement)"), "Explore extension should let the side panel hide Onboard after the provider loses window focus");
   assert(extensionBackground.includes("setKeyboardVisible"), "Explore extension background should forward keyboard actions to the loopback API");
   assert(extensionBackground.includes("chrome.tabs.update(sender.tab.id, { url: provider.url })"), "extension background should navigate the bootstrap tab after proxy sync");
   assert(sidePanelSource.includes('sendWebModeAction({ type: "proxy", enabled:'), "Explore side panel should use the shared proxy action");
   assert(!sidePanelSource.includes("updateWebModeSettings"), "Explore side panel should not reopen the provider to switch proxy mode");
   assert(sidePanelSource.includes("data-web-mode-keyboard-toggle") && sidePanelSource.includes("<span>{pendingAction === \"keyboard\" ? \"Opening\" : \"Keyboard\"}</span>"), "Explore side panel should expose a visible Keyboard toggle");
+  assert((sidePanelSource.match(/onClick=\{\(\) => void closeWebMode\(\)\}/g) ?? []).length === 1, "Explore side panel should keep only the top-right Back button");
   assert(!quickSettingsSource.includes("handleWebModeKeyboard"), "Console should rely on input-focus keyboard behavior instead of a duplicate button");
+  assert(["focus", "calm", "sleep", "hifi", "explore"].every((id) => quickSettingsSource.includes(`id: "${id}"`)), "Console should expose five room shortcuts");
+  assert(quickSettingsSource.includes('data-room-shortcut={shortcut.id}') && quickSettingsSource.includes("disabled={pendingRoomShortcut !== null}"), "Console room shortcuts should expose state and lock while switching");
+  assert(quickSettingsSource.includes('destination !== "explore" && destination === roomExperience.mode'), "Console should return immediately when the current room mode is selected");
+  assert(quickSettingsSource.includes('await onExperienceAction({ type: "set_mode", mode: destination })'), "Console should reuse the room mode action");
+  assert(quickSettingsSource.includes("await onOpenWebMode()"), "Console Explore shortcut should reuse the existing Explore flow");
+  assert(!quickSettingsSource.includes("console-back-button"), "Console room shortcuts should replace the top-right Back button");
   assert(remoteControlSource.includes("data-remote-key") && !remoteControlSource.includes("window.prompt"), "portable remote should keep its key field visible instead of relying on a browser prompt");
   assert(remoteControlSource.includes("setActionError") && remoteControlSource.includes("setRefreshError"), "portable remote should keep action errors visible across state polling");
   assert(!flameSceneSource.includes("video.load()"), "single-loop recovery should not leak Chromium media decoders by reloading the video element");
@@ -271,41 +280,52 @@ async function run() {
   assert(kioskSession.includes("TIKPAL_KIOSK_X_COMMAND_TIMEOUT_SECONDS"), "kiosk session should expose an X command timeout");
   assert(kioskSession.includes("run_x_command xset"), "kiosk session should bound xset commands");
   assert(webModeScript.includes("nohup \"$SCRIPT_DIR/tikpal-web-mode.sh\" guard"), "web mode should keep the window guard alive after the launcher exits");
+  assert(webModeScript.includes('open_provider "${2:-qq_music}"'), "web mode should default initial Explore launch to QQ Music");
   assert(webModeScript.includes("window-guard.pid"), "web mode should track the persistent window guard pid");
   assert(webModeScript.includes('flock -x -w "$TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS"'), "web mode should not wait forever on provider switch locks");
   assert(webModeScript.includes("9>&- &"), "web mode background children should not inherit the provider switch lock");
   assert(
-    webModeScript.indexOf('export DBUS_SESSION_BUS_ADDRESS="$session_bus"') < webModeScript.indexOf('DISPLAY="$TIKPAL_KIOSK_DISPLAY" onboard </dev/null'),
+    webModeScript.indexOf('export DBUS_SESSION_BUS_ADDRESS="$session_bus"') < webModeScript.indexOf('systemd-run --user --quiet --unit=tikpal-onboard'),
     "web mode should bind Onboard to the existing user DBus session before launch"
   );
-  assert(webModeScript.includes('disown "$!"'), "web mode should detach Onboard from the launcher shell");
+  assert(webModeScript.includes('systemd-run --user --quiet --unit=tikpal-onboard'), "web mode should keep Onboard outside the API launcher process tree");
+  assert(webModeScript.includes('systemctl --user start tikpal-onboard.service'), "web mode should reuse the resident Onboard user service");
   assert(webModeScript.includes("timeout 1 gdbus call"), "web mode should retry Onboard DBus calls while its service starts");
   assert(webModeScript.includes("Onboard.Keyboard.$method"), "web mode should share Onboard DBus Show and Hide calls");
   assert(webModeScript.includes("call_onboard_method Show"), "web mode should keep DBus Show as a fallback when xdotool map is not enough");
   assert(webModeScript.includes("call_onboard_method Hide"), "web mode should hide Onboard without terminating it");
-  assert(webModeScript.includes("windowunmap"), "web mode should fall back to unmapping Onboard when DBus Hide leaves it visible");
+  assert(!webModeScript.includes("windowunmap"), "web mode should not unmap Onboard because that terminates the resident process");
+  assert(webModeScript.includes("Class: InputOnly"), "web mode should ignore Onboard's transparent input-only helper window");
+  assert(webModeScript.includes('getwindowname "$window"'), "web mode should ignore Onboard's cold-start placeholder window");
+  assert(webModeScript.includes("xdotool windowraise"), "web mode should raise Onboard above Chromium without relying on a window manager");
   assert(!webModeScript.slice(webModeScript.indexOf("keyboard)"), webModeScript.indexOf("proxy)")).includes("check_runtime"), "keyboard actions should skip the full Explore runtime check for responsive input");
   assert(webModeScript.includes("onboard_visible_windows"), "web mode should toggle the Keyboard button from visible X windows");
   assert(webModeScript.includes("xdotool windowfocus"), "web mode should return X focus to the input owner after showing Onboard");
   assert(webModeScript.includes("focused_browser_window"), "web mode should recover browser focus even when X has no active window");
   assert(webModeScript.includes("window_uses_profile"), "web mode should return keyboard focus to the active provider window, not the kiosk window");
   assert(webModeScript.includes("read_runtime_active_provider"), "manual Keyboard toggle should find the active provider window");
+  assert(webModeScript.includes("TIKPAL_WEB_MODE_ONBOARD_SUPPRESS_PATH"), "manual Keyboard hide should suppress periodic provider auto-show");
+  assert(webModeScript.includes("show-force"), "new provider input focus should clear manual keyboard suppression");
+  assert(webModeScript.includes("show-force) with_web_mode_lock force_onboard"), "keyboard requests should serialize cold Onboard startup");
   assert(webModeScript.indexOf('focus_window "$active_window"') < webModeScript.indexOf("position_onboard", webModeScript.indexOf("ensure_onboard()")), "web mode should focus the provider before mapping Onboard");
   assert(webModeScript.includes('pkill -KILL -f -- "--user-data-dir=$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"'), "Explore close should force-exit a side panel that ignores graceful shutdown");
   assert(webModeScript.includes("org.onboard.auto-show enabled false"), "Tikpal focus events should own Onboard visibility");
-  assert(webModeScript.includes("configure_onboard"), "web mode should normalize Onboard settings on hide and cold start");
+  assert(webModeScript.includes("org.onboard show-status-icon false"), "web mode should hide Onboard's status icon");
+  assert(webModeScript.includes("org.onboard.icon-palette in-use false"), "web mode should hide Onboard's floating icon palette");
+  assert(webModeScript.includes("configure_onboard"), "web mode should normalize Onboard settings on cold start");
   assert(webModeScript.includes("org.onboard.keyboard input-event-source GTK"), "Onboard should use GTK input events for Chromium provider typing");
   assert(webModeScript.includes("org.onboard.keyboard key-synth XTest"), "Onboard should synthesize keys through XTest for Chromium provider typing");
   assert(webModeScript.includes("org.onboard.window.landscape x"), "Onboard should open at the Tikpal keyboard X position without a visible jump");
   assert(webModeScript.includes("org.onboard.window.landscape y"), "Onboard should open at the Tikpal keyboard Y position without a visible jump");
-  assert(webModeScript.indexOf("hide_onboard()") < webModeScript.indexOf("configure_onboard", webModeScript.indexOf("hide_onboard()")), "web mode should normalize Onboard settings before hiding it");
+  assert(!webModeScript.slice(webModeScript.indexOf("hide_onboard()"), webModeScript.indexOf("toggle_onboard()")).includes("configure_onboard"), "web mode should not rewrite live Onboard settings while hiding it");
   assert(webModeScript.includes('"$((width - 1))" "$((height - 1))"'), "Onboard cold start should force one redraw before its final size");
   const mainSource = await readFile(path.join(ROOT, "src/main.tsx"), "utf8");
   assert(mainSource.includes("onboardInputSelector"), "local kiosk text inputs should share automatic Onboard activation");
   assert(mainSource.includes("localKioskHosts.has(window.location.hostname)"), "automatic Onboard activation should stay on the physical kiosk host");
-  assert(mainSource.includes('sendWebModeAction({ type: "keyboard", enabled })'), "local kiosk inputs should explicitly show and hide Onboard");
+  assert(mainSource.includes('sendWebModeAction({ type: "keyboard", enabled,'), "local kiosk inputs should explicitly show and hide Onboard");
   assert(mainSource.includes("keepTextInputFocus"), "local kiosk inputs should keep focus when Onboard appears");
   assert(mainSource.includes("outsidePointerDown"), "local kiosk inputs should still hide Onboard when the user taps outside");
+  assert(mainSource.includes("target && target === document.activeElement"), "local kiosk should reshow Onboard when an already-focused input is tapped again");
   assert(mainSource.includes("tikpal:keyboard-context-clear"), "local kiosk should clear input focus state when Settings closes");
   assert(mainSource.includes('document.addEventListener("focusout"'), "local kiosk inputs should hide Onboard after focus leaves text input");
   const openProviderBody = webModeScript.slice(
@@ -461,12 +481,13 @@ async function run() {
   assert(providerGuardSource.includes("lastOnboardActionMs"), "provider focus guard should throttle repeated keyboard show while inputs stay focused");
   assert(providerGuardSource.includes("lastKeyboardRequestMs < 250"), "provider focus guard should not delay keyboard show behind a long throttle");
   assert(providerGuardSource.includes("lastOnboardActionMs < 250"), "provider poll fallback should not delay keyboard show behind a long throttle");
-  assert(providerGuardSource.includes("anyFocused || shouldShow"), "provider focus guard should keep Onboard visible while provider inputs stay focused");
+  assert(providerGuardSource.includes("else if (anyFocused) setOnboardVisible(true)"), "provider focus guard should keep Onboard visible while provider inputs stay focused");
+  assert(providerGuardSource.includes("if (!doc?.hasFocus?.()) return false"), "provider focus polling should stop auto-show after focus moves to the side panel");
   assert(providerGuardSource.includes("mode: \"no-cors\""), "provider focus guard should request local keyboard actions without cross-origin response access");
   assert(providerGuardSource.includes("text/plain;charset=UTF-8"), "provider focus guard should send a CORS-safelisted JSON text body");
   assert(providerGuardSource.includes("keyboardActionUrl"), "provider focus guard should use the loopback keyboard action as its primary path");
   assert(providerGuardSource.includes("__tikpalInputFocusHideRequest"), "provider input blur and submit should request Onboard Hide");
-  assert(providerGuardSource.includes('enabled ? "show" : "hide"'), "provider focus guard should use explicit keyboard show/hide actions");
+  assert(providerGuardSource.includes('force ? "show-force" : "show"'), "provider focus guard should distinguish new focus from periodic keyboard show actions");
   assert(providerGuardSource.includes("__tikpalQqClientPromptRetried"), "QQ client prompt retries should stop after one playback attempt");
   assert(providerGuardSource.includes('!text.includes("下载客户端体验更多内容")'), "QQ login-required prompt should stay visible for user login");
   assert(providerGuardSource.includes(".yqq-dialog-close"), "QQ client prompt handling should use the explicit close control");

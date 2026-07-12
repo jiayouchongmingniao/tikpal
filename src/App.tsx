@@ -502,7 +502,7 @@ export default function App() {
 
   const handleOpenWebMode = useCallback(async () => {
     const webMode = await fetchWebModeState().catch(() => null);
-    await sendWebModeAction({ type: "open", provider: webMode?.activeProvider ?? "spotify" });
+    await sendWebModeAction({ type: "open", provider: webMode?.activeProvider ?? "qq_music" });
     await refresh();
     await refreshRoomExperience();
     returnAmbient();
@@ -725,6 +725,7 @@ export default function App() {
         onLyricsVisibleChange={setLyricsVisible}
         onLyricsFontSizeChange={setLyricsFontSize}
         onExperienceAction={handleRoomExperienceAction}
+        onOpenWebMode={handleOpenWebMode}
         onSystemAction={sendSystemAction}
         onReturnAmbient={returnAmbient}
       />

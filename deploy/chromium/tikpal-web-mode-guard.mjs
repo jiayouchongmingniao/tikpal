@@ -203,7 +203,7 @@ const inputFocusGuardScript = `(() => {
   let outsidePointerDown = false;
   const editableTarget = (target) => target?.closest?.(selector) || null;
   const isEditable = (target) => Boolean(editableTarget(target));
-  const activeEditable = () => editableTarget(document.activeElement);
+  const activeEditable = () => document.hasFocus() ? editableTarget(document.activeElement) : null;
   const refocusEditable = (target) => {
     if (!target?.isConnected) return;
     target.focus({ preventScroll: true });
@@ -211,31 +211,32 @@ const inputFocusGuardScript = `(() => {
   const keepEditableFocus = (target) => {
     for (const delay of [80, 260, 620, 1200, 1800]) {
       setTimeout(() => {
-        if (lastEditable === target && !outsidePointerDown) refocusEditable(target);
+        if (document.hasFocus() && lastEditable === target && !outsidePointerDown) refocusEditable(target);
       }, delay);
     }
   };
-  const requestKeyboard = (enabled) => {
+  const requestKeyboard = (enabled, force = false) => {
     const now = Date.now();
-    if (lastKeyboardEnabled === enabled && now - lastKeyboardRequestMs < 250) return;
+    if (!force && lastKeyboardEnabled === enabled && now - lastKeyboardRequestMs < 250) return;
     lastKeyboardEnabled = enabled;
     lastKeyboardRequestMs = now;
     fetch(keyboardActionUrl, {
       method: "POST",
       mode: "no-cors",
       headers: { "Content-Type": "text/plain;charset=UTF-8" },
-      body: JSON.stringify({ type: "keyboard", enabled })
+      body: JSON.stringify({ type: "keyboard", enabled, force })
     }).catch(() => {});
   };
   const isMultiline = (target) => Boolean(target && (target.matches("textarea,[contenteditable='true']") || target.getAttribute("aria-multiline") === "true"));
   const requestShow = (event) => {
+    if (!document.hasFocus()) return;
     const path = typeof event.composedPath === "function" ? event.composedPath() : [event.target];
     const target = path.map(editableTarget).find(Boolean);
     if (!target) return;
     outsidePointerDown = false;
     lastEditable = target;
     window.__tikpalInputFocusShowRequest += 1;
-    requestKeyboard(true);
+    requestKeyboard(true, true);
     keepEditableFocus(target);
   };
   document.addEventListener("pointerdown", (event) => {
@@ -247,6 +248,12 @@ const inputFocusGuardScript = `(() => {
   document.addEventListener("focusin", requestShow, true);
   document.addEventListener("focusout", () => {
     setTimeout(() => {
+      if (!document.hasFocus()) {
+        lastEditable = null;
+        window.__tikpalInputFocusHideRequest += 1;
+        requestKeyboard(false);
+        return;
+      }
       if (activeEditable() || document.activeElement?.tagName === "IFRAME") return;
       if (lastEditable && !outsidePointerDown) {
         refocusEditable(lastEditable);
@@ -274,6 +281,7 @@ const inputFocusGuardScript = `(() => {
 const inputFocusExpression = `(() => {
   const selector = ${JSON.stringify(onboardInputSelector)};
   const activeEditable = (doc) => {
+    if (!doc?.hasFocus?.()) return false;
     let active = doc?.activeElement || null;
     for (let depth = 0; active && depth < 8; depth += 1) {
       if (active.matches?.(selector)) return true;
@@ -302,12 +310,12 @@ const inputFocusExpression = `(() => {
   };
 })()`;
 
-function setOnboardVisible(enabled) {
+function setOnboardVisible(enabled, force = false) {
   const now = Date.now();
-  if (lastOnboardVisible === enabled && now - lastOnboardActionMs < 250) return;
+  if (!force && lastOnboardVisible === enabled && now - lastOnboardActionMs < 250) return;
   lastOnboardVisible = enabled;
   lastOnboardActionMs = now;
-  const child = spawn("bash", [launcherPath, "keyboard", enabled ? "show" : "hide"], {
+  const child = spawn("bash", [launcherPath, "keyboard", enabled ? force ? "show-force" : "show" : "hide"], {
     detached: true,
     stdio: "ignore",
     env: process.env
@@ -338,7 +346,8 @@ async function runInputFocusKeyboard(targets) {
     wasFocused ||= previous.focused;
     inputFocusRequests.delete(targetId);
   }
-  if (anyFocused || shouldShow) setOnboardVisible(true);
+  if (shouldShow) setOnboardVisible(true, true);
+  else if (anyFocused) setOnboardVisible(true);
   else if (shouldHide || (wasFocused && !anyFocused)) setOnboardVisible(false);
 }
 

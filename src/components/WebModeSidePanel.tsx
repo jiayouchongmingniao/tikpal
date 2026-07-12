@@ -313,10 +313,6 @@ export function WebModeSidePanel() {
             <Keyboard size={16} />
             <span>{pendingAction === "keyboard" ? "Opening" : "Keyboard"}</span>
           </button>
-          <button type="button" onClick={() => void closeWebMode()} disabled={Boolean(pendingAction || pendingProvider)}>
-            <LogOut size={19} />
-            <span>{pendingAction === "close" ? "Closing" : "Back"}</span>
-          </button>
         </div>
       </section>
 

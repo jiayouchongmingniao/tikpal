@@ -43,6 +43,7 @@ fi
 : "${TIKPAL_WEB_MODE_ONBOARD_AUTO_FOCUS:=1}"
 : "${TIKPAL_WEB_MODE_ONBOARD_WINDOW:=900x280}"
 : "${TIKPAL_WEB_MODE_ONBOARD_POSITION:=500,420}"
+: "${TIKPAL_WEB_MODE_ONBOARD_SUPPRESS_PATH:=$TIKPAL_WEB_MODE_PROFILE_ROOT/onboard-manual-hidden}"
 : "${TIKPAL_WEB_MODE_ALSA_OUTPUT_DEVICE:=${TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE:-}}"
 : "${TIKPAL_WEB_MODE_WINDOW_GUARD:=1}"
 : "${TIKPAL_WEB_MODE_SINGLE_PROVIDER_WINDOW:=1}"
@@ -308,6 +309,11 @@ position_onboard() {
 
   if command -v xdotool >/dev/null 2>&1; then
     while IFS= read -r window; do
+      [[ "$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool getwindowname "$window" 2>/dev/null || true)" == "Onboard" ]] || continue
+      if command -v xwininfo >/dev/null 2>&1 &&
+        DISPLAY="$TIKPAL_KIOSK_DISPLAY" xwininfo -id "$window" 2>/dev/null | grep -q "Class: InputOnly"; then
+        continue
+      fi
       width="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool getwindowgeometry --shell "$window" 2>/dev/null | awk -F= '$1 == "WIDTH" { print $2 }')"
       height="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool getwindowgeometry --shell "$window" 2>/dev/null | awk -F= '$1 == "HEIGHT" { print $2 }')"
       area=$(( ${width:-0} * ${height:-0} ))
@@ -326,6 +332,7 @@ position_onboard() {
       DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowsize "$keyboard_window" "$width" "$height" >/dev/null 2>&1 || true
       DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowmove "$keyboard_window" \
         "$(position_x "$TIKPAL_WEB_MODE_ONBOARD_POSITION")" "$(position_y "$TIKPAL_WEB_MODE_ONBOARD_POSITION")" >/dev/null 2>&1 || true
+      DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowraise "$keyboard_window" >/dev/null 2>&1 || true
     fi
   fi
 
@@ -335,8 +342,17 @@ position_onboard() {
 }
 
 onboard_visible_windows() {
+  local window
   command -v xdotool >/dev/null 2>&1 || return 1
-  DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool search --onlyvisible --name Onboard 2>/dev/null || true
+  while IFS= read -r window; do
+    [[ -n "$window" ]] || continue
+    [[ "$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool getwindowname "$window" 2>/dev/null || true)" == "Onboard" ]] || continue
+    if command -v xwininfo >/dev/null 2>&1 &&
+      DISPLAY="$TIKPAL_KIOSK_DISPLAY" xwininfo -id "$window" 2>/dev/null | grep -q "Class: InputOnly"; then
+      continue
+    fi
+    printf '%s\n' "$window"
+  done < <(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool search --onlyvisible --name Onboard 2>/dev/null || true)
 }
 
 configure_onboard() {
@@ -348,6 +364,8 @@ configure_onboard() {
   y="$(position_y "$TIKPAL_WEB_MODE_ONBOARD_POSITION")"
   gsettings set org.onboard.window docking-enabled false >/dev/null 2>&1 || true
   gsettings set org.onboard.window force-to-top true >/dev/null 2>&1 || true
+  gsettings set org.onboard show-status-icon false >/dev/null 2>&1 || true
+  gsettings set org.onboard.icon-palette in-use false >/dev/null 2>&1 || true
   gsettings set org.onboard.auto-show enabled false >/dev/null 2>&1 || true
   gsettings set org.onboard.window.landscape width "$width" >/dev/null 2>&1 || true
   gsettings set org.onboard.window.landscape height "$height" >/dev/null 2>&1 || true
@@ -414,6 +432,7 @@ focus_window() {
 ensure_onboard() {
   local active_window=""
   is_enabled "$TIKPAL_WEB_MODE_ONBOARD" || return 0
+  [[ ! -e "$TIKPAL_WEB_MODE_ONBOARD_SUPPRESS_PATH" ]] || return 0
   command -v onboard >/dev/null 2>&1 || {
     log "WARN: onboard not found"
     return 0
@@ -427,8 +446,14 @@ ensure_onboard() {
     configure_onboard
     local session_bus="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/user/$(id -u)/bus}"
     export DBUS_SESSION_BUS_ADDRESS="$session_bus"
-    DISPLAY="$TIKPAL_KIOSK_DISPLAY" onboard </dev/null >/dev/null 2>&1 9>&- &
-    disown "$!" 2>/dev/null || true
+    if systemctl --user cat tikpal-onboard.service >/dev/null 2>&1; then
+      systemctl --user reset-failed tikpal-onboard.service >/dev/null 2>&1 || true
+      systemctl --user start tikpal-onboard.service
+    else
+      systemd-run --user --quiet --unit=tikpal-onboard \
+        --setenv="DISPLAY=$TIKPAL_KIOSK_DISPLAY" --setenv="DBUS_SESSION_BUS_ADDRESS=$session_bus" \
+        "$(command -v onboard)"
+    fi
     sleep 0.8
   fi
 
@@ -442,25 +467,26 @@ ensure_onboard() {
 }
 
 hide_onboard() {
-  local window
   is_enabled "$TIKPAL_WEB_MODE_ONBOARD" || return 0
-  configure_onboard
   pgrep -u "$(id -u)" -x onboard >/dev/null 2>&1 || return 0
   call_onboard_method Hide || true
-  sleep 0.2
-  while IFS= read -r window; do
-    [[ -n "$window" ]] || continue
-    DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowunmap "$window" >/dev/null 2>&1 || true
-  done < <(onboard_visible_windows)
 }
 
 toggle_onboard() {
   is_enabled "$TIKPAL_WEB_MODE_ONBOARD" || return 0
   if ! pgrep -u "$(id -u)" -x onboard >/dev/null 2>&1 || [[ -z "$(onboard_visible_windows)" ]]; then
+    rm -f "$TIKPAL_WEB_MODE_ONBOARD_SUPPRESS_PATH"
     ensure_onboard
     return
   fi
+  mkdir -p "$(dirname "$TIKPAL_WEB_MODE_ONBOARD_SUPPRESS_PATH")"
+  touch "$TIKPAL_WEB_MODE_ONBOARD_SUPPRESS_PATH"
   hide_onboard
+}
+
+force_onboard() {
+  rm -f "$TIKPAL_WEB_MODE_ONBOARD_SUPPRESS_PATH"
+  ensure_onboard
 }
 
 close_side_panel() {
@@ -979,7 +1005,7 @@ case "${1:-open}" in
     ;;
   open)
     check_runtime
-    with_web_mode_lock open_provider "${2:-spotify}"
+    with_web_mode_lock open_provider "${2:-qq_music}"
     ;;
   close)
     with_web_mode_lock close_web_mode
@@ -990,10 +1016,11 @@ case "${1:-open}" in
     ;;
   keyboard)
     case "${2:-toggle}" in
-      show) ensure_onboard ;;
-      hide) hide_onboard ;;
-      toggle) toggle_onboard ;;
-      *) fail "Keyboard mode must be show, hide, or toggle" ;;
+      show) with_web_mode_lock ensure_onboard ;;
+      show-force) with_web_mode_lock force_onboard ;;
+      hide) with_web_mode_lock hide_onboard ;;
+      toggle) with_web_mode_lock toggle_onboard ;;
+      *) fail "Keyboard mode must be show, show-force, hide, or toggle" ;;
     esac
     log "keyboard ${2:-toggle} ready"
     ;;

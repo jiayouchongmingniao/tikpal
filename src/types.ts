@@ -64,6 +64,7 @@ export interface WebModeActionRequest {
   type: "open" | "close" | "keyboard" | "proxy";
   provider?: WebModeProviderId;
   enabled?: boolean;
+  force?: boolean;
 }
 
 export interface WebModeSettingsPatch {

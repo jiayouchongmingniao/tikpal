@@ -133,7 +133,7 @@ stateDiagram-v2
 - The visible surface is Console, while the internal app mode remains `quickSettings` for compatibility.
 - Console has no Home or Overview category and opens directly to Preferences.
 - The only chips are Preferences, Library, Link, and Care, rendered as a listening console rather than a left sidebar.
-- The header shows current source/playback truth so AirPlay/Bluetooth ready states stay readable and do not bleed through the background.
+- The header shows current source/playback truth and a top-right `Focus / Calm / Sleep / Hi-Fi / Explore` shortcut group. Selecting the current room mode returns to Ambient without another API write; selecting another mode applies it before returning, while Explore reuses the existing provider flow.
 - Library/NAS controls stay status-first on the kiosk; complex SMB/NFS setup and credentials belong to remote/admin flows.
 - Swipe up returns to ambient even when the gesture starts inside the protected Console panel.
 - Button-sized taps inside the protected Console panel must remain local Console actions, not blank-tap returns.
@@ -158,8 +158,8 @@ stateDiagram-v2
 - Ambient and Player expose a single Explore entry. The side panel, not the source picker, handles provider switching among Spotify, YouTube Music, Apple Music, TIDAL, Qobuz, Deezer, Amazon Music, QQ Music, and NetEase Cloud Music.
 - Only one official-provider window should remain visible at a time. Sites that try to open a new playback page should be redirected into the same left pane, and any extra provider window should be closed so two pages cannot keep playing in parallel.
 - The side panel's active provider highlight follows `.tikpal/web-mode-state.json`. It must not invent Spotify as a fallback when runtime state is missing; stale state is worse than no active highlight.
-- Entering Explore pauses Tikpal playback and closes audible Scene Sound so browser audio does not overlap MPD or scene audio.
-- Explore does not show Tikpal lyrics, artwork truth, or fake transport controls for the third-party site. It only offers provider switching, global volume, proxy status, a `Keyboard` text toggle, and Back.
+- Entering Explore must pause MPD, close external renderer intakes, and close audible Scene Sound before the provider opens. If Tikpal cannot release audio, Explore stays closed; Hi-Fi runtime recovery remains suspended while Explore is opening or active.
+- Explore does not show Tikpal lyrics, artwork truth, or fake transport controls for the third-party site. It only offers provider switching, global volume, proxy status, a `Keyboard` text toggle, and one Back control in the top-right header.
 - Console Link owns Explore proxy settings and has no duplicate Keyboard button. Focusing its proxy URL or a provider text field shows `onboard`; blur, submit, or single-line Enter hides it, while the right-panel `Keyboard` button remains the manual toggle.
 - The left provider pane must not expose Chromium-native error pages. If a provider fails to load, show the local Tikpal Explore error page with provider name, Proxy/Direct state, and a short retry hint.
 - The left provider pane should feel kiosk-like, not desktop-browser-like: disable right-click context menus, drag/select affordances, and common zoom/refresh shortcuts while preserving normal touch, scrolling, login input, and playback clicks.

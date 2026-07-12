@@ -33,7 +33,7 @@ if (!window.__TIKPAL_REMOTE_MODE__ && localKioskHosts.has(window.location.hostna
   let lastTextInput: HTMLElement | null = null;
   let outsidePointerDown = false;
   const setOnboardVisible = (enabled: boolean) => {
-    void sendWebModeAction({ type: "keyboard", enabled }).catch(() => undefined);
+    void sendWebModeAction({ type: "keyboard", enabled, ...(enabled ? { force: true } : {}) }).catch(() => undefined);
   };
   const activeTextInput = () => document.activeElement instanceof HTMLElement
     && Boolean(document.activeElement.closest(onboardInputSelector));
@@ -56,6 +56,11 @@ if (!window.__TIKPAL_REMOTE_MODE__ && localKioskHosts.has(window.location.hostna
   document.addEventListener("pointerdown", (event) => {
     const target = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>(onboardInputSelector) : null;
     outsidePointerDown = !target;
+    if (target && target === document.activeElement) {
+      lastTextInput = target;
+      setOnboardVisible(true);
+      keepTextInputFocus(target);
+    }
     if (!target) {
       lastTextInput = null;
       setOnboardVisible(false);

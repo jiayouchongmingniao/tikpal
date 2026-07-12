@@ -3508,6 +3508,25 @@ try {
     client,
     `
       (() => {
+        const switcher = document.querySelector('.console-room-switcher');
+        const shortcuts = [...document.querySelectorAll('[data-room-shortcut]')];
+        const labels = shortcuts.map((node) => node.textContent?.trim());
+        const rows = new Set(shortcuts.map((node) => Math.round(node.getBoundingClientRect().top)));
+        return Boolean(switcher)
+          && switcher.getBoundingClientRect().width >= 680
+          && labels.join('|') === 'Focus|Calm|Sleep|Hi-Fi|Explore'
+          && shortcuts.every((node) => node.querySelector('svg'))
+          && shortcuts.filter((node) => node.getAttribute('aria-pressed') === 'true').length === 1
+          && rows.size === 1
+          && !document.querySelector('.console-back-button');
+      })()
+    `,
+    "Console shows one-row icon and text room shortcuts"
+  );
+  await expect(
+    client,
+    `
+      (() => {
         const labels = [...document.querySelectorAll('.settings-top-tab span')].map((node) => node.textContent?.trim());
         return !document.querySelector('.settings-nav')
           && labels.join('|') === 'Preferences|Library|Link|Care'
@@ -3818,8 +3837,8 @@ try {
   await expect(client, "document.querySelectorAll('[data-web-mode-provider]').length >= 10", "Explore side panel exposes common web player providers");
   await expect(
     client,
-    "document.querySelector('[data-web-mode-proxy-toggle]')?.tagName === 'BUTTON' && document.querySelector('[data-web-mode-top-back]') !== null && document.querySelector('[data-web-mode-keyboard-toggle]')?.getAttribute('aria-label') === 'Show or hide keyboard' && document.querySelector('[data-web-mode-keyboard-toggle]')?.textContent.trim() === 'Keyboard'",
-    "Explore side panel exposes proxy, Keyboard, and Back controls"
+    "document.querySelector('[data-web-mode-proxy-toggle]')?.tagName === 'BUTTON' && document.querySelector('[data-web-mode-top-back]') !== null && document.querySelector('[data-web-mode-keyboard-toggle]')?.getAttribute('aria-label') === 'Show or hide keyboard' && document.querySelector('[data-web-mode-keyboard-toggle]')?.textContent.trim() === 'Keyboard' && document.querySelectorAll('.web-mode-actions button').length === 1",
+    "Explore side panel exposes proxy, Keyboard, and one top-right Back control"
   );
   await expect(
     client,

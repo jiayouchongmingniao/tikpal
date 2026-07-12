@@ -3557,6 +3557,7 @@ async function run() {
     const afterWebModeOpen = await request("/api/v1/system/state");
     assert(afterWebModeOpen.body.audio.currentSource.id === "mpd", "web mode should not change audio source truth");
     assert(afterWebModeOpen.body.audio.rememberedSource === null, "web mode should not write remembered source");
+    assert(afterWebModeOpen.body.playback.state === "paused", "web mode should pause Tikpal playback before provider audio starts");
 
     const switchedWebMode = await request("/api/v1/web-mode/actions", {
       method: "POST",
@@ -3604,6 +3605,11 @@ async function run() {
       body: JSON.stringify({ type: "keyboard", enabled: "yes" })
     });
     assert(invalidKeyboardAction.response.status === 400, "web mode keyboard should reject non-boolean enabled values");
+    const invalidKeyboardForceAction = await request("/api/v1/web-mode/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "keyboard", enabled: true, force: "yes" })
+    });
+    assert(invalidKeyboardForceAction.response.status === 400, "web mode keyboard should reject non-boolean force values");
 
     const closedWebMode = await request("/api/v1/web-mode/actions", {
       method: "POST",
@@ -4617,8 +4623,8 @@ async function run() {
       body: JSON.stringify({ type: "explore.open" })
     });
     assert(remoteExploreOpen.response.ok, "remote explore.open should return 200");
-    assert(remoteExploreOpen.body.explore.activeProvider === "spotify", "remote explore.open should default to Spotify");
-    assert(remoteExploreOpen.body.explore.activeProviderLabel === "Spotify", "remote explore.open should expose the active provider label");
+    assert(remoteExploreOpen.body.explore.activeProvider === "qq_music", "remote explore.open should default to QQ Music");
+    assert(remoteExploreOpen.body.explore.activeProviderLabel === "QQ Music", "remote explore.open should expose the active provider label");
     const remoteProxyOff = await request("/api/v1/remote/actions", {
       method: "POST",
       headers: remoteHeaders,
@@ -4626,7 +4632,7 @@ async function run() {
     });
     assert(remoteProxyOff.response.ok, "remote explore.proxy_set should return 200");
     assert(remoteProxyOff.body.explore.proxyEnabled === false, "remote explore.proxy_set should disable the proxy");
-    assert(remoteProxyOff.body.explore.activeProvider === "spotify", "remote proxy changes should preserve the active provider without reopening it");
+    assert(remoteProxyOff.body.explore.activeProvider === "qq_music", "remote proxy changes should preserve the active provider without reopening it");
     const remoteProxyOn = await request("/api/v1/remote/actions", {
       method: "POST",
       headers: remoteHeaders,

@@ -15,16 +15,17 @@
   let lastKeyboardEnabled = null;
   let lastKeyboardRequestMs = 0;
   const editableTarget = (target) => target?.closest?.(inputSelector) || null;
-  const requestKeyboard = (enabled) => {
+  const requestKeyboard = (enabled, force = false) => {
     const now = Date.now();
-    if (lastKeyboardEnabled === enabled && now - lastKeyboardRequestMs < 250) return;
+    if (!force && lastKeyboardEnabled === enabled && now - lastKeyboardRequestMs < 250) return;
     lastKeyboardEnabled = enabled;
     lastKeyboardRequestMs = now;
-    chrome.runtime.sendMessage({ type: "keyboard", enabled }, () => undefined);
+    chrome.runtime.sendMessage({ type: "keyboard", enabled, force }, () => undefined);
   };
   const requestShow = (event) => {
+    if (!document.hasFocus()) return;
     const path = typeof event.composedPath === "function" ? event.composedPath() : [event.target];
-    if (path.some(editableTarget)) requestKeyboard(true);
+    if (path.some(editableTarget)) requestKeyboard(true, true);
   };
   const isMultiline = (target) => Boolean(target && (target.matches("textarea,[contenteditable='true']") || target.getAttribute("aria-multiline") === "true"));
 
@@ -32,7 +33,7 @@
   document.addEventListener("focusin", requestShow, true);
   document.addEventListener("focusout", () => {
     setTimeout(() => {
-      if (!editableTarget(document.activeElement) && document.activeElement?.tagName !== "IFRAME") requestKeyboard(false);
+      if (!document.hasFocus() || (!editableTarget(document.activeElement) && document.activeElement?.tagName !== "IFRAME")) requestKeyboard(false);
     }, 80);
   }, true);
   document.addEventListener("submit", () => requestKeyboard(false), true);
@@ -41,7 +42,7 @@
     if (event.key === "Enter" && target && !isMultiline(target)) requestKeyboard(false);
   }, true);
   window.setInterval(() => {
-    if (editableTarget(document.activeElement)) requestKeyboard(true);
+    if (document.hasFocus() && editableTarget(document.activeElement)) requestKeyboard(true);
   }, 250);
 
   const retarget = (root = document) => {

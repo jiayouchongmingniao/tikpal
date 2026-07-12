@@ -106,6 +106,7 @@ systemctl daemon-reload
 systemctl enable tikpal-api.service tikpal-web.service
 
 if [[ "$INSTALL_KIOSK" -eq 1 ]]; then
+  loginctl enable-linger "$SERVICE_USER"
   systemctl enable tikpal-kiosk.service tikpal-kiosk-viewer.service tikpal-kiosk-devtools.service tikpal-kiosk-watchdog.timer
   if systemctl is-active --quiet kiosk.service; then
     echo "WARN: legacy kiosk.service is active. Inspect it before enabling Tikpal as the only screen owner." >&2
