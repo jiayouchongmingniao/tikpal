@@ -6180,9 +6180,7 @@ select {
 
 .web-mode-control-stack {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 132px;
   align-items: center;
-  gap: 12px;
   padding: 10px 12px;
 }
 
@@ -6210,36 +6208,9 @@ select {
   accent-color: #81d7ff;
 }
 
-.web-mode-actions {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 10px;
-  align-items: center;
-}
-
-.web-mode-actions button {
-  min-height: 44px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 9px;
-  border: 1px solid rgba(180, 210, 230, 0.16);
-  border-radius: 8px;
-  color: #eef7fb;
-  background: rgba(255, 255, 255, 0.08);
-  font: inherit;
-  font-weight: 850;
-}
-
-.web-mode-actions .web-mode-keyboard-toggle {
-  min-height: 44px;
-  padding: 0 12px;
-}
-
 .web-mode-provider:disabled,
 .web-mode-proxy-chip:disabled,
-.web-mode-top-back:disabled,
-.web-mode-actions button:disabled {
+.web-mode-top-back:disabled {
   opacity: 0.5;
 }
 

@@ -3837,8 +3837,8 @@ try {
   await expect(client, "document.querySelectorAll('[data-web-mode-provider]').length >= 10", "Explore side panel exposes common web player providers");
   await expect(
     client,
-    "document.querySelector('[data-web-mode-proxy-toggle]')?.tagName === 'BUTTON' && document.querySelector('[data-web-mode-top-back]') !== null && document.querySelector('[data-web-mode-keyboard-toggle]')?.getAttribute('aria-label') === 'Show or hide keyboard' && document.querySelector('[data-web-mode-keyboard-toggle]')?.textContent.trim() === 'Keyboard' && document.querySelectorAll('.web-mode-actions button').length === 1",
-    "Explore side panel exposes proxy, Keyboard, and one top-right Back control"
+    "document.querySelector('[data-web-mode-proxy-toggle]')?.tagName === 'BUTTON' && document.querySelector('[data-web-mode-top-back]') !== null && document.querySelector('[data-web-mode-keyboard-toggle]') === null && document.querySelector('.web-mode-actions') === null",
+    "Explore side panel exposes proxy and one top-right Back control without a manual Keyboard button"
   );
   await expect(
     client,

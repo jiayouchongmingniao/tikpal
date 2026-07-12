@@ -262,7 +262,7 @@ async function run() {
   assert(extensionBackground.includes("chrome.tabs.update(sender.tab.id, { url: provider.url })"), "extension background should navigate the bootstrap tab after proxy sync");
   assert(sidePanelSource.includes('sendWebModeAction({ type: "proxy", enabled:'), "Explore side panel should use the shared proxy action");
   assert(!sidePanelSource.includes("updateWebModeSettings"), "Explore side panel should not reopen the provider to switch proxy mode");
-  assert(sidePanelSource.includes("data-web-mode-keyboard-toggle") && sidePanelSource.includes("<span>{pendingAction === \"keyboard\" ? \"Opening\" : \"Keyboard\"}</span>"), "Explore side panel should expose a visible Keyboard toggle");
+  assert(!sidePanelSource.includes("data-web-mode-keyboard-toggle") && !sidePanelSource.includes("toggleKeyboard"), "Explore side panel should rely on automatic input-focus keyboard behavior");
   assert((sidePanelSource.match(/onClick=\{\(\) => void closeWebMode\(\)\}/g) ?? []).length === 1, "Explore side panel should keep only the top-right Back button");
   assert(!quickSettingsSource.includes("handleWebModeKeyboard"), "Console should rely on input-focus keyboard behavior instead of a duplicate button");
   assert(["focus", "calm", "sleep", "hifi", "explore"].every((id) => quickSettingsSource.includes(`id: "${id}"`)), "Console should expose five room shortcuts");
@@ -299,12 +299,12 @@ async function run() {
   assert(webModeScript.includes('getwindowname "$window"'), "web mode should ignore Onboard's cold-start placeholder window");
   assert(webModeScript.includes("xdotool windowraise"), "web mode should raise Onboard above Chromium without relying on a window manager");
   assert(!webModeScript.slice(webModeScript.indexOf("keyboard)"), webModeScript.indexOf("proxy)")).includes("check_runtime"), "keyboard actions should skip the full Explore runtime check for responsive input");
-  assert(webModeScript.includes("onboard_visible_windows"), "web mode should toggle the Keyboard button from visible X windows");
+  assert(webModeScript.includes("onboard_visible_windows"), "web mode should detect whether Onboard is already visible");
   assert(webModeScript.includes("xdotool windowfocus"), "web mode should return X focus to the input owner after showing Onboard");
   assert(webModeScript.includes("focused_browser_window"), "web mode should recover browser focus even when X has no active window");
   assert(webModeScript.includes("window_uses_profile"), "web mode should return keyboard focus to the active provider window, not the kiosk window");
-  assert(webModeScript.includes("read_runtime_active_provider"), "manual Keyboard toggle should find the active provider window");
-  assert(webModeScript.includes("TIKPAL_WEB_MODE_ONBOARD_SUPPRESS_PATH"), "manual Keyboard hide should suppress periodic provider auto-show");
+  assert(webModeScript.includes("read_runtime_active_provider"), "keyboard focus recovery should find the active provider window");
+  assert(webModeScript.includes("TIKPAL_WEB_MODE_ONBOARD_SUPPRESS_PATH"), "explicit keyboard hide should suppress periodic provider auto-show");
   assert(webModeScript.includes("show-force"), "new provider input focus should clear manual keyboard suppression");
   assert(webModeScript.includes("show-force) with_web_mode_lock force_onboard"), "keyboard requests should serialize cold Onboard startup");
   assert(webModeScript.indexOf('focus_window "$active_window"') < webModeScript.indexOf("position_onboard", webModeScript.indexOf("ensure_onboard()")), "web mode should focus the provider before mapping Onboard");

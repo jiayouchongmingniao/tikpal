@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { Apple, Cloud, Gem, Globe2, Keyboard, LogOut, Music2, ShoppingBag, SquarePlay, Volume2 } from "lucide-react";
+import { Apple, Cloud, Gem, Globe2, LogOut, Music2, ShoppingBag, SquarePlay, Volume2 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { fetchTikpalState, fetchWebModeState, sendPlaybackAction, sendWebModeAction } from "../api/tikpalClient";
 import type { TikpalState, WebModeProviderId, WebModeProviderSummary, WebModeState } from "../types";
@@ -66,7 +66,7 @@ export function WebModeSidePanel() {
   const [webMode, setWebMode] = useState<WebModeState | null>(null);
   const [tikpalState, setTikpalState] = useState<TikpalState | null>(null);
   const [pendingProvider, setPendingProvider] = useState<WebModeProviderId | null>(readInitialOpeningProvider);
-  const [pendingAction, setPendingAction] = useState<"close" | "keyboard" | "proxy" | null>(null);
+  const [pendingAction, setPendingAction] = useState<"close" | "proxy" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const actionLockRef = useRef(false);
   const activeProvider = webMode?.activeProvider ?? null;
@@ -184,22 +184,6 @@ export function WebModeSidePanel() {
     }
   }
 
-  async function toggleKeyboard() {
-    if (actionLockRef.current || pendingAction || pendingProvider) return;
-    actionLockRef.current = true;
-    setPendingAction("keyboard");
-    setError(null);
-    try {
-      const next = await sendWebModeAction({ type: "keyboard" });
-      setWebMode(next);
-    } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : "Keyboard unavailable");
-    } finally {
-      setPendingAction(null);
-      actionLockRef.current = false;
-    }
-  }
-
   async function updateVolume(nextValue: number) {
     const percent = Math.max(0, Math.min(100, Math.round(nextValue)));
     setTikpalState((current) => current ? {
@@ -300,20 +284,6 @@ export function WebModeSidePanel() {
             onChange={(event) => void updateVolume(Number(event.currentTarget.value))}
           />
         </label>
-        <div className="web-mode-actions">
-          <button
-            className="web-mode-keyboard-toggle"
-            type="button"
-            aria-label="Show or hide keyboard"
-            title="Show or hide keyboard"
-            data-web-mode-keyboard-toggle
-            onClick={() => void toggleKeyboard()}
-            disabled={Boolean(pendingAction || pendingProvider)}
-          >
-            <Keyboard size={16} />
-            <span>{pendingAction === "keyboard" ? "Opening" : "Keyboard"}</span>
-          </button>
-        </div>
       </section>
 
       <footer className="web-mode-panel-footer" role="status">
