@@ -21,16 +21,38 @@ ensure_loopback_output() {
 }
 
 shairport_config_changed=0
+airplay_artwork_root="${TIKPAL_AIRPLAY_ARTWORK_ROOT:-/var/local/www/imagesw/airplay-covers}"
 
-write_shairport_output_config() {
+write_shairport_config() {
   config_path="$1"
   output_device="$2"
+  artwork_root="$3"
   tmp_path="$(mktemp)"
 
-  awk -v output_device="$output_device" '
+  awk -v output_device="$output_device" -v artwork_root="$artwork_root" '
     !updated && $0 ~ /^[[:space:]]*(\/\/[[:space:]]*)?output_device[[:space:]]*=/ {
       print "\toutput_device = \"" output_device "\";";
       updated = 1;
+      next;
+    }
+    !updated_start && $0 ~ /^[[:space:]]*(\/\/[[:space:]]*)?run_this_before_entering_active_state[[:space:]]*=/ {
+      print "run_this_before_entering_active_state = \"/var/local/www/commandw/spspre.sh\";";
+      updated_start = 1;
+      next;
+    }
+    !updated_stop && $0 ~ /^[[:space:]]*(\/\/[[:space:]]*)?run_this_after_exiting_active_state[[:space:]]*=/ {
+      print "run_this_after_exiting_active_state = \"/var/local/www/commandw/spspost.sh\";";
+      updated_stop = 1;
+      next;
+    }
+    !updated_wait && $0 ~ /^[[:space:]]*(\/\/[[:space:]]*)?wait_for_completion[[:space:]]*=/ {
+      print "wait_for_completion = \"yes\";";
+      updated_wait = 1;
+      next;
+    }
+    !updated_artwork && $0 ~ /^[[:space:]]*(\/\/[[:space:]]*)?cover_art_cache_directory[[:space:]]*=/ {
+      print "cover_art_cache_directory = \"" artwork_root "\";";
+      updated_artwork = 1;
       next;
     }
     { print }
@@ -43,19 +65,21 @@ write_shairport_output_config() {
   rm -f "$tmp_path"
 }
 
-ensure_shairport_output() {
+ensure_shairport_config() {
   config_path="${TIKPAL_SHAIRPORT_SYNC_CONFIG:-/etc/shairport-sync.conf}"
   output_device="${TIKPAL_AIRPLAY_ALSA_OUTPUT_DEVICE:-_audioout}"
 
   [ -f "$config_path" ] || return 0
-  if grep -Eq "^[[:space:]]*output_device[[:space:]]*=[[:space:]]*\"${output_device}\";" "$config_path"; then
+  if grep -Fq "output_device = \"${output_device}\";" "$config_path" \
+    && grep -Fq 'run_this_before_entering_active_state = "/var/local/www/commandw/spspre.sh";' "$config_path" \
+    && grep -Fq 'run_this_after_exiting_active_state = "/var/local/www/commandw/spspost.sh";' "$config_path" \
+    && grep -Fq 'wait_for_completion = "yes";' "$config_path" \
+    && grep -Fq "cover_art_cache_directory = \"${airplay_artwork_root}\";" "$config_path"; then
     return 0
   fi
 
-  if grep -Eq '^[[:space:]]*(//[[:space:]]*)?output_device[[:space:]]*=' "$config_path"; then
-    write_shairport_output_config "$config_path" "$output_device" || return 0
-    shairport_config_changed=1
-  fi
+  write_shairport_config "$config_path" "$output_device" "$airplay_artwork_root" || return 0
+  shairport_config_changed=1
 }
 
 shairport_receiver_running() {
@@ -63,14 +87,14 @@ shairport_receiver_running() {
 }
 
 ensure_loopback_output
-ensure_shairport_output
+ensure_shairport_config
+
+if [ -n "$airplay_artwork_root" ]; then
+  run_as_root install -d -o shairport-sync -g shairport-sync -m 775 "$airplay_artwork_root" >/dev/null 2>&1 || true
+  run_as_root chown -R shairport-sync:shairport-sync "$airplay_artwork_root" >/dev/null 2>&1 || true
+fi
 
 moodeutl -Ro --airplay on
-
-if [ -d /var/local/www/imagesw/airplay-covers ]; then
-  run_as_root chown -R shairport-sync:shairport-sync /var/local/www/imagesw/airplay-covers >/dev/null 2>&1 || true
-  run_as_root chmod 775 /var/local/www/imagesw/airplay-covers >/dev/null 2>&1 || true
-fi
 
 if command -v systemctl >/dev/null 2>&1; then
   systemctl start nqptp.service >/dev/null 2>&1 \

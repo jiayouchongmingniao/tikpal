@@ -41,9 +41,6 @@
     const target = editableTarget(event.target);
     if (event.key === "Enter" && target && !isMultiline(target)) requestKeyboard(false);
   }, true);
-  window.setInterval(() => {
-    if (document.hasFocus() && editableTarget(document.activeElement)) requestKeyboard(true);
-  }, 250);
 
   const retarget = (root = document) => {
     root.querySelectorAll?.('a[target="_blank"]').forEach((link) => {

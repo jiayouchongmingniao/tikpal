@@ -791,7 +791,7 @@ start_provider_guard() {
   TIKPAL_WEB_MODE_QQ_AUTO_CONFIRM="$TIKPAL_WEB_MODE_QQ_AUTO_CONFIRM" \
   TIKPAL_WEB_MODE_ONBOARD_AUTO_FOCUS="$TIKPAL_WEB_MODE_ONBOARD_AUTO_FOCUS" \
   TIKPAL_KIOSK_DISPLAY="$TIKPAL_KIOSK_DISPLAY" \
-    node "$helper" >/dev/null 2>&1 9>&- &
+    node --experimental-websocket "$helper" >/dev/null 2>&1 9>&- &
   printf '%s\n' "$!" > "$(provider_guard_pid_file)"
 }
 

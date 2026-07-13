@@ -347,7 +347,6 @@ async function runInputFocusKeyboard(targets) {
     inputFocusRequests.delete(targetId);
   }
   if (shouldShow) setOnboardVisible(true, true);
-  else if (anyFocused) setOnboardVisible(true);
   else if (shouldHide || (wasFocused && !anyFocused)) setOnboardVisible(false);
 }
 

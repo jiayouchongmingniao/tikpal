@@ -5460,12 +5460,13 @@ function buildFastTrackMetadata({ title, artist, album, file }) {
   };
 }
 
-function shouldUseOutputVolumeForMpcAction() {
+async function shouldUseOutputVolumeForMpcAction() {
+  const webModeActive = Boolean((await readWebModeRuntimeState()).activeProvider);
   const cachedSource = tikpalStateSnapshotCache?.state?.audio?.currentSource?.id
     ?? tikpalStateSnapshotCache?.state?.playback?.source
     ?? null;
   const source = mockArmedSource ?? cachedSource;
-  return source === "scene" || COMMAND_HANDOFF_SOURCE_TARGETS.has(source);
+  return webModeActive || source === "scene" || COMMAND_HANDOFF_SOURCE_TARGETS.has(source);
 }
 
 function getCurrentMpcSourceId() {
@@ -5631,10 +5632,11 @@ async function getMpcSnapshot(options = {}) {
   const queuePreview = await getMpcQueuePreview(status);
   const playbackSource = audio.sources.find((source) => source.active)?.id ?? audio.currentSource.id;
   const outputVolumePercent = includeOutputVolumeStatus ? await readOutputVolumePercent() : null;
+  const webModeActive = includeOutputVolumeStatus && Boolean((await readWebModeRuntimeState()).activeProvider);
   const isSceneSource = playbackSource === "scene";
   const isExternalHandoffSource = playbackSource === "scene" || playbackSource === "spotify" || playbackSource === "bluetooth" || playbackSource === "airplay" || playbackSource === "upnp";
   const isMpdBackedSource = playbackSource === "mpd" || playbackSource === "audio";
-  const volumePercent = isExternalHandoffSource
+  const volumePercent = isExternalHandoffSource || webModeActive
     ? (outputVolumePercent ?? status.volumePercent ?? system.volume.percent)
     : (status.volumePercent ?? outputVolumePercent ?? system.volume.percent);
   if (volumePercent > 0) {
@@ -6579,7 +6581,7 @@ async function applyMpcPlaybackActionUnlocked(action) {
       if (!Number.isFinite(percent) || percent < 0 || percent > 100) {
         throw new Error("volume_set requires value between 0 and 100");
       }
-      if (shouldUseOutputVolumeForMpcAction()) {
+      if (await shouldUseOutputVolumeForMpcAction()) {
         await setOutputVolumePercent(percent);
       } else {
         await runMpc(["volume", String(Math.round(percent))]);
@@ -9727,8 +9729,9 @@ async function pauseTikpalForWebMode() {
   if (API_MODE === "mpc") {
     await withMpcMutationLock(async () => {
       const before = parseMpcStatus(await runMpc(["status"], { timeout: 2500 }));
+      const currentFile = (await runMpc(["--format", "%file%", "current"], { allowFailure: true, timeout: 2500 })).trim();
       if (before.state === "playing") {
-        await runMpc(["pause"], { timeout: 2500 });
+        await runMpc([isStreamUri(currentFile) ? "stop" : "pause"], { timeout: 2500 });
       }
       const after = parseMpcStatus(await runMpc(["status"], { timeout: 2500 }));
       if (after.state === "playing") {

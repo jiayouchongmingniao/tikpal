@@ -255,9 +255,9 @@ async function run() {
   assert(extensionContent.includes("window.setInterval(() => void syncProxy(), 750)"), "provider pages should poll the proxy settings revision every 750ms");
   assert(extensionContent.includes("window.location.reload()"), "provider pages should refresh after a proxy revision change");
   assert(extensionContent.includes("window.location.replace(provider.url)"), "provider bootstrap should navigate only after proxy sync succeeds");
-  assert(extensionContent.includes('chrome.runtime.sendMessage({ type: "keyboard", enabled, force }'), "Explore extension should distinguish new input focus from periodic keyboard polling");
-  assert(extensionContent.includes("editableTarget(document.activeElement)"), "Explore extension should poll focused provider inputs as a keyboard fallback");
-  assert(extensionContent.includes("document.hasFocus() && editableTarget(document.activeElement)"), "Explore extension should let the side panel hide Onboard after the provider loses window focus");
+  assert(extensionContent.includes('chrome.runtime.sendMessage({ type: "keyboard", enabled, force }'), "Explore extension should distinguish new input focus from keyboard hide requests");
+  assert(extensionContent.includes("editableTarget(document.activeElement)"), "Explore extension should hide Onboard after provider input focus ends");
+  assert(!extensionContent.includes("if (document.hasFocus() && editableTarget(document.activeElement)) requestKeyboard(true);"), "Explore extension should not reopen Onboard after its own close button hides it");
   assert(extensionBackground.includes("setKeyboardVisible"), "Explore extension background should forward keyboard actions to the loopback API");
   assert(extensionBackground.includes("chrome.tabs.update(sender.tab.id, { url: provider.url })"), "extension background should navigate the bootstrap tab after proxy sync");
   assert(sidePanelSource.includes('sendWebModeAction({ type: "proxy", enabled:'), "Explore side panel should use the shared proxy action");
@@ -282,6 +282,7 @@ async function run() {
   assert(webModeScript.includes("nohup \"$SCRIPT_DIR/tikpal-web-mode.sh\" guard"), "web mode should keep the window guard alive after the launcher exits");
   assert(webModeScript.includes('open_provider "${2:-qq_music}"'), "web mode should default initial Explore launch to QQ Music");
   assert(webModeScript.includes("window-guard.pid"), "web mode should track the persistent window guard pid");
+  assert(webModeScript.includes('node --experimental-websocket "$helper"'), "web mode should enable the Node 20 WebSocket API for the provider guard");
   assert(webModeScript.includes('flock -x -w "$TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS"'), "web mode should not wait forever on provider switch locks");
   assert(webModeScript.includes("9>&- &"), "web mode background children should not inherit the provider switch lock");
   assert(
@@ -481,7 +482,7 @@ async function run() {
   assert(providerGuardSource.includes("lastOnboardActionMs"), "provider focus guard should throttle repeated keyboard show while inputs stay focused");
   assert(providerGuardSource.includes("lastKeyboardRequestMs < 250"), "provider focus guard should not delay keyboard show behind a long throttle");
   assert(providerGuardSource.includes("lastOnboardActionMs < 250"), "provider poll fallback should not delay keyboard show behind a long throttle");
-  assert(providerGuardSource.includes("else if (anyFocused) setOnboardVisible(true)"), "provider focus guard should keep Onboard visible while provider inputs stay focused");
+  assert(!providerGuardSource.includes("else if (anyFocused) setOnboardVisible(true)"), "provider focus guard should let Onboard stay closed until a new input interaction");
   assert(providerGuardSource.includes("if (!doc?.hasFocus?.()) return false"), "provider focus polling should stop auto-show after focus moves to the side panel");
   assert(providerGuardSource.includes("mode: \"no-cors\""), "provider focus guard should request local keyboard actions without cross-origin response access");
   assert(providerGuardSource.includes("text/plain;charset=UTF-8"), "provider focus guard should send a CORS-safelisted JSON text body");
