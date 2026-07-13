@@ -3802,8 +3802,26 @@ try {
   await expect(client, "document.querySelector('[data-settings-detail=\"web-mode\"]') !== null", "Console Explore drawer opens");
   await expect(
     client,
-    "document.querySelector('.web-mode-proxy-field input')?.value === 'http://192.168.10.140:7897' && document.querySelectorAll('.web-mode-settings-actions button').length === 2 && !document.querySelector('.web-mode-settings-actions')?.textContent.includes('Keyboard')",
-    "Console Explore drawer exposes proxy actions without a duplicate Keyboard button"
+    "document.querySelector('.web-mode-proxy-field input')?.value.startsWith('http') && document.querySelectorAll('.web-mode-settings-actions button').length === 1 && document.querySelector('.web-mode-settings-actions')?.textContent.includes('Test') && !document.querySelector('.web-mode-settings-actions')?.textContent.includes('Save') && !document.querySelector('.web-mode-settings-actions')?.textContent.includes('Keyboard')",
+    "Console Explore drawer auto-saves proxy settings and keeps only the Test action"
+  );
+  await expect(
+    client,
+    "document.querySelector('[data-settings-detail=\"web-mode\"]')?.scrollHeight <= document.querySelector('[data-settings-detail=\"web-mode\"]')?.clientHeight",
+    "Console Explore drawer fits within kiosk height"
+  );
+  const originalProxyUrl = await evaluate(client, "document.querySelector('.web-mode-proxy-field input')?.value");
+  await setInputValue(client, ".web-mode-proxy-field input", "http://127.0.0.1:7896");
+  await expectEventually(
+    client,
+    "document.querySelector('.settings-detail-header p')?.textContent === 'Saved' && document.querySelector('.web-mode-proxy-field input')?.value === 'http://127.0.0.1:7896'",
+    "Console Explore proxy URL auto-saves without rewriting the input"
+  );
+  await setInputValue(client, ".web-mode-proxy-field input", originalProxyUrl);
+  await expectEventually(
+    client,
+    "document.querySelector('.settings-detail-header p')?.textContent === 'Saved'",
+    "Console Explore proxy URL restores after the auto-save check"
   );
   await evaluate(
     client,

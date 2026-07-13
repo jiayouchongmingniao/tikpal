@@ -423,6 +423,7 @@ async function run() {
   assert(skipEnvCheck.status === 0, `launcher skip-env --check failed:\n${skipEnvCheck.stdout}\n${skipEnvCheck.stderr}`);
   assert(skipEnvCheck.stdout.includes("window: 2560x720"), "launcher should preserve systemd-provided window when env sourcing is skipped");
 
+  const webModeCheckDir = mkdtempSync(path.join(tmpdir(), "tikpal-web-mode-check-"));
   const webModeCheck = spawnSync("bash", ["deploy/chromium/tikpal-web-mode.sh", "--check"], {
     cwd: ROOT,
     env: {
@@ -430,7 +431,9 @@ async function run() {
       TIKPAL_CHROMIUM_BIN: process.execPath,
       TIKPAL_KIOSK_XRANDR_MODE: "none",
       TIKPAL_KIOSK_SKIP_ENV_SOURCE: "1",
-      TIKPAL_WEB_MODE_EXTENSION_ENABLED: "1"
+      TIKPAL_WEB_MODE_EXTENSION_ENABLED: "1",
+      TIKPAL_WEB_MODE_SETTINGS_PATH: path.join(webModeCheckDir, "settings.json"),
+      TIKPAL_WEB_MODE_STATE_PATH: path.join(webModeCheckDir, "state.json")
     },
     encoding: "utf8"
   });
@@ -452,7 +455,10 @@ async function run() {
   assert(webModeCheck.stdout.includes("onboard: 500,420 900,280"), "web mode should place the full Onboard keyboard near provider login inputs");
   assert(webModeCheck.stdout.includes("onboard input focus: 1"), "web mode should enable input-focus keyboard activation");
   assert(webModeCheck.stdout.includes("qq scoped auto confirm: 1"), "web mode should keep QQ auto-confirm scoped inside the provider guard");
-  assert(webModeCheck.stdout.includes("proxy: enabled http://192.168.10.140:7897"), "web mode should default to the HTTP development proxy");
+  assert(webModeCheck.stdout.includes("proxy: enabled http://192.168.10.103:7897"), "web mode should default to the HTTP development proxy");
+
+  assert(!quickSettingsSource.includes("handleWebModeSettingsSave"), "Explore settings should auto-save without a Save button");
+  assert(quickSettingsSource.includes("Enter a complete proxy URL"), "Explore auto-save should wait for a complete proxy URL");
 
   const providerGuardCheck = spawnSync(process.execPath, ["deploy/chromium/tikpal-web-mode-guard.mjs", "--check"], {
     cwd: ROOT,

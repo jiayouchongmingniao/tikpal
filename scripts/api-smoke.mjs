@@ -3539,20 +3539,20 @@ async function run() {
     const webMode = await request("/api/v1/web-mode/state");
     assert(webMode.response.ok, "web mode state should return 200");
     assert(webMode.body.settings.proxyEnabled === true, "web mode should enable the development HTTP proxy by default");
-    assert(webMode.body.settings.proxyUrl === "http://192.168.10.140:7897", "web mode should default to the HTTP development proxy");
+    assert(webMode.body.settings.proxyUrl === "http://192.168.10.103:7897", "web mode should default to the HTTP development proxy");
     assert(typeof webMode.body.settings.updatedAt === "string", "web mode settings should always expose a revision for the extension");
     assert(webMode.body.providers.some((provider) => provider.id === "spotify"), "web mode should expose Spotify provider");
 
     const savedWebMode = await request("/api/v1/web-mode/settings", {
       method: "PATCH",
-      body: JSON.stringify({ proxyEnabled: true, proxyUrl: "http://192.168.10.140:7897" })
+      body: JSON.stringify({ proxyEnabled: true, proxyUrl: "http://192.168.10.103:7897" })
     });
     assert(savedWebMode.response.ok, "web mode settings patch should return 200");
-    assert(savedWebMode.body.settings.proxyUrl === "http://192.168.10.140:7897", "web mode settings patch should persist HTTP proxy URL");
+    assert(savedWebMode.body.settings.proxyUrl === "http://192.168.10.103:7897", "web mode settings patch should persist HTTP proxy URL");
 
     const invalidWebModeProxy = await request("/api/v1/web-mode/settings", {
       method: "PATCH",
-      body: JSON.stringify({ proxyEnabled: true, proxyUrl: "ftp://192.168.10.140:7897" })
+      body: JSON.stringify({ proxyEnabled: true, proxyUrl: "ftp://192.168.10.103:7897" })
     });
     assert(invalidWebModeProxy.response.status === 400, "web mode settings should reject unsupported proxy protocols");
 

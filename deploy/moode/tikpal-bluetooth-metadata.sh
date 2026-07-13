@@ -55,7 +55,7 @@ decode_busctl_string() {
   if [ -z "$value" ]; then
     return 0
   fi
-  printf '%b' "$value"
+  printf '%b' "$value" | sed "s/\\\\'/'/g"
 }
 
 sanitize_text_value() {

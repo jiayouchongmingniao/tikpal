@@ -6225,7 +6225,17 @@ select {
 
 .web-mode-settings-panel {
   display: grid;
-  gap: 16px;
+  grid-template-columns: minmax(280px, 0.45fr) minmax(0, 1fr);
+  align-content: start;
+  gap: 12px;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.web-mode-settings-panel .night-toggle,
+.web-mode-settings-panel .night-field {
+  min-height: 88px;
+  padding: 12px 16px;
 }
 
 .web-mode-proxy-field input {
@@ -6242,5 +6252,6 @@ select {
 }
 
 .web-mode-settings-actions {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-column: 1 / -1;
+  grid-template-columns: minmax(0, 1fr);
 }

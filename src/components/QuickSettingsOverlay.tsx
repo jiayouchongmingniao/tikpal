@@ -149,6 +149,21 @@ const roomShortcuts: Array<{ id: RoomMode | "explore"; label: string; Icon: type
 ];
 const localKioskHosts = new Set(["localhost", "127.0.0.1", "::1"]);
 
+function normalizeProxyUrl(value: string) {
+  try {
+    const parsed = new URL(value.trim());
+    if (!["http:", "https:", "socks5:"].includes(parsed.protocol) || !parsed.hostname || !parsed.port) return null;
+    parsed.username = "";
+    parsed.password = "";
+    parsed.pathname = "";
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.toString().replace(/\/$/, "");
+  } catch {
+    return null;
+  }
+}
+
 function hideLocalKeyboard() {
   if (!localKioskHosts.has(window.location.hostname) || window.__TIKPAL_REMOTE_MODE__) return;
   window.dispatchEvent(new Event("tikpal:keyboard-context-clear"));
@@ -209,8 +224,8 @@ export function QuickSettingsOverlay({
   const [pendingNight, setPendingNight] = useState(false);
   const [webModeState, setWebModeState] = useState<WebModeState | null>(null);
   const [webModeProxyEnabled, setWebModeProxyEnabled] = useState(true);
-  const [webModeProxyUrl, setWebModeProxyUrl] = useState("http://192.168.10.140:7897");
-  const [pendingWebModeSettings, setPendingWebModeSettings] = useState<"save" | "test" | null>(null);
+  const [webModeProxyUrl, setWebModeProxyUrl] = useState("");
+  const [pendingWebModeSettings, setPendingWebModeSettings] = useState<"test" | null>(null);
   const [webModeError, setWebModeError] = useState<string | null>(null);
   const [pendingRoomShortcut, setPendingRoomShortcut] = useState<RoomMode | "explore" | null>(null);
   const [roomShortcutError, setRoomShortcutError] = useState<string | null>(null);
@@ -274,6 +289,45 @@ export function QuickSettingsOverlay({
       cancelled = true;
     };
   }, [active]);
+
+  useEffect(() => {
+    if (!active || !webModeState || pendingWebModeSettings === "test") return undefined;
+
+    const normalizedProxyUrl = normalizeProxyUrl(webModeProxyUrl);
+    const enabledChanged = webModeProxyEnabled !== webModeState.settings.proxyEnabled;
+    const proxyUrlChanged = normalizedProxyUrl !== null && normalizedProxyUrl !== webModeState.settings.proxyUrl;
+
+    if (webModeProxyEnabled && normalizedProxyUrl === null) {
+      setWebModeError("Enter a complete proxy URL");
+      return undefined;
+    }
+    if (!enabledChanged && !proxyUrlChanged) {
+      setWebModeError((current) => current === "Enter a complete proxy URL" || current === "Saving..." ? null : current);
+      return undefined;
+    }
+
+    let cancelled = false;
+    setWebModeError("Saving...");
+    const timer = window.setTimeout(() => {
+      void updateWebModeSettings({
+        proxyEnabled: webModeProxyEnabled,
+        ...(normalizedProxyUrl === null ? {} : { proxyUrl: normalizedProxyUrl })
+      })
+        .then((nextState) => {
+          if (cancelled) return;
+          setWebModeState(nextState);
+          setWebModeError("Saved");
+        })
+        .catch((error) => {
+          if (!cancelled) setWebModeError(error instanceof Error ? error.message : "Explore settings save failed");
+        });
+    }, 700);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [active, pendingWebModeSettings, webModeProxyEnabled, webModeProxyUrl, webModeState]);
 
   const librarySourceKind = system.library.source.trim().toLowerCase();
   const libraryTrackCount = Math.max(0, system.library.trackCount);
@@ -510,31 +564,21 @@ export function QuickSettingsOverlay({
     }
   }
 
-  async function handleWebModeSettingsSave() {
+  async function handleWebModeProxyTest() {
     if (pendingWebModeSettings) return;
-    setPendingWebModeSettings("save");
+    const normalizedProxyUrl = normalizeProxyUrl(webModeProxyUrl);
+    if (webModeProxyEnabled && normalizedProxyUrl === null) {
+      setWebModeError("Enter a complete proxy URL");
+      return;
+    }
+    setPendingWebModeSettings("test");
     setWebModeError(null);
     try {
       const nextState = await updateWebModeSettings({
         proxyEnabled: webModeProxyEnabled,
-        proxyUrl: webModeProxyUrl
+        ...(normalizedProxyUrl === null ? {} : { proxyUrl: normalizedProxyUrl })
       });
       setWebModeState(nextState);
-      setWebModeProxyEnabled(nextState.settings.proxyEnabled);
-      setWebModeProxyUrl(nextState.settings.proxyUrl);
-      setWebModeError("Saved");
-    } catch (error) {
-      setWebModeError(error instanceof Error ? error.message : "Explore settings save failed");
-    } finally {
-      setPendingWebModeSettings(null);
-    }
-  }
-
-  async function handleWebModeProxyTest() {
-    if (pendingWebModeSettings) return;
-    setPendingWebModeSettings("test");
-    setWebModeError(null);
-    try {
       const result = await testWebModeProxy();
       setWebModeError(result.message);
     } catch (error) {
@@ -836,9 +880,6 @@ export function QuickSettingsOverlay({
           </label>
 
           <div className="display-brightness-controls web-mode-settings-actions" role="group" aria-label="Explore controls">
-            <button className="display-brightness-step" type="button" disabled={busy} onClick={() => void handleWebModeSettingsSave()}>
-              {pendingWebModeSettings === "save" ? "Saving..." : "Save"}
-            </button>
             <button className="display-brightness-step" type="button" disabled={busy} onClick={() => void handleWebModeProxyTest()}>
               {pendingWebModeSettings === "test" ? "Testing..." : "Test"}
             </button>

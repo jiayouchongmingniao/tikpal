@@ -191,6 +191,7 @@ const LYRICS_CUSTOM_URL_TEMPLATE = process.env.TIKPAL_LYRICS_CUSTOM_URL_TEMPLATE
 const LYRICS_CUSTOM_AUTH_HEADER = process.env.TIKPAL_LYRICS_CUSTOM_AUTH_HEADER ?? "";
 const THEAUDIODB_BASE_URL = process.env.TIKPAL_THEAUDIODB_BASE_URL ?? "https://www.theaudiodb.com";
 const THEAUDIODB_API_KEY = process.env.TIKPAL_THEAUDIODB_API_KEY ?? "123";
+const ITUNES_SEARCH_BASE_URL = process.env.TIKPAL_ITUNES_SEARCH_BASE_URL ?? "https://itunes.apple.com/search";
 const REMOTE_METADATA_TIMEOUT_MS = Number(process.env.TIKPAL_REMOTE_METADATA_TIMEOUT_MS ?? 4500);
 const LYRICS_ERROR_BACKOFF_MS = Number(process.env.TIKPAL_LYRICS_ERROR_BACKOFF_MS ?? 90000);
 const SUPPORTED_LYRICS_PROVIDERS = new Set(["lrclib", "custom", "lyricsovh"]);
@@ -223,7 +224,7 @@ const WEB_MODE_SETTINGS_PATH = resolve(process.env.TIKPAL_WEB_MODE_SETTINGS_PATH
 const WEB_MODE_STATE_PATH = resolve(process.env.TIKPAL_WEB_MODE_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "web-mode-state.json"));
 const WEB_MODE_COMMAND = process.env.TIKPAL_WEB_MODE_COMMAND ?? (API_MODE === "mpc" ? "./deploy/chromium/tikpal-web-mode.sh" : "");
 const WEB_MODE_PROXY_TEST_URL = process.env.TIKPAL_WEB_MODE_PROXY_TEST_URL ?? "https://open.spotify.com/";
-const WEB_MODE_DEFAULT_PROXY_URL = process.env.TIKPAL_WEB_MODE_DEFAULT_PROXY_URL ?? "http://192.168.10.140:7897";
+const WEB_MODE_DEFAULT_PROXY_URL = process.env.TIKPAL_WEB_MODE_DEFAULT_PROXY_URL ?? "http://192.168.10.103:7897";
 const WEB_MODE_PROXY_TEST_NETWORK = parseEnvBoolean(process.env.TIKPAL_WEB_MODE_PROXY_TEST_NETWORK ?? "0");
 const LOCAL_LIBRARY_COVER_COLUMNS = ["cover_relative_path", "cover_path", "album_art_relative_path", "artwork_relative_path"];
 const LOCAL_LIBRARY_COVER_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp"];
@@ -5706,7 +5707,7 @@ async function getMpcSnapshot(options = {}) {
         absolutePath: null
       };
 
-  if (includeSlowRuntimeStatus) {
+  if (includeSlowRuntimeStatus && !isExternalHandoffSource) {
     currentArtworkState = hasCurrentTrack
       ? await resolveCurrentArtworkState({
           playbackSource,
@@ -8038,7 +8039,32 @@ async function cacheRemoteArtwork({ cacheKey, imageUrl }) {
   return metadata;
 }
 
-async function fetchRemoteArtworkForAlbum({ artist, album }) {
+function highResolutionItunesArtworkUrl(value) {
+  return normalizeMetadataValue(value).replace(/\/100x100bb(?=\.(?:jpg|png)(?:$|\?))/i, "/600x600bb");
+}
+
+async function fetchItunesArtworkUrl({ title, artist, album }) {
+  const searchUrl = new URL(ITUNES_SEARCH_BASE_URL);
+  searchUrl.searchParams.set("term", [artist, title].filter(Boolean).join(" "));
+  searchUrl.searchParams.set("entity", "song");
+  searchUrl.searchParams.set("limit", "10");
+
+  const { response, body } = await fetchJsonWithTimeout(searchUrl, {
+    timeoutMs: REMOTE_METADATA_TIMEOUT_MS
+  });
+  if (!response.ok) return null;
+
+  const matches = Array.isArray(body?.results)
+    ? body.results.filter((entry) => strictLyricsProviderMatch({ title, artist }, entry))
+    : [];
+  const normalizedAlbum = normalizeLyricsMatchValue(album);
+  const entry = matches.find((candidate) => (
+    normalizedAlbum && normalizeLyricsMatchValue(candidate?.collectionName) === normalizedAlbum
+  )) ?? matches[0];
+  return highResolutionItunesArtworkUrl(entry?.artworkUrl100) || null;
+}
+
+async function fetchRemoteArtworkForAlbum({ title, artist, album }) {
   const cacheKey = buildArtworkCacheKey({ artist, album });
   if (!cacheKey) return null;
 
@@ -8054,18 +8080,19 @@ async function fetchRemoteArtworkForAlbum({ artist, album }) {
     searchUrl.searchParams.set("s", artist);
     searchUrl.searchParams.set("a", album);
 
-    const { response, body } = await fetchJsonWithTimeout(searchUrl, {
+    const albumEntry = await fetchJsonWithTimeout(searchUrl, {
       timeoutMs: REMOTE_METADATA_TIMEOUT_MS
-    });
-    if (!response.ok) {
-      throw new Error(`TheAudioDB album lookup failed: ${response.status}`);
-    }
-
-    const albumEntry = Array.isArray(body?.album) ? body.album.find((entry) => entry?.strAlbumThumb) : null;
-    if (!albumEntry?.strAlbumThumb) return null;
+    }).then(({ response, body }) => (
+      response.ok && Array.isArray(body?.album)
+        ? body.album.find((entry) => entry?.strAlbumThumb) ?? null
+        : null
+    )).catch(() => null);
+    const imageUrl = albumEntry?.strAlbumThumb
+      || await fetchItunesArtworkUrl({ title, artist, album }).catch(() => null);
+    if (!imageUrl) return null;
     return cacheRemoteArtwork({
       cacheKey,
-      imageUrl: albumEntry.strAlbumThumb
+      imageUrl
     });
   })();
 
@@ -8097,7 +8124,7 @@ async function resolveRemotePlaybackArtworkUrl({ playbackSource, title, artist, 
     return `/api/v1/media/artwork?track=${encodeURIComponent(cached.token)}`;
   }
 
-  void fetchRemoteArtworkForAlbum({ artist, album }).catch(() => null);
+  void fetchRemoteArtworkForAlbum({ title, artist, album }).catch(() => null);
   return null;
 }
 
