@@ -15,6 +15,7 @@ const PROVIDER_PORT = Number(process.env.TIKPAL_PROVIDER_SMOKE_PORT ?? 18788);
 const PROVIDER_URL = `http://${HOST}:${PROVIDER_PORT}`;
 const BLUETOOTH_SCENARIO_PATH = resolve(process.cwd(), ".tmp-api-smoke-bluetooth.txt");
 const BLUETOOTH_METADATA_PATH = resolve(process.cwd(), ".tmp-api-smoke-bluetooth-metadata.txt");
+const PROVIDER_PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMB/azU1wAAAABJRU5ErkJggg==", "base64");
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -680,6 +681,25 @@ function createProviderServer() {
 
     if (request.method === "GET" && url.pathname === "/api/v1/json/123/searchalbum.php") {
       sendProviderJson(response, 200, { album: [] });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/itunes/search") {
+      sendProviderJson(response, 200, {
+        resultCount: 1,
+        results: [{
+          trackName: "Pocket Signal",
+          artistName: "Tikpal Phone",
+          collectionName: "AVRCP Smoke",
+          artworkUrl100: `${PROVIDER_URL}/artwork/pocket-signal/100x100bb.png`
+        }]
+      });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/artwork/pocket-signal/600x600bb.png") {
+      response.writeHead(200, { "Content-Type": "image/png" });
+      response.end(PROVIDER_PNG);
       return;
     }
 
@@ -2840,7 +2860,9 @@ appendFileSync(${JSON.stringify(fakeBluetoothTransportLogPath)}, action + "\\n")
       TIKPAL_LYRICS_CUSTOM_AUTH_HEADER: "Authorization: Bearer smoke",
       TIKPAL_LYRICS_OVH_BASE_URL: PROVIDER_URL,
       TIKPAL_LRCLIB_TIMEOUT_MS: "250",
-      TIKPAL_LRCLIB_BASE_URL: PROVIDER_URL
+      TIKPAL_LRCLIB_BASE_URL: PROVIDER_URL,
+      TIKPAL_THEAUDIODB_BASE_URL: PROVIDER_URL,
+      TIKPAL_ITUNES_SEARCH_BASE_URL: `${PROVIDER_URL}/itunes/search`
     }),
     stdio: ["ignore", "pipe", "pipe"]
   });
@@ -2966,6 +2988,10 @@ appendFileSync(${JSON.stringify(fakeBluetoothTransportLogPath)}, action + "\\n")
       body: JSON.stringify({ target: "bluetooth" })
     });
     assert(bluetoothForTransport.response.ok, "mpc bluetooth transport source switch should return 200");
+    assert(bluetoothForTransport.body.playback.albumArtUrl?.startsWith("/api/v1/media/artwork?track=remote-"), "mpc bluetooth should reuse cached iTunes artwork when BlueZ has no cover");
+    const bluetoothArtwork = await requestBinaryFrom(baseUrl, bluetoothForTransport.body.playback.albumArtUrl);
+    assert(bluetoothArtwork.response.ok, "mpc bluetooth remote artwork endpoint should return 200");
+    assert(bluetoothArtwork.body.length > 0, "mpc bluetooth remote artwork endpoint should return image bytes");
     let bluetoothState = null;
     for (let attempt = 0; attempt < 20; attempt += 1) {
       bluetoothState = await requestFrom(baseUrl, "/api/v1/system/state");
@@ -3511,7 +3537,8 @@ async function run() {
       TIKPAL_MOCK_BLUETOOTH_CONNECT_AFTER_MS: "150",
       TIKPAL_MOCK_BLUETOOTH_METADATA_FILE: BLUETOOTH_METADATA_PATH,
       TIKPAL_LRCLIB_BASE_URL: PROVIDER_URL,
-      TIKPAL_THEAUDIODB_BASE_URL: PROVIDER_URL
+      TIKPAL_THEAUDIODB_BASE_URL: PROVIDER_URL,
+      TIKPAL_ITUNES_SEARCH_BASE_URL: `${PROVIDER_URL}/itunes/search`
     },
     stdio: ["ignore", "pipe", "pipe"]
   });
