@@ -279,6 +279,12 @@ async function run() {
   assert(kioskLauncher.includes("run_x_command xset"), "kiosk launcher should bound xset commands");
   assert(kioskSession.includes("TIKPAL_KIOSK_X_COMMAND_TIMEOUT_SECONDS"), "kiosk session should expose an X command timeout");
   assert(kioskSession.includes("run_x_command xset"), "kiosk session should bound xset commands");
+  assert(kioskSession.includes("GTK_IM_MODULE=fcitx") && kioskSession.includes("XMODIFIERS=@im=fcitx"), "kiosk session should expose Fcitx5 to Chromium/X11");
+  assert(kioskSession.includes("DefaultIM=pinyin") && kioskSession.includes("Name=keyboard-us"), "kiosk session should seed English and Simplified Chinese Pinyin");
+  assert(kioskSession.includes("0=F9") && kioskSession.includes("1=Control+space"), "kiosk session should configure touch and hardware input-method toggles without opening Chromium DevTools");
+  assert(kioskSession.includes("ActiveByDefault=False") && kioskSession.includes("ShareInputState=No"), "kiosk input should start in English without sharing state across applications");
+  assert(kioskSession.includes('Font="AR PL UMing CN 12"'), "Fcitx5 should render readable Chinese candidates on the physical display");
+  assert(kioskSession.includes("fcitx5 -d --replace"), "kiosk session should start Fcitx5 before Chromium");
   assert(webModeScript.includes("nohup \"$SCRIPT_DIR/tikpal-web-mode.sh\" guard"), "web mode should keep the window guard alive after the launcher exits");
   assert(webModeScript.includes('open_provider "${2:-qq_music}"'), "web mode should default initial Explore launch to QQ Music");
   assert(webModeScript.includes("window-guard.pid"), "web mode should track the persistent window guard pid");
@@ -314,8 +320,14 @@ async function run() {
   assert(webModeScript.includes("org.onboard show-status-icon false"), "web mode should hide Onboard's status icon");
   assert(webModeScript.includes("org.onboard.icon-palette in-use false"), "web mode should hide Onboard's floating icon palette");
   assert(webModeScript.includes("configure_onboard"), "web mode should normalize Onboard settings on cold start");
+  assert(webModeScript.slice(webModeScript.indexOf("configure_onboard()"), webModeScript.indexOf("window_uses_profile()")).includes('export DBUS_SESSION_BUS_ADDRESS="$session_bus"'), "Onboard settings should use the kiosk user DBus session");
   assert(webModeScript.includes("org.onboard.keyboard input-event-source GTK"), "Onboard should use GTK input events for Chromium provider typing");
   assert(webModeScript.includes("org.onboard.keyboard key-synth XTest"), "Onboard should synthesize keys through XTest for Chromium provider typing");
+  assert(webModeScript.includes('id=\\"F9.tikpal-ime\\"'), "Onboard should use the Chromium-safe F9 key template for the Fcitx5 toggle");
+  assert(webModeScript.includes('svg_id=\\"LWIN\\"'), "Onboard should keep the input-method toggle in the Compact Super key position");
+  assert(webModeScript.includes('label=\\"中/EN\\"'), "Onboard should label the input-method toggle in Chinese and English");
+  assert(webModeScript.includes('sticky_behavior=\\"lock\\"') && webModeScript.includes('action=\\"double-stroke\\"'), "Onboard should keep the input-method toggle visibly active until the user switches back");
+  assert(webModeScript.includes("gsettings reset org.onboard layout"), "Onboard should fall back to its packaged Compact layout when Fcitx5 is unavailable");
   assert(webModeScript.includes("org.onboard.window.landscape x"), "Onboard should open at the Tikpal keyboard X position without a visible jump");
   assert(webModeScript.includes("org.onboard.window.landscape y"), "Onboard should open at the Tikpal keyboard Y position without a visible jump");
   assert(!webModeScript.slice(webModeScript.indexOf("hide_onboard()"), webModeScript.indexOf("toggle_onboard()")).includes("configure_onboard"), "web mode should not rewrite live Onboard settings while hiding it");

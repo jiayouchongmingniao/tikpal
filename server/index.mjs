@@ -3698,6 +3698,10 @@ async function readWebModeRuntimeState() {
   }
 }
 
+async function shouldSuspendMpcRadioBackgroundRecovery() {
+  return webModeOpenInFlight || Boolean((await readWebModeRuntimeState()).activeProvider);
+}
+
 async function writeWebModeRuntimeState(patch) {
   const current = await readWebModeRuntimeState();
   const next = normalizeWebModeRuntimeState({
@@ -6190,6 +6194,7 @@ async function recoverLateMpcRadioStartFailure(options = {}) {
 let mpcRadioAutoAdvanceInFlight = false;
 
 async function autoAdvanceMpcRadioStation(currentUri, reason = "radio stream failure") {
+  if (await shouldSuspendMpcRadioBackgroundRecovery()) return false;
   if (mpcRadioAutoAdvanceInFlight) {
     return true;
   }
@@ -6222,6 +6227,7 @@ function scheduleMpcRadioLatePlayNudges(targetUri) {
   for (const delayMs of RADIO_LATE_PLAY_NUDGE_DELAYS_MS) {
     const timer = setTimeout(() => {
       void (async () => {
+        if (await shouldSuspendMpcRadioBackgroundRecovery()) return;
         const [currentFileRaw, statusRaw] = await Promise.all([
           runMpc(["--format", "%file%", "current"], { allowFailure: true }),
           runMpc(["status"], { allowFailure: true })
@@ -6265,6 +6271,7 @@ function recoverWeakNetworkMpcRadioIfNeeded(snapshot) {
   if (snapshot?.audio?.currentSource?.id !== "radio") return null;
 
   mpcRadioWeakNetworkRecoveryPromise = (async () => {
+    if (await shouldSuspendMpcRadioBackgroundRecovery()) return false;
     const currentFileRaw = await runMpc(["--format", "%file%", "current"], { allowFailure: true });
     const currentUri = extractMpcCurrentFile(currentFileRaw);
     if (!isStreamUri(currentUri)) return false;

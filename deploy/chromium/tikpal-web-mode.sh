@@ -355,9 +355,48 @@ onboard_visible_windows() {
   done < <(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool search --onlyvisible --name Onboard 2>/dev/null || true)
 }
 
+configure_onboard_input_method_key() {
+  local source_dir="/usr/share/onboard/layouts"
+  local target_dir="${XDG_DATA_HOME:-$HOME/.local/share}/onboard/layouts"
+  local target_layout="$target_dir/Tikpal-Compact.onboard"
+  local temporary_layout="$target_layout.tmp"
+
+  if ! command -v fcitx5-remote >/dev/null 2>&1 \
+    || [[ ! -f "$source_dir/Compact.onboard" ]] \
+    || [[ ! -f "$source_dir/Compact-Alpha.svg" ]] \
+    || [[ ! -f "$source_dir/Compact-Numbers.svg" ]] \
+    || [[ ! -f "$source_dir/Compact-Utils.svg" ]]; then
+    gsettings reset org.onboard layout >/dev/null 2>&1 || true
+    gsettings reset org.onboard key-label-overrides >/dev/null 2>&1 || true
+    return 0
+  fi
+
+  mkdir -p "$target_dir"
+  cp -f "$source_dir/Compact-Alpha.svg" "$source_dir/Compact-Numbers.svg" \
+    "$source_dir/Compact-Utils.svg" "$target_dir/"
+  if ! awk '
+    !done && /group="bottomrow" id="LWIN"/ {
+      sub("id=\"LWIN\"/>", "id=\"F9.tikpal-ime\" svg_id=\"LWIN\" label=\"中/EN\" sticky=\"true\" sticky_behavior=\"lock\" action=\"double-stroke\"/>")
+      done = 1
+    }
+    { print }
+    END { if (!done) exit 1 }
+  ' "$source_dir/Compact.onboard" >"$temporary_layout"; then
+    rm -f "$temporary_layout"
+    gsettings reset org.onboard layout >/dev/null 2>&1 || true
+    gsettings reset org.onboard key-label-overrides >/dev/null 2>&1 || true
+    return 0
+  fi
+  mv -f "$temporary_layout" "$target_layout"
+  gsettings set org.onboard layout "$target_layout" >/dev/null 2>&1 || true
+  gsettings reset org.onboard key-label-overrides >/dev/null 2>&1 || true
+}
+
 configure_onboard() {
   command -v gsettings >/dev/null 2>&1 || return 0
-  local height width x y
+  local height session_bus width x y
+  session_bus="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/user/$(id -u)/bus}"
+  export DBUS_SESSION_BUS_ADDRESS="$session_bus"
   width="$(window_width "$TIKPAL_WEB_MODE_ONBOARD_WINDOW")"
   height="$(window_height "$TIKPAL_WEB_MODE_ONBOARD_WINDOW")"
   x="$(position_x "$TIKPAL_WEB_MODE_ONBOARD_POSITION")"
@@ -373,6 +412,7 @@ configure_onboard() {
   gsettings set org.onboard.window.landscape y "$y" >/dev/null 2>&1 || true
   gsettings set org.onboard.keyboard input-event-source GTK >/dev/null 2>&1 || true
   gsettings set org.onboard.keyboard key-synth XTest >/dev/null 2>&1 || true
+  configure_onboard_input_method_key
 }
 
 window_uses_profile() {

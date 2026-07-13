@@ -1289,6 +1289,7 @@ async function runMpcHifiRuntimePlaybackRecoverySmoke() {
   const fakeMpdLogPath = path.join(workspace, "mpd.log");
   const roomExperienceStatePath = path.join(workspace, "room-experience-state.json");
   const audioSourceMemoryStatePath = path.join(workspace, "audio-source-memory.json");
+  const webModeStatePath = path.join(workspace, "web-mode-state.json");
   const radioUri = "http://radio.example/runtime-restore";
   const otherRadioUri = "http://radio.example/runtime-other";
   const rememberedTrackPath = "Focus/Lo-fi Ambient/FASSounds - Good Night - Lofi Cozy Chill Music - 02m27s - Lo-fi.mp3";
@@ -1450,6 +1451,7 @@ if (process.argv.join(" ").includes("cfg_radio")) {
       TIKPAL_RADIO_LATE_PLAY_NUDGE_DELAYS_MS: "",
       TIKPAL_ROOM_EXPERIENCE_STATE_PATH: roomExperienceStatePath,
       TIKPAL_AUDIO_SOURCE_MEMORY_STATE_PATH: audioSourceMemoryStatePath,
+      TIKPAL_WEB_MODE_STATE_PATH: webModeStatePath,
       TIKPAL_OUTPUT_VOLUME_GET_COMMAND: "",
       TIKPAL_RADIO_XRUN_GRACE_MS: "500",
       TIKPAL_RADIO_XRUN_WINDOW_MS: "2000",
@@ -1537,6 +1539,12 @@ if (process.argv.join(" ").includes("cfg_radio")) {
       "2026-07-02T21:32:10 alsa_output: Decoder is too slow; playing silence to avoid xrun",
       "2026-07-02T21:32:15 alsa_output: Decoder is too slow; playing silence to avoid xrun"
     ].join("\n") + "\n");
+    await writeFile(webModeStatePath, `${JSON.stringify({ activeProvider: "qq_music" }, null, 2)}\n`);
+    await wait(1500);
+    fakeState = JSON.parse(await readFile(fakeMpcStatePath, "utf8"));
+    assert(fakeState.currentFile === radioUri, "mpc Radio background recovery should not auto-advance while Explore is active");
+    assert(fakeState.switchCount === 0, "mpc Radio background recovery should not restart MPD while Explore is active");
+    await writeFile(webModeStatePath, `${JSON.stringify({ activeProvider: null }, null, 2)}\n`);
     let xrunSkippedRadio = null;
     let rememberedAfterXrunSkip = null;
     for (let attempt = 0; attempt < 40; attempt += 1) {
