@@ -29,6 +29,7 @@ fi
 : "${TIKPAL_WEB_MODE_EXTENSION_ENABLED:=1}"
 : "${TIKPAL_WEB_MODE_PROXY_APPLY_TIMEOUT_SECONDS:=5}"
 : "${TIKPAL_WEB_MODE_PROVIDER_BOOTSTRAP_TIMEOUT_SECONDS:=7}"
+: "${TIKPAL_WEB_MODE_PROVIDER_READY_TIMEOUT_SECONDS:=18}"
 : "${TIKPAL_WEB_MODE_LEFT_WINDOW:=1920x720}"
 : "${TIKPAL_WEB_MODE_LEFT_POSITION:=0,0}"
 : "${TIKPAL_WEB_MODE_PANEL_WINDOW:=640x720}"
@@ -37,6 +38,13 @@ fi
 : "${TIKPAL_WEB_MODE_TRANSITION_URL:=http://127.0.0.1:4173/web-mode-transition.html}"
 : "${TIKPAL_WEB_MODE_STAGE_POSITION:=2560,0}"
 : "${TIKPAL_WEB_MODE_STAGE_REVEAL_MS:=650}"
+: "${TIKPAL_WEB_MODE_AUDIO_CROSSFADE_ENABLED:=1}"
+: "${TIKPAL_WEB_MODE_AUDIO_CROSSFADE_MS:=2000}"
+: "${TIKPAL_WEB_MODE_AUDIO_CROSSFADE_HELPER:=$SCRIPT_DIR/../moode/tikpal-web-mode-crossfade.sh}"
+: "${TIKPAL_WEB_MODE_CROSSFADE_CARD:=}"
+: "${TIKPAL_WEB_MODE_CROSSFADE_PCM_A:=tikpal_explore_a}"
+: "${TIKPAL_WEB_MODE_CROSSFADE_PCM_B:=tikpal_explore_b}"
+: "${TIKPAL_WEB_MODE_AUDIO_BUS_STATE_PATH:=$TIKPAL_WEB_MODE_PROFILE_ROOT/active-audio-bus}"
 : "${TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS:=2}"
 : "${TIKPAL_WEB_MODE_DEFAULT_PROXY_URL:=http://192.168.10.103:7897}"
 : "${TIKPAL_WEB_MODE_ONBOARD:=1}"
@@ -222,6 +230,114 @@ wait_for_real_provider_url() {
     attempts=$((attempts - 1))
   done
   return 1
+}
+
+wait_for_provider_ready() {
+  local provider_port="$1"
+  node --experimental-websocket - "$provider_port" "$TIKPAL_WEB_MODE_PROVIDER_READY_TIMEOUT_SECONDS" <<'NODE'
+const [port, timeoutSeconds] = process.argv.slice(2);
+const deadline = Date.now() + Math.max(1, Number(timeoutSeconds) || 18) * 1000;
+const readyExpression = `(() => {
+  if (!document.body || document.readyState === "loading") return false;
+  const textLength = String(document.body.innerText || "").replace(/\\s+/g, " ").trim().length;
+  const candidates = Array.from(document.querySelectorAll("main,nav,header,button,a,input,[role='button'],audio,video")).slice(0, 200);
+  const visibleCount = candidates.filter((element) => {
+    const style = getComputedStyle(element);
+    const rect = element.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" && Number(style.opacity || 1) > 0 && rect.width > 2 && rect.height > 2;
+  }).length;
+  return textLength >= 80 || visibleCount >= 3;
+})()`;
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function evaluate(wsUrl) {
+  return await new Promise((resolve, reject) => {
+    const ws = new WebSocket(wsUrl);
+    const timer = setTimeout(() => {
+      try { ws.close(); } catch {}
+      reject(new Error("CDP readiness timeout"));
+    }, 1000);
+    ws.addEventListener("open", () => {
+      ws.send(JSON.stringify({ id: 1, method: "Runtime.evaluate", params: { expression: readyExpression, returnByValue: true } }));
+    });
+    ws.addEventListener("message", (event) => {
+      const message = JSON.parse(String(event.data));
+      if (message.id !== 1) return;
+      clearTimeout(timer);
+      ws.close();
+      if (message.error) reject(new Error(message.error.message || "CDP readiness failed"));
+      else resolve(message.result?.result?.value === true);
+    });
+    ws.addEventListener("error", () => {
+      clearTimeout(timer);
+      reject(new Error("CDP readiness websocket failed"));
+    });
+  });
+}
+
+let stableChecks = 0;
+while (Date.now() < deadline) {
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(800) });
+    const targets = await response.json();
+    const target = targets.find((item) => item.type === "page" && String(item.url || "").startsWith("https://") && item.webSocketDebuggerUrl);
+    if (target && await evaluate(target.webSocketDebuggerUrl)) {
+      stableChecks += 1;
+      if (stableChecks >= 2) process.exit(0);
+    } else {
+      stableChecks = 0;
+    }
+  } catch {
+    stableChecks = 0;
+  }
+  await sleep(200);
+}
+process.exit(1);
+NODE
+}
+
+crossfade_helper() {
+  TIKPAL_WEB_MODE_ALSA_OUTPUT_DEVICE="$TIKPAL_WEB_MODE_ALSA_OUTPUT_DEVICE" \
+  TIKPAL_WEB_MODE_CROSSFADE_CARD="$TIKPAL_WEB_MODE_CROSSFADE_CARD" \
+  TIKPAL_WEB_MODE_CROSSFADE_PCM_A="$TIKPAL_WEB_MODE_CROSSFADE_PCM_A" \
+  TIKPAL_WEB_MODE_CROSSFADE_PCM_B="$TIKPAL_WEB_MODE_CROSSFADE_PCM_B" \
+    "$TIKPAL_WEB_MODE_AUDIO_CROSSFADE_HELPER" "$@"
+}
+
+crossfade_available() {
+  is_enabled "$TIKPAL_WEB_MODE_AUDIO_CROSSFADE_ENABLED" || return 1
+  [[ -n "$TIKPAL_WEB_MODE_ALSA_OUTPUT_DEVICE" ]] || return 1
+  [[ -x "$TIKPAL_WEB_MODE_AUDIO_CROSSFADE_HELPER" ]] || return 1
+  crossfade_helper check >/dev/null 2>&1
+}
+
+profile_audio_bus() {
+  local profile="$1"
+  local pid command_line
+  while IFS= read -r pid; do
+    [[ "$pid" =~ ^[0-9]+$ && -r "/proc/$pid/cmdline" ]] || continue
+    command_line="$(tr '\0' ' ' < "/proc/$pid/cmdline")"
+    if [[ "$command_line" == *"--alsa-output-device=$TIKPAL_WEB_MODE_CROSSFADE_PCM_A"* ]]; then
+      printf '%s\n' a
+      return 0
+    fi
+    if [[ "$command_line" == *"--alsa-output-device=$TIKPAL_WEB_MODE_CROSSFADE_PCM_B"* ]]; then
+      printf '%s\n' b
+      return 0
+    fi
+  done < <(pgrep -f -- "--user-data-dir=$profile" 2>/dev/null || true)
+  return 1
+}
+
+write_audio_bus_state() {
+  local bus="${1:-}"
+  if [[ "$bus" != "a" && "$bus" != "b" ]]; then
+    rm -f "$TIKPAL_WEB_MODE_AUDIO_BUS_STATE_PATH"
+    return
+  fi
+  mkdir -p "$(dirname "$TIKPAL_WEB_MODE_AUDIO_BUS_STATE_PATH")"
+  printf '%s\n' "$bus" > "$TIKPAL_WEB_MODE_AUDIO_BUS_STATE_PATH"
 }
 
 ensure_chromium_profile_prefs() {
@@ -596,6 +712,7 @@ close_web_mode() {
   close_provider_windows
   close_side_panel
   close_transition_veil
+  write_audio_bus_state ""
   write_runtime_provider_state ""
 }
 
@@ -908,6 +1025,7 @@ open_provider() {
   local current_provider
   local current_profile
   local target_window launch_url extension_enabled=0
+  local current_audio_bus="" target_audio_bus="" target_audio_device="$TIKPAL_WEB_MODE_ALSA_OUTPUT_DEVICE" crossfade_switch=0
   local proxy_line proxy_enabled proxy_url
   url="$(provider_url "$provider")"
   provider_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/$provider"
@@ -924,6 +1042,39 @@ open_provider() {
   if is_enabled "$TIKPAL_WEB_MODE_EXTENSION_ENABLED" && [[ -f "$TIKPAL_WEB_MODE_EXTENSION_DIR/manifest.json" ]]; then
     extension_enabled=1
     launch_url="$TIKPAL_WEB_MODE_TRANSITION_URL?provider=$provider"
+  fi
+
+  if crossfade_available; then
+    if [[ -n "$current_profile" && "$current_profile" != "$provider_profile" ]] && profile_process_exists "$current_profile"; then
+      current_audio_bus="$(profile_audio_bus "$current_profile" || true)"
+    fi
+    if [[ "$current_audio_bus" == "a" ]]; then
+      target_audio_bus="b"
+      crossfade_switch=1
+    elif [[ "$current_audio_bus" == "b" ]]; then
+      target_audio_bus="a"
+      crossfade_switch=1
+    else
+      target_audio_bus="a"
+    fi
+    if [[ "$crossfade_switch" == "1" ]]; then
+      if ! crossfade_helper set "$target_audio_bus" 0 >/dev/null 2>&1; then
+        log "WARN: Explore crossfade bus could not be muted; using direct provider audio"
+        current_audio_bus=""
+        target_audio_bus=""
+        target_audio_device="$TIKPAL_WEB_MODE_ALSA_OUTPUT_DEVICE"
+        crossfade_switch=0
+      else
+        target_audio_device="$(crossfade_helper device "$target_audio_bus")"
+      fi
+    elif crossfade_helper set "$target_audio_bus" 100 >/dev/null 2>&1; then
+      target_audio_device="$(crossfade_helper device "$target_audio_bus")"
+    else
+      log "WARN: Explore crossfade bus could not be initialized; using direct provider audio"
+      target_audio_bus=""
+    fi
+  elif is_enabled "$TIKPAL_WEB_MODE_AUDIO_CROSSFADE_ENABLED"; then
+    log "WARN: Explore crossfade is unavailable; using direct provider audio"
   fi
 
   mkdir -p "$provider_profile"
@@ -955,8 +1106,8 @@ open_provider() {
   if [[ "$extension_enabled" == "1" ]]; then
     args+=("--load-extension=$TIKPAL_WEB_MODE_EXTENSION_DIR")
   fi
-  if [[ -n "$TIKPAL_WEB_MODE_ALSA_OUTPUT_DEVICE" ]]; then
-    args+=("--alsa-output-device=$TIKPAL_WEB_MODE_ALSA_OUTPUT_DEVICE")
+  if [[ -n "$target_audio_device" ]]; then
+    args+=("--alsa-output-device=$target_audio_device")
   fi
   if [[ "$extension_enabled" != "1" && "$proxy_enabled" == "1" && -n "$proxy_url" ]]; then
     args+=("--proxy-server=$proxy_url")
@@ -966,12 +1117,14 @@ open_provider() {
   DISPLAY="$TIKPAL_KIOSK_DISPLAY" "$TIKPAL_CHROMIUM_BIN" "${args[@]}" >/dev/null 2>&1 9>&- &
   target_window="$(wait_for_profile_window "$provider_profile" 70 || true)"
   if [[ -z "$target_window" ]]; then
+    [[ -n "$target_audio_bus" ]] && crossfade_helper set "$target_audio_bus" 0 >/dev/null 2>&1 || true
     close_transition_veil
     close_provider_profile "$provider_profile"
     [[ -n "$current_profile" ]] && start_window_guard "$current_profile" "$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"
     fail "$(provider_label "$provider") did not open"
   fi
   if [[ "$extension_enabled" == "1" ]] && ! wait_for_real_provider_url "$provider_port"; then
+    [[ -n "$target_audio_bus" ]] && crossfade_helper set "$target_audio_bus" 0 >/dev/null 2>&1 || true
     close_transition_veil
     close_provider_profile "$provider_profile"
     if [[ -n "$current_provider" && "$current_profile" != "$provider_profile" ]]; then
@@ -980,14 +1133,33 @@ open_provider() {
     fi
     fail "$(provider_label "$provider") did not enter the provider page within ${TIKPAL_WEB_MODE_PROVIDER_BOOTSTRAP_TIMEOUT_SECONDS}s"
   fi
+  if ! wait_for_provider_ready "$provider_port"; then
+    [[ -n "$target_audio_bus" ]] && crossfade_helper set "$target_audio_bus" 0 >/dev/null 2>&1 || true
+    close_transition_veil
+    close_provider_profile "$provider_profile"
+    if [[ -n "$current_provider" && "$current_profile" != "$provider_profile" ]]; then
+      start_provider_guard "$current_provider" "$current_profile" "$(provider_url "$current_provider")" "$proxy_enabled" "$(provider_debug_port "$current_provider")"
+      start_window_guard "$current_profile" "$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"
+    fi
+    fail "$(provider_label "$provider") did not become ready within ${TIKPAL_WEB_MODE_PROVIDER_READY_TIMEOUT_SECONDS}s"
+  fi
   start_provider_guard "$provider" "$provider_profile" "$url" "$proxy_enabled" "$provider_port"
   tile_window "$target_window" "$TIKPAL_WEB_MODE_LEFT_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
   raise_window "$target_window"
-  sleep "$(awk "BEGIN { printf \"%.3f\", $TIKPAL_WEB_MODE_STAGE_REVEAL_MS / 1000 }")"
+  if [[ "$crossfade_switch" == "1" ]]; then
+    if ! crossfade_helper fade "$current_audio_bus" "$target_audio_bus" "$TIKPAL_WEB_MODE_AUDIO_CROSSFADE_MS"; then
+      log "WARN: Explore crossfade failed; completing the provider switch at full target gain"
+      crossfade_helper set "$target_audio_bus" 100 >/dev/null 2>&1 || true
+      crossfade_helper set "$current_audio_bus" 0 >/dev/null 2>&1 || true
+    fi
+  else
+    sleep "$(awk "BEGIN { printf \"%.3f\", $TIKPAL_WEB_MODE_STAGE_REVEAL_MS / 1000 }")"
+  fi
   close_other_provider_profiles "$provider_profile"
   close_transition_veil
   tile_window "$target_window" "$TIKPAL_WEB_MODE_LEFT_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
   raise_window "$target_window"
+  write_audio_bus_state "$target_audio_bus"
   write_runtime_provider_state "$provider"
   start_window_guard "$provider_profile" "$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"
   log "opened $provider"
@@ -1017,6 +1189,8 @@ check_runtime() {
   log "stage: $TIKPAL_WEB_MODE_STAGE_POSITION"
   log "panel: $TIKPAL_WEB_MODE_PANEL_POSITION $(normalize_window_size "$TIKPAL_WEB_MODE_PANEL_WINDOW")"
   log "audio: ${TIKPAL_WEB_MODE_ALSA_OUTPUT_DEVICE:-default}"
+  log "provider ready timeout: ${TIKPAL_WEB_MODE_PROVIDER_READY_TIMEOUT_SECONDS}s"
+  log "audio crossfade: $TIKPAL_WEB_MODE_AUDIO_CROSSFADE_ENABLED ${TIKPAL_WEB_MODE_AUDIO_CROSSFADE_MS}ms"
   log "window guard: $TIKPAL_WEB_MODE_WINDOW_GUARD"
   log "single provider window: $TIKPAL_WEB_MODE_SINGLE_PROVIDER_WINDOW"
   log "popup blocking: $TIKPAL_WEB_MODE_POPUP_BLOCKING"

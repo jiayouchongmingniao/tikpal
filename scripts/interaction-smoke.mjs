@@ -1504,15 +1504,16 @@ try {
         const panel = document.querySelector('[data-hifi-lyrics-panel]');
         const activeLine = document.querySelector('[data-hifi-lyrics-line][data-hifi-lyrics-active]');
         const ticker = document.querySelector('.ambient-lyrics-ticker');
-        const activeText = activeLine?.textContent?.trim() ?? "";
         return panel !== null
+          && panel.classList.contains('is-static')
           && document.querySelectorAll('[data-hifi-lyrics-line]').length === 5
-          && activeText.includes('Static line')
+          && panel.textContent?.includes('Static line')
+          && activeLine === null
           && ticker === null
           && document.querySelector('[data-hifi-lyrics-controls]') !== null;
       })()
     `,
-    "Hi-Fi static ready lyrics render lyrics wall without ticker"
+    "Hi-Fi static ready lyrics render lyrics wall without ticker or false active-line highlight"
   );
   const noReadyLyricsPatchVersion = await setStatePatchMode(client, "noReadyLyrics");
   await waitForStatePatchRefresh(client, noReadyLyricsPatchVersion, "Hi-Fi no-ready lyrics fixture refreshes");
@@ -1634,16 +1635,17 @@ try {
         const panel = document.querySelector('[data-hifi-lyrics-panel]');
         const activeLine = document.querySelector('[data-hifi-lyrics-line][data-hifi-lyrics-active]');
         const controls = document.querySelector('[data-hifi-lyrics-controls]');
-        const activeText = activeLine?.textContent?.trim() ?? "";
         return panel !== null
+          && panel.classList.contains('is-static')
           && document.querySelector('[data-hifi-centered-now-playing]') === null
-          && activeText.includes('AirPlay fallback')
+          && panel.textContent?.includes('AirPlay fallback')
+          && activeLine === null
           && document.querySelector('.ambient-lyrics-ticker') === null
           && document.querySelector('[data-ambient-lyrics]')?.getAttribute('aria-hidden') === 'true'
           && controls !== null;
       })()
     `,
-    "AirPlay fallback plain lyrics use the shared Hi-Fi lyrics wall without ticker"
+    "AirPlay fallback plain lyrics use a static Hi-Fi wall without false active-line highlight"
   );
   const airplayUntrustedSyncedLyricsPatchVersion = await setStatePatchMode(client, "airplayUntrustedSyncedLyrics");
   await waitForStatePatchRefresh(client, airplayUntrustedSyncedLyricsPatchVersion, "AirPlay untrusted synced lyrics fixture refreshes");
@@ -1653,14 +1655,15 @@ try {
       (() => {
         const panel = document.querySelector('[data-hifi-lyrics-panel]');
         const activeLine = document.querySelector('[data-hifi-lyrics-line][data-hifi-lyrics-active]');
-        const activeText = activeLine?.textContent?.trim() ?? "";
         return panel !== null
+          && panel.classList.contains('is-static')
           && document.querySelector('[data-hifi-centered-now-playing]') === null
-          && activeText.includes('Untrusted AirPlay line one')
+          && panel.textContent?.includes('Untrusted AirPlay line one')
+          && activeLine === null
           && document.querySelector('.ambient-lyrics-ticker') === null;
       })()
     `,
-    "Hi-Fi AirPlay lyrics with an untrusted clock stay on a static safe line"
+    "Hi-Fi AirPlay lyrics with an untrusted clock stay on a static wall without false highlight"
   );
   await wait(1500);
   await expect(
@@ -1668,12 +1671,13 @@ try {
     `
       (() => {
         const activeLine = document.querySelector('[data-hifi-lyrics-line][data-hifi-lyrics-active]');
-        const activeText = activeLine?.textContent?.trim() ?? "";
-        return activeText.includes('Untrusted AirPlay line one')
-          && !activeText.includes('line three');
+        const panel = document.querySelector('[data-hifi-lyrics-panel]');
+        return activeLine === null
+          && panel?.classList.contains('is-static')
+          && panel.textContent?.includes('Untrusted AirPlay line one');
       })()
     `,
-    "Hi-Fi AirPlay lyrics do not advance from an untrusted elapsed clock"
+    "Hi-Fi AirPlay lyrics do not create an active line from an untrusted elapsed clock"
   );
   const airplayEstimatedSyncedLyricsPatchVersion = await setStatePatchMode(client, "airplayEstimatedSyncedLyrics");
   await waitForStatePatchRefresh(client, airplayEstimatedSyncedLyricsPatchVersion, "AirPlay estimated synced lyrics fixture refreshes");
@@ -3504,7 +3508,7 @@ try {
     "document.querySelector('.console-title-block')?.textContent?.includes('Console') && document.querySelector('[data-console-now-playing]') !== null",
     "Console shows the listening status header"
   );
-  await expect(
+  await expectEventually(
     client,
     `
       (() => {
@@ -3800,10 +3804,10 @@ try {
     `
   );
   await expect(client, "document.querySelector('[data-settings-detail=\"web-mode\"]') !== null", "Console Explore drawer opens");
-  await expect(
+  await expectEventually(
     client,
-    "document.querySelector('.web-mode-proxy-field input')?.value.startsWith('http') && document.querySelectorAll('.web-mode-settings-actions button').length === 1 && document.querySelector('.web-mode-settings-actions')?.textContent.includes('Test') && !document.querySelector('.web-mode-settings-actions')?.textContent.includes('Save') && !document.querySelector('.web-mode-settings-actions')?.textContent.includes('Keyboard')",
-    "Console Explore drawer auto-saves proxy settings and keeps only the Test action"
+    "document.querySelector('.web-mode-proxy-field input')?.value.startsWith('http') && !document.querySelector('.web-mode-settings-actions') && ![...document.querySelectorAll('[data-settings-detail=\"web-mode\"] button')].some((button) => ['Test', 'Save', 'Keyboard'].includes(button.textContent?.trim() ?? ''))",
+    "Console Explore drawer auto-saves proxy settings without action buttons"
   );
   await expect(
     client,
@@ -3814,13 +3818,13 @@ try {
   await setInputValue(client, ".web-mode-proxy-field input", "http://127.0.0.1:7896");
   await expectEventually(
     client,
-    "document.querySelector('.settings-detail-header p')?.textContent === 'Saved' && document.querySelector('.web-mode-proxy-field input')?.value === 'http://127.0.0.1:7896'",
+    "document.querySelector('.settings-detail-header p')?.textContent === 'Saved automatically' && document.querySelector('.web-mode-proxy-field input')?.value === 'http://127.0.0.1:7896' && document.querySelector('.web-mode-settings-help')?.textContent.includes('toggle Web Proxy and retry')",
     "Console Explore proxy URL auto-saves without rewriting the input"
   );
   await setInputValue(client, ".web-mode-proxy-field input", originalProxyUrl);
   await expectEventually(
     client,
-    "document.querySelector('.settings-detail-header p')?.textContent === 'Saved'",
+    "document.querySelector('.settings-detail-header p')?.textContent === 'Saved automatically'",
     "Console Explore proxy URL restores after the auto-save check"
   );
   await evaluate(

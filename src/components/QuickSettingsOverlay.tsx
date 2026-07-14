@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Airplay, Bluetooth, Captions, Cast, Clock3, Cpu, Database, EthernetPort, Eye, EyeOff, Globe2, HardDrive, Info, Monitor, Moon, Music2, Palette, Power, Radio as RadioIcon, RotateCcw, Server, SlidersHorizontal, Target, Type, Usb, Volume2, Waves } from "lucide-react";
-import { fetchWebModeState, sendWebModeAction, testWebModeProxy, updateWebModeSettings } from "../api/tikpalClient";
+import { fetchWebModeState, sendWebModeAction, updateWebModeSettings } from "../api/tikpalClient";
 import type { TikpalDataStatus } from "../hooks/useTikpalState";
 import { useOverlayReturnGesture } from "../hooks/useOverlayReturnGesture";
 import type { AudioState, FontTheme, LyricsFontSize, NightScheduleState, PlaybackSummary, RoomExperienceActionRequest, RoomExperienceState, RoomMode, RuntimeState, SurfaceTheme, SystemActionType, SystemState, WebModeState } from "../types";
@@ -225,7 +225,6 @@ export function QuickSettingsOverlay({
   const [webModeState, setWebModeState] = useState<WebModeState | null>(null);
   const [webModeProxyEnabled, setWebModeProxyEnabled] = useState(true);
   const [webModeProxyUrl, setWebModeProxyUrl] = useState("");
-  const [pendingWebModeSettings, setPendingWebModeSettings] = useState<"test" | null>(null);
   const [webModeError, setWebModeError] = useState<string | null>(null);
   const [pendingRoomShortcut, setPendingRoomShortcut] = useState<RoomMode | "explore" | null>(null);
   const [roomShortcutError, setRoomShortcutError] = useState<string | null>(null);
@@ -258,7 +257,6 @@ export function QuickSettingsOverlay({
       setPendingAction(null);
       setPendingBrightness(null);
       setPendingNight(false);
-      setPendingWebModeSettings(null);
       setActionError({
         library_scan: null,
         reboot: null,
@@ -291,7 +289,7 @@ export function QuickSettingsOverlay({
   }, [active]);
 
   useEffect(() => {
-    if (!active || !webModeState || pendingWebModeSettings === "test") return undefined;
+    if (!active || !webModeState) return undefined;
 
     const normalizedProxyUrl = normalizeProxyUrl(webModeProxyUrl);
     const enabledChanged = webModeProxyEnabled !== webModeState.settings.proxyEnabled;
@@ -316,7 +314,7 @@ export function QuickSettingsOverlay({
         .then((nextState) => {
           if (cancelled) return;
           setWebModeState(nextState);
-          setWebModeError("Saved");
+          setWebModeError("Saved automatically");
         })
         .catch((error) => {
           if (!cancelled) setWebModeError(error instanceof Error ? error.message : "Explore settings save failed");
@@ -327,7 +325,7 @@ export function QuickSettingsOverlay({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [active, pendingWebModeSettings, webModeProxyEnabled, webModeProxyUrl, webModeState]);
+  }, [active, webModeProxyEnabled, webModeProxyUrl, webModeState]);
 
   const librarySourceKind = system.library.source.trim().toLowerCase();
   const libraryTrackCount = Math.max(0, system.library.trackCount);
@@ -561,30 +559,6 @@ export function QuickSettingsOverlay({
       setNightError(error instanceof Error ? error.message : "Night schedule update failed");
     } finally {
       setPendingNight(false);
-    }
-  }
-
-  async function handleWebModeProxyTest() {
-    if (pendingWebModeSettings) return;
-    const normalizedProxyUrl = normalizeProxyUrl(webModeProxyUrl);
-    if (webModeProxyEnabled && normalizedProxyUrl === null) {
-      setWebModeError("Enter a complete proxy URL");
-      return;
-    }
-    setPendingWebModeSettings("test");
-    setWebModeError(null);
-    try {
-      const nextState = await updateWebModeSettings({
-        proxyEnabled: webModeProxyEnabled,
-        ...(normalizedProxyUrl === null ? {} : { proxyUrl: normalizedProxyUrl })
-      });
-      setWebModeState(nextState);
-      const result = await testWebModeProxy();
-      setWebModeError(result.message);
-    } catch (error) {
-      setWebModeError(error instanceof Error ? error.message : "Proxy test failed");
-    } finally {
-      setPendingWebModeSettings(null);
     }
   }
 
@@ -835,7 +809,6 @@ export function QuickSettingsOverlay({
   }
 
   function renderWebModeDetail() {
-    const busy = pendingWebModeSettings !== null;
     const statusText = webModeError
       ?? (webModeState?.settings.proxyEnabled ? webModeState.settings.proxyUrl : "Direct browser access");
 
@@ -857,7 +830,6 @@ export function QuickSettingsOverlay({
             className={`night-toggle ${webModeProxyEnabled ? "is-active" : ""}`}
             type="button"
             aria-pressed={webModeProxyEnabled}
-            disabled={busy}
             onClick={() => setWebModeProxyEnabled((enabled) => !enabled)}
           >
             <Globe2 size={26} />
@@ -872,18 +844,13 @@ export function QuickSettingsOverlay({
             <input
               type="url"
               value={webModeProxyUrl}
-              disabled={busy}
               inputMode="url"
               spellCheck={false}
               onChange={(event) => setWebModeProxyUrl(event.currentTarget.value)}
             />
           </label>
 
-          <div className="display-brightness-controls web-mode-settings-actions" role="group" aria-label="Explore controls">
-            <button className="display-brightness-step" type="button" disabled={busy} onClick={() => void handleWebModeProxyTest()}>
-              {pendingWebModeSettings === "test" ? "Testing..." : "Test"}
-            </button>
-          </div>
+          <p className="web-mode-settings-help">Saves automatically. If a provider won’t open, toggle Web Proxy and retry.</p>
         </div>
       </section>
     );

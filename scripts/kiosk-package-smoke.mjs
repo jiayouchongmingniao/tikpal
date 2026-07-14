@@ -256,6 +256,7 @@ async function run() {
   assert(extensionContent.includes("window.location.reload()"), "provider pages should refresh after a proxy revision change");
   assert(extensionContent.includes("window.location.replace(provider.url)"), "provider bootstrap should navigate only after proxy sync succeeds");
   assert(extensionContent.includes('chrome.runtime.sendMessage({ type: "keyboard", enabled, force }'), "Explore extension should distinguish new input focus from keyboard hide requests");
+  assert(extensionContent.includes("suno\\.com") && extensionContent.includes('event.type === "focusin" && !allowProgrammaticInputFocus'), "Suno should ignore page-driven autofocus until the user taps an input");
   assert(extensionContent.includes("editableTarget(document.activeElement)"), "Explore extension should hide Onboard after provider input focus ends");
   assert(!extensionContent.includes("if (document.hasFocus() && editableTarget(document.activeElement)) requestKeyboard(true);"), "Explore extension should not reopen Onboard after its own close button hides it");
   assert(extensionBackground.includes("setKeyboardVisible"), "Explore extension background should forward keyboard actions to the loopback API");
@@ -458,6 +459,7 @@ async function run() {
   assert(webModeCheck.stdout.includes("proxy: enabled http://192.168.10.103:7897"), "web mode should default to the HTTP development proxy");
 
   assert(!quickSettingsSource.includes("handleWebModeSettingsSave"), "Explore settings should auto-save without a Save button");
+  assert(!quickSettingsSource.includes("handleWebModeProxyTest"), "Explore settings should not need a manual Test button");
   assert(quickSettingsSource.includes("Enter a complete proxy URL"), "Explore auto-save should wait for a complete proxy URL");
 
   const providerGuardCheck = spawnSync(process.execPath, ["deploy/chromium/tikpal-web-mode-guard.mjs", "--check"], {
@@ -495,6 +497,8 @@ async function run() {
   assert(providerGuardSource.includes("active.shadowRoot?.activeElement"), "provider focus polling should see focused text inputs inside shadow DOM");
   assert(providerGuardSource.includes('querySelectorAll?.("iframe")'), "provider focus polling should scan same-origin iframe focus");
   assert(providerGuardSource.includes("state.focused && !previous.focused"), "provider navigation should surface Onboard when text focus arrives before listener installation");
+  assert(providerGuardSource.includes('const allowProgrammaticInputFocus = providerId !== "suno"'), "provider guard should suppress Suno page-driven autofocus");
+  assert(providerGuardSource.includes("allowProgrammaticInputFocus && state.focused && !previous.focused"), "Suno polling should wait for an explicit input interaction before showing Onboard");
   assert(providerGuardSource.includes("keepEditableFocus"), "provider focus guard should keep Spotify-style inputs focused after Onboard opens");
   assert(providerGuardSource.includes("outsidePointerDown"), "provider focus guard should still hide Onboard when tapping outside inputs");
   assert(providerGuardSource.includes("lastOnboardActionMs"), "provider focus guard should throttle repeated keyboard show while inputs stay focused");

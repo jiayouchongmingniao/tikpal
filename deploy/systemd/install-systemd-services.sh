@@ -92,6 +92,13 @@ if [[ "$INSTALL_KIOSK" -eq 1 ]]; then
     chown "$SERVICE_USER":"$SERVICE_USER" "$APP_DIR/.env.kiosk" || true
     echo "created $APP_DIR/.env.kiosk from example"
   fi
+  web_mode_audio_device="$(sed -n 's/^TIKPAL_WEB_MODE_ALSA_OUTPUT_DEVICE=//p' "$APP_DIR/.env.kiosk" | tail -n 1)"
+  web_mode_audio_device="${web_mode_audio_device%\"}"
+  web_mode_audio_device="${web_mode_audio_device#\"}"
+  if [[ -n "$web_mode_audio_device" && -x "$APP_DIR/deploy/moode/tikpal-web-mode-crossfade.sh" ]]; then
+    TIKPAL_WEB_MODE_ALSA_OUTPUT_DEVICE="$web_mode_audio_device" \
+      "$APP_DIR/deploy/moode/tikpal-web-mode-crossfade.sh" install
+  fi
 fi
 
 for policy_dir in /etc/chromium/policies/managed /etc/chromium-browser/policies/managed; do

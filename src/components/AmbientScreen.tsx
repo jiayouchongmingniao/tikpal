@@ -437,14 +437,15 @@ export function AmbientScreen({
     const activeIndex = syncedActiveIndex >= 0
       ? syncedActiveIndex
       : staticLyricsLineIndex % lyricEntries.length;
+    const synced = syncedActiveIndex >= 0;
 
     return {
       activeIndex,
-      synced: syncedActiveIndex >= 0,
+      synced,
       lines: lyricEntries.map((line, index) => ({
         id: `${lyrics.trackKey ?? "lyrics"}-${line.index}`,
         text: line.text,
-        active: index === activeIndex,
+        active: synced && index === activeIndex,
         distance: Math.abs(index - activeIndex)
       }))
     };

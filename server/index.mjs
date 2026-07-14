@@ -7747,40 +7747,6 @@ function buildBluetoothSyncedLyricsTiming(lines, durationMs) {
   };
 }
 
-function buildEstimatedTimedLyrics(lines, durationMs) {
-  if (!Number.isFinite(durationMs) || durationMs < 30_000 || lines.length < 2) {
-    return [];
-  }
-
-  const introMs = Math.min(12_000, Math.max(2_500, Math.round(durationMs * 0.045)));
-  const outroMs = Math.min(8_000, Math.max(1_500, Math.round(durationMs * 0.035)));
-  const availableMs = Math.max(lines.length * 400, durationMs - introMs - outroMs);
-  const weights = lines.map((line) => {
-    const wordCount = normalizeMetadataValue(line.text).split(/\s+/).filter(Boolean).length;
-    return Math.max(1.2, Math.min(5.5, 0.8 + wordCount * 0.34));
-  });
-  const totalWeight = weights.reduce((total, weight) => total + weight, 0) || 1;
-  let consumedWeight = 0;
-
-  return lines.map((line, index) => {
-    const isLast = index === lines.length - 1;
-    const startMs = Math.min(
-      durationMs,
-      Math.round(introMs + (availableMs * consumedWeight) / totalWeight)
-    );
-    consumedWeight += weights[index];
-    const endMs = isLast
-      ? durationMs
-      : Math.min(durationMs, Math.round(introMs + (availableMs * consumedWeight) / totalWeight));
-
-    return {
-      ...line,
-      startMs,
-      endMs
-    };
-  });
-}
-
 function buildDisplayableLyricsLines(lyricsBody, candidate) {
   const syncedLines = parseSyncedLyrics(lyricsBody?.syncedLyrics);
   const plainLines = parseUnsyncedLyrics(lyricsBody?.plainLyrics);
@@ -7802,15 +7768,6 @@ function buildDisplayableLyricsLines(lyricsBody, candidate) {
 
     const staticLines = parseBluetoothStaticLyrics(lyricsBody?.plainLyrics);
     const displayLines = staticLines.length > 0 ? staticLines : convertSyncedLinesToStaticLines(syncedLines);
-    const estimatedLines = candidate.playbackClock ? buildEstimatedTimedLyrics(displayLines, candidate.durationMs) : [];
-    if (estimatedLines.length > 0) {
-      return {
-        synced: true,
-        timingStrategy: "estimated_plain",
-        lines: estimatedLines
-      };
-    }
-
     return {
       synced: false,
       timingStrategy: "plain_static",
@@ -8245,8 +8202,9 @@ async function fetchLyricsBodyFromLrclib(candidate) {
     if (!response.ok) {
       throw new Error(`LRCLIB search failed: ${response.status}`);
     }
+    const matches = Array.isArray(body) ? body.filter(acceptsLyricsBody) : [];
     return {
-      lyricsBody: Array.isArray(body) ? body.find(acceptsLyricsBody) ?? null : null,
+      lyricsBody: matches.find((entry) => parseSyncedLyrics(entry?.syncedLyrics).length > 0) ?? matches[0] ?? null,
       noMatch: true
     };
   };
@@ -8312,7 +8270,8 @@ async function fetchLyricsBodyFromLrclib(candidate) {
         return { lyricsBody: null, noMatch: false, error };
       }
     }));
-    const matched = results.find((result) => result.lyricsBody)?.lyricsBody;
+    const matches = results.map((result) => result.lyricsBody).filter(Boolean);
+    const matched = matches.find((entry) => parseSyncedLyrics(entry?.syncedLyrics).length > 0) ?? matches[0];
     if (matched) return matched;
     if (results.some((result) => result.noMatch)) return null;
     const error = results.find((result) => result.error)?.error;

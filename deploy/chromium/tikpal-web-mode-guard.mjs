@@ -10,6 +10,7 @@ const proxyMode = process.env.TIKPAL_WEB_MODE_PROXY_MODE === "proxy" ? "proxy" :
 const errorPageBaseUrl = process.env.TIKPAL_WEB_MODE_ERROR_PAGE_URL || "http://127.0.0.1:4173/web-mode-error.html";
 const qqAutoConfirm = /^(1|true|yes|on|enabled)$/i.test(process.env.TIKPAL_WEB_MODE_QQ_AUTO_CONFIRM || "1");
 const onboardAutoFocus = /^(1|true|yes|on|enabled)$/i.test(process.env.TIKPAL_WEB_MODE_ONBOARD_AUTO_FOCUS || "1");
+const allowProgrammaticInputFocus = providerId !== "suno";
 const launcherPath = fileURLToPath(new URL("./tikpal-web-mode.sh", import.meta.url));
 const keyboardActionUrl = `http://127.0.0.1:${process.env.TIKPAL_API_PORT || "8787"}/api/v1/web-mode/actions`;
 const emptyPageTimeoutMs = Math.max(5, Number.parseInt(process.env.TIKPAL_WEB_MODE_EMPTY_PAGE_ERROR_SECONDS || "18", 10) || 18) * 1000;
@@ -197,6 +198,7 @@ const inputFocusGuardScript = `(() => {
   window.__tikpalInputFocusHideRequest = 0;
   const selector = ${JSON.stringify(onboardInputSelector)};
   const keyboardActionUrl = ${JSON.stringify(keyboardActionUrl)};
+  const allowProgrammaticInputFocus = ${JSON.stringify(allowProgrammaticInputFocus)};
   let lastEditable = null;
   let lastKeyboardEnabled = null;
   let lastKeyboardRequestMs = 0;
@@ -230,6 +232,7 @@ const inputFocusGuardScript = `(() => {
   const isMultiline = (target) => Boolean(target && (target.matches("textarea,[contenteditable='true']") || target.getAttribute("aria-multiline") === "true"));
   const requestShow = (event) => {
     if (!document.hasFocus()) return;
+    if (event.type === "focusin" && !allowProgrammaticInputFocus) return;
     const path = typeof event.composedPath === "function" ? event.composedPath() : [event.target];
     const target = path.map(editableTarget).find(Boolean);
     if (!target) return;
@@ -337,7 +340,7 @@ async function runInputFocusKeyboard(targets) {
     const previous = inputFocusRequests.get(target.id) || { showRequest: 0, hideRequest: 0, focused: false, url: target.url };
     anyFocused ||= state.focused;
     wasFocused ||= previous.focused;
-    shouldShow ||= state.showRequest > previous.showRequest || (state.focused && !previous.focused);
+    shouldShow ||= state.showRequest > previous.showRequest || (allowProgrammaticInputFocus && state.focused && !previous.focused);
     shouldHide ||= state.hideRequest > previous.hideRequest || (previous.url !== target.url && !state.focused);
     inputFocusRequests.set(target.id, { ...state, url: target.url });
   }

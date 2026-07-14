@@ -587,6 +587,14 @@ function createProviderServer() {
             artistName: "Sam Fischer",
             albumName: "Not a Hobby",
             duration: 60,
+            syncedLyrics: null,
+            plainLyrics: "A matching plain result should not outrank real timestamps"
+          },
+          {
+            trackName: track,
+            artistName: "Sam Fischer",
+            albumName: "Not a Hobby",
+            duration: 60,
             syncedLyrics: "[00:05.00]I've been seeing lonely people in crowded rooms\n[00:21.00]Covering their old heartbreaks with new tattoos\n[00:42.00]It's all about smoke screens and cigarettes\n[01:14.00]This city is gonna break my heart\n[01:46.00]This city is gonna love me then leave me alone",
             plainLyrics: "I've been seeing lonely people in crowded rooms\nCovering their old heartbreaks with new tattoos\nIt's all about smoke screens and cigarettes\nThis city is gonna break my heart"
           }
@@ -3326,6 +3334,7 @@ appendFileSync(${JSON.stringify(fakeBluetoothTransportLogPath)}, action + "\\n")
       artist: "Fallback Artist"
     });
     assert(fallbackLyrics.recognitionProvider === "lyricsovh", "AirPlay fallback lyrics should report lyricsovh provider");
+    assert(fallbackLyrics.synced === false && fallbackLyrics.timingStrategy === "plain_static", "AirPlay plain lyrics should stay static without provider timestamps");
     assert(fallbackLyrics.lines.some((line) => line.text.includes("Fallback provider line one")), "AirPlay fallback lyrics should expose lyrics.ovh plain lyrics");
     assert(!fallbackLyrics.lines.some((line) => line.text.includes("Wrong fallback line")), "AirPlay fallback lyrics should still reject wrong-artist LRCLIB results");
 
@@ -3350,6 +3359,7 @@ appendFileSync(${JSON.stringify(fakeBluetoothTransportLogPath)}, action + "\\n")
       artist: "Custom Artist"
     });
     assert(customLyrics.recognitionProvider === "custom", "AirPlay custom lyrics should report custom provider");
+    assert(customLyrics.synced === false && customLyrics.timingStrategy === "plain_static", "custom plain lyrics should stay static without provider timestamps");
     assert(customLyrics.lines.some((line) => line.text.includes("Custom provider line one")), "AirPlay custom lyrics should expose plain custom lyrics");
 
     await writeAirplayMetadata({

@@ -12,6 +12,7 @@
     "input[type='tel']",
     "input[type='number']"
   ].join(",");
+  const allowProgrammaticInputFocus = !/(^|\.)suno\.com$/i.test(window.location.hostname);
   let lastKeyboardEnabled = null;
   let lastKeyboardRequestMs = 0;
   const editableTarget = (target) => target?.closest?.(inputSelector) || null;
@@ -24,6 +25,7 @@
   };
   const requestShow = (event) => {
     if (!document.hasFocus()) return;
+    if (event.type === "focusin" && !allowProgrammaticInputFocus) return;
     const path = typeof event.composedPath === "function" ? event.composedPath() : [event.target];
     if (path.some(editableTarget)) requestKeyboard(true, true);
   };
