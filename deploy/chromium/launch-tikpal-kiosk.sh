@@ -34,6 +34,7 @@ fi
 : "${TIKPAL_KIOSK_ACTIVE_DISPLAY_MODE:=$TIKPAL_KIOSK_DISPLAY_MODE}"
 : "${TIKPAL_KIOSK_XRANDR_MODE:=2560x720}"
 : "${TIKPAL_KIOSK_XRANDR_OUTPUT:=}"
+: "${TIKPAL_KIOSK_XRANDR_CLONE_OUTPUTS:=}"
 : "${TIKPAL_KIOSK_X_COMMAND_TIMEOUT_SECONDS:=5}"
 : "${TIKPAL_CHROMIUM_BIN:=/usr/lib/chromium-browser/chromium-browser}"
 : "${TIKPAL_CHROMIUM_PROFILE_DIR:=$HOME/.config/tikpal-chromium-kiosk}"
@@ -192,7 +193,13 @@ export DISPLAY="$TIKPAL_KIOSK_DISPLAY"
 
 if [[ "$TIKPAL_KIOSK_ACTIVE_DISPLAY_MODE" != "virtual" && "$TIKPAL_KIOSK_XRANDR_MODE" != "none" ]] && command -v xrandr >/dev/null 2>&1; then
   if [[ -n "$TIKPAL_KIOSK_XRANDR_OUTPUT" ]]; then
-    run_x_command xrandr --output "$TIKPAL_KIOSK_XRANDR_OUTPUT" --mode "$TIKPAL_KIOSK_XRANDR_MODE" || log "WARN: xrandr mode set failed or timed out"
+    XRANDR_ARGS=(--output "$TIKPAL_KIOSK_XRANDR_OUTPUT" --mode "$TIKPAL_KIOSK_XRANDR_MODE" --primary)
+    if [[ -n "$TIKPAL_KIOSK_XRANDR_CLONE_OUTPUTS" ]]; then
+      for clone_output in $TIKPAL_KIOSK_XRANDR_CLONE_OUTPUTS; do
+        XRANDR_ARGS+=(--output "$clone_output" --mode "$TIKPAL_KIOSK_XRANDR_MODE" --same-as "$TIKPAL_KIOSK_XRANDR_OUTPUT")
+      done
+    fi
+    run_x_command xrandr "${XRANDR_ARGS[@]}" || log "WARN: xrandr mode set failed or timed out"
   else
     run_x_command xrandr -s "$TIKPAL_KIOSK_XRANDR_MODE" || log "WARN: xrandr mode set failed or timed out"
   fi
