@@ -338,6 +338,8 @@ async function run() {
   assert(webModeScript.includes("show-force"), "new provider input focus should clear manual keyboard suppression");
   assert(webModeScript.includes("show-force) with_web_mode_lock force_onboard"), "keyboard requests should serialize cold Onboard startup");
   assert(webModeScript.indexOf('focus_window "$active_window"') < webModeScript.indexOf("position_onboard", webModeScript.indexOf("ensure_onboard()")), "web mode should focus the provider before mapping Onboard");
+  assert(webModeScript.includes("raise_window_without_focus"), "web mode guard should raise provider and side-panel windows without stealing input focus");
+  assert(webModeScript.includes('raise_window_without_focus "$window"'), "web mode guard should keep tiled provider windows above the full-screen kiosk");
   assert(webModeScript.includes('pkill -KILL -f -- "--user-data-dir=$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"'), "Explore close should force-exit a side panel that ignores graceful shutdown");
   assert(webModeScript.includes("org.onboard.auto-show enabled false"), "Tikpal focus events should own Onboard visibility");
   assert(webModeScript.includes("org.onboard show-status-icon false"), "web mode should hide Onboard's status icon");

@@ -840,6 +840,12 @@ raise_window() {
   DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowraise "$window" windowactivate "$window" >/dev/null 2>&1 || true
 }
 
+raise_window_without_focus() {
+  local window="$1"
+  [[ -n "$window" ]] || return 0
+  DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowraise "$window" >/dev/null 2>&1 || true
+}
+
 first_window_for_profile() {
   local profile="$1"
   local window pid geometry width height area best_window="" best_area=0
@@ -910,6 +916,7 @@ tile_visible_web_mode_windows() {
 
     if process_tree_uses_profile "$pid" "$panel_profile"; then
       tile_window "$window" "$TIKPAL_WEB_MODE_PANEL_POSITION" "$TIKPAL_WEB_MODE_PANEL_WINDOW"
+      raise_window_without_focus "$window"
       continue
     fi
     if is_ad_window_title "$title"; then
@@ -918,9 +925,11 @@ tile_visible_web_mode_windows() {
     fi
     if process_tree_uses_profile "$pid" "$provider_profile"; then
       tile_window "$window" "$TIKPAL_WEB_MODE_LEFT_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
+      raise_window_without_focus "$window"
       provider_windows+=("$window")
     elif [[ -n "$title" ]] && ! is_tikpal_window_title "$title"; then
       tile_window "$window" "$TIKPAL_WEB_MODE_LEFT_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
+      raise_window_without_focus "$window"
       provider_windows+=("$window")
     fi
   done < <(visible_chromium_windows)
@@ -941,6 +950,7 @@ tile_visible_web_mode_windows() {
     DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowclose "$window" >/dev/null 2>&1 || true
   done
   tile_window "$keep_window" "$TIKPAL_WEB_MODE_LEFT_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
+  raise_window_without_focus "$keep_window"
 }
 
 start_window_guard() {
