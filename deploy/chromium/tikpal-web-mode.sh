@@ -1233,6 +1233,7 @@ apply_proxy_settings() {
 }
 
 check_runtime() {
+  local xdotool_bin
   log "app dir: $APP_DIR"
   log "display: $TIKPAL_KIOSK_DISPLAY"
   log "chromium: $TIKPAL_CHROMIUM_BIN"
@@ -1261,6 +1262,9 @@ check_runtime() {
   log "settings: $TIKPAL_WEB_MODE_SETTINGS_PATH"
   read_proxy_settings | awk -F '\t' '{ printf("[tikpal-web-mode] proxy: %s %s\n", $1 == "1" ? "enabled" : "disabled", $2) }'
   [[ -x "$TIKPAL_CHROMIUM_BIN" ]] || fail "Chromium binary is missing or not executable"
+  xdotool_bin="$(command -v xdotool || true)"
+  [[ -n "$xdotool_bin" ]] || fail "xdotool is required for Explore provider window detection; install with: sudo apt-get install -y xdotool"
+  log "xdotool: $xdotool_bin"
   log "check passed"
 }
 

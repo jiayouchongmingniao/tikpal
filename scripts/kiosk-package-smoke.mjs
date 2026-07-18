@@ -13,6 +13,7 @@ const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..")
 const requiredFiles = [
   "server/index.mjs",
   "server/web.mjs",
+  "docs/06-deployment/raspberry-pi-kiosk-deploy-v1.md",
   "deploy/chromium/launch-tikpal-kiosk.sh",
   "deploy/chromium/start-tikpal-kiosk-devtools-proxy.sh",
   "deploy/chromium/start-tikpal-kiosk-display.sh",
@@ -152,6 +153,7 @@ async function run() {
   const kioskWatchdogUnit = await readFile(path.join(ROOT, "deploy/systemd/tikpal-kiosk-watchdog.service"), "utf8");
   const kioskWatchdogTimer = await readFile(path.join(ROOT, "deploy/systemd/tikpal-kiosk-watchdog.timer"), "utf8");
   const systemdInstaller = await readFile(path.join(ROOT, "deploy/systemd/install-systemd-services.sh"), "utf8");
+  const deployDoc = await readFile(path.join(ROOT, "docs/06-deployment/raspberry-pi-kiosk-deploy-v1.md"), "utf8");
   assert(apiUnit.includes("network.target"), "api unit should use network.target");
   assert(!apiUnit.includes("network-online.target"), "api unit should not wait for network-online.target");
   assert(webUnit.includes("server/web.mjs"), "web unit should use the production static server");
@@ -171,9 +173,15 @@ async function run() {
   assert(systemdInstaller.includes("tikpal-kiosk-watchdog.service"), "systemd installer should install the kiosk watchdog service");
   assert(systemdInstaller.includes("tikpal-kiosk-watchdog.timer"), "systemd installer should install and enable the kiosk watchdog timer");
   assert(systemdInstaller.includes("tikpal-locale-enable.sh"), "systemd installer should normalize SSH locale handling on new Pi installs");
+  assert(systemdInstaller.includes("KIOSK_PACKAGES=("), "systemd installer should own new-Pi kiosk package installation");
+  assert(systemdInstaller.includes("xdotool"), "systemd installer should install xdotool for Explore provider window detection");
+  assert(systemdInstaller.includes("TIKPAL_INSTALL_KIOSK_PACKAGES"), "systemd installer should expose an escape hatch for kiosk package installation");
   assert(systemdInstaller.includes('loginctl enable-linger "$SERVICE_USER"'), "systemd installer should keep the Onboard user service alive between API calls");
   assert(systemdInstaller.includes('rm -f "$policy_dir/tikpal-kiosk-managed.json"'), "systemd installer should remove the legacy Tikpal extension-blocking policy file");
   assert(kioskUnit.includes("TIKPAL_KIOSK_SKIP_ENV_SOURCE=1"), "kiosk unit should preserve systemd EnvironmentFile override order");
+  assert(deployDoc.includes("install-systemd-services.sh --enable-kiosk") && deployDoc.includes("including `xdotool`"), "Pi deployment docs should route new kiosk dependencies through the installer");
+  assert(deployDoc.includes("onboard wmctrl xdotool fcitx5"), "Pi Explore install docs should include xdotool for manual provider window detection setup");
+  assert(deployDoc.includes("make sure `xdotool` is installed"), "Explore troubleshooting docs should call out missing xdotool when QQ only leaves the side panel");
 
   const webSmokeDir = mkdtempSync(path.join(tmpdir(), "tikpal-web-surfaces-"));
   writeFileSync(path.join(webSmokeDir, "index.html"), "<!doctype html><html><head></head><body>Tikpal</body></html>");
@@ -301,6 +309,7 @@ async function run() {
   assert(webModeCrossfadeScript.includes('configured_base_pcm="${TIKPAL_WEB_MODE_ALSA_OUTPUT_DEVICE:-auto}"'), "Explore crossfade should default to auto ALSA output detection");
   assert(!webModeCrossfadeScript.includes("BT66"), "Explore crossfade should not pin one ALSA card id");
   assert(webModeScript.includes('open_provider "${2:-qq_music}"'), "web mode should default initial Explore launch to QQ Music");
+  assert(webModeScript.includes("xdotool is required for Explore provider window detection"), "web mode --check should fail clearly when xdotool is missing");
   assert(webModeScript.includes("window-guard.pid"), "web mode should track the persistent window guard pid");
   assert(webModeScript.includes('node --experimental-websocket "$helper"'), "web mode should enable the Node 20 WebSocket API for the provider guard");
   assert(webModeScript.includes('flock -x -w "$TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS"'), "web mode should not wait forever on provider switch locks");
@@ -438,10 +447,13 @@ async function run() {
   assert(skipEnvCheck.stdout.includes("window: 2560x720"), "launcher should preserve systemd-provided window when env sourcing is skipped");
 
   const webModeCheckDir = mkdtempSync(path.join(tmpdir(), "tikpal-web-mode-check-"));
+  const fakeXdoToolDir = mkdtempSync(path.join(tmpdir(), "tikpal-web-mode-bin-"));
+  writeFileSync(path.join(fakeXdoToolDir, "xdotool"), "#!/usr/bin/env sh\nexit 0\n", { mode: 0o755 });
   const webModeCheck = spawnSync("bash", ["deploy/chromium/tikpal-web-mode.sh", "--check"], {
     cwd: ROOT,
     env: {
       ...process.env,
+      PATH: `${fakeXdoToolDir}:${process.env.PATH ?? ""}`,
       TIKPAL_CHROMIUM_BIN: process.execPath,
       TIKPAL_KIOSK_XRANDR_MODE: "none",
       TIKPAL_KIOSK_SKIP_ENV_SOURCE: "1",
@@ -464,6 +476,7 @@ async function run() {
   assert(webModeCheck.stdout.includes("provider guard: 1"), "web mode should enable the provider guard by default");
   assert(webModeCheck.stdout.includes("provider hang monitor: 1"), "web mode should suppress provider unresponsive dialogs");
   assert(webModeCheck.stdout.includes("switch lock timeout: 2s"), "web mode should report the bounded provider switch lock timeout");
+  assert(webModeCheck.stdout.includes(`xdotool: ${path.join(fakeXdoToolDir, "xdotool")}`), "web mode --check should report the xdotool it will use");
   assert(webModeCheck.stdout.includes("error page: http://127.0.0.1:4173/web-mode-error.html"), "web mode should report the friendly error page URL");
   assert(webModeCheck.stdout.includes("transition page: http://127.0.0.1:4173/web-mode-transition.html"), "web mode should report the staged switch transition page");
   assert(webModeCheck.stdout.includes("onboard: 500,420 900,280"), "web mode should place the full Onboard keyboard near provider login inputs");

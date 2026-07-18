@@ -1656,6 +1656,10 @@ async function runMpcLocalLibraryPathSmoke(roomExperienceStatePath) {
   const fakeMpcStatePath = path.join(workspace, "mpc-state.json");
   const fakeExternalDisableLogPath = path.join(workspace, "external-disable.log");
   const fakeExternalDisableCommandPath = path.join(workspace, "external-disable.mjs");
+  const fakeWebModeLogPath = path.join(workspace, "web-mode.log");
+  const fakeWebModeCommandPath = path.join(workspace, "web-mode-command.mjs");
+  const fakeWebModeSettingsPath = path.join(workspace, "web-mode-settings.json");
+  const fakeWebModeStatePath = path.join(workspace, "web-mode-state.json");
   const fakeAudioSourceMemoryStatePath = path.join(workspace, "audio-source-memory.json");
   const fakeMpcTracks = [
     "Codex/Focus/Lo-fi Ambient/FASSounds - Good Night - Lofi Cozy Chill Music - 02m27s - Lo-fi.mp3",
@@ -1771,6 +1775,10 @@ switch (command) {
     state.state = "paused";
     writeState(state);
     break;
+  case "stop":
+    state.state = "stopped";
+    writeState(state);
+    break;
   case "random":
   case "repeat":
   case "single":
@@ -1788,6 +1796,13 @@ import { appendFileSync } from "node:fs";
 appendFileSync(${JSON.stringify(fakeExternalDisableLogPath)}, (process.argv[2] ?? "disable") + "\\n");
 `);
   await chmod(fakeExternalDisableCommandPath, 0o755);
+  await writeFile(fakeWebModeLogPath, "");
+  await writeFile(fakeWebModeCommandPath, `#!/usr/bin/env node
+import { appendFileSync } from "node:fs";
+
+appendFileSync(${JSON.stringify(fakeWebModeLogPath)}, process.argv.slice(2).join("\\t") + "\\n");
+`);
+  await chmod(fakeWebModeCommandPath, 0o755);
 
   const server = spawn(process.execPath, ["server/index.mjs"], {
     env: mpcFocusedSmokeEnv({
@@ -1805,10 +1820,16 @@ appendFileSync(${JSON.stringify(fakeExternalDisableLogPath)}, (process.argv[2] ?
       TIKPAL_SPOTIFY_READY_COMMAND: "true",
       TIKPAL_SPOTIFY_ACTIVE_COMMAND: "true",
       TIKPAL_SPOTIFY_DISABLE_COMMAND: `${process.execPath} ${fakeExternalDisableCommandPath} spotify-disable`,
+      TIKPAL_BLUETOOTH_ENABLE_COMMAND: `${process.execPath} ${fakeExternalDisableCommandPath} bluetooth-enable`,
+      TIKPAL_BLUETOOTH_READY_COMMAND: "true",
+      TIKPAL_BLUETOOTH_ACTIVE_COMMAND: "true",
       TIKPAL_BLUETOOTH_DISABLE_COMMAND: `${process.execPath} ${fakeExternalDisableCommandPath} bluetooth-disable`,
       TIKPAL_AIRPLAY_DISABLE_COMMAND: `${process.execPath} ${fakeExternalDisableCommandPath} airplay-disable`,
       TIKPAL_AIRPLAY_RECEIVER_ACTIVE_COMMAND: "true",
       TIKPAL_UPNP_DISABLE_COMMAND: `${process.execPath} ${fakeExternalDisableCommandPath} upnp-disable`,
+      TIKPAL_WEB_MODE_COMMAND: `${process.execPath} ${fakeWebModeCommandPath}`,
+      TIKPAL_WEB_MODE_SETTINGS_PATH: fakeWebModeSettingsPath,
+      TIKPAL_WEB_MODE_STATE_PATH: fakeWebModeStatePath,
       TIKPAL_FAKE_MPC_LOG: fakeMpcLogPath,
       TIKPAL_FAKE_MPC_STATE: fakeMpcStatePath,
       TIKPAL_FAKE_MPC_TRACKS: JSON.stringify(fakeMpcTracks),
@@ -1912,6 +1933,35 @@ appendFileSync(${JSON.stringify(fakeExternalDisableLogPath)}, (process.argv[2] ?
     assert(previous.body.audio.rememberedSource?.localTrackPath === localTrackPath, "mpc local library previous should remember the previous local track");
     const previousLog = await readFile(fakeMpcLogPath, "utf8");
     assert(previousLog.includes("prev"), "mpc local library previous should issue prev");
+
+    const bluetoothBeforeExplore = await requestFrom(baseUrl, "/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({ target: "bluetooth" })
+    });
+    assert(bluetoothBeforeExplore.response.ok, "mpc bluetooth source switch before Explore should return 200");
+    assert(bluetoothBeforeExplore.body.audio.currentSource.id === "bluetooth", "mpc bluetooth source switch before Explore should make Bluetooth current");
+
+    await writeFile(fakeExternalDisableLogPath, "");
+    await writeFile(fakeWebModeLogPath, "");
+    const webModeFromBluetooth = await requestFrom(baseUrl, "/api/v1/web-mode/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "open" })
+    });
+    assert(webModeFromBluetooth.response.ok, "web mode open from Bluetooth should return 200");
+    assert(webModeFromBluetooth.body.activeProvider === "qq_music", "web mode open without provider should default to QQ Music");
+    const webModeLog = await readFile(fakeWebModeLogPath, "utf8");
+    assert(webModeLog.includes("open\tqq_music\n"), `web mode command should open QQ Music by default, got ${JSON.stringify(webModeLog)}`);
+    const webModeExternalDisableLog = await readFile(fakeExternalDisableLogPath, "utf8");
+    assert(
+      webModeExternalDisableLog.includes("spotify-disable\n")
+        && webModeExternalDisableLog.includes("bluetooth-disable\n")
+        && webModeExternalDisableLog.includes("airplay-disable\n")
+        && webModeExternalDisableLog.includes("upnp-disable\n"),
+      `web mode open should synchronously close external sources before provider audio starts, got ${JSON.stringify(webModeExternalDisableLog)}`
+    );
+    const stateAfterWebMode = await requestFrom(baseUrl, "/api/v1/system/state");
+    assert(stateAfterWebMode.body.audio.currentSource.id !== "web_mode", "web mode should not become audio source truth");
+    assert(stateAfterWebMode.body.audio.rememberedSource?.target === "bluetooth", "web mode should preserve remembered Bluetooth instead of storing Explore");
   } finally {
     if (server.exitCode === null && server.signalCode === null) {
       server.kill("SIGTERM");

@@ -3646,7 +3646,7 @@ async function writeRoomExperienceState(state) {
   return normalized;
 }
 
-function normalizeWebModeProviderId(value, fallback = "spotify") {
+function normalizeWebModeProviderId(value, fallback = "qq_music") {
   const id = String(value ?? "").trim().toLowerCase();
   return WEB_MODE_PROVIDER_IDS.has(id) ? id : fallback;
 }

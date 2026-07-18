@@ -6,6 +6,19 @@ APP_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 SERVICE_USER="${SUDO_USER:-moode}"
 INSTALL_KIOSK=0
 RESTART_SERVICES=0
+KIOSK_PACKAGES=(
+  xvfb
+  x11vnc
+  novnc
+  websockify
+  socat
+  onboard
+  wmctrl
+  xdotool
+  fcitx5
+  fcitx5-chinese-addons
+  fcitx5-frontend-gtk3
+)
 
 usage() {
   cat <<USAGE
@@ -68,6 +81,26 @@ install_unit() {
   echo "installed $target"
 }
 
+install_kiosk_packages() {
+  local missing_packages=()
+  local package
+  command -v apt-get >/dev/null 2>&1 || {
+    echo "WARN: apt-get not found; skipping kiosk package install" >&2
+    return
+  }
+  for package in "${KIOSK_PACKAGES[@]}"; do
+    if ! dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -q "install ok installed"; then
+      missing_packages+=("$package")
+    fi
+  done
+  if [[ "${#missing_packages[@]}" -eq 0 ]]; then
+    echo "kiosk packages already installed"
+    return
+  fi
+  DEBIAN_FRONTEND=noninteractive apt-get update -y
+  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${missing_packages[@]}"
+}
+
 if [[ ! -f "$APP_DIR/server/index.mjs" || ! -f "$APP_DIR/server/web.mjs" ]]; then
   echo "Missing Tikpal server files under $APP_DIR" >&2
   exit 1
@@ -86,6 +119,9 @@ install_unit "$SCRIPT_DIR/tikpal-api.service"
 install_unit "$SCRIPT_DIR/tikpal-web.service"
 
 if [[ "$INSTALL_KIOSK" -eq 1 ]]; then
+  if [[ "${TIKPAL_INSTALL_KIOSK_PACKAGES:-1}" != "0" ]]; then
+    install_kiosk_packages
+  fi
   install_unit "$SCRIPT_DIR/tikpal-kiosk.service"
   install_unit "$SCRIPT_DIR/tikpal-kiosk-viewer.service"
   install_unit "$SCRIPT_DIR/tikpal-kiosk-devtools.service"
