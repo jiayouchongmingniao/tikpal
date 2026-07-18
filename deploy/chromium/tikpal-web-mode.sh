@@ -1184,6 +1184,7 @@ open_provider() {
     [[ -n "$current_profile" ]] && start_window_guard "$current_profile" "$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"
     fail "$(provider_label "$provider") did not open"
   fi
+  start_provider_guard "$provider" "$provider_profile" "$url" "$proxy_enabled" "$provider_port"
   if [[ "$extension_enabled" == "1" ]] && ! wait_for_real_provider_url "$provider_port"; then
     [[ -n "$target_audio_bus" ]] && crossfade_helper set "$target_audio_bus" 0 >/dev/null 2>&1 || true
     close_transition_veil
@@ -1191,6 +1192,8 @@ open_provider() {
     if [[ -n "$current_provider" && "$current_profile" != "$provider_profile" ]]; then
       start_provider_guard "$current_provider" "$current_profile" "$(provider_url "$current_provider")" "$proxy_enabled" "$(provider_debug_port "$current_provider")"
       start_window_guard "$current_profile" "$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"
+    else
+      stop_provider_guard
     fi
     fail "$(provider_label "$provider") did not enter the provider page within ${TIKPAL_WEB_MODE_PROVIDER_BOOTSTRAP_TIMEOUT_SECONDS}s"
   fi
@@ -1201,10 +1204,11 @@ open_provider() {
     if [[ -n "$current_provider" && "$current_profile" != "$provider_profile" ]]; then
       start_provider_guard "$current_provider" "$current_profile" "$(provider_url "$current_provider")" "$proxy_enabled" "$(provider_debug_port "$current_provider")"
       start_window_guard "$current_profile" "$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"
+    else
+      stop_provider_guard
     fi
     fail "$(provider_label "$provider") did not become ready within ${TIKPAL_WEB_MODE_PROVIDER_READY_TIMEOUT_SECONDS}s"
   fi
-  start_provider_guard "$provider" "$provider_profile" "$url" "$proxy_enabled" "$provider_port"
   tile_window "$target_window" "$TIKPAL_WEB_MODE_LEFT_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
   raise_window "$target_window"
   if [[ "$crossfade_switch" == "1" ]]; then

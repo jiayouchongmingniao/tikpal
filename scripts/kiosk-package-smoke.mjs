@@ -501,6 +501,10 @@ async function run() {
   assert(providerGuardCheck.stdout.includes("provider native failure redirect: 1"), "provider guard should redirect provider-native failure pages");
   assert(providerGuardCheck.stdout.includes("oauth navigation abort ignored: 1"), "provider guard should not redirect normal OAuth navigation aborts");
   assert(providerGuardCheck.stdout.includes("safe consent auto confirm: 1"), "provider guard should auto-confirm safe cookie consent prompts");
+  assert(providerGuardCheck.stdout.includes("cookie accept-all auto confirm: 1"), "provider guard should prefer cookie accept-all prompts");
+  assert(providerGuardCheck.stdout.includes("all-provider consent polling: 1"), "provider guard should poll consent prompts for every provider page");
+  assert(providerGuardCheck.stdout.includes("accept all cookies"), "provider guard should include English accept-all cookie labels");
+  assert(providerGuardCheck.stdout.includes("全部接受"), "provider guard should include Chinese accept-all cookie labels");
   assert(providerGuardCheck.stdout.includes("input focus keyboard: 1"), "provider guard should raise Onboard when provider inputs receive focus");
   assert(providerGuardCheck.stdout.includes("empty page timeout: 18s"), "provider guard should redirect long-running blank provider pages");
   assert(providerGuardCheck.stdout.includes("取消"), "provider guard should include safe QQ cancel prompts");
@@ -514,6 +518,10 @@ async function run() {
   assert(providerGuardCheck.stdout.includes("qq login prompt preserve: 1"), "provider guard should preserve the QQ login-required prompt");
   const providerGuardSource = await readFile(path.join(ROOT, "deploy/chromium/tikpal-web-mode-guard.mjs"), "utf8");
   assert(providerGuardSource.includes("querySelectorAll(\"iframe\")"), "provider guard should scan same-origin QQ modal iframes");
+  assert(providerGuardSource.includes("consentAcceptAllLabels"), "provider guard should keep accept-all cookie labels separate from generic consent labels");
+  assert(providerGuardSource.includes("rejectActionText"), "provider guard should skip cookie preference, reject, and settings actions");
+  assert(providerGuardSource.includes('attr(element, "aria-label")'), "provider guard should read aria-label text from cookie buttons");
+  assert(providerGuardSource.includes('attr(element, "title")'), "provider guard should read title text from cookie buttons");
   assert(providerGuardSource.includes("[class*='confirm']"), "provider guard should recognize QQ confirm-style modal containers");
   assert(providerGuardSource.includes("unsupported_browser"), "provider guard should classify unsupported-browser provider failures");
   assert(providerGuardSource.includes("region_unavailable"), "provider guard should classify region-blocked provider failures");
@@ -544,6 +552,9 @@ async function run() {
   assert(providerGuardSource.includes(".yqq-dialog-close"), "QQ client prompt handling should use the explicit close control");
   assert(webModeScript.includes('args+=("--disable-hang-monitor")'), "provider Chromium should not block Explore return on a page-unresponsive dialog");
   assert(webModeScript.includes('pkill -KILL -f -- "--user-data-dir=$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/"'), "Explore close should force-exit an unresponsive provider after the grace period");
+  assert(webModeScript.includes('provider_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/$provider"'), "Explore should keep a stable per-provider Chromium profile for login state");
+  assert(!webModeScript.includes('rm -rf "$provider_profile"'), "Explore provider switches should not delete the provider login profile");
+  assert(webModeScript.indexOf('start_provider_guard "$provider" "$provider_profile" "$url" "$proxy_enabled" "$provider_port"') < webModeScript.indexOf('if ! wait_for_provider_ready "$provider_port"; then'), "provider guard should start before the ready gate so cookie prompts can be accepted during entry");
 
   const webModeErrorPage = await readFile(path.join(ROOT, "public/web-mode-error.html"), "utf8");
   assert(webModeErrorPage.includes("did not respond"), "friendly Explore error page should avoid native Chromium error copy");

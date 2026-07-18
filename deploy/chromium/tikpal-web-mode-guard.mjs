@@ -30,27 +30,107 @@ const onboardInputSelector = [
 ].join(",");
 const safeLabels = ["确定", "确认", "取消", "关闭", "知道了", "我知道了", "好的", "好", "开始播放", "继续播放", "不用了，谢谢", "不了，谢谢", "no, thanks", "no thanks"];
 const dismissLabels = ["取消", "关闭", "知道了", "我知道了", "好的", "好", "不用了，谢谢", "不了，谢谢", "no, thanks", "no thanks"];
-const consentLabels = [
-  "accept",
+const consentAcceptAllLabels = [
   "accept all",
-  "accept cookies",
+  "accept all cookies",
   "allow all",
   "allow all cookies",
+  "allow optional cookies",
+  "agree to all",
+  "enable all",
+  "yes, accept all",
+  "accept all and continue",
+  "agree and continue",
+  "accept and continue",
+  "全部接受",
+  "接受全部",
+  "同意全部",
+  "全部同意",
+  "允许全部",
+  "允許全部",
+  "すべて同意",
+  "全て同意",
+  "すべて許可",
+  "すべて受け入れる",
+  "모두 수락",
+  "모두 허용",
+  "alle akzeptieren",
+  "tout accepter",
+  "aceptar todo",
+  "aceptar todas"
+];
+const consentFallbackLabels = [
+  "accept",
+  "accept cookies",
+  "allow cookies",
   "agree",
   "i agree",
   "ok",
   "got it",
-  "accept and continue",
-  "agree and continue",
+  "continue",
   "同意",
   "我同意",
   "接受",
-  "接受全部",
-  "全部接受",
+  "允许",
+  "允許",
   "确定",
   "好的",
-  "知道了"
+  "知道了",
+  "同意する",
+  "許可",
+  "受け入れる",
+  "확인",
+  "동의",
+  "수락"
 ];
+const consentRejectLabels = [
+  "reject",
+  "reject all",
+  "decline",
+  "deny",
+  "manage",
+  "manage options",
+  "settings",
+  "preferences",
+  "customize",
+  "customise",
+  "learn more",
+  "more options",
+  "necessary only",
+  "only necessary",
+  "save preferences",
+  "拒绝",
+  "拒絕",
+  "全部拒绝",
+  "全部拒絕",
+  "管理",
+  "设置",
+  "設定",
+  "偏好",
+  "更多选项",
+  "更多選項",
+  "仅必要",
+  "僅必要",
+  "只接受必要",
+  "拒否",
+  "管理する",
+  "カスタマイズ",
+  "必要なものだけ",
+  "거부",
+  "관리",
+  "설정",
+  "필수만",
+  "ablehnen",
+  "verwalten",
+  "einstellungen",
+  "refuser",
+  "parametres",
+  "paramètres",
+  "personnaliser",
+  "rechazar",
+  "configurar"
+];
+const consentLabels = [...consentAcceptAllLabels, ...consentFallbackLabels];
 const kioskInjectedTargets = new Set();
 const qqInjectedTargets = new Set();
 const earlyRedirectTargets = new Set();
@@ -799,9 +879,12 @@ const autoConfirmExpression = `(() => {
 })()`;
 
 const consentConfirmExpression = `(() => {
-  const safeLabels = new Set(${JSON.stringify(consentLabels.map((label) => label.replace(/\s+/g, "").toLowerCase()))});
-  const consentText = /(cookie|cookies|consent|privacy|gdpr|personal data|tracking|プライバシー|個人情報|쿠키|隐私|隱私|数据|資料|同意|接受)/i;
-  const dangerText = /(log in|login|sign in|payment|purchase|subscribe|membership|premium|vip|authorization|authorize|登录|登入|支付|购买|購買|开通|開通|授权|授權|会员|會員|充值|订阅|訂閱|ログイン|サインイン|支払い|購入)/i;
+  const acceptAllLabels = new Set(${JSON.stringify(consentAcceptAllLabels.map((label) => label.replace(/\s+/g, "").toLowerCase()))});
+  const fallbackLabels = new Set(${JSON.stringify(consentFallbackLabels.map((label) => label.replace(/\s+/g, "").toLowerCase()))});
+  const rejectLabels = new Set(${JSON.stringify(consentRejectLabels.map((label) => label.replace(/\s+/g, "").toLowerCase()))});
+  const consentText = /(cookie|cookies|cookie policy|cookie settings|consent|privacy|gdpr|personal data|personal information|tracking|広告識別子|クッキー|プライバシー|個人情報|쿠키|개인정보|隐私|隱私|个人信息|個人資料|数据|資料|个人资料|個人資料)/i;
+  const dangerText = /(log in|login|sign in|payment|purchase|subscribe|membership|premium|vip|authorization|authorize|terms of service|terms of use|user agreement|service agreement|登录|登入|支付|购买|購買|开通|開通|授权|授權|会员|會員|充值|订阅|訂閱|用户协议|用戶協議|服务协议|服務協議|服务条款|服務條款|使用条款|使用條款|ログイン|サインイン|支払い|購入|利用規約|ログイン|결제|구매|로그인|구독|약관)/i;
+  const rejectActionText = /(reject|decline|deny|manage|settings|preferences|customi[sz]e|learn more|more options|necessary only|only necessary|save preferences|拒绝|拒絕|管理|设置|設定|偏好|更多选项|更多選項|仅必要|僅必要|只接受必要|拒否|カスタマイズ|必要なものだけ|거부|관리|설정|필수만|ablehnen|verwalten|einstellungen|refuser|param[èe]tres|personnaliser|rechazar|configurar)/i;
   const buttonSelectors = [
     "button",
     "a",
@@ -826,8 +909,43 @@ const consentConfirmExpression = `(() => {
     "[class*='banner' i]"
   ].join(",");
   const textOf = (element) => String(element?.value || element?.innerText || element?.textContent || "").replace(/\\s+/g, " ").trim();
+  const attr = (element, name) => String(element?.getAttribute?.(name) || "").replace(/\\s+/g, " ").trim();
   const keyOf = (value) => String(value || "").replace(/\\s+/g, "").toLowerCase();
+  const labelsOf = (element) => Array.from(new Set([
+    attr(element, "aria-label"),
+    attr(element, "title"),
+    attr(element, "alt"),
+    String(element?.value || "").trim(),
+    textOf(element)
+  ].filter(Boolean)));
+  const metadataOf = (element) => {
+    const parts = [];
+    let cursor = element;
+    for (let depth = 0; cursor && depth < 3; depth += 1) {
+      parts.push(attr(cursor, "id"));
+      parts.push(String(cursor.className || ""));
+      parts.push(attr(cursor, "aria-label"));
+      parts.push(attr(cursor, "title"));
+      cursor = cursor.parentElement;
+    }
+    return parts.filter(Boolean).join(" ");
+  };
+  const labelMatch = (element) => {
+    const labels = labelsOf(element);
+    if (!labels.length) return null;
+    const keys = labels.map(keyOf);
+    const labelBlob = labels.join(" ");
+    if (keys.some((key) => rejectLabels.has(key)) || rejectActionText.test(labelBlob)) return null;
+    for (let index = 0; index < labels.length; index += 1) {
+      if (acceptAllLabels.has(keys[index])) return { label: labels[index], priority: 0 };
+    }
+    for (let index = 0; index < labels.length; index += 1) {
+      if (fallbackLabels.has(keys[index])) return { label: labels[index], priority: 1 };
+    }
+    return null;
+  };
   const visible = (element) => {
+    if (!element) return false;
     const rect = element.getBoundingClientRect();
     const view = element.ownerDocument?.defaultView || window;
     const style = view.getComputedStyle(element);
@@ -847,18 +965,26 @@ const consentConfirmExpression = `(() => {
       if (frame.contentDocument) docs.push(frame.contentDocument);
     } catch {}
   }
+  const candidates = [];
   for (const doc of docs) {
+    let order = 0;
     for (const element of Array.from(doc.querySelectorAll(buttonSelectors))) {
+      order += 1;
       if (!visible(element)) continue;
-      const label = textOf(element);
-      if (!safeLabels.has(keyOf(label))) continue;
+      const match = labelMatch(element);
+      if (!match) continue;
       const container = element.closest(modalSelectors) || element.parentElement;
-      const context = textOf(container || element).slice(0, 1200);
+      const context = (textOf(container || element) + " " + metadataOf(container || element)).slice(0, 2000);
       if (!consentText.test(context)) continue;
       if (dangerText.test(context)) continue;
-      element.click();
-      return { clicked: true, label };
+      candidates.push({ element, label: match.label, priority: match.priority, order });
     }
+  }
+  candidates.sort((left, right) => left.priority - right.priority || left.order - right.order);
+  const candidate = candidates[0];
+  if (candidate) {
+    candidate.element.click();
+    return { clicked: true, label: candidate.label, priority: candidate.priority };
   }
   return { clicked: false };
 })()`;
@@ -920,10 +1046,13 @@ if (process.argv.includes("--check")) {
   console.log("[tikpal-web-mode-guard] early load-failure redirect: 1");
   console.log("[tikpal-web-mode-guard] oauth navigation abort ignored: 1");
   console.log("[tikpal-web-mode-guard] safe consent auto confirm: 1");
+  console.log("[tikpal-web-mode-guard] cookie accept-all auto confirm: 1");
+  console.log("[tikpal-web-mode-guard] all-provider consent polling: 1");
   console.log(`[tikpal-web-mode-guard] input focus keyboard: ${onboardAutoFocus ? "1" : "0"}`);
   console.log(`[tikpal-web-mode-guard] empty page timeout: ${Math.round(emptyPageTimeoutMs / 1000)}s`);
   console.log(`[tikpal-web-mode-guard] qq auto confirm: ${qqAutoConfirm ? "1" : "0"}`);
   console.log("[tikpal-web-mode-guard] youtube safe dismiss: 1");
+  console.log(`[tikpal-web-mode-guard] accept-all labels: ${consentAcceptAllLabels.join(",")}`);
   console.log(`[tikpal-web-mode-guard] safe labels: ${safeLabels.join(",")}`);
   console.log(`[tikpal-web-mode-guard] dismiss labels: ${dismissLabels.join(",")}`);
   console.log("[tikpal-web-mode-guard] duplicate player pruning: 1");
