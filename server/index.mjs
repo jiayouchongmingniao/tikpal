@@ -1441,6 +1441,33 @@ function buildAudioState({ activeSource, armedSource = null, radioReady, radioAc
   };
 }
 
+function promoteCurrentSourceConnectedFromPlaybackMetadata(audio, source) {
+  if (!audio?.currentSource || audio.currentSource.id !== source) return audio;
+
+  const fallbackLabel = source === "bluetooth"
+    ? "Bluetooth audio"
+    : source === "airplay"
+      ? "AirPlay audio"
+      : "External audio";
+  const patchSource = (entry) => {
+    if (entry.id !== source) return entry;
+    const connectedLabel = entry.connectedLabel ?? null;
+    return {
+      ...entry,
+      availability: "available",
+      connectionState: "connected",
+      connectedLabel,
+      secondaryStatus: `${connectedLabel ?? fallbackLabel} connected`
+    };
+  };
+
+  return {
+    ...audio,
+    currentSource: patchSource(audio.currentSource),
+    sources: Array.isArray(audio.sources) ? audio.sources.map(patchSource) : audio.sources
+  };
+}
+
 function formatMockTimeLabel(date = new Date()) {
   const hours = String(date.getHours()).padStart(2, "0");
   const minutes = String(date.getMinutes()).padStart(2, "0");
@@ -1614,7 +1641,7 @@ function getPlayback() {
     return {
       state: "playing",
       source: "radio",
-      albumArtUrl: null,
+      albumArtUrl: activeRadio?.logoUrl ?? null,
       title: activeRadio?.label ?? RADIO_LABEL,
       artist: "Internet Radio",
       album: "Radio",
@@ -5673,7 +5700,10 @@ async function getMpcSnapshot(options = {}) {
     ? await readAirplayTransportAvailable(includeSlowRuntimeStatus)
     : null;
   const hasBluetoothTrackMetadata = Boolean(bluetoothPlaybackMetadata?.title);
-  const airplayConnected = playbackSource === "airplay" && audio.currentSource.connectionState === "connected";
+  const playbackAudio = playbackSource === "bluetooth" && hasBluetoothTrackMetadata
+    ? promoteCurrentSourceConnectedFromPlaybackMetadata(audio, "bluetooth")
+    : audio;
+  const airplayConnected = playbackSource === "airplay" && playbackAudio.currentSource.connectionState === "connected";
   const trustedAirplayPlaybackMetadata = airplayConnected
     ? normalizeAirplayPlaybackMetadata(airplayPlaybackMetadata)
     : null;
@@ -5727,10 +5757,10 @@ async function getMpcSnapshot(options = {}) {
         ? mapBluetoothPlaybackState(bluetoothPlaybackMetadata)
         : playbackSource === "airplay"
           ? trustedAirplayPlaybackMetadata ? mapBluetoothPlaybackState(trustedAirplayPlaybackMetadata) : "stopped"
-        : playbackSource === "spotify"
-          ? audio.currentSource.connectionState === "connected" ? "playing" : "stopped"
+          : playbackSource === "spotify"
+          ? playbackAudio.currentSource.connectionState === "connected" ? "playing" : "stopped"
         : playbackSource === "upnp"
-          ? audio.currentSource.connectionState === "connected" ? "playing" : "stopped"
+          ? playbackAudio.currentSource.connectionState === "connected" ? "playing" : "stopped"
         : hasCurrentTrack ? status.state : "stopped",
       source: playbackSource,
       albumArtUrl: playbackSource === "bluetooth"
@@ -5758,21 +5788,21 @@ async function getMpcSnapshot(options = {}) {
           : playbackSource === "radio"
           ? radioPlaybackMetadata?.artist || metadata.artist || artist || "Internet Radio"
           : playbackSource === "spotify"
-            ? audio.currentSource.connectedLabel
-              || (audio.currentSource.advertisedLabel ? `Choose ${audio.currentSource.advertisedLabel} in Spotify` : "Choose Tikpal in Spotify")
+            ? playbackAudio.currentSource.connectedLabel
+              || (playbackAudio.currentSource.advertisedLabel ? `Choose ${playbackAudio.currentSource.advertisedLabel} in Spotify` : "Choose Tikpal in Spotify")
           : playbackSource === "upnp"
-            ? audio.currentSource.connectedLabel
-              || (audio.currentSource.advertisedLabel ? `Cast to ${audio.currentSource.advertisedLabel} with DLNA` : "Cast to Tikpal with DLNA")
+            ? playbackAudio.currentSource.connectedLabel
+              || (playbackAudio.currentSource.advertisedLabel ? `Cast to ${playbackAudio.currentSource.advertisedLabel} with DLNA` : "Cast to Tikpal with DLNA")
           : playbackSource === "bluetooth"
             ? bluetoothPlaybackMetadata?.artist || (hasBluetoothTrackMetadata
               ? null
-              : audio.currentSource.connectedLabel
-                || (audio.currentSource.advertisedLabel ? `Find ${audio.currentSource.advertisedLabel} in Bluetooth` : "Pair a device to start playback"))
+              : playbackAudio.currentSource.connectedLabel
+                || (playbackAudio.currentSource.advertisedLabel ? `Find ${playbackAudio.currentSource.advertisedLabel} in Bluetooth` : "Pair a device to start playback"))
           : playbackSource === "airplay"
               ? trustedAirplayPlaybackMetadata?.artist || (hasAirplayTrackMetadata
                 ? null
-                : audio.currentSource.connectedLabel
-                  || (audio.currentSource.advertisedLabel ? `Choose ${audio.currentSource.advertisedLabel} from AirPlay` : "Choose Tikpal from AirPlay"))
+                : playbackAudio.currentSource.connectedLabel
+                  || (playbackAudio.currentSource.advertisedLabel ? `Choose ${playbackAudio.currentSource.advertisedLabel} from AirPlay` : "Choose Tikpal from AirPlay"))
           : hasCurrentTrack ? metadata.artist || artist || "Unknown Artist" : null,
       album: isSceneSource
           ? currentSceneVideo.label
@@ -5830,7 +5860,7 @@ async function getMpcSnapshot(options = {}) {
         muted: volumePercent <= 0
       }
     },
-    audio
+    audio: playbackAudio
   };
 }
 

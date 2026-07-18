@@ -4566,6 +4566,7 @@ async function run() {
     assert(radio.body.audio.currentSource.radioStationId === "radio-2", "radio switch should expose the selected mock station id on currentSource");
     assert(radio.body.playback.source === "radio", "playback source should follow radio switch");
     assert(radio.body.playback.title === "Tikpal Calm - Radio Paradise Mellow", "radio switch should surface the active preset label");
+    assert(radio.body.playback.albumArtUrl?.startsWith("data:image/svg+xml"), "radio switch should expose the active station logo as playback artwork");
     assert(radio.body.audio.rememberedSource?.target === "radio", "radio switch should remember Radio as the last source");
     assert(radio.body.audio.rememberedSource?.radioStationId === "radio-2", "radio switch should remember the selected station id");
     assert(radio.body.audio.sources.some((source) => source.id === "airplay" && source.armed === false), "radio switch should close airplay intake");

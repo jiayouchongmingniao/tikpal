@@ -852,6 +852,7 @@ try {
         window.localStorage.setItem('tikpal.lyricsVisible.v3', 'false');
         const nativeFetch = window.fetch.bind(window);
         const realBluetoothCover = "data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22120%22%20height%3D%22120%22%3E%3Crect%20width%3D%22120%22%20height%3D%22120%22%20fill%3D%22%2318405a%22%2F%3E%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2232%22%20fill%3D%22%23f2d36b%22%2F%3E%3C%2Fsvg%3E";
+        const realRadioCover = "data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22120%22%20height%3D%22120%22%3E%3Crect%20width%3D%22120%22%20height%3D%22120%22%20fill%3D%22%231f2937%22%2F%3E%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2238%22%20fill%3D%22%23d6b761%22%2F%3E%3Ctext%20x%3D%2260%22%20y%3D%2268%22%20font-family%3D%22Arial%22%20font-size%3D%2228%22%20font-weight%3D%22700%22%20text-anchor%3D%22middle%22%20fill%3D%22%231f2937%22%3ER%3C%2Ftext%3E%3C%2Fsvg%3E";
 
         function clone(value) {
           return JSON.parse(JSON.stringify(value));
@@ -1031,6 +1032,46 @@ try {
                 { text: "Bluetooth line two", startMs: 18000, endMs: 36000 },
                 { text: "Bluetooth chorus line glows through the shared lyrics wall", startMs: 36000, endMs: 54000 },
                 { text: "Bluetooth line four", startMs: 54000, endMs: 72000 }
+              ],
+              message: null,
+              updatedAt: new Date().toISOString()
+            };
+            return next;
+          }
+
+          if (mode === "radioReadyLyrics") {
+            const next = withSource(state, "radio", { radioStationId: "radio-502" });
+            next.playback = {
+              ...next.playback,
+              state: "playing",
+              source: "radio",
+              albumArtUrl: realRadioCover,
+              title: "Midnight Radio Glow",
+              artist: "Tikpal Broadcast",
+              album: "Tikpal Hi-Fi Radio",
+              elapsedSeconds: 34,
+              durationSeconds: 180,
+              currentTrackIndex: 0,
+              queueLength: 0,
+              favorite: false,
+              queuePreview: []
+            };
+            next.lyrics = {
+              ...next.lyrics,
+              status: "ready",
+              sourceScope: "local_playback",
+              recognitionMode: "metadata",
+              recognitionProvider: "lrclib",
+              trackKey: "smoke-radio-ready-lyrics",
+              synced: true,
+              activeLineIndex: null,
+              title: "Midnight Radio Glow",
+              artist: "Tikpal Broadcast",
+              lines: [
+                { text: "Radio line one", startMs: 0, endMs: 15000 },
+                { text: "Radio line two", startMs: 15000, endMs: 30000 },
+                { text: "Radio chorus line uses the shared lyrics wall", startMs: 30000, endMs: 50000 },
+                { text: "Radio line four", startMs: 50000, endMs: 72000 }
               ],
               message: null,
               updatedAt: new Date().toISOString()
@@ -1625,6 +1666,30 @@ try {
       })()
     `,
     "Bluetooth ready lyrics use the shared Hi-Fi lyrics wall with lightweight footer"
+  );
+  const radioReadyLyricsPatchVersion = await setStatePatchMode(client, "radioReadyLyrics");
+  await waitForStatePatchRefresh(client, radioReadyLyricsPatchVersion, "Radio ready lyrics fixture refreshes");
+  await expectEventually(
+    client,
+    `
+      (() => {
+        const panel = document.querySelector('[data-hifi-lyrics-panel]');
+        const activeLine = document.querySelector('[data-hifi-lyrics-line][data-hifi-lyrics-active]');
+        const coverImage = document.querySelector('[data-hifi-cover-art] img');
+        const controls = document.querySelector('[data-hifi-lyrics-controls]');
+        const activeText = activeLine?.textContent?.trim() ?? "";
+        return panel !== null
+          && document.querySelector('[data-hifi-centered-now-playing]') === null
+          && document.querySelector('[data-hifi-playback-presence]') === null
+          && coverImage?.getAttribute('src')?.startsWith('data:image/svg+xml') === true
+          && document.querySelector('[data-bluetooth-generated-cover]') === null
+          && activeText.includes('Radio chorus line')
+          && document.querySelector('.ambient-lyrics-ticker') === null
+          && document.querySelector('[data-ambient-lyrics]')?.getAttribute('aria-hidden') === 'true'
+          && controls !== null;
+      })()
+    `,
+    "Radio ready lyrics use the shared Hi-Fi lyrics wall with station artwork"
   );
   const airplayFallbackLyricsPatchVersion = await setStatePatchMode(client, "airplayFallbackLyrics");
   await waitForStatePatchRefresh(client, airplayFallbackLyricsPatchVersion, "AirPlay fallback lyrics fixture refreshes");
