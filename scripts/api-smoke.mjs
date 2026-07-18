@@ -1962,6 +1962,30 @@ appendFileSync(${JSON.stringify(fakeWebModeLogPath)}, process.argv.slice(2).join
     const stateAfterWebMode = await requestFrom(baseUrl, "/api/v1/system/state");
     assert(stateAfterWebMode.body.audio.currentSource.id !== "web_mode", "web mode should not become audio source truth");
     assert(stateAfterWebMode.body.audio.rememberedSource?.target === "bluetooth", "web mode should preserve remembered Bluetooth instead of storing Explore");
+
+    for (const providerId of ["spotify", "youtube_music", "apple_music", "tidal", "qobuz", "deezer", "amazon_music", "suno", "netease_music"]) {
+      await writeFile(fakeExternalDisableLogPath, "");
+      await writeFile(fakeWebModeLogPath, "");
+      const switchedProvider = await requestFrom(baseUrl, "/api/v1/web-mode/actions", {
+        method: "POST",
+        body: JSON.stringify({ type: "open", provider: providerId })
+      });
+      assert(switchedProvider.response.ok, `web mode switch to ${providerId} should return 200`);
+      assert(switchedProvider.body.activeProvider === providerId, `web mode switch should activate ${providerId}`);
+      const providerSwitchLog = await readFile(fakeWebModeLogPath, "utf8");
+      assert(providerSwitchLog.includes(`open\t${providerId}\n`), `web mode command should open ${providerId}, got ${JSON.stringify(providerSwitchLog)}`);
+      const providerSwitchDisableLog = await readFile(fakeExternalDisableLogPath, "utf8");
+      assert(
+        providerSwitchDisableLog.includes("spotify-disable\n")
+          && providerSwitchDisableLog.includes("bluetooth-disable\n")
+          && providerSwitchDisableLog.includes("airplay-disable\n")
+          && providerSwitchDisableLog.includes("upnp-disable\n"),
+        `web mode switch to ${providerId} should keep external sources closed before provider audio starts, got ${JSON.stringify(providerSwitchDisableLog)}`
+      );
+      const stateAfterProviderSwitch = await requestFrom(baseUrl, "/api/v1/system/state");
+      assert(stateAfterProviderSwitch.body.audio.currentSource.id !== "web_mode", `web mode switch to ${providerId} should not become audio source truth`);
+      assert(stateAfterProviderSwitch.body.audio.rememberedSource?.target === "bluetooth", `web mode switch to ${providerId} should preserve remembered Bluetooth`);
+    }
   } finally {
     if (server.exitCode === null && server.signalCode === null) {
       server.kill("SIGTERM");
