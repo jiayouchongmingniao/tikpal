@@ -541,7 +541,8 @@ async function run() {
   assert(providerGuardSource.includes("lastKeyboardRequestMs < 250"), "provider focus guard should not delay keyboard show behind a long throttle");
   assert(providerGuardSource.includes("lastOnboardActionMs < 250"), "provider poll fallback should not delay keyboard show behind a long throttle");
   assert(!providerGuardSource.includes("else if (anyFocused) setOnboardVisible(true)"), "provider focus guard should let Onboard stay closed until a new input interaction");
-  assert(providerGuardSource.includes("if (!doc?.hasFocus?.()) return false"), "provider focus polling should stop auto-show after focus moves to the side panel");
+  assert(providerGuardSource.includes("lastEditable?.isConnected && !outsidePointerDown"), "provider focus guard should keep Onboard visible when it takes X focus from a login input");
+  assert(!providerGuardSource.includes("if (!doc?.hasFocus?.()) return false"), "provider focus polling should preserve active login inputs while Onboard has window focus");
   assert(providerGuardSource.includes("mode: \"no-cors\""), "provider focus guard should request local keyboard actions without cross-origin response access");
   assert(providerGuardSource.includes("text/plain;charset=UTF-8"), "provider focus guard should send a CORS-safelisted JSON text body");
   assert(providerGuardSource.includes("keyboardActionUrl"), "provider focus guard should use the loopback keyboard action as its primary path");

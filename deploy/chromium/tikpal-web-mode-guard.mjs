@@ -285,7 +285,7 @@ const inputFocusGuardScript = `(() => {
   let outsidePointerDown = false;
   const editableTarget = (target) => target?.closest?.(selector) || null;
   const isEditable = (target) => Boolean(editableTarget(target));
-  const activeEditable = () => document.hasFocus() ? editableTarget(document.activeElement) : null;
+  const activeEditable = () => editableTarget(document.activeElement);
   const refocusEditable = (target) => {
     if (!target?.isConnected) return;
     target.focus({ preventScroll: true });
@@ -332,6 +332,10 @@ const inputFocusGuardScript = `(() => {
   document.addEventListener("focusout", () => {
     setTimeout(() => {
       if (!document.hasFocus()) {
+        if (lastEditable?.isConnected && !outsidePointerDown) {
+          keepEditableFocus(lastEditable);
+          return;
+        }
         lastEditable = null;
         window.__tikpalInputFocusHideRequest += 1;
         requestKeyboard(false);
@@ -364,7 +368,6 @@ const inputFocusGuardScript = `(() => {
 const inputFocusExpression = `(() => {
   const selector = ${JSON.stringify(onboardInputSelector)};
   const activeEditable = (doc) => {
-    if (!doc?.hasFocus?.()) return false;
     let active = doc?.activeElement || null;
     for (let depth = 0; active && depth < 8; depth += 1) {
       if (active.matches?.(selector)) return true;
