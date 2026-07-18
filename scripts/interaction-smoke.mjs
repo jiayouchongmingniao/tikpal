@@ -1754,9 +1754,9 @@ try {
   await expectEventuallyEvaluate(
     client,
     "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => state.audio.currentSource.id === 'radio' && state.playback.source === 'radio')",
-    "Hi-Fi source picker regression restores Radio fixture for remembered-source checks"
+    "Hi-Fi source picker regression establishes Radio fixture for preserve-source checks"
   );
-  await switchRoomModeAndNavigate(client, "focus", "Focus room mode is active before Hi-Fi remembered-source restore");
+  await switchRoomModeAndNavigate(client, "focus", "Focus room mode is active before Hi-Fi preserve-source check");
   await evaluate(
     client,
     `
@@ -1771,9 +1771,9 @@ try {
   await expectEventuallyEvaluate(
     client,
     "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') === 'hifi' && state.audio.currentSource.id === 'radio' && state.playback.source === 'radio')",
-    "Hi-Fi entry restores the remembered Radio source"
+    "Hi-Fi entry preserves the current Radio source"
   );
-  await switchRoomModeAndNavigate(client, "focus", "Focus room mode is active before Hi-Fi remembered station restore");
+  await switchRoomModeAndNavigate(client, "focus", "Focus room mode is active before Hi-Fi different remembered station preserve check");
   const differentRadioPatchVersion = await setStatePatchMode(client, "hifiRememberedDifferentRadio");
   await waitForStatePatchRefresh(client, differentRadioPatchVersion, "Hi-Fi different remembered Radio fixture refreshes");
   await evaluate(
@@ -1845,12 +1845,16 @@ try {
       })()
     `
   );
-  await expectEventually(
+  await wait(1800);
+  await expect(
     client,
-    "(window.__tikpalRememberedRadioRequests ?? []).some((body) => body.target === 'radio' && body.radioStationId === 'radio-503')",
-    "Hi-Fi entry restores the remembered Radio station when another Radio station is current",
-    45,
-    150
+    "!(window.__tikpalRememberedRadioRequests ?? []).some((body) => body.target === 'radio')",
+    "Hi-Fi entry preserves the current Radio station instead of restoring a different remembered station"
+  );
+  await expectEventuallyEvaluate(
+    client,
+    "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => state.audio.currentSource.id === 'radio' && state.audio.currentSource.radioStationId === 'radio-500')",
+    "Hi-Fi entry keeps the current Radio station when rememberedSource differs"
   );
   await evaluate(
     client,
@@ -1864,7 +1868,7 @@ try {
       })()
     `
   );
-  await switchRoomModeAndNavigate(client, "focus", "Focus room mode is active before delayed Hi-Fi remembered station restore");
+  await switchRoomModeAndNavigate(client, "focus", "Focus room mode is active before delayed Hi-Fi remembered station preserve check");
   const pendingRadioPatchVersion = await setStatePatchMode(client, "hifiRememberedRadioPendingMemory");
   await waitForStatePatchRefresh(client, pendingRadioPatchVersion, "Hi-Fi pending remembered Radio fixture refreshes");
   await evaluate(
@@ -1939,12 +1943,11 @@ try {
   await wait(350);
   const delayedRadioPatchVersion = await setStatePatchMode(client, "hifiRememberedDifferentRadio");
   await waitForStatePatchRefresh(client, delayedRadioPatchVersion, "Hi-Fi delayed remembered Radio fixture refreshes");
-  await expectEventually(
+  await wait(1800);
+  await expect(
     client,
-    "(window.__tikpalRememberedRadioRequests ?? []).some((body) => body.target === 'radio' && body.radioStationId === 'radio-503')",
-    "Hi-Fi initial load restores Radio when rememberedSource arrives after the Hi-Fi edge",
-    45,
-    150
+    "!(window.__tikpalRememberedRadioRequests ?? []).some((body) => body.target === 'radio')",
+    "Hi-Fi initial load preserves current Radio when rememberedSource arrives after the Hi-Fi edge"
   );
   await evaluate(
     client,
@@ -1960,7 +1963,7 @@ try {
       })()
     `
   );
-  await switchRoomModeAndNavigate(client, "focus", "Focus room mode is active before same Hi-Fi remembered station restore");
+  await switchRoomModeAndNavigate(client, "focus", "Focus room mode is active before same Hi-Fi remembered station preserve check");
   const sameRadioPatchVersion = await setStatePatchMode(client, "hifiRememberedSameRadio");
   await waitForStatePatchRefresh(client, sameRadioPatchVersion, "Hi-Fi same remembered Radio fixture refreshes");
   await evaluate(
@@ -1996,7 +1999,7 @@ try {
   await expect(
     client,
     "!(window.__tikpalRememberedRadioRequests ?? []).some((body) => body.target === 'radio')",
-    "Hi-Fi entry does not repeat Radio restore when the remembered station is already current"
+    "Hi-Fi entry does not request Radio restore when the remembered station is already current"
   );
   await evaluate(
     client,
@@ -2012,7 +2015,7 @@ try {
       })()
     `
   );
-  await switchRoomModeAndNavigate(client, "focus", "Focus room mode is active before Hi-Fi remembered Library restore");
+  await switchRoomModeAndNavigate(client, "focus", "Focus room mode is active before Hi-Fi remembered Library preserve check");
   const differentLibraryPatchVersion = await setStatePatchMode(client, "hifiRememberedDifferentLibrary");
   await waitForStatePatchRefresh(client, differentLibraryPatchVersion, "Hi-Fi different remembered Library fixture refreshes");
   await evaluate(
@@ -2090,12 +2093,16 @@ try {
       })()
     `
   );
-  await expectEventually(
+  await wait(1800);
+  await expect(
     client,
-    "(window.__tikpalRememberedLibraryRequests ?? []).some((body) => body.target === 'mpd' && body.localTrackPath === 'Focus/Lo-fi Ambient/FASSounds - Good Night - Lofi Cozy Chill Music - 02m27s - Lo-fi.mp3')",
-    "Hi-Fi entry restores the remembered Library track when another source is current",
-    45,
-    150
+    "!(window.__tikpalRememberedLibraryRequests ?? []).some((body) => body.target === 'mpd')",
+    "Hi-Fi entry preserves the current source instead of restoring a remembered Library track"
+  );
+  await expectEventuallyEvaluate(
+    client,
+    "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => state.audio.currentSource.id === 'radio')",
+    "Hi-Fi entry keeps Radio when rememberedSource points at Library"
   );
   await evaluate(
     client,
@@ -2109,7 +2116,7 @@ try {
       })()
     `
   );
-  await switchRoomModeAndNavigate(client, "focus", "Focus room mode is active before same Hi-Fi remembered Library restore");
+  await switchRoomModeAndNavigate(client, "focus", "Focus room mode is active before same Hi-Fi remembered Library preserve check");
   const sameLibraryPatchVersion = await setStatePatchMode(client, "hifiRememberedSameLibrary");
   await waitForStatePatchRefresh(client, sameLibraryPatchVersion, "Hi-Fi same remembered Library fixture refreshes");
   await evaluate(
@@ -2145,7 +2152,7 @@ try {
   await expect(
     client,
     "!(window.__tikpalRememberedLibraryRequests ?? []).some((body) => body.target === 'mpd')",
-    "Hi-Fi entry does not repeat Library restore when the remembered track is already current"
+    "Hi-Fi entry does not request Library restore when the remembered track is already current"
   );
   await evaluate(
     client,

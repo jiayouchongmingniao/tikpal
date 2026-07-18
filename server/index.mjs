@@ -9424,6 +9424,12 @@ function getRoomModeFromPresetId(presetId, fallbackMode) {
   return found?.[0] ?? normalizeRoomMode(fallbackMode);
 }
 
+function resolveRoomActionSceneSoundEnabled(action, current, mode, fallbackEnabled = false) {
+  if (mode === "hifi") return false;
+  if (action.sceneSoundEnabled !== undefined) return action.sceneSoundEnabled === true;
+  return fallbackEnabled === true && current.mode !== "hifi";
+}
+
 async function resolveSceneAudioVideo(experience) {
   const preset = getRoomModePreset(experience.mode);
   const fallbackVideo = {
@@ -9492,6 +9498,7 @@ async function applyRoomExperienceAction(action) {
       const hifiEqPatch = buildHifiEqPatch(action, current.hifiEqPresetId ?? preset.hifiEqPresetId);
       const rememberedCurrent = rememberSceneVideoForRoomMode(current);
       const sceneVideoId = await resolveRoomModeSceneVideoId(rememberedCurrent, mode, action.sceneVideoId);
+      const sceneSoundEnabled = resolveRoomActionSceneSoundEnabled(action, current, mode);
       next = {
         ...rememberedCurrent,
         mode,
@@ -9500,16 +9507,16 @@ async function applyRoomExperienceAction(action) {
         sceneVideoId,
         sceneVideoByMode: rememberSceneVideoForRoomMode(rememberedCurrent, mode, sceneVideoId).sceneVideoByMode,
         ...hifiEqPatch,
-        sceneSoundEnabled: mode === "hifi" ? false : action.sceneSoundEnabled === true ? true : preset.sceneSoundEnabled,
+        sceneSoundEnabled,
         playlistId: action.playlistId === undefined ? preset.playlistId : action.playlistId,
         volumePercent: clampPercent(action.volumePercent, preset.volumePercent),
         brightnessPercent: clampPercent(action.brightnessPercent, preset.brightnessPercent),
         timerMinutes,
         timerEndsAt: null
       };
-      applyScene = mode !== "hifi";
+      applyScene = sceneSoundEnabled;
       applyLevels = mode !== "hifi";
-      stopScene = mode === "hifi";
+      stopScene = !sceneSoundEnabled;
       break;
     }
     case "apply_preset": {
@@ -9519,6 +9526,7 @@ async function applyRoomExperienceAction(action) {
       const hifiEqPatch = buildHifiEqPatch(action, current.hifiEqPresetId ?? preset.hifiEqPresetId);
       const rememberedCurrent = rememberSceneVideoForRoomMode(current);
       const sceneVideoId = await resolveRoomModeSceneVideoId(rememberedCurrent, mode, action.sceneVideoId);
+      const sceneSoundEnabled = resolveRoomActionSceneSoundEnabled(action, current, mode);
       next = {
         ...rememberedCurrent,
         mode,
@@ -9527,16 +9535,16 @@ async function applyRoomExperienceAction(action) {
         sceneVideoId,
         sceneVideoByMode: rememberSceneVideoForRoomMode(rememberedCurrent, mode, sceneVideoId).sceneVideoByMode,
         ...hifiEqPatch,
-        sceneSoundEnabled: mode === "hifi" ? false : action.sceneSoundEnabled === true ? true : preset.sceneSoundEnabled,
+        sceneSoundEnabled,
         playlistId: action.playlistId === undefined ? preset.playlistId : action.playlistId,
         volumePercent: clampPercent(action.volumePercent, preset.volumePercent),
         brightnessPercent: clampPercent(action.brightnessPercent, preset.brightnessPercent),
         timerMinutes,
         timerEndsAt: null
       };
-      applyScene = mode !== "hifi";
+      applyScene = sceneSoundEnabled;
       applyLevels = mode !== "hifi";
-      stopScene = mode === "hifi";
+      stopScene = !sceneSoundEnabled;
       break;
     }
     case "start_session": {
@@ -9546,6 +9554,7 @@ async function applyRoomExperienceAction(action) {
       const hifiEqPatch = buildHifiEqPatch(action, current.hifiEqPresetId ?? preset.hifiEqPresetId);
       const rememberedCurrent = rememberSceneVideoForRoomMode(current);
       const sceneVideoId = await resolveRoomModeSceneVideoId(rememberedCurrent, mode, action.sceneVideoId);
+      const sceneSoundEnabled = resolveRoomActionSceneSoundEnabled(action, current, mode, current.sceneSoundEnabled);
       next = {
         ...rememberedCurrent,
         mode,
@@ -9554,16 +9563,16 @@ async function applyRoomExperienceAction(action) {
         sceneVideoId,
         sceneVideoByMode: rememberSceneVideoForRoomMode(rememberedCurrent, mode, sceneVideoId).sceneVideoByMode,
         ...hifiEqPatch,
-        sceneSoundEnabled: mode === "hifi" ? false : action.sceneSoundEnabled === undefined ? current.sceneSoundEnabled : action.sceneSoundEnabled === true,
+        sceneSoundEnabled,
         playlistId: action.playlistId === undefined ? current.playlistId : action.playlistId,
         volumePercent: clampPercent(action.volumePercent, current.volumePercent),
         brightnessPercent: clampPercent(action.brightnessPercent, current.brightnessPercent),
         timerMinutes,
         timerEndsAt: buildTimerEndsAt(timerMinutes)
       };
-      applyScene = mode !== "hifi";
+      applyScene = sceneSoundEnabled;
       applyLevels = mode !== "hifi";
-      stopScene = mode === "hifi";
+      stopScene = !sceneSoundEnabled;
       break;
     }
     case "stop_session":

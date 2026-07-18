@@ -73,6 +73,54 @@ is_enabled() {
   esac
 }
 
+detect_non_hdmi_card_id() {
+  command -v aplay >/dev/null 2>&1 || return 1
+  aplay -l 2>/dev/null | awk '
+    /^card [0-9]+:/ {
+      line = $0
+      lower = tolower(line)
+      if (lower ~ /loopback|vc4hdmi|bcm2835|hdmi/) next
+      id = line
+      sub(/^card [0-9]+: /, "", id)
+      sub(/[[:space:]].*$/, "", id)
+      gsub(/[^[:alnum:]_-]/, "", id)
+      if (id == "") next
+      if (lower ~ /usb/) {
+        print id
+        found = 1
+        exit
+      }
+      if (first == "") first = id
+    }
+    END {
+      if (!found && first != "") print first
+    }
+  '
+}
+
+resolve_physical_alsa_output_device() {
+  local value lower card_id
+  value="$(printf '%s' "${1:-}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+  lower="$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')"
+  case "$lower" in
+    ""|default)
+      printf '\n'
+      ;;
+    auto)
+      card_id="$(detect_non_hdmi_card_id || true)"
+      if [[ -z "$card_id" ]]; then
+        log "WARN: auto ALSA output requested but no non-HDMI card was detected" >&2
+        printf '\n'
+        return
+      fi
+      printf 'dmix:CARD=%s,DEV=0\n' "$card_id"
+      ;;
+    *)
+      printf '%s\n' "$value"
+      ;;
+  esac
+}
+
 run_x_command() {
   if command -v timeout >/dev/null 2>&1; then
     timeout -k 1s "${TIKPAL_KIOSK_X_COMMAND_TIMEOUT_SECONDS}s" "$@"
@@ -93,6 +141,7 @@ normalize_chromium_window_size() {
   fail "Invalid TIKPAL_KIOSK_WINDOW '$1'; expected WIDTHxHEIGHT or WIDTH,HEIGHT"
 }
 
+TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE="$(resolve_physical_alsa_output_device "$TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE")"
 CHROMIUM_WINDOW_SIZE="$(normalize_chromium_window_size "$TIKPAL_KIOSK_WINDOW")"
 
 read_flags() {

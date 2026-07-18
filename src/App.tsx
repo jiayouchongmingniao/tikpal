@@ -25,6 +25,7 @@ const KIOSK_HEARTBEAT_MS = 10_000;
 const EVENT_LOOP_LAG_SAMPLE_MS = 1_000;
 const SOURCE_SWITCH_TARGETS = new Set<SourceSwitchTarget>(["mpd", "audio", "scene", "radio", "spotify", "bluetooth", "airplay", "upnp"]);
 const EXTERNAL_HANDOFF_TARGETS = new Set<SourceSwitchTarget>(["spotify", "bluetooth", "airplay", "upnp"]);
+const VISIBLE_LISTENING_SOURCE_TARGETS = new Set<SourceSwitchTarget>(["mpd", "radio", "spotify", "bluetooth", "airplay", "upnp"]);
 
 const DEFAULT_SCENE_VIDEO: BackgroundVideoSummary = {
   id: "scene-empty",
@@ -93,6 +94,10 @@ function delay(ms: number) {
 
 function isSourceSwitchTarget(sourceId: string): sourceId is SourceSwitchTarget {
   return SOURCE_SWITCH_TARGETS.has(sourceId as SourceSwitchTarget);
+}
+
+function isVisibleListeningSourceTarget(sourceId: string): sourceId is SourceSwitchTarget {
+  return VISIBLE_LISTENING_SOURCE_TARGETS.has(sourceId as SourceSwitchTarget);
 }
 
 function getSourceLabel(sourceId: SourceSwitchTarget) {
@@ -189,15 +194,17 @@ function isRememberedLibraryTrackCurrent(state: TikpalState, localTrackPath: str
 
 function shouldRestoreRememberedSource(state: TikpalState, rememberedSource: RememberedAudioSource | null | undefined) {
   if (!rememberedSource || !isSourceSwitchTarget(rememberedSource.target)) return false;
+  const currentSourceId: string = state.audio.currentSource.id;
+  if (isVisibleListeningSourceTarget(currentSourceId)) return false;
   if (rememberedSource.target === "mpd" && rememberedSource.localTrackPath) {
-    if (state.audio.currentSource.id !== "mpd") return true;
+    if (currentSourceId !== "mpd") return true;
     return !isRememberedLibraryTrackCurrent(state, rememberedSource.localTrackPath);
   }
   if (rememberedSource.target === "radio" && rememberedSource.radioStationId) {
-    if (state.audio.currentSource.id !== "radio") return true;
+    if (currentSourceId !== "radio") return true;
     return state.audio.currentSource.radioStationId !== rememberedSource.radioStationId;
   }
-  if (state.audio.currentSource.id === rememberedSource.target) return false;
+  if (currentSourceId === rememberedSource.target) return false;
   return true;
 }
 

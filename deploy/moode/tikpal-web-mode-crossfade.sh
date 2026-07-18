@@ -4,7 +4,7 @@ set -eu
 action="${1:-check}"
 bus="${2:-}"
 value="${3:-}"
-base_pcm="${TIKPAL_WEB_MODE_ALSA_OUTPUT_DEVICE:-dmix:CARD=BT66,DEV=0}"
+configured_base_pcm="${TIKPAL_WEB_MODE_ALSA_OUTPUT_DEVICE:-auto}"
 card="${TIKPAL_WEB_MODE_CROSSFADE_CARD:-}"
 pcm_a="${TIKPAL_WEB_MODE_CROSSFADE_PCM_A:-tikpal_explore_a}"
 pcm_b="${TIKPAL_WEB_MODE_CROSSFADE_PCM_B:-tikpal_explore_b}"
@@ -20,6 +20,55 @@ fail() {
   log "ERROR: $*" >&2
   exit 1
 }
+
+trim_value() {
+  printf '%s' "${1:-}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
+}
+
+detect_non_hdmi_card_id() {
+  command -v aplay >/dev/null 2>&1 || return 1
+  aplay -l 2>/dev/null | awk '
+    /^card [0-9]+:/ {
+      line = $0
+      lower = tolower(line)
+      if (lower ~ /loopback|vc4hdmi|bcm2835|hdmi/) next
+      id = line
+      sub(/^card [0-9]+: /, "", id)
+      sub(/[[:space:]].*$/, "", id)
+      gsub(/[^[:alnum:]_-]/, "", id)
+      if (id == "") next
+      if (lower ~ /usb/) {
+        print id
+        found = 1
+        exit
+      }
+      if (first == "") first = id
+    }
+    END {
+      if (!found && first != "") print first
+    }
+  '
+}
+
+resolve_base_pcm() {
+  next_base_pcm="$(trim_value "$1")"
+  next_base_pcm_lower="$(printf '%s' "$next_base_pcm" | tr '[:upper:]' '[:lower:]')"
+  case "$next_base_pcm_lower" in
+    ""|default)
+      fail "TIKPAL_WEB_MODE_ALSA_OUTPUT_DEVICE must be auto or a physical ALSA PCM for crossfade"
+      ;;
+    auto)
+      detected_card="$(detect_non_hdmi_card_id || true)"
+      [ -n "$detected_card" ] || fail "auto ALSA output requested but no non-HDMI card was detected"
+      printf 'dmix:CARD=%s,DEV=0\n' "$detected_card"
+      ;;
+    *)
+      printf '%s\n' "$next_base_pcm"
+      ;;
+  esac
+}
+
+base_pcm="$(resolve_base_pcm "$configured_base_pcm")"
 
 derive_card() {
   printf '%s\n' "$base_pcm" | sed -n 's/.*CARD=\([^,]*\).*/\1/p'

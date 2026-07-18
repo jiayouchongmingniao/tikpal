@@ -2021,6 +2021,7 @@ async function runMpcRadioPresetFastSnapshotSmoke(roomExperienceStatePath) {
   const fakeLogoDir = path.join(workspace, "radio-logos");
   const fakeAudioVolumeStatePath = path.join(workspace, "audio-volume-state.json");
   const fakeAudioSourceMemoryStatePath = path.join(workspace, "audio-source-memory.json");
+  const fakeWebModeStatePath = path.join(workspace, "web-mode-state.json");
   const radioUri = "http://radio.example/tikpal-calm";
 
   await writeFile(fakeMpcStatePath, JSON.stringify({
@@ -2041,6 +2042,7 @@ async function runMpcRadioPresetFastSnapshotSmoke(roomExperienceStatePath) {
   await writeFile(path.join(fakeLogoDir, "Tikpal Focus - Test Exact.jpg"), Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
   await writeFile(path.join(fakeLogoDir, "FluxFM - Chillout Radio.jpg"), Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
   await writeFile(fakeAudioVolumeStatePath, JSON.stringify({ version: 1, lastNonZeroPercent: 44, updatedAt: "2026-01-01T00:00:00.000Z" }));
+  await writeFile(fakeWebModeStatePath, JSON.stringify({ activeProvider: null, lastError: null, updatedAt: "2026-01-01T00:00:00.000Z" }));
   await writeFile(fakeBrightnessStatePath, "48\n");
   await writeFile(fakeMpcPath, `#!/usr/bin/env node
 import { readFileSync, writeFileSync } from "node:fs";
@@ -2272,7 +2274,8 @@ if (getIndex >= 0) {
       TIKPAL_RADIO_AUTO_SKIP_VERIFY_WINDOW_MS: "80",
       TIKPAL_RADIO_LATE_PLAY_NUDGE_DELAYS_MS: "80,160,260",
       TIKPAL_KIOSK_AUDIO_RELEASE_COMMAND: `${process.execPath} ${fakeKioskAudioReleasePath}`,
-      TIKPAL_KIOSK_AUDIO_RELEASE_SETTLE_MS: "1"
+      TIKPAL_KIOSK_AUDIO_RELEASE_SETTLE_MS: "1",
+      TIKPAL_WEB_MODE_STATE_PATH: fakeWebModeStatePath
     }),
     stdio: ["ignore", "pipe", "pipe"]
   });
@@ -2996,8 +2999,17 @@ appendFileSync(${JSON.stringify(fakeBluetoothTransportLogPath)}, action + "\\n")
       body: JSON.stringify({ target: "bluetooth" })
     });
     assert(bluetoothForTransport.response.ok, "mpc bluetooth transport source switch should return 200");
-    assert(bluetoothForTransport.body.playback.albumArtUrl?.startsWith("/api/v1/media/artwork?track=remote-"), "mpc bluetooth should reuse cached iTunes artwork when BlueZ has no cover");
-    const bluetoothArtwork = await requestBinaryFrom(baseUrl, bluetoothForTransport.body.playback.albumArtUrl);
+    let bluetoothArtworkState = bluetoothForTransport.body;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      if (bluetoothArtworkState.playback.albumArtUrl?.startsWith("/api/v1/media/artwork?track=remote-")) break;
+      await wait(100);
+      bluetoothArtworkState = (await requestFrom(baseUrl, "/api/v1/system/state")).body;
+    }
+    assert(
+      bluetoothArtworkState.playback.albumArtUrl?.startsWith("/api/v1/media/artwork?track=remote-"),
+      `mpc bluetooth should reuse cached iTunes artwork when BlueZ has no cover, got ${bluetoothArtworkState.playback.albumArtUrl ?? "null"}`
+    );
+    const bluetoothArtwork = await requestBinaryFrom(baseUrl, bluetoothArtworkState.playback.albumArtUrl);
     assert(bluetoothArtwork.response.ok, "mpc bluetooth remote artwork endpoint should return 200");
     assert(bluetoothArtwork.body.length > 0, "mpc bluetooth remote artwork endpoint should return image bytes");
     let bluetoothState = null;
@@ -3841,12 +3853,12 @@ async function run() {
     assert(focusExperience.body.mode === "focus", "set_mode should switch room mode");
     assert(focusExperience.body.presetId === "focus-library-flow", "set_mode should apply focus preset");
     assert(focusExperience.body.sceneVideoId === "midnight-library", "focus preset should bind Midnight Library");
-    assert(focusExperience.body.sceneSoundEnabled === true, "focus preset should enable scene sound by default");
+    assert(focusExperience.body.sceneSoundEnabled === false, "focus mode switch should leave Scene Sound off unless explicitly enabled");
     const persistedExperience = JSON.parse(await readFile(roomExperienceStatePath, "utf8"));
     assert(persistedExperience.mode === "focus", "room experience should persist to the state file");
     const stateAfterFocus = await request("/api/v1/system/state");
-    assert(stateAfterFocus.body.audio.currentSource.id === "scene", "focus room mode should switch to Scene Sound");
-    assert(stateAfterFocus.body.playback.source === "scene", "focus room mode playback should follow Scene Sound");
+    assert(stateAfterFocus.body.audio.currentSource.id === "mpd", "focus room mode should preserve the current music source");
+    assert(stateAfterFocus.body.playback.source === "mpd", "focus room mode playback should not switch to Scene Sound");
     assert(stateAfterFocus.body.system.volume.percent === 31, "room mode should preserve explicit global volume");
     assert(stateAfterFocus.body.system.display.brightnessPercent === focusExperience.body.brightnessPercent, "room mode should apply brightness through system actions");
 
@@ -3856,6 +3868,7 @@ async function run() {
     });
     assert(calmSceneDefault.response.ok, "calm mode before scene memory check should return 200");
     assert(calmSceneDefault.body.sceneVideoId === "rainy-window", "calm should start from the preset scene before user scene memory");
+    assert(calmSceneDefault.body.sceneSoundEnabled === false, "calm mode switch should leave Scene Sound off unless explicitly enabled");
     const warmSceneMemory = await request("/api/v1/experience/actions", {
       method: "POST",
       body: JSON.stringify({ type: "set_scene", sceneVideoId: "warm-fireplace" })
@@ -3864,8 +3877,8 @@ async function run() {
     assert(warmSceneMemory.body.sceneVideoId === "warm-fireplace", "set_scene should persist the selected scene");
     assert(warmSceneMemory.body.sceneVideoByMode?.calm === "warm-fireplace", "set_scene should remember the selected calm scene");
     const stateAfterWarmScene = await request("/api/v1/system/state");
-    assert(stateAfterWarmScene.body.playback.artist === "Warm Fireplace", "set_scene should update active Scene Sound playback");
-    assert(stateAfterWarmScene.body.audio.currentSource.secondaryStatus === "Warm Fireplace audio playing", "set_scene should update active Scene Sound status");
+    assert(stateAfterWarmScene.body.audio.currentSource.id === "mpd", "set_scene should not interrupt music while Scene Sound is off");
+    assert(stateAfterWarmScene.body.playback.source === "mpd", "set_scene should not retarget playback while Scene Sound is off");
     const hifiAfterWarmScene = await request("/api/v1/experience/actions", {
       method: "POST",
       body: JSON.stringify({ type: "set_mode", mode: "hifi" })
@@ -3877,6 +3890,7 @@ async function run() {
     });
     assert(calmAfterWarmScene.response.ok, "calm mode after hifi should return 200");
     assert(calmAfterWarmScene.body.sceneVideoId === "warm-fireplace", "calm should restore the remembered warm fireplace scene");
+    assert(calmAfterWarmScene.body.sceneSoundEnabled === false, "calm mode after hifi should keep Scene Sound off");
     const legacyCalmState = { ...calmAfterWarmScene.body };
     delete legacyCalmState.sceneVideoByMode;
     await writeFile(roomExperienceStatePath, `${JSON.stringify(legacyCalmState, null, 2)}\n`);
@@ -3893,6 +3907,7 @@ async function run() {
     });
     assert(focusBeforeSceneSound.response.ok, "focus mode after scene memory check should return 200");
     assert(focusBeforeSceneSound.body.sceneVideoId === "midnight-library", "focus should keep its own scene after calm scene memory");
+    assert(focusBeforeSceneSound.body.sceneSoundEnabled === false, "focus mode should still require manual Scene Sound enable");
 
     const focusSceneSound = await request("/api/v1/experience/actions", {
       method: "POST",
@@ -4349,9 +4364,9 @@ async function run() {
       body: JSON.stringify({ type: "set_mode", mode: "calm" })
     });
     assert(calmBeforeScene.response.ok, "calm room mode before scene source switch should return 200");
-    assert(calmBeforeScene.body.sceneSoundEnabled === true, "calm room mode should enable scene sound by default");
+    assert(calmBeforeScene.body.sceneSoundEnabled === false, "calm room mode should leave scene sound off by default");
     const stateAfterCalmBeforeScene = await request("/api/v1/system/state");
-    assert(stateAfterCalmBeforeScene.body.audio.currentSource.id === "scene", "calm room mode should switch to Scene Sound by default");
+    assert(stateAfterCalmBeforeScene.body.audio.currentSource.id === "mpd", "calm room mode should preserve the current music source by default");
 
     const scene = await request("/api/v1/audio/source", {
       method: "POST",
@@ -4503,6 +4518,29 @@ async function run() {
     assert(airplay.body.audio.currentSource.armed === true, "airplay switch should arm airplay intake");
     assert(airplay.body.audio.currentSource.connectionState === "armed", "airplay source should initially wait for a connected input");
     assert(airplay.body.audio.sources.some((source) => source.id === "bluetooth" && source.armed === false), "airplay switch should disarm bluetooth");
+
+    const hifiWithAirplay = await request("/api/v1/experience/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "set_mode", mode: "hifi" })
+    });
+    assert(hifiWithAirplay.response.ok, "hifi mode with AirPlay should return 200");
+    assert(hifiWithAirplay.body.sceneSoundEnabled === false, "hifi mode with AirPlay should keep Scene Sound off");
+    const focusWithAirplay = await request("/api/v1/experience/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "set_mode", mode: "focus" })
+    });
+    assert(focusWithAirplay.response.ok, "focus mode from hifi with AirPlay should return 200");
+    assert(focusWithAirplay.body.sceneSoundEnabled === false, "focus mode from hifi should keep Scene Sound off");
+    const stateAfterFocusWithAirplay = await request("/api/v1/system/state");
+    assert(stateAfterFocusWithAirplay.body.audio.currentSource.id === "airplay", "focus mode from hifi should preserve AirPlay");
+    assert(stateAfterFocusWithAirplay.body.playback.source === "airplay", "focus mode from hifi should not replace AirPlay with Scene Sound");
+    const hifiAfterFocusWithAirplay = await request("/api/v1/experience/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "set_mode", mode: "hifi" })
+    });
+    assert(hifiAfterFocusWithAirplay.response.ok, "hifi mode after focus with AirPlay should return 200");
+    const stateAfterHifiWithAirplay = await request("/api/v1/system/state");
+    assert(stateAfterHifiWithAirplay.body.audio.currentSource.id === "airplay", "hifi mode after focus should preserve AirPlay");
 
     const dlna = await request("/api/v1/audio/source", {
       method: "POST",
@@ -4727,6 +4765,8 @@ async function run() {
     assert(remoteRoom.response.ok, "remote room.set_mode should return 200");
     assert(remoteRoom.body.room.mode === "calm", "remote room.set_mode should update room mode");
     assert(remoteRoom.body.volume.percent === 33, "remote room.set_mode should preserve explicit global volume");
+    assert(remoteRoom.body.scene.sceneSoundEnabled === false, "remote room.set_mode should keep Scene Sound off by default");
+    assert(remoteRoom.body.source.current.id === "radio", "remote room.set_mode should preserve Radio");
     const remoteScene = await request("/api/v1/remote/actions", {
       method: "POST",
       headers: remoteHeaders,
@@ -4734,12 +4774,14 @@ async function run() {
     });
     assert(remoteScene.response.ok, "remote scene.set should return 200");
     assert(remoteScene.body.scene.videoId === "warm-fireplace", "remote scene.set should update scene");
+    assert(remoteScene.body.source.current.id === "radio", "remote scene.set should preserve Radio while Scene Sound is off");
     const remoteHifiAfterScene = await request("/api/v1/remote/actions", {
       method: "POST",
       headers: remoteHeaders,
       body: JSON.stringify({ type: "room.set_mode", mode: "hifi" })
     });
     assert(remoteHifiAfterScene.response.ok, "remote room.set_mode hifi after scene.set should return 200");
+    assert(remoteHifiAfterScene.body.source.current.id === "radio", "remote room.set_mode hifi should preserve Radio");
     const remoteCalmAfterScene = await request("/api/v1/remote/actions", {
       method: "POST",
       headers: remoteHeaders,
@@ -4747,6 +4789,8 @@ async function run() {
     });
     assert(remoteCalmAfterScene.response.ok, "remote room.set_mode calm after scene.set should return 200");
     assert(remoteCalmAfterScene.body.scene.videoId === "warm-fireplace", "remote room.set_mode should restore remembered calm scene");
+    assert(remoteCalmAfterScene.body.scene.sceneSoundEnabled === false, "remote room.set_mode calm after hifi should keep Scene Sound off");
+    assert(remoteCalmAfterScene.body.source.current.id === "radio", "remote room.set_mode calm after hifi should preserve Radio");
     const remoteSceneSound = await request("/api/v1/remote/actions", {
       method: "POST",
       headers: remoteHeaders,

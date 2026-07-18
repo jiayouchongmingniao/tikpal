@@ -78,6 +78,10 @@ if [[ ! -d "$APP_DIR/dist" ]]; then
   exit 1
 fi
 
+if [[ "${TIKPAL_INSTALL_LOCALE_FIX:-1}" != "0" && -x "$APP_DIR/deploy/moode/tikpal-locale-enable.sh" ]]; then
+  "$APP_DIR/deploy/moode/tikpal-locale-enable.sh"
+fi
+
 install_unit "$SCRIPT_DIR/tikpal-api.service"
 install_unit "$SCRIPT_DIR/tikpal-web.service"
 
@@ -96,8 +100,10 @@ if [[ "$INSTALL_KIOSK" -eq 1 ]]; then
   web_mode_audio_device="${web_mode_audio_device%\"}"
   web_mode_audio_device="${web_mode_audio_device#\"}"
   if [[ -n "$web_mode_audio_device" && -x "$APP_DIR/deploy/moode/tikpal-web-mode-crossfade.sh" ]]; then
-    TIKPAL_WEB_MODE_ALSA_OUTPUT_DEVICE="$web_mode_audio_device" \
-      "$APP_DIR/deploy/moode/tikpal-web-mode-crossfade.sh" install
+    if ! TIKPAL_WEB_MODE_ALSA_OUTPUT_DEVICE="$web_mode_audio_device" \
+      "$APP_DIR/deploy/moode/tikpal-web-mode-crossfade.sh" install; then
+      echo "WARN: Explore audio crossfade install failed; continuing with direct provider audio" >&2
+    fi
   fi
 fi
 

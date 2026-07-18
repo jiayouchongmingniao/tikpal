@@ -86,7 +86,10 @@ sudo apt-get install -y xvfb x11vnc novnc websockify socat
 npm ci
 npm run build
 cp -n deploy/chromium/env.kiosk.example .env.kiosk
+sudo deploy/moode/tikpal-locale-enable.sh
 ```
+
+`deploy/moode/tikpal-locale-enable.sh` should be run on new moOde Pi installs before the final service install. It writes `/etc/ssh/sshd_config.d/99-tikpal-locale.conf`, sets the default locale to `C.UTF-8`, reloads `ssh.service`, and prevents macOS SSH clients that send `LC_CTYPE=UTF-8` from causing repeated login-shell warnings. `deploy/systemd/install-systemd-services.sh` also runs this helper automatically unless `TIKPAL_INSTALL_LOCALE_FIX=0` is set.
 
 If this device will use Explore login, proxy editing, or Simplified Chinese Pinyin on the touch screen, also install the on-screen keyboard and input-method helpers:
 
@@ -106,10 +109,10 @@ deploy/chromium/launch-tikpal-kiosk.sh --check
 deploy/chromium/tikpal-web-mode.sh --check
 ```
 
-For Scene Sound on the local kiosk, route Chromium to the physical USB `dmix` output instead of moOde's Loopback-backed `_audioout`. MPD, AirPlay, Bluetooth, Spotify, and Hi-Fi capture can keep using `_audioout`; browser Scene Sound should not hold that device while Tikpal starts MPD-backed sources such as Library or Radio:
+For Scene Sound on the local kiosk, route Chromium to the current physical USB `dmix` output instead of moOde's Loopback-backed `_audioout`. MPD, AirPlay, Bluetooth, Spotify, and Hi-Fi capture can keep using `_audioout`; browser Scene Sound should not hold that device while Tikpal starts MPD-backed sources such as Library or Radio:
 
 ```bash
-sed -i 's|^TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE=.*|TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE=dmix:CARD=BT66,DEV=0|' .env.kiosk
+sed -i 's|^TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE=.*|TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE=auto|' .env.kiosk
 deploy/chromium/launch-tikpal-kiosk.sh --check
 ```
 
@@ -203,20 +206,24 @@ TIKPAL_BLUETOOTH_CAPTURE_DURATION_SECONDS=10
 TIKPAL_BLUETOOTH_RECOGNITION_SETTLE_MS=4000
 TIKPAL_BLUETOOTH_RECOGNITION_RETRY_MS=45000
 TIKPAL_BLUETOOTH_RECOGNITION_NOT_FOUND_RETRY_MS=30000
-TIKPAL_AIRPLAY_READY_COMMAND="[ \"$(sqlite3 /var/local/www/db/moode-sqlite3.db \"SELECT value FROM cfg_system WHERE param='airplaysvc'\")\" = \"1\" ]"
-TIKPAL_AIRPLAY_ACTIVE_COMMAND="[ \"$(sqlite3 /var/local/www/db/moode-sqlite3.db \"SELECT value FROM cfg_system WHERE param='aplactive'\")\" = \"1\" ]"
+TIKPAL_AIRPLAY_READY_COMMAND="./deploy/moode/tikpal-airplay-state.sh ready"
+TIKPAL_AIRPLAY_ACTIVE_COMMAND="./deploy/moode/tikpal-airplay-state.sh active"
 TIKPAL_AIRPLAY_ENABLE_COMMAND="./deploy/moode/tikpal-airplay-enable.sh"
 TIKPAL_AIRPLAY_DISABLE_COMMAND="moodeutl -Ro --airplay off"
-TIKPAL_AIRPLAY_RECEIVER_ACTIVE_COMMAND="sh -lc '(command -v ss >/dev/null 2>&1 && ss -ltn sport = :7000 | grep -q LISTEN) || systemctl is-active --quiet shairport-sync.service'"
+TIKPAL_AIRPLAY_RECEIVER_ACTIVE_COMMAND="./deploy/moode/tikpal-airplay-state.sh receiver"
+TIKPAL_AIRPLAY_SERVICE_NAME=Tikpal-Speaker-Airplay
+TIKPAL_AIRPLAY_SERVICE_TYPE=classic
+TIKPAL_AIRPLAY_LABEL_COMMAND="./deploy/moode/tikpal-airplay-label.sh"
 TIKPAL_AIRPLAY_ALSA_OUTPUT_DEVICE=_audioout
 TIKPAL_AIRPLAY_METADATA_COMMAND="./deploy/moode/tikpal-airplay-metadata.sh"
+TIKPAL_AIRPLAY_METADATA_PIPE=/tmp/shairport-sync-metadata
 TIKPAL_AIRPLAY_TRANSPORT_AVAILABLE_COMMAND="./deploy/moode/tikpal-airplay-transport.sh available"
 TIKPAL_AIRPLAY_PLAY_PAUSE_COMMAND="./deploy/moode/tikpal-airplay-transport.sh play-pause"
 TIKPAL_AIRPLAY_PLAY_COMMAND="./deploy/moode/tikpal-airplay-transport.sh play"
 TIKPAL_AIRPLAY_PAUSE_COMMAND="./deploy/moode/tikpal-airplay-transport.sh pause"
 TIKPAL_AIRPLAY_NEXT_COMMAND="./deploy/moode/tikpal-airplay-transport.sh next"
 TIKPAL_AIRPLAY_PREVIOUS_COMMAND="./deploy/moode/tikpal-airplay-transport.sh previous"
-TIKPAL_AIRPLAY_METADATA_MAX_AGE_SECONDS=3600
+TIKPAL_AIRPLAY_METADATA_MAX_AGE_SECONDS=300
 TIKPAL_AIRPLAY_ARTWORK_MAX_LAG_SECONDS=1
 TIKPAL_AIRPLAY_METADATA_CLOCK_LEAD_MS=1000
 TIKPAL_AIRPLAY_DIRECT_METADATA_REFRESH_MIN_MS=1000
@@ -259,7 +266,7 @@ EOF
 `TIKPAL_MPD_STARTUP_VOLUME=30` makes Tikpal set MPD to 30% before auto-resuming playback when the API starts and playback is not already running.
 `TIKPAL_STARTUP_SCENE_SOUND_ENABLED=1` makes the Pi open Scene Sound as the default startup source for Focus, Calm, and Sleep room modes. The startup path writes `sceneSoundEnabled=true` when needed and switches to `target=scene`; choosing Library, Radio, Bluetooth, AirPlay, Spotify, or DLNA later still clears Scene Sound for that session.
 `TIKPAL_AUDIO_SOURCE_MEMORY_STATE_PATH` defaults to `.tikpal/audio-source-memory.json` and stores the last visible source for Hi-Fi restore and Scene Sound exit. It records only `mpd`, `radio`, `spotify`, `bluetooth`, `airplay`, and `upnp`; internal `scene` and `audio` are ignored so startup Scene Sound and Scene Sound toggles do not erase the user's last Library track, Radio station, or external waiting source. When Scene Sound is turned off or Hi-Fi disables it, the backend restores this remembered source first and falls back to `mpd` only if that restore fails. `localTrackPath` is the last actual local Library song and is preserved while Radio or an external source is remembered, so returning to Library can resume that song before falling back to `TIKPAL_MPD_DEFAULT_QUEUE_PATH`. `radioStationId` is the last successful Radio station and is preserved while Library or an external source is remembered, so a bare Radio source switch can resume that station before falling back to the catalog/default route. After a resource OTA or full Library replacement, the backend validates the local path against the current manifest before reuse and refreshes memory to the new current song or clears it when no local song can be mapped; after Radio catalog changes, stale station ids are ignored and replaced by the final station that actually starts.
-`TIKPAL_ALSA_LOOPBACK_ALLOW_HDMI=0` keeps Tikpal from re-enabling a stale moOde ALSA Loopback override when `_audioout` routes only to HDMI. Most Tikpal installs should select the USB speaker or USB amplifier in moOde first, then let `_audioout` follow that current output while mirroring to Loopback for AirPlay, Bluetooth, and Hi-Fi spectrum. Set this to `1` only for an intentional HDMI-output install. For Chromium Scene Sound, set `TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE` to the physical USB `dmix` output, such as `dmix:CARD=BT66,DEV=0`, so browser audio does not compete with MPD for `_audioout`.
+`TIKPAL_ALSA_LOOPBACK_ALLOW_HDMI=0` keeps Tikpal from re-enabling a stale moOde ALSA Loopback override when `_audioout` routes only to HDMI. Most Tikpal installs should select the USB speaker or USB amplifier in moOde first, then let `_audioout` follow that current output while mirroring to Loopback for AirPlay, Bluetooth, and Hi-Fi spectrum. Set this to `1` only for an intentional HDMI-output install. For Chromium Scene Sound, leave `TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE=auto` so the launcher detects the current non-HDMI USB card and resolves it to that card's `dmix` output instead of competing with MPD for `_audioout`.
 `TIKPAL_KIOSK_AUDIO_RELEASE_COMMAND` is run only before MPD-backed sources (`mpd` and `radio`) start. The checked-in `deploy/moode/tikpal-release-kiosk-audio.sh` helper kills Chromium's `audio.mojom.AudioService` utility process with a safe process pattern, then the backend waits `TIKPAL_KIOSK_AUDIO_RELEASE_SETTLE_MS` before issuing `mpc clear/add/play`. If Radio later reports `_audioout: Device or resource busy`, the delayed Radio recovery path runs the same release command again before retrying `mpc play`. Use it on Pi installs where Scene Sound is browser audio and MPD Radio otherwise reports `_audioout: Device or resource busy`.
 `TIKPAL_OUTPUT_VOLUME_GET_COMMAND` and `TIKPAL_OUTPUT_VOLUME_SET_COMMAND` should control the physical `_audioout` output, not only ALSA Loopback. On moOde installs with ALSA Loopback enabled, the checked-in `deploy/moode/tikpal-output-volume.sh` helper reads the current `/etc/alsa/conf.d/_sndaloop.conf` / `_audioout.conf` route, gets volume from the physical output, and mirrors writes to Loopback so renderer intakes and Hi-Fi spectrum use the same level. Browser Scene Sound reaches the same physical output through Chromium's `dmix` route. Avoid bare `amixer get PCM` on these installs because it can hit the Loopback card while the USB output remains at 100%.
 `TIKPAL_SYSTEM_REBOOT_COMMAND` and `TIKPAL_SYSTEM_SHUTDOWN_COMMAND` run in the background after the confirmed Console tap, so Settings does not wait on systemd while services and child processes stop.
@@ -419,6 +426,66 @@ curl -fsS http://127.0.0.1:8787/api/v1/system/state
 
 When lyrics exist, `/api/v1/lyrics/status` should be `ready` with `lines.length > 0`, `sourceScope: "airplay_input"`, and title / artist identity matching `/api/v1/playback/status`. If the provider only has a same-title different-artist result, `not_found` or continued `recognizing` is the correct state. If lyrics stay `idle` with a message like `Waiting for AirPlay audio`, first check `audio.currentSource.connectionState`; the lyrics wall intentionally stays hidden while AirPlay is only `armed`. If the wall shows the right song but the wrong highlighted line, compare helper `positionMs`, `positionTrusted`, `positionConfidence`, playback `elapsedSeconds`, and the lyric line timestamps before changing provider logic. The Hi-Fi wall defaults visible through `tikpal.lyricsVisible.v3`; old hidden-state storage is restored visible once through `tikpal.lyricsVisible.autoRestored.v1`, then later manual hides remain respected. If ready lyrics have no provider timestamps, every source must show them statically. If provider-synced lyrics have no trusted position but AirPlay reports `positionConfidence=estimated`, the wall may use that pause-aware clock; if the clock is missing, stale, paused without stored elapsed, or discarded as overrun, the wall should remain static rather than wrapping elapsed time and highlighting a false line.
 
+### AirPlay 5.1 Classic Output And Lyrics Wall Verification
+
+On moOde 10 / Shairport Sync 5.1, an AirPlay 2 control session can appear as `Playing` on the sender while the Pi receives no decryptable PCM stream, no usable title / artwork metadata, and no sound-device ownership. Treat sender-side `Playing` as weak evidence until the Pi proves the audio and metadata path locally. For this Tikpal path, set `TIKPAL_AIRPLAY_SERVICE_TYPE=classic`, keep `TIKPAL_AIRPLAY_ALSA_OUTPUT_DEVICE=_audioout`, and keep the service name stable through `TIKPAL_AIRPLAY_SERVICE_NAME=Tikpal-Speaker-Airplay`.
+
+After enabling AirPlay, verify the receiver identity, output route, metadata, and physical screen together:
+
+```bash
+shairport-sync -V
+grep -nE 'service_type|name|output_device|metadata|pipe_name|include_cover_art|cover_art_cache_directory|run_this' /etc/shairport-sync.conf
+ss -ltnp | grep -E ':5000|:7000|:4173|:4174'
+sqlite3 /var/local/www/db/moode-sqlite3.db "select param,value from cfg_system where param in ('airplaysvc','aplactive','adevname','cardnum','amixname','alsavolume') order by param;"
+sudo fuser -v /dev/snd/* 2>&1 || true
+./deploy/moode/tikpal-airplay-metadata.sh
+curl -fsS http://127.0.0.1:8787/api/v1/system/state > /tmp/tikpal-state.json
+python3 - <<'PY'
+import json
+s = json.load(open("/tmp/tikpal-state.json"))
+print(s["audio"]["currentSource"])
+print(s["playback"]["source"], s["playback"]["state"], s["playback"]["title"], "-", s["playback"]["artist"])
+print(s["playback"].get("albumArtUrl"))
+print("lyrics", s["lyrics"]["status"], "lines", len(s["lyrics"].get("lines") or []), "synced", s["lyrics"].get("synced"))
+PY
+```
+
+Success means Shairport Sync is listening as the Tikpal AirPlay endpoint, the connected session drives `aplactive=1`, `sudo fuser` shows `shairport-sync` owning both the current USB playback device and the Loopback mirror, the helper emits current title / artist / artwork from `metadataSource=mpris`, and `/api/v1/system/state` reports `audio.currentSource.id:"airplay"`, `connectionState:"connected"`, `playback.source:"airplay"`, a non-empty `albumArtUrl`, and `lyrics.status:"ready"` with displayable lines when lyrics exist. If Shairport listens on TCP 5000 in classic mode, that is expected; TCP 7000 belongs to the AirPlay 2 path and is not required for this fallback.
+
+The AirPlay artwork endpoint is a GET media endpoint; validate it by downloading bytes instead of using `HEAD`:
+
+```bash
+art_url="$(python3 - <<'PY'
+import json
+s = json.load(open("/tmp/tikpal-state.json"))
+print(s["playback"].get("albumArtUrl") or "")
+PY
+)"
+[ -n "$art_url" ] && curl -fsS "http://127.0.0.1:8787${art_url}" | wc -c
+```
+
+To prove real PCM is flowing into Tikpal's capture path, sample the Loopback capture side while the phone is playing:
+
+```bash
+timeout 3 arecord -q -D hw:CARD=Loopback,DEV=1 -f S16_LE -r 48000 -c 2 -d 2 /tmp/tikpal-airplay-loop.wav
+ls -lh /tmp/tikpal-airplay-loop.wav
+```
+
+The loopback WAV should be larger than a header-only file and Shairport should still own the USB playback PCM. This proves software audio reached `_audioout` and the Loopback mirror; it cannot prove a downstream amplifier, speaker input, or cable is audible. If those checks pass but the room is silent, test the physical output separately with an intentional low-volume speaker test.
+
+Finally, prove the physical kiosk has the cover and lyrics wall instead of relying only on API JSON:
+
+```bash
+DISPLAY=:0 XAUTHORITY=/home/moode/.Xauthority \
+  timeout 8 ffmpeg -hide_banner -loglevel error -y \
+  -video_size 2560x720 -f x11grab -i :0 -frames:v 1 /tmp/tikpal-airplay-hifi.png
+ls -lh /tmp/tikpal-airplay-hifi.png
+```
+
+The captured frame should show Hi-Fi mode with real AirPlay cover art and the lyrics wall. If the API is ready but the wall is absent, inspect `/api/v1/experience/state` for `mode:"hifi"` and the Chromium profile's `tikpal.lyricsVisible.v3` key before changing lyrics provider code.
+
+2026-07-19 validation on `192.168.2.138` used the SOCKS proxy route and confirmed `shairport-sync -V` reported `5.1-AirPlay2`, `/etc/shairport-sync.conf` had `service_type = "classic"` and `output_device = "_audioout"`, the advertised endpoint was `Tikpal-Speaker-Airplay` on TCP 5000, `sudo fuser` showed `shairport-sync` on the physical USB card and Loopback, Loopback capture produced nonzero PCM, `/api/v1/system/state` reported AirPlay playing with a versioned cover URL and ready synced lyrics, and a `DISPLAY=:0` screenshot showed the album cover plus Hi-Fi lyrics wall.
+
 Verify the portable remote facade locally and through the LAN-facing web proxy:
 
 Set the same non-empty `TIKPAL_PORTABLE_API_KEY` for both `tikpal-api.service` and `tikpal-web.service`. Check every later systemd `EnvironmentFile` override (`/etc/tikpal-api.env`, `/etc/tikpal-web.env`, or deployment-specific equivalents), then restart both services. Port `4174` keeps the key field visible near the top, stores the entered value in browser local storage, and keeps action errors visible until another action clears them.
@@ -531,7 +598,7 @@ Recovery rules:
 
 - If Loopback is missing while `/etc/alsa/conf.d/_sndaloop.conf` references `hw:Loopback,0`, run `sudo ./deploy/moode/tikpal-snd-aloop-enable.sh`, then restart the affected service.
 - If `librespot --device _audioout` is still running after the source is `scene`, run `moodeutl -Ro --spotify off`, set `TIKPAL_SPOTIFY_DISABLE_COMMAND="moodeutl -Ro --spotify off"`, and restart `tikpal-api.service`.
-- If Chromium logs `PcmOpen: _audioout,Device or resource busy`, set `TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE=dmix:CARD=<USB_CARD>,DEV=0` in `.env.kiosk`, keep DevTools disabled, and restart `tikpal-kiosk.service`.
+- If Chromium logs `PcmOpen: _audioout,Device or resource busy`, set `TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE=auto` in `.env.kiosk`, keep DevTools disabled, and restart `tikpal-kiosk.service`. Override with `dmix:CARD=<USB_CARD>,DEV=0` only when the install intentionally pins one known card.
 - If MPD reports `Failed to open ALSA device "_audioout"`, fix `_audioout` separately before judging Scene Sound; MPD and Chromium can fail for different reasons.
 
 After recovery, success looks like this:

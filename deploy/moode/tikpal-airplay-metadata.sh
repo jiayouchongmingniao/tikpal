@@ -3,7 +3,7 @@ set -eu
 
 metadata_file="${TIKPAL_AIRPLAY_METADATA_FILE:-/var/local/www/aplmeta.txt}"
 metadata_json_file="${TIKPAL_AIRPLAY_METADATA_JSON_FILE:-/var/local/www/aplmeta.json}"
-max_age_seconds="${TIKPAL_AIRPLAY_METADATA_MAX_AGE_SECONDS:-3600}"
+max_age_seconds="${TIKPAL_AIRPLAY_METADATA_MAX_AGE_SECONDS:-300}"
 artwork_max_lag_seconds="${TIKPAL_AIRPLAY_ARTWORK_MAX_LAG_SECONDS:-1}"
 event_log="${TIKPAL_AIRPLAY_EVENT_LOG:-/var/log/moode_spsevent.log}"
 metadata_clock_lead_ms="${TIKPAL_AIRPLAY_METADATA_CLOCK_LEAD_MS:-1000}"
@@ -321,7 +321,7 @@ metadata_source="$(printf '%s\n' "$metadata_payload" | awk -F '=' '$1 == "metada
 metadata_status="$(printf '%s\n' "$metadata_payload" | awk -F '=' '$1 == "status" { print tolower($2); exit }')"
 duration_ms="$(printf '%s\n' "$metadata_payload" | awk -F '=' '$1 == "durationMs" { print $2; exit }')"
 duration_ms="${duration_ms:-0}"
-if [ "$has_event_clock" -eq 1 ] && [ "$active_started_at" -lt "$active_stopped_at" ] && [ "$file_mtime" -le "$active_stopped_at" ]; then
+if [ "$metadata_source" != "mpris" ] && [ "$has_event_clock" -eq 1 ] && [ "$active_started_at" -lt "$active_stopped_at" ] && [ "$file_mtime" -le "$active_stopped_at" ]; then
   rm -f "$clock_state_file" >/dev/null 2>&1 || true
   exit 1
 fi
