@@ -277,7 +277,7 @@ esac
   const bt66Resolve = runAudioAdapt(`${hdmiCard}\n${crimsonCard}\n${bt66Card}`, ["resolve-browser"]);
   assert(bt66Resolve.status === 0 && bt66Resolve.stdout.trim() === "dmix:CARD=BT66,DEV=0", `audio adapter should prefer BT66 and use dmix:\n${bt66Resolve.stdout}\n${bt66Resolve.stderr}`);
   const crimsonResolve = runAudioAdapt(`${hdmiCard}\n${crimsonCard}`, ["resolve-browser"]);
-  assert(crimsonResolve.status === 0 && crimsonResolve.stdout.trim() === "dmix:CARD=Crimson,DEV=0", `audio adapter should use dmix for S24-only Crimson:\n${crimsonResolve.stdout}\n${crimsonResolve.stderr}`);
+  assert(crimsonResolve.status === 0 && crimsonResolve.stdout.trim() === "tikpal_browser_output", `audio adapter should use a shared conversion PCM for S24-only Crimson browser audio:\n${crimsonResolve.stdout}\n${crimsonResolve.stderr}`);
   const crimsonAudioout = runAudioAdapt(`${hdmiCard}\n${crimsonCard}`, ["resolve-audioout"]);
   assert(crimsonAudioout.status === 0 && crimsonAudioout.stdout.trim() === "plughw:CARD=Crimson,DEV=0", "audio adapter should use plughw for moOde audioout");
   const mysteryCheck = runAudioAdapt(`${hdmiCard}\n${mysteryCard}`, ["check"]);
@@ -481,6 +481,7 @@ esac
   assert(audioAdaptScript.includes("TIKPAL_AUDIO_ALLOW_UNKNOWN_SINGLE:=1"), "audio adapter should allow one unknown USB card by default");
   assert(audioAdaptScript.includes("multiple unknown non-HDMI audio cards detected"), "audio adapter should reject multiple unknown cards without a forced card");
   assert(audioAdaptScript.includes("resolve-browser") && audioAdaptScript.includes("resolve-audioout"), "audio adapter should expose browser and moOde PCM resolvers");
+  assert(audioAdaptScript.includes("write_browser_output_config") && audioAdaptScript.includes("TIKPAL_AUDIO_BROWSER_SHARED_PCM"), "audio adapter should generate a shared conversion PCM for S24-only browser outputs");
   assert(audioAdaptScript.includes("printf 'snd_aloop\\n'") && audioAdaptScript.includes("snd_aloop is not visible after applying Loopback config"), "audio adapter apply should persist and verify the real snd_aloop module name");
   assert(alsaLoopbackScript.includes("modprobe_command") && alsaLoopbackScript.includes("snd_aloop"), "ALSA Loopback helper should load the real snd_aloop module name through a resolved modprobe path");
   assert(sndAloopEnableScript.includes("printf 'snd_aloop\\n'") && sndAloopEnableScript.includes("exit 1"), "standalone Loopback enable script should persist snd_aloop and fail if Loopback stays hidden");
