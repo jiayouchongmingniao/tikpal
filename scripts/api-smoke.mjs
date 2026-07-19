@@ -280,14 +280,17 @@ async function runAirplayMetadataHelperClockSmoke() {
   const metadataJsonPath = path.join(workspace, "aplmeta.json");
   const metadataTxtPath = path.join(workspace, "missing-aplmeta.txt");
   const eventLogPath = path.join(workspace, "moode_spsevent.log");
+  const oldEventLogPath = path.join(workspace, "old-moode_spsevent.log");
   const clockStatePath = path.join(workspace, "clock-state");
   const mprisClockStatePath = path.join(workspace, "mpris-clock-state");
+  const mprisSeenClockStatePath = path.join(workspace, "mpris-seen-clock-state");
   const fakeBusctlPath = path.join(workspace, "busctl");
   const coverPath = path.join(workspace, "airplay-cover.jpg");
   const eventSeconds = Math.floor(Date.now() / 1000) - 12;
   const metadataSeconds = eventSeconds + 6;
   const oldCoverSeconds = metadataSeconds - 600;
   const eventStamp = formatMoodeEventTimestamp(eventSeconds);
+  const oldEventStamp = formatMoodeEventTimestamp(Math.floor(Date.now() / 1000) - 300);
 
   try {
     await writeFile(
@@ -385,6 +388,43 @@ if (property === "Metadata") {
     assert(Number(mprisFields.get("metadataMtimeMs")) === metadataSeconds * 1000, "MPRIS clock should use matching json metadata mtime");
     assert(Number(mprisFields.get("clockStartMs")) === metadataSeconds * 1000, "MPRIS clock should not use stale shared artwork mtime");
     assert(Number(mprisFields.get("positionMs")) < 30_000, "MPRIS inferred position should start near the current track, not the old cover mtime");
+
+    await writeFile(oldEventLogPath, `${oldEventStamp} Event: Run spspre.sh\n`);
+    const mprisSeenResult = await runProcess("sh", ["deploy/moode/tikpal-airplay-metadata.sh"], {
+      env: {
+        ...process.env,
+        PATH: `${workspace}:${process.env.PATH}`,
+        TIKPAL_AIRPLAY_EVENT_LOG: oldEventLogPath,
+        TIKPAL_AIRPLAY_METADATA_FILE: metadataTxtPath,
+        TIKPAL_AIRPLAY_METADATA_JSON_FILE: path.join(workspace, "missing-aplmeta.json"),
+        TIKPAL_AIRPLAY_CLOCK_STATE_FILE: mprisSeenClockStatePath,
+        TIKPAL_AIRPLAY_METADATA_CLOCK_LEAD_MS: "1000"
+      }
+    });
+    assert(mprisSeenResult.code === 0, `AirPlay helper should recover MPRIS clock from a stale AirPlay event, stderr: ${mprisSeenResult.stderr}`);
+    const mprisSeenFields = parseKeyValueOutput(mprisSeenResult.stdout);
+    const mprisSeenPositionMs = Number(mprisSeenFields.get("positionMs"));
+    assert(mprisSeenFields.get("clockStartReason") === "mpris_seen", "MPRIS without native position should reset stale AirPlay event clocks to mpris_seen");
+    assert(mprisSeenFields.get("positionConfidence") === "estimated", "MPRIS without native position should still expose an estimated clock");
+    assert(Number.isFinite(mprisSeenPositionMs) && mprisSeenPositionMs >= 0 && mprisSeenPositionMs < 2500, "fresh mpris_seen clock should start near zero");
+
+    await wait(1100);
+    const persistedMprisSeenResult = await runProcess("sh", ["deploy/moode/tikpal-airplay-metadata.sh"], {
+      env: {
+        ...process.env,
+        PATH: `${workspace}:${process.env.PATH}`,
+        TIKPAL_AIRPLAY_EVENT_LOG: oldEventLogPath,
+        TIKPAL_AIRPLAY_METADATA_FILE: metadataTxtPath,
+        TIKPAL_AIRPLAY_METADATA_JSON_FILE: path.join(workspace, "missing-aplmeta.json"),
+        TIKPAL_AIRPLAY_CLOCK_STATE_FILE: mprisSeenClockStatePath,
+        TIKPAL_AIRPLAY_METADATA_CLOCK_LEAD_MS: "1000"
+      }
+    });
+    assert(persistedMprisSeenResult.code === 0, `AirPlay helper should reuse persisted MPRIS clock state, stderr: ${persistedMprisSeenResult.stderr}`);
+    const persistedMprisSeenFields = parseKeyValueOutput(persistedMprisSeenResult.stdout);
+    assert(persistedMprisSeenFields.get("clockStartMs") === mprisSeenFields.get("clockStartMs"), "persisted mpris_seen clock should keep the same start");
+    assert(persistedMprisSeenFields.get("positionConfidence") === "estimated", "persisted mpris_seen clock should stay estimated");
+    assert(Number(persistedMprisSeenFields.get("positionMs")) > mprisSeenPositionMs, "persisted mpris_seen clock should advance while playing");
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
@@ -3375,6 +3415,11 @@ appendFileSync(${JSON.stringify(fakeBluetoothTransportLogPath)}, action + "\\n")
     assert(estimatedClockState.body.playback.timingDiagnostics?.positionConfidence === "estimated", "estimated AirPlay clock should be marked in diagnostics");
     assert(estimatedClockState.body.lyrics.title === "This City", "estimated AirPlay clock should keep the correct lyrics identity");
     assert(estimatedClockState.body.lyrics.synced === true, "estimated AirPlay clock should drive synced lyrics");
+    assert(
+      estimatedClockState.body.lyrics.timingStrategy !== "plain_static"
+        && estimatedClockState.body.lyrics.timingStrategy !== "static_duration_mismatch",
+      "estimated AirPlay clock should not degrade ready synced lyrics to a static wall"
+    );
 
     await writeAirplayMetadata({
       title: "Instant Crush",

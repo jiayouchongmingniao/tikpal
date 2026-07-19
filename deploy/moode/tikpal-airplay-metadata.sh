@@ -358,6 +358,29 @@ state_clock_reason=""
 state_position_ms=""
 state_updated_at=0
 state_status=""
+if [ -r "$clock_state_file" ]; then
+  read -r state_key_hash state_clock_start state_started_at state_clock_reason state_position_ms state_updated_at state_status < "$clock_state_file" || true
+fi
+state_clock_start="${state_clock_start:-0}"
+state_started_at="${state_started_at:-0}"
+state_position_ms="${state_position_ms:-}"
+state_updated_at="${state_updated_at:-0}"
+state_status="${state_status:-}"
+
+mpris_missing_position=0
+if [ "$metadata_source" = "mpris" ] \
+  && { ! printf '%s\n' "$raw_position_ms" | grep -Eq '^[0-9]+$' || [ "${raw_position_ms:-0}" -eq 0 ]; }; then
+  mpris_missing_position=1
+fi
+
+state_clock_matches=0
+if [ "$metadata_key_hash" = "$state_key_hash" ] \
+  && [ "$active_started_at" -eq "$state_started_at" ] \
+  && [ "$state_clock_start" -gt 0 ] \
+  && [ "$state_clock_start" -le "$now" ]; then
+  state_clock_matches=1
+fi
+
 if [ "$active_started_at" -gt "$active_stopped_at" ]; then
   clock_start="$active_started_at"
   clock_start_reason="airplay_event"
@@ -371,24 +394,22 @@ if [ "$file_mtime" -gt 0 ] && { [ "$clock_start" -eq 0 ] || [ "$file_mtime" -gt 
   fi
 fi
 
+if [ "$mpris_missing_position" -eq 1 ] \
+  && [ "$metadata_status" = "playing" ] \
+  && [ "$file_mtime" -eq 0 ] \
+  && [ "$state_clock_matches" -eq 0 ]; then
+  clock_start="$now"
+  clock_start_reason="mpris_seen"
+  clock_lead_ms=0
+fi
+
 if [ "$clock_start" -eq 0 ] && [ "$metadata_source" = "mpris" ]; then
   clock_start="$now"
   clock_start_reason="mpris_seen"
 fi
 
 if [ "$clock_start" -gt 0 ]; then
-  if [ -r "$clock_state_file" ]; then
-    read -r state_key_hash state_clock_start state_started_at state_clock_reason state_position_ms state_updated_at state_status < "$clock_state_file" || true
-  fi
-  state_clock_start="${state_clock_start:-0}"
-  state_started_at="${state_started_at:-0}"
-  state_position_ms="${state_position_ms:-}"
-  state_updated_at="${state_updated_at:-0}"
-  state_status="${state_status:-}"
-  if [ "$metadata_key_hash" = "$state_key_hash" ] \
-    && [ "$active_started_at" -eq "$state_started_at" ] \
-    && [ "$state_clock_start" -gt 0 ] \
-    && [ "$state_clock_start" -le "$now" ] \
+  if [ "$state_clock_matches" -eq 1 ] \
     && { [ "$clock_start_reason" = "mpris_seen" ] || [ "$state_clock_start" -eq "$clock_start" ]; }; then
     clock_start="$state_clock_start"
     if [ "$state_clock_reason" = "metadata_mtime" ] || [ "$state_clock_reason" = "persisted_metadata_mtime" ]; then
@@ -438,9 +459,20 @@ if printf '%s\n' "$duration_ms" | grep -Eq '^[0-9]+$' \
   && [ "$duration_ms" -gt 0 ] \
   && printf '%s\n' "$position_ms" | grep -Eq '^[0-9]+$' \
   && [ "$position_ms" -gt $((duration_ms + 10000)) ]; then
-  position_ms=""
-  position_trusted=false
-  position_confidence=none
+  if [ "$mpris_missing_position" -eq 1 ] \
+    && [ "$metadata_status" = "playing" ] \
+    && [ "$clock_start_reason" = "airplay_event" ]; then
+    clock_start="$now"
+    clock_start_reason="mpris_seen"
+    clock_lead_ms=0
+    position_ms=0
+    position_trusted=false
+    position_confidence=estimated
+  else
+    position_ms=""
+    position_trusted=false
+    position_confidence=none
+  fi
 fi
 
 if printf '%s\n' "$position_ms" | grep -Eq '^[0-9]+$'; then
