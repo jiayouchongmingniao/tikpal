@@ -62,6 +62,14 @@ fi
 : "${TIKPAL_WEB_MODE_ERROR_PAGE_URL:=http://127.0.0.1:4173/web-mode-error.html}"
 : "${TIKPAL_WEB_MODE_QQ_AUTO_CONFIRM:=1}"
 
+if [[ -n "${TIKPAL_WEB_MODE_ONBOARD_ACTION_POSITION:-}" ]]; then
+  TIKPAL_WEB_MODE_ONBOARD_POSITION="$TIKPAL_WEB_MODE_ONBOARD_ACTION_POSITION"
+fi
+
+if [[ -n "${TIKPAL_WEB_MODE_ONBOARD_ACTION_WINDOW:-}" ]]; then
+  TIKPAL_WEB_MODE_ONBOARD_WINDOW="$TIKPAL_WEB_MODE_ONBOARD_ACTION_WINDOW"
+fi
+
 log() {
   printf '[tikpal-web-mode] %s\n' "$*"
 }
@@ -534,6 +542,41 @@ raise_onboard() {
   done < <(onboard_visible_windows)
 }
 
+move_onboard_if_requested() {
+  local area height keyboard_area=0 keyboard_window="" window width
+  is_enabled "$TIKPAL_WEB_MODE_ONBOARD" || return 0
+  is_enabled "${TIKPAL_WEB_MODE_ONBOARD_REQUESTED_POSITION:-0}" || return 0
+  command -v xdotool >/dev/null 2>&1 || return 0
+  pgrep -u "$(id -u)" -x onboard >/dev/null 2>&1 || return 0
+
+  while IFS= read -r window; do
+    [[ -n "$window" ]] || continue
+    [[ "$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool getwindowname "$window" 2>/dev/null || true)" == "Onboard" ]] || continue
+    if command -v xwininfo >/dev/null 2>&1 &&
+      DISPLAY="$TIKPAL_KIOSK_DISPLAY" xwininfo -id "$window" 2>/dev/null | grep -q "Class: InputOnly"; then
+      continue
+    fi
+    width="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool getwindowgeometry --shell "$window" 2>/dev/null | awk -F= '$1 == "WIDTH" { print $2 }')"
+    height="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool getwindowgeometry --shell "$window" 2>/dev/null | awk -F= '$1 == "HEIGHT" { print $2 }')"
+    area=$(( ${width:-0} * ${height:-0} ))
+    if (( area > keyboard_area )); then
+      keyboard_window="$window"
+      keyboard_area="$area"
+    fi
+  done < <(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool search --onlyvisible --name Onboard 2>/dev/null || true)
+
+  [[ -n "$keyboard_window" ]] || return 0
+  width="$(window_width "$TIKPAL_WEB_MODE_ONBOARD_WINDOW")"
+  height="$(window_height "$TIKPAL_WEB_MODE_ONBOARD_WINDOW")"
+  DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowsize "$keyboard_window" "$width" "$height" >/dev/null 2>&1 || true
+  DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowmove "$keyboard_window" \
+    "$(position_x "$TIKPAL_WEB_MODE_ONBOARD_POSITION")" "$(position_y "$TIKPAL_WEB_MODE_ONBOARD_POSITION")" >/dev/null 2>&1 || true
+  DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowraise "$keyboard_window" >/dev/null 2>&1 || true
+  if command -v wmctrl >/dev/null 2>&1; then
+    DISPLAY="$TIKPAL_KIOSK_DISPLAY" wmctrl -i -r "$keyboard_window" -b add,above >/dev/null 2>&1 || true
+  fi
+}
+
 configure_onboard_input_method_key() {
   local source_dir="/usr/share/onboard/layouts"
   local target_dir="${XDG_DATA_HOME:-$HOME/.local/share}/onboard/layouts"
@@ -689,6 +732,7 @@ ensure_onboard() {
   call_onboard_method Show || true
   sleep 0.1
   raise_onboard
+  move_onboard_if_requested
 }
 
 hide_onboard() {

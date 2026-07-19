@@ -3670,6 +3670,47 @@ function normalizeWebModeProxyUrl(value) {
   return parsed.toString().replace(/\/$/, "");
 }
 
+function normalizeWebModeKeyboardPosition(value) {
+  if (value === undefined) return null;
+  if (typeof value !== "string") {
+    throw new Error("Explore keyboard position must be x,y");
+  }
+  const match = value.trim().match(/^(\d{1,4}),(\d{1,4})$/);
+  if (!match) {
+    throw new Error("Explore keyboard position must be x,y");
+  }
+  const x = Number(match[1]);
+  const y = Number(match[2]);
+  if (!Number.isSafeInteger(x) || !Number.isSafeInteger(y) || x > 3840 || y > 2160) {
+    throw new Error("Explore keyboard position must be inside the kiosk display");
+  }
+  return `${x},${y}`;
+}
+
+function normalizeWebModeKeyboardWindow(value) {
+  if (value === undefined) return null;
+  if (typeof value !== "string") {
+    throw new Error("Explore keyboard window must be WIDTHxHEIGHT");
+  }
+  const match = value.trim().match(/^(\d{2,4})x(\d{2,4})$/);
+  if (!match) {
+    throw new Error("Explore keyboard window must be WIDTHxHEIGHT");
+  }
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  if (
+    !Number.isSafeInteger(width)
+    || !Number.isSafeInteger(height)
+    || width < 320
+    || height < 120
+    || width > 2560
+    || height > 1440
+  ) {
+    throw new Error("Explore keyboard window must fit the kiosk display");
+  }
+  return `${width}x${height}`;
+}
+
 function normalizeWebModeSettings(raw = {}) {
   let proxyUrl = WEB_MODE_DEFAULT_PROXY_URL;
   try {
@@ -9720,12 +9761,17 @@ async function applyPlaybackActionForCurrentBackend(action) {
   await applyPlaybackAction(action);
 }
 
-async function runWebModeCommand(action, providerId = "") {
+async function runWebModeCommand(action, providerId = "", env = {}) {
   if (!WEB_MODE_COMMAND.trim()) return;
+  const envPrefix = Object.entries(env)
+    .filter(([, value]) => value !== undefined && value !== null && String(value).trim() !== "")
+    .map(([key, value]) => `${key}=${shellQuote(value)}`)
+    .join(" ");
   const command = providerId
     ? `${WEB_MODE_COMMAND} ${shellQuote(action)} ${shellQuote(providerId)}`
     : `${WEB_MODE_COMMAND} ${shellQuote(action)}`;
-  await runCommand(command, { allowFailure: false, timeout: 45_000, includeStdoutOnFailure: true });
+  const commandWithEnv = envPrefix ? `${envPrefix} ${command}` : command;
+  await runCommand(commandWithEnv, { allowFailure: false, timeout: 45_000, includeStdoutOnFailure: true });
 }
 
 function webModeProviderLabel(providerId) {
@@ -9797,10 +9843,19 @@ async function applyWebModeAction(action) {
     if (action?.force !== undefined && typeof action.force !== "boolean") {
       throw new Error("Explore keyboard force value must be boolean");
     }
+    const keyboardPosition = normalizeWebModeKeyboardPosition(action?.keyboardPosition);
+    const keyboardWindow = normalizeWebModeKeyboardWindow(action?.keyboardWindow);
     const keyboardMode = action.enabled === true ? "show" : action.enabled === false ? "hide" : "toggle";
     const keyboardCommand = keyboardMode === "show" && action.force === true ? "show-force" : keyboardMode;
+    const keyboardEnv = keyboardMode === "hide" || (!keyboardPosition && !keyboardWindow)
+      ? {}
+      : {
+          TIKPAL_WEB_MODE_ONBOARD_REQUESTED_POSITION: "1",
+          ...(keyboardPosition ? { TIKPAL_WEB_MODE_ONBOARD_ACTION_POSITION: keyboardPosition, TIKPAL_WEB_MODE_ONBOARD_POSITION: keyboardPosition } : {}),
+          ...(keyboardWindow ? { TIKPAL_WEB_MODE_ONBOARD_ACTION_WINDOW: keyboardWindow, TIKPAL_WEB_MODE_ONBOARD_WINDOW: keyboardWindow } : {})
+        };
     try {
-      await runWebModeCommand("keyboard", keyboardCommand);
+      await runWebModeCommand("keyboard", keyboardCommand, keyboardEnv);
       await writeWebModeRuntimeState({ lastError: null });
     } catch (error) {
       const message = formatWebModeCommandError(error, "keyboard");

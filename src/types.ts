@@ -65,6 +65,8 @@ export interface WebModeActionRequest {
   provider?: WebModeProviderId;
   enabled?: boolean;
   force?: boolean;
+  keyboardPosition?: string;
+  keyboardWindow?: string;
 }
 
 export interface WebModeSettingsPatch {

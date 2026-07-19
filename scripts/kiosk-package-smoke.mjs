@@ -250,6 +250,7 @@ async function run() {
   const kioskLauncher = await readFile(path.join(ROOT, "deploy/chromium/launch-tikpal-kiosk.sh"), "utf8");
   const kioskSession = await readFile(path.join(ROOT, "deploy/chromium/start-tikpal-kiosk-session.sh"), "utf8");
   const webModeScript = await readFile(path.join(ROOT, "deploy/chromium/tikpal-web-mode.sh"), "utf8");
+  const serverSource = await readFile(path.join(ROOT, "server/index.mjs"), "utf8");
   const webModeCrossfadeScript = await readFile(path.join(ROOT, "deploy/moode/tikpal-web-mode-crossfade.sh"), "utf8");
   const extensionManifest = JSON.parse(await readFile(path.join(ROOT, "deploy/chromium/web-mode-extension/manifest.json"), "utf8"));
   const extensionContent = await readFile(path.join(ROOT, "deploy/chromium/web-mode-extension/content.js"), "utf8");
@@ -340,6 +341,9 @@ async function run() {
   assert(webModeScript.includes("TIKPAL_WEB_MODE_ONBOARD_SUPPRESS_PATH"), "explicit keyboard hide should suppress periodic provider auto-show");
   assert(webModeScript.includes("show-force"), "new provider input focus should clear manual keyboard suppression");
   assert(webModeScript.includes("show-force) with_web_mode_lock force_onboard"), "keyboard requests should serialize cold Onboard startup");
+  assert(webModeScript.includes("move_onboard_if_requested"), "keyboard requests with local kiosk geometry should move Onboard away from focused Console fields");
+  assert(webModeScript.includes("TIKPAL_WEB_MODE_ONBOARD_REQUESTED_POSITION"), "web mode should only move Onboard when the API explicitly supplies a per-focus position");
+  assert(webModeScript.includes("TIKPAL_WEB_MODE_ONBOARD_ACTION_POSITION"), "web mode should preserve per-action Onboard coordinates after sourcing .env.kiosk");
   assert(!webModeScript.slice(webModeScript.indexOf("ensure_onboard()"), webModeScript.indexOf("hide_onboard()")).includes("focus_window"), "web mode should not change X focus while showing Onboard");
   assert(!webModeScript.includes('if [[ -z "$(onboard_visible_windows)" ]]; then\n    call_onboard_method Show'), "web mode should not skip DBus Show just because a stale Onboard X window is visible");
   assert(!webModeScript.slice(webModeScript.indexOf("ensure_onboard()"), webModeScript.indexOf("hide_onboard()")).includes("position_onboard"), "web mode should not xdotool-map Onboard while showing it");
@@ -380,11 +384,16 @@ async function run() {
   assert(mainSource.includes("onboardInputSelector"), "local kiosk text inputs should share automatic Onboard activation");
   assert(mainSource.includes("localKioskHosts.has(window.location.hostname)"), "automatic Onboard activation should stay on the physical kiosk host");
   assert(mainSource.includes('sendWebModeAction({ type: "keyboard", enabled,'), "local kiosk inputs should explicitly show and hide Onboard");
+  assert(mainSource.includes("keyboardPlacementForTarget") && mainSource.includes("rectsOverlap"), "local kiosk inputs should choose a keyboard position that avoids the focused field");
+  assert(mainSource.includes("keyboardPosition") && mainSource.includes("keyboardWindow"), "local kiosk inputs should send per-focus Onboard geometry to the API");
   assert(mainSource.includes("keepTextInputFocus"), "local kiosk inputs should keep focus when Onboard appears");
   assert(mainSource.includes("outsidePointerDown"), "local kiosk inputs should still hide Onboard when the user taps outside");
   assert(mainSource.includes("target && target === document.activeElement"), "local kiosk should reshow Onboard when an already-focused input is tapped again");
   assert(mainSource.includes("tikpal:keyboard-context-clear"), "local kiosk should clear input focus state when Settings closes");
   assert(mainSource.includes('document.addEventListener("focusout"'), "local kiosk inputs should hide Onboard after focus leaves text input");
+  assert(serverSource.includes("normalizeWebModeKeyboardPosition") && serverSource.includes("normalizeWebModeKeyboardWindow"), "API should validate per-focus keyboard geometry before invoking the launcher");
+  assert(serverSource.includes("TIKPAL_WEB_MODE_ONBOARD_ACTION_POSITION") && serverSource.includes("TIKPAL_WEB_MODE_ONBOARD_ACTION_WINDOW"), "API should pass per-action keyboard geometry without relying on .env-overridable variables");
+  assert(serverSource.includes("TIKPAL_WEB_MODE_ONBOARD_POSITION") && serverSource.includes("TIKPAL_WEB_MODE_ONBOARD_WINDOW"), "API should pass validated keyboard geometry to the launcher");
   const openProviderBody = webModeScript.slice(
     webModeScript.indexOf("open_provider()"),
     webModeScript.indexOf("check_runtime()")

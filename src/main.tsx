@@ -28,12 +28,82 @@ const onboardInputSelector = [
   "input[type='tel']",
   "input[type='number']"
 ].join(",");
+const onboardKeyboardWindow = { width: 900, height: 280 };
+const onboardKeyboardDefaultPosition = { x: 500, y: 420 };
+const onboardKeyboardMargin = 24;
+
+type KeyboardPlacement = {
+  keyboardPosition: string;
+  keyboardWindow: string;
+};
+
+type RectLike = {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+};
+
+const clampKeyboardCoordinate = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
+
+const keyboardRect = (x: number, y: number): RectLike => ({
+  left: x,
+  top: y,
+  right: x + onboardKeyboardWindow.width,
+  bottom: y + onboardKeyboardWindow.height
+});
+
+const rectsOverlap = (a: RectLike, b: RectLike) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+
+const keyboardPlacementForTarget = (target: HTMLElement): KeyboardPlacement => {
+  const viewportWidth = Math.max(window.innerWidth || 0, onboardKeyboardWindow.width);
+  const viewportHeight = Math.max(window.innerHeight || 0, onboardKeyboardWindow.height);
+  const maxX = Math.max(0, viewportWidth - onboardKeyboardWindow.width);
+  const maxY = Math.max(0, viewportHeight - onboardKeyboardWindow.height);
+  const targetRect = target.getBoundingClientRect();
+  const safeTarget = {
+    left: targetRect.left - onboardKeyboardMargin,
+    top: targetRect.top - onboardKeyboardMargin,
+    right: targetRect.right + onboardKeyboardMargin,
+    bottom: targetRect.bottom + onboardKeyboardMargin
+  };
+  const fit = (x: number, y: number) => ({
+    x: Math.round(clampKeyboardCoordinate(x, 0, maxX)),
+    y: Math.round(clampKeyboardCoordinate(y, 0, maxY))
+  });
+  const centeredX = targetRect.left + targetRect.width / 2 - onboardKeyboardWindow.width / 2;
+  const topY = onboardKeyboardMargin;
+  const bottomY = viewportHeight - onboardKeyboardWindow.height - onboardKeyboardMargin;
+  const aboveY = targetRect.top - onboardKeyboardWindow.height - onboardKeyboardMargin;
+  const belowY = targetRect.bottom + onboardKeyboardMargin;
+  const leftX = onboardKeyboardMargin;
+  const rightX = viewportWidth - onboardKeyboardWindow.width - onboardKeyboardMargin;
+  const candidates = [
+    fit(onboardKeyboardDefaultPosition.x, onboardKeyboardDefaultPosition.y),
+    fit(centeredX, aboveY),
+    fit(centeredX, belowY),
+    fit(centeredX, topY),
+    fit(centeredX, bottomY),
+    fit(leftX, topY),
+    fit(rightX, topY),
+    fit(leftX, bottomY),
+    fit(rightX, bottomY)
+  ];
+  const chosen = candidates.find((candidate) => !rectsOverlap(keyboardRect(candidate.x, candidate.y), safeTarget))
+    ?? (targetRect.top > viewportHeight / 2 ? fit(centeredX, topY) : fit(centeredX, bottomY));
+
+  return {
+    keyboardPosition: `${chosen.x},${chosen.y}`,
+    keyboardWindow: `${onboardKeyboardWindow.width}x${onboardKeyboardWindow.height}`
+  };
+};
 
 if (!window.__TIKPAL_REMOTE_MODE__ && localKioskHosts.has(window.location.hostname)) {
   let lastTextInput: HTMLElement | null = null;
   let outsidePointerDown = false;
-  const setOnboardVisible = (enabled: boolean) => {
-    void sendWebModeAction({ type: "keyboard", enabled, ...(enabled ? { force: true } : {}) }).catch(() => undefined);
+  const setOnboardVisible = (enabled: boolean, target: HTMLElement | null = null) => {
+    const placement = enabled && target ? keyboardPlacementForTarget(target) : null;
+    void sendWebModeAction({ type: "keyboard", enabled, ...(enabled ? { force: true } : {}), ...(placement ?? {}) }).catch(() => undefined);
   };
   const activeTextInput = () => document.activeElement instanceof HTMLElement
     && Boolean(document.activeElement.closest(onboardInputSelector));
@@ -58,7 +128,7 @@ if (!window.__TIKPAL_REMOTE_MODE__ && localKioskHosts.has(window.location.hostna
     outsidePointerDown = !target;
     if (target && target === document.activeElement) {
       lastTextInput = target;
-      setOnboardVisible(true);
+      setOnboardVisible(true, target);
       keepTextInputFocus(target);
     }
     if (!target) {
@@ -76,7 +146,7 @@ if (!window.__TIKPAL_REMOTE_MODE__ && localKioskHosts.has(window.location.hostna
     if (target) {
       outsidePointerDown = false;
       lastTextInput = target;
-      setOnboardVisible(true);
+      setOnboardVisible(true, target);
       keepTextInputFocus(target);
     }
   }, true);

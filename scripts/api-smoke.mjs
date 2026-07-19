@@ -1800,7 +1800,15 @@ appendFileSync(${JSON.stringify(fakeExternalDisableLogPath)}, (process.argv[2] ?
   await writeFile(fakeWebModeCommandPath, `#!/usr/bin/env node
 import { appendFileSync } from "node:fs";
 
-appendFileSync(${JSON.stringify(fakeWebModeLogPath)}, process.argv.slice(2).join("\\t") + "\\n");
+const args = process.argv.slice(2);
+const keyboardEnv = args[0] === "keyboard"
+  ? [
+      process.env.TIKPAL_WEB_MODE_ONBOARD_REQUESTED_POSITION ?? "",
+      process.env.TIKPAL_WEB_MODE_ONBOARD_POSITION ?? "",
+      process.env.TIKPAL_WEB_MODE_ONBOARD_WINDOW ?? ""
+    ]
+  : [];
+appendFileSync(${JSON.stringify(fakeWebModeLogPath)}, [...args, ...keyboardEnv].join("\\t") + "\\n");
 `);
   await chmod(fakeWebModeCommandPath, 0o755);
 
@@ -1962,6 +1970,23 @@ appendFileSync(${JSON.stringify(fakeWebModeLogPath)}, process.argv.slice(2).join
     const stateAfterWebMode = await requestFrom(baseUrl, "/api/v1/system/state");
     assert(stateAfterWebMode.body.audio.currentSource.id !== "web_mode", "web mode should not become audio source truth");
     assert(stateAfterWebMode.body.audio.rememberedSource?.target === "bluetooth", "web mode should preserve remembered Bluetooth instead of storing Explore");
+
+    await writeFile(fakeWebModeLogPath, "");
+    const movedKeyboard = await requestFrom(baseUrl, "/api/v1/web-mode/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "keyboard", enabled: true, force: true, keyboardPosition: "500,80", keyboardWindow: "900x280" })
+    });
+    assert(movedKeyboard.response.ok, "web mode keyboard should accept local kiosk geometry for focused Console inputs");
+    const movedKeyboardLog = await readFile(fakeWebModeLogPath, "utf8");
+    assert(
+      movedKeyboardLog.includes("keyboard\tshow-force\t1\t500,80\t900x280\n"),
+      `web mode keyboard should pass Onboard geometry through environment, got ${JSON.stringify(movedKeyboardLog)}`
+    );
+    const invalidKeyboardPosition = await requestFrom(baseUrl, "/api/v1/web-mode/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "keyboard", enabled: true, keyboardPosition: "left,top" })
+    });
+    assert(invalidKeyboardPosition.response.status === 400, "web mode keyboard should reject unsafe Console geometry");
 
     for (const providerId of ["spotify", "youtube_music", "apple_music", "tidal", "qobuz", "deezer", "amazon_music", "suno", "netease_music"]) {
       await writeFile(fakeExternalDisableLogPath, "");
