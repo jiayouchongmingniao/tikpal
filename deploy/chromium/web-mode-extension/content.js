@@ -15,10 +15,15 @@
   const allowProgrammaticInputFocus = !/(^|\.)suno\.com$/i.test(window.location.hostname);
   let lastKeyboardEnabled = null;
   let lastKeyboardRequestMs = 0;
+  let lastEditable = null;
+  let outsidePointerDown = false;
   const editableTarget = (target) => target?.closest?.(inputSelector) || null;
+  const isEditable = (target) => Boolean(editableTarget(target));
+  const activeEditable = () => editableTarget(document.activeElement);
   const requestKeyboard = (enabled, force = false) => {
     const now = Date.now();
-    if (!force && lastKeyboardEnabled === enabled && now - lastKeyboardRequestMs < 250) return;
+    const throttleMs = force ? 1000 : 250;
+    if (lastKeyboardEnabled === enabled && now - lastKeyboardRequestMs < throttleMs) return;
     lastKeyboardEnabled = enabled;
     lastKeyboardRequestMs = now;
     chrome.runtime.sendMessage({ type: "keyboard", enabled, force }, () => undefined);
@@ -27,21 +32,49 @@
     if (!document.hasFocus()) return;
     if (event.type === "focusin" && !allowProgrammaticInputFocus) return;
     const path = typeof event.composedPath === "function" ? event.composedPath() : [event.target];
-    if (path.some(editableTarget)) requestKeyboard(true, true);
+    const target = path.map(editableTarget).find(Boolean);
+    if (!target) return;
+    outsidePointerDown = false;
+    lastEditable = target;
+    requestKeyboard(true, true);
   };
   const isMultiline = (target) => Boolean(target && (target.matches("textarea,[contenteditable='true']") || target.getAttribute("aria-multiline") === "true"));
 
+  document.addEventListener("pointerdown", (event) => {
+    const path = typeof event.composedPath === "function" ? event.composedPath() : [event.target];
+    outsidePointerDown = !path.some(isEditable);
+    if (outsidePointerDown) lastEditable = null;
+  }, true);
   document.addEventListener("pointerdown", requestShow, true);
   document.addEventListener("focusin", requestShow, true);
   document.addEventListener("focusout", () => {
     setTimeout(() => {
-      if (!document.hasFocus() || (!editableTarget(document.activeElement) && document.activeElement?.tagName !== "IFRAME")) requestKeyboard(false);
+      if (!document.hasFocus()) {
+        const active = activeEditable();
+        if (active || lastEditable?.isConnected || !outsidePointerDown) {
+          lastEditable = active || lastEditable;
+          return;
+        }
+        lastEditable = null;
+        requestKeyboard(false);
+        return;
+      }
+      if (activeEditable() || document.activeElement?.tagName === "IFRAME") return;
+      if (lastEditable && !outsidePointerDown) return;
+      lastEditable = null;
+      requestKeyboard(false);
     }, 80);
   }, true);
-  document.addEventListener("submit", () => requestKeyboard(false), true);
+  document.addEventListener("submit", () => {
+    lastEditable = null;
+    requestKeyboard(false);
+  }, true);
   document.addEventListener("keydown", (event) => {
     const target = editableTarget(event.target);
-    if (event.key === "Enter" && target && !isMultiline(target)) requestKeyboard(false);
+    if (event.key === "Enter" && target && !isMultiline(target)) {
+      lastEditable = null;
+      requestKeyboard(false);
+    }
   }, true);
 
   const retarget = (root = document) => {

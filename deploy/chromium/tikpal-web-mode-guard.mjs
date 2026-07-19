@@ -299,7 +299,8 @@ const inputFocusGuardScript = `(() => {
   };
   const requestKeyboard = (enabled, force = false) => {
     const now = Date.now();
-    if (!force && lastKeyboardEnabled === enabled && now - lastKeyboardRequestMs < 250) return;
+    const throttleMs = force ? 1000 : 250;
+    if (lastKeyboardEnabled === enabled && now - lastKeyboardRequestMs < throttleMs) return;
     lastKeyboardEnabled = enabled;
     lastKeyboardRequestMs = now;
     fetch(keyboardActionUrl, {
@@ -400,7 +401,8 @@ const inputFocusExpression = `(() => {
 
 function setOnboardVisible(enabled, force = false) {
   const now = Date.now();
-  if (!force && lastOnboardVisible === enabled && now - lastOnboardActionMs < 250) return;
+  const throttleMs = force ? 1000 : 250;
+  if (lastOnboardVisible === enabled && now - lastOnboardActionMs < throttleMs) return;
   lastOnboardVisible = enabled;
   lastOnboardActionMs = now;
   const child = spawn("bash", [launcherPath, "keyboard", enabled ? force ? "show-force" : "show" : "hide"], {

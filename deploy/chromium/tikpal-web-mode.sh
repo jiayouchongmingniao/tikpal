@@ -838,11 +838,21 @@ tile_window() {
   local window="$1"
   local position="$2"
   local size="$3"
-  local x y width height
+  local current_height current_width current_x current_y geometry height width x y
   x="$(position_x "$position")"
   y="$(position_y "$position")"
   width="$(window_width "$size")"
   height="$(window_height "$size")"
+  TIKPAL_TILE_WINDOW_CHANGED=0
+  geometry="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool getwindowgeometry --shell "$window" 2>/dev/null || true)"
+  current_x="$(printf '%s\n' "$geometry" | awk -F= '$1 == "X" { print $2 }')"
+  current_y="$(printf '%s\n' "$geometry" | awk -F= '$1 == "Y" { print $2 }')"
+  current_width="$(printf '%s\n' "$geometry" | awk -F= '$1 == "WIDTH" { print $2 }')"
+  current_height="$(printf '%s\n' "$geometry" | awk -F= '$1 == "HEIGHT" { print $2 }')"
+  if [[ "$current_x" == "$x" && "$current_y" == "$y" && "$current_width" == "$width" && "$current_height" == "$height" ]]; then
+    return 0
+  fi
+  TIKPAL_TILE_WINDOW_CHANGED=1
   if command -v wmctrl >/dev/null 2>&1; then
     DISPLAY="$TIKPAL_KIOSK_DISPLAY" wmctrl -i -r "$window" -b remove,fullscreen,maximized_vert,maximized_horz >/dev/null 2>&1 || true
   fi
@@ -922,6 +932,8 @@ all_chromium_windows() {
 tile_visible_web_mode_windows() {
   local provider_profile="$1"
   local panel_profile="$2"
+  local force_raise="${3:-0}"
+  local did_restack=0
   local window pid title active_window keep_window provider_window_count
   local provider_windows=()
   command -v xdotool >/dev/null 2>&1 || return 0
@@ -934,7 +946,10 @@ tile_visible_web_mode_windows() {
 
     if process_tree_uses_profile "$pid" "$panel_profile"; then
       tile_window "$window" "$TIKPAL_WEB_MODE_PANEL_POSITION" "$TIKPAL_WEB_MODE_PANEL_WINDOW"
-      raise_window_without_focus "$window"
+      if [[ "$force_raise" == "1" || "${TIKPAL_TILE_WINDOW_CHANGED:-0}" == "1" ]]; then
+        raise_window_without_focus "$window"
+        did_restack=1
+      fi
       continue
     fi
     if is_ad_window_title "$title"; then
@@ -943,16 +958,22 @@ tile_visible_web_mode_windows() {
     fi
     if process_tree_uses_profile "$pid" "$provider_profile"; then
       tile_window "$window" "$TIKPAL_WEB_MODE_LEFT_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
-      raise_window_without_focus "$window"
+      if [[ "$force_raise" == "1" || "${TIKPAL_TILE_WINDOW_CHANGED:-0}" == "1" ]]; then
+        raise_window_without_focus "$window"
+        did_restack=1
+      fi
       provider_windows+=("$window")
     elif [[ -n "$title" ]] && ! is_tikpal_window_title "$title"; then
       tile_window "$window" "$TIKPAL_WEB_MODE_LEFT_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
-      raise_window_without_focus "$window"
+      if [[ "$force_raise" == "1" || "${TIKPAL_TILE_WINDOW_CHANGED:-0}" == "1" ]]; then
+        raise_window_without_focus "$window"
+        did_restack=1
+      fi
       provider_windows+=("$window")
     fi
   done < <(visible_chromium_windows)
 
-  raise_onboard
+  [[ "$did_restack" == "1" ]] && raise_onboard
   is_enabled "$TIKPAL_WEB_MODE_SINGLE_PROVIDER_WINDOW" || return 0
   [[ "${#provider_windows[@]}" -gt 1 ]] || return 0
 
@@ -967,10 +988,13 @@ tile_visible_web_mode_windows() {
   for window in "${provider_windows[@]}"; do
     [[ "$window" == "$keep_window" ]] && continue
     DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowclose "$window" >/dev/null 2>&1 || true
+    did_restack=1
   done
   tile_window "$keep_window" "$TIKPAL_WEB_MODE_LEFT_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
-  raise_window_without_focus "$keep_window"
-  raise_onboard
+  if [[ "$force_raise" == "1" || "$did_restack" == "1" || "${TIKPAL_TILE_WINDOW_CHANGED:-0}" == "1" ]]; then
+    raise_window_without_focus "$keep_window"
+    raise_onboard
+  fi
 }
 
 start_window_guard() {
@@ -990,10 +1014,12 @@ start_window_guard() {
 run_window_guard() {
   local provider_profile="$1"
   local panel_profile="$2"
+  local force_raise=1
   [[ -n "$provider_profile" ]] || return 0
 
   while profile_process_exists "$provider_profile"; do
-    tile_visible_web_mode_windows "$provider_profile" "$panel_profile"
+    tile_visible_web_mode_windows "$provider_profile" "$panel_profile" "$force_raise"
+    force_raise=0
     sleep 0.25
   done
 }

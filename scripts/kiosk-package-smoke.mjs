@@ -271,6 +271,9 @@ async function run() {
   assert(extensionContent.includes('chrome.runtime.sendMessage({ type: "keyboard", enabled, force }'), "Explore extension should distinguish new input focus from keyboard hide requests");
   assert(extensionContent.includes("suno\\.com") && extensionContent.includes('event.type === "focusin" && !allowProgrammaticInputFocus'), "Suno should ignore page-driven autofocus until the user taps an input");
   assert(extensionContent.includes("editableTarget(document.activeElement)"), "Explore extension should hide Onboard after provider input focus ends");
+  assert(extensionContent.includes("active || lastEditable?.isConnected || !outsidePointerDown"), "Explore extension should not hide Onboard when the keyboard takes focus from a provider input");
+  assert(extensionContent.includes("const throttleMs = force ? 1000 : 250"), "Explore extension should throttle repeated forced keyboard show requests");
+  assert(!extensionContent.includes("if (!document.hasFocus() || (!editableTarget(document.activeElement)"), "Explore extension should not hide Onboard on provider-window blur alone");
   assert(!extensionContent.includes("if (document.hasFocus() && editableTarget(document.activeElement)) requestKeyboard(true);"), "Explore extension should not reopen Onboard after its own close button hides it");
   assert(extensionBackground.includes("setKeyboardVisible"), "Explore extension background should forward keyboard actions to the loopback API");
   assert(extensionBackground.includes("chrome.tabs.update(sender.tab.id, { url: provider.url })"), "extension background should navigate the bootstrap tab after proxy sync");
@@ -346,6 +349,9 @@ async function run() {
   assert(webModeScript.indexOf("call_onboard_method Show || true", webModeScript.indexOf("ensure_onboard()")) < webModeScript.indexOf("raise_onboard", webModeScript.indexOf("ensure_onboard()")), "web mode should show Onboard before raising it above Chromium");
   assert(webModeScript.includes("raise_window_without_focus"), "web mode guard should raise provider and side-panel windows without stealing input focus");
   assert(webModeScript.includes('raise_window_without_focus "$window"'), "web mode guard should keep tiled provider windows above the full-screen kiosk");
+  assert(webModeScript.includes("TIKPAL_TILE_WINDOW_CHANGED=0"), "web mode guard should track whether a Chromium window actually needed retile");
+  assert(webModeScript.includes('local force_raise="${3:-0}"'), "web mode guard should force a single provider raise when the guard first starts");
+  assert(webModeScript.includes('[[ "$did_restack" == "1" ]] && raise_onboard'), "web mode guard should not raise Onboard on every polling pass");
   assert(webModeScript.includes('pkill -KILL -f -- "--user-data-dir=$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"'), "Explore close should force-exit a side panel that ignores graceful shutdown");
   assert(webModeScript.includes("org.onboard.window force-to-top true"), "Onboard should enable its Always on Top setting");
   assert(webModeScript.includes("org.onboard.window window-state-sticky true"), "Onboard should keep its always-on-top window sticky");
@@ -551,8 +557,9 @@ async function run() {
   assert(providerGuardSource.includes("keepEditableFocus"), "provider focus guard should keep Spotify-style inputs focused after Onboard opens");
   assert(providerGuardSource.includes("outsidePointerDown"), "provider focus guard should still hide Onboard when tapping outside inputs");
   assert(providerGuardSource.includes("lastOnboardActionMs"), "provider focus guard should throttle repeated keyboard show while inputs stay focused");
-  assert(providerGuardSource.includes("lastKeyboardRequestMs < 250"), "provider focus guard should not delay keyboard show behind a long throttle");
-  assert(providerGuardSource.includes("lastOnboardActionMs < 250"), "provider poll fallback should not delay keyboard show behind a long throttle");
+  assert(providerGuardSource.includes("const throttleMs = force ? 1000 : 250"), "provider focus guard should throttle repeated forced keyboard show requests");
+  assert(providerGuardSource.includes("lastKeyboardEnabled === enabled && now - lastKeyboardRequestMs < throttleMs"), "provider focus guard should not spam duplicate keyboard requests");
+  assert(providerGuardSource.includes("lastOnboardVisible === enabled && now - lastOnboardActionMs < throttleMs"), "provider poll fallback should not spam duplicate launcher actions");
   assert(!providerGuardSource.includes("else if (anyFocused) setOnboardVisible(true)"), "provider focus guard should let Onboard stay closed until a new input interaction");
   assert(providerGuardSource.includes("active || lastEditable?.isConnected || !outsidePointerDown"), "provider focus guard should keep Onboard visible when it takes X focus from a login input");
   assert(providerGuardSource.includes("shouldHide ||= state.hideRequest > previous.hideRequest"), "provider polling should hide Onboard only after an explicit provider hide request");
