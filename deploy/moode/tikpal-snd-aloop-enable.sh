@@ -21,16 +21,17 @@ warn() {
 }
 
 if [[ "$(id -u)" -ne 0 ]]; then
-  echo "Please run with sudo so snd-aloop can be loaded and persisted." >&2
+  echo "Please run with sudo so snd_aloop can be loaded and persisted." >&2
   exit 1
 fi
 
 tikpal_enable_alsa_loopback_output "$ALSALOOP_CONF"
-printf 'snd-aloop\n' >"$MODULES_LOAD_PATH"
+printf 'snd_aloop\n' >"$MODULES_LOAD_PATH"
 chmod 0644 "$MODULES_LOAD_PATH"
 
 if ! aplay -l 2>/dev/null | grep -q 'Loopback'; then
-  warn "snd-aloop was loaded but aplay did not list Loopback yet; reboot may be required"
+  warn "snd_aloop was loaded but aplay did not list Loopback yet"
+  exit 1
 fi
 
-log "snd-aloop is loaded and will be loaded at boot"
+log "snd_aloop is loaded and will be loaded at boot"

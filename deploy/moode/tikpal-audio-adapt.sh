@@ -59,6 +59,35 @@ run_as_root() {
   fi
 }
 
+modprobe_command() {
+  local modprobe_cmd
+  modprobe_cmd="$(command -v modprobe 2>/dev/null || true)"
+  if [[ -n "$modprobe_cmd" ]]; then
+    printf '%s\n' "$modprobe_cmd"
+    return 0
+  fi
+  if [[ -x /usr/sbin/modprobe ]]; then
+    printf '%s\n' /usr/sbin/modprobe
+    return 0
+  fi
+  if [[ -x /sbin/modprobe ]]; then
+    printf '%s\n' /sbin/modprobe
+    return 0
+  fi
+  return 1
+}
+
+modprobe_snd_aloop() {
+  local modprobe_cmd
+  modprobe_cmd="$(modprobe_command || true)"
+  if [[ -z "$modprobe_cmd" ]]; then
+    log "WARN: modprobe was not found; cannot load snd_aloop"
+    return 1
+  fi
+  run_as_root "$modprobe_cmd" snd_aloop >/dev/null 2>&1 \
+    || run_as_root "$modprobe_cmd" snd-aloop >/dev/null 2>&1
+}
+
 write_root_file() {
   local target="$1"
   local tmp
@@ -308,10 +337,13 @@ EOF
 
 enable_loopback_config() {
   local pcm="$1"
+  printf 'snd_aloop\n' | write_root_file "$TIKPAL_SND_ALOOP_MODULES_LOAD"
   if [[ -f "$SCRIPT_DIR/tikpal-alsa-loopback.sh" ]]; then
     # shellcheck disable=SC1091
     . "$SCRIPT_DIR/tikpal-alsa-loopback.sh"
-    TIKPAL_ALSA_PHYSICAL_OUTPUT_DEVICE="$pcm" tikpal_enable_alsa_loopback_output "$TIKPAL_SNDALOOP_CONFIG"
+    if ! TIKPAL_ALSA_PHYSICAL_OUTPUT_DEVICE="$pcm" tikpal_enable_alsa_loopback_output "$TIKPAL_SNDALOOP_CONFIG"; then
+      fail "failed to enable ALSA Loopback for $pcm"
+    fi
   else
     write_root_file "$TIKPAL_SNDALOOP_CONFIG" <<EOF
 #########################################
@@ -338,9 +370,9 @@ ttable [
 ]
 }
 EOF
-    run_as_root modprobe snd-aloop >/dev/null 2>&1 || true
+    modprobe_snd_aloop || true
   fi
-  printf 'snd-aloop\n' | write_root_file "$TIKPAL_SND_ALOOP_MODULES_LOAD"
+  loopback_visible || fail "snd_aloop is not visible after applying Loopback config"
 }
 
 check_audio() {

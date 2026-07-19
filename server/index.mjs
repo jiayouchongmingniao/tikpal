@@ -2380,8 +2380,55 @@ function isUsableAirplayPlaybackMetadata(metadata) {
   return true;
 }
 
+function splitAirplayCompoundTrackArtistLabel(rawArtist) {
+  const value = normalizeMetadataValue(rawArtist);
+  for (const separator of [" — ", " – "]) {
+    const parts = value.split(separator).map((part) => normalizeMetadataValue(part)).filter(Boolean);
+    if (parts.length === 2) {
+      return {
+        title: parts[0],
+        artist: parts[1]
+      };
+    }
+  }
+  return null;
+}
+
+function containsCjk(value) {
+  return /[\u3400-\u9fff]/.test(String(value ?? ""));
+}
+
+function latinWordCount(value) {
+  return String(value ?? "").match(/[A-Za-z0-9]+/g)?.length ?? 0;
+}
+
+function looksLikeAirplayCompoundTrackTitle(value) {
+  const normalized = normalizeMetadataValue(value);
+  if (!normalized) return false;
+  if (containsCjk(normalized)) return normalized.replace(/[^\u3400-\u9fff]/g, "").length >= 2;
+  return latinWordCount(normalized) >= 2 || /[[(]/.test(normalized);
+}
+
+function normalizeAirplayCompoundTrackMetadata(metadata) {
+  const splitLabel = splitAirplayCompoundTrackArtistLabel(metadata?.artist);
+  if (!splitLabel) return metadata;
+  if (!looksLikeAirplayCompoundTrackTitle(splitLabel.title)) return metadata;
+
+  const currentTitleKey = normalizeLyricsMatchValue(metadata.title);
+  const splitTitleKey = normalizeLyricsMatchValue(splitLabel.title);
+  const titleAlreadyMatches = currentTitleKey && splitTitleKey && currentTitleKey === splitTitleKey;
+  if (!titleAlreadyMatches && !currentTitleKey) return metadata;
+
+  return {
+    ...metadata,
+    title: splitLabel.title,
+    artist: splitLabel.artist
+  };
+}
+
 function normalizeAirplayPlaybackMetadata(metadata) {
   if (!isUsableAirplayPlaybackMetadata(metadata)) return null;
+  metadata = normalizeAirplayCompoundTrackMetadata(metadata);
   const positionMs = Number(metadata.positionMs);
   const durationMs = Number(metadata.durationMs);
   const metadataSource = String(metadata?.timingDiagnostics?.metadataSource ?? "").trim().toLowerCase();

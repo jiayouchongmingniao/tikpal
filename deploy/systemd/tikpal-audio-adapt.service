@@ -10,6 +10,7 @@ User=root
 WorkingDirectory=@APP_DIR@
 EnvironmentFile=-@APP_DIR@/.env
 EnvironmentFile=-@APP_DIR@/.env.kiosk
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ExecStart=@APP_DIR@/deploy/moode/tikpal-audio-adapt.sh apply
 RemainAfterExit=yes
 

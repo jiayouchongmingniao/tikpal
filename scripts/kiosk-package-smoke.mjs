@@ -283,6 +283,8 @@ esac
   assert(noUsb.status !== 0 && !noUsb.stdout.includes("vc4hdmi"), "audio adapter should not select HDMI as a fallback output");
 
   const audioAdaptUnit = await readFile(path.join(ROOT, "deploy/systemd/tikpal-audio-adapt.service"), "utf8");
+  const alsaLoopbackScript = await readFile(path.join(ROOT, "deploy/moode/tikpal-alsa-loopback.sh"), "utf8");
+  const sndAloopEnableScript = await readFile(path.join(ROOT, "deploy/moode/tikpal-snd-aloop-enable.sh"), "utf8");
   const apiUnit = await readFile(path.join(ROOT, "deploy/systemd/tikpal-api.service"), "utf8");
   const webUnit = await readFile(path.join(ROOT, "deploy/systemd/tikpal-web.service"), "utf8");
   const kioskDevtoolsUnit = await readFile(path.join(ROOT, "deploy/systemd/tikpal-kiosk-devtools.service"), "utf8");
@@ -294,6 +296,7 @@ esac
   const deployDoc = await readFile(path.join(ROOT, "docs/06-deployment/raspberry-pi-kiosk-deploy-v1.md"), "utf8");
   assert(audioAdaptUnit.includes("tikpal-audio-adapt.sh apply"), "audio adapter unit should run the moOde adapter before services");
   assert(audioAdaptUnit.includes("Before=mpd.service tikpal-api.service tikpal-web.service tikpal-kiosk.service"), "audio adapter unit should order before playback and Tikpal services");
+  assert(audioAdaptUnit.includes("/usr/sbin:/usr/bin:/sbin:/bin"), "audio adapter unit should include sbin paths so modprobe is available");
   assert(apiUnit.includes("network.target"), "api unit should use network.target");
   assert(apiUnit.includes("tikpal-audio-adapt.service"), "api unit should pull the audio adapter before startup");
   assert(!apiUnit.includes("network-online.target"), "api unit should not wait for network-online.target");
@@ -468,6 +471,9 @@ esac
   assert(audioAdaptScript.includes("TIKPAL_AUDIO_ALLOW_UNKNOWN_SINGLE:=1"), "audio adapter should allow one unknown USB card by default");
   assert(audioAdaptScript.includes("multiple unknown non-HDMI audio cards detected"), "audio adapter should reject multiple unknown cards without a forced card");
   assert(audioAdaptScript.includes("resolve-browser") && audioAdaptScript.includes("resolve-audioout"), "audio adapter should expose browser and moOde PCM resolvers");
+  assert(audioAdaptScript.includes("printf 'snd_aloop\\n'") && audioAdaptScript.includes("snd_aloop is not visible after applying Loopback config"), "audio adapter apply should persist and verify the real snd_aloop module name");
+  assert(alsaLoopbackScript.includes("modprobe_command") && alsaLoopbackScript.includes("snd_aloop"), "ALSA Loopback helper should load the real snd_aloop module name through a resolved modprobe path");
+  assert(sndAloopEnableScript.includes("printf 'snd_aloop\\n'") && sndAloopEnableScript.includes("exit 1"), "standalone Loopback enable script should persist snd_aloop and fail if Loopback stays hidden");
   assert(webModeScript.includes('open_provider "${2:-qq_music}"'), "web mode should default initial Explore launch to QQ Music");
   assert(webModeScript.includes("xdotool is required for Explore provider window detection"), "web mode --check should fail clearly when xdotool is missing");
   assert(webModeScript.includes("window-guard.pid"), "web mode should track the persistent window guard pid");

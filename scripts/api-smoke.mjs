@@ -602,6 +602,20 @@ function createProviderServer() {
         return;
       }
 
+      if (track === "City Of Stars (From \"La La Land\" Soundtrack)") {
+        sendProviderJson(response, 200, [
+          {
+            trackName: track,
+            artistName: "Ryan Gosling/Emma Stone",
+            albumName: "La La Land (Original Motion Picture Soundtrack)",
+            duration: 149,
+            syncedLyrics: "[00:11.00]City of stars\n[00:19.00]Are you shining just for me\n[00:32.00]There's so much that I can't see\n[01:08.00]Who knows",
+            plainLyrics: "City of stars\nAre you shining just for me\nThere's so much that I can't see\nWho knows"
+          }
+        ]);
+        return;
+      }
+
       if (track === "Duration Drift") {
         sendProviderJson(response, 200, [
           {
@@ -3202,6 +3216,40 @@ appendFileSync(${JSON.stringify(fakeBluetoothTransportLogPath)}, action + "\\n")
     assert(thisCityLyrics.synced === true, "AirPlay lyrics should stay synced when playback position is available");
     assert(thisCityLyrics.lines.some((line) => line.text.includes("crowded rooms")), "AirPlay lyrics should expose current track lyrics");
     assert(!thisCityLyrics.lines.some((line) => line.text.includes("Wrong city")), "AirPlay lyrics should not expose wrong-artist same-title lyrics");
+
+    await writeAirplayMetadata({
+      title: "someone else",
+      artist: "City Of Stars (From \"La La Land\" Soundtrack) — Ryan Gosling/Emma Stone",
+      album: "La La Land (Original Motion Picture Soundtrack)",
+      status: "playing",
+      positionMs: 19000,
+      durationMs: 149000,
+      artworkPath: firstAirplayArtworkPath,
+      artworkMtimeMs: 111500,
+      positionTrusted: false,
+      metadataSource: "mpris"
+    });
+    const lyricTitleRefresh = await requestFrom(baseUrl, "/api/v1/lyrics/refresh", {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    assert(lyricTitleRefresh.response.ok, "mpc airplay lyrics-line metadata refresh should return 200");
+    const lyricTitleState = await requestFrom(baseUrl, "/api/v1/system/state");
+    assert(lyricTitleState.response.ok, "mpc airplay lyrics-line metadata state should return 200");
+    assert(
+      lyricTitleState.body.playback.title === "City Of Stars (From \"La La Land\" Soundtrack)",
+      "AirPlay should recover the track title when MPRIS title is only the current lyric line"
+    );
+    assert(
+      lyricTitleState.body.playback.artist === "Ryan Gosling/Emma Stone",
+      "AirPlay should recover the real artist from a compound artist label"
+    );
+    const cityOfStarsLyrics = await waitForLyricsTrackAt(baseUrl, {
+      title: "City Of Stars (From \"La La Land\" Soundtrack)",
+      artist: "Ryan Gosling/Emma Stone"
+    });
+    assert(cityOfStarsLyrics.sourceScope === "airplay_input", "AirPlay lyrics-line metadata should keep airplay scope");
+    assert(cityOfStarsLyrics.lines.some((line) => line.text.includes("City of stars")), "AirPlay lyrics-line metadata should expose the recovered track lyrics");
 
     const cached = await requestFrom(baseUrl, "/api/v1/system/state");
     assert(cached.response.ok, "cached mpc airplay state should return 200");

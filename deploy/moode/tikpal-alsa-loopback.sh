@@ -34,6 +34,33 @@ tikpal_run_as_root() {
   fi
 }
 
+tikpal_modprobe_command() {
+  modprobe_cmd="$(command -v modprobe 2>/dev/null || true)"
+  if [ -n "$modprobe_cmd" ]; then
+    printf '%s\n' "$modprobe_cmd"
+    return 0
+  fi
+  if [ -x /usr/sbin/modprobe ]; then
+    printf '%s\n' /usr/sbin/modprobe
+    return 0
+  fi
+  if [ -x /sbin/modprobe ]; then
+    printf '%s\n' /sbin/modprobe
+    return 0
+  fi
+  return 1
+}
+
+tikpal_modprobe_snd_aloop() {
+  modprobe_cmd="$(tikpal_modprobe_command || true)"
+  if [ -z "$modprobe_cmd" ]; then
+    tikpal_alsa_warn "modprobe was not found; cannot load snd_aloop"
+    return 1
+  fi
+  tikpal_run_as_root "$modprobe_cmd" snd_aloop >/dev/null 2>&1 \
+    || tikpal_run_as_root "$modprobe_cmd" snd-aloop >/dev/null 2>&1
+}
+
 tikpal_alsa_config_targets() {
   config_path="$1"
   awk '
@@ -216,13 +243,15 @@ tikpal_ensure_snd_aloop_loaded() {
     return 0
   fi
 
-  tikpal_run_as_root modprobe snd-aloop >/dev/null 2>&1 || true
+  if ! tikpal_modprobe_snd_aloop; then
+    tikpal_alsa_warn "could not load snd_aloop with modprobe"
+  fi
 
   if aplay -l 2>/dev/null | grep -q 'Loopback'; then
     return 0
   fi
 
-  tikpal_alsa_warn "snd-aloop is not visible in aplay output; Loopback may require sudo permissions or a reboot"
+  tikpal_alsa_warn "snd_aloop is not visible in aplay output; Loopback may require sudo permissions or a reboot"
   return 1
 }
 
