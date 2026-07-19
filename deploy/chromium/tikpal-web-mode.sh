@@ -596,11 +596,24 @@ install_onboard_ime_toggle_script() {
   return 1
 }
 
+install_onboard_ime_color_scheme() {
+  local source_scheme="$SCRIPT_DIR/onboard-themes/Tikpal-Classic.colors"
+  local target_dir="${XDG_DATA_HOME:-$HOME/.local/share}/onboard/themes"
+  local target_scheme="$target_dir/Tikpal-Classic.colors"
+  [[ -f "$source_scheme" ]] || return 1
+  mkdir -p "$target_dir"
+  install -m 0644 "$source_scheme" "$target_scheme"
+}
+
 configure_onboard_input_method_key() {
   local source_dir="/usr/share/onboard/layouts"
   local target_dir="${XDG_DATA_HOME:-$HOME/.local/share}/onboard/layouts"
+  local target_theme_dir="${XDG_DATA_HOME:-$HOME/.local/share}/onboard/themes"
   local target_layout="$target_dir/Tikpal-Compact.onboard"
+  local target_active_layout="$target_dir/Tikpal-Compact-Pinyin.onboard"
+  local target_color_scheme="$target_theme_dir/Tikpal-Classic.colors"
   local temporary_layout="$target_layout.tmp"
+  local temporary_active_layout="$target_active_layout.tmp"
 
   if ! command -v fcitx5-remote >/dev/null 2>&1 \
     || [[ ! -f "$source_dir/Compact.onboard" ]] \
@@ -608,6 +621,7 @@ configure_onboard_input_method_key() {
     || [[ ! -f "$source_dir/Compact-Numbers.svg" ]] \
     || [[ ! -f "$source_dir/Compact-Utils.svg" ]]; then
     gsettings reset org.onboard layout >/dev/null 2>&1 || true
+    gsettings set org.onboard.theme-settings color-scheme "/usr/share/onboard/themes/Classic Onboard.colors" >/dev/null 2>&1 || true
     gsettings reset org.onboard key-label-overrides >/dev/null 2>&1 || true
     return 0
   fi
@@ -615,13 +629,16 @@ configure_onboard_input_method_key() {
   if ! install_onboard_ime_toggle_script; then
     log "WARN: Onboard IME toggle script could not be installed; using F9 fallback"
   fi
+  if ! install_onboard_ime_color_scheme; then
+    log "WARN: Tikpal Onboard IME color scheme could not be installed; using default Onboard colors"
+  fi
 
   mkdir -p "$target_dir"
   cp -f "$source_dir/Compact-Alpha.svg" "$source_dir/Compact-Numbers.svg" \
     "$source_dir/Compact-Utils.svg" "$target_dir/"
   if ! awk '
     !done && /group="bottomrow" id="LWIN"/ {
-      sub("id=\"LWIN\"/>", "id=\"TIKPAL_IME\" svg_id=\"LWIN\" label=\"中/EN\" script=\"tikpalImeToggle\"/>")
+      sub("id=\"LWIN\"/>", "id=\"TIKPAL-IME\" svg_id=\"LWIN\" theme_id=\"TIKPAL-IME-INACTIVE\" label=\"中/EN\" script=\"tikpalImeToggle\"/>")
       done = 1
     }
     { print }
@@ -629,12 +646,37 @@ configure_onboard_input_method_key() {
   ' "$source_dir/Compact.onboard" >"$temporary_layout"; then
     rm -f "$temporary_layout"
     gsettings reset org.onboard layout >/dev/null 2>&1 || true
+    gsettings set org.onboard.theme-settings color-scheme "/usr/share/onboard/themes/Classic Onboard.colors" >/dev/null 2>&1 || true
+    gsettings reset org.onboard key-label-overrides >/dev/null 2>&1 || true
+    return 0
+  fi
+  if ! awk '
+    !done && /group="bottomrow" id="LWIN"/ {
+      sub("id=\"LWIN\"/>", "id=\"TIKPAL-IME\" svg_id=\"LWIN\" theme_id=\"TIKPAL-IME-ACTIVE\" label=\"中文\" script=\"tikpalImeToggle\"/>")
+      done = 1
+    }
+    { print }
+    END { if (!done) exit 1 }
+  ' "$source_dir/Compact.onboard" >"$temporary_active_layout"; then
+    rm -f "$temporary_layout" "$temporary_active_layout"
+    gsettings reset org.onboard layout >/dev/null 2>&1 || true
+    gsettings set org.onboard.theme-settings color-scheme "/usr/share/onboard/themes/Classic Onboard.colors" >/dev/null 2>&1 || true
     gsettings reset org.onboard key-label-overrides >/dev/null 2>&1 || true
     return 0
   fi
   mv -f "$temporary_layout" "$target_layout"
+  mv -f "$temporary_active_layout" "$target_active_layout"
+  if [[ -f "$target_color_scheme" ]]; then
+    gsettings set org.onboard.theme-settings color-scheme "$target_color_scheme" >/dev/null 2>&1 || true
+  fi
   gsettings set org.onboard layout "$target_layout" >/dev/null 2>&1 || true
   gsettings reset org.onboard key-label-overrides >/dev/null 2>&1 || true
+  python3 /usr/share/onboard/scripts/tikpalImeToggle.py --sync >/dev/null 2>&1 || true
+}
+
+sync_onboard_input_method_visual() {
+  [[ -f /usr/share/onboard/scripts/tikpalImeToggle.py ]] || return 0
+  python3 /usr/share/onboard/scripts/tikpalImeToggle.py --sync >/dev/null 2>&1 || true
 }
 
 configure_onboard_visibility() {
@@ -750,6 +792,7 @@ ensure_onboard() {
     sleep 0.8
   fi
 
+  sync_onboard_input_method_visual
   call_onboard_method Show || true
   sleep 0.2
   call_onboard_method Show || true

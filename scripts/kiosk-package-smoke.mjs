@@ -20,6 +20,7 @@ const requiredFiles = [
   "deploy/chromium/start-tikpal-kiosk-session.sh",
   "deploy/chromium/start-tikpal-kiosk-viewer.sh",
   "deploy/chromium/onboard-scripts/tikpalImeToggle.py",
+  "deploy/chromium/onboard-themes/Tikpal-Classic.colors",
   "deploy/chromium/tikpal-kiosk-healthcheck.sh",
   "deploy/chromium/tikpal-kiosk-viewerctl.sh",
   "deploy/chromium/tikpal-web-mode.sh",
@@ -253,6 +254,7 @@ async function run() {
   const kioskSession = await readFile(path.join(ROOT, "deploy/chromium/start-tikpal-kiosk-session.sh"), "utf8");
   const webModeScript = await readFile(path.join(ROOT, "deploy/chromium/tikpal-web-mode.sh"), "utf8");
   const onboardImeToggleScript = await readFile(path.join(ROOT, "deploy/chromium/onboard-scripts/tikpalImeToggle.py"), "utf8");
+  const onboardTheme = await readFile(path.join(ROOT, "deploy/chromium/onboard-themes/Tikpal-Classic.colors"), "utf8");
   const serverSource = await readFile(path.join(ROOT, "server/index.mjs"), "utf8");
   const webModeCrossfadeScript = await readFile(path.join(ROOT, "deploy/moode/tikpal-web-mode-crossfade.sh"), "utf8");
   const extensionManifest = JSON.parse(await readFile(path.join(ROOT, "deploy/chromium/web-mode-extension/manifest.json"), "utf8"));
@@ -375,10 +377,21 @@ async function run() {
   assert(webModeScript.indexOf("raise_onboard", webModeScript.indexOf("done < <(visible_chromium_windows)")) < webModeScript.indexOf("is_enabled \"$TIKPAL_WEB_MODE_SINGLE_PROVIDER_WINDOW\""), "window guard should restore Onboard above provider windows before early returns");
   assert(webModeScript.lastIndexOf("raise_onboard", webModeScript.indexOf("start_window_guard()")) > webModeScript.indexOf('raise_window_without_focus "$keep_window"'), "window guard should restore Onboard above the kept provider window");
   assert(webModeScript.includes("install_onboard_ime_toggle_script"), "web mode should install the direct Fcitx5 Onboard toggle script");
+  assert(webModeScript.includes("install_onboard_ime_color_scheme"), "web mode should install Tikpal's Onboard IME color scheme");
   assert(webModeScript.includes('script=\\"tikpalImeToggle\\"'), "Onboard should use a direct script key for the Fcitx5 toggle instead of a swallowed hotkey");
   assert(webModeScript.includes('svg_id=\\"LWIN\\"'), "Onboard should keep the input-method toggle in the Compact Super key position");
+  assert(webModeScript.includes('theme_id=\\"TIKPAL-IME-INACTIVE\\"') && webModeScript.includes('theme_id=\\"TIKPAL-IME-ACTIVE\\"'), "Onboard should use separate theme ids for inactive and active IME visuals");
   assert(webModeScript.includes('label=\\"中/EN\\"'), "Onboard should label the input-method toggle in Chinese and English");
+  assert(webModeScript.includes('label=\\"中文\\"'), "Onboard should make the active Chinese IME state readable on the key itself");
+  assert(webModeScript.includes("Tikpal-Compact-Pinyin.onboard"), "Onboard should have a separate active Pinyin layout for visual feedback");
+  assert(webModeScript.includes("Tikpal-Classic.colors"), "Onboard should apply Tikpal's color scheme for the IME key");
+  assert(webModeScript.includes("tikpalImeToggle.py --sync"), "Onboard should sync the IME key visual state when the keyboard is configured");
+  assert(webModeScript.includes("sync_onboard_input_method_visual") && webModeScript.indexOf("sync_onboard_input_method_visual", webModeScript.indexOf("ensure_onboard()")) < webModeScript.indexOf("call_onboard_method Show", webModeScript.indexOf("ensure_onboard()")), "Onboard should reapply the IME color scheme after the Onboard process starts");
   assert(onboardImeToggleScript.includes('fcitx5-remote') && onboardImeToggleScript.includes('"-s", "pinyin"') && onboardImeToggleScript.includes('"-s", "keyboard-us"'), "Onboard IME toggle script should switch Fcitx5 directly between English and Pinyin");
+  assert(onboardImeToggleScript.includes("Tikpal-Compact-Pinyin.onboard") && onboardImeToggleScript.includes("Tikpal-Classic.colors"), "Onboard IME toggle script should update layout and color scheme after switching input methods");
+  assert(onboardImeToggleScript.includes('"--sync"'), "Onboard IME toggle script should expose a visual-state sync mode");
+  assert(onboardTheme.includes("TIKPAL-IME-ACTIVE") && onboardTheme.includes("#35d0ba"), "Tikpal Onboard theme should define a clear active color for the IME key");
+  assert(systemdInstaller.includes("install_onboard_themes") && systemdInstaller.includes("Tikpal-Classic.colors"), "systemd installer should install Tikpal's Onboard IME color scheme");
   assert(deployDoc.includes("tikpalImeToggle.py"), "Pi deployment docs should describe the direct Onboard IME toggle script");
   assert(webModeScript.includes("gsettings reset org.onboard layout"), "Onboard should fall back to its packaged Compact layout when Fcitx5 is unavailable");
   assert(webModeScript.includes("org.onboard.window.landscape x"), "Onboard should open at the Tikpal keyboard X position without a visible jump");
