@@ -489,6 +489,7 @@ esac
   assert(audioAdaptScript.includes("wait_for_loopback_visible") && audioAdaptScript.includes("ensure_loopback_visible"), "audio adapter should wait for the real Loopback card after loading snd_aloop");
   assert(alsaLoopbackScript.includes("modprobe_command") && alsaLoopbackScript.includes("snd_aloop"), "ALSA Loopback helper should load the real snd_aloop module name through a resolved modprobe path");
   assert(airplayEnableScript.includes("TIKPAL_AIRPLAY_IGNORE_VOLUME_CONTROL:-no") && airplayEnableScript.includes("TIKPAL_AIRPLAY_DEFAULT_VOLUME_DB:-0.0"), "AirPlay enable should preserve phone volume control while avoiding Shairport's quiet default");
+  assert(airplayEnableScript.includes("TIKPAL_AIRPLAY_VOLUME_RANGE_DB:-30") && airplayEnableScript.includes("TIKPAL_AIRPLAY_VOLUME_CONTROL_PROFILE:-flat"), "AirPlay enable should keep Shairport's software volume curve audible at mid phone volume");
   assert(sndAloopEnableScript.includes("printf 'snd_aloop\\n'") && sndAloopEnableScript.includes("exit 1"), "standalone Loopback enable script should persist snd_aloop and fail if Loopback stays hidden");
   assert(webModeScript.includes('open_provider "${2:-qq_music}"'), "web mode should default initial Explore launch to QQ Music");
   assert(webModeScript.includes("xdotool is required for Explore provider window detection"), "web mode --check should fail clearly when xdotool is missing");
