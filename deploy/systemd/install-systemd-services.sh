@@ -101,6 +101,18 @@ install_kiosk_packages() {
   DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${missing_packages[@]}"
 }
 
+install_onboard_scripts() {
+  local source_dir="$APP_DIR/deploy/chromium/onboard-scripts"
+  local target_dir="/usr/share/onboard/scripts"
+  [[ -d "$source_dir" ]] || return 0
+  [[ -d "$target_dir" ]] || {
+    echo "WARN: $target_dir not found; skipping Tikpal Onboard scripts" >&2
+    return 0
+  }
+  install -m 0644 "$source_dir"/tikpalImeToggle.py "$target_dir/tikpalImeToggle.py"
+  echo "installed $target_dir/tikpalImeToggle.py"
+}
+
 if [[ ! -f "$APP_DIR/server/index.mjs" || ! -f "$APP_DIR/server/web.mjs" ]]; then
   echo "Missing Tikpal server files under $APP_DIR" >&2
   exit 1
@@ -122,6 +134,7 @@ if [[ "$INSTALL_KIOSK" -eq 1 ]]; then
   if [[ "${TIKPAL_INSTALL_KIOSK_PACKAGES:-1}" != "0" ]]; then
     install_kiosk_packages
   fi
+  install_onboard_scripts
   install_unit "$SCRIPT_DIR/tikpal-kiosk.service"
   install_unit "$SCRIPT_DIR/tikpal-kiosk-viewer.service"
   install_unit "$SCRIPT_DIR/tikpal-kiosk-devtools.service"

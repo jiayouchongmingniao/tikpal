@@ -577,6 +577,25 @@ move_onboard_if_requested() {
   fi
 }
 
+install_onboard_ime_toggle_script() {
+  local source_script="$SCRIPT_DIR/onboard-scripts/tikpalImeToggle.py"
+  local target_dir="/usr/share/onboard/scripts"
+  local target_script="$target_dir/tikpalImeToggle.py"
+  [[ -f "$source_script" ]] || return 1
+
+  if [[ -w "$target_dir" ]]; then
+    install -m 0644 "$source_script" "$target_script"
+    return 0
+  fi
+
+  if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
+    sudo install -m 0644 "$source_script" "$target_script"
+    return 0
+  fi
+
+  return 1
+}
+
 configure_onboard_input_method_key() {
   local source_dir="/usr/share/onboard/layouts"
   local target_dir="${XDG_DATA_HOME:-$HOME/.local/share}/onboard/layouts"
@@ -593,12 +612,16 @@ configure_onboard_input_method_key() {
     return 0
   fi
 
+  if ! install_onboard_ime_toggle_script; then
+    log "WARN: Onboard IME toggle script could not be installed; using F9 fallback"
+  fi
+
   mkdir -p "$target_dir"
   cp -f "$source_dir/Compact-Alpha.svg" "$source_dir/Compact-Numbers.svg" \
     "$source_dir/Compact-Utils.svg" "$target_dir/"
   if ! awk '
     !done && /group="bottomrow" id="LWIN"/ {
-      sub("id=\"LWIN\"/>", "id=\"F9.tikpal-ime\" svg_id=\"LWIN\" label=\"中/EN\" sticky=\"true\" sticky_behavior=\"lock\" action=\"double-stroke\"/>")
+      sub("id=\"LWIN\"/>", "id=\"TIKPAL_IME\" svg_id=\"LWIN\" label=\"中/EN\" script=\"tikpalImeToggle\"/>")
       done = 1
     }
     { print }

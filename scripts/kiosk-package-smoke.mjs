@@ -19,6 +19,7 @@ const requiredFiles = [
   "deploy/chromium/start-tikpal-kiosk-display.sh",
   "deploy/chromium/start-tikpal-kiosk-session.sh",
   "deploy/chromium/start-tikpal-kiosk-viewer.sh",
+  "deploy/chromium/onboard-scripts/tikpalImeToggle.py",
   "deploy/chromium/tikpal-kiosk-healthcheck.sh",
   "deploy/chromium/tikpal-kiosk-viewerctl.sh",
   "deploy/chromium/tikpal-web-mode.sh",
@@ -177,6 +178,7 @@ async function run() {
   assert(systemdInstaller.includes("xdotool"), "systemd installer should install xdotool for Explore provider window detection");
   assert(systemdInstaller.includes("TIKPAL_INSTALL_KIOSK_PACKAGES"), "systemd installer should expose an escape hatch for kiosk package installation");
   assert(systemdInstaller.includes('loginctl enable-linger "$SERVICE_USER"'), "systemd installer should keep the Onboard user service alive between API calls");
+  assert(systemdInstaller.includes("install_onboard_scripts") && systemdInstaller.includes("tikpalImeToggle.py"), "systemd installer should install Tikpal's direct Onboard IME toggle script");
   assert(systemdInstaller.includes('rm -f "$policy_dir/tikpal-kiosk-managed.json"'), "systemd installer should remove the legacy Tikpal extension-blocking policy file");
   assert(kioskUnit.includes("TIKPAL_KIOSK_SKIP_ENV_SOURCE=1"), "kiosk unit should preserve systemd EnvironmentFile override order");
   assert(deployDoc.includes("install-systemd-services.sh --enable-kiosk") && deployDoc.includes("including `xdotool`"), "Pi deployment docs should route new kiosk dependencies through the installer");
@@ -250,6 +252,7 @@ async function run() {
   const kioskLauncher = await readFile(path.join(ROOT, "deploy/chromium/launch-tikpal-kiosk.sh"), "utf8");
   const kioskSession = await readFile(path.join(ROOT, "deploy/chromium/start-tikpal-kiosk-session.sh"), "utf8");
   const webModeScript = await readFile(path.join(ROOT, "deploy/chromium/tikpal-web-mode.sh"), "utf8");
+  const onboardImeToggleScript = await readFile(path.join(ROOT, "deploy/chromium/onboard-scripts/tikpalImeToggle.py"), "utf8");
   const serverSource = await readFile(path.join(ROOT, "server/index.mjs"), "utf8");
   const webModeCrossfadeScript = await readFile(path.join(ROOT, "deploy/moode/tikpal-web-mode-crossfade.sh"), "utf8");
   const extensionManifest = JSON.parse(await readFile(path.join(ROOT, "deploy/chromium/web-mode-extension/manifest.json"), "utf8"));
@@ -371,10 +374,12 @@ async function run() {
   assert(webModeScript.includes("org.onboard.keyboard key-synth XTest"), "Onboard should synthesize keys through XTest for Chromium provider typing");
   assert(webModeScript.indexOf("raise_onboard", webModeScript.indexOf("done < <(visible_chromium_windows)")) < webModeScript.indexOf("is_enabled \"$TIKPAL_WEB_MODE_SINGLE_PROVIDER_WINDOW\""), "window guard should restore Onboard above provider windows before early returns");
   assert(webModeScript.lastIndexOf("raise_onboard", webModeScript.indexOf("start_window_guard()")) > webModeScript.indexOf('raise_window_without_focus "$keep_window"'), "window guard should restore Onboard above the kept provider window");
-  assert(webModeScript.includes('id=\\"F9.tikpal-ime\\"'), "Onboard should use the Chromium-safe F9 key template for the Fcitx5 toggle");
+  assert(webModeScript.includes("install_onboard_ime_toggle_script"), "web mode should install the direct Fcitx5 Onboard toggle script");
+  assert(webModeScript.includes('script=\\"tikpalImeToggle\\"'), "Onboard should use a direct script key for the Fcitx5 toggle instead of a swallowed hotkey");
   assert(webModeScript.includes('svg_id=\\"LWIN\\"'), "Onboard should keep the input-method toggle in the Compact Super key position");
   assert(webModeScript.includes('label=\\"中/EN\\"'), "Onboard should label the input-method toggle in Chinese and English");
-  assert(webModeScript.includes('sticky_behavior=\\"lock\\"') && webModeScript.includes('action=\\"double-stroke\\"'), "Onboard should keep the input-method toggle visibly active until the user switches back");
+  assert(onboardImeToggleScript.includes('fcitx5-remote') && onboardImeToggleScript.includes('"-s", "pinyin"') && onboardImeToggleScript.includes('"-s", "keyboard-us"'), "Onboard IME toggle script should switch Fcitx5 directly between English and Pinyin");
+  assert(deployDoc.includes("tikpalImeToggle.py"), "Pi deployment docs should describe the direct Onboard IME toggle script");
   assert(webModeScript.includes("gsettings reset org.onboard layout"), "Onboard should fall back to its packaged Compact layout when Fcitx5 is unavailable");
   assert(webModeScript.includes("org.onboard.window.landscape x"), "Onboard should open at the Tikpal keyboard X position without a visible jump");
   assert(webModeScript.includes("org.onboard.window.landscape y"), "Onboard should open at the Tikpal keyboard Y position without a visible jump");
