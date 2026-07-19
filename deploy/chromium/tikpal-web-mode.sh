@@ -47,6 +47,7 @@ fi
 : "${TIKPAL_WEB_MODE_CROSSFADE_PCM_B:=tikpal_explore_b}"
 : "${TIKPAL_WEB_MODE_AUDIO_BUS_STATE_PATH:=$TIKPAL_WEB_MODE_PROFILE_ROOT/active-audio-bus}"
 : "${TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS:=2}"
+: "${TIKPAL_WEB_MODE_ONBOARD_LOCK_TIMEOUT_SECONDS:=1}"
 : "${TIKPAL_WEB_MODE_DEFAULT_PROXY_URL:=http://192.168.10.103:7897}"
 : "${TIKPAL_WEB_MODE_ONBOARD:=1}"
 : "${TIKPAL_WEB_MODE_ONBOARD_AUTO_FOCUS:=1}"
@@ -87,6 +88,18 @@ with_web_mode_lock() {
       flock -x -w "$TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS" 9 || fail "Explore is already switching"
       "$@"
     ) 9>"$TIKPAL_WEB_MODE_PROFILE_ROOT/web-mode.lock"
+    return
+  fi
+  "$@"
+}
+
+with_onboard_lock() {
+  mkdir -p "$TIKPAL_WEB_MODE_PROFILE_ROOT"
+  if command -v flock >/dev/null 2>&1; then
+    (
+      flock -x -w "$TIKPAL_WEB_MODE_ONBOARD_LOCK_TIMEOUT_SECONDS" 8 || fail "Onboard is busy"
+      "$@"
+    ) 8>"$TIKPAL_WEB_MODE_PROFILE_ROOT/onboard.lock"
     return
   fi
   "$@"
@@ -152,8 +165,12 @@ resolve_physical_alsa_output_device() {
   esac
 }
 
-TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE="$(resolve_physical_alsa_output_device "$TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE")"
-TIKPAL_WEB_MODE_ALSA_OUTPUT_DEVICE="$(resolve_physical_alsa_output_device "$TIKPAL_WEB_MODE_ALSA_OUTPUT_DEVICE")"
+resolve_web_mode_audio_devices() {
+  [[ "${TIKPAL_WEB_MODE_AUDIO_DEVICES_RESOLVED:-0}" == "1" ]] && return 0
+  TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE="$(resolve_physical_alsa_output_device "$TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE")"
+  TIKPAL_WEB_MODE_ALSA_OUTPUT_DEVICE="$(resolve_physical_alsa_output_device "$TIKPAL_WEB_MODE_ALSA_OUTPUT_DEVICE")"
+  TIKPAL_WEB_MODE_AUDIO_DEVICES_RESOLVED=1
+}
 
 normalize_window_size() {
   local value
@@ -776,6 +793,25 @@ focus_window() {
   fi
 }
 
+start_onboard_process() {
+  local onboard_bin session_bus
+  onboard_bin="$(command -v onboard 2>/dev/null || true)"
+  [[ -n "$onboard_bin" ]] || return 1
+  session_bus="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/user/$(id -u)/bus}"
+  export DBUS_SESSION_BUS_ADDRESS="$session_bus"
+
+  if systemctl --user cat tikpal-onboard.service >/dev/null 2>&1; then
+    systemctl --user reset-failed tikpal-onboard.service >/dev/null 2>&1 || true
+    systemctl --user start tikpal-onboard.service >/dev/null 2>&1 && return 0
+  fi
+
+  systemd-run --user --quiet --unit=tikpal-onboard \
+    --setenv="DISPLAY=$TIKPAL_KIOSK_DISPLAY" --setenv="DBUS_SESSION_BUS_ADDRESS=$session_bus" \
+    "$onboard_bin" >/dev/null 2>&1 && return 0
+
+  DISPLAY="$TIKPAL_KIOSK_DISPLAY" DBUS_SESSION_BUS_ADDRESS="$session_bus" nohup "$onboard_bin" >/dev/null 2>&1 &
+}
+
 ensure_onboard() {
   is_enabled "$TIKPAL_WEB_MODE_ONBOARD" || return 0
   [[ ! -e "$TIKPAL_WEB_MODE_ONBOARD_SUPPRESS_PATH" ]] || return 0
@@ -783,20 +819,13 @@ ensure_onboard() {
     log "WARN: onboard not found"
     return 0
   }
-  configure_onboard
 
   if ! pgrep -u "$(id -u)" -x onboard >/dev/null 2>&1; then
-    local session_bus="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/user/$(id -u)/bus}"
-    export DBUS_SESSION_BUS_ADDRESS="$session_bus"
-    if systemctl --user cat tikpal-onboard.service >/dev/null 2>&1; then
-      systemctl --user reset-failed tikpal-onboard.service >/dev/null 2>&1 || true
-      systemctl --user start tikpal-onboard.service
-    else
-      systemd-run --user --quiet --unit=tikpal-onboard \
-        --setenv="DISPLAY=$TIKPAL_KIOSK_DISPLAY" --setenv="DBUS_SESSION_BUS_ADDRESS=$session_bus" \
-        "$(command -v onboard)"
-    fi
+    configure_onboard
+    start_onboard_process
     sleep 0.8
+  else
+    configure_onboard_visibility
   fi
 
   sync_onboard_input_method_visual
@@ -806,6 +835,22 @@ ensure_onboard() {
   sleep 0.1
   raise_onboard
   move_onboard_if_requested
+}
+
+preload_onboard() {
+  is_enabled "$TIKPAL_WEB_MODE_ONBOARD" || return 0
+  command -v onboard >/dev/null 2>&1 || {
+    log "WARN: onboard not found"
+    return 0
+  }
+  configure_onboard
+
+  if ! pgrep -u "$(id -u)" -x onboard >/dev/null 2>&1; then
+    start_onboard_process
+    sleep 0.8
+  fi
+
+  hide_onboard
 }
 
 hide_onboard() {
@@ -1249,7 +1294,7 @@ open_provider() {
   local current_provider
   local current_profile
   local target_window launch_url extension_enabled=0
-  local current_audio_bus="" target_audio_bus="" target_audio_device="$TIKPAL_WEB_MODE_ALSA_OUTPUT_DEVICE" crossfade_switch=0
+  local current_audio_bus="" target_audio_bus="" target_audio_device="" crossfade_switch=0
   local proxy_line proxy_enabled proxy_url
   url="$(provider_url "$provider")"
   provider_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/$provider"
@@ -1267,6 +1312,9 @@ open_provider() {
     extension_enabled=1
     launch_url="$TIKPAL_WEB_MODE_TRANSITION_URL?provider=$provider"
   fi
+
+  resolve_web_mode_audio_devices
+  target_audio_device="$TIKPAL_WEB_MODE_ALSA_OUTPUT_DEVICE"
 
   if crossfade_available; then
     if [[ -n "$current_profile" && "$current_profile" != "$provider_profile" ]] && profile_process_exists "$current_profile"; then
@@ -1411,6 +1459,7 @@ apply_proxy_settings() {
 
 check_runtime() {
   local xdotool_bin
+  resolve_web_mode_audio_devices
   log "app dir: $APP_DIR"
   log "display: $TIKPAL_KIOSK_DISPLAY"
   log "chromium: $TIKPAL_CHROMIUM_BIN"
@@ -1462,11 +1511,12 @@ case "${1:-open}" in
     ;;
   keyboard)
     case "${2:-toggle}" in
-      show) with_web_mode_lock ensure_onboard ;;
-      show-force) with_web_mode_lock force_onboard ;;
-      hide) with_web_mode_lock hide_onboard ;;
-      toggle) with_web_mode_lock toggle_onboard ;;
-      *) fail "Keyboard mode must be show, show-force, hide, or toggle" ;;
+      preload) with_onboard_lock preload_onboard ;;
+      show) with_onboard_lock ensure_onboard ;;
+      show-force) with_onboard_lock force_onboard ;;
+      hide) with_onboard_lock hide_onboard ;;
+      toggle) with_onboard_lock toggle_onboard ;;
+      *) fail "Keyboard mode must be preload, show, show-force, hide, or toggle" ;;
     esac
     log "keyboard ${2:-toggle} ready"
     ;;

@@ -448,6 +448,8 @@ esac
   assert(!sidePanelSource.includes("data-web-mode-keyboard-toggle") && !sidePanelSource.includes("toggleKeyboard"), "Explore side panel should rely on automatic input-focus keyboard behavior");
   assert((sidePanelSource.match(/onClick=\{\(\) => void closeWebMode\(\)\}/g) ?? []).length === 1, "Explore side panel should keep only the top-right Back button");
   assert(!quickSettingsSource.includes("handleWebModeKeyboard"), "Console should rely on input-focus keyboard behavior instead of a duplicate button");
+  assert(quickSettingsSource.includes('detailView !== "webMode"'), "Console should only preload Onboard for the Explore Proxy settings detail");
+  assert(quickSettingsSource.includes('sendWebModeAction({ type: "keyboard", preload: true })'), "Console Explore Proxy settings should preload resident Onboard before the first text-field tap");
   assert(["focus", "calm", "sleep", "hifi", "explore"].every((id) => quickSettingsSource.includes(`id: "${id}"`)), "Console should expose five room shortcuts");
   assert(quickSettingsSource.includes('data-room-shortcut={shortcut.id}') && quickSettingsSource.includes("disabled={pendingRoomShortcut !== null}"), "Console room shortcuts should expose state and lock while switching");
   assert(quickSettingsSource.includes('destination !== "explore" && destination === roomExperience.mode'), "Console should return immediately when the current room mode is selected");
@@ -476,7 +478,12 @@ esac
   assert(webModeScript.includes("nohup \"$SCRIPT_DIR/tikpal-web-mode.sh\" guard"), "web mode should keep the window guard alive after the launcher exits");
   assert(webModeScript.includes("detect_non_hdmi_card_id"), "web mode should detect the actual non-HDMI ALSA card");
   assert(webModeScript.includes("tikpal-audio-adapt.sh") && webModeScript.includes("resolve-browser"), "web mode should use the shared audio adapter for auto ALSA output");
-  assert(webModeScript.includes('TIKPAL_WEB_MODE_ALSA_OUTPUT_DEVICE="$(resolve_physical_alsa_output_device'), "web mode should resolve auto ALSA output before opening providers");
+  assert(webModeScript.includes("resolve_web_mode_audio_devices()"), "web mode should lazily resolve auto ALSA output for provider windows");
+  assert(
+    webModeScript.indexOf("resolve_web_mode_audio_devices", webModeScript.indexOf("open_provider()")) <
+      webModeScript.indexOf("crossfade_available", webModeScript.indexOf("open_provider()")),
+    "web mode should resolve auto ALSA output before opening providers"
+  );
   assert(webModeCrossfadeScript.includes('configured_base_pcm="${TIKPAL_WEB_MODE_ALSA_OUTPUT_DEVICE:-auto}"'), "Explore crossfade should default to auto ALSA output detection");
   assert(webModeCrossfadeScript.includes("resolve-browser") && webModeCrossfadeScript.includes("not safe for Explore softvol crossfade"), "Explore crossfade should use the adapter and decline non-dmix outputs");
   assert(!webModeCrossfadeScript.includes("BT66"), "Explore crossfade should not pin one ALSA card id");
@@ -512,6 +519,9 @@ esac
   assert(webModeScript.includes('getwindowname "$window"'), "web mode should ignore Onboard's cold-start placeholder window");
   assert(webModeScript.includes("xdotool windowraise"), "web mode should raise Onboard above Chromium without relying on a window manager");
   assert(!webModeScript.slice(webModeScript.indexOf("keyboard)"), webModeScript.indexOf("proxy)")).includes("check_runtime"), "keyboard actions should skip the full Explore runtime check for responsive input");
+  assert(!webModeScript.slice(webModeScript.indexOf("keyboard)"), webModeScript.indexOf("proxy)")).includes("with_web_mode_lock"), "keyboard actions should not wait for Explore provider switch locks");
+  assert(!webModeScript.slice(webModeScript.indexOf("keyboard)"), webModeScript.indexOf("proxy)")).includes("resolve_web_mode_audio_devices"), "keyboard actions should not run Explore audio auto-detection");
+  assert(webModeScript.includes("with_onboard_lock()"), "keyboard actions should use a dedicated Onboard lock instead of the provider switch lock");
   assert(webModeScript.includes("onboard_visible_windows"), "web mode should detect whether Onboard is already visible");
   assert(webModeScript.includes("xdotool windowfocus"), "web mode should still have a browser focus helper for fallback paths");
   assert(webModeScript.includes("focused_browser_window"), "web mode should recover browser focus even when X has no active window");
@@ -519,7 +529,8 @@ esac
   assert(webModeScript.includes("read_runtime_active_provider"), "keyboard focus recovery should find the active provider window");
   assert(webModeScript.includes("TIKPAL_WEB_MODE_ONBOARD_SUPPRESS_PATH"), "explicit keyboard hide should suppress periodic provider auto-show");
   assert(webModeScript.includes("show-force"), "new provider input focus should clear manual keyboard suppression");
-  assert(webModeScript.includes("show-force) with_web_mode_lock force_onboard"), "keyboard requests should serialize cold Onboard startup");
+  assert(webModeScript.includes("preload) with_onboard_lock preload_onboard"), "Console should be able to preload resident Onboard before the first text-field tap");
+  assert(webModeScript.includes("show-force) with_onboard_lock force_onboard"), "keyboard requests should serialize cold Onboard startup without waiting for provider switches");
   assert(webModeScript.includes("move_onboard_if_requested"), "keyboard requests with local kiosk geometry should move Onboard away from focused Console fields");
   assert(webModeScript.includes("TIKPAL_WEB_MODE_ONBOARD_REQUESTED_POSITION"), "web mode should only move Onboard when the API explicitly supplies a per-focus position");
   assert(webModeScript.includes("TIKPAL_WEB_MODE_ONBOARD_ACTION_POSITION"), "web mode should preserve per-action Onboard coordinates after sourcing .env.kiosk");
@@ -581,7 +592,7 @@ esac
   assert(mainSource.includes("keyboardPosition") && mainSource.includes("keyboardWindow"), "local kiosk inputs should send per-focus Onboard geometry to the API");
   assert(mainSource.includes("keepTextInputFocus"), "local kiosk inputs should keep focus when Onboard appears");
   assert(mainSource.includes("outsidePointerDown"), "local kiosk inputs should still hide Onboard when the user taps outside");
-  assert(mainSource.includes("target && target === document.activeElement"), "local kiosk should reshow Onboard when an already-focused input is tapped again");
+  assert(mainSource.includes("if (target) {\n      lastTextInput = target;"), "local kiosk should start showing Onboard on pointerdown before focus settles");
   assert(mainSource.includes("tikpal:keyboard-context-clear"), "local kiosk should clear input focus state when Settings closes");
   assert(mainSource.includes('document.addEventListener("focusout"'), "local kiosk inputs should hide Onboard after focus leaves text input");
   assert(serverSource.includes("normalizeWebModeKeyboardPosition") && serverSource.includes("normalizeWebModeKeyboardWindow"), "API should validate per-focus keyboard geometry before invoking the launcher");

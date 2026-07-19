@@ -129,7 +129,7 @@ if (!window.__TIKPAL_REMOTE_MODE__ && localKioskHosts.has(window.location.hostna
   document.addEventListener("pointerdown", (event) => {
     const target = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>(onboardInputSelector) : null;
     outsidePointerDown = !target;
-    if (target && target === document.activeElement) {
+    if (target) {
       lastTextInput = target;
       setOnboardVisible(true, target);
       keepTextInputFocus(target);

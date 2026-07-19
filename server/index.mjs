@@ -9910,11 +9910,14 @@ async function applyWebModeAction(action) {
     if (action?.force !== undefined && typeof action.force !== "boolean") {
       throw new Error("Explore keyboard force value must be boolean");
     }
+    if (action?.preload !== undefined && typeof action.preload !== "boolean") {
+      throw new Error("Explore keyboard preload value must be boolean");
+    }
     const keyboardPosition = normalizeWebModeKeyboardPosition(action?.keyboardPosition);
     const keyboardWindow = normalizeWebModeKeyboardWindow(action?.keyboardWindow);
-    const keyboardMode = action.enabled === true ? "show" : action.enabled === false ? "hide" : "toggle";
+    const keyboardMode = action.preload === true ? "preload" : action.enabled === true ? "show" : action.enabled === false ? "hide" : "toggle";
     const keyboardCommand = keyboardMode === "show" && action.force === true ? "show-force" : keyboardMode;
-    const keyboardEnv = keyboardMode === "hide" || (!keyboardPosition && !keyboardWindow)
+    const keyboardEnv = keyboardMode === "hide" || keyboardMode === "preload" || (!keyboardPosition && !keyboardWindow)
       ? {}
       : {
           TIKPAL_WEB_MODE_ONBOARD_REQUESTED_POSITION: "1",

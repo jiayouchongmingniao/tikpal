@@ -2028,6 +2028,15 @@ appendFileSync(${JSON.stringify(fakeWebModeLogPath)}, [...args, ...keyboardEnv].
     assert(stateAfterWebMode.body.audio.rememberedSource?.target === "bluetooth", "web mode should preserve remembered Bluetooth instead of storing Explore");
 
     await writeFile(fakeWebModeLogPath, "");
+    const preloadKeyboard = await requestFrom(baseUrl, "/api/v1/web-mode/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "keyboard", preload: true })
+    });
+    assert(preloadKeyboard.response.ok, "web mode keyboard preload should return 200");
+    const preloadKeyboardLog = await readFile(fakeWebModeLogPath, "utf8");
+    assert(preloadKeyboardLog.startsWith("keyboard\tpreload\t"), `web mode keyboard preload should warm Onboard without showing geometry, got ${JSON.stringify(preloadKeyboardLog)}`);
+
+    await writeFile(fakeWebModeLogPath, "");
     const movedKeyboard = await requestFrom(baseUrl, "/api/v1/web-mode/actions", {
       method: "POST",
       body: JSON.stringify({ type: "keyboard", enabled: true, force: true, keyboardPosition: "500,80", keyboardWindow: "900x280" })

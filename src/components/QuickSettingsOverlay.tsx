@@ -289,6 +289,14 @@ export function QuickSettingsOverlay({
   }, [active]);
 
   useEffect(() => {
+    if (!active || detailView !== "webMode" || window.__TIKPAL_REMOTE_MODE__ || !localKioskHosts.has(window.location.hostname)) return undefined;
+    const timer = window.setTimeout(() => {
+      void sendWebModeAction({ type: "keyboard", preload: true }).catch(() => undefined);
+    }, 120);
+    return () => window.clearTimeout(timer);
+  }, [active, detailView]);
+
+  useEffect(() => {
     if (!active || !webModeState) return undefined;
 
     const normalizedProxyUrl = normalizeProxyUrl(webModeProxyUrl);
