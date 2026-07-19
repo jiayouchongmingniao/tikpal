@@ -40,6 +40,7 @@ fi
 : "${TIKPAL_CHROMIUM_PROFILE_DIR:=$HOME/.config/tikpal-chromium-kiosk}"
 : "${TIKPAL_CHROMIUM_COLOR_SCHEME:=dark}"
 : "${TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE:=}"
+: "${TIKPAL_AUDIO_ADAPT_BIN:=$APP_DIR/deploy/moode/tikpal-audio-adapt.sh}"
 : "${TIKPAL_KIOSK_REMOTE_DEBUG:=0}"
 : "${TIKPAL_KIOSK_REMOTE_DEBUG_ADDRESS:=127.0.0.1}"
 : "${TIKPAL_KIOSK_REMOTE_DEBUG_PORT:=9222}"
@@ -107,6 +108,12 @@ resolve_physical_alsa_output_device() {
       printf '\n'
       ;;
     auto)
+      if [[ -x "$TIKPAL_AUDIO_ADAPT_BIN" ]]; then
+        if "$TIKPAL_AUDIO_ADAPT_BIN" resolve-browser; then
+          return
+        fi
+        log "WARN: audio adapter failed; falling back to first non-HDMI ALSA card" >&2
+      fi
       card_id="$(detect_non_hdmi_card_id || true)"
       if [[ -z "$card_id" ]]; then
         log "WARN: auto ALSA output requested but no non-HDMI card was detected" >&2

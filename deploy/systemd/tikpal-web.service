@@ -1,7 +1,7 @@
 [Unit]
 Description=Tikpal static web UI
-After=network.target tikpal-api.service
-Wants=network.target tikpal-api.service
+After=network.target tikpal-audio-adapt.service tikpal-api.service
+Wants=network.target tikpal-audio-adapt.service tikpal-api.service
 
 [Service]
 Type=simple

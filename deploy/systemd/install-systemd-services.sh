@@ -141,6 +141,7 @@ fi
 
 install_unit "$SCRIPT_DIR/tikpal-api.service"
 install_unit "$SCRIPT_DIR/tikpal-web.service"
+install_unit "$SCRIPT_DIR/tikpal-audio-adapt.service"
 
 if [[ "$INSTALL_KIOSK" -eq 1 ]]; then
   if [[ "${TIKPAL_INSTALL_KIOSK_PACKAGES:-1}" != "0" ]]; then
@@ -178,7 +179,7 @@ for policy_dir in /etc/chromium/policies/managed /etc/chromium-browser/policies/
 done
 
 systemctl daemon-reload
-systemctl enable tikpal-api.service tikpal-web.service
+systemctl enable tikpal-audio-adapt.service tikpal-api.service tikpal-web.service
 
 if [[ "$INSTALL_KIOSK" -eq 1 ]]; then
   loginctl enable-linger "$SERVICE_USER"
@@ -189,6 +190,7 @@ if [[ "$INSTALL_KIOSK" -eq 1 ]]; then
 fi
 
 if [[ "$RESTART_SERVICES" -eq 1 ]]; then
+  systemctl restart tikpal-audio-adapt.service
   systemctl restart tikpal-api.service
   systemctl restart tikpal-web.service
   if [[ "$INSTALL_KIOSK" -eq 1 ]]; then
@@ -201,6 +203,8 @@ fi
 
 echo "Tikpal services installed."
 echo "Verify with:"
+echo "  systemctl status tikpal-audio-adapt.service"
+echo "  $APP_DIR/deploy/moode/tikpal-audio-adapt.sh check"
 echo "  systemctl is-active tikpal-api.service tikpal-web.service"
 echo "  curl -fsS http://127.0.0.1:8787/api/v1/health"
 echo "  curl -fsSI http://127.0.0.1:4173/"

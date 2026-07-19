@@ -5,7 +5,7 @@ import { request as httpRequest } from "node:http";
 import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { buildProxyConfig } from "../deploy/chromium/web-mode-extension/background.js";
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
@@ -32,12 +32,14 @@ const requiredFiles = [
   "deploy/chromium/chromium-flags.conf",
   "deploy/chromium/managed-policies.json",
   "deploy/chromium/env.kiosk.example",
+  "deploy/moode/tikpal-audio-adapt.sh",
   "public/web-mode-error.html",
   "deploy/moode/tikpal-alsa-loopback.sh",
   "deploy/moode/tikpal-airplay-transport.sh",
   "deploy/moode/tikpal-output-volume.sh",
   "deploy/moode/tikpal-snd-aloop-enable.sh",
   "deploy/moode/tikpal-quiet-boot-enable.sh",
+  "deploy/systemd/tikpal-audio-adapt.service",
   "deploy/systemd/tikpal-api.service",
   "deploy/systemd/tikpal-web.service",
   "deploy/systemd/tikpal-kiosk-devtools.service",
@@ -139,6 +141,7 @@ async function run() {
   await assertExecutable("deploy/chromium/tikpal-kiosk-healthcheck.sh");
   await assertExecutable("deploy/chromium/tikpal-kiosk-viewerctl.sh");
   await assertExecutable("deploy/chromium/tikpal-web-mode.sh");
+  await assertExecutable("deploy/moode/tikpal-audio-adapt.sh");
   await assertExecutable("deploy/moode/tikpal-alsa-loopback.sh");
   await assertExecutable("deploy/moode/tikpal-airplay-transport.sh");
   await assertExecutable("deploy/moode/tikpal-output-volume.sh");
@@ -147,6 +150,139 @@ async function run() {
   await assertExecutable("deploy/moode/tikpal-locale-enable.sh");
   await assertExecutable("deploy/systemd/install-systemd-services.sh");
 
+  const outputVolumeTempDir = mkdtempSync(path.join(tmpdir(), "tikpal-output-volume-"));
+  const outputVolumeBinDir = path.join(outputVolumeTempDir, "bin");
+  const outputVolumeConfig = path.join(outputVolumeTempDir, "audioout.conf");
+  const fakeAmixerLog = path.join(outputVolumeTempDir, "amixer.log");
+  const fakeMpcLog = path.join(outputVolumeTempDir, "mpc.log");
+  mkdirSync(outputVolumeBinDir);
+  writeFileSync(path.join(outputVolumeBinDir, "amixer"), `#!/bin/sh\necho "$*" >> "$TIKPAL_FAKE_AMIXER_LOG"\nexit 1\n`, { mode: 0o755 });
+  writeFileSync(path.join(outputVolumeBinDir, "mpc"), `#!/bin/sh\necho "$*" >> "$TIKPAL_FAKE_MPC_LOG"\nif [ "$1" = "volume" ]; then\n  echo "volume: $2%   repeat: off   random: off   single: off   consume: off"\n  exit 0\nfi\necho "volume:  27%   repeat: off   random: off   single: off   consume: off"\n`, { mode: 0o755 });
+  writeFileSync(outputVolumeConfig, 'pcm._audioout { slave.pcm "default:CARD=Crimson" }\npcm.loop { slave.pcm "default:CARD=Loopback" }\n');
+  const outputVolumeEnv = {
+    ...process.env,
+    PATH: `${outputVolumeBinDir}:${process.env.PATH}`,
+    TIKPAL_OUTPUT_VOLUME_ALSA_CONFIGS: outputVolumeConfig,
+    TIKPAL_FAKE_AMIXER_LOG: fakeAmixerLog,
+    TIKPAL_FAKE_MPC_LOG: fakeMpcLog
+  };
+  const outputVolumeHelper = path.join(ROOT, "deploy/moode/tikpal-output-volume.sh");
+  const outputVolumeGet = spawnSync("sh", [outputVolumeHelper, "get"], { env: outputVolumeEnv, encoding: "utf8" });
+  assert(outputVolumeGet.status === 0 && outputVolumeGet.stdout.includes("[27%]"), "output volume helper should fall back to MPD software volume when ALSA has no mixer");
+  const outputVolumeSet = spawnSync("sh", [outputVolumeHelper, "set", "46"], { env: outputVolumeEnv, encoding: "utf8" });
+  assert(outputVolumeSet.status === 0, "output volume helper should set MPD software volume when ALSA has no mixer");
+  const fakeAmixerOutput = await readFile(fakeAmixerLog, "utf8");
+  const fakeMpcOutput = await readFile(fakeMpcLog, "utf8");
+  assert(!fakeAmixerOutput.includes("CARD=Loopback"), "output volume helper should normalize default:CARD=Loopback before probing mixer cards");
+  assert(fakeMpcOutput.includes("volume 46"), "output volume helper should issue mpc volume for mixerless USB DACs");
+
+  const outputVolumeMixerDir = mkdtempSync(path.join(tmpdir(), "tikpal-output-volume-mixer-"));
+  const outputVolumeMixerBinDir = path.join(outputVolumeMixerDir, "bin");
+  const outputVolumeMixerConfig = path.join(outputVolumeMixerDir, "audioout.conf");
+  const outputVolumeMixerLog = path.join(outputVolumeMixerDir, "amixer.log");
+  mkdirSync(outputVolumeMixerBinDir);
+  writeFileSync(path.join(outputVolumeMixerBinDir, "amixer"), `#!/bin/sh
+echo "$*" >> "$TIKPAL_FAKE_AMIXER_LOG"
+card=""
+action=""
+control=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -c) card="$2"; shift 2 ;;
+    get|sset) action="$1"; control="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+if [ "$card" = "Mystery" ] && [ "$control" = "Master" ]; then
+  echo "Front Left: Playback 74 [42%] [on]"
+  exit 0
+fi
+exit 1
+`, { mode: 0o755 });
+  writeFileSync(outputVolumeMixerConfig, 'pcm._audioout { slave.pcm "plughw:CARD=Mystery,DEV=0" }\n');
+  const outputVolumeMixerEnv = {
+    ...process.env,
+    PATH: `${outputVolumeMixerBinDir}:${process.env.PATH}`,
+    TIKPAL_OUTPUT_VOLUME_ALSA_CONFIGS: outputVolumeMixerConfig,
+    TIKPAL_FAKE_AMIXER_LOG: outputVolumeMixerLog
+  };
+  const outputVolumeMixerGet = spawnSync("sh", [outputVolumeHelper, "get"], { env: outputVolumeMixerEnv, encoding: "utf8" });
+  assert(outputVolumeMixerGet.status === 0 && outputVolumeMixerGet.stdout.includes("[42%]"), "output volume helper should discover non-PCM mixer controls");
+  const outputVolumeMixerSet = spawnSync("sh", [outputVolumeHelper, "set", "41"], { env: outputVolumeMixerEnv, encoding: "utf8" });
+  assert(outputVolumeMixerSet.status === 0, "output volume helper should set non-PCM mixer controls");
+  const outputVolumeMixerAmixer = await readFile(outputVolumeMixerLog, "utf8");
+  assert(outputVolumeMixerAmixer.includes("-c Mystery sset Master 41%"), "output volume helper should set the discovered Master mixer");
+
+  const audioAdaptTempDir = mkdtempSync(path.join(tmpdir(), "tikpal-audio-adapt-"));
+  const audioAdaptBinDir = path.join(audioAdaptTempDir, "bin");
+  mkdirSync(audioAdaptBinDir);
+  writeFileSync(path.join(audioAdaptBinDir, "aplay"), `#!/bin/sh
+if [ "$1" = "-l" ]; then
+  printf '%s\\n' "$TIKPAL_FAKE_APLAY_CARDS"
+  exit 0
+fi
+device=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-D" ]; then
+    device="$2"
+    shift 2
+    continue
+  fi
+  shift
+done
+case "$device" in
+  dmix:CARD=Crimson,DEV=0) exit 1 ;;
+  *) cat >/dev/null; exit 0 ;;
+esac
+`, { mode: 0o755 });
+  writeFileSync(path.join(audioAdaptBinDir, "amixer"), `#!/bin/sh
+card=""
+action=""
+control=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -c) card="$2"; shift 2 ;;
+    get|sset) action="$1"; control="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+case "$card:$control" in
+  BT66:PCM) echo "Mono: Playback 89 [35%] [on]"; exit 0 ;;
+  Mystery:Master) echo "Front Left: Playback 74 [42%] [on]"; exit 0 ;;
+  *) exit 1 ;;
+esac
+`, { mode: 0o755 });
+  const audioAdaptHelper = path.join(ROOT, "deploy/moode/tikpal-audio-adapt.sh");
+  const runAudioAdapt = (cards, args, extraEnv = {}) => spawnSync("bash", [audioAdaptHelper, ...args], {
+    cwd: ROOT,
+    env: {
+      ...process.env,
+      ...extraEnv,
+      PATH: `${audioAdaptBinDir}:${process.env.PATH}`,
+      TIKPAL_FAKE_APLAY_CARDS: cards,
+      TIKPAL_AUDIO_BROWSER_PROBE_TIMEOUT_SECONDS: "1"
+    },
+    encoding: "utf8"
+  });
+  const bt66Card = "card 2: BT66 [BT66], device 0: USB Audio [USB Audio]";
+  const crimsonCard = "card 1: Crimson [SPL Crimson], device 0: USB Audio [USB Audio]";
+  const hdmiCard = "card 0: vc4hdmi0 [vc4-hdmi-0], device 0: MAI PCM i2s-hifi-0 [MAI PCM i2s-hifi-0]";
+  const mysteryCard = "card 4: Mystery [Mystery USB DAC], device 0: USB Audio [USB Audio]";
+  const otherCard = "card 5: Other [Other USB DAC], device 0: USB Audio [USB Audio]";
+  const bt66Resolve = runAudioAdapt(`${hdmiCard}\n${crimsonCard}\n${bt66Card}`, ["resolve-browser"]);
+  assert(bt66Resolve.status === 0 && bt66Resolve.stdout.trim() === "dmix:CARD=BT66,DEV=0", `audio adapter should prefer BT66 and use dmix:\n${bt66Resolve.stdout}\n${bt66Resolve.stderr}`);
+  const crimsonResolve = runAudioAdapt(`${hdmiCard}\n${crimsonCard}`, ["resolve-browser"]);
+  assert(crimsonResolve.status === 0 && crimsonResolve.stdout.trim() === "plughw:CARD=Crimson,DEV=0", `audio adapter should fall back to plughw for Crimson:\n${crimsonResolve.stdout}\n${crimsonResolve.stderr}`);
+  const crimsonAudioout = runAudioAdapt(`${hdmiCard}\n${crimsonCard}`, ["resolve-audioout"]);
+  assert(crimsonAudioout.status === 0 && crimsonAudioout.stdout.trim() === "plughw:CARD=Crimson,DEV=0", "audio adapter should use plughw for moOde audioout");
+  const mysteryCheck = runAudioAdapt(`${hdmiCard}\n${mysteryCard}`, ["check"]);
+  assert(mysteryCheck.status === 0 && mysteryCheck.stdout.includes("selectedCard=Mystery") && mysteryCheck.stdout.includes("volumeStrategy=alsa:Master"), `audio adapter should accept one unknown USB card and probe its mixer:\n${mysteryCheck.stdout}\n${mysteryCheck.stderr}`);
+  const multipleUnknown = runAudioAdapt(`${hdmiCard}\n${mysteryCard}\n${otherCard}`, ["check"]);
+  assert(multipleUnknown.status !== 0 && multipleUnknown.stderr.includes("TIKPAL_AUDIO_CARD_FORCE"), "audio adapter should reject multiple unknown USB cards without a forced card");
+  const noUsb = runAudioAdapt(hdmiCard, ["check"]);
+  assert(noUsb.status !== 0 && !noUsb.stdout.includes("vc4hdmi"), "audio adapter should not select HDMI as a fallback output");
+
+  const audioAdaptUnit = await readFile(path.join(ROOT, "deploy/systemd/tikpal-audio-adapt.service"), "utf8");
   const apiUnit = await readFile(path.join(ROOT, "deploy/systemd/tikpal-api.service"), "utf8");
   const webUnit = await readFile(path.join(ROOT, "deploy/systemd/tikpal-web.service"), "utf8");
   const kioskDevtoolsUnit = await readFile(path.join(ROOT, "deploy/systemd/tikpal-kiosk-devtools.service"), "utf8");
@@ -156,13 +292,18 @@ async function run() {
   const kioskWatchdogTimer = await readFile(path.join(ROOT, "deploy/systemd/tikpal-kiosk-watchdog.timer"), "utf8");
   const systemdInstaller = await readFile(path.join(ROOT, "deploy/systemd/install-systemd-services.sh"), "utf8");
   const deployDoc = await readFile(path.join(ROOT, "docs/06-deployment/raspberry-pi-kiosk-deploy-v1.md"), "utf8");
+  assert(audioAdaptUnit.includes("tikpal-audio-adapt.sh apply"), "audio adapter unit should run the moOde adapter before services");
+  assert(audioAdaptUnit.includes("Before=mpd.service tikpal-api.service tikpal-web.service tikpal-kiosk.service"), "audio adapter unit should order before playback and Tikpal services");
   assert(apiUnit.includes("network.target"), "api unit should use network.target");
+  assert(apiUnit.includes("tikpal-audio-adapt.service"), "api unit should pull the audio adapter before startup");
   assert(!apiUnit.includes("network-online.target"), "api unit should not wait for network-online.target");
   assert(webUnit.includes("server/web.mjs"), "web unit should use the production static server");
+  assert(webUnit.includes("tikpal-audio-adapt.service"), "web unit should pull the audio adapter before startup");
   assert(webUnit.includes("TIKPAL_WEB_REMOTE_PORT=4174"), "web unit should expose portable remote control separately from the kiosk UI");
   assert(kioskDevtoolsUnit.includes("start-tikpal-kiosk-devtools-proxy.sh"), "kiosk DevTools unit should launch the LAN proxy");
   assert(kioskDevtoolsUnit.includes("PartOf=tikpal-kiosk.service"), "kiosk DevTools proxy should follow kiosk service lifecycle");
   assert(kioskUnit.includes("start-tikpal-kiosk-display.sh"), "kiosk unit should launch the display-mode wrapper");
+  assert(kioskUnit.includes("tikpal-audio-adapt.service"), "kiosk unit should pull the audio adapter before startup");
   assert(!kioskUnit.includes("/usr/bin/startx"), "kiosk unit should leave physical versus virtual X startup to the wrapper");
   assert(kioskViewerUnit.includes("start-tikpal-kiosk-viewer.sh"), "kiosk viewer unit should launch the noVNC wrapper");
   assert(kioskViewerUnit.includes(".env.kiosk.viewer"), "kiosk viewer unit should load the viewer-only switch file");
@@ -172,6 +313,8 @@ async function run() {
   assert(!kioskWatchdogUnit.includes("PartOf=tikpal-kiosk.service"), "kiosk watchdog should survive kiosk restarts");
   assert(kioskWatchdogTimer.includes("OnUnitActiveSec=75s"), "kiosk watchdog timer should run inside the 60-90s cadence");
   assert(kioskWatchdogTimer.includes("tikpal-kiosk-watchdog.service"), "kiosk watchdog timer should target the watchdog service");
+  assert(systemdInstaller.includes("tikpal-audio-adapt.service"), "systemd installer should install the audio adapter service");
+  assert(systemdInstaller.includes("systemctl restart tikpal-audio-adapt.service"), "systemd installer restart should run the audio adapter before app services");
   assert(systemdInstaller.includes("tikpal-kiosk-watchdog.service"), "systemd installer should install the kiosk watchdog service");
   assert(systemdInstaller.includes("tikpal-kiosk-watchdog.timer"), "systemd installer should install and enable the kiosk watchdog timer");
   assert(systemdInstaller.includes("tikpal-locale-enable.sh"), "systemd installer should normalize SSH locale handling on new Pi installs");
@@ -257,6 +400,7 @@ async function run() {
   const onboardTheme = await readFile(path.join(ROOT, "deploy/chromium/onboard-themes/Tikpal-Classic.colors"), "utf8");
   const serverSource = await readFile(path.join(ROOT, "server/index.mjs"), "utf8");
   const webModeCrossfadeScript = await readFile(path.join(ROOT, "deploy/moode/tikpal-web-mode-crossfade.sh"), "utf8");
+  const audioAdaptScript = await readFile(path.join(ROOT, "deploy/moode/tikpal-audio-adapt.sh"), "utf8");
   const extensionManifest = JSON.parse(await readFile(path.join(ROOT, "deploy/chromium/web-mode-extension/manifest.json"), "utf8"));
   const extensionContent = await readFile(path.join(ROOT, "deploy/chromium/web-mode-extension/content.js"), "utf8");
   const extensionBackground = await readFile(path.join(ROOT, "deploy/chromium/web-mode-extension/background.js"), "utf8");
@@ -303,6 +447,7 @@ async function run() {
   assert(kioskLauncher.includes("run_x_command xrandr"), "kiosk launcher should bound xrandr commands");
   assert(kioskLauncher.includes("run_x_command xset"), "kiosk launcher should bound xset commands");
   assert(kioskLauncher.includes("detect_non_hdmi_card_id"), "kiosk launcher should detect the actual non-HDMI ALSA card");
+  assert(kioskLauncher.includes("tikpal-audio-adapt.sh") && kioskLauncher.includes("resolve-browser"), "kiosk launcher should use the shared audio adapter for auto ALSA output");
   assert(kioskLauncher.includes('TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE="$(resolve_physical_alsa_output_device'), "kiosk launcher should resolve auto ALSA output before launching Chromium");
   assert(kioskSession.includes("TIKPAL_KIOSK_X_COMMAND_TIMEOUT_SECONDS"), "kiosk session should expose an X command timeout");
   assert(kioskSession.includes("run_x_command xset"), "kiosk session should bound xset commands");
@@ -314,9 +459,15 @@ async function run() {
   assert(kioskSession.includes("fcitx5 -d --replace"), "kiosk session should start Fcitx5 before Chromium");
   assert(webModeScript.includes("nohup \"$SCRIPT_DIR/tikpal-web-mode.sh\" guard"), "web mode should keep the window guard alive after the launcher exits");
   assert(webModeScript.includes("detect_non_hdmi_card_id"), "web mode should detect the actual non-HDMI ALSA card");
+  assert(webModeScript.includes("tikpal-audio-adapt.sh") && webModeScript.includes("resolve-browser"), "web mode should use the shared audio adapter for auto ALSA output");
   assert(webModeScript.includes('TIKPAL_WEB_MODE_ALSA_OUTPUT_DEVICE="$(resolve_physical_alsa_output_device'), "web mode should resolve auto ALSA output before opening providers");
   assert(webModeCrossfadeScript.includes('configured_base_pcm="${TIKPAL_WEB_MODE_ALSA_OUTPUT_DEVICE:-auto}"'), "Explore crossfade should default to auto ALSA output detection");
+  assert(webModeCrossfadeScript.includes("resolve-browser") && webModeCrossfadeScript.includes("not safe for Explore softvol crossfade"), "Explore crossfade should use the adapter and decline non-dmix outputs");
   assert(!webModeCrossfadeScript.includes("BT66"), "Explore crossfade should not pin one ALSA card id");
+  assert(audioAdaptScript.includes("TIKPAL_AUDIO_CARD_PRIORITY:=BT66,Crimson"), "audio adapter should prefer known USB cards in the configured order");
+  assert(audioAdaptScript.includes("TIKPAL_AUDIO_ALLOW_UNKNOWN_SINGLE:=1"), "audio adapter should allow one unknown USB card by default");
+  assert(audioAdaptScript.includes("multiple unknown non-HDMI audio cards detected"), "audio adapter should reject multiple unknown cards without a forced card");
+  assert(audioAdaptScript.includes("resolve-browser") && audioAdaptScript.includes("resolve-audioout"), "audio adapter should expose browser and moOde PCM resolvers");
   assert(webModeScript.includes('open_provider "${2:-qq_music}"'), "web mode should default initial Explore launch to QQ Music");
   assert(webModeScript.includes("xdotool is required for Explore provider window detection"), "web mode --check should fail clearly when xdotool is missing");
   assert(webModeScript.includes("window-guard.pid"), "web mode should track the persistent window guard pid");

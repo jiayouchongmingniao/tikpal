@@ -4,7 +4,10 @@ set -eu
 action="${1:-check}"
 bus="${2:-}"
 value="${3:-}"
+script_dir="$(cd "$(dirname "$0")" && pwd)"
+app_dir="$(cd "$script_dir/../.." && pwd)"
 configured_base_pcm="${TIKPAL_WEB_MODE_ALSA_OUTPUT_DEVICE:-auto}"
+audio_adapt_bin="${TIKPAL_AUDIO_ADAPT_BIN:-$app_dir/deploy/moode/tikpal-audio-adapt.sh}"
 card="${TIKPAL_WEB_MODE_CROSSFADE_CARD:-}"
 pcm_a="${TIKPAL_WEB_MODE_CROSSFADE_PCM_A:-tikpal_explore_a}"
 pcm_b="${TIKPAL_WEB_MODE_CROSSFADE_PCM_B:-tikpal_explore_b}"
@@ -58,12 +61,31 @@ resolve_base_pcm() {
       fail "TIKPAL_WEB_MODE_ALSA_OUTPUT_DEVICE must be auto or a physical ALSA PCM for crossfade"
       ;;
     auto)
-      detected_card="$(detect_non_hdmi_card_id || true)"
-      [ -n "$detected_card" ] || fail "auto ALSA output requested but no non-HDMI card was detected"
-      printf 'dmix:CARD=%s,DEV=0\n' "$detected_card"
+      if [ -x "$audio_adapt_bin" ]; then
+        next_base_pcm="$("$audio_adapt_bin" resolve-browser)"
+      else
+        detected_card="$(detect_non_hdmi_card_id || true)"
+        [ -n "$detected_card" ] || fail "auto ALSA output requested but no non-HDMI card was detected"
+        next_base_pcm="dmix:CARD=$detected_card,DEV=0"
+      fi
+      case "$next_base_pcm" in
+        dmix:*)
+          printf '%s\n' "$next_base_pcm"
+          ;;
+        *)
+          fail "resolved ALSA output '$next_base_pcm' is not safe for Explore softvol crossfade; using direct provider audio"
+          ;;
+      esac
       ;;
     *)
-      printf '%s\n' "$next_base_pcm"
+      case "$next_base_pcm" in
+        dmix:*)
+          printf '%s\n' "$next_base_pcm"
+          ;;
+        *)
+          fail "TIKPAL_WEB_MODE_ALSA_OUTPUT_DEVICE must resolve to a dmix PCM for crossfade"
+          ;;
+      esac
       ;;
   esac
 }

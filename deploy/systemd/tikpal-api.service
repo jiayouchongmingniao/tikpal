@@ -1,7 +1,7 @@
 [Unit]
 Description=Tikpal local API
-After=network.target
-Wants=network.target
+After=network.target tikpal-audio-adapt.service
+Wants=network.target tikpal-audio-adapt.service
 
 [Service]
 Type=simple

@@ -1,0 +1,17 @@
+[Unit]
+Description=Tikpal moOde audio adapter
+After=local-fs.target sound.target
+Before=mpd.service tikpal-api.service tikpal-web.service tikpal-kiosk.service
+Wants=sound.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=@APP_DIR@
+EnvironmentFile=-@APP_DIR@/.env
+EnvironmentFile=-@APP_DIR@/.env.kiosk
+ExecStart=@APP_DIR@/deploy/moode/tikpal-audio-adapt.sh apply
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
