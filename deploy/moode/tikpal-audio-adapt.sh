@@ -13,6 +13,7 @@ ACTION="${1:-check}"
 : "${TIKPAL_AUDIO_BROWSER_PROBE:=1}"
 : "${TIKPAL_AUDIO_BROWSER_PROBE_TIMEOUT_SECONDS:=2}"
 : "${TIKPAL_AUDIO_BROWSER_PROBE_FORMAT:=S16_LE}"
+: "${TIKPAL_AUDIO_BROWSER_PROBE_FORMATS:=$TIKPAL_AUDIO_BROWSER_PROBE_FORMAT,S24_3LE,S32_LE}"
 : "${TIKPAL_AUDIO_BROWSER_PROBE_RATE:=48000}"
 : "${TIKPAL_AUDIO_BROWSER_PROBE_CHANNELS:=2}"
 : "${TIKPAL_AUDIO_MIXER_CONTROLS:=PCM,Master,Digital,Speaker,Headphone,Line Out}"
@@ -214,36 +215,67 @@ selected_audioout_pcm() {
   printf 'plughw:CARD=%s,DEV=%s\n' "$card_id" "$device_id"
 }
 
-probe_browser_pcm() {
+sample_bytes_for_format() {
+  case "$(printf '%s' "${1:-}" | tr '[:lower:]' '[:upper:]')" in
+    U8|S8)
+      printf '1\n'
+      ;;
+    S24_3LE|S24_3BE)
+      printf '3\n'
+      ;;
+    S32_LE|S32_BE|FLOAT_LE|FLOAT_BE)
+      printf '4\n'
+      ;;
+    *)
+      printf '2\n'
+      ;;
+  esac
+}
+
+configured_browser_probe_formats() {
+  printf '%s\n' "$TIKPAL_AUDIO_BROWSER_PROBE_FORMATS" | tr ',' '\n' | while IFS= read -r format; do
+    format="$(trim "$format")"
+    [[ -n "$format" ]] && printf '%s\n' "$format"
+  done | awk '!seen[$0]++'
+}
+
+probe_browser_pcm_format() {
   local pcm="$1"
+  local format="$2"
   local rate="$TIKPAL_AUDIO_BROWSER_PROBE_RATE"
   local channels="$TIKPAL_AUDIO_BROWSER_PROBE_CHANNELS"
+  local sample_bytes
   local bytes
   is_enabled "$TIKPAL_AUDIO_BROWSER_PROBE" || return 0
   command -v aplay >/dev/null 2>&1 || return 1
-  bytes=$((rate * channels * 2 / 20))
+  sample_bytes="$(sample_bytes_for_format "$format")"
+  bytes=$((rate * channels * sample_bytes / 20))
   if command -v timeout >/dev/null 2>&1; then
     dd if=/dev/zero bs="$bytes" count=1 2>/dev/null \
       | timeout -k 1s "${TIKPAL_AUDIO_BROWSER_PROBE_TIMEOUT_SECONDS}s" \
-          aplay -q -D "$pcm" -t raw -f "$TIKPAL_AUDIO_BROWSER_PROBE_FORMAT" -r "$rate" -c "$channels" >/dev/null 2>&1
+          aplay -q -D "$pcm" -t raw -f "$format" -r "$rate" -c "$channels" >/dev/null 2>&1
   else
     dd if=/dev/zero bs="$bytes" count=1 2>/dev/null \
-      | aplay -q -D "$pcm" -t raw -f "$TIKPAL_AUDIO_BROWSER_PROBE_FORMAT" -r "$rate" -c "$channels" >/dev/null 2>&1
+      | aplay -q -D "$pcm" -t raw -f "$format" -r "$rate" -c "$channels" >/dev/null 2>&1
   fi
 }
 
 selected_browser_pcm() {
   local selected="$1"
-  local card_id device_id dmix_pcm plughw_pcm
+  local card_id device_id dmix_pcm plughw_pcm format formats_label
   card_id="$(selected_field "$selected" 2)"
   device_id="$(selected_field "$selected" 3)"
   dmix_pcm="dmix:CARD=$card_id,DEV=$device_id"
   plughw_pcm="plughw:CARD=$card_id,DEV=$device_id"
-  if probe_browser_pcm "$dmix_pcm"; then
-    printf '%s\n' "$dmix_pcm"
-    return 0
-  fi
-  log "WARN: $dmix_pcm did not accept ${TIKPAL_AUDIO_BROWSER_PROBE_FORMAT}/${TIKPAL_AUDIO_BROWSER_PROBE_RATE}Hz/${TIKPAL_AUDIO_BROWSER_PROBE_CHANNELS}ch; using $plughw_pcm"
+  formats_label="$(configured_browser_probe_formats | paste -sd, -)"
+  while IFS= read -r format; do
+    [[ -n "$format" ]] || continue
+    if probe_browser_pcm_format "$dmix_pcm" "$format"; then
+      printf '%s\n' "$dmix_pcm"
+      return 0
+    fi
+  done < <(configured_browser_probe_formats)
+  log "WARN: $dmix_pcm did not accept ${formats_label}/${TIKPAL_AUDIO_BROWSER_PROBE_RATE}Hz/${TIKPAL_AUDIO_BROWSER_PROBE_CHANNELS}ch; using $plughw_pcm"
   printf '%s\n' "$plughw_pcm"
 }
 

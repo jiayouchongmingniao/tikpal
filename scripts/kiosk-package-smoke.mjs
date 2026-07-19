@@ -29,6 +29,7 @@ const requiredFiles = [
   "deploy/chromium/web-mode-extension/manifest.json",
   "deploy/chromium/web-mode-extension/background.js",
   "deploy/chromium/web-mode-extension/content.js",
+  "deploy/chromium/web-mode-extension/netease-audio-mirror.js",
   "deploy/chromium/chromium-flags.conf",
   "deploy/chromium/managed-policies.json",
   "deploy/chromium/env.kiosk.example",
@@ -222,16 +223,20 @@ if [ "$1" = "-l" ]; then
   exit 0
 fi
 device=""
+format=""
 while [ "$#" -gt 0 ]; do
-  if [ "$1" = "-D" ]; then
-    device="$2"
-    shift 2
-    continue
-  fi
-  shift
+  case "$1" in
+    -D) device="$2"; shift 2 ;;
+    -f) format="$2"; shift 2 ;;
+    *) shift ;;
+  esac
 done
 case "$device" in
-  dmix:CARD=Crimson,DEV=0) exit 1 ;;
+  dmix:CARD=Crimson,DEV=0)
+    [ "$format" = "S24_3LE" ] || exit 1
+    cat >/dev/null
+    exit 0
+    ;;
   *) cat >/dev/null; exit 0 ;;
 esac
 `, { mode: 0o755 });
@@ -272,7 +277,7 @@ esac
   const bt66Resolve = runAudioAdapt(`${hdmiCard}\n${crimsonCard}\n${bt66Card}`, ["resolve-browser"]);
   assert(bt66Resolve.status === 0 && bt66Resolve.stdout.trim() === "dmix:CARD=BT66,DEV=0", `audio adapter should prefer BT66 and use dmix:\n${bt66Resolve.stdout}\n${bt66Resolve.stderr}`);
   const crimsonResolve = runAudioAdapt(`${hdmiCard}\n${crimsonCard}`, ["resolve-browser"]);
-  assert(crimsonResolve.status === 0 && crimsonResolve.stdout.trim() === "plughw:CARD=Crimson,DEV=0", `audio adapter should fall back to plughw for Crimson:\n${crimsonResolve.stdout}\n${crimsonResolve.stderr}`);
+  assert(crimsonResolve.status === 0 && crimsonResolve.stdout.trim() === "dmix:CARD=Crimson,DEV=0", `audio adapter should use dmix for S24-only Crimson:\n${crimsonResolve.stdout}\n${crimsonResolve.stderr}`);
   const crimsonAudioout = runAudioAdapt(`${hdmiCard}\n${crimsonCard}`, ["resolve-audioout"]);
   assert(crimsonAudioout.status === 0 && crimsonAudioout.stdout.trim() === "plughw:CARD=Crimson,DEV=0", "audio adapter should use plughw for moOde audioout");
   const mysteryCheck = runAudioAdapt(`${hdmiCard}\n${mysteryCard}`, ["check"]);
@@ -417,10 +422,15 @@ esac
   assert(extensionManifest.key, "Explore extension should use a stable id for managed-policy allowlisting");
   assert(extensionManifest.host_permissions.includes("http://127.0.0.1:8787/*"), "Explore extension should only call the loopback API");
   assert(extensionManifest.host_permissions.includes("http://127.0.0.1:4173/*"), "Explore extension should be able to leave the local provider bootstrap page");
+  assert(extensionManifest.host_permissions.includes("https://*.music.126.net/*") && extensionManifest.host_permissions.includes("https://*.music.163.com/*"), "Explore extension should allow NetEase audio fetch fallback domains only");
   assert(extensionManifest.background?.service_worker === "background.js" && extensionManifest.background?.type === "module", "Explore extension should use its MV3 module service worker");
+  assert(extensionManifest.web_accessible_resources?.some((entry) => entry.resources?.includes("netease-audio-mirror.js") && entry.matches?.includes("https://music.163.com/*")), "Explore extension should expose the NetEase audio mirror to the page world");
   assert(extensionContent.includes("window.setInterval(() => void syncProxy(), 750)"), "provider pages should poll the proxy settings revision every 750ms");
   assert(extensionContent.includes("window.location.reload()"), "provider pages should refresh after a proxy revision change");
   assert(extensionContent.includes("window.location.replace(provider.url)"), "provider bootstrap should navigate only after proxy sync succeeds");
+  assert(extensionContent.includes("netease-audio-mirror.js"), "NetEase provider pages should inject the audio mirror into the page world");
+  assert(extensionBackground.includes("isAllowedNeteaseAudioUrl") && extensionBackground.includes('message?.type === "fetch-audio"') && extensionBackground.includes("chrome.tabs.sendMessage"), "Explore extension background should proxy only allowed NetEase audio fetches in chunks");
+  assert(extensionContent.includes("tikpal-netease-fetch-audio") && extensionContent.includes('chrome.runtime.sendMessage({ type: "fetch-audio"') && extensionContent.includes('message?.type !== "fetch-audio-result"'), "NetEase page script should be able to request chunked extension-backed audio bytes");
   assert(extensionContent.includes('chrome.runtime.sendMessage({ type: "keyboard", enabled, force }'), "Explore extension should distinguish new input focus from keyboard hide requests");
   assert(extensionContent.includes("suno\\.com") && extensionContent.includes('event.type === "focusin" && !allowProgrammaticInputFocus'), "Suno should ignore page-driven autofocus until the user taps an input");
   assert(extensionContent.includes("editableTarget(document.activeElement)"), "Explore extension should hide Onboard after provider input focus ends");

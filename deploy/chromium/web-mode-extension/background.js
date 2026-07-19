@@ -72,6 +72,70 @@ async function setKeyboardVisible(enabled, force = false) {
   return { ok: true };
 }
 
+function isAllowedNeteaseAudioUrl(value) {
+  let url;
+  try {
+    url = new URL(String(value || ""));
+  } catch {
+    return false;
+  }
+  if (url.protocol !== "https:") return false;
+  return /(^|\.)music\.126\.net$/i.test(url.hostname) || /(^|\.)music\.163\.com$/i.test(url.hostname);
+}
+
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+  return btoa(binary);
+}
+
+async function sendNeteaseAudioChunk(sender, payload) {
+  if (!sender.tab?.id || !chrome.tabs?.sendMessage) throw new Error("No Explore tab for NetEase audio fetch");
+  await new Promise((resolve, reject) => {
+    chrome.tabs.sendMessage(sender.tab.id, payload, { frameId: sender.frameId }, () => {
+      const message = chrome.runtime.lastError?.message || "";
+      if (message && !message.includes("message port closed before a response")) {
+        reject(new Error(message));
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+async function fetchNeteaseAudio(url, sender, id) {
+  if (!isAllowedNeteaseAudioUrl(url)) throw new Error("Unsupported NetEase audio URL");
+  const response = await fetch(url, {
+    credentials: "include",
+    cache: "force-cache"
+  });
+  if (!response.ok) throw new Error(`NetEase audio fetch returned ${response.status}`);
+  const buffer = await response.arrayBuffer();
+  const base64 = arrayBufferToBase64(buffer);
+  const chunkSize = 512 * 1024;
+  const total = Math.max(1, Math.ceil(base64.length / chunkSize));
+  const metadata = {
+    type: "fetch-audio-result",
+    id,
+    contentType: response.headers.get("content-type") || "",
+    byteLength: buffer.byteLength,
+    total
+  };
+  for (let index = 0; index < total; index += 1) {
+    await sendNeteaseAudioChunk(sender, {
+      ...metadata,
+      ok: true,
+      index,
+      chunk: base64.slice(index * chunkSize, (index + 1) * chunkSize)
+    });
+  }
+  return { ok: true, streamed: true, byteLength: buffer.byteLength, total };
+}
+
 function queueSync() {
   if (!syncPromise) syncPromise = syncProxy().finally(() => { syncPromise = null; });
   return syncPromise;
@@ -81,6 +145,12 @@ if (globalThis.chrome?.runtime?.onMessage) {
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message?.type === "keyboard") {
       setKeyboardVisible(message.enabled === true, message.force === true)
+        .then(sendResponse)
+        .catch((error) => sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) }));
+      return true;
+    }
+    if (message?.type === "fetch-audio") {
+      fetchNeteaseAudio(message.url, sender, message.id)
         .then(sendResponse)
         .catch((error) => sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) }));
       return true;

@@ -14,6 +14,9 @@ pcm_b="${TIKPAL_WEB_MODE_CROSSFADE_PCM_B:-tikpal_explore_b}"
 control_a="${TIKPAL_WEB_MODE_CROSSFADE_CONTROL_A:-Tikpal Explore A}"
 control_b="${TIKPAL_WEB_MODE_CROSSFADE_CONTROL_B:-Tikpal Explore B}"
 config_path="${TIKPAL_WEB_MODE_CROSSFADE_CONFIG_PATH:-/etc/alsa/conf.d/99-tikpal-explore-crossfade.conf}"
+probe_formats="${TIKPAL_AUDIO_BROWSER_PROBE_FORMATS:-${TIKPAL_AUDIO_BROWSER_PROBE_FORMAT:-S16_LE},S24_3LE,S32_LE}"
+probe_rate="${TIKPAL_AUDIO_BROWSER_PROBE_RATE:-48000}"
+probe_channels="${TIKPAL_AUDIO_BROWSER_PROBE_CHANNELS:-2}"
 
 log() {
   printf '[tikpal-web-crossfade] %s\n' "$*"
@@ -120,6 +123,45 @@ control_for_bus() {
   esac
 }
 
+sample_bytes_for_format() {
+  case "$(printf '%s' "${1:-}" | tr '[:lower:]' '[:upper:]')" in
+    U8|S8)
+      printf '1\n'
+      ;;
+    S24_3LE|S24_3BE)
+      printf '3\n'
+      ;;
+    S32_LE|S32_BE|FLOAT_LE|FLOAT_BE)
+      printf '4\n'
+      ;;
+    *)
+      printf '2\n'
+      ;;
+  esac
+}
+
+configured_probe_formats() {
+  printf '%s\n' "$probe_formats" | tr ',' '\n' | while IFS= read -r format; do
+    format="$(trim_value "$format")"
+    [ -n "$format" ] && printf '%s\n' "$format"
+  done | awk '!seen[$0]++'
+}
+
+initialize_pcm_for_control() {
+  next_pcm="$1"
+  while IFS= read -r format; do
+    [ -n "$format" ] || continue
+    sample_bytes="$(sample_bytes_for_format "$format")"
+    bytes=$((probe_rate * probe_channels * sample_bytes / 20))
+    dd if=/dev/zero bs="$bytes" count=1 2>/dev/null \
+      | aplay -q -D "$next_pcm" -t raw -f "$format" -r "$probe_rate" -c "$probe_channels" >/dev/null 2>&1 \
+      && return 0
+  done <<EOF
+$(configured_probe_formats)
+EOF
+  return 1
+}
+
 install_config() {
   local_tmp="$(mktemp)"
   trap 'rm -f "$local_tmp"' EXIT INT TERM
@@ -164,9 +206,7 @@ EOF
     next_pcm="$(pcm_for_bus "$next_bus")"
     next_control="$(control_for_bus "$next_bus")"
     if ! amixer -c "$card" get "$next_control" >/dev/null 2>&1; then
-      dd if=/dev/zero bs=19200 count=1 2>/dev/null \
-        | aplay -q -D "$next_pcm" -t raw -f S16_LE -r 48000 -c 2 >/dev/null 2>&1 \
-        || true
+      initialize_pcm_for_control "$next_pcm" || true
     fi
     amixer -q -c "$card" sset "$next_control" 100% || fail "cannot initialize $next_control"
   done

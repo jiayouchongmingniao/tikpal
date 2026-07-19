@@ -106,6 +106,45 @@
 
   if (window.top !== window) return;
 
+  window.addEventListener("message", (event) => {
+    if (event.source !== window) return;
+    const message = event.data;
+    if (message?.type !== "tikpal-netease-fetch-audio" || typeof message.id !== "string") return;
+    chrome.runtime.sendMessage({ type: "fetch-audio", id: message.id, url: message.url }, (response) => {
+      const runtimeError = chrome.runtime.lastError?.message;
+      if (!runtimeError && response?.ok) return;
+      window.postMessage({
+        type: "tikpal-netease-fetch-audio-result",
+        id: message.id,
+        ok: false,
+        error: runtimeError || response?.error || "NetEase extension audio fetch failed"
+      }, window.location.origin);
+    });
+  });
+  chrome.runtime.onMessage.addListener((message) => {
+    if (message?.type !== "fetch-audio-result" || typeof message.id !== "string") return false;
+    window.postMessage({
+      type: "tikpal-netease-fetch-audio-result",
+      ...message
+    }, window.location.origin);
+    return false;
+  });
+
+  const injectNeteaseAudioMirror = () => {
+    if (!/(^|\.)music\.163\.com$/i.test(window.location.hostname)) return;
+    const root = document.documentElement || document.head;
+    if (!root || root.dataset.tikpalNeteaseAudioMirror === "1") return;
+    root.dataset.tikpalNeteaseAudioMirror = "1";
+    const script = document.createElement("script");
+    script.src = chrome.runtime.getURL("netease-audio-mirror.js");
+    script.async = false;
+    script.onload = () => script.remove();
+    (document.head || root).appendChild(script);
+  };
+
+  injectNeteaseAudioMirror();
+  document.addEventListener("DOMContentLoaded", injectNeteaseAudioMirror, { once: true });
+
   const bootstrapUrl = "http://127.0.0.1:4173/web-mode-transition.html";
   let initialRevision = null;
   let syncing = false;
