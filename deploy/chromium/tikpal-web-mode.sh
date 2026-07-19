@@ -522,6 +522,18 @@ onboard_visible_windows() {
   done < <(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool search --onlyvisible --name Onboard 2>/dev/null || true)
 }
 
+raise_onboard() {
+  local window
+  command -v xdotool >/dev/null 2>&1 || return 0
+  while IFS= read -r window; do
+    [[ -n "$window" ]] || continue
+    DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowraise "$window" >/dev/null 2>&1 || true
+    if command -v wmctrl >/dev/null 2>&1; then
+      DISPLAY="$TIKPAL_KIOSK_DISPLAY" wmctrl -i -r "$window" -b add,above >/dev/null 2>&1 || true
+    fi
+  done < <(onboard_visible_windows)
+}
+
 configure_onboard_input_method_key() {
   local source_dir="/usr/share/onboard/layouts"
   local target_dir="${XDG_DATA_HOME:-$HOME/.local/share}/onboard/layouts"
@@ -559,6 +571,25 @@ configure_onboard_input_method_key() {
   gsettings reset org.onboard key-label-overrides >/dev/null 2>&1 || true
 }
 
+configure_onboard_visibility() {
+  command -v gsettings >/dev/null 2>&1 || return 0
+  local session_bus
+  session_bus="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/user/$(id -u)/bus}"
+  export DBUS_SESSION_BUS_ADDRESS="$session_bus"
+  gsettings set org.onboard.window docking-enabled false >/dev/null 2>&1 || true
+  gsettings set org.onboard.window force-to-top true >/dev/null 2>&1 || true
+  gsettings set org.onboard.window window-state-sticky true >/dev/null 2>&1 || true
+  gsettings set org.onboard show-status-icon false >/dev/null 2>&1 || true
+  gsettings set org.onboard.icon-palette in-use false >/dev/null 2>&1 || true
+  gsettings set org.onboard.auto-show enabled false >/dev/null 2>&1 || true
+  gsettings set org.onboard.auto-show hide-on-key-press false >/dev/null 2>&1 || true
+  gsettings set org.onboard.window enable-inactive-transparency false >/dev/null 2>&1 || true
+  gsettings set org.onboard.window inactive-transparency 0.0 >/dev/null 2>&1 || true
+  gsettings set org.onboard.window transparency 0.0 >/dev/null 2>&1 || true
+  gsettings set org.onboard.keyboard input-event-source XInput >/dev/null 2>&1 || true
+  gsettings set org.onboard.keyboard key-synth XTest >/dev/null 2>&1 || true
+}
+
 configure_onboard() {
   command -v gsettings >/dev/null 2>&1 || return 0
   local height session_bus width x y
@@ -568,17 +599,11 @@ configure_onboard() {
   height="$(window_height "$TIKPAL_WEB_MODE_ONBOARD_WINDOW")"
   x="$(position_x "$TIKPAL_WEB_MODE_ONBOARD_POSITION")"
   y="$(position_y "$TIKPAL_WEB_MODE_ONBOARD_POSITION")"
-  gsettings set org.onboard.window docking-enabled false >/dev/null 2>&1 || true
-  gsettings set org.onboard.window force-to-top true >/dev/null 2>&1 || true
-  gsettings set org.onboard show-status-icon false >/dev/null 2>&1 || true
-  gsettings set org.onboard.icon-palette in-use false >/dev/null 2>&1 || true
-  gsettings set org.onboard.auto-show enabled false >/dev/null 2>&1 || true
+  configure_onboard_visibility
   gsettings set org.onboard.window.landscape width "$width" >/dev/null 2>&1 || true
   gsettings set org.onboard.window.landscape height "$height" >/dev/null 2>&1 || true
   gsettings set org.onboard.window.landscape x "$x" >/dev/null 2>&1 || true
   gsettings set org.onboard.window.landscape y "$y" >/dev/null 2>&1 || true
-  gsettings set org.onboard.keyboard input-event-source GTK >/dev/null 2>&1 || true
-  gsettings set org.onboard.keyboard key-synth XTest >/dev/null 2>&1 || true
   configure_onboard_input_method_key
 }
 
@@ -637,20 +662,15 @@ focus_window() {
 }
 
 ensure_onboard() {
-  local active_window=""
   is_enabled "$TIKPAL_WEB_MODE_ONBOARD" || return 0
   [[ ! -e "$TIKPAL_WEB_MODE_ONBOARD_SUPPRESS_PATH" ]] || return 0
   command -v onboard >/dev/null 2>&1 || {
     log "WARN: onboard not found"
     return 0
   }
-
-  if command -v xdotool >/dev/null 2>&1; then
-    active_window="$(focused_browser_window || true)"
-  fi
+  configure_onboard
 
   if ! pgrep -u "$(id -u)" -x onboard >/dev/null 2>&1; then
-    configure_onboard
     local session_bus="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/user/$(id -u)/bus}"
     export DBUS_SESSION_BUS_ADDRESS="$session_bus"
     if systemctl --user cat tikpal-onboard.service >/dev/null 2>&1; then
@@ -664,13 +684,11 @@ ensure_onboard() {
     sleep 0.8
   fi
 
-  focus_window "$active_window"
-  position_onboard
-  if [[ -z "$(onboard_visible_windows)" ]]; then
-    call_onboard_method Show || true
-    position_onboard
-  fi
-  focus_window "$active_window"
+  call_onboard_method Show || true
+  sleep 0.2
+  call_onboard_method Show || true
+  sleep 0.1
+  raise_onboard
 }
 
 hide_onboard() {
@@ -934,6 +952,7 @@ tile_visible_web_mode_windows() {
     fi
   done < <(visible_chromium_windows)
 
+  raise_onboard
   is_enabled "$TIKPAL_WEB_MODE_SINGLE_PROVIDER_WINDOW" || return 0
   [[ "${#provider_windows[@]}" -gt 1 ]] || return 0
 
@@ -951,6 +970,7 @@ tile_visible_web_mode_windows() {
   done
   tile_window "$keep_window" "$TIKPAL_WEB_MODE_LEFT_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
   raise_window_without_focus "$keep_window"
+  raise_onboard
 }
 
 start_window_guard() {

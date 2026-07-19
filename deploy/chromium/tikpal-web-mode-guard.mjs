@@ -332,8 +332,10 @@ const inputFocusGuardScript = `(() => {
   document.addEventListener("focusout", () => {
     setTimeout(() => {
       if (!document.hasFocus()) {
-        if (lastEditable?.isConnected && !outsidePointerDown) {
-          keepEditableFocus(lastEditable);
+        const active = activeEditable();
+        if (active || lastEditable?.isConnected || !outsidePointerDown) {
+          lastEditable = active || lastEditable;
+          if (lastEditable) keepEditableFocus(lastEditable);
           return;
         }
         lastEditable = null;
@@ -412,8 +414,6 @@ function setOnboardVisible(enabled, force = false) {
 async function runInputFocusKeyboard(targets) {
   if (!onboardAutoFocus) return;
   const currentTargetIds = new Set();
-  let anyFocused = false;
-  let wasFocused = false;
   let shouldShow = false;
   let shouldHide = false;
   for (const target of targets.filter(isProviderWebPage)) {
@@ -421,19 +421,16 @@ async function runInputFocusKeyboard(targets) {
     const state = await evaluate(target.webSocketDebuggerUrl, inputFocusExpression).catch(() => null);
     if (!state) continue;
     const previous = inputFocusRequests.get(target.id) || { showRequest: 0, hideRequest: 0, focused: false, url: target.url };
-    anyFocused ||= state.focused;
-    wasFocused ||= previous.focused;
     shouldShow ||= state.showRequest > previous.showRequest || (allowProgrammaticInputFocus && state.focused && !previous.focused);
-    shouldHide ||= state.hideRequest > previous.hideRequest || (previous.url !== target.url && !state.focused);
+    shouldHide ||= state.hideRequest > previous.hideRequest;
     inputFocusRequests.set(target.id, { ...state, url: target.url });
   }
-  for (const [targetId, previous] of inputFocusRequests) {
+  for (const [targetId] of inputFocusRequests) {
     if (currentTargetIds.has(targetId)) continue;
-    wasFocused ||= previous.focused;
     inputFocusRequests.delete(targetId);
   }
   if (shouldShow) setOnboardVisible(true, true);
-  else if (shouldHide || (wasFocused && !anyFocused)) setOnboardVisible(false);
+  else if (shouldHide) setOnboardVisible(false);
 }
 
 async function installKioskGuard(target) {
