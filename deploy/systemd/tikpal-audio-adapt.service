@@ -11,6 +11,8 @@ WorkingDirectory=@APP_DIR@
 EnvironmentFile=-@APP_DIR@/.env
 EnvironmentFile=-@APP_DIR@/.env.kiosk
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStartPre=/bin/sh -c 'if ! grep -q Loopback /proc/asound/cards 2>/dev/null; then /usr/sbin/modprobe -r snd_aloop 2>/dev/null || /usr/sbin/modprobe -r snd-aloop 2>/dev/null || true; /usr/sbin/modprobe snd_aloop || /usr/sbin/modprobe snd-aloop || true; fi'
+ExecStartPre=/bin/sh -c 'for i in $(seq 1 40); do grep -q Loopback /proc/asound/cards 2>/dev/null && exit 0; sleep 0.25; done; echo "Tikpal audio preflight: Loopback card did not appear" >&2; cat /proc/asound/cards >&2 || true; exit 1'
 ExecStart=@APP_DIR@/deploy/moode/tikpal-audio-adapt.sh apply
 RemainAfterExit=yes
 

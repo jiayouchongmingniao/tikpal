@@ -13,7 +13,7 @@ ACTION="${1:-check}"
 : "${TIKPAL_AUDIO_BROWSER_PROBE:=1}"
 : "${TIKPAL_AUDIO_BROWSER_PROBE_TIMEOUT_SECONDS:=2}"
 : "${TIKPAL_AUDIO_BROWSER_PROBE_FORMAT:=S16_LE}"
-: "${TIKPAL_AUDIO_BROWSER_PROBE_FORMATS:=$TIKPAL_AUDIO_BROWSER_PROBE_FORMAT,S24_3LE,S32_LE}"
+: "${TIKPAL_AUDIO_BROWSER_PROBE_FORMATS:=$TIKPAL_AUDIO_BROWSER_PROBE_FORMAT}"
 : "${TIKPAL_AUDIO_BROWSER_SHARED_FORMATS:=S24_3LE,S32_LE}"
 : "${TIKPAL_AUDIO_BROWSER_SHARED_PCM:=tikpal_browser_output}"
 : "${TIKPAL_AUDIO_BROWSER_SHARED_IPC_KEY:=742110}"
@@ -367,6 +367,25 @@ loopback_visible() {
   aplay -l 2>/dev/null | grep -q 'Loopback'
 }
 
+wait_for_loopback_visible() {
+  local attempt
+  for attempt in {1..40}; do
+    if loopback_visible; then
+      return 0
+    fi
+    sleep 0.25
+  done
+  return 1
+}
+
+ensure_loopback_visible() {
+  if loopback_visible; then
+    return 0
+  fi
+  modprobe_snd_aloop || true
+  wait_for_loopback_visible || fail "snd_aloop is not visible after applying Loopback config"
+}
+
 update_moode_db() {
   local selected="$1"
   local mixer_control="$2"
@@ -482,7 +501,7 @@ ttable [
 EOF
     modprobe_snd_aloop || true
   fi
-  loopback_visible || fail "snd_aloop is not visible after applying Loopback config"
+  ensure_loopback_visible
 }
 
 check_audio() {

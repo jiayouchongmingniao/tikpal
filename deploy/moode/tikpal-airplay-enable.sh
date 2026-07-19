@@ -25,6 +25,8 @@ airplay_artwork_root="${TIKPAL_AIRPLAY_ARTWORK_ROOT:-/var/local/www/imagesw/airp
 airplay_service_name="${TIKPAL_AIRPLAY_SERVICE_NAME:-}"
 airplay_service_type="${TIKPAL_AIRPLAY_SERVICE_TYPE:-}"
 airplay_metadata_pipe="${TIKPAL_AIRPLAY_METADATA_PIPE:-/tmp/shairport-sync-metadata}"
+airplay_ignore_volume_control="${TIKPAL_AIRPLAY_IGNORE_VOLUME_CONTROL:-no}"
+airplay_default_volume_db="${TIKPAL_AIRPLAY_DEFAULT_VOLUME_DB:-0.0}"
 airplay_pre_hook="/usr/local/bin/tikpal-shairport-spspre"
 airplay_post_hook="/usr/local/bin/tikpal-shairport-spspost"
 airplay_pre_hook_command="${airplay_pre_hook}"
@@ -58,9 +60,11 @@ write_shairport_config() {
   service_name="$4"
   service_type="$5"
   metadata_pipe="$6"
+  ignore_volume_control="$7"
+  default_volume_db="$8"
   tmp_path="$(mktemp)"
 
-  awk -v output_device="$output_device" -v artwork_root="$artwork_root" -v service_name="$service_name" -v service_type="$service_type" -v metadata_pipe="$metadata_pipe" -v pre_hook="$airplay_pre_hook_command" -v post_hook="$airplay_post_hook_command" '
+  awk -v output_device="$output_device" -v artwork_root="$artwork_root" -v service_name="$service_name" -v service_type="$service_type" -v metadata_pipe="$metadata_pipe" -v ignore_volume_control="$ignore_volume_control" -v default_volume_db="$default_volume_db" -v pre_hook="$airplay_pre_hook_command" -v post_hook="$airplay_post_hook_command" '
     function config_value(value) {
       gsub(/\\/, "\\\\", value);
       gsub(/"/, "\\\"", value);
@@ -72,6 +76,8 @@ write_shairport_config() {
       service_name = config_value(service_name);
       service_type = config_value(service_type);
       metadata_pipe = config_value(metadata_pipe);
+      ignore_volume_control = config_value(ignore_volume_control);
+      default_volume_db = config_value(default_volume_db);
       pre_hook = config_value(pre_hook);
       post_hook = config_value(post_hook);
     }
@@ -88,6 +94,16 @@ write_shairport_config() {
     !updated && $0 ~ /^[[:space:]]*(\/\/[[:space:]]*)?output_device[[:space:]]*=/ {
       print "\toutput_device = \"" output_device "\";";
       updated = 1;
+      next;
+    }
+    !updated_ignore_volume && $0 ~ /^[[:space:]]*(\/\/[[:space:]]*)?ignore_volume_control[[:space:]]*=/ {
+      print "\tignore_volume_control = \"" ignore_volume_control "\";";
+      updated_ignore_volume = 1;
+      next;
+    }
+    !updated_default_volume && $0 ~ /^[[:space:]]*(\/\/[[:space:]]*)?default_airplay_volume[[:space:]]*=/ {
+      print "\tdefault_airplay_volume = " default_volume_db ";";
+      updated_default_volume = 1;
       next;
     }
     !updated_start && $0 ~ /^[[:space:]]*(\/\/[[:space:]]*)?run_this_before_entering_active_state[[:space:]]*=/ {
@@ -180,6 +196,8 @@ ensure_shairport_config() {
   if [ "$name_ok" -eq 1 ] \
     && [ "$service_type_ok" -eq 1 ] \
     && grep -Fq "output_device = \"${output_device}\";" "$config_path" \
+    && grep -Fq "ignore_volume_control = \"${airplay_ignore_volume_control}\";" "$config_path" \
+    && grep -Fq "default_airplay_volume = ${airplay_default_volume_db};" "$config_path" \
     && grep -Fq "run_this_before_entering_active_state = \"${airplay_pre_hook_command}\";" "$config_path" \
     && grep -Fq "run_this_after_exiting_active_state = \"${airplay_post_hook_command}\";" "$config_path" \
     && grep -Fq 'wait_for_completion = "yes";' "$config_path" \
@@ -190,7 +208,7 @@ ensure_shairport_config() {
     return 0
   fi
 
-  write_shairport_config "$config_path" "$output_device" "$airplay_artwork_root" "$airplay_service_name" "$airplay_service_type" "$airplay_metadata_pipe" || return 0
+  write_shairport_config "$config_path" "$output_device" "$airplay_artwork_root" "$airplay_service_name" "$airplay_service_type" "$airplay_metadata_pipe" "$airplay_ignore_volume_control" "$airplay_default_volume_db" || return 0
   shairport_config_changed=1
 }
 

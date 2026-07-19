@@ -29,8 +29,8 @@ const APP_VERSION = process.env.TIKPAL_APP_VERSION ?? "0.1.0";
 const REQUESTED_RENDERER = (process.env.TIKPAL_RENDERER ?? "media").toLowerCase();
 const REQUESTED_KIOSK_WINDOW = process.env.TIKPAL_KIOSK_WINDOW ?? "2560x720";
 const LIBRARY_SCAN_COMMAND = process.env.TIKPAL_LIBRARY_SCAN_COMMAND ?? "";
-const SYSTEM_REBOOT_COMMAND = process.env.TIKPAL_SYSTEM_REBOOT_COMMAND ?? "systemctl reboot";
-const SYSTEM_SHUTDOWN_COMMAND = process.env.TIKPAL_SYSTEM_SHUTDOWN_COMMAND ?? "systemctl poweroff";
+const SYSTEM_REBOOT_COMMAND = process.env.TIKPAL_SYSTEM_REBOOT_COMMAND ?? "sudo -n systemctl --no-wall --no-block reboot";
+const SYSTEM_SHUTDOWN_COMMAND = process.env.TIKPAL_SYSTEM_SHUTDOWN_COMMAND ?? "sudo -n systemctl --no-wall --no-block poweroff";
 const DSP_PRESET = process.env.TIKPAL_DSP_PRESET ?? "Unknown";
 const DDCUTIL_BIN = process.env.TIKPAL_DDCUTIL_BIN ?? "ddcutil";
 const DDCUTIL_DISPLAY = process.env.TIKPAL_DDCUTIL_DISPLAY ?? "";
@@ -9821,6 +9821,26 @@ async function runWebModeCommand(action, providerId = "", env = {}) {
   await runCommand(commandWithEnv, { allowFailure: false, timeout: 45_000, includeStdoutOnFailure: true });
 }
 
+function isWebModeSwitchingError(error) {
+  const raw = error instanceof Error ? error.message : String(error ?? "");
+  return /Explore is already switching/i.test(raw);
+}
+
+async function runWebModeKeyboardCommand(keyboardCommand, keyboardEnv = {}) {
+  let lastError = null;
+  for (const retryDelayMs of [0, 500, 1200, 2000]) {
+    if (retryDelayMs > 0) await wait(retryDelayMs);
+    try {
+      await runWebModeCommand("keyboard", keyboardCommand, keyboardEnv);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (!isWebModeSwitchingError(error)) throw error;
+    }
+  }
+  throw lastError;
+}
+
 function webModeProviderLabel(providerId) {
   return WEB_MODE_PROVIDERS.find((provider) => provider.id === providerId)?.label ?? "Explore";
 }
@@ -9828,7 +9848,7 @@ function webModeProviderLabel(providerId) {
 function formatWebModeCommandError(error, action, providerId = "") {
   const raw = error instanceof Error ? error.message : String(error ?? "");
   const firstLine = raw.split(/\r?\n/).find((line) => line.trim())?.trim() ?? "";
-  if (/Explore is already switching/i.test(raw)) return "Explore is already switching";
+  if (isWebModeSwitchingError(error)) return "Explore is already switching";
   if (action === "open") {
     if (/did not open|did not appear|timed out|SIGKILL|Command failed|\[tikpal-web-mode\]/i.test(raw)) {
       return `${webModeProviderLabel(providerId)} did not open`;
@@ -9902,7 +9922,7 @@ async function applyWebModeAction(action) {
           ...(keyboardWindow ? { TIKPAL_WEB_MODE_ONBOARD_ACTION_WINDOW: keyboardWindow, TIKPAL_WEB_MODE_ONBOARD_WINDOW: keyboardWindow } : {})
         };
     try {
-      await runWebModeCommand("keyboard", keyboardCommand, keyboardEnv);
+      await runWebModeKeyboardCommand(keyboardCommand, keyboardEnv);
       await writeWebModeRuntimeState({ lastError: null });
     } catch (error) {
       const message = formatWebModeCommandError(error, "keyboard");

@@ -36,6 +36,7 @@ const requiredFiles = [
   "deploy/moode/tikpal-audio-adapt.sh",
   "public/web-mode-error.html",
   "deploy/moode/tikpal-alsa-loopback.sh",
+  "deploy/moode/tikpal-airplay-enable.sh",
   "deploy/moode/tikpal-airplay-transport.sh",
   "deploy/moode/tikpal-output-volume.sh",
   "deploy/moode/tikpal-snd-aloop-enable.sh",
@@ -289,6 +290,7 @@ esac
 
   const audioAdaptUnit = await readFile(path.join(ROOT, "deploy/systemd/tikpal-audio-adapt.service"), "utf8");
   const alsaLoopbackScript = await readFile(path.join(ROOT, "deploy/moode/tikpal-alsa-loopback.sh"), "utf8");
+  const airplayEnableScript = await readFile(path.join(ROOT, "deploy/moode/tikpal-airplay-enable.sh"), "utf8");
   const sndAloopEnableScript = await readFile(path.join(ROOT, "deploy/moode/tikpal-snd-aloop-enable.sh"), "utf8");
   const apiUnit = await readFile(path.join(ROOT, "deploy/systemd/tikpal-api.service"), "utf8");
   const webUnit = await readFile(path.join(ROOT, "deploy/systemd/tikpal-web.service"), "utf8");
@@ -302,6 +304,7 @@ esac
   assert(audioAdaptUnit.includes("tikpal-audio-adapt.sh apply"), "audio adapter unit should run the moOde adapter before services");
   assert(audioAdaptUnit.includes("Before=mpd.service tikpal-api.service tikpal-web.service tikpal-kiosk.service"), "audio adapter unit should order before playback and Tikpal services");
   assert(audioAdaptUnit.includes("/usr/sbin:/usr/bin:/sbin:/bin"), "audio adapter unit should include sbin paths so modprobe is available");
+  assert(audioAdaptUnit.includes("grep -q Loopback") && audioAdaptUnit.includes("modprobe snd_aloop"), "audio adapter unit should preflight a real Loopback card before app services start");
   assert(apiUnit.includes("network.target"), "api unit should use network.target");
   assert(apiUnit.includes("tikpal-audio-adapt.service"), "api unit should pull the audio adapter before startup");
   assert(!apiUnit.includes("network-online.target"), "api unit should not wait for network-online.target");
@@ -483,7 +486,9 @@ esac
   assert(audioAdaptScript.includes("resolve-browser") && audioAdaptScript.includes("resolve-audioout"), "audio adapter should expose browser and moOde PCM resolvers");
   assert(audioAdaptScript.includes("write_browser_output_config") && audioAdaptScript.includes("TIKPAL_AUDIO_BROWSER_SHARED_PCM"), "audio adapter should generate a shared conversion PCM for S24-only browser outputs");
   assert(audioAdaptScript.includes("printf 'snd_aloop\\n'") && audioAdaptScript.includes("snd_aloop is not visible after applying Loopback config"), "audio adapter apply should persist and verify the real snd_aloop module name");
+  assert(audioAdaptScript.includes("wait_for_loopback_visible") && audioAdaptScript.includes("ensure_loopback_visible"), "audio adapter should wait for the real Loopback card after loading snd_aloop");
   assert(alsaLoopbackScript.includes("modprobe_command") && alsaLoopbackScript.includes("snd_aloop"), "ALSA Loopback helper should load the real snd_aloop module name through a resolved modprobe path");
+  assert(airplayEnableScript.includes("TIKPAL_AIRPLAY_IGNORE_VOLUME_CONTROL:-no") && airplayEnableScript.includes("TIKPAL_AIRPLAY_DEFAULT_VOLUME_DB:-0.0"), "AirPlay enable should preserve phone volume control while avoiding Shairport's quiet default");
   assert(sndAloopEnableScript.includes("printf 'snd_aloop\\n'") && sndAloopEnableScript.includes("exit 1"), "standalone Loopback enable script should persist snd_aloop and fail if Loopback stays hidden");
   assert(webModeScript.includes('open_provider "${2:-qq_music}"'), "web mode should default initial Explore launch to QQ Music");
   assert(webModeScript.includes("xdotool is required for Explore provider window detection"), "web mode --check should fail clearly when xdotool is missing");
@@ -568,6 +573,7 @@ esac
   assert(webModeScript.includes('"$((width - 1))" "$((height - 1))"'), "Onboard cold start should force one redraw before its final size");
   const mainSource = await readFile(path.join(ROOT, "src/main.tsx"), "utf8");
   assert(mainSource.includes("onboardInputSelector"), "local kiosk text inputs should share automatic Onboard activation");
+  assert(mainSource.includes("onboardVisibleRequested"), "local kiosk inputs should avoid duplicate keyboard hide requests before a keyboard has been shown");
   assert(mainSource.includes("localKioskHosts.has(window.location.hostname)"), "automatic Onboard activation should stay on the physical kiosk host");
   assert(mainSource.includes('sendWebModeAction({ type: "keyboard", enabled,'), "local kiosk inputs should explicitly show and hide Onboard");
   assert(mainSource.includes("keyboardPlacementForTarget") && mainSource.includes("rectsOverlap"), "local kiosk inputs should choose a keyboard position that avoids the focused field");
@@ -578,6 +584,7 @@ esac
   assert(mainSource.includes("tikpal:keyboard-context-clear"), "local kiosk should clear input focus state when Settings closes");
   assert(mainSource.includes('document.addEventListener("focusout"'), "local kiosk inputs should hide Onboard after focus leaves text input");
   assert(serverSource.includes("normalizeWebModeKeyboardPosition") && serverSource.includes("normalizeWebModeKeyboardWindow"), "API should validate per-focus keyboard geometry before invoking the launcher");
+  assert(serverSource.includes("runWebModeKeyboardCommand") && serverSource.includes("isWebModeSwitchingError"), "API should retry keyboard show requests that collide with Explore provider switching");
   assert(serverSource.includes("TIKPAL_WEB_MODE_ONBOARD_ACTION_POSITION") && serverSource.includes("TIKPAL_WEB_MODE_ONBOARD_ACTION_WINDOW"), "API should pass per-action keyboard geometry without relying on .env-overridable variables");
   assert(serverSource.includes("TIKPAL_WEB_MODE_ONBOARD_POSITION") && serverSource.includes("TIKPAL_WEB_MODE_ONBOARD_WINDOW"), "API should pass validated keyboard geometry to the launcher");
   const openProviderBody = webModeScript.slice(

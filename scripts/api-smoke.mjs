@@ -1711,6 +1711,7 @@ async function runMpcLocalLibraryPathSmoke(roomExperienceStatePath) {
   const fakeExternalDisableLogPath = path.join(workspace, "external-disable.log");
   const fakeExternalDisableCommandPath = path.join(workspace, "external-disable.mjs");
   const fakeWebModeLogPath = path.join(workspace, "web-mode.log");
+  const fakeWebModeRetryMarkerPath = path.join(workspace, "web-mode-retry.marker");
   const fakeWebModeCommandPath = path.join(workspace, "web-mode-command.mjs");
   const fakeWebModeSettingsPath = path.join(workspace, "web-mode-settings.json");
   const fakeWebModeStatePath = path.join(workspace, "web-mode-state.json");
@@ -1851,7 +1852,7 @@ appendFileSync(${JSON.stringify(fakeExternalDisableLogPath)}, (process.argv[2] ?
 `);
   await chmod(fakeExternalDisableCommandPath, 0o755);
   await writeFile(fakeWebModeLogPath, "");
-  await writeFile(fakeWebModeCommandPath, `#!/usr/bin/env node
+  const fakeWebModeCommandSource = `#!/usr/bin/env node
 import { appendFileSync } from "node:fs";
 
 const args = process.argv.slice(2);
@@ -1863,7 +1864,8 @@ const keyboardEnv = args[0] === "keyboard"
     ]
   : [];
 appendFileSync(${JSON.stringify(fakeWebModeLogPath)}, [...args, ...keyboardEnv].join("\\t") + "\\n");
-`);
+`;
+  await writeFile(fakeWebModeCommandPath, fakeWebModeCommandSource);
   await chmod(fakeWebModeCommandPath, 0o755);
 
   const server = spawn(process.execPath, ["server/index.mjs"], {
@@ -2036,6 +2038,40 @@ appendFileSync(${JSON.stringify(fakeWebModeLogPath)}, [...args, ...keyboardEnv].
       movedKeyboardLog.includes("keyboard\tshow-force\t1\t500,80\t900x280\n"),
       `web mode keyboard should pass Onboard geometry through environment, got ${JSON.stringify(movedKeyboardLog)}`
     );
+    await writeFile(fakeWebModeLogPath, "");
+    await rm(fakeWebModeRetryMarkerPath, { force: true });
+    await writeFile(fakeWebModeCommandPath, `#!/usr/bin/env node
+import { appendFileSync, existsSync, writeFileSync } from "node:fs";
+
+const args = process.argv.slice(2);
+const markerPath = ${JSON.stringify(fakeWebModeRetryMarkerPath)};
+const keyboardEnv = args[0] === "keyboard"
+  ? [
+      process.env.TIKPAL_WEB_MODE_ONBOARD_REQUESTED_POSITION ?? "",
+      process.env.TIKPAL_WEB_MODE_ONBOARD_POSITION ?? "",
+      process.env.TIKPAL_WEB_MODE_ONBOARD_WINDOW ?? ""
+    ]
+  : [];
+if (args[0] === "keyboard" && args[1] === "show-force" && !existsSync(markerPath)) {
+  writeFileSync(markerPath, "1\\n");
+  console.error("[tikpal-web-mode] ERROR: Explore is already switching");
+  process.exit(1);
+}
+appendFileSync(${JSON.stringify(fakeWebModeLogPath)}, [...args, ...keyboardEnv].join("\\t") + "\\n");
+`);
+    const retriedKeyboard = await requestFrom(baseUrl, "/api/v1/web-mode/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "keyboard", enabled: true, force: true, keyboardPosition: "500,80", keyboardWindow: "900x280" })
+    });
+    assert(retriedKeyboard.response.ok, "web mode keyboard should retry while Explore is switching");
+    const retriedKeyboardMarker = await readFile(fakeWebModeRetryMarkerPath, "utf8");
+    assert(retriedKeyboardMarker.trim() === "1", "web mode keyboard retry smoke should exercise the lock conflict path");
+    const retriedKeyboardLog = await readFile(fakeWebModeLogPath, "utf8");
+    assert(
+      retriedKeyboardLog.includes("keyboard\tshow-force\t1\t500,80\t900x280\n"),
+      `web mode keyboard retry should preserve Onboard geometry, got ${JSON.stringify(retriedKeyboardLog)}`
+    );
+    await writeFile(fakeWebModeCommandPath, fakeWebModeCommandSource);
     const invalidKeyboardPosition = await requestFrom(baseUrl, "/api/v1/web-mode/actions", {
       method: "POST",
       body: JSON.stringify({ type: "keyboard", enabled: true, keyboardPosition: "left,top" })

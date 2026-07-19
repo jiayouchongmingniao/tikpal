@@ -100,8 +100,11 @@ const keyboardPlacementForTarget = (target: HTMLElement): KeyboardPlacement => {
 
 if (!window.__TIKPAL_REMOTE_MODE__ && localKioskHosts.has(window.location.hostname)) {
   let lastTextInput: HTMLElement | null = null;
+  let onboardVisibleRequested = false;
   let outsidePointerDown = false;
   const setOnboardVisible = (enabled: boolean, target: HTMLElement | null = null) => {
+    if (!enabled && !onboardVisibleRequested) return;
+    onboardVisibleRequested = enabled;
     const placement = enabled && target ? keyboardPlacementForTarget(target) : null;
     void sendWebModeAction({ type: "keyboard", enabled, ...(enabled ? { force: true } : {}), ...(placement ?? {}) }).catch(() => undefined);
   };
