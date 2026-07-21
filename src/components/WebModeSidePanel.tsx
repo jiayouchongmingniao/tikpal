@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { Apple, Cloud, Gem, Globe2, LogOut, Music2, ShoppingBag, SquarePlay, Volume2 } from "lucide-react";
+import { Apple, Cloud, Gem, Globe2, LogOut, Music2, ShoppingBag, SquarePlay, Type, Volume2 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { fetchTikpalState, fetchWebModeState, sendPlaybackAction, sendWebModeAction } from "../api/tikpalClient";
 import type { TikpalState, WebModeProviderId, WebModeProviderSummary, WebModeState } from "../types";
@@ -56,6 +56,12 @@ const providerTones: Record<WebModeProviderId, string> = {
   netease_music: "#e64040"
 };
 
+const textScaleChoices = [
+  { value: 1, label: "100%" },
+  { value: 1.1, label: "110%" },
+  { value: 1.2, label: "120%" }
+];
+
 function readInitialOpeningProvider(): WebModeProviderId | null {
   if (typeof window === "undefined") return null;
   const value = new URLSearchParams(window.location.search).get("opening") as WebModeProviderId | null;
@@ -66,11 +72,12 @@ export function WebModeSidePanel() {
   const [webMode, setWebMode] = useState<WebModeState | null>(null);
   const [tikpalState, setTikpalState] = useState<TikpalState | null>(null);
   const [pendingProvider, setPendingProvider] = useState<WebModeProviderId | null>(readInitialOpeningProvider);
-  const [pendingAction, setPendingAction] = useState<"close" | "proxy" | null>(null);
+  const [pendingAction, setPendingAction] = useState<"close" | "proxy" | "scale" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const actionLockRef = useRef(false);
   const activeProvider = webMode?.activeProvider ?? null;
   const volumePercent = tikpalState?.system.volume.percent ?? 0;
+  const providerTextScale = webMode?.settings.providerTextScale ?? 1.1;
 
   const providers = useMemo<WebModeProviderSummary[]>(() => {
     const byId = new Map(webMode?.providers.map((provider) => [provider.id, provider]) ?? []);
@@ -184,6 +191,23 @@ export function WebModeSidePanel() {
     }
   }
 
+  async function setProviderTextScale(nextScale: number) {
+    if (!webMode || actionLockRef.current || pendingAction || pendingProvider) return;
+    if (Math.abs(providerTextScale - nextScale) < 0.001) return;
+    actionLockRef.current = true;
+    setPendingAction("scale");
+    setError(null);
+    try {
+      const next = await sendWebModeAction({ type: "provider_text_scale", providerTextScale: nextScale });
+      setWebMode(next);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "Text scale update failed");
+    } finally {
+      setPendingAction(null);
+      actionLockRef.current = false;
+    }
+  }
+
   async function updateVolume(nextValue: number) {
     const percent = Math.max(0, Math.min(100, Math.round(nextValue)));
     setTikpalState((current) => current ? {
@@ -273,6 +297,24 @@ export function WebModeSidePanel() {
       </section>
 
       <section className="web-mode-control-stack" aria-label="Tikpal web controls">
+        <div className="web-mode-text-scale" data-web-mode-text-scale>
+          <span><Type size={18} /> Left Text</span>
+          <div className="web-mode-scale-options" role="group" aria-label="Left provider text size">
+            {textScaleChoices.map((choice) => (
+              <button
+                key={choice.label}
+                className={`web-mode-scale-option ${Math.abs(providerTextScale - choice.value) < 0.001 ? "is-active" : ""}`}
+                type="button"
+                aria-pressed={Math.abs(providerTextScale - choice.value) < 0.001}
+                disabled={!webMode || Boolean(pendingAction || pendingProvider)}
+                data-web-mode-text-scale-option={choice.value}
+                onClick={() => void setProviderTextScale(choice.value)}
+              >
+                {choice.label}
+              </button>
+            ))}
+          </div>
+        </div>
         <label className="web-mode-volume">
           <span><Volume2 size={18} /> Volume</span>
           <strong>{volumePercent}%</strong>

@@ -48,6 +48,7 @@ export interface WebModeProviderSummary {
 export interface WebModeSettings {
   proxyEnabled: boolean;
   proxyUrl: string;
+  providerTextScale: number;
   updatedAt: string | null;
 }
 
@@ -61,18 +62,20 @@ export interface WebModeState {
 }
 
 export interface WebModeActionRequest {
-  type: "open" | "close" | "keyboard" | "proxy";
+  type: "open" | "close" | "keyboard" | "proxy" | "provider_text_scale";
   provider?: WebModeProviderId;
   enabled?: boolean;
   force?: boolean;
   preload?: boolean;
   keyboardPosition?: string;
   keyboardWindow?: string;
+  providerTextScale?: number;
 }
 
 export interface WebModeSettingsPatch {
   proxyEnabled?: boolean;
   proxyUrl?: string;
+  providerTextScale?: number;
 }
 
 export interface RadioStationSummary {

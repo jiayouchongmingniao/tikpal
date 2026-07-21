@@ -5997,6 +5997,7 @@ select {
 .web-mode-panel-header span,
 .web-mode-active-card span,
 .web-mode-provider em,
+.web-mode-text-scale > span,
 .web-mode-volume span,
 .web-mode-panel-footer {
   color: rgba(226, 238, 245, 0.68);
@@ -6181,7 +6182,47 @@ select {
 .web-mode-control-stack {
   display: grid;
   align-items: center;
-  padding: 10px 12px;
+  gap: 8px;
+  padding: 8px 10px;
+}
+
+.web-mode-text-scale {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.web-mode-text-scale > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.web-mode-scale-options {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.web-mode-scale-option {
+  min-width: 0;
+  min-height: 32px;
+  border: 1px solid rgba(180, 210, 230, 0.16);
+  border-radius: 8px;
+  color: rgba(226, 238, 245, 0.76);
+  background: rgba(255, 255, 255, 0.07);
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 850;
+}
+
+.web-mode-scale-option.is-active {
+  border-color: #81d7ff;
+  color: #071014;
+  background: #81d7ff;
 }
 
 .web-mode-volume {
@@ -6249,6 +6290,42 @@ select {
   background: rgba(255, 255, 255, 0.06);
   font: inherit;
   font-weight: 800;
+}
+
+.web-mode-scale-field {
+  grid-column: 1 / -1;
+  min-height: 76px;
+  align-content: center;
+}
+
+.web-mode-scale-field > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.web-mode-settings-scale-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.web-mode-settings-scale-option {
+  min-width: 0;
+  min-height: 42px;
+  border: 1px solid var(--surface-control-border);
+  border-radius: 8px;
+  color: var(--surface-control-text);
+  background: var(--surface-control-bg-hover);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 850;
+}
+
+.web-mode-settings-scale-option.is-active {
+  border-color: var(--theme-info);
+  color: var(--theme-info-strong);
+  background: var(--theme-info-muted);
 }
 
 .web-mode-settings-help {

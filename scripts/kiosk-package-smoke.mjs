@@ -6,7 +6,7 @@ import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { buildProxyConfig } from "../deploy/chromium/web-mode-extension/background.js";
+import { buildProxyConfig, buildProxyKey, nextLowerProviderTextScale, normalizeProviderTextScale } from "../deploy/chromium/web-mode-extension/background.js";
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 
@@ -134,6 +134,13 @@ async function run() {
     assert(config.rules.bypassList.includes("localhost") && config.rules.bypassList.includes("127.0.0.1") && config.rules.bypassList.includes("<local>"), "extension proxy should bypass loopback hosts");
   }
   assertThrows(() => buildProxyConfig({ proxyEnabled: true, proxyUrl: "ftp://proxy.local:21" }), "extension should reject unsupported proxy protocols");
+  assert(normalizeProviderTextScale(1.2) === 1.2 && normalizeProviderTextScale("1.10") === 1.1, "extension should normalize supported provider text scales");
+  assert(nextLowerProviderTextScale(1.2) === 1.1 && nextLowerProviderTextScale(1.1) === 1.05 && nextLowerProviderTextScale(1.05) === 1, "extension should degrade overflowing provider zoom in bounded steps");
+  assert(
+    buildProxyKey({ proxyEnabled: true, proxyUrl: "http://proxy.local:8080", providerTextScale: 1 })
+      === buildProxyKey({ proxyEnabled: true, proxyUrl: "http://proxy.local:8080", providerTextScale: 1.2 }),
+    "provider text scale changes should not change the extension proxy key"
+  );
 
   await assertExecutable("deploy/chromium/launch-tikpal-kiosk.sh");
   await assertExecutable("deploy/chromium/start-tikpal-kiosk-devtools-proxy.sh");
@@ -404,6 +411,7 @@ esac
   assert(kioskEnv.includes("TIKPAL_WEB_MODE_EXTENSION_ENABLED=1"), "kiosk env should enable the dynamic Explore proxy extension by default");
   assert(kioskEnv.includes("TIKPAL_WEB_MODE_PROXY_APPLY_TIMEOUT_SECONDS=5"), "kiosk env should bound dynamic proxy confirmation");
   assert(kioskEnv.includes("TIKPAL_WEB_MODE_PROVIDER_BOOTSTRAP_TIMEOUT_SECONDS=7"), "kiosk env should bound provider bootstrap navigation");
+  assert(kioskEnv.includes("TIKPAL_WEB_MODE_PROVIDER_TEXT_SCALE=1.10"), "kiosk env should default Explore provider text scale to 110%");
   const kioskLauncher = await readFile(path.join(ROOT, "deploy/chromium/launch-tikpal-kiosk.sh"), "utf8");
   const kioskSession = await readFile(path.join(ROOT, "deploy/chromium/start-tikpal-kiosk-session.sh"), "utf8");
   const webModeScript = await readFile(path.join(ROOT, "deploy/chromium/tikpal-web-mode.sh"), "utf8");
@@ -422,6 +430,8 @@ esac
   const appSource = await readFile(path.join(ROOT, "src/App.tsx"), "utf8");
   const stylesSource = await readFile(path.join(ROOT, "src/styles.css"), "utf8");
   assert(extensionManifest.permissions.includes("proxy"), "Explore extension should declare the proxy permission");
+  assert(extensionManifest.permissions.includes("tabs"), "Explore extension should declare tabs permission for per-tab provider zoom");
+  assert(extensionManifest.version !== "1.0.0", "Explore extension should bump its version when provider zoom behavior changes so Chromium refreshes cached service workers");
   assert(extensionManifest.key, "Explore extension should use a stable id for managed-policy allowlisting");
   assert(extensionManifest.host_permissions.includes("http://127.0.0.1:8787/*"), "Explore extension should only call the loopback API");
   assert(extensionManifest.host_permissions.includes("http://127.0.0.1:4173/*"), "Explore extension should be able to leave the local provider bootstrap page");
@@ -429,8 +439,14 @@ esac
   assert(extensionManifest.background?.service_worker === "background.js" && extensionManifest.background?.type === "module", "Explore extension should use its MV3 module service worker");
   assert(extensionManifest.web_accessible_resources?.some((entry) => entry.resources?.includes("netease-audio-mirror.js") && entry.matches?.includes("https://music.163.com/*")), "Explore extension should expose the NetEase audio mirror to the page world");
   assert(extensionContent.includes("window.setInterval(() => void syncProxy(), 750)"), "provider pages should poll the proxy settings revision every 750ms");
+  assert(extensionContent.includes("initialProxyKey") && !extensionContent.includes("initialRevision"), "provider pages should reload only when the proxy key changes");
   assert(extensionContent.includes("window.location.reload()"), "provider pages should refresh after a proxy revision change");
   assert(extensionContent.includes("window.location.replace(provider.url)"), "provider bootstrap should navigate only after proxy sync succeeds");
+  assert(extensionBackground.includes("setZoomSettings") && extensionBackground.includes('scope: "per-tab"') && extensionBackground.includes("setZoom(tabId"), "Explore extension should apply provider text scale through per-tab Chrome zoom");
+  assert(extensionBackground.includes("getTabZoom") && extensionBackground.includes("actual !== null") && extensionBackground.includes("Math.abs(actual - applied)"), "Explore extension should verify real tab zoom instead of trusting cached provider zoom state");
+  assert(extensionBackground.includes("message.providerPage === true || Boolean(provider)"), "Explore extension should apply provider zoom before bootstrap navigation and during runtime scale changes");
+  assert(extensionBackground.includes("tabZoomState") && extensionBackground.includes("provider-zoom-overflow"), "Explore extension should remember per-tab overflow zoom fallback");
+  assert(extensionContent.includes("hasHorizontalOverflow") && extensionContent.includes("scrollWidth > width + 16") && extensionContent.includes('type: "provider-zoom-overflow"'), "provider pages should request zoom fallback when text scale overflows the left pane");
   assert(extensionContent.includes("netease-audio-mirror.js"), "NetEase provider pages should inject the audio mirror into the page world");
   assert(extensionBackground.includes("isAllowedNeteaseAudioUrl") && extensionBackground.includes('message?.type === "fetch-audio"') && extensionBackground.includes("chrome.tabs.sendMessage"), "Explore extension background should proxy only allowed NetEase audio fetches in chunks");
   assert(extensionContent.includes("tikpal-netease-fetch-audio") && extensionContent.includes('chrome.runtime.sendMessage({ type: "fetch-audio"') && extensionContent.includes('message?.type !== "fetch-audio-result"'), "NetEase page script should be able to request chunked extension-backed audio bytes");
@@ -444,6 +460,7 @@ esac
   assert(extensionBackground.includes("setKeyboardVisible"), "Explore extension background should forward keyboard actions to the loopback API");
   assert(extensionBackground.includes("chrome.tabs.update(sender.tab.id, { url: provider.url })"), "extension background should navigate the bootstrap tab after proxy sync");
   assert(sidePanelSource.includes('sendWebModeAction({ type: "proxy", enabled:'), "Explore side panel should use the shared proxy action");
+  assert(sidePanelSource.includes('sendWebModeAction({ type: "provider_text_scale"') && sidePanelSource.includes("data-web-mode-text-scale-option"), "Explore side panel should expose the provider text scale action");
   assert(!sidePanelSource.includes("updateWebModeSettings"), "Explore side panel should not reopen the provider to switch proxy mode");
   assert(!sidePanelSource.includes("data-web-mode-keyboard-toggle") && !sidePanelSource.includes("toggleKeyboard"), "Explore side panel should rely on automatic input-focus keyboard behavior");
   assert((sidePanelSource.match(/onClick=\{\(\) => void closeWebMode\(\)\}/g) ?? []).length === 1, "Explore side panel should keep only the top-right Back button");
@@ -792,6 +809,7 @@ esac
   assert(webModeScript.includes('pkill -KILL -f -- "--user-data-dir=$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/"'), "Explore close should force-exit an unresponsive provider after the grace period");
   assert(webModeScript.includes('provider_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/$provider"'), "Explore should keep a stable per-provider Chromium profile for login state");
   assert(!webModeScript.includes('rm -rf "$provider_profile"'), "Explore provider switches should not delete the provider login profile");
+  assert(webModeScript.includes('refresh_extension_script_cache "$provider_profile"') && webModeScript.includes("Default/Service Worker") && webModeScript.includes("service_worker_registration_info"), "Explore provider launch should refresh stale extension service-worker state without deleting login state");
   assert(webModeScript.indexOf('start_provider_guard "$provider" "$provider_profile" "$url" "$proxy_enabled" "$provider_port"') < webModeScript.indexOf('if ! wait_for_provider_ready "$provider_port"; then'), "provider guard should start before the ready gate so cookie prompts can be accepted during entry");
 
   const webModeErrorPage = await readFile(path.join(ROOT, "public/web-mode-error.html"), "utf8");

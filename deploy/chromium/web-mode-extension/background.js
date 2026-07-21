@@ -1,5 +1,19 @@
 const API_ROOT = "http://127.0.0.1:8787/api/v1";
 const BYPASS_LIST = ["localhost", "127.0.0.1", "[::1]", "<local>"];
+const PROVIDER_TEXT_SCALE_VALUES = [1, 1.1, 1.2];
+const PROVIDER_TEXT_SCALE_FALLBACK_VALUES = [1.2, 1.1, 1.05, 1];
+
+export function normalizeProviderTextScale(value, fallback = 1.1) {
+  const numeric = typeof value === "number" ? value : Number(String(value ?? "").trim());
+  const rounded = Math.round(numeric * 100) / 100;
+  const allowed = PROVIDER_TEXT_SCALE_VALUES.find((candidate) => Math.abs(candidate - rounded) < 0.001);
+  return allowed ?? fallback;
+}
+
+export function nextLowerProviderTextScale(value) {
+  const numeric = typeof value === "number" ? value : Number(String(value ?? "").trim());
+  return PROVIDER_TEXT_SCALE_FALLBACK_VALUES.find((candidate) => candidate < numeric - 0.001) ?? 1;
+}
 
 export function buildProxyConfig(settings = {}) {
   if (settings.proxyEnabled === false) return { mode: "direct" };
@@ -26,8 +40,14 @@ export function buildProxyConfig(settings = {}) {
   };
 }
 
-let appliedRevision = null;
+export function buildProxyKey(settings = {}) {
+  return JSON.stringify(buildProxyConfig(settings));
+}
+
+let appliedSettingsRevision = null;
+let appliedProxyKey = null;
 let syncPromise = null;
+const tabZoomState = new Map();
 
 async function readState() {
   const response = await fetch(`${API_ROOT}/web-mode/state`, { cache: "no-store" });
@@ -37,6 +57,76 @@ async function readState() {
 
 async function setProxy(value) {
   await chrome.proxy.settings.set({ value, scope: "regular" });
+}
+
+function callChrome(callbackStarter) {
+  return new Promise((resolve, reject) => {
+    try {
+      callbackStarter(() => {
+        const message = chrome.runtime.lastError?.message;
+        if (message) {
+          reject(new Error(message));
+          return;
+        }
+        resolve();
+      });
+    } catch (error) {
+      reject(error);
+    }
+  });
+}
+
+async function setTabZoom(tabId, scale) {
+  if (!chrome.tabs?.setZoom || !chrome.tabs?.setZoomSettings) return scale;
+  await callChrome((done) => chrome.tabs.setZoomSettings(tabId, {
+    mode: "automatic",
+    scope: "per-tab"
+  }, done));
+  await callChrome((done) => chrome.tabs.setZoom(tabId, scale, done));
+  return scale;
+}
+
+async function getTabZoom(tabId) {
+  if (!chrome.tabs?.getZoom) return null;
+  return new Promise((resolve, reject) => {
+    try {
+      chrome.tabs.getZoom(tabId, (zoom) => {
+        const message = chrome.runtime.lastError?.message;
+        if (message) {
+          reject(new Error(message));
+          return;
+        }
+        resolve(typeof zoom === "number" ? zoom : null);
+      });
+    } catch (error) {
+      reject(error);
+    }
+  });
+}
+
+async function applyProviderZoom(tabId, value) {
+  const desired = normalizeProviderTextScale(value);
+  if (!Number.isInteger(tabId)) return desired;
+  const current = tabZoomState.get(tabId);
+  const applied = current?.desired === desired ? Math.min(desired, current.applied ?? desired) : desired;
+  const actual = await getTabZoom(tabId).catch(() => null);
+  if (current?.desired === desired && Math.abs((current.applied ?? desired) - applied) < 0.001 && actual !== null && Math.abs(actual - applied) < 0.001) return applied;
+  await setTabZoom(tabId, applied);
+  tabZoomState.set(tabId, { desired, applied });
+  return applied;
+}
+
+async function applyProviderZoomFallback(tabId, value) {
+  const desired = normalizeProviderTextScale(value);
+  if (!Number.isInteger(tabId)) return nextLowerProviderTextScale(desired);
+  const current = tabZoomState.get(tabId);
+  const actual = await getTabZoom(tabId).catch(() => null);
+  const currentApplied = actual ?? current?.applied ?? desired;
+  const nextScale = nextLowerProviderTextScale(currentApplied);
+  if (Math.abs(currentApplied - nextScale) < 0.001) return currentApplied;
+  await setTabZoom(tabId, nextScale);
+  tabZoomState.set(tabId, { desired: current?.desired ?? desired, applied: nextScale });
+  return nextScale;
 }
 
 async function confirmApplied(settingsUpdatedAt) {
@@ -52,14 +142,25 @@ async function syncProxy() {
   const state = await readState();
   const revision = state.settings?.updatedAt;
   if (!revision) throw new Error("Explore proxy settings have no revision");
+  const settings = state.settings || {};
+  const proxyKey = buildProxyKey(settings);
 
-  if (revision !== appliedRevision) {
-    await setProxy(buildProxyConfig(state.settings));
+  if (proxyKey !== appliedProxyKey) {
+    await setProxy(buildProxyConfig(settings));
+    appliedProxyKey = proxyKey;
+  }
+  if (revision !== appliedSettingsRevision) {
     await confirmApplied(revision);
-    appliedRevision = revision;
+    appliedSettingsRevision = revision;
   }
 
-  return { ok: true, revision, providers: state.providers || [] };
+  return {
+    ok: true,
+    revision,
+    proxyKey,
+    providerTextScale: normalizeProviderTextScale(settings.providerTextScale),
+    providers: state.providers || []
+  };
 }
 
 async function setKeyboardVisible(enabled, force = false) {
@@ -155,11 +256,27 @@ if (globalThis.chrome?.runtime?.onMessage) {
         .catch((error) => sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) }));
       return true;
     }
+    if (message?.type === "provider-zoom-overflow") {
+      const tabId = sender.tab?.id;
+      applyProviderZoomFallback(tabId, message.scale)
+        .then((appliedProviderTextScale) => sendResponse({ ok: true, appliedProviderTextScale }))
+        .catch((error) => sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) }));
+      return true;
+    }
     if (message?.type !== "sync-proxy") return false;
     queueSync()
-      .then((result) => {
+      .then(async (result) => {
         const provider = message.providerId && result.providers.find((item) => item.id === message.providerId);
-        sendResponse(result);
+        let appliedProviderTextScale = null;
+        let zoomError = null;
+        if ((message.providerPage === true || Boolean(provider)) && Number.isInteger(sender.tab?.id)) {
+          try {
+            appliedProviderTextScale = await applyProviderZoom(sender.tab.id, result.providerTextScale);
+          } catch (error) {
+            zoomError = error instanceof Error ? error.message : String(error);
+          }
+        }
+        sendResponse({ ...result, appliedProviderTextScale, zoomError });
         if (provider?.url && sender.tab?.id && chrome.tabs?.update) {
           void chrome.tabs.update(sender.tab.id, { url: provider.url });
         }

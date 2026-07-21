@@ -32,6 +32,12 @@ type ActionableCardKey = "library_scan" | "reboot" | "shutdown";
 type SettingsSectionKey = "output" | "library" | "network" | "system";
 type SettingsDetailView = "appearance" | "display" | "font" | "lyrics" | "nas" | "night" | "webMode" | null;
 
+const webModeTextScaleChoices = [
+  { value: 1, label: "100%" },
+  { value: 1.1, label: "110%" },
+  { value: 1.2, label: "120%" }
+];
+
 interface BaseCard {
   key: string;
   section: SettingsSectionKey;
@@ -225,6 +231,7 @@ export function QuickSettingsOverlay({
   const [webModeState, setWebModeState] = useState<WebModeState | null>(null);
   const [webModeProxyEnabled, setWebModeProxyEnabled] = useState(true);
   const [webModeProxyUrl, setWebModeProxyUrl] = useState("");
+  const [webModeProviderTextScale, setWebModeProviderTextScale] = useState(1.1);
   const [webModeError, setWebModeError] = useState<string | null>(null);
   const [pendingRoomShortcut, setPendingRoomShortcut] = useState<RoomMode | "explore" | null>(null);
   const [roomShortcutError, setRoomShortcutError] = useState<string | null>(null);
@@ -279,6 +286,7 @@ export function QuickSettingsOverlay({
         setWebModeState(nextState);
         setWebModeProxyEnabled(nextState.settings.proxyEnabled);
         setWebModeProxyUrl(nextState.settings.proxyUrl);
+        setWebModeProviderTextScale(nextState.settings.providerTextScale ?? 1.1);
       })
       .catch((error) => {
         if (!cancelled) setWebModeError(error instanceof Error ? error.message : "Explore settings unavailable");
@@ -302,12 +310,13 @@ export function QuickSettingsOverlay({
     const normalizedProxyUrl = normalizeProxyUrl(webModeProxyUrl);
     const enabledChanged = webModeProxyEnabled !== webModeState.settings.proxyEnabled;
     const proxyUrlChanged = normalizedProxyUrl !== null && normalizedProxyUrl !== webModeState.settings.proxyUrl;
+    const textScaleChanged = Math.abs(webModeProviderTextScale - (webModeState.settings.providerTextScale ?? 1.1)) > 0.001;
 
     if (webModeProxyEnabled && normalizedProxyUrl === null) {
       setWebModeError("Enter a complete proxy URL");
       return undefined;
     }
-    if (!enabledChanged && !proxyUrlChanged) {
+    if (!enabledChanged && !proxyUrlChanged && !textScaleChanged) {
       setWebModeError((current) => current === "Enter a complete proxy URL" || current === "Saving..." ? null : current);
       return undefined;
     }
@@ -317,7 +326,8 @@ export function QuickSettingsOverlay({
     const timer = window.setTimeout(() => {
       void updateWebModeSettings({
         proxyEnabled: webModeProxyEnabled,
-        ...(normalizedProxyUrl === null ? {} : { proxyUrl: normalizedProxyUrl })
+        ...(normalizedProxyUrl === null ? {} : { proxyUrl: normalizedProxyUrl }),
+        providerTextScale: webModeProviderTextScale
       })
         .then((nextState) => {
           if (cancelled) return;
@@ -333,7 +343,7 @@ export function QuickSettingsOverlay({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [active, webModeProxyEnabled, webModeProxyUrl, webModeState]);
+  }, [active, webModeProviderTextScale, webModeProxyEnabled, webModeProxyUrl, webModeState]);
 
   const librarySourceKind = system.library.source.trim().toLowerCase();
   const libraryTrackCount = Math.max(0, system.library.trackCount);
@@ -857,6 +867,23 @@ export function QuickSettingsOverlay({
               onChange={(event) => setWebModeProxyUrl(event.currentTarget.value)}
             />
           </label>
+
+          <div className="night-field web-mode-scale-field" data-web-mode-settings-scale>
+            <span><Type size={16} /> Provider Text</span>
+            <div className="web-mode-settings-scale-options" role="group" aria-label="Provider text size">
+              {webModeTextScaleChoices.map((choice) => (
+                <button
+                  key={choice.label}
+                  className={`web-mode-settings-scale-option ${Math.abs(webModeProviderTextScale - choice.value) < 0.001 ? "is-active" : ""}`}
+                  type="button"
+                  aria-pressed={Math.abs(webModeProviderTextScale - choice.value) < 0.001}
+                  onClick={() => setWebModeProviderTextScale(choice.value)}
+                >
+                  {choice.label}
+                </button>
+              ))}
+            </div>
+          </div>
 
           <p className="web-mode-settings-help">Saves automatically. If a provider won’t open, toggle Web Proxy and retry.</p>
         </div>

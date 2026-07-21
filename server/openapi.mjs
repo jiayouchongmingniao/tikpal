@@ -27,7 +27,7 @@ const PLAYBACK_MODES = ["sequence", "repeat_one", "shuffle"];
 const SOURCE_TARGETS = ["mpd", "radio", "spotify", "bluetooth", "airplay", "upnp"];
 const HIFI_EQ_PRESETS = ["flat", "warm", "vocal"];
 const WEB_MODE_PROVIDERS = ["suno", "spotify", "youtube_music", "apple_music", "tidal", "qobuz", "deezer", "amazon_music", "qq_music", "netease_music"];
-const WEB_MODE_ACTION_TYPES = ["open", "close", "keyboard", "proxy"];
+const WEB_MODE_ACTION_TYPES = ["open", "close", "keyboard", "proxy", "provider_text_scale"];
 
 function ref(name) {
   return { $ref: `#/components/schemas/${name}` };
@@ -217,10 +217,11 @@ export function buildOpenApiDocument({ appVersion = "0.1.0" } = {}) {
         },
         WebModeSettings: {
           type: "object",
-          required: ["proxyEnabled", "proxyUrl", "updatedAt"],
+          required: ["proxyEnabled", "proxyUrl", "providerTextScale", "updatedAt"],
           properties: {
             proxyEnabled: { type: "boolean" },
             proxyUrl: { type: "string" },
+            providerTextScale: { type: "number", enum: [1, 1.1, 1.2] },
             updatedAt: { type: "string", nullable: true }
           }
         },
@@ -246,7 +247,8 @@ export function buildOpenApiDocument({ appVersion = "0.1.0" } = {}) {
             type: { type: "string", enum: WEB_MODE_ACTION_TYPES },
             provider: { type: "string", enum: WEB_MODE_PROVIDERS },
             enabled: { type: "boolean" },
-            force: { type: "boolean" }
+            force: { type: "boolean" },
+            providerTextScale: { type: "number", enum: [1, 1.1, 1.2] }
           },
           additionalProperties: false
         },
@@ -254,7 +256,8 @@ export function buildOpenApiDocument({ appVersion = "0.1.0" } = {}) {
           type: "object",
           properties: {
             proxyEnabled: { type: "boolean" },
-            proxyUrl: { type: "string" }
+            proxyUrl: { type: "string" },
+            providerTextScale: { type: "number", enum: [1, 1.1, 1.2] }
           },
           additionalProperties: false
         },

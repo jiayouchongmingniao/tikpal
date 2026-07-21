@@ -3848,21 +3848,29 @@ async function run() {
     assert(webMode.response.ok, "web mode state should return 200");
     assert(webMode.body.settings.proxyEnabled === true, "web mode should enable the development HTTP proxy by default");
     assert(webMode.body.settings.proxyUrl === "http://192.168.10.103:7897", "web mode should default to the HTTP development proxy");
+    assert(webMode.body.settings.providerTextScale === 1.1, "web mode should default provider text scale to 110%");
     assert(typeof webMode.body.settings.updatedAt === "string", "web mode settings should always expose a revision for the extension");
     assert(webMode.body.providers.some((provider) => provider.id === "spotify"), "web mode should expose Spotify provider");
 
     const savedWebMode = await request("/api/v1/web-mode/settings", {
       method: "PATCH",
-      body: JSON.stringify({ proxyEnabled: true, proxyUrl: "http://192.168.10.103:7897" })
+      body: JSON.stringify({ proxyEnabled: true, proxyUrl: "http://192.168.10.103:7897", providerTextScale: 1.2 })
     });
     assert(savedWebMode.response.ok, "web mode settings patch should return 200");
     assert(savedWebMode.body.settings.proxyUrl === "http://192.168.10.103:7897", "web mode settings patch should persist HTTP proxy URL");
+    assert(savedWebMode.body.settings.providerTextScale === 1.2, "web mode settings patch should persist provider text scale");
 
     const invalidWebModeProxy = await request("/api/v1/web-mode/settings", {
       method: "PATCH",
       body: JSON.stringify({ proxyEnabled: true, proxyUrl: "ftp://192.168.10.103:7897" })
     });
     assert(invalidWebModeProxy.response.status === 400, "web mode settings should reject unsupported proxy protocols");
+
+    const invalidWebModeTextScale = await request("/api/v1/web-mode/settings", {
+      method: "PATCH",
+      body: JSON.stringify({ providerTextScale: 1.25 })
+    });
+    assert(invalidWebModeTextScale.response.status === 400, "web mode settings should reject unsupported provider text scales");
 
     const openedWebMode = await request("/api/v1/web-mode/actions", {
       method: "POST",
@@ -3881,6 +3889,20 @@ async function run() {
     });
     assert(switchedWebMode.response.ok, "web mode provider switch should return 200");
     assert(switchedWebMode.body.activeProvider === "youtube_music", "web mode provider switch should update active provider");
+
+    const scaledWebMode = await request("/api/v1/web-mode/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "provider_text_scale", providerTextScale: 1 })
+    });
+    assert(scaledWebMode.response.ok, "web mode text scale action should return 200");
+    assert(scaledWebMode.body.settings.providerTextScale === 1, "web mode text scale action should persist the selected scale");
+    assert(scaledWebMode.body.activeProvider === "youtube_music", "web mode text scale action should preserve the active provider");
+
+    const invalidTextScaleAction = await request("/api/v1/web-mode/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "provider_text_scale", providerTextScale: 1.05 })
+    });
+    assert(invalidTextScaleAction.response.status === 400, "web mode text scale action should reject internal fallback-only scales");
 
     const directProxyAction = await request("/api/v1/web-mode/actions", {
       method: "POST",

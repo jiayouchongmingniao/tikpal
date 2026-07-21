@@ -146,8 +146,44 @@
   document.addEventListener("DOMContentLoaded", injectNeteaseAudioMirror, { once: true });
 
   const bootstrapUrl = "http://127.0.0.1:4173/web-mode-transition.html";
-  let initialRevision = null;
+  let initialProxyKey = null;
+  let activeProviderTextScale = 1;
+  let zoomOverflowTimer = null;
+  let zoomOverflowRequestMs = 0;
   let syncing = false;
+
+  const isLoopbackHost = (host) => /^(localhost|127\.0\.0\.1|\[::1\])$/i.test(host);
+  const isProviderPage = () => /^https?:$/i.test(window.location.protocol) && !isLoopbackHost(window.location.hostname);
+  const hasHorizontalOverflow = () => {
+    const width = Math.ceil(window.innerWidth || document.documentElement?.clientWidth || 0);
+    if (!width) return false;
+    const scrollWidth = Math.max(
+      document.documentElement?.scrollWidth || 0,
+      document.body?.scrollWidth || 0
+    );
+    return scrollWidth > width + 16;
+  };
+  const requestZoomFallbackIfNeeded = () => {
+    if (!isProviderPage() || activeProviderTextScale <= 1.001 || !hasHorizontalOverflow()) return;
+    const now = Date.now();
+    if (now - zoomOverflowRequestMs < 900) return;
+    zoomOverflowRequestMs = now;
+    chrome.runtime.sendMessage({ type: "provider-zoom-overflow", scale: activeProviderTextScale }, (response) => {
+      if (!response?.ok || typeof response.appliedProviderTextScale !== "number") return;
+      activeProviderTextScale = response.appliedProviderTextScale;
+      if (activeProviderTextScale > 1.001) scheduleZoomOverflowCheck();
+    });
+  };
+  const scheduleZoomOverflowCheck = () => {
+    if (!isProviderPage()) return;
+    if (zoomOverflowTimer !== null) window.clearTimeout(zoomOverflowTimer);
+    zoomOverflowTimer = window.setTimeout(() => {
+      zoomOverflowTimer = null;
+      requestZoomFallbackIfNeeded();
+      window.setTimeout(requestZoomFallbackIfNeeded, 1600);
+    }, 650);
+  };
+  window.addEventListener("load", scheduleZoomOverflowCheck, { once: true });
 
   const syncProxy = async () => {
     if (syncing) return;
@@ -156,7 +192,7 @@
       const isBootstrap = window.location.href.startsWith(bootstrapUrl);
       const providerId = isBootstrap ? new URL(window.location.href).searchParams.get("provider") : null;
       const result = await new Promise((resolve) => {
-        chrome.runtime.sendMessage({ type: "sync-proxy", providerId }, resolve);
+        chrome.runtime.sendMessage({ type: "sync-proxy", providerId, providerPage: !isBootstrap && isProviderPage() }, resolve);
       });
       if (!result?.ok) return;
 
@@ -166,10 +202,18 @@
         return;
       }
 
-      if (initialRevision === null) {
-        initialRevision = result.revision;
-      } else if (result.revision !== initialRevision) {
-        initialRevision = result.revision;
+      if (typeof result.appliedProviderTextScale === "number") {
+        const nextScale = result.appliedProviderTextScale;
+        if (Math.abs(nextScale - activeProviderTextScale) > 0.001) {
+          activeProviderTextScale = nextScale;
+          scheduleZoomOverflowCheck();
+        }
+      }
+
+      if (initialProxyKey === null) {
+        initialProxyKey = result.proxyKey || result.revision;
+      } else if ((result.proxyKey || result.revision) !== initialProxyKey) {
+        initialProxyKey = result.proxyKey || result.revision;
         window.location.reload();
       }
     } catch {

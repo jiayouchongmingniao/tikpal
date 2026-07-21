@@ -3864,6 +3864,16 @@ try {
     `,
     "Console Link summary stays within kiosk height"
   );
+  await evaluate(
+    client,
+    `
+      fetch('/api/v1/web-mode/settings', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ providerTextScale: 1.1 })
+      })
+    `
+  );
 
   await evaluate(
     client,
@@ -3878,7 +3888,7 @@ try {
   await expect(client, "document.querySelector('[data-settings-detail=\"web-mode\"]') !== null", "Console Explore drawer opens");
   await expectEventually(
     client,
-    "document.querySelector('.web-mode-proxy-field input')?.value.startsWith('http') && !document.querySelector('.web-mode-settings-actions') && ![...document.querySelectorAll('[data-settings-detail=\"web-mode\"] button')].some((button) => ['Test', 'Save', 'Keyboard'].includes(button.textContent?.trim() ?? ''))",
+    "document.querySelector('.web-mode-proxy-field input')?.value.startsWith('http') && document.querySelector('[data-web-mode-settings-scale]') !== null && document.querySelector('.web-mode-settings-scale-option.is-active')?.textContent === '110%' && !document.querySelector('.web-mode-settings-actions') && ![...document.querySelectorAll('[data-settings-detail=\"web-mode\"] button')].some((button) => ['Test', 'Save', 'Keyboard'].includes(button.textContent?.trim() ?? ''))",
     "Console Explore drawer auto-saves proxy settings without action buttons"
   );
   await expect(
@@ -3898,6 +3908,36 @@ try {
     client,
     "document.querySelector('.settings-detail-header p')?.textContent === 'Saved automatically'",
     "Console Explore proxy URL restores after the auto-save check"
+  );
+  await evaluate(
+    client,
+    `
+      (() => {
+        const target = [...document.querySelectorAll('.web-mode-settings-scale-option')].find((node) => node.textContent.trim() === '120%');
+        target?.click();
+        return Boolean(target);
+      })()
+    `
+  );
+  await expectEventually(
+    client,
+    "document.querySelector('.settings-detail-header p')?.textContent === 'Saved automatically' && document.querySelector('.web-mode-settings-scale-option.is-active')?.textContent === '120%'",
+    "Console Explore provider text scale auto-saves"
+  );
+  await evaluate(
+    client,
+    `
+      (() => {
+        const target = [...document.querySelectorAll('.web-mode-settings-scale-option')].find((node) => node.textContent.trim() === '110%');
+        target?.click();
+        return Boolean(target);
+      })()
+    `
+  );
+  await expectEventually(
+    client,
+    "document.querySelector('.settings-detail-header p')?.textContent === 'Saved automatically' && document.querySelector('.web-mode-settings-scale-option.is-active')?.textContent === '110%'",
+    "Console Explore provider text scale restores to the default"
   );
   await evaluate(
     client,
@@ -3931,8 +3971,8 @@ try {
   await expect(client, "document.querySelectorAll('[data-web-mode-provider]').length >= 10", "Explore side panel exposes common web player providers");
   await expect(
     client,
-    "document.querySelector('[data-web-mode-proxy-toggle]')?.tagName === 'BUTTON' && document.querySelector('[data-web-mode-top-back]') !== null && document.querySelector('[data-web-mode-keyboard-toggle]') === null && document.querySelector('.web-mode-actions') === null",
-    "Explore side panel exposes proxy and one top-right Back control without a manual Keyboard button"
+    "document.querySelector('[data-web-mode-proxy-toggle]')?.tagName === 'BUTTON' && document.querySelector('[data-web-mode-top-back]') !== null && document.querySelectorAll('[data-web-mode-text-scale-option]').length === 3 && document.querySelector('[data-web-mode-text-scale-option=\"1.1\"].is-active') !== null && document.querySelector('[data-web-mode-keyboard-toggle]') === null && document.querySelector('.web-mode-actions') === null",
+    "Explore side panel exposes proxy, provider text scale, and one top-right Back control without a manual Keyboard button"
   );
   await expect(
     client,

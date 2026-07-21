@@ -28,6 +28,7 @@ fi
 : "${TIKPAL_WEB_MODE_STATE_PATH:=$APP_DIR/.tikpal/web-mode-state.json}"
 : "${TIKPAL_WEB_MODE_EXTENSION_DIR:=$SCRIPT_DIR/web-mode-extension}"
 : "${TIKPAL_WEB_MODE_EXTENSION_ENABLED:=1}"
+: "${TIKPAL_WEB_MODE_EXTENSION_ID:=dlaggcjljagbfgfidblabfdonkemimfe}"
 : "${TIKPAL_WEB_MODE_PROXY_APPLY_TIMEOUT_SECONDS:=5}"
 : "${TIKPAL_WEB_MODE_PROVIDER_BOOTSTRAP_TIMEOUT_SECONDS:=7}"
 : "${TIKPAL_WEB_MODE_PROVIDER_READY_TIMEOUT_SECONDS:=18}"
@@ -61,6 +62,7 @@ fi
 : "${TIKPAL_WEB_MODE_PROVIDER_DEBUG_PORT:=9234}"
 : "${TIKPAL_WEB_MODE_PROVIDER_GUARD:=1}"
 : "${TIKPAL_WEB_MODE_DISABLE_HANG_MONITOR:=1}"
+: "${TIKPAL_WEB_MODE_REFRESH_EXTENSION_CACHE:=1}"
 : "${TIKPAL_WEB_MODE_ERROR_PAGE_URL:=http://127.0.0.1:4173/web-mode-error.html}"
 : "${TIKPAL_WEB_MODE_QQ_AUTO_CONFIRM:=1}"
 
@@ -446,6 +448,40 @@ if (/^(1|true|yes|on|enabled)$/i.test(String(popupBlocking))) {
 prefs.profile.cookie_controls_mode = 0;
 prefs.profile.block_third_party_cookies = false;
 fs.writeFileSync(prefsPath, `${JSON.stringify(prefs, null, 2)}\n`);
+NODE
+}
+
+refresh_extension_script_cache() {
+  local profile_dir="$1"
+  if ! is_enabled "$TIKPAL_WEB_MODE_REFRESH_EXTENSION_CACHE"; then
+    return 0
+  fi
+  rm -rf "$profile_dir/Default/Service Worker"
+  node - "$profile_dir" "$TIKPAL_WEB_MODE_EXTENSION_ID" <<'NODE'
+const fs = require("fs");
+const path = require("path");
+
+const [profileDir, extensionId] = process.argv.slice(2);
+const prefsPath = path.join(profileDir, "Default", "Preferences");
+if (!profileDir || !extensionId || !fs.existsSync(prefsPath)) process.exit(0);
+
+let prefs;
+try {
+  prefs = JSON.parse(fs.readFileSync(prefsPath, "utf8"));
+} catch {
+  process.exit(0);
+}
+
+const settings = prefs.extensions?.settings;
+const extensionSettings = settings && settings[extensionId];
+if (!extensionSettings || typeof extensionSettings !== "object") process.exit(0);
+
+delete extensionSettings.service_worker_registration_info;
+delete extensionSettings.serviceworkerevents;
+
+const tmpPath = `${prefsPath}.tmp-${process.pid}`;
+fs.writeFileSync(tmpPath, JSON.stringify(prefs));
+fs.renameSync(tmpPath, prefsPath);
 NODE
 }
 
@@ -1355,6 +1391,7 @@ open_provider() {
   stop_window_guard
   close_provider_profile "$provider_profile"
   sleep 0.2
+  refresh_extension_script_cache "$provider_profile"
   ensure_side_panel "$provider"
   launch_transition_veil "$provider"
   mapfile -t flags < <(read_flags)

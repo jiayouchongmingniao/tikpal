@@ -228,6 +228,16 @@ const WEB_MODE_STATE_PATH = resolve(process.env.TIKPAL_WEB_MODE_STATE_PATH ?? re
 const WEB_MODE_COMMAND = process.env.TIKPAL_WEB_MODE_COMMAND ?? (API_MODE === "mpc" ? "./deploy/chromium/tikpal-web-mode.sh" : "");
 const WEB_MODE_PROXY_TEST_URL = process.env.TIKPAL_WEB_MODE_PROXY_TEST_URL ?? "https://open.spotify.com/";
 const WEB_MODE_DEFAULT_PROXY_URL = process.env.TIKPAL_WEB_MODE_DEFAULT_PROXY_URL ?? "http://192.168.10.103:7897";
+const WEB_MODE_PROVIDER_TEXT_SCALE_VALUES = [1, 1.1, 1.2];
+function normalizeWebModeProviderTextScale(value, fallback = null) {
+  const numeric = typeof value === "number" ? value : Number(String(value ?? "").trim());
+  const rounded = Math.round(numeric * 100) / 100;
+  const allowed = WEB_MODE_PROVIDER_TEXT_SCALE_VALUES.find((candidate) => Math.abs(candidate - rounded) < 0.001);
+  if (allowed !== undefined) return allowed;
+  if (fallback !== null) return fallback;
+  throw new Error("Explore provider text scale must be 1.00, 1.10, or 1.20");
+}
+const WEB_MODE_DEFAULT_PROVIDER_TEXT_SCALE = normalizeWebModeProviderTextScale(process.env.TIKPAL_WEB_MODE_PROVIDER_TEXT_SCALE ?? "1.10", 1.1);
 const WEB_MODE_PROXY_TEST_NETWORK = parseEnvBoolean(process.env.TIKPAL_WEB_MODE_PROXY_TEST_NETWORK ?? "0");
 const LOCAL_LIBRARY_COVER_COLUMNS = ["cover_relative_path", "cover_path", "album_art_relative_path", "artwork_relative_path"];
 const LOCAL_LIBRARY_COVER_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp"];
@@ -3768,9 +3778,11 @@ function normalizeWebModeSettings(raw = {}) {
   } catch {
     proxyUrl = normalizeWebModeProxyUrl(WEB_MODE_DEFAULT_PROXY_URL);
   }
+  const providerTextScale = normalizeWebModeProviderTextScale(raw.providerTextScale ?? WEB_MODE_DEFAULT_PROVIDER_TEXT_SCALE, WEB_MODE_DEFAULT_PROVIDER_TEXT_SCALE);
   return {
     proxyEnabled: typeof raw.proxyEnabled === "boolean" ? raw.proxyEnabled : true,
     proxyUrl,
+    providerTextScale,
     updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : null
   };
 }
@@ -9868,6 +9880,7 @@ function formatWebModeCommandError(error, action, providerId = "") {
   if (action === "close") return firstLine.slice(0, 160) || "Explore close failed";
   if (action === "keyboard") return firstLine.slice(0, 160) || "Keyboard update failed";
   if (action === "proxy") return firstLine.slice(0, 160) || "Explore proxy was not applied within 5 seconds";
+  if (action === "provider_text_scale") return firstLine.slice(0, 160) || "Explore text scale update failed";
   return firstLine.slice(0, 160) || "Explore action failed";
 }
 
@@ -9970,8 +9983,15 @@ async function applyWebModeAction(action) {
     return await buildWebModeState();
   }
 
+  if (type === "provider_text_scale") {
+    const providerTextScale = normalizeWebModeProviderTextScale(action?.providerTextScale);
+    await writeWebModeSettings({ providerTextScale });
+    await writeWebModeRuntimeState({ lastError: null });
+    return await buildWebModeState();
+  }
+
   if (type !== "open") {
-    throw new Error("Explore action type must be open, close, keyboard, or proxy");
+    throw new Error("Explore action type must be open, close, keyboard, proxy, or provider_text_scale");
   }
 
   const providerId = normalizeWebModeProviderId(action.provider);
@@ -9997,6 +10017,9 @@ async function patchWebModeSettings(patch) {
   }
   if (Object.prototype.hasOwnProperty.call(patch ?? {}, "proxyUrl")) {
     next.proxyUrl = normalizeWebModeProxyUrl(patch.proxyUrl);
+  }
+  if (Object.prototype.hasOwnProperty.call(patch ?? {}, "providerTextScale")) {
+    next.providerTextScale = normalizeWebModeProviderTextScale(patch.providerTextScale);
   }
   await writeWebModeSettings(next);
   return await buildWebModeState();
