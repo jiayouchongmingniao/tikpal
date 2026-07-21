@@ -16,6 +16,7 @@ const FONT_THEME_STORAGE_KEY = "tikpal.fontTheme";
 const SURFACE_THEME_STORAGE_KEY = "tikpal.surfaceTheme";
 const LYRICS_VISIBLE_STORAGE_KEY = "tikpal.lyricsVisible.v3";
 const LYRICS_VISIBLE_AUTO_RESTORE_KEY = "tikpal.lyricsVisible.autoRestored.v1";
+const LYRICS_VISIBLE_READY_RESTORE_KEY = "tikpal.lyricsVisible.readyRestored.v1";
 const LYRICS_FONT_SIZE_STORAGE_KEY = "tikpal.lyricsFontSize";
 const SCENE_VIDEO_ENABLED_STORAGE_KEY = "tikpal.sceneVideoEnabled";
 const CLOCK_VISIBLE_STORAGE_KEY = "tikpal.clockVisible";
@@ -71,6 +72,12 @@ function readInitialLyricsVisible() {
     return true;
   }
   return visible;
+}
+
+function hasDisplayableReadyLyrics(state: TikpalState) {
+  return state.lyrics.status === "ready"
+    && (state.lyrics.sourceScope === "bluetooth_input" || state.lyrics.sourceScope === "airplay_input")
+    && state.lyrics.lines.some((line) => line.text.trim());
 }
 
 function readInitialLyricsFontSize(): LyricsFontSize {
@@ -430,6 +437,13 @@ export default function App() {
   useEffect(() => {
     window.localStorage.setItem(LYRICS_VISIBLE_STORAGE_KEY, lyricsVisible ? "true" : "false");
   }, [lyricsVisible]);
+
+  useEffect(() => {
+    if (lyricsVisible || !hasDisplayableReadyLyrics(tikpalState)) return;
+    if (window.localStorage.getItem(LYRICS_VISIBLE_READY_RESTORE_KEY) === "true") return;
+    window.localStorage.setItem(LYRICS_VISIBLE_READY_RESTORE_KEY, "true");
+    setLyricsVisible(true);
+  }, [lyricsVisible, tikpalState]);
 
   useEffect(() => {
     window.localStorage.setItem(LYRICS_FONT_SIZE_STORAGE_KEY, lyricsFontSize);

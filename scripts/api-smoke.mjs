@@ -634,9 +634,31 @@ function createProviderServer() {
             trackName: track,
             artistName: "Sam Fischer",
             albumName: "Not a Hobby",
-            duration: 60,
+            duration: 188,
             syncedLyrics: "[00:05.00]I've been seeing lonely people in crowded rooms\n[00:21.00]Covering their old heartbreaks with new tattoos\n[00:42.00]It's all about smoke screens and cigarettes\n[01:14.00]This city is gonna break my heart\n[01:46.00]This city is gonna love me then leave me alone",
             plainLyrics: "I've been seeing lonely people in crowded rooms\nCovering their old heartbreaks with new tattoos\nIt's all about smoke screens and cigarettes\nThis city is gonna break my heart"
+          }
+        ]);
+        return;
+      }
+
+      if (track === "中文测试歌") {
+        sendProviderJson(response, 200, [
+          {
+            trackName: track,
+            artistName: "错误歌手",
+            albumName: "错误专辑",
+            duration: 214,
+            syncedLyrics: "[00:05.00]错误中文歌词",
+            plainLyrics: "错误中文歌词"
+          },
+          {
+            trackName: track,
+            artistName: "周杰伦",
+            albumName: "中文蓝牙验证",
+            duration: 214,
+            syncedLyrics: "[00:08.00]中文蓝牙同步歌词第一行\n[00:20.00]中文歌手匹配不能被清空\n[00:42.00]歌词墙继续高亮",
+            plainLyrics: "中文蓝牙同步歌词第一行\n中文歌手匹配不能被清空\n歌词墙继续高亮"
           }
         ]);
         return;
@@ -4740,11 +4762,45 @@ async function run() {
     const thisCityLyrics = await waitForLyricsStatus(["ready"]);
     assert(thisCityLyrics.sourceScope === "bluetooth_input", "metadata bluetooth lyrics should keep bluetooth scope");
     assert(thisCityLyrics.recognitionMode === "metadata", "trusted BlueZ title metadata should use metadata lyrics lookup");
-    assert(thisCityLyrics.timingStrategy === "bluez_duration_clipped", "Bluetooth timed lyrics should clip to BlueZ duration when provider timestamps overrun");
-    assert(thisCityLyrics.synced === true, "clipped Bluetooth lyrics should remain synced while enough lines fit");
-    assert(thisCityLyrics.lines.every((line) => line.startMs === null || line.startMs <= 62000), "clipped lyrics should drop starts beyond the BlueZ duration grace");
-    assert(thisCityLyrics.lines.every((line) => line.endMs === null || line.endMs <= 60000), "clipped lyrics should clamp line ends to the BlueZ duration");
-    assert(thisCityLyrics.lines.every((line) => !line.text.includes("break my heart")), "clipped lyrics should omit lyrics that start after the current Bluetooth audio");
+    assert(thisCityLyrics.timingStrategy === "provider_synced", "Bluetooth timed lyrics should prefer provider timing when BlueZ reports a short unreliable duration");
+    assert(thisCityLyrics.synced === true, "Bluetooth metadata lyrics should stay synced when playback position is available");
+    assert(thisCityLyrics.lines.some((line) => line.text.includes("break my heart")), "Bluetooth lyrics should not clip provider-synced lines to a short fake BlueZ duration");
+    assert(
+      thisCityLyrics.trackKey === smokeTrackKey({
+        source: "bluetooth",
+        title: "This City",
+        artist: "Sam Fischer",
+        album: "Not a Hobby",
+        durationSeconds: null
+      }),
+      "Bluetooth lyrics should ignore unreliable short metadata duration in the track key"
+    );
+
+    await writeFile(
+      BLUETOOTH_METADATA_PATH,
+      [
+        "title=中文测试歌",
+        "artist=周杰伦",
+        "album=中文蓝牙验证",
+        "status=playing",
+        "positionMs=42000",
+        "durationMs=60000"
+      ].join("\n")
+    );
+    const chineseBluetoothLyricsRefresh = await request("/api/v1/lyrics/refresh", {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    assert(chineseBluetoothLyricsRefresh.response.ok, "bluetooth Chinese metadata lyrics refresh should return 200");
+    const chineseBluetoothLyrics = await waitForLyricsTrackAt(BASE_URL, {
+      title: "中文测试歌",
+      artist: "周杰伦"
+    });
+    assert(chineseBluetoothLyrics.sourceScope === "bluetooth_input", "Chinese bluetooth lyrics should keep bluetooth scope");
+    assert(chineseBluetoothLyrics.recognitionMode === "metadata", "Chinese BlueZ metadata should use metadata lyrics lookup");
+    assert(chineseBluetoothLyrics.recognitionProvider === "lrclib", "Chinese bluetooth lyrics should resolve through LRCLIB");
+    assert(chineseBluetoothLyrics.synced === true, "Chinese bluetooth lyrics should preserve synced provider timing");
+    assert(chineseBluetoothLyrics.lines.some((line) => line.text.includes("中文蓝牙同步歌词")), "Chinese bluetooth lyrics should keep displayable CJK text");
 
     const airplay = await request("/api/v1/audio/source", {
       method: "POST",

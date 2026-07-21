@@ -200,12 +200,15 @@ const LYRICS_PROVIDER_CACHE_VERSION = createHash("sha1")
   .update(JSON.stringify({
     chain: LYRICS_PROVIDER_CHAIN,
     lyricsOvhBaseUrl: LYRICS_OVH_BASE_URL,
-    customUrlTemplate: LYRICS_CUSTOM_URL_TEMPLATE
+    customUrlTemplate: LYRICS_CUSTOM_URL_TEMPLATE,
+    matchNormalizer: "unicode-v2",
+    externalDurationPolicy: "proxy-provider-duration-v1"
   }))
   .digest("hex")
   .slice(0, 12);
 const BLUETOOTH_LYRICS_MIN_TIMED_DURATION_MS = 30_000;
 const BLUETOOTH_LYRICS_DURATION_GRACE_MS = 2_000;
+const BLUETOOTH_LYRICS_UNRELIABLE_DURATION_MS = Number(process.env.TIKPAL_BLUETOOTH_LYRICS_UNRELIABLE_DURATION_MS ?? 90_000);
 const AIRPLAY_METADATA_POSITION_GRACE_MS = 30_000;
 const AIRPLAY_LYRICS_UNRELIABLE_DURATION_MS = 45_000;
 const REMOTE_MEDIA_CACHE_ROOT = resolve(process.cwd(), ".cache", "remote-media");
@@ -7519,11 +7522,15 @@ function buildPlaybackTrackKey({ source, title, artist, album, durationSeconds }
   return createHash("sha1").update(payload).digest("hex");
 }
 
-function isUnreliableAirplayLyricsDuration(sourceScope, durationMs) {
-  return sourceScope === "airplay_input"
-    && Number.isFinite(durationMs)
-    && durationMs > 0
-    && durationMs <= AIRPLAY_LYRICS_UNRELIABLE_DURATION_MS;
+function isUnreliableProxyLyricsDuration(sourceScope, durationMs) {
+  if (!Number.isFinite(durationMs) || durationMs <= 0) return false;
+  if (sourceScope === "airplay_input") {
+    return durationMs <= AIRPLAY_LYRICS_UNRELIABLE_DURATION_MS;
+  }
+  if (sourceScope === "bluetooth_input") {
+    return durationMs <= BLUETOOTH_LYRICS_UNRELIABLE_DURATION_MS;
+  }
+  return false;
 }
 
 function cloneLyricsState(state, overrides = {}) {
@@ -7549,7 +7556,7 @@ function decorateLyricsState(state, candidate, overrides = {}) {
 function buildMetadataLyricsCandidate(playback, overrides = {}) {
   const sourceScope = overrides.sourceScope ?? "local_playback";
   const durationMs = Number.isFinite(playback.durationSeconds) ? Math.round(playback.durationSeconds * 1000) : null;
-  const trustedDurationMs = isUnreliableAirplayLyricsDuration(sourceScope, durationMs) ? null : durationMs;
+  const trustedDurationMs = isUnreliableProxyLyricsDuration(sourceScope, durationMs) ? null : durationMs;
   const playbackClock = overrides.playbackClock ?? Number.isFinite(playback.elapsedSeconds);
   return {
     supported: true,
@@ -7976,7 +7983,7 @@ function normalizeLyricsMatchValue(value) {
     .toLowerCase()
     .replace(/&/g, " and ")
     .replace(/['’`]/g, "")
-    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
     .trim();
 }
 
@@ -7996,8 +8003,10 @@ function uniqueLyricsLookupValues(values) {
 function buildLyricsTitleLookupValues(title) {
   const normalized = normalizeMetadataValue(title);
   const featuredBase = normalized
-    .replace(/\s*[\[(]\s*(?:feat\.?|ft\.?|featuring|with)\b[^\])]*[\])]\s*/gi, " ")
+    .replace(/\s*[\[(（【]\s*(?:feat\.?|ft\.?|featuring|with|合唱|伴唱)[^\])）】]*[\])）】]\s*/gi, " ")
     .replace(/\s+(?:feat\.?|ft\.?|featuring|with)\b.*$/i, " ")
+    .replace(/\s*[\[(（【]\s*(?:live|remaster(?:ed)?|version|伴奏|纯音乐|现场|演唱会)[^\])）】]*[\])）】]\s*/gi, " ")
+    .replace(/\s+[-–—]\s*(?:live|remaster(?:ed)?|version|伴奏|纯音乐|现场|演唱会).*$/i, " ")
     .replace(/\s+/g, " ")
     .trim();
   return uniqueLyricsLookupValues([normalized, featuredBase]);
@@ -8006,7 +8015,7 @@ function buildLyricsTitleLookupValues(title) {
 function buildLyricsArtistLookupValues(artist) {
   const normalized = normalizeMetadataValue(artist);
   const splitArtists = normalized
-    .split(/\s*(?:,|&|\band\b|\bfeat\.?\b|\bft\.?\b|\bfeaturing\b|\bwith\b|\bx\b)\s*/i)
+    .split(/\s*(?:,|，|、|\/|／|;|；|\+|＋|&|\band\b|\bfeat\.?\b|\bft\.?\b|\bfeaturing\b|\bwith\b|\bx\b|和|与)\s*/i)
     .map((entry) => entry.trim())
     .filter((entry) => entry.length >= 2);
   return uniqueLyricsLookupValues([normalized, ...splitArtists]);
@@ -8055,11 +8064,12 @@ function shouldUseStrictLyricsProviderMatch(candidate) {
 }
 
 function shouldUseProviderLyricsDuration(candidate, providerDurationMs) {
-  if (candidate?.sourceScope !== "airplay_input") return false;
+  if (!isProxyInputSourceScope(candidate?.sourceScope)) return false;
   if (!Number.isFinite(providerDurationMs) || providerDurationMs < 30_000) return false;
 
   const candidateDurationMs = Number(candidate.durationMs);
   if (!Number.isFinite(candidateDurationMs) || candidateDurationMs <= 0) return true;
+  if (isUnreliableProxyLyricsDuration(candidate.sourceScope, candidateDurationMs)) return true;
 
   const toleranceMs = Math.max(8_000, Math.round(providerDurationMs * 0.12));
   return Math.abs(candidateDurationMs - providerDurationMs) > toleranceMs;
