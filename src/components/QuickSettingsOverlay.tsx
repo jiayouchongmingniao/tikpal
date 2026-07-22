@@ -156,8 +156,10 @@ const roomShortcuts: Array<{ id: RoomMode | "explore"; label: string; Icon: type
 const localKioskHosts = new Set(["localhost", "127.0.0.1", "::1"]);
 
 function normalizeProxyUrl(value: string) {
+  const trimmed = value.trim();
+  const candidate = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
   try {
-    const parsed = new URL(value.trim());
+    const parsed = new URL(candidate);
     if (!["http:", "https:", "socks5:"].includes(parsed.protocol) || !parsed.hostname || !parsed.port) return null;
     parsed.username = "";
     parsed.password = "";

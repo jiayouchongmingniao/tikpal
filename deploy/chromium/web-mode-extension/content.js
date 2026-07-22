@@ -16,6 +16,7 @@
   let lastKeyboardEnabled = null;
   let lastKeyboardRequestMs = 0;
   let lastEditable = null;
+  let inputSessionActive = false;
   let outsidePointerDown = false;
   const editableTarget = (target) => target?.closest?.(inputSelector) || null;
   const isEditable = (target) => Boolean(editableTarget(target));
@@ -36,14 +37,22 @@
     if (!target) return;
     outsidePointerDown = false;
     lastEditable = target;
+    inputSessionActive = true;
     requestKeyboard(true, true);
+  };
+  const endInputSession = () => {
+    lastEditable = null;
+    inputSessionActive = false;
   };
   const isMultiline = (target) => Boolean(target && (target.matches("textarea,[contenteditable='true']") || target.getAttribute("aria-multiline") === "true"));
 
   document.addEventListener("pointerdown", (event) => {
     const path = typeof event.composedPath === "function" ? event.composedPath() : [event.target];
     outsidePointerDown = !path.some(isEditable);
-    if (outsidePointerDown) lastEditable = null;
+    if (outsidePointerDown) {
+      endInputSession();
+      requestKeyboard(false);
+    }
   }, true);
   document.addEventListener("pointerdown", requestShow, true);
   document.addEventListener("focusin", requestShow, true);
@@ -51,28 +60,29 @@
     setTimeout(() => {
       if (!document.hasFocus()) {
         const active = activeEditable();
-        if (active || lastEditable?.isConnected || !outsidePointerDown) {
+        if (active || (inputSessionActive && lastEditable?.isConnected) || !outsidePointerDown) {
           lastEditable = active || lastEditable;
+          inputSessionActive = Boolean(lastEditable);
           return;
         }
-        lastEditable = null;
+        endInputSession();
         requestKeyboard(false);
         return;
       }
       if (activeEditable() || document.activeElement?.tagName === "IFRAME") return;
-      if (lastEditable && !outsidePointerDown) return;
-      lastEditable = null;
+      if (inputSessionActive && lastEditable && !outsidePointerDown) return;
+      endInputSession();
       requestKeyboard(false);
     }, 80);
   }, true);
   document.addEventListener("submit", () => {
-    lastEditable = null;
+    endInputSession();
     requestKeyboard(false);
   }, true);
   document.addEventListener("keydown", (event) => {
     const target = editableTarget(event.target);
     if (event.key === "Enter" && target && !isMultiline(target)) {
-      lastEditable = null;
+      endInputSession();
       requestKeyboard(false);
     }
   }, true);

@@ -276,6 +276,7 @@ const inputFocusGuardScript = `(() => {
   window.__tikpalInputFocusGuardInstalled = true;
   window.__tikpalInputFocusShowRequest = 0;
   window.__tikpalInputFocusHideRequest = 0;
+  window.__tikpalInputFocusSessionActive = false;
   const selector = ${JSON.stringify(onboardInputSelector)};
   const keyboardActionUrl = ${JSON.stringify(keyboardActionUrl)};
   const allowProgrammaticInputFocus = ${JSON.stringify(allowProgrammaticInputFocus)};
@@ -310,6 +311,10 @@ const inputFocusGuardScript = `(() => {
       body: JSON.stringify({ type: "keyboard", enabled, force })
     }).catch(() => {});
   };
+  const endInputSession = () => {
+    lastEditable = null;
+    window.__tikpalInputFocusSessionActive = false;
+  };
   const isMultiline = (target) => Boolean(target && (target.matches("textarea,[contenteditable='true']") || target.getAttribute("aria-multiline") === "true"));
   const requestShow = (event) => {
     if (!document.hasFocus()) return;
@@ -319,6 +324,7 @@ const inputFocusGuardScript = `(() => {
     if (!target) return;
     outsidePointerDown = false;
     lastEditable = target;
+    window.__tikpalInputFocusSessionActive = true;
     window.__tikpalInputFocusShowRequest += 1;
     requestKeyboard(true, true);
     keepEditableFocus(target);
@@ -326,7 +332,11 @@ const inputFocusGuardScript = `(() => {
   document.addEventListener("pointerdown", (event) => {
     const path = typeof event.composedPath === "function" ? event.composedPath() : [event.target];
     outsidePointerDown = !path.some(isEditable);
-    if (outsidePointerDown) lastEditable = null;
+    if (outsidePointerDown) {
+      endInputSession();
+      window.__tikpalInputFocusHideRequest += 1;
+      requestKeyboard(false);
+    }
   }, true);
   document.addEventListener("pointerdown", requestShow, true);
   document.addEventListener("focusin", requestShow, true);
@@ -334,34 +344,36 @@ const inputFocusGuardScript = `(() => {
     setTimeout(() => {
       if (!document.hasFocus()) {
         const active = activeEditable();
-        if (active || lastEditable?.isConnected || !outsidePointerDown) {
+        if (active || (window.__tikpalInputFocusSessionActive && lastEditable?.isConnected) || !outsidePointerDown) {
           lastEditable = active || lastEditable;
+          window.__tikpalInputFocusSessionActive = Boolean(lastEditable);
           if (lastEditable) keepEditableFocus(lastEditable);
           return;
         }
-        lastEditable = null;
+        endInputSession();
         window.__tikpalInputFocusHideRequest += 1;
         requestKeyboard(false);
         return;
       }
       if (activeEditable() || document.activeElement?.tagName === "IFRAME") return;
-      if (lastEditable && !outsidePointerDown) {
+      if (window.__tikpalInputFocusSessionActive && lastEditable && !outsidePointerDown) {
         refocusEditable(lastEditable);
         return;
       }
+      endInputSession();
       window.__tikpalInputFocusHideRequest += 1;
       requestKeyboard(false);
     }, 80);
   }, true);
   document.addEventListener("submit", () => {
-    lastEditable = null;
+    endInputSession();
     window.__tikpalInputFocusHideRequest += 1;
     requestKeyboard(false);
   }, true);
   document.addEventListener("keydown", (event) => {
     const target = event.target?.closest?.(selector);
     if (event.key === "Enter" && target && !isMultiline(target)) {
-      lastEditable = null;
+      endInputSession();
       window.__tikpalInputFocusHideRequest += 1;
       requestKeyboard(false);
     }
@@ -395,6 +407,7 @@ const inputFocusExpression = `(() => {
   return {
     showRequest: Number(window.__tikpalInputFocusShowRequest || 0),
     hideRequest: Number(window.__tikpalInputFocusHideRequest || 0),
+    sessionActive: Boolean(window.__tikpalInputFocusSessionActive),
     focused: activeEditable(document)
   };
 })()`;
@@ -424,7 +437,7 @@ async function runInputFocusKeyboard(targets) {
     if (!state) continue;
     const previous = inputFocusRequests.get(target.id) || { showRequest: 0, hideRequest: 0, focused: false, url: target.url };
     shouldShow ||= state.showRequest > previous.showRequest || (allowProgrammaticInputFocus && state.focused && !previous.focused);
-    shouldHide ||= state.hideRequest > previous.hideRequest;
+    shouldHide ||= state.hideRequest > previous.hideRequest && !state.sessionActive;
     inputFocusRequests.set(target.id, { ...state, url: target.url });
   }
   for (const [targetId] of inputFocusRequests) {

@@ -124,6 +124,7 @@ async function run() {
 
   assert(buildProxyConfig({ proxyEnabled: false }).mode === "direct", "extension should apply direct mode when the proxy is off");
   for (const [proxyUrl, expectedScheme] of [
+    ["proxy.local:8080", "http"],
     ["http://proxy.local:8080", "http"],
     ["https://proxy.local:8443", "https"],
     ["socks5://proxy.local:1080", "socks5"]
@@ -453,7 +454,8 @@ esac
   assert(extensionContent.includes('chrome.runtime.sendMessage({ type: "keyboard", enabled, force }'), "Explore extension should distinguish new input focus from keyboard hide requests");
   assert(extensionContent.includes("suno\\.com") && extensionContent.includes('event.type === "focusin" && !allowProgrammaticInputFocus'), "Suno should ignore page-driven autofocus until the user taps an input");
   assert(extensionContent.includes("editableTarget(document.activeElement)"), "Explore extension should hide Onboard after provider input focus ends");
-  assert(extensionContent.includes("active || lastEditable?.isConnected || !outsidePointerDown"), "Explore extension should not hide Onboard when the keyboard takes focus from a provider input");
+  assert(extensionContent.includes("inputSessionActive") && extensionContent.includes("active || (inputSessionActive && lastEditable?.isConnected) || !outsidePointerDown"), "Explore extension should not hide Onboard when the keyboard takes focus from a provider input");
+  assert(extensionContent.includes("endInputSession") && extensionContent.includes("if (outsidePointerDown)"), "Explore extension should end provider input sessions only on explicit outside provider taps or submits");
   assert(extensionContent.includes("const throttleMs = force ? 1000 : 250"), "Explore extension should throttle repeated forced keyboard show requests");
   assert(!extensionContent.includes("if (!document.hasFocus() || (!editableTarget(document.activeElement)"), "Explore extension should not hide Onboard on provider-window blur alone");
   assert(!extensionContent.includes("if (document.hasFocus() && editableTarget(document.activeElement)) requestKeyboard(true);"), "Explore extension should not reopen Onboard after its own close button hides it");
@@ -792,8 +794,9 @@ esac
   assert(providerGuardSource.includes("lastKeyboardEnabled === enabled && now - lastKeyboardRequestMs < throttleMs"), "provider focus guard should not spam duplicate keyboard requests");
   assert(providerGuardSource.includes("lastOnboardVisible === enabled && now - lastOnboardActionMs < throttleMs"), "provider poll fallback should not spam duplicate launcher actions");
   assert(!providerGuardSource.includes("else if (anyFocused) setOnboardVisible(true)"), "provider focus guard should let Onboard stay closed until a new input interaction");
-  assert(providerGuardSource.includes("active || lastEditable?.isConnected || !outsidePointerDown"), "provider focus guard should keep Onboard visible when it takes X focus from a login input");
-  assert(providerGuardSource.includes("shouldHide ||= state.hideRequest > previous.hideRequest"), "provider polling should hide Onboard only after an explicit provider hide request");
+  assert(providerGuardSource.includes("__tikpalInputFocusSessionActive"), "provider focus guard should expose an active provider input session to the polling fallback");
+  assert(providerGuardSource.includes("active || (window.__tikpalInputFocusSessionActive && lastEditable?.isConnected) || !outsidePointerDown"), "provider focus guard should keep Onboard visible when it takes X focus from a login input");
+  assert(providerGuardSource.includes("shouldHide ||= state.hideRequest > previous.hideRequest && !state.sessionActive"), "provider polling should hide Onboard only after an explicit provider hide request outside an active input session");
   assert(!providerGuardSource.includes("previous.url !== target.url && !state.focused"), "provider polling should not hide Onboard just because OAuth navigation moved focus");
   assert(!providerGuardSource.includes("wasFocused && !anyFocused"), "provider polling should not hide Onboard just because X focus moved to the keyboard");
   assert(!providerGuardSource.includes("if (!doc?.hasFocus?.()) return false"), "provider focus polling should preserve active login inputs while Onboard has window focus");

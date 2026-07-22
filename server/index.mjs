@@ -3713,14 +3713,15 @@ function normalizeWebModeProviderId(value, fallback = "qq_music") {
 
 function normalizeWebModeProxyUrl(value) {
   const proxyUrl = String(value ?? "").trim();
+  const candidate = /^[a-z][a-z0-9+.-]*:\/\//i.test(proxyUrl) ? proxyUrl : `http://${proxyUrl}`;
   let parsed;
   try {
-    parsed = new URL(proxyUrl);
+    parsed = new URL(candidate);
   } catch {
-    throw new Error("Explore proxy URL must be http://host:port, https://host:port, or socks5://host:port");
+    throw new Error("Explore proxy URL must be host:port, http://host:port, https://host:port, or socks5://host:port");
   }
   if (!["http:", "https:", "socks5:"].includes(parsed.protocol) || !parsed.hostname || !parsed.port) {
-    throw new Error("Explore proxy URL must be http://host:port, https://host:port, or socks5://host:port");
+    throw new Error("Explore proxy URL must be host:port, http://host:port, https://host:port, or socks5://host:port");
   }
   parsed.username = "";
   parsed.password = "";

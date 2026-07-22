@@ -20,7 +20,9 @@ export function buildProxyConfig(settings = {}) {
 
   let proxyUrl;
   try {
-    proxyUrl = new URL(String(settings.proxyUrl || ""));
+    const rawProxyUrl = String(settings.proxyUrl || "").trim();
+    const candidate = /^[a-z][a-z0-9+.-]*:\/\//i.test(rawProxyUrl) ? rawProxyUrl : `http://${rawProxyUrl}`;
+    proxyUrl = new URL(candidate);
   } catch {
     throw new Error("Invalid Explore proxy URL");
   }

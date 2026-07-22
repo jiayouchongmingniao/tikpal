@@ -3860,6 +3860,13 @@ async function run() {
     assert(savedWebMode.body.settings.proxyUrl === "http://192.168.10.103:7897", "web mode settings patch should persist HTTP proxy URL");
     assert(savedWebMode.body.settings.providerTextScale === 1.2, "web mode settings patch should persist provider text scale");
 
+    const savedBareWebModeProxy = await request("/api/v1/web-mode/settings", {
+      method: "PATCH",
+      body: JSON.stringify({ proxyEnabled: true, proxyUrl: "192.168.10.103:7897" })
+    });
+    assert(savedBareWebModeProxy.response.ok, "web mode settings should accept a bare host:port proxy URL");
+    assert(savedBareWebModeProxy.body.settings.proxyUrl === "http://192.168.10.103:7897", "web mode settings should normalize bare host:port proxy URL to HTTP");
+
     const invalidWebModeProxy = await request("/api/v1/web-mode/settings", {
       method: "PATCH",
       body: JSON.stringify({ proxyEnabled: true, proxyUrl: "ftp://192.168.10.103:7897" })
