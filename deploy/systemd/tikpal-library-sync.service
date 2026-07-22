@@ -1,0 +1,17 @@
+[Unit]
+Description=Tikpal MPD library sync
+After=local-fs.target mpd.service tikpal-audio-adapt.service
+Before=tikpal-api.service tikpal-web.service tikpal-kiosk.service
+Wants=mpd.service tikpal-audio-adapt.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=@APP_DIR@
+EnvironmentFile=-@APP_DIR@/.env
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=@APP_DIR@/deploy/moode/tikpal-library-sync.sh apply
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

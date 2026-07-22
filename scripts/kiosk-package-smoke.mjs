@@ -34,6 +34,8 @@ const requiredFiles = [
   "deploy/chromium/managed-policies.json",
   "deploy/chromium/env.kiosk.example",
   "deploy/moode/tikpal-audio-adapt.sh",
+  "deploy/moode/tikpal-local-library-sync.sh",
+  "deploy/moode/tikpal-library-sync.sh",
   "deploy/moode/tikpal-usb-library-sync.sh",
   "public/web-mode-error.html",
   "deploy/moode/tikpal-alsa-loopback.sh",
@@ -43,6 +45,7 @@ const requiredFiles = [
   "deploy/moode/tikpal-snd-aloop-enable.sh",
   "deploy/moode/tikpal-quiet-boot-enable.sh",
   "deploy/systemd/tikpal-audio-adapt.service",
+  "deploy/systemd/tikpal-library-sync.service",
   "deploy/systemd/tikpal-api.service",
   "deploy/systemd/tikpal-web.service",
   "deploy/systemd/tikpal-kiosk-devtools.service",
@@ -153,6 +156,8 @@ async function run() {
   await assertExecutable("deploy/chromium/tikpal-kiosk-viewerctl.sh");
   await assertExecutable("deploy/chromium/tikpal-web-mode.sh");
   await assertExecutable("deploy/moode/tikpal-audio-adapt.sh");
+  await assertExecutable("deploy/moode/tikpal-local-library-sync.sh");
+  await assertExecutable("deploy/moode/tikpal-library-sync.sh");
   await assertExecutable("deploy/moode/tikpal-usb-library-sync.sh");
   await assertExecutable("deploy/moode/tikpal-alsa-loopback.sh");
   await assertExecutable("deploy/moode/tikpal-airplay-transport.sh");
@@ -299,6 +304,7 @@ esac
   assert(noUsb.status !== 0 && !noUsb.stdout.includes("vc4hdmi"), "audio adapter should not select HDMI as a fallback output");
 
   const audioAdaptUnit = await readFile(path.join(ROOT, "deploy/systemd/tikpal-audio-adapt.service"), "utf8");
+  const librarySyncUnit = await readFile(path.join(ROOT, "deploy/systemd/tikpal-library-sync.service"), "utf8");
   const alsaLoopbackScript = await readFile(path.join(ROOT, "deploy/moode/tikpal-alsa-loopback.sh"), "utf8");
   const airplayEnableScript = await readFile(path.join(ROOT, "deploy/moode/tikpal-airplay-enable.sh"), "utf8");
   const sndAloopEnableScript = await readFile(path.join(ROOT, "deploy/moode/tikpal-snd-aloop-enable.sh"), "utf8");
@@ -315,8 +321,10 @@ esac
   assert(audioAdaptUnit.includes("Before=mpd.service tikpal-api.service tikpal-web.service tikpal-kiosk.service"), "audio adapter unit should order before playback and Tikpal services");
   assert(audioAdaptUnit.includes("/usr/sbin:/usr/bin:/sbin:/bin"), "audio adapter unit should include sbin paths so modprobe is available");
   assert(audioAdaptUnit.includes("grep -q Loopback") && audioAdaptUnit.includes("modprobe snd_aloop"), "audio adapter unit should preflight a real Loopback card before app services start");
+  assert(librarySyncUnit.includes("tikpal-library-sync.sh apply") && librarySyncUnit.includes("Before=tikpal-api.service"), "library sync service should run before the API exposes library state");
   assert(apiUnit.includes("network.target"), "api unit should use network.target");
   assert(apiUnit.includes("tikpal-audio-adapt.service"), "api unit should pull the audio adapter before startup");
+  assert(apiUnit.includes("tikpal-library-sync.service"), "api unit should pull the library sync before startup");
   assert(!apiUnit.includes("network-online.target"), "api unit should not wait for network-online.target");
   assert(webUnit.includes("server/web.mjs"), "web unit should use the production static server");
   assert(webUnit.includes("tikpal-audio-adapt.service"), "web unit should pull the audio adapter before startup");
@@ -335,7 +343,11 @@ esac
   assert(kioskWatchdogTimer.includes("OnUnitActiveSec=75s"), "kiosk watchdog timer should run inside the 60-90s cadence");
   assert(kioskWatchdogTimer.includes("tikpal-kiosk-watchdog.service"), "kiosk watchdog timer should target the watchdog service");
   assert(systemdInstaller.includes("tikpal-audio-adapt.service"), "systemd installer should install the audio adapter service");
+  assert(systemdInstaller.includes("tikpal-library-sync.service"), "systemd installer should install the library sync service");
+  assert(systemdInstaller.includes("ensure_library_scan_env"), "systemd installer should keep Library Scan pointed at the combined sync helper");
+  assert(systemdInstaller.includes("ensure_kiosk_audio_release_env") && systemdInstaller.includes("tikpal-release-kiosk-audio.sh"), "systemd installer should add the kiosk audio release hook on mpc Pi installs");
   assert(systemdInstaller.includes("systemctl restart tikpal-audio-adapt.service"), "systemd installer restart should run the audio adapter before app services");
+  assert(systemdInstaller.indexOf("systemctl restart tikpal-library-sync.service") < systemdInstaller.indexOf("systemctl restart tikpal-api.service"), "systemd installer restart should sync MPD libraries before the API starts");
   assert(systemdInstaller.includes("tikpal-kiosk-watchdog.service"), "systemd installer should install the kiosk watchdog service");
   assert(systemdInstaller.includes("tikpal-kiosk-watchdog.timer"), "systemd installer should install and enable the kiosk watchdog timer");
   assert(systemdInstaller.includes("tikpal-locale-enable.sh"), "systemd installer should normalize SSH locale handling on new Pi installs");
@@ -423,6 +435,8 @@ esac
   const serverSource = await readFile(path.join(ROOT, "server/index.mjs"), "utf8");
   const webModeCrossfadeScript = await readFile(path.join(ROOT, "deploy/moode/tikpal-web-mode-crossfade.sh"), "utf8");
   const audioAdaptScript = await readFile(path.join(ROOT, "deploy/moode/tikpal-audio-adapt.sh"), "utf8");
+  const localLibrarySyncScript = await readFile(path.join(ROOT, "deploy/moode/tikpal-local-library-sync.sh"), "utf8");
+  const librarySyncScript = await readFile(path.join(ROOT, "deploy/moode/tikpal-library-sync.sh"), "utf8");
   const usbLibrarySyncScript = await readFile(path.join(ROOT, "deploy/moode/tikpal-usb-library-sync.sh"), "utf8");
   const extensionManifest = JSON.parse(await readFile(path.join(ROOT, "deploy/chromium/web-mode-extension/manifest.json"), "utf8"));
   const extensionContent = await readFile(path.join(ROOT, "deploy/chromium/web-mode-extension/content.js"), "utf8");
@@ -518,6 +532,9 @@ esac
   assert(usbLibrarySyncScript.includes("USB_LIBRARY_AUTO_ROOTS") && usbLibrarySyncScript.includes("/media,/run/media"), "USB library sync should discover arbitrary mounted USB roots");
   assert(usbLibrarySyncScript.includes("skip_mount_name") && usbLibrarySyncScript.includes("rootfs"), "USB library sync should skip system partitions");
   assert(usbLibrarySyncScript.includes("mpc") && usbLibrarySyncScript.includes("update \"$USB_MPD_PREFIX\""), "USB library sync should refresh MPD after linking USB roots");
+  assert(localLibrarySyncScript.includes("LOCAL_SOURCE_ROOT") && localLibrarySyncScript.includes("public/assets") && localLibrarySyncScript.includes("RSYNC_BIN") && localLibrarySyncScript.includes("--delete"), "Local library sync should mirror repo music into MPD's Codex directory");
+  assert(localLibrarySyncScript.includes("TIKPAL_MPD_DEFAULT_QUEUE_PATH:-Codex") && localLibrarySyncScript.includes("unlink \"$target_dir\""), "Local library sync should replace the old inaccessible Codex symlink with a real MPD directory");
+  assert(librarySyncScript.includes("tikpal-local-library-sync.sh") && librarySyncScript.includes("tikpal-usb-library-sync.sh"), "combined library sync should run both Local and USB helpers");
   assert(alsaLoopbackScript.includes("modprobe_command") && alsaLoopbackScript.includes("snd_aloop"), "ALSA Loopback helper should load the real snd_aloop module name through a resolved modprobe path");
   assert(airplayEnableScript.includes("TIKPAL_AIRPLAY_IGNORE_VOLUME_CONTROL:-no") && airplayEnableScript.includes("TIKPAL_AIRPLAY_DEFAULT_VOLUME_DB:-0.0"), "AirPlay enable should preserve phone volume control while avoiding Shairport's quiet default");
   assert(airplayEnableScript.includes("TIKPAL_AIRPLAY_VOLUME_RANGE_DB:-30") && airplayEnableScript.includes("TIKPAL_AIRPLAY_VOLUME_CONTROL_PROFILE:-flat"), "AirPlay enable should keep Shairport's software volume curve audible at mid phone volume");

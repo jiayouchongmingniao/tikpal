@@ -8,6 +8,7 @@ USB_LIBRARY_AUTO_ROOTS="${TIKPAL_USB_LIBRARY_AUTO_ROOTS:-/media,/run/media}"
 MPC_BIN="${TIKPAL_MPC_BIN:-mpc}"
 MPD_HOST="${TIKPAL_MPD_HOST:-127.0.0.1}"
 MPD_PORT="${TIKPAL_MPD_PORT:-6600}"
+MPD_LIBRARY_OWNER="${TIKPAL_MPD_LIBRARY_OWNER:-mpd:audio}"
 
 warn() {
   printf 'tikpal-usb-library-sync: %s\n' "$*" >&2
@@ -35,7 +36,8 @@ path_is_within() {
 skip_mount_name() {
   local name
   name="$(basename "$1")"
-  case "${name,,}" in
+  name="$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]')"
+  case "$name" in
     ""|.*|boot|bootfs|root|rootfs) return 0 ;;
     *) return 1 ;;
   esac
@@ -44,8 +46,10 @@ skip_mount_name() {
 list_mount_targets() {
   if command -v findmnt >/dev/null 2>&1; then
     findmnt -rn -o TARGET
-  else
+  elif [ -r /proc/mounts ]; then
     awk '{print $2}' /proc/mounts | sed 's/\\040/ /g'
+  else
+    mount | sed -n 's/^.* on \([^ ]*\) .*$/\1/p'
   fi
 }
 
@@ -57,7 +61,10 @@ discover_roots() {
     return
   fi
 
-  mapfile -t auto_roots < <(split_path_list "$USB_LIBRARY_AUTO_ROOTS")
+  auto_roots=()
+  while IFS= read -r auto_root; do
+    auto_roots+=("$auto_root")
+  done < <(split_path_list "$USB_LIBRARY_AUTO_ROOTS")
   list_mount_targets | while IFS= read -r target; do
     [ -d "$target" ] || continue
     skip_mount_name "$target" && continue
@@ -121,7 +128,10 @@ count_audio_files() {
 }
 
 apply_sync() {
-  mapfile -t roots < <(discover_roots)
+  roots=()
+  while IFS= read -r root; do
+    roots+=("$root")
+  done < <(discover_roots)
   local prefix_dir="$MPD_MUSIC_ROOT/$USB_MPD_PREFIX"
   local sudo_prefix
   sudo_prefix="$(pick_sudo "$prefix_dir")"
@@ -129,7 +139,8 @@ apply_sync() {
     ${sudo_prefix}rm -f "$prefix_dir"
   fi
   ${sudo_prefix}mkdir -p "$prefix_dir"
-  ${sudo_prefix}chown "$(id -un):$(id -gn)" "$prefix_dir" 2>/dev/null || true
+  ${sudo_prefix}chown "$MPD_LIBRARY_OWNER" "$prefix_dir" 2>/dev/null || true
+  ${sudo_prefix}chmod 2775 "$prefix_dir" 2>/dev/null || true
 
   declare -A active_ids=()
   declare -A id_counts=()

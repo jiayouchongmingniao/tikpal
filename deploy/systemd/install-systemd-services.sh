@@ -125,6 +125,42 @@ install_onboard_themes() {
   echo "installed $target_dir/Tikpal-Classic.colors"
 }
 
+ensure_library_scan_env() {
+  local env_file="$APP_DIR/.env"
+  local helper="$APP_DIR/deploy/moode/tikpal-library-sync.sh"
+  [[ -f "$env_file" ]] || return 0
+  local current
+  current="$(sed -n 's/^TIKPAL_LIBRARY_SCAN_COMMAND=//p' "$env_file" | tail -n 1)"
+  current="${current%\"}"
+  current="${current#\"}"
+  current="${current%\'}"
+  current="${current#\'}"
+  if [[ -n "$current" && "$current" != *"tikpal-usb-library-sync.sh"* ]]; then
+    return 0
+  fi
+  {
+    printf '\n# Tikpal Library Scan keeps repo Local music and removable USB roots visible to MPD.\n'
+    printf 'TIKPAL_LIBRARY_SCAN_COMMAND="%s"\n' "$helper"
+  } >> "$env_file"
+  chown "$SERVICE_USER":"$SERVICE_USER" "$env_file" || true
+  echo "updated $env_file with Tikpal library sync command"
+}
+
+ensure_kiosk_audio_release_env() {
+  local env_file="$APP_DIR/.env"
+  [[ -f "$env_file" ]] || return 0
+  if grep -q '^TIKPAL_KIOSK_AUDIO_RELEASE_COMMAND=' "$env_file"; then
+    return 0
+  fi
+  {
+    printf '\n# Release Chromium audio services before MPD-backed Library or Radio reclaims _audioout.\n'
+    printf 'TIKPAL_KIOSK_AUDIO_RELEASE_COMMAND="./deploy/moode/tikpal-release-kiosk-audio.sh"\n'
+    printf 'TIKPAL_KIOSK_AUDIO_RELEASE_SETTLE_MS=250\n'
+  } >> "$env_file"
+  chown "$SERVICE_USER":"$SERVICE_USER" "$env_file" || true
+  echo "updated $env_file with Tikpal kiosk audio release command"
+}
+
 if [[ ! -f "$APP_DIR/server/index.mjs" || ! -f "$APP_DIR/server/web.mjs" ]]; then
   echo "Missing Tikpal server files under $APP_DIR" >&2
   exit 1
@@ -139,9 +175,13 @@ if [[ "${TIKPAL_INSTALL_LOCALE_FIX:-1}" != "0" && -x "$APP_DIR/deploy/moode/tikp
   "$APP_DIR/deploy/moode/tikpal-locale-enable.sh"
 fi
 
+ensure_library_scan_env
+ensure_kiosk_audio_release_env
+
 install_unit "$SCRIPT_DIR/tikpal-api.service"
 install_unit "$SCRIPT_DIR/tikpal-web.service"
 install_unit "$SCRIPT_DIR/tikpal-audio-adapt.service"
+install_unit "$SCRIPT_DIR/tikpal-library-sync.service"
 
 if [[ "$INSTALL_KIOSK" -eq 1 ]]; then
   if [[ "${TIKPAL_INSTALL_KIOSK_PACKAGES:-1}" != "0" ]]; then
@@ -179,7 +219,7 @@ for policy_dir in /etc/chromium/policies/managed /etc/chromium-browser/policies/
 done
 
 systemctl daemon-reload
-systemctl enable tikpal-audio-adapt.service tikpal-api.service tikpal-web.service
+systemctl enable tikpal-audio-adapt.service tikpal-library-sync.service tikpal-api.service tikpal-web.service
 
 if [[ "$INSTALL_KIOSK" -eq 1 ]]; then
   loginctl enable-linger "$SERVICE_USER"
@@ -191,6 +231,7 @@ fi
 
 if [[ "$RESTART_SERVICES" -eq 1 ]]; then
   systemctl restart tikpal-audio-adapt.service
+  systemctl restart tikpal-library-sync.service
   systemctl restart tikpal-api.service
   systemctl restart tikpal-web.service
   if [[ "$INSTALL_KIOSK" -eq 1 ]]; then
@@ -205,6 +246,8 @@ echo "Tikpal services installed."
 echo "Verify with:"
 echo "  systemctl status tikpal-audio-adapt.service"
 echo "  $APP_DIR/deploy/moode/tikpal-audio-adapt.sh check"
+echo "  systemctl status tikpal-library-sync.service"
+echo "  $APP_DIR/deploy/moode/tikpal-library-sync.sh check"
 echo "  systemctl is-active tikpal-api.service tikpal-web.service"
 echo "  curl -fsS http://127.0.0.1:8787/api/v1/health"
 echo "  curl -fsSI http://127.0.0.1:4173/"
