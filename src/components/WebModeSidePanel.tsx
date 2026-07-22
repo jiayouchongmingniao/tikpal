@@ -57,9 +57,9 @@ const providerTones: Record<WebModeProviderId, string> = {
 };
 
 const textScaleChoices = [
-  { value: 1, label: "100%" },
-  { value: 1.1, label: "110%" },
-  { value: 1.2, label: "120%" }
+  { value: 1, label: "Small" },
+  { value: 1.1, label: "Medium" },
+  { value: 1.2, label: "Large" }
 ];
 
 function readInitialOpeningProvider(): WebModeProviderId | null {
@@ -298,8 +298,8 @@ export function WebModeSidePanel() {
 
       <section className="web-mode-control-stack" aria-label="Tikpal web controls">
         <div className="web-mode-text-scale" data-web-mode-text-scale>
-          <span><Type size={18} /> Left Text</span>
-          <div className="web-mode-scale-options" role="group" aria-label="Left provider text size">
+          <span><Type size={18} /> Font</span>
+          <div className="web-mode-scale-options" role="group" aria-label="Left provider font size">
             {textScaleChoices.map((choice) => (
               <button
                 key={choice.label}

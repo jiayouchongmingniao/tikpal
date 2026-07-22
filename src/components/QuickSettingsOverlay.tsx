@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Airplay, Bluetooth, Captions, Cast, Clock3, Cpu, Database, EthernetPort, Eye, EyeOff, Globe2, HardDrive, Info, Monitor, Moon, Music2, Palette, Power, Radio as RadioIcon, RotateCcw, Server, SlidersHorizontal, Target, Type, Usb, Volume2, Waves } from "lucide-react";
-import { fetchWebModeState, sendWebModeAction, updateWebModeSettings } from "../api/tikpalClient";
+import { fetchAudioLibrary, fetchWebModeState, sendWebModeAction, updateWebModeSettings } from "../api/tikpalClient";
 import type { TikpalDataStatus } from "../hooks/useTikpalState";
 import { useOverlayReturnGesture } from "../hooks/useOverlayReturnGesture";
 import type { AudioState, FontTheme, LyricsFontSize, NightScheduleState, PlaybackSummary, RoomExperienceActionRequest, RoomExperienceState, RoomMode, RuntimeState, SurfaceTheme, SystemActionType, SystemState, WebModeState } from "../types";
@@ -31,11 +31,16 @@ type CardTone = "cyan" | "gold" | "neutral" | "warn" | "danger";
 type ActionableCardKey = "library_scan" | "reboot" | "shutdown";
 type SettingsSectionKey = "output" | "library" | "network" | "system";
 type SettingsDetailView = "appearance" | "display" | "font" | "lyrics" | "nas" | "night" | "webMode" | null;
+type LibraryStorageCounts = {
+  local: number | null;
+  nas: number | null;
+  usb: number | null;
+};
 
 const webModeTextScaleChoices = [
-  { value: 1, label: "100%" },
-  { value: 1.1, label: "110%" },
-  { value: 1.2, label: "120%" }
+  { value: 1, label: "Small" },
+  { value: 1.1, label: "Medium" },
+  { value: 1.2, label: "Large" }
 ];
 
 interface BaseCard {
@@ -235,6 +240,11 @@ export function QuickSettingsOverlay({
   const [webModeProxyUrl, setWebModeProxyUrl] = useState("");
   const [webModeProviderTextScale, setWebModeProviderTextScale] = useState(1.1);
   const [webModeError, setWebModeError] = useState<string | null>(null);
+  const [libraryStorageCounts, setLibraryStorageCounts] = useState<LibraryStorageCounts>({
+    local: null,
+    nas: null,
+    usb: null
+  });
   const [pendingRoomShortcut, setPendingRoomShortcut] = useState<RoomMode | "explore" | null>(null);
   const [roomShortcutError, setRoomShortcutError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<Record<ActionableCardKey, string | null>>({
@@ -279,6 +289,29 @@ export function QuickSettingsOverlay({
     }
   }, [active]);
 
+  const refreshLibraryStorageCounts = useCallback(
+    async (signal?: AbortSignal) => {
+      const library = await fetchAudioLibrary({ storage: "all", limit: 1 }, signal);
+      const storageCount = (storageId: keyof LibraryStorageCounts) => {
+        const count = library.storages.find((storage) => storage.id === storageId)?.trackCount;
+        return Number.isFinite(count) ? Math.max(0, Number(count)) : 0;
+      };
+      setLibraryStorageCounts({
+        local: storageCount("local"),
+        nas: storageCount("nas"),
+        usb: storageCount("usb")
+      });
+    },
+    []
+  );
+
+  useEffect(() => {
+    if (!active) return undefined;
+    const controller = new AbortController();
+    void refreshLibraryStorageCounts(controller.signal).catch(() => undefined);
+    return () => controller.abort();
+  }, [active, refreshLibraryStorageCounts]);
+
   useEffect(() => {
     if (!active) return undefined;
     let cancelled = false;
@@ -300,10 +333,23 @@ export function QuickSettingsOverlay({
 
   useEffect(() => {
     if (!active || detailView !== "webMode" || window.__TIKPAL_REMOTE_MODE__ || !localKioskHosts.has(window.location.hostname)) return undefined;
+    let inputSessionStarted = false;
+    const isWebModeInputTarget = (target: EventTarget | null) => target instanceof HTMLElement
+      && Boolean(target.closest("[data-settings-detail=\"web-mode\"] input, [data-settings-detail=\"web-mode\"] textarea, [data-settings-detail=\"web-mode\"] [contenteditable='true'], [data-settings-detail=\"web-mode\"] [role='textbox']"));
+    const markInputSessionStarted = (event: Event) => {
+      if (isWebModeInputTarget(event.target)) inputSessionStarted = true;
+    };
+    document.addEventListener("pointerdown", markInputSessionStarted, true);
+    document.addEventListener("focusin", markInputSessionStarted, true);
     const timer = window.setTimeout(() => {
+      if (inputSessionStarted || isWebModeInputTarget(document.activeElement)) return;
       void sendWebModeAction({ type: "keyboard", preload: true }).catch(() => undefined);
     }, 120);
-    return () => window.clearTimeout(timer);
+    return () => {
+      window.clearTimeout(timer);
+      document.removeEventListener("pointerdown", markInputSessionStarted, true);
+      document.removeEventListener("focusin", markInputSessionStarted, true);
+    };
   }, [active, detailView]);
 
   useEffect(() => {
@@ -349,14 +395,23 @@ export function QuickSettingsOverlay({
 
   const librarySourceKind = system.library.source.trim().toLowerCase();
   const libraryTrackCount = Math.max(0, system.library.trackCount);
-  const localTrackCount = librarySourceKind === "nas" || librarySourceKind === "usb" ? 0 : libraryTrackCount;
-  const nasTrackCount = librarySourceKind === "nas" ? libraryTrackCount : 0;
-  const usbTrackCount = librarySourceKind === "usb" ? libraryTrackCount : 0;
+  const localTrackCount = libraryStorageCounts.local ?? (librarySourceKind === "nas" || librarySourceKind === "usb" ? 0 : libraryTrackCount);
+  const nasTrackCount = libraryStorageCounts.nas ?? (librarySourceKind === "nas" ? libraryTrackCount : 0);
+  const usbTrackCount = libraryStorageCounts.usb ?? (librarySourceKind === "usb" ? libraryTrackCount : 0);
+  const scannedLibraryTrackCount = localTrackCount + usbTrackCount;
   const nasCardTone: CardTone = nasTrackCount > 0 ? "cyan" : "neutral";
   const nasCardValue = nasTrackCount > 0 ? "Mounted" : "Remote Admin";
   const nasCardMeta = nasTrackCount > 0
     ? `${nasTrackCount.toLocaleString()} tracks · ${system.library.lastScan}`
     : "SMB/NFS setup stays outside kiosk";
+  const usbCardValue = usbTrackCount > 0 ? `${usbTrackCount.toLocaleString()} tracks` : "Not mounted";
+  const usbCardMeta = usbTrackCount > 0 ? "Portable storage mounted" : "Portable storage";
+  const libraryScanValue = scannedLibraryTrackCount > 0 ? "Local + USB" : system.library.source;
+  const libraryScanMeta = system.library.scanning
+    ? "Scan in progress"
+    : scannedLibraryTrackCount > 0
+      ? `${scannedLibraryTrackCount.toLocaleString()} tracks`
+      : `${system.library.trackCount.toLocaleString()} tracks`;
 
   const settingsCards = useMemo<SettingsCard[]>(
     () => [
@@ -438,9 +493,9 @@ export function QuickSettingsOverlay({
         section: "library",
         icon: Usb,
         title: "USB",
-        value: usbTrackCount > 0 ? `${usbTrackCount.toLocaleString()} tracks` : "Not mounted",
-        meta: "Portable storage",
-        tone: "neutral"
+        value: usbCardValue,
+        meta: usbCardMeta,
+        tone: usbTrackCount > 0 ? "gold" : "neutral"
       },
       {
         kind: "action",
@@ -448,8 +503,8 @@ export function QuickSettingsOverlay({
         section: "library",
         icon: Database,
         title: "Library Scan",
-        value: system.library.source,
-        meta: system.library.scanning ? "Scan in progress" : `${system.library.trackCount.toLocaleString()} tracks`,
+        value: libraryScanValue,
+        meta: libraryScanMeta,
         tone: "gold",
         actionType: "library_scan",
         buttonLabel: system.library.scanning ? "Scanning..." : "Scan library"
@@ -487,7 +542,7 @@ export function QuickSettingsOverlay({
       {
         kind: "readonly",
         key: "system",
-        section: "network",
+        section: "system",
         icon: Info,
         title: "System",
         value: status.source === "api" ? "Tikpal API" : "Fallback",
@@ -531,7 +586,7 @@ export function QuickSettingsOverlay({
         confirmLabel: "Tap again to power off"
       }
     ],
-    [fontTheme, localTrackCount, lyricsFontSize, lyricsVisible, nasCardMeta, nasCardTone, nasCardValue, roomExperience.nightSchedule.active, roomExperience.nightSchedule.enabled, roomExperience.nightSchedule.end, roomExperience.nightSchedule.start, roomExperience.nightSchedule.timeZone, runtime.kioskWindow, runtime.requestedRenderer, status.error, status.source, surfaceTheme, system.cpuTemp, system.display.brightnessPercent, system.display.controllable, system.dspState.controllable, system.dspState.controlTransport, system.dspState.enabled, system.dspState.presetLabel, system.library.scanning, system.library.source, system.library.trackCount, system.network.ip, system.network.label, system.network.speed, system.outputDevice.detail, system.outputDevice.label, system.uptime, usbTrackCount, webModeProxyEnabled, webModeProxyUrl]
+    [fontTheme, libraryScanMeta, libraryScanValue, localTrackCount, lyricsFontSize, lyricsVisible, nasCardMeta, nasCardTone, nasCardValue, roomExperience.nightSchedule.active, roomExperience.nightSchedule.enabled, roomExperience.nightSchedule.end, roomExperience.nightSchedule.start, roomExperience.nightSchedule.timeZone, runtime.kioskWindow, runtime.requestedRenderer, status.error, status.source, surfaceTheme, system.cpuTemp, system.display.brightnessPercent, system.display.controllable, system.dspState.controllable, system.dspState.controlTransport, system.dspState.enabled, system.dspState.presetLabel, system.library.scanning, system.network.ip, system.network.label, system.network.speed, system.outputDevice.detail, system.outputDevice.label, system.uptime, usbCardMeta, usbCardValue, usbTrackCount, webModeProxyEnabled, webModeProxyUrl]
   );
 
   const visibleCards = useMemo(() => {
@@ -602,6 +657,9 @@ export function QuickSettingsOverlay({
 
     try {
       await onSystemAction(card.actionType);
+      if (card.actionType === "library_scan") {
+        void refreshLibraryStorageCounts().catch(() => undefined);
+      }
       setActionError((current) => ({
         ...current,
         [card.actionType]: null
@@ -871,8 +929,8 @@ export function QuickSettingsOverlay({
           </label>
 
           <div className="night-field web-mode-scale-field" data-web-mode-settings-scale>
-            <span><Type size={16} /> Provider Text</span>
-            <div className="web-mode-settings-scale-options" role="group" aria-label="Provider text size">
+            <span><Type size={16} /> Font</span>
+            <div className="web-mode-settings-scale-options" role="group" aria-label="Provider font size">
               {webModeTextScaleChoices.map((choice) => (
                 <button
                   key={choice.label}

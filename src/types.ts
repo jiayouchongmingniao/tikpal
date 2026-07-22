@@ -170,7 +170,7 @@ export interface RadioCatalogResponse {
 
 export type AudioLibraryStorageId = "local" | "nas" | "usb" | "favorites" | "recently_added";
 export type AudioLibraryCategoryId = "focus" | "meditation" | "rest";
-export type AudioLibraryTrackCategoryId = AudioLibraryCategoryId | "nas";
+export type AudioLibraryTrackCategoryId = AudioLibraryCategoryId | "nas" | "usb";
 
 export interface AudioLibrarySubCategorySummary {
   id: string;

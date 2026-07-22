@@ -217,6 +217,10 @@ const REMOTE_ARTWORK_INDEX_DIR = resolve(REMOTE_MEDIA_CACHE_ROOT, "artwork-index
 const LOCAL_LIBRARY_MANIFEST_PATH = process.env.TIKPAL_LOCAL_LIBRARY_MANIFEST_PATH
   ?? resolve(process.cwd(), "public", "assets", "music", "_metadata", "library_manifest.json");
 const LOCAL_LIBRARY_ROOT = resolve(dirname(LOCAL_LIBRARY_MANIFEST_PATH), "..");
+const USB_LIBRARY_ROOTS = parseEnvPathList(process.env.TIKPAL_USB_LIBRARY_ROOTS);
+const USB_LIBRARY_AUTO_ROOTS = parseEnvPathList(process.env.TIKPAL_USB_LIBRARY_AUTO_ROOTS || "/media,/run/media");
+const USB_LIBRARY_MPD_PREFIX = normalizeSafeRelativePath(process.env.TIKPAL_USB_LIBRARY_MPD_PREFIX ?? "USB") ?? "USB";
+const USB_LIBRARY_MAX_TRACKS = parseEnvPositiveInteger(process.env.TIKPAL_USB_LIBRARY_MAX_TRACKS, 500);
 const LOCAL_PLAYLIST_INDEX_PATH = resolve(LOCAL_LIBRARY_ROOT, "_metadata", "playlist_index.json");
 const LOCAL_PLAYLIST_ROOT = resolve(LOCAL_LIBRARY_ROOT, "_playlists");
 const MUSIC_LIBRARY_STATE_PATH = resolve(process.env.TIKPAL_MUSIC_LIBRARY_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "music-library-state.json"));
@@ -241,6 +245,8 @@ const WEB_MODE_DEFAULT_PROVIDER_TEXT_SCALE = normalizeWebModeProviderTextScale(p
 const WEB_MODE_PROXY_TEST_NETWORK = parseEnvBoolean(process.env.TIKPAL_WEB_MODE_PROXY_TEST_NETWORK ?? "0");
 const LOCAL_LIBRARY_COVER_COLUMNS = ["cover_relative_path", "cover_path", "album_art_relative_path", "artwork_relative_path"];
 const LOCAL_LIBRARY_COVER_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp"];
+const USB_LIBRARY_AUDIO_EXTENSIONS = new Set([".aac", ".aif", ".aiff", ".alac", ".flac", ".m4a", ".mp3", ".ogg", ".opus", ".wav", ".wma"]);
+const USB_LIBRARY_SKIPPED_MOUNT_NAMES = new Set(["boot", "bootfs", "root", "rootfs"]);
 const PUBLIC_ASSETS_ROOT = resolve(process.env.TIKPAL_PUBLIC_ASSETS_ROOT ?? resolve(process.cwd(), "public", "assets"));
 const PUBLIC_SCENES_ROOT = resolve(PUBLIC_ASSETS_ROOT, "scenes");
 const SCENE_VIDEO_MANIFEST_PATH = resolve(PUBLIC_SCENES_ROOT, "_metadata", "scene_videos.json");
@@ -433,6 +439,13 @@ function parseEnvIntegerList(value, fallback) {
     .map((entry) => parseEnvPositiveInteger(entry.trim(), null))
     .filter((entry) => Number.isFinite(entry));
   return parsed.length > 0 ? parsed : fallback;
+}
+
+function parseEnvPathList(value) {
+  return String(value ?? "")
+    .split(/[,:]/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
 }
 
 const tracks = [
@@ -4497,11 +4510,177 @@ async function readLocalAudioLibraryTracks(options = {}) {
   return tracks.filter(Boolean);
 }
 
+function decodeProcMountField(value) {
+  return String(value ?? "").replace(/\\([0-7]{3})/g, (_, octal) => String.fromCharCode(parseInt(octal, 8)));
+}
+
+function isPathWithin(root, candidate) {
+  const safeRoot = resolve(root);
+  const safeCandidate = resolve(candidate);
+  return safeCandidate === safeRoot || safeCandidate.startsWith(`${safeRoot}${sep}`);
+}
+
+function buildUsbMountId(rootPath, usedIds) {
+  const fallback = `drive-${usedIds.size + 1}`;
+  const rawName = basename(resolve(rootPath)) || fallback;
+  let id = rawName
+    .replace(/[\\/]+/g, "-")
+    .replace(/^\.+$/, "")
+    .trim()
+    || fallback;
+  let candidate = id;
+  for (let suffix = 2; usedIds.has(candidate); suffix += 1) {
+    candidate = `${id}-${suffix}`;
+  }
+  usedIds.add(candidate);
+  return candidate;
+}
+
+async function readMountedPaths() {
+  try {
+    return (await readFile("/proc/mounts", "utf8"))
+      .split("\n")
+      .map((line) => line.trim().split(/\s+/)[1])
+      .filter(Boolean)
+      .map(decodeProcMountField);
+  } catch {
+    return [];
+  }
+}
+
+function shouldSkipUsbLibraryRoot(rootPath) {
+  const mountName = basename(resolve(rootPath));
+  return !mountName
+    || mountName.startsWith(".")
+    || USB_LIBRARY_SKIPPED_MOUNT_NAMES.has(mountName.toLowerCase());
+}
+
+async function resolveReadableDirectory(pathValue) {
+  const absolutePath = resolve(pathValue);
+  try {
+    const info = await stat(absolutePath);
+    return info.isDirectory() ? absolutePath : null;
+  } catch {
+    return null;
+  }
+}
+
+async function discoverUsbLibraryRoots() {
+  const explicitRoots = [];
+  for (const rootPath of USB_LIBRARY_ROOTS) {
+    const absolutePath = await resolveReadableDirectory(rootPath);
+    if (absolutePath && !shouldSkipUsbLibraryRoot(absolutePath)) {
+      explicitRoots.push(absolutePath);
+    }
+  }
+  if (explicitRoots.length > 0) {
+    return Array.from(new Set(explicitRoots)).sort((left, right) => left.localeCompare(right));
+  }
+
+  const mountPaths = await readMountedPaths();
+  const candidates = [];
+  for (const mountPath of mountPaths) {
+    if (!USB_LIBRARY_AUTO_ROOTS.some((baseRoot) => isPathWithin(baseRoot, mountPath))) continue;
+    if (USB_LIBRARY_AUTO_ROOTS.some((baseRoot) => resolve(baseRoot) === resolve(mountPath))) continue;
+    if (shouldSkipUsbLibraryRoot(mountPath)) continue;
+    const absolutePath = await resolveReadableDirectory(mountPath);
+    if (absolutePath) candidates.push(absolutePath);
+  }
+
+  return Array.from(new Set(candidates)).sort((left, right) => left.localeCompare(right));
+}
+
+async function collectUsbAudioFiles(rootPath, options = {}) {
+  const limit = options.limit ?? USB_LIBRARY_MAX_TRACKS;
+  const files = [];
+  const stack = [{ path: rootPath, depth: 0 }];
+  const maxDepth = 10;
+
+  while (stack.length > 0 && files.length < limit) {
+    const current = stack.pop();
+    let entries;
+    try {
+      entries = await readdir(current.path, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    entries
+      .sort((left, right) => left.name.localeCompare(right.name))
+      .reverse()
+      .forEach((entry) => {
+        if (files.length >= limit) return;
+        if (!entry.name || entry.name.startsWith(".") || entry.name.startsWith("._")) return;
+        const absolutePath = resolve(current.path, entry.name);
+        if (!isPathWithin(rootPath, absolutePath)) return;
+        if (entry.isDirectory()) {
+          if (current.depth < maxDepth) {
+            stack.push({ path: absolutePath, depth: current.depth + 1 });
+          }
+          return;
+        }
+        if (!entry.isFile()) return;
+        if (!USB_LIBRARY_AUDIO_EXTENSIONS.has(extname(entry.name).toLowerCase())) return;
+        files.push(absolutePath);
+      });
+  }
+
+  return files.sort((left, right) => left.localeCompare(right));
+}
+
+function usbTrackTitleFromPath(filePath) {
+  return basename(filePath, extname(filePath))
+    .replace(/\s+-\s+\d{2}m\d{2}s\b/gi, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    || "Untitled";
+}
+
+async function readUsbAudioLibraryTracks() {
+  const roots = await discoverUsbLibraryRoots();
+  const usedIds = new Set();
+  const tracks = [];
+
+  for (const rootPath of roots) {
+    const mountId = buildUsbMountId(rootPath, usedIds);
+    const files = await collectUsbAudioFiles(rootPath, { limit: Math.max(0, USB_LIBRARY_MAX_TRACKS - tracks.length) });
+    for (const absolutePath of files) {
+      if (tracks.length >= USB_LIBRARY_MAX_TRACKS) break;
+      const relativeFilePath = normalizeSafeRelativePath(relative(rootPath, absolutePath).split(sep).join("/"));
+      if (!relativeFilePath) continue;
+      const mpdPath = normalizeSafeRelativePath(posix.join(USB_LIBRARY_MPD_PREFIX, mountId, relativeFilePath));
+      if (!mpdPath) continue;
+      const idHash = createHash("sha1").update(`${rootPath}\0${relativeFilePath}`).digest("hex").slice(0, 12);
+      tracks.push({
+        id: `usb-${mountId}-${idHash}`,
+        title: usbTrackTitleFromPath(absolutePath),
+        artist: "Unknown Artist",
+        album: `USB / ${mountId}`,
+        storage: "usb",
+        categoryId: "usb",
+        subCategory: mountId,
+        durationSeconds: null,
+        path: mpdPath,
+        albumArtUrl: null,
+        albumArtLabel: null,
+        albumArtScope: null,
+        active: false,
+        favorite: false
+      });
+    }
+  }
+
+  return tracks;
+}
+
 async function findLocalAudioLibraryTrackByPath(localTrackPath) {
   const safePath = normalizeLocalLibraryStateTrackPath(localTrackPath);
   if (!safePath) return null;
 
-  const tracks = await readLocalAudioLibraryTracks();
+  const tracks = [
+    ...await readLocalAudioLibraryTracks(),
+    ...await readUsbAudioLibraryTracks()
+  ];
   return tracks.find((track) => normalizeSafeRelativePath(track.path) === safePath) ?? null;
 }
 
@@ -4568,11 +4747,25 @@ function buildMpdLocalLibraryTrackPathCandidates(localTrackPath) {
   };
 
   const mpdPrefix = normalizeSafeRelativePath(MPD_DEFAULT_QUEUE_PATH);
-  if (mpdPrefix && !safePath.startsWith(`${mpdPrefix}/`)) {
+  if (mpdPrefix && !safePath.startsWith(`${mpdPrefix}/`) && !isUsbLibraryTrackPath(safePath)) {
     pushCandidate(posix.join(mpdPrefix, safePath));
   }
   pushCandidate(safePath);
   return candidates;
+}
+
+function isUsbLibraryTrackPath(trackPath) {
+  const safePath = normalizeSafeRelativePath(trackPath);
+  return Boolean(safePath && USB_LIBRARY_MPD_PREFIX && (
+    safePath === USB_LIBRARY_MPD_PREFIX || safePath.startsWith(`${USB_LIBRARY_MPD_PREFIX}/`)
+  ));
+}
+
+function isPlayableUsbLibraryMpdPath(trackPath) {
+  const safePath = normalizeSafeRelativePath(trackPath);
+  if (!safePath || !isUsbLibraryTrackPath(safePath)) return false;
+  const fileName = posix.basename(safePath);
+  return Boolean(fileName && !fileName.startsWith(".") && !fileName.startsWith("._") && USB_LIBRARY_AUDIO_EXTENSIONS.has(posix.extname(safePath).toLowerCase()));
 }
 
 async function resolveMpdLocalLibraryTrackPath(localTrackPath) {
@@ -4586,26 +4779,57 @@ async function resolveMpdLocalLibraryTrackPath(localTrackPath) {
   return null;
 }
 
+function buildMpdLibraryQueueRootCandidates(startTrackPath) {
+  const safeStartPath = normalizeLocalLibraryStateTrackPath(startTrackPath);
+  if (!safeStartPath) return [];
+  const roots = [];
+  const pushRoot = (rootPath) => {
+    const safeRoot = normalizeSafeRelativePath(rootPath);
+    if (safeRoot && !roots.includes(safeRoot)) roots.push(safeRoot);
+  };
+
+  if (isUsbLibraryTrackPath(safeStartPath)) {
+    const [prefix, mountId] = safeStartPath.split("/");
+    pushRoot(mountId ? posix.join(prefix, mountId) : prefix);
+    pushRoot(prefix);
+    return roots;
+  }
+
+  const mpdPrefix = normalizeSafeRelativePath(MPD_DEFAULT_QUEUE_PATH);
+  if (mpdPrefix) {
+    pushRoot(mpdPrefix);
+  } else {
+    roots.push("");
+  }
+  return roots;
+}
+
 async function resolveMpdLocalLibraryQueue(startTrackPath) {
   const safeStartPath = normalizeLocalLibraryStateTrackPath(startTrackPath);
   if (!safeStartPath) return null;
 
-  const mpdPrefix = normalizeSafeRelativePath(MPD_DEFAULT_QUEUE_PATH);
-  const listedTracks = (await runMpc(mpdPrefix ? ["listall", mpdPrefix] : ["listall"], { allowFailure: true }))
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-  if (listedTracks.length === 0) return null;
+  const startCandidates = buildMpdLocalLibraryTrackPathCandidates(safeStartPath);
+  const isUsbQueue = isUsbLibraryTrackPath(safeStartPath);
+  for (const rootPath of buildMpdLibraryQueueRootCandidates(safeStartPath)) {
+    const listedTracks = (await runMpc(rootPath ? ["listall", rootPath] : ["listall"], { allowFailure: true }))
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const queueTracks = isUsbQueue ? listedTracks.filter(isPlayableUsbLibraryMpdPath) : listedTracks;
+    if (queueTracks.length === 0) continue;
 
-  const listedTrackSet = new Set(listedTracks);
-  const startTrack = buildMpdLocalLibraryTrackPathCandidates(safeStartPath).find((candidate) => listedTrackSet.has(candidate));
-  if (!startTrack) return null;
+    const listedTrackSet = new Set(queueTracks);
+    const startTrack = startCandidates.find((candidate) => listedTrackSet.has(candidate));
+    if (!startTrack) continue;
 
-  return {
-    addRootPath: mpdPrefix,
-    mpdTrackPaths: listedTracks,
-    startIndex: listedTracks.indexOf(startTrack)
-  };
+    return {
+      addRootPath: isUsbQueue ? null : rootPath,
+      mpdTrackPaths: queueTracks,
+      startIndex: queueTracks.indexOf(startTrack)
+    };
+  }
+
+  return null;
 }
 
 function buildNasAudioLibraryTracks(playback) {
@@ -4699,6 +4923,7 @@ async function getAudioLibraryPayload(searchParams) {
   const state = await getTikpalState();
   const musicState = readMusicLibraryStateSync();
   const localTracks = await readLocalAudioLibraryTracks({ musicState });
+  const usbTracks = await readUsbAudioLibraryTracks();
   const nasTracks = buildNasAudioLibraryTracks(state.playback);
   const favoriteTracks = localTracks
     .filter((track) => track.favorite)
@@ -4715,8 +4940,8 @@ async function getAudioLibraryPayload(searchParams) {
         : filters.storage === "recently_added"
           ? recentlyAddedTracks
           : filters.storage === "usb"
-            ? []
-            : [...localTracks, ...nasTracks, ...favoriteTracks, ...recentlyAddedTracks];
+            ? usbTracks
+            : [...localTracks, ...nasTracks, ...usbTracks, ...favoriteTracks, ...recentlyAddedTracks];
   const tracks = sourceTracks;
   const filtered = filterAudioLibraryTracks(tracks, filters);
   const paged = filtered.slice(filters.offset, filters.offset + filters.limit);
@@ -4746,7 +4971,7 @@ async function getAudioLibraryPayload(searchParams) {
       {
         id: "usb",
         label: "USB",
-        trackCount: 0,
+        trackCount: usbTracks.length,
         categories: []
       },
       {

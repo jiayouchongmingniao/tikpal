@@ -3827,7 +3827,7 @@ try {
     "[...document.querySelectorAll('.settings-top-tab.is-active')].length === 1 && document.querySelector('.settings-top-tab.is-active')?.textContent?.trim() === 'Care'",
     "Console only highlights the active Care chip"
   );
-  await expect(client, settingsSummaryExpression("system", ["Restart", "Shutdown"]), "Console Care summary keeps fixed hardware tiles");
+  await expect(client, settingsSummaryExpression("system", ["System", "Restart", "Shutdown"]), "Console Care summary keeps fixed hardware tiles");
 
   await evaluate(
     client,
@@ -3852,7 +3852,7 @@ try {
     `
   );
   await expect(client, "document.querySelector('[data-settings-section=\"network\"]') !== null", "Console Link section opens");
-  await expect(client, settingsSummaryExpression("network", ["Network", "System", "Explore"]), "Console Link summary keeps fixed hardware tiles");
+  await expect(client, settingsSummaryExpression("network", ["Network", "Explore"]), "Console Link summary keeps fixed hardware tiles");
   await expect(
     client,
     `
@@ -3888,13 +3888,83 @@ try {
   await expect(client, "document.querySelector('[data-settings-detail=\"web-mode\"]') !== null", "Console Explore drawer opens");
   await expectEventually(
     client,
-    "document.querySelector('.web-mode-proxy-field input')?.value.startsWith('http') && document.querySelector('[data-web-mode-settings-scale]') !== null && document.querySelector('.web-mode-settings-scale-option.is-active')?.textContent === '110%' && !document.querySelector('.web-mode-settings-actions') && ![...document.querySelectorAll('[data-settings-detail=\"web-mode\"] button')].some((button) => ['Test', 'Save', 'Keyboard'].includes(button.textContent?.trim() ?? ''))",
+    "document.querySelector('.web-mode-proxy-field input')?.value.startsWith('http') && document.querySelector('[data-web-mode-settings-scale]')?.textContent.includes('Font') && document.querySelector('.web-mode-settings-scale-option.is-active')?.textContent === 'Medium' && [...document.querySelectorAll('.web-mode-settings-scale-option')].map((node) => node.textContent?.trim()).join(',') === 'Small,Medium,Large' && !document.querySelector('.web-mode-settings-actions') && ![...document.querySelectorAll('[data-settings-detail=\"web-mode\"] button')].some((button) => ['Test', 'Save', 'Keyboard'].includes(button.textContent?.trim() ?? ''))",
     "Console Explore drawer auto-saves proxy settings without action buttons"
   );
   await expect(
     client,
     "document.querySelector('[data-settings-detail=\"web-mode\"]')?.scrollHeight <= document.querySelector('[data-settings-detail=\"web-mode\"]')?.clientHeight",
     "Console Explore drawer fits within kiosk height"
+  );
+  await evaluate(
+    client,
+    `
+      (() => {
+        window.__tikpalKeyboardNativeFetch = window.fetch.bind(window);
+        window.__tikpalKeyboardActions = [];
+        window.fetch = (input, init) => {
+          const url = String(input instanceof Request ? input.url : input);
+          if (url.includes('/api/v1/web-mode/actions')) {
+            try {
+              window.__tikpalKeyboardActions.push(JSON.parse(String(init?.body ?? '{}')));
+            } catch {
+              window.__tikpalKeyboardActions.push({ parseError: true });
+            }
+            return Promise.resolve(new Response(JSON.stringify({
+              enabled: true,
+              activeProvider: null,
+              providers: [],
+              settings: {
+                proxyEnabled: true,
+                proxyUrl: document.querySelector('.web-mode-proxy-field input')?.value || 'http://127.0.0.1:7897',
+                providerTextScale: 1.1,
+                updatedAt: new Date().toISOString()
+              },
+              lastError: null,
+              updatedAt: new Date().toISOString()
+            }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+          }
+          return window.__tikpalKeyboardNativeFetch(input, init);
+        };
+        const input = document.querySelector('.web-mode-proxy-field input');
+        input?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, composed: true }));
+        input?.focus();
+        input?.blur();
+        return Boolean(input);
+      })()
+    `
+  );
+  await wait(220);
+  await expect(
+    client,
+    "Array.isArray(window.__tikpalKeyboardActions) && window.__tikpalKeyboardActions.some((action) => action.type === 'keyboard' && action.enabled === true && action.force === true) && !window.__tikpalKeyboardActions.some((action) => action.type === 'keyboard' && action.enabled === false)",
+    "Console Explore proxy input blur alone keeps Onboard visible"
+  );
+  await evaluate(
+    client,
+    `
+      (() => {
+        document.querySelector('.settings-detail-header')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, composed: true }));
+        return true;
+      })()
+    `
+  );
+  await wait(120);
+  await expect(
+    client,
+    "window.__tikpalKeyboardActions.some((action) => action.type === 'keyboard' && action.enabled === false)",
+    "Console Explore outside tap hides Onboard after proxy input"
+  );
+  await evaluate(
+    client,
+    `
+      (() => {
+        if (window.__tikpalKeyboardNativeFetch) window.fetch = window.__tikpalKeyboardNativeFetch;
+        delete window.__tikpalKeyboardNativeFetch;
+        delete window.__tikpalKeyboardActions;
+        return true;
+      })()
+    `
   );
   const originalProxyUrl = await evaluate(client, "document.querySelector('.web-mode-proxy-field input')?.value");
   await setInputValue(client, ".web-mode-proxy-field input", "http://127.0.0.1:7896");
@@ -3913,7 +3983,7 @@ try {
     client,
     `
       (() => {
-        const target = [...document.querySelectorAll('.web-mode-settings-scale-option')].find((node) => node.textContent.trim() === '120%');
+        const target = [...document.querySelectorAll('.web-mode-settings-scale-option')].find((node) => node.textContent.trim() === 'Large');
         target?.click();
         return Boolean(target);
       })()
@@ -3921,14 +3991,14 @@ try {
   );
   await expectEventually(
     client,
-    "document.querySelector('.settings-detail-header p')?.textContent === 'Saved automatically' && document.querySelector('.web-mode-settings-scale-option.is-active')?.textContent === '120%'",
+    "document.querySelector('.settings-detail-header p')?.textContent === 'Saved automatically' && document.querySelector('.web-mode-settings-scale-option.is-active')?.textContent === 'Large'",
     "Console Explore provider text scale auto-saves"
   );
   await evaluate(
     client,
     `
       (() => {
-        const target = [...document.querySelectorAll('.web-mode-settings-scale-option')].find((node) => node.textContent.trim() === '110%');
+        const target = [...document.querySelectorAll('.web-mode-settings-scale-option')].find((node) => node.textContent.trim() === 'Medium');
         target?.click();
         return Boolean(target);
       })()
@@ -3936,7 +4006,7 @@ try {
   );
   await expectEventually(
     client,
-    "document.querySelector('.settings-detail-header p')?.textContent === 'Saved automatically' && document.querySelector('.web-mode-settings-scale-option.is-active')?.textContent === '110%'",
+    "document.querySelector('.settings-detail-header p')?.textContent === 'Saved automatically' && document.querySelector('.web-mode-settings-scale-option.is-active')?.textContent === 'Medium'",
     "Console Explore provider text scale restores to the default"
   );
   await evaluate(
@@ -3971,7 +4041,7 @@ try {
   await expect(client, "document.querySelectorAll('[data-web-mode-provider]').length >= 10", "Explore side panel exposes common web player providers");
   await expect(
     client,
-    "document.querySelector('[data-web-mode-proxy-toggle]')?.tagName === 'BUTTON' && document.querySelector('[data-web-mode-top-back]') !== null && document.querySelectorAll('[data-web-mode-text-scale-option]').length === 3 && document.querySelector('[data-web-mode-text-scale-option=\"1.1\"].is-active') !== null && document.querySelector('[data-web-mode-keyboard-toggle]') === null && document.querySelector('.web-mode-actions') === null",
+    "document.querySelector('[data-web-mode-proxy-toggle]')?.tagName === 'BUTTON' && document.querySelector('[data-web-mode-top-back]') !== null && document.querySelector('[data-web-mode-text-scale]')?.textContent.includes('Font') && [...document.querySelectorAll('[data-web-mode-text-scale-option]')].map((node) => node.textContent?.trim()).join(',') === 'Small,Medium,Large' && document.querySelector('[data-web-mode-text-scale-option=\"1.1\"].is-active') !== null && document.querySelector('[data-web-mode-keyboard-toggle]') === null && document.querySelector('.web-mode-actions') === null",
     "Explore side panel exposes proxy, provider text scale, and one top-right Back control without a manual Keyboard button"
   );
   await expect(

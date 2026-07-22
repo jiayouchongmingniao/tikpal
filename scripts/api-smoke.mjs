@@ -1738,18 +1738,25 @@ async function runMpcLocalLibraryPathSmoke(roomExperienceStatePath) {
   const fakeWebModeSettingsPath = path.join(workspace, "web-mode-settings.json");
   const fakeWebModeStatePath = path.join(workspace, "web-mode-state.json");
   const fakeAudioSourceMemoryStatePath = path.join(workspace, "audio-source-memory.json");
+  const fakeUsbRoot = path.join(workspace, "Session Disk");
   const fakeMpcTracks = [
     "Codex/Focus/Lo-fi Ambient/FASSounds - Good Night - Lofi Cozy Chill Music - 02m27s - Lo-fi.mp3",
     "Codex/Focus/Lo-fi Ambient/FASSounds - Lofi Study - Calm Peaceful Chill Hop - 02m27s - Lo-fi.mp3",
     "Codex/Focus/Lo-fi Ambient/AtlasAudio - Ambient Soundscapes - 04m56s - Ambient.mp3"
   ];
+  const fakeMpcUsbTracks = [
+    "USB/Session Disk/Set/Live Take.flac"
+  ];
 
+  await mkdir(path.join(fakeUsbRoot, "Set"), { recursive: true });
+  await writeFile(path.join(fakeUsbRoot, "Set", "Live Take.flac"), "fake usb flac");
   await writeFile(fakeMpcPath, `#!/usr/bin/env node
-import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+	import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 
 const logPath = process.env.TIKPAL_FAKE_MPC_LOG;
 const statePath = process.env.TIKPAL_FAKE_MPC_STATE;
 const libraryTracks = JSON.parse(process.env.TIKPAL_FAKE_MPC_TRACKS ?? "[]");
+const usbLibraryTracks = JSON.parse(process.env.TIKPAL_FAKE_MPC_USB_TRACKS ?? "[]");
 const positionalPlayStaysPaused = process.env.TIKPAL_FAKE_MPC_POSITIONAL_PLAY_STAYS_PAUSED === "1";
 const currentFileOnly = process.env.TIKPAL_FAKE_MPC_CURRENT_FILE_ONLY === "1";
 const rawArgs = process.argv.slice(2);
@@ -1784,6 +1791,11 @@ function fail(message) {
   process.exit(1);
 }
 
+function tracksUnderTarget(target, tracks) {
+  if (!target) return tracks;
+  return tracks.filter((track) => track === target || track.startsWith(target + "/"));
+}
+
 if (logPath) appendFileSync(logPath, args.join("\\t") + "\\n");
 
 const [command, ...rest] = args;
@@ -1792,8 +1804,10 @@ const state = readState();
 switch (command) {
   case "listall": {
     const target = rest[0] ?? "";
+    const usbMatches = tracksUnderTarget(target, usbLibraryTracks);
     if (target === "Codex") output(libraryTracks.join("\\n") + "\\n");
-    else if (libraryTracks.includes(target)) output(target + "\\n");
+    else if (libraryTracks.includes(target) || usbLibraryTracks.includes(target)) output(target + "\\n");
+    else if (usbMatches.length > 0) output(usbMatches.join("\\n") + "\\n");
     else fail("MPD error: No such directory");
     break;
   }
@@ -1805,8 +1819,10 @@ switch (command) {
     break;
   case "add": {
     const target = rest[0] ?? "";
+    const usbMatches = tracksUnderTarget(target, usbLibraryTracks);
     if (target === "Codex") state.queue.push(...libraryTracks);
-    else if (libraryTracks.includes(target)) state.queue.push(target);
+    else if (usbMatches.length > 0) state.queue.push(...usbMatches);
+    else if (libraryTracks.includes(target) || usbLibraryTracks.includes(target)) state.queue.push(target);
     else fail("MPD error: No such song");
     writeState(state);
     break;
@@ -1899,6 +1915,8 @@ appendFileSync(${JSON.stringify(fakeWebModeLogPath)}, [...args, ...keyboardEnv].
       TIKPAL_MPD_HOST: "127.0.0.1",
       TIKPAL_MPD_PORT: "6600",
       TIKPAL_MPD_DEFAULT_QUEUE_PATH: "Codex",
+      TIKPAL_USB_LIBRARY_ROOTS: fakeUsbRoot,
+      TIKPAL_USB_LIBRARY_MPD_PREFIX: "USB",
       TIKPAL_OUTPUT_VOLUME_GET_COMMAND: "",
       TIKPAL_ROOM_EXPERIENCE_STATE_PATH: roomExperienceStatePath,
       TIKPAL_AUDIO_SOURCE_MEMORY_STATE_PATH: fakeAudioSourceMemoryStatePath,
@@ -1919,6 +1937,7 @@ appendFileSync(${JSON.stringify(fakeWebModeLogPath)}, [...args, ...keyboardEnv].
       TIKPAL_FAKE_MPC_LOG: fakeMpcLogPath,
       TIKPAL_FAKE_MPC_STATE: fakeMpcStatePath,
       TIKPAL_FAKE_MPC_TRACKS: JSON.stringify(fakeMpcTracks),
+      TIKPAL_FAKE_MPC_USB_TRACKS: JSON.stringify(fakeMpcUsbTracks),
       TIKPAL_FAKE_MPC_CURRENT_FILE_ONLY: "1",
       TIKPAL_FAKE_MPC_POSITIONAL_PLAY_STAYS_PAUSED: "1"
     }),
@@ -2019,6 +2038,25 @@ appendFileSync(${JSON.stringify(fakeWebModeLogPath)}, [...args, ...keyboardEnv].
     assert(previous.body.audio.rememberedSource?.localTrackPath === localTrackPath, "mpc local library previous should remember the previous local track");
     const previousLog = await readFile(fakeMpcLogPath, "utf8");
     assert(previousLog.includes("prev"), "mpc local library previous should issue prev");
+
+    const usbLibrary = await requestFrom(baseUrl, "/api/v1/audio/library?storage=usb&limit=5");
+    assert(usbLibrary.response.ok, "mpc USB library should return 200");
+    const usbTrackPath = usbLibrary.body.tracks[0]?.path;
+    assert(usbTrackPath === fakeMpcUsbTracks[0], "mpc USB library should expose MPD-visible USB/<mount name> track paths");
+    await writeFile(fakeMpcLogPath, "");
+    const switchedUsb = await requestFrom(baseUrl, "/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({ target: "mpd", localTrackPath: usbTrackPath })
+    });
+    assert(switchedUsb.response.ok, "mpc USB local library source switch should return 200");
+    assert(switchedUsb.body.audio.currentSource.id === "mpd", "mpc USB switch should keep Library current");
+    assert(switchedUsb.body.playback.queueLength === fakeMpcUsbTracks.length, "mpc USB switch should queue the mounted USB root");
+    assert(switchedUsb.body.audio.rememberedSource?.localTrackPath === usbTrackPath, "mpc USB switch should remember the selected USB track path");
+    const usbLog = await readFile(fakeMpcLogPath, "utf8");
+    assert(usbLog.includes("listall\tUSB/Session Disk"), "mpc USB switch should list the USB mount root");
+    assert(usbLog.includes(`add\t${fakeMpcUsbTracks[0]}`), "mpc USB switch should add only playable USB audio tracks to the queue");
+    assert(!usbLog.split("\n").includes("add\tUSB/Session Disk"), "mpc USB switch should not queue the raw USB mount root because MPD can list Apple resource-fork files");
+    assert(!usbLog.includes("Codex/USB/Session Disk"), "mpc USB switch should not prefix USB paths with the local Codex root");
 
     const bluetoothBeforeExplore = await requestFrom(baseUrl, "/api/v1/audio/source", {
       method: "POST",
@@ -3715,6 +3753,8 @@ async function run() {
 
   const apiAssetsRoot = await mkdtemp(path.join(tmpdir(), "tikpal-api-assets-"));
   const apiStateRoot = await mkdtemp(path.join(tmpdir(), "tikpal-api-state-"));
+  const apiUsbParentRoot = await mkdtemp(path.join(tmpdir(), "tikpal-api-usb-"));
+  const apiUsbRoot = path.join(apiUsbParentRoot, "Field Recorder");
   const musicLibraryStatePath = path.join(apiStateRoot, "music-library-state.json");
   const roomExperienceStatePath = path.join(apiStateRoot, "room-experience-state.json");
   const audioSourceMemoryStatePath = path.join(apiStateRoot, "audio-source-memory.json");
@@ -3725,6 +3765,9 @@ async function run() {
   const warmSceneBytes = Buffer.from("000000 ftypisom tikpal warm fireplace api smoke mp4");
   const warmSceneSha256 = createHash("sha256").update(warmSceneBytes).digest("hex");
   await mkdir(path.join(apiAssetsRoot, "scenes", "_metadata"), { recursive: true });
+  await mkdir(path.join(apiUsbRoot, "Bootleg Set"), { recursive: true });
+  await writeFile(path.join(apiUsbRoot, "Bootleg Set", "Stage Test.flac"), "fake flac bytes");
+  await writeFile(path.join(apiUsbRoot, "Bootleg Set", "._Stage Test.flac"), "apple resource fork");
   await writeFile(path.join(apiAssetsRoot, "output_2560x720-4k.mp4"), Buffer.from("000000 ftypisom tikpal legacy scene mp4"));
   await writeFile(path.join(apiAssetsRoot, "scenes", "Rainy-Window.mp4"), sceneBytes);
   await writeFile(path.join(apiAssetsRoot, "scenes", "Warm-Fireplace.mp4"), warmSceneBytes);
@@ -3796,6 +3839,8 @@ async function run() {
       TIKPAL_PORTABLE_API_KEY: PORTABLE_API_KEY,
       TIKPAL_KIOSK_HEARTBEAT_STALE_MS: "1000",
       TIKPAL_PUBLIC_ASSETS_ROOT: apiAssetsRoot,
+      TIKPAL_USB_LIBRARY_ROOTS: apiUsbRoot,
+      TIKPAL_USB_LIBRARY_MPD_PREFIX: "USB",
       TIKPAL_MUSIC_LIBRARY_STATE_PATH: musicLibraryStatePath,
       TIKPAL_ROOM_EXPERIENCE_STATE_PATH: roomExperienceStatePath,
       TIKPAL_AUDIO_SOURCE_MEMORY_STATE_PATH: audioSourceMemoryStatePath,
@@ -4310,6 +4355,18 @@ async function run() {
     assert(localLibrary.body.tracks[0]?.albumArtUrl, "local audio library tracks should expose cover art URLs");
     assert(localLibrary.body.tracks[0]?.albumArtLabel, "generic local library folder covers should expose overlay labels");
     assert(localLibrary.body.total === 39, "local audio library should keep the 39-track manifest total");
+    const usbLibrary = await request("/api/v1/audio/library?storage=usb&limit=10");
+    assert(usbLibrary.response.ok, "USB audio library should return 200");
+    assert(usbLibrary.body.total === 1, "USB audio library should scan mounted audio files without requiring a Music label");
+    assert(usbLibrary.body.storages.find((storage) => storage.id === "usb")?.trackCount === 1, "USB storage track count should match scanned tracks");
+    assert(usbLibrary.body.tracks[0]?.storage === "usb", "USB library filter should only return USB tracks");
+    assert(usbLibrary.body.tracks[0]?.categoryId === "usb", "USB tracks should expose the usb category id");
+    assert(usbLibrary.body.tracks[0]?.subCategory === "Field Recorder", "USB tracks should use the mount name as the display group");
+    assert(usbLibrary.body.tracks[0]?.path === "USB/Field Recorder/Bootleg Set/Stage Test.flac", "USB track path should be MPD-visible under USB/<mount name>");
+    assert(!usbLibrary.body.tracks.some((track) => track.path?.includes("._Stage Test")), "USB library should ignore Apple resource-fork files");
+    const allLibrary = await request("/api/v1/audio/library?storage=all&limit=500");
+    assert(allLibrary.response.ok, "all audio library should return 200");
+    assert(allLibrary.body.tracks.some((track) => track.storage === "usb" && track.path === usbLibrary.body.tracks[0].path), "all audio library should include scanned USB tracks for the Player overlay");
     const localStorage = localLibrary.body.storages.find((storage) => storage.id === "local");
     assert(localStorage, "local storage metadata should exist");
     const localCategoryIds = localStorage.categories.map((category) => category.id);
@@ -5179,6 +5236,7 @@ async function run() {
     await rm(BLUETOOTH_METADATA_PATH, { force: true });
     await rm(apiAssetsRoot, { recursive: true, force: true });
     await rm(apiStateRoot, { recursive: true, force: true });
+    await rm(apiUsbParentRoot, { recursive: true, force: true });
   }
 }
 

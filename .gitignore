@@ -10,6 +10,7 @@ build/
 .tikpal/
 coverage/
 public/assets/music/
+public/assets/.interaction-smoke/
 public/assets/output_2560x720-4k.mp4
 npm-debug.log*
 yarn-debug.log*

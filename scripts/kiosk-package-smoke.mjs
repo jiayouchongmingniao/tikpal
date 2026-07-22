@@ -34,6 +34,7 @@ const requiredFiles = [
   "deploy/chromium/managed-policies.json",
   "deploy/chromium/env.kiosk.example",
   "deploy/moode/tikpal-audio-adapt.sh",
+  "deploy/moode/tikpal-usb-library-sync.sh",
   "public/web-mode-error.html",
   "deploy/moode/tikpal-alsa-loopback.sh",
   "deploy/moode/tikpal-airplay-enable.sh",
@@ -136,7 +137,7 @@ async function run() {
   }
   assertThrows(() => buildProxyConfig({ proxyEnabled: true, proxyUrl: "ftp://proxy.local:21" }), "extension should reject unsupported proxy protocols");
   assert(normalizeProviderTextScale(1.2) === 1.2 && normalizeProviderTextScale("1.10") === 1.1, "extension should normalize supported provider text scales");
-  assert(nextLowerProviderTextScale(1.2) === 1.1 && nextLowerProviderTextScale(1.1) === 1.05 && nextLowerProviderTextScale(1.05) === 1, "extension should degrade overflowing provider zoom in bounded steps");
+  assert(nextLowerProviderTextScale(1.2) === 1.1 && nextLowerProviderTextScale(1.1) === 1.05 && nextLowerProviderTextScale(1.05) === 1, "extension should degrade overflowing provider text scale in bounded steps");
   assert(
     buildProxyKey({ proxyEnabled: true, proxyUrl: "http://proxy.local:8080", providerTextScale: 1 })
       === buildProxyKey({ proxyEnabled: true, proxyUrl: "http://proxy.local:8080", providerTextScale: 1.2 }),
@@ -152,6 +153,7 @@ async function run() {
   await assertExecutable("deploy/chromium/tikpal-kiosk-viewerctl.sh");
   await assertExecutable("deploy/chromium/tikpal-web-mode.sh");
   await assertExecutable("deploy/moode/tikpal-audio-adapt.sh");
+  await assertExecutable("deploy/moode/tikpal-usb-library-sync.sh");
   await assertExecutable("deploy/moode/tikpal-alsa-loopback.sh");
   await assertExecutable("deploy/moode/tikpal-airplay-transport.sh");
   await assertExecutable("deploy/moode/tikpal-output-volume.sh");
@@ -421,6 +423,7 @@ esac
   const serverSource = await readFile(path.join(ROOT, "server/index.mjs"), "utf8");
   const webModeCrossfadeScript = await readFile(path.join(ROOT, "deploy/moode/tikpal-web-mode-crossfade.sh"), "utf8");
   const audioAdaptScript = await readFile(path.join(ROOT, "deploy/moode/tikpal-audio-adapt.sh"), "utf8");
+  const usbLibrarySyncScript = await readFile(path.join(ROOT, "deploy/moode/tikpal-usb-library-sync.sh"), "utf8");
   const extensionManifest = JSON.parse(await readFile(path.join(ROOT, "deploy/chromium/web-mode-extension/manifest.json"), "utf8"));
   const extensionContent = await readFile(path.join(ROOT, "deploy/chromium/web-mode-extension/content.js"), "utf8");
   const extensionBackground = await readFile(path.join(ROOT, "deploy/chromium/web-mode-extension/background.js"), "utf8");
@@ -431,8 +434,8 @@ esac
   const appSource = await readFile(path.join(ROOT, "src/App.tsx"), "utf8");
   const stylesSource = await readFile(path.join(ROOT, "src/styles.css"), "utf8");
   assert(extensionManifest.permissions.includes("proxy"), "Explore extension should declare the proxy permission");
-  assert(extensionManifest.permissions.includes("tabs"), "Explore extension should declare tabs permission for per-tab provider zoom");
-  assert(extensionManifest.version !== "1.0.0", "Explore extension should bump its version when provider zoom behavior changes so Chromium refreshes cached service workers");
+  assert(extensionManifest.permissions.includes("tabs"), "Explore extension should declare tabs permission for provider bootstrap navigation");
+  assert(extensionManifest.version !== "1.0.0", "Explore extension should bump its version when provider scaling behavior changes so Chromium refreshes cached service workers");
   assert(extensionManifest.key, "Explore extension should use a stable id for managed-policy allowlisting");
   assert(extensionManifest.host_permissions.includes("http://127.0.0.1:8787/*"), "Explore extension should only call the loopback API");
   assert(extensionManifest.host_permissions.includes("http://127.0.0.1:4173/*"), "Explore extension should be able to leave the local provider bootstrap page");
@@ -443,11 +446,10 @@ esac
   assert(extensionContent.includes("initialProxyKey") && !extensionContent.includes("initialRevision"), "provider pages should reload only when the proxy key changes");
   assert(extensionContent.includes("window.location.reload()"), "provider pages should refresh after a proxy revision change");
   assert(extensionContent.includes("window.location.replace(provider.url)"), "provider bootstrap should navigate only after proxy sync succeeds");
-  assert(extensionBackground.includes("setZoomSettings") && extensionBackground.includes('scope: "per-tab"') && extensionBackground.includes("setZoom(tabId"), "Explore extension should apply provider text scale through per-tab Chrome zoom");
-  assert(extensionBackground.includes("getTabZoom") && extensionBackground.includes("actual !== null") && extensionBackground.includes("Math.abs(actual - applied)"), "Explore extension should verify real tab zoom instead of trusting cached provider zoom state");
-  assert(extensionBackground.includes("message.providerPage === true || Boolean(provider)"), "Explore extension should apply provider zoom before bootstrap navigation and during runtime scale changes");
-  assert(extensionBackground.includes("tabZoomState") && extensionBackground.includes("provider-zoom-overflow"), "Explore extension should remember per-tab overflow zoom fallback");
-  assert(extensionContent.includes("hasHorizontalOverflow") && extensionContent.includes("scrollWidth > width + 16") && extensionContent.includes('type: "provider-zoom-overflow"'), "provider pages should request zoom fallback when text scale overflows the left pane");
+  assert(!extensionBackground.includes("setZoom(") && !extensionBackground.includes("setZoomSettings") && !extensionBackground.includes("getZoom"), "Explore extension should avoid Chrome tab zoom so the browser zoom bubble never appears");
+  assert(extensionContent.includes("tikpal-provider-text-scale-style") && extensionContent.includes("zoom: var(--tikpal-provider-text-scale)") && extensionContent.includes("window.__tikpalProviderTextScale"), "provider pages should apply text scale through injected CSS");
+  assert(extensionContent.includes("providerTextScaleFallbackValues") && extensionContent.includes("nextLowerProviderTextScale") && extensionContent.includes("scrollWidth > width + 16"), "provider pages should degrade CSS text scale when the left pane overflows");
+  assert(!extensionContent.includes("provider-zoom-overflow"), "provider pages should not round-trip overflow fallback through the background service worker");
   assert(extensionContent.includes("netease-audio-mirror.js"), "NetEase provider pages should inject the audio mirror into the page world");
   assert(extensionBackground.includes("isAllowedNeteaseAudioUrl") && extensionBackground.includes('message?.type === "fetch-audio"') && extensionBackground.includes("chrome.tabs.sendMessage"), "Explore extension background should proxy only allowed NetEase audio fetches in chunks");
   assert(extensionContent.includes("tikpal-netease-fetch-audio") && extensionContent.includes('chrome.runtime.sendMessage({ type: "fetch-audio"') && extensionContent.includes('message?.type !== "fetch-audio-result"'), "NetEase page script should be able to request chunked extension-backed audio bytes");
@@ -513,6 +515,9 @@ esac
   assert(audioAdaptScript.includes("write_browser_output_config") && audioAdaptScript.includes("TIKPAL_AUDIO_BROWSER_SHARED_PCM"), "audio adapter should generate a shared conversion PCM for S24-only browser outputs");
   assert(audioAdaptScript.includes("printf 'snd_aloop\\n'") && audioAdaptScript.includes("snd_aloop is not visible after applying Loopback config"), "audio adapter apply should persist and verify the real snd_aloop module name");
   assert(audioAdaptScript.includes("wait_for_loopback_visible") && audioAdaptScript.includes("ensure_loopback_visible"), "audio adapter should wait for the real Loopback card after loading snd_aloop");
+  assert(usbLibrarySyncScript.includes("USB_LIBRARY_AUTO_ROOTS") && usbLibrarySyncScript.includes("/media,/run/media"), "USB library sync should discover arbitrary mounted USB roots");
+  assert(usbLibrarySyncScript.includes("skip_mount_name") && usbLibrarySyncScript.includes("rootfs"), "USB library sync should skip system partitions");
+  assert(usbLibrarySyncScript.includes("mpc") && usbLibrarySyncScript.includes("update \"$USB_MPD_PREFIX\""), "USB library sync should refresh MPD after linking USB roots");
   assert(alsaLoopbackScript.includes("modprobe_command") && alsaLoopbackScript.includes("snd_aloop"), "ALSA Loopback helper should load the real snd_aloop module name through a resolved modprobe path");
   assert(airplayEnableScript.includes("TIKPAL_AIRPLAY_IGNORE_VOLUME_CONTROL:-no") && airplayEnableScript.includes("TIKPAL_AIRPLAY_DEFAULT_VOLUME_DB:-0.0"), "AirPlay enable should preserve phone volume control while avoiding Shairport's quiet default");
   assert(airplayEnableScript.includes("TIKPAL_AIRPLAY_VOLUME_RANGE_DB:-30") && airplayEnableScript.includes("TIKPAL_AIRPLAY_VOLUME_CONTROL_PROFILE:-flat"), "AirPlay enable should keep Shairport's software volume curve audible at mid phone volume");
@@ -605,6 +610,7 @@ esac
   const mainSource = await readFile(path.join(ROOT, "src/main.tsx"), "utf8");
   assert(mainSource.includes("onboardInputSelector"), "local kiosk text inputs should share automatic Onboard activation");
   assert(mainSource.includes("onboardVisibleRequested"), "local kiosk inputs should avoid duplicate keyboard hide requests before a keyboard has been shown");
+  assert(mainSource.includes("inputSessionActive") && mainSource.includes("lastKeyboardRequestMs"), "local kiosk inputs should keep an active input session and throttle repeated keyboard requests");
   assert(mainSource.includes("localKioskHosts.has(window.location.hostname)"), "automatic Onboard activation should stay on the physical kiosk host");
   assert(mainSource.includes('sendWebModeAction({ type: "keyboard", enabled,'), "local kiosk inputs should explicitly show and hide Onboard");
   assert(mainSource.includes("keyboardPlacementForTarget") && mainSource.includes("rectsOverlap"), "local kiosk inputs should choose a keyboard position that avoids the focused field");
@@ -612,8 +618,10 @@ esac
   assert(mainSource.includes("keepTextInputFocus"), "local kiosk inputs should keep focus when Onboard appears");
   assert(mainSource.includes("outsidePointerDown"), "local kiosk inputs should still hide Onboard when the user taps outside");
   assert(mainSource.includes("if (target) {\n      lastTextInput = target;"), "local kiosk should start showing Onboard on pointerdown before focus settles");
+  assert(mainSource.includes("inputSessionActive && lastTextInput?.isConnected && !outsidePointerDown"), "local kiosk focusout should not hide Onboard while a text input session is still active");
   assert(mainSource.includes("tikpal:keyboard-context-clear"), "local kiosk should clear input focus state when Settings closes");
   assert(mainSource.includes('document.addEventListener("focusout"'), "local kiosk inputs should hide Onboard after focus leaves text input");
+  assert(quickSettingsSource.includes("inputSessionStarted") && quickSettingsSource.includes("sendWebModeAction({ type: \"keyboard\", preload: true })"), "Console Explore Proxy preload should skip itself once the proxy input session starts");
   assert(serverSource.includes("normalizeWebModeKeyboardPosition") && serverSource.includes("normalizeWebModeKeyboardWindow"), "API should validate per-focus keyboard geometry before invoking the launcher");
   assert(serverSource.includes("runWebModeKeyboardCommand") && serverSource.includes("isWebModeSwitchingError"), "API should retry keyboard show requests that collide with Explore provider switching");
   assert(serverSource.includes("TIKPAL_WEB_MODE_ONBOARD_ACTION_POSITION") && serverSource.includes("TIKPAL_WEB_MODE_ONBOARD_ACTION_WINDOW"), "API should pass per-action keyboard geometry without relying on .env-overridable variables");
@@ -755,6 +763,9 @@ esac
   assert(providerGuardCheck.stdout.includes("safe consent auto confirm: 1"), "provider guard should auto-confirm safe cookie consent prompts");
   assert(providerGuardCheck.stdout.includes("cookie accept-all auto confirm: 1"), "provider guard should prefer cookie accept-all prompts");
   assert(providerGuardCheck.stdout.includes("all-provider consent polling: 1"), "provider guard should poll consent prompts for every provider page");
+  assert(providerGuardCheck.stdout.includes("spotify cookie close dismiss: 1"), "provider guard should close Spotify cookie-policy dismiss prompts");
+  assert(providerGuardCheck.stdout.includes("trial upsell safe dismiss: 1"), "provider guard should dismiss visible free-trial upsells safely");
+  assert(providerGuardCheck.stdout.includes("dangerous trial action blocked: 1"), "provider guard should not accept trial, subscription, login, or payment actions");
   assert(providerGuardCheck.stdout.includes("accept all cookies"), "provider guard should include English accept-all cookie labels");
   assert(providerGuardCheck.stdout.includes("全部接受"), "provider guard should include Chinese accept-all cookie labels");
   assert(providerGuardCheck.stdout.includes("input focus keyboard: 1"), "provider guard should raise Onboard when provider inputs receive focus");
@@ -772,6 +783,9 @@ esac
   assert(providerGuardSource.includes("querySelectorAll(\"iframe\")"), "provider guard should scan same-origin QQ modal iframes");
   assert(providerGuardSource.includes("consentAcceptAllLabels"), "provider guard should keep accept-all cookie labels separate from generic consent labels");
   assert(providerGuardSource.includes("rejectActionText"), "provider guard should skip cookie preference, reject, and settings actions");
+  assert(providerGuardSource.includes("safeDismissPromptExpression"), "provider guard should keep safe prompt dismiss handling separate from consent acceptance");
+  assert(providerGuardSource.includes("spotify") && providerGuardSource.includes("cookieContextText"), "provider guard should close Spotify cookie policy prompts only from cookie context");
+  assert(providerGuardSource.includes("trialContextText") && providerGuardSource.includes("dangerousActionText"), "provider guard should require trial context and block dangerous trial actions");
   assert(providerGuardSource.includes('attr(element, "aria-label")'), "provider guard should read aria-label text from cookie buttons");
   assert(providerGuardSource.includes('attr(element, "title")'), "provider guard should read title text from cookie buttons");
   assert(providerGuardSource.includes("[class*='confirm']"), "provider guard should recognize QQ confirm-style modal containers");

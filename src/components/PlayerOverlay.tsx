@@ -178,6 +178,7 @@ export function PlayerOverlay({
   const [selectedLibraryTrackId, setSelectedLibraryTrackId] = useState<string | null>(null);
   const [manualPanelSelection, setManualPanelSelection] = useState(false);
   const [localLibraryTracks, setLocalLibraryTracks] = useState<AudioLibraryTrackSummary[]>([]);
+  const [usbLibraryTracks, setUsbLibraryTracks] = useState<AudioLibraryTrackSummary[]>([]);
   const [libraryLoading, setLibraryLoading] = useState(false);
   const [libraryError, setLibraryError] = useState<string | null>(null);
   const [favoriteBusy, setFavoriteBusy] = useState(false);
@@ -284,6 +285,7 @@ export function PlayerOverlay({
       case "local":
         return selectedLocalTracks;
       case "usb":
+        return usbLibraryTracks;
       case "recently_added":
         return localLibraryTracks.slice(0, 12);
       case "favorites":
@@ -291,7 +293,7 @@ export function PlayerOverlay({
       default:
         return localLibraryTracks;
     }
-  }, [localLibraryTracks, nasLibraryTracks, selectedLibraryStorage, selectedLocalTracks]);
+  }, [localLibraryTracks, nasLibraryTracks, selectedLibraryStorage, selectedLocalTracks, usbLibraryTracks]);
   const selectedLibraryTrack = visibleLibraryTracks.find((track) => track.id === selectedLibraryTrackId) ?? null;
   const seekSupported = playback.source === "mpd" && durationSeconds > 0 && transportCapabilities?.seek !== false;
   const displayedElapsedSeconds = seekSupported
@@ -433,9 +435,10 @@ export function PlayerOverlay({
     setLibraryError(null);
 
     const requestSignal = signal ?? controller.signal;
-    void fetchAudioLibrary({ storage: "local", limit: 500 }, requestSignal)
+    void fetchAudioLibrary({ storage: "all", limit: 500 }, requestSignal)
       .then((library) => {
         setLocalLibraryTracks(library.tracks.filter((track) => track.storage === "local"));
+        setUsbLibraryTracks(library.tracks.filter((track) => track.storage === "usb"));
       })
       .catch((error) => {
         if (requestSignal.aborted) return;
@@ -554,7 +557,7 @@ export function PlayerOverlay({
       case "nas":
         return system.library.trackCount || nasLibraryTracks.length;
       case "usb":
-        return 0;
+        return usbLibraryTracks.length;
       case "favorites":
         return localLibraryTracks.filter((track) => track.favorite).length;
       case "recently_added":
@@ -633,7 +636,7 @@ export function PlayerOverlay({
 
   function handleLibraryTrackSelect(track: AudioLibraryTrackSummary) {
     setSelectedLibraryTrackId(track.id);
-    if (track.storage === "local" && track.path) {
+    if ((track.storage === "local" || track.storage === "usb") && track.path) {
       void switchSource("mpd", undefined, track.path);
     }
   }
@@ -1197,7 +1200,7 @@ export function PlayerOverlay({
                 </nav>
               ) : null}
 
-              {libraryError && selectedLibraryStorage === "local" ? <p className="source-panel-error">{libraryError}</p> : null}
+              {libraryError && (selectedLibraryStorage === "local" || selectedLibraryStorage === "usb") ? <p className="source-panel-error">{libraryError}</p> : null}
 
               <div className="library-track-list" data-library-track-list>
                 {visibleLibraryTracks.map((track, index) => {
@@ -1245,8 +1248,8 @@ export function PlayerOverlay({
                     </article>
                   );
                 })}
-                {libraryLoading && selectedLibraryStorage === "local" ? (
-                  <p className="queue-panel-empty">Loading local music library...</p>
+                {libraryLoading && (selectedLibraryStorage === "local" || selectedLibraryStorage === "usb") ? (
+                  <p className="queue-panel-empty">Loading music library...</p>
                 ) : null}
                 {!libraryLoading && visibleLibraryTracks.length === 0 ? (
                   <p className="queue-panel-empty">

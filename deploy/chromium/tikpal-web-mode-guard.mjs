@@ -1004,12 +1004,137 @@ const consentConfirmExpression = `(() => {
   return { clicked: false };
 })()`;
 
+const safeDismissPromptExpression = `(() => {
+  const providerId = ${JSON.stringify(providerId)};
+  const cookieContextText = /(cookie|cookies|cookie policy|privacy|gdpr|tracking|personal data|personal information|クッキー|プライバシー|쿠키|개인정보|隐私|隱私|个人信息|個人資料)/i;
+  const trialContextText = /(free trial|trial|try free|premium|subscribe|subscription|upgrade|membership|vip|免费试用|免費試用|试用|試用|会员|會員|订阅|訂閱|开通|開通|ทดลองใช้ฟรี|無料体験|プレミアム|구독|프리미엄)/i;
+  const safeDismissActionText = /(close|dismiss|not now|no thanks|no, thanks|maybe later|skip|cancel|×|关闭|關閉|取消|不用了|不了|稍后|稍後|나중에|닫기|キャンセル|閉じる|あとで)/i;
+  const dangerousActionText = /(start|try|subscribe|get premium|go premium|continue|accept|agree|login|log in|sign in|pay|purchase|buy|join|开始|開始|试用|試用|订阅|訂閱|购买|購買|支付|登录|登入|加入|开通|開通)/i;
+  const buttonSelectors = [
+    "button",
+    "a",
+    "[role='button']",
+    "input[type='button']",
+    "input[type='submit']",
+    "[aria-label]",
+    "[title]",
+    "[class*='close' i]",
+    "[class*='dismiss' i]"
+  ].join(",");
+  const modalSelectors = [
+    "[role='dialog']",
+    "[aria-modal='true']",
+    "[id*='cookie' i]",
+    "[class*='cookie' i]",
+    "[id*='trial' i]",
+    "[class*='trial' i]",
+    "[id*='premium' i]",
+    "[class*='premium' i]",
+    "[class*='modal' i]",
+    "[class*='dialog' i]",
+    "[class*='popup' i]",
+    "[class*='banner' i]",
+    "[class*='overlay' i]"
+  ].join(",");
+  const textOf = (element) => String(element?.value || element?.innerText || element?.textContent || "").replace(/\\s+/g, " ").trim();
+  const attr = (element, name) => String(element?.getAttribute?.(name) || "").replace(/\\s+/g, " ").trim();
+  const metadataOf = (element) => {
+    const parts = [];
+    let cursor = element;
+    for (let depth = 0; cursor && depth < 3; depth += 1) {
+      parts.push(attr(cursor, "id"));
+      parts.push(String(cursor.className || ""));
+      parts.push(attr(cursor, "aria-label"));
+      parts.push(attr(cursor, "title"));
+      cursor = cursor.parentElement;
+    }
+    return parts.filter(Boolean).join(" ");
+  };
+  const actionTextOf = (element) => [
+    attr(element, "aria-label"),
+    attr(element, "title"),
+    String(element?.value || "").trim(),
+    textOf(element),
+    metadataOf(element)
+  ].filter(Boolean).join(" ");
+  const visible = (element) => {
+    if (!element) return false;
+    const rect = element.getBoundingClientRect();
+    const view = element.ownerDocument?.defaultView || window;
+    const style = view.getComputedStyle(element);
+    return rect.width >= 8 &&
+      rect.height >= 8 &&
+      rect.right > 0 &&
+      rect.bottom > 0 &&
+      rect.left < view.innerWidth &&
+      rect.top < view.innerHeight &&
+      style.display !== "none" &&
+      style.visibility !== "hidden" &&
+      Number(style.opacity || "1") > 0.05;
+  };
+  const clickableElement = (element) => {
+    if (!element) return null;
+    if (element.matches?.(buttonSelectors)) return element;
+    return element.closest?.(buttonSelectors) || null;
+  };
+  const contextOf = (element) => {
+    const modal = element.closest?.(modalSelectors);
+    if (modal && visible(modal)) return textOf(modal) + " " + metadataOf(modal);
+    let current = element.parentElement;
+    while (current && current !== current.ownerDocument.body) {
+      const text = textOf(current);
+      if (text.length >= 12 && text.length <= 1200) return text + " " + metadataOf(current);
+      current = current.parentElement;
+    }
+    return textOf(element.parentElement || element) + " " + metadataOf(element.parentElement || element);
+  };
+  const docs = [document];
+  for (const frame of Array.from(document.querySelectorAll("iframe"))) {
+    try {
+      if (frame.contentDocument) docs.push(frame.contentDocument);
+    } catch {}
+  }
+  for (const doc of docs) {
+    const seen = new Set();
+    for (const raw of Array.from(doc.querySelectorAll(buttonSelectors))) {
+      const candidate = clickableElement(raw);
+      if (!candidate || seen.has(candidate) || !visible(candidate)) continue;
+      seen.add(candidate);
+      const actionText = actionTextOf(candidate);
+      if (!safeDismissActionText.test(actionText)) continue;
+      if (dangerousActionText.test(actionText) && !/no thanks|no, thanks|不用了|不了|关闭|關閉|close|dismiss|not now|maybe later|稍后|稍後|skip|cancel/i.test(actionText)) continue;
+      const context = contextOf(candidate).slice(0, 2200);
+      const isSpotifyCookieDismiss = providerId === "spotify" && cookieContextText.test(context);
+      const isTrialDismiss = trialContextText.test(context);
+      if (!isSpotifyCookieDismiss && !isTrialDismiss) continue;
+      candidate.click();
+      return {
+        clicked: true,
+        label: actionText.slice(0, 80),
+        kind: isTrialDismiss ? "trial" : "cookie"
+      };
+    }
+  }
+  return { clicked: false };
+})()`;
+
 async function runConsentFeatures(targets) {
   const providerTargets = targets.filter((target) => isProviderWebPage(target) && !isFriendlyErrorPage(target));
   for (const target of providerTargets) {
     const result = await evaluate(target.webSocketDebuggerUrl, consentConfirmExpression).catch(() => null);
     if (result?.clicked) {
       console.log(`[tikpal-web-mode-guard] clicked consent ${providerId} ${result.label}`);
+      return;
+    }
+  }
+}
+
+async function runSafeDismissFeatures(targets) {
+  const providerTargets = targets.filter((target) => isProviderWebPage(target) && !isFriendlyErrorPage(target));
+  for (const target of providerTargets) {
+    const result = await evaluate(target.webSocketDebuggerUrl, safeDismissPromptExpression).catch(() => null);
+    if (result?.clicked) {
+      console.log(`[tikpal-web-mode-guard] dismissed ${providerId} ${result.kind || "prompt"} ${result.label || ""}`.trim());
       return;
     }
   }
@@ -1049,6 +1174,7 @@ async function guardOnce() {
   }));
   await runInputFocusKeyboard(targets);
   await runConsentFeatures(targets);
+  await runSafeDismissFeatures(targets);
   await runSafePromptFeatures(targets);
 }
 
@@ -1063,6 +1189,9 @@ if (process.argv.includes("--check")) {
   console.log("[tikpal-web-mode-guard] safe consent auto confirm: 1");
   console.log("[tikpal-web-mode-guard] cookie accept-all auto confirm: 1");
   console.log("[tikpal-web-mode-guard] all-provider consent polling: 1");
+  console.log("[tikpal-web-mode-guard] spotify cookie close dismiss: 1");
+  console.log("[tikpal-web-mode-guard] trial upsell safe dismiss: 1");
+  console.log("[tikpal-web-mode-guard] dangerous trial action blocked: 1");
   console.log(`[tikpal-web-mode-guard] input focus keyboard: ${onboardAutoFocus ? "1" : "0"}`);
   console.log(`[tikpal-web-mode-guard] empty page timeout: ${Math.round(emptyPageTimeoutMs / 1000)}s`);
   console.log(`[tikpal-web-mode-guard] qq auto confirm: ${qqAutoConfirm ? "1" : "0"}`);

@@ -101,23 +101,36 @@ const keyboardPlacementForTarget = (target: HTMLElement): KeyboardPlacement => {
 if (!window.__TIKPAL_REMOTE_MODE__ && localKioskHosts.has(window.location.hostname)) {
   let lastTextInput: HTMLElement | null = null;
   let onboardVisibleRequested = false;
+  let inputSessionActive = false;
   let outsidePointerDown = false;
+  let lastKeyboardEnabled: boolean | null = null;
+  let lastKeyboardRequestMs = 0;
   const setOnboardVisible = (enabled: boolean, target: HTMLElement | null = null) => {
     if (!enabled && !onboardVisibleRequested) return;
+    const now = Date.now();
+    const throttleMs = enabled ? 1000 : 250;
+    if (lastKeyboardEnabled === enabled && now - lastKeyboardRequestMs < throttleMs) return;
+    lastKeyboardEnabled = enabled;
+    lastKeyboardRequestMs = now;
     onboardVisibleRequested = enabled;
     const placement = enabled && target ? keyboardPlacementForTarget(target) : null;
     void sendWebModeAction({ type: "keyboard", enabled, ...(enabled ? { force: true } : {}), ...(placement ?? {}) }).catch(() => undefined);
   };
   const activeTextInput = () => document.activeElement instanceof HTMLElement
-    && Boolean(document.activeElement.closest(onboardInputSelector));
+    ? document.activeElement.closest<HTMLElement>(onboardInputSelector)
+    : null;
   const refocusTextInput = (target: HTMLElement | null) => {
     if (!target?.isConnected) return;
     target.focus({ preventScroll: true });
   };
+  const endInputSession = () => {
+    lastTextInput = null;
+    inputSessionActive = false;
+  };
   const keepTextInputFocus = (target: HTMLElement) => {
     for (const delay of [80, 260, 620, 1200, 1800]) {
       window.setTimeout(() => {
-        if (lastTextInput === target && !outsidePointerDown) {
+        if (lastTextInput === target && inputSessionActive && !outsidePointerDown) {
           refocusTextInput(target);
         }
       }, delay);
@@ -131,16 +144,17 @@ if (!window.__TIKPAL_REMOTE_MODE__ && localKioskHosts.has(window.location.hostna
     outsidePointerDown = !target;
     if (target) {
       lastTextInput = target;
+      inputSessionActive = true;
       setOnboardVisible(true, target);
       keepTextInputFocus(target);
     }
     if (!target) {
-      lastTextInput = null;
+      endInputSession();
       setOnboardVisible(false);
     }
   }, true);
   window.addEventListener("tikpal:keyboard-context-clear", () => {
-    lastTextInput = null;
+    endInputSession();
     outsidePointerDown = true;
     setOnboardVisible(false);
   });
@@ -149,28 +163,35 @@ if (!window.__TIKPAL_REMOTE_MODE__ && localKioskHosts.has(window.location.hostna
     if (target) {
       outsidePointerDown = false;
       lastTextInput = target;
+      inputSessionActive = true;
       setOnboardVisible(true, target);
       keepTextInputFocus(target);
     }
   }, true);
   document.addEventListener("focusout", () => {
     window.setTimeout(() => {
-      if (activeTextInput()) return;
-      if (lastTextInput && !outsidePointerDown) {
+      const active = activeTextInput();
+      if (active) {
+        lastTextInput = active;
+        inputSessionActive = true;
+        return;
+      }
+      if (inputSessionActive && lastTextInput?.isConnected && !outsidePointerDown) {
         refocusTextInput(lastTextInput);
         return;
       }
+      endInputSession();
       setOnboardVisible(false);
     }, 80);
   }, true);
   document.addEventListener("submit", () => {
-    lastTextInput = null;
+    endInputSession();
     setOnboardVisible(false);
   }, true);
   document.addEventListener("keydown", (event) => {
     const target = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>(onboardInputSelector) : null;
     if (event.key === "Enter" && target && !isMultilineInput(target)) {
-      lastTextInput = null;
+      endInputSession();
       setOnboardVisible(false);
     }
   }, true);
