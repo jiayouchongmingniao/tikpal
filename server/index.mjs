@@ -10221,14 +10221,25 @@ async function applyWebModeAction(action) {
   }
 
   const providerId = normalizeWebModeProviderId(action.provider);
+  const previousRuntimeState = await readWebModeRuntimeState();
+  let providerOpenCommandStarted = false;
   webModeOpenInFlight = true;
   try {
     await pauseTikpalForWebMode();
+    providerOpenCommandStarted = true;
     await runWebModeCommand("open", providerId);
     await writeWebModeRuntimeState({ activeProvider: providerId, lastError: null });
   } catch (error) {
     const message = formatWebModeCommandError(error, "open", providerId);
-    await writeWebModeRuntimeState({ lastError: message });
+    const clearFailedCurrentProvider = providerOpenCommandStarted
+      && previousRuntimeState.activeProvider === providerId
+      && /\bdid not open\b|\bdid not enter\b|\bdid not become ready\b/i.test(message);
+    await writeWebModeRuntimeState({
+      activeProvider: previousRuntimeState.activeProvider && !clearFailedCurrentProvider
+        ? previousRuntimeState.activeProvider
+        : null,
+      lastError: message
+    });
     throw new Error(message);
   } finally {
     webModeOpenInFlight = false;

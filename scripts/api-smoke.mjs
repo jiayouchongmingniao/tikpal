@@ -1903,6 +1903,16 @@ const keyboardEnv = args[0] === "keyboard"
   : [];
 appendFileSync(${JSON.stringify(fakeWebModeLogPath)}, [...args, ...keyboardEnv].join("\\t") + "\\n");
 `;
+  const fakeFailingWebModeCommandSource = (failedProvider) => `#!/usr/bin/env node
+import { appendFileSync } from "node:fs";
+
+const args = process.argv.slice(2);
+appendFileSync(${JSON.stringify(fakeWebModeLogPath)}, args.join("\\t") + "\\n");
+if (args[0] === "open" && args[1] === ${JSON.stringify(failedProvider)}) {
+  console.error("[tikpal-web-mode] ERROR: " + args[1] + " did not open");
+  process.exit(1);
+}
+`;
   await writeFile(fakeWebModeCommandPath, fakeWebModeCommandSource);
   await chmod(fakeWebModeCommandPath, 0o755);
 
@@ -2170,6 +2180,36 @@ appendFileSync(${JSON.stringify(fakeWebModeLogPath)}, [...args, ...keyboardEnv].
       assert(stateAfterProviderSwitch.body.audio.currentSource.id !== "web_mode", `web mode switch to ${providerId} should not become audio source truth`);
       assert(stateAfterProviderSwitch.body.audio.rememberedSource?.target === "bluetooth", `web mode switch to ${providerId} should preserve remembered Bluetooth`);
     }
+
+    await writeFile(fakeWebModeCommandPath, fakeFailingWebModeCommandSource("suno"));
+    const failedNewProvider = await requestFrom(baseUrl, "/api/v1/web-mode/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "open", provider: "suno" })
+    });
+    assert(failedNewProvider.response.status === 400, "failed web mode switch should return 400");
+    const stateAfterFailedNewProvider = await requestFrom(baseUrl, "/api/v1/web-mode/state");
+    assert(
+      stateAfterFailedNewProvider.body.activeProvider === "netease_music",
+      "failed web mode switch to a new provider should keep the previous provider active"
+    );
+    assert(stateAfterFailedNewProvider.body.lastError === "Suno did not open", "failed web mode switch should expose the failed provider message");
+
+    await writeFile(fakeWebModeCommandPath, fakeFailingWebModeCommandSource("netease_music"));
+    const failedCurrentProvider = await requestFrom(baseUrl, "/api/v1/web-mode/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "open", provider: "netease_music" })
+    });
+    assert(failedCurrentProvider.response.status === 400, "failed web mode reopen should return 400");
+    const stateAfterFailedCurrentProvider = await requestFrom(baseUrl, "/api/v1/web-mode/state");
+    assert(
+      stateAfterFailedCurrentProvider.body.activeProvider === null,
+      "failed web mode reopen of the current provider should clear stale active provider state"
+    );
+    assert(
+      stateAfterFailedCurrentProvider.body.lastError === "NetEase Cloud Music did not open",
+      "failed web mode reopen should expose the human provider label"
+    );
+    await writeFile(fakeWebModeCommandPath, fakeWebModeCommandSource);
   } finally {
     if (server.exitCode === null && server.signalCode === null) {
       server.kill("SIGTERM");

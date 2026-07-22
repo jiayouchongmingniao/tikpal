@@ -6151,6 +6151,14 @@ select {
   color: color-mix(in srgb, var(--provider-tone) 74%, #ffffff);
 }
 
+.web-mode-provider.is-failed {
+  border-color: rgba(255, 95, 95, 0.72);
+}
+
+.web-mode-provider.is-failed em {
+  color: #ff9f9f;
+}
+
 .web-mode-provider.is-connecting::after {
   content: "";
   position: absolute;

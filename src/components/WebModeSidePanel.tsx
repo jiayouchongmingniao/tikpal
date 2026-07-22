@@ -68,6 +68,13 @@ function readInitialOpeningProvider(): WebModeProviderId | null {
   return value && providerOrder.includes(value) ? value : null;
 }
 
+function inferFailedProviderFromError(error: string | null): WebModeProviderId | null {
+  if (!error) return null;
+  const normalizedError = error.trim().toLowerCase();
+  if (!/\bdid not open\b|\bdid not enter\b|\bdid not become ready\b/.test(normalizedError)) return null;
+  return providerOrder.find((id) => normalizedError.startsWith(providerLabels[id].toLowerCase())) ?? null;
+}
+
 export function WebModeSidePanel() {
   const [webMode, setWebMode] = useState<WebModeState | null>(null);
   const [tikpalState, setTikpalState] = useState<TikpalState | null>(null);
@@ -78,6 +85,8 @@ export function WebModeSidePanel() {
   const activeProvider = webMode?.activeProvider ?? null;
   const volumePercent = tikpalState?.system.volume.percent ?? 0;
   const providerTextScale = webMode?.settings.providerTextScale ?? 1.1;
+  const failedProvider = useMemo(() => inferFailedProviderFromError(error), [error]);
+  const effectiveActiveProvider = activeProvider && activeProvider !== failedProvider ? activeProvider : null;
 
   const providers = useMemo<WebModeProviderSummary[]>(() => {
     const byId = new Map(webMode?.providers.map((provider) => [provider.id, provider]) ?? []);
@@ -93,11 +102,11 @@ export function WebModeSidePanel() {
   }, [webMode?.providers]);
 
   const activeProviderLabel = useMemo(() => {
-    if (!activeProvider) return "No web player";
-    return providerLabels[activeProvider] ?? "Web player";
-  }, [activeProvider]);
+    if (!effectiveActiveProvider) return "No web player";
+    return providerLabels[effectiveActiveProvider] ?? "Web player";
+  }, [effectiveActiveProvider]);
 
-  const displayProviderLabel = pendingProvider ? providerLabels[pendingProvider] : activeProviderLabel;
+  const displayProviderLabel = pendingProvider ? providerLabels[pendingProvider] : failedProvider ? providerLabels[failedProvider] : activeProviderLabel;
 
   function applyWebModeState(next: WebModeState) {
     setWebMode(next);
@@ -265,21 +274,22 @@ export function WebModeSidePanel() {
         <div>
           <span>Left display</span>
           <strong>{displayProviderLabel}</strong>
-          <p>{pendingProvider ? "Connecting on the left display" : activeProvider ? (webMode?.settings.proxyEnabled ? webMode.settings.proxyUrl : "Direct browser access") : "Choose a web player below"}</p>
+          <p>{pendingProvider ? "Connecting on the left display" : failedProvider ? "Open failed" : effectiveActiveProvider ? (webMode?.settings.proxyEnabled ? webMode.settings.proxyUrl : "Direct browser access") : "Choose a web player below"}</p>
         </div>
       </section>
 
       <section className="web-mode-provider-grid" aria-label="Music web players">
         {providers.map((provider) => {
           const Icon = providerIcons[provider.id] ?? Music2;
-          const selected = activeProvider === provider.id;
+          const failed = failedProvider === provider.id && pendingProvider !== provider.id;
+          const selected = effectiveActiveProvider === provider.id;
           const connecting = pendingProvider === provider.id;
           const current = selected && Boolean(pendingProvider) && !connecting;
           const active = selected && !pendingProvider;
           return (
             <button
               key={provider.id}
-              className={`web-mode-provider ${active ? "is-active" : ""} ${current ? "is-current" : ""} ${connecting ? "is-connecting" : ""}`}
+              className={`web-mode-provider ${active ? "is-active" : ""} ${current ? "is-current" : ""} ${connecting ? "is-connecting" : ""} ${failed ? "is-failed" : ""}`}
               type="button"
               style={{ "--provider-tone": providerTones[provider.id] } as CSSProperties}
               aria-busy={connecting}
@@ -290,7 +300,7 @@ export function WebModeSidePanel() {
                 <Icon size={24} />
               </span>
               <strong>{provider.label}</strong>
-              <em>{connecting ? "Connecting" : current ? "Current" : active ? "Active" : provider.experimental ? "Experimental" : "Ready"}</em>
+              <em>{connecting ? "Connecting" : current ? "Current" : active ? "Active" : failed ? "Failed" : provider.experimental ? "Experimental" : "Ready"}</em>
             </button>
           );
         })}
