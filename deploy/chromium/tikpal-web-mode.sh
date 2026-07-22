@@ -32,6 +32,7 @@ fi
 : "${TIKPAL_WEB_MODE_PROXY_APPLY_TIMEOUT_SECONDS:=5}"
 : "${TIKPAL_WEB_MODE_PROVIDER_BOOTSTRAP_TIMEOUT_SECONDS:=7}"
 : "${TIKPAL_WEB_MODE_PROVIDER_READY_TIMEOUT_SECONDS:=18}"
+: "${TIKPAL_WEB_MODE_PROVIDER_WINDOW_TIMEOUT_SECONDS:=30}"
 : "${TIKPAL_WEB_MODE_LEFT_WINDOW:=1920x720}"
 : "${TIKPAL_WEB_MODE_LEFT_POSITION:=0,0}"
 : "${TIKPAL_WEB_MODE_PANEL_WINDOW:=640x720}"
@@ -1424,7 +1425,7 @@ open_provider() {
   fi
 
   DISPLAY="$TIKPAL_KIOSK_DISPLAY" "$TIKPAL_CHROMIUM_BIN" "${args[@]}" >/dev/null 2>&1 9>&- &
-  target_window="$(wait_for_profile_window "$provider_profile" 70 || true)"
+  target_window="$(wait_for_profile_window "$provider_profile" "$TIKPAL_WEB_MODE_PROVIDER_WINDOW_TIMEOUT_SECONDS" || true)"
   if [[ -z "$target_window" ]]; then
     [[ -n "$target_audio_bus" ]] && crossfade_helper set "$target_audio_bus" 0 >/dev/null 2>&1 || true
     close_transition_veil
@@ -1512,6 +1513,7 @@ check_runtime() {
   log "extension: $TIKPAL_WEB_MODE_EXTENSION_ENABLED $TIKPAL_WEB_MODE_EXTENSION_DIR"
   log "proxy apply timeout: ${TIKPAL_WEB_MODE_PROXY_APPLY_TIMEOUT_SECONDS}s"
   log "provider bootstrap timeout: ${TIKPAL_WEB_MODE_PROVIDER_BOOTSTRAP_TIMEOUT_SECONDS}s"
+  log "provider window timeout: ${TIKPAL_WEB_MODE_PROVIDER_WINDOW_TIMEOUT_SECONDS}s"
   log "provider debug: 127.0.0.1:$TIKPAL_WEB_MODE_PROVIDER_DEBUG_PORT"
   log "provider debug stride: per-provider"
   log "provider guard: $TIKPAL_WEB_MODE_PROVIDER_GUARD"

@@ -412,6 +412,7 @@ esac
   assert(kioskEnv.includes("TIKPAL_KIOSK_WATCHDOG_PAGE_HEARTBEAT_URL=http://127.0.0.1:8787/api/v1/kiosk/heartbeat"), "kiosk env should point the watchdog at the loopback page heartbeat API");
   assert(kioskEnv.includes("TIKPAL_KIOSK_WATCHDOG_WEB_MODE_HEARTBEAT_BYPASS=1"), "kiosk env should not restart the kiosk for stale page heartbeat while Explore is active");
   assert(kioskEnv.includes("TIKPAL_KIOSK_WATCHDOG_REBOOT_AFTER_RESTARTS=3"), "kiosk env should document persistent display-failure reboot escalation");
+  assert(kioskEnv.includes("TIKPAL_KIOSK_RESET_WEB_MODE_ON_START=1"), "kiosk env should clear stale Explore runtime state when the physical kiosk starts");
   assert(kioskEnv.includes("TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE=auto"), "kiosk env should auto-detect the Chromium ALSA output");
   assert(!kioskEnv.includes("TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE=_audioout"), "kiosk env should not default Chromium Scene Sound to Loopback-backed _audioout");
   assert(kioskEnv.includes("TIKPAL_WEB_MODE_ALSA_OUTPUT_DEVICE=auto"), "kiosk env should auto-detect the Explore ALSA output");
@@ -426,6 +427,7 @@ esac
   assert(kioskEnv.includes("TIKPAL_WEB_MODE_EXTENSION_ENABLED=1"), "kiosk env should enable the dynamic Explore proxy extension by default");
   assert(kioskEnv.includes("TIKPAL_WEB_MODE_PROXY_APPLY_TIMEOUT_SECONDS=5"), "kiosk env should bound dynamic proxy confirmation");
   assert(kioskEnv.includes("TIKPAL_WEB_MODE_PROVIDER_BOOTSTRAP_TIMEOUT_SECONDS=7"), "kiosk env should bound provider bootstrap navigation");
+  assert(kioskEnv.includes("TIKPAL_WEB_MODE_PROVIDER_WINDOW_TIMEOUT_SECONDS=30"), "kiosk env should bound provider window detection below the API open timeout");
   assert(kioskEnv.includes("TIKPAL_WEB_MODE_PROVIDER_TEXT_SCALE=1.10"), "kiosk env should default Explore provider text scale to 110%");
   const kioskLauncher = await readFile(path.join(ROOT, "deploy/chromium/launch-tikpal-kiosk.sh"), "utf8");
   const kioskSession = await readFile(path.join(ROOT, "deploy/chromium/start-tikpal-kiosk-session.sh"), "utf8");
@@ -512,10 +514,13 @@ esac
   assert(kioskSession.includes("ActiveByDefault=False") && kioskSession.includes("ShareInputState=No"), "kiosk input should start in English without sharing state across applications");
   assert(kioskSession.includes('Font="AR PL UMing CN 12"'), "Fcitx5 should render readable Chinese candidates on the physical display");
   assert(kioskSession.includes("fcitx5 -d --replace"), "kiosk session should start Fcitx5 before Chromium");
+  assert(kioskSession.includes("TIKPAL_KIOSK_RESET_WEB_MODE_ON_START") && kioskSession.includes('"$SCRIPT_DIR/tikpal-web-mode.sh" close'), "kiosk session should close Explore and clear provider state before launching the main kiosk");
   assert(webModeScript.includes("nohup \"$SCRIPT_DIR/tikpal-web-mode.sh\" guard"), "web mode should keep the window guard alive after the launcher exits");
   assert(webModeScript.includes("detect_non_hdmi_card_id"), "web mode should detect the actual non-HDMI ALSA card");
   assert(webModeScript.includes("tikpal-audio-adapt.sh") && webModeScript.includes("resolve-browser"), "web mode should use the shared audio adapter for auto ALSA output");
   assert(webModeScript.includes("resolve_web_mode_audio_devices()"), "web mode should lazily resolve auto ALSA output for provider windows");
+  assert(webModeScript.includes("TIKPAL_WEB_MODE_PROVIDER_WINDOW_TIMEOUT_SECONDS") && webModeScript.includes('wait_for_profile_window "$provider_profile" "$TIKPAL_WEB_MODE_PROVIDER_WINDOW_TIMEOUT_SECONDS"'), "web mode should bound provider window detection so failures can clean up before the API open timeout");
+  assert(serverSource.includes("WEB_MODE_OPEN_COMMAND_TIMEOUT_MS") && serverSource.includes('action === "open" ? WEB_MODE_OPEN_COMMAND_TIMEOUT_MS : WEB_MODE_COMMAND_TIMEOUT_MS'), "API should let provider-open cleanup run longer than generic web mode commands");
   assert(
     webModeScript.indexOf("resolve_web_mode_audio_devices", webModeScript.indexOf("open_provider()")) <
       webModeScript.indexOf("crossfade_available", webModeScript.indexOf("open_provider()")),

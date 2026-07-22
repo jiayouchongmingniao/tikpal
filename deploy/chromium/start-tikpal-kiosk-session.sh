@@ -27,7 +27,21 @@ fi
 
 : "${TIKPAL_KIOSK_DISPLAY:=:0}"
 : "${TIKPAL_KIOSK_X_COMMAND_TIMEOUT_SECONDS:=5}"
+: "${TIKPAL_KIOSK_RESET_WEB_MODE_ON_START:=1}"
 export DISPLAY="$TIKPAL_KIOSK_DISPLAY"
+
+is_enabled() {
+  local value
+  value="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+  case "$value" in
+    1|true|yes|on|enabled)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
 
 configure_fcitx5() {
   command -v fcitx5 >/dev/null 2>&1 || return 0
@@ -83,6 +97,16 @@ run_x_command() {
   "$@"
 }
 
+reset_web_mode_runtime() {
+  if ! is_enabled "$TIKPAL_KIOSK_RESET_WEB_MODE_ON_START"; then
+    return 0
+  fi
+  if [[ ! -x "$SCRIPT_DIR/tikpal-web-mode.sh" ]]; then
+    return 0
+  fi
+  TIKPAL_KIOSK_SKIP_ENV_SOURCE=1 "$SCRIPT_DIR/tikpal-web-mode.sh" close >/dev/null 2>&1 || true
+}
+
 if command -v xset >/dev/null 2>&1; then
   run_x_command xset -dpms || true
   run_x_command xset s off || true
@@ -90,5 +114,6 @@ if command -v xset >/dev/null 2>&1; then
 fi
 
 configure_fcitx5
+reset_web_mode_runtime
 
 exec "$SCRIPT_DIR/launch-tikpal-kiosk.sh"

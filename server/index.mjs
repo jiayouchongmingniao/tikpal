@@ -230,6 +230,8 @@ const AUDIO_SOURCE_MEMORY_STATE_PATH = resolve(process.env.TIKPAL_AUDIO_SOURCE_M
 const WEB_MODE_SETTINGS_PATH = resolve(process.env.TIKPAL_WEB_MODE_SETTINGS_PATH ?? resolve(process.cwd(), ".tikpal", "web-mode-settings.json"));
 const WEB_MODE_STATE_PATH = resolve(process.env.TIKPAL_WEB_MODE_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "web-mode-state.json"));
 const WEB_MODE_COMMAND = process.env.TIKPAL_WEB_MODE_COMMAND ?? (API_MODE === "mpc" ? "./deploy/chromium/tikpal-web-mode.sh" : "");
+const WEB_MODE_COMMAND_TIMEOUT_MS = Number(process.env.TIKPAL_WEB_MODE_COMMAND_TIMEOUT_MS ?? 45_000);
+const WEB_MODE_OPEN_COMMAND_TIMEOUT_MS = Number(process.env.TIKPAL_WEB_MODE_OPEN_COMMAND_TIMEOUT_MS ?? 110_000);
 const WEB_MODE_PROXY_TEST_URL = process.env.TIKPAL_WEB_MODE_PROXY_TEST_URL ?? "https://open.spotify.com/";
 const WEB_MODE_DEFAULT_PROXY_URL = process.env.TIKPAL_WEB_MODE_DEFAULT_PROXY_URL ?? "http://192.168.10.103:7897";
 const WEB_MODE_PROVIDER_TEXT_SCALE_VALUES = [1, 1.1, 1.2];
@@ -10066,7 +10068,11 @@ async function runWebModeCommand(action, providerId = "", env = {}) {
     ? `${WEB_MODE_COMMAND} ${shellQuote(action)} ${shellQuote(providerId)}`
     : `${WEB_MODE_COMMAND} ${shellQuote(action)}`;
   const commandWithEnv = envPrefix ? `${envPrefix} ${command}` : command;
-  await runCommand(commandWithEnv, { allowFailure: false, timeout: 45_000, includeStdoutOnFailure: true });
+  await runCommand(commandWithEnv, {
+    allowFailure: false,
+    timeout: action === "open" ? WEB_MODE_OPEN_COMMAND_TIMEOUT_MS : WEB_MODE_COMMAND_TIMEOUT_MS,
+    includeStdoutOnFailure: true
+  });
 }
 
 function isWebModeSwitchingError(error) {
