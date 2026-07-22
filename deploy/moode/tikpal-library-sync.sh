@@ -18,12 +18,16 @@ run_helper() {
 
 case "$MODE" in
   apply|sync)
-    run_helper "$LOCAL_SYNC_HELPER" apply
-    run_helper "$USB_SYNC_HELPER" apply
+    status=0
+    run_helper "$LOCAL_SYNC_HELPER" apply || status=$?
+    run_helper "$USB_SYNC_HELPER" apply || status=$?
+    exit "$status"
     ;;
   check)
-    run_helper "$LOCAL_SYNC_HELPER" check
-    run_helper "$USB_SYNC_HELPER" check
+    status=0
+    run_helper "$LOCAL_SYNC_HELPER" check || status=$?
+    run_helper "$USB_SYNC_HELPER" check || status=$?
+    exit "$status"
     ;;
   *)
     printf 'Usage: %s [apply|sync|check]\n' "$0" >&2

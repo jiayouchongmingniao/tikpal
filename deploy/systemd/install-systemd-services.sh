@@ -128,6 +128,7 @@ install_onboard_themes() {
 ensure_library_scan_env() {
   local env_file="$APP_DIR/.env"
   local helper="$APP_DIR/deploy/moode/tikpal-library-sync.sh"
+  local usb_helper="$APP_DIR/deploy/moode/tikpal-usb-library-sync.sh"
   [[ -f "$env_file" ]] || return 0
   local current
   current="$(sed -n 's/^TIKPAL_LIBRARY_SCAN_COMMAND=//p' "$env_file" | tail -n 1)"
@@ -135,13 +136,27 @@ ensure_library_scan_env() {
   current="${current#\"}"
   current="${current%\'}"
   current="${current#\'}"
-  if [[ -n "$current" && "$current" != *"tikpal-usb-library-sync.sh"* ]]; then
-    return 0
+  local updated=0
+  if [[ -z "$current" || "$current" == *"tikpal-usb-library-sync.sh"* ]]; then
+    {
+      printf '\n# Tikpal Library Scan keeps repo Local music and removable USB roots visible to MPD.\n'
+      printf 'TIKPAL_LIBRARY_SCAN_COMMAND="%s"\n' "$helper"
+    } >> "$env_file"
+    updated=1
   fi
-  {
-    printf '\n# Tikpal Library Scan keeps repo Local music and removable USB roots visible to MPD.\n'
-    printf 'TIKPAL_LIBRARY_SCAN_COMMAND="%s"\n' "$helper"
-  } >> "$env_file"
+  if ! grep -q '^TIKPAL_USB_LIBRARY_SCAN_COMMAND=' "$env_file"; then
+    printf 'TIKPAL_USB_LIBRARY_SCAN_COMMAND="%s"\n' "$usb_helper" >> "$env_file"
+    updated=1
+  fi
+  if ! grep -q '^TIKPAL_USB_LIBRARY_AUTO_UPDATE=' "$env_file"; then
+    printf 'TIKPAL_USB_LIBRARY_AUTO_UPDATE=1\n' >> "$env_file"
+    updated=1
+  fi
+  if ! grep -q '^TIKPAL_USB_LIBRARY_AUTO_UPDATE_MIN_MS=' "$env_file"; then
+    printf 'TIKPAL_USB_LIBRARY_AUTO_UPDATE_MIN_MS=15000\n' >> "$env_file"
+    updated=1
+  fi
+  [[ "$updated" -eq 1 ]] || return 0
   chown "$SERVICE_USER":"$SERVICE_USER" "$env_file" || true
   echo "updated $env_file with Tikpal library sync command"
 }

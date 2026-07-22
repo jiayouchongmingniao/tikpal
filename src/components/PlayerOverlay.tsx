@@ -178,6 +178,7 @@ export function PlayerOverlay({
   const [selectedLibraryTrackId, setSelectedLibraryTrackId] = useState<string | null>(null);
   const [manualPanelSelection, setManualPanelSelection] = useState(false);
   const [localLibraryTracks, setLocalLibraryTracks] = useState<AudioLibraryTrackSummary[]>([]);
+  const [nasLibraryTracks, setNasLibraryTracks] = useState<AudioLibraryTrackSummary[]>([]);
   const [usbLibraryTracks, setUsbLibraryTracks] = useState<AudioLibraryTrackSummary[]>([]);
   const [libraryLoading, setLibraryLoading] = useState(false);
   const [libraryError, setLibraryError] = useState<string | null>(null);
@@ -227,24 +228,6 @@ export function PlayerOverlay({
   const currentSource = audio.currentSource;
   const selectedPanelConfig = primaryPanels.find((panel) => panel.id === selectedPrimaryPanel) ?? primaryPanels[0];
   const playbackSource = getPlaybackSourceSummary(playback, audio);
-  const nasLibraryTracks = useMemo<AudioLibraryTrackSummary[]>(() => (
-    playback.queuePreview.map((entry) => ({
-      id: `nas-${entry.id}`,
-      title: entry.title,
-      artist: entry.artist,
-      album: entry.album || "NAS Library",
-      categoryId: "nas",
-      subCategory: entry.active ? "Now Playing" : "Queue",
-      durationSeconds: entry.durationSeconds,
-      path: null,
-      albumArtUrl: null,
-      albumArtLabel: null,
-      albumArtScope: null,
-      active: entry.active,
-      storage: "nas",
-      favorite: false
-    }))
-  ), [playback.queuePreview]);
   const localCategoryCounts = useMemo(() => (
     localLibraryTracks.reduce<Record<AudioLibraryCategoryId, number>>(
       (counts, track) => {
@@ -438,6 +421,7 @@ export function PlayerOverlay({
     void fetchAudioLibrary({ storage: "all", limit: 500 }, requestSignal)
       .then((library) => {
         setLocalLibraryTracks(library.tracks.filter((track) => track.storage === "local"));
+        setNasLibraryTracks(library.tracks.filter((track) => track.storage === "nas"));
         setUsbLibraryTracks(library.tracks.filter((track) => track.storage === "usb"));
       })
       .catch((error) => {
@@ -555,7 +539,7 @@ export function PlayerOverlay({
       case "local":
         return localLibraryTracks.length;
       case "nas":
-        return system.library.trackCount || nasLibraryTracks.length;
+        return nasLibraryTracks.length;
       case "usb":
         return usbLibraryTracks.length;
       case "favorites":

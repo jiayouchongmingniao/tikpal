@@ -395,8 +395,8 @@ export function QuickSettingsOverlay({
 
   const librarySourceKind = system.library.source.trim().toLowerCase();
   const libraryTrackCount = Math.max(0, system.library.trackCount);
-  const localTrackCount = libraryStorageCounts.local ?? (librarySourceKind === "nas" || librarySourceKind === "usb" ? 0 : libraryTrackCount);
-  const nasTrackCount = libraryStorageCounts.nas ?? (librarySourceKind === "nas" ? libraryTrackCount : 0);
+  const localTrackCount = libraryStorageCounts.local ?? (librarySourceKind === "local" ? libraryTrackCount : 0);
+  const nasTrackCount = libraryStorageCounts.nas ?? 0;
   const usbTrackCount = libraryStorageCounts.usb ?? (librarySourceKind === "usb" ? libraryTrackCount : 0);
   const scannedLibraryTrackCount = localTrackCount + usbTrackCount;
   const nasCardTone: CardTone = nasTrackCount > 0 ? "cyan" : "neutral";

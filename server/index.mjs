@@ -221,6 +221,9 @@ const USB_LIBRARY_ROOTS = parseEnvPathList(process.env.TIKPAL_USB_LIBRARY_ROOTS)
 const USB_LIBRARY_AUTO_ROOTS = parseEnvPathList(process.env.TIKPAL_USB_LIBRARY_AUTO_ROOTS || "/media,/run/media");
 const USB_LIBRARY_MPD_PREFIX = normalizeSafeRelativePath(process.env.TIKPAL_USB_LIBRARY_MPD_PREFIX ?? "USB") ?? "USB";
 const USB_LIBRARY_MAX_TRACKS = parseEnvPositiveInteger(process.env.TIKPAL_USB_LIBRARY_MAX_TRACKS, 500);
+const USB_LIBRARY_SCAN_COMMAND = process.env.TIKPAL_USB_LIBRARY_SCAN_COMMAND ?? (API_MODE === "mpc" ? "./deploy/moode/tikpal-usb-library-sync.sh" : "");
+const USB_LIBRARY_AUTO_UPDATE = parseEnvBoolean(process.env.TIKPAL_USB_LIBRARY_AUTO_UPDATE ?? "1");
+const USB_LIBRARY_AUTO_UPDATE_MIN_MS = parseEnvPositiveInteger(process.env.TIKPAL_USB_LIBRARY_AUTO_UPDATE_MIN_MS, 15_000);
 const LOCAL_PLAYLIST_INDEX_PATH = resolve(LOCAL_LIBRARY_ROOT, "_metadata", "playlist_index.json");
 const LOCAL_PLAYLIST_ROOT = resolve(LOCAL_LIBRARY_ROOT, "_playlists");
 const MUSIC_LIBRARY_STATE_PATH = resolve(process.env.TIKPAL_MUSIC_LIBRARY_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "music-library-state.json"));
@@ -523,6 +526,9 @@ let activeMpcRadioStationCache = null;
 let audioSourceMemoryStateCache = null;
 let airplayDirectMetadataRefreshPromise = null;
 let airplayDirectMetadataRefreshAtMs = 0;
+let usbLibraryScanPromise = null;
+let lastUsbLibraryAutoUpdateCheckAt = 0;
+let lastUsbLibraryAutoUpdateSignature = "";
 let sceneContextGeoCache = null;
 let sceneContextGeoRefreshPromise = null;
 let sceneContextWeatherCache = null;
@@ -4770,13 +4776,101 @@ function isPlayableUsbLibraryMpdPath(trackPath) {
   return Boolean(fileName && !fileName.startsWith(".") && !fileName.startsWith("._") && USB_LIBRARY_AUDIO_EXTENSIONS.has(posix.extname(safePath).toLowerCase()));
 }
 
-async function resolveMpdLocalLibraryTrackPath(localTrackPath) {
+function buildUsbLibraryMpdRootsFromTracks(usbTracks) {
+  const roots = [];
+  const seen = new Set();
+  for (const track of usbTracks) {
+    const safePath = normalizeSafeRelativePath(track?.path);
+    if (!safePath || !isUsbLibraryTrackPath(safePath)) continue;
+    const parts = safePath.split("/");
+    const rootPath = parts.length >= 2 ? posix.join(parts[0], parts[1]) : parts[0];
+    if (rootPath && !seen.has(rootPath)) {
+      seen.add(rootPath);
+      roots.push(rootPath);
+    }
+  }
+  return roots;
+}
+
+async function hasMpdUsbLibraryRoot(rootPath) {
+  const safeRoot = normalizeSafeRelativePath(rootPath);
+  if (!safeRoot || !isUsbLibraryTrackPath(safeRoot)) return false;
+  const listed = await runMpc(["listall", safeRoot], { allowFailure: true });
+  return listed
+    .split("\n")
+    .map((line) => line.trim())
+    .some((line) => line === safeRoot || line.startsWith(`${safeRoot}/`));
+}
+
+async function runUsbLibraryScanCommand(label, { allowFailure = false } = {}) {
+  if (API_MODE !== "mpc") return false;
+  if (usbLibraryScanPromise) {
+    try {
+      await usbLibraryScanPromise;
+      return true;
+    } catch (error) {
+      if (!allowFailure) throw error;
+      return false;
+    }
+  }
+
+  lastSystemLibraryScanRequestedAt = Date.now();
+  const command = USB_LIBRARY_SCAN_COMMAND.trim();
+  usbLibraryScanPromise = (async () => {
+    if (command) {
+      await runSystemActionCommand(command, label);
+    } else {
+      await runMpc(["update", USB_LIBRARY_MPD_PREFIX]);
+    }
+  })();
+
+  try {
+    await usbLibraryScanPromise;
+    return true;
+  } catch (error) {
+    if (!allowFailure) throw error;
+    console.warn(`tikpal-api ${label} failed: ${error instanceof Error ? error.message : "unknown error"}`);
+    return false;
+  } finally {
+    usbLibraryScanPromise = null;
+  }
+}
+
+function maybeScheduleUsbLibraryAutoUpdate(usbTracks) {
+  if (API_MODE !== "mpc" || !USB_LIBRARY_AUTO_UPDATE || usbTracks.length === 0) return;
+  const roots = buildUsbLibraryMpdRootsFromTracks(usbTracks);
+  if (roots.length === 0) return;
+  const signature = `${roots.join("|")}:${usbTracks.length}`;
+  const now = Date.now();
+  if (signature === lastUsbLibraryAutoUpdateSignature && now - lastUsbLibraryAutoUpdateCheckAt < USB_LIBRARY_AUTO_UPDATE_MIN_MS) {
+    return;
+  }
+  lastUsbLibraryAutoUpdateSignature = signature;
+  lastUsbLibraryAutoUpdateCheckAt = now;
+
+  void (async () => {
+    const missingRoots = [];
+    for (const root of roots) {
+      if (!await hasMpdUsbLibraryRoot(root)) missingRoots.push(root);
+    }
+    if (missingRoots.length === 0) return;
+    await runUsbLibraryScanCommand(`usb library auto update (${missingRoots.join(", ")})`, { allowFailure: true });
+  })().catch((error) => {
+    console.warn(`tikpal-api USB library auto update failed: ${error instanceof Error ? error.message : "unknown error"}`);
+  });
+}
+
+async function resolveMpdLocalLibraryTrackPath(localTrackPath, options = {}) {
   const candidates = buildMpdLocalLibraryTrackPathCandidates(localTrackPath);
   for (const candidate of candidates) {
     const listed = await runMpc(["listall", candidate], { allowFailure: true });
     if (listed.split("\n").map((line) => line.trim()).includes(candidate)) {
       return candidate;
     }
+  }
+  if (options.allowUsbRefresh !== false && isUsbLibraryTrackPath(localTrackPath)) {
+    await runUsbLibraryScanCommand("usb library track refresh", { allowFailure: true });
+    return await resolveMpdLocalLibraryTrackPath(localTrackPath, { ...options, allowUsbRefresh: false });
   }
   return null;
 }
@@ -4806,7 +4900,7 @@ function buildMpdLibraryQueueRootCandidates(startTrackPath) {
   return roots;
 }
 
-async function resolveMpdLocalLibraryQueue(startTrackPath) {
+async function resolveMpdLocalLibraryQueue(startTrackPath, options = {}) {
   const safeStartPath = normalizeLocalLibraryStateTrackPath(startTrackPath);
   if (!safeStartPath) return null;
 
@@ -4831,7 +4925,16 @@ async function resolveMpdLocalLibraryQueue(startTrackPath) {
     };
   }
 
+  if (isUsbQueue && options.allowUsbRefresh !== false) {
+    await runUsbLibraryScanCommand("usb library queue refresh", { allowFailure: true });
+    return await resolveMpdLocalLibraryQueue(safeStartPath, { ...options, allowUsbRefresh: false });
+  }
+
   return null;
+}
+
+function isNasLibrarySource(source) {
+  return /\b(nas|smb|nfs)\b/i.test(String(source ?? ""));
 }
 
 function buildNasAudioLibraryTracks(playback) {
@@ -4926,7 +5029,10 @@ async function getAudioLibraryPayload(searchParams) {
   const musicState = readMusicLibraryStateSync();
   const localTracks = await readLocalAudioLibraryTracks({ musicState });
   const usbTracks = await readUsbAudioLibraryTracks();
-  const nasTracks = buildNasAudioLibraryTracks(state.playback);
+  maybeScheduleUsbLibraryAutoUpdate(usbTracks);
+  const nasTracks = isNasLibrarySource(state.system.library.source)
+    ? buildNasAudioLibraryTracks(state.playback)
+    : [];
   const favoriteTracks = localTracks
     .filter((track) => track.favorite)
     .map((track) => ({ ...track, storage: "favorites" }));
@@ -4967,7 +5073,7 @@ async function getAudioLibraryPayload(searchParams) {
       {
         id: "nas",
         label: "NAS",
-        trackCount: state.system.library.trackCount || nasTracks.length,
+        trackCount: nasTracks.length,
         categories: []
       },
       {

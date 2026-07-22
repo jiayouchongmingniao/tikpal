@@ -116,7 +116,7 @@ apply_sync() {
     exit 1
   fi
   "${SUDO[@]}" mkdir -p "$target_dir"
-  "${SUDO[@]}" "$RSYNC_BIN" -a --delete --exclude '._*' "$LOCAL_SOURCE_ROOT/" "$target_dir/"
+  "${SUDO[@]}" "$RSYNC_BIN" -r --links --delete --exclude '._*' "$LOCAL_SOURCE_ROOT/" "$target_dir/"
   apply_permissions "$target_dir"
   update_mpd "$safe_prefix"
 
