@@ -59,6 +59,7 @@ interface DragState {
   pointerId: number;
   startY: number;
   startPercent: number;
+  input: "pointer" | "touch";
 }
 
 interface AdjustOverlayState {
@@ -1012,7 +1013,7 @@ export function AmbientScreen({
         const target = requestState.queued;
         requestState.queued = null;
 
-        if (target === null || target === requestState.lastSent) {
+        if (target === null) {
           requestState.inFlight = false;
           return;
         }
@@ -1039,7 +1040,7 @@ export function AmbientScreen({
           ));
         }
 
-        if (requestState.queued !== null && requestState.queued !== requestState.lastSent) {
+        if (requestState.queued !== null) {
           await sendNext();
           return;
         }
@@ -1073,14 +1074,15 @@ export function AmbientScreen({
     }
   }
 
-  function startAdjust(channel: AmbientAdjustChannel, pointerId: number, startY: number) {
+  function startAdjust(channel: AmbientAdjustChannel, pointerId: number, startY: number, input: DragState["input"] = "pointer") {
     const startPercent = channel === "volume" ? system.volume.percent : brightnessPercent;
     clearAdjustDismissTimer();
     dragStateRef.current = {
       channel,
       pointerId,
       startY,
-      startPercent
+      startPercent,
+      input
     };
     setAdjustOverlay({
       channel,
@@ -1180,16 +1182,17 @@ export function AmbientScreen({
 
       event.preventDefault();
       event.stopPropagation();
+      if (dragStateRef.current) return;
       if (event.currentTarget.setPointerCapture) {
         event.currentTarget.setPointerCapture(event.pointerId);
       }
-      startAdjust(channel, event.pointerId, event.clientY);
+      startAdjust(channel, event.pointerId, event.clientY, "pointer");
     };
   }
 
   const handleZonePointerMove = useCallback<React.PointerEventHandler<HTMLDivElement>>((event) => {
     const dragState = dragStateRef.current;
-    if (!dragState || dragState.pointerId !== event.pointerId) return;
+    if (!dragState || dragState.input !== "pointer" || dragState.pointerId !== event.pointerId) return;
     event.preventDefault();
     event.stopPropagation();
     updateAdjust(event.clientY);
@@ -1197,7 +1200,7 @@ export function AmbientScreen({
 
   const handleZonePointerUp = useCallback<React.PointerEventHandler<HTMLDivElement>>((event) => {
     const dragState = dragStateRef.current;
-    if (!dragState || dragState.pointerId !== event.pointerId) return;
+    if (!dragState || dragState.input !== "pointer" || dragState.pointerId !== event.pointerId) return;
     event.preventDefault();
     event.stopPropagation();
     updateAdjust(event.clientY);
@@ -1206,7 +1209,69 @@ export function AmbientScreen({
 
   const handleZonePointerCancel = useCallback<React.PointerEventHandler<HTMLDivElement>>((event) => {
     const dragState = dragStateRef.current;
-    if (!dragState || dragState.pointerId !== event.pointerId) return;
+    if (!dragState || dragState.input !== "pointer" || dragState.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    finishAdjust();
+  }, []);
+
+  function getChangedTouch(event: React.TouchEvent<HTMLDivElement>) {
+    return event.changedTouches[0] ?? event.touches[0] ?? null;
+  }
+
+  function findTrackedTouch(event: React.TouchEvent<HTMLDivElement>, pointerId: number) {
+    return [...Array.from(event.touches), ...Array.from(event.changedTouches)].find((touch) => touch.identifier === pointerId) ?? null;
+  }
+
+  function handleZoneTouchStart(channel: AmbientAdjustChannel): React.TouchEventHandler<HTMLDivElement> {
+    return (event) => {
+      if (channel === "brightness" && !system.display.controllable) {
+        event.preventDefault();
+        event.stopPropagation();
+        setAdjustOverlay({
+          channel,
+          percent: brightnessPercent,
+          error: "DDC/CI brightness unavailable"
+        });
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      if (dragStateRef.current) return;
+
+      const touch = getChangedTouch(event);
+      if (!touch) return;
+      startAdjust(channel, touch.identifier, touch.clientY, "touch");
+    };
+  }
+
+  const handleZoneTouchMove = useCallback<React.TouchEventHandler<HTMLDivElement>>((event) => {
+    const dragState = dragStateRef.current;
+    if (!dragState || dragState.input !== "touch") return;
+    const touch = findTrackedTouch(event, dragState.pointerId);
+    if (!touch) return;
+    event.preventDefault();
+    event.stopPropagation();
+    updateAdjust(touch.clientY);
+  }, [dispatchAdjust]);
+
+  const handleZoneTouchEnd = useCallback<React.TouchEventHandler<HTMLDivElement>>((event) => {
+    const dragState = dragStateRef.current;
+    if (!dragState || dragState.input !== "touch") return;
+    const touch = findTrackedTouch(event, dragState.pointerId);
+    if (!touch) return;
+    event.preventDefault();
+    event.stopPropagation();
+    updateAdjust(touch.clientY);
+    finishAdjust();
+  }, [dispatchAdjust]);
+
+  const handleZoneTouchCancel = useCallback<React.TouchEventHandler<HTMLDivElement>>((event) => {
+    const dragState = dragStateRef.current;
+    if (!dragState || dragState.input !== "touch") return;
+    const touch = findTrackedTouch(event, dragState.pointerId);
+    if (!touch) return;
     event.preventDefault();
     event.stopPropagation();
     finishAdjust();
@@ -1335,6 +1400,10 @@ export function AmbientScreen({
         onPointerMove={handleZonePointerMove}
         onPointerUp={handleZonePointerUp}
         onPointerCancel={handleZonePointerCancel}
+        onTouchStart={handleZoneTouchStart("brightness")}
+        onTouchMove={handleZoneTouchMove}
+        onTouchEnd={handleZoneTouchEnd}
+        onTouchCancel={handleZoneTouchCancel}
         onWheel={handleZoneWheel("brightness")}
       />
       <div
@@ -1346,6 +1415,10 @@ export function AmbientScreen({
         onPointerMove={handleZonePointerMove}
         onPointerUp={handleZonePointerUp}
         onPointerCancel={handleZonePointerCancel}
+        onTouchStart={handleZoneTouchStart("volume")}
+        onTouchMove={handleZoneTouchMove}
+        onTouchEnd={handleZoneTouchEnd}
+        onTouchCancel={handleZoneTouchCancel}
         onWheel={handleZoneWheel("volume")}
       />
 

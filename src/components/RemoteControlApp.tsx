@@ -92,15 +92,11 @@ export function RemoteControlApp() {
 
   const applyAction = useCallback(async (action: RemoteActionRequest) => {
     const actionKey = remoteKey.trim();
-    if (!actionKey) {
-      setActionError("Enter the Remote key before using controls");
-      return;
-    }
     storeRemoteKey(actionKey);
     setPendingAction(action.type);
     setActionError(null);
     try {
-      const nextState = await sendRemoteAction(action, actionKey);
+      const nextState = await sendRemoteAction(action, actionKey || undefined);
       setRemoteState(nextState);
     } catch (caught) {
       setActionError(caught instanceof Error ? caught.message : "Remote action failed");
@@ -194,10 +190,10 @@ export function RemoteControlApp() {
               onKeyDown={(event) => {
                 if (event.key === "Enter") handleKeySave();
               }}
-              placeholder="X-Tikpal-Key"
+              placeholder="Optional X-Tikpal-Key"
             />
           </label>
-          <strong>{remoteKey.trim() ? "Ready" : "Required"}</strong>
+          <strong>{remoteKey.trim() ? "Ready" : "Auto"}</strong>
         </section>
 
         {visibleError ? (
@@ -235,6 +231,7 @@ export function RemoteControlApp() {
             min="0"
             max="100"
             value={volumeDraft}
+            data-remote-volume-slider
             onChange={(event) => handleVolumeDraftChange(Number(event.currentTarget.value))}
             onPointerUp={commitVolume}
             onTouchEnd={commitVolume}

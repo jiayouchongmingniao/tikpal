@@ -125,6 +125,20 @@ function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function generatedCoverSquareRootExpression(selector) {
+  return `
+    (() => {
+      const src = document.querySelector(${JSON.stringify(selector)})?.getAttribute('src') ?? "";
+      if (!src.startsWith('data:image/svg+xml')) return false;
+      const encodedSvg = src.includes(",") ? src.slice(src.indexOf(",") + 1) : src;
+      const svg = decodeURIComponent(encodedSvg);
+      return /<rect\\s+width="1200"\\s+height="1200"\\s+fill=/.test(svg)
+        && !/<rect\\s+width="1200"\\s+height="1200"\\s+rx=/.test(svg)
+        && !/clipPath\\s+id="posterClip"/.test(svg);
+    })()
+  `;
+}
+
 async function waitForExit(child, timeoutMs = 5000) {
   if (child.exitCode !== null || child.signalCode !== null) return true;
   return await new Promise((resolve) => {
@@ -1413,6 +1427,28 @@ try {
     `document.querySelector('.startup-mode-chooser') === null && document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') === ${JSON.stringify(startupDefaultMode)}`,
     "startup mode chooser defaults to the persisted room mode after 5 seconds"
   );
+  await evaluate(
+    client,
+    `
+      fetch('/api/v1/playback/actions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'volume_set', value: 34 })
+      }).then((response) => response.ok)
+    `
+  );
+  await wait(250);
+  await touchSwipe(client, 2460, 540, 2460, 360);
+  await expectEventually(
+    client,
+    "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => state.system.volume.percent >= 78)",
+    "ambient right-edge touch swipe updates the global volume"
+  );
+  await expect(
+    client,
+    "document.querySelector('.ambient-adjust-indicator')?.textContent.includes('Volume')",
+    "ambient right-edge touch swipe shows the volume overlay"
+  );
   await postExperienceAction(client, { type: "set_mode", mode: "hifi" });
   await navigate(client, APP_URL);
   await expectEventually(
@@ -1595,12 +1631,22 @@ try {
     "document.querySelector('[data-hifi-cover-art][data-generated-cover-fallback=\"true\"] img')?.getAttribute('src')?.startsWith('data:image/svg+xml') === true && document.querySelector('[data-hifi-track-info]')?.textContent?.includes('Broken Artwork Study')",
     "Hi-Fi broken artwork URL falls back to generated cover"
   );
+  await expectEventually(
+    client,
+    generatedCoverSquareRootExpression('[data-hifi-cover-art][data-generated-cover-fallback="true"] img'),
+    "Hi-Fi generated cover uses the outer container for rounded clipping"
+  );
   const bluetoothFallbackPatchVersion = await setStatePatchMode(client, "bluetoothFallback");
   await waitForStatePatchRefresh(client, bluetoothFallbackPatchVersion, "Bluetooth fallback fixture refreshes");
   await expectEventually(
     client,
     "document.querySelector('[data-bluetooth-generated-cover]') !== null && document.querySelector('[data-hifi-track-info]')?.textContent?.includes('Pocket Signal')",
     "Bluetooth without real artwork uses generated record poster"
+  );
+  await expectEventually(
+    client,
+    generatedCoverSquareRootExpression('[data-bluetooth-generated-cover] img'),
+    "Bluetooth generated poster uses a square SVG root"
   );
   const bluetoothRealCoverPatchVersion = await setStatePatchMode(client, "bluetoothRealCover");
   await waitForStatePatchRefresh(client, bluetoothRealCoverPatchVersion, "Bluetooth real cover fixture refreshes");
@@ -3327,6 +3373,11 @@ try {
     "document.querySelector('.player-overlay .cover-art[data-generated-cover-fallback=\"true\"] img')?.getAttribute('src')?.startsWith('data:image/svg+xml') === true",
     "Player broken artwork URL falls back to generated cover"
   );
+  await expectEventually(
+    client,
+    generatedCoverSquareRootExpression('.player-overlay .cover-art[data-generated-cover-fallback="true"] img'),
+    "Player generated cover uses the outer container for rounded clipping"
+  );
   await click(client, 1360, 600);
   await expect(client, "document.querySelector('.player-overlay.is-active') !== null", "protected player click stays in player");
   await dragUntilHold(client, 100, 600, 100, 540);
@@ -4217,8 +4268,13 @@ try {
   await expect(client, "document.querySelector('.remote-root') !== null", "portable remote renders on the remote port");
   await expect(
     client,
-    "document.querySelector('[data-remote-key]') !== null && document.querySelector('[data-remote-explore]') !== null && document.querySelector('[data-remote-explore-open]') !== null && document.querySelector('[data-remote-explore-close]') !== null && document.querySelector('[data-remote-explore-proxy]') !== null",
-    "portable remote exposes its key field plus Explore start, back, and proxy controls"
+    "document.querySelector('[data-remote-key]') !== null && document.querySelector('[data-remote-volume-slider]') !== null && document.querySelector('[data-remote-explore]') !== null && document.querySelector('[data-remote-explore-open]') !== null && document.querySelector('[data-remote-explore-close]') !== null && document.querySelector('[data-remote-explore-proxy]') !== null",
+    "portable remote exposes its key field, volume slider, Explore start, back, and proxy controls"
+  );
+  await expect(
+    client,
+    "document.querySelector('.remote-key-panel strong')?.textContent?.trim() === 'Auto'",
+    "portable remote defaults to proxy-managed key mode"
   );
   await expectEventually(
     client,

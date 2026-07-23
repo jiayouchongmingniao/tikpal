@@ -236,17 +236,17 @@ export function buildBluetoothGeneratedCoverArtUrl(title: string, artist: string
     </radialGradient>
     <linearGradient id="poster" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0%" stop-color="${palette.bgB}"/>
-      <stop offset="52%" stop-color="${palette.bgC}"/>
-      <stop offset="100%" stop-color="${palette.bgA}"/>
+      <stop offset="58%" stop-color="${palette.bgC}"/>
+      <stop offset="100%" stop-color="rgba(3,6,10,0.98)"/>
     </linearGradient>
   </defs>
-  <rect width="1200" height="1200" rx="86" fill="url(#poster)"/>
-  <circle cx="820" cy="404" r="300" fill="url(#record)" opacity="0.98"/>
-  <circle cx="820" cy="404" r="238" fill="none" stroke="rgba(255,255,255,0.1)" stroke-width="2"/>
-  <circle cx="820" cy="404" r="190" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="2"/>
-  <circle cx="820" cy="404" r="132" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="2"/>
-  <circle cx="820" cy="404" r="52" fill="rgba(8,12,18,0.94)" stroke="rgba(255,255,255,0.24)" stroke-width="3"/>
-  <rect x="88" y="88" width="1024" height="1024" rx="70" fill="none" stroke="rgba(255,255,255,0.14)" stroke-width="2"/>
+  <rect width="1200" height="1200" fill="url(#poster)"/>
+  <circle cx="820" cy="404" r="300" fill="url(#record)" opacity="0.62"/>
+  <circle cx="820" cy="404" r="238" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="2"/>
+  <circle cx="820" cy="404" r="190" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="2"/>
+  <circle cx="820" cy="404" r="132" fill="none" stroke="rgba(255,255,255,0.05)" stroke-width="2"/>
+  <circle cx="820" cy="404" r="52" fill="rgba(8,12,18,0.86)" stroke="rgba(255,255,255,0.18)" stroke-width="3"/>
+  <rect x="88" y="88" width="1024" height="1024" rx="70" fill="rgba(8,12,18,0.1)" stroke="rgba(255,255,255,0.12)" stroke-width="2"/>
   <text x="120" y="170" fill="${palette.accent}" font-family="SF Pro Display, Inter, Helvetica Neue, sans-serif" font-size="46" font-weight="800" letter-spacing="3">BLUETOOTH</text>
   <text x="120" y="780" fill="${palette.title}" font-family="SF Pro Display, Inter, Helvetica Neue, sans-serif" font-size="88" font-weight="760">${safeTitle}</text>
   <text x="120" y="874" fill="rgba(255,255,255,0.78)" font-family="SF Pro Text, Inter, Helvetica Neue, sans-serif" font-size="46" font-weight="620">${safeArtist}</text>

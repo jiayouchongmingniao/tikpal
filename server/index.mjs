@@ -120,6 +120,8 @@ const UPNP_DISABLE_COMMAND = process.env.TIKPAL_UPNP_DISABLE_COMMAND ?? "";
 const UPNP_LABEL_COMMAND = process.env.TIKPAL_UPNP_LABEL_COMMAND ?? "";
 const OUTPUT_VOLUME_GET_COMMAND = process.env.TIKPAL_OUTPUT_VOLUME_GET_COMMAND ?? "amixer get PCM";
 const OUTPUT_VOLUME_SET_COMMAND = process.env.TIKPAL_OUTPUT_VOLUME_SET_COMMAND ?? "amixer sset PCM %VALUE%%";
+const OUTPUT_VOLUME_SET_COMMAND_CONFIGURED = Object.prototype.hasOwnProperty.call(process.env, "TIKPAL_OUTPUT_VOLUME_SET_COMMAND")
+  && OUTPUT_VOLUME_SET_COMMAND.trim();
 const HIFI_EQ_APPLY_COMMAND = process.env.TIKPAL_HIFI_EQ_APPLY_COMMAND ?? "";
 const HIFI_SPECTRUM_COMMAND = process.env.TIKPAL_HIFI_SPECTRUM_COMMAND ?? "";
 const HIFI_SPECTRUM_CACHE_MS_RAW = Number(process.env.TIKPAL_HIFI_SPECTRUM_CACHE_MS ?? 900);
@@ -2068,6 +2070,17 @@ async function setOutputVolumePercent(percent) {
   await runCommand(command, { allowFailure: false, timeout: 2500 });
   if (normalized > 0) {
     await rememberNonZeroVolumePercent(normalized);
+  }
+}
+
+async function setMpcAndOutputVolumePercent(percent) {
+  const normalized = Math.max(0, Math.min(100, Math.round(Number(percent))));
+  await runMpc(["volume", String(normalized)]);
+  if (normalized > 0) {
+    await rememberNonZeroVolumePercent(normalized);
+  }
+  if (OUTPUT_VOLUME_SET_COMMAND_CONFIGURED) {
+    await setOutputVolumePercent(normalized);
   }
 }
 
@@ -6105,7 +6118,8 @@ async function getMpcSnapshot(options = {}) {
   const isSceneSource = playbackSource === "scene";
   const isExternalHandoffSource = playbackSource === "scene" || playbackSource === "spotify" || playbackSource === "bluetooth" || playbackSource === "airplay" || playbackSource === "upnp";
   const isMpdBackedSource = playbackSource === "mpd" || playbackSource === "audio";
-  const volumePercent = isExternalHandoffSource || webModeActive
+  const hasConfiguredOutputVolume = Boolean(OUTPUT_VOLUME_SET_COMMAND_CONFIGURED && outputVolumePercent !== null);
+  const volumePercent = isExternalHandoffSource || webModeActive || hasConfiguredOutputVolume
     ? (outputVolumePercent ?? status.volumePercent ?? system.volume.percent)
     : (status.volumePercent ?? outputVolumePercent ?? system.volume.percent);
   if (volumePercent > 0) {
@@ -7059,10 +7073,7 @@ async function applyMpcPlaybackActionUnlocked(action) {
       if (await shouldUseOutputVolumeForMpcAction()) {
         await setOutputVolumePercent(percent);
       } else {
-        await runMpc(["volume", String(Math.round(percent))]);
-        if (percent > 0) {
-          await rememberNonZeroVolumePercent(percent);
-        }
+        await setMpcAndOutputVolumePercent(percent);
       }
       break;
     }
