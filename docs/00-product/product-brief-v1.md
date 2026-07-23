@@ -134,9 +134,10 @@ Dangerous actions must require confirmation.
 
 Long press on the ambient screen opens a quick menu with discoverable fallback controls:
 
-- Scene Video.
-- Clock.
-- Scene Sound.
+- Screen.
+- Volume.
+- Time.
+- Sleep.
 
 The quick menu lowers the learning cost for hidden gestures without becoming a second settings tree.
 

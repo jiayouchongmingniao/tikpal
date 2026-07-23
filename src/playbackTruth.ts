@@ -14,6 +14,8 @@ const SOURCE_LABELS: Record<SourceState, string> = {
   radio: "Radio"
 };
 
+const GENERATED_ARTWORK_PATH = "/api/v1/media/artwork";
+
 export interface PlaybackDisplayTruth {
   title: string;
   artist: string;
@@ -34,6 +36,20 @@ export function getPlaybackSourceSummary(playback: PlaybackSummary, audio: Audio
     ?? (audio.currentSource.id === playback.source ? audio.currentSource : undefined);
 }
 
+function withGeneratedArtworkFontTheme(albumArtUrl: string | null | undefined, fontTheme: FontTheme) {
+  if (!albumArtUrl) return null;
+
+  try {
+    const baseUrl = typeof window === "undefined" ? "http://localhost/" : window.location.href;
+    const parsed = new URL(albumArtUrl, baseUrl);
+    if (parsed.pathname !== GENERATED_ARTWORK_PATH) return albumArtUrl;
+    parsed.searchParams.set("fontTheme", fontTheme);
+    return albumArtUrl.startsWith("/") ? `${parsed.pathname}${parsed.search}${parsed.hash}` : parsed.toString();
+  } catch {
+    return albumArtUrl;
+  }
+}
+
 export function getPlaybackDisplayTruth(playback: PlaybackSummary, audio: AudioState, fontTheme: FontTheme): PlaybackDisplayTruth {
   const title = playback.title ?? "Not Playing";
   const artist = playback.artist ?? "Unknown Artist";
@@ -44,6 +60,7 @@ export function getPlaybackDisplayTruth(playback: PlaybackSummary, audio: AudioS
   const fallbackAlbumArtUrl = isGeneratedBluetoothCover
     ? buildBluetoothGeneratedCoverArtUrl(title, artist, album)
     : buildGeneratedCoverArtUrl(title, artist, album, fontTheme);
+  const albumArtUrl = withGeneratedArtworkFontTheme(playback.albumArtUrl, fontTheme);
   const elapsedSeconds = Number.isFinite(playback.elapsedSeconds) ? playback.elapsedSeconds : null;
   const durationSeconds = Number.isFinite(playback.durationSeconds) && (playback.durationSeconds ?? 0) > 0
     ? playback.durationSeconds
@@ -57,7 +74,7 @@ export function getPlaybackDisplayTruth(playback: PlaybackSummary, audio: AudioS
     artist,
     album,
     sourceLabel,
-    albumArtUrl: playback.albumArtUrl ?? fallbackAlbumArtUrl,
+    albumArtUrl: albumArtUrl ?? fallbackAlbumArtUrl,
     fallbackAlbumArtUrl,
     hasPlaybackArtwork,
     isGeneratedBluetoothCover,

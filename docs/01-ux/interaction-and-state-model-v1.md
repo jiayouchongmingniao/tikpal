@@ -145,11 +145,14 @@ stateDiagram-v2
 - Quick menu is a fallback, not a second navigation system.
 - It should never expose deep Console drawers directly.
 - It should close cleanly on cancel or after choosing an item.
-- Quick Menu may expose shallow scene toggles: Scene Video, Clock, and Scene Sound.
-- Turning Scene Sound on forces Scene Video on, switches playback source truth to `scene`, and unmutes only the active Ambient video layer.
+- Quick Menu exposes four large shallow controls: Screen, Volume, Time, and Sleep.
+- Screen enters a black tap-to-wake overlay without changing the active audio source or global volume.
+- Volume toggles global output between muted and the last nonzero `system.volume.percent`.
+- Time toggles the Ambient clock display.
+- Sleep enters a black tap-to-wake overlay, lowers brightness and volume while asleep, and restores the previous values on a single tap.
+- Turning Scene Sound on from the Ambient center control forces Scene Video on, switches playback source truth to `scene`, and unmutes only the active Ambient video layer.
 - Turning Scene Sound off restores the remembered visible source: the last Library song, the last successful Radio station, or an external waiting source. If that restore fails, playback falls back to Library/MPD instead of staying stopped on `scene`.
-- Turning Scene Video off while Scene Sound is active also stops Scene Sound, follows the same remembered-source resume path, and returns the video surface to a black quiet state.
-- Hi-Fi mode disables Scene Video and Scene Sound controls and does not mount MP4 scenes.
+- Hi-Fi mode does not mount MP4 scenes, but the Quick Menu Screen and Sleep overlays remain available.
 - Auto Night uses the selected timezone to lower display brightness only. It must not switch modes, start Scene Sound, or interrupt Hi-Fi playback.
 
 ### Explore

@@ -20,6 +20,10 @@ const LYRICS_VISIBLE_READY_RESTORE_KEY = "tikpal.lyricsVisible.readyRestored.v1"
 const LYRICS_FONT_SIZE_STORAGE_KEY = "tikpal.lyricsFontSize";
 const SCENE_VIDEO_ENABLED_STORAGE_KEY = "tikpal.sceneVideoEnabled";
 const CLOCK_VISIBLE_STORAGE_KEY = "tikpal.clockVisible";
+const QUICK_MENU_VOLUME_RESTORE_STORAGE_KEY = "tikpal.quickMenuVolumeRestore";
+const QUICK_MENU_BRIGHTNESS_RESTORE_STORAGE_KEY = "tikpal.quickMenuBrightnessRestore";
+const DEFAULT_QUICK_MENU_RESTORE_VOLUME_PERCENT = 35;
+const DEFAULT_QUICK_MENU_RESTORE_BRIGHTNESS_PERCENT = 72;
 const EXTERNAL_HANDOFF_TIMEOUT_MS = 60_000;
 const EXTERNAL_HANDOFF_POLL_MS = 1_000;
 const KIOSK_HEARTBEAT_MS = 10_000;
@@ -92,6 +96,21 @@ function readStoredBoolean(key: string, fallback: boolean) {
   const savedValue = window.localStorage.getItem(key);
   if (savedValue === "true") return true;
   if (savedValue === "false") return false;
+  return fallback;
+}
+
+function readStoredPercent(key: string, fallback: number) {
+  const savedValue = Number(window.localStorage.getItem(key));
+  if (Number.isFinite(savedValue) && savedValue > 0 && savedValue <= 100) {
+    return Math.round(savedValue);
+  }
+  return fallback;
+}
+
+function normalizeRestorePercent(value: number, fallback: number) {
+  if (Number.isFinite(value) && value > 0 && value <= 100) {
+    return Math.round(value);
+  }
   return fallback;
 }
 
@@ -258,6 +277,8 @@ export default function App() {
   const [sceneVideoEnabled, setSceneVideoEnabled] = useState(() => readStoredBoolean(SCENE_VIDEO_ENABLED_STORAGE_KEY, true));
   const [clockVisible, setClockVisible] = useState(() => readStoredBoolean(CLOCK_VISIBLE_STORAGE_KEY, true));
   const [sceneSoundPending, setSceneSoundPending] = useState(false);
+  const [screenOffActive, setScreenOffActive] = useState(false);
+  const [systemSleepActive, setSystemSleepActive] = useState(false);
   const [ambientSourcePickerRequest, setAmbientSourcePickerRequest] = useState(0);
   const [ambientSourcePickerOpen, setAmbientSourcePickerOpen] = useState(false);
   const [startupChooserVisible, setStartupChooserVisible] = useState(() => readInitialMode() === "ambient");
@@ -270,6 +291,12 @@ export default function App() {
   const hifiInitialRestoreCheckedRef = useRef(false);
   const hifiRestoreInFlightRef = useRef(false);
   const roomExperienceRef = useRef<RoomExperienceState | null>(null);
+  const quickMenuVolumeRestoreRef = useRef(readStoredPercent(QUICK_MENU_VOLUME_RESTORE_STORAGE_KEY, DEFAULT_QUICK_MENU_RESTORE_VOLUME_PERCENT));
+  const quickMenuBrightnessRestoreRef = useRef(readStoredPercent(QUICK_MENU_BRIGHTNESS_RESTORE_STORAGE_KEY, DEFAULT_QUICK_MENU_RESTORE_BRIGHTNESS_PERCENT));
+  const systemSleepBrightnessRestoreRef = useRef<number | null>(null);
+  const systemSleepVolumeRestoreRef = useRef<number | null>(null);
+  const systemSleepEntryTaskRef = useRef<Promise<void> | null>(null);
+  const systemSleepWakePendingRef = useRef(false);
   const { mode, hudVisible, idleTotalMs, idleRemainingMs, showHud, toggleHud, changeMode, returnAmbient, resetIdleTimer } = useAppMode(readInitialMode());
   const { state: tikpalState, status: tikpalStatus, refresh, sendPlaybackAction, sendSystemAction, sendSourceSwitch } = useTikpalState();
   const { experience: roomExperience, status: roomExperienceStatus, refresh: refreshRoomExperience, sendExperienceAction } = useRoomExperience();
@@ -457,6 +484,20 @@ export default function App() {
     window.localStorage.setItem(CLOCK_VISIBLE_STORAGE_KEY, clockVisible ? "true" : "false");
   }, [clockVisible]);
 
+  useEffect(() => {
+    const percent = tikpalState.system.volume.percent;
+    if (percent <= 0) return;
+    quickMenuVolumeRestoreRef.current = Math.round(percent);
+    window.localStorage.setItem(QUICK_MENU_VOLUME_RESTORE_STORAGE_KEY, String(Math.round(percent)));
+  }, [tikpalState.system.volume.percent]);
+
+  useEffect(() => {
+    const percent = tikpalState.system.display.brightnessPercent;
+    if (percent <= 0) return;
+    quickMenuBrightnessRestoreRef.current = Math.round(percent);
+    window.localStorage.setItem(QUICK_MENU_BRIGHTNESS_RESTORE_STORAGE_KEY, String(Math.round(percent)));
+  }, [tikpalState.system.display.brightnessPercent]);
+
   const activeTimeZone = roomExperience.nightSchedule.timeZone;
   const timeFormatter = useMemo(() => new Intl.DateTimeFormat("en-US", {
     hour: "2-digit",
@@ -633,6 +674,109 @@ export default function App() {
     setSceneVideoEnabled(enabled);
   }
 
+  const handleQuickMenuVolumeEnabledChange = useCallback(async (_enabled: boolean) => {
+    try {
+      const latestState = await refresh();
+      const currentPercent = latestState?.system.volume.percent ?? tikpalState.system.volume.percent;
+      if (currentPercent > 0) {
+        const remembered = Math.round(currentPercent);
+        quickMenuVolumeRestoreRef.current = remembered;
+        window.localStorage.setItem(QUICK_MENU_VOLUME_RESTORE_STORAGE_KEY, String(remembered));
+        await sendPlaybackAction("volume_set", 0);
+        return;
+      }
+
+      await sendPlaybackAction(
+        "volume_set",
+        normalizeRestorePercent(quickMenuVolumeRestoreRef.current, DEFAULT_QUICK_MENU_RESTORE_VOLUME_PERCENT)
+      );
+    } catch {
+      await refresh();
+    }
+  }, [refresh, sendPlaybackAction, tikpalState.system.volume.percent]);
+
+  const handleQuickMenuScreenEnabledChange = useCallback((enabled: boolean) => {
+    setScreenOffActive(!enabled);
+    if (!enabled) {
+      returnAmbient();
+    }
+  }, [returnAmbient]);
+
+  const handleQuickMenuSleep = useCallback(() => {
+    if (systemSleepActive || systemSleepEntryTaskRef.current) return;
+
+    const currentBrightness = tikpalState.system.display.brightnessPercent;
+    const currentVolume = tikpalState.system.volume.percent;
+    systemSleepBrightnessRestoreRef.current = currentBrightness > 0 ? Math.round(currentBrightness) : null;
+    systemSleepVolumeRestoreRef.current = currentVolume > 0 ? Math.round(currentVolume) : null;
+
+    if (systemSleepBrightnessRestoreRef.current !== null) {
+      quickMenuBrightnessRestoreRef.current = systemSleepBrightnessRestoreRef.current;
+      window.localStorage.setItem(QUICK_MENU_BRIGHTNESS_RESTORE_STORAGE_KEY, String(systemSleepBrightnessRestoreRef.current));
+    }
+
+    if (systemSleepVolumeRestoreRef.current !== null) {
+      quickMenuVolumeRestoreRef.current = systemSleepVolumeRestoreRef.current;
+      window.localStorage.setItem(QUICK_MENU_VOLUME_RESTORE_STORAGE_KEY, String(systemSleepVolumeRestoreRef.current));
+    }
+
+    setSystemSleepActive(true);
+    returnAmbient();
+
+    const entryTask = (async () => {
+      try {
+        if (tikpalState.system.display.controllable && currentBrightness > 0) {
+          await sendSystemAction("brightness_set", 0);
+        }
+        if (currentVolume > 0) {
+          await sendPlaybackAction("volume_set", 0);
+        }
+      } catch {
+        await refresh();
+      } finally {
+        systemSleepEntryTaskRef.current = null;
+      }
+    })();
+
+    systemSleepEntryTaskRef.current = entryTask;
+  }, [
+    refresh,
+    returnAmbient,
+    sendPlaybackAction,
+    sendSystemAction,
+    systemSleepActive,
+    tikpalState.system.display.brightnessPercent,
+    tikpalState.system.display.controllable,
+    tikpalState.system.volume.percent
+  ]);
+
+  const handleSystemSleepWake = useCallback(async () => {
+    if (systemSleepWakePendingRef.current) return;
+    systemSleepWakePendingRef.current = true;
+
+    try {
+      await systemSleepEntryTaskRef.current?.catch(() => null);
+      const restoreBrightness = systemSleepBrightnessRestoreRef.current;
+      const restoreVolume = systemSleepVolumeRestoreRef.current;
+
+      if (tikpalState.system.display.controllable && restoreBrightness !== null) {
+        await sendSystemAction("brightness_set", restoreBrightness);
+      }
+
+      if (restoreVolume !== null) {
+        await sendPlaybackAction("volume_set", restoreVolume);
+      }
+
+      setSystemSleepActive(false);
+      systemSleepBrightnessRestoreRef.current = null;
+      systemSleepVolumeRestoreRef.current = null;
+    } catch {
+      await refresh();
+    } finally {
+      systemSleepWakePendingRef.current = false;
+    }
+  }, [refresh, sendPlaybackAction, sendSystemAction, tikpalState.system.display.controllable]);
+
   const handleRoomExperienceAction = useCallback(
     async (action: RoomExperienceActionRequest) => {
       const nextExperience = await sendExperienceAction(action);
@@ -677,7 +821,7 @@ export default function App() {
   });
 
   return (
-    <main className="app-root" {...gestureHandlers}>
+    <main className={`app-root ${screenOffActive ? "is-screen-off" : ""} ${systemSleepActive ? "is-system-sleeping" : ""}`} {...gestureHandlers}>
       <AmbientScreen
         hudVisible={hudVisible}
         timeLabel={timeLabel}
@@ -705,6 +849,7 @@ export default function App() {
         onLyricsVisibleChange={setLyricsVisible}
         onCurrentSceneVideoChange={handleCurrentSceneVideoChange}
         onSceneSoundEnabledChange={(enabled) => void handleSceneSoundEnabledChange(enabled)}
+        onOpenPlayer={() => changeMode("player")}
         onOpenSettings={() => changeMode("quickSettings")}
         roomExperience={roomExperience}
         onExperienceAction={handleRoomExperienceAction}
@@ -752,16 +897,45 @@ export default function App() {
       />
       <QuickMenu
         active={mode === "quickMenu"}
-        sceneVideoEnabled={sceneVideoEnabled}
+        screenEnabled={!screenOffActive}
         clockVisible={clockVisible}
-        sceneSoundEnabled={roomExperience.sceneSoundEnabled}
-        sceneSoundPending={sceneSoundPending || tikpalStatus.pending}
-        roomMode={roomExperience.mode}
-        onSceneVideoEnabledChange={handleSceneVideoEnabledChange}
+        volumeEnabled={tikpalState.system.volume.percent > 0}
+        volumePending={tikpalStatus.pending && tikpalStatus.pendingAction === "playback:volume_set"}
+        sleepPending={systemSleepActive || Boolean(systemSleepEntryTaskRef.current)}
+        onScreenEnabledChange={handleQuickMenuScreenEnabledChange}
         onClockVisibleChange={setClockVisible}
-        onSceneSoundEnabledChange={(enabled) => void handleSceneSoundEnabledChange(enabled)}
+        onVolumeEnabledChange={(enabled) => void handleQuickMenuVolumeEnabledChange(enabled)}
+        onSleep={handleQuickMenuSleep}
         onClose={returnAmbient}
       />
+
+      {screenOffActive && !systemSleepActive ? (
+        <button
+          className="screen-off-overlay"
+          type="button"
+          data-gesture-protected
+          aria-label="Turn screen on"
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => {
+            event.stopPropagation();
+            setScreenOffActive(false);
+          }}
+        />
+      ) : null}
+
+      {systemSleepActive ? (
+        <button
+          className="system-sleep-overlay"
+          type="button"
+          data-gesture-protected
+          aria-label="Wake Tikpal"
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => {
+            event.stopPropagation();
+            void handleSystemSleepWake();
+          }}
+        />
+      ) : null}
 
       <div className={`gesture-cue ${gesturePreview ? "is-visible" : ""}`} aria-hidden={!gesturePreview}>
         <span>{gesturePreview?.label ?? ""}</span>

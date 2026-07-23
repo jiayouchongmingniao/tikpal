@@ -35,6 +35,7 @@ interface AmbientScreenProps {
   onLyricsVisibleChange: (visible: boolean) => void;
   onCurrentSceneVideoChange: (video: BackgroundVideoSummary) => void;
   onSceneSoundEnabledChange: (enabled: boolean) => void;
+  onOpenPlayer: () => void;
   onOpenSettings: () => void;
   roomExperience: RoomExperienceState;
   onExperienceAction: (action: RoomExperienceActionRequest) => Promise<RoomExperienceState>;
@@ -320,6 +321,7 @@ export function AmbientScreen({
   onLyricsVisibleChange,
   onCurrentSceneVideoChange,
   onSceneSoundEnabledChange,
+  onOpenPlayer,
   onOpenSettings,
   roomExperience,
   onExperienceAction
@@ -670,6 +672,12 @@ export function AmbientScreen({
     onHudActivity();
     if (isPlaybackPending || mode === playMode) return;
     void onPlaybackAction("play_mode_set", undefined, mode);
+  }
+
+  function handleOpenPlayerClick() {
+    onHudActivity();
+    setSourcePickerOpen(false);
+    onOpenPlayer();
   }
 
   function handleSceneSoundToggle() {
@@ -1375,16 +1383,25 @@ export function AmbientScreen({
           ) : null}
           {isHifiMode ? (
             <>
-              <div className="ambient-play-mode" role="group" aria-label="Playback mode">
+              <div className="ambient-play-mode" role="group" aria-label="Player and playback mode">
                 <button
-                  className={`ambient-play-mode-button ${playMode === "sequence" ? "is-active" : ""}`}
+                  className="ambient-play-mode-button"
                   type="button"
-                  aria-label="Sequence playback"
-                  title="Sequence playback"
-                  aria-pressed={playMode === "sequence"}
+                  aria-label="Open player"
+                  title="Player"
+                  data-hifi-player-entry
                   tabIndex={ambientHudVisible ? 0 : -1}
-                  disabled={isPlaybackPending}
-                  onClick={() => handlePlayModeChange("sequence")}
+                  onClick={handleOpenPlayerClick}
+                  onPointerDown={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    handleOpenPlayerClick();
+                  }}
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    handleOpenPlayerClick();
+                  }}
                 >
                   <ListMusic size={22} strokeWidth={1.8} />
                 </button>

@@ -2320,19 +2320,19 @@ select {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: min(620px, calc(100vw - 112px));
-  padding: 8px;
-  border: 1px solid color-mix(in srgb, var(--room-accent) 15%, transparent);
+  width: min(780px, calc(100vw - 112px));
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--room-accent) 22%, transparent);
   border-radius: 999px;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.035)),
-    radial-gradient(circle at 50% 0%, color-mix(in srgb, var(--room-accent) 12%, transparent), transparent 62%),
-    rgba(6, 7, 9, 0.52);
+    linear-gradient(180deg, rgba(255, 255, 255, 0.145), rgba(255, 255, 255, 0.04)),
+    radial-gradient(circle at 50% 0%, color-mix(in srgb, var(--room-accent) 16%, transparent), transparent 62%),
+    rgba(6, 7, 9, 0.58);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.13),
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
     inset 0 -1px 0 rgba(255, 255, 255, 0.035),
-    0 18px 52px rgba(0, 0, 0, 0.34),
-    0 0 14px color-mix(in srgb, var(--room-accent-muted) 70%, transparent);
+    0 22px 62px rgba(0, 0, 0, 0.38),
+    0 0 20px color-mix(in srgb, var(--room-accent-muted) 78%, transparent);
   backdrop-filter: blur(18px) saturate(1.12);
   -webkit-backdrop-filter: blur(18px) saturate(1.12);
   opacity: 0.66;
@@ -2347,9 +2347,9 @@ select {
 .ambient-screen.is-hud-visible .ambient-hud {
   opacity: 0.92;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0.045)),
-    radial-gradient(circle at 50% 0%, color-mix(in srgb, var(--room-accent) 15%, transparent), transparent 64%),
-    rgba(6, 7, 9, 0.62);
+    linear-gradient(180deg, rgba(255, 255, 255, 0.17), rgba(255, 255, 255, 0.052)),
+    radial-gradient(circle at 50% 0%, color-mix(in srgb, var(--room-accent) 20%, transparent), transparent 64%),
+    rgba(6, 7, 9, 0.66);
   transform: translate(-50%, -2px);
 }
 
@@ -2420,7 +2420,7 @@ select {
 .ambient-room-mode-buttons {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
+  gap: 10px;
   pointer-events: auto;
 }
 
@@ -2428,27 +2428,29 @@ select {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   place-items: center;
-  gap: 6px;
+  gap: 8px;
   min-width: 0;
-  min-height: 50px;
-  padding: 0 16px;
-  border: 1px solid color-mix(in srgb, var(--surface-control-border) 22%, transparent);
+  min-height: 64px;
+  padding: 0 22px;
+  border: 1px solid color-mix(in srgb, var(--surface-control-border) 28%, transparent);
   border-radius: 999px;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.058), rgba(255, 255, 255, 0.018)),
-    color-mix(in srgb, var(--surface-control-bg) 52%, transparent);
+    linear-gradient(180deg, rgba(255, 255, 255, 0.072), rgba(255, 255, 255, 0.02)),
+    color-mix(in srgb, var(--surface-control-bg) 58%, transparent);
   color: var(--surface-control-text);
   font: inherit;
-  font-size: 14px;
-  font-weight: 760;
+  font-size: 16px;
+  font-weight: 780;
   cursor: pointer;
   pointer-events: auto;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  transform: translateY(0);
   transition:
     border-color 180ms ease,
     background 180ms ease,
     box-shadow 180ms ease,
-    color 180ms ease;
+    color 180ms ease,
+    transform 180ms ease;
 }
 
 .ambient-room-mode-buttons button:hover,
@@ -2458,23 +2460,28 @@ select {
     linear-gradient(180deg, rgba(255, 255, 255, 0.075), rgba(255, 255, 255, 0.026)),
     color-mix(in srgb, var(--surface-control-bg-hover) 58%, transparent);
   outline: none;
+  transform: translateY(-1px);
 }
 
 .ambient-room-mode-buttons button.is-active {
-  border-color: color-mix(in srgb, var(--room-accent) 32%, rgba(255, 255, 255, 0.14));
+  border-color: color-mix(in srgb, var(--room-accent) 68%, rgba(255, 255, 255, 0.28));
   background:
-    linear-gradient(135deg, color-mix(in srgb, var(--room-accent) 17%, transparent), rgba(255, 255, 255, 0.05)),
-    radial-gradient(circle at 50% 0%, color-mix(in srgb, var(--room-accent) 13%, transparent), transparent 68%),
-    rgba(255, 255, 255, 0.045);
+    linear-gradient(135deg, color-mix(in srgb, var(--room-accent) 26%, rgba(255, 255, 255, 0.08)), rgba(255, 255, 255, 0.07)),
+    radial-gradient(circle at 50% 0%, color-mix(in srgb, var(--room-accent) 25%, transparent), transparent 68%),
+    rgba(255, 255, 255, 0.072);
   color: var(--room-accent-strong);
+  transform: translateY(-2px);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.12),
-    0 0 10px color-mix(in srgb, var(--room-accent-muted) 46%, transparent);
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    inset 0 -1px 0 color-mix(in srgb, var(--room-accent) 16%, transparent),
+    0 10px 28px rgba(0, 0, 0, 0.22),
+    0 0 26px color-mix(in srgb, var(--room-accent-muted) 92%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--room-accent) 20%, transparent);
 }
 
 .ambient-room-mode-buttons button svg {
-  width: 17px;
-  height: 17px;
+  width: 21px;
+  height: 21px;
   opacity: 0.82;
 }
 
@@ -2484,7 +2491,7 @@ select {
 
 .ambient-room-mode-buttons button span {
   overflow: hidden;
-  line-height: 1;
+  line-height: 1.05;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -5014,9 +5021,9 @@ select {
   left: 50%;
   top: 50%;
   display: grid;
-  grid-template-columns: repeat(3, 154px);
-  gap: 14px;
-  padding: 18px;
+  grid-template-columns: repeat(4, 176px);
+  gap: 18px;
+  padding: 22px;
   border: 1px solid var(--surface-shell-border);
   border-radius: 8px;
   background: var(--surface-shell-bg);
@@ -5029,8 +5036,8 @@ select {
 .quick-menu-panel button {
   display: grid;
   place-items: center;
-  gap: 9px;
-  min-height: 118px;
+  gap: 12px;
+  min-height: 146px;
   border: 1px solid var(--surface-card-border);
   border-radius: 8px;
   background: var(--surface-card-bg);
@@ -5040,21 +5047,30 @@ select {
 
 .quick-menu-panel button strong {
   color: var(--surface-control-text);
-  font-size: 17px;
+  font-size: 20px;
   font-weight: 650;
   line-height: 1;
 }
 
 .quick-menu-panel button span {
   color: var(--muted);
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 600;
   line-height: 1;
+}
+
+.quick-menu-panel button svg {
+  width: 32px;
+  height: 32px;
 }
 
 .quick-menu-panel button.is-on {
   border-color: var(--theme-info);
   background: var(--theme-info-muted);
+}
+
+.quick-menu-panel button.is-sleep {
+  border-color: rgba(255, 206, 116, 0.4);
 }
 
 .quick-menu-panel button:disabled {
@@ -5067,6 +5083,18 @@ select {
   border-color: var(--surface-card-border-hover);
   background: var(--surface-card-bg-hover);
   outline: none;
+}
+
+.screen-off-overlay,
+.system-sleep-overlay {
+  position: absolute;
+  z-index: 60;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #000;
+  cursor: none;
 }
 
 .gesture-cue {
@@ -5215,19 +5243,24 @@ select {
   }
 
   .ambient-hud {
-    width: min(600px, calc(100vw - 48px));
+    width: min(700px, calc(100vw - 48px));
     bottom: 52px;
-    padding: 7px;
+    padding: 8px;
   }
 
   .ambient-room-mode-buttons {
-    gap: 7px;
+    gap: 8px;
   }
 
   .ambient-room-mode-buttons button {
-    min-height: 46px;
-    padding: 0 12px;
-    font-size: 13px;
+    min-height: 56px;
+    padding: 0 16px;
+    font-size: 14px;
+  }
+
+  .ambient-room-mode-buttons button svg {
+    width: 19px;
+    height: 19px;
   }
 
   .ambient-transport {
@@ -5500,9 +5533,9 @@ select {
 
   .ambient-room-mode-buttons button {
     grid-template-columns: minmax(0, 1fr);
-    min-height: 44px;
+    min-height: 48px;
     padding: 0 8px;
-    font-size: 12px;
+    font-size: 12.5px;
   }
 
   .ambient-room-mode-buttons button svg {
@@ -5636,7 +5669,14 @@ select {
   }
 
   .quick-menu-panel {
-    grid-template-columns: repeat(2, 136px);
+    grid-template-columns: repeat(2, minmax(144px, 1fr));
+    width: min(92vw, 360px);
+    gap: 12px;
+    padding: 14px;
+  }
+
+  .quick-menu-panel button {
+    min-height: 124px;
   }
 }
 

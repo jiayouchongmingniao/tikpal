@@ -448,6 +448,7 @@ esac
   const remoteControlSource = await readFile(path.join(ROOT, "src/components/RemoteControlApp.tsx"), "utf8");
   const flameSceneSource = await readFile(path.join(ROOT, "src/components/FlameScene.tsx"), "utf8");
   const appSource = await readFile(path.join(ROOT, "src/App.tsx"), "utf8");
+  const playbackTruthSource = await readFile(path.join(ROOT, "src/playbackTruth.ts"), "utf8");
   const stylesSource = await readFile(path.join(ROOT, "src/styles.css"), "utf8");
   assert(extensionManifest.permissions.includes("proxy"), "Explore extension should declare the proxy permission");
   assert(extensionManifest.permissions.includes("tabs"), "Explore extension should declare tabs permission for provider bootstrap navigation");
@@ -497,6 +498,8 @@ esac
   assert(!quickSettingsSource.includes("console-back-button"), "Console room shortcuts should replace the top-right Back button");
   assert(appSource.includes("VISIBLE_LISTENING_SOURCE_TARGETS"), "Hi-Fi entry should preserve the current visible listening source");
   assert(appSource.includes("isVisibleListeningSourceTarget(currentSourceId)"), "Hi-Fi remembered-source restore should not overwrite active Library/Radio/external sources");
+  assert(playbackTruthSource.includes('parsed.searchParams.set("fontTheme", fontTheme)'), "playback artwork URLs should carry the selected font theme");
+  assert(serverSource.includes("GENERATED_ARTWORK_FONT_FAMILIES") && serverSource.includes('url.searchParams.get("fontTheme")'), "generated backend artwork should honor the requested font theme");
   assert(remoteControlSource.includes("data-remote-key") && !remoteControlSource.includes("window.prompt"), "portable remote should keep its key field visible instead of relying on a browser prompt");
   assert(remoteControlSource.includes("setActionError") && remoteControlSource.includes("setRefreshError"), "portable remote should keep action errors visible across state polling");
   assert(!flameSceneSource.includes("video.load()"), "single-loop recovery should not leak Chromium media decoders by reloading the video element");

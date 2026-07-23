@@ -2238,6 +2238,10 @@ try {
     "document.querySelector('.ambient-transport [data-hifi-playlist-entry]') === null && document.querySelector('.playlist-overlay') === null",
     "Hi-Fi ambient transport omits playlist editing entry"
   );
+  await expect(client, "document.querySelector('[data-hifi-player-entry]') !== null", "Hi-Fi ambient transport exposes Player entry");
+  await evaluate(client, "document.querySelector('[data-hifi-player-entry]')?.click();");
+  await expectEventually(client, "document.querySelector('.player-overlay.is-active') !== null", "Hi-Fi Player entry opens Player");
+  await navigate(client, APP_URL);
   await navigate(client, `${APP_URL}?mode=quickMenu`);
   await expect(client, "document.querySelector('[data-quick-menu-toggle=\"hifi-eq\"]') === null", "quick menu omits Hi-Fi EQ visibility toggle");
   await evaluate(client, "document.querySelector('.overlay-backdrop')?.click();");
@@ -2663,6 +2667,16 @@ try {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ type: 'set_scene_sound', sceneSoundEnabled: false })
         }))
+        .then(() => fetch('/api/v1/playback/actions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ type: 'volume_set', value: 58 })
+        }))
+        .then(() => fetch('/api/v1/system/actions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ type: 'brightness_set', value: 64 })
+        }))
         .then(() => fetch('/api/v1/audio/source', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -2684,42 +2698,49 @@ try {
     `
       (() => {
         const text = document.querySelector('.quick-menu-panel')?.textContent ?? '';
-        return document.querySelectorAll('.quick-menu-panel [data-quick-menu-toggle]').length === 3
-          && text.includes('Scene Video')
+        return document.querySelectorAll('.quick-menu-panel [data-quick-menu-toggle]').length === 4
+          && text.includes('Screen')
           && !text.includes('Room Mode')
-          && text.includes('Clock')
+          && text.includes('Volume')
+          && text.includes('Time')
+          && text.includes('Sleep')
           && !text.includes('Hi-Fi EQ')
-          && text.includes('Scene Sound')
+          && !text.includes('Scene Sound')
+          && !text.includes('Unavailable')
           && !text.includes('Flame')
           && !text.includes('Screen Off');
       })()
     `,
-    "quick menu exposes scene toggles without stale labels"
+    "quick menu exposes screen, volume, time, and sleep toggles without stale labels"
   );
 
   await evaluate(
     client,
     `
-      (() => {
-        document.querySelector('[data-quick-menu-toggle="scene-video"]')?.click();
+      (async () => {
+        const state = await fetch('/api/v1/system/state').then((response) => response.json());
+        window.__tikpalQuickMenuScreenBeforeVolume = state.system.volume.percent;
+        document.querySelector('[data-quick-menu-toggle="screen"]')?.click();
         return true;
       })()
     `
   );
-  await expect(client, "document.querySelector('.flame-scene.is-video-off') !== null", "scene video off makes ambient background black");
-  await expect(client, "document.querySelector('.fireplace-backdrop') === null && document.querySelector('.scene-logo-backdrop') === null && document.querySelector('.flame-video') === null", "scene video off removes scene media layers");
-  await expect(client, "document.querySelector('.ambient-clock') !== null", "clock remains independent while scene video is off");
-  await expectEventually(
+  await expectEventually(client, "document.querySelector('.screen-off-overlay') !== null && document.querySelector('.quick-menu.is-active') === null", "quick menu screen toggle enters a black tap-to-wake overlay");
+  await expectEventuallyEvaluate(
     client,
-    "document.querySelector('[data-quick-menu-toggle=\"scene-sound\"]')?.disabled === false",
-    "scene sound toggle is ready after scene video off"
+    "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => state.system.volume.percent === window.__tikpalQuickMenuScreenBeforeVolume)",
+    "quick menu screen toggle keeps global volume unchanged"
   );
+  await evaluate(client, "document.querySelector('.screen-off-overlay')?.click();");
+  await expectEventually(client, "document.querySelector('.screen-off-overlay') === null", "single tap wakes the quick menu screen overlay");
+
+  await navigate(client, `${APP_URL}?mode=quickMenu`);
 
   await evaluate(
     client,
     `
       (() => {
-        document.querySelector('[data-quick-menu-toggle="clock"]')?.click();
+        document.querySelector('[data-quick-menu-toggle="time"]')?.click();
         return true;
       })()
     `
@@ -2729,13 +2750,64 @@ try {
   await evaluate(
     client,
     `
-      (() => {
-        document.querySelector('[data-quick-menu-toggle="scene-sound"]')?.click();
+      (async () => {
+        const state = await fetch('/api/v1/system/state').then((response) => response.json());
+        window.__tikpalQuickMenuVolumeBefore = state.system.volume.percent;
+        document.querySelector('[data-quick-menu-toggle="volume"]')?.click();
         return true;
       })()
     `
   );
-  await expectEventually(client, "document.querySelector('[data-quick-menu-toggle=\"scene-sound\"]')?.getAttribute('aria-pressed') === 'true'", "scene sound toggle turns on");
+  await expectEventuallyEvaluate(
+    client,
+    "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => state.system.volume.percent === 0)",
+    "quick menu volume toggle mutes the global API volume"
+  );
+  await expectEventually(client, "document.querySelector('[data-quick-menu-toggle=\"volume\"]')?.getAttribute('aria-pressed') === 'false'", "quick menu volume toggle shows muted state");
+  await evaluate(client, "document.querySelector('[data-quick-menu-toggle=\"volume\"]')?.click();");
+  await expectEventuallyEvaluate(
+    client,
+    "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => state.system.volume.percent === window.__tikpalQuickMenuVolumeBefore)",
+    "quick menu volume toggle restores the previous global volume"
+  );
+
+  await evaluate(
+    client,
+    `
+      (async () => {
+        const state = await fetch('/api/v1/system/state').then((response) => response.json());
+        window.__tikpalQuickMenuSleepBefore = {
+          brightness: state.system.display.brightnessPercent,
+          volume: state.system.volume.percent
+        };
+        document.querySelector('[data-quick-menu-toggle="sleep"]')?.click();
+        return true;
+      })()
+    `
+  );
+  await expectEventually(client, "document.querySelector('.system-sleep-overlay') !== null && document.querySelector('.quick-menu.is-active') === null", "quick menu sleep enters a black tap-to-wake overlay");
+  await expectEventuallyEvaluate(
+    client,
+    "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => state.system.volume.percent === 0 && state.system.display.brightnessPercent === 0)",
+    "quick menu sleep mutes volume and lowers brightness"
+  );
+  await evaluate(client, "document.querySelector('.system-sleep-overlay')?.click();");
+  await expectEventually(
+    client,
+    "document.querySelector('.system-sleep-overlay') === null",
+    "single tap wakes the quick menu sleep overlay",
+    35,
+    120
+  );
+  await expectEventuallyEvaluate(
+    client,
+    "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => state.system.volume.percent === window.__tikpalQuickMenuSleepBefore.volume && state.system.display.brightnessPercent === window.__tikpalQuickMenuSleepBefore.brightness)",
+    "quick menu sleep wake restores brightness and volume"
+  );
+
+  await navigate(client, APP_URL);
+  await evaluate(client, "document.querySelector('.ambient-transport-sound')?.click();");
+  await expectEventually(client, "document.querySelector('.ambient-transport-sound')?.getAttribute('aria-pressed') === 'true'", "ambient scene sound toggle turns on");
   await expectEventually(
     client,
     `
@@ -3011,12 +3083,12 @@ try {
     client,
     `
       (() => {
-        document.querySelector('[data-quick-menu-toggle="scene-sound"]')?.click();
+        document.querySelector('.ambient-transport-sound')?.click();
         return true;
       })()
     `
   );
-  await expectEventually(client, "document.querySelector('[data-quick-menu-toggle=\"scene-sound\"]')?.getAttribute('aria-pressed') === 'false'", "turning scene sound off clears the toggle");
+  await expectEventually(client, "document.querySelector('.ambient-transport-sound')?.getAttribute('aria-pressed') === 'false'", "turning scene sound off clears the toggle");
   await expectEventuallyEvaluate(
     client,
     "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => state.audio.currentSource.id === 'mpd' && state.playback.source === 'mpd' && state.playback.state === 'playing')",
@@ -3045,56 +3117,56 @@ try {
     client,
     `
       (() => {
-        document.querySelector('[data-quick-menu-toggle="scene-sound"]')?.click();
+        document.querySelector('.ambient-transport-sound')?.click();
         return true;
       })()
     `
   );
-  await expectEventually(client, "document.querySelector('[data-quick-menu-toggle=\"scene-sound\"]')?.getAttribute('aria-pressed') === 'true'", "scene sound can turn back on before scene video off");
+  await expectEventually(client, "document.querySelector('.ambient-transport-sound')?.getAttribute('aria-pressed') === 'true'", "scene sound can turn back on before screen overlay checks");
   await expectEventuallyEvaluate(
     client,
     "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => state.playback.source === 'scene' && state.playback.state === 'playing')",
     "scene sound switches API source to scene again"
   );
 
+  await navigate(client, `${APP_URL}?mode=quickMenu`);
   await evaluate(
     client,
     `
-      (() => {
-        document.querySelector('[data-quick-menu-toggle="scene-video"]')?.click();
+      (async () => {
+        const state = await fetch('/api/v1/system/state').then((response) => response.json());
+        window.__tikpalQuickMenuScreenDuringSceneSound = {
+          volume: state.system.volume.percent,
+          source: state.playback.source
+        };
+        document.querySelector('[data-quick-menu-toggle="screen"]')?.click();
         return true;
       })()
     `
   );
-  await expectEventually(client, "document.querySelector('[data-quick-menu-toggle=\"scene-sound\"]')?.getAttribute('aria-pressed') === 'false'", "turning scene video off first disables scene sound");
-  await expect(client, "document.querySelector('.flame-scene.is-video-off') !== null", "scene video off after scene sound returns to black background");
+  await expectEventually(client, "document.querySelector('.screen-off-overlay') !== null && document.querySelector('.quick-menu.is-active') === null", "quick menu screen overlay is available while scene sound is active");
   await expectEventuallyEvaluate(
     client,
-    "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => state.audio.currentSource.id === 'mpd' && state.playback.source === 'mpd' && state.playback.state === 'playing')",
-    "scene video off resumes library playback"
+    "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => state.playback.source === window.__tikpalQuickMenuScreenDuringSceneSound.source && state.system.volume.percent === window.__tikpalQuickMenuScreenDuringSceneSound.volume)",
+    "quick menu screen overlay does not change source or volume"
   );
+  await evaluate(client, "document.querySelector('.screen-off-overlay')?.click();");
+  await expectEventually(client, "document.querySelector('.screen-off-overlay') === null", "single tap wakes screen overlay while scene sound continues");
 
+  await navigate(client, `${APP_URL}?mode=quickMenu`);
   await evaluate(
     client,
     `
       (() => {
-        document.querySelector('[data-quick-menu-toggle="scene-video"]')?.click();
-        document.querySelector('[data-quick-menu-toggle="clock"]')?.click();
+        document.querySelector('[data-quick-menu-toggle="time"]')?.click();
         return true;
       })()
     `
   );
   await expect(client, "document.querySelector('.ambient-clock') !== null", "quick menu clock toggle restores ambient clock");
-  await evaluate(
-    client,
-    `
-      (() => {
-        document.querySelector('[data-quick-menu-toggle="scene-sound"]')?.click();
-        return true;
-      })()
-    `
-  );
-  await expectEventually(client, "document.querySelector('.flame-video.is-active') instanceof HTMLVideoElement && document.querySelector('.flame-video.is-active').muted === false", "scene sound can be re-enabled before switching sources");
+  await evaluate(client, "document.querySelector('.overlay-backdrop')?.click();");
+  await expectEventually(client, "document.querySelector('.quick-menu.is-active') === null", "quick menu closes while scene sound remains active");
+  await expectEventually(client, "document.querySelector('.flame-video.is-active') instanceof HTMLVideoElement && document.querySelector('.flame-video.is-active').muted === false", "scene sound stays enabled before switching sources");
   await evaluate(
     client,
     `
@@ -3476,12 +3548,12 @@ try {
     "player volume display stays on the global volume after room mode changes"
   );
 
-  await navigate(client, `${APP_URL}?mode=quickMenu`);
+  await navigate(client, APP_URL);
   await evaluate(
     client,
     `
       (() => {
-        document.querySelector('[data-quick-menu-toggle="scene-sound"]')?.click();
+        document.querySelector('.ambient-transport-sound')?.click();
         return true;
       })()
     `

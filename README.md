@@ -177,7 +177,7 @@ The first implementation milestone should deliver:
 - One-finger player overlay and explicit Console entry through gesture and weak gear fallback.
 - Playback state, cover art, transport controls, progress, volume, format, sample rate, bit depth, output device, and network status.
 - Console chips for Preferences, Library, Link, and Care, with listening status, output, DSP, display, library/NAS status, API health, reboot, and shutdown.
-- Long-press quick menu and a weak top-right Console fallback.
+- Long-press Quick Menu with large `Screen`, `Volume`, `Time`, and `Sleep` controls; `Screen` / `Sleep` use black tap-to-wake overlays, and the weak top-right Console fallback remains available.
 - Kiosk-safe behavior on Raspberry Pi 4 with 2560 x 720 fullscreen output.
 
 ## Repository Status
