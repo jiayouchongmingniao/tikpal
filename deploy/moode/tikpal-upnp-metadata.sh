@@ -1,104 +1,286 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-mpc_bin="${TIKPAL_MPC_BIN:-mpc}"
+metadata_json_file="${TIKPAL_UPNP_METADATA_JSON_FILE:-/var/local/www/upnpmeta.json}"
+metadata_file="${TIKPAL_UPNP_METADATA_FILE:-/var/local/www/upnpmeta.txt}"
+max_age_seconds="${TIKPAL_UPNP_METADATA_MAX_AGE_SECONDS:-300}"
+journal_command="${TIKPAL_UPNP_METADATA_JOURNAL_COMMAND:-journalctl -u upmpdcli.service -n 160 -o short-unix --no-pager}"
+now="$(date +%s)"
 
-current="$("$mpc_bin" --format '%title%\t%artist%\t%album%\t%file%\t%time%' current 2>/dev/null || true)"
-status="$("$mpc_bin" status 2>/dev/null || true)"
+case "$max_age_seconds" in
+  ''|*[!0-9]*) max_age_seconds=0 ;;
+esac
 
-if [[ -z "${current//[[:space:]]/}" ]]; then
-  exit 0
-fi
+python3 - "$metadata_json_file" "$metadata_file" "$max_age_seconds" "$now" "$journal_command" <<'PY'
+import json
+import os
+import re
+import subprocess
+import sys
+import xml.etree.ElementTree as ET
 
-IFS=$'\t' read -r title artist album file duration _rest <<< "$current"
+json_path, text_path, max_age, now, journal_command = sys.argv[1:]
+max_age = int(max_age)
+now = int(now)
 
-clean_text() {
-  local value="${1:-}"
-  value="${value//$'\r'/ }"
-  value="${value//$'\n'/ }"
-  value="$(printf '%s' "$value" | sed -E 's/[[:space:]]+/ /g; s/^[[:space:]]+//; s/[[:space:]]+$//')"
-  case "$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')" in
-    ""|"unknown"|"unknow"|"unknown artist"|"unknown album")
-      return 0
-      ;;
-  esac
-  printf '%s' "$value"
-}
 
-duration_to_ms() {
-  local value
-  value="$(clean_text "${1:-}")"
-  [[ -n "$value" ]] || return 0
-  local IFS=:
-  # shellcheck disable=SC2206
-  local parts=($value)
-  local seconds=0
-  case "${#parts[@]}" in
-    1) seconds="${parts[0]}" ;;
-    2) seconds=$((10#${parts[0]} * 60 + 10#${parts[1]})) ;;
-    3) seconds=$((10#${parts[0]} * 3600 + 10#${parts[1]} * 60 + 10#${parts[2]})) ;;
-    *) return 0 ;;
-  esac
-  if [[ "$seconds" =~ ^[0-9]+$ ]] && (( seconds > 0 )); then
-    printf '%s' "$((seconds * 1000))"
-  fi
-}
+def clean(value):
+    return " ".join(str(value or "").split())
 
-status_value="stopped"
-if printf '%s\n' "$status" | grep -q '^\[playing\]'; then
-  status_value="playing"
-elif printf '%s\n' "$status" | grep -q '^\[paused\]'; then
-  status_value="paused"
-fi
 
-progress="$(
-  printf '%s\n' "$status" | awk '
-    /^\[(playing|paused)\]/ {
-      for (i = 1; i <= NF; i += 1) {
-        if ($i ~ /^[0-9]+(:[0-9][0-9]){0,2}\/[0-9]+(:[0-9][0-9]){0,2}$/) {
-          print $i
-          exit
-        }
-      }
+def stat_mtime(path):
+    try:
+        return int(os.stat(path).st_mtime)
+    except OSError:
+        return 0
+
+
+def is_recent(path):
+    mtime = stat_mtime(path)
+    if mtime <= 0:
+        return False
+    return max_age <= 0 or now - mtime <= max_age
+
+
+def parse_time_ms(value):
+    value = clean(value)
+    if not value:
+        return ""
+    if re.fullmatch(r"\d+(?:\.\d+)?", value):
+        number = float(value)
+        return str(int(number if number >= 1000 else number * 1000))
+    match = re.fullmatch(r"(?:(\d+):)?(\d{1,2}):(\d{1,2})(?:\.\d+)?", value)
+    if not match:
+        return ""
+    hours = int(match.group(1) or 0)
+    minutes = int(match.group(2))
+    seconds = int(match.group(3))
+    return str(((hours * 60 + minutes) * 60 + seconds) * 1000)
+
+
+def first_value(payload, keys):
+    if not isinstance(payload, dict):
+        return ""
+    lowered = {str(key).lower(): value for key, value in payload.items()}
+    for key in keys:
+        if key.lower() in lowered:
+            value = lowered[key.lower()]
+            if isinstance(value, list):
+                value = ", ".join(clean(entry) for entry in value if clean(entry))
+            if clean(value):
+                return clean(value)
+    for value in payload.values():
+        if isinstance(value, dict):
+            found = first_value(value, keys)
+            if found:
+                return found
+    return ""
+
+
+def remote_artwork_url(value):
+    value = clean(value)
+    if value.startswith(("http://", "https://", "data:image/")):
+        return value
+    return ""
+
+
+def parse_didl(value):
+    value = clean(value)
+    if not value or "<" not in value:
+        return {}
+    if " qq=" in value and "xmlns:qq=" not in value:
+        value = value.replace(" qq=", " xmlns:qq=", 1)
+    try:
+        root = ET.fromstring(value)
+    except ET.ParseError:
+        return {}
+
+    def local_name(tag):
+        return tag.rsplit("}", 1)[-1].lower()
+
+    result = {}
+    for element in root.iter():
+        name = local_name(element.tag)
+        text = clean(element.text)
+        if name == "title" and text and not result.get("title"):
+            result["title"] = text
+        elif name in ("artist", "creator") and text and not result.get("artist"):
+            result["artist"] = text
+        elif name == "album" and text and not result.get("album"):
+            result["album"] = text
+        elif name == "albumarturi" and text and not result.get("artworkUrl"):
+            result["artworkUrl"] = remote_artwork_url(text)
+        elif name == "res" and not result.get("durationMs"):
+            duration = parse_time_ms(element.attrib.get("duration"))
+            if duration:
+                result["durationMs"] = duration
+    return result
+
+
+def read_json_payload():
+    if not os.path.isfile(json_path) or not is_recent(json_path):
+        return {}
+    try:
+        with open(json_path, "r", encoding="utf-8", errors="ignore") as handle:
+            payload = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+    didl = parse_didl(first_value(payload, [
+        "CurrentTrackMetaData",
+        "currentTrackMetaData",
+        "metadata",
+        "trackMetaData",
+        "TrackMetaData",
+    ]))
+    result = {
+        **didl,
+        "title": first_value(payload, ["title", "dc:title", "track", "name"]) or didl.get("title", ""),
+        "artist": first_value(payload, ["artist", "upnp:artist", "creator", "dc:creator"]) or didl.get("artist", ""),
+        "album": first_value(payload, ["album", "upnp:album"]) or didl.get("album", ""),
+        "artworkUrl": remote_artwork_url(first_value(payload, [
+            "albumArtURI",
+            "upnp:albumArtURI",
+            "artworkUrl",
+            "artwork_url",
+            "coverUrl",
+            "cover_url",
+            "artUrl",
+        ])) or didl.get("artworkUrl", ""),
+        "durationMs": parse_time_ms(first_value(payload, [
+            "durationMs",
+            "duration_ms",
+            "duration",
+            "CurrentTrackDuration",
+            "currentTrackDuration",
+        ])) or didl.get("durationMs", ""),
+        "positionMs": parse_time_ms(first_value(payload, [
+            "positionMs",
+            "position_ms",
+            "position",
+            "RelTime",
+            "relTime",
+            "relativeTimePosition",
+        ])),
+        "status": first_value(payload, ["status", "state", "transportState", "PlaybackStatus"]),
+        "metadataMtimeMs": str(stat_mtime(json_path) * 1000),
     }
-  '
-)"
-position_ms=""
-duration_ms="$(duration_to_ms "$duration")"
-if [[ -n "$progress" ]]; then
-  elapsed_part="${progress%%/*}"
-  total_part="${progress#*/}"
-  position_ms="$(duration_to_ms "$elapsed_part")"
-  if [[ -z "$duration_ms" ]]; then
-    duration_ms="$(duration_to_ms "$total_part")"
-  fi
-fi
+    return result
 
-title="$(clean_text "$title")"
-artist="$(clean_text "$artist")"
-album="$(clean_text "$album")"
 
-if [[ -z "$title" && -n "${file:-}" && ! "$file" =~ ^https?:// ]]; then
-  basename="${file##*/}"
-  title="$(clean_text "${basename%.*}")"
-fi
+def read_text_payload():
+    if not os.path.isfile(text_path) or not is_recent(text_path):
+        return {}
+    result = {}
+    try:
+        with open(text_path, "r", encoding="utf-8", errors="ignore") as handle:
+            for line in handle:
+                match = re.match(r"^([A-Za-z][A-Za-z0-9_-]*)=(.*)$", line.rstrip("\n"))
+                if match:
+                    result[match.group(1)] = clean(match.group(2))
+    except OSError:
+        return {}
+    if result:
+        result.setdefault("metadataMtimeMs", str(stat_mtime(text_path) * 1000))
+    return result
 
-if [[ -n "$title" ]]; then
-  printf 'title=%s\n' "$title"
-fi
-if [[ -n "$artist" ]]; then
-  printf 'artist=%s\n' "$artist"
-fi
-if [[ -n "$album" ]]; then
-  printf 'album=%s\n' "$album"
-fi
-printf 'status=%s\n' "$status_value"
-if [[ -n "$position_ms" ]]; then
-  printf 'positionMs=%s\n' "$position_ms"
-  printf 'positionTrusted=true\n'
-  printf 'positionConfidence=trusted\n'
-fi
-if [[ -n "$duration_ms" ]]; then
-  printf 'durationMs=%s\n' "$duration_ms"
-fi
-printf 'metadataSource=mpd\n'
+
+def parse_journal_timestamp(line):
+    match = re.match(r"^(\d+(?:\.\d+)?)\s+", line)
+    if not match:
+        return now
+    try:
+        return int(float(match.group(1)))
+    except ValueError:
+        return now
+
+
+def read_journal_payload():
+    if not journal_command:
+        return {}
+    try:
+        completed = subprocess.run(
+            journal_command,
+            shell=True,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+        )
+    except Exception:
+        return {}
+
+    latest = {}
+    latest_seen_at = 0
+    for line in completed.stdout.splitlines():
+        if "metadata [" not in line or "DIDL-Lite" not in line:
+            continue
+        seen_at = parse_journal_timestamp(line)
+        if max_age > 0 and now - seen_at > max_age:
+            continue
+        match = re.search(r"metadata \[(<\?xml.*)\]\s*$", line)
+        if not match:
+            match = re.search(r"metadata \[(<.*DIDL-Lite.*)\]\s*$", line)
+        if not match:
+            continue
+        didl = parse_didl(match.group(1))
+        if not didl.get("title"):
+            continue
+        rejected_stream = "unsupported format" in line or "resource has no protocolinfo" in line
+        latest = {
+            **didl,
+            "status": "stopped" if rejected_stream else "playing",
+            "metadataSource": "upmpdcli_journal",
+            "metadataMtimeMs": str(seen_at * 1000),
+            "metadataOnly": "true" if rejected_stream else "",
+            "streamAvailable": "false" if rejected_stream else "",
+        }
+        latest_seen_at = seen_at
+
+    if latest and not latest.get("metadataMtimeMs") and latest_seen_at:
+        latest["metadataMtimeMs"] = str(latest_seen_at * 1000)
+    return latest
+
+
+def normalized_status(value):
+    value = clean(value).lower()
+    if value in ("playing", "play", "transport_playing"):
+        return "playing"
+    if value in ("paused", "pause", "paused_playback", "transport_paused"):
+        return "paused"
+    if value in ("stopped", "stop", "no_media_present", "transport_stopped"):
+        return "stopped"
+    return value
+
+
+payload = read_json_payload() or read_text_payload() or read_journal_payload()
+title = clean(payload.get("title") or payload.get("Title"))
+if not title:
+    sys.exit(0)
+
+position_ms = parse_time_ms(payload.get("positionMs") or payload.get("position_ms") or payload.get("position"))
+duration_ms = parse_time_ms(payload.get("durationMs") or payload.get("duration_ms") or payload.get("duration"))
+position_confidence = "trusted" if position_ms and int(position_ms) > 0 else "none"
+
+fields = {
+    "title": title,
+    "artist": clean(payload.get("artist") or payload.get("Artist")),
+    "album": clean(payload.get("album") or payload.get("Album")),
+    "status": normalized_status(payload.get("status") or payload.get("state") or payload.get("transportState")) or "playing",
+    "positionMs": position_ms,
+    "durationMs": duration_ms,
+    "artworkUrl": remote_artwork_url(payload.get("artworkUrl") or payload.get("artwork_url") or payload.get("coverUrl") or payload.get("cover_url")),
+    "metadataSource": clean(payload.get("metadataSource") or payload.get("metadata_source")) or "upmpdcli",
+    "metadataMtimeMs": clean(payload.get("metadataMtimeMs") or payload.get("metadata_mtime_ms")),
+    "metadataOnly": clean(payload.get("metadataOnly") or payload.get("metadata_only")),
+    "streamAvailable": clean(payload.get("streamAvailable") or payload.get("stream_available")),
+    "positionTrusted": "true" if position_confidence == "trusted" else "false",
+    "positionConfidence": position_confidence,
+}
+
+for key, value in fields.items():
+    value = clean(value)
+    if value:
+        print(f"{key}={value}")
+PY

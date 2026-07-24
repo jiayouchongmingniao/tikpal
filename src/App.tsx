@@ -80,7 +80,11 @@ function readInitialLyricsVisible() {
 
 function hasDisplayableReadyLyrics(state: TikpalState) {
   return state.lyrics.status === "ready"
-    && (state.lyrics.sourceScope === "bluetooth_input" || state.lyrics.sourceScope === "airplay_input")
+    && (
+      state.lyrics.sourceScope === "bluetooth_input"
+      || state.lyrics.sourceScope === "airplay_input"
+      || state.lyrics.sourceScope === "upnp_input"
+    )
     && state.lyrics.lines.some((line) => line.text.trim());
 }
 

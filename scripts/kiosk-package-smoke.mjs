@@ -39,6 +39,7 @@ const requiredFiles = [
   "deploy/moode/tikpal-usb-library-sync.sh",
   "deploy/moode/tikpal-radio-presets-sync.sh",
   "deploy/moode/tikpal-upnp-ready.sh",
+  "deploy/moode/tikpal-upnp-configure.sh",
   "deploy/moode/tikpal-upnp-enable.sh",
   "deploy/moode/tikpal-upnp-disable.sh",
   "deploy/moode/tikpal-upnp-label.sh",
@@ -167,6 +168,7 @@ async function run() {
   await assertExecutable("deploy/moode/tikpal-usb-library-sync.sh");
   await assertExecutable("deploy/moode/tikpal-radio-presets-sync.sh");
   await assertExecutable("deploy/moode/tikpal-upnp-ready.sh");
+  await assertExecutable("deploy/moode/tikpal-upnp-configure.sh");
   await assertExecutable("deploy/moode/tikpal-upnp-enable.sh");
   await assertExecutable("deploy/moode/tikpal-upnp-disable.sh");
   await assertExecutable("deploy/moode/tikpal-upnp-label.sh");

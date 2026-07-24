@@ -466,7 +466,7 @@ export type LyricsTimingStrategy =
 
 export interface LyricsState {
   status: "idle" | "recognizing" | "ready" | "not_found" | "error";
-  sourceScope: "local_playback" | "bluetooth_input" | "airplay_input";
+  sourceScope: "local_playback" | "bluetooth_input" | "airplay_input" | "upnp_input";
   providerMode: "online";
   recognitionMode: "metadata" | "fingerprint" | null;
   recognitionProvider: "lrclib" | "lyricsovh" | "custom" | "acrcloud" | null;

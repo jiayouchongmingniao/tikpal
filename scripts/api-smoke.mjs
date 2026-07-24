@@ -1695,8 +1695,10 @@ if (process.argv.join(" ").includes("cfg_radio")) {
 
     await writeFile(fakeMpcStatePath, JSON.stringify({ ...fakeState, currentFile: "", queue: [], playbackState: "stopped" }));
     recoveredRadio = null;
+    let lastRuntimeRecoveryState = null;
     for (let attempt = 0; attempt < 30; attempt += 1) {
       const state = await requestFrom(baseUrl, "/api/v1/system/state");
+      if (state.response.ok) lastRuntimeRecoveryState = state.body;
       if (
         state.response.ok
         && state.body.audio.currentSource.id === "radio"
@@ -1708,7 +1710,14 @@ if (process.argv.join(" ").includes("cfg_radio")) {
       }
       await wait(150);
     }
-    assert(recoveredRadio, "mpc Hi-Fi runtime recovery should restore stopped remembered Radio without a restart");
+    assert(
+      recoveredRadio,
+      `mpc Hi-Fi runtime recovery should restore stopped remembered Radio without a restart: ${JSON.stringify({
+        currentSource: lastRuntimeRecoveryState?.audio?.currentSource,
+        playback: lastRuntimeRecoveryState?.playback,
+        rememberedSource: lastRuntimeRecoveryState?.audio?.rememberedSource
+      })}`
+    );
 
     await writeFile(fakeMpcStatePath, JSON.stringify({
       currentFile: "http://radio.example/runtime-unknown",
@@ -3026,6 +3035,35 @@ if (getIndex >= 0) {
       "mpc DLNA ready should remain a non-active armed source while known Radio playback is active"
     );
 
+    const stateBeforeUnknownRadio = JSON.parse(await readFile(fakeMpcStatePath, "utf8"));
+    await writeFile(fakeMpcStatePath, JSON.stringify({
+      ...stateBeforeUnknownRadio,
+      currentFile: "http://radio.example/user-added-station",
+      failedStreamUri: null,
+      playbackState: "playing"
+    }));
+    const unknownRadioWhileDlnaReady = await requestFrom(baseUrl, "/api/v1/playback/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "pause" })
+    });
+    assert(unknownRadioWhileDlnaReady.response.ok, "mpc unknown radio refresh while DLNA ready should return 200");
+    assert(
+      unknownRadioWhileDlnaReady.body.audio.currentSource.id === "radio",
+      `mpc unknown Radio stream should remain current while DLNA is only ready: ${JSON.stringify({
+        currentSource: unknownRadioWhileDlnaReady.body.audio.currentSource,
+        playback: unknownRadioWhileDlnaReady.body.playback,
+        sources: unknownRadioWhileDlnaReady.body.audio.sources
+      })}`
+    );
+    assert(
+      unknownRadioWhileDlnaReady.body.playback.source === "radio",
+      `mpc unknown Radio playback source should not be replaced by DLNA Ready: ${JSON.stringify(unknownRadioWhileDlnaReady.body.playback)}`
+    );
+    assert(
+      unknownRadioWhileDlnaReady.body.audio.sources.some((source) => source.id === "upnp" && source.armed === true && source.active === false),
+      "mpc DLNA ready should remain non-active while an unknown Radio stream is active"
+    );
+
     const stateBeforeFailedStream = JSON.parse(await readFile(fakeMpcStatePath, "utf8"));
     await writeFile(fakeMpcStatePath, JSON.stringify({
       ...stateBeforeFailedStream,
@@ -3473,8 +3511,10 @@ appendFileSync(${JSON.stringify(fakeBluetoothTransportLogPath)}, action + "\\n")
       TIKPAL_UPNP_ACTIVE_COMMAND: `${process.execPath} ${fakeExternalCommandPath} upnp-active`,
       TIKPAL_UPNP_DISABLE_COMMAND: `${process.execPath} ${fakeExternalCommandPath} upnp-disable`,
       TIKPAL_UPNP_LABEL_COMMAND: "printf 'Tikpal Speaker'",
+      TIKPAL_UPNP_METADATA_COMMAND: `${process.execPath} ${fakeUpnpMetadataCommandPath}`,
       TIKPAL_FAKE_EXTERNAL_STATE_PATH: fakeExternalStatePath,
       TIKPAL_FAKE_BLUETOOTH_METADATA_PATH: fakeBluetoothMetadataPath,
+      TIKPAL_FAKE_UPNP_METADATA_PATH: fakeUpnpMetadataPath,
       TIKPAL_AIRPLAY_ENABLE_COMMAND: `${process.execPath} ${fakeExternalCommandPath} airplay-enable`,
       TIKPAL_AIRPLAY_READY_COMMAND: "true",
       TIKPAL_AIRPLAY_ACTIVE_COMMAND: "true",
@@ -4102,6 +4142,138 @@ appendFileSync(${JSON.stringify(fakeBluetoothTransportLogPath)}, action + "\\n")
     assert(missingMetadataLyricsRefresh.response.ok, "mpc airplay lyrics refresh without usable metadata should return 200");
     assert(missingMetadataLyricsRefresh.body.status === "idle", "AirPlay without usable metadata and capture should not stay in fingerprint recognizing");
     assert(missingMetadataLyricsRefresh.body.recognitionMode === null, "AirPlay without capture should not advertise fingerprint recognition");
+
+    await writeFile(fakeUpnpMetadataPath, [
+      "title=中文测试歌",
+      "artist=周杰伦",
+      "album=中文蓝牙验证",
+      "status=playing",
+      "positionMs=42000",
+      "durationMs=214000",
+      `artworkUrl=${PROVIDER_URL}/artwork/pocket-signal/600x600bb.png`,
+      "metadataSource=upmpdcli",
+      "positionTrusted=true",
+      "positionConfidence=trusted"
+    ].join("\n") + "\n");
+    const dlnaOpen = await requestFrom(baseUrl, "/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({ target: "upnp" })
+    });
+    assert(dlnaOpen.response.ok, "mpc dlna source switch should return 200 before metadata playback");
+    assert(dlnaOpen.body.audio.currentSource.id === "upnp", "mpc dlna switch should not be stolen by an old external connected probe");
+    assert(dlnaOpen.body.playback.source === "upnp", "mpc dlna switch should expose DLNA while waiting for sender metadata");
+
+    const stateAfterDlnaOpen = JSON.parse(await readFile(fakeMpcStatePath, "utf8"));
+    await writeFile(fakeMpcStatePath, JSON.stringify({
+      ...stateAfterDlnaOpen,
+      currentFile: "http://dlna.example/chinese-test.flac",
+      title: "",
+      artist: "",
+      album: "",
+      duration: "3:34",
+      elapsed: "0:42",
+      failedStreamUri: null,
+      playbackState: "playing"
+    }, null, 2) + "\n");
+    let dlnaMetadataState = null;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      dlnaMetadataState = await requestFrom(baseUrl, "/api/v1/system/state");
+      if (
+        dlnaMetadataState.response.ok
+        && dlnaMetadataState.body.playback.source === "upnp"
+        && dlnaMetadataState.body.playback.title === "中文测试歌"
+      ) {
+        break;
+      }
+      await wait(100);
+    }
+    assert(dlnaMetadataState?.response.ok, "mpc dlna metadata state should return 200");
+    assert(
+      dlnaMetadataState.body.audio.currentSource.id === "upnp",
+      `mpc DLNA metadata should promote DLNA as the current source: ${JSON.stringify(dlnaMetadataState.body.audio.currentSource)}`
+    );
+    assert(
+      dlnaMetadataState.body.audio.currentSource.connectionState === "connected",
+      "mpc DLNA metadata playback should mark DLNA connected"
+    );
+    assert(dlnaMetadataState.body.playback.source === "upnp", "mpc DLNA metadata playback should use upnp source");
+    assert(dlnaMetadataState.body.playback.title === "中文测试歌", "mpc DLNA metadata playback should expose sender title");
+    assert(dlnaMetadataState.body.playback.artist === "周杰伦", "mpc DLNA metadata playback should expose sender artist");
+    assert(dlnaMetadataState.body.playback.album === "中文蓝牙验证", "mpc DLNA metadata playback should expose sender album");
+    assert(dlnaMetadataState.body.playback.elapsedSeconds === 42, "mpc DLNA metadata playback should expose sender elapsed");
+    assert(dlnaMetadataState.body.playback.durationSeconds === 214, "mpc DLNA metadata playback should expose sender duration");
+    assert(
+      dlnaMetadataState.body.playback.albumArtUrl === `${PROVIDER_URL}/artwork/pocket-signal/600x600bb.png`,
+      "mpc DLNA metadata playback should expose sender artwork URL"
+    );
+    assert(
+      dlnaMetadataState.body.playback.timingDiagnostics?.positionConfidence === "trusted",
+      "mpc DLNA metadata playback should expose trusted timing diagnostics"
+    );
+
+    const dlnaLyricsRefresh = await requestFrom(baseUrl, "/api/v1/lyrics/refresh", {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    assert(dlnaLyricsRefresh.response.ok, "mpc dlna metadata lyrics refresh should return 200");
+    const dlnaChineseLyrics = await waitForLyricsTrackAt(baseUrl, {
+      title: "中文测试歌",
+      artist: "周杰伦"
+    });
+    assert(dlnaChineseLyrics.sourceScope === "upnp_input", "DLNA metadata lyrics should keep upnp scope");
+    assert(dlnaChineseLyrics.recognitionMode === "metadata", "DLNA sender metadata should use metadata lyrics lookup");
+    assert(dlnaChineseLyrics.recognitionProvider === "lrclib", "DLNA Chinese metadata lyrics should resolve through LRCLIB");
+    assert(dlnaChineseLyrics.synced === true, "DLNA metadata lyrics should preserve synced provider timing");
+    assert(dlnaChineseLyrics.lines.some((line) => line.text.includes("中文蓝牙同步歌词")), "DLNA lyrics wall should keep displayable CJK text");
+
+    await writeFile(fakeUpnpMetadataPath, [
+      "title=中文测试歌",
+      "artist=周杰伦",
+      "album=中文蓝牙验证",
+      "status=playing",
+      "durationMs=214000",
+      `artworkUrl=${PROVIDER_URL}/artwork/pocket-signal/600x600bb.png`,
+      "metadataSource=upmpdcli_journal",
+      "metadataOnly=true",
+      "streamAvailable=false",
+      "positionTrusted=false",
+      "positionConfidence=none"
+    ].join("\n") + "\n");
+    const stateAfterMetadataOnlyDlna = JSON.parse(await readFile(fakeMpcStatePath, "utf8"));
+    await writeFile(fakeMpcStatePath, JSON.stringify({
+      ...stateAfterMetadataOnlyDlna,
+      currentFile: "",
+      title: "",
+      artist: "",
+      album: "",
+      duration: "",
+      elapsed: "0:00",
+      failedStreamUri: null,
+      playbackState: "stopped"
+    }, null, 2) + "\n");
+    const metadataOnlyDlnaState = await requestFrom(baseUrl, "/api/v1/system/state");
+    assert(metadataOnlyDlnaState.response.ok, "metadata-only DLNA state should return 200");
+    assert(metadataOnlyDlnaState.body.audio.currentSource.id === "upnp", "metadata-only DLNA should keep DLNA current");
+    assert(
+      metadataOnlyDlnaState.body.audio.currentSource.connectionState === "armed",
+      `metadata-only DLNA should stay armed without an MPD stream: ${JSON.stringify(metadataOnlyDlnaState.body.audio.currentSource)}`
+    );
+    assert(metadataOnlyDlnaState.body.playback.source === "upnp", "metadata-only DLNA should expose upnp playback source");
+    assert(metadataOnlyDlnaState.body.playback.state === "stopped", "metadata-only DLNA should not fake playback without an MPD stream");
+    assert(metadataOnlyDlnaState.body.playback.title === "中文测试歌", "metadata-only DLNA should expose sender title without MPD current");
+    assert(
+      metadataOnlyDlnaState.body.playback.albumArtUrl === `${PROVIDER_URL}/artwork/pocket-signal/600x600bb.png`,
+      "metadata-only DLNA should expose sender artwork without MPD current"
+    );
+    const metadataOnlyDlnaLyricsRefresh = await requestFrom(baseUrl, "/api/v1/lyrics/refresh", {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    assert(metadataOnlyDlnaLyricsRefresh.response.ok, "metadata-only DLNA lyrics refresh should return 200");
+    const metadataOnlyDlnaLyrics = metadataOnlyDlnaLyricsRefresh.body;
+    assert(metadataOnlyDlnaLyrics.status === "idle", "metadata-only DLNA should not enter the lyrics wall without connected audio");
+    assert(metadataOnlyDlnaLyrics.sourceScope === "upnp_input", "metadata-only DLNA lyrics should keep upnp scope");
+    assert(metadataOnlyDlnaLyrics.message === "Waiting for DLNA audio", "metadata-only DLNA lyrics should explain that audio is still waiting");
   } finally {
     if (server.exitCode === null && server.signalCode === null) {
       server.kill("SIGTERM");

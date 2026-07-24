@@ -241,7 +241,7 @@ function findActiveLyricsLineIndex(lyrics: LyricsState, elapsedSeconds: number |
 }
 
 function isProxyInputLyricsSource(sourceScope: LyricsState["sourceScope"]) {
-  return sourceScope === "bluetooth_input" || sourceScope === "airplay_input";
+  return sourceScope === "bluetooth_input" || sourceScope === "airplay_input" || sourceScope === "upnp_input";
 }
 
 function getLyricsTimelineMs(lyrics: LyricsState) {
@@ -393,12 +393,12 @@ export function AmbientScreen({
   const sceneVisualLowPower = audioProtectionMode || sceneVideoThermalGuardActive;
   const sceneAudioEnabled = shouldRenderSceneVideo && sceneSoundEnabled && !ambientSceneAudioSuppressed && playback.source === "scene" && playback.state === "playing";
   const useStableSceneLoop = sceneVideoStableLoop && shouldRenderSceneVideo && !isHifiMode;
-  const airplayLyricsClockUsable = playback.timingDiagnostics?.positionTrusted === true
+  const proxyLyricsClockUsable = playback.timingDiagnostics?.positionTrusted === true
     || playback.timingDiagnostics?.positionConfidence === "estimated";
   const playbackLyricsClockTrusted = Number.isFinite(playback.elapsedSeconds)
-    && (playback.source !== "airplay" || airplayLyricsClockUsable);
+    && ((playback.source !== "airplay" && playback.source !== "upnp") || proxyLyricsClockUsable);
   const canAdvanceLyrics = lyrics.synced
-    && (playback.source === "mpd" || playback.source === "radio" || playback.source === "bluetooth" || playback.source === "airplay")
+    && (playback.source === "mpd" || playback.source === "radio" || playback.source === "bluetooth" || playback.source === "airplay" || playback.source === "upnp")
     && playback.state === "playing"
     && playbackLyricsClockTrusted;
   const lyricsElapsedSeconds = useMemo(() => {
@@ -452,7 +452,7 @@ export function AmbientScreen({
   const showStaticLyrics = hasReadyLyrics && Boolean(staticLyricsText) && (!lyrics.synced || !canAdvanceLyrics || !activeLyricsLine);
   const showIdentifiedTrack = (lyrics.status === "not_found" || lyrics.status === "error") && Boolean(lyrics.title || lyrics.artist);
   const recognizingMessage = isProxyInputLyricsSource(lyrics.sourceScope)
-    ? `Listening to ${lyrics.sourceScope === "airplay_input" ? "AirPlay" : "Bluetooth"} audio...`
+    ? `Listening to ${lyrics.sourceScope === "airplay_input" ? "AirPlay" : lyrics.sourceScope === "upnp_input" ? "DLNA" : "Bluetooth"} audio...`
     : "Identifying track...";
   const tickerText = showSyncedLyrics
     ? activeLyricsLine?.text ?? ""

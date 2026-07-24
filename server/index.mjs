@@ -1535,6 +1535,27 @@ function promoteCurrentSourceConnectedFromPlaybackMetadata(audio, source) {
   };
 }
 
+function demoteCurrentSourceToArmed(audio, source, secondaryStatus = null) {
+  if (!audio?.currentSource || audio.currentSource.id !== source) return audio;
+
+  const patchSource = (entry) => {
+    if (entry.id !== source) return entry;
+    return {
+      ...entry,
+      availability: entry.armed ? "waiting" : entry.availability,
+      connectionState: entry.armed ? "armed" : "blocked",
+      connectedLabel: null,
+      secondaryStatus: secondaryStatus ?? entry.secondaryStatus
+    };
+  };
+
+  return {
+    ...audio,
+    currentSource: patchSource(audio.currentSource),
+    sources: Array.isArray(audio.sources) ? audio.sources.map(patchSource) : audio.sources
+  };
+}
+
 function formatMockTimeLabel(date = new Date()) {
   const hours = String(date.getHours()).padStart(2, "0");
   const minutes = String(date.getMinutes()).padStart(2, "0");
@@ -2299,6 +2320,19 @@ function parseBluetoothMetadataOutput(raw) {
   const durationMs = Number(metadata.durationms ?? metadata.duration_ms ?? metadata.duration);
   const status = normalizeMetadataValue(metadata.status).toLowerCase();
   const timingDiagnostics = parsePlaybackTimingDiagnostics(metadata);
+  const streamAvailable = readMetadataBoolean(metadata, [
+    "streamavailable",
+    "streamAvailable",
+    "stream_available",
+    "playbackavailable",
+    "playbackAvailable",
+    "playback_available"
+  ]);
+  const metadataOnly = readMetadataBoolean(metadata, [
+    "metadataonly",
+    "metadataOnly",
+    "metadata_only"
+  ]);
 
   return {
     title,
@@ -2308,6 +2342,8 @@ function parseBluetoothMetadataOutput(raw) {
     positionMs: Number.isFinite(positionMs) ? positionMs : null,
     durationMs: Number.isFinite(durationMs) ? durationMs : null,
     artworkUrl: metadataArtworkUrl(metadata),
+    streamAvailable,
+    metadataOnly,
     positionTrusted: timingDiagnostics?.positionTrusted === true,
     timingDiagnostics
   };
@@ -5717,7 +5753,7 @@ async function enforceConnectionGate(nextSource) {
   await ensureAirplayReceiverState(false);
 }
 
-async function getMpcAudioSnapshot(currentFile, status = null) {
+async function getMpcAudioSnapshot(currentFile, status = null, options = {}) {
   const radioStations = await getAvailableRadioStations();
   const [audioSourceState, spotifyState, bluetoothState, airplayState, upnpState] = await Promise.all([
     getSourceStatusFromCommands({
@@ -5785,10 +5821,23 @@ async function getMpcAudioSnapshot(currentFile, status = null) {
   ]);
   const radioReady = Boolean(RADIO_ACTIVATE_COMMAND || RADIO_DEFAULT_URI || radioStations.length > 0);
   const radioActive = isStreamUri(currentFile);
-  const knownRadioStation = radioActive ? findActiveRadioStationFromList(currentFile, radioStations) : null;
   const mpcPlaybackState = String(status?.state ?? "").trim().toLowerCase();
   const mpdPlaybackActive = Boolean(currentFile) && mpcPlaybackState !== "stopped";
-  const upnpMpdPlaybackActive = mockArmedSource === "upnp" && mpdPlaybackActive && hasUpnpMpdReleaseMarker() && !knownRadioStation;
+  const hasUpnpPlaybackMetadata = Boolean(options.upnpPlaybackMetadata?.title);
+  const canUseUpnpPlaybackMetadata = hasUpnpPlaybackMetadata
+    && (mockArmedSource === "upnp" || upnpState.armed || upnpState.connected || hasUpnpMpdReleaseMarker());
+  const upnpMpdPlaybackActive = mockArmedSource === "upnp"
+    && mpdPlaybackActive
+    && hasUpnpMpdReleaseMarker()
+    && canUseUpnpPlaybackMetadata;
+  const effectiveUpnpState = upnpMpdPlaybackActive
+    ? {
+        ...upnpState,
+        available: true,
+        armed: true,
+        connected: true
+      }
+    : upnpState;
   const activeMpdSource = mpdPlaybackActive
     ? upnpMpdPlaybackActive
       ? "upnp"
@@ -5797,33 +5846,33 @@ async function getMpcAudioSnapshot(currentFile, status = null) {
       : "mpd"
     : null;
   const canHonorExternalHandoff = Date.now() >= externalAutoArmSuppressedUntilMs;
-  const connectedExternalSource = spotifyState.connected
+  const rawConnectedExternalSource = spotifyState.connected
     ? "spotify"
     : bluetoothState.connected
       ? "bluetooth"
       : airplayState.connected
         ? "airplay"
-        : upnpState.connected
+        : effectiveUpnpState.connected
           ? "upnp"
           : null;
-  const knownRadioPlaybackActive = activeMpdSource === "radio" && Boolean(knownRadioStation);
+  const connectedExternalSource = !mockArmedSource || rawConnectedExternalSource === mockArmedSource
+    ? rawConnectedExternalSource
+    : null;
   const preferredHandoffSource = canHonorExternalHandoff
     && mockArmedSource
     && COMMAND_HANDOFF_SOURCE_TARGETS.has(mockArmedSource)
-    && !knownRadioPlaybackActive
+    && !activeMpdSource
     ? mockArmedSource
     : null;
   let activeSource = "mpd";
   if (mockArmedSource === "scene") {
     activeSource = "scene";
-  } else if (knownRadioPlaybackActive) {
-    activeSource = activeMpdSource;
-  } else if (preferredHandoffSource) {
-    activeSource = preferredHandoffSource;
-  } else if (canHonorExternalHandoff && connectedExternalSource) {
-    activeSource = connectedExternalSource;
   } else if (activeMpdSource) {
     activeSource = activeMpdSource;
+  } else if (canHonorExternalHandoff && connectedExternalSource) {
+    activeSource = connectedExternalSource;
+  } else if (preferredHandoffSource) {
+    activeSource = preferredHandoffSource;
   } else if (audioSourceState.connected || audioSourceState.armed) {
     activeSource = "audio";
   } else if (spotifyState.armed) {
@@ -5832,7 +5881,7 @@ async function getMpcAudioSnapshot(currentFile, status = null) {
     activeSource = "bluetooth";
   } else if (airplayState.armed) {
     activeSource = "airplay";
-  } else if (upnpState.armed) {
+  } else if (effectiveUpnpState.armed) {
     activeSource = "upnp";
   } else if (radioActive) {
     activeSource = "radio";
@@ -5840,7 +5889,7 @@ async function getMpcAudioSnapshot(currentFile, status = null) {
   const connectedHandoffSource = (activeSource === "spotify" && spotifyState.connected)
     || (activeSource === "bluetooth" && bluetoothState.connected)
     || (activeSource === "airplay" && airplayState.connected)
-    || (activeSource === "upnp" && upnpState.connected);
+    || (activeSource === "upnp" && effectiveUpnpState.connected);
   if (canHonorExternalHandoff && !mockArmedSource && connectedHandoffSource) {
     mockArmedSource = activeSource;
   }
@@ -5861,7 +5910,7 @@ async function getMpcAudioSnapshot(currentFile, status = null) {
     spotifyState,
     bluetoothState,
     airplayState,
-    upnpState
+    upnpState: effectiveUpnpState
   });
 }
 
@@ -5893,34 +5942,28 @@ function buildMinimalMpcAudioSnapshot(currentFile = "") {
     ? { ...activeMpcRadioStationCache.station, active: true }
     : null;
   const mpdPlaybackActive = Boolean(currentFile);
-  const upnpMpdPlaybackActive = mockArmedSource === "upnp" && mpdPlaybackActive && hasUpnpMpdReleaseMarker() && !cachedActiveRadioStation;
   const cachedConnectedSource = ["spotify", "bluetooth", "airplay", "upnp"].find((source) => (
     mockArmedSource === source
       && tikpalStateSnapshotCache?.state?.audio?.sources?.find((entry) => entry.id === source)?.connectionState === "connected"
   )) ?? null;
   const canHonorExternalHandoff = Date.now() >= externalAutoArmSuppressedUntilMs;
-  const knownRadioPlaybackActive = radioActive && Boolean(cachedActiveRadioStation);
   const preferredHandoffSource = canHonorExternalHandoff
     && mockArmedSource
     && ["spotify", "bluetooth", "airplay", "upnp"].includes(mockArmedSource)
-    && !knownRadioPlaybackActive
+    && !mpdPlaybackActive
     ? mockArmedSource
     : null;
   let activeSource = "mpd";
   if (mockArmedSource === "scene") {
     activeSource = "scene";
-  } else if (knownRadioPlaybackActive) {
-    activeSource = "radio";
   } else if (preferredHandoffSource) {
     activeSource = preferredHandoffSource;
-  } else if (canHonorExternalHandoff && cachedConnectedSource) {
-    activeSource = cachedConnectedSource;
-  } else if (upnpMpdPlaybackActive) {
-    activeSource = "upnp";
   } else if (radioActive) {
     activeSource = "radio";
   } else if (mpdPlaybackActive) {
     activeSource = "mpd";
+  } else if (canHonorExternalHandoff && cachedConnectedSource) {
+    activeSource = cachedConnectedSource;
   } else if (mockArmedSource && ["audio", "spotify", "bluetooth", "airplay", "upnp"].includes(mockArmedSource)) {
     activeSource = mockArmedSource;
   }
@@ -6186,12 +6229,16 @@ async function getMpcSnapshot(options = {}) {
   const file = getEffectiveMpcCurrentFile(rawFile, status);
   const hasCurrentTrack = Boolean(currentRaw.trim()) || Boolean(file);
   const durationSeconds = parseDuration(duration) ?? status.durationSeconds;
+  const upnpPlaybackMetadata = includeSlowRuntimeStatus
+    ? await readUpnpPlaybackMetadata()
+    : null;
+  const trustedUpnpPlaybackMetadata = normalizeUpnpPlaybackMetadata(upnpPlaybackMetadata);
   const nextSystem = includeSlowRuntimeStatus
     ? await getMpcSystemSnapshot(statusRaw, statsRaw)
     : getCachedMpcSystemSnapshot(statusRaw, statsRaw);
   const useCachedSceneSourceRuntimeStatus = includeSourceRuntimeStatus && shouldUseCachedSceneSourceRuntimeStatus(file);
   const audio = includeSourceRuntimeStatus && !useCachedSceneSourceRuntimeStatus
-    ? await getMpcAudioSnapshot(file, status)
+    ? await getMpcAudioSnapshot(file, status, { upnpPlaybackMetadata: trustedUpnpPlaybackMetadata })
     : buildMinimalMpcAudioSnapshot(file);
   const queuePreview = await getMpcQueuePreview(status);
   const playbackSource = audio.sources.find((source) => source.active)?.id ?? audio.currentSource.id;
@@ -6229,26 +6276,27 @@ async function getMpcSnapshot(options = {}) {
   const airplayPlaybackMetadata = includeSlowRuntimeStatus && playbackSource === "airplay"
     ? await readAirplayPlaybackMetadata()
     : null;
-  const upnpPlaybackMetadata = includeSlowRuntimeStatus && playbackSource === "upnp"
-    ? await readUpnpPlaybackMetadata()
-    : null;
   const airplayTransportAvailable = playbackSource === "airplay"
     ? await readAirplayTransportAvailable(includeSlowRuntimeStatus)
     : null;
   const hasBluetoothTrackMetadata = Boolean(bluetoothPlaybackMetadata?.title);
-  const playbackAudio = playbackSource === "bluetooth" && hasBluetoothTrackMetadata
+  const activeUpnpPlaybackMetadata = playbackSource === "upnp" ? trustedUpnpPlaybackMetadata : null;
+  const hasUpnpTrackMetadata = Boolean(activeUpnpPlaybackMetadata?.title);
+  const upnpMetadataHasAudibleStream = hasCurrentTrack || activeUpnpPlaybackMetadata?.streamAvailable === true;
+  const upnpMetadataOnlyWithoutStream = playbackSource === "upnp" && hasUpnpTrackMetadata && !upnpMetadataHasAudibleStream;
+  const rawPlaybackAudio = playbackSource === "bluetooth" && hasBluetoothTrackMetadata
     ? promoteCurrentSourceConnectedFromPlaybackMetadata(audio, "bluetooth")
-    : playbackSource === "upnp" && hasCurrentTrack
+    : playbackSource === "upnp" && hasUpnpTrackMetadata && upnpMetadataHasAudibleStream
       ? promoteCurrentSourceConnectedFromPlaybackMetadata(audio, "upnp")
     : audio;
+  const playbackAudio = upnpMetadataOnlyWithoutStream
+    ? demoteCurrentSourceToArmed(rawPlaybackAudio, "upnp", "DLNA metadata received; waiting for audio stream")
+    : rawPlaybackAudio;
   const airplayConnected = playbackSource === "airplay" && playbackAudio.currentSource.connectionState === "connected";
   const trustedAirplayPlaybackMetadata = airplayConnected
     ? normalizeAirplayPlaybackMetadata(airplayPlaybackMetadata)
     : null;
   const hasAirplayTrackMetadata = Boolean(trustedAirplayPlaybackMetadata?.title);
-  const trustedUpnpPlaybackMetadata = playbackSource === "upnp"
-    ? normalizeUpnpPlaybackMetadata(upnpPlaybackMetadata)
-    : null;
   const bluetoothRemoteArtworkUrl = playbackSource === "bluetooth" && bluetoothPlaybackMetadata?.title && !bluetoothPlaybackMetadata.artworkUrl
     ? await resolveRemotePlaybackArtworkUrl({
         playbackSource,
@@ -6265,12 +6313,12 @@ async function getMpcSnapshot(options = {}) {
         album: trustedAirplayPlaybackMetadata.album
       })
     : null;
-  const upnpRemoteArtworkUrl = playbackSource === "upnp" && trustedUpnpPlaybackMetadata?.title && !trustedUpnpPlaybackMetadata.artworkUrl
+  const upnpRemoteArtworkUrl = playbackSource === "upnp" && activeUpnpPlaybackMetadata?.title && !activeUpnpPlaybackMetadata.artworkUrl
     ? await resolveRemotePlaybackArtworkUrl({
         playbackSource,
-        title: trustedUpnpPlaybackMetadata.title,
-        artist: trustedUpnpPlaybackMetadata.artist,
-        album: trustedUpnpPlaybackMetadata.album
+        title: activeUpnpPlaybackMetadata.title,
+        artist: activeUpnpPlaybackMetadata.artist,
+        album: activeUpnpPlaybackMetadata.album
       })
     : null;
   const metadata = hasCurrentTrack
@@ -6291,9 +6339,9 @@ async function getMpcSnapshot(options = {}) {
       ? await resolveCurrentArtworkState({
           playbackSource,
           metadata,
-          fallbackTitle: trustedUpnpPlaybackMetadata?.title || radioPlaybackMetadata?.title || title || trackTitleFromFile(file),
-          fallbackArtist: trustedUpnpPlaybackMetadata?.artist || radioPlaybackMetadata?.artist || artist || "Unknown Artist",
-          fallbackAlbum: trustedUpnpPlaybackMetadata?.album || radioPlaybackMetadata?.album || album || "MPD Queue"
+          fallbackTitle: activeUpnpPlaybackMetadata?.title || radioPlaybackMetadata?.title || title || trackTitleFromFile(file),
+          fallbackArtist: activeUpnpPlaybackMetadata?.artist || radioPlaybackMetadata?.artist || artist || "Unknown Artist",
+          fallbackAlbum: activeUpnpPlaybackMetadata?.album || radioPlaybackMetadata?.album || album || "MPD Queue"
         })
       : null;
   }
@@ -6309,7 +6357,9 @@ async function getMpcSnapshot(options = {}) {
           : playbackSource === "spotify"
           ? playbackAudio.currentSource.connectionState === "connected" ? "playing" : "stopped"
         : playbackSource === "upnp"
-          ? hasCurrentTrack ? status.state : playbackAudio.currentSource.connectionState === "connected" ? "playing" : "stopped"
+          ? activeUpnpPlaybackMetadata && upnpMetadataHasAudibleStream
+            ? mapBluetoothPlaybackState(activeUpnpPlaybackMetadata)
+            : hasCurrentTrack ? status.state : playbackAudio.currentSource.connectionState === "connected" ? "playing" : "stopped"
         : hasCurrentTrack ? status.state : "stopped",
       source: playbackSource,
       albumArtUrl: playbackSource === "bluetooth"
@@ -6317,7 +6367,7 @@ async function getMpcSnapshot(options = {}) {
         : playbackSource === "airplay"
           ? trustedAirplayPlaybackMetadata?.artworkUrl ?? airplayRemoteArtworkUrl
         : playbackSource === "upnp"
-          ? trustedUpnpPlaybackMetadata?.artworkUrl
+          ? activeUpnpPlaybackMetadata?.artworkUrl
             ?? upnpRemoteArtworkUrl
             ?? (hasCurrentTrack && includeSlowRuntimeStatus && currentArtworkState ? `/api/v1/media/artwork?track=${encodeURIComponent(currentArtworkState.token)}` : null)
           : playbackSource === "radio" && activeRadioStation?.logoUrl
@@ -6330,7 +6380,7 @@ async function getMpcSnapshot(options = {}) {
           : playbackSource === "spotify"
             ? "Spotify Connect Ready"
           : playbackSource === "upnp"
-            ? trustedUpnpPlaybackMetadata?.title || (hasCurrentTrack ? metadata.title || title || trackTitleFromFile(file) : "DLNA Ready")
+            ? activeUpnpPlaybackMetadata?.title || (hasCurrentTrack ? metadata.title || title || trackTitleFromFile(file) : "DLNA Ready")
           : playbackSource === "bluetooth"
             ? bluetoothPlaybackMetadata?.title || "Bluetooth Ready"
             : playbackSource === "airplay"
@@ -6344,7 +6394,7 @@ async function getMpcSnapshot(options = {}) {
             ? playbackAudio.currentSource.connectedLabel
               || (playbackAudio.currentSource.advertisedLabel ? `Choose ${playbackAudio.currentSource.advertisedLabel} in Spotify` : "Choose Tikpal in Spotify")
           : playbackSource === "upnp"
-            ? trustedUpnpPlaybackMetadata?.artist || (hasCurrentTrack
+            ? activeUpnpPlaybackMetadata?.artist || (hasCurrentTrack
               ? metadata.artist || artist || null
               : playbackAudio.currentSource.connectedLabel
                 || (playbackAudio.currentSource.advertisedLabel ? `Cast to ${playbackAudio.currentSource.advertisedLabel} with DLNA` : "Cast to Tikpal with DLNA"))
@@ -6366,7 +6416,7 @@ async function getMpcSnapshot(options = {}) {
           : playbackSource === "spotify"
             ? "Spotify Connect"
           : playbackSource === "upnp"
-            ? trustedUpnpPlaybackMetadata?.album || (hasCurrentTrack ? metadata.album || album || "DLNA Source" : "DLNA Source")
+            ? activeUpnpPlaybackMetadata?.album || (hasCurrentTrack ? metadata.album || album || "DLNA Source" : "DLNA Source")
           : playbackSource === "bluetooth"
             ? bluetoothPlaybackMetadata?.album || null
             : playbackSource === "airplay"
@@ -6379,7 +6429,7 @@ async function getMpcSnapshot(options = {}) {
         : playbackSource === "airplay"
           ? millisecondsToSeconds(trustedAirplayPlaybackMetadata?.positionMs)
         : playbackSource === "upnp"
-          ? millisecondsToSeconds(trustedUpnpPlaybackMetadata?.positionMs) ?? (isMpdBackedSource && hasCurrentTrack ? status.elapsedSeconds : null)
+          ? millisecondsToSeconds(activeUpnpPlaybackMetadata?.positionMs) ?? (isMpdBackedSource && hasCurrentTrack ? status.elapsedSeconds : null)
         : playbackSource === "spotify"
           ? null
         : isMpdBackedSource && hasCurrentTrack ? status.elapsedSeconds : null,
@@ -6390,7 +6440,7 @@ async function getMpcSnapshot(options = {}) {
         : playbackSource === "airplay"
           ? millisecondsToSeconds(trustedAirplayPlaybackMetadata?.durationMs, { allowZero: false })
         : playbackSource === "upnp"
-          ? millisecondsToSeconds(trustedUpnpPlaybackMetadata?.durationMs, { allowZero: false }) ?? (isMpdBackedSource && hasCurrentTrack ? durationSeconds : null)
+          ? millisecondsToSeconds(activeUpnpPlaybackMetadata?.durationMs, { allowZero: false }) ?? (isMpdBackedSource && hasCurrentTrack ? durationSeconds : null)
         : playbackSource === "spotify"
           ? null
         : isMpdBackedSource && hasCurrentTrack ? durationSeconds : null,
@@ -6399,7 +6449,7 @@ async function getMpcSnapshot(options = {}) {
         : playbackSource === "airplay"
           ? trustedAirplayPlaybackMetadata?.timingDiagnostics ?? null
           : playbackSource === "upnp"
-            ? trustedUpnpPlaybackMetadata?.timingDiagnostics ?? null
+            ? activeUpnpPlaybackMetadata?.timingDiagnostics ?? null
           : null,
       transportCapabilities: buildPlaybackTransportCapabilities(playbackSource, {
         airplayRemoteControlAvailable: airplayTransportAvailable,
@@ -7766,7 +7816,10 @@ async function getTikpalState(options = {}) {
     await startupPlaybackPolicyPromise;
   }
   void requestTikpalStateSnapshotRefresh();
-  const cachedState = readCachedTikpalState();
+  let cachedState = readCachedTikpalState();
+  if (cachedState.playback?.source === "upnp" && UPNP_METADATA_COMMAND.trim()) {
+    cachedState = await requestTikpalStateSnapshotRefresh({ force: true }) ?? readCachedTikpalState();
+  }
   void recoverWeakNetworkMpcRadioIfNeeded(cachedState);
   void recoverHifiRuntimePlaybackIfNeeded(cachedState);
   return await refreshAirplayPlaybackMetadataForState(cachedState, {
