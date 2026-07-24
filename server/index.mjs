@@ -7756,6 +7756,12 @@ function escapeXml(value) {
     .replaceAll("'", "&apos;");
 }
 
+function truncateSvgText(value, maxLength) {
+  const trimmed = String(value ?? "").trim();
+  if (trimmed.length <= maxLength) return trimmed;
+  return `${trimmed.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
+}
+
 const GENERATED_ARTWORK_FONT_FAMILIES = {
   system: "SF Pro Display, SF Pro Text, Inter, Helvetica Neue, PingFang SC, sans-serif",
   hardware: "Avenir Next, DIN Alternate, DIN Condensed, SF Pro Display, PingFang SC, sans-serif",
@@ -7783,23 +7789,27 @@ function buildGeneratedArtworkSvg({ title, artist, album }, fontTheme = "system"
     .slice(0, 3)
     .toUpperCase();
   const fontFamily = escapeXml(GENERATED_ARTWORK_FONT_FAMILIES[normalizeGeneratedArtworkFontTheme(fontTheme)]);
+  const safeTitle = escapeXml(truncateSvgText(title || "Not Playing", 22));
+  const safeArtist = escapeXml(truncateSvgText(artist || "Unknown Artist", 28));
+  const safeAlbum = escapeXml(truncateSvgText(album || "MPD Queue", 28));
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1200" viewBox="0 0 1200 1200" role="img" aria-label="${escapeXml(title || "Tikpal")}">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="hsl(${hueA} 72% 58%)"/>
-      <stop offset="100%" stop-color="hsl(${hueB} 68% 18%)"/>
+      <stop offset="0%" stop-color="hsl(${hueA} 42% 24%)"/>
+      <stop offset="58%" stop-color="hsl(${hueB} 36% 18%)"/>
+      <stop offset="100%" stop-color="hsl(${hueB} 32% 11%)"/>
     </linearGradient>
   </defs>
-  <rect width="1200" height="1200" rx="88" fill="url(#bg)"/>
-  <circle cx="920" cy="280" r="220" fill="rgba(255,255,255,0.12)"/>
-  <circle cx="300" cy="920" r="260" fill="rgba(0,0,0,0.18)"/>
-  <rect x="100" y="100" width="1000" height="1000" rx="72" fill="rgba(12,16,24,0.28)" stroke="rgba(255,255,255,0.16)"/>
-  <text x="600" y="520" text-anchor="middle" fill="rgba(255,255,255,0.94)" font-family="${fontFamily}" font-size="220" font-weight="700">${escapeXml(label || "TK")}</text>
-  <text x="130" y="860" fill="rgba(255,255,255,0.96)" font-family="${fontFamily}" font-size="80" font-weight="700">${escapeXml(title || "Not Playing")}</text>
-  <text x="130" y="935" fill="rgba(255,255,255,0.78)" font-family="${fontFamily}" font-size="46">${escapeXml(artist || "Unknown Artist")}</text>
-  <text x="130" y="995" fill="rgba(255,255,255,0.62)" font-family="${fontFamily}" font-size="38">${escapeXml(album || "MPD Queue")}</text>
+  <rect width="1200" height="1200" fill="url(#bg)"/>
+  <circle cx="600" cy="420" r="230" fill="rgba(255,255,255,0.055)"/>
+  <circle cx="600" cy="420" r="150" fill="rgba(0,0,0,0.12)"/>
+  <text x="600" y="490" text-anchor="middle" fill="rgba(255,255,255,0.94)" font-family="${fontFamily}" font-size="210" font-weight="700">${escapeXml(label || "TK")}</text>
+  <path d="M430 640h340" stroke="rgba(255,255,255,0.2)" stroke-width="5" stroke-linecap="round"/>
+  <text x="600" y="780" text-anchor="middle" fill="rgba(255,255,255,0.96)" font-family="${fontFamily}" font-size="68" font-weight="700">${safeTitle}</text>
+  <text x="600" y="850" text-anchor="middle" fill="rgba(255,255,255,0.72)" font-family="${fontFamily}" font-size="40">${safeArtist}</text>
+  <text x="600" y="908" text-anchor="middle" fill="rgba(255,255,255,0.54)" font-family="${fontFamily}" font-size="34">${safeAlbum}</text>
 </svg>`;
 }
 

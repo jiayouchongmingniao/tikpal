@@ -23,6 +23,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { fetchAudioLibrary, fetchRadioCatalog, sendFavoriteTrack } from "../api/tikpalClient";
 import { getPlaybackDisplayTruth, getPlaybackSourceSummary } from "../playbackTruth";
+import { getSourceDisplayStatusLabel } from "../sourceStatus";
 import type { TikpalDataStatus } from "../hooks/useTikpalState";
 import { formatDuration } from "../mockState";
 import { useOverlayReturnGesture } from "../hooks/useOverlayReturnGesture";
@@ -123,15 +124,7 @@ function subCategorySortIndex(categoryId: AudioLibraryCategoryId, label: string)
 }
 
 function sourceStatusLabel(source: AudioState["currentSource"] | undefined, pending: boolean) {
-  if (pending && isHandoffSourceId(source?.id)) return "Waiting for connection";
-  if (pending) return "Opening";
-  if (!source) return "Unavailable";
-  if (source.active) return "Active";
-  if (source.connectionState === "connected") return "Connected";
-  if (source.connectionState === "armed") return "Ready";
-  if (source.connectionState === "blocked") return "Closed";
-  if (source.availability === "unavailable") return "Unavailable";
-  return "Ready";
+  return getSourceDisplayStatusLabel(source, { pending });
 }
 
 function isHandoffSourceId(sourceId: string | null | undefined): sourceId is ExternalPanelId {
@@ -919,7 +912,7 @@ export function PlayerOverlay({
             <LoaderCircle size={26} className="is-spinning" />
           </span>
           <span className="source-panel-kicker">{sourceLabel}</span>
-          <strong>Waiting for connection</strong>
+          <strong>Connecting</strong>
           <p>Tikpal is open for {sourceLabel}. This panel will return when the device connects or the handoff times out.</p>
         </div>
       </section>

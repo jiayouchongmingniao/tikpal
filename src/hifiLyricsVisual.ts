@@ -221,9 +221,9 @@ export function hifiThemeToCssVariables(palette: HifiThemePalette) {
 
 export function buildBluetoothGeneratedCoverArtUrl(title: string, artist: string, album: string) {
   const palette = buildHifiSeedTheme([title, artist, album, "bluetooth"]);
-  const safeTitle = escapeXml(truncateSvgText(title || "Bluetooth Audio", 30));
-  const safeArtist = escapeXml(truncateSvgText(artist || "Unknown Artist", 34));
-  const safeAlbum = escapeXml(truncateSvgText(album || "Bluetooth Source", 34));
+  const safeTitle = escapeXml(truncateSvgText(title || "Bluetooth Audio", 22));
+  const safeArtist = escapeXml(truncateSvgText(artist || "Unknown Artist", 28));
+  const safeAlbum = escapeXml(truncateSvgText(album || "Bluetooth Source", 28));
 
   const svg = `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1200" viewBox="0 0 1200 1200">
@@ -241,17 +241,15 @@ export function buildBluetoothGeneratedCoverArtUrl(title: string, artist: string
     </linearGradient>
   </defs>
   <rect width="1200" height="1200" fill="url(#poster)"/>
-  <circle cx="820" cy="404" r="300" fill="url(#record)" opacity="0.62"/>
-  <circle cx="820" cy="404" r="238" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="2"/>
-  <circle cx="820" cy="404" r="190" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="2"/>
-  <circle cx="820" cy="404" r="132" fill="none" stroke="rgba(255,255,255,0.05)" stroke-width="2"/>
-  <circle cx="820" cy="404" r="52" fill="rgba(8,12,18,0.86)" stroke="rgba(255,255,255,0.18)" stroke-width="3"/>
-  <rect x="88" y="88" width="1024" height="1024" rx="70" fill="rgba(8,12,18,0.1)" stroke="rgba(255,255,255,0.12)" stroke-width="2"/>
-  <text x="120" y="170" fill="${palette.accent}" font-family="SF Pro Display, Inter, Helvetica Neue, sans-serif" font-size="46" font-weight="800" letter-spacing="3">BLUETOOTH</text>
-  <text x="120" y="780" fill="${palette.title}" font-family="SF Pro Display, Inter, Helvetica Neue, sans-serif" font-size="88" font-weight="760">${safeTitle}</text>
-  <text x="120" y="874" fill="rgba(255,255,255,0.78)" font-family="SF Pro Text, Inter, Helvetica Neue, sans-serif" font-size="46" font-weight="620">${safeArtist}</text>
-  <text x="120" y="940" fill="rgba(255,255,255,0.58)" font-family="SF Pro Text, Inter, Helvetica Neue, sans-serif" font-size="38" font-weight="560">${safeAlbum}</text>
-  <path d="M120 1018h304" stroke="${palette.accent}" stroke-width="8" stroke-linecap="round"/>
+  <circle cx="600" cy="420" r="250" fill="url(#record)" opacity="0.54"/>
+  <circle cx="600" cy="420" r="196" fill="none" stroke="rgba(255,255,255,0.07)" stroke-width="2"/>
+  <circle cx="600" cy="420" r="132" fill="none" stroke="rgba(255,255,255,0.05)" stroke-width="2"/>
+  <circle cx="600" cy="420" r="46" fill="rgba(8,12,18,0.84)" stroke="rgba(255,255,255,0.16)" stroke-width="3"/>
+  <text x="600" y="220" text-anchor="middle" fill="${palette.accent}" font-family="SF Pro Display, Inter, Helvetica Neue, sans-serif" font-size="42" font-weight="800" letter-spacing="3">BLUETOOTH</text>
+  <text x="600" y="760" text-anchor="middle" fill="${palette.title}" font-family="SF Pro Display, Inter, Helvetica Neue, sans-serif" font-size="74" font-weight="760">${safeTitle}</text>
+  <text x="600" y="835" text-anchor="middle" fill="rgba(255,255,255,0.76)" font-family="SF Pro Text, Inter, Helvetica Neue, sans-serif" font-size="40" font-weight="620">${safeArtist}</text>
+  <text x="600" y="895" text-anchor="middle" fill="rgba(255,255,255,0.56)" font-family="SF Pro Text, Inter, Helvetica Neue, sans-serif" font-size="34" font-weight="560">${safeAlbum}</text>
+  <path d="M450 986h300" stroke="${palette.accent}" stroke-width="7" stroke-linecap="round" opacity="0.84"/>
 </svg>`;
 
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;

@@ -1922,15 +1922,15 @@ select {
   position: absolute;
   bottom: calc(100% + 42px);
   left: 50%;
-  width: min(900px, calc(100vw - 160px));
-  padding: 12px;
+  width: min(1120px, calc(100vw - 160px));
+  padding: 14px;
   transform: translateX(-50%);
 }
 
 .ambient-source-picker-grid {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
-  gap: 8px;
+  gap: 10px;
 }
 
 .dlna-handoff-card {
@@ -1981,13 +1981,13 @@ select {
 
 .ambient-source-option {
   display: grid;
-  grid-template-rows: 34px auto auto;
+  grid-template-rows: 42px auto auto;
   justify-items: center;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   min-width: 0;
-  min-height: 108px;
-  padding: 10px 8px;
+  min-height: 126px;
+  padding: 14px 10px;
   border: 1px solid var(--surface-control-border);
   border-radius: 8px;
   background: var(--surface-control-bg);
@@ -2029,8 +2029,8 @@ select {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
+  width: 42px;
+  height: 42px;
   border-radius: 50%;
   background: var(--surface-control-bg-hover);
 }
@@ -2039,7 +2039,7 @@ select {
   overflow: hidden;
   max-width: 100%;
   color: inherit;
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 820;
   line-height: 1.1;
   text-align: center;
@@ -2051,7 +2051,7 @@ select {
   overflow: hidden;
   max-width: 100%;
   color: var(--theme-text-muted);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 720;
   line-height: 1.1;
   text-align: center;

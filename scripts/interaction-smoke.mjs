@@ -134,7 +134,8 @@ function generatedCoverSquareRootExpression(selector) {
       const svg = decodeURIComponent(encodedSvg);
       return /<rect\\s+width="1200"\\s+height="1200"\\s+fill=/.test(svg)
         && !/<rect\\s+width="1200"\\s+height="1200"\\s+rx=/.test(svg)
-        && !/clipPath\\s+id="posterClip"/.test(svg);
+        && !/clipPath\\s+id="posterClip"/.test(svg)
+        && !/<rect\\s+x="\\d+"[^>]*\\srx=/.test(svg);
     })()
   `;
 }
@@ -512,7 +513,7 @@ function sourceHandoffExpression(sourceId) {
   return `
     (() => {
       const card = document.querySelector('[data-source-handoff-waiting="${sourceId}"]');
-      return Boolean(card && card.textContent?.includes('Waiting for connection'));
+      return Boolean(card && card.textContent?.includes('Connecting'));
     })()
   `;
 }
@@ -2380,6 +2381,20 @@ try {
       })()
     `,
     "ambient source picker keeps Explore on the first row"
+  );
+  await expect(
+    client,
+    `
+      (() => {
+        const statuses = [...document.querySelectorAll('[data-ambient-source-picker] [data-ambient-source-option] span:last-child')]
+          .map((entry) => entry.textContent?.trim());
+        return statuses.includes('Active')
+          && statuses.filter((status) => status === 'Ready').length >= 4
+          && !statuses.includes('Closed')
+          && !statuses.includes('Blocked');
+      })()
+    `,
+    "ambient source picker uses unified source status labels"
   );
   await evaluate(client, "window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })); true");
   await expectEventually(client, "document.querySelector('[data-ambient-source-picker]') === null", "ambient scene source picker closes with Escape");

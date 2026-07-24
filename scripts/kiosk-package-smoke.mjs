@@ -37,6 +37,10 @@ const requiredFiles = [
   "deploy/moode/tikpal-local-library-sync.sh",
   "deploy/moode/tikpal-library-sync.sh",
   "deploy/moode/tikpal-usb-library-sync.sh",
+  "deploy/moode/tikpal-upnp-ready.sh",
+  "deploy/moode/tikpal-upnp-enable.sh",
+  "deploy/moode/tikpal-upnp-disable.sh",
+  "deploy/moode/tikpal-upnp-label.sh",
   "public/web-mode-error.html",
   "deploy/moode/tikpal-alsa-loopback.sh",
   "deploy/moode/tikpal-airplay-enable.sh",
@@ -159,6 +163,10 @@ async function run() {
   await assertExecutable("deploy/moode/tikpal-local-library-sync.sh");
   await assertExecutable("deploy/moode/tikpal-library-sync.sh");
   await assertExecutable("deploy/moode/tikpal-usb-library-sync.sh");
+  await assertExecutable("deploy/moode/tikpal-upnp-ready.sh");
+  await assertExecutable("deploy/moode/tikpal-upnp-enable.sh");
+  await assertExecutable("deploy/moode/tikpal-upnp-disable.sh");
+  await assertExecutable("deploy/moode/tikpal-upnp-label.sh");
   await assertExecutable("deploy/moode/tikpal-alsa-loopback.sh");
   await assertExecutable("deploy/moode/tikpal-airplay-transport.sh");
   await assertExecutable("deploy/moode/tikpal-output-volume.sh");

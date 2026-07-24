@@ -5,6 +5,7 @@ import { fetchBackgroundVideos, fetchSceneContext } from "../api/tikpalClient";
 import { EqVisualScene, type HifiLyricsPanel } from "./EqVisualScene";
 import { FlameScene } from "./FlameScene";
 import { roomModeOptions } from "../roomExperienceTruth";
+import { getSourceDisplayStatusLabel } from "../sourceStatus";
 import type { TikpalDataStatus } from "../hooks/useTikpalState";
 import type { AudioState, BackgroundVideoSummary, FontTheme, LyricsFontSize, LyricsState, PlaybackActionType, PlaybackMode, PlaybackSummary, RoomExperienceActionRequest, RoomExperienceState, RoomMode, SceneContextSummary, SceneDayPart, SourceSwitchTarget, SystemActionType, SystemState, TikpalState } from "../types";
 
@@ -119,15 +120,7 @@ function getAmbientSourceLabel(sourceId: SourceSwitchTarget) {
 }
 
 function getAmbientSourceStatusLabel(source: AudioState["currentSource"] | undefined, pending: boolean) {
-  if (pending && source?.id && ambientHandoffSourceTargets.has(source.id as AmbientMusicSourceTarget)) return "Waiting for connection";
-  if (pending) return "Opening";
-  if (!source) return "Unavailable";
-  if (source.active) return "Active";
-  if (source.connectionState === "connected") return "Connected";
-  if (source.connectionState === "armed") return "Ready";
-  if (source.connectionState === "blocked") return "Closed";
-  if (source.availability === "unavailable") return "Unavailable";
-  return "Ready";
+  return getSourceDisplayStatusLabel(source, { pending });
 }
 
 function isAmbientHandoffSourceTarget(sourceId: AmbientMusicSourceTarget | null): sourceId is AmbientMusicSourceTarget {
@@ -152,7 +145,7 @@ function getAmbientSourcePillDetail(
 ) {
   const waiting = pending || (ambientHandoffSourceTargets.has(sourceId) && source?.connectionState === "armed");
   if (waiting) {
-    return source?.advertisedLabel ? `Waiting as ${source.advertisedLabel}` : "Waiting for connection";
+    return source?.advertisedLabel ? `Connecting as ${source.advertisedLabel}` : "Connecting";
   }
 
   if (sourceId === "mpd" || sourceId === "radio") {
@@ -1305,7 +1298,7 @@ export function AmbientScreen({
                 <LoaderCircle size={24} className="is-spinning" />
               </span>
               <span className="source-panel-kicker">{handoffPendingSourceLabel}</span>
-              <strong>Waiting for connection</strong>
+              <strong>Connecting</strong>
               <p>Tikpal is open for {handoffPendingSourceLabel}. This will close when the device connects or the handoff times out.</p>
             </div>
           ) : (
@@ -1330,7 +1323,7 @@ export function AmbientScreen({
                     onClick={() => void handleAmbientSourceSelect(id)}
                   >
                     <span className="ambient-source-option-icon" aria-hidden="true">
-                      {pending ? <LoaderCircle size={23} className="is-spinning" /> : <Icon size={23} strokeWidth={1.8} />}
+                      {pending ? <LoaderCircle size={27} className="is-spinning" /> : <Icon size={27} strokeWidth={1.8} />}
                     </span>
                     <strong>{label}</strong>
                     <span>{getAmbientSourceStatusLabel(source, pending)}</span>
@@ -1346,7 +1339,7 @@ export function AmbientScreen({
                 onClick={() => void handleOpenWebModeClick()}
               >
                 <span className="ambient-source-option-icon" aria-hidden="true">
-                  {webModePending ? <LoaderCircle size={23} className="is-spinning" /> : <Globe2 size={23} strokeWidth={1.8} />}
+                  {webModePending ? <LoaderCircle size={27} className="is-spinning" /> : <Globe2 size={27} strokeWidth={1.8} />}
                 </span>
                 <strong>Explore</strong>
                 <span>{webModePending ? "Opening" : "Web players"}</span>

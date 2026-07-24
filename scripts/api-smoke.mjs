@@ -81,6 +81,17 @@ async function requestText(path, options = {}) {
   return { response, body };
 }
 
+async function runGeneratedArtworkSourceSmoke() {
+  const serverSource = await readFile("server/index.mjs", "utf8");
+  const start = serverSource.indexOf("function buildGeneratedArtworkSvg");
+  const end = serverSource.indexOf("function buildLyricsState", start);
+  const generatedArtworkSource = start === -1 || end === -1 ? "" : serverSource.slice(start, end);
+  assert(generatedArtworkSource.includes('<rect width="1200" height="1200" fill='), "generated media artwork should use a full-bleed square root");
+  assert(!generatedArtworkSource.includes('<rect width="1200" height="1200" rx='), "generated media artwork should not round the root SVG background");
+  assert(!generatedArtworkSource.includes('clipPath id="posterClip"'), "generated media artwork should not use an inner clipped poster");
+  assert(!/<rect\s+x="\d+"[^>]*\srx=/.test(generatedArtworkSource), "generated media artwork should not draw an inner rounded card");
+}
+
 function assert(condition, message) {
   if (!condition) {
     throw new Error(message);
@@ -3843,6 +3854,7 @@ appendFileSync(${JSON.stringify(fakeBluetoothTransportLogPath)}, action + "\\n")
 
 async function run() {
   runAccessControlHelperSmoke();
+  await runGeneratedArtworkSourceSmoke();
   await runAirplayMetadataHelperClockSmoke();
 
   const apiAssetsRoot = await mkdtemp(path.join(tmpdir(), "tikpal-api-assets-"));

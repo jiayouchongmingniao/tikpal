@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Airplay, Bluetooth, Captions, Cast, Clock3, Cpu, Database, EthernetPort, Eye, EyeOff, Globe2, HardDrive, Info, Monitor, Moon, Music2, Palette, Power, Radio as RadioIcon, RotateCcw, Server, SlidersHorizontal, Target, Type, Usb, Volume2, Waves } from "lucide-react";
 import { fetchAudioLibrary, fetchWebModeState, sendWebModeAction, updateWebModeSettings } from "../api/tikpalClient";
+import { getSourceDisplayStatus, getSourceDisplayStatusLabel } from "../sourceStatus";
 import type { TikpalDataStatus } from "../hooks/useTikpalState";
 import { useOverlayReturnGesture } from "../hooks/useOverlayReturnGesture";
 import type { AudioState, FontTheme, LyricsFontSize, NightScheduleState, PlaybackSummary, RoomExperienceActionRequest, RoomExperienceState, RoomMode, RuntimeState, SurfaceTheme, SystemActionType, SystemState, WebModeState } from "../types";
@@ -194,16 +195,14 @@ function getConsoleSourceIcon(sourceId: AudioState["currentSource"]["id"]) {
 function getConsoleStateLabel(playback: PlaybackSummary, source: AudioState["currentSource"]) {
   if (playback.state === "playing") return "Playing";
   if (playback.state === "paused") return "Paused";
-  if (source.connectionState === "connected") return "Connected";
-  if (source.connectionState === "armed") return "Ready";
-  if (source.connectionState === "blocked") return "Blocked";
-  return "Stopped";
+  return getSourceDisplayStatusLabel(source);
 }
 
 function getConsoleStateClass(playback: PlaybackSummary, source: AudioState["currentSource"]) {
   if (playback.state === "playing") return "is-playing";
   if (playback.state === "paused") return "is-paused";
-  if (source.connectionState === "armed" || source.connectionState === "connected") return "is-ready";
+  const status = getSourceDisplayStatus(source);
+  if (status.kind === "active" || status.kind === "ready" || status.kind === "connected") return "is-ready";
   return "is-stopped";
 }
 

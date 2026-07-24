@@ -37,9 +37,9 @@ export function buildGeneratedCoverArtUrl(title: string, artist: string, album: 
   const hueA = seed % 360;
   const hueB = (hueA + 72 + (seed % 90)) % 360;
   const fontFamily = escapeXml(COVER_FONT_FAMILIES[fontTheme]);
-  const safeTitle = escapeXml(truncateSvgText(title || "Not Playing", 26));
-  const safeArtist = escapeXml(truncateSvgText(artist || "Unknown Artist", 32));
-  const safeAlbum = escapeXml(truncateSvgText(album || "MPD Queue", 32));
+  const safeTitle = escapeXml(truncateSvgText(title || "Not Playing", 22));
+  const safeArtist = escapeXml(truncateSvgText(artist || "Unknown Artist", 28));
+  const safeAlbum = escapeXml(truncateSvgText(album || "MPD Queue", 28));
   const label = (album || title || "TK")
     .split(/\s+/)
     .map((word) => word[0] ?? "")
@@ -57,13 +57,13 @@ export function buildGeneratedCoverArtUrl(title: string, artist: string, album: 
     </linearGradient>
   </defs>
   <rect width="1200" height="1200" fill="url(#bg)"/>
-  <circle cx="860" cy="330" r="250" fill="rgba(255,255,255,0.08)"/>
-  <circle cx="310" cy="900" r="250" fill="rgba(0,0,0,0.18)"/>
-  <rect x="100" y="100" width="1000" height="1000" rx="72" fill="rgba(12,16,24,0.24)" stroke="rgba(255,255,255,0.12)"/>
-  <text x="600" y="520" text-anchor="middle" fill="rgba(255,255,255,0.94)" font-family="${fontFamily}" font-size="220" font-weight="700">${escapeXml(label || "TK")}</text>
-  <text x="130" y="860" fill="rgba(255,255,255,0.96)" font-family="${fontFamily}" font-size="80" font-weight="700">${safeTitle}</text>
-  <text x="130" y="935" fill="rgba(255,255,255,0.78)" font-family="${fontFamily}" font-size="46">${safeArtist}</text>
-  <text x="130" y="995" fill="rgba(255,255,255,0.62)" font-family="${fontFamily}" font-size="38">${safeAlbum}</text>
+  <circle cx="600" cy="420" r="230" fill="rgba(255,255,255,0.055)"/>
+  <circle cx="600" cy="420" r="150" fill="rgba(0,0,0,0.12)"/>
+  <text x="600" y="490" text-anchor="middle" fill="rgba(255,255,255,0.94)" font-family="${fontFamily}" font-size="210" font-weight="700">${escapeXml(label || "TK")}</text>
+  <path d="M430 640h340" stroke="rgba(255,255,255,0.2)" stroke-width="5" stroke-linecap="round"/>
+  <text x="600" y="780" text-anchor="middle" fill="rgba(255,255,255,0.96)" font-family="${fontFamily}" font-size="68" font-weight="700">${safeTitle}</text>
+  <text x="600" y="850" text-anchor="middle" fill="rgba(255,255,255,0.72)" font-family="${fontFamily}" font-size="40">${safeArtist}</text>
+  <text x="600" y="908" text-anchor="middle" fill="rgba(255,255,255,0.54)" font-family="${fontFamily}" font-size="34">${safeAlbum}</text>
 </svg>`;
 
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
