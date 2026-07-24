@@ -37,10 +37,12 @@ const requiredFiles = [
   "deploy/moode/tikpal-local-library-sync.sh",
   "deploy/moode/tikpal-library-sync.sh",
   "deploy/moode/tikpal-usb-library-sync.sh",
+  "deploy/moode/tikpal-radio-presets-sync.sh",
   "deploy/moode/tikpal-upnp-ready.sh",
   "deploy/moode/tikpal-upnp-enable.sh",
   "deploy/moode/tikpal-upnp-disable.sh",
   "deploy/moode/tikpal-upnp-label.sh",
+  "deploy/moode/tikpal-upnp-metadata.sh",
   "public/web-mode-error.html",
   "deploy/moode/tikpal-alsa-loopback.sh",
   "deploy/moode/tikpal-airplay-enable.sh",
@@ -163,10 +165,12 @@ async function run() {
   await assertExecutable("deploy/moode/tikpal-local-library-sync.sh");
   await assertExecutable("deploy/moode/tikpal-library-sync.sh");
   await assertExecutable("deploy/moode/tikpal-usb-library-sync.sh");
+  await assertExecutable("deploy/moode/tikpal-radio-presets-sync.sh");
   await assertExecutable("deploy/moode/tikpal-upnp-ready.sh");
   await assertExecutable("deploy/moode/tikpal-upnp-enable.sh");
   await assertExecutable("deploy/moode/tikpal-upnp-disable.sh");
   await assertExecutable("deploy/moode/tikpal-upnp-label.sh");
+  await assertExecutable("deploy/moode/tikpal-upnp-metadata.sh");
   await assertExecutable("deploy/moode/tikpal-alsa-loopback.sh");
   await assertExecutable("deploy/moode/tikpal-airplay-transport.sh");
   await assertExecutable("deploy/moode/tikpal-output-volume.sh");
@@ -352,6 +356,7 @@ esac
   assert(kioskWatchdogTimer.includes("tikpal-kiosk-watchdog.service"), "kiosk watchdog timer should target the watchdog service");
   assert(systemdInstaller.includes("tikpal-audio-adapt.service"), "systemd installer should install the audio adapter service");
   assert(systemdInstaller.includes("tikpal-library-sync.service"), "systemd installer should install the library sync service");
+  assert(systemdInstaller.includes("tikpal-radio-presets-sync.sh") && systemdInstaller.includes("ensure_radio_presets"), "systemd installer should sync single-layer Radio presets");
   assert(systemdInstaller.includes("ensure_library_scan_env"), "systemd installer should keep Library Scan pointed at the combined sync helper");
   assert(systemdInstaller.includes("ensure_kiosk_audio_release_env") && systemdInstaller.includes("tikpal-release-kiosk-audio.sh"), "systemd installer should add the kiosk audio release hook on mpc Pi installs");
   assert(systemdInstaller.includes("systemctl restart tikpal-audio-adapt.service"), "systemd installer restart should run the audio adapter before app services");
@@ -455,6 +460,7 @@ esac
   const quickSettingsSource = await readFile(path.join(ROOT, "src/components/QuickSettingsOverlay.tsx"), "utf8");
   const remoteControlSource = await readFile(path.join(ROOT, "src/components/RemoteControlApp.tsx"), "utf8");
   const ambientScreenSource = await readFile(path.join(ROOT, "src/components/AmbientScreen.tsx"), "utf8");
+  const playerOverlaySource = await readFile(path.join(ROOT, "src/components/PlayerOverlay.tsx"), "utf8");
   const flameSceneSource = await readFile(path.join(ROOT, "src/components/FlameScene.tsx"), "utf8");
   const appSource = await readFile(path.join(ROOT, "src/App.tsx"), "utf8");
   const playbackTruthSource = await readFile(path.join(ROOT, "src/playbackTruth.ts"), "utf8");
@@ -507,6 +513,14 @@ esac
   assert(!quickSettingsSource.includes("console-back-button"), "Console room shortcuts should replace the top-right Back button");
   assert(appSource.includes("VISIBLE_LISTENING_SOURCE_TARGETS"), "Hi-Fi entry should preserve the current visible listening source");
   assert(appSource.includes("isVisibleListeningSourceTarget(currentSourceId)"), "Hi-Fi remembered-source restore should not overwrite active Library/Radio/external sources");
+  assert(
+    playerOverlaySource.includes("data-player-now-playing-pane") && playerOverlaySource.includes("data-player-library-pane"),
+    "Player should expose stable now-playing and library pane hooks for layout smoke"
+  );
+  assert(
+    stylesSource.includes("-webkit-line-clamp: 3") && stylesSource.includes(".player-now-playing-pane") && stylesSource.includes(".player-overlay .overlay-backdrop"),
+    "Player layout should clamp long titles and dim the ambient background behind the overlay"
+  );
   assert(playbackTruthSource.includes('parsed.searchParams.set("fontTheme", fontTheme)'), "playback artwork URLs should carry the selected font theme");
   assert(serverSource.includes("GENERATED_ARTWORK_FONT_FAMILIES") && serverSource.includes('url.searchParams.get("fontTheme")'), "generated backend artwork should honor the requested font theme");
   assert(

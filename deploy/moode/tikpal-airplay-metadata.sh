@@ -11,6 +11,7 @@ clock_state_file="${TIKPAL_AIRPLAY_CLOCK_STATE_FILE:-/tmp/tikpal-airplay-clock-s
 mpris_service="${TIKPAL_AIRPLAY_MPRIS_SERVICE:-org.mpris.MediaPlayer2.ShairportSync}"
 mpris_path="${TIKPAL_AIRPLAY_MPRIS_PATH:-/org/mpris/MediaPlayer2}"
 mpris_interface="${TIKPAL_AIRPLAY_MPRIS_INTERFACE:-org.mpris.MediaPlayer2.Player}"
+mpris_busctl_bin="${TIKPAL_AIRPLAY_BUSCTL_BIN:-busctl}"
 
 now="$(date +%s)"
 case "$max_age_seconds" in
@@ -37,13 +38,13 @@ active_started_at="${active_started_at:-0}"
 active_stopped_at="${active_stopped_at:-0}"
 
 metadata_payload="$(
-  python3 - "$metadata_file" "$metadata_json_file" "$max_age_seconds" "$artwork_max_lag_seconds" "$now" "$mpris_service" "$mpris_path" "$mpris_interface" <<'PY'
+  python3 - "$metadata_file" "$metadata_json_file" "$max_age_seconds" "$artwork_max_lag_seconds" "$now" "$mpris_service" "$mpris_path" "$mpris_interface" "$mpris_busctl_bin" <<'PY'
 import json
 import os
 import subprocess
 import sys
 
-metadata_file, metadata_json_file, max_age, artwork_max_lag, now, mpris_service, mpris_path, mpris_interface = sys.argv[1:]
+metadata_file, metadata_json_file, max_age, artwork_max_lag, now, mpris_service, mpris_path, mpris_interface, mpris_busctl_bin = sys.argv[1:]
 max_age = int(max_age)
 try:
     artwork_max_lag = int(artwork_max_lag)
@@ -188,7 +189,7 @@ def busctl_json(property_name):
     try:
         completed = subprocess.run(
             [
-                "busctl",
+                mpris_busctl_bin,
                 "--json=short",
                 "--system",
                 "get-property",

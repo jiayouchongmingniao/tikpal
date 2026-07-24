@@ -182,14 +182,14 @@ Center playback zone:
 - Source workspace: when opened, replace the old compact source list with a three-column workspace.
   - Left rail: `Library`, `Radio`, `Spotify`, `AirPlay`, `Bluetooth`, `DLNA`.
   - `Audio` can remain part of the backend state model, but it is not a visible primary tab in the source browser.
-  - Center pane: source-specific content, especially searchable radio catalog and large touch targets.
+  - Center pane: source-specific content, especially curated Radio category rows and large touch targets.
   - Right pane: source detail, connection policy, readiness, and active session label.
 - Library browsing should keep the storage tier distinct from local taxonomy: storage uses `Local`, `NAS`, `USB`, `Favorites`, and `Recently Added`; Local then exposes the larger `Focus`, `Meditation`, and `Rest` categories with smaller subfolder chips beneath them.
 - Local subfolder chips use the manifest-backed curated order: `Focus` shows `Lo-fi / Ambient`, `Classical / Piano`, `Binaural / Alpha / Theta`, and `White Noise / Brown Noise`; `Meditation` shows `Guided Meditation`, `Breathing`, `Singing Bowl`, and `Nature Sounds`; `Rest` shows `Nap`, `Sleep`, `Rain / Ocean / Forest`, and `Deep Sleep Long Tracks`.
 - Local category folders should remain manifest-backed. `Meditation` should not absorb Rest folders such as Sleep, Rain, Ocean, Forest, Nap, or Deep Sleep long tracks unless the manifest itself categorizes them there.
-- Radio browsing must support 200+ stations without feeling like a dense admin table.
-  - Keep search and filters visible near the top of the workspace.
-  - Default to the Tikpal curated catalog with `Focus`, `Calm`, `Sleep`, `Hi-Fi`, `Jazz`, `Classical`, and `News` tabs, while keeping an `All moOde` scope for the full station table.
+- Radio browsing is a curated listening surface, not a dense station directory.
+  - Do not show search, genre filters, bitrate filters, or other second-layer controls in Player Radio.
+  - Use one Radio category layer: `Focus`, `Calm`, `Sleep`, `Jazz`, `Classical`, `News`, and `Hi-Fi`. Do not expose a Tikpal/moOde scope switch in Player.
   - Use official station logo thumbnails when the backend exposes `logoUrl`; generated covers are only a fallback when the logo file is unavailable.
   - Use large row height, broadcaster copy, quick-scan metadata pills, and obvious active/pending state.
 - Bluetooth, AirPlay, and DLNA should read like gated intake modes, not ordinary playlists.

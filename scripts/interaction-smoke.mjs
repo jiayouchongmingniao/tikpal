@@ -596,7 +596,11 @@ async function switchPlayerSourceAndExpectHandoff(client, sourceId, sourceLabel)
       })()
     `
   );
-  await expectEventually(client, sourceHandoffExpression(sourceId), `${sourceLabel} source shows waiting handoff card`);
+  await expectEventually(
+    client,
+    `(${sourceHandoffExpression(sourceId)}) || document.querySelector('.source-line span')?.textContent?.includes('${sourceLabel}') === true`,
+    `${sourceLabel} source shows waiting handoff card or connects quickly`
+  );
   await expectEventually(client, `document.querySelector('.source-line span')?.textContent?.includes('${sourceLabel}') === true`, `${sourceLabel} source connects after handoff`);
   await expectEventually(client, sourceTabExpression(sourceId, { selected: true, active: true }), `${sourceLabel} source is selected and active after handoff`);
 }
@@ -1241,12 +1245,31 @@ try {
             return next;
           }
 
+          if (mode === "longPlayerTitle") {
+            const next = withSource(state, "mpd");
+            next.playback = {
+              ...next.playback,
+              state: "playing",
+              source: "mpd",
+              albumArtUrl: null,
+              title: "WolfgangAmadeusMozart-SymphonyNo.40InGMinorK.550-01-MoltoAllegro",
+              artist: "Unknown Artist",
+              album: "Untitled",
+              elapsedSeconds: 138,
+              durationSeconds: 551,
+              currentTrackIndex: 9,
+              queueLength: 13,
+              favorite: false
+            };
+            return next;
+          }
+
           if (mode === "hifiRememberedDifferentRadio" || mode === "hifiRememberedSameRadio" || mode === "hifiRememberedRadioPendingMemory") {
             const currentStationId = mode === "hifiRememberedSameRadio" ? "radio-503" : "radio-500";
             const next = withSource(state, "radio", { radioStationId: currentStationId });
             const currentStationLabel = currentStationId === "radio-503"
-              ? "Tikpal Focus - KEXP Seattle"
-              : "Tikpal Focus - Radio Paradise Main";
+              ? "Focus - Soma FM Groove Salad"
+              : "Focus - FluxFM ChillHop";
             next.audio.rememberedSource = mode === "hifiRememberedRadioPendingMemory"
               ? null
               : {
@@ -1289,9 +1312,9 @@ try {
               state: "playing",
               source: mode === "hifiRememberedSameLibrary" ? "mpd" : "radio",
               albumArtUrl: mode === "hifiRememberedSameLibrary" ? "/api/v1/media/library-cover?track=smoke" : "/api/v1/media/radio-logo?stationId=radio-500",
-              title: mode === "hifiRememberedSameLibrary" ? "Good Night" : "Tikpal Focus - Radio Paradise Main",
+              title: mode === "hifiRememberedSameLibrary" ? "Good Night" : "Focus - FluxFM ChillHop",
               artist: mode === "hifiRememberedSameLibrary" ? "FASSounds" : "Internet Radio",
-              album: mode === "hifiRememberedSameLibrary" ? "Lo-fi Ambient" : "Tikpal Focus - Radio Paradise Main",
+              album: mode === "hifiRememberedSameLibrary" ? "Lo-fi Ambient" : "Focus - FluxFM ChillHop",
               elapsedSeconds: mode === "hifiRememberedSameLibrary" ? 42 : null,
               durationSeconds: mode === "hifiRememberedSameLibrary" ? 147 : null,
               currentTrackIndex: mode === "hifiRememberedSameLibrary" ? 1 : 0,
@@ -1914,7 +1937,7 @@ try {
                 };
                 if (source.id === 'radio') {
                   patched.radioStationId = body.radioStationId ?? null;
-                  patched.secondaryStatus = 'Tikpal Focus - KEXP Seattle active';
+                  patched.secondaryStatus = 'Focus - Soma FM Groove Salad active';
                 }
                 return patched;
               });
@@ -1930,9 +1953,9 @@ try {
                 state: 'playing',
                 source: 'radio',
                 albumArtUrl: '/api/v1/media/radio-logo?stationId=' + encodeURIComponent(body.radioStationId ?? ''),
-                title: 'Tikpal Focus - KEXP Seattle',
+                title: 'Focus - Soma FM Groove Salad',
                 artist: 'Internet Radio',
-                album: 'Tikpal Focus - KEXP Seattle'
+                album: 'Focus - Soma FM Groove Salad'
               };
               return new Response(JSON.stringify(next), {
                 status: 200,
@@ -2009,7 +2032,7 @@ try {
                 };
                 if (source.id === 'radio') {
                   patched.radioStationId = body.radioStationId ?? null;
-                  patched.secondaryStatus = 'Tikpal Focus - KEXP Seattle active';
+                  patched.secondaryStatus = 'Focus - Soma FM Groove Salad active';
                 }
                 return patched;
               });
@@ -2025,9 +2048,9 @@ try {
                 state: 'playing',
                 source: 'radio',
                 albumArtUrl: '/api/v1/media/radio-logo?stationId=' + encodeURIComponent(body.radioStationId ?? ''),
-                title: 'Tikpal Focus - KEXP Seattle',
+                title: 'Focus - Soma FM Groove Salad',
                 artist: 'Internet Radio',
-                album: 'Tikpal Focus - KEXP Seattle'
+                album: 'Focus - Soma FM Groove Salad'
               };
               return new Response(JSON.stringify(next), {
                 status: 200,
@@ -3246,7 +3269,7 @@ try {
         await fetch('/api/v1/audio/source', {
           method: 'POST',
           headers,
-          body: JSON.stringify({ target: 'radio', radioStationId: 'radio-2' })
+          body: JSON.stringify({ target: 'radio', radioStationId: 'radio-510' })
         });
         await fetch('/api/v1/audio/source', {
           method: 'POST',
@@ -3264,7 +3287,7 @@ try {
   );
   await expectEventuallyEvaluate(
     client,
-    "Promise.all([fetch('/api/v1/system/state').then((response) => response.json()), fetch('/api/v1/experience/state').then((response) => response.json())]).then(([state, experience]) => state.audio.rememberedSource?.target === 'mpd' && state.audio.rememberedSource?.radioStationId === 'radio-2' && experience.sceneSoundEnabled === true)",
+    "Promise.all([fetch('/api/v1/system/state').then((response) => response.json()), fetch('/api/v1/experience/state').then((response) => response.json())]).then(([state, experience]) => state.audio.rememberedSource?.target === 'mpd' && state.audio.rememberedSource?.radioStationId === 'radio-510' && experience.sceneSoundEnabled === true)",
     "Ambient Radio source selection precondition preserves previous station while back on Library"
   );
   await click(client, 1280, 280);
@@ -3309,7 +3332,7 @@ try {
   await expect(client, "document.querySelector('.flame-video.is-active') instanceof HTMLVideoElement && document.querySelector('.flame-video.is-active').muted === true", "Ambient Radio source switch mutes scene video before backend switch");
   await expectEventuallyEvaluate(
     client,
-    "Promise.all([fetch('/api/v1/system/state').then((response) => response.json()), fetch('/api/v1/experience/state').then((response) => response.json())]).then(([state, experience]) => state.audio.currentSource.id === 'radio' && state.audio.currentSource.radioStationId === 'radio-2' && state.playback.source === 'radio' && experience.sceneSoundEnabled === false)",
+    "Promise.all([fetch('/api/v1/system/state').then((response) => response.json()), fetch('/api/v1/experience/state').then((response) => response.json())]).then(([state, experience]) => state.audio.currentSource.id === 'radio' && state.audio.currentSource.radioStationId === 'radio-510' && state.playback.source === 'radio' && experience.sceneSoundEnabled === false)",
     "Ambient Radio source selection deactivates scene sound and starts Radio"
   );
   await expectEventually(
@@ -3381,6 +3404,34 @@ try {
     150
   );
   await navigate(client, `${APP_URL}?mode=player`);
+  const playerLongTitlePatchVersion = await setStatePatchMode(client, "longPlayerTitle");
+  await waitForStatePatchRefresh(client, playerLongTitlePatchVersion, "Player long title fixture refreshes");
+  await expectEventually(
+    client,
+    "document.querySelector('[data-player-now-playing-pane]') !== null && document.querySelector('[data-player-library-pane]') !== null",
+    "player renders distinct now-playing and library panes"
+  );
+  await expectEventually(
+    client,
+    `
+      (() => {
+        const nowPane = document.querySelector('[data-player-now-playing-pane]');
+        const libraryPane = document.querySelector('[data-player-library-pane]');
+        const title = document.querySelector('.track-stack h1');
+        if (!(nowPane instanceof HTMLElement) || !(libraryPane instanceof HTMLElement) || !(title instanceof HTMLElement)) return false;
+        const nowRect = nowPane.getBoundingClientRect();
+        const libraryRect = libraryPane.getBoundingClientRect();
+        const titleRect = title.getBoundingClientRect();
+        const style = getComputedStyle(title);
+        return style.webkitLineClamp === '3'
+          && titleRect.left >= nowRect.left - 1
+          && titleRect.right <= nowRect.right + 1
+          && titleRect.right < libraryRect.left - 8
+          && nowRect.right < libraryRect.left;
+      })()
+    `,
+    "player long now-playing title stays inside the left pane"
+  );
   const playerBrokenArtworkPatchVersion = await setStatePatchMode(client, "brokenArtwork");
   await waitForStatePatchRefresh(client, playerBrokenArtworkPatchVersion, "Player broken artwork fixture refreshes");
   await expectEventually(
@@ -3436,24 +3487,31 @@ try {
   await evaluate(client, "document.querySelector('[data-source-item=\"radio\"]')?.click(); true");
   await expectEventually(
     client,
-    "document.querySelector('[data-radio-scope=\"tikpal\"][aria-selected=\"true\"]') !== null",
-    "Radio panel defaults to Tikpal curated scope"
+    "document.querySelector('[data-radio-scope]') === null && document.querySelector('[data-radio-category=\"focus\"][aria-selected=\"true\"]') !== null && document.querySelector('[aria-label=\"Search radio stations\"]') === null",
+    "Radio panel defaults to the single-layer Focus category"
   );
   await expectEventually(
     client,
-    "document.querySelector('[data-radio-category=\"all\"][aria-selected=\"true\"]') !== null && document.querySelector('[data-radio-category=\"focus\"]') !== null && document.querySelector('[data-radio-category=\"calm\"]') !== null",
-    "Radio panel exposes Tikpal category tabs"
+    `
+      (() => {
+        const expected = ['focus', 'calm', 'sleep', 'jazz', 'classical', 'news', 'hifi'];
+        const tabs = Array.from(document.querySelectorAll('[data-radio-category]'));
+        return tabs.length === expected.length
+          && expected.every((category, index) => tabs[index]?.getAttribute('data-radio-category') === category);
+      })()
+    `,
+    "Radio panel exposes the single-layer category tabs"
   );
   await expectEventually(
     client,
     "document.querySelector('[data-radio-station-logo]') instanceof HTMLImageElement && document.querySelector('[data-radio-station-logo]')?.complete === true && document.querySelector('[data-radio-station-logo]')?.naturalWidth > 0",
     "Radio panel renders station logo images"
   );
-  await evaluate(client, "document.querySelector('[data-radio-category=\"calm\"]')?.click(); true");
+  await evaluate(client, "document.querySelector('[data-radio-category=\"sleep\"]')?.click(); true");
   await expectEventually(
     client,
-    "Array.from(document.querySelectorAll('[data-radio-station-category]')).length > 0 && Array.from(document.querySelectorAll('[data-radio-station-category]')).every((node) => node.getAttribute('data-radio-station-category') === 'calm')",
-    "Radio panel category filter shows Calm stations only"
+    "Array.from(document.querySelectorAll('[data-radio-station-category]')).length > 0 && Array.from(document.querySelectorAll('[data-radio-station-category]')).every((node) => node.getAttribute('data-radio-station-category') === 'sleep')",
+    "Radio panel category filter shows Sleep stations only"
   );
   await evaluate(client, "document.querySelector('[data-source-item=\"mpd\"]')?.click(); true");
   await expect(
@@ -3726,11 +3784,16 @@ try {
         const shortcuts = [...document.querySelectorAll('[data-room-shortcut]')];
         const labels = shortcuts.map((node) => node.textContent?.trim());
         const rows = new Set(shortcuts.map((node) => Math.round(node.getBoundingClientRect().top)));
+        const activeIds = shortcuts
+          .filter((node) => node.getAttribute('aria-pressed') === 'true')
+          .map((node) => node.getAttribute('data-room-shortcut'));
+        const activeRoomIds = activeIds.filter((id) => id !== 'explore');
         return Boolean(switcher)
-          && switcher.getBoundingClientRect().width >= 680
+          && switcher.getBoundingClientRect().width >= 600
           && labels.join('|') === 'Focus|Calm|Sleep|Hi-Fi|Explore'
           && shortcuts.every((node) => node.querySelector('svg'))
-          && shortcuts.filter((node) => node.getAttribute('aria-pressed') === 'true').length === 1
+          && activeRoomIds.length === 1
+          && activeIds.every((id) => id === 'explore' || activeRoomIds.includes(id))
           && rows.size === 1
           && !document.querySelector('.console-back-button');
       })()

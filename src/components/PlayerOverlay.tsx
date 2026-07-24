@@ -14,7 +14,6 @@ import {
   Pause,
   Play,
   Radio as RadioIcon,
-  Search,
   Server,
   SkipBack,
   SkipForward,
@@ -77,6 +76,15 @@ const primaryPanels: Array<{ id: PrimaryPanelId; label: string; Icon: LucideIcon
   { id: "upnp", label: "DLNA", Icon: Network }
 ];
 const handoffSourceIds = new Set(["spotify", "airplay", "bluetooth", "upnp"]);
+const radioCategoryTabs = [
+  { id: "focus", label: "Focus" },
+  { id: "calm", label: "Calm" },
+  { id: "sleep", label: "Sleep" },
+  { id: "jazz", label: "Jazz" },
+  { id: "classical", label: "Classical" },
+  { id: "news", label: "News" },
+  { id: "hifi", label: "Hi-Fi" }
+];
 const CONTROL_COMMIT_DELAY_MS = 140;
 
 const storageTabs: Array<{ id: LibraryFilterId; label: string; Icon: LucideIcon }> = [
@@ -178,14 +186,8 @@ export function PlayerOverlay({
   const [favoriteBusy, setFavoriteBusy] = useState(false);
   const [radioStations, setRadioStations] = useState<RadioStationSummary[]>([]);
   const [radioTotal, setRadioTotal] = useState(0);
-  const [radioGenres, setRadioGenres] = useState<string[]>([]);
-  const [radioBitrates, setRadioBitrates] = useState<string[]>([]);
   const [radioCategories, setRadioCategories] = useState<Array<{ id: string; label: string; count: number }>>([]);
-  const [radioScope, setRadioScope] = useState<"tikpal" | "all">("tikpal");
-  const [radioQuery, setRadioQuery] = useState("");
-  const [selectedRadioCategory, setSelectedRadioCategory] = useState("");
-  const [selectedRadioGenre, setSelectedRadioGenre] = useState("");
-  const [selectedRadioBitrate, setSelectedRadioBitrate] = useState("");
+  const [selectedRadioCategory, setSelectedRadioCategory] = useState("focus");
   const [radioLoading, setRadioLoading] = useState(false);
   const [radioError, setRadioError] = useState<string | null>(null);
   const [failedRadioLogoIds, setFailedRadioLogoIds] = useState<Set<string>>(() => new Set());
@@ -445,19 +447,13 @@ export function PlayerOverlay({
     setRadioError(null);
 
     void fetchRadioCatalog({
-      q: radioQuery,
-      scope: radioScope,
       category: selectedRadioCategory || undefined,
-      genre: selectedRadioGenre || undefined,
-      bitrate: selectedRadioBitrate || undefined,
       limit: 250
     }, controller.signal)
       .then((catalog) => {
         setRadioStations(catalog.stations);
         setRadioTotal(catalog.total);
-        setRadioGenres(catalog.genres);
         setRadioCategories(catalog.categories);
-        setRadioBitrates(catalog.bitrates);
       })
       .catch((error) => {
         if (controller.signal.aborted) return;
@@ -470,11 +466,11 @@ export function PlayerOverlay({
       });
 
     return () => controller.abort();
-  }, [active, radioQuery, radioScope, selectedPrimaryPanel, selectedRadioBitrate, selectedRadioCategory, selectedRadioGenre]);
+  }, [active, selectedPrimaryPanel, selectedRadioCategory]);
 
   useEffect(() => {
     setFailedRadioLogoIds(new Set());
-  }, [radioScope, selectedRadioCategory, selectedRadioGenre, selectedRadioBitrate, radioQuery]);
+  }, [selectedRadioCategory]);
 
   useEffect(() => {
     if (!selectedSubCategoryIsAvailable) {
@@ -702,97 +698,25 @@ export function PlayerOverlay({
           </button>
         </div>
 
-        <div className="radio-scope-control" role="tablist" aria-label="Radio catalog scope">
-          {[
-            { id: "tikpal" as const, label: "Tikpal" },
-            { id: "all" as const, label: "All moOde" }
-          ].map((scope) => (
-            <button
-              key={scope.id}
-              className={radioScope === scope.id ? "is-active" : ""}
-              type="button"
-              role="tab"
-              aria-selected={radioScope === scope.id}
-              data-gesture-control
-              data-radio-scope={scope.id}
-              onClick={() => {
-                setRadioScope(scope.id);
-                setSelectedRadioCategory("");
-                setSelectedRadioGenre("");
-              }}
-            >
-              {scope.label}
-            </button>
-          ))}
-        </div>
-
         <div className="radio-category-tabs" role="tablist" aria-label="Radio categories">
-          <button
-            className={selectedRadioCategory === "" ? "is-active" : ""}
-            type="button"
-            role="tab"
-            aria-selected={selectedRadioCategory === ""}
-            data-gesture-control
-            data-radio-category="all"
-            onClick={() => setSelectedRadioCategory("")}
-          >
-            All
-          </button>
-          {radioCategories.map((category) => (
-            <button
-              className={selectedRadioCategory === category.id ? "is-active" : ""}
-              key={category.id}
-              type="button"
-              role="tab"
-              aria-selected={selectedRadioCategory === category.id}
-              data-gesture-control
-              data-radio-category={category.id}
-              onClick={() => setSelectedRadioCategory(category.id)}
-            >
-              {category.label}
-            </button>
-          ))}
-        </div>
-
-        <div className="radio-filter-row">
-          <label className="source-search-field">
-            <Search size={18} aria-hidden="true" />
-            <input
-              value={radioQuery}
-              placeholder="Search stations"
-              aria-label="Search radio stations"
-              data-gesture-control
-              onChange={(event) => setRadioQuery(event.currentTarget.value)}
-            />
-          </label>
-          <label className="source-filter-field">
-            <span>Genre</span>
-            <select
-              value={selectedRadioGenre}
-              aria-label="Radio genre"
-              data-gesture-control
-              onChange={(event) => setSelectedRadioGenre(event.currentTarget.value)}
-            >
-              <option value="">All genres</option>
-              {radioGenres.map((genre) => (
-                <option value={genre} key={genre}>{genre}</option>
-              ))}
-            </select>
-          </label>
-          <label className="source-filter-field">
-            <span>Bitrate</span>
-            <select
-              value={selectedRadioBitrate}
-              aria-label="Radio bitrate"
-              data-gesture-control
-              onChange={(event) => setSelectedRadioBitrate(event.currentTarget.value)}
-            >
-              <option value="">All bitrates</option>
-              {radioBitrates.map((bitrate) => (
-                <option value={bitrate} key={bitrate}>{bitrate}</option>
-              ))}
-            </select>
-          </label>
+          {radioCategoryTabs.map((category) => {
+            const count = radioCategories.find((entry) => entry.id === category.id)?.count ?? 0;
+            return (
+              <button
+                className={selectedRadioCategory === category.id ? "is-active" : ""}
+                key={category.id}
+                type="button"
+                role="tab"
+                aria-selected={selectedRadioCategory === category.id}
+                data-gesture-control
+                data-radio-category={category.id}
+                data-radio-category-count={count}
+                onClick={() => setSelectedRadioCategory(category.id)}
+              >
+                {category.label}
+              </button>
+            );
+          })}
         </div>
 
         <div className="source-result-meta">
@@ -803,7 +727,7 @@ export function PlayerOverlay({
                 ? `${radioStations.length} / ${radioTotal} stations`
                 : `${radioTotal || radioStations.length} stations`}
           </span>
-          <span>{radioError ? "Catalog unavailable" : selectedRadioCategory || selectedRadioGenre || selectedRadioBitrate || (radioScope === "tikpal" ? "Tikpal curated" : "All moOde")}</span>
+          <span>{radioError ? "Catalog unavailable" : radioCategoryTabs.find((category) => category.id === selectedRadioCategory)?.label ?? "Focus"}</span>
         </div>
 
         {radioError ? <p className="source-panel-error">{radioError}</p> : null}
@@ -925,93 +849,95 @@ export function PlayerOverlay({
     <section className={`overlay player-overlay ${active ? "is-active" : ""}`} aria-label="Player controls" aria-hidden={!active}>
       <button className="overlay-backdrop" type="button" tabIndex={active ? 0 : -1} aria-label="Return to ambient" onClick={onReturnAmbient} />
       <div className="player-shell" role="dialog" aria-modal="true" data-gesture-protected {...overlayReturnGesture}>
-        <div className="cover-zone">
-          <div className="cover-art" data-generated-cover-fallback={usingGeneratedCoverFallback ? true : undefined}>
-            <img
-              src={displayedAlbumArtUrl}
-              alt=""
-              data-generated-cover-fallback={usingGeneratedCoverFallback ? true : undefined}
-              onError={() => {
-                if (playbackTruth.hasPlaybackArtwork) {
-                  setFailedAlbumArtUrl(playbackTruth.albumArtUrl);
-                }
-              }}
-            />
-          </div>
-        </div>
-
-        <div className="playback-zone">
-          <div className="source-line">
-            {sourceLine.map((line) => (
-              <span key={line}>{line}</span>
-            ))}
-          </div>
-
-          <div className="track-stack">
-            <h1>{playbackTruth.title}</h1>
-            <p className="artist">{playbackTruth.artist}</p>
-            <p>{playbackTruth.album}</p>
-            <p>{playbackTruth.queuePositionLabel}</p>
-          </div>
-
-          <div className="progress-row">
-            <span>{formatDuration(displayedElapsedSeconds)}</span>
-            <div className={`progress-control ${seekSupported ? "is-interactive" : "is-readonly"}`}>
-              <div className="progress-bar" aria-hidden="true">
-                <span style={{ width: `${progress * 100}%` }} />
-              </div>
-              {seekSupported ? (
-                <input
-                  className="progress-slider"
-                  type="range"
-                  min={0}
-                  max={durationSeconds}
-                  step={1}
-                  value={seekDraftSeconds ?? seekPendingSeconds ?? elapsedSeconds}
-                  aria-label="Seek position"
-                  disabled={status.pending}
-                  onChange={(event) => handleSeekDraft(event.currentTarget.value)}
-                  onPointerUp={() => void commitSeek(seekDraftSeconds)}
-                  onPointerCancel={() => setSeekDraftSeconds(null)}
-                  onBlur={() => void commitSeek(seekDraftSeconds)}
-                  onKeyUp={(event) => {
-                    if (event.key === "ArrowLeft" || event.key === "ArrowRight" || event.key === "Home" || event.key === "End" || event.key === "PageUp" || event.key === "PageDown") {
-                      void commitSeek(seekDraftSeconds);
-                    }
-                  }}
-                />
-              ) : null}
+        <div className="player-now-playing-pane" data-player-now-playing-pane>
+          <div className="cover-zone">
+            <div className="cover-art" data-generated-cover-fallback={usingGeneratedCoverFallback ? true : undefined}>
+              <img
+                src={displayedAlbumArtUrl}
+                alt=""
+                data-generated-cover-fallback={usingGeneratedCoverFallback ? true : undefined}
+                onError={() => {
+                  if (playbackTruth.hasPlaybackArtwork) {
+                    setFailedAlbumArtUrl(playbackTruth.albumArtUrl);
+                  }
+                }}
+              />
             </div>
-            <span>{formatDuration(displayedDurationSeconds)}</span>
           </div>
-          {seekError ? <p className="player-inline-message is-error">{seekError}</p> : null}
-          {!seekError && seekPendingSeconds !== null ? <p className="player-inline-message">Seeking to {formatDuration(seekPendingSeconds)}...</p> : null}
 
-          <div className="transport-row" aria-label="Playback controls">
-            <button className="icon-button" type="button" aria-label="Previous" title={previousTitle} disabled={previousDisabled} onClick={() => void onPlaybackAction("previous")}>
-              <SkipBack size={34} fill="currentColor" />
-            </button>
-            <button className="play-button" type="button" aria-label={isPlaying ? "Pause" : "Play"} title={playPauseTitle} disabled={playPauseDisabled} onClick={() => void onPlaybackAction("play_pause")}>
-              {isPlaying ? <Pause size={40} fill="currentColor" /> : <Play size={40} fill="currentColor" />}
-            </button>
-            <button className="icon-button" type="button" aria-label="Next" title={nextTitle} disabled={nextDisabled} onClick={() => void onPlaybackAction("next")}>
-              <SkipForward size={34} fill="currentColor" />
-            </button>
-            <button
-              className={`icon-button ${playback.favorite ? "is-active" : ""}`}
-              type="button"
-              aria-label={playback.favorite ? "Remove favorite" : "Favorite"}
-              title={playback.favorite ? "Remove favorite" : "Favorite"}
-              aria-pressed={playback.favorite}
-              disabled={status.pending}
-              onClick={() => void handlePlayerFavoriteAction()}
-            >
-              <Heart size={30} fill={playback.favorite ? "currentColor" : "none"} />
-            </button>
+          <div className="playback-zone">
+            <div className="source-line">
+              {sourceLine.map((line) => (
+                <span key={line}>{line}</span>
+              ))}
+            </div>
+
+            <div className="track-stack">
+              <h1>{playbackTruth.title}</h1>
+              <p className="artist">{playbackTruth.artist}</p>
+              <p>{playbackTruth.album}</p>
+              <p>{playbackTruth.queuePositionLabel}</p>
+            </div>
+
+            <div className="progress-row">
+              <span>{formatDuration(displayedElapsedSeconds)}</span>
+              <div className={`progress-control ${seekSupported ? "is-interactive" : "is-readonly"}`}>
+                <div className="progress-bar" aria-hidden="true">
+                  <span style={{ width: `${progress * 100}%` }} />
+                </div>
+                {seekSupported ? (
+                  <input
+                    className="progress-slider"
+                    type="range"
+                    min={0}
+                    max={durationSeconds}
+                    step={1}
+                    value={seekDraftSeconds ?? seekPendingSeconds ?? elapsedSeconds}
+                    aria-label="Seek position"
+                    disabled={status.pending}
+                    onChange={(event) => handleSeekDraft(event.currentTarget.value)}
+                    onPointerUp={() => void commitSeek(seekDraftSeconds)}
+                    onPointerCancel={() => setSeekDraftSeconds(null)}
+                    onBlur={() => void commitSeek(seekDraftSeconds)}
+                    onKeyUp={(event) => {
+                      if (event.key === "ArrowLeft" || event.key === "ArrowRight" || event.key === "Home" || event.key === "End" || event.key === "PageUp" || event.key === "PageDown") {
+                        void commitSeek(seekDraftSeconds);
+                      }
+                    }}
+                  />
+                ) : null}
+              </div>
+              <span>{formatDuration(displayedDurationSeconds)}</span>
+            </div>
+            {seekError ? <p className="player-inline-message is-error">{seekError}</p> : null}
+            {!seekError && seekPendingSeconds !== null ? <p className="player-inline-message">Seeking to {formatDuration(seekPendingSeconds)}...</p> : null}
+
+            <div className="transport-row" aria-label="Playback controls">
+              <button className="icon-button" type="button" aria-label="Previous" title={previousTitle} disabled={previousDisabled} onClick={() => void onPlaybackAction("previous")}>
+                <SkipBack size={34} fill="currentColor" />
+              </button>
+              <button className="play-button" type="button" aria-label={isPlaying ? "Pause" : "Play"} title={playPauseTitle} disabled={playPauseDisabled} onClick={() => void onPlaybackAction("play_pause")}>
+                {isPlaying ? <Pause size={40} fill="currentColor" /> : <Play size={40} fill="currentColor" />}
+              </button>
+              <button className="icon-button" type="button" aria-label="Next" title={nextTitle} disabled={nextDisabled} onClick={() => void onPlaybackAction("next")}>
+                <SkipForward size={34} fill="currentColor" />
+              </button>
+              <button
+                className={`icon-button ${playback.favorite ? "is-active" : ""}`}
+                type="button"
+                aria-label={playback.favorite ? "Remove favorite" : "Favorite"}
+                title={playback.favorite ? "Remove favorite" : "Favorite"}
+                aria-pressed={playback.favorite}
+                disabled={status.pending}
+                onClick={() => void handlePlayerFavoriteAction()}
+              >
+                <Heart size={30} fill={playback.favorite ? "currentColor" : "none"} />
+              </button>
+            </div>
           </div>
         </div>
 
-        <aside className="library-zone" aria-label="Audio source browser">
+        <aside className="library-zone" aria-label="Audio source browser" data-player-library-pane>
           <div className="library-browser-header">
             <div className="library-browser-title">
               <div>

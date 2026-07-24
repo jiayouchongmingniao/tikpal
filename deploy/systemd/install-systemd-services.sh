@@ -176,6 +176,16 @@ ensure_kiosk_audio_release_env() {
   echo "updated $env_file with Tikpal kiosk audio release command"
 }
 
+ensure_radio_presets() {
+  [[ "${TIKPAL_INSTALL_RADIO_PRESETS:-1}" != "0" ]] || return 0
+  local helper="$APP_DIR/deploy/moode/tikpal-radio-presets-sync.sh"
+  [[ -x "$helper" ]] || {
+    echo "WARN: $helper not found; skipping Tikpal Radio preset sync" >&2
+    return 0
+  }
+  "$helper" apply
+}
+
 if [[ ! -f "$APP_DIR/server/index.mjs" || ! -f "$APP_DIR/server/web.mjs" ]]; then
   echo "Missing Tikpal server files under $APP_DIR" >&2
   exit 1
@@ -192,6 +202,7 @@ fi
 
 ensure_library_scan_env
 ensure_kiosk_audio_release_env
+ensure_radio_presets
 
 install_unit "$SCRIPT_DIR/tikpal-api.service"
 install_unit "$SCRIPT_DIR/tikpal-web.service"
