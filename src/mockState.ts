@@ -253,19 +253,19 @@ export const audioState: AudioState = {
 export const radioStations: RadioStationSummary[] = [
     buildRadioStation({
       id: "radio-500",
-      label: "Focus - FluxFM ChillHop",
-      uri: "https://channels.fluxfm.de/chillhop/stream.mp3",
-      genre: "Focus, Lo-fi, Chillhop, Study Beats",
-      bitrateKbps: 256,
+      label: "Focus - Soma FM Cliqhop",
+      uri: "http://ice1.somafm.com/cliqhop-128-mp3",
+      genre: "Focus, IDM, Downtempo, Study Beats",
+      bitrateKbps: 128,
       codec: "MP3",
       category: "focus",
       categoryLabel: "Focus",
-      tags: ["Lo-fi", "Chillhop"],
-      broadcaster: "FluxFM",
+      tags: ["IDM", "Downtempo"],
+      broadcaster: "Soma FM",
       logoUrl: null,
       catalogSource: "tikpal",
       sortOrder: 500,
-      secondaryStatus: "Focus · FluxFM · 256 kbps MP3",
+      secondaryStatus: "Focus · Soma FM · 128 kbps MP3",
       active: false
     }),
     buildRadioStation({

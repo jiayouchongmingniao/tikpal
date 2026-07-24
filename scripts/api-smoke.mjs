@@ -1491,6 +1491,13 @@ async function runMpcHifiRuntimePlaybackRecoverySmoke() {
     `Codex/${rememberedTrackPath}`,
     "Codex/Focus/Lo-fi Ambient/AtlasAudio - Ambient Soundscapes - 04m56s - Ambient.mp3"
   ];
+  const mpdLogTimestamp = (baseMs, offsetMs = 0) => {
+    const date = new Date(baseMs + offsetMs);
+    const pad = (value) => String(value).padStart(2, "0");
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+  };
+  const radioPlayedLogLine = (uri, baseMs, offsetMs = 0) => `${mpdLogTimestamp(baseMs, offsetMs)} player: played ${JSON.stringify(uri)}`;
+  const xrunLogLine = (baseMs, offsetMs = 0) => `${mpdLogTimestamp(baseMs, offsetMs)} alsa_output: Decoder is too slow; playing silence to avoid xrun`;
 
   await writeFile(fakeMpcPath, `#!/usr/bin/env node
 	import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
@@ -1650,7 +1657,7 @@ if (process.argv.join(" ").includes("cfg_radio")) {
       TIKPAL_WEB_MODE_STATE_PATH: webModeStatePath,
       TIKPAL_OUTPUT_VOLUME_GET_COMMAND: "",
       TIKPAL_RADIO_XRUN_GRACE_MS: "500",
-      TIKPAL_RADIO_XRUN_WINDOW_MS: "2000",
+      TIKPAL_RADIO_XRUN_WINDOW_MS: "5000",
       TIKPAL_RADIO_XRUN_SKIP_THRESHOLD: "3",
       TIKPAL_HIFI_RUNTIME_RECOVERY_COOLDOWN_MS: "1000",
       TIKPAL_STATE_SNAPSHOT_REFRESH_MS: "1000"
@@ -1724,18 +1731,28 @@ if (process.argv.join(" ").includes("cfg_radio")) {
       volume: 30,
       switchCount: 0
     }));
-    await writeFile(fakeMpdLogPath, "2026-07-02T21:32:00 alsa_output: Decoder is too slow; playing silence to avoid xrun\n");
+    const shortXrunBaseMs = Date.now();
+    await writeFile(fakeMpdLogPath, [
+      xrunLogLine(shortXrunBaseMs, -9000),
+      xrunLogLine(shortXrunBaseMs, -8000),
+      xrunLogLine(shortXrunBaseMs, -7000),
+      radioPlayedLogLine(radioUri, shortXrunBaseMs),
+      xrunLogLine(shortXrunBaseMs, 100)
+    ].join("\n") + "\n");
     await wait(1500);
     await requestFrom(baseUrl, "/api/v1/system/state");
     fakeState = JSON.parse(await readFile(fakeMpcStatePath, "utf8"));
     assert(fakeState.currentFile === radioUri, "mpc Radio weak-network recovery should tolerate a short xrun burst");
-    assert(fakeState.switchCount === 0, "mpc Radio weak-network recovery should not reload during the xrun grace window");
+    assert(fakeState.switchCount === 0, "mpc Radio weak-network recovery should ignore stale xrun lines from a previous Radio stream");
 
+    const repeatedXrunBaseMs = Date.now() - 3000;
     await writeFile(fakeMpdLogPath, [
-      "2026-07-02T21:32:00 alsa_output: Decoder is too slow; playing silence to avoid xrun",
-      "2026-07-02T21:32:05 alsa_output: Decoder is too slow; playing silence to avoid xrun",
-      "2026-07-02T21:32:10 alsa_output: Decoder is too slow; playing silence to avoid xrun",
-      "2026-07-02T21:32:15 alsa_output: Decoder is too slow; playing silence to avoid xrun"
+      xrunLogLine(repeatedXrunBaseMs, -9000),
+      radioPlayedLogLine(radioUri, repeatedXrunBaseMs),
+      xrunLogLine(repeatedXrunBaseMs, 500),
+      xrunLogLine(repeatedXrunBaseMs, 1500),
+      xrunLogLine(repeatedXrunBaseMs, 2500),
+      xrunLogLine(repeatedXrunBaseMs, 3000)
     ].join("\n") + "\n");
     await writeFile(webModeStatePath, `${JSON.stringify({ activeProvider: "qq_music" }, null, 2)}\n`);
     await wait(1500);
@@ -2505,8 +2522,8 @@ async function runMpcRadioPresetFastSnapshotSmoke(roomExperienceStatePath) {
     observations: []
   }));
   await mkdir(fakeLogoDir, { recursive: true });
-  await writeFile(path.join(fakeLogoDir, "FluxFM - ChillHop.jpg"), Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
-  await writeFile(path.join(fakeLogoDir, "FluxFM - Chillout Radio.jpg"), Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
+  await writeFile(path.join(fakeLogoDir, "Soma FM - Cliqhop.jpg"), Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
+  await writeFile(path.join(fakeLogoDir, "Soma FM - Fluid.jpg"), Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
   await writeFile(fakeAudioVolumeStatePath, JSON.stringify({ version: 1, lastNonZeroPercent: 44, updatedAt: "2026-01-01T00:00:00.000Z" }));
   await writeFile(fakeWebModeStatePath, JSON.stringify({ activeProvider: null, lastError: null, updatedAt: "2026-01-01T00:00:00.000Z" }));
   await writeFile(fakeBrightnessStatePath, "48\n");
@@ -2687,11 +2704,11 @@ writeFileSync(statePath, JSON.stringify({
 if (process.argv.join(" ").includes("cfg_radio")) {
   process.stdout.write([
     "1|1.FM - Blues Radio|http://radio.example/blues|Blues|1.FM|192|MP3|local",
-    "500|Focus - FluxFM ChillHop|http://radio.example/focus-chillhop|Focus, Lo-fi, Chillhop, Study Beats|FluxFM|256|MP3|local",
+    "500|Focus - Soma FM Cliqhop|http://radio.example/focus-cliqhop|Focus, IDM, Downtempo, Study Beats|Soma FM|128|MP3|local",
     "501|Focus - Soma FM Beat Blender|http://radio.example/focus-beatblender|Focus, Downtempo, Deep House, Study|Soma FM|128|MP3|local",
     "502|Focus - Dead Link|http://radio.example/focus-dead|Focus, Failing Stream|Dead FM|320|MP3|local",
     "510|Calm - Positively Meditation|http://radio.example/calm-meditation|Calm, Meditation, Healing|Positivity Radio|128|MP3|local",
-    "511|Calm - FluxFM Chillout|${radioUri}|Calm, Chill Out, Laidback|FluxFM|256|MP3|local",
+    "511|Calm - Soma FM Fluid|${radioUri}|Calm, Ambient, Downtempo, Meditation|Soma FM|128|MP3|local",
     "512|Calm - Soma FM Synphaera|http://radio.example/calm-synphaera|Calm, Ambient, Meditation|Soma FM|128|MP3|local",
     "520|Sleep - Ambient Sleeping Pill|http://radio.example/sleep-ambient|Sleep, Ambient|Stereoscenic|256|MP3|local",
     "521|Sleep - Soma FM Drone Zone|http://radio.example/sleep-drone|Sleep, Electronica, Ambient|Soma FM|128|AAC|local",
@@ -2774,7 +2791,7 @@ if (getIndex >= 0) {
     assert(catalog.body.total === 21, "mpc radio catalog should default to curated single-layer stations");
     assert(catalog.body.stations[0]?.id === "radio-500", "mpc radio catalog should expose high-id curated cfg_radio rows first");
     assert(catalog.body.stations[0]?.category === "focus", "mpc radio catalog should expose the Focus category");
-    assert(catalog.body.stations[0]?.broadcaster === "FluxFM", "mpc radio catalog should expose broadcaster");
+    assert(catalog.body.stations[0]?.broadcaster === "Soma FM", "mpc radio catalog should expose broadcaster");
     assert(catalog.body.stations[0]?.logoUrl?.startsWith("/api/v1/media/radio-logo?stationId=radio-500"), "mpc radio catalog should expose radio logo URL");
     assert(
       catalog.body.categories.map((category) => category.id).join(",") === "focus,calm,sleep,jazz,classical,news,hifi",
@@ -2908,7 +2925,7 @@ if (getIndex >= 0) {
       body: JSON.stringify({ type: "previous" })
     });
     assert(previousRadio.response.ok, "mpc radio previous should return 200");
-    assert(previousRadio.body.audio.currentSource.secondaryStatus === "Calm - FluxFM Chillout active", "mpc radio previous should return to the previous station inside the category");
+    assert(previousRadio.body.audio.currentSource.secondaryStatus === "Calm - Soma FM Fluid active", "mpc radio previous should return to the previous station inside the category");
     assert(previousRadio.body.audio.currentSource.radioStationId === "radio-511", "mpc radio previous should expose the previous station id on currentSource");
     assert(previousRadio.body.audio.rememberedSource?.radioStationId === "radio-511", "mpc radio previous should remember the previous station");
     assert(previousRadio.body.playback.albumArtUrl?.startsWith("/api/v1/media/radio-logo?stationId=radio-511"), "mpc radio previous should refresh station logo artwork");
@@ -2963,7 +2980,7 @@ if (getIndex >= 0) {
     assert(fastRefresh.body.audio.currentSource.id === "radio", "mpc radio fast refresh should keep Radio current");
     assert(fastRefresh.body.audio.currentSource.radioStationId === "radio-511", "mpc radio fast refresh should keep the selected station id");
     assert(
-      fastRefresh.body.audio.currentSource.secondaryStatus === "Calm - FluxFM Chillout active",
+      fastRefresh.body.audio.currentSource.secondaryStatus === "Calm - Soma FM Fluid active",
       "mpc radio fast refresh should keep the selected station label"
     );
     assert(
@@ -3026,7 +3043,7 @@ if (getIndex >= 0) {
     assert(failedStreamRefresh.body.playback.state === "stopped", "mpc failed radio stream should not be reported as playing");
     assert(failedStreamRefresh.body.audio.currentSource.radioStationId === "radio-511", "mpc failed radio stream should keep the failed station id on currentSource");
     assert(
-      failedStreamRefresh.body.audio.currentSource.secondaryStatus === "Calm - FluxFM Chillout active",
+      failedStreamRefresh.body.audio.currentSource.secondaryStatus === "Calm - Soma FM Fluid active",
       "mpc failed radio stream should keep the failed station label"
     );
     const failedStreamCatalog = await requestFrom(baseUrl, "/api/v1/audio/radios?category=calm");
@@ -3070,7 +3087,7 @@ if (getIndex >= 0) {
       "mpc radio source switch fallback should expose the recovered station id on currentSource"
     );
     assert(
-      manualDeadStationFallback.body.audio.currentSource.secondaryStatus === "Focus - FluxFM ChillHop active",
+      manualDeadStationFallback.body.audio.currentSource.secondaryStatus === "Focus - Soma FM Cliqhop active",
       "mpc radio source switch should advance to the next station when the selected station cannot connect"
     );
     assert(
@@ -3081,7 +3098,7 @@ if (getIndex >= 0) {
       manualDeadStationFallback.body.playback.albumArtUrl?.startsWith("/api/v1/media/radio-logo?stationId=radio-500"),
       "mpc radio source switch fallback should refresh station logo artwork immediately"
     );
-    assert(JSON.parse(await readFile(fakeMpcStatePath, "utf8")).currentFile === "http://radio.example/focus-chillhop", "mpc radio source switch fallback should replace the dead selected station URI");
+    assert(JSON.parse(await readFile(fakeMpcStatePath, "utf8")).currentFile === "http://radio.example/focus-cliqhop", "mpc radio source switch fallback should replace the dead selected station URI");
 
     const stateBeforeDelayedStreamFailure = JSON.parse(await readFile(fakeMpcStatePath, "utf8"));
     await writeFile(fakeMpcStatePath, JSON.stringify({
@@ -3117,14 +3134,14 @@ if (getIndex >= 0) {
       rememberedAfterAutoSkip = JSON.parse(await readFile(fakeAudioSourceMemoryStatePath, "utf8"));
       if (
         autoSkippedDeadStation.body.audio.currentSource.radioStationId === "radio-500"
-        && autoSkippedFakeState.currentFile === "http://radio.example/focus-chillhop"
+        && autoSkippedFakeState.currentFile === "http://radio.example/focus-cliqhop"
         && rememberedAfterAutoSkip.radioStationId === "radio-500"
       ) {
         break;
       }
     }
     assert(
-      autoSkippedDeadStation.body.audio.currentSource.secondaryStatus === "Focus - FluxFM ChillHop active",
+      autoSkippedDeadStation.body.audio.currentSource.secondaryStatus === "Focus - Soma FM Cliqhop active",
       `mpc radio late stream failure should auto-advance to the next station: ${JSON.stringify({
         currentSource: autoSkippedDeadStation.body.audio.currentSource,
         fakeCurrentFile: autoSkippedFakeState.currentFile,
@@ -3140,7 +3157,7 @@ if (getIndex >= 0) {
       autoSkippedDeadStation.body.playback.albumArtUrl?.startsWith("/api/v1/media/radio-logo?stationId=radio-500"),
       "mpc radio late stream failure should refresh station logo artwork with the auto-advanced station"
     );
-    assert(autoSkippedFakeState.currentFile === "http://radio.example/focus-chillhop", "mpc radio late stream failure should replace the failed stream URI");
+    assert(autoSkippedFakeState.currentFile === "http://radio.example/focus-cliqhop", "mpc radio late stream failure should replace the failed stream URI");
     assert(
       rememberedAfterAutoSkip.target === "radio" && rememberedAfterAutoSkip.radioStationId === "radio-500",
       `mpc radio late stream failure should persist the auto-advanced station as remembered source: ${JSON.stringify({
@@ -5000,7 +5017,7 @@ async function run() {
     assert(rainyWindow?.audioGainDb === 11.1, "background video catalog should expose scene audio gain");
     assert(backgroundVideos.body.catalogVersion, "background video catalog should expose a catalog version");
 
-    const radios = await request("/api/v1/audio/radios?q=chillhop&category=focus");
+    const radios = await request("/api/v1/audio/radios?q=cliqhop&category=focus");
     assert(radios.response.ok, "radio catalog should return 200");
     assert(radios.body.total >= 1, "radio catalog should include matching stations");
     assert(radios.body.stations.every((station) => station.category === "focus"), "radio catalog should filter by single-layer category");

@@ -333,11 +333,11 @@ const RADIO_CATEGORY_LABELS = {
 const RADIO_LOGO_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp"];
 const MOCK_RADIO_LOGO_URL = "data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22120%22%20height%3D%22120%22%3E%3Crect%20width%3D%22120%22%20height%3D%22120%22%20fill%3D%22%231f2937%22%2F%3E%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2238%22%20fill%3D%22%23d6b761%22%2F%3E%3Ctext%20x%3D%2260%22%20y%3D%2268%22%20font-family%3D%22Arial%22%20font-size%3D%2228%22%20font-weight%3D%22700%22%20text-anchor%3D%22middle%22%20fill%3D%22%231f2937%22%3ER%3C%2Ftext%3E%3C%2Fsvg%3E";
 const RADIO_LOGO_ALIASES = new Map([
-  ["Focus - FluxFM ChillHop", "FluxFM - ChillHop.jpg"],
+  ["Focus - Soma FM Cliqhop", "Soma FM - Cliqhop.jpg"],
   ["Focus - Soma FM Beat Blender", "Soma FM - Beat Blender.jpg"],
   ["Focus - Soma FM Groove Salad", "Soma FM - Groove Salad.jpg"],
   ["Calm - Positively Meditation", "Positively Meditation.jpg"],
-  ["Calm - FluxFM Chillout", "FluxFM - Chillout Radio.jpg"],
+  ["Calm - Soma FM Fluid", "Soma FM - Fluid.jpg"],
   ["Calm - Soma FM Synphaera", "Soma FM - Synphaera.jpg"],
   ["Sleep - Ambient Sleeping Pill", "Ambient Sleeping Pill.jpg"],
   ["Sleep - Soma FM Drone Zone", "Soma FM - Drone Zone.jpg"],
@@ -1772,7 +1772,7 @@ function getPlayback() {
 function getMockRadioStations() {
   return [
     ["radio-1", "1.FM - Blues Radio", "http://radio.example/blues", "Blues", 192, "MP3", null, null, ["Blues"], "1.FM", "moode", 1],
-    ["radio-500", "Focus - FluxFM ChillHop", "http://radio.example/focus-chillhop", "Focus, Lo-fi, Chillhop, Study Beats", 256, "MP3", "focus", "Focus", ["Lo-fi", "Chillhop"], "FluxFM", "tikpal", 500],
+    ["radio-500", "Focus - Soma FM Cliqhop", "http://radio.example/focus-cliqhop", "Focus, IDM, Downtempo, Study Beats", 128, "MP3", "focus", "Focus", ["IDM", "Downtempo"], "Soma FM", "tikpal", 500],
     ["radio-510", "Calm - Positively Meditation", "http://radio.example/calm-meditation", "Calm, Meditation, Healing", 128, "MP3", "calm", "Calm", ["Meditation", "Healing"], "Positivity Radio", "tikpal", 510],
     ["radio-520", "Sleep - Ambient Sleeping Pill", "http://radio.example/sleep-ambient", "Sleep, Ambient", 256, "MP3", "sleep", "Sleep", ["Ambient"], "Stereoscenic", "tikpal", 520],
     ["radio-530", "Jazz - Jazz24", "http://radio.example/jazz24", "Jazz", 256, "AAC", "jazz", "Jazz", [], "Jazz24.org", "tikpal", 530],
@@ -6516,6 +6516,32 @@ function isMpcRadioXrunLine(line) {
   return /Decoder is too slow|xrun/i.test(String(line ?? ""));
 }
 
+function getMpcLogLineTimeMs(line) {
+  const match = String(line ?? "").match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})/);
+  if (!match) return null;
+  const parsed = Date.parse(match[1]);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function getMpcPlayedUriFromLogLine(line) {
+  const match = String(line ?? "").match(/\bplayer:\s+played\s+"([^"]+)"/i);
+  return match?.[1]?.trim() || null;
+}
+
+function getRecentMpcRadioStartedAtMs(uri, lines, fallbackMs) {
+  const targetUri = String(uri ?? "").trim();
+  if (!targetUri) return fallbackMs;
+  let startedAtMs = null;
+  for (const line of lines) {
+    if (getMpcPlayedUriFromLogLine(line) !== targetUri) continue;
+    const lineAtMs = getMpcLogLineTimeMs(line);
+    if (lineAtMs !== null) {
+      startedAtMs = lineAtMs;
+    }
+  }
+  return startedAtMs ?? fallbackMs;
+}
+
 function radioWeakNetworkKey(stationId, uri) {
   const id = String(stationId ?? "").trim();
   const targetUri = String(uri ?? "").trim();
@@ -6533,32 +6559,29 @@ function resetMpcRadioWeakNetworkMonitor(stationId, uri) {
   };
 }
 
-async function readRecentMpcRadioXrunLines() {
-  if (!MPD_LOG_PATH || RADIO_XRUN_SKIP_THRESHOLD <= 0) return { lines: [], mtimeMs: 0 };
+async function readRecentMpcRadioLogLines() {
+  if (!MPD_LOG_PATH || RADIO_XRUN_SKIP_THRESHOLD <= 0) return [];
   let handle = null;
   try {
     const info = await stat(MPD_LOG_PATH);
-    if (!info.isFile() || info.size <= 0) return { lines: [], mtimeMs: 0 };
+    if (!info.isFile() || info.size <= 0) return [];
     const length = Math.min(info.size, RADIO_XRUN_LOG_TAIL_BYTES);
     const buffer = Buffer.alloc(length);
     handle = await open(MPD_LOG_PATH, "r");
     await handle.read(buffer, 0, length, info.size - length);
-    return {
-      lines: buffer
-        .toString("utf8")
-        .split("\n")
-        .map((line) => line.trim())
-        .filter(isMpcRadioXrunLine),
-      mtimeMs: info.mtimeMs
-    };
+    return buffer
+      .toString("utf8")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
   } catch {
-    return { lines: [], mtimeMs: 0 };
+    return [];
   } finally {
     await handle?.close().catch(() => null);
   }
 }
 
-function noteMpcRadioXrunLines(stationId, uri, lines, { logMtimeMs = 0 } = {}) {
+function noteMpcRadioXrunLines(stationId, uri, lines) {
   const key = radioWeakNetworkKey(stationId, uri);
   if (!mpcRadioWeakNetworkState || mpcRadioWeakNetworkState.key !== key) {
     resetMpcRadioWeakNetworkMonitor(stationId, uri);
@@ -6566,28 +6589,33 @@ function noteMpcRadioXrunLines(stationId, uri, lines, { logMtimeMs = 0 } = {}) {
 
   const now = Date.now();
   const state = mpcRadioWeakNetworkState;
-  if (!state.primed) {
-    for (const line of lines) {
-      state.seenLines.add(line);
+  const wasPrimed = state.primed;
+  const stationStartedAtMs = getRecentMpcRadioStartedAtMs(uri, lines, state.startedAtMs);
+  for (const line of lines) {
+    if (!isMpcRadioXrunLine(line)) continue;
+    if (state.seenLines.has(line)) continue;
+    state.seenLines.add(line);
+
+    const lineAtMs = getMpcLogLineTimeMs(line);
+    if (lineAtMs !== null) {
+      if (lineAtMs + 1000 >= stationStartedAtMs && now - lineAtMs <= RADIO_XRUN_WINDOW_MS) {
+        state.events.push(lineAtMs);
+      }
+      continue;
     }
-    state.primed = true;
-    if (logMtimeMs > 0 && now - logMtimeMs <= RADIO_XRUN_WINDOW_MS && lines.length >= RADIO_XRUN_SKIP_THRESHOLD) {
-      state.events.push(...lines.slice(-RADIO_XRUN_SKIP_THRESHOLD).map(() => now));
-    }
-  } else {
-    for (const line of lines) {
-      if (state.seenLines.has(line)) continue;
-      state.seenLines.add(line);
+
+    if (wasPrimed) {
       state.events.push(now);
     }
   }
+  state.primed = true;
 
   if (state.seenLines.size > 200) {
     state.seenLines = new Set(Array.from(state.seenLines).slice(-100));
   }
   state.events = state.events.filter((eventAtMs) => now - eventAtMs <= RADIO_XRUN_WINDOW_MS);
 
-  if (now - state.startedAtMs < RADIO_XRUN_GRACE_MS) return false;
+  if (now - stationStartedAtMs < RADIO_XRUN_GRACE_MS) return false;
   return state.events.length >= RADIO_XRUN_SKIP_THRESHOLD;
 }
 
@@ -6875,9 +6903,9 @@ function recoverWeakNetworkMpcRadioIfNeeded(snapshot) {
     if (!isStreamUri(currentUri)) return false;
 
     const stationId = snapshot.audio.currentSource.radioStationId ?? activeMpcRadioStationCache?.id ?? null;
-    const { lines: xrunLines, mtimeMs: xrunLogMtimeMs } = await readRecentMpcRadioXrunLines();
-    if (xrunLines.length === 0) return false;
-    if (!noteMpcRadioXrunLines(stationId, currentUri, xrunLines, { logMtimeMs: xrunLogMtimeMs })) return false;
+    const recentMpdLogLines = await readRecentMpcRadioLogLines();
+    if (!recentMpdLogLines.some(isMpcRadioXrunLine)) return false;
+    if (!noteMpcRadioXrunLines(stationId, currentUri, recentMpdLogLines)) return false;
     if (await shouldSuspendMpcRadioBackgroundRecovery()) return false;
     if (sourceSwitchInFlightCount > 0) return false;
 

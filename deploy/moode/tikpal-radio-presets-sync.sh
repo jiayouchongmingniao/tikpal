@@ -12,11 +12,11 @@ cleanup() {
 trap cleanup EXIT
 
 rows=(
-  "500|https://channels.fluxfm.de/chillhop/stream.mp3|Focus - FluxFM ChillHop|r|local|Focus, Lo-fi, Chillhop, Study Beats|FluxFM|German|Germany|Europe|256|MP3|No||No"
+  "500|http://ice1.somafm.com/cliqhop-128-mp3|Focus - Soma FM Cliqhop|r|local|Focus, IDM, Downtempo, Study Beats|Soma FM|English|United States|North America|128|MP3|No||No"
   "501|http://ice1.somafm.com/beatblender-128-mp3|Focus - Soma FM Beat Blender|r|local|Focus, Downtempo, Deep House, Study|Soma FM|English|United States|North America|128|MP3|No||No"
   "502|http://ice1.somafm.com/groovesalad-128-aac|Focus - Soma FM Groove Salad|r|local|Focus, Electronica, Ambient, Down-Tempo|Soma FM|English|United States|North America|128|AAC|No||No"
   "510|https://streaming.positivity.radio/pr/posimeditation/icecast.audio|Calm - Positively Meditation|r|local|Calm, Meditation, Healing, Mindfulness|Positivity Radio|English|United Kingdom|Europe|128|MP3|No||No"
-  "511|https://channels.fluxfm.de/chillout-radio/stream.mp3|Calm - FluxFM Chillout|r|local|Calm, Chill Out, Laidback|FluxFM|German|Germany|Europe|256|MP3|No||No"
+  "511|http://ice1.somafm.com/fluid-128-mp3|Calm - Soma FM Fluid|r|local|Calm, Ambient, Downtempo, Meditation|Soma FM|English|United States|North America|128|MP3|No||No"
   "512|http://ice1.somafm.com/synphaera-128-mp3|Calm - Soma FM Synphaera|r|local|Calm, Ambient, Meditation, Space|Soma FM|English|United States|North America|128|MP3|No||No"
   "520|http://radio.stereoscenic.com/asp-h|Sleep - Ambient Sleeping Pill|r|local|Sleep, Electronica, Ambient|Stereoscenic|English|United States|North America|256|MP3|No||No"
   "521|http://ice1.somafm.com/dronezone-128-aac|Sleep - Soma FM Drone Zone|r|local|Sleep, Electronica, Ambient, Texture|Soma FM|English|United States|North America|128|AAC|No||No"

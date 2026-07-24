@@ -1269,7 +1269,7 @@ try {
             const next = withSource(state, "radio", { radioStationId: currentStationId });
             const currentStationLabel = currentStationId === "radio-503"
               ? "Focus - Soma FM Groove Salad"
-              : "Focus - FluxFM ChillHop";
+              : "Focus - Soma FM Cliqhop";
             next.audio.rememberedSource = mode === "hifiRememberedRadioPendingMemory"
               ? null
               : {
@@ -1312,9 +1312,9 @@ try {
               state: "playing",
               source: mode === "hifiRememberedSameLibrary" ? "mpd" : "radio",
               albumArtUrl: mode === "hifiRememberedSameLibrary" ? "/api/v1/media/library-cover?track=smoke" : "/api/v1/media/radio-logo?stationId=radio-500",
-              title: mode === "hifiRememberedSameLibrary" ? "Good Night" : "Focus - FluxFM ChillHop",
+              title: mode === "hifiRememberedSameLibrary" ? "Good Night" : "Focus - Soma FM Cliqhop",
               artist: mode === "hifiRememberedSameLibrary" ? "FASSounds" : "Internet Radio",
-              album: mode === "hifiRememberedSameLibrary" ? "Lo-fi Ambient" : "Focus - FluxFM ChillHop",
+              album: mode === "hifiRememberedSameLibrary" ? "Lo-fi Ambient" : "Focus - Soma FM Cliqhop",
               elapsedSeconds: mode === "hifiRememberedSameLibrary" ? 42 : null,
               durationSeconds: mode === "hifiRememberedSameLibrary" ? 147 : null,
               currentTrackIndex: mode === "hifiRememberedSameLibrary" ? 1 : 0,
