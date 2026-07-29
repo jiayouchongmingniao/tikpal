@@ -513,7 +513,9 @@ esac
   assert(quickSettingsSource.includes('destination !== "explore" && destination === roomExperience.mode'), "Console should return immediately when the current room mode is selected");
   assert(quickSettingsSource.includes('await onExperienceAction({ type: "set_mode", mode: destination })'), "Console should reuse the room mode action");
   assert(quickSettingsSource.includes("await onOpenWebMode()"), "Console Explore shortcut should reuse the existing Explore flow");
-  assert(!quickSettingsSource.includes("console-back-button"), "Console room shortcuts should replace the top-right Back button");
+  assert(quickSettingsSource.includes('data-room-shortcut="back"') && quickSettingsSource.includes("data-console-back-button") && quickSettingsSource.includes("onClick={handleReturnAmbient}"), "Console should expose a Back shortcut next to Explore");
+  assert(quickSettingsSource.includes("LogOut") && !quickSettingsSource.includes("ArrowLeft"), "Console Back shortcut should match the Explore Back icon");
+  assert(stylesSource.includes("grid-template-columns: repeat(6, minmax(0, 1fr));") && stylesSource.includes(".console-room-back"), "Console room shortcuts should fit Explore plus Back on one row");
   assert(appSource.includes("VISIBLE_LISTENING_SOURCE_TARGETS"), "Hi-Fi entry should preserve the current visible listening source");
   assert(appSource.includes("isVisibleListeningSourceTarget(currentSourceId)"), "Hi-Fi remembered-source restore should not overwrite active Library/Radio/external sources");
   assert(

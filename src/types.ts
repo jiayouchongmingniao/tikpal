@@ -192,6 +192,14 @@ export interface AudioLibraryStorageSummary {
   categories: AudioLibraryCategorySummary[];
 }
 
+export interface AudioLibraryDiskSummary {
+  rootPath: string;
+  totalBytes: number | null;
+  usedBytes: number | null;
+  freeBytes: number | null;
+  usedPercent: number | null;
+}
+
 export interface AudioLibraryTrackSummary {
   id: string;
   title: string;
@@ -207,6 +215,13 @@ export interface AudioLibraryTrackSummary {
   albumArtScope: string | null;
   active: boolean;
   favorite: boolean;
+  fileSizeBytes?: number | null;
+  codec?: string | null;
+  container?: string | null;
+  sampleRateHz?: number | null;
+  bitrateKbps?: number | null;
+  bitDepth?: number | null;
+  channels?: number | null;
 }
 
 export interface AudioLibraryFilters {
@@ -232,7 +247,22 @@ export interface AudioLibraryResponse {
     limit: number;
     offset: number;
   };
+  localStorage?: AudioLibraryDiskSummary;
   updatedAt: string;
+}
+
+export interface AudioLibraryActionRequest {
+  type: "copy_to_local" | "delete_local";
+  trackPath: string;
+}
+
+export interface AudioLibraryActionResponse {
+  ok: boolean;
+  copied?: boolean;
+  deleted?: boolean;
+  copiedTrackPath?: string | null;
+  deletedTrackPath?: string | null;
+  library: AudioLibraryResponse;
 }
 
 export type AudioPlaylistSource = "user" | "curated";

@@ -109,9 +109,9 @@ Playlist management is not part of the kiosk Hi-Fi Console. The Console should k
 
 ### Library Browsing
 
-The kiosk UI does not ship a playlist-editing or ritual-builder surface. Library browsing remains available in Player for selecting a specific local/NAS track to play, while playlist CRUD stays a backend compatibility capability for local tools or future non-kiosk management.
+The kiosk UI does not ship a playlist-editing or ritual-builder surface. Library browsing remains available in Player for selecting a specific Local, NAS, USB, Favorite, or Recently Added track to play, while playlist CRUD stays a backend compatibility capability for local tools or future non-kiosk management.
 
-The local music taxonomy remains manifest-backed: `Focus`, `Meditation`, and `Rest` are library categories, while `Focus`, `Calm`, `Sleep`, and `Hi-Fi` are experience modes.
+Player Library is storage-first and flat. Local and USB lists show file/audio details on each row, USB can copy a track into Local without overwriting same-name files, and Local delete is guarded by an explicit `Yes` / `No` confirmation. Long lists use a fixed right-side fast-scroll rail so the user can drag from the first track to the last without selecting or accidentally starting playback.
 
 ### Console Overlay
 

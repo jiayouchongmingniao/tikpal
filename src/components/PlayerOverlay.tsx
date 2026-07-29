@@ -1,14 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { PointerEvent } from "react";
 import {
   Bluetooth,
   Cast,
   Check,
   Clock,
+  Copy,
   Globe2,
   HardDrive,
   Heart,
   LibraryBig,
   LoaderCircle,
+  LogOut,
   Music2,
   Network,
   Pause,
@@ -17,17 +20,18 @@ import {
   Server,
   SkipBack,
   SkipForward,
+  Trash2,
   Usb
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { fetchAudioLibrary, fetchRadioCatalog, sendFavoriteTrack } from "../api/tikpalClient";
+import { copyLibraryTrackToLocal, deleteLibraryTrackFromLocal, fetchAudioLibrary, fetchRadioCatalog, sendFavoriteTrack } from "../api/tikpalClient";
 import { getPlaybackDisplayTruth, getPlaybackSourceSummary } from "../playbackTruth";
 import { getSourceDisplayStatusLabel } from "../sourceStatus";
 import type { TikpalDataStatus } from "../hooks/useTikpalState";
 import { formatDuration } from "../mockState";
 import { useOverlayReturnGesture } from "../hooks/useOverlayReturnGesture";
 import type {
-  AudioLibraryCategoryId,
+  AudioLibraryDiskSummary,
   AudioLibraryTrackSummary,
   AudioState,
   FontTheme,
@@ -56,11 +60,6 @@ type PrimaryPanelId = "library" | "radio" | "spotify" | "airplay" | "bluetooth" 
 type ExternalPanelId = Exclude<PrimaryPanelId, "library" | "radio">;
 type LibraryFilterId = "local" | "nas" | "usb" | "favorites" | "recently_added";
 
-interface LocalCategory {
-  id: AudioLibraryCategoryId;
-  label: string;
-}
-
 interface VolumeRequestState {
   inFlight: boolean;
   queued: number | null;
@@ -83,9 +82,17 @@ const radioCategoryTabs = [
   { id: "jazz", label: "Jazz" },
   { id: "classical", label: "Classical" },
   { id: "news", label: "News" },
-  { id: "hifi", label: "Hi-Fi" }
+  { id: "hifi", label: "Hi-Fi" },
+  { id: "blues", label: "Blues" },
+  { id: "rock", label: "Rock" },
+  { id: "world", label: "World" },
+  { id: "electronic", label: "Electronic" },
+  { id: "podcast", label: "Podcast" },
+  { id: "random", label: "Random" }
 ];
 const CONTROL_COMMIT_DELAY_MS = 140;
+const LIBRARY_FAST_SCROLL_MIN_THUMB_PERCENT = 18;
+const LIBRARY_FAST_SCROLL_MAX_THUMB_PERCENT = 72;
 
 const storageTabs: Array<{ id: LibraryFilterId; label: string; Icon: LucideIcon }> = [
   { id: "local", label: "Local", Icon: HardDrive },
@@ -94,42 +101,6 @@ const storageTabs: Array<{ id: LibraryFilterId; label: string; Icon: LucideIcon 
   { id: "favorites", label: "Favorites", Icon: Heart },
   { id: "recently_added", label: "Recently Added", Icon: Clock }
 ];
-
-const localCategories: LocalCategory[] = [
-  { id: "focus", label: "Focus" },
-  { id: "meditation", label: "Meditation" },
-  { id: "rest", label: "Rest" }
-];
-
-const localSubCategoryOrder: Record<AudioLibraryCategoryId, string[]> = {
-  focus: [
-    "Lo-fi / Ambient",
-    "Classical / Piano",
-    "Binaural / Alpha / Theta",
-    "White Noise / Brown Noise"
-  ],
-  meditation: [
-    "Guided Meditation",
-    "Breathing",
-    "Singing Bowl",
-    "Nature Sounds"
-  ],
-  rest: [
-    "Nap",
-    "Sleep",
-    "Rain / Ocean / Forest",
-    "Deep Sleep Long Tracks"
-  ]
-};
-
-function categoryLabel(categoryId: AudioLibraryCategoryId) {
-  return localCategories.find((category) => category.id === categoryId)?.label ?? "Library";
-}
-
-function subCategorySortIndex(categoryId: AudioLibraryCategoryId, label: string) {
-  const index = localSubCategoryOrder[categoryId].indexOf(label);
-  return index === -1 ? localSubCategoryOrder[categoryId].length : index;
-}
 
 function sourceStatusLabel(source: AudioState["currentSource"] | undefined, pending: boolean) {
   return getSourceDisplayStatusLabel(source, { pending });
@@ -156,6 +127,66 @@ function clampVolumePercent(value: number) {
   return Math.max(0, Math.min(100, Math.round(value)));
 }
 
+function clampUnit(value: number) {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(1, value));
+}
+
+interface LibraryFastScrollMetrics {
+  available: boolean;
+  progress: number;
+  thumbPercent: number;
+  thumbTopPercent: number;
+  currentIndex: number;
+}
+
+const defaultLibraryFastScrollMetrics: LibraryFastScrollMetrics = {
+  available: false,
+  progress: 0,
+  thumbPercent: 100,
+  thumbTopPercent: 0,
+  currentIndex: 0
+};
+
+function formatFileSize(bytes: number | null | undefined) {
+  const value = Number(bytes);
+  if (!Number.isFinite(value) || value <= 0) return null;
+  if (value >= 1024 * 1024 * 1024) return `${(value / 1024 / 1024 / 1024).toFixed(1)} GB`;
+  if (value >= 1024 * 1024) return `${(value / 1024 / 1024).toFixed(1)} MB`;
+  return `${Math.max(1, Math.round(value / 1024))} KB`;
+}
+
+function formatSampleRate(sampleRateHz: number | null | undefined) {
+  const value = Number(sampleRateHz);
+  if (!Number.isFinite(value) || value <= 0) return null;
+  return value >= 1000 ? `${Number((value / 1000).toFixed(1))} kHz` : `${value} Hz`;
+}
+
+function formatLibraryAudioInfo(track: AudioLibraryTrackSummary) {
+  const parts = [
+    track.codec?.toUpperCase() ?? track.container?.toUpperCase() ?? null,
+    formatSampleRate(track.sampleRateHz),
+    track.bitDepth ? `${track.bitDepth}-bit` : null,
+    track.channels ? `${track.channels}ch` : null,
+    track.bitrateKbps ? `${track.bitrateKbps} kbps` : null,
+    formatFileSize(track.fileSizeBytes)
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join(" · ") : "Audio file";
+}
+
+function formatDiskSize(bytes: number | null | undefined) {
+  const value = Number(bytes);
+  if (!Number.isFinite(value) || value < 0) return "Unavailable";
+  if (value >= 1024 * 1024 * 1024) return `${(value / 1024 / 1024 / 1024).toFixed(1)} GB`;
+  if (value >= 1024 * 1024) return `${Math.round(value / 1024 / 1024)} MB`;
+  return `${Math.max(1, Math.round(value / 1024))} KB`;
+}
+
+function normalizeDiskUsedPercent(storage: AudioLibraryDiskSummary | null) {
+  const percent = Number(storage?.usedPercent);
+  return Number.isFinite(percent) ? Math.max(0, Math.min(100, Math.round(percent))) : null;
+}
+
 export function PlayerOverlay({
   active,
   playback,
@@ -174,18 +205,19 @@ export function PlayerOverlay({
   const [seekError, setSeekError] = useState<string | null>(null);
   const [selectedPrimaryPanel, setSelectedPrimaryPanel] = useState<PrimaryPanelId>("library");
   const [selectedLibraryStorage, setSelectedLibraryStorage] = useState<LibraryFilterId>("local");
-  const [selectedLocalCategory, setSelectedLocalCategory] = useState<AudioLibraryCategoryId>("focus");
-  const [selectedLocalSubCategory, setSelectedLocalSubCategory] = useState("all");
   const [selectedLibraryTrackId, setSelectedLibraryTrackId] = useState<string | null>(null);
   const [manualPanelSelection, setManualPanelSelection] = useState(false);
   const [localLibraryTracks, setLocalLibraryTracks] = useState<AudioLibraryTrackSummary[]>([]);
   const [nasLibraryTracks, setNasLibraryTracks] = useState<AudioLibraryTrackSummary[]>([]);
   const [usbLibraryTracks, setUsbLibraryTracks] = useState<AudioLibraryTrackSummary[]>([]);
+  const [localLibraryStorage, setLocalLibraryStorage] = useState<AudioLibraryDiskSummary | null>(null);
   const [libraryLoading, setLibraryLoading] = useState(false);
   const [libraryError, setLibraryError] = useState<string | null>(null);
   const [favoriteBusy, setFavoriteBusy] = useState(false);
+  const [copyingLibraryTrackId, setCopyingLibraryTrackId] = useState<string | null>(null);
+  const [deletingLibraryTrackId, setDeletingLibraryTrackId] = useState<string | null>(null);
+  const [confirmingDeleteLibraryTrackId, setConfirmingDeleteLibraryTrackId] = useState<string | null>(null);
   const [radioStations, setRadioStations] = useState<RadioStationSummary[]>([]);
-  const [radioTotal, setRadioTotal] = useState(0);
   const [radioCategories, setRadioCategories] = useState<Array<{ id: string; label: string; count: number }>>([]);
   const [selectedRadioCategory, setSelectedRadioCategory] = useState("focus");
   const [radioLoading, setRadioLoading] = useState(false);
@@ -203,6 +235,12 @@ export function PlayerOverlay({
     lastSent: system.volume.percent
   });
   const volumeCommitTimerRef = useRef<number | null>(null);
+  const libraryTrackListRef = useRef<HTMLDivElement | null>(null);
+  const libraryFastScrollTrackRef = useRef<HTMLSpanElement | null>(null);
+  const libraryFastScrollPointerIdRef = useRef<number | null>(null);
+  const libraryFastScrollDraggingRef = useRef(false);
+  const [libraryFastScrollDragging, setLibraryFastScrollDragging] = useState(false);
+  const [libraryFastScrollMetrics, setLibraryFastScrollMetrics] = useState<LibraryFastScrollMetrics>(defaultLibraryFastScrollMetrics);
   const playbackTruth = getPlaybackDisplayTruth(playback, audio, fontTheme);
   const [failedAlbumArtUrl, setFailedAlbumArtUrl] = useState<string | null>(null);
   const displayedAlbumArtUrl = playbackTruth.hasPlaybackArtwork && failedAlbumArtUrl === playbackTruth.albumArtUrl
@@ -223,55 +261,25 @@ export function PlayerOverlay({
   const currentSource = audio.currentSource;
   const selectedPanelConfig = primaryPanels.find((panel) => panel.id === selectedPrimaryPanel) ?? primaryPanels[0];
   const playbackSource = getPlaybackSourceSummary(playback, audio);
-  const localCategoryCounts = useMemo(() => (
-    localLibraryTracks.reduce<Record<AudioLibraryCategoryId, number>>(
-      (counts, track) => {
-        if (track.categoryId === "focus" || track.categoryId === "meditation" || track.categoryId === "rest") {
-          counts[track.categoryId] += 1;
-        }
-        return counts;
-      },
-      { focus: 0, meditation: 0, rest: 0 }
-    )
-  ), [localLibraryTracks]);
-  const localCategoryTracks = useMemo(() => (
-    localLibraryTracks.filter((track) => track.categoryId === selectedLocalCategory)
-  ), [localLibraryTracks, selectedLocalCategory]);
-  const localSubCategoryTabs = useMemo(() => {
-    const counts = new Map<string, number>();
-    localCategoryTracks.forEach((track) => {
-      counts.set(track.subCategory, (counts.get(track.subCategory) ?? 0) + 1);
-    });
-    return Array.from(counts.entries())
-      .sort(([leftLabel], [rightLabel]) => (
-        subCategorySortIndex(selectedLocalCategory, leftLabel) - subCategorySortIndex(selectedLocalCategory, rightLabel)
-        || leftLabel.localeCompare(rightLabel)
-      ))
-      .map(([label, count]) => ({ label, count }));
-  }, [localCategoryTracks, selectedLocalCategory]);
-  const selectedSubCategoryIsAvailable = selectedLocalSubCategory === "all"
-    || localSubCategoryTabs.some((tab) => tab.label === selectedLocalSubCategory);
-  const selectedLocalTracks = useMemo(() => (
-    selectedLocalSubCategory === "all" || !selectedSubCategoryIsAvailable
-      ? localCategoryTracks
-      : localCategoryTracks.filter((track) => track.subCategory === selectedLocalSubCategory)
-  ), [localCategoryTracks, selectedLocalSubCategory, selectedSubCategoryIsAvailable]);
+  const favoriteLibraryTracks = useMemo(() => (
+    [...localLibraryTracks, ...usbLibraryTracks].filter((track) => track.favorite)
+  ), [localLibraryTracks, usbLibraryTracks]);
   const visibleLibraryTracks = useMemo(() => {
     switch (selectedLibraryStorage) {
       case "nas":
         return nasLibraryTracks;
       case "local":
-        return selectedLocalTracks;
+        return localLibraryTracks;
       case "usb":
         return usbLibraryTracks;
       case "recently_added":
         return localLibraryTracks.slice(0, 12);
       case "favorites":
-        return localLibraryTracks.filter((track) => track.favorite);
+        return favoriteLibraryTracks;
       default:
         return localLibraryTracks;
     }
-  }, [localLibraryTracks, nasLibraryTracks, selectedLibraryStorage, selectedLocalTracks, usbLibraryTracks]);
+  }, [favoriteLibraryTracks, localLibraryTracks, nasLibraryTracks, selectedLibraryStorage, usbLibraryTracks]);
   const selectedLibraryTrack = visibleLibraryTracks.find((track) => track.id === selectedLibraryTrackId) ?? null;
   const seekSupported = playback.source === "mpd" && durationSeconds > 0 && transportCapabilities?.seek !== false;
   const displayedElapsedSeconds = seekSupported
@@ -285,12 +293,117 @@ export function PlayerOverlay({
     : 0;
   const displayedVolumePercent = clampVolumePercent(volumeDraftPercent ?? system.volume.percent);
 
-  const selectedLocalCategoryLabel = categoryLabel(selectedLocalCategory);
+  const localDiskUsedPercent = normalizeDiskUsedPercent(localLibraryStorage);
+  const localDiskFreeLabel = formatDiskSize(localLibraryStorage?.freeBytes);
   const sourceLine = [
     playbackTruth.sourceLabel,
     sourceStatusLabel(playbackSource, pendingSource === playback.source),
     status.pending ? "Syncing" : status.source === "api" ? "API Confirmed" : "Fallback Data"
   ];
+
+  function readLibraryFastScrollMetrics(): LibraryFastScrollMetrics {
+    const list = libraryTrackListRef.current;
+    if (!list || selectedPrimaryPanel !== "library") {
+      return defaultLibraryFastScrollMetrics;
+    }
+
+    const maxScrollTop = Math.max(0, list.scrollHeight - list.clientHeight);
+    const available = visibleLibraryTracks.length > 0 && maxScrollTop > 8;
+    if (!available) {
+      return defaultLibraryFastScrollMetrics;
+    }
+
+    const progress = clampUnit(list.scrollTop / maxScrollTop);
+    const visibleRatio = clampUnit(list.clientHeight / Math.max(list.clientHeight, list.scrollHeight));
+    const thumbPercent = Math.max(
+      LIBRARY_FAST_SCROLL_MIN_THUMB_PERCENT,
+      Math.min(LIBRARY_FAST_SCROLL_MAX_THUMB_PERCENT, visibleRatio * 100)
+    );
+    const thumbTopPercent = progress * (100 - thumbPercent);
+    const currentIndex = Math.min(
+      visibleLibraryTracks.length,
+      Math.max(1, Math.round(progress * (visibleLibraryTracks.length - 1)) + 1)
+    );
+
+    return {
+      available,
+      progress,
+      thumbPercent,
+      thumbTopPercent,
+      currentIndex
+    };
+  }
+
+  function updateLibraryFastScrollMetrics() {
+    const nextMetrics = readLibraryFastScrollMetrics();
+    setLibraryFastScrollMetrics((current) => (
+      current.available === nextMetrics.available
+        && current.currentIndex === nextMetrics.currentIndex
+        && Math.abs(current.progress - nextMetrics.progress) < 0.001
+        && Math.abs(current.thumbPercent - nextMetrics.thumbPercent) < 0.001
+        && Math.abs(current.thumbTopPercent - nextMetrics.thumbTopPercent) < 0.001
+        ? current
+        : nextMetrics
+    ));
+    return nextMetrics;
+  }
+
+  function resetLibraryFastScrollDrag() {
+    libraryFastScrollPointerIdRef.current = null;
+    libraryFastScrollDraggingRef.current = false;
+    setLibraryFastScrollDragging(false);
+  }
+
+  function scrollLibraryFastScrollToClientY(clientY: number) {
+    const list = libraryTrackListRef.current;
+    const track = libraryFastScrollTrackRef.current;
+    if (!list || !track) return;
+    const maxScrollTop = Math.max(0, list.scrollHeight - list.clientHeight);
+    if (maxScrollTop <= 0) return;
+    const rect = track.getBoundingClientRect();
+    const progress = clampUnit((clientY - rect.top) / Math.max(1, rect.height));
+    list.scrollTop = progress * maxScrollTop;
+    updateLibraryFastScrollMetrics();
+  }
+
+  function handleLibraryTrackListScroll() {
+    updateLibraryFastScrollMetrics();
+  }
+
+  function handleLibraryTrackListWheel() {
+    updateLibraryFastScrollMetrics();
+  }
+
+  function handleLibraryFastScrollPointerDown(event: PointerEvent<HTMLDivElement>) {
+    if (!libraryFastScrollMetrics.available) return;
+    event.preventDefault();
+    event.stopPropagation();
+    libraryFastScrollPointerIdRef.current = event.pointerId;
+    libraryFastScrollDraggingRef.current = true;
+    setLibraryFastScrollDragging(true);
+    event.currentTarget.setPointerCapture(event.pointerId);
+    scrollLibraryFastScrollToClientY(event.clientY);
+  }
+
+  function handleLibraryFastScrollPointerMove(event: PointerEvent<HTMLDivElement>) {
+    if (libraryFastScrollPointerIdRef.current !== event.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    scrollLibraryFastScrollToClientY(event.clientY);
+  }
+
+  function finishLibraryFastScrollDrag(event: PointerEvent<HTMLDivElement>) {
+    if (libraryFastScrollPointerIdRef.current !== event.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    libraryFastScrollPointerIdRef.current = null;
+    libraryFastScrollDraggingRef.current = false;
+    setLibraryFastScrollDragging(false);
+    updateLibraryFastScrollMetrics();
+  }
 
   useEffect(() => {
     if (!active) {
@@ -308,8 +421,21 @@ export function PlayerOverlay({
       setVolumeDraftPercent(null);
       setVolumeError(null);
       setManualPanelSelection(false);
+      setConfirmingDeleteLibraryTrackId(null);
+      resetLibraryFastScrollDrag();
     }
   }, [active]);
+
+  useEffect(() => {
+    if (!active || selectedPrimaryPanel !== "library") {
+      resetLibraryFastScrollDrag();
+      return;
+    }
+    const animationFrame = window.requestAnimationFrame(() => {
+      updateLibraryFastScrollMetrics();
+    });
+    return () => window.cancelAnimationFrame(animationFrame);
+  }, [active, selectedLibraryStorage, selectedPrimaryPanel, visibleLibraryTracks.length]);
 
   useEffect(() => {
     const requestState = volumeRequestStateRef.current;
@@ -418,6 +544,7 @@ export function PlayerOverlay({
         setLocalLibraryTracks(library.tracks.filter((track) => track.storage === "local"));
         setNasLibraryTracks(library.tracks.filter((track) => track.storage === "nas"));
         setUsbLibraryTracks(library.tracks.filter((track) => track.storage === "usb"));
+        setLocalLibraryStorage(library.localStorage ?? null);
       })
       .catch((error) => {
         if (requestSignal.aborted) return;
@@ -452,7 +579,6 @@ export function PlayerOverlay({
     }, controller.signal)
       .then((catalog) => {
         setRadioStations(catalog.stations);
-        setRadioTotal(catalog.total);
         setRadioCategories(catalog.categories);
       })
       .catch((error) => {
@@ -471,12 +597,6 @@ export function PlayerOverlay({
   useEffect(() => {
     setFailedRadioLogoIds(new Set());
   }, [selectedRadioCategory]);
-
-  useEffect(() => {
-    if (!selectedSubCategoryIsAvailable) {
-      setSelectedLocalSubCategory("all");
-    }
-  }, [selectedSubCategoryIsAvailable]);
 
   useEffect(() => {
     if (!active || selectedPrimaryPanel !== "library") return;
@@ -532,7 +652,7 @@ export function PlayerOverlay({
       case "usb":
         return usbLibraryTracks.length;
       case "favorites":
-        return localLibraryTracks.filter((track) => track.favorite).length;
+        return favoriteLibraryTracks.length;
       case "recently_added":
         return Math.min(12, localLibraryTracks.length);
       default:
@@ -576,7 +696,7 @@ export function PlayerOverlay({
       } else if (target === "mpd") {
         setSourceHint("Library source ready.");
       } else if (target === "radio") {
-        setSourceHint(`${nextSource?.secondaryStatus ?? "Radio ready."}`);
+        setSourceHint(null);
       } else if (nextSource?.connectedLabel) {
         setSourceHint(`${nextSource.label}: ${nextSource.connectedLabel}.`);
       } else if (nextSource?.advertisedLabel) {
@@ -607,10 +727,11 @@ export function PlayerOverlay({
     }
   }
 
-  function handleLibraryTrackSelect(track: AudioLibraryTrackSummary) {
+  async function handleLibraryTrackSelect(track: AudioLibraryTrackSummary) {
     setSelectedLibraryTrackId(track.id);
+    setConfirmingDeleteLibraryTrackId(null);
     if ((track.storage === "local" || track.storage === "usb") && track.path) {
-      void switchSource("mpd", undefined, track.path);
+      await switchSource("mpd", undefined, track.path);
     }
   }
 
@@ -620,6 +741,8 @@ export function PlayerOverlay({
     setSelectedLibraryTrackId(null);
     setSourceError(null);
     setSourceHint(null);
+    setConfirmingDeleteLibraryTrackId(null);
+    resetLibraryFastScrollDrag();
 
     if (panelId === "library") {
       if (currentSource.id !== "mpd") void switchSource("mpd");
@@ -633,9 +756,10 @@ export function PlayerOverlay({
     setManualPanelSelection(true);
     setSelectedLibraryStorage(storageId);
     setSelectedLibraryTrackId(null);
-    setSelectedLocalSubCategory("all");
     setSourceError(null);
     setSourceHint(null);
+    setConfirmingDeleteLibraryTrackId(null);
+    resetLibraryFastScrollDrag();
     if (storageId === "nas") {
       void switchSource("mpd");
     }
@@ -654,6 +778,61 @@ export function PlayerOverlay({
       setSourceError(error instanceof Error ? error.message : "Favorite update failed");
     } finally {
       setFavoriteBusy(false);
+    }
+  }
+
+  async function handleCopyUsbTrackToLocal(track: AudioLibraryTrackSummary) {
+    if (track.storage !== "usb" || !track.path || copyingLibraryTrackId) return;
+    setCopyingLibraryTrackId(track.id);
+    setSourceError(null);
+    setSourceHint(null);
+    try {
+      const result = await copyLibraryTrackToLocal(track.path);
+      setLocalLibraryTracks(result.library.tracks.filter((entry) => entry.storage === "local"));
+      setNasLibraryTracks(result.library.tracks.filter((entry) => entry.storage === "nas"));
+      setUsbLibraryTracks(result.library.tracks.filter((entry) => entry.storage === "usb"));
+      setLocalLibraryStorage(result.library.localStorage ?? null);
+      setSourceHint(result.copied ? "Copied to Local." : "Already in Local.");
+    } catch (error) {
+      setSourceError(error instanceof Error ? error.message : "Copy to Local failed");
+    } finally {
+      setCopyingLibraryTrackId(null);
+    }
+  }
+
+  function handleDeleteLocalTrackRequest(track: AudioLibraryTrackSummary) {
+    if (track.storage !== "local" || !track.path || deletingLibraryTrackId) return;
+    setConfirmingDeleteLibraryTrackId(track.id);
+    setSourceError(null);
+    setSourceHint(null);
+  }
+
+  function handleDeleteLocalTrackCancel(track: AudioLibraryTrackSummary) {
+    if (confirmingDeleteLibraryTrackId === track.id) {
+      setConfirmingDeleteLibraryTrackId(null);
+    }
+  }
+
+  async function handleDeleteLocalTrackConfirm(track: AudioLibraryTrackSummary) {
+    if (track.storage !== "local" || !track.path || deletingLibraryTrackId) return;
+    setDeletingLibraryTrackId(track.id);
+    setSourceError(null);
+    setSourceHint(null);
+    try {
+      const result = await deleteLibraryTrackFromLocal(track.path);
+      setLocalLibraryTracks(result.library.tracks.filter((entry) => entry.storage === "local"));
+      setNasLibraryTracks(result.library.tracks.filter((entry) => entry.storage === "nas"));
+      setUsbLibraryTracks(result.library.tracks.filter((entry) => entry.storage === "usb"));
+      setLocalLibraryStorage(result.library.localStorage ?? null);
+      if (selectedLibraryTrackId === track.id) {
+        setSelectedLibraryTrackId(null);
+      }
+      setSourceHint(result.deleted ? "Deleted from Local." : "Local track removed.");
+    } catch (error) {
+      setSourceError(error instanceof Error ? error.message : "Delete local track failed");
+    } finally {
+      setDeletingLibraryTrackId(null);
+      setConfirmingDeleteLibraryTrackId(null);
     }
   }
 
@@ -676,7 +855,7 @@ export function PlayerOverlay({
     const canSwitch = source?.controllability !== "status-only" && source?.availability !== "unavailable";
 
     return (
-      <section className="source-panel" aria-label="Radio source">
+      <section className="source-panel source-panel-radio" aria-label="Radio source">
         <div className="source-hero-card">
           <div className="source-hero-icon" aria-hidden="true">
             <RadioIcon size={28} />
@@ -719,16 +898,11 @@ export function PlayerOverlay({
           })}
         </div>
 
-        <div className="source-result-meta">
-          <span>
-            {radioLoading
-              ? "Loading stations..."
-              : radioTotal > radioStations.length
-                ? `${radioStations.length} / ${radioTotal} stations`
-                : `${radioTotal || radioStations.length} stations`}
-          </span>
-          <span>{radioError ? "Catalog unavailable" : radioCategoryTabs.find((category) => category.id === selectedRadioCategory)?.label ?? "Focus"}</span>
-        </div>
+        {radioLoading ? (
+          <div className="source-result-meta" data-radio-loading-status>
+            <span>Loading stations...</span>
+          </div>
+        ) : null}
 
         {radioError ? <p className="source-panel-error">{radioError}</p> : null}
 
@@ -937,7 +1111,7 @@ export function PlayerOverlay({
           </div>
         </div>
 
-        <aside className="library-zone" aria-label="Audio source browser" data-player-library-pane>
+        <aside className="library-zone" aria-label="Audio source browser" data-player-library-pane data-player-source-panel={selectedPrimaryPanel}>
           <div className="library-browser-header">
             <div className="library-browser-title">
               <div>
@@ -970,6 +1144,31 @@ export function PlayerOverlay({
                 />
               </div>
               <span className={`library-volume-percent ${volumeError ? "is-error" : ""}`} data-player-volume-percent>{displayedVolumePercent}%</span>
+              <div
+                className={`library-local-storage-meter ${localDiskUsedPercent === null ? "is-unavailable" : ""}`}
+                aria-label={`Local storage: ${localDiskFreeLabel} free`}
+                title={localDiskUsedPercent === null ? "Local storage unavailable" : `${localDiskFreeLabel} free`}
+                data-library-local-storage
+              >
+                <span className="library-local-storage-copy">
+                  <b>Local</b>
+                  <strong>{localDiskFreeLabel} free</strong>
+                </span>
+                <span className="library-local-storage-track" aria-hidden="true">
+                  <i style={{ width: `${localDiskUsedPercent ?? 0}%` }} />
+                </span>
+              </div>
+              <button
+                className="library-volume-back"
+                type="button"
+                data-gesture-control
+                data-player-volume-back
+                aria-label="Back to main screen"
+                onClick={onReturnAmbient}
+              >
+                <LogOut size={15} />
+                <span>Back</span>
+              </button>
             </div>
           </div>
 
@@ -1035,144 +1234,182 @@ export function PlayerOverlay({
                 })}
               </nav>
 
-              {selectedLibraryStorage === "local" ? (
-                <nav className="library-category-tabs" aria-label="Local library categories">
-                  {localCategories.map((category) => {
-                    const isSelected = selectedLocalCategory === category.id;
-                    return (
-                      <button
-                        className={`library-category-tab ${isSelected ? "is-selected" : ""}`}
-                        key={category.id}
-                        type="button"
-                        aria-pressed={isSelected}
-                        data-library-category={category.id}
-                        data-gesture-control
-                        onClick={() => {
-                          setManualPanelSelection(true);
-                          setSelectedLocalCategory(category.id);
-                          setSelectedLocalSubCategory("all");
-                          setSelectedLibraryTrackId(null);
-                          setSourceError(null);
-                          setSourceHint(null);
-                        }}
-                      >
-                        <strong>{category.label}</strong>
-                        <span>{localCategoryCounts[category.id]}</span>
-                      </button>
-                    );
-                  })}
-                </nav>
-              ) : null}
-
-              {selectedLibraryStorage === "local" && localSubCategoryTabs.length > 0 ? (
-                <nav className="library-subcategory-tabs" aria-label={`${selectedLocalCategoryLabel} subfolders`}>
-                  <button
-                    className={`library-subcategory-tab ${selectedLocalSubCategory === "all" ? "is-selected" : ""}`}
-                    type="button"
-                    aria-pressed={selectedLocalSubCategory === "all"}
-                    data-gesture-control
-                    onClick={() => {
-                      setManualPanelSelection(true);
-                      setSelectedLocalSubCategory("all");
-                      setSelectedLibraryTrackId(null);
-                    }}
-                  >
-                    <strong>All</strong>
-                    <span>{localCategoryTracks.length}</span>
-                  </button>
-                  {localSubCategoryTabs.map((subCategory) => {
-                    const isSelected = selectedLocalSubCategory === subCategory.label;
-                    return (
-                      <button
-                        className={`library-subcategory-tab ${isSelected ? "is-selected" : ""}`}
-                        key={subCategory.label}
-                        type="button"
-                        aria-pressed={isSelected}
-                        data-gesture-control
-                        onClick={() => {
-                          setManualPanelSelection(true);
-                          setSelectedLocalSubCategory(subCategory.label);
-                          setSelectedLibraryTrackId(null);
-                        }}
-                      >
-                        <strong>{subCategory.label}</strong>
-                        <span>{subCategory.count}</span>
-                      </button>
-                    );
-                  })}
-                </nav>
-              ) : null}
-
               {libraryError && (selectedLibraryStorage === "local" || selectedLibraryStorage === "usb") ? <p className="source-panel-error">{libraryError}</p> : null}
 
-              <div className="library-track-list" data-library-track-list>
-                {visibleLibraryTracks.map((track, index) => {
-                  const selected = selectedLibraryTrack?.id === track.id;
-                  return (
-                    <article
-                      className={`library-track-item ${selected ? "is-selected" : ""} ${track.active ? "is-active" : ""}`}
-                      key={track.id}
-                      data-library-track={track.id}
-                    >
-                      <button
-                        className="library-track-main"
-                        type="button"
-                        aria-pressed={selected}
-                        data-gesture-control
-                        onClick={() => handleLibraryTrackSelect(track)}
+              <div
+                className={`library-track-list-shell ${libraryFastScrollMetrics.available ? "has-fast-scroll" : ""}`}
+                data-library-track-list-shell
+              >
+                <div
+                  className="library-track-list"
+                  data-library-track-list
+                  data-gesture-control
+                  ref={libraryTrackListRef}
+                  onScroll={handleLibraryTrackListScroll}
+                  onWheel={handleLibraryTrackListWheel}
+                >
+                  {visibleLibraryTracks.map((track, index) => {
+                    const selected = selectedLibraryTrack?.id === track.id;
+                    const isLocalTrack = selectedLibraryStorage === "local" && track.storage === "local";
+                    const isUsbTrack = selectedLibraryStorage === "usb" && track.storage === "usb";
+                    const hasRowAction = isLocalTrack || isUsbTrack;
+                    const copyBusy = copyingLibraryTrackId === track.id;
+                    const deleteBusy = deletingLibraryTrackId === track.id;
+                    const deleteConfirming = confirmingDeleteLibraryTrackId === track.id;
+                    const audioInfo = track.storage === "local" || track.storage === "usb" ? formatLibraryAudioInfo(track) : null;
+                    return (
+                      <article
+                        className={`library-track-item ${hasRowAction ? "has-row-action" : ""} ${selected ? "is-selected" : ""} ${track.active ? "is-active" : ""}`}
+                        key={track.id}
+                        data-library-track={track.id}
                       >
-                        <span className="library-track-index">
-                          {track.albumArtUrl ? <img src={track.albumArtUrl} alt="" /> : String(index + 1).padStart(2, "0")}
-                        </span>
-                        <span className="library-track-copy">
-                          <strong>{track.title}</strong>
-                          <em>{track.artist}</em>
-                        </span>
-                        <span className="library-track-meta">
-                          <i>{track.subCategory}</i>
-                          <b>{formatDuration(track.durationSeconds)}</b>
-                        </span>
-                        <span className="library-track-state" aria-hidden="true">
-                          {selected || track.active ? <Check size={16} /> : null}
-                        </span>
-                      </button>
-                      <button
-                        className={`library-track-favorite ${track.favorite ? "is-active" : ""}`}
-                        type="button"
-                        aria-label={track.favorite ? `Remove ${track.title} from favorites` : `Add ${track.title} to favorites`}
-                        title={track.favorite ? "Remove favorite" : "Favorite"}
-                        aria-pressed={track.favorite}
-                        disabled={favoriteBusy || !track.path}
-                        data-gesture-control
-                        onClick={() => void handleFavoriteTrack(track)}
-                      >
-                        <Heart size={17} fill={track.favorite ? "currentColor" : "none"} />
-                      </button>
-                    </article>
-                  );
-                })}
-                {libraryLoading && (selectedLibraryStorage === "local" || selectedLibraryStorage === "usb") ? (
-                  <p className="queue-panel-empty">Loading music library...</p>
-                ) : null}
-                {!libraryLoading && visibleLibraryTracks.length === 0 ? (
-                  <p className="queue-panel-empty">
-                    {selectedLibraryStorage === "nas"
-                      ? "NAS queue is empty."
-                      : selectedLibraryStorage === "usb"
-                        ? "USB library is empty."
-                        : selectedLibraryStorage === "favorites"
-                          ? "No favorite tracks yet."
-                          : selectedLibraryStorage === "recently_added"
-                            ? "No recently added tracks yet."
-                            : "No local tracks found."}
-                  </p>
+                        <button
+                          className="library-track-main"
+                          type="button"
+                          aria-pressed={selected}
+                          data-gesture-control
+                          onClick={() => void handleLibraryTrackSelect(track)}
+                        >
+                          <span className="library-track-index">
+                            {track.albumArtUrl ? <img src={track.albumArtUrl} alt="" /> : String(index + 1).padStart(2, "0")}
+                          </span>
+                          <span className="library-track-copy">
+                            <strong>{track.title}</strong>
+                            <em>{track.artist}</em>
+                          </span>
+                          <span className="library-track-meta">
+                            <i>{track.subCategory}</i>
+                            <b>{formatDuration(track.durationSeconds)}</b>
+                            {audioInfo ? <small className="library-track-audio-info">{audioInfo}</small> : null}
+                          </span>
+                          <span className="library-track-state" aria-hidden="true">
+                            {selected || track.active ? <Check size={16} /> : null}
+                          </span>
+                        </button>
+                        <button
+                          className={`library-track-favorite ${track.favorite ? "is-active" : ""}`}
+                          type="button"
+                          aria-label={track.favorite ? `Remove ${track.title} from favorites` : `Add ${track.title} to favorites`}
+                          title={track.favorite ? "Remove favorite" : "Favorite"}
+                          aria-pressed={track.favorite}
+                          disabled={favoriteBusy || !track.path}
+                          data-gesture-control
+                          onClick={() => void handleFavoriteTrack(track)}
+                        >
+                          <Heart size={17} fill={track.favorite ? "currentColor" : "none"} />
+                        </button>
+                        {isUsbTrack ? (
+                          <button
+                            className="library-track-copy-local"
+                            type="button"
+                            aria-label={`Copy ${track.title} to Local`}
+                            title="Copy to Local"
+                            disabled={copyingLibraryTrackId !== null || !track.path}
+                            data-library-copy-local
+                            data-gesture-control
+                            onClick={() => void handleCopyUsbTrackToLocal(track)}
+                          >
+                            {copyBusy ? <LoaderCircle size={15} className="is-spinning" /> : <Copy size={15} />}
+                            <span>Copy to Local</span>
+                          </button>
+                        ) : null}
+                        {isLocalTrack && deleteConfirming ? (
+                          <span className="library-track-delete-confirm" data-library-delete-confirm data-gesture-control>
+                            <button
+                              className="library-track-delete-confirm-button is-yes"
+                              type="button"
+                              disabled={deletingLibraryTrackId !== null || !track.path}
+                              data-library-delete-confirm-yes
+                              data-gesture-control
+                              onClick={() => void handleDeleteLocalTrackConfirm(track)}
+                            >
+                              {deleteBusy ? <LoaderCircle size={14} className="is-spinning" /> : null}
+                              <span>Yes</span>
+                            </button>
+                            <button
+                              className="library-track-delete-confirm-button is-no"
+                              type="button"
+                              disabled={deletingLibraryTrackId !== null}
+                              data-library-delete-confirm-no
+                              data-gesture-control
+                              onClick={() => handleDeleteLocalTrackCancel(track)}
+                            >
+                              No
+                            </button>
+                          </span>
+                        ) : isLocalTrack ? (
+                          <button
+                            className="library-track-delete-local"
+                            type="button"
+                            aria-label={`Delete ${track.title} from Local`}
+                            title="Delete from Local"
+                            disabled={deletingLibraryTrackId !== null || !track.path}
+                            data-library-delete-local
+                            data-gesture-control
+                            onClick={() => handleDeleteLocalTrackRequest(track)}
+                          >
+                            <Trash2 size={15} />
+                            <span>Delete</span>
+                          </button>
+                        ) : null}
+                      </article>
+                    );
+                  })}
+                  {libraryLoading && (selectedLibraryStorage === "local" || selectedLibraryStorage === "usb") ? (
+                    <p className="queue-panel-empty">Loading music library...</p>
+                  ) : null}
+                  {!libraryLoading && visibleLibraryTracks.length === 0 ? (
+                    <p className="queue-panel-empty">
+                      {selectedLibraryStorage === "nas"
+                        ? "NAS queue is empty."
+                        : selectedLibraryStorage === "usb"
+                          ? "USB library is empty."
+                          : selectedLibraryStorage === "favorites"
+                            ? "No favorite tracks yet."
+                            : selectedLibraryStorage === "recently_added"
+                              ? "No recently added tracks yet."
+                              : "No local tracks found."}
+                    </p>
+                  ) : null}
+                </div>
+                {libraryFastScrollMetrics.available ? (
+                  <div
+                    className={`library-fast-scroll ${libraryFastScrollDragging ? "is-dragging" : ""}`}
+                    data-library-fast-scroll
+                    data-gesture-control
+                    role="scrollbar"
+                    aria-label="Library fast scroll"
+                    aria-orientation="vertical"
+                    aria-valuemin={1}
+                    aria-valuemax={visibleLibraryTracks.length}
+                    aria-valuenow={libraryFastScrollMetrics.currentIndex}
+                    onPointerDown={handleLibraryFastScrollPointerDown}
+                    onPointerMove={handleLibraryFastScrollPointerMove}
+                    onPointerUp={finishLibraryFastScrollDrag}
+                    onPointerCancel={finishLibraryFastScrollDrag}
+                  >
+                    <span className="library-fast-scroll-count">
+                      {libraryFastScrollMetrics.currentIndex}
+                      <small>/ {visibleLibraryTracks.length}</small>
+                    </span>
+                    <span className="library-fast-scroll-track" ref={libraryFastScrollTrackRef}>
+                      <span
+                        className="library-fast-scroll-thumb"
+                        data-library-fast-scroll-thumb
+                        style={{
+                          height: `${libraryFastScrollMetrics.thumbPercent}%`,
+                          top: `${libraryFastScrollMetrics.thumbTopPercent}%`
+                        }}
+                      />
+                    </span>
+                  </div>
                 ) : null}
               </div>
             </>
           ) : selectedPrimaryPanel === "radio" ? renderRadioSourcePanel() : renderExternalSourcePanel(selectedPrimaryPanel)}
 
           {sourceError ? <p className="source-panel-error">{sourceError}</p> : null}
-          {!sourceError && sourceHint ? <p className="source-panel-hint">{sourceHint}</p> : null}
+          {!sourceError && sourceHint && selectedPrimaryPanel !== "radio" ? <p className="source-panel-hint">{sourceHint}</p> : null}
         </aside>
       </div>
     </section>

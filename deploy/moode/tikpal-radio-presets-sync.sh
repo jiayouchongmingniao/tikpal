@@ -24,15 +24,30 @@ rows=(
   "530|https://knkx-live-a.edge.audiocdn.com/6285_256k|Jazz - Jazz24|r|local|Jazz|Jazz24.org|English|United States|North America|256|AAC|No||No"
   "531|https://west-mp3-128.streamthejazzgroove.com/stream|Jazz - The Jazz Groove|r|local|Jazz|The Jazz Groove|English|United States|North America|128|MP3|No||No"
   "532|http://linn.co.uk:8000/autodj|Jazz - Linn Jazz|r|local|Jazz|Linn|English|United Kingdom|Europe|320|MP3|No||No"
-  "540|https://dispatcher.rndfnk.com/br/brklassik/live/mp3/high|Classical - BR-Klassik|r|local|Classical|Bayern Radio|German|Germany|Europe|192|MP3|No||No"
-  "541|http://icecast.omroep.nl/radio4-bb-mp3|Classical - NPO Klassiek|r|local|Classical|NPO|Dutch|Netherlands|Europe|192|MP3|No||No"
-  "542|http://linn.co.uk:8004/autodj|Classical - Linn Classical|r|local|Classical|Linn|English|United Kingdom|Europe|320|MP3|No||No"
-  "550|https://npr-ice.streamguys1.com/live.mp3|News - NPR Program Stream|r|local|News, Public Radio, Talk|NPR|English|United States|North America|128|MP3|No||No"
-  "551|http://live-icy.dr.dk/A/A03H.mp3|News - DR P1|r|local|News, Talk|DR|Danish|Denmark|Europe|128|MP3|No||No"
-  "552|http://streaming.swisstxt.ch/m/drs4news/mp3_128|News - Radio SRF 4 News|r|local|News, Current Affairs|SRF|German|Switzerland|Europe|128|MP3|No||No"
-  "560|https://stream.radioparadise.com/flacm|Hi-Fi - Radio Paradise FLAC|r|local|Hi-Fi, Eclectic|Radio Paradise|English|United States|North America|900|FLAC|No||No"
-  "561|http://mscp3.live-streams.nl:8360/high.aac|Hi-Fi - Naim Radio|r|local|Hi-Fi, Eclectic|Naim|English|United Kingdom|Europe|320|AAC|No||No"
-  "562|http://linn.co.uk:8003/autodj|Hi-Fi - Linn Radio|r|local|Hi-Fi, Eclectic|Linn|English|United Kingdom|Europe|320|MP3|No||No"
+  "590|https://dispatcher.rndfnk.com/br/brklassik/live/mp3/high|Classical - BR-Klassik|r|local|Classical|Bayern Radio|German|Germany|Europe|192|MP3|No||No"
+  "591|http://icecast.omroep.nl/radio4-bb-mp3|Classical - NPO Klassiek|r|local|Classical|NPO|Dutch|Netherlands|Europe|192|MP3|No||No"
+  "592|http://linn.co.uk:8004/autodj|Classical - Linn Classical|r|local|Classical|Linn|English|United Kingdom|Europe|320|MP3|No||No"
+  "600|https://npr-ice.streamguys1.com/live.mp3|News - NPR Program Stream|r|local|News, Public Radio, Talk|NPR|English|United States|North America|128|MP3|No||No"
+  "601|http://live-icy.dr.dk/A/A03H.mp3|News - DR P1|r|local|News, Talk|DR|Danish|Denmark|Europe|128|MP3|No||No"
+  "602|http://streaming.swisstxt.ch/m/drs4news/mp3_128|News - Radio SRF 4 News|r|local|News, Current Affairs|SRF|German|Switzerland|Europe|128|MP3|No||No"
+  "610|https://stream.radioparadise.com/flacm|Hi-Fi - Radio Paradise FLAC|r|local|Hi-Fi, Eclectic|Radio Paradise|English|United States|North America|900|FLAC|No||No"
+  "611|http://mscp3.live-streams.nl:8360/high.aac|Hi-Fi - Naim Radio|r|local|Hi-Fi, Eclectic|Naim|English|United Kingdom|Europe|320|AAC|No||No"
+  "612|http://linn.co.uk:8003/autodj|Hi-Fi - Linn Radio|r|local|Hi-Fi, Eclectic|Linn|English|United Kingdom|Europe|320|MP3|No||No"
+  "540|http://strm112.1.fm/blues_mobile_mp3|Blues - 1.FM Blues Radio|r|local|Blues|1.FM|English|United States|North America|192|MP3|No||No"
+  "541|http://wdcb-ice.streamguys.org:80/wdcb128|Blues - WDCB Chicago Jazz & Blues|r|local|Blues, Jazz|DuPage College|English|United States|North America|128|MP3|No||No"
+  "542|https://www.wwoz.org/listen/hi|Blues - WWOZ New Orleans|r|local|Blues, Jazz, Funk|WWOZ|English|United States|North America|128|MP3|No||No"
+  "550|https://stream.radioparadise.com/rock-flacm|Rock - Radio Paradise Rock|r|local|Rock|Radio Paradise|English|United States|North America|900|FLAC|No||No"
+  "551|http://sc3.radiocaroline.net:8030|Rock - Radio Caroline|r|local|Rock, Classic Rock|Radio Caroline|English|United Kingdom|Europe|96|MP3|No||No"
+  "552|http://ice1.somafm.com/digitalis-128-aac|Rock - Soma FM Digitalis|r|local|Rock, Indie|Soma FM|English|United States|North America|128|AAC|No||No"
+  "560|https://stream.radioparadise.com/world-flacm|World - Radio Paradise World|r|local|World, World Music|Radio Paradise|English|United States|North America|900|FLAC|No||No"
+  "561|http://mediaserv38.live-streams.nl:8027/live|World - Hi On Line World|r|local|World, World Music|Hi.Fine|English|Netherlands|Europe|320|MP3|No||No"
+  "562|http://ice1.somafm.com/suburbsofgoa-128-aac|World - Soma FM Suburbs of Goa|r|local|World, World Music, Desi|Soma FM|English|United States|North America|128|AAC|No||No"
+  "570|https://channels.fluxfm.de/elektro-flux/stream.mp3|Electronic - FluxFM ElectroFlux|r|local|Electronic, Pop|FluxFM|German|Germany|Europe|256|MP3|No||No"
+  "571|https://channels.fluxfm.de/techno-underground/stream.mp3|Electronic - FluxFM Techno Underground|r|local|Electronic, Techno|FluxFM|German|Germany|Europe|256|MP3|No||No"
+  "572|http://ice1.somafm.com/poptron-128-aac|Electronic - Soma FM PopTron|r|local|Electronic, Electro-Pop|Soma FM|English|United States|North America|128|AAC|No||No"
+  "580|http://lsn.lv/bbcradio.m3u8?station=bbc_radio_fourfm&bitrate=96000|Podcast - BBC Radio 4|r|local|Podcast, Spoken Word, Talk|BBC|English|United Kingdom|Europe|96|AAC-LC|No||No"
+  "581|http://direct.franceculture.fr/live/franceculture-midfi.mp3|Podcast - France Culture Live|r|local|Podcast, Spoken Word, Current Affairs|Radio France|French|France|Europe|128|MP3|No||No"
+  "582|https://npr-ice.streamguys1.com/live.mp3|Podcast - NPR Program Stream|r|local|Podcast, Public Radio, Talk|NPR|English|United States|North America|128|MP3|No||No"
 )
 
 usage() {
@@ -87,7 +102,7 @@ require_db() {
 
 print_conflicts() {
   "$SQLITE_BIN" -separator '|' "$SQLDB" \
-    "SELECT id, name FROM cfg_radio WHERE id IN ($(target_ids_csv)) AND name NOT IN ($(target_names_sql)) AND name NOT LIKE 'Tikpal %' AND name NOT LIKE 'Focus - %' AND name NOT LIKE 'Calm - %' AND name NOT LIKE 'Sleep - %' AND name NOT LIKE 'Jazz - %' AND name NOT LIKE 'Classical - %' AND name NOT LIKE 'News - %' AND name NOT LIKE 'Hi-Fi - %' ORDER BY id;"
+    "SELECT id, name FROM cfg_radio WHERE id IN ($(target_ids_csv)) AND name NOT IN ($(target_names_sql)) AND name NOT LIKE 'Tikpal %' AND name NOT LIKE 'Focus - %' AND name NOT LIKE 'Calm - %' AND name NOT LIKE 'Sleep - %' AND name NOT LIKE 'Jazz - %' AND name NOT LIKE 'Blues - %' AND name NOT LIKE 'Rock - %' AND name NOT LIKE 'World - %' AND name NOT LIKE 'Electronic - %' AND name NOT LIKE 'Podcast - %' AND name NOT LIKE 'Classical - %' AND name NOT LIKE 'News - %' AND name NOT LIKE 'Hi-Fi - %' ORDER BY id;"
 }
 
 check_presets() {
@@ -102,7 +117,7 @@ check_presets() {
 
   local missing=0
   local category count
-  for category in Focus Calm Sleep Jazz Classical News Hi-Fi; do
+  for category in Focus Calm Sleep Jazz Classical News Hi-Fi Blues Rock World Electronic Podcast; do
     local category_sql
     category_sql="$(printf "%s" "$category" | sed "s/'/''/g")"
     count="$("$SQLITE_BIN" "$SQLDB" \

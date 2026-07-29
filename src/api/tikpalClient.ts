@@ -1,4 +1,5 @@
 import type {
+  AudioLibraryActionResponse,
   AudioLibraryFilters,
   AudioLibraryResponse,
   AudioSpectrumFrame,
@@ -116,6 +117,30 @@ export async function fetchAudioLibrary(filters: AudioLibraryFilters = {}, signa
     signal
   }, DEFAULT_GET_TIMEOUT_MS);
   return readJson<AudioLibraryResponse>(response);
+}
+
+export async function copyLibraryTrackToLocal(trackPath: string): Promise<AudioLibraryActionResponse> {
+  const response = await fetchWithTimeout(`${API_ROOT}/audio/library-actions`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ type: "copy_to_local", trackPath })
+  }, DEFAULT_POST_TIMEOUT_MS);
+  return readJson<AudioLibraryActionResponse>(response);
+}
+
+export async function deleteLibraryTrackFromLocal(trackPath: string): Promise<AudioLibraryActionResponse> {
+  const response = await fetchWithTimeout(`${API_ROOT}/audio/library-actions`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ type: "delete_local", trackPath })
+  }, DEFAULT_POST_TIMEOUT_MS);
+  return readJson<AudioLibraryActionResponse>(response);
 }
 
 export async function fetchAudioSpectrum(signal?: AbortSignal): Promise<AudioSpectrumFrame> {

@@ -1,7 +1,7 @@
 import http from "node:http";
 import { execFile, spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { mkdir, open, readFile, readdir, stat, unlink, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, open, readFile, readdir, stat, statfs, unlink, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { basename, dirname, extname, posix, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
@@ -22,6 +22,8 @@ const MPD_STARTUP_VOLUME = Number(process.env.TIKPAL_MPD_STARTUP_VOLUME ?? 30);
 const MPD_RECOVERY_COMMAND = process.env.TIKPAL_MPD_RECOVERY_COMMAND ?? "";
 const MPD_RECOVERY_TIMEOUT_MS = parseEnvPositiveInteger(process.env.TIKPAL_MPD_RECOVERY_TIMEOUT_MS, 20_000);
 const MPD_RECOVERY_SETTLE_MS = parseEnvPositiveInteger(process.env.TIKPAL_MPD_RECOVERY_SETTLE_MS, 2500);
+const MPD_LIBRARY_UPDATE_WAIT_MS = parseEnvPositiveInteger(process.env.TIKPAL_MPD_LIBRARY_UPDATE_WAIT_MS, 8000);
+const MPD_LIBRARY_UPDATE_POLL_MS = parseEnvPositiveInteger(process.env.TIKPAL_MPD_LIBRARY_UPDATE_POLL_MS, 350);
 const MPD_LOG_PATH = process.env.TIKPAL_MPD_LOG_PATH ?? "/var/log/mpd/log";
 const STARTUP_SCENE_SOUND_ENABLED = parseEnvBoolean(process.env.TIKPAL_STARTUP_SCENE_SOUND_ENABLED ?? "1");
 const MPD_MUSIC_ROOT = process.env.TIKPAL_MPD_MUSIC_ROOT ?? "/var/lib/mpd/music";
@@ -236,6 +238,9 @@ const USB_LIBRARY_MAX_TRACKS = parseEnvPositiveInteger(process.env.TIKPAL_USB_LI
 const USB_LIBRARY_SCAN_COMMAND = process.env.TIKPAL_USB_LIBRARY_SCAN_COMMAND ?? (API_MODE === "mpc" ? "./deploy/moode/tikpal-usb-library-sync.sh" : "");
 const USB_LIBRARY_AUTO_UPDATE = parseEnvBoolean(process.env.TIKPAL_USB_LIBRARY_AUTO_UPDATE ?? "1");
 const USB_LIBRARY_AUTO_UPDATE_MIN_MS = parseEnvPositiveInteger(process.env.TIKPAL_USB_LIBRARY_AUTO_UPDATE_MIN_MS, 15_000);
+const LOCAL_LIBRARY_IMPORTS_DIR_NAME = normalizeSafeRelativePath(process.env.TIKPAL_LOCAL_LIBRARY_IMPORTS_DIR_NAME ?? "USB Imports") ?? "USB Imports";
+const LIBRARY_AUDIO_PROBE_ENABLED = parseEnvBoolean(process.env.TIKPAL_LIBRARY_AUDIO_PROBE_ENABLED ?? "1");
+const LIBRARY_AUDIO_PROBE_TIMEOUT_MS = parseEnvPositiveInteger(process.env.TIKPAL_LIBRARY_AUDIO_PROBE_TIMEOUT_MS, 1800);
 const LOCAL_PLAYLIST_INDEX_PATH = resolve(LOCAL_LIBRARY_ROOT, "_metadata", "playlist_index.json");
 const LOCAL_PLAYLIST_ROOT = resolve(LOCAL_LIBRARY_ROOT, "_playlists");
 const MUSIC_LIBRARY_STATE_PATH = resolve(process.env.TIKPAL_MUSIC_LIBRARY_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "music-library-state.json"));
@@ -244,6 +249,7 @@ const AUDIO_VOLUME_STATE_PATH = resolve(process.env.TIKPAL_AUDIO_VOLUME_STATE_PA
 const AUDIO_SOURCE_MEMORY_STATE_PATH = resolve(process.env.TIKPAL_AUDIO_SOURCE_MEMORY_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "audio-source-memory.json"));
 const WEB_MODE_SETTINGS_PATH = resolve(process.env.TIKPAL_WEB_MODE_SETTINGS_PATH ?? resolve(process.cwd(), ".tikpal", "web-mode-settings.json"));
 const WEB_MODE_STATE_PATH = resolve(process.env.TIKPAL_WEB_MODE_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "web-mode-state.json"));
+const WEB_MODE_HANDOFF_STATE_PATH = resolve(process.env.TIKPAL_WEB_MODE_HANDOFF_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "web-mode-handoff.json"));
 const WEB_MODE_COMMAND = process.env.TIKPAL_WEB_MODE_COMMAND ?? (API_MODE === "mpc" ? "./deploy/chromium/tikpal-web-mode.sh" : "");
 const WEB_MODE_COMMAND_TIMEOUT_MS = Number(process.env.TIKPAL_WEB_MODE_COMMAND_TIMEOUT_MS ?? 45_000);
 const WEB_MODE_OPEN_COMMAND_TIMEOUT_MS = Number(process.env.TIKPAL_WEB_MODE_OPEN_COMMAND_TIMEOUT_MS ?? 110_000);
@@ -326,7 +332,9 @@ const HIFI_EQ_PRESETS = [
   { id: "warm", label: "Warm", intent: "Gentle low-mid lift", hifiVisualPresetId: "waveform" },
   { id: "vocal", label: "Vocal", intent: "Clearer midrange presence", hifiVisualPresetId: "dual-vu" }
 ];
-const RADIO_CATEGORY_ORDER = ["focus", "calm", "sleep", "jazz", "classical", "news", "hifi"];
+const RADIO_RANDOM_CATEGORY_ID = "random";
+const RADIO_REAL_CATEGORY_ORDER = ["focus", "calm", "sleep", "jazz", "classical", "news", "hifi", "blues", "rock", "world", "electronic", "podcast"];
+const RADIO_CATEGORY_ORDER = [...RADIO_REAL_CATEGORY_ORDER, RADIO_RANDOM_CATEGORY_ID];
 const RADIO_CATEGORY_LABELS = {
   focus: "Focus",
   calm: "Calm",
@@ -334,7 +342,13 @@ const RADIO_CATEGORY_LABELS = {
   jazz: "Jazz",
   classical: "Classical",
   news: "News",
-  hifi: "Hi-Fi"
+  hifi: "Hi-Fi",
+  blues: "Blues",
+  rock: "Rock",
+  world: "World",
+  electronic: "Electronic",
+  podcast: "Podcast",
+  random: "Random"
 };
 const RADIO_LOGO_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp"];
 const MOCK_RADIO_LOGO_URL = "data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22120%22%20height%3D%22120%22%3E%3Crect%20width%3D%22120%22%20height%3D%22120%22%20fill%3D%22%231f2937%22%2F%3E%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2238%22%20fill%3D%22%23d6b761%22%2F%3E%3Ctext%20x%3D%2260%22%20y%3D%2268%22%20font-family%3D%22Arial%22%20font-size%3D%2228%22%20font-weight%3D%22700%22%20text-anchor%3D%22middle%22%20fill%3D%22%231f2937%22%3ER%3C%2Ftext%3E%3C%2Fsvg%3E";
@@ -351,6 +365,21 @@ const RADIO_LOGO_ALIASES = new Map([
   ["Jazz - Jazz24", "Jazz24.jpg"],
   ["Jazz - The Jazz Groove", "The Jazz Groove.jpg"],
   ["Jazz - Linn Jazz", "Linn Jazz.jpg"],
+  ["Blues - 1.FM Blues Radio", "1.FM - Blues Radio.jpg"],
+  ["Blues - WDCB Chicago Jazz & Blues", "WDCB Chicago FM 90.9 - Jazz & Blues.jpg"],
+  ["Blues - WWOZ New Orleans", "WWOZ New Orleans FM 90.7 - Various Artists.jpg"],
+  ["Rock - Radio Paradise Rock", "Radio Paradise - Rock.jpg"],
+  ["Rock - Radio Caroline", "Radio Caroline.jpg"],
+  ["Rock - Soma FM Digitalis", "Soma FM - Digitalis.jpg"],
+  ["World - Radio Paradise World", "Radio Paradise - World.jpg"],
+  ["World - Hi On Line World", "Hi On Line - World.jpg"],
+  ["World - Soma FM Suburbs of Goa", "Soma FM - Suburbs of Goa.jpg"],
+  ["Electronic - FluxFM ElectroFlux", "FluxFM - ElectroFlux.jpg"],
+  ["Electronic - FluxFM Techno Underground", "FluxFM - Techno Underground.jpg"],
+  ["Electronic - Soma FM PopTron", "Soma FM - PopTron.jpg"],
+  ["Podcast - BBC Radio 4", "BBC Radio 4 FM (320K).jpg"],
+  ["Podcast - France Culture Live", "France Culture Live.jpg"],
+  ["Podcast - NPR Program Stream", "NPR Program Stream.jpg"],
   ["Classical - BR-Klassik", "BR-Klassik.jpg"],
   ["Classical - NPO Klassiek", "NPO Klassiek.jpg"],
   ["Classical - Linn Classical", "Linn Classical.jpg"],
@@ -518,6 +547,7 @@ let lastTickAt = Date.now();
 let lastMockLibraryScanAt = 0;
 let lastSystemLibraryScanRequestedAt = 0;
 const mediaMetadataCache = new Map();
+const libraryAudioInfoCache = new Map();
 let currentArtworkState = null;
 let mockActiveSource = "mpd";
 let mockActiveRadioStationId = "radio-1";
@@ -1819,9 +1849,32 @@ function getMockRadioStations() {
     ["radio-510", "Calm - Positively Meditation", "http://radio.example/calm-meditation", "Calm, Meditation, Healing", 128, "MP3", "calm", "Calm", ["Meditation", "Healing"], "Positivity Radio", "tikpal", 510],
     ["radio-520", "Sleep - Ambient Sleeping Pill", "http://radio.example/sleep-ambient", "Sleep, Ambient", 256, "MP3", "sleep", "Sleep", ["Ambient"], "Stereoscenic", "tikpal", 520],
     ["radio-530", "Jazz - Jazz24", "http://radio.example/jazz24", "Jazz", 256, "AAC", "jazz", "Jazz", [], "Jazz24.org", "tikpal", 530],
-    ["radio-540", "Classical - BR-Klassik", "http://radio.example/br-klassik", "Classical", 192, "MP3", "classical", "Classical", [], "Bayern Radio", "tikpal", 540],
-    ["radio-550", "News - NPR Program Stream", "http://radio.example/npr", "News, Public Radio, Talk", 128, "MP3", "news", "News", ["Public Radio", "Talk"], "NPR", "tikpal", 550],
-    ["radio-560", "Hi-Fi - Radio Paradise FLAC", "http://radio.example/hifi-rp-flac", "Hi-Fi, Eclectic", 900, "FLAC", "hifi", "Hi-Fi", ["Eclectic"], "Radio Paradise", "tikpal", 560]
+    ["radio-531", "Jazz - The Jazz Groove", "http://radio.example/the-jazz-groove", "Jazz", 128, "MP3", "jazz", "Jazz", [], "The Jazz Groove", "tikpal", 531],
+    ["radio-532", "Jazz - Linn Jazz", "http://radio.example/linn-jazz", "Jazz", 320, "MP3", "jazz", "Jazz", [], "Linn", "tikpal", 532],
+    ["radio-590", "Classical - BR-Klassik", "http://radio.example/br-klassik", "Classical", 192, "MP3", "classical", "Classical", [], "Bayern Radio", "tikpal", 590],
+    ["radio-591", "Classical - NPO Klassiek", "http://radio.example/npo-klassiek", "Classical", 192, "MP3", "classical", "Classical", [], "NPO", "tikpal", 591],
+    ["radio-592", "Classical - Linn Classical", "http://radio.example/linn-classical", "Classical", 320, "MP3", "classical", "Classical", [], "Linn", "tikpal", 592],
+    ["radio-600", "News - NPR Program Stream", "http://radio.example/npr-news", "News, Public Radio, Talk", 128, "MP3", "news", "News", ["Public Radio", "Talk"], "NPR", "tikpal", 600],
+    ["radio-601", "News - DR P1", "http://radio.example/dr-p1", "News, Talk", 128, "MP3", "news", "News", ["Talk"], "DR", "tikpal", 601],
+    ["radio-602", "News - Radio SRF 4 News", "http://radio.example/srf-news", "News, Current Affairs", 128, "MP3", "news", "News", ["Current Affairs"], "SRF", "tikpal", 602],
+    ["radio-610", "Hi-Fi - Radio Paradise FLAC", "http://radio.example/hifi-rp", "Hi-Fi, Eclectic", 900, "FLAC", "hifi", "Hi-Fi", ["Eclectic"], "Radio Paradise", "tikpal", 610],
+    ["radio-611", "Hi-Fi - Naim Radio", "http://radio.example/naim-radio", "Hi-Fi, Eclectic", 320, "AAC", "hifi", "Hi-Fi", ["Eclectic"], "Naim", "tikpal", 611],
+    ["radio-612", "Hi-Fi - Linn Radio", "http://radio.example/linn-radio", "Hi-Fi, Eclectic", 320, "MP3", "hifi", "Hi-Fi", ["Eclectic"], "Linn", "tikpal", 612],
+    ["radio-540", "Blues - 1.FM Blues Radio", "http://radio.example/blues", "Blues", 192, "MP3", "blues", "Blues", [], "1.FM", "tikpal", 540],
+    ["radio-541", "Blues - WDCB Chicago Jazz & Blues", "http://radio.example/wdcb", "Blues, Jazz", 128, "MP3", "blues", "Blues", ["Jazz"], "DuPage College", "tikpal", 541],
+    ["radio-542", "Blues - WWOZ New Orleans", "http://radio.example/wwoz", "Blues, Jazz, Funk", 128, "MP3", "blues", "Blues", ["Jazz", "Funk"], "WWOZ", "tikpal", 542],
+    ["radio-550", "Rock - Radio Paradise Rock", "http://radio.example/rp-rock", "Rock", 900, "FLAC", "rock", "Rock", [], "Radio Paradise", "tikpal", 550],
+    ["radio-551", "Rock - Radio Caroline", "http://radio.example/radio-caroline", "Rock, Classic Rock", 96, "MP3", "rock", "Rock", ["Classic Rock"], "Radio Caroline", "tikpal", 551],
+    ["radio-552", "Rock - Soma FM Digitalis", "http://radio.example/digitalis", "Rock, Indie", 128, "AAC", "rock", "Rock", ["Indie"], "Soma FM", "tikpal", 552],
+    ["radio-560", "World - Radio Paradise World", "http://radio.example/rp-world", "World, World Music", 900, "FLAC", "world", "World", [], "Radio Paradise", "tikpal", 560],
+    ["radio-561", "World - Hi On Line World", "http://radio.example/hionline-world", "World, World Music", 320, "MP3", "world", "World", [], "Hi.Fine", "tikpal", 561],
+    ["radio-562", "World - Soma FM Suburbs of Goa", "http://radio.example/suburbs-of-goa", "World, World Music, Desi", 128, "AAC", "world", "World", ["Desi"], "Soma FM", "tikpal", 562],
+    ["radio-570", "Electronic - FluxFM ElectroFlux", "http://radio.example/electroflux", "Electronic, Pop", 256, "MP3", "electronic", "Electronic", ["Pop"], "FluxFM", "tikpal", 570],
+    ["radio-571", "Electronic - FluxFM Techno Underground", "http://radio.example/techno-underground", "Electronic, Techno", 256, "MP3", "electronic", "Electronic", ["Techno"], "FluxFM", "tikpal", 571],
+    ["radio-572", "Electronic - Soma FM PopTron", "http://radio.example/poptron", "Electronic, Electro-Pop", 128, "AAC", "electronic", "Electronic", ["Electro-Pop"], "Soma FM", "tikpal", 572],
+    ["radio-580", "Podcast - BBC Radio 4", "http://radio.example/bbc-radio-4", "Podcast, Spoken Word, Talk", 96, "AAC-LC", "podcast", "Podcast", ["Spoken Word", "Talk"], "BBC", "tikpal", 580],
+    ["radio-581", "Podcast - France Culture Live", "http://radio.example/france-culture", "Podcast, Spoken Word, Current Affairs", 128, "MP3", "podcast", "Podcast", ["Spoken Word"], "Radio France", "tikpal", 581],
+    ["radio-582", "Podcast - NPR Program Stream", "http://radio.example/npr", "Podcast, Public Radio, Talk", 128, "MP3", "podcast", "Podcast", ["Public Radio", "Talk"], "NPR", "tikpal", 582]
   ].map(([id, label, uri, genre, bitrateKbps, codec, category, categoryLabel, tags, broadcaster, catalogSource, sortOrder]) => (
     buildRadioStationSummary({
       id,
@@ -2716,6 +2769,122 @@ async function readMediaMetadata(file) {
   return metadata;
 }
 
+function parsePositiveNumber(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function normalizeAudioFileCodec(value, fallbackPath) {
+  const raw = String(value ?? "").trim();
+  if (raw) return raw.toLowerCase();
+  const extension = extname(String(fallbackPath ?? "")).replace(/^\./, "").trim();
+  return extension ? extension.toLowerCase() : null;
+}
+
+function normalizeAudioFileContainer(value, fallbackPath) {
+  const raw = String(value ?? "").trim();
+  if (raw) return raw.split(",").map((entry) => entry.trim()).filter(Boolean)[0]?.toLowerCase() ?? null;
+  const extension = extname(String(fallbackPath ?? "")).replace(/^\./, "").trim();
+  return extension ? extension.toLowerCase() : null;
+}
+
+function audioInfoFromFileStat(absolutePath, fileStat) {
+  return {
+    fileSizeBytes: fileStat?.size ?? null,
+    codec: normalizeAudioFileCodec(null, absolutePath),
+    container: normalizeAudioFileContainer(null, absolutePath),
+    sampleRateHz: null,
+    bitrateKbps: null,
+    bitDepth: null,
+    channels: null,
+    durationSeconds: null,
+    title: null,
+    artist: null,
+    album: null
+  };
+}
+
+function normalizeAudioFileTag(value) {
+  const normalized = String(value ?? "").trim();
+  return normalized || null;
+}
+
+function readAudioFileTag(tags, key) {
+  return normalizeAudioFileTag(tags?.[key]) ?? normalizeAudioFileTag(tags?.[key.toUpperCase()]);
+}
+
+async function readAudioFileInfo(absolutePath) {
+  let fileStat;
+  try {
+    fileStat = await stat(absolutePath);
+  } catch {
+    return audioInfoFromFileStat(absolutePath, null);
+  }
+
+  const cached = libraryAudioInfoCache.get(absolutePath);
+  if (cached?.mtimeMs === fileStat.mtimeMs && cached?.size === fileStat.size) {
+    return cached.info;
+  }
+
+  const fallback = audioInfoFromFileStat(absolutePath, fileStat);
+  if (!LIBRARY_AUDIO_PROBE_ENABLED) {
+    libraryAudioInfoCache.set(absolutePath, { mtimeMs: fileStat.mtimeMs, size: fileStat.size, info: fallback });
+    return fallback;
+  }
+
+  let probe = {};
+  try {
+    const { stdout } = await execFileAsync(
+      FFPROBE_BIN,
+      [
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration,bit_rate,format_name:format_tags=title,artist,album:stream=codec_name,codec_type,sample_rate,channels,bits_per_sample,bits_per_raw_sample,bit_rate",
+        "-of",
+        "json",
+        absolutePath
+      ],
+      {
+        timeout: LIBRARY_AUDIO_PROBE_TIMEOUT_MS,
+        maxBuffer: 1024 * 512
+      }
+    );
+    probe = JSON.parse(stdout);
+  } catch {
+    probe = {};
+  }
+
+  const audioStream = Array.isArray(probe?.streams)
+    ? probe.streams.find((stream) => stream?.codec_type === "audio") ?? null
+    : null;
+  const tags = probe?.format?.tags ?? {};
+  const durationSeconds = parsePositiveNumber(probe?.format?.duration);
+  const streamBitrate = parsePositiveNumber(audioStream?.bit_rate);
+  const formatBitrate = parsePositiveNumber(probe?.format?.bit_rate);
+  const sampleRateHz = parsePositiveNumber(audioStream?.sample_rate);
+  const channels = parsePositiveNumber(audioStream?.channels);
+  const bitDepth = parsePositiveNumber(audioStream?.bits_per_sample) ?? parsePositiveNumber(audioStream?.bits_per_raw_sample);
+  const bitrate = streamBitrate ?? formatBitrate;
+
+  const info = {
+    fileSizeBytes: fallback.fileSizeBytes,
+    codec: normalizeAudioFileCodec(audioStream?.codec_name, absolutePath),
+    container: normalizeAudioFileContainer(probe?.format?.format_name, absolutePath),
+    sampleRateHz: sampleRateHz ? Math.round(sampleRateHz) : null,
+    bitrateKbps: bitrate ? Math.round(bitrate / 1000) : null,
+    bitDepth: bitDepth ? Math.round(bitDepth) : null,
+    channels: channels ? Math.round(channels) : null,
+    durationSeconds: durationSeconds ? Math.round(durationSeconds) : null,
+    title: readAudioFileTag(tags, "title"),
+    artist: readAudioFileTag(tags, "artist"),
+    album: readAudioFileTag(tags, "album")
+  };
+
+  libraryAudioInfoCache.set(absolutePath, { mtimeMs: fileStat.mtimeMs, size: fileStat.size, info });
+  return info;
+}
+
 async function readArtworkBuffer(filePath) {
   try {
     const { stdout } = await execFileAsync(
@@ -3161,13 +3330,19 @@ function getCachedMpcSystemSnapshot(statusRaw, statsRaw) {
 
 function normalizeRadioCategory(value) {
   const normalized = String(value ?? "").trim().toLowerCase().replace(/[-_\s]+/g, "");
-  if (normalized === "hifi" || normalized === "hi-fi") return "hifi";
   if (normalized === "focus") return "focus";
   if (normalized === "calm") return "calm";
   if (normalized === "sleep") return "sleep";
   if (normalized === "jazz") return "jazz";
   if (normalized === "classical") return "classical";
   if (normalized === "news") return "news";
+  if (normalized === "hifi" || normalized === "highfidelity") return "hifi";
+  if (normalized === "blues") return "blues";
+  if (normalized === "rock") return "rock";
+  if (normalized === "world" || normalized === "worldmusic") return "world";
+  if (normalized === "electronic" || normalized === "electronica") return "electronic";
+  if (normalized === "podcast" || normalized === "spokenword" || normalized === "talk") return "podcast";
+  if (normalized === RADIO_RANDOM_CATEGORY_ID) return RADIO_RANDOM_CATEGORY_ID;
   return null;
 }
 
@@ -3194,8 +3369,21 @@ function isCuratedRadioStation(rawId, label, category) {
 }
 
 function radioCategoryOrder(category) {
-  const index = RADIO_CATEGORY_ORDER.indexOf(category);
-  return index === -1 ? RADIO_CATEGORY_ORDER.length : index;
+  const index = RADIO_REAL_CATEGORY_ORDER.indexOf(category);
+  return index === -1 ? RADIO_REAL_CATEGORY_ORDER.length : index;
+}
+
+function randomizeRadioStations(stations) {
+  return [...stations]
+    .map((station) => ({ station, rank: Math.random() }))
+    .sort((left, right) => left.rank - right.rank)
+    .map((entry) => entry.station);
+}
+
+function pickRandomRadioStations(stations, limit) {
+  const boundedLimit = Math.max(0, Math.min(Math.round(limit), 3));
+  if (boundedLimit === 0) return [];
+  return randomizeRadioStations(stations).slice(0, boundedLimit);
 }
 
 function buildRadioLogoUrl(stationId, logo) {
@@ -3562,6 +3750,24 @@ function filterRadioStations(stations, filters) {
   });
 }
 
+function buildRadioCategorySummaries(stations) {
+  const realCategoryStations = stations.filter((station) => (
+    station.catalogSource === "tikpal"
+    && station.category
+    && RADIO_REAL_CATEGORY_ORDER.includes(station.category)
+  ));
+
+  return RADIO_CATEGORY_ORDER
+    .map((category) => ({
+      id: category,
+      label: RADIO_CATEGORY_LABELS[category],
+      count: category === RADIO_RANDOM_CATEGORY_ID
+        ? Math.min(3, realCategoryStations.length)
+        : stations.filter((station) => station.category === category).length
+    }))
+    .filter((category) => category.count > 0);
+}
+
 async function getRadioCatalogPayload(searchParams) {
   const filters = normalizeRadioFilters(searchParams);
   const [currentFileRaw, statusRaw] = API_MODE === "mpc"
@@ -3573,13 +3779,7 @@ async function getRadioCatalogPayload(searchParams) {
   const currentFile = getEffectiveMpcCurrentFile(currentFileRaw, parseMpcStatus(statusRaw));
   const stations = markActiveRadioStations(await getAvailableRadioStations(filters.scope), currentFile);
   const genres = Array.from(new Set(stations.map((station) => station.genre).filter(Boolean))).sort((left, right) => left.localeCompare(right));
-  const categories = RADIO_CATEGORY_ORDER
-    .map((category) => ({
-      id: category,
-      label: RADIO_CATEGORY_LABELS[category],
-      count: stations.filter((station) => station.category === category).length
-    }))
-    .filter((category) => category.count > 0);
+  const categories = buildRadioCategorySummaries(stations);
   const bitrates = Array.from(
     new Set(
       stations
@@ -3587,12 +3787,25 @@ async function getRadioCatalogPayload(searchParams) {
         .filter(Boolean)
     )
   ).sort((left, right) => Number.parseInt(left, 10) - Number.parseInt(right, 10));
-  const filtered = filterRadioStations(stations, filters);
-  const paged = filtered.slice(filters.offset, filters.offset + filters.limit);
+  const randomCategorySelected = filters.category === RADIO_RANDOM_CATEGORY_ID;
+  const filtered = randomCategorySelected
+    ? pickRandomRadioStations(
+        filterRadioStations(stations, { ...filters, category: null })
+          .filter((station) => (
+            station.catalogSource === "tikpal"
+            && station.category
+            && RADIO_REAL_CATEGORY_ORDER.includes(station.category)
+          )),
+        filters.limit
+      )
+    : filterRadioStations(stations, filters);
+  const paged = randomCategorySelected
+    ? filtered
+    : filtered.slice(filters.offset, filters.offset + filters.limit);
 
   return {
     stations: paged,
-    total: filtered.length,
+    total: randomCategorySelected ? paged.length : filtered.length,
     genres,
     categories,
     bitrates,
@@ -3680,6 +3893,7 @@ function emptyMusicLibraryState() {
   return {
     version: 2,
     favorites: { trackPaths: [] },
+    deletedTrackPaths: [],
     playlists: []
   };
 }
@@ -3770,6 +3984,7 @@ function normalizeMusicLibraryState(raw) {
   const state = emptyMusicLibraryState();
   const favorites = raw?.favorites?.trackPaths ?? [];
   state.favorites.trackPaths = uniqueSafeTrackPaths(Array.isArray(favorites) ? favorites : []);
+  state.deletedTrackPaths = uniqueSafeTrackPaths(Array.isArray(raw?.deletedTrackPaths) ? raw.deletedTrackPaths : []);
   const playlists = Array.isArray(raw?.playlists) ? raw.playlists : [];
   const seenIds = new Set();
   for (const playlist of playlists) {
@@ -3925,6 +4140,20 @@ function normalizeWebModeRuntimeState(raw = {}) {
   };
 }
 
+function normalizeWebModeHandoffState(raw = {}) {
+  const sourceId = String(raw?.sourceId ?? "").trim().toLowerCase();
+  const playbackState = String(raw?.playbackState ?? "").trim().toLowerCase();
+  const elapsedSeconds = Number(raw?.elapsedSeconds);
+  return {
+    sourceId: sourceId || null,
+    playbackState: ["playing", "paused", "stopped"].includes(playbackState) ? playbackState : "stopped",
+    localTrackPath: normalizeLocalLibraryStateTrackPath(raw?.localTrackPath),
+    radioStationId: normalizeRememberedRadioStationId(raw?.radioStationId),
+    elapsedSeconds: Number.isFinite(elapsedSeconds) && elapsedSeconds >= 0 ? elapsedSeconds : null,
+    updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : null
+  };
+}
+
 async function readWebModeSettings() {
   try {
     return normalizeWebModeSettings(JSON.parse(await readFile(WEB_MODE_SETTINGS_PATH, "utf8")));
@@ -3972,6 +4201,32 @@ async function writeWebModeRuntimeState(patch) {
   await mkdir(dirname(WEB_MODE_STATE_PATH), { recursive: true });
   await writeFile(WEB_MODE_STATE_PATH, `${JSON.stringify(next, null, 2)}\n`);
   return next;
+}
+
+async function readWebModeHandoffState() {
+  try {
+    return normalizeWebModeHandoffState(JSON.parse(await readFile(WEB_MODE_HANDOFF_STATE_PATH, "utf8")));
+  } catch {
+    return normalizeWebModeHandoffState();
+  }
+}
+
+async function writeWebModeHandoffState(patch) {
+  const next = normalizeWebModeHandoffState({
+    ...patch,
+    updatedAt: new Date().toISOString()
+  });
+  await mkdir(dirname(WEB_MODE_HANDOFF_STATE_PATH), { recursive: true });
+  await writeFile(WEB_MODE_HANDOFF_STATE_PATH, `${JSON.stringify(next, null, 2)}\n`);
+  return next;
+}
+
+async function clearWebModeHandoffState() {
+  try {
+    await unlink(WEB_MODE_HANDOFF_STATE_PATH);
+  } catch {
+    // Runtime handoff state is best-effort and safe to recreate on the next Explore open.
+  }
 }
 
 async function buildWebModeState() {
@@ -4579,17 +4834,33 @@ function buildLibrarySubCategoryId(categoryId, subCategory) {
     .replace(/^-|-$/g, "") || "library"}`;
 }
 
+async function readLocalLibraryTrackAudioInfo(trackPath) {
+  const candidates = buildMpdLocalLibraryTrackPathCandidates(trackPath);
+  for (const candidate of candidates) {
+    const absolutePath = resolveMpdFilePath(candidate);
+    if (!absolutePath) continue;
+    try {
+      const info = await stat(absolutePath);
+      if (info.isFile()) return await readAudioFileInfo(absolutePath);
+    } catch {
+      // Try the next MPD-visible candidate.
+    }
+  }
+  return audioInfoFromFileStat(trackPath, null);
+}
+
 async function readLocalAudioLibraryTracks(options = {}) {
   let manifestRows = [];
   const musicState = options.musicState ?? readMusicLibraryStateSync();
+  const deletedPaths = new Set(musicState.deletedTrackPaths ?? []);
   try {
     manifestRows = readJsonRowsFromText(await readFile(LOCAL_LIBRARY_MANIFEST_PATH, "utf8"), "Music library manifest");
   } catch {
-    return [];
+    manifestRows = [];
   }
   const favoritePaths = new Set(musicState.favorites.trackPaths);
 
-  const tracks = await Promise.all(manifestRows
+  const manifestTracks = await Promise.all(manifestRows
     .map(async (row) => {
       const categoryId = resolveLocalLibraryCategory(row);
       if (!categoryId) return null;
@@ -4597,14 +4868,16 @@ async function readLocalAudioLibraryTracks(options = {}) {
       const title = row.title?.trim() || row.final_filename?.trim() || "Untitled";
       const artist = row.artist_or_author?.trim() || "Unknown Artist";
       const subCategory = row.category_level_2?.trim() || libraryCategoryLabel(categoryId);
-      const path = row.final_relative_path?.trim() || null;
+      const path = normalizeSafeRelativePath(row.final_relative_path) ?? null;
+      if (path && deletedPaths.has(path)) return null;
       const cover = await resolveLocalLibraryCover(row, {
         categoryLabel: row.category_level_1?.trim() || libraryCategoryLabel(categoryId),
         subCategory,
         trackPath: path
       });
+      const audioInfo = path ? await readLocalLibraryTrackAudioInfo(path) : audioInfoFromFileStat(row.final_filename, null);
 
-      return {
+      return appendAudioFileInfo({
         id: row.id?.trim() || path || `${categoryId}-${title}`,
         title,
         artist,
@@ -4619,10 +4892,13 @@ async function readLocalAudioLibraryTracks(options = {}) {
         albumArtScope: cover?.labelOverlay ? libraryCategoryLabel(categoryId) : null,
         active: false,
         favorite: Boolean(path && favoritePaths.has(path))
-      };
+      }, audioInfo);
     }));
 
-  return tracks.filter(Boolean);
+  return [
+    ...manifestTracks.filter(Boolean),
+    ...await readImportedLocalAudioLibraryTracks({ musicState })
+  ];
 }
 
 function decodeProcMountField(value) {
@@ -4751,8 +5027,68 @@ function usbTrackTitleFromPath(filePath) {
     || "Untitled";
 }
 
-async function readUsbAudioLibraryTracks() {
+function appendAudioFileInfo(track, audioInfo) {
+  return {
+    ...track,
+    durationSeconds: track.durationSeconds ?? audioInfo.durationSeconds,
+    fileSizeBytes: audioInfo.fileSizeBytes,
+    codec: audioInfo.codec,
+    container: audioInfo.container,
+    sampleRateHz: audioInfo.sampleRateHz,
+    bitrateKbps: audioInfo.bitrateKbps,
+    bitDepth: audioInfo.bitDepth,
+    channels: audioInfo.channels
+  };
+}
+
+async function readImportedLocalAudioLibraryTracks(options = {}) {
+  const favoritePaths = new Set((options.musicState ?? readMusicLibraryStateSync()).favorites.trackPaths);
+  const mpdPrefix = normalizeSafeRelativePath(MPD_DEFAULT_QUEUE_PATH);
+  const importsMpdPath = normalizeSafeRelativePath(mpdPrefix ? posix.join(mpdPrefix, LOCAL_LIBRARY_IMPORTS_DIR_NAME) : LOCAL_LIBRARY_IMPORTS_DIR_NAME);
+  const importsRoot = resolveMpdFilePath(importsMpdPath);
+  if (!importsRoot) return [];
+
+  try {
+    const info = await stat(importsRoot);
+    if (!info.isDirectory()) return [];
+  } catch {
+    return [];
+  }
+
+  const files = await collectUsbAudioFiles(importsRoot, { limit: USB_LIBRARY_MAX_TRACKS });
+  const tracks = [];
+  for (const absolutePath of files) {
+    const relativeFilePath = normalizeSafeRelativePath(relative(importsRoot, absolutePath).split(sep).join("/"));
+    if (!relativeFilePath) continue;
+    const localTrackPath = normalizeSafeRelativePath(posix.join(LOCAL_LIBRARY_IMPORTS_DIR_NAME, relativeFilePath));
+    if (!localTrackPath) continue;
+    const audioInfo = await readAudioFileInfo(absolutePath);
+    const sourceGroup = localTrackPath.split("/")[1] || LOCAL_LIBRARY_IMPORTS_DIR_NAME;
+    const idHash = createHash("sha1").update(localTrackPath).digest("hex").slice(0, 12);
+    tracks.push(appendAudioFileInfo({
+      id: `local-import-${idHash}`,
+      title: audioInfo.title || usbTrackTitleFromPath(absolutePath),
+      artist: audioInfo.artist || "Unknown Artist",
+      album: audioInfo.album || `Local / ${LOCAL_LIBRARY_IMPORTS_DIR_NAME}`,
+      storage: "local",
+      categoryId: "focus",
+      subCategory: sourceGroup,
+      durationSeconds: audioInfo.durationSeconds,
+      path: localTrackPath,
+      albumArtUrl: null,
+      albumArtLabel: null,
+      albumArtScope: null,
+      active: false,
+      favorite: favoritePaths.has(localTrackPath)
+    }, audioInfo));
+  }
+
+  return tracks;
+}
+
+async function readUsbAudioLibraryTracks(options = {}) {
   const roots = await discoverUsbLibraryRoots();
+  const favoritePaths = new Set((options.musicState ?? readMusicLibraryStateSync()).favorites.trackPaths);
   const usedIds = new Set();
   const tracks = [];
 
@@ -4766,26 +5102,178 @@ async function readUsbAudioLibraryTracks() {
       const mpdPath = normalizeSafeRelativePath(posix.join(USB_LIBRARY_MPD_PREFIX, mountId, relativeFilePath));
       if (!mpdPath) continue;
       const idHash = createHash("sha1").update(`${rootPath}\0${relativeFilePath}`).digest("hex").slice(0, 12);
-      tracks.push({
+      const audioInfo = await readAudioFileInfo(absolutePath);
+      tracks.push(appendAudioFileInfo({
         id: `usb-${mountId}-${idHash}`,
-        title: usbTrackTitleFromPath(absolutePath),
-        artist: "Unknown Artist",
-        album: `USB / ${mountId}`,
+        title: audioInfo.title || usbTrackTitleFromPath(absolutePath),
+        artist: audioInfo.artist || "Unknown Artist",
+        album: audioInfo.album || `USB / ${mountId}`,
         storage: "usb",
         categoryId: "usb",
         subCategory: mountId,
-        durationSeconds: null,
+        durationSeconds: audioInfo.durationSeconds,
         path: mpdPath,
         albumArtUrl: null,
         albumArtLabel: null,
         albumArtScope: null,
         active: false,
-        favorite: false
-      });
+        favorite: favoritePaths.has(mpdPath),
+        ...(options.includeAbsolutePath ? { _absolutePath: absolutePath, _sourceRelativePath: relativeFilePath } : {})
+      }, audioInfo));
     }
   }
 
   return tracks;
+}
+
+async function findUsbAudioLibraryTrackForCopy(trackPath) {
+  const safePath = normalizeSafeRelativePath(trackPath);
+  if (!safePath || !isPlayableUsbLibraryMpdPath(safePath)) {
+    throw new Error("copy_to_local requires a playable USB library track path");
+  }
+  const usbTracks = await readUsbAudioLibraryTracks({ includeAbsolutePath: true });
+  const track = usbTracks.find((candidate) => normalizeSafeRelativePath(candidate.path) === safePath);
+  if (!track?._absolutePath) throw new Error("USB track is not available");
+  return track;
+}
+
+function buildLocalImportTrackPathForUsbTrack(track) {
+  const safePath = normalizeSafeRelativePath(track?.path);
+  if (!safePath) throw new Error("USB track path is required");
+  const parts = safePath.split("/");
+  const sourceRelativePath = normalizeSafeRelativePath(track?._sourceRelativePath ?? parts.slice(2).join("/"));
+  if (!sourceRelativePath) throw new Error("USB track relative path is not safe");
+  return normalizeSafeRelativePath(posix.join(LOCAL_LIBRARY_IMPORTS_DIR_NAME, track.subCategory || "USB", sourceRelativePath));
+}
+
+function buildMpdImportTrackPath(localTrackPath) {
+  const safePath = normalizeSafeRelativePath(localTrackPath);
+  if (!safePath) throw new Error("Local import path is not safe");
+  const mpdPrefix = normalizeSafeRelativePath(MPD_DEFAULT_QUEUE_PATH);
+  return normalizeSafeRelativePath(mpdPrefix ? posix.join(mpdPrefix, safePath) : safePath);
+}
+
+function buildMpdUpdateTargetsForTrack(mpdTrackPath) {
+  const safePath = normalizeSafeRelativePath(mpdTrackPath);
+  if (!safePath) return [];
+  const targets = [];
+  const pushTarget = (target) => {
+    const safeTarget = normalizeSafeRelativePath(target);
+    if (safeTarget && !targets.includes(safeTarget)) targets.push(safeTarget);
+  };
+
+  let current = posix.dirname(safePath);
+  while (current && current !== ".") {
+    pushTarget(current);
+    current = posix.dirname(current);
+  }
+  pushTarget(MPD_DEFAULT_QUEUE_PATH);
+  return targets;
+}
+
+async function isMpdTrackIndexed(mpdTrackPath) {
+  const safePath = normalizeSafeRelativePath(mpdTrackPath);
+  if (!safePath) return false;
+  const listed = await runMpc(["listall", safePath], { allowFailure: true });
+  return listed.split("\n").map((line) => line.trim()).includes(safePath);
+}
+
+async function refreshMpdTrackIndex(mpdTrackPath) {
+  if (API_MODE !== "mpc") return true;
+  const safePath = normalizeSafeRelativePath(mpdTrackPath);
+  if (!safePath) return false;
+  if (await isMpdTrackIndexed(safePath)) return true;
+
+  for (const target of buildMpdUpdateTargetsForTrack(safePath)) {
+    await runMpc(["update", target], { allowFailure: true, timeout: 5000 });
+  }
+
+  const deadline = Date.now() + MPD_LIBRARY_UPDATE_WAIT_MS;
+  while (Date.now() < deadline) {
+    if (await isMpdTrackIndexed(safePath)) return true;
+    await wait(MPD_LIBRARY_UPDATE_POLL_MS);
+  }
+  return await isMpdTrackIndexed(safePath);
+}
+
+async function pathExists(pathValue) {
+  try {
+    await stat(pathValue);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function copyUsbLibraryTrackToLocal(trackPath) {
+  const usbTrack = await findUsbAudioLibraryTrackForCopy(trackPath);
+  const localTrackPath = buildLocalImportTrackPathForUsbTrack(usbTrack);
+  const mpdTrackPath = buildMpdImportTrackPath(localTrackPath);
+  const destinationPath = resolveMpdFilePath(mpdTrackPath);
+  if (!destinationPath) throw new Error("Local import destination is not safe");
+
+  if (await pathExists(destinationPath)) {
+    await refreshMpdTrackIndex(mpdTrackPath);
+    return { copied: false, copiedTrackPath: localTrackPath };
+  }
+
+  await mkdir(dirname(destinationPath), { recursive: true });
+  await copyFile(usbTrack._absolutePath, destinationPath);
+  await refreshMpdTrackIndex(mpdTrackPath);
+  return { copied: true, copiedTrackPath: localTrackPath };
+}
+
+async function findLocalAudioLibraryTrackForDelete(trackPath) {
+  const safePath = normalizeLocalLibraryStateTrackPath(trackPath);
+  if (!safePath || isUsbLibraryTrackPath(safePath)) {
+    throw new Error("delete_local requires a local library track path");
+  }
+
+  const localTracks = await readLocalAudioLibraryTracks();
+  const track = localTracks.find((candidate) => normalizeLocalLibraryStateTrackPath(candidate.path) === safePath);
+  if (!track) throw new Error("Local track is not available");
+
+  for (const candidate of buildMpdLocalLibraryTrackPathCandidates(safePath)) {
+    if (isUsbLibraryTrackPath(candidate)) continue;
+    const absolutePath = resolveMpdFilePath(candidate);
+    if (!absolutePath) continue;
+    try {
+      const info = await stat(absolutePath);
+      if (info.isFile()) {
+        return { track, safePath, mpdTrackPath: candidate, absolutePath };
+      }
+    } catch {
+      // A manifest-backed row can still be hidden below even if the file is already gone.
+    }
+  }
+
+  return { track, safePath, mpdTrackPath: buildMpdLocalLibraryTrackPathCandidates(safePath)[0] ?? safePath, absolutePath: null };
+}
+
+async function removeTrackPathFromMusicLibraryState(trackPath) {
+  const safePath = normalizeLocalLibraryStateTrackPath(trackPath);
+  if (!safePath) return await readMusicLibraryState();
+  const state = await readMusicLibraryState();
+  state.favorites.trackPaths = state.favorites.trackPaths.filter((candidate) => candidate !== safePath);
+  state.deletedTrackPaths = uniqueSafeTrackPaths([...(state.deletedTrackPaths ?? []), safePath]);
+  state.playlists = state.playlists.map((playlist) => ({
+    ...playlist,
+    trackPaths: playlist.trackPaths.filter((candidate) => candidate !== safePath),
+    updatedAt: playlist.trackPaths.includes(safePath) ? new Date().toISOString() : playlist.updatedAt
+  }));
+  return await writeMusicLibraryState(state);
+}
+
+async function deleteLocalLibraryTrack(trackPath) {
+  const target = await findLocalAudioLibraryTrackForDelete(trackPath);
+  if (target.absolutePath) {
+    await unlink(target.absolutePath);
+  }
+  await removeTrackPathFromMusicLibraryState(target.safePath);
+  if (API_MODE === "mpc" && target.mpdTrackPath) {
+    await runMpc(["update", dirname(target.mpdTrackPath)], { allowFailure: true });
+  }
+  return { deleted: true, deletedTrackPath: target.safePath };
 }
 
 async function findLocalAudioLibraryTrackByPath(localTrackPath) {
@@ -4873,6 +5361,13 @@ function isUsbLibraryTrackPath(trackPath) {
   const safePath = normalizeSafeRelativePath(trackPath);
   return Boolean(safePath && USB_LIBRARY_MPD_PREFIX && (
     safePath === USB_LIBRARY_MPD_PREFIX || safePath.startsWith(`${USB_LIBRARY_MPD_PREFIX}/`)
+  ));
+}
+
+function isLocalImportedLibraryTrackPath(trackPath) {
+  const safePath = normalizeSafeRelativePath(trackPath);
+  return Boolean(safePath && (
+    safePath === LOCAL_LIBRARY_IMPORTS_DIR_NAME || safePath.startsWith(`${LOCAL_LIBRARY_IMPORTS_DIR_NAME}/`)
   ));
 }
 
@@ -5037,6 +5532,11 @@ async function resolveMpdLocalLibraryQueue(startTrackPath, options = {}) {
     return await resolveMpdLocalLibraryQueue(safeStartPath, { ...options, allowUsbRefresh: false });
   }
 
+  if (!isUsbQueue && isLocalImportedLibraryTrackPath(safeStartPath) && options.allowLocalImportRefresh !== false) {
+    await refreshMpdTrackIndex(buildMpdImportTrackPath(safeStartPath));
+    return await resolveMpdLocalLibraryQueue(safeStartPath, { ...options, allowLocalImportRefresh: false });
+  }
+
   return null;
 }
 
@@ -5130,17 +5630,47 @@ function filterAudioLibraryTracks(tracks, filters) {
   });
 }
 
+async function getLocalLibraryStorageSummary() {
+  try {
+    const info = await statfs(MPD_MUSIC_ROOT);
+    const blockSize = Number(info.bsize);
+    const blocks = Number(info.blocks);
+    const availableBlocks = Number(info.bavail);
+    if (!Number.isFinite(blockSize) || !Number.isFinite(blocks) || !Number.isFinite(availableBlocks) || blockSize <= 0 || blocks <= 0) {
+      throw new Error("invalid statfs result");
+    }
+    const totalBytes = blocks * blockSize;
+    const freeBytes = Math.max(0, availableBlocks * blockSize);
+    const usedBytes = Math.max(0, totalBytes - freeBytes);
+    return {
+      rootPath: MPD_MUSIC_ROOT,
+      totalBytes,
+      usedBytes,
+      freeBytes,
+      usedPercent: Math.max(0, Math.min(100, Math.round((usedBytes / totalBytes) * 100)))
+    };
+  } catch {
+    return {
+      rootPath: MPD_MUSIC_ROOT,
+      totalBytes: null,
+      usedBytes: null,
+      freeBytes: null,
+      usedPercent: null
+    };
+  }
+}
+
 async function getAudioLibraryPayload(searchParams) {
   const filters = normalizeAudioLibraryFilters(searchParams);
   const state = await getTikpalState();
   const musicState = readMusicLibraryStateSync();
   const localTracks = await readLocalAudioLibraryTracks({ musicState });
-  const usbTracks = await readUsbAudioLibraryTracks();
+  const usbTracks = await readUsbAudioLibraryTracks({ musicState });
   maybeScheduleUsbLibraryAutoUpdate(usbTracks);
   const nasTracks = isNasLibrarySource(state.system.library.source)
     ? buildNasAudioLibraryTracks(state.playback)
     : [];
-  const favoriteTracks = localTracks
+  const favoriteTracks = [...localTracks, ...usbTracks]
     .filter((track) => track.favorite)
     .map((track) => ({ ...track, storage: "favorites" }));
   const recentlyAddedTracks = localTracks
@@ -5205,7 +5735,26 @@ async function getAudioLibraryPayload(searchParams) {
     tracks: paged,
     total: filtered.length,
     filters,
+    localStorage: await getLocalLibraryStorageSummary(),
     updatedAt: state.runtime.updatedAt
+  };
+}
+
+async function applyAudioLibraryAction(action) {
+  if (action?.type !== "copy_to_local" && action?.type !== "delete_local") {
+    throw new Error("unsupported audio library action");
+  }
+  const result = action.type === "copy_to_local"
+    ? await copyUsbLibraryTrackToLocal(action.trackPath)
+    : await deleteLocalLibraryTrack(action.trackPath);
+  const params = new URLSearchParams();
+  params.set("storage", "all");
+  params.set("limit", "500");
+  return {
+    ok: true,
+    ...(Object.hasOwn(result, "copied") ? { copied: result.copied, copiedTrackPath: result.copiedTrackPath } : {}),
+    ...(Object.hasOwn(result, "deleted") ? { deleted: result.deleted, deletedTrackPath: result.deletedTrackPath } : {}),
+    library: await getAudioLibraryPayload(params)
   };
 }
 
@@ -7217,6 +7766,42 @@ async function applyMpcPlayMode(mode) {
   }
 }
 
+function getDifferentRandomMpcQueuePosition(status) {
+  const queueLength = Number(status?.queueLength);
+  const currentPosition = Number(status?.currentTrackIndex);
+  if (!Number.isFinite(queueLength) || queueLength <= 1) return null;
+
+  const current = Number.isFinite(currentPosition) && currentPosition >= 1 && currentPosition <= queueLength
+    ? Math.round(currentPosition)
+    : 1;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const candidate = Math.floor(Math.random() * queueLength) + 1;
+    if (candidate !== current) return candidate;
+  }
+  return current >= queueLength ? 1 : current + 1;
+}
+
+async function playDifferentRandomMpcQueueTrack(status = null) {
+  const currentStatus = status ?? parseMpcStatus(await runMpc(["status"], { allowFailure: true }));
+  const nextPosition = getDifferentRandomMpcQueuePosition(currentStatus);
+  if (!nextPosition) return false;
+  await runMpc(["play", String(nextPosition)]);
+  return true;
+}
+
+function shouldRandomJumpCurrentMpcQueue() {
+  const currentSource = getCurrentMpcSourceId();
+  return !currentSource || currentSource === "mpd" || currentSource === "audio";
+}
+
+async function maybeJumpToRandomMpcTrackAfterShuffleEnabled() {
+  if (!shouldRandomJumpCurrentMpcQueue()) return false;
+  await ensureMpcQueue();
+  const status = parseMpcStatus(await runMpc(["status"], { allowFailure: true }));
+  if (status.state !== "playing") return false;
+  return await playDifferentRandomMpcQueueTrack(status);
+}
+
 async function applyMpcPlaybackActionUnlocked(action) {
   if (mockArmedSource === "scene") {
     switch (action.type) {
@@ -7258,6 +7843,7 @@ async function applyMpcPlaybackActionUnlocked(action) {
     return;
   }
 
+  let shouldRememberLibraryTrack = false;
   switch (action.type) {
     case "play_pause": {
       await ensureMpcQueue();
@@ -7279,7 +7865,15 @@ async function applyMpcPlaybackActionUnlocked(action) {
     case "next":
       if (await switchRadioStationByOffset(1)) break;
       await ensureMpcQueue();
-      await runMpc(["next"]);
+      {
+        const status = parseMpcStatus(await runMpc(["status"], { allowFailure: true }));
+        const randomJumped = status.settings.playMode === "shuffle"
+          ? await playDifferentRandomMpcQueueTrack(status)
+          : false;
+        if (!randomJumped) {
+          await runMpc(["next"]);
+        }
+      }
       await ensureMpcPlaybackStarted();
       break;
     case "previous":
@@ -7304,6 +7898,9 @@ async function applyMpcPlaybackActionUnlocked(action) {
     case "play_mode_set": {
       const mode = normalizePlaybackMode(action.mode);
       await applyMpcPlayMode(mode);
+      if (mode === "shuffle") {
+        shouldRememberLibraryTrack = await maybeJumpToRandomMpcTrackAfterShuffleEnabled();
+      }
       break;
     }
     case "volume_set": {
@@ -7322,7 +7919,7 @@ async function applyMpcPlaybackActionUnlocked(action) {
       throw new Error(`Unsupported playback action: ${action.type}`);
   }
 
-  if (["next", "previous"].includes(String(action.type))) {
+  if (shouldRememberLibraryTrack || ["next", "previous"].includes(String(action.type))) {
     const currentSource = getCurrentMpcSourceId();
     if (!currentSource || currentSource === "mpd") {
       await rememberCurrentLocalLibraryTrackSource();
@@ -10534,6 +11131,86 @@ function formatWebModeCommandError(error, action, providerId = "") {
   return firstLine.slice(0, 160) || "Explore action failed";
 }
 
+async function captureWebModePlaybackHandoff() {
+  const snapshot = await collectTikpalStateSnapshot({
+    includeSlowRuntimeStatus: false,
+    includeSourceRuntimeStatus: true,
+    includeOutputVolumeStatus: false,
+    skipExperienceReconcile: true
+  });
+  const sourceId = String(snapshot.audio?.currentSource?.id ?? snapshot.playback?.source ?? "").trim().toLowerCase();
+  const activeQueueTrackPath = normalizeLocalLibraryStateTrackPath(
+    snapshot.playback?.queuePreview?.find((entry) => entry.active)?.id
+  );
+  const localTrackPath = sourceId === "mpd"
+    ? activeQueueTrackPath ?? await resolveCurrentLocalLibraryTrackPath()
+    : null;
+  const radioStationId = sourceId === "radio"
+    ? normalizeRememberedRadioStationId(snapshot.audio?.currentSource?.radioStationId)
+      ?? await resolveCurrentOrRememberedRadioStationId()
+    : null;
+
+  return await writeWebModeHandoffState({
+    sourceId,
+    playbackState: snapshot.playback?.state,
+    localTrackPath,
+    radioStationId,
+    elapsedSeconds: snapshot.playback?.elapsedSeconds
+  });
+}
+
+async function restoreMpdWebModeLibraryHandoff(handoff) {
+  const localTrackPath = normalizeLocalLibraryStateTrackPath(handoff.localTrackPath);
+  if (localTrackPath) {
+    const [statusRaw, currentTrackPath] = await Promise.all([
+      runMpc(["status"], { allowFailure: true, timeout: 2500 }),
+      resolveCurrentLocalLibraryTrackPath()
+    ]);
+    const status = parseMpcStatus(statusRaw);
+    if (status.queueLength > 0 && normalizeLocalLibraryStateTrackPath(currentTrackPath) === localTrackPath) {
+      if (status.state !== "playing") {
+        await runMpc(["play"], { timeout: 2500 });
+      }
+      return true;
+    }
+  }
+
+  const restoreAction = {
+    target: "mpd",
+    ...(localTrackPath ? { localTrackPath } : {})
+  };
+  try {
+    await applySourceSwitch(restoreAction, { rememberSource: false });
+  } catch (error) {
+    if (!localTrackPath) throw error;
+    await applySourceSwitch({ target: "mpd" }, { rememberSource: false });
+  }
+  return true;
+}
+
+async function restoreWebModePlaybackHandoff() {
+  const handoff = await readWebModeHandoffState();
+  try {
+    if (handoff.playbackState !== "playing") return false;
+
+    if (handoff.sourceId === "mpd") {
+      return await restoreMpdWebModeLibraryHandoff(handoff);
+    }
+
+    if (handoff.sourceId === "radio") {
+      await applySourceSwitch({
+        target: "radio",
+        ...(handoff.radioStationId ? { radioStationId: handoff.radioStationId } : {})
+      }, { rememberSource: false });
+      return true;
+    }
+
+    return false;
+  } finally {
+    await clearWebModeHandoffState();
+  }
+}
+
 async function pauseTikpalForWebMode() {
   const room = await readRoomExperienceState();
   if (room.sceneSoundEnabled) {
@@ -10569,7 +11246,18 @@ async function applyWebModeAction(action) {
   if (type === "close") {
     try {
       await runWebModeCommand("close");
-      await writeWebModeRuntimeState({ activeProvider: null, lastError: null });
+      let restoreError = null;
+      try {
+        const restoredPlayback = await restoreWebModePlaybackHandoff();
+        if (restoredPlayback) {
+          await refreshTikpalStateSnapshotAfterMutation({
+            includeSourceRuntimeStatus: true
+          });
+        }
+      } catch (error) {
+        restoreError = `Explore closed; playback restore failed: ${error instanceof Error ? error.message : "unknown error"}`;
+      }
+      await writeWebModeRuntimeState({ activeProvider: null, lastError: restoreError });
     } catch (error) {
       await writeWebModeRuntimeState({ lastError: formatWebModeCommandError(error, "close") });
     }
@@ -10649,6 +11337,9 @@ async function applyWebModeAction(action) {
   let providerOpenCommandStarted = false;
   webModeOpenInFlight = true;
   try {
+    if (!previousRuntimeState.activeProvider) {
+      await captureWebModePlaybackHandoff();
+    }
     await pauseTikpalForWebMode();
     providerOpenCommandStarted = true;
     await runWebModeCommand("open", providerId);
@@ -11273,6 +11964,11 @@ const server = http.createServer(async (request, response) => {
       const action = await readJson(request);
       await setFavoriteTrackPath(action.trackPath, action.favorite !== false);
       sendJson(response, 200, await refreshTikpalStateSnapshotAfterMutation());
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/v1/audio/library-actions") {
+      sendJson(response, 200, await applyAudioLibraryAction(await readJson(request)));
       return;
     }
 

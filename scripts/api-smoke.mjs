@@ -1866,7 +1866,9 @@ async function runMpcLocalLibraryPathSmoke(roomExperienceStatePath) {
   const fakeWebModeCommandPath = path.join(workspace, "web-mode-command.mjs");
   const fakeWebModeSettingsPath = path.join(workspace, "web-mode-settings.json");
   const fakeWebModeStatePath = path.join(workspace, "web-mode-state.json");
+  const fakeWebModeHandoffStatePath = path.join(workspace, "web-mode-handoff.json");
   const fakeAudioSourceMemoryStatePath = path.join(workspace, "audio-source-memory.json");
+  const fakeMpdMusicRoot = path.join(workspace, "mpd-music");
   const fakeUsbRoot = path.join(workspace, "Session Disk");
   const fakeMpcTracks = [
     "Codex/Focus/Lo-fi Ambient/FASSounds - Good Night - Lofi Cozy Chill Music - 02m27s - Lo-fi.mp3",
@@ -1878,6 +1880,7 @@ async function runMpcLocalLibraryPathSmoke(roomExperienceStatePath) {
   ];
 
   await mkdir(path.join(fakeUsbRoot, "Set"), { recursive: true });
+  await mkdir(path.join(fakeMpdMusicRoot, "Codex"), { recursive: true });
   await writeFile(path.join(fakeUsbRoot, "Set", "Live Take.flac"), "fake usb flac");
   await writeFile(fakeUsbScanLogPath, "");
   await writeFile(fakeUsbScanCommandPath, `#!/usr/bin/env node
@@ -1888,13 +1891,15 @@ writeFileSync(${JSON.stringify(fakeUsbIndexPath)}, "ready\\n");
 `);
   await chmod(fakeUsbScanCommandPath, 0o755);
   await writeFile(fakeMpcPath, `#!/usr/bin/env node
-	import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+	import { appendFileSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { relative, sep } from "node:path";
 
 const logPath = process.env.TIKPAL_FAKE_MPC_LOG;
 const statePath = process.env.TIKPAL_FAKE_MPC_STATE;
 const libraryTracks = JSON.parse(process.env.TIKPAL_FAKE_MPC_TRACKS ?? "[]");
 const usbLibraryTracks = JSON.parse(process.env.TIKPAL_FAKE_MPC_USB_TRACKS ?? "[]");
 const usbIndexPath = process.env.TIKPAL_FAKE_MPC_USB_INDEX_PATH ?? "";
+const musicRoot = ${JSON.stringify(fakeMpdMusicRoot)};
 const positionalPlayStaysPaused = process.env.TIKPAL_FAKE_MPC_POSITIONAL_PLAY_STAYS_PAUSED === "1";
 const currentFileOnly = process.env.TIKPAL_FAKE_MPC_CURRENT_FILE_ONLY === "1";
 const rawArgs = process.argv.slice(2);
@@ -1934,6 +1939,33 @@ function tracksUnderTarget(target, tracks) {
   return tracks.filter((track) => track === target || track.startsWith(target + "/"));
 }
 
+function collectFiles(root) {
+  const files = [];
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    const absolutePath = root + sep + entry.name;
+    if (entry.isDirectory()) {
+      files.push(...collectFiles(absolutePath));
+    } else if (entry.isFile()) {
+      files.push(absolutePath);
+    }
+  }
+  return files;
+}
+
+function localImportTracks() {
+  const importsRoot = musicRoot + sep + "Codex" + sep + "USB Imports";
+  try {
+    if (!statSync(importsRoot).isDirectory()) return [];
+  } catch {
+    return [];
+  }
+  return collectFiles(importsRoot).map((file) => relative(musicRoot, file).split(sep).join("/"));
+}
+
+function allLibraryTracks() {
+  return [...libraryTracks, ...localImportTracks()];
+}
+
 function usbTracksVisible() {
   if (!usbIndexPath) return true;
   try {
@@ -1950,15 +1982,18 @@ const [command, ...rest] = args;
 const state = readState();
 
 switch (command) {
-  case "listall": {
-    const target = rest[0] ?? "";
-    const visibleUsbTracks = usbTracksVisible() ? usbLibraryTracks : [];
-    const usbMatches = tracksUnderTarget(target, visibleUsbTracks);
-    if (target === "Codex") output(libraryTracks.join("\\n") + "\\n");
-    else if (libraryTracks.includes(target) || visibleUsbTracks.includes(target)) output(target + "\\n");
-    else if (usbMatches.length > 0) output(usbMatches.join("\\n") + "\\n");
-    else fail("MPD error: No such directory");
-    break;
+	  case "listall": {
+	    const target = rest[0] ?? "";
+	    const visibleLocalTracks = allLibraryTracks();
+	    const visibleUsbTracks = usbTracksVisible() ? usbLibraryTracks : [];
+	    const usbMatches = tracksUnderTarget(target, visibleUsbTracks);
+	    const localMatches = tracksUnderTarget(target, visibleLocalTracks);
+	    if (target === "Codex") output(visibleLocalTracks.join("\\n") + "\\n");
+	    else if (visibleLocalTracks.includes(target) || visibleUsbTracks.includes(target)) output(target + "\\n");
+	    else if (localMatches.length > 0) output(localMatches.join("\\n") + "\\n");
+	    else if (usbMatches.length > 0) output(usbMatches.join("\\n") + "\\n");
+	    else fail("MPD error: No such directory");
+	    break;
   }
   case "clear":
     state.queue = [];
@@ -1966,16 +2001,19 @@ switch (command) {
     state.state = "stopped";
     writeState(state);
     break;
-  case "add": {
-    const target = rest[0] ?? "";
-    const visibleUsbTracks = usbTracksVisible() ? usbLibraryTracks : [];
-    const usbMatches = tracksUnderTarget(target, visibleUsbTracks);
-    if (target === "Codex") state.queue.push(...libraryTracks);
-    else if (usbMatches.length > 0) state.queue.push(...usbMatches);
-    else if (libraryTracks.includes(target) || visibleUsbTracks.includes(target)) state.queue.push(target);
-    else fail("MPD error: No such song");
-    writeState(state);
-    break;
+	  case "add": {
+	    const target = rest[0] ?? "";
+	    const visibleLocalTracks = allLibraryTracks();
+	    const visibleUsbTracks = usbTracksVisible() ? usbLibraryTracks : [];
+	    const usbMatches = tracksUnderTarget(target, visibleUsbTracks);
+	    const localMatches = tracksUnderTarget(target, visibleLocalTracks);
+	    if (target === "Codex") state.queue.push(...visibleLocalTracks);
+	    else if (usbMatches.length > 0) state.queue.push(...usbMatches);
+	    else if (localMatches.length > 0) state.queue.push(...localMatches);
+	    else if (visibleLocalTracks.includes(target) || visibleUsbTracks.includes(target)) state.queue.push(target);
+	    else fail("MPD error: No such song");
+	    writeState(state);
+	    break;
   }
   case "next":
     state.current = Math.min(state.queue.length - 1, state.current + 1);
@@ -1995,12 +2033,18 @@ switch (command) {
     if (file) output(currentFileOnly ? file + "\\n" : "Fake Title\\tFake Artist\\tFake Album\\t" + file + "\\t02:27\\n");
     break;
   }
-  case "status":
-    if (state.queue.length > 0) {
-      output("[" + state.state + "] #" + (state.current + 1) + "/" + state.queue.length + " 0:01/2:27 (0%)\\n");
-    }
-    output("volume:" + state.volume + "%   repeat: off   random: off   single: off   consume: off\\n");
-    break;
+	  case "status":
+	    if (state.queue.length > 0) {
+	      output("[" + state.state + "] #" + (state.current + 1) + "/" + state.queue.length + " 0:01/2:27 (0%)\\n");
+	    }
+	    output(
+	      "volume:" + state.volume
+	      + "%   repeat: " + (state.repeat ? "on" : "off")
+	      + "   random: " + (state.random ? "on" : "off")
+	      + "   single: " + (state.single ? "on" : "off")
+	      + "   consume: off\\n"
+	    );
+	    break;
   case "stats":
     output("Artists: 1\\nAlbums: 1\\nSongs: " + state.queue.length + "\\nDB Updated: fake\\n");
     break;
@@ -2022,12 +2066,20 @@ switch (command) {
     state.state = "stopped";
     writeState(state);
     break;
-  case "random":
-  case "repeat":
-  case "single":
-    break;
-  default:
-    break;
+	  case "random":
+	    state.random = rest[0] === "on";
+	    writeState(state);
+	    break;
+	  case "repeat":
+	    state.repeat = rest[0] === "on";
+	    writeState(state);
+	    break;
+	  case "single":
+	    state.single = rest[0] === "on";
+	    writeState(state);
+	    break;
+	  default:
+	    break;
 }
 `);
   await chmod(fakeMpcPath, 0o755);
@@ -2075,6 +2127,8 @@ if (args[0] === "open" && args[1] === ${JSON.stringify(failedProvider)}) {
       TIKPAL_MPD_HOST: "127.0.0.1",
       TIKPAL_MPD_PORT: "6600",
       TIKPAL_MPD_DEFAULT_QUEUE_PATH: "Codex",
+      TIKPAL_MPD_MUSIC_ROOT: fakeMpdMusicRoot,
+      TIKPAL_LIBRARY_AUDIO_PROBE_ENABLED: "0",
       TIKPAL_USB_LIBRARY_ROOTS: fakeUsbRoot,
       TIKPAL_USB_LIBRARY_MPD_PREFIX: "USB",
       TIKPAL_USB_LIBRARY_SCAN_COMMAND: `${process.execPath} ${fakeUsbScanCommandPath}`,
@@ -2096,6 +2150,7 @@ if (args[0] === "open" && args[1] === ${JSON.stringify(failedProvider)}) {
       TIKPAL_WEB_MODE_COMMAND: `${process.execPath} ${fakeWebModeCommandPath}`,
       TIKPAL_WEB_MODE_SETTINGS_PATH: fakeWebModeSettingsPath,
       TIKPAL_WEB_MODE_STATE_PATH: fakeWebModeStatePath,
+      TIKPAL_WEB_MODE_HANDOFF_STATE_PATH: fakeWebModeHandoffStatePath,
       TIKPAL_FAKE_MPC_LOG: fakeMpcLogPath,
       TIKPAL_FAKE_MPC_STATE: fakeMpcStatePath,
       TIKPAL_FAKE_MPC_TRACKS: JSON.stringify(fakeMpcTracks),
@@ -2146,7 +2201,11 @@ if (args[0] === "open" && args[1] === ${JSON.stringify(failedProvider)}) {
       method: "POST",
       body: JSON.stringify({ target: "mpd" })
     });
-    assert(staleLibraryResume.response.ok, "mpc Library resume with replaced-library stale memory should return 200");
+    const staleLibraryResumeLog = await readFile(fakeMpcLogPath, "utf8");
+    assert(
+      staleLibraryResume.response.ok,
+      `mpc Library resume with replaced-library stale memory should return 200, got ${staleLibraryResume.response.status}: ${JSON.stringify(staleLibraryResume.body)}; mpc log: ${JSON.stringify(staleLibraryResumeLog)}`
+    );
     assert(
       staleLibraryResume.body.audio.rememberedSource?.localTrackPath !== staleLocalTrackPath,
       "mpc Library resume should not write back a local track path missing from the current library manifest"
@@ -2197,6 +2256,57 @@ if (args[0] === "open" && args[1] === ${JSON.stringify(failedProvider)}) {
       `mpc local library switch with a concrete track should synchronously close external sources, got ${JSON.stringify(externalDisableLog)}`
     );
 
+    await writeFile(fakeMpcLogPath, "");
+    await writeFile(fakeWebModeLogPath, "");
+    const webModeFromPlayingLibrary = await requestFrom(baseUrl, "/api/v1/web-mode/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "open", provider: "qq_music" })
+    });
+    assert(webModeFromPlayingLibrary.response.ok, "web mode open from playing Library should return 200");
+    assert(webModeFromPlayingLibrary.body.activeProvider === "qq_music", "web mode open from playing Library should activate QQ Music");
+    const pausedDuringExplore = JSON.parse(await readFile(fakeMpcStatePath, "utf8"));
+    assert(pausedDuringExplore.state === "paused", "web mode open should pause playing Library while Explore owns browser audio");
+    const closedPlayingLibraryExplore = await requestFrom(baseUrl, "/api/v1/web-mode/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "close" })
+    });
+    assert(closedPlayingLibraryExplore.response.ok, "web mode close from playing Library should return 200");
+    assert(closedPlayingLibraryExplore.body.activeProvider === null, "web mode close should clear the active provider");
+    assert(closedPlayingLibraryExplore.body.lastError === null, `web mode close should not report a restore error: ${closedPlayingLibraryExplore.body.lastError}`);
+    const resumedAfterExplore = JSON.parse(await readFile(fakeMpcStatePath, "utf8"));
+    assert(resumedAfterExplore.state === "playing", "web mode close should resume Library only when it was playing before Explore");
+    const stateAfterPlayingExplore = await requestFrom(baseUrl, "/api/v1/system/state");
+    assert(stateAfterPlayingExplore.body.playback.state === "playing", "system state should show Library playing after Explore returns");
+    assert(stateAfterPlayingExplore.body.audio.rememberedSource?.target === "mpd", "web mode return should not replace remembered Library with Explore");
+    assert(
+      stateAfterPlayingExplore.body.audio.rememberedSource?.localTrackPath === localTrackPath,
+      "web mode return should preserve the remembered Library track"
+    );
+    const playingExploreLog = await readFile(fakeMpcLogPath, "utf8");
+    assert(playingExploreLog.includes("pause\n"), "web mode open should issue MPD pause before opening provider audio");
+    assert(playingExploreLog.includes("play\n"), "web mode close should issue MPD play to resume the handoff track");
+
+    await requestFrom(baseUrl, "/api/v1/playback/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "pause" })
+    });
+    await writeFile(fakeMpcLogPath, "");
+    await writeFile(fakeWebModeLogPath, "");
+    const webModeFromPausedLibrary = await requestFrom(baseUrl, "/api/v1/web-mode/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "open", provider: "qq_music" })
+    });
+    assert(webModeFromPausedLibrary.response.ok, "web mode open from paused Library should return 200");
+    const closedPausedLibraryExplore = await requestFrom(baseUrl, "/api/v1/web-mode/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "close" })
+    });
+    assert(closedPausedLibraryExplore.response.ok, "web mode close from paused Library should return 200");
+    const pausedAfterExplore = JSON.parse(await readFile(fakeMpcStatePath, "utf8"));
+    assert(pausedAfterExplore.state === "paused", "web mode close should not autoplay Library when it was paused before Explore");
+    const pausedExploreLog = await readFile(fakeMpcLogPath, "utf8");
+    assert(!pausedExploreLog.split("\n").includes("play"), "web mode close should not issue MPD play for a paused handoff");
+
     await requestFrom(baseUrl, "/api/v1/playback/actions", {
       method: "POST",
       body: JSON.stringify({ type: "pause" })
@@ -2220,12 +2330,42 @@ if (args[0] === "open" && args[1] === ${JSON.stringify(failedProvider)}) {
       body: JSON.stringify({ type: "previous" })
     });
     assert(previous.response.ok, "mpc local library previous should return 200");
-    assert(previous.body.playback.currentTrackIndex === 1, "mpc local library previous should return to the first queue entry");
-    assert(previous.body.audio.rememberedSource?.localTrackPath === localTrackPath, "mpc local library previous should remember the previous local track");
-    const previousLog = await readFile(fakeMpcLogPath, "utf8");
-    assert(previousLog.includes("prev"), "mpc local library previous should issue prev");
+	    assert(previous.body.playback.currentTrackIndex === 1, "mpc local library previous should return to the first queue entry");
+	    assert(previous.body.audio.rememberedSource?.localTrackPath === localTrackPath, "mpc local library previous should remember the previous local track");
+	    const previousLog = await readFile(fakeMpcLogPath, "utf8");
+	    assert(previousLog.includes("prev"), "mpc local library previous should issue prev");
 
-    const usbLibrary = await requestFrom(baseUrl, "/api/v1/audio/library?storage=usb&limit=5");
+	    await writeFile(fakeMpcLogPath, "");
+	    const shuffle = await requestFrom(baseUrl, "/api/v1/playback/actions", {
+	      method: "POST",
+	      body: JSON.stringify({ type: "play_mode_set", mode: "shuffle" })
+	    });
+	    assert(shuffle.response.ok, "mpc local library shuffle mode should return 200");
+	    assert(shuffle.body.playback.settings.playMode === "shuffle", "mpc local library shuffle should expose shuffle mode");
+	    assert(shuffle.body.playback.currentTrackIndex !== 1, "mpc local library shuffle should immediately leave the current track");
+	    assert(shuffle.body.audio.rememberedSource?.localTrackPath !== localTrackPath, "mpc local library shuffle should remember the random track");
+	    const shuffleLog = await readFile(fakeMpcLogPath, "utf8");
+	    assert(shuffleLog.includes("random\ton"), "mpc local library shuffle should enable MPD random mode");
+	    assert(shuffleLog.includes("single\toff"), "mpc local library shuffle should clear single-track repeat");
+	    assert(/(^|\n)play\t[23](\n|$)/.test(shuffleLog), "mpc local library shuffle should jump to a different queue position");
+
+	    await writeFile(fakeMpcLogPath, "");
+	    const shuffleNextStartIndex = shuffle.body.playback.currentTrackIndex;
+	    const shuffleNext = await requestFrom(baseUrl, "/api/v1/playback/actions", {
+	      method: "POST",
+	      body: JSON.stringify({ type: "next" })
+	    });
+	    assert(shuffleNext.response.ok, "mpc local library shuffle next should return 200");
+	    assert(shuffleNext.body.playback.currentTrackIndex !== shuffleNextStartIndex, "mpc local library shuffle next should not replay the same queue position");
+	    const shuffleNextLog = await readFile(fakeMpcLogPath, "utf8");
+	    assert(!shuffleNextLog.split("\n").includes("next"), "mpc local library shuffle next should use an explicit random queue jump");
+
+	    await requestFrom(baseUrl, "/api/v1/playback/actions", {
+	      method: "POST",
+	      body: JSON.stringify({ type: "play_mode_set", mode: "sequence" })
+	    });
+
+	    const usbLibrary = await requestFrom(baseUrl, "/api/v1/audio/library?storage=usb&limit=5");
     assert(usbLibrary.response.ok, "mpc USB library should return 200");
     const usbTrackPath = usbLibrary.body.tracks[0]?.path;
     assert(usbTrackPath === fakeMpcUsbTracks[0], "mpc USB library should expose MPD-visible USB/<mount name> track paths");
@@ -2243,6 +2383,77 @@ if (args[0] === "open" && args[1] === ${JSON.stringify(failedProvider)}) {
     assert(usbLog.includes(`add\t${fakeMpcUsbTracks[0]}`), "mpc USB switch should add only playable USB audio tracks to the queue");
     assert(!usbLog.split("\n").includes("add\tUSB/Session Disk"), "mpc USB switch should not queue the raw USB mount root because MPD can list Apple resource-fork files");
     assert(!usbLog.includes("Codex/USB/Session Disk"), "mpc USB switch should not prefix USB paths with the local Codex root");
+
+    const usbFavorite = await requestFrom(baseUrl, "/api/v1/audio/favorites", {
+      method: "POST",
+      body: JSON.stringify({ trackPath: usbTrackPath, favorite: true })
+    });
+    assert(usbFavorite.response.ok, "mpc USB favorite add should return 200");
+    const usbLibraryAfterFavorite = await requestFrom(baseUrl, "/api/v1/audio/library?storage=usb&limit=5");
+    assert(
+      usbLibraryAfterFavorite.body.tracks.some((track) => track.path === usbTrackPath && track.favorite === true),
+      "mpc USB library should expose favorite=true after saving a USB track"
+    );
+    const favoriteLibraryAfterUsb = await requestFrom(baseUrl, "/api/v1/audio/library?storage=favorites&limit=20");
+    assert(
+      favoriteLibraryAfterUsb.body.tracks.some((track) => track.path === usbTrackPath),
+      "mpc favorites library should include favorited USB tracks"
+    );
+    await requestFrom(baseUrl, "/api/v1/audio/favorites", {
+      method: "POST",
+      body: JSON.stringify({ trackPath: usbTrackPath, favorite: false })
+    });
+
+    const copyUsb = await requestFrom(baseUrl, "/api/v1/audio/library-actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "copy_to_local", trackPath: usbTrackPath })
+    });
+    assert(copyUsb.response.ok, "mpc USB copy to local should return 200");
+    assert(copyUsb.body.copied === true, "mpc USB copy to local should copy a missing local file");
+    assert(copyUsb.body.copiedTrackPath === "USB Imports/Session Disk/Set/Live Take.flac", "mpc USB copy should preserve the USB mount and relative path under USB Imports");
+    assert(
+      (await readFile(path.join(fakeMpdMusicRoot, "Codex", "USB Imports", "Session Disk", "Set", "Live Take.flac"), "utf8")) === "fake usb flac",
+      "mpc USB copy should write the file into the local MPD music root"
+    );
+    assert(
+      copyUsb.body.library.tracks.some((track) => track.storage === "local" && track.path === copyUsb.body.copiedTrackPath),
+      "mpc USB copy response should expose the imported file as a local track"
+    );
+	    assert(
+	      Number.isFinite(copyUsb.body.library.localStorage?.freeBytes) && Number.isFinite(copyUsb.body.library.localStorage?.usedPercent),
+	      "mpc USB copy response should expose local storage usage"
+	    );
+	    const copiedLocalPlayback = await requestFrom(baseUrl, "/api/v1/audio/source", {
+	      method: "POST",
+	      body: JSON.stringify({ target: "mpd", localTrackPath: copyUsb.body.copiedTrackPath })
+	    });
+	    assert(copiedLocalPlayback.response.ok, "copied USB local track should be playable immediately");
+	    assert(
+	      copiedLocalPlayback.body.audio.rememberedSource?.localTrackPath === copyUsb.body.copiedTrackPath,
+	      "copied USB local playback should remember the imported local path"
+	    );
+	    const copyUsbAgain = await requestFrom(baseUrl, "/api/v1/audio/library-actions", {
+	      method: "POST",
+	      body: JSON.stringify({ type: "copy_to_local", trackPath: usbTrackPath })
+    });
+    assert(copyUsbAgain.response.ok, "mpc duplicate USB copy should return 200");
+    assert(copyUsbAgain.body.copied === false, "mpc duplicate USB copy should not copy an existing local file");
+    const deleteCopiedLocal = await requestFrom(baseUrl, "/api/v1/audio/library-actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "delete_local", trackPath: copyUsb.body.copiedTrackPath })
+    });
+    assert(deleteCopiedLocal.response.ok, "mpc local delete should return 200 for an imported local track");
+    assert(deleteCopiedLocal.body.deleted === true, "mpc local delete should report deleted=true");
+    try {
+      await readFile(path.join(fakeMpdMusicRoot, "Codex", "USB Imports", "Session Disk", "Set", "Live Take.flac"), "utf8");
+      assert(false, "mpc local delete should remove the copied local file from disk");
+    } catch {
+      // Expected: the imported file has been deleted.
+    }
+    assert(
+      !deleteCopiedLocal.body.library.tracks.some((track) => track.storage === "local" && track.path === copyUsb.body.copiedTrackPath),
+      "mpc local delete response should remove the imported file from local tracks"
+    );
 
     await rm(fakeUsbIndexPath, { force: true });
     await writeFile(fakeUsbScanLogPath, "");
@@ -2725,15 +2936,30 @@ if (process.argv.join(" ").includes("cfg_radio")) {
     "530|Jazz - Jazz24|http://radio.example/jazz24|Jazz|Jazz24.org|256|AAC|local",
     "531|Jazz - The Jazz Groove|http://radio.example/the-jazz-groove|Jazz|The Jazz Groove|128|MP3|local",
     "532|Jazz - Linn Jazz|http://radio.example/linn-jazz|Jazz|Linn|320|MP3|local",
-    "540|Classical - BR-Klassik|http://radio.example/br-klassik|Classical|Bayern Radio|192|MP3|local",
-    "541|Classical - NPO Klassiek|http://radio.example/npo-klassiek|Classical|NPO|192|MP3|local",
-    "542|Classical - Linn Classical|http://radio.example/linn-classical|Classical|Linn|320|MP3|local",
-    "550|News - NPR Program Stream|http://radio.example/npr|News, Public Radio, Talk|NPR|128|MP3|local",
-    "551|News - DR P1|http://radio.example/dr-p1|News, Talk|DR|128|MP3|local",
-    "552|News - Radio SRF 4 News|http://radio.example/srf-news|News, Current Affairs|SRF|128|MP3|local",
-    "560|Hi-Fi - Radio Paradise FLAC|http://radio.example/hifi-rp|Hi-Fi, Eclectic|Radio Paradise|900|FLAC|local",
-    "561|Hi-Fi - Naim Radio|http://radio.example/naim-radio|Hi-Fi, Eclectic|Naim|320|AAC|local",
-    "562|Hi-Fi - Linn Radio|http://radio.example/linn-radio|Hi-Fi, Eclectic|Linn|320|MP3|local"
+    "590|Classical - BR-Klassik|http://radio.example/br-klassik|Classical|Bayern Radio|192|MP3|local",
+    "591|Classical - NPO Klassiek|http://radio.example/npo-klassiek|Classical|NPO|192|MP3|local",
+    "592|Classical - Linn Classical|http://radio.example/linn-classical|Classical|Linn|320|MP3|local",
+    "600|News - NPR Program Stream|http://radio.example/npr-news|News, Public Radio, Talk|NPR|128|MP3|local",
+    "601|News - DR P1|http://radio.example/dr-p1|News, Talk|DR|128|MP3|local",
+    "602|News - Radio SRF 4 News|http://radio.example/srf-news|News, Current Affairs|SRF|128|MP3|local",
+    "610|Hi-Fi - Radio Paradise FLAC|http://radio.example/hifi-rp|Hi-Fi, Eclectic|Radio Paradise|900|FLAC|local",
+    "611|Hi-Fi - Naim Radio|http://radio.example/naim-radio|Hi-Fi, Eclectic|Naim|320|AAC|local",
+    "612|Hi-Fi - Linn Radio|http://radio.example/linn-radio|Hi-Fi, Eclectic|Linn|320|MP3|local",
+    "540|Blues - 1.FM Blues Radio|http://radio.example/blues|Blues|1.FM|192|MP3|local",
+    "541|Blues - WDCB Chicago Jazz & Blues|http://radio.example/wdcb|Blues, Jazz|DuPage College|128|MP3|local",
+    "542|Blues - WWOZ New Orleans|http://radio.example/wwoz|Blues, Jazz, Funk|WWOZ|128|MP3|local",
+    "550|Rock - Radio Paradise Rock|http://radio.example/rp-rock|Rock|Radio Paradise|900|FLAC|local",
+    "551|Rock - Radio Caroline|http://radio.example/radio-caroline|Rock, Classic Rock|Radio Caroline|96|MP3|local",
+    "552|Rock - Soma FM Digitalis|http://radio.example/digitalis|Rock, Indie|Soma FM|128|AAC|local",
+    "560|World - Radio Paradise World|http://radio.example/rp-world|World, World Music|Radio Paradise|900|FLAC|local",
+    "561|World - Hi On Line World|http://radio.example/hionline-world|World, World Music|Hi.Fine|320|MP3|local",
+    "562|World - Soma FM Suburbs of Goa|http://radio.example/suburbs-of-goa|World, World Music, Desi|Soma FM|128|AAC|local",
+    "570|Electronic - FluxFM ElectroFlux|http://radio.example/electroflux|Electronic, Pop|FluxFM|256|MP3|local",
+    "571|Electronic - FluxFM Techno Underground|http://radio.example/techno-underground|Electronic, Techno|FluxFM|256|MP3|local",
+    "572|Electronic - Soma FM PopTron|http://radio.example/poptron|Electronic, Electro-Pop|Soma FM|128|AAC|local",
+    "580|Podcast - BBC Radio 4|http://radio.example/bbc-radio-4|Podcast, Spoken Word, Talk|BBC|96|AAC-LC|local",
+    "581|Podcast - France Culture Live|http://radio.example/france-culture|Podcast, Spoken Word, Current Affairs|Radio France|128|MP3|local",
+    "582|Podcast - NPR Program Stream|http://radio.example/npr|Podcast, Public Radio, Talk|NPR|128|MP3|local"
   ].join("\\n") + "\\n");
 }
 `);
@@ -2797,25 +3023,41 @@ if (getIndex >= 0) {
     await waitForHealthAt(baseUrl);
     const catalog = await requestFrom(baseUrl, "/api/v1/audio/radios");
     assert(catalog.response.ok, "mpc radio preset catalog should return 200");
-    assert(catalog.body.total === 21, "mpc radio catalog should default to curated single-layer stations");
+    assert(catalog.body.total === 36, "mpc radio catalog should default to curated single-layer stations");
     assert(catalog.body.stations[0]?.id === "radio-500", "mpc radio catalog should expose high-id curated cfg_radio rows first");
     assert(catalog.body.stations[0]?.category === "focus", "mpc radio catalog should expose the Focus category");
     assert(catalog.body.stations[0]?.broadcaster === "Soma FM", "mpc radio catalog should expose broadcaster");
     assert(catalog.body.stations[0]?.logoUrl?.startsWith("/api/v1/media/radio-logo?stationId=radio-500"), "mpc radio catalog should expose radio logo URL");
+    const expectedRadioCategoryOrder = "focus,calm,sleep,jazz,classical,news,hifi,blues,rock,world,electronic,podcast,random";
     assert(
-      catalog.body.categories.map((category) => category.id).join(",") === "focus,calm,sleep,jazz,classical,news,hifi",
+      catalog.body.categories.map((category) => category.id).join(",") === expectedRadioCategoryOrder,
       "mpc radio catalog should expose the single-layer category order"
     );
 
     const allCatalog = await requestFrom(baseUrl, "/api/v1/audio/radios?scope=all&limit=250");
     assert(allCatalog.response.ok, "mpc radio all-scope catalog should return 200");
-    assert(allCatalog.body.total === 22, "mpc radio all-scope catalog should include moOde and curated rows");
+    assert(allCatalog.body.total === 37, "mpc radio all-scope catalog should include moOde and curated rows");
     assert(allCatalog.body.stations[0]?.catalogSource === "tikpal", "mpc radio all-scope catalog should keep curated rows first");
     assert(allCatalog.body.stations.some((station) => station.id === "radio-1" && station.catalogSource === "moode"), "mpc radio all-scope catalog should retain moOde rows");
 
     const calmCatalog = await requestFrom(baseUrl, "/api/v1/audio/radios?category=calm");
     assert(calmCatalog.response.ok, "mpc radio category catalog should return 200");
     assert(calmCatalog.body.total === 3 && calmCatalog.body.stations.every((station) => station.category === "calm"), "mpc radio category filter should isolate Calm stations");
+    for (const categoryId of expectedRadioCategoryOrder.split(",").filter((categoryId) => categoryId !== "random")) {
+      const categoryCatalog = await requestFrom(baseUrl, `/api/v1/audio/radios?category=${categoryId}`);
+      assert(categoryCatalog.response.ok, `mpc radio ${categoryId} catalog should return 200`);
+      assert(
+        categoryCatalog.body.total === 3 && categoryCatalog.body.stations.every((station) => station.category === categoryId),
+        `mpc radio category filter should isolate ${categoryId} stations`
+      );
+    }
+    const randomCatalog = await requestFrom(baseUrl, "/api/v1/audio/radios?category=random");
+    assert(randomCatalog.response.ok, "mpc radio random catalog should return 200");
+    assert(randomCatalog.body.total === 3 && randomCatalog.body.stations.length === 3, "mpc radio random catalog should return three stations");
+    assert(
+      randomCatalog.body.stations.every((station) => station.catalogSource === "tikpal" && station.category && station.category !== "random"),
+      "mpc radio random catalog should keep real station categories"
+    );
 
     const exactLogo = await requestBinaryFrom(baseUrl, catalog.body.stations[0].logoUrl);
     assert(exactLogo.response.ok, "mpc radio exact logo endpoint should return 200");
@@ -4929,6 +5171,8 @@ async function run() {
     assert(localLibrary.body.tracks[0]?.path, "local audio library tracks should expose manifest paths");
     assert(localLibrary.body.tracks[0]?.albumArtUrl, "local audio library tracks should expose cover art URLs");
     assert(localLibrary.body.tracks[0]?.albumArtLabel, "generic local library folder covers should expose overlay labels");
+    assert(localLibrary.body.tracks[0]?.codec, "local audio library tracks should expose file audio information");
+    assert(localLibrary.body.localStorage?.rootPath, "local audio library should expose local storage root information");
     assert(localLibrary.body.total === 39, "local audio library should keep the 39-track manifest total");
     const usbLibrary = await request("/api/v1/audio/library?storage=usb&limit=10");
     assert(usbLibrary.response.ok, "USB audio library should return 200");
@@ -4938,6 +5182,8 @@ async function run() {
     assert(usbLibrary.body.tracks[0]?.categoryId === "usb", "USB tracks should expose the usb category id");
     assert(usbLibrary.body.tracks[0]?.subCategory === "Field Recorder", "USB tracks should use the mount name as the display group");
     assert(usbLibrary.body.tracks[0]?.path === "USB/Field Recorder/Bootleg Set/Stage Test.flac", "USB track path should be MPD-visible under USB/<mount name>");
+    assert(usbLibrary.body.tracks[0]?.codec === "flac", "USB tracks should expose fallback codec information from the file extension");
+    assert(usbLibrary.body.tracks[0]?.fileSizeBytes > 0, "USB tracks should expose file size information");
     assert(!usbLibrary.body.tracks.some((track) => track.path?.includes("._Stage Test")), "USB library should ignore Apple resource-fork files");
     const allLibrary = await request("/api/v1/audio/library?storage=all&limit=500");
     assert(allLibrary.response.ok, "all audio library should return 200");
@@ -5038,8 +5284,25 @@ async function run() {
     });
     assert(favoriteAdd.response.ok, "favorite add endpoint should return 200");
     assert(favoriteAdd.body.playback.favorite === true, "favorite add endpoint should update playback favorite state");
+    const usbFavoriteAdd = await request("/api/v1/audio/favorites", {
+      method: "POST",
+      body: JSON.stringify({ trackPath: usbLibrary.body.tracks[0].path, favorite: true })
+    });
+    assert(usbFavoriteAdd.response.ok, "USB favorite add endpoint should return 200");
+    const usbLibraryAfterFavorite = await request("/api/v1/audio/library?storage=usb&limit=10");
+    assert(
+      usbLibraryAfterFavorite.body.tracks.some((track) => track.path === usbLibrary.body.tracks[0].path && track.favorite === true),
+      "USB library should expose favorite=true for saved USB tracks"
+    );
+    const favoritesWithUsb = await request("/api/v1/audio/library?storage=favorites&limit=50");
+    assert(favoritesWithUsb.body.total === 2, "favorites library should include saved local and USB tracks");
+    assert(
+      favoritesWithUsb.body.tracks.some((track) => track.path === usbLibrary.body.tracks[0].path),
+      "favorites library should return the favorited USB track path"
+    );
     const persistedState = JSON.parse(await readFile(musicLibraryStatePath, "utf8"));
     assert(persistedState.favorites.trackPaths.includes(localLibrary.body.tracks[0].path), "favorites should persist to the music library state file");
+    assert(persistedState.favorites.trackPaths.includes(usbLibrary.body.tracks[0].path), "USB favorites should persist to the music library state file");
 
     const initialPlaylists = await request("/api/v1/audio/playlists");
     assert(initialPlaylists.response.ok, "playlists endpoint should return 200");

@@ -184,6 +184,44 @@ Candidate fonts should prefer `Noto Sans CJK SC 16` when Noto CJK is installed, 
 
 Onboard should only appear for text-like fields after real focus or tap. It should stay hidden for buttons, checkboxes, selectors, provider entry, and LAN browsers that view `http://<gentoo-ip>:4173/`.
 
+## Player Library UX
+
+The Gentoo physical kiosk uses the same Player Library contract as moOde:
+
+- `Local`, `NAS`, `USB`, `Favorites`, and `Recently Added` are flat storage/filter tabs.
+- Local and USB rows show compact audio/file information when the backend exposes codec, sample rate, bit depth, channel count, bitrate, or file size.
+- USB rows expose `Copy to Local`; the backend should not overwrite same-name Local files and should report `Already in Local` when no copy is needed.
+- Local rows expose `Delete`, but the first tap only reveals `Yes` and `No`. Only `Yes` performs deletion; `No`, storage changes, source changes, or closing Player must cancel the pending confirmation.
+- Long track lists keep a fixed right-side fast-scroll rail with `current / total` count and a draggable thumb. Dragging that rail only changes `scrollTop`; it must not select a track or auto-play on release.
+
+Targeted physical-kiosk DOM checks after deploying a frontend build:
+
+```js
+(() => {
+  const shell = document.querySelector("[data-library-track-list-shell]");
+  const list = document.querySelector("[data-library-track-list]");
+  const rail = document.querySelector("[data-library-fast-scroll]");
+  const thumb = document.querySelector("[data-library-fast-scroll-thumb]");
+  return {
+    fixedRail: shell instanceof HTMLElement
+      && getComputedStyle(shell).gridTemplateColumns.split(" ").length === 2
+      && rail instanceof HTMLElement
+      && getComputedStyle(rail).position === "relative",
+    scrollable: list instanceof HTMLElement && list.scrollHeight > list.clientHeight,
+    thumb: thumb instanceof HTMLElement
+  };
+})()
+```
+
+For destructive actions, verify only the confirmation path unless a real deletion is intended:
+
+```js
+document.querySelector("[data-library-delete-local]")?.click();
+document.querySelector("[data-library-delete-confirm-yes]") !== null;
+document.querySelector("[data-library-delete-confirm-no]")?.click();
+document.querySelector("[data-library-delete-confirm]") === null;
+```
+
 ## Display And Power
 
 Brightness through DDC/CI is display-specific and can be non-linear. The Gentoo target should prefer conservative values that keep the screen visible; do not blindly map UI `100%` to raw DDC `100` if that target can black out or become unreadably dim during gesture changes.

@@ -1470,8 +1470,20 @@ try {
   );
   await expect(
     client,
-    "document.querySelector('.ambient-adjust-indicator')?.textContent.includes('Volume')",
-    "ambient right-edge touch swipe shows the volume overlay"
+    "document.querySelector('.ambient-adjust-indicator')?.textContent.includes('Volume') && !document.querySelector('.ambient-adjust-indicator')?.textContent.includes('moOde live level')",
+    "ambient right-edge touch swipe shows the volume overlay without the moOde helper copy"
+  );
+  await wait(1100);
+  await expect(
+    client,
+    "document.querySelector('.ambient-adjust-indicator')?.textContent.includes('Volume') && document.querySelector('[data-ambient-adjust-back]') !== null",
+    "ambient volume overlay stays open with an explicit Back button"
+  );
+  await evaluate(client, "document.querySelector('[data-ambient-adjust-back]')?.click();");
+  await expectEventually(
+    client,
+    "document.querySelector('.ambient-adjust-indicator') === null",
+    "ambient volume Back closes the adjustment overlay"
   );
   await postExperienceAction(client, { type: "set_mode", mode: "hifi" });
   await navigate(client, APP_URL);
@@ -1549,8 +1561,10 @@ try {
         const ticker = document.querySelector('.ambient-lyrics-ticker');
         const controls = document.querySelector('[data-hifi-lyrics-controls]');
         const play = controls?.querySelector('button[aria-label="Pause"], button[aria-label="Play"]');
+        const controlsStyle = controls ? getComputedStyle(controls) : null;
         const activeText = activeLine?.textContent?.trim() ?? "";
         return panel !== null
+          && document.querySelector('.ambient-screen.is-hud-visible') !== null
           && document.querySelector('[data-hifi-centered-now-playing]') === null
           && document.querySelector('[data-hifi-playback-presence]') === null
           && document.querySelectorAll('[data-hifi-lyrics-line]').length >= 4
@@ -1559,10 +1573,12 @@ try {
           && document.querySelector('[data-ambient-lyrics]')?.getAttribute('aria-hidden') === 'true'
           && ticker === null
           && controls !== null
-          && play !== null;
+          && play !== null
+          && controlsStyle?.pointerEvents === 'none'
+          && Number.parseFloat(controlsStyle?.opacity ?? '1') <= 0.05;
       })()
     `,
-    "Hi-Fi ready synced lyrics render lyrics wall with footer controls and without ticker"
+    "Hi-Fi ready synced lyrics hide footer controls while the real HUD transport is visible"
   );
   await wait(1500);
   await expectEventually(
@@ -1583,18 +1599,21 @@ try {
     `
       (() => {
         const activeLine = document.querySelector('[data-hifi-lyrics-line][data-hifi-lyrics-active]');
-        const footerPlay = document.querySelector('[data-hifi-lyrics-controls] button[aria-label="Pause"], [data-hifi-lyrics-controls] button[aria-label="Play"]');
+        const controls = document.querySelector('[data-hifi-lyrics-controls]');
+        const controlsStyle = controls ? getComputedStyle(controls) : null;
+        const footerPlay = controls?.querySelector('button[aria-label="Pause"], button[aria-label="Play"]');
         return document.querySelector('.ambient-screen.is-hud-hidden') !== null
           && document.querySelector('[data-hifi-lyrics-panel]') !== null
           && document.querySelector('.ambient-lyrics-ticker') === null
           && document.querySelector('.ambient-transport') !== null
           && getComputedStyle(document.querySelector('.ambient-transport')).pointerEvents === 'none'
           && footerPlay !== null
-          && getComputedStyle(footerPlay).pointerEvents !== 'none'
+          && controlsStyle?.pointerEvents !== 'none'
+          && Number.parseFloat(controlsStyle?.opacity ?? '0') >= 0.95
           && (activeLine?.textContent?.trim().length ?? 0) > 0;
       })()
     `,
-    "Hi-Fi HUD auto hides while lyrics wall and footer controls remain visible"
+    "Hi-Fi HUD auto hides while lyrics wall footer controls return"
   );
   const staticLyricsPatchVersion = await setStatePatchMode(client, "staticLyrics");
   await waitForStatePatchRefresh(client, staticLyricsPatchVersion, "Hi-Fi static lyrics fixture refreshes");
@@ -1853,13 +1872,24 @@ try {
     client,
     `
       (() => {
+        const picker = document.querySelector('[data-ambient-source-picker]');
+        const transport = document.querySelector('.ambient-transport.is-hifi');
         const options = [...document.querySelectorAll('[data-ambient-source-picker] [data-ambient-source-option]')];
-        if (options.length !== 7) return false;
+        if (!(picker instanceof HTMLElement) || !(transport instanceof HTMLElement) || options.length !== 7) return false;
+        const pickerRect = picker.getBoundingClientRect();
+        const transportRect = transport.getBoundingClientRect();
         const tops = options.map((option) => option.getBoundingClientRect().top);
-        return Math.max(...tops) - Math.min(...tops) < 2;
+        const pickerCenter = pickerRect.left + pickerRect.width / 2;
+        const transportCenter = transportRect.left + transportRect.width / 2;
+        return Math.max(...tops) - Math.min(...tops) < 2
+          && pickerRect.left >= 0
+          && pickerRect.right <= window.innerWidth
+          && pickerRect.height <= 122
+          && pickerRect.bottom <= transportRect.top + 8
+          && Math.abs(pickerCenter - transportCenter) <= 18;
       })()
     `,
-    "Hi-Fi source picker keeps Explore on the first row"
+    "Hi-Fi source picker renders as a compact shelf above the transport"
   );
   await wait(5200);
   await expectEventually(client, "document.querySelector('[data-ambient-source-picker]') === null", "Hi-Fi source picker auto-closes after 5 seconds");
@@ -2830,6 +2860,22 @@ try {
     `
   );
   await expect(client, "document.querySelector('.ambient-clock') === null", "quick menu clock toggle hides ambient clock");
+  await evaluate(client, "document.querySelector('[data-quick-menu-toggle=\"time\"]')?.click();");
+  await expectEventually(
+    client,
+    `
+      (() => {
+        const time = document.querySelector('[data-quick-menu-toggle="time"]');
+        const screen = document.querySelector('[data-quick-menu-toggle="screen"]');
+        if (!(time instanceof HTMLElement) || !(screen instanceof HTMLElement)) return false;
+        return document.querySelector('.ambient-clock') !== null
+          && time.getAttribute('aria-pressed') === 'true'
+          && time.classList.contains('is-on')
+          && getComputedStyle(time).borderColor === getComputedStyle(screen).borderColor;
+      })()
+    `,
+    "quick menu clock toggle restores active state border"
+  );
 
   await evaluate(
     client,
@@ -3242,12 +3288,25 @@ try {
     client,
     `
       (() => {
-        document.querySelector('[data-quick-menu-toggle="time"]')?.click();
+        if (!document.querySelector('.ambient-clock')) {
+          document.querySelector('[data-quick-menu-toggle="time"]')?.click();
+        }
         return true;
       })()
     `
   );
-  await expect(client, "document.querySelector('.ambient-clock') !== null", "quick menu clock toggle restores ambient clock");
+  await expect(
+    client,
+    `
+      (() => {
+        const time = document.querySelector('[data-quick-menu-toggle="time"]');
+        return document.querySelector('.ambient-clock') !== null
+          && time?.getAttribute('aria-pressed') === 'true'
+          && time?.classList.contains('is-on');
+      })()
+    `,
+    "quick menu clock toggle keeps ambient clock restored"
+  );
   await evaluate(client, "document.querySelector('.overlay-backdrop')?.click();");
   await expectEventually(client, "document.querySelector('.quick-menu.is-active') === null", "quick menu closes while scene sound remains active");
   await expectEventually(client, "document.querySelector('.flame-video.is-active') instanceof HTMLVideoElement && document.querySelector('.flame-video.is-active').muted === false", "scene sound stays enabled before switching sources");
@@ -3494,7 +3553,7 @@ try {
     client,
     `
       (() => {
-        const expected = ['focus', 'calm', 'sleep', 'jazz', 'classical', 'news', 'hifi'];
+        const expected = ['focus', 'calm', 'sleep', 'jazz', 'classical', 'news', 'hifi', 'blues', 'rock', 'world', 'electronic', 'podcast', 'random'];
         const tabs = Array.from(document.querySelectorAll('[data-radio-category]'));
         return tabs.length === expected.length
           && expected.every((category, index) => tabs[index]?.getAttribute('data-radio-category') === category);
@@ -3506,6 +3565,40 @@ try {
     client,
     "document.querySelector('[data-radio-station-logo]') instanceof HTMLImageElement && document.querySelector('[data-radio-station-logo]')?.complete === true && document.querySelector('[data-radio-station-logo]')?.naturalWidth > 0",
     "Radio panel renders station logo images"
+  );
+  await expectEventually(
+    client,
+    `
+      (() => {
+        const panel = document.querySelector('.source-panel-radio');
+        const shell = document.querySelector('.player-shell');
+        const items = [...document.querySelectorAll('.source-panel-radio .radio-catalog-item')];
+        if (!(panel instanceof HTMLElement) || !(shell instanceof HTMLElement) || items.length !== 3) return false;
+        const lastRect = items[items.length - 1].getBoundingClientRect();
+        const shellRect = shell.getBoundingClientRect();
+        return !/\\b\\d+\\s+stations\\b/i.test(panel.textContent ?? "")
+          && document.querySelector('.source-panel-hint') === null
+          && lastRect.bottom <= shellRect.bottom - 12
+          && shellRect.bottom - lastRect.bottom <= 72;
+      })()
+    `,
+    "Radio panel omits station count and bottom hint while filling the player shell with three station rows"
+  );
+  await evaluate(client, "document.querySelector('[data-radio-category=\"random\"]')?.click(); true");
+  await expectEventually(
+    client,
+    `
+      (() => {
+        const items = [...document.querySelectorAll('.source-panel-radio .radio-catalog-item')];
+        const categoryNodes = [...document.querySelectorAll('.source-panel-radio [data-radio-station-category]')];
+        const categories = categoryNodes.map((node) => node.getAttribute('data-radio-station-category'));
+        return document.querySelector('[data-radio-category="random"][aria-selected="true"]') !== null
+          && items.length === 3
+          && categoryNodes.length === 3
+          && categories.every((category) => category && category !== 'random');
+      })()
+    `,
+    "Radio Random tab shows three stations with their real categories"
   );
   await evaluate(client, "document.querySelector('[data-radio-category=\"sleep\"]')?.click(); true");
   await expectEventually(
@@ -3523,6 +3616,111 @@ try {
   await evaluate(client, "document.querySelector('[data-library-storage=\"local\"]')?.click(); true");
   await expectEventually(client, "document.querySelector('[data-library-storage=\"local\"].is-selected') !== null", "player Library local storage tab is selected");
   await expectEventually(client, "document.querySelector('[data-library-track-list] [data-library-track] .library-track-main') !== null", "player Library keeps selectable tracks");
+  await expectEventually(
+    client,
+    `
+      (() => {
+        const shell = document.querySelector('[data-library-track-list-shell]');
+        const control = document.querySelector('[data-library-fast-scroll]');
+        if (!(shell instanceof HTMLElement) || !(control instanceof HTMLElement)) return false;
+        const columns = getComputedStyle(shell).gridTemplateColumns.split(' ').filter(Boolean);
+        const style = getComputedStyle(control);
+        return columns.length === 2
+          && style.position === 'relative'
+          && style.pointerEvents !== 'none'
+          && Number.parseFloat(style.opacity || '0') >= 0.95;
+      })()
+    `,
+    "player Library fast scroll is a fixed visible rail on long lists"
+  );
+  await evaluate(
+    client,
+    `
+      (() => {
+        const list = document.querySelector('[data-library-track-list]');
+        if (!(list instanceof HTMLElement)) return false;
+        list.scrollTop = Math.max(1, list.scrollHeight * 0.35);
+        list.dispatchEvent(new Event('scroll', { bubbles: true }));
+        return list.scrollTop > 0;
+      })()
+    `
+  );
+  await expectEventually(client, "document.querySelector('[data-library-fast-scroll]') !== null", "player Library fast scroll remains mounted after list scroll");
+  await expect(client, "document.querySelector('[data-library-fast-scroll-thumb]') !== null", "player Library fast scroll exposes thumb hook");
+  const fastScrollBox = await evaluate(
+    client,
+    `
+      (() => {
+        const track = document.querySelector('[data-library-fast-scroll] .library-fast-scroll-track');
+        if (!(track instanceof HTMLElement)) return null;
+        const rect = track.getBoundingClientRect();
+        return { x: Math.round(rect.left + rect.width / 2), top: Math.round(rect.top + 2), bottom: Math.round(rect.bottom - 2) };
+      })()
+    `
+  );
+  if (!fastScrollBox) throw new Error("Failed: player Library fast scroll track geometry is available");
+  await drag(client, fastScrollBox.x, fastScrollBox.top, fastScrollBox.x, fastScrollBox.bottom, 6);
+  await expect(
+    client,
+    `
+      (() => {
+        const list = document.querySelector('[data-library-track-list]');
+        if (!(list instanceof HTMLElement)) return false;
+        const maxScrollTop = list.scrollHeight - list.clientHeight;
+        return maxScrollTop > 0 && list.scrollTop >= maxScrollTop * 0.72;
+      })()
+    `,
+    "player Library fast scroll drag moves toward the list end"
+  );
+  await expect(
+    client,
+    `
+      (() => {
+        const list = document.querySelector('[data-library-track-list]');
+        if (!(list instanceof HTMLElement)) return false;
+        const listRect = list.getBoundingClientRect();
+        const actions = [...document.querySelectorAll('[data-library-delete-local], [data-library-copy-local], .library-track-favorite')];
+        const action = actions.find((node) => {
+          if (!(node instanceof HTMLElement)) return false;
+          const rect = node.getBoundingClientRect();
+          return rect.top >= listRect.top && rect.bottom <= listRect.bottom;
+        });
+        if (!(action instanceof HTMLElement)) return false;
+        const rect = action.getBoundingClientRect();
+        const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+        return hit === action || action.contains(hit);
+      })()
+    `,
+    "player Library fast scroll does not cover row action buttons"
+  );
+  await evaluate(
+    client,
+    `
+      (() => {
+        const list = document.querySelector('[data-library-track-list]');
+        if (!(list instanceof HTMLElement)) return false;
+        const listRect = list.getBoundingClientRect();
+        const button = [...document.querySelectorAll('[data-library-delete-local]')].find((node) => {
+          if (!(node instanceof HTMLElement)) return false;
+          const rect = node.getBoundingClientRect();
+          return rect.top >= listRect.top && rect.bottom <= listRect.bottom;
+        });
+        button?.click();
+        return Boolean(button);
+      })()
+    `
+  );
+  await expectEventually(
+    client,
+    "document.querySelector('[data-library-delete-confirm-yes]') !== null && document.querySelector('[data-library-delete-confirm-no]') !== null",
+    "local Library delete asks for Yes and No confirmation"
+  );
+  await evaluate(client, "document.querySelector('[data-library-delete-confirm-no]')?.click(); true");
+  await expectEventually(
+    client,
+    "document.querySelector('[data-library-delete-confirm]') === null && document.querySelector('[data-library-delete-local]') !== null",
+    "local Library delete confirmation cancels with No"
+  );
   await evaluate(
     client,
     `
@@ -3546,6 +3744,7 @@ try {
     `,
     "Library track selection switches MPD with a concrete localTrackPath"
   );
+  await expectEventually(client, "document.querySelector('[data-library-fast-scroll]') !== null", "player Library fast scroll stays fixed after track selection completes");
   await expectEventually(client, sourceTabExpression("mpd", { selected: true, active: true }), "library source starts selected and active");
 
   // Spotify Connect uses third-party librespot, so its runtime availability is intentionally non-blocking.
@@ -3586,11 +3785,13 @@ try {
           && slider.min === '0'
           && slider.max === '100'
           && slider.step === '1'
+          && document.querySelector('[data-player-volume-back]') !== null
+          && !document.querySelector('.idle-meter.is-visible')
           && document.querySelector('[aria-label="Volume down"]') === null
           && document.querySelector('[aria-label="Volume up"]') === null;
       })()
     `,
-    "player volume renders a range slider instead of plus/minus buttons"
+    "player volume renders a range slider with Back and without idle countdown"
   );
 
   await evaluate(
@@ -3716,40 +3917,35 @@ try {
     "music source remains available after scene volume sync"
   );
 
-  for (const [categoryLabel, expectedLabels] of Object.entries({
-    Focus: ["Lo-fi / Ambient", "Classical / Piano", "Binaural / Alpha / Theta", "White Noise / Brown Noise"],
-    Meditation: ["Guided Meditation", "Breathing", "Singing Bowl", "Nature Sounds"],
-    Rest: ["Nap", "Sleep", "Rain / Ocean / Forest", "Deep Sleep Long Tracks"]
-  })) {
-    await evaluate(
-      client,
-      `
-        (() => {
-          const target = [...document.querySelectorAll('.library-category-tab')].find((node) => node.textContent.includes(${JSON.stringify(categoryLabel)}));
-          target?.click();
-          return Boolean(target);
-        })()
-      `
-    );
-    await expectEventually(
-      client,
-      `
-        (() => {
-          const container = document.querySelector('.library-subcategory-tabs');
-          if (!container) return false;
-          const labels = [...document.querySelectorAll('.library-subcategory-tab strong')]
-            .map((node) => node.textContent?.trim())
-            .filter((label) => label && label !== 'All');
-          return container.scrollWidth <= container.clientWidth + 1
-            && window.getComputedStyle(container).overflowX !== 'auto'
-            && JSON.stringify(labels) === ${JSON.stringify(JSON.stringify(expectedLabels))};
-        })()
-      `,
-      `${categoryLabel.toLowerCase()} subcategory tabs match the curated taxonomy order`,
-      20,
-      50
-    );
-  }
+  await expect(
+    client,
+    `
+      (() => {
+        const localTab = document.querySelector('[data-library-storage="local"]');
+        localTab?.click();
+        return !document.querySelector('.library-category-tab')
+          && !document.querySelector('.library-subcategory-tab')
+          && document.querySelectorAll('[data-library-track]').length > 0
+          && document.querySelector('[data-library-delete-local]')
+          && document.querySelector('.library-track-audio-info')
+          && document.querySelector('[data-library-local-storage]');
+      })()
+    `,
+    "local library is flat and exposes audio info, delete, and storage meter"
+  );
+
+  await expect(
+    client,
+    `
+      (() => {
+        const usbTab = document.querySelector('[data-library-storage="usb"]');
+        usbTab?.click();
+        const copy = document.querySelector('[data-library-copy-local]');
+        return !copy || copy.textContent.trim() === 'Copy to Local';
+      })()
+    `,
+    "USB copy button preserves Copy to Local casing"
+  );
 
   for (const theme of ["warm-gold", "graphite-silver", "ivory-studio"]) {
     await evaluate(client, `window.localStorage.setItem('tikpal.surfaceTheme', ${JSON.stringify(theme)})`);
@@ -3762,6 +3958,10 @@ try {
     "document.querySelector('[aria-label=\"Queue\"]') === null && document.querySelector('[data-queue-panel]') === null",
     "player no longer exposes the inline queue panel"
   );
+
+  await navigate(client, `${APP_URL}?mode=player`);
+  await evaluate(client, "document.querySelector('[data-player-volume-back]')?.click();");
+  await expect(client, "document.querySelector('.player-overlay.is-active') === null && document.querySelector('.ambient-screen') !== null", "player volume Back exits to Ambient");
 
   await navigate(client, `${APP_URL}?mode=player`);
   await click(client, 10, 10);
@@ -3790,16 +3990,29 @@ try {
         const activeRoomIds = activeIds.filter((id) => id !== 'explore');
         return Boolean(switcher)
           && switcher.getBoundingClientRect().width >= 600
-          && labels.join('|') === 'Focus|Calm|Sleep|Hi-Fi|Explore'
+          && labels.join('|') === 'Focus|Calm|Sleep|Hi-Fi|Explore|Back'
           && shortcuts.every((node) => node.querySelector('svg'))
           && activeRoomIds.length === 1
           && activeIds.every((id) => id === 'explore' || activeRoomIds.includes(id))
           && rows.size === 1
-          && !document.querySelector('.console-back-button');
+          && document.querySelector('[data-console-back-button]') !== null;
       })()
     `,
     "Console shows one-row icon and text room shortcuts"
   );
+  await evaluate(
+    client,
+    `
+      (() => {
+        const target = document.querySelector('[data-console-back-button]');
+        target?.click();
+        return Boolean(target);
+      })()
+    `
+  );
+  await expect(client, "document.querySelector('.quick-settings.is-active') === null", "Console Back shortcut exits Console");
+  await navigate(client, `${APP_URL}?mode=quickSettings`);
+  await expect(client, "document.querySelector('.quick-settings.is-active') !== null", "Console reopens after Back shortcut test");
   await expect(
     client,
     `

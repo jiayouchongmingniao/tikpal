@@ -175,6 +175,7 @@ export function WebModeSidePanel() {
     try {
       const next = await sendWebModeAction({ type: "close" });
       setWebMode(next);
+      await refresh().catch(() => undefined);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "Close failed");
     } finally {

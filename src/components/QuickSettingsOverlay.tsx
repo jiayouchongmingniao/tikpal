@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Airplay, Bluetooth, Captions, Cast, Clock3, Cpu, Database, EthernetPort, Eye, EyeOff, Globe2, HardDrive, Info, Monitor, Moon, Music2, Palette, Power, Radio as RadioIcon, RotateCcw, Server, SlidersHorizontal, Target, Type, Usb, Volume2, Waves } from "lucide-react";
+import { Airplay, Bluetooth, Captions, Cast, Clock3, Cpu, Database, EthernetPort, Eye, EyeOff, Globe2, HardDrive, Info, LogOut, Monitor, Moon, Music2, Palette, Power, Radio as RadioIcon, RotateCcw, Server, SlidersHorizontal, Target, Type, Usb, Volume2, Waves } from "lucide-react";
 import { fetchAudioLibrary, fetchWebModeState, sendWebModeAction, updateWebModeSettings } from "../api/tikpalClient";
 import { getSourceDisplayStatus, getSourceDisplayStatusLabel } from "../sourceStatus";
 import type { TikpalDataStatus } from "../hooks/useTikpalState";
@@ -1159,6 +1159,17 @@ export function QuickSettingsOverlay({
                   </button>
                 );
               })}
+              <button
+                className="console-room-shortcut console-room-back"
+                data-room-shortcut="back"
+                data-console-back-button
+                type="button"
+                aria-label="Back to main screen"
+                onClick={handleReturnAmbient}
+              >
+                <LogOut size={17} />
+                <span>Back</span>
+              </button>
             </div>
             <span className="console-room-switcher-error" role="alert">{roomShortcutError ?? ""}</span>
           </div>

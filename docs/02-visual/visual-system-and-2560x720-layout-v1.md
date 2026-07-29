@@ -184,12 +184,12 @@ Center playback zone:
   - `Audio` can remain part of the backend state model, but it is not a visible primary tab in the source browser.
   - Center pane: source-specific content, especially curated Radio category rows and large touch targets.
   - Right pane: source detail, connection policy, readiness, and active session label.
-- Library browsing should keep the storage tier distinct from local taxonomy: storage uses `Local`, `NAS`, `USB`, `Favorites`, and `Recently Added`; Local then exposes the larger `Focus`, `Meditation`, and `Rest` categories with smaller subfolder chips beneath them.
-- Local subfolder chips use the manifest-backed curated order: `Focus` shows `Lo-fi / Ambient`, `Classical / Piano`, `Binaural / Alpha / Theta`, and `White Noise / Brown Noise`; `Meditation` shows `Guided Meditation`, `Breathing`, `Singing Bowl`, and `Nature Sounds`; `Rest` shows `Nap`, `Sleep`, `Rain / Ocean / Forest`, and `Deep Sleep Long Tracks`.
-- Local category folders should remain manifest-backed. `Meditation` should not absorb Rest folders such as Sleep, Rain, Ocean, Forest, Nap, or Deep Sleep long tracks unless the manifest itself categorizes them there.
+- Library browsing should keep the storage tier visible and flat: `Local`, `NAS`, `USB`, `Favorites`, and `Recently Added` are storage/filter tabs, and each tab renders track rows directly instead of adding a second category/subfolder chip layer.
+- Local and USB rows should include compact audio/file details when the backend exposes them. USB rows use a `Copy to Local` action; Local rows use `Delete`, but destructive deletion must first swap the action into explicit `Yes` / `No` confirmation buttons.
+- Long Library lists should reserve a fixed right-side fast-scroll rail, with a count and draggable thumb. Dragging the rail only scrolls; it must not preselect a track, auto-play on release, or cover Favorite / Copy / Delete controls.
 - Radio browsing is a curated listening surface, not a dense station directory.
   - Do not show search, genre filters, bitrate filters, or other second-layer controls in Player Radio.
-  - Use one Radio category layer: `Focus`, `Calm`, `Sleep`, `Jazz`, `Classical`, `News`, and `Hi-Fi`. Do not expose a Tikpal/moOde scope switch in Player.
+  - Use one Radio category layer: `Focus`, `Calm`, `Sleep`, `Jazz`, `Classical`, `News`, `Hi-Fi`, `Blues`, `Rock`, `World`, `Electronic`, `Podcast`, and final `Random`. Do not expose a Tikpal/moOde scope switch in Player.
   - Use official station logo thumbnails when the backend exposes `logoUrl`; generated covers are only a fallback when the logo file is unavailable.
   - Use large row height, broadcaster copy, quick-scan metadata pills, and obvious active/pending state.
 - Bluetooth, AirPlay, and DLNA should read like gated intake modes, not ordinary playlists.

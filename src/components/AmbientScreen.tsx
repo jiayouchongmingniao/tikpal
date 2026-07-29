@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { Bluetooth, Captions, CaptionsOff, Cast, GalleryHorizontalEnd, Globe2, Heart, LibraryBig, ListMusic, LoaderCircle, Moon, Music2, Network, Pause, Play, Radio as RadioIcon, Repeat1, Settings, Shuffle, SkipBack, SkipForward, SlidersHorizontal, SunMedium, Target, Volume2, VolumeX, Waves } from "lucide-react";
+import { Bluetooth, Captions, CaptionsOff, Cast, GalleryHorizontalEnd, Globe2, Heart, LibraryBig, ListMusic, LoaderCircle, LogOut, Moon, Music2, Network, Pause, Play, Radio as RadioIcon, Repeat1, Settings, Shuffle, SkipBack, SkipForward, SlidersHorizontal, SunMedium, Target, Volume2, VolumeX, Waves } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { fetchBackgroundVideos, fetchSceneContext } from "../api/tikpalClient";
 import { EqVisualScene, type HifiLyricsPanel } from "./EqVisualScene";
@@ -321,7 +321,6 @@ export function AmbientScreen({
   onExperienceAction
 }: AmbientScreenProps) {
   const dragStateRef = useRef<DragState | null>(null);
-  const adjustDismissTimerRef = useRef<number | null>(null);
   const sourcePickerRef = useRef<HTMLDivElement | null>(null);
   const lastSourcePickerOpenRequestRef = useRef(sourcePickerOpenRequest);
   const lastRoomSceneIdRef = useRef<string | null>(null);
@@ -664,7 +663,13 @@ export function AmbientScreen({
 
   function handlePlayModeChange(mode: PlaybackMode) {
     onHudActivity();
-    if (isPlaybackPending || mode === playMode) return;
+    if (isPlaybackPending) return;
+    if (mode === playMode) {
+      if (mode === "shuffle" && transportCapabilities?.next !== false) {
+        void onPlaybackAction("next");
+      }
+      return;
+    }
     void onPlaybackAction("play_mode_set", undefined, mode);
   }
 
@@ -889,13 +894,6 @@ export function AmbientScreen({
     };
   }, [handoffPendingSource, sourcePickerOpen]);
 
-  function clearAdjustDismissTimer() {
-    if (adjustDismissTimerRef.current !== null) {
-      window.clearTimeout(adjustDismissTimerRef.current);
-      adjustDismissTimerRef.current = null;
-    }
-  }
-
   function clearAdjustCommitTimer(channel: AmbientAdjustChannel) {
     const timer = adjustCommitTimersRef.current[channel];
     if (timer !== null) {
@@ -904,16 +902,7 @@ export function AmbientScreen({
     }
   }
 
-  function scheduleAdjustDismiss() {
-    clearAdjustDismissTimer();
-    adjustDismissTimerRef.current = window.setTimeout(() => {
-      adjustDismissTimerRef.current = null;
-      setAdjustOverlay((current) => (dragStateRef.current ? current : null));
-    }, 850);
-  }
-
   useEffect(() => () => {
-    clearAdjustDismissTimer();
     clearAdjustCommitTimer("volume");
     clearAdjustCommitTimer("brightness");
   }, []);
@@ -1069,7 +1058,6 @@ export function AmbientScreen({
 
   function startAdjust(channel: AmbientAdjustChannel, pointerId: number, startY: number, input: DragState["input"] = "pointer") {
     const startPercent = channel === "volume" ? system.volume.percent : brightnessPercent;
-    clearAdjustDismissTimer();
     dragStateRef.current = {
       channel,
       pointerId,
@@ -1103,7 +1091,6 @@ export function AmbientScreen({
       flushAdjustDispatch(dragState.channel);
     }
     dragStateRef.current = null;
-    scheduleAdjustDismiss();
   }
 
   function currentAdjustPercent(channel: AmbientAdjustChannel) {
@@ -1121,9 +1108,8 @@ export function AmbientScreen({
       setAdjustOverlay({
         channel,
         percent: brightnessPercent,
-        error: "DDC/CI brightness unavailable"
+        error: "Unavailable"
       });
-      scheduleAdjustDismiss();
       return;
     }
 
@@ -1140,7 +1126,6 @@ export function AmbientScreen({
       error: null
     });
     scheduleAdjustDispatch(channel, nextPercent);
-    scheduleAdjustDismiss();
   }
 
   function handleAmbientWheelCapture(event: React.WheelEvent<HTMLElement>) {
@@ -1168,7 +1153,7 @@ export function AmbientScreen({
         setAdjustOverlay({
           channel,
           percent: brightnessPercent,
-          error: "DDC/CI brightness unavailable"
+          error: "Unavailable"
         });
         return;
       }
@@ -1224,7 +1209,7 @@ export function AmbientScreen({
         setAdjustOverlay({
           channel,
           percent: brightnessPercent,
-          error: "DDC/CI brightness unavailable"
+          error: "Unavailable"
         });
         return;
       }
@@ -1269,6 +1254,17 @@ export function AmbientScreen({
     event.stopPropagation();
     finishAdjust();
   }, []);
+
+  function handleAdjustBack(event: React.MouseEvent<HTMLButtonElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    const channel = adjustOverlay?.channel;
+    if (channel) {
+      flushAdjustDispatch(channel);
+    }
+    dragStateRef.current = null;
+    setAdjustOverlay(null);
+  }
 
   const sourcePickerControl = (
     <div className="ambient-source-picker" ref={sourcePickerRef}>
@@ -1668,8 +1664,22 @@ export function AmbientScreen({
           <div className="ambient-adjust-indicator-copy">
             <strong>{adjustOverlay.channel === "volume" ? "Volume" : "Brightness"}</strong>
             <span>{adjustOverlay.percent}%</span>
-            <p>{adjustOverlay.error ?? (adjustOverlay.channel === "volume" ? "moOde live level" : "DDC/CI display level")}</p>
+            {adjustOverlay.error || adjustOverlay.channel === "brightness" ? (
+              <p>{adjustOverlay.error ?? "DDC/CI display level"}</p>
+            ) : null}
           </div>
+          <button
+            className="ambient-adjust-back"
+            type="button"
+            data-gesture-protected
+            data-ambient-adjust-back
+            aria-label={`Close ${adjustOverlay.channel === "volume" ? "volume" : "brightness"} adjustment`}
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={handleAdjustBack}
+          >
+            <LogOut size={16} />
+            <span>Back</span>
+          </button>
         </div>
       ) : null}
     </section>
