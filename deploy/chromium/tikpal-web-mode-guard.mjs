@@ -9,6 +9,7 @@ const providerLabel = process.env.TIKPAL_WEB_MODE_PROVIDER_LABEL || providerId |
 const proxyMode = process.env.TIKPAL_WEB_MODE_PROXY_MODE === "proxy" ? "proxy" : "direct";
 const errorPageBaseUrl = process.env.TIKPAL_WEB_MODE_ERROR_PAGE_URL || "http://127.0.0.1:4173/web-mode-error.html";
 const qqAutoConfirm = /^(1|true|yes|on|enabled)$/i.test(process.env.TIKPAL_WEB_MODE_QQ_AUTO_CONFIRM || "1");
+const qqAutoUnmute = /^(1|true|yes|on|enabled)$/i.test(process.env.TIKPAL_WEB_MODE_QQ_AUTO_UNMUTE || "1");
 const onboardAutoFocus = /^(1|true|yes|on|enabled)$/i.test(process.env.TIKPAL_WEB_MODE_ONBOARD_AUTO_FOCUS || "1");
 const allowProgrammaticInputFocus = providerId !== "suno";
 const launcherPath = fileURLToPath(new URL("./tikpal-web-mode.sh", import.meta.url));
@@ -137,9 +138,11 @@ const earlyRedirectTargets = new Set();
 const redirectedTargets = new Set();
 const targetProgressState = new Map();
 const inputFocusRequests = new Map();
+const qqAudioUnmuteAttempts = new Map();
 let lastOnboardVisible = null;
 let lastOnboardActionMs = 0;
 const providerNativeFailureIds = new Set(["amazon_music", "qobuz", "deezer"]);
+const qqAudioUnmuteCooldownMs = 5000;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -726,6 +729,58 @@ const qqClientPromptExpression = `(() => {
   return { handled: true, closed: true, retried };
 })()`;
 
+const qqAudioStateExpression = `(() => {
+  const icon = document.querySelector(".btn_big_voice");
+  const play = document.querySelector(".btn_big_play,.btn_big_pause");
+  if (!icon || !play) return { ready: false };
+  const rect = icon.getBoundingClientRect();
+  const iconText = String(icon.innerText || icon.title || "");
+  const iconClass = String(icon.className || "");
+  const playClass = String(play.className || "");
+  const scaleX = window.outerWidth && window.innerWidth ? window.outerWidth / window.innerWidth : window.devicePixelRatio || 1;
+  const scaleY = window.outerHeight && window.innerHeight ? window.outerHeight / window.innerHeight : window.devicePixelRatio || scaleX || 1;
+  return {
+    ready: true,
+    muted: iconClass.includes("btn_big_voice--no") || iconText.includes("打开声音"),
+    playing: playClass.includes("btn_big_play--pause"),
+    iconX: rect.x + rect.width / 2,
+    iconY: rect.y + rect.height / 2,
+    scaleX,
+    scaleY
+  };
+})()`;
+
+function qqWindowId() {
+  const result = spawnSync("xdotool", ["search", "--onlyvisible", "--name", "QQ音乐"], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"]
+  });
+  if (result.status !== 0) return "";
+  return String(result.stdout || "").trim().split(/\s+/).filter(Boolean).at(-1) || "";
+}
+
+function clickQqAudioIcon(state) {
+  const windowId = qqWindowId();
+  if (!windowId) return false;
+  const x = Math.max(0, Math.round(Number(state.iconX || 0) * Number(state.scaleX || 1)));
+  const y = Math.max(0, Math.round(Number(state.iconY || 0) * Number(state.scaleY || 1)));
+  if (!Number.isFinite(x) || !Number.isFinite(y) || x <= 0 || y <= 0) return false;
+
+  spawnSync("xdotool", ["windowfocus", windowId], { stdio: "ignore" });
+  const result = spawnSync("xdotool", [
+    "mousemove",
+    "--window",
+    windowId,
+    String(x),
+    String(y),
+    "click",
+    "--window",
+    windowId,
+    "1"
+  ], { stdio: "ignore" });
+  return result.status === 0;
+}
+
 async function installSinglePaneNavigation(target) {
   if (!isQqMusicPage(target)) return;
   if (!qqInjectedTargets.has(target.id)) {
@@ -1010,6 +1065,22 @@ const safeDismissPromptExpression = `(() => {
   const trialContextText = /(free trial|trial|try free|premium|subscribe|subscription|upgrade|membership|vip|免费试用|免費試用|试用|試用|会员|會員|订阅|訂閱|开通|開通|ทดลองใช้ฟรี|無料体験|プレミアム|구독|프리미엄)/i;
   const safeDismissActionText = /(close|dismiss|not now|no thanks|no, thanks|maybe later|skip|cancel|×|关闭|關閉|取消|不用了|不了|稍后|稍後|나중에|닫기|キャンセル|閉じる|あとで)/i;
   const dangerousActionText = /(start|try|subscribe|get premium|go premium|continue|accept|agree|login|log in|sign in|pay|purchase|buy|join|开始|開始|试用|試用|订阅|訂閱|购买|購買|支付|登录|登入|加入|开通|開通)/i;
+  const mediaControlText = /(play|pause|previous|next|mute|unmute|volume|sound|audio|播放|暂停|暫停|上一首|下一首|打开声音|打開聲音|关闭声音|關閉聲音|音量|音效)/i;
+  const mediaControlSelectors = [
+    "audio",
+    "video",
+    ".player__ft",
+    ".player_voice",
+    ".player_progress",
+    ".btn_big_voice",
+    ".btn_big_play",
+    ".btn_big_prev",
+    ".btn_big_next",
+    ".btn_audio_sound",
+    "[class*='volume' i]",
+    "[class*='mute' i]",
+    "[class*='voice' i]"
+  ].join(",");
   const buttonSelectors = [
     "button",
     "a",
@@ -1057,6 +1128,7 @@ const safeDismissPromptExpression = `(() => {
     textOf(element),
     metadataOf(element)
   ].filter(Boolean).join(" ");
+  const isMediaControl = (element, actionText) => Boolean(element.closest?.(mediaControlSelectors)) || mediaControlText.test(actionText);
   const visible = (element) => {
     if (!element) return false;
     const rect = element.getBoundingClientRect();
@@ -1101,6 +1173,7 @@ const safeDismissPromptExpression = `(() => {
       if (!candidate || seen.has(candidate) || !visible(candidate)) continue;
       seen.add(candidate);
       const actionText = actionTextOf(candidate);
+      if (isMediaControl(candidate, actionText)) continue;
       if (!safeDismissActionText.test(actionText)) continue;
       if (dangerousActionText.test(actionText) && !/no thanks|no, thanks|不用了|不了|关闭|關閉|close|dismiss|not now|maybe later|稍后|稍後|skip|cancel/i.test(actionText)) continue;
       const context = contextOf(candidate).slice(0, 2200);
@@ -1164,6 +1237,21 @@ async function runSafePromptFeatures(targets) {
   }
 }
 
+async function runQqAudioFeatures(targets) {
+  if (providerId !== "qq_music" || !qqAutoUnmute) return;
+  for (const target of targets.filter(isQqMusicPlayerPage)) {
+    const state = await evaluate(target.webSocketDebuggerUrl, qqAudioStateExpression).catch(() => null);
+    if (!state?.ready || !state.playing || !state.muted) continue;
+    const previousAttempt = qqAudioUnmuteAttempts.get(target.id) || 0;
+    if (Date.now() - previousAttempt < qqAudioUnmuteCooldownMs) continue;
+    qqAudioUnmuteAttempts.set(target.id, Date.now());
+    if (clickQqAudioIcon(state)) {
+      console.log("[tikpal-web-mode-guard] unmuted QQ player");
+      return;
+    }
+  }
+}
+
 async function guardOnce() {
   if (typeof WebSocket !== "function") return;
   const targets = (await readTargets()).filter(isPageTarget);
@@ -1176,6 +1264,7 @@ async function guardOnce() {
   await runConsentFeatures(targets);
   await runSafeDismissFeatures(targets);
   await runSafePromptFeatures(targets);
+  await runQqAudioFeatures(targets);
 }
 
 if (process.argv.includes("--check")) {
@@ -1195,6 +1284,7 @@ if (process.argv.includes("--check")) {
   console.log(`[tikpal-web-mode-guard] input focus keyboard: ${onboardAutoFocus ? "1" : "0"}`);
   console.log(`[tikpal-web-mode-guard] empty page timeout: ${Math.round(emptyPageTimeoutMs / 1000)}s`);
   console.log(`[tikpal-web-mode-guard] qq auto confirm: ${qqAutoConfirm ? "1" : "0"}`);
+  console.log(`[tikpal-web-mode-guard] qq auto unmute: ${qqAutoUnmute ? "1" : "0"}`);
   console.log("[tikpal-web-mode-guard] youtube safe dismiss: 1");
   console.log(`[tikpal-web-mode-guard] accept-all labels: ${consentAcceptAllLabels.join(",")}`);
   console.log(`[tikpal-web-mode-guard] safe labels: ${safeLabels.join(",")}`);

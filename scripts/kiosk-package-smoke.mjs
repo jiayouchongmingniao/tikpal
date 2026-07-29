@@ -6,13 +6,14 @@ import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { buildProxyConfig, buildProxyKey, nextLowerProviderTextScale, normalizeProviderTextScale } from "../deploy/chromium/web-mode-extension/background.js";
+import { buildProxyConfig, buildProxyKey, normalizeProviderTextScale } from "../deploy/chromium/web-mode-extension/background.js";
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 
 const requiredFiles = [
   "server/index.mjs",
   "server/web.mjs",
+  "docs/06-deployment/gentoo-kiosk-deploy-v1.md",
   "docs/06-deployment/raspberry-pi-kiosk-deploy-v1.md",
   "deploy/chromium/launch-tikpal-kiosk.sh",
   "deploy/chromium/start-tikpal-kiosk-devtools-proxy.sh",
@@ -147,7 +148,7 @@ async function run() {
   }
   assertThrows(() => buildProxyConfig({ proxyEnabled: true, proxyUrl: "ftp://proxy.local:21" }), "extension should reject unsupported proxy protocols");
   assert(normalizeProviderTextScale(1.2) === 1.2 && normalizeProviderTextScale("1.10") === 1.1, "extension should normalize supported provider text scales");
-  assert(nextLowerProviderTextScale(1.2) === 1.1 && nextLowerProviderTextScale(1.1) === 1.05 && nextLowerProviderTextScale(1.05) === 1, "extension should degrade overflowing provider text scale in bounded steps");
+  assert(normalizeProviderTextScale(1.05) === 1.1, "extension should keep provider text scale to the supported Small / Medium / Large values");
   assert(
     buildProxyKey({ proxyEnabled: true, proxyUrl: "http://proxy.local:8080", providerTextScale: 1 })
       === buildProxyKey({ proxyEnabled: true, proxyUrl: "http://proxy.local:8080", providerTextScale: 1.2 }),
@@ -481,8 +482,8 @@ esac
   assert(extensionContent.includes("window.location.reload()"), "provider pages should refresh after a proxy revision change");
   assert(extensionContent.includes("window.location.replace(provider.url)"), "provider bootstrap should navigate only after proxy sync succeeds");
   assert(!extensionBackground.includes("setZoom(") && !extensionBackground.includes("setZoomSettings") && !extensionBackground.includes("getZoom"), "Explore extension should avoid Chrome tab zoom so the browser zoom bubble never appears");
-  assert(extensionContent.includes("tikpal-provider-text-scale-style") && extensionContent.includes("zoom: var(--tikpal-provider-text-scale)") && extensionContent.includes("window.__tikpalProviderTextScale"), "provider pages should apply text scale through injected CSS");
-  assert(extensionContent.includes("providerTextScaleFallbackValues") && extensionContent.includes("nextLowerProviderTextScale") && extensionContent.includes("scrollWidth > width + 16"), "provider pages should degrade CSS text scale when the left pane overflows");
+  assert(extensionContent.includes("tikpal-provider-text-scale-style") && extensionContent.includes("scaleProviderTextElements") && extensionContent.includes("element.style.fontSize") && extensionContent.includes("window.__tikpalProviderTextScale"), "provider pages should apply text scale to detected text elements");
+  assert(extensionContent.includes('document.documentElement.style.zoom = ""') && !extensionContent.includes("zoom: var(--tikpal-provider-text-scale)") && !extensionContent.includes("nextLowerProviderTextScale"), "provider pages should avoid Chrome/page zoom and overflow fallback loops");
   assert(!extensionContent.includes("provider-zoom-overflow"), "provider pages should not round-trip overflow fallback through the background service worker");
   assert(extensionContent.includes("netease-audio-mirror.js"), "NetEase provider pages should inject the audio mirror into the page world");
   assert(extensionBackground.includes("isAllowedNeteaseAudioUrl") && extensionBackground.includes('message?.type === "fetch-audio"') && extensionBackground.includes("chrome.tabs.sendMessage"), "Explore extension background should proxy only allowed NetEase audio fetches in chunks");
@@ -551,10 +552,10 @@ esac
   assert(kioskSession.includes("TIKPAL_KIOSK_X_COMMAND_TIMEOUT_SECONDS"), "kiosk session should expose an X command timeout");
   assert(kioskSession.includes("run_x_command xset"), "kiosk session should bound xset commands");
   assert(kioskSession.includes("GTK_IM_MODULE=fcitx") && kioskSession.includes("XMODIFIERS=@im=fcitx"), "kiosk session should expose Fcitx5 to Chromium/X11");
-  assert(kioskSession.includes("DefaultIM=pinyin") && kioskSession.includes("Name=keyboard-us"), "kiosk session should seed English and Simplified Chinese Pinyin");
+  assert(kioskSession.includes("DefaultIM=pinyin") && kioskSession.includes("Name=keyboard-us") && kioskSession.includes("Name=pinyin") && kioskSession.includes("Name=anthy") && kioskSession.includes("Name=keyboard-es"), "kiosk session should seed English, Chinese, Japanese, and Spanish input methods");
   assert(kioskSession.includes("0=F9") && kioskSession.includes("1=Control+space"), "kiosk session should configure touch and hardware input-method toggles without opening Chromium DevTools");
-  assert(kioskSession.includes("ActiveByDefault=False") && kioskSession.includes("ShareInputState=No"), "kiosk input should start in English without sharing state across applications");
-  assert(kioskSession.includes('Font="AR PL UMing CN 12"'), "Fcitx5 should render readable Chinese candidates on the physical display");
+  assert(kioskSession.includes("ActiveByDefault=False") && kioskSession.includes("ShareInputState=All"), "kiosk input should start inactive while sharing the selected method across provider windows");
+  assert(kioskSession.includes('candidate_font="Source Han Sans CN 16"') && kioskSession.includes('candidate_font="Noto Sans CJK SC 16"'), "Fcitx5 should render large CJK candidates with the best available kiosk font");
   assert(kioskSession.includes("fcitx5 -d --replace"), "kiosk session should start Fcitx5 before Chromium");
   assert(kioskSession.includes("TIKPAL_KIOSK_RESET_WEB_MODE_ON_START") && kioskSession.includes('"$SCRIPT_DIR/tikpal-web-mode.sh" close'), "kiosk session should close Explore and clear provider state before launching the main kiosk");
   assert(webModeScript.includes("nohup \"$SCRIPT_DIR/tikpal-web-mode.sh\" guard"), "web mode should keep the window guard alive after the launcher exits");
@@ -653,17 +654,18 @@ esac
   assert(webModeScript.lastIndexOf("raise_onboard", webModeScript.indexOf("start_window_guard()")) > webModeScript.indexOf('raise_window_without_focus "$keep_window"'), "window guard should restore Onboard above the kept provider window");
   assert(webModeScript.includes("install_onboard_ime_toggle_script"), "web mode should install the direct Fcitx5 Onboard toggle script");
   assert(webModeScript.includes("install_onboard_ime_color_scheme"), "web mode should install Tikpal's Onboard IME color scheme");
-  assert(webModeScript.includes('script=\\"tikpalImeToggle\\"'), "Onboard should use a direct script key for the Fcitx5 toggle instead of a swallowed hotkey");
-  assert(webModeScript.includes('svg_id=\\"LWIN\\"'), "Onboard should keep the input-method toggle in the Compact Super key position");
-  assert(webModeScript.includes('theme_id=\\"TIKPAL-IME-INACTIVE\\"') && webModeScript.includes('theme_id=\\"TIKPAL-IME-ACTIVE\\"'), "Onboard should use separate theme ids for inactive and active IME visuals");
-  assert(webModeScript.includes('label=\\"中/EN\\"'), "Onboard should label the input-method toggle in Chinese and English");
-  assert(webModeScript.includes('label=\\"中文\\"'), "Onboard should make the active Chinese IME state readable on the key itself");
-  assert(webModeScript.includes("Tikpal-Compact-Pinyin.onboard"), "Onboard should have a separate active Pinyin layout for visual feedback");
+  assert(webModeScript.includes('key.set("script", "tikpalImeToggle")'), "Onboard should use a direct script key for the Fcitx5 toggle instead of a swallowed hotkey");
+  assert(webModeScript.includes('key.set("svg_id", "LWIN")'), "Onboard should keep the input-method toggle in the Compact Super key position");
+  assert(webModeScript.includes('"ime_theme": "TIKPAL-IME-INACTIVE"') && webModeScript.includes('"ime_theme": "TIKPAL-IME-ACTIVE"'), "Onboard should use separate theme ids for inactive and active IME visuals");
+  assert(webModeScript.includes('"ime_label": "EN"') && webModeScript.includes('"ime_label": "中文"') && webModeScript.includes('"ime_label": "日本語"') && webModeScript.includes('"ime_label": "ES"'), "Onboard should label the input-method key for all four modes");
+  assert(webModeScript.includes('"SPCE": "空格"') && webModeScript.includes('"SPCE": "変換"') && webModeScript.includes('"SPCE": "Espacio"'), "Onboard should localize main action labels for Chinese, Japanese, and Spanish");
+  assert(webModeScript.includes('"AC10": "Ñ"') && webModeScript.includes('"AE12": "¡ ¿"') && webModeScript.includes('"AC11": "´ ¨"') && webModeScript.includes('"BKSL": "Ç"'), "Onboard should show the visible Spanish keycap differences");
+  assert(webModeScript.includes("Tikpal-Compact-Pinyin.onboard") && webModeScript.includes("Tikpal-Compact-Japanese.onboard") && webModeScript.includes("Tikpal-Compact-Spanish.onboard"), "Onboard should have separate visual layouts for every non-English mode");
   assert(webModeScript.includes("Tikpal-Classic.colors"), "Onboard should apply Tikpal's color scheme for the IME key");
   assert(webModeScript.includes("tikpalImeToggle.py --sync"), "Onboard should sync the IME key visual state when the keyboard is configured");
   assert(webModeScript.includes("sync_onboard_input_method_visual") && webModeScript.indexOf("sync_onboard_input_method_visual", webModeScript.indexOf("ensure_onboard()")) < webModeScript.indexOf("call_onboard_method Show", webModeScript.indexOf("ensure_onboard()")), "Onboard should reapply the IME color scheme after the Onboard process starts");
-  assert(onboardImeToggleScript.includes('fcitx5-remote') && onboardImeToggleScript.includes('"-s", "pinyin"') && onboardImeToggleScript.includes('"-s", "keyboard-us"'), "Onboard IME toggle script should switch Fcitx5 directly between English and Pinyin");
-  assert(onboardImeToggleScript.includes("Tikpal-Compact-Pinyin.onboard") && onboardImeToggleScript.includes("Tikpal-Classic.colors"), "Onboard IME toggle script should update layout and color scheme after switching input methods");
+  assert(onboardImeToggleScript.includes('fcitx5-remote') && onboardImeToggleScript.includes('"id": "keyboard-us"') && onboardImeToggleScript.includes('"id": "pinyin"') && onboardImeToggleScript.includes('"id": "anthy"') && onboardImeToggleScript.includes('"id": "keyboard-es"'), "Onboard IME toggle script should cycle Fcitx5 directly through English, Chinese, Japanese, and Spanish");
+  assert(onboardImeToggleScript.includes("Tikpal-Compact-Pinyin.onboard") && onboardImeToggleScript.includes("Tikpal-Compact-Japanese.onboard") && onboardImeToggleScript.includes("Tikpal-Compact-Spanish.onboard") && onboardImeToggleScript.includes("Tikpal-Classic.colors"), "Onboard IME toggle script should update layout and color scheme after switching input methods");
   assert(onboardImeToggleScript.includes('"--sync"'), "Onboard IME toggle script should expose a visual-state sync mode");
   assert(onboardTheme.includes("TIKPAL-IME-ACTIVE") && onboardTheme.includes("#35d0ba"), "Tikpal Onboard theme should define a clear active color for the IME key");
   assert(systemdInstaller.includes("install_onboard_themes") && systemdInstaller.includes("Tikpal-Classic.colors"), "systemd installer should install Tikpal's Onboard IME color scheme");

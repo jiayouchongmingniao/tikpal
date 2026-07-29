@@ -1020,7 +1020,7 @@ export function AmbientScreen({
             : nextState.system.display.brightnessPercent;
 
           setAdjustOverlay((current) => (
-            current && current.channel === channel
+            current && current.channel === channel && requestState.queued === null
               ? { ...current, percent: target, error: null }
               : current
           ));

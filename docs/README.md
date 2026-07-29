@@ -12,11 +12,11 @@ This directory is the source of truth for Tikpal product, UX, visual, architectu
 
 ## Current Scope
 
-- Tikpal targets a Raspberry Pi 4 running Chromium kiosk at 2560 x 720.
+- Tikpal targets a Raspberry Pi 4 or Gentoo systemd host running Chromium kiosk at 2560 x 720.
 - The current implementation uses Vite + React + TypeScript, a local Node API, and a fireplace image plus local MP4 ambience layer. WebGL remains an architecture/performance track for future renderers rather than the active flame surface.
 - The default screen is an ambient flame screen, not a conventional app homepage.
-- moOde / MPD remains the playback and system capability owner; Tikpal presents a focused touch UI over those capabilities.
-- Batch 3 now includes a local API bridge, frontend API read/write path, a repo-owned Chromium kiosk package, and an optional native MPD backend for moOde devices.
+- moOde / MPD remains the original playback and system capability owner; the Gentoo migration path keeps the MPD contract while using Portage, systemd, ALSA direct output, and Gentoo-managed kiosk dependencies.
+- Batch 3 now includes a local API bridge, frontend API read/write path, a repo-owned Chromium kiosk package, an optional native MPD backend for moOde devices, and a Gentoo physical-kiosk runbook.
 
 ## Document Index
 
@@ -61,6 +61,7 @@ This directory is the source of truth for Tikpal product, UX, visual, architectu
 | Document | Status | Purpose |
 | --- | --- | --- |
 | [Raspberry Pi kiosk deploy v1](06-deployment/raspberry-pi-kiosk-deploy-v1.md) | Current reference | Pi sync, systemd install, Chromium kiosk launch, verification, and rollback. |
+| [Gentoo kiosk deploy v1](06-deployment/gentoo-kiosk-deploy-v1.md) | Current reference | Gentoo systemd migration, physical display, Portage audio/kiosk setup, Explore provider validation, and rollback. |
 
 ### Marketing
 

@@ -27,10 +27,14 @@
     if (lastKeyboardEnabled === enabled && now - lastKeyboardRequestMs < throttleMs) return;
     lastKeyboardEnabled = enabled;
     lastKeyboardRequestMs = now;
-    chrome.runtime.sendMessage({ type: "keyboard", enabled, force }, () => undefined);
+    chrome.runtime.sendMessage({ type: "keyboard", enabled, force }, (response) => {
+      if (chrome.runtime.lastError || response?.ok === false) {
+        lastKeyboardEnabled = null;
+      }
+    });
   };
   const requestShow = (event) => {
-    if (!document.hasFocus()) return;
+    if (event.type !== "pointerdown" && !document.hasFocus()) return;
     if (event.type === "focusin" && !allowProgrammaticInputFocus) return;
     const path = typeof event.composedPath === "function" ? event.composedPath() : [event.target];
     const target = path.map(editableTarget).find(Boolean);
@@ -86,6 +90,38 @@
       requestKeyboard(false);
     }
   }, true);
+
+  const isBrowserZoomKey = (event) => {
+    if (!event.ctrlKey && !event.metaKey) return false;
+    const key = String(event.key || "").toLowerCase();
+    const code = String(event.code || "").toLowerCase();
+    return [
+      "+", "=", "-", "_", "0", "numpadadd", "numpadsubtract", "numpad0", "minus", "equal", "digit0"
+    ].includes(key) || [
+      "numpadadd", "numpadsubtract", "numpad0", "minus", "equal", "digit0"
+    ].includes(code);
+  };
+
+  const preventBrowserZoom = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+  };
+
+  document.addEventListener("keydown", (event) => {
+    if (isBrowserZoomKey(event)) preventBrowserZoom(event);
+  }, true);
+  document.addEventListener("wheel", (event) => {
+    if (event.ctrlKey || event.metaKey) preventBrowserZoom(event);
+  }, { capture: true, passive: false });
+  document.addEventListener("touchstart", (event) => {
+    if (event.touches?.length > 1) preventBrowserZoom(event);
+  }, { capture: true, passive: false });
+  document.addEventListener("touchmove", (event) => {
+    if (event.touches?.length > 1) preventBrowserZoom(event);
+  }, { capture: true, passive: false });
+  ["gesturestart", "gesturechange", "gestureend"].forEach((type) => {
+    document.addEventListener(type, preventBrowserZoom, { capture: true, passive: false });
+  });
 
   const retarget = (root = document) => {
     root.querySelectorAll?.('a[target="_blank"]').forEach((link) => {
@@ -157,13 +193,22 @@
 
   const bootstrapUrl = "http://127.0.0.1:4173/web-mode-transition.html";
   const providerTextScaleValues = [1, 1.1, 1.2];
-  const providerTextScaleFallbackValues = [1.2, 1.1, 1.05, 1];
   let initialProxyKey = null;
   let desiredProviderTextScale = null;
   let activeProviderTextScale = 1;
-  let textScaleOverflowTimer = null;
-  let textScaleOverflowRequestMs = 0;
+  let lastProviderTextScaleScanMs = 0;
+  let lastProviderTextScaleElementCount = 0;
   let syncing = false;
+  const providerTextScaleStyleId = "tikpal-provider-text-scale-style";
+  const providerTextScaleSelector = [
+    "a", "button", "div", "em", "h1", "h2", "h3", "h4", "h5", "h6",
+    "input", "label", "li", "p", "select", "small", "span", "strong",
+    "td", "textarea", "th"
+  ].join(",");
+  const providerTextScaleSkipSelector = [
+    "audio", "canvas", "iframe", "img", "noscript", "picture", "script",
+    "source", "style", "svg", "video"
+  ].join(",");
 
   const isLoopbackHost = (host) => /^(localhost|127\.0\.0\.1|\[::1\])$/i.test(host);
   const isProviderPage = () => /^https?:$/i.test(window.location.protocol) && !isLoopbackHost(window.location.hostname);
@@ -172,72 +217,113 @@
     const rounded = Math.round(numeric * 100) / 100;
     return providerTextScaleValues.find((candidate) => Math.abs(candidate - rounded) < 0.001) ?? fallback;
   };
-  const nextLowerProviderTextScale = (value) => {
-    const numeric = typeof value === "number" ? value : Number(String(value ?? "").trim());
-    return providerTextScaleFallbackValues.find((candidate) => candidate < numeric - 0.001) ?? 1;
-  };
-  const hasHorizontalOverflow = () => {
-    const width = Math.ceil(window.innerWidth || document.documentElement?.clientWidth || 0);
-    if (!width) return false;
-    const scrollWidth = Math.max(
-      document.documentElement?.scrollWidth || 0,
-      document.body?.scrollWidth || 0
-    );
-    return scrollWidth > width + 16;
-  };
-  const ensureTextScaleStyle = () => {
-    if (document.getElementById("tikpal-provider-text-scale-style")) return;
-    const style = document.createElement("style");
-    style.id = "tikpal-provider-text-scale-style";
-    style.textContent = `
-      html[data-tikpal-provider-text-scale] {
-        zoom: var(--tikpal-provider-text-scale) !important;
-      }
-    `;
-    (document.head || document.documentElement).appendChild(style);
-  };
-  const applyProviderTextScale = (scale) => {
-    if (!isProviderPage() || !document.documentElement) return activeProviderTextScale;
-    activeProviderTextScale = scale;
-    ensureTextScaleStyle();
+  const providerTextDensity = (scale) => scale;
+  const ensureProviderTextScaleStyle = (scale) => {
     const root = document.documentElement;
-    root.dataset.tikpalProviderTextScale = scale.toFixed(2);
-    root.style.setProperty("--tikpal-provider-text-scale", scale.toFixed(2));
+    if (!root || !document.head) return;
+    const density = providerTextDensity(scale);
+    let style = document.getElementById(providerTextScaleStyleId);
+    if (!style) {
+      style = document.createElement("style");
+      style.id = providerTextScaleStyleId;
+      document.head.appendChild(style);
+    }
+    style.textContent = `
+html[data-tikpal-provider-text-scale] {
+  -webkit-text-size-adjust: 100% !important;
+  text-size-adjust: 100% !important;
+}
+`;
+    root.style.setProperty("--tikpal-provider-text-density", density.toFixed(3));
+  };
+  const hasDirectText = (element) => {
+    for (const node of element.childNodes || []) {
+      if (node.nodeType === Node.TEXT_NODE && String(node.nodeValue || "").trim()) return true;
+    }
+    return false;
+  };
+  const shouldScaleProviderTextElement = (element) => {
+    if (!(element instanceof HTMLElement)) return false;
+    if (element.matches(providerTextScaleSkipSelector) || element.closest(providerTextScaleSkipSelector)) return false;
+    const tagName = element.tagName.toLowerCase();
+    const isTextControl = ["button", "input", "select", "textarea"].includes(tagName);
+    if (!isTextControl && !hasDirectText(element)) return false;
+    const rect = element.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return false;
+    const style = getComputedStyle(element);
+    if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity || 1) <= 0) return false;
+    const fontSize = Number.parseFloat(style.fontSize);
+    return Number.isFinite(fontSize) && fontSize >= 8 && fontSize <= 48;
+  };
+  const restoreProviderTextElement = (element) => {
+    const originalInline = element.dataset.tikpalTextScaleInlineFontSize || "";
+    if (originalInline) {
+      element.style.fontSize = originalInline;
+    } else {
+      element.style.removeProperty("font-size");
+    }
+    delete element.dataset.tikpalTextScaleInlineFontSize;
+    delete element.dataset.tikpalTextScaleBaseFontSize;
+  };
+  const scaleProviderTextElements = (scale, force = false) => {
+    const now = Date.now();
+    if (!force && now - lastProviderTextScaleScanMs < 1200) return;
+    lastProviderTextScaleScanMs = now;
+    const density = providerTextDensity(scale);
+    const active = Math.abs(density - 1) > 0.001;
+    let elementCount = 0;
+    document.querySelectorAll(providerTextScaleSelector).forEach((element) => {
+      const tracked = element instanceof HTMLElement && element.dataset.tikpalTextScaleBaseFontSize;
+      if (!tracked && !shouldScaleProviderTextElement(element)) return;
+      if (!(element instanceof HTMLElement)) return;
+      if (!active) {
+        if (tracked) restoreProviderTextElement(element);
+        return;
+      }
+      if (!tracked) {
+        const fontSize = Number.parseFloat(getComputedStyle(element).fontSize);
+        if (!Number.isFinite(fontSize)) return;
+        element.dataset.tikpalTextScaleBaseFontSize = fontSize.toFixed(3);
+        element.dataset.tikpalTextScaleInlineFontSize = element.style.fontSize || "";
+      }
+      const baseFontSize = Number.parseFloat(element.dataset.tikpalTextScaleBaseFontSize || "");
+      if (!Number.isFinite(baseFontSize)) return;
+      element.style.fontSize = `${Math.max(8, Math.min(58, baseFontSize * density)).toFixed(2)}px`;
+      elementCount += 1;
+    });
+    lastProviderTextScaleElementCount = elementCount;
+  };
+  const recordProviderTextScale = (scale, source = "extension") => {
+    const root = document.documentElement;
+    if (root) {
+      root.dataset.tikpalProviderTextScale = scale.toFixed(2);
+      root.dataset.tikpalProviderHost = window.location.hostname;
+      root.style.setProperty("--tikpal-provider-text-scale", scale.toFixed(2));
+    }
     window.__tikpalProviderTextScale = {
       desired: desiredProviderTextScale ?? scale,
-      applied: activeProviderTextScale
+      applied: activeProviderTextScale,
+      density: providerTextDensity(activeProviderTextScale),
+      elementCount: lastProviderTextScaleElementCount,
+      source
     };
+  };
+  const applyProviderTextScale = (scale, force = false) => {
+    if (!isProviderPage() || !document.documentElement) return activeProviderTextScale;
+    activeProviderTextScale = normalizeProviderTextScale(scale, scale);
+    document.documentElement.style.zoom = "";
+    ensureProviderTextScaleStyle(activeProviderTextScale);
+    scaleProviderTextElements(activeProviderTextScale, force);
+    recordProviderTextScale(activeProviderTextScale, "content-text-density");
     return activeProviderTextScale;
   };
   const setDesiredProviderTextScale = (value) => {
     const nextDesired = normalizeProviderTextScale(value);
-    if (desiredProviderTextScale === null || Math.abs(nextDesired - desiredProviderTextScale) > 0.001) {
-      desiredProviderTextScale = nextDesired;
-      activeProviderTextScale = nextDesired;
-    }
-    applyProviderTextScale(activeProviderTextScale);
-    if (activeProviderTextScale > 1.001) scheduleTextScaleOverflowCheck();
+    const changed = desiredProviderTextScale === null || Math.abs(nextDesired - desiredProviderTextScale) > 0.001;
+    desiredProviderTextScale = nextDesired;
+    activeProviderTextScale = nextDesired;
+    applyProviderTextScale(activeProviderTextScale, changed);
   };
-  const requestTextScaleFallbackIfNeeded = () => {
-    if (!isProviderPage() || activeProviderTextScale <= 1.001 || !hasHorizontalOverflow()) return;
-    const now = Date.now();
-    if (now - textScaleOverflowRequestMs < 900) return;
-    textScaleOverflowRequestMs = now;
-    const nextScale = nextLowerProviderTextScale(activeProviderTextScale);
-    if (Math.abs(activeProviderTextScale - nextScale) < 0.001) return;
-    applyProviderTextScale(nextScale);
-    if (activeProviderTextScale > 1.001) scheduleTextScaleOverflowCheck();
-  };
-  const scheduleTextScaleOverflowCheck = () => {
-    if (!isProviderPage()) return;
-    if (textScaleOverflowTimer !== null) window.clearTimeout(textScaleOverflowTimer);
-    textScaleOverflowTimer = window.setTimeout(() => {
-      textScaleOverflowTimer = null;
-      requestTextScaleFallbackIfNeeded();
-      window.setTimeout(requestTextScaleFallbackIfNeeded, 1600);
-    }, 650);
-  };
-  window.addEventListener("load", scheduleTextScaleOverflowCheck, { once: true });
 
   const syncProxy = async () => {
     if (syncing) return;

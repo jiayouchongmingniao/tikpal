@@ -61,6 +61,14 @@ Layout=
 Name=pinyin
 Layout=
 
+[Groups/0/Items/2]
+Name=anthy
+Layout=
+
+[Groups/0/Items/3]
+Name=keyboard-es
+Layout=
+
 [GroupOrder]
 0=Default
 EOF
@@ -71,16 +79,23 @@ EOF
 
 [Behavior]
 ActiveByDefault=False
-ShareInputState=No
+ShareInputState=All
 ShowInputMethodInformation=False
 showInputMethodInformationWhenFocusIn=False
 ShowFirstInputMethodInformation=False
 DefaultPageSize=5
 EOF
   mkdir -p "$config_dir/conf"
-  cat >"$config_dir/conf/classicui.conf" <<'EOF'
+  local candidate_font="Source Han Sans CN 16"
+  if command -v fc-match >/dev/null 2>&1 &&
+    fc-match "Noto Sans CJK SC" 2>/dev/null | grep -qi "Noto Sans CJK"; then
+    candidate_font="Noto Sans CJK SC 16"
+  fi
+  cat >"$config_dir/conf/classicui.conf" <<EOF
 Vertical Candidate List=False
-Font="AR PL UMing CN 12"
+Font="$candidate_font"
+MenuFont="$candidate_font"
+TrayFont="$candidate_font"
 EOF
   export GTK_IM_MODULE=fcitx
   export QT_IM_MODULE=fcitx

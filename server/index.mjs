@@ -48,6 +48,7 @@ const DDCUTIL_UNAVAILABLE_BACKOFF_MS = Number.isFinite(DDCUTIL_UNAVAILABLE_BACKO
   : Math.max(1_800_000, DDCUTIL_READ_CACHE_MS);
 const DDCUTIL_SUPPRESS_READ_WARNINGS = parseEnvBoolean(process.env.TIKPAL_DDCUTIL_SUPPRESS_READ_WARNINGS ?? "1");
 const DDCUTIL_SUPPRESS_SYSLOG = parseEnvBoolean(process.env.TIKPAL_DDCUTIL_SUPPRESS_SYSLOG ?? "1");
+const RUNTIME_DRM_MODE_ENABLED = parseEnvBoolean(process.env.TIKPAL_RUNTIME_DRM_MODE_ENABLED ?? "1");
 const RUNTIME_DRM_MODE_TIMEOUT_MS_RAW = Number(process.env.TIKPAL_RUNTIME_DRM_MODE_TIMEOUT_MS ?? 500);
 const RUNTIME_DRM_MODE_TIMEOUT_MS = Number.isFinite(RUNTIME_DRM_MODE_TIMEOUT_MS_RAW) && RUNTIME_DRM_MODE_TIMEOUT_MS_RAW > 0
   ? RUNTIME_DRM_MODE_TIMEOUT_MS_RAW
@@ -3067,6 +3068,10 @@ function normalizeKioskWindow(value) {
 }
 
 async function getRuntimeSnapshot() {
+  if (!RUNTIME_DRM_MODE_ENABLED) {
+    return buildRuntimeSnapshot(normalizeKioskWindow(REQUESTED_KIOSK_WINDOW) ?? REQUESTED_KIOSK_WINDOW);
+  }
+
   const drmMode = await runCommand(
     "for status in /sys/class/drm/card*-*/status; do [ -f \"$status\" ] || continue; if grep -qx connected \"$status\"; then modes=\"${status%/status}/modes\"; [ -s \"$modes\" ] && sed -n '1p' \"$modes\" && exit 0; fi; done",
     { allowFailure: true, timeout: RUNTIME_DRM_MODE_TIMEOUT_MS }

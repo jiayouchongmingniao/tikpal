@@ -68,6 +68,30 @@
             TIKPAL-IME-INACTIVE
         </key_group>
         <key_group>
+            <color element="fill"   rgb="#f6efe2"/>
+            <color element="stroke" rgb="#3f3428"/>
+            <color element="label"  rgb="#1f2937"/>
+            TIKPAL-KEY-EN
+        </key_group>
+        <key_group>
+            <color element="fill"   rgb="#dff7ed"/>
+            <color element="stroke" rgb="#0f766e"/>
+            <color element="label"  rgb="#052e2b"/>
+            TIKPAL-KEY-PINYIN
+        </key_group>
+        <key_group>
+            <color element="fill"   rgb="#e8ecff"/>
+            <color element="stroke" rgb="#4338ca"/>
+            <color element="label"  rgb="#1e1b4b"/>
+            TIKPAL-KEY-JAPANESE
+        </key_group>
+        <key_group>
+            <color element="fill"   rgb="#fff0c7"/>
+            <color element="stroke" rgb="#b45309"/>
+            <color element="label"  rgb="#3b2600"/>
+            TIKPAL-KEY-SPANISH
+        </key_group>
+        <key_group>
             <color element="fill"   rgb="#35d0ba"/>
             <color element="fill"   rgb="#21a99b" pressed="true"/>
             <color element="stroke" rgb="#064e45"/>

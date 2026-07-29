@@ -1,18 +1,12 @@
 const API_ROOT = "http://127.0.0.1:8787/api/v1";
 const BYPASS_LIST = ["localhost", "127.0.0.1", "[::1]", "<local>"];
 const PROVIDER_TEXT_SCALE_VALUES = [1, 1.1, 1.2];
-const PROVIDER_TEXT_SCALE_FALLBACK_VALUES = [1.2, 1.1, 1.05, 1];
 
 export function normalizeProviderTextScale(value, fallback = 1.1) {
   const numeric = typeof value === "number" ? value : Number(String(value ?? "").trim());
   const rounded = Math.round(numeric * 100) / 100;
   const allowed = PROVIDER_TEXT_SCALE_VALUES.find((candidate) => Math.abs(candidate - rounded) < 0.001);
   return allowed ?? fallback;
-}
-
-export function nextLowerProviderTextScale(value) {
-  const numeric = typeof value === "number" ? value : Number(String(value ?? "").trim());
-  return PROVIDER_TEXT_SCALE_FALLBACK_VALUES.find((candidate) => candidate < numeric - 0.001) ?? 1;
 }
 
 export function buildProxyConfig(settings = {}) {
@@ -187,11 +181,15 @@ if (globalThis.chrome?.runtime?.onMessage) {
         .catch((error) => sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) }));
       return true;
     }
+    if (message?.type === "provider-text-scale") {
+      sendResponse({ ok: true, providerTextScale: normalizeProviderTextScale(message.scale) });
+      return false;
+    }
     if (message?.type !== "sync-proxy") return false;
     queueSync()
       .then(async (result) => {
         const provider = message.providerId && result.providers.find((item) => item.id === message.providerId);
-        sendResponse(result);
+        sendResponse({ ...result, providerTextScaleApplied: result.providerTextScale });
         if (provider?.url && sender.tab?.id && chrome.tabs?.update) {
           void chrome.tabs.update(sender.tab.id, { url: provider.url });
         }

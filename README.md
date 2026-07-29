@@ -2,11 +2,11 @@
 
 Tikpal is a documentation-first product project for a Raspberry Pi 4 based moOde streamer touch UI. The target device is a 2560 x 720 ultra-wide kiosk screen that should feel like a quiet HiFi object first, and a playback controller only when the user asks for controls.
 
-The project started documentation-first and now includes a runnable Vite + React + TypeScript kiosk app with a local Node API, MP4 fireplace ambience, kiosk-safe dark startup, fixed 2560 x 720 design rules, and moOde-oriented player/Console surfaces.
+The project started documentation-first and now includes a runnable Vite + React + TypeScript kiosk app with a local Node API, MP4 fireplace ambience, kiosk-safe dark startup, fixed 2560 x 720 design rules, moOde-oriented player/Console surfaces, and a Gentoo systemd physical-kiosk migration path.
 
 ## Product Direction
 
-- Target hardware: Raspberry Pi 4, touch screen, 2560 x 720 physical output.
+- Target hardware: Raspberry Pi 4 or Gentoo systemd host, touch screen, 2560 x 720 physical output.
 - Runtime: Chromium kiosk, full screen, no browser chrome.
 - Frontend baseline: Vite + React + TypeScript.
 - Visual rendering baseline: fireplace image plus local MP4 ambience with crossfaded scene changes; WebGL remains a future/experimental renderer track, not the current flame surface.
@@ -48,6 +48,7 @@ Key documents:
 - [moOde capability mapping](docs/04-integration/moode-capability-mapping-v1.md)
 - [MVP backlog and acceptance](docs/05-planning/mvp-backlog-and-acceptance-v1.md)
 - [Raspberry Pi kiosk deploy](docs/06-deployment/raspberry-pi-kiosk-deploy-v1.md)
+- [Gentoo kiosk deploy](docs/06-deployment/gentoo-kiosk-deploy-v1.md)
 
 Reference assets:
 
@@ -158,6 +159,12 @@ For Scene Sound on moOde, keep `TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE=auto` in `.en
 `deploy/moode/tikpal-quiet-boot-enable.sh` suppresses normal boot/reboot console text on the HDMI kiosk display by quieting the kernel/systemd console path, disabling the visible `tty1` login prompt, and masking `tty2` login fallback.
 
 See the full deploy and rollback runbook in [docs/06-deployment/raspberry-pi-kiosk-deploy-v1.md](docs/06-deployment/raspberry-pi-kiosk-deploy-v1.md).
+
+## Gentoo Deploy
+
+The Gentoo migration path keeps the same app directory and systemd units, but replaces the moOde package assumptions with Portage, ALSA direct output, a physical `:0` Xorg kiosk, and Gentoo-specific audio receiver setup. The validated physical layout is a main `2560x720` kiosk with Explore split into a `1920x720` provider window plus a `640x720` side panel.
+
+Gentoo Explore provider text sizing must not use Chrome tab zoom or `--force-device-scale-factor`; Small, Medium, and Large adjust detected provider text elements while preserving the provider viewport and avoiding Chromium's `-/+` zoom bubble. See [docs/06-deployment/gentoo-kiosk-deploy-v1.md](docs/06-deployment/gentoo-kiosk-deploy-v1.md).
 
 ## Interaction Smoke Test
 

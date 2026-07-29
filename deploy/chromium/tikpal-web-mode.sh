@@ -49,7 +49,7 @@ fi
 : "${TIKPAL_WEB_MODE_CROSSFADE_PCM_B:=tikpal_explore_b}"
 : "${TIKPAL_WEB_MODE_AUDIO_BUS_STATE_PATH:=$TIKPAL_WEB_MODE_PROFILE_ROOT/active-audio-bus}"
 : "${TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS:=2}"
-: "${TIKPAL_WEB_MODE_ONBOARD_LOCK_TIMEOUT_SECONDS:=1}"
+: "${TIKPAL_WEB_MODE_ONBOARD_LOCK_TIMEOUT_SECONDS:=8}"
 : "${TIKPAL_WEB_MODE_DEFAULT_PROXY_URL:=http://192.168.10.103:7897}"
 : "${TIKPAL_WEB_MODE_ONBOARD:=1}"
 : "${TIKPAL_WEB_MODE_ONBOARD_AUTO_FOCUS:=1}"
@@ -74,6 +74,13 @@ fi
 if [[ -n "${TIKPAL_WEB_MODE_ONBOARD_ACTION_WINDOW:-}" ]]; then
   TIKPAL_WEB_MODE_ONBOARD_WINDOW="$TIKPAL_WEB_MODE_ONBOARD_ACTION_WINDOW"
 fi
+
+export DISPLAY="$TIKPAL_KIOSK_DISPLAY"
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$XDG_RUNTIME_DIR/bus}"
+export GTK_IM_MODULE="${GTK_IM_MODULE:-fcitx}"
+export QT_IM_MODULE="${QT_IM_MODULE:-fcitx}"
+export XMODIFIERS="${XMODIFIERS:-@im=fcitx}"
 
 log() {
   printf '[tikpal-web-mode] %s\n' "$*"
@@ -282,6 +289,19 @@ console.log(`${enabled ? "1" : "0"}\t${proxyUrl}`);
 NODE
 }
 
+read_provider_text_scale() {
+  node - "$TIKPAL_WEB_MODE_SETTINGS_PATH" <<'NODE'
+const fs = require("node:fs");
+const [settingsPath] = process.argv.slice(2);
+let settings = {};
+try { settings = JSON.parse(fs.readFileSync(settingsPath, "utf8")); } catch {}
+const raw = Number(settings.providerTextScale);
+const rounded = Math.round(raw * 100) / 100;
+const value = [1, 1.1, 1.2].find((candidate) => Math.abs(candidate - rounded) < 0.001) ?? 1.1;
+console.log(value.toFixed(2).replace(/\.00$/, ""));
+NODE
+}
+
 proxy_revision_applied() {
   node - "$TIKPAL_WEB_MODE_SETTINGS_PATH" "$TIKPAL_WEB_MODE_STATE_PATH" <<'NODE'
 const fs = require("node:fs");
@@ -448,6 +468,16 @@ if (/^(1|true|yes|on|enabled)$/i.test(String(popupBlocking))) {
 }
 prefs.profile.cookie_controls_mode = 0;
 prefs.profile.block_third_party_cookies = false;
+if (prefs.profile.content_settings && typeof prefs.profile.content_settings === "object") {
+  if (prefs.profile.content_settings.exceptions && typeof prefs.profile.content_settings.exceptions === "object") {
+    delete prefs.profile.content_settings.exceptions.zoomlevels;
+  }
+}
+delete prefs.profile.per_host_zoom_levels;
+delete prefs.profile.default_zoom_level;
+if (prefs.partition && typeof prefs.partition === "object") {
+  delete prefs.partition.default_zoom_level;
+}
 fs.writeFileSync(prefsPath, `${JSON.stringify(prefs, null, 2)}\n`);
 NODE
 }
@@ -644,13 +674,17 @@ install_onboard_ime_toggle_script() {
   local target_script="$target_dir/tikpalImeToggle.py"
   [[ -f "$source_script" ]] || return 1
 
+  if [[ -r "$target_script" ]] && cmp -s "$source_script" "$target_script"; then
+    return 0
+  fi
+
   if [[ -w "$target_dir" ]]; then
-    install -m 0644 "$source_script" "$target_script"
+    install -m 0755 "$source_script" "$target_script"
     return 0
   fi
 
   if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
-    sudo install -m 0644 "$source_script" "$target_script"
+    sudo install -m 0755 "$source_script" "$target_script"
     return 0
   fi
 
@@ -670,11 +704,11 @@ configure_onboard_input_method_key() {
   local source_dir="/usr/share/onboard/layouts"
   local target_dir="${XDG_DATA_HOME:-$HOME/.local/share}/onboard/layouts"
   local target_theme_dir="${XDG_DATA_HOME:-$HOME/.local/share}/onboard/themes"
-  local target_layout="$target_dir/Tikpal-Compact.onboard"
-  local target_active_layout="$target_dir/Tikpal-Compact-Pinyin.onboard"
+  local target_en_layout="$target_dir/Tikpal-Compact-EN.onboard"
+  local target_pinyin_layout="$target_dir/Tikpal-Compact-Pinyin.onboard"
+  local target_japanese_layout="$target_dir/Tikpal-Compact-Japanese.onboard"
+  local target_spanish_layout="$target_dir/Tikpal-Compact-Spanish.onboard"
   local target_color_scheme="$target_theme_dir/Tikpal-Classic.colors"
-  local temporary_layout="$target_layout.tmp"
-  local temporary_active_layout="$target_active_layout.tmp"
 
   if ! command -v fcitx5-remote >/dev/null 2>&1 \
     || [[ ! -f "$source_dir/Compact.onboard" ]] \
@@ -697,40 +731,101 @@ configure_onboard_input_method_key() {
   mkdir -p "$target_dir"
   cp -f "$source_dir/Compact-Alpha.svg" "$source_dir/Compact-Numbers.svg" \
     "$source_dir/Compact-Utils.svg" "$target_dir/"
-  if ! awk '
-    !done && /group="bottomrow" id="LWIN"/ {
-      sub("id=\"LWIN\"/>", "id=\"TIKPAL-IME\" svg_id=\"LWIN\" theme_id=\"TIKPAL-IME-INACTIVE\" label=\"中/EN\" script=\"tikpalImeToggle\"/>")
-      done = 1
-    }
-    { print }
-    END { if (!done) exit 1 }
-  ' "$source_dir/Compact.onboard" >"$temporary_layout"; then
-    rm -f "$temporary_layout"
+  if ! python3 - "$source_dir/Compact.onboard" "$target_en_layout" "$target_pinyin_layout" "$target_japanese_layout" "$target_spanish_layout" <<'PY'
+from __future__ import annotations
+
+import sys
+import xml.etree.ElementTree as ET
+
+source, en_path, pinyin_path, japanese_path, spanish_path = sys.argv[1:]
+
+variants = [
+    {
+        "path": en_path,
+        "ime_label": "EN",
+        "ime_theme": "TIKPAL-IME-INACTIVE",
+        "key_theme": "TIKPAL-KEY-EN",
+        "labels": {"SPCE": "Space"},
+    },
+    {
+        "path": pinyin_path,
+        "ime_label": "中文",
+        "ime_theme": "TIKPAL-IME-ACTIVE",
+        "key_theme": "TIKPAL-KEY-PINYIN",
+        "labels": {"SPCE": "空格", "RTRN": "回车"},
+    },
+    {
+        "path": japanese_path,
+        "ime_label": "日本語",
+        "ime_theme": "TIKPAL-IME-ACTIVE",
+        "key_theme": "TIKPAL-KEY-JAPANESE",
+        "labels": {"SPCE": "変換", "RTRN": "確定"},
+    },
+    {
+        "path": spanish_path,
+        "ime_label": "ES",
+        "ime_theme": "TIKPAL-IME-ACTIVE",
+        "key_theme": "TIKPAL-KEY-SPANISH",
+        "labels": {
+            "TLDE": "º ª",
+            "AE11": "' ?",
+            "AE12": "¡ ¿",
+            "AD11": "` ^",
+            "AD12": "+ *",
+            "AC10": "Ñ",
+            "AC11": "´ ¨",
+            "BKSL": "Ç",
+            "LSGT": "< >",
+            "AB08": ", ;",
+            "AB09": ". :",
+            "AB10": "- _",
+            "SPCE": "Espacio",
+            "RTRN": "Intro",
+        },
+    },
+]
+
+
+def patch_key(key: ET.Element, variant: dict[str, object]) -> None:
+    key_id = key.attrib.get("id", "")
+    group = key.attrib.get("group", "")
+    key_theme = str(variant["key_theme"])
+
+    if group == "alphanumeric":
+        key.set("theme_id", key_theme)
+
+    if group == "bottomrow" and key_id == "LWIN":
+        key.set("id", "TIKPAL-IME")
+        key.set("svg_id", "LWIN")
+        key.set("theme_id", str(variant["ime_theme"]))
+        key.set("label", str(variant["ime_label"]))
+        key.set("script", "tikpalImeToggle")
+        return
+
+    labels = variant["labels"]
+    if key_id in labels:
+        key.set("label", str(labels[key_id]))
+        if key_id in {"SPCE", "RTRN"}:
+            key.set("theme_id", key_theme)
+
+
+for variant in variants:
+    tree = ET.parse(source)
+    root = tree.getroot()
+    for key in root.iter("key"):
+        patch_key(key, variant)
+    tree.write(variant["path"], encoding="utf-8", xml_declaration=True)
+PY
+  then
     gsettings reset org.onboard layout >/dev/null 2>&1 || true
     gsettings set org.onboard.theme-settings color-scheme "/usr/share/onboard/themes/Classic Onboard.colors" >/dev/null 2>&1 || true
     gsettings reset org.onboard key-label-overrides >/dev/null 2>&1 || true
     return 0
   fi
-  if ! awk '
-    !done && /group="bottomrow" id="LWIN"/ {
-      sub("id=\"LWIN\"/>", "id=\"TIKPAL-IME\" svg_id=\"LWIN\" theme_id=\"TIKPAL-IME-ACTIVE\" label=\"中文\" script=\"tikpalImeToggle\"/>")
-      done = 1
-    }
-    { print }
-    END { if (!done) exit 1 }
-  ' "$source_dir/Compact.onboard" >"$temporary_active_layout"; then
-    rm -f "$temporary_layout" "$temporary_active_layout"
-    gsettings reset org.onboard layout >/dev/null 2>&1 || true
-    gsettings set org.onboard.theme-settings color-scheme "/usr/share/onboard/themes/Classic Onboard.colors" >/dev/null 2>&1 || true
-    gsettings reset org.onboard key-label-overrides >/dev/null 2>&1 || true
-    return 0
-  fi
-  mv -f "$temporary_layout" "$target_layout"
-  mv -f "$temporary_active_layout" "$target_active_layout"
   if [[ -f "$target_color_scheme" ]]; then
     gsettings set org.onboard.theme-settings color-scheme "$target_color_scheme" >/dev/null 2>&1 || true
   fi
-  gsettings set org.onboard layout "$target_layout" >/dev/null 2>&1 || true
+  gsettings set org.onboard layout "$target_en_layout" >/dev/null 2>&1 || true
   gsettings reset org.onboard key-label-overrides >/dev/null 2>&1 || true
   python3 /usr/share/onboard/scripts/tikpalImeToggle.py --sync >/dev/null 2>&1 || true
 }
@@ -862,7 +957,7 @@ ensure_onboard() {
     start_onboard_process
     sleep 0.8
   else
-    configure_onboard_visibility
+    configure_onboard
   fi
 
   sync_onboard_input_method_visual
@@ -1392,6 +1487,7 @@ open_provider() {
   stop_window_guard
   close_provider_profile "$provider_profile"
   sleep 0.2
+  ensure_chromium_profile_prefs "$provider_profile"
   refresh_extension_script_cache "$provider_profile"
   ensure_side_panel "$provider"
   launch_transition_veil "$provider"
@@ -1511,6 +1607,7 @@ check_runtime() {
   log "single provider window: $TIKPAL_WEB_MODE_SINGLE_PROVIDER_WINDOW"
   log "popup blocking: $TIKPAL_WEB_MODE_POPUP_BLOCKING"
   log "extension: $TIKPAL_WEB_MODE_EXTENSION_ENABLED $TIKPAL_WEB_MODE_EXTENSION_DIR"
+  log "provider text scale: $(read_provider_text_scale)"
   log "proxy apply timeout: ${TIKPAL_WEB_MODE_PROXY_APPLY_TIMEOUT_SECONDS}s"
   log "provider bootstrap timeout: ${TIKPAL_WEB_MODE_PROVIDER_BOOTSTRAP_TIMEOUT_SECONDS}s"
   log "provider window timeout: ${TIKPAL_WEB_MODE_PROVIDER_WINDOW_TIMEOUT_SECONDS}s"

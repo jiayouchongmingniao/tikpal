@@ -246,6 +246,11 @@ check_runtime
 reset_chromium_profile_state
 
 export DISPLAY="$TIKPAL_KIOSK_DISPLAY"
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$XDG_RUNTIME_DIR/bus}"
+export GTK_IM_MODULE="${GTK_IM_MODULE:-fcitx}"
+export QT_IM_MODULE="${QT_IM_MODULE:-fcitx}"
+export XMODIFIERS="${XMODIFIERS:-@im=fcitx}"
 
 if [[ "$TIKPAL_KIOSK_ACTIVE_DISPLAY_MODE" != "virtual" && "$TIKPAL_KIOSK_XRANDR_MODE" != "none" ]] && command -v xrandr >/dev/null 2>&1; then
   if [[ -n "$TIKPAL_KIOSK_XRANDR_OUTPUT" ]]; then
