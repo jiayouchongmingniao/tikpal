@@ -4605,6 +4605,29 @@ async function run() {
     const freshHeartbeat = await request("/api/v1/kiosk/heartbeat");
     assert(freshHeartbeat.body.healthy === true, "kiosk heartbeat read should return the latest healthy heartbeat");
 
+    const visibleLagHeartbeat = await request("/api/v1/kiosk/heartbeat", {
+      method: "POST",
+      body: JSON.stringify({
+        ...healthyHeartbeatPayload,
+        visibility: "visible",
+        eventLoop: { lagMs: 6000 }
+      })
+    });
+    assert(visibleLagHeartbeat.body.healthy === false, "visible kiosk event-loop lag should be unhealthy");
+    assert(visibleLagHeartbeat.body.reasons.includes("event-loop-lag"), "visible kiosk event-loop lag should remain a restart reason");
+
+    const hiddenLagHeartbeat = await request("/api/v1/kiosk/heartbeat", {
+      method: "POST",
+      body: JSON.stringify({
+        ...healthyHeartbeatPayload,
+        visibility: "hidden",
+        eventLoop: { lagMs: 6000 }
+      })
+    });
+    assert(hiddenLagHeartbeat.body.healthy === true, "hidden kiosk event-loop lag should not be treated as a broken visible kiosk");
+    assert(hiddenLagHeartbeat.body.ignoredReasons.includes("event-loop-lag:hidden-page"), "hidden kiosk event-loop lag should stay visible as ignored diagnostics");
+    assert(hiddenLagHeartbeat.body.thresholds.hiddenStaleMs > hiddenLagHeartbeat.body.thresholds.staleMs, "hidden kiosk heartbeats should have a wider stale threshold for Chromium timer throttling");
+
     const pendingHeartbeat = await request("/api/v1/kiosk/heartbeat", {
       method: "POST",
       body: JSON.stringify({
@@ -4644,6 +4667,18 @@ async function run() {
       })
     });
     assert(transitionHeartbeat.body.healthy === true, "scene transition heartbeat should not be treated as a missing-video failure");
+
+    await request("/api/v1/kiosk/heartbeat", {
+      method: "POST",
+      body: JSON.stringify({
+        ...healthyHeartbeatPayload,
+        visibility: "hidden"
+      })
+    });
+    await wait(1100);
+    const hiddenStaleHeartbeat = await request("/api/v1/kiosk/heartbeat");
+    assert(hiddenStaleHeartbeat.body.healthy === true, "hidden kiosk heartbeat should tolerate browser timer throttling past the visible stale threshold");
+    assert(hiddenStaleHeartbeat.body.ignoredReasons.includes("heartbeat-stale:hidden-page"), "hidden stale heartbeat should stay visible as ignored diagnostics");
 
     await request("/api/v1/kiosk/heartbeat", {
       method: "POST",

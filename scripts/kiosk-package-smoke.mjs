@@ -564,6 +564,7 @@ esac
   assert(webModeScript.includes("resolve_web_mode_audio_devices()"), "web mode should lazily resolve auto ALSA output for provider windows");
   assert(webModeScript.includes("TIKPAL_WEB_MODE_PROVIDER_WINDOW_TIMEOUT_SECONDS") && webModeScript.includes('wait_for_profile_window "$provider_profile" "$TIKPAL_WEB_MODE_PROVIDER_WINDOW_TIMEOUT_SECONDS"'), "web mode should bound provider window detection so failures can clean up before the API open timeout");
   assert(serverSource.includes("WEB_MODE_OPEN_COMMAND_TIMEOUT_MS") && serverSource.includes('action === "open" ? WEB_MODE_OPEN_COMMAND_TIMEOUT_MS : WEB_MODE_COMMAND_TIMEOUT_MS'), "API should let provider-open cleanup run longer than generic web mode commands");
+  assert(serverSource.includes("TIKPAL_KIOSK_HEARTBEAT_HIDDEN_STALE_MS") && serverSource.includes("isHiddenPageHeartbeat") && serverSource.includes('ignoredReasons.push("event-loop-lag:hidden-page")') && serverSource.includes('ignoredReasons.push("heartbeat-stale:hidden-page")'), "API should not restart a hidden main kiosk for browser-throttled Explore heartbeat lag");
   assert(
     webModeScript.indexOf("resolve_web_mode_audio_devices", webModeScript.indexOf("open_provider()")) <
       webModeScript.indexOf("crossfade_available", webModeScript.indexOf("open_provider()")),

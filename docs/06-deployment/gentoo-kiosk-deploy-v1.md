@@ -214,8 +214,10 @@ Physical display checks:
 ```bash
 DISPLAY=:0 XAUTHORITY=/home/moode/.Xauthority xrandr --query
 DISPLAY=:0 XAUTHORITY=/home/moode/.Xauthority xdotool search --onlyvisible --name ".*" getwindowname %@ getwindowgeometry %@
-curl -fsS http://127.0.0.1:8787/api/v1/kiosk/heartbeat
+curl -fsS http://127.0.0.1:8787/api/v1/kiosk/heartbeat | jq '{healthy,status,ageMs,reasons,ignoredReasons,visibility:.heartbeat.visibility,eventLoop:.heartbeat.eventLoop}'
 ```
+
+When Explore is active, the main Tikpal kiosk page can become Chromium-hidden behind the visible provider / side-panel windows. Browser timer throttling may then report a large `eventLoop.lagMs` or delay the next heartbeat past the normal 30s visible-page stale threshold. These are diagnostic only and should appear under `ignoredReasons` as `event-loop-lag:hidden-page` or `heartbeat-stale:hidden-page`, not as restart reasons. Hidden pages use `TIKPAL_KIOSK_HEARTBEAT_HIDDEN_STALE_MS` (`120000` by default) before becoming truly stale. A stale visible heartbeat, visible-page event-loop lag, stuck pending action, or scene-video failure remains unhealthy.
 
 Explore checks:
 

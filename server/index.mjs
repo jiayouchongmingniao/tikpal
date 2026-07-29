@@ -139,6 +139,11 @@ const KIOSK_HEARTBEAT_STALE_MS_RAW = Number(process.env.TIKPAL_KIOSK_HEARTBEAT_S
 const KIOSK_HEARTBEAT_STALE_MS = Number.isFinite(KIOSK_HEARTBEAT_STALE_MS_RAW) && KIOSK_HEARTBEAT_STALE_MS_RAW >= 1_000
   ? KIOSK_HEARTBEAT_STALE_MS_RAW
   : 30_000;
+const KIOSK_HEARTBEAT_HIDDEN_STALE_MS_RAW = Number(process.env.TIKPAL_KIOSK_HEARTBEAT_HIDDEN_STALE_MS ?? 120_000);
+const KIOSK_HEARTBEAT_HIDDEN_STALE_MS = Number.isFinite(KIOSK_HEARTBEAT_HIDDEN_STALE_MS_RAW)
+  && KIOSK_HEARTBEAT_HIDDEN_STALE_MS_RAW >= KIOSK_HEARTBEAT_STALE_MS
+  ? KIOSK_HEARTBEAT_HIDDEN_STALE_MS_RAW
+  : Math.max(120_000, KIOSK_HEARTBEAT_STALE_MS);
 const KIOSK_HEARTBEAT_PENDING_STUCK_MS_RAW = Number(process.env.TIKPAL_KIOSK_HEARTBEAT_PENDING_STUCK_MS ?? 45_000);
 const KIOSK_HEARTBEAT_PENDING_STUCK_MS = Number.isFinite(KIOSK_HEARTBEAT_PENDING_STUCK_MS_RAW) && KIOSK_HEARTBEAT_PENDING_STUCK_MS_RAW >= 10_000
   ? KIOSK_HEARTBEAT_PENDING_STUCK_MS_RAW
@@ -712,6 +717,10 @@ function finiteNumber(value) {
   return Number.isFinite(numeric) ? numeric : null;
 }
 
+function isHiddenPageHeartbeat(payload) {
+  return String(payload?.visibility ?? "").toLowerCase() === "hidden";
+}
+
 function setKioskHeartbeat(payload) {
   kioskHeartbeat = {
     receivedAtMs: Date.now(),
@@ -723,6 +732,7 @@ function setKioskHeartbeat(payload) {
 function buildKioskHeartbeatStatus(now = Date.now()) {
   const thresholds = {
     staleMs: KIOSK_HEARTBEAT_STALE_MS,
+    hiddenStaleMs: KIOSK_HEARTBEAT_HIDDEN_STALE_MS,
     pendingStuckMs: KIOSK_HEARTBEAT_PENDING_STUCK_MS,
     eventLoopLagMs: KIOSK_HEARTBEAT_EVENT_LOOP_LAG_MS
   };
@@ -734,6 +744,7 @@ function buildKioskHeartbeatStatus(now = Date.now()) {
       status: "unseen",
       ageMs: null,
       reasons: ["heartbeat-unseen"],
+      ignoredReasons: [],
       thresholds,
       receivedAt: null,
       heartbeat: null
@@ -743,8 +754,13 @@ function buildKioskHeartbeatStatus(now = Date.now()) {
   const payload = asPlainObject(kioskHeartbeat.payload);
   const ageMs = now - kioskHeartbeat.receivedAtMs;
   const reasons = [];
-  if (ageMs > KIOSK_HEARTBEAT_STALE_MS) {
+  const ignoredReasons = [];
+  const hiddenPageHeartbeat = isHiddenPageHeartbeat(payload);
+  const staleThresholdMs = hiddenPageHeartbeat ? KIOSK_HEARTBEAT_HIDDEN_STALE_MS : KIOSK_HEARTBEAT_STALE_MS;
+  if (ageMs > staleThresholdMs) {
     reasons.push("heartbeat-stale");
+  } else if (hiddenPageHeartbeat && ageMs > KIOSK_HEARTBEAT_STALE_MS) {
+    ignoredReasons.push("heartbeat-stale:hidden-page");
   }
 
   const status = asPlainObject(payload.status);
@@ -757,7 +773,11 @@ function buildKioskHeartbeatStatus(now = Date.now()) {
   const eventLoop = asPlainObject(payload.eventLoop);
   const eventLoopLagMs = finiteNumber(eventLoop.lagMs);
   if (eventLoopLagMs !== null && eventLoopLagMs > KIOSK_HEARTBEAT_EVENT_LOOP_LAG_MS) {
-    reasons.push("event-loop-lag");
+    if (hiddenPageHeartbeat) {
+      ignoredReasons.push("event-loop-lag:hidden-page");
+    } else {
+      reasons.push("event-loop-lag");
+    }
   }
 
   const playback = asPlainObject(payload.playback);
@@ -788,6 +808,7 @@ function buildKioskHeartbeatStatus(now = Date.now()) {
     status: reasons.length === 0 ? "fresh" : reasons.includes("heartbeat-stale") ? "stale" : "unhealthy",
     ageMs,
     reasons,
+    ignoredReasons,
     thresholds,
     receivedAt: new Date(kioskHeartbeat.receivedAtMs).toISOString(),
     heartbeat: payload

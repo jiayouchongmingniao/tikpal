@@ -101,7 +101,7 @@ Renderer requirements:
 - Keep scene video rendering independent from music source playback; Scene Sound decides whether the active scene layer is audible.
 - Unmute only the active video layer when `scene` is the playback source, and keep volume synced to `system.volume.percent`.
 - On Pi, use the single-loop/stable scene path and `data-flame-video-health` to recover ordinary video-element stalls. Repeated stalls may briefly show the logo fallback, but that state must retry video mounting and must be cleared by scene changes. Full X/Chromium/V3D hangs are outside React's recovery boundary and belong to the systemd kiosk watchdog.
-- Post a local kiosk heartbeat from the page and keep `/api/v1/kiosk/heartbeat` loopback-only. The watchdog can use stale heartbeats, stuck pending actions, event-loop lag, and scene-video health as a page-runtime signal without exposing that state to the portable remote API.
+- Post a local kiosk heartbeat from the page and keep `/api/v1/kiosk/heartbeat` loopback-only. The watchdog can use stale heartbeats, stuck pending actions, visible-page event-loop lag, and scene-video health as a page-runtime signal without exposing that state to the portable remote API. When Explore places the provider and side panel over the main kiosk, Chromium may throttle the hidden main page; hidden-page event-loop lag and short hidden-page heartbeat delays are reported in heartbeat diagnostics but are not restart reasons.
 - Keep future WebGL/canvas visual modes optional and isolated from the player/settings shell.
 
 Future renderer requirements:
