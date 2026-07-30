@@ -125,6 +125,46 @@ install_onboard_themes() {
   echo "installed $target_dir/Tikpal-Classic.colors"
 }
 
+install_physical_display_prepare() {
+  local helper="$APP_DIR/deploy/chromium/tikpal-physical-display-prepare.sh"
+  local target="/usr/local/sbin/tikpal-physical-display-prepare"
+  local dropin_dir="/etc/systemd/system/tikpal-kiosk.service.d"
+  local stability_unit="/etc/systemd/system/tikpal-display-stability.service"
+  [[ -x "$helper" ]] || {
+    echo "WARN: $helper not found; skipping physical display prepare install" >&2
+    return 0
+  }
+  install -o root -g root -m 0755 "$helper" "$target"
+  mkdir -p "$dropin_dir"
+  cat > "$dropin_dir/physical-display.conf" <<EOF
+[Service]
+Environment=TIKPAL_KIOSK_ENV_FILE=$APP_DIR/.env.kiosk
+ExecStartPre=+/usr/local/sbin/tikpal-physical-display-prepare wait-ready
+ExecStartPost=+/bin/sh -c 'systemctl stop tikpal-physical-display-kick.service >/dev/null 2>&1 || true; if command -v systemd-run >/dev/null 2>&1; then systemd-run --quiet --collect --no-block --unit=tikpal-physical-display-kick --property=Type=oneshot --setenv=TIKPAL_KIOSK_ENV_FILE="\$TIKPAL_KIOSK_ENV_FILE" --setenv=HOME=/root /usr/local/sbin/tikpal-physical-display-prepare delayed-soft-kick; else nohup env TIKPAL_KIOSK_ENV_FILE="\$TIKPAL_KIOSK_ENV_FILE" HOME=/root /usr/local/sbin/tikpal-physical-display-prepare delayed-soft-kick >/var/log/tikpal-physical-display-kick.log 2>&1 & fi'
+EOF
+  chmod 0644 "$dropin_dir/physical-display.conf"
+  cat > "$stability_unit" <<EOF
+[Unit]
+Description=Tikpal physical display PCI stability
+After=systemd-udev-settle.service
+Before=tikpal-kiosk.service
+
+[Service]
+Type=oneshot
+Environment=TIKPAL_KIOSK_ENV_FILE=$APP_DIR/.env.kiosk
+ExecStart=/usr/local/sbin/tikpal-physical-display-prepare pci-stabilize
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  chmod 0644 "$stability_unit"
+  systemctl enable tikpal-display-stability.service >/dev/null 2>&1 || true
+  echo "installed $target"
+  echo "installed $dropin_dir/physical-display.conf"
+  echo "installed $stability_unit"
+}
+
 ensure_library_scan_env() {
   local env_file="$APP_DIR/.env"
   local helper="$APP_DIR/deploy/moode/tikpal-library-sync.sh"
@@ -149,11 +189,15 @@ ensure_library_scan_env() {
     updated=1
   fi
   if ! grep -q '^TIKPAL_USB_LIBRARY_AUTO_UPDATE=' "$env_file"; then
-    printf 'TIKPAL_USB_LIBRARY_AUTO_UPDATE=1\n' >> "$env_file"
+    printf 'TIKPAL_USB_LIBRARY_AUTO_UPDATE=0\n' >> "$env_file"
     updated=1
   fi
   if ! grep -q '^TIKPAL_USB_LIBRARY_AUTO_UPDATE_MIN_MS=' "$env_file"; then
     printf 'TIKPAL_USB_LIBRARY_AUTO_UPDATE_MIN_MS=15000\n' >> "$env_file"
+    updated=1
+  fi
+  if ! grep -q '^TIKPAL_MPC_UPDATE_TIMEOUT_SECONDS=' "$env_file"; then
+    printf 'TIKPAL_MPC_UPDATE_TIMEOUT_SECONDS=8\n' >> "$env_file"
     updated=1
   fi
   [[ "$updated" -eq 1 ]] || return 0
@@ -215,6 +259,7 @@ if [[ "$INSTALL_KIOSK" -eq 1 ]]; then
   fi
   install_onboard_scripts
   install_onboard_themes
+  install_physical_display_prepare
   install_unit "$SCRIPT_DIR/tikpal-kiosk.service"
   install_unit "$SCRIPT_DIR/tikpal-kiosk-viewer.service"
   install_unit "$SCRIPT_DIR/tikpal-kiosk-devtools.service"

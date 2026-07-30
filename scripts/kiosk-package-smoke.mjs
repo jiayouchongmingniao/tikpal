@@ -23,6 +23,7 @@ const requiredFiles = [
   "deploy/chromium/onboard-scripts/tikpalImeToggle.py",
   "deploy/chromium/onboard-themes/Tikpal-Classic.colors",
   "deploy/chromium/tikpal-kiosk-healthcheck.sh",
+  "deploy/chromium/tikpal-physical-display-prepare.sh",
   "deploy/chromium/tikpal-kiosk-viewerctl.sh",
   "deploy/chromium/tikpal-web-mode.sh",
   "deploy/chromium/tikpal-web-mode-guard.mjs",
@@ -162,6 +163,7 @@ async function run() {
   await assertExecutable("deploy/chromium/start-tikpal-kiosk-session.sh");
   await assertExecutable("deploy/chromium/start-tikpal-kiosk-viewer.sh");
   await assertExecutable("deploy/chromium/tikpal-kiosk-healthcheck.sh");
+  await assertExecutable("deploy/chromium/tikpal-physical-display-prepare.sh");
   await assertExecutable("deploy/chromium/tikpal-kiosk-viewerctl.sh");
   await assertExecutable("deploy/chromium/tikpal-web-mode.sh");
   await assertExecutable("deploy/moode/tikpal-audio-adapt.sh");
@@ -333,6 +335,7 @@ esac
   const kioskWatchdogUnit = await readFile(path.join(ROOT, "deploy/systemd/tikpal-kiosk-watchdog.service"), "utf8");
   const kioskWatchdogTimer = await readFile(path.join(ROOT, "deploy/systemd/tikpal-kiosk-watchdog.timer"), "utf8");
   const systemdInstaller = await readFile(path.join(ROOT, "deploy/systemd/install-systemd-services.sh"), "utf8");
+  const physicalDisplayPrepare = await readFile(path.join(ROOT, "deploy/chromium/tikpal-physical-display-prepare.sh"), "utf8");
   const deployDoc = await readFile(path.join(ROOT, "docs/06-deployment/raspberry-pi-kiosk-deploy-v1.md"), "utf8");
   assert(audioAdaptUnit.includes("tikpal-audio-adapt.sh apply"), "audio adapter unit should run the moOde adapter before services");
   assert(audioAdaptUnit.includes("Before=mpd.service tikpal-api.service tikpal-web.service tikpal-kiosk.service"), "audio adapter unit should order before playback and Tikpal services");
@@ -368,6 +371,17 @@ esac
   assert(systemdInstaller.indexOf("systemctl restart tikpal-library-sync.service") < systemdInstaller.indexOf("systemctl restart tikpal-api.service"), "systemd installer restart should sync MPD libraries before the API starts");
   assert(systemdInstaller.includes("tikpal-kiosk-watchdog.service"), "systemd installer should install the kiosk watchdog service");
   assert(systemdInstaller.includes("tikpal-kiosk-watchdog.timer"), "systemd installer should install and enable the kiosk watchdog timer");
+  assert(
+    systemdInstaller.includes("install_physical_display_prepare")
+      && systemdInstaller.includes("/usr/local/sbin/tikpal-physical-display-prepare")
+      && systemdInstaller.includes("ExecStartPre=+/usr/local/sbin/tikpal-physical-display-prepare wait-ready")
+      && systemdInstaller.includes("systemd-run --quiet --collect --no-block --unit=tikpal-physical-display-kick")
+      && systemdInstaller.includes("--setenv=HOME=/root")
+      && systemdInstaller.includes("tikpal-physical-display-prepare delayed-soft-kick")
+      && systemdInstaller.includes("tikpal-display-stability.service")
+      && systemdInstaller.includes("tikpal-physical-display-prepare pci-stabilize"),
+    "systemd installer should install the physical-display helper, boot wait, delayed soft-kick, and PCI stability unit"
+  );
   assert(systemdInstaller.includes("tikpal-locale-enable.sh"), "systemd installer should normalize SSH locale handling on new Pi installs");
   assert(systemdInstaller.includes("KIOSK_PACKAGES=("), "systemd installer should own new-Pi kiosk package installation");
   assert(systemdInstaller.includes("xdotool"), "systemd installer should install xdotool for Explore provider window detection");
@@ -424,11 +438,34 @@ esac
   assert(kioskEnv.includes("TIKPAL_KIOSK_VIEWER=none"), "kiosk env should default noVNC viewer off");
   assert(kioskEnv.includes("TIKPAL_KIOSK_DISPLAY_MODE=auto"), "kiosk env should document automatic physical/virtual display selection");
   assert(kioskEnv.includes("TIKPAL_KIOSK_X_COMMAND_TIMEOUT_SECONDS=5"), "kiosk env should document bounded xset/xrandr commands");
+  assert(
+    kioskEnv.includes("TIKPAL_PHYSICAL_DISPLAY_RESET_MODE=1280x720")
+      && kioskEnv.includes("TIKPAL_PHYSICAL_DISPLAY_SAFE_BRIGHTNESS=45")
+      && kioskEnv.includes("TIKPAL_PHYSICAL_DISPLAY_SAFE_CONTRAST=50")
+      && kioskEnv.includes("TIKPAL_PHYSICAL_DISPLAY_INPUT_SOURCE=")
+      && kioskEnv.includes("TIKPAL_PHYSICAL_DISPLAY_DRM_CONNECTOR=/sys/class/drm/card0-HDMI-A-1")
+      && kioskEnv.includes("TIKPAL_PHYSICAL_DISPLAY_WAIT_READY_TIMEOUT_SECONDS=45")
+      && kioskEnv.includes("TIKPAL_PHYSICAL_DISPLAY_DELAYED_KICK_SECONDS=\"8 25\"")
+      && kioskEnv.includes("TIKPAL_PHYSICAL_DISPLAY_DISABLE_POWER_KEYS=1")
+      && kioskEnv.includes("TIKPAL_PHYSICAL_DISPLAY_PCI_POWER_DEVICES=")
+      && kioskEnv.includes("TIKPAL_PHYSICAL_DISPLAY_PCIE_ASPM_POLICY=")
+      && kioskEnv.includes("TIKPAL_PHYSICAL_DISPLAY_DRM_POLL=")
+      && kioskEnv.includes("TIKPAL_PHYSICAL_DISPLAY_NOUVEAU_PCI_ID=")
+      && kioskEnv.includes("TIKPAL_PHYSICAL_DISPLAY_NOUVEAU_REBIND_SETTLE_SECONDS=3"),
+    "kiosk env should document safe physical display soft-kick and PCI fallback defaults"
+  );
   assert(kioskEnv.includes("TIKPAL_KIOSK_WATCHDOG_ENABLED=1"), "kiosk env should default the display watchdog on");
   assert(kioskEnv.includes("TIKPAL_KIOSK_WATCHDOG_GPU_LOG_SCAN=1"), "kiosk env should enable GPU reset log scanning");
   assert(kioskEnv.includes("TIKPAL_KIOSK_WATCHDOG_PAGE_HEARTBEAT_ENABLED=1"), "kiosk env should enable page heartbeat scanning");
   assert(kioskEnv.includes("TIKPAL_KIOSK_WATCHDOG_PAGE_HEARTBEAT_URL=http://127.0.0.1:8787/api/v1/kiosk/heartbeat"), "kiosk env should point the watchdog at the loopback page heartbeat API");
   assert(kioskEnv.includes("TIKPAL_KIOSK_WATCHDOG_WEB_MODE_HEARTBEAT_BYPASS=1"), "kiosk env should not restart the kiosk for stale page heartbeat while Explore is active");
+  assert(
+    kioskEnv.includes("TIKPAL_KIOSK_PHYSICAL_DISPLAY_CHECK_ENABLED=0")
+      && kioskEnv.includes("TIKPAL_KIOSK_PHYSICAL_DISPLAY_SOFT_KICK_BEFORE_RESTART=1")
+      && kioskEnv.includes("TIKPAL_KIOSK_PHYSICAL_DISPLAY_GPU_REBIND_BEFORE_RESTART=0")
+      && kioskEnv.includes("TIKPAL_KIOSK_PHYSICAL_DISPLAY_PREPARE_COMMAND=/usr/local/sbin/tikpal-physical-display-prepare"),
+    "kiosk env should keep periodic physical xrandr probing off while preserving display recovery routing"
+  );
   assert(kioskEnv.includes("TIKPAL_KIOSK_WATCHDOG_REBOOT_AFTER_RESTARTS=3"), "kiosk env should document persistent display-failure reboot escalation");
   assert(kioskEnv.includes("TIKPAL_KIOSK_RESET_WEB_MODE_ON_START=1"), "kiosk env should clear stale Explore runtime state when the physical kiosk starts");
   assert(kioskEnv.includes("TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE=auto"), "kiosk env should auto-detect the Chromium ALSA output");
@@ -449,6 +486,7 @@ esac
   assert(kioskEnv.includes("TIKPAL_WEB_MODE_PROVIDER_TEXT_SCALE=1.10"), "kiosk env should default Explore provider text scale to 110%");
   const kioskLauncher = await readFile(path.join(ROOT, "deploy/chromium/launch-tikpal-kiosk.sh"), "utf8");
   const kioskSession = await readFile(path.join(ROOT, "deploy/chromium/start-tikpal-kiosk-session.sh"), "utf8");
+  const watchdogSource = await readFile(path.join(ROOT, "deploy/chromium/tikpal-kiosk-healthcheck.sh"), "utf8");
   const webModeScript = await readFile(path.join(ROOT, "deploy/chromium/tikpal-web-mode.sh"), "utf8");
   const onboardImeToggleScript = await readFile(path.join(ROOT, "deploy/chromium/onboard-scripts/tikpalImeToggle.py"), "utf8");
   const onboardTheme = await readFile(path.join(ROOT, "deploy/chromium/onboard-themes/Tikpal-Classic.colors"), "utf8");
@@ -472,6 +510,36 @@ esac
   const appSource = await readFile(path.join(ROOT, "src/App.tsx"), "utf8");
   const playbackTruthSource = await readFile(path.join(ROOT, "src/playbackTruth.ts"), "utf8");
   const stylesSource = await readFile(path.join(ROOT, "src/styles.css"), "utf8");
+  const localSyncTempDir = mkdtempSync(path.join(tmpdir(), "tikpal-local-sync-"));
+  const localSyncSourceRoot = path.join(localSyncTempDir, "source");
+  const localSyncMpdRoot = path.join(localSyncTempDir, "mpd");
+  const localSyncCodexRoot = path.join(localSyncMpdRoot, "Codex");
+  const localSyncImportedTrack = path.join(localSyncCodexRoot, "USB Imports", "Session Disk", "Saved.flac");
+  const localSyncStaleTrack = path.join(localSyncCodexRoot, "Stale.mp3");
+  const localSyncRepoTrack = path.join(localSyncCodexRoot, "Focus", "Repo.mp3");
+  mkdirSync(path.join(localSyncSourceRoot, "_metadata"), { recursive: true });
+  mkdirSync(path.join(localSyncSourceRoot, "Focus"), { recursive: true });
+  mkdirSync(path.dirname(localSyncImportedTrack), { recursive: true });
+  mkdirSync(path.dirname(localSyncStaleTrack), { recursive: true });
+  writeFileSync(path.join(localSyncSourceRoot, "_metadata", "library_manifest.json"), "[]\n");
+  writeFileSync(path.join(localSyncSourceRoot, "Focus", "Repo.mp3"), "repo music\n");
+  writeFileSync(localSyncImportedTrack, "copied usb music\n");
+  writeFileSync(localSyncStaleTrack, "stale repo music\n");
+  const localSyncResult = spawnSync(path.join(ROOT, "deploy/moode/tikpal-local-library-sync.sh"), ["apply"], {
+    env: {
+      ...process.env,
+      TIKPAL_MPD_MUSIC_ROOT: localSyncMpdRoot,
+      TIKPAL_LOCAL_LIBRARY_MPD_PREFIX: "Codex",
+      TIKPAL_LOCAL_LIBRARY_SOURCE_ROOT: localSyncSourceRoot,
+      TIKPAL_LOCAL_LIBRARY_IMPORTS_DIR_NAME: "USB Imports",
+      TIKPAL_MPC_BIN: "/bin/true"
+    },
+    encoding: "utf8"
+  });
+  assert(localSyncResult.status === 0, `Local library sync helper should run against a fake MPD root:\n${localSyncResult.stdout}\n${localSyncResult.stderr}`);
+  assert(spawnSync("test", ["-f", localSyncRepoTrack]).status === 0, "Local library sync should mirror repo-owned Local music");
+  assert(spawnSync("test", ["-f", localSyncImportedTrack]).status === 0, "Local library sync should preserve copied USB Imports");
+  assert(spawnSync("test", ["-f", localSyncStaleTrack]).status !== 0, "Local library sync should still prune stale repo-owned Local files");
   assert(extensionManifest.permissions.includes("proxy"), "Explore extension should declare the proxy permission");
   assert(extensionManifest.permissions.includes("tabs"), "Explore extension should declare tabs permission for provider bootstrap navigation");
   assert(extensionManifest.version !== "1.0.0", "Explore extension should bump its version when provider scaling behavior changes so Chromium refreshes cached service workers");
@@ -636,6 +704,30 @@ esac
   assert(kioskLauncher.includes("detect_non_hdmi_card_id"), "kiosk launcher should detect the actual non-HDMI ALSA card");
   assert(kioskLauncher.includes("tikpal-audio-adapt.sh") && kioskLauncher.includes("resolve-browser"), "kiosk launcher should use the shared audio adapter for auto ALSA output");
   assert(kioskLauncher.includes('TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE="$(resolve_physical_alsa_output_device'), "kiosk launcher should resolve auto ALSA output before launching Chromium");
+  assert(
+    physicalDisplayPrepare.includes("TIKPAL_PHYSICAL_DISPLAY_RESET_MODE:=1280x720")
+      && physicalDisplayPrepare.includes("TIKPAL_PHYSICAL_DISPLAY_INPUT_SOURCE:=")
+      && physicalDisplayPrepare.includes("TIKPAL_PHYSICAL_DISPLAY_DRM_CONNECTOR:=/sys/class/drm/card0-HDMI-A-1")
+      && physicalDisplayPrepare.includes("TIKPAL_PHYSICAL_DISPLAY_DELAYED_KICK_SECONDS:=8 25")
+      && physicalDisplayPrepare.includes("TIKPAL_PHYSICAL_DISPLAY_PCI_POWER_DEVICES:=")
+      && physicalDisplayPrepare.includes("TIKPAL_PHYSICAL_DISPLAY_PCIE_ASPM_POLICY:=")
+      && physicalDisplayPrepare.includes("TIKPAL_PHYSICAL_DISPLAY_DRM_POLL:=")
+      && physicalDisplayPrepare.includes("TIKPAL_PHYSICAL_DISPLAY_NOUVEAU_PCI_ID:=")
+      && physicalDisplayPrepare.includes("drm_connector_ready()")
+      && physicalDisplayPrepare.includes("wait_for_drm_connector()")
+      && physicalDisplayPrepare.includes("pci_stabilize()")
+      && physicalDisplayPrepare.includes("drm_poll_stabilize()")
+      && physicalDisplayPrepare.includes("nouveau_rebind()")
+      && physicalDisplayPrepare.includes("setvcp D6 01")
+      && physicalDisplayPrepare.includes("setvcp 10")
+      && physicalDisplayPrepare.includes("setvcp 12")
+      && physicalDisplayPrepare.includes("setvcp 60 \"$TIKPAL_PHYSICAL_DISPLAY_INPUT_SOURCE\"")
+      && physicalDisplayPrepare.includes("xrandr --output \"$TIKPAL_KIOSK_XRANDR_OUTPUT\" --off")
+      && physicalDisplayPrepare.includes("delayed_soft_kick()")
+      && physicalDisplayPrepare.includes("XF86(PowerOff|Sleep|Suspend|Standby|Display|ScreenSaver)")
+      && physicalDisplayPrepare.includes("xdotool search --onlyvisible --class Chromium-browser"),
+    "physical display helper should wait for HDMI/EDID, wake DDC safely, mode-reset the panel, stabilize PCI power, optionally rebind nouveau, block display power keys, and raise Chromium"
+  );
   assert(kioskSession.includes("TIKPAL_KIOSK_X_COMMAND_TIMEOUT_SECONDS"), "kiosk session should expose an X command timeout");
   assert(kioskSession.includes("run_x_command xset"), "kiosk session should bound xset commands");
   assert(kioskSession.includes("GTK_IM_MODULE=fcitx") && kioskSession.includes("XMODIFIERS=@im=fcitx"), "kiosk session should expose Fcitx5 to Chromium/X11");
@@ -669,8 +761,10 @@ esac
   assert(audioAdaptScript.includes("wait_for_loopback_visible") && audioAdaptScript.includes("ensure_loopback_visible"), "audio adapter should wait for the real Loopback card after loading snd_aloop");
   assert(usbLibrarySyncScript.includes("USB_LIBRARY_AUTO_ROOTS") && usbLibrarySyncScript.includes("/media,/run/media"), "USB library sync should discover arbitrary mounted USB roots");
   assert(usbLibrarySyncScript.includes("skip_mount_name") && usbLibrarySyncScript.includes("rootfs"), "USB library sync should skip system partitions");
-  assert(usbLibrarySyncScript.includes("mpc") && usbLibrarySyncScript.includes("update \"$USB_MPD_PREFIX\""), "USB library sync should refresh MPD after linking USB roots");
+  assert(usbLibrarySyncScript.includes("MPC_UPDATE_TIMEOUT_SECONDS") && usbLibrarySyncScript.includes("update_mpd \"$USB_MPD_PREFIX\""), "USB library sync should time-bound MPD refresh after linking USB roots");
   assert(localLibrarySyncScript.includes("LOCAL_SOURCE_ROOT") && localLibrarySyncScript.includes("public/assets") && localLibrarySyncScript.includes("RSYNC_BIN") && localLibrarySyncScript.includes("--delete"), "Local library sync should mirror repo music into MPD's Codex directory");
+  assert(localLibrarySyncScript.includes("LOCAL_IMPORTS_DIR_NAME") && localLibrarySyncScript.includes("--filter \"P /$safe_imports_dir/***\""), "Local library sync should protect copied USB Imports while pruning repo-owned Codex files");
+  assert(localLibrarySyncScript.includes("MPC_UPDATE_TIMEOUT_SECONDS"), "Local library sync should time-bound MPD refresh after mirroring Codex");
   assert(localLibrarySyncScript.includes("TIKPAL_MPD_DEFAULT_QUEUE_PATH:-Codex") && localLibrarySyncScript.includes("unlink \"$target_dir\""), "Local library sync should replace the old inaccessible Codex symlink with a real MPD directory");
   assert(librarySyncScript.includes("tikpal-local-library-sync.sh") && librarySyncScript.includes("tikpal-usb-library-sync.sh"), "combined library sync should run both Local and USB helpers");
   assert(alsaLoopbackScript.includes("modprobe_command") && alsaLoopbackScript.includes("snd_aloop"), "ALSA Loopback helper should load the real snd_aloop module name through a resolved modprobe path");
@@ -1076,7 +1170,18 @@ esac
   assert(watchdogCheck.stdout.includes("page heartbeat enabled: 1"), "watchdog --check should report page heartbeat scanning");
   assert(watchdogCheck.stdout.includes("/api/v1/kiosk/heartbeat"), "watchdog --check should report the heartbeat endpoint");
   assert(watchdogCheck.stdout.includes("web mode profile root:"), "watchdog --check should report the Explore profile root used for heartbeat bypass");
+  assert(watchdogCheck.stdout.includes("physical display check: 0"), "watchdog --check should report periodic physical display probing disabled by default");
+  assert(watchdogCheck.stdout.includes("physical display prepare:"), "watchdog --check should report the physical display helper");
   assert(watchdogCheck.stdout.includes("check passed"), "watchdog --check should report success");
+  assert(
+    watchdogSource.includes("physical-display-unhealthy")
+      && watchdogSource.includes("try_physical_display_soft_recover")
+      && watchdogSource.includes("try_physical_display_gpu_rebind_recover")
+      && watchdogSource.includes("soft-kick")
+      && watchdogSource.includes("nouveau-rebind")
+      && watchdogSource.includes("physical display recovered without restarting"),
+    "watchdog should try physical-display soft-kick and optional GPU rebind before restarting the kiosk"
+  );
 
   const heartbeatSmokeDir = mkdtempSync(path.join(tmpdir(), "tikpal-heartbeat-smoke-"));
   const heartbeatSmokePortFile = path.join(heartbeatSmokeDir, "port");

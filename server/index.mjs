@@ -17,6 +17,7 @@ const API_MODE = PLAYER_BACKEND === "mpc" ? "mpc" : "mock";
 const MPD_HOST = process.env.TIKPAL_MPD_HOST ?? "127.0.0.1";
 const MPD_PORT = process.env.TIKPAL_MPD_PORT ?? "6600";
 const MPC_BIN = process.env.TIKPAL_MPC_BIN ?? "mpc";
+const MPC_SEEK_TIMEOUT_MS = parseEnvPositiveInteger(process.env.TIKPAL_MPC_SEEK_TIMEOUT_MS, 10_000);
 const MPD_DEFAULT_QUEUE_PATH = process.env.TIKPAL_MPD_DEFAULT_QUEUE_PATH ?? "Codex";
 const MPD_STARTUP_VOLUME = Number(process.env.TIKPAL_MPD_STARTUP_VOLUME ?? 30);
 const MPD_RECOVERY_COMMAND = process.env.TIKPAL_MPD_RECOVERY_COMMAND ?? "";
@@ -137,6 +138,7 @@ const STATE_SNAPSHOT_REFRESH_MS = Number.isFinite(STATE_SNAPSHOT_REFRESH_MS_RAW)
   ? STATE_SNAPSHOT_REFRESH_MS_RAW
   : 3000;
 const HIFI_RUNTIME_RECOVERY_COOLDOWN_MS = parseEnvPositiveInteger(process.env.TIKPAL_HIFI_RUNTIME_RECOVERY_COOLDOWN_MS, 10_000);
+const HIFI_RUNTIME_RECOVERY_MUTATION_QUIET_MS = parseEnvPositiveInteger(process.env.TIKPAL_HIFI_RUNTIME_RECOVERY_MUTATION_QUIET_MS, 8000);
 const KIOSK_HEARTBEAT_STALE_MS_RAW = Number(process.env.TIKPAL_KIOSK_HEARTBEAT_STALE_MS ?? 30_000);
 const KIOSK_HEARTBEAT_STALE_MS = Number.isFinite(KIOSK_HEARTBEAT_STALE_MS_RAW) && KIOSK_HEARTBEAT_STALE_MS_RAW >= 1_000
   ? KIOSK_HEARTBEAT_STALE_MS_RAW
@@ -239,7 +241,7 @@ const NAS_LIBRARY_ROOTS = parseEnvPathList(process.env.TIKPAL_NAS_LIBRARY_ROOTS)
 const NAS_LIBRARY_MPD_PREFIX = normalizeSafeRelativePath(process.env.TIKPAL_NAS_LIBRARY_MPD_PREFIX ?? "NAS") ?? "NAS";
 const NAS_LIBRARY_MAX_TRACKS = parseEnvPositiveInteger(process.env.TIKPAL_NAS_LIBRARY_MAX_TRACKS, 500);
 const USB_LIBRARY_SCAN_COMMAND = process.env.TIKPAL_USB_LIBRARY_SCAN_COMMAND ?? (API_MODE === "mpc" ? "./deploy/moode/tikpal-usb-library-sync.sh" : "");
-const USB_LIBRARY_AUTO_UPDATE = parseEnvBoolean(process.env.TIKPAL_USB_LIBRARY_AUTO_UPDATE ?? "1");
+const USB_LIBRARY_AUTO_UPDATE = parseEnvBoolean(process.env.TIKPAL_USB_LIBRARY_AUTO_UPDATE ?? "0");
 const USB_LIBRARY_AUTO_UPDATE_MIN_MS = parseEnvPositiveInteger(process.env.TIKPAL_USB_LIBRARY_AUTO_UPDATE_MIN_MS, 15_000);
 const LOCAL_LIBRARY_IMPORTS_DIR_NAME = normalizeSafeRelativePath(process.env.TIKPAL_LOCAL_LIBRARY_IMPORTS_DIR_NAME ?? "USB Imports") ?? "USB Imports";
 const LIBRARY_AUDIO_PROBE_ENABLED = parseEnvBoolean(process.env.TIKPAL_LIBRARY_AUDIO_PROBE_ENABLED ?? "1");
@@ -250,6 +252,7 @@ const MUSIC_LIBRARY_STATE_PATH = resolve(process.env.TIKPAL_MUSIC_LIBRARY_STATE_
 const ROOM_EXPERIENCE_STATE_PATH = resolve(process.env.TIKPAL_ROOM_EXPERIENCE_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "room-experience-state.json"));
 const AUDIO_VOLUME_STATE_PATH = resolve(process.env.TIKPAL_AUDIO_VOLUME_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "audio-volume-state.json"));
 const AUDIO_SOURCE_MEMORY_STATE_PATH = resolve(process.env.TIKPAL_AUDIO_SOURCE_MEMORY_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "audio-source-memory.json"));
+const PLAYBACK_MODE_STATE_PATH = resolve(process.env.TIKPAL_PLAYBACK_MODE_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "playback-mode-state.json"));
 const NAS_SOURCES_STATE_PATH = resolve(process.env.TIKPAL_NAS_SOURCES_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "nas-sources.json"));
 const NAS_CREDENTIALS_DIR = resolve(process.env.TIKPAL_NAS_CREDENTIALS_DIR ?? resolve(process.cwd(), ".tikpal", "nas-credentials"));
 const NAS_MOUNT_ROOT = resolve(process.env.TIKPAL_NAS_MOUNT_ROOT ?? "/mnt/tikpal-nas");
@@ -261,6 +264,8 @@ const NAS_DISCOVERY_HINTS = process.env.TIKPAL_NAS_DISCOVERY_HINTS ?? "";
 const WEB_MODE_SETTINGS_PATH = resolve(process.env.TIKPAL_WEB_MODE_SETTINGS_PATH ?? resolve(process.cwd(), ".tikpal", "web-mode-settings.json"));
 const WEB_MODE_STATE_PATH = resolve(process.env.TIKPAL_WEB_MODE_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "web-mode-state.json"));
 const WEB_MODE_HANDOFF_STATE_PATH = resolve(process.env.TIKPAL_WEB_MODE_HANDOFF_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "web-mode-handoff.json"));
+const MPD_SHUFFLE_MONITOR_INTERVAL_MS = parseEnvPositiveInteger(process.env.TIKPAL_MPD_SHUFFLE_MONITOR_INTERVAL_MS, 500);
+const MPD_SHUFFLE_RECENT_HISTORY_SIZE = parseEnvPositiveInteger(process.env.TIKPAL_MPD_SHUFFLE_RECENT_HISTORY_SIZE, 4);
 const WEB_MODE_COMMAND = process.env.TIKPAL_WEB_MODE_COMMAND ?? (API_MODE === "mpc" ? "./deploy/chromium/tikpal-web-mode.sh" : "");
 const WEB_MODE_COMMAND_TIMEOUT_MS = Number(process.env.TIKPAL_WEB_MODE_COMMAND_TIMEOUT_MS ?? 45_000);
 const WEB_MODE_OPEN_COMMAND_TIMEOUT_MS = Number(process.env.TIKPAL_WEB_MODE_OPEN_COMMAND_TIMEOUT_MS ?? 110_000);
@@ -593,6 +598,7 @@ let tikpalStateSnapshotGeneration = 0;
 let startupPlaybackPolicyPromise = null;
 let hifiRuntimeRecoveryPromise = null;
 let hifiRuntimeRecoveryLastAttemptAtMs = 0;
+let hifiRuntimeRecoveryQuietUntilMs = 0;
 let webModeOpenInFlight = false;
 let sourceSwitchInFlightCount = 0;
 let mpdRecoveryPromise = null;
@@ -2166,6 +2172,17 @@ async function withMpcMutationLock(task) {
   return await next;
 }
 
+function markHifiRuntimeRecoveryQuietWindow() {
+  hifiRuntimeRecoveryQuietUntilMs = Math.max(
+    hifiRuntimeRecoveryQuietUntilMs,
+    Date.now() + HIFI_RUNTIME_RECOVERY_MUTATION_QUIET_MS
+  );
+}
+
+function isHifiRuntimeRecoveryQuiet() {
+  return Date.now() < hifiRuntimeRecoveryQuietUntilMs;
+}
+
 function parseOutputVolumePercent(raw) {
   const matches = Array.from(String(raw ?? "").matchAll(/\[(\d{1,3})%\]/g));
   const lastMatch = matches.at(-1);
@@ -3293,7 +3310,7 @@ async function getOutputDeviceSnapshot() {
 }
 
 async function getMpcSystemSnapshot(statusRaw, statsRaw) {
-  const status = parseMpcStatus(statusRaw);
+  const status = applyTikpalPlaybackModeToStatus(parseMpcStatus(statusRaw));
   const stats = parseMpcStats(statsRaw);
   const [network, display, outputDevice, dspState, cpuTemp, uptime] = await Promise.all([
     getNetworkSnapshot(),
@@ -3326,7 +3343,7 @@ async function getMpcSystemSnapshot(statusRaw, statsRaw) {
 
 function getCachedMpcSystemSnapshot(statusRaw, statsRaw) {
   const cachedSystem = tikpalStateSnapshotCache?.state?.system ?? system;
-  const status = parseMpcStatus(statusRaw);
+  const status = applyTikpalPlaybackModeToStatus(parseMpcStatus(statusRaw));
   const stats = parseMpcStats(statsRaw);
   const scanRecentlyRequested = Date.now() - lastSystemLibraryScanRequestedAt < 15000;
 
@@ -4476,6 +4493,52 @@ async function buildWebModeState() {
 }
 
 let audioVolumeStateCache = null;
+let playbackModeStateCache = null;
+
+function normalizePlaybackModeState(raw = {}) {
+  const mode = String(raw?.mode ?? "").trim().toLowerCase();
+  return {
+    mode: PLAYBACK_MODES.has(mode) ? mode : null,
+    updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : null
+  };
+}
+
+function getCachedPlaybackModeState() {
+  if (playbackModeStateCache !== null) return playbackModeStateCache;
+  try {
+    playbackModeStateCache = normalizePlaybackModeState(JSON.parse(readFileSync(PLAYBACK_MODE_STATE_PATH, "utf8")));
+  } catch {
+    playbackModeStateCache = normalizePlaybackModeState();
+  }
+  return playbackModeStateCache;
+}
+
+async function writePlaybackModeState(mode) {
+  const normalizedMode = normalizePlaybackMode(mode);
+  const next = normalizePlaybackModeState({
+    mode: normalizedMode,
+    updatedAt: new Date().toISOString()
+  });
+  await mkdir(dirname(PLAYBACK_MODE_STATE_PATH), { recursive: true });
+  await writeFile(PLAYBACK_MODE_STATE_PATH, `${JSON.stringify(next, null, 2)}\n`);
+  playbackModeStateCache = next;
+  return next;
+}
+
+function applyTikpalPlaybackModeToStatus(status) {
+  const mode = getCachedPlaybackModeState().mode ?? status?.settings?.playMode ?? "sequence";
+  return {
+    ...status,
+    settings: {
+      ...(status?.settings ?? {}),
+      playMode: mode
+    }
+  };
+}
+
+async function readMpcStatusWithTikpalPlaybackMode(options = {}) {
+  return applyTikpalPlaybackModeToStatus(parseMpcStatus(await runMpc(["status"], options)));
+}
 
 function normalizeRememberedAudioSource(raw = {}) {
   const target = String(raw?.target ?? "").trim().toLowerCase();
@@ -7616,7 +7679,7 @@ async function getMpcSnapshot(options = {}) {
     runMpc(["stats"], { allowFailure: true })
   ]);
 
-  const status = parseMpcStatus(statusRaw);
+  const status = applyTikpalPlaybackModeToStatus(parseMpcStatus(statusRaw));
   const currentColumns = currentRaw.split("\t");
   const hasFormattedCurrent = currentColumns.length >= 4;
   const [title, artist, album, rawFile, duration] = hasFormattedCurrent
@@ -8566,7 +8629,8 @@ async function switchToSceneSource(action = {}) {
 }
 
 async function applyMpcPlayMode(mode) {
-  switch (mode) {
+  const normalizedMode = normalizePlaybackMode(mode);
+  switch (normalizedMode) {
     case "sequence":
       await runMpc(["random", "off"]);
       await runMpc(["repeat", "off"]);
@@ -8578,16 +8642,36 @@ async function applyMpcPlayMode(mode) {
       await runMpc(["single", "on"]);
       break;
     case "shuffle":
-      await runMpc(["random", "on"]);
+      // Tikpal owns shuffle jumps explicitly. MPD's built-in random can replay
+      // the previous/current queue position on short tracks, which feels like
+      // the new song was cut off.
+      await runMpc(["random", "off"]);
       await runMpc(["repeat", "off"]);
-      await runMpc(["single", "off"]);
+      await runMpc(["single", "on"]);
       break;
     default:
       throw new Error(`Unsupported playback mode: ${mode}`);
   }
+  await writePlaybackModeState(normalizedMode);
 }
 
-function getDifferentRandomMpcQueuePosition(status) {
+let mpcShuffleMonitorTimer = null;
+let mpcShuffleMonitorInFlight = false;
+let mpcShuffleRecentPositions = [];
+let mpcShuffleLastObservedFile = null;
+let mpcShuffleLastObservedPosition = 0;
+let mpcShuffleLastObservedNearEnd = false;
+
+function rememberMpcShufflePosition(position) {
+  const normalized = Math.round(Number(position));
+  if (!Number.isFinite(normalized) || normalized < 1) return;
+  mpcShuffleRecentPositions = [
+    normalized,
+    ...mpcShuffleRecentPositions.filter((candidate) => candidate !== normalized)
+  ].slice(0, MPD_SHUFFLE_RECENT_HISTORY_SIZE);
+}
+
+function getDifferentRandomMpcQueuePosition(status, options = {}) {
   const queueLength = Number(status?.queueLength);
   const currentPosition = Number(status?.currentTrackIndex);
   if (!Number.isFinite(queueLength) || queueLength <= 1) return null;
@@ -8595,6 +8679,22 @@ function getDifferentRandomMpcQueuePosition(status) {
   const current = Number.isFinite(currentPosition) && currentPosition >= 1 && currentPosition <= queueLength
     ? Math.round(currentPosition)
     : 1;
+  const hardExcluded = new Set([current, ...(options.hardExcludedPositions ?? [])]
+    .map((position) => Math.round(Number(position)))
+    .filter((position) => Number.isFinite(position) && position >= 1 && position <= queueLength));
+  const excluded = new Set([...hardExcluded, ...(options.excludedPositions ?? [])]
+    .map((position) => Math.round(Number(position)))
+    .filter((position) => Number.isFinite(position) && position >= 1 && position <= queueLength));
+  const allowedPositions = Array.from({ length: queueLength }, (_, index) => index + 1)
+    .filter((position) => !excluded.has(position));
+  if (allowedPositions.length > 0) {
+    return allowedPositions[Math.floor(Math.random() * allowedPositions.length)];
+  }
+  const fallbackAllowedPositions = Array.from({ length: queueLength }, (_, index) => index + 1)
+    .filter((position) => !hardExcluded.has(position));
+  if (fallbackAllowedPositions.length > 0) {
+    return fallbackAllowedPositions[Math.floor(Math.random() * fallbackAllowedPositions.length)];
+  }
   for (let attempt = 0; attempt < 8; attempt += 1) {
     const candidate = Math.floor(Math.random() * queueLength) + 1;
     if (candidate !== current) return candidate;
@@ -8602,11 +8702,40 @@ function getDifferentRandomMpcQueuePosition(status) {
   return current >= queueLength ? 1 : current + 1;
 }
 
-async function playDifferentRandomMpcQueueTrack(status = null) {
-  const currentStatus = status ?? parseMpcStatus(await runMpc(["status"], { allowFailure: true }));
-  const nextPosition = getDifferentRandomMpcQueuePosition(currentStatus);
+function isMpcStatusNearTrackEnd(status) {
+  const elapsed = Number(status?.elapsedSeconds);
+  const duration = Number(status?.durationSeconds);
+  if (!Number.isFinite(elapsed) || !Number.isFinite(duration) || duration <= 0) return false;
+  return elapsed >= Math.max(0, duration - 3);
+}
+
+function isMpcStatusAtTrackEnd(status) {
+  const elapsed = Number(status?.elapsedSeconds);
+  const duration = Number(status?.durationSeconds);
+  if (!Number.isFinite(elapsed) || !Number.isFinite(duration) || duration <= 0) return false;
+  return elapsed >= duration;
+}
+
+function getMostRecentDifferentMpcShufflePosition(position) {
+  const current = Math.round(Number(position));
+  if (!Number.isFinite(current) || current < 1) return null;
+  return mpcShuffleRecentPositions.find((candidate) => candidate !== current) ?? null;
+}
+
+async function playDifferentRandomMpcQueueTrack(status = null, options = {}) {
+  const currentStatus = status ?? await readMpcStatusWithTikpalPlaybackMode({ allowFailure: true });
+  const nextPosition = getDifferentRandomMpcQueuePosition(currentStatus, options);
   if (!nextPosition) return false;
   await runMpc(["play", String(nextPosition)]);
+  rememberMpcShufflePosition(currentStatus.currentTrackIndex);
+  rememberMpcShufflePosition(nextPosition);
+  const [nextStatus, nextFile] = await Promise.all([
+    readMpcStatusWithTikpalPlaybackMode({ allowFailure: true }),
+    runMpc(["--format", "%file%", "current"], { allowFailure: true })
+  ]);
+  mpcShuffleLastObservedFile = extractMpcCurrentFile(nextFile);
+  mpcShuffleLastObservedPosition = nextStatus.currentTrackIndex || nextPosition;
+  mpcShuffleLastObservedNearEnd = isMpcStatusNearTrackEnd(nextStatus);
   return true;
 }
 
@@ -8618,9 +8747,111 @@ function shouldRandomJumpCurrentMpcQueue() {
 async function maybeJumpToRandomMpcTrackAfterShuffleEnabled() {
   if (!shouldRandomJumpCurrentMpcQueue()) return false;
   await ensureMpcQueue();
-  const status = parseMpcStatus(await runMpc(["status"], { allowFailure: true }));
+  const status = await readMpcStatusWithTikpalPlaybackMode({ allowFailure: true });
   if (status.state !== "playing") return false;
-  return await playDifferentRandomMpcQueueTrack(status);
+  return await playDifferentRandomMpcQueueTrack(status, { excludedPositions: mpcShuffleRecentPositions });
+}
+
+async function reconcileMpcShuffleNaturalAdvance() {
+  const mode = getCachedPlaybackModeState().mode;
+  if (mode !== "shuffle" || !shouldRandomJumpCurrentMpcQueue()) {
+    mpcShuffleLastObservedFile = null;
+    mpcShuffleLastObservedPosition = 0;
+    mpcShuffleLastObservedNearEnd = false;
+    return false;
+  }
+
+  await withMpcMutationLock(async () => {
+    const status = await readMpcStatusWithTikpalPlaybackMode({ allowFailure: true });
+    if (status.settings.playMode !== "shuffle" || status.queueLength <= 1) {
+      return;
+    }
+
+    const currentFile = extractMpcCurrentFile(await runMpc(["--format", "%file%", "current"], { allowFailure: true }));
+    if (!currentFile) return;
+    const currentPosition = status.currentTrackIndex;
+    if (status.state !== "playing") {
+      if (mpcShuffleLastObservedNearEnd || isMpcStatusAtTrackEnd(status)) {
+        const jumped = await playDifferentRandomMpcQueueTrack(status, {
+          excludedPositions: mpcShuffleRecentPositions,
+          hardExcludedPositions: [getMostRecentDifferentMpcShufflePosition(currentPosition)]
+        });
+        if (jumped) {
+          await rememberCurrentLocalLibraryTrackSource();
+          tikpalStateSnapshotGeneration += 1;
+          void requestTikpalStateSnapshotRefresh({ force: true });
+        }
+      }
+      return;
+    }
+
+    const naturallyAdvanced = Boolean(
+      mpcShuffleLastObservedFile
+        && mpcShuffleLastObservedNearEnd
+        && currentFile !== mpcShuffleLastObservedFile
+        && currentPosition !== mpcShuffleLastObservedPosition
+    );
+
+    if (!naturallyAdvanced) {
+      if (isMpcStatusAtTrackEnd(status)) {
+        const jumped = await playDifferentRandomMpcQueueTrack(status, {
+          excludedPositions: mpcShuffleRecentPositions,
+          hardExcludedPositions: [getMostRecentDifferentMpcShufflePosition(currentPosition)]
+        });
+        if (jumped) {
+          await rememberCurrentLocalLibraryTrackSource();
+          tikpalStateSnapshotGeneration += 1;
+          void requestTikpalStateSnapshotRefresh({ force: true });
+          return;
+        }
+      }
+
+      mpcShuffleLastObservedFile = currentFile;
+      mpcShuffleLastObservedPosition = currentPosition;
+      mpcShuffleLastObservedNearEnd = isMpcStatusNearTrackEnd(status);
+      rememberMpcShufflePosition(currentPosition);
+      return;
+    }
+
+    const previousPosition = mpcShuffleLastObservedPosition;
+    const jumped = await playDifferentRandomMpcQueueTrack(status, {
+      excludedPositions: mpcShuffleRecentPositions,
+      hardExcludedPositions: [previousPosition]
+    });
+    if (!jumped) {
+      mpcShuffleLastObservedFile = currentFile;
+      mpcShuffleLastObservedPosition = currentPosition;
+      mpcShuffleLastObservedNearEnd = isMpcStatusNearTrackEnd(status);
+      rememberMpcShufflePosition(currentPosition);
+      return;
+    }
+
+    const nextStatus = await readMpcStatusWithTikpalPlaybackMode({ allowFailure: true });
+    const nextFile = extractMpcCurrentFile(await runMpc(["--format", "%file%", "current"], { allowFailure: true }));
+    mpcShuffleLastObservedFile = nextFile || currentFile;
+    mpcShuffleLastObservedPosition = nextStatus.currentTrackIndex || currentPosition;
+    mpcShuffleLastObservedNearEnd = isMpcStatusNearTrackEnd(nextStatus);
+    await rememberCurrentLocalLibraryTrackSource();
+    tikpalStateSnapshotGeneration += 1;
+    void requestTikpalStateSnapshotRefresh({ force: true });
+  });
+  return true;
+}
+
+function startMpcShuffleMonitor() {
+  if (API_MODE !== "mpc" || mpcShuffleMonitorTimer || MPD_SHUFFLE_MONITOR_INTERVAL_MS <= 0) return;
+  mpcShuffleMonitorTimer = setInterval(() => {
+    if (mpcShuffleMonitorInFlight) return;
+    mpcShuffleMonitorInFlight = true;
+    reconcileMpcShuffleNaturalAdvance()
+      .catch((error) => {
+        console.warn(`tikpal-api mpc shuffle monitor failed: ${error instanceof Error ? error.message : "unknown error"}`);
+      })
+      .finally(() => {
+        mpcShuffleMonitorInFlight = false;
+      });
+  }, MPD_SHUFFLE_MONITOR_INTERVAL_MS);
+  mpcShuffleMonitorTimer.unref?.();
 }
 
 async function applyMpcPlaybackActionUnlocked(action) {
@@ -8687,9 +8918,9 @@ async function applyMpcPlaybackActionUnlocked(action) {
       if (await switchRadioStationByOffset(1)) break;
       await ensureMpcQueue();
       {
-        const status = parseMpcStatus(await runMpc(["status"], { allowFailure: true }));
+        const status = await readMpcStatusWithTikpalPlaybackMode({ allowFailure: true });
         const randomJumped = status.settings.playMode === "shuffle"
-          ? await playDifferentRandomMpcQueueTrack(status)
+          ? await playDifferentRandomMpcQueueTrack(status, { excludedPositions: mpcShuffleRecentPositions })
           : false;
         if (!randomJumped) {
           await runMpc(["next"]);
@@ -8708,7 +8939,7 @@ async function applyMpcPlaybackActionUnlocked(action) {
       if (!Number.isFinite(seconds) || seconds < 0) {
         throw new Error("seek requires a non-negative value");
       }
-      await runMpc(["seek", formatMpcSeek(seconds)]);
+      await runMpc(["seek", formatMpcSeek(seconds)], { timeout: MPC_SEEK_TIMEOUT_MS });
       break;
     }
     case "favorite_toggle": {
@@ -8749,7 +8980,12 @@ async function applyMpcPlaybackActionUnlocked(action) {
 }
 
 async function applyMpcPlaybackAction(action) {
-  return await withMpcMutationLock(() => applyMpcPlaybackActionUnlocked(action));
+  markHifiRuntimeRecoveryQuietWindow();
+  try {
+    return await withMpcMutationLock(() => applyMpcPlaybackActionUnlocked(action));
+  } finally {
+    markHifiRuntimeRecoveryQuietWindow();
+  }
 }
 
 async function primeMpcPlayback() {
@@ -8865,6 +9101,14 @@ function shouldRecoverHifiRuntimePlayback(snapshot, action) {
   if (currentSource?.id !== action.target) return true;
 
   if (snapshot.playback?.state === "playing") {
+    if (
+      action.target === "mpd"
+      && currentSource?.id === "mpd"
+      && snapshot.playback?.settings?.playMode === "shuffle"
+    ) {
+      return false;
+    }
+
     if (action.target === "radio") {
       const expectedStationId = normalizeRememberedRadioStationId(action.radioStationId);
       const currentStationId = normalizeRememberedRadioStationId(currentSource?.radioStationId);
@@ -8926,6 +9170,7 @@ function recoverHifiRuntimePlaybackIfNeeded(snapshot) {
     || mpcRadioWeakNetworkRecoveryPromise
     || sourceSwitchInFlightCount > 0
     || webModeOpenInFlight
+    || isHifiRuntimeRecoveryQuiet()
   ) return null;
 
   const action = buildHifiRuntimeRecoveryAction(snapshot);
@@ -12859,6 +13104,7 @@ server.listen(PORT, HOST, () => {
     startupPlaybackPolicyPromise = applyStartupPlaybackPolicy().finally(() => {
       startupPlaybackPolicyPromise = null;
       startTikpalStateSnapshotCollector();
+      startMpcShuffleMonitor();
     });
     void startupPlaybackPolicyPromise;
   }

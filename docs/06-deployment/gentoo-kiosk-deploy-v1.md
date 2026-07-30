@@ -76,7 +76,46 @@ Expected high-signal line:
 HDMI-1 connected primary 2560x720+0+0
 ```
 
-The physical display prepare helper should run after kiosk start. Its job is to wait for `:0`, disable DPMS/screen saver, retile `HDMI-1` to `2560x720`, and apply the safe HDMI properties that stopped black-screen recovery churn on the Gentoo target.
+The physical display prepare helper should run before and after kiosk start. Its job is to wait for the HDMI DRM connector and EDID at boot, disable DPMS/screen saver, keep the Nouveau PCI path awake, retile `HDMI-1` to `2560x720`, and apply the safe HDMI properties that stopped black-screen recovery churn on the Gentoo target.
+
+Install the repo-owned helper as the root command used by the systemd drop-in:
+
+```bash
+install -o root -g root -m 0755 \
+  /home/moode/code/tikpal/deploy/chromium/tikpal-physical-display-prepare.sh \
+  /usr/local/sbin/tikpal-physical-display-prepare
+mkdir -p /etc/systemd/system/tikpal-kiosk.service.d
+cat >/etc/systemd/system/tikpal-kiosk.service.d/physical-display.conf <<'EOF'
+[Service]
+Environment=TIKPAL_KIOSK_ENV_FILE=/home/moode/code/tikpal/.env.kiosk
+ExecStartPre=+/usr/local/sbin/tikpal-physical-display-prepare wait-ready
+ExecStartPost=+/bin/sh -c 'systemctl stop tikpal-physical-display-kick.service >/dev/null 2>&1 || true; systemd-run --quiet --collect --no-block --unit=tikpal-physical-display-kick --property=Type=oneshot --setenv=TIKPAL_KIOSK_ENV_FILE="$TIKPAL_KIOSK_ENV_FILE" --setenv=HOME=/root /usr/local/sbin/tikpal-physical-display-prepare delayed-soft-kick'
+EOF
+systemctl daemon-reload
+```
+
+`deploy/systemd/install-systemd-services.sh --enable-kiosk` installs the same helper and drop-in. The `+` prefix keeps the command root-owned even though `tikpal-kiosk.service` itself runs Chromium as `moode`. The delayed kick is launched as a short transient unit so `tikpal-kiosk.service` does not block on the full delay window.
+
+The installer also creates `tikpal-display-stability.service`, an enabled oneshot that runs before the kiosk and calls:
+
+```bash
+/usr/local/sbin/tikpal-physical-display-prepare pci-stabilize
+```
+
+On the Gentoo target, set these production values in `.env.kiosk`:
+
+```conf
+TIKPAL_PHYSICAL_DISPLAY_PCI_POWER_DEVICES="0000:03:00.0 0000:03:00.1"
+TIKPAL_PHYSICAL_DISPLAY_PCIE_ASPM_POLICY=performance
+TIKPAL_PHYSICAL_DISPLAY_DRM_POLL=0
+TIKPAL_PHYSICAL_DISPLAY_NOUVEAU_PCI_ID=0000:03:00.0
+TIKPAL_KIOSK_PHYSICAL_DISPLAY_CHECK_ENABLED=0
+TIKPAL_KIOSK_PHYSICAL_DISPLAY_GPU_REBIND_BEFORE_RESTART=1
+```
+
+If the kernel refuses a runtime ASPM policy write, the helper logs it as optional and continues. The important baseline is that both Nouveau GPU and HDMI-audio PCI functions stay at `power/control=on`.
+
+On this GTX 750 host, avoid periodic physical `xrandr --query` probing from the watchdog. Repeated probing can trigger Nouveau DDC reads against the unused `DVI-I-1` connector (`DDC responded, but no EDID for DVI-I-1`) on roughly the watchdog cadence. Because this panel can be black while RandR still reports healthy, that periodic probe adds risk without giving a reliable visual signal. Keep `TIKPAL_KIOSK_PHYSICAL_DISPLAY_CHECK_ENABLED=0` and use the recovery helper manually or from an explicit service when the screen is visibly black.
 
 ## Audio Services
 
@@ -196,7 +235,8 @@ The Gentoo physical kiosk uses the same Player Library contract as moOde:
 
 - `Local`, `NAS`, `USB`, `Favorites`, and `Recently Added` are flat storage/filter tabs.
 - Local, NAS, and USB rows show compact audio/file information when the backend exposes codec, sample rate, bit depth, channel count, bitrate, or file size.
-- USB rows expose `Copy to Local`; the backend should not overwrite same-name Local files and should report `Already in Local` when no copy is needed.
+- Keep `TIKPAL_USB_LIBRARY_AUTO_UPDATE=0` on the physical Gentoo kiosk. Browsing USB can scan the mounted filesystem for visible rows, but it should not launch `mpc update USB` in the background while the user seeks or plays Local/NAS music. Do not keep legacy 30-second USB sync timers such as `tikpal-usb-audio-sync.timer` enabled on the physical kiosk; use Settings -> Library -> Scan library for an explicit MPD index refresh, with `TIKPAL_MPC_UPDATE_TIMEOUT_SECONDS=8` as the default guardrail.
+- USB rows expose `Copy to Local`; the backend should not overwrite same-name Local files and should report `Already in Local` when no copy is needed. Copied files live under `Codex/USB Imports/...`; `tikpal-local-library-sync.sh` must protect that imports directory while still using `rsync --delete` for repo-owned Local music, so copied tracks survive reboot and service reinstall.
 - Local rows expose `Delete`, but the first tap only reveals `Yes` and `No`. Only `Yes` performs deletion; `No`, storage changes, source changes, or closing Player must cancel the pending confirmation.
 - Long track lists keep a fixed right-side fast-scroll rail with `current / total` count and a draggable thumb. Dragging that rail only changes `scrollTop`; it must not select a track or auto-play on release.
 
@@ -324,7 +364,52 @@ Current low-power policy:
 - Do not enable TLP or global USB autosuspend.
 - Use DDC brightness conservatively; if a raw DDC value makes the panel unreadable, recover with a known visible value before changing UI mapping.
 
+If the panel looks black while services and X still read healthy, recover the display path before rebooting:
+
+```bash
+/usr/local/sbin/tikpal-physical-display-prepare soft-kick
+```
+
+That soft-kick sequence:
+
+- Sends DDC power on, brightness `45`, and contrast `50`.
+- Leaves VCP `0x60` input source untouched by default because this panel can report a source code that does not match the live Xorg output. If a future unit needs forced HDMI-1, set `TIKPAL_PHYSICAL_DISPLAY_INPUT_SOURCE=0x11` only after confirming that code on the physical monitor.
+- Treat DDC readbacks as advisory on this panel. `D6` can drift back to `x02` shortly after a successful power-on write while Xorg, Chromium, and the physical HDMI signal remain healthy, so watchdog recovery must not restart services from that value alone.
+- Before kiosk start, waits for `/sys/class/drm/card0-HDMI-A-1/status` to become `connected` and for EDID to be readable, avoiding early Xorg `no screens found`.
+- Runs `xset s off`, `xset s noblank`, `xset -dpms`, and `xset dpms force on`.
+- Turns `HDMI-1` off briefly, switches it to `1280x720`, waits briefly, then switches back to `2560x720 primary`.
+- Reapplies the safe RandR properties (`dithering depth=8 bpc`, `dithering mode=off`, `scaling mode=Full`) when the driver exposes them.
+- Sets configured PCI display devices to `power/control=on`; on this host use `0000:03:00.0` for the GTX 750 Nouveau display function and `0000:03:00.1` for its HDMI audio function.
+- Optionally sets `/sys/module/drm_kms_helper/parameters/poll` to `N` with `TIKPAL_PHYSICAL_DISPLAY_DRM_POLL=0`, reducing connector polling against unused DVI outputs.
+- Raises the Chromium kiosk window.
+- Runs delayed soft-kicks around `8s` and `25s` after kiosk start to mimic the part of a physical replug that wakes this panel after Chromium and Xorg settle.
+- Uses `xkbcomp` to replace display power keysyms such as `XF86PowerOff`, `XF86Sleep`, `XF86Suspend`, `XF86Display`, and `XF86ScreenSaver` with `NoSymbol`; ordinary typing and Fcitx/Onboard input are left alone.
+
+If `soft-kick` cannot recover a visible panel and a physical HDMI replug has been proven to fix it, the second-stage fallback is a Nouveau PCI rebind:
+
+```bash
+systemctl stop tikpal-kiosk.service
+TIKPAL_KIOSK_ENV_FILE=/home/moode/code/tikpal/.env.kiosk \
+  /usr/local/sbin/tikpal-physical-display-prepare nouveau-rebind
+systemctl start tikpal-kiosk.service
+```
+
+The watchdog now runs the same helper in `--check` mode. If the physical display check fails, it tries `soft-kick` first, then an optional `nouveau-rebind` when `TIKPAL_KIOSK_PHYSICAL_DISPLAY_GPU_REBIND_BEFORE_RESTART=1`, and only restarts `tikpal-kiosk.service` when the display helper cannot recover the X/HDMI state. It still does not restart API, web, MPD, or audio services for ordinary display recovery.
+
+Important limitation: this panel can be black to the eye while DRM, RandR, DDC, Chromium, and heartbeat all report healthy. In that exact state, software has no reliable visual sensor. The PCI `power/control=on` baseline and delayed kicks reduce the chance of recurrence; the proven recovery path is `nouveau-rebind`, with a physical HDMI replug as the final fallback if the panel receiver firmware ignores every software kick.
+
 ## Validation
+
+2026-07-30 physical-kiosk validation on `192.168.10.117`:
+
+- `systemctl is-system-running` returned `running`, and `systemctl --failed` returned `0`.
+- `tikpal-api`, `tikpal-web`, `tikpal-kiosk`, and `mpd` were active after the library and seek fixes.
+- `tikpal-usb-audio-sync.timer` was disabled and inactive. Keep it that way unless its helper is changed to avoid periodic `mpc update USB`.
+- Local library sync preserved `Codex/USB Imports/...` while pruning stale repo-owned files. This protects `Copy to Local` imports across reboot and service reinstall.
+- `/api/v1/audio/library?storage=local` returned Local tracks, and MPD `listall Codex` returned the same MPD-visible library root.
+- Local MPD playback accepted repeated seek actions through `/api/v1/playback/actions` without an `mpc ... seek ... timed out` error after USB auto-update was disabled.
+- Browsing USB via `/api/v1/audio/library?storage=usb` did not spawn a background `mpc update USB` process.
+- The Player header should keep the Volume slider and Local storage meter aligned as one group, with a readable free-space label and visible spacing before the Back button.
 
 Baseline service checks:
 

@@ -33,6 +33,10 @@ fi
 : "${TIKPAL_KIOSK_WATCHDOG_WEB_MODE_HEARTBEAT_BYPASS:=1}"
 : "${TIKPAL_KIOSK_WATCHDOG_DRY_RUN:=0}"
 : "${TIKPAL_KIOSK_WATCHDOG_SERVICE:=tikpal-kiosk.service}"
+: "${TIKPAL_KIOSK_PHYSICAL_DISPLAY_CHECK_ENABLED:=0}"
+: "${TIKPAL_KIOSK_PHYSICAL_DISPLAY_PREPARE_COMMAND:=/usr/local/sbin/tikpal-physical-display-prepare}"
+: "${TIKPAL_KIOSK_PHYSICAL_DISPLAY_SOFT_KICK_BEFORE_RESTART:=1}"
+: "${TIKPAL_KIOSK_PHYSICAL_DISPLAY_GPU_REBIND_BEFORE_RESTART:=0}"
 : "${TIKPAL_KIOSK_WATCHDOG_API_URL:=http://127.0.0.1:8787/api/v1/health}"
 : "${TIKPAL_KIOSK_URL:=http://localhost:4173/}"
 : "${TIKPAL_KIOSK_DISPLAY:=:0}"
@@ -93,6 +97,10 @@ print_check() {
   log "page heartbeat url: $TIKPAL_KIOSK_WATCHDOG_PAGE_HEARTBEAT_URL"
   log "web mode heartbeat bypass: $TIKPAL_KIOSK_WATCHDOG_WEB_MODE_HEARTBEAT_BYPASS"
   log "web mode profile root: $TIKPAL_WEB_MODE_PROFILE_ROOT"
+  log "physical display check: $TIKPAL_KIOSK_PHYSICAL_DISPLAY_CHECK_ENABLED"
+  log "physical display prepare: $TIKPAL_KIOSK_PHYSICAL_DISPLAY_PREPARE_COMMAND"
+  log "physical display soft-kick before restart: $TIKPAL_KIOSK_PHYSICAL_DISPLAY_SOFT_KICK_BEFORE_RESTART"
+  log "physical display GPU rebind before restart: $TIKPAL_KIOSK_PHYSICAL_DISPLAY_GPU_REBIND_BEFORE_RESTART"
   log "dry run: $TIKPAL_KIOSK_WATCHDOG_DRY_RUN"
 
   [[ -d "$APP_DIR/deploy/chromium" ]] || {
@@ -203,6 +211,13 @@ check_x_display() {
 check_chromium_process() {
   command -v pgrep >/dev/null 2>&1 || return 0
   pgrep -af 'chrom(e|ium)' 2>/dev/null | grep -F -- "$TIKPAL_KIOSK_URL" >/dev/null 2>&1
+}
+
+check_physical_display() {
+  is_enabled "$TIKPAL_KIOSK_PHYSICAL_DISPLAY_CHECK_ENABLED" || return 0
+  [[ -x "$TIKPAL_KIOSK_PHYSICAL_DISPLAY_PREPARE_COMMAND" ]] || return 0
+  run_with_timeout "$TIKPAL_KIOSK_WATCHDOG_X_TIMEOUT_SECONDS" \
+    "$TIKPAL_KIOSK_PHYSICAL_DISPLAY_PREPARE_COMMAND" --check >/dev/null 2>&1
 }
 
 check_http_url() {
@@ -348,7 +363,55 @@ restart_kiosk() {
 
 has_display_stack_reason() {
   local reason="$1"
-  [[ "$reason" == *"x-unresponsive"* || "$reason" == *"v3d-reset"* ]]
+  [[ "$reason" == *"x-unresponsive"* || "$reason" == *"v3d-reset"* || "$reason" == *"physical-display-unhealthy"* ]]
+}
+
+try_physical_display_soft_recover() {
+  local reason="$1"
+  is_enabled "$TIKPAL_KIOSK_PHYSICAL_DISPLAY_SOFT_KICK_BEFORE_RESTART" || return 1
+  [[ "$reason" == *"physical-display-unhealthy"* || "$reason" == *"x-unresponsive"* || "$reason" == *"v3d-reset"* ]] || return 1
+  [[ -x "$TIKPAL_KIOSK_PHYSICAL_DISPLAY_PREPARE_COMMAND" ]] || return 1
+
+  log "trying physical display soft-kick before kiosk restart: $reason"
+  if is_enabled "$TIKPAL_KIOSK_WATCHDOG_DRY_RUN"; then
+    log "dry-run physical display soft-kick suppressed"
+    return 1
+  fi
+
+  run_with_timeout "$TIKPAL_KIOSK_WATCHDOG_RESTART_TIMEOUT_SECONDS" \
+    "$TIKPAL_KIOSK_PHYSICAL_DISPLAY_PREPARE_COMMAND" soft-kick >/dev/null 2>&1 || return 1
+  check_physical_display || return 1
+  check_x_display || return 1
+  log "physical display recovered without restarting $TIKPAL_KIOSK_WATCHDOG_SERVICE"
+  return 0
+}
+
+try_physical_display_gpu_rebind_recover() {
+  local reason="$1"
+  is_enabled "$TIKPAL_KIOSK_PHYSICAL_DISPLAY_GPU_REBIND_BEFORE_RESTART" || return 1
+  has_display_stack_reason "$reason" || return 1
+  [[ -x "$TIKPAL_KIOSK_PHYSICAL_DISPLAY_PREPARE_COMMAND" ]] || return 1
+
+  log "trying physical display GPU rebind before kiosk restart: $reason"
+  if is_enabled "$TIKPAL_KIOSK_WATCHDOG_DRY_RUN"; then
+    log "dry-run physical display GPU rebind suppressed"
+    return 1
+  fi
+  command -v systemctl >/dev/null 2>&1 || return 1
+
+  systemctl stop "$TIKPAL_KIOSK_WATCHDOG_SERVICE" >/dev/null 2>&1 || true
+  run_with_timeout "$TIKPAL_KIOSK_WATCHDOG_RESTART_TIMEOUT_SECONDS" \
+    "$TIKPAL_KIOSK_PHYSICAL_DISPLAY_PREPARE_COMMAND" nouveau-rebind >/dev/null 2>&1 || return 1
+  run_with_timeout "$TIKPAL_KIOSK_WATCHDOG_RESTART_TIMEOUT_SECONDS" \
+    systemctl start "$TIKPAL_KIOSK_WATCHDOG_SERVICE" || return 1
+  sleep 8
+  run_with_timeout "$TIKPAL_KIOSK_WATCHDOG_RESTART_TIMEOUT_SECONDS" \
+    "$TIKPAL_KIOSK_PHYSICAL_DISPLAY_PREPARE_COMMAND" soft-kick >/dev/null 2>&1 || true
+  check_physical_display || return 1
+  check_x_display || return 1
+  check_chromium_process || return 1
+  log "physical display recovered with GPU rebind"
+  return 0
 }
 
 next_restart_count() {
@@ -405,6 +468,7 @@ fi
 if is_enabled "$TIKPAL_KIOSK_WATCHDOG_CHROMIUM_PROCESS_SCAN"; then
   check_chromium_process || reasons+=("chromium-missing")
 fi
+check_physical_display || reasons+=("physical-display-unhealthy")
 if is_enabled "$TIKPAL_KIOSK_WATCHDOG_WEB_URL_SCAN"; then
   check_http_url "$TIKPAL_KIOSK_URL" || reasons+=("web-unhealthy")
 fi
@@ -451,6 +515,16 @@ if [[ "$last_restart" -gt 0 && "$cooldown" =~ ^[0-9]+$ && $((now - last_restart)
 fi
 
 if maybe_reboot_for_persistent_display_failure "$reason" "$now"; then
+  exit 0
+fi
+
+if try_physical_display_soft_recover "$reason"; then
+  write_state_number "$failure_file" "0"
+  exit 0
+fi
+
+if try_physical_display_gpu_rebind_recover "$reason"; then
+  write_state_number "$failure_file" "0"
   exit 0
 fi
 

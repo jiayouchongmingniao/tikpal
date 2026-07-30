@@ -3477,10 +3477,10 @@ select {
 
 .library-volume-actions {
   display: grid;
-  grid-template-columns: auto minmax(136px, 190px) 46px minmax(170px, 230px) auto;
+  grid-template-columns: auto minmax(148px, 208px) 50px minmax(198px, 258px) auto;
   align-items: center;
-  gap: 10px;
-  min-width: 620px;
+  gap: 12px;
+  min-width: 684px;
 }
 
 .library-volume-label,
@@ -3513,7 +3513,7 @@ select {
 
 .library-local-storage-copy {
   position: absolute;
-  top: -3px;
+  top: -5px;
   right: 0;
   left: 0;
   display: flex;
@@ -3522,7 +3522,7 @@ select {
   gap: 8px;
   min-width: 0;
   color: var(--theme-text-soft);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 650;
   line-height: 1;
 }
@@ -3542,7 +3542,7 @@ select {
 
 .library-local-storage-copy strong {
   color: var(--theme-info-strong);
-  font-size: 11px;
+  font-size: 14px;
   font-weight: 760;
 }
 
@@ -3606,6 +3606,7 @@ select {
   align-items: center;
   justify-content: center;
   gap: 7px;
+  margin-left: 6px;
   min-width: 78px;
   height: 38px;
   padding: 0 12px;

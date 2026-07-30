@@ -511,8 +511,11 @@ async function waitForOutput(text) {
 let outputBuffer = "";
 
 function mpcFocusedSmokeEnv(overrides = {}) {
+  const playbackModeStatePath = overrides.TIKPAL_PLAYBACK_MODE_STATE_PATH
+    ?? path.join(tmpdir(), `tikpal-api-smoke-playback-mode-${process.pid}-${Math.random().toString(36).slice(2)}.json`);
   return {
     ...process.env,
+    TIKPAL_PLAYBACK_MODE_STATE_PATH: playbackModeStatePath,
     ...overrides,
     TIKPAL_STARTUP_SCENE_SOUND_ENABLED: "0"
   };
@@ -1484,6 +1487,7 @@ async function runMpcHifiRuntimePlaybackRecoverySmoke() {
   const roomExperienceStatePath = path.join(workspace, "room-experience-state.json");
   const audioSourceMemoryStatePath = path.join(workspace, "audio-source-memory.json");
   const webModeStatePath = path.join(workspace, "web-mode-state.json");
+  const playbackModeStatePath = path.join(workspace, "playback-mode-state.json");
   const radioUri = "http://radio.example/runtime-restore";
   const otherRadioUri = "http://radio.example/runtime-other";
   const rememberedTrackPath = "Focus/Lo-fi Ambient/FASSounds - Good Night - Lofi Cozy Chill Music - 02m27s - Lo-fi.mp3";
@@ -1654,12 +1658,14 @@ if (process.argv.join(" ").includes("cfg_radio")) {
       TIKPAL_RADIO_LATE_PLAY_NUDGE_DELAYS_MS: "",
       TIKPAL_ROOM_EXPERIENCE_STATE_PATH: roomExperienceStatePath,
       TIKPAL_AUDIO_SOURCE_MEMORY_STATE_PATH: audioSourceMemoryStatePath,
+      TIKPAL_PLAYBACK_MODE_STATE_PATH: playbackModeStatePath,
       TIKPAL_WEB_MODE_STATE_PATH: webModeStatePath,
       TIKPAL_OUTPUT_VOLUME_GET_COMMAND: "",
       TIKPAL_RADIO_XRUN_GRACE_MS: "500",
       TIKPAL_RADIO_XRUN_WINDOW_MS: "5000",
       TIKPAL_RADIO_XRUN_SKIP_THRESHOLD: "3",
       TIKPAL_HIFI_RUNTIME_RECOVERY_COOLDOWN_MS: "1000",
+      TIKPAL_HIFI_RUNTIME_RECOVERY_MUTATION_QUIET_MS: "1",
       TIKPAL_STATE_SNAPSHOT_REFRESH_MS: "1000"
     }),
     stdio: ["ignore", "pipe", "pipe"]
@@ -1808,6 +1814,7 @@ if (process.argv.join(" ").includes("cfg_radio")) {
       librarySwitch.response.ok,
       `mpc Hi-Fi runtime recovery smoke should update remembered Library through the source API: ${librarySwitch.response.status} ${JSON.stringify(librarySwitch.body)}`
     );
+
     await writeFile(fakeMpcStatePath, JSON.stringify({
       currentFile: "",
       queue: [`Codex/${rememberedTrackPath}`],
@@ -1837,6 +1844,25 @@ if (process.argv.join(" ").includes("cfg_radio")) {
       await wait(150);
     }
     assert(recoveredLibrary, "mpc Hi-Fi runtime recovery should restore stopped remembered Library playback");
+
+    const shuffleMode = await requestFrom(baseUrl, "/api/v1/playback/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "play_mode_set", mode: "shuffle" })
+    });
+    assert(shuffleMode.response.ok, "mpc Hi-Fi runtime recovery smoke should enable Library shuffle mode");
+    await writeFile(fakeMpcStatePath, JSON.stringify({
+      currentFile: "",
+      queue: fakeMpcTracks,
+      current: 1,
+      playbackState: "playing",
+      volume: 30,
+      switchCount: 0
+    }));
+    await wait(2500);
+    await requestFrom(baseUrl, "/api/v1/system/state");
+    fakeState = JSON.parse(await readFile(fakeMpcStatePath, "utf8"));
+    assert(fakeState.current === 1, "mpc Hi-Fi runtime recovery should not pull shuffle playback back to the remembered Library track");
+    assert(fakeState.switchCount === 0, "mpc Hi-Fi runtime recovery should not reload Library while shuffle is playing a different track");
   } finally {
     if (server.exitCode === null && server.signalCode === null) {
       server.kill("SIGTERM");
@@ -1868,6 +1894,7 @@ async function runMpcLocalLibraryPathSmoke(roomExperienceStatePath) {
   const fakeWebModeStatePath = path.join(workspace, "web-mode-state.json");
   const fakeWebModeHandoffStatePath = path.join(workspace, "web-mode-handoff.json");
   const fakeAudioSourceMemoryStatePath = path.join(workspace, "audio-source-memory.json");
+  const fakePlaybackModeStatePath = path.join(workspace, "playback-mode-state.json");
   const fakeMpdMusicRoot = path.join(workspace, "mpd-music");
   const fakeUsbRoot = path.join(workspace, "Session Disk");
   const fakeNasRoot = path.join(workspace, "TikpalNAS");
@@ -2143,12 +2170,14 @@ if (args[0] === "open" && args[1] === ${JSON.stringify(failedProvider)}) {
 	      TIKPAL_USB_LIBRARY_ROOTS: fakeUsbRoot,
 	      TIKPAL_USB_LIBRARY_MPD_PREFIX: "USB",
 	      TIKPAL_USB_LIBRARY_SCAN_COMMAND: `${process.execPath} ${fakeUsbScanCommandPath}`,
+	      TIKPAL_USB_LIBRARY_AUTO_UPDATE: "1",
 	      TIKPAL_USB_LIBRARY_AUTO_UPDATE_MIN_MS: "50",
 	      TIKPAL_NAS_LIBRARY_ROOTS: fakeNasRoot,
 	      TIKPAL_NAS_LIBRARY_MPD_PREFIX: "NAS",
 	      TIKPAL_OUTPUT_VOLUME_GET_COMMAND: "",
       TIKPAL_ROOM_EXPERIENCE_STATE_PATH: roomExperienceStatePath,
       TIKPAL_AUDIO_SOURCE_MEMORY_STATE_PATH: fakeAudioSourceMemoryStatePath,
+      TIKPAL_PLAYBACK_MODE_STATE_PATH: fakePlaybackModeStatePath,
       TIKPAL_SPOTIFY_ACTIVATE_COMMAND: `${process.execPath} ${fakeExternalDisableCommandPath} spotify-enable`,
       TIKPAL_SPOTIFY_READY_COMMAND: "true",
       TIKPAL_SPOTIFY_ACTIVE_COMMAND: "true",
@@ -2359,8 +2388,8 @@ if (args[0] === "open" && args[1] === ${JSON.stringify(failedProvider)}) {
 	    assert(shuffle.body.playback.currentTrackIndex !== 1, "mpc local library shuffle should immediately leave the current track");
 	    assert(shuffle.body.audio.rememberedSource?.localTrackPath !== localTrackPath, "mpc local library shuffle should remember the random track");
 	    const shuffleLog = await readFile(fakeMpcLogPath, "utf8");
-	    assert(shuffleLog.includes("random\ton"), "mpc local library shuffle should enable MPD random mode");
-	    assert(shuffleLog.includes("single\toff"), "mpc local library shuffle should clear single-track repeat");
+	    assert(shuffleLog.includes("random\toff"), "mpc local library shuffle should keep MPD random off so Tikpal controls de-duplicated random jumps");
+	    assert(shuffleLog.includes("single\ton"), "mpc local library shuffle should keep MPD single mode on so Tikpal owns track boundaries");
 	    assert(/(^|\n)play\t[23](\n|$)/.test(shuffleLog), "mpc local library shuffle should jump to a different queue position");
 
 	    await writeFile(fakeMpcLogPath, "");
@@ -2758,6 +2787,7 @@ async function runMpcRadioPresetFastSnapshotSmoke(roomExperienceStatePath) {
   const fakeAudioVolumeStatePath = path.join(workspace, "audio-volume-state.json");
   const fakeAudioSourceMemoryStatePath = path.join(workspace, "audio-source-memory.json");
   const fakeWebModeStatePath = path.join(workspace, "web-mode-state.json");
+  const fakePlaybackModeStatePath = path.join(workspace, "playback-mode-state.json");
   const radioUri = "http://radio.example/tikpal-calm";
 
   await writeFile(fakeMpcStatePath, JSON.stringify({
@@ -3027,6 +3057,7 @@ if (getIndex >= 0) {
       TIKPAL_RADIO_LOGO_DIR: fakeLogoDir,
       TIKPAL_AUDIO_VOLUME_STATE_PATH: fakeAudioVolumeStatePath,
       TIKPAL_AUDIO_SOURCE_MEMORY_STATE_PATH: fakeAudioSourceMemoryStatePath,
+      TIKPAL_PLAYBACK_MODE_STATE_PATH: fakePlaybackModeStatePath,
       TIKPAL_MPD_HOST: "127.0.0.1",
       TIKPAL_MPD_PORT: "6600",
       TIKPAL_ROOM_EXPERIENCE_STATE_PATH: roomExperienceStatePath,

@@ -9,6 +9,7 @@ MPC_BIN="${TIKPAL_MPC_BIN:-mpc}"
 MPD_HOST="${TIKPAL_MPD_HOST:-127.0.0.1}"
 MPD_PORT="${TIKPAL_MPD_PORT:-6600}"
 MPD_LIBRARY_OWNER="${TIKPAL_MPD_LIBRARY_OWNER:-mpd:audio}"
+MPC_UPDATE_TIMEOUT_SECONDS="${TIKPAL_MPC_UPDATE_TIMEOUT_SECONDS:-8}"
 
 warn() {
   printf 'tikpal-usb-library-sync: %s\n' "$*" >&2
@@ -127,6 +128,20 @@ count_audio_files() {
   \) ! -name '._*' 2>/dev/null | wc -l | tr -d '[:space:]'
 }
 
+update_mpd() {
+  local prefix="$1"
+  if command -v "$MPC_BIN" >/dev/null 2>&1; then
+    if command -v timeout >/dev/null 2>&1; then
+      timeout -k 1s "${MPC_UPDATE_TIMEOUT_SECONDS}s" "$MPC_BIN" --host "$MPD_HOST" --port "$MPD_PORT" update "$prefix" >/dev/null \
+        || warn "mpc update $prefix timed out or failed"
+    else
+      "$MPC_BIN" --host "$MPD_HOST" --port "$MPD_PORT" update "$prefix" >/dev/null || warn "mpc update $prefix failed"
+    fi
+  else
+    warn "$MPC_BIN not found; symlinks were updated but MPD was not refreshed"
+  fi
+}
+
 apply_sync() {
   roots=()
   while IFS= read -r root; do
@@ -178,11 +193,7 @@ apply_sync() {
     done < <(find "$prefix_dir" -maxdepth 1 -mindepth 1 -type l 2>/dev/null)
   fi
 
-  if command -v "$MPC_BIN" >/dev/null 2>&1; then
-    "$MPC_BIN" --host "$MPD_HOST" --port "$MPD_PORT" update "$USB_MPD_PREFIX" >/dev/null || warn "mpc update $USB_MPD_PREFIX failed"
-  else
-    warn "$MPC_BIN not found; symlinks were updated but MPD was not refreshed"
-  fi
+  update_mpd "$USB_MPD_PREFIX"
 
   printf 'usbRoots=%s linked=%s audioFiles=%s mpdPrefix=%s\n' "${#roots[@]}" "$linked" "$tracks" "$USB_MPD_PREFIX"
 }

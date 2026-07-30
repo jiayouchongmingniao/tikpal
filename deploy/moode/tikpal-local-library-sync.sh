@@ -7,10 +7,12 @@ MPD_MUSIC_ROOT="${TIKPAL_MPD_MUSIC_ROOT:-/var/lib/mpd/music}"
 LOCAL_MPD_PREFIX="${TIKPAL_LOCAL_LIBRARY_MPD_PREFIX:-${TIKPAL_MPD_DEFAULT_QUEUE_PATH:-Codex}}"
 PUBLIC_ASSETS_ROOT="${TIKPAL_PUBLIC_ASSETS_ROOT:-$APP_DIR/public/assets}"
 LOCAL_SOURCE_ROOT="${TIKPAL_LOCAL_LIBRARY_SOURCE_ROOT:-$PUBLIC_ASSETS_ROOT/music}"
+LOCAL_IMPORTS_DIR_NAME="${TIKPAL_LOCAL_LIBRARY_IMPORTS_DIR_NAME:-USB Imports}"
 MPC_BIN="${TIKPAL_MPC_BIN:-mpc}"
 MPD_HOST="${TIKPAL_MPD_HOST:-127.0.0.1}"
 MPD_PORT="${TIKPAL_MPD_PORT:-6600}"
 MPD_LIBRARY_OWNER="${TIKPAL_MPD_LIBRARY_OWNER:-mpd:audio}"
+MPC_UPDATE_TIMEOUT_SECONDS="${TIKPAL_MPC_UPDATE_TIMEOUT_SECONDS:-8}"
 RSYNC_BIN="${TIKPAL_RSYNC_BIN:-rsync}"
 SUDO=()
 
@@ -46,6 +48,14 @@ select_sudo() {
   exit 1
 }
 
+run_privileged() {
+  if [ "${#SUDO[@]}" -gt 0 ]; then
+    "${SUDO[@]}" "$@"
+  else
+    "$@"
+  fi
+}
+
 count_audio_files() {
   find "$1" -maxdepth 10 -type f \( \
     -iname '*.aac' -o -iname '*.aif' -o -iname '*.aiff' -o -iname '*.alac' -o \
@@ -56,15 +66,20 @@ count_audio_files() {
 
 apply_permissions() {
   local target_dir="$1"
-  "${SUDO[@]}" chown -R "$MPD_LIBRARY_OWNER" "$target_dir" 2>/dev/null || true
-  "${SUDO[@]}" find "$target_dir" -type d -exec chmod 2775 {} + 2>/dev/null || true
-  "${SUDO[@]}" find "$target_dir" -type f -exec chmod 0664 {} + 2>/dev/null || true
+  run_privileged chown -R "$MPD_LIBRARY_OWNER" "$target_dir" 2>/dev/null || true
+  run_privileged find "$target_dir" -type d -exec chmod 2775 {} + 2>/dev/null || true
+  run_privileged find "$target_dir" -type f -exec chmod 0664 {} + 2>/dev/null || true
 }
 
 update_mpd() {
   local prefix="$1"
   if command -v "$MPC_BIN" >/dev/null 2>&1; then
-    "$MPC_BIN" --host "$MPD_HOST" --port "$MPD_PORT" update "$prefix" >/dev/null || warn "mpc update $prefix failed"
+    if command -v timeout >/dev/null 2>&1; then
+      timeout -k 1s "${MPC_UPDATE_TIMEOUT_SECONDS}s" "$MPC_BIN" --host "$MPD_HOST" --port "$MPD_PORT" update "$prefix" >/dev/null \
+        || warn "mpc update $prefix timed out or failed"
+    else
+      "$MPC_BIN" --host "$MPD_HOST" --port "$MPD_PORT" update "$prefix" >/dev/null || warn "mpc update $prefix failed"
+    fi
   else
     warn "$MPC_BIN not found; local library files were synced but MPD was not refreshed"
   fi
@@ -86,9 +101,13 @@ check_sync() {
 }
 
 apply_sync() {
-  local safe_prefix
+  local safe_prefix safe_imports_dir
   safe_prefix="$(normalize_relative_path "$LOCAL_MPD_PREFIX")" || {
     warn "invalid local MPD prefix: $LOCAL_MPD_PREFIX"
+    exit 2
+  }
+  safe_imports_dir="$(normalize_relative_path "$LOCAL_IMPORTS_DIR_NAME")" || {
+    warn "invalid local imports directory: $LOCAL_IMPORTS_DIR_NAME"
     exit 2
   }
   if [ ! -d "$LOCAL_SOURCE_ROOT" ]; then
@@ -109,14 +128,15 @@ apply_sync() {
   local target_dir="$MPD_MUSIC_ROOT/$safe_prefix"
   select_sudo "$target_dir"
   if [ -L "$target_dir" ]; then
-    "${SUDO[@]}" unlink "$target_dir"
+    run_privileged unlink "$target_dir"
   fi
   if [ -e "$target_dir" ] && [ ! -d "$target_dir" ]; then
     warn "$target_dir exists and is not a directory"
     exit 1
   fi
-  "${SUDO[@]}" mkdir -p "$target_dir"
-  "${SUDO[@]}" "$RSYNC_BIN" -r --links --delete --exclude '._*' "$LOCAL_SOURCE_ROOT/" "$target_dir/"
+  run_privileged mkdir -p "$target_dir"
+  rsync_args=(-r --links --delete --filter "P /$safe_imports_dir/***" --exclude '._*')
+  run_privileged "$RSYNC_BIN" "${rsync_args[@]}" "$LOCAL_SOURCE_ROOT/" "$target_dir/"
   apply_permissions "$target_dir"
   update_mpd "$safe_prefix"
 

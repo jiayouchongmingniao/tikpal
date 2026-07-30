@@ -211,6 +211,7 @@ export function PlayerOverlay({
   const [seekDraftSeconds, setSeekDraftSeconds] = useState<number | null>(null);
   const [seekPendingSeconds, setSeekPendingSeconds] = useState<number | null>(null);
   const [seekError, setSeekError] = useState<string | null>(null);
+  const seekCommitInFlightRef = useRef(false);
   const [selectedPrimaryPanel, setSelectedPrimaryPanel] = useState<PrimaryPanelId>("library");
   const [selectedLibraryStorage, setSelectedLibraryStorage] = useState<LibraryFilterId>("local");
   const [selectedLibraryTrackId, setSelectedLibraryTrackId] = useState<string | null>(null);
@@ -627,7 +628,7 @@ export function PlayerOverlay({
   }, [seekSupported]);
 
   async function commitSeek(nextSeconds: number | null) {
-    if (!seekSupported || nextSeconds === null || status.pending) {
+    if (!seekSupported || nextSeconds === null || status.pending || seekCommitInFlightRef.current) {
       setSeekDraftSeconds(null);
       return;
     }
@@ -636,12 +637,14 @@ export function PlayerOverlay({
     setSeekDraftSeconds(null);
     setSeekPendingSeconds(clampedSeconds);
     setSeekError(null);
+    seekCommitInFlightRef.current = true;
 
     try {
       await onPlaybackAction("seek", clampedSeconds);
     } catch (error) {
-      setSeekError(error instanceof Error ? error.message : "Seek failed");
+      setSeekError(friendlyUiError(error instanceof Error ? error.message : String(error), "Seek did not move. Try again."));
     } finally {
+      seekCommitInFlightRef.current = false;
       setSeekPendingSeconds(null);
     }
   }
@@ -1075,12 +1078,12 @@ export function PlayerOverlay({
                     aria-label="Seek position"
                     disabled={status.pending}
                     onChange={(event) => handleSeekDraft(event.currentTarget.value)}
-                    onPointerUp={() => void commitSeek(seekDraftSeconds)}
+                    onPointerUp={(event) => void commitSeek(Number(event.currentTarget.value))}
                     onPointerCancel={() => setSeekDraftSeconds(null)}
-                    onBlur={() => void commitSeek(seekDraftSeconds)}
+                    onBlur={(event) => void commitSeek(Number(event.currentTarget.value))}
                     onKeyUp={(event) => {
                       if (event.key === "ArrowLeft" || event.key === "ArrowRight" || event.key === "Home" || event.key === "End" || event.key === "PageUp" || event.key === "PageDown") {
-                        void commitSeek(seekDraftSeconds);
+                        void commitSeek(Number(event.currentTarget.value));
                       }
                     }}
                   />
