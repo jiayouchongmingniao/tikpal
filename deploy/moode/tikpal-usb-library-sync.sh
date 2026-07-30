@@ -5,6 +5,11 @@ MPD_MUSIC_ROOT="${TIKPAL_MPD_MUSIC_ROOT:-/var/lib/mpd/music}"
 USB_MPD_PREFIX="${TIKPAL_USB_LIBRARY_MPD_PREFIX:-USB}"
 USB_LIBRARY_ROOTS="${TIKPAL_USB_LIBRARY_ROOTS:-}"
 USB_LIBRARY_AUTO_ROOTS="${TIKPAL_USB_LIBRARY_AUTO_ROOTS:-/media,/run/media}"
+USB_LIBRARY_AUTO_MOUNT="${TIKPAL_USB_LIBRARY_AUTO_MOUNT:-0}"
+USB_LIBRARY_MOUNT_ROOT="${TIKPAL_USB_LIBRARY_MOUNT_ROOT:-/run/media/tikpal}"
+USB_LIBRARY_AUTO_MOUNT_FSTYPES="${TIKPAL_USB_LIBRARY_AUTO_MOUNT_FSTYPES:-exfat,vfat,ntfs,ntfs3,ext2,ext3,ext4}"
+USB_LIBRARY_AUTO_MOUNT_WAIT_SECONDS="${TIKPAL_USB_LIBRARY_AUTO_MOUNT_WAIT_SECONDS:-8}"
+USB_LIBRARY_AUTO_MOUNT_RETRY_INTERVAL_SECONDS="${TIKPAL_USB_LIBRARY_AUTO_MOUNT_RETRY_INTERVAL_SECONDS:-1}"
 MPC_BIN="${TIKPAL_MPC_BIN:-mpc}"
 MPD_HOST="${TIKPAL_MPD_HOST:-127.0.0.1}"
 MPD_PORT="${TIKPAL_MPD_PORT:-6600}"
@@ -13,6 +18,13 @@ MPC_UPDATE_TIMEOUT_SECONDS="${TIKPAL_MPC_UPDATE_TIMEOUT_SECONDS:-8}"
 
 warn() {
   printf 'tikpal-usb-library-sync: %s\n' "$*" >&2
+}
+
+truthy() {
+  case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
+    1|yes|true|on|enabled) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 split_path_list() {
@@ -32,6 +44,120 @@ path_is_within() {
   local base="${1%/}"
   local candidate="${2%/}"
   [ "$candidate" = "$base" ] || [[ "$candidate" == "$base/"* ]]
+}
+
+lsblk_value() {
+  local line="$1"
+  local key="$2"
+  printf '%s\n' "$line" | sed -n "s/.*${key}=\"\\([^\"]*\\)\".*/\\1/p"
+}
+
+fstype_allowed() {
+  local fstype="$1"
+  local allowed_list
+  allowed_list="${USB_LIBRARY_AUTO_MOUNT_FSTYPES//:/,}"
+  allowed_list=",${allowed_list,,},"
+  [[ "$allowed_list" == *",${fstype,,},"* ]]
+}
+
+safe_mount_name() {
+  local value="$1"
+  value="$(printf '%s' "$value" | tr ' /' '__' | tr -cd '[:alnum:]_.+-')"
+  [ -n "$value" ] && printf '%s\n' "$value" || printf 'drive\n'
+}
+
+mount_options_for_fstype() {
+  case "$1" in
+    exfat|vfat)
+      printf 'ro,uid=mpd,gid=audio,umask=0022,iocharset=utf8,nosuid,nodev'
+      ;;
+    ntfs|ntfs3)
+      printf 'ro,uid=mpd,gid=audio,umask=0022,nosuid,nodev'
+      ;;
+    *)
+      printf 'ro,nosuid,nodev'
+      ;;
+  esac
+}
+
+list_unmounted_usb_partitions() {
+  command -v lsblk >/dev/null 2>&1 || return 0
+  command -v mount >/dev/null 2>&1 || return 0
+  lsblk -p -P -n -o NAME,FSTYPE,LABEL,TYPE,MOUNTPOINT | while IFS= read -r line; do
+    local device fstype label type mountpoint parent tran
+    device="$(lsblk_value "$line" NAME)"
+    fstype="$(lsblk_value "$line" FSTYPE)"
+    label="$(lsblk_value "$line" LABEL)"
+    type="$(lsblk_value "$line" TYPE)"
+    mountpoint="$(lsblk_value "$line" MOUNTPOINT)"
+    [ "$type" = "part" ] || continue
+    [ -n "$device" ] && [ -n "$fstype" ] || continue
+    [ -z "$mountpoint" ] || continue
+    fstype_allowed "$fstype" || continue
+    parent="$(lsblk -no PKNAME "$device" 2>/dev/null | head -n 1 || true)"
+    [ -n "$parent" ] || continue
+    tran="$(lsblk -ndo TRAN "/dev/$parent" 2>/dev/null | head -n 1 || true)"
+    [ "$tran" = "usb" ] || continue
+    printf '%s\t%s\t%s\n' "$device" "$fstype" "$label"
+  done
+}
+
+auto_mount_usb_partitions() {
+  truthy "$USB_LIBRARY_AUTO_MOUNT" || return 0
+  command -v findmnt >/dev/null 2>&1 || return 0
+  local wait_seconds retry_seconds
+  wait_seconds="$USB_LIBRARY_AUTO_MOUNT_WAIT_SECONDS"
+  retry_seconds="$USB_LIBRARY_AUTO_MOUNT_RETRY_INTERVAL_SECONDS"
+  [[ "$wait_seconds" =~ ^[0-9]+$ ]] || wait_seconds=8
+  [[ "$retry_seconds" =~ ^[0-9]+$ ]] || retry_seconds=1
+  [ "$retry_seconds" -gt 0 ] || retry_seconds=1
+  local sudo_prefix=''
+  if [ "$(id -u)" -ne 0 ]; then
+    if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+      sudo_prefix='sudo -n '
+    else
+      warn "USB auto-mount needs root or passwordless sudo"
+      return 0
+    fi
+  fi
+  ${sudo_prefix}mkdir -p "$USB_LIBRARY_MOUNT_ROOT"
+  local deadline waited
+  deadline=$((SECONDS + wait_seconds))
+  waited=0
+  while :; do
+    local found mounted
+    found=0
+    mounted=0
+    while IFS=$'\t' read -r device fstype label; do
+      [ -n "$device" ] || continue
+      found=1
+      if findmnt -rn --source "$device" >/dev/null 2>&1; then
+        continue
+      fi
+      local uuid name target options
+      uuid="$(blkid -s UUID -o value "$device" 2>/dev/null || true)"
+      name="$(safe_mount_name "${label:-${uuid:-$(basename "$device")}}")"
+      target="$USB_LIBRARY_MOUNT_ROOT/$name"
+      options="$(mount_options_for_fstype "$fstype")"
+      ${sudo_prefix}mkdir -p "$target"
+      if ${sudo_prefix}mount -t "$fstype" -o "$options" "$device" "$target" 2>/dev/null; then
+        warn "mounted $device at $target"
+        mounted=1
+      else
+        warn "could not mount $device as $fstype at $target"
+        ${sudo_prefix}rmdir "$target" 2>/dev/null || true
+      fi
+    done < <(list_unmounted_usb_partitions)
+    if { [ "$found" -eq 0 ] || [ "$mounted" -eq 0 ]; } && [ "$SECONDS" -lt "$deadline" ]; then
+      if [ "$waited" -eq 0 ]; then
+        warn "waiting up to ${wait_seconds}s for removable USB storage"
+        waited=1
+      fi
+      sleep "$retry_seconds"
+      continue
+    fi
+    break
+  done
 }
 
 skip_mount_name() {
@@ -143,6 +269,7 @@ update_mpd() {
 }
 
 apply_sync() {
+  auto_mount_usb_partitions
   roots=()
   while IFS= read -r root; do
     roots+=("$root")

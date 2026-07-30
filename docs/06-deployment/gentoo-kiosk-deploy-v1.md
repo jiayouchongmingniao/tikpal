@@ -235,9 +235,10 @@ The Gentoo physical kiosk uses the same Player Library contract as moOde:
 
 - `Local`, `NAS`, `USB`, `Favorites`, and `Recently Added` are flat storage/filter tabs.
 - Local, NAS, and USB rows show compact audio/file information when the backend exposes codec, sample rate, bit depth, channel count, bitrate, or file size.
-- Keep `TIKPAL_USB_LIBRARY_AUTO_UPDATE=0` on the physical Gentoo kiosk. Browsing USB can scan the mounted filesystem for visible rows, but it should not launch `mpc update USB` in the background while the user seeks or plays Local/NAS music. Do not keep legacy 30-second USB sync timers such as `tikpal-usb-audio-sync.timer` enabled on the physical kiosk; use Settings -> Library -> Scan library for an explicit MPD index refresh, with `TIKPAL_MPC_UPDATE_TIMEOUT_SECONDS=8` as the default guardrail.
+- Keep `TIKPAL_USB_LIBRARY_AUTO_UPDATE=0` on the physical Gentoo kiosk. Browsing USB can scan the mounted filesystem for visible rows, but it should not launch `mpc update USB` in the background while the user seeks or plays Local/NAS music. Gentoo may set `TIKPAL_USB_LIBRARY_AUTO_MOUNT=1` so the library sync helper waits briefly for newly inserted USB storage, mounts current partitions under `/run/media/tikpal/<label-or-uuid>`, then links them into `USB/<mount name>`; this is generic for swapped USB drives and is not tied to `/dev/sda1`. Do not keep legacy 30-second USB sync timers such as `tikpal-usb-audio-sync.timer` enabled on the physical kiosk; use Settings -> Library -> Scan library for an explicit MPD index refresh, with `TIKPAL_MPC_UPDATE_TIMEOUT_SECONDS=8` as the default guardrail.
 - USB rows expose `Copy to Local`; the backend should not overwrite same-name Local files and should report `Already in Local` when no copy is needed. Copied files live under `Codex/USB Imports/...`; `tikpal-local-library-sync.sh` must protect that imports directory while still using `rsync --delete` for repo-owned Local music, so copied tracks survive reboot and service reinstall.
 - Local rows expose `Delete`, but the first tap only reveals `Yes` and `No`. Only `Yes` performs deletion; `No`, storage changes, source changes, or closing Player must cancel the pending confirmation.
+- Player -> Library has a compact search field beside volume/free-space/Back. It filters only the currently selected `Local`, `USB`, `NAS`, or `Favorites` tab using visible track metadata and path text; it must not send source-switch requests, change the MPD queue, or search Radio stations.
 - Long track lists keep a fixed right-side fast-scroll rail with `current / total` count and a draggable thumb. Dragging that rail only changes `scrollTop`; it must not select a track or auto-play on release.
 
 NAS v1 is configured by the user in Settings rather than silently attached from a LAN scan. The backend may still read legacy manual roots from `TIKPAL_NAS_LIBRARY_ROOTS`, but those entries are marked `Manual` in Settings and should be treated as compatibility input. New setups should use Settings -> Library -> NAS:
@@ -247,14 +248,14 @@ TIKPAL_NAS_SOURCES_STATE_PATH=/home/moode/code/tikpal/.tikpal/nas-sources.json
 TIKPAL_NAS_CREDENTIALS_DIR=/home/moode/code/tikpal/.tikpal/nas-credentials
 TIKPAL_NAS_MOUNT_ROOT=/mnt/tikpal-nas
 TIKPAL_NAS_MPD_ENTRY_ROOT=/var/lib/mpd/music/NAS
+TIKPAL_NAS_AUTO_MOUNT=1
 TIKPAL_NAS_MOUNT_COMMAND="sudo -n -E /usr/local/sbin/tikpal-nas-mount mount"
 TIKPAL_NAS_UNMOUNT_COMMAND="sudo -n -E /usr/local/sbin/tikpal-nas-mount unmount"
-TIKPAL_NAS_LIBRARY_ROOTS=/mnt/tikpal-nas-test
 TIKPAL_NAS_LIBRARY_MPD_PREFIX=NAS
 TIKPAL_NAS_LIBRARY_MAX_TRACKS=500
 ```
 
-Configured NAS sources are stored in `.tikpal/nas-sources.json`. Passwords are not returned to the frontend; username/password credentials are written under `.tikpal/nas-credentials/<id>.cred` with `0600` permissions. The UI password field is masked by default and has a show/hide control for setup.
+Configured NAS sources are stored in `.tikpal/nas-sources.json`. Passwords are not returned to the frontend; username/password credentials are written under `.tikpal/nas-credentials/<id>.cred` with `0600` permissions. The UI password field is masked by default and has a show/hide control for setup. With `TIKPAL_NAS_AUTO_MOUNT=1`, every saved and enabled NAS source is mounted again when `tikpal-api` starts, so swapping to another saved NAS only requires saving/enabling that source once in Settings. A brand-new NAS should still go through Settings -> Library -> NAS -> Add/Test/Save; LAN discovery is only a candidate list and should not silently mount unknown shares.
 
 Discovery is only a candidate list. `POST /api/v1/nas/discover` may use `TIKPAL_NAS_DISCOVERY_HINTS` or a host-specific `TIKPAL_NAS_DISCOVERY_COMMAND`, but it must not save, mount, or scan anything until the user selects a candidate, runs `Test`, then uses `Save & Scan`.
 
@@ -265,6 +266,8 @@ Default mount behavior is read-only CIFS:
 - Expose track paths as `NAS/<mountName>/<relative-file>`.
 - Try SMB `3.0`, then `2.1`, then `2.0`; save the version that works.
 - Use `ro,uid=mpd,gid=audio,iocharset=utf8,nounix,soft`.
+
+`TIKPAL_NAS_LIBRARY_ROOTS` remains only for manual/legacy local mount roots, such as a temporary fake NAS at `/mnt/tikpal-nas-test`; production Gentoo should prefer saved Settings NAS sources.
 
 Install the repo helper as the root-owned command and allow `moode` to run only that helper with preserved `TIKPAL_NAS_*` environment:
 
@@ -301,6 +304,8 @@ Selecting a Library storage tab is a browse-only action. `Local`, `NAS`, `USB`, 
 - USB rows post `{"target":"mpd","localTrackPath":"USB/<mountName>/..."}` and show `Playing from USB.`
 
 This separation matters on the physical kiosk: an empty MPD switch while changing tabs can put the UI into a pending state, restore the wrong Local queue, and swallow the real NAS/USB track tap.
+
+NAS playback should expose `play`, `pause`, `previous`, and `next`, but not `seek`. On CIFS/SMB streams MPD seek can block long enough to look like a broken UI, so `/api/v1/system/state` and `/api/v1/audio/source` responses should return `playback.transportCapabilities.seek=false` for current files under `NAS/...`, and `/api/v1/playback/actions {"type":"seek"}` should fail fast without calling `mpc seek`. If a user needs reliable seeking for a NAS file, copy it to Local first and play the `Codex/USB Imports/...` copy.
 
 Targeted physical-kiosk DOM checks after deploying a frontend build:
 

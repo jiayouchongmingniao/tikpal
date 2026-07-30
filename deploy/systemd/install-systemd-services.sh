@@ -196,6 +196,22 @@ ensure_library_scan_env() {
     printf 'TIKPAL_USB_LIBRARY_AUTO_UPDATE_MIN_MS=15000\n' >> "$env_file"
     updated=1
   fi
+  if ! grep -q '^TIKPAL_USB_LIBRARY_AUTO_MOUNT=' "$env_file"; then
+    printf 'TIKPAL_USB_LIBRARY_AUTO_MOUNT=0\n' >> "$env_file"
+    updated=1
+  fi
+  if ! grep -q '^TIKPAL_USB_LIBRARY_MOUNT_ROOT=' "$env_file"; then
+    printf 'TIKPAL_USB_LIBRARY_MOUNT_ROOT=/run/media/tikpal\n' >> "$env_file"
+    updated=1
+  fi
+  if ! grep -q '^TIKPAL_USB_LIBRARY_AUTO_MOUNT_WAIT_SECONDS=' "$env_file"; then
+    printf 'TIKPAL_USB_LIBRARY_AUTO_MOUNT_WAIT_SECONDS=8\n' >> "$env_file"
+    updated=1
+  fi
+  if ! grep -q '^TIKPAL_NAS_AUTO_MOUNT=' "$env_file"; then
+    printf 'TIKPAL_NAS_AUTO_MOUNT=1\n' >> "$env_file"
+    updated=1
+  fi
   if ! grep -q '^TIKPAL_MPC_UPDATE_TIMEOUT_SECONDS=' "$env_file"; then
     printf 'TIKPAL_MPC_UPDATE_TIMEOUT_SECONDS=8\n' >> "$env_file"
     updated=1

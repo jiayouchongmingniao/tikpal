@@ -659,6 +659,8 @@ esac
     serverSource.includes("TIKPAL_NAS_LIBRARY_ROOTS")
       && serverSource.includes("TIKPAL_NAS_LIBRARY_MPD_PREFIX")
       && serverSource.includes("TIKPAL_NAS_SOURCES_STATE_PATH")
+      && serverSource.includes("TIKPAL_NAS_AUTO_MOUNT")
+      && serverSource.includes("mountEnabledNasSourcesOnStartup")
       && serverSource.includes("/api/v1/nas/sources")
       && serverSource.includes("/api/v1/nas/discover")
       && serverSource.includes("async function readNasAudioLibraryTracks")
@@ -760,6 +762,7 @@ esac
   assert(audioAdaptScript.includes("printf 'snd_aloop\\n'") && audioAdaptScript.includes("snd_aloop is not visible after applying Loopback config"), "audio adapter apply should persist and verify the real snd_aloop module name");
   assert(audioAdaptScript.includes("wait_for_loopback_visible") && audioAdaptScript.includes("ensure_loopback_visible"), "audio adapter should wait for the real Loopback card after loading snd_aloop");
   assert(usbLibrarySyncScript.includes("USB_LIBRARY_AUTO_ROOTS") && usbLibrarySyncScript.includes("/media,/run/media"), "USB library sync should discover arbitrary mounted USB roots");
+  assert(usbLibrarySyncScript.includes("USB_LIBRARY_AUTO_MOUNT") && usbLibrarySyncScript.includes("USB_LIBRARY_AUTO_MOUNT_WAIT_SECONDS") && usbLibrarySyncScript.includes("list_unmounted_usb_partitions") && usbLibrarySyncScript.includes("TRAN"), "USB library sync should optionally wait for and auto-mount removable USB partitions before scanning");
   assert(usbLibrarySyncScript.includes("skip_mount_name") && usbLibrarySyncScript.includes("rootfs"), "USB library sync should skip system partitions");
   assert(usbLibrarySyncScript.includes("MPC_UPDATE_TIMEOUT_SECONDS") && usbLibrarySyncScript.includes("update_mpd \"$USB_MPD_PREFIX\""), "USB library sync should time-bound MPD refresh after linking USB roots");
   assert(localLibrarySyncScript.includes("LOCAL_SOURCE_ROOT") && localLibrarySyncScript.includes("public/assets") && localLibrarySyncScript.includes("RSYNC_BIN") && localLibrarySyncScript.includes("--delete"), "Local library sync should mirror repo music into MPD's Codex directory");

@@ -17,10 +17,12 @@ import {
   Pause,
   Play,
   Radio as RadioIcon,
+  Search,
   Server,
   SkipBack,
   SkipForward,
   Trash2,
+  X,
   Usb
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -175,6 +177,33 @@ function formatLibraryAudioInfo(track: AudioLibraryTrackSummary) {
   return parts.length > 0 ? parts.join(" · ") : "Audio file";
 }
 
+function normalizeLibrarySearchText(value: string | number | null | undefined) {
+  return String(value ?? "").trim().toLocaleLowerCase();
+}
+
+function filterLibraryTracksByQuery(tracks: AudioLibraryTrackSummary[], query: string) {
+  const tokens = normalizeLibrarySearchText(query).split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return tracks;
+
+  return tracks.filter((track) => {
+    const haystack = [
+      track.title,
+      track.artist,
+      track.album,
+      track.subCategory,
+      track.categoryId,
+      track.codec,
+      track.container,
+      track.sampleRateHz,
+      track.bitrateKbps,
+      track.bitDepth,
+      track.channels,
+      track.path
+    ].map(normalizeLibrarySearchText).join(" ");
+    return tokens.every((token) => haystack.includes(token));
+  });
+}
+
 function formatDiskSize(bytes: number | null | undefined) {
   const value = Number(bytes);
   if (!Number.isFinite(value) || value < 0) return "Unavailable";
@@ -215,6 +244,7 @@ export function PlayerOverlay({
   const [selectedPrimaryPanel, setSelectedPrimaryPanel] = useState<PrimaryPanelId>("library");
   const [selectedLibraryStorage, setSelectedLibraryStorage] = useState<LibraryFilterId>("local");
   const [selectedLibraryTrackId, setSelectedLibraryTrackId] = useState<string | null>(null);
+  const [librarySearchQuery, setLibrarySearchQuery] = useState("");
   const [manualPanelSelection, setManualPanelSelection] = useState(false);
   const [localLibraryTracks, setLocalLibraryTracks] = useState<AudioLibraryTrackSummary[]>([]);
   const [nasLibraryTracks, setNasLibraryTracks] = useState<AudioLibraryTrackSummary[]>([]);
@@ -273,7 +303,7 @@ export function PlayerOverlay({
   const favoriteLibraryTracks = useMemo(() => (
     [...localLibraryTracks, ...usbLibraryTracks].filter((track) => track.favorite)
   ), [localLibraryTracks, usbLibraryTracks]);
-  const visibleLibraryTracks = useMemo(() => {
+  const baseVisibleLibraryTracks = useMemo(() => {
     switch (selectedLibraryStorage) {
       case "nas":
         return nasLibraryTracks;
@@ -289,6 +319,20 @@ export function PlayerOverlay({
         return localLibraryTracks;
     }
   }, [favoriteLibraryTracks, localLibraryTracks, nasLibraryTracks, selectedLibraryStorage, usbLibraryTracks]);
+  const librarySearchStorageLabels: Partial<Record<LibraryFilterId, string>> = {
+    local: "Local",
+    nas: "NAS",
+    usb: "USB",
+    favorites: "Favorites"
+  };
+  const librarySearchStorageLabel = librarySearchStorageLabels[selectedLibraryStorage];
+  const librarySearchEnabled = Boolean(librarySearchStorageLabel);
+  const librarySearchActive = librarySearchEnabled && normalizeLibrarySearchText(librarySearchQuery).length > 0;
+  const visibleLibraryTracks = useMemo(() => {
+    if (!librarySearchEnabled) return baseVisibleLibraryTracks;
+    return filterLibraryTracksByQuery(baseVisibleLibraryTracks, librarySearchQuery);
+  }, [baseVisibleLibraryTracks, librarySearchEnabled, librarySearchQuery]);
+  const librarySearchHasNoMatches = librarySearchActive && baseVisibleLibraryTracks.length > 0 && visibleLibraryTracks.length === 0;
   const selectedLibraryTrack = visibleLibraryTracks.find((track) => track.id === selectedLibraryTrackId) ?? null;
   const seekSupported = playback.source === "mpd" && durationSeconds > 0 && transportCapabilities?.seek !== false;
   const displayedElapsedSeconds = seekSupported
@@ -429,6 +473,7 @@ export function PlayerOverlay({
       setSourceHint(null);
       setVolumeDraftPercent(null);
       setVolumeError(null);
+      setLibrarySearchQuery("");
       setManualPanelSelection(false);
       setConfirmingDeleteLibraryTrackId(null);
       resetLibraryFastScrollDrag();
@@ -526,6 +571,17 @@ export function PlayerOverlay({
 
   function handleVolumeSliderChange(value: string) {
     scheduleVolumeChange(Number(value));
+  }
+
+  function handleLibrarySearchChange(value: string) {
+    setLibrarySearchQuery(value);
+    setSelectedLibraryTrackId(null);
+    setConfirmingDeleteLibraryTrackId(null);
+    resetLibraryFastScrollDrag();
+  }
+
+  function clearLibrarySearch() {
+    handleLibrarySearchChange("");
   }
 
   useEffect(() => {
@@ -1127,6 +1183,36 @@ export function PlayerOverlay({
                 <strong>{selectedPanelConfig.label}</strong>
               </div>
             </div>
+            {selectedPrimaryPanel === "library" && librarySearchEnabled ? (
+              <label
+                className="library-search-control"
+                data-library-search
+                title={`Search ${librarySearchStorageLabel}`}
+              >
+                <Search size={16} aria-hidden="true" />
+                <input
+                  type="search"
+                  value={librarySearchQuery}
+                  placeholder={`Search ${librarySearchStorageLabel}`}
+                  aria-label={`Search ${librarySearchStorageLabel}`}
+                  data-library-search-input
+                  data-gesture-control
+                  onChange={(event) => handleLibrarySearchChange(event.currentTarget.value)}
+                />
+                <button
+                  className={`library-search-clear ${librarySearchQuery ? "is-visible" : ""}`}
+                  type="button"
+                  aria-label="Clear search"
+                  title="Clear search"
+                  disabled={!librarySearchQuery}
+                  data-library-search-clear
+                  data-gesture-control
+                  onClick={clearLibrarySearch}
+                >
+                  <X size={14} />
+                </button>
+              </label>
+            ) : null}
             <div className="library-volume-actions" data-player-volume-control title={volumeError ?? "Volume"}>
               <span className="library-volume-label">Volume</span>
               <div className="library-volume-slider-control">
@@ -1375,7 +1461,9 @@ export function PlayerOverlay({
                   ) : null}
                   {!libraryLoading && visibleLibraryTracks.length === 0 ? (
                     <p className="queue-panel-empty">
-                      {selectedLibraryStorage === "nas"
+                      {librarySearchHasNoMatches
+                        ? "No matches. Try another search."
+                        : selectedLibraryStorage === "nas"
                         ? "Add NAS in Settings."
                         : selectedLibraryStorage === "usb"
                           ? "No USB tracks found. Check the drive, then scan."

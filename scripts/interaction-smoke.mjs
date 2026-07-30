@@ -518,6 +518,80 @@ function sourceHandoffExpression(sourceId) {
   `;
 }
 
+async function expectLibrarySearchForStorage(client, storageId, placeholder) {
+  await evaluate(client, `document.querySelector('[data-library-storage="${storageId}"]')?.click(); true`);
+  await expectEventually(client, `document.querySelector('[data-library-storage="${storageId}"].is-selected') !== null`, `player Library ${storageId} storage tab is selected`);
+  await expectEventually(
+    client,
+    `document.querySelector('[data-library-search-input]')?.getAttribute('placeholder') === ${JSON.stringify(placeholder)}`,
+    `player Library search shows ${placeholder}`
+  );
+  const probe = await evaluate(
+    client,
+    `
+      (() => {
+        const input = document.querySelector('[data-library-search-input]');
+        if (!(input instanceof HTMLInputElement)) return { ready: false, rows: 0, token: "" };
+        const rowsBefore = [...document.querySelectorAll('[data-library-track-list] [data-library-track]')];
+        const text = [
+          ...rowsBefore[0]?.querySelectorAll('.library-track-copy strong, .library-track-copy em, .library-track-meta i, .library-track-meta small') ?? []
+        ].map((node) => node.textContent ?? "").join(" ");
+        const token = text
+          .split(/[^\\p{L}\\p{N}]+/u)
+          .map((entry) => entry.trim())
+          .find((entry) => entry.length >= 3) ?? "";
+        window.__tikpalLibrarySearchProbe = {
+          before: rowsBefore.length,
+          storage: ${JSON.stringify(storageId)},
+          token: token.toLocaleLowerCase()
+        };
+        if (token) {
+          const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+          if (setter) setter.call(input, token);
+          else input.value = token;
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+        return { ready: true, rows: rowsBefore.length, token };
+      })()
+    `
+  );
+  if (!probe?.ready) throw new Error(`Failed: player Library ${storageId} search input is ready`);
+  if (probe.token) {
+    await expectEventually(
+      client,
+      `
+        (() => {
+          const probe = window.__tikpalLibrarySearchProbe;
+          const input = document.querySelector('[data-library-search-input]');
+          const rows = [...document.querySelectorAll('[data-library-track-list] [data-library-track]')];
+          return Boolean(probe?.token)
+            && input instanceof HTMLInputElement
+            && input.value.toLocaleLowerCase() === probe.token
+            && rows.length > 0
+            && rows.length <= probe.before
+            && rows.every((row) => row.textContent?.toLocaleLowerCase().includes(probe.token));
+        })()
+      `,
+      `player Library ${storageId} search filters visible tracks`
+    );
+    await evaluate(client, "document.querySelector('[data-library-search-clear]')?.click(); true");
+    await expectEventually(
+      client,
+      `
+        (() => {
+          const probe = window.__tikpalLibrarySearchProbe;
+          const input = document.querySelector('[data-library-search-input]');
+          const rows = [...document.querySelectorAll('[data-library-track-list] [data-library-track]')];
+          return input instanceof HTMLInputElement
+            && input.value === ''
+            && (!probe || rows.length === probe.before);
+        })()
+      `,
+      `player Library ${storageId} search clears back to full list`
+    );
+  }
+}
+
 function hifiAmbientSourceSettledExpression(sourceId) {
   const label = {
     mpd: "Library",
@@ -3629,6 +3703,12 @@ try {
   await evaluate(client, "document.querySelector('[data-library-storage=\"local\"]')?.click(); true");
   await expectEventually(client, "document.querySelector('[data-library-storage=\"local\"].is-selected') !== null", "player Library local storage tab is selected");
   await expectEventually(client, "document.querySelector('[data-library-track-list] [data-library-track] .library-track-main') !== null", "player Library keeps selectable tracks");
+  await expectLibrarySearchForStorage(client, "local", "Search Local");
+  await expectLibrarySearchForStorage(client, "usb", "Search USB");
+  await expectLibrarySearchForStorage(client, "nas", "Search NAS");
+  await expectLibrarySearchForStorage(client, "favorites", "Search Favorites");
+  await evaluate(client, "document.querySelector('[data-library-storage=\"local\"]')?.click(); true");
+  await expectEventually(client, "document.querySelector('[data-library-storage=\"local\"].is-selected') !== null", "player Library returns to local storage after search checks");
   await expectEventually(
     client,
     `

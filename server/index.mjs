@@ -257,6 +257,8 @@ const NAS_SOURCES_STATE_PATH = resolve(process.env.TIKPAL_NAS_SOURCES_STATE_PATH
 const NAS_CREDENTIALS_DIR = resolve(process.env.TIKPAL_NAS_CREDENTIALS_DIR ?? resolve(process.cwd(), ".tikpal", "nas-credentials"));
 const NAS_MOUNT_ROOT = resolve(process.env.TIKPAL_NAS_MOUNT_ROOT ?? "/mnt/tikpal-nas");
 const NAS_MPD_ENTRY_ROOT = resolve(process.env.TIKPAL_NAS_MPD_ENTRY_ROOT ?? resolve(MPD_MUSIC_ROOT, NAS_LIBRARY_MPD_PREFIX));
+const NAS_AUTO_MOUNT = parseEnvBoolean(process.env.TIKPAL_NAS_AUTO_MOUNT ?? (API_MODE === "mpc" ? "1" : "0"));
+const NAS_AUTO_MOUNT_DELAY_MS = parseEnvPositiveInteger(process.env.TIKPAL_NAS_AUTO_MOUNT_DELAY_MS, 1500);
 const NAS_MOUNT_COMMAND = process.env.TIKPAL_NAS_MOUNT_COMMAND ?? "";
 const NAS_UNMOUNT_COMMAND = process.env.TIKPAL_NAS_UNMOUNT_COMMAND ?? "";
 const NAS_DISCOVERY_COMMAND = process.env.TIKPAL_NAS_DISCOVERY_COMMAND ?? "";
@@ -1971,6 +1973,7 @@ async function commandSucceeds(command, options = {}) {
 
 const AIRPLAY_REMOTE_UNAVAILABLE_REASON = "AirPlay remote control is unavailable from this sender";
 const BLUETOOTH_REMOTE_UNAVAILABLE_REASON = "Bluetooth AVRCP control is unavailable from this sender";
+const NAS_SEEK_UNAVAILABLE_REASON = "NAS playback does not support reliable seeking";
 
 function buildPlaybackTransportCapabilities(source, options = {}) {
   const base = {
@@ -1979,8 +1982,8 @@ function buildPlaybackTransportCapabilities(source, options = {}) {
     pause: true,
     next: true,
     previous: true,
-    seek: true,
-    reason: null
+    seek: options.seekAvailable !== false,
+    reason: options.seekAvailable === false ? options.reason ?? null : null
   };
 
   if (source === "airplay") {
@@ -5881,6 +5884,25 @@ async function mountSavedNasSource(sourceId, payload = null) {
   return await buildNasSourcesPayload();
 }
 
+async function mountEnabledNasSourcesOnStartup() {
+  if (API_MODE !== "mpc" || !NAS_AUTO_MOUNT) return;
+  const state = await readNasSourcesState();
+  const sources = state.sources.filter((source) => source.enabled !== false);
+  if (sources.length === 0) return;
+  for (const source of sources) {
+    try {
+      const result = await mountNasSource(source);
+      console.log(`tikpal-api mounted NAS ${source.name} at ${result.mpdPath ?? "NAS"}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`tikpal-api could not auto-mount NAS ${source.name}: ${message}`);
+      await updateNasSourceRuntimeStatus(source.id, {
+        lastStatus: { status: "check_setup", checkedAt: new Date().toISOString(), lastError: message }
+      });
+    }
+  }
+}
+
 async function unmountNasSource(sourceId) {
   const source = await findNasSourceForAction(sourceId);
   await runNasUnmountCommand(source);
@@ -7912,7 +7934,9 @@ async function getMpcSnapshot(options = {}) {
           : null,
       transportCapabilities: buildPlaybackTransportCapabilities(playbackSource, {
         airplayRemoteControlAvailable: airplayTransportAvailable,
-        bluetoothRemoteControlAvailable: bluetoothTransportAvailable
+        bluetoothRemoteControlAvailable: bluetoothTransportAvailable,
+        seekAvailable: playbackSource === "mpd" && isNasLibraryTrackPath(file) ? false : true,
+        reason: playbackSource === "mpd" && isNasLibraryTrackPath(file) ? NAS_SEEK_UNAVAILABLE_REASON : null
       }),
       currentTrackIndex: playbackSource === "mpd" ? status.currentTrackIndex : 0,
       queueLength: playbackSource === "mpd" ? status.queueLength : 0,
@@ -8938,6 +8962,10 @@ async function applyMpcPlaybackActionUnlocked(action) {
       const seconds = Number(action.value);
       if (!Number.isFinite(seconds) || seconds < 0) {
         throw new Error("seek requires a non-negative value");
+      }
+      const currentFile = extractMpcCurrentFile(await runMpc(["--format", "%file%", "current"], { allowFailure: true, timeout: 2500 }));
+      if (isNasLibraryTrackPath(currentFile)) {
+        throw new Error(NAS_SEEK_UNAVAILABLE_REASON);
       }
       await runMpc(["seek", formatMpcSeek(seconds)], { timeout: MPC_SEEK_TIMEOUT_MS });
       break;
@@ -13101,6 +13129,9 @@ const server = http.createServer(async (request, response) => {
 server.listen(PORT, HOST, () => {
   console.log(`tikpal-api ${API_MODE} listening on http://${HOST}:${PORT}`);
   if (API_MODE === "mpc") {
+    setTimeout(() => {
+      void mountEnabledNasSourcesOnStartup();
+    }, NAS_AUTO_MOUNT_DELAY_MS);
     startupPlaybackPolicyPromise = applyStartupPlaybackPolicy().finally(() => {
       startupPlaybackPolicyPromise = null;
       startTikpalStateSnapshotCollector();

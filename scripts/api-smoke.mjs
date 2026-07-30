@@ -2440,11 +2440,21 @@ if (args[0] === "open" && args[1] === ${JSON.stringify(failedProvider)}) {
 	    assert(switchedNas.body.audio.currentSource.id === "mpd", "mpc NAS switch should keep Library current");
 	    assert(switchedNas.body.playback.queueLength === fakeMpcNasTracks.length, "mpc NAS switch should queue the mounted NAS root");
 	    assert(switchedNas.body.audio.rememberedSource?.localTrackPath === nasTrackPath, "mpc NAS switch should remember the selected NAS track path");
+	    assert(switchedNas.body.playback.transportCapabilities?.seek === false, "mpc NAS playback should not expose seek");
+	    assert(switchedNas.body.playback.transportCapabilities?.reason?.includes("NAS"), "mpc NAS playback should explain why seek is unavailable");
 	    const nasLog = await readFile(fakeMpcLogPath, "utf8");
 	    assert(nasLog.includes("listall\tNAS/TikpalNAS"), "mpc NAS switch should list the NAS share root");
 	    assert(nasLog.includes(`add\t${fakeMpcNasTracks[0]}`), "mpc NAS switch should add only playable NAS audio tracks to the queue");
 	    assert(!nasLog.split("\n").includes("add\tNAS/TikpalNAS"), "mpc NAS switch should not queue the raw NAS share root");
 	    assert(!nasLog.includes("Codex/NAS/TikpalNAS"), "mpc NAS switch should not prefix NAS paths with the local Codex root");
+	    await writeFile(fakeMpcLogPath, "");
+	    const nasSeek = await requestFrom(baseUrl, "/api/v1/playback/actions", {
+	      method: "POST",
+	      body: JSON.stringify({ type: "seek", value: 30 })
+	    });
+	    assert(nasSeek.response.status === 400, "mpc NAS seek should be rejected quickly");
+	    assert(nasSeek.body.message?.includes("NAS"), "mpc NAS seek rejection should mention NAS");
+	    assert(!((await readFile(fakeMpcLogPath, "utf8")).split("\n").includes("seek\t30")), "mpc NAS seek should not call mpc seek");
 
 	    const usbFavorite = await requestFrom(baseUrl, "/api/v1/audio/favorites", {
       method: "POST",
