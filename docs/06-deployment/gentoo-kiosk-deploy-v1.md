@@ -152,6 +152,12 @@ Provider guard behavior:
 - Keeps QQ Music single-pane and closes duplicate QQ player windows.
 - May close safe cookie/trial/client prompts, but must not click login, payment, membership, subscription, purchase, authorization, or native-client download actions.
 - For QQ Music, may unmute the web player when playback is active but the QQ volume button is muted.
+- QQ Music MV uses wrapper cinema mode by default: `TIKPAL_WEB_MODE_QQ_MV_CINEMA_MODE=1`, `TIKPAL_WEB_MODE_QQ_MV_AUTO_PLAY=1`, and `TIKPAL_WEB_MODE_QQ_MV_AUTO_FULLSCREEN=0`.
+- MV cinema mode must not click QQ Music's fullscreen button, call `requestFullscreen()`, press `F11`, retile Chromium, or hide the right side panel. It only applies CSS/DOM inside the left `1920x720` provider page so the largest visible MV `<video>` sits on a black `100vw x 100vh` stage with `object-fit: contain`.
+- MV cinema mode hides QQ page chrome, comments, feedback/report/player controls, and injects icon-only controls in the lower-right corner. The playlist icon keeps `aria-label/title="播放列表"` and uses provider history to return to the QQ playlist, with `https://y.qq.com/n/ryqq/player` as the fallback. The replay icon keeps `aria-label/title="重播"` and is visible only when the MV has ended or is within `0.75s` of the end; clicking it immediately hides the replay icon, seeks the current cinema video to `0`, calls `play()`, and refreshes state from video events. MV completion must not auto-return, auto-replay, or auto-start the next item.
+- MV cinema mode computes the real video ratio and overlays subtle dark ambience only on the letterbox bars. It keeps `object-fit: contain`, does not crop subtitles or picture content, does not draw blue/cyan frame lines, and leaves the overlay `pointer-events:none` so video and controls remain clickable.
+- MV auto-play is conditional: if cinema mode sees the video still paused near `0s` with no progress for about two seconds, it starts the selected cinema `<video>` once. QQ's video-center click path is not reliable on the Gentoo physical kiosk, so the guard does not depend on it. If the MV is already playing, has advanced past the start, or is manually paused after playback began, it does not start it again.
+- If QQ shows `播放失败，请刷新页面重试` / `错误码undefined`, the guard removes the cinema wrapper and does not click retry. Stable playback has priority over visual automation.
 
 ## Input And Fonts
 
@@ -292,6 +298,46 @@ devicePixelRatio=1
 htmlZoom=""
 datasetScale="1.00" | "1.10" | "1.20"
 ```
+
+Use CDP to verify QQ Music MV cinema mode stays scoped to the provider pane:
+
+```js
+(() => {
+  const video = [...document.querySelectorAll("video")]
+    .map((node) => ({ node, rect: node.getBoundingClientRect() }))
+    .sort((a, b) => (b.rect.width * b.rect.height) - (a.rect.width * a.rect.height))[0];
+  const playlistButton = document.querySelector("[data-tikpal-qq-mv-playlist-button]");
+  const replayButton = document.querySelector("[data-tikpal-qq-mv-replay-button]");
+  return {
+    cinema: document.documentElement.dataset.tikpalQqMvCinema || "",
+    playlistButton: Boolean(playlistButton),
+    playlistText: playlistButton?.innerText || "",
+    replayButton: Boolean(replayButton),
+    replayVisible: replayButton ? !replayButton.hidden : false,
+    frame: Boolean(document.querySelector("[data-tikpal-qq-mv-cinema-frame]")),
+    letterbox: document.documentElement.dataset.tikpalQqMvLetterbox || "",
+    nativeFullscreen: Boolean(document.fullscreenElement),
+    playbackError: /播放失败|错误码undefined|刷新页面重试/.test(document.body?.innerText || ""),
+    paused: video ? video.node.paused : null,
+    ended: video ? video.node.ended : null,
+    nearEnded: video ? (
+      video.node.ended ||
+      (Number.isFinite(video.node.duration) && video.node.duration > 0 &&
+        video.node.duration - video.node.currentTime <= 0.75)
+    ) : null,
+    currentTime: video ? Math.round(video.node.currentTime * 10) / 10 : null,
+    videoRect: video ? {
+      width: Math.round(video.rect.width),
+      height: Math.round(video.rect.height),
+      left: Math.round(video.rect.left),
+      top: Math.round(video.rect.top)
+    } : null,
+    viewport: { width: innerWidth, height: innerHeight }
+  };
+})()
+```
+
+Expected MV behavior: `cinema="1"`, `playlistButton=true`, `playlistText=""`, `frame=true`, `nativeFullscreen=false`, `playbackError=false`, `innerWidth=1920`, `innerHeight=720`, and the video rectangle nearly fills the provider viewport with dark, borderless letterboxing when needed. During playback, the replay icon may exist but stays hidden; at `ended=true` or `nearEnded=true`, `replayVisible=true`. Tapping replay must move the same MV back to the beginning and then report `ended=false`, `nearEnded=false`, and `replayVisible=false` once playback resumes. If the MV initially stalls at a play overlay, it should become `paused=false` after the one-shot auto-play gate. The right `640x720` side panel must remain visible. MV completion does not auto-return or auto-start the next item; use the playlist icon when returning to the list is desired.
 
 Input checks:
 

@@ -10,6 +10,9 @@ const proxyMode = process.env.TIKPAL_WEB_MODE_PROXY_MODE === "proxy" ? "proxy" :
 const errorPageBaseUrl = process.env.TIKPAL_WEB_MODE_ERROR_PAGE_URL || "http://127.0.0.1:4173/web-mode-error.html";
 const qqAutoConfirm = /^(1|true|yes|on|enabled)$/i.test(process.env.TIKPAL_WEB_MODE_QQ_AUTO_CONFIRM || "1");
 const qqAutoUnmute = /^(1|true|yes|on|enabled)$/i.test(process.env.TIKPAL_WEB_MODE_QQ_AUTO_UNMUTE || "1");
+const qqMvAutoFullscreen = /^(1|true|yes|on|enabled)$/i.test(process.env.TIKPAL_WEB_MODE_QQ_MV_AUTO_FULLSCREEN || "0");
+const qqMvCinemaMode = /^(1|true|yes|on|enabled)$/i.test(process.env.TIKPAL_WEB_MODE_QQ_MV_CINEMA_MODE || "1");
+const qqMvAutoPlay = /^(1|true|yes|on|enabled)$/i.test(process.env.TIKPAL_WEB_MODE_QQ_MV_AUTO_PLAY || "1");
 const onboardAutoFocus = /^(1|true|yes|on|enabled)$/i.test(process.env.TIKPAL_WEB_MODE_ONBOARD_AUTO_FOCUS || "1");
 const allowProgrammaticInputFocus = providerId !== "suno";
 const launcherPath = fileURLToPath(new URL("./tikpal-web-mode.sh", import.meta.url));
@@ -139,10 +142,15 @@ const redirectedTargets = new Set();
 const targetProgressState = new Map();
 const inputFocusRequests = new Map();
 const qqAudioUnmuteAttempts = new Map();
+const qqMvCinemaStates = new Map();
+const qqMvAutoPlayStates = new Map();
 let lastOnboardVisible = null;
 let lastOnboardActionMs = 0;
 const providerNativeFailureIds = new Set(["amazon_music", "qobuz", "deezer"]);
 const qqAudioUnmuteCooldownMs = 5000;
+const qqMvAutoPlayDelayMs = 1700;
+const qqMvAutoPlayMaxStartSeconds = 1.5;
+const qqMvAutoPlayProgressEpsilonSeconds = 0.2;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -750,6 +758,385 @@ const qqAudioStateExpression = `(() => {
   };
 })()`;
 
+const qqMvCinemaExpression = `(() => {
+  const styleId = "tikpal-qq-mv-cinema-style";
+  const controlsId = "tikpal-qq-mv-cinema-controls";
+  const playlistButtonId = "tikpal-qq-mv-cinema-playlist-button";
+  const replayButtonId = "tikpal-qq-mv-cinema-replay-button";
+  const frameId = "tikpal-qq-mv-cinema-frame";
+  const cleanup = (reason = "inactive", extra = {}) => {
+    document.getElementById(styleId)?.remove();
+    document.getElementById(controlsId)?.remove();
+    document.getElementById(playlistButtonId)?.remove();
+    document.getElementById(replayButtonId)?.remove();
+    document.getElementById(frameId)?.remove();
+    document.documentElement?.removeAttribute("data-tikpal-qq-mv-cinema");
+    document.documentElement?.removeAttribute("data-tikpal-qq-mv-letterbox");
+    document.documentElement?.style?.removeProperty("--tikpal-qq-mv-letterbox-left");
+    document.documentElement?.style?.removeProperty("--tikpal-qq-mv-letterbox-right");
+    document.documentElement?.style?.removeProperty("--tikpal-qq-mv-letterbox-top");
+    document.documentElement?.style?.removeProperty("--tikpal-qq-mv-letterbox-bottom");
+    document.querySelectorAll("[data-tikpal-qq-mv-cinema-video]").forEach((node) => {
+      node.removeAttribute("data-tikpal-qq-mv-cinema-video");
+    });
+    return { active: false, reason, ...extra };
+  };
+  if (!/(^|\\.)y\\.qq\\.com$/i.test(location.hostname)) return cleanup("not-qq");
+
+  const href = String(location.href || "");
+  const pageText = String(document.body?.innerText || "").replace(/\\s+/g, " ").trim();
+  const mvUrl = /(?:\\/|%2F)(?:mv|mvdetail|mvplay)(?:\\/|\\b)|[?&#](?:mvid|mv_id|vid)=|\\bmv\\b/i.test(href);
+  if (/播放失败|播放出错|加载失败|刷新页面重试|错误码\\s*undefined|error code\\s*undefined/i.test(pageText)) {
+    return cleanup("playback-error", { playbackError: true, url: href });
+  }
+
+  const visible = (element) => {
+    if (!element) return false;
+    const rect = element.getBoundingClientRect();
+    const style = getComputedStyle(element);
+    return rect.width >= 180 &&
+      rect.height >= 100 &&
+      rect.right > 0 &&
+      rect.bottom > 0 &&
+      rect.left < innerWidth &&
+      rect.top < innerHeight &&
+      style.display !== "none" &&
+      style.visibility !== "hidden" &&
+      Number(style.opacity || "1") > 0.02;
+  };
+  const videos = Array.from(document.querySelectorAll("video"))
+    .filter(visible)
+    .map((video) => {
+      const rect = video.getBoundingClientRect();
+      return { video, rect, area: rect.width * rect.height };
+    })
+    .sort((a, b) => b.area - a.area);
+  const entry = videos[0];
+  if (!entry) return cleanup("no-video");
+  const largeVideo = entry.rect.width >= Math.min(960, innerWidth * 0.48) &&
+    entry.rect.height >= Math.min(360, innerHeight * 0.5);
+  if (!mvUrl && !largeVideo) return cleanup("not-mv");
+
+  document.querySelectorAll("[data-tikpal-qq-mv-cinema-video]").forEach((node) => {
+    if (node !== entry.video) node.removeAttribute("data-tikpal-qq-mv-cinema-video");
+  });
+  document.documentElement.dataset.tikpalQqMvCinema = "1";
+  entry.video.dataset.tikpalQqMvCinemaVideo = "1";
+  const duration = Number(entry.video.duration || 0);
+  const currentTime = Number(entry.video.currentTime || 0);
+  const videoWidth = Number(entry.video.videoWidth || 0);
+  const videoHeight = Number(entry.video.videoHeight || 0);
+  const viewportWidth = Math.max(1, Number(innerWidth || 0));
+  const viewportHeight = Math.max(1, Number(innerHeight || 0));
+  const letterbox = { left: 0, right: 0, top: 0, bottom: 0, orientation: "none" };
+  if (videoWidth > 0 && videoHeight > 0) {
+    const videoRatio = videoWidth / videoHeight;
+    const viewportRatio = viewportWidth / viewportHeight;
+    if (videoRatio > viewportRatio) {
+      const renderedHeight = viewportWidth / videoRatio;
+      letterbox.top = Math.max(0, Math.round((viewportHeight - renderedHeight) / 2));
+      letterbox.bottom = letterbox.top;
+      letterbox.orientation = letterbox.top > 0 ? "horizontal" : "none";
+    } else if (videoRatio < viewportRatio) {
+      const renderedWidth = viewportHeight * videoRatio;
+      letterbox.left = Math.max(0, Math.round((viewportWidth - renderedWidth) / 2));
+      letterbox.right = letterbox.left;
+      letterbox.orientation = letterbox.left > 0 ? "vertical" : "none";
+    }
+  }
+  document.documentElement.dataset.tikpalQqMvLetterbox = letterbox.orientation;
+  document.documentElement.style.setProperty("--tikpal-qq-mv-letterbox-left", letterbox.left + "px");
+  document.documentElement.style.setProperty("--tikpal-qq-mv-letterbox-right", letterbox.right + "px");
+  document.documentElement.style.setProperty("--tikpal-qq-mv-letterbox-top", letterbox.top + "px");
+  document.documentElement.style.setProperty("--tikpal-qq-mv-letterbox-bottom", letterbox.bottom + "px");
+
+  let style = document.getElementById(styleId);
+  if (!style) {
+    style = document.createElement("style");
+    style.id = styleId;
+    document.head?.appendChild(style);
+  }
+  style.textContent = \`
+html[data-tikpal-qq-mv-cinema="1"],
+html[data-tikpal-qq-mv-cinema="1"] body {
+  background: #000 !important;
+  overflow: hidden !important;
+}
+html[data-tikpal-qq-mv-cinema="1"] body * {
+  visibility: hidden !important;
+}
+html[data-tikpal-qq-mv-cinema="1"] #\${frameId},
+html[data-tikpal-qq-mv-cinema="1"] #\${frameId} *,
+html[data-tikpal-qq-mv-cinema="1"] #\${controlsId},
+html[data-tikpal-qq-mv-cinema="1"] #\${controlsId} * {
+  visibility: visible !important;
+}
+html[data-tikpal-qq-mv-cinema="1"] video[data-tikpal-qq-mv-cinema-video="1"] {
+  position: fixed !important;
+  inset: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  min-width: 100vw !important;
+  min-height: 100vh !important;
+  max-width: none !important;
+  max-height: none !important;
+  object-fit: contain !important;
+  background: #000 !important;
+  opacity: 1 !important;
+  visibility: visible !important;
+  z-index: 2147483600 !important;
+  transform: none !important;
+  pointer-events: auto !important;
+}
+html[data-tikpal-qq-mv-cinema="1"] #\${frameId} {
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 2147483610 !important;
+  pointer-events: none !important;
+  overflow: hidden !important;
+  opacity: 1 !important;
+}
+html[data-tikpal-qq-mv-cinema="1"] #\${frameId} [data-tikpal-qq-mv-letterbox] {
+  position: fixed !important;
+  pointer-events: none !important;
+  opacity: 1 !important;
+  background:
+    radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.045), rgba(10, 11, 15, 0.72) 54%, rgba(0, 0, 0, 0.98)),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.008) 36%, rgba(0, 0, 0, 0.34)) !important;
+  box-shadow:
+    inset 0 0 86px rgba(255, 255, 255, 0.035),
+    inset 0 0 160px rgba(0, 0, 0, 0.96) !important;
+}
+html[data-tikpal-qq-mv-cinema="1"] #\${frameId} [data-tikpal-qq-mv-letterbox="left"] {
+  left: 0 !important;
+  top: 0 !important;
+  width: var(--tikpal-qq-mv-letterbox-left) !important;
+  height: 100vh !important;
+}
+html[data-tikpal-qq-mv-cinema="1"] #\${frameId} [data-tikpal-qq-mv-letterbox="right"] {
+  right: 0 !important;
+  top: 0 !important;
+  width: var(--tikpal-qq-mv-letterbox-right) !important;
+  height: 100vh !important;
+}
+html[data-tikpal-qq-mv-cinema="1"] #\${frameId} [data-tikpal-qq-mv-letterbox="top"] {
+  left: 0 !important;
+  top: 0 !important;
+  width: 100vw !important;
+  height: var(--tikpal-qq-mv-letterbox-top) !important;
+}
+html[data-tikpal-qq-mv-cinema="1"] #\${frameId} [data-tikpal-qq-mv-letterbox="bottom"] {
+  left: 0 !important;
+  bottom: 0 !important;
+  width: 100vw !important;
+  height: var(--tikpal-qq-mv-letterbox-bottom) !important;
+}
+html[data-tikpal-qq-mv-cinema="1"] #\${controlsId} {
+  position: fixed !important;
+  right: 28px !important;
+  bottom: 26px !important;
+  z-index: 2147483640 !important;
+  display: flex !important;
+  gap: 12px !important;
+  align-items: center !important;
+}
+html[data-tikpal-qq-mv-cinema="1"] #\${controlsId} button {
+  all: unset !important;
+  box-sizing: border-box !important;
+  width: 56px !important;
+  height: 56px !important;
+  border: 1px solid rgba(255, 255, 255, 0.72) !important;
+  border-radius: 999px !important;
+  background: rgba(10, 18, 30, 0.72) !important;
+  color: #fff !important;
+  display: grid !important;
+  place-items: center !important;
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.44), inset 0 0 18px rgba(96, 222, 255, 0.14) !important;
+  backdrop-filter: blur(14px) !important;
+  opacity: 1 !important;
+  cursor: pointer !important;
+}
+html[data-tikpal-qq-mv-cinema="1"] #\${controlsId} button[hidden] {
+  display: none !important;
+}
+html[data-tikpal-qq-mv-cinema="1"] #\${controlsId} button svg {
+  width: 26px !important;
+  height: 26px !important;
+  stroke: currentColor !important;
+  fill: none !important;
+  stroke-width: 2.2 !important;
+  stroke-linecap: round !important;
+  stroke-linejoin: round !important;
+}
+\`;
+
+  const playlistIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6h11"/><path d="M8 12h11"/><path d="M8 18h7"/><path d="M4 6h.01"/><path d="M4 12h.01"/><path d="M4 18h.01"/></svg>';
+  const replayIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 9a7 7 0 1 1 1.7 7.3"/><path d="M5 4v5h5"/><path d="M10 9l4 3-4 3z"/></svg>';
+  let frame = document.getElementById(frameId);
+  if (!frame) {
+    frame = document.createElement("div");
+    frame.id = frameId;
+    frame.dataset.tikpalQqMvCinemaFrame = "1";
+    frame.innerHTML = '<span data-tikpal-qq-mv-letterbox="left"></span><span data-tikpal-qq-mv-letterbox="right"></span><span data-tikpal-qq-mv-letterbox="top"></span><span data-tikpal-qq-mv-letterbox="bottom"></span>';
+    document.body?.appendChild(frame);
+  }
+  let controls = document.getElementById(controlsId);
+  if (!controls) {
+    controls = document.createElement("div");
+    controls.id = controlsId;
+    document.body?.appendChild(controls);
+  }
+  let playlistButton = document.getElementById(playlistButtonId);
+  if (!playlistButton || playlistButton.dataset.tikpalQqMvIconButton !== "playlist") {
+    playlistButton?.remove();
+    playlistButton = document.createElement("button");
+    playlistButton.id = playlistButtonId;
+    playlistButton.type = "button";
+    playlistButton.dataset.tikpalQqMvIconButton = "playlist";
+    playlistButton.dataset.tikpalQqMvPlaylistButton = "1";
+    controls.appendChild(playlistButton);
+  }
+  playlistButton.setAttribute("aria-label", "播放列表");
+  playlistButton.setAttribute("title", "播放列表");
+  playlistButton.innerHTML = playlistIcon;
+  playlistButton.onclick = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (history.length > 1) {
+      history.back();
+    } else {
+      location.assign("https://y.qq.com/n/ryqq/player");
+    }
+  };
+
+  let replayButton = document.getElementById(replayButtonId);
+  if (!replayButton || replayButton.dataset.tikpalQqMvIconButton !== "replay") {
+    replayButton?.remove();
+    replayButton = document.createElement("button");
+    replayButton.id = replayButtonId;
+    replayButton.type = "button";
+    replayButton.dataset.tikpalQqMvIconButton = "replay";
+    replayButton.dataset.tikpalQqMvReplayButton = "1";
+    controls.insertBefore(replayButton, playlistButton);
+  }
+  replayButton.setAttribute("aria-label", "重播");
+  replayButton.setAttribute("title", "重播");
+  replayButton.innerHTML = replayIcon;
+  const isReplayReady = () => {
+    const latestDuration = Number(entry.video.duration || 0);
+    const latestCurrentTime = Number(entry.video.currentTime || 0);
+    return Boolean(entry.video.ended ||
+      (Number.isFinite(latestDuration) && latestDuration > 0 &&
+        Number.isFinite(latestCurrentTime) && latestDuration - latestCurrentTime <= 0.75));
+  };
+  const syncReplayState = () => {
+    replayButton.hidden = !isReplayReady();
+    return !replayButton.hidden;
+  };
+  const replayStateEvents = ["play", "playing", "timeupdate", "seeking", "seeked", "ended", "pause", "loadedmetadata"];
+  if (entry.video.__tikpalQqMvReplaySync !== syncReplayState) {
+    if (entry.video.__tikpalQqMvReplaySync) {
+      replayStateEvents.forEach((eventName) => {
+        entry.video.removeEventListener(eventName, entry.video.__tikpalQqMvReplaySync);
+      });
+    }
+    replayStateEvents.forEach((eventName) => {
+      entry.video.addEventListener(eventName, syncReplayState, { passive: true });
+    });
+    entry.video.__tikpalQqMvReplaySync = syncReplayState;
+  }
+  const replayVisible = syncReplayState();
+  replayButton.onclick = async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    replayButton.hidden = true;
+    try {
+      entry.video.currentTime = 0;
+      await entry.video.play();
+    } catch {
+      syncReplayState();
+      return;
+    }
+    syncReplayState();
+  };
+
+  const rect = entry.video.getBoundingClientRect();
+  const scaleX = window.outerWidth && window.innerWidth ? window.outerWidth / window.innerWidth : window.devicePixelRatio || 1;
+  const scaleY = window.outerHeight && window.innerHeight ? window.outerHeight / window.innerHeight : window.devicePixelRatio || scaleX || 1;
+  const key = [
+    new URL(location.href).pathname,
+    new URL(location.href).search,
+    entry.video.currentSrc || entry.video.src || entry.video.poster || "",
+    Number.isFinite(duration) && duration > 0 ? Math.round(duration) : ""
+  ].join("|");
+  return {
+    active: true,
+    url: href,
+    key,
+    playbackError: false,
+    paused: Boolean(entry.video.paused),
+    ended: Boolean(entry.video.ended),
+    nearEnded: replayVisible,
+    readyState: Number(entry.video.readyState || 0),
+    currentTime,
+    duration,
+    muted: Boolean(entry.video.muted),
+    videoCenterX: rect.x + rect.width / 2,
+    videoCenterY: rect.y + rect.height / 2,
+    scaleX,
+    scaleY,
+    videoRect: {
+      width: Math.round(rect.width),
+      height: Math.round(rect.height),
+      left: Math.round(rect.left),
+      top: Math.round(rect.top)
+    },
+    viewport: { width: innerWidth, height: innerHeight },
+    button: Boolean(playlistButton),
+    replayButton: Boolean(replayVisible),
+    frame: Boolean(frame),
+    letterbox
+  };
+})()`;
+
+const qqMvAutoPlayExpression = `(async () => {
+  if (document.documentElement.dataset.tikpalQqMvCinema !== "1") return { played: false, reason: "not-cinema" };
+  const entry = Array.from(document.querySelectorAll("video[data-tikpal-qq-mv-cinema-video='1'],video"))
+    .map((video) => {
+      const rect = video.getBoundingClientRect();
+      return { video, rect, area: rect.width * rect.height };
+    })
+    .filter((item) => item.rect.width >= 180 && item.rect.height >= 100)
+    .sort((a, b) => b.area - a.area)[0];
+  if (!entry) return { played: false, reason: "no-video" };
+  const currentTime = Number(entry.video.currentTime || 0);
+  const readyState = Number(entry.video.readyState || 0);
+  if (!entry.video.paused) return { played: false, reason: "already-playing", currentTime, readyState };
+  if (entry.video.ended) return { played: false, reason: "ended", currentTime, readyState };
+  if (readyState < 2) return { played: false, reason: "not-ready", currentTime, readyState };
+  if (!Number.isFinite(currentTime) || currentTime > ${qqMvAutoPlayMaxStartSeconds}) {
+    return { played: false, reason: "progressed", currentTime, readyState };
+  }
+  try {
+    await entry.video.play();
+    return {
+      played: !entry.video.paused,
+      reason: entry.video.paused ? "still-paused" : "started",
+      currentTime: Number(entry.video.currentTime || 0),
+      readyState: Number(entry.video.readyState || 0)
+    };
+  } catch (error) {
+    return {
+      played: false,
+      reason: "play-rejected",
+      name: error?.name || "",
+      message: error?.message || String(error),
+      currentTime,
+      readyState
+    };
+  }
+})()`;
+
 function qqWindowId() {
   const result = spawnSync("xdotool", ["search", "--onlyvisible", "--name", "QQ音乐"], {
     encoding: "utf8",
@@ -759,26 +1146,79 @@ function qqWindowId() {
   return String(result.stdout || "").trim().split(/\s+/).filter(Boolean).at(-1) || "";
 }
 
-function clickQqAudioIcon(state) {
+function interactQqWindowPoint(state, xKey, yKey, { click = true } = {}) {
   const windowId = qqWindowId();
   if (!windowId) return false;
-  const x = Math.max(0, Math.round(Number(state.iconX || 0) * Number(state.scaleX || 1)));
-  const y = Math.max(0, Math.round(Number(state.iconY || 0) * Number(state.scaleY || 1)));
+  const x = Math.max(0, Math.round(Number(state[xKey] || 0) * Number(state.scaleX || 1)));
+  const y = Math.max(0, Math.round(Number(state[yKey] || 0) * Number(state.scaleY || 1)));
   if (!Number.isFinite(x) || !Number.isFinite(y) || x <= 0 || y <= 0) return false;
 
   spawnSync("xdotool", ["windowfocus", windowId], { stdio: "ignore" });
-  const result = spawnSync("xdotool", [
+  const args = [
     "mousemove",
     "--window",
     windowId,
     String(x),
-    String(y),
-    "click",
-    "--window",
-    windowId,
-    "1"
-  ], { stdio: "ignore" });
+    String(y)
+  ];
+  if (click) {
+    args.push("click", "--window", windowId, "1");
+  }
+  const result = spawnSync("xdotool", args, { stdio: "ignore" });
   return result.status === 0;
+}
+
+function clickQqWindowPoint(state, xKey, yKey) {
+  return interactQqWindowPoint(state, xKey, yKey, { click: true });
+}
+
+function clickQqAudioIcon(state) {
+  return clickQqWindowPoint(state, "iconX", "iconY");
+}
+
+function claimQqMvAutoPlayAttempt(target, result) {
+  if (!qqMvAutoPlay || !result?.active || result.playbackError || result.ended || !result.key) return false;
+  const currentTime = Number(result.currentTime);
+  const readyState = Number(result.readyState);
+  const paused = Boolean(result.paused);
+  if (!Number.isFinite(currentTime) || !Number.isFinite(readyState)) return false;
+
+  const now = Date.now();
+  const key = `${target.id}:${result.key}`;
+  let state = qqMvAutoPlayStates.get(key);
+  if (!state) {
+    state = {
+      firstSeenAt: now,
+      lastProgressAt: now,
+      lastTime: currentTime,
+      clicked: false,
+      progressed: false
+    };
+    qqMvAutoPlayStates.set(key, state);
+    if (qqMvAutoPlayStates.size > 100) {
+      qqMvAutoPlayStates.delete(qqMvAutoPlayStates.keys().next().value);
+    }
+  }
+
+  if (currentTime > Number(state.lastTime || 0) + qqMvAutoPlayProgressEpsilonSeconds) {
+    state.lastProgressAt = now;
+    state.progressed = true;
+  }
+  state.lastTime = currentTime;
+
+  if (!paused || currentTime > qqMvAutoPlayMaxStartSeconds) {
+    state.progressed = true;
+  }
+  if (state.progressed || state.clicked || !paused || readyState < 2 || currentTime > qqMvAutoPlayMaxStartSeconds) {
+    return false;
+  }
+  if (now - state.firstSeenAt < qqMvAutoPlayDelayMs || now - state.lastProgressAt < qqMvAutoPlayDelayMs) {
+    return false;
+  }
+
+  state.clicked = true;
+  state.clickedAt = now;
+  return true;
 }
 
 async function installSinglePaneNavigation(target) {
@@ -1252,6 +1692,31 @@ async function runQqAudioFeatures(targets) {
   }
 }
 
+async function runQqMvCinemaFeatures(targets) {
+  if (providerId !== "qq_music" || !qqMvCinemaMode) return;
+  for (const target of targets.filter(isQqMusicPage)) {
+    const result = await evaluate(target.webSocketDebuggerUrl, qqMvCinemaExpression).catch(() => null);
+    if (!result) continue;
+    const previous = qqMvCinemaStates.get(target.id) || {};
+    const nextKey = `${result.active ? "1" : "0"}:${result.reason || ""}:${result.url || ""}`;
+    if (previous.key !== nextKey) {
+      qqMvCinemaStates.set(target.id, { key: nextKey });
+      if (result.active) {
+        console.log("[tikpal-web-mode-guard] enabled QQ MV cinema mode");
+      } else if (result.reason && result.reason !== "not-mv" && result.reason !== "not-qq") {
+        console.log(`[tikpal-web-mode-guard] disabled QQ MV cinema mode ${result.reason}`.trim());
+      }
+    }
+    if (claimQqMvAutoPlayAttempt(target, result)) {
+      const playback = await evaluate(target.webSocketDebuggerUrl, qqMvAutoPlayExpression).catch((error) => ({
+        played: false,
+        reason: error?.message || "failed"
+      }));
+      console.log(`[tikpal-web-mode-guard] QQ MV auto play ${playback?.played ? "started" : "skipped"} ${playback?.reason || ""} ${result.url || ""}`.trim());
+    }
+  }
+}
+
 async function guardOnce() {
   if (typeof WebSocket !== "function") return;
   const targets = (await readTargets()).filter(isPageTarget);
@@ -1265,6 +1730,7 @@ async function guardOnce() {
   await runSafeDismissFeatures(targets);
   await runSafePromptFeatures(targets);
   await runQqAudioFeatures(targets);
+  await runQqMvCinemaFeatures(targets);
 }
 
 if (process.argv.includes("--check")) {
@@ -1285,6 +1751,13 @@ if (process.argv.includes("--check")) {
   console.log(`[tikpal-web-mode-guard] empty page timeout: ${Math.round(emptyPageTimeoutMs / 1000)}s`);
   console.log(`[tikpal-web-mode-guard] qq auto confirm: ${qqAutoConfirm ? "1" : "0"}`);
   console.log(`[tikpal-web-mode-guard] qq auto unmute: ${qqAutoUnmute ? "1" : "0"}`);
+  console.log(`[tikpal-web-mode-guard] qq mv auto fullscreen: ${qqMvAutoFullscreen ? "1" : "0"}`);
+  console.log(`[tikpal-web-mode-guard] qq mv cinema mode: ${qqMvCinemaMode ? "1" : "0"}`);
+  console.log(`[tikpal-web-mode-guard] qq mv auto play: ${qqMvAutoPlay ? "1" : "0"}`);
+  console.log("[tikpal-web-mode-guard] qq mv native fullscreen path: 0");
+  console.log("[tikpal-web-mode-guard] qq mv playlist button: 1");
+  console.log("[tikpal-web-mode-guard] qq mv replay button: 1");
+  console.log("[tikpal-web-mode-guard] qq mv cinema frame: 1");
   console.log("[tikpal-web-mode-guard] youtube safe dismiss: 1");
   console.log(`[tikpal-web-mode-guard] accept-all labels: ${consentAcceptAllLabels.join(",")}`);
   console.log(`[tikpal-web-mode-guard] safe labels: ${safeLabels.join(",")}`);
