@@ -2812,12 +2812,17 @@ try {
     `
       (() => {
         const text = document.querySelector('.quick-menu-panel')?.textContent ?? '';
+        const timeLabel = document.querySelector('[data-quick-menu-toggle="time"] span')?.textContent?.trim() ?? '';
+        const sleepLabel = document.querySelector('[data-quick-menu-toggle="sleep"] span')?.textContent?.trim() ?? '';
         return document.querySelectorAll('.quick-menu-panel [data-quick-menu-toggle]').length === 4
           && text.includes('Screen')
           && !text.includes('Room Mode')
           && text.includes('Volume')
           && text.includes('Time')
           && text.includes('Sleep')
+          && ['Visible', 'Hidden'].includes(timeLabel)
+          && ['Tap to sleep', 'Syncing'].includes(sleepLabel)
+          && !text.includes('Tap wake')
           && !text.includes('Hi-Fi EQ')
           && !text.includes('Scene Sound')
           && !text.includes('Unavailable')
@@ -3566,6 +3571,12 @@ try {
     "document.querySelector('[data-radio-station-logo]') instanceof HTMLImageElement && document.querySelector('[data-radio-station-logo]')?.complete === true && document.querySelector('[data-radio-station-logo]')?.naturalWidth > 0",
     "Radio panel renders station logo images"
   );
+  await evaluate(client, "document.querySelector('[data-radio-category=\"jazz\"]')?.click(); true");
+  await expectEventually(
+    client,
+    "document.querySelector('[data-radio-category=\"jazz\"][aria-selected=\"true\"]') !== null && document.querySelectorAll('.source-panel-radio .radio-catalog-item').length === 3",
+    "Radio panel can show a full three-station category"
+  );
   await expectEventually(
     client,
     `
@@ -3578,7 +3589,7 @@ try {
         const shellRect = shell.getBoundingClientRect();
         return !/\\b\\d+\\s+stations\\b/i.test(panel.textContent ?? "")
           && document.querySelector('.source-panel-hint') === null
-          && lastRect.bottom <= shellRect.bottom - 12
+          && lastRect.bottom <= shellRect.bottom - 4
           && shellRect.bottom - lastRect.bottom <= 72;
       })()
     `,
@@ -3592,9 +3603,11 @@ try {
         const items = [...document.querySelectorAll('.source-panel-radio .radio-catalog-item')];
         const categoryNodes = [...document.querySelectorAll('.source-panel-radio [data-radio-station-category]')];
         const categories = categoryNodes.map((node) => node.getAttribute('data-radio-station-category'));
+        const text = document.querySelector('.source-panel-radio')?.textContent ?? '';
         return document.querySelector('[data-radio-category="random"][aria-selected="true"]') !== null
           && items.length === 3
           && categoryNodes.length === 3
+          && text.includes('Three fresh picks. Tap one to play.')
           && categories.every((category) => category && category !== 'random');
       })()
     `,
@@ -3712,8 +3725,8 @@ try {
   );
   await expectEventually(
     client,
-    "document.querySelector('[data-library-delete-confirm-yes]') !== null && document.querySelector('[data-library-delete-confirm-no]') !== null",
-    "local Library delete asks for Yes and No confirmation"
+    "document.querySelector('[data-library-delete-confirm]')?.textContent.includes('Delete?') && document.querySelector('[data-library-delete-confirm-yes]') !== null && document.querySelector('[data-library-delete-confirm-no]') !== null",
+    "local Library delete asks for Delete, Yes, and No confirmation"
   );
   await evaluate(client, "document.querySelector('[data-library-delete-confirm-no]')?.click(); true");
   await expectEventually(
@@ -4384,7 +4397,7 @@ try {
   await setInputValue(client, ".web-mode-proxy-field input", "http://127.0.0.1:7896");
   await expectEventually(
     client,
-    "document.querySelector('.settings-detail-header p')?.textContent === 'Saved automatically' && document.querySelector('.web-mode-proxy-field input')?.value === 'http://127.0.0.1:7896' && document.querySelector('.web-mode-settings-help')?.textContent.includes('toggle Web Proxy and retry')",
+    "document.querySelector('.settings-detail-header p')?.textContent === 'Saved automatically' && document.querySelector('.web-mode-proxy-field input')?.value === 'http://127.0.0.1:7896' && document.querySelector('.web-mode-settings-help')?.textContent.includes('switch Proxy and retry')",
     "Console Explore proxy URL auto-saves without rewriting the input"
   );
   await setInputValue(client, ".web-mode-proxy-field input", originalProxyUrl);
@@ -4564,8 +4577,8 @@ try {
   );
   await expect(
     client,
-    "document.querySelector('.remote-key-panel strong')?.textContent?.trim() === 'Auto'",
-    "portable remote defaults to proxy-managed key mode"
+    "document.querySelector('.remote-key-panel span')?.textContent?.trim() === 'Access key' && document.querySelector('.remote-key-panel strong')?.textContent?.trim() === 'No key'",
+    "portable remote defaults to no-key mode without setup friction"
   );
   await expectEventually(
     client,

@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { Apple, Cloud, Gem, Globe2, LogOut, Music2, ShoppingBag, SquarePlay, Type, Volume2 } from "lucide-react";
+import { Apple, Cloud, Gem, Globe2, Music2, PanelRightClose, ShoppingBag, SquarePlay, Type, Volume2 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { fetchTikpalState, fetchWebModeState, sendPlaybackAction, sendWebModeAction } from "../api/tikpalClient";
+import { friendlyUiError } from "../uiCopy";
 import type { TikpalState, WebModeProviderId, WebModeProviderSummary, WebModeState } from "../types";
 
 const providerOrder: WebModeProviderId[] = [
@@ -73,6 +74,17 @@ function inferFailedProviderFromError(error: string | null): WebModeProviderId |
   const normalizedError = error.trim().toLowerCase();
   if (!/\bdid not open\b|\bdid not enter\b|\bdid not become ready\b/.test(normalizedError)) return null;
   return providerOrder.find((id) => normalizedError.startsWith(providerLabels[id].toLowerCase())) ?? null;
+}
+
+function friendlyExploreError(message: string | null) {
+  if (!message) return null;
+  const normalized = message.toLowerCase();
+  if (normalized.includes("proxy")) return "Proxy needs attention. Check the URL and retry.";
+  if (normalized.includes("did not open") || normalized.includes("did not enter") || normalized.includes("did not become ready")) return "Could not open. Check Web Proxy and retry.";
+  if (normalized.includes("volume")) return "Volume did not change. Try again.";
+  if (normalized.includes("scale") || normalized.includes("font")) return "Font size did not change. Try again.";
+  if (normalized.includes("close")) return "Could not close Explore. Try Back again.";
+  return friendlyUiError(message, "Explore needs attention. Try again.");
 }
 
 export function WebModeSidePanel() {
@@ -264,7 +276,7 @@ export function WebModeSidePanel() {
             data-web-mode-top-back
             onClick={() => void closeWebMode()}
           >
-            <LogOut size={17} />
+            <PanelRightClose size={17} />
             <span>{pendingAction === "close" ? "Closing" : "Back"}</span>
           </button>
         </div>
@@ -273,9 +285,9 @@ export function WebModeSidePanel() {
       <section className="web-mode-active-card" aria-label="Active web player">
         <Globe2 size={30} />
         <div>
-          <span>Left display</span>
+          <span>Pick music on the left</span>
           <strong>{displayProviderLabel}</strong>
-          <p>{pendingProvider ? "Connecting on the left display" : failedProvider ? "Open failed" : effectiveActiveProvider ? (webMode?.settings.proxyEnabled ? webMode.settings.proxyUrl : "Direct browser access") : "Choose a web player below"}</p>
+          <p>{pendingProvider ? "Opening on the left" : failedProvider ? "Could not open" : effectiveActiveProvider ? (webMode?.settings.proxyEnabled ? "Proxy active" : "Direct connection") : "Choose a web player below"}</p>
         </div>
       </section>
 
@@ -339,8 +351,8 @@ export function WebModeSidePanel() {
         </label>
       </section>
 
-      <footer className="web-mode-panel-footer" role="status">
-        {error ?? (pendingProvider ? `Connecting to ${providerLabels[pendingProvider]}` : "Use the official player on the left. Tikpal controls stay here.")}
+      <footer className="web-mode-panel-footer" role="status" title={error ?? undefined}>
+        {friendlyExploreError(error) ?? (pendingProvider ? `Connecting to ${providerLabels[pendingProvider]}` : "Choose music on the left. Tikpal controls stay here.")}
       </footer>
     </main>
   );

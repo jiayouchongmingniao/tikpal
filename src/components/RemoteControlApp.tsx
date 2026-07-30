@@ -1,6 +1,7 @@
-import { Airplay, Bluetooth, Globe2, LogOut, Music, Pause, Play, Radio, RefreshCw, SkipBack, SkipForward, SlidersHorizontal, Sun, Volume2, Wifi } from "lucide-react";
+import { Airplay, Bluetooth, Globe2, Music, PanelRightClose, Pause, Play, Radio, RefreshCw, SkipBack, SkipForward, SlidersHorizontal, Sun, Volume2, Wifi } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fetchRemoteCatalog, fetchRemoteState, readStoredRemoteKey, sendRemoteAction, storeRemoteKey } from "../api/remoteClient";
+import { friendlyUiError, playbackFallbackCopy } from "../uiCopy";
 import type { RemoteActionRequest, RemoteCatalogResponse, RemoteStateResponse, RoomMode, SourceState } from "../types";
 
 const REFRESH_MS = 2500;
@@ -29,9 +30,17 @@ function roomLabel(mode: RoomMode) {
 function formatTrack(state: RemoteStateResponse | null) {
   if (!state) return { title: "Connecting", artist: "Tikpal Remote" };
   return {
-    title: state.playback.title || "Untitled",
+    title: state.playback.title || playbackFallbackCopy.title,
     artist: [state.playback.artist, state.playback.album].filter(Boolean).join(" / ") || state.source.current.label
   };
+}
+
+function remotePlaybackStateLabel(state: RemoteStateResponse | null) {
+  if (!state) return "Updating";
+  if (state.playback.state === "playing") return "Playing";
+  if (state.playback.state === "paused") return "Paused";
+  if (state.playback.state === "stopped") return "Stopped";
+  return "Ready";
 }
 
 export function RemoteControlApp() {
@@ -147,7 +156,9 @@ export function RemoteControlApp() {
 
   const isPlaying = remoteState?.playback.state === "playing";
   const busy = pendingAction !== null;
-  const visibleError = actionError ?? refreshError;
+  const rawError = actionError ?? refreshError;
+  const visibleError = friendlyUiError(rawError, "Remote needs attention. Try again.");
+  const visibleExploreError = friendlyUiError(remoteState?.explore.lastError, "Explore needs attention. Try again.");
   const transportCapabilities = remoteState?.playback.transportCapabilities;
   const transportUnavailableTitle = transportCapabilities?.reason ?? "Playback control unavailable";
   const previousDisabled = busy || transportCapabilities?.previous === false;
@@ -172,14 +183,14 @@ export function RemoteControlApp() {
         </header>
 
         <section className="remote-status-band" aria-live="polite">
-          <span>{remoteState?.playback.state ?? "loading"}</span>
+          <span>{remotePlaybackStateLabel(remoteState)}</span>
           <span>{remoteState?.source.current.label ?? "Source"}</span>
           <span>{remoteState ? roomLabel(remoteState.room.mode) : "Room"}</span>
         </section>
 
         <section className="remote-key-panel">
           <label>
-            <span>Remote key</span>
+            <span>Access key</span>
             <input
               data-remote-key
               type="password"
@@ -190,15 +201,15 @@ export function RemoteControlApp() {
               onKeyDown={(event) => {
                 if (event.key === "Enter") handleKeySave();
               }}
-              placeholder="Optional X-Tikpal-Key"
+              placeholder="Optional access key"
             />
           </label>
-          <strong>{remoteKey.trim() ? "Ready" : "Auto"}</strong>
+          <strong>{remoteKey.trim() ? "Ready" : "No key"}</strong>
         </section>
 
         {visibleError ? (
           <section className="remote-error" role="alert">
-            <p>{visibleError}</p>
+            <p title={rawError ?? undefined}>{visibleError}</p>
           </section>
         ) : null}
 
@@ -262,8 +273,8 @@ export function RemoteControlApp() {
               data-remote-explore-close
               onClick={() => void applyAction({ type: "explore.close" })}
             >
-              <LogOut aria-hidden="true" />
-              <span>{pendingAction === "explore.close" ? "Closing" : "Back to Tikpal"}</span>
+              <PanelRightClose aria-hidden="true" />
+              <span>{pendingAction === "explore.close" ? "Closing" : "Back"}</span>
             </button>
             <button
               type="button"
@@ -277,7 +288,7 @@ export function RemoteControlApp() {
               <span>{pendingAction === "explore.proxy_set" ? "Saving" : remoteState?.explore.proxyEnabled ? "Proxy On" : "Proxy Off"}</span>
             </button>
           </div>
-          {remoteState?.explore.lastError ? <p className="remote-explore-error" role="alert">{remoteState.explore.lastError}</p> : null}
+          {visibleExploreError ? <p className="remote-explore-error" role="alert" title={remoteState?.explore.lastError ?? undefined}>{visibleExploreError}</p> : null}
         </section>
 
         <section className="remote-grid-panel">

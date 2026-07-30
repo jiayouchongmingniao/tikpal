@@ -1,7 +1,7 @@
 import http from "node:http";
 import { execFile, spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { copyFile, mkdir, open, readFile, readdir, stat, statfs, unlink, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, open, readFile, readdir, stat, statfs, unlink, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { basename, dirname, extname, posix, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
@@ -235,6 +235,9 @@ const USB_LIBRARY_ROOTS = parseEnvPathList(process.env.TIKPAL_USB_LIBRARY_ROOTS)
 const USB_LIBRARY_AUTO_ROOTS = parseEnvPathList(process.env.TIKPAL_USB_LIBRARY_AUTO_ROOTS || "/media,/run/media");
 const USB_LIBRARY_MPD_PREFIX = normalizeSafeRelativePath(process.env.TIKPAL_USB_LIBRARY_MPD_PREFIX ?? "USB") ?? "USB";
 const USB_LIBRARY_MAX_TRACKS = parseEnvPositiveInteger(process.env.TIKPAL_USB_LIBRARY_MAX_TRACKS, 500);
+const NAS_LIBRARY_ROOTS = parseEnvPathList(process.env.TIKPAL_NAS_LIBRARY_ROOTS);
+const NAS_LIBRARY_MPD_PREFIX = normalizeSafeRelativePath(process.env.TIKPAL_NAS_LIBRARY_MPD_PREFIX ?? "NAS") ?? "NAS";
+const NAS_LIBRARY_MAX_TRACKS = parseEnvPositiveInteger(process.env.TIKPAL_NAS_LIBRARY_MAX_TRACKS, 500);
 const USB_LIBRARY_SCAN_COMMAND = process.env.TIKPAL_USB_LIBRARY_SCAN_COMMAND ?? (API_MODE === "mpc" ? "./deploy/moode/tikpal-usb-library-sync.sh" : "");
 const USB_LIBRARY_AUTO_UPDATE = parseEnvBoolean(process.env.TIKPAL_USB_LIBRARY_AUTO_UPDATE ?? "1");
 const USB_LIBRARY_AUTO_UPDATE_MIN_MS = parseEnvPositiveInteger(process.env.TIKPAL_USB_LIBRARY_AUTO_UPDATE_MIN_MS, 15_000);
@@ -247,6 +250,14 @@ const MUSIC_LIBRARY_STATE_PATH = resolve(process.env.TIKPAL_MUSIC_LIBRARY_STATE_
 const ROOM_EXPERIENCE_STATE_PATH = resolve(process.env.TIKPAL_ROOM_EXPERIENCE_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "room-experience-state.json"));
 const AUDIO_VOLUME_STATE_PATH = resolve(process.env.TIKPAL_AUDIO_VOLUME_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "audio-volume-state.json"));
 const AUDIO_SOURCE_MEMORY_STATE_PATH = resolve(process.env.TIKPAL_AUDIO_SOURCE_MEMORY_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "audio-source-memory.json"));
+const NAS_SOURCES_STATE_PATH = resolve(process.env.TIKPAL_NAS_SOURCES_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "nas-sources.json"));
+const NAS_CREDENTIALS_DIR = resolve(process.env.TIKPAL_NAS_CREDENTIALS_DIR ?? resolve(process.cwd(), ".tikpal", "nas-credentials"));
+const NAS_MOUNT_ROOT = resolve(process.env.TIKPAL_NAS_MOUNT_ROOT ?? "/mnt/tikpal-nas");
+const NAS_MPD_ENTRY_ROOT = resolve(process.env.TIKPAL_NAS_MPD_ENTRY_ROOT ?? resolve(MPD_MUSIC_ROOT, NAS_LIBRARY_MPD_PREFIX));
+const NAS_MOUNT_COMMAND = process.env.TIKPAL_NAS_MOUNT_COMMAND ?? "";
+const NAS_UNMOUNT_COMMAND = process.env.TIKPAL_NAS_UNMOUNT_COMMAND ?? "";
+const NAS_DISCOVERY_COMMAND = process.env.TIKPAL_NAS_DISCOVERY_COMMAND ?? "";
+const NAS_DISCOVERY_HINTS = process.env.TIKPAL_NAS_DISCOVERY_HINTS ?? "";
 const WEB_MODE_SETTINGS_PATH = resolve(process.env.TIKPAL_WEB_MODE_SETTINGS_PATH ?? resolve(process.cwd(), ".tikpal", "web-mode-settings.json"));
 const WEB_MODE_STATE_PATH = resolve(process.env.TIKPAL_WEB_MODE_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "web-mode-state.json"));
 const WEB_MODE_HANDOFF_STATE_PATH = resolve(process.env.TIKPAL_WEB_MODE_HANDOFF_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "web-mode-handoff.json"));
@@ -288,6 +299,9 @@ const PLAYLIST_COVER_TYPES = new Set(["gradient", "scene", "collage", "custom"])
 const PLAYBACK_MODES = new Set(["sequence", "repeat_one", "shuffle"]);
 const ROOM_MODES = new Set(["focus", "calm", "sleep", "hifi"]);
 const ROOM_SESSION_PHASES = new Set(["idle", "preparing", "active", "windDown"]);
+const NAS_AUTH_MODES = new Set(["guest", "password"]);
+const NAS_STATUS_VALUES = new Set(["ready", "offline", "checking", "check_setup", "manual"]);
+const NAS_SMB_VERSIONS = ["3.0", "2.1", "2.0"];
 const REMOTE_SOURCE_TARGETS = new Set(["mpd", "radio", "spotify", "bluetooth", "airplay", "upnp"]);
 const REMEMBERED_AUDIO_SOURCE_TARGETS = new Set(["mpd", "radio", "spotify", "bluetooth", "airplay", "upnp"]);
 const COMMAND_HANDOFF_SOURCE_TARGETS = new Set(["spotify", "bluetooth", "airplay", "upnp"]);
@@ -1923,7 +1937,8 @@ async function runCommand(command, options = {}) {
     const { stdout } = await execFileAsync("sh", ["-lc", command], {
       timeout: options.timeout ?? 3500,
       killSignal: "SIGKILL",
-      maxBuffer: 1024 * 256
+      maxBuffer: options.maxBuffer ?? 1024 * 256,
+      env: options.env ? { ...process.env, ...options.env } : process.env
     });
     return stdout.trim();
   } catch (error) {
@@ -4031,6 +4046,222 @@ async function writeMusicLibraryState(state) {
   return normalized;
 }
 
+function emptyNasSourcesState() {
+  return {
+    version: 1,
+    sources: []
+  };
+}
+
+function normalizeNasId(value, fallbackSeed = "") {
+  const raw = String(value ?? fallbackSeed ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  const id = raw || `nas-${Date.now().toString(36)}`;
+  return id.startsWith("nas-") ? id : `nas-${id}`;
+}
+
+function normalizeNasDisplayName(value, fallback = "NAS") {
+  return String(value ?? fallback)
+    .trim()
+    .replace(/\s+/g, " ")
+    .slice(0, 48)
+    || fallback;
+}
+
+function normalizeNasMountName(value, fallback = "NAS") {
+  const normalized = String(value ?? fallback)
+    .trim()
+    .replace(/[\\/]+/g, "-")
+    .replace(/[^A-Za-z0-9._ -]+/g, "")
+    .replace(/\s+/g, " ")
+    .slice(0, 48);
+  return normalized || fallback;
+}
+
+function normalizeNasHost(value) {
+  const host = String(value ?? "").trim().replace(/^\/+|\/+$/g, "");
+  if (!host || /[\\/]/.test(host)) return "";
+  return host;
+}
+
+function normalizeNasShare(value) {
+  return String(value ?? "")
+    .trim()
+    .replace(/^\/+|\/+$/g, "")
+    .split(/[\\/]+/)
+    .filter(Boolean)
+    .at(0)
+    ?? "";
+}
+
+function normalizeNasFolderPath(value) {
+  const safePath = normalizeSafeRelativePath(value);
+  return safePath ?? "";
+}
+
+function normalizeNasPort(value) {
+  const port = Number(value ?? 445);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return 445;
+  return port;
+}
+
+function normalizeNasAuthMode(value) {
+  const mode = String(value ?? "").trim().toLowerCase();
+  return NAS_AUTH_MODES.has(mode) ? mode : "guest";
+}
+
+function parseNasLocator(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw || (!raw.startsWith("//") && !raw.toLowerCase().startsWith("smb://"))) return null;
+  try {
+    const parsed = new URL(raw.startsWith("//") ? `smb:${raw}` : raw);
+    const parts = parsed.pathname
+      .split("/")
+      .map((part) => decodeURIComponent(part).trim())
+      .filter(Boolean);
+    if (!parsed.hostname || parts.length === 0) return null;
+    return {
+      host: parsed.hostname,
+      port: parsed.port ? normalizeNasPort(parsed.port) : 445,
+      share: parts[0],
+      path: normalizeNasFolderPath(parts.slice(1).join("/"))
+    };
+  } catch {
+    return null;
+  }
+}
+
+function normalizeNasLastStatus(raw, fallbackStatus = "offline") {
+  const status = NAS_STATUS_VALUES.has(String(raw?.status ?? raw?.state ?? "").trim())
+    ? String(raw.status ?? raw.state).trim()
+    : fallbackStatus;
+  return {
+    status,
+    checkedAt: typeof raw?.checkedAt === "string" ? raw.checkedAt : null,
+    lastError: typeof raw?.lastError === "string" && raw.lastError.trim() ? raw.lastError.trim() : null
+  };
+}
+
+function normalizeNasSource(raw, existing = null) {
+  const locator = parseNasLocator(raw?.url ?? raw?.server ?? raw?.host);
+  const host = normalizeNasHost(raw?.host ?? locator?.host);
+  const share = normalizeNasShare(raw?.share ?? locator?.share);
+  if (!host) throw new Error("NAS server is required");
+  if (!share) throw new Error("NAS share is required");
+
+  const now = new Date().toISOString();
+  const port = normalizeNasPort(raw?.port ?? locator?.port);
+  const path = normalizeNasFolderPath(raw?.path ?? raw?.folder ?? locator?.path);
+  const name = normalizeNasDisplayName(raw?.name, existing?.name || share);
+  const mountName = normalizeNasMountName(raw?.mountName, existing?.mountName || name);
+  const id = normalizeNasId(raw?.id ?? existing?.id, `${host}-${share}-${mountName}`);
+  const authMode = normalizeNasAuthMode(raw?.authMode);
+  const username = authMode === "password"
+    ? String(raw?.username ?? existing?.username ?? "").trim().slice(0, 128)
+    : "";
+
+  return {
+    id,
+    name,
+    host,
+    port,
+    share,
+    path,
+    authMode,
+    username,
+    enabled: raw?.enabled === undefined ? existing?.enabled !== false : raw.enabled !== false,
+    mountName,
+    smbVersion: NAS_SMB_VERSIONS.includes(String(raw?.smbVersion ?? existing?.smbVersion ?? "").trim())
+      ? String(raw?.smbVersion ?? existing?.smbVersion).trim()
+      : null,
+    lastStatus: normalizeNasLastStatus(raw?.lastStatus ?? existing?.lastStatus, existing?.lastStatus?.status ?? "offline"),
+    lastScanAt: typeof raw?.lastScanAt === "string" ? raw.lastScanAt : existing?.lastScanAt ?? null,
+    createdAt: typeof existing?.createdAt === "string" ? existing.createdAt : now,
+    updatedAt: now
+  };
+}
+
+function normalizeNasSourcesState(raw) {
+  const state = emptyNasSourcesState();
+  const seenIds = new Set();
+  for (const entry of Array.isArray(raw?.sources) ? raw.sources : []) {
+    try {
+      const source = normalizeNasSource(entry);
+      if (seenIds.has(source.id)) continue;
+      seenIds.add(source.id);
+      state.sources.push(source);
+    } catch {
+      // Skip malformed NAS entries rather than blocking the rest of the library.
+    }
+  }
+  return state;
+}
+
+async function readNasSourcesState() {
+  try {
+    return normalizeNasSourcesState(JSON.parse(await readFile(NAS_SOURCES_STATE_PATH, "utf8")));
+  } catch {
+    return emptyNasSourcesState();
+  }
+}
+
+async function writeNasSourcesState(state) {
+  const normalized = normalizeNasSourcesState(state);
+  await mkdir(dirname(NAS_SOURCES_STATE_PATH), { recursive: true });
+  await writeFile(NAS_SOURCES_STATE_PATH, `${JSON.stringify(normalized, null, 2)}\n`);
+  return normalized;
+}
+
+function nasCredentialPath(sourceId) {
+  const id = normalizeNasId(sourceId);
+  return resolve(NAS_CREDENTIALS_DIR, `${id}.cred`);
+}
+
+async function readNasCredential(sourceId) {
+  try {
+    const text = await readFile(nasCredentialPath(sourceId), "utf8");
+    const values = Object.fromEntries(text
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const index = line.indexOf("=");
+        return index === -1 ? [line, ""] : [line.slice(0, index), line.slice(index + 1)];
+      }));
+    return {
+      username: values.username ?? "",
+      password: values.password ?? ""
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function writeNasCredentialFile(filePath, username, password) {
+  const safeUsername = String(username ?? "").replace(/[\r\n]/g, "").trim();
+  const safePassword = String(password ?? "").replace(/[\r\n]/g, "");
+  await mkdir(dirname(filePath), { recursive: true });
+  await writeFile(filePath, `username=${safeUsername}\npassword=${safePassword}\n`, { mode: 0o600 });
+  await chmod(filePath, 0o600);
+  return filePath;
+}
+
+async function writeNasCredential(sourceId, username, password) {
+  await mkdir(NAS_CREDENTIALS_DIR, { recursive: true });
+  return await writeNasCredentialFile(nasCredentialPath(sourceId), username, password);
+}
+
+async function deleteNasCredential(sourceId) {
+  try {
+    await unlink(nasCredentialPath(sourceId));
+  } catch {
+    // Credentials may not exist for guest shares.
+  }
+}
+
 async function readRoomExperienceState() {
   try {
     return normalizeRoomExperienceState(JSON.parse(await readFile(ROOM_EXPERIENCE_STATE_PATH, "utf8")));
@@ -4911,9 +5142,10 @@ function isPathWithin(root, candidate) {
   return safeCandidate === safeRoot || safeCandidate.startsWith(`${safeRoot}${sep}`);
 }
 
-function buildUsbMountId(rootPath, usedIds) {
+function buildLibraryMountId(rootPath, usedIds, preferredName = "") {
   const fallback = `drive-${usedIds.size + 1}`;
-  const rawName = basename(resolve(rootPath)) || fallback;
+  const sourceName = basename(String(preferredName || "").replace(/\\/g, "/"));
+  const rawName = sourceName || basename(resolve(rootPath)) || fallback;
   let id = rawName
     .replace(/[\\/]+/g, "-")
     .replace(/^\.+$/, "")
@@ -4927,16 +5159,34 @@ function buildUsbMountId(rootPath, usedIds) {
   return candidate;
 }
 
-async function readMountedPaths() {
+function buildUsbMountId(rootPath, usedIds) {
+  return buildLibraryMountId(rootPath, usedIds);
+}
+
+async function readProcMountEntries() {
   try {
     return (await readFile("/proc/mounts", "utf8"))
       .split("\n")
-      .map((line) => line.trim().split(/\s+/)[1])
-      .filter(Boolean)
-      .map(decodeProcMountField);
+      .map((line) => line.trim().split(/\s+/))
+      .filter((parts) => parts[1])
+      .map((parts) => ({
+        source: decodeProcMountField(parts[0]),
+        target: decodeProcMountField(parts[1]),
+        type: parts[2] ?? ""
+      }));
   } catch {
     return [];
   }
+}
+
+async function readMountedPaths() {
+  return (await readProcMountEntries()).map((entry) => entry.target);
+}
+
+async function readMountSourceForPath(pathValue) {
+  const safePath = resolve(pathValue);
+  const matches = (await readProcMountEntries()).filter((entry) => resolve(entry.target) === safePath);
+  return matches.at(-1)?.source ?? null;
 }
 
 function shouldSkipUsbLibraryRoot(rootPath) {
@@ -4979,6 +5229,75 @@ async function discoverUsbLibraryRoots() {
   }
 
   return Array.from(new Set(candidates)).sort((left, right) => left.localeCompare(right));
+}
+
+function resolveNasSourceMountPoint(source) {
+  return resolve(NAS_MOUNT_ROOT, normalizeNasId(source?.id));
+}
+
+function resolveNasSourceContentRoot(source) {
+  const mountPoint = resolveNasSourceMountPoint(source);
+  const folder = normalizeNasFolderPath(source?.path);
+  return folder ? resolve(mountPoint, ...folder.split("/")) : mountPoint;
+}
+
+function resolveNasSourceMpdEntryPath(source) {
+  return resolve(NAS_MPD_ENTRY_ROOT, normalizeNasMountName(source?.mountName, source?.name || "NAS"));
+}
+
+function buildNasRemoteShare(source) {
+  return `//${source.host}/${source.share}`;
+}
+
+function nasMpdUpdateTarget(source) {
+  const mountName = normalizeNasMountName(source?.mountName, source?.name || "NAS");
+  return normalizeSafeRelativePath(posix.join(NAS_LIBRARY_MPD_PREFIX, mountName));
+}
+
+async function discoverNasLibraryRootEntries() {
+  const entries = [];
+  const configuredState = await readNasSourcesState();
+  for (const source of configuredState.sources) {
+    if (source.enabled === false) continue;
+    const mpdEntry = await resolveReadableDirectory(resolveNasSourceMpdEntryPath(source));
+    if (!mpdEntry) continue;
+    entries.push({
+      rootPath: mpdEntry,
+      mountId: normalizeNasMountName(source.mountName, source.name),
+      sourceId: source.id,
+      sourceKind: "configured"
+    });
+  }
+
+  for (const rootPath of NAS_LIBRARY_ROOTS) {
+    const absolutePath = await resolveReadableDirectory(rootPath);
+    if (absolutePath) {
+      entries.push({
+        rootPath: absolutePath,
+        mountId: null,
+        sourceId: null,
+        sourceKind: "manual"
+      });
+    }
+  }
+
+  const seen = new Set();
+  return entries
+    .filter((entry) => {
+      const key = resolve(entry.rootPath);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((left, right) => left.rootPath.localeCompare(right.rootPath));
+}
+
+async function discoverNasLibraryRoots() {
+  return (await discoverNasLibraryRootEntries()).map((entry) => entry.rootPath);
+}
+
+async function buildNasMountId(rootPath, usedIds) {
+  return buildLibraryMountId(rootPath, usedIds, await readMountSourceForPath(rootPath));
 }
 
 async function collectUsbAudioFiles(rootPath, options = {}) {
@@ -5124,6 +5443,481 @@ async function readUsbAudioLibraryTracks(options = {}) {
   }
 
   return tracks;
+}
+
+async function readNasAudioLibraryTracks(options = {}) {
+  const roots = await discoverNasLibraryRootEntries();
+  const favoritePaths = new Set((options.musicState ?? readMusicLibraryStateSync()).favorites.trackPaths);
+  const usedIds = new Set();
+  const tracks = [];
+
+  for (const rootEntry of roots) {
+    const rootPath = rootEntry.rootPath;
+    const mountId = rootEntry.mountId
+      ? buildLibraryMountId(rootPath, usedIds, rootEntry.mountId)
+      : await buildNasMountId(rootPath, usedIds);
+    const files = await collectUsbAudioFiles(rootPath, { limit: Math.max(0, NAS_LIBRARY_MAX_TRACKS - tracks.length) });
+    for (const absolutePath of files) {
+      if (tracks.length >= NAS_LIBRARY_MAX_TRACKS) break;
+      const relativeFilePath = normalizeSafeRelativePath(relative(rootPath, absolutePath).split(sep).join("/"));
+      if (!relativeFilePath) continue;
+      const mpdPath = normalizeSafeRelativePath(posix.join(NAS_LIBRARY_MPD_PREFIX, mountId, relativeFilePath));
+      if (!mpdPath) continue;
+      const idHash = createHash("sha1").update(`${rootPath}\0${relativeFilePath}`).digest("hex").slice(0, 12);
+      const audioInfo = await readAudioFileInfo(absolutePath);
+      tracks.push(appendAudioFileInfo({
+        id: `nas-${mountId}-${idHash}`,
+        title: audioInfo.title || usbTrackTitleFromPath(absolutePath),
+        artist: audioInfo.artist || "Unknown Artist",
+        album: audioInfo.album || `NAS / ${mountId}`,
+        storage: "nas",
+        categoryId: "nas",
+        subCategory: mountId,
+        durationSeconds: audioInfo.durationSeconds,
+        path: mpdPath,
+        albumArtUrl: null,
+        albumArtLabel: null,
+        albumArtScope: null,
+        active: false,
+        favorite: favoritePaths.has(mpdPath),
+        ...(rootEntry.sourceId ? { sourceId: rootEntry.sourceId } : {}),
+        ...(rootEntry.sourceKind ? { sourceKind: rootEntry.sourceKind } : {})
+      }, audioInfo));
+    }
+  }
+
+  return tracks;
+}
+
+function publicNasStatus(source) {
+  const lastStatus = normalizeNasLastStatus(source?.lastStatus, source?.sourceKind === "manual" ? "manual" : "offline");
+  return {
+    status: lastStatus.status,
+    checkedAt: lastStatus.checkedAt,
+    lastError: lastStatus.lastError
+  };
+}
+
+async function buildPublicNasSource(source, tracks = []) {
+  const sourceId = source.id;
+  const mountName = normalizeNasMountName(source.mountName, source.name);
+  const trackCount = tracks.filter((track) => (
+    track.sourceId === sourceId || (!track.sourceId && track.subCategory === mountName)
+  )).length;
+  const credential = source.authMode === "password" ? await readNasCredential(source.id) : null;
+  return {
+    id: source.id,
+    name: source.name,
+    host: source.host,
+    port: source.port,
+    share: source.share,
+    path: source.path,
+    authMode: source.authMode,
+    username: source.authMode === "password" ? source.username : "",
+    enabled: source.enabled !== false,
+    mountName,
+    mountPoint: resolveNasSourceMountPoint(source),
+    mpdPath: nasMpdUpdateTarget(source),
+    smbVersion: source.smbVersion,
+    status: publicNasStatus(source).status,
+    lastStatus: publicNasStatus(source),
+    lastError: publicNasStatus(source).lastError,
+    lastScanAt: source.lastScanAt ?? null,
+    trackCount,
+    sourceKind: source.sourceKind ?? "configured",
+    readOnly: source.readOnly === true,
+    hasCredentials: Boolean(credential?.password)
+  };
+}
+
+async function buildManualNasSources(tracks = []) {
+  const entries = (await discoverNasLibraryRootEntries()).filter((entry) => entry.sourceKind === "manual");
+  const usedIds = new Set();
+  const sources = [];
+  for (const entry of entries) {
+    const mountName = await buildNasMountId(entry.rootPath, usedIds);
+    const idHash = createHash("sha1").update(entry.rootPath).digest("hex").slice(0, 10);
+    sources.push({
+      id: `manual-${idHash}`,
+      name: mountName,
+      host: "",
+      port: 0,
+      share: "",
+      path: entry.rootPath,
+      authMode: "manual",
+      username: "",
+      enabled: true,
+      mountName,
+      mountPoint: entry.rootPath,
+      mpdPath: normalizeSafeRelativePath(posix.join(NAS_LIBRARY_MPD_PREFIX, mountName)),
+      smbVersion: null,
+      status: "manual",
+      lastStatus: { status: "manual", checkedAt: null, lastError: null },
+      lastError: null,
+      lastScanAt: null,
+      trackCount: tracks.filter((track) => track.subCategory === mountName).length,
+      sourceKind: "manual",
+      readOnly: true,
+      hasCredentials: false
+    });
+  }
+  return sources;
+}
+
+async function buildNasSourcesPayload(options = {}) {
+  const state = await readNasSourcesState();
+  const tracks = options.tracks ?? await readNasAudioLibraryTracks();
+  const configuredSources = await Promise.all(state.sources.map((source) => buildPublicNasSource(source, tracks)));
+  const manualSources = await buildManualNasSources(tracks);
+  return {
+    sources: [...configuredSources, ...manualSources],
+    configuredCount: configuredSources.length,
+    legacyCount: manualSources.length,
+    updatedAt: new Date().toISOString()
+  };
+}
+
+async function saveNasSource(payload) {
+  const state = await readNasSourcesState();
+  const existing = payload?.id ? state.sources.find((source) => source.id === normalizeNasId(payload.id)) : null;
+  const source = normalizeNasSource(payload, existing);
+  if (source.authMode === "password") {
+    const hasIncomingPassword = payload && Object.hasOwn(payload, "password");
+    if (hasIncomingPassword) {
+      await writeNasCredential(source.id, source.username, payload.password);
+    } else {
+      const previousCredential = await readNasCredential(source.id);
+      if (!previousCredential?.password) {
+        throw new Error("NAS password is required for username/password access");
+      }
+      if (previousCredential.username !== source.username) {
+        await writeNasCredential(source.id, source.username, previousCredential.password);
+      }
+    }
+  } else {
+    await deleteNasCredential(source.id);
+  }
+
+  const nextSources = state.sources.filter((entry) => entry.id !== source.id);
+  nextSources.push(source);
+  await writeNasSourcesState({ ...state, sources: nextSources });
+  return await buildNasSourcesPayload();
+}
+
+async function updateNasSourceRuntimeStatus(sourceId, patch) {
+  const state = await readNasSourcesState();
+  const index = state.sources.findIndex((source) => source.id === sourceId);
+  if (index === -1) return null;
+  const current = state.sources[index];
+  const next = {
+    ...current,
+    ...patch,
+    lastStatus: normalizeNasLastStatus(patch.lastStatus ?? current.lastStatus, current.lastStatus?.status ?? "offline"),
+    updatedAt: new Date().toISOString()
+  };
+  state.sources.splice(index, 1, next);
+  await writeNasSourcesState(state);
+  return next;
+}
+
+async function findNasSourceForAction(sourceId, payload = null) {
+  if (sourceId === "_draft" || sourceId === "draft") {
+    return normalizeNasSource(payload ?? {});
+  }
+  const state = await readNasSourcesState();
+  const source = state.sources.find((entry) => entry.id === normalizeNasId(sourceId));
+  if (!source) throw new Error("NAS source not found");
+  return payload && Object.keys(payload).length > 0
+    ? normalizeNasSource({ ...source, ...payload, id: source.id }, source)
+    : source;
+}
+
+async function buildNasCredentialForAction(source, payload = null) {
+  if (source.authMode !== "password") return { credentialPath: null, cleanup: async () => {} };
+  const hasIncomingPassword = payload && Object.hasOwn(payload, "password");
+  const username = String(payload?.username ?? source.username ?? "").trim();
+  if (hasIncomingPassword) {
+    const tempPath = resolve(NAS_CREDENTIALS_DIR, `.${source.id}-${Date.now().toString(36)}.cred`);
+    await writeNasCredentialFile(tempPath, username, payload.password);
+    return {
+      credentialPath: tempPath,
+      cleanup: async () => {
+        try {
+          await unlink(tempPath);
+        } catch {
+          // Best effort cleanup for temporary test credentials.
+        }
+      }
+    };
+  }
+
+  const credential = await readNasCredential(source.id);
+  if (!credential?.password) throw new Error("NAS credentials are not saved");
+  return { credentialPath: nasCredentialPath(source.id), cleanup: async () => {} };
+}
+
+function buildNasMountEnv(source, options = {}) {
+  return {
+    TIKPAL_NAS_ID: source.id,
+    TIKPAL_NAS_NAME: source.name,
+    TIKPAL_NAS_HOST: source.host,
+    TIKPAL_NAS_PORT: String(source.port),
+    TIKPAL_NAS_SHARE: source.share,
+    TIKPAL_NAS_PATH: source.path,
+    TIKPAL_NAS_AUTH_MODE: source.authMode,
+    TIKPAL_NAS_USERNAME: source.username ?? "",
+    TIKPAL_NAS_CREDENTIALS: options.credentialPath ?? "",
+    TIKPAL_NAS_REMOTE: buildNasRemoteShare(source),
+    TIKPAL_NAS_MOUNT_POINT: resolveNasSourceMountPoint(source),
+    TIKPAL_NAS_CONTENT_ROOT: resolveNasSourceContentRoot(source),
+    TIKPAL_NAS_MPD_ENTRY: resolveNasSourceMpdEntryPath(source),
+    TIKPAL_NAS_MPD_PATH: nasMpdUpdateTarget(source) ?? "",
+    TIKPAL_NAS_SMB_VERSION: options.smbVersion ?? source.smbVersion ?? "3.0"
+  };
+}
+
+function buildDefaultNasMountOptions(source, smbVersion, credentialPath) {
+  const options = [
+    "ro",
+    "uid=mpd",
+    "gid=audio",
+    "iocharset=utf8",
+    "nounix",
+    "soft",
+    `port=${source.port}`,
+    `vers=${smbVersion}`
+  ];
+  if (source.authMode === "password") {
+    if (!credentialPath) throw new Error("NAS credential file is required");
+    options.push(`credentials=${credentialPath}`);
+  } else {
+    options.push("guest", "username=guest", "password=");
+  }
+  return options.join(",");
+}
+
+async function runDefaultNasMount(source, options = {}) {
+  if (API_MODE !== "mpc") return;
+  const smbVersion = options.smbVersion ?? source.smbVersion ?? "3.0";
+  const mountPoint = resolveNasSourceMountPoint(source);
+  const contentRoot = resolveNasSourceContentRoot(source);
+  const mpdEntry = resolveNasSourceMpdEntryPath(source);
+  const mountOptions = buildDefaultNasMountOptions(source, smbVersion, options.credentialPath);
+  await runCommand([
+    `sudo -n mkdir -p ${shellQuote(mountPoint)} ${shellQuote(dirname(mpdEntry))}`,
+    `if ! findmnt -rn --mountpoint ${shellQuote(mountPoint)} >/dev/null 2>&1; then sudo -n mount -t cifs ${shellQuote(buildNasRemoteShare(source))} ${shellQuote(mountPoint)} -o ${shellQuote(mountOptions)}; fi`,
+    `test -d ${shellQuote(contentRoot)}`,
+    `sudo -n mkdir -p ${shellQuote(mpdEntry)}`,
+    `if ! findmnt -rn --mountpoint ${shellQuote(mpdEntry)} >/dev/null 2>&1; then sudo -n mount --bind ${shellQuote(contentRoot)} ${shellQuote(mpdEntry)}; fi`
+  ].join(" && "), { timeout: 30_000, includeStdoutOnFailure: true });
+}
+
+async function runDefaultNasUnmount(source) {
+  if (API_MODE !== "mpc") return;
+  const mountPoint = resolveNasSourceMountPoint(source);
+  const mpdEntry = resolveNasSourceMpdEntryPath(source);
+  await runCommand([
+    `if findmnt -rn --mountpoint ${shellQuote(mpdEntry)} >/dev/null 2>&1; then sudo -n umount ${shellQuote(mpdEntry)}; fi`,
+    `if findmnt -rn --mountpoint ${shellQuote(mountPoint)} >/dev/null 2>&1; then sudo -n umount ${shellQuote(mountPoint)}; fi`
+  ].join(" && "), { timeout: 15_000, allowFailure: true });
+}
+
+async function runNasMountCommand(source, options = {}) {
+  const env = buildNasMountEnv(source, options);
+  if (NAS_MOUNT_COMMAND.trim()) {
+    await runCommand(NAS_MOUNT_COMMAND, { timeout: 30_000, env, includeStdoutOnFailure: true });
+    return;
+  }
+  await runDefaultNasMount(source, options);
+}
+
+async function runNasUnmountCommand(source) {
+  const env = buildNasMountEnv(source);
+  if (NAS_UNMOUNT_COMMAND.trim()) {
+    await runCommand(NAS_UNMOUNT_COMMAND, { timeout: 15_000, env, allowFailure: true, includeStdoutOnFailure: true });
+    return;
+  }
+  await runDefaultNasUnmount(source);
+}
+
+async function updateMpdForNasSource(source) {
+  const target = nasMpdUpdateTarget(source);
+  if (API_MODE === "mpc" && target) {
+    await runMpc(["update", target], { timeout: 8000, allowFailure: true });
+  }
+  return target;
+}
+
+async function mountNasSource(source, payload = null) {
+  const credential = await buildNasCredentialForAction(source, payload);
+  const versions = source.smbVersion ? [source.smbVersion, ...NAS_SMB_VERSIONS.filter((version) => version !== source.smbVersion)] : NAS_SMB_VERSIONS;
+  let lastError = null;
+  try {
+    for (const smbVersion of versions) {
+      try {
+        await runNasMountCommand(source, { credentialPath: credential.credentialPath, smbVersion });
+        const mpdPath = await updateMpdForNasSource(source);
+        const scanRoot = await resolveReadableDirectory(resolveNasSourceMpdEntryPath(source));
+        const trackCount = scanRoot ? (await collectUsbAudioFiles(scanRoot, { limit: NAS_LIBRARY_MAX_TRACKS })).length : 0;
+        const updated = await updateNasSourceRuntimeStatus(source.id, {
+          smbVersion,
+          lastScanAt: new Date().toISOString(),
+          lastStatus: { status: "ready", checkedAt: new Date().toISOString(), lastError: null }
+        });
+        return {
+          ok: true,
+          source: updated ?? { ...source, smbVersion, lastStatus: { status: "ready", checkedAt: new Date().toISOString(), lastError: null } },
+          mpdPath,
+          trackCount,
+          smbVersion
+        };
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : String(error);
+      }
+    }
+    throw new Error(lastError || "NAS mount failed");
+  } finally {
+    await credential.cleanup();
+  }
+}
+
+async function testNasSource(sourceId, payload = null) {
+  const source = await findNasSourceForAction(sourceId, payload);
+  try {
+    const result = await mountNasSource(source, payload);
+    return {
+      ok: true,
+      status: "ready",
+      source: await buildPublicNasSource(result.source, await readNasAudioLibraryTracks()),
+      mpdPath: result.mpdPath,
+      trackCount: result.trackCount,
+      smbVersion: result.smbVersion
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (sourceId !== "_draft" && sourceId !== "draft") {
+      await updateNasSourceRuntimeStatus(source.id, {
+        lastStatus: { status: "check_setup", checkedAt: new Date().toISOString(), lastError: message }
+      });
+    }
+    return {
+      ok: false,
+      status: "check_setup",
+      lastError: message,
+      source: await buildPublicNasSource({
+        ...source,
+        lastStatus: { status: "check_setup", checkedAt: new Date().toISOString(), lastError: message }
+      }, [])
+    };
+  }
+}
+
+async function mountSavedNasSource(sourceId, payload = null) {
+  const source = await findNasSourceForAction(sourceId, payload);
+  await mountNasSource(source, payload);
+  return await buildNasSourcesPayload();
+}
+
+async function unmountNasSource(sourceId) {
+  const source = await findNasSourceForAction(sourceId);
+  await runNasUnmountCommand(source);
+  await updateNasSourceRuntimeStatus(source.id, {
+    lastStatus: { status: "offline", checkedAt: new Date().toISOString(), lastError: null }
+  });
+  return await buildNasSourcesPayload();
+}
+
+async function deleteNasSource(sourceId) {
+  const state = await readNasSourcesState();
+  const id = normalizeNasId(sourceId);
+  const source = state.sources.find((entry) => entry.id === id);
+  if (source) {
+    await runNasUnmountCommand(source);
+    await deleteNasCredential(id);
+  }
+  await writeNasSourcesState({ ...state, sources: state.sources.filter((entry) => entry.id !== id) });
+  return await buildNasSourcesPayload();
+}
+
+function normalizeNasCandidate(raw, source = "scan") {
+  const locator = parseNasLocator(raw?.url ?? raw?.server ?? raw?.host ?? raw);
+  const host = normalizeNasHost(raw?.host ?? locator?.host);
+  const share = normalizeNasShare(raw?.share ?? locator?.share);
+  if (!host || !share) return null;
+  const port = normalizeNasPort(raw?.port ?? locator?.port);
+  const path = normalizeNasFolderPath(raw?.path ?? raw?.folder ?? locator?.path);
+  const name = normalizeNasDisplayName(raw?.name, share);
+  const mountName = normalizeNasMountName(raw?.mountName, name);
+  return {
+    id: normalizeNasId(raw?.id, `${host}-${share}-${mountName}`),
+    name,
+    host,
+    port,
+    share,
+    path,
+    authMode: normalizeNasAuthMode(raw?.authMode),
+    mountName,
+    source
+  };
+}
+
+function parseNasCandidateLine(line, source = "scan") {
+  const trimmed = String(line ?? "").trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith("{")) {
+    try {
+      return normalizeNasCandidate(JSON.parse(trimmed), source);
+    } catch {
+      return null;
+    }
+  }
+  if (trimmed.startsWith("//") || trimmed.toLowerCase().startsWith("smb://")) {
+    return normalizeNasCandidate(trimmed, source);
+  }
+  const [name, host, port, share, path] = trimmed.split("|").map((part) => part.trim());
+  return normalizeNasCandidate({ name, host, port, share, path }, source);
+}
+
+async function discoverNasCandidates(payload = {}) {
+  const candidates = [];
+  const pushCandidate = (candidate) => {
+    if (!candidate) return;
+    const key = `${candidate.host}:${candidate.port}/${candidate.share}/${candidate.path}`;
+    if (!candidates.some((entry) => `${entry.host}:${entry.port}/${entry.share}/${entry.path}` === key)) {
+      candidates.push(candidate);
+    }
+  };
+
+  const hintLines = [
+    ...String(NAS_DISCOVERY_HINTS).split(/[\n,]+/),
+    ...(Array.isArray(payload?.hints) ? payload.hints : [])
+  ];
+  for (const line of hintLines) {
+    pushCandidate(parseNasCandidateLine(line, "hint"));
+  }
+
+  if (NAS_DISCOVERY_COMMAND.trim()) {
+    const output = await runCommand(NAS_DISCOVERY_COMMAND, { timeout: 12_000, allowFailure: true, maxBuffer: 1024 * 512 });
+    const trimmed = output.trim();
+    if (trimmed.startsWith("[")) {
+      try {
+        for (const entry of JSON.parse(trimmed)) {
+          pushCandidate(normalizeNasCandidate(entry, "scan"));
+        }
+      } catch {
+        // Fall back to line parsing below.
+      }
+    }
+    for (const line of trimmed.split(/\r?\n/)) {
+      pushCandidate(parseNasCandidateLine(line, "scan"));
+    }
+  }
+
+  return {
+    candidates,
+    total: candidates.length,
+    updatedAt: new Date().toISOString()
+  };
 }
 
 async function findUsbAudioLibraryTrackForCopy(trackPath) {
@@ -5282,7 +6076,8 @@ async function findLocalAudioLibraryTrackByPath(localTrackPath) {
 
   const tracks = [
     ...await readLocalAudioLibraryTracks(),
-    ...await readUsbAudioLibraryTracks()
+    ...await readUsbAudioLibraryTracks(),
+    ...await readNasAudioLibraryTracks()
   ];
   return tracks.find((track) => normalizeSafeRelativePath(track.path) === safePath) ?? null;
 }
@@ -5350,7 +6145,7 @@ function buildMpdLocalLibraryTrackPathCandidates(localTrackPath) {
   };
 
   const mpdPrefix = normalizeSafeRelativePath(MPD_DEFAULT_QUEUE_PATH);
-  if (mpdPrefix && !safePath.startsWith(`${mpdPrefix}/`) && !isUsbLibraryTrackPath(safePath)) {
+  if (mpdPrefix && !safePath.startsWith(`${mpdPrefix}/`) && !isExternalLibraryTrackPath(safePath)) {
     pushCandidate(posix.join(mpdPrefix, safePath));
   }
   pushCandidate(safePath);
@@ -5364,6 +6159,17 @@ function isUsbLibraryTrackPath(trackPath) {
   ));
 }
 
+function isNasLibraryTrackPath(trackPath) {
+  const safePath = normalizeSafeRelativePath(trackPath);
+  return Boolean(safePath && NAS_LIBRARY_MPD_PREFIX && (
+    safePath === NAS_LIBRARY_MPD_PREFIX || safePath.startsWith(`${NAS_LIBRARY_MPD_PREFIX}/`)
+  ));
+}
+
+function isExternalLibraryTrackPath(trackPath) {
+  return isUsbLibraryTrackPath(trackPath) || isNasLibraryTrackPath(trackPath);
+}
+
 function isLocalImportedLibraryTrackPath(trackPath) {
   const safePath = normalizeSafeRelativePath(trackPath);
   return Boolean(safePath && (
@@ -5374,6 +6180,13 @@ function isLocalImportedLibraryTrackPath(trackPath) {
 function isPlayableUsbLibraryMpdPath(trackPath) {
   const safePath = normalizeSafeRelativePath(trackPath);
   if (!safePath || !isUsbLibraryTrackPath(safePath)) return false;
+  const fileName = posix.basename(safePath);
+  return Boolean(fileName && !fileName.startsWith(".") && !fileName.startsWith("._") && USB_LIBRARY_AUDIO_EXTENSIONS.has(posix.extname(safePath).toLowerCase()));
+}
+
+function isPlayableNasLibraryMpdPath(trackPath) {
+  const safePath = normalizeSafeRelativePath(trackPath);
+  if (!safePath || !isNasLibraryTrackPath(safePath)) return false;
   const fileName = posix.basename(safePath);
   return Boolean(fileName && !fileName.startsWith(".") && !fileName.startsWith("._") && USB_LIBRARY_AUDIO_EXTENSIONS.has(posix.extname(safePath).toLowerCase()));
 }
@@ -5486,7 +6299,7 @@ function buildMpdLibraryQueueRootCandidates(startTrackPath) {
     if (safeRoot && !roots.includes(safeRoot)) roots.push(safeRoot);
   };
 
-  if (isUsbLibraryTrackPath(safeStartPath)) {
+  if (isExternalLibraryTrackPath(safeStartPath)) {
     const [prefix, mountId] = safeStartPath.split("/");
     pushRoot(mountId ? posix.join(prefix, mountId) : prefix);
     pushRoot(prefix);
@@ -5508,12 +6321,17 @@ async function resolveMpdLocalLibraryQueue(startTrackPath, options = {}) {
 
   const startCandidates = buildMpdLocalLibraryTrackPathCandidates(safeStartPath);
   const isUsbQueue = isUsbLibraryTrackPath(safeStartPath);
+  const isNasQueue = isNasLibraryTrackPath(safeStartPath);
   for (const rootPath of buildMpdLibraryQueueRootCandidates(safeStartPath)) {
     const listedTracks = (await runMpc(rootPath ? ["listall", rootPath] : ["listall"], { allowFailure: true }))
       .split("\n")
       .map((line) => line.trim())
       .filter(Boolean);
-    const queueTracks = isUsbQueue ? listedTracks.filter(isPlayableUsbLibraryMpdPath) : listedTracks;
+    const queueTracks = isUsbQueue
+      ? listedTracks.filter(isPlayableUsbLibraryMpdPath)
+      : isNasQueue
+        ? listedTracks.filter(isPlayableNasLibraryMpdPath)
+        : listedTracks;
     if (queueTracks.length === 0) continue;
 
     const listedTrackSet = new Set(queueTracks);
@@ -5521,7 +6339,7 @@ async function resolveMpdLocalLibraryQueue(startTrackPath, options = {}) {
     if (!startTrack) continue;
 
     return {
-      addRootPath: isUsbQueue ? null : rootPath,
+      addRootPath: isExternalLibraryTrackPath(safeStartPath) ? null : rootPath,
       mpdTrackPaths: queueTracks,
       startIndex: queueTracks.indexOf(startTrack)
     };
@@ -5666,11 +6484,14 @@ async function getAudioLibraryPayload(searchParams) {
   const musicState = readMusicLibraryStateSync();
   const localTracks = await readLocalAudioLibraryTracks({ musicState });
   const usbTracks = await readUsbAudioLibraryTracks({ musicState });
+  const scannedNasTracks = await readNasAudioLibraryTracks({ musicState });
   maybeScheduleUsbLibraryAutoUpdate(usbTracks);
-  const nasTracks = isNasLibrarySource(state.system.library.source)
+  const nasTracks = scannedNasTracks.length > 0
+    ? scannedNasTracks
+    : isNasLibrarySource(state.system.library.source)
     ? buildNasAudioLibraryTracks(state.playback)
     : [];
-  const favoriteTracks = [...localTracks, ...usbTracks]
+  const favoriteTracks = [...localTracks, ...nasTracks, ...usbTracks]
     .filter((track) => track.favorite)
     .map((track) => ({ ...track, storage: "favorites" }));
   const recentlyAddedTracks = localTracks
@@ -11826,6 +12647,45 @@ const server = http.createServer(async (request, response) => {
     if (request.method === "GET" && url.pathname === "/api/v1/audio/radios") {
       sendJson(response, 200, await getRadioCatalogPayload(url.searchParams));
       return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/v1/nas/sources") {
+      sendJson(response, 200, await buildNasSourcesPayload());
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/v1/nas/sources") {
+      sendJson(response, 200, await saveNasSource(await readJson(request)));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/v1/nas/discover") {
+      sendJson(response, 200, await discoverNasCandidates(await readJson(request)));
+      return;
+    }
+
+    {
+      const nasSourceMatch = url.pathname.match(/^\/api\/v1\/nas\/sources\/([^/]+)(?:\/([^/]+))?$/);
+      if (nasSourceMatch) {
+        const sourceId = decodeURIComponent(nasSourceMatch[1]);
+        const action = nasSourceMatch[2] ? decodeURIComponent(nasSourceMatch[2]) : "";
+        if (request.method === "DELETE" && !action) {
+          sendJson(response, 200, await deleteNasSource(sourceId));
+          return;
+        }
+        if (request.method === "POST" && action === "test") {
+          sendJson(response, 200, await testNasSource(sourceId, await readJson(request)));
+          return;
+        }
+        if (request.method === "POST" && action === "mount") {
+          sendJson(response, 200, await mountSavedNasSource(sourceId, await readJson(request)));
+          return;
+        }
+        if (request.method === "POST" && action === "unmount") {
+          sendJson(response, 200, await unmountNasSource(sourceId));
+          return;
+        }
+      }
     }
 
     if (request.method === "GET" && url.pathname === "/api/v1/audio/library") {

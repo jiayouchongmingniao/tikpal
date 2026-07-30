@@ -66,7 +66,7 @@ export function QuickMenu({
         >
           <Clock size={26} />
           <strong>Time</strong>
-          <span>{clockVisible ? "Show" : "Hide"}</span>
+          <span>{clockVisible ? "Visible" : "Hidden"}</span>
         </button>
         <button
           className="quick-menu-toggle is-sleep"
@@ -78,7 +78,7 @@ export function QuickMenu({
         >
           <Moon size={26} />
           <strong>Sleep</strong>
-          <span>{sleepPending ? "Syncing" : "Tap wake"}</span>
+          <span>{sleepPending ? "Syncing" : "Tap to sleep"}</span>
         </button>
       </div>
     </section>

@@ -265,6 +265,89 @@ export interface AudioLibraryActionResponse {
   library: AudioLibraryResponse;
 }
 
+export type NasAuthMode = "guest" | "password" | "manual";
+export type NasSourceStatus = "ready" | "offline" | "checking" | "check_setup" | "manual";
+export type NasSourceKind = "configured" | "manual";
+
+export interface NasSourceStatusSummary {
+  status: NasSourceStatus;
+  checkedAt: string | null;
+  lastError: string | null;
+}
+
+export interface NasSourceSummary {
+  id: string;
+  name: string;
+  host: string;
+  port: number;
+  share: string;
+  path: string;
+  authMode: NasAuthMode;
+  username: string;
+  enabled: boolean;
+  mountName: string;
+  mountPoint: string;
+  mpdPath: string | null;
+  smbVersion: string | null;
+  status: NasSourceStatus;
+  lastStatus: NasSourceStatusSummary;
+  lastError: string | null;
+  lastScanAt: string | null;
+  trackCount: number;
+  sourceKind: NasSourceKind;
+  readOnly: boolean;
+  hasCredentials: boolean;
+}
+
+export interface NasSourcesResponse {
+  sources: NasSourceSummary[];
+  configuredCount: number;
+  legacyCount: number;
+  updatedAt: string;
+}
+
+export interface NasSourceInput {
+  id?: string;
+  name: string;
+  host: string;
+  port?: number;
+  share: string;
+  path?: string;
+  authMode: Exclude<NasAuthMode, "manual">;
+  username?: string;
+  password?: string;
+  enabled?: boolean;
+  mountName?: string;
+}
+
+export interface NasSourceTestResponse {
+  ok: boolean;
+  status: NasSourceStatus;
+  source?: NasSourceSummary;
+  mpdPath?: string | null;
+  trackCount?: number;
+  smbVersion?: string | null;
+  lastError?: string | null;
+}
+
+export interface NasDiscoverCandidate {
+  id: string;
+  name: string;
+  host: string;
+  port: number;
+  share: string;
+  path: string;
+  authMode: Exclude<NasAuthMode, "manual">;
+  mountName: string;
+  source: "hint" | "scan";
+}
+
+export interface NasDiscoverResponse {
+  candidates: NasDiscoverCandidate[];
+  total: number;
+  updatedAt: string;
+}
+
 export type AudioPlaylistSource = "user" | "curated";
 export type AudioPlaylistCoverType = "gradient" | "scene" | "collage" | "custom";
 

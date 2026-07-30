@@ -4135,10 +4135,18 @@ select {
 
 .library-track-delete-confirm {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: auto 1fr 1fr;
   gap: 6px;
   align-items: center;
-  min-width: 132px;
+  min-width: 154px;
+}
+
+.library-track-delete-confirm-label {
+  color: var(--theme-text-weak);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0;
+  white-space: nowrap;
 }
 
 .library-track-delete-confirm-button {
@@ -4799,18 +4807,66 @@ select {
 
 .nas-source-detail {
   display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
+  grid-auto-rows: max-content;
   gap: 14px;
   min-height: 0;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.nas-source-toolbar,
+.nas-form-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.nas-source-toolbar button,
+.nas-form-actions button,
+.nas-source-actions button,
+.nas-candidate-list button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 14px;
+  border: 1px solid var(--surface-control-border);
+  border-radius: 8px;
+  color: var(--theme-text);
+  font-size: 12px;
+  font-weight: 780;
+  background: var(--surface-control-bg);
+}
+
+.nas-source-toolbar button:hover,
+.nas-source-toolbar button:focus-visible,
+.nas-form-actions button:hover,
+.nas-form-actions button:focus-visible,
+.nas-source-actions button:hover,
+.nas-source-actions button:focus-visible,
+.nas-candidate-list button:hover,
+.nas-candidate-list button:focus-visible {
+  border-color: color-mix(in srgb, var(--cyan) 72%, transparent);
+  background: color-mix(in srgb, var(--cyan) 16%, var(--surface-control-bg));
+}
+
+.nas-source-toolbar button:disabled,
+.nas-form-actions button:disabled,
+.nas-source-actions button:disabled,
+.nas-candidate-list button:disabled {
+  opacity: 0.48;
+  pointer-events: none;
 }
 
 .nas-source-card {
   display: grid;
-  grid-template-columns: 62px minmax(0, 1fr);
+  grid-template-columns: 52px minmax(0, 1fr) auto;
   align-items: start;
-  gap: 18px;
+  gap: 14px;
   min-height: 0;
-  padding: 22px;
+  padding: 16px;
   overflow: hidden;
   border: 1px solid var(--surface-card-border);
   border-radius: 8px;
@@ -4838,7 +4894,7 @@ select {
 .nas-source-copy {
   display: grid;
   align-content: start;
-  gap: 8px;
+  gap: 7px;
   min-width: 0;
 }
 
@@ -4851,29 +4907,32 @@ select {
 
 .nas-source-copy strong {
   color: var(--theme-text);
-  font-size: clamp(24px, 1.35vw, 34px);
+  font-size: clamp(18px, 1vw, 24px);
   font-weight: 560;
   line-height: 1.05;
 }
 
 .nas-source-copy p {
   margin: 0;
+  overflow: hidden;
   color: var(--theme-text-soft);
-  font-size: 15px;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .nas-source-copy dl {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-  margin: 8px 0 0;
+  gap: 8px;
+  margin: 4px 0 0;
 }
 
 .nas-source-copy dl div {
   display: grid;
-  gap: 4px;
+  gap: 2px;
   min-width: 0;
-  padding: 12px;
+  padding: 8px;
   border: 1px solid var(--surface-control-border);
   border-radius: 8px;
   background: var(--surface-control-bg);
@@ -4891,10 +4950,112 @@ select {
   margin: 0;
   overflow: hidden;
   color: var(--theme-text);
-  font-size: 18px;
+  font-size: 14px;
   font-weight: 560;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.nas-source-actions {
+  display: grid;
+  gap: 8px;
+  justify-items: stretch;
+  min-width: 108px;
+}
+
+.nas-source-actions button {
+  width: 100%;
+  min-height: 32px;
+  padding: 0 10px;
+}
+
+.nas-delete-confirm {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.nas-source-error {
+  color: var(--warning);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 760;
+}
+
+.nas-source-form {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--cyan) 36%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-card-bg-hover) 76%, transparent);
+}
+
+.nas-form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 100px;
+  gap: 10px;
+  min-width: 0;
+}
+
+.nas-form-grid-auth {
+  grid-template-columns: 1fr 1fr;
+}
+
+.nas-auth-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.nas-password-input-wrap {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 42px;
+  gap: 8px;
+}
+
+.nas-password-input-wrap button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  border: 1px solid var(--surface-control-border);
+  border-radius: 8px;
+  color: var(--theme-text);
+  background: var(--surface-control-bg);
+}
+
+.nas-candidate-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.nas-candidate-list button {
+  justify-content: flex-start;
+  min-width: 0;
+  padding: 10px 12px;
+}
+
+.nas-candidate-list span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  text-align: left;
+}
+
+.nas-candidate-list strong,
+.nas-candidate-list em {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nas-candidate-list em {
+  color: var(--theme-text-soft);
+  font-size: 11px;
+  font-style: normal;
 }
 
 .font-theme-options,

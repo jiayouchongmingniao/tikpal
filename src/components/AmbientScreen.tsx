@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { Bluetooth, Captions, CaptionsOff, Cast, GalleryHorizontalEnd, Globe2, Heart, LibraryBig, ListMusic, LoaderCircle, LogOut, Moon, Music2, Network, Pause, Play, Radio as RadioIcon, Repeat1, Settings, Shuffle, SkipBack, SkipForward, SlidersHorizontal, SunMedium, Target, Volume2, VolumeX, Waves } from "lucide-react";
+import { Bluetooth, Captions, CaptionsOff, Cast, GalleryHorizontalEnd, Globe2, Heart, LibraryBig, ListMusic, LoaderCircle, Moon, Music2, Network, PanelRightClose, Pause, Play, Radio as RadioIcon, Repeat1, Settings, Shuffle, SkipBack, SkipForward, SlidersHorizontal, SunMedium, Target, Volume2, VolumeX, Waves } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { fetchBackgroundVideos, fetchSceneContext } from "../api/tikpalClient";
 import { EqVisualScene, type HifiLyricsPanel } from "./EqVisualScene";
 import { FlameScene } from "./FlameScene";
 import { roomModeOptions } from "../roomExperienceTruth";
 import { getSourceDisplayStatusLabel } from "../sourceStatus";
+import { friendlyUiError } from "../uiCopy";
 import type { TikpalDataStatus } from "../hooks/useTikpalState";
 import type { AudioState, BackgroundVideoSummary, FontTheme, LyricsFontSize, LyricsState, PlaybackActionType, PlaybackMode, PlaybackSummary, RoomExperienceActionRequest, RoomExperienceState, RoomMode, SceneContextSummary, SceneDayPart, SourceSwitchTarget, SystemActionType, SystemState, TikpalState } from "../types";
 
@@ -78,6 +79,7 @@ interface LyricsClockAnchor {
 
 const DRAG_PIXELS_PER_PERCENT = 4;
 const WHEEL_PIXELS_PER_PERCENT = 9;
+
 const DEFAULT_BACKGROUND_VIDEO: BackgroundVideoSummary = {
   id: "scene-empty",
   filename: "",
@@ -1295,7 +1297,7 @@ export function AmbientScreen({
               </span>
               <span className="source-panel-kicker">{handoffPendingSourceLabel}</span>
               <strong>Connecting</strong>
-              <p>Tikpal is open for {handoffPendingSourceLabel}. This will close when the device connects or the handoff times out.</p>
+              <p>Connect from your phone. This returns when playback starts.</p>
             </div>
           ) : (
             <div className="ambient-source-picker-grid">
@@ -1342,7 +1344,7 @@ export function AmbientScreen({
               </button>
             </div>
           )}
-          {ambientSourceError ? <div className="ambient-source-error" role="status">{ambientSourceError}</div> : null}
+          {ambientSourceError ? <div className="ambient-source-error" role="status" title={ambientSourceError}>{friendlyUiError(ambientSourceError)}</div> : null}
         </div>
       ) : null}
     </div>
@@ -1665,7 +1667,7 @@ export function AmbientScreen({
             <strong>{adjustOverlay.channel === "volume" ? "Volume" : "Brightness"}</strong>
             <span>{adjustOverlay.percent}%</span>
             {adjustOverlay.error || adjustOverlay.channel === "brightness" ? (
-              <p>{adjustOverlay.error ?? "DDC/CI display level"}</p>
+              <p>{adjustOverlay.error ?? "Display level"}</p>
             ) : null}
           </div>
           <button
@@ -1677,7 +1679,7 @@ export function AmbientScreen({
             onPointerDown={(event) => event.stopPropagation()}
             onClick={handleAdjustBack}
           >
-            <LogOut size={16} />
+            <PanelRightClose size={16} />
             <span>Back</span>
           </button>
         </div>

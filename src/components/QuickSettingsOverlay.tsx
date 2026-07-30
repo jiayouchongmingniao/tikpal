@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Airplay, Bluetooth, Captions, Cast, Clock3, Cpu, Database, EthernetPort, Eye, EyeOff, Globe2, HardDrive, Info, LogOut, Monitor, Moon, Music2, Palette, Power, Radio as RadioIcon, RotateCcw, Server, SlidersHorizontal, Target, Type, Usb, Volume2, Waves } from "lucide-react";
-import { fetchAudioLibrary, fetchWebModeState, sendWebModeAction, updateWebModeSettings } from "../api/tikpalClient";
+import { Airplay, Bluetooth, Captions, Cast, CheckCircle2, Clock3, Cpu, Database, EthernetPort, Eye, EyeOff, Globe2, HardDrive, Info, Monitor, Moon, Music2, Palette, PanelRightClose, Plus, Power, Radio as RadioIcon, RotateCcw, Search, Server, SlidersHorizontal, Target, Trash2, Type, Usb, Volume2, Waves } from "lucide-react";
+import { deleteNasSource, discoverNasSources, fetchAudioLibrary, fetchNasSources, fetchWebModeState, mountNasSource, saveNasSource, sendWebModeAction, testNasSource, unmountNasSource, updateWebModeSettings } from "../api/tikpalClient";
 import { getSourceDisplayStatus, getSourceDisplayStatusLabel } from "../sourceStatus";
+import { friendlyUiErrorOrFallback } from "../uiCopy";
 import type { TikpalDataStatus } from "../hooks/useTikpalState";
 import { useOverlayReturnGesture } from "../hooks/useOverlayReturnGesture";
-import type { AudioState, FontTheme, LyricsFontSize, NightScheduleState, PlaybackSummary, RoomExperienceActionRequest, RoomExperienceState, RoomMode, RuntimeState, SurfaceTheme, SystemActionType, SystemState, WebModeState } from "../types";
+import type { AudioState, FontTheme, LyricsFontSize, NasDiscoverCandidate, NasSourceInput, NasSourcesResponse, NightScheduleState, PlaybackSummary, RoomExperienceActionRequest, RoomExperienceState, RoomMode, RuntimeState, SurfaceTheme, SystemActionType, SystemState, WebModeState } from "../types";
 
 interface QuickSettingsOverlayProps {
   active: boolean;
@@ -116,6 +117,49 @@ const surfaceThemeChoices: Array<{ id: SurfaceTheme; label: string; sample: stri
   { id: "ivory-studio", label: "Ivory Studio", sample: "Soft studio" }
 ];
 
+const blankNasForm: NasSourceInput = {
+  name: "",
+  host: "",
+  port: 445,
+  share: "",
+  path: "",
+  authMode: "guest",
+  username: "",
+  password: "",
+  enabled: true,
+  mountName: ""
+};
+
+function buildNasFormFromCandidate(candidate: NasDiscoverCandidate): NasSourceInput {
+  return {
+    name: candidate.name,
+    host: candidate.host,
+    port: candidate.port,
+    share: candidate.share,
+    path: candidate.path,
+    authMode: candidate.authMode,
+    username: "",
+    password: "",
+    enabled: true,
+    mountName: candidate.mountName
+  };
+}
+
+function nasStatusLabel(status: string) {
+  switch (status) {
+    case "ready":
+      return "Ready";
+    case "manual":
+      return "Manual";
+    case "checking":
+      return "Checking";
+    case "check_setup":
+      return "Check setup";
+    default:
+      return "Offline";
+  }
+}
+
 const timeZoneChoices = [
   "Asia/Shanghai",
   "America/Los_Angeles",
@@ -130,15 +174,15 @@ const timeZoneChoices = [
 const sectionCopy: Record<SettingsSectionKey, { label: string; description: string }> = {
   output: {
     label: "Preferences",
-    description: "Output path, DSP, display, typography, and listening overlays."
+    description: "Audio, display, type, and listening overlays."
   },
   library: {
     label: "Library",
-    description: "Storage health, NAS status, USB readiness, and library scanning."
+    description: "Local music, USB, NAS, and scan status."
   },
   network: {
     label: "Link",
-    description: "Connectivity, API sync state, and kiosk runtime reachability."
+    description: "Connectivity and remote reachability."
   },
   system: {
     label: "Care",
@@ -244,6 +288,16 @@ export function QuickSettingsOverlay({
     nas: null,
     usb: null
   });
+  const [nasSourcesState, setNasSourcesState] = useState<NasSourcesResponse | null>(null);
+  const [nasFormVisible, setNasFormVisible] = useState(false);
+  const [nasForm, setNasForm] = useState<NasSourceInput>(blankNasForm);
+  const [nasPasswordVisible, setNasPasswordVisible] = useState(false);
+  const [nasPendingAction, setNasPendingAction] = useState<"test" | "save" | "scan" | "mount" | "unmount" | "delete" | null>(null);
+  const [nasMessage, setNasMessage] = useState<string | null>(null);
+  const [nasError, setNasError] = useState<string | null>(null);
+  const [nasCandidates, setNasCandidates] = useState<NasDiscoverCandidate[]>([]);
+  const [nasTestReady, setNasTestReady] = useState(false);
+  const [nasDeleteConfirmId, setNasDeleteConfirmId] = useState<string | null>(null);
   const [pendingRoomShortcut, setPendingRoomShortcut] = useState<RoomMode | "explore" | null>(null);
   const [roomShortcutError, setRoomShortcutError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<Record<ActionableCardKey, string | null>>({
@@ -283,6 +337,15 @@ export function QuickSettingsOverlay({
       setBrightnessError(null);
       setNightError(null);
       setWebModeError(null);
+      setNasFormVisible(false);
+      setNasForm(blankNasForm);
+      setNasPasswordVisible(false);
+      setNasPendingAction(null);
+      setNasMessage(null);
+      setNasError(null);
+      setNasCandidates([]);
+      setNasTestReady(false);
+      setNasDeleteConfirmId(null);
       setPendingRoomShortcut(null);
       setRoomShortcutError(null);
     }
@@ -304,12 +367,22 @@ export function QuickSettingsOverlay({
     []
   );
 
+  const refreshNasSources = useCallback(
+    async (signal?: AbortSignal) => {
+      const nextSources = await fetchNasSources(signal);
+      setNasSourcesState(nextSources);
+      return nextSources;
+    },
+    []
+  );
+
   useEffect(() => {
     if (!active) return undefined;
     const controller = new AbortController();
     void refreshLibraryStorageCounts(controller.signal).catch(() => undefined);
+    void refreshNasSources(controller.signal).catch(() => undefined);
     return () => controller.abort();
-  }, [active, refreshLibraryStorageCounts]);
+  }, [active, refreshLibraryStorageCounts, refreshNasSources]);
 
   useEffect(() => {
     if (!active) return undefined;
@@ -323,7 +396,7 @@ export function QuickSettingsOverlay({
         setWebModeProviderTextScale(nextState.settings.providerTextScale ?? 1.1);
       })
       .catch((error) => {
-        if (!cancelled) setWebModeError(error instanceof Error ? error.message : "Explore settings unavailable");
+        if (!cancelled) setWebModeError(friendlyUiErrorOrFallback(error instanceof Error ? error.message : null, "Explore settings unavailable"));
       });
     return () => {
       cancelled = true;
@@ -382,7 +455,7 @@ export function QuickSettingsOverlay({
           setWebModeError("Saved automatically");
         })
         .catch((error) => {
-          if (!cancelled) setWebModeError(error instanceof Error ? error.message : "Explore settings save failed");
+          if (!cancelled) setWebModeError(friendlyUiErrorOrFallback(error instanceof Error ? error.message : null, "Explore settings save failed"));
         });
     }, 700);
 
@@ -398,11 +471,15 @@ export function QuickSettingsOverlay({
   const nasTrackCount = libraryStorageCounts.nas ?? 0;
   const usbTrackCount = libraryStorageCounts.usb ?? (librarySourceKind === "usb" ? libraryTrackCount : 0);
   const scannedLibraryTrackCount = localTrackCount + usbTrackCount;
+  const configuredNasSources = nasSourcesState?.sources.filter((source) => source.sourceKind !== "manual") ?? [];
+  const readyNasSources = configuredNasSources.filter((source) => source.status === "ready");
   const nasCardTone: CardTone = nasTrackCount > 0 ? "cyan" : "neutral";
-  const nasCardValue = nasTrackCount > 0 ? "Mounted" : "Remote Admin";
+  const nasCardValue = readyNasSources.length > 0 ? "Ready" : configuredNasSources.length > 0 ? "Check setup" : "Add NAS";
   const nasCardMeta = nasTrackCount > 0
     ? `${nasTrackCount.toLocaleString()} tracks · ${system.library.lastScan}`
-    : "SMB/NFS setup stays outside kiosk";
+    : configuredNasSources.length > 0
+      ? `${configuredNasSources.length.toLocaleString()} saved`
+      : "Add NAS in Settings";
   const usbCardValue = usbTrackCount > 0 ? `${usbTrackCount.toLocaleString()} tracks` : "Not mounted";
   const usbCardMeta = usbTrackCount > 0 ? "Portable storage mounted" : "Portable storage";
   const libraryScanValue = scannedLibraryTrackCount > 0 ? "Local + USB" : system.library.source;
@@ -441,7 +518,7 @@ export function QuickSettingsOverlay({
         icon: SlidersHorizontal,
         title: "DSP",
         value: system.dspState.controllable ? "EQ Ready" : system.dspState.enabled ? "Enabled" : "Disabled",
-        meta: `${system.dspState.presetLabel} · ${system.dspState.controlTransport}`,
+        meta: `${system.dspState.presetLabel} · ${system.dspState.controllable ? "Adjustable" : "Read-only"}`,
         tone: "cyan"
       },
       {
@@ -451,9 +528,7 @@ export function QuickSettingsOverlay({
         icon: Monitor,
         title: "Display",
         value: runtime.kioskWindow,
-        meta: system.display.controllable
-          ? `Renderer: ${runtime.requestedRenderer} · Live brightness ready`
-          : `Renderer: ${runtime.requestedRenderer} · DDC/CI unavailable`,
+        meta: system.display.controllable ? "Screen ready · Brightness ready" : "Screen ready · Unavailable",
         tone: "neutral"
       },
       {
@@ -473,7 +548,7 @@ export function QuickSettingsOverlay({
         icon: HardDrive,
         title: "Local Library",
         value: `${localTrackCount.toLocaleString()} tracks`,
-        meta: "Manifest-backed music",
+        meta: "Music saved on this device",
         tone: "gold"
       },
       {
@@ -544,8 +619,8 @@ export function QuickSettingsOverlay({
         section: "system",
         icon: Info,
         title: "System",
-        value: status.source === "api" ? "Tikpal API" : "Fallback",
-        meta: status.error ?? `CPU ${system.cpuTemp}C - ${system.uptime}`,
+        value: status.source === "api" ? "Online" : "Limited",
+        meta: status.error ? "Needs attention" : `CPU ${system.cpuTemp}C - ${system.uptime}`,
         tone: status.source === "api" ? "neutral" : "warn"
       },
       {
@@ -554,8 +629,8 @@ export function QuickSettingsOverlay({
         section: "network",
         icon: Globe2,
         title: "Explore",
-        value: webModeProxyEnabled ? "HTTP Proxy" : "Direct",
-        meta: webModeProxyEnabled ? webModeProxyUrl : "Official web players",
+        value: webModeProxyEnabled ? "Proxy" : "Direct",
+        meta: webModeProxyEnabled ? "Proxy ready" : "Official web players",
         tone: webModeProxyEnabled ? "cyan" : "neutral"
       },
       {
@@ -610,7 +685,7 @@ export function QuickSettingsOverlay({
       await onSystemAction("brightness_set", clampedPercent);
       setBrightnessError(null);
     } catch (error) {
-      setBrightnessError(error instanceof Error ? error.message : "Brightness update failed");
+      setBrightnessError(friendlyUiErrorOrFallback(error instanceof Error ? error.message : null, "Brightness did not change. Try a lower level."));
     } finally {
       setPendingBrightness(null);
     }
@@ -630,7 +705,7 @@ export function QuickSettingsOverlay({
         }
       });
     } catch (error) {
-      setNightError(error instanceof Error ? error.message : "Night schedule update failed");
+      setNightError(friendlyUiErrorOrFallback(error instanceof Error ? error.message : null, "Night schedule did not save. Try again."));
     } finally {
       setPendingNight(false);
     }
@@ -666,10 +741,201 @@ export function QuickSettingsOverlay({
     } catch (error) {
       setActionError((current) => ({
         ...current,
-        [card.actionType]: error instanceof Error ? error.message : "System action failed"
+        [card.actionType]: friendlyUiErrorOrFallback(error instanceof Error ? error.message : null, "System action did not start. Try again.")
       }));
     } finally {
       setPendingAction(null);
+    }
+  }
+
+  function handleNasFormPatch(patch: Partial<NasSourceInput>) {
+    setNasForm((current) => ({ ...current, ...patch }));
+    setNasTestReady(false);
+    setNasError(null);
+    setNasMessage(null);
+  }
+
+  function openNasAddForm(candidate?: NasDiscoverCandidate) {
+    setNasForm(candidate ? buildNasFormFromCandidate(candidate) : blankNasForm);
+    setNasFormVisible(true);
+    setNasPasswordVisible(false);
+    setNasTestReady(false);
+    setNasDeleteConfirmId(null);
+    setNasError(null);
+    setNasMessage(candidate ? "Review, then test." : null);
+  }
+
+  function openNasEditForm(source: NasSourcesResponse["sources"][number]) {
+    if (source.readOnly) return;
+    setNasForm({
+      id: source.id,
+      name: source.name,
+      host: source.host,
+      port: source.port || 445,
+      share: source.share,
+      path: source.path,
+      authMode: source.authMode === "password" ? "password" : "guest",
+      username: source.username,
+      password: "",
+      enabled: source.enabled,
+      mountName: source.mountName
+    });
+    setNasFormVisible(true);
+    setNasPasswordVisible(false);
+    setNasTestReady(false);
+    setNasDeleteConfirmId(null);
+    setNasError(null);
+    setNasMessage("Edit, then test.");
+  }
+
+  function buildNasSavePayload() {
+    const payload: NasSourceInput = {
+      ...nasForm,
+      port: Number.isFinite(Number(nasForm.port)) ? Number(nasForm.port) : 445,
+      path: nasForm.path ?? "",
+      mountName: nasForm.mountName?.trim() || nasForm.name.trim() || nasForm.share.trim(),
+      username: nasForm.authMode === "password" ? nasForm.username ?? "" : "",
+      password: nasForm.authMode === "password" ? nasForm.password ?? "" : "",
+      enabled: nasForm.enabled !== false
+    };
+    if (payload.authMode === "guest" || !payload.password) {
+      delete payload.password;
+    }
+    return payload;
+  }
+
+  function findSavedNasSource(sources: NasSourcesResponse["sources"], payload: NasSourceInput) {
+    return sources.find((source) => payload.id && source.id === payload.id)
+      ?? sources.find((source) => (
+        !source.readOnly
+        && source.host === payload.host.trim()
+        && source.share === payload.share.trim()
+        && source.mountName === (payload.mountName?.trim() || payload.name.trim() || payload.share.trim())
+      ))
+      ?? sources.find((source) => !source.readOnly && source.host === payload.host.trim() && source.share === payload.share.trim());
+  }
+
+  async function handleNasTest() {
+    if (nasPendingAction) return;
+    setNasPendingAction("test");
+    setNasError(null);
+    setNasMessage("Testing...");
+    try {
+      const payload = buildNasSavePayload();
+      const result = await testNasSource(payload, payload.id || "_draft");
+      setNasTestReady(result.ok);
+      setNasMessage(result.ok ? `Ready${result.trackCount !== undefined ? ` · ${result.trackCount.toLocaleString()} tracks` : ""}` : null);
+      setNasError(result.ok ? null : result.lastError || "Check setup");
+      if (result.ok) {
+        void refreshLibraryStorageCounts().catch(() => undefined);
+        void refreshNasSources().catch(() => undefined);
+      }
+    } catch (error) {
+      setNasTestReady(false);
+      setNasError(friendlyUiErrorOrFallback(error instanceof Error ? error.message : null, "Check setup"));
+      setNasMessage(null);
+    } finally {
+      setNasPendingAction(null);
+    }
+  }
+
+  async function handleNasSaveAndScan() {
+    if (nasPendingAction) return;
+    setNasPendingAction("save");
+    setNasError(null);
+    setNasMessage("Saving...");
+    try {
+      const payload = buildNasSavePayload();
+      const saved = await saveNasSource(payload);
+      setNasSourcesState(saved);
+      const savedSource = findSavedNasSource(saved.sources, payload);
+      if (savedSource && !savedSource.readOnly) {
+        setNasMessage("Scanning...");
+        const mounted = await mountNasSource(savedSource.id);
+        setNasSourcesState(mounted);
+      }
+      await refreshLibraryStorageCounts();
+      setNasFormVisible(false);
+      setNasForm(blankNasForm);
+      setNasPasswordVisible(false);
+      setNasTestReady(false);
+      setNasMessage("Saved to NAS.");
+    } catch (error) {
+      setNasError(friendlyUiErrorOrFallback(error instanceof Error ? error.message : null, "NAS did not save. Check setup."));
+      setNasMessage(null);
+    } finally {
+      setNasPendingAction(null);
+    }
+  }
+
+  async function handleNasScanNetwork() {
+    if (nasPendingAction) return;
+    setNasPendingAction("scan");
+    setNasError(null);
+    setNasMessage("Scanning...");
+    try {
+      const result = await discoverNasSources();
+      setNasCandidates(result.candidates);
+      setNasMessage(result.candidates.length > 0 ? `${result.candidates.length} found. Choose one to add.` : "No shares found.");
+    } catch (error) {
+      setNasError(friendlyUiErrorOrFallback(error instanceof Error ? error.message : null, "Scan did not find shares."));
+      setNasMessage(null);
+    } finally {
+      setNasPendingAction(null);
+    }
+  }
+
+  async function handleNasMount(sourceId: string) {
+    if (nasPendingAction) return;
+    setNasPendingAction("mount");
+    setNasError(null);
+    setNasMessage("Scanning...");
+    try {
+      setNasSourcesState(await mountNasSource(sourceId));
+      await refreshLibraryStorageCounts();
+      setNasMessage("NAS ready.");
+    } catch (error) {
+      setNasError(friendlyUiErrorOrFallback(error instanceof Error ? error.message : null, "Check setup"));
+      setNasMessage(null);
+    } finally {
+      setNasPendingAction(null);
+    }
+  }
+
+  async function handleNasUnmount(sourceId: string) {
+    if (nasPendingAction) return;
+    setNasPendingAction("unmount");
+    setNasError(null);
+    try {
+      setNasSourcesState(await unmountNasSource(sourceId));
+      await refreshLibraryStorageCounts();
+      setNasMessage("NAS offline.");
+    } catch (error) {
+      setNasError(friendlyUiErrorOrFallback(error instanceof Error ? error.message : null, "Could not unmount."));
+    } finally {
+      setNasPendingAction(null);
+    }
+  }
+
+  async function handleNasDelete(sourceId: string) {
+    if (nasPendingAction) return;
+    if (nasDeleteConfirmId !== sourceId) {
+      setNasDeleteConfirmId(sourceId);
+      setNasMessage("Delete NAS?");
+      setNasError(null);
+      return;
+    }
+    setNasPendingAction("delete");
+    setNasError(null);
+    try {
+      setNasSourcesState(await deleteNasSource(sourceId));
+      await refreshLibraryStorageCounts();
+      setNasDeleteConfirmId(null);
+      setNasMessage("NAS removed.");
+    } catch (error) {
+      setNasError(friendlyUiErrorOrFallback(error instanceof Error ? error.message : null, "Could not delete NAS."));
+    } finally {
+      setNasPendingAction(null);
     }
   }
 
@@ -697,7 +963,7 @@ export function QuickSettingsOverlay({
         handleReturnAmbient();
       }
     } catch (error) {
-      setRoomShortcutError(error instanceof Error ? error.message : "Room switch failed");
+      setRoomShortcutError(friendlyUiErrorOrFallback(error instanceof Error ? error.message : null, "Room did not change. Try again."));
     } finally {
       setPendingRoomShortcut(null);
     }
@@ -718,7 +984,7 @@ export function QuickSettingsOverlay({
           <div>
             <span>Preferences</span>
             <strong>Skin Presets</strong>
-            <p>Switch the glass shell, cards, and controls as one surface.</p>
+            <p>Choose the look for this screen.</p>
           </div>
         </div>
 
@@ -754,7 +1020,7 @@ export function QuickSettingsOverlay({
           <div>
             <span>Preferences</span>
             <strong>Font Presets</strong>
-            <p>Choose the kiosk typography for this surface.</p>
+            <p>Choose the type style.</p>
           </div>
         </div>
 
@@ -785,7 +1051,7 @@ export function QuickSettingsOverlay({
           <div>
             <span>Preferences</span>
             <strong>Lyrics</strong>
-            <p>{lyricsVisible ? "Ambient lyrics visible" : "Ambient lyrics hidden"}</p>
+            <p>{lyricsVisible ? "Lyrics are visible." : "Lyrics are hidden."}</p>
           </div>
         </div>
 
@@ -800,7 +1066,7 @@ export function QuickSettingsOverlay({
               {lyricsVisible ? <Eye size={28} /> : <EyeOff size={28} />}
             </span>
             <span>
-              <strong>{lyricsVisible ? "Show Lyrics" : "Hide Lyrics"}</strong>
+              <strong>{lyricsVisible ? "Hide Lyrics" : "Show Lyrics"}</strong>
               <em>{lyricsVisible ? "Visible on Ambient" : "Hidden on Ambient"}</em>
             </span>
             <i>{lyricsVisible ? "On" : "Off"}</i>
@@ -826,10 +1092,17 @@ export function QuickSettingsOverlay({
   }
 
   function renderNasDetail() {
-    const hasNas = nasTrackCount > 0;
-    const sourceStatus = hasNas
-      ? `${nasTrackCount.toLocaleString()} tracks · Last scan ${system.library.lastScan}`
-      : "Add or edit SMB/NFS shares from remote admin";
+    const sources = nasSourcesState?.sources ?? [];
+    const configuredSources = sources.filter((source) => source.sourceKind !== "manual");
+    const manualSources = sources.filter((source) => source.sourceKind === "manual");
+    const sourceStatus = nasError
+      ?? nasMessage
+      ?? (nasTrackCount > 0
+        ? `${nasTrackCount.toLocaleString()} tracks · Last scan ${system.library.lastScan}`
+        : configuredSources.length > 0
+          ? "Check setup, then scan."
+          : "Add NAS in Settings.");
+    const busy = nasPendingAction !== null;
 
     return (
       <section className="settings-detail-panel" aria-label="NAS sources detail" data-settings-detail="nas">
@@ -845,41 +1118,260 @@ export function QuickSettingsOverlay({
         </div>
 
         <div className="nas-source-detail">
-          <article className={`nas-source-card tone-${hasNas ? "cyan" : "neutral"}`}>
-            <div className="settings-icon">
-              <Server size={32} />
-            </div>
-            <div className="nas-source-copy">
-              <span>{hasNas ? "Detected NAS" : "Remote Admin"}</span>
-              <strong>{hasNas ? system.library.source : "No NAS configured"}</strong>
-              <p>{hasNas ? "Current MPD library source" : "Kiosk shows health only; credentials and mounts belong in remote/admin."}</p>
-              <dl>
-                <div>
-                  <dt>Status</dt>
-                  <dd>{hasNas ? "mounted" : "not configured"}</dd>
-                </div>
-                <div>
-                  <dt>Tracks</dt>
-                  <dd>{nasTrackCount.toLocaleString()}</dd>
-                </div>
-                <div>
-                  <dt>Last Scan</dt>
-                  <dd>{system.library.lastScan}</dd>
-                </div>
-              </dl>
-            </div>
-          </article>
+          <div className="nas-source-toolbar">
+            <button type="button" onClick={() => openNasAddForm()} disabled={busy}>
+              <Plus size={18} />
+              <span>Add NAS</span>
+            </button>
+            <button type="button" onClick={() => void handleNasScanNetwork()} disabled={busy}>
+              <Search size={18} />
+              <span>{nasPendingAction === "scan" ? "Scanning..." : "Scan Network"}</span>
+            </button>
+          </div>
 
-          <article className="nas-source-card tone-neutral">
-            <div className="settings-icon">
-              <Info size={32} />
+          {nasFormVisible ? (
+            <form
+              className="nas-source-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void handleNasSaveAndScan();
+              }}
+            >
+              <div className="nas-form-grid">
+                <label className="night-field">
+                  <span>Name</span>
+                  <input
+                    value={nasForm.name}
+                    autoComplete="off"
+                    onChange={(event) => handleNasFormPatch({ name: event.currentTarget.value, mountName: nasForm.mountName || event.currentTarget.value })}
+                  />
+                </label>
+                <label className="night-field">
+                  <span>Server/IP</span>
+                  <input
+                    value={nasForm.host}
+                    inputMode="url"
+                    autoComplete="off"
+                    spellCheck={false}
+                    onChange={(event) => handleNasFormPatch({ host: event.currentTarget.value })}
+                  />
+                </label>
+                <label className="night-field">
+                  <span>Port</span>
+                  <input
+                    value={nasForm.port ?? 445}
+                    inputMode="numeric"
+                    onChange={(event) => handleNasFormPatch({ port: Number(event.currentTarget.value) || 445 })}
+                  />
+                </label>
+                <label className="night-field">
+                  <span>Share</span>
+                  <input
+                    value={nasForm.share}
+                    autoComplete="off"
+                    spellCheck={false}
+                    onChange={(event) => handleNasFormPatch({ share: event.currentTarget.value, mountName: nasForm.mountName || event.currentTarget.value })}
+                  />
+                </label>
+                <label className="night-field">
+                  <span>Folder</span>
+                  <input
+                    value={nasForm.path ?? ""}
+                    autoComplete="off"
+                    spellCheck={false}
+                    placeholder="Optional"
+                    onChange={(event) => handleNasFormPatch({ path: event.currentTarget.value })}
+                  />
+                </label>
+                <label className="night-field">
+                  <span>Local Name</span>
+                  <input
+                    value={nasForm.mountName ?? ""}
+                    autoComplete="off"
+                    spellCheck={false}
+                    onChange={(event) => handleNasFormPatch({ mountName: event.currentTarget.value })}
+                  />
+                </label>
+              </div>
+
+              <div className="nas-auth-row">
+                <button
+                  className={`night-toggle ${nasForm.authMode === "guest" ? "is-active" : ""}`}
+                  type="button"
+                  aria-pressed={nasForm.authMode === "guest"}
+                  onClick={() => handleNasFormPatch({ authMode: "guest", username: "", password: "" })}
+                >
+                  <CheckCircle2 size={24} />
+                  <span>
+                    <strong>Guest</strong>
+                    <em>No password</em>
+                  </span>
+                </button>
+                <button
+                  className={`night-toggle ${nasForm.authMode === "password" ? "is-active" : ""}`}
+                  type="button"
+                  aria-pressed={nasForm.authMode === "password"}
+                  onClick={() => handleNasFormPatch({ authMode: "password" })}
+                >
+                  <Server size={24} />
+                  <span>
+                    <strong>Account</strong>
+                    <em>Username + password</em>
+                  </span>
+                </button>
+              </div>
+
+              {nasForm.authMode === "password" ? (
+                <div className="nas-form-grid nas-form-grid-auth">
+                  <label className="night-field">
+                    <span>Username</span>
+                    <input
+                      value={nasForm.username ?? ""}
+                      autoComplete="username"
+                      spellCheck={false}
+                      onChange={(event) => handleNasFormPatch({ username: event.currentTarget.value })}
+                    />
+                  </label>
+                  <label className="night-field nas-password-field">
+                    <span>Password</span>
+                    <span className="nas-password-input-wrap">
+                      <input
+                        value={nasForm.password ?? ""}
+                        type={nasPasswordVisible ? "text" : "password"}
+                        autoComplete="current-password"
+                        spellCheck={false}
+                        onChange={(event) => handleNasFormPatch({ password: event.currentTarget.value })}
+                      />
+                      <button
+                        type="button"
+                        aria-label={nasPasswordVisible ? "Hide password" : "Show password"}
+                        title={nasPasswordVisible ? "Hide password" : "Show password"}
+                        onClick={() => setNasPasswordVisible((visible) => !visible)}
+                      >
+                        {nasPasswordVisible ? <EyeOff size={18} /> : <Eye size={18} />}
+                      </button>
+                    </span>
+                  </label>
+                </div>
+              ) : null}
+
+              <div className="nas-form-actions">
+                <button type="button" onClick={() => void handleNasTest()} disabled={busy}>
+                  {nasPendingAction === "test" ? "Testing..." : "Test"}
+                </button>
+                <button type="submit" disabled={busy}>
+                  {nasPendingAction === "save" ? "Saving..." : nasTestReady ? "Save & Scan" : "Save & Scan"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setNasFormVisible(false);
+                    setNasForm(blankNasForm);
+                    setNasTestReady(false);
+                    setNasError(null);
+                    setNasMessage(null);
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          ) : null}
+
+          {configuredSources.length === 0 && manualSources.length === 0 && !nasFormVisible ? (
+            <article className="nas-source-card tone-neutral">
+              <div className="settings-icon">
+                <Server size={32} />
+              </div>
+              <div className="nas-source-copy">
+                <span>No NAS yet</span>
+                <strong>Add NAS</strong>
+                <p>Scan Network can find candidates. Save only after Test.</p>
+              </div>
+            </article>
+          ) : null}
+
+          {configuredSources.map((source) => (
+            <article key={source.id} className={`nas-source-card tone-${source.status === "ready" ? "cyan" : "neutral"}`}>
+              <div className="settings-icon">
+                <Server size={32} />
+              </div>
+              <div className="nas-source-copy">
+                <span>{nasStatusLabel(source.status)}</span>
+                <strong>{source.name}</strong>
+                <p>{source.host ? `//${source.host}:${source.port}/${source.share}` : source.mountName}</p>
+                <dl>
+                  <div>
+                    <dt>Tracks</dt>
+                    <dd>{source.trackCount.toLocaleString()}</dd>
+                  </div>
+                  <div>
+                    <dt>Path</dt>
+                    <dd>{source.mpdPath ?? "NAS"}</dd>
+                  </div>
+                  <div>
+                    <dt>Version</dt>
+                    <dd>{source.smbVersion ?? "Auto"}</dd>
+                  </div>
+                </dl>
+                {source.lastError ? <em className="nas-source-error" title={source.lastError}>Check setup</em> : null}
+              </div>
+              <div className="nas-source-actions">
+                <button type="button" onClick={() => openNasEditForm(source)} disabled={busy}>Edit</button>
+                <button type="button" onClick={() => void handleNasMount(source.id)} disabled={busy}>
+                  {source.status === "ready" ? "Scan" : "Mount"}
+                </button>
+                <button type="button" onClick={() => void handleNasUnmount(source.id)} disabled={busy}>Unmount</button>
+                {nasDeleteConfirmId === source.id ? (
+                  <span className="nas-delete-confirm">
+                    <button type="button" onClick={() => void handleNasDelete(source.id)} disabled={busy}>Yes</button>
+                    <button type="button" onClick={() => setNasDeleteConfirmId(null)} disabled={busy}>No</button>
+                  </span>
+                ) : (
+                  <button type="button" aria-label={`Delete ${source.name}`} title={`Delete ${source.name}`} onClick={() => void handleNasDelete(source.id)} disabled={busy}>
+                    <Trash2 size={16} />
+                  </button>
+                )}
+              </div>
+            </article>
+          ))}
+
+          {manualSources.map((source) => (
+            <article key={source.id} className="nas-source-card tone-neutral">
+              <div className="settings-icon">
+                <Info size={32} />
+              </div>
+              <div className="nas-source-copy">
+                <span>Manual</span>
+                <strong>{source.name}</strong>
+                <p>Loaded from environment.</p>
+                <dl>
+                  <div>
+                    <dt>Tracks</dt>
+                    <dd>{source.trackCount.toLocaleString()}</dd>
+                  </div>
+                  <div>
+                    <dt>Path</dt>
+                    <dd>{source.mpdPath ?? "NAS"}</dd>
+                  </div>
+                </dl>
+              </div>
+            </article>
+          ))}
+
+          {nasCandidates.length > 0 ? (
+            <div className="nas-candidate-list">
+              {nasCandidates.map((candidate) => (
+                <button key={`${candidate.host}:${candidate.port}/${candidate.share}/${candidate.path}`} type="button" onClick={() => openNasAddForm(candidate)} disabled={busy}>
+                  <Server size={18} />
+                  <span>
+                    <strong>{candidate.name}</strong>
+                    <em>{`//${candidate.host}:${candidate.port}/${candidate.share}`}</em>
+                  </span>
+                </button>
+              ))}
             </div>
-            <div className="nas-source-copy">
-              <span>Boundary</span>
-              <strong>Console stays lightweight</strong>
-              <p>Use Library Scan here for maintenance. Add, edit, credentials, SMB/NFS options, and logs stay out of this kiosk surface.</p>
-            </div>
-          </article>
+          ) : null}
         </div>
       </section>
     );
@@ -887,7 +1379,7 @@ export function QuickSettingsOverlay({
 
   function renderWebModeDetail() {
     const statusText = webModeError
-      ?? (webModeState?.settings.proxyEnabled ? webModeState.settings.proxyUrl : "Direct browser access");
+      ?? (webModeState?.settings.proxyEnabled ? "Proxy ready" : "Direct connection");
 
     return (
       <section className="settings-detail-panel" aria-label="Explore detail" data-settings-detail="web-mode">
@@ -911,8 +1403,8 @@ export function QuickSettingsOverlay({
           >
             <Globe2 size={26} />
             <span>
-              <strong>Web Proxy</strong>
-              <em>{webModeProxyEnabled ? "HTTP proxy enabled" : "Direct"}</em>
+              <strong>Proxy</strong>
+              <em>{webModeProxyEnabled ? "On" : "Direct"}</em>
             </span>
           </button>
 
@@ -944,7 +1436,7 @@ export function QuickSettingsOverlay({
             </div>
           </div>
 
-          <p className="web-mode-settings-help">Saves automatically. If a provider won’t open, toggle Web Proxy and retry.</p>
+          <p className="web-mode-settings-help">Saves automatically. If a player won’t open, switch Proxy and retry.</p>
         </div>
       </section>
     );
@@ -965,14 +1457,14 @@ export function QuickSettingsOverlay({
           <div>
             <span>Preferences</span>
             <strong>Display Brightness</strong>
-            <p>{brightnessError ?? (system.display.controllable ? "Live display brightness control" : "Brightness control unavailable on this display")}</p>
+            <p>{brightnessError ?? (system.display.controllable ? "Brightness ready" : "Unavailable")}</p>
           </div>
         </div>
 
         <div className="display-brightness-panel display-brightness-panel-detail">
           <div className="display-brightness-header">
             <strong>{brightnessPercent}% Brightness</strong>
-            <em>{system.display.transport === "ddcci" ? "DDC/CI" : system.display.transport}</em>
+            <em title={system.display.transport}>{system.display.controllable ? "Hardware" : "Unavailable"}</em>
           </div>
           <div className="display-brightness-bar" aria-hidden="true">
             <span style={{ width: `${brightnessPercent}%` }} />
@@ -1012,8 +1504,8 @@ export function QuickSettingsOverlay({
             {system.display.controllable
               ? brightnessBusy
                 ? `Applying ${brightnessPercent}%...`
-                : "Dedicated display control panel"
-              : "This display does not expose DDC/CI brightness control"}
+                : "Display brightness panel"
+              : "Unavailable"}
           </em>
         </div>
       </section>
@@ -1167,7 +1659,7 @@ export function QuickSettingsOverlay({
                 aria-label="Back to main screen"
                 onClick={handleReturnAmbient}
               >
-                <LogOut size={17} />
+                <PanelRightClose size={17} />
                 <span>Back</span>
               </button>
             </div>
@@ -1406,8 +1898,8 @@ export function QuickSettingsOverlay({
                   <div>
                     <span>{card.title}</span>
                     <strong>{card.value}</strong>
-                    <p>{error ?? (isConfirming ? card.confirmLabel : card.meta)}</p>
-                    <em className="settings-card-action">{isPending ? "Working..." : card.buttonLabel}</em>
+                    <p title={error ?? undefined}>{error ?? (isConfirming ? card.confirmLabel : card.meta)}</p>
+                    <em className="settings-card-action">{isPending ? "Applying..." : card.buttonLabel}</em>
                   </div>
                 </button>
               );

@@ -1,5 +1,6 @@
 import { buildGeneratedCoverArtUrl } from "./coverArt";
 import { buildBluetoothGeneratedCoverArtUrl } from "./hifiLyricsVisual";
+import { playbackFallbackCopy } from "./uiCopy";
 import type { AudioState, FontTheme, PlaybackSummary, SourceState, SourceSummary } from "./types";
 
 const SOURCE_LABELS: Record<SourceState, string> = {
@@ -51,10 +52,10 @@ function withGeneratedArtworkFontTheme(albumArtUrl: string | null | undefined, f
 }
 
 export function getPlaybackDisplayTruth(playback: PlaybackSummary, audio: AudioState, fontTheme: FontTheme): PlaybackDisplayTruth {
-  const title = playback.title ?? "Not Playing";
-  const artist = playback.artist ?? "Unknown Artist";
-  const album = playback.album ?? "No Album";
-  const sourceLabel = getPlaybackSourceSummary(playback, audio)?.label ?? SOURCE_LABELS[playback.source] ?? "Unknown Source";
+  const title = playback.title ?? playbackFallbackCopy.title;
+  const artist = playback.artist ?? playbackFallbackCopy.artist;
+  const album = playback.album ?? playbackFallbackCopy.album;
+  const sourceLabel = getPlaybackSourceSummary(playback, audio)?.label ?? SOURCE_LABELS[playback.source] ?? playbackFallbackCopy.source;
   const hasPlaybackArtwork = Boolean(playback.albumArtUrl);
   const isGeneratedBluetoothCover = playback.source === "bluetooth" && !hasPlaybackArtwork;
   const fallbackAlbumArtUrl = isGeneratedBluetoothCover

@@ -37,6 +37,7 @@ const requiredFiles = [
   "deploy/moode/tikpal-audio-adapt.sh",
   "deploy/moode/tikpal-local-library-sync.sh",
   "deploy/moode/tikpal-library-sync.sh",
+  "deploy/moode/tikpal-nas-mount.sh",
   "deploy/moode/tikpal-usb-library-sync.sh",
   "deploy/moode/tikpal-radio-presets-sync.sh",
   "deploy/moode/tikpal-upnp-ready.sh",
@@ -166,6 +167,7 @@ async function run() {
   await assertExecutable("deploy/moode/tikpal-audio-adapt.sh");
   await assertExecutable("deploy/moode/tikpal-local-library-sync.sh");
   await assertExecutable("deploy/moode/tikpal-library-sync.sh");
+  await assertExecutable("deploy/moode/tikpal-nas-mount.sh");
   await assertExecutable("deploy/moode/tikpal-usb-library-sync.sh");
   await assertExecutable("deploy/moode/tikpal-radio-presets-sync.sh");
   await assertExecutable("deploy/moode/tikpal-upnp-ready.sh");
@@ -455,6 +457,7 @@ esac
   const audioAdaptScript = await readFile(path.join(ROOT, "deploy/moode/tikpal-audio-adapt.sh"), "utf8");
   const localLibrarySyncScript = await readFile(path.join(ROOT, "deploy/moode/tikpal-local-library-sync.sh"), "utf8");
   const librarySyncScript = await readFile(path.join(ROOT, "deploy/moode/tikpal-library-sync.sh"), "utf8");
+  const nasMountScript = await readFile(path.join(ROOT, "deploy/moode/tikpal-nas-mount.sh"), "utf8");
   const usbLibrarySyncScript = await readFile(path.join(ROOT, "deploy/moode/tikpal-usb-library-sync.sh"), "utf8");
   const extensionManifest = JSON.parse(await readFile(path.join(ROOT, "deploy/chromium/web-mode-extension/manifest.json"), "utf8"));
   const extensionContent = await readFile(path.join(ROOT, "deploy/chromium/web-mode-extension/content.js"), "utf8");
@@ -464,6 +467,7 @@ esac
   const remoteControlSource = await readFile(path.join(ROOT, "src/components/RemoteControlApp.tsx"), "utf8");
   const ambientScreenSource = await readFile(path.join(ROOT, "src/components/AmbientScreen.tsx"), "utf8");
   const playerOverlaySource = await readFile(path.join(ROOT, "src/components/PlayerOverlay.tsx"), "utf8");
+  const uiCopySource = await readFile(path.join(ROOT, "src/uiCopy.ts"), "utf8");
   const flameSceneSource = await readFile(path.join(ROOT, "src/components/FlameScene.tsx"), "utf8");
   const appSource = await readFile(path.join(ROOT, "src/App.tsx"), "utf8");
   const playbackTruthSource = await readFile(path.join(ROOT, "src/playbackTruth.ts"), "utf8");
@@ -514,7 +518,54 @@ esac
   assert(quickSettingsSource.includes('await onExperienceAction({ type: "set_mode", mode: destination })'), "Console should reuse the room mode action");
   assert(quickSettingsSource.includes("await onOpenWebMode()"), "Console Explore shortcut should reuse the existing Explore flow");
   assert(quickSettingsSource.includes('data-room-shortcut="back"') && quickSettingsSource.includes("data-console-back-button") && quickSettingsSource.includes("onClick={handleReturnAmbient}"), "Console should expose a Back shortcut next to Explore");
-  assert(quickSettingsSource.includes("LogOut") && !quickSettingsSource.includes("ArrowLeft"), "Console Back shortcut should match the Explore Back icon");
+  assert(
+    quickSettingsSource.includes("PanelRightClose")
+      && sidePanelSource.includes("PanelRightClose")
+      && playerOverlaySource.includes("PanelRightClose")
+      && ambientScreenSource.includes("PanelRightClose")
+      && !quickSettingsSource.includes("LogOut")
+      && !sidePanelSource.includes("LogOut")
+      && !playerOverlaySource.includes("LogOut")
+      && !ambientScreenSource.includes("LogOut")
+      && !quickSettingsSource.includes("ArrowLeft"),
+    "Back controls should share a panel-close icon without logout or plain-arrow semantics"
+  );
+  assert(
+    quickSettingsSource.includes('"Online"')
+      && quickSettingsSource.includes('"Limited"')
+      && quickSettingsSource.includes('"Music saved on this device"')
+      && quickSettingsSource.includes('"Add NAS in Settings"')
+      && quickSettingsSource.includes("nasPasswordVisible")
+      && quickSettingsSource.includes('"Applying..."')
+      && !quickSettingsSource.includes("Tikpal API")
+      && !quickSettingsSource.includes("Manifest-backed music")
+      && !quickSettingsSource.includes("Renderer:")
+      && !quickSettingsSource.includes("Remote Admin")
+      && !quickSettingsSource.includes("SMB/NFS")
+      && !quickSettingsSource.includes("credentials"),
+    "Console summary copy should avoid technical implementation labels"
+  );
+  assert(
+    uiCopySource.includes("friendlyUiError")
+      && uiCopySource.includes("dataSyncLabel")
+      && uiCopySource.includes('"Nothing playing"')
+      && uiCopySource.includes('"Unknown artist"')
+      && uiCopySource.includes('"Source unknown"'),
+    "friendly UI copy helpers should centralize fallback and error language"
+  );
+  assert(
+    playerOverlaySource.includes("dataSyncLabel(status)")
+      && playerOverlaySource.includes('"Open Spotify"')
+      && playerOverlaySource.includes('"Open AirPlay"')
+      && playerOverlaySource.includes('"Pair phone"')
+      && playerOverlaySource.includes('"Open DLNA"')
+      && playerOverlaySource.includes("Connect from your phone. This returns when playback starts.")
+      && !playerOverlaySource.includes("API Confirmed")
+      && !playerOverlaySource.includes("Fallback Data")
+      && !playerOverlaySource.includes("Enable Spotify")
+      && !playerOverlaySource.includes("Enable AirPlay"),
+    "Player source copy should use action-oriented labels and friendly sync state"
+  );
   assert(stylesSource.includes("grid-template-columns: repeat(6, minmax(0, 1fr));") && stylesSource.includes(".console-room-back"), "Console room shortcuts should fit Explore plus Back on one row");
   assert(appSource.includes("VISIBLE_LISTENING_SOURCE_TARGETS"), "Hi-Fi entry should preserve the current visible listening source");
   assert(appSource.includes("isVisibleListeningSourceTarget(currentSourceId)"), "Hi-Fi remembered-source restore should not overwrite active Library/Radio/external sources");
@@ -537,13 +588,47 @@ esac
     "mpc library volume_set should mirror the configured output volume helper"
   );
   assert(
+    serverSource.includes("TIKPAL_NAS_LIBRARY_ROOTS")
+      && serverSource.includes("TIKPAL_NAS_LIBRARY_MPD_PREFIX")
+      && serverSource.includes("TIKPAL_NAS_SOURCES_STATE_PATH")
+      && serverSource.includes("/api/v1/nas/sources")
+      && serverSource.includes("/api/v1/nas/discover")
+      && serverSource.includes("async function readNasAudioLibraryTracks")
+      && serverSource.includes("async function mountNasSource")
+      && nasMountScript.includes("mount -t cifs")
+      && nasMountScript.includes("mount --bind")
+      && serverSource.includes("function isNasLibraryTrackPath")
+      && serverSource.includes("isExternalLibraryTrackPath")
+      && playerOverlaySource.includes('track.storage === "local" || track.storage === "nas" || track.storage === "usb"'),
+    "NAS Library tracks should scan configured roots, expose MPD-visible NAS paths, and play from the Player Library"
+  );
+  assert(
+    playerOverlaySource.includes("function libraryPlaybackHint")
+      && playerOverlaySource.includes('"Playing from NAS."')
+      && playerOverlaySource.includes('"Playing from USB."')
+      && playerOverlaySource.includes('"Playing from Local."')
+      && playerOverlaySource.includes("track.path, track.storage")
+      && !playerOverlaySource.includes('if (storageId === "nas")'),
+    "Library playback hints should identify Local, USB, and NAS tracks distinctly"
+  );
+  assert(
     ambientScreenSource.includes('onTouchStart={handleZoneTouchStart("volume")}') && ambientScreenSource.includes('startAdjust(channel, touch.identifier, touch.clientY, "touch")'),
     "ambient right-edge volume control should include a touch-event fallback for physical touchscreens"
   );
   assert(remoteControlSource.includes("data-remote-key") && !remoteControlSource.includes("window.prompt"), "portable remote should keep its key field visible instead of relying on a browser prompt");
   assert(remoteControlSource.includes("data-remote-volume-slider"), "portable remote should expose a stable volume slider hook");
   assert(!remoteControlSource.includes("Enter the Remote key before using controls") && remoteControlSource.includes("actionKey || undefined"), "portable remote should let the 4174 proxy/API decide remote-key validity instead of blocking actions locally");
-  assert(remoteControlSource.includes("setActionError") && remoteControlSource.includes("setRefreshError"), "portable remote should keep action errors visible across state polling");
+  assert(
+    remoteControlSource.includes("setActionError")
+      && remoteControlSource.includes("setRefreshError")
+      && remoteControlSource.includes("friendlyUiError")
+      && remoteControlSource.includes("Access key")
+      && remoteControlSource.includes("No key")
+      && remoteControlSource.includes("PanelRightClose")
+      && !remoteControlSource.includes("Remote key")
+      && !remoteControlSource.includes("Back to Tikpal"),
+    "portable remote should keep action errors visible with low-friction labels"
+  );
   assert(!flameSceneSource.includes("video.load()"), "single-loop recovery should not leak Chromium media decoders by reloading the video element");
   assert(kioskLauncher.includes("TIKPAL_KIOSK_X_COMMAND_TIMEOUT_SECONDS"), "kiosk launcher should expose an X command timeout");
   assert(kioskLauncher.includes("run_x_command xrandr"), "kiosk launcher should bound xrandr commands");

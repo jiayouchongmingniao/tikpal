@@ -195,10 +195,72 @@ Onboard should only appear for text-like fields after real focus or tap. It shou
 The Gentoo physical kiosk uses the same Player Library contract as moOde:
 
 - `Local`, `NAS`, `USB`, `Favorites`, and `Recently Added` are flat storage/filter tabs.
-- Local and USB rows show compact audio/file information when the backend exposes codec, sample rate, bit depth, channel count, bitrate, or file size.
+- Local, NAS, and USB rows show compact audio/file information when the backend exposes codec, sample rate, bit depth, channel count, bitrate, or file size.
 - USB rows expose `Copy to Local`; the backend should not overwrite same-name Local files and should report `Already in Local` when no copy is needed.
 - Local rows expose `Delete`, but the first tap only reveals `Yes` and `No`. Only `Yes` performs deletion; `No`, storage changes, source changes, or closing Player must cancel the pending confirmation.
 - Long track lists keep a fixed right-side fast-scroll rail with `current / total` count and a draggable thumb. Dragging that rail only changes `scrollTop`; it must not select a track or auto-play on release.
+
+NAS v1 is configured by the user in Settings rather than silently attached from a LAN scan. The backend may still read legacy manual roots from `TIKPAL_NAS_LIBRARY_ROOTS`, but those entries are marked `Manual` in Settings and should be treated as compatibility input. New setups should use Settings -> Library -> NAS:
+
+```conf
+TIKPAL_NAS_SOURCES_STATE_PATH=/home/moode/code/tikpal/.tikpal/nas-sources.json
+TIKPAL_NAS_CREDENTIALS_DIR=/home/moode/code/tikpal/.tikpal/nas-credentials
+TIKPAL_NAS_MOUNT_ROOT=/mnt/tikpal-nas
+TIKPAL_NAS_MPD_ENTRY_ROOT=/var/lib/mpd/music/NAS
+TIKPAL_NAS_MOUNT_COMMAND="sudo -n -E /usr/local/sbin/tikpal-nas-mount mount"
+TIKPAL_NAS_UNMOUNT_COMMAND="sudo -n -E /usr/local/sbin/tikpal-nas-mount unmount"
+TIKPAL_NAS_LIBRARY_ROOTS=/mnt/tikpal-nas-test
+TIKPAL_NAS_LIBRARY_MPD_PREFIX=NAS
+TIKPAL_NAS_LIBRARY_MAX_TRACKS=500
+```
+
+Configured NAS sources are stored in `.tikpal/nas-sources.json`. Passwords are not returned to the frontend; username/password credentials are written under `.tikpal/nas-credentials/<id>.cred` with `0600` permissions. The UI password field is masked by default and has a show/hide control for setup.
+
+Discovery is only a candidate list. `POST /api/v1/nas/discover` may use `TIKPAL_NAS_DISCOVERY_HINTS` or a host-specific `TIKPAL_NAS_DISCOVERY_COMMAND`, but it must not save, mount, or scan anything until the user selects a candidate, runs `Test`, then uses `Save & Scan`.
+
+Default mount behavior is read-only CIFS:
+
+- Mount share at `/mnt/tikpal-nas/<id>`.
+- Bind the selected folder into `/var/lib/mpd/music/NAS/<mountName>`.
+- Expose track paths as `NAS/<mountName>/<relative-file>`.
+- Try SMB `3.0`, then `2.1`, then `2.0`; save the version that works.
+- Use `ro,uid=mpd,gid=audio,iocharset=utf8,nounix,soft`.
+
+Install the repo helper as the root-owned command and allow `moode` to run only that helper with preserved `TIKPAL_NAS_*` environment:
+
+```bash
+install -o root -g root -m 0755 /home/moode/code/tikpal/deploy/moode/tikpal-nas-mount.sh /usr/local/sbin/tikpal-nas-mount
+cat >/etc/sudoers.d/tikpal-nas <<'EOF'
+Defaults:moode env_keep += "TIKPAL_NAS_ID TIKPAL_NAS_NAME TIKPAL_NAS_HOST TIKPAL_NAS_PORT TIKPAL_NAS_SHARE TIKPAL_NAS_PATH TIKPAL_NAS_AUTH_MODE TIKPAL_NAS_USERNAME TIKPAL_NAS_CREDENTIALS TIKPAL_NAS_REMOTE TIKPAL_NAS_MOUNT_POINT TIKPAL_NAS_CONTENT_ROOT TIKPAL_NAS_MPD_ENTRY TIKPAL_NAS_MPD_PATH TIKPAL_NAS_SMB_VERSION"
+moode ALL=(root) NOPASSWD:SETENV: /usr/local/sbin/tikpal-nas-mount
+EOF
+chmod 0440 /etc/sudoers.d/tikpal-nas
+visudo -cf /etc/sudoers.d/tikpal-nas
+```
+
+If a host needs different root policy, replace that helper command but keep the same `TIKPAL_NAS_*` environment contract. Tikpal passes source details through variables including `TIKPAL_NAS_REMOTE`, `TIKPAL_NAS_MOUNT_POINT`, `TIKPAL_NAS_CONTENT_ROOT`, `TIKPAL_NAS_MPD_ENTRY`, and `TIKPAL_NAS_CREDENTIALS`.
+
+Temporary Gentoo validation can still use a high-port SMB share from a developer machine without enabling macOS system file sharing. Mount the test share read-only, expose it to MPD as `NAS/TikpalNAS`, then update MPD. The impacket test server currently negotiates SMB 2.0; a real NAS can use SMB 3.0 when supported.
+
+```bash
+mount -t cifs //192.168.10.103/TikpalNAS /mnt/tikpal-nas-test \
+  -o port=1445,vers=2.0,guest,ro,uid=mpd,gid=audio,iocharset=utf8
+mkdir -p /var/lib/mpd/music/NAS/TikpalNAS
+mount --bind /mnt/tikpal-nas-test /var/lib/mpd/music/NAS/TikpalNAS
+mpc update NAS
+mpc listall NAS/TikpalNAS
+curl -fsS 'http://127.0.0.1:8787/api/v1/audio/library?storage=nas&limit=10'
+```
+
+The API should expose NAS rows with `storage:"nas"` and `path:"NAS/TikpalNAS/<file>"`; Player Library can play them through MPD, but NAS rows do not show Local delete or USB copy actions. If no NAS is configured, Player -> Library -> NAS should say `Add NAS in Settings.`
+
+Selecting a Library storage tab is a browse-only action. `Local`, `NAS`, `USB`, `Favorites`, and `Recently Added` must not send an empty `POST /api/v1/audio/source` request or restore a default MPD queue just because the user changed tabs. Playback starts only after a track row is tapped:
+
+- Local rows post `{"target":"mpd","localTrackPath":"Codex/..."}` and show `Playing from Local.`
+- NAS rows post `{"target":"mpd","localTrackPath":"NAS/<mountName>/..."}` and show `Playing from NAS.`
+- USB rows post `{"target":"mpd","localTrackPath":"USB/<mountName>/..."}` and show `Playing from USB.`
+
+This separation matters on the physical kiosk: an empty MPD switch while changing tabs can put the UI into a pending state, restore the wrong Local queue, and swallow the real NAS/USB track tap.
 
 Targeted physical-kiosk DOM checks after deploying a frontend build:
 
@@ -227,6 +289,27 @@ document.querySelector("[data-library-delete-confirm-yes]") !== null;
 document.querySelector("[data-library-delete-confirm-no]")?.click();
 document.querySelector("[data-library-delete-confirm]") === null;
 ```
+
+For NAS/USB playback-hint regressions, wrap `window.fetch` in the physical page or DevTools and confirm tab changes do not emit `/api/v1/audio/source`, while the first row tap does emit the right MPD-visible path:
+
+```js
+(() => {
+  window.__tikpalFetchLog = [];
+  const originalFetch = window.__tikpalOriginalFetch || window.fetch.bind(window);
+  window.__tikpalOriginalFetch = originalFetch;
+  window.fetch = async (...args) => {
+    const url = typeof args[0] === "string" ? args[0] : args[0]?.url;
+    const init = args[1] || {};
+    if (String(url || "").includes("/api/v1/audio/source")) {
+      window.__tikpalFetchLog.push(String(init.body || ""));
+    }
+    return originalFetch(...args);
+  };
+  return true;
+})()
+```
+
+After selecting `NAS` and tapping a NAS row, expect a body containing `NAS/<mountName>/...` and the Player hint `Playing from NAS.` Repeat with `USB/<mountName>/...` and `Playing from USB.`
 
 ## Display And Power
 

@@ -1870,6 +1870,7 @@ async function runMpcLocalLibraryPathSmoke(roomExperienceStatePath) {
   const fakeAudioSourceMemoryStatePath = path.join(workspace, "audio-source-memory.json");
   const fakeMpdMusicRoot = path.join(workspace, "mpd-music");
   const fakeUsbRoot = path.join(workspace, "Session Disk");
+  const fakeNasRoot = path.join(workspace, "TikpalNAS");
   const fakeMpcTracks = [
     "Codex/Focus/Lo-fi Ambient/FASSounds - Good Night - Lofi Cozy Chill Music - 02m27s - Lo-fi.mp3",
     "Codex/Focus/Lo-fi Ambient/FASSounds - Lofi Study - Calm Peaceful Chill Hop - 02m27s - Lo-fi.mp3",
@@ -1878,10 +1879,15 @@ async function runMpcLocalLibraryPathSmoke(roomExperienceStatePath) {
   const fakeMpcUsbTracks = [
     "USB/Session Disk/Set/Live Take.flac"
   ];
+  const fakeMpcNasTracks = [
+    "NAS/TikpalNAS/Album/NAS Take.flac"
+  ];
 
   await mkdir(path.join(fakeUsbRoot, "Set"), { recursive: true });
+  await mkdir(path.join(fakeNasRoot, "Album"), { recursive: true });
   await mkdir(path.join(fakeMpdMusicRoot, "Codex"), { recursive: true });
   await writeFile(path.join(fakeUsbRoot, "Set", "Live Take.flac"), "fake usb flac");
+  await writeFile(path.join(fakeNasRoot, "Album", "NAS Take.flac"), "fake nas flac");
   await writeFile(fakeUsbScanLogPath, "");
   await writeFile(fakeUsbScanCommandPath, `#!/usr/bin/env node
 import { appendFileSync, writeFileSync } from "node:fs";
@@ -1898,6 +1904,7 @@ const logPath = process.env.TIKPAL_FAKE_MPC_LOG;
 const statePath = process.env.TIKPAL_FAKE_MPC_STATE;
 const libraryTracks = JSON.parse(process.env.TIKPAL_FAKE_MPC_TRACKS ?? "[]");
 const usbLibraryTracks = JSON.parse(process.env.TIKPAL_FAKE_MPC_USB_TRACKS ?? "[]");
+const nasLibraryTracks = JSON.parse(process.env.TIKPAL_FAKE_MPC_NAS_TRACKS ?? "[]");
 const usbIndexPath = process.env.TIKPAL_FAKE_MPC_USB_INDEX_PATH ?? "";
 const musicRoot = ${JSON.stringify(fakeMpdMusicRoot)};
 const positionalPlayStaysPaused = process.env.TIKPAL_FAKE_MPC_POSITIONAL_PLAY_STAYS_PAUSED === "1";
@@ -1982,36 +1989,40 @@ const [command, ...rest] = args;
 const state = readState();
 
 switch (command) {
-	  case "listall": {
-	    const target = rest[0] ?? "";
-	    const visibleLocalTracks = allLibraryTracks();
-	    const visibleUsbTracks = usbTracksVisible() ? usbLibraryTracks : [];
-	    const usbMatches = tracksUnderTarget(target, visibleUsbTracks);
-	    const localMatches = tracksUnderTarget(target, visibleLocalTracks);
-	    if (target === "Codex") output(visibleLocalTracks.join("\\n") + "\\n");
-	    else if (visibleLocalTracks.includes(target) || visibleUsbTracks.includes(target)) output(target + "\\n");
-	    else if (localMatches.length > 0) output(localMatches.join("\\n") + "\\n");
-	    else if (usbMatches.length > 0) output(usbMatches.join("\\n") + "\\n");
-	    else fail("MPD error: No such directory");
-	    break;
-  }
+		  case "listall": {
+		    const target = rest[0] ?? "";
+		    const visibleLocalTracks = allLibraryTracks();
+		    const visibleUsbTracks = usbTracksVisible() ? usbLibraryTracks : [];
+		    const nasMatches = tracksUnderTarget(target, nasLibraryTracks);
+		    const usbMatches = tracksUnderTarget(target, visibleUsbTracks);
+		    const localMatches = tracksUnderTarget(target, visibleLocalTracks);
+		    if (target === "Codex") output(visibleLocalTracks.join("\\n") + "\\n");
+		    else if (visibleLocalTracks.includes(target) || visibleUsbTracks.includes(target) || nasLibraryTracks.includes(target)) output(target + "\\n");
+		    else if (localMatches.length > 0) output(localMatches.join("\\n") + "\\n");
+		    else if (usbMatches.length > 0) output(usbMatches.join("\\n") + "\\n");
+		    else if (nasMatches.length > 0) output(nasMatches.join("\\n") + "\\n");
+		    else fail("MPD error: No such directory");
+		    break;
+	  }
   case "clear":
     state.queue = [];
     state.current = 0;
     state.state = "stopped";
     writeState(state);
     break;
-	  case "add": {
-	    const target = rest[0] ?? "";
-	    const visibleLocalTracks = allLibraryTracks();
-	    const visibleUsbTracks = usbTracksVisible() ? usbLibraryTracks : [];
-	    const usbMatches = tracksUnderTarget(target, visibleUsbTracks);
-	    const localMatches = tracksUnderTarget(target, visibleLocalTracks);
-	    if (target === "Codex") state.queue.push(...visibleLocalTracks);
-	    else if (usbMatches.length > 0) state.queue.push(...usbMatches);
-	    else if (localMatches.length > 0) state.queue.push(...localMatches);
-	    else if (visibleLocalTracks.includes(target) || visibleUsbTracks.includes(target)) state.queue.push(target);
-	    else fail("MPD error: No such song");
+		  case "add": {
+		    const target = rest[0] ?? "";
+		    const visibleLocalTracks = allLibraryTracks();
+		    const visibleUsbTracks = usbTracksVisible() ? usbLibraryTracks : [];
+		    const nasMatches = tracksUnderTarget(target, nasLibraryTracks);
+		    const usbMatches = tracksUnderTarget(target, visibleUsbTracks);
+		    const localMatches = tracksUnderTarget(target, visibleLocalTracks);
+		    if (target === "Codex") state.queue.push(...visibleLocalTracks);
+		    else if (usbMatches.length > 0) state.queue.push(...usbMatches);
+		    else if (nasMatches.length > 0) state.queue.push(...nasMatches);
+		    else if (localMatches.length > 0) state.queue.push(...localMatches);
+		    else if (visibleLocalTracks.includes(target) || visibleUsbTracks.includes(target) || nasLibraryTracks.includes(target)) state.queue.push(target);
+		    else fail("MPD error: No such song");
 	    writeState(state);
 	    break;
   }
@@ -2129,11 +2140,13 @@ if (args[0] === "open" && args[1] === ${JSON.stringify(failedProvider)}) {
       TIKPAL_MPD_DEFAULT_QUEUE_PATH: "Codex",
       TIKPAL_MPD_MUSIC_ROOT: fakeMpdMusicRoot,
       TIKPAL_LIBRARY_AUDIO_PROBE_ENABLED: "0",
-      TIKPAL_USB_LIBRARY_ROOTS: fakeUsbRoot,
-      TIKPAL_USB_LIBRARY_MPD_PREFIX: "USB",
-      TIKPAL_USB_LIBRARY_SCAN_COMMAND: `${process.execPath} ${fakeUsbScanCommandPath}`,
-      TIKPAL_USB_LIBRARY_AUTO_UPDATE_MIN_MS: "50",
-      TIKPAL_OUTPUT_VOLUME_GET_COMMAND: "",
+	      TIKPAL_USB_LIBRARY_ROOTS: fakeUsbRoot,
+	      TIKPAL_USB_LIBRARY_MPD_PREFIX: "USB",
+	      TIKPAL_USB_LIBRARY_SCAN_COMMAND: `${process.execPath} ${fakeUsbScanCommandPath}`,
+	      TIKPAL_USB_LIBRARY_AUTO_UPDATE_MIN_MS: "50",
+	      TIKPAL_NAS_LIBRARY_ROOTS: fakeNasRoot,
+	      TIKPAL_NAS_LIBRARY_MPD_PREFIX: "NAS",
+	      TIKPAL_OUTPUT_VOLUME_GET_COMMAND: "",
       TIKPAL_ROOM_EXPERIENCE_STATE_PATH: roomExperienceStatePath,
       TIKPAL_AUDIO_SOURCE_MEMORY_STATE_PATH: fakeAudioSourceMemoryStatePath,
       TIKPAL_SPOTIFY_ACTIVATE_COMMAND: `${process.execPath} ${fakeExternalDisableCommandPath} spotify-enable`,
@@ -2153,9 +2166,10 @@ if (args[0] === "open" && args[1] === ${JSON.stringify(failedProvider)}) {
       TIKPAL_WEB_MODE_HANDOFF_STATE_PATH: fakeWebModeHandoffStatePath,
       TIKPAL_FAKE_MPC_LOG: fakeMpcLogPath,
       TIKPAL_FAKE_MPC_STATE: fakeMpcStatePath,
-      TIKPAL_FAKE_MPC_TRACKS: JSON.stringify(fakeMpcTracks),
-      TIKPAL_FAKE_MPC_USB_TRACKS: JSON.stringify(fakeMpcUsbTracks),
-      TIKPAL_FAKE_MPC_USB_INDEX_PATH: fakeUsbIndexPath,
+	      TIKPAL_FAKE_MPC_TRACKS: JSON.stringify(fakeMpcTracks),
+	      TIKPAL_FAKE_MPC_USB_TRACKS: JSON.stringify(fakeMpcUsbTracks),
+	      TIKPAL_FAKE_MPC_NAS_TRACKS: JSON.stringify(fakeMpcNasTracks),
+	      TIKPAL_FAKE_MPC_USB_INDEX_PATH: fakeUsbIndexPath,
       TIKPAL_FAKE_MPC_CURRENT_FILE_ONLY: "1",
       TIKPAL_FAKE_MPC_POSITIONAL_PLAY_STAYS_PAUSED: "1"
     }),
@@ -2167,11 +2181,11 @@ if (args[0] === "open" && args[1] === ${JSON.stringify(failedProvider)}) {
     await writeFile(fakeMpcLogPath, "");
 
     const library = await requestFrom(baseUrl, "/api/v1/audio/library?storage=local&limit=1");
-    assert(library.response.ok, "mpc local library path smoke should read the local library");
-    assert(
-      library.body.storages.find((storage) => storage.id === "nas")?.trackCount === 0,
-      "mpc MPD library stats should not be exposed as NAS storage count"
-    );
+	    assert(library.response.ok, "mpc local library path smoke should read the local library");
+	    assert(
+	      library.body.storages.find((storage) => storage.id === "nas")?.trackCount === fakeMpcNasTracks.length,
+	      "mpc NAS storage count should come from configured NAS roots, not MPD stats"
+	    );
     const localTrackPath = library.body.tracks[0]?.path;
     assert(localTrackPath && !localTrackPath.startsWith("Codex/"), "local library should expose manifest-relative track paths");
     let autoUsbIndexReady = false;
@@ -2379,12 +2393,31 @@ if (args[0] === "open" && args[1] === ${JSON.stringify(failedProvider)}) {
     assert(switchedUsb.body.playback.queueLength === fakeMpcUsbTracks.length, "mpc USB switch should queue the mounted USB root");
     assert(switchedUsb.body.audio.rememberedSource?.localTrackPath === usbTrackPath, "mpc USB switch should remember the selected USB track path");
     const usbLog = await readFile(fakeMpcLogPath, "utf8");
-    assert(usbLog.includes("listall\tUSB/Session Disk"), "mpc USB switch should list the USB mount root");
-    assert(usbLog.includes(`add\t${fakeMpcUsbTracks[0]}`), "mpc USB switch should add only playable USB audio tracks to the queue");
-    assert(!usbLog.split("\n").includes("add\tUSB/Session Disk"), "mpc USB switch should not queue the raw USB mount root because MPD can list Apple resource-fork files");
-    assert(!usbLog.includes("Codex/USB/Session Disk"), "mpc USB switch should not prefix USB paths with the local Codex root");
+	    assert(usbLog.includes("listall\tUSB/Session Disk"), "mpc USB switch should list the USB mount root");
+	    assert(usbLog.includes(`add\t${fakeMpcUsbTracks[0]}`), "mpc USB switch should add only playable USB audio tracks to the queue");
+	    assert(!usbLog.split("\n").includes("add\tUSB/Session Disk"), "mpc USB switch should not queue the raw USB mount root because MPD can list Apple resource-fork files");
+	    assert(!usbLog.includes("Codex/USB/Session Disk"), "mpc USB switch should not prefix USB paths with the local Codex root");
 
-    const usbFavorite = await requestFrom(baseUrl, "/api/v1/audio/favorites", {
+	    const nasLibrary = await requestFrom(baseUrl, "/api/v1/audio/library?storage=nas&limit=5");
+	    assert(nasLibrary.response.ok, "mpc NAS library should return 200");
+	    const nasTrackPath = nasLibrary.body.tracks[0]?.path;
+	    assert(nasTrackPath === fakeMpcNasTracks[0], "mpc NAS library should expose MPD-visible NAS/<share name> track paths");
+	    await writeFile(fakeMpcLogPath, "");
+	    const switchedNas = await requestFrom(baseUrl, "/api/v1/audio/source", {
+	      method: "POST",
+	      body: JSON.stringify({ target: "mpd", localTrackPath: nasTrackPath })
+	    });
+	    assert(switchedNas.response.ok, "mpc NAS library source switch should return 200");
+	    assert(switchedNas.body.audio.currentSource.id === "mpd", "mpc NAS switch should keep Library current");
+	    assert(switchedNas.body.playback.queueLength === fakeMpcNasTracks.length, "mpc NAS switch should queue the mounted NAS root");
+	    assert(switchedNas.body.audio.rememberedSource?.localTrackPath === nasTrackPath, "mpc NAS switch should remember the selected NAS track path");
+	    const nasLog = await readFile(fakeMpcLogPath, "utf8");
+	    assert(nasLog.includes("listall\tNAS/TikpalNAS"), "mpc NAS switch should list the NAS share root");
+	    assert(nasLog.includes(`add\t${fakeMpcNasTracks[0]}`), "mpc NAS switch should add only playable NAS audio tracks to the queue");
+	    assert(!nasLog.split("\n").includes("add\tNAS/TikpalNAS"), "mpc NAS switch should not queue the raw NAS share root");
+	    assert(!nasLog.includes("Codex/NAS/TikpalNAS"), "mpc NAS switch should not prefix NAS paths with the local Codex root");
+
+	    const usbFavorite = await requestFrom(baseUrl, "/api/v1/audio/favorites", {
       method: "POST",
       body: JSON.stringify({ trackPath: usbTrackPath, favorite: true })
     });
@@ -4542,6 +4575,8 @@ async function run() {
   const audioSourceMemoryStatePath = path.join(apiStateRoot, "audio-source-memory.json");
   const webModeSettingsPath = path.join(apiStateRoot, "web-mode-settings.json");
   const webModeStatePath = path.join(apiStateRoot, "web-mode-state.json");
+  const nasSourcesStatePath = path.join(apiStateRoot, "nas-sources.json");
+  const nasCredentialsDir = path.join(apiStateRoot, "nas-credentials");
   const sceneBytes = Buffer.from("000000 ftypisom tikpal rainy window api smoke mp4");
   const sceneSha256 = createHash("sha256").update(sceneBytes).digest("hex");
   const warmSceneBytes = Buffer.from("000000 ftypisom tikpal warm fireplace api smoke mp4");
@@ -4628,6 +4663,9 @@ async function run() {
       TIKPAL_AUDIO_SOURCE_MEMORY_STATE_PATH: audioSourceMemoryStatePath,
       TIKPAL_WEB_MODE_SETTINGS_PATH: webModeSettingsPath,
       TIKPAL_WEB_MODE_STATE_PATH: webModeStatePath,
+      TIKPAL_NAS_SOURCES_STATE_PATH: nasSourcesStatePath,
+      TIKPAL_NAS_CREDENTIALS_DIR: nasCredentialsDir,
+      TIKPAL_NAS_DISCOVERY_HINTS: "//192.168.10.103:1445/TikpalNAS",
       TIKPAL_RECOGNITION_PROVIDER: "acrcloud",
       TIKPAL_ACRCLOUD_HOST: PROVIDER_URL,
       TIKPAL_ACRCLOUD_ACCESS_KEY: "mock-key",
@@ -5188,6 +5226,63 @@ async function run() {
     const allLibrary = await request("/api/v1/audio/library?storage=all&limit=500");
     assert(allLibrary.response.ok, "all audio library should return 200");
     assert(allLibrary.body.tracks.some((track) => track.storage === "usb" && track.path === usbLibrary.body.tracks[0].path), "all audio library should include scanned USB tracks for the Player overlay");
+    const initialNasSources = await request("/api/v1/nas/sources");
+    assert(initialNasSources.response.ok, "NAS sources should return 200");
+    assert(initialNasSources.body.configuredCount === 0, "NAS sources should start with no configured shares");
+    const nasDiscover = await request("/api/v1/nas/discover", {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    assert(nasDiscover.response.ok, "NAS discovery should return 200");
+    assert(nasDiscover.body.candidates.some((candidate) => candidate.host === "192.168.10.103" && candidate.share === "TikpalNAS"), "NAS discovery should return candidates without saving them");
+    const nasAfterDiscover = await request("/api/v1/nas/sources");
+    assert(nasAfterDiscover.body.configuredCount === 0, "NAS discovery should not save candidates");
+    const nasGuestSource = {
+      name: "TikpalNAS",
+      host: "192.168.10.103",
+      port: 1445,
+      share: "TikpalNAS",
+      path: "",
+      authMode: "guest",
+      mountName: "TikpalNAS"
+    };
+    const nasGuestTest = await request("/api/v1/nas/sources/_draft/test", {
+      method: "POST",
+      body: JSON.stringify(nasGuestSource)
+    });
+    assert(nasGuestTest.response.ok && nasGuestTest.body.ok === true, "draft NAS guest test should return a non-saving ready result in mock mode");
+    const nasGuestSave = await request("/api/v1/nas/sources", {
+      method: "POST",
+      body: JSON.stringify(nasGuestSource)
+    });
+    assert(nasGuestSave.response.ok && nasGuestSave.body.configuredCount === 1, "saving a NAS source should persist one configured source");
+    assert(!JSON.stringify(nasGuestSave.body).includes("password"), "NAS source responses should not expose password fields");
+    const savedNas = nasGuestSave.body.sources.find((source) => source.name === "TikpalNAS");
+    assert(savedNas?.mpdPath === "NAS/TikpalNAS", "saved NAS source should expose an MPD-visible NAS/<name> path");
+    const nasGuestMount = await request(`/api/v1/nas/sources/${encodeURIComponent(savedNas.id)}/mount`, {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    assert(nasGuestMount.response.ok && nasGuestMount.body.sources.find((source) => source.id === savedNas.id)?.status === "ready", "NAS mount should mark saved source ready");
+    const nasPasswordSave = await request("/api/v1/nas/sources", {
+      method: "POST",
+      body: JSON.stringify({
+        name: "Private NAS",
+        host: "192.168.10.104",
+        port: 445,
+        share: "Music",
+        authMode: "password",
+        username: "listener",
+        password: "secret",
+        mountName: "Private"
+      })
+    });
+    assert(nasPasswordSave.response.ok, "NAS username/password source should save");
+    const privateNas = nasPasswordSave.body.sources.find((source) => source.name === "Private NAS");
+    assert(privateNas?.hasCredentials === true && privateNas.username === "listener", "NAS password source should expose username and hasCredentials only");
+    assert(!JSON.stringify(nasPasswordSave.body).includes("secret"), "NAS password source response should never echo the clear password");
+    const nasDelete = await request(`/api/v1/nas/sources/${encodeURIComponent(privateNas.id)}`, { method: "DELETE" });
+    assert(nasDelete.response.ok && !nasDelete.body.sources.some((source) => source.id === privateNas.id), "NAS delete should remove the saved source");
     const localStorage = localLibrary.body.storages.find((storage) => storage.id === "local");
     assert(localStorage, "local storage metadata should exist");
     const localCategoryIds = localStorage.categories.map((category) => category.id);
