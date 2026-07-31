@@ -372,6 +372,10 @@ export const fallbackTikpalState: TikpalState = {
   preferences: {
     locale: "en",
     inputMethodId: "keyboard-us",
+    fontTheme: "system",
+    displaySleepEnabled: true,
+    displaySleepMinutes: 10,
+    displaySleepStyle: "meteor_shower",
     updatedAt: null,
     warning: null
   }

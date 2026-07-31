@@ -47,18 +47,24 @@ Skin changes must affect the shell, cards, buttons, source highlight states, pro
 
 ## Typography
 
-Preferred Chinese fonts:
+Preferred multilingual fonts:
 
-- Source Han Sans.
+- Inter for the default Latin UI.
+- Noto Sans CJK SC / JP / KR for Chinese, Japanese, and Korean coverage.
+- Source Han Sans CN for Simplified Chinese-forward surfaces.
+- Noto Serif CJK for editorial lyric walls and reading surfaces.
+- Noto Sans Mono CJK for mono / technical surfaces.
+- WenQuanYi Zen Hei as the Linux CJK fallback.
+
+Optional drop-in fonts:
+
 - HarmonyOS Sans.
 - MiSans.
-- PingFang SC.
+- LXGW WenKai.
 
-Preferred English fonts:
+Do not add optional fonts to the default stack until they are installed, `fc-cache` has run, and `fc-match` proves the family resolves on the target kiosk.
 
-- Inter.
-- SF Pro.
-- Helvetica Neue.
+Settings -> Font is a product-level visual choice, not just a browser CSS toggle. Generated artwork and Gentoo Onboard keycap labels should use the selected preset family as well, with smaller keycap sizes than the main UI so translated labels do not crowd the compact keyboard.
 
 Recommended sizes:
 

@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 ENV_FILE="${TIKPAL_KIOSK_ENV_FILE:-$APP_DIR/.env.kiosk}"
+export TIKPAL_APP_DIR="${TIKPAL_APP_DIR:-$APP_DIR}"
 FLAGS_FILE="${TIKPAL_CHROMIUM_FLAGS_FILE:-$SCRIPT_DIR/chromium-flags.conf}"
 
 should_source_env_file() {
@@ -758,7 +759,7 @@ variants = [
         "ime_label": "中文",
         "ime_theme": "TIKPAL-IME-ACTIVE",
         "key_theme": "TIKPAL-KEY-PINYIN",
-        "labels": {"SPCE": "空格", "RTRN": "回车"},
+        "labels": {"SPCE": "空格", "RTRN": "↵"},
     },
     {
         "path": german_path,

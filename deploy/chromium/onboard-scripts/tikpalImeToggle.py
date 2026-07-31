@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -12,6 +13,7 @@ import subprocess
 ONBOARD_DATA_DIR = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share")) / "onboard"
 LAYOUT_DIR = ONBOARD_DATA_DIR / "layouts"
 COLOR_SCHEME = ONBOARD_DATA_DIR / "themes" / "Tikpal-Classic.colors"
+FCITX_CLASSIC_UI_CONFIG = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "fcitx5/conf/classicui.conf"
 MODES = [
     {"id": "keyboard-us", "layout": LAYOUT_DIR / "Tikpal-Compact-EN.onboard", "active": False},
     {"id": "pinyin", "layout": LAYOUT_DIR / "Tikpal-Compact-Pinyin.onboard", "active": True},
@@ -34,6 +36,22 @@ LOCALE_TO_MODE_ID = {
 }
 LEGACY_LAYOUTS = {
     LAYOUT_DIR / "Tikpal-Compact.onboard": MODES[0],
+}
+CANDIDATE_FONT_BY_MODE = {
+    "pinyin": "Noto Sans CJK SC",
+    "anthy": "Noto Sans CJK JP",
+    "hangul": "Noto Sans CJK KR",
+}
+FONT_THEME_FAMILIES = {
+    "system": ["Inter", "Noto Sans CJK SC", "Source Han Sans CN", "WenQuanYi Zen Hei"],
+    "hardware": ["Noto Sans CJK SC", "Source Han Sans CN", "WenQuanYi Zen Hei", "Inter"],
+    "precision": ["Source Han Sans CN", "Noto Sans CJK SC", "WenQuanYi Zen Hei", "Inter"],
+    "sans": ["Inter", "Roboto", "Fira Sans", "Noto Sans CJK SC", "Source Han Sans CN"],
+    "serif": ["Noto Serif CJK SC", "Noto Serif CJK JP", "Noto Serif CJK KR", "Georgia"],
+    "mono": ["Noto Sans Mono CJK SC", "Noto Sans Mono CJK JP", "Noto Sans Mono CJK KR", "Source Han Mono SC"],
+}
+FONT_THEME_SIZES = {
+    "mono": 11,
 }
 
 
@@ -91,6 +109,85 @@ def _read_command(*args: str) -> str:
     return result.stdout.strip()
 
 
+def _preference_paths() -> list[Path]:
+    paths: list[Path] = []
+    explicit = os.environ.get("TIKPAL_UI_PREFERENCES_STATE_PATH")
+    if explicit:
+        paths.append(Path(explicit).expanduser())
+    app_dir = os.environ.get("TIKPAL_APP_DIR")
+    if app_dir:
+        paths.append(Path(app_dir).expanduser() / ".tikpal" / "ui-preferences.json")
+    paths.extend([
+        Path.cwd() / ".tikpal" / "ui-preferences.json",
+        Path.home() / "code" / "tikpal" / ".tikpal" / "ui-preferences.json",
+    ])
+    unique: list[Path] = []
+    for path in paths:
+        if path not in unique:
+            unique.append(path)
+    return unique
+
+
+def _read_font_theme() -> str:
+    for path in _preference_paths():
+        try:
+            value = json.loads(path.read_text(encoding="utf-8")).get("fontTheme")
+        except Exception:
+            continue
+        if value in FONT_THEME_FAMILIES:
+            return str(value)
+    return "system"
+
+
+def _font_available(family: str, marker: str) -> bool:
+    output = _read_command("fc-match", family)
+    return marker.lower() in output.lower()
+
+
+def _font_family_available(family: str) -> bool:
+    output = _read_command("fc-match", "-f", "%{family}\n", family)
+    return family.lower() in output.lower()
+
+
+def _candidate_font(mode_id: str) -> str:
+    preferred_family = CANDIDATE_FONT_BY_MODE.get(mode_id, "Noto Sans CJK SC")
+    if _font_available(preferred_family, "Noto Sans CJK"):
+        return f"{preferred_family} 16"
+    if _font_available("Source Han Sans CN", "Source Han"):
+        return "Source Han Sans CN 16"
+    return "WenQuanYi Zen Hei 16"
+
+
+def _onboard_key_label_font() -> str:
+    theme = _read_font_theme()
+    for family in FONT_THEME_FAMILIES.get(theme, FONT_THEME_FAMILIES["system"]):
+        if _font_family_available(family):
+            return f"{family} {FONT_THEME_SIZES.get(theme, 12)}"
+    return "Noto Sans CJK SC 12"
+
+
+def _set_onboard_key_label_font() -> None:
+    _run_command("gsettings", "set", "org.onboard.theme-settings", "key-label-font", _onboard_key_label_font())
+
+
+def _set_candidate_font(mode: dict[str, object]) -> None:
+    font = _candidate_font(str(mode["id"]))
+    try:
+        FCITX_CLASSIC_UI_CONFIG.parent.mkdir(parents=True, exist_ok=True)
+        FCITX_CLASSIC_UI_CONFIG.write_text(
+            "\n".join([
+                "Vertical Candidate List=False",
+                f'Font="{font}"',
+                f'MenuFont="{font}"',
+                f'TrayFont="{font}"',
+                ""
+            ]),
+            encoding="utf-8"
+        )
+    except Exception:
+        pass
+
+
 def _onboard_layout() -> Path:
     layout = _read_command("gsettings", "get", "org.onboard", "layout").strip("'")
     return Path(layout)
@@ -115,12 +212,15 @@ def _set_onboard_visual(mode: dict[str, object]) -> None:
     layout = mode["layout"]
     if COLOR_SCHEME.exists():
         _run_command("gsettings", "set", "org.onboard.theme-settings", "color-scheme", str(COLOR_SCHEME))
+    _set_onboard_key_label_font()
     if isinstance(layout, Path) and layout.exists():
         _run_command("gsettings", "set", "org.onboard", "layout", str(layout))
 
 
 def sync() -> None:
-    _set_onboard_visual(_current_mode())
+    mode = _current_mode()
+    _set_candidate_font(mode)
+    _set_onboard_visual(mode)
 
 
 def _set_mode(mode: dict[str, object]) -> None:
@@ -128,6 +228,7 @@ def _set_mode(mode: dict[str, object]) -> None:
         _remote("-o")
     _remote("-s", str(mode["id"]))
     _remote("-o" if mode["active"] else "-c")
+    _set_candidate_font(mode)
     _set_onboard_visual(mode)
 
 

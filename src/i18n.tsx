@@ -1,12 +1,16 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { fetchPreferences, updatePreferences } from "./api/tikpalClient";
-import type { AudioLibraryStorageId, PlaybackState, SourceState, UiLocale, UiPreferences, UiInputMethodId, RoomMode } from "./types";
+import type { AudioLibraryStorageId, DisplaySleepStyle, FontTheme, PlaybackState, SourceState, UiLocale, UiPreferences, UiInputMethodId, RoomMode } from "./types";
 
 export type TranslationParams = Record<string, string | number | null | undefined>;
 
 export const defaultPreferences: UiPreferences = {
   locale: "en",
   inputMethodId: "keyboard-us",
+  fontTheme: "system",
+  displaySleepEnabled: true,
+  displaySleepMinutes: 10,
+  displaySleepStyle: "meteor_shower",
   updatedAt: null,
   warning: null
 };
@@ -30,6 +34,10 @@ export const languageOptions: Array<{ locale: UiLocale; label: string; shortLabe
   { locale: "ja", label: "日本語", shortLabel: "日本語" },
   { locale: "es", label: "Español", shortLabel: "ES" }
 ];
+
+const displaySleepMinuteOptions = [5, 10, 15, 30, 60] as const;
+const displaySleepStyleOptions: DisplaySleepStyle[] = ["meteor_shower", "clock", "now_playing", "starfield", "signal"];
+const fontThemeOptions: FontTheme[] = ["system", "hardware", "precision", "sans", "serif", "mono"];
 
 const dictionaries: Record<UiLocale, Record<string, string>> = {
   en: {
@@ -189,6 +197,23 @@ const dictionaries: Record<UiLocale, Record<string, string>> = {
     "settings.display": "Display",
     "settings.screenReady": "Screen ready",
     "settings.brightnessReady": "Brightness ready",
+    "settings.displayBrightness": "Display Brightness",
+    "settings.brightnessPanel": "Display brightness panel",
+    "settings.hardware": "Hardware",
+    "settings.dimStep": "Dim -10",
+    "settings.boostStep": "Boost +10",
+    "settings.screenSleep": "Screen Sleep",
+    "settings.screenSleepMeta": "Touch wakes screen.",
+    "settings.sleepStyle": "Sleep Style",
+    "settings.sleepStyle.meteor_shower": "Meteor Shower",
+    "settings.sleepStyle.clock": "Clock",
+    "settings.sleepStyle.now_playing": "Now Playing",
+    "settings.sleepStyle.starfield": "Starfield",
+    "settings.sleepStyle.signal": "Signal",
+    "settings.previewSleepStyle": "Preview",
+    "settings.stopSleepPreview": "Stop screen saver preview",
+    "settings.turnOffAfter": "Turn off after",
+    "settings.sleepAfterMinutes": "{minutes} min",
     "settings.timeNight": "Time & Night",
     "settings.night": "Night",
     "settings.auto": "Auto",
@@ -438,6 +463,126 @@ Object.assign(dictionaries.es, {
 });
 
 Object.assign(dictionaries["zh-CN"], {
+  "settings.displayBrightness": "屏幕亮度",
+  "settings.brightnessPanel": "屏幕亮度面板",
+  "settings.hardware": "硬件",
+  "settings.dimStep": "变暗 -10",
+  "settings.boostStep": "增亮 +10",
+  "settings.screenSleep": "屏幕休眠",
+  "settings.screenSleepMeta": "触摸可唤醒屏幕。",
+  "settings.sleepStyle": "屏保样式",
+  "settings.sleepStyle.meteor_shower": "流星雨",
+  "settings.sleepStyle.clock": "时钟",
+  "settings.sleepStyle.now_playing": "正在播放",
+  "settings.sleepStyle.starfield": "星空",
+  "settings.sleepStyle.signal": "信号线",
+  "settings.previewSleepStyle": "预览",
+  "settings.stopSleepPreview": "退出屏保预览",
+  "settings.turnOffAfter": "多久后关屏",
+  "settings.sleepAfterMinutes": "{minutes} 分钟"
+});
+
+Object.assign(dictionaries.de, {
+  "settings.displayBrightness": "Display-Helligkeit",
+  "settings.brightnessPanel": "Display-Helligkeit",
+  "settings.hardware": "Hardware",
+  "settings.dimStep": "Dunkler -10",
+  "settings.boostStep": "Heller +10",
+  "settings.screenSleep": "Bildschirmruhe",
+  "settings.screenSleepMeta": "Berührung weckt den Bildschirm.",
+  "settings.sleepStyle": "Schoner",
+  "settings.sleepStyle.meteor_shower": "Sternschnuppen",
+  "settings.sleepStyle.clock": "Uhr",
+  "settings.sleepStyle.now_playing": "Jetzt läuft",
+  "settings.sleepStyle.starfield": "Sternfeld",
+  "settings.sleepStyle.signal": "Signal",
+  "settings.previewSleepStyle": "Vorschau",
+  "settings.stopSleepPreview": "Vorschau beenden",
+  "settings.turnOffAfter": "Ausschalten nach",
+  "settings.sleepAfterMinutes": "{minutes} Min."
+});
+
+Object.assign(dictionaries.it, {
+  "settings.displayBrightness": "Luminosità display",
+  "settings.brightnessPanel": "Pannello luminosità",
+  "settings.hardware": "Hardware",
+  "settings.dimStep": "Riduci -10",
+  "settings.boostStep": "Aumenta +10",
+  "settings.screenSleep": "Sospensione schermo",
+  "settings.screenSleepMeta": "Un tocco riattiva lo schermo.",
+  "settings.sleepStyle": "Salvaschermo",
+  "settings.sleepStyle.meteor_shower": "Stelle cadenti",
+  "settings.sleepStyle.clock": "Orologio",
+  "settings.sleepStyle.now_playing": "In riproduzione",
+  "settings.sleepStyle.starfield": "Stelle",
+  "settings.sleepStyle.signal": "Segnale",
+  "settings.previewSleepStyle": "Anteprima",
+  "settings.stopSleepPreview": "Chiudi anteprima",
+  "settings.turnOffAfter": "Spegni dopo",
+  "settings.sleepAfterMinutes": "{minutes} min"
+});
+
+Object.assign(dictionaries.ko, {
+  "settings.displayBrightness": "화면 밝기",
+  "settings.brightnessPanel": "화면 밝기 패널",
+  "settings.hardware": "하드웨어",
+  "settings.dimStep": "어둡게 -10",
+  "settings.boostStep": "밝게 +10",
+  "settings.screenSleep": "화면 절전",
+  "settings.screenSleepMeta": "터치하면 화면이 켜집니다.",
+  "settings.sleepStyle": "화면보호기",
+  "settings.sleepStyle.meteor_shower": "유성우",
+  "settings.sleepStyle.clock": "시계",
+  "settings.sleepStyle.now_playing": "재생 중",
+  "settings.sleepStyle.starfield": "별빛",
+  "settings.sleepStyle.signal": "시그널",
+  "settings.previewSleepStyle": "미리보기",
+  "settings.stopSleepPreview": "미리보기 종료",
+  "settings.turnOffAfter": "꺼지는 시간",
+  "settings.sleepAfterMinutes": "{minutes}분"
+});
+
+Object.assign(dictionaries.ja, {
+  "settings.displayBrightness": "画面の明るさ",
+  "settings.brightnessPanel": "明るさパネル",
+  "settings.hardware": "ハードウェア",
+  "settings.dimStep": "暗く -10",
+  "settings.boostStep": "明るく +10",
+  "settings.screenSleep": "画面スリープ",
+  "settings.screenSleepMeta": "タッチで画面を復帰します。",
+  "settings.sleepStyle": "スクリーンセーバー",
+  "settings.sleepStyle.meteor_shower": "流星群",
+  "settings.sleepStyle.clock": "時計",
+  "settings.sleepStyle.now_playing": "再生中",
+  "settings.sleepStyle.starfield": "星空",
+  "settings.sleepStyle.signal": "シグナル",
+  "settings.previewSleepStyle": "プレビュー",
+  "settings.stopSleepPreview": "プレビュー終了",
+  "settings.turnOffAfter": "消灯まで",
+  "settings.sleepAfterMinutes": "{minutes}分"
+});
+
+Object.assign(dictionaries.es, {
+  "settings.displayBrightness": "Brillo de pantalla",
+  "settings.brightnessPanel": "Panel de brillo",
+  "settings.hardware": "Hardware",
+  "settings.dimStep": "Bajar -10",
+  "settings.boostStep": "Subir +10",
+  "settings.screenSleep": "Reposo de pantalla",
+  "settings.screenSleepMeta": "Toca para despertar la pantalla.",
+  "settings.sleepStyle": "Salvapantallas",
+  "settings.sleepStyle.meteor_shower": "Lluvia de meteoros",
+  "settings.sleepStyle.clock": "Reloj",
+  "settings.sleepStyle.now_playing": "Reproduciendo",
+  "settings.sleepStyle.starfield": "Estrellas",
+  "settings.sleepStyle.signal": "Señal",
+  "settings.previewSleepStyle": "Vista previa",
+  "settings.stopSleepPreview": "Salir de vista previa",
+  "settings.turnOffAfter": "Apagar después de",
+  "settings.sleepAfterMinutes": "{minutes} min"
+});
+
+Object.assign(dictionaries["zh-CN"], {
   "app.name": "Tikpal", "source.localQueueReady": "本地队列就绪",
   "settings.preferencesDesc": "音频、显示、字体和聆听浮层。", "settings.libraryDesc": "本地音乐、USB、NAS 和扫描状态。", "settings.linkDesc": "连接与远程访问。", "settings.careDesc": "受保护的重启和关机。", "settings.adjustable": "可调", "settings.readOnly": "只读", "settings.screenReady": "屏幕就绪", "settings.brightnessReady": "亮度就绪", "settings.night": "夜间", "settings.auto": "自动", "settings.addNasInSettings": "在 Settings 添加 NAS", "settings.portableStorage": "移动存储", "settings.portableStorageMounted": "移动存储已挂载", "settings.scanInProgress": "扫描中", "settings.chooseTypography": "选择 kiosk 字体", "settings.switchSkin": "切换皮肤", "settings.tuneLyrics": "调整歌词", "settings.limited": "受限", "settings.needsAttention": "需要检查", "settings.systemReboot": "系统重启", "settings.powerOff": "关机", "settings.adjustType": "调整字体", "settings.proxyKeyboard": "代理与键盘", "settings.proxyReady": "代理就绪", "settings.officialWebPlayers": "官方网页播放器", "settings.exploreHelp": "会自动保存。播放器打不开时，切换代理后重试。", "settings.enterProxyUrl": "输入完整代理 URL", "settings.nightBrightness": "夜间亮度 {percent}%", "settings.nasStatus": "NAS 状态",
   "library.localShort": "{count} 本地", "library.nasShort": "{count} NAS", "library.usbShort": "{count} USB", "library.savedShort": "{count} 已保存", "library.newShort": "{count} 新增", "library.localStorage": "本地空间：剩余 {free}", "library.localStorageUnavailable": "本地空间不可用",
@@ -461,6 +606,26 @@ export function localeFromValue(value: unknown): UiLocale {
   return languageOptions.some((option) => option.locale === candidate) ? candidate as UiLocale : "en";
 }
 
+function normalizePreferences(value: UiPreferences): UiPreferences {
+  const locale = localeFromValue(value?.locale);
+  const fontTheme = String(value?.fontTheme ?? "").trim() as FontTheme;
+  const minutes = Number(value?.displaySleepMinutes);
+  const rawStyle = String(value?.displaySleepStyle ?? "").trim().toLowerCase().replaceAll("-", "_");
+  const style = (rawStyle === "blank" || rawStyle === "dim_waves" ? "meteor_shower" : rawStyle === "dvd" || rawStyle === "dvd_bounce" ? "signal" : rawStyle) as DisplaySleepStyle;
+  return {
+    locale,
+    inputMethodId: localeInputMethods[locale],
+    fontTheme: fontThemeOptions.includes(fontTheme) ? fontTheme : defaultPreferences.fontTheme,
+    displaySleepEnabled: value?.displaySleepEnabled === undefined ? true : value.displaySleepEnabled !== false,
+    displaySleepMinutes: displaySleepMinuteOptions.includes(minutes as typeof displaySleepMinuteOptions[number])
+      ? minutes as typeof displaySleepMinuteOptions[number]
+      : defaultPreferences.displaySleepMinutes,
+    displaySleepStyle: displaySleepStyleOptions.includes(style) ? style : defaultPreferences.displaySleepStyle,
+    updatedAt: typeof value?.updatedAt === "string" ? value.updatedAt : null,
+    warning: value?.warning ?? null
+  };
+}
+
 interface I18nContextValue {
   locale: UiLocale;
   preferences: UiPreferences;
@@ -468,6 +633,7 @@ interface I18nContextValue {
   error: string | null;
   t: (key: string, params?: TranslationParams) => string;
   setLocale: (locale: UiLocale) => Promise<UiPreferences>;
+  setDisplaySleepPreferences: (patch: Partial<Pick<UiPreferences, "displaySleepEnabled" | "displaySleepMinutes" | "displaySleepStyle">>) => Promise<UiPreferences>;
   refreshPreferences: () => Promise<UiPreferences | null>;
   sourceLabel: (sourceId: SourceState | string, fallback?: string | null) => string;
   roomLabel: (mode: RoomMode) => string;
@@ -487,7 +653,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
 
   const refreshPreferences = useCallback(async () => {
     try {
-      const next = await fetchPreferences();
+      const next = normalizePreferences(await fetchPreferences());
       setPreferences(next);
       setError(null);
       return next;
@@ -519,12 +685,32 @@ export function I18nProvider({ children }: { children: ReactNode }) {
       warning: null
     }));
     try {
-      const next = await updatePreferences({ locale: normalized });
+      const next = normalizePreferences(await updatePreferences({ locale: normalized }));
       setPreferences(next);
       return next;
     } catch (caught) {
       await refreshPreferences();
       const message = caught instanceof Error ? caught.message : "Language did not save";
+      setError(message);
+      throw caught;
+    } finally {
+      setPending(false);
+    }
+  }, [refreshPreferences]);
+
+  const setDisplaySleepPreferences = useCallback(async (
+    patch: Partial<Pick<UiPreferences, "displaySleepEnabled" | "displaySleepMinutes" | "displaySleepStyle">>
+  ) => {
+    setPending(true);
+    setError(null);
+    setPreferences((current) => ({ ...current, ...patch, warning: null }));
+    try {
+      const next = normalizePreferences(await updatePreferences(patch));
+      setPreferences(next);
+      return next;
+    } catch (caught) {
+      await refreshPreferences();
+      const message = caught instanceof Error ? caught.message : "Display preference did not save";
       setError(message);
       throw caught;
     } finally {
@@ -578,6 +764,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
       error,
       t,
       setLocale,
+      setDisplaySleepPreferences,
       refreshPreferences,
       sourceLabel,
       roomLabel,
@@ -586,7 +773,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
       playbackStateLabel,
       friendlyError
     };
-  }, [error, locale, pending, preferences, refreshPreferences, setLocale]);
+  }, [error, locale, pending, preferences, refreshPreferences, setDisplaySleepPreferences, setLocale]);
 
   return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;
 }

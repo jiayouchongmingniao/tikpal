@@ -8,16 +8,25 @@ export type HifiEqPresetId = "flat" | "warm" | "vocal";
 export type HifiVisualPresetId = "spectrum-bars" | "waveform" | "dual-vu";
 export type UiLocale = "en" | "zh-CN" | "de" | "it" | "ko" | "ja" | "es";
 export type UiInputMethodId = "keyboard-us" | "pinyin" | "keyboard-de" | "keyboard-it" | "hangul" | "anthy" | "keyboard-es";
+export type DisplaySleepStyle = "meteor_shower" | "clock" | "now_playing" | "starfield" | "signal";
 
 export interface UiPreferences {
   locale: UiLocale;
   inputMethodId: UiInputMethodId;
+  fontTheme: FontTheme;
+  displaySleepEnabled: boolean;
+  displaySleepMinutes: 5 | 10 | 15 | 30 | 60;
+  displaySleepStyle: DisplaySleepStyle;
   updatedAt: string | null;
   warning?: string | null;
 }
 
 export interface UiPreferencesPatch {
-  locale: UiLocale;
+  locale?: UiLocale;
+  fontTheme?: FontTheme;
+  displaySleepEnabled?: boolean;
+  displaySleepMinutes?: 5 | 10 | 15 | 30 | 60;
+  displaySleepStyle?: DisplaySleepStyle;
 }
 
 export type PlaybackState = "playing" | "paused" | "stopped";

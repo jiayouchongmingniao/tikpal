@@ -1,11 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { AppMode } from "../types";
 
-const SETTINGS_IDLE_MS = 30000;
 const HUD_AUTO_HIDE_MS = 5000;
 
-function getIdleTotalMs(mode: AppMode): number | null {
-  if (mode === "quickSettings") return SETTINGS_IDLE_MS;
+function getIdleTotalMs(_mode: AppMode): number | null {
   return null;
 }
 

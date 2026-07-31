@@ -341,8 +341,10 @@ apply_x_safety() {
   command -v xset >/dev/null 2>&1 || return 0
   run_optional xset s off
   run_optional xset s noblank
-  run_optional xset -dpms
   run_optional xset dpms force on
+  # On this Gentoo/Xorg path, `dpms force on` also re-enables DPMS timers.
+  # Keep `-dpms` last so soft-kick wakes the panel without restoring 10m sleep.
+  run_optional xset -dpms
 }
 
 apply_xrandr_properties() {

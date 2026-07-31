@@ -296,7 +296,15 @@ const UI_LOCALE_INPUT_METHODS = {
 };
 const UI_LOCALES = new Set(Object.keys(UI_LOCALE_INPUT_METHODS));
 const UI_INPUT_METHOD_SYNC_COMMAND = process.env.TIKPAL_UI_INPUT_METHOD_SYNC_COMMAND
-  ?? (API_MODE === "mpc" ? "if [ -f /usr/share/onboard/scripts/tikpalImeToggle.py ]; then python3 /usr/share/onboard/scripts/tikpalImeToggle.py --set-mode %INPUT_METHOD%; fi" : "");
+  ?? (API_MODE === "mpc" ? "if [ -f /usr/share/onboard/scripts/tikpalImeToggle.py ]; then TIKPAL_APP_DIR=%APP_DIR% python3 /usr/share/onboard/scripts/tikpalImeToggle.py --set-mode %INPUT_METHOD%; fi" : "");
+const UI_KEYBOARD_VISUAL_SYNC_COMMAND = process.env.TIKPAL_UI_KEYBOARD_VISUAL_SYNC_COMMAND
+  ?? (API_MODE === "mpc" ? "if [ -f /usr/share/onboard/scripts/tikpalImeToggle.py ]; then TIKPAL_APP_DIR=%APP_DIR% python3 /usr/share/onboard/scripts/tikpalImeToggle.py --sync; fi" : "");
+const FONT_THEMES = new Set(["system", "hardware", "precision", "sans", "serif", "mono"]);
+const DEFAULT_FONT_THEME = "system";
+const DISPLAY_SLEEP_MINUTES = [5, 10, 15, 30, 60];
+const DEFAULT_DISPLAY_SLEEP_MINUTES = 10;
+const DISPLAY_SLEEP_STYLES = new Set(["meteor_shower", "clock", "now_playing", "starfield", "signal"]);
+const DEFAULT_DISPLAY_SLEEP_STYLE = "meteor_shower";
 const LOCAL_LIBRARY_COVER_COLUMNS = ["cover_relative_path", "cover_path", "album_art_relative_path", "artwork_relative_path"];
 const LOCAL_LIBRARY_COVER_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp"];
 const USB_LIBRARY_AUDIO_EXTENSIONS = new Set([".aac", ".aif", ".aiff", ".alac", ".flac", ".m4a", ".mp3", ".ogg", ".opus", ".wav", ".wma"]);
@@ -4262,18 +4270,44 @@ function normalizeUiLocale(value) {
   return null;
 }
 
-function buildUiPreferences(locale = "en", updatedAt = null, warning = null) {
+function normalizeDisplaySleepMinutes(value, fallback = DEFAULT_DISPLAY_SLEEP_MINUTES) {
+  const numeric = Number(String(value ?? "").trim());
+  return DISPLAY_SLEEP_MINUTES.includes(numeric) ? numeric : fallback;
+}
+
+function normalizeDisplaySleepStyle(value, fallback = DEFAULT_DISPLAY_SLEEP_STYLE) {
+  const normalized = String(value ?? "").trim().toLowerCase().replaceAll("-", "_");
+  const migrated = normalized === "blank" || normalized === "dim_waves" ? "meteor_shower" : normalized === "dvd" || normalized === "dvd_bounce" ? "signal" : normalized;
+  return DISPLAY_SLEEP_STYLES.has(migrated) ? migrated : fallback;
+}
+
+function normalizeFontTheme(value, fallback = DEFAULT_FONT_THEME) {
+  const normalized = String(value ?? "").trim().toLowerCase().replaceAll("-", "_");
+  return FONT_THEMES.has(normalized) ? normalized : fallback;
+}
+
+function buildUiPreferences(locale = "en", updatedAt = null, warning = null, displaySleep = {}, fontTheme = DEFAULT_FONT_THEME) {
   const normalizedLocale = normalizeUiLocale(locale) ?? "en";
+  const displaySleepMinutes = normalizeDisplaySleepMinutes(displaySleep?.displaySleepMinutes);
+  const displaySleepStyle = normalizeDisplaySleepStyle(displaySleep?.displaySleepStyle);
   return {
     locale: normalizedLocale,
     inputMethodId: UI_LOCALE_INPUT_METHODS[normalizedLocale] ?? "keyboard-us",
+    fontTheme: normalizeFontTheme(fontTheme),
+    displaySleepEnabled: displaySleep?.displaySleepEnabled === undefined ? true : displaySleep.displaySleepEnabled !== false,
+    displaySleepMinutes,
+    displaySleepStyle,
     updatedAt,
     warning
   };
 }
 
 function normalizeUiPreferencesState(raw = {}) {
-  return buildUiPreferences(raw?.locale, typeof raw?.updatedAt === "string" ? raw.updatedAt : null, null);
+  return buildUiPreferences(raw?.locale, typeof raw?.updatedAt === "string" ? raw.updatedAt : null, null, {
+    displaySleepEnabled: raw?.displaySleepEnabled,
+    displaySleepMinutes: raw?.displaySleepMinutes,
+    displaySleepStyle: raw?.displaySleepStyle
+  }, raw?.fontTheme);
 }
 
 async function readUiPreferences() {
@@ -4287,7 +4321,9 @@ async function readUiPreferences() {
 function expandUiInputMethodSyncCommand(command, preferences) {
   return command
     .replaceAll("%LOCALE%", shellQuote(preferences.locale))
-    .replaceAll("%INPUT_METHOD%", shellQuote(preferences.inputMethodId));
+    .replaceAll("%INPUT_METHOD%", shellQuote(preferences.inputMethodId))
+    .replaceAll("%FONT_THEME%", shellQuote(preferences.fontTheme ?? DEFAULT_FONT_THEME))
+    .replaceAll("%APP_DIR%", shellQuote(process.cwd()));
 }
 
 async function syncUiInputMethod(preferences) {
@@ -4305,15 +4341,63 @@ async function syncUiInputMethod(preferences) {
   }
 }
 
+async function syncUiKeyboardVisual(preferences) {
+  if (!UI_KEYBOARD_VISUAL_SYNC_COMMAND.trim()) return null;
+  try {
+    await runCommand(expandUiInputMethodSyncCommand(UI_KEYBOARD_VISUAL_SYNC_COMMAND, preferences), {
+      allowFailure: false,
+      timeout: 2500
+    });
+    return null;
+  } catch (error) {
+    const warning = error instanceof Error ? error.message : "Keyboard visual sync failed";
+    console.warn(`tikpal-api keyboard visual sync failed: ${warning}`);
+    return warning;
+  }
+}
+
 async function writeUiPreferences(patch, options = {}) {
-  const locale = normalizeUiLocale(patch?.locale);
+  const current = await readUiPreferences();
+  const hasLocalePatch = Object.prototype.hasOwnProperty.call(patch ?? {}, "locale");
+  const locale = hasLocalePatch ? normalizeUiLocale(patch?.locale) : current.locale;
   if (!locale) {
     throw new Error("Language must be en, zh-CN, de, it, ko, ja, or es");
   }
-  const next = buildUiPreferences(locale, new Date().toISOString(), null);
+  const hasDisplaySleepMinutesPatch = Object.prototype.hasOwnProperty.call(patch ?? {}, "displaySleepMinutes");
+  const displaySleepMinutes = hasDisplaySleepMinutesPatch
+    ? normalizeDisplaySleepMinutes(patch.displaySleepMinutes, null)
+    : current.displaySleepMinutes;
+  if (!DISPLAY_SLEEP_MINUTES.includes(displaySleepMinutes)) {
+    throw new Error("Screen sleep time must be 5, 10, 15, 30, or 60 minutes");
+  }
+  const hasDisplaySleepStylePatch = Object.prototype.hasOwnProperty.call(patch ?? {}, "displaySleepStyle");
+  const displaySleepStyle = hasDisplaySleepStylePatch
+    ? normalizeDisplaySleepStyle(patch.displaySleepStyle, null)
+    : current.displaySleepStyle;
+  if (!DISPLAY_SLEEP_STYLES.has(displaySleepStyle)) {
+    throw new Error("Screen sleep style must be meteor_shower, clock, now_playing, starfield, or signal");
+  }
+  const hasFontThemePatch = Object.prototype.hasOwnProperty.call(patch ?? {}, "fontTheme");
+  const fontTheme = hasFontThemePatch ? normalizeFontTheme(patch.fontTheme, null) : current.fontTheme;
+  if (!FONT_THEMES.has(fontTheme)) {
+    throw new Error("Font theme must be system, hardware, precision, sans, serif, or mono");
+  }
+  const next = buildUiPreferences(locale, new Date().toISOString(), null, {
+    displaySleepEnabled: Object.prototype.hasOwnProperty.call(patch ?? {}, "displaySleepEnabled")
+      ? patch.displaySleepEnabled !== false
+      : current.displaySleepEnabled,
+    displaySleepMinutes,
+    displaySleepStyle
+  }, fontTheme);
   await mkdir(dirname(UI_PREFERENCES_STATE_PATH), { recursive: true });
   await writeFile(UI_PREFERENCES_STATE_PATH, `${JSON.stringify(next, null, 2)}\n`);
-  const warning = options.syncInputMethod === false ? null : await syncUiInputMethod(next);
+  const shouldSyncInputMethod = options.syncInputMethod !== false && hasLocalePatch && next.inputMethodId !== current.inputMethodId;
+  const shouldSyncKeyboardVisual = options.syncInputMethod !== false && hasFontThemePatch;
+  const warning = shouldSyncInputMethod
+    ? await syncUiInputMethod(next)
+    : shouldSyncKeyboardVisual
+      ? await syncUiKeyboardVisual(next)
+      : null;
   return warning ? { ...next, warning } : next;
 }
 

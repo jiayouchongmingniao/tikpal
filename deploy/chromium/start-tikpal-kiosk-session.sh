@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 ENV_FILE="${TIKPAL_KIOSK_ENV_FILE:-$APP_DIR/.env.kiosk}"
+export TIKPAL_APP_DIR="${TIKPAL_APP_DIR:-$APP_DIR}"
 
 should_source_env_file() {
   local value
@@ -86,6 +87,35 @@ input_method_should_activate() {
   esac
 }
 
+fcitx_candidate_font() {
+  local preferred_family="Noto Sans CJK SC"
+  case "$1" in
+    anthy)
+      preferred_family="Noto Sans CJK JP"
+      ;;
+    hangul)
+      preferred_family="Noto Sans CJK KR"
+      ;;
+    pinyin)
+      preferred_family="Noto Sans CJK SC"
+      ;;
+  esac
+
+  if command -v fc-match >/dev/null 2>&1 &&
+    fc-match "$preferred_family" 2>/dev/null | grep -qi "Noto Sans CJK"; then
+    printf '%s 16\n' "$preferred_family"
+    return 0
+  fi
+
+  if command -v fc-match >/dev/null 2>&1 &&
+    fc-match "Source Han Sans CN" 2>/dev/null | grep -qi "Source Han"; then
+    printf 'Source Han Sans CN 16\n'
+    return 0
+  fi
+
+  printf 'WenQuanYi Zen Hei 16\n'
+}
+
 configure_fcitx5() {
   command -v fcitx5 >/dev/null 2>&1 || return 0
   local config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/fcitx5"
@@ -143,11 +173,8 @@ ShowFirstInputMethodInformation=False
 DefaultPageSize=5
 EOF
   mkdir -p "$config_dir/conf"
-  local candidate_font="Source Han Sans CN 16"
-  if command -v fc-match >/dev/null 2>&1 &&
-    fc-match "Noto Sans CJK SC" 2>/dev/null | grep -qi "Noto Sans CJK"; then
-    candidate_font="Noto Sans CJK SC 16"
-  fi
+  local candidate_font
+  candidate_font="$(fcitx_candidate_font "$default_im")"
   cat >"$config_dir/conf/classicui.conf" <<EOF
 Vertical Candidate List=False
 Font="$candidate_font"

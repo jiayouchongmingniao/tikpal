@@ -678,6 +678,11 @@ esac
       && serverSource.includes("/api/v1/nas/discover")
       && serverSource.includes("async function readNasAudioLibraryTracks")
       && serverSource.includes("async function mountNasSource")
+      && quickSettingsSource.includes("data-nas-detail-left")
+      && quickSettingsSource.includes("data-nas-detail-right")
+      && quickSettingsSource.includes("Saved NAS")
+      && quickSettingsSource.includes("Scan Results")
+      && quickSettingsSource.includes("Test first, then Save & Scan.")
       && nasMountScript.includes("mount -t cifs")
       && nasMountScript.includes("mount --bind")
       && serverSource.includes("function isNasLibraryTrackPath")
@@ -754,7 +759,7 @@ esac
   assert(kioskSession.includes("read_preferred_input_method") && kioskSession.includes("DefaultIM=$default_im") && kioskSession.includes("Name=keyboard-us") && kioskSession.includes("Name=pinyin") && kioskSession.includes("Name=keyboard-de") && kioskSession.includes("Name=keyboard-it") && kioskSession.includes("Name=hangul") && kioskSession.includes("Name=anthy") && kioskSession.includes("Name=keyboard-es"), "kiosk session should seed English, Chinese, German, Italian, Korean, Japanese, and Spanish input methods");
   assert(kioskSession.includes("0=F9") && kioskSession.includes("1=Control+space"), "kiosk session should configure touch and hardware input-method toggles without opening Chromium DevTools");
   assert(kioskSession.includes("ActiveByDefault=False") && kioskSession.includes("ShareInputState=All"), "kiosk input should start inactive while sharing the selected method across provider windows");
-  assert(kioskSession.includes('candidate_font="Source Han Sans CN 16"') && kioskSession.includes('candidate_font="Noto Sans CJK SC 16"'), "Fcitx5 should render large CJK candidates with the best available kiosk font");
+  assert(kioskSession.includes("fcitx_candidate_font()") && kioskSession.includes("Noto Sans CJK SC") && kioskSession.includes("Noto Sans CJK JP") && kioskSession.includes("Noto Sans CJK KR") && kioskSession.includes("Source Han Sans CN 16"), "Fcitx5 should render large CJK candidates with the best available locale-aware kiosk font");
   assert(kioskSession.includes("fcitx5 -d --replace"), "kiosk session should start Fcitx5 before Chromium");
   assert(kioskSession.includes("TIKPAL_KIOSK_RESET_WEB_MODE_ON_START") && kioskSession.includes('"$SCRIPT_DIR/tikpal-web-mode.sh" close'), "kiosk session should close Explore and clear provider state before launching the main kiosk");
   assert(webModeScript.includes("nohup \"$SCRIPT_DIR/tikpal-web-mode.sh\" guard"), "web mode should keep the window guard alive after the launcher exits");
@@ -802,10 +807,28 @@ esac
   assert(webModeScript.includes("TIKPAL_WEB_MODE_QQ_MV_AUTO_PLAY:=1"), "web mode should enable conditional QQ MV auto play by default");
   assert(webModeScript.includes('TIKPAL_WEB_MODE_QQ_MV_AUTO_PLAY="$TIKPAL_WEB_MODE_QQ_MV_AUTO_PLAY"'), "web mode should pass the QQ MV auto-play switch to the provider guard");
   assert(serverSource.includes("/api/v1/preferences") && serverSource.includes("UI_LOCALE_INPUT_METHODS"), "API should expose persisted UI language preferences and input-method mapping");
+  assert(
+    serverSource.includes("FONT_THEMES")
+      && serverSource.includes("fontTheme")
+      && serverSource.includes("UI_KEYBOARD_VISUAL_SYNC_COMMAND")
+      && serverSource.includes("syncUiKeyboardVisual")
+      && serverSource.includes("hasFontThemePatch"),
+    "API should persist the selected font theme and sync Onboard keycap visuals"
+  );
+  assert(appSource.includes("updatePreferences({ fontTheme })"), "kiosk should sync the selected font theme to device preferences");
+  assert(serverSource.includes("DISPLAY_SLEEP_STYLES") && serverSource.includes("meteor_shower") && serverSource.includes("signal"), "API should persist the selected screen sleep saver style");
   assert(i18nSource.includes('UiLocale = "en" | "zh-CN" | "de" | "it" | "ko" | "ja" | "es"') || i18nSource.includes('"zh-CN"'), "kiosk i18n should include the seven supported UI locales");
   assert(quickSettingsSource.includes('data-settings-detail="language"') && quickSettingsSource.includes("languageOptions"), "Settings Preferences should expose the Language detail first");
+  assert(quickSettingsSource.includes("displaySleepStyleChoices") && quickSettingsSource.includes("settings.sleepStyle"), "Settings Display should expose compact screen saver style choices");
+  assert(quickSettingsSource.includes("onPreviewScreenSaver") && quickSettingsSource.includes("settings.previewSleepStyle"), "Settings Display should expose a screen saver preview button");
+  assert(!quickSettingsSource.includes("disabled={!sleepEnabled || preferencesPending}"), "Screen sleep style and time choices should remain editable while automatic sleep is off");
+  assert(appSource.includes("data-screen-saver-style") && appSource.includes("screen-saver-now-playing") && appSource.includes("screen-saver-meteor-shower") && appSource.includes("screen-saver-signal"), "soft screen sleep should render selectable classic screen saver overlays");
+  assert(appSource.includes("SCREEN_SAVER_PREVIEW_STYLES") && appSource.includes("data-screen-saver-preview"), "screen saver preview should cycle the available styles without changing preferences");
   assert(onboardImeToggleScript.includes("--set-locale") && onboardImeToggleScript.includes("--set-mode") && onboardImeToggleScript.includes('"ko": "hangul"'), "Onboard IME toggle should support locale and direct mode sync");
+  assert(onboardImeToggleScript.includes("key-label-font") && onboardImeToggleScript.includes("FONT_THEME_FAMILIES") && onboardImeToggleScript.includes("ui-preferences.json"), "Onboard keycaps should read Tikpal font preference and apply key-label-font");
   assert(kioskSession.includes("read_preferred_input_method") && kioskSession.includes("ui-preferences.json") && kioskSession.includes("fcitx5-remote -s \"$default_im\""), "kiosk session should default Fcitx from persisted UI preferences");
+  assert(kioskSession.includes('export TIKPAL_APP_DIR="${TIKPAL_APP_DIR:-$APP_DIR}"'), "kiosk session should expose the app dir so Onboard scripts can read UI preferences");
+  assert(webModeScript.includes('export TIKPAL_APP_DIR="${TIKPAL_APP_DIR:-$APP_DIR}"'), "web mode should expose the app dir so Onboard scripts can read UI preferences");
   assert(webModeErrorPage.includes("/api/v1/preferences") && webModeErrorPage.includes('"zh-CN"') && webModeErrorPage.includes("applyLocale"), "Explore error page should localize itself from device preferences");
   assert(webModeScript.includes('node --experimental-websocket "$helper"'), "web mode should enable the Node 20 WebSocket API for the provider guard");
   assert(webModeScript.includes('flock -x -w "$TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS"'), "web mode should not wait forever on provider switch locks");
@@ -874,6 +897,7 @@ esac
   assert(webModeScript.includes('"ime_theme": "TIKPAL-IME-INACTIVE"') && webModeScript.includes('"ime_theme": "TIKPAL-IME-ACTIVE"'), "Onboard should use separate theme ids for inactive and active IME visuals");
   assert(webModeScript.includes('"ime_label": "EN"') && webModeScript.includes('"ime_label": "中文"') && webModeScript.includes('"ime_label": "DE"') && webModeScript.includes('"ime_label": "IT"') && webModeScript.includes('"ime_label": "한국어"') && webModeScript.includes('"ime_label": "日本語"') && webModeScript.includes('"ime_label": "ES"'), "Onboard should label the input-method key for all configured modes");
   assert(webModeScript.includes('"SPCE": "空格"') && webModeScript.includes('"SPCE": "Leertaste"') && webModeScript.includes('"SPCE": "Spazio"') && webModeScript.includes('"SPCE": "스페이스"') && webModeScript.includes('"SPCE": "変換"') && webModeScript.includes('"SPCE": "Espacio"'), "Onboard should localize main action labels for Chinese, German, Italian, Korean, Japanese, and Spanish");
+  assert(webModeScript.includes('"RTRN": "↵"'), "Chinese Onboard return key should use a compact icon label instead of oversized text");
   assert(webModeScript.includes('"AE11": "ß ?"') && webModeScript.includes('"AD11": "Ü"') && webModeScript.includes('"AC10": "Ö"') && webModeScript.includes('"AC11": "Ä"'), "Onboard should show visible German keycap differences");
   assert(webModeScript.includes('"AE12": "ì ^"') && webModeScript.includes('"AD11": "è é"') && webModeScript.includes('"AC10": "ò ç"') && webModeScript.includes('"BKSL": "ù §"'), "Onboard should show visible Italian keycap differences");
   assert(webModeScript.includes('"AD01": "ㅂ"') && webModeScript.includes('"AC03": "ㅇ"') && webModeScript.includes('"AB07": "ㅡ"'), "Onboard should show Korean 2-beolsik keycap hints");

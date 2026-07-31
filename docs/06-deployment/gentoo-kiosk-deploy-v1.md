@@ -117,6 +117,30 @@ If the kernel refuses a runtime ASPM policy write, the helper logs it as optiona
 
 On this GTX 750 host, avoid periodic physical `xrandr --query` probing from the watchdog. Repeated probing can trigger Nouveau DDC reads against the unused `DVI-I-1` connector (`DDC responded, but no EDID for DVI-I-1`) on roughly the watchdog cadence. Because this panel can be black while RandR still reports healthy, that periodic probe adds risk without giving a reliable visual signal. Keep `TIKPAL_KIOSK_PHYSICAL_DISPLAY_CHECK_ENABLED=0` and use the recovery helper manually or from an explicit service when the screen is visibly black.
 
+## Screen Sleep
+
+Tikpal's user-facing Screen Sleep is a soft screen saver, not X11 DPMS power-off. This is intentional for sold kiosk devices that may not ship with a keyboard: the first touch wakes the screen saver and is swallowed, so it does not activate the control underneath.
+
+Preferences are stored in `.tikpal/ui-preferences.json`:
+
+| Preference | Values | Default |
+| --- | --- | --- |
+| `displaySleepEnabled` | `true` / `false` | `true` |
+| `displaySleepMinutes` | `5`, `10`, `15`, `30`, `60` | `10` |
+| `displaySleepStyle` | `meteor_shower`, `clock`, `now_playing`, `starfield`, `signal` | `meteor_shower` |
+
+The selectable styles are intentionally classic and low-risk:
+
+- `meteor_shower`: low-brightness meteor streaks for a living dark screen without looking like a panel fault.
+- `clock`: date and clock.
+- `now_playing`: current track, artwork, and progress.
+- `starfield`: subtle classic starfield animation.
+- `signal`: slow music-signal bars with a subdued grid.
+
+Legacy `blank` / `dim_waves` preferences migrate to `meteor_shower`; legacy `dvd` / `dvd_bounce` preferences migrate to `signal`.
+
+Keep `tikpal-physical-display-prepare` disabling DPMS after every soft-kick. Do not expose DPMS/deep power-off as the normal Screen Sleep mode unless touch wake has been revalidated on the target hardware.
+
 ## Audio Services
 
 The Gentoo audio base uses ALSA direct output to the BT66 USB DAC. The validated `_audioout` route points at BT66, and Chromium provider audio uses the shareable `tikpal_bt66_dmix` device.
@@ -230,15 +254,60 @@ Chinese and Japanese keep QWERTY letter keys because users type pinyin and romaj
 
 On Gentoo, Korean input needs `app-i18n/fcitx-hangul` in addition to the existing `app-i18n/fcitx`, `app-i18n/fcitx-chinese-addons`, `app-i18n/fcitx-anthy`, `app-i18n/fcitx-gtk`, and `app-i18n/fcitx-qt` packages. German, Italian, and Spanish are Fcitx keyboard layouts and do not need extra candidate engines.
 
-Candidate fonts should prefer `Noto Sans CJK SC 16` when Noto CJK is installed, otherwise `Source Han Sans CN 16`. The regular UI font stack should have CJK coverage so Chromium does not fall back to Liberation for Chinese.
+Install and verify the multilingual UI font set before judging Chromium rendering:
 
-Tikpal UI language is a device preference, not a browser-only setting. The backend stores it in:
+```bash
+emerge --ask=n media-fonts/noto-cjk media-fonts/noto-emoji media-fonts/source-han-sans media-fonts/wqy-zenhei media-fonts/inter media-fonts/roboto media-fonts/fira-sans media-fonts/nanum
+fc-cache -fv
+fc-match 'sans:lang=zh-cn'
+fc-match 'sans:lang=ja'
+fc-match 'sans:lang=ko'
+fc-match 'serif:lang=zh-cn'
+fc-match 'monospace:lang=zh-cn'
+```
+
+Tikpal's Settings -> Font presets are intentionally curated rather than a full system-font browser:
+
+| Preset | Primary intent |
+| --- | --- |
+| System Neo | Inter plus Noto CJK fallback for the regular device UI. |
+| CJK Sans | Noto Sans CJK SC / JP / KR for Chinese, Japanese, and Korean UI. |
+| Source Han | Source Han Sans CN first, useful when Simplified Chinese is the dominant language. |
+| Editorial CJK | Noto Serif CJK for lyric walls and warmer reading surfaces. |
+| Modern Sans | Inter / Roboto / Fira Sans for Latin-language UI, with CJK fallback. |
+| Mono Grid | Noto Sans Mono CJK plus mono fallbacks for technical-looking surfaces. |
+
+Candidate fonts follow the active input mode: Chinese uses `Noto Sans CJK SC 16`, Japanese uses `Noto Sans CJK JP 16`, Korean uses `Noto Sans CJK KR 16`, and all fall back to `Source Han Sans CN 16` or `WenQuanYi Zen Hei 16`. The regular UI font stack must keep CJK coverage so Chromium does not fall back to Liberation for Chinese.
+
+Onboard keycap labels should follow Settings -> Font. The kiosk writes the active `fontTheme` into `.tikpal/ui-preferences.json`; the API persists it through `/api/v1/preferences`, and `tikpalImeToggle.py` reads that file before setting Onboard's `org.onboard.theme-settings key-label-font`. Language changes still use `--set-mode` / `--set-locale`; font-only changes use the lighter `--sync` path so the user does not lose a temporary input-method choice.
+
+The default API hooks on Gentoo are:
+
+```conf
+TIKPAL_UI_INPUT_METHOD_SYNC_COMMAND='if [ -f /usr/share/onboard/scripts/tikpalImeToggle.py ]; then TIKPAL_APP_DIR=%APP_DIR% python3 /usr/share/onboard/scripts/tikpalImeToggle.py --set-mode %INPUT_METHOD%; fi'
+TIKPAL_UI_KEYBOARD_VISUAL_SYNC_COMMAND='if [ -f /usr/share/onboard/scripts/tikpalImeToggle.py ]; then TIKPAL_APP_DIR=%APP_DIR% python3 /usr/share/onboard/scripts/tikpalImeToggle.py --sync; fi'
+```
+
+Expected keycap font examples:
+
+| Font preset | Typical Onboard `key-label-font` |
+| --- | --- |
+| System Neo | `Inter 12` |
+| CJK Sans | `Noto Sans CJK SC 12` |
+| Source Han | `Source Han Sans CN 12` |
+| Editorial CJK | `Noto Serif CJK SC 12` |
+| Modern Sans | `Inter 12`, `Roboto 12`, or `Fira Sans 12` depending on installed packages. |
+| Mono Grid | `Noto Sans Mono CJK SC 11` |
+
+Third-party fonts such as MiSans, HarmonyOS Sans, or LXGW WenKai are optional drop-ins. Place `.ttf` / `.otf` files under `/usr/local/share/fonts/tikpal/`, run `fc-cache -fv`, verify with `fc-match`, and only then add the family to Tikpal's font stack.
+
+Tikpal UI language and font choice are device preferences, not browser-only settings. The backend stores them in:
 
 ```bash
 /home/moode/code/tikpal/.tikpal/ui-preferences.json
 ```
 
-The supported locales are `en`, `zh-CN`, `de`, `it`, `ko`, `ja`, and `es`. The kiosk, Explore side panel, portable Remote, and Tikpal-owned Explore error page read the same preference through `GET /api/v1/preferences`; only the local kiosk should write it through `PATCH /api/v1/preferences`. `GET /api/v1/system/state`, `/api/v1/remote/state`, and `/api/v1/web-mode/state` also include `preferences` so surfaces can stay in sync after polling.
+The supported locales are `en`, `zh-CN`, `de`, `it`, `ko`, `ja`, and `es`. The supported font themes are `system`, `hardware`, `precision`, `sans`, `serif`, and `mono`. The kiosk, Explore side panel, portable Remote, and Tikpal-owned Explore error page read the same preference through `GET /api/v1/preferences`; only the local kiosk should write it through `PATCH /api/v1/preferences`. `GET /api/v1/system/state`, `/api/v1/remote/state`, and `/api/v1/web-mode/state` also include `preferences` so surfaces can stay in sync after polling.
 
 Changing Settings -> Preferences -> Language also selects the matching default input method:
 
@@ -545,9 +614,10 @@ Input checks:
 pgrep -af fcitx5
 su - moode -c 'DISPLAY=:0 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus fcitx5-remote -n'
 gsettings get org.onboard layout
+sudo -u moode -H env DISPLAY=:0 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus gsettings get org.onboard.theme-settings key-label-font
 ```
 
-Touch a provider search field and confirm Onboard appears above the provider, cycles through EN / Chinese / German / Italian / Korean / Japanese / ES, shows a larger CJK candidate window, and hides after outside tap, submit, or single-line Enter.
+Touch a provider search field and confirm Onboard appears above the provider, cycles through EN / Chinese / German / Italian / Korean / Japanese / ES, shows a larger CJK candidate window, and hides after outside tap, submit, or single-line Enter. Change Settings -> Font once and confirm `key-label-font` changes without resetting the current Fcitx mode.
 
 Audio checks:
 

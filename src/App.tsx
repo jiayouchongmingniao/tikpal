@@ -9,8 +9,9 @@ import { useBrowserKioskGuard } from "./hooks/useBrowserKioskGuard";
 import { useKioskGestures } from "./hooks/useKioskGestures";
 import { useRoomExperience } from "./hooks/useRoomExperience";
 import { useTikpalState } from "./hooks/useTikpalState";
-import { fetchRoomExperienceState, fetchWebModeState, sendKioskHeartbeat, sendWebModeAction } from "./api/tikpalClient";
-import type { AppMode, BackgroundVideoSummary, FontTheme, LyricsFontSize, RememberedAudioSource, RoomExperienceActionRequest, RoomExperienceState, RoomMode, SourceSwitchTarget, SurfaceTheme, TikpalState } from "./types";
+import { fetchRoomExperienceState, fetchWebModeState, sendKioskHeartbeat, sendWebModeAction, updatePreferences } from "./api/tikpalClient";
+import { useI18n } from "./i18n";
+import type { AppMode, BackgroundVideoSummary, DisplaySleepStyle, FontTheme, LyricsFontSize, RememberedAudioSource, RoomExperienceActionRequest, RoomExperienceState, RoomMode, SourceSwitchTarget, SurfaceTheme, TikpalState } from "./types";
 
 const FONT_THEME_STORAGE_KEY = "tikpal.fontTheme";
 const SURFACE_THEME_STORAGE_KEY = "tikpal.surfaceTheme";
@@ -28,9 +29,15 @@ const EXTERNAL_HANDOFF_TIMEOUT_MS = 60_000;
 const EXTERNAL_HANDOFF_POLL_MS = 1_000;
 const KIOSK_HEARTBEAT_MS = 10_000;
 const EVENT_LOOP_LAG_SAMPLE_MS = 1_000;
+const DISPLAY_SLEEP_CHECK_MS = 5_000;
+const SCREEN_SAVER_PREVIEW_INTERVAL_MS = 8_000;
 const SOURCE_SWITCH_TARGETS = new Set<SourceSwitchTarget>(["mpd", "audio", "scene", "radio", "spotify", "bluetooth", "airplay", "upnp"]);
 const EXTERNAL_HANDOFF_TARGETS = new Set<SourceSwitchTarget>(["spotify", "bluetooth", "airplay", "upnp"]);
 const VISIBLE_LISTENING_SOURCE_TARGETS = new Set<SourceSwitchTarget>(["mpd", "radio", "spotify", "bluetooth", "airplay", "upnp"]);
+const SCREEN_SAVER_STAR_COUNT = 32;
+const SCREEN_SAVER_METEOR_COUNT = 18;
+const SCREEN_SAVER_SIGNAL_COUNT = 22;
+const SCREEN_SAVER_PREVIEW_STYLES: DisplaySleepStyle[] = ["clock", "now_playing", "starfield", "meteor_shower", "signal"];
 
 const DEFAULT_SCENE_VIDEO: BackgroundVideoSummary = {
   id: "scene-empty",
@@ -120,6 +127,14 @@ function normalizeRestorePercent(value: number, fallback: number) {
 
 function delay(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function formatScreenSaverDuration(seconds: number | null | undefined) {
+  if (!Number.isFinite(seconds) || (seconds ?? 0) <= 0) return "--:--";
+  const safeSeconds = Math.max(0, Math.floor(seconds ?? 0));
+  const minutes = Math.floor(safeSeconds / 60);
+  const remainder = safeSeconds % 60;
+  return `${minutes}:${String(remainder).padStart(2, "0")}`;
 }
 
 function isSourceSwitchTarget(sourceId: string): sourceId is SourceSwitchTarget {
@@ -282,6 +297,7 @@ export default function App() {
   const [clockVisible, setClockVisible] = useState(() => readStoredBoolean(CLOCK_VISIBLE_STORAGE_KEY, true));
   const [sceneSoundPending, setSceneSoundPending] = useState(false);
   const [screenOffActive, setScreenOffActive] = useState(false);
+  const [screenSaverPreviewIndex, setScreenSaverPreviewIndex] = useState<number | null>(null);
   const [systemSleepActive, setSystemSleepActive] = useState(false);
   const [ambientSourcePickerRequest, setAmbientSourcePickerRequest] = useState(0);
   const [ambientSourcePickerOpen, setAmbientSourcePickerOpen] = useState(false);
@@ -301,11 +317,90 @@ export default function App() {
   const systemSleepVolumeRestoreRef = useRef<number | null>(null);
   const systemSleepEntryTaskRef = useRef<Promise<void> | null>(null);
   const systemSleepWakePendingRef = useRef(false);
+  const screenOffActiveRef = useRef(false);
+  const screenOffSourceRef = useRef<"manual" | "idle" | null>(null);
+  const displaySleepLastActivityRef = useRef(Date.now());
   const { mode, hudVisible, idleTotalMs, idleRemainingMs, showHud, toggleHud, changeMode, returnAmbient, resetIdleTimer } = useAppMode(readInitialMode());
   const { state: tikpalState, status: tikpalStatus, refresh, sendPlaybackAction, sendSystemAction, sendSourceSwitch } = useTikpalState();
   const { experience: roomExperience, status: roomExperienceStatus, refresh: refreshRoomExperience, sendExperienceAction } = useRoomExperience();
+  const { preferences, t } = useI18n();
 
   useBrowserKioskGuard();
+
+  const registerDisplayActivity = useCallback((nextMode: AppMode = mode) => {
+    displaySleepLastActivityRef.current = Date.now();
+    resetIdleTimer(nextMode);
+  }, [mode, resetIdleTimer]);
+
+  const enterSoftScreenOff = useCallback((source: "manual" | "idle") => {
+    screenOffSourceRef.current = source;
+    setScreenOffActive(true);
+  }, []);
+
+  const wakeSoftScreen = useCallback(() => {
+    screenOffSourceRef.current = null;
+    displaySleepLastActivityRef.current = Date.now();
+    resetIdleTimer(mode);
+    setScreenOffActive(false);
+  }, [mode, resetIdleTimer]);
+
+  const stopScreenSaverPreview = useCallback(() => {
+    displaySleepLastActivityRef.current = Date.now();
+    resetIdleTimer(mode);
+    setScreenSaverPreviewIndex(null);
+  }, [mode, resetIdleTimer]);
+
+  const startScreenSaverPreview = useCallback(() => {
+    screenOffSourceRef.current = null;
+    displaySleepLastActivityRef.current = Date.now();
+    resetIdleTimer(mode);
+    setScreenOffActive(false);
+    setScreenSaverPreviewIndex(0);
+  }, [mode, resetIdleTimer]);
+
+  useEffect(() => {
+    screenOffActiveRef.current = screenOffActive;
+  }, [screenOffActive]);
+
+  useEffect(() => {
+    if (preferences.displaySleepEnabled) return;
+    if (screenOffSourceRef.current === "idle") {
+      screenOffSourceRef.current = null;
+      setScreenOffActive(false);
+    }
+  }, [preferences.displaySleepEnabled]);
+
+  useEffect(() => {
+    const recordActivity = () => {
+      if (screenOffActiveRef.current) return;
+      displaySleepLastActivityRef.current = Date.now();
+    };
+    const activityEvents = ["pointerdown", "pointermove", "wheel", "keydown", "touchstart", "input", "focusin"] as const;
+    activityEvents.forEach((eventName) => window.addEventListener(eventName, recordActivity, { passive: true }));
+    return () => activityEvents.forEach((eventName) => window.removeEventListener(eventName, recordActivity));
+  }, []);
+
+  useEffect(() => {
+    if (!preferences.displaySleepEnabled || systemSleepActive || screenSaverPreviewIndex !== null) return;
+    const interval = window.setInterval(() => {
+      if (screenOffActiveRef.current || screenOffSourceRef.current) return;
+      const timeoutMs = Math.max(1, preferences.displaySleepMinutes) * 60_000;
+      if (Date.now() - displaySleepLastActivityRef.current >= timeoutMs) {
+        enterSoftScreenOff("idle");
+      }
+    }, DISPLAY_SLEEP_CHECK_MS);
+    return () => window.clearInterval(interval);
+  }, [enterSoftScreenOff, preferences.displaySleepEnabled, preferences.displaySleepMinutes, screenSaverPreviewIndex, systemSleepActive]);
+
+  useEffect(() => {
+    if (screenSaverPreviewIndex === null) return undefined;
+    displaySleepLastActivityRef.current = Date.now();
+    const interval = window.setInterval(() => {
+      displaySleepLastActivityRef.current = Date.now();
+      setScreenSaverPreviewIndex((index) => index === null ? null : (index + 1) % SCREEN_SAVER_PREVIEW_STYLES.length);
+    }, SCREEN_SAVER_PREVIEW_INTERVAL_MS);
+    return () => window.clearInterval(interval);
+  }, [screenSaverPreviewIndex]);
 
   useEffect(() => {
     roomExperienceRef.current = roomExperience;
@@ -458,6 +553,9 @@ export default function App() {
   useEffect(() => {
     document.documentElement.dataset.fontTheme = fontTheme;
     window.localStorage.setItem(FONT_THEME_STORAGE_KEY, fontTheme);
+    updatePreferences({ fontTheme }).catch(() => {
+      // The kiosk can keep rendering with localStorage; the API sync only keeps external helpers aligned.
+    });
   }, [fontTheme]);
 
   useEffect(() => {
@@ -700,11 +798,16 @@ export default function App() {
   }, [refresh, sendPlaybackAction, tikpalState.system.volume.percent]);
 
   const handleQuickMenuScreenEnabledChange = useCallback((enabled: boolean) => {
-    setScreenOffActive(!enabled);
+    if (enabled) {
+      wakeSoftScreen();
+      return;
+    }
+
+    enterSoftScreenOff("manual");
     if (!enabled) {
       returnAmbient();
     }
-  }, [returnAmbient]);
+  }, [enterSoftScreenOff, returnAmbient, wakeSoftScreen]);
 
   const handleQuickMenuSleep = useCallback(() => {
     if (systemSleepActive || systemSleepEntryTaskRef.current) return;
@@ -814,6 +917,80 @@ export default function App() {
     toggleHud();
   }, [ambientSourcePickerOpen, mode, roomExperience.mode, showHud, toggleHud]);
 
+  function renderScreenSaverContent(style: DisplaySleepStyle) {
+    const playback = tikpalState.playback;
+    const title = playback.title?.trim() || t("playback.nothingPlaying");
+    const artist = playback.artist?.trim() || t("playback.unknownArtist");
+    const duration = playback.durationSeconds ?? 0;
+    const elapsed = playback.elapsedSeconds ?? 0;
+    const progress = duration > 0 ? Math.max(0, Math.min(1, elapsed / duration)) : 0;
+
+    if (style === "meteor_shower") {
+      return (
+        <div className="screen-saver-content screen-saver-meteor-shower" aria-hidden="true">
+          {Array.from({ length: SCREEN_SAVER_METEOR_COUNT }, (_, index) => (
+            <span key={index} className={`screen-saver-meteor meteor-${index + 1}`} />
+          ))}
+          <strong>Tikpal</strong>
+        </div>
+      );
+    }
+
+    if (style === "clock") {
+      return (
+        <div className="screen-saver-content screen-saver-clock" aria-hidden="true">
+          <span>{dateLabel}</span>
+          <strong>{timeLabel}</strong>
+        </div>
+      );
+    }
+
+    if (style === "now_playing") {
+      return (
+        <div className="screen-saver-content screen-saver-now-playing" aria-hidden="true">
+          <div className="screen-saver-art">
+            {playback.albumArtUrl ? <img src={playback.albumArtUrl} alt="" /> : <span>{title.slice(0, 1).toLocaleUpperCase()}</span>}
+          </div>
+          <div className="screen-saver-track">
+            <span>{tikpalState.audio.currentSource.label || t("source.library")}</span>
+            <strong>{title}</strong>
+            <em>{artist}</em>
+            <div className="screen-saver-progress">
+              <i style={{ width: `${progress * 100}%` }} />
+            </div>
+            <small>{formatScreenSaverDuration(elapsed)} / {formatScreenSaverDuration(duration)}</small>
+          </div>
+        </div>
+      );
+    }
+
+    if (style === "starfield") {
+      return (
+        <div className="screen-saver-content screen-saver-starfield" aria-hidden="true">
+          {Array.from({ length: SCREEN_SAVER_STAR_COUNT }, (_, index) => (
+            <span key={index} className={`screen-saver-star star-${index + 1}`} />
+          ))}
+          <strong>Tikpal</strong>
+        </div>
+      );
+    }
+
+    return (
+      <div className="screen-saver-content screen-saver-signal" aria-hidden="true">
+        <div className="screen-saver-signal-lines">
+          {Array.from({ length: SCREEN_SAVER_SIGNAL_COUNT }, (_, index) => (
+            <span key={index} className={`signal-${index + 1}`} />
+          ))}
+        </div>
+        <div className="screen-saver-signal-copy">
+          <span>{tikpalState.audio.currentSource.label || t("source.library")}</span>
+          <strong>Tikpal Signal</strong>
+          <em>{title}</em>
+        </div>
+      </div>
+    );
+  }
+
   const { gesturePreview, ...gestureHandlers } = useKioskGestures({
     mode,
     onOpenPlayer: () => changeMode("player"),
@@ -821,7 +998,7 @@ export default function App() {
     onOpenMenu: () => changeMode("quickMenu"),
     onReturnAmbient: returnAmbient,
     onToggleHud: handleAmbientTap,
-    onActivity: () => resetIdleTimer(mode)
+    onActivity: () => registerDisplayActivity(mode)
   });
 
   return (
@@ -897,6 +1074,7 @@ export default function App() {
         onExperienceAction={handleRoomExperienceAction}
         onOpenWebMode={handleOpenWebMode}
         onSystemAction={sendSystemAction}
+        onPreviewScreenSaver={startScreenSaverPreview}
         onReturnAmbient={returnAmbient}
       />
       <QuickMenu
@@ -913,18 +1091,32 @@ export default function App() {
         onClose={returnAmbient}
       />
 
-      {screenOffActive && !systemSleepActive ? (
+      {(screenOffActive || screenSaverPreviewIndex !== null) && !systemSleepActive ? (
         <button
-          className="screen-off-overlay"
+          className={`screen-off-overlay style-${screenSaverPreviewIndex === null ? preferences.displaySleepStyle : SCREEN_SAVER_PREVIEW_STYLES[screenSaverPreviewIndex]}`}
           type="button"
           data-gesture-protected
-          aria-label="Turn screen on"
-          onPointerDown={(event) => event.stopPropagation()}
-          onClick={(event) => {
+          data-screen-saver-style={screenSaverPreviewIndex === null ? preferences.displaySleepStyle : SCREEN_SAVER_PREVIEW_STYLES[screenSaverPreviewIndex]}
+          data-screen-saver-preview={screenSaverPreviewIndex === null ? undefined : "true"}
+          aria-label={screenSaverPreviewIndex === null ? t("quickMenu.turnScreenOn") : t("settings.stopSleepPreview")}
+          onPointerDown={(event) => {
+            event.preventDefault();
             event.stopPropagation();
-            setScreenOffActive(false);
+            if (screenSaverPreviewIndex === null) wakeSoftScreen();
+            else stopScreenSaverPreview();
           }}
-        />
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          }}
+        >
+          {screenSaverPreviewIndex === null ? null : (
+            <span className="screen-saver-preview-label">
+              {t(`settings.sleepStyle.${SCREEN_SAVER_PREVIEW_STYLES[screenSaverPreviewIndex]}`)}
+            </span>
+          )}
+          {renderScreenSaverContent(screenSaverPreviewIndex === null ? preferences.displaySleepStyle : SCREEN_SAVER_PREVIEW_STYLES[screenSaverPreviewIndex])}
+        </button>
       ) : null}
 
       {systemSleepActive ? (

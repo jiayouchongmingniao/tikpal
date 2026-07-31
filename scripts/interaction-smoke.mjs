@@ -4297,6 +4297,16 @@ try {
   );
   await expect(client, "document.querySelector('[data-settings-detail=\"nas\"]') !== null", "Console NAS drawer opens");
   await expect(client, "document.querySelector('.nas-source-detail') !== null", "Console NAS drawer shows source status");
+  await expect(client, "document.querySelector('[data-nas-detail-left]') !== null && document.querySelector('[data-nas-detail-right]') !== null", "Console NAS drawer uses fixed two-column layout");
+  await expect(
+    client,
+    `
+      [...document.querySelectorAll('.nas-source-toolbar button')].map((button) => button.textContent.trim()).join('|') === 'Add NAS|Scan Network'
+        && document.querySelector('.nas-list-heading')?.textContent.includes('Saved NAS')
+        && [...document.querySelectorAll('.nas-list-heading')].some((node) => node.textContent.includes('Scan Results'))
+    `,
+    "Console NAS drawer keeps primary actions and lists visible without bottom controls"
+  );
   await expect(
     client,
     `

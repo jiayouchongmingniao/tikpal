@@ -166,7 +166,7 @@ The Gentoo migration path keeps the same app directory and systemd units, but re
 
 Gentoo Explore provider text sizing must not use Chrome tab zoom or `--force-device-scale-factor`; Small, Medium, and Large adjust detected provider text elements while preserving the provider viewport and avoiding Chromium's `-/+` zoom bubble. See [docs/06-deployment/gentoo-kiosk-deploy-v1.md](docs/06-deployment/gentoo-kiosk-deploy-v1.md).
 
-Tikpal-owned kiosk UI, Explore side panel, portable Remote, and local Explore error pages share the device language preference from `.tikpal/ui-preferences.json`. Supported UI languages are English, Chinese, German, Italian, Korean, Japanese, and Spanish; Onboard/Fcitx defaults follow the selected language on the physical kiosk.
+Tikpal-owned kiosk UI, Explore side panel, portable Remote, and local Explore error pages share the device language preference from `.tikpal/ui-preferences.json`. Supported UI languages are English, Chinese, German, Italian, Korean, Japanese, and Spanish; Onboard/Fcitx defaults follow the selected language on the physical kiosk. Settings -> Font also syncs the selected font preset into device preferences so Onboard keycap labels use the same visual family as the kiosk UI.
 
 ## Interaction Smoke Test
 
