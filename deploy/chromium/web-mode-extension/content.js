@@ -193,13 +193,28 @@
 
   const bootstrapUrl = "http://127.0.0.1:4173/web-mode-transition.html";
   const providerTextScaleValues = [1, 1.1, 1.2];
+  const providerFontThemeValues = new Set(["system", "hardware", "precision", "sans", "serif", "mono"]);
+  const providerFontThemeFamilies = {
+    system: 'Inter, "SF Pro Display", "SF Pro Text", "Helvetica Neue", "Noto Sans CJK SC", "Noto Sans CJK JP", "Noto Sans CJK KR", "Source Han Sans CN", "PingFang SC", "WenQuanYi Zen Hei", sans-serif',
+    hardware: '"Noto Sans CJK SC", "Noto Sans CJK JP", "Noto Sans CJK KR", "Source Han Sans CN", "WenQuanYi Zen Hei", Inter, sans-serif',
+    precision: '"Source Han Sans CN", "Noto Sans CJK SC", "Noto Sans CJK JP", "Noto Sans CJK KR", "PingFang SC", Inter, sans-serif',
+    sans: 'Inter, Roboto, "Fira Sans", "SF Pro Display", "Helvetica Neue", "Noto Sans CJK SC", "Noto Sans CJK JP", "Noto Sans CJK KR", "Source Han Sans CN", sans-serif',
+    serif: '"Noto Serif CJK SC", "Noto Serif CJK JP", "Noto Serif CJK KR", "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, "Times New Roman", "Songti SC", serif',
+    mono: '"Noto Sans Mono CJK SC", "Noto Sans Mono CJK JP", "Noto Sans Mono CJK KR", "SF Mono", "IBM Plex Mono", "JetBrains Mono", "Cascadia Mono", "Fira Code", "Source Han Mono SC", monospace'
+  };
   let initialProxyKey = null;
   let desiredProviderTextScale = null;
   let activeProviderTextScale = 1;
+  let desiredProviderFontTheme = null;
+  let activeProviderFontTheme = "system";
   let lastProviderTextScaleScanMs = 0;
+  let lastProviderFontThemeScanMs = 0;
   let lastProviderTextScaleElementCount = 0;
+  let lastProviderFontThemeElementCount = 0;
   let syncing = false;
   const providerTextScaleStyleId = "tikpal-provider-text-scale-style";
+  const providerFontThemeStyleId = "tikpal-provider-font-theme-style";
+  const providerIconFontPattern = /icon|symbol|fontawesome|glyphicons|material icons|material symbols|icomoon|ionicons/i;
   const providerTextScaleSelector = [
     "a", "button", "div", "em", "h1", "h2", "h3", "h4", "h5", "h6",
     "input", "label", "li", "p", "select", "small", "span", "strong",
@@ -217,7 +232,12 @@
     const rounded = Math.round(numeric * 100) / 100;
     return providerTextScaleValues.find((candidate) => Math.abs(candidate - rounded) < 0.001) ?? fallback;
   };
+  const normalizeProviderFontTheme = (value, fallback = "system") => {
+    const normalized = String(value ?? "").trim().toLowerCase().replaceAll("-", "_");
+    return providerFontThemeValues.has(normalized) ? normalized : fallback;
+  };
   const providerTextDensity = (scale) => scale;
+  const providerFontFamily = (theme) => providerFontThemeFamilies[normalizeProviderFontTheme(theme)] || providerFontThemeFamilies.system;
   const ensureProviderTextScaleStyle = (scale) => {
     const root = document.documentElement;
     if (!root || !document.head) return;
@@ -235,6 +255,29 @@ html[data-tikpal-provider-text-scale] {
 }
 `;
     root.style.setProperty("--tikpal-provider-text-density", density.toFixed(3));
+  };
+  const ensureProviderFontThemeStyle = (theme) => {
+    const root = document.documentElement;
+    if (!root || !document.head) return;
+    let style = document.getElementById(providerFontThemeStyleId);
+    if (!style) {
+      style = document.createElement("style");
+      style.id = providerFontThemeStyleId;
+      document.head.appendChild(style);
+    }
+    style.textContent = `
+html[data-tikpal-provider-font-theme] {
+  --tikpal-provider-font-family: ${providerFontFamily(theme)};
+}
+html[data-tikpal-provider-font-theme] body,
+html[data-tikpal-provider-font-theme] button,
+html[data-tikpal-provider-font-theme] input,
+html[data-tikpal-provider-font-theme] select,
+html[data-tikpal-provider-font-theme] textarea {
+  font-family: var(--tikpal-provider-font-family) !important;
+}
+`;
+    root.dataset.tikpalProviderFontTheme = normalizeProviderFontTheme(theme);
   };
   const hasDirectText = (element) => {
     for (const node of element.childNodes || []) {
@@ -254,6 +297,21 @@ html[data-tikpal-provider-text-scale] {
     if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity || 1) <= 0) return false;
     const fontSize = Number.parseFloat(style.fontSize);
     return Number.isFinite(fontSize) && fontSize >= 8 && fontSize <= 48;
+  };
+  const shouldApplyProviderFontElement = (element) => {
+    if (!(element instanceof HTMLElement)) return false;
+    if (element.matches(providerTextScaleSkipSelector) || element.closest(providerTextScaleSkipSelector)) return false;
+    if (element.getAttribute("aria-hidden") === "true") return false;
+    const tagName = element.tagName.toLowerCase();
+    const isTextControl = ["button", "input", "select", "textarea"].includes(tagName);
+    if (!isTextControl && !hasDirectText(element)) return false;
+    const rect = element.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return false;
+    const style = getComputedStyle(element);
+    if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity || 1) <= 0) return false;
+    if (providerIconFontPattern.test(style.fontFamily) || providerIconFontPattern.test(String(element.className || ""))) return false;
+    const fontSize = Number.parseFloat(style.fontSize);
+    return Number.isFinite(fontSize) && fontSize >= 8 && fontSize <= 72;
   };
   const restoreProviderTextElement = (element) => {
     const originalInline = element.dataset.tikpalTextScaleInlineFontSize || "";
@@ -308,6 +366,39 @@ html[data-tikpal-provider-text-scale] {
       source
     };
   };
+  const recordProviderFontTheme = (theme, source = "extension-font-theme") => {
+    window.__tikpalProviderFontTheme = {
+      desired: desiredProviderFontTheme ?? theme,
+      applied: activeProviderFontTheme,
+      family: providerFontFamily(activeProviderFontTheme),
+      elementCount: lastProviderFontThemeElementCount,
+      source
+    };
+  };
+  const applyProviderFontTheme = (theme, force = false) => {
+    if (!isProviderPage() || !document.documentElement) return activeProviderFontTheme;
+    activeProviderFontTheme = normalizeProviderFontTheme(theme, activeProviderFontTheme);
+    ensureProviderFontThemeStyle(activeProviderFontTheme);
+    const now = Date.now();
+    if (force || now - lastProviderFontThemeScanMs >= 1200) {
+      lastProviderFontThemeScanMs = now;
+      let elementCount = 0;
+      document.querySelectorAll(providerTextScaleSelector).forEach((element) => {
+        const tracked = element instanceof HTMLElement && element.dataset.tikpalFontThemeApplied === "1";
+        if (!tracked && !shouldApplyProviderFontElement(element)) return;
+        if (!(element instanceof HTMLElement)) return;
+        if (!tracked) {
+          element.dataset.tikpalFontThemeInlineFontFamily = element.style.fontFamily || "";
+          element.dataset.tikpalFontThemeApplied = "1";
+        }
+        element.style.setProperty("font-family", "var(--tikpal-provider-font-family)", "important");
+        elementCount += 1;
+      });
+      lastProviderFontThemeElementCount = elementCount;
+    }
+    recordProviderFontTheme(activeProviderFontTheme, "content-font-theme");
+    return activeProviderFontTheme;
+  };
   const applyProviderTextScale = (scale, force = false) => {
     if (!isProviderPage() || !document.documentElement) return activeProviderTextScale;
     activeProviderTextScale = normalizeProviderTextScale(scale, scale);
@@ -323,6 +414,13 @@ html[data-tikpal-provider-text-scale] {
     desiredProviderTextScale = nextDesired;
     activeProviderTextScale = nextDesired;
     applyProviderTextScale(activeProviderTextScale, changed);
+  };
+  const setDesiredProviderFontTheme = (value) => {
+    const nextDesired = normalizeProviderFontTheme(value);
+    const changed = desiredProviderFontTheme === null || nextDesired !== desiredProviderFontTheme;
+    desiredProviderFontTheme = nextDesired;
+    activeProviderFontTheme = nextDesired;
+    applyProviderFontTheme(activeProviderFontTheme, changed);
   };
 
   const syncProxy = async () => {
@@ -344,6 +442,9 @@ html[data-tikpal-provider-text-scale] {
 
       if (typeof result.providerTextScale === "number") {
         setDesiredProviderTextScale(result.providerTextScale);
+      }
+      if (typeof result.fontTheme === "string") {
+        setDesiredProviderFontTheme(result.fontTheme);
       }
 
       if (initialProxyKey === null) {

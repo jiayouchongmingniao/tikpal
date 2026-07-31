@@ -4,7 +4,7 @@
 
 Deploy Tikpal on a Gentoo systemd host as the production 2560 x 720 physical kiosk while keeping the existing Raspberry Pi / moOde deployment path intact.
 
-This runbook records the Gentoo migration baseline validated on `192.168.10.117` in July 2026. The app path stays compatible with the moOde host:
+This runbook records the Gentoo migration baseline validated on `192.168.10.117` and later DHCP address `192.168.10.115` in July 2026. The app path stays compatible with the moOde host:
 
 ```bash
 /home/moode/code/tikpal
@@ -186,11 +186,13 @@ The physical layout is fixed:
 | Explore provider | `1920x720` at `0,0` |
 | Explore side panel | `640x720` at `1920,0` |
 
-The proxy truth is `.tikpal/web-mode-settings.json`; the current Gentoo fallback is:
+The proxy truth is `.tikpal/web-mode-settings.json`; the launcher fallback should prefer a proxy on the same Gentoo host:
 
 ```conf
-TIKPAL_WEB_MODE_DEFAULT_PROXY_URL=http://192.168.10.103:7897
+TIKPAL_WEB_MODE_DEFAULT_PROXY_URL=http://127.0.0.1:7897
 ```
+
+If the proxy runs on a separate LAN machine, set it in Settings -> Link -> Explore Proxy or in `.tikpal/web-mode-settings.json`, for example `http://192.168.10.148:7897`. Do not leave a DHCP-specific proxy IP hard-coded in the repo defaults.
 
 Changing proxy state uses the MV3 extension and refreshes the active provider page while keeping its profile and window. Cookies and login state stay in per-provider Chromium profiles under:
 
@@ -281,11 +283,13 @@ Candidate fonts follow the active input mode: Chinese uses `Noto Sans CJK SC 16`
 
 Onboard keycap labels should follow Settings -> Font. The kiosk writes the active `fontTheme` into `.tikpal/ui-preferences.json`; the API persists it through `/api/v1/preferences`, and `tikpalImeToggle.py` reads that file before setting Onboard's `org.onboard.theme-settings key-label-font`. Language changes still use `--set-mode` / `--set-locale`; font-only changes use the lighter `--sync` path so the user does not lose a temporary input-method choice.
 
+The Onboard language key keeps its own runtime cycle state in `.tikpal/onboard-ime-state.json` and `~/.config/tikpal/onboard-ime-state.json`. This is deliberate: relying only on `fcitx5-remote -n` during a touch click can bounce between `keyboard-us` and `pinyin` while Onboard reloads layouts. The no-argument `tikpalImeToggle.py` path is the live Onboard key path; it reads that runtime state, advances to the next mode, writes Fcitx `DefaultIM`, switches the current input method, applies the matching layout, and asks Onboard to stay visible. `--set-mode`, `--set-locale`, and `--sync` remain safe for Settings/API preference sync and do not pop the keyboard open unexpectedly.
+
 The default API hooks on Gentoo are:
 
 ```conf
-TIKPAL_UI_INPUT_METHOD_SYNC_COMMAND='if [ -f /usr/share/onboard/scripts/tikpalImeToggle.py ]; then TIKPAL_APP_DIR=%APP_DIR% python3 /usr/share/onboard/scripts/tikpalImeToggle.py --set-mode %INPUT_METHOD%; fi'
-TIKPAL_UI_KEYBOARD_VISUAL_SYNC_COMMAND='if [ -f /usr/share/onboard/scripts/tikpalImeToggle.py ]; then TIKPAL_APP_DIR=%APP_DIR% python3 /usr/share/onboard/scripts/tikpalImeToggle.py --sync; fi'
+TIKPAL_UI_INPUT_METHOD_SYNC_COMMAND='if [ -f /usr/share/onboard/scripts/tikpalImeToggle.py ]; then TIKPAL_APP_DIR=%APP_DIR% TIKPAL_FONT_THEME=%FONT_THEME% python3 /usr/share/onboard/scripts/tikpalImeToggle.py --set-mode %INPUT_METHOD%; fi'
+TIKPAL_UI_KEYBOARD_VISUAL_SYNC_COMMAND='if [ -f /usr/share/onboard/scripts/tikpalImeToggle.py ]; then TIKPAL_APP_DIR=%APP_DIR% TIKPAL_FONT_THEME=%FONT_THEME% python3 /usr/share/onboard/scripts/tikpalImeToggle.py --sync; fi'
 ```
 
 Expected keycap font examples:
@@ -324,6 +328,8 @@ Changing Settings -> Preferences -> Language also selects the matching default i
 `start-tikpal-kiosk-session.sh` reads `.tikpal/ui-preferences.json` before starting Fcitx5 and writes the matching `DefaultIM`. `tikpalImeToggle.py --set-locale <locale>` and `--set-mode <fcitx-id>` are the best-effort runtime sync hooks used after a language change; failure to sync the keyboard should be logged as a warning, not block saving the UI language.
 
 Onboard should only appear for text-like fields after real focus or tap. It should stay hidden for buttons, checkboxes, selectors, provider entry, and LAN browsers that view `http://<gentoo-ip>:4173/`.
+
+Never start Fcitx as root. `tikpalImeToggle.py` refuses root execution unless `TIKPAL_ALLOW_ROOT_IME_SYNC=1` is explicitly set for a controlled diagnostic. A root-owned Fcitx instance can steal the X/DBus input context from the `moode` kiosk session and make Chinese/Japanese/Korean candidate entry feel intermittent.
 
 ## Player Library UX
 
@@ -615,6 +621,8 @@ pgrep -af fcitx5
 su - moode -c 'DISPLAY=:0 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus fcitx5-remote -n'
 gsettings get org.onboard layout
 sudo -u moode -H env DISPLAY=:0 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus gsettings get org.onboard.theme-settings key-label-font
+cat /home/moode/code/tikpal/.tikpal/onboard-ime-state.json 2>/dev/null || true
+cat /home/moode/.config/tikpal/onboard-ime-state.json 2>/dev/null || true
 ```
 
 Touch a provider search field and confirm Onboard appears above the provider, cycles through EN / Chinese / German / Italian / Korean / Japanese / ES, shows a larger CJK candidate window, and hides after outside tap, submit, or single-line Enter. Change Settings -> Font once and confirm `key-label-font` changes without resetting the current Fcitx mode.
@@ -633,6 +641,6 @@ For QQ Music, manually click play if the provider was reopened during deploy. Co
 
 - To return from Explore to the main kiosk, use the side panel Back action or `deploy/chromium/tikpal-web-mode.sh close`.
 - If provider layout looks compressed, confirm there is no `--force-device-scale-factor` in provider Chromium processes and no `chrome.tabs.setZoom` / `chrome.tabs.getZoom` reference in the deployed extension.
-- If Onboard stops changing languages, run `deploy/chromium/tikpal-web-mode.sh --check`, then verify `/usr/share/onboard/scripts/tikpalImeToggle.py`, the generated `Tikpal-Compact-*.onboard` layouts, and `fcitx5-remote -n`.
+- If Onboard stops changing languages, run `deploy/chromium/tikpal-web-mode.sh --check`, then verify `/usr/share/onboard/scripts/tikpalImeToggle.py`, the generated `Tikpal-Compact-*.onboard` layouts, `fcitx5-remote -n`, and the two `onboard-ime-state.json` files. If `pgrep -af fcitx5` shows any root-owned Fcitx process, stop that process and resync as `moode`.
 - If the display becomes too dim to use, recover the DDC value out of band before changing UI gesture mapping.
 - If Chromium, MPD, AirPlay, or Spotify contend for BT66, use the Gentoo source handoff helper rather than killing random audio processes.

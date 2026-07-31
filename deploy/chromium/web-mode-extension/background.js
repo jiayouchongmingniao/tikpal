@@ -1,12 +1,18 @@
 const API_ROOT = "http://127.0.0.1:8787/api/v1";
 const BYPASS_LIST = ["localhost", "127.0.0.1", "[::1]", "<local>"];
 const PROVIDER_TEXT_SCALE_VALUES = [1, 1.1, 1.2];
+const FONT_THEME_VALUES = new Set(["system", "hardware", "precision", "sans", "serif", "mono"]);
 
 export function normalizeProviderTextScale(value, fallback = 1.1) {
   const numeric = typeof value === "number" ? value : Number(String(value ?? "").trim());
   const rounded = Math.round(numeric * 100) / 100;
   const allowed = PROVIDER_TEXT_SCALE_VALUES.find((candidate) => Math.abs(candidate - rounded) < 0.001);
   return allowed ?? fallback;
+}
+
+export function normalizeFontTheme(value, fallback = "system") {
+  const normalized = String(value ?? "").trim().toLowerCase().replaceAll("-", "_");
+  return FONT_THEME_VALUES.has(normalized) ? normalized : fallback;
 }
 
 export function buildProxyConfig(settings = {}) {
@@ -84,6 +90,7 @@ async function syncProxy() {
     revision,
     proxyKey,
     providerTextScale: normalizeProviderTextScale(settings.providerTextScale),
+    fontTheme: normalizeFontTheme(state.preferences?.fontTheme),
     providers: state.providers || []
   };
 }

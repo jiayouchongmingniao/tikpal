@@ -8,12 +8,15 @@ import json
 import os
 from pathlib import Path
 import subprocess
+from datetime import datetime, timezone
 
 
 ONBOARD_DATA_DIR = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share")) / "onboard"
 LAYOUT_DIR = ONBOARD_DATA_DIR / "layouts"
 COLOR_SCHEME = ONBOARD_DATA_DIR / "themes" / "Tikpal-Classic.colors"
 FCITX_CLASSIC_UI_CONFIG = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "fcitx5/conf/classicui.conf"
+FCITX_PROFILE_CONFIG = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "fcitx5/profile"
+IME_STATE_FALLBACK_PATH = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "tikpal/onboard-ime-state.json"
 MODES = [
     {"id": "keyboard-us", "layout": LAYOUT_DIR / "Tikpal-Compact-EN.onboard", "active": False},
     {"id": "pinyin", "layout": LAYOUT_DIR / "Tikpal-Compact-Pinyin.onboard", "active": True},
@@ -61,6 +64,11 @@ def _env() -> dict[str, str]:
     env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
     env.setdefault("DBUS_SESSION_BUS_ADDRESS", f"unix:path=/run/user/{os.getuid()}/bus")
     return env
+
+
+def _refuse_root_session() -> None:
+    if os.geteuid() == 0 and os.environ.get("TIKPAL_ALLOW_ROOT_IME_SYNC") != "1":
+        raise SystemExit("Refusing to sync kiosk input as root; run as the kiosk user.")
 
 
 def _remote(*args: str) -> str:
@@ -129,6 +137,9 @@ def _preference_paths() -> list[Path]:
 
 
 def _read_font_theme() -> str:
+    explicit = os.environ.get("TIKPAL_FONT_THEME")
+    if explicit in FONT_THEME_FAMILIES:
+        return str(explicit)
     for path in _preference_paths():
         try:
             value = json.loads(path.read_text(encoding="utf-8")).get("fontTheme")
@@ -137,6 +148,48 @@ def _read_font_theme() -> str:
         if value in FONT_THEME_FAMILIES:
             return str(value)
     return "system"
+
+
+def _state_paths() -> list[Path]:
+    paths: list[Path] = []
+    explicit = os.environ.get("TIKPAL_ONBOARD_IME_STATE_PATH")
+    if explicit:
+        paths.append(Path(explicit).expanduser())
+    app_dir = os.environ.get("TIKPAL_APP_DIR")
+    if app_dir:
+        paths.append(Path(app_dir).expanduser() / ".tikpal" / "onboard-ime-state.json")
+    for preferences_path in _preference_paths():
+        paths.append(preferences_path.with_name("onboard-ime-state.json"))
+    paths.append(IME_STATE_FALLBACK_PATH)
+    unique: list[Path] = []
+    for path in paths:
+        if path not in unique:
+            unique.append(path)
+    return unique
+
+
+def _read_cycle_mode_id() -> str:
+    for path in _state_paths():
+        try:
+            value = json.loads(path.read_text(encoding="utf-8")).get("modeId")
+        except Exception:
+            continue
+        if value in MODE_BY_ID:
+            return str(value)
+    return str(_current_mode()["id"])
+
+
+def _write_cycle_mode_id(mode_id: str) -> None:
+    payload = {
+        "modeId": mode_id,
+        "updatedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    }
+    for path in _state_paths():
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        except Exception:
+            continue
 
 
 def _font_available(family: str, marker: str) -> bool:
@@ -170,6 +223,20 @@ def _set_onboard_key_label_font() -> None:
     _run_command("gsettings", "set", "org.onboard.theme-settings", "key-label-font", _onboard_key_label_font())
 
 
+def _show_onboard() -> None:
+    _run_command(
+        "gdbus",
+        "call",
+        "--session",
+        "--dest",
+        "org.onboard.Onboard",
+        "--object-path",
+        "/org/onboard/Onboard/Keyboard",
+        "--method",
+        "org.onboard.Onboard.Keyboard.Show",
+    )
+
+
 def _set_candidate_font(mode: dict[str, object]) -> None:
     font = _candidate_font(str(mode["id"]))
     try:
@@ -180,6 +247,67 @@ def _set_candidate_font(mode: dict[str, object]) -> None:
                 f'Font="{font}"',
                 f'MenuFont="{font}"',
                 f'TrayFont="{font}"',
+                ""
+            ]),
+            encoding="utf-8"
+        )
+    except Exception:
+        pass
+
+
+def _sync_fcitx_default_im(mode: dict[str, object]) -> None:
+    mode_id = str(mode["id"])
+    try:
+        FCITX_PROFILE_CONFIG.parent.mkdir(parents=True, exist_ok=True)
+        current = FCITX_PROFILE_CONFIG.read_text(encoding="utf-8") if FCITX_PROFILE_CONFIG.exists() else ""
+        if current:
+            lines = current.splitlines()
+            replaced = False
+            for index, line in enumerate(lines):
+                if line.startswith("DefaultIM="):
+                    lines[index] = f"DefaultIM={mode_id}"
+                    replaced = True
+                    break
+            if replaced:
+                FCITX_PROFILE_CONFIG.write_text("\n".join(lines) + "\n", encoding="utf-8")
+                return
+        FCITX_PROFILE_CONFIG.write_text(
+            "\n".join([
+                "[Groups/0]",
+                "Name=Default",
+                "Default Layout=us",
+                f"DefaultIM={mode_id}",
+                "",
+                "[Groups/0/Items/0]",
+                "Name=keyboard-us",
+                "Layout=",
+                "",
+                "[Groups/0/Items/1]",
+                "Name=pinyin",
+                "Layout=",
+                "",
+                "[Groups/0/Items/2]",
+                "Name=keyboard-de",
+                "Layout=",
+                "",
+                "[Groups/0/Items/3]",
+                "Name=keyboard-it",
+                "Layout=",
+                "",
+                "[Groups/0/Items/4]",
+                "Name=hangul",
+                "Layout=",
+                "",
+                "[Groups/0/Items/5]",
+                "Name=anthy",
+                "Layout=",
+                "",
+                "[Groups/0/Items/6]",
+                "Name=keyboard-es",
+                "Layout=",
+                "",
+                "[GroupOrder]",
+                "0=Default",
                 ""
             ]),
             encoding="utf-8"
@@ -219,23 +347,27 @@ def _set_onboard_visual(mode: dict[str, object]) -> None:
 
 def sync() -> None:
     mode = _current_mode()
+    _write_cycle_mode_id(str(mode["id"]))
     _set_candidate_font(mode)
     _set_onboard_visual(mode)
 
 
-def _set_mode(mode: dict[str, object]) -> None:
-    if mode["active"]:
-        _remote("-o")
+def _set_mode(mode: dict[str, object], *, keep_visible: bool = False) -> None:
+    _sync_fcitx_default_im(mode)
     _remote("-s", str(mode["id"]))
     _remote("-o" if mode["active"] else "-c")
     _set_candidate_font(mode)
     _set_onboard_visual(mode)
+    _write_cycle_mode_id(str(mode["id"]))
+    if keep_visible:
+        _show_onboard()
 
 
 def run() -> None:
-    current = _current_mode()
+    current_id = _read_cycle_mode_id()
+    current = MODE_BY_ID.get(current_id, MODES[0])
     index = MODES.index(current) if current in MODES else 0
-    _set_mode(MODES[(index + 1) % len(MODES)])
+    _set_mode(MODES[(index + 1) % len(MODES)], keep_visible=True)
 
 
 def set_mode(mode_id: str) -> None:
@@ -253,6 +385,7 @@ def set_locale(locale: str) -> None:
 
 
 if __name__ == "__main__":
+    _refuse_root_session()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sync", action="store_true", help="Sync the Onboard layout to the current Fcitx input method.")
     parser.add_argument("--set-mode", choices=sorted(MODE_BY_ID), help="Switch to a specific Fcitx input method and matching Onboard layout.")

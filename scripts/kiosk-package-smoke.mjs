@@ -558,6 +558,14 @@ esac
   assert(extensionContent.includes("window.location.replace(provider.url)"), "provider bootstrap should navigate only after proxy sync succeeds");
   assert(!extensionBackground.includes("setZoom(") && !extensionBackground.includes("setZoomSettings") && !extensionBackground.includes("getZoom"), "Explore extension should avoid Chrome tab zoom so the browser zoom bubble never appears");
   assert(extensionContent.includes("tikpal-provider-text-scale-style") && extensionContent.includes("scaleProviderTextElements") && extensionContent.includes("element.style.fontSize") && extensionContent.includes("window.__tikpalProviderTextScale"), "provider pages should apply text scale to detected text elements");
+  assert(
+    extensionBackground.includes("fontTheme: normalizeFontTheme(state.preferences?.fontTheme)")
+      && extensionContent.includes("tikpal-provider-font-theme-style")
+      && extensionContent.includes("applyProviderFontTheme")
+      && extensionContent.includes("window.__tikpalProviderFontTheme")
+      && extensionContent.includes("providerIconFontPattern"),
+    "provider pages should inherit the device font theme without replacing icon fonts"
+  );
   assert(extensionContent.includes('document.documentElement.style.zoom = ""') && !extensionContent.includes("zoom: var(--tikpal-provider-text-scale)") && !extensionContent.includes("nextLowerProviderTextScale"), "provider pages should avoid Chrome/page zoom and overflow fallback loops");
   assert(!extensionContent.includes("provider-zoom-overflow"), "provider pages should not round-trip overflow fallback through the background service worker");
   assert(extensionContent.includes("netease-audio-mirror.js"), "NetEase provider pages should inject the audio mirror into the page world");
@@ -677,13 +685,16 @@ esac
       && serverSource.includes("/api/v1/nas/sources")
       && serverSource.includes("/api/v1/nas/discover")
       && serverSource.includes("async function readNasAudioLibraryTracks")
-      && serverSource.includes("async function mountNasSource")
-      && quickSettingsSource.includes("data-nas-detail-left")
-      && quickSettingsSource.includes("data-nas-detail-right")
-      && quickSettingsSource.includes("Saved NAS")
-      && quickSettingsSource.includes("Scan Results")
-      && quickSettingsSource.includes("Test first, then Save & Scan.")
-      && nasMountScript.includes("mount -t cifs")
+        && serverSource.includes("async function mountNasSource")
+        && quickSettingsSource.includes("data-nas-detail-left")
+        && quickSettingsSource.includes("data-nas-detail-right")
+        && quickSettingsSource.includes('t("nas.savedNas")')
+        && quickSettingsSource.includes('t("nas.scanResults")')
+        && quickSettingsSource.includes('t("nas.testFirst")')
+        && i18nSource.includes('"nas.savedNas": "Saved NAS"')
+        && i18nSource.includes('"nas.scanResults": "Scan Results"')
+        && i18nSource.includes('"nas.testFirst": "Test first, then save."')
+        && nasMountScript.includes("mount -t cifs")
       && nasMountScript.includes("mount --bind")
       && serverSource.includes("function isNasLibraryTrackPath")
       && serverSource.includes("isExternalLibraryTrackPath")
@@ -816,6 +827,8 @@ esac
     "API should persist the selected font theme and sync Onboard keycap visuals"
   );
   assert(appSource.includes("updatePreferences({ fontTheme })"), "kiosk should sync the selected font theme to device preferences");
+  assert(i18nSource.includes("document.documentElement.dataset.fontTheme = preferences.fontTheme"), "shared React roots should apply the persisted font theme to the document");
+  assert(stylesSource.includes(".web-mode-panel") && stylesSource.includes("font-family: var(--app-font-family);"), "Explore side panel should use the shared Tikpal font family");
   assert(serverSource.includes("DISPLAY_SLEEP_STYLES") && serverSource.includes("meteor_shower") && serverSource.includes("signal"), "API should persist the selected screen sleep saver style");
   assert(i18nSource.includes('UiLocale = "en" | "zh-CN" | "de" | "it" | "ko" | "ja" | "es"') || i18nSource.includes('"zh-CN"'), "kiosk i18n should include the seven supported UI locales");
   assert(quickSettingsSource.includes('data-settings-detail="language"') && quickSettingsSource.includes("languageOptions"), "Settings Preferences should expose the Language detail first");
@@ -825,7 +838,27 @@ esac
   assert(appSource.includes("data-screen-saver-style") && appSource.includes("screen-saver-now-playing") && appSource.includes("screen-saver-meteor-shower") && appSource.includes("screen-saver-signal"), "soft screen sleep should render selectable classic screen saver overlays");
   assert(appSource.includes("SCREEN_SAVER_PREVIEW_STYLES") && appSource.includes("data-screen-saver-preview"), "screen saver preview should cycle the available styles without changing preferences");
   assert(onboardImeToggleScript.includes("--set-locale") && onboardImeToggleScript.includes("--set-mode") && onboardImeToggleScript.includes('"ko": "hangul"'), "Onboard IME toggle should support locale and direct mode sync");
-  assert(onboardImeToggleScript.includes("key-label-font") && onboardImeToggleScript.includes("FONT_THEME_FAMILIES") && onboardImeToggleScript.includes("ui-preferences.json"), "Onboard keycaps should read Tikpal font preference and apply key-label-font");
+  assert(onboardImeToggleScript.includes("key-label-font") && onboardImeToggleScript.includes("FONT_THEME_FAMILIES") && onboardImeToggleScript.includes("ui-preferences.json") && onboardImeToggleScript.includes("TIKPAL_FONT_THEME"), "Onboard keycaps should read Tikpal font preference and apply key-label-font");
+  assert(
+    onboardImeToggleScript.includes("_sync_fcitx_default_im(mode)")
+      && onboardImeToggleScript.includes("DefaultIM={mode_id}")
+      && onboardImeToggleScript.indexOf('_remote("-s", str(mode["id"]))') < onboardImeToggleScript.indexOf('_remote("-o" if mode["active"] else "-c")'),
+    "Onboard IME switches should persist Fcitx DefaultIM and activate only after selecting the target mode"
+  );
+  assert(
+    onboardImeToggleScript.includes("onboard-ime-state.json")
+      && onboardImeToggleScript.includes("_read_cycle_mode_id()")
+      && onboardImeToggleScript.includes("_write_cycle_mode_id(str(mode[\"id\"]))"),
+    "Onboard IME key should use its own cycle state instead of bouncing on transient Fcitx state"
+  );
+  assert(
+    onboardImeToggleScript.includes("keep_visible: bool = False")
+      && onboardImeToggleScript.includes("keep_visible=True")
+      && onboardImeToggleScript.includes("org.onboard.Onboard.Keyboard.Show"),
+    "Onboard IME key should keep the keyboard open without popping it during Settings preference sync"
+  );
+  assert(onboardImeToggleScript.includes("_refuse_root_session()") && onboardImeToggleScript.includes("TIKPAL_ALLOW_ROOT_IME_SYNC"), "Onboard IME sync should not start a root-owned Fcitx session by accident");
+  assert(serverSource.includes("TIKPAL_FONT_THEME=%FONT_THEME%"), "API font changes should pass the active font theme to the Onboard visual sync command");
   assert(kioskSession.includes("read_preferred_input_method") && kioskSession.includes("ui-preferences.json") && kioskSession.includes("fcitx5-remote -s \"$default_im\""), "kiosk session should default Fcitx from persisted UI preferences");
   assert(kioskSession.includes('export TIKPAL_APP_DIR="${TIKPAL_APP_DIR:-$APP_DIR}"'), "kiosk session should expose the app dir so Onboard scripts can read UI preferences");
   assert(webModeScript.includes('export TIKPAL_APP_DIR="${TIKPAL_APP_DIR:-$APP_DIR}"'), "web mode should expose the app dir so Onboard scripts can read UI preferences");
@@ -1056,11 +1089,15 @@ esac
   assert(webModeCheck.stdout.includes("onboard: 500,420 900,280"), "web mode should place the full Onboard keyboard near provider login inputs");
   assert(webModeCheck.stdout.includes("onboard input focus: 1"), "web mode should enable input-focus keyboard activation");
   assert(webModeCheck.stdout.includes("qq scoped auto confirm: 1"), "web mode should keep QQ auto-confirm scoped inside the provider guard");
-  assert(webModeCheck.stdout.includes("proxy: enabled http://192.168.10.103:7897"), "web mode should default to the HTTP development proxy");
+  assert(webModeCheck.stdout.includes("proxy: enabled http://127.0.0.1:7897"), "web mode should default to the HTTP development proxy");
 
   assert(!quickSettingsSource.includes("handleWebModeSettingsSave"), "Explore settings should auto-save without a Save button");
   assert(!quickSettingsSource.includes("handleWebModeProxyTest"), "Explore settings should not need a manual Test button");
-  assert(quickSettingsSource.includes("Enter a complete proxy URL"), "Explore auto-save should wait for a complete proxy URL");
+  assert(
+    quickSettingsSource.includes('t("settings.enterProxyUrl")')
+      && i18nSource.includes('"settings.enterProxyUrl": "Enter a complete proxy URL"'),
+    "Explore auto-save should wait for a complete proxy URL"
+  );
 
   const providerGuardCheck = spawnSync(process.execPath, ["deploy/chromium/tikpal-web-mode-guard.mjs", "--check"], {
     cwd: ROOT,

@@ -273,7 +273,7 @@ const WEB_MODE_COMMAND = process.env.TIKPAL_WEB_MODE_COMMAND ?? (API_MODE === "m
 const WEB_MODE_COMMAND_TIMEOUT_MS = Number(process.env.TIKPAL_WEB_MODE_COMMAND_TIMEOUT_MS ?? 45_000);
 const WEB_MODE_OPEN_COMMAND_TIMEOUT_MS = Number(process.env.TIKPAL_WEB_MODE_OPEN_COMMAND_TIMEOUT_MS ?? 110_000);
 const WEB_MODE_PROXY_TEST_URL = process.env.TIKPAL_WEB_MODE_PROXY_TEST_URL ?? "https://open.spotify.com/";
-const WEB_MODE_DEFAULT_PROXY_URL = process.env.TIKPAL_WEB_MODE_DEFAULT_PROXY_URL ?? "http://192.168.10.103:7897";
+const WEB_MODE_DEFAULT_PROXY_URL = process.env.TIKPAL_WEB_MODE_DEFAULT_PROXY_URL ?? "http://127.0.0.1:7897";
 const WEB_MODE_PROVIDER_TEXT_SCALE_VALUES = [1, 1.1, 1.2];
 function normalizeWebModeProviderTextScale(value, fallback = null) {
   const numeric = typeof value === "number" ? value : Number(String(value ?? "").trim());
@@ -296,9 +296,9 @@ const UI_LOCALE_INPUT_METHODS = {
 };
 const UI_LOCALES = new Set(Object.keys(UI_LOCALE_INPUT_METHODS));
 const UI_INPUT_METHOD_SYNC_COMMAND = process.env.TIKPAL_UI_INPUT_METHOD_SYNC_COMMAND
-  ?? (API_MODE === "mpc" ? "if [ -f /usr/share/onboard/scripts/tikpalImeToggle.py ]; then TIKPAL_APP_DIR=%APP_DIR% python3 /usr/share/onboard/scripts/tikpalImeToggle.py --set-mode %INPUT_METHOD%; fi" : "");
+  ?? (API_MODE === "mpc" ? "if [ -f /usr/share/onboard/scripts/tikpalImeToggle.py ]; then TIKPAL_APP_DIR=%APP_DIR% TIKPAL_FONT_THEME=%FONT_THEME% python3 /usr/share/onboard/scripts/tikpalImeToggle.py --set-mode %INPUT_METHOD%; fi" : "");
 const UI_KEYBOARD_VISUAL_SYNC_COMMAND = process.env.TIKPAL_UI_KEYBOARD_VISUAL_SYNC_COMMAND
-  ?? (API_MODE === "mpc" ? "if [ -f /usr/share/onboard/scripts/tikpalImeToggle.py ]; then TIKPAL_APP_DIR=%APP_DIR% python3 /usr/share/onboard/scripts/tikpalImeToggle.py --sync; fi" : "");
+  ?? (API_MODE === "mpc" ? "if [ -f /usr/share/onboard/scripts/tikpalImeToggle.py ]; then TIKPAL_APP_DIR=%APP_DIR% TIKPAL_FONT_THEME=%FONT_THEME% python3 /usr/share/onboard/scripts/tikpalImeToggle.py --sync; fi" : "");
 const FONT_THEMES = new Set(["system", "hardware", "precision", "sans", "serif", "mono"]);
 const DEFAULT_FONT_THEME = "system";
 const DISPLAY_SLEEP_MINUTES = [5, 10, 15, 30, 60];

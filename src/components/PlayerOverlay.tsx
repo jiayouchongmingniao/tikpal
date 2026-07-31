@@ -326,6 +326,12 @@ export function PlayerOverlay({
   const librarySearchHasNoMatches = librarySearchActive && baseVisibleLibraryTracks.length > 0 && visibleLibraryTracks.length === 0;
   const selectedLibraryTrack = visibleLibraryTracks.find((track) => track.id === selectedLibraryTrackId) ?? null;
   const seekSupported = playback.source === "mpd" && durationSeconds > 0 && transportCapabilities?.seek !== false;
+  const rememberedLibraryPath = audio.rememberedSource?.target === "mpd" ? audio.rememberedSource.localTrackPath ?? "" : "";
+  const seekUnavailableMessage = !seekSupported && playback.source === "mpd" && durationSeconds > 0 && transportCapabilities?.seek === false
+    ? rememberedLibraryPath.startsWith("NAS/")
+      ? t("playback.seekUnavailableNas")
+      : t("playback.seekUnavailable")
+    : null;
   const displayedElapsedSeconds = seekSupported
     ? seekDraftSeconds ?? seekPendingSeconds ?? elapsedSeconds
     : playbackTruth.elapsedSeconds;
@@ -344,6 +350,11 @@ export function PlayerOverlay({
     localizedSourceStatusLabel(playbackSource, pendingSource === playback.source),
     status.pending ? t("status.updating") : status.source === "api" ? t("status.live") : t("status.offlineView")
   ];
+  const playbackQueuePositionLabel = playbackTruth.queuePositionLabel === "No active queue"
+    ? playback.state === "playing" && displayedDurationSeconds === null
+      ? t("playback.liveStream")
+      : ""
+    : playbackTruth.queuePositionLabel;
 
   function localizedSourceStatusLabel(source: AudioState["currentSource"] | undefined, pending: boolean) {
     const statusInfo = getSourceDisplayStatus(source, { pending });
@@ -359,6 +370,11 @@ export function PlayerOverlay({
 
   function localizedPanelLabel(panelId: PrimaryPanelId) {
     return panelId === "upnp" ? sourceLabel("upnp", "DLNA") : sourceLabel(panelId, primaryPanels.find((panel) => panel.id === panelId)?.label);
+  }
+
+  function localizedRadioCategoryLabel(categoryId: string, fallback: string) {
+    const translated = t(`radio.category.${categoryId}`);
+    return translated === `radio.category.${categoryId}` ? fallback : translated;
   }
 
   function readLibraryFastScrollMetrics(): LibraryFastScrollMetrics {
@@ -705,7 +721,7 @@ export function PlayerOverlay({
     try {
       await onPlaybackAction("seek", clampedSeconds);
     } catch (error) {
-      setSeekError(friendlyUiError(error instanceof Error ? error.message : String(error), "Seek did not move. Try again."));
+      setSeekError(friendlyError(error instanceof Error ? error.message : String(error), "error.seek") ?? t("error.seek"));
     } finally {
       seekCommitInFlightRef.current = false;
       setSeekPendingSeconds(null);
@@ -963,7 +979,7 @@ export function PlayerOverlay({
                 data-radio-category-count={count}
                 onClick={() => setSelectedRadioCategory(category.id)}
               >
-                {category.id === "random" ? t("radio.random") : category.label}
+                {category.id === "random" ? t("radio.random") : localizedRadioCategoryLabel(category.id, category.label)}
               </button>
             );
           })}
@@ -975,7 +991,7 @@ export function PlayerOverlay({
           </div>
         ) : null}
 
-        {radioError ? <p className="source-panel-error" title={radioError}>{friendlyUiError(radioError, "Radio is not ready. Try another station.")}</p> : null}
+        {radioError ? <p className="source-panel-error" title={radioError}>{friendlyError(radioError, "error.radio") ?? t("error.radio")}</p> : null}
 
         <div className="radio-catalog-list">
           {radioStations.map((station) => {
@@ -1121,7 +1137,7 @@ export function PlayerOverlay({
               <h1>{playback.title ?? t("playback.nothingPlaying")}</h1>
               <p className="artist">{playback.artist ?? t("playback.unknownArtist")}</p>
               <p>{playback.album ?? t("playback.noAlbum")}</p>
-              <p>{playbackTruth.queuePositionLabel}</p>
+              {playbackQueuePositionLabel ? <p>{playbackQueuePositionLabel}</p> : null}
             </div>
 
             <div className="progress-row">
@@ -1154,8 +1170,9 @@ export function PlayerOverlay({
               </div>
               <span>{formatDuration(displayedDurationSeconds)}</span>
             </div>
-            {seekError ? <p className="player-inline-message is-error">{friendlyError(seekError) ?? seekError}</p> : null}
+            {seekError ? <p className="player-inline-message is-error">{friendlyError(seekError, "error.seek") ?? seekError}</p> : null}
             {!seekError && seekPendingSeconds !== null ? <p className="player-inline-message">{t("playback.seekingTo", { time: formatDuration(seekPendingSeconds) })}</p> : null}
+            {!seekError && seekPendingSeconds === null && seekUnavailableMessage ? <p className="player-inline-message">{seekUnavailableMessage}</p> : null}
 
             <div className="transport-row" aria-label="Playback controls">
               <button className="icon-button" type="button" aria-label={t("playback.previous")} title={previousTitle} disabled={previousDisabled} onClick={() => void onPlaybackAction("previous")}>
