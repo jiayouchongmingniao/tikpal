@@ -92,6 +92,24 @@
             TIKPAL-KEY-SPANISH
         </key_group>
         <key_group>
+            <color element="fill"   rgb="#eef4ff"/>
+            <color element="stroke" rgb="#2563eb"/>
+            <color element="label"  rgb="#10214a"/>
+            TIKPAL-KEY-GERMAN
+        </key_group>
+        <key_group>
+            <color element="fill"   rgb="#e8f6df"/>
+            <color element="stroke" rgb="#4d7c0f"/>
+            <color element="label"  rgb="#1f2f0a"/>
+            TIKPAL-KEY-ITALIAN
+        </key_group>
+        <key_group>
+            <color element="fill"   rgb="#f4e7ff"/>
+            <color element="stroke" rgb="#7e22ce"/>
+            <color element="label"  rgb="#2e124d"/>
+            TIKPAL-KEY-KOREAN
+        </key_group>
+        <key_group>
             <color element="fill"   rgb="#35d0ba"/>
             <color element="fill"   rgb="#21a99b" pressed="true"/>
             <color element="stroke" rgb="#064e45"/>

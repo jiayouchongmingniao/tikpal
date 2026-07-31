@@ -368,7 +368,13 @@ export const fallbackTikpalState: TikpalState = {
     updatedAt: new Date().toISOString()
   },
   audio: audioState,
-  lyrics: lyricsState
+  lyrics: lyricsState,
+  preferences: {
+    locale: "en",
+    inputMethodId: "keyboard-us",
+    updatedAt: null,
+    warning: null
+  }
 };
 
 export function formatDuration(seconds: number | null): string {

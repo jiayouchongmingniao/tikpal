@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react"
 import { Apple, Cloud, Gem, Globe2, Music2, PanelRightClose, ShoppingBag, SquarePlay, Type, Volume2 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { fetchTikpalState, fetchWebModeState, sendPlaybackAction, sendWebModeAction } from "../api/tikpalClient";
-import { friendlyUiError } from "../uiCopy";
+import { useI18n } from "../i18n";
 import type { TikpalState, WebModeProviderId, WebModeProviderSummary, WebModeState } from "../types";
 
 const providerOrder: WebModeProviderId[] = [
@@ -76,18 +76,8 @@ function inferFailedProviderFromError(error: string | null): WebModeProviderId |
   return providerOrder.find((id) => normalizedError.startsWith(providerLabels[id].toLowerCase())) ?? null;
 }
 
-function friendlyExploreError(message: string | null) {
-  if (!message) return null;
-  const normalized = message.toLowerCase();
-  if (normalized.includes("proxy")) return "Proxy needs attention. Check the URL and retry.";
-  if (normalized.includes("did not open") || normalized.includes("did not enter") || normalized.includes("did not become ready")) return "Could not open. Check Web Proxy and retry.";
-  if (normalized.includes("volume")) return "Volume did not change. Try again.";
-  if (normalized.includes("scale") || normalized.includes("font")) return "Font size did not change. Try again.";
-  if (normalized.includes("close")) return "Could not close Explore. Try Back again.";
-  return friendlyUiError(message, "Explore needs attention. Try again.");
-}
-
 export function WebModeSidePanel() {
+  const { t, friendlyError } = useI18n();
   const [webMode, setWebMode] = useState<WebModeState | null>(null);
   const [tikpalState, setTikpalState] = useState<TikpalState | null>(null);
   const [pendingProvider, setPendingProvider] = useState<WebModeProviderId | null>(readInitialOpeningProvider);
@@ -114,9 +104,9 @@ export function WebModeSidePanel() {
   }, [webMode?.providers]);
 
   const activeProviderLabel = useMemo(() => {
-    if (!effectiveActiveProvider) return "No web player";
+    if (!effectiveActiveProvider) return t("explore.noWebPlayer");
     return providerLabels[effectiveActiveProvider] ?? "Web player";
-  }, [effectiveActiveProvider]);
+  }, [effectiveActiveProvider, t]);
 
   const displayProviderLabel = pendingProvider ? providerLabels[pendingProvider] : failedProvider ? providerLabels[failedProvider] : activeProviderLabel;
 
@@ -267,7 +257,7 @@ export function WebModeSidePanel() {
             onClick={() => void toggleProxy()}
           >
             <Globe2 size={17} />
-            <span>{pendingAction === "proxy" ? "Saving" : webMode?.settings.proxyEnabled ? "Proxy" : "Direct"}</span>
+            <span>{pendingAction === "proxy" ? t("common.saving") : webMode?.settings.proxyEnabled ? t("common.proxy") : t("common.direct")}</span>
           </button>
           <button
             className="web-mode-top-back"
@@ -277,21 +267,21 @@ export function WebModeSidePanel() {
             onClick={() => void closeWebMode()}
           >
             <PanelRightClose size={17} />
-            <span>{pendingAction === "close" ? "Closing" : "Back"}</span>
+            <span>{pendingAction === "close" ? t("common.closing") : t("common.back")}</span>
           </button>
         </div>
       </header>
 
-      <section className="web-mode-active-card" aria-label="Active web player">
+      <section className="web-mode-active-card" aria-label={t("explore.tikpalControls")}>
         <Globe2 size={30} />
         <div>
-          <span>Pick music on the left</span>
+          <span>{t("explore.pickLeft")}</span>
           <strong>{displayProviderLabel}</strong>
-          <p>{pendingProvider ? "Opening on the left" : failedProvider ? "Could not open" : effectiveActiveProvider ? (webMode?.settings.proxyEnabled ? "Proxy active" : "Direct connection") : "Choose a web player below"}</p>
+          <p>{pendingProvider ? t("explore.openLeft") : failedProvider ? t("explore.couldNotOpen") : effectiveActiveProvider ? (webMode?.settings.proxyEnabled ? t("explore.proxyActive") : t("explore.directConnection")) : t("explore.chooseBelow")}</p>
         </div>
       </section>
 
-      <section className="web-mode-provider-grid" aria-label="Music web players">
+      <section className="web-mode-provider-grid" aria-label={t("explore.webPlayers")}>
         {providers.map((provider) => {
           const Icon = providerIcons[provider.id] ?? Music2;
           const failed = failedProvider === provider.id && pendingProvider !== provider.id;
@@ -313,16 +303,16 @@ export function WebModeSidePanel() {
                 <Icon size={24} />
               </span>
               <strong>{provider.label}</strong>
-              <em>{connecting ? "Connecting" : current ? "Current" : active ? "Active" : failed ? "Failed" : provider.experimental ? "Experimental" : "Ready"}</em>
+              <em>{connecting ? t("common.connecting") : current ? t("common.current") : active ? t("common.active") : failed ? t("common.failed") : provider.experimental ? t("common.experimental") : t("common.ready")}</em>
             </button>
           );
         })}
       </section>
 
-      <section className="web-mode-control-stack" aria-label="Tikpal web controls">
+      <section className="web-mode-control-stack" aria-label={t("explore.tikpalControls")}>
         <div className="web-mode-text-scale" data-web-mode-text-scale>
-          <span><Type size={18} /> Font</span>
-          <div className="web-mode-scale-options" role="group" aria-label="Left provider font size">
+          <span><Type size={18} /> {t("explore.font")}</span>
+          <div className="web-mode-scale-options" role="group" aria-label={t("explore.leftFont")}>
             {textScaleChoices.map((choice) => (
               <button
                 key={choice.label}
@@ -333,13 +323,13 @@ export function WebModeSidePanel() {
                 data-web-mode-text-scale-option={choice.value}
                 onClick={() => void setProviderTextScale(choice.value)}
               >
-                {choice.label}
+                {t(`explore.${choice.label.toLowerCase()}`)}
               </button>
             ))}
           </div>
         </div>
         <label className="web-mode-volume">
-          <span><Volume2 size={18} /> Volume</span>
+          <span><Volume2 size={18} /> {t("quickMenu.volume")}</span>
           <strong>{volumePercent}%</strong>
           <input
             type="range"
@@ -352,7 +342,7 @@ export function WebModeSidePanel() {
       </section>
 
       <footer className="web-mode-panel-footer" role="status" title={error ?? undefined}>
-        {friendlyExploreError(error) ?? (pendingProvider ? `Connecting to ${providerLabels[pendingProvider]}` : "Choose music on the left. Tikpal controls stay here.")}
+        {friendlyError(error, "error.explore") ?? (pendingProvider ? `${t("common.connecting")} ${providerLabels[pendingProvider]}` : t("explore.footer"))}
       </footer>
     </main>
   );

@@ -27,9 +27,10 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { copyLibraryTrackToLocal, deleteLibraryTrackFromLocal, fetchAudioLibrary, fetchRadioCatalog, sendFavoriteTrack } from "../api/tikpalClient";
+import { useI18n } from "../i18n";
 import { getPlaybackDisplayTruth, getPlaybackSourceSummary } from "../playbackTruth";
-import { getSourceDisplayStatusLabel } from "../sourceStatus";
-import { dataSyncLabel, friendlyUiError } from "../uiCopy";
+import { getSourceDisplayStatus } from "../sourceStatus";
+import { friendlyUiError } from "../uiCopy";
 import type { TikpalDataStatus } from "../hooks/useTikpalState";
 import { formatDuration } from "../mockState";
 import { useOverlayReturnGesture } from "../hooks/useOverlayReturnGesture";
@@ -104,10 +105,6 @@ const storageTabs: Array<{ id: LibraryFilterId; label: string; Icon: LucideIcon 
   { id: "favorites", label: "Favorites", Icon: Heart },
   { id: "recently_added", label: "Recently Added", Icon: Clock }
 ];
-
-function sourceStatusLabel(source: AudioState["currentSource"] | undefined, pending: boolean) {
-  return getSourceDisplayStatusLabel(source, { pending });
-}
 
 function isHandoffSourceId(sourceId: string | null | undefined): sourceId is ExternalPanelId {
   return Boolean(sourceId && handoffSourceIds.has(sourceId));
@@ -217,13 +214,6 @@ function normalizeDiskUsedPercent(storage: AudioLibraryDiskSummary | null) {
   return Number.isFinite(percent) ? Math.max(0, Math.min(100, Math.round(percent))) : null;
 }
 
-function libraryPlaybackHint(storage: AudioLibraryTrackSummary["storage"] | null | undefined) {
-  if (storage === "nas") return "Playing from NAS.";
-  if (storage === "usb") return "Playing from USB.";
-  if (storage === "local") return "Playing from Local.";
-  return "Library ready. Pick a track.";
-}
-
 export function PlayerOverlay({
   active,
   playback,
@@ -236,6 +226,7 @@ export function PlayerOverlay({
   onOpenWebMode,
   onReturnAmbient
 }: PlayerOverlayProps) {
+  const { t, sourceLabel, storageLabel, friendlyError } = useI18n();
   const overlayReturnGesture = useOverlayReturnGesture(onReturnAmbient);
   const [seekDraftSeconds, setSeekDraftSeconds] = useState<number | null>(null);
   const [seekPendingSeconds, setSeekPendingSeconds] = useState<number | null>(null);
@@ -294,9 +285,9 @@ export function PlayerOverlay({
   const previousDisabled = status.pending || transportCapabilities?.previous === false;
   const playPauseDisabled = status.pending || transportCapabilities?.playPause === false;
   const nextDisabled = status.pending || transportCapabilities?.next === false;
-  const previousTitle = transportCapabilities?.previous === false ? transportUnavailableTitle : "Previous";
-  const playPauseTitle = transportCapabilities?.playPause === false ? transportUnavailableTitle : isPlaying ? "Pause" : "Play";
-  const nextTitle = transportCapabilities?.next === false ? transportUnavailableTitle : "Next";
+  const previousTitle = transportCapabilities?.previous === false ? transportUnavailableTitle : t("playback.previous");
+  const playPauseTitle = transportCapabilities?.playPause === false ? transportUnavailableTitle : isPlaying ? t("playback.pause") : t("playback.play");
+  const nextTitle = transportCapabilities?.next === false ? transportUnavailableTitle : t("playback.next");
   const currentSource = audio.currentSource;
   const selectedPanelConfig = primaryPanels.find((panel) => panel.id === selectedPrimaryPanel) ?? primaryPanels[0];
   const playbackSource = getPlaybackSourceSummary(playback, audio);
@@ -320,10 +311,10 @@ export function PlayerOverlay({
     }
   }, [favoriteLibraryTracks, localLibraryTracks, nasLibraryTracks, selectedLibraryStorage, usbLibraryTracks]);
   const librarySearchStorageLabels: Partial<Record<LibraryFilterId, string>> = {
-    local: "Local",
-    nas: "NAS",
-    usb: "USB",
-    favorites: "Favorites"
+    local: storageLabel("local"),
+    nas: storageLabel("nas"),
+    usb: storageLabel("usb"),
+    favorites: storageLabel("favorites")
   };
   const librarySearchStorageLabel = librarySearchStorageLabels[selectedLibraryStorage];
   const librarySearchEnabled = Boolean(librarySearchStorageLabel);
@@ -347,12 +338,28 @@ export function PlayerOverlay({
   const displayedVolumePercent = clampVolumePercent(volumeDraftPercent ?? system.volume.percent);
 
   const localDiskUsedPercent = normalizeDiskUsedPercent(localLibraryStorage);
-  const localDiskFreeLabel = formatDiskSize(localLibraryStorage?.freeBytes);
+  const localDiskFreeLabel = localDiskUsedPercent === null ? t("common.unavailable") : formatDiskSize(localLibraryStorage?.freeBytes);
   const sourceLine = [
-    playbackTruth.sourceLabel,
-    sourceStatusLabel(playbackSource, pendingSource === playback.source),
-    dataSyncLabel(status)
+    sourceLabel(playback.source, playbackTruth.sourceLabel),
+    localizedSourceStatusLabel(playbackSource, pendingSource === playback.source),
+    status.pending ? t("status.updating") : status.source === "api" ? t("status.live") : t("status.offlineView")
   ];
+
+  function localizedSourceStatusLabel(source: AudioState["currentSource"] | undefined, pending: boolean) {
+    const statusInfo = getSourceDisplayStatus(source, { pending });
+    return t(`common.${statusInfo.kind}`);
+  }
+
+  function localizedLibraryPlaybackHint(storage: AudioLibraryTrackSummary["storage"] | null | undefined) {
+    if (storage === "nas") return t("library.playingFromNas");
+    if (storage === "usb") return t("library.playingFromUsb");
+    if (storage === "local") return t("library.playingFromLocal");
+    return t("source.libraryReadyPickTrack");
+  }
+
+  function localizedPanelLabel(panelId: PrimaryPanelId) {
+    return panelId === "upnp" ? sourceLabel("upnp", "DLNA") : sourceLabel(panelId, primaryPanels.find((panel) => panel.id === panelId)?.label);
+  }
 
   function readLibraryFastScrollMetrics(): LibraryFastScrollMetrics {
     const list = libraryTrackListRef.current;
@@ -731,21 +738,21 @@ export function PlayerOverlay({
     if (panelId === "library") {
       switch (selectedLibraryStorage) {
         case "local":
-          return `${libraryFilterCount("local")} local`;
+          return t("library.localShort", { count: libraryFilterCount("local") });
         case "nas":
-          return `${libraryFilterCount("nas")} NAS`;
+          return t("library.nasShort", { count: libraryFilterCount("nas") });
         case "usb":
-          return `${libraryFilterCount("usb")} USB`;
+          return t("library.usbShort", { count: libraryFilterCount("usb") });
         case "favorites":
-          return `${libraryFilterCount("favorites")} saved`;
+          return t("library.savedShort", { count: libraryFilterCount("favorites") });
         case "recently_added":
-          return `${libraryFilterCount("recently_added")} new`;
+          return t("library.newShort", { count: libraryFilterCount("recently_added") });
         default:
           return "";
       }
     }
     const source = audio.sources.find((entry) => entry.id === panelId);
-    return sourceStatusLabel(source, pendingSource === panelId);
+    return localizedSourceStatusLabel(source, pendingSource === panelId);
   }
 
   async function switchSource(target: SourceSwitchTarget, radioStationId?: string, localTrackPath?: string, libraryStorage?: AudioLibraryTrackSummary["storage"]) {
@@ -759,17 +766,17 @@ export function PlayerOverlay({
       const nextState = await onSourceSwitch(target, radioStationId, localTrackPath);
       const nextSource = nextState.audio.sources.find((source) => source.id === target);
       if (target === "mpd" && localTrackPath) {
-        setSourceHint(libraryPlaybackHint(libraryStorage));
+        setSourceHint(localizedLibraryPlaybackHint(libraryStorage));
       } else if (target === "mpd") {
-        setSourceHint("Library ready. Pick a track.");
+        setSourceHint(t("source.libraryReadyPickTrack"));
       } else if (target === "radio") {
         setSourceHint(null);
       } else if (nextSource?.connectedLabel) {
-        setSourceHint(`${nextSource.label}: ${nextSource.connectedLabel}.`);
+        setSourceHint(t("source.connectedAs", { source: sourceLabel(nextSource.id, nextSource.label), label: nextSource.connectedLabel }));
       } else if (nextSource?.advertisedLabel) {
-        setSourceHint(`${nextSource.label} ready as ${nextSource.advertisedLabel}.`);
+        setSourceHint(t("source.readyAs", { source: sourceLabel(nextSource.id, nextSource.label), label: nextSource.advertisedLabel }));
       } else {
-        setSourceHint(`${nextSource?.label ?? target} ready.`);
+        setSourceHint(t("source.ready", { source: nextSource ? sourceLabel(nextSource.id, nextSource.label) : sourceLabel(target) }));
       }
     } catch (error) {
       if (isHandoffSourceId(target)) {
@@ -837,7 +844,7 @@ export function PlayerOverlay({
     try {
       await sendFavoriteTrack(track.path, !track.favorite);
       refreshLocalLibrary();
-      setSourceHint(!track.favorite ? "Saved to Favorites." : "Removed from Favorites.");
+      setSourceHint(!track.favorite ? t("library.savedFavorite") : t("library.removedFavorite"));
     } catch (error) {
       setSourceError(error instanceof Error ? error.message : "Favorite update failed");
     } finally {
@@ -856,7 +863,7 @@ export function PlayerOverlay({
       setNasLibraryTracks(result.library.tracks.filter((entry) => entry.storage === "nas"));
       setUsbLibraryTracks(result.library.tracks.filter((entry) => entry.storage === "usb"));
       setLocalLibraryStorage(result.library.localStorage ?? null);
-      setSourceHint(result.copied ? "Saved to Local." : "Already saved locally.");
+      setSourceHint(result.copied ? t("library.savedToLocal") : t("library.alreadySaved"));
     } catch (error) {
       setSourceError(error instanceof Error ? error.message : "Copy to Local failed");
     } finally {
@@ -891,7 +898,7 @@ export function PlayerOverlay({
       if (selectedLibraryTrackId === track.id) {
         setSelectedLibraryTrackId(null);
       }
-      setSourceHint("Removed from Local.");
+      setSourceHint(t("library.removedLocal"));
     } catch (error) {
       setSourceError(error instanceof Error ? error.message : "Delete local track failed");
     } finally {
@@ -906,11 +913,11 @@ export function PlayerOverlay({
   }
 
   function externalSourceActionLabel(panelId: ExternalPanelId, sourceActive: boolean) {
-    if (sourceActive) return "Active";
-    if (panelId === "spotify") return "Open Spotify";
-    if (panelId === "bluetooth") return "Pair phone";
-    if (panelId === "upnp") return "Open DLNA";
-    return "Open AirPlay";
+    if (sourceActive) return t("common.active");
+    if (panelId === "spotify") return t("source.openSpotify");
+    if (panelId === "bluetooth") return t("source.pairPhone");
+    if (panelId === "upnp") return t("source.openDlna");
+    return t("source.openAirplay");
   }
 
   function renderRadioSourcePanel() {
@@ -925,9 +932,9 @@ export function PlayerOverlay({
             <RadioIcon size={28} />
           </div>
           <div className="source-hero-copy">
-            <span className="source-panel-kicker">{source?.label ?? "Radio"}</span>
-            <strong>{sourceStatusLabel(source, sourcePending)}</strong>
-            <p>{selectedRadioCategory === "random" ? "Three fresh picks. Tap one to play." : source?.secondaryStatus ?? "Radio presets"}</p>
+            <span className="source-panel-kicker">{sourceLabel("radio", source?.label ?? "Radio")}</span>
+            <strong>{localizedSourceStatusLabel(source, sourcePending)}</strong>
+            <p>{selectedRadioCategory === "random" ? t("radio.threeFresh") : source?.secondaryStatus ?? t("source.radioPresets")}</p>
           </div>
           <button
             className={`source-hero-action ${source?.active ? "is-active" : ""}`}
@@ -937,7 +944,7 @@ export function PlayerOverlay({
             onClick={() => void switchSource("radio")}
           >
             {sourcePending ? <LoaderCircle size={18} className="is-spinning" /> : <RadioIcon size={18} />}
-            <span>{source?.active ? "Active" : "Enable Radio"}</span>
+            <span>{source?.active ? t("common.active") : t("source.enableRadio")}</span>
           </button>
         </div>
 
@@ -956,7 +963,7 @@ export function PlayerOverlay({
                 data-radio-category-count={count}
                 onClick={() => setSelectedRadioCategory(category.id)}
               >
-                {category.label}
+                {category.id === "random" ? t("radio.random") : category.label}
               </button>
             );
           })}
@@ -964,7 +971,7 @@ export function PlayerOverlay({
 
         {radioLoading ? (
           <div className="source-result-meta" data-radio-loading-status>
-            <span>Loading stations...</span>
+            <span>{t("radio.loading")}</span>
           </div>
         ) : null}
 
@@ -1018,7 +1025,7 @@ export function PlayerOverlay({
             );
           })}
           {!radioLoading && radioStations.length === 0 ? (
-            <p className="queue-panel-empty">No stations here. Try Random.</p>
+            <p className="queue-panel-empty">{t("radio.empty")}</p>
           ) : null}
         </div>
       </section>
@@ -1039,9 +1046,9 @@ export function PlayerOverlay({
             <Icon size={28} />
           </div>
           <div className="external-source-copy">
-            <span className="source-panel-kicker">{source?.label ?? selectedPanelConfig.label}</span>
-            <strong>{sourceStatusLabel(source, sourcePending)}</strong>
-            <p>{source?.connectedLabel ?? source?.advertisedLabel ?? source?.secondaryStatus ?? panel.label}</p>
+            <span className="source-panel-kicker">{sourceLabel(panelId, source?.label ?? localizedPanelLabel(panelId))}</span>
+            <strong>{localizedSourceStatusLabel(source, sourcePending)}</strong>
+            <p>{source?.connectedLabel ?? source?.advertisedLabel ?? source?.secondaryStatus ?? localizedPanelLabel(panel.id)}</p>
           </div>
           <button
             className={`external-source-action ${source?.active ? "is-active" : ""}`}
@@ -1051,7 +1058,7 @@ export function PlayerOverlay({
             onClick={() => void switchSource(panelId)}
           >
             {sourcePending ? <LoaderCircle size={18} className="is-spinning" /> : <Icon size={18} />}
-            <span>{sourcePending && isHandoffSourceId(panelId) ? "Waiting" : externalSourceActionLabel(panelId, Boolean(source?.active))}</span>
+            <span>{sourcePending && isHandoffSourceId(panelId) ? t("common.waiting") : externalSourceActionLabel(panelId, Boolean(source?.active))}</span>
           </button>
         </div>
       </section>
@@ -1060,10 +1067,10 @@ export function PlayerOverlay({
 
   function renderHandoffPanel(panelId: ExternalPanelId) {
     const source = audio.sources.find((entry) => entry.id === panelId);
-    const sourceLabel = getHandoffSourceLabel(panelId, source);
+    const handoffLabel = sourceLabel(panelId, getHandoffSourceLabel(panelId, source));
 
     return (
-      <section className="external-source-panel" aria-label={`${sourceLabel} connection handoff`}>
+      <section className="external-source-panel" aria-label={`${handoffLabel} connection handoff`}>
         <div
           className="dlna-handoff-card player-dlna-handoff-card"
           role="status"
@@ -1073,9 +1080,9 @@ export function PlayerOverlay({
           <span className="dlna-handoff-icon" aria-hidden="true">
             <LoaderCircle size={26} className="is-spinning" />
           </span>
-          <span className="source-panel-kicker">{sourceLabel}</span>
-          <strong>Connecting</strong>
-          <p>Connect from your phone. This returns when playback starts.</p>
+          <span className="source-panel-kicker">{handoffLabel}</span>
+          <strong>{t("handoff.title")}</strong>
+          <p>{t("handoff.body")}</p>
         </div>
       </section>
     );
@@ -1085,7 +1092,7 @@ export function PlayerOverlay({
 
   return (
     <section className={`overlay player-overlay ${active ? "is-active" : ""}`} aria-label="Player controls" aria-hidden={!active}>
-      <button className="overlay-backdrop" type="button" tabIndex={active ? 0 : -1} aria-label="Return to ambient" onClick={onReturnAmbient} />
+      <button className="overlay-backdrop" type="button" tabIndex={active ? 0 : -1} aria-label={t("library.backMain")} onClick={onReturnAmbient} />
       <div className="player-shell" role="dialog" aria-modal="true" data-gesture-protected {...overlayReturnGesture}>
         <div className="player-now-playing-pane" data-player-now-playing-pane>
           <div className="cover-zone">
@@ -1111,9 +1118,9 @@ export function PlayerOverlay({
             </div>
 
             <div className="track-stack">
-              <h1>{playbackTruth.title}</h1>
-              <p className="artist">{playbackTruth.artist}</p>
-              <p>{playbackTruth.album}</p>
+              <h1>{playback.title ?? t("playback.nothingPlaying")}</h1>
+              <p className="artist">{playback.artist ?? t("playback.unknownArtist")}</p>
+              <p>{playback.album ?? t("playback.noAlbum")}</p>
               <p>{playbackTruth.queuePositionLabel}</p>
             </div>
 
@@ -1131,7 +1138,7 @@ export function PlayerOverlay({
                     max={durationSeconds}
                     step={1}
                     value={seekDraftSeconds ?? seekPendingSeconds ?? elapsedSeconds}
-                    aria-label="Seek position"
+                    aria-label={t("playback.seekPosition")}
                     disabled={status.pending}
                     onChange={(event) => handleSeekDraft(event.currentTarget.value)}
                     onPointerUp={(event) => void commitSeek(Number(event.currentTarget.value))}
@@ -1147,24 +1154,24 @@ export function PlayerOverlay({
               </div>
               <span>{formatDuration(displayedDurationSeconds)}</span>
             </div>
-            {seekError ? <p className="player-inline-message is-error">{seekError}</p> : null}
-            {!seekError && seekPendingSeconds !== null ? <p className="player-inline-message">Seeking to {formatDuration(seekPendingSeconds)}...</p> : null}
+            {seekError ? <p className="player-inline-message is-error">{friendlyError(seekError) ?? seekError}</p> : null}
+            {!seekError && seekPendingSeconds !== null ? <p className="player-inline-message">{t("playback.seekingTo", { time: formatDuration(seekPendingSeconds) })}</p> : null}
 
             <div className="transport-row" aria-label="Playback controls">
-              <button className="icon-button" type="button" aria-label="Previous" title={previousTitle} disabled={previousDisabled} onClick={() => void onPlaybackAction("previous")}>
+              <button className="icon-button" type="button" aria-label={t("playback.previous")} title={previousTitle} disabled={previousDisabled} onClick={() => void onPlaybackAction("previous")}>
                 <SkipBack size={34} fill="currentColor" />
               </button>
-              <button className="play-button" type="button" aria-label={isPlaying ? "Pause" : "Play"} title={playPauseTitle} disabled={playPauseDisabled} onClick={() => void onPlaybackAction("play_pause")}>
+              <button className="play-button" type="button" aria-label={isPlaying ? t("playback.pause") : t("playback.play")} title={playPauseTitle} disabled={playPauseDisabled} onClick={() => void onPlaybackAction("play_pause")}>
                 {isPlaying ? <Pause size={40} fill="currentColor" /> : <Play size={40} fill="currentColor" />}
               </button>
-              <button className="icon-button" type="button" aria-label="Next" title={nextTitle} disabled={nextDisabled} onClick={() => void onPlaybackAction("next")}>
+              <button className="icon-button" type="button" aria-label={t("playback.next")} title={nextTitle} disabled={nextDisabled} onClick={() => void onPlaybackAction("next")}>
                 <SkipForward size={34} fill="currentColor" />
               </button>
               <button
                 className={`icon-button ${playback.favorite ? "is-active" : ""}`}
                 type="button"
-                aria-label={playback.favorite ? "Remove favorite" : "Favorite"}
-                title={playback.favorite ? "Remove favorite" : "Favorite"}
+                aria-label={playback.favorite ? t("playback.removeFavorite") : t("playback.favorite")}
+                title={playback.favorite ? t("playback.removeFavorite") : t("playback.favorite")}
                 aria-pressed={playback.favorite}
                 disabled={status.pending}
                 onClick={() => void handlePlayerFavoriteAction()}
@@ -1175,26 +1182,26 @@ export function PlayerOverlay({
           </div>
         </div>
 
-        <aside className="library-zone" aria-label="Audio source browser" data-player-library-pane data-player-source-panel={selectedPrimaryPanel}>
+        <aside className="library-zone" aria-label={t("library.source")} data-player-library-pane data-player-source-panel={selectedPrimaryPanel}>
           <div className="library-browser-header">
             <div className="library-browser-title">
               <div>
-                <span className="source-panel-kicker">Source</span>
-                <strong>{selectedPanelConfig.label}</strong>
+                <span className="source-panel-kicker">{t("library.source")}</span>
+                <strong>{localizedPanelLabel(selectedPanelConfig.id)}</strong>
               </div>
             </div>
             {selectedPrimaryPanel === "library" && librarySearchEnabled ? (
               <label
                 className="library-search-control"
                 data-library-search
-                title={`Search ${librarySearchStorageLabel}`}
+                title={t("library.search", { storage: librarySearchStorageLabel })}
               >
                 <Search size={16} aria-hidden="true" />
                 <input
                   type="search"
                   value={librarySearchQuery}
-                  placeholder={`Search ${librarySearchStorageLabel}`}
-                  aria-label={`Search ${librarySearchStorageLabel}`}
+                  placeholder={t("library.search", { storage: librarySearchStorageLabel })}
+                  aria-label={t("library.search", { storage: librarySearchStorageLabel })}
                   data-library-search-input
                   data-gesture-control
                   onChange={(event) => handleLibrarySearchChange(event.currentTarget.value)}
@@ -1202,8 +1209,8 @@ export function PlayerOverlay({
                 <button
                   className={`library-search-clear ${librarySearchQuery ? "is-visible" : ""}`}
                   type="button"
-                  aria-label="Clear search"
-                  title="Clear search"
+                  aria-label={t("library.clearSearch")}
+                  title={t("library.clearSearch")}
                   disabled={!librarySearchQuery}
                   data-library-search-clear
                   data-gesture-control
@@ -1213,8 +1220,8 @@ export function PlayerOverlay({
                 </button>
               </label>
             ) : null}
-            <div className="library-volume-actions" data-player-volume-control title={volumeError ?? "Volume"}>
-              <span className="library-volume-label">Volume</span>
+            <div className="library-volume-actions" data-player-volume-control title={volumeError ?? t("quickMenu.volume")}>
+              <span className="library-volume-label">{t("quickMenu.volume")}</span>
               <div className="library-volume-slider-control">
                 <div className="library-volume-track" aria-hidden="true">
                   <span style={{ width: `${displayedVolumePercent}%` }} />
@@ -1226,7 +1233,7 @@ export function PlayerOverlay({
                   max={100}
                   step={1}
                   value={displayedVolumePercent}
-                  aria-label="Volume"
+                  aria-label={t("quickMenu.volume")}
                   aria-valuetext={`${displayedVolumePercent}%`}
                   data-player-volume-slider
                   data-gesture-control
@@ -1240,13 +1247,13 @@ export function PlayerOverlay({
               <span className={`library-volume-percent ${volumeError ? "is-error" : ""}`} data-player-volume-percent>{displayedVolumePercent}%</span>
               <div
                 className={`library-local-storage-meter ${localDiskUsedPercent === null ? "is-unavailable" : ""}`}
-                aria-label={`Local storage: ${localDiskFreeLabel} free`}
-                title={localDiskUsedPercent === null ? "Local storage unavailable" : `${localDiskFreeLabel} free`}
+                aria-label={t("library.localStorage", { free: localDiskFreeLabel })}
+                title={localDiskUsedPercent === null ? t("library.localStorageUnavailable") : t("library.free", { free: localDiskFreeLabel })}
                 data-library-local-storage
               >
                 <span className="library-local-storage-copy">
-                  <b>Local</b>
-                  <strong>{localDiskFreeLabel} free</strong>
+                  <b>{t("library.local")}</b>
+                  <strong>{t("library.free", { free: localDiskFreeLabel })}</strong>
                 </span>
                 <span className="library-local-storage-track" aria-hidden="true">
                   <i style={{ width: `${localDiskUsedPercent ?? 0}%` }} />
@@ -1257,11 +1264,11 @@ export function PlayerOverlay({
                 type="button"
                 data-gesture-control
                 data-player-volume-back
-                aria-label="Back to main screen"
+                aria-label={t("library.backMain")}
                 onClick={onReturnAmbient}
               >
                 <PanelRightClose size={15} />
-                <span>Back</span>
+                <span>{t("common.back")}</span>
               </button>
             </div>
           </div>
@@ -1283,8 +1290,8 @@ export function PlayerOverlay({
                     onClick={() => handlePrimaryPanelSelect(panel.id)}
                   >
                     <Icon size={20} />
-                    <strong>{panel.label}</strong>
-                    <span>{isPending ? "Opening" : panelMeta(panel.id)}</span>
+                    <strong>{localizedPanelLabel(panel.id)}</strong>
+                    <span>{isPending ? t("common.opening") : panelMeta(panel.id)}</span>
                   </button>
                 );
               })}
@@ -1297,8 +1304,8 @@ export function PlayerOverlay({
                 onClick={() => void openWebMode()}
               >
                 <Globe2 size={20} />
-                <strong>Explore</strong>
-                <span>{webModePending ? "Opening" : "Web players"}</span>
+                <strong>{t("source.explore")}</strong>
+                <span>{webModePending ? t("common.opening") : t("source.webPlayers")}</span>
               </button>
             </nav>
           ) : null}
@@ -1321,7 +1328,7 @@ export function PlayerOverlay({
                       onClick={() => handleStorageSelect(storage.id)}
                     >
                       <Icon size={18} />
-                      <strong>{storage.label}</strong>
+                      <strong>{storageLabel(storage.id)}</strong>
                       <span>{count}</span>
                     </button>
                   );
@@ -1329,7 +1336,7 @@ export function PlayerOverlay({
               </nav>
 
               {libraryError && (selectedLibraryStorage === "local" || selectedLibraryStorage === "usb") ? (
-                <p className="source-panel-error" title={libraryError}>{friendlyUiError(libraryError, "Library is not ready. Scan or retry.")}</p>
+                <p className="source-panel-error" title={libraryError}>{friendlyError(libraryError, "error.library") ?? friendlyUiError(libraryError, t("error.library"))}</p>
               ) : null}
 
               <div
@@ -1386,7 +1393,7 @@ export function PlayerOverlay({
                           className={`library-track-favorite ${track.favorite ? "is-active" : ""}`}
                           type="button"
                           aria-label={track.favorite ? `Remove ${track.title} from favorites` : `Add ${track.title} to favorites`}
-                          title={track.favorite ? "Remove favorite" : "Favorite"}
+                          title={track.favorite ? t("playback.removeFavorite") : t("playback.favorite")}
                           aria-pressed={track.favorite}
                           disabled={favoriteBusy || !track.path}
                           data-gesture-control
@@ -1399,43 +1406,43 @@ export function PlayerOverlay({
                             className="library-track-copy-local"
                             type="button"
                             aria-label={`Copy ${track.title} to Local`}
-                            title="Copy to Local"
+                            title={t("library.copyToLocal")}
                             disabled={copyingLibraryTrackId !== null || !track.path}
                             data-library-copy-local
                             data-gesture-control
                             onClick={() => void handleCopyUsbTrackToLocal(track)}
                           >
                             {copyBusy ? <LoaderCircle size={15} className="is-spinning" /> : <Copy size={15} />}
-                            <span>Copy to Local</span>
+                            <span>{t("library.copyToLocal")}</span>
                           </button>
                         ) : null}
                         {isLocalTrack && deleteConfirming ? (
                           <span className="library-track-delete-confirm" data-library-delete-confirm data-gesture-control>
-                            <span className="library-track-delete-confirm-label">Delete?</span>
+                            <span className="library-track-delete-confirm-label">{t("common.deleteQuestion")}</span>
                             <button
                               className="library-track-delete-confirm-button is-yes"
                               type="button"
                               aria-label={`Yes, delete ${track.title} from Local`}
-                              title="Yes, delete"
+                              title={t("common.yes")}
                               disabled={deletingLibraryTrackId !== null || !track.path}
                               data-library-delete-confirm-yes
                               data-gesture-control
                               onClick={() => void handleDeleteLocalTrackConfirm(track)}
                             >
                               {deleteBusy ? <LoaderCircle size={14} className="is-spinning" /> : null}
-                              <span>Yes</span>
+                              <span>{t("common.yes")}</span>
                             </button>
                             <button
                               className="library-track-delete-confirm-button is-no"
                               type="button"
                               aria-label={`No, keep ${track.title}`}
-                              title="No, keep"
+                              title={t("common.no")}
                               disabled={deletingLibraryTrackId !== null}
                               data-library-delete-confirm-no
                               data-gesture-control
                               onClick={() => handleDeleteLocalTrackCancel(track)}
                             >
-                              No
+                              {t("common.no")}
                             </button>
                           </span>
                         ) : isLocalTrack ? (
@@ -1443,35 +1450,35 @@ export function PlayerOverlay({
                             className="library-track-delete-local"
                             type="button"
                             aria-label={`Delete ${track.title} from Local`}
-                            title="Delete from Local"
+                            title={t("library.deleteFromLocal")}
                             disabled={deletingLibraryTrackId !== null || !track.path}
                             data-library-delete-local
                             data-gesture-control
                             onClick={() => handleDeleteLocalTrackRequest(track)}
                           >
                             <Trash2 size={15} />
-                            <span>Delete</span>
+                            <span>{t("common.delete")}</span>
                           </button>
                         ) : null}
                       </article>
                     );
                   })}
                   {libraryLoading && (selectedLibraryStorage === "local" || selectedLibraryStorage === "usb") ? (
-                    <p className="queue-panel-empty">Loading music library...</p>
+                    <p className="queue-panel-empty">{t("library.loading")}</p>
                   ) : null}
                   {!libraryLoading && visibleLibraryTracks.length === 0 ? (
                     <p className="queue-panel-empty">
                       {librarySearchHasNoMatches
-                        ? "No matches. Try another search."
+                        ? t("library.noMatches")
                         : selectedLibraryStorage === "nas"
-                        ? "Add NAS in Settings."
+                        ? t("library.emptyNas")
                         : selectedLibraryStorage === "usb"
-                          ? "No USB tracks found. Check the drive, then scan."
+                          ? t("library.emptyUsb")
                           : selectedLibraryStorage === "favorites"
-                            ? "No favorites yet. Tap the heart on a track."
+                            ? t("library.emptyFavorites")
                             : selectedLibraryStorage === "recently_added"
-                              ? "No recent tracks yet."
-                              : "No local tracks yet. Copy from USB or scan."}
+                              ? t("library.emptyRecent")
+                              : t("library.emptyLocal")}
                     </p>
                   ) : null}
                 </div>
@@ -1511,7 +1518,7 @@ export function PlayerOverlay({
             </>
           ) : selectedPrimaryPanel === "radio" ? renderRadioSourcePanel() : renderExternalSourcePanel(selectedPrimaryPanel)}
 
-          {sourceError ? <p className="source-panel-error" title={sourceError}>{friendlyUiError(sourceError)}</p> : null}
+          {sourceError ? <p className="source-panel-error" title={sourceError}>{friendlyError(sourceError) ?? friendlyUiError(sourceError)}</p> : null}
           {!sourceError && sourceHint && selectedPrimaryPanel !== "radio" ? <p className="source-panel-hint">{sourceHint}</p> : null}
         </aside>
       </div>

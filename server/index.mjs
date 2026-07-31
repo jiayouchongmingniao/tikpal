@@ -253,6 +253,7 @@ const ROOM_EXPERIENCE_STATE_PATH = resolve(process.env.TIKPAL_ROOM_EXPERIENCE_ST
 const AUDIO_VOLUME_STATE_PATH = resolve(process.env.TIKPAL_AUDIO_VOLUME_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "audio-volume-state.json"));
 const AUDIO_SOURCE_MEMORY_STATE_PATH = resolve(process.env.TIKPAL_AUDIO_SOURCE_MEMORY_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "audio-source-memory.json"));
 const PLAYBACK_MODE_STATE_PATH = resolve(process.env.TIKPAL_PLAYBACK_MODE_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "playback-mode-state.json"));
+const UI_PREFERENCES_STATE_PATH = resolve(process.env.TIKPAL_UI_PREFERENCES_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "ui-preferences.json"));
 const NAS_SOURCES_STATE_PATH = resolve(process.env.TIKPAL_NAS_SOURCES_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "nas-sources.json"));
 const NAS_CREDENTIALS_DIR = resolve(process.env.TIKPAL_NAS_CREDENTIALS_DIR ?? resolve(process.cwd(), ".tikpal", "nas-credentials"));
 const NAS_MOUNT_ROOT = resolve(process.env.TIKPAL_NAS_MOUNT_ROOT ?? "/mnt/tikpal-nas");
@@ -284,6 +285,18 @@ function normalizeWebModeProviderTextScale(value, fallback = null) {
 }
 const WEB_MODE_DEFAULT_PROVIDER_TEXT_SCALE = normalizeWebModeProviderTextScale(process.env.TIKPAL_WEB_MODE_PROVIDER_TEXT_SCALE ?? "1.10", 1.1);
 const WEB_MODE_PROXY_TEST_NETWORK = parseEnvBoolean(process.env.TIKPAL_WEB_MODE_PROXY_TEST_NETWORK ?? "0");
+const UI_LOCALE_INPUT_METHODS = {
+  en: "keyboard-us",
+  "zh-CN": "pinyin",
+  de: "keyboard-de",
+  it: "keyboard-it",
+  ko: "hangul",
+  ja: "anthy",
+  es: "keyboard-es"
+};
+const UI_LOCALES = new Set(Object.keys(UI_LOCALE_INPUT_METHODS));
+const UI_INPUT_METHOD_SYNC_COMMAND = process.env.TIKPAL_UI_INPUT_METHOD_SYNC_COMMAND
+  ?? (API_MODE === "mpc" ? "if [ -f /usr/share/onboard/scripts/tikpalImeToggle.py ]; then python3 /usr/share/onboard/scripts/tikpalImeToggle.py --set-mode %INPUT_METHOD%; fi" : "");
 const LOCAL_LIBRARY_COVER_COLUMNS = ["cover_relative_path", "cover_path", "album_art_relative_path", "artwork_relative_path"];
 const LOCAL_LIBRARY_COVER_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp"];
 const USB_LIBRARY_AUDIO_EXTENSIONS = new Set([".aac", ".aif", ".aiff", ".alac", ".flac", ".m4a", ".mp3", ".ogg", ".opus", ".wav", ".wma"]);
@@ -4235,6 +4248,82 @@ async function writeNasSourcesState(state) {
   return normalized;
 }
 
+function normalizeUiLocale(value) {
+  const raw = String(value ?? "").trim();
+  if (UI_LOCALES.has(raw)) return raw;
+  const lower = raw.toLowerCase().replace("_", "-");
+  if (lower === "zh" || lower === "zh-cn" || lower === "cn") return "zh-CN";
+  if (lower === "en" || lower.startsWith("en-")) return "en";
+  if (lower === "de" || lower.startsWith("de-")) return "de";
+  if (lower === "it" || lower.startsWith("it-")) return "it";
+  if (lower === "ko" || lower.startsWith("ko-")) return "ko";
+  if (lower === "ja" || lower.startsWith("ja-")) return "ja";
+  if (lower === "es" || lower.startsWith("es-")) return "es";
+  return null;
+}
+
+function buildUiPreferences(locale = "en", updatedAt = null, warning = null) {
+  const normalizedLocale = normalizeUiLocale(locale) ?? "en";
+  return {
+    locale: normalizedLocale,
+    inputMethodId: UI_LOCALE_INPUT_METHODS[normalizedLocale] ?? "keyboard-us",
+    updatedAt,
+    warning
+  };
+}
+
+function normalizeUiPreferencesState(raw = {}) {
+  return buildUiPreferences(raw?.locale, typeof raw?.updatedAt === "string" ? raw.updatedAt : null, null);
+}
+
+async function readUiPreferences() {
+  try {
+    return normalizeUiPreferencesState(JSON.parse(await readFile(UI_PREFERENCES_STATE_PATH, "utf8")));
+  } catch {
+    return buildUiPreferences();
+  }
+}
+
+function expandUiInputMethodSyncCommand(command, preferences) {
+  return command
+    .replaceAll("%LOCALE%", shellQuote(preferences.locale))
+    .replaceAll("%INPUT_METHOD%", shellQuote(preferences.inputMethodId));
+}
+
+async function syncUiInputMethod(preferences) {
+  if (!UI_INPUT_METHOD_SYNC_COMMAND.trim()) return null;
+  try {
+    await runCommand(expandUiInputMethodSyncCommand(UI_INPUT_METHOD_SYNC_COMMAND, preferences), {
+      allowFailure: false,
+      timeout: 2500
+    });
+    return null;
+  } catch (error) {
+    const warning = error instanceof Error ? error.message : "Input method sync failed";
+    console.warn(`tikpal-api input method sync failed: ${warning}`);
+    return warning;
+  }
+}
+
+async function writeUiPreferences(patch, options = {}) {
+  const locale = normalizeUiLocale(patch?.locale);
+  if (!locale) {
+    throw new Error("Language must be en, zh-CN, de, it, ko, ja, or es");
+  }
+  const next = buildUiPreferences(locale, new Date().toISOString(), null);
+  await mkdir(dirname(UI_PREFERENCES_STATE_PATH), { recursive: true });
+  await writeFile(UI_PREFERENCES_STATE_PATH, `${JSON.stringify(next, null, 2)}\n`);
+  const warning = options.syncInputMethod === false ? null : await syncUiInputMethod(next);
+  return warning ? { ...next, warning } : next;
+}
+
+async function attachUiPreferences(state) {
+  return {
+    ...state,
+    preferences: await readUiPreferences()
+  };
+}
+
 function nasCredentialPath(sourceId) {
   const id = normalizeNasId(sourceId);
   return resolve(NAS_CREDENTIALS_DIR, `${id}.cred`);
@@ -4481,15 +4570,17 @@ async function clearWebModeHandoffState() {
 }
 
 async function buildWebModeState() {
-  const [settings, runtimeState] = await Promise.all([
+  const [settings, runtimeState, preferences] = await Promise.all([
     ensureWebModeSettings(),
-    readWebModeRuntimeState()
+    readWebModeRuntimeState(),
+    readUiPreferences()
   ]);
   return {
     enabled: true,
     activeProvider: runtimeState.activeProvider,
     providers: WEB_MODE_PROVIDERS,
     settings,
+    preferences,
     lastError: runtimeState.lastError,
     updatedAt: runtimeState.updatedAt ?? settings.updatedAt ?? new Date(0).toISOString()
   };
@@ -9526,7 +9617,7 @@ async function shouldWaitForStartupPlaybackState() {
 
 async function getTikpalState(options = {}) {
   if (API_MODE !== "mpc") {
-    return await collectTikpalStateSnapshot(options);
+    return await attachUiPreferences(await collectTikpalStateSnapshot(options));
   }
 
   if (await shouldWaitForStartupPlaybackState()) {
@@ -9539,9 +9630,9 @@ async function getTikpalState(options = {}) {
   }
   void recoverWeakNetworkMpcRadioIfNeeded(cachedState);
   void recoverHifiRuntimePlaybackIfNeeded(cachedState);
-  return await refreshAirplayPlaybackMetadataForState(cachedState, {
+  return await attachUiPreferences(await refreshAirplayPlaybackMetadataForState(cachedState, {
     force: options.forceFreshAirplayMetadata === true
-  });
+  }));
 }
 
 function startTikpalStateSnapshotCollector() {
@@ -12574,11 +12665,12 @@ function buildRoomModeCatalog() {
 }
 
 async function buildRemoteStateResponse() {
-  const [state, experience, sceneCatalog, webMode] = await Promise.all([
+  const [state, experience, sceneCatalog, webMode, preferences] = await Promise.all([
     getTikpalState(),
     getRoomExperienceState(),
     getAmbientBackgroundVideosPayload(),
-    buildWebModeState()
+    buildWebModeState(),
+    readUiPreferences()
   ]);
   const activeSceneVideo = sceneCatalog.videos.find((video) => video.id === experience.sceneVideoId) ?? null;
 
@@ -12620,6 +12712,7 @@ async function buildRemoteStateResponse() {
       lastError: webMode.lastError
     },
     runtime: state.runtime,
+    preferences,
     updatedAt: state.runtime.updatedAt
   };
 }
@@ -12820,6 +12913,16 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "GET" && url.pathname === "/api/v1/remote/catalog") {
       sendJson(response, 200, await buildRemoteCatalogResponse());
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/v1/preferences") {
+      sendJson(response, 200, await readUiPreferences());
+      return;
+    }
+
+    if (request.method === "PATCH" && url.pathname === "/api/v1/preferences") {
+      sendJson(response, 200, await writeUiPreferences(await readJson(request)));
       return;
     }
 

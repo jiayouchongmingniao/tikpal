@@ -35,6 +35,7 @@ const requiredFiles = [
   "deploy/chromium/chromium-flags.conf",
   "deploy/chromium/managed-policies.json",
   "deploy/chromium/env.kiosk.example",
+  "src/i18n.tsx",
   "deploy/moode/tikpal-audio-adapt.sh",
   "deploy/moode/tikpal-local-library-sync.sh",
   "deploy/moode/tikpal-library-sync.sh",
@@ -491,6 +492,7 @@ esac
   const onboardImeToggleScript = await readFile(path.join(ROOT, "deploy/chromium/onboard-scripts/tikpalImeToggle.py"), "utf8");
   const onboardTheme = await readFile(path.join(ROOT, "deploy/chromium/onboard-themes/Tikpal-Classic.colors"), "utf8");
   const serverSource = await readFile(path.join(ROOT, "server/index.mjs"), "utf8");
+  const webModeErrorPage = await readFile(path.join(ROOT, "public/web-mode-error.html"), "utf8");
   const webModeCrossfadeScript = await readFile(path.join(ROOT, "deploy/moode/tikpal-web-mode-crossfade.sh"), "utf8");
   const audioAdaptScript = await readFile(path.join(ROOT, "deploy/moode/tikpal-audio-adapt.sh"), "utf8");
   const localLibrarySyncScript = await readFile(path.join(ROOT, "deploy/moode/tikpal-local-library-sync.sh"), "utf8");
@@ -500,6 +502,7 @@ esac
   const extensionManifest = JSON.parse(await readFile(path.join(ROOT, "deploy/chromium/web-mode-extension/manifest.json"), "utf8"));
   const extensionContent = await readFile(path.join(ROOT, "deploy/chromium/web-mode-extension/content.js"), "utf8");
   const extensionBackground = await readFile(path.join(ROOT, "deploy/chromium/web-mode-extension/background.js"), "utf8");
+  const i18nSource = await readFile(path.join(ROOT, "src/i18n.tsx"), "utf8");
   const sidePanelSource = await readFile(path.join(ROOT, "src/components/WebModeSidePanel.tsx"), "utf8");
   const quickSettingsSource = await readFile(path.join(ROOT, "src/components/QuickSettingsOverlay.tsx"), "utf8");
   const remoteControlSource = await readFile(path.join(ROOT, "src/components/RemoteControlApp.tsx"), "utf8");
@@ -572,7 +575,7 @@ esac
   assert(extensionBackground.includes("chrome.tabs.update(sender.tab.id, { url: provider.url })"), "extension background should navigate the bootstrap tab after proxy sync");
   assert(sidePanelSource.includes('sendWebModeAction({ type: "proxy", enabled:'), "Explore side panel should use the shared proxy action");
   assert(sidePanelSource.includes('sendWebModeAction({ type: "provider_text_scale"') && sidePanelSource.includes("data-web-mode-text-scale-option"), "Explore side panel should expose the provider text scale action");
-  assert(sidePanelSource.includes("inferFailedProviderFromError") && sidePanelSource.includes('"Failed"') && sidePanelSource.includes("is-failed"), "Explore side panel should show provider-open failures without marking the provider active");
+  assert(sidePanelSource.includes("inferFailedProviderFromError") && sidePanelSource.includes('"common.failed"') && sidePanelSource.includes("is-failed"), "Explore side panel should show provider-open failures without marking the provider active");
   assert(stylesSource.includes(".web-mode-provider.is-failed"), "Explore side panel should style failed provider-open state separately from Active");
   assert(!sidePanelSource.includes("updateWebModeSettings"), "Explore side panel should not reopen the provider to switch proxy mode");
   assert(!sidePanelSource.includes("data-web-mode-keyboard-toggle") && !sidePanelSource.includes("toggleKeyboard"), "Explore side panel should rely on automatic input-focus keyboard behavior");
@@ -599,12 +602,12 @@ esac
     "Back controls should share a panel-close icon without logout or plain-arrow semantics"
   );
   assert(
-    quickSettingsSource.includes('"Online"')
-      && quickSettingsSource.includes('"Limited"')
-      && quickSettingsSource.includes('"Music saved on this device"')
-      && quickSettingsSource.includes('"Add NAS in Settings"')
+    i18nSource.includes('"common.online": "Online"')
+      && i18nSource.includes('"settings.limited": "Limited"')
+      && i18nSource.includes('"settings.savedOnDevice": "Music saved on this device"')
+      && i18nSource.includes('"settings.addNasInSettings": "Add NAS in Settings"')
+      && quickSettingsSource.includes('t("common.applying")')
       && quickSettingsSource.includes("nasPasswordVisible")
-      && quickSettingsSource.includes('"Applying..."')
       && !quickSettingsSource.includes("Tikpal API")
       && !quickSettingsSource.includes("Manifest-backed music")
       && !quickSettingsSource.includes("Renderer:")
@@ -622,12 +625,22 @@ esac
     "friendly UI copy helpers should centralize fallback and error language"
   );
   assert(
-    playerOverlaySource.includes("dataSyncLabel(status)")
-      && playerOverlaySource.includes('"Open Spotify"')
-      && playerOverlaySource.includes('"Open AirPlay"')
-      && playerOverlaySource.includes('"Pair phone"')
-      && playerOverlaySource.includes('"Open DLNA"')
-      && playerOverlaySource.includes("Connect from your phone. This returns when playback starts.")
+    playerOverlaySource.includes('status.pending ? t("status.updating")')
+      && playerOverlaySource.includes('t("status.live")')
+      && playerOverlaySource.includes('t("status.offlineView")')
+      && i18nSource.includes('"status.live": "Live"')
+      && i18nSource.includes('"status.offlineView": "Offline view"')
+      && i18nSource.includes('"status.updating": "Updating"')
+      && playerOverlaySource.includes('t("source.openSpotify")')
+      && playerOverlaySource.includes('t("source.openAirplay")')
+      && playerOverlaySource.includes('t("source.pairPhone")')
+      && playerOverlaySource.includes('t("source.openDlna")')
+      && playerOverlaySource.includes('t("handoff.body")')
+      && i18nSource.includes('"source.openSpotify": "Open Spotify"')
+      && i18nSource.includes('"source.openAirplay": "Open AirPlay"')
+      && i18nSource.includes('"source.pairPhone": "Pair phone"')
+      && i18nSource.includes('"source.openDlna": "Open DLNA"')
+      && i18nSource.includes('"handoff.body": "Connect from your phone. This returns when playback starts."')
       && !playerOverlaySource.includes("API Confirmed")
       && !playerOverlaySource.includes("Fallback Data")
       && !playerOverlaySource.includes("Enable Spotify")
@@ -673,10 +686,13 @@ esac
     "NAS Library tracks should scan configured roots, expose MPD-visible NAS paths, and play from the Player Library"
   );
   assert(
-    playerOverlaySource.includes("function libraryPlaybackHint")
-      && playerOverlaySource.includes('"Playing from NAS."')
-      && playerOverlaySource.includes('"Playing from USB."')
-      && playerOverlaySource.includes('"Playing from Local."')
+    playerOverlaySource.includes("function localizedLibraryPlaybackHint")
+      && playerOverlaySource.includes('t("library.playingFromNas")')
+      && playerOverlaySource.includes('t("library.playingFromUsb")')
+      && playerOverlaySource.includes('t("library.playingFromLocal")')
+      && i18nSource.includes('"library.playingFromNas": "Playing from NAS."')
+      && i18nSource.includes('"library.playingFromUsb": "Playing from USB."')
+      && i18nSource.includes('"library.playingFromLocal": "Playing from Local."')
       && playerOverlaySource.includes("track.path, track.storage")
       && !playerOverlaySource.includes('if (storageId === "nas")'),
     "Library playback hints should identify Local, USB, and NAS tracks distinctly"
@@ -691,9 +707,11 @@ esac
   assert(
     remoteControlSource.includes("setActionError")
       && remoteControlSource.includes("setRefreshError")
-      && remoteControlSource.includes("friendlyUiError")
-      && remoteControlSource.includes("Access key")
-      && remoteControlSource.includes("No key")
+      && remoteControlSource.includes("friendlyError")
+      && remoteControlSource.includes('t("remote.accessKey")')
+      && remoteControlSource.includes('t("remote.noKey")')
+      && i18nSource.includes('"remote.accessKey": "Access key"')
+      && i18nSource.includes('"remote.noKey": "No key"')
       && remoteControlSource.includes("PanelRightClose")
       && !remoteControlSource.includes("Remote key")
       && !remoteControlSource.includes("Back to Tikpal"),
@@ -733,7 +751,7 @@ esac
   assert(kioskSession.includes("TIKPAL_KIOSK_X_COMMAND_TIMEOUT_SECONDS"), "kiosk session should expose an X command timeout");
   assert(kioskSession.includes("run_x_command xset"), "kiosk session should bound xset commands");
   assert(kioskSession.includes("GTK_IM_MODULE=fcitx") && kioskSession.includes("XMODIFIERS=@im=fcitx"), "kiosk session should expose Fcitx5 to Chromium/X11");
-  assert(kioskSession.includes("DefaultIM=pinyin") && kioskSession.includes("Name=keyboard-us") && kioskSession.includes("Name=pinyin") && kioskSession.includes("Name=anthy") && kioskSession.includes("Name=keyboard-es"), "kiosk session should seed English, Chinese, Japanese, and Spanish input methods");
+  assert(kioskSession.includes("read_preferred_input_method") && kioskSession.includes("DefaultIM=$default_im") && kioskSession.includes("Name=keyboard-us") && kioskSession.includes("Name=pinyin") && kioskSession.includes("Name=keyboard-de") && kioskSession.includes("Name=keyboard-it") && kioskSession.includes("Name=hangul") && kioskSession.includes("Name=anthy") && kioskSession.includes("Name=keyboard-es"), "kiosk session should seed English, Chinese, German, Italian, Korean, Japanese, and Spanish input methods");
   assert(kioskSession.includes("0=F9") && kioskSession.includes("1=Control+space"), "kiosk session should configure touch and hardware input-method toggles without opening Chromium DevTools");
   assert(kioskSession.includes("ActiveByDefault=False") && kioskSession.includes("ShareInputState=All"), "kiosk input should start inactive while sharing the selected method across provider windows");
   assert(kioskSession.includes('candidate_font="Source Han Sans CN 16"') && kioskSession.includes('candidate_font="Noto Sans CJK SC 16"'), "Fcitx5 should render large CJK candidates with the best available kiosk font");
@@ -783,6 +801,12 @@ esac
   assert(webModeScript.includes('TIKPAL_WEB_MODE_QQ_MV_CINEMA_MODE="$TIKPAL_WEB_MODE_QQ_MV_CINEMA_MODE"'), "web mode should pass the QQ MV cinema switch to the provider guard");
   assert(webModeScript.includes("TIKPAL_WEB_MODE_QQ_MV_AUTO_PLAY:=1"), "web mode should enable conditional QQ MV auto play by default");
   assert(webModeScript.includes('TIKPAL_WEB_MODE_QQ_MV_AUTO_PLAY="$TIKPAL_WEB_MODE_QQ_MV_AUTO_PLAY"'), "web mode should pass the QQ MV auto-play switch to the provider guard");
+  assert(serverSource.includes("/api/v1/preferences") && serverSource.includes("UI_LOCALE_INPUT_METHODS"), "API should expose persisted UI language preferences and input-method mapping");
+  assert(i18nSource.includes('UiLocale = "en" | "zh-CN" | "de" | "it" | "ko" | "ja" | "es"') || i18nSource.includes('"zh-CN"'), "kiosk i18n should include the seven supported UI locales");
+  assert(quickSettingsSource.includes('data-settings-detail="language"') && quickSettingsSource.includes("languageOptions"), "Settings Preferences should expose the Language detail first");
+  assert(onboardImeToggleScript.includes("--set-locale") && onboardImeToggleScript.includes("--set-mode") && onboardImeToggleScript.includes('"ko": "hangul"'), "Onboard IME toggle should support locale and direct mode sync");
+  assert(kioskSession.includes("read_preferred_input_method") && kioskSession.includes("ui-preferences.json") && kioskSession.includes("fcitx5-remote -s \"$default_im\""), "kiosk session should default Fcitx from persisted UI preferences");
+  assert(webModeErrorPage.includes("/api/v1/preferences") && webModeErrorPage.includes('"zh-CN"') && webModeErrorPage.includes("applyLocale"), "Explore error page should localize itself from device preferences");
   assert(webModeScript.includes('node --experimental-websocket "$helper"'), "web mode should enable the Node 20 WebSocket API for the provider guard");
   assert(webModeScript.includes('flock -x -w "$TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS"'), "web mode should not wait forever on provider switch locks");
   assert(webModeScript.includes("9>&- &"), "web mode background children should not inherit the provider switch lock");
@@ -848,17 +872,22 @@ esac
   assert(webModeScript.includes('key.set("script", "tikpalImeToggle")'), "Onboard should use a direct script key for the Fcitx5 toggle instead of a swallowed hotkey");
   assert(webModeScript.includes('key.set("svg_id", "LWIN")'), "Onboard should keep the input-method toggle in the Compact Super key position");
   assert(webModeScript.includes('"ime_theme": "TIKPAL-IME-INACTIVE"') && webModeScript.includes('"ime_theme": "TIKPAL-IME-ACTIVE"'), "Onboard should use separate theme ids for inactive and active IME visuals");
-  assert(webModeScript.includes('"ime_label": "EN"') && webModeScript.includes('"ime_label": "中文"') && webModeScript.includes('"ime_label": "日本語"') && webModeScript.includes('"ime_label": "ES"'), "Onboard should label the input-method key for all four modes");
-  assert(webModeScript.includes('"SPCE": "空格"') && webModeScript.includes('"SPCE": "変換"') && webModeScript.includes('"SPCE": "Espacio"'), "Onboard should localize main action labels for Chinese, Japanese, and Spanish");
+  assert(webModeScript.includes('"ime_label": "EN"') && webModeScript.includes('"ime_label": "中文"') && webModeScript.includes('"ime_label": "DE"') && webModeScript.includes('"ime_label": "IT"') && webModeScript.includes('"ime_label": "한국어"') && webModeScript.includes('"ime_label": "日本語"') && webModeScript.includes('"ime_label": "ES"'), "Onboard should label the input-method key for all configured modes");
+  assert(webModeScript.includes('"SPCE": "空格"') && webModeScript.includes('"SPCE": "Leertaste"') && webModeScript.includes('"SPCE": "Spazio"') && webModeScript.includes('"SPCE": "스페이스"') && webModeScript.includes('"SPCE": "変換"') && webModeScript.includes('"SPCE": "Espacio"'), "Onboard should localize main action labels for Chinese, German, Italian, Korean, Japanese, and Spanish");
+  assert(webModeScript.includes('"AE11": "ß ?"') && webModeScript.includes('"AD11": "Ü"') && webModeScript.includes('"AC10": "Ö"') && webModeScript.includes('"AC11": "Ä"'), "Onboard should show visible German keycap differences");
+  assert(webModeScript.includes('"AE12": "ì ^"') && webModeScript.includes('"AD11": "è é"') && webModeScript.includes('"AC10": "ò ç"') && webModeScript.includes('"BKSL": "ù §"'), "Onboard should show visible Italian keycap differences");
+  assert(webModeScript.includes('"AD01": "ㅂ"') && webModeScript.includes('"AC03": "ㅇ"') && webModeScript.includes('"AB07": "ㅡ"'), "Onboard should show Korean 2-beolsik keycap hints");
   assert(webModeScript.includes('"AC10": "Ñ"') && webModeScript.includes('"AE12": "¡ ¿"') && webModeScript.includes('"AC11": "´ ¨"') && webModeScript.includes('"BKSL": "Ç"'), "Onboard should show the visible Spanish keycap differences");
-  assert(webModeScript.includes("Tikpal-Compact-Pinyin.onboard") && webModeScript.includes("Tikpal-Compact-Japanese.onboard") && webModeScript.includes("Tikpal-Compact-Spanish.onboard"), "Onboard should have separate visual layouts for every non-English mode");
+  assert(webModeScript.includes("Tikpal-Compact-Pinyin.onboard") && webModeScript.includes("Tikpal-Compact-German.onboard") && webModeScript.includes("Tikpal-Compact-Italian.onboard") && webModeScript.includes("Tikpal-Compact-Korean.onboard") && webModeScript.includes("Tikpal-Compact-Japanese.onboard") && webModeScript.includes("Tikpal-Compact-Spanish.onboard"), "Onboard should have separate visual layouts for every non-English mode");
   assert(webModeScript.includes("Tikpal-Classic.colors"), "Onboard should apply Tikpal's color scheme for the IME key");
   assert(webModeScript.includes("tikpalImeToggle.py --sync"), "Onboard should sync the IME key visual state when the keyboard is configured");
   assert(webModeScript.includes("sync_onboard_input_method_visual") && webModeScript.indexOf("sync_onboard_input_method_visual", webModeScript.indexOf("ensure_onboard()")) < webModeScript.indexOf("call_onboard_method Show", webModeScript.indexOf("ensure_onboard()")), "Onboard should reapply the IME color scheme after the Onboard process starts");
-  assert(onboardImeToggleScript.includes('fcitx5-remote') && onboardImeToggleScript.includes('"id": "keyboard-us"') && onboardImeToggleScript.includes('"id": "pinyin"') && onboardImeToggleScript.includes('"id": "anthy"') && onboardImeToggleScript.includes('"id": "keyboard-es"'), "Onboard IME toggle script should cycle Fcitx5 directly through English, Chinese, Japanese, and Spanish");
-  assert(onboardImeToggleScript.includes("Tikpal-Compact-Pinyin.onboard") && onboardImeToggleScript.includes("Tikpal-Compact-Japanese.onboard") && onboardImeToggleScript.includes("Tikpal-Compact-Spanish.onboard") && onboardImeToggleScript.includes("Tikpal-Classic.colors"), "Onboard IME toggle script should update layout and color scheme after switching input methods");
+  assert(onboardImeToggleScript.includes('fcitx5-remote') && onboardImeToggleScript.includes('"id": "keyboard-us"') && onboardImeToggleScript.includes('"id": "pinyin"') && onboardImeToggleScript.includes('"id": "keyboard-de"') && onboardImeToggleScript.includes('"id": "keyboard-it"') && onboardImeToggleScript.includes('"id": "hangul"') && onboardImeToggleScript.includes('"id": "anthy"') && onboardImeToggleScript.includes('"id": "keyboard-es"'), "Onboard IME toggle script should cycle Fcitx5 directly through English, Chinese, German, Italian, Korean, Japanese, and Spanish");
+  assert(onboardImeToggleScript.includes("Tikpal-Compact-Pinyin.onboard") && onboardImeToggleScript.includes("Tikpal-Compact-German.onboard") && onboardImeToggleScript.includes("Tikpal-Compact-Italian.onboard") && onboardImeToggleScript.includes("Tikpal-Compact-Korean.onboard") && onboardImeToggleScript.includes("Tikpal-Compact-Japanese.onboard") && onboardImeToggleScript.includes("Tikpal-Compact-Spanish.onboard") && onboardImeToggleScript.includes("Tikpal-Classic.colors"), "Onboard IME toggle script should update layout and color scheme after switching input methods");
   assert(onboardImeToggleScript.includes('"--sync"'), "Onboard IME toggle script should expose a visual-state sync mode");
   assert(onboardTheme.includes("TIKPAL-IME-ACTIVE") && onboardTheme.includes("#35d0ba"), "Tikpal Onboard theme should define a clear active color for the IME key");
+  assert(onboardTheme.includes("TIKPAL-KEY-GERMAN") && onboardTheme.includes("TIKPAL-KEY-ITALIAN") && onboardTheme.includes("TIKPAL-KEY-KOREAN"), "Tikpal Onboard theme should define language key colors for German, Italian, and Korean layouts");
+  assert(systemdInstaller.includes("fcitx5-anthy") && systemdInstaller.includes("fcitx5-hangul"), "systemd installer should request Japanese and Korean Fcitx5 engines on apt-based kiosks");
   assert(systemdInstaller.includes("install_onboard_themes") && systemdInstaller.includes("Tikpal-Classic.colors"), "systemd installer should install Tikpal's Onboard IME color scheme");
   assert(deployDoc.includes("tikpalImeToggle.py"), "Pi deployment docs should describe the direct Onboard IME toggle script");
   assert(webModeScript.includes("gsettings reset org.onboard layout"), "Onboard should fall back to its packaged Compact layout when Fcitx5 is unavailable");
@@ -1142,7 +1171,6 @@ esac
   assert(webModeScript.includes('refresh_extension_script_cache "$provider_profile"') && webModeScript.includes("Default/Service Worker") && webModeScript.includes("service_worker_registration_info"), "Explore provider launch should refresh stale extension service-worker state without deleting login state");
   assert(webModeScript.indexOf('start_provider_guard "$provider" "$provider_profile" "$url" "$proxy_enabled" "$provider_port"') < webModeScript.indexOf('if ! wait_for_provider_ready "$provider_port"; then'), "provider guard should start before the ready gate so cookie prompts can be accepted during entry");
 
-  const webModeErrorPage = await readFile(path.join(ROOT, "public/web-mode-error.html"), "utf8");
   assert(webModeErrorPage.includes("did not respond"), "friendly Explore error page should avoid native Chromium error copy");
   assert(webModeErrorPage.includes("Proxy switch"), "friendly Explore error page should point users to the side-panel proxy switch");
   assert(!webModeErrorPage.includes("sendKioskHeartbeat"), "friendly Explore error page should not post kiosk heartbeats");
@@ -1156,7 +1184,7 @@ esac
   assert(!webModeTransitionPage.includes("tikpalExplorePulse"), "Explore transition page should not use the old circular pulse");
   assert(!webModeTransitionPage.includes("sendKioskHeartbeat"), "Explore transition page should not post kiosk heartbeats");
   assert(sidePanelSource.includes('new URLSearchParams(window.location.search).get("opening")'), "Explore side panel should read its initial pending provider");
-  assert(sidePanelSource.includes('connecting ? "Connecting" : current ? "Current"'), "Explore side panel should distinguish Connecting from Current");
+  assert(sidePanelSource.includes('connecting ? t("common.connecting") : current ? t("common.current")'), "Explore side panel should distinguish Connecting from Current");
   assert(stylesSource.includes("webModeProviderSignalTrace"), "Explore provider cards should use the short signal trace");
   assert(!stylesSource.includes("webModeProviderOpeningSpin"), "Explore provider cards should remove the full rotating border");
 

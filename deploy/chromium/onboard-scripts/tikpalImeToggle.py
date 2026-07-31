@@ -3,10 +3,10 @@
 
 from __future__ import annotations
 
+import argparse
 import os
 from pathlib import Path
 import subprocess
-import sys
 
 
 ONBOARD_DATA_DIR = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share")) / "onboard"
@@ -15,10 +15,23 @@ COLOR_SCHEME = ONBOARD_DATA_DIR / "themes" / "Tikpal-Classic.colors"
 MODES = [
     {"id": "keyboard-us", "layout": LAYOUT_DIR / "Tikpal-Compact-EN.onboard", "active": False},
     {"id": "pinyin", "layout": LAYOUT_DIR / "Tikpal-Compact-Pinyin.onboard", "active": True},
+    {"id": "keyboard-de", "layout": LAYOUT_DIR / "Tikpal-Compact-German.onboard", "active": True},
+    {"id": "keyboard-it", "layout": LAYOUT_DIR / "Tikpal-Compact-Italian.onboard", "active": True},
+    {"id": "hangul", "layout": LAYOUT_DIR / "Tikpal-Compact-Korean.onboard", "active": True},
     {"id": "anthy", "layout": LAYOUT_DIR / "Tikpal-Compact-Japanese.onboard", "active": True},
     {"id": "keyboard-es", "layout": LAYOUT_DIR / "Tikpal-Compact-Spanish.onboard", "active": True},
 ]
 MODE_BY_ID = {mode["id"]: mode for mode in MODES}
+LOCALE_TO_MODE_ID = {
+    "en": "keyboard-us",
+    "zh-cn": "pinyin",
+    "zh-CN": "pinyin",
+    "de": "keyboard-de",
+    "it": "keyboard-it",
+    "ko": "hangul",
+    "ja": "anthy",
+    "es": "keyboard-es",
+}
 LEGACY_LAYOUTS = {
     LAYOUT_DIR / "Tikpal-Compact.onboard": MODES[0],
 }
@@ -110,19 +123,46 @@ def sync() -> None:
     _set_onboard_visual(_current_mode())
 
 
+def _set_mode(mode: dict[str, object]) -> None:
+    if mode["active"]:
+        _remote("-o")
+    _remote("-s", str(mode["id"]))
+    _remote("-o" if mode["active"] else "-c")
+    _set_onboard_visual(mode)
+
+
 def run() -> None:
     current = _current_mode()
     index = MODES.index(current) if current in MODES else 0
-    next_mode = MODES[(index + 1) % len(MODES)]
-    if next_mode["active"]:
-        _remote("-o")
-    _remote("-s", str(next_mode["id"]))
-    _remote("-o" if next_mode["active"] else "-c")
-    _set_onboard_visual(next_mode)
+    _set_mode(MODES[(index + 1) % len(MODES)])
+
+
+def set_mode(mode_id: str) -> None:
+    mode = MODE_BY_ID.get(mode_id)
+    if mode is None:
+        raise SystemExit(f"Unsupported input mode: {mode_id}")
+    _set_mode(mode)
+
+
+def set_locale(locale: str) -> None:
+    mode_id = LOCALE_TO_MODE_ID.get(locale) or LOCALE_TO_MODE_ID.get(locale.lower())
+    if not mode_id:
+        raise SystemExit(f"Unsupported locale: {locale}")
+    set_mode(mode_id)
 
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "--sync":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--sync", action="store_true", help="Sync the Onboard layout to the current Fcitx input method.")
+    parser.add_argument("--set-mode", choices=sorted(MODE_BY_ID), help="Switch to a specific Fcitx input method and matching Onboard layout.")
+    parser.add_argument("--set-locale", help="Switch to the input method mapped from a Tikpal UI locale.")
+    args = parser.parse_args()
+
+    if args.sync:
         sync()
+    elif args.set_mode:
+        set_mode(args.set_mode)
+    elif args.set_locale:
+        set_locale(args.set_locale)
     else:
         run()

@@ -709,6 +709,9 @@ configure_onboard_input_method_key() {
   local target_theme_dir="${XDG_DATA_HOME:-$HOME/.local/share}/onboard/themes"
   local target_en_layout="$target_dir/Tikpal-Compact-EN.onboard"
   local target_pinyin_layout="$target_dir/Tikpal-Compact-Pinyin.onboard"
+  local target_german_layout="$target_dir/Tikpal-Compact-German.onboard"
+  local target_italian_layout="$target_dir/Tikpal-Compact-Italian.onboard"
+  local target_korean_layout="$target_dir/Tikpal-Compact-Korean.onboard"
   local target_japanese_layout="$target_dir/Tikpal-Compact-Japanese.onboard"
   local target_spanish_layout="$target_dir/Tikpal-Compact-Spanish.onboard"
   local target_color_scheme="$target_theme_dir/Tikpal-Classic.colors"
@@ -734,13 +737,13 @@ configure_onboard_input_method_key() {
   mkdir -p "$target_dir"
   cp -f "$source_dir/Compact-Alpha.svg" "$source_dir/Compact-Numbers.svg" \
     "$source_dir/Compact-Utils.svg" "$target_dir/"
-  if ! python3 - "$source_dir/Compact.onboard" "$target_en_layout" "$target_pinyin_layout" "$target_japanese_layout" "$target_spanish_layout" <<'PY'
+  if ! python3 - "$source_dir/Compact.onboard" "$target_en_layout" "$target_pinyin_layout" "$target_german_layout" "$target_italian_layout" "$target_korean_layout" "$target_japanese_layout" "$target_spanish_layout" <<'PY'
 from __future__ import annotations
 
 import sys
 import xml.etree.ElementTree as ET
 
-source, en_path, pinyin_path, japanese_path, spanish_path = sys.argv[1:]
+source, en_path, pinyin_path, german_path, italian_path, korean_path, japanese_path, spanish_path = sys.argv[1:]
 
 variants = [
     {
@@ -756,6 +759,102 @@ variants = [
         "ime_theme": "TIKPAL-IME-ACTIVE",
         "key_theme": "TIKPAL-KEY-PINYIN",
         "labels": {"SPCE": "空格", "RTRN": "回车"},
+    },
+    {
+        "path": german_path,
+        "ime_label": "DE",
+        "ime_theme": "TIKPAL-IME-ACTIVE",
+        "key_theme": "TIKPAL-KEY-GERMAN",
+        "labels": {
+            "TLDE": "^ °",
+            "AE02": '2 "',
+            "AE03": "3 §",
+            "AE06": "6 &",
+            "AE07": "7 /",
+            "AE08": "8 (",
+            "AE09": "9 )",
+            "AE10": "0 =",
+            "AE11": "ß ?",
+            "AE12": "´ `",
+            "AD06": "Z",
+            "AD11": "Ü",
+            "AD12": "+ *",
+            "AC10": "Ö",
+            "AC11": "Ä",
+            "BKSL": "# '",
+            "LSGT": "< >",
+            "AB01": "Y",
+            "AB08": ", ;",
+            "AB09": ". :",
+            "AB10": "- _",
+            "SPCE": "Leertaste",
+            "RTRN": "Enter",
+        },
+    },
+    {
+        "path": italian_path,
+        "ime_label": "IT",
+        "ime_theme": "TIKPAL-IME-ACTIVE",
+        "key_theme": "TIKPAL-KEY-ITALIAN",
+        "labels": {
+            "TLDE": "\\ |",
+            "AE02": '2 "',
+            "AE03": "3 £",
+            "AE06": "6 &",
+            "AE07": "7 /",
+            "AE08": "8 (",
+            "AE09": "9 )",
+            "AE10": "0 =",
+            "AE11": "' ?",
+            "AE12": "ì ^",
+            "AD11": "è é",
+            "AD12": "+ *",
+            "AC10": "ò ç",
+            "AC11": "à °",
+            "BKSL": "ù §",
+            "LSGT": "< >",
+            "AB08": ", ;",
+            "AB09": ". :",
+            "AB10": "- _",
+            "SPCE": "Spazio",
+            "RTRN": "Invio",
+        },
+    },
+    {
+        "path": korean_path,
+        "ime_label": "한국어",
+        "ime_theme": "TIKPAL-IME-ACTIVE",
+        "key_theme": "TIKPAL-KEY-KOREAN",
+        "labels": {
+            "AD01": "ㅂ",
+            "AD02": "ㅈ",
+            "AD03": "ㄷ",
+            "AD04": "ㄱ",
+            "AD05": "ㅅ",
+            "AD06": "ㅛ",
+            "AD07": "ㅕ",
+            "AD08": "ㅑ",
+            "AD09": "ㅐ",
+            "AD10": "ㅔ",
+            "AC01": "ㅁ",
+            "AC02": "ㄴ",
+            "AC03": "ㅇ",
+            "AC04": "ㄹ",
+            "AC05": "ㅎ",
+            "AC06": "ㅗ",
+            "AC07": "ㅓ",
+            "AC08": "ㅏ",
+            "AC09": "ㅣ",
+            "AB01": "ㅋ",
+            "AB02": "ㅌ",
+            "AB03": "ㅊ",
+            "AB04": "ㅍ",
+            "AB05": "ㅠ",
+            "AB06": "ㅜ",
+            "AB07": "ㅡ",
+            "SPCE": "스페이스",
+            "RTRN": "확인",
+        },
     },
     {
         "path": japanese_path,

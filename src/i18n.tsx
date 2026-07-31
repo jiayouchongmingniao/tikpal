@@ -1,0 +1,598 @@
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { fetchPreferences, updatePreferences } from "./api/tikpalClient";
+import type { AudioLibraryStorageId, PlaybackState, SourceState, UiLocale, UiPreferences, UiInputMethodId, RoomMode } from "./types";
+
+export type TranslationParams = Record<string, string | number | null | undefined>;
+
+export const defaultPreferences: UiPreferences = {
+  locale: "en",
+  inputMethodId: "keyboard-us",
+  updatedAt: null,
+  warning: null
+};
+
+export const localeInputMethods: Record<UiLocale, UiInputMethodId> = {
+  en: "keyboard-us",
+  "zh-CN": "pinyin",
+  de: "keyboard-de",
+  it: "keyboard-it",
+  ko: "hangul",
+  ja: "anthy",
+  es: "keyboard-es"
+};
+
+export const languageOptions: Array<{ locale: UiLocale; label: string; shortLabel: string }> = [
+  { locale: "en", label: "English", shortLabel: "EN" },
+  { locale: "zh-CN", label: "中文", shortLabel: "中文" },
+  { locale: "de", label: "Deutsch", shortLabel: "DE" },
+  { locale: "it", label: "Italiano", shortLabel: "IT" },
+  { locale: "ko", label: "한국어", shortLabel: "KO" },
+  { locale: "ja", label: "日本語", shortLabel: "日本語" },
+  { locale: "es", label: "Español", shortLabel: "ES" }
+];
+
+const dictionaries: Record<UiLocale, Record<string, string>> = {
+  en: {
+    "app.name": "Tikpal",
+    "common.active": "Active",
+    "common.add": "Add",
+    "common.apply": "Apply",
+    "common.applying": "Applying...",
+    "common.back": "Back",
+    "common.cancel": "Cancel",
+    "common.checkSetup": "Check setup",
+    "common.clear": "Clear",
+    "common.close": "Close",
+    "common.closing": "Closing",
+    "common.connected": "Connected",
+    "common.connecting": "Connecting",
+    "common.current": "Current",
+    "common.delete": "Delete",
+    "common.deleteQuestion": "Delete?",
+    "common.direct": "Direct",
+    "common.disabled": "Disabled",
+    "common.enabled": "Enabled",
+    "common.experimental": "Experimental",
+    "common.failed": "Failed",
+    "common.hidden": "Hidden",
+    "common.loading": "Loading",
+    "common.manual": "Manual",
+    "common.muted": "Muted",
+    "common.no": "No",
+    "common.off": "Off",
+    "common.offline": "Offline",
+    "common.on": "On",
+    "common.online": "Online",
+    "common.opening": "Opening",
+    "common.proxy": "Proxy",
+    "common.ready": "Ready",
+    "common.saving": "Saving",
+    "common.savedAutomatically": "Saved automatically",
+    "common.scanning": "Scanning...",
+    "common.syncing": "Syncing",
+    "common.unavailable": "Unavailable",
+    "common.visible": "Visible",
+    "common.waiting": "Waiting",
+    "common.yes": "Yes",
+    "status.live": "Live",
+    "status.offlineView": "Offline view",
+    "status.updating": "Updating",
+    "playback.nothingPlaying": "Nothing playing",
+    "playback.unknownArtist": "Unknown artist",
+    "playback.noAlbum": "No album",
+    "playback.sourceUnknown": "Source unknown",
+    "playback.playing": "Playing",
+    "playback.paused": "Paused",
+    "playback.stopped": "Stopped",
+    "playback.previous": "Previous",
+    "playback.play": "Play",
+    "playback.pause": "Pause",
+    "playback.next": "Next",
+    "playback.favorite": "Favorite",
+    "playback.removeFavorite": "Remove favorite",
+    "playback.seekPosition": "Seek position",
+    "playback.seekingTo": "Seeking to {time}...",
+    "playback.controlUnavailable": "Playback control unavailable",
+    "lyrics.listeningTo": "Listening to {source} audio...",
+    "lyrics.identifying": "Identifying track...",
+    "lyrics.hide": "Hide lyrics",
+    "lyrics.show": "Show lyrics",
+    "ambient.changeBrightness": "Swipe or scroll to change brightness",
+    "ambient.changeVolume": "Swipe or scroll to change volume",
+    "ambient.previousScene": "Previous scene",
+    "ambient.nextScene": "Next scene",
+    "ambient.playbackMode": "Player and playback mode",
+    "ambient.openPlayer": "Open player",
+    "ambient.player": "Player",
+    "ambient.repeatCurrent": "Repeat current track",
+    "ambient.shuffle": "Shuffle playback",
+    "ambient.muteSceneSound": "Mute scene sound",
+    "ambient.unmuteSceneSound": "Unmute scene sound",
+    "ambient.currentTime": "Current time",
+    "ambient.moodSwitcher": "Mood switcher",
+    "ambient.mood": "Mood",
+    "ambient.chooseRoomMode": "Choose room mode",
+    "ambient.roomModeLabel": "{mode} room mode",
+    "ambient.brightness": "Brightness",
+    "ambient.displayLevel": "Display level",
+    "ambient.closeAdjustment": "Close {channel} adjustment",
+    "source.library": "Library",
+    "source.audio": "Audio",
+    "source.scene": "Scene Sound",
+    "source.radio": "Radio",
+    "source.spotify": "Spotify",
+    "source.bluetooth": "Bluetooth",
+    "source.airplay": "AirPlay",
+    "source.upnp": "DLNA",
+    "source.explore": "Explore",
+    "source.localQueueReady": "Local queue ready",
+    "source.webPlayers": "Web players",
+    "source.choose": "Choose audio source",
+    "source.audioPicker": "Audio source picker",
+    "source.enableRadio": "Enable Radio",
+    "source.radioPresets": "Radio presets",
+    "source.openSpotify": "Open Spotify",
+    "source.pairPhone": "Pair phone",
+    "source.openDlna": "Open DLNA",
+    "source.openAirplay": "Open AirPlay",
+    "source.libraryReadyPickTrack": "Library ready. Pick a track.",
+    "source.readyAs": "{source} ready as {label}.",
+    "source.connectedAs": "{source}: {label}.",
+    "source.connectingAs": "Connecting as {label}",
+    "source.connectedTo": "Connected to {label}",
+    "source.ready": "{source} ready.",
+    "handoff.title": "Connecting",
+    "handoff.body": "Connect from your phone. This returns when playback starts.",
+    "room.focus": "Focus",
+    "room.calm": "Calm",
+    "room.sleep": "Sleep",
+    "room.hifi": "Hi-Fi",
+    "room.focusIntent": "Deep work & reading",
+    "room.calmIntent": "Unwind & relax",
+    "room.sleepIntent": "Dim, timer, fade-out",
+    "room.hifiIntent": "Pure music listening",
+    "quickMenu.title": "Quick menu",
+    "quickMenu.close": "Close quick menu",
+    "quickMenu.screen": "Screen",
+    "quickMenu.turnScreenOff": "Turn screen off",
+    "quickMenu.turnScreenOn": "Turn screen on",
+    "quickMenu.volume": "Volume",
+    "quickMenu.mute": "Mute volume",
+    "quickMenu.restoreVolume": "Restore volume",
+    "quickMenu.time": "Time",
+    "quickMenu.hideTime": "Hide time display",
+    "quickMenu.showTime": "Show time display",
+    "quickMenu.sleep": "Sleep",
+    "quickMenu.sleepTikpal": "Sleep Tikpal",
+    "quickMenu.tapToSleep": "Tap to sleep",
+    "startup.setRoomMood": "Set Your Room Mood",
+    "startup.roomModes": "Startup room modes",
+    "settings.console": "Console",
+    "settings.preferences": "Preferences",
+    "settings.library": "Library",
+    "settings.link": "Link",
+    "settings.care": "Care",
+    "settings.preferencesDesc": "Audio, display, type, and listening overlays.",
+    "settings.libraryDesc": "Local music, USB, NAS, and scan status.",
+    "settings.linkDesc": "Connectivity and remote reachability.",
+    "settings.careDesc": "Guarded restart and shutdown actions.",
+    "settings.language": "Language",
+    "settings.languageMeta": "Device UI and keyboard default",
+    "settings.languageDetail": "Choose Tikpal UI language. Onboard will open in the matching input mode.",
+    "settings.languageSaved": "Language saved.",
+    "settings.languageSavedWithWarning": "Language saved. Keyboard will sync soon.",
+    "settings.audioOutput": "Audio Output",
+    "settings.dsp": "DSP",
+    "settings.eqReady": "EQ Ready",
+    "settings.adjustable": "Adjustable",
+    "settings.readOnly": "Read-only",
+    "settings.display": "Display",
+    "settings.screenReady": "Screen ready",
+    "settings.brightnessReady": "Brightness ready",
+    "settings.timeNight": "Time & Night",
+    "settings.night": "Night",
+    "settings.auto": "Auto",
+    "settings.localLibrary": "Local Library",
+    "settings.savedOnDevice": "Music saved on this device",
+    "settings.nasSources": "NAS Sources",
+    "settings.addNas": "Add NAS",
+    "settings.addNasInSettings": "Add NAS in Settings",
+    "settings.usb": "USB",
+    "settings.notMounted": "Not mounted",
+    "settings.portableStorage": "Portable storage",
+    "settings.portableStorageMounted": "Portable storage mounted",
+    "settings.libraryScan": "Library Scan",
+    "settings.scanLibrary": "Scan library",
+    "settings.scanInProgress": "Scan in progress",
+    "settings.font": "Font",
+    "settings.chooseTypography": "Choose the kiosk typography",
+    "settings.skin": "Skin",
+    "settings.switchSkin": "Switch skin",
+    "settings.lyrics": "Lyrics",
+    "settings.tuneLyrics": "Tune lyrics",
+    "settings.system": "System",
+    "settings.limited": "Limited",
+    "settings.needsAttention": "Needs attention",
+    "settings.restart": "Restart",
+    "settings.shutdown": "Shutdown",
+    "settings.confirmNeeded": "Confirm Needed",
+    "settings.systemReboot": "System reboot",
+    "settings.powerOff": "Power off",
+    "settings.restartSystem": "Restart system",
+    "settings.shutdownSystem": "Shutdown system",
+    "settings.tapAgainRestart": "Tap again to restart",
+    "settings.tapAgainPowerOff": "Tap again to power off",
+    "settings.adjustType": "Adjust type",
+    "settings.proxyKeyboard": "Proxy & keyboard",
+    "settings.proxyReady": "Proxy ready",
+    "settings.officialWebPlayers": "Official web players",
+    "settings.exploreHelp": "Saves automatically. If a player won’t open, switch Proxy and retry.",
+    "settings.enterProxyUrl": "Enter a complete proxy URL",
+    "settings.nightBrightness": "{percent}% night brightness",
+    "settings.nasStatus": "NAS status",
+    "settings.tracks": "{count} tracks",
+    "settings.savedCount": "{count} saved",
+    "library.source": "Source",
+    "library.local": "Local",
+    "library.nas": "NAS",
+    "library.usb": "USB",
+    "library.favorites": "Favorites",
+    "library.recentlyAdded": "Recently Added",
+    "library.localShort": "{count} local",
+    "library.nasShort": "{count} NAS",
+    "library.usbShort": "{count} USB",
+    "library.savedShort": "{count} saved",
+    "library.newShort": "{count} new",
+    "library.copyToLocal": "Copy to Local",
+    "library.deleteFromLocal": "Delete from Local",
+    "library.search": "Search {storage}",
+    "library.clearSearch": "Clear search",
+    "library.localStorage": "Local storage: {free} free",
+    "library.localStorageUnavailable": "Local storage unavailable",
+    "library.free": "{free} free",
+    "library.backMain": "Back to main screen",
+    "library.loading": "Loading music library...",
+    "library.noMatches": "No matches. Try another search.",
+    "library.emptyNas": "Add NAS in Settings.",
+    "library.emptyUsb": "No USB tracks found. Check the drive, then scan.",
+    "library.emptyFavorites": "No favorites yet. Tap the heart on a track.",
+    "library.emptyRecent": "No recent tracks yet.",
+    "library.emptyLocal": "No local tracks yet. Copy from USB or scan.",
+    "library.playingFromLocal": "Playing from Local.",
+    "library.playingFromNas": "Playing from NAS.",
+    "library.playingFromUsb": "Playing from USB.",
+    "library.savedToLocal": "Saved to Local.",
+    "library.alreadySaved": "Already saved locally.",
+    "library.savedFavorite": "Saved to Favorites.",
+    "library.removedFavorite": "Removed from Favorites.",
+    "library.removedLocal": "Removed from Local.",
+    "radio.threeFresh": "Three fresh picks. Tap one to play.",
+    "radio.loading": "Loading stations...",
+    "radio.empty": "No stations here. Try Random.",
+    "radio.random": "Random",
+    "explore.pickLeft": "Pick music on the left",
+    "explore.noWebPlayer": "No web player",
+    "explore.chooseBelow": "Choose a web player below",
+    "explore.openLeft": "Opening on the left",
+    "explore.couldNotOpen": "Could not open",
+    "explore.proxyActive": "Proxy active",
+    "explore.directConnection": "Direct connection",
+    "explore.footer": "Choose music on the left. Tikpal controls stay here.",
+    "explore.webPlayers": "Music web players",
+    "explore.tikpalControls": "Tikpal web controls",
+    "explore.font": "Font",
+    "explore.leftFont": "Left provider font size",
+    "explore.small": "Small",
+    "explore.medium": "Medium",
+    "explore.large": "Large",
+    "remote.title": "Tikpal Remote",
+    "remote.accessKey": "Access key",
+    "remote.optionalAccessKey": "Optional access key",
+    "remote.noKey": "No key",
+    "remote.refresh": "Refresh",
+    "remote.sources": "Sources",
+    "remote.room": "Room",
+    "remote.hifiEq": "Hi-Fi EQ",
+    "remote.scene": "Scene",
+    "remote.display": "Display",
+    "remote.startExplore": "Start Explore",
+    "remote.proxyOn": "Proxy On",
+    "remote.proxyOff": "Proxy Off",
+    "remote.soundOn": "Sound On",
+    "remote.soundOff": "Sound Off",
+    "error.accessKey": "Check the access key.",
+    "error.noConnection": "No connection yet. Reopen the source and try again.",
+    "error.proxy": "Check Web Proxy and retry.",
+    "error.brightness": "Brightness did not change. Try a lower level.",
+    "error.copy": "Could not save to Local. Try again.",
+    "error.delete": "Could not remove this track. Try again.",
+    "error.favorite": "Could not update Favorites. Try again.",
+    "error.radio": "Radio is not ready. Try another station.",
+    "error.library": "Library is not ready. Scan or retry.",
+    "error.explore": "Explore did not open. Check Web Proxy and retry.",
+    "error.volume": "Volume did not change. Try again.",
+    "error.timeout": "This took too long. Try again.",
+    "error.connection": "Connection is slow. Try again.",
+    "error.generic": "Needs attention. Try again."
+  },
+  "zh-CN": {},
+  de: {},
+  it: {},
+  ko: {},
+  ja: {},
+  es: {}
+};
+
+Object.assign(dictionaries["zh-CN"], {
+  "common.active": "正在使用", "common.add": "添加", "common.apply": "应用", "common.applying": "应用中...", "common.back": "返回", "common.cancel": "取消", "common.checkSetup": "检查设置", "common.clear": "清除", "common.close": "关闭", "common.closing": "关闭中", "common.connected": "已连接", "common.connecting": "连接中", "common.current": "当前", "common.delete": "删除", "common.deleteQuestion": "删除？", "common.direct": "直连", "common.disabled": "已关闭", "common.enabled": "已启用", "common.experimental": "实验", "common.failed": "失败", "common.hidden": "隐藏", "common.loading": "加载中", "common.manual": "手动", "common.muted": "静音", "common.no": "否", "common.off": "关", "common.offline": "离线", "common.on": "开", "common.online": "在线", "common.opening": "打开中", "common.proxy": "代理", "common.ready": "就绪", "common.saving": "保存中", "common.savedAutomatically": "已自动保存", "common.scanning": "扫描中...", "common.syncing": "同步中", "common.unavailable": "不可用", "common.visible": "显示", "common.waiting": "等待中", "common.yes": "是",
+  "status.live": "实时", "status.offlineView": "离线视图", "status.updating": "更新中", "playback.nothingPlaying": "未播放", "playback.unknownArtist": "未知艺人", "playback.noAlbum": "无专辑", "playback.sourceUnknown": "未知音源", "playback.playing": "播放中", "playback.paused": "已暂停", "playback.stopped": "已停止", "playback.previous": "上一曲", "playback.play": "播放", "playback.pause": "暂停", "playback.next": "下一曲", "playback.favorite": "收藏", "playback.removeFavorite": "取消收藏", "playback.seekPosition": "播放位置", "playback.seekingTo": "跳转到 {time}...", "playback.controlUnavailable": "播放控制不可用", "lyrics.listeningTo": "正在听取 {source} 音频...", "lyrics.identifying": "正在识别歌曲...", "lyrics.hide": "隐藏歌词", "lyrics.show": "显示歌词",
+  "ambient.changeBrightness": "滑动或滚动调节亮度", "ambient.changeVolume": "滑动或滚动调节音量", "ambient.previousScene": "上一个场景", "ambient.nextScene": "下一个场景", "ambient.playbackMode": "播放器与播放模式", "ambient.openPlayer": "打开播放器", "ambient.player": "播放器", "ambient.repeatCurrent": "单曲循环", "ambient.shuffle": "随机播放", "ambient.muteSceneSound": "关闭场景声音", "ambient.unmuteSceneSound": "打开场景声音", "ambient.currentTime": "当前时间", "ambient.moodSwitcher": "氛围切换", "ambient.mood": "氛围", "ambient.chooseRoomMode": "选择房间模式", "ambient.roomModeLabel": "{mode} 房间模式", "ambient.brightness": "亮度", "ambient.displayLevel": "显示亮度", "ambient.closeAdjustment": "关闭 {channel} 调节",
+  "source.library": "曲库", "source.audio": "音频", "source.scene": "场景声音", "source.radio": "电台", "source.spotify": "Spotify", "source.bluetooth": "蓝牙", "source.airplay": "AirPlay", "source.upnp": "DLNA", "source.explore": "Explore", "source.webPlayers": "网页播放器", "source.choose": "选择音源", "source.audioPicker": "音源选择", "source.enableRadio": "启用电台", "source.radioPresets": "电台预设", "source.openSpotify": "打开 Spotify", "source.pairPhone": "配对手机", "source.openDlna": "打开 DLNA", "source.openAirplay": "打开 AirPlay", "source.libraryReadyPickTrack": "曲库就绪。请选择歌曲。", "source.readyAs": "{source} 已就绪：{label}。", "source.connectedAs": "{source}：{label}。", "source.connectingAs": "正在以 {label} 连接", "source.connectedTo": "已连接到 {label}", "source.ready": "{source} 已就绪。",
+  "handoff.title": "连接中", "handoff.body": "从手机连接。播放开始后会自动返回。", "room.focus": "专注", "room.calm": "放松", "room.sleep": "睡眠", "room.hifi": "Hi-Fi", "room.focusIntent": "深度工作与阅读", "room.calmIntent": "放松与休息", "room.sleepIntent": "调暗、定时、淡出", "room.hifiIntent": "纯音乐聆听",
+  "quickMenu.title": "快捷菜单", "quickMenu.close": "关闭快捷菜单", "quickMenu.screen": "屏幕", "quickMenu.turnScreenOff": "关闭屏幕", "quickMenu.turnScreenOn": "打开屏幕", "quickMenu.volume": "音量", "quickMenu.mute": "静音", "quickMenu.restoreVolume": "恢复音量", "quickMenu.time": "时间", "quickMenu.hideTime": "隐藏时间", "quickMenu.showTime": "显示时间", "quickMenu.sleep": "睡眠", "quickMenu.sleepTikpal": "让 Tikpal 休眠", "quickMenu.tapToSleep": "点击休眠", "startup.setRoomMood": "设置房间氛围", "startup.roomModes": "启动房间模式",
+  "settings.console": "控制台", "settings.preferences": "偏好", "settings.library": "曲库", "settings.link": "连接", "settings.care": "维护", "settings.language": "语言", "settings.languageMeta": "界面与键盘默认语言", "settings.languageDetail": "选择 Tikpal 界面语言。Onboard 会打开匹配的输入法。", "settings.languageSaved": "语言已保存。", "settings.languageSavedWithWarning": "语言已保存。键盘稍后同步。", "settings.audioOutput": "音频输出", "settings.dsp": "DSP", "settings.eqReady": "EQ 就绪", "settings.display": "显示", "settings.timeNight": "时间与夜间", "settings.localLibrary": "本地曲库", "settings.savedOnDevice": "保存在本机的音乐", "settings.nasSources": "NAS 来源", "settings.addNas": "添加 NAS", "settings.usb": "USB", "settings.notMounted": "未挂载", "settings.libraryScan": "曲库扫描", "settings.scanLibrary": "扫描曲库", "settings.font": "字体", "settings.skin": "皮肤", "settings.lyrics": "歌词", "settings.system": "系统", "settings.restart": "重启", "settings.shutdown": "关机", "settings.confirmNeeded": "需要确认", "settings.restartSystem": "重启系统", "settings.shutdownSystem": "关闭系统", "settings.tapAgainRestart": "再点一次重启", "settings.tapAgainPowerOff": "再点一次关机", "settings.tracks": "{count} 首", "settings.savedCount": "{count} 个已保存",
+  "library.source": "音源", "library.local": "本地", "library.nas": "NAS", "library.usb": "USB", "library.favorites": "收藏", "library.recentlyAdded": "最近添加", "library.copyToLocal": "复制到本地", "library.deleteFromLocal": "从本地删除", "library.search": "搜索 {storage}", "library.clearSearch": "清除搜索", "library.free": "剩余 {free}", "library.backMain": "返回主界面", "library.loading": "正在加载曲库...", "library.noMatches": "没有匹配。换个关键词试试。", "library.emptyNas": "请在 Settings 添加 NAS。", "library.emptyUsb": "未找到 USB 音频。检查 U 盘后扫描。", "library.emptyFavorites": "还没有收藏。点击歌曲上的爱心。", "library.emptyRecent": "暂无最近添加。", "library.emptyLocal": "暂无本地歌曲。可从 USB 复制或扫描。", "library.playingFromLocal": "正在播放本地音乐。", "library.playingFromNas": "正在播放 NAS 音乐。", "library.playingFromUsb": "正在播放 USB 音乐。", "library.savedToLocal": "已保存到本地。", "library.alreadySaved": "本地已存在。", "library.savedFavorite": "已加入收藏。", "library.removedFavorite": "已移出收藏。", "library.removedLocal": "已从本地删除。",
+  "radio.threeFresh": "随机 3 个推荐，点选后播放。", "radio.loading": "正在加载电台...", "radio.empty": "这里没有电台。试试 Random。", "radio.random": "随机",
+  "explore.pickLeft": "在左侧选择音乐", "explore.noWebPlayer": "未打开网页播放器", "explore.chooseBelow": "从下面选择网页播放器", "explore.openLeft": "正在左侧打开", "explore.couldNotOpen": "无法打开", "explore.proxyActive": "代理已启用", "explore.directConnection": "直连", "explore.footer": "在左侧选择音乐。Tikpal 控制保留在这里。", "explore.font": "字体", "explore.small": "小", "explore.medium": "中", "explore.large": "大",
+  "remote.title": "Tikpal 遥控", "remote.accessKey": "访问密钥", "remote.optionalAccessKey": "可选访问密钥", "remote.noKey": "无需密钥", "remote.refresh": "刷新", "remote.sources": "音源", "remote.room": "房间", "remote.hifiEq": "Hi-Fi EQ", "remote.scene": "场景", "remote.display": "显示", "remote.startExplore": "打开 Explore", "remote.proxyOn": "代理开", "remote.proxyOff": "代理关", "remote.soundOn": "声音开", "remote.soundOff": "声音关"
+});
+
+Object.assign(dictionaries.de, {
+  "common.active": "Aktiv", "common.back": "Zurück", "common.cancel": "Abbrechen", "common.close": "Schließen", "common.connected": "Verbunden", "common.connecting": "Verbinden", "common.current": "Aktuell", "common.delete": "Löschen", "common.deleteQuestion": "Löschen?", "common.direct": "Direkt", "common.hidden": "Ausgeblendet", "common.muted": "Stumm", "common.no": "Nein", "common.off": "Aus", "common.on": "Ein", "common.opening": "Öffnen", "common.proxy": "Proxy", "common.ready": "Bereit", "common.saving": "Speichern", "common.syncing": "Synchronisieren", "common.unavailable": "Nicht verfügbar", "common.visible": "Sichtbar", "common.waiting": "Warten", "common.yes": "Ja",
+  "playback.nothingPlaying": "Keine Wiedergabe", "playback.unknownArtist": "Unbekannter Künstler", "playback.noAlbum": "Kein Album", "playback.sourceUnknown": "Quelle unbekannt", "playback.playing": "Wiedergabe", "playback.paused": "Pausiert", "playback.previous": "Zurück", "playback.play": "Play", "playback.pause": "Pause", "playback.next": "Weiter", "source.library": "Mediathek", "source.radio": "Radio", "source.scene": "Szenenklang", "source.explore": "Explore",
+  "room.focus": "Fokus", "room.calm": "Ruhe", "room.sleep": "Schlaf", "room.hifi": "Hi-Fi", "quickMenu.screen": "Bildschirm", "quickMenu.volume": "Lautstärke", "quickMenu.time": "Zeit", "quickMenu.sleep": "Schlaf", "quickMenu.tapToSleep": "Zum Schlafen tippen",
+  "settings.preferences": "Präferenzen", "settings.library": "Mediathek", "settings.link": "Verbindung", "settings.care": "Pflege", "settings.language": "Sprache", "settings.languageMeta": "UI und Tastatur", "settings.languageDetail": "Wähle die Tikpal Sprache. Onboard startet mit passender Eingabe.", "settings.audioOutput": "Audioausgang", "settings.display": "Display", "settings.font": "Schrift", "settings.skin": "Design", "settings.lyrics": "Lyrics", "settings.restart": "Neustart", "settings.shutdown": "Ausschalten",
+  "library.local": "Lokal", "library.favorites": "Favoriten", "library.recentlyAdded": "Neu", "library.copyToLocal": "Lokal kopieren", "library.search": "{storage} suchen", "library.noMatches": "Keine Treffer. Anders suchen.", "library.emptyNas": "NAS in Settings hinzufügen.", "library.playingFromLocal": "Wiedergabe von Lokal.", "library.playingFromNas": "Wiedergabe von NAS.", "library.playingFromUsb": "Wiedergabe von USB.",
+  "explore.pickLeft": "Links Musik wählen", "explore.chooseBelow": "Webplayer wählen", "explore.font": "Schrift", "explore.small": "Klein", "explore.medium": "Mittel", "explore.large": "Groß", "remote.title": "Tikpal Remote", "remote.accessKey": "Zugangsschlüssel", "remote.noKey": "Kein Schlüssel"
+});
+
+Object.assign(dictionaries.it, {
+  "common.active": "Attivo", "common.back": "Indietro", "common.cancel": "Annulla", "common.close": "Chiudi", "common.connected": "Connesso", "common.connecting": "Connessione", "common.delete": "Elimina", "common.deleteQuestion": "Eliminare?", "common.direct": "Diretto", "common.hidden": "Nascosto", "common.muted": "Muto", "common.no": "No", "common.off": "Off", "common.on": "On", "common.opening": "Apertura", "common.proxy": "Proxy", "common.ready": "Pronto", "common.saving": "Salvataggio", "common.unavailable": "Non disponibile", "common.visible": "Visibile", "common.yes": "Sì",
+  "playback.nothingPlaying": "Niente in riproduzione", "playback.unknownArtist": "Artista sconosciuto", "playback.noAlbum": "Nessun album", "playback.playing": "In riproduzione", "playback.paused": "In pausa", "playback.previous": "Precedente", "playback.play": "Play", "playback.pause": "Pausa", "playback.next": "Successivo", "source.library": "Libreria", "source.radio": "Radio", "source.scene": "Audio scena", "source.explore": "Explore",
+  "room.focus": "Focus", "room.calm": "Calma", "room.sleep": "Sonno", "room.hifi": "Hi-Fi", "quickMenu.screen": "Schermo", "quickMenu.volume": "Volume", "quickMenu.time": "Ora", "quickMenu.sleep": "Sonno", "quickMenu.tapToSleep": "Tocca per dormire",
+  "settings.preferences": "Preferenze", "settings.library": "Libreria", "settings.link": "Collegamento", "settings.care": "Cura", "settings.language": "Lingua", "settings.languageMeta": "UI e tastiera", "settings.languageDetail": "Scegli la lingua di Tikpal. Onboard userà l'input adatto.", "settings.audioOutput": "Uscita audio", "settings.display": "Display", "settings.font": "Font", "settings.skin": "Tema", "settings.lyrics": "Testi",
+  "library.local": "Locale", "library.favorites": "Preferiti", "library.copyToLocal": "Copia in locale", "library.search": "Cerca {storage}", "library.noMatches": "Nessun risultato. Prova un'altra ricerca.", "library.playingFromLocal": "Riproduzione da Locale.", "library.playingFromNas": "Riproduzione da NAS.", "library.playingFromUsb": "Riproduzione da USB.",
+  "explore.pickLeft": "Scegli musica a sinistra", "explore.font": "Font", "explore.small": "Piccolo", "explore.medium": "Medio", "explore.large": "Grande", "remote.title": "Tikpal Remote", "remote.accessKey": "Chiave di accesso"
+});
+
+Object.assign(dictionaries.ko, {
+  "common.active": "활성", "common.back": "뒤로", "common.cancel": "취소", "common.close": "닫기", "common.connected": "연결됨", "common.connecting": "연결 중", "common.delete": "삭제", "common.deleteQuestion": "삭제할까요?", "common.direct": "직접", "common.hidden": "숨김", "common.muted": "음소거", "common.no": "아니요", "common.off": "꺼짐", "common.on": "켜짐", "common.opening": "여는 중", "common.proxy": "프록시", "common.ready": "준비됨", "common.saving": "저장 중", "common.unavailable": "사용 불가", "common.visible": "표시", "common.yes": "예",
+  "playback.nothingPlaying": "재생 중 아님", "playback.unknownArtist": "알 수 없는 아티스트", "playback.noAlbum": "앨범 없음", "playback.playing": "재생 중", "playback.paused": "일시정지", "playback.previous": "이전", "playback.play": "재생", "playback.pause": "일시정지", "playback.next": "다음", "source.library": "라이브러리", "source.radio": "라디오", "source.scene": "장면 사운드", "source.explore": "Explore",
+  "room.focus": "집중", "room.calm": "휴식", "room.sleep": "수면", "room.hifi": "Hi-Fi", "quickMenu.screen": "화면", "quickMenu.volume": "볼륨", "quickMenu.time": "시간", "quickMenu.sleep": "수면", "quickMenu.tapToSleep": "눌러서 수면",
+  "settings.preferences": "환경설정", "settings.library": "라이브러리", "settings.link": "연결", "settings.care": "관리", "settings.language": "언어", "settings.languageMeta": "UI와 키보드", "settings.languageDetail": "Tikpal 언어를 선택합니다. Onboard가 맞는 입력으로 열립니다.", "settings.audioOutput": "오디오 출력", "settings.display": "디스플레이", "settings.font": "글꼴", "settings.skin": "스킨", "settings.lyrics": "가사",
+  "library.local": "로컬", "library.favorites": "즐겨찾기", "library.copyToLocal": "로컬에 복사", "library.search": "{storage} 검색", "library.noMatches": "결과 없음. 다른 검색어를 입력하세요.", "library.playingFromLocal": "로컬에서 재생 중.", "library.playingFromNas": "NAS에서 재생 중.", "library.playingFromUsb": "USB에서 재생 중.",
+  "explore.pickLeft": "왼쪽에서 음악 선택", "explore.font": "글꼴", "explore.small": "작게", "explore.medium": "보통", "explore.large": "크게", "remote.title": "Tikpal 리모컨", "remote.accessKey": "접근 키"
+});
+
+Object.assign(dictionaries.ja, {
+  "common.active": "有効", "common.back": "戻る", "common.cancel": "キャンセル", "common.close": "閉じる", "common.connected": "接続済み", "common.connecting": "接続中", "common.delete": "削除", "common.deleteQuestion": "削除しますか？", "common.direct": "直接", "common.hidden": "非表示", "common.muted": "ミュート", "common.no": "いいえ", "common.off": "オフ", "common.on": "オン", "common.opening": "起動中", "common.proxy": "プロキシ", "common.ready": "準備完了", "common.saving": "保存中", "common.unavailable": "利用不可", "common.visible": "表示", "common.yes": "はい",
+  "playback.nothingPlaying": "再生していません", "playback.unknownArtist": "不明なアーティスト", "playback.noAlbum": "アルバムなし", "playback.playing": "再生中", "playback.paused": "一時停止", "playback.previous": "前へ", "playback.play": "再生", "playback.pause": "一時停止", "playback.next": "次へ", "source.library": "ライブラリ", "source.radio": "ラジオ", "source.scene": "シーンサウンド", "source.explore": "Explore",
+  "room.focus": "集中", "room.calm": "リラックス", "room.sleep": "スリープ", "room.hifi": "Hi-Fi", "quickMenu.screen": "画面", "quickMenu.volume": "音量", "quickMenu.time": "時間", "quickMenu.sleep": "スリープ", "quickMenu.tapToSleep": "タップでスリープ",
+  "settings.preferences": "設定", "settings.library": "ライブラリ", "settings.link": "接続", "settings.care": "管理", "settings.language": "言語", "settings.languageMeta": "UI とキーボード", "settings.languageDetail": "Tikpal の表示言語を選びます。Onboard も対応する入力で開きます。", "settings.audioOutput": "音声出力", "settings.display": "ディスプレイ", "settings.font": "フォント", "settings.skin": "スキン", "settings.lyrics": "歌詞",
+  "library.local": "ローカル", "library.favorites": "お気に入り", "library.copyToLocal": "ローカルにコピー", "library.search": "{storage}を検索", "library.noMatches": "一致なし。別の語で検索してください。", "library.playingFromLocal": "ローカルから再生中。", "library.playingFromNas": "NAS から再生中。", "library.playingFromUsb": "USB から再生中。",
+  "explore.pickLeft": "左で音楽を選択", "explore.font": "フォント", "explore.small": "小", "explore.medium": "中", "explore.large": "大", "remote.title": "Tikpal Remote", "remote.accessKey": "アクセスキー"
+});
+
+Object.assign(dictionaries.es, {
+  "common.active": "Activo", "common.back": "Volver", "common.cancel": "Cancelar", "common.close": "Cerrar", "common.connected": "Conectado", "common.connecting": "Conectando", "common.delete": "Eliminar", "common.deleteQuestion": "¿Eliminar?", "common.direct": "Directo", "common.hidden": "Oculto", "common.muted": "Silencio", "common.no": "No", "common.off": "Off", "common.on": "On", "common.opening": "Abriendo", "common.proxy": "Proxy", "common.ready": "Listo", "common.saving": "Guardando", "common.unavailable": "No disponible", "common.visible": "Visible", "common.yes": "Sí",
+  "playback.nothingPlaying": "Nada en reproducción", "playback.unknownArtist": "Artista desconocido", "playback.noAlbum": "Sin álbum", "playback.playing": "Reproduciendo", "playback.paused": "Pausado", "playback.previous": "Anterior", "playback.play": "Reproducir", "playback.pause": "Pausa", "playback.next": "Siguiente", "source.library": "Biblioteca", "source.radio": "Radio", "source.scene": "Sonido de escena", "source.explore": "Explore",
+  "room.focus": "Focus", "room.calm": "Calma", "room.sleep": "Sueño", "room.hifi": "Hi-Fi", "quickMenu.screen": "Pantalla", "quickMenu.volume": "Volumen", "quickMenu.time": "Hora", "quickMenu.sleep": "Sueño", "quickMenu.tapToSleep": "Toca para dormir",
+  "settings.preferences": "Preferencias", "settings.library": "Biblioteca", "settings.link": "Conexión", "settings.care": "Cuidado", "settings.language": "Idioma", "settings.languageMeta": "UI y teclado", "settings.languageDetail": "Elige el idioma de Tikpal. Onboard abrirá el método de entrada correspondiente.", "settings.audioOutput": "Salida de audio", "settings.display": "Pantalla", "settings.font": "Fuente", "settings.skin": "Tema", "settings.lyrics": "Letras",
+  "library.local": "Local", "library.favorites": "Favoritos", "library.copyToLocal": "Copiar a Local", "library.search": "Buscar {storage}", "library.noMatches": "Sin resultados. Prueba otra búsqueda.", "library.playingFromLocal": "Reproduciendo desde Local.", "library.playingFromNas": "Reproduciendo desde NAS.", "library.playingFromUsb": "Reproduciendo desde USB.",
+  "explore.pickLeft": "Elige música a la izquierda", "explore.font": "Fuente", "explore.small": "Pequeño", "explore.medium": "Medio", "explore.large": "Grande", "remote.title": "Tikpal Remote", "remote.accessKey": "Clave de acceso"
+});
+
+Object.assign(dictionaries.de, {
+  "app.name": "Tikpal", "common.add": "Hinzufügen", "common.apply": "Anwenden", "common.applying": "Wird angewendet...", "common.checkSetup": "Setup prüfen", "common.clear": "Leeren", "common.closing": "Schließt", "common.disabled": "Deaktiviert", "common.enabled": "Aktiviert", "common.experimental": "Experimentell", "common.failed": "Fehlgeschlagen", "common.loading": "Lädt", "common.manual": "Manuell", "common.offline": "Offline", "common.online": "Online", "common.savedAutomatically": "Automatisch gespeichert", "common.scanning": "Scan läuft...",
+  "status.live": "Live", "status.offlineView": "Offline-Ansicht", "status.updating": "Aktualisiert", "playback.stopped": "Gestoppt", "playback.favorite": "Favorit", "playback.removeFavorite": "Favorit entfernen", "playback.seekPosition": "Position", "playback.seekingTo": "Springt zu {time}...", "playback.controlUnavailable": "Steuerung nicht verfügbar", "lyrics.listeningTo": "Hört {source} Audio...", "lyrics.identifying": "Titel wird erkannt...", "lyrics.hide": "Lyrics ausblenden", "lyrics.show": "Lyrics anzeigen",
+  "ambient.changeBrightness": "Wischen oder scrollen für Helligkeit", "ambient.changeVolume": "Wischen oder scrollen für Lautstärke", "ambient.previousScene": "Vorige Szene", "ambient.nextScene": "Nächste Szene", "ambient.playbackMode": "Player und Wiedergabe", "ambient.openPlayer": "Player öffnen", "ambient.player": "Player", "ambient.repeatCurrent": "Aktuellen Titel wiederholen", "ambient.shuffle": "Zufallswiedergabe", "ambient.muteSceneSound": "Szenenklang stumm", "ambient.unmuteSceneSound": "Szenenklang an", "ambient.currentTime": "Aktuelle Zeit", "ambient.moodSwitcher": "Stimmung wechseln", "ambient.mood": "Stimmung", "ambient.chooseRoomMode": "Raummodus wählen", "ambient.roomModeLabel": "{mode} Raummodus", "ambient.brightness": "Helligkeit", "ambient.displayLevel": "Displaystufe", "ambient.closeAdjustment": "{channel} schließen",
+  "source.audio": "Audio", "source.spotify": "Spotify", "source.bluetooth": "Bluetooth", "source.airplay": "AirPlay", "source.upnp": "DLNA", "source.localQueueReady": "Lokale Warteschlange bereit", "source.webPlayers": "Webplayer", "source.choose": "Audioquelle wählen", "source.audioPicker": "Audioquellen-Auswahl", "source.enableRadio": "Radio öffnen", "source.radioPresets": "Radio-Presets", "source.openSpotify": "Spotify öffnen", "source.pairPhone": "Telefon koppeln", "source.openDlna": "DLNA öffnen", "source.openAirplay": "AirPlay öffnen", "source.libraryReadyPickTrack": "Mediathek bereit. Titel wählen.", "source.readyAs": "{source} bereit als {label}.", "source.connectedAs": "{source}: {label}.", "source.connectingAs": "Verbindet als {label}", "source.connectedTo": "Verbunden mit {label}", "source.ready": "{source} bereit.",
+  "handoff.title": "Verbindet", "handoff.body": "Vom Telefon verbinden. Tikpal kommt zurück, sobald Musik startet.", "room.focusIntent": "Arbeit und Lesen", "room.calmIntent": "Runterkommen", "room.sleepIntent": "Dunkel, Timer, Ausblenden", "room.hifiIntent": "Reines Musikhören", "quickMenu.title": "Schnellmenü", "quickMenu.close": "Schnellmenü schließen", "quickMenu.turnScreenOff": "Bildschirm aus", "quickMenu.turnScreenOn": "Bildschirm an", "quickMenu.mute": "Stumm", "quickMenu.restoreVolume": "Lautstärke zurück", "quickMenu.hideTime": "Zeit ausblenden", "quickMenu.showTime": "Zeit anzeigen", "quickMenu.sleepTikpal": "Tikpal schlafen lassen", "startup.setRoomMood": "Raumstimmung wählen", "startup.roomModes": "Startmodi",
+  "settings.console": "Konsole", "settings.preferencesDesc": "Audio, Display, Schrift und Overlays.", "settings.libraryDesc": "Lokale Musik, USB, NAS und Scanstatus.", "settings.linkDesc": "Verbindungen und Remote-Zugriff.", "settings.careDesc": "Gesicherter Neustart und Ausschalten.", "settings.languageSaved": "Sprache gespeichert.", "settings.languageSavedWithWarning": "Sprache gespeichert. Tastatur folgt gleich.", "settings.dsp": "DSP", "settings.eqReady": "EQ bereit", "settings.adjustable": "Einstellbar", "settings.readOnly": "Nur lesen", "settings.screenReady": "Bildschirm bereit", "settings.brightnessReady": "Helligkeit bereit", "settings.timeNight": "Zeit und Nacht", "settings.night": "Nacht", "settings.auto": "Auto", "settings.localLibrary": "Lokale Mediathek", "settings.savedOnDevice": "Musik auf diesem Gerät", "settings.nasSources": "NAS-Quellen", "settings.addNas": "NAS hinzufügen", "settings.addNasInSettings": "NAS in Settings hinzufügen", "settings.usb": "USB", "settings.notMounted": "Nicht eingebunden", "settings.portableStorage": "Mobiler Speicher", "settings.portableStorageMounted": "Mobiler Speicher verbunden", "settings.libraryScan": "Mediathek-Scan", "settings.scanLibrary": "Mediathek scannen", "settings.scanInProgress": "Scan läuft", "settings.chooseTypography": "Kiosk-Schrift wählen", "settings.switchSkin": "Skin wechseln", "settings.tuneLyrics": "Lyrics anpassen", "settings.system": "System", "settings.limited": "Begrenzt", "settings.needsAttention": "Prüfen", "settings.confirmNeeded": "Bestätigung nötig", "settings.systemReboot": "Systemneustart", "settings.powerOff": "Ausschalten", "settings.restartSystem": "System neu starten", "settings.shutdownSystem": "System ausschalten", "settings.tapAgainRestart": "Zum Neustart erneut tippen", "settings.tapAgainPowerOff": "Zum Ausschalten erneut tippen", "settings.adjustType": "Schrift anpassen", "settings.proxyKeyboard": "Proxy und Tastatur", "settings.proxyReady": "Proxy bereit", "settings.officialWebPlayers": "Offizielle Webplayer", "settings.exploreHelp": "Speichert automatisch. Wenn ein Player nicht öffnet, Proxy umschalten und erneut versuchen.", "settings.enterProxyUrl": "Vollständige Proxy-URL eingeben", "settings.nightBrightness": "{percent}% Nachthelligkeit", "settings.nasStatus": "NAS-Status", "settings.tracks": "{count} Titel", "settings.savedCount": "{count} gespeichert",
+  "library.source": "Quelle", "library.nas": "NAS", "library.usb": "USB", "library.localShort": "{count} lokal", "library.nasShort": "{count} NAS", "library.usbShort": "{count} USB", "library.savedShort": "{count} gespeichert", "library.newShort": "{count} neu", "library.deleteFromLocal": "Lokal löschen", "library.clearSearch": "Suche leeren", "library.localStorage": "Lokaler Speicher: {free} frei", "library.localStorageUnavailable": "Lokaler Speicher nicht verfügbar", "library.free": "{free} frei", "library.backMain": "Zur Hauptansicht", "library.loading": "Mediathek lädt...", "library.emptyUsb": "Keine USB-Titel. Laufwerk prüfen, dann scannen.", "library.emptyFavorites": "Noch keine Favoriten. Herz am Titel tippen.", "library.emptyRecent": "Noch keine neuen Titel.", "library.emptyLocal": "Noch keine lokalen Titel. Von USB kopieren oder scannen.", "library.savedToLocal": "Lokal gespeichert.", "library.alreadySaved": "Schon lokal gespeichert.", "library.savedFavorite": "Als Favorit gespeichert.", "library.removedFavorite": "Aus Favoriten entfernt.", "library.removedLocal": "Lokal entfernt.",
+  "radio.threeFresh": "Drei neue Tipps. Einen antippen.", "radio.loading": "Sender laden...", "radio.empty": "Keine Sender hier. Random versuchen.", "radio.random": "Zufall", "explore.noWebPlayer": "Kein Webplayer", "explore.openLeft": "Öffnet links", "explore.couldNotOpen": "Konnte nicht öffnen", "explore.proxyActive": "Proxy aktiv", "explore.directConnection": "Direktverbindung", "explore.footer": "Links Musik wählen. Tikpal bleibt rechts.", "explore.webPlayers": "Musik-Webplayer", "explore.tikpalControls": "Tikpal-Steuerung", "explore.leftFont": "Schrift links", "remote.optionalAccessKey": "Optionaler Zugangsschlüssel", "remote.refresh": "Aktualisieren", "remote.sources": "Quellen", "remote.room": "Raum", "remote.hifiEq": "Hi-Fi EQ", "remote.scene": "Szene", "remote.display": "Display", "remote.startExplore": "Explore starten", "remote.proxyOn": "Proxy an", "remote.proxyOff": "Proxy aus", "remote.soundOn": "Ton an", "remote.soundOff": "Ton aus", "error.accessKey": "Zugangsschlüssel prüfen.", "error.noConnection": "Noch keine Verbindung. Quelle erneut öffnen.", "error.proxy": "Web Proxy prüfen und erneut versuchen.", "error.brightness": "Helligkeit änderte sich nicht. Niedriger versuchen.", "error.copy": "Konnte nicht lokal speichern.", "error.delete": "Titel konnte nicht entfernt werden.", "error.favorite": "Favoriten konnten nicht geändert werden.", "error.radio": "Radio ist nicht bereit. Anderen Sender wählen.", "error.library": "Mediathek nicht bereit. Scannen oder erneut versuchen.", "error.explore": "Explore öffnete nicht. Proxy prüfen.", "error.volume": "Lautstärke änderte sich nicht.", "error.timeout": "Das dauerte zu lang. Erneut versuchen.", "error.connection": "Verbindung ist langsam. Erneut versuchen.", "error.generic": "Benötigt Aufmerksamkeit. Erneut versuchen."
+});
+
+Object.assign(dictionaries.it, {
+  "app.name": "Tikpal", "common.add": "Aggiungi", "common.apply": "Applica", "common.applying": "Applicazione...", "common.checkSetup": "Controlla setup", "common.clear": "Cancella", "common.closing": "Chiusura", "common.current": "Attuale", "common.disabled": "Disattivato", "common.enabled": "Attivato", "common.experimental": "Sperimentale", "common.failed": "Non riuscito", "common.loading": "Caricamento", "common.manual": "Manuale", "common.offline": "Offline", "common.online": "Online", "common.savedAutomatically": "Salvato automaticamente", "common.scanning": "Scansione...", "common.syncing": "Sincronizzazione", "common.waiting": "In attesa",
+  "status.live": "Live", "status.offlineView": "Vista offline", "status.updating": "Aggiornamento", "playback.sourceUnknown": "Sorgente sconosciuta", "playback.stopped": "Fermo", "playback.favorite": "Preferito", "playback.removeFavorite": "Rimuovi preferito", "playback.seekPosition": "Posizione", "playback.seekingTo": "Salto a {time}...", "playback.controlUnavailable": "Controllo non disponibile", "lyrics.listeningTo": "Ascolto audio {source}...", "lyrics.identifying": "Riconoscimento brano...", "lyrics.hide": "Nascondi testi", "lyrics.show": "Mostra testi",
+  "ambient.changeBrightness": "Scorri per cambiare luminosità", "ambient.changeVolume": "Scorri per cambiare volume", "ambient.previousScene": "Scena precedente", "ambient.nextScene": "Scena successiva", "ambient.playbackMode": "Player e riproduzione", "ambient.openPlayer": "Apri player", "ambient.player": "Player", "ambient.repeatCurrent": "Ripeti brano", "ambient.shuffle": "Riproduzione casuale", "ambient.muteSceneSound": "Disattiva suono scena", "ambient.unmuteSceneSound": "Attiva suono scena", "ambient.currentTime": "Ora attuale", "ambient.moodSwitcher": "Cambio atmosfera", "ambient.mood": "Atmosfera", "ambient.chooseRoomMode": "Scegli modalità stanza", "ambient.roomModeLabel": "Modalità {mode}", "ambient.brightness": "Luminosità", "ambient.displayLevel": "Livello display", "ambient.closeAdjustment": "Chiudi regolazione {channel}",
+  "source.audio": "Audio", "source.spotify": "Spotify", "source.bluetooth": "Bluetooth", "source.airplay": "AirPlay", "source.upnp": "DLNA", "source.localQueueReady": "Coda locale pronta", "source.webPlayers": "Player web", "source.choose": "Scegli sorgente audio", "source.audioPicker": "Selettore sorgente", "source.enableRadio": "Apri Radio", "source.radioPresets": "Preset radio", "source.openSpotify": "Apri Spotify", "source.pairPhone": "Abbina telefono", "source.openDlna": "Apri DLNA", "source.openAirplay": "Apri AirPlay", "source.libraryReadyPickTrack": "Libreria pronta. Scegli un brano.", "source.readyAs": "{source} pronta come {label}.", "source.connectedAs": "{source}: {label}.", "source.connectingAs": "Connessione come {label}", "source.connectedTo": "Connesso a {label}", "source.ready": "{source} pronta.",
+  "handoff.title": "Connessione", "handoff.body": "Connettiti dal telefono. Torna quando parte la musica.", "room.focusIntent": "Lavoro e lettura", "room.calmIntent": "Relax", "room.sleepIntent": "Scuro, timer, dissolvenza", "room.hifiIntent": "Ascolto puro", "quickMenu.title": "Menu rapido", "quickMenu.close": "Chiudi menu rapido", "quickMenu.turnScreenOff": "Spegni schermo", "quickMenu.turnScreenOn": "Accendi schermo", "quickMenu.mute": "Muto", "quickMenu.restoreVolume": "Ripristina volume", "quickMenu.hideTime": "Nascondi ora", "quickMenu.showTime": "Mostra ora", "quickMenu.sleepTikpal": "Metti Tikpal in sleep", "startup.setRoomMood": "Imposta atmosfera", "startup.roomModes": "Modalità iniziali",
+  "settings.console": "Console", "settings.preferencesDesc": "Audio, display, testo e overlay.", "settings.libraryDesc": "Musica locale, USB, NAS e scansione.", "settings.linkDesc": "Connessioni e accesso remoto.", "settings.careDesc": "Riavvio e spegnimento protetti.", "settings.languageSaved": "Lingua salvata.", "settings.languageSavedWithWarning": "Lingua salvata. Tastiera in sync a breve.", "settings.dsp": "DSP", "settings.eqReady": "EQ pronto", "settings.adjustable": "Regolabile", "settings.readOnly": "Solo lettura", "settings.screenReady": "Schermo pronto", "settings.brightnessReady": "Luminosità pronta", "settings.timeNight": "Ora e notte", "settings.night": "Notte", "settings.auto": "Auto", "settings.localLibrary": "Libreria locale", "settings.savedOnDevice": "Musica salvata su questo dispositivo", "settings.nasSources": "Sorgenti NAS", "settings.addNas": "Aggiungi NAS", "settings.addNasInSettings": "Aggiungi NAS in Settings", "settings.usb": "USB", "settings.notMounted": "Non montato", "settings.portableStorage": "Archivio portatile", "settings.portableStorageMounted": "Archivio portatile montato", "settings.libraryScan": "Scansione libreria", "settings.scanLibrary": "Scansiona libreria", "settings.scanInProgress": "Scansione in corso", "settings.chooseTypography": "Scegli carattere kiosk", "settings.switchSkin": "Cambia skin", "settings.tuneLyrics": "Regola testi", "settings.system": "Sistema", "settings.limited": "Limitato", "settings.needsAttention": "Da controllare", "settings.restart": "Riavvia", "settings.shutdown": "Spegni", "settings.confirmNeeded": "Conferma richiesta", "settings.systemReboot": "Riavvio sistema", "settings.powerOff": "Spegnimento", "settings.restartSystem": "Riavvia sistema", "settings.shutdownSystem": "Spegni sistema", "settings.tapAgainRestart": "Tocca ancora per riavviare", "settings.tapAgainPowerOff": "Tocca ancora per spegnere", "settings.adjustType": "Regola testo", "settings.proxyKeyboard": "Proxy e tastiera", "settings.proxyReady": "Proxy pronto", "settings.officialWebPlayers": "Player web ufficiali", "settings.exploreHelp": "Salva automaticamente. Se non apre, cambia Proxy e riprova.", "settings.enterProxyUrl": "Inserisci URL proxy completo", "settings.nightBrightness": "Luminosità notte {percent}%", "settings.nasStatus": "Stato NAS", "settings.tracks": "{count} brani", "settings.savedCount": "{count} salvati",
+  "library.source": "Sorgente", "library.nas": "NAS", "library.usb": "USB", "library.recentlyAdded": "Recenti", "library.localShort": "{count} locali", "library.nasShort": "{count} NAS", "library.usbShort": "{count} USB", "library.savedShort": "{count} salvati", "library.newShort": "{count} nuovi", "library.deleteFromLocal": "Elimina da Locale", "library.clearSearch": "Cancella ricerca", "library.localStorage": "Spazio locale: {free} liberi", "library.localStorageUnavailable": "Spazio locale non disponibile", "library.free": "{free} liberi", "library.backMain": "Torna alla schermata principale", "library.loading": "Caricamento libreria...", "library.emptyNas": "Aggiungi NAS in Settings.", "library.emptyUsb": "Nessun brano USB. Controlla il drive, poi scansiona.", "library.emptyFavorites": "Nessun preferito. Tocca il cuore su un brano.", "library.emptyRecent": "Nessun brano recente.", "library.emptyLocal": "Nessun brano locale. Copia da USB o scansiona.", "library.savedToLocal": "Salvato in Locale.", "library.alreadySaved": "Già salvato localmente.", "library.savedFavorite": "Salvato nei Preferiti.", "library.removedFavorite": "Rimosso dai Preferiti.", "library.removedLocal": "Rimosso da Locale.",
+  "radio.threeFresh": "Tre scelte nuove. Tocca per ascoltare.", "radio.loading": "Caricamento stazioni...", "radio.empty": "Nessuna stazione qui. Prova Random.", "radio.random": "Casuale", "explore.noWebPlayer": "Nessun player web", "explore.chooseBelow": "Scegli un player web sotto", "explore.openLeft": "Apertura a sinistra", "explore.couldNotOpen": "Impossibile aprire", "explore.proxyActive": "Proxy attivo", "explore.directConnection": "Connessione diretta", "explore.footer": "Scegli musica a sinistra. I controlli restano qui.", "explore.webPlayers": "Player web musicali", "explore.tikpalControls": "Controlli Tikpal", "explore.leftFont": "Testo provider sinistro", "remote.optionalAccessKey": "Chiave opzionale", "remote.noKey": "Nessuna chiave", "remote.refresh": "Aggiorna", "remote.sources": "Sorgenti", "remote.room": "Stanza", "remote.hifiEq": "Hi-Fi EQ", "remote.scene": "Scena", "remote.display": "Display", "remote.startExplore": "Avvia Explore", "remote.proxyOn": "Proxy On", "remote.proxyOff": "Proxy Off", "remote.soundOn": "Audio On", "remote.soundOff": "Audio Off", "error.accessKey": "Controlla la chiave.", "error.noConnection": "Nessuna connessione. Riapri la sorgente.", "error.proxy": "Controlla Web Proxy e riprova.", "error.brightness": "Luminosità non cambiata. Prova più bassa.", "error.copy": "Impossibile salvare in Locale.", "error.delete": "Impossibile rimuovere il brano.", "error.favorite": "Impossibile aggiornare Preferiti.", "error.radio": "Radio non pronta. Prova un'altra stazione.", "error.library": "Libreria non pronta. Scansiona o riprova.", "error.explore": "Explore non si è aperto. Controlla Proxy.", "error.volume": "Volume non cambiato. Riprova.", "error.timeout": "Operazione troppo lunga. Riprova.", "error.connection": "Connessione lenta. Riprova.", "error.generic": "Richiede attenzione. Riprova."
+});
+
+Object.assign(dictionaries.ko, {
+  "app.name": "Tikpal", "common.add": "추가", "common.apply": "적용", "common.applying": "적용 중...", "common.checkSetup": "설정 확인", "common.clear": "지우기", "common.closing": "닫는 중", "common.current": "현재", "common.disabled": "비활성", "common.enabled": "활성", "common.experimental": "실험적", "common.failed": "실패", "common.loading": "로딩 중", "common.manual": "수동", "common.offline": "오프라인", "common.online": "온라인", "common.savedAutomatically": "자동 저장됨", "common.scanning": "스캔 중...", "common.syncing": "동기화 중", "common.waiting": "대기 중",
+  "status.live": "실시간", "status.offlineView": "오프라인 보기", "status.updating": "업데이트 중", "playback.sourceUnknown": "소스 알 수 없음", "playback.stopped": "정지됨", "playback.favorite": "즐겨찾기", "playback.removeFavorite": "즐겨찾기 해제", "playback.seekPosition": "재생 위치", "playback.seekingTo": "{time}(으)로 이동 중...", "playback.controlUnavailable": "재생 제어 불가", "lyrics.listeningTo": "{source} 오디오 듣는 중...", "lyrics.identifying": "곡 인식 중...", "lyrics.hide": "가사 숨기기", "lyrics.show": "가사 표시",
+  "ambient.changeBrightness": "쓸거나 스크롤해 밝기 조절", "ambient.changeVolume": "쓸거나 스크롤해 볼륨 조절", "ambient.previousScene": "이전 장면", "ambient.nextScene": "다음 장면", "ambient.playbackMode": "플레이어와 재생 모드", "ambient.openPlayer": "플레이어 열기", "ambient.player": "플레이어", "ambient.repeatCurrent": "현재 곡 반복", "ambient.shuffle": "셔플 재생", "ambient.muteSceneSound": "장면 사운드 끄기", "ambient.unmuteSceneSound": "장면 사운드 켜기", "ambient.currentTime": "현재 시간", "ambient.moodSwitcher": "분위기 전환", "ambient.mood": "분위기", "ambient.chooseRoomMode": "룸 모드 선택", "ambient.roomModeLabel": "{mode} 룸 모드", "ambient.brightness": "밝기", "ambient.displayLevel": "디스플레이 밝기", "ambient.closeAdjustment": "{channel} 조절 닫기",
+  "source.audio": "오디오", "source.spotify": "Spotify", "source.bluetooth": "Bluetooth", "source.airplay": "AirPlay", "source.upnp": "DLNA", "source.localQueueReady": "로컬 큐 준비됨", "source.webPlayers": "웹 플레이어", "source.choose": "오디오 소스 선택", "source.audioPicker": "오디오 소스 선택기", "source.enableRadio": "라디오 열기", "source.radioPresets": "라디오 프리셋", "source.openSpotify": "Spotify 열기", "source.pairPhone": "폰 페어링", "source.openDlna": "DLNA 열기", "source.openAirplay": "AirPlay 열기", "source.libraryReadyPickTrack": "라이브러리 준비됨. 곡을 선택하세요.", "source.readyAs": "{source} 준비됨: {label}.", "source.connectedAs": "{source}: {label}.", "source.connectingAs": "{label}(으)로 연결 중", "source.connectedTo": "{label}에 연결됨", "source.ready": "{source} 준비됨.",
+  "handoff.title": "연결 중", "handoff.body": "폰에서 연결하세요. 재생이 시작되면 돌아옵니다.", "room.focusIntent": "작업과 독서", "room.calmIntent": "휴식", "room.sleepIntent": "어둡게, 타이머, 페이드아웃", "room.hifiIntent": "순수 음악 감상", "quickMenu.title": "빠른 메뉴", "quickMenu.close": "빠른 메뉴 닫기", "quickMenu.turnScreenOff": "화면 끄기", "quickMenu.turnScreenOn": "화면 켜기", "quickMenu.mute": "음소거", "quickMenu.restoreVolume": "볼륨 복원", "quickMenu.hideTime": "시간 숨기기", "quickMenu.showTime": "시간 표시", "quickMenu.sleepTikpal": "Tikpal 절전", "startup.setRoomMood": "룸 분위기 설정", "startup.roomModes": "시작 룸 모드",
+  "settings.console": "콘솔", "settings.preferencesDesc": "오디오, 화면, 글꼴, 오버레이.", "settings.libraryDesc": "로컬 음악, USB, NAS, 스캔 상태.", "settings.linkDesc": "연결과 원격 접근.", "settings.careDesc": "안전한 재시작과 종료.", "settings.languageSaved": "언어 저장됨.", "settings.languageSavedWithWarning": "언어 저장됨. 키보드는 곧 동기화됩니다.", "settings.dsp": "DSP", "settings.eqReady": "EQ 준비됨", "settings.adjustable": "조절 가능", "settings.readOnly": "읽기 전용", "settings.screenReady": "화면 준비됨", "settings.brightnessReady": "밝기 준비됨", "settings.timeNight": "시간과 야간", "settings.night": "야간", "settings.auto": "자동", "settings.localLibrary": "로컬 라이브러리", "settings.savedOnDevice": "이 기기에 저장된 음악", "settings.nasSources": "NAS 소스", "settings.addNas": "NAS 추가", "settings.addNasInSettings": "Settings에서 NAS 추가", "settings.usb": "USB", "settings.notMounted": "마운트 안 됨", "settings.portableStorage": "이동식 저장소", "settings.portableStorageMounted": "이동식 저장소 연결됨", "settings.libraryScan": "라이브러리 스캔", "settings.scanLibrary": "라이브러리 스캔", "settings.scanInProgress": "스캔 중", "settings.chooseTypography": "키오스크 글꼴 선택", "settings.switchSkin": "스킨 변경", "settings.tuneLyrics": "가사 조정", "settings.system": "시스템", "settings.limited": "제한됨", "settings.needsAttention": "확인 필요", "settings.restart": "재시작", "settings.shutdown": "종료", "settings.confirmNeeded": "확인 필요", "settings.systemReboot": "시스템 재시작", "settings.powerOff": "전원 끄기", "settings.restartSystem": "시스템 재시작", "settings.shutdownSystem": "시스템 종료", "settings.tapAgainRestart": "다시 눌러 재시작", "settings.tapAgainPowerOff": "다시 눌러 종료", "settings.adjustType": "글자 조정", "settings.proxyKeyboard": "프록시와 키보드", "settings.proxyReady": "프록시 준비됨", "settings.officialWebPlayers": "공식 웹 플레이어", "settings.exploreHelp": "자동 저장됩니다. 열리지 않으면 Proxy를 바꾸고 재시도하세요.", "settings.enterProxyUrl": "전체 프록시 URL 입력", "settings.nightBrightness": "야간 밝기 {percent}%", "settings.nasStatus": "NAS 상태", "settings.tracks": "{count}곡", "settings.savedCount": "{count}개 저장됨",
+  "library.source": "소스", "library.nas": "NAS", "library.usb": "USB", "library.recentlyAdded": "최근 추가", "library.localShort": "로컬 {count}", "library.nasShort": "NAS {count}", "library.usbShort": "USB {count}", "library.savedShort": "저장 {count}", "library.newShort": "신규 {count}", "library.deleteFromLocal": "로컬에서 삭제", "library.clearSearch": "검색 지우기", "library.localStorage": "로컬 저장소: {free} 남음", "library.localStorageUnavailable": "로컬 저장소 사용 불가", "library.free": "{free} 남음", "library.backMain": "메인 화면으로", "library.loading": "음악 라이브러리 로딩 중...", "library.emptyNas": "Settings에서 NAS를 추가하세요.", "library.emptyUsb": "USB 곡 없음. 드라이브 확인 후 스캔하세요.", "library.emptyFavorites": "즐겨찾기 없음. 곡의 하트를 누르세요.", "library.emptyRecent": "최근 곡 없음.", "library.emptyLocal": "로컬 곡 없음. USB에서 복사하거나 스캔하세요.", "library.savedToLocal": "로컬에 저장됨.", "library.alreadySaved": "이미 로컬에 저장됨.", "library.savedFavorite": "즐겨찾기에 저장됨.", "library.removedFavorite": "즐겨찾기에서 제거됨.", "library.removedLocal": "로컬에서 제거됨.",
+  "radio.threeFresh": "새 추천 3개. 하나를 누르세요.", "radio.loading": "스테이션 로딩 중...", "radio.empty": "여기엔 스테이션 없음. Random을 시도하세요.", "radio.random": "랜덤", "explore.noWebPlayer": "웹 플레이어 없음", "explore.chooseBelow": "아래에서 웹 플레이어 선택", "explore.openLeft": "왼쪽에서 여는 중", "explore.couldNotOpen": "열 수 없음", "explore.proxyActive": "프록시 활성", "explore.directConnection": "직접 연결", "explore.footer": "왼쪽에서 음악을 고르세요. Tikpal 제어는 여기 남습니다.", "explore.webPlayers": "음악 웹 플레이어", "explore.tikpalControls": "Tikpal 제어", "explore.leftFont": "왼쪽 글꼴 크기", "remote.optionalAccessKey": "선택 접근 키", "remote.noKey": "키 없음", "remote.refresh": "새로고침", "remote.sources": "소스", "remote.room": "룸", "remote.hifiEq": "Hi-Fi EQ", "remote.scene": "장면", "remote.display": "디스플레이", "remote.startExplore": "Explore 시작", "remote.proxyOn": "프록시 켜짐", "remote.proxyOff": "프록시 꺼짐", "remote.soundOn": "소리 켜짐", "remote.soundOff": "소리 꺼짐", "error.accessKey": "접근 키를 확인하세요.", "error.noConnection": "아직 연결 없음. 소스를 다시 여세요.", "error.proxy": "Web Proxy를 확인하고 재시도하세요.", "error.brightness": "밝기가 바뀌지 않았습니다. 낮게 시도하세요.", "error.copy": "로컬에 저장할 수 없습니다.", "error.delete": "곡을 제거할 수 없습니다.", "error.favorite": "즐겨찾기를 업데이트할 수 없습니다.", "error.radio": "라디오가 준비되지 않았습니다. 다른 스테이션을 선택하세요.", "error.library": "라이브러리가 준비되지 않았습니다. 스캔하거나 재시도하세요.", "error.explore": "Explore가 열리지 않았습니다. Proxy를 확인하세요.", "error.volume": "볼륨이 바뀌지 않았습니다.", "error.timeout": "너무 오래 걸렸습니다. 다시 시도하세요.", "error.connection": "연결이 느립니다. 다시 시도하세요.", "error.generic": "확인이 필요합니다. 다시 시도하세요."
+});
+
+Object.assign(dictionaries.ja, {
+  "app.name": "Tikpal", "common.add": "追加", "common.apply": "適用", "common.applying": "適用中...", "common.checkSetup": "設定確認", "common.clear": "クリア", "common.closing": "終了中", "common.current": "現在", "common.disabled": "無効", "common.enabled": "有効", "common.experimental": "試験中", "common.failed": "失敗", "common.loading": "読み込み中", "common.manual": "手動", "common.offline": "オフライン", "common.online": "オンライン", "common.savedAutomatically": "自動保存済み", "common.scanning": "スキャン中...", "common.syncing": "同期中", "common.waiting": "待機中",
+  "status.live": "ライブ", "status.offlineView": "オフライン表示", "status.updating": "更新中", "playback.sourceUnknown": "ソース不明", "playback.stopped": "停止", "playback.favorite": "お気に入り", "playback.removeFavorite": "お気に入り解除", "playback.seekPosition": "再生位置", "playback.seekingTo": "{time}へ移動中...", "playback.controlUnavailable": "再生操作は利用不可", "lyrics.listeningTo": "{source}の音声を聴取中...", "lyrics.identifying": "曲を認識中...", "lyrics.hide": "歌詞を隠す", "lyrics.show": "歌詞を表示",
+  "ambient.changeBrightness": "スワイプまたはスクロールで明るさ調整", "ambient.changeVolume": "スワイプまたはスクロールで音量調整", "ambient.previousScene": "前のシーン", "ambient.nextScene": "次のシーン", "ambient.playbackMode": "プレイヤーと再生モード", "ambient.openPlayer": "プレイヤーを開く", "ambient.player": "プレイヤー", "ambient.repeatCurrent": "現在の曲をリピート", "ambient.shuffle": "シャッフル再生", "ambient.muteSceneSound": "シーンサウンドをミュート", "ambient.unmuteSceneSound": "シーンサウンドをオン", "ambient.currentTime": "現在時刻", "ambient.moodSwitcher": "ムード切替", "ambient.mood": "ムード", "ambient.chooseRoomMode": "ルームモード選択", "ambient.roomModeLabel": "{mode}ルームモード", "ambient.brightness": "明るさ", "ambient.displayLevel": "表示レベル", "ambient.closeAdjustment": "{channel}調整を閉じる",
+  "source.audio": "オーディオ", "source.spotify": "Spotify", "source.bluetooth": "Bluetooth", "source.airplay": "AirPlay", "source.upnp": "DLNA", "source.localQueueReady": "ローカルキュー準備完了", "source.webPlayers": "Webプレイヤー", "source.choose": "音源を選択", "source.audioPicker": "音源ピッカー", "source.enableRadio": "ラジオを開く", "source.radioPresets": "ラジオプリセット", "source.openSpotify": "Spotifyを開く", "source.pairPhone": "スマホをペアリング", "source.openDlna": "DLNAを開く", "source.openAirplay": "AirPlayを開く", "source.libraryReadyPickTrack": "ライブラリ準備完了。曲を選択。", "source.readyAs": "{source}は{label}で準備完了。", "source.connectedAs": "{source}: {label}。", "source.connectingAs": "{label}として接続中", "source.connectedTo": "{label}に接続済み", "source.ready": "{source}準備完了。",
+  "handoff.title": "接続中", "handoff.body": "スマホから接続してください。再生開始後に戻ります。", "room.focusIntent": "作業と読書", "room.calmIntent": "リラックス", "room.sleepIntent": "暗め、タイマー、フェードアウト", "room.hifiIntent": "純粋な音楽鑑賞", "quickMenu.title": "クイックメニュー", "quickMenu.close": "クイックメニューを閉じる", "quickMenu.turnScreenOff": "画面オフ", "quickMenu.turnScreenOn": "画面オン", "quickMenu.mute": "ミュート", "quickMenu.restoreVolume": "音量を戻す", "quickMenu.hideTime": "時刻を隠す", "quickMenu.showTime": "時刻を表示", "quickMenu.sleepTikpal": "Tikpalをスリープ", "startup.setRoomMood": "部屋のムードを設定", "startup.roomModes": "起動ルームモード",
+  "settings.console": "コンソール", "settings.preferencesDesc": "音声、表示、文字、オーバーレイ。", "settings.libraryDesc": "ローカル音楽、USB、NAS、スキャン状態。", "settings.linkDesc": "接続とリモートアクセス。", "settings.careDesc": "安全な再起動と電源操作。", "settings.languageSaved": "言語を保存しました。", "settings.languageSavedWithWarning": "言語を保存しました。キーボードは後で同期します。", "settings.dsp": "DSP", "settings.eqReady": "EQ準備完了", "settings.adjustable": "調整可", "settings.readOnly": "読み取り専用", "settings.screenReady": "画面準備完了", "settings.brightnessReady": "明るさ準備完了", "settings.timeNight": "時刻と夜間", "settings.night": "夜間", "settings.auto": "自動", "settings.localLibrary": "ローカルライブラリ", "settings.savedOnDevice": "この端末に保存した音楽", "settings.nasSources": "NASソース", "settings.addNas": "NASを追加", "settings.addNasInSettings": "SettingsでNASを追加", "settings.usb": "USB", "settings.notMounted": "未マウント", "settings.portableStorage": "外部ストレージ", "settings.portableStorageMounted": "外部ストレージ接続済み", "settings.libraryScan": "ライブラリスキャン", "settings.scanLibrary": "ライブラリをスキャン", "settings.scanInProgress": "スキャン中", "settings.chooseTypography": "キオスクの書体を選択", "settings.switchSkin": "スキン変更", "settings.tuneLyrics": "歌詞を調整", "settings.system": "システム", "settings.limited": "制限あり", "settings.needsAttention": "確認が必要", "settings.restart": "再起動", "settings.shutdown": "シャットダウン", "settings.confirmNeeded": "確認が必要", "settings.systemReboot": "システム再起動", "settings.powerOff": "電源オフ", "settings.restartSystem": "システムを再起動", "settings.shutdownSystem": "システムを終了", "settings.tapAgainRestart": "もう一度タップで再起動", "settings.tapAgainPowerOff": "もう一度タップで電源オフ", "settings.adjustType": "文字を調整", "settings.proxyKeyboard": "プロキシとキーボード", "settings.proxyReady": "プロキシ準備完了", "settings.officialWebPlayers": "公式Webプレイヤー", "settings.exploreHelp": "自動保存されます。開かない時はProxyを切り替えて再試行。", "settings.enterProxyUrl": "完全なプロキシURLを入力", "settings.nightBrightness": "夜間明るさ {percent}%", "settings.nasStatus": "NAS状態", "settings.tracks": "{count}曲", "settings.savedCount": "{count}件保存",
+  "library.source": "ソース", "library.nas": "NAS", "library.usb": "USB", "library.recentlyAdded": "最近追加", "library.localShort": "ローカル {count}", "library.nasShort": "NAS {count}", "library.usbShort": "USB {count}", "library.savedShort": "保存 {count}", "library.newShort": "新規 {count}", "library.deleteFromLocal": "ローカルから削除", "library.clearSearch": "検索をクリア", "library.localStorage": "ローカル容量: {free}空き", "library.localStorageUnavailable": "ローカル容量は利用不可", "library.free": "{free}空き", "library.backMain": "メイン画面へ", "library.loading": "ライブラリ読み込み中...", "library.emptyNas": "SettingsでNASを追加。", "library.emptyUsb": "USBの曲なし。ドライブ確認後にスキャン。", "library.emptyFavorites": "お気に入りはまだありません。曲のハートをタップ。", "library.emptyRecent": "最近の曲はまだありません。", "library.emptyLocal": "ローカル曲なし。USBからコピーまたはスキャン。", "library.savedToLocal": "ローカルに保存しました。", "library.alreadySaved": "すでにローカル保存済み。", "library.savedFavorite": "お気に入りに保存しました。", "library.removedFavorite": "お気に入りから削除しました。", "library.removedLocal": "ローカルから削除しました。",
+  "radio.threeFresh": "新しい3局。1つタップして再生。", "radio.loading": "局を読み込み中...", "radio.empty": "ここに局はありません。Randomを試してください。", "radio.random": "ランダム", "explore.noWebPlayer": "Webプレイヤーなし", "explore.chooseBelow": "下からWebプレイヤーを選択", "explore.openLeft": "左で起動中", "explore.couldNotOpen": "開けませんでした", "explore.proxyActive": "プロキシ有効", "explore.directConnection": "直接接続", "explore.footer": "左で音楽を選択。Tikpal操作はここに残ります。", "explore.webPlayers": "音楽Webプレイヤー", "explore.tikpalControls": "Tikpal操作", "explore.leftFont": "左プレイヤー文字サイズ", "remote.optionalAccessKey": "任意のアクセスキー", "remote.noKey": "キーなし", "remote.refresh": "更新", "remote.sources": "ソース", "remote.room": "ルーム", "remote.hifiEq": "Hi-Fi EQ", "remote.scene": "シーン", "remote.display": "表示", "remote.startExplore": "Explore開始", "remote.proxyOn": "プロキシオン", "remote.proxyOff": "プロキシオフ", "remote.soundOn": "音オン", "remote.soundOff": "音オフ", "error.accessKey": "アクセスキーを確認してください。", "error.noConnection": "まだ接続なし。ソースを開き直してください。", "error.proxy": "Web Proxyを確認して再試行。", "error.brightness": "明るさが変わりません。低めで試してください。", "error.copy": "ローカル保存できませんでした。", "error.delete": "曲を削除できませんでした。", "error.favorite": "お気に入りを更新できませんでした。", "error.radio": "ラジオ準備未完了。別の局を選択。", "error.library": "ライブラリ準備未完了。スキャンまたは再試行。", "error.explore": "Exploreを開けませんでした。Proxyを確認。", "error.volume": "音量が変わりません。", "error.timeout": "時間がかかりすぎました。再試行。", "error.connection": "接続が遅いです。再試行。", "error.generic": "確認が必要です。再試行。"
+});
+
+Object.assign(dictionaries.es, {
+  "app.name": "Tikpal", "common.add": "Añadir", "common.apply": "Aplicar", "common.applying": "Aplicando...", "common.checkSetup": "Revisar setup", "common.clear": "Limpiar", "common.closing": "Cerrando", "common.current": "Actual", "common.disabled": "Desactivado", "common.enabled": "Activado", "common.experimental": "Experimental", "common.failed": "Falló", "common.loading": "Cargando", "common.manual": "Manual", "common.offline": "Offline", "common.online": "Online", "common.savedAutomatically": "Guardado automáticamente", "common.scanning": "Escaneando...", "common.syncing": "Sincronizando", "common.waiting": "Esperando",
+  "status.live": "En vivo", "status.offlineView": "Vista offline", "status.updating": "Actualizando", "playback.sourceUnknown": "Fuente desconocida", "playback.stopped": "Detenido", "playback.favorite": "Favorito", "playback.removeFavorite": "Quitar favorito", "playback.seekPosition": "Posición", "playback.seekingTo": "Saltando a {time}...", "playback.controlUnavailable": "Control no disponible", "lyrics.listeningTo": "Escuchando audio de {source}...", "lyrics.identifying": "Identificando canción...", "lyrics.hide": "Ocultar letras", "lyrics.show": "Mostrar letras",
+  "ambient.changeBrightness": "Desliza o rueda para cambiar brillo", "ambient.changeVolume": "Desliza o rueda para cambiar volumen", "ambient.previousScene": "Escena anterior", "ambient.nextScene": "Escena siguiente", "ambient.playbackMode": "Player y modo de reproducción", "ambient.openPlayer": "Abrir player", "ambient.player": "Player", "ambient.repeatCurrent": "Repetir canción actual", "ambient.shuffle": "Reproducción aleatoria", "ambient.muteSceneSound": "Silenciar escena", "ambient.unmuteSceneSound": "Activar sonido de escena", "ambient.currentTime": "Hora actual", "ambient.moodSwitcher": "Cambio de ambiente", "ambient.mood": "Ambiente", "ambient.chooseRoomMode": "Elegir modo de sala", "ambient.roomModeLabel": "Modo {mode}", "ambient.brightness": "Brillo", "ambient.displayLevel": "Nivel de pantalla", "ambient.closeAdjustment": "Cerrar ajuste de {channel}",
+  "source.audio": "Audio", "source.spotify": "Spotify", "source.bluetooth": "Bluetooth", "source.airplay": "AirPlay", "source.upnp": "DLNA", "source.localQueueReady": "Cola local lista", "source.webPlayers": "Web players", "source.choose": "Elegir fuente de audio", "source.audioPicker": "Selector de fuente", "source.enableRadio": "Abrir Radio", "source.radioPresets": "Presets de radio", "source.openSpotify": "Abrir Spotify", "source.pairPhone": "Emparejar teléfono", "source.openDlna": "Abrir DLNA", "source.openAirplay": "Abrir AirPlay", "source.libraryReadyPickTrack": "Biblioteca lista. Elige una canción.", "source.readyAs": "{source} lista como {label}.", "source.connectedAs": "{source}: {label}.", "source.connectingAs": "Conectando como {label}", "source.connectedTo": "Conectado a {label}", "source.ready": "{source} lista.",
+  "handoff.title": "Conectando", "handoff.body": "Conecta desde tu teléfono. Vuelve cuando empiece la música.", "room.focusIntent": "Trabajo y lectura", "room.calmIntent": "Relajarse", "room.sleepIntent": "Oscuro, temporizador, fundido", "room.hifiIntent": "Escucha musical pura", "quickMenu.title": "Menú rápido", "quickMenu.close": "Cerrar menú rápido", "quickMenu.turnScreenOff": "Apagar pantalla", "quickMenu.turnScreenOn": "Encender pantalla", "quickMenu.mute": "Silenciar", "quickMenu.restoreVolume": "Restaurar volumen", "quickMenu.hideTime": "Ocultar hora", "quickMenu.showTime": "Mostrar hora", "quickMenu.sleepTikpal": "Dormir Tikpal", "startup.setRoomMood": "Configurar ambiente", "startup.roomModes": "Modos de inicio",
+  "settings.console": "Consola", "settings.preferencesDesc": "Audio, pantalla, texto y overlays.", "settings.libraryDesc": "Música local, USB, NAS y escaneo.", "settings.linkDesc": "Conectividad y acceso remoto.", "settings.careDesc": "Reinicio y apagado protegidos.", "settings.languageSaved": "Idioma guardado.", "settings.languageSavedWithWarning": "Idioma guardado. Teclado se sincronizará pronto.", "settings.dsp": "DSP", "settings.eqReady": "EQ listo", "settings.adjustable": "Ajustable", "settings.readOnly": "Solo lectura", "settings.screenReady": "Pantalla lista", "settings.brightnessReady": "Brillo listo", "settings.timeNight": "Hora y noche", "settings.night": "Noche", "settings.auto": "Auto", "settings.localLibrary": "Biblioteca local", "settings.savedOnDevice": "Música guardada en este dispositivo", "settings.nasSources": "Fuentes NAS", "settings.addNas": "Añadir NAS", "settings.addNasInSettings": "Añadir NAS en Settings", "settings.usb": "USB", "settings.notMounted": "No montado", "settings.portableStorage": "Almacenamiento portátil", "settings.portableStorageMounted": "Almacenamiento conectado", "settings.libraryScan": "Escaneo de biblioteca", "settings.scanLibrary": "Escanear biblioteca", "settings.scanInProgress": "Escaneando", "settings.chooseTypography": "Elegir tipografía del kiosk", "settings.switchSkin": "Cambiar skin", "settings.tuneLyrics": "Ajustar letras", "settings.system": "Sistema", "settings.limited": "Limitado", "settings.needsAttention": "Revisar", "settings.restart": "Reiniciar", "settings.shutdown": "Apagar", "settings.confirmNeeded": "Confirmar", "settings.systemReboot": "Reinicio del sistema", "settings.powerOff": "Apagar", "settings.restartSystem": "Reiniciar sistema", "settings.shutdownSystem": "Apagar sistema", "settings.tapAgainRestart": "Toca otra vez para reiniciar", "settings.tapAgainPowerOff": "Toca otra vez para apagar", "settings.adjustType": "Ajustar texto", "settings.proxyKeyboard": "Proxy y teclado", "settings.proxyReady": "Proxy listo", "settings.officialWebPlayers": "Web players oficiales", "settings.exploreHelp": "Se guarda solo. Si no abre, cambia Proxy y reintenta.", "settings.enterProxyUrl": "Introduce una URL proxy completa", "settings.nightBrightness": "Brillo noche {percent}%", "settings.nasStatus": "Estado NAS", "settings.tracks": "{count} canciones", "settings.savedCount": "{count} guardadas",
+  "library.source": "Fuente", "library.nas": "NAS", "library.usb": "USB", "library.recentlyAdded": "Recientes", "library.localShort": "{count} local", "library.nasShort": "{count} NAS", "library.usbShort": "{count} USB", "library.savedShort": "{count} guardadas", "library.newShort": "{count} nuevas", "library.deleteFromLocal": "Eliminar de Local", "library.clearSearch": "Limpiar búsqueda", "library.localStorage": "Espacio local: {free} libre", "library.localStorageUnavailable": "Espacio local no disponible", "library.free": "{free} libre", "library.backMain": "Volver a pantalla principal", "library.loading": "Cargando biblioteca...", "library.emptyNas": "Añade NAS en Settings.", "library.emptyUsb": "Sin canciones USB. Revisa la unidad y escanea.", "library.emptyFavorites": "Sin favoritos. Toca el corazón de una canción.", "library.emptyRecent": "Sin canciones recientes.", "library.emptyLocal": "Sin canciones locales. Copia desde USB o escanea.", "library.savedToLocal": "Guardado en Local.", "library.alreadySaved": "Ya guardado localmente.", "library.savedFavorite": "Guardado en Favoritos.", "library.removedFavorite": "Quitado de Favoritos.", "library.removedLocal": "Quitado de Local.",
+  "radio.threeFresh": "Tres opciones nuevas. Toca una.", "radio.loading": "Cargando emisoras...", "radio.empty": "No hay emisoras aquí. Prueba Random.", "radio.random": "Aleatorio", "explore.noWebPlayer": "Sin web player", "explore.chooseBelow": "Elige un web player abajo", "explore.openLeft": "Abriendo a la izquierda", "explore.couldNotOpen": "No se pudo abrir", "explore.proxyActive": "Proxy activo", "explore.directConnection": "Conexión directa", "explore.footer": "Elige música a la izquierda. Tikpal queda aquí.", "explore.webPlayers": "Web players de música", "explore.tikpalControls": "Controles Tikpal", "explore.leftFont": "Texto del provider izquierdo", "remote.optionalAccessKey": "Clave opcional", "remote.noKey": "Sin clave", "remote.refresh": "Actualizar", "remote.sources": "Fuentes", "remote.room": "Sala", "remote.hifiEq": "Hi-Fi EQ", "remote.scene": "Escena", "remote.display": "Pantalla", "remote.startExplore": "Iniciar Explore", "remote.proxyOn": "Proxy On", "remote.proxyOff": "Proxy Off", "remote.soundOn": "Sonido On", "remote.soundOff": "Sonido Off", "error.accessKey": "Revisa la clave.", "error.noConnection": "Sin conexión aún. Reabre la fuente.", "error.proxy": "Revisa Web Proxy y reintenta.", "error.brightness": "El brillo no cambió. Prueba más bajo.", "error.copy": "No se pudo guardar en Local.", "error.delete": "No se pudo quitar esta canción.", "error.favorite": "No se pudieron actualizar Favoritos.", "error.radio": "Radio no está lista. Prueba otra emisora.", "error.library": "Biblioteca no lista. Escanea o reintenta.", "error.explore": "Explore no se abrió. Revisa Proxy.", "error.volume": "El volumen no cambió.", "error.timeout": "Tardó demasiado. Reintenta.", "error.connection": "Conexión lenta. Reintenta.", "error.generic": "Necesita atención. Reintenta."
+});
+
+Object.assign(dictionaries["zh-CN"], {
+  "app.name": "Tikpal", "source.localQueueReady": "本地队列就绪",
+  "settings.preferencesDesc": "音频、显示、字体和聆听浮层。", "settings.libraryDesc": "本地音乐、USB、NAS 和扫描状态。", "settings.linkDesc": "连接与远程访问。", "settings.careDesc": "受保护的重启和关机。", "settings.adjustable": "可调", "settings.readOnly": "只读", "settings.screenReady": "屏幕就绪", "settings.brightnessReady": "亮度就绪", "settings.night": "夜间", "settings.auto": "自动", "settings.addNasInSettings": "在 Settings 添加 NAS", "settings.portableStorage": "移动存储", "settings.portableStorageMounted": "移动存储已挂载", "settings.scanInProgress": "扫描中", "settings.chooseTypography": "选择 kiosk 字体", "settings.switchSkin": "切换皮肤", "settings.tuneLyrics": "调整歌词", "settings.limited": "受限", "settings.needsAttention": "需要检查", "settings.systemReboot": "系统重启", "settings.powerOff": "关机", "settings.adjustType": "调整字体", "settings.proxyKeyboard": "代理与键盘", "settings.proxyReady": "代理就绪", "settings.officialWebPlayers": "官方网页播放器", "settings.exploreHelp": "会自动保存。播放器打不开时，切换代理后重试。", "settings.enterProxyUrl": "输入完整代理 URL", "settings.nightBrightness": "夜间亮度 {percent}%", "settings.nasStatus": "NAS 状态",
+  "library.localShort": "{count} 本地", "library.nasShort": "{count} NAS", "library.usbShort": "{count} USB", "library.savedShort": "{count} 已保存", "library.newShort": "{count} 新增", "library.localStorage": "本地空间：剩余 {free}", "library.localStorageUnavailable": "本地空间不可用",
+  "explore.webPlayers": "音乐网页播放器", "explore.tikpalControls": "Tikpal 控制", "explore.leftFont": "左侧播放器字体",
+  "error.accessKey": "请检查访问密钥。", "error.noConnection": "尚未连接。重新打开音源后重试。", "error.proxy": "检查 Web Proxy 后重试。", "error.brightness": "亮度未改变。试试更低数值。", "error.copy": "无法保存到本地。请重试。", "error.delete": "无法移除这首歌。请重试。", "error.favorite": "无法更新收藏。请重试。", "error.radio": "电台未就绪。试试其他电台。", "error.library": "曲库未就绪。请扫描或重试。", "error.explore": "Explore 未打开。检查代理后重试。", "error.volume": "音量未改变。请重试。", "error.timeout": "等待太久了。请重试。", "error.connection": "连接较慢。请重试。", "error.generic": "需要检查。请重试。"
+});
+
+function template(value: string, params: TranslationParams = {}) {
+  return value.replace(/\{([^}]+)\}/g, (_, key: string) => {
+    const replacement = params[key];
+    return replacement === null || replacement === undefined ? "" : String(replacement);
+  });
+}
+
+function translate(locale: UiLocale, key: string, params?: TranslationParams) {
+  return template(dictionaries[locale][key] ?? dictionaries.en[key] ?? key, params);
+}
+
+export function localeFromValue(value: unknown): UiLocale {
+  const candidate = String(value ?? "").trim();
+  return languageOptions.some((option) => option.locale === candidate) ? candidate as UiLocale : "en";
+}
+
+interface I18nContextValue {
+  locale: UiLocale;
+  preferences: UiPreferences;
+  pending: boolean;
+  error: string | null;
+  t: (key: string, params?: TranslationParams) => string;
+  setLocale: (locale: UiLocale) => Promise<UiPreferences>;
+  refreshPreferences: () => Promise<UiPreferences | null>;
+  sourceLabel: (sourceId: SourceState | string, fallback?: string | null) => string;
+  roomLabel: (mode: RoomMode) => string;
+  roomIntent: (mode: RoomMode) => string;
+  storageLabel: (storage: AudioLibraryStorageId | string) => string;
+  playbackStateLabel: (state: PlaybackState | string | null | undefined) => string;
+  friendlyError: (message: string | null | undefined, fallbackKey?: string) => string | null;
+}
+
+const I18nContext = createContext<I18nContextValue | null>(null);
+
+export function I18nProvider({ children }: { children: ReactNode }) {
+  const [preferences, setPreferences] = useState<UiPreferences>(defaultPreferences);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const locale = preferences.locale;
+
+  const refreshPreferences = useCallback(async () => {
+    try {
+      const next = await fetchPreferences();
+      setPreferences(next);
+      setError(null);
+      return next;
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Preferences unavailable");
+      return null;
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshPreferences();
+    const timer = window.setInterval(() => void refreshPreferences(), 5000);
+    return () => window.clearInterval(timer);
+  }, [refreshPreferences]);
+
+  useEffect(() => {
+    document.documentElement.lang = locale;
+    document.documentElement.dir = "ltr";
+  }, [locale]);
+
+  const setLocale = useCallback(async (nextLocale: UiLocale) => {
+    const normalized = localeFromValue(nextLocale);
+    setPending(true);
+    setError(null);
+    setPreferences((current) => ({
+      ...current,
+      locale: normalized,
+      inputMethodId: localeInputMethods[normalized],
+      warning: null
+    }));
+    try {
+      const next = await updatePreferences({ locale: normalized });
+      setPreferences(next);
+      return next;
+    } catch (caught) {
+      await refreshPreferences();
+      const message = caught instanceof Error ? caught.message : "Language did not save";
+      setError(message);
+      throw caught;
+    } finally {
+      setPending(false);
+    }
+  }, [refreshPreferences]);
+
+  const value = useMemo<I18nContextValue>(() => {
+    const t = (key: string, params?: TranslationParams) => translate(locale, key, params);
+    const sourceLabel = (sourceId: SourceState | string, fallback?: string | null) => {
+      const key = sourceId === "mpd" || sourceId === "library" ? "source.library" : `source.${sourceId}`;
+      const translated = t(key);
+      return translated === key ? fallback ?? String(sourceId) : translated;
+    };
+    const roomLabel = (mode: RoomMode) => t(`room.${mode}`);
+    const roomIntent = (mode: RoomMode) => t(`room.${mode}Intent`);
+    const storageLabel = (storage: AudioLibraryStorageId | string) => {
+      const key = storage === "recently_added" ? "library.recentlyAdded" : `library.${storage}`;
+      const translated = t(key);
+      return translated === key ? String(storage) : translated;
+    };
+    const playbackStateLabel = (state: PlaybackState | string | null | undefined) => {
+      if (state === "playing") return t("playback.playing");
+      if (state === "paused") return t("playback.paused");
+      if (state === "stopped") return t("playback.stopped");
+      return t("common.ready");
+    };
+    const friendlyError = (message: string | null | undefined, fallbackKey = "error.generic") => {
+      if (!message) return null;
+      const normalized = message.toLowerCase();
+      if (normalized.includes("unauthorized") || normalized.includes("forbidden") || normalized.includes("remote key")) return t("error.accessKey");
+      if (normalized.includes("no ") && normalized.includes(" connection detected")) return t("error.noConnection");
+      if (normalized.includes("proxy")) return t("error.proxy");
+      if (normalized.includes("brightness") || normalized.includes("ddc")) return t("error.brightness");
+      if (normalized.includes("copy")) return t("error.copy");
+      if (normalized.includes("delete") || normalized.includes("remove")) return t("error.delete");
+      if (normalized.includes("favorite")) return t("error.favorite");
+      if (normalized.includes("radio")) return t("error.radio");
+      if (normalized.includes("library") || normalized.includes("manifest")) return t("error.library");
+      if (normalized.includes("explore") || normalized.includes("provider")) return t("error.explore");
+      if (normalized.includes("volume")) return t("error.volume");
+      if (normalized.includes("timeout") || normalized.includes("timed out")) return t("error.timeout");
+      if (normalized.includes("api") || normalized.includes("http") || normalized.includes("fetch")) return t("error.connection");
+      if (message.length > 72 || normalized.includes("error") || normalized.includes("failed")) return t(fallbackKey);
+      return message;
+    };
+    return {
+      locale,
+      preferences,
+      pending,
+      error,
+      t,
+      setLocale,
+      refreshPreferences,
+      sourceLabel,
+      roomLabel,
+      roomIntent,
+      storageLabel,
+      playbackStateLabel,
+      friendlyError
+    };
+  }, [error, locale, pending, preferences, refreshPreferences, setLocale]);
+
+  return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;
+}
+
+export function useI18n() {
+  const value = useContext(I18nContext);
+  if (!value) throw new Error("useI18n must be used inside I18nProvider");
+  return value;
+}

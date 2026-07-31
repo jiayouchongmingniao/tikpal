@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Airplay, Bluetooth, Captions, Cast, CheckCircle2, Clock3, Cpu, Database, EthernetPort, Eye, EyeOff, Globe2, HardDrive, Info, Monitor, Moon, Music2, Palette, PanelRightClose, Plus, Power, Radio as RadioIcon, RotateCcw, Search, Server, SlidersHorizontal, Target, Trash2, Type, Usb, Volume2, Waves } from "lucide-react";
 import { deleteNasSource, discoverNasSources, fetchAudioLibrary, fetchNasSources, fetchWebModeState, mountNasSource, saveNasSource, sendWebModeAction, testNasSource, unmountNasSource, updateWebModeSettings } from "../api/tikpalClient";
+import { languageOptions, useI18n } from "../i18n";
 import { getSourceDisplayStatus, getSourceDisplayStatusLabel } from "../sourceStatus";
 import { friendlyUiErrorOrFallback } from "../uiCopy";
 import type { TikpalDataStatus } from "../hooks/useTikpalState";
 import { useOverlayReturnGesture } from "../hooks/useOverlayReturnGesture";
-import type { AudioState, FontTheme, LyricsFontSize, NasDiscoverCandidate, NasSourceInput, NasSourcesResponse, NightScheduleState, PlaybackSummary, RoomExperienceActionRequest, RoomExperienceState, RoomMode, RuntimeState, SurfaceTheme, SystemActionType, SystemState, WebModeState } from "../types";
+import type { AudioState, FontTheme, LyricsFontSize, NasDiscoverCandidate, NasSourceInput, NasSourcesResponse, NightScheduleState, PlaybackSummary, RoomExperienceActionRequest, RoomExperienceState, RoomMode, RuntimeState, SurfaceTheme, SystemActionType, SystemState, UiLocale, WebModeState } from "../types";
 
 interface QuickSettingsOverlayProps {
   active: boolean;
@@ -32,7 +33,7 @@ interface QuickSettingsOverlayProps {
 type CardTone = "cyan" | "gold" | "neutral" | "warn" | "danger";
 type ActionableCardKey = "library_scan" | "reboot" | "shutdown";
 type SettingsSectionKey = "output" | "library" | "network" | "system";
-type SettingsDetailView = "appearance" | "display" | "font" | "lyrics" | "nas" | "night" | "webMode" | null;
+type SettingsDetailView = "appearance" | "display" | "font" | "language" | "lyrics" | "nas" | "night" | "webMode" | null;
 type LibraryStorageCounts = {
   local: number | null;
   nas: number | null;
@@ -94,7 +95,11 @@ interface WebModeCard extends BaseCard {
   kind: "webMode";
 }
 
-type SettingsCard = ReadOnlyCard | ActionCard | FontCard | AppearanceCard | LyricsCard | DisplayCard | NightCard | NasCard | WebModeCard;
+interface LanguageCard extends BaseCard {
+  kind: "language";
+}
+
+type SettingsCard = ReadOnlyCard | ActionCard | FontCard | AppearanceCard | LanguageCard | LyricsCard | DisplayCard | NightCard | NasCard | WebModeCard;
 
 const fontChoices: Array<{ id: FontTheme; label: string; sample: string }> = [
   { id: "system", label: "System Neo", sample: "Clean device UI" },
@@ -271,6 +276,7 @@ export function QuickSettingsOverlay({
   onSystemAction,
   onReturnAmbient
 }: QuickSettingsOverlayProps) {
+  const { t, preferences, pending: localePending, error: localeError, setLocale } = useI18n();
   const overlayReturnGesture = useOverlayReturnGesture(onReturnAmbient);
   const [activeSection, setActiveSection] = useState<SettingsSectionKey>("output");
   const [detailView, setDetailView] = useState<SettingsDetailView>(null);
@@ -307,6 +313,7 @@ export function QuickSettingsOverlay({
   });
   const [brightnessError, setBrightnessError] = useState<string | null>(null);
   const [nightError, setNightError] = useState<string | null>(null);
+  const [localeMessage, setLocaleMessage] = useState<string | null>(null);
   const currentSource = audio.currentSource;
   const ConsoleSourceIcon = getConsoleSourceIcon(currentSource.id);
   const consoleStateLabel = getConsoleStateLabel(playback, currentSource);
@@ -320,6 +327,14 @@ export function QuickSettingsOverlay({
     playback.artist?.trim() || playback.album?.trim() || currentSource.secondaryStatus || currentSource.label,
     `${currentSource.label} ${consoleStateLabel}`
   ].filter(Boolean).join(" · ");
+  const sectionLabel = useCallback(
+    (section: SettingsSectionKey) => t(`settings.${section === "output" ? "preferences" : section === "network" ? "link" : section === "system" ? "care" : "library"}`),
+    [t]
+  );
+  const sectionDescription = useCallback(
+    (section: SettingsSectionKey) => t(`settings.${section === "output" ? "preferencesDesc" : section === "network" ? "linkDesc" : section === "system" ? "careDesc" : "libraryDesc"}`),
+    [t]
+  );
   useEffect(() => {
     if (!active) {
       hideLocalKeyboard();
@@ -336,6 +351,7 @@ export function QuickSettingsOverlay({
       });
       setBrightnessError(null);
       setNightError(null);
+      setLocaleMessage(null);
       setWebModeError(null);
       setNasFormVisible(false);
       setNasForm(blankNasForm);
@@ -492,6 +508,16 @@ export function QuickSettingsOverlay({
   const settingsCards = useMemo<SettingsCard[]>(
     () => [
       {
+        kind: "language",
+        key: "language",
+        section: "output",
+        icon: Globe2,
+        title: t("settings.language"),
+        value: languageOptions.find((option) => option.locale === preferences.locale)?.label ?? "English",
+        meta: t("settings.languageMeta"),
+        tone: "cyan"
+      },
+      {
         kind: "readonly",
         key: "network",
         section: "network",
@@ -506,7 +532,7 @@ export function QuickSettingsOverlay({
         key: "output",
         section: "output",
         icon: Volume2,
-        title: "Audio Output",
+        title: t("settings.audioOutput"),
         value: system.outputDevice.label,
         meta: system.outputDevice.detail,
         tone: "gold"
@@ -516,9 +542,9 @@ export function QuickSettingsOverlay({
         key: "dsp",
         section: "output",
         icon: SlidersHorizontal,
-        title: "DSP",
-        value: system.dspState.controllable ? "EQ Ready" : system.dspState.enabled ? "Enabled" : "Disabled",
-        meta: `${system.dspState.presetLabel} · ${system.dspState.controllable ? "Adjustable" : "Read-only"}`,
+        title: t("settings.dsp"),
+        value: system.dspState.controllable ? t("settings.eqReady") : system.dspState.enabled ? t("common.enabled") : t("common.disabled"),
+        meta: `${system.dspState.presetLabel} · ${system.dspState.controllable ? t("settings.adjustable") : t("settings.readOnly")}`,
         tone: "cyan"
       },
       {
@@ -526,9 +552,9 @@ export function QuickSettingsOverlay({
         key: "display",
         section: "output",
         icon: Monitor,
-        title: "Display",
+        title: t("settings.display"),
         value: runtime.kioskWindow,
-        meta: system.display.controllable ? "Screen ready · Brightness ready" : "Screen ready · Unavailable",
+        meta: system.display.controllable ? `${t("settings.screenReady")} · ${t("settings.brightnessReady")}` : `${t("settings.screenReady")} · ${t("common.unavailable")}`,
         tone: "neutral"
       },
       {
@@ -536,8 +562,8 @@ export function QuickSettingsOverlay({
         key: "night",
         section: "output",
         icon: Clock3,
-        title: "Time & Night",
-        value: roomExperience.nightSchedule.active ? "Night" : roomExperience.nightSchedule.enabled ? "Auto" : "Manual",
+        title: t("settings.timeNight"),
+        value: roomExperience.nightSchedule.active ? t("settings.night") : roomExperience.nightSchedule.enabled ? t("settings.auto") : t("common.manual"),
         meta: `${roomExperience.nightSchedule.timeZone} · ${roomExperience.nightSchedule.start}-${roomExperience.nightSchedule.end}`,
         tone: roomExperience.nightSchedule.active ? "cyan" : "neutral"
       },
@@ -546,9 +572,9 @@ export function QuickSettingsOverlay({
         key: "local-library",
         section: "library",
         icon: HardDrive,
-        title: "Local Library",
-        value: `${localTrackCount.toLocaleString()} tracks`,
-        meta: "Music saved on this device",
+        title: t("settings.localLibrary"),
+        value: t("settings.tracks", { count: localTrackCount.toLocaleString() }),
+        meta: t("settings.savedOnDevice"),
         tone: "gold"
       },
       {
@@ -556,7 +582,7 @@ export function QuickSettingsOverlay({
         key: "nas-sources",
         section: "library",
         icon: Server,
-        title: "NAS Sources",
+        title: t("settings.nasSources"),
         value: nasCardValue,
         meta: nasCardMeta,
         tone: nasCardTone
@@ -566,7 +592,7 @@ export function QuickSettingsOverlay({
         key: "usb-library",
         section: "library",
         icon: Usb,
-        title: "USB",
+        title: t("settings.usb"),
         value: usbCardValue,
         meta: usbCardMeta,
         tone: usbTrackCount > 0 ? "gold" : "neutral"
@@ -576,21 +602,21 @@ export function QuickSettingsOverlay({
         key: "library",
         section: "library",
         icon: Database,
-        title: "Library Scan",
+        title: t("settings.libraryScan"),
         value: libraryScanValue,
         meta: libraryScanMeta,
         tone: "gold",
         actionType: "library_scan",
-        buttonLabel: system.library.scanning ? "Scanning..." : "Scan library"
+        buttonLabel: system.library.scanning ? t("common.scanning") : t("settings.scanLibrary")
       },
       {
         kind: "font",
         key: "font",
         section: "output",
         icon: Type,
-        title: "Font",
+        title: t("settings.font"),
         value: fontChoices.find((choice) => choice.id === fontTheme)?.label ?? "System Neo",
-        meta: "Choose the kiosk typography",
+        meta: t("settings.chooseTypography"),
         tone: "cyan"
       },
       {
@@ -598,7 +624,7 @@ export function QuickSettingsOverlay({
         key: "appearance",
         section: "output",
         icon: Palette,
-        title: "Skin",
+        title: t("settings.skin"),
         value: surfaceThemeChoices.find((choice) => choice.id === surfaceTheme)?.label ?? "Warm Gold",
         meta: surfaceThemeChoices.find((choice) => choice.id === surfaceTheme)?.sample ?? "Amber glass",
         tone: "gold"
@@ -608,9 +634,9 @@ export function QuickSettingsOverlay({
         key: "lyrics",
         section: "output",
         icon: Captions,
-        title: "Lyrics",
-        value: lyricsVisible ? "Shown" : "Hidden",
-        meta: `Font: ${lyricsSizeChoices.find((choice) => choice.id === lyricsFontSize)?.label ?? "Medium"}`,
+        title: t("settings.lyrics"),
+        value: lyricsVisible ? t("common.visible") : t("common.hidden"),
+        meta: `${t("settings.font")}: ${lyricsSizeChoices.find((choice) => choice.id === lyricsFontSize)?.label ?? "Medium"}`,
         tone: lyricsVisible ? "gold" : "neutral"
       },
       {
@@ -618,9 +644,9 @@ export function QuickSettingsOverlay({
         key: "system",
         section: "system",
         icon: Info,
-        title: "System",
-        value: status.source === "api" ? "Online" : "Limited",
-        meta: status.error ? "Needs attention" : `CPU ${system.cpuTemp}C - ${system.uptime}`,
+        title: t("settings.system"),
+        value: status.source === "api" ? t("common.online") : t("settings.limited"),
+        meta: status.error ? t("settings.needsAttention") : `CPU ${system.cpuTemp}C - ${system.uptime}`,
         tone: status.source === "api" ? "neutral" : "warn"
       },
       {
@@ -629,8 +655,8 @@ export function QuickSettingsOverlay({
         section: "network",
         icon: Globe2,
         title: "Explore",
-        value: webModeProxyEnabled ? "Proxy" : "Direct",
-        meta: webModeProxyEnabled ? "Proxy ready" : "Official web players",
+        value: webModeProxyEnabled ? t("common.proxy") : t("common.direct"),
+        meta: webModeProxyEnabled ? t("settings.proxyReady") : t("settings.officialWebPlayers"),
         tone: webModeProxyEnabled ? "cyan" : "neutral"
       },
       {
@@ -638,29 +664,29 @@ export function QuickSettingsOverlay({
         key: "restart",
         section: "system",
         icon: RotateCcw,
-        title: "Restart",
-        value: "Confirm Needed",
-        meta: "System reboot",
+        title: t("settings.restart"),
+        value: t("settings.confirmNeeded"),
+        meta: t("settings.systemReboot"),
         tone: "warn",
         actionType: "reboot",
-        buttonLabel: "Restart system",
-        confirmLabel: "Tap again to restart"
+        buttonLabel: t("settings.restartSystem"),
+        confirmLabel: t("settings.tapAgainRestart")
       },
       {
         kind: "action",
         key: "shutdown",
         section: "system",
         icon: Power,
-        title: "Shutdown",
-        value: "Confirm Needed",
-        meta: "Power off",
+        title: t("settings.shutdown"),
+        value: t("settings.confirmNeeded"),
+        meta: t("settings.powerOff"),
         tone: "danger",
         actionType: "shutdown",
-        buttonLabel: "Shutdown system",
-        confirmLabel: "Tap again to power off"
+        buttonLabel: t("settings.shutdownSystem"),
+        confirmLabel: t("settings.tapAgainPowerOff")
       }
     ],
-    [fontTheme, libraryScanMeta, libraryScanValue, localTrackCount, lyricsFontSize, lyricsVisible, nasCardMeta, nasCardTone, nasCardValue, roomExperience.nightSchedule.active, roomExperience.nightSchedule.enabled, roomExperience.nightSchedule.end, roomExperience.nightSchedule.start, roomExperience.nightSchedule.timeZone, runtime.kioskWindow, runtime.requestedRenderer, status.error, status.source, surfaceTheme, system.cpuTemp, system.display.brightnessPercent, system.display.controllable, system.dspState.controllable, system.dspState.controlTransport, system.dspState.enabled, system.dspState.presetLabel, system.library.scanning, system.network.ip, system.network.label, system.network.speed, system.outputDevice.detail, system.outputDevice.label, system.uptime, usbCardMeta, usbCardValue, usbTrackCount, webModeProxyEnabled, webModeProxyUrl]
+    [fontTheme, libraryScanMeta, libraryScanValue, localTrackCount, lyricsFontSize, lyricsVisible, nasCardMeta, nasCardTone, nasCardValue, preferences.locale, roomExperience.nightSchedule.active, roomExperience.nightSchedule.enabled, roomExperience.nightSchedule.end, roomExperience.nightSchedule.start, roomExperience.nightSchedule.timeZone, runtime.kioskWindow, runtime.requestedRenderer, status.error, status.source, surfaceTheme, system.cpuTemp, system.display.brightnessPercent, system.display.controllable, system.dspState.controllable, system.dspState.controlTransport, system.dspState.enabled, system.dspState.presetLabel, system.library.scanning, system.network.ip, system.network.label, system.network.speed, system.outputDevice.detail, system.outputDevice.label, system.uptime, t, usbCardMeta, usbCardValue, usbTrackCount, webModeProxyEnabled, webModeProxyUrl]
   );
 
   const visibleCards = useMemo(() => {
@@ -708,6 +734,17 @@ export function QuickSettingsOverlay({
       setNightError(friendlyUiErrorOrFallback(error instanceof Error ? error.message : null, "Night schedule did not save. Try again."));
     } finally {
       setPendingNight(false);
+    }
+  }
+
+  async function handleLocaleSelect(locale: UiLocale) {
+    if (localePending || preferences.locale === locale) return;
+    setLocaleMessage(null);
+    try {
+      const nextPreferences = await setLocale(locale);
+      setLocaleMessage(nextPreferences.warning ? t("settings.languageSavedWithWarning") : t("settings.languageSaved"));
+    } catch (error) {
+      setLocaleMessage(friendlyUiErrorOrFallback(error instanceof Error ? error.message : null, t("error.generic")));
     }
   }
 
@@ -1037,6 +1074,46 @@ export function QuickSettingsOverlay({
             </button>
           ))}
         </div>
+      </section>
+    );
+  }
+
+  function renderLanguageDetail() {
+    const selectedLanguage = languageOptions.find((option) => option.locale === preferences.locale) ?? languageOptions[0];
+    const languageStatus = localeMessage ?? (localeError ? t("error.generic") : t("settings.languageDetail"));
+
+    return (
+      <section className="settings-detail-panel" aria-label={t("settings.language")} data-settings-detail="language">
+        <div className="settings-detail-header">
+          <button className="settings-detail-back" type="button" onClick={() => setDetailView(null)}>
+            {t("common.back")}
+          </button>
+          <div>
+            <span>{t("settings.preferences")}</span>
+            <strong>{t("settings.language")}</strong>
+            <p>{languageStatus}</p>
+          </div>
+        </div>
+
+        <div className="font-theme-options font-theme-options-detail" role="group" aria-label={t("settings.language")}>
+          {languageOptions.map((option) => (
+            <button
+              key={option.locale}
+              className={`font-theme-option ${preferences.locale === option.locale ? "is-active" : ""}`}
+              type="button"
+              aria-pressed={preferences.locale === option.locale}
+              disabled={localePending}
+              onClick={() => void handleLocaleSelect(option.locale)}
+            >
+              <strong>{option.label}</strong>
+              <span>{preferences.locale === option.locale ? t("common.current") : option.shortLabel}</span>
+            </button>
+          ))}
+        </div>
+
+        <p className="settings-card-action">
+          {localePending ? t("common.applying") : `${selectedLanguage.label} · ${preferences.inputMethodId}`}
+        </p>
       </section>
     );
   }
@@ -1612,8 +1689,8 @@ export function QuickSettingsOverlay({
           <div className="console-title-block">
             <i className={`console-status-dot ${consoleStateClass}`} aria-hidden="true" />
             <div>
-              <span>Console</span>
-              <strong>{sectionCopy[activeSection].label}</strong>
+              <span>{t("settings.console")}</span>
+              <strong>{sectionLabel(activeSection)}</strong>
             </div>
           </div>
 
@@ -1647,7 +1724,7 @@ export function QuickSettingsOverlay({
                     onClick={() => void handleRoomShortcut(shortcut.id)}
                   >
                     <Icon size={18} strokeWidth={1.8} />
-                    <span>{pendingShortcut ? shortcut.id === "explore" ? "Opening" : "Switching" : shortcut.label}</span>
+                    <span>{pendingShortcut ? shortcut.id === "explore" ? t("common.opening") : t("common.applying") : shortcut.id === "explore" ? t("source.explore") : t(`room.${shortcut.id}`)}</span>
                   </button>
                 );
               })}
@@ -1656,11 +1733,11 @@ export function QuickSettingsOverlay({
                 data-room-shortcut="back"
                 data-console-back-button
                 type="button"
-                aria-label="Back to main screen"
+                aria-label={t("library.backMain")}
                 onClick={handleReturnAmbient}
               >
                 <PanelRightClose size={17} />
-                <span>Back</span>
+                <span>{t("common.back")}</span>
               </button>
             </div>
             <span className="console-room-switcher-error" role="alert">{roomShortcutError ?? ""}</span>
@@ -1682,7 +1759,7 @@ export function QuickSettingsOverlay({
                 onClick={() => handleSectionSelect(tab.id)}
               >
                 <Icon size={21} />
-                <span>{tab.label}</span>
+                <span>{sectionLabel(tab.id)}</span>
               </button>
             );
           })}
@@ -1690,24 +1767,26 @@ export function QuickSettingsOverlay({
 
         <div className="settings-content">
           <header className="settings-section-header">
-            <span>{sectionCopy[activeSection].label}</span>
-            <strong>{sectionCopy[activeSection].description}</strong>
+            <span>{sectionLabel(activeSection)}</span>
+            <strong>{sectionDescription(activeSection)}</strong>
           </header>
 
           {detailView === "appearance"
             ? renderAppearanceDetail()
             : detailView === "display"
             ? renderDisplayDetail()
-            : detailView === "font"
-              ? renderFontDetail()
-              : detailView === "lyrics"
-                ? renderLyricsDetail()
-              : detailView === "nas"
-                  ? renderNasDetail()
-                : detailView === "night"
-                  ? renderNightDetail()
-                  : detailView === "webMode"
-                    ? renderWebModeDetail()
+              : detailView === "language"
+                ? renderLanguageDetail()
+                : detailView === "font"
+                  ? renderFontDetail()
+                  : detailView === "lyrics"
+                    ? renderLyricsDetail()
+                    : detailView === "nas"
+                      ? renderNasDetail()
+                      : detailView === "night"
+                        ? renderNightDetail()
+                        : detailView === "webMode"
+                          ? renderWebModeDetail()
               : (
           <div className="settings-grid" data-settings-section={activeSection}>
             {visibleCards.map((card) => {
@@ -1728,6 +1807,27 @@ export function QuickSettingsOverlay({
                 );
               }
 
+              if (card.kind === "language") {
+                return (
+                  <button
+                    className={`settings-card settings-card-button settings-card-summary settings-card-language tone-${card.tone}`}
+                    key={card.key}
+                    type="button"
+                    onClick={() => openDetail("language")}
+                  >
+                    <div className="settings-icon">
+                      <Globe2 size={32} />
+                    </div>
+                    <div>
+                      <span>{card.title}</span>
+                      <strong>{card.value}</strong>
+                      <p>{card.meta}</p>
+                      <em className="settings-card-action">{localePending ? t("common.applying") : t("settings.language")}</em>
+                    </div>
+                  </button>
+                );
+              }
+
               if (card.kind === "font") {
                 return (
                   <button
@@ -1743,7 +1843,7 @@ export function QuickSettingsOverlay({
                       <span>{card.title}</span>
                       <strong>{card.value}</strong>
                       <p>{card.meta}</p>
-                      <em className="settings-card-action">Adjust type</em>
+                      <em className="settings-card-action">{t("settings.adjustType")}</em>
                     </div>
                   </button>
                 );
@@ -1764,7 +1864,7 @@ export function QuickSettingsOverlay({
                       <span>{card.title}</span>
                       <strong>{card.value}</strong>
                       <p>{card.meta}</p>
-                      <em className="settings-card-action">Switch skin</em>
+                      <em className="settings-card-action">{t("settings.switchSkin")}</em>
                     </div>
                   </button>
                 );
@@ -1785,7 +1885,7 @@ export function QuickSettingsOverlay({
                       <span>{card.title}</span>
                       <strong>{card.value}</strong>
                       <p>{card.meta}</p>
-                      <em className="settings-card-action">Tune lyrics</em>
+                      <em className="settings-card-action">{t("settings.tuneLyrics")}</em>
                     </div>
                   </button>
                 );
@@ -1809,7 +1909,7 @@ export function QuickSettingsOverlay({
                       <em className="settings-card-action">
                         {system.display.controllable
                           ? `${system.display.brightnessPercent}% brightness`
-                          : "Display status"}
+                          : t("settings.display")}
                       </em>
                     </div>
                   </button>
@@ -1831,7 +1931,7 @@ export function QuickSettingsOverlay({
                       <span>{card.title}</span>
                       <strong>{card.value}</strong>
                       <p>{card.meta}</p>
-                      <em className="settings-card-action">{roomExperience.nightSchedule.brightnessPercent}% night brightness</em>
+                      <em className="settings-card-action">{t("settings.nightBrightness", { percent: roomExperience.nightSchedule.brightnessPercent })}</em>
                     </div>
                   </button>
                 );
@@ -1852,7 +1952,7 @@ export function QuickSettingsOverlay({
                       <span>{card.title}</span>
                       <strong>{card.value}</strong>
                       <p>{card.meta}</p>
-                      <em className="settings-card-action">NAS status</em>
+                      <em className="settings-card-action">{t("settings.nasStatus")}</em>
                     </div>
                   </button>
                 );
@@ -1873,7 +1973,7 @@ export function QuickSettingsOverlay({
                       <span>{card.title}</span>
                       <strong>{card.value}</strong>
                       <p>{card.meta}</p>
-                      <em className="settings-card-action">Proxy & keyboard</em>
+                      <em className="settings-card-action">{t("settings.proxyKeyboard")}</em>
                     </div>
                   </button>
                 );
@@ -1899,7 +1999,7 @@ export function QuickSettingsOverlay({
                     <span>{card.title}</span>
                     <strong>{card.value}</strong>
                     <p title={error ?? undefined}>{error ?? (isConfirming ? card.confirmLabel : card.meta)}</p>
-                    <em className="settings-card-action">{isPending ? "Applying..." : card.buttonLabel}</em>
+                    <em className="settings-card-action">{isPending ? t("common.applying") : card.buttonLabel}</em>
                   </div>
                 </button>
               );

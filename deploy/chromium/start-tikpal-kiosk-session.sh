@@ -43,15 +43,60 @@ is_enabled() {
   esac
 }
 
+read_preferred_input_method() {
+  python3 - "$APP_DIR" <<'PY'
+import json
+import os
+import sys
+
+app_dir = sys.argv[1]
+path = os.environ.get("TIKPAL_UI_PREFERENCES_STATE_PATH") or os.path.join(app_dir, ".tikpal", "ui-preferences.json")
+locale_to_method = {
+    "en": "keyboard-us",
+    "zh-CN": "pinyin",
+    "de": "keyboard-de",
+    "it": "keyboard-it",
+    "ko": "hangul",
+    "ja": "anthy",
+    "es": "keyboard-es",
+}
+supported = set(locale_to_method.values())
+candidate = "keyboard-us"
+try:
+    with open(path, "r", encoding="utf-8") as handle:
+        data = json.load(handle)
+    if data.get("inputMethodId") in supported:
+        candidate = data["inputMethodId"]
+    elif data.get("locale") in locale_to_method:
+        candidate = locale_to_method[data["locale"]]
+except Exception:
+    pass
+print(candidate)
+PY
+}
+
+input_method_should_activate() {
+  case "$1" in
+    pinyin|keyboard-de|keyboard-it|hangul|anthy|keyboard-es)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 configure_fcitx5() {
   command -v fcitx5 >/dev/null 2>&1 || return 0
   local config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/fcitx5"
+  local default_im
+  default_im="$(read_preferred_input_method)"
   mkdir -p "$config_dir"
-  cat >"$config_dir/profile" <<'EOF'
+  cat >"$config_dir/profile" <<EOF
 [Groups/0]
 Name=Default
 Default Layout=us
-DefaultIM=pinyin
+DefaultIM=$default_im
 
 [Groups/0/Items/0]
 Name=keyboard-us
@@ -62,10 +107,22 @@ Name=pinyin
 Layout=
 
 [Groups/0/Items/2]
-Name=anthy
+Name=keyboard-de
 Layout=
 
 [Groups/0/Items/3]
+Name=keyboard-it
+Layout=
+
+[Groups/0/Items/4]
+Name=hangul
+Layout=
+
+[Groups/0/Items/5]
+Name=anthy
+Layout=
+
+[Groups/0/Items/6]
 Name=keyboard-es
 Layout=
 
@@ -102,6 +159,18 @@ EOF
   export XMODIFIERS=@im=fcitx
   export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/user/$(id -u)/bus}"
   fcitx5 -d --replace >/dev/null 2>&1 || true
+  if command -v fcitx5-remote >/dev/null 2>&1; then
+    sleep 0.2
+    fcitx5-remote -s "$default_im" >/dev/null 2>&1 || true
+  if input_method_should_activate "$default_im"; then
+    fcitx5-remote -o >/dev/null 2>&1 || true
+  else
+      fcitx5-remote -c >/dev/null 2>&1 || true
+    fi
+  fi
+  if [[ -f /usr/share/onboard/scripts/tikpalImeToggle.py ]]; then
+    python3 /usr/share/onboard/scripts/tikpalImeToggle.py --set-mode "$default_im" >/dev/null 2>&1 || true
+  fi
 }
 
 run_x_command() {

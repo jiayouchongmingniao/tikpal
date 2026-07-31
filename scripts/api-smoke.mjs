@@ -155,6 +155,24 @@ function runAccessControlHelperSmoke() {
   );
   assert(
     getTikpalApiAccessDecision({
+      method: "GET",
+      pathname: "/api/v1/preferences",
+      remoteAddress: "192.168.10.44",
+      portableApiKey: PORTABLE_API_KEY
+    }).allowed === true,
+    "external clients should be able to read device language preferences"
+  );
+  assert(
+    getTikpalApiAccessDecision({
+      method: "PATCH",
+      pathname: "/api/v1/preferences",
+      remoteAddress: "192.168.10.44",
+      portableApiKey: PORTABLE_API_KEY
+    }).allowed === false,
+    "external clients should not change kiosk language preferences directly"
+  );
+  assert(
+    getTikpalApiAccessDecision({
       method: "POST",
       pathname: "/api/v1/playback/actions",
       remoteAddress: "192.168.10.44",

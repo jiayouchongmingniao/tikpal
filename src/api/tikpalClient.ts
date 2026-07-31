@@ -7,6 +7,8 @@ import type {
   PlaybackMode,
   PlaybackActionRequest,
   PlaybackActionType,
+  UiPreferences,
+  UiPreferencesPatch,
   NasDiscoverResponse,
   NasSourceInput,
   NasSourcesResponse,
@@ -87,6 +89,26 @@ export async function fetchTikpalState(signal?: AbortSignal): Promise<TikpalStat
     signal
   }, DEFAULT_GET_TIMEOUT_MS);
   return readJson<TikpalState>(response);
+}
+
+export async function fetchPreferences(signal?: AbortSignal): Promise<UiPreferences> {
+  const response = await fetchWithTimeout(`${API_ROOT}/preferences`, {
+    headers: { Accept: "application/json" },
+    signal
+  }, DEFAULT_GET_TIMEOUT_MS);
+  return readJson<UiPreferences>(response);
+}
+
+export async function updatePreferences(patch: UiPreferencesPatch): Promise<UiPreferences> {
+  const response = await fetchWithTimeout(`${API_ROOT}/preferences`, {
+    method: "PATCH",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(patch)
+  }, DEFAULT_POST_TIMEOUT_MS);
+  return readJson<UiPreferences>(response);
 }
 
 export async function fetchRadioCatalog(filters: RadioCatalogFilters = {}, signal?: AbortSignal): Promise<RadioCatalogResponse> {

@@ -4,6 +4,7 @@ import App from "./App";
 import { sendWebModeAction } from "./api/tikpalClient";
 import { RemoteControlApp } from "./components/RemoteControlApp";
 import { WebModeSidePanel } from "./components/WebModeSidePanel";
+import { I18nProvider } from "./i18n";
 import "./styles.css";
 
 declare global {
@@ -200,6 +201,8 @@ if (!window.__TIKPAL_REMOTE_MODE__ && localKioskHosts.has(window.location.hostna
 
 createRoot(document.getElementById("root") as HTMLElement).render(
   <StrictMode>
-    <RootApp />
+    <I18nProvider>
+      <RootApp />
+    </I18nProvider>
   </StrictMode>
 );

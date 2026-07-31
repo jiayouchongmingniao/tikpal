@@ -1,7 +1,7 @@
 import { Airplay, Bluetooth, Globe2, Music, PanelRightClose, Pause, Play, Radio, RefreshCw, SkipBack, SkipForward, SlidersHorizontal, Sun, Volume2, Wifi } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fetchRemoteCatalog, fetchRemoteState, readStoredRemoteKey, sendRemoteAction, storeRemoteKey } from "../api/remoteClient";
-import { friendlyUiError, playbackFallbackCopy } from "../uiCopy";
+import { useI18n } from "../i18n";
 import type { RemoteActionRequest, RemoteCatalogResponse, RemoteStateResponse, RoomMode, SourceState } from "../types";
 
 const REFRESH_MS = 2500;
@@ -23,27 +23,16 @@ function sourceIcon(source: SourceState) {
   }
 }
 
-function roomLabel(mode: RoomMode) {
-  return mode === "hifi" ? "Hi-Fi" : `${mode.slice(0, 1).toUpperCase()}${mode.slice(1)}`;
-}
-
-function formatTrack(state: RemoteStateResponse | null) {
-  if (!state) return { title: "Connecting", artist: "Tikpal Remote" };
+function formatTrack(state: RemoteStateResponse | null, fallbackTitle: string, fallbackArtist: string) {
+  if (!state) return { title: fallbackTitle, artist: fallbackArtist };
   return {
-    title: state.playback.title || playbackFallbackCopy.title,
+    title: state.playback.title || fallbackTitle,
     artist: [state.playback.artist, state.playback.album].filter(Boolean).join(" / ") || state.source.current.label
   };
 }
 
-function remotePlaybackStateLabel(state: RemoteStateResponse | null) {
-  if (!state) return "Updating";
-  if (state.playback.state === "playing") return "Playing";
-  if (state.playback.state === "paused") return "Paused";
-  if (state.playback.state === "stopped") return "Stopped";
-  return "Ready";
-}
-
 export function RemoteControlApp() {
+  const { t, roomLabel, sourceLabel, playbackStateLabel, friendlyError } = useI18n();
   const [remoteState, setRemoteState] = useState<RemoteStateResponse | null>(null);
   const [catalog, setCatalog] = useState<RemoteCatalogResponse | null>(null);
   const [remoteKey, setRemoteKey] = useState(readStoredRemoteKey);
@@ -56,7 +45,7 @@ export function RemoteControlApp() {
   const brightnessDraftRef = useRef(brightnessDraft);
   const volumeCommitTimerRef = useRef<number | null>(null);
   const brightnessCommitTimerRef = useRef<number | null>(null);
-  const track = useMemo(() => formatTrack(remoteState), [remoteState]);
+  const track = useMemo(() => formatTrack(remoteState, remoteState ? t("playback.nothingPlaying") : t("common.connecting"), t("remote.title")), [remoteState, t]);
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
     try {
@@ -157,40 +146,40 @@ export function RemoteControlApp() {
   const isPlaying = remoteState?.playback.state === "playing";
   const busy = pendingAction !== null;
   const rawError = actionError ?? refreshError;
-  const visibleError = friendlyUiError(rawError, "Remote needs attention. Try again.");
-  const visibleExploreError = friendlyUiError(remoteState?.explore.lastError, "Explore needs attention. Try again.");
+  const visibleError = friendlyError(rawError, "error.generic");
+  const visibleExploreError = friendlyError(remoteState?.explore.lastError, "error.explore");
   const transportCapabilities = remoteState?.playback.transportCapabilities;
   const transportUnavailableTitle = transportCapabilities?.reason ?? "Playback control unavailable";
   const previousDisabled = busy || transportCapabilities?.previous === false;
   const playPauseDisabled = busy || transportCapabilities?.playPause === false;
   const nextDisabled = busy || transportCapabilities?.next === false;
-  const previousTitle = transportCapabilities?.previous === false ? transportUnavailableTitle : "Previous";
-  const playPauseTitle = transportCapabilities?.playPause === false ? transportUnavailableTitle : isPlaying ? "Pause" : "Play";
-  const nextTitle = transportCapabilities?.next === false ? transportUnavailableTitle : "Next";
+  const previousTitle = transportCapabilities?.previous === false ? transportUnavailableTitle : t("playback.previous");
+  const playPauseTitle = transportCapabilities?.playPause === false ? transportUnavailableTitle : isPlaying ? t("playback.pause") : t("playback.play");
+  const nextTitle = transportCapabilities?.next === false ? transportUnavailableTitle : t("playback.next");
 
   return (
     <main className="remote-root">
       <section className="remote-shell">
         <header className="remote-header">
           <div>
-            <p>Tikpal Remote</p>
+            <p>{t("remote.title")}</p>
             <h1>{track.title}</h1>
             <span>{track.artist}</span>
           </div>
-          <button className="remote-icon-button" type="button" title="Refresh" aria-label="Refresh" onClick={() => void refresh()}>
+          <button className="remote-icon-button" type="button" title={t("remote.refresh")} aria-label={t("remote.refresh")} onClick={() => void refresh()}>
             <RefreshCw aria-hidden="true" />
           </button>
         </header>
 
         <section className="remote-status-band" aria-live="polite">
-          <span>{remotePlaybackStateLabel(remoteState)}</span>
-          <span>{remoteState?.source.current.label ?? "Source"}</span>
-          <span>{remoteState ? roomLabel(remoteState.room.mode) : "Room"}</span>
+          <span>{remoteState ? playbackStateLabel(remoteState.playback.state) : t("status.updating")}</span>
+          <span>{remoteState ? sourceLabel(remoteState.source.current.id, remoteState.source.current.label) : t("library.source")}</span>
+          <span>{remoteState ? roomLabel(remoteState.room.mode) : t("remote.room")}</span>
         </section>
 
         <section className="remote-key-panel">
           <label>
-            <span>Access key</span>
+            <span>{t("remote.accessKey")}</span>
             <input
               data-remote-key
               type="password"
@@ -201,10 +190,10 @@ export function RemoteControlApp() {
               onKeyDown={(event) => {
                 if (event.key === "Enter") handleKeySave();
               }}
-              placeholder="Optional access key"
+              placeholder={t("remote.optionalAccessKey")}
             />
           </label>
-          <strong>{remoteKey.trim() ? "Ready" : "No key"}</strong>
+          <strong>{remoteKey.trim() ? t("common.ready") : t("remote.noKey")}</strong>
         </section>
 
         {visibleError ? (
@@ -214,27 +203,27 @@ export function RemoteControlApp() {
         ) : null}
 
         <section className="remote-transport" aria-label="Playback controls">
-          <button className="remote-icon-button" type="button" title={previousTitle} aria-label="Previous" disabled={previousDisabled} onClick={() => void applyAction({ type: "playback.previous" })}>
+          <button className="remote-icon-button" type="button" title={previousTitle} aria-label={t("playback.previous")} disabled={previousDisabled} onClick={() => void applyAction({ type: "playback.previous" })}>
             <SkipBack aria-hidden="true" />
           </button>
           <button
             className="remote-play-button"
             type="button"
             title={playPauseTitle}
-            aria-label={isPlaying ? "Pause" : "Play"}
+            aria-label={isPlaying ? t("playback.pause") : t("playback.play")}
             disabled={playPauseDisabled}
             onClick={() => void applyAction({ type: "playback.play_pause" })}
           >
             {isPlaying ? <Pause aria-hidden="true" /> : <Play aria-hidden="true" />}
           </button>
-          <button className="remote-icon-button" type="button" title={nextTitle} aria-label="Next" disabled={nextDisabled} onClick={() => void applyAction({ type: "playback.next" })}>
+          <button className="remote-icon-button" type="button" title={nextTitle} aria-label={t("playback.next")} disabled={nextDisabled} onClick={() => void applyAction({ type: "playback.next" })}>
             <SkipForward aria-hidden="true" />
           </button>
         </section>
 
         <section className="remote-slider-panel">
           <label>
-            <span><Volume2 aria-hidden="true" /> Volume</span>
+            <span><Volume2 aria-hidden="true" /> {t("quickMenu.volume")}</span>
             <strong>{volumeDraft}%</strong>
           </label>
           <input
@@ -265,7 +254,7 @@ export function RemoteControlApp() {
               onClick={() => void applyAction({ type: "explore.open" })}
             >
               <Globe2 aria-hidden="true" />
-              <span>{pendingAction === "explore.open" ? "Opening" : remoteState?.explore.activeProviderLabel ?? "Start Explore"}</span>
+              <span>{pendingAction === "explore.open" ? t("common.opening") : remoteState?.explore.activeProviderLabel ?? t("remote.startExplore")}</span>
             </button>
             <button
               type="button"
@@ -274,7 +263,7 @@ export function RemoteControlApp() {
               onClick={() => void applyAction({ type: "explore.close" })}
             >
               <PanelRightClose aria-hidden="true" />
-              <span>{pendingAction === "explore.close" ? "Closing" : "Back"}</span>
+              <span>{pendingAction === "explore.close" ? t("common.closing") : t("common.back")}</span>
             </button>
             <button
               type="button"
@@ -285,14 +274,14 @@ export function RemoteControlApp() {
               onClick={() => void applyAction({ type: "explore.proxy_set", enabled: !remoteState?.explore.proxyEnabled })}
             >
               <Wifi aria-hidden="true" />
-              <span>{pendingAction === "explore.proxy_set" ? "Saving" : remoteState?.explore.proxyEnabled ? "Proxy On" : "Proxy Off"}</span>
+              <span>{pendingAction === "explore.proxy_set" ? t("common.saving") : remoteState?.explore.proxyEnabled ? t("remote.proxyOn") : t("remote.proxyOff")}</span>
             </button>
           </div>
           {visibleExploreError ? <p className="remote-explore-error" role="alert" title={remoteState?.explore.lastError ?? undefined}>{visibleExploreError}</p> : null}
         </section>
 
         <section className="remote-grid-panel">
-          <h2>Sources</h2>
+          <h2>{t("remote.sources")}</h2>
           <div className="remote-button-grid">
             {(catalog?.sources ?? []).map((source) => (
               <button
@@ -303,14 +292,14 @@ export function RemoteControlApp() {
                 onClick={() => void applyAction({ type: "source.set", target: source.id as RemoteActionRequest["target"] })}
               >
                 {sourceIcon(source.id)}
-                <span>{source.label}</span>
+                <span>{sourceLabel(source.id, source.label)}</span>
               </button>
             ))}
           </div>
         </section>
 
         <section className="remote-grid-panel">
-          <h2>Room</h2>
+          <h2>{t("remote.room")}</h2>
           <div className="remote-button-grid">
             {(catalog?.roomModes ?? []).map((mode) => (
               <button
@@ -321,14 +310,14 @@ export function RemoteControlApp() {
                 onClick={() => void applyAction({ type: "room.set_mode", mode: mode.id })}
               >
                 <SlidersHorizontal aria-hidden="true" />
-                <span>{mode.label}</span>
+                <span>{roomLabel(mode.id)}</span>
               </button>
             ))}
           </div>
         </section>
 
         <section className="remote-grid-panel">
-          <h2>Hi-Fi EQ</h2>
+          <h2>{t("remote.hifiEq")}</h2>
           <div className="remote-button-grid">
             {(catalog?.hifiEqPresets ?? []).map((preset) => (
               <button
@@ -347,7 +336,7 @@ export function RemoteControlApp() {
 
         <section className="remote-slider-panel">
           <label>
-            <span><Sun aria-hidden="true" /> Display</span>
+            <span><Sun aria-hidden="true" /> {t("remote.display")}</span>
             <strong>{brightnessDraft}%</strong>
           </label>
           <input
@@ -367,7 +356,7 @@ export function RemoteControlApp() {
         </section>
 
         <section className="remote-grid-panel">
-          <h2>Scene</h2>
+          <h2>{t("remote.scene")}</h2>
           <div className="remote-button-grid">
             <button
               type="button"
@@ -376,7 +365,7 @@ export function RemoteControlApp() {
               onClick={() => void applyAction({ type: "scene.sound_set", enabled: !remoteState?.scene.sceneSoundEnabled })}
             >
               <Music aria-hidden="true" />
-              <span>{remoteState?.scene.sceneSoundEnabled ? "Sound On" : "Sound Off"}</span>
+              <span>{remoteState?.scene.sceneSoundEnabled ? t("remote.soundOn") : t("remote.soundOff")}</span>
             </button>
             <button type="button" disabled={busy} onClick={() => void applyAction({ type: "lyrics.refresh" })}>
               <RefreshCw aria-hidden="true" />

@@ -208,11 +208,14 @@ QT_IM_MODULE=fcitx
 XMODIFIERS=@im=fcitx
 ```
 
-The Fcitx5 profile contains four input methods:
+The Fcitx5 profile contains these input methods:
 
 ```text
 keyboard-us
 pinyin
+keyboard-de
+keyboard-it
+hangul
 anthy
 keyboard-es
 ```
@@ -220,12 +223,36 @@ keyboard-es
 Onboard cycles modes through one Tikpal IME key:
 
 ```text
-EN -> Chinese -> Japanese -> ES -> EN
+EN -> Chinese -> German -> Italian -> Korean -> Japanese -> ES -> EN
 ```
 
-Chinese and Japanese keep QWERTY letter keys because users type pinyin and romaji. Spanish uses a visual Spanish variant for keys such as `Ñ`, `¡ ¿`, accent/dead-key hints, and `Ç`. The key labels change to reflect the current mode; the underlying Onboard key IDs stay compatible with XTest.
+Chinese and Japanese keep QWERTY letter keys because users type pinyin and romaji. German, Italian, Spanish, and Korean use visual keycap variants for their expected layouts: German shows QWERTZ plus `Ä/Ö/Ü/ß`, Italian shows `à/è/ì/ò/ù`, Spanish shows `Ñ`, `¡ ¿`, accent/dead-key hints, and `Ç`, and Korean shows 2-beolsik Hangul hints. The key labels change to reflect the current mode; the underlying Onboard key IDs stay compatible with XTest.
+
+On Gentoo, Korean input needs `app-i18n/fcitx-hangul` in addition to the existing `app-i18n/fcitx`, `app-i18n/fcitx-chinese-addons`, `app-i18n/fcitx-anthy`, `app-i18n/fcitx-gtk`, and `app-i18n/fcitx-qt` packages. German, Italian, and Spanish are Fcitx keyboard layouts and do not need extra candidate engines.
 
 Candidate fonts should prefer `Noto Sans CJK SC 16` when Noto CJK is installed, otherwise `Source Han Sans CN 16`. The regular UI font stack should have CJK coverage so Chromium does not fall back to Liberation for Chinese.
+
+Tikpal UI language is a device preference, not a browser-only setting. The backend stores it in:
+
+```bash
+/home/moode/code/tikpal/.tikpal/ui-preferences.json
+```
+
+The supported locales are `en`, `zh-CN`, `de`, `it`, `ko`, `ja`, and `es`. The kiosk, Explore side panel, portable Remote, and Tikpal-owned Explore error page read the same preference through `GET /api/v1/preferences`; only the local kiosk should write it through `PATCH /api/v1/preferences`. `GET /api/v1/system/state`, `/api/v1/remote/state`, and `/api/v1/web-mode/state` also include `preferences` so surfaces can stay in sync after polling.
+
+Changing Settings -> Preferences -> Language also selects the matching default input method:
+
+| Locale | Fcitx input method |
+| --- | --- |
+| `en` | `keyboard-us` |
+| `zh-CN` | `pinyin` |
+| `de` | `keyboard-de` |
+| `it` | `keyboard-it` |
+| `ko` | `hangul` |
+| `ja` | `anthy` |
+| `es` | `keyboard-es` |
+
+`start-tikpal-kiosk-session.sh` reads `.tikpal/ui-preferences.json` before starting Fcitx5 and writes the matching `DefaultIM`. `tikpalImeToggle.py --set-locale <locale>` and `--set-mode <fcitx-id>` are the best-effort runtime sync hooks used after a language change; failure to sync the keyboard should be logged as a warning, not block saving the UI language.
 
 Onboard should only appear for text-like fields after real focus or tap. It should stay hidden for buttons, checkboxes, selectors, provider entry, and LAN browsers that view `http://<gentoo-ip>:4173/`.
 
@@ -520,7 +547,7 @@ su - moode -c 'DISPLAY=:0 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus 
 gsettings get org.onboard layout
 ```
 
-Touch a provider search field and confirm Onboard appears above the provider, cycles through EN / Chinese / Japanese / ES, shows a larger CJK candidate window, and hides after outside tap, submit, or single-line Enter.
+Touch a provider search field and confirm Onboard appears above the provider, cycles through EN / Chinese / German / Italian / Korean / Japanese / ES, shows a larger CJK candidate window, and hides after outside tap, submit, or single-line Enter.
 
 Audio checks:
 

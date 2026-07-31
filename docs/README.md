@@ -16,6 +16,7 @@ This directory is the source of truth for Tikpal product, UX, visual, architectu
 - The current implementation uses Vite + React + TypeScript, a local Node API, and a fireplace image plus local MP4 ambience layer. WebGL remains an architecture/performance track for future renderers rather than the active flame surface.
 - The default screen is an ambient flame screen, not a conventional app homepage.
 - moOde / MPD remains the original playback and system capability owner; the Gentoo migration path keeps the MPD contract while using Portage, systemd, ALSA direct output, and Gentoo-managed kiosk dependencies.
+- Tikpal-owned UI surfaces share a device language preference for English, Chinese, German, Italian, Korean, Japanese, and Spanish; the Gentoo physical kiosk also syncs Onboard/Fcitx defaults from that preference.
 - Batch 3 now includes a local API bridge, frontend API read/write path, a repo-owned Chromium kiosk package, an optional native MPD backend for moOde devices, and a Gentoo physical-kiosk runbook.
 
 ## Document Index

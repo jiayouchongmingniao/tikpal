@@ -6,6 +6,19 @@ export type RoomMode = "focus" | "calm" | "sleep" | "hifi";
 export type RoomSessionPhase = "idle" | "preparing" | "active" | "windDown";
 export type HifiEqPresetId = "flat" | "warm" | "vocal";
 export type HifiVisualPresetId = "spectrum-bars" | "waveform" | "dual-vu";
+export type UiLocale = "en" | "zh-CN" | "de" | "it" | "ko" | "ja" | "es";
+export type UiInputMethodId = "keyboard-us" | "pinyin" | "keyboard-de" | "keyboard-it" | "hangul" | "anthy" | "keyboard-es";
+
+export interface UiPreferences {
+  locale: UiLocale;
+  inputMethodId: UiInputMethodId;
+  updatedAt: string | null;
+  warning?: string | null;
+}
+
+export interface UiPreferencesPatch {
+  locale: UiLocale;
+}
 
 export type PlaybackState = "playing" | "paused" | "stopped";
 export type PlaybackMode = "sequence" | "repeat_one" | "shuffle";
@@ -57,6 +70,7 @@ export interface WebModeState {
   activeProvider: WebModeProviderId | null;
   providers: WebModeProviderSummary[];
   settings: WebModeSettings;
+  preferences: UiPreferences;
   lastError: string | null;
   updatedAt: string;
 }
@@ -601,6 +615,7 @@ export interface TikpalState {
   runtime: RuntimeState;
   audio: AudioState;
   lyrics: LyricsState;
+  preferences: UiPreferences;
 }
 
 export interface RoomExperienceState {
@@ -791,6 +806,7 @@ export interface RemoteStateResponse {
     lastError: string | null;
   };
   runtime: RuntimeState;
+  preferences: UiPreferences;
   updatedAt: string;
 }
 

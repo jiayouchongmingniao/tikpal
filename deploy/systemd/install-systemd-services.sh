@@ -16,8 +16,10 @@ KIOSK_PACKAGES=(
   wmctrl
   xdotool
   fcitx5
+  fcitx5-anthy
   fcitx5-chinese-addons
   fcitx5-frontend-gtk3
+  fcitx5-hangul
 )
 
 usage() {
