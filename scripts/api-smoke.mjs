@@ -4634,6 +4634,7 @@ async function run() {
   const audioSourceMemoryStatePath = path.join(apiStateRoot, "audio-source-memory.json");
   const webModeSettingsPath = path.join(apiStateRoot, "web-mode-settings.json");
   const webModeStatePath = path.join(apiStateRoot, "web-mode-state.json");
+  const uiPreferencesStatePath = path.join(apiStateRoot, "ui-preferences.json");
   const nasSourcesStatePath = path.join(apiStateRoot, "nas-sources.json");
   const nasCredentialsDir = path.join(apiStateRoot, "nas-credentials");
   const sceneBytes = Buffer.from("000000 ftypisom tikpal rainy window api smoke mp4");
@@ -4720,6 +4721,7 @@ async function run() {
       TIKPAL_MUSIC_LIBRARY_STATE_PATH: musicLibraryStatePath,
       TIKPAL_ROOM_EXPERIENCE_STATE_PATH: roomExperienceStatePath,
       TIKPAL_AUDIO_SOURCE_MEMORY_STATE_PATH: audioSourceMemoryStatePath,
+      TIKPAL_UI_PREFERENCES_STATE_PATH: uiPreferencesStatePath,
       TIKPAL_WEB_MODE_SETTINGS_PATH: webModeSettingsPath,
       TIKPAL_WEB_MODE_STATE_PATH: webModeStatePath,
       TIKPAL_NAS_SOURCES_STATE_PATH: nasSourcesStatePath,
@@ -4767,6 +4769,71 @@ async function run() {
     assert(initial.body.audio.currentSource.id === "mpd", "system state should expose current audio source");
     assert(initial.body.audio.rememberedSource === null, "system state should expose empty remembered source before source selection");
     assert(initial.body.lyrics?.sourceScope === "local_playback", "system state should expose lyrics state");
+    assert(initial.body.preferences.audioOutputProfile === "everyday", "preferences should default Audio Output to Everyday");
+    assert(initial.body.preferences.audioOutputCustomSettings?.volumeNormalization === true, "preferences should default Custom volume normalization on");
+    assert(initial.body.preferences.audioOutputCustomSettings?.dsdMode === false, "preferences should default Custom DSD mode off");
+    assert(initial.body.preferences.mpdBitPerfectMode === "standard", "legacy MPD quality should derive from Everyday");
+
+    const pureAudioProfile = await request("/api/v1/preferences", {
+      method: "PATCH",
+      body: JSON.stringify({ audioOutputProfile: "pure" })
+    });
+    assert(pureAudioProfile.response.ok, "preferences should accept Pure Listening profile");
+    assert(pureAudioProfile.body.audioOutputProfile === "pure", "preferences should persist Pure Listening profile");
+    assert(pureAudioProfile.body.mpdBitPerfectMode === "strict", "Pure Listening should remain compatible with strict bit-perfect mode");
+
+    const legacyEverydayProfile = await request("/api/v1/preferences", {
+      method: "PATCH",
+      body: JSON.stringify({ mpdBitPerfectMode: "standard" })
+    });
+    assert(legacyEverydayProfile.response.ok, "legacy MPD quality preference should still be accepted");
+    assert(legacyEverydayProfile.body.audioOutputProfile === "everyday", "legacy standard mode should map to Everyday");
+    assert(legacyEverydayProfile.body.mpdBitPerfectMode === "standard", "Everyday should derive legacy standard mode");
+
+    const customAudioProfile = await request("/api/v1/preferences", {
+      method: "PATCH",
+      body: JSON.stringify({ audioOutputProfile: "custom" })
+    });
+    assert(customAudioProfile.response.ok, "preferences should accept Custom Audio Output profile");
+    assert(customAudioProfile.body.audioOutputProfile === "custom", "preferences should persist Custom Audio Output profile");
+    assert(customAudioProfile.body.mpdBitPerfectMode === "standard", "Custom Audio Output should remain compatible with standard legacy mode");
+
+    const tunedCustomAudioProfile = await request("/api/v1/preferences", {
+      method: "PATCH",
+      body: JSON.stringify({
+        audioOutputProfile: "custom",
+        audioOutputCustomSettings: {
+          pureDirect: true,
+          volumeNormalization: false,
+          smoothTransition: false,
+          automaticSampleRate: false,
+          dsdMode: true,
+          playbackStability: false
+        }
+      })
+    });
+    assert(tunedCustomAudioProfile.response.ok, "preferences should accept Custom Audio Output switches");
+    assert(tunedCustomAudioProfile.body.audioOutputProfile === "custom", "Custom switch changes should keep the Custom profile active");
+    assert(tunedCustomAudioProfile.body.audioOutputCustomSettings.pureDirect === true, "Custom Pure Direct switch should persist");
+    assert(tunedCustomAudioProfile.body.audioOutputCustomSettings.volumeNormalization === false, "Custom Volume Normalization switch should persist");
+    assert(tunedCustomAudioProfile.body.audioOutputCustomSettings.dsdMode === true, "Custom DSD Mode switch should persist");
+
+    const invalidAudioProfile = await request("/api/v1/preferences", {
+      method: "PATCH",
+      body: JSON.stringify({ audioOutputProfile: "developer" })
+    });
+    assert(invalidAudioProfile.response.status === 400, "preferences should reject unsupported Audio Output profiles");
+
+    const everydayAudioProfile = await request("/api/v1/preferences", {
+      method: "PATCH",
+      body: JSON.stringify({ audioOutputProfile: "everyday" })
+    });
+    assert(everydayAudioProfile.response.ok, "preferences should switch Audio Output back to Everyday");
+
+    const audioDiagnostics = await request("/api/v1/audio/output-diagnostics");
+    assert(audioDiagnostics.response.ok, "Audio Output diagnostics should return 200 for the local kiosk API");
+    assert(audioDiagnostics.body.profile === "everyday", "Audio Output diagnostics should report the current profile");
+    assert(String(audioDiagnostics.body.text ?? "").includes("profile=everyday"), "Audio Output diagnostics should include profile text");
 
     const webMode = await request("/api/v1/web-mode/state");
     assert(webMode.response.ok, "web mode state should return 200");
@@ -5240,13 +5307,16 @@ async function run() {
 
     const sources = await request("/api/v1/audio/sources");
     assert(sources.response.ok, "audio sources should return 200");
-    assert(Array.isArray(sources.body.sources) && sources.body.sources.length === 8, "audio sources should return Library, Radio, Scene Sound, Audio, Spotify Connect, Bluetooth, AirPlay, and DLNA");
+    assert(Array.isArray(sources.body.sources) && sources.body.sources.length === 11, "audio sources should return Library, Radio, Scene Sound, Audio, Spotify Connect, Bluetooth, AirPlay, Roon Bridge, Lyrion, Tikpal Multi-room, and DLNA");
     assert(sources.body.currentSource.id === "mpd", "audio source payload should be on MPD after Hi-Fi and night checks");
     assert(sources.body.sources.some((source) => source.id === "scene"), "audio sources payload should include scene sound");
     assert(sources.body.sources.some((source) => source.id === "audio"), "audio sources payload should include audio");
     assert(sources.body.sources.some((source) => source.id === "spotify"), "audio sources payload should include spotify connect");
     assert(sources.body.sources.some((source) => source.id === "bluetooth"), "audio sources payload should include bluetooth");
     assert(sources.body.sources.some((source) => source.id === "airplay"), "audio sources payload should include airplay");
+    assert(sources.body.sources.some((source) => source.id === "roonbridge"), "audio sources payload should include Roon Bridge status");
+    assert(sources.body.sources.some((source) => source.id === "lyrion"), "audio sources payload should include Lyrion status");
+    assert(sources.body.sources.some((source) => source.id === "tikpal_multiroom"), "audio sources payload should include Tikpal Multi-room status");
     assert(sources.body.sources.some((source) => source.id === "upnp"), "audio sources payload should include dlna");
     assert(sources.body.sources.some((source) => source.id === "spotify" && source.connectionState === "blocked" && source.availability === "waiting"), "spotify should start closed until selected");
     assert(sources.body.sources.some((source) => source.id === "bluetooth" && source.connectionState === "blocked" && source.availability === "waiting"), "bluetooth should start closed until selected");
@@ -5254,6 +5324,13 @@ async function run() {
     assert(sources.body.sources.some((source) => source.id === "upnp" && source.connectionState === "blocked" && source.availability === "waiting"), "dlna should start closed until selected");
     assert(sources.body.sources.some((source) => source.id === "bluetooth" && source.advertisedLabel === "Tikpal Speaker"), "bluetooth source should expose advertised device name");
     assert(sources.body.sources.some((source) => source.id === "upnp" && source.advertisedLabel === "Tikpal Speaker"), "dlna source should expose advertised renderer name");
+
+    const multiroom = await request("/api/v1/multiroom");
+    assert(multiroom.response.ok, "multi-room state should return 200");
+    assert(multiroom.body.ecosystems?.roon?.label, "multi-room payload should include Roon");
+    assert(multiroom.body.ecosystems?.lyrion?.label, "multi-room payload should include Lyrion");
+    assert(multiroom.body.ecosystems?.tikpal?.label, "multi-room payload should include Tikpal Multi-room");
+    assert(multiroom.body.ecosystems?.music_assistant?.comingSoon === true, "Music Assistant should be a coming-soon placeholder");
 
     const localLibrary = await request("/api/v1/audio/library?storage=local&limit=5");
     assert(localLibrary.response.ok, "local audio library should return 200");

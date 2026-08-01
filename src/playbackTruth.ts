@@ -11,6 +11,9 @@ const SOURCE_LABELS: Record<SourceState, string> = {
   spotify: "Spotify Connect",
   bluetooth: "Bluetooth",
   roonbridge: "Roon Bridge",
+  lyrion: "Lyrion",
+  tikpal_multiroom: "Tikpal Multi-room",
+  music_assistant: "Music Assistant",
   upnp: "DLNA",
   radio: "Radio"
 };

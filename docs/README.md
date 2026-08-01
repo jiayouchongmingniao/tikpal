@@ -94,6 +94,9 @@ type SourceState =
   | "spotify"
   | "bluetooth"
   | "roonbridge"
+  | "lyrion"
+  | "tikpal_multiroom"
+  | "music_assistant"
   | "upnp"
   | "radio";
 

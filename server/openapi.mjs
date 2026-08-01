@@ -28,6 +28,7 @@ const SOURCE_TARGETS = ["mpd", "radio", "spotify", "bluetooth", "airplay", "upnp
 const HIFI_EQ_PRESETS = ["flat", "warm", "vocal"];
 const WEB_MODE_PROVIDERS = ["suno", "spotify", "youtube_music", "apple_music", "tidal", "qobuz", "deezer", "amazon_music", "qq_music", "netease_music"];
 const WEB_MODE_ACTION_TYPES = ["open", "close", "keyboard", "proxy", "provider_text_scale"];
+const MULTIROOM_ECOSYSTEMS = ["roon", "lyrion", "tikpal", "music_assistant"];
 
 function ref(name) {
   return { $ref: `#/components/schemas/${name}` };
@@ -146,6 +147,42 @@ export function buildOpenApiDocument({ appVersion = "0.1.0" } = {}) {
           responses: {
             200: jsonResponse("Proxy test result", "WebModeProxyTestResponse"),
             400: jsonResponse("Bad request", "ErrorResponse")
+          }
+        }
+      },
+      "/multiroom": {
+        get: {
+          tags: ["multiroom"],
+          summary: "Read Multi-room Audio ecosystem state",
+          responses: {
+            200: jsonResponse("Multi-room Audio state", "MultiroomAudioState")
+          }
+        }
+      },
+      "/multiroom/ecosystems/{id}": {
+        patch: {
+          tags: ["multiroom"],
+          summary: "Enable or disable one Multi-room Audio ecosystem",
+          parameters: [
+            {
+              name: "id",
+              in: "path",
+              required: true,
+              schema: { type: "string", enum: MULTIROOM_ECOSYSTEMS }
+            }
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: ref("MultiroomUpdateRequest")
+              }
+            }
+          },
+          responses: {
+            200: jsonResponse("Multi-room Audio state", "MultiroomAudioState"),
+            400: jsonResponse("Bad request", "ErrorResponse"),
+            403: jsonResponse("Forbidden", "ErrorResponse")
           }
         }
       },
@@ -270,6 +307,43 @@ export function buildOpenApiDocument({ appVersion = "0.1.0" } = {}) {
             proxyUrl: { type: "string" }
           }
         },
+        MultiroomEcosystemState: {
+          type: "object",
+          required: ["id", "enabled", "ready", "active", "serviceActive", "label", "lastError", "updatedAt"],
+          properties: {
+            id: { type: "string", enum: MULTIROOM_ECOSYSTEMS },
+            enabled: { type: "boolean" },
+            ready: { type: "boolean" },
+            active: { type: "boolean" },
+            serviceActive: { type: "boolean" },
+            label: { type: "string" },
+            lastError: { type: "string", nullable: true },
+            updatedAt: { type: "string", format: "date-time", nullable: true },
+            comingSoon: { type: "boolean" }
+          }
+        },
+        MultiroomAudioState: {
+          type: "object",
+          required: ["enabled", "active", "activeEcosystemId", "ecosystems", "updatedAt"],
+          properties: {
+            enabled: { type: "boolean" },
+            active: { type: "boolean" },
+            activeEcosystemId: { type: "string", enum: MULTIROOM_ECOSYSTEMS, nullable: true },
+            ecosystems: {
+              type: "object",
+              additionalProperties: ref("MultiroomEcosystemState")
+            },
+            updatedAt: { type: "string", format: "date-time", nullable: true }
+          }
+        },
+        MultiroomUpdateRequest: {
+          type: "object",
+          required: ["enabled"],
+          properties: {
+            enabled: { type: "boolean" }
+          },
+          additionalProperties: false
+        },
         RemoteStateResponse: {
           type: "object",
           required: ["playback", "volume", "room", "scene", "source", "display", "hifi", "explore", "runtime", "updatedAt"],
@@ -393,8 +467,10 @@ export function buildOpenApiDocsHtml() {
     <pre>GET  /api/v1/remote/state
 GET  /api/v1/remote/catalog
 POST /api/v1/remote/actions
+GET  /api/v1/multiroom
+PATCH /api/v1/multiroom/ecosystems/{id}  (local kiosk only)
 
-Header for POST:
+Header for remote POST:
 X-Tikpal-Key: &lt;TIKPAL_PORTABLE_API_KEY&gt;</pre>
   </main>
 </body>

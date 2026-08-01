@@ -167,6 +167,45 @@ EOF
   echo "installed $stability_unit"
 }
 
+install_roonbridge_helpers() {
+  local multiroom_helper="/usr/local/sbin/tikpal-multiroom-state"
+  local roon_helper="/usr/local/sbin/tikpal-roonbridge-state"
+  local audio_profile_helper="/usr/local/sbin/tikpal-audio-output-profile"
+  local mpd_profile_helper="/usr/local/sbin/tikpal-mpd-bitperfect-profile"
+  local sudoers_file="/etc/sudoers.d/tikpal-roonbridge-mpd"
+  if [[ -f "$APP_DIR/deploy/moode/tikpal-multiroom-state.sh" ]]; then
+    install -o root -g root -m 0755 "$APP_DIR/deploy/moode/tikpal-multiroom-state.sh" "$multiroom_helper"
+    echo "installed $multiroom_helper"
+  fi
+  if [[ -f "$APP_DIR/deploy/moode/tikpal-roonbridge-state.sh" ]]; then
+    install -o root -g root -m 0755 "$APP_DIR/deploy/moode/tikpal-roonbridge-state.sh" "$roon_helper"
+    echo "installed $roon_helper"
+  fi
+  if [[ -f "$APP_DIR/deploy/moode/tikpal-audio-output-profile.sh" ]]; then
+    install -o root -g root -m 0755 "$APP_DIR/deploy/moode/tikpal-audio-output-profile.sh" "$audio_profile_helper"
+    echo "installed $audio_profile_helper"
+  fi
+  if [[ -f "$APP_DIR/deploy/moode/tikpal-mpd-bitperfect-profile.sh" ]]; then
+    install -o root -g root -m 0755 "$APP_DIR/deploy/moode/tikpal-mpd-bitperfect-profile.sh" "$mpd_profile_helper"
+    echo "installed $mpd_profile_helper"
+  fi
+  if command -v visudo >/dev/null 2>&1; then
+    local tmp_sudoers
+    tmp_sudoers="$(mktemp)"
+    cat > "$tmp_sudoers" <<EOF
+Defaults:$SERVICE_USER env_keep += "TIKPAL_MULTIROOM_ROON_SERVICE TIKPAL_MULTIROOM_ROON_LABEL TIKPAL_MULTIROOM_LYRION_SERVICE TIKPAL_MULTIROOM_LYRION_LABEL TIKPAL_MULTIROOM_TIKPAL_SERVICE TIKPAL_MULTIROOM_TIKPAL_LABEL TIKPAL_ROONBRIDGE_SERVICE TIKPAL_ROONBRIDGE_LABEL TIKPAL_MPD_CONF TIKPAL_MPD_STANDARD_ALSA_DEVICE TIKPAL_MPD_PURE_ALSA_DEVICE TIKPAL_MPD_BITPERFECT_ALSA_DEVICE TIKPAL_MPD_SLEEP_SAMPLE_RATE TIKPAL_MPD_SLEEP_VOLUME_LIMIT TIKPAL_AUDIO_CARD_FORCE"
+$SERVICE_USER ALL=(root) NOPASSWD:SETENV: $multiroom_helper, $roon_helper, $audio_profile_helper, $mpd_profile_helper
+EOF
+    if visudo -cf "$tmp_sudoers" >/dev/null; then
+      install -o root -g root -m 0440 "$tmp_sudoers" "$sudoers_file"
+      echo "installed $sudoers_file"
+    else
+      echo "WARN: generated sudoers for Roon/MPD helpers did not validate; skipping" >&2
+    fi
+    rm -f "$tmp_sudoers"
+  fi
+}
+
 ensure_library_scan_env() {
   local env_file="$APP_DIR/.env"
   local helper="$APP_DIR/deploy/moode/tikpal-library-sync.sh"
@@ -238,6 +277,92 @@ ensure_kiosk_audio_release_env() {
   echo "updated $env_file with Tikpal kiosk audio release command"
 }
 
+ensure_roonbridge_env() {
+  local env_file="$APP_DIR/.env"
+  [[ -f "$env_file" ]] || return 0
+  local updated=0
+  if ! grep -q '^TIKPAL_MULTIROOM_ROON_READY_COMMAND=' "$env_file"; then
+    printf '\n# Multi-room Audio ecosystems can be enabled from Settings; playback handoff releases MPD/Radio while an endpoint owns ALSA.\n' >> "$env_file"
+    printf 'TIKPAL_MULTIROOM_ROON_SERVICE=roonbridge.service\n' >> "$env_file"
+    printf 'TIKPAL_MULTIROOM_ROON_READY_COMMAND="sudo -n -E /usr/local/sbin/tikpal-multiroom-state roon ready"\n' >> "$env_file"
+    printf 'TIKPAL_MULTIROOM_ROON_ACTIVE_COMMAND="sudo -n -E /usr/local/sbin/tikpal-multiroom-state roon active"\n' >> "$env_file"
+    printf 'TIKPAL_MULTIROOM_ROON_ENABLE_COMMAND="sudo -n -E /usr/local/sbin/tikpal-multiroom-state roon enable"\n' >> "$env_file"
+    printf 'TIKPAL_MULTIROOM_ROON_DISABLE_COMMAND="sudo -n -E /usr/local/sbin/tikpal-multiroom-state roon disable"\n' >> "$env_file"
+    printf 'TIKPAL_MULTIROOM_ROON_LABEL_COMMAND="sudo -n -E /usr/local/sbin/tikpal-multiroom-state roon label"\n' >> "$env_file"
+    printf 'TIKPAL_MULTIROOM_LYRION_SERVICE=squeezelite.service\n' >> "$env_file"
+    printf 'TIKPAL_MULTIROOM_LYRION_READY_COMMAND="sudo -n -E /usr/local/sbin/tikpal-multiroom-state lyrion ready"\n' >> "$env_file"
+    printf 'TIKPAL_MULTIROOM_LYRION_ACTIVE_COMMAND="sudo -n -E /usr/local/sbin/tikpal-multiroom-state lyrion active"\n' >> "$env_file"
+    printf 'TIKPAL_MULTIROOM_LYRION_ENABLE_COMMAND="sudo -n -E /usr/local/sbin/tikpal-multiroom-state lyrion enable"\n' >> "$env_file"
+    printf 'TIKPAL_MULTIROOM_LYRION_DISABLE_COMMAND="sudo -n -E /usr/local/sbin/tikpal-multiroom-state lyrion disable"\n' >> "$env_file"
+    printf 'TIKPAL_MULTIROOM_LYRION_LABEL_COMMAND="sudo -n -E /usr/local/sbin/tikpal-multiroom-state lyrion label"\n' >> "$env_file"
+    printf 'TIKPAL_MULTIROOM_TIKPAL_SERVICE=tikpal-multiroom.service\n' >> "$env_file"
+    printf 'TIKPAL_MULTIROOM_TIKPAL_READY_COMMAND="sudo -n -E /usr/local/sbin/tikpal-multiroom-state tikpal ready"\n' >> "$env_file"
+    printf 'TIKPAL_MULTIROOM_TIKPAL_ACTIVE_COMMAND="sudo -n -E /usr/local/sbin/tikpal-multiroom-state tikpal active"\n' >> "$env_file"
+    printf 'TIKPAL_MULTIROOM_TIKPAL_ENABLE_COMMAND="sudo -n -E /usr/local/sbin/tikpal-multiroom-state tikpal enable"\n' >> "$env_file"
+    printf 'TIKPAL_MULTIROOM_TIKPAL_DISABLE_COMMAND="sudo -n -E /usr/local/sbin/tikpal-multiroom-state tikpal disable"\n' >> "$env_file"
+    printf 'TIKPAL_MULTIROOM_TIKPAL_LABEL_COMMAND="sudo -n -E /usr/local/sbin/tikpal-multiroom-state tikpal label"\n' >> "$env_file"
+    updated=1
+  fi
+  if ! grep -q '^TIKPAL_ROONBRIDGE_SERVICE=' "$env_file"; then
+    printf '\n# Legacy Roon Bridge commands are kept for old clients and rollback.\n' >> "$env_file"
+    printf 'TIKPAL_ROONBRIDGE_SERVICE=roonbridge.service\n' >> "$env_file"
+    updated=1
+  fi
+  if ! grep -q '^TIKPAL_ROONBRIDGE_READY_COMMAND=' "$env_file"; then
+    printf 'TIKPAL_ROONBRIDGE_READY_COMMAND="sudo -n -E /usr/local/sbin/tikpal-roonbridge-state ready"\n' >> "$env_file"
+    updated=1
+  fi
+  if ! grep -q '^TIKPAL_ROONBRIDGE_ACTIVE_COMMAND=' "$env_file"; then
+    printf 'TIKPAL_ROONBRIDGE_ACTIVE_COMMAND="sudo -n -E /usr/local/sbin/tikpal-roonbridge-state active"\n' >> "$env_file"
+    updated=1
+  fi
+  if ! grep -q '^TIKPAL_ROONBRIDGE_ENABLE_COMMAND=' "$env_file"; then
+    printf 'TIKPAL_ROONBRIDGE_ENABLE_COMMAND="sudo -n -E /usr/local/sbin/tikpal-roonbridge-state enable"\n' >> "$env_file"
+    updated=1
+  fi
+  if ! grep -q '^TIKPAL_ROONBRIDGE_DISABLE_COMMAND=' "$env_file"; then
+    printf 'TIKPAL_ROONBRIDGE_DISABLE_COMMAND="sudo -n -E /usr/local/sbin/tikpal-roonbridge-state disable"\n' >> "$env_file"
+    updated=1
+  fi
+  if ! grep -q '^TIKPAL_ROONBRIDGE_LABEL_COMMAND=' "$env_file"; then
+    printf 'TIKPAL_ROONBRIDGE_LABEL_COMMAND="sudo -n -E /usr/local/sbin/tikpal-roonbridge-state label"\n' >> "$env_file"
+    updated=1
+  fi
+  if ! grep -q '^TIKPAL_AUDIO_OUTPUT_PROFILE_COMMAND=' "$env_file"; then
+    printf '\n# MPD listening profile switcher used by Settings -> Audio Output.\n' >> "$env_file"
+    printf 'TIKPAL_AUDIO_OUTPUT_PROFILE_COMMAND="sudo -n -E /usr/local/sbin/tikpal-audio-output-profile %%PROFILE%%"\n' >> "$env_file"
+    updated=1
+  fi
+  if ! grep -q '^TIKPAL_MPD_BITPERFECT_PROFILE_COMMAND=' "$env_file"; then
+    printf '# Legacy Standard/Bit-perfect wrapper kept for old clients and rollback.\n' >> "$env_file"
+    printf 'TIKPAL_MPD_BITPERFECT_PROFILE_COMMAND="sudo -n -E /usr/local/sbin/tikpal-mpd-bitperfect-profile %%MODE%%"\n' >> "$env_file"
+    updated=1
+  fi
+  if ! grep -q '^TIKPAL_MPD_STANDARD_ALSA_DEVICE=' "$env_file"; then
+    printf 'TIKPAL_MPD_STANDARD_ALSA_DEVICE=_audioout\n' >> "$env_file"
+    updated=1
+  fi
+  if ! grep -q '^TIKPAL_MPD_PURE_ALSA_DEVICE=' "$env_file"; then
+    printf 'TIKPAL_MPD_PURE_ALSA_DEVICE=\n' >> "$env_file"
+    updated=1
+  fi
+  if ! grep -q '^TIKPAL_MPD_BITPERFECT_ALSA_DEVICE=' "$env_file"; then
+    printf 'TIKPAL_MPD_BITPERFECT_ALSA_DEVICE=\n' >> "$env_file"
+    updated=1
+  fi
+  if ! grep -q '^TIKPAL_MPD_SLEEP_SAMPLE_RATE=' "$env_file"; then
+    printf 'TIKPAL_MPD_SLEEP_SAMPLE_RATE=48000\n' >> "$env_file"
+    updated=1
+  fi
+  if ! grep -q '^TIKPAL_MPD_SLEEP_VOLUME_LIMIT=' "$env_file"; then
+    printf 'TIKPAL_MPD_SLEEP_VOLUME_LIMIT=45\n' >> "$env_file"
+    updated=1
+  fi
+  [[ "$updated" -eq 1 ]] || return 0
+  chown "$SERVICE_USER":"$SERVICE_USER" "$env_file" || true
+  echo "updated $env_file with Multi-room Audio and Audio Output commands"
+}
+
 ensure_radio_presets() {
   [[ "${TIKPAL_INSTALL_RADIO_PRESETS:-1}" != "0" ]] || return 0
   local helper="$APP_DIR/deploy/moode/tikpal-radio-presets-sync.sh"
@@ -264,6 +389,8 @@ fi
 
 ensure_library_scan_env
 ensure_kiosk_audio_release_env
+install_roonbridge_helpers
+ensure_roonbridge_env
 ensure_radio_presets
 
 install_unit "$SCRIPT_DIR/tikpal-api.service"

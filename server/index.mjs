@@ -123,6 +123,61 @@ const UPNP_ENABLE_COMMAND = process.env.TIKPAL_UPNP_ENABLE_COMMAND ?? "";
 const UPNP_DISABLE_COMMAND = process.env.TIKPAL_UPNP_DISABLE_COMMAND ?? "";
 const UPNP_LABEL_COMMAND = process.env.TIKPAL_UPNP_LABEL_COMMAND ?? "";
 const UPNP_METADATA_COMMAND = process.env.TIKPAL_UPNP_METADATA_COMMAND ?? "";
+const ROONBRIDGE_SERVICE = process.env.TIKPAL_ROONBRIDGE_SERVICE ?? "roonbridge.service";
+const ROONBRIDGE_READY_COMMAND = process.env.TIKPAL_ROONBRIDGE_READY_COMMAND ?? "./deploy/moode/tikpal-roonbridge-state.sh ready";
+const ROONBRIDGE_ACTIVE_COMMAND = process.env.TIKPAL_ROONBRIDGE_ACTIVE_COMMAND ?? "./deploy/moode/tikpal-roonbridge-state.sh active";
+const ROONBRIDGE_ENABLE_COMMAND = process.env.TIKPAL_ROONBRIDGE_ENABLE_COMMAND ?? "./deploy/moode/tikpal-roonbridge-state.sh enable";
+const ROONBRIDGE_DISABLE_COMMAND = process.env.TIKPAL_ROONBRIDGE_DISABLE_COMMAND ?? "./deploy/moode/tikpal-roonbridge-state.sh disable";
+const ROONBRIDGE_LABEL_COMMAND = process.env.TIKPAL_ROONBRIDGE_LABEL_COMMAND ?? "./deploy/moode/tikpal-roonbridge-state.sh label";
+const MULTIROOM_ECOSYSTEM_IDS = ["roon", "lyrion", "tikpal", "music_assistant"];
+const MULTIROOM_ECOSYSTEM_CONFIGS = {
+  roon: {
+    sourceId: "roonbridge",
+    label: "Roon Bridge",
+    service: process.env.TIKPAL_MULTIROOM_ROON_SERVICE ?? ROONBRIDGE_SERVICE,
+    readyCommand: process.env.TIKPAL_MULTIROOM_ROON_READY_COMMAND ?? ROONBRIDGE_READY_COMMAND,
+    activeCommand: process.env.TIKPAL_MULTIROOM_ROON_ACTIVE_COMMAND ?? ROONBRIDGE_ACTIVE_COMMAND,
+    enableCommand: process.env.TIKPAL_MULTIROOM_ROON_ENABLE_COMMAND ?? ROONBRIDGE_ENABLE_COMMAND,
+    disableCommand: process.env.TIKPAL_MULTIROOM_ROON_DISABLE_COMMAND ?? ROONBRIDGE_DISABLE_COMMAND,
+    labelCommand: process.env.TIKPAL_MULTIROOM_ROON_LABEL_COMMAND ?? ROONBRIDGE_LABEL_COMMAND,
+    controlReason: "Control Roon playback from the Roon app"
+  },
+  lyrion: {
+    sourceId: "lyrion",
+    label: "Lyrion",
+    service: process.env.TIKPAL_MULTIROOM_LYRION_SERVICE ?? "squeezelite.service",
+    readyCommand: process.env.TIKPAL_MULTIROOM_LYRION_READY_COMMAND ?? "./deploy/moode/tikpal-multiroom-state.sh lyrion ready",
+    activeCommand: process.env.TIKPAL_MULTIROOM_LYRION_ACTIVE_COMMAND ?? "./deploy/moode/tikpal-multiroom-state.sh lyrion active",
+    enableCommand: process.env.TIKPAL_MULTIROOM_LYRION_ENABLE_COMMAND ?? "./deploy/moode/tikpal-multiroom-state.sh lyrion enable",
+    disableCommand: process.env.TIKPAL_MULTIROOM_LYRION_DISABLE_COMMAND ?? "./deploy/moode/tikpal-multiroom-state.sh lyrion disable",
+    labelCommand: process.env.TIKPAL_MULTIROOM_LYRION_LABEL_COMMAND ?? "./deploy/moode/tikpal-multiroom-state.sh lyrion label",
+    controlReason: "Control Lyrion playback from the sender"
+  },
+  tikpal: {
+    sourceId: "tikpal_multiroom",
+    label: "Tikpal Multi-room",
+    service: process.env.TIKPAL_MULTIROOM_TIKPAL_SERVICE ?? "tikpal-multiroom.service",
+    readyCommand: process.env.TIKPAL_MULTIROOM_TIKPAL_READY_COMMAND ?? "./deploy/moode/tikpal-multiroom-state.sh tikpal ready",
+    activeCommand: process.env.TIKPAL_MULTIROOM_TIKPAL_ACTIVE_COMMAND ?? "./deploy/moode/tikpal-multiroom-state.sh tikpal active",
+    enableCommand: process.env.TIKPAL_MULTIROOM_TIKPAL_ENABLE_COMMAND ?? "./deploy/moode/tikpal-multiroom-state.sh tikpal enable",
+    disableCommand: process.env.TIKPAL_MULTIROOM_TIKPAL_DISABLE_COMMAND ?? "./deploy/moode/tikpal-multiroom-state.sh tikpal disable",
+    labelCommand: process.env.TIKPAL_MULTIROOM_TIKPAL_LABEL_COMMAND ?? "./deploy/moode/tikpal-multiroom-state.sh tikpal label",
+    controlReason: "Control Tikpal Multi-room playback from the group controller"
+  },
+  music_assistant: {
+    sourceId: "music_assistant",
+    label: "Music Assistant",
+    placeholder: true,
+    controlReason: "Music Assistant support is coming soon"
+  }
+};
+const MULTIROOM_SOURCE_TO_ECOSYSTEM = Object.fromEntries(
+  MULTIROOM_ECOSYSTEM_IDS
+    .map((id) => [MULTIROOM_ECOSYSTEM_CONFIGS[id]?.sourceId, id])
+    .filter(([sourceId]) => Boolean(sourceId))
+);
+const AUDIO_OUTPUT_PROFILE_COMMAND = process.env.TIKPAL_AUDIO_OUTPUT_PROFILE_COMMAND ?? "./deploy/moode/tikpal-audio-output-profile.sh %PROFILE%";
+const MPD_BITPERFECT_PROFILE_COMMAND = process.env.TIKPAL_MPD_BITPERFECT_PROFILE_COMMAND ?? "./deploy/moode/tikpal-mpd-bitperfect-profile.sh %MODE%";
 const OUTPUT_VOLUME_GET_COMMAND = process.env.TIKPAL_OUTPUT_VOLUME_GET_COMMAND ?? "amixer get PCM";
 const OUTPUT_VOLUME_SET_COMMAND = process.env.TIKPAL_OUTPUT_VOLUME_SET_COMMAND ?? "amixer sset PCM %VALUE%%";
 const OUTPUT_VOLUME_SET_COMMAND_CONFIGURED = Object.prototype.hasOwnProperty.call(process.env, "TIKPAL_OUTPUT_VOLUME_SET_COMMAND")
@@ -267,6 +322,9 @@ const NAS_DISCOVERY_HINTS = process.env.TIKPAL_NAS_DISCOVERY_HINTS ?? "";
 const WEB_MODE_SETTINGS_PATH = resolve(process.env.TIKPAL_WEB_MODE_SETTINGS_PATH ?? resolve(process.cwd(), ".tikpal", "web-mode-settings.json"));
 const WEB_MODE_STATE_PATH = resolve(process.env.TIKPAL_WEB_MODE_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "web-mode-state.json"));
 const WEB_MODE_HANDOFF_STATE_PATH = resolve(process.env.TIKPAL_WEB_MODE_HANDOFF_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "web-mode-handoff.json"));
+const MULTIROOM_AUDIO_STATE_PATH = resolve(process.env.TIKPAL_MULTIROOM_AUDIO_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "multiroom-audio.json"));
+const MULTIROOM_HANDOFF_STATE_PATH = resolve(process.env.TIKPAL_MULTIROOM_HANDOFF_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "multiroom-handoff.json"));
+const ROONBRIDGE_HANDOFF_STATE_PATH = resolve(process.env.TIKPAL_ROONBRIDGE_HANDOFF_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "roonbridge-handoff.json"));
 const MPD_SHUFFLE_MONITOR_INTERVAL_MS = parseEnvPositiveInteger(process.env.TIKPAL_MPD_SHUFFLE_MONITOR_INTERVAL_MS, 500);
 const MPD_SHUFFLE_RECENT_HISTORY_SIZE = parseEnvPositiveInteger(process.env.TIKPAL_MPD_SHUFFLE_RECENT_HISTORY_SIZE, 4);
 const WEB_MODE_COMMAND = process.env.TIKPAL_WEB_MODE_COMMAND ?? (API_MODE === "mpc" ? "./deploy/chromium/tikpal-web-mode.sh" : "");
@@ -301,6 +359,20 @@ const UI_KEYBOARD_VISUAL_SYNC_COMMAND = process.env.TIKPAL_UI_KEYBOARD_VISUAL_SY
   ?? (API_MODE === "mpc" ? "if [ -f /usr/share/onboard/scripts/tikpalImeToggle.py ]; then TIKPAL_APP_DIR=%APP_DIR% TIKPAL_FONT_THEME=%FONT_THEME% python3 /usr/share/onboard/scripts/tikpalImeToggle.py --sync; fi" : "");
 const FONT_THEMES = new Set(["system", "hardware", "precision", "sans", "serif", "mono"]);
 const DEFAULT_FONT_THEME = "system";
+const AUDIO_OUTPUT_PROFILES = new Set(["pure", "everyday", "sleep", "custom"]);
+const DEFAULT_AUDIO_OUTPUT_PROFILE = "everyday";
+const DEFAULT_AUDIO_OUTPUT_CUSTOM_SETTINGS = {
+  pureDirect: false,
+  volumeNormalization: true,
+  smoothTransition: true,
+  automaticSampleRate: true,
+  dsdMode: false,
+  playbackStability: true
+};
+const MPD_BITPERFECT_MODES = new Set(["standard", "strict"]);
+const DEFAULT_MPD_BITPERFECT_MODE = "standard";
+const SLEEP_AUDIO_OUTPUT_VOLUME_LIMIT_PERCENT = 45;
+const SLEEP_AUDIO_OUTPUT_AUTO_STOP_MS = 60 * 60_000;
 const DISPLAY_SLEEP_MINUTES = [5, 10, 15, 30, 60];
 const DEFAULT_DISPLAY_SLEEP_MINUTES = 10;
 const DISPLAY_SLEEP_STYLES = new Set(["meteor_shower", "clock", "now_playing", "starfield", "signal"]);
@@ -630,6 +702,8 @@ let mpcRadioWeakNetworkState = null;
 let mpcRadioCatalogReadyCache = false;
 let mpcRadioCatalogCountCache = 0;
 let activeMpcRadioStationCache = null;
+let multiroomMpdReleaseAtMs = 0;
+let audioOutputProfileAutoStopTimer = null;
 let audioSourceMemoryStateCache = null;
 let airplayDirectMetadataRefreshPromise = null;
 let airplayDirectMetadataRefreshAtMs = 0;
@@ -680,6 +754,62 @@ const system = {
     controllable: true,
     controlTransport: "mock",
     availablePresets: HIFI_EQ_PRESETS
+  },
+  multiroom: {
+    ecosystems: {
+      roon: {
+        id: "roon",
+        enabled: false,
+        ready: false,
+        active: false,
+        serviceActive: false,
+        label: "Roon Bridge",
+        lastError: null,
+        updatedAt: new Date().toISOString()
+      },
+      lyrion: {
+        id: "lyrion",
+        enabled: false,
+        ready: false,
+        active: false,
+        serviceActive: false,
+        label: "Lyrion",
+        lastError: null,
+        updatedAt: new Date().toISOString()
+      },
+      tikpal: {
+        id: "tikpal",
+        enabled: false,
+        ready: false,
+        active: false,
+        serviceActive: false,
+        label: "Tikpal Multi-room",
+        lastError: null,
+        updatedAt: new Date().toISOString()
+      },
+      music_assistant: {
+        id: "music_assistant",
+        enabled: false,
+        ready: false,
+        active: false,
+        serviceActive: false,
+        label: "Music Assistant",
+        lastError: "Coming soon",
+        comingSoon: true,
+        updatedAt: new Date().toISOString()
+      }
+    },
+    activeEcosystemId: null,
+    updatedAt: new Date().toISOString()
+  },
+  roonBridge: {
+    enabled: false,
+    ready: false,
+    active: false,
+    serviceActive: false,
+    label: "Roon Bridge",
+    lastError: null,
+    updatedAt: new Date().toISOString()
   },
   library: {
     source: "NAS",
@@ -1421,11 +1551,21 @@ function randomMockTrackIndex(excludedIndex = trackIndex) {
   return nextIndex;
 }
 
-function buildAudioState({ activeSource, armedSource = null, radioReady, radioActive, radioStations = [], audioSourceState, spotifyState, bluetoothState, airplayState, upnpState }) {
+function buildAudioState({ activeSource, armedSource = null, radioReady, radioActive, radioStations = [], audioSourceState, spotifyState, bluetoothState, airplayState, roonBridgeState, multiroomState, upnpState }) {
   audioSourceState = buildSourceRuntimeState(audioSourceState);
   spotifyState = buildSourceRuntimeState(spotifyState);
   bluetoothState = buildSourceRuntimeState(bluetoothState);
   airplayState = buildSourceRuntimeState(airplayState);
+  multiroomState = buildDefaultMultiroomState(multiroomState ?? {
+    ecosystems: {
+      roon: {
+        ...roonBridgeState,
+        id: "roon"
+      }
+    },
+    activeEcosystemId: roonBridgeState?.active ? "roon" : null
+  });
+  roonBridgeState = multiroomState.ecosystems.roon;
   upnpState = buildSourceRuntimeState(upnpState);
 
   const activeRadio = radioStations.find((station) => station.active) ?? null;
@@ -1557,6 +1697,30 @@ function buildAudioState({ activeSource, armedSource = null, radioReady, radioAc
       connectedLabel: airplayState.connectedLabel,
       advertisedLabel: airplayState.advertisedLabel
     },
+    ...["roon", "lyrion", "tikpal"].map((ecosystemId) => {
+      const state = multiroomState.ecosystems[ecosystemId];
+      const config = getMultiroomEcosystemConfig(ecosystemId);
+      const sourceId = config?.sourceId ?? ecosystemId;
+      const label = state?.label ?? config?.label ?? "Multi-room Audio";
+      return {
+        ...buildSourceSummary({
+          id: sourceId,
+          label,
+          availability: state?.ready ? (state?.active ? "available" : "waiting") : "unavailable",
+          active: activeSource === sourceId,
+          controllability: "status-only",
+          secondaryStatus: state?.active
+            ? `Playing from ${label.replace(/\s*Bridge$/i, "")}.`
+            : state?.ready
+              ? `Start playback from ${label.replace(/\s*Bridge$/i, "")}.`
+              : "Check setup."
+        }),
+        armed: state?.enabled || state?.serviceActive,
+        connectionState: state?.active ? "connected" : state?.ready ? "armed" : "blocked",
+        connectedLabel: state?.active ? label : null,
+        advertisedLabel: label
+      };
+    }),
     {
       ...buildSourceSummary({
         id: "upnp",
@@ -1586,7 +1750,7 @@ function buildAudioState({ activeSource, armedSource = null, radioReady, radioAc
   const activeCurrentSource = sources.find((source) => source.active) ?? null;
   const preferredCurrentSource = !activeCurrentSource
     && armedSource
-    && (armedSource === "scene" || armedSource === "audio" || armedSource === "spotify" || armedSource === "bluetooth" || armedSource === "airplay" || armedSource === "upnp")
+    && (armedSource === "scene" || armedSource === "audio" || armedSource === "spotify" || armedSource === "bluetooth" || armedSource === "airplay" || isMultiroomSourceId(armedSource) || armedSource === "upnp")
       ? sources.find((source) => source.id === armedSource)
       : null;
 
@@ -1995,6 +2159,7 @@ async function commandSucceeds(command, options = {}) {
 const AIRPLAY_REMOTE_UNAVAILABLE_REASON = "AirPlay remote control is unavailable from this sender";
 const BLUETOOTH_REMOTE_UNAVAILABLE_REASON = "Bluetooth AVRCP control is unavailable from this sender";
 const NAS_SEEK_UNAVAILABLE_REASON = "NAS playback does not support reliable seeking";
+const MULTIROOM_CONTROL_UNAVAILABLE_REASON = "Control multi-room playback from the source app";
 
 function buildPlaybackTransportCapabilities(source, options = {}) {
   const base = {
@@ -2059,6 +2224,18 @@ function buildPlaybackTransportCapabilities(source, options = {}) {
       previous: false,
       seek: false,
       reason: `${source} transport is controlled by the sender`
+    };
+  }
+
+  if (isMultiroomSourceId(source)) {
+    return {
+      playPause: false,
+      play: false,
+      pause: false,
+      next: false,
+      previous: false,
+      seek: false,
+      reason: getMultiroomEcosystemConfig(getMultiroomEcosystemIdFromSource(source))?.controlReason ?? MULTIROOM_CONTROL_UNAVAILABLE_REASON
     };
   }
 
@@ -2244,6 +2421,54 @@ async function setMpcAndOutputVolumePercent(percent) {
   }
   if (OUTPUT_VOLUME_SET_COMMAND_CONFIGURED) {
     await setOutputVolumePercent(normalized);
+  }
+}
+
+async function getMpdResumeVolumePercent() {
+  const volumeState = await readAudioVolumeState();
+  if (volumeState.lastNonZeroPercent && volumeState.lastNonZeroPercent > 0) {
+    return volumeState.lastNonZeroPercent;
+  }
+  const globalVolumePercent = clampPercent(system.volume?.percent, null);
+  if (globalVolumePercent && globalVolumePercent > 0) {
+    return globalVolumePercent;
+  }
+  if (Number.isFinite(MPD_STARTUP_VOLUME) && MPD_STARTUP_VOLUME > 0 && MPD_STARTUP_VOLUME <= 100) {
+    return Math.round(MPD_STARTUP_VOLUME);
+  }
+  return RADIO_VOLUME_DEFAULT_PERCENT;
+}
+
+async function restoreMpdOutputVolumeAfterProfileSwitch(profile, customSettings = DEFAULT_AUDIO_OUTPUT_CUSTOM_SETTINGS) {
+  if (API_MODE !== "mpc" || !audioOutputProfileCanRestoreVolume(profile, customSettings)) return;
+  const status = parseMpcStatus(await runMpc(["status"], { allowFailure: true, timeout: 2500 }));
+  if (status.state !== "playing") return;
+  const outputVolumePercent = OUTPUT_VOLUME_SET_COMMAND_CONFIGURED
+    ? await readOutputVolumePercent()
+    : null;
+  const mpcMuted = status.volumePercent === 0;
+  const outputMuted = OUTPUT_VOLUME_SET_COMMAND_CONFIGURED && outputVolumePercent === 0;
+  if (!mpcMuted && !outputMuted) {
+    if (status.volumePercent && status.volumePercent > 0) {
+      await rememberNonZeroVolumePercent(status.volumePercent);
+    }
+    if (outputVolumePercent && outputVolumePercent > 0) {
+      await rememberNonZeroVolumePercent(outputVolumePercent);
+    }
+    return;
+  }
+
+  const nextVolume = await getMpdResumeVolumePercent();
+  try {
+    if (mpcMuted) {
+      await runMpc(["volume", String(nextVolume)], { allowFailure: true, timeout: 2500 });
+    }
+    if (outputMuted) {
+      await setOutputVolumePercent(nextVolume);
+    }
+    await rememberNonZeroVolumePercent(nextVolume);
+  } catch (error) {
+    console.warn(`tikpal-api could not restore volume after audio output profile switch: ${error instanceof Error ? error.message : "unknown error"}`);
   }
 }
 
@@ -3336,13 +3561,14 @@ async function getOutputDeviceSnapshot() {
 async function getMpcSystemSnapshot(statusRaw, statsRaw) {
   const status = applyTikpalPlaybackModeToStatus(parseMpcStatus(statusRaw));
   const stats = parseMpcStats(statsRaw);
-  const [network, display, outputDevice, dspState, cpuTemp, uptime] = await Promise.all([
+  const [network, display, outputDevice, dspState, cpuTemp, uptime, multiroom] = await Promise.all([
     getNetworkSnapshot(),
     readDisplayBrightnessSnapshot(),
     getOutputDeviceSnapshot(),
     getDspSnapshot(),
     getCpuTempSnapshot(),
-    getUptimeSnapshot()
+    getUptimeSnapshot(),
+    readMultiroomState({ releaseMpd: false })
   ]);
 
   const scanRecentlyRequested = Date.now() - lastSystemLibraryScanRequestedAt < 15000;
@@ -3355,6 +3581,8 @@ async function getMpcSystemSnapshot(statusRaw, statsRaw) {
     cpuTemp,
     uptime,
     dspState,
+    multiroom,
+    roonBridge: multiroom.ecosystems.roon,
     library: {
       ...system.library,
       source: "MPD",
@@ -3374,6 +3602,8 @@ function getCachedMpcSystemSnapshot(statusRaw, statsRaw) {
   return {
     ...cachedSystem,
     display: system.display,
+    multiroom: cachedSystem.multiroom ?? system.multiroom,
+    roonBridge: cachedSystem.roonBridge ?? system.roonBridge,
     library: {
       ...cachedSystem.library,
       source: "MPD",
@@ -4286,14 +4516,51 @@ function normalizeFontTheme(value, fallback = DEFAULT_FONT_THEME) {
   return FONT_THEMES.has(normalized) ? normalized : fallback;
 }
 
-function buildUiPreferences(locale = "en", updatedAt = null, warning = null, displaySleep = {}, fontTheme = DEFAULT_FONT_THEME) {
+function normalizeMpdBitPerfectMode(value, fallback = DEFAULT_MPD_BITPERFECT_MODE) {
+  const normalized = String(value ?? "").trim().toLowerCase().replaceAll("-", "_");
+  return MPD_BITPERFECT_MODES.has(normalized) ? normalized : fallback;
+}
+
+function normalizeAudioOutputProfile(value, fallback = DEFAULT_AUDIO_OUTPUT_PROFILE) {
+  const normalized = String(value ?? "").trim().toLowerCase().replaceAll("-", "_");
+  if (normalized === "strict" || normalized === "bit_perfect" || normalized === "bitperfect") return "pure";
+  if (normalized === "standard") return "everyday";
+  if (normalized === "meditation" || normalized === "sleep_meditation") return "sleep";
+  return AUDIO_OUTPUT_PROFILES.has(normalized) ? normalized : fallback;
+}
+
+function normalizeAudioOutputCustomSettings(value = {}, fallback = DEFAULT_AUDIO_OUTPUT_CUSTOM_SETTINGS) {
+  const source = value && typeof value === "object" ? value : {};
+  return {
+    pureDirect: source.pureDirect === undefined ? fallback.pureDirect : source.pureDirect === true,
+    volumeNormalization: source.volumeNormalization === undefined ? fallback.volumeNormalization : source.volumeNormalization === true,
+    smoothTransition: source.smoothTransition === undefined ? fallback.smoothTransition : source.smoothTransition === true,
+    automaticSampleRate: source.automaticSampleRate === undefined ? fallback.automaticSampleRate : source.automaticSampleRate === true,
+    dsdMode: source.dsdMode === undefined ? fallback.dsdMode : source.dsdMode === true,
+    playbackStability: source.playbackStability === undefined ? fallback.playbackStability : source.playbackStability === true
+  };
+}
+
+function audioOutputProfileToMpdBitPerfectMode(profile) {
+  return normalizeAudioOutputProfile(profile) === "pure" ? "strict" : "standard";
+}
+
+function mpdBitPerfectModeToAudioOutputProfile(mode) {
+  return normalizeMpdBitPerfectMode(mode) === "strict" ? "pure" : "everyday";
+}
+
+function buildUiPreferences(locale = "en", updatedAt = null, warning = null, displaySleep = {}, fontTheme = DEFAULT_FONT_THEME, mpdBitPerfectMode = DEFAULT_MPD_BITPERFECT_MODE, audioOutputProfile = null, audioOutputCustomSettings = DEFAULT_AUDIO_OUTPUT_CUSTOM_SETTINGS) {
   const normalizedLocale = normalizeUiLocale(locale) ?? "en";
   const displaySleepMinutes = normalizeDisplaySleepMinutes(displaySleep?.displaySleepMinutes);
   const displaySleepStyle = normalizeDisplaySleepStyle(displaySleep?.displaySleepStyle);
+  const normalizedProfile = normalizeAudioOutputProfile(audioOutputProfile, mpdBitPerfectModeToAudioOutputProfile(mpdBitPerfectMode));
   return {
     locale: normalizedLocale,
     inputMethodId: UI_LOCALE_INPUT_METHODS[normalizedLocale] ?? "keyboard-us",
     fontTheme: normalizeFontTheme(fontTheme),
+    audioOutputProfile: normalizedProfile,
+    audioOutputCustomSettings: normalizeAudioOutputCustomSettings(audioOutputCustomSettings),
+    mpdBitPerfectMode: audioOutputProfileToMpdBitPerfectMode(normalizedProfile),
     displaySleepEnabled: displaySleep?.displaySleepEnabled === undefined ? true : displaySleep.displaySleepEnabled !== false,
     displaySleepMinutes,
     displaySleepStyle,
@@ -4307,7 +4574,7 @@ function normalizeUiPreferencesState(raw = {}) {
     displaySleepEnabled: raw?.displaySleepEnabled,
     displaySleepMinutes: raw?.displaySleepMinutes,
     displaySleepStyle: raw?.displaySleepStyle
-  }, raw?.fontTheme);
+  }, raw?.fontTheme, raw?.mpdBitPerfectMode, raw?.audioOutputProfile, raw?.audioOutputCustomSettings);
 }
 
 async function readUiPreferences() {
@@ -4316,6 +4583,25 @@ async function readUiPreferences() {
   } catch {
     return buildUiPreferences();
   }
+}
+
+async function isMpdBitPerfectStrictModeActive() {
+  const preferences = await readUiPreferences();
+  return preferences.audioOutputProfile === "pure"
+    || (preferences.audioOutputProfile === "custom" && preferences.audioOutputCustomSettings.pureDirect === true);
+}
+
+async function getMpdVolumeLimitPercent() {
+  return (await readUiPreferences()).audioOutputProfile === "sleep" ? SLEEP_AUDIO_OUTPUT_VOLUME_LIMIT_PERCENT : null;
+}
+
+function audioOutputProfileCanRestoreVolume(profile, customSettings = DEFAULT_AUDIO_OUTPUT_CUSTOM_SETTINGS) {
+  const normalizedProfile = normalizeAudioOutputProfile(profile);
+  if (normalizedProfile === "pure") return false;
+  if (normalizedProfile === "custom") {
+    return normalizeAudioOutputCustomSettings(customSettings).pureDirect !== true;
+  }
+  return true;
 }
 
 function expandUiInputMethodSyncCommand(command, preferences) {
@@ -4356,6 +4642,152 @@ async function syncUiKeyboardVisual(preferences) {
   }
 }
 
+function expandMpdBitPerfectProfileCommand(command, mode) {
+  return command
+    .replaceAll("%MODE%", shellQuote(mode))
+    .replaceAll("%PROFILE%", shellQuote(mpdBitPerfectModeToAudioOutputProfile(mode)))
+    .replaceAll("%APP_DIR%", shellQuote(process.cwd()));
+}
+
+function expandAudioOutputProfileCommand(command, profile) {
+  const normalizedProfile = normalizeAudioOutputProfile(profile);
+  return command
+    .replaceAll("%PROFILE%", shellQuote(normalizedProfile))
+    .replaceAll("%MODE%", shellQuote(audioOutputProfileToMpdBitPerfectMode(normalizedProfile)))
+    .replaceAll("%APP_DIR%", shellQuote(process.cwd()));
+}
+
+function buildAudioOutputCustomSettingsEnv(settings = DEFAULT_AUDIO_OUTPUT_CUSTOM_SETTINGS) {
+  const normalized = normalizeAudioOutputCustomSettings(settings);
+  const flag = (value) => (value ? "1" : "0");
+  return {
+    TIKPAL_MPD_CUSTOM_PURE_DIRECT: flag(normalized.pureDirect),
+    TIKPAL_MPD_CUSTOM_VOLUME_NORMALIZATION: flag(normalized.volumeNormalization),
+    TIKPAL_MPD_CUSTOM_SMOOTH_TRANSITION: flag(normalized.smoothTransition),
+    TIKPAL_MPD_CUSTOM_AUTOMATIC_SAMPLE_RATE: flag(normalized.automaticSampleRate),
+    TIKPAL_MPD_CUSTOM_DSD_MODE: flag(normalized.dsdMode),
+    TIKPAL_MPD_CUSTOM_PLAYBACK_STABILITY: flag(normalized.playbackStability)
+  };
+}
+
+function expandAudioOutputDiagnosticsCommand(command) {
+  return command
+    .replaceAll("%PROFILE%", shellQuote("diagnostics"))
+    .replaceAll("%MODE%", shellQuote("status"))
+    .replaceAll("%APP_DIR%", shellQuote(process.cwd()));
+}
+
+async function readAudioOutputDiagnostics() {
+  const preferences = await readUiPreferences();
+  if (API_MODE !== "mpc" || !AUDIO_OUTPUT_PROFILE_COMMAND.trim()) {
+    return {
+      profile: preferences.audioOutputProfile,
+      text: `profile=${preferences.audioOutputProfile}\ntransport=${API_MODE}`,
+      updatedAt: new Date().toISOString()
+    };
+  }
+  const text = await runCommand(expandAudioOutputDiagnosticsCommand(AUDIO_OUTPUT_PROFILE_COMMAND), {
+    allowFailure: true,
+    timeout: 5000,
+    maxBuffer: 1024 * 128
+  });
+  return {
+    profile: preferences.audioOutputProfile,
+    text: text || `profile=${preferences.audioOutputProfile}`,
+    updatedAt: new Date().toISOString()
+  };
+}
+
+function clearAudioOutputProfileAutoStop() {
+  if (audioOutputProfileAutoStopTimer !== null) {
+    clearTimeout(audioOutputProfileAutoStopTimer);
+    audioOutputProfileAutoStopTimer = null;
+  }
+}
+
+function scheduleAudioOutputProfileAutoStop(profile) {
+  clearAudioOutputProfileAutoStop();
+  if (API_MODE !== "mpc" || normalizeAudioOutputProfile(profile) !== "sleep") return;
+  audioOutputProfileAutoStopTimer = setTimeout(() => {
+    runMpc(["stop"], { allowFailure: true, timeout: 2500 }).catch((error) => {
+      console.warn(`tikpal-api sleep audio profile auto-stop failed: ${error instanceof Error ? error.message : "unknown error"}`);
+    });
+  }, SLEEP_AUDIO_OUTPUT_AUTO_STOP_MS);
+  audioOutputProfileAutoStopTimer.unref?.();
+}
+
+async function applyAudioOutputProfile(profile, customSettings = DEFAULT_AUDIO_OUTPUT_CUSTOM_SETTINGS) {
+  const normalizedProfile = normalizeAudioOutputProfile(profile, null);
+  if (!AUDIO_OUTPUT_PROFILES.has(normalizedProfile)) {
+    throw new Error("Audio output profile must be pure, everyday, sleep, or custom");
+  }
+  if (API_MODE !== "mpc") {
+    scheduleAudioOutputProfileAutoStop(normalizedProfile);
+    return;
+  }
+  const playbackRestoreState = await captureMpdBitPerfectPlaybackRestoreState();
+  const command = AUDIO_OUTPUT_PROFILE_COMMAND.trim()
+    ? expandAudioOutputProfileCommand(AUDIO_OUTPUT_PROFILE_COMMAND, normalizedProfile)
+    : expandMpdBitPerfectProfileCommand(MPD_BITPERFECT_PROFILE_COMMAND, audioOutputProfileToMpdBitPerfectMode(normalizedProfile));
+  const env = normalizedProfile === "custom" ? buildAudioOutputCustomSettingsEnv(customSettings) : undefined;
+  await runCommand(command, { allowFailure: false, timeout: 20_000, env });
+  scheduleAudioOutputProfileAutoStop(normalizedProfile);
+  await restoreMpdBitPerfectPlayback(playbackRestoreState);
+  await restoreMpdOutputVolumeAfterProfileSwitch(normalizedProfile, customSettings);
+}
+
+async function applyMpdBitPerfectMode(mode) {
+  await applyAudioOutputProfile(mpdBitPerfectModeToAudioOutputProfile(mode));
+}
+
+async function captureMpdBitPerfectPlaybackRestoreState() {
+  if (API_MODE !== "mpc") return null;
+  const currentSourceId = getCurrentMpcSourceId();
+  if (currentSourceId && currentSourceId !== "mpd" && currentSourceId !== "radio") return null;
+
+  try {
+    const status = await readMpcStatusWithTikpalPlaybackMode({ allowFailure: true, timeout: 2500 });
+    if (status.state !== "playing" || status.queueLength <= 0) return null;
+    return {
+      source: currentSourceId ?? "mpd",
+      position: status.currentTrackIndex > 0 ? status.currentTrackIndex : null,
+      queueLength: status.queueLength
+    };
+  } catch (error) {
+    console.warn(`tikpal-api could not capture MPD playback before quality switch: ${error instanceof Error ? error.message : "unknown error"}`);
+    return null;
+  }
+}
+
+async function restoreMpdBitPerfectPlayback(snapshot) {
+  if (!snapshot) return;
+  try {
+    let latestStatus = null;
+    for (let attempt = 0; attempt < 16; attempt += 1) {
+      latestStatus = await readMpcStatusWithTikpalPlaybackMode({ allowFailure: true, timeout: 2500 });
+      if (latestStatus.queueLength > 0) break;
+      await wait(250);
+    }
+
+    const queueLength = Number(latestStatus?.queueLength ?? 0);
+    const position = Number(snapshot.position);
+    const playArgs = Number.isInteger(position) && position >= 1 && position <= queueLength
+      ? ["play", String(position)]
+      : ["play"];
+
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      await runMpc(playArgs, { allowFailure: true, timeout: 2500 });
+      const status = await readMpcStatusWithTikpalPlaybackMode({ allowFailure: true, timeout: 2500 });
+      if (status.state === "playing") return;
+      await wait(250);
+    }
+
+    throw new Error(`MPD stayed ${latestStatus?.state ?? "unknown"} after quality switch`);
+  } catch (error) {
+    console.warn(`tikpal-api could not restore MPD playback after quality switch: ${error instanceof Error ? error.message : "unknown error"}`);
+  }
+}
+
 async function writeUiPreferences(patch, options = {}) {
   const current = await readUiPreferences();
   const hasLocalePatch = Object.prototype.hasOwnProperty.call(patch ?? {}, "locale");
@@ -4382,13 +4814,41 @@ async function writeUiPreferences(patch, options = {}) {
   if (!FONT_THEMES.has(fontTheme)) {
     throw new Error("Font theme must be system, hardware, precision, sans, serif, or mono");
   }
+  const hasAudioOutputProfilePatch = Object.prototype.hasOwnProperty.call(patch ?? {}, "audioOutputProfile");
+  const hasMpdBitPerfectModePatch = Object.prototype.hasOwnProperty.call(patch ?? {}, "mpdBitPerfectMode");
+  const legacyMpdBitPerfectMode = hasMpdBitPerfectModePatch ? normalizeMpdBitPerfectMode(patch.mpdBitPerfectMode, null) : current.mpdBitPerfectMode;
+  if (hasMpdBitPerfectModePatch && !MPD_BITPERFECT_MODES.has(legacyMpdBitPerfectMode)) {
+    throw new Error("MPD quality must be standard or strict");
+  }
+  const audioOutputProfile = hasAudioOutputProfilePatch
+    ? normalizeAudioOutputProfile(patch.audioOutputProfile, null)
+    : hasMpdBitPerfectModePatch
+      ? mpdBitPerfectModeToAudioOutputProfile(legacyMpdBitPerfectMode)
+      : current.audioOutputProfile;
+  if (!AUDIO_OUTPUT_PROFILES.has(audioOutputProfile)) {
+    throw new Error("Audio output profile must be pure, everyday, sleep, or custom");
+  }
+  const hasAudioOutputCustomSettingsPatch = Object.prototype.hasOwnProperty.call(patch ?? {}, "audioOutputCustomSettings");
+  const audioOutputCustomSettings = hasAudioOutputCustomSettingsPatch
+    ? normalizeAudioOutputCustomSettings({
+      ...current.audioOutputCustomSettings,
+      ...patch.audioOutputCustomSettings
+    }, current.audioOutputCustomSettings)
+    : current.audioOutputCustomSettings;
+  if (
+    ((hasAudioOutputProfilePatch || hasMpdBitPerfectModePatch) && audioOutputProfile !== current.audioOutputProfile)
+    || (hasAudioOutputCustomSettingsPatch && audioOutputProfile === "custom")
+  ) {
+    await applyAudioOutputProfile(audioOutputProfile, audioOutputCustomSettings);
+  }
+  const mpdBitPerfectMode = audioOutputProfileToMpdBitPerfectMode(audioOutputProfile);
   const next = buildUiPreferences(locale, new Date().toISOString(), null, {
     displaySleepEnabled: Object.prototype.hasOwnProperty.call(patch ?? {}, "displaySleepEnabled")
       ? patch.displaySleepEnabled !== false
       : current.displaySleepEnabled,
     displaySleepMinutes,
     displaySleepStyle
-  }, fontTheme);
+  }, fontTheme, mpdBitPerfectMode, audioOutputProfile, audioOutputCustomSettings);
   await mkdir(dirname(UI_PREFERENCES_STATE_PATH), { recursive: true });
   await writeFile(UI_PREFERENCES_STATE_PATH, `${JSON.stringify(next, null, 2)}\n`);
   const shouldSyncInputMethod = options.syncInputMethod !== false && hasLocalePatch && next.inputMethodId !== current.inputMethodId;
@@ -4652,6 +5112,150 @@ async function clearWebModeHandoffState() {
     // Runtime handoff state is best-effort and safe to recreate on the next Explore open.
   }
 }
+
+function normalizeMultiroomEcosystemId(value, fallback = null) {
+  const normalized = String(value ?? "").trim().toLowerCase().replaceAll("-", "_");
+  return MULTIROOM_ECOSYSTEM_IDS.includes(normalized) ? normalized : fallback;
+}
+
+function normalizeMultiroomEcosystemState(id, raw = {}) {
+  const config = MULTIROOM_ECOSYSTEM_CONFIGS[id] ?? {};
+  return {
+    id,
+    enabled: raw?.enabled === true,
+    ready: raw?.ready === true,
+    active: raw?.active === true,
+    serviceActive: raw?.serviceActive === true,
+    label: typeof raw?.label === "string" && raw.label.trim() ? raw.label.trim() : config.label ?? id,
+    lastError: typeof raw?.lastError === "string" && raw.lastError.trim() ? raw.lastError.trim() : null,
+    comingSoon: raw?.comingSoon === true || config.placeholder === true,
+    updatedAt: typeof raw?.updatedAt === "string" ? raw.updatedAt : new Date().toISOString()
+  };
+}
+
+function buildDefaultMultiroomState(overrides = {}) {
+  const ecosystems = {};
+  for (const id of MULTIROOM_ECOSYSTEM_IDS) {
+    ecosystems[id] = normalizeMultiroomEcosystemState(id, overrides.ecosystems?.[id]);
+  }
+  const activeEcosystemId = normalizeMultiroomEcosystemId(overrides.activeEcosystemId);
+  return {
+    ecosystems,
+    activeEcosystemId: activeEcosystemId && ecosystems[activeEcosystemId]?.active ? activeEcosystemId : null,
+    updatedAt: typeof overrides.updatedAt === "string" ? overrides.updatedAt : new Date().toISOString()
+  };
+}
+
+function normalizeMultiroomIntentState(raw = {}) {
+  const ecosystems = {};
+  for (const id of MULTIROOM_ECOSYSTEM_IDS) {
+    ecosystems[id] = {
+      enabled: raw?.ecosystems?.[id]?.enabled === true,
+      updatedAt: typeof raw?.ecosystems?.[id]?.updatedAt === "string" ? raw.ecosystems[id].updatedAt : null
+    };
+  }
+  return {
+    ecosystems,
+    updatedAt: typeof raw?.updatedAt === "string" ? raw.updatedAt : null
+  };
+}
+
+async function readMultiroomIntentState() {
+  try {
+    return normalizeMultiroomIntentState(JSON.parse(await readFile(MULTIROOM_AUDIO_STATE_PATH, "utf8")));
+  } catch {
+    return normalizeMultiroomIntentState();
+  }
+}
+
+async function writeMultiroomIntentState(patch = {}) {
+  const current = await readMultiroomIntentState();
+  const now = new Date().toISOString();
+  const ecosystems = { ...current.ecosystems };
+  for (const id of MULTIROOM_ECOSYSTEM_IDS) {
+    const nextEnabled = patch?.ecosystems?.[id]?.enabled;
+    ecosystems[id] = {
+      ...ecosystems[id],
+      ...(typeof nextEnabled === "boolean" ? { enabled: nextEnabled, updatedAt: now } : {})
+    };
+  }
+  const next = normalizeMultiroomIntentState({
+    ecosystems,
+    updatedAt: now
+  });
+  await mkdir(dirname(MULTIROOM_AUDIO_STATE_PATH), { recursive: true });
+  await writeFile(MULTIROOM_AUDIO_STATE_PATH, `${JSON.stringify(next, null, 2)}\n`);
+  return next;
+}
+
+function normalizeMultiroomHandoffState(raw = {}) {
+  const ecosystemId = normalizeMultiroomEcosystemId(raw?.ecosystemId, "roon");
+  const sourceId = String(raw?.sourceId ?? "").trim().toLowerCase();
+  const playbackState = String(raw?.playbackState ?? "").trim().toLowerCase();
+  const queuePosition = Number(raw?.queuePosition);
+  const queueLength = Number(raw?.queueLength);
+  return {
+    ecosystemId,
+    sourceId: sourceId || null,
+    playbackState: ["playing", "paused", "stopped"].includes(playbackState) ? playbackState : "stopped",
+    queuePosition: Number.isInteger(queuePosition) && queuePosition > 0 ? queuePosition : null,
+    queueLength: Number.isInteger(queueLength) && queueLength > 0 ? queueLength : null,
+    currentFile: typeof raw?.currentFile === "string" && raw.currentFile.trim() ? raw.currentFile.trim() : null,
+    localTrackPath: normalizeLocalLibraryStateTrackPath(raw?.localTrackPath),
+    radioStationId: normalizeRememberedRadioStationId(raw?.radioStationId),
+    updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : null
+  };
+}
+
+async function readMultiroomHandoffState() {
+  try {
+    return normalizeMultiroomHandoffState(JSON.parse(await readFile(MULTIROOM_HANDOFF_STATE_PATH, "utf8")));
+  } catch {
+    try {
+      const migrated = normalizeMultiroomHandoffState({
+        ...JSON.parse(await readFile(ROONBRIDGE_HANDOFF_STATE_PATH, "utf8")),
+        ecosystemId: "roon"
+      });
+      await writeMultiroomHandoffState(migrated);
+      try {
+        await unlink(ROONBRIDGE_HANDOFF_STATE_PATH);
+      } catch {
+        // Legacy state migration is best-effort; a stale file is harmless.
+      }
+      return migrated;
+    } catch {
+      return normalizeMultiroomHandoffState();
+    }
+  }
+}
+
+async function writeMultiroomHandoffState(patch) {
+  const next = normalizeMultiroomHandoffState({
+    ...patch,
+    updatedAt: new Date().toISOString()
+  });
+  await mkdir(dirname(MULTIROOM_HANDOFF_STATE_PATH), { recursive: true });
+  await writeFile(MULTIROOM_HANDOFF_STATE_PATH, `${JSON.stringify(next, null, 2)}\n`);
+  return next;
+}
+
+async function clearMultiroomHandoffState() {
+  try {
+    await unlink(MULTIROOM_HANDOFF_STATE_PATH);
+  } catch {
+    // Runtime handoff state is best-effort and safe to recreate on the next multi-room handoff.
+  }
+  try {
+    await unlink(ROONBRIDGE_HANDOFF_STATE_PATH);
+  } catch {
+    // The legacy Roon handoff path is kept only for migration.
+  }
+}
+
+const normalizeRoonBridgeHandoffState = normalizeMultiroomHandoffState;
+const readRoonBridgeHandoffState = readMultiroomHandoffState;
+const writeRoonBridgeHandoffState = writeMultiroomHandoffState;
+const clearRoonBridgeHandoffState = clearMultiroomHandoffState;
 
 async function buildWebModeState() {
   const [settings, runtimeState, preferences] = await Promise.all([
@@ -7191,6 +7795,277 @@ async function getSourceStatusFromCommands({ readyCommand, activeCommand, labelC
   };
 }
 
+function getMultiroomEcosystemConfig(id) {
+  return MULTIROOM_ECOSYSTEM_CONFIGS[normalizeMultiroomEcosystemId(id)] ?? null;
+}
+
+function getMultiroomSourceId(ecosystemId) {
+  return getMultiroomEcosystemConfig(ecosystemId)?.sourceId ?? null;
+}
+
+function getMultiroomEcosystemIdFromSource(sourceId) {
+  return MULTIROOM_SOURCE_TO_ECOSYSTEM[String(sourceId ?? "")] ?? null;
+}
+
+function isMultiroomSourceId(sourceId) {
+  return Boolean(getMultiroomEcosystemIdFromSource(sourceId));
+}
+
+function getMultiroomPlaybackLabel(sourceId) {
+  const ecosystemId = getMultiroomEcosystemIdFromSource(sourceId);
+  return getMultiroomEcosystemConfig(ecosystemId)?.label ?? "Multi-room Audio";
+}
+
+function getActiveMultiroomEcosystem(multiroomState) {
+  const activeId = normalizeMultiroomEcosystemId(multiroomState?.activeEcosystemId);
+  if (activeId && multiroomState?.ecosystems?.[activeId]?.active) {
+    return multiroomState.ecosystems[activeId];
+  }
+  return MULTIROOM_ECOSYSTEM_IDS
+    .map((id) => multiroomState?.ecosystems?.[id])
+    .find((state) => state?.active && !state?.comingSoon) ?? null;
+}
+
+async function getMultiroomEcosystemRuntimeState(id, intents = null) {
+  id = normalizeMultiroomEcosystemId(id);
+  const config = getMultiroomEcosystemConfig(id);
+  if (!id || !config) {
+    throw new Error("Unknown multi-room ecosystem");
+  }
+  const now = new Date().toISOString();
+  if (config.placeholder) {
+    return normalizeMultiroomEcosystemState(id, {
+      label: config.label,
+      lastError: "Coming soon",
+      comingSoon: true,
+      updatedAt: now
+    });
+  }
+
+  const persisted = intents?.ecosystems?.[id] ?? null;
+  if (API_MODE !== "mpc") {
+    return normalizeMultiroomEcosystemState(id, {
+      ...(system.multiroom?.ecosystems?.[id] ?? {}),
+      enabled: persisted?.enabled ?? system.multiroom?.ecosystems?.[id]?.enabled ?? false,
+      label: config.label,
+      updatedAt: now
+    });
+  }
+
+  const serviceName = shellQuote(config.service ?? "");
+  const serviceActiveCommand = `systemctl is-active --quiet ${serviceName}`;
+  const serviceEnabledCommand = `systemctl is-enabled --quiet ${serviceName}`;
+  const [serviceActive, serviceEnabled, ready, active, label] = await Promise.all([
+    config.service ? commandSucceeds(serviceActiveCommand, { timeout: 2500 }) : Promise.resolve(false),
+    config.service ? commandSucceeds(serviceEnabledCommand, { timeout: 2500 }) : Promise.resolve(false),
+    config.readyCommand?.trim() ? commandSucceeds(config.readyCommand, { timeout: 2500 }) : Promise.resolve(false),
+    config.activeCommand?.trim() ? commandSucceeds(config.activeCommand, { timeout: 2500 }) : Promise.resolve(false),
+    config.labelCommand?.trim() ? runCommand(config.labelCommand, { allowFailure: true, timeout: 2500 }) : Promise.resolve("")
+  ]);
+
+  const supported = Boolean(
+    config.service
+    || config.readyCommand
+    || config.activeCommand
+    || config.enableCommand
+    || config.disableCommand
+    || config.labelCommand
+  );
+  const installed = ready || serviceActive || serviceEnabled;
+  const enabled = persisted?.enabled === true || serviceActive || serviceEnabled;
+  const lastError = supported && !installed ? "Check setup" : null;
+
+  return normalizeMultiroomEcosystemState(id, {
+    enabled,
+    ready: installed,
+    active,
+    serviceActive,
+    label: label.trim() || config.label,
+    lastError,
+    updatedAt: now
+  });
+}
+
+async function getRoonBridgeRuntimeState() {
+  return await getMultiroomEcosystemRuntimeState("roon", await readMultiroomIntentState());
+}
+
+async function releaseMpdForMultiroomEcosystem(ecosystemId, state, { force = false, overwriteHandoff = false } = {}) {
+  ecosystemId = normalizeMultiroomEcosystemId(ecosystemId, "roon");
+  if (API_MODE !== "mpc" || (!force && !state?.active)) return false;
+  const now = Date.now();
+  if (!force && now - multiroomMpdReleaseAtMs < 5000) return false;
+  multiroomMpdReleaseAtMs = now;
+
+  try {
+    const [statusRaw, currentRaw] = await Promise.all([
+      runMpc(["status"], { allowFailure: true, timeout: 2500 }),
+      runMpc(["--format", "%file%", "current"], { allowFailure: true, timeout: 2500 })
+    ]);
+    const status = parseMpcStatus(statusRaw);
+    const existingHandoff = await readMultiroomHandoffState();
+    if (status.state !== "playing") {
+      if (force && existingHandoff.ecosystemId === ecosystemId) {
+        await clearMultiroomHandoffState();
+      }
+      return false;
+    }
+    const currentFile = getEffectiveMpcCurrentFile(extractMpcCurrentFile(currentRaw), status);
+    const shouldWriteHandoff = overwriteHandoff || existingHandoff.playbackState !== "playing";
+    if (shouldWriteHandoff) {
+      await writeMultiroomHandoffState({
+        ecosystemId,
+        sourceId: isStreamUri(currentFile) ? "radio" : "mpd",
+        playbackState: "playing",
+        queuePosition: status.currentTrackIndex,
+        queueLength: status.queueLength,
+        currentFile,
+        localTrackPath: isStreamUri(currentFile) ? null : await resolveCurrentLocalLibraryTrackPath(),
+        radioStationId: isStreamUri(currentFile) ? await resolveCurrentOrRememberedRadioStationId() : null
+      });
+    }
+    await runMpc([isStreamUri(currentFile) ? "stop" : "pause"], { allowFailure: true, timeout: 2500 });
+    return true;
+  } catch (error) {
+    const label = getMultiroomEcosystemConfig(ecosystemId)?.label ?? "Multi-room Audio";
+    console.warn(`tikpal-api could not release MPD for ${label}: ${error instanceof Error ? error.message : "unknown error"}`);
+    return false;
+  }
+}
+
+async function releaseMpdForRoonBridge(state, options = {}) {
+  return await releaseMpdForMultiroomEcosystem("roon", state, options);
+}
+
+async function restoreMultiroomPlaybackHandoff(ecosystemId = null) {
+  ecosystemId = normalizeMultiroomEcosystemId(ecosystemId);
+  const handoff = await readMultiroomHandoffState();
+  try {
+    if (handoff.playbackState !== "playing") return false;
+    if (ecosystemId && handoff.ecosystemId !== ecosystemId) return false;
+
+    const status = await readMpcStatusWithTikpalPlaybackMode({ allowFailure: true, timeout: 2500 });
+    if (status.queueLength > 0) {
+      const queuePosition = Number(handoff.queuePosition);
+      const playArgs = Number.isInteger(queuePosition) && queuePosition >= 1 && queuePosition <= status.queueLength
+        ? ["play", String(queuePosition)]
+        : ["play"];
+      await runMpc(playArgs, { allowFailure: true, timeout: 2500 });
+      return true;
+    }
+
+    if (handoff.sourceId === "radio") {
+      await applySourceSwitch({
+        target: "radio",
+        ...(handoff.radioStationId ? { radioStationId: handoff.radioStationId } : {})
+      }, { rememberSource: false });
+      return true;
+    }
+
+    if (handoff.sourceId === "mpd") {
+      await applySourceSwitch({
+        target: "mpd",
+        ...(handoff.localTrackPath ? { localTrackPath: handoff.localTrackPath } : {})
+      }, { rememberSource: false });
+      return true;
+    }
+
+    return false;
+  } catch (error) {
+    console.warn(`tikpal-api could not restore MPD after multi-room switch: ${error instanceof Error ? error.message : "unknown error"}`);
+    return false;
+  } finally {
+    await clearMultiroomHandoffState();
+  }
+}
+
+async function restoreRoonBridgePlaybackHandoff() {
+  return await restoreMultiroomPlaybackHandoff("roon");
+}
+
+async function readMultiroomState({ releaseMpd = true } = {}) {
+  const intents = await readMultiroomIntentState();
+  const entries = await Promise.all(MULTIROOM_ECOSYSTEM_IDS.map((id) => getMultiroomEcosystemRuntimeState(id, intents)));
+  const ecosystems = Object.fromEntries(entries.map((entry) => [entry.id, entry]));
+  const activeEcosystem = getActiveMultiroomEcosystem({ ecosystems });
+  if (releaseMpd) {
+    await releaseMpdForMultiroomEcosystem(activeEcosystem?.id, activeEcosystem);
+  }
+  return buildDefaultMultiroomState({
+    ecosystems,
+    activeEcosystemId: activeEcosystem?.id ?? null,
+    updatedAt: new Date().toISOString()
+  });
+}
+
+async function readRoonBridgeState({ releaseMpd = true } = {}) {
+  const state = await readMultiroomState({ releaseMpd });
+  return state.ecosystems.roon;
+}
+
+async function hasOtherActiveMultiroomEcosystem(ecosystemId) {
+  const state = await readMultiroomState({ releaseMpd: false });
+  return MULTIROOM_ECOSYSTEM_IDS.some((id) => id !== ecosystemId && state.ecosystems[id]?.active);
+}
+
+async function updateMultiroomEcosystemState(ecosystemId, patch = {}) {
+  ecosystemId = normalizeMultiroomEcosystemId(ecosystemId);
+  const config = getMultiroomEcosystemConfig(ecosystemId);
+  if (!ecosystemId || !config) {
+    throw new Error("Unknown multi-room ecosystem");
+  }
+  if (typeof patch.enabled !== "boolean") {
+    throw new Error("Multi-room enabled must be true or false");
+  }
+  if (config.placeholder) {
+    throw new Error("Music Assistant is coming soon");
+  }
+  const command = patch.enabled ? config.enableCommand : config.disableCommand;
+  if (API_MODE === "mpc") {
+    if (!command?.trim()) {
+      throw new Error(patch.enabled ? "Multi-room enable command is not configured" : "Multi-room disable command is not configured");
+    }
+    if (patch.enabled) {
+      const releasedMpd = await releaseMpdForMultiroomEcosystem(ecosystemId, null, { force: true, overwriteHandoff: true });
+      try {
+        await runSystemActionCommand(command, `${config.label} enable`);
+        await writeMultiroomIntentState({ ecosystems: { [ecosystemId]: { enabled: true } } });
+      } catch (error) {
+        if (releasedMpd) {
+          await restoreMultiroomPlaybackHandoff(ecosystemId);
+        }
+        throw error;
+      }
+    } else {
+      await runSystemActionCommand(command, `${config.label} disable`);
+      await writeMultiroomIntentState({ ecosystems: { [ecosystemId]: { enabled: false } } });
+      if (!(await hasOtherActiveMultiroomEcosystem(ecosystemId))) {
+        await restoreMultiroomPlaybackHandoff(ecosystemId);
+      }
+    }
+  } else {
+    const nextState = normalizeMultiroomEcosystemState(ecosystemId, {
+      ...(system.multiroom?.ecosystems?.[ecosystemId] ?? {}),
+      enabled: patch.enabled,
+      serviceActive: patch.enabled,
+      ready: patch.enabled,
+      active: false,
+      label: config.label,
+      updatedAt: new Date().toISOString()
+    });
+    system.multiroom.ecosystems[ecosystemId] = nextState;
+    system.multiroom.activeEcosystemId = getActiveMultiroomEcosystem(system.multiroom)?.id ?? null;
+    system.multiroom.updatedAt = new Date().toISOString();
+    system.roonBridge = system.multiroom.ecosystems.roon;
+  }
+  return await readMultiroomState({ releaseMpd: false });
+}
+
+async function updateRoonBridgeState(patch = {}) {
+  const state = await updateMultiroomEcosystemState("roon", patch);
+  return state.ecosystems.roon;
+}
+
 async function getAirplaySourceStatus({ readyCommand, activeCommand, labelCommand, armed, supported }) {
   const [ready, rendererActive, receiverActive, label] = await Promise.all([
     commandSucceeds(readyCommand, { timeout: 2500 }),
@@ -7411,7 +8286,7 @@ async function enforceConnectionGate(nextSource) {
 
 async function getMpcAudioSnapshot(currentFile, status = null, options = {}) {
   const radioStations = await getAvailableRadioStations();
-  const [audioSourceState, spotifyState, bluetoothState, airplayState, upnpState] = await Promise.all([
+  const [audioSourceState, spotifyState, bluetoothState, airplayState, multiroomState, upnpState] = await Promise.all([
     getSourceStatusFromCommands({
       readyCommand: AUDIO_READY_COMMAND,
       activeCommand: AUDIO_ACTIVE_COMMAND,
@@ -7460,6 +8335,7 @@ async function getMpcAudioSnapshot(currentFile, status = null, options = {}) {
         || AIRPLAY_DISABLE_COMMAND
       )
     }),
+    readMultiroomState(),
     getSourceStatusFromCommands({
       readyCommand: UPNP_READY_COMMAND,
       activeCommand: UPNP_ACTIVE_COMMAND,
@@ -7475,6 +8351,8 @@ async function getMpcAudioSnapshot(currentFile, status = null, options = {}) {
       )
     })
   ]);
+  const activeMultiroomEcosystem = getActiveMultiroomEcosystem(multiroomState);
+  const activeMultiroomSource = activeMultiroomEcosystem ? getMultiroomSourceId(activeMultiroomEcosystem.id) : null;
   const radioReady = Boolean(RADIO_ACTIVATE_COMMAND || RADIO_DEFAULT_URI || radioStations.length > 0);
   const radioActive = isStreamUri(currentFile);
   const mpcPlaybackState = String(status?.state ?? "").trim().toLowerCase();
@@ -7523,6 +8401,8 @@ async function getMpcAudioSnapshot(currentFile, status = null, options = {}) {
   let activeSource = "mpd";
   if (mockArmedSource === "scene") {
     activeSource = "scene";
+  } else if (activeMultiroomSource) {
+    activeSource = activeMultiroomSource;
   } else if (activeMpdSource) {
     activeSource = activeMpdSource;
   } else if (canHonorExternalHandoff && connectedExternalSource) {
@@ -7566,6 +8446,7 @@ async function getMpcAudioSnapshot(currentFile, status = null, options = {}) {
     spotifyState,
     bluetoothState,
     airplayState,
+    multiroomState,
     upnpState: effectiveUpnpState
   });
 }
@@ -7602,6 +8483,17 @@ function buildMinimalMpcAudioSnapshot(currentFile = "") {
     mockArmedSource === source
       && tikpalStateSnapshotCache?.state?.audio?.sources?.find((entry) => entry.id === source)?.connectionState === "connected"
   )) ?? null;
+  const cachedMultiroomSystem = buildDefaultMultiroomState(
+    tikpalStateSnapshotCache?.state?.system?.multiroom
+    ?? {
+      ecosystems: {
+        roon: tikpalStateSnapshotCache?.state?.system?.roonBridge ?? null
+      },
+      activeEcosystemId: tikpalStateSnapshotCache?.state?.system?.roonBridge?.active ? "roon" : null
+    }
+  );
+  const cachedMultiroomActiveEcosystem = getActiveMultiroomEcosystem(cachedMultiroomSystem);
+  const cachedMultiroomActiveSource = cachedMultiroomActiveEcosystem ? getMultiroomSourceId(cachedMultiroomActiveEcosystem.id) : null;
   const canHonorExternalHandoff = Date.now() >= externalAutoArmSuppressedUntilMs;
   const preferredHandoffSource = canHonorExternalHandoff
     && mockArmedSource
@@ -7612,6 +8504,8 @@ function buildMinimalMpcAudioSnapshot(currentFile = "") {
   let activeSource = "mpd";
   if (mockArmedSource === "scene") {
     activeSource = "scene";
+  } else if (cachedMultiroomActiveSource) {
+    activeSource = cachedMultiroomActiveSource;
   } else if (preferredHandoffSource) {
     activeSource = preferredHandoffSource;
   } else if (radioActive) {
@@ -7652,6 +8546,7 @@ function buildMinimalMpcAudioSnapshot(currentFile = "") {
       AIRPLAY_ENABLE_COMMAND,
       AIRPLAY_DISABLE_COMMAND
     ]), tikpalStateSnapshotCache?.state?.audio?.sources?.find((source) => source.id === "airplay")?.advertisedLabel ?? null),
+    multiroomState: cachedMultiroomSystem,
     upnpState: buildCachedSourceRuntimeState("upnp", commandSourceSupported([
       UPNP_READY_COMMAND,
       UPNP_ACTIVE_COMMAND,
@@ -7729,7 +8624,7 @@ async function shouldUseOutputVolumeForMpcAction() {
     ?? tikpalStateSnapshotCache?.state?.playback?.source
     ?? null;
   const source = mockArmedSource ?? cachedSource;
-  return webModeActive || source === "scene" || COMMAND_HANDOFF_SOURCE_TARGETS.has(source);
+  return webModeActive || source === "scene" || isMultiroomSourceId(source) || COMMAND_HANDOFF_SOURCE_TARGETS.has(source);
 }
 
 function getCurrentMpcSourceId() {
@@ -7749,6 +8644,10 @@ function isCurrentMpcSourceBluetooth() {
 
 function isCurrentMpcSourceRadio() {
   return getCurrentMpcSourceId() === "radio";
+}
+
+function isCurrentMpcSourceMultiroom() {
+  return isMultiroomSourceId(getCurrentMpcSourceId());
 }
 
 function isAirplayTransportPlaybackAction(action) {
@@ -7866,6 +8765,30 @@ async function applyMpcBluetoothPlaybackAction(action) {
   }
 }
 
+async function applyMpcMultiroomPlaybackAction(action) {
+  switch (action.type) {
+    case "volume_set": {
+      const percent = Number(action.value);
+      if (!Number.isFinite(percent) || percent < 0 || percent > 100) {
+        throw new Error("volume_set requires value between 0 and 100");
+      }
+      await setOutputVolumePercent(percent);
+      return;
+    }
+    case "play_pause":
+    case "play":
+    case "pause":
+    case "next":
+    case "previous":
+    case "seek":
+    case "favorite_toggle":
+    case "play_mode_set":
+      return;
+    default:
+      throw new Error(`Unsupported playback action: ${action.type}`);
+  }
+}
+
 async function getMpcSnapshot(options = {}) {
   const includeSlowRuntimeStatus = options.includeSlowRuntimeStatus !== false;
   const includeSourceRuntimeStatus = options.includeSourceRuntimeStatus ?? includeSlowRuntimeStatus;
@@ -7901,7 +8824,10 @@ async function getMpcSnapshot(options = {}) {
   const outputVolumePercent = includeOutputVolumeStatus ? await readOutputVolumePercent() : null;
   const webModeActive = includeOutputVolumeStatus && Boolean((await readWebModeRuntimeState()).activeProvider);
   const isSceneSource = playbackSource === "scene";
-  const isExternalOutputSource = playbackSource === "scene" || playbackSource === "spotify" || playbackSource === "bluetooth" || playbackSource === "airplay";
+  const isMultiroomSource = isMultiroomSourceId(playbackSource);
+  const multiroomPlaybackLabel = isMultiroomSource ? getMultiroomPlaybackLabel(playbackSource) : null;
+  const multiroomPlaybackBrand = multiroomPlaybackLabel?.replace(/\s*Bridge$/i, "") ?? "Multi-room Audio";
+  const isExternalOutputSource = playbackSource === "scene" || playbackSource === "spotify" || playbackSource === "bluetooth" || playbackSource === "airplay" || isMultiroomSource;
   const isMpdBackedSource = playbackSource === "mpd" || playbackSource === "audio" || playbackSource === "upnp";
   const hasConfiguredOutputVolume = Boolean(OUTPUT_VOLUME_SET_COMMAND_CONFIGURED && outputVolumePercent !== null);
   const volumePercent = isExternalOutputSource || webModeActive || hasConfiguredOutputVolume
@@ -8012,6 +8938,8 @@ async function getMpcSnapshot(options = {}) {
           ? trustedAirplayPlaybackMetadata ? mapBluetoothPlaybackState(trustedAirplayPlaybackMetadata) : "stopped"
           : playbackSource === "spotify"
           ? playbackAudio.currentSource.connectionState === "connected" ? "playing" : "stopped"
+        : isMultiroomSource
+          ? "playing"
         : playbackSource === "upnp"
           ? activeUpnpPlaybackMetadata && upnpMetadataHasAudibleStream
             ? mapBluetoothPlaybackState(activeUpnpPlaybackMetadata)
@@ -8026,6 +8954,8 @@ async function getMpcSnapshot(options = {}) {
           ? activeUpnpPlaybackMetadata?.artworkUrl
             ?? upnpRemoteArtworkUrl
             ?? (hasCurrentTrack && includeSlowRuntimeStatus && currentArtworkState ? `/api/v1/media/artwork?track=${encodeURIComponent(currentArtworkState.token)}` : null)
+          : isMultiroomSource
+            ? null
           : playbackSource === "radio" && activeRadioStation?.logoUrl
             ? activeRadioStation.logoUrl
           : !isExternalOutputSource && hasCurrentTrack && includeSlowRuntimeStatus && currentArtworkState ? `/api/v1/media/artwork?track=${encodeURIComponent(currentArtworkState.token)}` : null,
@@ -8035,6 +8965,8 @@ async function getMpcSnapshot(options = {}) {
           ? radioPlaybackMetadata?.title || metadata.title || title || RADIO_LABEL
           : playbackSource === "spotify"
             ? "Spotify Connect Ready"
+          : isMultiroomSource
+            ? multiroomPlaybackLabel
           : playbackSource === "upnp"
             ? activeUpnpPlaybackMetadata?.title || (hasCurrentTrack ? metadata.title || title || trackTitleFromFile(file) : "DLNA Ready")
           : playbackSource === "bluetooth"
@@ -8049,6 +8981,8 @@ async function getMpcSnapshot(options = {}) {
           : playbackSource === "spotify"
             ? playbackAudio.currentSource.connectedLabel
               || (playbackAudio.currentSource.advertisedLabel ? `Choose ${playbackAudio.currentSource.advertisedLabel} in Spotify` : "Choose Tikpal in Spotify")
+          : isMultiroomSource
+            ? `Playing from ${multiroomPlaybackBrand}.`
           : playbackSource === "upnp"
             ? activeUpnpPlaybackMetadata?.artist || (hasCurrentTrack
               ? metadata.artist || artist || null
@@ -8071,6 +9005,8 @@ async function getMpcSnapshot(options = {}) {
           ? radioPlaybackMetadata?.album || metadata.album || album || "Radio"
           : playbackSource === "spotify"
             ? "Spotify Connect"
+          : isMultiroomSource
+            ? multiroomPlaybackLabel
           : playbackSource === "upnp"
             ? activeUpnpPlaybackMetadata?.album || (hasCurrentTrack ? metadata.album || album || "DLNA Source" : "DLNA Source")
           : playbackSource === "bluetooth"
@@ -8086,7 +9022,7 @@ async function getMpcSnapshot(options = {}) {
           ? millisecondsToSeconds(trustedAirplayPlaybackMetadata?.positionMs)
         : playbackSource === "upnp"
           ? millisecondsToSeconds(activeUpnpPlaybackMetadata?.positionMs) ?? (isMpdBackedSource && hasCurrentTrack ? status.elapsedSeconds : null)
-        : playbackSource === "spotify"
+        : playbackSource === "spotify" || isMultiroomSource
           ? null
         : isMpdBackedSource && hasCurrentTrack ? status.elapsedSeconds : null,
       durationSeconds: isSceneSource
@@ -8097,7 +9033,7 @@ async function getMpcSnapshot(options = {}) {
           ? millisecondsToSeconds(trustedAirplayPlaybackMetadata?.durationMs, { allowZero: false })
         : playbackSource === "upnp"
           ? millisecondsToSeconds(activeUpnpPlaybackMetadata?.durationMs, { allowZero: false }) ?? (isMpdBackedSource && hasCurrentTrack ? durationSeconds : null)
-        : playbackSource === "spotify"
+        : playbackSource === "spotify" || isMultiroomSource
           ? null
         : isMpdBackedSource && hasCurrentTrack ? durationSeconds : null,
       timingDiagnostics: playbackSource === "bluetooth"
@@ -9094,6 +10030,11 @@ async function applyMpcPlaybackActionUnlocked(action) {
     return;
   }
 
+  if (isCurrentMpcSourceMultiroom()) {
+    await applyMpcMultiroomPlaybackAction(action);
+    return;
+  }
+
   let shouldRememberLibraryTrack = false;
   switch (action.type) {
     case "play_pause": {
@@ -9163,10 +10104,20 @@ async function applyMpcPlaybackActionUnlocked(action) {
       if (!Number.isFinite(percent) || percent < 0 || percent > 100) {
         throw new Error("volume_set requires value between 0 and 100");
       }
+      const currentSourceId = getCurrentMpcSourceId();
+      if ((currentSourceId === "mpd" || currentSourceId === "radio") && await isMpdBitPerfectStrictModeActive()) {
+        return;
+      }
+      const volumeLimitPercent = currentSourceId === "mpd" || currentSourceId === "radio"
+        ? await getMpdVolumeLimitPercent()
+        : null;
+      const effectivePercent = Number.isFinite(volumeLimitPercent)
+        ? Math.min(percent, volumeLimitPercent)
+        : percent;
       if (await shouldUseOutputVolumeForMpcAction()) {
-        await setOutputVolumePercent(percent);
+        await setOutputVolumePercent(effectivePercent);
       } else {
-        await setMpcAndOutputVolumePercent(percent);
+        await setMpcAndOutputVolumePercent(effectivePercent);
       }
       break;
     }
@@ -9185,7 +10136,15 @@ async function applyMpcPlaybackActionUnlocked(action) {
 async function applyMpcPlaybackAction(action) {
   markHifiRuntimeRecoveryQuietWindow();
   try {
-    return await withMpcMutationLock(() => applyMpcPlaybackActionUnlocked(action));
+    const result = await withMpcMutationLock(() => applyMpcPlaybackActionUnlocked(action));
+    if (!["volume_set", "seek", "favorite_toggle"].includes(String(action?.type ?? ""))) {
+      const preferences = await readUiPreferences();
+      if (preferences.audioOutputProfile === "sleep") {
+        const status = await readMpcStatusWithTikpalPlaybackMode({ allowFailure: true, timeout: 2500 });
+        if (status.state === "playing") scheduleAudioOutputProfileAutoStop("sleep");
+      }
+    }
+    return result;
   } finally {
     markHifiRuntimeRecoveryQuietWindow();
   }
@@ -11991,6 +12950,14 @@ async function applySourceSwitch(action, { syncSceneSoundState = true, rememberS
     if (rememberSource) {
       await rememberAudioSourceSwitch(switchAction);
     }
+
+    if (API_MODE === "mpc" && (target === "mpd" || target === "radio")) {
+      const preferences = await readUiPreferences();
+      if (preferences.audioOutputProfile === "sleep") {
+        const status = await readMpcStatusWithTikpalPlaybackMode({ allowFailure: true, timeout: 2500 });
+        if (status.state === "playing") scheduleAudioOutputProfileAutoStop("sleep");
+      }
+    }
   } finally {
     sourceSwitchInFlightCount = Math.max(0, sourceSwitchInFlightCount - 1);
   }
@@ -13010,6 +13977,34 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "GET" && url.pathname === "/api/v1/audio/output-diagnostics") {
+      sendJson(response, 200, await readAudioOutputDiagnostics());
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/v1/multiroom") {
+      sendJson(response, 200, await readMultiroomState({ releaseMpd: false }));
+      return;
+    }
+
+    const multiroomEcosystemMatch = url.pathname.match(/^\/api\/v1\/multiroom\/ecosystems\/([^/]+)$/);
+    if (request.method === "PATCH" && multiroomEcosystemMatch) {
+      const ecosystemId = decodeURIComponent(multiroomEcosystemMatch[1] ?? "");
+      sendJson(response, 200, await updateMultiroomEcosystemState(ecosystemId, await readJson(request)));
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/v1/roonbridge") {
+      sendJson(response, 200, await readRoonBridgeState({ releaseMpd: false }));
+      return;
+    }
+
+    if (request.method === "PATCH" && url.pathname === "/api/v1/roonbridge") {
+      await updateRoonBridgeState(await readJson(request));
+      sendJson(response, 200, await readRoonBridgeState({ releaseMpd: true }));
+      return;
+    }
+
     if (request.method === "POST" && url.pathname === "/api/v1/remote/actions") {
       if (!hasValidTikpalKey(request.headers, PORTABLE_API_KEY)) {
         sendJson(response, 403, buildPortableKeyRequiredBody());
@@ -13323,6 +14318,9 @@ server.listen(PORT, HOST, () => {
       startupPlaybackPolicyPromise = null;
       startTikpalStateSnapshotCollector();
       startMpcShuffleMonitor();
+      void readUiPreferences()
+        .then((preferences) => scheduleAudioOutputProfileAutoStop(preferences.audioOutputProfile))
+        .catch(() => undefined);
     });
     void startupPlaybackPolicyPromise;
   }

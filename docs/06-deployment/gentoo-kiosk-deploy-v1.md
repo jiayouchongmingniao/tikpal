@@ -174,6 +174,139 @@ sudo fuser -v /dev/snd/*
 
 When QQ Music or another Explore provider is playing, the expected owner is a Chromium audio process holding BT66. When MPD or Radio is playing, the expected owner is MPD.
 
+### Multi-room Audio
+
+Multi-room Audio is optional and is controlled from Settings -> Preferences -> Multi-room Audio. Roon, Lyrion, and Tikpal Multi-room can be enabled at the same time and wait for playback; Music Assistant is a coming-soon placeholder in the first release. None of these ecosystems appear in the Player source rail, because playback selection and transport remain in their own apps.
+
+Install Roon Bridge with Roon's official Linux installer, then keep the service name as `roonbridge.service`. Lyrion is a Squeezelite endpoint (`squeezelite.service`), not a local Lyrion server. Tikpal Multi-room is reserved for `tikpal-multiroom.service`.
+
+```bash
+systemctl status roonbridge.service
+systemctl status squeezelite.service
+test -d /opt/RoonBridge
+test -d /var/roon/RoonBridge
+```
+
+For the production Gentoo kiosk, install the root-owned helpers and allow only those helpers through sudo:
+
+```bash
+install -o root -g root -m 0755 /home/moode/code/tikpal/deploy/moode/tikpal-multiroom-state.sh /usr/local/sbin/tikpal-multiroom-state
+install -o root -g root -m 0755 /home/moode/code/tikpal/deploy/moode/tikpal-roonbridge-state.sh /usr/local/sbin/tikpal-roonbridge-state
+install -o root -g root -m 0755 /home/moode/code/tikpal/deploy/moode/tikpal-audio-output-profile.sh /usr/local/sbin/tikpal-audio-output-profile
+install -o root -g root -m 0755 /home/moode/code/tikpal/deploy/moode/tikpal-mpd-bitperfect-profile.sh /usr/local/sbin/tikpal-mpd-bitperfect-profile
+cat >/etc/sudoers.d/tikpal-roonbridge-mpd <<'EOF'
+Defaults:moode env_keep += "TIKPAL_MULTIROOM_ROON_SERVICE TIKPAL_MULTIROOM_ROON_LABEL TIKPAL_MULTIROOM_LYRION_SERVICE TIKPAL_MULTIROOM_LYRION_LABEL TIKPAL_MULTIROOM_TIKPAL_SERVICE TIKPAL_MULTIROOM_TIKPAL_LABEL TIKPAL_ROONBRIDGE_SERVICE TIKPAL_ROONBRIDGE_LABEL TIKPAL_MPD_CONF TIKPAL_MPD_STANDARD_ALSA_DEVICE TIKPAL_MPD_PURE_ALSA_DEVICE TIKPAL_MPD_BITPERFECT_ALSA_DEVICE TIKPAL_MPD_SLEEP_SAMPLE_RATE TIKPAL_MPD_SLEEP_VOLUME_LIMIT TIKPAL_MPD_CUSTOM_OUTPUT_NAME TIKPAL_MPD_CUSTOM_ALSA_DEVICE TIKPAL_MPD_CUSTOM_PURE_DIRECT TIKPAL_MPD_CUSTOM_VOLUME_NORMALIZATION TIKPAL_MPD_CUSTOM_SMOOTH_TRANSITION TIKPAL_MPD_CUSTOM_AUTOMATIC_SAMPLE_RATE TIKPAL_MPD_CUSTOM_DSD_MODE TIKPAL_MPD_CUSTOM_PLAYBACK_STABILITY TIKPAL_MPD_CUSTOM_MIXER_TYPE TIKPAL_MPD_CUSTOM_REPLAY_GAIN_HANDLER TIKPAL_MPD_CUSTOM_FORMAT TIKPAL_MPD_CUSTOM_FIXED_SAMPLE_RATE TIKPAL_MPD_CUSTOM_REPLAYGAIN TIKPAL_MPD_CUSTOM_CROSSFADE TIKPAL_AUDIO_CARD_FORCE"
+moode ALL=(root) NOPASSWD:SETENV: /usr/local/sbin/tikpal-multiroom-state, /usr/local/sbin/tikpal-roonbridge-state, /usr/local/sbin/tikpal-audio-output-profile, /usr/local/sbin/tikpal-mpd-bitperfect-profile
+EOF
+chmod 0440 /etc/sudoers.d/tikpal-roonbridge-mpd
+visudo -cf /etc/sudoers.d/tikpal-roonbridge-mpd
+```
+
+Recommended Gentoo `.env` values:
+
+```conf
+TIKPAL_MULTIROOM_ROON_SERVICE=roonbridge.service
+TIKPAL_MULTIROOM_ROON_READY_COMMAND="sudo -n -E /usr/local/sbin/tikpal-multiroom-state roon ready"
+TIKPAL_MULTIROOM_ROON_ACTIVE_COMMAND="sudo -n -E /usr/local/sbin/tikpal-multiroom-state roon active"
+TIKPAL_MULTIROOM_ROON_ENABLE_COMMAND="sudo -n -E /usr/local/sbin/tikpal-multiroom-state roon enable"
+TIKPAL_MULTIROOM_ROON_DISABLE_COMMAND="sudo -n -E /usr/local/sbin/tikpal-multiroom-state roon disable"
+TIKPAL_MULTIROOM_ROON_LABEL_COMMAND="sudo -n -E /usr/local/sbin/tikpal-multiroom-state roon label"
+TIKPAL_MULTIROOM_LYRION_SERVICE=squeezelite.service
+TIKPAL_MULTIROOM_LYRION_READY_COMMAND="sudo -n -E /usr/local/sbin/tikpal-multiroom-state lyrion ready"
+TIKPAL_MULTIROOM_LYRION_ACTIVE_COMMAND="sudo -n -E /usr/local/sbin/tikpal-multiroom-state lyrion active"
+TIKPAL_MULTIROOM_LYRION_ENABLE_COMMAND="sudo -n -E /usr/local/sbin/tikpal-multiroom-state lyrion enable"
+TIKPAL_MULTIROOM_LYRION_DISABLE_COMMAND="sudo -n -E /usr/local/sbin/tikpal-multiroom-state lyrion disable"
+TIKPAL_MULTIROOM_LYRION_LABEL_COMMAND="sudo -n -E /usr/local/sbin/tikpal-multiroom-state lyrion label"
+TIKPAL_MULTIROOM_TIKPAL_SERVICE=tikpal-multiroom.service
+TIKPAL_MULTIROOM_TIKPAL_READY_COMMAND="sudo -n -E /usr/local/sbin/tikpal-multiroom-state tikpal ready"
+TIKPAL_MULTIROOM_TIKPAL_ACTIVE_COMMAND="sudo -n -E /usr/local/sbin/tikpal-multiroom-state tikpal active"
+TIKPAL_MULTIROOM_TIKPAL_ENABLE_COMMAND="sudo -n -E /usr/local/sbin/tikpal-multiroom-state tikpal enable"
+TIKPAL_MULTIROOM_TIKPAL_DISABLE_COMMAND="sudo -n -E /usr/local/sbin/tikpal-multiroom-state tikpal disable"
+TIKPAL_MULTIROOM_TIKPAL_LABEL_COMMAND="sudo -n -E /usr/local/sbin/tikpal-multiroom-state tikpal label"
+TIKPAL_ROONBRIDGE_SERVICE=roonbridge.service
+TIKPAL_ROONBRIDGE_READY_COMMAND="sudo -n -E /usr/local/sbin/tikpal-roonbridge-state ready"
+TIKPAL_ROONBRIDGE_ACTIVE_COMMAND="sudo -n -E /usr/local/sbin/tikpal-roonbridge-state active"
+TIKPAL_ROONBRIDGE_ENABLE_COMMAND="sudo -n -E /usr/local/sbin/tikpal-roonbridge-state enable"
+TIKPAL_ROONBRIDGE_DISABLE_COMMAND="sudo -n -E /usr/local/sbin/tikpal-roonbridge-state disable"
+TIKPAL_ROONBRIDGE_LABEL_COMMAND="sudo -n -E /usr/local/sbin/tikpal-roonbridge-state label"
+```
+
+Active multi-room playback means the ecosystem process is holding an ALSA PCM device, not merely that a systemd service is running. Roon matches `RoonBridge|RAATServer`, Lyrion matches `squeezelite`, and Tikpal Multi-room matches `tikpal-multiroom|snapclient|snapserver`. When active, Tikpal reports the ecosystem as the current playback source, pauses local MPD files, stops MPD Radio streams, and does not claim fake metadata, artwork, or lyrics. Stopping an ecosystem restores only the MPD/Radio playback that was active when that same ecosystem was started, and only if no other multi-room player is active.
+
+Validation:
+
+```bash
+curl -fsS http://127.0.0.1:8787/api/v1/multiroom
+curl -fsS http://127.0.0.1:8787/api/v1/roonbridge
+sudo -n -E /usr/local/sbin/tikpal-multiroom-state roon active
+sudo -n -E /usr/local/sbin/tikpal-multiroom-state lyrion ready
+sudo -n -E /usr/local/sbin/tikpal-roonbridge-state active
+sudo fuser -v /dev/snd/*
+mpc status
+```
+
+### Audio Output Profiles
+
+Settings -> Preferences -> Audio Output exposes four MPD listening profiles:
+
+- `Pure Listening` rewrites only the Tikpal-managed MPD output block, backs up `/etc/mpd.conf`, uses a real hardware ALSA device such as `hw:CARD=BT66,DEV=0`, sets `mixer_type "none"`, disables ReplayGain handling, avoids output `format` conversion, and locks MPD software volume.
+- `Everyday` is the default. It keeps `_audioout`, MPD software volume, ReplayGain auto, two-second crossfade, and the shared route that works well with Tikpal Library and Radio.
+- `Sleep / Meditation` keeps `_audioout`, sets MPD output `format "48000:*:*"`, uses ReplayGain track, five-second crossfade, caps MPD/Radio volume at `45%`, and schedules MPD stop after 60 minutes. [MPD documents audio output `format`](https://mpd.readthedocs.io/en/stable/mpd.conf.5.html#audio-output) as `sample_rate:bits:channels`, and any field can be `*` when it should not be forced.
+- `Custom` uses six user-facing switches saved in `.tikpal/ui-preferences.json`: `Pure Direct`, `Volume Normalization`, `Smooth Transition`, `Automatic Sample Rate`, `DSD Mode`, and `Playback Stability`. The API passes those switches to the root helper as `TIKPAL_MPD_CUSTOM_*` environment flags whenever Custom is applied. Keep lower-level buffer, IRQ, and resampler details in Audio Diagnostics, not in the normal user flow.
+
+Custom is intentionally treated as an advanced path. The kiosk UI shows a short red caution line above the custom switches, and copy should stay concise enough that it does not push the switch grid below the 2560 x 720 Settings viewport.
+
+Custom switch mapping:
+
+- `Pure Direct`: uses the real hardware ALSA device and `mixer_type "none"`.
+- `Volume Normalization`: uses MPD ReplayGain auto unless Pure Direct is on.
+- `Smooth Transition`: sets MPD crossfade to 2 seconds.
+- `Automatic Sample Rate`: leaves MPD output `format` unset; when off, Custom fixes `format` to `48000:*:*` by default.
+- `DSD Mode`: writes MPD ALSA `dop "yes"` for DSD-over-PCM. Only enable it for DACs known to support DoP.
+- `Playback Stability`: writes conservative ALSA `buffer_time` / `period_time` values for fewer underruns.
+
+The legacy `tikpal-mpd-bitperfect-profile` helper remains as a wrapper: `strict` maps to `pure`, and `standard` maps to `everyday`.
+
+Recommended Gentoo `.env` values:
+
+```conf
+TIKPAL_AUDIO_OUTPUT_PROFILE_COMMAND="sudo -n -E /usr/local/sbin/tikpal-audio-output-profile %PROFILE%"
+TIKPAL_MPD_BITPERFECT_PROFILE_COMMAND="sudo -n -E /usr/local/sbin/tikpal-mpd-bitperfect-profile %MODE%"
+TIKPAL_MPD_STANDARD_ALSA_DEVICE=_audioout
+TIKPAL_MPD_PURE_ALSA_DEVICE=hw:CARD=BT66,DEV=0
+TIKPAL_MPD_BITPERFECT_ALSA_DEVICE=hw:CARD=BT66,DEV=0
+TIKPAL_MPD_SLEEP_SAMPLE_RATE=48000
+TIKPAL_MPD_SLEEP_VOLUME_LIMIT=45
+TIKPAL_MPD_CUSTOM_OUTPUT_NAME="Tikpal Custom"
+TIKPAL_MPD_CUSTOM_ALSA_DEVICE=_audioout
+TIKPAL_MPD_CUSTOM_PURE_DIRECT=0
+TIKPAL_MPD_CUSTOM_VOLUME_NORMALIZATION=1
+TIKPAL_MPD_CUSTOM_SMOOTH_TRANSITION=1
+TIKPAL_MPD_CUSTOM_AUTOMATIC_SAMPLE_RATE=1
+TIKPAL_MPD_CUSTOM_DSD_MODE=0
+TIKPAL_MPD_CUSTOM_PLAYBACK_STABILITY=1
+TIKPAL_MPD_CUSTOM_MIXER_TYPE=
+TIKPAL_MPD_CUSTOM_REPLAY_GAIN_HANDLER=
+TIKPAL_MPD_CUSTOM_FORMAT=
+TIKPAL_MPD_CUSTOM_FIXED_SAMPLE_RATE=48000
+TIKPAL_MPD_CUSTOM_REPLAYGAIN=
+TIKPAL_MPD_CUSTOM_CROSSFADE=
+```
+
+`Pure Listening` is intentionally not the default. It can make MPD software volume, Loopback spectrum, ReplayGain, and shared-output convenience unavailable. Roon, AirPlay, Spotify, DLNA, Explore, and provider audio are outside these MPD presets.
+
+Validation:
+
+```bash
+sudo -n -E /usr/local/sbin/tikpal-audio-output-profile pure
+mpc clear && mpc add "Codex/<known-flac-or-wav>" && mpc play
+cat /proc/asound/card*/pcm*p/sub*/hw_params
+sudo -n -E /usr/local/sbin/tikpal-audio-output-profile everyday
+sudo -n -E /usr/local/sbin/tikpal-audio-output-profile sleep
+sudo -n -E /usr/local/sbin/tikpal-audio-output-profile diagnostics
+curl -fsS http://127.0.0.1:8787/api/v1/audio/output-diagnostics
+```
+
 ## Explore Provider Mode
 
 Explore is not a restorable Tikpal audio source. It pauses local MPD/Radio, releases external receiver intakes, and opens a provider web player in a separate left Chromium window. The side panel remains a local Tikpal surface.

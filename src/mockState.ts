@@ -118,6 +118,63 @@ export const systemState: SystemState = {
       { id: "vocal", label: "Vocal", intent: "Clearer midrange presence", hifiVisualPresetId: "dual-vu" }
     ]
   },
+  roonBridge: {
+    id: "roon",
+    enabled: false,
+    ready: false,
+    active: false,
+    serviceActive: false,
+    label: "Roon Bridge",
+    lastError: null,
+    updatedAt: new Date().toISOString()
+  },
+  multiroom: {
+    ecosystems: {
+      roon: {
+        id: "roon",
+        enabled: false,
+        ready: false,
+        active: false,
+        serviceActive: false,
+        label: "Roon Bridge",
+        lastError: null,
+        updatedAt: new Date().toISOString()
+      },
+      lyrion: {
+        id: "lyrion",
+        enabled: false,
+        ready: false,
+        active: false,
+        serviceActive: false,
+        label: "Lyrion",
+        lastError: null,
+        updatedAt: new Date().toISOString()
+      },
+      tikpal: {
+        id: "tikpal",
+        enabled: false,
+        ready: false,
+        active: false,
+        serviceActive: false,
+        label: "Tikpal Multi-room",
+        lastError: null,
+        updatedAt: new Date().toISOString()
+      },
+      music_assistant: {
+        id: "music_assistant",
+        enabled: false,
+        ready: false,
+        active: false,
+        serviceActive: false,
+        label: "Music Assistant",
+        lastError: "Coming soon",
+        comingSoon: true,
+        updatedAt: new Date().toISOString()
+      }
+    },
+    activeEcosystemId: null,
+    updatedAt: new Date().toISOString()
+  },
   library: {
     source: "NAS",
     trackCount: 3265,
@@ -373,6 +430,16 @@ export const fallbackTikpalState: TikpalState = {
     locale: "en",
     inputMethodId: "keyboard-us",
     fontTheme: "system",
+    audioOutputProfile: "everyday",
+    audioOutputCustomSettings: {
+      pureDirect: false,
+      volumeNormalization: true,
+      smoothTransition: true,
+      automaticSampleRate: true,
+      dsdMode: false,
+      playbackStability: true
+    },
+    mpdBitPerfectMode: "standard",
     displaySleepEnabled: true,
     displaySleepMinutes: 10,
     displaySleepStyle: "meteor_shower",

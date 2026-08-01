@@ -4133,7 +4133,7 @@ try {
     `,
     "Console avoids heavy backdrop blur"
   );
-  await expect(client, settingsSummaryExpression("output", ["Audio Output", "DSP", "Display", "Time & Night", "Font", "Skin", "Lyrics"]), "Console Preferences summary keeps fixed hardware tiles");
+  await expect(client, settingsSummaryExpression("output", ["Audio Output", "Multi-room Audio", "Display", "Time & Night", "Font", "Skin", "Lyrics"]), "Console Preferences summary keeps fixed hardware tiles");
   await expect(
     client,
     `
@@ -4158,7 +4158,7 @@ try {
   );
   await expect(client, "document.querySelector('[data-settings-section=\"output\"]') !== null", "Console Preferences section opens");
   await expect(client, "document.querySelector('[data-settings-detail]') === null", "Console Preferences summary stays summary-first");
-  await expect(client, settingsSummaryExpression("output", ["Audio Output", "DSP", "Display", "Time & Night", "Font", "Skin", "Lyrics"]), "Console Preferences remains a fixed hardware tile grid");
+  await expect(client, settingsSummaryExpression("output", ["Audio Output", "Multi-room Audio", "Display", "Time & Night", "Font", "Skin", "Lyrics"]), "Console Preferences remains a fixed hardware tile grid");
 
   await evaluate(
     client,

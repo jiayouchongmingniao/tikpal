@@ -2,6 +2,7 @@ import type {
   AudioLibraryActionResponse,
   AudioLibraryFilters,
   AudioLibraryResponse,
+  AudioOutputDiagnostics,
   AudioSpectrumFrame,
   BackgroundVideoCatalogResponse,
   PlaybackMode,
@@ -9,6 +10,9 @@ import type {
   PlaybackActionType,
   UiPreferences,
   UiPreferencesPatch,
+  MultiroomAudioState,
+  MultiroomEcosystemId,
+  MultiroomUpdateRequest,
   NasDiscoverResponse,
   NasSourceInput,
   NasSourcesResponse,
@@ -16,6 +20,8 @@ import type {
   RadioCatalogFilters,
   RadioCatalogResponse,
   BackgroundVideoSummary,
+  RoonBridgeState,
+  RoonBridgeUpdateRequest,
   RoomExperienceActionRequest,
   RoomExperienceState,
   SceneContextSummary,
@@ -109,6 +115,54 @@ export async function updatePreferences(patch: UiPreferencesPatch): Promise<UiPr
     body: JSON.stringify(patch)
   }, DEFAULT_POST_TIMEOUT_MS);
   return readJson<UiPreferences>(response);
+}
+
+export async function fetchAudioOutputDiagnostics(signal?: AbortSignal): Promise<AudioOutputDiagnostics> {
+  const response = await fetchWithTimeout(`${API_ROOT}/audio/output-diagnostics`, {
+    headers: { Accept: "application/json" },
+    signal
+  }, DEFAULT_GET_TIMEOUT_MS);
+  return readJson<AudioOutputDiagnostics>(response);
+}
+
+export async function fetchRoonBridge(signal?: AbortSignal): Promise<RoonBridgeState> {
+  const response = await fetchWithTimeout(`${API_ROOT}/roonbridge`, {
+    headers: { Accept: "application/json" },
+    signal
+  }, DEFAULT_GET_TIMEOUT_MS);
+  return readJson<RoonBridgeState>(response);
+}
+
+export async function fetchMultiroom(signal?: AbortSignal): Promise<MultiroomAudioState> {
+  const response = await fetchWithTimeout(`${API_ROOT}/multiroom`, {
+    headers: { Accept: "application/json" },
+    signal
+  }, DEFAULT_GET_TIMEOUT_MS);
+  return readJson<MultiroomAudioState>(response);
+}
+
+export async function updateMultiroomEcosystem(id: MultiroomEcosystemId, patch: MultiroomUpdateRequest): Promise<MultiroomAudioState> {
+  const response = await fetchWithTimeout(`${API_ROOT}/multiroom/ecosystems/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(patch)
+  }, DEFAULT_POST_TIMEOUT_MS);
+  return readJson<MultiroomAudioState>(response);
+}
+
+export async function updateRoonBridge(patch: RoonBridgeUpdateRequest): Promise<RoonBridgeState> {
+  const response = await fetchWithTimeout(`${API_ROOT}/roonbridge`, {
+    method: "PATCH",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(patch)
+  }, DEFAULT_POST_TIMEOUT_MS);
+  return readJson<RoonBridgeState>(response);
 }
 
 export async function fetchRadioCatalog(filters: RadioCatalogFilters = {}, signal?: AbortSignal): Promise<RadioCatalogResponse> {

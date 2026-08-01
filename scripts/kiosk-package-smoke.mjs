@@ -37,8 +37,11 @@ const requiredFiles = [
   "deploy/chromium/env.kiosk.example",
   "src/i18n.tsx",
   "deploy/moode/tikpal-audio-adapt.sh",
+  "deploy/moode/tikpal-audio-output-profile.sh",
   "deploy/moode/tikpal-local-library-sync.sh",
   "deploy/moode/tikpal-library-sync.sh",
+  "deploy/moode/tikpal-multiroom-state.sh",
+  "deploy/moode/tikpal-mpd-bitperfect-profile.sh",
   "deploy/moode/tikpal-nas-mount.sh",
   "deploy/moode/tikpal-usb-library-sync.sh",
   "deploy/moode/tikpal-radio-presets-sync.sh",
@@ -168,8 +171,11 @@ async function run() {
   await assertExecutable("deploy/chromium/tikpal-kiosk-viewerctl.sh");
   await assertExecutable("deploy/chromium/tikpal-web-mode.sh");
   await assertExecutable("deploy/moode/tikpal-audio-adapt.sh");
+  await assertExecutable("deploy/moode/tikpal-audio-output-profile.sh");
   await assertExecutable("deploy/moode/tikpal-local-library-sync.sh");
   await assertExecutable("deploy/moode/tikpal-library-sync.sh");
+  await assertExecutable("deploy/moode/tikpal-multiroom-state.sh");
+  await assertExecutable("deploy/moode/tikpal-mpd-bitperfect-profile.sh");
   await assertExecutable("deploy/moode/tikpal-nas-mount.sh");
   await assertExecutable("deploy/moode/tikpal-usb-library-sync.sh");
   await assertExecutable("deploy/moode/tikpal-radio-presets-sync.sh");
@@ -186,6 +192,50 @@ async function run() {
   await assertExecutable("deploy/moode/tikpal-quiet-boot-enable.sh");
   await assertExecutable("deploy/moode/tikpal-locale-enable.sh");
   await assertExecutable("deploy/systemd/install-systemd-services.sh");
+
+  const audioProfileHelperSource = await readFile(path.join(ROOT, "deploy/moode/tikpal-audio-output-profile.sh"), "utf8");
+  assert(audioProfileHelperSource.includes("Tikpal Pure Listening"), "Audio Output helper should include Pure Listening");
+  assert(audioProfileHelperSource.includes("Tikpal Everyday"), "Audio Output helper should include Everyday");
+  assert(audioProfileHelperSource.includes("Tikpal Sleep Meditation"), "Audio Output helper should include Sleep / Meditation");
+  assert(audioProfileHelperSource.includes("Tikpal Custom"), "Audio Output helper should include Custom profile");
+  assert(audioProfileHelperSource.includes("TIKPAL_MPD_CUSTOM_PURE_DIRECT"), "Custom Audio Output helper should support Pure Direct");
+  assert(audioProfileHelperSource.includes("TIKPAL_MPD_CUSTOM_VOLUME_NORMALIZATION"), "Custom Audio Output helper should support Volume Normalization");
+  assert(audioProfileHelperSource.includes("TIKPAL_MPD_CUSTOM_SMOOTH_TRANSITION"), "Custom Audio Output helper should support Smooth Transition");
+  assert(audioProfileHelperSource.includes("TIKPAL_MPD_CUSTOM_AUTOMATIC_SAMPLE_RATE"), "Custom Audio Output helper should support Automatic Sample Rate");
+  assert(audioProfileHelperSource.includes("TIKPAL_MPD_CUSTOM_DSD_MODE") && audioProfileHelperSource.includes("dop"), "Custom Audio Output helper should support DSD DoP mode");
+  assert(audioProfileHelperSource.includes("TIKPAL_MPD_CUSTOM_PLAYBACK_STABILITY") && audioProfileHelperSource.includes("buffer_time"), "Custom Audio Output helper should support Playback Stability");
+  assert(audioProfileHelperSource.includes("${sleep_rate}:*:*"), "Sleep profile should use MPD format sample-rate wildcard semantics");
+  assert(audioProfileHelperSource.includes("mixer_type=\"none\"") || audioProfileHelperSource.includes("mixer_type=\"none\""), "Pure profile should disable MPD mixer");
+  const bitperfectWrapperSource = await readFile(path.join(ROOT, "deploy/moode/tikpal-mpd-bitperfect-profile.sh"), "utf8");
+  assert(bitperfectWrapperSource.includes("exec \"$profile_helper\" pure"), "Legacy strict mode should map to Pure profile");
+  assert(bitperfectWrapperSource.includes("exec \"$profile_helper\" everyday"), "Legacy standard mode should map to Everyday profile");
+  const quickSettingsAudioSource = await readFile(path.join(ROOT, "src/components/QuickSettingsOverlay.tsx"), "utf8");
+  assert(quickSettingsAudioSource.includes("data-audio-output-profile={choice.id}"), "Settings Audio Output should expose profile test hooks");
+  assert(quickSettingsAudioSource.includes('id: "custom"'), "Settings Audio Output should show a Custom profile card");
+  assert(quickSettingsAudioSource.includes("data-custom-audio-settings"), "Settings Audio Output should expose Custom switches when Custom is selected");
+  assert(quickSettingsAudioSource.includes("data-custom-audio-warning"), "Custom Audio Output should show a visible caution line");
+  assert(quickSettingsAudioSource.includes("data-custom-audio-toggle={choice.id}"), "Custom Audio Output switches should expose per-setting test hooks");
+  assert(quickSettingsAudioSource.includes("is-custom-active"), "Custom Audio Output layout should use the compact profile rail");
+  assert(quickSettingsAudioSource.includes("audio-output-header-dac"), "Audio Output detail should place DAC detail in the header");
+  assert(!quickSettingsAudioSource.includes('mpdQualityError ?? (preferencesPending ? t("common.applying") : t("settings.mpdQualityMeta"))'), "Audio Output detail should not show redundant profile ids as the default footer");
+  assert(!quickSettingsAudioSource.includes('settings-detail-note-grid" aria-label={t("settings.mpdQuality")}'), "Audio Output detail should not use boxed note cards beside profiles");
+  assert(quickSettingsAudioSource.includes("audioDiagnostics"), "Audio Output should keep diagnostics behind a hidden detail");
+  assert(quickSettingsAudioSource.includes("parseAudioDiagnosticsText"), "Audio Diagnostics should parse helper text into friendly groups");
+  assert(quickSettingsAudioSource.includes('kind: "multiroom"'), "Settings should expose Multi-room Audio instead of a Roon-only card");
+  assert(quickSettingsAudioSource.includes('multiroomEcosystemChoices: MultiroomEcosystemId[] = ["roon", "lyrion", "tikpal", "music_assistant"]'), "Settings Multi-room should show all four ecosystems in order");
+  assert(quickSettingsAudioSource.includes("settings.multiroomComingSoon"), "Settings Multi-room should show a Coming soon placeholder");
+  const multiroomHelperSource = await readFile(path.join(ROOT, "deploy/moode/tikpal-multiroom-state.sh"), "utf8");
+  assert(multiroomHelperSource.includes("RoonBridge|RAATServer"), "Multi-room helper should detect Roon ALSA ownership");
+  assert(multiroomHelperSource.includes("squeezelite"), "Multi-room helper should support Lyrion / Squeezelite");
+  assert(multiroomHelperSource.includes("tikpal-multiroom|snapclient|snapserver"), "Multi-room helper should support Tikpal Multi-room ownership");
+  assert(quickSettingsAudioSource.includes("data-audio-diagnostics-grid"), "Audio Diagnostics should expose a horizontal grid test hook");
+  assert(quickSettingsAudioSource.includes("settings.audioDiagnosticsNoActiveStream"), "Audio Diagnostics should show a friendly empty stream state");
+  const audioDiagnosticsStylesSource = await readFile(path.join(ROOT, "src/styles.css"), "utf8");
+  assert(audioDiagnosticsStylesSource.includes(".audio-output-title-row"), "Audio Output should style the title/DAC row");
+  assert(audioDiagnosticsStylesSource.includes('.settings-detail-panel[data-settings-detail="audio-output"].is-custom-active'), "Custom Audio Output should compact the full detail panel");
+  assert(audioDiagnosticsStylesSource.includes(".audio-output-detail-body.is-custom-active .audio-profile-option"), "Custom Audio Output should compact the preset cards so all switches fit");
+  assert(!quickSettingsAudioSource.includes("settings-diagnostics-chip-row"), "Audio Diagnostics should not duplicate summary chips above the cards");
+  assert(audioDiagnosticsStylesSource.includes(".settings-diagnostics-raw"), "Audio Diagnostics should keep raw text folded separately");
 
   const outputVolumeTempDir = mkdtempSync(path.join(tmpdir(), "tikpal-output-volume-"));
   const outputVolumeBinDir = path.join(outputVolumeTempDir, "bin");
@@ -673,7 +723,8 @@ esac
       && serverSource.includes('await runMpc(["volume", String(normalized)])')
       && serverSource.includes("if (OUTPUT_VOLUME_SET_COMMAND_CONFIGURED)")
       && serverSource.includes("await setOutputVolumePercent(normalized)")
-      && serverSource.includes("await setMpcAndOutputVolumePercent(percent)"),
+      && serverSource.includes("const effectivePercent")
+      && serverSource.includes("await setMpcAndOutputVolumePercent(effectivePercent)"),
     "mpc library volume_set should mirror the configured output volume helper"
   );
   assert(

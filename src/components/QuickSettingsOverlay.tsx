@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Airplay, Bluetooth, Captions, Cast, CheckCircle2, Clock3, Cpu, Database, EthernetPort, Eye, EyeOff, Globe2, HardDrive, Info, Monitor, Moon, Music2, Palette, PanelRightClose, Plus, Power, Radio as RadioIcon, RotateCcw, Search, Server, SlidersHorizontal, Target, Trash2, Type, Usb, Volume2, Waves } from "lucide-react";
-import { deleteNasSource, discoverNasSources, fetchAudioLibrary, fetchNasSources, fetchWebModeState, mountNasSource, saveNasSource, sendWebModeAction, testNasSource, unmountNasSource, updateWebModeSettings } from "../api/tikpalClient";
+import { deleteNasSource, discoverNasSources, fetchAudioLibrary, fetchAudioOutputDiagnostics, fetchMultiroom, fetchNasSources, fetchWebModeState, mountNasSource, saveNasSource, sendWebModeAction, testNasSource, unmountNasSource, updateMultiroomEcosystem, updateWebModeSettings } from "../api/tikpalClient";
 import { languageOptions, useI18n } from "../i18n";
 import { getSourceDisplayStatus, getSourceDisplayStatusLabel } from "../sourceStatus";
 import type { TikpalDataStatus } from "../hooks/useTikpalState";
 import { useOverlayReturnGesture } from "../hooks/useOverlayReturnGesture";
-import type { AudioState, DisplaySleepStyle, FontTheme, LyricsFontSize, NasDiscoverCandidate, NasSourceInput, NasSourcesResponse, NightScheduleState, PlaybackSummary, RoomExperienceActionRequest, RoomExperienceState, RoomMode, RuntimeState, SurfaceTheme, SystemActionType, SystemState, UiLocale, WebModeState } from "../types";
+import type { AudioOutputCustomSettingId, AudioOutputDiagnostics, AudioOutputProfile, AudioState, DisplaySleepStyle, FontTheme, LyricsFontSize, MultiroomAudioState, MultiroomEcosystemId, NasDiscoverCandidate, NasSourceInput, NasSourcesResponse, NightScheduleState, PlaybackSummary, RoomExperienceActionRequest, RoomExperienceState, RoomMode, RuntimeState, SurfaceTheme, SystemActionType, SystemState, UiLocale, WebModeState } from "../types";
 
 interface QuickSettingsOverlayProps {
   active: boolean;
@@ -33,7 +33,7 @@ interface QuickSettingsOverlayProps {
 type CardTone = "cyan" | "gold" | "neutral" | "warn" | "danger";
 type ActionableCardKey = "library_scan" | "reboot" | "shutdown";
 type SettingsSectionKey = "output" | "library" | "network" | "system";
-type SettingsDetailView = "appearance" | "display" | "font" | "language" | "lyrics" | "nas" | "night" | "webMode" | null;
+type SettingsDetailView = "appearance" | "audioDiagnostics" | "audioOutput" | "display" | "font" | "language" | "lyrics" | "multiroom" | "nas" | "night" | "webMode" | null;
 type LibraryStorageCounts = {
   local: number | null;
   nas: number | null;
@@ -49,6 +49,108 @@ const webModeTextScaleChoices = [
 const NAS_PANEL_PAGE_SIZE = 3;
 const displaySleepMinuteChoices = [5, 10, 15, 30, 60] as const;
 const displaySleepStyleChoices: DisplaySleepStyle[] = ["meteor_shower", "clock", "now_playing", "starfield", "signal"];
+const multiroomEcosystemChoices: MultiroomEcosystemId[] = ["roon", "lyrion", "tikpal", "music_assistant"];
+
+interface ParsedAudioHwParams {
+  path: string;
+  label: string;
+  format: string | null;
+  rate: string | null;
+  channels: string | null;
+}
+
+interface ParsedAudioDiagnostics {
+  parsed: boolean;
+  outputName: string | null;
+  outputDevice: string | null;
+  replayGain: string | null;
+  crossfade: string | null;
+  activeHwParams: ParsedAudioHwParams[];
+  ownerPids: string[];
+}
+
+function extractMpdSetting(block: string | undefined, name: string) {
+  if (!block) return null;
+  const match = block.match(new RegExp(`^\\s*${name}\\s+"([^"]*)"`, "m"));
+  return match?.[1]?.trim() || null;
+}
+
+function normalizeMpcSetting(value: string | undefined, prefix: string) {
+  if (!value) return null;
+  return value.replace(new RegExp(`^${prefix}\\s*:\\s*`, "i"), "").trim() || null;
+}
+
+function parseAudioHwParams(rawBlock: string | undefined): ParsedAudioHwParams[] {
+  if (!rawBlock) return [];
+  const entries: ParsedAudioHwParams[] = [];
+  let currentPath: string | null = null;
+  let currentLines: string[] = [];
+
+  const commit = () => {
+    if (!currentPath) return;
+    const closed = currentLines.some((line) => line.trim() === "closed");
+    if (!closed) {
+      const fields = new Map<string, string>();
+      currentLines.forEach((line) => {
+        const match = line.match(/^\s*([^:]+):\s*(.+)$/);
+        if (match) fields.set(match[1].trim().toLowerCase(), match[2].trim());
+      });
+      const deviceMatch = currentPath.match(/\/asound\/card(\d+)\/pcm(\d+)([cp])\/sub(\d+)\/hw_params$/);
+      entries.push({
+        path: currentPath,
+        label: deviceMatch ? `card${deviceMatch[1]} pcm${deviceMatch[2]}${deviceMatch[3]}` : currentPath.replace(/^.*\/asound\//, ""),
+        format: fields.get("format") ?? null,
+        rate: fields.get("rate")?.replace(/\s+\(.+\)$/, "") ?? null,
+        channels: fields.get("channels") ?? null
+      });
+    }
+  };
+
+  rawBlock.split(/\r?\n/).forEach((line) => {
+    if (line.startsWith("/proc/asound/") && line.endsWith("/hw_params")) {
+      commit();
+      currentPath = line.trim();
+      currentLines = [];
+      return;
+    }
+    if (currentPath) currentLines.push(line);
+  });
+  commit();
+  return entries;
+}
+
+function parseAudioDiagnosticsText(rawText: string): ParsedAudioDiagnostics {
+  const sections: Record<string, string> = {};
+  const values: Record<string, string> = {};
+  const lines = rawText.trim().split(/\r?\n/);
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const sectionMatch = line.match(/^([A-Za-z0-9_.-]+)<<EOF$/);
+    if (sectionMatch) {
+      const sectionLines: string[] = [];
+      index += 1;
+      while (index < lines.length && lines[index] !== "EOF") {
+        sectionLines.push(lines[index]);
+        index += 1;
+      }
+      sections[sectionMatch[1]] = sectionLines.join("\n");
+      continue;
+    }
+    const valueMatch = line.match(/^([A-Za-z0-9_.-]+)=(.*)$/);
+    if (valueMatch) values[valueMatch[1]] = valueMatch[2].trim();
+  }
+
+  const ownerPids = Array.from(new Set((values.snd_owners ?? "").split(/\s+/).filter((pid) => /^\d+$/.test(pid))));
+  return {
+    parsed: Object.keys(sections).length > 0 || Object.keys(values).length > 0,
+    outputName: extractMpdSetting(sections.output_block, "name"),
+    outputDevice: extractMpdSetting(sections.output_block, "device"),
+    replayGain: normalizeMpcSetting(values.mpc_replaygain, "replay_gain_mode"),
+    crossfade: normalizeMpcSetting(values.mpc_crossfade, "crossfade"),
+    activeHwParams: parseAudioHwParams(sections.hw_params),
+    ownerPids
+  };
+}
 
 interface BaseCard {
   key: string;
@@ -62,6 +164,10 @@ interface BaseCard {
 
 interface ReadOnlyCard extends BaseCard {
   kind: "readonly";
+}
+
+interface AudioOutputCard extends BaseCard {
+  kind: "audioOutput";
 }
 
 interface ActionCard extends BaseCard {
@@ -87,6 +193,10 @@ interface DisplayCard extends BaseCard {
   kind: "display";
 }
 
+interface MultiroomCard extends BaseCard {
+  kind: "multiroom";
+}
+
 interface NightCard extends BaseCard {
   kind: "night";
 }
@@ -103,7 +213,7 @@ interface LanguageCard extends BaseCard {
   kind: "language";
 }
 
-type SettingsCard = ReadOnlyCard | ActionCard | FontCard | AppearanceCard | LanguageCard | LyricsCard | DisplayCard | NightCard | NasCard | WebModeCard;
+type SettingsCard = ReadOnlyCard | AudioOutputCard | ActionCard | FontCard | AppearanceCard | LanguageCard | LyricsCard | DisplayCard | MultiroomCard | NightCard | NasCard | WebModeCard;
 
 const fontChoices: Array<{ id: FontTheme; label: string; sample: string }> = [
   { id: "system", label: "System Neo", sample: "Inter + Noto CJK" },
@@ -290,6 +400,8 @@ export function QuickSettingsOverlay({
     error: preferencesError,
     setLocale,
     setDisplaySleepPreferences,
+    setAudioOutputProfile,
+    setAudioOutputCustomSettings,
     friendlyError
   } = useI18n();
   const localePending = preferencesPending;
@@ -302,6 +414,14 @@ export function QuickSettingsOverlay({
   const [pendingBrightness, setPendingBrightness] = useState<number | null>(null);
   const [pendingNight, setPendingNight] = useState(false);
   const [webModeState, setWebModeState] = useState<WebModeState | null>(null);
+  const [multiroomState, setMultiroomState] = useState<MultiroomAudioState | null>(system.multiroom ?? null);
+  const [multiroomPendingId, setMultiroomPendingId] = useState<MultiroomEcosystemId | null>(null);
+  const [multiroomError, setMultiroomError] = useState<string | null>(null);
+  const [mpdQualityError, setMpdQualityError] = useState<string | null>(null);
+  const [audioDiagnostics, setAudioDiagnostics] = useState<AudioOutputDiagnostics | null>(null);
+  const [audioDiagnosticsPending, setAudioDiagnosticsPending] = useState(false);
+  const [audioDiagnosticsError, setAudioDiagnosticsError] = useState<string | null>(null);
+  const audioDiagnosticsTimerRef = useRef<number | null>(null);
   const [webModeProxyEnabled, setWebModeProxyEnabled] = useState(true);
   const [webModeProxyUrl, setWebModeProxyUrl] = useState("");
   const [webModeProviderTextScale, setWebModeProviderTextScale] = useState(1.1);
@@ -378,6 +498,8 @@ export function QuickSettingsOverlay({
       setBrightnessError(null);
       setNightError(null);
       setLocaleMessage(null);
+      setMultiroomError(null);
+      setMpdQualityError(null);
       setWebModeError(null);
       setNasFormVisible(false);
       setNasForm(blankNasForm);
@@ -391,6 +513,31 @@ export function QuickSettingsOverlay({
       setPendingRoomShortcut(null);
       setRoomShortcutError(null);
     }
+  }, [active, localizedErrorMessage]);
+
+  useEffect(() => {
+    setMultiroomState(system.multiroom ?? null);
+  }, [system.multiroom]);
+
+  useEffect(() => () => {
+    if (audioDiagnosticsTimerRef.current !== null) {
+      window.clearTimeout(audioDiagnosticsTimerRef.current);
+      audioDiagnosticsTimerRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!active) return undefined;
+    const controller = new AbortController();
+    void fetchMultiroom(controller.signal)
+      .then((nextState) => {
+        setMultiroomState(nextState);
+        setMultiroomError(null);
+      })
+      .catch((error) => {
+        setMultiroomError(localizedErrorMessage(error, "error.generic"));
+      });
+    return () => controller.abort();
   }, [active, localizedErrorMessage]);
 
   const refreshLibraryStorageCounts = useCallback(
@@ -508,6 +655,30 @@ export function QuickSettingsOverlay({
   }, [active, localizedErrorMessage, t, webModeProviderTextScale, webModeProxyEnabled, webModeProxyUrl, webModeState]);
 
   const librarySourceKind = system.library.source.trim().toLowerCase();
+  const effectiveMultiroom = multiroomState ?? system.multiroom;
+  const multiroomEcosystems = effectiveMultiroom?.ecosystems;
+  const activeMultiroom = multiroomEcosystemChoices
+    .map((id) => multiroomEcosystems?.[id])
+    .find((entry) => entry?.active);
+  const enabledMultiroomCount = multiroomEcosystemChoices
+    .filter((id) => id !== "music_assistant" && multiroomEcosystems?.[id]?.enabled)
+    .length;
+  const multiroomNeedsSetup = multiroomEcosystemChoices
+    .some((id) => id !== "music_assistant" && multiroomEcosystems?.[id]?.enabled && Boolean(multiroomEcosystems?.[id]?.lastError));
+  const multiroomValue = activeMultiroom
+    ? t("settings.multiroomPlaying")
+    : enabledMultiroomCount > 0
+      ? t("settings.multiroomReadyCount", { count: enabledMultiroomCount })
+      : multiroomNeedsSetup
+        ? t("settings.multiroomCheckSetup")
+        : t("common.off");
+  const multiroomMeta = activeMultiroom
+    ? t("playback.playingFromMultiroom", { label: activeMultiroom.label.replace(/\s*Bridge$/i, "") })
+    : enabledMultiroomCount > 0
+      ? t("settings.multiroomReadyMeta")
+      : multiroomNeedsSetup
+        ? t("settings.multiroomCheckSetup")
+        : t("settings.multiroomOffMeta");
   const libraryTrackCount = Math.max(0, system.library.trackCount);
   const localTrackCount = libraryStorageCounts.local ?? (librarySourceKind === "local" ? libraryTrackCount : 0);
   const nasTrackCount = libraryStorageCounts.nas ?? 0;
@@ -560,24 +731,24 @@ export function QuickSettingsOverlay({
         tone: "cyan"
       },
       {
-        kind: "readonly",
+        kind: "audioOutput",
         key: "output",
         section: "output",
         icon: Volume2,
         title: t("settings.audioOutput"),
-        value: system.outputDevice.label,
-        meta: system.outputDevice.detail,
+        value: t(`settings.audioProfile.${preferences.audioOutputProfile}`),
+        meta: t("settings.mpdQualityMeta"),
         tone: "gold"
       },
       {
-        kind: "readonly",
-        key: "dsp",
+        kind: "multiroom",
+        key: "multiroom",
         section: "output",
-        icon: SlidersHorizontal,
-        title: t("settings.dsp"),
-        value: system.dspState.controllable ? t("settings.eqReady") : system.dspState.enabled ? t("common.enabled") : t("common.disabled"),
-        meta: `${system.dspState.presetLabel} · ${system.dspState.controllable ? t("settings.adjustable") : t("settings.readOnly")}`,
-        tone: "cyan"
+        icon: Waves,
+        title: t("settings.multiroomAudio"),
+        value: multiroomValue,
+        meta: multiroomMeta,
+        tone: activeMultiroom ? "gold" : enabledMultiroomCount > 0 ? "cyan" : "neutral"
       },
       {
         kind: "display",
@@ -723,7 +894,7 @@ export function QuickSettingsOverlay({
         confirmLabel: t("settings.tapAgainPowerOff")
       }
     ],
-    [fontTheme, libraryScanMeta, libraryScanValue, localTrackCount, lyricsFontSize, lyricsVisible, nasCardMeta, nasCardTone, nasCardValue, preferences.displaySleepEnabled, preferences.displaySleepMinutes, preferences.displaySleepStyle, preferences.locale, roomExperience.nightSchedule.active, roomExperience.nightSchedule.enabled, roomExperience.nightSchedule.end, roomExperience.nightSchedule.start, roomExperience.nightSchedule.timeZone, status.error, status.source, surfaceTheme, system.cpuTemp, system.display.brightnessPercent, system.display.controllable, system.dspState.controllable, system.dspState.controlTransport, system.dspState.enabled, system.dspState.presetLabel, system.library.scanning, system.network.ip, system.network.label, system.network.speed, system.outputDevice.detail, system.outputDevice.label, system.uptime, t, usbCardMeta, usbCardValue, usbTrackCount, webModeProxyEnabled, webModeProxyUrl]
+    [activeMultiroom, enabledMultiroomCount, fontTheme, libraryScanMeta, libraryScanValue, localTrackCount, lyricsFontSize, lyricsVisible, multiroomMeta, multiroomNeedsSetup, multiroomValue, nasCardMeta, nasCardTone, nasCardValue, preferences.audioOutputProfile, preferences.displaySleepEnabled, preferences.displaySleepMinutes, preferences.displaySleepStyle, preferences.locale, roomExperience.nightSchedule.active, roomExperience.nightSchedule.enabled, roomExperience.nightSchedule.end, roomExperience.nightSchedule.start, roomExperience.nightSchedule.timeZone, status.error, status.source, surfaceTheme, system.cpuTemp, system.display.brightnessPercent, system.display.controllable, system.library.scanning, system.network.ip, system.network.label, system.network.speed, system.uptime, t, usbCardMeta, usbCardValue, usbTrackCount, webModeProxyEnabled, webModeProxyUrl]
   );
 
   const visibleCards = useMemo(() => {
@@ -813,6 +984,71 @@ export function QuickSettingsOverlay({
     } catch (error) {
       setLocaleMessage(localizedErrorMessage(error, "error.generic"));
     }
+  }
+
+  async function handleMultiroomToggle(id: MultiroomEcosystemId, enabled: boolean) {
+    if (multiroomPendingId) return;
+    setMultiroomPendingId(id);
+    setMultiroomError(null);
+    try {
+      setMultiroomState(await updateMultiroomEcosystem(id, { enabled }));
+    } catch (error) {
+      setMultiroomError(localizedErrorMessage(error, "error.generic"));
+    } finally {
+      setMultiroomPendingId(null);
+    }
+  }
+
+  async function handleAudioOutputProfileChange(profile: AudioOutputProfile) {
+    if (preferencesPending || preferences.audioOutputProfile === profile) return;
+    setMpdQualityError(null);
+    try {
+      await setAudioOutputProfile(profile);
+    } catch (error) {
+      setMpdQualityError(localizedErrorMessage(error, "error.generic"));
+    }
+  }
+
+  async function handleAudioOutputCustomSettingChange(setting: AudioOutputCustomSettingId, enabled: boolean) {
+    if (preferencesPending) return;
+    setMpdQualityError(null);
+    try {
+      await setAudioOutputCustomSettings({
+        ...preferences.audioOutputCustomSettings,
+        [setting]: enabled
+      });
+      setAudioDiagnostics(null);
+    } catch (error) {
+      setMpdQualityError(localizedErrorMessage(error, "error.generic"));
+    }
+  }
+
+  async function loadAudioDiagnostics() {
+    setAudioDiagnosticsPending(true);
+    setAudioDiagnosticsError(null);
+    try {
+      setAudioDiagnostics(await fetchAudioOutputDiagnostics());
+    } catch (error) {
+      setAudioDiagnosticsError(localizedErrorMessage(error, "error.generic"));
+    } finally {
+      setAudioDiagnosticsPending(false);
+    }
+  }
+
+  function clearAudioDiagnosticsPressTimer() {
+    if (audioDiagnosticsTimerRef.current !== null) {
+      window.clearTimeout(audioDiagnosticsTimerRef.current);
+      audioDiagnosticsTimerRef.current = null;
+    }
+  }
+
+  function armAudioDiagnosticsPress() {
+    clearAudioDiagnosticsPressTimer();
+    audioDiagnosticsTimerRef.current = window.setTimeout(() => {
+      audioDiagnosticsTimerRef.current = null;
+      setDetailView("audioDiagnostics");
+      void loadAudioDiagnostics();
+    }, 850);
   }
 
   async function handleAction(card: ActionCard) {
@@ -1186,8 +1422,365 @@ export function QuickSettingsOverlay({
           ))}
         </div>
 
-        <p className="settings-card-action language-input-status" title={preferences.inputMethodId}>
+        <p className={`settings-card-action language-input-status ${localePending ? "is-applying" : ""}`} title={preferences.inputMethodId}>
           {localePending ? t("common.applying") : `${selectedLanguage.label} · ${t("settings.keyboardDefault")}`}
+        </p>
+      </section>
+    );
+  }
+
+  function renderAudioOutputDetail() {
+    const profileChoices: Array<{ id: AudioOutputProfile; icon: typeof Waves; label: string; sample: string; traits: string }> = [
+      {
+        id: "pure",
+        icon: Target,
+        label: t("settings.audioProfile.pure"),
+        sample: t("settings.audioProfile.pureHint"),
+        traits: t("settings.audioProfile.pureTraits")
+      },
+      {
+        id: "everyday",
+        icon: Volume2,
+        label: t("settings.audioProfile.everyday"),
+        sample: t("settings.audioProfile.everydayHint"),
+        traits: t("settings.audioProfile.everydayTraits")
+      },
+      {
+        id: "sleep",
+        icon: Moon,
+        label: t("settings.audioProfile.sleep"),
+        sample: t("settings.audioProfile.sleepHint"),
+        traits: t("settings.audioProfile.sleepTraits")
+      },
+      {
+        id: "custom",
+        icon: SlidersHorizontal,
+        label: t("settings.audioProfile.custom"),
+        sample: t("settings.audioProfile.customHint"),
+        traits: t("settings.audioProfile.customTraits")
+      }
+    ];
+    const customSettingChoices: Array<{ id: AudioOutputCustomSettingId; label: string; hint: string }> = [
+      {
+        id: "pureDirect",
+        label: t("settings.audioCustom.pureDirect"),
+        hint: t("settings.audioCustom.pureDirectHint")
+      },
+      {
+        id: "volumeNormalization",
+        label: t("settings.audioCustom.volumeNormalization"),
+        hint: t("settings.audioCustom.volumeNormalizationHint")
+      },
+      {
+        id: "smoothTransition",
+        label: t("settings.audioCustom.smoothTransition"),
+        hint: t("settings.audioCustom.smoothTransitionHint")
+      },
+      {
+        id: "automaticSampleRate",
+        label: t("settings.audioCustom.automaticSampleRate"),
+        hint: t("settings.audioCustom.automaticSampleRateHint")
+      },
+      {
+        id: "dsdMode",
+        label: t("settings.audioCustom.dsdMode"),
+        hint: t("settings.audioCustom.dsdModeHint")
+      },
+      {
+        id: "playbackStability",
+        label: t("settings.audioCustom.playbackStability"),
+        hint: t("settings.audioCustom.playbackStabilityHint")
+      }
+    ];
+
+    return (
+      <section className={`settings-detail-panel ${preferences.audioOutputProfile === "custom" ? "is-custom-active" : ""}`} aria-label={t("settings.audioOutput")} data-settings-detail="audio-output">
+        <div className="settings-detail-header">
+          <button className="settings-detail-back" type="button" onClick={() => setDetailView(null)}>
+            {t("common.back")}
+          </button>
+          <div>
+            <span>{t("settings.preferences")}</span>
+            <div className="audio-output-title-row">
+              <strong
+                onPointerDown={armAudioDiagnosticsPress}
+                onPointerUp={clearAudioDiagnosticsPressTimer}
+                onPointerCancel={clearAudioDiagnosticsPressTimer}
+                onPointerLeave={clearAudioDiagnosticsPressTimer}
+                title={t("settings.audioDiagnosticsHint")}
+              >
+                {t("settings.audioOutput")}
+              </strong>
+              <p className="audio-output-header-dac">
+                <span>DAC:</span>
+                <em>{system.outputDevice.label} · {system.outputDevice.detail}</em>
+              </p>
+            </div>
+            <p className="audio-output-header-hint">{t("settings.audioDiagnosticsTitleHint")}</p>
+          </div>
+        </div>
+
+        <div className={`audio-output-detail-body ${preferences.audioOutputProfile === "custom" ? "is-custom-active" : ""}`}>
+          <div className="font-theme-options audio-profile-options-detail" role="group" aria-label={t("settings.mpdQuality")}>
+            {profileChoices.map((choice) => {
+              const Icon = choice.icon;
+              return (
+              <button
+                key={choice.id}
+                className={`font-theme-option audio-profile-option ${preferences.audioOutputProfile === choice.id ? "is-active" : ""}`}
+                type="button"
+                aria-pressed={preferences.audioOutputProfile === choice.id}
+                data-audio-output-profile={choice.id}
+                disabled={preferencesPending}
+                onClick={() => void handleAudioOutputProfileChange(choice.id)}
+              >
+                <Icon size={22} />
+                <strong>{choice.label}</strong>
+                <span>{choice.sample}</span>
+                <em>{choice.traits}</em>
+              </button>
+              );
+            })}
+          </div>
+          {preferences.audioOutputProfile === "custom" ? (
+            <div className="custom-audio-settings-panel" role="group" aria-label={t("settings.audioProfile.custom")} data-custom-audio-settings>
+              <p className="custom-audio-warning" data-custom-audio-warning>{t("settings.audioCustom.warning")}</p>
+              {customSettingChoices.map((choice) => {
+                const enabled = preferences.audioOutputCustomSettings[choice.id];
+                return (
+                  <button
+                    key={choice.id}
+                    className={`custom-audio-toggle ${enabled ? "is-active" : ""}`}
+                    type="button"
+                    aria-pressed={enabled}
+                    title={choice.hint}
+                    data-custom-audio-toggle={choice.id}
+                    disabled={preferencesPending}
+                    onClick={() => void handleAudioOutputCustomSettingChange(choice.id, !enabled)}
+                  >
+                    <span>{enabled ? t("common.on") : t("common.off")}</span>
+                    <strong>{choice.label}</strong>
+                    <em>{choice.hint}</em>
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
+        </div>
+
+        {mpdQualityError || preferencesPending ? (
+          <p className={`settings-card-action ${mpdQualityError ? "is-error" : preferencesPending ? "is-applying" : ""}`}>
+            {mpdQualityError ?? t("common.applying")}
+          </p>
+        ) : null}
+      </section>
+    );
+  }
+
+  function renderAudioDiagnosticsDetail() {
+    const rawDiagnosticsText = audioDiagnostics?.text?.trim() ?? "";
+    const diagnosticsText = rawDiagnosticsText
+      || (audioDiagnosticsPending ? t("settings.audioDiagnosticsLoading") : t("settings.audioDiagnosticsUnavailable"));
+    const diagnostics = parseAudioDiagnosticsText(rawDiagnosticsText);
+    const profileKey = audioDiagnostics?.profile ?? preferences.audioOutputProfile;
+    const updatedAtLabel = audioDiagnostics?.updatedAt
+      ? new Date(audioDiagnostics.updatedAt).toLocaleTimeString(preferences.locale, { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+      : t("common.unavailable");
+    const activeStream = diagnostics.activeHwParams[0] ?? null;
+    const ownerLabel = diagnostics.ownerPids.length > 0
+      ? diagnostics.ownerPids.map((pid) => `PID ${pid}`).join(" · ")
+      : t("settings.audioDiagnosticsNoDacOwner");
+
+    return (
+      <section className="settings-detail-panel" aria-label={t("settings.audioDiagnostics")} data-settings-detail="audio-diagnostics">
+        <div className="settings-detail-header">
+          <button className="settings-detail-back" type="button" onClick={() => setDetailView("audioOutput")}>
+            {t("common.back")}
+          </button>
+          <div>
+            <span>{t("settings.preferences")}</span>
+            <strong>{t("settings.audioDiagnostics")}</strong>
+          </div>
+        </div>
+
+        <div className="settings-diagnostics-panel">
+          {rawDiagnosticsText ? (
+            <>
+              <div className="settings-diagnostics-grid" data-audio-diagnostics-grid>
+                <article className="settings-diagnostics-card">
+                  <span>{t("settings.audioDiagnosticsProfile")}</span>
+                  <dl>
+                    <div>
+                      <dt>{t("settings.audioDiagnosticsProfile")}</dt>
+                      <dd>{t(`settings.audioProfile.${profileKey}`)}</dd>
+                    </div>
+                    <div>
+                      <dt>{t("settings.audioDiagnosticsUpdated")}</dt>
+                      <dd>{updatedAtLabel}</dd>
+                    </div>
+                  </dl>
+                </article>
+                <article className="settings-diagnostics-card">
+                  <span>{t("settings.audioDiagnosticsMpd")}</span>
+                  <dl>
+                    <div>
+                      <dt>{t("settings.audioDiagnosticsOutput")}</dt>
+                      <dd>{diagnostics.outputName ?? t("common.unavailable")}</dd>
+                    </div>
+                    <div>
+                      <dt>{t("settings.audioDiagnosticsDevice")}</dt>
+                      <dd>{diagnostics.outputDevice ?? t("common.unavailable")}</dd>
+                    </div>
+                    <div>
+                      <dt>{t("settings.audioDiagnosticsReplayGain")}</dt>
+                      <dd>{diagnostics.replayGain ?? t("common.unavailable")}</dd>
+                    </div>
+                    <div>
+                      <dt>{t("settings.audioDiagnosticsCrossfade")}</dt>
+                      <dd>{diagnostics.crossfade ?? t("common.unavailable")}</dd>
+                    </div>
+                  </dl>
+                </article>
+                <article className="settings-diagnostics-card">
+                  <span>{t("settings.audioDiagnosticsAlsa")}</span>
+                  {activeStream ? (
+                    <dl>
+                      <div>
+                        <dt>{t("settings.audioDiagnosticsDevice")}</dt>
+                        <dd>{activeStream.label}</dd>
+                      </div>
+                      <div>
+                        <dt>{t("settings.audioDiagnosticsRate")}</dt>
+                        <dd>{activeStream.rate ?? t("common.unavailable")}</dd>
+                      </div>
+                      <div>
+                        <dt>{t("settings.audioDiagnosticsFormat")}</dt>
+                        <dd>{activeStream.format ?? t("common.unavailable")}</dd>
+                      </div>
+                      <div>
+                        <dt>{t("settings.audioDiagnosticsChannels")}</dt>
+                        <dd>{activeStream.channels ?? t("common.unavailable")}</dd>
+                      </div>
+                    </dl>
+                  ) : (
+                    <p>{t("settings.audioDiagnosticsNoActiveStream")}</p>
+                  )}
+                </article>
+                <article className="settings-diagnostics-card">
+                  <span>{t("settings.audioDiagnosticsOwner")}</span>
+                  <dl>
+                    <div>
+                      <dt>{t("settings.audioDiagnosticsOwner")}</dt>
+                      <dd>{ownerLabel}</dd>
+                    </div>
+                    <div>
+                      <dt>{t("settings.audioDiagnosticsState")}</dt>
+                      <dd>{diagnostics.ownerPids.length > 0 ? t("settings.audioDiagnosticsOwnerHint") : t("settings.audioDiagnosticsNoDacOwner")}</dd>
+                    </div>
+                  </dl>
+                </article>
+              </div>
+
+              <details className="settings-diagnostics-raw" open={!diagnostics.parsed}>
+                <summary>{t("settings.audioDiagnosticsRaw")}</summary>
+                <pre>{diagnosticsText}</pre>
+              </details>
+            </>
+          ) : (
+            <div className="settings-diagnostics-empty">{diagnosticsText}</div>
+          )}
+        </div>
+
+        <div className={`settings-card-action ${audioDiagnosticsError ? "is-error" : ""}`}>
+          {audioDiagnosticsError ?? (
+            <button className="settings-inline-action" type="button" disabled={audioDiagnosticsPending} onClick={() => void loadAudioDiagnostics()}>
+              {audioDiagnosticsPending ? t("common.loading") : t("remote.refresh")}
+            </button>
+          )}
+        </div>
+      </section>
+    );
+  }
+
+  function getMultiroomEcosystemStatus(id: MultiroomEcosystemId) {
+    const state = multiroomEcosystems?.[id];
+    if (id === "music_assistant" || state?.comingSoon) return t("settings.multiroomComingSoon");
+    if (state?.active) return t("settings.multiroomPlaying");
+    if (state?.enabled && state?.ready) return t("settings.multiroomReady");
+    if (state?.enabled && state?.lastError) return t("settings.multiroomCheckSetup");
+    if (state?.enabled) return t("settings.multiroomStarting");
+    if (state?.ready) return t("common.off");
+    if (state?.lastError) return t("settings.multiroomCheckSetup");
+    return t("common.off");
+  }
+
+  function renderMultiroomDetail() {
+    const statusText = multiroomError ?? multiroomMeta;
+
+    return (
+      <section className="settings-detail-panel" aria-label={t("settings.multiroomAudio")} data-settings-detail="multiroom">
+        <div className="settings-detail-header">
+          <button className="settings-detail-back" type="button" onClick={() => setDetailView(null)}>
+            {t("common.back")}
+          </button>
+          <div>
+            <span>{t("settings.preferences")}</span>
+            <strong>{t("settings.multiroomAudio")}</strong>
+            <p>{statusText}</p>
+          </div>
+        </div>
+
+        <div className="multiroom-ecosystem-grid">
+          {multiroomEcosystemChoices.map((id) => {
+            const state = multiroomEcosystems?.[id];
+            const pending = multiroomPendingId === id;
+            const comingSoon = id === "music_assistant" || state?.comingSoon;
+            const Icon = id === "roon"
+              ? Waves
+              : id === "lyrion"
+                ? RadioIcon
+                : id === "tikpal"
+                  ? Server
+                  : Info;
+            const title = t(`settings.multiroom.ecosystem.${id}`);
+            const enabled = state?.enabled === true;
+            const status = pending ? t("common.applying") : getMultiroomEcosystemStatus(id);
+            const hint = comingSoon
+              ? t("settings.multiroomComingSoonHint")
+              : state?.active
+                ? t("settings.multiroomActiveHint", { label: title })
+                : enabled
+                  ? t("settings.multiroomStopHint")
+                  : t("settings.multiroomStartHint");
+
+            return (
+              <article className={`multiroom-ecosystem-card ${enabled ? "is-enabled" : ""} ${state?.active ? "is-active" : ""} ${comingSoon ? "is-disabled" : ""}`} key={id}>
+                <div className="multiroom-ecosystem-head">
+                  <span className="multiroom-ecosystem-icon">
+                    <Icon size={24} />
+                  </span>
+                  <span>
+                    <strong>{title}</strong>
+                    <em className={pending ? "is-applying" : state?.lastError ? "is-error" : undefined} title={state?.lastError ?? undefined}>{status}</em>
+                  </span>
+                </div>
+                <p>{hint}</p>
+                <button
+                  className={`settings-inline-action multiroom-ecosystem-toggle ${enabled ? "is-active" : ""}`}
+                  type="button"
+                  disabled={comingSoon || pending || Boolean(multiroomPendingId && multiroomPendingId !== id)}
+                  aria-pressed={enabled}
+                  onClick={() => void handleMultiroomToggle(id, !enabled)}
+                >
+                  {comingSoon ? t("settings.multiroomComingSoon") : enabled ? t("settings.multiroomStop", { label: title }) : t("settings.multiroomStart", { label: title })}
+                </button>
+              </article>
+            );
+          })}
+        </div>
+
+        <p className={`settings-card-action ${multiroomError ? "is-error" : ""}`}>
+          {t("settings.multiroomReleaseBody")}
         </p>
       </section>
     );
@@ -1704,7 +2297,7 @@ export function QuickSettingsOverlay({
               {t("settings.boostStep")}
             </button>
           </div>
-          <em className="settings-card-action">
+          <em className={`settings-card-action ${brightnessBusy ? "is-applying" : ""}`}>
             {system.display.controllable
               ? brightnessBusy
                 ? t("settings.applyingPercent", { percent: brightnessPercent })
@@ -1915,7 +2508,7 @@ export function QuickSettingsOverlay({
                     onClick={() => void handleRoomShortcut(shortcut.id)}
                   >
                     <Icon size={18} strokeWidth={1.8} />
-                    <span>{pendingShortcut ? shortcut.id === "explore" ? t("common.opening") : t("common.applying") : shortcut.id === "explore" ? t("source.explore") : t(`room.${shortcut.id}`)}</span>
+                    <span className={pendingShortcut ? "is-applying" : undefined}>{pendingShortcut ? shortcut.id === "explore" ? t("common.opening") : t("common.applying") : shortcut.id === "explore" ? t("source.explore") : t(`room.${shortcut.id}`)}</span>
                   </button>
                 );
               })}
@@ -1964,6 +2557,10 @@ export function QuickSettingsOverlay({
 
           {detailView === "appearance"
             ? renderAppearanceDetail()
+            : detailView === "audioDiagnostics"
+              ? renderAudioDiagnosticsDetail()
+            : detailView === "audioOutput"
+              ? renderAudioOutputDetail()
             : detailView === "display"
             ? renderDisplayDetail()
               : detailView === "language"
@@ -1976,8 +2573,10 @@ export function QuickSettingsOverlay({
                       ? renderNasDetail()
                       : detailView === "night"
                         ? renderNightDetail()
-                        : detailView === "webMode"
-                          ? renderWebModeDetail()
+                        : detailView === "multiroom"
+                          ? renderMultiroomDetail()
+                          : detailView === "webMode"
+                            ? renderWebModeDetail()
               : (
           <div className="settings-grid" data-settings-section={activeSection}>
             {visibleCards.map((card) => {
@@ -1998,6 +2597,48 @@ export function QuickSettingsOverlay({
                 );
               }
 
+              if (card.kind === "audioOutput") {
+                return (
+                  <button
+                    className={`settings-card settings-card-button settings-card-summary settings-card-audio-output tone-${card.tone}`}
+                    key={card.key}
+                    type="button"
+                    onClick={() => openDetail("audioOutput")}
+                  >
+                    <div className="settings-icon">
+                      <Volume2 size={32} />
+                    </div>
+                    <div>
+                      <span>{card.title}</span>
+                      <strong>{card.value}</strong>
+                      <p>{card.meta}</p>
+                      <em className="settings-card-action">{t(`settings.audioProfile.${preferences.audioOutputProfile}`)}</em>
+                    </div>
+                  </button>
+                );
+              }
+
+              if (card.kind === "multiroom") {
+                return (
+                  <button
+                    className={`settings-card settings-card-button settings-card-summary settings-card-multiroom tone-${card.tone}`}
+                    key={card.key}
+                    type="button"
+                    onClick={() => openDetail("multiroom")}
+                  >
+                    <div className="settings-icon">
+                      <Waves size={32} />
+                    </div>
+                    <div>
+                      <span>{card.title}</span>
+                      <strong>{card.value}</strong>
+                      <p>{card.meta}</p>
+                      <em className={`settings-card-action ${multiroomPendingId ? "is-applying" : ""}`}>{multiroomPendingId ? t("common.applying") : t("settings.multiroomAudio")}</em>
+                    </div>
+                  </button>
+                );
+              }
+
               if (card.kind === "language") {
                 return (
                   <button
@@ -2013,7 +2654,7 @@ export function QuickSettingsOverlay({
                       <span>{card.title}</span>
                       <strong>{card.value}</strong>
                       <p>{card.meta}</p>
-                      <em className="settings-card-action">{localePending ? t("common.applying") : t("settings.language")}</em>
+                      <em className={`settings-card-action ${localePending ? "is-applying" : ""}`}>{localePending ? t("common.applying") : t("settings.language")}</em>
                     </div>
                   </button>
                 );
@@ -2190,7 +2831,7 @@ export function QuickSettingsOverlay({
                     <span>{card.title}</span>
                     <strong>{card.value}</strong>
                     <p title={error ?? undefined}>{error ?? (isConfirming ? card.confirmLabel : card.meta)}</p>
-                    <em className="settings-card-action">{isPending ? t("common.applying") : card.buttonLabel}</em>
+                    <em className={`settings-card-action ${isPending ? "is-applying" : ""}`}>{isPending ? t("common.applying") : card.buttonLabel}</em>
                   </div>
                 </button>
               );

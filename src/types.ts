@@ -9,11 +9,25 @@ export type HifiVisualPresetId = "spectrum-bars" | "waveform" | "dual-vu";
 export type UiLocale = "en" | "zh-CN" | "de" | "it" | "ko" | "ja" | "es";
 export type UiInputMethodId = "keyboard-us" | "pinyin" | "keyboard-de" | "keyboard-it" | "hangul" | "anthy" | "keyboard-es";
 export type DisplaySleepStyle = "meteor_shower" | "clock" | "now_playing" | "starfield" | "signal";
+export type MpdBitPerfectMode = "standard" | "strict";
+export type AudioOutputProfile = "pure" | "everyday" | "sleep" | "custom";
+export type AudioOutputCustomSettingId =
+  | "pureDirect"
+  | "volumeNormalization"
+  | "smoothTransition"
+  | "automaticSampleRate"
+  | "dsdMode"
+  | "playbackStability";
+
+export type AudioOutputCustomSettings = Record<AudioOutputCustomSettingId, boolean>;
 
 export interface UiPreferences {
   locale: UiLocale;
   inputMethodId: UiInputMethodId;
   fontTheme: FontTheme;
+  audioOutputProfile: AudioOutputProfile;
+  audioOutputCustomSettings: AudioOutputCustomSettings;
+  mpdBitPerfectMode: MpdBitPerfectMode;
   displaySleepEnabled: boolean;
   displaySleepMinutes: 5 | 10 | 15 | 30 | 60;
   displaySleepStyle: DisplaySleepStyle;
@@ -24,6 +38,9 @@ export interface UiPreferences {
 export interface UiPreferencesPatch {
   locale?: UiLocale;
   fontTheme?: FontTheme;
+  audioOutputProfile?: AudioOutputProfile;
+  audioOutputCustomSettings?: Partial<AudioOutputCustomSettings>;
+  mpdBitPerfectMode?: MpdBitPerfectMode;
   displaySleepEnabled?: boolean;
   displaySleepMinutes?: 5 | 10 | 15 | 30 | 60;
   displaySleepStyle?: DisplaySleepStyle;
@@ -40,12 +57,15 @@ export type SourceState =
   | "spotify"
   | "bluetooth"
   | "roonbridge"
+  | "lyrion"
+  | "tikpal_multiroom"
+  | "music_assistant"
   | "upnp"
   | "radio";
 
 export type SourceAvailability = "available" | "waiting" | "unavailable";
 export type SourceControllability = "switchable" | "handoff" | "status-only";
-export type SourceSwitchTarget = "mpd" | "audio" | "scene" | "radio" | "spotify" | "bluetooth" | "airplay" | "upnp";
+export type SourceSwitchTarget = "mpd" | "audio" | "scene" | "radio" | "spotify" | "bluetooth" | "airplay" | "roonbridge" | "upnp";
 export type SourceConnectionState = "idle" | "armed" | "connected" | "blocked";
 export type RememberedAudioSourceTarget = Exclude<SourceSwitchTarget, "audio" | "scene">;
 export type WebModeProviderId =
@@ -503,6 +523,51 @@ export interface DspState {
   availablePresets: HifiEqPresetSummary[];
 }
 
+export interface RoonBridgeState {
+  id?: "roon";
+  enabled: boolean;
+  ready: boolean;
+  active: boolean;
+  serviceActive: boolean;
+  label: string;
+  lastError: string | null;
+  updatedAt: string;
+}
+
+export interface RoonBridgeUpdateRequest {
+  enabled: boolean;
+}
+
+export type MultiroomEcosystemId = "roon" | "lyrion" | "tikpal" | "music_assistant";
+
+export interface MultiroomEcosystemState {
+  id: MultiroomEcosystemId;
+  enabled: boolean;
+  ready: boolean;
+  active: boolean;
+  serviceActive: boolean;
+  label: string;
+  lastError: string | null;
+  comingSoon?: boolean;
+  updatedAt: string;
+}
+
+export interface MultiroomAudioState {
+  ecosystems: Record<MultiroomEcosystemId, MultiroomEcosystemState>;
+  activeEcosystemId: MultiroomEcosystemId | null;
+  updatedAt: string;
+}
+
+export interface MultiroomUpdateRequest {
+  enabled: boolean;
+}
+
+export interface AudioOutputDiagnostics {
+  profile: AudioOutputProfile;
+  text: string;
+  updatedAt: string;
+}
+
 export interface SystemState {
   network: NetworkState;
   display: DisplayState;
@@ -513,6 +578,8 @@ export interface SystemState {
   bitDepth: number | null;
   cpuTemp: number | null;
   dspState: DspState;
+  multiroom: MultiroomAudioState;
+  roonBridge: RoonBridgeState;
   library: {
     source: string;
     trackCount: number;
