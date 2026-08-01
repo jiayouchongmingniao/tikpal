@@ -155,6 +155,10 @@
   window.addEventListener("message", (event) => {
     if (event.source !== window) return;
     const message = event.data;
+    if (message?.type === "tikpal-provider-audio-muted") {
+      chrome.runtime.sendMessage({ type: "provider-audio-muted", muted: message.muted === true }, () => {});
+      return;
+    }
     if (message?.type !== "tikpal-netease-fetch-audio" || typeof message.id !== "string") return;
     chrome.runtime.sendMessage({ type: "fetch-audio", id: message.id, url: message.url }, (response) => {
       const runtimeError = chrome.runtime.lastError?.message;

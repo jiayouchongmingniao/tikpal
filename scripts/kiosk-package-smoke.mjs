@@ -828,7 +828,7 @@ esac
   assert(webModeScript.includes("detect_non_hdmi_card_id"), "web mode should detect the actual non-HDMI ALSA card");
   assert(webModeScript.includes("tikpal-audio-adapt.sh") && webModeScript.includes("resolve-browser"), "web mode should use the shared audio adapter for auto ALSA output");
   assert(webModeScript.includes("resolve_web_mode_audio_devices()"), "web mode should lazily resolve auto ALSA output for provider windows");
-  assert(webModeScript.includes("TIKPAL_WEB_MODE_PROVIDER_WINDOW_TIMEOUT_SECONDS") && webModeScript.includes('wait_for_profile_window "$provider_profile" "$TIKPAL_WEB_MODE_PROVIDER_WINDOW_TIMEOUT_SECONDS"'), "web mode should bound provider window detection so failures can clean up before the API open timeout");
+  assert(webModeScript.includes("TIKPAL_WEB_MODE_PROVIDER_WINDOW_TIMEOUT_SECONDS") && webModeScript.includes("profile_window_timeout_attempts") && webModeScript.includes('wait_for_profile_window "$provider_profile" "$(profile_window_timeout_attempts "$TIKPAL_WEB_MODE_PROVIDER_WINDOW_TIMEOUT_SECONDS")"'), "web mode should bound provider window detection so failures can clean up before the API open timeout");
   assert(serverSource.includes("WEB_MODE_OPEN_COMMAND_TIMEOUT_MS") && serverSource.includes('action === "open" ? WEB_MODE_OPEN_COMMAND_TIMEOUT_MS : WEB_MODE_COMMAND_TIMEOUT_MS'), "API should let provider-open cleanup run longer than generic web mode commands");
   assert(serverSource.includes("TIKPAL_KIOSK_HEARTBEAT_HIDDEN_STALE_MS") && serverSource.includes("isHiddenPageHeartbeat") && serverSource.includes('ignoredReasons.push("event-loop-lag:hidden-page")') && serverSource.includes('ignoredReasons.push("heartbeat-stale:hidden-page")'), "API should not restart a hidden main kiosk for browser-throttled Explore heartbeat lag");
   assert(
@@ -868,6 +868,8 @@ esac
   assert(webModeScript.includes('TIKPAL_WEB_MODE_QQ_MV_CINEMA_MODE="$TIKPAL_WEB_MODE_QQ_MV_CINEMA_MODE"'), "web mode should pass the QQ MV cinema switch to the provider guard");
   assert(webModeScript.includes("TIKPAL_WEB_MODE_QQ_MV_AUTO_PLAY:=1"), "web mode should enable conditional QQ MV auto play by default");
   assert(webModeScript.includes('TIKPAL_WEB_MODE_QQ_MV_AUTO_PLAY="$TIKPAL_WEB_MODE_QQ_MV_AUTO_PLAY"'), "web mode should pass the QQ MV auto-play switch to the provider guard");
+  assert(webModeScript.includes("TIKPAL_WEB_MODE_NETEASE_AUTO_PLAY:=1"), "web mode should enable conditional NetEase auto play by default");
+  assert(webModeScript.includes('TIKPAL_WEB_MODE_NETEASE_AUTO_PLAY="$TIKPAL_WEB_MODE_NETEASE_AUTO_PLAY"'), "web mode should pass the NetEase auto-play switch to the provider guard");
   assert(serverSource.includes("/api/v1/preferences") && serverSource.includes("UI_LOCALE_INPUT_METHODS"), "API should expose persisted UI language preferences and input-method mapping");
   assert(
     serverSource.includes("FONT_THEMES")
@@ -1036,7 +1038,7 @@ esac
   assert(webModeScript.includes('panel_url="$panel_url?opening=$opening_provider"'), "initial side panel URL should carry its pending provider");
   assert(webModeScript.includes('transition_url="$transition_url?provider=$provider"'), "transition veil URL should carry its provider identity");
   assert(openProviderBody.includes('launch_url="$TIKPAL_WEB_MODE_TRANSITION_URL?provider=$provider"'), "extension-enabled providers should start on the local bootstrap page");
-  assert(openProviderBody.includes('if [[ "$extension_enabled" != "1" && "$proxy_enabled" == "1"'), "command-line proxy switches should remain only in the extension-disabled fallback");
+  assert(webModeScript.includes("provider_uses_direct_bootstrap()") && webModeScript.includes("deezer) return 0") && openProviderBody.includes('if [[ "$proxy_enabled" == "1" && -n "$proxy_url" && ( "$extension_enabled" != "1" || "$launch_url" == "$url" ) ]]'), "command-line proxy switches should remain limited to extension-disabled fallback and explicit direct-bootstrap providers");
   assert(webModeScript.includes('target.type === "page"') && openProviderBody.includes("wait_for_real_provider_url"), "provider switches should wait for a real HTTPS page rather than a stale service worker");
   assert(webModeScript.includes("wait_for_proxy_applied"), "dynamic proxy actions should wait for extension confirmation");
   assert(webModeScript.includes('log "proxy applied without restarting $provider"'), "dynamic proxy actions should preserve the provider process");
@@ -1182,6 +1184,7 @@ esac
   assert(providerGuardCheck.stdout.includes("qq mv auto fullscreen: 0"), "provider guard should keep QQ Music MV auto fullscreen off by default");
   assert(providerGuardCheck.stdout.includes("qq mv cinema mode: 1"), "provider guard should enable QQ MV cinema mode by default");
   assert(providerGuardCheck.stdout.includes("qq mv auto play: 1"), "provider guard should enable conditional QQ MV auto play by default");
+  assert(providerGuardCheck.stdout.includes("netease auto play: 1"), "provider guard should enable conditional NetEase auto play by default");
   assert(providerGuardCheck.stdout.includes("qq mv native fullscreen path: 0"), "provider guard should report the old QQ MV native fullscreen path as disabled");
   assert(providerGuardCheck.stdout.includes("qq mv playlist button: 1"), "provider guard should expose a manual QQ MV playlist return button");
   assert(providerGuardCheck.stdout.includes("qq mv replay button: 1"), "provider guard should expose the QQ MV replay button path");
@@ -1225,6 +1228,11 @@ esac
   assert(providerGuardSource.includes("await entry.video.play()"), "QQ MV auto play should start only the selected cinema video");
   assert(providerGuardSource.includes("QQ MV auto play") && providerGuardSource.includes("playback?.played"), "QQ MV auto play should report whether the one-shot start succeeded");
   assert(providerGuardSource.includes("await runQqMvCinemaFeatures(targets)"), "provider guard main loop should call QQ MV cinema behavior");
+  assert(providerGuardSource.includes("neteaseAutoPlayStates"), "provider guard should track per-page NetEase auto-play attempts");
+  assert(providerGuardSource.includes("claimNeteaseAutoPlayAttempt"), "provider guard should gate NetEase auto play before clicking");
+  assert(providerGuardSource.includes("window.Howler?._howls"), "NetEase auto play should inspect Howler playback state");
+  assert(providerGuardSource.includes("clickNeteasePlayButton"), "NetEase auto play should use a real X11 click for the selected play button");
+  assert(providerGuardSource.includes("await runNeteaseAudioFeatures(targets)"), "provider guard main loop should call NetEase auto play behavior");
   assert(!providerGuardSource.includes("await runQqMvFullscreenFeatures(targets)"), "provider guard main loop should not call QQ MV native fullscreen behavior");
   assert(!providerGuardSource.includes("await runQqMvContinuationFeatures(targets)"), "provider guard main loop should not auto-continue QQ MV playback");
   assert(providerGuardSource.includes("data-tikpal-qq-mv-cinema"), "provider guard should mark QQ MV cinema mode on the document");
@@ -1281,7 +1289,7 @@ esac
   assert(webModeScript.includes('provider_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/$provider"'), "Explore should keep a stable per-provider Chromium profile for login state");
   assert(!webModeScript.includes('rm -rf "$provider_profile"'), "Explore provider switches should not delete the provider login profile");
   assert(webModeScript.includes('refresh_extension_script_cache "$provider_profile"') && webModeScript.includes("Default/Service Worker") && webModeScript.includes("service_worker_registration_info"), "Explore provider launch should refresh stale extension service-worker state without deleting login state");
-  assert(webModeScript.indexOf('start_provider_guard "$provider" "$provider_profile" "$url" "$proxy_enabled" "$provider_port"') < webModeScript.indexOf('if ! wait_for_provider_ready "$provider_port"; then'), "provider guard should start before the ready gate so cookie prompts can be accepted during entry");
+  assert(webModeScript.indexOf('start_provider_guard "$provider" "$provider_profile" "$url" "$proxy_enabled" "$provider_port"') < webModeScript.indexOf('if ! wait_for_provider_ready "$provider_port" "$provider"; then'), "provider guard should start before the ready gate so cookie prompts can be accepted during entry");
 
   assert(webModeErrorPage.includes("did not respond"), "friendly Explore error page should avoid native Chromium error copy");
   assert(webModeErrorPage.includes("Proxy switch"), "friendly Explore error page should point users to the side-panel proxy switch");
@@ -1296,7 +1304,12 @@ esac
   assert(!webModeTransitionPage.includes("tikpalExplorePulse"), "Explore transition page should not use the old circular pulse");
   assert(!webModeTransitionPage.includes("sendKioskHeartbeat"), "Explore transition page should not post kiosk heartbeats");
   assert(sidePanelSource.includes('new URLSearchParams(window.location.search).get("opening")'), "Explore side panel should read its initial pending provider");
-  assert(sidePanelSource.includes('connecting ? t("common.connecting") : current ? t("common.current")'), "Explore side panel should distinguish Connecting from Current");
+  assert(sidePanelSource.includes("providerStatusLabel"), "Explore side panel should centralize provider status labels");
+  assert(sidePanelSource.includes('residentStatus === "opening"') && sidePanelSource.includes('residentStatus === "check_setup"'), "Explore side panel should show resident provider warm/check states");
+  assert(webModeScript.includes("TIKPAL_WEB_MODE_PROVIDER_POOL:=1"), "Explore provider pool should be enabled by default");
+  assert(webModeScript.includes("prewarm_provider_pool"), "Explore should prewarm resident providers after entry");
+  assert(providerGuardSource.includes("__tikpalProviderAudioGate"), "Explore provider guard should install resident provider audio gating");
+  assert(providerGuardSource.includes("tikpal-provider-audio-muted") && extensionBackground.includes("provider-audio-muted"), "Explore provider gate should ask the extension to tab-mute inactive providers");
   assert(stylesSource.includes("webModeProviderSignalTrace"), "Explore provider cards should use the short signal trace");
   assert(!stylesSource.includes("webModeProviderOpeningSpin"), "Explore provider cards should remove the full rotating border");
 

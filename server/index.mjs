@@ -5037,8 +5037,25 @@ function normalizeWebModeSettings(raw = {}) {
 }
 
 function normalizeWebModeRuntimeState(raw = {}) {
+  const residentProviders = {};
+  const rawResidentProviders = raw.residentProviders && typeof raw.residentProviders === "object"
+    ? raw.residentProviders
+    : {};
+  const allowedProviderStatuses = new Set(["opening", "ready", "active", "check_setup", "closed"]);
+  for (const provider of WEB_MODE_PROVIDERS) {
+    const value = rawResidentProviders[provider.id];
+    if (!value || typeof value !== "object") continue;
+    const status = String(value.status ?? "").trim().toLowerCase();
+    if (!allowedProviderStatuses.has(status) || status === "closed") continue;
+    residentProviders[provider.id] = {
+      status,
+      lastError: typeof value.lastError === "string" && value.lastError.trim() ? value.lastError.trim() : null,
+      updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : null
+    };
+  }
   return {
     activeProvider: raw.activeProvider ? normalizeWebModeProviderId(raw.activeProvider, null) : null,
+    residentProviders,
     lastError: typeof raw.lastError === "string" && raw.lastError.trim() ? raw.lastError.trim() : null,
     proxyAppliedSettingsUpdatedAt: typeof raw.proxyAppliedSettingsUpdatedAt === "string" ? raw.proxyAppliedSettingsUpdatedAt : null,
     updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : null
@@ -5288,6 +5305,7 @@ async function buildWebModeState() {
     enabled: true,
     activeProvider: runtimeState.activeProvider,
     providers: WEB_MODE_PROVIDERS,
+    residentProviders: runtimeState.residentProviders,
     settings,
     preferences,
     lastError: runtimeState.lastError,

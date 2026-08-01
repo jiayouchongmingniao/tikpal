@@ -110,6 +110,25 @@ export function WebModeSidePanel() {
 
   const displayProviderLabel = pendingProvider ? providerLabels[pendingProvider] : failedProvider ? providerLabels[failedProvider] : activeProviderLabel;
 
+  function providerStatusLabel(providerId: WebModeProviderId, flags: {
+    active: boolean;
+    connecting: boolean;
+    current: boolean;
+    failed: boolean;
+    experimental: boolean;
+  }) {
+    if (flags.connecting) return t("common.connecting");
+    if (flags.current) return t("common.current");
+    if (flags.active) return t("common.active");
+    if (flags.failed) return t("common.failed");
+    const residentStatus = webMode?.residentProviders?.[providerId]?.status;
+    if (residentStatus === "opening") return t("common.opening");
+    if (residentStatus === "check_setup") return t("common.checkSetup");
+    if (residentStatus === "ready") return t("common.ready");
+    if (flags.experimental) return t("common.experimental");
+    return t("common.waiting");
+  }
+
   function applyWebModeState(next: WebModeState) {
     setWebMode(next);
     setError(next.lastError);
@@ -289,13 +308,14 @@ export function WebModeSidePanel() {
           const connecting = pendingProvider === provider.id;
           const current = selected && Boolean(pendingProvider) && !connecting;
           const active = selected && !pendingProvider;
+          const residentStatus = webMode?.residentProviders?.[provider.id]?.status;
           return (
             <button
               key={provider.id}
-              className={`web-mode-provider ${active ? "is-active" : ""} ${current ? "is-current" : ""} ${connecting ? "is-connecting" : ""} ${failed ? "is-failed" : ""}`}
+              className={`web-mode-provider ${active ? "is-active" : ""} ${current ? "is-current" : ""} ${connecting || residentStatus === "opening" ? "is-connecting" : ""} ${failed || residentStatus === "check_setup" ? "is-failed" : ""}`}
               type="button"
               style={{ "--provider-tone": providerTones[provider.id] } as CSSProperties}
-              aria-busy={connecting}
+              aria-busy={connecting || residentStatus === "opening"}
               data-web-mode-provider={provider.id}
               onClick={() => void openProvider(provider.id)}
             >
@@ -303,7 +323,7 @@ export function WebModeSidePanel() {
                 <Icon size={24} />
               </span>
               <strong>{provider.label}</strong>
-              <em>{connecting ? t("common.connecting") : current ? t("common.current") : active ? t("common.active") : failed ? t("common.failed") : provider.experimental ? t("common.experimental") : t("common.ready")}</em>
+              <em>{providerStatusLabel(provider.id, { active, connecting, current, failed, experimental: provider.experimental })}</em>
             </button>
           );
         })}

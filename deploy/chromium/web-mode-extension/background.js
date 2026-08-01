@@ -105,6 +105,12 @@ async function setKeyboardVisible(enabled, force = false) {
   return { ok: true };
 }
 
+async function setTabMuted(sender, muted) {
+  if (!sender.tab?.id || !chrome.tabs?.update) throw new Error("No Explore tab to mute");
+  await chrome.tabs.update(sender.tab.id, { muted: muted === true });
+  return { ok: true, muted: muted === true };
+}
+
 function isAllowedNeteaseAudioUrl(value) {
   let url;
   try {
@@ -178,6 +184,12 @@ if (globalThis.chrome?.runtime?.onMessage) {
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message?.type === "keyboard") {
       setKeyboardVisible(message.enabled === true, message.force === true)
+        .then(sendResponse)
+        .catch((error) => sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) }));
+      return true;
+    }
+    if (message?.type === "provider-audio-muted") {
+      setTabMuted(sender, message.muted === true)
         .then(sendResponse)
         .catch((error) => sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) }));
       return true;

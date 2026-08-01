@@ -355,6 +355,16 @@ The physical layout is fixed:
 | Explore provider | `1920x720` at `0,0` |
 | Explore side panel | `640x720` at `1920,0` |
 
+The physical Gentoo path uses a resident provider pool by default:
+
+```conf
+TIKPAL_WEB_MODE_PROVIDER_POOL=1
+TIKPAL_WEB_MODE_PROVIDER_PREWARM_ENABLED=1
+TIKPAL_WEB_MODE_PROVIDER_PREWARM_DELAY_SECONDS=2
+```
+
+Opening Explore starts the requested provider first, then prewarms the remaining fixed providers in the offscreen stage at `2560,0`: Suno, Spotify, YouTube Music, Apple Music, TIDAL, Qobuz, Deezer, Amazon Music, QQ Music, and NetEase Cloud Music. Switching to an already resident provider must stop the background prewarm job, reveal and focus the existing provider window, restart its per-provider guard, and update `activeProvider`; it must not re-run the first-load readiness gate or roll back to the previous provider just because a site like YouTube Music, Apple Music, TIDAL, or Deezer has a slow provider-ready probe. Background providers stay muted and page-paused through the provider audio gate. `deploy/chromium/tikpal-web-mode.sh close` is the boundary that closes all resident providers and the side panel.
+
 The proxy truth is `.tikpal/web-mode-settings.json`; the launcher fallback should prefer a proxy on the same Gentoo host:
 
 ```conf
@@ -717,6 +727,23 @@ curl -fsS -X POST http://127.0.0.1:8787/api/v1/web-mode/actions \
   --data '{"type":"open","provider":"qq_music"}'
 curl -fsS http://127.0.0.1:9241/json/list
 ```
+
+Resident-provider switching checks should cover at least one Chinese provider and several slow western providers:
+
+```bash
+for provider in youtube_music apple_music tidal deezer qq_music; do
+  curl -fsS -H "Content-Type: application/json" \
+    -X POST http://127.0.0.1:8787/api/v1/web-mode/actions \
+    --data "{\"type\":\"open\",\"provider\":\"$provider\"}" |
+    jq '{activeProvider,lastError,current:.residentProviders[$activeProvider]}'
+done
+
+DISPLAY=:0 XAUTHORITY=/home/moode/.Xauthority \
+  xdotool search --onlyvisible --class chromium \
+  getwindowname %@ getwindowgeometry %@
+```
+
+Expected geometry after switching: the active provider is at `0,0 1920x720`, the side panel is at `1920,0 640x720`, and inactive resident providers remain at `2560,0 1920x720`.
 
 Use CDP to verify provider text scaling without viewport scaling:
 

@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const port = Number.parseInt(process.env.TIKPAL_WEB_MODE_PROVIDER_DEBUG_PORT || "9234", 10);
 const profile = process.env.TIKPAL_WEB_MODE_PROVIDER_PROFILE || "";
+const statePath = process.env.TIKPAL_WEB_MODE_STATE_PATH || "";
 const providerId = process.env.TIKPAL_WEB_MODE_PROVIDER_ID || "";
 const providerLabel = process.env.TIKPAL_WEB_MODE_PROVIDER_LABEL || providerId || "Web player";
 const proxyMode = process.env.TIKPAL_WEB_MODE_PROXY_MODE === "proxy" ? "proxy" : "direct";
@@ -13,6 +15,7 @@ const qqAutoUnmute = /^(1|true|yes|on|enabled)$/i.test(process.env.TIKPAL_WEB_MO
 const qqMvAutoFullscreen = /^(1|true|yes|on|enabled)$/i.test(process.env.TIKPAL_WEB_MODE_QQ_MV_AUTO_FULLSCREEN || "0");
 const qqMvCinemaMode = /^(1|true|yes|on|enabled)$/i.test(process.env.TIKPAL_WEB_MODE_QQ_MV_CINEMA_MODE || "1");
 const qqMvAutoPlay = /^(1|true|yes|on|enabled)$/i.test(process.env.TIKPAL_WEB_MODE_QQ_MV_AUTO_PLAY || "1");
+const neteaseAutoPlay = /^(1|true|yes|on|enabled)$/i.test(process.env.TIKPAL_WEB_MODE_NETEASE_AUTO_PLAY || "1");
 const onboardAutoFocus = /^(1|true|yes|on|enabled)$/i.test(process.env.TIKPAL_WEB_MODE_ONBOARD_AUTO_FOCUS || "1");
 const allowProgrammaticInputFocus = providerId !== "suno";
 const launcherPath = fileURLToPath(new URL("./tikpal-web-mode.sh", import.meta.url));
@@ -135,6 +138,24 @@ const consentRejectLabels = [
   "configurar"
 ];
 const consentLabels = [...consentAcceptAllLabels, ...consentFallbackLabels];
+const tidalOneTrustConsentExpression = `(() => {
+  const button = document.querySelector("#onetrust-accept-btn-handler");
+  if (!(button instanceof HTMLElement)) return { clicked: false };
+  const rect = button.getBoundingClientRect();
+  const style = getComputedStyle(button);
+  const visible = rect.width >= 8 &&
+    rect.height >= 8 &&
+    rect.right > 0 &&
+    rect.bottom > 0 &&
+    rect.left < innerWidth &&
+    rect.top < innerHeight &&
+    style.display !== "none" &&
+    style.visibility !== "hidden" &&
+    Number(style.opacity || "1") > 0.05;
+  if (!visible) return { clicked: false };
+  button.click();
+  return { clicked: true, label: "Accept" };
+})()`;
 const kioskInjectedTargets = new Set();
 const qqInjectedTargets = new Set();
 const earlyRedirectTargets = new Set();
@@ -144,6 +165,7 @@ const inputFocusRequests = new Map();
 const qqAudioUnmuteAttempts = new Map();
 const qqMvCinemaStates = new Map();
 const qqMvAutoPlayStates = new Map();
+const neteaseAutoPlayStates = new Map();
 let lastOnboardVisible = null;
 let lastOnboardActionMs = 0;
 const providerNativeFailureIds = new Set(["amazon_music", "qobuz", "deezer"]);
@@ -151,6 +173,9 @@ const qqAudioUnmuteCooldownMs = 5000;
 const qqMvAutoPlayDelayMs = 1700;
 const qqMvAutoPlayMaxStartSeconds = 1.5;
 const qqMvAutoPlayProgressEpsilonSeconds = 0.2;
+const neteaseAutoPlayDelayMs = 1800;
+const neteaseAutoPlayMaxStartSeconds = 1.5;
+const neteaseAutoPlayProgressEpsilonSeconds = 0.2;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -162,6 +187,16 @@ function profileProcessExists() {
     stdio: "ignore"
   });
   return result.status === 0;
+}
+
+function providerIsActive() {
+  if (!statePath || !providerId) return true;
+  try {
+    const state = JSON.parse(readFileSync(statePath, "utf8"));
+    return String(state?.activeProvider || "") === providerId;
+  } catch {
+    return true;
+  }
 }
 
 async function readTargets() {
@@ -209,6 +244,16 @@ function isQqMusicPlayerPage(target) {
   try {
     const url = new URL(target.url || "");
     return url.pathname.startsWith("/n/ryqq");
+  } catch {
+    return false;
+  }
+}
+
+function isNeteaseMusicPage(target) {
+  if (!isPageTarget(target)) return false;
+  try {
+    const url = new URL(target.url || "");
+    return url.hostname === "music.163.com" || url.hostname.endsWith(".music.163.com");
   } catch {
     return false;
   }
@@ -281,6 +326,127 @@ const kioskGuardScript = `(() => {
   style.textContent = "html,body{-webkit-touch-callout:none;} body,body *{-webkit-user-drag:none;} input,textarea,[contenteditable='true']{-webkit-user-select:text!important;user-select:text!important;}";
   document.documentElement.appendChild(style);
 })()`;
+
+const providerAudioGateScript = `(() => {
+  if (window.__tikpalProviderAudioGate?.version === 1) return;
+  const state = {
+    active: true,
+    media: new WeakMap(),
+    howlerSounds: [],
+    audioContexts: new Set(),
+    suspendedContexts: new Set()
+  };
+  const nativeAudioContext = window.AudioContext || window.webkitAudioContext;
+  if (nativeAudioContext && !window.__tikpalNativeAudioContext) {
+    window.__tikpalNativeAudioContext = nativeAudioContext;
+    const PatchedAudioContext = function (...args) {
+      const context = new nativeAudioContext(...args);
+      state.audioContexts.add(context);
+      return context;
+    };
+    PatchedAudioContext.prototype = nativeAudioContext.prototype;
+    Object.setPrototypeOf(PatchedAudioContext, nativeAudioContext);
+    window.AudioContext = PatchedAudioContext;
+    if (window.webkitAudioContext) window.webkitAudioContext = PatchedAudioContext;
+  }
+  const mediaElements = () => Array.from(document.querySelectorAll("audio,video"));
+  const setMediaActive = (active) => {
+    for (const element of mediaElements()) {
+      if (!(element instanceof HTMLMediaElement)) continue;
+      const previous = state.media.get(element) || { wasPlaying: false, muted: element.muted };
+      if (!active) {
+        previous.wasPlaying = !element.paused && !element.ended;
+        previous.muted = element.muted;
+        state.media.set(element, previous);
+        element.muted = true;
+        try { element.pause(); } catch {}
+      } else {
+        element.muted = previous.muted === true ? true : false;
+        if (previous.wasPlaying && element.paused && !element.ended) {
+          element.play().catch(() => {});
+        }
+        state.media.set(element, { ...previous, wasPlaying: false });
+      }
+    }
+  };
+  const setHowlerActive = (active) => {
+    const howler = window.Howler;
+    const howls = Array.isArray(howler?._howls) ? howler._howls : [];
+    if (!howler || !howls.length) return;
+    if (!active) {
+      state.howlerSounds = [];
+      for (const howl of howls) {
+        const sounds = Array.isArray(howl?._sounds) ? howl._sounds : [];
+        for (const sound of sounds) {
+          if (!sound?._paused && sound?._id !== undefined) state.howlerSounds.push([howl, sound._id]);
+        }
+      }
+      try { howler.mute(true); } catch {}
+      for (const [howl, id] of state.howlerSounds) {
+        try { howl.pause(id); } catch {}
+      }
+    } else {
+      try { howler.mute(false); } catch {}
+      for (const [howl, id] of state.howlerSounds.splice(0)) {
+        try { howl.play(id); } catch {}
+      }
+    }
+  };
+  const setAudioContextsActive = (active) => {
+    const contexts = Array.from(state.audioContexts);
+    if (!active) {
+      for (const context of contexts) {
+        if (context?.state === "running") {
+          state.suspendedContexts.add(context);
+          context.suspend?.().catch?.(() => {});
+        }
+      }
+    } else {
+      for (const context of Array.from(state.suspendedContexts)) {
+        if (context?.state === "suspended") context.resume?.().catch?.(() => {});
+      }
+      state.suspendedContexts.clear();
+    }
+  };
+  const setActive = (active) => {
+    const nextActive = active === true;
+    try {
+      window.postMessage({ type: "tikpal-provider-audio-muted", muted: !nextActive }, window.location.origin);
+    } catch {}
+    if (state.active === nextActive) {
+      if (!nextActive) setMediaActive(false);
+      return status();
+    }
+    state.active = nextActive;
+    setMediaActive(nextActive);
+    setHowlerActive(nextActive);
+    setAudioContextsActive(nextActive);
+    return status();
+  };
+  const status = () => ({
+    active: state.active,
+    mediaCount: mediaElements().length,
+    playingCount: mediaElements().filter((element) => !element.paused && !element.ended).length,
+    contextCount: state.audioContexts.size
+  });
+  document.addEventListener("play", (event) => {
+    if (state.active) return;
+    const element = event.target;
+    if (!(element instanceof HTMLMediaElement)) return;
+    element.muted = true;
+    setTimeout(() => {
+      try { element.pause(); } catch {}
+    }, 0);
+  }, true);
+  window.__tikpalProviderAudioGate = { version: 1, setActive, status };
+})()`;
+
+function providerAudioGateExpression(active) {
+  return `(() => {
+    ${providerAudioGateScript}
+    return window.__tikpalProviderAudioGate?.setActive(${active ? "true" : "false"}) || { active: ${active ? "true" : "false"}, mediaCount: 0 };
+  })()`;
+}
 
 const inputFocusGuardScript = `(() => {
   if (window.__tikpalInputFocusGuardInstalled) return;
@@ -468,10 +634,14 @@ async function installKioskGuard(target) {
     await cdpCommand(target.webSocketDebuggerUrl, "Page.addScriptToEvaluateOnNewDocument", {
       source: inputFocusGuardScript
     }).catch(() => {});
+    await cdpCommand(target.webSocketDebuggerUrl, "Page.addScriptToEvaluateOnNewDocument", {
+      source: providerAudioGateScript
+    }).catch(() => {});
     kioskInjectedTargets.add(target.id);
   }
   await evaluate(target.webSocketDebuggerUrl, kioskGuardScript).catch(() => {});
   await evaluate(target.webSocketDebuggerUrl, inputFocusGuardScript).catch(() => {});
+  await evaluate(target.webSocketDebuggerUrl, providerAudioGateScript).catch(() => {});
 }
 
 function errorPageUrl(reason) {
@@ -1137,6 +1307,172 @@ const qqMvAutoPlayExpression = `(async () => {
   }
 })()`;
 
+const neteaseAutoPlayStateExpression = `(() => {
+  if (!/(^|\\.)music\\.163\\.com$/i.test(location.hostname)) {
+    return { ready: false, reason: "not-netease" };
+  }
+
+  const visible = (element) => {
+    if (!element) return false;
+    const view = element.ownerDocument?.defaultView || window;
+    const rect = element.getBoundingClientRect();
+    const style = view.getComputedStyle(element);
+    return rect.width >= 8 &&
+      rect.height >= 8 &&
+      rect.right > 0 &&
+      rect.bottom > 0 &&
+      rect.left < view.innerWidth &&
+      rect.top < view.innerHeight &&
+      style.display !== "none" &&
+      style.visibility !== "hidden" &&
+      Number(style.opacity || "1") > 0.05;
+  };
+  const textOf = (element) => String(element?.innerText || element?.textContent || "").replace(/\\s+/g, " ").trim();
+  const attr = (element, name) => String(element?.getAttribute?.(name) || "").replace(/\\s+/g, " ").trim();
+  const actionTextOf = (element) => [
+    attr(element, "aria-label"),
+    attr(element, "title"),
+    String(element?.value || "").trim(),
+    textOf(element),
+    attr(element, "class"),
+    attr(element, "id")
+  ].filter(Boolean).join(" ");
+  const docs = [document];
+  for (const frame of Array.from(document.querySelectorAll("iframe"))) {
+    try {
+      if (frame.contentDocument) docs.push(frame.contentDocument);
+    } catch {}
+  }
+
+  const media = [];
+  for (const doc of docs) {
+    for (const node of Array.from(doc.querySelectorAll("audio,video"))) {
+      const currentTime = Number(node.currentTime || 0);
+      media.push({
+        paused: Boolean(node.paused),
+        ended: Boolean(node.ended),
+        currentTime: Number.isFinite(currentTime) ? currentTime : 0,
+        duration: Number(node.duration || 0),
+        readyState: Number(node.readyState || 0),
+        src: node.currentSrc || node.src || ""
+      });
+    }
+  }
+  const howls = Array.isArray(window.Howler?._howls) ? window.Howler._howls : [];
+  for (const howl of howls) {
+    const sounds = Array.isArray(howl?._sounds) ? howl._sounds : [];
+    for (const sound of sounds) {
+      const node = sound?._node;
+      const currentTime = Number(node?.currentTime || sound?._seek || 0);
+      media.push({
+        paused: Boolean(sound?._paused || node?.paused),
+        ended: Boolean(sound?._ended || node?.ended),
+        currentTime: Number.isFinite(currentTime) ? currentTime : 0,
+        duration: Number(node?.duration || sound?._duration || 0),
+        readyState: Number(node?.readyState || 0),
+        src: node?.currentSrc || node?.src || ""
+      });
+    }
+  }
+
+  const activeMedia = media.filter((item) => !item.ended);
+  const playing = activeMedia.some((item) => !item.paused);
+  const currentTime = activeMedia.reduce((max, item) => Math.max(max, Number(item.currentTime || 0)), 0);
+  const readyState = activeMedia.reduce((max, item) => Math.max(max, Number(item.readyState || 0)), 0);
+  const progressed = currentTime > ${neteaseAutoPlayMaxStartSeconds};
+  if (playing || progressed) {
+    return {
+      ready: true,
+      reason: playing ? "already-playing" : "progressed",
+      playing,
+      progressed,
+      currentTime,
+      readyState,
+      key: location.href
+    };
+  }
+
+  const includeAction = /(播放|^play$|\\bplay\\b|cmd-icon-play|icon-play|\\bbtnp\\b|\\bply\\b|u-icn-play)/i;
+  const excludeAction = /(暂停|暫停|pause|上一|下一|previous|prev|next|voice|volume|sound|mute|unmute|静音|音量|下载|download|登录|login|会员|vip|收藏|like|heart|favorite)/i;
+  const clickableSelectors = [
+    "button",
+    "a",
+    "[role='button']",
+    "[title]",
+    "[aria-label]",
+    ".cmd-button",
+    ".cmd-icon-play",
+    ".icon-play",
+    ".btnp",
+    ".ply",
+    ".u-icn-play"
+  ].join(",");
+  const clickableElement = (element) => {
+    if (!element) return null;
+    if (element.matches?.("button,a,[role='button']")) return element;
+    return element.closest?.("button,a,[role='button']") || element;
+  };
+  const candidates = [];
+  let order = 0;
+  for (const doc of docs) {
+    const seen = new Set();
+    for (const raw of Array.from(doc.querySelectorAll(clickableSelectors))) {
+      const element = clickableElement(raw);
+      if (!element || seen.has(element) || !visible(element)) continue;
+      seen.add(element);
+      const label = actionTextOf(element);
+      if (!includeAction.test(label) || excludeAction.test(label)) continue;
+      const rect = element.getBoundingClientRect();
+      if (rect.width > 120 || rect.height > 120) continue;
+      const score =
+        (/(^|\\s)cmd-button(\\s|$)|播放/i.test(label) ? 0 : 8) +
+        (rect.width >= 24 && rect.width <= 72 && rect.height >= 24 && rect.height <= 72 ? 0 : 4) +
+        (rect.top < 64 ? 4 : 0);
+      candidates.push({
+        element,
+        label: label.slice(0, 120),
+        score,
+        order,
+        rect
+      });
+      order += 1;
+    }
+  }
+  candidates.sort((left, right) => left.score - right.score || left.order - right.order);
+  const candidate = candidates[0];
+  if (!candidate) {
+    return {
+      ready: false,
+      reason: "no-play-button",
+      playing: false,
+      progressed,
+      currentTime,
+      readyState,
+      key: location.href
+    };
+  }
+
+  const scaleX = window.outerWidth && window.innerWidth ? window.outerWidth / window.innerWidth : window.devicePixelRatio || 1;
+  const scaleY = window.outerHeight && window.innerHeight ? window.outerHeight / window.innerHeight : window.devicePixelRatio || scaleX || 1;
+  return {
+    ready: true,
+    reason: "ready",
+    playing: false,
+    progressed,
+    currentTime,
+    readyState,
+    key: [
+      location.href,
+      String(document.body?.innerText || "").replace(/\\s+/g, " ").trim().slice(0, 180)
+    ].join("|"),
+    buttonLabel: candidate.label,
+    buttonX: candidate.rect.x + candidate.rect.width / 2,
+    buttonY: candidate.rect.y + candidate.rect.height / 2,
+    scaleX,
+    scaleY
+  };
+})()`;
+
 function qqWindowId() {
   const result = spawnSync("xdotool", ["search", "--onlyvisible", "--name", "QQ音乐"], {
     encoding: "utf8",
@@ -1176,6 +1512,53 @@ function clickQqAudioIcon(state) {
   return clickQqWindowPoint(state, "iconX", "iconY");
 }
 
+function x11Env() {
+  const env = { ...process.env };
+  if (!env.DISPLAY) env.DISPLAY = env.TIKPAL_KIOSK_DISPLAY || ":0";
+  if (!env.XAUTHORITY && env.HOME) env.XAUTHORITY = `${env.HOME}/.Xauthority`;
+  return env;
+}
+
+function visibleWindowIdByNames(names) {
+  for (const name of names) {
+    const result = spawnSync("xdotool", ["search", "--onlyvisible", "--name", name], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      env: x11Env()
+    });
+    if (result.status !== 0) continue;
+    const windowId = String(result.stdout || "").trim().split(/\s+/).filter(Boolean).at(-1) || "";
+    if (windowId) return windowId;
+  }
+  return "";
+}
+
+function neteaseWindowId() {
+  return visibleWindowIdByNames(["网易云音乐", "NetEase Cloud Music", "music.163.com"]);
+}
+
+function clickNeteasePlayButton(state) {
+  const windowId = neteaseWindowId();
+  if (!windowId) return false;
+  const x = Math.max(0, Math.round(Number(state.buttonX || 0) * Number(state.scaleX || 1)));
+  const y = Math.max(0, Math.round(Number(state.buttonY || 0) * Number(state.scaleY || 1)));
+  if (!Number.isFinite(x) || !Number.isFinite(y) || x <= 0 || y <= 0) return false;
+
+  spawnSync("xdotool", ["windowfocus", windowId], { stdio: "ignore", env: x11Env() });
+  const result = spawnSync("xdotool", [
+    "mousemove",
+    "--window",
+    windowId,
+    String(x),
+    String(y),
+    "click",
+    "--window",
+    windowId,
+    "1"
+  ], { stdio: "ignore", env: x11Env() });
+  return result.status === 0;
+}
+
 function claimQqMvAutoPlayAttempt(target, result) {
   if (!qqMvAutoPlay || !result?.active || result.playbackError || result.ended || !result.key) return false;
   const currentTime = Number(result.currentTime);
@@ -1213,6 +1596,49 @@ function claimQqMvAutoPlayAttempt(target, result) {
     return false;
   }
   if (now - state.firstSeenAt < qqMvAutoPlayDelayMs || now - state.lastProgressAt < qqMvAutoPlayDelayMs) {
+    return false;
+  }
+
+  state.clicked = true;
+  state.clickedAt = now;
+  return true;
+}
+
+function claimNeteaseAutoPlayAttempt(target, result) {
+  if (providerId !== "netease_music" || !neteaseAutoPlay || !result?.ready || !result.buttonLabel || !result.key) return false;
+  const currentTime = Number(result.currentTime || 0);
+  if (!Number.isFinite(currentTime)) return false;
+
+  const now = Date.now();
+  const key = `${target.id}:${result.key}`;
+  let state = neteaseAutoPlayStates.get(key);
+  if (!state) {
+    state = {
+      firstSeenAt: now,
+      lastProgressAt: now,
+      lastTime: currentTime,
+      clicked: false,
+      progressed: false
+    };
+    neteaseAutoPlayStates.set(key, state);
+    if (neteaseAutoPlayStates.size > 100) {
+      neteaseAutoPlayStates.delete(neteaseAutoPlayStates.keys().next().value);
+    }
+  }
+
+  if (currentTime > Number(state.lastTime || 0) + neteaseAutoPlayProgressEpsilonSeconds) {
+    state.lastProgressAt = now;
+    state.progressed = true;
+  }
+  state.lastTime = currentTime;
+
+  if (result.playing || result.progressed || currentTime > neteaseAutoPlayMaxStartSeconds) {
+    state.progressed = true;
+  }
+  if (state.progressed || state.clicked || result.playing || currentTime > neteaseAutoPlayMaxStartSeconds) {
+    return false;
+  }
+  if (now - state.firstSeenAt < neteaseAutoPlayDelayMs || now - state.lastProgressAt < neteaseAutoPlayDelayMs) {
     return false;
   }
 
@@ -1634,6 +2060,13 @@ const safeDismissPromptExpression = `(() => {
 async function runConsentFeatures(targets) {
   const providerTargets = targets.filter((target) => isProviderWebPage(target) && !isFriendlyErrorPage(target));
   for (const target of providerTargets) {
+    if (providerId === "tidal") {
+      const tidalResult = await evaluate(target.webSocketDebuggerUrl, tidalOneTrustConsentExpression).catch(() => null);
+      if (tidalResult?.clicked) {
+        console.log("[tikpal-web-mode-guard] clicked TIDAL OneTrust consent");
+        return;
+      }
+    }
     const result = await evaluate(target.webSocketDebuggerUrl, consentConfirmExpression).catch(() => null);
     if (result?.clicked) {
       console.log(`[tikpal-web-mode-guard] clicked consent ${providerId} ${result.label}`);
@@ -1717,20 +2150,44 @@ async function runQqMvCinemaFeatures(targets) {
   }
 }
 
+async function runNeteaseAudioFeatures(targets) {
+  if (providerId !== "netease_music" || !neteaseAutoPlay) return;
+  for (const target of targets.filter(isNeteaseMusicPage)) {
+    const state = await evaluate(target.webSocketDebuggerUrl, neteaseAutoPlayStateExpression).catch(() => null);
+    if (!state) continue;
+    if (claimNeteaseAutoPlayAttempt(target, state)) {
+      const clicked = clickNeteasePlayButton(state);
+      console.log(`[tikpal-web-mode-guard] NetEase auto play ${clicked ? "clicked" : "skipped"} ${state.buttonLabel || ""}`.trim());
+      if (clicked) return;
+    }
+  }
+}
+
+async function runProviderAudioGate(targets, active) {
+  for (const target of targets.filter((item) => isProviderWebPage(item) && !isFriendlyErrorPage(item))) {
+    await evaluate(target.webSocketDebuggerUrl, providerAudioGateExpression(active)).catch(() => null);
+  }
+}
+
 async function guardOnce() {
   if (typeof WebSocket !== "function") return;
+  const active = providerIsActive();
   const targets = (await readTargets()).filter(isPageTarget);
   await Promise.all(targets.map(async (target) => {
     attachEarlyErrorRedirect(target);
     await installKioskGuard(target);
     await maybeRedirectErrorPage(target);
   }));
-  await runInputFocusKeyboard(targets);
+  await runProviderAudioGate(targets, active);
+  if (active) await runInputFocusKeyboard(targets);
   await runConsentFeatures(targets);
   await runSafeDismissFeatures(targets);
-  await runSafePromptFeatures(targets);
-  await runQqAudioFeatures(targets);
-  await runQqMvCinemaFeatures(targets);
+  if (active) {
+    await runSafePromptFeatures(targets);
+    await runQqAudioFeatures(targets);
+    await runQqMvCinemaFeatures(targets);
+    await runNeteaseAudioFeatures(targets);
+  }
 }
 
 if (process.argv.includes("--check")) {
@@ -1748,12 +2205,14 @@ if (process.argv.includes("--check")) {
   console.log("[tikpal-web-mode-guard] trial upsell safe dismiss: 1");
   console.log("[tikpal-web-mode-guard] dangerous trial action blocked: 1");
   console.log(`[tikpal-web-mode-guard] input focus keyboard: ${onboardAutoFocus ? "1" : "0"}`);
+  console.log(`[tikpal-web-mode-guard] provider audio gate: ${statePath ? "1" : "0"}`);
   console.log(`[tikpal-web-mode-guard] empty page timeout: ${Math.round(emptyPageTimeoutMs / 1000)}s`);
   console.log(`[tikpal-web-mode-guard] qq auto confirm: ${qqAutoConfirm ? "1" : "0"}`);
   console.log(`[tikpal-web-mode-guard] qq auto unmute: ${qqAutoUnmute ? "1" : "0"}`);
   console.log(`[tikpal-web-mode-guard] qq mv auto fullscreen: ${qqMvAutoFullscreen ? "1" : "0"}`);
   console.log(`[tikpal-web-mode-guard] qq mv cinema mode: ${qqMvCinemaMode ? "1" : "0"}`);
   console.log(`[tikpal-web-mode-guard] qq mv auto play: ${qqMvAutoPlay ? "1" : "0"}`);
+  console.log(`[tikpal-web-mode-guard] netease auto play: ${neteaseAutoPlay ? "1" : "0"}`);
   console.log("[tikpal-web-mode-guard] qq mv native fullscreen path: 0");
   console.log("[tikpal-web-mode-guard] qq mv playlist button: 1");
   console.log("[tikpal-web-mode-guard] qq mv replay button: 1");

@@ -87,6 +87,14 @@ export interface WebModeProviderSummary {
   experimental: boolean;
 }
 
+export type WebModeResidentProviderStatus = "opening" | "ready" | "active" | "check_setup";
+
+export interface WebModeResidentProviderState {
+  status: WebModeResidentProviderStatus;
+  lastError: string | null;
+  updatedAt: string | null;
+}
+
 export interface WebModeSettings {
   proxyEnabled: boolean;
   proxyUrl: string;
@@ -98,6 +106,7 @@ export interface WebModeState {
   enabled: boolean;
   activeProvider: WebModeProviderId | null;
   providers: WebModeProviderSummary[];
+  residentProviders: Partial<Record<WebModeProviderId, WebModeResidentProviderState>>;
   settings: WebModeSettings;
   preferences: UiPreferences;
   lastError: string | null;
