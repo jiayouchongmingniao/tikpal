@@ -363,7 +363,7 @@ TIKPAL_WEB_MODE_PROVIDER_PREWARM_ENABLED=1
 TIKPAL_WEB_MODE_PROVIDER_PREWARM_DELAY_SECONDS=2
 ```
 
-Opening Explore starts the requested provider first, then prewarms the remaining fixed providers in the offscreen stage at `2560,0`: Suno, Spotify, YouTube Music, Apple Music, TIDAL, Qobuz, Deezer, Amazon Music, QQ Music, and NetEase Cloud Music. Switching to an already resident provider must stop the background prewarm job, reveal and focus the existing provider window, restart its per-provider guard, and update `activeProvider`; it must not re-run the first-load readiness gate or roll back to the previous provider just because a site like YouTube Music, Apple Music, TIDAL, or Deezer has a slow provider-ready probe. Background providers stay muted and page-paused through the provider audio gate. `deploy/chromium/tikpal-web-mode.sh close` is the boundary that closes all resident providers and the side panel.
+Opening Explore starts the requested provider first, then prewarms the remaining fixed providers in the offscreen stage at `2560,0`: Suno, Spotify, YouTube Music, Apple Music, TIDAL, Qobuz, Deezer, Amazon Music, QQ Music, and NetEase Cloud Music. Switching to an already resident provider must stop the background prewarm job, reveal and focus the existing provider window, restart its per-provider guard, and update `activeProvider`; it must not re-run the first-load readiness gate or roll back to the previous provider just because a site like YouTube Music, Apple Music, TIDAL, or Deezer has a slow provider-ready probe. Background providers stay muted and page-paused through the provider audio gate. Returning to a resident provider must clear tab mute, unmute media elements, and resume only the media that was playing when that provider was hidden. Repeated inactive guard polling must not overwrite that resume intent after the page is already paused. `deploy/chromium/tikpal-web-mode.sh close` is the boundary that closes all resident providers and the side panel.
 
 The proxy truth is `.tikpal/web-mode-settings.json`; the launcher fallback should prefer a proxy on the same Gentoo host:
 
@@ -744,6 +744,17 @@ DISPLAY=:0 XAUTHORITY=/home/moode/.Xauthority \
 ```
 
 Expected geometry after switching: the active provider is at `0,0 1920x720`, the side panel is at `1920,0 640x720`, and inactive resident providers remain at `2560,0 1920x720`.
+
+Use CDP to verify the resident provider audio gate after deploy:
+
+```js
+(() => ({
+  version: window.__tikpalProviderAudioGate?.version || 0,
+  status: window.__tikpalProviderAudioGate?.status?.() || null
+}))()
+```
+
+Expected: `version=2`. The active provider reports `status.active=true`; inactive providers report `status.active=false`. When the user returns to a provider that was playing before it was hidden, it should become unmuted and continue playback. If the user paused the provider before switching away, returning to it should keep it paused.
 
 Use CDP to verify provider text scaling without viewport scaling:
 

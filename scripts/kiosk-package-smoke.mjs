@@ -1310,6 +1310,9 @@ esac
   assert(webModeScript.includes("prewarm_provider_pool"), "Explore should prewarm resident providers after entry");
   assert(providerGuardSource.includes("__tikpalProviderAudioGate"), "Explore provider guard should install resident provider audio gating");
   assert(providerGuardSource.includes("tikpal-provider-audio-muted") && extensionBackground.includes("provider-audio-muted"), "Explore provider gate should ask the extension to tab-mute inactive providers");
+  assert(providerGuardSource.includes("version: 2"), "Explore provider audio gate should use the resumable v2 contract");
+  assert(providerGuardSource.includes("previous.wasPlaying = previous.wasPlaying ||"), "Inactive provider audio polling should not forget playback that must resume");
+  assert(providerGuardSource.includes("element.muted = false"), "Returning to a resident provider should unmute media elements");
   assert(stylesSource.includes("webModeProviderSignalTrace"), "Explore provider cards should use the short signal trace");
   assert(!stylesSource.includes("webModeProviderOpeningSpin"), "Explore provider cards should remove the full rotating border");
 

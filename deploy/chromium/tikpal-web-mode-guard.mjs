@@ -328,7 +328,7 @@ const kioskGuardScript = `(() => {
 })()`;
 
 const providerAudioGateScript = `(() => {
-  if (window.__tikpalProviderAudioGate?.version === 1) return;
+  if (window.__tikpalProviderAudioGate?.version >= 2) return;
   const state = {
     active: true,
     media: new WeakMap(),
@@ -353,15 +353,14 @@ const providerAudioGateScript = `(() => {
   const setMediaActive = (active) => {
     for (const element of mediaElements()) {
       if (!(element instanceof HTMLMediaElement)) continue;
-      const previous = state.media.get(element) || { wasPlaying: false, muted: element.muted };
+      const previous = state.media.get(element) || { wasPlaying: false };
       if (!active) {
-        previous.wasPlaying = !element.paused && !element.ended;
-        previous.muted = element.muted;
+        previous.wasPlaying = previous.wasPlaying || (!element.paused && !element.ended);
         state.media.set(element, previous);
         element.muted = true;
         try { element.pause(); } catch {}
       } else {
-        element.muted = previous.muted === true ? true : false;
+        element.muted = false;
         if (previous.wasPlaying && element.paused && !element.ended) {
           element.play().catch(() => {});
         }
@@ -374,11 +373,13 @@ const providerAudioGateScript = `(() => {
     const howls = Array.isArray(howler?._howls) ? howler._howls : [];
     if (!howler || !howls.length) return;
     if (!active) {
-      state.howlerSounds = [];
       for (const howl of howls) {
         const sounds = Array.isArray(howl?._sounds) ? howl._sounds : [];
         for (const sound of sounds) {
-          if (!sound?._paused && sound?._id !== undefined) state.howlerSounds.push([howl, sound._id]);
+          if (sound?._paused || sound?._id === undefined) continue;
+          if (!state.howlerSounds.some(([knownHowl, knownId]) => knownHowl === howl && knownId === sound._id)) {
+            state.howlerSounds.push([howl, sound._id]);
+          }
         }
       }
       try { howler.mute(true); } catch {}
@@ -438,7 +439,7 @@ const providerAudioGateScript = `(() => {
       try { element.pause(); } catch {}
     }, 0);
   }, true);
-  window.__tikpalProviderAudioGate = { version: 1, setActive, status };
+  window.__tikpalProviderAudioGate = { version: 2, setActive, status };
 })()`;
 
 function providerAudioGateExpression(active) {
