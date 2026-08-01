@@ -252,7 +252,7 @@ mpc status
 
 Settings -> Preferences -> Audio Output exposes four MPD listening profiles:
 
-- `Pure Listening` rewrites only the Tikpal-managed MPD output block, backs up `/etc/mpd.conf`, uses a real hardware ALSA device such as `hw:CARD=BT66,DEV=0`, sets `mixer_type "none"`, disables ReplayGain handling, avoids output `format` conversion, and locks MPD software volume.
+- `Pure Listening` rewrites only the Tikpal-managed MPD output block, backs up `/etc/mpd.conf`, uses a real hardware ALSA device such as `hw:CARD=BT66,DEV=0`, sets `mixer_type "none"`, disables ReplayGain handling, avoids output `format` conversion, and locks MPD software volume. User-facing volume still adjusts the output level through `TIKPAL_OUTPUT_VOLUME_SET_COMMAND` when that helper is configured; it must not be silently disabled just because MPD software volume is locked.
 - `Everyday` is the default. It keeps `_audioout`, MPD software volume, ReplayGain auto, two-second crossfade, and the shared route that works well with Tikpal Library and Radio.
 - `Sleep / Meditation` keeps `_audioout`, sets MPD output `format "48000:*:*"`, uses ReplayGain track, five-second crossfade, caps MPD/Radio volume at `45%`, and schedules MPD stop after 60 minutes. [MPD documents audio output `format`](https://mpd.readthedocs.io/en/stable/mpd.conf.5.html#audio-output) as `sample_rate:bits:channels`, and any field can be `*` when it should not be forced.
 - `Custom` uses six user-facing switches saved in `.tikpal/ui-preferences.json`: `Pure Direct`, `Volume Normalization`, `Smooth Transition`, `Automatic Sample Rate`, `DSD Mode`, and `Playback Stability`. The API passes those switches to the root helper as `TIKPAL_MPD_CUSTOM_*` environment flags whenever Custom is applied. Keep lower-level buffer, IRQ, and resampler details in Audio Diagnostics, not in the normal user flow.
@@ -296,7 +296,7 @@ TIKPAL_MPD_CUSTOM_REPLAYGAIN=
 TIKPAL_MPD_CUSTOM_CROSSFADE=
 ```
 
-`Pure Listening` is intentionally not the default. It can make MPD software volume, Loopback spectrum, ReplayGain, and shared-output convenience unavailable. Roon, AirPlay, Spotify, DLNA, Explore, and provider audio are outside these MPD presets.
+`Pure Listening` is intentionally not the default. It can make MPD software volume, Loopback spectrum, ReplayGain, and shared-output convenience unavailable. However, the Player/side-panel volume slider should remain usable on Gentoo when the output-volume helper can write the hardware or system output level. Roon, AirPlay, Spotify, DLNA, Explore, and provider audio are outside these MPD presets.
 
 Profile switching must stay bounded. The helper now wraps `mpc` and `systemctl` calls with short timeouts, stops a stuck `mpd.service` with a bounded SIGTERM/SIGKILL fallback, enables only the selected Tikpal-managed MPD output, and applies ReplayGain/crossfade/volume settings through best-effort `mpc` calls. The API wraps profile changes in the MPD mutation lock, captures current MPD/Radio playback before the helper runs, then performs only a short best-effort restore instead of waiting indefinitely for MPD to prove `playing`. This avoids a successful profile change looking like a failed Settings action when MPD or a NAS-backed queue responds slowly.
 
@@ -340,6 +340,8 @@ done
 ```
 
 On the 2026-08-01 Gentoo `192.168.10.115` validation run, `Custom`, `Sleep`, and `Pure Listening` returned in roughly `0.7s-3.1s` after the bounded restore change. The first `Sleep -> Everyday` switch could still take around `7s-8s` while MPD reopened the shared output path, but it no longer timed out and playback recovered.
+
+On the same host, Pure Listening / strict mode was validated with Radio playing: `POST /api/v1/playback/actions {"type":"volume_set","value":46}` moved `system.volume.percent` from `45` to `46`, and a second write restored `45` without interrupting Radio playback. This is the expected contract: MPD software volume stays locked for the direct-output profile, while the physical output level remains adjustable.
 
 ## Explore Provider Mode
 

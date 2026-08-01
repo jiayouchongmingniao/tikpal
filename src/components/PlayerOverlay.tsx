@@ -343,9 +343,9 @@ export function PlayerOverlay({
     : 0;
   const displayedVolumePercent = clampVolumePercent(volumeDraftPercent ?? system.volume.percent);
   const mpdProfileVolumeBound = playback.source === "mpd" || playback.source === "radio";
-  const mpdVolumeLocked = (preferences.audioOutputProfile === "pure" || (preferences.audioOutputProfile === "custom" && preferences.audioOutputCustomSettings.pureDirect)) && mpdProfileVolumeBound;
+  const mpdSoftwareVolumeLocked = (preferences.audioOutputProfile === "pure" || (preferences.audioOutputProfile === "custom" && preferences.audioOutputCustomSettings.pureDirect)) && mpdProfileVolumeBound;
   const mpdVolumeCapped = preferences.audioOutputProfile === "sleep" && mpdProfileVolumeBound;
-  const volumeControlTitle = mpdVolumeLocked
+  const volumeControlTitle = mpdSoftwareVolumeLocked
     ? t("settings.volumeLocked")
     : mpdVolumeCapped
       ? t("settings.volumeCapped")
@@ -534,11 +534,6 @@ export function PlayerOverlay({
     () => {
       const requestState = volumeRequestStateRef.current;
       if (requestState.inFlight) return;
-      if (mpdVolumeLocked) {
-        requestState.queued = null;
-        setVolumeDraftPercent(null);
-        return;
-      }
 
       requestState.inFlight = true;
 
@@ -575,16 +570,11 @@ export function PlayerOverlay({
 
       void sendNext();
     },
-    [mpdVolumeLocked, onPlaybackAction]
+    [onPlaybackAction]
   );
 
   const scheduleVolumeChange = useCallback(
     (percent: number) => {
-      if (mpdVolumeLocked) {
-        volumeRequestStateRef.current.queued = null;
-        setVolumeDraftPercent(null);
-        return;
-      }
       const nextPercent = clampVolumePercent(percent);
       const requestState = volumeRequestStateRef.current;
       requestState.queued = nextPercent;
@@ -599,7 +589,7 @@ export function PlayerOverlay({
         flushVolumeChange();
       }, CONTROL_COMMIT_DELAY_MS);
     },
-    [flushVolumeChange, mpdVolumeLocked]
+    [flushVolumeChange]
   );
 
   const commitVolumeChange = useCallback(() => {
@@ -1255,7 +1245,7 @@ export function PlayerOverlay({
                 </button>
               </label>
             ) : null}
-            <div className={`library-volume-actions ${mpdVolumeLocked ? "is-locked" : ""}`} data-player-volume-control title={volumeControlTitle}>
+            <div className="library-volume-actions" data-player-volume-control title={volumeControlTitle}>
               <span className="library-volume-label">{t("quickMenu.volume")}</span>
               <div className="library-volume-slider-control">
                 <div className="library-volume-track" aria-hidden="true">
@@ -1269,8 +1259,7 @@ export function PlayerOverlay({
                   step={1}
                   value={displayedVolumePercent}
                   aria-label={t("quickMenu.volume")}
-                  aria-valuetext={mpdVolumeLocked ? t("settings.volumeLocked") : `${displayedVolumePercent}%`}
-                  disabled={mpdVolumeLocked}
+                  aria-valuetext={`${displayedVolumePercent}%`}
                   data-player-volume-slider
                   data-gesture-control
                   onChange={(event) => handleVolumeSliderChange(event.currentTarget.value)}

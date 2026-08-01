@@ -10127,6 +10127,9 @@ async function applyMpcPlaybackActionUnlocked(action) {
       }
       const currentSourceId = getCurrentMpcSourceId();
       if ((currentSourceId === "mpd" || currentSourceId === "radio") && await isMpdBitPerfectStrictModeActive()) {
+        if (OUTPUT_VOLUME_SET_COMMAND_CONFIGURED) {
+          await setOutputVolumePercent(percent);
+        }
         return;
       }
       const volumeLimitPercent = currentSourceId === "mpd" || currentSourceId === "radio"

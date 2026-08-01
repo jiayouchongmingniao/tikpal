@@ -3698,19 +3698,6 @@ select {
   cursor: pointer;
 }
 
-.library-volume-actions.is-locked .library-volume-track span {
-  background: linear-gradient(90deg, rgba(226, 232, 240, 0.5), rgba(148, 163, 184, 0.38));
-  box-shadow: none;
-}
-
-.library-volume-actions.is-locked .library-volume-slider {
-  cursor: not-allowed;
-}
-
-.library-volume-actions.is-locked .library-volume-percent {
-  color: var(--theme-text-weak);
-}
-
 .library-volume-slider-control:focus-within .library-volume-track {
   outline: 1px solid var(--surface-control-border-hover);
   outline-offset: 5px;
