@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const port = Number.parseInt(process.env.TIKPAL_WEB_MODE_PROVIDER_DEBUG_PORT || "9234", 10);
@@ -169,6 +170,18 @@ const neteaseAutoPlayStates = new Map();
 let lastOnboardVisible = null;
 let lastOnboardActionMs = 0;
 const providerNativeFailureIds = new Set(["amazon_music", "qobuz", "deezer"]);
+const providerReadyHosts = {
+  suno: ["suno.com", "www.suno.com"],
+  spotify: ["open.spotify.com"],
+  youtube_music: ["music.youtube.com", "www.youtube.com", "youtube.com"],
+  apple_music: ["music.apple.com"],
+  tidal: ["listen.tidal.com", "tidal.com"],
+  qobuz: ["play.qobuz.com", "www.qobuz.com", "qobuz.com"],
+  deezer: ["www.deezer.com", "deezer.com"],
+  amazon_music: ["music.amazon.com", "music.amazon.co.jp", "music.amazon.co.uk", "music.amazon.de", "music.amazon.fr", "music.amazon.it", "music.amazon.es"],
+  qq_music: ["y.qq.com"],
+  netease_music: ["music.163.com"]
+};
 const qqAudioUnmuteCooldownMs = 5000;
 const qqMvAutoPlayDelayMs = 1700;
 const qqMvAutoPlayMaxStartSeconds = 1.5;
@@ -227,6 +240,58 @@ function isProviderWebPage(target) {
   } catch {
     return false;
   }
+}
+
+function hostMatches(host, expectedHost) {
+  return host === expectedHost || host.endsWith(`.${expectedHost}`);
+}
+
+function isExpectedProviderPage(target) {
+  if (!isPageTarget(target) || isFriendlyErrorPage(target) || redirectedTargets.has(target.id)) return false;
+  const expectedHosts = providerReadyHosts[providerId] || [];
+  if (expectedHosts.length === 0) return isProviderWebPage(target);
+  try {
+    const url = new URL(target.url || "");
+    if (url.protocol !== "http:" && url.protocol !== "https:") return false;
+    return expectedHosts.some((host) => hostMatches(url.hostname, host));
+  } catch {
+    return false;
+  }
+}
+
+function writeResidentProviderStatus(status) {
+  if (!statePath || !providerId) return;
+  const normalizedStatus = status === "active" ? "active" : "ready";
+  let state = {};
+  try {
+    state = JSON.parse(readFileSync(statePath, "utf8"));
+  } catch {}
+  const residentProviders = state.residentProviders && typeof state.residentProviders === "object"
+    ? state.residentProviders
+    : {};
+  const current = residentProviders[providerId] && typeof residentProviders[providerId] === "object"
+    ? residentProviders[providerId]
+    : {};
+  if (current.status === normalizedStatus && !current.lastError) return;
+  const now = new Date().toISOString();
+  residentProviders[providerId] = {
+    ...current,
+    status: normalizedStatus,
+    lastError: null,
+    updatedAt: now
+  };
+  state.residentProviders = residentProviders;
+  state.updatedAt = now;
+  if (normalizedStatus === "active") state.lastError = null;
+  try {
+    mkdirSync(dirname(statePath), { recursive: true });
+    writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`);
+  } catch {}
+}
+
+function syncResidentProviderStatus(targets, active) {
+  if (!targets.some(isExpectedProviderPage)) return;
+  writeResidentProviderStatus(active ? "active" : "ready");
 }
 
 function isQqMusicPage(target) {
@@ -2179,6 +2244,7 @@ async function guardOnce() {
     await installKioskGuard(target);
     await maybeRedirectErrorPage(target);
   }));
+  syncResidentProviderStatus(targets, active);
   await runProviderAudioGate(targets, active);
   if (active) await runInputFocusKeyboard(targets);
   await runConsentFeatures(targets);

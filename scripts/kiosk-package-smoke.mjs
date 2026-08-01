@@ -1313,6 +1313,7 @@ esac
   assert(providerGuardSource.includes("version: 2"), "Explore provider audio gate should use the resumable v2 contract");
   assert(providerGuardSource.includes("previous.wasPlaying = previous.wasPlaying ||"), "Inactive provider audio polling should not forget playback that must resume");
   assert(providerGuardSource.includes("element.muted = false"), "Returning to a resident provider should unmute media elements");
+  assert(providerGuardSource.includes("syncResidentProviderStatus") && providerGuardSource.includes("providerReadyHosts"), "Resident provider guards should clear stale check_setup once the provider reaches its real host");
   assert(stylesSource.includes("webModeProviderSignalTrace"), "Explore provider cards should use the short signal trace");
   assert(!stylesSource.includes("webModeProviderOpeningSpin"), "Explore provider cards should remove the full rotating border");
 
