@@ -7,6 +7,9 @@ standard_device="${TIKPAL_MPD_STANDARD_ALSA_DEVICE:-_audioout}"
 pure_device="${TIKPAL_MPD_PURE_ALSA_DEVICE:-${TIKPAL_MPD_BITPERFECT_ALSA_DEVICE:-}}"
 sleep_rate="${TIKPAL_MPD_SLEEP_SAMPLE_RATE:-48000}"
 sleep_volume_limit="${TIKPAL_MPD_SLEEP_VOLUME_LIMIT:-45}"
+mpc_timeout_seconds="${TIKPAL_MPC_TIMEOUT_SECONDS:-1}"
+mpd_stop_timeout_seconds="${TIKPAL_MPD_STOP_TIMEOUT_SECONDS:-2}"
+mpd_start_timeout_seconds="${TIKPAL_MPD_START_TIMEOUT_SECONDS:-5}"
 custom_device="${TIKPAL_MPD_CUSTOM_ALSA_DEVICE:-$standard_device}"
 custom_name="${TIKPAL_MPD_CUSTOM_OUTPUT_NAME:-Tikpal Custom}"
 custom_mixer_type="${TIKPAL_MPD_CUSTOM_MIXER_TYPE:-}"
@@ -23,6 +26,31 @@ env_enabled() {
     1|true|yes|on|enabled) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+run_with_timeout() {
+  local seconds="$1"
+  shift
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$seconds" "$@"
+  else
+    "$@"
+  fi
+}
+
+run_systemctl() {
+  local seconds="$1"
+  shift
+  if [[ "$(id -u)" == "0" ]]; then
+    run_with_timeout "$seconds" systemctl "$@"
+  else
+    run_with_timeout "$seconds" sudo -n systemctl "$@"
+  fi
+}
+
+run_mpc() {
+  command -v mpc >/dev/null 2>&1 || return 127
+  run_with_timeout "$mpc_timeout_seconds" mpc "$@"
 }
 
 normalize_profile() {
@@ -154,9 +182,43 @@ $marker_end
 EOF
 }
 
+profile_output_name() {
+  case "$1" in
+    pure) printf 'Tikpal Pure Listening\n' ;;
+    everyday) printf 'Tikpal Everyday\n' ;;
+    sleep) printf 'Tikpal Sleep Meditation\n' ;;
+    custom) printf '%s\n' "$custom_name" ;;
+  esac
+}
+
 runtime_mpc() {
+  run_mpc "$@" >/dev/null 2>&1 || true
+}
+
+wait_for_mpd() {
   command -v mpc >/dev/null 2>&1 || return 0
-  mpc "$@" >/dev/null 2>&1 || true
+  local attempt
+  for attempt in {1..8}; do
+    if run_mpc status >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.25
+  done
+}
+
+select_runtime_output() {
+  command -v mpc >/dev/null 2>&1 || return 0
+  local selected_name="$1"
+  while IFS= read -r line; do
+    [[ "$line" =~ ^Output[[:space:]]+([0-9]+)[[:space:]]+\((.*)\)[[:space:]]+is ]] || continue
+    local output_id="${BASH_REMATCH[1]}"
+    local output_name="${BASH_REMATCH[2]}"
+    if [[ "$output_name" == "$selected_name" ]]; then
+      runtime_mpc enable "$output_id"
+    else
+      runtime_mpc disable "$output_id"
+    fi
+  done < <(run_mpc outputs 2>/dev/null || true)
 }
 
 apply_runtime_profile() {
@@ -175,7 +237,7 @@ apply_runtime_profile() {
       runtime_mpc crossfade 5
       if command -v mpc >/dev/null 2>&1; then
         local current_volume
-        current_volume="$(mpc volume 2>/dev/null | awk -F: '/volume:/ { gsub(/[^0-9]/, "", $2); print $2; exit }' || true)"
+        current_volume="$(run_mpc volume 2>/dev/null | awk -F: '/volume:/ { gsub(/[^0-9]/, "", $2); print $2; exit }' || true)"
         if [[ "$current_volume" =~ ^[0-9]+$ ]] && (( current_volume > sleep_volume_limit )); then
           runtime_mpc volume "$sleep_volume_limit"
         fi
@@ -201,6 +263,46 @@ apply_runtime_profile() {
       fi
       ;;
   esac
+}
+
+mpd_unit() {
+  if systemctl cat mpd.service >/dev/null 2>&1; then
+    printf 'mpd.service\n'
+  else
+    printf 'mpd\n'
+  fi
+}
+
+mpd_is_stopping_or_running() {
+  case "${1:-}" in
+    active|activating|deactivating|reloading) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+stop_mpd_quickly() {
+  local unit="$1"
+  run_systemctl "$mpd_stop_timeout_seconds" stop "$unit" >/dev/null 2>&1 || true
+
+  local state attempt
+  for attempt in {1..8}; do
+    state="$(systemctl is-active "$unit" 2>/dev/null || true)"
+    mpd_is_stopping_or_running "$state" || break
+    if (( attempt == 2 )); then
+      run_systemctl 1 kill -s SIGTERM "$unit" >/dev/null 2>&1 || true
+    elif (( attempt == 4 )); then
+      run_systemctl 1 kill -s SIGKILL "$unit" >/dev/null 2>&1 || true
+    fi
+    sleep 0.25
+  done
+  run_systemctl 1 reset-failed "$unit" >/dev/null 2>&1 || true
+}
+
+restart_mpd_quickly() {
+  local unit
+  unit="$(mpd_unit)"
+  stop_mpd_quickly "$unit"
+  run_systemctl "$mpd_start_timeout_seconds" start "$unit" >/dev/null 2>&1 || true
 }
 
 current_profile() {
@@ -245,13 +347,14 @@ write_profile() {
 
   if [[ "$(id -u)" == "0" ]]; then
     install -m 0644 "${tmp_file}.next" "$mpd_conf"
-    systemctl restart mpd.service >/dev/null 2>&1 || systemctl restart mpd >/dev/null 2>&1 || true
   else
     sudo -n install -m 0644 "${tmp_file}.next" "$mpd_conf"
-    sudo -n systemctl restart mpd.service >/dev/null 2>&1 || sudo -n systemctl restart mpd >/dev/null 2>&1 || true
   fi
 
   rm -f "$tmp_file" "${tmp_file}.next"
+  restart_mpd_quickly
+  wait_for_mpd
+  select_runtime_output "$(profile_output_name "$selected_profile")"
   apply_runtime_profile "$selected_profile"
   printf '%s\n' "$selected_profile"
 }

@@ -6062,6 +6062,11 @@ select {
   color: var(--theme-accent);
 }
 
+.audio-profile-option.is-custom-profile > svg,
+.audio-profile-option.is-custom-profile strong {
+  color: color-mix(in srgb, #ff6b78 88%, white 8%);
+}
+
 .audio-profile-option em {
   display: block;
   margin-top: 4px;
@@ -6105,10 +6110,11 @@ select {
 .custom-audio-warning {
   grid-column: 1 / -1;
   margin: 0;
-  color: color-mix(in srgb, #ff5c6c 86%, white 8%);
-  font-size: clamp(11px, 0.62vw, 14px);
-  font-weight: 820;
+  color: color-mix(in srgb, #ff4d5e 92%, white 8%);
+  font-size: clamp(12px, 0.68vw, 15px);
+  font-weight: 880;
   line-height: 1.15;
+  text-shadow: 0 0 16px rgba(255, 76, 94, 0.18);
 }
 
 .custom-audio-toggle {
@@ -6130,6 +6136,11 @@ select {
   cursor: pointer;
 }
 
+.custom-audio-toggle:disabled {
+  cursor: wait;
+  opacity: 0.76;
+}
+
 .custom-audio-toggle:hover,
 .custom-audio-toggle:focus-visible {
   border-color: var(--surface-control-border-hover);
@@ -6144,14 +6155,18 @@ select {
     var(--surface-control-bg);
 }
 
-.custom-audio-toggle span {
+.custom-audio-toggle .custom-audio-switch {
   grid-row: 1 / span 2;
-  display: inline-grid;
-  place-items: center;
-  min-width: 42px;
-  min-height: 26px;
-  border: 1px solid color-mix(in srgb, var(--surface-control-border) 72%, transparent);
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 58px;
+  min-height: 28px;
+  padding: 0 8px 0 28px;
+  border: 1px solid color-mix(in srgb, var(--surface-control-border) 76%, transparent);
   border-radius: 999px;
+  background: rgba(0, 0, 0, 0.2);
   color: var(--theme-text-muted);
   font-size: 11px;
   font-weight: 850;
@@ -6159,9 +6174,30 @@ select {
   text-transform: uppercase;
 }
 
-.custom-audio-toggle.is-active span {
+.custom-audio-switch i {
+  position: absolute;
+  left: 5px;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--theme-text-muted) 78%, transparent);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.25);
+  transition: transform 140ms ease, background 140ms ease;
+}
+
+.custom-audio-switch b {
+  font: inherit;
+}
+
+.custom-audio-toggle.is-active .custom-audio-switch {
   border-color: color-mix(in srgb, var(--theme-accent) 70%, white 12%);
   color: var(--theme-accent-strong);
+  background: color-mix(in srgb, var(--theme-accent) 22%, rgba(0, 0, 0, 0.2));
+}
+
+.custom-audio-toggle.is-active .custom-audio-switch i {
+  transform: translateX(29px);
+  background: color-mix(in srgb, var(--theme-accent-strong) 82%, white 10%);
 }
 
 .custom-audio-toggle strong {
@@ -6223,8 +6259,8 @@ select {
 
 .multiroom-ecosystem-card {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
-  gap: 12px;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  gap: 9px;
   min-height: 184px;
   padding: 16px;
   border: 1px solid var(--surface-control-border);
@@ -6302,6 +6338,17 @@ select {
   font-size: clamp(12px, 0.64vw, 14px);
   font-weight: 620;
   line-height: 1.32;
+}
+
+.multiroom-ecosystem-card .multiroom-ecosystem-stack {
+  min-width: 0;
+  color: color-mix(in srgb, var(--theme-accent-strong) 76%, var(--theme-text-soft));
+  font-size: clamp(10px, 0.54vw, 12px);
+  font-weight: 780;
+  letter-spacing: 0;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .multiroom-ecosystem-toggle {

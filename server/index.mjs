@@ -23,6 +23,9 @@ const MPD_STARTUP_VOLUME = Number(process.env.TIKPAL_MPD_STARTUP_VOLUME ?? 30);
 const MPD_RECOVERY_COMMAND = process.env.TIKPAL_MPD_RECOVERY_COMMAND ?? "";
 const MPD_RECOVERY_TIMEOUT_MS = parseEnvPositiveInteger(process.env.TIKPAL_MPD_RECOVERY_TIMEOUT_MS, 20_000);
 const MPD_RECOVERY_SETTLE_MS = parseEnvPositiveInteger(process.env.TIKPAL_MPD_RECOVERY_SETTLE_MS, 2500);
+const AUDIO_OUTPUT_RESTORE_MPC_TIMEOUT_MS = parseEnvPositiveInteger(process.env.TIKPAL_AUDIO_OUTPUT_RESTORE_MPC_TIMEOUT_MS, 1000);
+const AUDIO_OUTPUT_RESTORE_ATTEMPTS = parseEnvPositiveInteger(process.env.TIKPAL_AUDIO_OUTPUT_RESTORE_ATTEMPTS, 2);
+const AUDIO_OUTPUT_RESTORE_SETTLE_MS = parseEnvPositiveInteger(process.env.TIKPAL_AUDIO_OUTPUT_RESTORE_SETTLE_MS, 200);
 const MPD_LIBRARY_UPDATE_WAIT_MS = parseEnvPositiveInteger(process.env.TIKPAL_MPD_LIBRARY_UPDATE_WAIT_MS, 8000);
 const MPD_LIBRARY_UPDATE_POLL_MS = parseEnvPositiveInteger(process.env.TIKPAL_MPD_LIBRARY_UPDATE_POLL_MS, 350);
 const MPD_LOG_PATH = process.env.TIKPAL_MPD_LOG_PATH ?? "/var/log/mpd/log";
@@ -4604,6 +4607,22 @@ function audioOutputProfileCanRestoreVolume(profile, customSettings = DEFAULT_AU
   return true;
 }
 
+function isMpdAudioOutputProfileRestoreSource(sourceId) {
+  const normalized = String(sourceId ?? "").trim().toLowerCase();
+  if (!normalized) return true;
+  return [
+    "mpd",
+    "library",
+    "audio",
+    "local",
+    "nas",
+    "usb",
+    "favorites",
+    "recently_added",
+    "radio"
+  ].includes(normalized);
+}
+
 function expandUiInputMethodSyncCommand(command, preferences) {
   return command
     .replaceAll("%LOCALE%", shellQuote(preferences.locale))
@@ -4725,15 +4744,17 @@ async function applyAudioOutputProfile(profile, customSettings = DEFAULT_AUDIO_O
     scheduleAudioOutputProfileAutoStop(normalizedProfile);
     return;
   }
-  const playbackRestoreState = await captureMpdBitPerfectPlaybackRestoreState();
-  const command = AUDIO_OUTPUT_PROFILE_COMMAND.trim()
-    ? expandAudioOutputProfileCommand(AUDIO_OUTPUT_PROFILE_COMMAND, normalizedProfile)
-    : expandMpdBitPerfectProfileCommand(MPD_BITPERFECT_PROFILE_COMMAND, audioOutputProfileToMpdBitPerfectMode(normalizedProfile));
-  const env = normalizedProfile === "custom" ? buildAudioOutputCustomSettingsEnv(customSettings) : undefined;
-  await runCommand(command, { allowFailure: false, timeout: 20_000, env });
-  scheduleAudioOutputProfileAutoStop(normalizedProfile);
-  await restoreMpdBitPerfectPlayback(playbackRestoreState);
-  await restoreMpdOutputVolumeAfterProfileSwitch(normalizedProfile, customSettings);
+  await withMpcMutationLock(async () => {
+    const playbackRestoreState = await captureMpdBitPerfectPlaybackRestoreState();
+    const command = AUDIO_OUTPUT_PROFILE_COMMAND.trim()
+      ? expandAudioOutputProfileCommand(AUDIO_OUTPUT_PROFILE_COMMAND, normalizedProfile)
+      : expandMpdBitPerfectProfileCommand(MPD_BITPERFECT_PROFILE_COMMAND, audioOutputProfileToMpdBitPerfectMode(normalizedProfile));
+    const env = normalizedProfile === "custom" ? buildAudioOutputCustomSettingsEnv(customSettings) : undefined;
+    await runCommand(command, { allowFailure: false, timeout: 20_000, env });
+    scheduleAudioOutputProfileAutoStop(normalizedProfile);
+    await restoreMpdBitPerfectPlayback(playbackRestoreState);
+    await restoreMpdOutputVolumeAfterProfileSwitch(normalizedProfile, customSettings);
+  });
 }
 
 async function applyMpdBitPerfectMode(mode) {
@@ -4743,7 +4764,7 @@ async function applyMpdBitPerfectMode(mode) {
 async function captureMpdBitPerfectPlaybackRestoreState() {
   if (API_MODE !== "mpc") return null;
   const currentSourceId = getCurrentMpcSourceId();
-  if (currentSourceId && currentSourceId !== "mpd" && currentSourceId !== "radio") return null;
+  if (!isMpdAudioOutputProfileRestoreSource(currentSourceId)) return null;
 
   try {
     const status = await readMpcStatusWithTikpalPlaybackMode({ allowFailure: true, timeout: 2500 });
@@ -4762,27 +4783,27 @@ async function captureMpdBitPerfectPlaybackRestoreState() {
 async function restoreMpdBitPerfectPlayback(snapshot) {
   if (!snapshot) return;
   try {
-    let latestStatus = null;
-    for (let attempt = 0; attempt < 16; attempt += 1) {
-      latestStatus = await readMpcStatusWithTikpalPlaybackMode({ allowFailure: true, timeout: 2500 });
-      if (latestStatus.queueLength > 0) break;
-      await wait(250);
-    }
-
-    const queueLength = Number(latestStatus?.queueLength ?? 0);
+    const latestStatus = parseMpcStatus(await runMpc(["status"], {
+      allowFailure: true,
+      timeout: AUDIO_OUTPUT_RESTORE_MPC_TIMEOUT_MS
+    }));
+    const queueLength = Number(latestStatus.queueLength || snapshot.queueLength || 0);
     const position = Number(snapshot.position);
     const playArgs = Number.isInteger(position) && position >= 1 && position <= queueLength
       ? ["play", String(position)]
       : ["play"];
 
-    for (let attempt = 0; attempt < 8; attempt += 1) {
-      await runMpc(playArgs, { allowFailure: true, timeout: 2500 });
-      const status = await readMpcStatusWithTikpalPlaybackMode({ allowFailure: true, timeout: 2500 });
+    for (let attempt = 0; attempt < AUDIO_OUTPUT_RESTORE_ATTEMPTS; attempt += 1) {
+      await runMpc(playArgs, { allowFailure: true, timeout: AUDIO_OUTPUT_RESTORE_MPC_TIMEOUT_MS });
+      await wait(AUDIO_OUTPUT_RESTORE_SETTLE_MS);
+      const status = parseMpcStatus(await runMpc(["status"], {
+        allowFailure: true,
+        timeout: AUDIO_OUTPUT_RESTORE_MPC_TIMEOUT_MS
+      }));
       if (status.state === "playing") return;
-      await wait(250);
     }
 
-    throw new Error(`MPD stayed ${latestStatus?.state ?? "unknown"} after quality switch`);
+    console.warn(`tikpal-api left MPD ${latestStatus.state ?? "unknown"} after audio output profile switch; playback polling will refresh shortly`);
   } catch (error) {
     console.warn(`tikpal-api could not restore MPD playback after quality switch: ${error instanceof Error ? error.message : "unknown error"}`);
   }

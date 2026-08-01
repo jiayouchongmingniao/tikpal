@@ -38,6 +38,7 @@ import type {
 const API_ROOT = "/api/v1";
 const DEFAULT_GET_TIMEOUT_MS = 4500;
 const DEFAULT_POST_TIMEOUT_MS = 15000;
+const PREFERENCES_POST_TIMEOUT_MS = 30000;
 const HEARTBEAT_TIMEOUT_MS = 2500;
 
 async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit = {}, timeoutMs = DEFAULT_GET_TIMEOUT_MS) {
@@ -113,7 +114,7 @@ export async function updatePreferences(patch: UiPreferencesPatch): Promise<UiPr
       "Content-Type": "application/json"
     },
     body: JSON.stringify(patch)
-  }, DEFAULT_POST_TIMEOUT_MS);
+  }, PREFERENCES_POST_TIMEOUT_MS);
   return readJson<UiPreferences>(response);
 }
 

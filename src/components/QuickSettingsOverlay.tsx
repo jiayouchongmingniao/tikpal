@@ -417,6 +417,8 @@ export function QuickSettingsOverlay({
   const [multiroomState, setMultiroomState] = useState<MultiroomAudioState | null>(system.multiroom ?? null);
   const [multiroomPendingId, setMultiroomPendingId] = useState<MultiroomEcosystemId | null>(null);
   const [multiroomError, setMultiroomError] = useState<string | null>(null);
+  const [audioOutputPendingProfile, setAudioOutputPendingProfile] = useState<AudioOutputProfile | null>(null);
+  const [audioOutputPendingCustomSettings, setAudioOutputPendingCustomSettings] = useState<Partial<Record<AudioOutputCustomSettingId, boolean>> | null>(null);
   const [mpdQualityError, setMpdQualityError] = useState<string | null>(null);
   const [audioDiagnostics, setAudioDiagnostics] = useState<AudioOutputDiagnostics | null>(null);
   const [audioDiagnosticsPending, setAudioDiagnosticsPending] = useState(false);
@@ -499,6 +501,8 @@ export function QuickSettingsOverlay({
       setNightError(null);
       setLocaleMessage(null);
       setMultiroomError(null);
+      setAudioOutputPendingProfile(null);
+      setAudioOutputPendingCustomSettings(null);
       setMpdQualityError(null);
       setWebModeError(null);
       setNasFormVisible(false);
@@ -518,6 +522,12 @@ export function QuickSettingsOverlay({
   useEffect(() => {
     setMultiroomState(system.multiroom ?? null);
   }, [system.multiroom]);
+
+  useEffect(() => {
+    if (preferencesPending) return;
+    setAudioOutputPendingProfile(null);
+    setAudioOutputPendingCustomSettings(null);
+  }, [preferencesPending]);
 
   useEffect(() => () => {
     if (audioDiagnosticsTimerRef.current !== null) {
@@ -655,6 +665,11 @@ export function QuickSettingsOverlay({
   }, [active, localizedErrorMessage, t, webModeProviderTextScale, webModeProxyEnabled, webModeProxyUrl, webModeState]);
 
   const librarySourceKind = system.library.source.trim().toLowerCase();
+  const displayedAudioOutputProfile = audioOutputPendingProfile ?? preferences.audioOutputProfile;
+  const displayedAudioOutputCustomSettings = {
+    ...preferences.audioOutputCustomSettings,
+    ...(audioOutputPendingCustomSettings ?? {})
+  };
   const effectiveMultiroom = multiroomState ?? system.multiroom;
   const multiroomEcosystems = effectiveMultiroom?.ecosystems;
   const activeMultiroom = multiroomEcosystemChoices
@@ -736,7 +751,7 @@ export function QuickSettingsOverlay({
         section: "output",
         icon: Volume2,
         title: t("settings.audioOutput"),
-        value: t(`settings.audioProfile.${preferences.audioOutputProfile}`),
+        value: t(`settings.audioProfile.${displayedAudioOutputProfile}`),
         meta: t("settings.mpdQualityMeta"),
         tone: "gold"
       },
@@ -894,7 +909,7 @@ export function QuickSettingsOverlay({
         confirmLabel: t("settings.tapAgainPowerOff")
       }
     ],
-    [activeMultiroom, enabledMultiroomCount, fontTheme, libraryScanMeta, libraryScanValue, localTrackCount, lyricsFontSize, lyricsVisible, multiroomMeta, multiroomNeedsSetup, multiroomValue, nasCardMeta, nasCardTone, nasCardValue, preferences.audioOutputProfile, preferences.displaySleepEnabled, preferences.displaySleepMinutes, preferences.displaySleepStyle, preferences.locale, roomExperience.nightSchedule.active, roomExperience.nightSchedule.enabled, roomExperience.nightSchedule.end, roomExperience.nightSchedule.start, roomExperience.nightSchedule.timeZone, status.error, status.source, surfaceTheme, system.cpuTemp, system.display.brightnessPercent, system.display.controllable, system.library.scanning, system.network.ip, system.network.label, system.network.speed, system.uptime, t, usbCardMeta, usbCardValue, usbTrackCount, webModeProxyEnabled, webModeProxyUrl]
+    [activeMultiroom, displayedAudioOutputProfile, enabledMultiroomCount, fontTheme, libraryScanMeta, libraryScanValue, localTrackCount, lyricsFontSize, lyricsVisible, multiroomMeta, multiroomNeedsSetup, multiroomValue, nasCardMeta, nasCardTone, nasCardValue, preferences.displaySleepEnabled, preferences.displaySleepMinutes, preferences.displaySleepStyle, preferences.locale, roomExperience.nightSchedule.active, roomExperience.nightSchedule.enabled, roomExperience.nightSchedule.end, roomExperience.nightSchedule.start, roomExperience.nightSchedule.timeZone, status.error, status.source, surfaceTheme, system.cpuTemp, system.display.brightnessPercent, system.display.controllable, system.library.scanning, system.network.ip, system.network.label, system.network.speed, system.uptime, t, usbCardMeta, usbCardValue, usbTrackCount, webModeProxyEnabled, webModeProxyUrl]
   );
 
   const visibleCards = useMemo(() => {
@@ -1000,11 +1015,16 @@ export function QuickSettingsOverlay({
   }
 
   async function handleAudioOutputProfileChange(profile: AudioOutputProfile) {
-    if (preferencesPending || preferences.audioOutputProfile === profile) return;
+    if (preferencesPending || displayedAudioOutputProfile === profile) return;
     setMpdQualityError(null);
+    setAudioOutputPendingProfile(profile);
+    setAudioOutputPendingCustomSettings(null);
     try {
       await setAudioOutputProfile(profile);
+      setAudioDiagnostics(null);
     } catch (error) {
+      setAudioOutputPendingProfile(null);
+      setAudioOutputPendingCustomSettings(null);
       setMpdQualityError(localizedErrorMessage(error, "error.generic"));
     }
   }
@@ -1012,13 +1032,18 @@ export function QuickSettingsOverlay({
   async function handleAudioOutputCustomSettingChange(setting: AudioOutputCustomSettingId, enabled: boolean) {
     if (preferencesPending) return;
     setMpdQualityError(null);
+    const nextCustomSettings = {
+      ...displayedAudioOutputCustomSettings,
+      [setting]: enabled
+    };
+    setAudioOutputPendingProfile("custom");
+    setAudioOutputPendingCustomSettings(nextCustomSettings);
     try {
-      await setAudioOutputCustomSettings({
-        ...preferences.audioOutputCustomSettings,
-        [setting]: enabled
-      });
+      await setAudioOutputCustomSettings(nextCustomSettings);
       setAudioDiagnostics(null);
     } catch (error) {
+      setAudioOutputPendingProfile(null);
+      setAudioOutputPendingCustomSettings(null);
       setMpdQualityError(localizedErrorMessage(error, "error.generic"));
     }
   }
@@ -1494,7 +1519,7 @@ export function QuickSettingsOverlay({
     ];
 
     return (
-      <section className={`settings-detail-panel ${preferences.audioOutputProfile === "custom" ? "is-custom-active" : ""}`} aria-label={t("settings.audioOutput")} data-settings-detail="audio-output">
+      <section className={`settings-detail-panel ${displayedAudioOutputProfile === "custom" ? "is-custom-active" : ""}`} aria-label={t("settings.audioOutput")} data-settings-detail="audio-output">
         <div className="settings-detail-header">
           <button className="settings-detail-back" type="button" onClick={() => setDetailView(null)}>
             {t("common.back")}
@@ -1520,16 +1545,16 @@ export function QuickSettingsOverlay({
           </div>
         </div>
 
-        <div className={`audio-output-detail-body ${preferences.audioOutputProfile === "custom" ? "is-custom-active" : ""}`}>
+        <div className={`audio-output-detail-body ${displayedAudioOutputProfile === "custom" ? "is-custom-active" : ""}`}>
           <div className="font-theme-options audio-profile-options-detail" role="group" aria-label={t("settings.mpdQuality")}>
             {profileChoices.map((choice) => {
               const Icon = choice.icon;
               return (
               <button
                 key={choice.id}
-                className={`font-theme-option audio-profile-option ${preferences.audioOutputProfile === choice.id ? "is-active" : ""}`}
+                className={`font-theme-option audio-profile-option ${displayedAudioOutputProfile === choice.id ? "is-active" : ""} ${choice.id === "custom" ? "is-custom-profile" : ""}`}
                 type="button"
-                aria-pressed={preferences.audioOutputProfile === choice.id}
+                aria-pressed={displayedAudioOutputProfile === choice.id}
                 data-audio-output-profile={choice.id}
                 disabled={preferencesPending}
                 onClick={() => void handleAudioOutputProfileChange(choice.id)}
@@ -1542,23 +1567,28 @@ export function QuickSettingsOverlay({
               );
             })}
           </div>
-          {preferences.audioOutputProfile === "custom" ? (
+          {displayedAudioOutputProfile === "custom" ? (
             <div className="custom-audio-settings-panel" role="group" aria-label={t("settings.audioProfile.custom")} data-custom-audio-settings>
               <p className="custom-audio-warning" data-custom-audio-warning>{t("settings.audioCustom.warning")}</p>
               {customSettingChoices.map((choice) => {
-                const enabled = preferences.audioOutputCustomSettings[choice.id];
+                const enabled = displayedAudioOutputCustomSettings[choice.id];
                 return (
                   <button
                     key={choice.id}
                     className={`custom-audio-toggle ${enabled ? "is-active" : ""}`}
                     type="button"
-                    aria-pressed={enabled}
+                    role="switch"
+                    aria-checked={enabled}
                     title={choice.hint}
                     data-custom-audio-toggle={choice.id}
+                    data-custom-audio-toggle-state={enabled ? "on" : "off"}
                     disabled={preferencesPending}
                     onClick={() => void handleAudioOutputCustomSettingChange(choice.id, !enabled)}
                   >
-                    <span>{enabled ? t("common.on") : t("common.off")}</span>
+                    <span className="custom-audio-switch" aria-hidden="true">
+                      <i />
+                      <b>{enabled ? t("common.on") : t("common.off")}</b>
+                    </span>
                     <strong>{choice.label}</strong>
                     <em>{choice.hint}</em>
                   </button>
@@ -1582,7 +1612,7 @@ export function QuickSettingsOverlay({
     const diagnosticsText = rawDiagnosticsText
       || (audioDiagnosticsPending ? t("settings.audioDiagnosticsLoading") : t("settings.audioDiagnosticsUnavailable"));
     const diagnostics = parseAudioDiagnosticsText(rawDiagnosticsText);
-    const profileKey = audioDiagnostics?.profile ?? preferences.audioOutputProfile;
+    const profileKey = audioDiagnostics?.profile ?? displayedAudioOutputProfile;
     const updatedAtLabel = audioDiagnostics?.updatedAt
       ? new Date(audioDiagnostics.updatedAt).toLocaleTimeString(preferences.locale, { hour: "2-digit", minute: "2-digit", second: "2-digit" })
       : t("common.unavailable");
@@ -1743,6 +1773,7 @@ export function QuickSettingsOverlay({
                   ? Server
                   : Info;
             const title = t(`settings.multiroom.ecosystem.${id}`);
+            const stack = t(`settings.multiroom.stack.${id}`);
             const enabled = state?.enabled === true;
             const status = pending ? t("common.applying") : getMultiroomEcosystemStatus(id);
             const hint = comingSoon
@@ -1764,6 +1795,7 @@ export function QuickSettingsOverlay({
                     <em className={pending ? "is-applying" : state?.lastError ? "is-error" : undefined} title={state?.lastError ?? undefined}>{status}</em>
                   </span>
                 </div>
+                <p className="multiroom-ecosystem-stack" title={stack}>{stack}</p>
                 <p>{hint}</p>
                 <button
                   className={`settings-inline-action multiroom-ecosystem-toggle ${enabled ? "is-active" : ""}`}
@@ -2612,7 +2644,7 @@ export function QuickSettingsOverlay({
                       <span>{card.title}</span>
                       <strong>{card.value}</strong>
                       <p>{card.meta}</p>
-                      <em className="settings-card-action">{t(`settings.audioProfile.${preferences.audioOutputProfile}`)}</em>
+                      <em className="settings-card-action">{t(`settings.audioProfile.${displayedAudioOutputProfile}`)}</em>
                     </div>
                   </button>
                 );

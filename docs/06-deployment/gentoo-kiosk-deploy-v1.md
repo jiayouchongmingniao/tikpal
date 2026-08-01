@@ -178,11 +178,12 @@ When QQ Music or another Explore provider is playing, the expected owner is a Ch
 
 Multi-room Audio is optional and is controlled from Settings -> Preferences -> Multi-room Audio. Roon, Lyrion, and Tikpal Multi-room can be enabled at the same time and wait for playback; Music Assistant is a coming-soon placeholder in the first release. None of these ecosystems appear in the Player source rail, because playback selection and transport remain in their own apps.
 
-Install Roon Bridge with Roon's official Linux installer, then keep the service name as `roonbridge.service`. Lyrion is a Squeezelite endpoint (`squeezelite.service`), not a local Lyrion server. Tikpal Multi-room is reserved for `tikpal-multiroom.service`.
+Install Roon Bridge with Roon's official Linux installer, then keep the service name as `roonbridge.service`. Lyrion is a Squeezelite endpoint (`squeezelite.service`), not a local Lyrion server. Tikpal Multi-room is a Snapcast endpoint on Gentoo: `tikpal-multiroom.service` runs `snapclient` against the configured Snapcast server or future Tikpal room coordinator, and the Settings card should describe it as `Based on: Snapcast endpoint`.
 
 ```bash
 systemctl status roonbridge.service
 systemctl status squeezelite.service
+systemctl status tikpal-multiroom.service
 test -d /opt/RoonBridge
 test -d /var/roon/RoonBridge
 ```
@@ -232,6 +233,8 @@ TIKPAL_ROONBRIDGE_LABEL_COMMAND="sudo -n -E /usr/local/sbin/tikpal-roonbridge-st
 ```
 
 Active multi-room playback means the ecosystem process is holding an ALSA PCM device, not merely that a systemd service is running. Roon matches `RoonBridge|RAATServer`, Lyrion matches `squeezelite`, and Tikpal Multi-room matches `tikpal-multiroom|snapclient|snapserver`. When active, Tikpal reports the ecosystem as the current playback source, pauses local MPD files, stops MPD Radio streams, and does not claim fake metadata, artwork, or lyrics. Stopping an ecosystem restores only the MPD/Radio playback that was active when that same ecosystem was started, and only if no other multi-room player is active.
+
+If `tikpal-multiroom.service` is installed as a local Snapcast endpoint, keep it disabled by default until the user turns Tikpal Multi-room on in Settings. The service should be safe to start and stop repeatedly; the active check still depends on ALSA ownership so an idle `snapclient` does not make Tikpal claim room playback.
 
 Validation:
 
@@ -295,6 +298,21 @@ TIKPAL_MPD_CUSTOM_CROSSFADE=
 
 `Pure Listening` is intentionally not the default. It can make MPD software volume, Loopback spectrum, ReplayGain, and shared-output convenience unavailable. Roon, AirPlay, Spotify, DLNA, Explore, and provider audio are outside these MPD presets.
 
+Profile switching must stay bounded. The helper now wraps `mpc` and `systemctl` calls with short timeouts, stops a stuck `mpd.service` with a bounded SIGTERM/SIGKILL fallback, enables only the selected Tikpal-managed MPD output, and applies ReplayGain/crossfade/volume settings through best-effort `mpc` calls. The API wraps profile changes in the MPD mutation lock, captures current MPD/Radio playback before the helper runs, then performs only a short best-effort restore instead of waiting indefinitely for MPD to prove `playing`. This avoids a successful profile change looking like a failed Settings action when MPD or a NAS-backed queue responds slowly.
+
+Useful tuning knobs:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `TIKPAL_MPC_TIMEOUT_SECONDS` | `1` | Per-`mpc` command timeout inside the root helper. |
+| `TIKPAL_MPD_STOP_TIMEOUT_SECONDS` | `2` | Time allowed for a clean MPD stop before forced recovery. |
+| `TIKPAL_MPD_START_TIMEOUT_SECONDS` | `5` | Time allowed for MPD start after profile rewrite. |
+| `TIKPAL_AUDIO_OUTPUT_RESTORE_MPC_TIMEOUT_MS` | `1000` | API-side `mpc` timeout during playback restore. |
+| `TIKPAL_AUDIO_OUTPUT_RESTORE_ATTEMPTS` | `2` | API-side best-effort `mpc play` attempts after a profile switch. |
+| `TIKPAL_AUDIO_OUTPUT_RESTORE_SETTLE_MS` | `200` | Short settle between restore attempts. |
+
+Do not reintroduce long profile-change loops that block the Preferences request. The frontend allows a longer Preferences write timeout for real MPD profile changes, but the backend should normally return in a few seconds and let regular state polling refresh playback truth.
+
 Validation:
 
 ```bash
@@ -306,6 +324,22 @@ sudo -n -E /usr/local/sbin/tikpal-audio-output-profile sleep
 sudo -n -E /usr/local/sbin/tikpal-audio-output-profile diagnostics
 curl -fsS http://127.0.0.1:8787/api/v1/audio/output-diagnostics
 ```
+
+API timing check from the Gentoo host:
+
+```bash
+for profile in everyday sleep custom pure; do
+  start=$(date +%s%3N)
+  curl -fsS -X PATCH http://127.0.0.1:8787/api/v1/preferences \
+    -H "Content-Type: application/json" \
+    --data "{\"audioOutputProfile\":\"$profile\"}" >/dev/null
+  end=$(date +%s%3N)
+  printf '%s %sms\n' "$profile" "$((end-start))"
+  mpc status | sed -n '1,3p'
+done
+```
+
+On the 2026-08-01 Gentoo `192.168.10.115` validation run, `Custom`, `Sleep`, and `Pure Listening` returned in roughly `0.7s-3.1s` after the bounded restore change. The first `Sleep -> Everyday` switch could still take around `7s-8s` while MPD reopened the shared output path, but it no longer timed out and playback recovered.
 
 ## Explore Provider Mode
 
