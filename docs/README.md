@@ -17,7 +17,7 @@ This directory is the source of truth for Tikpal product, UX, visual, architectu
 - The default screen is an ambient flame screen, not a conventional app homepage.
 - moOde / MPD remains the original playback and system capability owner; the Gentoo migration path keeps the MPD contract while using Portage, systemd, ALSA direct output, and Gentoo-managed kiosk dependencies.
 - Tikpal-owned UI surfaces share a device language preference for English, Chinese, German, Italian, Korean, Japanese, and Spanish; the Gentoo physical kiosk also syncs Onboard/Fcitx defaults, Onboard keycap font, and the touch keyboard's runtime language-cycle state from device preferences.
-- Gentoo Settings now covers touch-wake Screen Sleep, SMB NAS setup, bounded MPD Audio Output profiles, and Multi-room Audio service intent for Roon, Lyrion, Tikpal Multi-room, and the Music Assistant placeholder.
+- Gentoo Settings now covers touch-wake Screen Sleep, SMB NAS setup with best-effort startup remount, bounded MPD Audio Output profiles, and Multi-room Audio service intent for Roon, Lyrion, Tikpal Multi-room, and the Music Assistant placeholder.
 - Batch 3 now includes a local API bridge, frontend API read/write path, a repo-owned Chromium kiosk package, an optional native MPD backend for moOde devices, and a Gentoo physical-kiosk runbook.
 
 ## Document Index

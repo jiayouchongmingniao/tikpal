@@ -755,7 +755,10 @@ esac
       && serverSource.includes("TIKPAL_NAS_LIBRARY_MPD_PREFIX")
       && serverSource.includes("TIKPAL_NAS_SOURCES_STATE_PATH")
       && serverSource.includes("TIKPAL_NAS_AUTO_MOUNT")
+      && serverSource.includes("TIKPAL_NAS_AUTO_MOUNT_ATTEMPTS")
+      && serverSource.includes("TIKPAL_NAS_AUTO_MOUNT_RETRY_DELAY_MS")
       && serverSource.includes("mountEnabledNasSourcesOnStartup")
+      && serverSource.includes('status: "checking"')
       && serverSource.includes("/api/v1/nas/sources")
       && serverSource.includes("/api/v1/nas/discover")
       && serverSource.includes("async function readNasAudioLibraryTracks")
@@ -1048,12 +1051,15 @@ esac
   assert(mainSource.includes('keyboardTarget: "kiosk"'), "local kiosk inputs should tell the keyboard helper to restore focus to the kiosk Chromium window");
   assert(mainSource.includes("lastKeyboardBounds") && mainSource.includes("pointerInsideOnboardKeyboard"), "local kiosk inputs should ignore underlying pointer events inside the Onboard window");
   assert(mainSource.includes("event.stopImmediatePropagation()"), "underlying Onboard pointer events should not leak into Player or Settings controls");
+  assert(mainSource.includes("onboardStickyInputSelector") && mainSource.includes("pointerInsideStickyKeyboardZone"), "sticky kiosk inputs should survive Onboard key taps that land outside the exact keyboard bounds");
+  assert(mainSource.includes("recentInputActivity") && mainSource.includes('document.addEventListener("compositionupdate"'), "local kiosk inputs should keep Onboard alive while text or IME composition is arriving");
   assert(mainSource.includes("keepTextInputFocus"), "local kiosk inputs should keep focus when Onboard appears");
   assert(mainSource.includes("outsidePointerDown"), "local kiosk inputs should still hide Onboard when the user taps outside");
-  assert(mainSource.includes("if (target) {\n      lastTextInput = target;"), "local kiosk should start showing Onboard on pointerdown before focus settles");
-  assert(mainSource.includes("inputSessionActive && lastTextInput?.isConnected && !outsidePointerDown"), "local kiosk focusout should not hide Onboard while a text input session is still active");
+  assert(mainSource.includes("markTextInputActivity(target)") && mainSource.includes('document.addEventListener("pointerdown"'), "local kiosk should start showing Onboard on pointerdown before focus settles");
+  assert(mainSource.includes("inputSessionActive && lastTextInput?.isConnected && (!outsidePointerDown || stickyInputSessionActive() || recentInputActivity())"), "local kiosk focusout should not hide Onboard while an active or sticky text input session is still alive");
   assert(mainSource.includes("tikpal:keyboard-context-clear"), "local kiosk should clear input focus state when Settings closes");
   assert(mainSource.includes('document.addEventListener("focusout"'), "local kiosk inputs should hide Onboard after focus leaves text input");
+  assert(playerOverlaySource.includes('data-library-search-input') && playerOverlaySource.includes('data-onboard-sticky="true"'), "Player Library search should keep Onboard open while typing filter text");
   assert(quickSettingsSource.includes("inputSessionStarted") && quickSettingsSource.includes("sendWebModeAction({ type: \"keyboard\", preload: true })"), "Console Explore Proxy preload should skip itself once the proxy input session starts");
   assert(serverSource.includes("normalizeWebModeKeyboardPosition") && serverSource.includes("normalizeWebModeKeyboardWindow"), "API should validate per-focus keyboard geometry before invoking the launcher");
   assert(serverSource.includes("runWebModeKeyboardCommand") && serverSource.includes("isWebModeSwitchingError"), "API should retry keyboard show requests that collide with Explore provider switching");

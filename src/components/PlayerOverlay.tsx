@@ -1277,6 +1277,7 @@ export function PlayerOverlay({
                   placeholder={t("library.search", { storage: librarySearchStorageLabel })}
                   aria-label={t("library.search", { storage: librarySearchStorageLabel })}
                   data-library-search-input
+                  data-onboard-sticky="true"
                   data-gesture-control
                   onChange={(event) => handleLibrarySearchChange(event.currentTarget.value)}
                 />

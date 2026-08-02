@@ -540,13 +540,15 @@ TIKPAL_NAS_CREDENTIALS_DIR=/home/moode/code/tikpal/.tikpal/nas-credentials
 TIKPAL_NAS_MOUNT_ROOT=/mnt/tikpal-nas
 TIKPAL_NAS_MPD_ENTRY_ROOT=/var/lib/mpd/music/NAS
 TIKPAL_NAS_AUTO_MOUNT=1
+TIKPAL_NAS_AUTO_MOUNT_ATTEMPTS=3
+TIKPAL_NAS_AUTO_MOUNT_RETRY_DELAY_MS=12000
 TIKPAL_NAS_MOUNT_COMMAND="sudo -n -E /usr/local/sbin/tikpal-nas-mount mount"
 TIKPAL_NAS_UNMOUNT_COMMAND="sudo -n -E /usr/local/sbin/tikpal-nas-mount unmount"
 TIKPAL_NAS_LIBRARY_MPD_PREFIX=NAS
 TIKPAL_NAS_LIBRARY_MAX_TRACKS=500
 ```
 
-Configured NAS sources are stored in `.tikpal/nas-sources.json`. Passwords are not returned to the frontend; username/password credentials are written under `.tikpal/nas-credentials/<id>.cred` with `0600` permissions. The UI password field is masked by default and has a show/hide control for setup. With `TIKPAL_NAS_AUTO_MOUNT=1`, every saved and enabled NAS source is mounted again when `tikpal-api` starts, so swapping to another saved NAS only requires saving/enabling that source once in Settings. A brand-new NAS should still go through Settings -> Library -> NAS -> Add/Test/Save; LAN discovery is only a candidate list and should not silently mount unknown shares.
+Configured NAS sources are stored in `.tikpal/nas-sources.json`. Passwords are not returned to the frontend; username/password credentials are written under `.tikpal/nas-credentials/<id>.cred` with `0600` permissions. The UI password field is masked by default and has a show/hide control for setup. With `TIKPAL_NAS_AUTO_MOUNT=1`, every saved and enabled NAS source is mounted again when `tikpal-api` starts, so swapping to another saved NAS only requires saving/enabling that source once in Settings. Startup mount is best effort: Tikpal marks the source as `Checking`, retries a few times while the network and NAS wake up, then skips the share and shows `Check setup` if it still cannot mount. A brand-new NAS should still go through Settings -> Library -> NAS -> Add/Test/Save; LAN discovery is only a candidate list and should not silently mount unknown shares.
 
 NAS v1 supports SMB/Samba shares as a client by mounting them through Linux CIFS. Tikpal does not run a Samba server. Mount and test failures shown in Settings must be short and actionable in the NAS header and selected-source card, such as `Login failed. Check username, password, or Guest access.` or `Share or Folder not found. Check Share and Folder.` The raw `mount.cifs` or helper stderr is preserved as `lastRawError` in the API and as the UI `title`, but it should not be the primary visible text on the 2560 x 720 kiosk.
 

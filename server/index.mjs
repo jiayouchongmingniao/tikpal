@@ -318,6 +318,8 @@ const NAS_MOUNT_ROOT = resolve(process.env.TIKPAL_NAS_MOUNT_ROOT ?? "/mnt/tikpal
 const NAS_MPD_ENTRY_ROOT = resolve(process.env.TIKPAL_NAS_MPD_ENTRY_ROOT ?? resolve(MPD_MUSIC_ROOT, NAS_LIBRARY_MPD_PREFIX));
 const NAS_AUTO_MOUNT = parseEnvBoolean(process.env.TIKPAL_NAS_AUTO_MOUNT ?? (API_MODE === "mpc" ? "1" : "0"));
 const NAS_AUTO_MOUNT_DELAY_MS = parseEnvPositiveInteger(process.env.TIKPAL_NAS_AUTO_MOUNT_DELAY_MS, 1500);
+const NAS_AUTO_MOUNT_ATTEMPTS = Math.max(1, Math.min(5, parseEnvPositiveInteger(process.env.TIKPAL_NAS_AUTO_MOUNT_ATTEMPTS, 3)));
+const NAS_AUTO_MOUNT_RETRY_DELAY_MS = parseEnvPositiveInteger(process.env.TIKPAL_NAS_AUTO_MOUNT_RETRY_DELAY_MS, 12_000);
 const NAS_MOUNT_COMMAND = process.env.TIKPAL_NAS_MOUNT_COMMAND ?? "";
 const NAS_UNMOUNT_COMMAND = process.env.TIKPAL_NAS_UNMOUNT_COMMAND ?? "";
 const NAS_DISCOVERY_COMMAND = process.env.TIKPAL_NAS_DISCOVERY_COMMAND ?? "";
@@ -630,6 +632,10 @@ function parseEnvPathList(value) {
     .split(/[,:]/)
     .map((entry) => entry.trim())
     .filter(Boolean);
+}
+
+function waitMs(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 const tracks = [
@@ -6800,16 +6806,33 @@ async function mountEnabledNasSourcesOnStartup() {
   const sources = state.sources.filter((source) => source.enabled !== false);
   if (sources.length === 0) return;
   for (const source of sources) {
-    try {
-      const result = await mountNasSource(source);
-      console.log(`tikpal-api mounted NAS ${source.name} at ${result.mpdPath ?? "NAS"}`);
-    } catch (error) {
-      const rawMessage = error?.lastRawError ?? (error instanceof Error ? error.message : String(error));
-      const errorInfo = formatNasMountErrorForUser(rawMessage);
-      const message = errorInfo.message ?? "Could not mount NAS.";
-      console.warn(`tikpal-api could not auto-mount NAS ${source.name}: ${message}${errorInfo.rawMessage ? ` (${errorInfo.rawMessage})` : ""}`);
+    let finalErrorInfo = null;
+    await updateNasSourceRuntimeStatus(source.id, {
+      lastStatus: { status: "checking", checkedAt: new Date().toISOString(), lastError: null, lastRawError: null }
+    });
+
+    for (let attempt = 1; attempt <= NAS_AUTO_MOUNT_ATTEMPTS; attempt += 1) {
+      if (attempt > 1) {
+        await waitMs(NAS_AUTO_MOUNT_RETRY_DELAY_MS);
+      }
+      try {
+        const result = await mountNasSource(source);
+        console.log(`tikpal-api mounted NAS ${source.name} at ${result.mpdPath ?? "NAS"} on attempt ${attempt}/${NAS_AUTO_MOUNT_ATTEMPTS}`);
+        finalErrorInfo = null;
+        break;
+      } catch (error) {
+        const rawMessage = error?.lastRawError ?? (error instanceof Error ? error.message : String(error));
+        finalErrorInfo = formatNasMountErrorForUser(rawMessage);
+        const message = finalErrorInfo.message ?? "Could not mount NAS.";
+        const retrying = attempt < NAS_AUTO_MOUNT_ATTEMPTS;
+        console.warn(`tikpal-api could not auto-mount NAS ${source.name} on attempt ${attempt}/${NAS_AUTO_MOUNT_ATTEMPTS}: ${message}${retrying ? "; retrying" : "; skipping"}${finalErrorInfo.rawMessage ? ` (${finalErrorInfo.rawMessage})` : ""}`);
+      }
+    }
+
+    if (finalErrorInfo) {
+      const message = finalErrorInfo.message ?? "Could not mount NAS.";
       await updateNasSourceRuntimeStatus(source.id, {
-        lastStatus: { status: "check_setup", checkedAt: new Date().toISOString(), lastError: message, lastRawError: errorInfo.rawMessage }
+        lastStatus: { status: "check_setup", checkedAt: new Date().toISOString(), lastError: message, lastRawError: finalErrorInfo.rawMessage }
       });
     }
   }

@@ -29,6 +29,7 @@ const onboardInputSelector = [
   "input[type='tel']",
   "input[type='number']"
 ].join(",");
+const onboardStickyInputSelector = "[data-onboard-sticky='true']";
 const onboardKeyboardWindow = { width: 900, height: 280 };
 const onboardKeyboardDefaultPosition = { x: 500, y: 420 };
 const onboardKeyboardMargin = 24;
@@ -109,6 +110,7 @@ if (!window.__TIKPAL_REMOTE_MODE__ && localKioskHosts.has(window.location.hostna
   let lastKeyboardEnabled: boolean | null = null;
   let lastKeyboardRequestMs = 0;
   let lastKeyboardBounds: RectLike | null = null;
+  let lastInputActivityMs = 0;
   const setOnboardVisible = (enabled: boolean, target: HTMLElement | null = null) => {
     if (!enabled && !onboardVisibleRequested) return;
     const now = Date.now();
@@ -132,9 +134,22 @@ if (!window.__TIKPAL_REMOTE_MODE__ && localKioskHosts.has(window.location.hostna
     if (!target?.isConnected) return;
     target.focus({ preventScroll: true });
   };
+  const stickyInputSessionActive = () => Boolean(
+    inputSessionActive
+      && lastTextInput?.isConnected
+      && lastTextInput.matches(onboardStickyInputSelector)
+  );
+  const recentInputActivity = () => Date.now() - lastInputActivityMs < 1800;
+  const markTextInputActivity = (target: HTMLElement) => {
+    lastTextInput = target;
+    inputSessionActive = true;
+    outsidePointerDown = false;
+    lastInputActivityMs = Date.now();
+  };
   const endInputSession = () => {
     lastTextInput = null;
     inputSessionActive = false;
+    lastInputActivityMs = 0;
   };
   const keepTextInputFocus = (target: HTMLElement) => {
     for (const delay of [80, 260, 620, 1200, 1800]) {
@@ -153,17 +168,39 @@ if (!window.__TIKPAL_REMOTE_MODE__ && localKioskHosts.has(window.location.hostna
       && event.clientY >= lastKeyboardBounds.top - margin
       && event.clientY <= lastKeyboardBounds.bottom + margin;
   };
+  const pointerInsideStickyKeyboardZone = (event: PointerEvent) => {
+    if (!onboardVisibleRequested || !stickyInputSessionActive()) return false;
+    const viewportHeight = window.innerHeight || 0;
+    const lowerKeyboardTop = Math.max(0, viewportHeight - onboardKeyboardWindow.height - onboardKeyboardMargin * 2);
+    const expandedBounds = lastKeyboardBounds
+      ? {
+          left: lastKeyboardBounds.left - onboardKeyboardMargin * 4,
+          top: lastKeyboardBounds.top - onboardKeyboardMargin * 4,
+          right: lastKeyboardBounds.right + onboardKeyboardMargin * 4,
+          bottom: lastKeyboardBounds.bottom + onboardKeyboardMargin * 4
+        }
+      : null;
+
+    return Boolean(
+      (expandedBounds
+        && event.clientX >= expandedBounds.left
+        && event.clientX <= expandedBounds.right
+        && event.clientY >= expandedBounds.top
+        && event.clientY <= expandedBounds.bottom)
+        || (viewportHeight > 0 && event.clientY >= lowerKeyboardTop)
+    );
+  };
   const isMultilineInput = (target: HTMLElement) => target.matches("textarea,[contenteditable='true']")
     || target.getAttribute("aria-multiline") === "true";
 
   document.addEventListener("pointerdown", (event) => {
     const target = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>(onboardInputSelector) : null;
-    if (!target && pointerInsideOnboardKeyboard(event)) {
+    if (!target && (pointerInsideOnboardKeyboard(event) || pointerInsideStickyKeyboardZone(event))) {
       event.preventDefault();
       event.stopImmediatePropagation();
       outsidePointerDown = false;
       if (lastTextInput?.isConnected) {
-        inputSessionActive = true;
+        markTextInputActivity(lastTextInput);
         refocusTextInput(lastTextInput);
         keepTextInputFocus(lastTextInput);
       }
@@ -171,8 +208,7 @@ if (!window.__TIKPAL_REMOTE_MODE__ && localKioskHosts.has(window.location.hostna
     }
     outsidePointerDown = !target;
     if (target) {
-      lastTextInput = target;
-      inputSessionActive = true;
+      markTextInputActivity(target);
       setOnboardVisible(true, target);
       keepTextInputFocus(target);
     }
@@ -189,9 +225,7 @@ if (!window.__TIKPAL_REMOTE_MODE__ && localKioskHosts.has(window.location.hostna
   document.addEventListener("focusin", (event) => {
     const target = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>(onboardInputSelector) : null;
     if (target) {
-      outsidePointerDown = false;
-      lastTextInput = target;
-      inputSessionActive = true;
+      markTextInputActivity(target);
       setOnboardVisible(true, target);
       keepTextInputFocus(target);
     }
@@ -204,20 +238,40 @@ if (!window.__TIKPAL_REMOTE_MODE__ && localKioskHosts.has(window.location.hostna
         inputSessionActive = true;
         return;
       }
-      if (inputSessionActive && lastTextInput?.isConnected && !outsidePointerDown) {
+      if (inputSessionActive && lastTextInput?.isConnected && (!outsidePointerDown || stickyInputSessionActive() || recentInputActivity())) {
+        outsidePointerDown = false;
         refocusTextInput(lastTextInput);
+        keepTextInputFocus(lastTextInput);
         return;
       }
       endInputSession();
       setOnboardVisible(false);
     }, 80);
   }, true);
+  const refreshTextInputSession = (event: Event) => {
+    const target = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>(onboardInputSelector) : null;
+    if (!target) return;
+    markTextInputActivity(target);
+    setOnboardVisible(true, target);
+    keepTextInputFocus(target);
+  };
+  document.addEventListener("beforeinput", refreshTextInputSession, true);
+  document.addEventListener("input", refreshTextInputSession, true);
+  document.addEventListener("compositionstart", refreshTextInputSession, true);
+  document.addEventListener("compositionupdate", refreshTextInputSession, true);
   document.addEventListener("submit", () => {
     endInputSession();
     setOnboardVisible(false);
   }, true);
   document.addEventListener("keydown", (event) => {
     const target = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>(onboardInputSelector) : null;
+    if (target) {
+      markTextInputActivity(target);
+      if (!(event.key === "Enter" && !isMultilineInput(target))) {
+        setOnboardVisible(true, target);
+        keepTextInputFocus(target);
+      }
+    }
     if (event.key === "Enter" && target && !isMultilineInput(target)) {
       endInputSession();
       setOnboardVisible(false);
