@@ -36,6 +36,7 @@ const onboardKeyboardMargin = 24;
 type KeyboardPlacement = {
   keyboardPosition: string;
   keyboardWindow: string;
+  bounds: RectLike;
 };
 
 type RectLike = {
@@ -95,7 +96,8 @@ const keyboardPlacementForTarget = (target: HTMLElement): KeyboardPlacement => {
 
   return {
     keyboardPosition: `${chosen.x},${chosen.y}`,
-    keyboardWindow: `${onboardKeyboardWindow.width}x${onboardKeyboardWindow.height}`
+    keyboardWindow: `${onboardKeyboardWindow.width}x${onboardKeyboardWindow.height}`,
+    bounds: keyboardRect(chosen.x, chosen.y)
   };
 };
 
@@ -106,6 +108,7 @@ if (!window.__TIKPAL_REMOTE_MODE__ && localKioskHosts.has(window.location.hostna
   let outsidePointerDown = false;
   let lastKeyboardEnabled: boolean | null = null;
   let lastKeyboardRequestMs = 0;
+  let lastKeyboardBounds: RectLike | null = null;
   const setOnboardVisible = (enabled: boolean, target: HTMLElement | null = null) => {
     if (!enabled && !onboardVisibleRequested) return;
     const now = Date.now();
@@ -115,7 +118,11 @@ if (!window.__TIKPAL_REMOTE_MODE__ && localKioskHosts.has(window.location.hostna
     lastKeyboardRequestMs = now;
     onboardVisibleRequested = enabled;
     const placement = enabled && target ? keyboardPlacementForTarget(target) : null;
-    void sendWebModeAction({ type: "keyboard", enabled, keyboardTarget: "kiosk", ...(enabled ? { force: true } : {}), ...(placement ?? {}) })
+    lastKeyboardBounds = placement?.bounds ?? null;
+    const placementPayload = placement
+      ? { keyboardPosition: placement.keyboardPosition, keyboardWindow: placement.keyboardWindow }
+      : {};
+    void sendWebModeAction({ type: "keyboard", enabled, keyboardTarget: "kiosk", ...(enabled ? { force: true } : {}), ...placementPayload })
       .catch(() => { lastKeyboardEnabled = null; });
   };
   const activeTextInput = () => document.activeElement instanceof HTMLElement
@@ -138,11 +145,30 @@ if (!window.__TIKPAL_REMOTE_MODE__ && localKioskHosts.has(window.location.hostna
       }, delay);
     }
   };
+  const pointerInsideOnboardKeyboard = (event: PointerEvent) => {
+    if (!onboardVisibleRequested || !lastKeyboardBounds) return false;
+    const margin = 18;
+    return event.clientX >= lastKeyboardBounds.left - margin
+      && event.clientX <= lastKeyboardBounds.right + margin
+      && event.clientY >= lastKeyboardBounds.top - margin
+      && event.clientY <= lastKeyboardBounds.bottom + margin;
+  };
   const isMultilineInput = (target: HTMLElement) => target.matches("textarea,[contenteditable='true']")
     || target.getAttribute("aria-multiline") === "true";
 
   document.addEventListener("pointerdown", (event) => {
     const target = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>(onboardInputSelector) : null;
+    if (!target && pointerInsideOnboardKeyboard(event)) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      outsidePointerDown = false;
+      if (lastTextInput?.isConnected) {
+        inputSessionActive = true;
+        refocusTextInput(lastTextInput);
+        keepTextInputFocus(lastTextInput);
+      }
+      return;
+    }
     outsidePointerDown = !target;
     if (target) {
       lastTextInput = target;

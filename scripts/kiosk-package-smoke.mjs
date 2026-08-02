@@ -1046,6 +1046,8 @@ esac
   assert(mainSource.includes("keyboardPlacementForTarget") && mainSource.includes("rectsOverlap"), "local kiosk inputs should choose a keyboard position that avoids the focused field");
   assert(mainSource.includes("keyboardPosition") && mainSource.includes("keyboardWindow"), "local kiosk inputs should send per-focus Onboard geometry to the API");
   assert(mainSource.includes('keyboardTarget: "kiosk"'), "local kiosk inputs should tell the keyboard helper to restore focus to the kiosk Chromium window");
+  assert(mainSource.includes("lastKeyboardBounds") && mainSource.includes("pointerInsideOnboardKeyboard"), "local kiosk inputs should ignore underlying pointer events inside the Onboard window");
+  assert(mainSource.includes("event.stopImmediatePropagation()"), "underlying Onboard pointer events should not leak into Player or Settings controls");
   assert(mainSource.includes("keepTextInputFocus"), "local kiosk inputs should keep focus when Onboard appears");
   assert(mainSource.includes("outsidePointerDown"), "local kiosk inputs should still hide Onboard when the user taps outside");
   assert(mainSource.includes("if (target) {\n      lastTextInput = target;"), "local kiosk should start showing Onboard on pointerdown before focus settles");
