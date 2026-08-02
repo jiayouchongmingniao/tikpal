@@ -298,6 +298,7 @@ export default function App() {
   const [sceneSoundPending, setSceneSoundPending] = useState(false);
   const [screenOffActive, setScreenOffActive] = useState(false);
   const [screenSaverPreviewIndex, setScreenSaverPreviewIndex] = useState<number | null>(null);
+  const [webModeActive, setWebModeActive] = useState(false);
   const [systemSleepActive, setSystemSleepActive] = useState(false);
   const [ambientSourcePickerRequest, setAmbientSourcePickerRequest] = useState(0);
   const [ambientSourcePickerOpen, setAmbientSourcePickerOpen] = useState(false);
@@ -319,6 +320,7 @@ export default function App() {
   const systemSleepWakePendingRef = useRef(false);
   const screenOffActiveRef = useRef(false);
   const screenOffSourceRef = useRef<"manual" | "idle" | null>(null);
+  const webModeActiveRef = useRef(false);
   const displaySleepLastActivityRef = useRef(Date.now());
   const { mode, hudVisible, idleTotalMs, idleRemainingMs, showHud, toggleHud, changeMode, returnAmbient, resetIdleTimer } = useAppMode(readInitialMode());
   const { state: tikpalState, status: tikpalStatus, refresh, sendPlaybackAction, sendSystemAction, sendSourceSwitch } = useTikpalState();
@@ -326,6 +328,22 @@ export default function App() {
   const { preferences, t } = useI18n();
 
   useBrowserKioskGuard();
+
+  const setWebModeSleepSuppressed = useCallback((active: boolean) => {
+    const changed = webModeActiveRef.current !== active;
+    webModeActiveRef.current = active;
+    if (changed) {
+      setWebModeActive(active);
+      displaySleepLastActivityRef.current = Date.now();
+    }
+    if (active) {
+      displaySleepLastActivityRef.current = Date.now();
+      if (screenOffSourceRef.current === "idle") {
+        screenOffSourceRef.current = null;
+        setScreenOffActive(false);
+      }
+    }
+  }, []);
 
   const registerDisplayActivity = useCallback((nextMode: AppMode = mode) => {
     displaySleepLastActivityRef.current = Date.now();
@@ -381,8 +399,33 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!preferences.displaySleepEnabled || systemSleepActive || screenSaverPreviewIndex !== null) return;
+    let cancelled = false;
+
+    const pollWebModeActivity = async () => {
+      try {
+        const next = await fetchWebModeState();
+        if (cancelled) return;
+        setWebModeSleepSuppressed(Boolean(next.activeProvider));
+      } catch {
+        // Keep the last known Explore state; this only gates the soft screen saver.
+      }
+    };
+
+    void pollWebModeActivity();
+    const interval = window.setInterval(() => void pollWebModeActivity(), KIOSK_HEARTBEAT_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [setWebModeSleepSuppressed]);
+
+  useEffect(() => {
+    if (!preferences.displaySleepEnabled || systemSleepActive || screenSaverPreviewIndex !== null || webModeActive) return;
     const interval = window.setInterval(() => {
+      if (webModeActiveRef.current) {
+        displaySleepLastActivityRef.current = Date.now();
+        return;
+      }
       if (screenOffActiveRef.current || screenOffSourceRef.current) return;
       const timeoutMs = Math.max(1, preferences.displaySleepMinutes) * 60_000;
       if (Date.now() - displaySleepLastActivityRef.current >= timeoutMs) {
@@ -390,7 +433,7 @@ export default function App() {
       }
     }, DISPLAY_SLEEP_CHECK_MS);
     return () => window.clearInterval(interval);
-  }, [enterSoftScreenOff, preferences.displaySleepEnabled, preferences.displaySleepMinutes, screenSaverPreviewIndex, systemSleepActive]);
+  }, [enterSoftScreenOff, preferences.displaySleepEnabled, preferences.displaySleepMinutes, screenSaverPreviewIndex, systemSleepActive, webModeActive]);
 
   useEffect(() => {
     if (screenSaverPreviewIndex === null) return undefined;
@@ -666,11 +709,18 @@ export default function App() {
 
   const handleOpenWebMode = useCallback(async () => {
     const webMode = await fetchWebModeState().catch(() => null);
-    await sendWebModeAction({ type: "open", provider: webMode?.activeProvider ?? "qq_music" });
+    setWebModeSleepSuppressed(true);
+    try {
+      const nextWebMode = await sendWebModeAction({ type: "open", provider: webMode?.activeProvider ?? "qq_music" });
+      setWebModeSleepSuppressed(Boolean(nextWebMode.activeProvider));
+    } catch (error) {
+      setWebModeSleepSuppressed(false);
+      throw error;
+    }
     await refresh();
     await refreshRoomExperience();
     returnAmbient();
-  }, [refresh, refreshRoomExperience, returnAmbient]);
+  }, [refresh, refreshRoomExperience, returnAmbient, setWebModeSleepSuppressed]);
 
   const restoreSceneSoundAfterStaleHifiRestore = useCallback(async () => {
     let latestRoom = roomExperienceRef.current;

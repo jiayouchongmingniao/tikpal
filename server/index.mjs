@@ -5041,7 +5041,7 @@ function normalizeWebModeRuntimeState(raw = {}) {
   const rawResidentProviders = raw.residentProviders && typeof raw.residentProviders === "object"
     ? raw.residentProviders
     : {};
-  const allowedProviderStatuses = new Set(["opening", "ready", "active", "check_setup", "closed"]);
+  const allowedProviderStatuses = new Set(["opening", "prewarming", "ready", "active", "check_setup", "check_proxy", "closed"]);
   for (const provider of WEB_MODE_PROVIDERS) {
     const value = rawResidentProviders[provider.id];
     if (!value || typeof value !== "object") continue;

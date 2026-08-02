@@ -72,8 +72,14 @@ function readInitialOpeningProvider(): WebModeProviderId | null {
 function inferFailedProviderFromError(error: string | null): WebModeProviderId | null {
   if (!error) return null;
   const normalizedError = error.trim().toLowerCase();
-  if (!/\bdid not open\b|\bdid not enter\b|\bdid not become ready\b/.test(normalizedError)) return null;
+  if (!/\bneeds proxy on\b|\bdid not open\b|\bdid not enter\b|\bdid not become ready\b/.test(normalizedError)) return null;
   return providerOrder.find((id) => normalizedError.startsWith(providerLabels[id].toLowerCase())) ?? null;
+}
+
+function isProxyNeededError(error: string | null, providerId: WebModeProviderId | null) {
+  if (!error || !providerId) return false;
+  const normalizedError = error.trim().toLowerCase();
+  return normalizedError.startsWith(providerLabels[providerId].toLowerCase()) && normalizedError.includes("needs proxy on");
 }
 
 export function WebModeSidePanel() {
@@ -87,7 +93,9 @@ export function WebModeSidePanel() {
   const activeProvider = webMode?.activeProvider ?? null;
   const volumePercent = tikpalState?.system.volume.percent ?? 0;
   const providerTextScale = webMode?.settings.providerTextScale ?? 1.1;
+  const proxyEnabled = webMode?.settings.proxyEnabled ?? true;
   const failedProvider = useMemo(() => inferFailedProviderFromError(error), [error]);
+  const failedProviderNeedsProxy = isProxyNeededError(error, failedProvider);
   const effectiveActiveProvider = activeProvider && activeProvider !== failedProvider ? activeProvider : null;
 
   const providers = useMemo<WebModeProviderSummary[]>(() => {
@@ -120,10 +128,12 @@ export function WebModeSidePanel() {
     if (flags.connecting) return t("common.connecting");
     if (flags.current) return t("common.current");
     if (flags.active) return t("common.active");
-    if (flags.failed) return t("common.failed");
+    if (flags.failed) return failedProviderNeedsProxy && providerId === failedProvider ? t("common.needProxyOn") : t("common.failed");
     const residentStatus = webMode?.residentProviders?.[providerId]?.status;
     if (residentStatus === "opening") return t("common.opening");
+    if (residentStatus === "prewarming") return t("common.prewarming");
     if (residentStatus === "check_setup") return t("common.checkSetup");
+    if (residentStatus === "check_proxy") return t("common.needProxyOn");
     if (residentStatus === "ready") return t("common.ready");
     if (flags.experimental) return t("common.experimental");
     return t("common.waiting");
@@ -276,7 +286,7 @@ export function WebModeSidePanel() {
             onClick={() => void toggleProxy()}
           >
             <Globe2 size={17} />
-            <span>{pendingAction === "proxy" ? t("common.saving") : webMode?.settings.proxyEnabled ? t("common.proxy") : t("common.direct")}</span>
+            <span>{pendingAction === "proxy" ? t("common.saving") : proxyEnabled ? t("common.proxyOn") : t("common.proxyOff")}</span>
           </button>
           <button
             className="web-mode-top-back"
@@ -296,7 +306,7 @@ export function WebModeSidePanel() {
         <div>
           <span>{t("explore.pickLeft")}</span>
           <strong>{displayProviderLabel}</strong>
-          <p>{pendingProvider ? t("explore.openLeft") : failedProvider ? t("explore.couldNotOpen") : effectiveActiveProvider ? (webMode?.settings.proxyEnabled ? t("explore.proxyActive") : t("explore.directConnection")) : t("explore.chooseBelow")}</p>
+          <p>{pendingProvider ? t("explore.openLeft") : failedProvider ? t("explore.couldNotOpen") : effectiveActiveProvider ? (webMode?.residentProviders?.[effectiveActiveProvider]?.status === "check_proxy" ? t("explore.proxyRequired") : proxyEnabled ? t("explore.proxyActive") : t("explore.directConnection")) : t("explore.chooseBelow")}</p>
         </div>
       </section>
 
@@ -309,13 +319,15 @@ export function WebModeSidePanel() {
           const current = selected && Boolean(pendingProvider) && !connecting;
           const active = selected && !pendingProvider;
           const residentStatus = webMode?.residentProviders?.[provider.id]?.status;
+          const warming = residentStatus === "opening" || residentStatus === "prewarming";
+          const proxyUnavailable = residentStatus === "check_proxy";
           return (
             <button
               key={provider.id}
-              className={`web-mode-provider ${active ? "is-active" : ""} ${current ? "is-current" : ""} ${connecting || residentStatus === "opening" ? "is-connecting" : ""} ${failed || residentStatus === "check_setup" ? "is-failed" : ""}`}
+              className={`web-mode-provider ${active && !proxyUnavailable ? "is-active" : ""} ${current ? "is-current" : ""} ${connecting || warming ? "is-connecting" : ""} ${failed || proxyUnavailable || residentStatus === "check_setup" ? "is-failed" : ""} ${proxyUnavailable ? "is-proxy-unavailable" : ""}`}
               type="button"
               style={{ "--provider-tone": providerTones[provider.id] } as CSSProperties}
-              aria-busy={connecting || residentStatus === "opening"}
+              aria-busy={connecting || warming}
               data-web-mode-provider={provider.id}
               onClick={() => void openProvider(provider.id)}
             >

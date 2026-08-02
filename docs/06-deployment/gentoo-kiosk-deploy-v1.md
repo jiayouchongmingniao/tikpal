@@ -121,6 +121,8 @@ On this GTX 750 host, avoid periodic physical `xrandr --query` probing from the 
 
 Tikpal's user-facing Screen Sleep is a soft screen saver, not X11 DPMS power-off. This is intentional for sold kiosk devices that may not ship with a keyboard: the first touch wakes the screen saver and is swallowed, so it does not activate the control underneath.
 
+Automatic Screen Sleep is disabled while Explore has an active provider. Provider login, MV playback, or web-player browsing can be long-running, and the visible provider/side-panel windows sit above the main kiosk. When Explore closes, the kiosk resets the idle timer and resumes the user's configured sleep interval.
+
 Preferences are stored in `.tikpal/ui-preferences.json`:
 
 | Preference | Values | Default |
@@ -360,10 +362,11 @@ The physical Gentoo path uses a resident provider pool by default:
 ```conf
 TIKPAL_WEB_MODE_PROVIDER_POOL=1
 TIKPAL_WEB_MODE_PROVIDER_PREWARM_ENABLED=1
-TIKPAL_WEB_MODE_PROVIDER_PREWARM_DELAY_SECONDS=2
+TIKPAL_WEB_MODE_PROVIDER_PREWARM_DELAY_SECONDS=0.75
+TIKPAL_WEB_MODE_PROVIDER_PREWARM_LOCK_TIMEOUT_SECONDS=2
 ```
 
-Opening Explore starts the requested provider first, then prewarms the remaining fixed providers in the offscreen stage at `2560,0`: Suno, Spotify, YouTube Music, Apple Music, TIDAL, Qobuz, Deezer, Amazon Music, QQ Music, and NetEase Cloud Music. Switching to an already resident provider must stop the background prewarm job, reveal and focus the existing provider window, restart its per-provider guard, and update `activeProvider`; it must not re-run the first-load readiness gate or roll back to the previous provider just because a site like YouTube Music, Apple Music, TIDAL, or Deezer has a slow provider-ready probe. Background providers stay muted and page-paused through the provider audio gate. Returning to a resident provider must clear tab mute, unmute media elements, and resume only the media that was playing when that provider was hidden. Repeated inactive guard polling must not overwrite that resume intent after the page is already paused. If an offscreen prewarm times out before the SPA reaches its real host, the per-provider guard must later clear stale `check_setup` once CDP reports an expected provider URL such as `https://tidal.com/`. `deploy/chromium/tikpal-web-mode.sh close` is the boundary that closes all resident providers and the side panel.
+Opening Explore starts the requested provider first, then prewarms the remaining fixed providers in the offscreen stage at `2560,0`: Suno, Spotify, YouTube Music, Apple Music, TIDAL, Qobuz, Deezer, Amazon Music, QQ Music, and NetEase Cloud Music. Background prewarm is intentionally window/guard-only: it should not wait for a slow provider page to become fully ready before moving to the next provider, and it uses a short launch-lock wait so an existing YouTube Music launch cannot stall the rest of the queue. The launcher seeds queued providers as `Prewarming` before their individual launch turn, then the per-provider guard promotes them to `Ready` once CDP reports an expected real provider URL; `Opening` is reserved for the provider the user explicitly selected. When Proxy is off, the launcher must run a short direct reachability probe against each provider's own URL; only providers that fail that probe are marked internally as `check_proxy`, shown to the user as `Need Proxy On`, and skipped, while direct-reachable providers continue to open or prewarm. Switching to an already resident provider must stop the background prewarm job, reveal and focus the existing provider window, restart its per-provider guard, and update `activeProvider`; it must not re-run the first-load readiness gate or roll back to the previous provider just because a site like YouTube Music, Apple Music, TIDAL, or Deezer has a slow provider-ready probe. Background providers stay muted and page-paused through the provider audio gate. Returning to a resident provider must clear tab mute, unmute media elements, and resume only the media that was playing when the provider was hidden. Repeated inactive guard polling must not overwrite that resume intent after the page is already paused. If an offscreen prewarm times out before the SPA reaches its real host, the per-provider guard must later clear stale `check_setup` once CDP reports an expected provider URL such as `https://tidal.com/`. `deploy/chromium/tikpal-web-mode.sh close` is the boundary that closes all resident providers and the side panel.
 
 The proxy truth is `.tikpal/web-mode-settings.json`; the launcher fallback should prefer a proxy on the same Gentoo host:
 
@@ -373,7 +376,7 @@ TIKPAL_WEB_MODE_DEFAULT_PROXY_URL=http://127.0.0.1:7897
 
 If the proxy runs on a separate LAN machine, set it in Settings -> Link -> Explore Proxy or in `.tikpal/web-mode-settings.json`, for example `http://192.168.10.148:7897`. Do not leave a DHCP-specific proxy IP hard-coded in the repo defaults.
 
-Changing proxy state uses the MV3 extension and refreshes the active provider page while keeping its profile and window. Cookies and login state stay in per-provider Chromium profiles under:
+Changing proxy state uses the MV3 extension and refreshes the active provider page while keeping its profile and window. The side panel toggle must read `Proxy On` or `Proxy Off`; do not use `Direct` as the visible switch state because direct mode still cannot reach several providers on this network. Cookies and login state stay in per-provider Chromium profiles under:
 
 ```bash
 /home/moode/.config/tikpal-web-mode/providers/<provider>

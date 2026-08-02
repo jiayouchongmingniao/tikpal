@@ -87,7 +87,7 @@ export interface WebModeProviderSummary {
   experimental: boolean;
 }
 
-export type WebModeResidentProviderStatus = "opening" | "ready" | "active" | "check_setup";
+export type WebModeResidentProviderStatus = "opening" | "prewarming" | "ready" | "active" | "check_setup" | "check_proxy";
 
 export interface WebModeResidentProviderState {
   status: WebModeResidentProviderStatus;

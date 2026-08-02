@@ -62,7 +62,10 @@ fi
 : "${TIKPAL_WEB_MODE_SINGLE_PROVIDER_WINDOW:=1}"
 : "${TIKPAL_WEB_MODE_PROVIDER_POOL:=1}"
 : "${TIKPAL_WEB_MODE_PROVIDER_PREWARM_ENABLED:=1}"
-: "${TIKPAL_WEB_MODE_PROVIDER_PREWARM_DELAY_SECONDS:=2}"
+: "${TIKPAL_WEB_MODE_PROVIDER_PREWARM_DELAY_SECONDS:=0.75}"
+: "${TIKPAL_WEB_MODE_PROVIDER_PREWARM_LOCK_TIMEOUT_SECONDS:=2}"
+: "${TIKPAL_WEB_MODE_DIRECT_PROBE_ENABLED:=1}"
+: "${TIKPAL_WEB_MODE_DIRECT_PROBE_TIMEOUT_SECONDS:=4}"
 : "${TIKPAL_WEB_MODE_POPUP_BLOCKING:=1}"
 : "${TIKPAL_WEB_MODE_PROVIDER_DEBUG_PORT:=9234}"
 : "${TIKPAL_WEB_MODE_PROVIDER_GUARD:=1}"
@@ -317,6 +320,33 @@ const enabled = typeof settings.proxyEnabled === "boolean" ? settings.proxyEnabl
 const proxyUrl = String(settings.proxyUrl || defaultProxy).trim();
 console.log(`${enabled ? "1" : "0"}\t${proxyUrl}`);
 NODE
+}
+
+http_code_is_reachable() {
+  local code="$1"
+  [[ "$code" =~ ^[1-5][0-9][0-9]$ && "$code" != "000" ]]
+}
+
+provider_direct_reachable() {
+  local provider="$1"
+  local url code timeout
+  is_enabled "$TIKPAL_WEB_MODE_DIRECT_PROBE_ENABLED" || return 0
+  command -v curl >/dev/null 2>&1 || return 0
+  timeout="$TIKPAL_WEB_MODE_DIRECT_PROBE_TIMEOUT_SECONDS"
+  [[ "$timeout" =~ ^[0-9]+$ ]] || timeout=4
+  url="$(provider_url "$provider")"
+  code="$(curl --noproxy '*' -k -I -L -sS -o /dev/null \
+    --connect-timeout 2 --max-time "$timeout" -w '%{http_code}' "$url" 2>/dev/null || true)"
+  if http_code_is_reachable "$code"; then
+    return 0
+  fi
+  code="$(curl --noproxy '*' -k -L -r 0-0 -sS -o /dev/null \
+    --connect-timeout 2 --max-time "$timeout" -w '%{http_code}' "$url" 2>/dev/null || true)"
+  http_code_is_reachable "$code"
+}
+
+provider_needs_proxy_message() {
+  printf '%s needs Proxy On' "$(provider_label "$1")"
 }
 
 read_provider_text_scale() {
@@ -606,7 +636,7 @@ write_runtime_provider_status() {
 const fs = require("node:fs");
 const path = require("node:path");
 const [statePath, provider, status, message] = process.argv.slice(2);
-const allowed = new Set(["opening", "ready", "active", "check_setup", "closed"]);
+const allowed = new Set(["opening", "prewarming", "ready", "active", "check_setup", "check_proxy", "closed"]);
 let state = {};
 try { state = JSON.parse(fs.readFileSync(statePath, "utf8")); } catch {}
 const now = new Date().toISOString();
@@ -625,6 +655,39 @@ if (provider && allowed.has(status)) {
     };
   }
 }
+state.updatedAt = now;
+fs.mkdirSync(path.dirname(statePath), { recursive: true });
+fs.writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`);
+NODE
+}
+
+seed_runtime_provider_pool_statuses() {
+  local active_provider="$1"
+  node - "$TIKPAL_WEB_MODE_STATE_PATH" "$active_provider" "$(provider_ids | tr '\n' ',' | sed 's/,$//')" <<'NODE'
+const fs = require("node:fs");
+const path = require("node:path");
+const [statePath, activeProvider, providerList] = process.argv.slice(2);
+const providerIds = String(providerList || "").split(",").filter(Boolean);
+let state = {};
+try { state = JSON.parse(fs.readFileSync(statePath, "utf8")); } catch {}
+const now = new Date().toISOString();
+const residentProviders = state.residentProviders && typeof state.residentProviders === "object"
+  ? state.residentProviders
+  : {};
+for (const provider of providerIds) {
+  if (!provider || provider === activeProvider) continue;
+  const current = residentProviders[provider] && typeof residentProviders[provider] === "object"
+    ? residentProviders[provider]
+    : {};
+  if (current.status && current.status !== "opening" && current.status !== "closed" && current.status !== "check_proxy") continue;
+  residentProviders[provider] = {
+    ...current,
+    status: "prewarming",
+    lastError: null,
+    updatedAt: now
+  };
+}
+state.residentProviders = residentProviders;
 state.updatedAt = now;
 fs.mkdirSync(path.dirname(statePath), { recursive: true });
 fs.writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`);
@@ -1248,13 +1311,17 @@ stop_window_guard() {
 stop_provider_pool_prewarm() {
   local pid_file pid
   pid_file="$(prewarm_pid_file)"
-  [[ -r "$pid_file" ]] || {
-    rm -f "$pid_file" >/dev/null 2>&1 || true
-    return 0
-  }
-  pid="$(cat "$pid_file" 2>/dev/null || true)"
-  if [[ "$pid" =~ ^[0-9]+$ ]]; then
-    kill "$pid" >/dev/null 2>&1 || true
+  if [[ -r "$pid_file" ]]; then
+    pid="$(cat "$pid_file" 2>/dev/null || true)"
+    if [[ "$pid" =~ ^[0-9]+$ ]]; then
+      pkill -TERM -P "$pid" >/dev/null 2>&1 || true
+      kill "$pid" >/dev/null 2>&1 || true
+    fi
+  fi
+  if command -v pkill >/dev/null 2>&1; then
+    pkill -TERM -f "$SCRIPT_DIR/tikpal-web-mode.sh prewarm" >/dev/null 2>&1 || true
+    sleep 0.1
+    pkill -KILL -f "$SCRIPT_DIR/tikpal-web-mode.sh prewarm" >/dev/null 2>&1 || true
   fi
   rm -f "$pid_file"
 }
@@ -1744,11 +1811,13 @@ launch_provider_for_pool() {
   local wait_ready="${2:-1}"
   local launch_role="${3:-active}"
   local url provider_profile provider_port launch_url extension_enabled=0
-  local target_window proxy_line proxy_enabled proxy_url target_audio_device
+  local target_window proxy_line proxy_enabled proxy_url target_audio_device lock_timeout
   if command -v flock >/dev/null 2>&1 && [[ "${TIKPAL_WEB_MODE_PROVIDER_LAUNCH_LOCKED:-0}" != "1" ]]; then
+    lock_timeout="$TIKPAL_WEB_MODE_PROVIDER_WINDOW_TIMEOUT_SECONDS"
+    [[ "$launch_role" == "prewarm" ]] && lock_timeout="$TIKPAL_WEB_MODE_PROVIDER_PREWARM_LOCK_TIMEOUT_SECONDS"
     mkdir -p "$TIKPAL_WEB_MODE_PROFILE_ROOT"
     (
-      flock -x -w "$TIKPAL_WEB_MODE_PROVIDER_WINDOW_TIMEOUT_SECONDS" 7 || exit 75
+      flock -x -w "$lock_timeout" 7 || exit 75
       TIKPAL_WEB_MODE_PROVIDER_LAUNCH_LOCKED=1 launch_provider_for_pool "$provider" "$wait_ready" "$launch_role"
     ) 7>"$TIKPAL_WEB_MODE_PROFILE_ROOT/provider-$provider.launch.lock"
     local lock_status=$?
@@ -1766,6 +1835,11 @@ launch_provider_for_pool() {
   proxy_enabled="${proxy_line%%$'\t'*}"
   proxy_url="${proxy_line#*$'\t'}"
   launch_url="$url"
+  if [[ "$proxy_enabled" != "1" ]] && ! provider_direct_reachable "$provider"; then
+    write_runtime_provider_status "$provider" "check_proxy" "$(provider_needs_proxy_message "$provider")"
+    [[ "$launch_role" == "prewarm" ]] && return 0
+    return 1
+  fi
 
   if is_enabled "$TIKPAL_WEB_MODE_EXTENSION_ENABLED" && [[ -f "$TIKPAL_WEB_MODE_EXTENSION_DIR/manifest.json" ]]; then
     extension_enabled=1
@@ -1783,7 +1857,11 @@ launch_provider_for_pool() {
     return 0
   fi
 
-  write_runtime_provider_status "$provider" "opening"
+  if [[ "$launch_role" == "prewarm" ]]; then
+    write_runtime_provider_status "$provider" "prewarming"
+  else
+    write_runtime_provider_status "$provider" "opening"
+  fi
   resolve_web_mode_audio_devices
   target_audio_device="$TIKPAL_WEB_MODE_ALSA_OUTPUT_DEVICE"
   mkdir -p "$provider_profile"
@@ -1850,6 +1928,10 @@ launch_provider_for_pool() {
   if [[ "$launch_role" == "prewarm" && -z "$(read_runtime_active_provider)" ]]; then
     return 0
   fi
+  if [[ "$launch_role" == "prewarm" && "$wait_ready" != "1" ]]; then
+    write_runtime_provider_status "$provider" "prewarming"
+    return 0
+  fi
   write_runtime_provider_status "$provider" "ready"
 }
 
@@ -1857,13 +1939,14 @@ prewarm_provider_pool() {
   local active_provider="${1:-}"
   local provider delay
   is_enabled "$TIKPAL_WEB_MODE_PROVIDER_PREWARM_ENABLED" || return 0
+  seed_runtime_provider_pool_statuses "$active_provider"
   delay="$TIKPAL_WEB_MODE_PROVIDER_PREWARM_DELAY_SECONDS"
   while IFS= read -r provider; do
     [[ -n "$provider" && "$provider" != "$active_provider" ]] || continue
     [[ -n "$(read_runtime_active_provider)" ]] || return 0
     sleep "$delay"
     [[ -n "$(read_runtime_active_provider)" ]] || return 0
-    launch_provider_for_pool "$provider" 1 prewarm || true
+    launch_provider_for_pool "$provider" 0 prewarm || true
   done < <(provider_ids)
 }
 
@@ -1872,6 +1955,7 @@ start_provider_pool_prewarm() {
   is_enabled "$TIKPAL_WEB_MODE_PROVIDER_PREWARM_ENABLED" || return 0
   stop_provider_pool_prewarm
   mkdir -p "$TIKPAL_WEB_MODE_PROFILE_ROOT"
+  seed_runtime_provider_pool_statuses "$active_provider"
   nohup "$SCRIPT_DIR/tikpal-web-mode.sh" prewarm "$active_provider" >/dev/null 2>&1 9>&- &
   printf '%s\n' "$!" > "$(prewarm_pid_file)"
 }
@@ -1887,14 +1971,20 @@ open_provider_pool() {
   stop_provider_pool_prewarm
   hide_onboard
   ensure_side_panel "$provider"
+  proxy_line="$(read_proxy_settings)"
+  proxy_enabled="${proxy_line%%$'\t'*}"
+  if [[ "$proxy_enabled" != "1" ]] && ! provider_direct_reachable "$provider"; then
+    write_runtime_provider_status "$provider" "check_proxy" "$(provider_needs_proxy_message "$provider")"
+    [[ -n "$current_provider" ]] && write_runtime_provider_state "$current_provider"
+    [[ -n "$current_profile" ]] && start_window_guard "$current_profile" "$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"
+    fail "$(provider_needs_proxy_message "$provider")"
+  fi
   if ! profile_process_exists "$provider_profile"; then
     launch_transition_veil "$provider"
   fi
   stop_window_guard
 
   if profile_process_exists "$provider_profile"; then
-    proxy_line="$(read_proxy_settings)"
-    proxy_enabled="${proxy_line%%$'\t'*}"
     start_provider_guard "$provider" "$provider_profile" "$(provider_url "$provider")" "$proxy_enabled" "$(provider_debug_port "$provider")"
     write_runtime_provider_status "$provider" "ready"
   elif ! launch_provider_for_pool "$provider" 1; then
@@ -1950,6 +2040,10 @@ open_provider() {
   proxy_enabled="${proxy_line%%$'\t'*}"
   proxy_url="${proxy_line#*$'\t'}"
   launch_url="$url"
+  if [[ "$proxy_enabled" != "1" ]] && ! provider_direct_reachable "$provider"; then
+    write_runtime_provider_status "$provider" "check_proxy" "$(provider_needs_proxy_message "$provider")"
+    fail "$(provider_needs_proxy_message "$provider")"
+  fi
   if is_enabled "$TIKPAL_WEB_MODE_EXTENSION_ENABLED" && [[ -f "$TIKPAL_WEB_MODE_EXTENSION_DIR/manifest.json" ]]; then
     extension_enabled=1
     if ! provider_uses_direct_bootstrap "$provider"; then
@@ -2091,12 +2185,17 @@ apply_proxy_settings() {
   local provider="$1"
   local provider_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/$provider"
   local proxy_line proxy_enabled
-  if is_enabled "$TIKPAL_WEB_MODE_EXTENSION_ENABLED" && [[ -f "$TIKPAL_WEB_MODE_EXTENSION_DIR/manifest.json" ]]; then
-    profile_process_exists "$provider_profile" || fail "Explore provider process is not running"
-    wait_for_proxy_applied || fail "Explore proxy was not applied within ${TIKPAL_WEB_MODE_PROXY_APPLY_TIMEOUT_SECONDS}s"
-    proxy_line="$(read_proxy_settings)"
-    proxy_enabled="${proxy_line%%$'\t'*}"
-    start_provider_guard "$provider" "$provider_profile" "$(provider_url "$provider")" "$proxy_enabled" "$(provider_debug_port "$provider")"
+	  if is_enabled "$TIKPAL_WEB_MODE_EXTENSION_ENABLED" && [[ -f "$TIKPAL_WEB_MODE_EXTENSION_DIR/manifest.json" ]]; then
+	    profile_process_exists "$provider_profile" || fail "Explore provider process is not running"
+	    wait_for_proxy_applied || fail "Explore proxy was not applied within ${TIKPAL_WEB_MODE_PROXY_APPLY_TIMEOUT_SECONDS}s"
+	    proxy_line="$(read_proxy_settings)"
+	    proxy_enabled="${proxy_line%%$'\t'*}"
+	    if [[ "$proxy_enabled" != "1" ]] && ! provider_direct_reachable "$provider"; then
+	      write_runtime_provider_status "$provider" "check_proxy" "$(provider_needs_proxy_message "$provider")"
+	      log "proxy disabled for $provider; marked check_proxy"
+	      return
+	    fi
+	    start_provider_guard "$provider" "$provider_profile" "$(provider_url "$provider")" "$proxy_enabled" "$(provider_debug_port "$provider")"
     log "proxy applied without restarting $provider"
     return
   fi

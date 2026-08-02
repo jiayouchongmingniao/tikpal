@@ -563,6 +563,10 @@ esac
   const appSource = await readFile(path.join(ROOT, "src/App.tsx"), "utf8");
   const playbackTruthSource = await readFile(path.join(ROOT, "src/playbackTruth.ts"), "utf8");
   const stylesSource = await readFile(path.join(ROOT, "src/styles.css"), "utf8");
+  assert(stylesSource.includes("--transport-play-icon") && stylesSource.includes("--transport-play-border"), "Transport play buttons should expose skin-aware icon and border tokens");
+  assert(stylesSource.includes(".ambient-transport-play") && stylesSource.includes("color: var(--transport-play-icon);"), "Ambient play/pause button should follow the selected surface skin");
+  assert(stylesSource.includes(".remote-play-button") && stylesSource.includes("background: var(--transport-play-bg);"), "Remote play/pause button should follow the selected surface skin");
+  assert(!stylesSource.includes("linear-gradient(145deg, rgba(119, 215, 239, 0.28), rgba(242, 200, 101, 0.14))"), "Remote play/pause button should not keep a fixed cyan/gold gradient");
   const localSyncTempDir = mkdtempSync(path.join(tmpdir(), "tikpal-local-sync-"));
   const localSyncSourceRoot = path.join(localSyncTempDir, "source");
   const localSyncMpdRoot = path.join(localSyncTempDir, "mpd");
@@ -634,7 +638,11 @@ esac
   assert(sidePanelSource.includes('sendWebModeAction({ type: "proxy", enabled:'), "Explore side panel should use the shared proxy action");
   assert(sidePanelSource.includes('sendWebModeAction({ type: "provider_text_scale"') && sidePanelSource.includes("data-web-mode-text-scale-option"), "Explore side panel should expose the provider text scale action");
   assert(sidePanelSource.includes("inferFailedProviderFromError") && sidePanelSource.includes('"common.failed"') && sidePanelSource.includes("is-failed"), "Explore side panel should show provider-open failures without marking the provider active");
+  assert(sidePanelSource.includes('residentStatus === "check_proxy"') && sidePanelSource.includes('"common.needProxyOn"'), "Explore side panel should show Need Proxy On from live provider probe state");
+  assert(sidePanelSource.includes("isProxyNeededError") && sidePanelSource.includes("needs proxy on"), "Explore side panel should show Need Proxy On for proxy-related provider failures");
+  assert(sidePanelSource.includes('"common.proxyOn"') && sidePanelSource.includes('"common.proxyOff"') && !sidePanelSource.includes('"common.direct"'), "Explore proxy toggle should say Proxy On/Proxy Off instead of Direct");
   assert(stylesSource.includes(".web-mode-provider.is-failed"), "Explore side panel should style failed provider-open state separately from Active");
+  assert(stylesSource.includes(".web-mode-provider.is-proxy-unavailable"), "Explore side panel should give proxy-unavailable providers their own visual state");
   assert(!sidePanelSource.includes("updateWebModeSettings"), "Explore side panel should not reopen the provider to switch proxy mode");
   assert(!sidePanelSource.includes("data-web-mode-keyboard-toggle") && !sidePanelSource.includes("toggleKeyboard"), "Explore side panel should rely on automatic input-focus keyboard behavior");
   assert((sidePanelSource.match(/onClick=\{\(\) => void closeWebMode\(\)\}/g) ?? []).length === 1, "Explore side panel should keep only the top-right Back button");
@@ -890,6 +898,7 @@ esac
   assert(!quickSettingsSource.includes("disabled={!sleepEnabled || preferencesPending}"), "Screen sleep style and time choices should remain editable while automatic sleep is off");
   assert(appSource.includes("data-screen-saver-style") && appSource.includes("screen-saver-now-playing") && appSource.includes("screen-saver-meteor-shower") && appSource.includes("screen-saver-signal"), "soft screen sleep should render selectable classic screen saver overlays");
   assert(appSource.includes("SCREEN_SAVER_PREVIEW_STYLES") && appSource.includes("data-screen-saver-preview"), "screen saver preview should cycle the available styles without changing preferences");
+  assert(appSource.includes("setWebModeSleepSuppressed") && appSource.includes("webModeActiveRef.current") && appSource.includes("fetchWebModeState"), "Explore should suppress automatic screen sleep while a provider is active");
   assert(onboardImeToggleScript.includes("--set-locale") && onboardImeToggleScript.includes("--set-mode") && onboardImeToggleScript.includes('"ko": "hangul"'), "Onboard IME toggle should support locale and direct mode sync");
   assert(onboardImeToggleScript.includes("key-label-font") && onboardImeToggleScript.includes("FONT_THEME_FAMILIES") && onboardImeToggleScript.includes("ui-preferences.json") && onboardImeToggleScript.includes("TIKPAL_FONT_THEME"), "Onboard keycaps should read Tikpal font preference and apply key-label-font");
   assert(
@@ -1305,9 +1314,16 @@ esac
   assert(!webModeTransitionPage.includes("sendKioskHeartbeat"), "Explore transition page should not post kiosk heartbeats");
   assert(sidePanelSource.includes('new URLSearchParams(window.location.search).get("opening")'), "Explore side panel should read its initial pending provider");
   assert(sidePanelSource.includes("providerStatusLabel"), "Explore side panel should centralize provider status labels");
-  assert(sidePanelSource.includes('residentStatus === "opening"') && sidePanelSource.includes('residentStatus === "check_setup"'), "Explore side panel should show resident provider warm/check states");
+  assert(sidePanelSource.includes('residentStatus === "prewarming"') && sidePanelSource.includes('residentStatus === "check_setup"') && sidePanelSource.includes('residentStatus === "check_proxy"'), "Explore side panel should show resident provider warm/check states");
+  assert(webModeScript.includes('"prewarming"') && webModeScript.includes('"check_proxy"') && serverSource.includes('"prewarming", "ready", "active", "check_setup", "check_proxy"'), "Explore provider pool should expose distinct prewarming and check_proxy states end to end");
   assert(webModeScript.includes("TIKPAL_WEB_MODE_PROVIDER_POOL:=1"), "Explore provider pool should be enabled by default");
+  assert(webModeScript.includes("TIKPAL_WEB_MODE_PROVIDER_PREWARM_DELAY_SECONDS:=0.75"), "Explore provider pool should use a short stagger for responsive prewarm");
+  assert(webModeScript.includes("TIKPAL_WEB_MODE_PROVIDER_PREWARM_LOCK_TIMEOUT_SECONDS:=2"), "Explore provider prewarm should use a short launch-lock timeout");
   assert(webModeScript.includes("prewarm_provider_pool"), "Explore should prewarm resident providers after entry");
+  assert(webModeScript.includes("seed_runtime_provider_pool_statuses") && webModeScript.includes('status: "prewarming"'), "Explore should seed queued resident providers as prewarming before their windows launch");
+  assert(webModeScript.includes("provider_direct_reachable") && webModeScript.includes("--noproxy '*'") && webModeScript.includes('"check_proxy"') && webModeScript.includes("needs Proxy On"), "Explore should probe direct provider reachability before marking Check proxy");
+  assert(webModeScript.includes('launch_provider_for_pool "$provider" 0 prewarm'), "Explore background prewarm should not block on slow provider readiness");
+  assert(webModeScript.includes('pkill -TERM -f "$SCRIPT_DIR/tikpal-web-mode.sh prewarm"'), "Explore should stop stale prewarm queues before starting a new one");
   assert(providerGuardSource.includes("__tikpalProviderAudioGate"), "Explore provider guard should install resident provider audio gating");
   assert(providerGuardSource.includes("tikpal-provider-audio-muted") && extensionBackground.includes("provider-audio-muted"), "Explore provider gate should ask the extension to tab-mute inactive providers");
   assert(providerGuardSource.includes("version: 2"), "Explore provider audio gate should use the resumable v2 contract");
