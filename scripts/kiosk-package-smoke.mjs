@@ -1050,7 +1050,7 @@ esac
   assert(webModeScript.includes("provider_uses_direct_bootstrap()") && webModeScript.includes("deezer) return 0") && openProviderBody.includes('if [[ "$proxy_enabled" == "1" && -n "$proxy_url" && ( "$extension_enabled" != "1" || "$launch_url" == "$url" ) ]]'), "command-line proxy switches should remain limited to extension-disabled fallback and explicit direct-bootstrap providers");
   assert(webModeScript.includes('target.type === "page"') && openProviderBody.includes("wait_for_real_provider_url"), "provider switches should wait for a real HTTPS page rather than a stale service worker");
   assert(webModeScript.includes("wait_for_proxy_applied"), "dynamic proxy actions should wait for extension confirmation");
-  assert(webModeScript.includes('log "proxy applied without restarting $provider"'), "dynamic proxy actions should preserve the provider process");
+  assert(webModeScript.includes('log "proxy applied without restarting $provider; provider pool prewarm restarted"'), "dynamic proxy actions should preserve the provider process and restart pool prewarm");
 
   const loopbackGuardDir = mkdtempSync(path.join(tmpdir(), "tikpal-loopback-guard-"));
   const hdmiLoopbackConfig = path.join(loopbackGuardDir, "_sndaloop-hdmi.conf");
@@ -1321,6 +1321,8 @@ esac
   assert(webModeScript.includes("TIKPAL_WEB_MODE_PROVIDER_PREWARM_LOCK_TIMEOUT_SECONDS:=2"), "Explore provider prewarm should use a short launch-lock timeout");
   assert(webModeScript.includes("prewarm_provider_pool"), "Explore should prewarm resident providers after entry");
   assert(webModeScript.includes("seed_runtime_provider_pool_statuses") && webModeScript.includes('status: "prewarming"'), "Explore should seed queued resident providers as prewarming before their windows launch");
+  assert(webModeScript.includes('const force = seedMode === "force"') && webModeScript.includes('start_provider_pool_prewarm "$provider" force'), "Explore proxy toggles should force resident providers back through prewarm");
+  assert(webModeScript.includes("navigate_provider_target") && webModeScript.includes('TIKPAL_WEB_MODE_PROVIDER_PREWARM_FORCE=1') && webModeScript.includes('launch_provider_for_pool "$provider" 0 prewarm "$force_existing"'), "Forced provider prewarm should re-navigate existing resident pages after proxy changes");
   assert(webModeScript.includes("provider_direct_reachable") && webModeScript.includes("--noproxy '*'") && webModeScript.includes('"check_proxy"') && webModeScript.includes("needs Proxy On"), "Explore should probe direct provider reachability before marking Check proxy");
   assert(webModeScript.includes('launch_provider_for_pool "$provider" 0 prewarm'), "Explore background prewarm should not block on slow provider readiness");
   assert(webModeScript.includes('pkill -TERM -f "$SCRIPT_DIR/tikpal-web-mode.sh prewarm"'), "Explore should stop stale prewarm queues before starting a new one");
