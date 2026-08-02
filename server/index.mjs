@@ -4412,11 +4412,80 @@ function normalizeNasLastStatus(raw, fallbackStatus = "offline") {
   const status = NAS_STATUS_VALUES.has(String(raw?.status ?? raw?.state ?? "").trim())
     ? String(raw.status ?? raw.state).trim()
     : fallbackStatus;
+  const storedError = typeof raw?.lastError === "string" && raw.lastError.trim() ? raw.lastError.trim() : null;
+  const storedRawError = typeof raw?.lastRawError === "string" && raw.lastRawError.trim() ? raw.lastRawError.trim() : null;
+  const errorInfo = formatNasMountErrorForUser(storedRawError ?? storedError);
   return {
     status,
     checkedAt: typeof raw?.checkedAt === "string" ? raw.checkedAt : null,
-    lastError: typeof raw?.lastError === "string" && raw.lastError.trim() ? raw.lastError.trim() : null
+    lastError: errorInfo.message,
+    lastRawError: errorInfo.rawMessage
   };
+}
+
+function compactNasRawError(raw) {
+  const value = String(raw ?? "")
+    .replace(/credentials=([^,'"\s]+)/gi, "credentials=<saved>")
+    .replace(/password=([^,'"\s]*)/gi, "password=<hidden>")
+    .replace(/\s+\n/g, "\n")
+    .trim();
+  if (!value) return null;
+  return value.length > 1400 ? `${value.slice(0, 1400).trim()}...` : value;
+}
+
+function formatNasMountErrorForUser(raw) {
+  const rawMessage = compactNasRawError(raw);
+  if (!rawMessage) return { message: null, rawMessage: null };
+  const normalized = rawMessage.toLowerCase();
+  const friendlyMessages = new Set([
+    "Password is not saved. Re-enter username and password.",
+    "NAS mount helper is not allowed. Check Tikpal setup.",
+    "File sharing support is missing on this device.",
+    "Server not found. Check Server/IP.",
+    "NAS is not reachable. Check network and port.",
+    "NAS did not respond. Check power and network.",
+    "NAS refused the connection. Check SMB sharing and port.",
+    "Login failed. Check username, password, or Guest access.",
+    "Share or Folder not found. Check Share and Folder.",
+    "SMB version did not work. Enable SMB 2 or 3 on the NAS.",
+    "NAS is busy. Unmount and try again.",
+    "Could not mount NAS. Check Server/IP, Share, and login."
+  ]);
+  if (friendlyMessages.has(rawMessage)) {
+    return { message: rawMessage, rawMessage: null };
+  }
+  let message = "Could not mount NAS. Check Server/IP, Share, and login.";
+  if (/credential file is not readable|credentials are not saved|credential file is required/.test(normalized)) {
+    message = "Password is not saved. Re-enter username and password.";
+  } else if (/sudo:|a password is required|not in the sudoers|operation not permitted/.test(normalized)) {
+    message = "NAS mount helper is not allowed. Check Tikpal setup.";
+  } else if (/mount\.cifs: not found|unknown filesystem type ['"]?cifs|bad option;.*mount\.cifs|cifs filesystem not supported/.test(normalized)) {
+    message = "File sharing support is missing on this device.";
+  } else if (/could not resolve address|name or service not known|temporary failure in name resolution|nodename nor servname/.test(normalized)) {
+    message = "Server not found. Check Server/IP.";
+  } else if (/no route to host|network is unreachable|connection timed out|operation timed out|unable to find suitable address|mount error\(110\)/.test(normalized)) {
+    message = "NAS is not reachable. Check network and port.";
+  } else if (/host is down|mount error\(112\)/.test(normalized)) {
+    message = "NAS did not respond. Check power and network.";
+  } else if (/connection refused|mount error\(111\)/.test(normalized)) {
+    message = "NAS refused the connection. Check SMB sharing and port.";
+  } else if (/permission denied|access denied|logon failure|status_logon_failure|status_access_denied|mount error\(13\)/.test(normalized)) {
+    message = "Login failed. Check username, password, or Guest access.";
+  } else if (/bad network name|status_bad_network_name|tree connect failed|no such file or directory|nas folder is not readable/.test(normalized)) {
+    message = "Share or Folder not found. Check Share and Folder.";
+  } else if (/protocol negotiation failed|operation not supported|mount error\(95\)|invalid argument|mount error\(22\)/.test(normalized)) {
+    message = "SMB version did not work. Enable SMB 2 or 3 on the NAS.";
+  } else if (/busy|target is busy|mount point is busy/.test(normalized)) {
+    message = "NAS is busy. Unmount and try again.";
+  }
+  return { message, rawMessage: rawMessage === message ? null : rawMessage };
+}
+
+function createNasMountError(raw) {
+  const errorInfo = formatNasMountErrorForUser(raw);
+  const error = new Error(errorInfo.message ?? "Could not mount NAS.");
+  error.lastRawError = errorInfo.rawMessage;
+  return error;
 }
 
 function normalizeNasSource(raw, existing = null) {
@@ -5018,6 +5087,12 @@ function normalizeWebModeKeyboardWindow(value) {
     throw new Error("Explore keyboard window must fit the kiosk display");
   }
   return `${width}x${height}`;
+}
+
+function normalizeWebModeKeyboardTarget(value) {
+  const target = String(value ?? "auto").trim().toLowerCase();
+  if (target === "auto" || target === "kiosk" || target === "provider") return target;
+  throw new Error("Explore keyboard target must be auto, kiosk, or provider");
 }
 
 function normalizeWebModeSettings(raw = {}) {
@@ -6378,7 +6453,8 @@ function publicNasStatus(source) {
   return {
     status: lastStatus.status,
     checkedAt: lastStatus.checkedAt,
-    lastError: lastStatus.lastError
+    lastError: lastStatus.lastError,
+    lastRawError: lastStatus.lastRawError
   };
 }
 
@@ -6406,6 +6482,7 @@ async function buildPublicNasSource(source, tracks = []) {
     status: publicNasStatus(source).status,
     lastStatus: publicNasStatus(source),
     lastError: publicNasStatus(source).lastError,
+    lastRawError: publicNasStatus(source).lastRawError,
     lastScanAt: source.lastScanAt ?? null,
     trackCount,
     sourceKind: source.sourceKind ?? "configured",
@@ -6646,11 +6723,11 @@ async function mountNasSource(source, payload = null) {
         const updated = await updateNasSourceRuntimeStatus(source.id, {
           smbVersion,
           lastScanAt: new Date().toISOString(),
-          lastStatus: { status: "ready", checkedAt: new Date().toISOString(), lastError: null }
+          lastStatus: { status: "ready", checkedAt: new Date().toISOString(), lastError: null, lastRawError: null }
         });
         return {
           ok: true,
-          source: updated ?? { ...source, smbVersion, lastStatus: { status: "ready", checkedAt: new Date().toISOString(), lastError: null } },
+          source: updated ?? { ...source, smbVersion, lastStatus: { status: "ready", checkedAt: new Date().toISOString(), lastError: null, lastRawError: null } },
           mpdPath,
           trackCount,
           smbVersion
@@ -6659,7 +6736,7 @@ async function mountNasSource(source, payload = null) {
         lastError = error instanceof Error ? error.message : String(error);
       }
     }
-    throw new Error(lastError || "NAS mount failed");
+    throw createNasMountError(lastError || "NAS mount failed");
   } finally {
     await credential.cleanup();
   }
@@ -6678,19 +6755,22 @@ async function testNasSource(sourceId, payload = null) {
       smbVersion: result.smbVersion
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const rawMessage = error?.lastRawError ?? (error instanceof Error ? error.message : String(error));
+    const errorInfo = formatNasMountErrorForUser(rawMessage);
+    const message = errorInfo.message ?? "Could not mount NAS.";
     if (sourceId !== "_draft" && sourceId !== "draft") {
       await updateNasSourceRuntimeStatus(source.id, {
-        lastStatus: { status: "check_setup", checkedAt: new Date().toISOString(), lastError: message }
+        lastStatus: { status: "check_setup", checkedAt: new Date().toISOString(), lastError: message, lastRawError: errorInfo.rawMessage }
       });
     }
     return {
       ok: false,
       status: "check_setup",
       lastError: message,
+      lastRawError: errorInfo.rawMessage,
       source: await buildPublicNasSource({
         ...source,
-        lastStatus: { status: "check_setup", checkedAt: new Date().toISOString(), lastError: message }
+        lastStatus: { status: "check_setup", checkedAt: new Date().toISOString(), lastError: message, lastRawError: errorInfo.rawMessage }
       }, [])
     };
   }
@@ -6698,7 +6778,19 @@ async function testNasSource(sourceId, payload = null) {
 
 async function mountSavedNasSource(sourceId, payload = null) {
   const source = await findNasSourceForAction(sourceId, payload);
-  await mountNasSource(source, payload);
+  try {
+    await mountNasSource(source, payload);
+  } catch (error) {
+    const rawMessage = error?.lastRawError ?? (error instanceof Error ? error.message : String(error));
+    const errorInfo = formatNasMountErrorForUser(rawMessage);
+    const message = errorInfo.message ?? "Could not mount NAS.";
+    await updateNasSourceRuntimeStatus(source.id, {
+      lastStatus: { status: "check_setup", checkedAt: new Date().toISOString(), lastError: message, lastRawError: errorInfo.rawMessage }
+    });
+    const wrapped = new Error(message);
+    wrapped.lastRawError = errorInfo.rawMessage;
+    throw wrapped;
+  }
   return await buildNasSourcesPayload();
 }
 
@@ -6712,10 +6804,12 @@ async function mountEnabledNasSourcesOnStartup() {
       const result = await mountNasSource(source);
       console.log(`tikpal-api mounted NAS ${source.name} at ${result.mpdPath ?? "NAS"}`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.warn(`tikpal-api could not auto-mount NAS ${source.name}: ${message}`);
+      const rawMessage = error?.lastRawError ?? (error instanceof Error ? error.message : String(error));
+      const errorInfo = formatNasMountErrorForUser(rawMessage);
+      const message = errorInfo.message ?? "Could not mount NAS.";
+      console.warn(`tikpal-api could not auto-mount NAS ${source.name}: ${message}${errorInfo.rawMessage ? ` (${errorInfo.rawMessage})` : ""}`);
       await updateNasSourceRuntimeStatus(source.id, {
-        lastStatus: { status: "check_setup", checkedAt: new Date().toISOString(), lastError: message }
+        lastStatus: { status: "check_setup", checkedAt: new Date().toISOString(), lastError: message, lastRawError: errorInfo.rawMessage }
       });
     }
   }
@@ -13554,11 +13648,13 @@ async function applyWebModeAction(action) {
     }
     const keyboardPosition = normalizeWebModeKeyboardPosition(action?.keyboardPosition);
     const keyboardWindow = normalizeWebModeKeyboardWindow(action?.keyboardWindow);
+    const keyboardTarget = normalizeWebModeKeyboardTarget(action?.keyboardTarget);
     const keyboardMode = action.preload === true ? "preload" : action.enabled === true ? "show" : action.enabled === false ? "hide" : "toggle";
     const keyboardCommand = keyboardMode === "show" && action.force === true ? "show-force" : keyboardMode;
-    const keyboardEnv = keyboardMode === "hide" || keyboardMode === "preload" || (!keyboardPosition && !keyboardWindow)
+    const keyboardEnv = keyboardMode === "hide" || keyboardMode === "preload" || (!keyboardPosition && !keyboardWindow && keyboardTarget === "auto")
       ? {}
       : {
+          ...(keyboardTarget !== "auto" ? { TIKPAL_WEB_MODE_KEYBOARD_TARGET: keyboardTarget } : {}),
           TIKPAL_WEB_MODE_ONBOARD_REQUESTED_POSITION: "1",
           ...(keyboardPosition ? { TIKPAL_WEB_MODE_ONBOARD_ACTION_POSITION: keyboardPosition, TIKPAL_WEB_MODE_ONBOARD_POSITION: keyboardPosition } : {}),
           ...(keyboardWindow ? { TIKPAL_WEB_MODE_ONBOARD_ACTION_WINDOW: keyboardWindow, TIKPAL_WEB_MODE_ONBOARD_WINDOW: keyboardWindow } : {})

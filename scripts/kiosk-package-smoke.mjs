@@ -217,6 +217,10 @@ async function run() {
   assert(quickSettingsAudioSource.includes("data-custom-audio-toggle={choice.id}"), "Custom Audio Output switches should expose per-setting test hooks");
   assert(quickSettingsAudioSource.includes("is-custom-active"), "Custom Audio Output layout should use the compact profile rail");
   assert(quickSettingsAudioSource.includes("audio-output-header-dac"), "Audio Output detail should place DAC detail in the header");
+  assert(quickSettingsAudioSource.includes("audio-output-diagnostics-chip"), "Audio Output detail should expose a touchable advanced-info hint");
+  assert(quickSettingsAudioSource.includes('t("settings.openAudioOutput")'), "Preferences cards should use action-oriented Audio Output copy");
+  assert(quickSettingsAudioSource.includes('t("settings.manageRooms")'), "Multi-room Settings card should use a concise management action");
+  assert(quickSettingsAudioSource.includes('t("nas.checkSetupNext")'), "NAS setup errors should include a next-step hint");
   assert(!quickSettingsAudioSource.includes('mpdQualityError ?? (preferencesPending ? t("common.applying") : t("settings.mpdQualityMeta"))'), "Audio Output detail should not show redundant profile ids as the default footer");
   assert(!quickSettingsAudioSource.includes('settings-detail-note-grid" aria-label={t("settings.mpdQuality")}'), "Audio Output detail should not use boxed note cards beside profiles");
   assert(quickSettingsAudioSource.includes("audioDiagnostics"), "Audio Output should keep diagnostics behind a hidden detail");
@@ -564,6 +568,10 @@ esac
   const playbackTruthSource = await readFile(path.join(ROOT, "src/playbackTruth.ts"), "utf8");
   const stylesSource = await readFile(path.join(ROOT, "src/styles.css"), "utf8");
   assert(stylesSource.includes("--transport-play-icon") && stylesSource.includes("--transport-play-border"), "Transport play buttons should expose skin-aware icon and border tokens");
+  assert(stylesSource.includes(".screen-saver-wake-hint"), "Screen sleep should include a subtle touch-to-wake hint");
+  assert(stylesSource.includes(".audio-output-diagnostics-chip"), "Audio Output should style the advanced-info hint as a light chip");
+  assert(stylesSource.includes(".nas-source-next-step"), "NAS source detail should reserve a separate next-step row");
+  assert(stylesSource.includes(".settings-card-summary .settings-card-action"), "Settings cards should reduce low-value footer copy weight");
   assert(stylesSource.includes(".ambient-transport-play") && stylesSource.includes("color: var(--transport-play-icon);"), "Ambient play/pause button should follow the selected surface skin");
   assert(stylesSource.includes(".remote-play-button") && stylesSource.includes("background: var(--transport-play-bg);"), "Remote play/pause button should follow the selected surface skin");
   assert(!stylesSource.includes("linear-gradient(145deg, rgba(119, 215, 239, 0.28), rgba(242, 200, 101, 0.14))"), "Remote play/pause button should not keep a fixed cyan/gold gradient");
@@ -721,6 +729,13 @@ esac
     "Player should expose stable now-playing and library pane hooks for layout smoke"
   );
   assert(
+    playerOverlaySource.includes("function isLibraryTrackPlaying")
+      && playerOverlaySource.includes("data-library-track-current")
+      && playerOverlaySource.includes("currentRow?.scrollIntoView")
+      && playerOverlaySource.includes('playback.source !== "mpd"'),
+    "Player Library should keep the current-track checkmark synced after previous/next playback changes"
+  );
+  assert(
     stylesSource.includes("-webkit-line-clamp: 3") && stylesSource.includes(".player-now-playing-pane") && stylesSource.includes(".player-overlay .overlay-backdrop"),
     "Player layout should clamp long titles and dim the ambient background behind the overlay"
   );
@@ -744,9 +759,15 @@ esac
       && serverSource.includes("/api/v1/nas/sources")
       && serverSource.includes("/api/v1/nas/discover")
       && serverSource.includes("async function readNasAudioLibraryTracks")
+        && serverSource.includes("formatNasMountErrorForUser")
+        && serverSource.includes("lastRawError")
+        && serverSource.includes("Login failed. Check username, password, or Guest access.")
         && serverSource.includes("async function mountNasSource")
         && quickSettingsSource.includes("data-nas-detail-left")
         && quickSettingsSource.includes("data-nas-detail-right")
+        && quickSettingsSource.includes("readableNasErrorMessage")
+        && quickSettingsSource.includes("nasErrorRaw")
+        && quickSettingsSource.includes("selectedSource.lastRawError")
         && quickSettingsSource.includes('t("nas.savedNas")')
         && quickSettingsSource.includes('t("nas.scanResults")')
         && quickSettingsSource.includes('t("nas.testFirst")')
@@ -951,6 +972,8 @@ esac
   assert(webModeScript.includes("focused_browser_window"), "web mode should recover browser focus even when X has no active window");
   assert(webModeScript.includes("window_uses_profile"), "web mode should return keyboard focus to the active provider window, not the kiosk window");
   assert(webModeScript.includes("read_runtime_active_provider"), "keyboard focus recovery should find the active provider window");
+  assert(webModeScript.includes("TIKPAL_CHROMIUM_PROFILE_DIR") && webModeScript.includes("kiosk_browser_window"), "local kiosk keyboard focus recovery should target the main Chromium profile");
+  assert(webModeScript.includes("TIKPAL_WEB_MODE_KEYBOARD_TARGET") && webModeScript.includes("restore_local_kiosk_keyboard_focus"), "keyboard show should restore X focus to the kiosk only for local Settings inputs");
   assert(webModeScript.includes("TIKPAL_WEB_MODE_ONBOARD_SUPPRESS_PATH"), "explicit keyboard hide should suppress periodic provider auto-show");
   assert(webModeScript.includes("show-force"), "new provider input focus should clear manual keyboard suppression");
   assert(webModeScript.includes("preload) with_onboard_lock preload_onboard"), "Console should be able to preload resident Onboard before the first text-field tap");
@@ -1022,6 +1045,7 @@ esac
   assert(mainSource.includes('sendWebModeAction({ type: "keyboard", enabled,'), "local kiosk inputs should explicitly show and hide Onboard");
   assert(mainSource.includes("keyboardPlacementForTarget") && mainSource.includes("rectsOverlap"), "local kiosk inputs should choose a keyboard position that avoids the focused field");
   assert(mainSource.includes("keyboardPosition") && mainSource.includes("keyboardWindow"), "local kiosk inputs should send per-focus Onboard geometry to the API");
+  assert(mainSource.includes('keyboardTarget: "kiosk"'), "local kiosk inputs should tell the keyboard helper to restore focus to the kiosk Chromium window");
   assert(mainSource.includes("keepTextInputFocus"), "local kiosk inputs should keep focus when Onboard appears");
   assert(mainSource.includes("outsidePointerDown"), "local kiosk inputs should still hide Onboard when the user taps outside");
   assert(mainSource.includes("if (target) {\n      lastTextInput = target;"), "local kiosk should start showing Onboard on pointerdown before focus settles");
@@ -1032,6 +1056,7 @@ esac
   assert(serverSource.includes("normalizeWebModeKeyboardPosition") && serverSource.includes("normalizeWebModeKeyboardWindow"), "API should validate per-focus keyboard geometry before invoking the launcher");
   assert(serverSource.includes("runWebModeKeyboardCommand") && serverSource.includes("isWebModeSwitchingError"), "API should retry keyboard show requests that collide with Explore provider switching");
   assert(serverSource.includes("TIKPAL_WEB_MODE_ONBOARD_ACTION_POSITION") && serverSource.includes("TIKPAL_WEB_MODE_ONBOARD_ACTION_WINDOW"), "API should pass per-action keyboard geometry without relying on .env-overridable variables");
+  assert(serverSource.includes("normalizeWebModeKeyboardTarget") && serverSource.includes("TIKPAL_WEB_MODE_KEYBOARD_TARGET"), "API should pass the local kiosk keyboard target to the launcher");
   assert(serverSource.includes("TIKPAL_WEB_MODE_ONBOARD_POSITION") && serverSource.includes("TIKPAL_WEB_MODE_ONBOARD_WINDOW"), "API should pass validated keyboard geometry to the launcher");
   const openProviderBody = webModeScript.slice(
     webModeScript.indexOf("open_provider()"),

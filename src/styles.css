@@ -4892,7 +4892,7 @@ select {
 
 .settings-card > div:last-child {
   display: grid;
-  gap: 4px;
+  gap: 3px;
   min-height: 0;
   overflow: hidden;
   min-width: 0;
@@ -4940,6 +4940,14 @@ select {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.settings-card-summary .settings-card-action {
+  color: color-mix(in srgb, var(--theme-accent-strong) 68%, var(--theme-text-soft));
+  font-size: 11px;
+  font-weight: 760;
+  letter-spacing: 0;
+  opacity: 0.74;
 }
 
 .settings-card-action.is-applying,
@@ -5195,7 +5203,7 @@ select {
 
 .nas-panel-card {
   grid-template-columns: minmax(0, 1fr) minmax(420px, 0.28fr);
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto auto minmax(0, 1fr);
   align-content: stretch;
   gap: 10px 14px;
   padding: 14px;
@@ -5377,6 +5385,16 @@ select {
   font-size: 12px;
   font-style: normal;
   font-weight: 760;
+}
+
+.nas-source-next-step {
+  grid-column: 1;
+  grid-row: 4;
+  align-self: start;
+  margin: -4px 0 0;
+  color: var(--theme-text-soft);
+  font-size: 12px;
+  font-weight: 720;
 }
 
 .nas-readonly-note {
@@ -5885,6 +5903,10 @@ select {
 
 .settings-card p {
   overflow: hidden;
+  color: var(--theme-text-soft);
+  font-size: clamp(13px, 0.72vw, 16px);
+  font-weight: 620;
+  opacity: 0.84;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -5965,12 +5987,39 @@ select {
   white-space: normal;
 }
 
+.settings-detail-header p.is-error {
+  color: var(--danger);
+}
+
 .audio-output-title-row {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: auto auto minmax(0, 1fr);
   align-items: baseline;
-  gap: 22px;
+  gap: 12px;
   min-width: 0;
+}
+
+.audio-output-diagnostics-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--surface-control-border) 62%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface-control-bg-hover) 58%, transparent);
+  color: var(--theme-text-soft);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 760;
+  cursor: pointer;
+}
+
+.audio-output-diagnostics-chip:hover,
+.audio-output-diagnostics-chip:focus-visible {
+  border-color: color-mix(in srgb, var(--theme-accent-strong) 58%, transparent);
+  color: var(--theme-text);
+  outline: none;
 }
 
 .audio-output-title-row .audio-output-header-dac {
@@ -6981,6 +7030,24 @@ select {
   pointer-events: none;
 }
 
+.screen-saver-wake-hint {
+  position: absolute;
+  z-index: 4;
+  left: 50%;
+  bottom: 54px;
+  transform: translateX(-50%);
+  padding: 10px 18px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.045);
+  color: rgba(255, 255, 255, 0.42);
+  font-size: clamp(18px, 1vw, 24px);
+  font-weight: 620;
+  letter-spacing: 0;
+  pointer-events: none;
+  animation: screen-saver-wake-hint 3.2s ease forwards;
+}
+
 .screen-saver-clock {
   left: 120px;
   bottom: 92px;
@@ -7299,6 +7366,24 @@ select {
   font-style: normal;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+@keyframes screen-saver-wake-hint {
+  0% {
+    opacity: 0;
+    transform: translateX(-50%) translateY(8px);
+  }
+  14% {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+  72% {
+    opacity: 0.86;
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(-50%) translateY(-5px);
+  }
 }
 
 @keyframes tikpal-starfield {

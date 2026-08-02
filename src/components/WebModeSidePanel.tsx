@@ -293,10 +293,11 @@ export function WebModeSidePanel() {
             type="button"
             disabled={Boolean(pendingAction || pendingProvider)}
             data-web-mode-top-back
+            aria-label={t("common.close")}
             onClick={() => void closeWebMode()}
           >
             <PanelRightClose size={17} />
-            <span>{pendingAction === "close" ? t("common.closing") : t("common.back")}</span>
+            <span>{pendingAction === "close" ? t("common.closing") : t("common.close")}</span>
           </button>
         </div>
       </header>

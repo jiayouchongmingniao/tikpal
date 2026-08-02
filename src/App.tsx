@@ -1165,6 +1165,9 @@ export default function App() {
               {t(`settings.sleepStyle.${SCREEN_SAVER_PREVIEW_STYLES[screenSaverPreviewIndex]}`)}
             </span>
           )}
+          {screenSaverPreviewIndex === null ? (
+            <span className="screen-saver-wake-hint">{t("settings.touchToWake")}</span>
+          ) : null}
           {renderScreenSaverContent(screenSaverPreviewIndex === null ? preferences.displaySleepStyle : SCREEN_SAVER_PREVIEW_STYLES[screenSaverPreviewIndex])}
         </button>
       ) : null}

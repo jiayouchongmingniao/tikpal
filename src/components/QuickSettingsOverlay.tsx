@@ -440,6 +440,7 @@ export function QuickSettingsOverlay({
   const [nasPendingAction, setNasPendingAction] = useState<"test" | "save" | "scan" | "mount" | "unmount" | "delete" | null>(null);
   const [nasMessage, setNasMessage] = useState<string | null>(null);
   const [nasError, setNasError] = useState<string | null>(null);
+  const [nasErrorRaw, setNasErrorRaw] = useState<string | null>(null);
   const [nasCandidates, setNasCandidates] = useState<NasDiscoverCandidate[]>([]);
   const [nasTestReady, setNasTestReady] = useState(false);
   const [nasDeleteConfirmId, setNasDeleteConfirmId] = useState<string | null>(null);
@@ -482,6 +483,16 @@ export function QuickSettingsOverlay({
     (error: unknown, fallbackKey = "error.generic") => friendlyError(error instanceof Error ? error.message : typeof error === "string" ? error : null, fallbackKey) ?? t(fallbackKey),
     [friendlyError, t]
   );
+  const readableNasErrorMessage = useCallback(
+    (error: unknown) => {
+      const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+      if (message && message.length <= 96 && !message.includes("\n") && !/^Tikpal\s+API/i.test(message)) {
+        return message;
+      }
+      return localizedErrorMessage(error, "error.nas");
+    },
+    [localizedErrorMessage]
+  );
   useEffect(() => {
     if (!active) {
       hideLocalKeyboard();
@@ -511,6 +522,7 @@ export function QuickSettingsOverlay({
       setNasPendingAction(null);
       setNasMessage(null);
       setNasError(null);
+      setNasErrorRaw(null);
       setNasCandidates([]);
       setNasTestReady(false);
       setNasDeleteConfirmId(null);
@@ -752,7 +764,7 @@ export function QuickSettingsOverlay({
         icon: Volume2,
         title: t("settings.audioOutput"),
         value: t(`settings.audioProfile.${displayedAudioOutputProfile}`),
-        meta: t("settings.mpdQualityMeta"),
+        meta: t("settings.chooseAudioProfile"),
         tone: "gold"
       },
       {
@@ -839,7 +851,7 @@ export function QuickSettingsOverlay({
         icon: Type,
         title: t("settings.font"),
         value: fontChoices.find((choice) => choice.id === fontTheme)?.label ?? "System Neo",
-        meta: t("settings.chooseTypography"),
+        meta: t("settings.chooseFont"),
         tone: "cyan"
       },
       {
@@ -849,7 +861,7 @@ export function QuickSettingsOverlay({
         icon: Palette,
         title: t("settings.skin"),
         value: surfaceThemeChoices.find((choice) => choice.id === surfaceTheme)?.label ?? "Warm Gold",
-        meta: surfaceThemeChoices.find((choice) => choice.id === surfaceTheme)?.sample ?? "Amber glass",
+        meta: t("settings.chooseSkin"),
         tone: "gold"
       },
       {
@@ -859,7 +871,7 @@ export function QuickSettingsOverlay({
         icon: Captions,
         title: t("settings.lyrics"),
         value: lyricsVisible ? t("common.visible") : t("common.hidden"),
-        meta: `${t("settings.font")}: ${lyricsSizeChoices.find((choice) => choice.id === lyricsFontSize)?.label ?? "Medium"}`,
+        meta: t("settings.chooseLyrics"),
         tone: lyricsVisible ? "gold" : "neutral"
       },
       {
@@ -1060,6 +1072,12 @@ export function QuickSettingsOverlay({
     }
   }
 
+  function openAudioDiagnostics() {
+    clearAudioDiagnosticsPressTimer();
+    setDetailView("audioDiagnostics");
+    void loadAudioDiagnostics();
+  }
+
   function clearAudioDiagnosticsPressTimer() {
     if (audioDiagnosticsTimerRef.current !== null) {
       window.clearTimeout(audioDiagnosticsTimerRef.current);
@@ -1071,8 +1089,7 @@ export function QuickSettingsOverlay({
     clearAudioDiagnosticsPressTimer();
     audioDiagnosticsTimerRef.current = window.setTimeout(() => {
       audioDiagnosticsTimerRef.current = null;
-      setDetailView("audioDiagnostics");
-      void loadAudioDiagnostics();
+      openAudioDiagnostics();
     }, 850);
   }
 
@@ -1117,6 +1134,7 @@ export function QuickSettingsOverlay({
     setNasForm((current) => ({ ...current, ...patch }));
     setNasTestReady(false);
     setNasError(null);
+    setNasErrorRaw(null);
     setNasMessage(null);
   }
 
@@ -1128,6 +1146,7 @@ export function QuickSettingsOverlay({
     setNasTestReady(false);
     setNasDeleteConfirmId(null);
     setNasError(null);
+    setNasErrorRaw(null);
     setNasMessage(candidate ? t("nas.reviewThenTest") : t("nas.addShareHint"));
   }
 
@@ -1152,6 +1171,7 @@ export function QuickSettingsOverlay({
     setNasTestReady(false);
     setNasDeleteConfirmId(null);
     setNasError(null);
+    setNasErrorRaw(null);
     setNasMessage(t("nas.editThenTest"));
   }
 
@@ -1186,6 +1206,7 @@ export function QuickSettingsOverlay({
     if (nasPendingAction) return;
     setNasPendingAction("test");
     setNasError(null);
+    setNasErrorRaw(null);
     setNasMessage(t("nas.testing"));
     try {
       const payload = buildNasSavePayload();
@@ -1193,13 +1214,15 @@ export function QuickSettingsOverlay({
       setNasTestReady(result.ok);
       setNasMessage(result.ok ? (result.trackCount !== undefined ? t("nas.readyTrackCount", { count: result.trackCount.toLocaleString() }) : t("nas.status.ready")) : null);
       setNasError(result.ok ? null : result.lastError || t("nas.status.checkSetup"));
+      setNasErrorRaw(result.ok ? null : result.lastRawError ?? result.source?.lastRawError ?? null);
       if (result.ok) {
         void refreshLibraryStorageCounts().catch(() => undefined);
         void refreshNasSources().catch(() => undefined);
       }
     } catch (error) {
       setNasTestReady(false);
-      setNasError(localizedErrorMessage(error, "error.nas"));
+      setNasError(readableNasErrorMessage(error));
+      setNasErrorRaw(error instanceof Error ? error.message : null);
       setNasMessage(null);
     } finally {
       setNasPendingAction(null);
@@ -1210,6 +1233,7 @@ export function QuickSettingsOverlay({
     if (nasPendingAction) return;
     setNasPendingAction("save");
     setNasError(null);
+    setNasErrorRaw(null);
     setNasMessage(t("common.saving"));
     try {
       const payload = buildNasSavePayload();
@@ -1228,8 +1252,10 @@ export function QuickSettingsOverlay({
       setNasPasswordVisible(false);
       setNasTestReady(false);
       setNasMessage(t("nas.status.ready"));
+      setNasErrorRaw(null);
     } catch (error) {
-      setNasError(localizedErrorMessage(error, "error.nas"));
+      setNasError(readableNasErrorMessage(error));
+      setNasErrorRaw(error instanceof Error ? error.message : null);
       setNasMessage(null);
     } finally {
       setNasPendingAction(null);
@@ -1240,6 +1266,7 @@ export function QuickSettingsOverlay({
     if (nasPendingAction) return;
     setNasPendingAction("scan");
     setNasError(null);
+    setNasErrorRaw(null);
     setNasMessage(t("nas.scanning"));
     try {
       const result = await discoverNasSources();
@@ -1247,7 +1274,8 @@ export function QuickSettingsOverlay({
       setNasCandidatePage(0);
       setNasMessage(result.candidates.length > 0 ? t("nas.foundShares", { count: result.candidates.length }) : t("nas.noSharesFound"));
     } catch (error) {
-      setNasError(localizedErrorMessage(error, "error.nas"));
+      setNasError(readableNasErrorMessage(error));
+      setNasErrorRaw(error instanceof Error ? error.message : null);
       setNasMessage(null);
     } finally {
       setNasPendingAction(null);
@@ -1258,14 +1286,17 @@ export function QuickSettingsOverlay({
     if (nasPendingAction) return;
     setNasPendingAction("mount");
     setNasError(null);
+    setNasErrorRaw(null);
     setNasMessage(t("nas.scanning"));
     try {
       setNasSourcesState(await mountNasSource(sourceId));
       setSelectedNasId(sourceId);
       await refreshLibraryStorageCounts();
       setNasMessage(t("nas.status.ready"));
+      setNasErrorRaw(null);
     } catch (error) {
-      setNasError(localizedErrorMessage(error, "error.nas"));
+      setNasError(readableNasErrorMessage(error));
+      setNasErrorRaw(error instanceof Error ? error.message : null);
       setNasMessage(null);
     } finally {
       setNasPendingAction(null);
@@ -1276,13 +1307,16 @@ export function QuickSettingsOverlay({
     if (nasPendingAction) return;
     setNasPendingAction("unmount");
     setNasError(null);
+    setNasErrorRaw(null);
     try {
       setNasSourcesState(await unmountNasSource(sourceId));
       setSelectedNasId(sourceId);
       await refreshLibraryStorageCounts();
       setNasMessage(t("nas.status.offline"));
+      setNasErrorRaw(null);
     } catch (error) {
-      setNasError(localizedErrorMessage(error, "error.nas"));
+      setNasError(readableNasErrorMessage(error));
+      setNasErrorRaw(error instanceof Error ? error.message : null);
     } finally {
       setNasPendingAction(null);
     }
@@ -1295,18 +1329,22 @@ export function QuickSettingsOverlay({
       setNasDeleteConfirmId(sourceId);
       setNasMessage(t("nas.deleteQuestion"));
       setNasError(null);
+      setNasErrorRaw(null);
       return;
     }
     setNasPendingAction("delete");
     setNasError(null);
+    setNasErrorRaw(null);
     try {
       setNasSourcesState(await deleteNasSource(sourceId));
       await refreshLibraryStorageCounts();
       setNasDeleteConfirmId(null);
       setSelectedNasId(null);
       setNasMessage(t("nas.removed"));
+      setNasErrorRaw(null);
     } catch (error) {
-      setNasError(localizedErrorMessage(error, "error.nas"));
+      setNasError(readableNasErrorMessage(error));
+      setNasErrorRaw(error instanceof Error ? error.message : null);
     } finally {
       setNasPendingAction(null);
     }
@@ -1536,6 +1574,19 @@ export function QuickSettingsOverlay({
               >
                 {t("settings.audioOutput")}
               </strong>
+              <button
+                className="audio-output-diagnostics-chip"
+                type="button"
+                title={t("settings.audioDiagnosticsHint")}
+                onClick={openAudioDiagnostics}
+                onPointerDown={armAudioDiagnosticsPress}
+                onPointerUp={clearAudioDiagnosticsPressTimer}
+                onPointerCancel={clearAudioDiagnosticsPressTimer}
+                onPointerLeave={clearAudioDiagnosticsPressTimer}
+              >
+                <Info size={14} />
+                <span>{t("settings.audioDiagnosticsChip")}</span>
+              </button>
               <p className="audio-output-header-dac">
                 <span>DAC:</span>
                 <em>{system.outputDevice.label} · {system.outputDevice.detail}</em>
@@ -1745,7 +1796,7 @@ export function QuickSettingsOverlay({
   }
 
   function renderMultiroomDetail() {
-    const statusText = multiroomError ?? multiroomMeta;
+    const statusText = multiroomError ?? t("settings.multiroomReleaseBody");
 
     return (
       <section className="settings-detail-panel" aria-label={t("settings.multiroomAudio")} data-settings-detail="multiroom">
@@ -1756,7 +1807,7 @@ export function QuickSettingsOverlay({
           <div>
             <span>{t("settings.preferences")}</span>
             <strong>{t("settings.multiroomAudio")}</strong>
-            <p>{statusText}</p>
+            <p className={multiroomError ? "is-error" : undefined}>{statusText}</p>
           </div>
         </div>
 
@@ -1781,8 +1832,8 @@ export function QuickSettingsOverlay({
               : state?.active
                 ? t("settings.multiroomActiveHint", { label: title })
                 : enabled
-                  ? t("settings.multiroomStopHint")
-                  : t("settings.multiroomStartHint");
+                  ? t("settings.multiroomWaitingHint")
+                  : t("settings.multiroomReadyToStartHint");
 
             return (
               <article className={`multiroom-ecosystem-card ${enabled ? "is-enabled" : ""} ${state?.active ? "is-active" : ""} ${comingSoon ? "is-disabled" : ""}`} key={id}>
@@ -1810,10 +1861,6 @@ export function QuickSettingsOverlay({
             );
           })}
         </div>
-
-        <p className={`settings-card-action ${multiroomError ? "is-error" : ""}`}>
-          {t("settings.multiroomReleaseBody")}
-        </p>
       </section>
     );
   }
@@ -1883,6 +1930,7 @@ export function QuickSettingsOverlay({
     const busy = nasPendingAction !== null;
     const showNasForm = nasFormVisible || !selectedSource;
     const requiredNasFieldsReady = nasForm.host.trim().length > 0 && nasForm.share.trim().length > 0;
+    const selectedSourceNeedsSetup = Boolean(selectedSource && selectedSource.status !== "ready" && selectedSource.sourceKind !== "manual");
     const nasFormGuidance = !requiredNasFieldsReady
       ? t("nas.requiredHint")
       : nasTestReady
@@ -1894,9 +1942,12 @@ export function QuickSettingsOverlay({
         ? t("nas.addShareHint")
         : nasTrackCount > 0
           ? t("nas.trackCountReady", { count: nasTrackCount.toLocaleString() })
-          : configuredSources.length > 0
-            ? t("nas.testFirst")
+          : selectedSourceNeedsSetup
+            ? t("nas.checkSetupNext")
+            : configuredSources.length > 0
+              ? t("nas.testFirst")
             : t("settings.addNasInSettings"));
+    const sourceStatusTitle = nasError ? nasErrorRaw ?? nasError : undefined;
 
     return (
       <section className="settings-detail-panel" aria-label="NAS sources detail" data-settings-detail="nas">
@@ -1907,7 +1958,7 @@ export function QuickSettingsOverlay({
             <div>
               <span>{t("settings.library")}</span>
               <strong>{t("settings.nasSources")}</strong>
-              <p>{sourceStatus}</p>
+              <p title={sourceStatusTitle}>{sourceStatus}</p>
             </div>
         </div>
 
@@ -1942,6 +1993,7 @@ export function QuickSettingsOverlay({
                         setNasFormVisible(false);
                         setNasDeleteConfirmId(null);
                         setNasError(null);
+                        setNasErrorRaw(null);
                       }}
                       >
                         {badge ? <span>{badge}</span> : null}
@@ -2037,6 +2089,7 @@ export function QuickSettingsOverlay({
                       setNasForm(blankNasForm);
                       setNasTestReady(false);
                       setNasError(null);
+                      setNasErrorRaw(null);
                       setNasMessage(null);
                     }}
                   >
@@ -2182,7 +2235,14 @@ export function QuickSettingsOverlay({
                       </dd>
                     </div>
                   </dl>
-                  {selectedSource.lastError ? <em className="nas-source-error" title={selectedSource.lastError}>{t("nas.status.checkSetup")}</em> : null}
+                  {selectedSource.lastError ? (
+                    <em className="nas-source-error" title={selectedSource.lastRawError ?? selectedSource.lastError}>
+                      {selectedSource.lastError}
+                    </em>
+                  ) : null}
+                  {selectedSource.status !== "ready" && selectedSource.sourceKind !== "manual" ? (
+                    <p className="nas-source-next-step">{t("nas.checkSetupNext")}</p>
+                  ) : null}
                   {selectedSource.readOnly ? (
                     <p className="nas-readonly-note">{t("nas.readOnlyEnvironment")}</p>
                   ) : (
@@ -2549,11 +2609,11 @@ export function QuickSettingsOverlay({
                 data-room-shortcut="back"
                 data-console-back-button
                 type="button"
-                aria-label={t("library.backMain")}
+                aria-label={t("common.close")}
                 onClick={handleReturnAmbient}
               >
                 <PanelRightClose size={17} />
-                <span>{t("common.back")}</span>
+                <span>{t("common.close")}</span>
               </button>
             </div>
             <span className="console-room-switcher-error" role="alert">{roomShortcutError ?? ""}</span>
@@ -2644,7 +2704,7 @@ export function QuickSettingsOverlay({
                       <span>{card.title}</span>
                       <strong>{card.value}</strong>
                       <p>{card.meta}</p>
-                      <em className="settings-card-action">{t(`settings.audioProfile.${displayedAudioOutputProfile}`)}</em>
+                      <em className="settings-card-action">{t("settings.openAudioOutput")}</em>
                     </div>
                   </button>
                 );
@@ -2665,7 +2725,7 @@ export function QuickSettingsOverlay({
                       <span>{card.title}</span>
                       <strong>{card.value}</strong>
                       <p>{card.meta}</p>
-                      <em className={`settings-card-action ${multiroomPendingId ? "is-applying" : ""}`}>{multiroomPendingId ? t("common.applying") : t("settings.multiroomAudio")}</em>
+                      <em className={`settings-card-action ${multiroomPendingId ? "is-applying" : ""}`}>{multiroomPendingId ? t("common.applying") : t("settings.manageRooms")}</em>
                     </div>
                   </button>
                 );
@@ -2707,7 +2767,7 @@ export function QuickSettingsOverlay({
                       <span>{card.title}</span>
                       <strong>{card.value}</strong>
                       <p>{card.meta}</p>
-                      <em className="settings-card-action">{t("settings.adjustType")}</em>
+                      <em className="settings-card-action">{t("settings.openFont")}</em>
                     </div>
                   </button>
                 );
@@ -2728,7 +2788,7 @@ export function QuickSettingsOverlay({
                       <span>{card.title}</span>
                       <strong>{card.value}</strong>
                       <p>{card.meta}</p>
-                      <em className="settings-card-action">{t("settings.switchSkin")}</em>
+                      <em className="settings-card-action">{t("settings.openSkin")}</em>
                     </div>
                   </button>
                 );
@@ -2749,7 +2809,7 @@ export function QuickSettingsOverlay({
                       <span>{card.title}</span>
                       <strong>{card.value}</strong>
                       <p>{card.meta}</p>
-                      <em className="settings-card-action">{t("settings.tuneLyrics")}</em>
+                      <em className="settings-card-action">{t("settings.openLyrics")}</em>
                     </div>
                   </button>
                 );

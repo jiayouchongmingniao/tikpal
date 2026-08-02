@@ -123,6 +123,8 @@ Tikpal's user-facing Screen Sleep is a soft screen saver, not X11 DPMS power-off
 
 Automatic Screen Sleep is disabled while Explore has an active provider. Provider login, MV playback, or web-player browsing can be long-running, and the visible provider/side-panel windows sit above the main kiosk. When Explore closes, the kiosk resets the idle timer and resumes the user's configured sleep interval.
 
+On real screen-off entry, Tikpal should briefly show a faint `Touch to wake` hint for the first few seconds, then fade it away. This keeps the saver calm while making it clear that the device is asleep, not black-screened.
+
 Preferences are stored in `.tikpal/ui-preferences.json`:
 
 | Preference | Values | Default |
@@ -469,6 +471,8 @@ Onboard keycap labels should follow Settings -> Font. The kiosk writes the activ
 
 The Onboard language key keeps its own runtime cycle state in `.tikpal/onboard-ime-state.json` and `~/.config/tikpal/onboard-ime-state.json`. This is deliberate: relying only on `fcitx5-remote -n` during a touch click can bounce between `keyboard-us` and `pinyin` while Onboard reloads layouts. The no-argument `tikpalImeToggle.py` path is the live Onboard key path; it reads that runtime state, advances to the next mode, writes Fcitx `DefaultIM`, switches the current input method, applies the matching layout, and asks Onboard to stay visible. `--set-mode`, `--set-locale`, and `--sync` remain safe for Settings/API preference sync and do not pop the keyboard open unexpectedly.
 
+Local kiosk text fields, including Settings -> Library -> NAS Add/Edit, request Onboard with `keyboardTarget:"kiosk"`. The API passes this as `TIKPAL_WEB_MODE_KEYBOARD_TARGET=kiosk`, and `tikpal-web-mode.sh` restores X focus to the main kiosk Chromium profile after the Onboard window is raised. Provider pages keep the default `auto` target, so Explore login fields still use provider-focused recovery instead of stealing focus back to the kiosk.
+
 The default API hooks on Gentoo are:
 
 ```conf
@@ -525,6 +529,7 @@ The Gentoo physical kiosk uses the same Player Library contract as moOde:
 - USB rows expose `Copy to Local`; the backend should not overwrite same-name Local files and should report `Already in Local` when no copy is needed. Copied files live under `Codex/USB Imports/...`; `tikpal-local-library-sync.sh` must protect that imports directory while still using `rsync --delete` for repo-owned Local music, so copied tracks survive reboot and service reinstall.
 - Local rows expose `Delete`, but the first tap only reveals `Yes` and `No`. Only `Yes` performs deletion; `No`, storage changes, source changes, or closing Player must cancel the pending confirmation.
 - Player -> Library has a compact search field beside volume/free-space/Back. It filters only the currently selected `Local`, `USB`, `NAS`, or `Favorites` tab using visible track metadata and path text; it must not send source-switch requests, change the MPD queue, or search Radio stations.
+- The rightmost Library row checkmark represents the current MPD track, not just the row last selected for browsing. Previous/next playback must update the checkmark and scroll the current row into view without switching storage tabs.
 - Long track lists keep a fixed right-side fast-scroll rail with `current / total` count and a draggable thumb. Dragging that rail only changes `scrollTop`; it must not select a track or auto-play on release.
 
 NAS v1 is configured by the user in Settings rather than silently attached from a LAN scan. The backend may still read legacy manual roots from `TIKPAL_NAS_LIBRARY_ROOTS`, but those entries are marked `Manual` in Settings and should be treated as compatibility input. New setups should use Settings -> Library -> NAS:
@@ -542,6 +547,8 @@ TIKPAL_NAS_LIBRARY_MAX_TRACKS=500
 ```
 
 Configured NAS sources are stored in `.tikpal/nas-sources.json`. Passwords are not returned to the frontend; username/password credentials are written under `.tikpal/nas-credentials/<id>.cred` with `0600` permissions. The UI password field is masked by default and has a show/hide control for setup. With `TIKPAL_NAS_AUTO_MOUNT=1`, every saved and enabled NAS source is mounted again when `tikpal-api` starts, so swapping to another saved NAS only requires saving/enabling that source once in Settings. A brand-new NAS should still go through Settings -> Library -> NAS -> Add/Test/Save; LAN discovery is only a candidate list and should not silently mount unknown shares.
+
+NAS v1 supports SMB/Samba shares as a client by mounting them through Linux CIFS. Tikpal does not run a Samba server. Mount and test failures shown in Settings must be short and actionable in the NAS header and selected-source card, such as `Login failed. Check username, password, or Guest access.` or `Share or Folder not found. Check Share and Folder.` The raw `mount.cifs` or helper stderr is preserved as `lastRawError` in the API and as the UI `title`, but it should not be the primary visible text on the 2560 x 720 kiosk.
 
 Discovery is only a candidate list. `POST /api/v1/nas/discover` may use `TIKPAL_NAS_DISCOVERY_HINTS` or a host-specific `TIKPAL_NAS_DISCOVERY_COMMAND`, but it must not save, mount, or scan anything until the user selects a candidate, runs `Test`, then uses `Save & Scan`.
 

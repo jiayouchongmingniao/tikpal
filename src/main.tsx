@@ -115,7 +115,7 @@ if (!window.__TIKPAL_REMOTE_MODE__ && localKioskHosts.has(window.location.hostna
     lastKeyboardRequestMs = now;
     onboardVisibleRequested = enabled;
     const placement = enabled && target ? keyboardPlacementForTarget(target) : null;
-    void sendWebModeAction({ type: "keyboard", enabled, ...(enabled ? { force: true } : {}), ...(placement ?? {}) })
+    void sendWebModeAction({ type: "keyboard", enabled, keyboardTarget: "kiosk", ...(enabled ? { force: true } : {}), ...(placement ?? {}) })
       .catch(() => { lastKeyboardEnabled = null; });
   };
   const activeTextInput = () => document.activeElement instanceof HTMLElement

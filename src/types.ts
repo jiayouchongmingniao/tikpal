@@ -119,6 +119,7 @@ export interface WebModeActionRequest {
   enabled?: boolean;
   force?: boolean;
   preload?: boolean;
+  keyboardTarget?: "auto" | "kiosk" | "provider";
   keyboardPosition?: string;
   keyboardWindow?: string;
   providerTextScale?: number;
@@ -325,6 +326,7 @@ export interface NasSourceStatusSummary {
   status: NasSourceStatus;
   checkedAt: string | null;
   lastError: string | null;
+  lastRawError?: string | null;
 }
 
 export interface NasSourceSummary {
@@ -344,6 +346,7 @@ export interface NasSourceSummary {
   status: NasSourceStatus;
   lastStatus: NasSourceStatusSummary;
   lastError: string | null;
+  lastRawError?: string | null;
   lastScanAt: string | null;
   trackCount: number;
   sourceKind: NasSourceKind;
@@ -380,6 +383,7 @@ export interface NasSourceTestResponse {
   trackCount?: number;
   smbVersion?: string | null;
   lastError?: string | null;
+  lastRawError?: string | null;
 }
 
 export interface NasDiscoverCandidate {

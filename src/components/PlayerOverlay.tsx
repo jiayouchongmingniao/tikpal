@@ -178,6 +178,37 @@ function normalizeLibrarySearchText(value: string | number | null | undefined) {
   return String(value ?? "").trim().toLocaleLowerCase();
 }
 
+function normalizeLibraryTrackCompareText(value: string | null | undefined) {
+  return String(value ?? "")
+    .trim()
+    .replaceAll("\\", "/")
+    .replace(/^\/+/, "")
+    .replace(/^Codex\//i, "")
+    .toLocaleLowerCase();
+}
+
+function isLibraryTrackPlaying(track: AudioLibraryTrackSummary, playback: PlaybackSummary) {
+  if (playback.source !== "mpd") return false;
+  const activeQueueEntry = playback.queuePreview.find((entry) => entry.active);
+  const trackPath = normalizeLibraryTrackCompareText(track.path ?? track.id);
+  const queuePath = normalizeLibraryTrackCompareText(activeQueueEntry?.id);
+  if (trackPath && queuePath && (trackPath === queuePath || queuePath.endsWith(trackPath) || trackPath.endsWith(queuePath))) {
+    return true;
+  }
+
+  const trackTitle = normalizeLibraryTrackCompareText(track.title);
+  const playbackTitle = normalizeLibraryTrackCompareText(activeQueueEntry?.title ?? playback.title);
+  if (!trackTitle || !playbackTitle || trackTitle !== playbackTitle) return false;
+
+  const trackArtist = normalizeLibraryTrackCompareText(track.artist);
+  const playbackArtist = normalizeLibraryTrackCompareText(activeQueueEntry?.artist ?? playback.artist);
+  const artistMatches = !trackArtist || !playbackArtist || trackArtist === playbackArtist;
+  const trackDuration = track.durationSeconds;
+  const playbackDuration = activeQueueEntry?.durationSeconds ?? playback.durationSeconds;
+  const durationMatches = trackDuration === null || playbackDuration === null || Math.abs(trackDuration - playbackDuration) <= 2;
+  return artistMatches && durationMatches;
+}
+
 function filterLibraryTracksByQuery(tracks: AudioLibraryTrackSummary[], query: string) {
   const tokens = normalizeLibrarySearchText(query).split(/\s+/).filter(Boolean);
   if (tokens.length === 0) return tracks;
@@ -269,6 +300,7 @@ export function PlayerOverlay({
   const libraryFastScrollTrackRef = useRef<HTMLSpanElement | null>(null);
   const libraryFastScrollPointerIdRef = useRef<number | null>(null);
   const libraryFastScrollDraggingRef = useRef(false);
+  const previousLibraryCurrentTrackIdRef = useRef<string | null>(null);
   const [libraryFastScrollDragging, setLibraryFastScrollDragging] = useState(false);
   const [libraryFastScrollMetrics, setLibraryFastScrollMetrics] = useState<LibraryFastScrollMetrics>(defaultLibraryFastScrollMetrics);
   const playbackTruth = getPlaybackDisplayTruth(playback, audio, fontTheme);
@@ -325,6 +357,10 @@ export function PlayerOverlay({
   }, [baseVisibleLibraryTracks, librarySearchEnabled, librarySearchQuery]);
   const librarySearchHasNoMatches = librarySearchActive && baseVisibleLibraryTracks.length > 0 && visibleLibraryTracks.length === 0;
   const selectedLibraryTrack = visibleLibraryTracks.find((track) => track.id === selectedLibraryTrackId) ?? null;
+  const currentLibraryTrackId = useMemo(
+    () => visibleLibraryTracks.find((track) => track.active || isLibraryTrackPlaying(track, playback))?.id ?? null,
+    [playback, visibleLibraryTracks]
+  );
   const seekSupported = playback.source === "mpd" && durationSeconds > 0 && transportCapabilities?.seek !== false;
   const rememberedLibraryPath = audio.rememberedSource?.target === "mpd" ? audio.rememberedSource.localTrackPath ?? "" : "";
   const seekUnavailableMessage = !seekSupported && playback.source === "mpd" && durationSeconds > 0 && transportCapabilities?.seek === false
@@ -521,6 +557,19 @@ export function PlayerOverlay({
     });
     return () => window.cancelAnimationFrame(animationFrame);
   }, [active, selectedLibraryStorage, selectedPrimaryPanel, visibleLibraryTracks.length]);
+
+  useEffect(() => {
+    if (!active || selectedPrimaryPanel !== "library" || !currentLibraryTrackId) return;
+    if (previousLibraryCurrentTrackIdRef.current === currentLibraryTrackId) return;
+    previousLibraryCurrentTrackIdRef.current = currentLibraryTrackId;
+    const animationFrame = window.requestAnimationFrame(() => {
+      const list = libraryTrackListRef.current;
+      const currentRow = list?.querySelector<HTMLElement>('[data-library-track-current="true"]');
+      currentRow?.scrollIntoView({ block: "nearest" });
+      updateLibraryFastScrollMetrics();
+    });
+    return () => window.cancelAnimationFrame(animationFrame);
+  }, [active, currentLibraryTrackId, selectedPrimaryPanel]);
 
   useEffect(() => {
     const requestState = volumeRequestStateRef.current;
@@ -1116,7 +1165,7 @@ export function PlayerOverlay({
 
   return (
     <section className={`overlay player-overlay ${active ? "is-active" : ""}`} aria-label="Player controls" aria-hidden={!active}>
-      <button className="overlay-backdrop" type="button" tabIndex={active ? 0 : -1} aria-label={t("library.backMain")} onClick={onReturnAmbient} />
+      <button className="overlay-backdrop" type="button" tabIndex={active ? 0 : -1} aria-label={t("common.close")} onClick={onReturnAmbient} />
       <div className="player-shell" role="dialog" aria-modal="true" data-gesture-protected {...overlayReturnGesture}>
         <div className="player-now-playing-pane" data-player-now-playing-pane>
           <div className="cover-zone">
@@ -1289,11 +1338,11 @@ export function PlayerOverlay({
                 type="button"
                 data-gesture-control
                 data-player-volume-back
-                aria-label={t("library.backMain")}
+                aria-label={t("common.close")}
                 onClick={onReturnAmbient}
               >
                 <PanelRightClose size={15} />
-                <span>{t("common.back")}</span>
+                <span>{t("common.close")}</span>
               </button>
             </div>
           </div>
@@ -1378,6 +1427,7 @@ export function PlayerOverlay({
                 >
                   {visibleLibraryTracks.map((track, index) => {
                     const selected = selectedLibraryTrack?.id === track.id;
+                    const current = track.active || isLibraryTrackPlaying(track, playback);
                     const isLocalTrack = selectedLibraryStorage === "local" && track.storage === "local";
                     const isUsbTrack = selectedLibraryStorage === "usb" && track.storage === "usb";
                     const hasRowAction = isLocalTrack || isUsbTrack;
@@ -1387,9 +1437,10 @@ export function PlayerOverlay({
                     const audioInfo = track.storage === "local" || track.storage === "nas" || track.storage === "usb" ? formatLibraryAudioInfo(track) : null;
                     return (
                       <article
-                        className={`library-track-item ${hasRowAction ? "has-row-action" : ""} ${selected ? "is-selected" : ""} ${track.active ? "is-active" : ""}`}
+                        className={`library-track-item ${hasRowAction ? "has-row-action" : ""} ${selected ? "is-selected" : ""} ${current ? "is-active" : ""}`}
                         key={track.id}
                         data-library-track={track.id}
+                        data-library-track-current={current ? "true" : undefined}
                       >
                         <button
                           className="library-track-main"
@@ -1411,7 +1462,7 @@ export function PlayerOverlay({
                             {audioInfo ? <small className="library-track-audio-info">{audioInfo}</small> : null}
                           </span>
                           <span className="library-track-state" aria-hidden="true">
-                            {selected || track.active ? <Check size={16} /> : null}
+                            {current ? <Check size={16} /> : null}
                           </span>
                         </button>
                         <button

@@ -22,6 +22,7 @@ fi
 
 : "${TIKPAL_KIOSK_DISPLAY:=:0}"
 : "${TIKPAL_CHROMIUM_BIN:=/usr/lib/chromium-browser/chromium-browser}"
+: "${TIKPAL_CHROMIUM_PROFILE_DIR:=$HOME/.config/tikpal-chromium-kiosk}"
 : "${TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE:=}"
 : "${TIKPAL_AUDIO_ADAPT_BIN:=$APP_DIR/deploy/moode/tikpal-audio-adapt.sh}"
 : "${TIKPAL_WEB_MODE_PROFILE_ROOT:=$HOME/.config/tikpal-web-mode}"
@@ -57,6 +58,7 @@ fi
 : "${TIKPAL_WEB_MODE_ONBOARD_WINDOW:=900x280}"
 : "${TIKPAL_WEB_MODE_ONBOARD_POSITION:=500,420}"
 : "${TIKPAL_WEB_MODE_ONBOARD_SUPPRESS_PATH:=$TIKPAL_WEB_MODE_PROFILE_ROOT/onboard-manual-hidden}"
+: "${TIKPAL_WEB_MODE_KEYBOARD_TARGET:=auto}"
 : "${TIKPAL_WEB_MODE_ALSA_OUTPUT_DEVICE:=${TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE:-}}"
 : "${TIKPAL_WEB_MODE_WINDOW_GUARD:=1}"
 : "${TIKPAL_WEB_MODE_SINGLE_PROVIDER_WINDOW:=1}"
@@ -1184,6 +1186,20 @@ window_uses_profile() {
   [[ "$cmdline" == *"--user-data-dir=$profile"* ]]
 }
 
+kiosk_browser_window() {
+  local window
+  command -v xdotool >/dev/null 2>&1 || return 1
+  [[ -n "$TIKPAL_CHROMIUM_PROFILE_DIR" ]] || return 1
+  while IFS= read -r window; do
+    [[ -n "$window" ]] || continue
+    if window_uses_profile "$TIKPAL_CHROMIUM_PROFILE_DIR" "$window"; then
+      printf '%s\n' "$window"
+      return 0
+    fi
+  done < <(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool search --onlyvisible --class chromium 2>/dev/null || true)
+  return 1
+}
+
 focused_browser_window() {
   local active_provider area best_area=0 best_window="" height profile window width
   command -v xdotool >/dev/null 2>&1 || return 1
@@ -1229,6 +1245,15 @@ focus_window() {
   fi
 }
 
+restore_local_kiosk_keyboard_focus() {
+  local target window
+  target="$(printf '%s' "${TIKPAL_WEB_MODE_KEYBOARD_TARGET:-auto}" | tr '[:upper:]' '[:lower:]')"
+  [[ "$target" == "kiosk" ]] || return 0
+  window="$(kiosk_browser_window || true)"
+  [[ -n "$window" ]] || return 0
+  focus_window "$window"
+}
+
 start_onboard_process() {
   local onboard_bin session_bus
   onboard_bin="$(command -v onboard 2>/dev/null || true)"
@@ -1271,6 +1296,7 @@ ensure_onboard() {
   sleep 0.1
   raise_onboard
   move_onboard_if_requested
+  restore_local_kiosk_keyboard_focus
 }
 
 preload_onboard() {

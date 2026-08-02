@@ -1969,6 +1969,125 @@ Object.assign(dictionaries.es, {
   "settings.roonBridgeReleaseBody": "Iniciar Roon pausa Radio o Library ahora. Detenerlo restaura."
 });
 
+Object.assign(dictionaries.en, {
+  "settings.touchToWake": "Touch to wake",
+  "settings.chooseAudioProfile": "Choose listening style",
+  "settings.chooseFont": "Choose a display font",
+  "settings.chooseSkin": "Choose the surface",
+  "settings.chooseLyrics": "Tune lyric view",
+  "settings.openAudioOutput": "Open audio settings",
+  "settings.openFont": "Open font settings",
+  "settings.openSkin": "Open skin settings",
+  "settings.openLyrics": "Open lyric settings",
+  "settings.manageRooms": "Manage rooms",
+  "settings.audioDiagnosticsChip": "Advanced info",
+  "settings.multiroomWaitingHint": "Waiting for app playback.",
+  "settings.multiroomReadyToStartHint": "Start when you want this room available.",
+  "nas.checkSetupNext": "Check server, then tap Mount."
+});
+
+Object.assign(dictionaries["zh-CN"], {
+  "settings.touchToWake": "轻触唤醒",
+  "settings.chooseAudioProfile": "选择听音方式",
+  "settings.chooseFont": "选择显示字体",
+  "settings.chooseSkin": "选择界面质感",
+  "settings.chooseLyrics": "调整歌词显示",
+  "settings.openAudioOutput": "打开音频设置",
+  "settings.openFont": "打开字体设置",
+  "settings.openSkin": "打开皮肤设置",
+  "settings.openLyrics": "打开歌词设置",
+  "settings.manageRooms": "管理多房间",
+  "settings.audioDiagnosticsChip": "高级信息",
+  "settings.multiroomWaitingHint": "等待 App 开始播放。",
+  "settings.multiroomReadyToStartHint": "需要这个房间时再启动。",
+  "nas.checkSetupNext": "检查服务器，然后点 Mount。"
+});
+
+Object.assign(dictionaries.de, {
+  "settings.touchToWake": "Zum Aufwecken berühren",
+  "settings.chooseAudioProfile": "Hörprofil wählen",
+  "settings.chooseFont": "Schrift wählen",
+  "settings.chooseSkin": "Oberfläche wählen",
+  "settings.chooseLyrics": "Lyrics anpassen",
+  "settings.openAudioOutput": "Audio öffnen",
+  "settings.openFont": "Schrift öffnen",
+  "settings.openSkin": "Design öffnen",
+  "settings.openLyrics": "Lyrics öffnen",
+  "settings.manageRooms": "Räume verwalten",
+  "settings.audioDiagnosticsChip": "Erweiterte Info",
+  "settings.multiroomWaitingHint": "Wartet auf App-Wiedergabe.",
+  "settings.multiroomReadyToStartHint": "Starten, wenn dieser Raum bereit sein soll.",
+  "nas.checkSetupNext": "Server prüfen, dann Mount tippen."
+});
+
+Object.assign(dictionaries.it, {
+  "settings.touchToWake": "Tocca per riattivare",
+  "settings.chooseAudioProfile": "Scegli stile di ascolto",
+  "settings.chooseFont": "Scegli font",
+  "settings.chooseSkin": "Scegli superficie",
+  "settings.chooseLyrics": "Regola testi",
+  "settings.openAudioOutput": "Apri audio",
+  "settings.openFont": "Apri font",
+  "settings.openSkin": "Apri tema",
+  "settings.openLyrics": "Apri testi",
+  "settings.manageRooms": "Gestisci stanze",
+  "settings.audioDiagnosticsChip": "Info avanzate",
+  "settings.multiroomWaitingHint": "In attesa della riproduzione dall'app.",
+  "settings.multiroomReadyToStartHint": "Avvia quando vuoi usare questa stanza.",
+  "nas.checkSetupNext": "Controlla il server, poi tocca Mount."
+});
+
+Object.assign(dictionaries.ko, {
+  "settings.touchToWake": "터치하여 깨우기",
+  "settings.chooseAudioProfile": "청취 스타일 선택",
+  "settings.chooseFont": "표시 글꼴 선택",
+  "settings.chooseSkin": "화면 스킨 선택",
+  "settings.chooseLyrics": "가사 보기 조정",
+  "settings.openAudioOutput": "오디오 설정 열기",
+  "settings.openFont": "글꼴 설정 열기",
+  "settings.openSkin": "스킨 설정 열기",
+  "settings.openLyrics": "가사 설정 열기",
+  "settings.manageRooms": "룸 관리",
+  "settings.audioDiagnosticsChip": "고급 정보",
+  "settings.multiroomWaitingHint": "앱 재생을 기다리는 중.",
+  "settings.multiroomReadyToStartHint": "이 룸을 사용할 때 시작하세요.",
+  "nas.checkSetupNext": "서버를 확인한 뒤 Mount를 누르세요."
+});
+
+Object.assign(dictionaries.ja, {
+  "settings.touchToWake": "タッチで復帰",
+  "settings.chooseAudioProfile": "聴き方を選択",
+  "settings.chooseFont": "表示フォントを選択",
+  "settings.chooseSkin": "表示スキンを選択",
+  "settings.chooseLyrics": "歌詞表示を調整",
+  "settings.openAudioOutput": "音声設定を開く",
+  "settings.openFont": "フォント設定を開く",
+  "settings.openSkin": "スキン設定を開く",
+  "settings.openLyrics": "歌詞設定を開く",
+  "settings.manageRooms": "ルーム管理",
+  "settings.audioDiagnosticsChip": "詳細情報",
+  "settings.multiroomWaitingHint": "アプリ再生を待っています。",
+  "settings.multiroomReadyToStartHint": "この部屋を使う時に開始。",
+  "nas.checkSetupNext": "サーバー確認後、Mountをタップ。"
+});
+
+Object.assign(dictionaries.es, {
+  "settings.touchToWake": "Toca para despertar",
+  "settings.chooseAudioProfile": "Elige estilo de escucha",
+  "settings.chooseFont": "Elige fuente",
+  "settings.chooseSkin": "Elige tema",
+  "settings.chooseLyrics": "Ajusta letras",
+  "settings.openAudioOutput": "Abrir audio",
+  "settings.openFont": "Abrir fuente",
+  "settings.openSkin": "Abrir tema",
+  "settings.openLyrics": "Abrir letras",
+  "settings.manageRooms": "Gestionar salas",
+  "settings.audioDiagnosticsChip": "Info avanzada",
+  "settings.multiroomWaitingHint": "Esperando reproducción desde la app.",
+  "settings.multiroomReadyToStartHint": "Inicia cuando quieras usar esta sala.",
+  "nas.checkSetupNext": "Revisa el servidor y toca Mount."
+});
+
 function template(value: string, params: TranslationParams = {}) {
   return value.replace(/\{([^}]+)\}/g, (_, key: string) => {
     const replacement = params[key];
