@@ -1342,15 +1342,10 @@ keepalive_onboard() {
   is_enabled "$TIKPAL_WEB_MODE_ONBOARD" || return 0
   rm -f "$TIKPAL_WEB_MODE_ONBOARD_SUPPRESS_PATH"
   if ! pgrep -u "$(id -u)" -x onboard >/dev/null 2>&1; then
-    ensure_onboard
     return
   fi
-  call_onboard_method Show || true
-  sleep 0.1
-  call_onboard_method Show || true
-  position_onboard
+  [[ -n "$(onboard_visible_windows)" ]] || return 0
   raise_onboard || true
-  move_onboard_if_requested
   restore_local_kiosk_keyboard_focus
 }
 

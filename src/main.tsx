@@ -33,6 +33,7 @@ const onboardStickyInputSelector = "[data-onboard-sticky='true']";
 const onboardKeyboardWindow = { width: 900, height: 280 };
 const onboardKeyboardDefaultPosition = { x: 500, y: 420 };
 const onboardKeyboardMargin = 24;
+const stickyKeyboardKeepaliveIdleMs = 2500;
 
 type KeyboardPlacement = {
   keyboardPosition: string;
@@ -137,8 +138,12 @@ if (!window.__TIKPAL_REMOTE_MODE__ && localKioskHosts.has(window.location.hostna
     lastKeyboardEnabled = enabled;
     lastKeyboardRequestMs = now;
     onboardVisibleRequested = enabled;
-    const placement = enabled && target ? keyboardPlacementForTarget(target) : null;
-    lastKeyboardBounds = placement?.bounds ?? null;
+    const placement = enabled && target && !keepAlive ? keyboardPlacementForTarget(target) : null;
+    if (placement) {
+      lastKeyboardBounds = placement.bounds;
+    } else if (!enabled) {
+      lastKeyboardBounds = null;
+    }
     const placementPayload = placement
       ? { keyboardPosition: placement.keyboardPosition, keyboardWindow: placement.keyboardWindow }
       : {};
@@ -179,6 +184,10 @@ if (!window.__TIKPAL_REMOTE_MODE__ && localKioskHosts.has(window.location.hostna
     if (stickyKeyboardKeepaliveTimer !== null) return;
     stickyKeyboardKeepaliveTimer = window.setInterval(() => {
       if (!stickyInputSessionActive() || outsidePointerDown || !lastTextInput?.isConnected) {
+        stopStickyKeyboardKeepalive();
+        return;
+      }
+      if (Date.now() - lastInputActivityMs > stickyKeyboardKeepaliveIdleMs) {
         stopStickyKeyboardKeepalive();
         return;
       }

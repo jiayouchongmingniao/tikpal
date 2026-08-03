@@ -13770,11 +13770,12 @@ async function applyWebModeAction(action) {
       : keyboardMode === "show" && action.force === true
         ? "show-force"
         : keyboardMode;
+    const shouldApplyKeyboardPlacement = keyboardMode === "show" && action.keepAlive !== true && Boolean(keyboardPosition || keyboardWindow);
     const keyboardEnv = keyboardMode === "hide" || keyboardMode === "preload" || (!keyboardPosition && !keyboardWindow && keyboardTarget === "auto")
       ? {}
       : {
           ...(keyboardTarget !== "auto" ? { TIKPAL_WEB_MODE_KEYBOARD_TARGET: keyboardTarget } : {}),
-          TIKPAL_WEB_MODE_ONBOARD_REQUESTED_POSITION: "1",
+          ...(shouldApplyKeyboardPlacement ? { TIKPAL_WEB_MODE_ONBOARD_REQUESTED_POSITION: "1" } : {}),
           ...(keyboardPosition ? { TIKPAL_WEB_MODE_ONBOARD_ACTION_POSITION: keyboardPosition, TIKPAL_WEB_MODE_ONBOARD_POSITION: keyboardPosition } : {}),
           ...(keyboardWindow ? { TIKPAL_WEB_MODE_ONBOARD_ACTION_WINDOW: keyboardWindow, TIKPAL_WEB_MODE_ONBOARD_WINDOW: keyboardWindow } : {})
         };
