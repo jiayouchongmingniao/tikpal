@@ -349,6 +349,7 @@ function normalizeWebModeProviderTextScale(value, fallback = null) {
 }
 const WEB_MODE_DEFAULT_PROVIDER_TEXT_SCALE = normalizeWebModeProviderTextScale(process.env.TIKPAL_WEB_MODE_PROVIDER_TEXT_SCALE ?? "1.10", 1.1);
 const WEB_MODE_PROXY_TEST_NETWORK = parseEnvBoolean(process.env.TIKPAL_WEB_MODE_PROXY_TEST_NETWORK ?? "0");
+const WEB_MODE_KEYBOARD_STICKY_PROTECT_MS = parseEnvPositiveInteger(process.env.TIKPAL_WEB_MODE_KEYBOARD_STICKY_PROTECT_MS, 60_000);
 const UI_LOCALE_INPUT_METHODS = {
   en: "keyboard-us",
   "zh-CN": "pinyin",
@@ -13706,6 +13707,8 @@ async function pauseTikpalForWebMode() {
   await applyPlaybackActionForCurrentBackend({ type: "pause" });
 }
 
+let webModeKeyboardStickyUntilMs = 0;
+
 async function applyWebModeAction(action) {
   const type = String(action?.type ?? "").trim().toLowerCase();
   if (type === "close") {
@@ -13739,6 +13742,12 @@ async function applyWebModeAction(action) {
     if (action?.keepAlive !== undefined && typeof action.keepAlive !== "boolean") {
       throw new Error("Explore keyboard keepAlive value must be boolean");
     }
+    if (action?.sticky !== undefined && typeof action.sticky !== "boolean") {
+      throw new Error("Explore keyboard sticky value must be boolean");
+    }
+    if (action?.dismissSticky !== undefined && typeof action.dismissSticky !== "boolean") {
+      throw new Error("Explore keyboard dismissSticky value must be boolean");
+    }
     if (action?.preload !== undefined && typeof action.preload !== "boolean") {
       throw new Error("Explore keyboard preload value must be boolean");
     }
@@ -13746,6 +13755,16 @@ async function applyWebModeAction(action) {
     const keyboardWindow = normalizeWebModeKeyboardWindow(action?.keyboardWindow);
     const keyboardTarget = normalizeWebModeKeyboardTarget(action?.keyboardTarget);
     const keyboardMode = action.preload === true ? "preload" : action.enabled === true ? "show" : action.enabled === false ? "hide" : "toggle";
+    if (keyboardMode === "show" && action.sticky === true) {
+      webModeKeyboardStickyUntilMs = Date.now() + WEB_MODE_KEYBOARD_STICKY_PROTECT_MS;
+    }
+    if (keyboardMode === "hide" && action.dismissSticky !== true && Date.now() < webModeKeyboardStickyUntilMs) {
+      await writeWebModeRuntimeState({ lastError: null });
+      return await buildWebModeState();
+    }
+    if (keyboardMode === "hide" && action.dismissSticky === true) {
+      webModeKeyboardStickyUntilMs = 0;
+    }
     const keyboardCommand = keyboardMode === "show" && action.keepAlive === true
       ? "keepalive"
       : keyboardMode === "show" && action.force === true

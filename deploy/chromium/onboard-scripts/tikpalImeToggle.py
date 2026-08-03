@@ -202,11 +202,14 @@ def _read_cycle_mode_id() -> str:
 
 
 def _read_target_mode_id() -> str:
+    preferred = _preferred_locale_mode_id()
+    if preferred != DEFAULT_MODE_ID:
+        return preferred
     payload = _read_state_payload()
     value = payload.get("targetModeId")
     if value in MODE_BY_ID:
         return str(value)
-    return _preferred_locale_mode_id()
+    return preferred
 
 
 def _write_cycle_mode_id(mode_id: str, target_mode_id: str | None = None) -> None:

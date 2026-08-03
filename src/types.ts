@@ -119,6 +119,8 @@ export interface WebModeActionRequest {
   enabled?: boolean;
   force?: boolean;
   keepAlive?: boolean;
+  sticky?: boolean;
+  dismissSticky?: boolean;
   preload?: boolean;
   keyboardTarget?: "auto" | "kiosk" | "provider";
   keyboardPosition?: string;

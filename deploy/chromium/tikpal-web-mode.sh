@@ -1346,7 +1346,9 @@ keepalive_onboard() {
     return
   fi
   call_onboard_method Show || true
-  sleep 0.05
+  sleep 0.1
+  call_onboard_method Show || true
+  position_onboard
   raise_onboard || true
   move_onboard_if_requested
   restore_local_kiosk_keyboard_focus

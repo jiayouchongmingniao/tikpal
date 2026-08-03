@@ -424,6 +424,7 @@ export function QuickSettingsOverlay({
   const [audioDiagnosticsPending, setAudioDiagnosticsPending] = useState(false);
   const [audioDiagnosticsError, setAudioDiagnosticsError] = useState<string | null>(null);
   const audioDiagnosticsTimerRef = useRef<number | null>(null);
+  const wasActiveRef = useRef(active);
   const [webModeProxyEnabled, setWebModeProxyEnabled] = useState(true);
   const [webModeProxyUrl, setWebModeProxyUrl] = useState("");
   const [webModeProviderTextScale, setWebModeProviderTextScale] = useState(1.1);
@@ -494,42 +495,43 @@ export function QuickSettingsOverlay({
     [localizedErrorMessage]
   );
   useEffect(() => {
-    if (!active) {
-      hideLocalKeyboard();
-      setActiveSection("output");
-      setDetailView(null);
-      setConfirmAction(null);
-      setPendingAction(null);
-      setPendingBrightness(null);
-      setPendingNight(false);
-      setDisplaySleepError(null);
-      setActionError({
-        library_scan: null,
-        reboot: null,
-        shutdown: null
-      });
-      setBrightnessError(null);
-      setNightError(null);
-      setLocaleMessage(null);
-      setMultiroomError(null);
-      setAudioOutputPendingProfile(null);
-      setAudioOutputPendingCustomSettings(null);
-      setMpdQualityError(null);
-      setWebModeError(null);
-      setNasFormVisible(false);
-      setNasForm(blankNasForm);
-      setNasPasswordVisible(false);
-      setNasPendingAction(null);
-      setNasMessage(null);
-      setNasError(null);
-      setNasErrorRaw(null);
-      setNasCandidates([]);
-      setNasTestReady(false);
-      setNasDeleteConfirmId(null);
-      setPendingRoomShortcut(null);
-      setRoomShortcutError(null);
-    }
-  }, [active, localizedErrorMessage]);
+    const wasActive = wasActiveRef.current;
+    wasActiveRef.current = active;
+    if (active || !wasActive) return;
+    hideLocalKeyboard();
+    setActiveSection("output");
+    setDetailView(null);
+    setConfirmAction(null);
+    setPendingAction(null);
+    setPendingBrightness(null);
+    setPendingNight(false);
+    setDisplaySleepError(null);
+    setActionError({
+      library_scan: null,
+      reboot: null,
+      shutdown: null
+    });
+    setBrightnessError(null);
+    setNightError(null);
+    setLocaleMessage(null);
+    setMultiroomError(null);
+    setAudioOutputPendingProfile(null);
+    setAudioOutputPendingCustomSettings(null);
+    setMpdQualityError(null);
+    setWebModeError(null);
+    setNasFormVisible(false);
+    setNasForm(blankNasForm);
+    setNasPasswordVisible(false);
+    setNasPendingAction(null);
+    setNasMessage(null);
+    setNasError(null);
+    setNasErrorRaw(null);
+    setNasCandidates([]);
+    setNasTestReady(false);
+    setNasDeleteConfirmId(null);
+    setPendingRoomShortcut(null);
+    setRoomShortcutError(null);
+  }, [active]);
 
   useEffect(() => {
     setMultiroomState(system.multiroom ?? null);

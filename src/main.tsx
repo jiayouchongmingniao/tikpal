@@ -49,6 +49,7 @@ type RectLike = {
 
 type OnboardVisibleOptions = {
   keepAlive?: boolean;
+  dismissSticky?: boolean;
 };
 
 const clampKeyboardCoordinate = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
@@ -147,6 +148,8 @@ if (!window.__TIKPAL_REMOTE_MODE__ && localKioskHosts.has(window.location.hostna
       enabled,
       keyboardTarget: "kiosk",
       ...(enabled ? (keepAlive ? { keepAlive: true } : { force: true }) : {}),
+      ...(enabled && target?.matches(onboardStickyInputSelector) ? { sticky: true } : {}),
+      ...(!enabled && options.dismissSticky === true ? { dismissSticky: true } : {}),
       ...placementPayload
     })
       .catch(() => { lastKeyboardEnabled = null; });
@@ -163,6 +166,10 @@ if (!window.__TIKPAL_REMOTE_MODE__ && localKioskHosts.has(window.location.hostna
       && lastTextInput?.isConnected
       && lastTextInput.matches(onboardStickyInputSelector)
   );
+  const stickyTextInputTarget = () => {
+    if (lastTextInput?.isConnected && lastTextInput.matches(onboardStickyInputSelector)) return lastTextInput;
+    return document.querySelector<HTMLElement>(onboardStickyInputSelector);
+  };
   const stopStickyKeyboardKeepalive = () => {
     if (stickyKeyboardKeepaliveTimer === null) return;
     window.clearInterval(stickyKeyboardKeepaliveTimer);
@@ -205,6 +212,19 @@ if (!window.__TIKPAL_REMOTE_MODE__ && localKioskHosts.has(window.location.hostna
         }
       }, delay);
     }
+  };
+  const keepStickyKeyboardVisible = () => {
+    const target = stickyTextInputTarget();
+    if (!target) return false;
+    lastTextInput = target;
+    inputSessionActive = true;
+    outsidePointerDown = false;
+    lastInputActivityMs = Date.now();
+    startStickyKeyboardKeepalive();
+    setOnboardVisible(true, target, { keepAlive: true });
+    refocusTextInput(target);
+    keepTextInputFocus(target);
+    return true;
   };
   const pointerInsideOnboardKeyboard = (event: PointerEvent) => {
     if (!onboardVisibleRequested || !lastKeyboardBounds) return false;
@@ -264,13 +284,13 @@ if (!window.__TIKPAL_REMOTE_MODE__ && localKioskHosts.has(window.location.hostna
     }
     if (!target) {
       endInputSession();
-      setOnboardVisible(false);
+      setOnboardVisible(false, null, { dismissSticky: true });
     }
   }, true);
   window.addEventListener("tikpal:keyboard-context-clear", () => {
     endInputSession();
     outsidePointerDown = true;
-    setOnboardVisible(false);
+    setOnboardVisible(false, null, { dismissSticky: true });
   });
   document.addEventListener("focusin", (event) => {
     const target = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>(onboardInputSelector) : null;
@@ -288,10 +308,16 @@ if (!window.__TIKPAL_REMOTE_MODE__ && localKioskHosts.has(window.location.hostna
         inputSessionActive = true;
         return;
       }
-      if (inputSessionActive && lastTextInput?.isConnected && (!outsidePointerDown || stickyInputSessionActive() || recentInputActivity())) {
-        outsidePointerDown = false;
-        refocusTextInput(lastTextInput);
-        keepTextInputFocus(lastTextInput);
+      if (inputSessionActive && (!outsidePointerDown || stickyInputSessionActive() || recentInputActivity())) {
+        if (keepStickyKeyboardVisible()) return;
+        if (lastTextInput?.isConnected) {
+          outsidePointerDown = false;
+          refocusTextInput(lastTextInput);
+          keepTextInputFocus(lastTextInput);
+          return;
+        }
+      }
+      if (inputSessionActive && stickyTextInputTarget() && keepStickyKeyboardVisible()) {
         return;
       }
       endInputSession();
@@ -309,7 +335,12 @@ if (!window.__TIKPAL_REMOTE_MODE__ && localKioskHosts.has(window.location.hostna
   document.addEventListener("input", refreshTextInputSession, true);
   document.addEventListener("compositionstart", refreshTextInputSession, true);
   document.addEventListener("compositionupdate", refreshTextInputSession, true);
-  document.addEventListener("submit", () => {
+  document.addEventListener("submit", (event) => {
+    if (stickyInputSessionActive() || (inputSessionActive && stickyTextInputTarget())) {
+      event.preventDefault();
+      keepStickyKeyboardVisible();
+      return;
+    }
     endInputSession();
     setOnboardVisible(false);
   }, true);
@@ -322,7 +353,7 @@ if (!window.__TIKPAL_REMOTE_MODE__ && localKioskHosts.has(window.location.hostna
         keepTextInputFocus(target);
       }
     }
-    if (event.key === "Enter" && target && !isMultilineInput(target)) {
+    if (event.key === "Enter" && target && !isMultilineInput(target) && !target.matches(onboardStickyInputSelector)) {
       endInputSession();
       setOnboardVisible(false);
     }
