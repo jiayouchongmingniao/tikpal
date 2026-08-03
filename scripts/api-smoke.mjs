@@ -570,6 +570,7 @@ function createProviderServer() {
     if (request.method === "GET" && url.pathname === "/forecast") {
       sendProviderJson(response, 200, {
         current: {
+          temperature_2m: 27.4,
           weather_code: 61,
           precipitation: 1.2,
           rain: 1.2,
@@ -1128,6 +1129,7 @@ switch (command) {
       TIKPAL_API_PORT: String(port),
       TIKPAL_PLAYER_BACKEND: "mpc",
       TIKPAL_MPC_BIN: fakeMpcPath,
+      TIKPAL_MPD_STARTUP_VOLUME: "-1",
       TIKPAL_MPD_HOST: "127.0.0.1",
       TIKPAL_MPD_PORT: "6600",
       TIKPAL_ROOM_EXPERIENCE_STATE_PATH: roomExperienceStatePath,
@@ -3086,6 +3088,7 @@ if (getIndex >= 0) {
       TIKPAL_AUDIO_VOLUME_STATE_PATH: fakeAudioVolumeStatePath,
       TIKPAL_AUDIO_SOURCE_MEMORY_STATE_PATH: fakeAudioSourceMemoryStatePath,
       TIKPAL_PLAYBACK_MODE_STATE_PATH: fakePlaybackModeStatePath,
+      TIKPAL_MPD_STARTUP_VOLUME: "-1",
       TIKPAL_MPD_HOST: "127.0.0.1",
       TIKPAL_MPD_PORT: "6600",
       TIKPAL_ROOM_EXPERIENCE_STATE_PATH: roomExperienceStatePath,
@@ -3817,6 +3820,7 @@ appendFileSync(${JSON.stringify(fakeBluetoothTransportLogPath)}, action + "\\n")
       TIKPAL_API_PORT: String(port),
       TIKPAL_PLAYER_BACKEND: "mpc",
       TIKPAL_MPC_BIN: fakeMpcPath,
+      TIKPAL_MPD_STARTUP_VOLUME: "-1",
       TIKPAL_MPD_HOST: "127.0.0.1",
       TIKPAL_MPD_PORT: "6600",
       TIKPAL_ROOM_EXPERIENCE_STATE_PATH: roomExperienceStatePath,
@@ -5102,6 +5106,7 @@ async function run() {
     assert(sceneContext.body.countryCode === "CN", "scene context should expose IP-derived country code");
     assert(sceneContext.body.weather?.condition === "rainy", "scene context should expose IP-location weather");
     assert(sceneContext.body.weather?.label === "Rainy", "scene context should expose a weather label for ambient copy");
+    assert(sceneContext.body.weather?.temperatureCelsius === 27, "scene context should expose rounded Celsius temperature");
     assert(["morning", "afternoon", "evening", "night"].includes(sceneContext.body.dayPart), "scene context should expose a daypart");
 
     const openapi = await request("/api/v1/openapi.json");

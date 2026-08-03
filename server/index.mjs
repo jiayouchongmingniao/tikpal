@@ -1155,6 +1155,7 @@ function getWeatherLabel(condition) {
 function normalizeWeatherBody(body) {
   const current = body?.current ?? body?.current_weather ?? {};
   const weatherCode = Number(current.weather_code ?? current.weathercode);
+  const temperatureCelsius = Number(current.temperature_2m ?? current.temperature);
   const precipitationValues = [
     current.precipitation,
     current.rain,
@@ -1170,6 +1171,7 @@ function normalizeWeatherBody(body) {
     label,
     weatherCode: Number.isFinite(weatherCode) ? weatherCode : null,
     precipitation,
+    temperatureCelsius: Number.isFinite(temperatureCelsius) ? Math.round(temperatureCelsius) : null,
     source: "ip_weather"
   };
 }
@@ -1178,7 +1180,7 @@ function buildWeatherUrl(latitude, longitude, timeZone) {
   const url = new URL(SCENE_CONTEXT_WEATHER_URL);
   url.searchParams.set("latitude", latitude.toFixed(4));
   url.searchParams.set("longitude", longitude.toFixed(4));
-  url.searchParams.set("current", "weather_code,precipitation,rain,showers,snowfall");
+  url.searchParams.set("current", "temperature_2m,weather_code,precipitation,rain,showers,snowfall");
   url.searchParams.set("timezone", timeZone || "auto");
   return url.toString();
 }
@@ -2407,7 +2409,8 @@ async function readOutputVolumePercent() {
   return parseOutputVolumePercent(raw);
 }
 
-async function setOutputVolumePercent(percent) {
+async function setOutputVolumePercent(percent, options = {}) {
+  const { remember = true } = options;
   const normalized = Math.max(0, Math.min(100, Math.round(Number(percent))));
   if (!Number.isFinite(normalized)) {
     throw new Error("output volume requires value between 0 and 100");
@@ -2417,7 +2420,7 @@ async function setOutputVolumePercent(percent) {
   }
   const command = OUTPUT_VOLUME_SET_COMMAND.replace(/%VALUE%/g, String(normalized));
   await runCommand(command, { allowFailure: false, timeout: 2500 });
-  if (normalized > 0) {
+  if (remember && normalized > 0) {
     await rememberNonZeroVolumePercent(normalized);
   }
 }
@@ -10326,6 +10329,31 @@ async function primeMpcPlayback() {
   }
 }
 
+function getStartupVolumePercent() {
+  if (Number.isFinite(MPD_STARTUP_VOLUME) && MPD_STARTUP_VOLUME >= 0 && MPD_STARTUP_VOLUME <= 100) {
+    return Math.round(MPD_STARTUP_VOLUME);
+  }
+  return null;
+}
+
+async function applyStartupVolumeGuard() {
+  const startupVolume = getStartupVolumePercent();
+  if (startupVolume === null) return;
+
+  try {
+    await runMpc(["volume", String(startupVolume)], { allowFailure: true, timeout: 2500 });
+  } catch (error) {
+    console.warn(`tikpal-api startup MPD volume guard failed: ${error instanceof Error ? error.message : "unknown error"}`);
+  }
+
+  if (!OUTPUT_VOLUME_SET_COMMAND.trim()) return;
+  try {
+    await setOutputVolumePercent(startupVolume, { remember: false });
+  } catch (error) {
+    console.warn(`tikpal-api startup output volume guard failed: ${error instanceof Error ? error.message : "unknown error"}`);
+  }
+}
+
 async function startStartupSceneSoundPlayback() {
   if (!STARTUP_SCENE_SOUND_ENABLED) return false;
 
@@ -10535,6 +10563,7 @@ function recoverHifiRuntimePlaybackIfNeeded(snapshot) {
 }
 
 async function applyStartupPlaybackPolicy() {
+  await applyStartupVolumeGuard();
   if (await getConnectedStartupExternalSource()) return;
   if (await restoreHifiRememberedSourcePlayback()) return;
   if (await startStartupSceneSoundPlayback()) return;

@@ -2088,6 +2088,139 @@ Object.assign(dictionaries.es, {
   "nas.checkSetupNext": "Revisa el servidor y toca Mount."
 });
 
+Object.assign(dictionaries.en, {
+  "scene.clock.withContext": "{context} {mode} {dayPart}",
+  "scene.clock.withoutContext": "{mode} {dayPart}",
+  "scene.dayPart.morning": "morning",
+  "scene.dayPart.afternoon": "afternoon",
+  "scene.dayPart.evening": "evening",
+  "scene.dayPart.night": "night",
+  "scene.mode.focus": "focused",
+  "scene.mode.calm": "calm",
+  "scene.mode.sleep": "quiet",
+  "scene.mode.hifi": "Hi-Fi listening",
+  "scene.weather.clear": "Clear",
+  "scene.weather.cloudy": "Cloudy",
+  "scene.weather.foggy": "Foggy",
+  "scene.weather.rainy": "Rainy",
+  "scene.weather.snowy": "Snowy",
+  "scene.weather.stormy": "Stormy"
+});
+
+Object.assign(dictionaries["zh-CN"], {
+  "scene.clock.withContext": "{context} · {mode} · {dayPart}",
+  "scene.clock.withoutContext": "{mode} · {dayPart}",
+  "scene.dayPart.morning": "早晨",
+  "scene.dayPart.afternoon": "午后",
+  "scene.dayPart.evening": "傍晚",
+  "scene.dayPart.night": "夜间",
+  "scene.mode.focus": "专注",
+  "scene.mode.calm": "放松",
+  "scene.mode.sleep": "安静",
+  "scene.mode.hifi": "Hi-Fi 聆听",
+  "scene.weather.clear": "晴天",
+  "scene.weather.cloudy": "多云",
+  "scene.weather.foggy": "雾天",
+  "scene.weather.rainy": "雨天",
+  "scene.weather.snowy": "雪天",
+  "scene.weather.stormy": "雷雨"
+});
+
+Object.assign(dictionaries.de, {
+  "scene.clock.withContext": "{context} · {mode} · {dayPart}",
+  "scene.clock.withoutContext": "{mode} · {dayPart}",
+  "scene.dayPart.morning": "Morgen",
+  "scene.dayPart.afternoon": "Nachmittag",
+  "scene.dayPart.evening": "Abend",
+  "scene.dayPart.night": "Nacht",
+  "scene.mode.focus": "Fokus",
+  "scene.mode.calm": "ruhig",
+  "scene.mode.sleep": "leise",
+  "scene.mode.hifi": "Hi-Fi",
+  "scene.weather.clear": "Klar",
+  "scene.weather.cloudy": "Bewölkt",
+  "scene.weather.foggy": "Neblig",
+  "scene.weather.rainy": "Regnerisch",
+  "scene.weather.snowy": "Schnee",
+  "scene.weather.stormy": "Stürmisch"
+});
+
+Object.assign(dictionaries.it, {
+  "scene.clock.withContext": "{context} · {mode} · {dayPart}",
+  "scene.clock.withoutContext": "{mode} · {dayPart}",
+  "scene.dayPart.morning": "mattina",
+  "scene.dayPart.afternoon": "pomeriggio",
+  "scene.dayPart.evening": "sera",
+  "scene.dayPart.night": "notte",
+  "scene.mode.focus": "focus",
+  "scene.mode.calm": "calma",
+  "scene.mode.sleep": "quieto",
+  "scene.mode.hifi": "Hi-Fi",
+  "scene.weather.clear": "Sereno",
+  "scene.weather.cloudy": "Nuvoloso",
+  "scene.weather.foggy": "Nebbia",
+  "scene.weather.rainy": "Pioggia",
+  "scene.weather.snowy": "Neve",
+  "scene.weather.stormy": "Temporale"
+});
+
+Object.assign(dictionaries.ko, {
+  "scene.clock.withContext": "{context} · {mode} · {dayPart}",
+  "scene.clock.withoutContext": "{mode} · {dayPart}",
+  "scene.dayPart.morning": "아침",
+  "scene.dayPart.afternoon": "오후",
+  "scene.dayPart.evening": "저녁",
+  "scene.dayPart.night": "밤",
+  "scene.mode.focus": "집중",
+  "scene.mode.calm": "휴식",
+  "scene.mode.sleep": "고요한",
+  "scene.mode.hifi": "Hi-Fi",
+  "scene.weather.clear": "맑음",
+  "scene.weather.cloudy": "흐림",
+  "scene.weather.foggy": "안개",
+  "scene.weather.rainy": "비",
+  "scene.weather.snowy": "눈",
+  "scene.weather.stormy": "폭풍"
+});
+
+Object.assign(dictionaries.ja, {
+  "scene.clock.withContext": "{context} · {mode} · {dayPart}",
+  "scene.clock.withoutContext": "{mode} · {dayPart}",
+  "scene.dayPart.morning": "朝",
+  "scene.dayPart.afternoon": "午後",
+  "scene.dayPart.evening": "夕方",
+  "scene.dayPart.night": "夜",
+  "scene.mode.focus": "集中",
+  "scene.mode.calm": "リラックス",
+  "scene.mode.sleep": "静か",
+  "scene.mode.hifi": "Hi-Fi",
+  "scene.weather.clear": "晴れ",
+  "scene.weather.cloudy": "曇り",
+  "scene.weather.foggy": "霧",
+  "scene.weather.rainy": "雨",
+  "scene.weather.snowy": "雪",
+  "scene.weather.stormy": "嵐"
+});
+
+Object.assign(dictionaries.es, {
+  "scene.clock.withContext": "{context} · {mode} · {dayPart}",
+  "scene.clock.withoutContext": "{mode} · {dayPart}",
+  "scene.dayPart.morning": "mañana",
+  "scene.dayPart.afternoon": "tarde",
+  "scene.dayPart.evening": "atardecer",
+  "scene.dayPart.night": "noche",
+  "scene.mode.focus": "focus",
+  "scene.mode.calm": "calma",
+  "scene.mode.sleep": "tranquilo",
+  "scene.mode.hifi": "Hi-Fi",
+  "scene.weather.clear": "Despejado",
+  "scene.weather.cloudy": "Nublado",
+  "scene.weather.foggy": "Niebla",
+  "scene.weather.rainy": "Lluvia",
+  "scene.weather.snowy": "Nieve",
+  "scene.weather.stormy": "Tormenta"
+});
+
 function template(value: string, params: TranslationParams = {}) {
   return value.replace(/\{([^}]+)\}/g, (_, key: string) => {
     const replacement = params[key];

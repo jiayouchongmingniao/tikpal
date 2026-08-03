@@ -743,6 +743,7 @@ export interface SceneWeatherSummary {
   label: string;
   weatherCode: number | null;
   precipitation: number;
+  temperatureCelsius: number | null;
   source: "ip_weather";
 }
 

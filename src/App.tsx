@@ -325,7 +325,7 @@ export default function App() {
   const { mode, hudVisible, idleTotalMs, idleRemainingMs, showHud, toggleHud, changeMode, returnAmbient, resetIdleTimer } = useAppMode(readInitialMode());
   const { state: tikpalState, status: tikpalStatus, refresh, sendPlaybackAction, sendSystemAction, sendSourceSwitch } = useTikpalState();
   const { experience: roomExperience, status: roomExperienceStatus, refresh: refreshRoomExperience, sendExperienceAction } = useRoomExperience();
-  const { preferences, t } = useI18n();
+  const { locale, preferences, t } = useI18n();
 
   useBrowserKioskGuard();
 
@@ -644,20 +644,23 @@ export default function App() {
   }, [tikpalState.system.display.brightnessPercent]);
 
   const activeTimeZone = roomExperience.nightSchedule.timeZone;
-  const timeFormatter = useMemo(() => new Intl.DateTimeFormat("en-US", {
+  const timeFormatter = useMemo(() => new Intl.DateTimeFormat(locale, {
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,
     timeZone: activeTimeZone
-  }), [activeTimeZone]);
+  }), [activeTimeZone, locale]);
   const dateFormatter = useMemo(() => new Intl.DateTimeFormat("en-US", {
     month: "2-digit",
     day: "2-digit",
-    weekday: "long",
     timeZone: activeTimeZone
   }), [activeTimeZone]);
+  const weekdayFormatter = useMemo(() => new Intl.DateTimeFormat(locale, {
+    weekday: "long",
+    timeZone: activeTimeZone
+  }), [activeTimeZone, locale]);
   const timeLabel = useMemo(() => timeFormatter.format(now), [now, timeFormatter]);
-  const dateLabel = useMemo(() => dateFormatter.format(now), [dateFormatter, now]);
+  const dateLabel = useMemo(() => `${dateFormatter.format(now)} ${weekdayFormatter.format(now)}`, [dateFormatter, now, weekdayFormatter]);
 
   const handleCurrentSceneVideoChange = useCallback((video: BackgroundVideoSummary) => {
     setActiveSceneVideo(video);

@@ -9,7 +9,7 @@ import { roomModeOptions } from "../roomExperienceTruth";
 import { getSourceDisplayStatusLabel } from "../sourceStatus";
 import { friendlyUiError } from "../uiCopy";
 import type { TikpalDataStatus } from "../hooks/useTikpalState";
-import type { AudioState, BackgroundVideoSummary, FontTheme, LyricsFontSize, LyricsState, PlaybackActionType, PlaybackMode, PlaybackSummary, RoomExperienceActionRequest, RoomExperienceState, RoomMode, SceneContextSummary, SceneDayPart, SourceSwitchTarget, SystemActionType, SystemState, TikpalState } from "../types";
+import type { AudioState, BackgroundVideoSummary, FontTheme, LyricsFontSize, LyricsState, PlaybackActionType, PlaybackMode, PlaybackSummary, RoomExperienceActionRequest, RoomExperienceState, RoomMode, SceneContextSummary, SceneDayPart, SceneWeatherCondition, SourceSwitchTarget, SystemActionType, SystemState, TikpalState } from "../types";
 
 interface AmbientScreenProps {
   hudVisible: boolean;
@@ -52,6 +52,7 @@ const SCENE_CONTEXT_REFRESH_MS = 30 * 60_000;
 const SOURCE_PICKER_AUTO_CLOSE_MS = 5_000;
 const SOURCE_PICKER_SCENE_AUDIO_RELEASE_MS = 150;
 const ADJUST_COMMIT_DELAY_MS = 140;
+const ADJUST_OVERLAY_AUTO_CLOSE_MS = 3_000;
 const SCENE_VIDEO_THERMAL_PAUSE_C = 76;
 const SCENE_VIDEO_THERMAL_RESUME_C = 68;
 const LYRICS_CLOCK_TICK_MS = 250;
@@ -104,13 +105,6 @@ const ambientMusicSources: Array<{ id: AmbientMusicSourceTarget; label: string; 
   { id: "upnp", label: "DLNA", Icon: Network }
 ];
 const ambientHandoffSourceTargets = new Set<AmbientMusicSourceTarget>(["spotify", "airplay", "bluetooth", "upnp"]);
-
-const ambientClockModeWord = {
-  focus: "focused",
-  calm: "calm",
-  sleep: "quiet",
-  hifi: "listening room"
-} satisfies Record<RoomMode, string>;
 
 const sceneCopyStopWords = new Set(["loop", "room", "scene", "video", "window"]);
 
@@ -187,6 +181,17 @@ function getSceneCopyKeyword(video: BackgroundVideoSummary) {
   return `${keyword.charAt(0).toUpperCase()}${keyword.slice(1).toLowerCase()}`;
 }
 
+function getSceneWeatherConditionFromKeyword(keyword: string): SceneWeatherCondition | null {
+  const normalized = keyword.trim().toLowerCase();
+  if (normalized === "clear" || normalized === "sunny") return "clear";
+  if (normalized === "cloudy" || normalized === "cloud") return "cloudy";
+  if (normalized === "foggy" || normalized === "fog") return "foggy";
+  if (normalized === "rainy" || normalized === "rain") return "rainy";
+  if (normalized === "snowy" || normalized === "snow") return "snowy";
+  if (normalized === "stormy" || normalized === "storm") return "stormy";
+  return null;
+}
+
 function getSceneDayPartForHour(hour: number): SceneDayPart {
   if (hour >= 5 && hour < 12) return "morning";
   if (hour >= 12 && hour < 17) return "afternoon";
@@ -215,18 +220,31 @@ function getAmbientClockSceneCopy(
   video: BackgroundVideoSummary,
   mode: RoomMode,
   sceneContext: SceneContextSummary | null,
-  timeZone: string
+  timeZone: string,
+  labels: {
+    dayPart: (dayPart: SceneDayPart) => string;
+    mode: (mode: RoomMode) => string;
+    weather: (condition: SceneWeatherCondition) => string;
+    withContext: (context: string, mode: string, dayPart: string) => string;
+    withoutContext: (mode: string, dayPart: string) => string;
+  }
 ) {
   const dayPart = getSceneDayPart(sceneContext, timeZone);
-  const contextKeyword = sceneContext?.weather?.label ?? getSceneCopyKeyword(video);
+  const fallbackKeyword = getSceneCopyKeyword(video);
+  const fallbackCondition = getSceneWeatherConditionFromKeyword(fallbackKeyword);
+  const contextKeyword = sceneContext?.weather?.condition
+    ? [
+        labels.weather(sceneContext.weather.condition),
+        typeof sceneContext.weather.temperatureCelsius === "number" ? `${sceneContext.weather.temperatureCelsius}°C` : null
+      ].filter(Boolean).join(" ")
+    : fallbackCondition
+    ? labels.weather(fallbackCondition)
+    : fallbackKeyword;
+  const modeCopy = labels.mode(mode);
+  const dayPartCopy = labels.dayPart(dayPart);
 
-  if (mode === "hifi") {
-    return contextKeyword ? `${contextKeyword} Hi-Fi listening ${dayPart}` : `Hi-Fi listening ${dayPart}`;
-  }
-
-  const modeCopy = ambientClockModeWord[mode];
-  if (contextKeyword) return `${contextKeyword} ${modeCopy} ${dayPart}`;
-  return `${modeCopy.charAt(0).toUpperCase()}${modeCopy.slice(1)} ${dayPart}`;
+  if (contextKeyword) return labels.withContext(contextKeyword, modeCopy, dayPartCopy);
+  return labels.withoutContext(modeCopy, dayPartCopy);
 }
 
 function findActiveLyricsLineIndex(lyrics: LyricsState, elapsedSeconds: number | null) {
@@ -392,7 +410,13 @@ export function AmbientScreen({
 
     return modeBackgroundVideos[0] ?? indexedBackgroundVideo;
   }, [backgroundVideos, indexedBackgroundVideo, isHifiMode, modeBackgroundVideos, roomExperience.mode, roomExperience.sceneVideoId]);
-  const ambientClockSceneCopy = getAmbientClockSceneCopy(currentBackgroundVideo, roomExperience.mode, sceneContext, activeTimeZone);
+  const ambientClockSceneCopy = getAmbientClockSceneCopy(currentBackgroundVideo, roomExperience.mode, sceneContext, activeTimeZone, {
+    dayPart: (dayPart) => t(`scene.dayPart.${dayPart}`),
+    mode: (mode) => t(`scene.mode.${mode}`),
+    weather: (condition) => t(`scene.weather.${condition}`),
+    withContext: (context, mode, dayPart) => t("scene.clock.withContext", { context, mode, dayPart }),
+    withoutContext: (mode, dayPart) => t("scene.clock.withoutContext", { mode, dayPart })
+  });
   const switchableBackgroundVideos = modeBackgroundVideos.length > 0
     ? modeBackgroundVideos
     : backgroundVideos.filter((video) => Boolean(video.src));
@@ -927,6 +951,18 @@ export function AmbientScreen({
   }, []);
 
   useEffect(() => {
+    if (!adjustOverlay) return undefined;
+    const channel = adjustOverlay.channel;
+    const timer = window.setTimeout(() => {
+      if (dragStateRef.current) return;
+      flushAdjustDispatch(channel);
+      setAdjustOverlay((current) => (current?.channel === channel ? null : current));
+    }, ADJUST_OVERLAY_AUTO_CLOSE_MS);
+
+    return () => window.clearTimeout(timer);
+  }, [adjustOverlay?.channel, adjustOverlay?.error, adjustOverlay?.percent]);
+
+  useEffect(() => {
     if (!playbackLyricsClockTrusted) {
       setLyricsClockAnchor(null);
       return;
@@ -1110,6 +1146,7 @@ export function AmbientScreen({
       flushAdjustDispatch(dragState.channel);
     }
     dragStateRef.current = null;
+    setAdjustOverlay((current) => (current ? { ...current } : current));
   }
 
   function currentAdjustPercent(channel: AmbientAdjustChannel) {

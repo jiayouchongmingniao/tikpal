@@ -1551,13 +1551,13 @@ try {
   await expect(
     client,
     "document.querySelector('.ambient-adjust-indicator')?.textContent.includes('Volume') && document.querySelector('[data-ambient-adjust-back]') !== null",
-    "ambient volume overlay stays open with an explicit Close button"
+    "ambient volume overlay offers an explicit Close button while visible"
   );
-  await evaluate(client, "document.querySelector('[data-ambient-adjust-back]')?.click();");
+  await wait(2600);
   await expectEventually(
     client,
     "document.querySelector('.ambient-adjust-indicator') === null",
-    "ambient volume Close closes the adjustment overlay"
+    "ambient volume overlay auto-closes after a short idle delay"
   );
   await postExperienceAction(client, { type: "set_mode", mode: "hifi" });
   await navigate(client, APP_URL);

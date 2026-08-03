@@ -373,6 +373,8 @@ On the 2026-08-01 Gentoo `192.168.10.115` validation run, `Custom`, `Sleep`, and
 
 On the same host, Pure Listening / strict mode was validated with Radio playing: `POST /api/v1/playback/actions {"type":"volume_set","value":46}` moved `system.volume.percent` from `45` to `46`, and a second write restored `45` without interrupting Radio playback. This is the expected contract: MPD software volume stays locked for the direct-output profile, while the physical output level remains adjustable.
 
+Startup volume is deliberately conservative. Keep `TIKPAL_MPD_STARTUP_VOLUME=30` in the Gentoo environment: on `tikpal-api` start, the backend first sets MPD software volume and the configured output-volume helper to 30% before any remembered Library/Radio/Scene restore runs. This is the reboot anti-blast guard, not a new remembered playback volume; the user's last nonzero volume in `.tikpal/audio-volume-state.json` remains available for later playback restore. If the physical helper is unavailable, MPD is still primed and the failure is logged without blocking boot.
+
 ## Explore Provider Mode
 
 Explore is not a restorable Tikpal audio source. It pauses local MPD/Radio, releases external receiver intakes, and opens a provider web player in a separate left Chromium window. The side panel remains a local Tikpal surface.
@@ -680,6 +682,8 @@ After selecting `NAS` and tapping a NAS row, expect a body containing `NAS/<moun
 ## Display And Power
 
 Brightness through DDC/CI is display-specific and can be non-linear. The Gentoo target should prefer conservative values that keep the screen visible; do not blindly map UI `100%` to raw DDC `100` if that target can black out or become unreadably dim during gesture changes.
+
+Ambient physical-screen gestures keep the left edge for brightness and the right edge for volume. Their transient adjustment overlay should be readable while the user is dragging, but it must return to the scene on its own after roughly three idle seconds so touch users do not need to hunt for Close.
 
 Current low-power policy:
 
