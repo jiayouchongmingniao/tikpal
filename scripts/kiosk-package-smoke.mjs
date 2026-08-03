@@ -553,6 +553,7 @@ esac
   const librarySyncScript = await readFile(path.join(ROOT, "deploy/moode/tikpal-library-sync.sh"), "utf8");
   const nasMountScript = await readFile(path.join(ROOT, "deploy/moode/tikpal-nas-mount.sh"), "utf8");
   const usbLibrarySyncScript = await readFile(path.join(ROOT, "deploy/moode/tikpal-usb-library-sync.sh"), "utf8");
+  const quietBootScript = await readFile(path.join(ROOT, "deploy/moode/tikpal-quiet-boot-enable.sh"), "utf8");
   const extensionManifest = JSON.parse(await readFile(path.join(ROOT, "deploy/chromium/web-mode-extension/manifest.json"), "utf8"));
   const extensionContent = await readFile(path.join(ROOT, "deploy/chromium/web-mode-extension/content.js"), "utf8");
   const extensionBackground = await readFile(path.join(ROOT, "deploy/chromium/web-mode-extension/background.js"), "utf8");
@@ -653,7 +654,7 @@ esac
   assert(stylesSource.includes(".web-mode-provider.is-proxy-unavailable"), "Explore side panel should give proxy-unavailable providers their own visual state");
   assert(!sidePanelSource.includes("updateWebModeSettings"), "Explore side panel should not reopen the provider to switch proxy mode");
   assert(!sidePanelSource.includes("data-web-mode-keyboard-toggle") && !sidePanelSource.includes("toggleKeyboard"), "Explore side panel should rely on automatic input-focus keyboard behavior");
-  assert((sidePanelSource.match(/onClick=\{\(\) => void closeWebMode\(\)\}/g) ?? []).length === 1, "Explore side panel should keep only the top-right Back button");
+  assert((sidePanelSource.match(/onClick=\{\(\) => void closeWebMode\(\)\}/g) ?? []).length === 1, "Explore side panel should keep only the top-right Close button");
   assert(!quickSettingsSource.includes("handleWebModeKeyboard"), "Console should rely on input-focus keyboard behavior instead of a duplicate button");
   assert(quickSettingsSource.includes('detailView !== "webMode"'), "Console should only preload Onboard for the Explore Proxy settings detail");
   assert(quickSettingsSource.includes('sendWebModeAction({ type: "keyboard", preload: true })'), "Console Explore Proxy settings should preload resident Onboard before the first text-field tap");
@@ -662,7 +663,7 @@ esac
   assert(quickSettingsSource.includes('destination !== "explore" && destination === roomExperience.mode'), "Console should return immediately when the current room mode is selected");
   assert(quickSettingsSource.includes('await onExperienceAction({ type: "set_mode", mode: destination })'), "Console should reuse the room mode action");
   assert(quickSettingsSource.includes("await onOpenWebMode()"), "Console Explore shortcut should reuse the existing Explore flow");
-  assert(quickSettingsSource.includes('data-room-shortcut="back"') && quickSettingsSource.includes("data-console-back-button") && quickSettingsSource.includes("onClick={handleReturnAmbient}"), "Console should expose a Back shortcut next to Explore");
+  assert(quickSettingsSource.includes('data-room-shortcut="back"') && quickSettingsSource.includes("data-console-back-button") && quickSettingsSource.includes("onClick={handleReturnAmbient}"), "Console should expose a Close shortcut next to Explore");
   assert(
     quickSettingsSource.includes("PanelRightClose")
       && sidePanelSource.includes("PanelRightClose")
@@ -673,7 +674,7 @@ esac
       && !playerOverlaySource.includes("LogOut")
       && !ambientScreenSource.includes("LogOut")
       && !quickSettingsSource.includes("ArrowLeft"),
-    "Back controls should share a panel-close icon without logout or plain-arrow semantics"
+    "Close controls should share a panel-close icon without logout or plain-arrow semantics"
   );
   assert(
     i18nSource.includes('"common.online": "Online"')
@@ -721,7 +722,7 @@ esac
       && !playerOverlaySource.includes("Enable AirPlay"),
     "Player source copy should use action-oriented labels and friendly sync state"
   );
-  assert(stylesSource.includes("grid-template-columns: repeat(6, minmax(0, 1fr));") && stylesSource.includes(".console-room-back"), "Console room shortcuts should fit Explore plus Back on one row");
+  assert(stylesSource.includes("grid-template-columns: repeat(6, minmax(0, 1fr));") && stylesSource.includes(".console-room-back"), "Console room shortcuts should fit Explore plus Close on one row");
   assert(appSource.includes("VISIBLE_LISTENING_SOURCE_TARGETS"), "Hi-Fi entry should preserve the current visible listening source");
   assert(appSource.includes("isVisibleListeningSourceTarget(currentSourceId)"), "Hi-Fi remembered-source restore should not overwrite active Library/Radio/external sources");
   assert(
@@ -1563,6 +1564,30 @@ esac
   assert(quietBootCheck.stdout.includes("planned: mask getty@tty1.service"), "quiet boot should mask tty1 getty");
   assert(quietBootCheck.stdout.includes("planned: mask getty@tty2.service"), "quiet boot should mask tty2 getty");
   assert(quietBootCheck.stdout.includes("planned: mask getty@tty3.service"), "quiet boot should mask tty3 getty");
+
+  const quietBootGrub = path.join(quietBootDir, "grub");
+  writeFileSync(
+    quietBootGrub,
+    'GRUB_CMDLINE_LINUX_DEFAULT="console=tty1 rootfstype=ext4 systemd.show_status=true"\n'
+  );
+  const quietBootGrubCheck = spawnSync("bash", [
+    "deploy/moode/tikpal-quiet-boot-enable.sh",
+    "--dry-run",
+    "--grub-default",
+    quietBootGrub
+  ], {
+    cwd: ROOT,
+    encoding: "utf8"
+  });
+
+  assert(quietBootGrubCheck.status === 0, `quiet boot grub dry-run failed:\n${quietBootGrubCheck.stdout}\n${quietBootGrubCheck.stderr}`);
+  const nextGrubCmdline = quietBootGrubCheck.stdout.match(/next cmdline: (.+)/)?.[1] ?? "";
+  assert(quietBootGrubCheck.stdout.includes("boot config type: grub"), "quiet boot should support Gentoo /etc/default/grub");
+  assert(quietBootGrubCheck.stdout.includes("planned: set GRUB_TIMEOUT_STYLE=hidden and GRUB_TIMEOUT=0"), "quiet boot should hide the GRUB text menu on Gentoo");
+  assert(!/\bconsole=tty[0-9]*\b/.test(nextGrubCmdline), "Gentoo quiet boot should remove visible tty consoles from GRUB defaults");
+  assert(nextGrubCmdline.includes("rd.systemd.show_status=false"), "Gentoo quiet boot should hide dracut/systemd status lines");
+  assert(quietBootScript.includes("GRUB_TIMEOUT_STYLE=hidden") && quietBootScript.includes("GRUB_TIMEOUT=0"), "quiet boot should persist hidden GRUB menu defaults");
+  assert(!quietBootScript.includes("-v next="), "quiet boot should not use awk's builtin next as a variable name");
 
   console.log("kiosk package smoke passed");
 }

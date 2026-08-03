@@ -100,7 +100,7 @@ Use a split-window composition:
 
 - Left provider browser: 1920 x 720 at `0,0`.
 - Right Tikpal side panel: 640 x 720 at `1920,0`.
-- The side panel uses Tikpal-native controls only: provider grid, global volume, Keyboard, proxy state, and Back/Close.
+- The side panel uses Tikpal-native controls only: provider grid, global volume, Keyboard, proxy state, and Close.
 - Provider navigation remains inside the left pane. New official-player windows should be pulled back to 1920 x 720 or closed in favor of the latest provider window, so the right panel remains stable and the user never sees two web players competing.
 - The active provider tile is a runtime indicator, not a default decoration: no provider should be highlighted until Explore state says it is active.
 - Provider icons should use generic local glyphs plus brand-color accents, not downloaded official logos.

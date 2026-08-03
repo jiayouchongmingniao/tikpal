@@ -1551,13 +1551,13 @@ try {
   await expect(
     client,
     "document.querySelector('.ambient-adjust-indicator')?.textContent.includes('Volume') && document.querySelector('[data-ambient-adjust-back]') !== null",
-    "ambient volume overlay stays open with an explicit Back button"
+    "ambient volume overlay stays open with an explicit Close button"
   );
   await evaluate(client, "document.querySelector('[data-ambient-adjust-back]')?.click();");
   await expectEventually(
     client,
     "document.querySelector('.ambient-adjust-indicator') === null",
-    "ambient volume Back closes the adjustment overlay"
+    "ambient volume Close closes the adjustment overlay"
   );
   await postExperienceAction(client, { type: "set_mode", mode: "hifi" });
   await navigate(client, APP_URL);
@@ -3884,7 +3884,7 @@ try {
           && document.querySelector('[aria-label="Volume up"]') === null;
       })()
     `,
-    "player volume renders a range slider with Back and without idle countdown"
+    "player volume renders a range slider with Close and without idle countdown"
   );
 
   await evaluate(
@@ -4054,7 +4054,7 @@ try {
 
   await navigate(client, `${APP_URL}?mode=player`);
   await evaluate(client, "document.querySelector('[data-player-volume-back]')?.click();");
-  await expect(client, "document.querySelector('.player-overlay.is-active') === null && document.querySelector('.ambient-screen') !== null", "player volume Back exits to Ambient");
+  await expect(client, "document.querySelector('.player-overlay.is-active') === null && document.querySelector('.ambient-screen') !== null", "player volume Close exits to Ambient");
 
   await navigate(client, `${APP_URL}?mode=player`);
   await click(client, 10, 10);
@@ -4083,7 +4083,7 @@ try {
         const activeRoomIds = activeIds.filter((id) => id !== 'explore');
         return Boolean(switcher)
           && switcher.getBoundingClientRect().width >= 600
-          && labels.join('|') === 'Focus|Calm|Sleep|Hi-Fi|Explore|Back'
+          && labels.join('|') === 'Focus|Calm|Sleep|Hi-Fi|Explore|Close'
           && shortcuts.every((node) => node.querySelector('svg'))
           && activeRoomIds.length === 1
           && activeIds.every((id) => id === 'explore' || activeRoomIds.includes(id))
@@ -4103,9 +4103,9 @@ try {
       })()
     `
   );
-  await expect(client, "document.querySelector('.quick-settings.is-active') === null", "Console Back shortcut exits Console");
+  await expect(client, "document.querySelector('.quick-settings.is-active') === null", "Console Close shortcut exits Console");
   await navigate(client, `${APP_URL}?mode=quickSettings`);
-  await expect(client, "document.querySelector('.quick-settings.is-active') !== null", "Console reopens after Back shortcut test");
+  await expect(client, "document.querySelector('.quick-settings.is-active') !== null", "Console reopens after Close shortcut test");
   await expect(
     client,
     `
@@ -4559,7 +4559,7 @@ try {
   await expect(
     client,
     "document.querySelector('[data-web-mode-proxy-toggle]')?.tagName === 'BUTTON' && document.querySelector('[data-web-mode-top-back]') !== null && document.querySelector('[data-web-mode-text-scale]')?.textContent.includes('Font') && [...document.querySelectorAll('[data-web-mode-text-scale-option]')].map((node) => node.textContent?.trim()).join(',') === 'Small,Medium,Large' && document.querySelector('[data-web-mode-text-scale-option=\"1.1\"].is-active') !== null && document.querySelector('[data-web-mode-keyboard-toggle]') === null && document.querySelector('.web-mode-actions') === null",
-    "Explore side panel exposes proxy, provider text scale, and one top-right Back control without a manual Keyboard button"
+    "Explore side panel exposes proxy, provider text scale, and one top-right Close control without a manual Keyboard button"
   );
   await expect(
     client,
@@ -4663,7 +4663,7 @@ try {
   await expect(
     client,
     "document.querySelector('[data-remote-key]') !== null && document.querySelector('[data-remote-volume-slider]') !== null && document.querySelector('[data-remote-explore]') !== null && document.querySelector('[data-remote-explore-open]') !== null && document.querySelector('[data-remote-explore-close]') !== null && document.querySelector('[data-remote-explore-proxy]') !== null",
-    "portable remote exposes its key field, volume slider, Explore start, back, and proxy controls"
+    "portable remote exposes its key field, volume slider, Explore start, close, and proxy controls"
   );
   await expect(
     client,
@@ -4673,7 +4673,7 @@ try {
   await expectEventually(
     client,
     "document.querySelector('[data-remote-explore-open]')?.disabled === true && document.querySelector('[data-remote-explore-open]')?.textContent.includes('YouTube Music') && document.querySelector('[data-remote-explore-close]')?.disabled === false",
-    "portable remote reflects active Explore provider and keeps Back available"
+    "portable remote reflects active Explore provider and keeps Close available"
   );
   await expect(
     client,

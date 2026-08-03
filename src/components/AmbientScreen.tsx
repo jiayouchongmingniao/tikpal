@@ -1697,7 +1697,7 @@ export function AmbientScreen({
             onClick={handleAdjustBack}
           >
             <PanelRightClose size={16} />
-            <span>{t("common.back")}</span>
+            <span>{t("common.close")}</span>
           </button>
         </div>
       ) : null}

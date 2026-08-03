@@ -1390,7 +1390,7 @@ export function QuickSettingsOverlay({
       <section className="settings-detail-panel" aria-label={t("settings.skin")} data-settings-detail="appearance">
         <div className="settings-detail-header">
           <button className="settings-detail-back" type="button" onClick={() => setDetailView(null)}>
-            {t("common.back")}
+            {t("common.close")}
           </button>
           <div>
             <span>{t("settings.preferences")}</span>
@@ -1426,7 +1426,7 @@ export function QuickSettingsOverlay({
       <section className="settings-detail-panel" aria-label={t("settings.font")} data-settings-detail="font">
         <div className="settings-detail-header">
           <button className="settings-detail-back" type="button" onClick={() => setDetailView(null)}>
-            {t("common.back")}
+            {t("common.close")}
           </button>
           <div>
             <span>{t("settings.preferences")}</span>
@@ -1460,7 +1460,7 @@ export function QuickSettingsOverlay({
       <section className="settings-detail-panel" aria-label={t("settings.language")} data-settings-detail="language">
         <div className="settings-detail-header">
           <button className="settings-detail-back" type="button" onClick={() => setDetailView(null)}>
-            {t("common.back")}
+            {t("common.close")}
           </button>
           <div>
             <span>{t("settings.preferences")}</span>
@@ -1560,7 +1560,7 @@ export function QuickSettingsOverlay({
       <section className={`settings-detail-panel ${displayedAudioOutputProfile === "custom" ? "is-custom-active" : ""}`} aria-label={t("settings.audioOutput")} data-settings-detail="audio-output">
         <div className="settings-detail-header">
           <button className="settings-detail-back" type="button" onClick={() => setDetailView(null)}>
-            {t("common.back")}
+            {t("common.close")}
           </button>
           <div>
             <span>{t("settings.preferences")}</span>
@@ -1676,7 +1676,7 @@ export function QuickSettingsOverlay({
       <section className="settings-detail-panel" aria-label={t("settings.audioDiagnostics")} data-settings-detail="audio-diagnostics">
         <div className="settings-detail-header">
           <button className="settings-detail-back" type="button" onClick={() => setDetailView("audioOutput")}>
-            {t("common.back")}
+            {t("common.close")}
           </button>
           <div>
             <span>{t("settings.preferences")}</span>
@@ -1802,7 +1802,7 @@ export function QuickSettingsOverlay({
       <section className="settings-detail-panel" aria-label={t("settings.multiroomAudio")} data-settings-detail="multiroom">
         <div className="settings-detail-header">
           <button className="settings-detail-back" type="button" onClick={() => setDetailView(null)}>
-            {t("common.back")}
+            {t("common.close")}
           </button>
           <div>
             <span>{t("settings.preferences")}</span>
@@ -1870,7 +1870,7 @@ export function QuickSettingsOverlay({
       <section className="settings-detail-panel" aria-label={t("settings.lyrics")} data-settings-detail="lyrics">
         <div className="settings-detail-header">
           <button className="settings-detail-back" type="button" onClick={() => setDetailView(null)}>
-            {t("common.back")}
+            {t("common.close")}
           </button>
           <div>
             <span>{t("settings.preferences")}</span>
@@ -1953,7 +1953,7 @@ export function QuickSettingsOverlay({
       <section className="settings-detail-panel" aria-label="NAS sources detail" data-settings-detail="nas">
         <div className="settings-detail-header">
             <button className="settings-detail-back" type="button" onClick={() => setDetailView(null)}>
-              {t("common.back")}
+              {t("common.close")}
             </button>
             <div>
               <span>{t("settings.library")}</span>
@@ -2287,7 +2287,7 @@ export function QuickSettingsOverlay({
       <section className="settings-detail-panel" aria-label="Explore detail" data-settings-detail="web-mode">
         <div className="settings-detail-header">
             <button className="settings-detail-back" type="button" onClick={() => setDetailView(null)}>
-              {t("common.back")}
+              {t("common.close")}
             </button>
             <div>
               <span>{t("settings.link")}</span>
@@ -2354,7 +2354,7 @@ export function QuickSettingsOverlay({
       <section className="settings-detail-panel" aria-label="Display detail" data-settings-detail="display">
         <div className="settings-detail-header">
           <button className="settings-detail-back" type="button" onClick={() => setDetailView(null)}>
-            {t("common.back")}
+            {t("common.close")}
           </button>
           <div>
             <span>{t("settings.preferences")}</span>
@@ -2476,7 +2476,7 @@ export function QuickSettingsOverlay({
       <section className="settings-detail-panel" aria-label={t("settings.timeNight")} data-settings-detail="night">
         <div className="settings-detail-header">
           <button className="settings-detail-back" type="button" onClick={() => setDetailView(null)}>
-            {t("common.back")}
+            {t("common.close")}
           </button>
           <div>
             <span>{t("settings.preferences")}</span>

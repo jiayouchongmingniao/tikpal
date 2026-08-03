@@ -117,6 +117,32 @@ If the kernel refuses a runtime ASPM policy write, the helper logs it as optiona
 
 On this GTX 750 host, avoid periodic physical `xrandr --query` probing from the watchdog. Repeated probing can trigger Nouveau DDC reads against the unused `DVI-I-1` connector (`DDC responded, but no EDID for DVI-I-1`) on roughly the watchdog cadence. Because this panel can be black while RandR still reports healthy, that periodic probe adds risk without giving a reliable visual signal. Keep `TIKPAL_KIOSK_PHYSICAL_DISPLAY_CHECK_ENABLED=0` and use the recovery helper manually or from an explicit service when the screen is visibly black.
 
+## Quiet Boot And No TTY
+
+The production kiosk should not show kernel, systemd, udev, cursor, or `tty1 login` text on the physical screen during normal boot. Run the repo-owned quiet boot helper on Gentoo after GRUB is installed:
+
+```bash
+cd /home/moode/code/tikpal
+sudo deploy/moode/tikpal-quiet-boot-enable.sh
+```
+
+On Gentoo the helper detects `/etc/default/grub`, backs it up, removes visible `console=tty*` routing from `GRUB_CMDLINE_LINUX_DEFAULT`, adds quiet boot flags, sets `GRUB_TIMEOUT_STYLE=hidden` and `GRUB_TIMEOUT=0`, regenerates `/boot/grub/grub.cfg` when `grub-mkconfig` is available, writes systemd/logind/sysctl quiet-console drop-ins, and masks `getty@tty1.service`, `getty@tty2.service`, and `getty@tty3.service`. SSH remains available.
+
+Verify after installation:
+
+```bash
+grep -E 'quiet|systemd.show_status=false|rd.systemd.show_status=false|vt.global_cursor_default=0' /etc/default/grub
+grep -E 'GRUB_TIMEOUT_STYLE=hidden|GRUB_TIMEOUT=0' /etc/default/grub
+grep -E 'console=tty[0-9]*' /etc/default/grub && echo "unexpected visible tty console"
+systemctl is-enabled getty@tty1.service getty@tty2.service getty@tty3.service || true
+systemctl is-active getty@tty1.service getty@tty2.service getty@tty3.service || true
+cat /etc/systemd/system.conf.d/tikpal-quiet-boot.conf
+cat /etc/systemd/logind.conf.d/tikpal-quiet-vts.conf
+cat /etc/sysctl.d/99-tikpal-quiet-console.conf
+```
+
+Reboot once for the GRUB command line to take effect. Emergency kernel failures may still show critical text; ordinary boot should stay quiet until Xorg/Chromium owns the screen.
+
 ## Screen Sleep
 
 Tikpal's user-facing Screen Sleep is a soft screen saver, not X11 DPMS power-off. This is intentional for sold kiosk devices that may not ship with a keyboard: the first touch wakes the screen saver and is swallowed, so it does not activate the control underneath.
@@ -528,7 +554,7 @@ The Gentoo physical kiosk uses the same Player Library contract as moOde:
 - Keep `TIKPAL_USB_LIBRARY_AUTO_UPDATE=0` on the physical Gentoo kiosk. Browsing USB can scan the mounted filesystem for visible rows, but it should not launch `mpc update USB` in the background while the user seeks or plays Local/NAS music. Gentoo may set `TIKPAL_USB_LIBRARY_AUTO_MOUNT=1` so the library sync helper waits briefly for newly inserted USB storage, mounts current partitions under `/run/media/tikpal/<label-or-uuid>`, then links them into `USB/<mount name>`; this is generic for swapped USB drives and is not tied to `/dev/sda1`. Do not keep legacy 30-second USB sync timers such as `tikpal-usb-audio-sync.timer` enabled on the physical kiosk; use Settings -> Library -> Scan library for an explicit MPD index refresh, with `TIKPAL_MPC_UPDATE_TIMEOUT_SECONDS=8` as the default guardrail.
 - USB rows expose `Copy to Local`; the backend should not overwrite same-name Local files and should report `Already in Local` when no copy is needed. Copied files live under `Codex/USB Imports/...`; `tikpal-local-library-sync.sh` must protect that imports directory while still using `rsync --delete` for repo-owned Local music, so copied tracks survive reboot and service reinstall.
 - Local rows expose `Delete`, but the first tap only reveals `Yes` and `No`. Only `Yes` performs deletion; `No`, storage changes, source changes, or closing Player must cancel the pending confirmation.
-- Player -> Library has a compact search field beside volume/free-space/Back. It filters only the currently selected `Local`, `USB`, `NAS`, or `Favorites` tab using visible track metadata and path text; it must not send source-switch requests, change the MPD queue, or search Radio stations.
+- Player -> Library has a compact search field beside volume/free-space/Close. It filters only the currently selected `Local`, `USB`, `NAS`, or `Favorites` tab using visible track metadata and path text; it must not send source-switch requests, change the MPD queue, or search Radio stations.
 - The rightmost Library row checkmark represents the current MPD track, not just the row last selected for browsing. Previous/next playback must update the checkmark and scroll the current row into view without switching storage tabs.
 - Long track lists keep a fixed right-side fast-scroll rail with `current / total` count and a draggable thumb. Dragging that rail only changes `scrollTop`; it must not select a track or auto-play on release.
 
@@ -709,7 +735,7 @@ Important limitation: this panel can be black to the eye while DRM, RandR, DDC, 
 - `/api/v1/audio/library?storage=local` returned Local tracks, and MPD `listall Codex` returned the same MPD-visible library root.
 - Local MPD playback accepted repeated seek actions through `/api/v1/playback/actions` without an `mpc ... seek ... timed out` error after USB auto-update was disabled.
 - Browsing USB via `/api/v1/audio/library?storage=usb` did not spawn a background `mpc update USB` process.
-- The Player header should keep the Volume slider and Local storage meter aligned as one group, with a readable free-space label and visible spacing before the Back button.
+- The Player header should keep the Volume slider and Local storage meter aligned as one group, with a readable free-space label and visible spacing before the Close button.
 
 Baseline service checks:
 
@@ -883,7 +909,7 @@ For QQ Music, manually click play if the provider was reopened during deploy. Co
 
 ## Rollback Notes
 
-- To return from Explore to the main kiosk, use the side panel Back action or `deploy/chromium/tikpal-web-mode.sh close`.
+- To return from Explore to the main kiosk, use the side panel Close action or `deploy/chromium/tikpal-web-mode.sh close`.
 - If provider layout looks compressed, confirm there is no `--force-device-scale-factor` in provider Chromium processes and no `chrome.tabs.setZoom` / `chrome.tabs.getZoom` reference in the deployed extension.
 - If Onboard stops changing languages, run `deploy/chromium/tikpal-web-mode.sh --check`, then verify `/usr/share/onboard/scripts/tikpalImeToggle.py`, the generated `Tikpal-Compact-*.onboard` layouts, `fcitx5-remote -n`, and the two `onboard-ime-state.json` files. If `pgrep -af fcitx5` shows any root-owned Fcitx process, stop that process and resync as `moode`.
 - If the display becomes too dim to use, recover the DDC value out of band before changing UI gesture mapping.

@@ -263,7 +263,7 @@ export function RemoteControlApp() {
               onClick={() => void applyAction({ type: "explore.close" })}
             >
               <PanelRightClose aria-hidden="true" />
-              <span>{pendingAction === "explore.close" ? t("common.closing") : t("common.back")}</span>
+              <span>{pendingAction === "explore.close" ? t("common.closing") : t("common.close")}</span>
             </button>
             <button
               type="button"
