@@ -881,6 +881,7 @@ esac
   assert(audioAdaptScript.includes("wait_for_loopback_visible") && audioAdaptScript.includes("ensure_loopback_visible"), "audio adapter should wait for the real Loopback card after loading snd_aloop");
   assert(usbLibrarySyncScript.includes("USB_LIBRARY_AUTO_ROOTS") && usbLibrarySyncScript.includes("/media,/run/media"), "USB library sync should discover arbitrary mounted USB roots");
   assert(usbLibrarySyncScript.includes("USB_LIBRARY_AUTO_MOUNT") && usbLibrarySyncScript.includes("USB_LIBRARY_AUTO_MOUNT_WAIT_SECONDS") && usbLibrarySyncScript.includes("list_unmounted_usb_partitions") && usbLibrarySyncScript.includes("TRAN"), "USB library sync should optionally wait for and auto-mount removable USB partitions before scanning");
+  assert(usbLibrarySyncScript.includes('USB_LIBRARY_AUTO_MOUNT="${TIKPAL_USB_LIBRARY_AUTO_MOUNT:-1}"') && systemdInstaller.includes("TIKPAL_USB_LIBRARY_AUTO_MOUNT=1"), "USB library auto-mount should default on for physical kiosks");
   assert(usbLibrarySyncScript.includes("skip_mount_name") && usbLibrarySyncScript.includes("rootfs"), "USB library sync should skip system partitions");
   assert(usbLibrarySyncScript.includes("MPC_UPDATE_TIMEOUT_SECONDS") && usbLibrarySyncScript.includes("update_mpd \"$USB_MPD_PREFIX\""), "USB library sync should time-bound MPD refresh after linking USB roots");
   assert(localLibrarySyncScript.includes("LOCAL_SOURCE_ROOT") && localLibrarySyncScript.includes("public/assets") && localLibrarySyncScript.includes("RSYNC_BIN") && localLibrarySyncScript.includes("--delete"), "Local library sync should mirror repo music into MPD's Codex directory");
@@ -1046,7 +1047,7 @@ esac
   assert(mainSource.includes("onboardVisibleRequested"), "local kiosk inputs should avoid duplicate keyboard hide requests before a keyboard has been shown");
   assert(mainSource.includes("inputSessionActive") && mainSource.includes("lastKeyboardRequestMs"), "local kiosk inputs should keep an active input session and throttle repeated keyboard requests");
   assert(mainSource.includes("localKioskHosts.has(window.location.hostname)"), "automatic Onboard activation should stay on the physical kiosk host");
-  assert(mainSource.includes('sendWebModeAction({ type: "keyboard", enabled,'), "local kiosk inputs should explicitly show and hide Onboard");
+  assert(mainSource.includes("sendWebModeAction({") && mainSource.includes("keepAlive: true"), "local kiosk inputs should explicitly show, hide, and keep Onboard alive");
   assert(mainSource.includes("keyboardPlacementForTarget") && mainSource.includes("rectsOverlap"), "local kiosk inputs should choose a keyboard position that avoids the focused field");
   assert(mainSource.includes("keyboardPosition") && mainSource.includes("keyboardWindow"), "local kiosk inputs should send per-focus Onboard geometry to the API");
   assert(mainSource.includes('keyboardTarget: "kiosk"'), "local kiosk inputs should tell the keyboard helper to restore focus to the kiosk Chromium window");

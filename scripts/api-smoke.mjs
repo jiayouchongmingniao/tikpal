@@ -2084,6 +2084,7 @@ switch (command) {
   case "play":
     if (rest[0]) state.current = Math.max(0, Number(rest[0]) - 1);
     state.state = positionalPlayStaysPaused && rest[0] ? "paused" : "playing";
+    state.elapsed = "0:01";
     writeState(state);
     break;
   case "current": {
@@ -2093,7 +2094,7 @@ switch (command) {
   }
 	  case "status":
 	    if (state.queue.length > 0) {
-	      output("[" + state.state + "] #" + (state.current + 1) + "/" + state.queue.length + " 0:01/2:27 (0%)\\n");
+	      output("[" + state.state + "] #" + (state.current + 1) + "/" + state.queue.length + " " + (state.elapsed ?? "0:01") + "/" + (state.duration ?? "2:27") + " (0%)\\n");
 	    }
 	    output(
 	      "volume:" + state.volume
@@ -2422,6 +2423,32 @@ if (args[0] === "open" && args[1] === ${JSON.stringify(failedProvider)}) {
 	    assert(shuffleNext.body.playback.currentTrackIndex !== shuffleNextStartIndex, "mpc local library shuffle next should not replay the same queue position");
 	    const shuffleNextLog = await readFile(fakeMpcLogPath, "utf8");
 	    assert(!shuffleNextLog.split("\n").includes("next"), "mpc local library shuffle next should use an explicit random queue jump");
+
+	    await wait(1800);
+	    await writeFile(fakeMpcLogPath, "");
+	    const shuffleRepeatStartState = JSON.parse(await readFile(fakeMpcStatePath, "utf8"));
+	    await writeFile(fakeMpcStatePath, JSON.stringify({
+	      ...shuffleRepeatStartState,
+	      elapsed: "2:26",
+	      duration: "2:27"
+	    }));
+	    await wait(700);
+	    await writeFile(fakeMpcStatePath, JSON.stringify({
+	      ...JSON.parse(await readFile(fakeMpcStatePath, "utf8")),
+	      elapsed: "0:01",
+	      duration: "2:27"
+	    }));
+	    let shuffleRepeatRecoveryState = JSON.parse(await readFile(fakeMpcStatePath, "utf8"));
+	    for (let attempt = 0; attempt < 20 && shuffleRepeatRecoveryState.current === shuffleRepeatStartState.current; attempt += 1) {
+	      await wait(150);
+	      shuffleRepeatRecoveryState = JSON.parse(await readFile(fakeMpcStatePath, "utf8"));
+	    }
+	    assert(
+	      shuffleRepeatRecoveryState.current !== shuffleRepeatStartState.current,
+	      "mpc local library shuffle monitor should leave a single-mode repeat of the same track"
+	    );
+	    const shuffleRepeatRecoveryLog = await readFile(fakeMpcLogPath, "utf8");
+	    assert(/(^|\n)play\t[123](\n|$)/.test(shuffleRepeatRecoveryLog), "mpc local library shuffle repeat recovery should issue an explicit random play");
 
 	    await requestFrom(baseUrl, "/api/v1/playback/actions", {
 	      method: "POST",

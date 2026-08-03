@@ -238,7 +238,7 @@ ensure_library_scan_env() {
     updated=1
   fi
   if ! grep -q '^TIKPAL_USB_LIBRARY_AUTO_MOUNT=' "$env_file"; then
-    printf 'TIKPAL_USB_LIBRARY_AUTO_MOUNT=0\n' >> "$env_file"
+    printf 'TIKPAL_USB_LIBRARY_AUTO_MOUNT=1\n' >> "$env_file"
     updated=1
   fi
   if ! grep -q '^TIKPAL_USB_LIBRARY_MOUNT_ROOT=' "$env_file"; then

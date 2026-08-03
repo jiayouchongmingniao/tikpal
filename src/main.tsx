@@ -47,6 +47,10 @@ type RectLike = {
   bottom: number;
 };
 
+type OnboardVisibleOptions = {
+  keepAlive?: boolean;
+};
+
 const clampKeyboardCoordinate = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
 
 const keyboardRect = (x: number, y: number): RectLike => ({
@@ -110,12 +114,25 @@ if (!window.__TIKPAL_REMOTE_MODE__ && localKioskHosts.has(window.location.hostna
   let lastKeyboardEnabled: boolean | null = null;
   let lastKeyboardRequestMs = 0;
   let lastKeyboardBounds: RectLike | null = null;
+  let lastKeyboardTarget: HTMLElement | null = null;
+  let stickyKeyboardKeepaliveTimer: number | null = null;
   let lastInputActivityMs = 0;
-  const setOnboardVisible = (enabled: boolean, target: HTMLElement | null = null) => {
+  const setOnboardVisible = (enabled: boolean, target: HTMLElement | null = null, options: OnboardVisibleOptions = {}) => {
     if (!enabled && !onboardVisibleRequested) return;
     const now = Date.now();
+    const isStickyRepeat = Boolean(
+      enabled
+      && onboardVisibleRequested
+      && target
+      && target === lastKeyboardTarget
+      && target.matches(onboardStickyInputSelector)
+    );
+    const keepAlive = options.keepAlive === true || isStickyRepeat;
+    if (isStickyRepeat && now - lastKeyboardRequestMs < 150) {
+      return;
+    }
     const throttleMs = enabled ? 1000 : 250;
-    if (lastKeyboardEnabled === enabled && now - lastKeyboardRequestMs < throttleMs) return;
+    if (!keepAlive && lastKeyboardEnabled === enabled && now - lastKeyboardRequestMs < throttleMs) return;
     lastKeyboardEnabled = enabled;
     lastKeyboardRequestMs = now;
     onboardVisibleRequested = enabled;
@@ -124,7 +141,14 @@ if (!window.__TIKPAL_REMOTE_MODE__ && localKioskHosts.has(window.location.hostna
     const placementPayload = placement
       ? { keyboardPosition: placement.keyboardPosition, keyboardWindow: placement.keyboardWindow }
       : {};
-    void sendWebModeAction({ type: "keyboard", enabled, keyboardTarget: "kiosk", ...(enabled ? { force: true } : {}), ...placementPayload })
+    lastKeyboardTarget = enabled ? target : null;
+    void sendWebModeAction({
+      type: "keyboard",
+      enabled,
+      keyboardTarget: "kiosk",
+      ...(enabled ? (keepAlive ? { keepAlive: true } : { force: true }) : {}),
+      ...placementPayload
+    })
       .catch(() => { lastKeyboardEnabled = null; });
   };
   const activeTextInput = () => document.activeElement instanceof HTMLElement
@@ -139,17 +163,39 @@ if (!window.__TIKPAL_REMOTE_MODE__ && localKioskHosts.has(window.location.hostna
       && lastTextInput?.isConnected
       && lastTextInput.matches(onboardStickyInputSelector)
   );
+  const stopStickyKeyboardKeepalive = () => {
+    if (stickyKeyboardKeepaliveTimer === null) return;
+    window.clearInterval(stickyKeyboardKeepaliveTimer);
+    stickyKeyboardKeepaliveTimer = null;
+  };
+  const startStickyKeyboardKeepalive = () => {
+    if (stickyKeyboardKeepaliveTimer !== null) return;
+    stickyKeyboardKeepaliveTimer = window.setInterval(() => {
+      if (!stickyInputSessionActive() || outsidePointerDown || !lastTextInput?.isConnected) {
+        stopStickyKeyboardKeepalive();
+        return;
+      }
+      setOnboardVisible(true, lastTextInput, { keepAlive: true });
+    }, 900);
+  };
   const recentInputActivity = () => Date.now() - lastInputActivityMs < 1800;
   const markTextInputActivity = (target: HTMLElement) => {
     lastTextInput = target;
     inputSessionActive = true;
     outsidePointerDown = false;
     lastInputActivityMs = Date.now();
+    if (target.matches(onboardStickyInputSelector)) {
+      startStickyKeyboardKeepalive();
+    } else {
+      stopStickyKeyboardKeepalive();
+    }
   };
   const endInputSession = () => {
     lastTextInput = null;
     inputSessionActive = false;
     lastInputActivityMs = 0;
+    lastKeyboardTarget = null;
+    stopStickyKeyboardKeepalive();
   };
   const keepTextInputFocus = (target: HTMLElement) => {
     for (const delay of [80, 260, 620, 1200, 1800]) {
@@ -195,7 +241,11 @@ if (!window.__TIKPAL_REMOTE_MODE__ && localKioskHosts.has(window.location.hostna
 
   document.addEventListener("pointerdown", (event) => {
     const target = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>(onboardInputSelector) : null;
-    if (!target && (pointerInsideOnboardKeyboard(event) || pointerInsideStickyKeyboardZone(event))) {
+    if (!target && (
+      pointerInsideOnboardKeyboard(event)
+      || pointerInsideStickyKeyboardZone(event)
+      || (stickyInputSessionActive() && onboardVisibleRequested && recentInputActivity())
+    )) {
       event.preventDefault();
       event.stopImmediatePropagation();
       outsidePointerDown = false;

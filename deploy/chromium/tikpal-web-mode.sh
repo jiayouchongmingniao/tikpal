@@ -1338,6 +1338,20 @@ force_onboard() {
   ensure_onboard
 }
 
+keepalive_onboard() {
+  is_enabled "$TIKPAL_WEB_MODE_ONBOARD" || return 0
+  rm -f "$TIKPAL_WEB_MODE_ONBOARD_SUPPRESS_PATH"
+  if ! pgrep -u "$(id -u)" -x onboard >/dev/null 2>&1; then
+    ensure_onboard
+    return
+  fi
+  call_onboard_method Show || true
+  sleep 0.05
+  raise_onboard || true
+  move_onboard_if_requested
+  restore_local_kiosk_keyboard_focus
+}
+
 close_side_panel() {
   pkill -f -- "--user-data-dir=$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel" >/dev/null 2>&1 || true
   sleep 0.2
@@ -2355,9 +2369,10 @@ case "${1:-open}" in
       preload) with_onboard_lock preload_onboard ;;
       show) with_onboard_lock ensure_onboard ;;
       show-force) with_onboard_lock force_onboard ;;
+      keepalive) with_onboard_lock keepalive_onboard ;;
       hide) with_onboard_lock hide_onboard ;;
       toggle) with_onboard_lock toggle_onboard ;;
-      *) fail "Keyboard mode must be preload, show, show-force, hide, or toggle" ;;
+      *) fail "Keyboard mode must be preload, show, show-force, keepalive, hide, or toggle" ;;
     esac
     log "keyboard ${2:-toggle} ready"
     ;;

@@ -17,6 +17,7 @@ COLOR_SCHEME = ONBOARD_DATA_DIR / "themes" / "Tikpal-Classic.colors"
 FCITX_CLASSIC_UI_CONFIG = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "fcitx5/conf/classicui.conf"
 FCITX_PROFILE_CONFIG = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "fcitx5/profile"
 IME_STATE_FALLBACK_PATH = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "tikpal/onboard-ime-state.json"
+DEFAULT_MODE_ID = "keyboard-us"
 MODES = [
     {"id": "keyboard-us", "layout": LAYOUT_DIR / "Tikpal-Compact-EN.onboard", "active": False},
     {"id": "pinyin", "layout": LAYOUT_DIR / "Tikpal-Compact-Pinyin.onboard", "active": True},
@@ -168,20 +169,51 @@ def _state_paths() -> list[Path]:
     return unique
 
 
-def _read_cycle_mode_id() -> str:
+def _read_state_payload() -> dict[str, object]:
     for path in _state_paths():
         try:
-            value = json.loads(path.read_text(encoding="utf-8")).get("modeId")
+            value = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
             continue
-        if value in MODE_BY_ID:
-            return str(value)
+        if isinstance(value, dict):
+            return value
+    return {}
+
+
+def _preferred_locale_mode_id() -> str:
+    for path in _preference_paths():
+        try:
+            locale = json.loads(path.read_text(encoding="utf-8")).get("locale")
+        except Exception:
+            continue
+        if not isinstance(locale, str):
+            continue
+        mode_id = LOCALE_TO_MODE_ID.get(locale) or LOCALE_TO_MODE_ID.get(locale.lower())
+        if mode_id in MODE_BY_ID:
+            return str(mode_id)
+    return DEFAULT_MODE_ID
+
+
+def _read_cycle_mode_id() -> str:
+    value = _read_state_payload().get("modeId")
+    if value in MODE_BY_ID:
+        return str(value)
     return str(_current_mode()["id"])
 
 
-def _write_cycle_mode_id(mode_id: str) -> None:
+def _read_target_mode_id() -> str:
+    payload = _read_state_payload()
+    value = payload.get("targetModeId")
+    if value in MODE_BY_ID:
+        return str(value)
+    return _preferred_locale_mode_id()
+
+
+def _write_cycle_mode_id(mode_id: str, target_mode_id: str | None = None) -> None:
+    target = target_mode_id if target_mode_id in MODE_BY_ID else _read_target_mode_id()
     payload = {
         "modeId": mode_id,
+        "targetModeId": target,
         "updatedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
     }
     for path in _state_paths():
@@ -352,36 +384,37 @@ def sync() -> None:
     _set_onboard_visual(mode)
 
 
-def _set_mode(mode: dict[str, object], *, keep_visible: bool = False) -> None:
+def _set_mode(mode: dict[str, object], *, keep_visible: bool = False, target_mode_id: str | None = None) -> None:
     _sync_fcitx_default_im(mode)
     _remote("-s", str(mode["id"]))
     _remote("-o" if mode["active"] else "-c")
     _set_candidate_font(mode)
     _set_onboard_visual(mode)
-    _write_cycle_mode_id(str(mode["id"]))
+    _write_cycle_mode_id(str(mode["id"]), target_mode_id)
     if keep_visible:
         _show_onboard()
 
 
 def run() -> None:
-    current_id = _read_cycle_mode_id()
-    current = MODE_BY_ID.get(current_id, MODES[0])
-    index = MODES.index(current) if current in MODES else 0
-    _set_mode(MODES[(index + 1) % len(MODES)], keep_visible=True)
+    current_id = str(_current_mode()["id"])
+    target_mode_id = _read_target_mode_id()
+    next_mode_id = target_mode_id if current_id == DEFAULT_MODE_ID and target_mode_id != DEFAULT_MODE_ID else DEFAULT_MODE_ID
+    _set_mode(MODE_BY_ID[next_mode_id], keep_visible=True, target_mode_id=target_mode_id)
 
 
 def set_mode(mode_id: str) -> None:
     mode = MODE_BY_ID.get(mode_id)
     if mode is None:
         raise SystemExit(f"Unsupported input mode: {mode_id}")
-    _set_mode(mode)
+    target_mode_id = mode_id if mode_id != DEFAULT_MODE_ID else _read_target_mode_id()
+    _set_mode(mode, target_mode_id=target_mode_id)
 
 
 def set_locale(locale: str) -> None:
     mode_id = LOCALE_TO_MODE_ID.get(locale) or LOCALE_TO_MODE_ID.get(locale.lower())
     if not mode_id:
         raise SystemExit(f"Unsupported locale: {locale}")
-    set_mode(mode_id)
+    _set_mode(MODE_BY_ID[DEFAULT_MODE_ID], target_mode_id=mode_id)
 
 
 if __name__ == "__main__":

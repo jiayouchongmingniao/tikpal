@@ -52,24 +52,12 @@ import sys
 
 app_dir = sys.argv[1]
 path = os.environ.get("TIKPAL_UI_PREFERENCES_STATE_PATH") or os.path.join(app_dir, ".tikpal", "ui-preferences.json")
-locale_to_method = {
-    "en": "keyboard-us",
-    "zh-CN": "pinyin",
-    "de": "keyboard-de",
-    "it": "keyboard-it",
-    "ko": "hangul",
-    "ja": "anthy",
-    "es": "keyboard-es",
-}
-supported = set(locale_to_method.values())
 candidate = "keyboard-us"
 try:
     with open(path, "r", encoding="utf-8") as handle:
         data = json.load(handle)
-    if data.get("inputMethodId") in supported:
-        candidate = data["inputMethodId"]
-    elif data.get("locale") in locale_to_method:
-        candidate = locale_to_method[data["locale"]]
+    if data.get("inputMethodId") == "keyboard-us":
+        candidate = "keyboard-us"
 except Exception:
     pass
 print(candidate)
@@ -196,7 +184,7 @@ EOF
     fi
   fi
   if [[ -f /usr/share/onboard/scripts/tikpalImeToggle.py ]]; then
-    python3 /usr/share/onboard/scripts/tikpalImeToggle.py --set-mode "$default_im" >/dev/null 2>&1 || true
+    python3 /usr/share/onboard/scripts/tikpalImeToggle.py --set-mode keyboard-us >/dev/null 2>&1 || true
   fi
 }
 

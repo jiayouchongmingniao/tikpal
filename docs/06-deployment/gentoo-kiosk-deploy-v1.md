@@ -460,10 +460,10 @@ anthy
 keyboard-es
 ```
 
-Onboard cycles modes through one Tikpal IME key:
+Onboard starts in English and uses one Tikpal IME key to toggle only between English and the current UI language's input method:
 
 ```text
-EN -> Chinese -> German -> Italian -> Korean -> Japanese -> ES -> EN
+EN <-> selected UI language
 ```
 
 Chinese and Japanese keep QWERTY letter keys because users type pinyin and romaji. German, Italian, Spanish, and Korean use visual keycap variants for their expected layouts: German shows QWERTZ plus `Ä/Ö/Ü/ß`, Italian shows `à/è/ì/ò/ù`, Spanish shows `Ñ`, `¡ ¿`, accent/dead-key hints, and `Ç`, and Korean shows 2-beolsik Hangul hints. The key labels change to reflect the current mode; the underlying Onboard key IDs stay compatible with XTest.
@@ -495,16 +495,16 @@ Tikpal's Settings -> Font presets are intentionally curated rather than a full s
 
 Candidate fonts follow the active input mode: Chinese uses `Noto Sans CJK SC 16`, Japanese uses `Noto Sans CJK JP 16`, Korean uses `Noto Sans CJK KR 16`, and all fall back to `Source Han Sans CN 16` or `WenQuanYi Zen Hei 16`. The regular UI font stack must keep CJK coverage so Chromium does not fall back to Liberation for Chinese.
 
-Onboard keycap labels should follow Settings -> Font. The kiosk writes the active `fontTheme` into `.tikpal/ui-preferences.json`; the API persists it through `/api/v1/preferences`, and `tikpalImeToggle.py` reads that file before setting Onboard's `org.onboard.theme-settings key-label-font`. Language changes still use `--set-mode` / `--set-locale`; font-only changes use the lighter `--sync` path so the user does not lose a temporary input-method choice.
+Onboard keycap labels should follow Settings -> Font. The kiosk writes the active `fontTheme` into `.tikpal/ui-preferences.json`; the API persists it through `/api/v1/preferences`, and `tikpalImeToggle.py` reads that file before setting Onboard's `org.onboard.theme-settings key-label-font`. Language changes use `--set-locale` to keep English as the default mode while updating the selected-language pair; font-only changes use the lighter `--sync` path so the user does not lose a temporary input-method choice.
 
-The Onboard language key keeps its own runtime cycle state in `.tikpal/onboard-ime-state.json` and `~/.config/tikpal/onboard-ime-state.json`. This is deliberate: relying only on `fcitx5-remote -n` during a touch click can bounce between `keyboard-us` and `pinyin` while Onboard reloads layouts. The no-argument `tikpalImeToggle.py` path is the live Onboard key path; it reads that runtime state, advances to the next mode, writes Fcitx `DefaultIM`, switches the current input method, applies the matching layout, and asks Onboard to stay visible. `--set-mode`, `--set-locale`, and `--sync` remain safe for Settings/API preference sync and do not pop the keyboard open unexpectedly.
+The Onboard language key keeps its own runtime pair state in `.tikpal/onboard-ime-state.json` and `~/.config/tikpal/onboard-ime-state.json`. This is deliberate: relying only on `fcitx5-remote -n` during a touch click can bounce between `keyboard-us` and `pinyin` while Onboard reloads layouts. The no-argument `tikpalImeToggle.py` path is the live Onboard key path; it reads the current UI locale target, toggles between `keyboard-us` and that target, writes Fcitx `DefaultIM`, switches the current input method, applies the matching layout, and asks Onboard to stay visible. `--set-mode`, `--set-locale`, and `--sync` remain safe for Settings/API preference sync and do not pop the keyboard open unexpectedly.
 
 Local kiosk text fields, including Settings -> Library -> NAS Add/Edit, request Onboard with `keyboardTarget:"kiosk"`. The API passes this as `TIKPAL_WEB_MODE_KEYBOARD_TARGET=kiosk`, and `tikpal-web-mode.sh` restores X focus to the main kiosk Chromium profile after the Onboard window is raised. Provider pages keep the default `auto` target, so Explore login fields still use provider-focused recovery instead of stealing focus back to the kiosk.
 
 The default API hooks on Gentoo are:
 
 ```conf
-TIKPAL_UI_INPUT_METHOD_SYNC_COMMAND='if [ -f /usr/share/onboard/scripts/tikpalImeToggle.py ]; then TIKPAL_APP_DIR=%APP_DIR% TIKPAL_FONT_THEME=%FONT_THEME% python3 /usr/share/onboard/scripts/tikpalImeToggle.py --set-mode %INPUT_METHOD%; fi'
+TIKPAL_UI_INPUT_METHOD_SYNC_COMMAND='if [ -f /usr/share/onboard/scripts/tikpalImeToggle.py ]; then TIKPAL_APP_DIR=%APP_DIR% TIKPAL_FONT_THEME=%FONT_THEME% python3 /usr/share/onboard/scripts/tikpalImeToggle.py --set-locale %LOCALE%; fi'
 TIKPAL_UI_KEYBOARD_VISUAL_SYNC_COMMAND='if [ -f /usr/share/onboard/scripts/tikpalImeToggle.py ]; then TIKPAL_APP_DIR=%APP_DIR% TIKPAL_FONT_THEME=%FONT_THEME% python3 /usr/share/onboard/scripts/tikpalImeToggle.py --sync; fi'
 ```
 
@@ -529,9 +529,9 @@ Tikpal UI language and font choice are device preferences, not browser-only sett
 
 The supported locales are `en`, `zh-CN`, `de`, `it`, `ko`, `ja`, and `es`. The supported font themes are `system`, `hardware`, `precision`, `sans`, `serif`, and `mono`. The kiosk, Explore side panel, portable Remote, and Tikpal-owned Explore error page read the same preference through `GET /api/v1/preferences`; only the local kiosk should write it through `PATCH /api/v1/preferences`. `GET /api/v1/system/state`, `/api/v1/remote/state`, and `/api/v1/web-mode/state` also include `preferences` so surfaces can stay in sync after polling.
 
-Changing Settings -> Preferences -> Language also selects the matching default input method:
+Changing Settings -> Preferences -> Language keeps the default input method as English and updates the language key's paired target:
 
-| Locale | Fcitx input method |
+| Locale | Language-key target |
 | --- | --- |
 | `en` | `keyboard-us` |
 | `zh-CN` | `pinyin` |
@@ -541,7 +541,7 @@ Changing Settings -> Preferences -> Language also selects the matching default i
 | `ja` | `anthy` |
 | `es` | `keyboard-es` |
 
-`start-tikpal-kiosk-session.sh` reads `.tikpal/ui-preferences.json` before starting Fcitx5 and writes the matching `DefaultIM`. `tikpalImeToggle.py --set-locale <locale>` and `--set-mode <fcitx-id>` are the best-effort runtime sync hooks used after a language change; failure to sync the keyboard should be logged as a warning, not block saving the UI language.
+`start-tikpal-kiosk-session.sh` reads `.tikpal/ui-preferences.json` before starting Fcitx5 and writes `DefaultIM=keyboard-us`. `tikpalImeToggle.py --set-locale <locale>` is the best-effort runtime hook used after a language change; it keeps the current/default mode English and stores the matching target for the language key. `--set-mode <fcitx-id>` remains available for diagnostics or explicit one-off switching. Failure to sync the keyboard should be logged as a warning, not block saving the UI language.
 
 Onboard should only appear for text-like fields after real focus or tap. It should stay hidden for buttons, checkboxes, selectors, provider entry, and LAN browsers that view `http://<gentoo-ip>:4173/`.
 
@@ -553,10 +553,10 @@ The Gentoo physical kiosk uses the same Player Library contract as moOde:
 
 - `Local`, `NAS`, `USB`, `Favorites`, and `Recently Added` are flat storage/filter tabs.
 - Local, NAS, and USB rows show compact audio/file information when the backend exposes codec, sample rate, bit depth, channel count, bitrate, or file size.
-- Keep `TIKPAL_USB_LIBRARY_AUTO_UPDATE=0` on the physical Gentoo kiosk. Browsing USB can scan the mounted filesystem for visible rows, but it should not launch `mpc update USB` in the background while the user seeks or plays Local/NAS music. Gentoo may set `TIKPAL_USB_LIBRARY_AUTO_MOUNT=1` so the library sync helper waits briefly for newly inserted USB storage, mounts current partitions under `/run/media/tikpal/<label-or-uuid>`, then links them into `USB/<mount name>`; this is generic for swapped USB drives and is not tied to `/dev/sda1`. Do not keep legacy 30-second USB sync timers such as `tikpal-usb-audio-sync.timer` enabled on the physical kiosk; use Settings -> Library -> Scan library for an explicit MPD index refresh, with `TIKPAL_MPC_UPDATE_TIMEOUT_SECONDS=8` as the default guardrail.
+- Keep `TIKPAL_USB_LIBRARY_AUTO_UPDATE=0` on the physical Gentoo kiosk. Browsing USB can scan the mounted filesystem for visible rows, but it should not launch `mpc update USB` in the background while the user seeks or plays Local/NAS music. `TIKPAL_USB_LIBRARY_AUTO_MOUNT` defaults to `1`: the library sync helper waits briefly for newly inserted USB storage, mounts current partitions under `/run/media/tikpal/<label-or-uuid>`, then links them into `USB/<mount name>`. This is generic for swapped USB drives and is not tied to `/dev/sda1`; if mounting fails, the helper warns and continues without blocking Local/NAS. Do not keep legacy 30-second USB sync timers such as `tikpal-usb-audio-sync.timer` enabled on the physical kiosk; use Settings -> Library -> Scan library for an explicit MPD index refresh, with `TIKPAL_MPC_UPDATE_TIMEOUT_SECONDS=8` as the default guardrail.
 - USB rows expose `Copy to Local`; the backend should not overwrite same-name Local files and should report `Already in Local` when no copy is needed. Copied files live under `Codex/USB Imports/...`; `tikpal-local-library-sync.sh` must protect that imports directory while still using `rsync --delete` for repo-owned Local music, so copied tracks survive reboot and service reinstall.
 - Local rows expose `Delete`, but the first tap only reveals `Yes` and `No`. Only `Yes` performs deletion; `No`, storage changes, source changes, or closing Player must cancel the pending confirmation.
-- Player -> Library has a compact search field beside volume/free-space/Close. It filters only the currently selected `Local`, `USB`, `NAS`, or `Favorites` tab using visible track metadata and path text; it must not send source-switch requests, change the MPD queue, or search Radio stations.
+- Player -> Library has a compact search field beside volume/free-space/Close. It filters only the currently selected `Local`, `USB`, `NAS`, or `Favorites` tab using visible track metadata and path text; it must not send source-switch requests, change the MPD queue, or search Radio stations. The search input is `data-onboard-sticky`: after touch focus it sends a lightweight Onboard keepalive instead of repeatedly reconfiguring the keyboard, so typing one character should not make Onboard close.
 - The rightmost Library row checkmark represents the current MPD track, not just the row last selected for browsing. Previous/next playback must update the checkmark and scroll the current row into view without switching storage tabs.
 - Long track lists keep a fixed right-side fast-scroll rail with `current / total` count and a draggable thumb. Dragging that rail only changes `scrollTop`; it must not select a track or auto-play on release.
 

@@ -332,6 +332,7 @@ const MULTIROOM_HANDOFF_STATE_PATH = resolve(process.env.TIKPAL_MULTIROOM_HANDOF
 const ROONBRIDGE_HANDOFF_STATE_PATH = resolve(process.env.TIKPAL_ROONBRIDGE_HANDOFF_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "roonbridge-handoff.json"));
 const MPD_SHUFFLE_MONITOR_INTERVAL_MS = parseEnvPositiveInteger(process.env.TIKPAL_MPD_SHUFFLE_MONITOR_INTERVAL_MS, 500);
 const MPD_SHUFFLE_RECENT_HISTORY_SIZE = parseEnvPositiveInteger(process.env.TIKPAL_MPD_SHUFFLE_RECENT_HISTORY_SIZE, 4);
+const MPD_SHUFFLE_POST_JUMP_SETTLE_MS = parseEnvPositiveInteger(process.env.TIKPAL_MPD_SHUFFLE_POST_JUMP_SETTLE_MS, 1500);
 const WEB_MODE_COMMAND = process.env.TIKPAL_WEB_MODE_COMMAND ?? (API_MODE === "mpc" ? "./deploy/chromium/tikpal-web-mode.sh" : "");
 const WEB_MODE_COMMAND_TIMEOUT_MS = Number(process.env.TIKPAL_WEB_MODE_COMMAND_TIMEOUT_MS ?? 45_000);
 const WEB_MODE_OPEN_COMMAND_TIMEOUT_MS = Number(process.env.TIKPAL_WEB_MODE_OPEN_COMMAND_TIMEOUT_MS ?? 110_000);
@@ -359,7 +360,7 @@ const UI_LOCALE_INPUT_METHODS = {
 };
 const UI_LOCALES = new Set(Object.keys(UI_LOCALE_INPUT_METHODS));
 const UI_INPUT_METHOD_SYNC_COMMAND = process.env.TIKPAL_UI_INPUT_METHOD_SYNC_COMMAND
-  ?? (API_MODE === "mpc" ? "if [ -f /usr/share/onboard/scripts/tikpalImeToggle.py ]; then TIKPAL_APP_DIR=%APP_DIR% TIKPAL_FONT_THEME=%FONT_THEME% python3 /usr/share/onboard/scripts/tikpalImeToggle.py --set-mode %INPUT_METHOD%; fi" : "");
+  ?? (API_MODE === "mpc" ? "if [ -f /usr/share/onboard/scripts/tikpalImeToggle.py ]; then TIKPAL_APP_DIR=%APP_DIR% TIKPAL_FONT_THEME=%FONT_THEME% python3 /usr/share/onboard/scripts/tikpalImeToggle.py --set-locale %LOCALE%; fi" : "");
 const UI_KEYBOARD_VISUAL_SYNC_COMMAND = process.env.TIKPAL_UI_KEYBOARD_VISUAL_SYNC_COMMAND
   ?? (API_MODE === "mpc" ? "if [ -f /usr/share/onboard/scripts/tikpalImeToggle.py ]; then TIKPAL_APP_DIR=%APP_DIR% TIKPAL_FONT_THEME=%FONT_THEME% python3 /usr/share/onboard/scripts/tikpalImeToggle.py --sync; fi" : "");
 const FONT_THEMES = new Set(["system", "hardware", "precision", "sans", "serif", "mono"]);
@@ -4637,7 +4638,7 @@ function buildUiPreferences(locale = "en", updatedAt = null, warning = null, dis
   const normalizedProfile = normalizeAudioOutputProfile(audioOutputProfile, mpdBitPerfectModeToAudioOutputProfile(mpdBitPerfectMode));
   return {
     locale: normalizedLocale,
-    inputMethodId: UI_LOCALE_INPUT_METHODS[normalizedLocale] ?? "keyboard-us",
+    inputMethodId: "keyboard-us",
     fontTheme: normalizeFontTheme(fontTheme),
     audioOutputProfile: normalizedProfile,
     audioOutputCustomSettings: normalizeAudioOutputCustomSettings(audioOutputCustomSettings),
@@ -4950,7 +4951,7 @@ async function writeUiPreferences(patch, options = {}) {
   }, fontTheme, mpdBitPerfectMode, audioOutputProfile, audioOutputCustomSettings);
   await mkdir(dirname(UI_PREFERENCES_STATE_PATH), { recursive: true });
   await writeFile(UI_PREFERENCES_STATE_PATH, `${JSON.stringify(next, null, 2)}\n`);
-  const shouldSyncInputMethod = options.syncInputMethod !== false && hasLocalePatch && next.inputMethodId !== current.inputMethodId;
+  const shouldSyncInputMethod = options.syncInputMethod !== false && hasLocalePatch;
   const shouldSyncKeyboardVisual = options.syncInputMethod !== false && hasFontThemePatch;
   const warning = shouldSyncInputMethod
     ? await syncUiInputMethod(next)
@@ -9955,6 +9956,7 @@ let mpcShuffleRecentPositions = [];
 let mpcShuffleLastObservedFile = null;
 let mpcShuffleLastObservedPosition = 0;
 let mpcShuffleLastObservedNearEnd = false;
+let mpcShuffleLastJumpAtMs = 0;
 
 function rememberMpcShufflePosition(position) {
   const normalized = Math.round(Number(position));
@@ -10003,6 +10005,14 @@ function isMpcStatusNearTrackEnd(status) {
   return elapsed >= Math.max(0, duration - 3);
 }
 
+function isMpcStatusNearTrackStart(status) {
+  const elapsed = Number(status?.elapsedSeconds);
+  const duration = Number(status?.durationSeconds);
+  if (!Number.isFinite(elapsed) || elapsed < 0) return false;
+  if (Number.isFinite(duration) && duration > 0 && elapsed > duration) return false;
+  return elapsed <= 3;
+}
+
 function isMpcStatusAtTrackEnd(status) {
   const elapsed = Number(status?.elapsedSeconds);
   const duration = Number(status?.durationSeconds);
@@ -10021,6 +10031,7 @@ async function playDifferentRandomMpcQueueTrack(status = null, options = {}) {
   const nextPosition = getDifferentRandomMpcQueuePosition(currentStatus, options);
   if (!nextPosition) return false;
   await runMpc(["play", String(nextPosition)]);
+  mpcShuffleLastJumpAtMs = Date.now();
   rememberMpcShufflePosition(currentStatus.currentTrackIndex);
   rememberMpcShufflePosition(nextPosition);
   const [nextStatus, nextFile] = await Promise.all([
@@ -10029,7 +10040,10 @@ async function playDifferentRandomMpcQueueTrack(status = null, options = {}) {
   ]);
   mpcShuffleLastObservedFile = extractMpcCurrentFile(nextFile);
   mpcShuffleLastObservedPosition = nextStatus.currentTrackIndex || nextPosition;
-  mpcShuffleLastObservedNearEnd = isMpcStatusNearTrackEnd(nextStatus);
+  // Give MPD a brief settle window after explicit `play <position>`. Some
+  // backends report the previous near-end status for one poll, which can make
+  // the shuffle monitor jump again before the new track really starts.
+  mpcShuffleLastObservedNearEnd = false;
   return true;
 }
 
@@ -10064,6 +10078,13 @@ async function reconcileMpcShuffleNaturalAdvance() {
     const currentFile = extractMpcCurrentFile(await runMpc(["--format", "%file%", "current"], { allowFailure: true }));
     if (!currentFile) return;
     const currentPosition = status.currentTrackIndex;
+    if (Date.now() - mpcShuffleLastJumpAtMs < MPD_SHUFFLE_POST_JUMP_SETTLE_MS) {
+      mpcShuffleLastObservedFile = currentFile;
+      mpcShuffleLastObservedPosition = currentPosition;
+      mpcShuffleLastObservedNearEnd = false;
+      rememberMpcShufflePosition(currentPosition);
+      return;
+    }
     if (status.state !== "playing") {
       if (mpcShuffleLastObservedNearEnd || isMpcStatusAtTrackEnd(status)) {
         const jumped = await playDifferentRandomMpcQueueTrack(status, {
@@ -10077,6 +10098,26 @@ async function reconcileMpcShuffleNaturalAdvance() {
         }
       }
       return;
+    }
+
+    const repeatedSingleTrack = Boolean(
+      mpcShuffleLastObservedFile
+        && mpcShuffleLastObservedNearEnd
+        && currentFile === mpcShuffleLastObservedFile
+        && currentPosition === mpcShuffleLastObservedPosition
+        && isMpcStatusNearTrackStart(status)
+    );
+    if (repeatedSingleTrack) {
+      const jumped = await playDifferentRandomMpcQueueTrack(status, {
+        excludedPositions: mpcShuffleRecentPositions,
+        hardExcludedPositions: [currentPosition]
+      });
+      if (jumped) {
+        await rememberCurrentLocalLibraryTrackSource();
+        tikpalStateSnapshotGeneration += 1;
+        void requestTikpalStateSnapshotRefresh({ force: true });
+        return;
+      }
     }
 
     const naturallyAdvanced = Boolean(
@@ -13695,6 +13736,9 @@ async function applyWebModeAction(action) {
     if (action?.force !== undefined && typeof action.force !== "boolean") {
       throw new Error("Explore keyboard force value must be boolean");
     }
+    if (action?.keepAlive !== undefined && typeof action.keepAlive !== "boolean") {
+      throw new Error("Explore keyboard keepAlive value must be boolean");
+    }
     if (action?.preload !== undefined && typeof action.preload !== "boolean") {
       throw new Error("Explore keyboard preload value must be boolean");
     }
@@ -13702,7 +13746,11 @@ async function applyWebModeAction(action) {
     const keyboardWindow = normalizeWebModeKeyboardWindow(action?.keyboardWindow);
     const keyboardTarget = normalizeWebModeKeyboardTarget(action?.keyboardTarget);
     const keyboardMode = action.preload === true ? "preload" : action.enabled === true ? "show" : action.enabled === false ? "hide" : "toggle";
-    const keyboardCommand = keyboardMode === "show" && action.force === true ? "show-force" : keyboardMode;
+    const keyboardCommand = keyboardMode === "show" && action.keepAlive === true
+      ? "keepalive"
+      : keyboardMode === "show" && action.force === true
+        ? "show-force"
+        : keyboardMode;
     const keyboardEnv = keyboardMode === "hide" || keyboardMode === "preload" || (!keyboardPosition && !keyboardWindow && keyboardTarget === "auto")
       ? {}
       : {
