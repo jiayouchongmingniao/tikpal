@@ -994,6 +994,126 @@ const qqAudioStateExpression = `(() => {
   };
 })()`;
 
+const qqMvTouchTargetExpression = `(() => {
+  const styleId = "tikpal-qq-mv-touch-target-style";
+  const legacyLayerId = "tikpal-qq-mv-touch-target-layer";
+  const hitWidth = 72;
+  const hitHeight = 44;
+  const hookSelector = "[data-tikpal-qq-mv-touch-target='1']";
+  const cleanup = (reason) => {
+    document.getElementById(legacyLayerId)?.remove();
+    document.querySelectorAll(hookSelector).forEach((node) => {
+      node.removeAttribute("data-tikpal-qq-mv-touch-target");
+    });
+    if (reason === "not-qq") document.getElementById(styleId)?.remove();
+    return { active: false, reason, hitWidth, hitHeight };
+  };
+  document.getElementById(legacyLayerId)?.remove();
+  if (!/(^|\\.)y\\.qq\\.com$/i.test(location.hostname)) return cleanup("not-qq");
+  if (document.documentElement.dataset.tikpalQqMvCinema === "1") return cleanup("cinema");
+  let style = document.getElementById(styleId);
+  if (!style) {
+    style = document.createElement("style");
+    style.id = styleId;
+    document.head?.appendChild(style);
+  }
+  style.textContent = \`
+a[data-tikpal-qq-mv-touch-target="1"] {
+  position: relative !important;
+  overflow: visible !important;
+  z-index: 2147482600 !important;
+  touch-action: manipulation !important;
+  -webkit-tap-highlight-color: rgba(88, 220, 255, 0.16) !important;
+}
+a[data-tikpal-qq-mv-touch-target="1"]:active {
+  filter: drop-shadow(0 0 10px rgba(88, 220, 255, 0.34)) !important;
+}
+\`;
+  const isMvHref = (href) => /(?:\\/|%2F)(?:mv|mvdetail|mvplay)(?:\\/|\\b)|[?&#](?:mvid|mv_id|vid)=/i.test(href || "");
+  const isVisibleMvLink = (link, seenLinks) => {
+      if (!(link instanceof HTMLAnchorElement)) return false;
+      const href = link.href || "";
+      if (!isMvHref(href)) return false;
+      if (seenLinks.has(link)) return false;
+      seenLinks.add(link);
+      const rect = link.getBoundingClientRect();
+      const style = getComputedStyle(link);
+      return rect.width >= 8 &&
+        rect.height >= 8 &&
+        rect.right > 0 &&
+        rect.bottom > 0 &&
+        rect.left < innerWidth &&
+        rect.top < innerHeight &&
+        style.display !== "none" &&
+        style.visibility !== "hidden" &&
+        Number(style.opacity || "1") > 0.05;
+  };
+  const collectLinks = () => {
+    const seenLinks = new Set();
+    return Array.from(document.querySelectorAll("a.songlist__icon_mv[href],a[href*='/mv/'],a[href*='/mvdetail/'],a[href*='/mvplay/']"))
+      .filter((link) => isVisibleMvLink(link, seenLinks))
+      .slice(0, 80);
+  };
+  const linkAtPoint = (x, y) => {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    const hits = collectLinks()
+      .map((link) => {
+        const rect = link.getBoundingClientRect();
+        const centerX = rect.left + rect.width / 2;
+        const centerY = rect.top + rect.height / 2;
+        const inHit = Math.abs(x - centerX) <= hitWidth / 2 && Math.abs(y - centerY) <= hitHeight / 2;
+        return inHit ? { link, distance: Math.hypot(x - centerX, y - centerY) } : null;
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.distance - b.distance);
+    return hits[0]?.link || null;
+  };
+  window.__tikpalQqMvTouchTargetLinkAtPoint = linkAtPoint;
+  if (!window.__tikpalQqMvTouchTargetInstalled) {
+    document.addEventListener("click", (event) => {
+      try {
+        if (!/(^|\\.)y\\.qq\\.com$/i.test(location.hostname)) return;
+        if (document.documentElement.dataset.tikpalQqMvCinema === "1") return;
+        if (event.defaultPrevented || event.button > 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        const target = event.target instanceof Element ? event.target : null;
+        if (target?.closest?.(hookSelector)) return;
+        const link = window.__tikpalQqMvTouchTargetLinkAtPoint?.(Number(event.clientX || 0), Number(event.clientY || 0));
+        if (!link) return;
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation?.();
+        link.target = "_self";
+        window.location.assign(link.href);
+      } catch {}
+    }, true);
+    window.__tikpalQqMvTouchTargetInstalled = true;
+  }
+  const links = collectLinks();
+  const linkSet = new Set(links);
+  document.querySelectorAll(hookSelector).forEach((node) => {
+    if (!linkSet.has(node)) node.removeAttribute("data-tikpal-qq-mv-touch-target");
+  });
+  for (const link of links) {
+    link.dataset.tikpalQqMvTouchTarget = "1";
+    link.target = "_self";
+    link.setAttribute("aria-label", link.getAttribute("aria-label") || link.title || "MV");
+    link.title = link.title || "MV";
+  }
+  const first = links[0]?.getBoundingClientRect();
+  return {
+    active: links.length > 0,
+    count: links.length,
+    hitWidth,
+    hitHeight,
+    firstHit: first ? {
+      x: Math.round(first.left + first.width / 2 - hitWidth / 2),
+      y: Math.round(first.top + first.height / 2 - hitHeight / 2),
+      width: hitWidth,
+      height: hitHeight
+    } : null
+  };
+})()`;
+
 const qqMvCinemaExpression = `(() => {
   const styleId = "tikpal-qq-mv-cinema-style";
   const controlsId = "tikpal-qq-mv-cinema-controls";
@@ -1995,8 +2115,9 @@ const safeDismissPromptExpression = `(() => {
   const providerId = ${JSON.stringify(providerId)};
   const cookieContextText = /(cookie|cookies|cookie policy|privacy|gdpr|tracking|personal data|personal information|クッキー|プライバシー|쿠키|개인정보|隐私|隱私|个人信息|個人資料)/i;
   const trialContextText = /(free trial|trial|try free|premium|subscribe|subscription|upgrade|membership|vip|免费试用|免費試用|试用|試用|会员|會員|订阅|訂閱|开通|開通|ทดลองใช้ฟรี|無料体験|プレミアム|구독|프리미엄)/i;
-  const safeDismissActionText = /(close|dismiss|not now|no thanks|no, thanks|maybe later|skip|cancel|×|关闭|關閉|取消|不用了|不了|稍后|稍後|나중에|닫기|キャンセル|閉じる|あとで)/i;
-  const dangerousActionText = /(start|try|subscribe|get premium|go premium|continue|accept|agree|login|log in|sign in|pay|purchase|buy|join|开始|開始|试用|試用|订阅|訂閱|购买|購買|支付|登录|登入|加入|开通|開通)/i;
+  const localAccessContextText = /(other apps and services on this device|other applications and services on this device|apps and services on this device|local network|nearby devices|nearby services|访问此设备上的其他应用和服务|訪問此裝置上的其他應用程式和服務|访问本设备上的其他应用和服务|其他应用和服务|其他應用程式和服務)/i;
+  const safeDismissActionText = /(close|dismiss|not now|no thanks|no, thanks|maybe later|skip|cancel|block|deny|don't allow|do not allow|×|关闭|關閉|取消|不用了|不了|稍后|稍後|阻止|拒绝|拒絕|不允许|不允許|나중에|닫기|거부|キャンセル|閉じる|あとで|許可しない|拒否)/i;
+  const dangerousActionText = /(start|try|subscribe|get premium|go premium|continue|accept|agree|allow|login|log in|sign in|pay|purchase|buy|join|开始|開始|试用|試用|订阅|訂閱|购买|購買|支付|登录|登入|加入|开通|開通|允许|允許|同意|続行|許可|허용|동의)/i;
   const mediaControlText = /(play|pause|previous|next|mute|unmute|volume|sound|audio|播放|暂停|暫停|上一首|下一首|打开声音|打開聲音|关闭声音|關閉聲音|音量|音效)/i;
   const mediaControlSelectors = [
     "audio",
@@ -2111,12 +2232,13 @@ const safeDismissPromptExpression = `(() => {
       const context = contextOf(candidate).slice(0, 2200);
       const isSpotifyCookieDismiss = providerId === "spotify" && cookieContextText.test(context);
       const isTrialDismiss = trialContextText.test(context);
-      if (!isSpotifyCookieDismiss && !isTrialDismiss) continue;
+      const isLocalAccessDismiss = localAccessContextText.test(context);
+      if (!isSpotifyCookieDismiss && !isTrialDismiss && !isLocalAccessDismiss) continue;
       candidate.click();
       return {
         clicked: true,
         label: actionText.slice(0, 80),
-        kind: isTrialDismiss ? "trial" : "cookie"
+        kind: isLocalAccessDismiss ? "local-access" : isTrialDismiss ? "trial" : "cookie"
       };
     }
   }
@@ -2191,6 +2313,13 @@ async function runQqAudioFeatures(targets) {
   }
 }
 
+async function runQqMvTouchTargetFeatures(targets) {
+  if (providerId !== "qq_music") return;
+  for (const target of targets.filter(isQqMusicPage)) {
+    await evaluate(target.webSocketDebuggerUrl, qqMvTouchTargetExpression).catch(() => null);
+  }
+}
+
 async function runQqMvCinemaFeatures(targets) {
   if (providerId !== "qq_music" || !qqMvCinemaMode) return;
   for (const target of targets.filter(isQqMusicPage)) {
@@ -2252,6 +2381,7 @@ async function guardOnce() {
   if (active) {
     await runSafePromptFeatures(targets);
     await runQqAudioFeatures(targets);
+    await runQqMvTouchTargetFeatures(targets);
     await runQqMvCinemaFeatures(targets);
     await runNeteaseAudioFeatures(targets);
   }
@@ -2284,6 +2414,7 @@ if (process.argv.includes("--check")) {
   console.log("[tikpal-web-mode-guard] qq mv playlist button: 1");
   console.log("[tikpal-web-mode-guard] qq mv replay button: 1");
   console.log("[tikpal-web-mode-guard] qq mv cinema frame: 1");
+  console.log("[tikpal-web-mode-guard] qq mv touch target: 1");
   console.log("[tikpal-web-mode-guard] youtube safe dismiss: 1");
   console.log(`[tikpal-web-mode-guard] accept-all labels: ${consentAcceptAllLabels.join(",")}`);
   console.log(`[tikpal-web-mode-guard] safe labels: ${safeLabels.join(",")}`);

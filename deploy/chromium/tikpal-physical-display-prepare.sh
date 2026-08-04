@@ -4,6 +4,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 ENV_FILE="${TIKPAL_KIOSK_ENV_FILE:-$APP_DIR/.env.kiosk}"
+DEFAULT_FIELD_ENV="/home/${TIKPAL_KIOSK_SERVICE_USER:-moode}/code/tikpal/.env.kiosk"
+
+if [[ -z "${TIKPAL_KIOSK_ENV_FILE:-}" && ! -f "$ENV_FILE" && -f "$DEFAULT_FIELD_ENV" ]]; then
+  ENV_FILE="$DEFAULT_FIELD_ENV"
+fi
 
 should_source_env_file() {
   local value
@@ -28,15 +33,30 @@ fi
 : "${TIKPAL_KIOSK_DISPLAY:=:0}"
 : "${TIKPAL_KIOSK_DISPLAY_MODE:=auto}"
 : "${TIKPAL_KIOSK_ACTIVE_DISPLAY_MODE:=$TIKPAL_KIOSK_DISPLAY_MODE}"
-: "${TIKPAL_KIOSK_XRANDR_OUTPUT:=HDMI-1}"
+: "${TIKPAL_KIOSK_XRANDR_OUTPUT:=auto}"
 : "${TIKPAL_KIOSK_XRANDR_MODE:=2560x720}"
+: "${TIKPAL_KIOSK_XRANDR_RATE:=}"
+: "${TIKPAL_KIOSK_XRANDR_USB_RATE:=29.95}"
+: "${TIKPAL_KIOSK_XRANDR_USB_OUTPUT_PATTERN:=^(DVI-I|DVI-D)-[0-9]+-[0-9]+$}"
+: "${TIKPAL_KIOSK_XRANDR_CLONE_OUTPUTS:=}"
+: "${TIKPAL_KIOSK_XRANDR_PRIMARY_PREFERRED_OUTPUTS:=HDMI-1 HDMI-A-1}"
+: "${TIKPAL_KIOSK_XRANDR_FALLBACK_TO_CONNECTED:=1}"
 : "${TIKPAL_KIOSK_WINDOW_POSITION:=0,0}"
 : "${TIKPAL_KIOSK_X_COMMAND_TIMEOUT_SECONDS:=5}"
+: "${TIKPAL_DISPLAY_MIRROR_ENABLED:=0}"
+: "${TIKPAL_DISPLAY_MIRROR_OUTPUT:=}"
+: "${TIKPAL_DISPLAY_PRIMARY_OUTPUT:=}"
+: "${TIKPAL_DISPLAY_MODE:=}"
 : "${TIKPAL_PHYSICAL_DISPLAY_RESET_MODE:=1280x720}"
 : "${TIKPAL_PHYSICAL_DISPLAY_SAFE_BRIGHTNESS:=45}"
 : "${TIKPAL_PHYSICAL_DISPLAY_SAFE_CONTRAST:=50}"
 : "${TIKPAL_PHYSICAL_DISPLAY_INPUT_SOURCE:=}"
-: "${TIKPAL_PHYSICAL_DISPLAY_DRM_CONNECTOR:=/sys/class/drm/card0-HDMI-A-1}"
+: "${TIKPAL_PHYSICAL_DISPLAY_DRM_CONNECTOR:=auto}"
+: "${TIKPAL_PHYSICAL_DISPLAY_DRM_CONNECTORS:=$TIKPAL_PHYSICAL_DISPLAY_DRM_CONNECTOR}"
+: "${TIKPAL_PHYSICAL_DISPLAY_DRM_PREFERRED_CONNECTORS:=card0-HDMI-A-1 card0-HDMI-A-2}"
+: "${TIKPAL_PHYSICAL_DISPLAY_DRM_FALLBACK_TO_CONNECTED:=1}"
+: "${TIKPAL_PHYSICAL_DISPLAY_ALLOW_NO_EDID:=0}"
+: "${TIKPAL_PHYSICAL_DISPLAY_NO_EDID_CONNECTOR_PATTERN:=card[0-9]+-DVI-I-[0-9]+}"
 : "${TIKPAL_PHYSICAL_DISPLAY_WAIT_READY_TIMEOUT_SECONDS:=45}"
 : "${TIKPAL_PHYSICAL_DISPLAY_WAIT_READY_SETTLE_SECONDS:=2}"
 : "${TIKPAL_PHYSICAL_DISPLAY_DELAYED_KICK_SECONDS:=8 25}"
@@ -48,6 +68,16 @@ fi
 : "${TIKPAL_PHYSICAL_DISPLAY_DRM_POLL:=}"
 : "${TIKPAL_PHYSICAL_DISPLAY_NOUVEAU_PCI_ID:=}"
 : "${TIKPAL_PHYSICAL_DISPLAY_NOUVEAU_REBIND_SETTLE_SECONDS:=3}"
+: "${TIKPAL_TURZX_USB_RECOVERY_ENABLED:=0}"
+: "${TIKPAL_TURZX_USB_RECOVERY_AFTER_SECONDS:=8}"
+: "${TIKPAL_TURZX_USB_RECOVERY_PCI_DEVICE:=}"
+: "${TIKPAL_TURZX_USB_RECOVERY_REQUIRE_ERROR:=1}"
+: "${TIKPAL_TURZX_USB_RECOVERY_SETTLE_SECONDS:=8}"
+: "${TIKPAL_TURZX_USB_RECOVERY_MIN_INTERVAL_SECONDS:=300}"
+: "${TIKPAL_TURZX_USB_RECOVERY_STATE_FILE:=/run/tikpal-turzx-usb-recovery.last}"
+: "${TIKPAL_TURZX_USB_RECOVERY_ERROR_PATTERN:=device descriptor read|unable to enumerate USB device|error -71|error -110}"
+: "${TIKPAL_TURZX_USB_RECOVERY_LOG_LINES:=80}"
+: "${TIKPAL_TURZX_USB_RECOVERY_SERVICE:=display_turzx.service}"
 
 MODE="${1:-soft-kick}"
 DISPLAY_NUMBER="${TIKPAL_KIOSK_DISPLAY#:}"
@@ -58,6 +88,8 @@ POSITION_Y="${TIKPAL_KIOSK_WINDOW_POSITION#*,}"
 XRANDR_TMP="${TMPDIR:-/tmp}/tikpal-physical-display-xrandr.$$.tmp"
 COMMAND_TMP="${TMPDIR:-/tmp}/tikpal-physical-display-command.$$.tmp"
 KEYMAP_TMP="${TMPDIR:-/tmp}/tikpal-physical-display-keymap.$$.xkb"
+RESOLVED_XRANDR_CLONE_OUTPUTS=""
+TURZX_USB_RECOVERY_ATTEMPTED=0
 
 export DISPLAY="$TIKPAL_KIOSK_DISPLAY"
 export XAUTHORITY
@@ -83,6 +115,20 @@ is_enabled() {
       ;;
   esac
 }
+
+apply_display_mirror_aliases() {
+  if [[ -n "$TIKPAL_DISPLAY_PRIMARY_OUTPUT" ]]; then
+    TIKPAL_KIOSK_XRANDR_OUTPUT="$TIKPAL_DISPLAY_PRIMARY_OUTPUT"
+  fi
+  if [[ -n "$TIKPAL_DISPLAY_MODE" ]]; then
+    TIKPAL_KIOSK_XRANDR_MODE="$TIKPAL_DISPLAY_MODE"
+  fi
+  if is_enabled "$TIKPAL_DISPLAY_MIRROR_ENABLED" && [[ -n "$TIKPAL_DISPLAY_MIRROR_OUTPUT" ]]; then
+    TIKPAL_KIOSK_XRANDR_CLONE_OUTPUTS="${TIKPAL_KIOSK_XRANDR_CLONE_OUTPUTS:-$TIKPAL_DISPLAY_MIRROR_OUTPUT}"
+  fi
+}
+
+apply_display_mirror_aliases
 
 run_with_timeout() {
   local seconds="$1"
@@ -215,18 +261,6 @@ nouveau_rebind() {
   pci_stabilize
 }
 
-drm_connector_base() {
-  printf '%s' "${TIKPAL_PHYSICAL_DISPLAY_DRM_CONNECTOR%/status}"
-}
-
-drm_status_path() {
-  printf '%s/status' "$(drm_connector_base)"
-}
-
-drm_edid_path() {
-  printf '%s/edid' "$(drm_connector_base)"
-}
-
 physical_display_enabled() {
   local display_mode
   display_mode="$(printf '%s' "$TIKPAL_KIOSK_ACTIVE_DISPLAY_MODE" | tr '[:upper:]' '[:lower:]')"
@@ -238,16 +272,179 @@ physical_display_enabled() {
   [[ "$TIKPAL_KIOSK_XRANDR_MODE" != "none" ]]
 }
 
+is_auto_token() {
+  local value
+  value="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')"
+  case "$value" in
+    auto|connected|any|first|primary)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+normalize_drm_connector_base() {
+  local token="$1"
+  token="${token%/status}"
+  if [[ "$token" == /sys/class/drm/* ]]; then
+    printf '%s\n' "$token"
+    return 0
+  fi
+  printf '/sys/class/drm/%s\n' "$token"
+}
+
+drm_connector_bases() {
+  local token preferred base status_path
+  if is_auto_token "$TIKPAL_PHYSICAL_DISPLAY_DRM_CONNECTORS"; then
+    for preferred in $TIKPAL_PHYSICAL_DISPLAY_DRM_PREFERRED_CONNECTORS; do
+      base="$(normalize_drm_connector_base "$preferred")"
+      [[ -f "$base/status" ]] || continue
+      printf '%s\n' "$base"
+    done
+    for status_path in /sys/class/drm/card*-*/status; do
+      [[ -f "$status_path" ]] || continue
+      base="${status_path%/status}"
+      case " $TIKPAL_PHYSICAL_DISPLAY_DRM_PREFERRED_CONNECTORS " in
+        *" ${base##*/} "*) continue ;;
+      esac
+      printf '%s\n' "$base"
+    done
+    return 0
+  fi
+
+  for token in $TIKPAL_PHYSICAL_DISPLAY_DRM_CONNECTORS; do
+    [[ -n "$token" ]] || continue
+    normalize_drm_connector_base "$token"
+  done
+  is_enabled "$TIKPAL_PHYSICAL_DISPLAY_DRM_FALLBACK_TO_CONNECTED" || return 0
+  for status_path in /sys/class/drm/card*-*/status; do
+    [[ -f "$status_path" ]] || continue
+    base="${status_path%/status}"
+    case " $TIKPAL_PHYSICAL_DISPLAY_DRM_CONNECTORS " in
+      *" ${base##*/} "*|*" $base "*) continue ;;
+    esac
+    printf '%s\n' "$base"
+  done
+}
+
 drm_connector_ready() {
-  local status_path edid_path edid_size
-  status_path="$(drm_status_path)"
-  edid_path="$(drm_edid_path)"
+  local base="$1"
+  local status_path edid_path edid_size connector_name
+  status_path="$base/status"
+  edid_path="$base/edid"
   [[ -r "$status_path" ]] || return 1
   grep -qx "connected" "$status_path" || return 1
   [[ -r "$edid_path" ]] || return 1
   edid_size="$(wc -c < "$edid_path" 2>/dev/null || printf '0')"
   [[ "$edid_size" =~ ^[0-9]+$ ]] || edid_size=0
-  [[ "$edid_size" -ge 128 ]]
+  if [[ "$edid_size" -ge 128 ]]; then
+    return 0
+  fi
+  connector_name="${base##*/}"
+  if is_enabled "$TIKPAL_PHYSICAL_DISPLAY_ALLOW_NO_EDID" && [[ "$connector_name" =~ $TIKPAL_PHYSICAL_DISPLAY_NO_EDID_CONNECTOR_PATTERN ]]; then
+    log "DRM connector ready without EDID: $base connected, EDID ${edid_size} bytes"
+    return 0
+  fi
+  return 1
+}
+
+recent_usb_error_bus() {
+  command -v dmesg >/dev/null 2>&1 || return 1
+  dmesg 2>/dev/null |
+    tail -n "$TIKPAL_TURZX_USB_RECOVERY_LOG_LINES" |
+    grep -E "$TIKPAL_TURZX_USB_RECOVERY_ERROR_PATTERN" |
+    sed -nE 's/.*usb ([0-9]+)-[0-9.:-]+.*/\1/p' |
+    tail -n 1
+}
+
+pci_device_for_usb_bus() {
+  local bus="$1"
+  local path base
+  [[ -n "$bus" ]] || return 1
+  path="$(readlink -f "/sys/bus/usb/devices/usb$bus" 2>/dev/null || true)"
+  [[ -n "$path" ]] || return 1
+  while [[ "$path" != "/" && -n "$path" ]]; do
+    base="${path##*/}"
+    if [[ "$base" =~ ^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7]$ ]]; then
+      printf '%s\n' "$base"
+      return 0
+    fi
+    path="${path%/*}"
+  done
+  return 1
+}
+
+log_usb_display_diagnostics() {
+  command -v dmesg >/dev/null 2>&1 || return 0
+  if dmesg 2>/dev/null |
+    tail -n "$TIKPAL_TURZX_USB_RECOVERY_LOG_LINES" |
+    grep -E "$TIKPAL_TURZX_USB_RECOVERY_ERROR_PATTERN" >"$COMMAND_TMP"; then
+    log "recent USB display enumeration errors: $(tail -n 4 "$COMMAND_TMP" | tr '\n' ' ')"
+  fi
+}
+
+maybe_recover_turzx_usb() {
+  is_enabled "$TIKPAL_TURZX_USB_RECOVERY_ENABLED" || return 0
+  (( TURZX_USB_RECOVERY_ATTEMPTED == 0 )) || return 0
+  [[ "$(id -u)" -eq 0 ]] || {
+    log "TURZX USB recovery skipped: root is required"
+    return 0
+  }
+
+  local bus pci_device driver_path driver_name recovery_reason
+  local now last interval
+  bus="$(recent_usb_error_bus || true)"
+  if [[ -z "$bus" ]]; then
+    if is_enabled "$TIKPAL_TURZX_USB_RECOVERY_REQUIRE_ERROR" || [[ -z "$TIKPAL_TURZX_USB_RECOVERY_PCI_DEVICE" || "$TIKPAL_TURZX_USB_RECOVERY_PCI_DEVICE" == "auto" ]]; then
+      TURZX_USB_RECOVERY_ATTEMPTED=1
+      log "TURZX USB recovery skipped: no recent USB enumeration error matched"
+      return 0
+    fi
+    log "TURZX USB recovery: no recent USB error matched; using configured controller $TIKPAL_TURZX_USB_RECOVERY_PCI_DEVICE"
+  fi
+
+  pci_device="$TIKPAL_TURZX_USB_RECOVERY_PCI_DEVICE"
+  if [[ -z "$pci_device" || "$pci_device" == "auto" ]]; then
+    pci_device="$(pci_device_for_usb_bus "$bus" || true)"
+  fi
+  if [[ -z "$pci_device" ]]; then
+    log "TURZX USB recovery skipped: could not resolve USB controller for bus $bus"
+    return 0
+  fi
+
+  driver_path="$(readlink -f "/sys/bus/pci/devices/$pci_device/driver" 2>/dev/null || true)"
+  if [[ -z "$driver_path" || ! -w "$driver_path/unbind" || ! -w "$driver_path/bind" ]]; then
+    log "TURZX USB recovery skipped: PCI driver controls are unavailable for $pci_device"
+    return 0
+  fi
+  driver_name="${driver_path##*/}"
+
+  TURZX_USB_RECOVERY_ATTEMPTED=1
+  interval="$TIKPAL_TURZX_USB_RECOVERY_MIN_INTERVAL_SECONDS"
+  if [[ "$interval" =~ ^[0-9]+$ && "$interval" -gt 0 && -r "$TIKPAL_TURZX_USB_RECOVERY_STATE_FILE" ]]; then
+    now="$(date +%s)"
+    last="$(cat "$TIKPAL_TURZX_USB_RECOVERY_STATE_FILE" 2>/dev/null || printf '0')"
+    if [[ "$last" =~ ^[0-9]+$ ]] && (( now - last < interval )); then
+      log "TURZX USB recovery skipped: last controller rebind was $((now - last))s ago"
+      return 0
+    fi
+  fi
+
+  recovery_reason="configured recovery"
+  [[ -n "$bus" ]] && recovery_reason="USB bus $bus enumeration error"
+  log "TURZX USB recovery: rebind $driver_name controller $pci_device after $recovery_reason"
+  mkdir -p "$(dirname "$TIKPAL_TURZX_USB_RECOVERY_STATE_FILE")" 2>/dev/null || true
+  date +%s > "$TIKPAL_TURZX_USB_RECOVERY_STATE_FILE" 2>/dev/null || true
+  printf '%s' "$pci_device" > "$driver_path/unbind"
+  sleep 3
+  printf '%s' "$pci_device" > "$driver_path/bind"
+  udevadm settle 2>/dev/null || true
+  if [[ -n "$TIKPAL_TURZX_USB_RECOVERY_SERVICE" ]] && command -v systemctl >/dev/null 2>&1; then
+    systemctl try-restart "$TIKPAL_TURZX_USB_RECOVERY_SERVICE" >/dev/null 2>&1 || true
+  fi
+  sleep "$TIKPAL_TURZX_USB_RECOVERY_SETTLE_SECONDS"
 }
 
 wait_for_drm_connector() {
@@ -258,24 +455,36 @@ wait_for_drm_connector() {
 
   safe_ddc_values
 
-  local deadline status_path edid_path edid_size
+  local base deadline edid_path edid_size resolved="" recovery_at
   deadline=$((SECONDS + TIKPAL_PHYSICAL_DISPLAY_WAIT_READY_TIMEOUT_SECONDS))
-  status_path="$(drm_status_path)"
-  edid_path="$(drm_edid_path)"
+  recovery_at=$((SECONDS + TIKPAL_TURZX_USB_RECOVERY_AFTER_SECONDS))
   while (( SECONDS <= deadline )); do
-    if drm_connector_ready; then
-      edid_size="$(wc -c < "$edid_path" 2>/dev/null || printf '0')"
-      log "DRM connector ready: $status_path connected, EDID ${edid_size} bytes"
-      sleep "$TIKPAL_PHYSICAL_DISPLAY_WAIT_READY_SETTLE_SECONDS"
-      safe_ddc_values
-      return 0
+    while IFS= read -r base; do
+      [[ -n "$base" ]] || continue
+      if drm_connector_ready "$base"; then
+        edid_path="$base/edid"
+        edid_size="$(wc -c < "$edid_path" 2>/dev/null || printf '0')"
+        log "DRM connector ready: $base connected, EDID ${edid_size} bytes"
+        sleep "$TIKPAL_PHYSICAL_DISPLAY_WAIT_READY_SETTLE_SECONDS"
+        safe_ddc_values
+        return 0
+      fi
+    done < <(drm_connector_bases)
+    if (( SECONDS >= recovery_at )); then
+      maybe_recover_turzx_usb
     fi
     sleep 1
   done
 
-  edid_size=0
-  [[ -r "$edid_path" ]] && edid_size="$(wc -c < "$edid_path" 2>/dev/null || printf '0')"
-  log "DRM connector not ready: $status_path=$(cat "$status_path" 2>/dev/null || printf 'missing'), EDID ${edid_size} bytes"
+  while IFS= read -r base; do
+    [[ -n "$base" ]] || continue
+    edid_path="$base/edid"
+    edid_size=0
+    [[ -r "$edid_path" ]] && edid_size="$(wc -c < "$edid_path" 2>/dev/null || printf '0')"
+    resolved="${resolved}${resolved:+; }$base/status=$(cat "$base/status" 2>/dev/null || printf 'missing'), EDID ${edid_size} bytes"
+  done < <(drm_connector_bases)
+  log "DRM connector not ready: ${resolved:-no connector candidates}"
+  log_usb_display_diagnostics
   return 1
 }
 
@@ -300,8 +509,95 @@ query_xrandr() {
   run_with_timeout "$TIKPAL_KIOSK_X_COMMAND_TIMEOUT_SECONDS" xrandr --query >"$XRANDR_TMP" 2>&1
 }
 
+xrandr_output_connected() {
+  local output="$1"
+  [[ -s "$XRANDR_TMP" ]] || return 1
+  awk -v want="$output" '$1 == want && $2 == "connected" { found = 1 } END { exit found ? 0 : 1 }' "$XRANDR_TMP"
+}
+
+choose_auto_xrandr_output() {
+  local output preferred first=""
+  [[ -s "$XRANDR_TMP" ]] || return 1
+  for preferred in $TIKPAL_KIOSK_XRANDR_PRIMARY_PREFERRED_OUTPUTS; do
+    if xrandr_output_connected "$preferred"; then
+      printf '%s\n' "$preferred"
+      return 0
+    fi
+  done
+  while read -r output _; do
+    [[ -n "$output" ]] || continue
+    first="${first:-$output}"
+  done < <(awk '$2 == "connected" { print $1 }' "$XRANDR_TMP")
+  [[ -n "$first" ]] || return 1
+  printf '%s\n' "$first"
+}
+
+resolve_primary_output() {
+  local resolved
+  if is_auto_token "$TIKPAL_KIOSK_XRANDR_OUTPUT"; then
+    resolved="$(choose_auto_xrandr_output || true)"
+    [[ -n "$resolved" ]] || return 1
+    TIKPAL_KIOSK_XRANDR_OUTPUT="$resolved"
+    log "resolved primary output: $TIKPAL_KIOSK_XRANDR_OUTPUT"
+    return 0
+  fi
+  if ! xrandr_output_connected "$TIKPAL_KIOSK_XRANDR_OUTPUT"; then
+    if is_enabled "$TIKPAL_KIOSK_XRANDR_FALLBACK_TO_CONNECTED"; then
+      resolved="$(choose_auto_xrandr_output || true)"
+      if [[ -n "$resolved" ]]; then
+        log "configured primary output $TIKPAL_KIOSK_XRANDR_OUTPUT is not connected; using $resolved"
+        TIKPAL_KIOSK_XRANDR_OUTPUT="$resolved"
+        return 0
+      fi
+    fi
+    return 1
+  fi
+}
+
+xrandr_output_line() {
+  local output="$1"
+  awk -v want="$output" '$1 == want && $2 == "connected" { print; exit }' "$XRANDR_TMP"
+}
+
 output_line() {
-  grep -E "^${TIKPAL_KIOSK_XRANDR_OUTPUT}[[:space:]]+connected" "$XRANDR_TMP" | head -n 1 || true
+  xrandr_output_line "$TIKPAL_KIOSK_XRANDR_OUTPUT"
+}
+
+add_resolved_clone_output() {
+  local output="$1"
+  [[ -n "$output" && "$output" != "$TIKPAL_KIOSK_XRANDR_OUTPUT" ]] || return 0
+  case " $RESOLVED_XRANDR_CLONE_OUTPUTS " in
+    *" $output "*) return 0 ;;
+  esac
+  RESOLVED_XRANDR_CLONE_OUTPUTS="${RESOLVED_XRANDR_CLONE_OUTPUTS:+$RESOLVED_XRANDR_CLONE_OUTPUTS }$output"
+}
+
+resolve_clone_outputs() {
+  local output token
+  RESOLVED_XRANDR_CLONE_OUTPUTS=""
+  [[ -n "$TIKPAL_KIOSK_XRANDR_CLONE_OUTPUTS" ]] || return 0
+  [[ -s "$XRANDR_TMP" ]] || return 0
+  for token in $TIKPAL_KIOSK_XRANDR_CLONE_OUTPUTS; do
+    case "$(printf '%s' "$token" | tr '[:upper:]' '[:lower:]')" in
+      auto|connected|evdi)
+        while read -r output _; do
+          add_resolved_clone_output "$output"
+        done < <(grep -E '^[^[:space:]]+[[:space:]]+connected' "$XRANDR_TMP" || true)
+        ;;
+      *)
+        if [[ -n "$(xrandr_output_line "$token")" ]]; then
+          add_resolved_clone_output "$token"
+        else
+          log "clone output $token is not connected; keeping primary output only"
+        fi
+        ;;
+    esac
+  done
+  if [[ -n "$RESOLVED_XRANDR_CLONE_OUTPUTS" ]]; then
+    log "resolved clone outputs: $RESOLVED_XRANDR_CLONE_OUTPUTS"
+  elif [[ -n "$TIKPAL_KIOSK_XRANDR_CLONE_OUTPUTS" ]]; then
+    log "no connected clone outputs resolved; keeping HDMI primary"
+  fi
 }
 
 safe_ddc_values() {
@@ -353,17 +649,54 @@ apply_xrandr_properties() {
   run_optional xrandr --output "$TIKPAL_KIOSK_XRANDR_OUTPUT" --set "scaling mode" "Full"
 }
 
+xrandr_rate_for_output() {
+  local output="$1"
+  if [[ -n "$TIKPAL_KIOSK_XRANDR_RATE" && "$TIKPAL_KIOSK_XRANDR_RATE" != "auto" ]]; then
+    printf '%s\n' "$TIKPAL_KIOSK_XRANDR_RATE"
+    return 0
+  fi
+  if [[ -n "$TIKPAL_KIOSK_XRANDR_USB_RATE" && "$TIKPAL_KIOSK_XRANDR_USB_RATE" != "auto" && "$TIKPAL_KIOSK_XRANDR_USB_RATE" != "none" ]]; then
+    if [[ "$output" =~ $TIKPAL_KIOSK_XRANDR_USB_OUTPUT_PATTERN ]]; then
+      printf '%s\n' "$TIKPAL_KIOSK_XRANDR_USB_RATE"
+      return 0
+    fi
+  fi
+  return 1
+}
+
 turn_output_off() {
+  local clone_output
+  for clone_output in $RESOLVED_XRANDR_CLONE_OUTPUTS; do
+    run_optional xrandr --output "$clone_output" --off
+  done
   run_optional xrandr --output "$TIKPAL_KIOSK_XRANDR_OUTPUT" --off
 }
 
 apply_mode() {
   local mode="$1"
-  run_optional xrandr \
-    --output "$TIKPAL_KIOSK_XRANDR_OUTPUT" \
-    --mode "$mode" \
-    --pos "${POSITION_X}x${POSITION_Y}" \
+  local clone_output output_rate
+  local -a xrandr_args
+  xrandr_args=(
+    --output "$TIKPAL_KIOSK_XRANDR_OUTPUT"
+    --mode "$mode"
+  )
+  if [[ "$mode" == "$TIKPAL_KIOSK_XRANDR_MODE" ]] && output_rate="$(xrandr_rate_for_output "$TIKPAL_KIOSK_XRANDR_OUTPUT" || true)" && [[ -n "$output_rate" ]]; then
+    xrandr_args+=(--rate "$output_rate")
+  fi
+  xrandr_args+=(
+    --pos "${POSITION_X}x${POSITION_Y}"
     --primary
+  )
+  if [[ "$mode" == "$TIKPAL_KIOSK_XRANDR_MODE" ]]; then
+    for clone_output in $RESOLVED_XRANDR_CLONE_OUTPUTS; do
+      xrandr_args+=(--output "$clone_output" --mode "$mode")
+      if output_rate="$(xrandr_rate_for_output "$clone_output" || true)" && [[ -n "$output_rate" ]]; then
+        xrandr_args+=(--rate "$output_rate")
+      fi
+      xrandr_args+=(--same-as "$TIKPAL_KIOSK_XRANDR_OUTPUT")
+    done
+  fi
+  run_optional xrandr "${xrandr_args[@]}"
 }
 
 raise_chromium() {
@@ -388,7 +721,12 @@ check_display() {
     log "xrandr query failed: $(tr '\n' ' ' <"$XRANDR_TMP" 2>/dev/null || true)"
     return 1
   }
-  local line desired
+  resolve_primary_output || {
+    log "no connected primary output found"
+    return 1
+  }
+  resolve_clone_outputs
+  local clone_line clone_output line desired
   line="$(output_line)"
   desired="${TIKPAL_KIOSK_XRANDR_MODE}+${POSITION_X}+${POSITION_Y}"
   if [[ -z "$line" ]]; then
@@ -400,6 +738,18 @@ check_display() {
     return 1
   fi
   log "$TIKPAL_KIOSK_XRANDR_OUTPUT primary at $desired"
+  for clone_output in $RESOLVED_XRANDR_CLONE_OUTPUTS; do
+    clone_line="$(xrandr_output_line "$clone_output")"
+    if [[ -z "$clone_line" ]]; then
+      log "clone output $clone_output is not connected"
+      return 1
+    fi
+    if [[ "$clone_line" != *" ${desired}"* ]]; then
+      log "clone output $clone_output is not mirrored at $desired: $clone_line"
+      return 1
+    fi
+    log "$clone_output mirrored at $desired"
+  done
   return 0
 }
 
@@ -416,6 +766,11 @@ soft_kick() {
     log "xrandr query failed: $(tr '\n' ' ' <"$XRANDR_TMP" 2>/dev/null || true)"
     return 1
   }
+  resolve_primary_output || {
+    log "no connected primary output found"
+    return 1
+  }
+  resolve_clone_outputs
   if [[ -z "$(output_line)" ]]; then
     log "output $TIKPAL_KIOSK_XRANDR_OUTPUT is not connected"
     return 1
@@ -465,16 +820,25 @@ case "$MODE" in
   --check|check)
     log "display: $TIKPAL_KIOSK_DISPLAY"
     log "output: $TIKPAL_KIOSK_XRANDR_OUTPUT"
+    log "clone outputs: ${TIKPAL_KIOSK_XRANDR_CLONE_OUTPUTS:-none}"
     log "mode: $TIKPAL_KIOSK_XRANDR_MODE"
+    log "rate: ${TIKPAL_KIOSK_XRANDR_RATE:-auto}"
+    log "USB output rate: ${TIKPAL_KIOSK_XRANDR_USB_RATE:-auto}"
+    log "USB output pattern: $TIKPAL_KIOSK_XRANDR_USB_OUTPUT_PATTERN"
     log "reset mode: $TIKPAL_PHYSICAL_DISPLAY_RESET_MODE"
     log "safe brightness: $TIKPAL_PHYSICAL_DISPLAY_SAFE_BRIGHTNESS"
     log "safe contrast: $TIKPAL_PHYSICAL_DISPLAY_SAFE_CONTRAST"
     log "input source policy: ${TIKPAL_PHYSICAL_DISPLAY_INPUT_SOURCE:-preserve-current}"
-    log "DRM connector: $(drm_connector_base)"
+    log "DRM connectors: $TIKPAL_PHYSICAL_DISPLAY_DRM_CONNECTORS"
+    log "DRM preferred connectors: $TIKPAL_PHYSICAL_DISPLAY_DRM_PREFERRED_CONNECTORS"
+    log "DRM fallback to connected: $TIKPAL_PHYSICAL_DISPLAY_DRM_FALLBACK_TO_CONNECTED"
+    log "DRM allow no EDID: $TIKPAL_PHYSICAL_DISPLAY_ALLOW_NO_EDID"
     log "PCI power devices: ${TIKPAL_PHYSICAL_DISPLAY_PCI_POWER_DEVICES:-none}"
     log "PCIe ASPM policy: ${TIKPAL_PHYSICAL_DISPLAY_PCIE_ASPM_POLICY:-preserve-current}"
     log "DRM connector poll: ${TIKPAL_PHYSICAL_DISPLAY_DRM_POLL:-preserve-current}"
     log "nouveau PCI id: ${TIKPAL_PHYSICAL_DISPLAY_NOUVEAU_PCI_ID:-none}"
+    log "TURZX USB recovery: $TIKPAL_TURZX_USB_RECOVERY_ENABLED"
+    log "TURZX USB recovery PCI device: ${TIKPAL_TURZX_USB_RECOVERY_PCI_DEVICE:-auto}"
     log "wait-ready timeout: ${TIKPAL_PHYSICAL_DISPLAY_WAIT_READY_TIMEOUT_SECONDS}s"
     log "delayed soft-kick seconds: $TIKPAL_PHYSICAL_DISPLAY_DELAYED_KICK_SECONDS"
     check_display

@@ -35,6 +35,8 @@ fi
 : "${TIKPAL_KIOSK_XRANDR_MODE:=2560x720}"
 : "${TIKPAL_KIOSK_XRANDR_OUTPUT:=}"
 : "${TIKPAL_KIOSK_XRANDR_CLONE_OUTPUTS:=}"
+: "${TIKPAL_KIOSK_XRANDR_PRIMARY_PREFERRED_OUTPUTS:=HDMI-1 HDMI-A-1}"
+: "${TIKPAL_KIOSK_XRANDR_FALLBACK_TO_CONNECTED:=1}"
 : "${TIKPAL_KIOSK_X_COMMAND_TIMEOUT_SECONDS:=5}"
 : "${TIKPAL_CHROMIUM_BIN:=/usr/lib/chromium-browser/chromium-browser}"
 : "${TIKPAL_CHROMIUM_PROFILE_DIR:=$HOME/.config/tikpal-chromium-kiosk}"
@@ -134,6 +136,103 @@ run_x_command() {
     return
   fi
   "$@"
+}
+
+is_auto_xrandr_output() {
+  local value
+  value="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')"
+  case "$value" in
+    auto|connected|first|primary)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+xrandr_output_connected() {
+  local query="$1"
+  local output="$2"
+  printf '%s\n' "$query" | awk -v want="$output" '$1 == want && $2 == "connected" { found = 1 } END { exit found ? 0 : 1 }'
+}
+
+choose_auto_xrandr_output() {
+  local query="$1"
+  local output preferred first=""
+  for preferred in $TIKPAL_KIOSK_XRANDR_PRIMARY_PREFERRED_OUTPUTS; do
+    if xrandr_output_connected "$query" "$preferred"; then
+      printf '%s\n' "$preferred"
+      return 0
+    fi
+  done
+  while read -r output _; do
+    [[ -n "$output" ]] || continue
+    first="${first:-$output}"
+  done < <(printf '%s\n' "$query" | awk '$2 == "connected" { print $1 }')
+  [[ -n "$first" ]] || return 1
+  printf '%s\n' "$first"
+}
+
+resolve_xrandr_primary_output() {
+  local value="$1"
+  local query resolved
+  [[ -n "$value" ]] || return 1
+  query="$(run_x_command xrandr --query 2>/dev/null || true)"
+  [[ -n "$query" ]] || return 1
+  if is_auto_xrandr_output "$value"; then
+    resolved="$(choose_auto_xrandr_output "$query" || true)"
+    [[ -n "$resolved" ]] || return 1
+    log "resolved primary output: $resolved" >&2
+    printf '%s\n' "$resolved"
+    return 0
+  fi
+  if ! xrandr_output_connected "$query" "$value"; then
+    if is_enabled "$TIKPAL_KIOSK_XRANDR_FALLBACK_TO_CONNECTED"; then
+      resolved="$(choose_auto_xrandr_output "$query" || true)"
+      if [[ -n "$resolved" ]]; then
+        log "configured primary output $value is not connected; using $resolved" >&2
+        printf '%s\n' "$resolved"
+        return 0
+      fi
+    fi
+    log "WARN: configured primary output $value is not connected" >&2
+  fi
+  printf '%s\n' "$value"
+}
+
+add_clone_output() {
+  local output="$1"
+  [[ -n "$output" && "$output" != "$TIKPAL_KIOSK_XRANDR_OUTPUT" ]] || return 0
+  case " ${resolved_outputs[*]} " in
+    *" $output "*) return 0 ;;
+  esac
+  resolved_outputs+=("$output")
+}
+
+resolve_xrandr_clone_outputs() {
+  local output query token
+  local -a resolved_outputs
+  [[ -n "$TIKPAL_KIOSK_XRANDR_CLONE_OUTPUTS" ]] || return 0
+  query="$(run_x_command xrandr --query 2>/dev/null || true)"
+  [[ -n "$query" ]] || return 0
+  for token in $TIKPAL_KIOSK_XRANDR_CLONE_OUTPUTS; do
+    case "$(printf '%s' "$token" | tr '[:upper:]' '[:lower:]')" in
+      auto|connected|evdi)
+        while read -r output _; do
+          add_clone_output "$output"
+        done < <(printf '%s\n' "$query" | grep -E '^[^[:space:]]+[[:space:]]+connected' || true)
+        ;;
+      *)
+        if xrandr_output_connected "$query" "$token"; then
+          add_clone_output "$token"
+        else
+          log "WARN: clone output $token is not connected; keeping primary output only"
+        fi
+        ;;
+    esac
+  done
+  printf '%s\n' "${resolved_outputs[@]}"
 }
 
 normalize_chromium_window_size() {
@@ -254,11 +353,16 @@ export XMODIFIERS="${XMODIFIERS:-@im=fcitx}"
 
 if [[ "$TIKPAL_KIOSK_ACTIVE_DISPLAY_MODE" != "virtual" && "$TIKPAL_KIOSK_XRANDR_MODE" != "none" ]] && command -v xrandr >/dev/null 2>&1; then
   if [[ -n "$TIKPAL_KIOSK_XRANDR_OUTPUT" ]]; then
+    RESOLVED_XRANDR_OUTPUT="$(resolve_xrandr_primary_output "$TIKPAL_KIOSK_XRANDR_OUTPUT" || true)"
+    if [[ -n "$RESOLVED_XRANDR_OUTPUT" ]]; then
+      TIKPAL_KIOSK_XRANDR_OUTPUT="$RESOLVED_XRANDR_OUTPUT"
+    fi
     XRANDR_ARGS=(--output "$TIKPAL_KIOSK_XRANDR_OUTPUT" --mode "$TIKPAL_KIOSK_XRANDR_MODE" --primary)
     if [[ -n "$TIKPAL_KIOSK_XRANDR_CLONE_OUTPUTS" ]]; then
-      for clone_output in $TIKPAL_KIOSK_XRANDR_CLONE_OUTPUTS; do
+      while IFS= read -r clone_output; do
+        [[ -n "$clone_output" ]] || continue
         XRANDR_ARGS+=(--output "$clone_output" --mode "$TIKPAL_KIOSK_XRANDR_MODE" --same-as "$TIKPAL_KIOSK_XRANDR_OUTPUT")
-      done
+      done < <(resolve_xrandr_clone_outputs)
     fi
     run_x_command xrandr "${XRANDR_ARGS[@]}" || log "WARN: xrandr mode set failed or timed out"
   else

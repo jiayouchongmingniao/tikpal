@@ -35,7 +35,7 @@ case "$action" in
       [ -r "$TIKPAL_NAS_CREDENTIALS" ] || die "credential file is not readable"
       mount_options="${mount_options},credentials=${TIKPAL_NAS_CREDENTIALS}"
     else
-      mount_options="${mount_options},guest,username=guest,password="
+      mount_options="${mount_options},guest"
     fi
 
     mkdir -p "$TIKPAL_NAS_MOUNT_POINT" "$(dirname "$TIKPAL_NAS_MPD_ENTRY")"

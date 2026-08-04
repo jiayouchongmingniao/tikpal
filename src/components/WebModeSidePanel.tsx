@@ -87,7 +87,7 @@ export function WebModeSidePanel() {
   const [webMode, setWebMode] = useState<WebModeState | null>(null);
   const [tikpalState, setTikpalState] = useState<TikpalState | null>(null);
   const [pendingProvider, setPendingProvider] = useState<WebModeProviderId | null>(readInitialOpeningProvider);
-  const [pendingAction, setPendingAction] = useState<"close" | "proxy" | "scale" | null>(null);
+  const [pendingAction, setPendingAction] = useState<"close" | "scale" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const actionLockRef = useRef(false);
   const activeProvider = webMode?.activeProvider ?? null;
@@ -215,23 +215,6 @@ export function WebModeSidePanel() {
     }
   }
 
-  async function toggleProxy() {
-    if (!webMode || actionLockRef.current || pendingAction || pendingProvider) return;
-    actionLockRef.current = true;
-    setPendingAction("proxy");
-    setError(null);
-    try {
-      const next = await sendWebModeAction({ type: "proxy", enabled: !webMode.settings.proxyEnabled });
-      setWebMode(next);
-    } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : "Proxy update failed");
-    } finally {
-      setPendingAction(null);
-      await refresh().catch(() => undefined);
-      actionLockRef.current = false;
-    }
-  }
-
   async function setProviderTextScale(nextScale: number) {
     if (!webMode || actionLockRef.current || pendingAction || pendingProvider) return;
     if (Math.abs(providerTextScale - nextScale) < 0.001) return;
@@ -277,17 +260,16 @@ export function WebModeSidePanel() {
           <strong>{displayProviderLabel}</strong>
         </div>
         <div className="web-mode-header-actions">
-          <button
-            className={`web-mode-proxy-chip ${webMode?.settings.proxyEnabled ? "is-proxy" : ""}`}
-            type="button"
-            aria-pressed={Boolean(webMode?.settings.proxyEnabled)}
-            disabled={!webMode || Boolean(pendingAction || pendingProvider)}
-            data-web-mode-proxy-toggle
-            onClick={() => void toggleProxy()}
+          <div
+            className={`web-mode-proxy-chip web-mode-proxy-status ${proxyEnabled ? "is-proxy" : "is-off"}`}
+            role="status"
+            aria-label={`${proxyEnabled ? t("common.proxyOn") : t("common.proxyOff")}. ${t("explore.proxyChangeInSettings")}`}
+            title={t("explore.proxyChangeInSettings")}
+            data-web-mode-proxy-status
           >
             <Globe2 size={17} />
-            <span>{pendingAction === "proxy" ? t("common.saving") : proxyEnabled ? t("common.proxyOn") : t("common.proxyOff")}</span>
-          </button>
+            <span>{proxyEnabled ? t("common.proxyOn") : t("common.proxyOff")}</span>
+          </div>
           <button
             className="web-mode-top-back"
             type="button"

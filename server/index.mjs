@@ -5122,6 +5122,12 @@ function normalizeWebModeSettings(raw = {}) {
   };
 }
 
+function normalizeWebModeVisibleError(error) {
+  const message = typeof error === "string" && error.trim() ? error.trim() : null;
+  if (!message) return null;
+  return message.replace(/\bneeds Proxy On\b/gi, "needs proxy");
+}
+
 function normalizeWebModeRuntimeState(raw = {}) {
   const residentProviders = {};
   const rawResidentProviders = raw.residentProviders && typeof raw.residentProviders === "object"
@@ -5135,14 +5141,14 @@ function normalizeWebModeRuntimeState(raw = {}) {
     if (!allowedProviderStatuses.has(status) || status === "closed") continue;
     residentProviders[provider.id] = {
       status,
-      lastError: typeof value.lastError === "string" && value.lastError.trim() ? value.lastError.trim() : null,
+      lastError: normalizeWebModeVisibleError(value.lastError),
       updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : null
     };
   }
   return {
     activeProvider: raw.activeProvider ? normalizeWebModeProviderId(raw.activeProvider, null) : null,
     residentProviders,
-    lastError: typeof raw.lastError === "string" && raw.lastError.trim() ? raw.lastError.trim() : null,
+    lastError: normalizeWebModeVisibleError(raw.lastError),
     proxyAppliedSettingsUpdatedAt: typeof raw.proxyAppliedSettingsUpdatedAt === "string" ? raw.proxyAppliedSettingsUpdatedAt : null,
     updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : null
   };
@@ -13585,6 +13591,9 @@ function formatWebModeCommandError(error, action, providerId = "") {
   const firstLine = raw.split(/\r?\n/).find((line) => line.trim())?.trim() ?? "";
   if (isWebModeSwitchingError(error)) return "Explore is already switching";
   if (action === "open") {
+    if (/needs proxy(?: on)?/i.test(raw)) {
+      return `${webModeProviderLabel(providerId)} needs proxy`;
+    }
     if (/did not open|did not appear|timed out|SIGKILL|Command failed|\[tikpal-web-mode\]/i.test(raw)) {
       return `${webModeProviderLabel(providerId)} did not open`;
     }
@@ -13592,7 +13601,15 @@ function formatWebModeCommandError(error, action, providerId = "") {
   }
   if (action === "close") return firstLine.slice(0, 160) || "Explore close failed";
   if (action === "keyboard") return firstLine.slice(0, 160) || "Keyboard update failed";
-  if (action === "proxy") return firstLine.slice(0, 160) || "Explore proxy was not applied within 5 seconds";
+  if (action === "proxy") {
+    if (/needs proxy(?: on)?/i.test(raw)) {
+      return `${webModeProviderLabel(providerId)} needs proxy`;
+    }
+    if (/proxy did not connect|proxy was not applied|timed out|SIGKILL|Command failed|\[tikpal-web-mode\]/i.test(raw)) {
+      return "Proxy did not connect. Try again.";
+    }
+    return firstLine.slice(0, 160) || "Proxy did not connect. Try again.";
+  }
   if (action === "provider_text_scale") return firstLine.slice(0, 160) || "Explore text scale update failed";
   return firstLine.slice(0, 160) || "Explore action failed";
 }

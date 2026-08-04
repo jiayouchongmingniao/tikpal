@@ -4558,8 +4558,8 @@ try {
   await expect(client, "document.querySelectorAll('[data-web-mode-provider]').length >= 10", "Explore side panel exposes common web player providers");
   await expect(
     client,
-    "document.querySelector('[data-web-mode-proxy-toggle]')?.tagName === 'BUTTON' && document.querySelector('[data-web-mode-top-back]') !== null && document.querySelector('[data-web-mode-text-scale]')?.textContent.includes('Font') && [...document.querySelectorAll('[data-web-mode-text-scale-option]')].map((node) => node.textContent?.trim()).join(',') === 'Small,Medium,Large' && document.querySelector('[data-web-mode-text-scale-option=\"1.1\"].is-active') !== null && document.querySelector('[data-web-mode-keyboard-toggle]') === null && document.querySelector('.web-mode-actions') === null",
-    "Explore side panel exposes proxy, provider text scale, and one top-right Close control without a manual Keyboard button"
+    "document.querySelector('[data-web-mode-proxy-status]')?.tagName !== 'BUTTON' && document.querySelector('[data-web-mode-top-back]') !== null && document.querySelector('[data-web-mode-text-scale]')?.textContent.includes('Font') && [...document.querySelectorAll('[data-web-mode-text-scale-option]')].map((node) => node.textContent?.trim()).join(',') === 'Small,Medium,Large' && document.querySelector('[data-web-mode-text-scale-option=\"1.1\"].is-active') !== null && document.querySelector('[data-web-mode-keyboard-toggle]') === null && document.querySelector('.web-mode-actions') === null",
+    "Explore side panel exposes read-only proxy status, provider text scale, and one top-right Close control without a manual Keyboard button"
   );
   await expect(
     client,

@@ -8425,9 +8425,19 @@ select {
   white-space: nowrap;
 }
 
+.web-mode-proxy-status {
+  cursor: default;
+  user-select: none;
+}
+
 .web-mode-proxy-chip.is-proxy {
   color: #08110c;
   background: #71e59a;
+}
+
+.web-mode-proxy-chip.is-off {
+  color: rgba(226, 238, 245, 0.76);
+  background: rgba(255, 255, 255, 0.07);
 }
 
 .web-mode-top-back {

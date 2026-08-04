@@ -139,6 +139,10 @@ install_physical_display_prepare() {
   install -o root -g root -m 0755 "$helper" "$target"
   mkdir -p "$dropin_dir"
   cat > "$dropin_dir/physical-display.conf" <<EOF
+[Unit]
+Wants=display_turzx.service
+After=display_turzx.service
+
 [Service]
 Environment=TIKPAL_KIOSK_ENV_FILE=$APP_DIR/.env.kiosk
 ExecStartPre=+/usr/local/sbin/tikpal-physical-display-prepare wait-ready

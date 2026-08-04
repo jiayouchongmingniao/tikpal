@@ -2,6 +2,7 @@ const API_ROOT = "http://127.0.0.1:8787/api/v1";
 const BYPASS_LIST = ["localhost", "127.0.0.1", "[::1]", "<local>"];
 const PROVIDER_TEXT_SCALE_VALUES = [1, 1.1, 1.2];
 const FONT_THEME_VALUES = new Set(["system", "hardware", "precision", "sans", "serif", "mono"]);
+const DIRECT_PROXY_PROVIDER_IDS = new Set(["qq_music", "netease_music"]);
 
 export function normalizeProviderTextScale(value, fallback = 1.1) {
   const numeric = typeof value === "number" ? value : Number(String(value ?? "").trim());
@@ -15,7 +16,8 @@ export function normalizeFontTheme(value, fallback = "system") {
   return FONT_THEME_VALUES.has(normalized) ? normalized : fallback;
 }
 
-export function buildProxyConfig(settings = {}) {
+export function buildProxyConfig(settings = {}, providerId = "") {
+  if (DIRECT_PROXY_PROVIDER_IDS.has(String(providerId || ""))) return { mode: "direct" };
   if (settings.proxyEnabled === false) return { mode: "direct" };
 
   let proxyUrl;
@@ -42,12 +44,13 @@ export function buildProxyConfig(settings = {}) {
   };
 }
 
-export function buildProxyKey(settings = {}) {
-  return JSON.stringify(buildProxyConfig(settings));
+export function buildProxyKey(settings = {}, providerId = "") {
+  return JSON.stringify(buildProxyConfig(settings, providerId));
 }
 
 let appliedSettingsRevision = null;
 let appliedProxyKey = null;
+let appliedProviderId = null;
 let syncPromise = null;
 
 async function readState() {
@@ -69,16 +72,18 @@ async function confirmApplied(settingsUpdatedAt) {
   if (!response.ok) throw new Error(`Explore proxy confirmation returned ${response.status}`);
 }
 
-async function syncProxy() {
+async function syncProxy(providerId = "") {
   const state = await readState();
   const revision = state.settings?.updatedAt;
   if (!revision) throw new Error("Explore proxy settings have no revision");
   const settings = state.settings || {};
-  const proxyKey = buildProxyKey(settings);
+  const normalizedProviderId = String(providerId || "");
+  const proxyKey = buildProxyKey(settings, normalizedProviderId);
 
-  if (proxyKey !== appliedProxyKey) {
-    await setProxy(buildProxyConfig(settings));
+  if (proxyKey !== appliedProxyKey || normalizedProviderId !== appliedProviderId) {
+    await setProxy(buildProxyConfig(settings, normalizedProviderId));
     appliedProxyKey = proxyKey;
+    appliedProviderId = normalizedProviderId;
   }
   if (revision !== appliedSettingsRevision) {
     await confirmApplied(revision);
@@ -89,6 +94,7 @@ async function syncProxy() {
     ok: true,
     revision,
     proxyKey,
+    providerProxyMode: buildProxyConfig(settings, normalizedProviderId).mode === "direct" ? "direct" : "proxy",
     providerTextScale: normalizeProviderTextScale(settings.providerTextScale),
     fontTheme: normalizeFontTheme(state.preferences?.fontTheme),
     providers: state.providers || []
@@ -175,8 +181,10 @@ async function fetchNeteaseAudio(url, sender, id) {
   return { ok: true, streamed: true, byteLength: buffer.byteLength, total };
 }
 
-function queueSync() {
-  if (!syncPromise) syncPromise = syncProxy().finally(() => { syncPromise = null; });
+function queueSync(providerId = "") {
+  if (!syncPromise || String(providerId || "") !== appliedProviderId) {
+    syncPromise = syncProxy(providerId).finally(() => { syncPromise = null; });
+  }
   return syncPromise;
 }
 
@@ -205,11 +213,11 @@ if (globalThis.chrome?.runtime?.onMessage) {
       return false;
     }
     if (message?.type !== "sync-proxy") return false;
-    queueSync()
+    queueSync(message.providerId)
       .then(async (result) => {
         const provider = message.providerId && result.providers.find((item) => item.id === message.providerId);
         sendResponse({ ...result, providerTextScaleApplied: result.providerTextScale });
-        if (provider?.url && sender.tab?.id && chrome.tabs?.update) {
+        if (provider?.url && sender.tab?.id && chrome.tabs?.update && message.providerPage !== true) {
           void chrome.tabs.update(sender.tab.id, { url: provider.url });
         }
       })

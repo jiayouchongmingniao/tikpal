@@ -120,7 +120,7 @@
       <p class="eyebrow">Explore</p>
       <h1><span id="provider-label">This music service</span> <span id="headline-tail">did not respond</span></h1>
       <p>
-        <span id="body-copy">The official web player could not be reached from this device. Use the Proxy switch on the right, choose another provider, or try again later.</span>
+        <span id="body-copy">The official web player could not be reached from this device. Change Proxy in Settings, choose another provider, or try again later.</span>
       </p>
       <div class="chips" id="connection-details" aria-label="Connection details">
         <span class="chip" id="proxy-chip">Direct</span>
@@ -134,68 +134,97 @@
             title: "Tikpal Explore",
             provider: "This music service",
             tail: "did not respond",
-            body: "The official web player could not be reached from this device. Use the Proxy switch on the right, choose another provider, or try again later.",
+            body: "The official web player could not be reached from this device. Change Proxy in Settings, choose another provider, or try again later.",
             proxyOn: "Proxy On",
             direct: "Direct",
+            needsProxy: "Turn Proxy On in Settings",
+            proxyFailed: "Proxy did not connect",
+            tryAgain: "Try again",
             details: "Connection details"
           },
           "zh-CN": {
             title: "Tikpal Explore",
             provider: "这个音乐服务",
             tail: "暂时没有响应",
-            body: "此设备暂时无法打开官方网页播放器。请在右侧切换代理、选择其他服务，或稍后重试。",
+            body: "此设备暂时无法打开官方网页播放器。请到 Settings 修改 Proxy、选择其他服务，或稍后重试。",
             proxyOn: "代理已开",
             direct: "直连",
+            needsProxy: "请在 Settings 打开 Proxy",
+            proxyFailed: "Proxy 未连通",
+            tryAgain: "稍后重试",
             details: "连接状态"
           },
           de: {
             title: "Tikpal Explore",
             provider: "Dieser Musikdienst",
             tail: "antwortet nicht",
-            body: "Der offizielle Webplayer ist auf diesem Gerät nicht erreichbar. Schalte rechts den Proxy um, wähle einen anderen Dienst oder versuche es später erneut.",
+            body: "Der offizielle Webplayer ist auf diesem Gerät nicht erreichbar. Ändere Proxy in Settings, wähle einen anderen Dienst oder versuche es später erneut.",
             proxyOn: "Proxy Ein",
             direct: "Direkt",
+            needsProxy: "Proxy in Settings einschalten",
+            proxyFailed: "Proxy nicht verbunden",
+            tryAgain: "Erneut versuchen",
             details: "Verbindungsdetails"
           },
           it: {
             title: "Tikpal Explore",
             provider: "Questo servizio musicale",
             tail: "non risponde",
-            body: "Il player web ufficiale non è raggiungibile da questo dispositivo. Cambia Proxy a destra, scegli un altro servizio o riprova più tardi.",
+            body: "Il player web ufficiale non è raggiungibile da questo dispositivo. Cambia Proxy in Settings, scegli un altro servizio o riprova più tardi.",
             proxyOn: "Proxy On",
             direct: "Diretto",
+            needsProxy: "Attiva Proxy in Settings",
+            proxyFailed: "Proxy non connesso",
+            tryAgain: "Riprova",
             details: "Dettagli connessione"
           },
           ko: {
             title: "Tikpal Explore",
             provider: "이 음악 서비스",
             tail: "응답하지 않음",
-            body: "이 기기에서 공식 웹 플레이어에 연결할 수 없습니다. 오른쪽에서 프록시를 바꾸거나 다른 서비스를 선택한 뒤 다시 시도하세요.",
+            body: "이 기기에서 공식 웹 플레이어에 연결할 수 없습니다. Settings에서 Proxy를 바꾸거나 다른 서비스를 선택한 뒤 다시 시도하세요.",
             proxyOn: "프록시 켜짐",
             direct: "직접",
+            needsProxy: "Settings에서 Proxy 켜기",
+            proxyFailed: "Proxy 연결 안 됨",
+            tryAgain: "다시 시도",
             details: "연결 정보"
           },
           ja: {
             title: "Tikpal Explore",
             provider: "この音楽サービス",
             tail: "が応答しません",
-            body: "このデバイスから公式 Web プレイヤーに接続できません。右側でプロキシを切り替えるか、別のサービスを選んでください。",
+            body: "このデバイスから公式 Web プレイヤーに接続できません。Settings で Proxy を変更するか、別のサービスを選んでください。",
             proxyOn: "プロキシ オン",
             direct: "直接",
+            needsProxy: "Settings で Proxy をオン",
+            proxyFailed: "Proxy 未接続",
+            tryAgain: "再試行",
             details: "接続情報"
           },
           es: {
             title: "Tikpal Explore",
             provider: "Este servicio de música",
             tail: "no responde",
-            body: "No se pudo abrir el reproductor web oficial desde este dispositivo. Cambia Proxy a la derecha, elige otro servicio o inténtalo más tarde.",
+            body: "No se pudo abrir el reproductor web oficial desde este dispositivo. Cambia Proxy en Settings, elige otro servicio o inténtalo más tarde.",
             proxyOn: "Proxy On",
             direct: "Directo",
+            needsProxy: "Activa Proxy en Settings",
+            proxyFailed: "Proxy no conectó",
+            tryAgain: "Inténtalo de nuevo",
             details: "Detalles de conexión"
           }
         };
         const params = new URLSearchParams(location.search);
         const normalizeLocale = (value) => Object.prototype.hasOwnProperty.call(copy, value || "") ? value : "en";
+        const friendlyReason = (dict) => {
+          const value = String(params.get("reason") || "load_failed").trim();
+          const normalized = value.toLowerCase();
+          if (normalized.includes("needs proxy on")) return dict.needsProxy;
+          if (normalized.includes("proxy did not connect")) return dict.proxyFailed;
+          if (normalized === "load_failed" || normalized.includes("did not respond") || normalized.includes("did not open")) return dict.tryAgain;
+          return value;
+        };
         const applyLocale = (localeValue) => {
           const locale = normalizeLocale(localeValue);
           const dict = copy[locale] || copy.en;
@@ -207,10 +236,9 @@
           document.getElementById("headline-tail").textContent = dict.tail;
           document.getElementById("body-copy").textContent = dict.body;
           document.getElementById("proxy-chip").textContent = proxy;
+          document.getElementById("reason-chip").textContent = friendlyReason(dict);
           document.getElementById("connection-details").setAttribute("aria-label", dict.details);
         };
-        const reason = params.get("reason") || "load_failed";
-        document.getElementById("reason-chip").textContent = reason;
         applyLocale(params.get("lang") || "en");
         fetch("/api/v1/preferences", { cache: "no-store" })
           .then((response) => response.ok ? response.json() : null)

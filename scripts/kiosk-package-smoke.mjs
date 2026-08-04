@@ -35,6 +35,8 @@ const requiredFiles = [
   "deploy/chromium/chromium-flags.conf",
   "deploy/chromium/managed-policies.json",
   "deploy/chromium/env.kiosk.example",
+  "deploy/turzx/install-turzx-evdi-display.sh",
+  "deploy/turzx/README.md",
   "src/i18n.tsx",
   "deploy/moode/tikpal-audio-adapt.sh",
   "deploy/moode/tikpal-audio-output-profile.sh",
@@ -52,6 +54,7 @@ const requiredFiles = [
   "deploy/moode/tikpal-upnp-label.sh",
   "deploy/moode/tikpal-upnp-metadata.sh",
   "public/web-mode-error.html",
+  "public/web-mode-background.html",
   "deploy/moode/tikpal-alsa-loopback.sh",
   "deploy/moode/tikpal-airplay-enable.sh",
   "deploy/moode/tikpal-airplay-transport.sh",
@@ -152,6 +155,13 @@ async function run() {
     assert(config.rules.singleProxy.scheme === expectedScheme, `${expectedScheme} proxy should preserve its scheme`);
     assert(config.rules.bypassList.includes("localhost") && config.rules.bypassList.includes("127.0.0.1") && config.rules.bypassList.includes("<local>"), "extension proxy should bypass loopback hosts");
   }
+  assert(buildProxyConfig({ proxyEnabled: true, proxyUrl: "http://proxy.local:8080" }, "qq_music").mode === "direct", "QQ Music should stay direct even when global Explore proxy is on");
+  assert(buildProxyConfig({ proxyEnabled: true, proxyUrl: "http://proxy.local:8080" }, "netease_music").mode === "direct", "NetEase Cloud Music should stay direct even when global Explore proxy is on");
+  assert(
+    buildProxyKey({ proxyEnabled: true, proxyUrl: "http://proxy.local:8080" }, "qq_music")
+      !== buildProxyKey({ proxyEnabled: true, proxyUrl: "http://proxy.local:8080" }, "spotify"),
+    "provider-specific proxy mode should be part of the extension proxy key"
+  );
   assertThrows(() => buildProxyConfig({ proxyEnabled: true, proxyUrl: "ftp://proxy.local:21" }), "extension should reject unsupported proxy protocols");
   assert(normalizeProviderTextScale(1.2) === 1.2 && normalizeProviderTextScale("1.10") === 1.1, "extension should normalize supported provider text scales");
   assert(normalizeProviderTextScale(1.05) === 1.1, "extension should keep provider text scale to the supported Small / Medium / Large values");
@@ -170,6 +180,7 @@ async function run() {
   await assertExecutable("deploy/chromium/tikpal-physical-display-prepare.sh");
   await assertExecutable("deploy/chromium/tikpal-kiosk-viewerctl.sh");
   await assertExecutable("deploy/chromium/tikpal-web-mode.sh");
+  await assertExecutable("deploy/turzx/install-turzx-evdi-display.sh");
   await assertExecutable("deploy/moode/tikpal-audio-adapt.sh");
   await assertExecutable("deploy/moode/tikpal-audio-output-profile.sh");
   await assertExecutable("deploy/moode/tikpal-local-library-sync.sh");
@@ -429,6 +440,8 @@ esac
   assert(
     systemdInstaller.includes("install_physical_display_prepare")
       && systemdInstaller.includes("/usr/local/sbin/tikpal-physical-display-prepare")
+      && systemdInstaller.includes("Wants=display_turzx.service")
+      && systemdInstaller.includes("After=display_turzx.service")
       && systemdInstaller.includes("ExecStartPre=+/usr/local/sbin/tikpal-physical-display-prepare wait-ready")
       && systemdInstaller.includes("systemd-run --quiet --collect --no-block --unit=tikpal-physical-display-kick")
       && systemdInstaller.includes("--setenv=HOME=/root")
@@ -498,7 +511,12 @@ esac
       && kioskEnv.includes("TIKPAL_PHYSICAL_DISPLAY_SAFE_BRIGHTNESS=45")
       && kioskEnv.includes("TIKPAL_PHYSICAL_DISPLAY_SAFE_CONTRAST=50")
       && kioskEnv.includes("TIKPAL_PHYSICAL_DISPLAY_INPUT_SOURCE=")
-      && kioskEnv.includes("TIKPAL_PHYSICAL_DISPLAY_DRM_CONNECTOR=/sys/class/drm/card0-HDMI-A-1")
+      && kioskEnv.includes("TIKPAL_KIOSK_XRANDR_OUTPUT=auto")
+      && kioskEnv.includes("TIKPAL_KIOSK_XRANDR_PRIMARY_PREFERRED_OUTPUTS=\"HDMI-1 HDMI-A-1\"")
+      && kioskEnv.includes("TIKPAL_KIOSK_XRANDR_FALLBACK_TO_CONNECTED=1")
+      && kioskEnv.includes("TIKPAL_PHYSICAL_DISPLAY_DRM_CONNECTOR=auto")
+      && kioskEnv.includes("TIKPAL_PHYSICAL_DISPLAY_DRM_CONNECTORS=auto")
+      && kioskEnv.includes("TIKPAL_PHYSICAL_DISPLAY_DRM_FALLBACK_TO_CONNECTED=1")
       && kioskEnv.includes("TIKPAL_PHYSICAL_DISPLAY_WAIT_READY_TIMEOUT_SECONDS=45")
       && kioskEnv.includes("TIKPAL_PHYSICAL_DISPLAY_DELAYED_KICK_SECONDS=\"8 25\"")
       && kioskEnv.includes("TIKPAL_PHYSICAL_DISPLAY_DISABLE_POWER_KEYS=1")
@@ -530,6 +548,7 @@ esac
   assert(kioskEnv.includes("TIKPAL_WEB_MODE_PROVIDER_DEBUG_PORT=9234"), "kiosk env should document the Explore provider local CDP port");
   assert(kioskEnv.includes("TIKPAL_WEB_MODE_PROVIDER_GUARD=1"), "kiosk env should enable the Explore provider guard by default");
   assert(kioskEnv.includes("TIKPAL_WEB_MODE_ERROR_PAGE_URL=http://127.0.0.1:4173/web-mode-error.html"), "kiosk env should point provider guard at the local friendly error page");
+  assert(kioskEnv.includes("TIKPAL_WEB_MODE_BACKGROUND_URL=http://127.0.0.1:4173/web-mode-background.html"), "kiosk env should point Explore at the persistent branded background page");
   assert(kioskEnv.includes("TIKPAL_WEB_MODE_TRANSITION_URL=http://127.0.0.1:4173/web-mode-transition.html"), "kiosk env should point staged Explore switches at the local transition page");
   assert(kioskEnv.includes("TIKPAL_WEB_MODE_STAGE_POSITION=2560,0"), "kiosk env should stage provider windows offscreen");
   assert(kioskEnv.includes("TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS=2"), "kiosk env should bound Explore provider switch locking");
@@ -547,6 +566,7 @@ esac
   const onboardTheme = await readFile(path.join(ROOT, "deploy/chromium/onboard-themes/Tikpal-Classic.colors"), "utf8");
   const serverSource = await readFile(path.join(ROOT, "server/index.mjs"), "utf8");
   const webModeErrorPage = await readFile(path.join(ROOT, "public/web-mode-error.html"), "utf8");
+  const webModeBackgroundPage = await readFile(path.join(ROOT, "public/web-mode-background.html"), "utf8");
   const webModeCrossfadeScript = await readFile(path.join(ROOT, "deploy/moode/tikpal-web-mode-crossfade.sh"), "utf8");
   const audioAdaptScript = await readFile(path.join(ROOT, "deploy/moode/tikpal-audio-adapt.sh"), "utf8");
   const localLibrarySyncScript = await readFile(path.join(ROOT, "deploy/moode/tikpal-local-library-sync.sh"), "utf8");
@@ -633,7 +653,9 @@ esac
   assert(!extensionContent.includes("provider-zoom-overflow"), "provider pages should not round-trip overflow fallback through the background service worker");
   assert(extensionContent.includes("netease-audio-mirror.js"), "NetEase provider pages should inject the audio mirror into the page world");
   assert(extensionBackground.includes("isAllowedNeteaseAudioUrl") && extensionBackground.includes('message?.type === "fetch-audio"') && extensionBackground.includes("chrome.tabs.sendMessage"), "Explore extension background should proxy only allowed NetEase audio fetches in chunks");
+  assert(extensionBackground.includes("DIRECT_PROXY_PROVIDER_IDS") && extensionBackground.includes('"qq_music"') && extensionBackground.includes('"netease_music"'), "Explore extension should keep QQ Music and NetEase direct even when global proxy is on");
   assert(extensionContent.includes("tikpal-netease-fetch-audio") && extensionContent.includes('chrome.runtime.sendMessage({ type: "fetch-audio"') && extensionContent.includes('message?.type !== "fetch-audio-result"'), "NetEase page script should be able to request chunked extension-backed audio bytes");
+  assert(extensionContent.includes("providerHostIds") && extensionContent.includes('id: "qq_music"') && extensionContent.includes("inferProviderId"), "Explore provider pages should infer their provider id after bootstrap navigation");
   assert(extensionContent.includes('chrome.runtime.sendMessage({ type: "keyboard", enabled, force }'), "Explore extension should distinguish new input focus from keyboard hide requests");
   assert(extensionContent.includes("suno\\.com") && extensionContent.includes('event.type === "focusin" && !allowProgrammaticInputFocus'), "Suno should ignore page-driven autofocus until the user taps an input");
   assert(extensionContent.includes("editableTarget(document.activeElement)"), "Explore extension should hide Onboard after provider input focus ends");
@@ -644,12 +666,13 @@ esac
   assert(!extensionContent.includes("if (document.hasFocus() && editableTarget(document.activeElement)) requestKeyboard(true);"), "Explore extension should not reopen Onboard after its own close button hides it");
   assert(extensionBackground.includes("setKeyboardVisible"), "Explore extension background should forward keyboard actions to the loopback API");
   assert(extensionBackground.includes("chrome.tabs.update(sender.tab.id, { url: provider.url })"), "extension background should navigate the bootstrap tab after proxy sync");
-  assert(sidePanelSource.includes('sendWebModeAction({ type: "proxy", enabled:'), "Explore side panel should use the shared proxy action");
+  assert(!sidePanelSource.includes('sendWebModeAction({ type: "proxy"') && !sidePanelSource.includes("data-web-mode-proxy-toggle"), "Explore side panel should not hot-toggle Proxy from the resident provider pool");
+  assert(sidePanelSource.includes("data-web-mode-proxy-status") && sidePanelSource.includes('"explore.proxyChangeInSettings"'), "Explore side panel should show Proxy On/Off as status and point users to Settings");
   assert(sidePanelSource.includes('sendWebModeAction({ type: "provider_text_scale"') && sidePanelSource.includes("data-web-mode-text-scale-option"), "Explore side panel should expose the provider text scale action");
   assert(sidePanelSource.includes("inferFailedProviderFromError") && sidePanelSource.includes('"common.failed"') && sidePanelSource.includes("is-failed"), "Explore side panel should show provider-open failures without marking the provider active");
   assert(sidePanelSource.includes('residentStatus === "check_proxy"') && sidePanelSource.includes('"common.needProxyOn"'), "Explore side panel should show Need Proxy On from live provider probe state");
   assert(sidePanelSource.includes("isProxyNeededError") && sidePanelSource.includes("needs proxy on"), "Explore side panel should show Need Proxy On for proxy-related provider failures");
-  assert(sidePanelSource.includes('"common.proxyOn"') && sidePanelSource.includes('"common.proxyOff"') && !sidePanelSource.includes('"common.direct"'), "Explore proxy toggle should say Proxy On/Proxy Off instead of Direct");
+  assert(sidePanelSource.includes('"common.proxyOn"') && sidePanelSource.includes('"common.proxyOff"') && !sidePanelSource.includes('"common.direct"'), "Explore proxy status should say Proxy On/Proxy Off instead of Direct");
   assert(stylesSource.includes(".web-mode-provider.is-failed"), "Explore side panel should style failed provider-open state separately from Active");
   assert(stylesSource.includes(".web-mode-provider.is-proxy-unavailable"), "Explore side panel should give proxy-unavailable providers their own visual state");
   assert(!sidePanelSource.includes("updateWebModeSettings"), "Explore side panel should not reopen the provider to switch proxy mode");
@@ -824,16 +847,23 @@ esac
   assert(kioskLauncher.includes("detect_non_hdmi_card_id"), "kiosk launcher should detect the actual non-HDMI ALSA card");
   assert(kioskLauncher.includes("tikpal-audio-adapt.sh") && kioskLauncher.includes("resolve-browser"), "kiosk launcher should use the shared audio adapter for auto ALSA output");
   assert(kioskLauncher.includes('TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE="$(resolve_physical_alsa_output_device'), "kiosk launcher should resolve auto ALSA output before launching Chromium");
+  assert(kioskLauncher.includes("resolve_xrandr_primary_output") && kioskLauncher.includes("TIKPAL_KIOSK_XRANDR_FALLBACK_TO_CONNECTED"), "kiosk launcher should support HDMI-first, connected-output fallback");
   assert(
     physicalDisplayPrepare.includes("TIKPAL_PHYSICAL_DISPLAY_RESET_MODE:=1280x720")
       && physicalDisplayPrepare.includes("TIKPAL_PHYSICAL_DISPLAY_INPUT_SOURCE:=")
-      && physicalDisplayPrepare.includes("TIKPAL_PHYSICAL_DISPLAY_DRM_CONNECTOR:=/sys/class/drm/card0-HDMI-A-1")
+      && physicalDisplayPrepare.includes("TIKPAL_KIOSK_XRANDR_OUTPUT:=auto")
+      && physicalDisplayPrepare.includes("TIKPAL_KIOSK_XRANDR_PRIMARY_PREFERRED_OUTPUTS:=HDMI-1 HDMI-A-1")
+      && physicalDisplayPrepare.includes("TIKPAL_PHYSICAL_DISPLAY_DRM_CONNECTOR:=auto")
+      && physicalDisplayPrepare.includes("TIKPAL_PHYSICAL_DISPLAY_DRM_CONNECTORS:=$TIKPAL_PHYSICAL_DISPLAY_DRM_CONNECTOR")
+      && physicalDisplayPrepare.includes("TIKPAL_PHYSICAL_DISPLAY_DRM_FALLBACK_TO_CONNECTED:=1")
       && physicalDisplayPrepare.includes("TIKPAL_PHYSICAL_DISPLAY_DELAYED_KICK_SECONDS:=8 25")
       && physicalDisplayPrepare.includes("TIKPAL_PHYSICAL_DISPLAY_PCI_POWER_DEVICES:=")
       && physicalDisplayPrepare.includes("TIKPAL_PHYSICAL_DISPLAY_PCIE_ASPM_POLICY:=")
       && physicalDisplayPrepare.includes("TIKPAL_PHYSICAL_DISPLAY_DRM_POLL:=")
       && physicalDisplayPrepare.includes("TIKPAL_PHYSICAL_DISPLAY_NOUVEAU_PCI_ID:=")
       && physicalDisplayPrepare.includes("drm_connector_ready()")
+      && physicalDisplayPrepare.includes("drm_connector_bases()")
+      && physicalDisplayPrepare.includes("resolve_primary_output()")
       && physicalDisplayPrepare.includes("wait_for_drm_connector()")
       && physicalDisplayPrepare.includes("pci_stabilize()")
       && physicalDisplayPrepare.includes("drm_poll_stabilize()")
@@ -846,7 +876,7 @@ esac
       && physicalDisplayPrepare.includes("delayed_soft_kick()")
       && physicalDisplayPrepare.includes("XF86(PowerOff|Sleep|Suspend|Standby|Display|ScreenSaver)")
       && physicalDisplayPrepare.includes("xdotool search --onlyvisible --class Chromium-browser"),
-    "physical display helper should wait for HDMI/EDID, wake DDC safely, mode-reset the panel, stabilize PCI power, optionally rebind nouveau, block display power keys, and raise Chromium"
+    "physical display helper should wait for HDMI/USB display readiness, wake DDC safely, mode-reset the panel, stabilize PCI power, optionally rebind nouveau, block display power keys, and raise Chromium"
   );
   assert(kioskSession.includes("TIKPAL_KIOSK_X_COMMAND_TIMEOUT_SECONDS"), "kiosk session should expose an X command timeout");
   assert(kioskSession.includes("run_x_command xset"), "kiosk session should bound xset commands");
@@ -995,8 +1025,12 @@ esac
   assert(webModeScript.indexOf("call_onboard_method Show || true", webModeScript.indexOf("ensure_onboard()")) < webModeScript.indexOf("raise_onboard", webModeScript.indexOf("ensure_onboard()")), "web mode should show Onboard before raising it above Chromium");
   assert(webModeScript.includes("raise_window_without_focus"), "web mode guard should raise provider and side-panel windows without stealing input focus");
   assert(webModeScript.includes('raise_window_without_focus "$window"'), "web mode guard should keep tiled provider windows above the full-screen kiosk");
+  assert(webModeScript.includes("mark_window_above()") && webModeScript.includes("-b add,above"), "Explore provider and side-panel windows should use the above hint so fullscreen kiosk cannot cover them");
+  assert(webModeScript.includes("clear_window_above()") && webModeScript.includes("-b remove,above"), "Explore background and inactive provider windows should not keep the above hint");
+  assert(webModeScript.includes('while kill -0 "$pid"') && webModeScript.includes('kill -KILL "$pid"'), "provider guard shutdown should wait and force-kill stale guards before starting a replacement");
   assert(webModeScript.includes("TIKPAL_TILE_WINDOW_CHANGED=0"), "web mode guard should track whether a Chromium window actually needed retile");
   assert(webModeScript.includes('local force_raise="${3:-0}"'), "web mode guard should force a single provider raise when the guard first starts");
+  assert(webModeScript.includes("stack_refresh_ticks") && webModeScript.includes('if [[ "$stack_refresh_ticks" -ge 4 ]]'), "web mode guard should periodically reassert provider stacking above the kiosk without doing it every tick");
   assert(webModeScript.includes('[[ "$did_restack" == "1" ]] && raise_onboard'), "web mode guard should not raise Onboard on every polling pass");
   assert(webModeScript.includes('pkill -KILL -f -- "--user-data-dir=$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"'), "Explore close should force-exit a side panel that ignores graceful shutdown");
   assert(webModeScript.includes("org.onboard.window force-to-top true"), "Onboard should enable its Always on Top setting");
@@ -1078,9 +1112,15 @@ esac
     "web mode should show the right provider panel before the left loading veil"
   );
   assert(openProviderBody.includes('ensure_side_panel "$provider"'), "initial Explore should tell the side panel which provider is opening");
+  assert(openProviderBody.includes('ensure_background_veil "$provider"'), "initial Explore should start a branded left background before provider switching");
   assert(openProviderBody.includes('launch_transition_veil "$provider"'), "the visible Explore veil should receive the target provider");
+  assert(webModeScript.includes("ensure_background_veil()") && webModeScript.includes("close_background_veil"), "Explore should own a branded left background that closes with Explore");
+  assert(webModeScript.includes("launch_error_veil()") && webModeScript.includes("recover_or_cover_provider_failure()"), "provider failures should keep a complete left Explore surface");
+  assert(openProviderBody.includes("recover_or_cover_provider_failure") && openProviderBody.includes("close_error_veil"), "provider open failures should recover an old provider or show the friendly error veil");
+  assert(webModeScript.includes("TIKPAL_WEB_MODE_PROXY_CONNECT_ERROR:=Proxy did not connect. Try again."), "proxy failures should use a short user-facing retry message");
   assert(webModeScript.includes('panel_url="$panel_url?opening=$opening_provider"'), "initial side panel URL should carry its pending provider");
   assert(webModeScript.includes('transition_url="$transition_url?provider=$provider"'), "transition veil URL should carry its provider identity");
+  assert(webModeScript.includes('error_url="$TIKPAL_WEB_MODE_ERROR_PAGE_URL?provider=$provider_param&label=$label_param&reason=$reason_param&proxy=$proxy_param"'), "friendly Explore error pages should carry provider, reason, and proxy state");
   assert(openProviderBody.includes('launch_url="$TIKPAL_WEB_MODE_TRANSITION_URL?provider=$provider"'), "extension-enabled providers should start on the local bootstrap page");
   assert(webModeScript.includes("provider_uses_direct_bootstrap()") && webModeScript.includes("deezer) return 0") && openProviderBody.includes('if [[ "$proxy_enabled" == "1" && -n "$proxy_url" && ( "$extension_enabled" != "1" || "$launch_url" == "$url" ) ]]'), "command-line proxy switches should remain limited to extension-disabled fallback and explicit direct-bootstrap providers");
   assert(webModeScript.includes('target.type === "page"') && openProviderBody.includes("wait_for_real_provider_url"), "provider switches should wait for a real HTTPS page rather than a stale service worker");
@@ -1182,6 +1222,7 @@ esac
   assert(webModeCheck.stdout.includes("switch lock timeout: 2s"), "web mode should report the bounded provider switch lock timeout");
   assert(webModeCheck.stdout.includes(`xdotool: ${path.join(fakeXdoToolDir, "xdotool")}`), "web mode --check should report the xdotool it will use");
   assert(webModeCheck.stdout.includes("error page: http://127.0.0.1:4173/web-mode-error.html"), "web mode should report the friendly error page URL");
+  assert(webModeCheck.stdout.includes("background page: http://127.0.0.1:4173/web-mode-background.html"), "web mode should report the branded Explore background page URL");
   assert(webModeCheck.stdout.includes("transition page: http://127.0.0.1:4173/web-mode-transition.html"), "web mode should report the staged switch transition page");
   assert(webModeCheck.stdout.includes("onboard: 500,420 900,280"), "web mode should place the full Onboard keyboard near provider login inputs");
   assert(webModeCheck.stdout.includes("onboard input focus: 1"), "web mode should enable input-focus keyboard activation");
@@ -1233,6 +1274,7 @@ esac
   assert(providerGuardCheck.stdout.includes("qq mv playlist button: 1"), "provider guard should expose a manual QQ MV playlist return button");
   assert(providerGuardCheck.stdout.includes("qq mv replay button: 1"), "provider guard should expose the QQ MV replay button path");
   assert(providerGuardCheck.stdout.includes("qq mv cinema frame: 1"), "provider guard should expose the QQ MV cinema frame path");
+  assert(providerGuardCheck.stdout.includes("qq mv touch target: 1"), "provider guard should enlarge tiny QQ MV touch targets");
   const providerGuardSource = await readFile(path.join(ROOT, "deploy/chromium/tikpal-web-mode-guard.mjs"), "utf8");
   assert(providerGuardSource.includes("querySelectorAll(\"iframe\")"), "provider guard should scan same-origin QQ modal iframes");
   assert(providerGuardSource.includes("consentAcceptAllLabels"), "provider guard should keep accept-all cookie labels separate from generic consent labels");
@@ -1262,6 +1304,11 @@ esac
   assert(providerGuardSource.includes("lastKeyboardEnabled === enabled && now - lastKeyboardRequestMs < throttleMs"), "provider focus guard should not spam duplicate keyboard requests");
   assert(providerGuardSource.includes("lastOnboardVisible === enabled && now - lastOnboardActionMs < throttleMs"), "provider poll fallback should not spam duplicate launcher actions");
   assert(providerGuardSource.includes("TIKPAL_WEB_MODE_QQ_MV_CINEMA_MODE"), "provider guard should expose a QQ MV cinema mode switch");
+  assert(providerGuardSource.includes("qqMvTouchTargetExpression"), "provider guard should inject larger QQ MV hit targets without changing QQ layout");
+  assert(providerGuardSource.includes("data-tikpal-qq-mv-touch-target"), "QQ MV hit targets should expose a test hook on the original link");
+  assert(providerGuardSource.includes("__tikpalQqMvTouchTargetLinkAtPoint"), "QQ MV touch target should use page-local hit testing instead of a cross-window overlay");
+  assert(providerGuardSource.includes("hitWidth = 72") && providerGuardSource.includes("hitHeight = 44"), "QQ MV touch target should be large enough for physical touch");
+  assert(providerGuardSource.includes("await runQqMvTouchTargetFeatures(targets)"), "provider guard main loop should refresh QQ MV touch targets");
   assert(providerGuardSource.includes("qqMvCinemaExpression"), "provider guard should inject QQ MV cinema CSS/DOM");
   assert(providerGuardSource.includes("runQqMvCinemaFeatures"), "provider guard should run QQ MV cinema behavior");
   assert(providerGuardSource.includes("qqMvAutoPlayStates"), "provider guard should track per-MV auto-play attempts");
@@ -1336,8 +1383,11 @@ esac
   assert(webModeScript.indexOf('start_provider_guard "$provider" "$provider_profile" "$url" "$proxy_enabled" "$provider_port"') < webModeScript.indexOf('if ! wait_for_provider_ready "$provider_port" "$provider"; then'), "provider guard should start before the ready gate so cookie prompts can be accepted during entry");
 
   assert(webModeErrorPage.includes("did not respond"), "friendly Explore error page should avoid native Chromium error copy");
-  assert(webModeErrorPage.includes("Proxy switch"), "friendly Explore error page should point users to the side-panel proxy switch");
+  assert(webModeErrorPage.includes("Change Proxy in Settings") && !webModeErrorPage.includes("Proxy switch") && !webModeErrorPage.includes("右侧切换代理"), "friendly Explore error page should point users to Settings instead of a side-panel proxy switch");
   assert(!webModeErrorPage.includes("sendKioskHeartbeat"), "friendly Explore error page should not post kiosk heartbeats");
+  assert(webModeBackgroundPage.includes("/assets/tikpal-scene-logo.png") && webModeBackgroundPage.includes("Tikpal Explore Background"), "Explore background page should show a branded logo surface");
+  assert(!webModeBackgroundPage.includes("sendKioskHeartbeat"), "Explore background page should not post kiosk heartbeats");
+  assert(webModeScript.includes("background_windows") && webModeScript.includes('TIKPAL_WEB_MODE_STAGE_POSITION') && webModeScript.includes("windowlower"), "Explore window guard should park the branded background offscreen while an active provider is visible");
   const webModeTransitionPage = await readFile(path.join(ROOT, "public/web-mode-transition.html"), "utf8");
   assert(webModeTransitionPage.includes("Connecting"), "Explore transition page should show a concise connecting state");
   for (const providerId of ["suno", "spotify", "youtube_music", "apple_music", "tidal", "qobuz", "deezer", "amazon_music", "qq_music", "netease_music"]) {
@@ -1359,6 +1409,10 @@ esac
   assert(webModeScript.includes('const force = seedMode === "force"') && webModeScript.includes('start_provider_pool_prewarm "$provider" force'), "Explore proxy toggles should force resident providers back through prewarm");
   assert(webModeScript.includes("navigate_provider_target") && webModeScript.includes('TIKPAL_WEB_MODE_PROVIDER_PREWARM_FORCE=1') && webModeScript.includes('launch_provider_for_pool "$provider" 0 prewarm "$force_existing"'), "Forced provider prewarm should re-navigate existing resident pages after proxy changes");
   assert(webModeScript.includes("provider_direct_reachable") && webModeScript.includes("--noproxy '*'") && webModeScript.includes('"check_proxy"') && webModeScript.includes("needs Proxy On"), "Explore should probe direct provider reachability before marking Check proxy");
+  assert(webModeScript.includes("provider_prefers_direct_proxy") && webModeScript.includes("effective_provider_proxy_enabled"), "Explore launcher should support direct-preferred providers such as QQ Music and NetEase");
+  assert(webModeScript.includes("deezer|qq_music|netease_music"), "Explore should direct-launch QQ Music and NetEase instead of waiting on the transition bootstrap");
+  assert(webModeScript.includes("wait_for_entry=1") && webModeScript.includes("wait_for_full_ready=1") && webModeScript.includes('launch_provider_for_pool "$provider" entry'), "Explore active opens should wait for provider entry without blocking on the full ready probe");
+  assert(webModeScript.includes("setsid") && webModeScript.includes("TIKPAL_WEB_MODE_PROVIDER_PREWARM_FORCE=1"), "Explore provider prewarm should detach from the active open command");
   assert(webModeScript.includes('launch_provider_for_pool "$provider" 0 prewarm'), "Explore background prewarm should not block on slow provider readiness");
   assert(webModeScript.includes('pkill -TERM -f "$SCRIPT_DIR/tikpal-web-mode.sh prewarm"'), "Explore should stop stale prewarm queues before starting a new one");
   assert(providerGuardSource.includes("__tikpalProviderAudioGate"), "Explore provider guard should install resident provider audio gating");

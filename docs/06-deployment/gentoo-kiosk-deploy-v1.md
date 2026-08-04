@@ -32,8 +32,11 @@ TIKPAL_KIOSK_DISPLAY=:0
 TIKPAL_KIOSK_DISPLAY_MODE=physical
 TIKPAL_KIOSK_LOCAL_SCREEN=1
 TIKPAL_KIOSK_WINDOW=2560x720
-TIKPAL_KIOSK_XRANDR_OUTPUT=HDMI-1
+TIKPAL_KIOSK_XRANDR_OUTPUT=auto
 TIKPAL_KIOSK_XRANDR_MODE=2560x720
+TIKPAL_KIOSK_XRANDR_CLONE_OUTPUTS=auto
+TIKPAL_KIOSK_XRANDR_PRIMARY_PREFERRED_OUTPUTS="HDMI-1 HDMI-A-1"
+TIKPAL_KIOSK_XRANDR_FALLBACK_TO_CONNECTED=1
 TIKPAL_KIOSK_VIEWER=none
 TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE=_audioout
 TIKPAL_WEB_MODE_ALSA_OUTPUT_DEVICE=tikpal_bt66_dmix
@@ -70,13 +73,91 @@ The long-term display expectation is:
 DISPLAY=:0 XAUTHORITY=/home/moode/.Xauthority xrandr --query
 ```
 
-Expected high-signal line:
+Expected high-signal line with both screens attached:
 
 ```text
 HDMI-1 connected primary 2560x720+0+0
 ```
 
-The physical display prepare helper should run before and after kiosk start. Its job is to wait for the HDMI DRM connector and EDID at boot, disable DPMS/screen saver, keep the Nouveau PCI path awake, retile `HDMI-1` to `2560x720`, and apply the safe HDMI properties that stopped black-screen recovery churn on the Gentoo target.
+With only the TURZX USB/EVDI screen attached, HDMI may be absent. The long-term contract is still one `2560x720` kiosk, but the primary output falls back to the connected EVDI RandR output, for example:
+
+```text
+DVI-I-1-1 connected primary 2560x720+0+0
+```
+
+When a TURZX USB/EVDI screen is installed and should mirror the main HDMI kiosk, leave the primary output on `auto`, prefer HDMI, and clone any other connected output:
+
+```conf
+TIKPAL_DISPLAY_MIRROR_ENABLED=1
+TIKPAL_DISPLAY_MIRROR_OUTPUT=auto
+TIKPAL_DISPLAY_PRIMARY_OUTPUT=auto
+TIKPAL_DISPLAY_MODE=2560x720
+```
+
+Use `auto` rather than a fixed EVDI output name on this Gentoo host. The same TURZX device has appeared as both `DVI-I-1-2` and `DVI-I-1-1` across service install and reboot; the helper resolves the currently connected non-primary output each time.
+
+USB 2.0 TURZX/EVDI output is CPU and bandwidth sensitive at `2560x720`. The
+display helper leaves HDMI at its normal refresh, but defaults USB-style RandR
+outputs such as `DVI-I-1-1` to `TIKPAL_KIOSK_XRANDR_USB_RATE=29.95`. Set this
+to `none` only for temporary recording or animation checks where the extra CPU
+cost is acceptable.
+
+On units where the TURZX panel occasionally fails to enumerate at boot, enable
+one guarded USB recovery pass in `.env.kiosk`. Keep the PCI device explicit on
+the current Gentoo host so recovery only touches the USB controller that owns
+the TURZX/BT66 branch:
+
+```conf
+TIKPAL_TURZX_USB_RECOVERY_ENABLED=1
+TIKPAL_TURZX_USB_RECOVERY_PCI_DEVICE=0000:00:1a.0
+TIKPAL_TURZX_USB_RECOVERY_REQUIRE_ERROR=0
+TIKPAL_TURZX_USB_RECOVERY_AFTER_SECONDS=8
+TIKPAL_TURZX_USB_RECOVERY_SETTLE_SECONDS=8
+TIKPAL_TURZX_USB_RECOVERY_MIN_INTERVAL_SECONDS=300
+```
+
+This recovery is intentionally guarded and infrequent. It briefly disconnects the
+USB devices on that controller, then restarts `display_turzx.service` and waits
+again for DRM. A `/run` cooldown keeps automatic restart loops from repeatedly
+resetting the USB bus. `TIKPAL_TURZX_USB_RECOVERY_REQUIRE_ERROR=0` is only for
+machines where the target USB controller has been confirmed; leave it at the
+default `1` on generic hosts so Tikpal does not reset unrelated USB hardware.
+If `dmesg` still shows `device descriptor read/64, error -71` or
+`unable to enumerate USB device`, the failure is before EVDI and the remaining
+field recovery is a physical USB/display power replug.
+
+The safe HDMI-only rollback is:
+
+```bash
+DISPLAY=:0 XAUTHORITY=/home/moode/.Xauthority \
+  xrandr --output DVI-I-1-1 --off --output DVI-I-1-2 --off \
+    --output HDMI-1 --primary --mode 2560x720 --pos 0x0
+```
+
+### TURZX USB/EVDI Driver
+
+The TURZX USB panel uses EVDI and `display_turzx.service`. Keep the Tikpal-owned
+install wrapper in the repo, and place the approved TURZX source tree under
+`deploy/vendor/evdi-display-linux-turzx2/` once redistribution is cleared:
+
+```bash
+sudo /home/moode/code/tikpal/deploy/turzx/install-turzx-evdi-display.sh install
+```
+
+For one-off field recovery from an already copied source tree:
+
+```bash
+sudo /home/moode/code/tikpal/deploy/turzx/install-turzx-evdi-display.sh \
+  --source /root/evdi-display-linux-turzx2 install
+```
+
+The wrapper installs Gentoo prerequisites such as `x11-drivers/evdi`, verifies
+`libevdi.so.1`, calls the TURZX source tree's `make install`, and starts
+`display_turzx.service`. The kiosk drop-in soft-depends on this service with
+`Wants=display_turzx.service` and `After=display_turzx.service`; HDMI-only hosts
+continue to boot even if the TURZX service is absent.
+
+The physical display prepare helper should run before and after kiosk start. Its job is to wait for any configured physical display candidate, prefer HDMI when it is connected, fall back to the connected USB/EVDI output when HDMI is absent, disable DPMS/screen saver, keep the Nouveau PCI path awake, retile the selected primary output to `2560x720`, and apply the safe HDMI properties that stopped black-screen recovery churn on the Gentoo target.
 
 Install the repo-owned helper as the root command used by the systemd drop-in:
 
@@ -86,6 +167,10 @@ install -o root -g root -m 0755 \
   /usr/local/sbin/tikpal-physical-display-prepare
 mkdir -p /etc/systemd/system/tikpal-kiosk.service.d
 cat >/etc/systemd/system/tikpal-kiosk.service.d/physical-display.conf <<'EOF'
+[Unit]
+Wants=display_turzx.service
+After=display_turzx.service
+
 [Service]
 Environment=TIKPAL_KIOSK_ENV_FILE=/home/moode/code/tikpal/.env.kiosk
 ExecStartPre=+/usr/local/sbin/tikpal-physical-display-prepare wait-ready
@@ -396,9 +481,9 @@ TIKPAL_WEB_MODE_PROVIDER_PREWARM_DELAY_SECONDS=0.75
 TIKPAL_WEB_MODE_PROVIDER_PREWARM_LOCK_TIMEOUT_SECONDS=2
 ```
 
-Opening Explore starts the requested provider first, then prewarms the remaining fixed providers in the offscreen stage at `2560,0`: Suno, Spotify, YouTube Music, Apple Music, TIDAL, Qobuz, Deezer, Amazon Music, QQ Music, and NetEase Cloud Music. Background prewarm is intentionally window/guard-only: it should not wait for a slow provider page to become fully ready before moving to the next provider, and it uses a short launch-lock wait so an existing YouTube Music launch cannot stall the rest of the queue. The launcher seeds queued providers as `Prewarming` before their individual launch turn, then the per-provider guard promotes them to `Ready` once CDP reports an expected real provider URL; `Opening` is reserved for the provider the user explicitly selected. When Proxy is off, the launcher must run a short direct reachability probe against each provider's own URL; only providers that fail that probe are marked internally as `check_proxy`, shown to the user as `Need Proxy On`, and skipped, while direct-reachable providers continue to open or prewarm. Switching to an already resident provider must stop the background prewarm job, reveal and focus the existing provider window, restart its per-provider guard, and update `activeProvider`; it must not re-run the first-load readiness gate or roll back to the previous provider just because a site like YouTube Music, Apple Music, TIDAL, or Deezer has a slow provider-ready probe. Background providers stay muted and page-paused through the provider audio gate. Returning to a resident provider must clear tab mute, unmute media elements, and resume only the media that was playing when the provider was hidden. Repeated inactive guard polling must not overwrite that resume intent after the page is already paused. If an offscreen prewarm times out before the SPA reaches its real host, the per-provider guard must later clear stale `check_setup` once CDP reports an expected provider URL such as `https://tidal.com/`. `deploy/chromium/tikpal-web-mode.sh close` is the boundary that closes all resident providers and the side panel.
+Opening Explore starts a branded left background page first, then opens the requested provider and prewarms the remaining fixed providers in the offscreen stage at `2560,0`: Suno, Spotify, YouTube Music, Apple Music, TIDAL, Qobuz, Deezer, Amazon Music, QQ Music, and NetEase Cloud Music. The background page is a safety underlay, not a provider: if a provider or proxy switch fails before the error page can appear, the left side still shows the Tikpal Explore logo instead of leaking the main kiosk underneath. Once a real provider window is visible, the window guard must park this branded background offscreen and lower it; keeping both the background and active provider at `0,0 1920x720` can make the left pane flicker between the two windows on X11/EVDI mirror setups. The guard also reasserts provider and side-panel stacking above the full-screen kiosk periodically without stealing focus, because X11/EVDI mirror setups can occasionally leave a correctly tiled provider behind the main kiosk window. `deploy/chromium/tikpal-web-mode.sh close` must close this background along with all resident providers and the side panel. Background prewarm is intentionally window/guard-only: it should not wait for a slow provider page to become fully ready before moving to the next provider, and it uses a short launch-lock wait so an existing YouTube Music launch cannot stall the rest of the queue. The background prewarm process must be detached from the active open command with `setsid` or `nohup`, otherwise a finished active open can still look slow while the background queue continues. Active provider opens also avoid the old long-start gate: after the Chromium window is visible, the launcher only waits for the real provider URL to replace the Tikpal transition page; full readiness is promoted later by the per-provider guard. The launcher seeds queued providers as `Prewarming` before their individual launch turn, then the per-provider guard promotes them to `Ready` once CDP reports an expected real provider URL; `Opening` is reserved for the provider the user explicitly selected. When Proxy is off, the launcher must run a short direct reachability probe against each provider's own URL; only providers that fail that probe are marked internally as `check_proxy`, shown to the user as `Needs proxy`, and skipped, while direct-reachable providers continue to open or prewarm. QQ Music and NetEase Cloud Music are direct-preferred providers: even when global Proxy is on, the launcher and MV3 extension keep these two providers in direct mode, including after navigation to `y.qq.com` or `music.163.com`; they also direct-launch their official URL instead of waiting on the transition bootstrap path. Switching to an already resident provider must stop the background prewarm job, reveal and focus the existing provider window, restart its per-provider guard, and update `activeProvider`; it must not re-run the first-load readiness gate or roll back to the previous provider just because a site like YouTube Music, Apple Music, TIDAL, or Deezer has a slow provider-ready probe. Background providers stay muted and page-paused through the provider audio gate. Returning to a resident provider must clear tab mute, unmute media elements, and resume only the media that was playing when the provider was hidden. Repeated inactive guard polling must not overwrite that resume intent after the page is already paused. Provider guard replacement must wait for the old guard to exit and force-kill it if needed; duplicate guards polling the same QQ Music page can amplify flicker and high CPU on X11/EVDI mirror setups. If an offscreen prewarm times out before the SPA reaches its real host, the per-provider guard must later clear stale `check_setup` once CDP reports an expected provider URL such as `https://tidal.com/`.
 
-Proxy On/Off is treated as a reachability change for the entire resident pool. After the extension applies the new proxy mode to the active provider, the launcher restarts background prewarm with a forced seed so inactive cards move back through `Prewarming` and re-evaluate to `Ready` or `Need Proxy On` instead of keeping stale status. Existing inactive provider processes are not killed, but forced prewarm navigates their CDP page target back to the provider URL so a previous Tikpal error page or network timeout is retried under the new proxy mode.
+Proxy On/Off is treated as a reachability change for the entire resident pool. Change it from Settings -> Link -> Explore Proxy or the guarded Remote path; the Explore side panel only displays read-only `Proxy On` / `Proxy Off` status and must not hot-toggle proxy while the provider pool is resident. Error pages should point users to Settings, not to the side panel. After the extension applies the new proxy mode to the active provider, the launcher restarts background prewarm with a forced seed so inactive cards move back through `Prewarming` and re-evaluate to `Ready` or `Needs proxy` instead of keeping stale status. Existing inactive provider processes are not killed, but forced prewarm navigates their CDP page target back to the provider URL so a previous Tikpal error page or network timeout is retried under the new proxy mode.
 
 The proxy truth is `.tikpal/web-mode-settings.json`; the launcher fallback should prefer a proxy on the same Gentoo host:
 
@@ -408,7 +493,7 @@ TIKPAL_WEB_MODE_DEFAULT_PROXY_URL=http://127.0.0.1:7897
 
 If the proxy runs on a separate LAN machine, set it in Settings -> Link -> Explore Proxy or in `.tikpal/web-mode-settings.json`, for example `http://192.168.10.148:7897`. Do not leave a DHCP-specific proxy IP hard-coded in the repo defaults.
 
-Changing proxy state uses the MV3 extension and refreshes the active provider page while keeping its profile and window. The side panel toggle must read `Proxy On` or `Proxy Off`; do not use `Direct` as the visible switch state because direct mode still cannot reach several providers on this network. Cookies and login state stay in per-provider Chromium profiles under:
+Changing proxy state uses the MV3 extension and refreshes the active provider page while keeping its profile and window. The side panel status must read `Proxy On` or `Proxy Off`; do not use `Direct` as the visible state because direct mode still cannot reach several providers on this network. Cookies and login state stay in per-provider Chromium profiles under:
 
 ```bash
 /home/moode/.config/tikpal-web-mode/providers/<provider>
@@ -705,9 +790,13 @@ That soft-kick sequence:
 - Sends DDC power on, brightness `45`, and contrast `50`.
 - Leaves VCP `0x60` input source untouched by default because this panel can report a source code that does not match the live Xorg output. If a future unit needs forced HDMI-1, set `TIKPAL_PHYSICAL_DISPLAY_INPUT_SOURCE=0x11` only after confirming that code on the physical monitor.
 - Treat DDC readbacks as advisory on this panel. `D6` can drift back to `x02` shortly after a successful power-on write while Xorg, Chromium, and the physical HDMI signal remain healthy, so watchdog recovery must not restart services from that value alone.
-- Before kiosk start, waits for `/sys/class/drm/card0-HDMI-A-1/status` to become `connected` and for EDID to be readable, avoiding early Xorg `no screens found`.
+- Before kiosk start, waits for HDMI or USB/EVDI DRM connectors to become `connected` with readable EDID, avoiding early Xorg `no screens found`.
+- If enabled, runs one TURZX USB controller recovery pass when recent boot logs show USB descriptor/enum errors before any DRM connector becomes ready.
 - Runs `xset s off`, `xset s noblank`, `xset -dpms`, and `xset dpms force on`.
-- Turns `HDMI-1` off briefly, switches it to `1280x720`, waits briefly, then switches back to `2560x720 primary`.
+- Resolves the primary RandR output from `auto`: HDMI first when present, otherwise the connected USB/EVDI output.
+- Turns the selected primary output off briefly, switches it to `1280x720` when that mode exists, waits briefly, then switches back to `2560x720 primary`.
+- Reapplies any configured `TIKPAL_KIOSK_XRANDR_CLONE_OUTPUTS` only on the final target mode, so USB/EVDI panels that advertise only `2560x720` do not break the temporary `1280x720` wake step.
+- Applies `TIKPAL_KIOSK_XRANDR_USB_RATE=29.95` to `DVI-I-*` / `DVI-D-*` USB/EVDI outputs by default, reducing TURZX CPU load and USB 2.0 traffic while preserving the `2560x720` layout.
 - Reapplies the safe RandR properties (`dithering depth=8 bpc`, `dithering mode=off`, `scaling mode=Full`) when the driver exposes them.
 - Sets configured PCI display devices to `power/control=on`; on this host use `0000:03:00.0` for the GTX 750 Nouveau display function and `0000:03:00.1` for its HDMI audio function.
 - Optionally sets `/sys/module/drm_kms_helper/parameters/poll` to `N` with `TIKPAL_PHYSICAL_DISPLAY_DRM_POLL=0`, reducing connector polling against unused DVI outputs.
@@ -887,6 +976,8 @@ Use CDP to verify QQ Music MV cinema mode stays scoped to the provider pane:
 ```
 
 Expected MV behavior: `cinema="1"`, `playlistButton=true`, `playlistText=""`, `frame=true`, `nativeFullscreen=false`, `playbackError=false`, `innerWidth=1920`, `innerHeight=720`, and the video rectangle nearly fills the provider viewport with dark, borderless letterboxing when needed. During playback, the replay icon may exist but stays hidden; at `ended=true` or `nearEnded=true`, `replayVisible=true`. Tapping replay must move the same MV back to the beginning and then report `ended=false`, `nearEnded=false`, and `replayVisible=false` once playback resumes. If the MV initially stalls at a play overlay, it should become `paused=false` after the one-shot auto-play gate. The right `640x720` side panel must remain visible. MV completion does not auto-return or auto-start the next item; use the playlist icon when returning to the list is desired.
+
+QQ Music's playlist MV glyphs are physically small on a `2560x720` touch panel. The provider guard enlarges the effective hit area in-page around original MV links to about `72x44` without adding a cross-window transparent overlay. This keeps taps tied to the real QQ link and avoids accidentally activating an offscreen resident provider.
 
 Input checks:
 

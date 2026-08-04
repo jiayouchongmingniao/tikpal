@@ -196,6 +196,18 @@
   document.addEventListener("DOMContentLoaded", injectNeteaseAudioMirror, { once: true });
 
   const bootstrapUrl = "http://127.0.0.1:4173/web-mode-transition.html";
+  const providerHostIds = [
+    { id: "suno", pattern: /(^|\.)suno\.com$/i },
+    { id: "spotify", pattern: /(^|\.)open\.spotify\.com$/i },
+    { id: "youtube_music", pattern: /(^|\.)music\.youtube\.com$/i },
+    { id: "apple_music", pattern: /(^|\.)music\.apple\.com$/i },
+    { id: "tidal", pattern: /(^|\.)listen\.tidal\.com$|(^|\.)tidal\.com$/i },
+    { id: "qobuz", pattern: /(^|\.)play\.qobuz\.com$/i },
+    { id: "deezer", pattern: /(^|\.)deezer\.com$/i },
+    { id: "amazon_music", pattern: /(^|\.)music\.amazon\.com$/i },
+    { id: "qq_music", pattern: /(^|\.)y\.qq\.com$/i },
+    { id: "netease_music", pattern: /(^|\.)music\.163\.com$/i }
+  ];
   const providerTextScaleValues = [1, 1.1, 1.2];
   const providerFontThemeValues = new Set(["system", "hardware", "precision", "sans", "serif", "mono"]);
   const providerFontThemeFamilies = {
@@ -239,6 +251,10 @@
   const normalizeProviderFontTheme = (value, fallback = "system") => {
     const normalized = String(value ?? "").trim().toLowerCase().replaceAll("-", "_");
     return providerFontThemeValues.has(normalized) ? normalized : fallback;
+  };
+  const inferProviderId = () => {
+    const host = window.location.hostname;
+    return providerHostIds.find((provider) => provider.pattern.test(host))?.id || null;
   };
   const providerTextDensity = (scale) => scale;
   const providerFontFamily = (theme) => providerFontThemeFamilies[normalizeProviderFontTheme(theme)] || providerFontThemeFamilies.system;
@@ -432,7 +448,7 @@ html[data-tikpal-provider-font-theme] textarea {
     syncing = true;
     try {
       const isBootstrap = window.location.href.startsWith(bootstrapUrl);
-      const providerId = isBootstrap ? new URL(window.location.href).searchParams.get("provider") : null;
+      const providerId = isBootstrap ? new URL(window.location.href).searchParams.get("provider") : inferProviderId();
       const result = await new Promise((resolve) => {
         chrome.runtime.sendMessage({ type: "sync-proxy", providerId, providerPage: !isBootstrap && isProviderPage() }, resolve);
       });
