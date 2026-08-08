@@ -34,6 +34,7 @@
         background:
           linear-gradient(135deg, rgba(3, 5, 11, 0.98), rgba(9, 14, 26, 0.98)),
           #05070b;
+        transition: background 360ms ease;
       }
 
       body::before {
@@ -45,6 +46,10 @@
           radial-gradient(circle at 18% 28%, color-mix(in srgb, var(--provider-tone) 18%, transparent), transparent 34%),
           radial-gradient(circle at 78% 70%, rgba(116, 255, 214, 0.08), transparent 32%),
           linear-gradient(90deg, rgba(255, 255, 255, 0.025), transparent 18%, transparent 82%, rgba(255, 255, 255, 0.022));
+        opacity: 1;
+        transition:
+          opacity 360ms ease,
+          filter 360ms ease;
       }
 
       .brand {
@@ -53,6 +58,10 @@
         justify-items: center;
         gap: 22px;
         opacity: 0.72;
+        transform: scale(1);
+        transition:
+          opacity 320ms ease,
+          transform 360ms cubic-bezier(0.2, 0.8, 0.2, 1);
       }
 
       .brand img {
@@ -69,6 +78,22 @@
         font-weight: 760;
         letter-spacing: 0.18em;
         text-transform: uppercase;
+      }
+
+      body.is-revealing {
+        background:
+          linear-gradient(135deg, rgba(3, 5, 11, 1), rgba(6, 9, 17, 1)),
+          #05070b;
+      }
+
+      body.is-revealing::before {
+        opacity: 0.24;
+        filter: blur(6px);
+      }
+
+      body.is-revealing .brand {
+        opacity: 0;
+        transform: scale(0.965);
       }
     </style>
   </head>
@@ -94,6 +119,17 @@
         const providerId = new URLSearchParams(window.location.search).get("provider") || "";
         document.body.dataset.provider = providerId || "explore";
         document.documentElement.style.setProperty("--provider-tone", providers[providerId] || "#81d7ff");
+        const reveal = () => document.body.classList.add("is-revealing");
+        window.addEventListener("keydown", (event) => {
+          if (event.key === "F8" || event.code === "F8") {
+            reveal();
+          }
+        });
+        window.addEventListener("message", (event) => {
+          if (event.data === "tikpal:entry-reveal") {
+            reveal();
+          }
+        });
         const block = (event) => event.preventDefault();
         document.addEventListener("contextmenu", block, true);
         document.addEventListener("dragstart", block, true);

@@ -1,0 +1,258 @@
+--- a/display_drv.c
++++ b/display_drv.c
+@@ -634,6 +634,27 @@
+     udl->ep_out = 0;
+     display_free_resolution_list(udl);
+     LOGI(udl, "display disconnected\n");
++}
++
++static u8 display_default_backlight_value(void)
++{
++    const char *raw = getenv("TIKPAL_TURZX_DEFAULT_BRIGHTNESS");
++    char *end = NULL;
++    long value;
++
++    if (!raw || !*raw)
++        return 45;
++
++    errno = 0;
++    value = strtol(raw, &end, 10);
++    if (errno || end == raw)
++        return 45;
++    if (value < 1)
++        return 1;
++    if (value > 100)
++        return 100;
++
++    return (u8)value;
+ }
+ 
+ static int display_init(libusb_context *usb_ctx, struct display_device *udl, libusb_device *dev)
+@@ -647,6 +668,8 @@
+     udl->usb_ctx = usb_ctx;
+     pthread_mutex_init(&udl->urbs.lock, NULL);
+     pthread_cond_init(&udl->urbs.sleep, NULL);
++    pthread_mutex_init(&udl->backlight_lock, NULL);
++    udl->backlight_value = display_default_backlight_value();
+     sem_init(&udl->pm_done, 0, 0);
+     list_init(&udl->urbs.list);
+     list_init(&udl->entry);
+@@ -769,5 +792,6 @@
+     sem_destroy(&udl->pm_done);
+     pthread_cond_destroy(&udl->urbs.sleep);
+     pthread_mutex_destroy(&udl->urbs.lock);
++    pthread_mutex_destroy(&udl->backlight_lock);
+     free(udl);
+ }
+--- a/display_drv.h
++++ b/display_drv.h
+@@ -113,6 +113,8 @@
+     sem_t pm_done;
+ 
+     u64 last_update_time;
++    pthread_mutex_t backlight_lock;
++    u8 backlight_value;
+     u64 last_drop_time;
+ 
+ #if DISPLAY_LOG_LEVEL_DEBUG
+@@ -206,6 +208,8 @@
+ int display_submit_urb(struct display_device *udl, char **urb_buf_ptr, struct libusb_transfer **urb_ptr, u32 *size);
+ 
+ int display_evdi_open(struct display_device *udl);
++u8 display_get_backlight_value(struct display_device *udl);
++int display_set_backlight_value(struct display_device *udl, u8 value);
+ void display_evdi_close(struct display_device *udl);
+ int display_usb_build_path(libusb_device *dev, char *path, size_t path_len);
+ 
+--- a/display_evdi.c
++++ b/display_evdi.c
+@@ -51,6 +51,55 @@
+     wrptr = display_set_register(wrptr, DISPLAY_CMD_HEIGHT_HIGH, height >> 8);
+     wrptr = display_set_register(wrptr, DISPLAY_CMD_HEIGHT_LOW, height);
+     return wrptr;
++}
++
++static u8 display_clamp_backlight_value(u8 value)
++{
++    if (value < 1)
++        return 1;
++    if (value > 100)
++        return 100;
++    return value;
++}
++
++u8 display_get_backlight_value(struct display_device *udl)
++{
++    u8 value;
++
++    pthread_mutex_lock(&udl->backlight_lock);
++    value = udl->backlight_value;
++    pthread_mutex_unlock(&udl->backlight_lock);
++
++    return display_clamp_backlight_value(value);
++}
++
++int display_set_backlight_value(struct display_device *udl, u8 value)
++{
++    struct libusb_transfer *urb;
++    char *wrptr;
++    int ret;
++
++    value = display_clamp_backlight_value(value);
++    pthread_mutex_lock(&udl->backlight_lock);
++    udl->backlight_value = value;
++    pthread_mutex_unlock(&udl->backlight_lock);
++
++    if (!udl->devh || udl->blank_mode != DRM_MODE_DPMS_ON)
++        return 0;
++
++    urb = display_get_urb(udl);
++    if (!urb)
++        return -EAGAIN;
++
++    wrptr = (char *)urb->buffer;
++    wrptr = display_set_blank_mode(wrptr, DRM_MODE_DPMS_ON);
++    wrptr = display_set_blank_value(wrptr, value);
++    ret = display_submit_urb(udl, &wrptr, &urb, NULL);
++    if (ret) {
++        LOGE(udl, "set backlight value failed: %d\n", ret);
++        return ret;
++    }
++    display_sync_pending_urbs(udl, DEFAULT_TIMEOUT_S);
++    return 0;
+ }
+ 
+ static int display_crtc_set_state_to_hw(struct display_device *udl, int blank_mode)
+@@ -67,7 +116,8 @@
+ 
+     wrptr = (char *) urb->buffer;
+     wrptr = display_set_blank_mode(wrptr, blank_mode);
+-    wrptr = display_set_blank_value(wrptr, blank_mode == DRM_MODE_DPMS_ON ? 100 : 0);
++    wrptr = display_set_blank_value(wrptr,
++                    blank_mode == DRM_MODE_DPMS_ON ? display_get_backlight_value(udl) : 0);
+     ret = display_submit_urb(udl, &wrptr, &urb, NULL);
+     if (ret) {
+         LOGE(udl, "set blank mode failed: %d\n", ret);
+@@ -112,7 +162,7 @@
+         wrptr = display_set_register(wrptr, DISPLAY_CMD_MJPEG, 1);
+ 
+     wrptr = display_set_blank_mode(wrptr, DRM_MODE_DPMS_ON);
+-    wrptr = display_set_blank_value(wrptr, 100);// backlight val = 100
++    wrptr = display_set_blank_value(wrptr, display_get_backlight_value(udl));
+ 
+     ret = display_submit_urb(udl, &wrptr, &urb, NULL);
+     if (ret)
+--- a/display_manager.c
++++ b/display_manager.c
+@@ -401,51 +401,99 @@
+         libusb_exit(mgr->usb_ctx);
+     pthread_mutex_destroy(&mgr->lock);
+     free(mgr);
++}
++
++static void display_pm_write_ack(struct display_manager *mgr, bool ok)
++{
++    ssize_t wr;
++
++    wr = write(mgr->pm_fifo_out_fd, ok ? "A" : "E", 1);
++    if (wr < 0 && errno != EAGAIN && errno != EWOULDBLOCK)
++        LOGE(NULL, "pm ack write failed: %s\n", strerror(errno));
++}
++
++static int display_pm_parse_backlight_value(const char *cmd)
++{
++    char *end = NULL;
++    long value;
++
++    if (!cmd || cmd[0] != 'B')
++        return -EINVAL;
++
++    errno = 0;
++    value = strtol(cmd + 1, &end, 10);
++    if (errno || end == cmd + 1)
++        return -EINVAL;
++    while (*end == ' ' || *end == '\t' || *end == '\r' || *end == '\n')
++        end++;
++    if (*end)
++        return -EINVAL;
++    if (value < 0 || value > 100)
++        return -ERANGE;
++    if (value < 1)
++        value = 1;
++
++    return (int)value;
+ }
+ 
+ void display_pm_handle_event(struct display_manager *mgr)
+ {
++    char cmd_buf[32];
+     char cmd;
+     ssize_t nread;
+     int pm_request = PM_STATUS_NONE;
++    int backlight_value = -1;
++    bool ok = true;
+     struct display_list_head *entry;
+ 
+     if (mgr->pm_fifo_in_fd < 0)
+         return;
+ 
+-    nread = read(mgr->pm_fifo_in_fd, &cmd, 1);
++    nread = read(mgr->pm_fifo_in_fd, cmd_buf, sizeof(cmd_buf) - 1);
+     if (nread <= 0)
+         return;
++    cmd_buf[nread] = '\0';
++    cmd = cmd_buf[0];
+ 
+     switch (cmd) {
+     case 'R':
+         pm_request = PM_STATUS_RESUME;
+         mgr->pm_suspended = false;
+-
+         break;
+     case 'S':
+         pm_request = PM_STATUS_SUSPEND;
+         mgr->pm_suspended = true;
+         break;
++    case 'B':
++        backlight_value = display_pm_parse_backlight_value(cmd_buf);
++        if (backlight_value < 0) {
++            display_pm_write_ack(mgr, false);
++            return;
++        }
++        break;
+     default:
+         return;
+     }
+ 
+     for (entry = mgr->devices.next; entry != &mgr->devices; entry = entry->next) {
+         struct display_device *udl = display_container_of(entry, struct display_device, entry);
+-        udl->pm_request = pm_request;
+-        sem_wait(&udl->pm_done);
+-        udl->pm_request = PM_STATUS_NONE;
++
++        if (cmd == 'B') {
++            if (display_set_backlight_value(udl, (u8)backlight_value) != 0)
++                ok = false;
++            continue;
++        }
++
++        if (pm_request != PM_STATUS_NONE) {
++            udl->pm_request = pm_request;
++            sem_wait(&udl->pm_done);
++            udl->pm_request = PM_STATUS_NONE;
++        }
+     }
+ 
+     if (cmd == 'R')
+         mgr->pm_suspended = false;
+ 
+-
+-    if (cmd == 'S') {
+-        ssize_t wr = write(mgr->pm_fifo_out_fd, "A", 1);
+-
+-        if (wr < 0 && errno != EAGAIN && errno != EWOULDBLOCK)
+-            LOGE(NULL, "pm ack write failed: %s\n", strerror(errno));
+-    }
++    if (cmd == 'S' || cmd == 'B')
++        display_pm_write_ack(mgr, ok);
+ }

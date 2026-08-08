@@ -157,6 +157,101 @@ The wrapper installs Gentoo prerequisites such as `x11-drivers/evdi`, verifies
 `Wants=display_turzx.service` and `After=display_turzx.service`; HDMI-only hosts
 continue to boot even if the TURZX service is absent.
 
+The wrapper also applies Tikpal's TURZX userspace brightness patches before
+installing the vendor manager. The patches keep `S`/`R` power messages, add
+`B<1-100>` brightness writes, and add a `G` hardware readback diagnostic on
+`/tmp/TURZXPmMessagesPort_in`. The write path first sends the existing
+`DISPLAY_CMD_BLANK_VALUE` bulk command, so it does not reset mode, restart EVDI,
+or touch the HID touch interface. On the current 8.8-inch TURZX panel,
+`GET_BACKLIGHT` readback stays at `100` after writes, so the helper falls back
+to RandR visual brightness and Tikpal reports `transport:"turzx-soft"`. This is
+a perceptual dimming fallback, not panel backlight power saving. The helper
+installed at `/usr/local/sbin/tikpal-turzx-brightness` persists the last-known
+value under `/var/lib/tikpal/turzx-brightness.json`.
+
+On this `1a86:ad11` panel, sending the unverified vendor brightness command can
+make the screen briefly blank before the soft fallback applies. Keep
+`TIKPAL_TURZX_HARDWARE_BRIGHTNESS_ENABLED=0` unless a specific unit has a
+verified hardware backlight protocol.
+
+For hardware backlight reverse engineering, the current USB panel exposes
+`hidraw2` as `hid-multitouch` and `hidraw3` as the `hid-generic` vendor report
+interface. Do not write to `hidraw2`. The diagnostic probe installed by the
+TURZX wrapper targets only `hidraw3` after checking `HID_NAME=TURZX USB Display`,
+`1a86:ad11`, and the `hid-generic` driver:
+
+```bash
+sudo /usr/local/sbin/tikpal-turzx-hid-probe describe
+sudo /usr/local/sbin/tikpal-turzx-hid-probe read --seconds 2
+sudo /usr/local/sbin/tikpal-turzx-hid-probe try-brightness 25 --restore-percent 45
+sudo /usr/local/sbin/tikpal-turzx-hid-probe try-brightness 25 \
+  --no-report-id-prefix \
+  --candidate turing-encrypted-brightness-id14 \
+  --restore-percent 45
+```
+
+The descriptor on the Gentoo target has a 512-byte Output report and a 512-byte
+Input report and no Report ID. Current candidates include both 513-byte
+report-id-prefixed writes and exact 512-byte `--no-report-id-prefix` writes for
+the existing TURZX register payload `AF 20 05 <value>` and the encrypted command
+id `14` pattern documented by the unofficial
+[`turing-smart-screen-cli`](https://github.com/phstudy/turing-smart-screen-cli)
+work. They do not produce an input report or change the `GET_BACKLIGHT=100`
+readback. A direct `HIDIOCSFEATURE` attempt returns `Broken pipe`, consistent
+with this descriptor not exposing Feature reports. Until a real hardware report
+is verified, do not wire HID writes into the production brightness path; keep
+the helper's `turzx-soft` fallback active.
+
+Interface-0 usbmon proof is available through the installed capture helper:
+
+```bash
+sudo /usr/local/sbin/tikpal-turzx-usb-probe read
+sudo /usr/local/sbin/tikpal-turzx-usbmon-capture 33
+sudo /usr/local/sbin/tikpal-turzx-usb-probe try-brightness-exclusive 25 \
+  --exclusive \
+  --candidate bulk-turing-usb-brightness-id14 \
+  --restore-percent 45
+```
+
+On the current panel, direct libusb reads return status `0x18`, EDID data, and
+backlight `0x64` (`100`). Usbmon shows the patched helper sending
+`AF 20 1F 01 AF 20 05 21` for brightness `33`, then
+`AF 20 1F 01 AF 20 05 2D` for restore-to-`45`. The following vendor control
+read `c1 04` returns `0x64`. That proves the bulk command reaches interface 0,
+but it is not the real hardware backlight control for this screen. With the USB
+screen allowed to briefly black/flash, the exclusive bulk probe stops
+`display_turzx.service`, claims interface 0, tests bounded candidates, then
+starts the service and restores brightness `45`. `AF 20` register forms, a full
+mode-set-plus-blank-value payload, and the Turing USB DES-CBC command-id `14`
+brightness packet all write successfully, but hardware readback remains `100`.
+Vendor control-OUT requests `0x04` and `0x05` stall with `LIBUSB_ERROR_PIPE`.
+
+The direct probe can scan read-only vendor control requests:
+
+```bash
+sudo /usr/local/sbin/tikpal-turzx-usb-probe scan-controls --start 0x00 --end 0x3f --length 4 --only-nonzero
+```
+
+On the Gentoo target, that scan only returns `0x01=status`, `0x02=EDID`, and
+`0x04=backlight readback`. There is no alternate short vendor-IN backlight
+readback in `0x00..0x3f`.
+
+Gentoo `.env` should expose that helper to the API when the USB panel may be the
+primary kiosk output:
+
+```conf
+TIKPAL_TURZX_BRIGHTNESS_COMMAND="sudo -n -E /usr/local/sbin/tikpal-turzx-brightness"
+TIKPAL_TURZX_BRIGHTNESS_TIMEOUT_MS=2500
+TIKPAL_TURZX_DEFAULT_BRIGHTNESS=45
+TIKPAL_TURZX_HARDWARE_BRIGHTNESS_ENABLED=0
+TIKPAL_TURZX_SOFT_BRIGHTNESS_MIN=0.35
+```
+
+The systemd installer installs a dedicated sudoers rule for this one helper.
+Tikpal only selects the TURZX brightness path when helper status is available
+and the current RandR primary output is `DVI-I-*` or `DVI-D-*`; HDMI/DDC screens
+continue through `ddcutil`.
+
 The physical display prepare helper should run before and after kiosk start. Its job is to wait for any configured physical display candidate, prefer HDMI when it is connected, fall back to the connected USB/EVDI output when HDMI is absent, disable DPMS/screen saver, keep the Nouveau PCI path awake, retile the selected primary output to `2560x720`, and apply the safe HDMI properties that stopped black-screen recovery churn on the Gentoo target.
 
 Install the repo-owned helper as the root command used by the systemd drop-in:
@@ -255,6 +350,27 @@ The selectable styles are intentionally classic and low-risk:
 Legacy `blank` / `dim_waves` preferences migrate to `meteor_shower`; legacy `dvd` / `dvd_bounce` preferences migrate to `signal`.
 
 Keep `tikpal-physical-display-prepare` disabling DPMS after every soft-kick. Do not expose DPMS/deep power-off as the normal Screen Sleep mode unless touch wake has been revalidated on the target hardware.
+
+## Startup Wizard
+
+The first-use Wizard is a local kiosk guide stored with the browser key
+`tikpal.onboardingDismissed.v1`. It is intentionally not a backend preference:
+finishing the Wizard hides it on later kiosk reloads, while Settings can still
+open it again for training or demos.
+
+The Wizard is a calm gesture preview, not another control surface. It should
+always open with the Ambient background visually hidden and scene sound muted,
+so first boot does not flash video or start audio unexpectedly. Do not add
+visible background/sound toggles to the Wizard; the footer should only expose
+the navigation actions `Previous`, `Next`, and `Finish` in the selected UI
+language.
+
+All user-visible Wizard text, including the sample labels inside the gesture
+preview, must be translated for the supported device locales: `en`, `zh-CN`,
+`de`, `it`, `ko`, `ja`, and `es`. Keep the copy short enough for the
+`2560x720` physical kiosk. The sample may keep brand words such as `Tikpal`,
+`Ambient`, and `Player`, but helper labels like brightness, volume, previous,
+next, and finish should use the active locale.
 
 ## Audio Services
 
@@ -767,6 +883,29 @@ After selecting `NAS` and tapping a NAS row, expect a body containing `NAS/<moun
 ## Display And Power
 
 Brightness through DDC/CI is display-specific and can be non-linear. The Gentoo target should prefer conservative values that keep the screen visible; do not blindly map UI `100%` to raw DDC `100` if that target can black out or become unreadably dim during gesture changes.
+
+For TURZX USB/EVDI panels, brightness is not exposed through
+`/sys/class/backlight`; use the patched manager helper instead. Check both the
+saved value and hardware readback:
+
+```bash
+sudo /usr/local/sbin/tikpal-turzx-brightness status
+sudo /usr/local/sbin/tikpal-turzx-brightness set 25
+sudo /usr/local/sbin/tikpal-turzx-brightness set 45
+sudo /usr/local/sbin/tikpal-turzx-brightness set 75
+sudo /usr/local/sbin/tikpal-turzx-hid-probe describe
+sudo /usr/local/sbin/tikpal-turzx-usb-probe read
+sudo /usr/local/sbin/tikpal-turzx-usbmon-capture 33
+```
+
+If status shows `hardwareBrightnessPercent` fixed at `100` while
+`softBrightnessActive:true`, the helper is using `xrandr --brightness` as a
+visible fallback and `/api/v1/system/state` should report
+`transport:"turzx-soft"`. For the current Gentoo TURZX screen, hardware writes
+are disabled by default to avoid a black flash during left-edge brightness
+dragging. Do not expose `0%` as a user brightness target. Screen Sleep stays a
+soft touch-wake overlay; TURZX backlight values below `1%` are reserved for the
+driver's DPMS-off path.
 
 Ambient physical-screen gestures keep the left edge for brightness and the right edge for volume. Their transient adjustment overlay should be readable while the user is dragging, but it must return to the scene on its own after roughly three idle seconds so touch users do not need to hunt for Close.
 

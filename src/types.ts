@@ -512,7 +512,7 @@ export interface OutputDeviceState {
 export interface DisplayState {
   brightnessPercent: number;
   controllable: boolean;
-  transport: "ddcci" | "mock" | "unavailable";
+  transport: "ddcci" | "mock" | "turzx" | "turzx-soft" | "unavailable";
 }
 
 export interface AudioFormatState {

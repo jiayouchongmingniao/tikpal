@@ -55,6 +55,7 @@ const requiredFiles = [
   "deploy/moode/tikpal-upnp-metadata.sh",
   "public/web-mode-error.html",
   "public/web-mode-background.html",
+  "src/components/OnboardingGuide.tsx",
   "deploy/moode/tikpal-alsa-loopback.sh",
   "deploy/moode/tikpal-airplay-enable.sh",
   "deploy/moode/tikpal-airplay-transport.sh",
@@ -203,6 +204,45 @@ async function run() {
   await assertExecutable("deploy/moode/tikpal-quiet-boot-enable.sh");
   await assertExecutable("deploy/moode/tikpal-locale-enable.sh");
   await assertExecutable("deploy/systemd/install-systemd-services.sh");
+
+  const onboardingGuideSource = await readFile(path.join(ROOT, "src/components/OnboardingGuide.tsx"), "utf8");
+  for (const visibleHardcodedText of [
+    'aria-label="Practice this gesture"',
+    "Warm room · Ambient",
+    ">Brightness<",
+    ">Volume<",
+    ">Player<",
+    ">Try it here<",
+    "wizard-preview-controls",
+    "onBackgroundHiddenChange",
+    "onSoundMutedChange"
+  ]) {
+    assert(!onboardingGuideSource.includes(visibleHardcodedText), `Onboarding guide should not expose ${visibleHardcodedText}`);
+  }
+  for (const onboardingKey of [
+    "onboarding.previous",
+    "onboarding.sampleAria",
+    "onboarding.sampleTrack",
+    "onboarding.sampleBrightness",
+    "onboarding.sampleVolume",
+    "onboarding.samplePlayer",
+    "onboarding.sampleTry"
+  ]) {
+    assert(onboardingGuideSource.includes(`t("${onboardingKey}")`), `Onboarding guide should use ${onboardingKey}`);
+  }
+  const onboardingI18nSource = await readFile(path.join(ROOT, "src/i18n.tsx"), "utf8");
+  for (const onboardingKey of [
+    "onboarding.previous",
+    "onboarding.sampleAria",
+    "onboarding.sampleTrack",
+    "onboarding.sampleBrightness",
+    "onboarding.sampleVolume",
+    "onboarding.samplePlayer",
+    "onboarding.sampleTry"
+  ]) {
+    const localeCount = onboardingI18nSource.match(new RegExp(`"${onboardingKey.replace(".", "\\.")}"`, "g"))?.length ?? 0;
+    assert(localeCount >= 7, `${onboardingKey} should be translated for all supported locales`);
+  }
 
   const audioProfileHelperSource = await readFile(path.join(ROOT, "deploy/moode/tikpal-audio-output-profile.sh"), "utf8");
   assert(audioProfileHelperSource.includes("Tikpal Pure Listening"), "Audio Output helper should include Pure Listening");
@@ -1388,6 +1428,14 @@ esac
   assert(webModeBackgroundPage.includes("/assets/tikpal-scene-logo.png") && webModeBackgroundPage.includes("Tikpal Explore Background"), "Explore background page should show a branded logo surface");
   assert(!webModeBackgroundPage.includes("sendKioskHeartbeat"), "Explore background page should not post kiosk heartbeats");
   assert(webModeScript.includes("background_windows") && webModeScript.includes('TIKPAL_WEB_MODE_STAGE_POSITION') && webModeScript.includes("windowlower"), "Explore window guard should park the branded background offscreen while an active provider is visible");
+  assert(webModeScript.includes("ensure_entry_stage_veil") && webModeScript.includes("TIKPAL_WEB_MODE_ENTRY_STAGE_WINDOW:=2560x720"), "Explore initial entry should use a full-width branded veil");
+  assert(webModeScript.includes("--user-data-dir=$TIKPAL_WEB_MODE_PROFILE_ROOT/entry-stage") && webModeScript.includes("close_entry_stage_veil"), "Explore entry veil should be isolated and closed with the rest of Explore");
+  assert(webModeScript.indexOf('ensure_entry_stage_veil "$provider"') < webModeScript.indexOf('if ! ensure_side_panel "$provider" "$entry_stage"; then'), "Explore should cover the full stage before launching the side panel on initial entry");
+  assert(webModeScript.includes('ensure_side_panel "$provider" "$entry_stage"') && webModeScript.includes('[[ "$hidden" == "1" ]] && panel_position="$TIKPAL_WEB_MODE_STAGE_POSITION"'), "Explore side panel should launch offscreen during the unified initial entry");
+  assert(webModeScript.includes("reveal_initial_entry_surfaces") && webModeScript.includes("TIKPAL_WEB_MODE_ENTRY_REVEAL_SETTLE_SECONDS"), "Explore initial entry should reveal provider and side panel together after a short paint settle");
+  assert(webModeScript.includes("start_entry_stage_guard") && webModeScript.includes("entry-guard") && webModeScript.includes("TIKPAL_WEB_MODE_ENTRY_GUARD_INTERVAL_SECONDS"), "Explore entry veil should stay above newly-created provider windows until reveal");
+  assert(webModeScript.includes("fade_entry_stage_veil") && webModeBackgroundPage.includes("is-revealing"), "Explore entry veil should use a soft dissolve before closing");
+  assert(webModeScript.includes("close_web_mode_from_guard") && webModeScript.includes('if [[ -z "$active_provider" ]]; then'), "Explore window guard should close orphaned surfaces when runtime active provider is cleared");
   const webModeTransitionPage = await readFile(path.join(ROOT, "public/web-mode-transition.html"), "utf8");
   assert(webModeTransitionPage.includes("Connecting"), "Explore transition page should show a concise connecting state");
   for (const providerId of ["suno", "spotify", "youtube_music", "apple_music", "tidal", "qobuz", "deezer", "amazon_music", "qq_music", "netease_music"]) {

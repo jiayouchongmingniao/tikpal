@@ -54,6 +54,8 @@ const DDCUTIL_UNAVAILABLE_BACKOFF_MS = Number.isFinite(DDCUTIL_UNAVAILABLE_BACKO
   : Math.max(1_800_000, DDCUTIL_READ_CACHE_MS);
 const DDCUTIL_SUPPRESS_READ_WARNINGS = parseEnvBoolean(process.env.TIKPAL_DDCUTIL_SUPPRESS_READ_WARNINGS ?? "1");
 const DDCUTIL_SUPPRESS_SYSLOG = parseEnvBoolean(process.env.TIKPAL_DDCUTIL_SUPPRESS_SYSLOG ?? "1");
+const TURZX_BRIGHTNESS_COMMAND = process.env.TIKPAL_TURZX_BRIGHTNESS_COMMAND ?? "";
+const TURZX_BRIGHTNESS_TIMEOUT_MS = parseEnvPositiveInteger(process.env.TIKPAL_TURZX_BRIGHTNESS_TIMEOUT_MS, 2500);
 const RUNTIME_DRM_MODE_ENABLED = parseEnvBoolean(process.env.TIKPAL_RUNTIME_DRM_MODE_ENABLED ?? "1");
 const RUNTIME_DRM_MODE_TIMEOUT_MS_RAW = Number(process.env.TIKPAL_RUNTIME_DRM_MODE_TIMEOUT_MS ?? 500);
 const RUNTIME_DRM_MODE_TIMEOUT_MS = Number.isFinite(RUNTIME_DRM_MODE_TIMEOUT_MS_RAW) && RUNTIME_DRM_MODE_TIMEOUT_MS_RAW > 0
@@ -3444,6 +3446,40 @@ function buildUnavailableDisplayBrightnessSnapshot() {
   };
 }
 
+function parseTurzxBrightnessSnapshot(raw) {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed?.available || !parsed?.primaryIsTurzx) return null;
+    const savedPercent = Math.max(0, clampPercent(parsed.brightnessPercent, system.display.brightnessPercent || 45));
+    const hardwarePercent = Number(parsed.hardwareBrightnessPercent);
+    const hasHardwareReadback = Number.isFinite(hardwarePercent) && hardwarePercent > 0;
+    const hardwareActualPercent = hasHardwareReadback ? Math.max(1, clampPercent(hardwarePercent, savedPercent)) : savedPercent;
+    const readbackMatches = !hasHardwareReadback || Math.abs(hardwareActualPercent - savedPercent) <= 2;
+    const softwarePercent = Number(parsed.softwareBrightnessPercent);
+    const hasSoftBrightness = parsed.softBrightnessActive === true && Number.isFinite(softwarePercent) && softwarePercent > 0;
+    const actualPercent = readbackMatches
+      ? hardwareActualPercent
+      : hasSoftBrightness ? Math.max(1, clampPercent(softwarePercent, savedPercent)) : hardwareActualPercent;
+    return {
+      brightnessPercent: actualPercent,
+      controllable: readbackMatches || hasSoftBrightness,
+      transport: readbackMatches ? "turzx-hid" : hasSoftBrightness ? "turzx-soft" : "turzx-hid"
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function readTurzxBrightnessSnapshot() {
+  if (!TURZX_BRIGHTNESS_COMMAND.trim()) return null;
+  const raw = await runCommand(`${TURZX_BRIGHTNESS_COMMAND} status`, {
+    allowFailure: true,
+    timeout: TURZX_BRIGHTNESS_TIMEOUT_MS
+  });
+  return parseTurzxBrightnessSnapshot(raw);
+}
+
 function parseDisplayBrightnessSnapshot(raw) {
   const current = raw.match(/current value =\s*(\d+)/i)?.[1] ?? raw.match(/^VCP\s+10\s+\S+\s+(\d+)\s+(\d+)/i)?.[1];
   const max = raw.match(/max value =\s*(\d+)/i)?.[1] ?? raw.match(/^VCP\s+10\s+\S+\s+(\d+)\s+(\d+)/i)?.[2];
@@ -3497,6 +3533,14 @@ function scheduleDisplayBrightnessRefresh() {
 
 async function readDisplayBrightnessSnapshot() {
   const now = Date.now();
+  const turzxSnapshot = await readTurzxBrightnessSnapshot();
+  if (turzxSnapshot) {
+    displayBrightnessSnapshotCache = { value: turzxSnapshot, updatedAtMs: now };
+    displayBrightnessUnavailableUntilMs = 0;
+    system.display = turzxSnapshot;
+    return turzxSnapshot;
+  }
+
   if (displayBrightnessSnapshotCache && now - displayBrightnessSnapshotCache.updatedAtMs < DDCUTIL_READ_CACHE_MS) {
     return displayBrightnessSnapshotCache.value;
   }
@@ -3515,6 +3559,37 @@ async function setDisplayBrightnessPercent(percent) {
     system.display.brightnessPercent = nextPercent;
     system.display.controllable = true;
     system.display.transport = "mock";
+    return;
+  }
+
+  const turzxSnapshot = await readTurzxBrightnessSnapshot();
+  if (turzxSnapshot) {
+    const safePercent = Math.max(0, nextPercent);
+    await runCommand(`${TURZX_BRIGHTNESS_COMMAND} set ${safePercent}`, {
+      allowFailure: false,
+      timeout: TURZX_BRIGHTNESS_TIMEOUT_MS
+    });
+    const verifiedSnapshot = await readTurzxBrightnessSnapshot();
+    if (verifiedSnapshot && !verifiedSnapshot.controllable) {
+      displayBrightnessSnapshotCache = { value: verifiedSnapshot, updatedAtMs: Date.now() };
+      displayBrightnessUnavailableUntilMs = Date.now() + DDCUTIL_UNAVAILABLE_BACKOFF_MS;
+      system.display = verifiedSnapshot;
+      invalidateTikpalStateSnapshotCache();
+      throw new Error("TURZX backlight did not accept brightness command");
+    }
+    const nextSnapshot = verifiedSnapshot?.controllable
+      ? verifiedSnapshot
+      : {
+          brightnessPercent: safePercent,
+          controllable: true,
+          transport: "turzx-hid"
+        };
+    displayBrightnessSnapshotCache = {
+      value: nextSnapshot,
+      updatedAtMs: Date.now()
+    };
+    displayBrightnessUnavailableUntilMs = 0;
+    system.display = displayBrightnessSnapshotCache.value;
     return;
   }
 
@@ -10752,6 +10827,11 @@ function cacheTikpalStateSnapshot(state) {
     error: null
   };
   return readCachedTikpalState();
+}
+
+function invalidateTikpalStateSnapshotCache() {
+  tikpalStateSnapshotGeneration += 1;
+  tikpalStateSnapshotCache = null;
 }
 
 async function refreshAirplayPlaybackMetadataForState(state, { force = false } = {}) {

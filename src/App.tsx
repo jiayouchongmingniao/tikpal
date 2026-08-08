@@ -4,6 +4,7 @@ import { PlayerOverlay } from "./components/PlayerOverlay";
 import { QuickMenu } from "./components/QuickMenu";
 import { QuickSettingsOverlay } from "./components/QuickSettingsOverlay";
 import { StartupModeChooser } from "./components/StartupModeChooser";
+import { OnboardingGuide } from "./components/OnboardingGuide";
 import { useAppMode } from "./hooks/useAppMode";
 import { useBrowserKioskGuard } from "./hooks/useBrowserKioskGuard";
 import { useKioskGestures } from "./hooks/useKioskGestures";
@@ -23,6 +24,7 @@ const SCENE_VIDEO_ENABLED_STORAGE_KEY = "tikpal.sceneVideoEnabled";
 const CLOCK_VISIBLE_STORAGE_KEY = "tikpal.clockVisible";
 const QUICK_MENU_VOLUME_RESTORE_STORAGE_KEY = "tikpal.quickMenuVolumeRestore";
 const QUICK_MENU_BRIGHTNESS_RESTORE_STORAGE_KEY = "tikpal.quickMenuBrightnessRestore";
+const ONBOARDING_STORAGE_KEY = "tikpal.onboardingDismissed.v1";
 const DEFAULT_QUICK_MENU_RESTORE_VOLUME_PERCENT = 35;
 const DEFAULT_QUICK_MENU_RESTORE_BRIGHTNESS_PERCENT = 72;
 const EXTERNAL_HANDOFF_TIMEOUT_MS = 60_000;
@@ -116,6 +118,10 @@ function readStoredPercent(key: string, fallback: number) {
     return Math.round(savedValue);
   }
   return fallback;
+}
+
+function readStoredFlag(key: string) {
+  return window.localStorage.getItem(key) === "true";
 }
 
 function normalizeRestorePercent(value: number, fallback: number) {
@@ -303,6 +309,10 @@ export default function App() {
   const [ambientSourcePickerRequest, setAmbientSourcePickerRequest] = useState(0);
   const [ambientSourcePickerOpen, setAmbientSourcePickerOpen] = useState(false);
   const [startupChooserVisible, setStartupChooserVisible] = useState(() => readInitialMode() === "ambient");
+  const [onboardingVisible, setOnboardingVisible] = useState(() => !readStoredFlag(ONBOARDING_STORAGE_KEY));
+  const [onboardingStep, setOnboardingStep] = useState(0);
+  const [onboardingBackgroundHidden, setOnboardingBackgroundHidden] = useState(true);
+  const [onboardingSoundMuted, setOnboardingSoundMuted] = useState(true);
   const [activeSceneVideo, setActiveSceneVideo] = useState<BackgroundVideoSummary>(DEFAULT_SCENE_VIDEO);
   const sceneSoundPendingSinceRef = useRef<number | null>(null);
   const eventLoopLagRef = useRef(0);
@@ -630,6 +640,10 @@ export default function App() {
   }, [clockVisible]);
 
   useEffect(() => {
+    window.localStorage.setItem(ONBOARDING_STORAGE_KEY, onboardingVisible ? "false" : "true");
+  }, [onboardingVisible]);
+
+  useEffect(() => {
     const percent = tikpalState.system.volume.percent;
     if (percent <= 0) return;
     quickMenuVolumeRestoreRef.current = Math.round(percent);
@@ -819,16 +833,6 @@ export default function App() {
     }
   }
 
-  function handleSceneVideoEnabledChange(enabled: boolean) {
-    if (!enabled && roomExperience.sceneSoundEnabled) {
-      setSceneVideoEnabled(false);
-      void handleSceneSoundEnabledChange(false);
-      return;
-    }
-
-    setSceneVideoEnabled(enabled);
-  }
-
   const handleQuickMenuVolumeEnabledChange = useCallback(async (_enabled: boolean) => {
     try {
       const latestState = await refresh();
@@ -958,6 +962,33 @@ export default function App() {
     setStartupChooserVisible(false);
   }, []);
 
+  const handleOnboardingDismiss = useCallback(() => {
+    setOnboardingVisible(false);
+    setOnboardingStep(0);
+    setOnboardingBackgroundHidden(false);
+    setOnboardingSoundMuted(false);
+  }, []);
+
+  const handleOnboardingNext = useCallback(() => {
+    setOnboardingStep((step) => Math.min(step + 1, 2));
+  }, []);
+
+  const handleOnboardingBack = useCallback(() => {
+    setOnboardingStep((step) => Math.max(step - 1, 0));
+  }, []);
+
+  const handleOpenWizard = useCallback(() => {
+    setOnboardingStep(0);
+    setOnboardingBackgroundHidden(true);
+    setOnboardingSoundMuted(true);
+    setOnboardingVisible(true);
+  }, []);
+
+  useEffect(() => {
+    if (!onboardingVisible) return;
+    setOnboardingStep((current) => Math.min(current, 2));
+  }, [onboardingVisible]);
+
   const handleAmbientTap = useCallback(() => {
     if (mode === "ambient" && roomExperience.mode !== "hifi") {
       showHud();
@@ -1055,7 +1086,7 @@ export default function App() {
   });
 
   return (
-    <main className={`app-root ${screenOffActive ? "is-screen-off" : ""} ${systemSleepActive ? "is-system-sleeping" : ""}`} {...gestureHandlers}>
+    <main className={`app-root ${screenOffActive ? "is-screen-off" : ""} ${systemSleepActive ? "is-system-sleeping" : ""} ${onboardingVisible && onboardingBackgroundHidden ? "is-wizard-background-hidden" : ""}`} {...gestureHandlers}>
       <AmbientScreen
         hudVisible={hudVisible}
         timeLabel={timeLabel}
@@ -1070,7 +1101,7 @@ export default function App() {
         status={tikpalStatus}
         sceneVideoEnabled={sceneVideoEnabled}
         sceneVideoStableLoop={tikpalState.runtime.apiMode === "mpc"}
-        sceneSoundEnabled={roomExperience.sceneSoundEnabled}
+        sceneSoundEnabled={roomExperience.sceneSoundEnabled && !(onboardingVisible && onboardingSoundMuted)}
         sceneSoundPending={sceneSoundPending || tikpalStatus.pending}
         sourcePickerOpenRequest={ambientSourcePickerRequest}
         clockVisible={clockVisible}
@@ -1094,6 +1125,13 @@ export default function App() {
         selectedMode={roomExperience.mode}
         onAutoDismiss={handleStartupModeAutoDismiss}
         onSelectMode={handleStartupModeSelect}
+      />
+      <OnboardingGuide
+        active={onboardingVisible}
+        step={onboardingStep}
+        onDismiss={handleOnboardingDismiss}
+        onNext={handleOnboardingNext}
+        onBack={handleOnboardingBack}
       />
 
       <PlayerOverlay
@@ -1128,6 +1166,7 @@ export default function App() {
         onOpenWebMode={handleOpenWebMode}
         onSystemAction={sendSystemAction}
         onPreviewScreenSaver={startScreenSaverPreview}
+        onOpenWizard={handleOpenWizard}
         onReturnAmbient={returnAmbient}
       />
       <QuickMenu

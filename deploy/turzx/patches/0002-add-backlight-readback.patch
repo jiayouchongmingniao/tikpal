@@ -1,0 +1,67 @@
+--- a/display_drv.h
++++ b/display_drv.h
+@@ -209,6 +209,7 @@
+ 
+ int display_evdi_open(struct display_device *udl);
+ u8 display_get_backlight_value(struct display_device *udl);
++int display_read_backlight_value(struct display_device *udl, u8 *value);
+ int display_set_backlight_value(struct display_device *udl, u8 value);
+ void display_evdi_close(struct display_device *udl);
+ int display_usb_build_path(libusb_device *dev, char *path, size_t path_len);
+--- a/display_evdi.c
++++ b/display_evdi.c
+@@ -72,6 +72,25 @@
+     return display_clamp_backlight_value(value);
+ }
+ 
++int display_read_backlight_value(struct display_device *udl, u8 *value)
++{
++    u8 buf[4] = {0};
++    int ret;
++
++    if (!udl->devh || !value)
++        return -ENODEV;
++
++    ret = libusb_control_transfer(udl->devh,
++                  LIBUSB_ENDPOINT_IN | LIBUSB_REQUEST_TYPE_VENDOR | LIBUSB_RECIPIENT_INTERFACE,
++                  DISPLAY_REQ_GET_BACKLIGHT, 0, udl->iface_num,
++                  buf, sizeof(buf), DISPLAY_USB_CTRL_TIMEOUT_MS);
++    if (ret <= 0)
++        return ret;
++
++    *value = display_clamp_backlight_value(buf[0]);
++    return 0;
++}
++
+ int display_set_backlight_value(struct display_device *udl, u8 value)
+ {
+     struct libusb_transfer *urb;
+--- a/display_manager.c
++++ b/display_manager.c
+@@ -442,10 +442,26 @@
+             return;
+         }
+         break;
++    case 'G':
++        break;
+     default:
+         return;
+     }
+ 
++    if (cmd == 'G') {
++        for (entry = mgr->devices.next; entry != &mgr->devices; entry = entry->next) {
++            struct display_device *udl = display_container_of(entry, struct display_device, entry);
++            u8 value = display_get_backlight_value(udl);
++
++            if (display_read_backlight_value(udl, &value) != 0)
++                value = display_get_backlight_value(udl);
++            dprintf(mgr->pm_fifo_out_fd, "V%u\n", value);
++            return;
++        }
++        display_pm_write_ack(mgr, false);
++        return;
++    }
++
+     for (entry = mgr->devices.next; entry != &mgr->devices; entry = entry->next) {
+         struct display_device *udl = display_container_of(entry, struct display_device, entry);
+ 

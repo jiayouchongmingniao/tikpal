@@ -171,6 +171,30 @@ EOF
   echo "installed $stability_unit"
 }
 
+install_turzx_brightness_helper() {
+  local helper="$APP_DIR/deploy/turzx/tikpal-turzx-brightness.sh"
+  local target="/usr/local/sbin/tikpal-turzx-brightness"
+  local sudoers_file="/etc/sudoers.d/tikpal-turzx-brightness"
+  [[ -f "$helper" ]] || return 0
+  install -o root -g root -m 0755 "$helper" "$target"
+  echo "installed $target"
+  if command -v visudo >/dev/null 2>&1; then
+    local tmp_sudoers
+    tmp_sudoers="$(mktemp)"
+    cat > "$tmp_sudoers" <<EOF
+Defaults:$SERVICE_USER env_keep += "TIKPAL_TURZX_PM_FIFO_IN TIKPAL_TURZX_PM_FIFO_OUT TIKPAL_TURZX_BRIGHTNESS_STATE TIKPAL_TURZX_DEFAULT_BRIGHTNESS TIKPAL_TURZX_HARDWARE_BRIGHTNESS_ENABLED TIKPAL_TURZX_SERVICE TIKPAL_TURZX_USB_ID"
+$SERVICE_USER ALL=(root) NOPASSWD:SETENV: $target
+EOF
+    if visudo -cf "$tmp_sudoers" >/dev/null; then
+      install -o root -g root -m 0440 "$tmp_sudoers" "$sudoers_file"
+      echo "installed $sudoers_file"
+    else
+      echo "WARN: generated sudoers for TURZX brightness helper did not validate; skipping" >&2
+    fi
+    rm -f "$tmp_sudoers"
+  fi
+}
+
 install_roonbridge_helpers() {
   local multiroom_helper="/usr/local/sbin/tikpal-multiroom-state"
   local roon_helper="/usr/local/sbin/tikpal-roonbridge-state"
@@ -279,6 +303,24 @@ ensure_kiosk_audio_release_env() {
   } >> "$env_file"
   chown "$SERVICE_USER":"$SERVICE_USER" "$env_file" || true
   echo "updated $env_file with Tikpal kiosk audio release command"
+}
+
+ensure_turzx_brightness_env() {
+  local env_file="$APP_DIR/.env"
+  [[ -f "$env_file" ]] || return 0
+  local updated=0
+  if ! grep -q '^TIKPAL_TURZX_BRIGHTNESS_COMMAND=' "$env_file"; then
+    {
+      printf '\n# TURZX/EVDI USB display backlight. Used when the active RandR output is DVI-I-* or DVI-D-*.\n'
+      printf 'TIKPAL_TURZX_BRIGHTNESS_COMMAND="sudo -n -E /usr/local/sbin/tikpal-turzx-brightness"\n'
+      printf 'TIKPAL_TURZX_DEFAULT_BRIGHTNESS=45\n'
+      printf 'TIKPAL_TURZX_HARDWARE_BRIGHTNESS_ENABLED=0\n'
+    } >> "$env_file"
+    updated=1
+  fi
+  [[ "$updated" -eq 1 ]] || return 0
+  chown "$SERVICE_USER":"$SERVICE_USER" "$env_file" || true
+  echo "updated $env_file with TURZX brightness command"
 }
 
 ensure_roonbridge_env() {
@@ -393,6 +435,8 @@ fi
 
 ensure_library_scan_env
 ensure_kiosk_audio_release_env
+install_turzx_brightness_helper
+ensure_turzx_brightness_env
 install_roonbridge_helpers
 ensure_roonbridge_env
 ensure_radio_presets

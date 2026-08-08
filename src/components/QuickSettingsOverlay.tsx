@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Airplay, Bluetooth, Captions, Cast, CheckCircle2, Clock3, Cpu, Database, EthernetPort, Eye, EyeOff, Globe2, HardDrive, Info, Monitor, Moon, Music2, Palette, PanelRightClose, Plus, Power, Radio as RadioIcon, RotateCcw, Search, Server, SlidersHorizontal, Target, Trash2, Type, Usb, Volume2, Waves } from "lucide-react";
+import { Airplay, Bluetooth, Captions, Cast, CheckCircle2, CircleHelp, Clock3, Cpu, Database, EthernetPort, Eye, EyeOff, Globe2, HardDrive, Info, Monitor, Moon, Music2, Palette, PanelRightClose, Plus, Power, Radio as RadioIcon, RotateCcw, Search, Server, SlidersHorizontal, Target, Trash2, Type, Usb, Volume2, Waves } from "lucide-react";
 import { deleteNasSource, discoverNasSources, fetchAudioLibrary, fetchAudioOutputDiagnostics, fetchMultiroom, fetchNasSources, fetchWebModeState, mountNasSource, saveNasSource, sendWebModeAction, testNasSource, unmountNasSource, updateMultiroomEcosystem, updateWebModeSettings } from "../api/tikpalClient";
 import { languageOptions, useI18n } from "../i18n";
 import { getSourceDisplayStatus, getSourceDisplayStatusLabel } from "../sourceStatus";
@@ -27,11 +27,12 @@ interface QuickSettingsOverlayProps {
   onOpenWebMode: () => Promise<void>;
   onSystemAction: (type: SystemActionType, value?: number) => Promise<unknown>;
   onPreviewScreenSaver: () => void;
+  onOpenWizard: () => void;
   onReturnAmbient: () => void;
 }
 
 type CardTone = "cyan" | "gold" | "neutral" | "warn" | "danger";
-type ActionableCardKey = "library_scan" | "reboot" | "shutdown";
+type ActionableCardKey = "library_scan" | "wizard" | "reboot" | "shutdown";
 type SettingsSectionKey = "output" | "library" | "network" | "system";
 type SettingsDetailView = "appearance" | "audioDiagnostics" | "audioOutput" | "display" | "font" | "language" | "lyrics" | "multiroom" | "nas" | "night" | "webMode" | null;
 type LibraryStorageCounts = {
@@ -391,6 +392,7 @@ export function QuickSettingsOverlay({
   onOpenWebMode,
   onSystemAction,
   onPreviewScreenSaver,
+  onOpenWizard,
   onReturnAmbient
 }: QuickSettingsOverlayProps) {
   const {
@@ -452,6 +454,7 @@ export function QuickSettingsOverlay({
   const [roomShortcutError, setRoomShortcutError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<Record<ActionableCardKey, string | null>>({
     library_scan: null,
+    wizard: null,
     reboot: null,
     shutdown: null
   });
@@ -508,6 +511,7 @@ export function QuickSettingsOverlay({
     setDisplaySleepError(null);
     setActionError({
       library_scan: null,
+      wizard: null,
       reboot: null,
       shutdown: null
     });
@@ -887,6 +891,18 @@ export function QuickSettingsOverlay({
         tone: status.source === "api" ? "neutral" : "warn"
       },
       {
+        kind: "action",
+        key: "wizard",
+        section: "system",
+        icon: CircleHelp,
+        title: t("settings.wizard"),
+        value: t("settings.startupGuide"),
+        meta: t("settings.wizardMeta"),
+        tone: "cyan",
+        actionType: "wizard",
+        buttonLabel: t("settings.openWizard")
+      },
+      {
         kind: "webMode",
         key: "web-mode",
         section: "network",
@@ -1102,6 +1118,12 @@ export function QuickSettingsOverlay({
       ...current,
       [card.actionType]: null
     }));
+
+    if (card.actionType === "wizard") {
+      onOpenWizard();
+      onReturnAmbient();
+      return;
+    }
 
     if (card.actionType === "reboot" || card.actionType === "shutdown") {
       if (confirmAction !== card.actionType) {
