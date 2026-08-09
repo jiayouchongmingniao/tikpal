@@ -82,6 +82,7 @@ fi
 : "${TIKPAL_WEB_MODE_PROVIDER_POOL:=1}"
 : "${TIKPAL_WEB_MODE_PROVIDER_IDLE_POOL_ENABLED:=1}"
 : "${TIKPAL_WEB_MODE_PROVIDER_PREWARM_ENABLED:=1}"
+: "${TIKPAL_WEB_MODE_PROVIDER_PREWARM_CONTINUE_AFTER_CLOSE:=1}"
 : "${TIKPAL_WEB_MODE_PROVIDER_PREWARM_DELAY_SECONDS:=0.75}"
 : "${TIKPAL_WEB_MODE_PROVIDER_PREWARM_LOCK_TIMEOUT_SECONDS:=2}"
 : "${TIKPAL_WEB_MODE_DIRECT_PROBE_ENABLED:=1}"
@@ -1750,6 +1751,7 @@ schedule_provider_pool_refill_after_close() {
   is_enabled "$TIKPAL_WEB_MODE_PROVIDER_IDLE_POOL_ENABLED" || return 0
   is_enabled "$TIKPAL_WEB_MODE_PROVIDER_PREWARM_ENABLED" || return 0
   [[ -z "$(read_runtime_active_provider)" ]] || return 0
+  pgrep -f "[t]ikpal-web-mode.sh prewarm" >/dev/null 2>&1 && return 0
   provider_pool_needs_prewarm "" || return 0
   if command -v setsid >/dev/null 2>&1; then
     setsid "$SCRIPT_DIR/tikpal-web-mode.sh" warm-pool </dev/null >/dev/null 2>&1 9>&- &
@@ -1800,7 +1802,6 @@ close_web_mode_warm() {
   show_exit_room_veil_if_enabled "$room_mode" || true
   stop_entry_stage_guard
   stop_window_guard
-  stop_provider_pool_prewarm
   park_web_mode_surfaces_for_reopen "$active_provider"
   write_audio_bus_state ""
   write_runtime_provider_state ""
@@ -1836,6 +1837,14 @@ close_web_mode_from_guard() {
   local room_mode
   room_mode="${TIKPAL_WEB_MODE_EXIT_ROOM_MODE:-calm}"
   hide_onboard
+  if is_enabled "$TIKPAL_WEB_MODE_CLOSE_KEEP_RESIDENT"; then
+    stop_entry_stage_guard
+    park_web_mode_surfaces_for_reopen ""
+    write_audio_bus_state ""
+    write_runtime_provider_state ""
+    schedule_provider_pool_refill_after_close
+    return 0
+  fi
   show_exit_room_veil_if_enabled "$room_mode" || true
   stop_entry_stage_guard
   stop_provider_pool_prewarm
@@ -2654,6 +2663,7 @@ launch_side_panel() {
   [[ "$hidden" == "1" ]] && panel_position="$TIKPAL_WEB_MODE_STAGE_POSITION"
   mkdir -p "$panel_profile"
   ensure_chromium_profile_prefs "$panel_profile"
+  cleanup_stale_profile_singletons "$panel_profile"
   mapfile -t flags < <(read_flags)
   mapfile -t base_args < <(chromium_base_args)
   DISPLAY="$TIKPAL_KIOSK_DISPLAY" "$TIKPAL_CHROMIUM_BIN" \
@@ -2686,14 +2696,15 @@ ensure_side_panel() {
       return 0
     fi
     close_side_panel
-    launch_side_panel "$opening_provider" 1
-    return
+    launch_side_panel "$opening_provider" 1 >/dev/null 2>&1 &
+    return 0
   fi
   if [[ -n "$panel_window" ]] || side_panel_window_visible "$panel_profile"; then
     return 0
   fi
   close_side_panel
-  launch_side_panel "$opening_provider"
+  launch_side_panel "$opening_provider" >/dev/null 2>&1 &
+  return 0
 }
 
 reveal_initial_entry_surfaces() {
@@ -2889,18 +2900,27 @@ launch_provider_for_pool() {
 
 prewarm_provider_pool() {
   local active_provider="${1:-}"
-  local provider delay force_existing
+  local current_active provider delay force_existing
   is_enabled "$TIKPAL_WEB_MODE_PROVIDER_PREWARM_ENABLED" || return 0
   seed_runtime_provider_pool_statuses "$active_provider"
   delay="$TIKPAL_WEB_MODE_PROVIDER_PREWARM_DELAY_SECONDS"
   force_existing="${TIKPAL_WEB_MODE_PROVIDER_PREWARM_FORCE:-0}"
   while IFS= read -r provider; do
     [[ -n "$provider" && "$provider" != "$active_provider" ]] || continue
-    [[ -n "$(read_runtime_active_provider)" ]] || return 0
+    current_active="$(read_runtime_active_provider)"
+    [[ -z "$current_active" ]] && ! is_enabled "$TIKPAL_WEB_MODE_PROVIDER_PREWARM_CONTINUE_AFTER_CLOSE" && return 0
+    [[ -n "$current_active" && "$provider" == "$current_active" ]] && continue
     sleep "$delay"
-    [[ -n "$(read_runtime_active_provider)" ]] || return 0
-    launch_provider_for_pool "$provider" 0 prewarm "$force_existing" || true
+    current_active="$(read_runtime_active_provider)"
+    [[ -z "$current_active" ]] && ! is_enabled "$TIKPAL_WEB_MODE_PROVIDER_PREWARM_CONTINUE_AFTER_CLOSE" && return 0
+    [[ -n "$current_active" && "$provider" == "$current_active" ]] && continue
+    if [[ -z "$current_active" ]]; then
+      TIKPAL_WEB_MODE_IDLE_POOL_WARMUP=1 launch_provider_for_pool "$provider" 0 prewarm "$force_existing" || true
+    else
+      launch_provider_for_pool "$provider" 0 prewarm "$force_existing" || true
+    fi
   done < <(provider_ids)
+  sync_runtime_provider_pool_process_statuses "$(read_runtime_active_provider)"
 }
 
 start_provider_pool_prewarm() {
@@ -2909,6 +2929,10 @@ start_provider_pool_prewarm() {
   local force_env=()
   is_enabled "$TIKPAL_WEB_MODE_PROVIDER_POOL" || return 0
   is_enabled "$TIKPAL_WEB_MODE_PROVIDER_PREWARM_ENABLED" || return 0
+  if [[ "$seed_mode" != "force" ]] && pgrep -f "[t]ikpal-web-mode.sh prewarm" >/dev/null 2>&1; then
+    log "provider pool prewarm already running"
+    return 0
+  fi
   stop_provider_pool_prewarm
   if [[ "$seed_mode" != "force" ]] && ! provider_pool_needs_prewarm "$active_provider"; then
     log "provider pool already resident; prewarm skipped"
@@ -2980,7 +3004,9 @@ open_provider_pool() {
     extension_enabled=1
   fi
 
-  stop_provider_pool_prewarm
+  if [[ "$fast_resident" != "1" ]]; then
+    stop_provider_pool_prewarm
+  fi
   hide_onboard
   if [[ "$entry_stage" == "1" ]]; then
     ensure_entry_stage_veil "$provider" || ensure_background_veil "$provider" || true
@@ -3000,7 +3026,7 @@ open_provider_pool() {
     recover_or_cover_provider_failure "$current_provider" "$current_profile" "$provider" "check_proxy" "$message" || true
     fail "$message"
   fi
-  if [[ "$switching_provider" == "1" ]] || { [[ "$entry_stage" == "1" ]] && ! provider_uses_direct_bootstrap "$provider"; }; then
+  if { [[ "$switching_provider" == "1" || "$entry_stage" == "1" ]] && [[ "$fast_resident" != "1" ]]; } && ! provider_uses_direct_bootstrap "$provider"; then
     launch_transition_veil "$provider"
     [[ "$entry_stage" == "1" ]] && raise_entry_stage_veil >/dev/null 2>&1 || true
   fi
@@ -3025,7 +3051,7 @@ open_provider_pool() {
     recover_or_cover_provider_failure "$current_provider" "$current_profile" "$provider" "check_setup" "$message" || true
     fail "$(provider_label "$provider") did not open"
   fi
-  if [[ "$entry_stage" == "1" ]]; then
+  if [[ "$entry_stage" == "1" && "$fast_resident" != "1" ]]; then
     wait_for_entry_provider_paint "$(provider_debug_port "$provider")" "$provider" || log "WARN: $(provider_label "$provider") did not paint before entry reveal"
   fi
   write_runtime_provider_status "$provider" "ready"

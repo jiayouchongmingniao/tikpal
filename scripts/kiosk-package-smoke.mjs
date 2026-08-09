@@ -1468,6 +1468,7 @@ esac
   assert(webModeScript.includes("TIKPAL_WEB_MODE_EXIT_ROOM_MODE") && serverSource.includes("runWebModeCloseInBackground(room.mode, closeRequestId, activeProvider)"), "Explore close should pass the current room mode into a background close transaction");
   assert(webModeScript.includes("TIKPAL_WEB_MODE_CLOSE_ACTIVE_PROVIDER") && webModeScript.includes('park_web_mode_surfaces_for_reopen "$active_provider"'), "Explore warm close should park the active provider before scanning resident providers");
   assert(serverSource.includes("webModeClosePromise") && serverSource.includes("webModeCloseRequestIsCurrent") && serverSource.includes("closeRequestId: null"), "Explore background close should suppress duplicate close transactions and not clear a newer provider open");
+  assert(!serverSource.includes("activeProvider: null,\n      residentProviders: {},\n      lastError: null,\n      closeRequestId"), "Explore close should preserve resident provider state while clearing the visible active provider");
   assert(webModeScript.includes("TIKPAL_WEB_MODE_CLOSE_WARM_ENABLED:=1") && webModeScript.includes("TIKPAL_WEB_MODE_CLOSE_KEEP_RESIDENT:=1") && webModeScript.includes("TIKPAL_WEB_MODE_CLOSE_WARM_TTL_SECONDS:=45"), "Explore close should default to a resident warm pool for instant reopen");
   assert(webModeScript.includes("TIKPAL_WEB_MODE_CLOSE_REFILL_PROVIDER_POOL_ENABLED:=1") && webModeScript.includes("schedule_provider_pool_refill_after_close"), "Explore warm close should refill the resident provider pool after visual exit");
   assert(webModeScript.includes("close_web_mode_warm()") && webModeScript.includes("park_side_panel_for_reopen") && webModeScript.includes("park_provider_windows_for_reopen"), "Explore warm close should park the side panel and providers offscreen instead of cold-closing them");
@@ -1479,12 +1480,14 @@ esac
       warmCloseBody.indexOf("park_web_mode_surfaces_for_reopen"),
     "Explore warm close should raise the full-width exit veil before parking provider and panel surfaces"
   );
+  assert(!warmCloseBody.includes("stop_provider_pool_prewarm"), "Explore warm close should not kill the provider prewarm queue");
   const parkSurfacesBody = webModeScript.slice(webModeScript.indexOf("park_web_mode_surfaces_for_reopen() {"), webModeScript.indexOf("\n}\n\nclose_web_mode_process_surfaces()", webModeScript.indexOf("park_web_mode_surfaces_for_reopen() {")));
   assert(parkSurfacesBody.includes('park_left_web_mode_surfaces_for_reopen "$active_provider" &') && parkSurfacesBody.includes("park_side_panel_for_reopen &"), "Explore warm close should park left providers and right side panel in parallel");
   assert(webModeScript.includes("close_web_mode_process_surfaces()") && webModeScript.includes("close_provider_windows &") && webModeScript.includes("close_side_panel &"), "Explore full close should close provider and side-panel surfaces in parallel under the exit veil");
   assert(webModeScript.includes("cleanup-warm") && webModeScript.includes("cleanup_warm_web_mode") && webModeScript.includes("close-full"), "Explore should keep delayed/full cleanup as an explicit maintenance path");
   assert(webModeScript.includes("TIKPAL_WEB_MODE_CLOSE_AUDIO_GATE_SETTLE_SECONDS") && webModeScript.includes('if ! is_enabled "$TIKPAL_WEB_MODE_CLOSE_KEEP_RESIDENT"; then') && webModeScript.includes("stop_provider_guard"), "Explore warm close should keep provider guards alive in resident mode and only stop them for non-resident cleanup");
   assert(webModeScript.includes("TIKPAL_WEB_MODE_PROVIDER_IDLE_POOL_ENABLED:=1") && webModeScript.includes("warm_provider_pool()") && webModeScript.includes("TIKPAL_WEB_MODE_IDLE_POOL_WARMUP=1"), "Explore should support boot-time idle prewarming of provider windows");
+  assert(webModeScript.includes("TIKPAL_WEB_MODE_PROVIDER_PREWARM_CONTINUE_AFTER_CLOSE:=1") && webModeScript.includes('TIKPAL_WEB_MODE_IDLE_POOL_WARMUP=1 launch_provider_for_pool "$provider" 0 prewarm "$force_existing"'), "Explore provider prewarm should keep opening providers offscreen after visible Explore closes");
   assert(webModeScript.includes('log "idle provider pool warmup paused because Explore is active"'), "Explore idle provider pool refill should stop if Explore reopens");
   assert(webModeScript.includes("warm-pool)") && webModeScript.includes("warm_provider_pool") && !webModeScript.includes("with_web_mode_lock warm_provider_pool"), "Explore boot prewarm should not hold the foreground web-mode lock");
   assert(webModeScript.includes("TIKPAL_WEB_MODE_X11_SYNC_WINDOW_OPS:=0") && webModeScript.includes('wmctrl -i -r "$window" -e') && webModeScript.includes('windowmove "$window" "$x" "$y"'), "Explore hot window moves should default to async X11 operations instead of xdotool --sync");
@@ -1494,7 +1497,8 @@ esac
   assert(webModeScript.includes("reveal_initial_entry_surfaces") && webModeScript.includes("TIKPAL_WEB_MODE_ENTRY_REVEAL_SETTLE_SECONDS"), "Explore initial entry should reveal provider and side panel together after a short paint settle");
   assert(webModeScript.includes("start_entry_stage_guard") && webModeScript.includes("entry-guard") && webModeScript.includes("TIKPAL_WEB_MODE_ENTRY_GUARD_INTERVAL_SECONDS"), "Explore entry veil should stay above newly-created provider windows until reveal");
   assert(webModeScript.includes("fade_entry_stage_veil") && webModeBackgroundPage.includes("is-revealing"), "Explore entry veil should use a soft dissolve before closing");
-  assert(webModeScript.includes("close_web_mode_from_guard") && webModeScript.includes('if [[ -z "$active_provider" ]]; then'), "Explore window guard should close orphaned surfaces when runtime active provider is cleared");
+  const guardCloseBody = webModeScript.match(/close_web_mode_from_guard\(\) \{[\s\S]*?\n\}/)?.[0] ?? "";
+  assert(guardCloseBody.includes('is_enabled "$TIKPAL_WEB_MODE_CLOSE_KEEP_RESIDENT"') && guardCloseBody.includes('park_web_mode_surfaces_for_reopen ""'), "Explore window guard should park resident surfaces instead of killing providers when runtime active provider is cleared");
   const revealResidentStart = webModeScript.indexOf("reveal_resident_provider_surfaces() {");
   const revealResidentEnd = webModeScript.indexOf("\n}\n\nlaunch_provider_for_pool()", revealResidentStart);
   const revealResidentBody = webModeScript.slice(revealResidentStart, revealResidentEnd);
@@ -1511,8 +1515,9 @@ esac
   assert(
     poolTransitionIndex >= 0 &&
       poolTransitionIndex < residentRevealIndex &&
+      openProviderPoolBody.includes('[[ "$fast_resident" != "1" ]]') &&
       openProviderPoolBody.includes("switching_provider"),
-    "Explore resident provider switches should launch the left transition veil before revealing the target provider"
+    "Explore cold provider switches should use the left transition veil, while resident switches hot-reveal the target window"
   );
   assert(
     residentRevealIndex >= 0 &&
@@ -1521,7 +1526,8 @@ esac
   );
   const webModeTransitionPage = await readFile(path.join(ROOT, "public/web-mode-transition.html"), "utf8");
   assert(webModeBackgroundPage.includes("/assets/tikpal-scene-logo.png") && !webModeTransitionPage.includes("/assets/tikpal-scene-logo.png"), "Explore transition page should not stack a second Tikpal logo above the background veil");
-  assert(webModeTransitionPage.includes("logo-floor") && webModeTransitionPage.includes("--provider-tone") && webModeTransitionPage.includes("signal-track"), "Explore transition page should share the logo floor, provider tone, and 2px signal rail");
+  assert(webModeTransitionPage.includes(".logo-floor") && webModeTransitionPage.includes("display: none"), "Explore transition page should not show the old left logo-floor rail");
+  assert(webModeTransitionPage.includes("--provider-tone") && webModeTransitionPage.includes("signal-track"), "Explore transition page should keep provider tone and the 2px signal rail");
   assert(webModeTransitionPage.includes("Connecting") && webModeTransitionPage.includes('"zh-CN"') && webModeTransitionPage.includes("providerTextScale") && webModeTransitionPage.includes("data-font-theme"), "Explore transition page should use localized connecting text and shared font settings");
   for (const providerId of ["suno", "spotify", "youtube_music", "apple_music", "tidal", "qobuz", "deezer", "amazon_music", "qq_music", "netease_music"]) {
     assert(webModeTransitionPage.includes(`${providerId}:`), `Explore transition page should map ${providerId}`);

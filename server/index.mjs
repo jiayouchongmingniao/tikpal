@@ -13683,7 +13683,6 @@ function runWebModeCloseInBackground(roomMode, closeRequestId = "", activeProvid
       if (await webModeCloseRequestIsCurrent(closeRequestId).catch(() => false)) {
         await writeWebModeRuntimeState({
           activeProvider: null,
-          residentProviders: {},
           lastError: restoreError,
           closeRequestId: null
         }).catch(() => {});
@@ -13874,7 +13873,6 @@ async function applyWebModeAction(action) {
     const activeProvider = typeof runtimeState.activeProvider === "string" ? runtimeState.activeProvider : "";
     await writeWebModeRuntimeState({
       activeProvider: null,
-      residentProviders: {},
       lastError: null,
       closeRequestId
     });
