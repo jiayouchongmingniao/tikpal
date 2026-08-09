@@ -14,6 +14,7 @@ const errorPageBaseUrl = process.env.TIKPAL_WEB_MODE_ERROR_PAGE_URL || "http://1
 const qqAutoConfirm = /^(1|true|yes|on|enabled)$/i.test(process.env.TIKPAL_WEB_MODE_QQ_AUTO_CONFIRM || "1");
 const qqAutoUnmute = /^(1|true|yes|on|enabled)$/i.test(process.env.TIKPAL_WEB_MODE_QQ_AUTO_UNMUTE || "1");
 const qqAudioPrime = /^(1|true|yes|on|enabled)$/i.test(process.env.TIKPAL_WEB_MODE_QQ_AUDIO_PRIME || "1");
+const qqMusicAutoPlay = /^(1|true|yes|on|enabled)$/i.test(process.env.TIKPAL_WEB_MODE_QQ_MUSIC_AUTO_PLAY || "1");
 const qqMvAutoFullscreen = /^(1|true|yes|on|enabled)$/i.test(process.env.TIKPAL_WEB_MODE_QQ_MV_AUTO_FULLSCREEN || "0");
 const qqMvCinemaMode = /^(1|true|yes|on|enabled)$/i.test(process.env.TIKPAL_WEB_MODE_QQ_MV_CINEMA_MODE || "1");
 const qqMvAutoPlay = /^(1|true|yes|on|enabled)$/i.test(process.env.TIKPAL_WEB_MODE_QQ_MV_AUTO_PLAY || "1");
@@ -166,6 +167,7 @@ const targetProgressState = new Map();
 const inputFocusRequests = new Map();
 const qqAudioUnmuteAttempts = new Map();
 const qqAudioPrimeAttempts = new Map();
+const qqMusicAutoPlayStates = new Map();
 const qqMvCinemaStates = new Map();
 const qqMvAutoPlayStates = new Map();
 const neteaseAutoPlayStates = new Map();
@@ -186,6 +188,9 @@ const providerReadyHosts = {
 };
 const qqAudioUnmuteCooldownMs = 5000;
 const qqAudioPrimeCooldownMs = 12000;
+const qqMusicAutoPlayDelayMs = 1800;
+const qqMusicAutoPlayRetryMs = 4200;
+const qqMusicAutoPlayMaxAttempts = 2;
 const qqMvAutoPlayDelayMs = 1700;
 const qqMvAutoPlayMaxStartSeconds = 1.5;
 const qqMvAutoPlayProgressEpsilonSeconds = 0.2;
@@ -396,7 +401,7 @@ const kioskGuardScript = `(() => {
 })()`;
 
 const providerAudioGateScript = `(() => {
-  if (window.__tikpalProviderAudioGate?.version >= 2) return;
+  if (window.__tikpalProviderAudioGate?.version >= 3) return;
   const state = {
     active: true,
     media: new WeakMap(),
@@ -471,7 +476,7 @@ const providerAudioGateScript = `(() => {
         }
       }
     } else {
-      for (const context of Array.from(state.suspendedContexts)) {
+      for (const context of contexts) {
         if (context?.state === "suspended") context.resume?.().catch?.(() => {});
       }
       state.suspendedContexts.clear();
@@ -483,7 +488,15 @@ const providerAudioGateScript = `(() => {
       window.postMessage({ type: "tikpal-provider-audio-muted", muted: !nextActive }, window.location.origin);
     } catch {}
     if (state.active === nextActive) {
-      if (!nextActive) setMediaActive(false);
+      if (nextActive) {
+        setMediaActive(true);
+        setHowlerActive(true);
+        setAudioContextsActive(true);
+      } else {
+        setMediaActive(false);
+        setHowlerActive(false);
+        setAudioContextsActive(false);
+      }
       return status();
     }
     state.active = nextActive;
@@ -496,7 +509,8 @@ const providerAudioGateScript = `(() => {
     active: state.active,
     mediaCount: mediaElements().length,
     playingCount: mediaElements().filter((element) => !element.paused && !element.ended).length,
-    contextCount: state.audioContexts.size
+    contextCount: state.audioContexts.size,
+    contextStates: Array.from(state.audioContexts).map((context) => context?.state || "unknown")
   });
   document.addEventListener("play", (event) => {
     if (state.active) return;
@@ -507,7 +521,7 @@ const providerAudioGateScript = `(() => {
       try { element.pause(); } catch {}
     }, 0);
   }, true);
-  window.__tikpalProviderAudioGate = { version: 2, setActive, status };
+  window.__tikpalProviderAudioGate = { version: 3, setActive, status };
 })()`;
 
 function providerAudioGateExpression(active) {
@@ -998,31 +1012,145 @@ const qqAudioStateExpression = `(() => {
 })()`;
 
 const qqAudioPrimeExpression = `(async () => {
+  const stopPrime = async (reason) => {
+    const prime = window.__tikpalQqAudioPrime;
+    window.__tikpalQqAudioPrime = null;
+    if (prime?.oscillator) {
+      try { prime.oscillator.stop(); } catch {}
+      try { prime.oscillator.disconnect(); } catch {}
+    }
+    if (prime?.gain) {
+      try { prime.gain.disconnect(); } catch {}
+    }
+    if (prime?.context && prime.context.state !== "closed") {
+      await prime.context.close?.().catch(() => {});
+    }
+    return { primed: false, stopped: Boolean(prime), reason };
+  };
   const icon = document.querySelector(".btn_big_voice");
   const play = document.querySelector(".btn_big_play,.btn_big_pause");
-  if (!icon || !play) return { primed: false, reason: "not-player" };
+  if (!icon || !play) return stopPrime("not-player");
   const iconText = String(icon.innerText || icon.title || "");
   const iconClass = String(icon.className || "");
   const playClass = String(play.className || "");
   const muted = iconClass.includes("btn_big_voice--no") || iconText.includes("打开声音");
   const playing = playClass.includes("btn_big_play--pause");
-  if (!playing || muted) return { primed: false, reason: muted ? "muted" : "not-playing" };
-  const Ctx = window.__tikpalNativeAudioContext || window.AudioContext || window.webkitAudioContext;
+  if (!playing || muted) return stopPrime(muted ? "muted" : "not-playing");
+  const Ctx = window.AudioContext || window.webkitAudioContext;
   if (!Ctx) return { primed: false, reason: "no-audio-context" };
+  const existing = window.__tikpalQqAudioPrime;
+  if (existing?.context && existing.context.state !== "closed") {
+    await existing.context.resume?.().catch(() => {});
+    return {
+      primed: true,
+      persistent: true,
+      reused: true,
+      state: existing.context.state
+    };
+  }
   const context = new Ctx();
   const oscillator = context.createOscillator();
   const gain = context.createGain();
-  gain.gain.value = 0.0001;
+  gain.gain.value = 0.000001;
   oscillator.frequency.value = 640;
   oscillator.connect(gain).connect(context.destination);
   await context.resume().catch(() => {});
   oscillator.start();
-  await new Promise((resolve) => setTimeout(resolve, 180));
-  oscillator.stop();
-  await new Promise((resolve) => setTimeout(resolve, 40));
-  const state = context.state;
-  await context.close().catch(() => {});
-  return { primed: true, state };
+  window.__tikpalQqAudioPrime = { context, oscillator, gain };
+  return {
+    primed: true,
+    persistent: true,
+    reused: false,
+    state: context.state
+  };
+})()`;
+
+const qqMusicAutoPlayStateExpression = `(() => {
+  if (!/(^|\\.)y\\.qq\\.com$/i.test(location.hostname)) return { ready: false, reason: "not-qq" };
+  if (!/^\\/n\\/ryqq(?:_v\\d+)?\\/player\\b/i.test(location.pathname)) {
+    return { ready: false, reason: "not-player", key: location.href };
+  }
+
+  const visible = (element) => {
+    if (!element) return false;
+    const rect = element.getBoundingClientRect();
+    const style = getComputedStyle(element);
+    return rect.width >= 8 &&
+      rect.height >= 8 &&
+      rect.right > 0 &&
+      rect.bottom > 0 &&
+      rect.left < innerWidth &&
+      rect.top < innerHeight &&
+      style.display !== "none" &&
+      style.visibility !== "hidden" &&
+      Number(style.opacity || "1") > 0.05;
+  };
+  const textOf = (element) => String(element?.innerText || element?.textContent || element?.title || element?.getAttribute?.("aria-label") || "").replace(/\\s+/g, " ").trim();
+  const play = document.querySelector(".btn_big_play,.btn_big_pause");
+  if (!play || !visible(play)) return { ready: false, reason: "no-global-play", key: location.href };
+  const playClass = String(play.className || "");
+  const playing = playClass.includes("btn_big_play--pause") || playClass.includes("btn_big_pause");
+  const currentRow = Array.from(document.querySelectorAll(".songlist__item--playing,.songlist__item.current,.mod_songlist li.current,[class*='playing']"))
+    .find(visible);
+  const recentPlaybackResource = performance.getEntriesByType("resource")
+    .slice(-80)
+    .some((entry) => {
+      const name = String(entry?.name || "");
+      const recent = performance.now() - Number(entry?.startTime || 0) < 45000;
+      return recent && /Fplay_time|cgi_music_webreport|musics\\.fcg|isure|vkey|audio|stream|music\\.tc\\.qq|u\\.y\\.qq/i.test(name);
+    });
+  const titles = Array.from(document.querySelectorAll(".songlist__songname_txt a,.songlist__songname a"))
+    .filter(visible)
+    .slice(0, 6)
+    .map((item) => textOf(item))
+    .filter(Boolean);
+  const listPlayButtons = Array.from(document.querySelectorAll(".mod_songlist .list_menu__play,.songlist__list .list_menu__play,.list_menu__play"))
+    .filter(visible);
+  const queueReady = titles.length > 0 || listPlayButtons.length > 0;
+  const media = Array.from(document.querySelectorAll("audio,video")).map((node) => ({
+    paused: Boolean(node.paused),
+    ended: Boolean(node.ended),
+    currentTime: Number(node.currentTime || 0),
+    readyState: Number(node.readyState || 0)
+  }));
+  const mediaPlaying = media.some((item) => !item.ended && !item.paused);
+  const progressed = media.some((item) => !item.ended && Number(item.currentTime || 0) > 1.5);
+  const realPlayback = mediaPlaying || progressed || (playing && (Boolean(currentRow) || recentPlaybackResource));
+  const key = [
+    location.origin,
+    location.pathname,
+    titles.join("|").slice(0, 240)
+  ].join("|");
+
+  if (realPlayback) {
+    return {
+      ready: true,
+      reason: mediaPlaying ? "already-playing" : progressed ? "progressed" : "qq-playback-evidence",
+      playing: true,
+      key,
+      mediaCount: media.length,
+      currentRow: textOf(currentRow).slice(0, 120),
+      recentPlaybackResource
+    };
+  }
+  if (!queueReady) return { ready: false, reason: "queue-not-ready", key, mediaCount: media.length };
+  const target = listPlayButtons[0] || play;
+  const rect = target.getBoundingClientRect();
+  const scaleX = window.outerWidth && window.innerWidth ? window.outerWidth / window.innerWidth : window.devicePixelRatio || 1;
+  const scaleY = window.outerHeight && window.innerHeight ? window.outerHeight / window.innerHeight : window.devicePixelRatio || scaleX || 1;
+  return {
+    ready: true,
+    reason: playing ? "stalled-global-play" : "ready",
+    playing: false,
+    key,
+    label: textOf(target) || "play",
+    buttonX: rect.x + rect.width / 2,
+    buttonY: rect.y + rect.height / 2,
+    scaleX,
+    scaleY,
+    mediaCount: media.length,
+    queueSize: Math.max(titles.length, listPlayButtons.length)
+  };
 })()`;
 
 const qqMvTouchTargetExpression = `(() => {
@@ -1729,6 +1857,39 @@ function clickQqAudioIcon(state) {
   return clickQqWindowPoint(state, "iconX", "iconY");
 }
 
+function clickQqMusicPlayButton(state) {
+  return clickQqWindowPoint(state, "buttonX", "buttonY");
+}
+
+function claimQqMusicAutoPlayAttempt(target, result) {
+  if (!qqMusicAutoPlay || !result?.ready || !result.key) return false;
+  const now = Date.now();
+  const key = `${target.id}:${result.key}`;
+  let state = qqMusicAutoPlayStates.get(key);
+  if (!state) {
+    state = {
+      firstSeenAt: now,
+      lastAttemptAt: 0,
+      attempts: 0,
+      completed: false
+    };
+    qqMusicAutoPlayStates.set(key, state);
+    if (qqMusicAutoPlayStates.size > 100) {
+      qqMusicAutoPlayStates.delete(qqMusicAutoPlayStates.keys().next().value);
+    }
+  }
+  if (result.playing) {
+    state.completed = true;
+    return false;
+  }
+  if (state.completed || state.attempts >= qqMusicAutoPlayMaxAttempts) return false;
+  if (now - state.firstSeenAt < qqMusicAutoPlayDelayMs) return false;
+  if (state.lastAttemptAt && now - state.lastAttemptAt < qqMusicAutoPlayRetryMs) return false;
+  state.lastAttemptAt = now;
+  state.attempts += 1;
+  return true;
+}
+
 function x11Env() {
   const env = { ...process.env };
   if (!env.DISPLAY) env.DISPLAY = env.TIKPAL_KIOSK_DISPLAY || ":0";
@@ -2344,13 +2505,29 @@ async function runQqAudioFeatures(targets) {
   }
 }
 
+async function runQqMusicAutoPlayFeatures(targets) {
+  if (providerId !== "qq_music" || !qqMusicAutoPlay) return;
+  for (const target of targets.filter(isQqMusicPlayerPage)) {
+    const state = await evaluate(target.webSocketDebuggerUrl, qqMusicAutoPlayStateExpression).catch(() => null);
+    if (!claimQqMusicAutoPlayAttempt(target, state)) continue;
+    if (clickQqMusicPlayButton(state)) {
+      console.log(`[tikpal-web-mode-guard] clicked QQ music play ${state?.label || ""}`.trim());
+      return;
+    }
+  }
+}
+
 async function runQqAudioPrimeFeatures(targets) {
   if (providerId !== "qq_music" || !qqAudioPrime) return;
   for (const target of targets.filter(isQqMusicPlayerPage)) {
+    const state = await evaluate(target.webSocketDebuggerUrl, qqAudioStateExpression).catch(() => null);
+    if (!state?.ready) continue;
+    if (!state.playing || state.muted) {
+      await evaluate(target.webSocketDebuggerUrl, qqAudioPrimeExpression).catch(() => null);
+      continue;
+    }
     const previousAttempt = qqAudioPrimeAttempts.get(target.id) || 0;
     if (Date.now() - previousAttempt < qqAudioPrimeCooldownMs) continue;
-    const state = await evaluate(target.webSocketDebuggerUrl, qqAudioStateExpression).catch(() => null);
-    if (!state?.ready || !state.playing || state.muted) continue;
     qqAudioPrimeAttempts.set(target.id, Date.now());
     const result = await evaluate(target.webSocketDebuggerUrl, qqAudioPrimeExpression).catch((error) => ({
       primed: false,
@@ -2430,6 +2607,7 @@ async function guardOnce() {
   await runSafeDismissFeatures(targets);
   if (active) {
     await runSafePromptFeatures(targets);
+    await runQqMusicAutoPlayFeatures(targets);
     await runQqAudioFeatures(targets);
     await runQqAudioPrimeFeatures(targets);
     await runQqMvTouchTargetFeatures(targets);
@@ -2458,6 +2636,7 @@ if (process.argv.includes("--check")) {
   console.log(`[tikpal-web-mode-guard] qq auto confirm: ${qqAutoConfirm ? "1" : "0"}`);
   console.log(`[tikpal-web-mode-guard] qq auto unmute: ${qqAutoUnmute ? "1" : "0"}`);
   console.log(`[tikpal-web-mode-guard] qq audio prime: ${qqAudioPrime ? "1" : "0"}`);
+  console.log(`[tikpal-web-mode-guard] qq music auto play: ${qqMusicAutoPlay ? "1" : "0"}`);
   console.log(`[tikpal-web-mode-guard] qq mv auto fullscreen: ${qqMvAutoFullscreen ? "1" : "0"}`);
   console.log(`[tikpal-web-mode-guard] qq mv cinema mode: ${qqMvCinemaMode ? "1" : "0"}`);
   console.log(`[tikpal-web-mode-guard] qq mv auto play: ${qqMvAutoPlay ? "1" : "0"}`);

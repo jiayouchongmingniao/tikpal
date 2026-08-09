@@ -72,7 +72,8 @@ const requiredFiles = [
   "deploy/systemd/tikpal-kiosk-viewer.service",
   "deploy/systemd/tikpal-kiosk-watchdog.service",
   "deploy/systemd/tikpal-kiosk-watchdog.timer",
-  "deploy/systemd/install-systemd-services.sh"
+  "deploy/systemd/install-systemd-services.sh",
+  "public/web-mode-transition.html"
 ];
 
 function assert(condition, message) {
@@ -973,6 +974,7 @@ esac
   assert(webModeScript.includes("window-guard.pid"), "web mode should track the persistent window guard pid");
   assert(webModeScript.includes("TIKPAL_WEB_MODE_QQ_MV_AUTO_FULLSCREEN:=0"), "web mode should keep QQ MV auto fullscreen off by default");
   assert(webModeScript.includes("TIKPAL_WEB_MODE_QQ_AUDIO_PRIME:=1") && webModeScript.includes('TIKPAL_WEB_MODE_QQ_AUDIO_PRIME="$TIKPAL_WEB_MODE_QQ_AUDIO_PRIME"'), "web mode should enable and pass QQ Music audio prime by default");
+  assert(webModeScript.includes("TIKPAL_WEB_MODE_QQ_MUSIC_AUTO_PLAY:=1") && webModeScript.includes('TIKPAL_WEB_MODE_QQ_MUSIC_AUTO_PLAY="$TIKPAL_WEB_MODE_QQ_MUSIC_AUTO_PLAY"'), "web mode should enable and pass QQ Music one-shot auto play by default");
   assert(webModeScript.includes('TIKPAL_WEB_MODE_QQ_MV_AUTO_FULLSCREEN="$TIKPAL_WEB_MODE_QQ_MV_AUTO_FULLSCREEN"'), "web mode should pass the QQ MV fullscreen switch to the provider guard");
   assert(webModeScript.includes("TIKPAL_WEB_MODE_QQ_MV_CINEMA_MODE:=1"), "web mode should enable QQ MV cinema mode by default");
   assert(webModeScript.includes('TIKPAL_WEB_MODE_QQ_MV_CINEMA_MODE="$TIKPAL_WEB_MODE_QQ_MV_CINEMA_MODE"'), "web mode should pass the QQ MV cinema switch to the provider guard");
@@ -1352,6 +1354,8 @@ esac
   assert(providerGuardSource.includes("lastOnboardVisible === enabled && now - lastOnboardActionMs < throttleMs"), "provider poll fallback should not spam duplicate launcher actions");
   assert(providerGuardSource.includes("TIKPAL_WEB_MODE_QQ_MV_CINEMA_MODE"), "provider guard should expose a QQ MV cinema mode switch");
   assert(providerGuardSource.includes("TIKPAL_WEB_MODE_QQ_AUDIO_PRIME") && providerGuardSource.includes("runQqAudioPrimeFeatures") && providerGuardSource.includes("qqAudioPrimeCooldownMs"), "provider guard should gently prime QQ Music audio when QQ is active and already playing");
+  assert(providerGuardSource.includes("TIKPAL_WEB_MODE_QQ_MUSIC_AUTO_PLAY") && providerGuardSource.includes("runQqMusicAutoPlayFeatures") && providerGuardSource.includes("qqMusicAutoPlayMaxAttempts"), "provider guard should one-shot start a paused QQ Music player queue");
+  assert(providerGuardSource.includes("stalled-global-play") && providerGuardSource.includes("listPlayButtons[0] || play") && providerGuardSource.includes("recentPlaybackResource"), "QQ Music one-shot start should prefer a real queue row when the global player shows a false playing state");
   assert(providerGuardSource.includes("qqMvTouchTargetExpression"), "provider guard should inject larger QQ MV hit targets without changing QQ layout");
   assert(providerGuardSource.includes("data-tikpal-qq-mv-touch-target"), "QQ MV hit targets should expose a test hook on the original link");
   assert(providerGuardSource.includes("__tikpalQqMvTouchTargetLinkAtPoint"), "QQ MV touch target should use page-local hit testing instead of a cross-window overlay");
@@ -1428,6 +1432,8 @@ esac
   assert(webModeScript.includes('provider_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/$provider"'), "Explore should keep a stable per-provider Chromium profile for login state");
   assert(!webModeScript.includes('rm -rf "$provider_profile"'), "Explore provider switches should not delete the provider login profile");
   assert(webModeScript.includes('refresh_extension_script_cache "$provider_profile"') && webModeScript.includes("Default/Service Worker") && webModeScript.includes("service_worker_registration_info"), "Explore provider launch should refresh stale extension service-worker state without deleting login state");
+  assert(webModeScript.includes("seed_profile_widevine_cdm()") && webModeScript.includes("libwidevinecdm.so"), "Explore should repair empty provider Widevine CDM directories without deleting login state");
+  assert((webModeScript.match(/seed_profile_widevine_cdm "\$provider_profile"/g) || []).length >= 2, "Explore pool and direct provider launch paths should seed Widevine before Chromium starts");
   assert(webModeScript.indexOf('start_provider_guard "$provider" "$provider_profile" "$url" "$proxy_enabled" "$provider_port"') < webModeScript.indexOf('if ! wait_for_provider_ready "$provider_port" "$provider"; then'), "provider guard should start before the ready gate so cookie prompts can be accepted during entry");
 
   assert(webModeErrorPage.includes("did not respond"), "friendly Explore error page should avoid native Chromium error copy");
@@ -1461,7 +1467,25 @@ esac
   assert(webModeScript.includes("start_entry_stage_guard") && webModeScript.includes("entry-guard") && webModeScript.includes("TIKPAL_WEB_MODE_ENTRY_GUARD_INTERVAL_SECONDS"), "Explore entry veil should stay above newly-created provider windows until reveal");
   assert(webModeScript.includes("fade_entry_stage_veil") && webModeBackgroundPage.includes("is-revealing"), "Explore entry veil should use a soft dissolve before closing");
   assert(webModeScript.includes("close_web_mode_from_guard") && webModeScript.includes('if [[ -z "$active_provider" ]]; then'), "Explore window guard should close orphaned surfaces when runtime active provider is cleared");
+  const revealResidentStart = webModeScript.indexOf("reveal_resident_provider_surfaces() {");
+  const revealResidentEnd = webModeScript.indexOf("\n}\n\nlaunch_provider_for_pool()", revealResidentStart);
+  const revealResidentBody = webModeScript.slice(revealResidentStart, revealResidentEnd);
+  assert(
+    revealResidentBody.indexOf('raise_window "$target_window"') <
+      revealResidentBody.indexOf('park_profile_windows_for_reopen "$previous_profile"'),
+    "Explore resident provider switches should raise the target window before parking the previous provider"
+  );
+  const openProviderPoolStart = webModeScript.indexOf("open_provider_pool() {");
+  const openProviderPoolEnd = webModeScript.indexOf("\n}\n\nopen_provider()", openProviderPoolStart);
+  const openProviderPoolBody = webModeScript.slice(openProviderPoolStart, openProviderPoolEnd);
+  const residentRevealIndex = openProviderPoolBody.indexOf('reveal_resident_provider_surfaces "$target_window"');
+  assert(
+    residentRevealIndex >= 0 &&
+      openProviderPoolBody.indexOf("close_transition_veil", residentRevealIndex) > residentRevealIndex,
+    "Explore should close the switch transition veil only after the resident provider reveal"
+  );
   const webModeTransitionPage = await readFile(path.join(ROOT, "public/web-mode-transition.html"), "utf8");
+  assert(webModeBackgroundPage.includes("/assets/tikpal-scene-logo.png") && webModeTransitionPage.includes("/assets/tikpal-scene-logo.png"), "Explore cover pages should use the Tikpal logo as the branded floor");
   assert(webModeTransitionPage.includes("Connecting"), "Explore transition page should show a concise connecting state");
   for (const providerId of ["suno", "spotify", "youtube_music", "apple_music", "tidal", "qobuz", "deezer", "amazon_music", "qq_music", "netease_music"]) {
     assert(webModeTransitionPage.includes(`${providerId}:`), `Explore transition page should map ${providerId}`);
@@ -1490,7 +1514,10 @@ esac
   assert(webModeScript.includes('pkill -TERM -f "[t]ikpal-web-mode.sh prewarm"'), "Explore should stop stale prewarm queues before starting a new one");
   assert(providerGuardSource.includes("__tikpalProviderAudioGate"), "Explore provider guard should install resident provider audio gating");
   assert(providerGuardSource.includes("tikpal-provider-audio-muted") && extensionBackground.includes("provider-audio-muted"), "Explore provider gate should ask the extension to tab-mute inactive providers");
-  assert(providerGuardSource.includes("version: 2"), "Explore provider audio gate should use the resumable v2 contract");
+  assert(providerGuardSource.includes("version: 3"), "Explore provider audio gate should use the active keepalive v3 contract");
+  assert(providerGuardSource.includes("state.active === nextActive") && providerGuardSource.includes("setAudioContextsActive(true)"), "Active provider audio polling should keep WebAudio contexts alive");
+  assert(providerGuardSource.includes("__tikpalQqAudioPrime") && providerGuardSource.includes("persistent: true"), "QQ Music audio prime should keep ALSA alive while QQ is playing");
+  assert(!providerGuardSource.includes("setTimeout(resolve, 180)"), "QQ Music audio prime should not fall back to a short pulse");
   assert(providerGuardSource.includes("previous.wasPlaying = previous.wasPlaying ||"), "Inactive provider audio polling should not forget playback that must resume");
   assert(providerGuardSource.includes("element.muted = false"), "Returning to a resident provider should unmute media elements");
   assert(providerGuardSource.includes("syncResidentProviderStatus") && providerGuardSource.includes("providerReadyHosts"), "Resident provider guards should clear stale check_setup once the provider reaches its real host");

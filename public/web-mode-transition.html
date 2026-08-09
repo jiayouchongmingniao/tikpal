@@ -34,7 +34,25 @@
         background: #05070b;
       }
 
+      .logo-floor {
+        position: fixed;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        pointer-events: none;
+      }
+
+      .logo-floor img {
+        width: min(680px, 54vw);
+        height: auto;
+        opacity: 0.18;
+        filter: grayscale(1) brightness(1.65) drop-shadow(0 26px 68px rgba(0, 0, 0, 0.42));
+        transform: translateY(-2px);
+      }
+
       .signal-stage {
+        position: relative;
+        z-index: 1;
         width: min(520px, calc(100vw - 96px));
         display: grid;
         justify-items: center;
@@ -105,6 +123,9 @@
     </style>
   </head>
   <body>
+    <div class="logo-floor" aria-hidden="true">
+      <img src="/assets/tikpal-scene-logo.png" alt="" />
+    </div>
     <main class="signal-stage" role="status" aria-live="polite" aria-label="Connecting to Explore provider">
       <h1 class="provider-name">Explore</h1>
       <p class="connecting-label">Connecting</p>

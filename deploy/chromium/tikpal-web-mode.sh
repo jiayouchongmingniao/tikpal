@@ -93,6 +93,7 @@ fi
 : "${TIKPAL_WEB_MODE_PROXY_CONNECT_ERROR:=Proxy did not connect. Try again.}"
 : "${TIKPAL_WEB_MODE_QQ_AUTO_CONFIRM:=1}"
 : "${TIKPAL_WEB_MODE_QQ_AUDIO_PRIME:=1}"
+: "${TIKPAL_WEB_MODE_QQ_MUSIC_AUTO_PLAY:=1}"
 : "${TIKPAL_WEB_MODE_QQ_MV_AUTO_FULLSCREEN:=0}"
 : "${TIKPAL_WEB_MODE_QQ_MV_CINEMA_MODE:=1}"
 : "${TIKPAL_WEB_MODE_QQ_MV_AUTO_PLAY:=1}"
@@ -715,6 +716,42 @@ const tmpPath = `${prefsPath}.tmp-${process.pid}`;
 fs.writeFileSync(tmpPath, JSON.stringify(prefs));
 fs.renameSync(tmpPath, prefsPath);
 NODE
+}
+
+profile_has_widevine_cdm() {
+  local profile_dir="$1"
+  [[ -n "$profile_dir" && -d "$profile_dir/WidevineCdm" ]] || return 1
+  find "$profile_dir/WidevineCdm" -path "*/_platform_specific/linux_x64/libwidevinecdm.so" -type f -size +1000000c -print -quit 2>/dev/null | grep -q .
+}
+
+seed_profile_widevine_cdm() {
+  local target_profile="$1"
+  local source_profile source_provider
+  [[ -n "$target_profile" && -d "$target_profile" ]] || return 0
+  profile_has_widevine_cdm "$target_profile" && return 0
+
+  for source_profile in "$TIKPAL_CHROMIUM_PROFILE_DIR" "$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"; do
+    [[ -n "$source_profile" && "$source_profile" != "$target_profile" ]] || continue
+    profile_has_widevine_cdm "$source_profile" || continue
+    if rm -rf "$target_profile/WidevineCdm" && cp -a "$source_profile/WidevineCdm" "$target_profile/WidevineCdm"; then
+      log "seeded Widevine CDM for $(basename "$target_profile") from $(basename "$source_profile")"
+      return 0
+    fi
+  done
+
+  while IFS= read -r source_provider; do
+    [[ -n "$source_provider" ]] || continue
+    source_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/$source_provider"
+    [[ "$source_profile" != "$target_profile" ]] || continue
+    profile_has_widevine_cdm "$source_profile" || continue
+    if rm -rf "$target_profile/WidevineCdm" && cp -a "$source_profile/WidevineCdm" "$target_profile/WidevineCdm"; then
+      log "seeded Widevine CDM for $(basename "$target_profile") from $source_provider"
+      return 0
+    fi
+  done < <(provider_ids)
+
+  log "WARN: Widevine CDM is unavailable for $(basename "$target_profile"); protected playback may fail"
+  return 0
 }
 
 write_runtime_provider_state() {
@@ -2248,6 +2285,7 @@ start_provider_guard() {
   TIKPAL_WEB_MODE_PROVIDER_DEBUG_PORT="$provider_port" \
   TIKPAL_WEB_MODE_QQ_AUTO_CONFIRM="$TIKPAL_WEB_MODE_QQ_AUTO_CONFIRM" \
   TIKPAL_WEB_MODE_QQ_AUDIO_PRIME="$TIKPAL_WEB_MODE_QQ_AUDIO_PRIME" \
+  TIKPAL_WEB_MODE_QQ_MUSIC_AUTO_PLAY="$TIKPAL_WEB_MODE_QQ_MUSIC_AUTO_PLAY" \
   TIKPAL_WEB_MODE_QQ_MV_AUTO_FULLSCREEN="$TIKPAL_WEB_MODE_QQ_MV_AUTO_FULLSCREEN" \
   TIKPAL_WEB_MODE_QQ_MV_CINEMA_MODE="$TIKPAL_WEB_MODE_QQ_MV_CINEMA_MODE" \
   TIKPAL_WEB_MODE_QQ_MV_AUTO_PLAY="$TIKPAL_WEB_MODE_QQ_MV_AUTO_PLAY" \
@@ -2640,13 +2678,7 @@ reveal_resident_provider_surfaces() {
   local provider_profile="$2"
   local panel_profile="$3"
   local previous_profile="${4:-}"
-  local panel_window previous_pid
-  if [[ -n "$previous_profile" && "$previous_profile" != "$provider_profile" ]]; then
-    park_profile_windows_for_reopen "$previous_profile" "$TIKPAL_WEB_MODE_LEFT_WINDOW" &
-    previous_pid=$!
-  else
-    previous_pid=""
-  fi
+  local panel_window
   panel_window="$(wait_for_profile_window "$panel_profile" 8 || true)"
   if [[ -n "$panel_window" ]]; then
     tile_window_fast "$panel_window" "$TIKPAL_WEB_MODE_PANEL_POSITION" "$TIKPAL_WEB_MODE_PANEL_WINDOW"
@@ -2656,7 +2688,9 @@ reveal_resident_provider_surfaces() {
   tile_window_fast "$target_window" "$TIKPAL_WEB_MODE_LEFT_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
   mark_window_above "$target_window"
   raise_window "$target_window"
-  [[ -n "$previous_pid" ]] && wait "$previous_pid" 2>/dev/null || true
+  if [[ -n "$previous_profile" && "$previous_profile" != "$provider_profile" ]]; then
+    park_profile_windows_for_reopen "$previous_profile" "$TIKPAL_WEB_MODE_LEFT_WINDOW" || true
+  fi
   raise_onboard
 }
 
@@ -2741,6 +2775,7 @@ launch_provider_for_pool() {
   target_audio_device="$TIKPAL_WEB_MODE_ALSA_OUTPUT_DEVICE"
   mkdir -p "$provider_profile"
   ensure_chromium_profile_prefs "$provider_profile"
+  seed_profile_widevine_cdm "$provider_profile"
   cleanup_stale_profile_singletons "$provider_profile"
   refresh_extension_script_cache "$provider_profile"
   mapfile -t flags < <(read_flags)
@@ -2950,12 +2985,14 @@ open_provider_pool() {
   fi
   write_runtime_provider_status "$provider" "ready"
   write_runtime_provider_state "$provider"
-  close_transition_veil
-  close_error_veil
   if [[ "$entry_stage" == "1" ]]; then
+    close_transition_veil
+    close_error_veil
     reveal_initial_entry_surfaces "$target_window" "$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"
   else
     reveal_resident_provider_surfaces "$target_window" "$provider_profile" "$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel" "$current_profile"
+    close_transition_veil
+    close_error_veil
     close_entry_stage_veil
   fi
   write_audio_bus_state ""
@@ -3052,6 +3089,7 @@ open_provider() {
   close_provider_profile "$provider_profile"
   sleep 0.2
   ensure_chromium_profile_prefs "$provider_profile"
+  seed_profile_widevine_cdm "$provider_profile"
   refresh_extension_script_cache "$provider_profile"
   if [[ "$entry_stage" == "1" ]]; then
     ensure_entry_stage_veil "$provider" || ensure_background_veil "$provider" || true
@@ -3122,9 +3160,9 @@ open_provider() {
     recover_or_cover_provider_failure "$current_provider" "$current_profile" "$provider" "check_setup" "$message" || true
     fail "$message"
   fi
-  close_transition_veil
-  close_error_veil
   if [[ "$entry_stage" == "1" ]]; then
+    close_transition_veil
+    close_error_veil
     reveal_initial_entry_surfaces "$target_window" "$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"
   else
     tile_window "$target_window" "$TIKPAL_WEB_MODE_LEFT_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
@@ -3141,6 +3179,8 @@ open_provider() {
     close_other_provider_profiles "$provider_profile"
     tile_window "$target_window" "$TIKPAL_WEB_MODE_LEFT_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
     raise_window "$target_window"
+    close_transition_veil
+    close_error_veil
     close_entry_stage_veil
   fi
   write_audio_bus_state "$target_audio_bus"
@@ -3229,6 +3269,7 @@ check_runtime() {
   log "onboard input focus: $TIKPAL_WEB_MODE_ONBOARD_AUTO_FOCUS"
   log "qq scoped auto confirm: $TIKPAL_WEB_MODE_QQ_AUTO_CONFIRM"
   log "qq audio prime: $TIKPAL_WEB_MODE_QQ_AUDIO_PRIME"
+  log "qq music auto play: $TIKPAL_WEB_MODE_QQ_MUSIC_AUTO_PLAY"
   log "settings: $TIKPAL_WEB_MODE_SETTINGS_PATH"
   read_proxy_settings | awk -F '\t' '{ printf("[tikpal-web-mode] proxy: %s %s\n", $1 == "1" ? "enabled" : "disabled", $2) }'
   [[ -x "$TIKPAL_CHROMIUM_BIN" ]] || fail "Chromium binary is missing or not executable"
