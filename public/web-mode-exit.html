@@ -7,12 +7,87 @@
     <style>
       :root {
         color-scheme: dark;
-        background: #06080d;
+        background: #05070b;
         color: #f7fbff;
-        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        font-family: var(--app-font-family);
+        font-synthesis: none;
+        text-rendering: geometricPrecision;
+        -webkit-font-smoothing: antialiased;
+        --app-font-family:
+          Inter,
+          "SF Pro Display",
+          "SF Pro Text",
+          "Helvetica Neue",
+          "Noto Sans CJK SC",
+          "Noto Sans CJK JP",
+          "Noto Sans CJK KR",
+          "Source Han Sans CN",
+          "PingFang SC",
+          "WenQuanYi Zen Hei",
+          sans-serif;
         --room-tone: #76d7ff;
-        --room-glow: rgba(118, 215, 255, 0.18);
         --room-base: #06101b;
+      }
+
+      :root[data-font-theme="serif"] {
+        --app-font-family:
+          "Noto Serif CJK SC",
+          "Noto Serif CJK JP",
+          "Noto Serif CJK KR",
+          "Iowan Old Style",
+          "Palatino Linotype",
+          "Book Antiqua",
+          Georgia,
+          "Times New Roman",
+          "Songti SC",
+          serif;
+      }
+
+      :root[data-font-theme="hardware"] {
+        --app-font-family:
+          "Noto Sans CJK SC",
+          "Noto Sans CJK JP",
+          "Noto Sans CJK KR",
+          "Source Han Sans CN",
+          "WenQuanYi Zen Hei",
+          Inter,
+          sans-serif;
+      }
+
+      :root[data-font-theme="precision"] {
+        --app-font-family:
+          "Source Han Sans CN",
+          "Noto Sans CJK SC",
+          "Noto Sans CJK JP",
+          "Noto Sans CJK KR",
+          "PingFang SC",
+          Inter,
+          sans-serif;
+      }
+
+      :root[data-font-theme="sans"] {
+        --app-font-family:
+          Inter,
+          Roboto,
+          "Fira Sans",
+          "SF Pro Display",
+          "Helvetica Neue",
+          "Noto Sans CJK SC",
+          "Noto Sans CJK JP",
+          "Noto Sans CJK KR",
+          "Source Han Sans CN",
+          sans-serif;
+      }
+
+      :root[data-font-theme="mono"] {
+        --app-font-family:
+          "Noto Sans Mono CJK SC",
+          "Noto Sans Mono CJK JP",
+          "Noto Sans Mono CJK KR",
+          "SF Mono",
+          "IBM Plex Mono",
+          "JetBrains Mono",
+          monospace;
       }
 
       * {
@@ -34,13 +109,11 @@
         display: grid;
         place-items: center;
         background:
-          radial-gradient(circle at 24% 28%, var(--room-glow), transparent 34%),
-          radial-gradient(circle at 82% 76%, rgba(255, 255, 255, 0.045), transparent 38%),
-          linear-gradient(135deg, rgba(4, 6, 12, 0.98), var(--room-base)),
+          linear-gradient(135deg, rgba(4, 6, 11, 1), var(--room-base)),
           #05070b;
         transition:
-          opacity 260ms ease,
-          filter 260ms ease;
+          opacity 240ms ease,
+          filter 240ms ease;
       }
 
       body::before {
@@ -49,74 +122,148 @@
         inset: 0;
         pointer-events: none;
         background:
-          linear-gradient(90deg, rgba(255, 255, 255, 0.035), transparent 18%, transparent 82%, rgba(255, 255, 255, 0.028)),
-          repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.012) 0 1px, transparent 1px 84px);
-        opacity: 0.54;
+          linear-gradient(90deg, rgba(255, 255, 255, 0.035), transparent 19%, transparent 81%, rgba(255, 255, 255, 0.026)),
+          repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.014) 0 1px, transparent 1px 96px);
+        opacity: 0.58;
       }
 
-      body::after {
+      .logo-floor {
+        position: fixed;
+        left: 50%;
+        top: 50%;
+        width: min(780px, 42vw);
+        height: min(430px, 52vh);
+        pointer-events: none;
+        border-left: 2px solid color-mix(in srgb, var(--room-tone) 50%, #ffffff);
+        border-right: 1px solid rgba(255, 255, 255, 0.045);
+        opacity: 0.3;
+        transform: translate(-50%, -50%);
+      }
+
+      .logo-floor::before,
+      .logo-floor::after {
         content: "";
-        width: min(420px, 28vw);
+        position: absolute;
+        left: 12%;
+        right: 12%;
+        height: 1px;
+        background: rgba(255, 255, 255, 0.07);
+      }
+
+      .logo-floor::before {
+        top: 0;
+      }
+
+      .logo-floor::after {
+        bottom: 0;
+      }
+
+      .return-stage {
+        position: relative;
+        z-index: 1;
+        width: min(520px, calc(100vw - 180px));
+        display: grid;
+        justify-items: center;
+        gap: 18px;
+        transform: translateY(-3px);
+      }
+
+      .return-stage img {
+        width: min(300px, 22vw);
+        height: auto;
+        opacity: 0.82;
+        filter: drop-shadow(0 24px 62px rgba(0, 0, 0, 0.38));
+      }
+
+      .signal-rail {
+        width: min(440px, calc(100vw - 220px));
         height: 2px;
-        border-radius: 999px;
-        background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--room-tone) 62%, white), transparent);
-        opacity: 0.58;
-        transform: translateY(0);
-        animation: tikpalRoomReturn 800ms ease-in-out infinite alternate;
+        overflow: hidden;
+        background: rgba(255, 255, 255, 0.08);
+      }
+
+      .signal-rail::after {
+        content: "";
+        display: block;
+        width: 100%;
+        height: 100%;
+        background: color-mix(in srgb, var(--room-tone) 72%, #ffffff);
+        opacity: 0.72;
+        transform: scaleX(0.48);
+        transform-origin: center;
+        animation: tikpalRoomReturn 820ms ease-in-out infinite alternate;
       }
 
       body[data-room="focus"] {
         --room-tone: #76d7ff;
-        --room-glow: rgba(65, 188, 255, 0.19);
         --room-base: #061322;
       }
 
       body[data-room="calm"] {
         --room-tone: #7ee4b8;
-        --room-glow: rgba(92, 225, 170, 0.16);
         --room-base: #071912;
       }
 
       body[data-room="sleep"] {
         --room-tone: #a9a4ff;
-        --room-glow: rgba(128, 118, 255, 0.15);
         --room-base: #08091c;
       }
 
       body[data-room="hifi"] {
         --room-tone: #e0b25f;
-        --room-glow: rgba(224, 178, 95, 0.14);
         --room-base: #0f0c08;
       }
 
       body.is-revealing {
         opacity: 0;
-        filter: blur(6px);
+        filter: blur(5px);
       }
 
       @keyframes tikpalRoomReturn {
-        from {
-          opacity: 0.34;
-          transform: scaleX(0.48);
-        }
-        to {
+        from { opacity: 0.34; transform: scaleX(0.36); }
+        to { opacity: 0.82; transform: scaleX(1); }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .signal-rail::after {
+          animation: none;
           opacity: 0.72;
           transform: scaleX(1);
         }
       }
-
-      @media (prefers-reduced-motion: reduce) {
-        body::after {
-          animation: none;
-        }
-      }
     </style>
   </head>
-  <body aria-label="Returning to room">
+  <body aria-label="Closing Explore">
+    <div class="logo-floor" aria-hidden="true"></div>
+    <main class="return-stage" aria-hidden="true">
+      <img src="/assets/tikpal-scene-logo.png" alt="" />
+      <div class="signal-rail"></div>
+    </main>
     <script>
       (() => {
+        const translations = {
+          en: { closing: "Closing" },
+          "zh-CN": { closing: "关闭中" },
+          de: { closing: "Schließt" },
+          it: { closing: "Chiusura" },
+          ko: { closing: "닫는 중" },
+          ja: { closing: "終了中" },
+          es: { closing: "Cerrando" }
+        };
+        const normalizeLocale = (value) => Object.prototype.hasOwnProperty.call(translations, value) ? value : "en";
+        const normalizeFontTheme = (value) => ["system", "hardware", "precision", "sans", "serif", "mono"].includes(value) ? value : "system";
         const room = new URLSearchParams(window.location.search).get("room") || "calm";
         document.body.dataset.room = ["focus", "calm", "sleep", "hifi"].includes(room) ? room : "calm";
+        fetch("/api/v1/web-mode/state", { headers: { Accept: "application/json" } })
+          .then((response) => response.ok ? response.json() : null)
+          .then((state) => {
+            const locale = normalizeLocale(state?.preferences?.locale);
+            const fontTheme = normalizeFontTheme(state?.preferences?.fontTheme);
+            document.documentElement.lang = locale;
+            document.documentElement.dataset.fontTheme = fontTheme;
+            document.body.setAttribute("aria-label", translations[locale].closing);
+          })
+          .catch(() => {});
         const reveal = () => document.body.classList.add("is-revealing");
         window.addEventListener("keydown", (event) => {
           if (event.key === "F8" || event.code === "F8") {

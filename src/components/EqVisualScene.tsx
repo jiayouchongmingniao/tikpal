@@ -382,7 +382,7 @@ export function EqVisualScene({ playback, audio, system, fontTheme, lyricsPanel,
             </div>
           </div>
           {lyricsControls ? (
-            <div className="hifi-lyrics-controls" aria-label="Playback controls" data-hifi-lyrics-controls>
+            <div className="hifi-lyrics-controls" data-hifi-lyrics-controls>
               {lyricsControls}
             </div>
           ) : null}

@@ -415,6 +415,11 @@ export async function fetchWebModeState(signal?: AbortSignal): Promise<WebModeSt
 }
 
 export async function sendWebModeAction(action: WebModeActionRequest): Promise<WebModeState> {
+  const timeoutMs = action.type === "open"
+    ? 120000
+    : action.type === "close"
+      ? 30000
+      : DEFAULT_POST_TIMEOUT_MS;
   const response = await fetchWithTimeout(`${API_ROOT}/web-mode/actions`, {
     method: "POST",
     headers: {
@@ -422,7 +427,7 @@ export async function sendWebModeAction(action: WebModeActionRequest): Promise<W
       "Content-Type": "application/json"
     },
     body: JSON.stringify(action)
-  }, DEFAULT_POST_TIMEOUT_MS);
+  }, timeoutMs);
   return readJson<WebModeState>(response);
 }
 

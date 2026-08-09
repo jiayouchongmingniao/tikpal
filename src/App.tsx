@@ -5,7 +5,7 @@ import { QuickMenu } from "./components/QuickMenu";
 import { QuickSettingsOverlay } from "./components/QuickSettingsOverlay";
 import { StartupModeChooser } from "./components/StartupModeChooser";
 import { OnboardingGuide } from "./components/OnboardingGuide";
-import { useAppMode } from "./hooks/useAppMode";
+import { HUD_AUTO_HIDE_MS, HUD_SOURCE_PICKER_AUTO_HIDE_MS, useAppMode } from "./hooks/useAppMode";
 import { useBrowserKioskGuard } from "./hooks/useBrowserKioskGuard";
 import { useKioskGestures } from "./hooks/useKioskGestures";
 import { useRoomExperience } from "./hooks/useRoomExperience";
@@ -334,9 +334,14 @@ export default function App() {
   const screenOffSourceRef = useRef<"manual" | "idle" | null>(null);
   const webModeActiveRef = useRef(false);
   const displaySleepLastActivityRef = useRef(Date.now());
-  const { mode, hudVisible, idleTotalMs, idleRemainingMs, showHud, toggleHud, changeMode, returnAmbient, resetIdleTimer } = useAppMode(readInitialMode());
   const { state: tikpalState, status: tikpalStatus, refresh, sendPlaybackAction, sendSystemAction, sendSourceSwitch } = useTikpalState();
   const { experience: roomExperience, status: roomExperienceStatus, refresh: refreshRoomExperience, sendExperienceAction } = useRoomExperience();
+  const hudAutoHideMs = ambientSourcePickerOpen ? HUD_SOURCE_PICKER_AUTO_HIDE_MS : HUD_AUTO_HIDE_MS;
+  const hudAutoHidePaused = tikpalStatus.pending || roomExperienceStatus.pending || sceneSoundPending;
+  const { mode, hudVisible, idleTotalMs, idleRemainingMs, showHud, toggleHud, changeMode, returnAmbient, resetIdleTimer } = useAppMode(readInitialMode(), {
+    hudAutoHideMs,
+    hudAutoHidePaused
+  });
   const { locale, preferences, t } = useI18n();
 
   useBrowserKioskGuard();
@@ -910,15 +915,9 @@ export default function App() {
   const handleQuickMenuSleep = useCallback(() => {
     if (systemSleepActive || systemSleepEntryTaskRef.current) return;
 
-    const currentBrightness = tikpalState.system.display.brightnessPercent;
     const currentVolume = tikpalState.system.volume.percent;
-    systemSleepBrightnessRestoreRef.current = currentBrightness > 0 ? Math.round(currentBrightness) : null;
+    systemSleepBrightnessRestoreRef.current = null;
     systemSleepVolumeRestoreRef.current = currentVolume > 0 ? Math.round(currentVolume) : null;
-
-    if (systemSleepBrightnessRestoreRef.current !== null) {
-      quickMenuBrightnessRestoreRef.current = systemSleepBrightnessRestoreRef.current;
-      window.localStorage.setItem(QUICK_MENU_BRIGHTNESS_RESTORE_STORAGE_KEY, String(systemSleepBrightnessRestoreRef.current));
-    }
 
     if (systemSleepVolumeRestoreRef.current !== null) {
       quickMenuVolumeRestoreRef.current = systemSleepVolumeRestoreRef.current;
@@ -930,9 +929,6 @@ export default function App() {
 
     const entryTask = (async () => {
       try {
-        if (tikpalState.system.display.controllable && currentBrightness > 0) {
-          await sendSystemAction("brightness_set", 0);
-        }
         if (currentVolume > 0) {
           await sendPlaybackAction("volume_set", 0);
         }
@@ -948,10 +944,7 @@ export default function App() {
     refresh,
     returnAmbient,
     sendPlaybackAction,
-    sendSystemAction,
     systemSleepActive,
-    tikpalState.system.display.brightnessPercent,
-    tikpalState.system.display.controllable,
     tikpalState.system.volume.percent
   ]);
 
@@ -961,12 +954,7 @@ export default function App() {
 
     try {
       await systemSleepEntryTaskRef.current?.catch(() => null);
-      const restoreBrightness = systemSleepBrightnessRestoreRef.current;
       const restoreVolume = systemSleepVolumeRestoreRef.current;
-
-      if (tikpalState.system.display.controllable && restoreBrightness !== null) {
-        await sendSystemAction("brightness_set", restoreBrightness);
-      }
 
       if (restoreVolume !== null) {
         await sendPlaybackAction("volume_set", restoreVolume);
@@ -980,7 +968,43 @@ export default function App() {
     } finally {
       systemSleepWakePendingRef.current = false;
     }
-  }, [refresh, sendPlaybackAction, sendSystemAction, tikpalState.system.display.controllable]);
+  }, [refresh, sendPlaybackAction]);
+
+  const handleSystemSleepWakeGesture = useCallback((event: { preventDefault: () => void; stopPropagation: () => void }) => {
+    event.preventDefault();
+    event.stopPropagation();
+    void handleSystemSleepWake();
+  }, [handleSystemSleepWake]);
+
+  useEffect(() => {
+    if (!systemSleepActive) return undefined;
+
+    let wakeQueued = false;
+    const wakeFromInput = (event: Event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (wakeQueued) return;
+      wakeQueued = true;
+      void handleSystemSleepWake().finally(() => {
+        wakeQueued = false;
+      });
+    };
+    const options = { capture: true, passive: false } as AddEventListenerOptions;
+
+    window.addEventListener("pointerdown", wakeFromInput, options);
+    window.addEventListener("touchstart", wakeFromInput, options);
+    window.addEventListener("mousedown", wakeFromInput, options);
+    window.addEventListener("click", wakeFromInput, options);
+    window.addEventListener("keydown", wakeFromInput, options);
+
+    return () => {
+      window.removeEventListener("pointerdown", wakeFromInput, options);
+      window.removeEventListener("touchstart", wakeFromInput, options);
+      window.removeEventListener("mousedown", wakeFromInput, options);
+      window.removeEventListener("click", wakeFromInput, options);
+      window.removeEventListener("keydown", wakeFromInput, options);
+    };
+  }, [handleSystemSleepWake, systemSleepActive]);
 
   const handleRoomExperienceAction = useCallback(
     async (action: RoomExperienceActionRequest) => {
@@ -1289,13 +1313,13 @@ export default function App() {
           className="system-sleep-overlay"
           type="button"
           data-gesture-protected
-          aria-label="Wake Tikpal"
-          onPointerDown={(event) => event.stopPropagation()}
-          onClick={(event) => {
-            event.stopPropagation();
-            void handleSystemSleepWake();
-          }}
-        />
+          aria-label={t("quickMenu.turnScreenOn")}
+          onPointerDown={handleSystemSleepWakeGesture}
+          onTouchStart={handleSystemSleepWakeGesture}
+          onClick={handleSystemSleepWakeGesture}
+        >
+          <span className="screen-saver-wake-hint">{t("settings.touchToWake")}</span>
+        </button>
       ) : null}
 
       <div className={`gesture-cue ${gesturePreview ? "is-visible" : ""}`} aria-hidden={!gesturePreview}>

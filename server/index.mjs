@@ -709,6 +709,7 @@ let hifiRuntimeRecoveryLastAttemptAtMs = 0;
 let hifiRuntimeRecoveryQuietUntilMs = 0;
 let webModeOpenInFlight = false;
 let webModeCloseInFlight = false;
+let webModeClosePromise = null;
 let sourceSwitchInFlightCount = 0;
 let mpdRecoveryPromise = null;
 let mpcRadioWeakNetworkRecoveryPromise = null;
@@ -13650,14 +13651,18 @@ async function webModeCloseRequestIsCurrent(closeRequestId) {
   return runtimeState.closeRequestId === closeRequestId && !runtimeState.activeProvider;
 }
 
-function runWebModeCloseInBackground(roomMode, closeRequestId = "") {
-  if (webModeCloseInFlight) return;
+function runWebModeCloseInBackground(roomMode, closeRequestId = "", activeProvider = "") {
+  if (webModeClosePromise) {
+    return webModeClosePromise;
+  }
   webModeCloseInFlight = true;
-  void (async () => {
+  webModeClosePromise = (async () => {
     let restoreError = null;
     try {
       await runWebModeCommand("close", "", {
-        TIKPAL_WEB_MODE_EXIT_ROOM_MODE: roomMode
+        TIKPAL_WEB_MODE_EXIT_ROOM_MODE: roomMode,
+        TIKPAL_WEB_MODE_CLOSE_ACTIVE_PROVIDER: activeProvider,
+        TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS: "10"
       });
       if (await webModeCloseRequestIsCurrent(closeRequestId)) {
         try {
@@ -13683,8 +13688,10 @@ function runWebModeCloseInBackground(roomMode, closeRequestId = "") {
           closeRequestId: null
         }).catch(() => {});
       }
+      webModeClosePromise = null;
     }
   })();
+  return webModeClosePromise;
 }
 
 function isWebModeSwitchingError(error) {
@@ -13855,14 +13862,23 @@ async function applyWebModeAction(action) {
   const type = String(action?.type ?? "").trim().toLowerCase();
   if (type === "close") {
     const room = await readRoomExperienceState();
+    if (webModeClosePromise) {
+      const runtimeState = await readWebModeRuntimeState();
+      if (!runtimeState.activeProvider && runtimeState.closeRequestId) {
+        await writeWebModeRuntimeState({ closeRequestId: null });
+      }
+      return await buildWebModeState();
+    }
     const closeRequestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const runtimeState = await readWebModeRuntimeState();
+    const activeProvider = typeof runtimeState.activeProvider === "string" ? runtimeState.activeProvider : "";
     await writeWebModeRuntimeState({
       activeProvider: null,
       residentProviders: {},
       lastError: null,
       closeRequestId
     });
-    runWebModeCloseInBackground(room.mode, closeRequestId);
+    runWebModeCloseInBackground(room.mode, closeRequestId, activeProvider);
     return await buildWebModeState();
   }
 

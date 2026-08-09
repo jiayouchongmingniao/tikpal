@@ -9,8 +9,85 @@
         color-scheme: dark;
         background: #05070b;
         color: #f7fbff;
-        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        font-family: var(--app-font-family);
+        font-synthesis: none;
+        text-rendering: geometricPrecision;
+        -webkit-font-smoothing: antialiased;
+        --app-font-family:
+          Inter,
+          "SF Pro Display",
+          "SF Pro Text",
+          "Helvetica Neue",
+          "Noto Sans CJK SC",
+          "Noto Sans CJK JP",
+          "Noto Sans CJK KR",
+          "Source Han Sans CN",
+          "PingFang SC",
+          "WenQuanYi Zen Hei",
+          sans-serif;
         --provider-tone: #81d7ff;
+        --provider-text-scale: 1.1;
+      }
+
+      :root[data-font-theme="serif"] {
+        --app-font-family:
+          "Noto Serif CJK SC",
+          "Noto Serif CJK JP",
+          "Noto Serif CJK KR",
+          "Iowan Old Style",
+          "Palatino Linotype",
+          "Book Antiqua",
+          Georgia,
+          "Times New Roman",
+          "Songti SC",
+          serif;
+      }
+
+      :root[data-font-theme="hardware"] {
+        --app-font-family:
+          "Noto Sans CJK SC",
+          "Noto Sans CJK JP",
+          "Noto Sans CJK KR",
+          "Source Han Sans CN",
+          "WenQuanYi Zen Hei",
+          Inter,
+          sans-serif;
+      }
+
+      :root[data-font-theme="precision"] {
+        --app-font-family:
+          "Source Han Sans CN",
+          "Noto Sans CJK SC",
+          "Noto Sans CJK JP",
+          "Noto Sans CJK KR",
+          "PingFang SC",
+          Inter,
+          sans-serif;
+      }
+
+      :root[data-font-theme="sans"] {
+        --app-font-family:
+          Inter,
+          Roboto,
+          "Fira Sans",
+          "SF Pro Display",
+          "Helvetica Neue",
+          "Noto Sans CJK SC",
+          "Noto Sans CJK JP",
+          "Noto Sans CJK KR",
+          "Source Han Sans CN",
+          sans-serif;
+      }
+
+      :root[data-font-theme="mono"] {
+        --app-font-family:
+          "Noto Sans Mono CJK SC",
+          "Noto Sans Mono CJK JP",
+          "Noto Sans Mono CJK KR",
+          "SF Mono",
+          "IBM Plex Mono",
+          "JetBrains Mono",
+          monospace;
       }
 
       * {
@@ -31,23 +108,51 @@
       body {
         display: grid;
         place-items: center;
-        background: #05070b;
+        background:
+          linear-gradient(135deg, rgba(4, 6, 11, 1), rgba(11, 15, 20, 1)),
+          #05070b;
+      }
+
+      body::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        background:
+          linear-gradient(90deg, rgba(255, 255, 255, 0.035), transparent 19%, transparent 81%, rgba(255, 255, 255, 0.026)),
+          repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.014) 0 1px, transparent 1px 96px);
+        opacity: 0.58;
       }
 
       .logo-floor {
         position: fixed;
-        inset: 0;
-        display: grid;
-        place-items: center;
+        left: 50%;
+        top: 50%;
+        width: min(680px, 54vw);
+        height: min(420px, 52vh);
         pointer-events: none;
+        border-left: 2px solid color-mix(in srgb, var(--provider-tone) 58%, #ffffff);
+        border-right: 1px solid rgba(255, 255, 255, 0.045);
+        opacity: 0.34;
+        transform: translate(-50%, -50%);
       }
 
-      .logo-floor img {
-        width: min(680px, 54vw);
-        height: auto;
-        opacity: 0.18;
-        filter: grayscale(1) brightness(1.65) drop-shadow(0 26px 68px rgba(0, 0, 0, 0.42));
-        transform: translateY(-2px);
+      .logo-floor::before,
+      .logo-floor::after {
+        content: "";
+        position: absolute;
+        left: 14%;
+        right: 14%;
+        height: 1px;
+        background: rgba(255, 255, 255, 0.07);
+      }
+
+      .logo-floor::before {
+        top: 0;
+      }
+
+      .logo-floor::after {
+        bottom: 0;
       }
 
       .signal-stage {
@@ -56,34 +161,35 @@
         width: min(520px, calc(100vw - 96px));
         display: grid;
         justify-items: center;
-        gap: 13px;
+        gap: 14px;
         transform: translateY(-4px);
         animation: tikpalSignalStageIn 260ms ease-out both;
       }
 
       .provider-name {
+        max-width: 100%;
         margin: 0;
         color: #f7fbff;
-        font-size: 30px;
+        font-size: calc(30px * var(--provider-text-scale));
         font-weight: 760;
         line-height: 1.1;
         text-align: center;
+        overflow-wrap: anywhere;
       }
 
       .connecting-label {
         margin: 0;
         color: color-mix(in srgb, var(--provider-tone) 72%, #ffffff);
-        font-size: 12px;
+        font-size: calc(12px * var(--provider-text-scale));
         font-weight: 760;
         line-height: 1;
-        text-transform: uppercase;
       }
 
       .signal-track {
         position: relative;
         width: min(420px, calc(100vw - 160px));
         height: 2px;
-        margin-top: 8px;
+        margin-top: 6px;
         overflow: hidden;
         background: rgba(255, 255, 255, 0.08);
       }
@@ -123,10 +229,8 @@
     </style>
   </head>
   <body>
-    <div class="logo-floor" aria-hidden="true">
-      <img src="/assets/tikpal-scene-logo.png" alt="" />
-    </div>
-    <main class="signal-stage" role="status" aria-live="polite" aria-label="Connecting to Explore provider">
+    <div class="logo-floor" aria-hidden="true"></div>
+    <main class="signal-stage" role="status" aria-live="polite">
       <h1 class="provider-name">Explore</h1>
       <p class="connecting-label">Connecting</p>
       <div class="signal-track" aria-hidden="true"></div>
@@ -145,12 +249,53 @@
           qq_music: { label: "QQ Music", tone: "#20d070" },
           netease_music: { label: "NetEase Cloud Music", tone: "#e64040" }
         };
+        const translations = {
+          en: { connecting: "Connecting", connectingTo: "Connecting to {label}" },
+          "zh-CN": { connecting: "连接中", connectingTo: "正在连接 {label}" },
+          de: { connecting: "Verbinden", connectingTo: "Verbindet mit {label}" },
+          it: { connecting: "Connessione", connectingTo: "Connessione a {label}" },
+          ko: { connecting: "연결 중", connectingTo: "{label} 연결 중" },
+          ja: { connecting: "接続中", connectingTo: "{label}に接続中" },
+          es: { connecting: "Conectando", connectingTo: "Conectando con {label}" }
+        };
+        const normalizeLocale = (value) => Object.prototype.hasOwnProperty.call(translations, value) ? value : "en";
+        const normalizeFontTheme = (value) => ["system", "hardware", "precision", "sans", "serif", "mono"].includes(value) ? value : "system";
+        const normalizeTextScale = (value) => [1, 1.1, 1.2].includes(Number(value)) ? Number(value) : 1.1;
+        const template = (value, params) => value.replace(/\{([^}]+)\}/g, (_, key) => params[key] ?? "");
         const providerId = new URLSearchParams(window.location.search).get("provider") || "";
-        const provider = providers[providerId] || { label: "Explore", tone: "#81d7ff" };
-        document.body.dataset.provider = providerId || "explore";
-        document.documentElement.style.setProperty("--provider-tone", provider.tone);
-        document.querySelector(".provider-name").textContent = provider.label;
-        document.querySelector(".signal-stage").setAttribute("aria-label", `Connecting to ${provider.label}`);
+        const fallbackProvider = providers[providerId] || { label: "Explore", tone: "#81d7ff" };
+        const providerName = document.querySelector(".provider-name");
+        const connectingLabel = document.querySelector(".connecting-label");
+        const signalStage = document.querySelector(".signal-stage");
+
+        const applyState = (webModeState) => {
+          const preferences = webModeState?.preferences || {};
+          const settings = webModeState?.settings || {};
+          const locale = normalizeLocale(preferences.locale);
+          const fontTheme = normalizeFontTheme(preferences.fontTheme);
+          const runtimeProvider = Array.isArray(webModeState?.providers)
+            ? webModeState.providers.find((candidate) => candidate.id === providerId)
+            : null;
+          const provider = {
+            ...fallbackProvider,
+            ...(runtimeProvider?.label ? { label: runtimeProvider.label } : {})
+          };
+          const text = translations[locale] || translations.en;
+          document.documentElement.lang = locale;
+          document.documentElement.dataset.fontTheme = fontTheme;
+          document.documentElement.style.setProperty("--provider-tone", provider.tone);
+          document.documentElement.style.setProperty("--provider-text-scale", String(normalizeTextScale(settings.providerTextScale)));
+          document.body.dataset.provider = providerId || "explore";
+          providerName.textContent = provider.label;
+          connectingLabel.textContent = text.connecting;
+          signalStage.setAttribute("aria-label", template(text.connectingTo, { label: provider.label }));
+        };
+
+        applyState(null);
+        fetch("/api/v1/web-mode/state", { headers: { Accept: "application/json" } })
+          .then((response) => response.ok ? response.json() : null)
+          .then(applyState)
+          .catch(() => {});
 
         const block = (event) => event.preventDefault();
         document.addEventListener("contextmenu", block, true);

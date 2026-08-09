@@ -49,7 +49,6 @@ type AmbientMusicSourceTarget = Exclude<SourceSwitchTarget, "audio" | "scene">;
 const BACKGROUND_VIDEO_REFRESH_MS = 30_000;
 const BACKGROUND_VIDEO_REFRESH_EVENT = "tikpal:background-videos-refresh";
 const SCENE_CONTEXT_REFRESH_MS = 30 * 60_000;
-const SOURCE_PICKER_AUTO_CLOSE_MS = 5_000;
 const SOURCE_PICKER_SCENE_AUDIO_RELEASE_MS = 150;
 const ADJUST_COMMIT_DELAY_MS = 35;
 const ADJUST_OVERLAY_AUTO_CLOSE_MS = 3_000;
@@ -722,6 +721,12 @@ export function AmbientScreen({
     onOpenPlayer();
   }
 
+  function handleHifiLyricsPromptClick() {
+    onHudActivity();
+    setAmbientSourceError(null);
+    setSourcePickerOpen(true);
+  }
+
   function handleSceneSoundToggle() {
     onHudActivity();
     if (sceneSoundPending || !hasSceneVideo) return;
@@ -735,38 +740,17 @@ export function AmbientScreen({
   }
 
   const hifiLyricsControls = isHifiMode && hifiLyricsPanel ? (
-    <>
-      <button
-        className="hifi-lyrics-control"
-        type="button"
-        aria-label={t("playback.previous")}
-        title={previousTrackTitle}
-        disabled={previousTrackDisabled}
-        onClick={() => handleAmbientPlaybackAction("previous")}
-      >
-        <SkipBack size={34} fill="currentColor" strokeWidth={1.6} />
-      </button>
-      <button
-        className="hifi-lyrics-control hifi-lyrics-control-play"
-        type="button"
-        aria-label={isPlaying ? t("playback.pause") : t("playback.play")}
-        title={playPauseTitle}
-        disabled={playPauseDisabled}
-        onClick={() => handleAmbientPlaybackAction("play_pause")}
-      >
-        {isPlaying ? <Pause size={42} fill="currentColor" strokeWidth={1.5} /> : <Play size={42} fill="currentColor" strokeWidth={1.5} />}
-      </button>
-      <button
-        className="hifi-lyrics-control"
-        type="button"
-        aria-label={t("playback.next")}
-        title={nextTrackTitle}
-        disabled={nextTrackDisabled}
-        onClick={() => handleAmbientPlaybackAction("next")}
-      >
-        <SkipForward size={34} fill="currentColor" strokeWidth={1.6} />
-      </button>
-    </>
+    <button
+      className="hifi-lyrics-control-prompt"
+      type="button"
+      aria-label={t("hifi.tapForMusicControls")}
+      title={t("hifi.tapForMusicControls")}
+      data-hifi-lyrics-control-prompt
+      onClick={handleHifiLyricsPromptClick}
+    >
+      <Music2 size={24} strokeWidth={1.8} />
+      <span>{t("hifi.tapForMusicControls")}</span>
+    </button>
   ) : null;
 
   async function handleAmbientSourceSelect(sourceId: AmbientMusicSourceTarget) {
@@ -788,7 +772,7 @@ export function AmbientScreen({
         setSourcePickerOpen(false);
       }
       await onSourceSwitch(sourceId);
-      setSourcePickerOpen(false);
+      setSourcePickerOpen(ambientHudVisible);
     } catch (error) {
       if (shouldReleaseSceneAudio) {
         setAmbientSceneAudioSuppressed(false);
@@ -879,14 +863,12 @@ export function AmbientScreen({
   }, [backgroundVideos.length, currentBackgroundVideo.id, hasSceneVideo, hudVisible, isHifiMode, isPlaybackPending, nextTrackDisabled, onExperienceAction, onHudActivity, onPlaybackAction, onSceneSoundEnabledChange, playPauseDisabled, previousTrackDisabled, sceneSoundEnabled, sceneSoundPending, switchableBackgroundVideos.length]);
 
   useEffect(() => {
-    if (!sourcePickerOpen || pendingAmbientSource || ambientSourceError) return undefined;
-
-    const timer = window.setTimeout(() => {
-      setSourcePickerOpen(false);
-    }, SOURCE_PICKER_AUTO_CLOSE_MS);
-
-    return () => window.clearTimeout(timer);
-  }, [ambientSourceError, pendingAmbientSource, sourcePickerOpen]);
+    if (ambientHudVisible) {
+      setSourcePickerOpen(true);
+      return;
+    }
+    setSourcePickerOpen(false);
+  }, [ambientHudVisible, roomExperience.mode]);
 
   useEffect(() => {
     onSourcePickerOpenChange?.(sourcePickerOpen);
@@ -903,8 +885,8 @@ export function AmbientScreen({
     if (!isHifiMode || !pendingAmbientSource || status.pending) return;
     if (audio.currentSource.id !== pendingAmbientSource) return;
     setPendingAmbientSource(null);
-    setSourcePickerOpen(false);
-  }, [audio.currentSource.id, isHifiMode, pendingAmbientSource, status.pending]);
+    setSourcePickerOpen(ambientHudVisible);
+  }, [ambientHudVisible, audio.currentSource.id, isHifiMode, pendingAmbientSource, status.pending]);
 
   useEffect(() => {
     if (sourcePickerOpenRequest === lastSourcePickerOpenRequestRef.current) return;
@@ -1325,7 +1307,7 @@ export function AmbientScreen({
   const sourcePickerControl = (
     <div className="ambient-source-picker" ref={sourcePickerRef}>
       <button
-        className={`ambient-transport-button ambient-transport-setting ambient-source-toggle ${sourcePickerOpen ? "is-active" : ""}`}
+        className={`ambient-transport-button ambient-transport-setting ambient-source-toggle is-source-primary ${sourcePickerOpen ? "is-active" : ""}`}
         type="button"
         aria-label={t("source.choose")}
         title={`Source: ${currentAmbientSourceLabel}`}

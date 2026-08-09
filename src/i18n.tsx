@@ -2491,6 +2491,34 @@ Object.assign(dictionaries.es, {
   "onboarding.sampleTry": "Prueba aquí"
 });
 
+Object.assign(dictionaries.en, {
+  "hifi.tapForMusicControls": "Tap for music controls"
+});
+
+Object.assign(dictionaries["zh-CN"], {
+  "hifi.tapForMusicControls": "轻触选择播放"
+});
+
+Object.assign(dictionaries.de, {
+  "hifi.tapForMusicControls": "Tippen für Musiksteuerung"
+});
+
+Object.assign(dictionaries.it, {
+  "hifi.tapForMusicControls": "Tocca per controlli musica"
+});
+
+Object.assign(dictionaries.ko, {
+  "hifi.tapForMusicControls": "음악 제어 열기"
+});
+
+Object.assign(dictionaries.ja, {
+  "hifi.tapForMusicControls": "タップで音楽操作"
+});
+
+Object.assign(dictionaries.es, {
+  "hifi.tapForMusicControls": "Toca para controles"
+});
+
 function template(value: string, params: TranslationParams = {}) {
   return value.replace(/\{([^}]+)\}/g, (_, key: string) => {
     const replacement = params[key];

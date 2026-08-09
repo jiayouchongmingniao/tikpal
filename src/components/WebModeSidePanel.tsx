@@ -117,6 +117,12 @@ export function WebModeSidePanel() {
   }, [effectiveActiveProvider, t]);
 
   const displayProviderLabel = pendingProvider ? providerLabels[pendingProvider] : failedProvider ? providerLabels[failedProvider] : activeProviderLabel;
+  const panelState = pendingAction === "close" ? "closing" : pendingProvider ? "switching" : "ready";
+  const panelTone = pendingProvider
+    ? providerTones[pendingProvider]
+    : effectiveActiveProvider
+      ? providerTones[effectiveActiveProvider]
+      : "#81d7ff";
 
   function providerStatusLabel(providerId: WebModeProviderId, flags: {
     active: boolean;
@@ -253,7 +259,13 @@ export function WebModeSidePanel() {
   }
 
   return (
-    <main className="web-mode-panel" data-web-mode-panel>
+    <main
+      className={`web-mode-panel ${panelState === "closing" ? "is-closing" : ""} ${panelState === "switching" ? "is-switching" : ""}`}
+      style={{ "--panel-tone": panelTone } as CSSProperties}
+      data-web-mode-panel
+      data-web-mode-state={panelState}
+      aria-busy={panelState !== "ready"}
+    >
       <header className="web-mode-panel-header">
         <div>
           <span>Explore</span>
@@ -309,6 +321,7 @@ export function WebModeSidePanel() {
               key={provider.id}
               className={`web-mode-provider ${active && !proxyUnavailable ? "is-active" : ""} ${current ? "is-current" : ""} ${connecting || warming ? "is-connecting" : ""} ${failed || proxyUnavailable || residentStatus === "check_setup" ? "is-failed" : ""} ${proxyUnavailable ? "is-proxy-unavailable" : ""}`}
               type="button"
+              disabled={Boolean(pendingAction || pendingProvider)}
               style={{ "--provider-tone": providerTones[provider.id] } as CSSProperties}
               aria-busy={connecting || warming}
               data-web-mode-provider={provider.id}

@@ -1,13 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { AppMode } from "../types";
 
-const HUD_AUTO_HIDE_MS = 5000;
+export const HUD_AUTO_HIDE_MS = 8000;
+export const HUD_SOURCE_PICKER_AUTO_HIDE_MS = 12000;
+
+interface AppModeOptions {
+  hudAutoHideMs?: number;
+  hudAutoHidePaused?: boolean;
+}
 
 function getIdleTotalMs(_mode: AppMode): number | null {
   return null;
 }
 
-export function useAppMode(initialMode: AppMode = "ambient") {
+export function useAppMode(initialMode: AppMode = "ambient", options: AppModeOptions = {}) {
+  const hudAutoHideMs = options.hudAutoHideMs ?? HUD_AUTO_HIDE_MS;
+  const hudAutoHidePaused = options.hudAutoHidePaused ?? false;
   const [mode, setMode] = useState<AppMode>(initialMode);
   const [hudVisible, setHudVisible] = useState(true);
   const [idleTotalMs, setIdleTotalMs] = useState(() => getIdleTotalMs(initialMode));
@@ -28,8 +36,9 @@ export function useAppMode(initialMode: AppMode = "ambient") {
 
   const scheduleHudAutoHide = useCallback(() => {
     clearTimer(hudTimerRef);
-    hudTimerRef.current = window.setTimeout(() => setHudVisible(false), HUD_AUTO_HIDE_MS);
-  }, [clearTimer]);
+    if (hudAutoHidePaused) return;
+    hudTimerRef.current = window.setTimeout(() => setHudVisible(false), hudAutoHideMs);
+  }, [clearTimer, hudAutoHideMs, hudAutoHidePaused]);
 
   const showHud = useCallback(() => {
     setHudVisible(true);
@@ -64,11 +73,13 @@ export function useAppMode(initialMode: AppMode = "ambient") {
       const nextVisible = !visible;
       clearTimer(hudTimerRef);
       if (nextVisible) {
-        hudTimerRef.current = window.setTimeout(() => setHudVisible(false), HUD_AUTO_HIDE_MS);
+        if (!hudAutoHidePaused) {
+          hudTimerRef.current = window.setTimeout(() => setHudVisible(false), hudAutoHideMs);
+        }
       }
       return nextVisible;
     });
-  }, [clearTimer]);
+  }, [clearTimer, hudAutoHideMs, hudAutoHidePaused]);
 
   const returnAmbient = useCallback(() => {
     setMode("ambient");
@@ -88,11 +99,11 @@ export function useAppMode(initialMode: AppMode = "ambient") {
 
   useEffect(() => {
     clearTimer(hudTimerRef);
-    if (!hudVisible) return undefined;
+    if (!hudVisible || hudAutoHidePaused) return undefined;
 
-    hudTimerRef.current = window.setTimeout(() => setHudVisible(false), HUD_AUTO_HIDE_MS);
+    hudTimerRef.current = window.setTimeout(() => setHudVisible(false), hudAutoHideMs);
     return () => clearTimer(hudTimerRef);
-  }, [clearTimer, hudVisible]);
+  }, [clearTimer, hudAutoHideMs, hudAutoHidePaused, hudVisible]);
 
   useEffect(() => {
     if (idleDeadlineMs === null) return undefined;

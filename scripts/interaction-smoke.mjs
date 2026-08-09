@@ -1667,7 +1667,7 @@ try {
     `,
     "Hi-Fi synced lyrics advance wall from the local playback clock between state refreshes"
   );
-  await wait(4200);
+  await wait(12200);
   await expectEventually(
     client,
     `
@@ -1790,8 +1790,9 @@ try {
         const controls = document.querySelector('[data-hifi-lyrics-controls]');
         const progressGroup = document.querySelector('[data-hifi-lyrics-progress-eq]');
         const progressRow = document.querySelector('.hifi-lyrics-progress-row');
-        const play = controls?.querySelector('button[aria-label="Pause"], button[aria-label="Play"]');
-        if (!panel || !activeLine || !cover || !footer || !miniEq || !firstBar || !time || !controls || !progressGroup || !progressRow || !play) return false;
+        const prompt = controls?.querySelector('[data-hifi-lyrics-control-prompt]');
+        const falsePlaybackButtons = controls?.querySelector('button[aria-label="Pause"], button[aria-label="Play"], button[aria-label="Previous"], button[aria-label="Next"]');
+        if (!panel || !activeLine || !cover || !footer || !miniEq || !firstBar || !time || !controls || !progressGroup || !progressRow || !prompt || falsePlaybackButtons) return false;
         const bars = Array.from(document.querySelectorAll('[data-hifi-mini-eq-bar]'));
         const barStyle = getComputedStyle(firstBar);
         const barDurations = new Set(bars.map((bar) => getComputedStyle(bar).animationDuration));
@@ -1802,6 +1803,7 @@ try {
         const miniEqRect = miniEq.getBoundingClientRect();
         const progressRowRect = progressRow.getBoundingClientRect();
         const controlsRect = controls.getBoundingClientRect();
+        const controlsStyle = getComputedStyle(controls);
         const coverCenterX = coverRect.left + coverRect.width / 2;
         const miniEqCenterX = miniEqRect.left + miniEqRect.width / 2;
         const activeText = activeLine.textContent?.trim() ?? "";
@@ -1815,6 +1817,7 @@ try {
           && barPeaks.size >= 5
           && activeText.includes('Bluetooth chorus line')
           && document.querySelector('.ambient-lyrics-ticker') === null
+          && prompt.textContent?.includes('Tap for music controls')
           && footerRect.left >= 250
           && footerRect.left <= 330
           && footerRect.bottom < window.innerHeight - 56
@@ -1825,10 +1828,18 @@ try {
           && progressRect.width < window.innerWidth * 0.46
           && controlsRect.left < window.innerWidth * 0.68
           && controlsRect.right < window.innerWidth - 320
+          && Number(controlsStyle.opacity) > 0.9
+          && controlsStyle.pointerEvents !== 'none'
           && time.textContent?.trim() === '0:42/3:08';
       })()
     `,
-    "Bluetooth ready lyrics use the shared Hi-Fi lyrics wall with lightweight footer"
+    "Bluetooth ready lyrics use the shared Hi-Fi lyrics wall with a music controls prompt"
+  );
+  await evaluate(client, "document.querySelector('[data-hifi-lyrics-control-prompt]')?.click(); true");
+  await expectEventually(
+    client,
+    "document.querySelector('.ambient-screen.is-hud-visible') !== null && document.querySelectorAll('[data-ambient-source-picker] [data-ambient-source-option]').length === 7",
+    "Hi-Fi lyrics prompt opens the real HUD and source picker without playback action"
   );
   const radioReadyLyricsPatchVersion = await setStatePatchMode(client, "radioReadyLyrics");
   await waitForStatePatchRefresh(client, radioReadyLyricsPatchVersion, "Radio ready lyrics fixture refreshes");
@@ -1936,11 +1947,10 @@ try {
   await evaluate(client, "document.querySelector('.ambient-transport button[aria-label=\"Hide lyrics\"]')?.click(); true");
   await setStatePatchMode(client, "");
   await wait(3300);
-  await evaluate(client, "document.querySelector('[data-ambient-source-toggle]')?.click()");
   await expectEventually(
     client,
     "document.querySelectorAll('[data-ambient-source-picker] [data-ambient-source-option]').length === 7 && document.querySelector('[data-ambient-source-option=\"web-mode\"] strong')?.textContent === 'Explore'",
-    "Hi-Fi source picker opens six source choices plus Explore"
+    "Hi-Fi source picker defaults open with six source choices plus Explore"
   );
   await expect(
     client,
@@ -1955,18 +1965,20 @@ try {
         const tops = options.map((option) => option.getBoundingClientRect().top);
         const pickerCenter = pickerRect.left + pickerRect.width / 2;
         const transportCenter = transportRect.left + transportRect.width / 2;
+        const isUltraWide = window.innerWidth / window.innerHeight > 2.4;
         return Math.max(...tops) - Math.min(...tops) < 2
           && pickerRect.left >= 0
           && pickerRect.right <= window.innerWidth
           && pickerRect.height <= 122
           && pickerRect.bottom <= transportRect.top + 8
-          && Math.abs(pickerCenter - transportCenter) <= 18;
+          && Math.abs(pickerCenter - transportCenter) <= 18
+          && (!isUltraWide || transportCenter > window.innerWidth / 2 + 48);
       })()
     `,
     "Hi-Fi source picker renders as a compact shelf above the transport"
   );
-  await wait(5200);
-  await expectEventually(client, "document.querySelector('[data-ambient-source-picker]') === null", "Hi-Fi source picker auto-closes after 5 seconds");
+  await wait(1200);
+  await expect(client, "document.querySelector('[data-ambient-source-picker]') !== null", "Hi-Fi source picker stays open while the HUD is visible");
   await switchHifiAmbientSource(client, "radio", "Hi-Fi source picker exposes Radio", "Hi-Fi source picker switches immediately to Radio");
   await expectEventually(client, "document.querySelector('[data-ambient-source-toggle]:not(:disabled)') !== null", "Hi-Fi source toggle is ready after Radio");
   await switchHifiAmbientSource(client, "bluetooth", "Hi-Fi source picker exposes Bluetooth", "Hi-Fi source picker switches immediately to Bluetooth waiting state");
@@ -2487,7 +2499,7 @@ try {
     "ambient mood overlay omits music metadata and seek controls"
   );
 
-  await wait(5600);
+  await wait(12200);
   await expect(client, "document.querySelector('.ambient-screen.is-hud-hidden') !== null", "ambient HUD auto hides after startup");
 
   await click(client, 1280, 280);
@@ -2501,13 +2513,22 @@ try {
     client,
     `
       (() => {
+        const picker = document.querySelector('[data-ambient-source-picker]');
+        const transport = document.querySelector('.ambient-transport');
         const options = [...document.querySelectorAll('[data-ambient-source-picker] [data-ambient-source-option]')];
-        if (options.length !== 7) return false;
+        if (!(picker instanceof HTMLElement) || !(transport instanceof HTMLElement) || options.length !== 7) return false;
         const tops = options.map((option) => option.getBoundingClientRect().top);
-        return Math.max(...tops) - Math.min(...tops) < 2;
+        const pickerRect = picker.getBoundingClientRect();
+        const transportRect = transport.getBoundingClientRect();
+        const pickerCenter = pickerRect.left + pickerRect.width / 2;
+        const transportCenter = transportRect.left + transportRect.width / 2;
+        const isUltraWide = window.innerWidth / window.innerHeight > 2.4;
+        return Math.max(...tops) - Math.min(...tops) < 2
+          && Math.abs(pickerCenter - transportCenter) <= 22
+          && (!isUltraWide || transportCenter > window.innerWidth / 2 + 48);
       })()
     `,
-    "ambient source picker keeps Explore on the first row"
+    "ambient source picker keeps Explore on the first row and follows the shared control anchor"
   );
   await expect(
     client,
@@ -2823,7 +2844,7 @@ try {
 	  );
 	  await setStatePatchMode(client, "");
 
-  await wait(5600);
+  await wait(12200);
   await expect(client, "document.querySelector('.ambient-screen.is-hud-hidden') !== null", "ambient HUD auto hides after tap show");
 
   await wheel(client, 220);
@@ -2887,9 +2908,17 @@ try {
       (() => {
         const text = document.querySelector('.quick-menu-panel')?.textContent ?? '';
         const proxy = document.querySelector('[data-quick-menu-toggle="proxy"]');
+        const backdrop = document.querySelector('.quick-menu > .overlay-backdrop');
+        const backdropStyle = backdrop instanceof HTMLElement ? getComputedStyle(backdrop) : null;
+        const backdropFilter = backdropStyle ? (backdropStyle.backdropFilter || backdropStyle.getPropertyValue('-webkit-backdrop-filter')) : '';
+        const sleep = document.querySelector('[data-quick-menu-toggle="sleep"]');
+        const time = document.querySelector('[data-quick-menu-toggle="time"]');
         return document.querySelectorAll('.quick-menu-panel [data-quick-menu-toggle]').length === 5
           && document.querySelectorAll('.quick-menu-panel .quick-menu-switch').length === 5
           && document.querySelectorAll('.quick-menu-toggle > span').length === 0
+          && backdropStyle
+          && backdropFilter
+          && backdropFilter !== 'none'
           && text.includes('Screen')
           && !text.includes('Room Mode')
           && text.includes('Volume')
@@ -2908,10 +2937,13 @@ try {
           && !text.includes('Scene Sound')
           && !text.includes('Unavailable')
           && !text.includes('Flame')
-          && !text.includes('Screen Off');
+          && !text.includes('Screen Off')
+          && sleep instanceof HTMLElement
+          && time instanceof HTMLElement
+          && getComputedStyle(sleep).borderColor !== getComputedStyle(time).borderColor;
       })()
     `,
-    "quick menu exposes screen, volume, time, and sleep toggles without stale labels"
+    "quick menu exposes five focused toggles with a skin-aware backdrop"
   );
 
   await evaluate(
@@ -3001,13 +3033,22 @@ try {
       })()
     `
   );
-  await expectEventually(client, "document.querySelector('.system-sleep-overlay') !== null && document.querySelector('.quick-menu.is-active') === null", "quick menu sleep enters a black tap-to-wake overlay");
+  await expectEventually(client, "document.querySelector('.system-sleep-overlay .screen-saver-wake-hint') !== null && document.querySelector('.quick-menu.is-active') === null", "quick menu sleep enters a touch-safe wake overlay");
   await expectEventuallyEvaluate(
     client,
-    "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => state.system.volume.percent === 0 && state.system.display.brightnessPercent === 0)",
-    "quick menu sleep mutes volume and lowers brightness"
+    "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => state.system.volume.percent === 0 && state.system.display.brightnessPercent === window.__tikpalQuickMenuSleepBefore.brightness)",
+    "quick menu sleep mutes volume without turning hardware brightness to zero"
   );
-  await evaluate(client, "document.querySelector('.system-sleep-overlay')?.click();");
+  await evaluate(
+    client,
+    `
+      (() => {
+        const overlay = document.querySelector('.system-sleep-overlay');
+        overlay?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'touch' }));
+        return true;
+      })()
+    `
+  );
   await expectEventually(
     client,
     "document.querySelector('.system-sleep-overlay') === null",

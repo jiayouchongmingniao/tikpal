@@ -48,9 +48,10 @@ fi
 : "${TIKPAL_WEB_MODE_ENTRY_STAGE_WINDOW:=2560x720}"
 : "${TIKPAL_WEB_MODE_ENTRY_REVEAL_SETTLE_SECONDS:=0.45}"
 : "${TIKPAL_WEB_MODE_ENTRY_GUARD_INTERVAL_SECONDS:=0.12}"
-: "${TIKPAL_WEB_MODE_EXIT_VEIL_ENABLED:=0}"
-: "${TIKPAL_WEB_MODE_EXIT_VEIL_SETTLE_SECONDS:=0.18}"
+: "${TIKPAL_WEB_MODE_EXIT_VEIL_ENABLED:=1}"
+: "${TIKPAL_WEB_MODE_EXIT_VEIL_SETTLE_SECONDS:=0.12}"
 : "${TIKPAL_WEB_MODE_EXIT_ROOM_MODE:=}"
+: "${TIKPAL_WEB_MODE_CLOSE_ACTIVE_PROVIDER:=}"
 : "${TIKPAL_WEB_MODE_STAGE_POSITION:=2560,0}"
 : "${TIKPAL_WEB_MODE_STAGE_REVEAL_MS:=650}"
 : "${TIKPAL_WEB_MODE_AUDIO_CROSSFADE_ENABLED:=1}"
@@ -66,6 +67,7 @@ fi
 : "${TIKPAL_WEB_MODE_CLOSE_KEEP_RESIDENT:=1}"
 : "${TIKPAL_WEB_MODE_CLOSE_WARM_TTL_SECONDS:=45}"
 : "${TIKPAL_WEB_MODE_CLOSE_AUDIO_GATE_SETTLE_SECONDS:=0.35}"
+: "${TIKPAL_WEB_MODE_CLOSE_REFILL_PROVIDER_POOL_ENABLED:=1}"
 : "${TIKPAL_WEB_MODE_ONBOARD_LOCK_TIMEOUT_SECONDS:=8}"
 : "${TIKPAL_WEB_MODE_DEFAULT_PROXY_URL:=http://127.0.0.1:7897}"
 : "${TIKPAL_WEB_MODE_ONBOARD:=1}"
@@ -1684,28 +1686,48 @@ park_side_panel_for_reopen() {
 }
 
 park_provider_windows_for_reopen() {
+  local active_provider="${1:-}"
   local provider profile
+  if [[ -n "$active_provider" ]]; then
+    profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/$active_provider"
+    if profile_process_exists "$profile"; then
+      park_profile_windows_for_reopen "$profile" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
+    fi
+  fi
   while IFS= read -r provider; do
     [[ -n "$provider" ]] || continue
+    [[ -z "$active_provider" || "$provider" != "$active_provider" ]] || continue
     profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/$provider"
+    profile_process_exists "$profile" || continue
     park_profile_windows_for_reopen "$profile" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
   done < <(provider_ids)
 }
 
 park_left_web_mode_surfaces_for_reopen() {
+  local active_provider="${1:-}"
   close_transition_veil
   close_error_veil
   close_entry_stage_veil
   close_background_veil
-  park_provider_windows_for_reopen
+  park_provider_windows_for_reopen "$active_provider"
 }
 
 park_web_mode_surfaces_for_reopen() {
-  park_left_web_mode_surfaces_for_reopen &
+  local active_provider="${1:-}"
+  park_left_web_mode_surfaces_for_reopen "$active_provider" &
   local left_pid=$!
   park_side_panel_for_reopen &
   local panel_pid=$!
   wait "$left_pid" 2>/dev/null || true
+  wait "$panel_pid" 2>/dev/null || true
+}
+
+close_web_mode_process_surfaces() {
+  close_provider_windows &
+  local providers_pid=$!
+  close_side_panel &
+  local panel_pid=$!
+  wait "$providers_pid" 2>/dev/null || true
   wait "$panel_pid" 2>/dev/null || true
 }
 
@@ -1719,6 +1741,22 @@ schedule_web_mode_warm_cleanup() {
   else
     env TIKPAL_WEB_MODE_CLOSE_WARM_TTL_SECONDS="$ttl" nohup "$SCRIPT_DIR/tikpal-web-mode.sh" cleanup-warm </dev/null >/dev/null 2>&1 9>&- &
   fi
+}
+
+schedule_provider_pool_refill_after_close() {
+  is_enabled "$TIKPAL_WEB_MODE_CLOSE_KEEP_RESIDENT" || return 0
+  is_enabled "$TIKPAL_WEB_MODE_CLOSE_REFILL_PROVIDER_POOL_ENABLED" || return 0
+  is_enabled "$TIKPAL_WEB_MODE_PROVIDER_POOL" || return 0
+  is_enabled "$TIKPAL_WEB_MODE_PROVIDER_IDLE_POOL_ENABLED" || return 0
+  is_enabled "$TIKPAL_WEB_MODE_PROVIDER_PREWARM_ENABLED" || return 0
+  [[ -z "$(read_runtime_active_provider)" ]] || return 0
+  provider_pool_needs_prewarm "" || return 0
+  if command -v setsid >/dev/null 2>&1; then
+    setsid "$SCRIPT_DIR/tikpal-web-mode.sh" warm-pool </dev/null >/dev/null 2>&1 9>&- &
+  else
+    nohup "$SCRIPT_DIR/tikpal-web-mode.sh" warm-pool </dev/null >/dev/null 2>&1 9>&- &
+  fi
+  printf '%s\n' "$!" > "$(prewarm_pid_file)"
 }
 
 show_exit_room_veil_if_enabled() {
@@ -1738,8 +1776,7 @@ close_web_mode_full() {
   hide_onboard
   show_exit_room_veil_if_enabled "$room_mode" || true
   stop_entry_stage_guard
-  close_side_panel
-  close_provider_windows
+  close_web_mode_process_surfaces
   close_transition_veil
   close_error_veil
   if is_enabled "$TIKPAL_WEB_MODE_EXIT_VEIL_ENABLED"; then
@@ -1753,8 +1790,10 @@ close_web_mode_full() {
 }
 
 close_web_mode_warm() {
-  local room_mode settle
+  local active_provider room_mode settle
   room_mode="${TIKPAL_WEB_MODE_EXIT_ROOM_MODE:-calm}"
+  active_provider="${TIKPAL_WEB_MODE_CLOSE_ACTIVE_PROVIDER:-}"
+  [[ -n "$active_provider" ]] || active_provider="$(read_runtime_active_provider)"
   settle="$TIKPAL_WEB_MODE_CLOSE_AUDIO_GATE_SETTLE_SECONDS"
   [[ "$settle" =~ ^[0-9]+([.][0-9]+)?$ ]] || settle=0.35
   hide_onboard
@@ -1762,7 +1801,7 @@ close_web_mode_warm() {
   stop_entry_stage_guard
   stop_window_guard
   stop_provider_pool_prewarm
-  park_web_mode_surfaces_for_reopen
+  park_web_mode_surfaces_for_reopen "$active_provider"
   write_audio_bus_state ""
   write_runtime_provider_state ""
   sleep "$settle"
@@ -1773,6 +1812,7 @@ close_web_mode_warm() {
     fade_exit_room_veil >/dev/null 2>&1 || true
   fi
   close_exit_room_veil
+  schedule_provider_pool_refill_after_close
   schedule_web_mode_warm_cleanup
 }
 
@@ -1798,10 +1838,9 @@ close_web_mode_from_guard() {
   hide_onboard
   show_exit_room_veil_if_enabled "$room_mode" || true
   stop_entry_stage_guard
-  close_side_panel
   stop_provider_pool_prewarm
   stop_provider_guard
-  pkill -f -- "--user-data-dir=$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/" >/dev/null 2>&1 || true
+  close_web_mode_process_surfaces
   close_transition_veil
   close_error_veil
   if is_enabled "$TIKPAL_WEB_MODE_EXIT_VEIL_ENABLED"; then
@@ -2760,6 +2799,7 @@ launch_provider_for_pool() {
       return 0
     fi
     if [[ "$launch_role" == "prewarm" && "$force_existing" == "1" ]]; then
+      write_runtime_provider_status "$provider" "ready"
       return 0
     fi
     write_runtime_provider_status "$provider" "ready"
@@ -2905,6 +2945,10 @@ warm_provider_pool() {
   delay="$TIKPAL_WEB_MODE_PROVIDER_PREWARM_DELAY_SECONDS"
   while IFS= read -r provider; do
     [[ -n "$provider" ]] || continue
+    if [[ -n "$(read_runtime_active_provider)" ]]; then
+      log "idle provider pool warmup paused because Explore is active"
+      return 0
+    fi
     TIKPAL_WEB_MODE_IDLE_POOL_WARMUP=1 launch_provider_for_pool "$provider" 0 prewarm force || true
     sleep "$delay"
   done < <(provider_ids)
@@ -2915,7 +2959,7 @@ open_provider_pool() {
   local provider="$1"
   local provider_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/$provider"
   local current_provider current_profile target_window proxy_line proxy_enabled message extension_enabled=0 entry_stage=0
-  local resident_status fast_resident=0
+  local resident_status fast_resident=0 switching_provider=0
   current_provider="$(read_runtime_active_provider)"
   current_profile=""
   if [[ -n "$current_provider" ]]; then
@@ -2927,6 +2971,7 @@ open_provider_pool() {
     fi
   fi
   [[ -z "$current_provider" ]] && entry_stage=1
+  [[ "$entry_stage" != "1" && "$current_provider" != "$provider" ]] && switching_provider=1
   resident_status="$(read_runtime_provider_status "$provider")"
   if profile_process_exists "$provider_profile" && [[ "$resident_status" == "ready" || "$resident_status" == "active" ]]; then
     fast_resident=1
@@ -2955,7 +3000,7 @@ open_provider_pool() {
     recover_or_cover_provider_failure "$current_provider" "$current_profile" "$provider" "check_proxy" "$message" || true
     fail "$message"
   fi
-  if { ! profile_process_exists "$provider_profile" || [[ -z "$current_provider" ]]; } && ! provider_uses_direct_bootstrap "$provider"; then
+  if [[ "$switching_provider" == "1" ]] || { [[ "$entry_stage" == "1" ]] && ! provider_uses_direct_bootstrap "$provider"; }; then
     launch_transition_veil "$provider"
     [[ "$entry_stage" == "1" ]] && raise_entry_stage_veil >/dev/null 2>&1 || true
   fi
@@ -3017,7 +3062,7 @@ open_provider() {
   local current_audio_bus="" target_audio_bus="" target_audio_device="" crossfade_switch=0
   local proxy_line proxy_enabled proxy_url
   local message
-  local entry_stage=0
+  local entry_stage=0 switching_provider=0
   url="$(provider_url "$provider")"
   provider_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/$provider"
   provider_port="$(provider_debug_port "$provider")"
@@ -3028,6 +3073,7 @@ open_provider() {
   else
     entry_stage=1
   fi
+  [[ "$entry_stage" != "1" && "$current_provider" != "$provider" ]] && switching_provider=1
   proxy_line="$(read_proxy_settings)"
   proxy_enabled="$(effective_provider_proxy_enabled "$provider" "${proxy_line%%$'\t'*}")"
   proxy_url="${proxy_line#*$'\t'}"
@@ -3103,7 +3149,7 @@ open_provider() {
     fail "Explore side panel did not open"
   fi
   [[ "$entry_stage" == "1" ]] && raise_entry_stage_veil >/dev/null 2>&1 || true
-  if ! provider_uses_direct_bootstrap "$provider"; then
+  if [[ "$switching_provider" == "1" ]] || ! provider_uses_direct_bootstrap "$provider"; then
     launch_transition_veil "$provider"
     [[ "$entry_stage" == "1" ]] && raise_entry_stage_veil >/dev/null 2>&1 || true
   fi
