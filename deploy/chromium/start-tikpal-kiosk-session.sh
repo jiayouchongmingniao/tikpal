@@ -203,7 +203,7 @@ reset_web_mode_runtime() {
   if [[ ! -x "$SCRIPT_DIR/tikpal-web-mode.sh" ]]; then
     return 0
   fi
-  TIKPAL_KIOSK_SKIP_ENV_SOURCE=1 "$SCRIPT_DIR/tikpal-web-mode.sh" close >/dev/null 2>&1 || true
+  TIKPAL_KIOSK_SKIP_ENV_SOURCE=1 "$SCRIPT_DIR/tikpal-web-mode.sh" close-full >/dev/null 2>&1 || true
 }
 
 if command -v xset >/dev/null 2>&1; then

@@ -2886,16 +2886,23 @@ try {
     `
       (() => {
         const text = document.querySelector('.quick-menu-panel')?.textContent ?? '';
-        const timeLabel = document.querySelector('[data-quick-menu-toggle="time"] span')?.textContent?.trim() ?? '';
-        const sleepLabel = document.querySelector('[data-quick-menu-toggle="sleep"] span')?.textContent?.trim() ?? '';
-        return document.querySelectorAll('.quick-menu-panel [data-quick-menu-toggle]').length === 4
+        const proxy = document.querySelector('[data-quick-menu-toggle="proxy"]');
+        return document.querySelectorAll('.quick-menu-panel [data-quick-menu-toggle]').length === 5
+          && document.querySelectorAll('.quick-menu-panel .quick-menu-switch').length === 5
+          && document.querySelectorAll('.quick-menu-toggle > span').length === 0
           && text.includes('Screen')
           && !text.includes('Room Mode')
           && text.includes('Volume')
           && text.includes('Time')
+          && text.includes('Proxy')
           && text.includes('Sleep')
-          && ['Visible', 'Hidden'].includes(timeLabel)
-          && ['Tap to sleep', 'Syncing'].includes(sleepLabel)
+          && proxy
+          && proxy.querySelector('svg')
+          && proxy.querySelector('.quick-menu-switch')
+          && !text.includes('Visible')
+          && !text.includes('Hidden')
+          && !text.includes('Tap to sleep')
+          && !text.includes('Syncing')
           && !text.includes('Tap wake')
           && !text.includes('Hi-Fi EQ')
           && !text.includes('Scene Sound')

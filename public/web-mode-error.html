@@ -220,7 +220,7 @@
         const friendlyReason = (dict) => {
           const value = String(params.get("reason") || "load_failed").trim();
           const normalized = value.toLowerCase();
-          if (normalized.includes("needs proxy on")) return dict.needsProxy;
+          if (/\bneeds proxy(?: on)?\b/.test(normalized)) return dict.needsProxy;
           if (normalized.includes("proxy did not connect")) return dict.proxyFailed;
           if (normalized === "load_failed" || normalized.includes("did not respond") || normalized.includes("did not open")) return dict.tryAgain;
           return value;

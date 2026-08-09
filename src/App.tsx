@@ -305,6 +305,8 @@ export default function App() {
   const [screenOffActive, setScreenOffActive] = useState(false);
   const [screenSaverPreviewIndex, setScreenSaverPreviewIndex] = useState<number | null>(null);
   const [webModeActive, setWebModeActive] = useState(false);
+  const [quickMenuProxyEnabled, setQuickMenuProxyEnabled] = useState<boolean | null>(null);
+  const [quickMenuProxyPending, setQuickMenuProxyPending] = useState(false);
   const [systemSleepActive, setSystemSleepActive] = useState(false);
   const [ambientSourcePickerRequest, setAmbientSourcePickerRequest] = useState(0);
   const [ambientSourcePickerOpen, setAmbientSourcePickerOpen] = useState(false);
@@ -354,6 +356,23 @@ export default function App() {
       }
     }
   }, []);
+
+  useEffect(() => {
+    if (mode !== "quickMenu") return undefined;
+
+    let cancelled = false;
+    void fetchWebModeState()
+      .then((state) => {
+        if (!cancelled) setQuickMenuProxyEnabled(state.settings.proxyEnabled);
+      })
+      .catch(() => {
+        if (!cancelled) setQuickMenuProxyEnabled((current) => current);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [mode]);
 
   const registerDisplayActivity = useCallback((nextMode: AppMode = mode) => {
     displaySleepLastActivityRef.current = Date.now();
@@ -854,6 +873,28 @@ export default function App() {
     }
   }, [refresh, sendPlaybackAction, tikpalState.system.volume.percent]);
 
+  const handleQuickMenuProxyEnabledChange = useCallback(async (enabled: boolean) => {
+    if (quickMenuProxyPending) return;
+
+    const previous = quickMenuProxyEnabled;
+    setQuickMenuProxyPending(true);
+    setQuickMenuProxyEnabled(enabled);
+
+    try {
+      const nextState = await sendWebModeAction({ type: "proxy", enabled });
+      setQuickMenuProxyEnabled(nextState.settings.proxyEnabled);
+    } catch {
+      if (previous !== null) {
+        setQuickMenuProxyEnabled(previous);
+      } else {
+        const nextState = await fetchWebModeState().catch(() => null);
+        setQuickMenuProxyEnabled(nextState?.settings.proxyEnabled ?? null);
+      }
+    } finally {
+      setQuickMenuProxyPending(false);
+    }
+  }, [quickMenuProxyEnabled, quickMenuProxyPending]);
+
   const handleQuickMenuScreenEnabledChange = useCallback((enabled: boolean) => {
     if (enabled) {
       wakeSoftScreen();
@@ -977,12 +1018,36 @@ export default function App() {
     setOnboardingStep((step) => Math.max(step - 1, 0));
   }, []);
 
-  const handleOpenWizard = useCallback(() => {
+  const showWizard = useCallback(() => {
     setOnboardingStep(0);
     setOnboardingBackgroundHidden(true);
     setOnboardingSoundMuted(true);
     setOnboardingVisible(true);
   }, []);
+
+  const handleOpenWizard = useCallback(async () => {
+    const webMode = webModeActiveRef.current
+      ? await fetchWebModeState().catch(() => ({ activeProvider: "qq_music" }))
+      : await fetchWebModeState().catch(() => null);
+
+    if (webMode?.activeProvider) {
+      try {
+        await sendWebModeAction({ type: "close" });
+      } catch {
+        // The guide only makes sense on the room screen; if Explore close fails,
+        // keep the request local and let the user retry from Settings.
+        return;
+      }
+      setWebModeSleepSuppressed(false);
+      returnAmbient();
+      await Promise.all([
+        refresh().catch(() => null),
+        refreshRoomExperience().catch(() => null)
+      ]);
+    }
+
+    showWizard();
+  }, [refresh, refreshRoomExperience, returnAmbient, setWebModeSleepSuppressed, showWizard]);
 
   useEffect(() => {
     if (!onboardingVisible) return;
@@ -1085,8 +1150,10 @@ export default function App() {
     onActivity: () => registerDisplayActivity(mode)
   });
 
+  const onboardingActive = onboardingVisible && !webModeActive;
+
   return (
-    <main className={`app-root ${screenOffActive ? "is-screen-off" : ""} ${systemSleepActive ? "is-system-sleeping" : ""} ${onboardingVisible && onboardingBackgroundHidden ? "is-wizard-background-hidden" : ""}`} {...gestureHandlers}>
+    <main className={`app-root ${screenOffActive ? "is-screen-off" : ""} ${systemSleepActive ? "is-system-sleeping" : ""} ${onboardingActive && onboardingBackgroundHidden ? "is-wizard-background-hidden" : ""}`} {...gestureHandlers}>
       <AmbientScreen
         hudVisible={hudVisible}
         timeLabel={timeLabel}
@@ -1101,7 +1168,7 @@ export default function App() {
         status={tikpalStatus}
         sceneVideoEnabled={sceneVideoEnabled}
         sceneVideoStableLoop={tikpalState.runtime.apiMode === "mpc"}
-        sceneSoundEnabled={roomExperience.sceneSoundEnabled && !(onboardingVisible && onboardingSoundMuted)}
+        sceneSoundEnabled={roomExperience.sceneSoundEnabled && !(onboardingActive && onboardingSoundMuted)}
         sceneSoundPending={sceneSoundPending || tikpalStatus.pending}
         sourcePickerOpenRequest={ambientSourcePickerRequest}
         clockVisible={clockVisible}
@@ -1127,7 +1194,7 @@ export default function App() {
         onSelectMode={handleStartupModeSelect}
       />
       <OnboardingGuide
-        active={onboardingVisible}
+        active={onboardingActive}
         step={onboardingStep}
         onDismiss={handleOnboardingDismiss}
         onNext={handleOnboardingNext}
@@ -1173,11 +1240,14 @@ export default function App() {
         active={mode === "quickMenu"}
         screenEnabled={!screenOffActive}
         clockVisible={clockVisible}
+        proxyEnabled={quickMenuProxyEnabled}
         volumeEnabled={tikpalState.system.volume.percent > 0}
+        proxyPending={quickMenuProxyPending}
         volumePending={tikpalStatus.pending && tikpalStatus.pendingAction === "playback:volume_set"}
         sleepPending={systemSleepActive || Boolean(systemSleepEntryTaskRef.current)}
         onScreenEnabledChange={handleQuickMenuScreenEnabledChange}
         onClockVisibleChange={setClockVisible}
+        onProxyEnabledChange={(enabled) => void handleQuickMenuProxyEnabledChange(enabled)}
         onVolumeEnabledChange={(enabled) => void handleQuickMenuVolumeEnabledChange(enabled)}
         onSleep={handleQuickMenuSleep}
         onClose={returnAmbient}

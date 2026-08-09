@@ -55,6 +55,7 @@ const requiredFiles = [
   "deploy/moode/tikpal-upnp-metadata.sh",
   "public/web-mode-error.html",
   "public/web-mode-background.html",
+  "public/web-mode-exit.html",
   "src/components/OnboardingGuide.tsx",
   "deploy/moode/tikpal-alsa-loopback.sh",
   "deploy/moode/tikpal-airplay-enable.sh",
@@ -226,7 +227,8 @@ async function run() {
     "onboarding.sampleBrightness",
     "onboarding.sampleVolume",
     "onboarding.samplePlayer",
-    "onboarding.sampleTry"
+    "onboarding.sampleTry",
+    "onboarding.scopeNote"
   ]) {
     assert(onboardingGuideSource.includes(`t("${onboardingKey}")`), `Onboarding guide should use ${onboardingKey}`);
   }
@@ -238,7 +240,8 @@ async function run() {
     "onboarding.sampleBrightness",
     "onboarding.sampleVolume",
     "onboarding.samplePlayer",
-    "onboarding.sampleTry"
+    "onboarding.sampleTry",
+    "onboarding.scopeNote"
   ]) {
     const localeCount = onboardingI18nSource.match(new RegExp(`"${onboardingKey.replace(".", "\\.")}"`, "g"))?.length ?? 0;
     assert(localeCount >= 7, `${onboardingKey} should be translated for all supported locales`);
@@ -607,6 +610,7 @@ esac
   const serverSource = await readFile(path.join(ROOT, "server/index.mjs"), "utf8");
   const webModeErrorPage = await readFile(path.join(ROOT, "public/web-mode-error.html"), "utf8");
   const webModeBackgroundPage = await readFile(path.join(ROOT, "public/web-mode-background.html"), "utf8");
+  const webModeExitPage = await readFile(path.join(ROOT, "public/web-mode-exit.html"), "utf8");
   const webModeCrossfadeScript = await readFile(path.join(ROOT, "deploy/moode/tikpal-web-mode-crossfade.sh"), "utf8");
   const audioAdaptScript = await readFile(path.join(ROOT, "deploy/moode/tikpal-audio-adapt.sh"), "utf8");
   const localLibrarySyncScript = await readFile(path.join(ROOT, "deploy/moode/tikpal-local-library-sync.sh"), "utf8");
@@ -711,7 +715,7 @@ esac
   assert(sidePanelSource.includes('sendWebModeAction({ type: "provider_text_scale"') && sidePanelSource.includes("data-web-mode-text-scale-option"), "Explore side panel should expose the provider text scale action");
   assert(sidePanelSource.includes("inferFailedProviderFromError") && sidePanelSource.includes('"common.failed"') && sidePanelSource.includes("is-failed"), "Explore side panel should show provider-open failures without marking the provider active");
   assert(sidePanelSource.includes('residentStatus === "check_proxy"') && sidePanelSource.includes('"common.needProxyOn"'), "Explore side panel should show Need Proxy On from live provider probe state");
-  assert(sidePanelSource.includes("isProxyNeededError") && sidePanelSource.includes("needs proxy on"), "Explore side panel should show Need Proxy On for proxy-related provider failures");
+  assert(sidePanelSource.includes("isProxyNeededError") && sidePanelSource.includes("needs proxy(?: on)?"), "Explore side panel should show Need Proxy On for proxy-related provider failures");
   assert(sidePanelSource.includes('"common.proxyOn"') && sidePanelSource.includes('"common.proxyOff"') && !sidePanelSource.includes('"common.direct"'), "Explore proxy status should say Proxy On/Proxy Off instead of Direct");
   assert(stylesSource.includes(".web-mode-provider.is-failed"), "Explore side panel should style failed provider-open state separately from Active");
   assert(stylesSource.includes(".web-mode-provider.is-proxy-unavailable"), "Explore side panel should give proxy-unavailable providers their own visual state");
@@ -926,7 +930,8 @@ esac
   assert(kioskSession.includes("ActiveByDefault=False") && kioskSession.includes("ShareInputState=All"), "kiosk input should start inactive while sharing the selected method across provider windows");
   assert(kioskSession.includes("fcitx_candidate_font()") && kioskSession.includes("Noto Sans CJK SC") && kioskSession.includes("Noto Sans CJK JP") && kioskSession.includes("Noto Sans CJK KR") && kioskSession.includes("Source Han Sans CN 16"), "Fcitx5 should render large CJK candidates with the best available locale-aware kiosk font");
   assert(kioskSession.includes("fcitx5 -d --replace"), "kiosk session should start Fcitx5 before Chromium");
-  assert(kioskSession.includes("TIKPAL_KIOSK_RESET_WEB_MODE_ON_START") && kioskSession.includes('"$SCRIPT_DIR/tikpal-web-mode.sh" close'), "kiosk session should close Explore and clear provider state before launching the main kiosk");
+  assert(kioskSession.includes("TIKPAL_KIOSK_RESET_WEB_MODE_ON_START") && kioskSession.includes('"$SCRIPT_DIR/tikpal-web-mode.sh" close-full'), "kiosk session should fully clear stale Explore windows before launching the main kiosk");
+  assert(kioskLauncher.includes("TIKPAL_WEB_MODE_BOOT_PREWARM_ENABLED:=1") && kioskLauncher.includes("start_web_mode_boot_prewarm") && kioskLauncher.includes('"$SCRIPT_DIR/tikpal-web-mode.sh" warm-pool'), "kiosk launcher should prewarm the resident Explore provider pool after the main screen starts");
   assert(webModeScript.includes("nohup \"$SCRIPT_DIR/tikpal-web-mode.sh\" guard"), "web mode should keep the window guard alive after the launcher exits");
   assert(webModeScript.includes("detect_non_hdmi_card_id"), "web mode should detect the actual non-HDMI ALSA card");
   assert(webModeScript.includes("tikpal-audio-adapt.sh") && webModeScript.includes("resolve-browser"), "web mode should use the shared audio adapter for auto ALSA output");
@@ -967,6 +972,7 @@ esac
   assert(webModeScript.includes("xdotool is required for Explore provider window detection"), "web mode --check should fail clearly when xdotool is missing");
   assert(webModeScript.includes("window-guard.pid"), "web mode should track the persistent window guard pid");
   assert(webModeScript.includes("TIKPAL_WEB_MODE_QQ_MV_AUTO_FULLSCREEN:=0"), "web mode should keep QQ MV auto fullscreen off by default");
+  assert(webModeScript.includes("TIKPAL_WEB_MODE_QQ_AUDIO_PRIME:=1") && webModeScript.includes('TIKPAL_WEB_MODE_QQ_AUDIO_PRIME="$TIKPAL_WEB_MODE_QQ_AUDIO_PRIME"'), "web mode should enable and pass QQ Music audio prime by default");
   assert(webModeScript.includes('TIKPAL_WEB_MODE_QQ_MV_AUTO_FULLSCREEN="$TIKPAL_WEB_MODE_QQ_MV_AUTO_FULLSCREEN"'), "web mode should pass the QQ MV fullscreen switch to the provider guard");
   assert(webModeScript.includes("TIKPAL_WEB_MODE_QQ_MV_CINEMA_MODE:=1"), "web mode should enable QQ MV cinema mode by default");
   assert(webModeScript.includes('TIKPAL_WEB_MODE_QQ_MV_CINEMA_MODE="$TIKPAL_WEB_MODE_QQ_MV_CINEMA_MODE"'), "web mode should pass the QQ MV cinema switch to the provider guard");
@@ -1030,7 +1036,7 @@ esac
   );
   assert(webModeScript.includes('systemd-run --user --quiet --unit=tikpal-onboard'), "web mode should keep Onboard outside the API launcher process tree");
   assert(webModeScript.includes('systemctl --user start tikpal-onboard.service'), "web mode should reuse the resident Onboard user service");
-  assert(webModeScript.includes("timeout 1 gdbus call"), "web mode should retry Onboard DBus calls while its service starts");
+  assert(webModeScript.includes('timeout "$timeout_seconds" gdbus call'), "web mode should retry Onboard DBus calls while its service starts");
   assert(webModeScript.includes("Onboard.Keyboard.$method"), "web mode should share Onboard DBus Show and Hide calls");
   assert(webModeScript.includes("call_onboard_method Show"), "web mode should keep DBus Show as a fallback when xdotool map is not enough");
   assert(webModeScript.includes("call_onboard_method Hide"), "web mode should hide Onboard without terminating it");
@@ -1067,7 +1073,7 @@ esac
   assert(webModeScript.includes('raise_window_without_focus "$window"'), "web mode guard should keep tiled provider windows above the full-screen kiosk");
   assert(webModeScript.includes("mark_window_above()") && webModeScript.includes("-b add,above"), "Explore provider and side-panel windows should use the above hint so fullscreen kiosk cannot cover them");
   assert(webModeScript.includes("clear_window_above()") && webModeScript.includes("-b remove,above"), "Explore background and inactive provider windows should not keep the above hint");
-  assert(webModeScript.includes('while kill -0 "$pid"') && webModeScript.includes('kill -KILL "$pid"'), "provider guard shutdown should wait and force-kill stale guards before starting a replacement");
+  assert(webModeScript.includes("pids+=(\"$pid\")") && webModeScript.includes('kill -KILL "$pid"'), "provider guard shutdown should force-kill stale guards without waiting one second per resident provider");
   assert(webModeScript.includes("TIKPAL_TILE_WINDOW_CHANGED=0"), "web mode guard should track whether a Chromium window actually needed retile");
   assert(webModeScript.includes('local force_raise="${3:-0}"'), "web mode guard should force a single provider raise when the guard first starts");
   assert(webModeScript.includes("stack_refresh_ticks") && webModeScript.includes('if [[ "$stack_refresh_ticks" -ge 4 ]]'), "web mode guard should periodically reassert provider stacking above the kiosk without doing it every tick");
@@ -1162,7 +1168,7 @@ esac
   assert(webModeScript.includes('transition_url="$transition_url?provider=$provider"'), "transition veil URL should carry its provider identity");
   assert(webModeScript.includes('error_url="$TIKPAL_WEB_MODE_ERROR_PAGE_URL?provider=$provider_param&label=$label_param&reason=$reason_param&proxy=$proxy_param"'), "friendly Explore error pages should carry provider, reason, and proxy state");
   assert(openProviderBody.includes('launch_url="$TIKPAL_WEB_MODE_TRANSITION_URL?provider=$provider"'), "extension-enabled providers should start on the local bootstrap page");
-  assert(webModeScript.includes("provider_uses_direct_bootstrap()") && webModeScript.includes("deezer) return 0") && openProviderBody.includes('if [[ "$proxy_enabled" == "1" && -n "$proxy_url" && ( "$extension_enabled" != "1" || "$launch_url" == "$url" ) ]]'), "command-line proxy switches should remain limited to extension-disabled fallback and explicit direct-bootstrap providers");
+  assert(webModeScript.includes("provider_uses_direct_bootstrap()") && webModeScript.includes("deezer|qq_music|netease_music") && openProviderBody.includes('if [[ "$proxy_enabled" == "1" && -n "$proxy_url" && ( "$extension_enabled" != "1" || "$launch_url" == "$url" ) ]]'), "command-line proxy switches should remain limited to extension-disabled fallback and explicit direct-bootstrap providers");
   assert(webModeScript.includes('target.type === "page"') && openProviderBody.includes("wait_for_real_provider_url"), "provider switches should wait for a real HTTPS page rather than a stale service worker");
   assert(webModeScript.includes("wait_for_proxy_applied"), "dynamic proxy actions should wait for extension confirmation");
   assert(webModeScript.includes('log "proxy applied without restarting $provider; provider pool prewarm restarted"'), "dynamic proxy actions should preserve the provider process and restart pool prewarm");
@@ -1264,6 +1270,7 @@ esac
   assert(webModeCheck.stdout.includes("error page: http://127.0.0.1:4173/web-mode-error.html"), "web mode should report the friendly error page URL");
   assert(webModeCheck.stdout.includes("background page: http://127.0.0.1:4173/web-mode-background.html"), "web mode should report the branded Explore background page URL");
   assert(webModeCheck.stdout.includes("transition page: http://127.0.0.1:4173/web-mode-transition.html"), "web mode should report the staged switch transition page");
+  assert(webModeCheck.stdout.includes("exit page: http://127.0.0.1:4173/web-mode-exit.html"), "web mode should report the room-return exit page URL");
   assert(webModeCheck.stdout.includes("onboard: 500,420 900,280"), "web mode should place the full Onboard keyboard near provider login inputs");
   assert(webModeCheck.stdout.includes("onboard input focus: 1"), "web mode should enable input-focus keyboard activation");
   assert(webModeCheck.stdout.includes("qq scoped auto confirm: 1"), "web mode should keep QQ auto-confirm scoped inside the provider guard");
@@ -1344,6 +1351,7 @@ esac
   assert(providerGuardSource.includes("lastKeyboardEnabled === enabled && now - lastKeyboardRequestMs < throttleMs"), "provider focus guard should not spam duplicate keyboard requests");
   assert(providerGuardSource.includes("lastOnboardVisible === enabled && now - lastOnboardActionMs < throttleMs"), "provider poll fallback should not spam duplicate launcher actions");
   assert(providerGuardSource.includes("TIKPAL_WEB_MODE_QQ_MV_CINEMA_MODE"), "provider guard should expose a QQ MV cinema mode switch");
+  assert(providerGuardSource.includes("TIKPAL_WEB_MODE_QQ_AUDIO_PRIME") && providerGuardSource.includes("runQqAudioPrimeFeatures") && providerGuardSource.includes("qqAudioPrimeCooldownMs"), "provider guard should gently prime QQ Music audio when QQ is active and already playing");
   assert(providerGuardSource.includes("qqMvTouchTargetExpression"), "provider guard should inject larger QQ MV hit targets without changing QQ layout");
   assert(providerGuardSource.includes("data-tikpal-qq-mv-touch-target"), "QQ MV hit targets should expose a test hook on the original link");
   assert(providerGuardSource.includes("__tikpalQqMvTouchTargetLinkAtPoint"), "QQ MV touch target should use page-local hit testing instead of a cross-window overlay");
@@ -1427,11 +1435,28 @@ esac
   assert(!webModeErrorPage.includes("sendKioskHeartbeat"), "friendly Explore error page should not post kiosk heartbeats");
   assert(webModeBackgroundPage.includes("/assets/tikpal-scene-logo.png") && webModeBackgroundPage.includes("Tikpal Explore Background"), "Explore background page should show a branded logo surface");
   assert(!webModeBackgroundPage.includes("sendKioskHeartbeat"), "Explore background page should not post kiosk heartbeats");
+  assert(webModeExitPage.includes("Tikpal Room Return") && webModeExitPage.includes('data-room') && !webModeExitPage.includes("Tikpal Explore Background"), "Explore exit page should be room-themed instead of Explore-branded");
   assert(webModeScript.includes("background_windows") && webModeScript.includes('TIKPAL_WEB_MODE_STAGE_POSITION') && webModeScript.includes("windowlower"), "Explore window guard should park the branded background offscreen while an active provider is visible");
   assert(webModeScript.includes("ensure_entry_stage_veil") && webModeScript.includes("TIKPAL_WEB_MODE_ENTRY_STAGE_WINDOW:=2560x720"), "Explore initial entry should use a full-width branded veil");
   assert(webModeScript.includes("--user-data-dir=$TIKPAL_WEB_MODE_PROFILE_ROOT/entry-stage") && webModeScript.includes("close_entry_stage_veil"), "Explore entry veil should be isolated and closed with the rest of Explore");
   assert(webModeScript.indexOf('ensure_entry_stage_veil "$provider"') < webModeScript.indexOf('if ! ensure_side_panel "$provider" "$entry_stage"; then'), "Explore should cover the full stage before launching the side panel on initial entry");
-  assert(webModeScript.includes('ensure_side_panel "$provider" "$entry_stage"') && webModeScript.includes('[[ "$hidden" == "1" ]] && panel_position="$TIKPAL_WEB_MODE_STAGE_POSITION"'), "Explore side panel should launch offscreen during the unified initial entry");
+  assert(webModeScript.includes("TIKPAL_WEB_MODE_ENTRY_PROVIDER_PAINT_TIMEOUT_SECONDS") && webModeScript.includes("wait_for_entry_provider_paint"), "Explore initial entry should keep the branded veil until the selected provider has painted or the short paint gate expires");
+  assert(webModeScript.indexOf('wait_for_entry_provider_paint "$(provider_debug_port "$provider")" "$provider"') < webModeScript.indexOf('reveal_initial_entry_surfaces "$target_window"'), "Explore should wait for initial provider paint before revealing the entry stage");
+  assert(webModeScript.includes('! provider_uses_direct_bootstrap "$provider" && ! wait_for_real_provider_url'), "direct-bootstrap providers should not pay the transition URL gate before first-paint reveal");
+  assert(webModeScript.includes("TIKPAL_WEB_MODE_EXIT_URL") && webModeScript.includes("ensure_exit_room_veil"), "Explore should retain the optional neutral room-return veil");
+  assert(webModeScript.includes("TIKPAL_WEB_MODE_EXIT_VEIL_ENABLED:=0") && webModeScript.includes("show_exit_room_veil_if_enabled"), "Explore close should default to fast return without cold-starting an exit-stage Chromium");
+  assert(webModeScript.includes("TIKPAL_WEB_MODE_EXIT_ROOM_MODE") && serverSource.includes("runWebModeCloseInBackground(room.mode, closeRequestId)"), "Explore close should pass the current room mode and close request token into background cleanup");
+  assert(serverSource.includes("webModeCloseInFlight") && serverSource.includes("webModeCloseRequestIsCurrent") && serverSource.includes("closeRequestId: null"), "Explore background close should not clear a newer provider open");
+  assert(webModeScript.includes("TIKPAL_WEB_MODE_CLOSE_WARM_ENABLED:=1") && webModeScript.includes("TIKPAL_WEB_MODE_CLOSE_KEEP_RESIDENT:=1") && webModeScript.includes("TIKPAL_WEB_MODE_CLOSE_WARM_TTL_SECONDS:=45"), "Explore close should default to a resident warm pool for instant reopen");
+  assert(webModeScript.includes("close_web_mode_warm()") && webModeScript.includes("park_side_panel_for_reopen") && webModeScript.includes("park_provider_windows_for_reopen"), "Explore warm close should park the side panel and providers offscreen instead of cold-closing them");
+  assert(webModeScript.includes("cleanup-warm") && webModeScript.includes("cleanup_warm_web_mode") && webModeScript.includes("close-full"), "Explore should keep delayed/full cleanup as an explicit maintenance path");
+  assert(webModeScript.includes("TIKPAL_WEB_MODE_CLOSE_AUDIO_GATE_SETTLE_SECONDS") && webModeScript.includes('if ! is_enabled "$TIKPAL_WEB_MODE_CLOSE_KEEP_RESIDENT"; then') && webModeScript.includes("stop_provider_guard"), "Explore warm close should keep provider guards alive in resident mode and only stop them for non-resident cleanup");
+  assert(webModeScript.includes("TIKPAL_WEB_MODE_PROVIDER_IDLE_POOL_ENABLED:=1") && webModeScript.includes("warm_provider_pool()") && webModeScript.includes("TIKPAL_WEB_MODE_IDLE_POOL_WARMUP=1"), "Explore should support boot-time idle prewarming of provider windows");
+  assert(webModeScript.includes("warm-pool)") && webModeScript.includes("warm_provider_pool") && !webModeScript.includes("with_web_mode_lock warm_provider_pool"), "Explore boot prewarm should not hold the foreground web-mode lock");
+  assert(webModeScript.includes("TIKPAL_WEB_MODE_X11_SYNC_WINDOW_OPS:=0") && webModeScript.includes('wmctrl -i -r "$window" -e') && webModeScript.includes('windowmove "$window" "$x" "$y"'), "Explore hot window moves should default to async X11 operations instead of xdotool --sync");
+  const stopProviderGuardBody = webModeScript.match(/stop_provider_guard\(\) \{[\s\S]*?\n\}/)?.[0] ?? "";
+  assert(!stopProviderGuardBody.includes("waited=0"), "Explore close should not wait one second per provider guard");
+  assert(webModeScript.includes('ensure_side_panel "$provider" "$entry_stage"') && webModeScript.includes('[[ "$hidden" == "1" ]] && panel_position="$TIKPAL_WEB_MODE_STAGE_POSITION"') && webModeScript.includes('tile_window_fast "$panel_window" "$TIKPAL_WEB_MODE_STAGE_POSITION"'), "Explore side panel should launch or reuse offscreen during the unified initial entry");
   assert(webModeScript.includes("reveal_initial_entry_surfaces") && webModeScript.includes("TIKPAL_WEB_MODE_ENTRY_REVEAL_SETTLE_SECONDS"), "Explore initial entry should reveal provider and side panel together after a short paint settle");
   assert(webModeScript.includes("start_entry_stage_guard") && webModeScript.includes("entry-guard") && webModeScript.includes("TIKPAL_WEB_MODE_ENTRY_GUARD_INTERVAL_SECONDS"), "Explore entry veil should stay above newly-created provider windows until reveal");
   assert(webModeScript.includes("fade_entry_stage_veil") && webModeBackgroundPage.includes("is-revealing"), "Explore entry veil should use a soft dissolve before closing");
@@ -1456,13 +1481,13 @@ esac
   assert(webModeScript.includes("seed_runtime_provider_pool_statuses") && webModeScript.includes('status: "prewarming"'), "Explore should seed queued resident providers as prewarming before their windows launch");
   assert(webModeScript.includes('const force = seedMode === "force"') && webModeScript.includes('start_provider_pool_prewarm "$provider" force'), "Explore proxy toggles should force resident providers back through prewarm");
   assert(webModeScript.includes("navigate_provider_target") && webModeScript.includes('TIKPAL_WEB_MODE_PROVIDER_PREWARM_FORCE=1') && webModeScript.includes('launch_provider_for_pool "$provider" 0 prewarm "$force_existing"'), "Forced provider prewarm should re-navigate existing resident pages after proxy changes");
-  assert(webModeScript.includes("provider_direct_reachable") && webModeScript.includes("--noproxy '*'") && webModeScript.includes('"check_proxy"') && webModeScript.includes("needs Proxy On"), "Explore should probe direct provider reachability before marking Check proxy");
+  assert(webModeScript.includes("provider_direct_reachable") && webModeScript.includes("--noproxy '*'") && webModeScript.includes('"check_proxy"') && webModeScript.includes("needs proxy"), "Explore should probe direct provider reachability before marking Check proxy");
   assert(webModeScript.includes("provider_prefers_direct_proxy") && webModeScript.includes("effective_provider_proxy_enabled"), "Explore launcher should support direct-preferred providers such as QQ Music and NetEase");
   assert(webModeScript.includes("deezer|qq_music|netease_music"), "Explore should direct-launch QQ Music and NetEase instead of waiting on the transition bootstrap");
   assert(webModeScript.includes("wait_for_entry=1") && webModeScript.includes("wait_for_full_ready=1") && webModeScript.includes('launch_provider_for_pool "$provider" entry'), "Explore active opens should wait for provider entry without blocking on the full ready probe");
   assert(webModeScript.includes("setsid") && webModeScript.includes("TIKPAL_WEB_MODE_PROVIDER_PREWARM_FORCE=1"), "Explore provider prewarm should detach from the active open command");
   assert(webModeScript.includes('launch_provider_for_pool "$provider" 0 prewarm'), "Explore background prewarm should not block on slow provider readiness");
-  assert(webModeScript.includes('pkill -TERM -f "$SCRIPT_DIR/tikpal-web-mode.sh prewarm"'), "Explore should stop stale prewarm queues before starting a new one");
+  assert(webModeScript.includes('pkill -TERM -f "[t]ikpal-web-mode.sh prewarm"'), "Explore should stop stale prewarm queues before starting a new one");
   assert(providerGuardSource.includes("__tikpalProviderAudioGate"), "Explore provider guard should install resident provider audio gating");
   assert(providerGuardSource.includes("tikpal-provider-audio-muted") && extensionBackground.includes("provider-audio-muted"), "Explore provider gate should ask the extension to tab-mute inactive providers");
   assert(providerGuardSource.includes("version: 2"), "Explore provider audio gate should use the resumable v2 contract");

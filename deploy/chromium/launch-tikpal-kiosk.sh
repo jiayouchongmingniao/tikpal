@@ -48,6 +48,8 @@ fi
 : "${TIKPAL_KIOSK_REMOTE_DEBUG_PORT:=9222}"
 : "${TIKPAL_KIOSK_REMOTE_DEBUG_CHROMIUM_ADDRESS:=127.0.0.1}"
 : "${TIKPAL_KIOSK_REMOTE_DEBUG_CHROMIUM_PORT:=$TIKPAL_KIOSK_REMOTE_DEBUG_PORT}"
+: "${TIKPAL_WEB_MODE_BOOT_PREWARM_ENABLED:=1}"
+: "${TIKPAL_WEB_MODE_BOOT_PREWARM_INITIAL_DELAY_SECONDS:=10}"
 
 MODE="launch"
 if [[ "${1:-}" == "--check" ]]; then
@@ -302,6 +304,17 @@ NODE
   fi
 }
 
+start_web_mode_boot_prewarm() {
+  local delay="$TIKPAL_WEB_MODE_BOOT_PREWARM_INITIAL_DELAY_SECONDS"
+  is_enabled "$TIKPAL_WEB_MODE_BOOT_PREWARM_ENABLED" || return 0
+  [[ -x "$SCRIPT_DIR/tikpal-web-mode.sh" ]] || return 0
+  [[ "$delay" =~ ^[0-9]+([.][0-9]+)?$ ]] || delay=10
+  (
+    sleep "$delay"
+    "$SCRIPT_DIR/tikpal-web-mode.sh" warm-pool
+  ) >/dev/null 2>&1 9>&- &
+}
+
 check_runtime() {
   log "app dir: $APP_DIR"
   log "env file: $ENV_FILE"
@@ -319,6 +332,7 @@ check_runtime() {
   else
     log "remote debug: off"
   fi
+  log "Explore boot prewarm: $TIKPAL_WEB_MODE_BOOT_PREWARM_ENABLED delay=${TIKPAL_WEB_MODE_BOOT_PREWARM_INITIAL_DELAY_SECONDS}s"
   log "flags: $FLAGS_FILE"
 
   [[ -f "$FLAGS_FILE" ]] || fail "Chromium flags file is missing"
@@ -406,4 +420,5 @@ if is_enabled "$TIKPAL_KIOSK_REMOTE_DEBUG"; then
 fi
 
 log "launching Chromium"
+start_web_mode_boot_prewarm
 exec "$TIKPAL_CHROMIUM_BIN" "${EXTRA_FLAGS[@]}" "${ARGS[@]}"

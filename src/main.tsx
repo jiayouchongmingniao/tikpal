@@ -317,14 +317,12 @@ if (!window.__TIKPAL_REMOTE_MODE__ && localKioskHosts.has(window.location.hostna
         inputSessionActive = true;
         return;
       }
-      if (inputSessionActive && (!outsidePointerDown || stickyInputSessionActive() || recentInputActivity())) {
+      if (inputSessionActive && lastTextInput?.isConnected && (!outsidePointerDown || stickyInputSessionActive() || recentInputActivity())) {
         if (keepStickyKeyboardVisible()) return;
-        if (lastTextInput?.isConnected) {
-          outsidePointerDown = false;
-          refocusTextInput(lastTextInput);
-          keepTextInputFocus(lastTextInput);
-          return;
-        }
+        outsidePointerDown = false;
+        refocusTextInput(lastTextInput);
+        keepTextInputFocus(lastTextInput);
+        return;
       }
       if (inputSessionActive && stickyTextInputTarget() && keepStickyKeyboardVisible()) {
         return;

@@ -154,6 +154,7 @@ export function OnboardingGuide({
 
         <div className="onboarding-guide-footer">
           <p>{t("onboarding.footer")}</p>
+          <p className="onboarding-guide-scope">{t("onboarding.scopeNote")}</p>
           <div className="onboarding-guide-actions">
             <button type="button" onClick={onBack} disabled={step === 0}>
               <ArrowLeft size={18} />

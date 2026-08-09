@@ -708,6 +708,7 @@ let hifiRuntimeRecoveryPromise = null;
 let hifiRuntimeRecoveryLastAttemptAtMs = 0;
 let hifiRuntimeRecoveryQuietUntilMs = 0;
 let webModeOpenInFlight = false;
+let webModeCloseInFlight = false;
 let sourceSwitchInFlightCount = 0;
 let mpdRecoveryPromise = null;
 let mpcRadioWeakNetworkRecoveryPromise = null;
@@ -5224,6 +5225,7 @@ function normalizeWebModeRuntimeState(raw = {}) {
     activeProvider: raw.activeProvider ? normalizeWebModeProviderId(raw.activeProvider, null) : null,
     residentProviders,
     lastError: normalizeWebModeVisibleError(raw.lastError),
+    closeRequestId: typeof raw.closeRequestId === "string" ? raw.closeRequestId : null,
     proxyAppliedSettingsUpdatedAt: typeof raw.proxyAppliedSettingsUpdatedAt === "string" ? raw.proxyAppliedSettingsUpdatedAt : null,
     updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : null
   };
@@ -5277,7 +5279,7 @@ async function readWebModeRuntimeState() {
 }
 
 async function shouldSuspendMpcRadioBackgroundRecovery() {
-  return webModeOpenInFlight || Boolean((await readWebModeRuntimeState()).activeProvider);
+  return webModeOpenInFlight || webModeCloseInFlight || Boolean((await readWebModeRuntimeState()).activeProvider);
 }
 
 async function writeWebModeRuntimeState(patch) {
@@ -13642,6 +13644,49 @@ async function runWebModeCommand(action, providerId = "", env = {}) {
   });
 }
 
+async function webModeCloseRequestIsCurrent(closeRequestId) {
+  if (!closeRequestId) return true;
+  const runtimeState = await readWebModeRuntimeState();
+  return runtimeState.closeRequestId === closeRequestId && !runtimeState.activeProvider;
+}
+
+function runWebModeCloseInBackground(roomMode, closeRequestId = "") {
+  if (webModeCloseInFlight) return;
+  webModeCloseInFlight = true;
+  void (async () => {
+    let restoreError = null;
+    try {
+      await runWebModeCommand("close", "", {
+        TIKPAL_WEB_MODE_EXIT_ROOM_MODE: roomMode
+      });
+      if (await webModeCloseRequestIsCurrent(closeRequestId)) {
+        try {
+          const restoredPlayback = await restoreWebModePlaybackHandoff();
+          if (restoredPlayback) {
+            await refreshTikpalStateSnapshotAfterMutation({
+              includeSourceRuntimeStatus: true
+            });
+          }
+        } catch (error) {
+          restoreError = `Explore closed; playback restore failed: ${error instanceof Error ? error.message : "unknown error"}`;
+        }
+      }
+    } catch (error) {
+      restoreError = formatWebModeCommandError(error, "close");
+    } finally {
+      webModeCloseInFlight = false;
+      if (await webModeCloseRequestIsCurrent(closeRequestId).catch(() => false)) {
+        await writeWebModeRuntimeState({
+          activeProvider: null,
+          residentProviders: {},
+          lastError: restoreError,
+          closeRequestId: null
+        }).catch(() => {});
+      }
+    }
+  })();
+}
+
 function isWebModeSwitchingError(error) {
   const raw = error instanceof Error ? error.message : String(error ?? "");
   return /Explore is already switching/i.test(raw);
@@ -13809,23 +13854,15 @@ let webModeKeyboardStickyUntilMs = 0;
 async function applyWebModeAction(action) {
   const type = String(action?.type ?? "").trim().toLowerCase();
   if (type === "close") {
-    try {
-      await runWebModeCommand("close");
-      let restoreError = null;
-      try {
-        const restoredPlayback = await restoreWebModePlaybackHandoff();
-        if (restoredPlayback) {
-          await refreshTikpalStateSnapshotAfterMutation({
-            includeSourceRuntimeStatus: true
-          });
-        }
-      } catch (error) {
-        restoreError = `Explore closed; playback restore failed: ${error instanceof Error ? error.message : "unknown error"}`;
-      }
-      await writeWebModeRuntimeState({ activeProvider: null, lastError: restoreError });
-    } catch (error) {
-      await writeWebModeRuntimeState({ lastError: formatWebModeCommandError(error, "close") });
-    }
+    const room = await readRoomExperienceState();
+    const closeRequestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    await writeWebModeRuntimeState({
+      activeProvider: null,
+      residentProviders: {},
+      lastError: null,
+      closeRequestId
+    });
+    runWebModeCloseInBackground(room.mode, closeRequestId);
     return await buildWebModeState();
   }
 
@@ -13930,11 +13967,11 @@ async function applyWebModeAction(action) {
   try {
     if (!previousRuntimeState.activeProvider) {
       await captureWebModePlaybackHandoff();
+      await pauseTikpalForWebMode();
     }
-    await pauseTikpalForWebMode();
     providerOpenCommandStarted = true;
     await runWebModeCommand("open", providerId);
-    await writeWebModeRuntimeState({ activeProvider: providerId, lastError: null });
+    await writeWebModeRuntimeState({ activeProvider: providerId, lastError: null, closeRequestId: null });
   } catch (error) {
     const message = formatWebModeCommandError(error, "open", providerId);
     const clearFailedCurrentProvider = providerOpenCommandStarted

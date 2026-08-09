@@ -72,14 +72,14 @@ function readInitialOpeningProvider(): WebModeProviderId | null {
 function inferFailedProviderFromError(error: string | null): WebModeProviderId | null {
   if (!error) return null;
   const normalizedError = error.trim().toLowerCase();
-  if (!/\bneeds proxy on\b|\bdid not open\b|\bdid not enter\b|\bdid not become ready\b/.test(normalizedError)) return null;
+  if (!/\bneeds proxy(?: on)?\b|\bdid not open\b|\bdid not enter\b|\bdid not become ready\b/.test(normalizedError)) return null;
   return providerOrder.find((id) => normalizedError.startsWith(providerLabels[id].toLowerCase())) ?? null;
 }
 
 function isProxyNeededError(error: string | null, providerId: WebModeProviderId | null) {
   if (!error || !providerId) return false;
   const normalizedError = error.trim().toLowerCase();
-  return normalizedError.startsWith(providerLabels[providerId].toLowerCase()) && normalizedError.includes("needs proxy on");
+  return normalizedError.startsWith(providerLabels[providerId].toLowerCase()) && /\bneeds proxy(?: on)?\b/.test(normalizedError);
 }
 
 export function WebModeSidePanel() {

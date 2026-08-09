@@ -2337,9 +2337,17 @@ if (args[0] === "open" && args[1] === ${JSON.stringify(failedProvider)}) {
     assert(closedPlayingLibraryExplore.response.ok, "web mode close from playing Library should return 200");
     assert(closedPlayingLibraryExplore.body.activeProvider === null, "web mode close should clear the active provider");
     assert(closedPlayingLibraryExplore.body.lastError === null, `web mode close should not report a restore error: ${closedPlayingLibraryExplore.body.lastError}`);
-    const resumedAfterExplore = JSON.parse(await readFile(fakeMpcStatePath, "utf8"));
+    let resumedAfterExplore = JSON.parse(await readFile(fakeMpcStatePath, "utf8"));
+    for (let attempt = 0; attempt < 20 && resumedAfterExplore.state !== "playing"; attempt += 1) {
+      await wait(100);
+      resumedAfterExplore = JSON.parse(await readFile(fakeMpcStatePath, "utf8"));
+    }
     assert(resumedAfterExplore.state === "playing", "web mode close should resume Library only when it was playing before Explore");
-    const stateAfterPlayingExplore = await requestFrom(baseUrl, "/api/v1/system/state");
+    let stateAfterPlayingExplore = await requestFrom(baseUrl, "/api/v1/system/state");
+    for (let attempt = 0; attempt < 20 && stateAfterPlayingExplore.body.playback?.state !== "playing"; attempt += 1) {
+      await wait(100);
+      stateAfterPlayingExplore = await requestFrom(baseUrl, "/api/v1/system/state");
+    }
     assert(stateAfterPlayingExplore.body.playback.state === "playing", "system state should show Library playing after Explore returns");
     assert(stateAfterPlayingExplore.body.audio.rememberedSource?.target === "mpd", "web mode return should not replace remembered Library with Explore");
     assert(
@@ -2694,11 +2702,8 @@ appendFileSync(${JSON.stringify(fakeWebModeLogPath)}, [...args, ...keyboardEnv].
       assert(providerSwitchLog.includes(`open\t${providerId}\n`), `web mode command should open ${providerId}, got ${JSON.stringify(providerSwitchLog)}`);
       const providerSwitchDisableLog = await readFile(fakeExternalDisableLogPath, "utf8");
       assert(
-        providerSwitchDisableLog.includes("spotify-disable\n")
-          && providerSwitchDisableLog.includes("bluetooth-disable\n")
-          && providerSwitchDisableLog.includes("airplay-disable\n")
-          && providerSwitchDisableLog.includes("upnp-disable\n"),
-        `web mode switch to ${providerId} should keep external sources closed before provider audio starts, got ${JSON.stringify(providerSwitchDisableLog)}`
+        providerSwitchDisableLog.trim() === "",
+        `web mode resident provider switch to ${providerId} should not rerun the initial Tikpal audio handoff, got ${JSON.stringify(providerSwitchDisableLog)}`
       );
       const stateAfterProviderSwitch = await requestFrom(baseUrl, "/api/v1/system/state");
       assert(stateAfterProviderSwitch.body.audio.currentSource.id !== "web_mode", `web mode switch to ${providerId} should not become audio source truth`);

@@ -13,6 +13,7 @@ const proxyMode = process.env.TIKPAL_WEB_MODE_PROXY_MODE === "proxy" ? "proxy" :
 const errorPageBaseUrl = process.env.TIKPAL_WEB_MODE_ERROR_PAGE_URL || "http://127.0.0.1:4173/web-mode-error.html";
 const qqAutoConfirm = /^(1|true|yes|on|enabled)$/i.test(process.env.TIKPAL_WEB_MODE_QQ_AUTO_CONFIRM || "1");
 const qqAutoUnmute = /^(1|true|yes|on|enabled)$/i.test(process.env.TIKPAL_WEB_MODE_QQ_AUTO_UNMUTE || "1");
+const qqAudioPrime = /^(1|true|yes|on|enabled)$/i.test(process.env.TIKPAL_WEB_MODE_QQ_AUDIO_PRIME || "1");
 const qqMvAutoFullscreen = /^(1|true|yes|on|enabled)$/i.test(process.env.TIKPAL_WEB_MODE_QQ_MV_AUTO_FULLSCREEN || "0");
 const qqMvCinemaMode = /^(1|true|yes|on|enabled)$/i.test(process.env.TIKPAL_WEB_MODE_QQ_MV_CINEMA_MODE || "1");
 const qqMvAutoPlay = /^(1|true|yes|on|enabled)$/i.test(process.env.TIKPAL_WEB_MODE_QQ_MV_AUTO_PLAY || "1");
@@ -164,6 +165,7 @@ const redirectedTargets = new Set();
 const targetProgressState = new Map();
 const inputFocusRequests = new Map();
 const qqAudioUnmuteAttempts = new Map();
+const qqAudioPrimeAttempts = new Map();
 const qqMvCinemaStates = new Map();
 const qqMvAutoPlayStates = new Map();
 const neteaseAutoPlayStates = new Map();
@@ -183,6 +185,7 @@ const providerReadyHosts = {
   netease_music: ["music.163.com"]
 };
 const qqAudioUnmuteCooldownMs = 5000;
+const qqAudioPrimeCooldownMs = 12000;
 const qqMvAutoPlayDelayMs = 1700;
 const qqMvAutoPlayMaxStartSeconds = 1.5;
 const qqMvAutoPlayProgressEpsilonSeconds = 0.2;
@@ -992,6 +995,34 @@ const qqAudioStateExpression = `(() => {
     scaleX,
     scaleY
   };
+})()`;
+
+const qqAudioPrimeExpression = `(async () => {
+  const icon = document.querySelector(".btn_big_voice");
+  const play = document.querySelector(".btn_big_play,.btn_big_pause");
+  if (!icon || !play) return { primed: false, reason: "not-player" };
+  const iconText = String(icon.innerText || icon.title || "");
+  const iconClass = String(icon.className || "");
+  const playClass = String(play.className || "");
+  const muted = iconClass.includes("btn_big_voice--no") || iconText.includes("打开声音");
+  const playing = playClass.includes("btn_big_play--pause");
+  if (!playing || muted) return { primed: false, reason: muted ? "muted" : "not-playing" };
+  const Ctx = window.__tikpalNativeAudioContext || window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) return { primed: false, reason: "no-audio-context" };
+  const context = new Ctx();
+  const oscillator = context.createOscillator();
+  const gain = context.createGain();
+  gain.gain.value = 0.0001;
+  oscillator.frequency.value = 640;
+  oscillator.connect(gain).connect(context.destination);
+  await context.resume().catch(() => {});
+  oscillator.start();
+  await new Promise((resolve) => setTimeout(resolve, 180));
+  oscillator.stop();
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  const state = context.state;
+  await context.close().catch(() => {});
+  return { primed: true, state };
 })()`;
 
 const qqMvTouchTargetExpression = `(() => {
@@ -2313,6 +2344,25 @@ async function runQqAudioFeatures(targets) {
   }
 }
 
+async function runQqAudioPrimeFeatures(targets) {
+  if (providerId !== "qq_music" || !qqAudioPrime) return;
+  for (const target of targets.filter(isQqMusicPlayerPage)) {
+    const previousAttempt = qqAudioPrimeAttempts.get(target.id) || 0;
+    if (Date.now() - previousAttempt < qqAudioPrimeCooldownMs) continue;
+    const state = await evaluate(target.webSocketDebuggerUrl, qqAudioStateExpression).catch(() => null);
+    if (!state?.ready || !state.playing || state.muted) continue;
+    qqAudioPrimeAttempts.set(target.id, Date.now());
+    const result = await evaluate(target.webSocketDebuggerUrl, qqAudioPrimeExpression).catch((error) => ({
+      primed: false,
+      reason: error?.message || "failed"
+    }));
+    if (result?.primed) {
+      console.log(`[tikpal-web-mode-guard] primed QQ audio ${result.state || ""}`.trim());
+      return;
+    }
+  }
+}
+
 async function runQqMvTouchTargetFeatures(targets) {
   if (providerId !== "qq_music") return;
   for (const target of targets.filter(isQqMusicPage)) {
@@ -2381,6 +2431,7 @@ async function guardOnce() {
   if (active) {
     await runSafePromptFeatures(targets);
     await runQqAudioFeatures(targets);
+    await runQqAudioPrimeFeatures(targets);
     await runQqMvTouchTargetFeatures(targets);
     await runQqMvCinemaFeatures(targets);
     await runNeteaseAudioFeatures(targets);
@@ -2406,6 +2457,7 @@ if (process.argv.includes("--check")) {
   console.log(`[tikpal-web-mode-guard] empty page timeout: ${Math.round(emptyPageTimeoutMs / 1000)}s`);
   console.log(`[tikpal-web-mode-guard] qq auto confirm: ${qqAutoConfirm ? "1" : "0"}`);
   console.log(`[tikpal-web-mode-guard] qq auto unmute: ${qqAutoUnmute ? "1" : "0"}`);
+  console.log(`[tikpal-web-mode-guard] qq audio prime: ${qqAudioPrime ? "1" : "0"}`);
   console.log(`[tikpal-web-mode-guard] qq mv auto fullscreen: ${qqMvAutoFullscreen ? "1" : "0"}`);
   console.log(`[tikpal-web-mode-guard] qq mv cinema mode: ${qqMvCinemaMode ? "1" : "0"}`);
   console.log(`[tikpal-web-mode-guard] qq mv auto play: ${qqMvAutoPlay ? "1" : "0"}`);

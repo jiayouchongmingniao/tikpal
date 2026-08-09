@@ -743,6 +743,8 @@ Object.assign(dictionaries.en, {
 
 Object.assign(dictionaries["zh-CN"], {
   "common.failed": "需要检查",
+  "common.proxyOff": "代理关",
+  "common.proxyOn": "代理开",
   "settings.preferencesDesc": "语言、显示、声音和聆听体验。",
   "settings.libraryDesc": "本机音乐、USB、NAS 和扫描。",
   "settings.linkDesc": "网络、遥控和网页播放器。",
@@ -849,6 +851,8 @@ Object.assign(dictionaries["zh-CN"], {
 
 Object.assign(dictionaries.de, {
   "common.failed": "Pruefen",
+  "common.proxyOff": "Proxy aus",
+  "common.proxyOn": "Proxy an",
   "settings.preferencesDesc": "Sprache, Display, Klang und Hoeren.",
   "settings.libraryDesc": "Musik hier, USB, NAS und Scans.",
   "settings.linkDesc": "Netzwerk, Remote und Webplayer.",
@@ -894,6 +898,8 @@ Object.assign(dictionaries.de, {
 
 Object.assign(dictionaries.it, {
   "common.failed": "Da controllare",
+  "common.proxyOff": "Proxy Off",
+  "common.proxyOn": "Proxy On",
   "settings.preferencesDesc": "Lingua, display, audio e ascolto.",
   "settings.libraryDesc": "Musica qui, USB, NAS e scansioni.",
   "settings.linkDesc": "Rete, remoto e player web.",
@@ -939,6 +945,8 @@ Object.assign(dictionaries.it, {
 
 Object.assign(dictionaries.ko, {
   "common.failed": "확인 필요",
+  "common.proxyOff": "프록시 꺼짐",
+  "common.proxyOn": "프록시 켜짐",
   "settings.preferencesDesc": "언어, 화면, 소리, 감상 설정.",
   "settings.libraryDesc": "기기 음악, USB, NAS, 스캔.",
   "settings.linkDesc": "네트워크, 리모컨, 웹 플레이어.",
@@ -984,6 +992,8 @@ Object.assign(dictionaries.ko, {
 
 Object.assign(dictionaries.ja, {
   "common.failed": "確認が必要",
+  "common.proxyOff": "プロキシオフ",
+  "common.proxyOn": "プロキシオン",
   "settings.preferencesDesc": "言語、表示、音、リスニング。",
   "settings.libraryDesc": "本体の音楽、USB、NAS、スキャン。",
   "settings.linkDesc": "ネットワーク、リモート、Webプレイヤー。",
@@ -1029,6 +1039,8 @@ Object.assign(dictionaries.ja, {
 
 Object.assign(dictionaries.es, {
   "common.failed": "Revisar",
+  "common.proxyOff": "Proxy Off",
+  "common.proxyOn": "Proxy On",
   "settings.preferencesDesc": "Idioma, pantalla, sonido y escucha.",
   "settings.libraryDesc": "Musica aqui, USB, NAS y escaneos.",
   "settings.linkDesc": "Red, remoto y web players.",
@@ -2269,6 +2281,7 @@ Object.assign(dictionaries.en, {
   "onboarding.practicePrompt": "Try the gesture in the sample",
   "onboarding.practiceSuccess": "Gesture recognized",
   "onboarding.footer": "This preview will not change your source or room mode.",
+  "onboarding.scopeNote": "Gestures work on the room screen. Web players use their own controls.",
   "onboarding.previous": "Previous",
   "onboarding.next": "Next",
   "onboarding.getStarted": "Finish",
@@ -2301,6 +2314,7 @@ Object.assign(dictionaries["zh-CN"], {
   "onboarding.practicePrompt": "在示例里试一下",
   "onboarding.practiceSuccess": "手势已识别",
   "onboarding.footer": "这只是预览，不会改变音源或房间模式。",
+  "onboarding.scopeNote": "这些手势用于房间主界面。网页播放器使用自己的控件。",
   "onboarding.previous": "上一步",
   "onboarding.next": "下一步",
   "onboarding.getStarted": "完成",
@@ -2333,6 +2347,7 @@ Object.assign(dictionaries.de, {
   "onboarding.practicePrompt": "Geste im Beispiel testen",
   "onboarding.practiceSuccess": "Geste erkannt",
   "onboarding.footer": "Diese Vorschau ändert weder Quelle noch Raummodus.",
+  "onboarding.scopeNote": "Gesten gelten für die Raumansicht. Webplayer nutzen eigene Steuerung.",
   "onboarding.previous": "Zurück",
   "onboarding.next": "Weiter",
   "onboarding.getStarted": "Fertig",
@@ -2365,6 +2380,7 @@ Object.assign(dictionaries.it, {
   "onboarding.practicePrompt": "Prova il gesto nel campione",
   "onboarding.practiceSuccess": "Gesto riconosciuto",
   "onboarding.footer": "Questa anteprima non cambia fonte o modalità stanza.",
+  "onboarding.scopeNote": "I gesti funzionano nella schermata stanza. I web player usano i propri controlli.",
   "onboarding.previous": "Indietro",
   "onboarding.next": "Avanti",
   "onboarding.getStarted": "Fine",
@@ -2397,6 +2413,7 @@ Object.assign(dictionaries.ko, {
   "onboarding.practicePrompt": "샘플에서 손동작을 해보세요",
   "onboarding.practiceSuccess": "손동작을 인식했습니다",
   "onboarding.footer": "이 미리보기는 소스나 룸 모드를 바꾸지 않습니다.",
+  "onboarding.scopeNote": "손동작은 룸 화면에서 동작합니다. 웹 플레이어는 자체 컨트롤을 사용합니다.",
   "onboarding.previous": "이전",
   "onboarding.next": "다음",
   "onboarding.getStarted": "완료",
@@ -2429,6 +2446,7 @@ Object.assign(dictionaries.ja, {
   "onboarding.practicePrompt": "サンプルで試してください",
   "onboarding.practiceSuccess": "ジェスチャーを認識しました",
   "onboarding.footer": "このプレビューは音源やルームモードを変更しません。",
+  "onboarding.scopeNote": "ジェスチャーはルーム画面で使います。Webプレイヤーは独自の操作を使います。",
   "onboarding.previous": "前へ",
   "onboarding.next": "次へ",
   "onboarding.getStarted": "完了",
@@ -2461,6 +2479,7 @@ Object.assign(dictionaries.es, {
   "onboarding.practicePrompt": "Prueba el gesto en la muestra",
   "onboarding.practiceSuccess": "Gesto reconocido",
   "onboarding.footer": "Esta vista previa no cambia fuente ni modo de sala.",
+  "onboarding.scopeNote": "Los gestos funcionan en la pantalla de sala. Los web players usan sus propios controles.",
   "onboarding.previous": "Anterior",
   "onboarding.next": "Siguiente",
   "onboarding.getStarted": "Terminar",
