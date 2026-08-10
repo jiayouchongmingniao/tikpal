@@ -119,31 +119,12 @@
         inset: 0;
         pointer-events: none;
         background:
-          linear-gradient(90deg, rgba(255, 255, 255, 0.035), transparent 19%, transparent 81%, rgba(255, 255, 255, 0.026)),
-          repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.014) 0 1px, transparent 1px 96px);
-        opacity: 0.58;
+          linear-gradient(180deg, rgba(255, 255, 255, 0.032), transparent 28%, transparent 72%, rgba(255, 255, 255, 0.022));
+        opacity: 0.52;
       }
 
       .logo-floor {
         display: none;
-      }
-
-      .logo-floor::before,
-      .logo-floor::after {
-        content: "";
-        position: absolute;
-        left: 14%;
-        right: 14%;
-        height: 1px;
-        background: rgba(255, 255, 255, 0.07);
-      }
-
-      .logo-floor::before {
-        top: 0;
-      }
-
-      .logo-floor::after {
-        bottom: 0;
       }
 
       .signal-stage {
@@ -176,45 +157,14 @@
         line-height: 1;
       }
 
-      .signal-track {
-        position: relative;
-        width: min(420px, calc(100vw - 160px));
-        height: 2px;
-        margin-top: 6px;
-        overflow: hidden;
-        background: rgba(255, 255, 255, 0.08);
-      }
-
-      .signal-track::after {
-        content: "";
-        position: absolute;
-        inset: 0;
-        background: var(--provider-tone);
-        opacity: 0.82;
-        transform: scaleX(0.12);
-        transform-origin: center;
-        animation: tikpalSignalExpand 1.4s cubic-bezier(0.4, 0, 0.2, 1) infinite alternate;
-      }
-
       @keyframes tikpalSignalStageIn {
         from { opacity: 0; transform: translateY(4px); }
         to { opacity: 1; transform: translateY(-4px); }
       }
 
-      @keyframes tikpalSignalExpand {
-        from { opacity: 0.34; transform: scaleX(0.12); }
-        to { opacity: 0.92; transform: scaleX(1); }
-      }
-
       @media (prefers-reduced-motion: reduce) {
-        .signal-stage,
-        .signal-track::after {
+        .signal-stage {
           animation: none;
-        }
-
-        .signal-track::after {
-          opacity: 0.82;
-          transform: scaleX(1);
         }
       }
     </style>
@@ -224,7 +174,6 @@
     <main class="signal-stage" role="status" aria-live="polite">
       <h1 class="provider-name">Explore</h1>
       <p class="connecting-label">Connecting</p>
-      <div class="signal-track" aria-hidden="true"></div>
     </main>
     <script>
       (() => {

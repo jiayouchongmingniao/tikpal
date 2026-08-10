@@ -13662,6 +13662,7 @@ function runWebModeCloseInBackground(roomMode, closeRequestId = "", activeProvid
       await runWebModeCommand("close", "", {
         TIKPAL_WEB_MODE_EXIT_ROOM_MODE: roomMode,
         TIKPAL_WEB_MODE_CLOSE_ACTIVE_PROVIDER: activeProvider,
+        TIKPAL_WEB_MODE_CLOSE_REQUEST_ID: closeRequestId,
         TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS: "10"
       });
       if (await webModeCloseRequestIsCurrent(closeRequestId)) {
@@ -13983,8 +13984,9 @@ async function applyWebModeAction(action) {
       await captureWebModePlaybackHandoff();
       await pauseTikpalForWebMode();
     }
+    await writeWebModeRuntimeState({ activeProvider: providerId, lastError: null, closeRequestId: null });
     providerOpenCommandStarted = true;
-    await runWebModeCommand("open", providerId);
+    await runWebModeCommand("open", providerId, { TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS: "25" });
     await writeWebModeRuntimeState({ activeProvider: providerId, lastError: null, closeRequestId: null });
   } catch (error) {
     const message = formatWebModeCommandError(error, "open", providerId);

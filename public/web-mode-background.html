@@ -122,40 +122,12 @@
         inset: 0;
         pointer-events: none;
         background:
-          linear-gradient(90deg, rgba(255, 255, 255, 0.035), transparent 19%, transparent 81%, rgba(255, 255, 255, 0.026)),
-          repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.014) 0 1px, transparent 1px 96px);
-        opacity: 0.58;
+          linear-gradient(180deg, rgba(255, 255, 255, 0.032), transparent 28%, transparent 72%, rgba(255, 255, 255, 0.022));
+        opacity: 0.52;
       }
 
       .logo-floor {
-        position: fixed;
-        left: 50%;
-        top: 50%;
-        width: min(720px, 56vw);
-        height: min(440px, 54vh);
-        pointer-events: none;
-        border-left: 2px solid color-mix(in srgb, var(--provider-tone) 48%, #ffffff);
-        border-right: 1px solid rgba(255, 255, 255, 0.045);
-        opacity: 0.3;
-        transform: translate(-50%, -50%);
-      }
-
-      .logo-floor::before,
-      .logo-floor::after {
-        content: "";
-        position: absolute;
-        left: 12%;
-        right: 12%;
-        height: 1px;
-        background: rgba(255, 255, 255, 0.07);
-      }
-
-      .logo-floor::before {
-        top: 0;
-      }
-
-      .logo-floor::after {
-        bottom: 0;
+        display: none;
       }
 
       .brand {
@@ -186,24 +158,6 @@
         font-weight: 800;
       }
 
-      .signal-rail {
-        width: min(420px, calc(100vw - 160px));
-        height: 2px;
-        overflow: hidden;
-        background: rgba(255, 255, 255, 0.08);
-      }
-
-      .signal-rail::after {
-        content: "";
-        display: block;
-        width: 100%;
-        height: 100%;
-        background: color-mix(in srgb, var(--provider-tone) 76%, #ffffff);
-        opacity: 0.72;
-        transform: scaleX(0.38);
-        transform-origin: center;
-      }
-
       body.is-revealing {
         opacity: 0;
         filter: blur(5px);
@@ -220,7 +174,6 @@
     <main class="brand" aria-label="Tikpal Explore">
       <img src="/assets/tikpal-scene-logo.png" alt="Tikpal" />
       <p>Explore</p>
-      <div class="signal-rail" aria-hidden="true"></div>
     </main>
     <script>
       (() => {
