@@ -975,7 +975,7 @@ That soft-kick sequence:
 - Sets configured PCI display devices to `power/control=on`; on this host use `0000:03:00.0` for the GTX 750 Nouveau display function and `0000:03:00.1` for its HDMI audio function.
 - Optionally sets `/sys/module/drm_kms_helper/parameters/poll` to `N` with `TIKPAL_PHYSICAL_DISPLAY_DRM_POLL=0`, reducing connector polling against unused DVI outputs.
 - Raises the Chromium kiosk window.
-- Runs delayed soft-kicks around `8s` and `25s` after kiosk start to mimic the part of a physical replug that wakes this panel after Chromium and Xorg settle.
+- Optionally runs delayed soft-kicks only when `TIKPAL_PHYSICAL_DISPLAY_DELAYED_KICK_SECONDS` is set to a numeric schedule such as `"8 25"`. The checked-in default is `none`, so normal startup does not deliberately blank the display; enable this only after a physical panel has proved it needs a post-start recovery reset.
 - Uses `xkbcomp` to replace display power keysyms such as `XF86PowerOff`, `XF86Sleep`, `XF86Suspend`, `XF86Display`, and `XF86ScreenSaver` with `NoSymbol`; ordinary typing and Fcitx/Onboard input are left alone.
 
 If `soft-kick` cannot recover a visible panel and a physical HDMI replug has been proven to fix it, the second-stage fallback is a Nouveau PCI rebind:
@@ -989,7 +989,7 @@ systemctl start tikpal-kiosk.service
 
 The watchdog now runs the same helper in `--check` mode. If the physical display check fails, it tries `soft-kick` first, then an optional `nouveau-rebind` when `TIKPAL_KIOSK_PHYSICAL_DISPLAY_GPU_REBIND_BEFORE_RESTART=1`, and only restarts `tikpal-kiosk.service` when the display helper cannot recover the X/HDMI state. It still does not restart API, web, MPD, or audio services for ordinary display recovery.
 
-Important limitation: this panel can be black to the eye while DRM, RandR, DDC, Chromium, and heartbeat all report healthy. In that exact state, software has no reliable visual sensor. The PCI `power/control=on` baseline and delayed kicks reduce the chance of recurrence; the proven recovery path is `nouveau-rebind`, with a physical HDMI replug as the final fallback if the panel receiver firmware ignores every software kick.
+Important limitation: this panel can be black to the eye while DRM, RandR, DDC, Chromium, and heartbeat all report healthy. In that exact state, software has no reliable visual sensor. The PCI `power/control=on` baseline and an explicitly enabled delayed kick schedule can reduce the chance of recurrence; the proven recovery path is `nouveau-rebind`, with a physical HDMI replug as the final fallback if the panel receiver firmware ignores every software kick.
 
 ## Validation
 
@@ -1048,6 +1048,19 @@ DISPLAY=:0 XAUTHORITY=/home/moode/.Xauthority xdotool search --onlyvisible --nam
 curl -fsS http://127.0.0.1:8787/api/v1/kiosk/heartbeat | jq '{healthy,status,ageMs,reasons,ignoredReasons,visibility:.heartbeat.visibility,eventLoop:.heartbeat.eventLoop}'
 ```
 
+On a normal installation, confirm that the default delayed reset is a no-op. Do
+not enable a numeric schedule merely to make this check pass:
+
+```bash
+TIKPAL_KIOSK_ENV_FILE=/home/moode/code/tikpal/.env.kiosk \
+  /usr/local/sbin/tikpal-physical-display-prepare delayed-soft-kick
+```
+
+Expected default log: `delayed soft-kick is disabled`. If a particular panel
+has physical proof that it needs the reset, set a numeric schedule in
+`.env.kiosk`, restart the kiosk, and verify the resulting black flash and
+recovery on that device before retaining the override.
+
 When Explore is active, the main Tikpal kiosk page can become Chromium-hidden behind the visible provider / side-panel windows. Browser timer throttling may then report a large `eventLoop.lagMs` or delay the next heartbeat past the normal 30s visible-page stale threshold. These are diagnostic only and should appear under `ignoredReasons` as `event-loop-lag:hidden-page` or `heartbeat-stale:hidden-page`, not as restart reasons. Hidden pages use `TIKPAL_KIOSK_HEARTBEAT_HIDDEN_STALE_MS` (`120000` by default) before becoming truly stale. A stale visible heartbeat, visible-page event-loop lag, stuck pending action, or scene-video failure remains unhealthy.
 
 Explore checks:
@@ -1058,8 +1071,22 @@ deploy/chromium/tikpal-web-mode.sh --check
 curl -fsS -X POST http://127.0.0.1:8787/api/v1/web-mode/actions \
   -H "Content-Type: application/json" \
   --data '{"type":"open","provider":"qq_music"}'
-curl -fsS http://127.0.0.1:9241/json/list
+curl -fsS http://127.0.0.1:9241/json/list | node -e '
+  let body = "";
+  process.stdin.on("data", (chunk) => body += chunk);
+  process.stdin.on("end", () => {
+    const targets = JSON.parse(body);
+    const page = targets.find((target) => target.type === "page" && String(target.url || "").startsWith("https://"));
+    if (!page) process.exit(1);
+    console.log(page.url);
+  });
+'
 ```
+
+The final command must print a real `https://` provider page. A Chromium
+process, cached X11 window id, local transition page, or Tikpal error page is
+not readiness evidence and should remain `Check setup` (or the explicit
+regional-unavailable state) until CDP reports the provider page.
 
 Resident-provider switching checks should cover at least one Chinese provider and several slow western providers:
 
