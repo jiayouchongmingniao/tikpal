@@ -41,12 +41,6 @@ type LibraryStorageCounts = {
   usb: number | null;
 };
 
-const webModeTextScaleChoices = [
-  { value: 1, label: "Small" },
-  { value: 1.1, label: "Medium" },
-  { value: 1.2, label: "Large" }
-];
-
 const NAS_PANEL_PAGE_SIZE = 3;
 const displaySleepMinuteChoices = [5, 10, 15, 30, 60] as const;
 const displaySleepStyleChoices: DisplaySleepStyle[] = ["meteor_shower", "clock", "now_playing", "starfield", "signal"];
@@ -426,10 +420,12 @@ export function QuickSettingsOverlay({
   const [audioDiagnosticsPending, setAudioDiagnosticsPending] = useState(false);
   const [audioDiagnosticsError, setAudioDiagnosticsError] = useState<string | null>(null);
   const audioDiagnosticsTimerRef = useRef<number | null>(null);
+  const webModeProxyUrlSaveNonceRef = useRef(0);
   const wasActiveRef = useRef(active);
   const [webModeProxyEnabled, setWebModeProxyEnabled] = useState(true);
   const [webModeProxyUrl, setWebModeProxyUrl] = useState("");
-  const [webModeProviderTextScale, setWebModeProviderTextScale] = useState(1.1);
+  const [webModeProxyConfirmEnabled, setWebModeProxyConfirmEnabled] = useState<boolean | null>(null);
+  const [webModeProxyRestartPending, setWebModeProxyRestartPending] = useState(false);
   const [webModeError, setWebModeError] = useState<string | null>(null);
   const [libraryStorageCounts, setLibraryStorageCounts] = useState<LibraryStorageCounts>({
     local: null,
@@ -610,7 +606,6 @@ export function QuickSettingsOverlay({
         setWebModeState(nextState);
         setWebModeProxyEnabled(nextState.settings.proxyEnabled);
         setWebModeProxyUrl(nextState.settings.proxyUrl);
-        setWebModeProviderTextScale(nextState.settings.providerTextScale ?? 1.1);
       })
       .catch((error) => {
         if (!cancelled) setWebModeError(localizedErrorMessage(error, "error.explore"));
@@ -645,34 +640,32 @@ export function QuickSettingsOverlay({
     if (!active || !webModeState) return undefined;
 
     const normalizedProxyUrl = normalizeProxyUrl(webModeProxyUrl);
-    const enabledChanged = webModeProxyEnabled !== webModeState.settings.proxyEnabled;
     const proxyUrlChanged = normalizedProxyUrl !== null && normalizedProxyUrl !== webModeState.settings.proxyUrl;
-    const textScaleChanged = Math.abs(webModeProviderTextScale - (webModeState.settings.providerTextScale ?? 1.1)) > 0.001;
 
-    if (webModeProxyEnabled && normalizedProxyUrl === null) {
+    if (normalizedProxyUrl === null) {
       setWebModeError(t("settings.enterProxyUrl"));
       return undefined;
     }
-    if (!enabledChanged && !proxyUrlChanged && !textScaleChanged) {
+    if (!proxyUrlChanged) {
       setWebModeError((current) => current === t("settings.enterProxyUrl") || current === t("common.saving") ? null : current);
       return undefined;
     }
 
     let cancelled = false;
+    const saveNonce = webModeProxyUrlSaveNonceRef.current;
     setWebModeError(t("common.saving"));
     const timer = window.setTimeout(() => {
+      if (cancelled || webModeProxyUrlSaveNonceRef.current !== saveNonce) return;
       void updateWebModeSettings({
-        proxyEnabled: webModeProxyEnabled,
-        ...(normalizedProxyUrl === null ? {} : { proxyUrl: normalizedProxyUrl }),
-        providerTextScale: webModeProviderTextScale
+        proxyUrl: normalizedProxyUrl
       })
         .then((nextState) => {
-          if (cancelled) return;
+          if (cancelled || webModeProxyUrlSaveNonceRef.current !== saveNonce) return;
           setWebModeState(nextState);
           setWebModeError(t("common.savedAutomatically"));
         })
         .catch((error) => {
-          if (!cancelled) setWebModeError(localizedErrorMessage(error, "error.explore"));
+          if (!cancelled && webModeProxyUrlSaveNonceRef.current === saveNonce) setWebModeError(localizedErrorMessage(error, "error.explore"));
         });
     }, 700);
 
@@ -680,7 +673,7 @@ export function QuickSettingsOverlay({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [active, localizedErrorMessage, t, webModeProviderTextScale, webModeProxyEnabled, webModeProxyUrl, webModeState]);
+  }, [active, localizedErrorMessage, t, webModeProxyUrl, webModeState]);
 
   const librarySourceKind = system.library.source.trim().toLowerCase();
   const displayedAudioOutputProfile = audioOutputPendingProfile ?? preferences.audioOutputProfile;
@@ -948,6 +941,7 @@ export function QuickSettingsOverlay({
 
   function handleSectionSelect(section: SettingsSectionKey) {
     setConfirmAction(null);
+    setWebModeProxyConfirmEnabled(null);
     setDetailView(null);
     setActiveSection(section);
   }
@@ -1407,6 +1401,57 @@ export function QuickSettingsOverlay({
   function openDetail(nextDetail: Exclude<SettingsDetailView, null>) {
     setDetailView(nextDetail);
     setConfirmAction(null);
+    setWebModeProxyConfirmEnabled(null);
+  }
+
+  function requestWebModeProxyChange(enabled: boolean) {
+    if (webModeProxyRestartPending || enabled === webModeProxyEnabled) return;
+    if (enabled && normalizeProxyUrl(webModeProxyUrl) === null) {
+      setWebModeError(t("settings.enterProxyUrl"));
+      return;
+    }
+    setWebModeError(null);
+    setWebModeProxyConfirmEnabled(enabled);
+  }
+
+  function cancelWebModeProxyChange() {
+    if (webModeProxyRestartPending) return;
+    setWebModeProxyConfirmEnabled(null);
+  }
+
+  async function confirmWebModeProxyChange() {
+    if (webModeProxyRestartPending || webModeProxyConfirmEnabled === null) return;
+
+    const nextEnabled = webModeProxyConfirmEnabled;
+    const normalizedProxyUrl = normalizeProxyUrl(webModeProxyUrl);
+    if (nextEnabled && normalizedProxyUrl === null) {
+      setWebModeError(t("settings.enterProxyUrl"));
+      return;
+    }
+
+    let settingsSaved = false;
+    webModeProxyUrlSaveNonceRef.current += 1;
+    setWebModeError(null);
+    setWebModeProxyRestartPending(true);
+    try {
+      const nextState = await updateWebModeSettings({
+        proxyEnabled: nextEnabled,
+        ...(normalizedProxyUrl === null ? {} : { proxyUrl: normalizedProxyUrl })
+      });
+      settingsSaved = true;
+      setWebModeState(nextState);
+      setWebModeProxyEnabled(nextState.settings.proxyEnabled);
+      setWebModeProxyUrl(nextState.settings.proxyUrl);
+      setWebModeProxyConfirmEnabled(null);
+      await onSystemAction("reboot");
+      setWebModeError(t("settings.proxyRestarting"));
+    } catch (error) {
+      setWebModeError(settingsSaved
+        ? t("settings.proxyRestartSavedManual")
+        : localizedErrorMessage(error, "error.explore"));
+    } finally {
+      setWebModeProxyRestartPending(false);
+    }
   }
 
   function renderAppearanceDetail() {
@@ -2303,20 +2348,26 @@ export function QuickSettingsOverlay({
     );
   }
 
-    function renderWebModeDetail() {
-      const statusText = webModeError
-        ?? (webModeState?.settings.proxyEnabled ? t("settings.proxyReady") : t("explore.directConnection"));
+  function renderWebModeDetail() {
+    const statusText = webModeError
+      ?? (webModeState?.settings.proxyEnabled ? t("settings.proxyReady") : t("explore.directConnection"));
+    const proxyChangeTarget = webModeProxyConfirmEnabled === null
+      ? null
+      : webModeProxyConfirmEnabled ? t("common.proxyOn") : t("common.direct");
 
     return (
       <section className="settings-detail-panel" aria-label="Explore detail" data-settings-detail="web-mode">
         <div className="settings-detail-header">
-            <button className="settings-detail-back" type="button" onClick={() => setDetailView(null)}>
-              {t("common.close")}
-            </button>
-            <div>
-              <span>{t("settings.link")}</span>
-              <strong>Explore</strong>
-              <p>{statusText}</p>
+          <button className="settings-detail-back" type="button" onClick={() => {
+            setWebModeProxyConfirmEnabled(null);
+            setDetailView(null);
+          }}>
+            {t("common.close")}
+          </button>
+          <div>
+            <span>{t("settings.link")}</span>
+            <strong>Explore</strong>
+            <p>{statusText}</p>
           </div>
         </div>
 
@@ -2325,44 +2376,47 @@ export function QuickSettingsOverlay({
             className={`night-toggle ${webModeProxyEnabled ? "is-active" : ""}`}
             type="button"
             aria-pressed={webModeProxyEnabled}
-            onClick={() => setWebModeProxyEnabled((enabled) => !enabled)}
+            disabled={webModeProxyRestartPending || webModeProxyConfirmEnabled !== null}
+            data-web-mode-proxy-toggle
+            onClick={() => requestWebModeProxyChange(!webModeProxyEnabled)}
           >
             <Globe2 size={26} />
-              <span>
-                <strong>{t("common.proxy")}</strong>
-                <em>{webModeProxyEnabled ? t("common.on") : t("common.direct")}</em>
-              </span>
+            <span>
+              <strong>{t("common.proxy")}</strong>
+              <em>{webModeProxyEnabled ? t("common.on") : t("common.direct")}</em>
+            </span>
           </button>
 
           <label className="night-field web-mode-proxy-field">
-              <span>Proxy URL</span>
+            <span>Proxy URL</span>
             <input
               type="url"
               value={webModeProxyUrl}
               inputMode="url"
               spellCheck={false}
+              disabled={webModeProxyRestartPending}
               onChange={(event) => setWebModeProxyUrl(event.currentTarget.value)}
             />
           </label>
 
-          <div className="night-field web-mode-scale-field" data-web-mode-settings-scale>
-              <span><Type size={16} /> {t("explore.font")}</span>
-            <div className="web-mode-settings-scale-options" role="group" aria-label="Provider font size">
-              {webModeTextScaleChoices.map((choice) => (
-                <button
-                  key={choice.label}
-                  className={`web-mode-settings-scale-option ${Math.abs(webModeProviderTextScale - choice.value) < 0.001 ? "is-active" : ""}`}
-                  type="button"
-                  aria-pressed={Math.abs(webModeProviderTextScale - choice.value) < 0.001}
-                  onClick={() => setWebModeProviderTextScale(choice.value)}
-                >
-                  {choice.label}
+          {proxyChangeTarget ? (
+            <section className="web-mode-proxy-restart-confirm" data-web-mode-proxy-restart-confirm aria-live="polite">
+              <div>
+                <strong>{t("settings.proxyRestartConfirmTitle")}</strong>
+                <p>{t("settings.proxyRestartConfirmBody", { state: proxyChangeTarget })}</p>
+              </div>
+              <div className="web-mode-proxy-restart-confirm-actions">
+                <button type="button" disabled={webModeProxyRestartPending} data-web-mode-proxy-restart-cancel onClick={cancelWebModeProxyChange}>
+                  {t("common.cancel")}
                 </button>
-              ))}
-            </div>
-          </div>
+                <button type="button" disabled={webModeProxyRestartPending} data-web-mode-proxy-restart-apply onClick={() => void confirmWebModeProxyChange()}>
+                  {webModeProxyRestartPending ? t("common.applying") : t("settings.proxyRestartConfirmAction")}
+                </button>
+              </div>
+            </section>
+          ) : null}
 
-            <p className="web-mode-settings-help">{t("settings.exploreHelp")}</p>
+          <p className="web-mode-settings-help">{t("settings.exploreHelp")}</p>
         </div>
       </section>
     );

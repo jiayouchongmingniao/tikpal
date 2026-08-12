@@ -632,7 +632,7 @@ Provider profiles keep their login state. Before launching a provider, the launc
 
 Close uses the warm resident path by default: it moves the right side panel and resident provider windows offscreen under the full-width exit veil, leaves per-provider guards running so inactive pages stay paused/muted, and keeps the provider pool alive for the next Explore open. With `TIKPAL_WEB_MODE_CLOSE_REFILL_PROVIDER_POOL_ENABLED=1`, warm close also starts an idle offscreen `warm-pool` after the exit veil is gone, so a user who exits before background prewarm finishes still ends up with all ten provider profiles resident. The idle refill must pause if Explore becomes active again, letting the foreground open command own the visible provider and side panel. If `TIKPAL_WEB_MODE_CLOSE_KEEP_RESIDENT=0`, delayed full cleanup runs after `TIKPAL_WEB_MODE_CLOSE_WARM_TTL_SECONDS` when Explore is not reopened. This makes close -> immediate reopen feel like a reveal from a warm pool instead of a full Chromium cold start. API-side close cleanup carries a runtime `closeRequestId`: if the user opens Explore again before cleanup and playback restore finish, the stale close must not clear the newer `activeProvider`, close the newly revealed provider through the window guard, or resume MPD/Radio behind it. Production Gentoo keeps `TIKPAL_WEB_MODE_EXIT_VEIL_ENABLED=1`, so closing Explore gives the left and right surfaces one synchronized room-return cover before fading back to the current Focus, Calm, Sleep, or Hi-Fi room.
 
-Proxy On/Off is treated as a reachability change for the entire resident pool. Change it from Settings -> Link -> Explore Proxy or the guarded Remote path; the Explore side panel only displays read-only `Proxy On` / `Proxy Off` status and must not hot-toggle proxy while the provider pool is resident. Error pages should point users to Settings, not to the side panel. After the extension applies the new proxy mode to the active provider, the launcher restarts background prewarm with a forced seed so inactive cards move back through `Prewarming` and re-evaluate to `Ready` or `Needs proxy` instead of keeping stale status. Existing inactive provider processes are not killed, but forced prewarm navigates their CDP page target back to the provider URL so a previous Tikpal error page or network timeout is retried under the new proxy mode.
+Proxy On/Off is treated as a reachability change for the entire resident pool. In Settings -> Link -> Explore Proxy, changing the local switch first asks the user to confirm the target state; confirmation persists the setting and immediately restarts the system, while cancellation changes nothing. The Proxy URL draft still saves automatically without a restart. The guarded Remote path remains an immediate runtime change. The Explore side panel only displays read-only `Proxy On` / `Proxy Off` status and must not hot-toggle proxy while the provider pool is resident. Error pages should point users to Settings, not to the side panel. After a Remote change applies the new proxy mode to the active provider, the launcher restarts background prewarm with a forced seed so inactive cards move back through `Prewarming` and re-evaluate to `Ready` or `Needs proxy` instead of keeping stale status. Existing inactive provider processes are not killed, but forced prewarm navigates their CDP page target back to the provider URL so a previous Tikpal error page or network timeout is retried under the new proxy mode.
 
 The proxy truth is `.tikpal/web-mode-settings.json`; the launcher fallback should prefer a proxy on the same Gentoo host:
 
@@ -642,13 +642,13 @@ TIKPAL_WEB_MODE_DEFAULT_PROXY_URL=http://127.0.0.1:7897
 
 If the proxy runs on a separate LAN machine, set it in Settings -> Link -> Explore Proxy or in `.tikpal/web-mode-settings.json`, for example `http://192.168.10.148:7897`. Do not leave a DHCP-specific proxy IP hard-coded in the repo defaults.
 
-Changing proxy state uses the MV3 extension and refreshes the active provider page while keeping its profile and window. The side panel status must read `Proxy On` or `Proxy Off`; do not use `Direct` as the visible state because direct mode still cannot reach several providers on this network. Cookies and login state stay in per-provider Chromium profiles under:
+Remote proxy changes use the MV3 extension and refresh the active provider page while keeping its profile and window. The side panel status must read `Proxy On` or `Proxy Off`; do not use `Direct` as the visible state because direct mode still cannot reach several providers on this network. Cookies and login state stay in per-provider Chromium profiles under:
 
 ```bash
 /home/moode/.config/tikpal-web-mode/providers/<provider>
 ```
 
-The provider text-size control uses `providerTextScale`:
+The Explore side-panel provider text-size control uses `providerTextScale`; the local Console proxy page intentionally does not expose it:
 
 | UI | Value | Behavior |
 | --- | --- | --- |
@@ -762,6 +762,8 @@ Tikpal UI language and font choice are device preferences, not browser-only sett
 ```
 
 The supported locales are `en`, `zh-CN`, `de`, `it`, `ko`, `ja`, and `es`. The supported font themes are `system`, `hardware`, `precision`, `sans`, `serif`, and `mono`. The kiosk, Explore side panel, portable Remote, and Tikpal-owned Explore error page read the same preference through `GET /api/v1/preferences`; only the local kiosk should write it through `PATCH /api/v1/preferences`. `GET /api/v1/system/state`, `/api/v1/remote/state`, and `/api/v1/web-mode/state` also include `preferences` so surfaces can stay in sync after polling.
+
+The local kiosk also caches the last validated locale in browser storage as `tikpal.locale`. At startup, any valid cached value from the complete supported locale set is the first rendered language; the later preference fetch remains authoritative and replaces it if another local user or device setting has changed it. With no valid cache, the kiosk leaves the React surface unrendered until `GET /api/v1/preferences` resolves. This prevents the old English-first frame followed by a Chinese, German, Italian, Korean, Japanese, or Spanish repaint.
 
 Changing Settings -> Preferences -> Language keeps the default input method as English and updates the language key's paired target:
 
@@ -990,6 +992,32 @@ The watchdog now runs the same helper in `--check` mode. If the physical display
 Important limitation: this panel can be black to the eye while DRM, RandR, DDC, Chromium, and heartbeat all report healthy. In that exact state, software has no reliable visual sensor. The PCI `power/control=on` baseline and delayed kicks reduce the chance of recurrence; the proven recovery path is `nouveau-rebind`, with a physical HDMI replug as the final fallback if the panel receiver firmware ignores every software kick.
 
 ## Validation
+
+### Startup Scene And Locale Readiness
+
+The four-card startup / Explore-return room chooser is a visual cover while the current Ambient scene becomes drawable. It must remain visible until the active scene video reports a decoded frame (`data-flame-frame-ready="true"` and `readyState >= 2`). On the single-loop Gentoo path, the health must also be `ok`; `recovering`, `stalled`, and `fallback` are not safe to reveal behind. In particular, `health="recovering"`, `currentTime=0`, and `readyState=1` mean the user would see the static fireplace fallback, so the cards must stay up instead of auto-dismissing.
+
+After a room-card selection, the cards remain pending until that selected scene reaches the same readiness condition. This avoids closing the cover on an old decoded scene and exposing a static frame during recovery. The 8-second idle dismissal timer starts only after readiness; it does not force an unsafe reveal.
+
+On the physical kiosk, inspect the active scene and chooser through the main kiosk DevTools page rather than service liveness alone:
+
+```js
+(() => {
+  const scene = document.querySelector(".flame-scene");
+  const video = document.querySelector('.flame-video[data-flame-layer="active"][data-flame-loop-role="active"]');
+  const chooser = document.querySelector(".startup-mode-chooser");
+  return {
+    chooserVisible: chooser instanceof HTMLElement,
+    chooserContext: chooser?.getAttribute("data-room-mode-chooser-context") ?? null,
+    health: scene?.getAttribute("data-flame-video-health") ?? null,
+    frameReady: video?.getAttribute("data-flame-frame-ready") ?? null,
+    readyState: video instanceof HTMLVideoElement ? video.readyState : null,
+    currentTime: video instanceof HTMLVideoElement ? video.currentTime : null
+  };
+})()
+```
+
+Expected safe reveal: `chooserVisible=false`, `frameReady="true"`, and `readyState >= 2`; for single-loop video, `health="ok"`. Verify a saved non-English preference by reloading the kiosk with `localStorage.getItem("tikpal.locale")` set to one of the seven valid values and confirming the first visible startup-card title is already in that language.
 
 2026-07-30 physical-kiosk validation on `192.168.10.117`:
 

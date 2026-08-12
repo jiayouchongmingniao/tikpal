@@ -1908,6 +1908,8 @@ async function runMpcLocalLibraryPathSmoke(roomExperienceStatePath) {
   const fakeExternalDisableLogPath = path.join(workspace, "external-disable.log");
   const fakeExternalDisableCommandPath = path.join(workspace, "external-disable.mjs");
   const fakeWebModeLogPath = path.join(workspace, "web-mode.log");
+  const fakeWebModeOpenStartedPath = path.join(workspace, "web-mode-open.started");
+  const fakeWebModeOpenReleasePath = path.join(workspace, "web-mode-open.release");
   const fakeWebModeRetryMarkerPath = path.join(workspace, "web-mode-retry.marker");
   const fakeWebModeCommandPath = path.join(workspace, "web-mode-command.mjs");
   const fakeWebModeSettingsPath = path.join(workspace, "web-mode-settings.json");
@@ -2322,10 +2324,40 @@ if (args[0] === "open" && args[1] === ${JSON.stringify(failedProvider)}) {
 
     await writeFile(fakeMpcLogPath, "");
     await writeFile(fakeWebModeLogPath, "");
-    const webModeFromPlayingLibrary = await requestFrom(baseUrl, "/api/v1/web-mode/actions", {
+    await rm(fakeWebModeOpenStartedPath, { force: true });
+    await rm(fakeWebModeOpenReleasePath, { force: true });
+    await writeFile(fakeWebModeCommandPath, `#!/usr/bin/env node
+import { appendFileSync, existsSync, writeFileSync } from "node:fs";
+
+const args = process.argv.slice(2);
+appendFileSync(${JSON.stringify(fakeWebModeLogPath)}, args.join("\\t") + "\\n");
+if (args[0] === "open" && args[1] === "qq_music") {
+  writeFileSync(${JSON.stringify(fakeWebModeOpenStartedPath)}, "1\\n");
+  while (!existsSync(${JSON.stringify(fakeWebModeOpenReleasePath)})) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+`);
+    const openingWebModeFromPlayingLibrary = requestFrom(baseUrl, "/api/v1/web-mode/actions", {
       method: "POST",
       body: JSON.stringify({ type: "open", provider: "qq_music" })
     });
+    let webModeOpenStarted = false;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      try {
+        await readFile(fakeWebModeOpenStartedPath, "utf8");
+        webModeOpenStarted = true;
+        break;
+      } catch {
+        await wait(25);
+      }
+    }
+    assert(webModeOpenStarted, "web mode open smoke should reach the delayed launcher");
+    const stateDuringWebModeEntry = await requestFrom(baseUrl, "/api/v1/web-mode/state");
+    assert(stateDuringWebModeEntry.body.activeProvider === null, "web mode entry should not activate provider audio before the launcher reveals it");
+    await writeFile(fakeWebModeOpenReleasePath, "1\\n");
+    const webModeFromPlayingLibrary = await openingWebModeFromPlayingLibrary;
+    await writeFile(fakeWebModeCommandPath, fakeWebModeCommandSource);
     assert(webModeFromPlayingLibrary.response.ok, "web mode open from playing Library should return 200");
     assert(webModeFromPlayingLibrary.body.activeProvider === "qq_music", "web mode open from playing Library should activate QQ Music");
     const pausedDuringExplore = JSON.parse(await readFile(fakeMpcStatePath, "utf8"));
@@ -2336,6 +2368,7 @@ if (args[0] === "open" && args[1] === ${JSON.stringify(failedProvider)}) {
     });
     assert(closedPlayingLibraryExplore.response.ok, "web mode close from playing Library should return 200");
     assert(closedPlayingLibraryExplore.body.activeProvider === null, "web mode close should clear the active provider");
+    assert(closedPlayingLibraryExplore.body.lastProvider === "qq_music", "web mode close should retain the provider selected before exit");
     assert(closedPlayingLibraryExplore.body.lastError === null, `web mode close should not report a restore error: ${closedPlayingLibraryExplore.body.lastError}`);
     let resumedAfterExplore = JSON.parse(await readFile(fakeMpcStatePath, "utf8"));
     for (let attempt = 0; attempt < 20 && resumedAfterExplore.state !== "playing"; attempt += 1) {
@@ -2366,9 +2399,14 @@ if (args[0] === "open" && args[1] === ${JSON.stringify(failedProvider)}) {
     await writeFile(fakeWebModeLogPath, "");
     const webModeFromPausedLibrary = await requestFrom(baseUrl, "/api/v1/web-mode/actions", {
       method: "POST",
-      body: JSON.stringify({ type: "open", provider: "qq_music" })
+      body: JSON.stringify({ type: "open" })
     });
-    assert(webModeFromPausedLibrary.response.ok, "web mode open from paused Library should return 200");
+    assert(webModeFromPausedLibrary.response.ok, "web mode reopen from paused Library should return 200");
+    assert(webModeFromPausedLibrary.body.activeProvider === "qq_music", "web mode reopen should reuse the provider retained at close");
+    assert(
+      (await readFile(fakeWebModeLogPath, "utf8")).includes("open\tqq_music\n"),
+      "web mode reopen should launch the provider retained at close"
+    );
     const closedPausedLibraryExplore = await requestFrom(baseUrl, "/api/v1/web-mode/actions", {
       method: "POST",
       body: JSON.stringify({ type: "close" })
@@ -2739,6 +2777,16 @@ appendFileSync(${JSON.stringify(fakeWebModeLogPath)}, [...args, ...keyboardEnv].
       "failed web mode reopen should expose the human provider label"
     );
     await writeFile(fakeWebModeCommandPath, fakeWebModeCommandSource);
+    await writeFile(fakeWebModeLogPath, "");
+    const reopenedLastProvider = await requestFrom(baseUrl, "/api/v1/web-mode/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "open" })
+    });
+    assert(reopenedLastProvider.response.ok, "web mode reopen without a provider should return 200");
+    assert(reopenedLastProvider.body.activeProvider === "netease_music", "web mode reopen without a provider should reuse the provider selected before exit");
+    assert(reopenedLastProvider.body.lastProvider === "netease_music", "web mode reopen should preserve the selected provider for the next exit");
+    const reopenedLastProviderLog = await readFile(fakeWebModeLogPath, "utf8");
+    assert(reopenedLastProviderLog.includes("open\tnetease_music\n"), `web mode reopen should target the retained provider, got ${JSON.stringify(reopenedLastProviderLog)}`);
   } finally {
     if (server.exitCode === null && server.signalCode === null) {
       server.kill("SIGTERM");
@@ -4677,11 +4725,14 @@ async function run() {
   const sceneSha256 = createHash("sha256").update(sceneBytes).digest("hex");
   const warmSceneBytes = Buffer.from("000000 ftypisom tikpal warm fireplace api smoke mp4");
   const warmSceneSha256 = createHash("sha256").update(warmSceneBytes).digest("hex");
+  const midnightLibrarySceneBytes = Buffer.from("000000 ftypisom tikpal midnight library api smoke mp4");
+  const midnightLibrarySceneSha256 = createHash("sha256").update(midnightLibrarySceneBytes).digest("hex");
   await mkdir(path.join(apiAssetsRoot, "scenes", "_metadata"), { recursive: true });
   await mkdir(path.join(apiUsbRoot, "Bootleg Set"), { recursive: true });
   await writeFile(path.join(apiUsbRoot, "Bootleg Set", "Stage Test.flac"), "fake flac bytes");
   await writeFile(path.join(apiUsbRoot, "Bootleg Set", "._Stage Test.flac"), "apple resource fork");
   await writeFile(path.join(apiAssetsRoot, "output_2560x720-4k.mp4"), Buffer.from("000000 ftypisom tikpal legacy scene mp4"));
+  await writeFile(path.join(apiAssetsRoot, "scenes", "Midnight-Library.mp4"), midnightLibrarySceneBytes);
   await writeFile(path.join(apiAssetsRoot, "scenes", "Rainy-Window.mp4"), sceneBytes);
   await writeFile(path.join(apiAssetsRoot, "scenes", "Warm-Fireplace.mp4"), warmSceneBytes);
   await writeFile(
@@ -4689,6 +4740,16 @@ async function run() {
     `${JSON.stringify({
       mode: "add",
       videos: [
+        {
+          id: "midnight-library",
+          filename: "Midnight-Library.mp4",
+          label: "Midnight Library",
+          order: 20,
+          roomModes: ["focus"],
+          audioGainDb: 0,
+          default: false,
+          sha256: midnightLibrarySceneSha256
+        },
         {
           id: "rainy-window",
           filename: "Rainy-Window.mp4",
@@ -5844,6 +5905,17 @@ async function run() {
     assert(scene.body.audio.sources.some((source) => source.id === "upnp" && source.armed === false), "scene switch should close dlna intake");
     const experienceAfterDirectScene = await request("/api/v1/experience/state");
     assert(experienceAfterDirectScene.body.sceneSoundEnabled === true, "direct scene source switch should mark scene sound enabled");
+
+    const focusWithSceneSound = await request("/api/v1/experience/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "set_mode", mode: "focus" })
+    });
+    assert(focusWithSceneSound.response.ok, "focus mode should accept an active scene source");
+    assert(focusWithSceneSound.body.sceneSoundEnabled === true, "focus mode should preserve active scene sound");
+    assert(focusWithSceneSound.body.sceneVideoId === "midnight-library", "focus mode should retarget active scene sound to the focus scene");
+    const stateAfterFocusWithSceneSound = await request("/api/v1/system/state");
+    assert(stateAfterFocusWithSceneSound.body.audio.currentSource.id === "scene", "focus mode should keep Scene Sound as the active source");
+    assert(stateAfterFocusWithSceneSound.body.playback.source === "scene", "focus mode should not fall silent while Scene Sound is active");
 
     const sceneNext = await request("/api/v1/playback/actions", {
       method: "POST",

@@ -36,6 +36,8 @@ fi
 : "${TIKPAL_WEB_MODE_PROVIDER_READY_TIMEOUT_SECONDS:=18}"
 : "${TIKPAL_WEB_MODE_PROVIDER_WINDOW_TIMEOUT_SECONDS:=30}"
 : "${TIKPAL_WEB_MODE_ENTRY_PROVIDER_PAINT_TIMEOUT_SECONDS:=1.5}"
+: "${TIKPAL_WEB_MODE_RESIDENT_ENTRY_SETTLE_SECONDS:=0.16}"
+: "${TIKPAL_WEB_MODE_RESIDENT_ENTRY_PAINT_SETTLE_SECONDS:=0.5}"
 : "${TIKPAL_WEB_MODE_LEFT_WINDOW:=1920x720}"
 : "${TIKPAL_WEB_MODE_LEFT_POSITION:=0,0}"
 : "${TIKPAL_WEB_MODE_PANEL_WINDOW:=640x720}"
@@ -50,6 +52,7 @@ fi
 : "${TIKPAL_WEB_MODE_ENTRY_GUARD_INTERVAL_SECONDS:=0.12}"
 : "${TIKPAL_WEB_MODE_EXIT_VEIL_ENABLED:=1}"
 : "${TIKPAL_WEB_MODE_EXIT_VEIL_SETTLE_SECONDS:=0.12}"
+: "${TIKPAL_WEB_MODE_EXIT_REVEAL_SETTLE_SECONDS:=1.1}"
 : "${TIKPAL_WEB_MODE_EXIT_ROOM_MODE:=}"
 : "${TIKPAL_WEB_MODE_CLOSE_ACTIVE_PROVIDER:=}"
 : "${TIKPAL_WEB_MODE_CLOSE_REQUEST_ID:=}"
@@ -797,6 +800,7 @@ const providerIds = String(providerList || "").split(",").filter(Boolean);
 let state = {};
 try { state = JSON.parse(fs.readFileSync(statePath, "utf8")); } catch {}
 state.activeProvider = provider || null;
+if (state.activeProvider) state.lastProvider = state.activeProvider;
 state.lastError = null;
 state.updatedAt = new Date().toISOString();
 if (!state.activeProvider) {
@@ -1842,6 +1846,8 @@ park_left_web_mode_surfaces_for_reopen() {
   local active_provider="${1:-}"
   close_transition_veil
   close_error_veil
+  # The entry stage is strictly an Explore-open surface. Exit has its own
+  # full-width stage, so never leave or raise entry-stage during a return.
   close_entry_stage_veil
   close_background_veil
   park_provider_windows_for_reopen "$active_provider"
@@ -1909,6 +1915,14 @@ show_exit_room_veil_if_enabled() {
   return 1
 }
 
+settle_exit_room_veil_if_enabled() {
+  local settle
+  is_enabled "$TIKPAL_WEB_MODE_EXIT_VEIL_ENABLED" || return 0
+  settle="$TIKPAL_WEB_MODE_EXIT_REVEAL_SETTLE_SECONDS"
+  [[ "$settle" =~ ^[0-9]+([.][0-9]+)?$ ]] || settle=1.1
+  sleep "$settle"
+}
+
 close_web_mode_full() {
   local room_mode
   room_mode="${TIKPAL_WEB_MODE_EXIT_ROOM_MODE:-calm}"
@@ -1918,6 +1932,7 @@ close_web_mode_full() {
   close_web_mode_process_surfaces
   close_transition_veil
   close_error_veil
+  settle_exit_room_veil_if_enabled
   if is_enabled "$TIKPAL_WEB_MODE_EXIT_VEIL_ENABLED"; then
     fade_exit_room_veil >/dev/null 2>&1 || true
   fi
@@ -1960,6 +1975,7 @@ close_web_mode_warm() {
   if ! is_enabled "$TIKPAL_WEB_MODE_CLOSE_KEEP_RESIDENT"; then
     stop_provider_guard
   fi
+  settle_exit_room_veil_if_enabled
   if is_enabled "$TIKPAL_WEB_MODE_EXIT_VEIL_ENABLED"; then
     fade_exit_room_veil >/dev/null 2>&1 || true
   fi
@@ -1989,13 +2005,25 @@ close_web_mode_from_guard() {
   room_mode="${TIKPAL_WEB_MODE_EXIT_ROOM_MODE:-calm}"
   hide_onboard
   if is_enabled "$TIKPAL_WEB_MODE_CLOSE_KEEP_RESIDENT"; then
+    show_exit_room_veil_if_enabled "$room_mode" || true
     stop_entry_stage_guard
-    [[ -z "$(read_runtime_active_provider)" ]] || return 0
+    if [[ -n "$(read_runtime_active_provider)" ]]; then
+      close_exit_room_veil
+      return 0
+    fi
     park_web_mode_surfaces_for_reopen ""
-    [[ -z "$(read_runtime_active_provider)" ]] || return 0
+    if [[ -n "$(read_runtime_active_provider)" ]]; then
+      close_exit_room_veil
+      return 0
+    fi
     write_audio_bus_state ""
     write_runtime_provider_state ""
     sync_runtime_provider_pool_process_statuses ""
+    settle_exit_room_veil_if_enabled
+    if is_enabled "$TIKPAL_WEB_MODE_EXIT_VEIL_ENABLED"; then
+      fade_exit_room_veil >/dev/null 2>&1 || true
+    fi
+    close_exit_room_veil
     schedule_provider_pool_refill_after_close
     return 0
   fi
@@ -2006,6 +2034,7 @@ close_web_mode_from_guard() {
   close_web_mode_process_surfaces
   close_transition_veil
   close_error_veil
+  settle_exit_room_veil_if_enabled
   if is_enabled "$TIKPAL_WEB_MODE_EXIT_VEIL_ENABLED"; then
     fade_exit_room_veil >/dev/null 2>&1 || true
   fi
@@ -2632,6 +2661,33 @@ ensure_entry_stage_veil() {
   return 1
 }
 
+ensure_parked_entry_stage_veil() {
+  local entry_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/entry-stage"
+  local entry_url="$TIKPAL_WEB_MODE_BACKGROUND_URL"
+  local window
+  mkdir -p "$entry_profile"
+  ensure_chromium_profile_prefs "$entry_profile"
+  window="$(wait_for_profile_window "$entry_profile" 2 || true)"
+  if [[ -z "$window" ]]; then
+    cleanup_stale_profile_singletons "$entry_profile"
+    mapfile -t flags < <(read_flags)
+    mapfile -t base_args < <(chromium_base_args)
+    DISPLAY="$TIKPAL_KIOSK_DISPLAY" "$TIKPAL_CHROMIUM_BIN" \
+      "${flags[@]}" \
+      "${base_args[@]}" \
+      "--app=$entry_url" \
+      "--user-data-dir=$entry_profile" \
+      "--window-position=$TIKPAL_WEB_MODE_STAGE_POSITION" \
+      "--window-size=$(normalize_window_size "$TIKPAL_WEB_MODE_ENTRY_STAGE_WINDOW")" \
+      >/dev/null 2>&1 9>&- &
+    window="$(wait_for_profile_window "$entry_profile" 20 || true)"
+  fi
+  [[ -n "$window" ]] || return 1
+  tile_window_fast "$window" "$TIKPAL_WEB_MODE_STAGE_POSITION" "$TIKPAL_WEB_MODE_ENTRY_STAGE_WINDOW"
+  clear_window_above "$window"
+  DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowlower "$window" >/dev/null 2>&1 || true
+}
+
 raise_entry_stage_veil() {
   local entry_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/entry-stage"
   local window
@@ -2675,6 +2731,17 @@ fade_entry_stage_veil() {
   else
     sleep 0.32
   fi
+}
+
+fade_and_park_entry_stage_veil() {
+  local entry_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/entry-stage"
+  local window
+  window="$(wait_for_profile_window "$entry_profile" 2 || true)"
+  [[ -n "$window" ]] || return 1
+  fade_entry_stage_veil || true
+  tile_window_fast "$window" "$TIKPAL_WEB_MODE_STAGE_POSITION" "$TIKPAL_WEB_MODE_ENTRY_STAGE_WINDOW"
+  clear_window_above "$window"
+  DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowlower "$window" >/dev/null 2>&1 || true
 }
 
 ensure_exit_room_veil() {
@@ -2908,15 +2975,57 @@ reveal_initial_entry_surfaces() {
   local panel_profile="$2"
   local panel_window
   panel_window="$(wait_for_profile_window "$panel_profile" 8 || true)"
-  [[ -n "$panel_window" ]] && tile_window "$panel_window" "$TIKPAL_WEB_MODE_PANEL_POSITION" "$TIKPAL_WEB_MODE_PANEL_WINDOW"
-  tile_window "$target_window" "$TIKPAL_WEB_MODE_LEFT_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
+
+  # A move can briefly raise Chromium on this bare X11 session. Keep the full
+  # entry veil on top while both surfaces are moved into their final positions.
+  raise_entry_stage_veil >/dev/null 2>&1 || true
+  if [[ -n "$panel_window" ]]; then
+    tile_window_fast "$panel_window" "$TIKPAL_WEB_MODE_PANEL_POSITION" "$TIKPAL_WEB_MODE_PANEL_WINDOW"
+    clear_window_above "$panel_window"
+    DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowlower "$panel_window" >/dev/null 2>&1 || true
+  fi
+  tile_window_fast "$target_window" "$TIKPAL_WEB_MODE_LEFT_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
+  clear_window_above "$target_window"
+  DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowlower "$target_window" >/dev/null 2>&1 || true
   raise_entry_stage_veil >/dev/null 2>&1 || true
   sleep "$TIKPAL_WEB_MODE_ENTRY_REVEAL_SETTLE_SECONDS"
   stop_entry_stage_guard
-  fade_entry_stage_veil >/dev/null 2>&1 || true
-  close_entry_stage_veil
+  fade_and_park_entry_stage_veil >/dev/null 2>&1 || true
   [[ -n "$panel_window" ]] && raise_window_without_focus "$panel_window"
   raise_window "$target_window"
+}
+
+reveal_resident_initial_entry_surfaces() {
+  local target_window="$1"
+  local panel_profile="$2"
+  local panel_window settle paint_settle
+  panel_window="$(wait_for_profile_window "$panel_profile" 2 || true)"
+  settle="$TIKPAL_WEB_MODE_RESIDENT_ENTRY_SETTLE_SECONDS"
+  paint_settle="$TIKPAL_WEB_MODE_RESIDENT_ENTRY_PAINT_SETTLE_SECONDS"
+  [[ "$settle" =~ ^[0-9]+([.][0-9]+)?$ ]] || settle=0.16
+  [[ "$paint_settle" =~ ^[0-9]+([.][0-9]+)?$ ]] || paint_settle=0.5
+
+  raise_entry_stage_veil >/dev/null 2>&1 || true
+  if [[ -n "$panel_window" ]]; then
+    tile_window_fast "$panel_window" "$TIKPAL_WEB_MODE_PANEL_POSITION" "$TIKPAL_WEB_MODE_PANEL_WINDOW"
+    clear_window_above "$panel_window"
+    DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowlower "$panel_window" >/dev/null 2>&1 || true
+  fi
+  tile_window_fast "$target_window" "$TIKPAL_WEB_MODE_LEFT_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
+  clear_window_above "$target_window"
+  DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowlower "$target_window" >/dev/null 2>&1 || true
+  raise_entry_stage_veil >/dev/null 2>&1 || true
+  sleep "$settle"
+  # Chromium can expose a blank compositor frame after an off-screen window is
+  # moved back. Keep the same full-width veil opaque through that repaint.
+  sleep "$paint_settle"
+  stop_entry_stage_guard
+  fade_entry_stage_veil >/dev/null 2>&1 || true
+  tile_window_fast "$target_window" "$TIKPAL_WEB_MODE_LEFT_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
+  mark_window_above "$target_window"
+  raise_window "$target_window"
+  [[ -n "$panel_window" ]] && raise_window_without_focus "$panel_window"
+  ensure_parked_entry_stage_veil >/dev/null 2>&1 || true
 }
 
 reveal_resident_provider_surfaces() {
@@ -3241,6 +3350,12 @@ warm_provider_pool() {
   trap warm_provider_pool_cleanup EXIT
   hide_onboard
   seed_runtime_provider_pool_statuses "" force
+  # The first entry waits for the side panel before lifting the full-width
+  # veil. Start it alongside the idle provider pool so it is already staged.
+  if [[ -z "$(read_runtime_active_provider)" ]]; then
+    ensure_parked_entry_stage_veil >/dev/null 2>&1 &
+    ensure_side_panel "" 1
+  fi
   delay="$TIKPAL_WEB_MODE_PROVIDER_PREWARM_DELAY_SECONDS"
   while IFS= read -r provider; do
     [[ -n "$provider" ]] || continue
@@ -3251,6 +3366,7 @@ warm_provider_pool() {
     TIKPAL_WEB_MODE_IDLE_POOL_WARMUP=1 launch_provider_for_pool "$provider" 0 prewarm force || true
     sleep "$delay"
   done < <(provider_ids)
+  sync_runtime_provider_pool_process_statuses ""
   log "warmed provider pool"
 }
 
@@ -3275,13 +3391,12 @@ open_provider_pool() {
   [[ "$entry_stage" != "1" && "$current_provider" != "$provider" ]] && switching_provider=1
   resident_status="$(read_runtime_provider_status "$provider")"
   provider_port="$(provider_debug_port "$provider")"
-  if profile_process_exists "$provider_profile" && [[ "$resident_status" == "ready" || "$resident_status" == "active" ]]; then
+  if profile_process_exists "$provider_profile"; then
     target_window="$(first_window_for_profile "$provider_profile" || true)"
-    if [[ -n "$target_window" ]]; then
+    if [[ -n "$target_window" ]] && provider_has_real_provider_page "$provider_port"; then
       fast_resident=1
-    elif provider_has_real_provider_page "$provider_port"; then
-      log "relaunching hidden resident provider $provider"
-    else
+      [[ "$resident_status" == "ready" || "$resident_status" == "active" ]] || write_runtime_provider_status "$provider" "ready"
+    elif [[ "$resident_status" == "ready" || "$resident_status" == "active" ]]; then
       write_runtime_provider_status "$provider" "check_setup" "$(provider_label "$provider") did not enter the provider page"
     fi
   fi
@@ -3374,7 +3489,11 @@ open_provider_pool() {
   if [[ "$entry_stage" == "1" ]]; then
     close_transition_veil
     close_error_veil
-    reveal_initial_entry_surfaces "$target_window" "$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"
+    if [[ "$fast_resident" == "1" ]]; then
+      reveal_resident_initial_entry_surfaces "$target_window" "$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"
+    else
+      reveal_initial_entry_surfaces "$target_window" "$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"
+    fi
     close_background_veil
     reassert_visible_provider_surfaces "$target_window" "$provider_profile" "$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"
   else
@@ -3564,6 +3683,12 @@ open_provider() {
   else
     tile_window "$target_window" "$TIKPAL_WEB_MODE_LEFT_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
     raise_window "$target_window"
+    close_transition_veil
+    close_error_veil
+    close_entry_stage_veil
+    close_background_veil
+    reassert_visible_provider_surfaces "$target_window" "$provider_profile" "$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"
+    sleep 0.05
     if [[ "$crossfade_switch" == "1" ]]; then
       if ! crossfade_helper fade "$current_audio_bus" "$target_audio_bus" "$TIKPAL_WEB_MODE_AUDIO_CROSSFADE_MS"; then
         log "WARN: Explore crossfade failed; completing the provider switch at full target gain"
@@ -3574,13 +3699,6 @@ open_provider() {
       sleep "$(awk "BEGIN { printf \"%.3f\", $TIKPAL_WEB_MODE_STAGE_REVEAL_MS / 1000 }")"
     fi
     close_other_provider_profiles "$provider_profile"
-    tile_window "$target_window" "$TIKPAL_WEB_MODE_LEFT_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
-    raise_window "$target_window"
-    close_transition_veil
-    close_error_veil
-    close_entry_stage_veil
-    close_background_veil
-    reassert_visible_provider_surfaces "$target_window" "$provider_profile" "$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"
   fi
   write_audio_bus_state "$target_audio_bus"
   write_runtime_provider_state "$provider"

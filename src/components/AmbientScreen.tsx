@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { Bluetooth, Captions, CaptionsOff, Cast, GalleryHorizontalEnd, Globe2, Heart, LibraryBig, ListMusic, LoaderCircle, Moon, Music2, Network, PanelRightClose, Pause, Play, Radio as RadioIcon, Repeat1, Settings, Shuffle, SkipBack, SkipForward, SlidersHorizontal, SunMedium, Target, Volume2, VolumeX, Waves } from "lucide-react";
+import { Bluetooth, Captions, CaptionsOff, Cast, ChevronLeft, ChevronRight, GalleryHorizontalEnd, Globe2, Heart, LibraryBig, ListMusic, LoaderCircle, Moon, Music2, Network, PanelRightClose, Pause, Play, Radio as RadioIcon, Repeat1, Settings, Shuffle, SkipBack, SkipForward, SlidersHorizontal, SunMedium, Target, Volume2, Waves } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { fetchBackgroundVideos, fetchSceneContext } from "../api/tikpalClient";
 import { EqVisualScene, type HifiLyricsPanel } from "./EqVisualScene";
@@ -26,7 +26,6 @@ interface AmbientScreenProps {
   sceneVideoEnabled: boolean;
   sceneVideoStableLoop: boolean;
   sceneSoundEnabled: boolean;
-  sceneSoundPending: boolean;
   sourcePickerOpenRequest: number;
   clockVisible: boolean;
   onPlaybackAction: (type: PlaybackActionType, value?: number, mode?: PlaybackMode) => Promise<TikpalState>;
@@ -35,9 +34,10 @@ interface AmbientScreenProps {
   onOpenWebMode: () => Promise<void>;
   onSourcePickerOpenChange?: (open: boolean) => void;
   onHudActivity: () => void;
+  onHudDismiss: () => void;
   onLyricsVisibleChange: (visible: boolean) => void;
   onCurrentSceneVideoChange: (video: BackgroundVideoSummary) => void;
-  onSceneSoundEnabledChange: (enabled: boolean) => void;
+  onSceneVideoReadyChange: (ready: boolean) => void;
   onOpenPlayer: () => void;
   onOpenSettings: () => void;
   roomExperience: RoomExperienceState;
@@ -54,10 +54,14 @@ const SOURCE_PICKER_SCENE_AUDIO_RELEASE_MS = 150;
 const ADJUST_COMMIT_DELAY_MS = 35;
 const ADJUST_OVERLAY_AUTO_CLOSE_MS = 3_000;
 const HIFI_LYRICS_FAKE_CONTROLS_VISIBLE_MS = 3_000;
+const AMBIENT_SOURCE_NOTIFICATION_VISIBLE_MS = 3_000;
+const AMBIENT_SOURCE_NOTIFICATION_EXIT_MS = 240;
 const SCENE_VIDEO_THERMAL_PAUSE_C = 76;
 const SCENE_VIDEO_THERMAL_RESUME_C = 68;
 const LYRICS_CLOCK_TICK_MS = 250;
 const LYRICS_CLOCK_REWIND_TOLERANCE_SECONDS = 4;
+const SCENE_GALLERY_SWIPE_THRESHOLD_PX = 64;
+const SCENE_GALLERY_CLICK_SUPPRESSION_MS = 350;
 
 interface DragState {
   channel: AmbientAdjustChannel;
@@ -67,10 +71,23 @@ interface DragState {
   input: "pointer" | "touch";
 }
 
+interface SceneGallerySwipeState {
+  pointerId: number;
+  startX: number;
+  startY: number;
+}
+
 interface AdjustOverlayState {
   channel: AmbientAdjustChannel;
   percent: number;
   error: string | null;
+}
+
+type AmbientSourceNotificationPhase = "connecting" | "success" | "exiting";
+
+interface AmbientSourceNotification {
+  sourceId: AmbientMusicSourceTarget;
+  phase: AmbientSourceNotificationPhase;
 }
 
 interface LyricsClockAnchor {
@@ -136,11 +153,10 @@ function getAmbientSourceIcon(sourceId: AmbientMusicSourceTarget | null) {
   return ambientMusicSources.find((source) => source.id === sourceId)?.Icon ?? Music2;
 }
 
-function getAmbientSourcePillDetail(
+function getAmbientSourceNotificationDetail(
   sourceId: AmbientMusicSourceTarget,
   source: AudioState["currentSource"] | undefined,
-  playback: PlaybackSummary,
-  pending: boolean,
+  phase: AmbientSourceNotificationPhase,
   labels: {
     connecting: string;
     connectingAs: (label: string) => string;
@@ -150,13 +166,12 @@ function getAmbientSourcePillDetail(
     ready: string;
   }
 ) {
-  const waiting = pending || (ambientHandoffSourceTargets.has(sourceId) && source?.connectionState === "armed");
-  if (waiting) {
+  if (phase === "connecting") {
     return source?.advertisedLabel ? labels.connectingAs(source.advertisedLabel) : labels.connecting;
   }
 
   if (sourceId === "mpd" || sourceId === "radio") {
-    return [playback.title, playback.artist].filter(Boolean).join(" - ") || source?.secondaryStatus || labels.playing;
+    return labels.playing;
   }
 
   if (source?.connectionState === "connected") {
@@ -172,6 +187,12 @@ function videoBelongsToRoomMode(video: BackgroundVideoSummary, mode: RoomMode) {
 
 function getSceneGalleryMode(video: BackgroundVideoSummary): SceneGalleryMode | null {
   return sceneGalleryModes.find((mode) => videoBelongsToRoomMode(video, mode)) ?? null;
+}
+
+function getSceneGalleryPageSize(viewportWidth = typeof window === "undefined" ? 901 : window.innerWidth) {
+  if (viewportWidth <= 560) return 1;
+  if (viewportWidth <= 900) return 2;
+  return 3;
 }
 
 function getSceneCopyKeyword(video: BackgroundVideoSummary) {
@@ -338,7 +359,6 @@ export function AmbientScreen({
   sceneVideoEnabled,
   sceneVideoStableLoop,
   sceneSoundEnabled,
-  sceneSoundPending,
   sourcePickerOpenRequest,
   clockVisible,
   onPlaybackAction,
@@ -347,9 +367,10 @@ export function AmbientScreen({
   onOpenWebMode,
   onSourcePickerOpenChange,
   onHudActivity,
+  onHudDismiss,
   onLyricsVisibleChange,
   onCurrentSceneVideoChange,
-  onSceneSoundEnabledChange,
+  onSceneVideoReadyChange,
   onOpenPlayer,
   onOpenSettings,
   roomExperience,
@@ -361,10 +382,17 @@ export function AmbientScreen({
   const lastSourcePickerOpenRequestRef = useRef(sourcePickerOpenRequest);
   const lastRoomSceneIdRef = useRef<string | null>(null);
   const selectedBackgroundVideoSrcRef = useRef(DEFAULT_BACKGROUND_VIDEO.src);
+  const sceneGallerySwipeRef = useRef<SceneGallerySwipeState | null>(null);
+  const sceneGalleryClickSuppressionUntilRef = useRef(0);
   const adjustCommitTimersRef = useRef<Record<AmbientAdjustChannel, number | null>>({
     volume: null,
     brightness: null
   });
+  const ambientSourceNotificationTimersRef = useRef<{ success: number | null; exit: number | null }>({
+    success: null,
+    exit: null
+  });
+  const ambientSourceNotificationRef = useRef<AmbientSourceNotification | null>(null);
   const requestStateRef = useRef<Record<AmbientAdjustChannel, { inFlight: boolean; queued: number | null; lastSent: number | null }>>({
     volume: { inFlight: false, queued: null, lastSent: null },
     brightness: { inFlight: false, queued: null, lastSent: null }
@@ -372,9 +400,12 @@ export function AmbientScreen({
   const [adjustOverlay, setAdjustOverlay] = useState<AdjustOverlayState | null>(null);
   const [sourcePickerOpen, setSourcePickerOpen] = useState(false);
   const [sceneGalleryOpen, setSceneGalleryOpen] = useState(false);
+  const [sceneGalleryPage, setSceneGalleryPage] = useState(0);
+  const [sceneGalleryPageSize, setSceneGalleryPageSize] = useState(getSceneGalleryPageSize);
   const [sceneGalleryPending, setSceneGalleryPending] = useState(false);
   const [sceneGalleryError, setSceneGalleryError] = useState<string | null>(null);
   const [pendingAmbientSource, setPendingAmbientSource] = useState<AmbientMusicSourceTarget | null>(null);
+  const [ambientSourceNotification, setAmbientSourceNotification] = useState<AmbientSourceNotification | null>(null);
   const [webModePending, setWebModePending] = useState(false);
   const [ambientSourceError, setAmbientSourceError] = useState<string | null>(null);
   const [backgroundVideos, setBackgroundVideos] = useState<BackgroundVideoSummary[]>([DEFAULT_BACKGROUND_VIDEO]);
@@ -418,6 +449,17 @@ export function AmbientScreen({
         || left.video.label.localeCompare(right.video.label)
       ))
   ), [backgroundVideos]);
+  const sceneGalleryPageCount = Math.max(1, Math.ceil(sceneGalleryVideos.length / sceneGalleryPageSize));
+  const safeSceneGalleryPage = Math.min(Math.max(0, sceneGalleryPage), sceneGalleryPageCount - 1);
+  const visibleSceneGalleryVideos = useMemo(() => {
+    const visibleCount = Math.min(sceneGalleryPageSize, sceneGalleryVideos.length);
+    if (visibleCount === 0) return [];
+
+    const firstIndex = safeSceneGalleryPage * sceneGalleryPageSize;
+    return Array.from({ length: visibleCount }, (_, index) => (
+      sceneGalleryVideos[(firstIndex + index) % sceneGalleryVideos.length]
+    ));
+  }, [safeSceneGalleryPage, sceneGalleryPageSize, sceneGalleryVideos]);
   const currentBackgroundVideo = useMemo(() => {
     if (isHifiMode || videoBelongsToRoomMode(indexedBackgroundVideo, roomExperience.mode)) {
       return indexedBackgroundVideo;
@@ -456,6 +498,12 @@ export function AmbientScreen({
     && (playback.source === "mpd" || playback.source === "radio" || playback.source === "bluetooth" || playback.source === "airplay" || playback.source === "upnp")
     && playback.state === "playing"
     && playbackLyricsClockTrusted;
+
+  useEffect(() => {
+    if (isHifiMode || !shouldRenderSceneVideo) {
+      onSceneVideoReadyChange(true);
+    }
+  }, [isHifiMode, onSceneVideoReadyChange, shouldRenderSceneVideo]);
   const lyricsElapsedSeconds = useMemo(() => {
     if (!canAdvanceLyrics || lyricsClockAnchor?.key !== playbackClockKey) return playback.elapsedSeconds;
 
@@ -561,28 +609,15 @@ export function AmbientScreen({
     ? getAmbientHandoffSourceLabel(handoffPendingSource, handoffPendingSourceSummary)
     : "";
   const ambientHudVisible = hudVisible || (isHifiMode && handoffPendingSource !== null);
-  const ambientSourcePillSourceId = !isHifiMode
-    ? handoffPendingSource ?? currentAmbientSource
-    : null;
-  const ambientSourcePillSource = ambientSourcePillSourceId
-    ? audio.sources.find((entry) => entry.id === ambientSourcePillSourceId)
+  const ambientSourceNotificationSource = ambientSourceNotification
+    ? audio.sources.find((entry) => entry.id === ambientSourceNotification.sourceId)
     : undefined;
-  const ambientSourcePillVisible = Boolean(
-    ambientSourcePillSourceId
-      && !(sceneSoundEnabled && !isHifiMode)
-      && (handoffPendingSource !== null || (audio.currentSource.id !== "scene" && audio.currentSource.id !== "audio"))
-  );
-  const ambientSourcePillWaiting = Boolean(
-    ambientSourcePillSourceId
-      && (handoffPendingSource === ambientSourcePillSourceId
-        || (ambientHandoffSourceTargets.has(ambientSourcePillSourceId) && ambientSourcePillSource?.connectionState === "armed"))
-  );
-  const AmbientSourcePillIcon = getAmbientSourceIcon(ambientSourcePillSourceId);
-  const ambientSourcePillLabel = ambientSourcePillSourceId
-    ? sourceLabel(ambientSourcePillSourceId, getAmbientSourceLabel(ambientSourcePillSourceId))
+  const AmbientSourceNotificationIcon = getAmbientSourceIcon(ambientSourceNotification?.sourceId ?? null);
+  const ambientSourceNotificationLabel = ambientSourceNotification
+    ? sourceLabel(ambientSourceNotification.sourceId, getAmbientSourceLabel(ambientSourceNotification.sourceId))
     : "";
-  const ambientSourcePillDetail = ambientSourcePillSourceId
-    ? getAmbientSourcePillDetail(ambientSourcePillSourceId, ambientSourcePillSource, playback, ambientSourcePillWaiting, {
+  const ambientSourceNotificationDetail = ambientSourceNotification
+    ? getAmbientSourceNotificationDetail(ambientSourceNotification.sourceId, ambientSourceNotificationSource, ambientSourceNotification.phase, {
       connecting: t("common.connecting"),
       connectingAs: (label) => t("source.connectingAs", { label }),
       playing: t("playback.playing"),
@@ -722,13 +757,84 @@ export function AmbientScreen({
     setAmbientSourceError(null);
     setSourcePickerOpen(false);
     setSceneGalleryError(null);
+    const currentSceneIndex = sceneGalleryVideos.findIndex(({ video, mode }) => (
+      mode === roomExperience.mode && video.id === roomExperience.sceneVideoId
+    ));
+    setSceneGalleryPage(currentSceneIndex >= 0 ? Math.floor(currentSceneIndex / sceneGalleryPageSize) : 0);
     setSceneGalleryOpen(true);
   }
 
   const closeSceneGallery = useCallback(() => {
+    sceneGallerySwipeRef.current = null;
     setSceneGalleryOpen(false);
     setSceneGalleryError(null);
   }, []);
+
+  function changeSceneGalleryPage(direction: -1 | 1) {
+    if (sceneGalleryPageCount <= 1) return;
+    setSceneGalleryPage((currentPage) => (
+      (currentPage + direction + sceneGalleryPageCount) % sceneGalleryPageCount
+    ));
+  }
+
+  function handleSceneGalleryPointerDown(event: React.PointerEvent<HTMLDivElement>) {
+    if (!event.isPrimary) return;
+    sceneGallerySwipeRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY
+    };
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      // Synthetic pointer events cannot always be captured.
+    }
+  }
+
+  function handleSceneGalleryPointerMove(event: React.PointerEvent<HTMLDivElement>) {
+    const swipe = sceneGallerySwipeRef.current;
+    if (!swipe || swipe.pointerId !== event.pointerId) return;
+
+    const horizontalDistance = Math.abs(event.clientX - swipe.startX);
+    const verticalDistance = Math.abs(event.clientY - swipe.startY);
+    if (horizontalDistance > verticalDistance && horizontalDistance >= 12) {
+      event.preventDefault();
+    }
+  }
+
+  function finishSceneGalleryPointer(event: React.PointerEvent<HTMLDivElement>) {
+    const swipe = sceneGallerySwipeRef.current;
+    if (!swipe || swipe.pointerId !== event.pointerId) return;
+    sceneGallerySwipeRef.current = null;
+    try {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    } catch {
+      // Pointer capture may already be released after a cancelled gesture.
+    }
+
+    const horizontalDelta = event.clientX - swipe.startX;
+    const verticalDelta = event.clientY - swipe.startY;
+    if (Math.abs(horizontalDelta) < SCENE_GALLERY_SWIPE_THRESHOLD_PX || Math.abs(horizontalDelta) <= Math.abs(verticalDelta)) {
+      return;
+    }
+
+    event.preventDefault();
+    sceneGalleryClickSuppressionUntilRef.current = Date.now() + SCENE_GALLERY_CLICK_SUPPRESSION_MS;
+    changeSceneGalleryPage(horizontalDelta < 0 ? 1 : -1);
+  }
+
+  function handleSceneGalleryCardClick(
+    event: React.MouseEvent<HTMLButtonElement>,
+    video: BackgroundVideoSummary,
+    mode: SceneGalleryMode
+  ) {
+    if (Date.now() < sceneGalleryClickSuppressionUntilRef.current) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    void handleSceneGallerySelect(video, mode);
+  }
 
   async function handleSceneGallerySelect(video: BackgroundVideoSummary, mode: SceneGalleryMode) {
     onHudActivity();
@@ -790,16 +896,15 @@ export function AmbientScreen({
     setSourcePickerOpen(true);
   }
 
-  function handleSceneSoundToggle() {
-    onHudActivity();
-    if (sceneSoundPending || !hasSceneVideo) return;
-    onSceneSoundEnabledChange(!sceneSoundEnabled);
-  }
-
   function handleAmbientSourceToggle() {
     onHudActivity();
     setAmbientSourceError(null);
     setSourcePickerOpen((open) => !open);
+  }
+
+  function dismissAmbientSourcePickerAndHud() {
+    setSourcePickerOpen(false);
+    onHudDismiss();
   }
 
   const hifiLyricsControls = isHifiMode && hifiLyricsPanel ? (
@@ -849,22 +954,33 @@ export function AmbientScreen({
     setPendingAmbientSource(sourceId);
     setAmbientSourceError(null);
     const shouldReleaseSceneAudio = sceneAudioEnabled;
-    const shouldUseAmbientStatusPill = !isHifiMode && ambientHandoffSourceTargets.has(sourceId);
+    const shouldShowAmbientSourceNotification = !isHifiMode;
+    const shouldCloseSourcePickerWhileConnecting = shouldShowAmbientSourceNotification && ambientHandoffSourceTargets.has(sourceId);
     try {
+      if (shouldShowAmbientSourceNotification) {
+        showAmbientSourceNotification(sourceId);
+      }
       if (shouldReleaseSceneAudio) {
         setAmbientSceneAudioSuppressed(true);
         await waitForSceneAudioRelease();
       }
-      if (shouldUseAmbientStatusPill) {
+      if (shouldCloseSourcePickerWhileConnecting) {
         setSourcePickerOpen(false);
       }
-      await onSourceSwitch(sourceId);
-      setSourcePickerOpen(ambientHudVisible);
+      const nextState = await onSourceSwitch(sourceId);
+      const nextSource = nextState.audio.sources.find((entry) => entry.id === sourceId);
+      if (shouldShowAmbientSourceNotification) {
+        if (!isAmbientHandoffSourceTarget(sourceId) || nextSource?.connectionState === "connected") {
+          confirmAmbientSourceNotification(sourceId);
+        }
+      }
+      dismissAmbientSourcePickerAndHud();
     } catch (error) {
+      dismissAmbientSourceNotification();
       if (shouldReleaseSceneAudio) {
         setAmbientSceneAudioSuppressed(false);
       }
-      if (shouldUseAmbientStatusPill) {
+      if (shouldCloseSourcePickerWhileConnecting) {
         setSourcePickerOpen(true);
       }
       setAmbientSourceError(error instanceof Error ? error.message : "Source switch failed");
@@ -907,17 +1023,44 @@ export function AmbientScreen({
   }, [isHifiMode]);
 
   useEffect(() => {
+    function syncSceneGalleryPageSize() {
+      setSceneGalleryPageSize(getSceneGalleryPageSize());
+    }
+
+    syncSceneGalleryPageSize();
+    window.addEventListener("resize", syncSceneGalleryPageSize);
+    return () => window.removeEventListener("resize", syncSceneGalleryPageSize);
+  }, []);
+
+  useEffect(() => {
+    setSceneGalleryPage((page) => Math.min(Math.max(0, page), sceneGalleryPageCount - 1));
+  }, [sceneGalleryPageCount]);
+
+  useEffect(() => {
     if (!sceneGalleryOpen) return undefined;
 
     function handleSceneGalleryKeyDown(event: KeyboardEvent) {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      closeSceneGallery();
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeSceneGallery();
+        return;
+      }
+
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        changeSceneGalleryPage(-1);
+        return;
+      }
+
+      if (event.key === "ArrowRight") {
+        event.preventDefault();
+        changeSceneGalleryPage(1);
+      }
     }
 
     window.addEventListener("keydown", handleSceneGalleryKeyDown);
     return () => window.removeEventListener("keydown", handleSceneGalleryKeyDown);
-  }, [closeSceneGallery, sceneGalleryOpen]);
+  }, [closeSceneGallery, sceneGalleryOpen, sceneGalleryPageCount]);
 
   useEffect(() => {
     if (!hudVisible) return undefined;
@@ -955,27 +1098,27 @@ export function AmbientScreen({
         handleAmbientPlaybackAction("next");
         return;
       }
-      if (event.key === " " || event.key === "Enter") {
+      if ((event.key === " " || event.key === "Enter") && isHifiMode) {
         event.preventDefault();
-        if (!isHifiMode) {
-          handleSceneSoundToggle();
-          return;
-        }
         handleAmbientPlaybackAction("play_pause");
       }
     }
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [backgroundVideos.length, currentBackgroundVideo.id, hasSceneVideo, hudVisible, isHifiMode, isPlaybackPending, nextTrackDisabled, onExperienceAction, onHudActivity, onPlaybackAction, onSceneSoundEnabledChange, playPauseDisabled, previousTrackDisabled, sceneGalleryOpen, sceneSoundEnabled, sceneSoundPending, switchableBackgroundVideos.length]);
+  }, [backgroundVideos.length, currentBackgroundVideo.id, hudVisible, isHifiMode, isPlaybackPending, nextTrackDisabled, onExperienceAction, onHudActivity, onPlaybackAction, playPauseDisabled, previousTrackDisabled, sceneGalleryOpen, switchableBackgroundVideos.length]);
 
   useEffect(() => {
+    if (sceneGalleryOpen) {
+      setSourcePickerOpen(false);
+      return;
+    }
     if (ambientHudVisible) {
       setSourcePickerOpen(true);
       return;
     }
     setSourcePickerOpen(false);
-  }, [ambientHudVisible, roomExperience.mode]);
+  }, [ambientHudVisible, roomExperience.mode, sceneGalleryOpen]);
 
   useEffect(() => {
     if (!hifiLyricsWallActive || ambientHudVisible) {
@@ -990,6 +1133,74 @@ export function AmbientScreen({
 
     return () => window.clearTimeout(timer);
   }, [ambientHudVisible, hifiLyricsWallActive]);
+
+  function clearAmbientSourceNotificationTimers() {
+    const timers = ambientSourceNotificationTimersRef.current;
+    if (timers.success !== null) {
+      window.clearTimeout(timers.success);
+      timers.success = null;
+    }
+    if (timers.exit !== null) {
+      window.clearTimeout(timers.exit);
+      timers.exit = null;
+    }
+  }
+
+  function dismissAmbientSourceNotification() {
+    clearAmbientSourceNotificationTimers();
+    ambientSourceNotificationRef.current = null;
+    setAmbientSourceNotification(null);
+  }
+
+  function showAmbientSourceNotification(sourceId: AmbientMusicSourceTarget) {
+    clearAmbientSourceNotificationTimers();
+    const notification = { sourceId, phase: "connecting" } satisfies AmbientSourceNotification;
+    ambientSourceNotificationRef.current = notification;
+    setAmbientSourceNotification(notification);
+  }
+
+  function confirmAmbientSourceNotification(sourceId: AmbientMusicSourceTarget) {
+    const currentNotification = ambientSourceNotificationRef.current;
+    if (currentNotification?.sourceId === sourceId && currentNotification.phase !== "connecting") return;
+
+    clearAmbientSourceNotificationTimers();
+    const notification = { sourceId, phase: "success" } satisfies AmbientSourceNotification;
+    ambientSourceNotificationRef.current = notification;
+    setAmbientSourceNotification(notification);
+    ambientSourceNotificationTimersRef.current.success = window.setTimeout(() => {
+      ambientSourceNotificationTimersRef.current.success = null;
+      const current = ambientSourceNotificationRef.current;
+      if (current?.sourceId !== sourceId || current.phase !== "success") return;
+
+      const exitingNotification = { ...current, phase: "exiting" } satisfies AmbientSourceNotification;
+      ambientSourceNotificationRef.current = exitingNotification;
+      setAmbientSourceNotification(exitingNotification);
+      ambientSourceNotificationTimersRef.current.exit = window.setTimeout(() => {
+        ambientSourceNotificationTimersRef.current.exit = null;
+        if (ambientSourceNotificationRef.current?.sourceId !== sourceId) return;
+        ambientSourceNotificationRef.current = null;
+        setAmbientSourceNotification(null);
+      }, AMBIENT_SOURCE_NOTIFICATION_EXIT_MS);
+    }, AMBIENT_SOURCE_NOTIFICATION_VISIBLE_MS);
+  }
+
+  useEffect(() => () => {
+    clearAmbientSourceNotificationTimers();
+  }, []);
+
+  useEffect(() => {
+    if (!ambientSourceNotification || ambientSourceNotification.phase !== "connecting") return;
+    if (!isAmbientHandoffSourceTarget(ambientSourceNotification.sourceId)) return;
+
+    const source = audio.sources.find((entry) => entry.id === ambientSourceNotification.sourceId);
+    if (source?.connectionState === "connected" && audio.currentSource.id === ambientSourceNotification.sourceId) {
+      confirmAmbientSourceNotification(ambientSourceNotification.sourceId);
+    }
+  }, [ambientSourceNotification, audio.currentSource.id, audio.sources]);
+
+  useEffect(() => {
+    if (isHifiMode) dismissAmbientSourceNotification();
+  }, [isHifiMode]);
 
   useEffect(() => {
     onSourcePickerOpenChange?.(sourcePickerOpen);
@@ -1022,8 +1233,14 @@ export function AmbientScreen({
     if (!sourcePickerOpen || handoffPendingSource) return undefined;
 
     function handleDocumentPointerDown(event: PointerEvent) {
-      if (sourcePickerRef.current?.contains(event.target as Node)) return;
-      setSourcePickerOpen(false);
+      const eventPath = event.composedPath();
+      if (
+        (sourcePickerRef.current && eventPath.includes(sourcePickerRef.current))
+        || eventPath.some((target) => target instanceof Element && target.classList.contains("ambient-transport"))
+      ) return;
+      event.preventDefault();
+      event.stopPropagation();
+      dismissAmbientSourcePickerAndHud();
     }
 
     function handleSourcePickerKeyDown(event: KeyboardEvent) {
@@ -1032,13 +1249,13 @@ export function AmbientScreen({
       setSourcePickerOpen(false);
     }
 
-    document.addEventListener("pointerdown", handleDocumentPointerDown);
+    document.addEventListener("pointerdown", handleDocumentPointerDown, true);
     window.addEventListener("keydown", handleSourcePickerKeyDown);
     return () => {
-      document.removeEventListener("pointerdown", handleDocumentPointerDown);
+      document.removeEventListener("pointerdown", handleDocumentPointerDown, true);
       window.removeEventListener("keydown", handleSourcePickerKeyDown);
     };
-  }, [handoffPendingSource, sourcePickerOpen]);
+  }, [handoffPendingSource, onHudDismiss, sourcePickerOpen]);
 
   function clearAdjustCommitTimer(channel: AmbientAdjustChannel) {
     const timer = adjustCommitTimersRef.current[channel];
@@ -1526,12 +1743,14 @@ export function AmbientScreen({
         data-ambient-scene-gallery-backdrop
         onClick={closeSceneGallery}
       />
-      <div className="ambient-scene-gallery-panel" data-gesture-protected onClick={(event) => event.stopPropagation()}>
+      <div
+        className="ambient-scene-gallery-panel"
+        data-gesture-protected
+        data-ambient-scene-gallery-page={safeSceneGalleryPage + 1}
+        data-ambient-scene-gallery-page-count={sceneGalleryPageCount}
+        onClick={(event) => event.stopPropagation()}
+      >
         <header className="ambient-scene-gallery-header">
-          <div>
-            <span>{t("ambient.mood")}</span>
-            <h2>{t("ambient.sceneGallery")}</h2>
-          </div>
           <button
             className="ambient-scene-gallery-close"
             type="button"
@@ -1544,34 +1763,72 @@ export function AmbientScreen({
           </button>
         </header>
         {sceneGalleryVideos.length > 0 ? (
-          <div className="ambient-scene-gallery-grid" role="listbox" aria-label={t("ambient.sceneGallery")}>
-            {sceneGalleryVideos.map(({ video, mode }) => {
-              const selected = roomExperience.mode === mode && roomExperience.sceneVideoId === video.id;
-              return (
-                <button
-                  className={`ambient-scene-gallery-card ${selected ? "is-selected" : ""} ${video.thumbnailSrc ? "has-thumbnail" : "is-thumbnail-fallback"}`}
-                  type="button"
-                  role="option"
-                  aria-selected={selected}
-                  aria-label={t("ambient.sceneGallerySelect", { scene: video.label, mode: roomLabel(mode) })}
-                  disabled={sceneGalleryPending}
-                  data-ambient-scene-card={video.id}
-                  data-scene-mode={mode}
-                  key={video.id}
-                  onClick={() => void handleSceneGallerySelect(video, mode)}
-                >
-                  <span className="ambient-scene-gallery-cover" aria-hidden="true">
-                    {video.thumbnailSrc ? <img src={video.thumbnailSrc} alt="" /> : <GalleryHorizontalEnd size={32} strokeWidth={1.6} />}
-                  </span>
-                  <span className="ambient-scene-gallery-card-copy">
-                    <strong>{video.label}</strong>
-                    <span>{roomLabel(mode)}</span>
-                  </span>
-                  {selected ? <span className="ambient-scene-gallery-selected">{t("common.current")}</span> : null}
-                </button>
-              );
-            })}
-          </div>
+          <>
+            <div className="ambient-scene-gallery-browser">
+              <button
+                className="ambient-scene-gallery-page-button"
+                type="button"
+                aria-label={t("ambient.previousGalleryPage")}
+                title={t("ambient.previousGalleryPage")}
+                disabled={sceneGalleryPageCount <= 1 || sceneGalleryPending}
+                data-ambient-scene-gallery-page-previous
+                onClick={() => changeSceneGalleryPage(-1)}
+              >
+                <ChevronLeft size={32} strokeWidth={1.7} />
+              </button>
+              <div
+                className={`ambient-scene-gallery-grid ${visibleSceneGalleryVideos.length < sceneGalleryPageSize ? "is-short-page" : ""}`}
+                role="listbox"
+                aria-label={t("ambient.sceneGallery")}
+                data-ambient-scene-gallery-cards
+                onPointerDown={handleSceneGalleryPointerDown}
+                onPointerMove={handleSceneGalleryPointerMove}
+                onPointerUp={finishSceneGalleryPointer}
+                onPointerCancel={finishSceneGalleryPointer}
+              >
+                {visibleSceneGalleryVideos.map(({ video, mode }) => {
+                  const selected = roomExperience.mode === mode && roomExperience.sceneVideoId === video.id;
+                  return (
+                    <button
+                      className={`ambient-scene-gallery-card ${selected ? "is-selected" : ""} ${video.thumbnailSrc ? "has-thumbnail" : "is-thumbnail-fallback"}`}
+                      type="button"
+                      role="option"
+                      aria-selected={selected}
+                      aria-label={t("ambient.sceneGallerySelect", { scene: video.label, mode: roomLabel(mode) })}
+                      disabled={sceneGalleryPending}
+                      data-ambient-scene-card={video.id}
+                      data-scene-mode={mode}
+                      key={video.id}
+                      onClick={(event) => handleSceneGalleryCardClick(event, video, mode)}
+                    >
+                      <span className="ambient-scene-gallery-cover" aria-hidden="true">
+                        {video.thumbnailSrc ? <img src={video.thumbnailSrc} alt="" /> : <GalleryHorizontalEnd size={32} strokeWidth={1.6} />}
+                      </span>
+                      <span className="ambient-scene-gallery-card-copy">
+                        <strong>{video.label}</strong>
+                        <span>{roomLabel(mode)}</span>
+                      </span>
+                      {selected ? <span className="ambient-scene-gallery-selected">{t("common.current")}</span> : null}
+                    </button>
+                  );
+                })}
+              </div>
+              <button
+                className="ambient-scene-gallery-page-button"
+                type="button"
+                aria-label={t("ambient.nextGalleryPage")}
+                title={t("ambient.nextGalleryPage")}
+                disabled={sceneGalleryPageCount <= 1 || sceneGalleryPending}
+                data-ambient-scene-gallery-page-next
+                onClick={() => changeSceneGalleryPage(1)}
+              >
+                <ChevronRight size={32} strokeWidth={1.7} />
+              </button>
+            </div>
+            <p className="ambient-scene-gallery-page-status" role="status" aria-live="polite" data-ambient-scene-gallery-page-status>
+              {t("ambient.sceneGalleryPage", { page: safeSceneGalleryPage + 1, total: sceneGalleryPageCount })}
+            </p>
+          </>
         ) : (
           <p className="ambient-scene-gallery-empty">{t("ambient.sceneGalleryEmpty")}</p>
         )}
@@ -1613,6 +1870,7 @@ export function AmbientScreen({
           audioSuspended={ambientSceneAudioSuppressed}
           volumePercent={system.volume.percent}
           audioGainDb={currentBackgroundVideo.audioGainDb}
+          onVideoReadyChange={onSceneVideoReadyChange}
         />
       )}
       {!isHifiMode && sceneVideoEnabled && hasSceneVideo ? <div className="ambient-vignette" /> : null}
@@ -1652,7 +1910,7 @@ export function AmbientScreen({
         <Settings size={26} strokeWidth={1.8} />
       </button>
 
-      <div
+      {!sceneGalleryOpen ? <div
         className={`ambient-transport ${isHifiMode ? "is-hifi" : "is-room-mode"}`}
         data-gesture-protected
         aria-hidden={!ambientHudVisible}
@@ -1795,22 +2053,10 @@ export function AmbientScreen({
                 <span>{roomModeIntent}</span>
               </div>
               {sourcePickerControl}
-              <button
-                className={`ambient-transport-button ambient-transport-setting ambient-transport-sound ${sceneSoundEnabled ? "is-active" : ""}`}
-                type="button"
-                aria-label={sceneSoundEnabled ? t("ambient.muteSceneSound") : t("ambient.unmuteSceneSound")}
-                title={sceneSoundEnabled ? t("ambient.muteSceneSound") : t("ambient.unmuteSceneSound")}
-                aria-pressed={sceneSoundEnabled}
-                tabIndex={ambientHudVisible ? 0 : -1}
-                disabled={sceneSoundPending || !hasSceneVideo}
-                onClick={handleSceneSoundToggle}
-              >
-                {sceneSoundEnabled ? <Volume2 size={27} strokeWidth={1.8} /> : <VolumeX size={27} strokeWidth={1.8} />}
-              </button>
             </>
           )}
         </div>
-      </div>
+      </div> : null}
 
       {clockVisible ? (
         <div className="ambient-clock" aria-label={t("ambient.currentTime")}>
@@ -1837,25 +2083,26 @@ export function AmbientScreen({
         ) : null}
       </div>
 
-      {ambientSourcePillVisible && ambientSourcePillSourceId ? (
+      {ambientSourceNotification ? (
         <div
-          className={`ambient-source-status-pill ${ambientSourcePillWaiting ? "is-waiting" : ""}`}
+          className={`ambient-source-status-pill ${ambientSourceNotification.phase === "connecting" ? "is-waiting" : ""} ${ambientSourceNotification.phase === "exiting" ? "is-exiting" : ""}`}
           role="status"
           aria-live="polite"
           data-ambient-source-status-pill
-          data-ambient-source-status-source={ambientSourcePillSourceId}
+          data-ambient-source-status-source={ambientSourceNotification.sourceId}
+          data-ambient-source-notification-phase={ambientSourceNotification.phase}
         >
           <span className="ambient-source-status-icon" aria-hidden="true">
-            {ambientSourcePillWaiting ? <LoaderCircle size={18} className="is-spinning" /> : <AmbientSourcePillIcon size={18} strokeWidth={1.9} />}
+            {ambientSourceNotification.phase === "connecting" ? <LoaderCircle size={18} className="is-spinning" /> : <AmbientSourceNotificationIcon size={18} strokeWidth={1.9} />}
           </span>
           <span className="ambient-source-status-copy">
-            <strong>{ambientSourcePillLabel}</strong>
-            <span>{ambientSourcePillDetail}</span>
+            <strong>{ambientSourceNotificationLabel}</strong>
+            <span>{ambientSourceNotificationDetail}</span>
           </span>
         </div>
       ) : null}
 
-      <div className="ambient-hud" aria-label={t("ambient.moodSwitcher")} data-room-mode={roomExperience.mode}>
+      {!sceneGalleryOpen ? <div className="ambient-hud" aria-label={t("ambient.moodSwitcher")} data-room-mode={roomExperience.mode}>
         <div className="ambient-room-mode" aria-label={t("ambient.mood")}>
           <div className="ambient-room-mode-buttons" role="group" aria-label={t("ambient.chooseRoomMode")}>
             {roomModeOptions.map((option) => {
@@ -1879,7 +2126,7 @@ export function AmbientScreen({
             })}
           </div>
         </div>
-      </div>
+      </div> : null}
 
       {adjustOverlay ? (
         <div className={`ambient-adjust-indicator ambient-adjust-${adjustOverlay.channel}`} aria-live="polite">

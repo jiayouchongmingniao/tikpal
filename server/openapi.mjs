@@ -264,10 +264,11 @@ export function buildOpenApiDocument({ appVersion = "0.1.0" } = {}) {
         },
         WebModeState: {
           type: "object",
-          required: ["enabled", "activeProvider", "providers", "settings", "lastError", "updatedAt"],
+          required: ["enabled", "activeProvider", "lastProvider", "providers", "settings", "lastError", "updatedAt"],
           properties: {
             enabled: { type: "boolean" },
             activeProvider: { type: "string", enum: WEB_MODE_PROVIDERS, nullable: true },
+            lastProvider: { type: "string", enum: WEB_MODE_PROVIDERS, nullable: true },
             providers: {
               type: "array",
               items: ref("WebModeProvider")

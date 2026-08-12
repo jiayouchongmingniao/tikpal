@@ -653,6 +653,7 @@ esac
   const quickSettingsSource = await readFile(path.join(ROOT, "src/components/QuickSettingsOverlay.tsx"), "utf8");
   const remoteControlSource = await readFile(path.join(ROOT, "src/components/RemoteControlApp.tsx"), "utf8");
   const ambientScreenSource = await readFile(path.join(ROOT, "src/components/AmbientScreen.tsx"), "utf8");
+  const startupModeChooserSource = await readFile(path.join(ROOT, "src/components/StartupModeChooser.tsx"), "utf8");
   const appModeSource = await readFile(path.join(ROOT, "src/hooks/useAppMode.ts"), "utf8");
   const playerOverlaySource = await readFile(path.join(ROOT, "src/components/PlayerOverlay.tsx"), "utf8");
   const uiCopySource = await readFile(path.join(ROOT, "src/uiCopy.ts"), "utf8");
@@ -685,11 +686,53 @@ esac
       && stylesSource.includes(".hifi-lyrics-fake-control.is-primary"),
     "Hi-Fi fake playback controls should visually auto-hide without leaving clickable hit targets"
   );
+  assert(
+    ambientScreenSource.includes("AMBIENT_SOURCE_NOTIFICATION_VISIBLE_MS = 3_000")
+      && ambientScreenSource.includes("data-ambient-source-notification-phase")
+      && ambientScreenSource.includes("showAmbientSourceNotification(sourceId)")
+      && ambientScreenSource.includes("dismissAmbientSourceNotification()")
+      && !ambientScreenSource.includes("getAmbientSourcePillDetail")
+      && stylesSource.includes(".ambient-source-status-pill.is-exiting"),
+    "Ambient source feedback should be an explicit temporary notification rather than persistent playback metadata"
+  );
   assert(stylesSource.includes(".quick-menu .overlay-backdrop") && stylesSource.includes("backdrop-filter: blur(10px) saturate(0.66) brightness(0.68)"), "Quick Menu should dim and soften the room behind the switches");
+  assert(
+    startupModeChooserSource.includes('context: "startup" | "explore-return"')
+      && startupModeChooserSource.includes("data-room-mode-chooser-context={context}")
+      && startupModeChooserSource.includes("videoReady: boolean")
+      && startupModeChooserSource.includes("!videoReady")
+      && appSource.includes('setRoomModeChooserContext("explore-return")')
+      && appSource.includes("onSceneVideoReadyChange={handleSceneVideoReadyChange}")
+      && appSource.includes("roomModeSelectionPending")
+      && appSource.includes("observedWebModeActiveRef"),
+    "Explore close should keep the room-mode chooser visible until its scene video is ready after an observed active-to-idle transition"
+  );
+  assert(
+    i18nSource.includes('const LOCALE_STORAGE_KEY = "tikpal.locale"')
+      && i18nSource.includes("const [initialLocale] = useState<UiLocale | null>(readStoredLocale)")
+      && i18nSource.includes("const [preferencesReady, setPreferencesReady] = useState(initialLocale !== null)")
+      && i18nSource.includes("if (!preferencesReady) return null;")
+      && i18nSource.includes("window.localStorage.setItem(LOCALE_STORAGE_KEY, locale)"),
+    "Saved UI locales should render before the first visible UI frame and cache every supported locale"
+  );
+  assert(
+    stylesSource.includes(".startup-mode-chooser.is-explore-return")
+      && stylesSource.includes("backdrop-filter: blur(24px) saturate(0.42) brightness(0.5)")
+      && stylesSource.includes("min-height: 220px"),
+    "Explore return chooser should visibly darken and blur ambient behind four large room cards"
+  );
   assert(appModeSource.includes("HUD_AUTO_HIDE_MS = 8000") && appModeSource.includes("HUD_SOURCE_PICKER_AUTO_HIDE_MS = 12000") && appModeSource.includes("hudAutoHidePaused"), "Ambient HUD should use 8s normally, 12s with the source picker, and pause auto-hide during pending work");
   assert(stylesSource.includes(".ambient-source-toggle.is-source-primary:not(:disabled)") && stylesSource.includes(".ambient-source-toggle.is-source-primary.is-active:not(:disabled)"), "Ambient source picker toggle should keep a skin-aware primary state after the shelf closes");
   assert(stylesSource.includes(".remote-play-button") && stylesSource.includes("background: var(--transport-play-bg);"), "Remote play/pause button should follow the selected surface skin");
   assert(!stylesSource.includes("linear-gradient(145deg, rgba(119, 215, 239, 0.28), rgba(242, 200, 101, 0.14))"), "Remote play/pause button should not keep a fixed cyan/gold gradient");
+  assert(
+    !ambientScreenSource.includes("ambient-transport-sound")
+      && !ambientScreenSource.includes("onSceneSoundEnabledChange")
+      && !remoteControlSource.includes("scene.sound_set")
+      && remoteControlSource.includes("data-remote-lyrics-refresh")
+      && remoteControlSource.includes('type: "lyrics.refresh"'),
+    "customer-facing Ambient and Remote controls should not expose a Scene Sound switch"
+  );
   const localSyncTempDir = mkdtempSync(path.join(tmpdir(), "tikpal-local-sync-"));
   const localSyncSourceRoot = path.join(localSyncTempDir, "source");
   const localSyncMpdRoot = path.join(localSyncTempDir, "mpd");
@@ -776,6 +819,10 @@ esac
   assert(!quickSettingsSource.includes("handleWebModeKeyboard"), "Console should rely on input-focus keyboard behavior instead of a duplicate button");
   assert(quickSettingsSource.includes('detailView !== "webMode"'), "Console should only preload Onboard for the Explore Proxy settings detail");
   assert(quickSettingsSource.includes('sendWebModeAction({ type: "keyboard", preload: true })'), "Console Explore Proxy settings should preload resident Onboard before the first text-field tap");
+  assert(!quickSettingsSource.includes("webModeProviderTextScale") && !quickSettingsSource.includes("webModeTextScaleChoices") && !quickSettingsSource.includes("data-web-mode-settings-scale"), "Console Explore settings should not expose provider text scale controls");
+  assert(quickSettingsSource.includes("requestWebModeProxyChange") && quickSettingsSource.includes("data-web-mode-proxy-restart-confirm") && quickSettingsSource.includes('await onSystemAction("reboot")'), "Console Proxy toggles should require confirmation, save settings, and then request a reboot");
+  assert(quickSettingsSource.includes('if (enabled && normalizeProxyUrl(webModeProxyUrl) === null)') && quickSettingsSource.includes("if (nextEnabled && normalizedProxyUrl === null)"), "Console Proxy should reject an invalid URL before confirmation and before saving Proxy On");
+  assert(quickSettingsSource.includes("proxyUrl: normalizedProxyUrl") && !quickSettingsSource.includes("proxyEnabled: webModeProxyEnabled"), "Console Proxy URL drafts should auto-save without hot-applying proxy state");
   assert(["focus", "calm", "sleep", "hifi", "explore"].every((id) => quickSettingsSource.includes(`id: "${id}"`)), "Console should expose five room shortcuts");
   assert(quickSettingsSource.includes('data-room-shortcut={shortcut.id}') && quickSettingsSource.includes("disabled={pendingRoomShortcut !== null}"), "Console room shortcuts should expose state and lock while switching");
   assert(quickSettingsSource.includes('destination !== "explore" && destination === roomExperience.mode'), "Console should return immediately when the current room mode is selected");
@@ -1526,6 +1573,7 @@ esac
   assert(webModeScript.includes('! provider_uses_direct_bootstrap "$provider" && ! wait_for_real_provider_url'), "direct-bootstrap providers should not pay the transition URL gate before first-paint reveal");
   assert(webModeScript.includes("TIKPAL_WEB_MODE_EXIT_URL") && webModeScript.includes("ensure_exit_room_veil"), "Explore should retain the neutral room-return veil");
   assert(webModeScript.includes("TIKPAL_WEB_MODE_EXIT_VEIL_ENABLED:=1") && webModeScript.includes("TIKPAL_WEB_MODE_EXIT_VEIL_SETTLE_SECONDS:=0.12") && webModeScript.includes("show_exit_room_veil_if_enabled"), "Explore close should default to a full-width synchronized exit veil");
+  assert(webModeScript.includes("TIKPAL_WEB_MODE_EXIT_REVEAL_SETTLE_SECONDS:=1.1") && webModeScript.includes("settle_exit_room_veil_if_enabled"), "Explore exit veil should remain above the return chooser's local state transition before revealing ambient");
   assert(webModeScript.includes("TIKPAL_WEB_MODE_EXIT_ROOM_MODE") && serverSource.includes("runWebModeCloseInBackground(room.mode, closeRequestId, activeProvider)"), "Explore close should pass the current room mode into a background close transaction");
   assert(webModeScript.includes("TIKPAL_WEB_MODE_CLOSE_REQUEST_ID") && serverSource.includes("TIKPAL_WEB_MODE_CLOSE_REQUEST_ID: closeRequestId"), "Explore close should pass a close request id into the shell transaction");
   assert(webModeScript.includes("TIKPAL_WEB_MODE_CLOSE_ACTIVE_PROVIDER") && webModeScript.includes('park_web_mode_surfaces_for_reopen "$active_provider"'), "Explore warm close should park the active provider before scanning resident providers");
@@ -1541,6 +1589,15 @@ esac
     warmCloseBody.indexOf('show_exit_room_veil_if_enabled "$room_mode"') <
       warmCloseBody.indexOf("park_web_mode_surfaces_for_reopen"),
     "Explore warm close should raise the full-width exit veil before parking provider and panel surfaces"
+  );
+  const fullCloseStart = webModeScript.indexOf("close_web_mode_full() {");
+  const fullCloseEnd = webModeScript.indexOf("\n}\n\nclose_web_mode_warm()", fullCloseStart);
+  const fullCloseBody = webModeScript.slice(fullCloseStart, fullCloseEnd);
+  assert(
+    fullCloseBody.indexOf('show_exit_room_veil_if_enabled "$room_mode"') < fullCloseBody.indexOf("close_web_mode_process_surfaces")
+      && fullCloseBody.indexOf("close_web_mode_process_surfaces") < fullCloseBody.indexOf("settle_exit_room_veil_if_enabled")
+      && fullCloseBody.indexOf("settle_exit_room_veil_if_enabled") < fullCloseBody.indexOf("fade_exit_room_veil"),
+    "Explore full close should keep the independent exit veil above parallel surface shutdown until ambient can reveal"
   );
   assert(!warmCloseBody.includes("stop_provider_pool_prewarm"), "Explore warm close should not kill the provider prewarm queue");
   assert(
@@ -1560,6 +1617,10 @@ esac
   );
   const parkSurfacesBody = webModeScript.slice(webModeScript.indexOf("park_web_mode_surfaces_for_reopen() {"), webModeScript.indexOf("\n}\n\nclose_web_mode_process_surfaces()", webModeScript.indexOf("park_web_mode_surfaces_for_reopen() {")));
   assert(parkSurfacesBody.includes('park_left_web_mode_surfaces_for_reopen "$active_provider" &') && parkSurfacesBody.includes("park_side_panel_for_reopen &"), "Explore warm close should park left providers and right side panel in parallel");
+  const parkLeftStart = webModeScript.indexOf("park_left_web_mode_surfaces_for_reopen() {");
+  const parkLeftEnd = webModeScript.indexOf("\n}\n\npark_web_mode_surfaces_for_reopen()", parkLeftStart);
+  const parkLeftBody = webModeScript.slice(parkLeftStart, parkLeftEnd);
+  assert(parkLeftBody.includes("close_entry_stage_veil") && !parkLeftBody.includes("raise_entry_stage_veil"), "Explore exit should dispose entry-stage instead of repurposing it as the return veil");
   assert(webModeScript.includes("close_web_mode_process_surfaces()") && webModeScript.includes("close_provider_windows &") && webModeScript.includes("close_side_panel &"), "Explore full close should close provider and side-panel surfaces in parallel under the exit veil");
   assert(webModeScript.includes("cleanup-warm") && webModeScript.includes("cleanup_warm_web_mode") && webModeScript.includes("close-full"), "Explore should keep delayed/full cleanup as an explicit maintenance path");
   assert(webModeScript.includes("TIKPAL_WEB_MODE_CLOSE_AUDIO_GATE_SETTLE_SECONDS") && webModeScript.includes('if ! is_enabled "$TIKPAL_WEB_MODE_CLOSE_KEEP_RESIDENT"; then') && webModeScript.includes("stop_provider_guard"), "Explore warm close should keep provider guards alive in resident mode and only stop them for non-resident cleanup");
@@ -1594,6 +1655,12 @@ esac
   assert(webModeScript.includes("fade_entry_stage_veil") && webModeBackgroundPage.includes("is-revealing"), "Explore entry veil should use a soft dissolve before closing");
   const guardCloseBody = webModeScript.match(/close_web_mode_from_guard\(\) \{[\s\S]*?\n\}/)?.[0] ?? "";
   assert(guardCloseBody.includes('is_enabled "$TIKPAL_WEB_MODE_CLOSE_KEEP_RESIDENT"') && guardCloseBody.includes('park_web_mode_surfaces_for_reopen ""'), "Explore window guard should park resident surfaces instead of killing providers when runtime active provider is cleared");
+  assert(
+    guardCloseBody.indexOf('show_exit_room_veil_if_enabled "$room_mode"') < guardCloseBody.indexOf('park_web_mode_surfaces_for_reopen ""')
+      && guardCloseBody.indexOf('park_web_mode_surfaces_for_reopen ""') < guardCloseBody.indexOf("settle_exit_room_veil_if_enabled")
+      && guardCloseBody.indexOf("settle_exit_room_veil_if_enabled") < guardCloseBody.indexOf("fade_exit_room_veil"),
+    "Explore resident window-guard close should use the independent full-width exit veil around both parked surfaces"
+  );
   const revealResidentStart = webModeScript.indexOf("reveal_resident_provider_surfaces() {");
   const revealResidentEnd = webModeScript.indexOf("\n}\n\nlaunch_provider_for_pool()", revealResidentStart);
   const revealResidentBody = webModeScript.slice(revealResidentStart, revealResidentEnd);
@@ -1649,6 +1716,31 @@ esac
       !webModeScript.includes("provider_needs_switch_cover()"),
     "Explore should not retain a Deezer-only switch-cover path"
   );
+  const directSwitchStart = openProviderBody.indexOf('  else\n    tile_window "$target_window" "$TIKPAL_WEB_MODE_LEFT_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"');
+  const directSwitchEnd = openProviderBody.indexOf('\n  fi\n  write_audio_bus_state', directSwitchStart);
+  const directSwitchBody = openProviderBody.slice(directSwitchStart, directSwitchEnd);
+  const directCrossfadeIndex = directSwitchBody.indexOf('crossfade_helper fade "$current_audio_bus" "$target_audio_bus" "$TIKPAL_WEB_MODE_AUDIO_CROSSFADE_MS"');
+  const directProviderCleanupIndex = directSwitchBody.indexOf('close_other_provider_profiles "$provider_profile"');
+  const directTargetTileIndex = directSwitchBody.indexOf('tile_window "$target_window" "$TIKPAL_WEB_MODE_LEFT_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"');
+  const directTargetRaiseIndex = directSwitchBody.indexOf('raise_window "$target_window"');
+  const directVisualRevealIndexes = [
+    directSwitchBody.indexOf("close_transition_veil"),
+    directSwitchBody.indexOf("close_error_veil"),
+    directSwitchBody.indexOf("close_entry_stage_veil"),
+    directSwitchBody.indexOf("close_background_veil"),
+    directSwitchBody.indexOf('reassert_visible_provider_surfaces "$target_window" "$provider_profile" "$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"')
+  ];
+  assert(
+    directSwitchStart >= 0 &&
+      directSwitchEnd > directSwitchStart &&
+      directCrossfadeIndex >= 0 &&
+      directProviderCleanupIndex > directCrossfadeIndex &&
+      directVisualRevealIndexes.every((index) => index >= 0 && index < directCrossfadeIndex) &&
+      directTargetTileIndex >= 0 &&
+      directTargetTileIndex < directTargetRaiseIndex &&
+      directTargetRaiseIndex < directVisualRevealIndexes[0],
+    "Explore direct provider switching should reveal the target before crossfade and retain the old provider until it finishes"
+  );
   assert(
     openProviderPoolBody.includes('provider_has_real_provider_page "$provider_port"') &&
       openProviderPoolBody.includes('write_runtime_provider_status "$provider" "check_setup"'),
@@ -1698,7 +1790,21 @@ esac
       reconcileProviderPoolBody.includes("abandoned=1"),
     "Explore reconcile should abandon stale work without clearing a newer active provider"
   );
-  assert((serverSource.match(/activeProvider: providerId, lastError: null, closeRequestId: null/g) ?? []).length >= 2, "Explore open should cancel any stale close request before and after the provider command");
+  const webModeOpenCommandIndex = serverSource.indexOf('await runWebModeCommand("open", providerId, { TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS: "25" })');
+  const webModeActiveCommitIndex = serverSource.indexOf('await writeWebModeRuntimeState({ activeProvider: providerId, lastProvider: providerId, lastError: null, closeRequestId: null });', webModeOpenCommandIndex);
+  assert(
+    webModeOpenCommandIndex >= 0 &&
+      !serverSource.slice(webModeOpenCommandIndex - 320, webModeOpenCommandIndex).includes("activeProvider: providerId") &&
+      webModeActiveCommitIndex > webModeOpenCommandIndex,
+    "Explore entry should keep the provider inactive until the launcher has revealed its entry veil"
+  );
+  assert(
+    serverSource.includes('previousRuntimeState.activeProvider ?? previousRuntimeState.lastProvider ?? "qq_music"')
+      && serverSource.includes("lastProvider: runtimeState.lastProvider ?? activeProvider ?? null")
+      && appSource.includes('sendWebModeAction({ type: "open" })')
+      && webModeScript.includes("if (state.activeProvider) state.lastProvider = state.activeProvider;"),
+    "Ambient and Hi-Fi Explore reopen should retain the last successful provider after activeProvider clears on close"
+  );
   assert(serverSource.includes('runWebModeCommand("open", providerId, { TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS: "25" })'), "Explore open should wait for an in-flight close transaction to release the web-mode lock");
   assert(
     residentHotRevealIndex >= 0 &&

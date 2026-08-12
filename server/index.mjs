@@ -5225,6 +5225,7 @@ function normalizeWebModeRuntimeState(raw = {}) {
   }
   return {
     activeProvider: raw.activeProvider ? normalizeWebModeProviderId(raw.activeProvider, null) : null,
+    lastProvider: raw.lastProvider ? normalizeWebModeProviderId(raw.lastProvider, null) : null,
     residentProviders,
     lastError: normalizeWebModeVisibleError(raw.lastError),
     closeRequestId: typeof raw.closeRequestId === "string" ? raw.closeRequestId : null,
@@ -5477,6 +5478,7 @@ async function buildWebModeState() {
   return {
     enabled: true,
     activeProvider: runtimeState.activeProvider,
+    lastProvider: runtimeState.lastProvider,
     providers: WEB_MODE_PROVIDERS,
     residentProviders: runtimeState.residentProviders,
     settings,
@@ -13382,10 +13384,13 @@ function getRoomModeFromPresetId(presetId, fallbackMode) {
   return found?.[0] ?? normalizeRoomMode(fallbackMode);
 }
 
-function resolveRoomActionSceneSoundEnabled(action, current, mode, fallbackEnabled = false) {
+function resolveRoomActionSceneSoundEnabled(action, current, mode) {
   if (mode === "hifi") return false;
   if (action.sceneSoundEnabled !== undefined) return action.sceneSoundEnabled === true;
-  return fallbackEnabled === true && current.mode !== "hifi";
+  // Customer-facing room changes preserve the current audible source. When the
+  // Ambient scene is already providing sound, retarget it to the new room's
+  // scene; otherwise Library, Radio, and external inputs keep ownership.
+  return current.mode !== "hifi" && current.sceneSoundEnabled === true;
 }
 
 async function resolveSceneAudioVideo(experience) {
@@ -13512,7 +13517,7 @@ async function applyRoomExperienceAction(action) {
       const hifiEqPatch = buildHifiEqPatch(action, current.hifiEqPresetId ?? preset.hifiEqPresetId);
       const rememberedCurrent = rememberSceneVideoForRoomMode(current);
       const sceneVideoId = await resolveRoomModeSceneVideoId(rememberedCurrent, mode, action.sceneVideoId);
-      const sceneSoundEnabled = resolveRoomActionSceneSoundEnabled(action, current, mode, current.sceneSoundEnabled);
+      const sceneSoundEnabled = resolveRoomActionSceneSoundEnabled(action, current, mode);
       next = {
         ...rememberedCurrent,
         mode,
@@ -13894,6 +13899,7 @@ async function applyWebModeAction(action) {
     const activeProvider = typeof runtimeState.activeProvider === "string" ? runtimeState.activeProvider : "";
     await writeWebModeRuntimeState({
       activeProvider: null,
+      lastProvider: runtimeState.lastProvider ?? activeProvider ?? null,
       lastError: null,
       closeRequestId
     });
@@ -13995,8 +14001,11 @@ async function applyWebModeAction(action) {
     throw new Error("Explore action type must be open, close, keyboard, proxy, or provider_text_scale");
   }
 
-  const providerId = normalizeWebModeProviderId(action.provider);
   const previousRuntimeState = await readWebModeRuntimeState();
+  const providerId = normalizeWebModeProviderId(
+    action.provider,
+    previousRuntimeState.activeProvider ?? previousRuntimeState.lastProvider ?? "qq_music"
+  );
   let providerOpenCommandStarted = false;
   webModeOpenInFlight = true;
   try {
@@ -14004,10 +14013,10 @@ async function applyWebModeAction(action) {
       await captureWebModePlaybackHandoff();
       await pauseTikpalForWebMode();
     }
-    await writeWebModeRuntimeState({ activeProvider: providerId, lastError: null, closeRequestId: null });
+    await writeWebModeRuntimeState({ lastError: null, closeRequestId: null });
     providerOpenCommandStarted = true;
     await runWebModeCommand("open", providerId, { TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS: "25" });
-    await writeWebModeRuntimeState({ activeProvider: providerId, lastError: null, closeRequestId: null });
+    await writeWebModeRuntimeState({ activeProvider: providerId, lastProvider: providerId, lastError: null, closeRequestId: null });
   } catch (error) {
     const message = formatWebModeCommandError(error, "open", providerId);
     const clearFailedCurrentProvider = providerOpenCommandStarted

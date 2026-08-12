@@ -41,6 +41,7 @@ interface FlameSceneProps {
   volumePercent?: number;
   videoSrc?: string;
   audioGainDb?: number;
+  onVideoReadyChange?: (ready: boolean) => void;
 }
 
 interface VideoLayer {
@@ -361,7 +362,7 @@ function SceneLogoBackdrop() {
   );
 }
 
-export function FlameScene({ lowPower = false, playback, singleLoop = false, staticOnly = false, videoEnabled = true, audioEnabled = false, audioSuspended = false, volumePercent = 100, videoSrc = DEFAULT_FLAME_VIDEO_SRC, audioGainDb = 0 }: FlameSceneProps) {
+export function FlameScene({ lowPower = false, playback, singleLoop = false, staticOnly = false, videoEnabled = true, audioEnabled = false, audioSuspended = false, volumePercent = 100, videoSrc = DEFAULT_FLAME_VIDEO_SRC, audioGainDb = 0, onVideoReadyChange }: FlameSceneProps) {
   const nextLayerIdRef = useRef(0);
   const nextSingleLayerIdRef = useRef(0);
   const activeVideoSrcRef = useRef(videoSrc);
@@ -419,6 +420,24 @@ export function FlameScene({ lowPower = false, playback, singleLoop = false, sta
   const singleLoopFallbackActive = singleVideoHealth === "fallback";
   const singleActiveLayer = singleLayers.find((layer) => layer.id === singleActiveLayerId) ?? singleLayers[0] ?? null;
   const singleVideoSrc = singleActiveLayer?.src ?? "";
+  const activeLoopLayer = layers.find((layer) => layer.id === activeLayerId) ?? null;
+  const activeLoopSlot = getLayerSlot(loopVisibleSlots, activeLayerId);
+  const activeLoopSlotStatus = getLoopSlotStatus(loopSlotStatuses, slotKey(activeLayerId, activeLoopSlot));
+  const activeLoopVideo = getSlotVideo(activeLayerId, activeLoopSlot);
+  const activeSingleVideo = getSingleLoopVideo(singleActiveLayerId);
+  const sceneVideoRequired = videoEnabled && Boolean(videoSrc) && !staticOnly;
+  const sceneVideoReady = !sceneVideoRequired || (singleLoop
+    ? Boolean(
+      singleActiveLayer?.src === videoSrc
+      && singleActiveLayer.frameReady
+      && singleVideoHealth === "ok"
+      && Number(activeSingleVideo?.readyState) >= 2
+    )
+    : Boolean(
+      activeLoopLayer?.src === videoSrc
+      && activeLoopSlotStatus.frameReady
+      && Number(activeLoopVideo?.readyState) >= 2
+    ));
 
   function clearTransitionTimers() {
     if (transitionActivateTimerRef.current !== null) {
@@ -1243,6 +1262,10 @@ export function FlameScene({ lowPower = false, playback, singleLoop = false, sta
   useEffect(() => {
     playbackRef.current = playback;
   }, [playback.elapsedSeconds, playback.state]);
+
+  useEffect(() => {
+    onVideoReadyChange?.(sceneVideoReady);
+  }, [onVideoReadyChange, sceneVideoReady]);
 
   useEffect(() => {
     videoEnabledRef.current = videoEnabled;

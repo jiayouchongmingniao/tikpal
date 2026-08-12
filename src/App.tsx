@@ -10,7 +10,7 @@ import { useBrowserKioskGuard } from "./hooks/useBrowserKioskGuard";
 import { useKioskGestures } from "./hooks/useKioskGestures";
 import { useRoomExperience } from "./hooks/useRoomExperience";
 import { useTikpalState } from "./hooks/useTikpalState";
-import { fetchRoomExperienceState, fetchWebModeState, sendKioskHeartbeat, sendWebModeAction, updatePreferences } from "./api/tikpalClient";
+import { fetchWebModeState, sendKioskHeartbeat, sendWebModeAction, updatePreferences } from "./api/tikpalClient";
 import { useI18n } from "./i18n";
 import type { AppMode, BackgroundVideoSummary, DisplaySleepStyle, FontTheme, LyricsFontSize, RememberedAudioSource, RoomExperienceActionRequest, RoomExperienceState, RoomMode, SourceSwitchTarget, SurfaceTheme, TikpalState } from "./types";
 
@@ -33,6 +33,9 @@ const KIOSK_HEARTBEAT_MS = 10_000;
 const EVENT_LOOP_LAG_SAMPLE_MS = 1_000;
 const DISPLAY_SLEEP_CHECK_MS = 5_000;
 const SCREEN_SAVER_PREVIEW_INTERVAL_MS = 8_000;
+const WEB_MODE_IDLE_POLL_MS = 2_000;
+const WEB_MODE_ACTIVE_POLL_MS = 350;
+const EXPLORE_RETURN_CHOOSER_DELAY_MS = 1_250;
 const SOURCE_SWITCH_TARGETS = new Set<SourceSwitchTarget>(["mpd", "audio", "scene", "radio", "spotify", "bluetooth", "airplay", "upnp"]);
 const EXTERNAL_HANDOFF_TARGETS = new Set<SourceSwitchTarget>(["spotify", "bluetooth", "airplay", "upnp"]);
 const VISIBLE_LISTENING_SOURCE_TARGETS = new Set<SourceSwitchTarget>(["mpd", "radio", "spotify", "bluetooth", "airplay", "upnp"]);
@@ -47,6 +50,8 @@ const DEFAULT_SCENE_VIDEO: BackgroundVideoSummary = {
   label: "No scene video",
   src: ""
 };
+
+type RoomModeChooserContext = "startup" | "explore-return";
 
 function readInitialMode(): AppMode {
   const mode = new URLSearchParams(window.location.search).get("mode");
@@ -301,7 +306,6 @@ export default function App() {
   const [lyricsFontSize, setLyricsFontSize] = useState<LyricsFontSize>(readInitialLyricsFontSize);
   const [sceneVideoEnabled, setSceneVideoEnabled] = useState(() => readStoredBoolean(SCENE_VIDEO_ENABLED_STORAGE_KEY, true));
   const [clockVisible, setClockVisible] = useState(() => readStoredBoolean(CLOCK_VISIBLE_STORAGE_KEY, true));
-  const [sceneSoundPending, setSceneSoundPending] = useState(false);
   const [screenOffActive, setScreenOffActive] = useState(false);
   const [screenSaverPreviewIndex, setScreenSaverPreviewIndex] = useState<number | null>(null);
   const [webModeActive, setWebModeActive] = useState(false);
@@ -310,13 +314,14 @@ export default function App() {
   const [systemSleepActive, setSystemSleepActive] = useState(false);
   const [ambientSourcePickerRequest, setAmbientSourcePickerRequest] = useState(0);
   const [ambientSourcePickerOpen, setAmbientSourcePickerOpen] = useState(false);
-  const [startupChooserVisible, setStartupChooserVisible] = useState(() => readInitialMode() === "ambient");
+  const [roomModeChooserContext, setRoomModeChooserContext] = useState<RoomModeChooserContext | null>(() => readInitialMode() === "ambient" ? "startup" : null);
+  const [roomModeSelectionPending, setRoomModeSelectionPending] = useState(false);
+  const [sceneVideoReady, setSceneVideoReady] = useState(false);
   const [onboardingVisible, setOnboardingVisible] = useState(() => !readStoredFlag(ONBOARDING_STORAGE_KEY));
   const [onboardingStep, setOnboardingStep] = useState(0);
   const [onboardingBackgroundHidden, setOnboardingBackgroundHidden] = useState(true);
   const [onboardingSoundMuted, setOnboardingSoundMuted] = useState(true);
   const [activeSceneVideo, setActiveSceneVideo] = useState<BackgroundVideoSummary>(DEFAULT_SCENE_VIDEO);
-  const sceneSoundPendingSinceRef = useRef<number | null>(null);
   const eventLoopLagRef = useRef(0);
   const heartbeatStateRef = useRef<Record<string, unknown>>({});
   const previousRoomModeRef = useRef<RoomMode | null>(null);
@@ -333,12 +338,16 @@ export default function App() {
   const screenOffActiveRef = useRef(false);
   const screenOffSourceRef = useRef<"manual" | "idle" | null>(null);
   const webModeActiveRef = useRef(false);
+  const sceneVideoReadyRef = useRef(false);
+  const observedWebModeActiveRef = useRef(false);
+  const suppressExploreReturnChooserRef = useRef(false);
+  const exploreReturnChooserTimerRef = useRef<number | null>(null);
   const displaySleepLastActivityRef = useRef(Date.now());
   const { state: tikpalState, status: tikpalStatus, refresh, sendPlaybackAction, sendSystemAction, sendSourceSwitch } = useTikpalState();
   const { experience: roomExperience, status: roomExperienceStatus, refresh: refreshRoomExperience, sendExperienceAction } = useRoomExperience();
   const hudAutoHideMs = ambientSourcePickerOpen ? HUD_SOURCE_PICKER_AUTO_HIDE_MS : HUD_AUTO_HIDE_MS;
-  const hudAutoHidePaused = tikpalStatus.pending || roomExperienceStatus.pending || sceneSoundPending;
-  const { mode, hudVisible, idleTotalMs, idleRemainingMs, showHud, toggleHud, changeMode, returnAmbient, resetIdleTimer } = useAppMode(readInitialMode(), {
+  const hudAutoHidePaused = tikpalStatus.pending || roomExperienceStatus.pending;
+  const { mode, hudVisible, idleTotalMs, idleRemainingMs, showHud, hideHud, toggleHud, changeMode, returnAmbient, resetIdleTimer } = useAppMode(readInitialMode(), {
     hudAutoHideMs,
     hudAutoHidePaused
   });
@@ -359,6 +368,44 @@ export default function App() {
         screenOffSourceRef.current = null;
         setScreenOffActive(false);
       }
+    }
+  }, []);
+
+  const handleSceneVideoReadyChange = useCallback((ready: boolean) => {
+    sceneVideoReadyRef.current = ready;
+    setSceneVideoReady((current) => current === ready ? current : ready);
+  }, []);
+
+  const observeWebModeActivity = useCallback((active: boolean) => {
+    const wasActive = observedWebModeActiveRef.current;
+    observedWebModeActiveRef.current = active;
+    setWebModeSleepSuppressed(active);
+
+    if (active) {
+      if (exploreReturnChooserTimerRef.current !== null) {
+        window.clearTimeout(exploreReturnChooserTimerRef.current);
+        exploreReturnChooserTimerRef.current = null;
+      }
+      suppressExploreReturnChooserRef.current = false;
+      setRoomModeChooserContext((current) => current === "explore-return" ? null : current);
+      return;
+    }
+
+    if (!wasActive) return;
+    const suppressChooser = suppressExploreReturnChooserRef.current;
+    suppressExploreReturnChooserRef.current = false;
+    if (suppressChooser) return;
+    exploreReturnChooserTimerRef.current = window.setTimeout(() => {
+      exploreReturnChooserTimerRef.current = null;
+      if (observedWebModeActiveRef.current) return;
+      returnAmbient();
+      setRoomModeChooserContext("explore-return");
+    }, EXPLORE_RETURN_CHOOSER_DELAY_MS);
+  }, [returnAmbient, setWebModeSleepSuppressed]);
+
+  useEffect(() => () => {
+    if (exploreReturnChooserTimerRef.current !== null) {
+      window.clearTimeout(exploreReturnChooserTimerRef.current);
     }
   }, []);
 
@@ -439,19 +486,22 @@ export default function App() {
       try {
         const next = await fetchWebModeState();
         if (cancelled) return;
-        setWebModeSleepSuppressed(Boolean(next.activeProvider));
+        observeWebModeActivity(Boolean(next.activeProvider));
       } catch {
         // Keep the last known Explore state; this only gates the soft screen saver.
       }
     };
 
     void pollWebModeActivity();
-    const interval = window.setInterval(() => void pollWebModeActivity(), KIOSK_HEARTBEAT_MS);
+    const interval = window.setInterval(
+      () => void pollWebModeActivity(),
+      webModeActive ? WEB_MODE_ACTIVE_POLL_MS : WEB_MODE_IDLE_POLL_MS
+    );
     return () => {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [setWebModeSleepSuppressed]);
+  }, [observeWebModeActivity, webModeActive]);
 
   useEffect(() => {
     if (!preferences.displaySleepEnabled || systemSleepActive || screenSaverPreviewIndex !== null || webModeActive) return;
@@ -516,30 +566,15 @@ export default function App() {
       activeSceneVideoLabel: activeSceneVideo.label,
       activeSceneVideoSrc: activeSceneVideo.src,
       tikpalStatus,
-      roomExperienceStatus,
-      sceneSoundPending,
-      sceneSoundPendingSinceMs: sceneSoundPendingSinceRef.current
+      roomExperienceStatus
     };
   });
 
   useEffect(() => {
     function buildPendingSnapshot(nowMs: number) {
       const snapshot = heartbeatStateRef.current;
-      const sceneSoundPendingSnapshot = snapshot.sceneSoundPending === true;
-      const sceneSoundPendingSinceMs = typeof snapshot.sceneSoundPendingSinceMs === "number"
-        ? snapshot.sceneSoundPendingSinceMs
-        : null;
       const tikpalStatusSnapshot = snapshot.tikpalStatus as typeof tikpalStatus | undefined;
       const roomStatusSnapshot = snapshot.roomExperienceStatus as typeof roomExperienceStatus | undefined;
-
-      if (sceneSoundPendingSnapshot) {
-        return {
-          active: true,
-          kind: "scene_sound",
-          sinceMs: sceneSoundPendingSinceMs,
-          durationMs: sceneSoundPendingSinceMs ? nowMs - sceneSoundPendingSinceMs : null
-        };
-      }
 
       if (tikpalStatusSnapshot?.pending) {
         const sinceMs = tikpalStatusSnapshot.pendingSinceMs;
@@ -749,11 +784,10 @@ export default function App() {
   }, [refresh, refreshRoomExperience, roomExperience.mode, sendSourceSwitch, tikpalState.audio.currentSource.connectionState, tikpalState.audio.currentSource.id]);
 
   const handleOpenWebMode = useCallback(async () => {
-    const webMode = await fetchWebModeState().catch(() => null);
     setWebModeSleepSuppressed(true);
     try {
-      const nextWebMode = await sendWebModeAction({ type: "open", provider: webMode?.activeProvider ?? "qq_music" });
-      setWebModeSleepSuppressed(Boolean(nextWebMode.activeProvider));
+      const nextWebMode = await sendWebModeAction({ type: "open" });
+      observeWebModeActivity(Boolean(nextWebMode.activeProvider));
     } catch (error) {
       setWebModeSleepSuppressed(false);
       throw error;
@@ -761,31 +795,7 @@ export default function App() {
     await refresh();
     await refreshRoomExperience();
     returnAmbient();
-  }, [refresh, refreshRoomExperience, returnAmbient, setWebModeSleepSuppressed]);
-
-  const restoreSceneSoundAfterStaleHifiRestore = useCallback(async () => {
-    let latestRoom = roomExperienceRef.current;
-    try {
-      latestRoom = await fetchRoomExperienceState();
-      roomExperienceRef.current = latestRoom;
-    } catch {
-      // Use the latest local room snapshot if the direct refresh is briefly unavailable.
-    }
-
-    if (!latestRoom || latestRoom.mode === "hifi" || !latestRoom.sceneSoundEnabled) return;
-
-    try {
-      await sendExperienceAction({
-        type: "set_scene_sound",
-        sceneSoundEnabled: true,
-        sceneVideoId: latestRoom.sceneVideoId
-      });
-      await refresh();
-      await refreshRoomExperience();
-    } catch {
-      await refresh();
-    }
-  }, [refresh, refreshRoomExperience, sendExperienceAction]);
+  }, [observeWebModeActivity, refresh, refreshRoomExperience, returnAmbient, setWebModeSleepSuppressed]);
 
   useEffect(() => {
     const previousMode = previousRoomModeRef.current;
@@ -826,36 +836,10 @@ export default function App() {
           }
         }
       } finally {
-        await restoreSceneSoundAfterStaleHifiRestore();
         hifiRestoreInFlightRef.current = false;
       }
     })();
-  }, [handleSourceSwitch, restoreSceneSoundAfterStaleHifiRestore, roomExperience.mode, tikpalState]);
-
-  async function handleSceneSoundEnabledChange(enabled: boolean) {
-    if (sceneSoundPending) return;
-    if (enabled && roomExperience.mode === "hifi") {
-      return;
-    }
-    sceneSoundPendingSinceRef.current = Date.now();
-    setSceneSoundPending(true);
-
-    try {
-      if (enabled) {
-        setSceneVideoEnabled(true);
-      }
-      await handleRoomExperienceAction({
-        type: "set_scene_sound",
-        sceneSoundEnabled: enabled,
-        sceneVideoId: activeSceneVideo.id
-      });
-    } catch {
-      // The next API refresh will surface the backend error state if the Pi rejects the switch.
-    } finally {
-      sceneSoundPendingSinceRef.current = null;
-      setSceneSoundPending(false);
-    }
-  }
+  }, [handleSourceSwitch, roomExperience.mode, tikpalState]);
 
   const handleQuickMenuVolumeEnabledChange = useCallback(async (_enabled: boolean) => {
     try {
@@ -1016,15 +1000,32 @@ export default function App() {
   );
 
   const handleStartupModeSelect = useCallback(async (nextMode: RoomMode) => {
-    setStartupChooserVisible(false);
+    const chooserContext = roomModeChooserContext ?? "startup";
+    const changesScene = nextMode !== roomExperience.mode;
+    if (changesScene) {
+      handleSceneVideoReadyChange(false);
+    }
+    setRoomModeSelectionPending(true);
     try {
       await handleRoomExperienceAction({ type: "set_mode", mode: nextMode });
+      if (sceneVideoReadyRef.current) {
+        setRoomModeChooserContext(null);
+        setRoomModeSelectionPending(false);
+      }
     } catch {
-      setStartupChooserVisible(true);
+      setRoomModeChooserContext(chooserContext);
+      setRoomModeSelectionPending(false);
     }
-  }, [handleRoomExperienceAction]);
+  }, [handleRoomExperienceAction, handleSceneVideoReadyChange, roomExperience.mode, roomModeChooserContext]);
+
+  useEffect(() => {
+    if (!roomModeSelectionPending || !sceneVideoReady) return;
+    setRoomModeSelectionPending(false);
+    setRoomModeChooserContext(null);
+  }, [roomModeSelectionPending, sceneVideoReady]);
+
   const handleStartupModeAutoDismiss = useCallback(() => {
-    setStartupChooserVisible(false);
+    setRoomModeChooserContext(null);
   }, []);
 
   const handleOnboardingDismiss = useCallback(() => {
@@ -1056,13 +1057,15 @@ export default function App() {
 
     if (webMode?.activeProvider) {
       try {
-        await sendWebModeAction({ type: "close" });
+        suppressExploreReturnChooserRef.current = true;
+        const nextWebMode = await sendWebModeAction({ type: "close" });
+        observeWebModeActivity(Boolean(nextWebMode.activeProvider));
       } catch {
+        suppressExploreReturnChooserRef.current = false;
         // The guide only makes sense on the room screen; if Explore close fails,
         // keep the request local and let the user retry from Settings.
         return;
       }
-      setWebModeSleepSuppressed(false);
       returnAmbient();
       await Promise.all([
         refresh().catch(() => null),
@@ -1071,7 +1074,7 @@ export default function App() {
     }
 
     showWizard();
-  }, [refresh, refreshRoomExperience, returnAmbient, setWebModeSleepSuppressed, showWizard]);
+  }, [observeWebModeActivity, refresh, refreshRoomExperience, returnAmbient, showWizard]);
 
   useEffect(() => {
     if (!onboardingVisible) return;
@@ -1193,7 +1196,6 @@ export default function App() {
         sceneVideoEnabled={sceneVideoEnabled}
         sceneVideoStableLoop={tikpalState.runtime.apiMode === "mpc"}
         sceneSoundEnabled={roomExperience.sceneSoundEnabled && !(onboardingActive && onboardingSoundMuted)}
-        sceneSoundPending={sceneSoundPending || tikpalStatus.pending}
         sourcePickerOpenRequest={ambientSourcePickerRequest}
         clockVisible={clockVisible}
         onPlaybackAction={sendPlaybackAction}
@@ -1202,17 +1204,20 @@ export default function App() {
         onOpenWebMode={handleOpenWebMode}
         onSourcePickerOpenChange={setAmbientSourcePickerOpen}
         onHudActivity={showHud}
+        onHudDismiss={hideHud}
         onLyricsVisibleChange={setLyricsVisible}
         onCurrentSceneVideoChange={handleCurrentSceneVideoChange}
-        onSceneSoundEnabledChange={(enabled) => void handleSceneSoundEnabledChange(enabled)}
+        onSceneVideoReadyChange={handleSceneVideoReadyChange}
         onOpenPlayer={() => changeMode("player")}
         onOpenSettings={() => changeMode("quickSettings")}
         roomExperience={roomExperience}
         onExperienceAction={handleRoomExperienceAction}
       />
       <StartupModeChooser
-        active={startupChooserVisible && mode === "ambient"}
-        pending={tikpalStatus.pending}
+        active={roomModeChooserContext !== null && mode === "ambient"}
+        context={roomModeChooserContext ?? "startup"}
+        videoReady={sceneVideoReady}
+        pending={tikpalStatus.pending || roomModeSelectionPending}
         selectedMode={roomExperience.mode}
         onAutoDismiss={handleStartupModeAutoDismiss}
         onSelectMode={handleStartupModeSelect}

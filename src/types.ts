@@ -105,6 +105,7 @@ export interface WebModeSettings {
 export interface WebModeState {
   enabled: boolean;
   activeProvider: WebModeProviderId | null;
+  lastProvider: WebModeProviderId | null;
   providers: WebModeProviderSummary[];
   residentProviders: Partial<Record<WebModeProviderId, WebModeResidentProviderState>>;
   settings: WebModeSettings;

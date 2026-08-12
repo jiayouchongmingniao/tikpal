@@ -219,6 +219,17 @@ export function RemoteControlApp() {
           <button className="remote-icon-button" type="button" title={nextTitle} aria-label={t("playback.next")} disabled={nextDisabled} onClick={() => void applyAction({ type: "playback.next" })}>
             <SkipForward aria-hidden="true" />
           </button>
+          <button
+            className="remote-icon-button"
+            type="button"
+            title="Refresh lyrics"
+            aria-label="Refresh lyrics"
+            disabled={busy}
+            data-remote-lyrics-refresh
+            onClick={() => void applyAction({ type: "lyrics.refresh" })}
+          >
+            <RefreshCw aria-hidden="true" />
+          </button>
         </section>
 
         <section className="remote-slider-panel">
@@ -353,25 +364,6 @@ export function RemoteControlApp() {
               if (event.key === "Enter" || event.key.startsWith("Arrow")) commitBrightness();
             }}
           />
-        </section>
-
-        <section className="remote-grid-panel">
-          <h2>{t("remote.scene")}</h2>
-          <div className="remote-button-grid">
-            <button
-              type="button"
-              className={remoteState?.scene.sceneSoundEnabled ? "is-active" : ""}
-              disabled={busy}
-              onClick={() => void applyAction({ type: "scene.sound_set", enabled: !remoteState?.scene.sceneSoundEnabled })}
-            >
-              <Music aria-hidden="true" />
-              <span>{remoteState?.scene.sceneSoundEnabled ? t("remote.soundOn") : t("remote.soundOff")}</span>
-            </button>
-            <button type="button" disabled={busy} onClick={() => void applyAction({ type: "lyrics.refresh" })}>
-              <RefreshCw aria-hidden="true" />
-              <span>Lyrics</span>
-            </button>
-          </div>
         </section>
 
       </section>

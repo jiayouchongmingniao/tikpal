@@ -6,6 +6,8 @@ import type { RoomMode } from "../types";
 
 interface StartupModeChooserProps {
   active: boolean;
+  context: "startup" | "explore-return";
+  videoReady: boolean;
   pending: boolean;
   selectedMode: RoomMode;
   onAutoDismiss: () => void;
@@ -19,22 +21,27 @@ const startupModeIcons = {
   hifi: SlidersHorizontal
 } satisfies Record<RoomMode, typeof Target>;
 
-export function StartupModeChooser({ active, pending, selectedMode, onAutoDismiss, onSelectMode }: StartupModeChooserProps) {
+export function StartupModeChooser({ active, context, videoReady, pending, selectedMode, onAutoDismiss, onSelectMode }: StartupModeChooserProps) {
   const { t, roomLabel, roomIntent } = useI18n();
   useEffect(() => {
-    if (!active || pending) return undefined;
+    if (!active || pending || !videoReady) return undefined;
 
     const timer = window.setTimeout(() => {
       onAutoDismiss();
-    }, 5000);
+    }, 8_000);
 
     return () => window.clearTimeout(timer);
-  }, [active, onAutoDismiss, pending]);
+  }, [active, onAutoDismiss, pending, videoReady]);
 
   if (!active) return null;
 
   return (
-    <section className="startup-mode-chooser" aria-label={t("ambient.chooseRoomMode")} data-gesture-protected>
+    <section
+      className={`startup-mode-chooser ${context === "explore-return" ? "is-explore-return" : ""}`}
+      aria-label={t("ambient.chooseRoomMode")}
+      data-gesture-protected
+      data-room-mode-chooser-context={context}
+    >
       <div className="startup-mode-panel">
         <div className="startup-mode-heading">
           <span>Tikpal</span>

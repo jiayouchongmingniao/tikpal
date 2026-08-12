@@ -647,6 +647,11 @@ async function switchHifiAmbientSource(client, sourceId, exposeLabel, switchLabe
     );
     if (!clicked) continue;
     if (await waitForEvaluate(client, hifiAmbientSourceSettledExpression(sourceId), 20, 150)) {
+      await expectEventually(
+        client,
+        "document.querySelector('[data-ambient-source-picker]') === null && document.querySelector('.ambient-transport')?.getAttribute('aria-hidden') === 'true'",
+        `Hi-Fi ${sourceId} source success closes the picker and dock`
+      );
       console.log(`ok - ${switchLabel}`);
       return;
     }
@@ -1476,6 +1481,7 @@ try {
 
   await navigate(client, APP_URL);
   await expect(client, "document.querySelector('.ambient-screen') !== null", "ambient root renders");
+  await expect(client, "document.querySelector('[data-ambient-source-status-pill]') === null", "Ambient initial load has no persistent source notification");
   await expectEventually(
     client,
     "window.localStorage.getItem('tikpal.lyricsVisible.v3') === 'true' && window.localStorage.getItem('tikpal.lyricsVisible.autoRestored.v1') === 'true'",
@@ -1520,11 +1526,114 @@ try {
     "startup mode cards use the simplified copy"
   );
   const startupDefaultMode = await evaluate(client, "document.querySelector('.startup-mode-grid button.is-active')?.getAttribute('data-startup-mode') ?? 'calm'");
-  await wait(5200);
+  await wait(8200);
   await expectEventually(
     client,
     `document.querySelector('.startup-mode-chooser') === null && document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') === ${JSON.stringify(startupDefaultMode)}`,
-    "startup mode chooser defaults to the persisted room mode after 5 seconds"
+    "startup mode chooser defaults to the persisted room mode after 8 seconds"
+  );
+  await evaluate(
+    client,
+    `
+      (async () => {
+        if (window.__tikpalExploreReturnOriginalFetch) return true;
+        const nativeFetch = window.fetch.bind(window);
+        const webModeResponse = await nativeFetch('/api/v1/web-mode/state', { headers: { Accept: 'application/json' } });
+        const webModeState = await webModeResponse.json();
+        window.__tikpalExploreReturnOriginalFetch = nativeFetch;
+        window.__tikpalExploreReturnState = "active";
+        window.__tikpalExploreReturnModePosts = 0;
+        window.fetch = async (input, init) => {
+          const rawUrl = typeof input === "string" ? input : input?.url;
+          const pathname = rawUrl ? new URL(rawUrl, window.location.href).pathname : "";
+          if (pathname === "/api/v1/experience/actions" && String(init?.method ?? "GET").toUpperCase() === "POST") {
+            window.__tikpalExploreReturnModePosts += 1;
+          }
+          if (pathname !== "/api/v1/web-mode/state") return nativeFetch(input, init);
+          return new Response(JSON.stringify({
+            ...webModeState,
+            activeProvider: window.__tikpalExploreReturnState === "active" ? "qq_music" : null
+          }), {
+            headers: { "content-type": "application/json" }
+          });
+        };
+        return true;
+      })()
+    `
+  );
+  await expectEventually(
+    client,
+    "document.querySelector('[data-room-mode-chooser-context=\"explore-return\"]') === null",
+    "Explore return chooser waits for an active-to-idle transition"
+  );
+  await wait(2300);
+  await evaluate(client, "window.__tikpalExploreReturnState = 'idle'; true");
+  await expectEventually(
+    client,
+    "document.querySelector('[data-room-mode-chooser-context=\"explore-return\"]') !== null",
+    "Explore return chooser appears after Explore becomes idle",
+    30,
+    150
+  );
+  await expectEventually(
+    client,
+    `
+      (() => {
+        const chooser = document.querySelector('[data-room-mode-chooser-context="explore-return"]');
+        const cards = chooser?.querySelectorAll('.startup-mode-grid button') ?? [];
+        if (!chooser || cards.length !== 4) return false;
+        const chooserRect = chooser.getBoundingClientRect();
+        return chooserRect.width >= innerWidth - 1
+          && chooserRect.height >= innerHeight - 1
+          && getComputedStyle(chooser).backgroundImage.includes('rgba(0, 0, 0, 0.72)')
+          && [...cards].every((card) => {
+            const style = getComputedStyle(card);
+            return style.minHeight === '220px' && card.getBoundingClientRect().height >= 220;
+          });
+      })()
+    `,
+    "Explore close presents four large high-contrast room cards over a full return cover",
+    30,
+    150
+  );
+  const roomModeBeforeExploreReturnChoice = await evaluate(client, "document.querySelector('.ambient-screen')?.getAttribute('data-room-mode')");
+  await wait(5200);
+  await expectEventually(
+    client,
+    `document.querySelector('[data-room-mode-chooser-context="explore-return"]') === null && document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') === ${JSON.stringify(roomModeBeforeExploreReturnChoice)}`,
+    "Explore return chooser keeps the previous room mood when no card is selected"
+  );
+  await evaluate(client, "window.__tikpalExploreReturnState = 'active'; true");
+  await wait(2300);
+  await evaluate(client, "window.__tikpalExploreReturnState = 'idle'; true");
+  await expectEventually(client, "document.querySelector('[data-room-mode-chooser-context=\"explore-return\"]') !== null", "Explore return chooser reopens after the next close");
+  const exploreReturnModePostsBefore = await evaluate(client, "window.__tikpalExploreReturnModePosts");
+  await evaluate(
+    client,
+    `
+      (() => {
+        const target = document.querySelector('[data-room-mode-chooser-context="explore-return"] [data-startup-mode="sleep"]');
+        target?.click();
+        return Boolean(target);
+      })()
+    `
+  );
+  await expectEventually(
+    client,
+    `document.querySelector('[data-room-mode-chooser-context="explore-return"]') === null && document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') === 'sleep' && window.__tikpalExploreReturnModePosts === ${JSON.stringify(Number(exploreReturnModePostsBefore) + 1)}`,
+    "Explore return room choice applies once and closes the chooser"
+  );
+  await evaluate(
+    client,
+    `
+      if (window.__tikpalExploreReturnOriginalFetch) {
+        window.fetch = window.__tikpalExploreReturnOriginalFetch;
+        delete window.__tikpalExploreReturnOriginalFetch;
+      }
+      delete window.__tikpalExploreReturnState;
+      delete window.__tikpalExploreReturnModePosts;
+      true
+    `
   );
   await evaluate(
     client,
@@ -2549,6 +2658,34 @@ try {
     `,
     "ambient source picker uses unified source status labels"
   );
+  const sceneGalleryTogglePoint = await evaluate(
+    client,
+    `
+      (() => {
+        const button = document.querySelector('[data-ambient-scene-gallery-toggle]');
+        const rect = button?.getBoundingClientRect();
+        return rect ? { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) } : null;
+      })()
+    `
+  );
+  if (!sceneGalleryTogglePoint) throw new Error("Failed: Ambient scene gallery control is missing");
+  await click(client, sceneGalleryTogglePoint.x, sceneGalleryTogglePoint.y);
+  await expectEventually(client, "document.querySelector('[data-ambient-scene-gallery]') !== null", "scene gallery opens from a real click while the source picker is open");
+  await click(client, 20, 20);
+  await expectEventually(client, "document.querySelector('[data-ambient-scene-gallery]') === null", "scene gallery closes from its backdrop after a real click");
+  const sourceTogglePoint = await evaluate(
+    client,
+    `
+      (() => {
+        const button = document.querySelector('[data-ambient-source-picker] [data-ambient-source-toggle]');
+        const rect = button?.getBoundingClientRect();
+        return rect ? { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) } : null;
+      })()
+    `
+  );
+  if (!sourceTogglePoint) throw new Error("Failed: Ambient source toggle is missing");
+  await click(client, sourceTogglePoint.x, sourceTogglePoint.y);
+  await expectEventually(client, "document.querySelector('[data-ambient-source-picker]') !== null", "ambient source picker reopens after closing the scene gallery");
   await evaluate(client, "window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })); true");
   await expectEventually(client, "document.querySelector('[data-ambient-source-picker]') === null", "ambient scene source picker closes with Escape");
   await expect(
@@ -2561,7 +2698,8 @@ try {
           && document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') !== 'hifi'
           && labels.includes('Open scene gallery')
           && labels.includes('Choose audio source')
-          && (labels.includes('Unmute scene sound') || labels.includes('Mute scene sound'))
+          && !labels.includes('Unmute scene sound')
+          && !labels.includes('Mute scene sound')
           && !labels.includes('Previous track')
           && !labels.includes('Next track')
           && !labels.includes('Play')
@@ -2571,7 +2709,7 @@ try {
           && !transport.querySelector('.ambient-play-mode');
       })()
     `,
-    "ambient non-Hi-Fi transport keeps scene gallery plus source selection"
+    "ambient non-Hi-Fi transport keeps only scene gallery plus source selection"
   );
   await evaluate(
     client,
@@ -2649,15 +2787,68 @@ try {
         const cards = [...document.querySelectorAll('[data-ambient-scene-card]')];
         const modes = cards.map((card) => card.getAttribute('data-scene-mode')).join('|');
         const fallback = cards.find((card) => card.getAttribute('data-ambient-scene-card') === 'focus-smoke-scene');
+        const cover = document.querySelector('.ambient-scene-gallery-cover');
+        const coverRect = cover?.getBoundingClientRect();
         return gallery !== null
-          && cards.length === 4
-          && modes === 'focus|calm|calm|sleep'
+          && cards.length === 3
+          && modes === 'focus|calm|calm'
+          && document.querySelector('.ambient-scene-gallery-header > div') === null
+          && coverRect !== undefined
+          && Math.abs((coverRect.width / coverRect.height) - (32 / 9)) < 0.001
+          && document.querySelector('[data-ambient-scene-gallery-page-status]')?.textContent?.trim() === 'Page 1 of 2'
+          && document.querySelector('.ambient-scene-gallery-panel')?.getAttribute('data-ambient-scene-gallery-page') === '1'
+          && document.querySelector('.ambient-scene-gallery-panel')?.getAttribute('data-ambient-scene-gallery-page-count') === '2'
+          && document.querySelector('[data-ambient-scene-gallery-page-previous]')?.disabled === false
+          && document.querySelector('[data-ambient-scene-gallery-page-next]')?.disabled === false
           && document.querySelector('[data-ambient-scene-card="focus-smoke-scene"] img') === null
           && fallback?.classList.contains('is-thumbnail-fallback');
       })()
     `,
-    "scene gallery flattens Focus, Calm, and Sleep cards and degrades an OTA card without a thumbnail"
+    "scene gallery opens on the current scene page with three cards and a fallback OTA card"
   );
+  await evaluate(client, "document.querySelector('[data-ambient-scene-gallery-page-next]')?.click(); true");
+  await expectEventually(
+    client,
+    "document.querySelector('[data-ambient-scene-gallery-page-status]')?.textContent?.trim() === 'Page 2 of 2' && document.querySelectorAll('[data-ambient-scene-card]').length === 3 && [...document.querySelectorAll('[data-ambient-scene-card]')].map((card) => card.getAttribute('data-scene-mode')).join('|') === 'sleep|focus|calm' && document.querySelector('[data-ambient-scene-gallery-page-previous]')?.disabled === false && document.querySelector('[data-ambient-scene-gallery-page-next]')?.disabled === false",
+    "scene gallery wraps catalogue cards into a complete final three-card page"
+  );
+  await evaluate(client, "document.querySelector('[data-ambient-scene-gallery-page-next]')?.click(); true");
+  await expectEventually(
+    client,
+    "document.querySelector('[data-ambient-scene-gallery-page-status]')?.textContent?.trim() === 'Page 1 of 2' && document.querySelectorAll('[data-ambient-scene-card]').length === 3",
+    "scene gallery wraps from its final page back to the first page"
+  );
+  await evaluate(client, "document.querySelector('[data-ambient-scene-gallery-page-previous]')?.click(); true");
+  await expectEventually(client, "document.querySelector('[data-ambient-scene-gallery-page-status]')?.textContent?.trim() === 'Page 2 of 2' && document.querySelectorAll('[data-ambient-scene-card]').length === 3", "scene gallery previous arrow loops from the first page to the final page");
+  await evaluate(client, "document.querySelector('[data-ambient-scene-gallery-page-previous]')?.click(); true");
+  await expectEventually(client, "document.querySelector('[data-ambient-scene-gallery-page-status]')?.textContent?.trim() === 'Page 1 of 2' && document.querySelectorAll('[data-ambient-scene-card]').length === 3", "scene gallery previous arrow returns to the first page for swipe verification");
+  const sceneGalleryCardsRect = await evaluate(
+    client,
+    `(() => {
+      const rect = document.querySelector('[data-ambient-scene-gallery-cards]')?.getBoundingClientRect();
+      return rect ? { left: rect.left, top: rect.top, width: rect.width, height: rect.height } : null;
+    })()`
+  );
+  if (!sceneGalleryCardsRect) throw new Error("Failed: scene gallery cards did not expose a swipe target");
+  await touchSwipe(
+    client,
+    sceneGalleryCardsRect.left + sceneGalleryCardsRect.width * 0.7,
+    sceneGalleryCardsRect.top + sceneGalleryCardsRect.height * 0.5,
+    sceneGalleryCardsRect.left + sceneGalleryCardsRect.width * 0.3,
+    sceneGalleryCardsRect.top + sceneGalleryCardsRect.height * 0.5
+  );
+  await expectEventually(
+    client,
+    "document.querySelector('[data-ambient-scene-gallery]') !== null && document.querySelector('[data-ambient-scene-gallery-page-status]')?.textContent?.trim() === 'Page 2 of 2' && document.querySelectorAll('[data-ambient-scene-card]').length === 3 && document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') === 'calm'",
+    "scene gallery swipe changes page without selecting the crossed card"
+  );
+  await expect(
+    client,
+    "document.querySelector('[data-ambient-source-picker]') === null && document.querySelector('.ambient-transport') === null && document.querySelector('.ambient-hud') === null",
+    "scene gallery swipe keeps the source picker and bottom dock hidden"
+  );
+  await evaluate(client, "document.querySelector('[data-ambient-scene-gallery-page-previous]')?.click(); true");
+  await expectEventually(client, "document.querySelector('[data-ambient-scene-gallery-page-status]')?.textContent?.trim() === 'Page 1 of 2'", "scene gallery returns to the selectable first page after swipe verification");
   await evaluate(client, "window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })); true");
   await expectEventually(client, "document.querySelector('[data-ambient-scene-gallery]') === null", "scene gallery closes with Escape");
   await evaluate(client, "document.querySelector('[data-ambient-scene-gallery-toggle]')?.click(); true");
@@ -3143,8 +3334,11 @@ try {
   );
 
   await navigate(client, APP_URL);
-  await evaluate(client, "document.querySelector('.ambient-transport-sound')?.click();");
-  await expectEventually(client, "document.querySelector('.ambient-transport-sound')?.getAttribute('aria-pressed') === 'true'", "ambient scene sound toggle turns on");
+  await expect(client, "document.querySelector('.ambient-transport-sound') === null", "Ambient no longer exposes a Scene Sound toggle");
+  await evaluate(
+    client,
+    "fetch('/api/v1/experience/actions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'set_scene_sound', sceneSoundEnabled: true }) }).then(() => true)"
+  );
   await expectEventually(
     client,
     `
@@ -3416,56 +3610,6 @@ try {
     "scene loop keeps audio on one active layer only"
   );
 
-  await evaluate(
-    client,
-    `
-      (() => {
-        document.querySelector('.ambient-transport-sound')?.click();
-        return true;
-      })()
-    `
-  );
-  await expectEventually(client, "document.querySelector('.ambient-transport-sound')?.getAttribute('aria-pressed') === 'false'", "turning scene sound off clears the toggle");
-  await expectEventuallyEvaluate(
-    client,
-    "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => state.audio.currentSource.id === 'mpd' && state.playback.source === 'mpd' && state.playback.state === 'playing')",
-    "turning scene sound off resumes library playback"
-  );
-  await expectEventually(
-    client,
-    `
-      (() => {
-        const scene = document.querySelector('.flame-scene');
-        const video = document.querySelector('.flame-video.is-active');
-        return scene instanceof HTMLElement
-          && video instanceof HTMLVideoElement
-          && !scene.classList.contains('is-video-off')
-          && !scene.classList.contains('is-static-only')
-            && video.muted === true
-            && video.paused === false
-            && video.getAttribute('data-flame-frame-ready') === 'true'
-            && Number.isFinite(Number.parseFloat(video.getAttribute('data-scene-gain-db') ?? 'NaN'));
-        })()
-      `,
-    "turning scene sound off keeps scene video playing muted"
-  );
-
-  await evaluate(
-    client,
-    `
-      (() => {
-        document.querySelector('.ambient-transport-sound')?.click();
-        return true;
-      })()
-    `
-  );
-  await expectEventually(client, "document.querySelector('.ambient-transport-sound')?.getAttribute('aria-pressed') === 'true'", "scene sound can turn back on before screen overlay checks");
-  await expectEventuallyEvaluate(
-    client,
-    "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => state.playback.source === 'scene' && state.playback.state === 'playing')",
-    "scene sound switches API source to scene again"
-  );
-
   await navigate(client, `${APP_URL}?mode=quickMenu`);
   await evaluate(
     client,
@@ -3568,7 +3712,15 @@ try {
       })()
     `
   );
-  await expectEventually(client, "document.querySelector('[data-ambient-source-option=\"radio\"]') !== null", "Ambient source picker exposes Radio from Scene Sound");
+  await expectEventually(client, "document.querySelector('[data-ambient-source-option=\"bluetooth\"]') !== null", "Ambient source picker exposes Bluetooth from Scene Sound");
+  await click(client, 300, 280);
+  await expect(
+    client,
+    "document.querySelector('[data-ambient-source-picker]') === null && document.querySelector('.ambient-transport')?.getAttribute('aria-hidden') === 'true'",
+    "Ambient outside click closes the source picker and dock"
+  );
+  await click(client, 1280, 280);
+  await expectEventually(client, "document.querySelector('[data-ambient-source-option=\"bluetooth\"]') !== null", "Ambient source picker reopens after outside dismissal");
   await evaluate(
     client,
     `
@@ -3589,10 +3741,10 @@ try {
       })()
     `
   );
-  await evaluate(client, "document.querySelector('[data-ambient-source-option=\"radio\"]')?.click()");
+  await evaluate(client, "document.querySelector('[data-ambient-source-option=\"bluetooth\"]')?.click()");
   await wait(80);
-  await expect(client, "document.querySelector('.flame-video.is-active') instanceof HTMLVideoElement && document.querySelector('.flame-video.is-active').muted === true", "Ambient Radio failed switch first mutes scene video");
-  await expectEventually(client, "document.querySelector('.flame-video.is-active') instanceof HTMLVideoElement && document.querySelector('.flame-video.is-active').muted === false && document.querySelector('.ambient-source-error') !== null", "Ambient Radio failed switch restores scene audio");
+  await expect(client, "document.querySelector('.flame-video.is-active') instanceof HTMLVideoElement && document.querySelector('.flame-video.is-active').muted === true", "Ambient Bluetooth failed switch first mutes scene video");
+  await expectEventually(client, "document.querySelector('.flame-video.is-active') instanceof HTMLVideoElement && document.querySelector('.flame-video.is-active').muted === false && document.querySelector('.ambient-source-error') !== null && document.querySelector('[data-ambient-source-status-pill]') === null && document.querySelector('[data-ambient-source-option=\"bluetooth\"]') !== null", "Ambient Bluetooth failure reopens the picker with its error and no success notification");
   await evaluate(client, "document.querySelector('[data-ambient-source-option=\"radio\"]')?.click()");
   await wait(80);
   await expect(client, "document.querySelector('.flame-video.is-active') instanceof HTMLVideoElement && document.querySelector('.flame-video.is-active').muted === true", "Ambient Radio source switch mutes scene video before backend switch");
@@ -3603,9 +3755,24 @@ try {
   );
   await expectEventually(
     client,
-    "document.querySelector('[data-ambient-source-picker]') === null && document.querySelector('[data-ambient-source-status-pill][data-ambient-source-status-source=\"radio\"]')?.textContent?.includes('Radio') === true",
-    "Ambient Radio source selection closes the picker and shows the corner source pill"
+    `
+      (async () => {
+        const pill = document.querySelector('[data-ambient-source-status-pill][data-ambient-source-status-source="radio"]');
+        const state = await fetch('/api/v1/system/state').then((response) => response.json());
+        const text = pill?.textContent ?? '';
+        const metadata = [state.playback.title, state.playback.artist].filter(Boolean);
+        return document.querySelector('[data-ambient-source-picker]') === null
+          && document.querySelector('.ambient-transport')?.getAttribute('aria-hidden') === 'true'
+          && pill?.getAttribute('data-ambient-source-notification-phase') === 'success'
+          && text.includes('Radio')
+          && text.includes('Playing')
+          && metadata.every((value) => !text.includes(value));
+      })()
+    `,
+    "Ambient Radio source selection closes the picker and shows a concise temporary source notification"
   );
+  await wait(3400);
+  await expect(client, "document.querySelector('[data-ambient-source-status-pill]') === null", "Ambient Radio source notification fades out and unmounts");
   await expectEventually(
     client,
     `
@@ -3647,9 +3814,11 @@ try {
   );
   await expectEventually(
     client,
-    "document.querySelector('[data-ambient-source-picker]') === null && document.querySelector('[data-ambient-source-status-pill][data-ambient-source-status-source=\"mpd\"]')?.textContent?.includes('Library') === true",
-    "Ambient Library source selection closes the picker and shows the corner source pill"
+    "document.querySelector('[data-ambient-source-picker]') === null && document.querySelector('.ambient-transport')?.getAttribute('aria-hidden') === 'true' && document.querySelector('[data-ambient-source-status-pill][data-ambient-source-status-source=\"mpd\"]')?.getAttribute('data-ambient-source-notification-phase') === 'success' && document.querySelector('[data-ambient-source-status-pill]')?.textContent?.includes('Library') === true && document.querySelector('[data-ambient-source-status-pill]')?.textContent?.includes('Playing') === true",
+    "Ambient Library source selection closes the picker and shows a concise temporary source notification"
   );
+  await wait(3400);
+  await expect(client, "document.querySelector('[data-ambient-source-status-pill]') === null", "Ambient Library source notification fades out and unmounts");
   await expectEventually(
     client,
     `
@@ -3668,6 +3837,101 @@ try {
     "Ambient Library switch keeps the scene video mounted and playing muted",
     30,
     150
+  );
+  await click(client, 1280, 280);
+  await expectEventually(client, "document.querySelector('[data-ambient-source-option=\"bluetooth\"]') !== null", "Ambient source picker exposes Bluetooth for connection notification verification");
+  await evaluate(
+    client,
+    `
+      (() => {
+        const originalFetch = window.fetch.bind(window);
+        let bluetoothSourceState = null;
+        let systemStateReads = 0;
+        const withBluetoothConnectionState = (state, connectionState) => {
+          const next = JSON.parse(JSON.stringify(state));
+          next.audio.sources = next.audio.sources.map((source) => ({
+            ...source,
+            active: source.id === 'bluetooth',
+            armed: source.id === 'bluetooth',
+            connectionState: source.id === 'bluetooth' ? connectionState : 'idle',
+            connectedLabel: source.id === 'bluetooth' && connectionState === 'connected' ? 'Tikpal Demo Phone' : null,
+            advertisedLabel: source.id === 'bluetooth' ? 'Tikpal Bluetooth' : source.advertisedLabel
+          }));
+          next.audio.currentSource = next.audio.sources.find((source) => source.id === 'bluetooth') ?? next.audio.currentSource;
+          next.playback = {
+            ...next.playback,
+            source: 'bluetooth',
+            state: 'playing',
+            title: 'External Notification Test',
+            artist: 'Tikpal Smoke'
+          };
+          return next;
+        };
+        window.__tikpalAmbientNotificationOriginalFetch = originalFetch;
+        window.fetch = async (input, init) => {
+          const url = typeof input === 'string' ? input : input instanceof Request ? input.url : String(input);
+          const pathname = new URL(url, window.location.href).pathname;
+          if (pathname === '/api/v1/audio/source' && String(init?.method ?? 'GET').toUpperCase() === 'POST') {
+            const action = JSON.parse(String(init?.body ?? '{}'));
+            if (action.target === 'bluetooth') {
+              const state = await originalFetch('/api/v1/system/state').then((response) => response.json());
+              bluetoothSourceState = withBluetoothConnectionState(state, 'armed');
+              return new Response(JSON.stringify(bluetoothSourceState), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' }
+              });
+            }
+          }
+          if (pathname === '/api/v1/system/state' && bluetoothSourceState) {
+            systemStateReads += 1;
+            if (systemStateReads >= 1) {
+              bluetoothSourceState = withBluetoothConnectionState(bluetoothSourceState, 'connected');
+            }
+            return new Response(JSON.stringify(bluetoothSourceState), {
+              status: 200,
+              headers: { 'Content-Type': 'application/json' }
+            });
+          }
+          return originalFetch(input, init);
+        };
+        return true;
+      })()
+    `
+  );
+  await evaluate(client, "document.querySelector('[data-ambient-source-option=\"bluetooth\"]')?.click(); true");
+  await expectEventually(
+    client,
+    "document.querySelector('[data-ambient-source-status-pill][data-ambient-source-status-source=\"bluetooth\"]')?.getAttribute('data-ambient-source-notification-phase') === 'connecting' && document.querySelector('[data-ambient-source-status-pill]')?.textContent?.includes('Connecting') === true && document.querySelector('[data-ambient-source-picker]') === null",
+    "Ambient external source stays in its connecting notification while armed"
+  );
+  await expectEventually(
+    client,
+    "document.querySelector('[data-ambient-source-status-pill][data-ambient-source-status-source=\"bluetooth\"]')?.getAttribute('data-ambient-source-notification-phase') === 'success' && document.querySelector('[data-ambient-source-status-pill]')?.textContent?.includes('Connected') === true",
+    "Ambient external source starts its success notification only after connected"
+  );
+  await wait(3400);
+  await expect(client, "document.querySelector('[data-ambient-source-status-pill]') === null", "Ambient external-source success notification fades out and unmounts");
+  await evaluate(
+    client,
+    `
+      (() => {
+        const originalFetch = window.__tikpalAmbientNotificationOriginalFetch;
+        if (originalFetch) {
+          window.fetch = originalFetch;
+          delete window.__tikpalAmbientNotificationOriginalFetch;
+        }
+        return fetch('/api/v1/audio/source', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ target: 'mpd' })
+        }).then(() => true);
+      })()
+    `
+  );
+  await expectEventuallyEvaluate(
+    client,
+    "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => state.audio.currentSource.id === 'mpd' && state.playback.source === 'mpd')",
+    "Ambient external notification verification restores Library"
   );
   await navigate(client, `${APP_URL}?mode=player`);
   const playerLongTitlePatchVersion = await setStatePatchMode(client, "longPlayerTitle");
@@ -4095,15 +4359,7 @@ try {
   );
 
   await navigate(client, APP_URL);
-  await evaluate(
-    client,
-    `
-      (() => {
-        document.querySelector('.ambient-transport-sound')?.click();
-        return true;
-      })()
-    `
-  );
+  await evaluate(client, "fetch('/api/v1/experience/actions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'set_scene_sound', sceneSoundEnabled: true }) }).then(() => true)");
   await expectEventuallyEvaluate(
     client,
     `
@@ -4512,17 +4768,6 @@ try {
   await evaluate(
     client,
     `
-      fetch('/api/v1/web-mode/settings', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ providerTextScale: 1.1 })
-      })
-    `
-  );
-
-  await evaluate(
-    client,
-    `
       (() => {
         const target = [...document.querySelectorAll('.settings-card-button')].find((node) => node.textContent.includes('Explore'));
         target?.click();
@@ -4533,8 +4778,8 @@ try {
   await expect(client, "document.querySelector('[data-settings-detail=\"web-mode\"]') !== null", "Console Explore drawer opens");
   await expectEventually(
     client,
-    "document.querySelector('.web-mode-proxy-field input')?.value.startsWith('http') && document.querySelector('[data-web-mode-settings-scale]')?.textContent.includes('Font') && document.querySelector('.web-mode-settings-scale-option.is-active')?.textContent === 'Medium' && [...document.querySelectorAll('.web-mode-settings-scale-option')].map((node) => node.textContent?.trim()).join(',') === 'Small,Medium,Large' && !document.querySelector('.web-mode-settings-actions') && ![...document.querySelectorAll('[data-settings-detail=\"web-mode\"] button')].some((button) => ['Test', 'Save', 'Keyboard'].includes(button.textContent?.trim() ?? ''))",
-    "Console Explore drawer auto-saves proxy settings without action buttons"
+    "document.querySelector('.web-mode-proxy-field input')?.value.startsWith('http') && document.querySelector('[data-web-mode-settings-scale]') === null && document.querySelector('.web-mode-settings-scale-option') === null && document.querySelector('[data-web-mode-proxy-restart-confirm]') === null && ![...document.querySelectorAll('[data-settings-detail=\"web-mode\"] button')].some((button) => ['Test', 'Save', 'Keyboard'].includes(button.textContent?.trim() ?? ''))",
+    "Console Explore drawer removes its font size controls and keeps proxy actions compact"
   );
   await expect(
     client,
@@ -4615,7 +4860,7 @@ try {
   await setInputValue(client, ".web-mode-proxy-field input", "http://127.0.0.1:7896");
   await expectEventually(
     client,
-    "document.querySelector('.settings-detail-header p')?.textContent === 'Saved automatically' && document.querySelector('.web-mode-proxy-field input')?.value === 'http://127.0.0.1:7896' && document.querySelector('.web-mode-settings-help')?.textContent.includes('switch Proxy and retry')",
+    "document.querySelector('.settings-detail-header p')?.textContent === 'Saved automatically' && document.querySelector('.web-mode-proxy-field input')?.value === 'http://127.0.0.1:7896' && document.querySelector('.web-mode-settings-help')?.textContent.includes('needs confirmation')",
     "Console Explore proxy URL auto-saves without rewriting the input"
   );
   await setInputValue(client, ".web-mode-proxy-field input", originalProxyUrl);
@@ -4628,31 +4873,153 @@ try {
     client,
     `
       (() => {
-        const target = [...document.querySelectorAll('.web-mode-settings-scale-option')].find((node) => node.textContent.trim() === 'Large');
-        target?.click();
-        return Boolean(target);
+        window.__tikpalProxyRestartNativeFetch = window.fetch.bind(window);
+        window.__tikpalProxyRestartRequests = [];
+        window.fetch = async (input, init) => {
+          const url = String(input instanceof Request ? input.url : input);
+          if (url.includes('/api/v1/web-mode/settings') || url.includes('/api/v1/system/actions')) {
+            window.__tikpalProxyRestartRequests.push({ url, body: JSON.parse(String(init?.body ?? '{}')) });
+          }
+          if (url.includes('/api/v1/system/actions')) {
+            return new Response(JSON.stringify({}), { status: 200, headers: { 'Content-Type': 'application/json' } });
+          }
+          return window.__tikpalProxyRestartNativeFetch(input, init);
+        };
+        window.__tikpalOriginalProxyEnabled = document.querySelector('[data-web-mode-proxy-toggle]')?.getAttribute('aria-pressed') === 'true';
+        document.querySelector('[data-web-mode-proxy-toggle]')?.click();
+        return window.__tikpalOriginalProxyEnabled;
       })()
     `
   );
-  await expectEventually(
+  await expect(
     client,
-    "document.querySelector('.settings-detail-header p')?.textContent === 'Saved automatically' && document.querySelector('.web-mode-settings-scale-option.is-active')?.textContent === 'Large'",
-    "Console Explore provider text scale auto-saves"
+    "document.querySelector('[data-web-mode-proxy-restart-confirm]')?.textContent.includes('Confirm proxy setting') && (window.__tikpalOriginalProxyEnabled ? document.querySelector('[data-web-mode-proxy-restart-confirm]')?.textContent.includes('Direct') : document.querySelector('[data-web-mode-proxy-restart-confirm]')?.textContent.includes('Proxy On')) && document.querySelector('[data-web-mode-proxy-toggle]')?.getAttribute('aria-pressed') === String(window.__tikpalOriginalProxyEnabled) && window.__tikpalProxyRestartRequests.length === 0",
+    "Console Proxy toggle asks for restart confirmation before saving"
   );
   await evaluate(
     client,
     `
       (() => {
-        const target = [...document.querySelectorAll('.web-mode-settings-scale-option')].find((node) => node.textContent.trim() === 'Medium');
-        target?.click();
-        return Boolean(target);
+        document.querySelector('[data-web-mode-proxy-restart-cancel]')?.click();
+        return true;
+      })()
+    `
+  );
+  await expect(
+    client,
+    "document.querySelector('[data-web-mode-proxy-restart-confirm]') === null && document.querySelector('[data-web-mode-proxy-toggle]')?.getAttribute('aria-pressed') === String(window.__tikpalOriginalProxyEnabled) && window.__tikpalProxyRestartRequests.length === 0",
+    "Console Proxy restart confirmation cancels without saving or restarting"
+  );
+  await evaluate(
+    client,
+    `
+      (() => {
+        document.querySelector('[data-web-mode-proxy-toggle]')?.click();
+        document.querySelector('[data-web-mode-proxy-restart-apply]')?.click();
+        return true;
       })()
     `
   );
   await expectEventually(
     client,
-    "document.querySelector('.settings-detail-header p')?.textContent === 'Saved automatically' && document.querySelector('.web-mode-settings-scale-option.is-active')?.textContent === 'Medium'",
-    "Console Explore provider text scale restores to the default"
+    "window.__tikpalProxyRestartRequests.length === 2 && window.__tikpalProxyRestartRequests[0].url.includes('/api/v1/web-mode/settings') && window.__tikpalProxyRestartRequests[0].body.proxyEnabled === !window.__tikpalOriginalProxyEnabled && window.__tikpalProxyRestartRequests[1].url.includes('/api/v1/system/actions') && window.__tikpalProxyRestartRequests[1].body.type === 'reboot' && document.querySelector('[data-web-mode-proxy-toggle]')?.getAttribute('aria-pressed') === String(!window.__tikpalOriginalProxyEnabled)",
+    "Console Proxy confirmation saves the new state before requesting reboot"
+  );
+  await evaluate(
+    client,
+    `
+      (() => {
+        const currentFetch = window.fetch;
+        window.fetch = async (input, init) => {
+          const url = String(input instanceof Request ? input.url : input);
+          if (url.includes('/api/v1/system/actions')) {
+            window.__tikpalProxyRestartRequests.push({ url, body: JSON.parse(String(init?.body ?? '{}')) });
+            return new Response(JSON.stringify({ message: 'restart unavailable' }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+          }
+          return currentFetch(input, init);
+        };
+        document.querySelector('[data-web-mode-proxy-toggle]')?.click();
+        document.querySelector('[data-web-mode-proxy-restart-apply]')?.click();
+        return true;
+      })()
+    `
+  );
+  await expectEventually(
+    client,
+    "window.__tikpalProxyRestartRequests.length === 4 && window.__tikpalProxyRestartRequests[2].url.includes('/api/v1/web-mode/settings') && window.__tikpalProxyRestartRequests[2].body.proxyEnabled === window.__tikpalOriginalProxyEnabled && window.__tikpalProxyRestartRequests[3].url.includes('/api/v1/system/actions') && document.querySelector('[data-web-mode-proxy-toggle]')?.getAttribute('aria-pressed') === String(window.__tikpalOriginalProxyEnabled) && document.querySelector('.settings-detail-header p')?.textContent.includes('Restart the system manually')",
+    "Console Proxy keeps the saved setting and asks for a manual restart when reboot fails"
+  );
+  await evaluate(
+    client,
+    `
+      (() => {
+        if (!window.__tikpalOriginalProxyEnabled) return true;
+        document.querySelector('[data-web-mode-proxy-toggle]')?.click();
+        document.querySelector('[data-web-mode-proxy-restart-apply]')?.click();
+        return true;
+      })()
+    `
+  );
+  await expectEventually(
+    client,
+    "document.querySelector('[data-web-mode-proxy-toggle]')?.getAttribute('aria-pressed') === 'false'",
+    "Console Proxy invalid-URL check starts from Direct mode"
+  );
+  await setInputValue(client, ".web-mode-proxy-field input", "ftp://127.0.0.1:7897");
+  await expectEventually(
+    client,
+    "document.querySelector('.settings-detail-header p')?.textContent.includes('Enter a complete proxy URL')",
+    "Console Proxy rejects an invalid URL"
+  );
+  await evaluate(
+    client,
+    `
+      (() => {
+        window.__tikpalInvalidProxyRequestCount = window.__tikpalProxyRestartRequests.length;
+        document.querySelector('[data-web-mode-proxy-toggle]')?.click();
+        return true;
+      })()
+    `
+  );
+  await expect(
+    client,
+    "document.querySelector('[data-web-mode-proxy-restart-confirm]') === null && document.querySelector('[data-web-mode-proxy-toggle]')?.getAttribute('aria-pressed') === 'false' && window.__tikpalProxyRestartRequests.length === window.__tikpalInvalidProxyRequestCount",
+    "Console Proxy invalid URL cannot confirm or restart Proxy On"
+  );
+  await setInputValue(client, ".web-mode-proxy-field input", originalProxyUrl);
+  await expectEventually(
+    client,
+    "!document.querySelector('.settings-detail-header p')?.textContent.includes('Enter a complete proxy URL')",
+    "Console Proxy clears the invalid URL warning after a valid URL is restored"
+  );
+  if (await evaluate(client, "window.__tikpalOriginalProxyEnabled")) {
+    await evaluate(
+      client,
+      `
+        (() => {
+          document.querySelector('[data-web-mode-proxy-toggle]')?.click();
+          document.querySelector('[data-web-mode-proxy-restart-apply]')?.click();
+          return true;
+        })()
+      `
+    );
+    await expectEventually(
+      client,
+      "document.querySelector('[data-web-mode-proxy-toggle]')?.getAttribute('aria-pressed') === 'true'",
+      "Console Proxy invalid-URL check restores its original Proxy state"
+    );
+  }
+  await evaluate(
+    client,
+    `
+      (() => {
+        if (window.__tikpalProxyRestartNativeFetch) window.fetch = window.__tikpalProxyRestartNativeFetch;
+        delete window.__tikpalProxyRestartNativeFetch;
+        delete window.__tikpalProxyRestartRequests;
+        delete window.__tikpalOriginalProxyEnabled;
+        return true;
+      })()
+    `
   );
   await evaluate(
     client,
@@ -4792,6 +5159,11 @@ try {
     client,
     "document.querySelector('[data-remote-key]') !== null && document.querySelector('[data-remote-volume-slider]') !== null && document.querySelector('[data-remote-explore]') !== null && document.querySelector('[data-remote-explore-open]') !== null && document.querySelector('[data-remote-explore-close]') !== null && document.querySelector('[data-remote-explore-proxy]') !== null",
     "portable remote exposes its key field, volume slider, Explore start, close, and proxy controls"
+  );
+  await expect(
+    client,
+    "document.querySelector('[data-remote-lyrics-refresh]') !== null && document.querySelector('[data-remote-lyrics-refresh]')?.closest('.remote-transport') !== null && !document.body.textContent?.includes('Sound on') && !document.body.textContent?.includes('Sound off')",
+    "portable remote keeps lyric refresh with playback controls and exposes no Scene Sound toggle"
   );
   await expect(
     client,
