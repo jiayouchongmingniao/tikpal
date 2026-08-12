@@ -59,7 +59,7 @@ fi
 : "${TIKPAL_PHYSICAL_DISPLAY_NO_EDID_CONNECTOR_PATTERN:=card[0-9]+-DVI-I-[0-9]+}"
 : "${TIKPAL_PHYSICAL_DISPLAY_WAIT_READY_TIMEOUT_SECONDS:=45}"
 : "${TIKPAL_PHYSICAL_DISPLAY_WAIT_READY_SETTLE_SECONDS:=2}"
-: "${TIKPAL_PHYSICAL_DISPLAY_DELAYED_KICK_SECONDS:=8 25}"
+: "${TIKPAL_PHYSICAL_DISPLAY_DELAYED_KICK_SECONDS:=none}"
 : "${TIKPAL_PHYSICAL_DISPLAY_DDCUTIL_BIN:=${TIKPAL_KIOSK_DDCUTIL_BIN:-${TIKPAL_REAL_DDCUTIL_BIN:-ddcutil}}}"
 : "${TIKPAL_PHYSICAL_DISPLAY_DDC_TIMEOUT_SECONDS:=5}"
 : "${TIKPAL_PHYSICAL_DISPLAY_DISABLE_POWER_KEYS:=1}"
@@ -800,7 +800,14 @@ soft_kick() {
 }
 
 delayed_soft_kick() {
-  local delay wait previous=0
+  local delay wait previous=0 delayed_kick_value
+  delayed_kick_value="$(printf '%s' "$TIKPAL_PHYSICAL_DISPLAY_DELAYED_KICK_SECONDS" | tr '[:upper:]' '[:lower:]')"
+  case "$delayed_kick_value" in
+    ""|0|off|false|no|none|disabled)
+      log "delayed soft-kick is disabled"
+      return 0
+      ;;
+  esac
   for delay in $TIKPAL_PHYSICAL_DISPLAY_DELAYED_KICK_SECONDS; do
     [[ "$delay" =~ ^[0-9]+$ ]] || {
       log "skipping invalid delayed soft-kick delay '$delay'"

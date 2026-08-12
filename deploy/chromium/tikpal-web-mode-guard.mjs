@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -269,11 +269,15 @@ function isExpectedProviderPage(target) {
 
 function writeResidentProviderStatus(status) {
   if (!statePath || !providerId) return;
+  if (status !== "active") return;
   const normalizedStatus = status === "active" ? "active" : "ready";
-  let state = {};
+  let state;
   try {
     state = JSON.parse(readFileSync(statePath, "utf8"));
-  } catch {}
+  } catch {
+    return;
+  }
+  if (state.activeProvider !== providerId) return;
   const residentProviders = state.residentProviders && typeof state.residentProviders === "object"
     ? state.residentProviders
     : {};
@@ -293,7 +297,9 @@ function writeResidentProviderStatus(status) {
   if (normalizedStatus === "active") state.lastError = null;
   try {
     mkdirSync(dirname(statePath), { recursive: true });
-    writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`);
+    const temporaryPath = `${statePath}.${process.pid}.${Date.now()}.tmp`;
+    writeFileSync(temporaryPath, `${JSON.stringify(state, null, 2)}\n`);
+    renameSync(temporaryPath, statePath);
   } catch {}
 }
 
@@ -770,7 +776,7 @@ function parseErrorReason(text, title, href) {
 }
 
 function attachEarlyErrorRedirect(target) {
-  if (!isPageTarget(target) || isFriendlyErrorPage(target) || earlyRedirectTargets.has(target.id)) return;
+  if (!isExpectedProviderPage(target) || earlyRedirectTargets.has(target.id)) return;
   earlyRedirectTargets.add(target.id);
 
   const ws = new WebSocket(target.webSocketDebuggerUrl);
@@ -815,7 +821,7 @@ function attachEarlyErrorRedirect(target) {
 }
 
 async function maybeRedirectErrorPage(target) {
-  if (!isPageTarget(target) || isFriendlyErrorPage(target) || redirectedTargets.has(target.id)) return;
+  if (!isExpectedProviderPage(target)) return;
   const targetUrl = String(target.url || "");
   let looksLikeError = targetUrl.startsWith("chrome-error://");
   let diagnostics = null;
@@ -988,6 +994,38 @@ const qqClientPromptExpression = `(() => {
     setTimeout(() => play.click(), 150);
   }
   return { handled: true, closed: true, retried };
+})()`;
+
+const qqReminderCancelExpression = `(() => {
+  const textOf = (element) => String(element?.innerText || element?.textContent || "").replace(/\\s+/g, "").trim();
+  const visible = (element) => {
+    if (!element) return false;
+    const rect = element.getBoundingClientRect();
+    const style = getComputedStyle(element);
+    return rect.width >= 8 &&
+      rect.height >= 8 &&
+      rect.right > 0 &&
+      rect.bottom > 0 &&
+      rect.left < innerWidth &&
+      rect.top < innerHeight &&
+      style.display !== "none" &&
+      style.visibility !== "hidden" &&
+      Number(style.opacity || "1") > 0.05;
+  };
+  const dialog = Array.from(document.querySelectorAll(".yqq-dialog-wrap,[role='dialog'],.yqq-dialog,.mod_popup"))
+    .find((element) => {
+      const text = textOf(element);
+      return visible(element) &&
+        text.includes("QQ音乐提醒您") &&
+        !text.includes("下载客户端体验更多内容");
+    });
+  if (!dialog) return { handled: false };
+
+  const cancel = Array.from(dialog.querySelectorAll("button,a,[role='button'],input[type='button'],input[type='submit']"))
+    .find((element) => visible(element) && textOf(element) === "取消");
+  if (!cancel) return { handled: false };
+  cancel.click();
+  return { handled: true, cancelled: true };
 })()`;
 
 const qqAudioStateExpression = `(() => {
@@ -2478,6 +2516,11 @@ async function runSafePromptFeatures(targets) {
   const target = providerTargets.find(Boolean);
   if (!target) return;
   if (providerId === "qq_music") {
+    const reminderPrompt = await evaluate(target.webSocketDebuggerUrl, qqReminderCancelExpression).catch(() => null);
+    if (reminderPrompt?.handled) {
+      console.log("[tikpal-web-mode-guard] dismissed QQ reminder cancel");
+      return;
+    }
     const clientPrompt = await evaluate(target.webSocketDebuggerUrl, qqClientPromptExpression).catch(() => null);
     if (clientPrompt?.handled) {
       console.log(`[tikpal-web-mode-guard] closed QQ client prompt retry=${clientPrompt.retried ? "1" : "0"}`);
@@ -2652,6 +2695,7 @@ if (process.argv.includes("--check")) {
   console.log(`[tikpal-web-mode-guard] dismiss labels: ${dismissLabels.join(",")}`);
   console.log("[tikpal-web-mode-guard] duplicate player pruning: 1");
   console.log("[tikpal-web-mode-guard] single pane navigation: 1");
+  console.log("[tikpal-web-mode-guard] qq reminder cancel: 1");
   console.log("[tikpal-web-mode-guard] qq client prompt close/retry: 1");
   console.log("[tikpal-web-mode-guard] qq login prompt preserve: 1");
   process.exit(0);

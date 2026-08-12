@@ -87,7 +87,7 @@ export interface WebModeProviderSummary {
   experimental: boolean;
 }
 
-export type WebModeResidentProviderStatus = "opening" | "prewarming" | "ready" | "active" | "check_setup" | "check_proxy";
+export type WebModeResidentProviderStatus = "opening" | "prewarming" | "ready" | "active" | "check_setup" | "check_proxy" | "region_unavailable";
 
 export interface WebModeResidentProviderState {
   status: WebModeResidentProviderStatus;
@@ -475,6 +475,7 @@ export interface BackgroundVideoSummary {
   filename: string;
   label: string;
   src: string;
+  thumbnailSrc?: string;
   order?: number;
   default?: boolean;
   source?: "legacy" | "scene";

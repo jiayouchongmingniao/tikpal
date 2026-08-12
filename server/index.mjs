@@ -1,7 +1,7 @@
 import http from "node:http";
 import { execFile, spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { chmod, copyFile, mkdir, open, readFile, readdir, stat, statfs, unlink, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, open, readFile, readdir, rename, stat, statfs, unlink, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { basename, dirname, extname, posix, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
@@ -394,6 +394,7 @@ const PUBLIC_ASSETS_ROOT = resolve(process.env.TIKPAL_PUBLIC_ASSETS_ROOT ?? reso
 const PUBLIC_SCENES_ROOT = resolve(PUBLIC_ASSETS_ROOT, "scenes");
 const SCENE_VIDEO_MANIFEST_PATH = resolve(PUBLIC_SCENES_ROOT, "_metadata", "scene_videos.json");
 const AMBIENT_BACKGROUND_VIDEO_EXTENSIONS = new Set([".mp4"]);
+const SCENE_THUMBNAIL_EXTENSIONS = new Set([".avif", ".jpg", ".jpeg", ".png", ".webp"]);
 const SCENE_AUDIO_GAIN_MIN_DB = -24;
 const SCENE_AUDIO_GAIN_MAX_DB = 12;
 const PREFERRED_AMBIENT_BACKGROUND_VIDEOS = [];
@@ -5210,7 +5211,7 @@ function normalizeWebModeRuntimeState(raw = {}) {
   const rawResidentProviders = raw.residentProviders && typeof raw.residentProviders === "object"
     ? raw.residentProviders
     : {};
-  const allowedProviderStatuses = new Set(["opening", "prewarming", "ready", "active", "check_setup", "check_proxy", "closed"]);
+  const allowedProviderStatuses = new Set(["opening", "prewarming", "ready", "active", "check_setup", "check_proxy", "region_unavailable", "closed"]);
   for (const provider of WEB_MODE_PROVIDERS) {
     const value = rawResidentProviders[provider.id];
     if (!value || typeof value !== "object") continue;
@@ -5291,7 +5292,9 @@ async function writeWebModeRuntimeState(patch) {
     updatedAt: new Date().toISOString()
   });
   await mkdir(dirname(WEB_MODE_STATE_PATH), { recursive: true });
-  await writeFile(WEB_MODE_STATE_PATH, `${JSON.stringify(next, null, 2)}\n`);
+  const temporaryPath = `${WEB_MODE_STATE_PATH}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
+  await writeFile(temporaryPath, `${JSON.stringify(next, null, 2)}\n`);
+  await rename(temporaryPath, WEB_MODE_STATE_PATH);
   return next;
 }
 
@@ -5963,6 +5966,21 @@ function normalizeSceneAudioGainDb(value) {
   return Number(clamped.toFixed(1));
 }
 
+async function resolveSceneThumbnailSrc(value) {
+  const thumbnailPath = normalizeSafeRelativePath(value);
+  if (!thumbnailPath || !SCENE_THUMBNAIL_EXTENSIONS.has(extname(thumbnailPath).toLowerCase())) return null;
+
+  const absolutePath = resolve(PUBLIC_SCENES_ROOT, ...thumbnailPath.split("/"));
+  if (absolutePath !== PUBLIC_SCENES_ROOT && !absolutePath.startsWith(`${PUBLIC_SCENES_ROOT}${sep}`)) return null;
+
+  try {
+    const info = await stat(absolutePath);
+    return info.isFile() ? `/assets/scenes/${encodeAssetRelativePath(thumbnailPath)}` : null;
+  } catch {
+    return null;
+  }
+}
+
 async function readSceneBackgroundVideos() {
   let manifest;
   try {
@@ -5991,6 +6009,7 @@ async function readSceneBackgroundVideos() {
     const id = String(video.id ?? "").trim() || basename(filename, extname(filename));
     const roomModes = normalizeSceneVideoRoomModes(video.roomModes);
     const audioGainDb = normalizeSceneAudioGainDb(video.audioGainDb);
+    const thumbnailSrc = await resolveSceneThumbnailSrc(video.thumbnailSrc);
     videos.push({
       id,
       filename,
@@ -6000,6 +6019,7 @@ async function readSceneBackgroundVideos() {
       ...(video.default === true ? { default: true } : {}),
       ...(roomModes.length > 0 ? { roomModes } : {}),
       ...(audioGainDb !== null ? { audioGainDb } : {}),
+      ...(thumbnailSrc ? { thumbnailSrc } : {}),
       source: "scene"
     });
   }
@@ -6033,7 +6053,7 @@ async function getAmbientBackgroundVideosPayload() {
   const sceneVideos = await readSceneBackgroundVideos();
   const videos = [...legacyVideos, ...sceneVideos].sort(sortAmbientBackgroundVideos);
   const catalogVersion = createHash("sha1")
-    .update(videos.map((video) => `${video.id}:${video.src}:${video.label}:${video.order ?? ""}:${video.default ? "1" : "0"}:${(video.roomModes ?? []).join(",")}:${video.audioGainDb ?? ""}`).join("|"))
+    .update(videos.map((video) => `${video.id}:${video.src}:${video.thumbnailSrc ?? ""}:${video.label}:${video.order ?? ""}:${video.default ? "1" : "0"}:${(video.roomModes ?? []).join(",")}:${video.audioGainDb ?? ""}`).join("|"))
     .digest("hex")
     .slice(0, 12);
 

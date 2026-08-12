@@ -5,6 +5,7 @@
       "id": "aurora-snowfield",
       "filename": "Aurora-Snowfield.mp4",
       "label": "Aurora Snowfield",
+      "thumbnailSrc": "thumbnails/aurora-snowfield.webp",
       "order": 100,
       "roomModes": [
         "sleep"
@@ -16,6 +17,7 @@
       "id": "cloud-sunrise",
       "filename": "Cloud-Sunrise.mp4",
       "label": "Cloud Sunrise",
+      "thumbnailSrc": "thumbnails/cloud-sunrise.webp",
       "order": 110,
       "roomModes": [
         "focus"
@@ -27,6 +29,7 @@
       "id": "deep-blue-ocean",
       "filename": "Deep-Blue-Ocean.mp4",
       "label": "Deep Blue Ocean",
+      "thumbnailSrc": "thumbnails/deep-blue-ocean.webp",
       "order": 120,
       "roomModes": [
         "sleep"
@@ -38,6 +41,7 @@
       "id": "midnight-library",
       "filename": "Midnight-Library.mp4",
       "label": "Midnight Library",
+      "thumbnailSrc": "thumbnails/midnight-library.webp",
       "order": 130,
       "roomModes": [
         "focus"
@@ -49,6 +53,7 @@
       "id": "rainy-window",
       "filename": "Rainy-Window.mp4",
       "label": "Rainy Window",
+      "thumbnailSrc": "thumbnails/rainy-window.webp",
       "order": 140,
       "roomModes": [
         "calm"
@@ -68,6 +73,7 @@
       "id": "warm-fireplace",
       "filename": "Warm-Fireplace.mp4",
       "label": "Warm Fireplace",
+      "thumbnailSrc": "thumbnails/warm-fireplace.webp",
       "order": 160,
       "roomModes": [
         "calm"
@@ -79,6 +85,7 @@
       "id": "zen-courtyard",
       "filename": "Zen-Courtyard.mp4",
       "label": "Zen Courtyard",
+      "thumbnailSrc": "thumbnails/zen-courtyard.webp",
       "order": 170,
       "roomModes": [
         "calm"

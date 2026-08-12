@@ -943,6 +943,7 @@ try {
     source: `
       (() => {
         window.localStorage.setItem('tikpal.lyricsVisible.v3', 'false');
+        window.localStorage.setItem('tikpal.onboardingDismissed.v1', 'true');
         const nativeFetch = window.fetch.bind(window);
         const realBluetoothCover = "data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22120%22%20height%3D%22120%22%3E%3Crect%20width%3D%22120%22%20height%3D%22120%22%20fill%3D%22%2318405a%22%2F%3E%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2232%22%20fill%3D%22%23f2d36b%22%2F%3E%3C%2Fsvg%3E";
         const realRadioCover = "data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22120%22%20height%3D%22120%22%3E%3Crect%20width%3D%22120%22%20height%3D%22120%22%20fill%3D%22%231f2937%22%2F%3E%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2238%22%20fill%3D%22%23d6b761%22%2F%3E%3Ctext%20x%3D%2260%22%20y%3D%2268%22%20font-family%3D%22Arial%22%20font-size%3D%2228%22%20font-weight%3D%22700%22%20text-anchor%3D%22middle%22%20fill%3D%22%231f2937%22%3ER%3C%2Ftext%3E%3C%2Fsvg%3E";
@@ -1475,7 +1476,7 @@ try {
 
   await navigate(client, APP_URL);
   await expect(client, "document.querySelector('.ambient-screen') !== null", "ambient root renders");
-  await expect(
+  await expectEventually(
     client,
     "window.localStorage.getItem('tikpal.lyricsVisible.v3') === 'true' && window.localStorage.getItem('tikpal.lyricsVisible.autoRestored.v1') === 'true'",
     "stale hidden lyrics visibility auto-restores once"
@@ -1542,7 +1543,7 @@ try {
     "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => state.system.volume.percent >= 78)",
     "ambient right-edge touch swipe updates the global volume"
   );
-  await expect(
+  await expectEventually(
     client,
     "document.querySelector('.ambient-adjust-indicator')?.textContent.includes('Volume') && !document.querySelector('.ambient-adjust-indicator')?.textContent.includes('moOde live level')",
     "ambient right-edge touch swipe shows the volume overlay without the moOde helper copy"
@@ -1634,7 +1635,7 @@ try {
         const activeLine = document.querySelector('[data-hifi-lyrics-line][data-hifi-lyrics-active]');
         const ticker = document.querySelector('.ambient-lyrics-ticker');
         const controls = document.querySelector('[data-hifi-lyrics-controls]');
-        const play = controls?.querySelector('button[aria-label="Pause"], button[aria-label="Play"]');
+        const fakeControls = controls?.querySelector('[data-hifi-lyrics-fake-controls]');
         const controlsStyle = controls ? getComputedStyle(controls) : null;
         const activeText = activeLine?.textContent?.trim() ?? "";
         return panel !== null
@@ -1647,7 +1648,7 @@ try {
           && document.querySelector('[data-ambient-lyrics]')?.getAttribute('aria-hidden') === 'true'
           && ticker === null
           && controls !== null
-          && play !== null
+          && fakeControls !== null
           && controlsStyle?.pointerEvents === 'none'
           && Number.parseFloat(controlsStyle?.opacity ?? '1') <= 0.05;
       })()
@@ -1675,13 +1676,13 @@ try {
         const activeLine = document.querySelector('[data-hifi-lyrics-line][data-hifi-lyrics-active]');
         const controls = document.querySelector('[data-hifi-lyrics-controls]');
         const controlsStyle = controls ? getComputedStyle(controls) : null;
-        const footerPlay = controls?.querySelector('button[aria-label="Pause"], button[aria-label="Play"]');
+        const fakeControls = controls?.querySelector('[data-hifi-lyrics-fake-controls]');
         return document.querySelector('.ambient-screen.is-hud-hidden') !== null
           && document.querySelector('[data-hifi-lyrics-panel]') !== null
           && document.querySelector('.ambient-lyrics-ticker') === null
           && document.querySelector('.ambient-transport') !== null
           && getComputedStyle(document.querySelector('.ambient-transport')).pointerEvents === 'none'
-          && footerPlay !== null
+          && fakeControls !== null
           && controlsStyle?.pointerEvents !== 'none'
           && Number.parseFloat(controlsStyle?.opacity ?? '0') >= 0.95
           && (activeLine?.textContent?.trim().length ?? 0) > 0;
@@ -1790,9 +1791,11 @@ try {
         const controls = document.querySelector('[data-hifi-lyrics-controls]');
         const progressGroup = document.querySelector('[data-hifi-lyrics-progress-eq]');
         const progressRow = document.querySelector('.hifi-lyrics-progress-row');
-        const prompt = controls?.querySelector('[data-hifi-lyrics-control-prompt]');
-        const falsePlaybackButtons = controls?.querySelector('button[aria-label="Pause"], button[aria-label="Play"], button[aria-label="Previous"], button[aria-label="Next"]');
-        if (!panel || !activeLine || !cover || !footer || !miniEq || !firstBar || !time || !controls || !progressGroup || !progressRow || !prompt || falsePlaybackButtons) return false;
+        const fakeControls = controls?.querySelector('[data-hifi-lyrics-fake-controls]');
+        const fakeButtons = [...(controls?.querySelectorAll('[data-hifi-lyrics-fake-control]') ?? [])];
+        const fakeButtonKinds = fakeButtons.map((button) => button.getAttribute('data-hifi-lyrics-fake-control')).join('|');
+        const realPlaybackLabels = fakeButtons.some((button) => /^(Previous|Play|Pause|Next)$/.test(button.getAttribute('aria-label') ?? ''));
+        if (!panel || !activeLine || !cover || !footer || !miniEq || !firstBar || !time || !controls || !progressGroup || !progressRow || !fakeControls || fakeButtons.length !== 3 || realPlaybackLabels) return false;
         const bars = Array.from(document.querySelectorAll('[data-hifi-mini-eq-bar]'));
         const barStyle = getComputedStyle(firstBar);
         const barDurations = new Set(bars.map((bar) => getComputedStyle(bar).animationDuration));
@@ -1817,7 +1820,8 @@ try {
           && barPeaks.size >= 5
           && activeText.includes('Bluetooth chorus line')
           && document.querySelector('.ambient-lyrics-ticker') === null
-          && prompt.textContent?.includes('Tap for music controls')
+          && fakeButtonKinds === 'previous|play-pause|next'
+          && fakeControls.classList.contains('is-hidden')
           && footerRect.left >= 250
           && footerRect.left <= 330
           && footerRect.bottom < window.innerHeight - 56
@@ -1833,13 +1837,13 @@ try {
           && time.textContent?.trim() === '0:42/3:08';
       })()
     `,
-    "Bluetooth ready lyrics use the shared Hi-Fi lyrics wall with a music controls prompt"
+    "Bluetooth ready lyrics use the shared Hi-Fi lyrics wall with temporary fake playback controls"
   );
-  await evaluate(client, "document.querySelector('[data-hifi-lyrics-control-prompt]')?.click(); true");
+  await evaluate(client, "document.querySelector('[data-hifi-lyrics-fake-control=\"play-pause\"]')?.click(); true");
   await expectEventually(
     client,
     "document.querySelector('.ambient-screen.is-hud-visible') !== null && document.querySelectorAll('[data-ambient-source-picker] [data-ambient-source-option]').length === 7",
-    "Hi-Fi lyrics prompt opens the real HUD and source picker without playback action"
+    "Hi-Fi fake playback control opens the real HUD and source picker without playback action"
   );
   const radioReadyLyricsPatchVersion = await setStatePatchMode(client, "radioReadyLyrics");
   await waitForStatePatchRefresh(client, radioReadyLyricsPatchVersion, "Radio ready lyrics fixture refreshes");
@@ -2425,6 +2429,7 @@ try {
     "Hi-Fi ambient transport omits playlist editing entry"
   );
   await expect(client, "document.querySelector('[data-hifi-player-entry]') !== null", "Hi-Fi ambient transport exposes Player entry");
+  await expect(client, "document.querySelector('[data-ambient-scene-gallery-toggle]') === null && document.querySelector('[data-ambient-scene-gallery]') === null", "Hi-Fi omits the Ambient scene gallery");
   await evaluate(client, "document.querySelector('[data-hifi-player-entry]')?.click();");
   await expectEventually(client, "document.querySelector('.player-overlay.is-active') !== null", "Hi-Fi Player entry opens Player");
   await navigate(client, APP_URL);
@@ -2554,8 +2559,7 @@ try {
         const labels = [...document.querySelectorAll('.ambient-transport button')].map((button) => button.getAttribute('aria-label'));
         return Boolean(transport)
           && document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') !== 'hifi'
-          && labels.includes('Previous scene')
-          && labels.includes('Next scene')
+          && labels.includes('Open scene gallery')
           && labels.includes('Choose audio source')
           && (labels.includes('Unmute scene sound') || labels.includes('Mute scene sound'))
           && !labels.includes('Previous track')
@@ -2567,7 +2571,7 @@ try {
           && !transport.querySelector('.ambient-play-mode');
       })()
     `,
-    "ambient non-Hi-Fi transport keeps scene controls plus source selection"
+    "ambient non-Hi-Fi transport keeps scene gallery plus source selection"
   );
   await evaluate(
     client,
@@ -2635,8 +2639,84 @@ try {
       })()
     `
 	  );
-	  await expectEventually(client, "!document.querySelector('.ambient-transport-scene-next')?.disabled", "ambient scene catalog refresh enables OTA scene navigation");
-	  const singleLoopPatchVersion = await setStatePatchMode(client, "singleLoopScene");
+  await expectEventually(client, "document.querySelector('[data-ambient-scene-gallery-toggle]') !== null", "ambient scene catalog refresh keeps the scene gallery entry available");
+  await evaluate(client, "document.querySelector('[data-ambient-scene-gallery-toggle]')?.click(); true");
+  await expectEventually(
+    client,
+    `
+      (() => {
+        const gallery = document.querySelector('[data-ambient-scene-gallery]');
+        const cards = [...document.querySelectorAll('[data-ambient-scene-card]')];
+        const modes = cards.map((card) => card.getAttribute('data-scene-mode')).join('|');
+        const fallback = cards.find((card) => card.getAttribute('data-ambient-scene-card') === 'focus-smoke-scene');
+        return gallery !== null
+          && cards.length === 4
+          && modes === 'focus|calm|calm|sleep'
+          && document.querySelector('[data-ambient-scene-card="focus-smoke-scene"] img') === null
+          && fallback?.classList.contains('is-thumbnail-fallback');
+      })()
+    `,
+    "scene gallery flattens Focus, Calm, and Sleep cards and degrades an OTA card without a thumbnail"
+  );
+  await evaluate(client, "window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })); true");
+  await expectEventually(client, "document.querySelector('[data-ambient-scene-gallery]') === null", "scene gallery closes with Escape");
+  await evaluate(client, "document.querySelector('[data-ambient-scene-gallery-toggle]')?.click(); true");
+  await expectEventually(client, "document.querySelector('[data-ambient-scene-gallery]') !== null", "scene gallery reopens from the Ambient scene control");
+  await evaluate(client, "document.querySelector('[data-ambient-scene-gallery-backdrop]')?.click(); true");
+  await expectEventually(client, "document.querySelector('[data-ambient-scene-gallery]') === null", "scene gallery closes from its backdrop");
+  await evaluate(client, "document.querySelector('[data-ambient-scene-gallery-toggle]')?.click(); true");
+  await expectEventually(client, "document.querySelector('[data-ambient-scene-card=\"focus-smoke-scene\"]') !== null", "scene gallery exposes the Focus OTA card");
+  await evaluate(client, "document.querySelector('[data-ambient-scene-card=\"focus-smoke-scene\"]')?.click(); true");
+  await expectEventually(
+    client,
+    `
+      document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') === 'focus'
+      && document.querySelector('[data-ambient-scene-gallery]') === null
+      && fetch('/api/v1/experience/state').then((response) => response.json()).then((experience) => experience.mode === 'focus' && experience.sceneVideoId === 'focus-smoke-scene')
+    `,
+    "scene gallery applies a cross-mode scene and synchronizes the Room Mode"
+  );
+  await evaluate(client, "document.querySelector('[data-ambient-scene-gallery-toggle]')?.click(); true");
+  await expectEventually(
+    client,
+    "document.querySelector('[data-ambient-scene-gallery]') !== null && document.querySelector('[data-ambient-scene-card=\"focus-smoke-scene\"]')?.disabled === false",
+    "scene gallery reopens after the selected Focus scene synchronizes"
+  );
+  await evaluate(client, "document.querySelector('[data-ambient-scene-gallery-backdrop]')?.click(); true");
+  await expectEventually(
+    client,
+    "document.querySelector('[data-ambient-scene-gallery]') === null",
+    "scene gallery closes after confirming the selected Focus scene"
+  );
+  await evaluate(client, "document.querySelector('[data-ambient-scene-gallery-toggle]')?.click(); true");
+  await expectEventually(client, "document.querySelector('[data-ambient-scene-card=\"rainy-window\"]') !== null", "scene gallery exposes the Calm scene");
+  await evaluate(client, "document.querySelector('[data-ambient-scene-card=\"rainy-window\"]')?.click(); true");
+  await expectEventually(
+    client,
+    `
+      document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') === 'calm'
+      && document.querySelector('[data-ambient-scene-gallery]') === null
+      && fetch('/api/v1/experience/state').then((response) => response.json()).then((experience) => experience.mode === 'calm' && experience.sceneVideoId === 'rainy-window')
+    `,
+    "scene gallery applies a second cross-mode scene and synchronizes Calm"
+  );
+  await evaluate(client, "document.querySelector('[data-ambient-scene-gallery-toggle]')?.click(); true");
+  await expectEventually(
+    client,
+    "document.querySelector('[data-ambient-scene-card=\"interaction-scene\"]')?.disabled === false",
+    "scene gallery exposes another Calm scene"
+  );
+  await evaluate(client, "document.querySelector('[data-ambient-scene-card=\"interaction-scene\"]')?.click(); true");
+  await expectEventually(
+    client,
+    `
+      document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') === 'calm'
+      && document.querySelector('[data-ambient-scene-gallery]') === null
+      && fetch('/api/v1/experience/state').then((response) => response.json()).then((experience) => experience.mode === 'calm' && experience.sceneVideoId === 'interaction-scene')
+    `,
+    "scene gallery applies a same-mode scene without changing the selected Room Mode"
+  );
+  const singleLoopPatchVersion = await setStatePatchMode(client, "singleLoopScene");
 	  await waitForStatePatchRefresh(client, singleLoopPatchVersion, "single-loop scene fixture refreshes");
 	  await expectEventually(client, "document.querySelector('.flame-scene')?.getAttribute('data-flame-loop-mode') === 'single'", "ambient scene test runs through single-loop mode");
 	  await expect(
@@ -2674,12 +2754,11 @@ try {
   await evaluate(
     client,
     `
-      (() => {
-        document.querySelector('.ambient-transport-scene-next')?.click();
-        return true;
-      })()
+      document.querySelector('[data-ambient-scene-gallery-toggle]')?.click(); true
     `
   );
+  await expectEventually(client, "document.querySelector('[data-ambient-scene-card=\"rainy-window\"]') !== null", "scene gallery exposes the incoming Calm card for transition proof");
+  await evaluate(client, "document.querySelector('[data-ambient-scene-card=\"rainy-window\"]')?.click(); true");
   await expectEventually(client, "[...document.querySelectorAll('.flame-video')].some((video) => video.getAttribute('src')?.includes('ota=rainy'))", "ambient can mount OTA scene video after catalog refresh");
   try {
     await expectEventually(
@@ -2919,6 +2998,7 @@ try {
           && backdropStyle
           && backdropFilter
           && backdropFilter !== 'none'
+          && backdropFilter.includes('brightness')
           && text.includes('Screen')
           && !text.includes('Room Mode')
           && text.includes('Volume')

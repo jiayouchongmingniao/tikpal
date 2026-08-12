@@ -135,6 +135,9 @@
             provider: "This music service",
             tail: "did not respond",
             body: "The official web player could not be reached from this device. Change Proxy in Settings, choose another provider, or try again later.",
+            regionTail: "is unavailable in this region",
+            regionBody: "The current Proxy exit is in a region where the official web player is unavailable. In Settings, choose a Proxy exit that supports this service, then try again.",
+            regionReason: "Unavailable in this region",
             proxyOn: "Proxy On",
             direct: "Direct",
             needsProxy: "Turn Proxy On in Settings",
@@ -147,6 +150,9 @@
             provider: "这个音乐服务",
             tail: "暂时没有响应",
             body: "此设备暂时无法打开官方网页播放器。请到 Settings 修改 Proxy、选择其他服务，或稍后重试。",
+            regionTail: "在当前地区不可用",
+            regionBody: "当前 Proxy 出口所在地区无法使用官方网页播放器。请在 Settings 更换支持此服务的 Proxy 出口后重试，或选择其他服务。",
+            regionReason: "当前地区不可用",
             proxyOn: "代理已开",
             direct: "直连",
             needsProxy: "请在 Settings 打开 Proxy",
@@ -159,6 +165,9 @@
             provider: "Dieser Musikdienst",
             tail: "antwortet nicht",
             body: "Der offizielle Webplayer ist auf diesem Gerät nicht erreichbar. Ändere Proxy in Settings, wähle einen anderen Dienst oder versuche es später erneut.",
+            regionTail: "ist in dieser Region nicht verfügbar",
+            regionBody: "Der aktuelle Proxy-Ausgang befindet sich in einer Region, in der der offizielle Webplayer nicht verfügbar ist. Wähle in Settings einen unterstützten Proxy-Ausgang und versuche es erneut.",
+            regionReason: "In dieser Region nicht verfügbar",
             proxyOn: "Proxy Ein",
             direct: "Direkt",
             needsProxy: "Proxy in Settings einschalten",
@@ -171,6 +180,9 @@
             provider: "Questo servizio musicale",
             tail: "non risponde",
             body: "Il player web ufficiale non è raggiungibile da questo dispositivo. Cambia Proxy in Settings, scegli un altro servizio o riprova più tardi.",
+            regionTail: "non è disponibile in questa regione",
+            regionBody: "L'uscita Proxy corrente si trova in una regione in cui il player web ufficiale non è disponibile. In Settings, scegli un'uscita Proxy supportata e riprova.",
+            regionReason: "Non disponibile in questa regione",
             proxyOn: "Proxy On",
             direct: "Diretto",
             needsProxy: "Attiva Proxy in Settings",
@@ -183,6 +195,9 @@
             provider: "이 음악 서비스",
             tail: "응답하지 않음",
             body: "이 기기에서 공식 웹 플레이어에 연결할 수 없습니다. Settings에서 Proxy를 바꾸거나 다른 서비스를 선택한 뒤 다시 시도하세요.",
+            regionTail: "은 현재 지역에서 사용할 수 없음",
+            regionBody: "현재 Proxy 출구 지역에서는 공식 웹 플레이어를 사용할 수 없습니다. Settings에서 이 서비스를 지원하는 Proxy 출구로 바꾼 뒤 다시 시도하세요.",
+            regionReason: "현재 지역에서 사용할 수 없음",
             proxyOn: "프록시 켜짐",
             direct: "직접",
             needsProxy: "Settings에서 Proxy 켜기",
@@ -195,6 +210,9 @@
             provider: "この音楽サービス",
             tail: "が応答しません",
             body: "このデバイスから公式 Web プレイヤーに接続できません。Settings で Proxy を変更するか、別のサービスを選んでください。",
+            regionTail: "はこの地域では利用できません",
+            regionBody: "現在の Proxy 出口の地域では公式 Web プレイヤーを利用できません。Settings でこのサービスに対応した Proxy 出口に変更してから、もう一度お試しください。",
+            regionReason: "この地域では利用できません",
             proxyOn: "プロキシ オン",
             direct: "直接",
             needsProxy: "Settings で Proxy をオン",
@@ -207,6 +225,9 @@
             provider: "Este servicio de música",
             tail: "no responde",
             body: "No se pudo abrir el reproductor web oficial desde este dispositivo. Cambia Proxy en Settings, elige otro servicio o inténtalo más tarde.",
+            regionTail: "no está disponible en esta región",
+            regionBody: "La salida Proxy actual está en una región donde el reproductor web oficial no está disponible. En Settings, elige una salida Proxy compatible con este servicio y vuelve a intentarlo.",
+            regionReason: "No disponible en esta región",
             proxyOn: "Proxy On",
             direct: "Directo",
             needsProxy: "Activa Proxy en Settings",
@@ -222,6 +243,7 @@
           const normalized = value.toLowerCase();
           if (/\bneeds proxy(?: on)?\b/.test(normalized)) return dict.needsProxy;
           if (normalized.includes("proxy did not connect")) return dict.proxyFailed;
+          if (normalized === "region_unavailable") return dict.regionReason;
           if (normalized === "load_failed" || normalized.includes("did not respond") || normalized.includes("did not open")) return dict.tryAgain;
           return value;
         };
@@ -230,11 +252,12 @@
           const dict = copy[locale] || copy.en;
           const providerLabel = params.get("label") || params.get("provider") || dict.provider;
           const proxy = params.get("proxy") === "proxy" ? dict.proxyOn : dict.direct;
+          const regionUnavailable = String(params.get("reason") || "").trim().toLowerCase() === "region_unavailable";
           document.documentElement.lang = locale;
           document.title = dict.title;
           document.getElementById("provider-label").textContent = providerLabel;
-          document.getElementById("headline-tail").textContent = dict.tail;
-          document.getElementById("body-copy").textContent = dict.body;
+          document.getElementById("headline-tail").textContent = regionUnavailable ? dict.regionTail : dict.tail;
+          document.getElementById("body-copy").textContent = regionUnavailable ? dict.regionBody : dict.body;
           document.getElementById("proxy-chip").textContent = proxy;
           document.getElementById("reason-chip").textContent = friendlyReason(dict);
           document.getElementById("connection-details").setAttribute("aria-label", dict.details);

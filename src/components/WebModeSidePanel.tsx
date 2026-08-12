@@ -140,6 +140,7 @@ export function WebModeSidePanel() {
     if (residentStatus === "prewarming") return t("common.prewarming");
     if (residentStatus === "check_setup") return t("common.checkSetup");
     if (residentStatus === "check_proxy") return t("common.needProxyOn");
+    if (residentStatus === "region_unavailable") return t("common.regionUnavailable");
     if (residentStatus === "ready") return t("common.ready");
     if (flags.experimental) return t("common.experimental");
     return t("common.waiting");

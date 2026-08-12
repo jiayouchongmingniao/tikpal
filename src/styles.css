@@ -498,7 +498,265 @@ select {
   --room-accent-strong: var(--theme-info-strong);
   --room-accent-muted: var(--theme-info-muted);
   --ambient-control-anchor-x: calc(50% + clamp(80px, 4vw, 110px));
+  isolation: isolate;
   overflow: hidden;
+}
+
+.ambient-screen::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  background:
+    radial-gradient(circle at var(--ambient-control-anchor-x) 52%, color-mix(in srgb, var(--room-accent) 14%, transparent), transparent 31%),
+    linear-gradient(90deg, rgba(2, 3, 5, 0.5), rgba(2, 3, 5, 0.28) 36%, rgba(2, 3, 5, 0.3) 64%, rgba(2, 3, 5, 0.56)),
+    rgba(0, 0, 0, 0.34);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 220ms ease;
+  backdrop-filter: blur(5px) saturate(0.82) brightness(0.72);
+  -webkit-backdrop-filter: blur(5px) saturate(0.82) brightness(0.72);
+}
+
+.ambient-screen.is-source-picker-open::before {
+  opacity: 1;
+}
+
+.ambient-screen.is-scene-gallery-open::before {
+  opacity: 1;
+  background:
+    radial-gradient(circle at 50% 42%, color-mix(in srgb, var(--room-accent) 12%, transparent), transparent 38%),
+    rgba(1, 2, 4, 0.76);
+  backdrop-filter: blur(18px) saturate(0.58) brightness(0.46);
+  -webkit-backdrop-filter: blur(18px) saturate(0.58) brightness(0.46);
+}
+
+.ambient-scene-gallery {
+  position: absolute;
+  z-index: 20;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: clamp(32px, 5vh, 70px) clamp(32px, 5.2vw, 132px);
+  color: var(--theme-text);
+  isolation: isolate;
+}
+
+.ambient-scene-gallery-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: rgba(1, 2, 4, 0.38);
+  cursor: default;
+}
+
+.ambient-scene-gallery-panel {
+  display: grid;
+  gap: clamp(18px, 2.4vh, 28px);
+  width: min(2380px, 100%);
+  max-height: 100%;
+  overflow: auto;
+  padding: clamp(20px, 2.5vw, 42px);
+  border: 1px solid color-mix(in srgb, var(--surface-control-border-hover) 62%, transparent);
+  border-radius: 22px;
+  background:
+    linear-gradient(155deg, rgba(25, 29, 36, 0.72), rgba(7, 9, 13, 0.84)),
+    rgba(3, 4, 7, 0.8);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    0 30px 96px rgba(0, 0, 0, 0.52);
+  backdrop-filter: blur(22px) saturate(0.74);
+  -webkit-backdrop-filter: blur(22px) saturate(0.74);
+}
+
+.ambient-scene-gallery-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.ambient-scene-gallery-header > div {
+  display: grid;
+  gap: 5px;
+}
+
+.ambient-scene-gallery-header span {
+  color: var(--room-accent);
+  font-size: 12px;
+  font-weight: 780;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.ambient-scene-gallery-header h2 {
+  margin: 0;
+  color: var(--theme-text);
+  font-size: clamp(28px, 2.1vw, 44px);
+  font-weight: 620;
+  letter-spacing: -0.035em;
+  line-height: 1;
+}
+
+.ambient-scene-gallery-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 52px;
+  height: 52px;
+  border: 1px solid var(--surface-control-border);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.055);
+  color: var(--theme-text-soft);
+  cursor: pointer;
+  transition: border-color 160ms ease, background 160ms ease, color 160ms ease, transform 160ms ease;
+}
+
+.ambient-scene-gallery-close:hover,
+.ambient-scene-gallery-close:focus-visible {
+  border-color: var(--surface-control-border-hover);
+  background: var(--surface-control-bg-hover);
+  color: var(--theme-text);
+  outline: none;
+  transform: translateY(-1px);
+}
+
+.ambient-scene-gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: clamp(10px, 0.72vw, 18px);
+}
+
+.ambient-scene-gallery-card {
+  position: relative;
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 0 0 14px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--surface-control-border) 76%, transparent);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--theme-text);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 180ms ease, background 180ms ease, box-shadow 180ms ease, transform 180ms ease;
+}
+
+.ambient-scene-gallery-cover {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 32 / 9;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--surface-control-bg) 86%, #030406);
+  color: var(--theme-text-muted);
+}
+
+.ambient-scene-gallery-cover img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 420ms ease, filter 180ms ease;
+}
+
+.ambient-scene-gallery-card.is-thumbnail-fallback .ambient-scene-gallery-cover {
+  background:
+    radial-gradient(circle at 50% 12%, color-mix(in srgb, var(--room-accent) 26%, transparent), transparent 64%),
+    color-mix(in srgb, var(--surface-control-bg) 88%, #030406);
+}
+
+.ambient-scene-gallery-card-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 0 15px;
+}
+
+.ambient-scene-gallery-card-copy strong,
+.ambient-scene-gallery-card-copy span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ambient-scene-gallery-card-copy strong {
+  color: var(--theme-text);
+  font-size: clamp(15px, 1.02vw, 20px);
+  font-weight: 720;
+  line-height: 1.1;
+}
+
+.ambient-scene-gallery-card-copy span {
+  color: var(--room-accent);
+  font-size: clamp(11px, 0.68vw, 14px);
+  font-weight: 730;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.ambient-scene-gallery-selected {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  padding: 5px 8px;
+  border: 1px solid color-mix(in srgb, var(--room-accent-strong) 52%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--room-accent-muted) 74%, rgba(1, 2, 4, 0.74));
+  color: var(--room-accent-strong);
+  font-size: 10px;
+  font-weight: 820;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.ambient-scene-gallery-card:hover,
+.ambient-scene-gallery-card:focus-visible {
+  border-color: color-mix(in srgb, var(--room-accent) 68%, var(--surface-control-border-hover));
+  background: color-mix(in srgb, var(--room-accent-muted) 34%, rgba(255, 255, 255, 0.06));
+  outline: none;
+  transform: translateY(-4px);
+}
+
+.ambient-scene-gallery-card:hover img,
+.ambient-scene-gallery-card:focus-visible img {
+  transform: scale(1.035);
+}
+
+.ambient-scene-gallery-card.is-selected {
+  border-color: var(--room-accent);
+  background:
+    linear-gradient(165deg, color-mix(in srgb, var(--room-accent-muted) 64%, transparent), rgba(255, 255, 255, 0.055)),
+    rgba(255, 255, 255, 0.06);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    0 14px 34px rgba(0, 0, 0, 0.26),
+    0 0 30px color-mix(in srgb, var(--room-accent-muted) 88%, transparent);
+}
+
+.ambient-scene-gallery-card:disabled {
+  cursor: wait;
+  opacity: 0.66;
+}
+
+.ambient-scene-gallery-empty,
+.ambient-scene-gallery-error {
+  margin: 0;
+  padding: 18px;
+  border: 1px solid var(--surface-control-border);
+  border-radius: 12px;
+  color: var(--theme-text-muted);
+  font-size: 15px;
+  line-height: 1.35;
+}
+
+.ambient-scene-gallery-error {
+  border-color: var(--warning);
+  color: var(--warning);
 }
 
 .ambient-screen[data-room-mode="focus"] {
@@ -1149,19 +1407,36 @@ select {
     transform 180ms ease;
 }
 
-.hifi-lyrics-control-prompt {
+.hifi-lyrics-fake-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0) scale(1);
+  transition:
+    opacity 240ms ease,
+    transform 240ms ease;
+}
+
+.hifi-lyrics-fake-controls.is-hidden {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(8px) scale(0.96);
+}
+
+.hifi-lyrics-fake-control {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 12px;
-  min-width: 224px;
-  min-height: 62px;
-  padding: 0 24px;
-  border: 1px solid color-mix(in srgb, var(--hifi-theme-title) 32%, transparent);
+  width: 64px;
+  height: 64px;
+  border: 1px solid color-mix(in srgb, var(--hifi-theme-title) 30%, transparent);
   border-radius: 999px;
   background:
-    radial-gradient(circle at 50% 0%, color-mix(in srgb, var(--hifi-theme-accent) 18%, transparent), transparent 64%),
-    rgba(6, 8, 12, 0.28);
+    radial-gradient(circle at 50% 0%, color-mix(in srgb, var(--hifi-theme-accent) 16%, transparent), transparent 65%),
+    rgba(7, 10, 16, 0.32);
   color: color-mix(in srgb, var(--hifi-theme-title) 88%, transparent);
   cursor: pointer;
   box-shadow:
@@ -1178,25 +1453,28 @@ select {
     transform 180ms ease;
 }
 
-.hifi-lyrics-control-prompt svg {
-  width: 26px;
-  height: 26px;
-  flex: 0 0 auto;
+.hifi-lyrics-fake-control svg {
+  width: 27px;
+  height: 27px;
   filter: drop-shadow(0 5px 14px rgba(0, 0, 0, 0.24));
 }
 
-.hifi-lyrics-control-prompt span {
-  max-width: 240px;
-  overflow: hidden;
-  font-size: clamp(16px, 1.05vw, 20px);
-  font-weight: 760;
-  line-height: 1;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.hifi-lyrics-fake-control.is-primary {
+  width: 74px;
+  height: 74px;
+  border-color: color-mix(in srgb, var(--hifi-theme-title) 46%, transparent);
+  background:
+    radial-gradient(circle at 50% 14%, color-mix(in srgb, var(--hifi-theme-accent) 28%, transparent), transparent 62%),
+    color-mix(in srgb, var(--hifi-theme-title) 15%, rgba(7, 10, 16, 0.42));
+  color: var(--hifi-theme-title);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    0 18px 42px rgba(0, 0, 0, 0.28),
+    0 0 24px color-mix(in srgb, var(--hifi-theme-accent) 18%, transparent);
 }
 
-.hifi-lyrics-control-prompt:hover,
-.hifi-lyrics-control-prompt:focus-visible {
+.hifi-lyrics-fake-control:hover,
+.hifi-lyrics-fake-control:focus-visible {
   border-color: color-mix(in srgb, var(--hifi-theme-title) 56%, transparent);
   background:
     radial-gradient(circle at 50% 0%, color-mix(in srgb, var(--hifi-theme-accent) 24%, transparent), transparent 66%),
@@ -1210,7 +1488,7 @@ select {
   transform: translateY(-1px);
 }
 
-.hifi-lyrics-control-prompt:active {
+.hifi-lyrics-fake-control:active {
   transform: translateY(1px) scale(0.98);
 }
 
@@ -3140,11 +3418,11 @@ select {
 
 .quick-menu .overlay-backdrop {
   background:
-    radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--theme-info-muted) 58%, transparent), transparent 42%),
-    linear-gradient(180deg, color-mix(in srgb, var(--surface-shell-bg) 24%, transparent), color-mix(in srgb, var(--surface-shell-bg) 38%, transparent)),
-    color-mix(in srgb, var(--surface-overlay-backdrop) 68%, rgba(0, 0, 0, 0.28));
-  backdrop-filter: blur(6px) saturate(0.78) brightness(0.82);
-  -webkit-backdrop-filter: blur(6px) saturate(0.78) brightness(0.82);
+    radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--theme-info-muted) 42%, transparent), transparent 48%),
+    linear-gradient(180deg, color-mix(in srgb, var(--surface-shell-bg) 34%, transparent), color-mix(in srgb, var(--surface-shell-bg) 58%, transparent)),
+    color-mix(in srgb, var(--surface-overlay-backdrop) 48%, rgba(0, 0, 0, 0.58));
+  backdrop-filter: blur(10px) saturate(0.66) brightness(0.68);
+  -webkit-backdrop-filter: blur(10px) saturate(0.66) brightness(0.68);
 }
 
 .player-overlay .overlay-backdrop {
@@ -8021,6 +8299,14 @@ select {
     --ambient-control-anchor-x: 50%;
   }
 
+  .ambient-scene-gallery {
+    padding: 34px 48px;
+  }
+
+  .ambient-scene-gallery-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
   .player-shell {
     inset: 18px;
     height: calc(100% - 36px);
@@ -8210,6 +8496,24 @@ select {
 }
 
 @media (max-width: 900px) {
+  .ambient-scene-gallery {
+    padding: 20px;
+  }
+
+  .ambient-scene-gallery-panel {
+    gap: 18px;
+    padding: 18px;
+    border-radius: 16px;
+  }
+
+  .ambient-scene-gallery-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .ambient-scene-gallery-header h2 {
+    font-size: 28px;
+  }
+
   .hifi-now-playing-surface {
     top: 50%;
     width: calc(100vw - 40px);
@@ -8850,6 +9154,24 @@ select {
   color: var(--theme-text);
   background: rgba(255, 255, 255, 0.06);
   font: inherit;
+}
+
+@media (max-width: 560px) {
+  .ambient-scene-gallery {
+    padding: 12px;
+  }
+
+  .ambient-scene-gallery-panel {
+    padding: 14px;
+  }
+
+  .ambient-scene-gallery-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .ambient-scene-gallery-card-copy {
+    padding: 0 12px;
+  }
 }
 
 @media (min-width: 680px) {

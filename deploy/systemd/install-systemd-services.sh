@@ -146,6 +146,8 @@ After=display_turzx.service
 [Service]
 Environment=TIKPAL_KIOSK_ENV_FILE=$APP_DIR/.env.kiosk
 ExecStartPre=+/usr/local/sbin/tikpal-physical-display-prepare wait-ready
+# This helper is a no-op by default. A device may opt in with a numeric
+# TIKPAL_PHYSICAL_DISPLAY_DELAYED_KICK_SECONDS schedule after boot testing.
 ExecStartPost=+/bin/sh -c 'systemctl stop tikpal-physical-display-kick.service >/dev/null 2>&1 || true; if command -v systemd-run >/dev/null 2>&1; then systemd-run --quiet --collect --no-block --unit=tikpal-physical-display-kick --property=Type=oneshot --setenv=TIKPAL_KIOSK_ENV_FILE="\$TIKPAL_KIOSK_ENV_FILE" --setenv=HOME=/root /usr/local/sbin/tikpal-physical-display-prepare delayed-soft-kick; else nohup env TIKPAL_KIOSK_ENV_FILE="\$TIKPAL_KIOSK_ENV_FILE" HOME=/root /usr/local/sbin/tikpal-physical-display-prepare delayed-soft-kick >/var/log/tikpal-physical-display-kick.log 2>&1 & fi'
 EOF
   chmod 0644 "$dropin_dir/physical-display.conf"
