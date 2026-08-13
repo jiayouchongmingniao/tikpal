@@ -2703,11 +2703,28 @@ if (process.argv.includes("--check")) {
   process.exit(0);
 }
 
+// If CDP is unreachable for this many consecutive ticks the Chromium
+// process has likely crashed or been killed.  Exit so reconcile can
+// start a fresh guard instead of looping against a dead process.
+let consecutiveCdpFailures = 0;
+const MAX_CDP_FAILURES = 3;
+
 while (profileProcessExists()) {
+  let cdpOk = false;
   try {
     await guardOnce();
+    cdpOk = true;
   } catch {
     // Guard failures must never break Explore playback or login.
+  }
+  if (cdpOk) {
+    consecutiveCdpFailures = 0;
+  } else {
+    consecutiveCdpFailures += 1;
+    if (consecutiveCdpFailures >= MAX_CDP_FAILURES) {
+      console.error(`[tikpal-web-mode-guard] CDP unreachable for ${MAX_CDP_FAILURES} consecutive ticks; exiting`);
+      process.exit(1);
+    }
   }
   // Only the visible provider needs sub-second input and prompt handling.
   // The other resident pages still get safety/consent checks, but must not

@@ -71,7 +71,7 @@ fi
 : "${TIKPAL_WEB_MODE_RESIDENT_SWITCH_PAINT_TIMEOUT_SECONDS:=0.6}"
 : "${TIKPAL_WEB_MODE_RESIDENT_SWITCH_PAINT_POLL_SECONDS:=0.08}"
 : "${TIKPAL_WEB_MODE_PROVIDER_SWITCH_FADE_SECONDS:=0.16}"
-: "${TIKPAL_WEB_MODE_TRANSITION_MIN_VISIBLE_SECONDS:=0.75}"
+: "${TIKPAL_WEB_MODE_TRANSITION_MIN_VISIBLE_SECONDS:=0.5}"
 : "${TIKPAL_WEB_MODE_ONBOARD_LOCK_TIMEOUT_SECONDS:=8}"
 : "${TIKPAL_WEB_MODE_DEFAULT_PROXY_URL:=http://127.0.0.1:7897}"
 : "${TIKPAL_WEB_MODE_ONBOARD:=1}"
@@ -87,8 +87,8 @@ fi
 : "${TIKPAL_WEB_MODE_PROVIDER_IDLE_POOL_ENABLED:=1}"
 : "${TIKPAL_WEB_MODE_PROVIDER_PREWARM_ENABLED:=1}"
 : "${TIKPAL_WEB_MODE_PROVIDER_PREWARM_CONTINUE_AFTER_CLOSE:=1}"
-: "${TIKPAL_WEB_MODE_PROVIDER_PREWARM_DELAY_SECONDS:=0.75}"
-: "${TIKPAL_WEB_MODE_PROVIDER_PREWARM_MAX_CONCURRENT_LAUNCHES:=2}"
+: "${TIKPAL_WEB_MODE_PROVIDER_PREWARM_DELAY_SECONDS:=0.4}"
+: "${TIKPAL_WEB_MODE_PROVIDER_PREWARM_MAX_CONCURRENT_LAUNCHES:=3}"
 : "${TIKPAL_WEB_MODE_PROVIDER_PREWARM_LOCK_TIMEOUT_SECONDS:=2}"
 : "${TIKPAL_WEB_MODE_PROVIDER_GUARD_IDLE_POLL_MS:=2000}"
 : "${TIKPAL_WEB_MODE_DIRECT_PROBE_ENABLED:=1}"
@@ -337,6 +337,23 @@ provider_ids() {
     netease_music
 }
 
+# Prewarm order: slow providers first so they get the earliest concurrent
+# slots while fast direct-bootstrap providers fill in later.
+provider_prewarm_order() {
+  printf '%s\n' \
+    youtube_music \
+    apple_music \
+    tidal \
+    deezer \
+    spotify \
+    suno \
+    qobuz \
+    amazon_music \
+    qq_music \
+    netease_music
+}
+
+
 provider_uses_direct_bootstrap() {
   case "$1" in
     deezer|qq_music|netease_music) return 0 ;;
@@ -551,6 +568,33 @@ wait_for_provider_window_nonblank_x11_frame() {
     sleep "$poll_seconds"
   done
   provider_window_has_nonblank_x11_frame "$target_window"
+}
+
+# Background probe: check for a non-blank X11 frame while the transition
+# veil is still visible.  Writes "1" to a temp file on success so
+# reveal_resident_provider_window can skip its synchronous wait.
+probe_target_window_background() {
+  local target_window="$1"
+  local probe_file="$TIKPAL_WEB_MODE_PROFILE_ROOT/.paint-probe-$target_window"
+  rm -f "$probe_file"
+  (
+    if wait_for_provider_window_nonblank_x11_frame "$target_window"; then
+      printf '1' > "$probe_file"
+    fi
+  ) >/dev/null 2>&1 &
+}
+
+# Check whether a background paint probe already passed.
+check_target_window_probe() {
+  local target_window="$1"
+  local probe_file="$TIKPAL_WEB_MODE_PROFILE_ROOT/.paint-probe-$target_window"
+  [[ -r "$probe_file" ]] && [[ "$(cat "$probe_file" 2>/dev/null)" == "1" ]]
+}
+
+# Clean up background probe temp files.
+cleanup_target_window_probe() {
+  local target_window="$1"
+  rm -f "$TIKPAL_WEB_MODE_PROFILE_ROOT/.paint-probe-$target_window"
 }
 
 provider_has_real_provider_page() {
@@ -1768,6 +1812,9 @@ sync_runtime_provider_pool_process_statuses() {
         fi
       elif [[ "$status" == "ready" || "$status" == "active" ]]; then
         write_runtime_provider_status "$provider" "check_setup" "$(provider_label "$provider") did not enter the provider page"
+      elif [[ "$status" == "prewarming" ]]; then
+        # Process exists but page never materialised; the prewarm is stuck.
+        write_runtime_provider_status "$provider" "check_setup" "$(provider_label "$provider") did not enter the provider page"
       elif [[ -z "$status" ]]; then
         write_runtime_provider_status "$provider" "prewarming"
       fi
@@ -2746,7 +2793,18 @@ refresh_provider_pool_guards() {
 }
 
 close_transition_veil() {
-  pkill -f -- "--user-data-dir=$TIKPAL_WEB_MODE_PROFILE_ROOT/transition" >/dev/null 2>&1 || true
+  local transition_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/transition"
+  local window duration step opacity
+  window="$(first_window_for_profile "$transition_profile" 2>/dev/null || true)"
+  if [[ -n "$window" ]] && command -v xprop >/dev/null 2>&1; then
+    duration=0.12
+    step="$(awk -v duration="$duration" 'BEGIN { printf "%.3f", duration / 3 }')"
+    for opacity in 0.60 0.28 0.06; do
+      set_window_opacity "$window" "$opacity" >/dev/null 2>&1 || break
+      sleep "$step"
+    done
+  fi
+  pkill -f -- "--user-data-dir=$transition_profile" >/dev/null 2>&1 || true
 }
 
 close_error_veil() {
@@ -2959,11 +3017,11 @@ fade_profile_window_for_provider_switch() {
   duration="$TIKPAL_WEB_MODE_PROVIDER_SWITCH_FADE_SECONDS"
   [[ "$duration" =~ ^[0-9]+([.][0-9]+)?$ ]] || duration=0.16
   [[ "$duration" != "0" ]] || return 0
-  step="$(awk -v duration="$duration" 'BEGIN { printf "%.3f", duration / 4 }')"
+  step="$(awk -v duration="$duration" 'BEGIN { printf "%.3f", duration / 5 }')"
 
   # A stale opacity from an interrupted switch must not carry into this one.
   restore_window_opacity "$window"
-  for opacity in 0.78 0.54 0.30 0.08; do
+  for opacity in 0.85 0.60 0.35 0.12 0.04; do
     set_window_opacity "$window" "$opacity" >/dev/null 2>&1 || {
       sleep "$duration"
       return 0
@@ -3314,9 +3372,12 @@ reveal_resident_provider_window() {
   local previous_profile="${2:-}"
   local provider_profile="${3:-}"
   local transition_shown_ms="${4:-0}"
-  tile_window_fast "$target_window" "$TIKPAL_WEB_MODE_LEFT_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
-  clear_window_above "$target_window"
-  DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowlower "$target_window" >/dev/null 2>&1 || true
+  # Tile and lower only if not already pre-positioned by the caller.
+  if ! check_target_window_probe "$target_window" 2>/dev/null; then
+    tile_window_fast "$target_window" "$TIKPAL_WEB_MODE_LEFT_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
+    clear_window_above "$target_window"
+    DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowlower "$target_window" >/dev/null 2>&1 || true
+  fi
   [[ "$transition_shown_ms" =~ ^[0-9]+$ && "$transition_shown_ms" -gt 0 ]] && raise_transition_veil >/dev/null 2>&1 || true
   if [[ "$TIKPAL_WEB_MODE_RESIDENT_SWITCH_SETTLE_SECONDS" =~ ^[0-9]+([.][0-9]+)?$ ]] \
     && [[ "$TIKPAL_WEB_MODE_RESIDENT_SWITCH_SETTLE_SECONDS" != "0" ]]; then
@@ -3325,12 +3386,16 @@ reveal_resident_provider_window() {
   # Verify the target window itself before letting it rise above the shared
   # transition.  This keeps Chromium's blank first compositor frame and the
   # kiosk underneath from becoming visible during a resident switch.
-  if ! wait_for_provider_window_nonblank_x11_frame "$target_window"; then
+  # A background probe may have already confirmed the frame; skip the
+  # synchronous wait when it has.
+  if ! check_target_window_probe "$target_window" && ! wait_for_provider_window_nonblank_x11_frame "$target_window"; then
+    cleanup_target_window_probe "$target_window"
     clear_window_above "$target_window"
     DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowlower "$target_window" >/dev/null 2>&1 || true
     raise_transition_veil >/dev/null 2>&1 || true
     return 1
   fi
+  cleanup_target_window_probe "$target_window"
   if [[ -n "$previous_profile" && "$previous_profile" != "$provider_profile" ]]; then
     park_profile_windows_for_reopen "$previous_profile" "$TIKPAL_WEB_MODE_LEFT_WINDOW" || true
   fi
@@ -3387,7 +3452,10 @@ launch_provider_for_pool() {
       TIKPAL_WEB_MODE_PROVIDER_LAUNCH_LOCKED=1 launch_provider_for_pool "$provider" "$wait_ready" "$launch_role" "$force_existing"
     ) 7>"$TIKPAL_WEB_MODE_PROFILE_ROOT/provider-$provider.launch.lock"
     local lock_status=$?
-    [[ "$lock_status" == "75" ]] && return 1
+    if [[ "$lock_status" == "75" ]]; then
+      rm -f "$TIKPAL_WEB_MODE_PROFILE_ROOT/provider-$provider.launch.lock"
+      return 1
+    fi
     return "$lock_status"
   fi
 
@@ -3482,7 +3550,7 @@ launch_provider_for_pool() {
   if [[ -n "$target_audio_device" ]]; then
     args+=("--alsa-output-device=$target_audio_device")
   fi
-  if [[ "$proxy_enabled" == "1" && -n "$proxy_url" && ( "$extension_enabled" != "1" || "$launch_url" == "$url" ) ]]; then
+  if [[ "$proxy_enabled" == "1" && -n "$proxy_url" ]]; then
     args+=("--proxy-server=$proxy_url")
     args+=("--proxy-bypass-list=localhost;127.0.0.1;<local>")
   fi
@@ -3576,6 +3644,30 @@ launch_provider_prewarm_worker() {
   launch_provider_for_pool "$provider" 0 prewarm "$force_existing" || true
 }
 
+# After the main prewarm queue completes, retry providers that ended up in
+# check_setup but still have a live Chromium process.  One retry with the
+# normal bootstrap timeout is enough; a second failure leaves the provider
+# marked for manual inspection.
+retry_failed_prewarm_providers() {
+  local active_provider="$1"
+  local queue_mode="$2"
+  local provider profile provider_port status retried=0
+  while IFS= read -r provider; do
+    [[ -n "$provider" && "$provider" != "$active_provider" ]] || continue
+    provider_prewarm_queue_can_continue "$active_provider" "$queue_mode" || return 0
+    status="$(read_runtime_provider_status "$provider")"
+    [[ "$status" == "check_setup" ]] || continue
+    profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/$provider"
+    profile_process_exists "$profile" || continue
+    provider_port="$(provider_debug_port "$provider")"
+    log "retrying prewarm for $provider (was check_setup)"
+    write_runtime_provider_status "$provider" "prewarming"
+    launch_provider_for_pool "$provider" 0 prewarm 1 || true
+    retried=$((retried + 1))
+  done < <(provider_prewarm_order)
+  [[ "$retried" -eq 0 ]] || log "retried $retried failed prewarm providers"
+}
+
 run_provider_prewarm_queue() {
   local active_provider="$1"
   local force_existing="$2"
@@ -3617,7 +3709,7 @@ run_provider_prewarm_queue() {
     ) &
     worker_pids+=("$!")
     sleep "$delay"
-  done < <(provider_ids)
+  done < <(provider_prewarm_order)
 
   for worker_pid in "${worker_pids[@]}"; do
     wait "$worker_pid" >/dev/null 2>&1 || true
@@ -3628,6 +3720,8 @@ run_provider_prewarm_queue() {
     return 0
   fi
   current_active="$(read_runtime_active_provider)"
+  sync_runtime_provider_pool_process_statuses "$current_active"
+  retry_failed_prewarm_providers "$active_provider" "$queue_mode"
   sync_runtime_provider_pool_process_statuses "$current_active"
   log "provider prewarm queue completed: max-concurrent=$maximum"
 }
@@ -3642,8 +3736,11 @@ prewarm_provider_pool() {
   printf '%s\n' "$BASHPID" > "$pid_file"
   printf '%s\n' "$active_provider" > "$active_file"
   prewarm_provider_pool_cleanup() {
-    [[ "$(cat "$pid_file" 2>/dev/null || true)" == "$BASHPID" ]] || return 0
-    rm -f "$pid_file" "$active_file"
+    local pf af
+    pf="$(prewarm_pid_file)" || return 0
+    af="$(prewarm_active_provider_file)" || return 0
+    [[ "$(cat "$pf" 2>/dev/null || true)" == "$BASHPID" ]] || return 0
+    rm -f "$pf" "$af"
   }
   trap prewarm_provider_pool_cleanup EXIT
   current_active="$(read_runtime_active_provider)"
@@ -3701,7 +3798,9 @@ warm_provider_pool() {
   mkdir -p "$(dirname "$pid_file")"
   printf '%s\n' "$BASHPID" > "$pid_file"
   warm_provider_pool_cleanup() {
-    [[ "$(cat "$pid_file" 2>/dev/null || true)" == "$BASHPID" ]] && rm -f "$pid_file"
+    local pf
+    pf="$(prewarm_pid_file)" || return 0
+    [[ "$(cat "$pf" 2>/dev/null || true)" == "$BASHPID" ]] && rm -f "$pf"
   }
   trap warm_provider_pool_cleanup EXIT
   hide_onboard
@@ -3774,6 +3873,14 @@ open_provider_pool() {
       if [[ "$transition_shown_ms" == "0" ]]; then
         begin_provider_switch_transition "$current_profile" "$provider"
         transition_shown_ms="$TIKPAL_WEB_MODE_TRANSITION_SHOWN_MS"
+        # Pre-position the target window under the transition and start
+        # a parallel paint probe so reveal can skip the synchronous wait.
+        if [[ -n "$target_window" ]]; then
+          tile_window_fast "$target_window" "$TIKPAL_WEB_MODE_LEFT_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
+          clear_window_above "$target_window"
+          DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowlower "$target_window" >/dev/null 2>&1 || true
+          probe_target_window_background "$target_window"
+        fi
       fi
     fi
     if reveal_resident_provider_window "$target_window" "$current_profile" "$provider_profile" "$transition_shown_ms" "$provider_port"; then
@@ -4010,7 +4117,7 @@ open_provider() {
   if [[ -n "$target_audio_device" ]]; then
     args+=("--alsa-output-device=$target_audio_device")
   fi
-  if [[ "$proxy_enabled" == "1" && -n "$proxy_url" && ( "$extension_enabled" != "1" || "$launch_url" == "$url" ) ]]; then
+  if [[ "$proxy_enabled" == "1" && -n "$proxy_url" ]]; then
     args+=("--proxy-server=$proxy_url")
     args+=("--proxy-bypass-list=localhost;127.0.0.1;<local>")
   fi

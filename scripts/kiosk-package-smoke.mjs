@@ -601,7 +601,7 @@ esac
       kioskEnv.includes("TIKPAL_WEB_MODE_RESIDENT_SWITCH_PAINT_TIMEOUT_SECONDS=0.6") &&
       kioskEnv.includes("TIKPAL_WEB_MODE_RESIDENT_SWITCH_PAINT_POLL_SECONDS=0.08") &&
       kioskEnv.includes("TIKPAL_WEB_MODE_PROVIDER_SWITCH_FADE_SECONDS=0.16") &&
-      kioskEnv.includes("TIKPAL_WEB_MODE_TRANSITION_MIN_VISIBLE_SECONDS=0.75"),
+      kioskEnv.includes("TIKPAL_WEB_MODE_TRANSITION_MIN_VISIBLE_SECONDS=0.5"),
     "kiosk env should make every provider switch fade briefly and hold the transition feedback"
   );
   assert(kioskEnv.includes("TIKPAL_WEB_MODE_STAGE_POSITION=2560,0"), "kiosk env should stage provider windows offscreen");
@@ -612,9 +612,9 @@ esac
   assert(kioskEnv.includes("TIKPAL_WEB_MODE_PROVIDER_BOOTSTRAP_TIMEOUT_SECONDS=7"), "kiosk env should bound provider bootstrap navigation");
   assert(kioskEnv.includes("TIKPAL_WEB_MODE_PROVIDER_WINDOW_TIMEOUT_SECONDS=30"), "kiosk env should bound provider window detection below the API open timeout");
   assert(
-    kioskEnv.includes("TIKPAL_WEB_MODE_PROVIDER_PREWARM_MAX_CONCURRENT_LAUNCHES=2") &&
+    kioskEnv.includes("TIKPAL_WEB_MODE_PROVIDER_PREWARM_MAX_CONCURRENT_LAUNCHES=3") &&
       kioskEnv.includes("TIKPAL_WEB_MODE_BOOT_PREWARM_READY_TIMEOUT_SECONDS=30") &&
-      kioskEnv.includes("TIKPAL_WEB_MODE_BOOT_PREWARM_INITIAL_DELAY_SECONDS=5"),
+      kioskEnv.includes("TIKPAL_WEB_MODE_BOOT_PREWARM_INITIAL_DELAY_SECONDS=3"),
     "kiosk env should document balanced boot prewarm concurrency and readiness timing"
   );
   assert(kioskEnv.includes("TIKPAL_WEB_MODE_PROVIDER_TEXT_SCALE=1.10"), "kiosk env should default Explore provider text scale to 110%");
@@ -1352,7 +1352,7 @@ esac
     "API should prepare entry surfaces alongside the initial audio release before opening a provider"
   );
   assert(openProviderBody.includes('launch_url="$TIKPAL_WEB_MODE_TRANSITION_URL?provider=$provider"'), "extension-enabled providers should start on the local bootstrap page");
-  assert(webModeScript.includes("provider_uses_direct_bootstrap()") && webModeScript.includes("deezer|qq_music|netease_music") && openProviderBody.includes('if [[ "$proxy_enabled" == "1" && -n "$proxy_url" && ( "$extension_enabled" != "1" || "$launch_url" == "$url" ) ]]'), "command-line proxy switches should remain limited to extension-disabled fallback and explicit direct-bootstrap providers");
+  assert(webModeScript.includes("provider_uses_direct_bootstrap()") && webModeScript.includes("deezer|qq_music|netease_music") && openProviderBody.includes('if [[ "$proxy_enabled" == "1" && -n "$proxy_url" ]]'), "command-line proxy switches should apply to all providers when proxy is enabled");
   assert(webModeScript.includes('target.type === "page"') && openProviderBody.includes("wait_for_real_provider_url"), "provider switches should wait for a real HTTPS page rather than a stale service worker");
   assert(webModeScript.includes("wait_for_proxy_applied"), "dynamic proxy actions should wait for extension confirmation");
   assert(webModeScript.includes('log "proxy applied without restarting $provider; provider pool prewarm restarted"'), "dynamic proxy actions should preserve the provider process and restart pool prewarm");
@@ -1696,7 +1696,7 @@ esac
   assert(webModeScript.includes("TIKPAL_WEB_MODE_CLOSE_AUDIO_GATE_SETTLE_SECONDS") && webModeScript.includes('if ! is_enabled "$TIKPAL_WEB_MODE_CLOSE_KEEP_RESIDENT"; then') && webModeScript.includes("stop_provider_guard"), "Explore warm close should keep provider guards alive in resident mode and only stop them for non-resident cleanup");
   assert(webModeScript.includes("TIKPAL_WEB_MODE_PROVIDER_IDLE_POOL_ENABLED:=1") && webModeScript.includes("warm_provider_pool()") && webModeScript.includes("TIKPAL_WEB_MODE_IDLE_POOL_WARMUP=1"), "Explore should support boot-time idle prewarming of provider windows");
   assert(
-    webModeScript.includes("TIKPAL_WEB_MODE_PROVIDER_PREWARM_MAX_CONCURRENT_LAUNCHES:=2") &&
+    webModeScript.includes("TIKPAL_WEB_MODE_PROVIDER_PREWARM_MAX_CONCURRENT_LAUNCHES:=3") &&
       webModeScript.includes("provider_prewarm_max_concurrent_launches()") &&
       webModeScript.includes("run_provider_prewarm_queue()") &&
       webModeScript.includes('while [[ "${#worker_pids[@]}" -ge "$maximum" ]]') &&
@@ -1744,7 +1744,7 @@ esac
   assert(
     webModeScript.includes("TIKPAL_WEB_MODE_RESIDENT_SWITCH_SETTLE_SECONDS:=0.16") &&
       webModeScript.includes("TIKPAL_WEB_MODE_PROVIDER_SWITCH_FADE_SECONDS:=0.16") &&
-      webModeScript.includes("TIKPAL_WEB_MODE_TRANSITION_MIN_VISIBLE_SECONDS:=0.75") &&
+      webModeScript.includes("TIKPAL_WEB_MODE_TRANSITION_MIN_VISIBLE_SECONDS:=0.5") &&
       webModeScript.includes("fade_profile_window_for_provider_switch()") &&
       webModeScript.includes("wait_for_transition_minimum_visibility()") &&
       webModeScript.includes('if [[ -n "$remaining" ]]; then') &&
@@ -1969,7 +1969,7 @@ esac
   assert(sidePanelSource.includes('residentStatus === "prewarming"') && sidePanelSource.includes('residentStatus === "check_setup"') && sidePanelSource.includes('residentStatus === "check_proxy"') && sidePanelSource.includes('residentStatus === "region_unavailable"'), "Explore side panel should show resident provider warm/check and regional availability states");
   assert(webModeScript.includes('"prewarming"') && webModeScript.includes('"check_proxy"') && webModeScript.includes('"region_unavailable"') && serverSource.includes('"prewarming", "ready", "active", "check_setup", "check_proxy", "region_unavailable"'), "Explore provider pool should expose distinct prewarming, proxy, and regional availability states end to end");
   assert(webModeScript.includes("TIKPAL_WEB_MODE_PROVIDER_POOL:=1"), "Explore provider pool should be enabled by default");
-  assert(webModeScript.includes("TIKPAL_WEB_MODE_PROVIDER_PREWARM_DELAY_SECONDS:=0.75"), "Explore provider pool should use a short stagger for responsive prewarm");
+  assert(webModeScript.includes("TIKPAL_WEB_MODE_PROVIDER_PREWARM_DELAY_SECONDS:=0.4"), "Explore provider pool should use a short stagger for responsive prewarm");
   assert(webModeScript.includes("TIKPAL_WEB_MODE_PROVIDER_PREWARM_LOCK_TIMEOUT_SECONDS:=2"), "Explore provider prewarm should use a short launch-lock timeout");
   assert(webModeScript.includes("prewarm_provider_pool"), "Explore should prewarm resident providers after entry");
   assert(webModeScript.includes("seed_runtime_provider_pool_statuses") && webModeScript.includes('status: "prewarming"'), "Explore should seed queued resident providers as prewarming before their windows launch");
