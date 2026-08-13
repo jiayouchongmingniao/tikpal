@@ -49,7 +49,8 @@ fi
 : "${TIKPAL_KIOSK_REMOTE_DEBUG_CHROMIUM_ADDRESS:=127.0.0.1}"
 : "${TIKPAL_KIOSK_REMOTE_DEBUG_CHROMIUM_PORT:=$TIKPAL_KIOSK_REMOTE_DEBUG_PORT}"
 : "${TIKPAL_WEB_MODE_BOOT_PREWARM_ENABLED:=1}"
-: "${TIKPAL_WEB_MODE_BOOT_PREWARM_INITIAL_DELAY_SECONDS:=10}"
+: "${TIKPAL_WEB_MODE_BOOT_PREWARM_INITIAL_DELAY_SECONDS:=5}"
+: "${TIKPAL_WEB_MODE_BOOT_PREWARM_READY_TIMEOUT_SECONDS:=30}"
 
 MODE="launch"
 if [[ "${1:-}" == "--check" ]]; then
@@ -304,15 +305,79 @@ NODE
   fi
 }
 
+kiosk_process_tree_uses_profile() {
+  local pid="$1"
+  local profile="$2"
+  local depth=0
+  [[ -n "$pid" && -n "$profile" ]] || return 1
+
+  while [[ "$pid" =~ ^[0-9]+$ && "$pid" != "1" && "$depth" -lt 8 ]]; do
+    if [[ -r "/proc/$pid/cmdline" ]] && tr '\0' ' ' < "/proc/$pid/cmdline" | grep -Fq -- "--user-data-dir=$profile"; then
+      return 0
+    fi
+    [[ -r "/proc/$pid/status" ]] || break
+    pid="$(awk '/^PPid:/{print $2}' "/proc/$pid/status")"
+    depth=$((depth + 1))
+  done
+
+  return 1
+}
+
+kiosk_profile_has_visible_window() {
+  local window pid
+  command -v xdotool >/dev/null 2>&1 || return 1
+  while IFS= read -r window; do
+    [[ -n "$window" ]] || continue
+    pid="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool getwindowpid "$window" 2>/dev/null || true)"
+    kiosk_process_tree_uses_profile "$pid" "$TIKPAL_CHROMIUM_PROFILE_DIR" && return 0
+  done < <(
+    {
+      DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool search --onlyvisible --class chromium 2>/dev/null || true
+      DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool search --onlyvisible --class Chromium-browser 2>/dev/null || true
+    } | awk 'NF && !seen[$0]++'
+  )
+  return 1
+}
+
+wait_for_kiosk_profile_window() {
+  local timeout="$TIKPAL_WEB_MODE_BOOT_PREWARM_READY_TIMEOUT_SECONDS"
+  local attempts visible_samples=0
+  [[ "$timeout" =~ ^[0-9]+$ ]] || timeout=30
+  attempts=$((timeout * 5))
+  [[ "$attempts" -gt 0 ]] || attempts=1
+
+  while [[ "$attempts" -gt 0 ]]; do
+    if kiosk_profile_has_visible_window; then
+      visible_samples=$((visible_samples + 1))
+      [[ "$visible_samples" -ge 2 ]] && return 0
+    else
+      visible_samples=0
+    fi
+    sleep 0.2
+    attempts=$((attempts - 1))
+  done
+
+  return 1
+}
+
 start_web_mode_boot_prewarm() {
   local delay="$TIKPAL_WEB_MODE_BOOT_PREWARM_INITIAL_DELAY_SECONDS"
   is_enabled "$TIKPAL_WEB_MODE_BOOT_PREWARM_ENABLED" || return 0
   [[ -x "$SCRIPT_DIR/tikpal-web-mode.sh" ]] || return 0
-  [[ "$delay" =~ ^[0-9]+([.][0-9]+)?$ ]] || delay=10
+  [[ "$delay" =~ ^[0-9]+([.][0-9]+)?$ ]] || delay=5
   (
+    if ! wait_for_kiosk_profile_window; then
+      log "Explore boot prewarm skipped: main kiosk window was not visible twice within ${TIKPAL_WEB_MODE_BOOT_PREWARM_READY_TIMEOUT_SECONDS}s"
+      exit 0
+    fi
     sleep "$delay"
+    if ! kiosk_profile_has_visible_window; then
+      log "Explore boot prewarm skipped: main kiosk window disappeared before warmup"
+      exit 0
+    fi
+    log "Explore boot prewarm starting after kiosk window stabilization"
     "$SCRIPT_DIR/tikpal-web-mode.sh" warm-pool
-  ) >/dev/null 2>&1 9>&- &
+  ) </dev/null &
 }
 
 check_runtime() {
@@ -332,7 +397,7 @@ check_runtime() {
   else
     log "remote debug: off"
   fi
-  log "Explore boot prewarm: $TIKPAL_WEB_MODE_BOOT_PREWARM_ENABLED delay=${TIKPAL_WEB_MODE_BOOT_PREWARM_INITIAL_DELAY_SECONDS}s"
+  log "Explore boot prewarm: $TIKPAL_WEB_MODE_BOOT_PREWARM_ENABLED ready-timeout=${TIKPAL_WEB_MODE_BOOT_PREWARM_READY_TIMEOUT_SECONDS}s delay=${TIKPAL_WEB_MODE_BOOT_PREWARM_INITIAL_DELAY_SECONDS}s"
   log "flags: $FLAGS_FILE"
 
   [[ -f "$FLAGS_FILE" ]] || fail "Chromium flags file is missing"

@@ -1908,8 +1908,8 @@ async function runMpcLocalLibraryPathSmoke(roomExperienceStatePath) {
   const fakeExternalDisableLogPath = path.join(workspace, "external-disable.log");
   const fakeExternalDisableCommandPath = path.join(workspace, "external-disable.mjs");
   const fakeWebModeLogPath = path.join(workspace, "web-mode.log");
-  const fakeWebModeOpenStartedPath = path.join(workspace, "web-mode-open.started");
-  const fakeWebModeOpenReleasePath = path.join(workspace, "web-mode-open.release");
+  const fakeWebModeEntryPreparedPath = path.join(workspace, "web-mode-entry-prepared.started");
+  const fakeWebModeEntryPrepareReleasePath = path.join(workspace, "web-mode-entry-prepared.release");
   const fakeWebModeRetryMarkerPath = path.join(workspace, "web-mode-retry.marker");
   const fakeWebModeCommandPath = path.join(workspace, "web-mode-command.mjs");
   const fakeWebModeSettingsPath = path.join(workspace, "web-mode-settings.json");
@@ -2324,16 +2324,16 @@ if (args[0] === "open" && args[1] === ${JSON.stringify(failedProvider)}) {
 
     await writeFile(fakeMpcLogPath, "");
     await writeFile(fakeWebModeLogPath, "");
-    await rm(fakeWebModeOpenStartedPath, { force: true });
-    await rm(fakeWebModeOpenReleasePath, { force: true });
+    await rm(fakeWebModeEntryPreparedPath, { force: true });
+    await rm(fakeWebModeEntryPrepareReleasePath, { force: true });
     await writeFile(fakeWebModeCommandPath, `#!/usr/bin/env node
 import { appendFileSync, existsSync, writeFileSync } from "node:fs";
 
 const args = process.argv.slice(2);
 appendFileSync(${JSON.stringify(fakeWebModeLogPath)}, args.join("\\t") + "\\n");
-if (args[0] === "open" && args[1] === "qq_music") {
-  writeFileSync(${JSON.stringify(fakeWebModeOpenStartedPath)}, "1\\n");
-  while (!existsSync(${JSON.stringify(fakeWebModeOpenReleasePath)})) {
+if (args[0] === "prepare-entry" && args[1] === "qq_music") {
+  writeFileSync(${JSON.stringify(fakeWebModeEntryPreparedPath)}, "1\\n");
+  while (!existsSync(${JSON.stringify(fakeWebModeEntryPrepareReleasePath)})) {
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
 }
@@ -2342,24 +2342,35 @@ if (args[0] === "open" && args[1] === "qq_music") {
       method: "POST",
       body: JSON.stringify({ type: "open", provider: "qq_music" })
     });
-    let webModeOpenStarted = false;
+    let webModeEntryPreparationStarted = false;
     for (let attempt = 0; attempt < 20; attempt += 1) {
       try {
-        await readFile(fakeWebModeOpenStartedPath, "utf8");
-        webModeOpenStarted = true;
+        await readFile(fakeWebModeEntryPreparedPath, "utf8");
+        webModeEntryPreparationStarted = true;
         break;
       } catch {
         await wait(25);
       }
     }
-    assert(webModeOpenStarted, "web mode open smoke should reach the delayed launcher");
+    assert(webModeEntryPreparationStarted, "web mode open smoke should reach entry preparation");
     const stateDuringWebModeEntry = await requestFrom(baseUrl, "/api/v1/web-mode/state");
     assert(stateDuringWebModeEntry.body.activeProvider === null, "web mode entry should not activate provider audio before the launcher reveals it");
-    await writeFile(fakeWebModeOpenReleasePath, "1\\n");
-    const webModeFromPlayingLibrary = await openingWebModeFromPlayingLibrary;
+    await writeFile(fakeWebModeEntryPrepareReleasePath, "1\\n");
+    const webModeFromPlayingLibrary = await Promise.race([
+      openingWebModeFromPlayingLibrary,
+      wait(10_000).then(() => {
+        throw new Error(`web mode open stalled; log: ${JSON.stringify(readFile(fakeWebModeLogPath, "utf8"))}`);
+      })
+    ]);
     await writeFile(fakeWebModeCommandPath, fakeWebModeCommandSource);
     assert(webModeFromPlayingLibrary.response.ok, "web mode open from playing Library should return 200");
     assert(webModeFromPlayingLibrary.body.activeProvider === "qq_music", "web mode open from playing Library should activate QQ Music");
+    const webModeEntryLog = await readFile(fakeWebModeLogPath, "utf8");
+    assert(
+      webModeEntryLog.indexOf("prepare-entry\\tqq_music\\n") >= 0 &&
+        webModeEntryLog.indexOf("prepare-entry\\tqq_music\\n") < webModeEntryLog.indexOf("open\\tqq_music\\n"),
+      "web mode should finish entry preparation before it launches the visible provider"
+    );
     const pausedDuringExplore = JSON.parse(await readFile(fakeMpcStatePath, "utf8"));
     assert(pausedDuringExplore.state === "paused", "web mode open should pause playing Library while Explore owns browser audio");
     const closedPlayingLibraryExplore = await requestFrom(baseUrl, "/api/v1/web-mode/actions", {

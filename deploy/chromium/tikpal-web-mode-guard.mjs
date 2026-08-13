@@ -24,7 +24,8 @@ const allowProgrammaticInputFocus = providerId !== "suno";
 const launcherPath = fileURLToPath(new URL("./tikpal-web-mode.sh", import.meta.url));
 const keyboardActionUrl = `http://127.0.0.1:${process.env.TIKPAL_API_PORT || "8787"}/api/v1/web-mode/actions`;
 const emptyPageTimeoutMs = Math.max(5, Number.parseInt(process.env.TIKPAL_WEB_MODE_EMPTY_PAGE_ERROR_SECONDS || "18", 10) || 18) * 1000;
-const pollMs = 250;
+const activePollMs = 250;
+const idlePollMs = Math.max(activePollMs, Number.parseInt(process.env.TIKPAL_WEB_MODE_PROVIDER_GUARD_IDLE_POLL_MS || "2000", 10) || 2000);
 const onboardInputSelector = [
   "textarea",
   "[contenteditable='true']",
@@ -2676,6 +2677,7 @@ if (process.argv.includes("--check")) {
   console.log(`[tikpal-web-mode-guard] input focus keyboard: ${onboardAutoFocus ? "1" : "0"}`);
   console.log(`[tikpal-web-mode-guard] provider audio gate: ${statePath ? "1" : "0"}`);
   console.log(`[tikpal-web-mode-guard] empty page timeout: ${Math.round(emptyPageTimeoutMs / 1000)}s`);
+  console.log(`[tikpal-web-mode-guard] idle poll: ${idlePollMs}ms`);
   console.log(`[tikpal-web-mode-guard] qq auto confirm: ${qqAutoConfirm ? "1" : "0"}`);
   console.log(`[tikpal-web-mode-guard] qq auto unmute: ${qqAutoUnmute ? "1" : "0"}`);
   console.log(`[tikpal-web-mode-guard] qq audio prime: ${qqAudioPrime ? "1" : "0"}`);
@@ -2707,5 +2709,8 @@ while (profileProcessExists()) {
   } catch {
     // Guard failures must never break Explore playback or login.
   }
-  await sleep(pollMs);
+  // Only the visible provider needs sub-second input and prompt handling.
+  // The other resident pages still get safety/consent checks, but must not
+  // compete with foreground X11 work on every 250ms tick.
+  await sleep(providerIsActive() ? activePollMs : idlePollMs);
 }

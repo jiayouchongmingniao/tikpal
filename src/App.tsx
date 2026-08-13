@@ -35,7 +35,6 @@ const DISPLAY_SLEEP_CHECK_MS = 5_000;
 const SCREEN_SAVER_PREVIEW_INTERVAL_MS = 8_000;
 const WEB_MODE_IDLE_POLL_MS = 2_000;
 const WEB_MODE_ACTIVE_POLL_MS = 350;
-const EXPLORE_RETURN_CHOOSER_DELAY_MS = 1_250;
 const SOURCE_SWITCH_TARGETS = new Set<SourceSwitchTarget>(["mpd", "audio", "scene", "radio", "spotify", "bluetooth", "airplay", "upnp"]);
 const EXTERNAL_HANDOFF_TARGETS = new Set<SourceSwitchTarget>(["spotify", "bluetooth", "airplay", "upnp"]);
 const VISIBLE_LISTENING_SOURCE_TARGETS = new Set<SourceSwitchTarget>(["mpd", "radio", "spotify", "bluetooth", "airplay", "upnp"]);
@@ -341,7 +340,6 @@ export default function App() {
   const sceneVideoReadyRef = useRef(false);
   const observedWebModeActiveRef = useRef(false);
   const suppressExploreReturnChooserRef = useRef(false);
-  const exploreReturnChooserTimerRef = useRef<number | null>(null);
   const displaySleepLastActivityRef = useRef(Date.now());
   const { state: tikpalState, status: tikpalStatus, refresh, sendPlaybackAction, sendSystemAction, sendSourceSwitch } = useTikpalState();
   const { experience: roomExperience, status: roomExperienceStatus, refresh: refreshRoomExperience, sendExperienceAction } = useRoomExperience();
@@ -382,10 +380,6 @@ export default function App() {
     setWebModeSleepSuppressed(active);
 
     if (active) {
-      if (exploreReturnChooserTimerRef.current !== null) {
-        window.clearTimeout(exploreReturnChooserTimerRef.current);
-        exploreReturnChooserTimerRef.current = null;
-      }
       suppressExploreReturnChooserRef.current = false;
       setRoomModeChooserContext((current) => current === "explore-return" ? null : current);
       return;
@@ -395,19 +389,9 @@ export default function App() {
     const suppressChooser = suppressExploreReturnChooserRef.current;
     suppressExploreReturnChooserRef.current = false;
     if (suppressChooser) return;
-    exploreReturnChooserTimerRef.current = window.setTimeout(() => {
-      exploreReturnChooserTimerRef.current = null;
-      if (observedWebModeActiveRef.current) return;
-      returnAmbient();
-      setRoomModeChooserContext("explore-return");
-    }, EXPLORE_RETURN_CHOOSER_DELAY_MS);
+    returnAmbient();
+    setRoomModeChooserContext("explore-return");
   }, [returnAmbient, setWebModeSleepSuppressed]);
-
-  useEffect(() => () => {
-    if (exploreReturnChooserTimerRef.current !== null) {
-      window.clearTimeout(exploreReturnChooserTimerRef.current);
-    }
-  }, []);
 
   useEffect(() => {
     if (mode !== "quickMenu") return undefined;
@@ -1008,7 +992,7 @@ export default function App() {
     setRoomModeSelectionPending(true);
     try {
       await handleRoomExperienceAction({ type: "set_mode", mode: nextMode });
-      if (sceneVideoReadyRef.current) {
+      if (chooserContext === "explore-return" || sceneVideoReadyRef.current) {
         setRoomModeChooserContext(null);
         setRoomModeSelectionPending(false);
       }
@@ -1180,7 +1164,7 @@ export default function App() {
   const onboardingActive = onboardingVisible && !webModeActive;
 
   return (
-    <main className={`app-root ${screenOffActive ? "is-screen-off" : ""} ${systemSleepActive ? "is-system-sleeping" : ""} ${onboardingActive && onboardingBackgroundHidden ? "is-wizard-background-hidden" : ""}`} {...gestureHandlers}>
+    <main className={`app-root ${screenOffActive ? "is-screen-off" : ""} ${systemSleepActive ? "is-system-sleeping" : ""} ${mode === "quickMenu" ? "is-quick-menu-active" : ""} ${onboardingActive && onboardingBackgroundHidden ? "is-wizard-background-hidden" : ""}`} {...gestureHandlers}>
       <AmbientScreen
         hudVisible={hudVisible}
         timeLabel={timeLabel}

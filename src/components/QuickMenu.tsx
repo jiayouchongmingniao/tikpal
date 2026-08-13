@@ -36,11 +36,6 @@ export function QuickMenu({
 }: QuickMenuProps) {
   const { t } = useI18n();
   const proxyKnown = proxyEnabled !== null;
-  const renderSwitch = () => (
-    <i className="quick-menu-switch" aria-hidden="true">
-      <b />
-    </i>
-  );
 
   return (
     <section className={`quick-menu ${active ? "is-active" : ""}`} aria-label={t("quickMenu.title")} aria-hidden={!active}>
@@ -56,7 +51,6 @@ export function QuickMenu({
         >
           <Monitor size={26} />
           <strong>{t("quickMenu.screen")}</strong>
-          {renderSwitch()}
         </button>
         <button
           className={`quick-menu-toggle ${volumeEnabled ? "is-on" : "is-off"} ${volumePending ? "is-pending" : ""}`}
@@ -69,7 +63,6 @@ export function QuickMenu({
         >
           {volumeEnabled ? <Volume2 size={26} /> : <VolumeX size={26} />}
           <strong>{t("quickMenu.volume")}</strong>
-          {renderSwitch()}
         </button>
         <button
           className={`quick-menu-toggle ${clockVisible ? "is-on" : "is-off"}`}
@@ -81,7 +74,6 @@ export function QuickMenu({
         >
           <Clock size={26} />
           <strong>{t("quickMenu.time")}</strong>
-          {renderSwitch()}
         </button>
         <button
           className={`quick-menu-toggle is-proxy ${proxyEnabled ? "is-on" : "is-off"} ${proxyPending || !proxyKnown ? "is-pending" : ""}`}
@@ -94,7 +86,6 @@ export function QuickMenu({
         >
           <Globe2 size={26} />
           <strong>{t("common.proxy")}</strong>
-          {renderSwitch()}
         </button>
         <button
           className={`quick-menu-toggle is-sleep ${sleepPending ? "is-on is-pending" : "is-off"}`}
@@ -107,7 +98,6 @@ export function QuickMenu({
         >
           <Moon size={26} />
           <strong>{t("quickMenu.sleep")}</strong>
-          {renderSwitch()}
         </button>
       </div>
     </section>

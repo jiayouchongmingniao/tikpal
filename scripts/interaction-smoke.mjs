@@ -1571,9 +1571,9 @@ try {
   await expectEventually(
     client,
     "document.querySelector('[data-room-mode-chooser-context=\"explore-return\"]') !== null",
-    "Explore return chooser appears after Explore becomes idle",
-    30,
-    150
+    "Explore return chooser appears in the first idle poll after Explore closes",
+    8,
+    120
   );
   await expectEventually(
     client,
@@ -1596,6 +1596,18 @@ try {
     30,
     150
   );
+  await evaluate(client, "window.__tikpalExploreReturnState = 'active'; true");
+  await expectEventually(
+    client,
+    "document.querySelector('[data-room-mode-chooser-context=\"explore-return\"]') === null",
+    "quick Explore reopen clears the previous return chooser"
+  );
+  await evaluate(client, "window.__tikpalExploreReturnState = 'idle'; true");
+  await expectEventually(
+    client,
+    "document.querySelector('[data-room-mode-chooser-context=\"explore-return\"]') !== null",
+    "Explore return chooser reopens after the next close"
+  );
   const roomModeBeforeExploreReturnChoice = await evaluate(client, "document.querySelector('.ambient-screen')?.getAttribute('data-room-mode')");
   await wait(5200);
   await expectEventually(
@@ -1606,7 +1618,7 @@ try {
   await evaluate(client, "window.__tikpalExploreReturnState = 'active'; true");
   await wait(2300);
   await evaluate(client, "window.__tikpalExploreReturnState = 'idle'; true");
-  await expectEventually(client, "document.querySelector('[data-room-mode-chooser-context=\"explore-return\"]') !== null", "Explore return chooser reopens after the next close");
+  await expectEventually(client, "document.querySelector('[data-room-mode-chooser-context=\"explore-return\"]') !== null", "Explore return chooser opens again after a later close");
   const exploreReturnModePostsBefore = await evaluate(client, "window.__tikpalExploreReturnModePosts");
   await evaluate(
     client,
@@ -2673,18 +2685,6 @@ try {
   await expectEventually(client, "document.querySelector('[data-ambient-scene-gallery]') !== null", "scene gallery opens from a real click while the source picker is open");
   await click(client, 20, 20);
   await expectEventually(client, "document.querySelector('[data-ambient-scene-gallery]') === null", "scene gallery closes from its backdrop after a real click");
-  const sourceTogglePoint = await evaluate(
-    client,
-    `
-      (() => {
-        const button = document.querySelector('[data-ambient-source-picker] [data-ambient-source-toggle]');
-        const rect = button?.getBoundingClientRect();
-        return rect ? { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) } : null;
-      })()
-    `
-  );
-  if (!sourceTogglePoint) throw new Error("Failed: Ambient source toggle is missing");
-  await click(client, sourceTogglePoint.x, sourceTogglePoint.y);
   await expectEventually(client, "document.querySelector('[data-ambient-source-picker]') !== null", "ambient source picker reopens after closing the scene gallery");
   await evaluate(client, "window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })); true");
   await expectEventually(client, "document.querySelector('[data-ambient-source-picker]') === null", "ambient scene source picker closes with Escape");
@@ -2722,7 +2722,7 @@ try {
             return Promise.resolve(new Response(JSON.stringify({
               videos: [
                 {
-                  id: 'interaction-scene',
+                  id: 'warm-fireplace',
                   filename: 'Interaction-Scene.mp4',
                   label: 'Interaction Scene',
                   src: ${JSON.stringify(interactionSceneVideoSrc)},
@@ -2764,7 +2764,7 @@ try {
 	              total: 4,
 	              updatedAt: new Date().toISOString(),
 	              catalogVersion: 'interaction-rainy',
-	              defaultVideoId: 'interaction-scene'
+              defaultVideoId: 'warm-fireplace'
             }), {
               status: 200,
               headers: { 'Content-Type': 'application/json' }
@@ -2894,16 +2894,16 @@ try {
   await evaluate(client, "document.querySelector('[data-ambient-scene-gallery-toggle]')?.click(); true");
   await expectEventually(
     client,
-    "document.querySelector('[data-ambient-scene-card=\"interaction-scene\"]')?.disabled === false",
+    "document.querySelector('[data-ambient-scene-card=\"warm-fireplace\"]')?.disabled === false",
     "scene gallery exposes another Calm scene"
   );
-  await evaluate(client, "document.querySelector('[data-ambient-scene-card=\"interaction-scene\"]')?.click(); true");
+  await evaluate(client, "document.querySelector('[data-ambient-scene-card=\"warm-fireplace\"]')?.click(); true");
   await expectEventually(
     client,
     `
       document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') === 'calm'
       && document.querySelector('[data-ambient-scene-gallery]') === null
-      && fetch('/api/v1/experience/state').then((response) => response.json()).then((experience) => experience.mode === 'calm' && experience.sceneVideoId === 'interaction-scene')
+      && fetch('/api/v1/experience/state').then((response) => response.json()).then((experience) => experience.mode === 'calm' && experience.sceneVideoId === 'warm-fireplace')
     `,
     "scene gallery applies a same-mode scene without changing the selected Room Mode"
   );
@@ -3184,12 +3184,10 @@ try {
         const sleep = document.querySelector('[data-quick-menu-toggle="sleep"]');
         const time = document.querySelector('[data-quick-menu-toggle="time"]');
         return document.querySelectorAll('.quick-menu-panel [data-quick-menu-toggle]').length === 5
-          && document.querySelectorAll('.quick-menu-panel .quick-menu-switch').length === 5
+          && document.querySelectorAll('.quick-menu-panel .quick-menu-switch').length === 0
           && document.querySelectorAll('.quick-menu-toggle > span').length === 0
           && backdropStyle
-          && backdropFilter
-          && backdropFilter !== 'none'
-          && backdropFilter.includes('brightness')
+          && (backdropFilter === 'none' || backdropFilter.includes('blur'))
           && text.includes('Screen')
           && !text.includes('Room Mode')
           && text.includes('Volume')
@@ -3198,7 +3196,7 @@ try {
           && text.includes('Sleep')
           && proxy
           && proxy.querySelector('svg')
-          && proxy.querySelector('.quick-menu-switch')
+          && proxy.getAttribute('aria-pressed') !== null
           && !text.includes('Visible')
           && !text.includes('Hidden')
           && !text.includes('Tap to sleep')
@@ -3234,7 +3232,7 @@ try {
     "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => state.system.volume.percent === window.__tikpalQuickMenuScreenBeforeVolume)",
     "quick menu screen toggle keeps global volume unchanged"
   );
-  await evaluate(client, "document.querySelector('.screen-off-overlay')?.click();");
+  await click(client, 1280, 360);
   await expectEventually(client, "document.querySelector('.screen-off-overlay') === null", "single tap wakes the quick menu screen overlay");
 
   await navigate(client, `${APP_URL}?mode=quickMenu`);

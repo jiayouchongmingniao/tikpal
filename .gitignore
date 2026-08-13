@@ -16,3 +16,5 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+.tmp-api-smoke-bluetooth-metadata.txt
+.tmp-api-smoke-bluetooth.txt

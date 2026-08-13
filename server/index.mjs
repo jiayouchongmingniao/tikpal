@@ -13670,13 +13670,27 @@ async function runWebModeCommand(action, providerId = "", env = {}) {
   });
 }
 
+async function prepareWebModeEntry(providerId) {
+  await runWebModeCommand("prepare-entry", providerId, {
+    // Entry preparation runs beside Tikpal's audio release. Give its short
+    // foreground lock the same room as the following open command.
+    TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS: "25"
+  });
+}
+
+async function parkPreparedWebModeEntry(providerId) {
+  await runWebModeCommand("park-entry", providerId, {
+    TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS: "25"
+  });
+}
+
 async function webModeCloseRequestIsCurrent(closeRequestId) {
   if (!closeRequestId) return true;
   const runtimeState = await readWebModeRuntimeState();
   return runtimeState.closeRequestId === closeRequestId && !runtimeState.activeProvider;
 }
 
-function runWebModeCloseInBackground(roomMode, closeRequestId = "", activeProvider = "") {
+function runWebModeCloseInBackground(closeRequestId = "", activeProvider = "") {
   if (webModeClosePromise) {
     return webModeClosePromise;
   }
@@ -13685,7 +13699,6 @@ function runWebModeCloseInBackground(roomMode, closeRequestId = "", activeProvid
     let restoreError = null;
     try {
       await runWebModeCommand("close", "", {
-        TIKPAL_WEB_MODE_EXIT_ROOM_MODE: roomMode,
         TIKPAL_WEB_MODE_CLOSE_ACTIVE_PROVIDER: activeProvider,
         TIKPAL_WEB_MODE_CLOSE_REQUEST_ID: closeRequestId,
         TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS: "10"
@@ -13886,7 +13899,6 @@ let webModeKeyboardStickyUntilMs = 0;
 async function applyWebModeAction(action) {
   const type = String(action?.type ?? "").trim().toLowerCase();
   if (type === "close") {
-    const room = await readRoomExperienceState();
     if (webModeClosePromise) {
       const runtimeState = await readWebModeRuntimeState();
       if (!runtimeState.activeProvider && runtimeState.closeRequestId) {
@@ -13903,7 +13915,7 @@ async function applyWebModeAction(action) {
       lastError: null,
       closeRequestId
     });
-    runWebModeCloseInBackground(room.mode, closeRequestId, activeProvider);
+    runWebModeCloseInBackground(closeRequestId, activeProvider);
     return await buildWebModeState();
   }
 
@@ -14007,11 +14019,21 @@ async function applyWebModeAction(action) {
     previousRuntimeState.activeProvider ?? previousRuntimeState.lastProvider ?? "qq_music"
   );
   let providerOpenCommandStarted = false;
+  let entryPreparationStarted = false;
   webModeOpenInFlight = true;
   try {
     if (!previousRuntimeState.activeProvider) {
       await captureWebModePlaybackHandoff();
-      await pauseTikpalForWebMode();
+      // The full-width entry veil and parked panel do not expose a provider or
+      // browser audio. Stage them while Scene/MPD releases audio, then keep
+      // the actual provider open behind that completed audio gate.
+      entryPreparationStarted = true;
+      const [pauseResult, preparationResult] = await Promise.allSettled([
+        pauseTikpalForWebMode(),
+        prepareWebModeEntry(providerId)
+      ]);
+      if (pauseResult.status === "rejected") throw pauseResult.reason;
+      if (preparationResult.status === "rejected") throw preparationResult.reason;
     }
     await writeWebModeRuntimeState({ lastError: null, closeRequestId: null });
     providerOpenCommandStarted = true;
@@ -14028,6 +14050,9 @@ async function applyWebModeAction(action) {
         : null,
       lastError: message
     });
+    if (entryPreparationStarted && !providerOpenCommandStarted) {
+      await parkPreparedWebModeEntry(providerId).catch(() => undefined);
+    }
     throw new Error(message);
   } finally {
     webModeOpenInFlight = false;
