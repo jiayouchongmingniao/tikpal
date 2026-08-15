@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { AmbientScreen } from "./components/AmbientScreen";
 import { PlayerOverlay } from "./components/PlayerOverlay";
 import { QuickMenu } from "./components/QuickMenu";
@@ -308,6 +309,8 @@ export default function App() {
   const [screenOffActive, setScreenOffActive] = useState(false);
   const [screenSaverPreviewIndex, setScreenSaverPreviewIndex] = useState<number | null>(null);
   const [webModeActive, setWebModeActive] = useState(false);
+  const [exploreClosing, setExploreClosing] = useState(false);
+  const [exploreOpening, setExploreOpening] = useState(false);
   const [quickMenuProxyEnabled, setQuickMenuProxyEnabled] = useState<boolean | null>(null);
   const [quickMenuProxyPending, setQuickMenuProxyPending] = useState(false);
   const [systemSleepActive, setSystemSleepActive] = useState(false);
@@ -340,6 +343,7 @@ export default function App() {
   const sceneVideoReadyRef = useRef(false);
   const observedWebModeActiveRef = useRef(false);
   const suppressExploreReturnChooserRef = useRef(false);
+  const exploreClosingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const displaySleepLastActivityRef = useRef(Date.now());
   const { state: tikpalState, status: tikpalStatus, refresh, sendPlaybackAction, sendSystemAction, sendSourceSwitch } = useTikpalState();
   const { experience: roomExperience, status: roomExperienceStatus, refresh: refreshRoomExperience, sendExperienceAction } = useRoomExperience();
@@ -486,6 +490,39 @@ export default function App() {
       window.clearInterval(interval);
     };
   }, [observeWebModeActivity, webModeActive]);
+
+  // Listen for explore close signal from side panel via BroadcastChannel.
+  // When webModeActive becomes false (Explore actually closed), delay clearing
+  // exploreClosing so the CSS fade-out transition (3000ms) has time to play.
+  useEffect(() => {
+    if (!webModeActive) {
+      // Explore is closed — keep overlay visible, fade it out after delay
+      if (exploreClosingTimerRef.current) clearTimeout(exploreClosingTimerRef.current);
+      exploreClosingTimerRef.current = setTimeout(() => {
+        setExploreClosing(false);
+        exploreClosingTimerRef.current = null;
+      }, 3200);
+      return;
+    }
+    // Explore is active — listen for close signal from side panel
+    if (exploreClosingTimerRef.current) {
+      clearTimeout(exploreClosingTimerRef.current);
+      exploreClosingTimerRef.current = null;
+    }
+    const bc = new BroadcastChannel("tikpal-explore-close");
+    bc.onmessage = (e) => { if (e.data === "closing") setExploreClosing(true); };
+    return () => { bc.close(); };
+  }, [webModeActive]);
+
+  // Clear exploreOpening when Explore becomes active
+  useEffect(() => {
+    if (webModeActive && exploreOpening) {
+      const t = setTimeout(() => setExploreOpening(false), 200);
+      return () => clearTimeout(t);
+    }
+    if (!webModeActive) setExploreOpening(false);
+  }, [webModeActive, exploreOpening]);
+
 
   useEffect(() => {
     if (!preferences.displaySleepEnabled || systemSleepActive || screenSaverPreviewIndex !== null || webModeActive) return;
@@ -769,6 +806,8 @@ export default function App() {
 
   const handleOpenWebMode = useCallback(async () => {
     setWebModeSleepSuppressed(true);
+    setExploreOpening(true);
+    try { new BroadcastChannel("tikpal-explore-open").postMessage("opening"); } catch {}
     try {
       const nextWebMode = await sendWebModeAction({ type: "open" });
       observeWebModeActivity(Boolean(nextWebMode.activeProvider));
@@ -776,10 +815,9 @@ export default function App() {
       setWebModeSleepSuppressed(false);
       throw error;
     }
-    await refresh();
-    await refreshRoomExperience();
+    await Promise.all([refresh(), refreshRoomExperience()]);
     returnAmbient();
-  }, [observeWebModeActivity, refresh, refreshRoomExperience, returnAmbient, setWebModeSleepSuppressed]);
+  }, [observeWebModeActivity, refresh, refreshRoomExperience, returnAmbient, setExploreOpening, setWebModeSleepSuppressed]);
 
   useEffect(() => {
     const previousMode = previousRoomModeRef.current;
@@ -1324,6 +1362,8 @@ export default function App() {
           <i style={{ width: `${idleTotalMs ? 100 - ((idleRemainingMs ?? 0) / idleTotalMs) * 100 : 0}%` }} />
         </div>
       </div>
+      {createPortal(<div className={"app-explore-close-overlay" + (exploreClosing ? " active" : "")} />, document.body)}
+      {createPortal(<div className={"app-explore-open-overlay" + (exploreOpening ? " active" : "")} />, document.body)}
     </main>
   );
 }

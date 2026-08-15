@@ -26,12 +26,13 @@ export function StartupModeChooser({ active, context, videoReady, pending, selec
   useEffect(() => {
     if (!active || pending || !videoReady) return undefined;
 
+    const dismissMs = context === "explore-return" ? 3_000 : 8_000;
     const timer = window.setTimeout(() => {
       onAutoDismiss();
-    }, 8_000);
+    }, dismissMs);
 
     return () => window.clearTimeout(timer);
-  }, [active, onAutoDismiss, pending, videoReady]);
+  }, [active, context, onAutoDismiss, pending, videoReady]);
 
   if (!active) return null;
 

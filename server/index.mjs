@@ -14036,6 +14036,17 @@ async function applyWebModeAction(action) {
       if (preparationResult.status === "rejected") throw preparationResult.reason;
     }
     await writeWebModeRuntimeState({ lastError: null, closeRequestId: null });
+    // Resident switch: optimistic update + background execution.
+    // Providers are already loaded in Chromium windows; the actual
+    // switch just raises one above another. Return immediately so
+    // the frontend is not blocked for the full shell-script duration.
+    const isResidentSwitch = previousRuntimeState.activeProvider
+      && previousRuntimeState.activeProvider !== providerId;
+    if (isResidentSwitch) {
+      await writeWebModeRuntimeState({ activeProvider: providerId, lastProvider: providerId, lastError: null, closeRequestId: null });
+      runWebModeCommand("open", providerId, { TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS: "2" }).catch(() => {});
+      return await buildWebModeState();
+    }
     providerOpenCommandStarted = true;
     await runWebModeCommand("open", providerId, { TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS: "25" });
     await writeWebModeRuntimeState({ activeProvider: providerId, lastProvider: providerId, lastError: null, closeRequestId: null });

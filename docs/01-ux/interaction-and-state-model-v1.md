@@ -195,3 +195,55 @@ Current desktop validation mappings:
 - No stacked player and Console overlays.
 - No full moOde admin surface in the kiosk UI.
 - No dangerous operation on first tap.
+
+## Explore Open / Close Transitions (August 2026)
+
+Explore uses a coordinated cross-component fade to avoid the abrupt black-frame jump that occurs when the provider pane and side panel disappear at different rates.
+
+### BroadcastChannel Protocol
+
+The app root (`App.tsx`) and the side panel (`WebModeSidePanel.tsx`) synchronize transition state through a `BroadcastChannel` named after each phase:
+
+| Channel | Sender | Payload | Purpose |
+| --- | --- | --- | --- |
+| `tikpal-explore-close` | Side panel | `"closing"` | Tells the app root to show its close overlay. |
+| `tikpal-explore-open` | App root | `"opening"` | Tells the side panel to show its open overlay. |
+
+Both channels are fire-and-forget; there is no ACK. If the channel message is missed (e.g. tab was backgrounded), the overlay simply does not appear — the close still completes on schedule.
+
+### Close Sequence
+
+1. User taps **Close** in the side panel header.
+2. Side panel broadcasts `"closing"` on `tikpal-explore-close`.
+3. App root sets `exploreClosing = true`, which renders a `createPortal` overlay covering the full `2560 × 720` canvas. CSS fades the overlay from `opacity: 0 → 1` over **3000 ms** (`#080b0e` background).
+4. Side panel sets its own `is-closing` state. The provider grid (left) fades to `opacity: 0` over **3000 ms**; the control stack (right) does the same. Both use `transition: opacity 3000ms ease-in` so the visual dim is synchronized.
+5. After **3050 ms**, the side panel calls the close API (`sendWebModeAction({ type: "close" })`). The backend destroys the Chromium provider page.
+6. The app root clears `exploreClosing` after **3200 ms** (the overlay fades back out over another 3000 ms).
+7. Total visual: ~3 s fade-to-black → provider killed → ~3 s fade-from-black back to ambient.
+
+If the user reopens Explore before the fade-out finishes, the side panel resets `pendingAction` and the close overlay is immediately cancelled.
+
+### Open Sequence
+
+1. User selects **Explore** from the source picker (or other entry). Source picker closes immediately.
+2. App root broadcasts `"opening"` on `tikpal-explore-open` and begins the backend open sequence (`refresh()` + `refreshRoomExperience()` in parallel).
+3. Both app root and side panel render a fade-in overlay (`opacity: 1 → 0` over **800 ms ease-in**, then held at 0 for **1000 ms ease-out** before removal).
+4. The provider pane loads underneath the overlay. Once `webModeActive` becomes true, the overlay clears after ~200 ms.
+5. Total visual: ~800 ms black overlay while provider loads → smooth reveal.
+
+### Reduced Motion
+
+When `prefers-reduced-motion: reduce` is active, all overlay transitions are disabled. Overlays appear and disappear instantly (no fade). This applies to both open and close sequences.
+
+### Right-Panel Context Menu
+
+The side panel root element calls `onContextMenu={(e) => e.preventDefault()}` to suppress the browser's native long-press context menu. This prevents the "Copy / Paste / Select All" popup from appearing over the provider grid and control stack on touch devices.
+
+### Startup Mode Chooser Timing
+
+The `StartupModeChooser` component uses two different auto-dismiss delays depending on entry context:
+
+| Context | Auto-dismiss delay |
+| --- | --- |
+| `explore-return` (returning from Explore to room selection) | 3 seconds |
+| Startup / cold boot | 8 seconds |

@@ -279,3 +279,49 @@ Thermal warning:
 - No bright browser-white startup flash.
 - No visually busy permanent HUD.
 - No moOde Web UI clone.
+
+## Explore Transition Overlays (August 2026)
+
+Explore open and close use full-canvas overlay elements to produce a smooth visual transition instead of an abrupt mode switch.
+
+### Overlay Layer
+
+| Overlay | Selector | Z-index | Background |
+| --- | --- | --- | --- |
+| Close (app root) | `.app-explore-close-overlay` | `9999` | `#080b0e` |
+| Close (side panel) | `.web-mode-close-overlay` | `9999` | `#080b0e` |
+| Open (app root) | `.app-explore-open-overlay` | `9999` | `#080b0e` |
+| Open (side panel) | `.web-mode-open-overlay` | `9999` | `#080b0e` |
+
+All overlays are rendered via `createPortal(document.body)` so they cover the full `2560 × 720` viewport regardless of component nesting.
+
+### Timing
+
+| Phase | Duration | Easing | Effect |
+| --- | --- | --- | --- |
+| Close fade-in | 3000 ms | `ease-in` | `opacity: 0 → 1` (black covers content) |
+| Close hold | 3050 ms | — | Backend API call fires; provider page destroyed |
+| Close fade-out | 3000 ms | `ease-out` | `opacity: 1 → 0` (ambient scene revealed) |
+| Open fade-in | 800 ms | `ease-in` | `opacity: 1 → 0` (overlay dissolves) |
+| Open fade-out | 1000 ms | `ease-out` | Remaining overlay clears |
+
+### Side-Panel Closing State
+
+When `is-closing` is applied to `.web-mode-provider-grid` or `.web-mode-control-stack`:
+
+- `opacity` transitions to `0` over 3000 ms.
+- The default (non-closing) state declares `transition: opacity 3000ms ease-in` so the class toggle produces a smooth animation.
+- A `::before` pseudo-element fades out over 600 ms (previously 900 ms pulsing, removed to eliminate the "double fade" visual).
+
+### Reduced Motion
+
+```css
+@media (prefers-reduced-motion: reduce) {
+  .app-explore-close-overlay,
+  .app-explore-open-overlay,
+  .web-mode-close-overlay,
+  .web-mode-open-overlay { transition: none !important; animation: none !important; }
+}
+```
+
+All overlays appear and disappear instantly with no fade.

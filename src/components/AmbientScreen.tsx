@@ -994,10 +994,10 @@ export function AmbientScreen({
     if (status.pending || pendingAmbientSource || webModePending) return;
     setWebModePending(true);
     setAmbientSourceError(null);
+    setSourcePickerOpen(false);
+    onSourcePickerOpenChange?.(false);
     try {
       await onOpenWebMode();
-      setSourcePickerOpen(false);
-      onSourcePickerOpenChange?.(false);
     } catch (error) {
       setAmbientSourceError(error instanceof Error ? error.message : "Explore failed to open");
     } finally {

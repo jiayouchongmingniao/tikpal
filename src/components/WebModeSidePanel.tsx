@@ -88,8 +88,10 @@ export function WebModeSidePanel() {
   const [tikpalState, setTikpalState] = useState<TikpalState | null>(null);
   const [pendingProvider, setPendingProvider] = useState<WebModeProviderId | null>(readInitialOpeningProvider);
   const [pendingAction, setPendingAction] = useState<"close" | "scale" | null>(null);
+  const pendingActionRef = useRef<"close" | "scale" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const actionLockRef = useRef(false);
+  const [exploreOpening, setExploreOpening] = useState(false);
   const activeProvider = webMode?.activeProvider ?? null;
   const volumePercent = tikpalState?.system.volume.percent ?? 0;
   const providerTextScale = webMode?.settings.providerTextScale ?? 1.1;
@@ -97,7 +99,6 @@ export function WebModeSidePanel() {
   const failedProvider = useMemo(() => inferFailedProviderFromError(error), [error]);
   const failedProviderNeedsProxy = isProxyNeededError(error, failedProvider);
   const effectiveActiveProvider = activeProvider && activeProvider !== failedProvider ? activeProvider : null;
-
   const providers = useMemo<WebModeProviderSummary[]>(() => {
     const byId = new Map(webMode?.providers.map((provider) => [provider.id, provider]) ?? []);
     return providerOrder.map((id) => {
@@ -152,6 +153,11 @@ export function WebModeSidePanel() {
     setPendingProvider((current) => (
       current && (next.activeProvider === current || next.lastError) ? null : current
     ));
+    // Reset close state when web mode becomes active again (reopen after close)
+    if (next.activeProvider && pendingActionRef.current === "close") {
+      pendingActionRef.current = null;
+      setPendingAction(null);
+    }
   }
 
   async function refresh() {
@@ -186,6 +192,23 @@ export function WebModeSidePanel() {
     };
   }, []);
 
+
+  // Listen for explore opening signal from main window
+  useEffect(() => {
+    const bc = new BroadcastChannel("tikpal-explore-open");
+    bc.onmessage = (e) => {
+      if (e.data === "opening") setExploreOpening(true);
+    };
+    return () => { bc.close(); };
+  }, []);
+
+  // Clear exploreOpening once the panel is ready
+  useEffect(() => {
+    if (!exploreOpening) return;
+    const t = setTimeout(() => setExploreOpening(false), 200);
+    return () => clearTimeout(t);
+  }, [exploreOpening]);
+
   async function openProvider(providerId: WebModeProviderId) {
     if (actionLockRef.current || pendingProvider || pendingAction) return;
     if (activeProvider === providerId) return;
@@ -209,16 +232,23 @@ export function WebModeSidePanel() {
     if (actionLockRef.current || pendingAction || pendingProvider) return;
     actionLockRef.current = true;
     setPendingAction("close");
+    pendingActionRef.current = "close";
+    try { new BroadcastChannel("tikpal-explore-close").postMessage("closing"); } catch {}
     setError(null);
+    await new Promise(r => setTimeout(r, 3050));
     try {
-      const next = await sendWebModeAction({ type: "close" });
-      setWebMode(next);
-      await refresh().catch(() => undefined);
+      await sendWebModeAction({ type: "close" });
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "Close failed");
     } finally {
-      setPendingAction(null);
-      actionLockRef.current = false;
+      // Reset pendingAction so the overlay fades away and reopen is not blocked.
+      // If the component unmounts (web mode deactivated), this is harmless.
+      // If it stays mounted (API error or polling delay), this allows reopening.
+      setTimeout(() => {
+        pendingActionRef.current = null;
+        setPendingAction(null);
+        actionLockRef.current = false;
+      }, 200);
     }
   }
 
@@ -266,6 +296,7 @@ export function WebModeSidePanel() {
       data-web-mode-panel
       data-web-mode-state={panelState}
       aria-busy={panelState !== "ready"}
+      onContextMenu={(e) => e.preventDefault()}
     >
       <header className="web-mode-panel-header">
         <div>
@@ -373,6 +404,8 @@ export function WebModeSidePanel() {
       <footer className="web-mode-panel-footer" role="status" title={error ?? undefined}>
         {friendlyError(error, "error.explore") ?? (pendingProvider ? `${t("common.connecting")} ${providerLabels[pendingProvider]}` : t("explore.footer"))}
       </footer>
+      <div className={"web-mode-close-overlay" + (panelState === "closing" ? " active" : "")} />
+      <div className={"web-mode-open-overlay" + (exploreOpening ? " active" : "")} />
     </main>
   );
 }

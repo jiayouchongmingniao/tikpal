@@ -1248,3 +1248,23 @@ For QQ Music, manually click play if the provider was reopened during deploy. Co
 - If Onboard stops changing languages, run `deploy/chromium/tikpal-web-mode.sh --check`, then verify `/usr/share/onboard/scripts/tikpalImeToggle.py`, the generated `Tikpal-Compact-*.onboard` layouts, `fcitx5-remote -n`, and the two `onboard-ime-state.json` files. If `pgrep -af fcitx5` shows any root-owned Fcitx process, stop that process and resync as `moode`.
 - If the display becomes too dim to use, recover the DDC value out of band before changing UI gesture mapping.
 - If Chromium, MPD, AirPlay, or Spotify contend for BT66, use the Gentoo source handoff helper rather than killing random audio processes.
+
+## Explore Transition Debug Port (August 2026)
+
+When `TIKPAL_WEB_MODE_TRANSITION_DEBUG_PORT=9250` is set in the web-mode environment, the shell script exposes a raw CDP debug port for inspecting the transition veil. The `navigate_transition_veil()` function uses a direct WebSocket `Page.navigate` call (not `chromium-browser-remote`) to show the transition cover page before a provider cold-load begins.
+
+Use this to diagnose stalls where the left pane stays black or the cover does not appear:
+
+```bash
+curl -s http://127.0.0.1:9250/json/list | jq '.[0].url'
+```
+
+If the URL is `about:blank` after a provider switch command, the veil navigation did not fire — check the shell script logs.
+
+## Resident Provider Optimistic Switch (August 2026)
+
+When switching between two providers that are both already loaded (resident), `server/index.mjs` returns the switch response immediately to the frontend and runs the shell-level provider switch command in the background. This eliminates the ~2–4 s blocking delay that previously occurred when the API waited for the shell script to finish before responding.
+
+The frontend side panel uses this fast response to update the active provider highlight immediately. The actual Chromium tab focus/visibility change happens asynchronously in the background.
+
+If the background shell command fails (e.g. target provider crashed), the next `web-mode-state.json` poll will show the stale provider, and the side panel will correct its highlight on the next read cycle.
