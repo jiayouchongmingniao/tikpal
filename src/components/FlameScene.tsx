@@ -1409,6 +1409,25 @@ export function FlameScene({ lowPower = false, playback, singleLoop = false, sta
       const hasProgress = Math.abs(currentTime - watchdog.currentTime) > SINGLE_LOOP_PROGRESS_EPSILON_SECONDS;
 
       if (video.readyState < 2 || video.seeking) {
+        // Detect videos stuck at readyState < 2 after a fatal error
+        // (e.g. AUDIO_RENDERER_ERROR). The onError handler reloads the
+        // video, but if it is still stuck after SINGLE_LOOP_STALL_MS,
+        // force another reload.
+        if (video.readyState < 2 && !video.seeking) {
+          watchdog.stalledSinceMs ??= now;
+          if (now - watchdog.stalledSinceMs >= SINGLE_LOOP_STALL_MS && !watchdog.recovering) {
+            watchdog.recovering = true;
+            patchSingleLoopVideoHealth("recovering");
+            video.load();
+            video.addEventListener("canplay", () => {
+              if (singleVideoRef.current === video) {
+                watchdog.recovering = false;
+                watchdog.stalledSinceMs = null;
+                void recoverSingleLoopVideo(video, watchdog.stallCount);
+              }
+            }, { once: true });
+          }
+        }
         scheduleWatchdog();
         return;
       }
@@ -1658,14 +1677,29 @@ export function FlameScene({ lowPower = false, playback, singleLoop = false, sta
                     return;
                   }
                   if (singleVideoHealthRef.current !== "fallback") {
+                    const video = event.currentTarget;
                     const watchdog = singleLoopWatchdogRef.current;
                     watchdog.stallCount += 1;
                     watchdog.lastStallAtMs = window.performance.now();
+                    // Fatal error: readyState stuck at metadata-only (e.g.
+                    // AUDIO_RENDERER_ERROR).  A normal pause+seek recovery
+                    // cannot fix a broken audio pipeline — force a full
+                    // media reload instead.
+                    if (video.readyState < 2) {
+                      patchSingleLoopVideoHealth("recovering");
+                      video.load();
+                      video.addEventListener("canplay", () => {
+                        if (singleVideoRef.current === video && singleVideoHealthRef.current !== "fallback") {
+                          void recoverSingleLoopVideo(video, watchdog.stallCount);
+                        }
+                      }, { once: true });
+                      return;
+                    }
                     patchSingleLoopVideoHealth("stalled");
                     if (watchdog.stallCount >= SINGLE_LOOP_STALL_FALLBACK_LIMIT) {
-                      fallBackSingleLoopVideo(event.currentTarget);
+                      fallBackSingleLoopVideo(video);
                     } else {
-                      recoverSingleLoopVideo(event.currentTarget, watchdog.stallCount);
+                      recoverSingleLoopVideo(video, watchdog.stallCount);
                     }
                   }
                 }}
