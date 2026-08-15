@@ -9465,7 +9465,14 @@ select {
 .app-explore-open-overlay.active {
   opacity: 1;
   visibility: visible;
-  transition: opacity 800ms ease-in, visibility 0s linear 0s;
+  animation: exploreVeilFadeIn 1200ms ease-in forwards;
+  transition: opacity 1000ms ease-out, visibility 0s linear 0s;
+}
+
+@keyframes exploreVeilFadeIn {
+  from { opacity: 0; }
+  35% { opacity: 0.38; }
+  100% { opacity: 1; }
 }
 
 @keyframes webModePanelSignal {

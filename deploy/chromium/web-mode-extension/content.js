@@ -168,7 +168,21 @@
   document.addEventListener("DOMContentLoaded", () => {
     retarget();
     hideNativeCta();
-    new MutationObserver(() => { retarget(); hideNativeCta(); }).observe(document.documentElement, {
+    let mutationIdleId = null;
+    const processMutations = () => {
+      mutationIdleId = null;
+      retarget();
+      hideNativeCta();
+    };
+    const scheduleMutationProcess = () => {
+      if (mutationIdleId !== null) return;
+      if (typeof requestIdleCallback === "function") {
+        mutationIdleId = requestIdleCallback(processMutations, { timeout: 200 });
+      } else {
+        mutationIdleId = setTimeout(processMutations, 50);
+      }
+    };
+    new MutationObserver(scheduleMutationProcess).observe(document.documentElement, {
       childList: true,
       subtree: true
     });

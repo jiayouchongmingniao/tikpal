@@ -1085,7 +1085,8 @@ chromium_base_args() {
   printf '%s\n' \
     "--force-dark-mode" \
     "--enable-features=WebUIDarkMode" \
-    "--default-background-color=000000"
+    "--default-background-color=000000" \
+    "--disable-features=StatusBubble"
 }
 
 call_onboard_method() {
@@ -1117,30 +1118,30 @@ position_onboard() {
 
   if command -v xdotool >/dev/null 2>&1; then
     while IFS= read -r window; do
-      [[ "$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool getwindowname "$window" 2>/dev/null || true)" == "Onboard" ]] || continue
+      [[ "$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe getwindowname "$window" 2>/dev/null || true)" == "Onboard" ]] || continue
       if command -v xwininfo >/dev/null 2>&1 &&
         DISPLAY="$TIKPAL_KIOSK_DISPLAY" xwininfo -id "$window" 2>/dev/null | grep -q "Class: InputOnly"; then
         continue
       fi
-      width="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool getwindowgeometry --shell "$window" 2>/dev/null | awk -F= '$1 == "WIDTH" { print $2 }')"
-      height="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool getwindowgeometry --shell "$window" 2>/dev/null | awk -F= '$1 == "HEIGHT" { print $2 }')"
+      width="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe getwindowgeometry --shell "$window" 2>/dev/null | awk -F= '$1 == "WIDTH" { print $2 }')"
+      height="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe getwindowgeometry --shell "$window" 2>/dev/null | awk -F= '$1 == "HEIGHT" { print $2 }')"
       area=$(( ${width:-0} * ${height:-0} ))
       if (( area > keyboard_area )); then
         keyboard_window="$window"
         keyboard_area="$area"
       fi
-    done < <(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool search --name Onboard 2>/dev/null || true)
+    done < <(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe search --name Onboard 2>/dev/null || true)
     if [[ -n "$keyboard_window" ]]; then
       width="$(window_width "$TIKPAL_WEB_MODE_ONBOARD_WINDOW")"
       height="$(window_height "$TIKPAL_WEB_MODE_ONBOARD_WINDOW")"
-      DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowmap "$keyboard_window" >/dev/null 2>&1 || true
-      DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowsize "$keyboard_window" \
+      DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowmap "$keyboard_window" >/dev/null 2>&1 || true
+      DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowsize "$keyboard_window" \
         "$((width - 1))" "$((height - 1))" >/dev/null 2>&1 || true
       sleep 0.2
-      DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowsize "$keyboard_window" "$width" "$height" >/dev/null 2>&1 || true
-      DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowmove "$keyboard_window" \
+      DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowsize "$keyboard_window" "$width" "$height" >/dev/null 2>&1 || true
+      DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowmove "$keyboard_window" \
         "$(position_x "$TIKPAL_WEB_MODE_ONBOARD_POSITION")" "$(position_y "$TIKPAL_WEB_MODE_ONBOARD_POSITION")" >/dev/null 2>&1 || true
-      DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowraise "$keyboard_window" >/dev/null 2>&1 || true
+      DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowraise "$keyboard_window" >/dev/null 2>&1 || true
     fi
   fi
 
@@ -1154,13 +1155,13 @@ onboard_visible_windows() {
   command -v xdotool >/dev/null 2>&1 || return 1
   while IFS= read -r window; do
     [[ -n "$window" ]] || continue
-    [[ "$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool getwindowname "$window" 2>/dev/null || true)" == "Onboard" ]] || continue
+    [[ "$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe getwindowname "$window" 2>/dev/null || true)" == "Onboard" ]] || continue
     if command -v xwininfo >/dev/null 2>&1 &&
       DISPLAY="$TIKPAL_KIOSK_DISPLAY" xwininfo -id "$window" 2>/dev/null | grep -q "Class: InputOnly"; then
       continue
     fi
     printf '%s\n' "$window"
-  done < <(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool search --onlyvisible --name Onboard 2>/dev/null || true)
+  done < <(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe search --onlyvisible --name Onboard 2>/dev/null || true)
 }
 
 raise_onboard() {
@@ -1168,7 +1169,7 @@ raise_onboard() {
   command -v xdotool >/dev/null 2>&1 || return 0
   while IFS= read -r window; do
     [[ -n "$window" ]] || continue
-    DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowraise "$window" >/dev/null 2>&1 || true
+    DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowraise "$window" >/dev/null 2>&1 || true
     if command -v wmctrl >/dev/null 2>&1; then
       DISPLAY="$TIKPAL_KIOSK_DISPLAY" wmctrl -i -r "$window" -b add,above >/dev/null 2>&1 || true
     fi
@@ -1184,27 +1185,27 @@ move_onboard_if_requested() {
 
   while IFS= read -r window; do
     [[ -n "$window" ]] || continue
-    [[ "$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool getwindowname "$window" 2>/dev/null || true)" == "Onboard" ]] || continue
+    [[ "$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe getwindowname "$window" 2>/dev/null || true)" == "Onboard" ]] || continue
     if command -v xwininfo >/dev/null 2>&1 &&
       DISPLAY="$TIKPAL_KIOSK_DISPLAY" xwininfo -id "$window" 2>/dev/null | grep -q "Class: InputOnly"; then
       continue
     fi
-    width="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool getwindowgeometry --shell "$window" 2>/dev/null | awk -F= '$1 == "WIDTH" { print $2 }')"
-    height="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool getwindowgeometry --shell "$window" 2>/dev/null | awk -F= '$1 == "HEIGHT" { print $2 }')"
+    width="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe getwindowgeometry --shell "$window" 2>/dev/null | awk -F= '$1 == "WIDTH" { print $2 }')"
+    height="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe getwindowgeometry --shell "$window" 2>/dev/null | awk -F= '$1 == "HEIGHT" { print $2 }')"
     area=$(( ${width:-0} * ${height:-0} ))
     if (( area > keyboard_area )); then
       keyboard_window="$window"
       keyboard_area="$area"
     fi
-  done < <(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool search --onlyvisible --name Onboard 2>/dev/null || true)
+  done < <(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe search --onlyvisible --name Onboard 2>/dev/null || true)
 
   [[ -n "$keyboard_window" ]] || return 0
   width="$(window_width "$TIKPAL_WEB_MODE_ONBOARD_WINDOW")"
   height="$(window_height "$TIKPAL_WEB_MODE_ONBOARD_WINDOW")"
-  DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowsize "$keyboard_window" "$width" "$height" >/dev/null 2>&1 || true
-  DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowmove "$keyboard_window" \
+  DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowsize "$keyboard_window" "$width" "$height" >/dev/null 2>&1 || true
+  DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowmove "$keyboard_window" \
     "$(position_x "$TIKPAL_WEB_MODE_ONBOARD_POSITION")" "$(position_y "$TIKPAL_WEB_MODE_ONBOARD_POSITION")" >/dev/null 2>&1 || true
-  DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowraise "$keyboard_window" >/dev/null 2>&1 || true
+  DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowraise "$keyboard_window" >/dev/null 2>&1 || true
   if command -v wmctrl >/dev/null 2>&1; then
     DISPLAY="$TIKPAL_KIOSK_DISPLAY" wmctrl -i -r "$keyboard_window" -b add,above >/dev/null 2>&1 || true
   fi
@@ -1515,7 +1516,7 @@ configure_onboard() {
 window_uses_profile() {
   local cmdline pid profile="$1" window="$2"
   [[ -n "$profile" ]] || return 1
-  pid="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool getwindowpid "$window" 2>/dev/null || true)"
+  pid="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe getwindowpid "$window" 2>/dev/null || true)"
   [[ -n "$pid" ]] || return 1
   cmdline="$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null || true)"
   [[ "$cmdline" == *"--user-data-dir=$profile"* ]]
@@ -1531,7 +1532,7 @@ kiosk_browser_window() {
       printf '%s\n' "$window"
       return 0
     fi
-  done < <(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool search --onlyvisible --class chromium 2>/dev/null || true)
+  done < <(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe search --onlyvisible --class chromium 2>/dev/null || true)
   return 1
 }
 
@@ -1550,23 +1551,23 @@ focused_browser_window() {
         printf '%s\n' "$window"
         return 0
       fi
-    done < <(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool search --onlyvisible --class chromium 2>/dev/null || true)
+    done < <(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe search --onlyvisible --class chromium 2>/dev/null || true)
   fi
-  window="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool getactivewindow 2>/dev/null || true)"
+  window="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe getactivewindow 2>/dev/null || true)"
   if [[ -n "$window" ]]; then
     printf '%s\n' "$window"
     return 0
   fi
   while IFS= read -r window; do
     [[ -n "$window" ]] || continue
-    width="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool getwindowgeometry --shell "$window" 2>/dev/null | awk -F= '$1 == "WIDTH" { print $2 }')"
-    height="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool getwindowgeometry --shell "$window" 2>/dev/null | awk -F= '$1 == "HEIGHT" { print $2 }')"
+    width="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe getwindowgeometry --shell "$window" 2>/dev/null | awk -F= '$1 == "WIDTH" { print $2 }')"
+    height="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe getwindowgeometry --shell "$window" 2>/dev/null | awk -F= '$1 == "HEIGHT" { print $2 }')"
     area=$(( ${width:-0} * ${height:-0} ))
     if (( area > best_area )); then
       best_window="$window"
       best_area="$area"
     fi
-  done < <(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool search --onlyvisible --class chromium 2>/dev/null || true)
+  done < <(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe search --onlyvisible --class chromium 2>/dev/null || true)
   [[ -n "$best_window" ]] && printf '%s\n' "$best_window"
 }
 
@@ -1574,9 +1575,9 @@ focus_window() {
   local window="$1"
   [[ -n "$window" ]] || return 0
   command -v xdotool >/dev/null 2>&1 || return 0
-  DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowfocus "$window" >/dev/null 2>&1 || true
-  if [[ -z "$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool getactivewindow 2>/dev/null || true)" ]]; then
-    DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowactivate "$window" >/dev/null 2>&1 || true
+  DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowfocus "$window" >/dev/null 2>&1 || true
+  if [[ -z "$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe getactivewindow 2>/dev/null || true)" ]]; then
+    DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowactivate "$window" >/dev/null 2>&1 || true
   fi
 }
 
@@ -1697,7 +1698,7 @@ side_panel_window_visible() {
   command -v xdotool >/dev/null 2>&1 || return 1
   while IFS= read -r window; do
     [[ -n "$window" ]] || continue
-    pid="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool getwindowpid "$window" 2>/dev/null || true)"
+    pid="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe getwindowpid "$window" 2>/dev/null || true)"
     if process_tree_uses_profile "$pid" "$panel_profile"; then
       return 0
     fi
@@ -2041,18 +2042,18 @@ park_profile_windows_for_reopen() {
     # after it is parked so the next reveal never inherits that opacity.
     restore_window_opacity "$window"
     clear_window_above "$window"
-    DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowlower "$window" >/dev/null 2>&1 || true
+    DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowlower "$window" >/dev/null 2>&1 || true
     return 0
   fi
   while IFS= read -r window; do
     [[ -n "$window" ]] || continue
-    pid="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool getwindowpid "$window" 2>/dev/null || true)"
+    pid="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe getwindowpid "$window" 2>/dev/null || true)"
     process_tree_uses_profile "$pid" "$profile" || continue
     tile_window_fast "$window" "$TIKPAL_WEB_MODE_STAGE_POSITION" "$size"
     restore_window_opacity "$window"
     clear_window_above "$window"
-    DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowlower "$window" >/dev/null 2>&1 || true
-  done < <(all_chromium_windows)
+    DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowlower "$window" >/dev/null 2>&1 || true
+  done < <(cached_chromium_windows)
 }
 
 park_side_panel_for_reopen() {
@@ -2356,7 +2357,7 @@ tile_window() {
   width="$(window_width "$size")"
   height="$(window_height "$size")"
   TIKPAL_TILE_WINDOW_CHANGED=0
-  geometry="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool getwindowgeometry --shell "$window" 2>/dev/null || true)"
+  geometry="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe getwindowgeometry --shell "$window" 2>/dev/null || true)"
   current_x="$(printf '%s\n' "$geometry" | awk -F= '$1 == "X" { print $2 }')"
   current_y="$(printf '%s\n' "$geometry" | awk -F= '$1 == "Y" { print $2 }')"
   current_width="$(printf '%s\n' "$geometry" | awk -F= '$1 == "WIDTH" { print $2 }')"
@@ -2372,13 +2373,13 @@ tile_window() {
     fi
   fi
   if is_enabled "$TIKPAL_WEB_MODE_X11_SYNC_WINDOW_OPS"; then
-    DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool \
+    DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe \
       windowmove --sync "$window" "$x" "$y" \
       windowsize --sync "$window" "$width" "$height" \
       windowmove "$window" "$x" "$y" >/dev/null 2>&1 || true
     return 0
   fi
-  DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool \
+  DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe \
     windowmove "$window" "$x" "$y" \
     windowsize "$window" "$width" "$height" \
     windowmove "$window" "$x" "$y" >/dev/null 2>&1 || true
@@ -2401,7 +2402,7 @@ tile_window_fast() {
     tile_window "$window" "$position" "$size"
     return
   fi
-  DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool \
+  DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe \
     windowmove "$window" "$x" "$y" \
     windowsize "$window" "$width" "$height" \
     windowmove "$window" "$x" "$y" >/dev/null 2>&1 || true
@@ -2410,13 +2411,13 @@ tile_window_fast() {
 raise_window() {
   local window="$1"
   [[ -n "$window" ]] || return 0
-  DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowraise "$window" windowactivate "$window" >/dev/null 2>&1 || true
+  DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowraise "$window" windowactivate "$window" >/dev/null 2>&1 || true
 }
 
 raise_window_without_focus() {
   local window="$1"
   [[ -n "$window" ]] || return 0
-  DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowraise "$window" >/dev/null 2>&1 || true
+  DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowraise "$window" >/dev/null 2>&1 || true
 }
 
 mark_window_above() {
@@ -2466,9 +2467,9 @@ first_window_for_profile() {
   fi
   while IFS= read -r window; do
     [[ -n "$window" ]] || continue
-    pid="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool getwindowpid "$window" 2>/dev/null || true)"
+    pid="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe getwindowpid "$window" 2>/dev/null || true)"
     process_tree_uses_profile "$pid" "$profile" || continue
-    geometry="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool getwindowgeometry "$window" 2>/dev/null || true)"
+    geometry="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe getwindowgeometry "$window" 2>/dev/null || true)"
     width="$(printf '%s\n' "$geometry" | awk -F'[ x]+' '/Geometry:/{print $3}')"
     height="$(printf '%s\n' "$geometry" | awk -F'[ x]+' '/Geometry:/{print $4}')"
     [[ "$width" =~ ^[0-9]+$ && "$height" =~ ^[0-9]+$ ]] || continue
@@ -2477,7 +2478,7 @@ first_window_for_profile() {
       best_area="$area"
       best_window="$window"
     fi
-  done < <(all_chromium_windows)
+  done < <(cached_chromium_windows)
   if [[ -n "$best_window" && "$best_area" -gt 100000 ]]; then
     mkdir -p "$(dirname "$cache_path")"
     printf '%s\n' "$best_window" > "$cache_path"
@@ -2499,9 +2500,9 @@ validate_profile_window() {
   local profile="$2"
   local pid geometry width height
   [[ "$window" =~ ^[0-9]+$ ]] || return 1
-  pid="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool getwindowpid "$window" 2>/dev/null || true)"
+  pid="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe getwindowpid "$window" 2>/dev/null || true)"
   process_tree_uses_profile "$pid" "$profile" || return 1
-  geometry="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool getwindowgeometry "$window" 2>/dev/null || true)"
+  geometry="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe getwindowgeometry "$window" 2>/dev/null || true)"
   width="$(printf '%s\n' "$geometry" | awk -F'[ x]+' '/Geometry:/{print $3}')"
   height="$(printf '%s\n' "$geometry" | awk -F'[ x]+' '/Geometry:/{print $4}')"
   [[ "$width" =~ ^[0-9]+$ && "$height" =~ ^[0-9]+$ ]] || return 1
@@ -2536,8 +2537,8 @@ profile_window_timeout_attempts() {
 
 visible_chromium_windows() {
   {
-    DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool search --onlyvisible --class chromium 2>/dev/null || true
-    DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool search --onlyvisible --class Chromium-browser 2>/dev/null || true
+    DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe search --onlyvisible --class chromium 2>/dev/null || true
+    DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe search --onlyvisible --class Chromium-browser 2>/dev/null || true
   } | awk 'NF && !seen[$0]++'
 }
 
@@ -2547,9 +2548,9 @@ profile_has_visible_window() {
   [[ -n "$profile" ]] || return 1
   while IFS= read -r window; do
     [[ -n "$window" ]] || continue
-    pid="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool getwindowpid "$window" 2>/dev/null || true)"
+    pid="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe getwindowpid "$window" 2>/dev/null || true)"
     process_tree_uses_profile "$pid" "$profile" || continue
-    geometry="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool getwindowgeometry --shell "$window" 2>/dev/null || true)"
+    geometry="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe getwindowgeometry --shell "$window" 2>/dev/null || true)"
     width="$(printf '%s\n' "$geometry" | awk -F= '$1 == "WIDTH" { print $2 }')"
     height="$(printf '%s\n' "$geometry" | awk -F= '$1 == "HEIGHT" { print $2 }')"
     [[ "$width" =~ ^[0-9]+$ && "$height" =~ ^[0-9]+$ ]] || continue
@@ -2567,11 +2568,28 @@ provider_launch_position() {
   printf '%s\n' "$TIKPAL_WEB_MODE_LEFT_POSITION"
 }
 
+xdotool_safe() {
+  timeout 3 xdotool "$@" 2>/dev/null || true
+}
+
 all_chromium_windows() {
   {
-    DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool search --class chromium 2>/dev/null || true
-    DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool search --class Chromium-browser 2>/dev/null || true
+    DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe search --class chromium
+    DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe search --class Chromium-browser
   } | awk 'NF && !seen[$0]++'
+}
+
+_CHROMIUM_WINDOW_CACHE=""
+
+cached_chromium_windows() {
+  if [[ -z "$_CHROMIUM_WINDOW_CACHE" ]]; then
+    _CHROMIUM_WINDOW_CACHE="$(all_chromium_windows)"
+  fi
+  printf '%s' "$_CHROMIUM_WINDOW_CACHE"
+}
+
+invalidate_chromium_window_cache() {
+  _CHROMIUM_WINDOW_CACHE=""
 }
 
 tile_visible_web_mode_windows() {
@@ -2584,12 +2602,12 @@ tile_visible_web_mode_windows() {
   local background_windows=()
   local provider_windows=()
   command -v xdotool >/dev/null 2>&1 || return 0
-  active_window="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool getactivewindow 2>/dev/null || true)"
+  active_window="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe getactivewindow 2>/dev/null || true)"
 
   while IFS= read -r window; do
     [[ -n "$window" ]] || continue
-    pid="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool getwindowpid "$window" 2>/dev/null || true)"
-    title="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool getwindowname "$window" 2>/dev/null || true)"
+    pid="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe getwindowpid "$window" 2>/dev/null || true)"
+    title="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe getwindowname "$window" 2>/dev/null || true)"
 
     if process_tree_uses_profile "$pid" "$panel_profile"; then
       tile_window "$window" "$TIKPAL_WEB_MODE_PANEL_POSITION" "$TIKPAL_WEB_MODE_PANEL_WINDOW"
@@ -2605,7 +2623,7 @@ tile_visible_web_mode_windows() {
       continue
     fi
     if is_ad_window_title "$title"; then
-      DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowclose "$window" >/dev/null 2>&1 || true
+      DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowclose "$window" >/dev/null 2>&1 || true
       continue
     fi
     if process_tree_uses_profile "$pid" "$provider_profile"; then
@@ -2648,7 +2666,7 @@ tile_visible_web_mode_windows() {
     if [[ "${#provider_windows[@]}" -gt 0 ]]; then
       tile_window "$window" "$TIKPAL_WEB_MODE_STAGE_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
       clear_window_above "$window"
-      DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowlower "$window" >/dev/null 2>&1 || true
+      DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowlower "$window" >/dev/null 2>&1 || true
     else
       tile_window "$window" "$TIKPAL_WEB_MODE_LEFT_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
       mark_window_above "$window"
@@ -2680,7 +2698,7 @@ tile_visible_web_mode_windows() {
   done
   for window in "${provider_windows[@]}"; do
     [[ "$window" == "$keep_window" ]] && continue
-    DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowclose "$window" >/dev/null 2>&1 || true
+    DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowclose "$window" >/dev/null 2>&1 || true
     did_restack=1
   done
   tile_window "$keep_window" "$TIKPAL_WEB_MODE_LEFT_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
@@ -2923,7 +2941,7 @@ park_transition_veil() {
   [[ -n "$window" ]] || return 0
   tile_window_fast "$window" "$TIKPAL_WEB_MODE_STAGE_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
   clear_window_above "$window"
-  DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowlower "$window" >/dev/null 2>&1 || true
+  DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowlower "$window" >/dev/null 2>&1 || true
 }
 
 park_background_veil() {
@@ -2933,7 +2951,7 @@ park_background_veil() {
   [[ -n "$window" ]] || return 0
   tile_window_fast "$window" "$TIKPAL_WEB_MODE_STAGE_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
   clear_window_above "$window"
-  DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowlower "$window" >/dev/null 2>&1 || true
+  DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowlower "$window" >/dev/null 2>&1 || true
 }
 
 close_entry_stage_veil() {
@@ -2962,7 +2980,7 @@ ensure_background_veil() {
     tile_window "$window" "$position" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
     if [[ "$hidden" == "1" ]]; then
       clear_window_above "$window"
-      DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowlower "$window" >/dev/null 2>&1 || true
+      DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowlower "$window" >/dev/null 2>&1 || true
     else
       raise_window_without_focus "$window"
     fi
@@ -2984,7 +3002,7 @@ ensure_background_veil() {
     tile_window "$window" "$position" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
     if [[ "$hidden" == "1" ]]; then
       clear_window_above "$window"
-      DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowlower "$window" >/dev/null 2>&1 || true
+      DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowlower "$window" >/dev/null 2>&1 || true
     else
       raise_window_without_focus "$window"
     fi
@@ -3051,7 +3069,7 @@ ensure_parked_entry_stage_veil() {
   [[ -n "$window" ]] || return 1
   tile_window_fast "$window" "$TIKPAL_WEB_MODE_STAGE_POSITION" "$TIKPAL_WEB_MODE_ENTRY_STAGE_WINDOW"
   clear_window_above "$window"
-  DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowlower "$window" >/dev/null 2>&1 || true
+  DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowlower "$window" >/dev/null 2>&1 || true
 }
 
 raise_entry_stage_veil() {
@@ -3086,7 +3104,7 @@ fade_entry_stage_veil() {
   local window window_id opacity value
   window="$(wait_for_profile_window "$entry_profile" 2 || true)"
   [[ -n "$window" ]] || return 1
-  DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool key --window "$window" F8 >/dev/null 2>&1 || true
+  DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe key --window "$window" F8 >/dev/null 2>&1 || true
   if command -v xprop >/dev/null 2>&1; then
     window_id="$(printf '0x%x' "$window")"
     for opacity in 0.82 0.64 0.48 0.32 0.18; do
@@ -3107,7 +3125,7 @@ fade_and_park_entry_stage_veil() {
   fade_entry_stage_veil || true
   tile_window_fast "$window" "$TIKPAL_WEB_MODE_STAGE_POSITION" "$TIKPAL_WEB_MODE_ENTRY_STAGE_WINDOW"
   clear_window_above "$window"
-  DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowlower "$window" >/dev/null 2>&1 || true
+  DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowlower "$window" >/dev/null 2>&1 || true
 }
 
 fade_profile_window_for_provider_switch() {
@@ -3148,20 +3166,28 @@ reveal_background_veil_below_current_provider() {
   [[ -n "$window" ]] || return 1
   tile_window_fast "$window" "$TIKPAL_WEB_MODE_LEFT_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
   clear_window_above "$window"
-  DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowlower "$window" >/dev/null 2>&1 || true
+  DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowlower "$window" >/dev/null 2>&1 || true
 }
 
 begin_provider_switch_transition() {
   local current_profile="$1"
   local provider="$2"
   local current_window
-  local _t_started _t_now
+  local _t_started _t_now _bg_pid _bg_watchdog
   _t_started="$(now_ms)"
   TIKPAL_WEB_MODE_TRANSITION_SHOWN_MS=0
+  invalidate_chromium_window_cache
 
   # Both cover pages are created off-screen first. A Chromium first paint can
   # be white, so it must never be allowed to replace the current provider.
-  ensure_background_veil "$provider" 1 || true
+  # Launch async — the background veil is a safety net, not a hard dependency.
+  ensure_background_veil "$provider" 1 &
+  _bg_pid=$!
+  ( sleep 3; kill "$_bg_pid" 2>/dev/null ) &
+  _bg_watchdog=$!
+  wait "$_bg_pid" 2>/dev/null || true
+  kill "$_bg_watchdog" 2>/dev/null || true
+  wait "$_bg_watchdog" 2>/dev/null || true
   _t_now="$(now_ms)"; log_stage "transition_bg_veil provider=$provider ms=$(( _t_now - _t_started ))"
   current_window="$(first_window_for_profile "$current_profile" || true)"
   if [[ -n "$current_window" ]]; then
@@ -3214,7 +3240,7 @@ launch_transition_veil() {
     navigate_transition_veil "$transition_url" || true
     tile_window_fast "$window" "$TIKPAL_WEB_MODE_STAGE_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
     clear_window_above "$window"
-    DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowlower "$window" >/dev/null 2>&1 || true
+    DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowlower "$window" >/dev/null 2>&1 || true
     return 0
   fi
   mapfile -t flags < <(read_flags)
@@ -3232,7 +3258,7 @@ launch_transition_veil() {
   if [[ -n "$window" ]]; then
     tile_window_fast "$window" "$TIKPAL_WEB_MODE_STAGE_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
     clear_window_above "$window"
-    DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowlower "$window" >/dev/null 2>&1 || true
+    DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowlower "$window" >/dev/null 2>&1 || true
   fi
 }
 
@@ -3415,11 +3441,11 @@ reveal_initial_entry_surfaces() {
   if [[ -n "$panel_window" ]]; then
     tile_window_fast "$panel_window" "$TIKPAL_WEB_MODE_PANEL_POSITION" "$TIKPAL_WEB_MODE_PANEL_WINDOW"
     clear_window_above "$panel_window"
-    DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowlower "$panel_window" >/dev/null 2>&1 || true
+    DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowlower "$panel_window" >/dev/null 2>&1 || true
   fi
   tile_window_fast "$target_window" "$TIKPAL_WEB_MODE_LEFT_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
   clear_window_above "$target_window"
-  DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowlower "$target_window" >/dev/null 2>&1 || true
+  DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowlower "$target_window" >/dev/null 2>&1 || true
   raise_entry_stage_veil >/dev/null 2>&1 || true
   sleep "$TIKPAL_WEB_MODE_ENTRY_REVEAL_SETTLE_SECONDS"
   stop_entry_stage_guard
@@ -3442,11 +3468,11 @@ reveal_resident_initial_entry_surfaces() {
   if [[ -n "$panel_window" ]]; then
     tile_window_fast "$panel_window" "$TIKPAL_WEB_MODE_PANEL_POSITION" "$TIKPAL_WEB_MODE_PANEL_WINDOW"
     clear_window_above "$panel_window"
-    DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowlower "$panel_window" >/dev/null 2>&1 || true
+    DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowlower "$panel_window" >/dev/null 2>&1 || true
   fi
   tile_window_fast "$target_window" "$TIKPAL_WEB_MODE_LEFT_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
   clear_window_above "$target_window"
-  DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowlower "$target_window" >/dev/null 2>&1 || true
+  DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowlower "$target_window" >/dev/null 2>&1 || true
   raise_entry_stage_veil >/dev/null 2>&1 || true
   sleep "$settle"
   # Chromium can expose a blank compositor frame after an off-screen window is
@@ -3489,7 +3515,7 @@ reveal_resident_provider_window() {
   if ! check_target_window_probe "$target_window" 2>/dev/null; then
     tile_window_fast "$target_window" "$TIKPAL_WEB_MODE_LEFT_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
     clear_window_above "$target_window"
-    DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowlower "$target_window" >/dev/null 2>&1 || true
+    DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowlower "$target_window" >/dev/null 2>&1 || true
   fi
   [[ "$transition_shown_ms" =~ ^[0-9]+$ && "$transition_shown_ms" -gt 0 ]] && raise_transition_veil >/dev/null 2>&1 || true
   if [[ "$TIKPAL_WEB_MODE_RESIDENT_SWITCH_SETTLE_SECONDS" =~ ^[0-9]+([.][0-9]+)?$ ]] \
@@ -3508,7 +3534,7 @@ reveal_resident_provider_window() {
   if ! check_target_window_probe "$target_window" && ! wait_for_provider_window_nonblank_x11_frame "$target_window" && ! { [[ -n "$provider_port" ]] && provider_has_real_provider_page "$provider_port"; }; then
     cleanup_target_window_probe "$target_window"
     clear_window_above "$target_window"
-    DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowlower "$target_window" >/dev/null 2>&1 || true
+    DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowlower "$target_window" >/dev/null 2>&1 || true
     raise_transition_veil >/dev/null 2>&1 || true
     log_stage "reveal_paint_failed target=$target_window port=$provider_port elapsed_ms=$(( $(now_ms) - _paint_check_ms ))"
     return 1
@@ -3521,7 +3547,18 @@ reveal_resident_provider_window() {
   wait_for_transition_minimum_visibility "$transition_shown_ms"
   close_error_veil
   close_entry_stage_veil
-  park_background_veil
+  # Keep background veil in position behind the provider window so that the
+  # next provider switch never exposes the underlying room/environment.
+  {
+    local _bg_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/background"
+    local _bg_window
+    _bg_window="$(first_window_for_profile "$_bg_profile" || true)"
+    if [[ -n "$_bg_window" ]]; then
+      tile_window_fast "$_bg_window" "$TIKPAL_WEB_MODE_LEFT_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
+      clear_window_above "$_bg_window"
+      DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowlower "$_bg_window" >/dev/null 2>&1 || true
+    fi
+  }
   mark_window_above "$target_window"
   raise_window "$target_window"
   # Park the transition veil off-screen instead of killing it. The next switch
@@ -4006,12 +4043,13 @@ open_provider_pool() {
         if [[ -n "$target_window" ]]; then
           tile_window_fast "$target_window" "$TIKPAL_WEB_MODE_LEFT_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
           clear_window_above "$target_window"
-          DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool windowlower "$target_window" >/dev/null 2>&1 || true
+          DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowlower "$target_window" >/dev/null 2>&1 || true
           probe_target_window_background "$target_window"
         fi
       fi
     fi
     if reveal_resident_provider_window "$target_window" "$current_profile" "$provider_profile" "$transition_shown_ms" "$provider_port"; then
+      invalidate_chromium_window_cache
       reveal_ms="$(( $(now_ms) - started_ms ))"
       log_stage "reveal_ms=$reveal_ms provider=$provider resident=1"
       clear_provider_switch_guard

@@ -518,7 +518,7 @@ export default function App() {
   // Clear exploreOpening when Explore becomes active
   useEffect(() => {
     if (webModeActive && exploreOpening) {
-      const t = setTimeout(() => setExploreOpening(false), 200);
+      const t = setTimeout(() => setExploreOpening(false), 1500);
       return () => clearTimeout(t);
     }
     if (!webModeActive) setExploreOpening(false);

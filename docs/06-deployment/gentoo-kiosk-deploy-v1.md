@@ -1268,3 +1268,29 @@ When switching between two providers that are both already loaded (resident), `s
 The frontend side panel uses this fast response to update the active provider highlight immediately. The actual Chromium tab focus/visibility change happens asynchronously in the background.
 
 If the background shell command fails (e.g. target provider crashed), the next `web-mode-state.json` poll will show the stale provider, and the side panel will correct its highlight on the next read cycle.
+
+## Explore Chromium Flags (August 2026)
+
+All Explore provider Chromium processes share `chromium_base_args()` flags:
+
+```bash
+--force-dark-mode
+--enable-features=WebUIDarkMode
+--default-background-color=000000
+--disable-features=StatusBubble
+```
+
+`StatusBubble` hides the bottom-left URL tooltip that appears on link hover. Additional per-process `--disable-features` flags (Translate, InterestFeedContentSuggestions, MediaRouter, OptimizationHints) are applied via the Chromium profile preferences.
+
+## Explore Process Race Condition Fix (August 2026)
+
+Provider switching was hanging for 100+ seconds when the X server was under load from 20+ Chromium windows. Root cause: `xdotool` calls had no timeout, and window enumeration was repeated 5-8 times per switch.
+
+Fixes applied in `tikpal-web-mode.sh`:
+
+- **`xdotool_safe()`**: wraps every `xdotool` call with `timeout 3` (74 call sites)
+- **`cached_chromium_windows()`**: caches the window list per switch operation, invalidated at switch boundaries
+- **Async background veil**: `ensure_background_veil` launches in background with 3s watchdog
+- **`--disable-features=StatusBubble`**: hides bottom-left link hover URL bar
+
+Architecture details: `docs/03-architecture/explore-provider-pool-v1.md`
