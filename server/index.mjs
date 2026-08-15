@@ -14052,6 +14052,29 @@ async function applyWebModeAction(action) {
     await writeWebModeRuntimeState({ activeProvider: providerId, lastProvider: providerId, lastError: null, closeRequestId: null });
   } catch (error) {
     const message = formatWebModeCommandError(error, "open", providerId);
+    // Auto-fallback: try a provider that does not need proxy.
+    // Providers not in check_proxy/region_unavailable/check_setup are candidates
+    // (includes prewarming, ready, active). Retry briefly if all candidates are
+    // still prewarming — the warm pool may be mid-launch.
+    const DIRECT_PROXY_IDS = new Set(["qq_music", "netease_music"]);
+    let fallbackId = null;
+    for (let attempt = 0; attempt < 3 && !fallbackId; attempt++) {
+      if (attempt > 0) await new Promise((r) => setTimeout(r, 2000));
+      const st = await readWebModeRuntimeState();
+      fallbackId = WEB_MODE_PROVIDERS.find((p) => {
+        if (p.id === providerId) return false;
+        if (!DIRECT_PROXY_IDS.has(p.id)) return false;
+        const s = st.residentProviders?.[p.id]?.status;
+        return !s || s === "ready" || s === "active" || s === "prewarming" || s === "opening";
+      })?.id;
+    }
+    if (fallbackId) {
+      try {
+        await runWebModeCommand("open", fallbackId, { TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS: "30" });
+        await writeWebModeRuntimeState({ activeProvider: fallbackId, lastProvider: fallbackId, lastError: null, closeRequestId: null });
+        return await buildWebModeState();
+      } catch (_) { /* fallback also failed; fall through to original error */ }
+    }
     const clearFailedCurrentProvider = providerOpenCommandStarted
       && previousRuntimeState.activeProvider === providerId
       && /\bdid not open\b|\bdid not enter\b|\bdid not become ready\b/i.test(message);

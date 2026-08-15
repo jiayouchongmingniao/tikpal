@@ -148,8 +148,8 @@ stateDiagram-v2
 - Quick menu is a fallback, not a second navigation system.
 - It should never expose deep Console drawers directly.
 - It should close cleanly on cancel or after choosing an item.
-- Quick Menu exposes four large shallow controls: Screen, Volume, Time, and Sleep.
-- Screen enters a black tap-to-wake overlay without changing the active audio source or global volume.
+- Quick Menu exposes four large shallow controls: Screen Saver, Volume, Proxy, and Sleep.
+- Screen immediately activates the screensaver overlay (tap overlay to wake). Long-press navigates to Screen Saver settings.
 - Volume toggles global output between muted and the last nonzero `system.volume.percent`.
 - Time toggles the Ambient clock display.
 - Sleep enters a black tap-to-wake overlay, lowers brightness and volume while asleep, and restores the previous values on a single tap.

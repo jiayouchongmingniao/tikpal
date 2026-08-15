@@ -153,8 +153,10 @@ export function WebModeSidePanel() {
     setPendingProvider((current) => (
       current && (next.activeProvider === current || next.lastError) ? null : current
     ));
-    // Reset close state when web mode becomes active again (reopen after close)
-    if (next.activeProvider && pendingActionRef.current === "close") {
+    // Reset close state when web mode becomes active again (reopen after close),
+    // but only if no close action is in flight — polling may return activeProvider
+    // while the background close is still running, which would abort the fade.
+    if (next.activeProvider && pendingActionRef.current === "close" && !actionLockRef.current) {
       pendingActionRef.current = null;
       setPendingAction(null);
     }
@@ -209,6 +211,23 @@ export function WebModeSidePanel() {
     return () => clearTimeout(t);
   }, [exploreOpening]);
 
+  function findNextAvailableProvider(failedId: WebModeProviderId): WebModeProviderId | null {
+    const statuses = webMode?.residentProviders;
+    // Prefer providers that are already ready/active.
+    const ready = providerOrder.find((id) => {
+      if (id === failedId) return false;
+      const s = statuses?.[id]?.status;
+      return s === "ready" || s === "active";
+    });
+    if (ready) return ready;
+    // Fall back to any provider not stuck in check_proxy/region_unavailable.
+    return providerOrder.find((id) => {
+      if (id === failedId) return false;
+      const s = statuses?.[id]?.status;
+      return s && s !== "check_proxy" && s !== "region_unavailable" && s !== "check_setup";
+    }) ?? null;
+  }
+
   async function openProvider(providerId: WebModeProviderId) {
     if (actionLockRef.current || pendingProvider || pendingAction) return;
     if (activeProvider === providerId) return;
@@ -219,8 +238,21 @@ export function WebModeSidePanel() {
       const next = await sendWebModeAction({ type: "open", provider: providerId });
       applyWebModeState(next);
     } catch (nextError) {
-      setPendingProvider(null);
-      setError(nextError instanceof Error ? nextError.message : "Provider switch failed");
+      const fallback = findNextAvailableProvider(providerId);
+      if (fallback) {
+        try {
+          setPendingProvider(fallback);
+          const next = await sendWebModeAction({ type: "open", provider: fallback });
+          applyWebModeState(next);
+          setError(null);
+        } catch (fallbackError) {
+          setPendingProvider(null);
+          setError(fallbackError instanceof Error ? fallbackError.message : "Provider switch failed");
+        }
+      } else {
+        setPendingProvider(null);
+        setError(nextError instanceof Error ? nextError.message : "Provider switch failed");
+      }
     } finally {
       setPendingProvider(null);
       await refresh().catch(() => undefined);
@@ -241,14 +273,19 @@ export function WebModeSidePanel() {
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "Close failed");
     } finally {
-      // Reset pendingAction so the overlay fades away and reopen is not blocked.
-      // If the component unmounts (web mode deactivated), this is harmless.
-      // If it stays mounted (API error or polling delay), this allows reopening.
+      // Release the action lock so other actions are not blocked, but keep
+      // pendingAction = "close" so the fade animation continues until polling
+      // confirms the close completed (webModeActive becomes false). The
+      // applyWebModeState handler or the component unmount will clear it.
+      actionLockRef.current = false;
+      // Safety: if polling never clears the close state (e.g. API error), reset
+      // after the full fade-out duration so reopening is not permanently blocked.
       setTimeout(() => {
-        pendingActionRef.current = null;
-        setPendingAction(null);
-        actionLockRef.current = false;
-      }, 200);
+        if (pendingActionRef.current === "close") {
+          pendingActionRef.current = null;
+          setPendingAction(null);
+        }
+      }, 3500);
     }
   }
 
@@ -353,7 +390,7 @@ export function WebModeSidePanel() {
               key={provider.id}
               className={`web-mode-provider ${active && !proxyUnavailable ? "is-active" : ""} ${current ? "is-current" : ""} ${connecting || warming ? "is-connecting" : ""} ${failed || proxyUnavailable || residentStatus === "check_setup" ? "is-failed" : ""} ${proxyUnavailable ? "is-proxy-unavailable" : ""}`}
               type="button"
-              disabled={Boolean(pendingAction || pendingProvider)}
+              disabled={Boolean(pendingAction || pendingProvider || (proxyUnavailable && !proxyEnabled))}
               style={{ "--provider-tone": providerTones[provider.id] } as CSSProperties}
               aria-busy={connecting || warming}
               data-web-mode-provider={provider.id}

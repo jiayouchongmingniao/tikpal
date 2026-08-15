@@ -29,6 +29,8 @@ interface QuickSettingsOverlayProps {
   onPreviewScreenSaver: () => void;
   onOpenWizard: () => void;
   onReturnAmbient: () => void;
+  initialDetail?: "display" | "webMode" | null;
+  onInitialDetailConsumed?: () => void;
 }
 
 type CardTone = "cyan" | "gold" | "neutral" | "warn" | "danger";
@@ -387,7 +389,9 @@ export function QuickSettingsOverlay({
   onSystemAction,
   onPreviewScreenSaver,
   onOpenWizard,
-  onReturnAmbient
+  onReturnAmbient,
+  initialDetail,
+  onInitialDetailConsumed
 }: QuickSettingsOverlayProps) {
   const {
     t,
@@ -422,6 +426,7 @@ export function QuickSettingsOverlay({
   const audioDiagnosticsTimerRef = useRef<number | null>(null);
   const webModeProxyUrlSaveNonceRef = useRef(0);
   const wasActiveRef = useRef(active);
+  const initialDetailConsumedRef = useRef(false);
   const [webModeProxyEnabled, setWebModeProxyEnabled] = useState(true);
   const [webModeProxyUrl, setWebModeProxyUrl] = useState("");
   const [webModeProxyConfirmEnabled, setWebModeProxyConfirmEnabled] = useState<boolean | null>(null);
@@ -532,6 +537,24 @@ export function QuickSettingsOverlay({
     setPendingRoomShortcut(null);
     setRoomShortcutError(null);
   }, [active]);
+  // Handle initialDetail from QuickMenu long-press navigation
+  useEffect(() => {
+    if (!active || !initialDetail) {
+      if (!active) initialDetailConsumedRef.current = false;
+      return;
+    }
+    if (initialDetailConsumedRef.current) return;
+    initialDetailConsumedRef.current = true;
+    if (initialDetail === "display") {
+      setActiveSection("output");
+      setDetailView("display");
+    } else if (initialDetail === "webMode") {
+      setActiveSection("network");
+      setDetailView("webMode");
+    }
+    onInitialDetailConsumed?.();
+  }, [active, initialDetail, onInitialDetailConsumed]);
+
 
   useEffect(() => {
     setMultiroomState(system.multiroom ?? null);

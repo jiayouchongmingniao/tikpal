@@ -103,7 +103,7 @@ fi
 : "${TIKPAL_WEB_MODE_PROXY_CONNECT_ERROR:=Proxy did not connect. Try again.}"
 : "${TIKPAL_WEB_MODE_QQ_AUTO_CONFIRM:=1}"
 : "${TIKPAL_WEB_MODE_QQ_AUDIO_PRIME:=1}"
-: "${TIKPAL_WEB_MODE_QQ_MUSIC_AUTO_PLAY:=1}"
+: "${TIKPAL_WEB_MODE_QQ_MUSIC_AUTO_PLAY:=0}"
 : "${TIKPAL_WEB_MODE_QQ_MV_AUTO_FULLSCREEN:=0}"
 : "${TIKPAL_WEB_MODE_QQ_MV_CINEMA_MODE:=1}"
 : "${TIKPAL_WEB_MODE_QQ_MV_AUTO_PLAY:=1}"
@@ -1757,6 +1757,10 @@ prewarm_active_provider_file() {
   printf '%s\n' "$TIKPAL_WEB_MODE_PROFILE_ROOT/provider-prewarm.active-provider"
 }
 
+
+pool_warm_stamp_file() {
+  printf '%s\n' "$TIKPAL_WEB_MODE_PROFILE_ROOT/pool-warm.stamp"
+}
 provider_pool_needs_prewarm() {
   local active_provider="${1:-}"
   local provider profile provider_port friendly_error_reason
@@ -1869,6 +1873,16 @@ reconcile_provider_pool() {
   proxy_line="$(read_proxy_settings)"
   proxy_enabled="$(effective_provider_proxy_enabled "$active_provider" "${proxy_line%%$'\t'*}")"
   start_provider_guard "$active_provider" "$provider_profile" "$(provider_url "$active_provider")" "$proxy_enabled" "$(provider_debug_port "$active_provider")"
+  if provider_prewarm_queue_running; then
+    elapsed_ms="$(( $(now_ms) - started_ms ))"
+    log_stage "reconcile_ms=$elapsed_ms provider=$active_provider pool=prewarming"
+    return 0
+  fi
+  if [[ -f "$(pool_warm_stamp_file)" ]]; then
+    elapsed_ms="$(( $(now_ms) - started_ms ))"
+    log_stage "reconcile_ms=$elapsed_ms provider=$active_provider pool=trusted"
+    return 0
+  fi
   sync_runtime_provider_pool_process_statuses "$active_provider" 0
   [[ "$(read_runtime_active_provider)" == "$active_provider" ]] || {
     elapsed_ms="$(( $(now_ms) - started_ms ))"
@@ -2113,6 +2127,10 @@ schedule_provider_pool_refill_after_close() {
   is_enabled "$TIKPAL_WEB_MODE_PROVIDER_PREWARM_ENABLED" || return 0
   [[ -z "$(read_runtime_active_provider)" ]] || return 0
   provider_prewarm_queue_running && return 0
+  if [[ -f "$(pool_warm_stamp_file)" ]]; then
+    sync_runtime_provider_pool_process_statuses ""
+    return 0
+  fi
   if ! provider_pool_needs_prewarm ""; then
     sync_runtime_provider_pool_process_statuses ""
     return 0
@@ -2136,6 +2154,7 @@ close_web_mode_full() {
   close_background_veil
   write_audio_bus_state ""
   write_runtime_provider_state ""
+  rm -f "$(pool_warm_stamp_file)"
   sync_runtime_provider_pool_process_statuses ""
 }
 
@@ -3912,6 +3931,7 @@ warm_provider_pool() {
     ensure_side_panel "" 1
   fi
   run_provider_prewarm_queue "" force idle
+  touch "$(pool_warm_stamp_file)"
   log "warmed provider pool"
 }
 
@@ -3955,7 +3975,9 @@ open_provider_pool() {
     transition_shown_ms="$TIKPAL_WEB_MODE_TRANSITION_SHOWN_MS"
     log_stage "open_pool_transition provider=$provider transition_shown=$transition_shown_ms ms=$(( $(now_ms) - started_ms ))"
   fi
-  stop_provider_pool_prewarm
+  if [[ -f "$(pool_warm_stamp_file)" ]]; then
+    stop_provider_pool_prewarm
+  fi
   # A single bounded CDP read can lose a just-woken resident renderer. Retry
   # only after the shared transition has covered the old page, with the normal
   # bootstrap deadline; do not cold-restart a profile that then proves to have

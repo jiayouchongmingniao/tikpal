@@ -313,6 +313,7 @@ export default function App() {
   const [exploreOpening, setExploreOpening] = useState(false);
   const [quickMenuProxyEnabled, setQuickMenuProxyEnabled] = useState<boolean | null>(null);
   const [quickMenuProxyPending, setQuickMenuProxyPending] = useState(false);
+  const [initialSettingsDetail, setInitialSettingsDetail] = useState<"display" | "webMode" | null>(null);
   const [systemSleepActive, setSystemSleepActive] = useState(false);
   const [ambientSourcePickerRequest, setAmbientSourcePickerRequest] = useState(0);
   const [ambientSourcePickerOpen, setAmbientSourcePickerOpen] = useState(false);
@@ -353,7 +354,7 @@ export default function App() {
     hudAutoHideMs,
     hudAutoHidePaused
   });
-  const { locale, preferences, t } = useI18n();
+  const { locale, preferences, setDisplaySleepPreferences, t } = useI18n();
 
   useBrowserKioskGuard();
 
@@ -918,6 +919,17 @@ export default function App() {
     }
   }, [enterSoftScreenOff, returnAmbient, wakeSoftScreen]);
 
+  const handleQuickMenuDisplaySleepChange = useCallback(async (enabled: boolean) => {
+    try {
+      await setDisplaySleepPreferences({ displaySleepEnabled: enabled });
+    } catch {}
+  }, [setDisplaySleepPreferences]);
+
+  const handleQuickMenuNavigateSettings = useCallback((detail: "display" | "webMode") => {
+    setInitialSettingsDetail(detail);
+    changeMode("quickSettings");
+  }, [changeMode]);
+
   const handleQuickMenuSleep = useCallback(() => {
     if (systemSleepActive || systemSleepEntryTaskRef.current) return;
 
@@ -1276,6 +1288,8 @@ export default function App() {
         lyricsVisible={lyricsVisible}
         lyricsFontSize={lyricsFontSize}
         roomExperience={roomExperience}
+        initialDetail={initialSettingsDetail}
+        onInitialDetailConsumed={() => setInitialSettingsDetail(null)}
         onFontThemeChange={setFontTheme}
         onSurfaceThemeChange={setSurfaceTheme}
         onLyricsVisibleChange={setLyricsVisible}
@@ -1289,19 +1303,19 @@ export default function App() {
       />
       <QuickMenu
         active={mode === "quickMenu"}
-        screenEnabled={!screenOffActive}
-        clockVisible={clockVisible}
+        screenOffActive={screenOffActive}
         proxyEnabled={quickMenuProxyEnabled}
         volumeEnabled={tikpalState.system.volume.percent > 0}
         proxyPending={quickMenuProxyPending}
         volumePending={tikpalStatus.pending && tikpalStatus.pendingAction === "playback:volume_set"}
         sleepPending={systemSleepActive || Boolean(systemSleepEntryTaskRef.current)}
-        onScreenEnabledChange={handleQuickMenuScreenEnabledChange}
-        onClockVisibleChange={setClockVisible}
+        onScreenSaverToggle={() => void handleQuickMenuScreenEnabledChange(screenOffActive)}
         onProxyEnabledChange={(enabled) => void handleQuickMenuProxyEnabledChange(enabled)}
         onVolumeEnabledChange={(enabled) => void handleQuickMenuVolumeEnabledChange(enabled)}
         onSleep={handleQuickMenuSleep}
         onClose={returnAmbient}
+        onReboot={() => void sendSystemAction("reboot")}
+        onNavigateSettings={handleQuickMenuNavigateSettings}
       />
 
       {(screenOffActive || screenSaverPreviewIndex !== null) && !systemSleepActive ? (

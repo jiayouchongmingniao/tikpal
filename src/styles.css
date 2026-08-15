@@ -7785,8 +7785,20 @@ select {
 }
 
 .quick-menu-panel button.is-proxy,
-.quick-menu-panel button.is-sleep {
+.quick-menu-panel button.is-sleep,
+.quick-menu-panel button.is-reboot {
   isolation: isolate;
+}
+
+.quick-menu-panel button.is-reboot {
+  border-color: color-mix(in srgb, var(--theme-danger, #e74c3c) 42%, var(--surface-card-border));
+  background:
+    radial-gradient(circle at 50% 12%, color-mix(in srgb, var(--theme-danger, #e74c3c) 16%, transparent), transparent 52%),
+    var(--surface-card-bg);
+}
+
+.quick-menu-panel button.is-reboot svg {
+  color: color-mix(in srgb, var(--theme-danger, #e74c3c) 86%, var(--theme-text-soft));
 }
 
 .quick-menu-panel button.is-sleep svg {
@@ -7818,6 +7830,65 @@ select {
 .quick-menu-panel button.is-on:focus-visible {
   border-color: var(--theme-info);
   background: var(--theme-info-muted);
+}
+
+.quick-menu-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 24px;
+  background: var(--surface-shell-bg);
+  border: 1px solid var(--surface-shell-border);
+  border-radius: 8px;
+  z-index: 10;
+  backdrop-filter: var(--surface-blur);
+  -webkit-backdrop-filter: var(--surface-blur);
+  animation: quickMenuFadeIn 160ms ease;
+}
+
+.quick-menu-overlay p {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 500;
+  color: var(--surface-control-text);
+  text-align: center;
+  line-height: 1.5;
+}
+
+.quick-menu-overlay-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.quick-menu-overlay-actions button {
+  position: static;
+  width: auto;
+  min-height: auto;
+  padding: 10px 24px;
+  border-radius: 6px;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.quick-menu-overlay-confirm {
+  background: var(--theme-accent) !important;
+  color: var(--theme-accent-contrast, #fff) !important;
+  border-color: var(--theme-accent) !important;
+}
+
+.quick-menu-overlay-cancel {
+  background: transparent !important;
+  color: var(--theme-text-soft) !important;
+  border: 1px solid var(--surface-card-border) !important;
+}
+
+@keyframes quickMenuFadeIn {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
 }
 
 .screen-off-overlay,
