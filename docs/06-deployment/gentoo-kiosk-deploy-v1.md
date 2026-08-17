@@ -1294,3 +1294,56 @@ Fixes applied in `tikpal-web-mode.sh`:
 - **`--disable-features=StatusBubble`**: hides bottom-left link hover URL bar
 
 Architecture details: `docs/03-architecture/explore-provider-pool-v1.md`
+
+## Deploy Script (August 2026)
+
+`deploy/deploy-gentoo.sh` is the standard deployment path for Gentoo. It replaces manual rsync commands and prevents two recurring issues:
+
+1. **`.env.kiosk` deletion**: `rsync --delete` previously wiped `.env.kiosk` on the remote because it was gitignored. The script now excludes `.env`, `.env.*`, and `.tikpal/` from rsync.
+2. **Permission breakage**: rsync runs as root, changing all files to `root:root`. The kiosk service runs as `User=moode`, causing EACCES on `.tikpal/web-mode-state.json`. The script runs `chown -R moode:` after rsync.
+
+Usage:
+
+```bash
+./deploy/deploy-gentoo.sh                           # defaults: 192.168.10.115, root, proxy 127.0.0.1:7897
+./deploy/deploy-gentoo.sh --host 192.168.10.99       # custom host
+./deploy/deploy-gentoo.sh --proxy ""                  # no proxy
+```
+
+Each deploy backs up the remote `.env.kiosk` with a timestamp suffix (e.g. `.env.kiosk.bak.20260817190900`) before syncing.
+
+### `.env.kiosk` Recovery
+
+The `.env.kiosk` file is machine-local and gitignored. If lost, copy from `.env.example` and set Gentoo-specific overrides:
+
+```conf
+TIKPAL_CHROMIUM_BIN=/usr/bin/chromium-browser
+TIKPAL_KIOSK_XRANDR_OUTPUT=DVI-I-1-1
+TIKPAL_KIOSK_XRANDR_MODE=2560x720
+TIKPAL_KIOSK_XRANDR_RATE=29.95
+TIKPAL_PHYSICAL_DISPLAY_ALLOW_NO_EDID=1
+TIKPAL_PHYSICAL_DISPLAY_DRM_PREFERRED_CONNECTORS=card1-DVI-I-1
+```
+
+**Critical**: `TIKPAL_KIOSK_XRANDR_OUTPUT=`, `TIKPAL_KIOSK_XRANDR_MODE=`, and `TIKPAL_KIOSK_XRANDR_RATE=` in `.env.kiosk` must be left empty or set to actual values. An explicit empty value (e.g. `TIKPAL_KIOSK_XRANDR_OUTPUT=`) overrides the script default (`auto`) and breaks mode detection, causing xrandr to fail with "Size 2560x720 not found in available modes".
+
+### Screen Brightness (TURZX USB)
+
+The TURZX USB screen brightness is controlled via `/usr/local/sbin/tikpal-turzx-brightness` (installed from `deploy/turzx/tikpal-turzx-brightness.sh` by the systemd installer). The script writes directly to `/dev/hidraw1`:
+
+```bash
+# Brightness commands (hidraw1)
+printf '\x00\xaa\x55\x30\x64' > /dev/hidraw1   # 100%
+printf '\x00\xaa\x55\x30\x32' > /dev/hidraw1   # 50%
+printf '\x00\xaa\x55\x30\x0a' > /dev/hidraw1   # 10%
+```
+
+The API calls `sudo -n -E /usr/local/sbin/tikpal-turzx-brightness set <1-100>`. The `TIKPAL_TURZX_BRIGHTNESS_COMMAND` env var is not used by the brightness script; brightness is handled by the installed helper directly.
+
+## Explore Launch Optimization (August 2026)
+
+The entry-stage veil (a separate 1920x720 Chromium instance used to cover the left side during first Explore open) has been removed. The frontend now handles the full-screen fade-to-black via a JS `requestAnimationFrame` overlay (3000ms ease-in, z-index 9999) that runs in parallel with the API call to `sendWebModeAction({ type: "open" })`. Both the animation and API call complete via `Promise.all`, after which the overlay is removed immediately.
+
+This eliminates one Chromium instance from the Explore cold-start path and removes the `entry-stage-guard` watchdog that continuously raised the left-side veil.
+
+Provider switching (between already-loaded providers) still uses the transition_veil flow unchanged.

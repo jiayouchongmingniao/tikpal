@@ -808,11 +808,34 @@ export default function App() {
   const handleOpenWebMode = useCallback(async () => {
     setWebModeSleepSuppressed(true);
     setExploreOpening(true);
+    // Create fullscreen overlay and start fade-in animation
+    const overlay = document.createElement("div");
+    overlay.style.cssText = "position:fixed;inset:0;z-index:9999;background:#080b0e;opacity:0;pointer-events:none;";
+    document.body.appendChild(overlay);
+    const fadeAnim = new Promise<void>(resolve => {
+      const duration = 3000;
+      const start = performance.now();
+      const animate = (now: number) => {
+        const progress = Math.min((now - start) / duration, 1);
+        overlay.style.opacity = String(progress);
+        if (progress < 1) requestAnimationFrame(animate);
+        else resolve();
+      };
+      requestAnimationFrame(animate);
+    });
     try { new BroadcastChannel("tikpal-explore-open").postMessage("opening"); } catch {}
-    try {
+    // Run animation and API call in parallel
+    const apiCall = (async () => {
       const nextWebMode = await sendWebModeAction({ type: "open" });
       observeWebModeActivity(Boolean(nextWebMode.activeProvider));
+      return nextWebMode;
+    })();
+    try {
+      await Promise.all([fadeAnim, apiCall]);
+      // Both done — remove overlay immediately, Explore is ready behind it
+      overlay.remove();
     } catch (error) {
+      overlay.remove();
       setWebModeSleepSuppressed(false);
       throw error;
     }

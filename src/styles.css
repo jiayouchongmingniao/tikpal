@@ -9457,22 +9457,13 @@ select {
   z-index: 9999;
   background: #080b0e;
   opacity: 0;
-  visibility: hidden;
   pointer-events: none;
-  transition: opacity 1000ms ease-out, visibility 0s linear 1050ms;
+  transition: opacity 800ms ease-out;
 }
 
 .app-explore-open-overlay.active {
   opacity: 1;
-  visibility: visible;
-  animation: exploreVeilFadeIn 1200ms ease-in forwards;
-  transition: opacity 1000ms ease-out, visibility 0s linear 0s;
-}
-
-@keyframes exploreVeilFadeIn {
-  from { opacity: 0; }
-  35% { opacity: 0.38; }
-  100% { opacity: 1; }
+  transition: opacity 3000ms ease-in;
 }
 
 @keyframes webModePanelSignal {
@@ -9751,7 +9742,6 @@ select {
 
   .app-explore-open-overlay.active {
     opacity: 1;
-    visibility: visible;
   }
 
 
