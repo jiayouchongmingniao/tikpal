@@ -21,13 +21,13 @@
   const editableTarget = (target) => target?.closest?.(inputSelector) || null;
   const isEditable = (target) => Boolean(editableTarget(target));
   const activeEditable = () => editableTarget(document.activeElement);
-  const requestKeyboard = (enabled, force = false) => {
+  const requestKeyboard = (enabled, force = false, dismissSticky = false) => {
     const now = Date.now();
     const throttleMs = force ? 1000 : 250;
     if (lastKeyboardEnabled === enabled && now - lastKeyboardRequestMs < throttleMs) return;
     lastKeyboardEnabled = enabled;
     lastKeyboardRequestMs = now;
-    chrome.runtime.sendMessage({ type: "keyboard", enabled, force }, (response) => {
+    chrome.runtime.sendMessage({ type: "keyboard", enabled, force, dismissSticky }, (response) => {
       if (chrome.runtime.lastError || response?.ok === false) {
         lastKeyboardEnabled = null;
       }
@@ -81,13 +81,13 @@
   }, true);
   document.addEventListener("submit", () => {
     endInputSession();
-    requestKeyboard(false);
+    requestKeyboard(false, false, true);
   }, true);
   document.addEventListener("keydown", (event) => {
     const target = editableTarget(event.target);
     if (event.key === "Enter" && target && !isMultiline(target)) {
       endInputSession();
-      requestKeyboard(false);
+      requestKeyboard(false, false, true);
     }
   }, true);
 
