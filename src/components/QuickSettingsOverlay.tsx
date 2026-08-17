@@ -343,7 +343,7 @@ function normalizeProxyUrl(value: string) {
 function hideLocalKeyboard() {
   if (!localKioskHosts.has(window.location.hostname) || window.__TIKPAL_REMOTE_MODE__) return;
   window.dispatchEvent(new Event("tikpal:keyboard-context-clear"));
-  void sendWebModeAction({ type: "keyboard", enabled: false }).catch(() => undefined);
+  void sendWebModeAction({ type: "keyboard", enabled: false, dismissSticky: true }).catch(() => undefined);
 }
 
 function getConsoleSourceIcon(sourceId: AudioState["currentSource"]["id"]) {
@@ -1452,7 +1452,6 @@ export function QuickSettingsOverlay({
       return;
     }
 
-    let settingsSaved = false;
     webModeProxyUrlSaveNonceRef.current += 1;
     setWebModeError(null);
     setWebModeProxyRestartPending(true);
@@ -1461,17 +1460,13 @@ export function QuickSettingsOverlay({
         proxyEnabled: nextEnabled,
         ...(normalizedProxyUrl === null ? {} : { proxyUrl: normalizedProxyUrl })
       });
-      settingsSaved = true;
       setWebModeState(nextState);
       setWebModeProxyEnabled(nextState.settings.proxyEnabled);
       setWebModeProxyUrl(nextState.settings.proxyUrl);
       setWebModeProxyConfirmEnabled(null);
       await onSystemAction("reboot");
-      setWebModeError(t("settings.proxyRestarting"));
     } catch (error) {
-      setWebModeError(settingsSaved
-        ? t("settings.proxyRestartSavedManual")
-        : localizedErrorMessage(error, "error.explore"));
+      setWebModeError(localizedErrorMessage(error, "error.explore"));
     } finally {
       setWebModeProxyRestartPending(false);
     }
@@ -2419,6 +2414,7 @@ export function QuickSettingsOverlay({
               spellCheck={false}
               disabled={webModeProxyRestartPending}
               onChange={(event) => setWebModeProxyUrl(event.currentTarget.value)}
+              onKeyDown={(event) => { if (event.key === "Enter") { hideLocalKeyboard(); (event.currentTarget as HTMLInputElement).blur(); } }}
             />
           </label>
 
