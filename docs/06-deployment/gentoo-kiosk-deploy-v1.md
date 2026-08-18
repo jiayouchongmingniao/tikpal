@@ -1399,3 +1399,22 @@ curl -s -X POST http://127.0.0.1:8787/api/v1/web-mode/actions \
   -H 'Content-Type: application/json' \
   -d '{"type":"open","provider":"netease_music"}'
 ```
+
+### Post-Reboot Validation (2026-08-18, after wait-for-exit fix)
+
+Gentoo `192.168.10.115` rebooted, kiosk cold-started, boot prewarm completed, then all 10 providers switched sequentially:
+
+| # | Provider | reveal_ms |
+| --- | --- | --- |
+| 1 | netease_music | 1,823 |
+| 2 | qq_music | 2,005 |
+| 3 | spotify | 1,959 |
+| 4 | tidal | 2,020 |
+| 5 | deezer | 1,973 |
+| 6 | apple_music | 1,979 |
+| 7 | youtube_music | 1,988 |
+| 8 | qobuz | 1,947 |
+| 9 | suno | 1,954 |
+| 10 | amazon_music | 2,020 |
+
+All switches under 2.1 seconds. The 23.7s post-NetEase failure delay is fixed.
