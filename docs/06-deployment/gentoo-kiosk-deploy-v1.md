@@ -1418,3 +1418,36 @@ Gentoo `192.168.10.115` rebooted, kiosk cold-started, boot prewarm completed, th
 | 10 | amazon_music | 2,020 |
 
 All switches under 2.1 seconds. The 23.7s post-NetEase failure delay is fixed.
+
+### Final Optimization: 100-Switch Stress Test (2026-08-18)
+
+After eliminating the remaining `xdotool search --class chromium` bottleneck (~9s per call scanning 27+ windows), ran 10 rounds × 10 providers = 100 sequential switches:
+
+| Metric | Value |
+| --- | --- |
+| Total switches | 100 |
+| Min | 1,801ms |
+| Max | 2,820ms |
+| Median | 1,974ms |
+| Average | 2,050ms |
+| Over 5s | 0 |
+
+Distribution:
+- <2s: 75 (75%)
+- 2-2.5s: 18 (18%)
+- 2.5-5s: 7 (7%)
+- \>5s: 0 (0%)
+
+**Root causes resolved (in order of discovery):**
+
+1. `pkill -f` scanning all 510 processes → PID file + targeted kill
+2. `xdotool search --pid` in `close_transition_veil` scanning 27 windows (~9s) → removed; fire-and-forget kill
+3. `wait_for_profile_window` → `first_window_for_profile` → `all_chromium_windows` → `xdotool search --class chromium` (~9s per call) → replaced with `xdotool search --pid` using the just-spawned Chromium PID
+4. Chromium profile lock contention after killing old process → unique profile directories per transition (`transition.$(date +%s%N)`)
+5. `StatusBubble` feature flag overridden by duplicate `--disable-features` → merged into single flag in `chromium-flags.conf`
+
+**Key design decisions:**
+- Transition veil uses a unique profile directory each time; old profiles are cleaned up in the background (keep last 3)
+- PID file is stored at a fixed path (`transition-veil.pid`) outside the unique profile directory
+- `close_transition_veil` is fire-and-forget (no wait, no xdotool); the unique profile approach makes stale-lock waits unnecessary
+- `launch_transition_veil` uses `xdotool search --pid` with the spawned PID instead of `wait_for_profile_window` to avoid the O(n) window scan
