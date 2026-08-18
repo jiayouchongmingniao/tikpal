@@ -2843,28 +2843,42 @@ close_transition_veil() {
     fi
     pkill -P "$pid" 2>/dev/null || true
     kill "$pid" 2>/dev/null || true
+    # Wait for process to actually exit (up to 2s)
+    local _wait
+    for _wait in $(seq 1 20); do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 0.1
+    done
     rm -f "$pid_file"
   fi
 }
 
 close_error_veil() {
   local pid_file="$TIKPAL_WEB_MODE_PROFILE_ROOT/error/veil.pid"
-  local pid
+  local pid _wait
   pid="$(cat "$pid_file" 2>/dev/null || true)"
   if [[ -n "$pid" ]]; then
     pkill -P "$pid" 2>/dev/null || true
     kill "$pid" 2>/dev/null || true
+    for _wait in $(seq 1 20); do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 0.1
+    done
     rm -f "$pid_file"
   fi
 }
 
 close_background_veil() {
   local pid_file="$TIKPAL_WEB_MODE_PROFILE_ROOT/background/veil.pid"
-  local pid
+  local pid _wait
   pid="$(cat "$pid_file" 2>/dev/null || true)"
   if [[ -n "$pid" ]]; then
     pkill -P "$pid" 2>/dev/null || true
     kill "$pid" 2>/dev/null || true
+    for _wait in $(seq 1 20); do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 0.1
+    done
     rm -f "$pid_file"
   fi
 }
