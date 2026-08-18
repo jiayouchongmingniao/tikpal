@@ -7,7 +7,7 @@ control="${TIKPAL_OUTPUT_VOLUME_CONTROL:-}"
 controls="${TIKPAL_OUTPUT_VOLUME_CONTROLS:-PCM,Master,Digital,Speaker,Headphone,Line Out}"
 mirror_loopback="${TIKPAL_OUTPUT_VOLUME_MIRROR_LOOPBACK:-1}"
 fallback_mpc="${TIKPAL_OUTPUT_VOLUME_FALLBACK_MPC:-1}"
-alsa_configs="${TIKPAL_OUTPUT_VOLUME_ALSA_CONFIGS:-/etc/alsa/conf.d/_sndaloop.conf /etc/alsa/conf.d/_audioout.conf}"
+alsa_configs="${TIKPAL_OUTPUT_VOLUME_ALSA_CONFIGS:-/etc/asound.conf /etc/alsa/conf.d/_sndaloop.conf /etc/alsa/conf.d/_audioout.conf}"
 
 discover_cards_from_config() {
   for config_path in $alsa_configs; do

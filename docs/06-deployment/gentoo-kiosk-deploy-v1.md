@@ -50,7 +50,6 @@ TIKPAL_MPD_HOST=127.0.0.1
 TIKPAL_MPD_PORT=6600
 TIKPAL_RUNTIME_DRM_MODE_ENABLED=1
 TIKPAL_AUDIO_CARD_FORCE=BT66
-TIKPAL_OUTPUT_VOLUME_CARDS=BT66
 ```
 
 If a future Gentoo host runs virtual kiosk only, set `TIKPAL_KIOSK_DISPLAY=:1`, `TIKPAL_KIOSK_DISPLAY_MODE=virtual`, `TIKPAL_KIOSK_LOCAL_SCREEN=0`, and keep noVNC enabled only for debugging.
@@ -1347,3 +1346,9 @@ The entry-stage veil (a separate 1920x720 Chromium instance used to cover the le
 This eliminates one Chromium instance from the Explore cold-start path and removes the `entry-stage-guard` watchdog that continuously raised the left-side veil.
 
 Provider switching (between already-loaded providers) still uses the transition_veil flow unchanged.
+
+## Volume Control Device Discovery Fix (August 2026)
+
+On Gentoo, the ALSA output config lives in `/etc/asound.conf` (not `/etc/alsa/conf.d/_audioout.conf` like on moOde). The volume helper `deploy/moode/tikpal-output-volume.sh` previously only read from `/etc/alsa/conf.d/`, causing it to fall back to `discover_first_playback_card` which picked card 1 (HDA Intel) instead of card 2 (BT66 USB). The UI showed volume numbers changing but actual audio was unaffected.
+
+Fix: added `/etc/asound.conf` to the default search path in `discover_cards_from_config`. The script now finds `CARD=BT66` from the Gentoo asound.conf automatically. `TIKPAL_OUTPUT_VOLUME_CARDS` is no longer needed in `.env.kiosk` for this host.

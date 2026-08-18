@@ -33,7 +33,11 @@ APP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 SSH_OPTS="-o StrictHostKeyChecking=no -o ConnectTimeout=5"
 if [[ -n "$PROXY" ]]; then
-  SSH_OPTS="$SSH_OPTS -o ProxyCommand=nc -X connect -x $PROXY %h %p"
+  if command -v ncat >/dev/null 2>&1; then
+    SSH_OPTS="$SSH_OPTS -o ProxyCommand=ncat --proxy $PROXY --proxy-type http %h %p"
+  else
+    SSH_OPTS="$SSH_OPTS -o ProxyCommand=nc -X 5 -x $PROXY %h %p"
+  fi
 fi
 
 ssh_cmd() {

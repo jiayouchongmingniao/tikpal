@@ -430,6 +430,8 @@ export function QuickSettingsOverlay({
   const [webModeProxyEnabled, setWebModeProxyEnabled] = useState(true);
   const [webModeProxyUrl, setWebModeProxyUrl] = useState("");
   const [webModeProxyConfirmEnabled, setWebModeProxyConfirmEnabled] = useState<boolean | null>(null);
+  const [webModeProxyConfirmMode, setWebModeProxyConfirmMode] = useState<"toggle" | "url">("toggle");
+  const [pendingProxyUrl, setPendingProxyUrl] = useState<string | null>(null);
   const [webModeProxyRestartPending, setWebModeProxyRestartPending] = useState(false);
   const [webModeError, setWebModeError] = useState<string | null>(null);
   const [libraryStorageCounts, setLibraryStorageCounts] = useState<LibraryStorageCounts>({
@@ -670,6 +672,17 @@ export function QuickSettingsOverlay({
       return undefined;
     }
     if (!proxyUrlChanged) {
+      setWebModeError((current) => current === t("settings.enterProxyUrl") || current === t("common.saving") ? null : current);
+      setPendingProxyUrl(null);
+      return undefined;
+    }
+
+    if (webModeState.settings.proxyEnabled) {
+      if (webModeProxyConfirmMode !== "url" || pendingProxyUrl !== normalizedProxyUrl) {
+        setPendingProxyUrl(normalizedProxyUrl);
+        setWebModeProxyConfirmMode("url");
+        setWebModeProxyConfirmEnabled(true);
+      }
       setWebModeError((current) => current === t("settings.enterProxyUrl") || current === t("common.saving") ? null : current);
       return undefined;
     }
@@ -1434,19 +1447,38 @@ export function QuickSettingsOverlay({
       return;
     }
     setWebModeError(null);
+    setPendingProxyUrl(null);
+    setWebModeProxyConfirmMode("toggle");
     setWebModeProxyConfirmEnabled(enabled);
+  }
+
+  function requestWebModeProxyUrlChange() {
+    if (webModeProxyRestartPending) return;
+
+    const normalizedProxyUrl = normalizeProxyUrl(webModeProxyUrl);
+    if (normalizedProxyUrl === null) {
+      setWebModeError(t("settings.enterProxyUrl"));
+      return;
+    }
+    if (!webModeState?.settings.proxyEnabled || normalizedProxyUrl === webModeState.settings.proxyUrl) return;
+
+    setWebModeError(null);
+    setPendingProxyUrl(normalizedProxyUrl);
+    setWebModeProxyConfirmMode("url");
+    setWebModeProxyConfirmEnabled(true);
   }
 
   function cancelWebModeProxyChange() {
     if (webModeProxyRestartPending) return;
     setWebModeProxyConfirmEnabled(null);
+    setPendingProxyUrl(null);
   }
 
   async function confirmWebModeProxyChange() {
     if (webModeProxyRestartPending || webModeProxyConfirmEnabled === null) return;
 
-    const nextEnabled = webModeProxyConfirmEnabled;
-    const normalizedProxyUrl = normalizeProxyUrl(webModeProxyUrl);
+    const nextEnabled = webModeProxyConfirmMode === "url" ? true : webModeProxyConfirmEnabled;
+    const normalizedProxyUrl = normalizeProxyUrl(webModeProxyConfirmMode === "url" && pendingProxyUrl ? pendingProxyUrl : webModeProxyUrl);
     if (nextEnabled && normalizedProxyUrl === null) {
       setWebModeError(t("settings.enterProxyUrl"));
       return;
@@ -1456,15 +1488,17 @@ export function QuickSettingsOverlay({
     setWebModeError(null);
     setWebModeProxyRestartPending(true);
     try {
-      const nextState = await updateWebModeSettings({
-        proxyEnabled: nextEnabled,
-        ...(normalizedProxyUrl === null ? {} : { proxyUrl: normalizedProxyUrl })
-      });
+      const nextState = await updateWebModeSettings(normalizedProxyUrl !== null || webModeProxyConfirmMode === "url"
+        ? { proxyEnabled: nextEnabled, proxyUrl: normalizedProxyUrl ?? pendingProxyUrl ?? webModeProxyUrl }
+        : { proxyEnabled: nextEnabled }
+      );
       setWebModeState(nextState);
       setWebModeProxyEnabled(nextState.settings.proxyEnabled);
       setWebModeProxyUrl(nextState.settings.proxyUrl);
       setWebModeProxyConfirmEnabled(null);
-      await onSystemAction("reboot");
+      setPendingProxyUrl(null);
+      setWebModeError(t("settings.systemRestarting"));
+      await onSystemAction("reboot").catch(() => undefined);
     } catch (error) {
       setWebModeError(localizedErrorMessage(error, "error.explore"));
     } finally {
@@ -2367,6 +2401,8 @@ export function QuickSettingsOverlay({
   }
 
   function renderWebModeDetail() {
+    const normalizedPendingProxyUrl = pendingProxyUrl ? (normalizeProxyUrl(pendingProxyUrl) ?? pendingProxyUrl) : null;
+
     const statusText = webModeError
       ?? (webModeState?.settings.proxyEnabled ? t("settings.proxyReady") : t("explore.directConnection"));
     const proxyChangeTarget = webModeProxyConfirmEnabled === null
@@ -2414,7 +2450,7 @@ export function QuickSettingsOverlay({
               spellCheck={false}
               disabled={webModeProxyRestartPending}
               onChange={(event) => setWebModeProxyUrl(event.currentTarget.value)}
-              onKeyDown={(event) => { if (event.key === "Enter") { hideLocalKeyboard(); (event.currentTarget as HTMLInputElement).blur(); } }}
+              onKeyDown={(event) => { if (event.key === "Enter") { window.dispatchEvent(new Event("tikpal:keyboard-context-clear")); requestWebModeProxyUrlChange(); (event.currentTarget as HTMLInputElement).blur(); } }}
             />
           </label>
 
@@ -2422,7 +2458,7 @@ export function QuickSettingsOverlay({
             <section className="web-mode-proxy-restart-confirm" data-web-mode-proxy-restart-confirm aria-live="polite">
               <div>
                 <strong>{t("settings.proxyRestartConfirmTitle")}</strong>
-                <p>{t("settings.proxyRestartConfirmBody", { state: proxyChangeTarget })}</p>
+                <p>{webModeProxyConfirmMode === "url" && normalizedPendingProxyUrl ? t("settings.proxyRestartConfirmWithUrlBody", { url: normalizedPendingProxyUrl }) : t("settings.proxyRestartConfirmBody", { state: proxyChangeTarget })}</p>
               </div>
               <div className="web-mode-proxy-restart-confirm-actions">
                 <button type="button" disabled={webModeProxyRestartPending} data-web-mode-proxy-restart-cancel onClick={cancelWebModeProxyChange}>

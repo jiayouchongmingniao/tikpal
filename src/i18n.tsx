@@ -2533,9 +2533,9 @@ Object.assign(dictionaries.en, {
   "settings.exploreHelp": "Proxy URL saves automatically. Switching Proxy On/Off needs confirmation and a system restart.",
   "settings.proxyRestartConfirmTitle": "Confirm proxy setting",
   "settings.proxyRestartConfirmBody": "Switch to {state}? Confirm only if this setting is correct. The system will restart to apply it.",
+  "settings.proxyRestartConfirmWithUrlBody": "Save Proxy URL {url} and restart to apply?",
   "settings.proxyRestartConfirmAction": "Confirm & restart",
-  "settings.proxyRestarting": "Setting saved. Restarting system...",
-  "settings.proxyRestartSavedManual": "Setting saved. Restart the system manually to apply it."
+  "settings.systemRestarting": "Restarting system…",
 });
 
 Object.assign(dictionaries["zh-CN"], {
@@ -2543,8 +2543,7 @@ Object.assign(dictionaries["zh-CN"], {
   "settings.proxyRestartConfirmTitle": "确认代理设置",
   "settings.proxyRestartConfirmBody": "将切换为 {state}。请确认设置正确；系统将重启以应用此设置。",
   "settings.proxyRestartConfirmAction": "确认并重启",
-  "settings.proxyRestarting": "设置已保存，系统正在重启…",
-  "settings.proxyRestartSavedManual": "设置已保存，请从系统设置手动重启后生效。"
+  "settings.systemRestarting": "系统正在重启…",
 });
 
 Object.assign(dictionaries.de, {
@@ -2552,8 +2551,7 @@ Object.assign(dictionaries.de, {
   "settings.proxyRestartConfirmTitle": "Proxy-Einstellung bestätigen",
   "settings.proxyRestartConfirmBody": "Zu {state} wechseln? Nur bestätigen, wenn diese Einstellung korrekt ist. Das System startet zum Anwenden neu.",
   "settings.proxyRestartConfirmAction": "Bestätigen & neu starten",
-  "settings.proxyRestarting": "Einstellung gespeichert. System wird neu gestartet...",
-  "settings.proxyRestartSavedManual": "Einstellung gespeichert. System zum Anwenden manuell neu starten."
+  "settings.systemRestarting": "System wird neu gestartet…",
 });
 
 Object.assign(dictionaries.it, {
@@ -2561,8 +2559,7 @@ Object.assign(dictionaries.it, {
   "settings.proxyRestartConfirmTitle": "Conferma impostazione proxy",
   "settings.proxyRestartConfirmBody": "Passare a {state}? Conferma solo se questa impostazione è corretta. Il sistema si riavvierà per applicarla.",
   "settings.proxyRestartConfirmAction": "Conferma e riavvia",
-  "settings.proxyRestarting": "Impostazione salvata. Riavvio del sistema...",
-  "settings.proxyRestartSavedManual": "Impostazione salvata. Riavvia manualmente il sistema per applicarla."
+  "settings.systemRestarting": "Riavvio del sistema…",
 });
 
 Object.assign(dictionaries.ko, {
@@ -2570,8 +2567,7 @@ Object.assign(dictionaries.ko, {
   "settings.proxyRestartConfirmTitle": "프록시 설정 확인",
   "settings.proxyRestartConfirmBody": "{state}(으)로 전환할까요? 설정이 올바른 경우에만 확인하세요. 적용하려면 시스템이 재시작됩니다.",
   "settings.proxyRestartConfirmAction": "확인 후 재시작",
-  "settings.proxyRestarting": "설정이 저장되었습니다. 시스템을 재시작하는 중...",
-  "settings.proxyRestartSavedManual": "설정이 저장되었습니다. 적용하려면 시스템을 수동으로 재시작하세요."
+  "settings.systemRestarting": "시스템을 재시작하는 중…",
 });
 
 Object.assign(dictionaries.ja, {
@@ -2579,8 +2575,7 @@ Object.assign(dictionaries.ja, {
   "settings.proxyRestartConfirmTitle": "プロキシ設定を確認",
   "settings.proxyRestartConfirmBody": "{state} に切り替えますか？設定が正しい場合のみ確認してください。適用するためシステムを再起動します。",
   "settings.proxyRestartConfirmAction": "確認して再起動",
-  "settings.proxyRestarting": "設定を保存しました。システムを再起動しています...",
-  "settings.proxyRestartSavedManual": "設定を保存しました。適用するにはシステムを手動で再起動してください。"
+  "settings.systemRestarting": "システムを再起動しています…",
 });
 
 Object.assign(dictionaries.es, {
@@ -2588,8 +2583,7 @@ Object.assign(dictionaries.es, {
   "settings.proxyRestartConfirmTitle": "Confirmar ajuste de proxy",
   "settings.proxyRestartConfirmBody": "¿Cambiar a {state}? Confirma solo si este ajuste es correcto. El sistema se reiniciará para aplicarlo.",
   "settings.proxyRestartConfirmAction": "Confirmar y reiniciar",
-  "settings.proxyRestarting": "Ajuste guardado. Reiniciando el sistema...",
-  "settings.proxyRestartSavedManual": "Ajuste guardado. Reinicia el sistema manualmente para aplicarlo."
+  "settings.systemRestarting": "Reiniciando el sistema…",
 });
 
 function template(value: string, params: TranslationParams = {}) {
