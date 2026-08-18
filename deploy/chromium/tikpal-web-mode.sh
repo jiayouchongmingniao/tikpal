@@ -1085,8 +1085,7 @@ chromium_base_args() {
   printf '%s\n' \
     "--force-dark-mode" \
     "--enable-features=WebUIDarkMode" \
-    "--default-background-color=000000" \
-    "--disable-features=StatusBubble"
+    "--default-background-color=000000"
 }
 
 call_onboard_method() {
