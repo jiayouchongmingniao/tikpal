@@ -2828,25 +2828,46 @@ refresh_provider_pool_guards() {
 
 close_transition_veil() {
   local transition_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/transition"
-  local window duration step opacity
-  window="$(first_window_for_profile "$transition_profile" 2>/dev/null || true)"
-  if [[ -n "$window" ]] && command -v xprop >/dev/null 2>&1; then
-    duration=0.12
-    step="$(awk -v duration="$duration" 'BEGIN { printf "%.3f", duration / 3 }')"
-    for opacity in 0.60 0.28 0.06; do
-      set_window_opacity "$window" "$opacity" >/dev/null 2>&1 || break
-      sleep "$step"
-    done
+  local pid_file="$transition_profile/veil.pid"
+  local pid window duration step opacity
+  pid="$(cat "$pid_file" 2>/dev/null || true)"
+  if [[ -n "$pid" ]]; then
+    # Find window from PID for fade animation (faster than scanning all windows)
+    window="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool search --pid "$pid" 2>/dev/null | head -1 || true)"
+    if [[ -n "$window" ]] && command -v xprop >/dev/null 2>&1; then
+      duration=0.12
+      step="$(awk -v duration="$duration" 'BEGIN { printf "%.3f", duration / 3 }')"
+      for opacity in 0.60 0.28 0.06; do
+        set_window_opacity "$window" "$opacity" >/dev/null 2>&1 || break
+        sleep "$step"
+      done
+    fi
+    pkill -P "$pid" 2>/dev/null || true
+    kill "$pid" 2>/dev/null || true
+    rm -f "$pid_file"
   fi
-  pkill -f -- "--user-data-dir=$transition_profile" >/dev/null 2>&1 || true
 }
 
 close_error_veil() {
-  pkill -f -- "--user-data-dir=$TIKPAL_WEB_MODE_PROFILE_ROOT/error" >/dev/null 2>&1 || true
+  local pid_file="$TIKPAL_WEB_MODE_PROFILE_ROOT/error/veil.pid"
+  local pid
+  pid="$(cat "$pid_file" 2>/dev/null || true)"
+  if [[ -n "$pid" ]]; then
+    pkill -P "$pid" 2>/dev/null || true
+    kill "$pid" 2>/dev/null || true
+    rm -f "$pid_file"
+  fi
 }
 
 close_background_veil() {
-  pkill -f -- "--user-data-dir=$TIKPAL_WEB_MODE_PROFILE_ROOT/background" >/dev/null 2>&1 || true
+  local pid_file="$TIKPAL_WEB_MODE_PROFILE_ROOT/background/veil.pid"
+  local pid
+  pid="$(cat "$pid_file" 2>/dev/null || true)"
+  if [[ -n "$pid" ]]; then
+    pkill -P "$pid" 2>/dev/null || true
+    kill "$pid" 2>/dev/null || true
+    rm -f "$pid_file"
+  fi
 }
 
 navigate_transition_veil() {
@@ -2933,6 +2954,7 @@ PYEOF
 park_transition_veil() {
   local transition_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/transition"
   local window
+  [[ -f "$transition_profile/veil.pid" ]] || return 0
   window="$(wait_for_profile_window "$transition_profile" 2 || true)"
   [[ -n "$window" ]] || return 0
   tile_window_fast "$window" "$TIKPAL_WEB_MODE_STAGE_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
@@ -2990,6 +3012,7 @@ ensure_background_veil() {
     "--window-position=$position" \
     "--window-size=$(normalize_window_size "$TIKPAL_WEB_MODE_LEFT_WINDOW")" \
     >/dev/null 2>&1 9>&- &
+  printf '%s\n' "$!" > "$background_profile/veil.pid"
   window="$(wait_for_profile_window "$background_profile" 20 || true)"
   if [[ -n "$window" ]]; then
     tile_window "$window" "$position" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
@@ -3137,6 +3160,7 @@ launch_transition_veil() {
     "--window-size=$(normalize_window_size "$TIKPAL_WEB_MODE_LEFT_WINDOW")" \
     "--remote-debugging-port=$TIKPAL_WEB_MODE_TRANSITION_DEBUG_PORT" \
     >/dev/null 2>&1 9>&- &
+  printf '%s\n' "$!" > "$transition_profile/veil.pid"
   window="$(wait_for_profile_window "$transition_profile" 20 || true)"
   if [[ -n "$window" ]]; then
     tile_window_fast "$window" "$TIKPAL_WEB_MODE_STAGE_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
@@ -3174,6 +3198,7 @@ launch_error_veil() {
     "--window-position=$TIKPAL_WEB_MODE_LEFT_POSITION" \
     "--window-size=$(normalize_window_size "$TIKPAL_WEB_MODE_LEFT_WINDOW")" \
     >/dev/null 2>&1 9>&- &
+  printf '%s\n' "$!" > "$error_profile/veil.pid"
   window="$(wait_for_profile_window "$error_profile" 20 || true)"
   if [[ -n "$window" ]]; then
     tile_window "$window" "$TIKPAL_WEB_MODE_LEFT_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
