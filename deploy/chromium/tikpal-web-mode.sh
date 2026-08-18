@@ -2301,6 +2301,28 @@ process_tree_uses_profile() {
   return 1
 }
 
+# Find an X11 window owned by a process tree rooted at $1.
+# Traverses child PIDs because Chromium forks — the spawned PID may not be the
+# window owner.  Uses xdotool search --pid which reads _NET_WM_PID.
+find_window_for_pid() {
+  local parent_pid="$1"
+  local _pid _w
+  command -v xdotool >/dev/null 2>&1 || return 1
+  [[ "$parent_pid" =~ ^[0-9]+$ ]] || return 1
+  # Direct match first.
+  _w="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe search --pid "$parent_pid" 2>/dev/null | head -1 || true)"
+  [[ -n "$_w" ]] && { printf '%s
+' "$_w"; return 0; }
+  # Traverse one level of children (Chromium main → renderer/gpu/zygote).
+  while IFS= read -r _pid; do
+    [[ "$_pid" =~ ^[0-9]+$ ]] || continue
+    _w="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe search --pid "$_pid" 2>/dev/null | head -1 || true)"
+    [[ -n "$_w" ]] && { printf '%s
+' "$_w"; return 0; }
+  done < <(pgrep -P "$parent_pid" 2>/dev/null || true)
+  return 1
+}
+
 provider_profile_for_pid() {
   local pid="$1"
   local provider profile
@@ -2944,14 +2966,11 @@ PYEOF
 }
 
 park_transition_veil() {
-  local pid pid_profile transition_profile window
+  local pid window
   [[ -f "$TIKPAL_WEB_MODE_PROFILE_ROOT/transition-veil.pid" ]] || return 0
   pid="$(cat "$TIKPAL_WEB_MODE_PROFILE_ROOT/transition-veil.pid" 2>/dev/null || true)"
   [[ -n "$pid" && "$pid" =~ ^[0-9]+$ ]] || return 0
-  # Derive actual profile from the running process (unique per transition).
-  pid_profile="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -oP '(?<=--user-data-dir=)\S+' || true)"
-  transition_profile="${pid_profile:-$TIKPAL_WEB_MODE_PROFILE_ROOT/transition}"
-  window="$(wait_for_profile_window "$transition_profile" 2 || true)"
+  window="$(find_window_for_pid "$pid" || true)"
   [[ -n "$window" ]] || return 0
   tile_window_fast "$window" "$TIKPAL_WEB_MODE_STAGE_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
   clear_window_above "$window"
@@ -3161,8 +3180,13 @@ launch_transition_veil() {
     >/dev/null 2>&1 9>&- &
   local _chrome_pid=$!
   printf '%s\n' "$_chrome_pid" > "$TIKPAL_WEB_MODE_PROFILE_ROOT/transition-veil.pid"
-  invalidate_chromium_window_cache
-  window="$(wait_for_profile_window "$transition_profile" 20 || true)"
+  # Fast path: search --pid on the spawned process and its children.
+  # Falls back to full window scan only if _NET_WM_PID is unavailable.
+  window="$(find_window_for_pid "$_chrome_pid" || true)"
+  if [[ -z "$window" ]]; then
+    invalidate_chromium_window_cache
+    window="$(wait_for_profile_window "$transition_profile" 20 || true)"
+  fi
   if [[ -n "$window" ]]; then
     tile_window_fast "$window" "$TIKPAL_WEB_MODE_STAGE_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
     clear_window_above "$window"
