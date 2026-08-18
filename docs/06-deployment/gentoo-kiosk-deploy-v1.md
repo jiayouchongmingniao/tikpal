@@ -1358,3 +1358,11 @@ Fix: added `/etc/asound.conf` to the default search path in `discover_cards_from
 When switching to a provider in Explore, the main kiosk window ("Tikpal - Chromium") stayed on top, covering the provider with a persistent black background. The window guard (`tile_visible_web_mode_windows`) correctly lowered background windows but never handled the kiosk window because `is_tikpal_window_title` caused it to be skipped entirely.
 
 Fix: added kiosk window lowering logic after the background windows loop in `tile_visible_web_mode_windows()`. When provider windows are present, the function now finds the kiosk window via `kiosk_browser_window()` and calls `xdotool windowlower`, matching the existing background window handling pattern.
+
+## Explore Guard Race Fix (August 2026)
+
+When switching to a provider that shows `check_setup` (e.g. NetEase Cloud Music), the side panel could end up parked offscreen at `2560,0`, causing the right side of the screen to appear empty/black.
+
+Root cause: `stop_window_guard` sends SIGTERM to the bash window guard, but the guard may be mid-tiling-cycle. It finishes tiling, loops back, reads `active_provider=""` (already cleared by `open_provider_pool`), and calls `close_web_mode_from_guard` which parks all surfaces offscreen (since `CLOSE_KEEP_RESIDENT=1`).
+
+Fix: before calling `close_web_mode_from_guard`, the guard now verifies the PID file still contains its own PID (`$$`). If `stop_window_guard` already removed the PID file, the guard exits cleanly without parking surfaces. This prevents the race between `stop_window_guard` and the guard's tiling cycle.
