@@ -3986,6 +3986,14 @@ open_provider_pool() {
     close_web_mode
     fail "Explore side panel did not open"
   fi
+  # Early panel positioning: tile the side panel to its final position
+  # immediately after launch, so it is visible during the long CDP wait
+  # (cold open can block 45+s on provider page load).
+  if [[ "$entry_stage" == "1" ]]; then
+    local _early_panel
+    _early_panel="$(wait_for_profile_window "$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel" 15 || true)"
+    [[ -n "$_early_panel" ]] && tile_window_fast "$_early_panel" "$TIKPAL_WEB_MODE_PANEL_POSITION" "$TIKPAL_WEB_MODE_PANEL_WINDOW"
+  fi
   proxy_line="$(read_proxy_settings)"
   proxy_enabled="$(effective_provider_proxy_enabled "$provider" "${proxy_line%%$'\t'*}")"
   if [[ "$proxy_enabled" != "1" ]] && ! provider_prefers_direct_proxy "$provider" && ! provider_direct_reachable "$provider"; then
