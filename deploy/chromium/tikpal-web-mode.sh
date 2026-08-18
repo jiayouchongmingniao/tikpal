@@ -2826,15 +2826,17 @@ refresh_provider_pool_guards() {
 }
 
 close_transition_veil() {
-  local profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/transition"
-  local pid_file="$profile/veil.pid"
-  local pid
+  local pid_file="$TIKPAL_WEB_MODE_PROFILE_ROOT/transition-veil.pid"
+  local pid _w
   pid="$(cat "$pid_file" 2>/dev/null || true)"
   if [[ -n "$pid" ]]; then
     pkill -P "$pid" 2>/dev/null || true
     kill "$pid" 2>/dev/null || true
+    for _w in $(seq 1 30); do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 0.1
+    done
     rm -f "$pid_file"
-    rm -f "$profile/SingletonLock" "$profile/SingletonSocket" "$profile/SingletonCookie" 2>/dev/null || true
   fi
 }
 
@@ -2944,7 +2946,7 @@ PYEOF
 park_transition_veil() {
   local transition_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/transition"
   local window
-  [[ -f "$transition_profile/veil.pid" ]] || return 0
+  [[ -f "$TIKPAL_WEB_MODE_PROFILE_ROOT/transition-veil.pid" ]] || return 0
   window="$(wait_for_profile_window "$transition_profile" 2 || true)"
   [[ -n "$window" ]] || return 0
   tile_window_fast "$window" "$TIKPAL_WEB_MODE_STAGE_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
@@ -3130,9 +3132,15 @@ launch_transition_veil() {
   [[ -n "$provider" ]] && transition_url="$transition_url?provider=$provider"
   close_error_veil
   close_transition_veil
+  # Use a unique profile directory each time to avoid Chromium lock contention.
+  # A killed Chromium may hold OS-level locks on the profile for seconds.
+  transition_profile="$transition_profile.$(date +%s%N)"
+  # Clean up old unique transition profiles (keep last 3)
+  local _old
+  for _old in $(ls -dt "$TIKPAL_WEB_MODE_PROFILE_ROOT/transition."* 2>/dev/null | tail -n +4); do
+    rm -rf "$_old" &
+  done
   mkdir -p "$transition_profile"
-  rm -f "$transition_profile/SingletonLock" "$transition_profile/SingletonSocket" "$transition_profile/SingletonCookie" 2>/dev/null || true
-  rm -f "$transition_profile/Default/Preferences.lock" 2>/dev/null || true
   ensure_chromium_profile_prefs "$transition_profile"
   # Always spawn a fresh instance — close_transition_veil already killed the old one.
   # Reusing a half-dead Chromium window via CDP navigate hangs for 10+ seconds.
@@ -3147,13 +3155,20 @@ launch_transition_veil() {
     "--window-size=$(normalize_window_size "$TIKPAL_WEB_MODE_LEFT_WINDOW")" \
     "--remote-debugging-port=$TIKPAL_WEB_MODE_TRANSITION_DEBUG_PORT" \
     >/dev/null 2>&1 9>&- &
-  printf '%s\n' "$!" > "$transition_profile/veil.pid"
-  window="$(wait_for_profile_window "$transition_profile" 20 || true)"
-  if [[ -n "$window" ]]; then
-    tile_window_fast "$window" "$TIKPAL_WEB_MODE_STAGE_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
-    clear_window_above "$window"
-    DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowlower "$window" >/dev/null 2>&1 || true
-  fi
+  local _chrome_pid=$!
+  printf '%s\n' "$_chrome_pid" > "$TIKPAL_WEB_MODE_PROFILE_ROOT/transition-veil.pid"
+  # Use targeted PID search instead of scanning all X11 windows (~9s).
+  local _w _attempts
+  for _attempts in $(seq 1 200); do
+    _w="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool search --pid "$_chrome_pid" 2>/dev/null | head -1 || true)"
+    if [[ -n "$_w" ]]; then
+      tile_window_fast "$_w" "$TIKPAL_WEB_MODE_STAGE_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
+      clear_window_above "$_w"
+      DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowlower "$_w" >/dev/null 2>&1 || true
+      return 0
+    fi
+    sleep 0.1
+  done
 }
 
 launch_error_veil() {
