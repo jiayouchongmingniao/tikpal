@@ -2660,6 +2660,15 @@ tile_visible_web_mode_windows() {
     fi
   done
 
+  # Lower kiosk window behind providers (mirrors background window handling)
+  if [[ "${#provider_windows[@]}" -gt 0 ]]; then
+    local kiosk_win
+    kiosk_win="$(kiosk_browser_window || true)"
+    if [[ -n "$kiosk_win" ]]; then
+      DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowlower "$kiosk_win" >/dev/null 2>&1 || true
+    fi
+  fi
+
   if [[ "${#provider_windows[@]}" -gt 0 && ( "$force_raise" == "1" || "${TIKPAL_TILE_WINDOW_CHANGED:-0}" == "1" ) ]]; then
     preferred_provider_window="${oauth_provider_window:-${active_provider_window:-${provider_windows[0]}}}"
     raise_window_without_focus "$preferred_provider_window"

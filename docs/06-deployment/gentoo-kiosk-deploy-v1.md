@@ -1352,3 +1352,9 @@ Provider switching (between already-loaded providers) still uses the transition_
 On Gentoo, the ALSA output config lives in `/etc/asound.conf` (not `/etc/alsa/conf.d/_audioout.conf` like on moOde). The volume helper `deploy/moode/tikpal-output-volume.sh` previously only read from `/etc/alsa/conf.d/`, causing it to fall back to `discover_first_playback_card` which picked card 1 (HDA Intel) instead of card 2 (BT66 USB). The UI showed volume numbers changing but actual audio was unaffected.
 
 Fix: added `/etc/asound.conf` to the default search path in `discover_cards_from_config`. The script now finds `CARD=BT66` from the Gentoo asound.conf automatically. `TIKPAL_OUTPUT_VOLUME_CARDS` is no longer needed in `.env.kiosk` for this host.
+
+## Explore Kiosk Window Stacking Fix (August 2026)
+
+When switching to a provider in Explore, the main kiosk window ("Tikpal - Chromium") stayed on top, covering the provider with a persistent black background. The window guard (`tile_visible_web_mode_windows`) correctly lowered background windows but never handled the kiosk window because `is_tikpal_window_title` caused it to be skipped entirely.
+
+Fix: added kiosk window lowering logic after the background windows loop in `tile_visible_web_mode_windows()`. When provider windows are present, the function now finds the kiosk window via `kiosk_browser_window()` and calls `xdotool windowlower`, matching the existing background window handling pattern.
