@@ -2826,59 +2826,36 @@ refresh_provider_pool_guards() {
 }
 
 close_transition_veil() {
-  local transition_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/transition"
-  local pid_file="$transition_profile/veil.pid"
-  local pid window duration step opacity
+  local profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/transition"
+  local pid_file="$profile/veil.pid"
+  local pid
   pid="$(cat "$pid_file" 2>/dev/null || true)"
   if [[ -n "$pid" ]]; then
-    # Find window from PID for fade animation (faster than scanning all windows)
-    window="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool search --pid "$pid" 2>/dev/null | head -1 || true)"
-    if [[ -n "$window" ]] && command -v xprop >/dev/null 2>&1; then
-      duration=0.12
-      step="$(awk -v duration="$duration" 'BEGIN { printf "%.3f", duration / 3 }')"
-      for opacity in 0.60 0.28 0.06; do
-        set_window_opacity "$window" "$opacity" >/dev/null 2>&1 || break
-        sleep "$step"
-      done
-    fi
     pkill -P "$pid" 2>/dev/null || true
     kill "$pid" 2>/dev/null || true
-    # Wait for process to actually exit (up to 2s)
-    local _wait
-    for _wait in $(seq 1 20); do
-      kill -0 "$pid" 2>/dev/null || break
-      sleep 0.1
-    done
     rm -f "$pid_file"
+    rm -f "$profile/SingletonLock" "$profile/SingletonSocket" "$profile/SingletonCookie" 2>/dev/null || true
   fi
 }
 
 close_error_veil() {
   local pid_file="$TIKPAL_WEB_MODE_PROFILE_ROOT/error/veil.pid"
-  local pid _wait
+  local pid
   pid="$(cat "$pid_file" 2>/dev/null || true)"
   if [[ -n "$pid" ]]; then
     pkill -P "$pid" 2>/dev/null || true
     kill "$pid" 2>/dev/null || true
-    for _wait in $(seq 1 20); do
-      kill -0 "$pid" 2>/dev/null || break
-      sleep 0.1
-    done
     rm -f "$pid_file"
   fi
 }
 
 close_background_veil() {
   local pid_file="$TIKPAL_WEB_MODE_PROFILE_ROOT/background/veil.pid"
-  local pid _wait
+  local pid
   pid="$(cat "$pid_file" 2>/dev/null || true)"
   if [[ -n "$pid" ]]; then
     pkill -P "$pid" 2>/dev/null || true
     kill "$pid" 2>/dev/null || true
-    for _wait in $(seq 1 20); do
-      kill -0 "$pid" 2>/dev/null || break
-      sleep 0.1
-    done
     rm -f "$pid_file"
   fi
 }
@@ -3152,16 +3129,13 @@ launch_transition_veil() {
   local window
   [[ -n "$provider" ]] && transition_url="$transition_url?provider=$provider"
   close_error_veil
+  close_transition_veil
   mkdir -p "$transition_profile"
+  rm -f "$transition_profile/SingletonLock" "$transition_profile/SingletonSocket" "$transition_profile/SingletonCookie" 2>/dev/null || true
+  rm -f "$transition_profile/Default/Preferences.lock" 2>/dev/null || true
   ensure_chromium_profile_prefs "$transition_profile"
-  window="$(wait_for_profile_window "$transition_profile" 2 || true)"
-  if [[ -n "$window" ]]; then
-    navigate_transition_veil "$transition_url" || true
-    tile_window_fast "$window" "$TIKPAL_WEB_MODE_STAGE_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
-    clear_window_above "$window"
-    DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowlower "$window" >/dev/null 2>&1 || true
-    return 0
-  fi
+  # Always spawn a fresh instance — close_transition_veil already killed the old one.
+  # Reusing a half-dead Chromium window via CDP navigate hangs for 10+ seconds.
   mapfile -t flags < <(read_flags)
   mapfile -t base_args < <(chromium_base_args)
   DISPLAY="$TIKPAL_KIOSK_DISPLAY" "$TIKPAL_CHROMIUM_BIN" \
