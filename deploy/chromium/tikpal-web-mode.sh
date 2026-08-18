@@ -2944,9 +2944,13 @@ PYEOF
 }
 
 park_transition_veil() {
-  local transition_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/transition"
-  local window
+  local pid pid_profile transition_profile window
   [[ -f "$TIKPAL_WEB_MODE_PROFILE_ROOT/transition-veil.pid" ]] || return 0
+  pid="$(cat "$TIKPAL_WEB_MODE_PROFILE_ROOT/transition-veil.pid" 2>/dev/null || true)"
+  [[ -n "$pid" && "$pid" =~ ^[0-9]+$ ]] || return 0
+  # Derive actual profile from the running process (unique per transition).
+  pid_profile="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -oP '(?<=--user-data-dir=)\S+' || true)"
+  transition_profile="${pid_profile:-$TIKPAL_WEB_MODE_PROFILE_ROOT/transition}"
   window="$(wait_for_profile_window "$transition_profile" 2 || true)"
   [[ -n "$window" ]] || return 0
   tile_window_fast "$window" "$TIKPAL_WEB_MODE_STAGE_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
@@ -3157,18 +3161,13 @@ launch_transition_veil() {
     >/dev/null 2>&1 9>&- &
   local _chrome_pid=$!
   printf '%s\n' "$_chrome_pid" > "$TIKPAL_WEB_MODE_PROFILE_ROOT/transition-veil.pid"
-  # Use targeted PID search instead of scanning all X11 windows (~9s).
-  local _w _attempts
-  for _attempts in $(seq 1 200); do
-    _w="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool search --pid "$_chrome_pid" 2>/dev/null | head -1 || true)"
-    if [[ -n "$_w" ]]; then
-      tile_window_fast "$_w" "$TIKPAL_WEB_MODE_STAGE_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
-      clear_window_above "$_w"
-      DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowlower "$_w" >/dev/null 2>&1 || true
-      return 0
-    fi
-    sleep 0.1
-  done
+  invalidate_chromium_window_cache
+  window="$(wait_for_profile_window "$transition_profile" 20 || true)"
+  if [[ -n "$window" ]]; then
+    tile_window_fast "$window" "$TIKPAL_WEB_MODE_STAGE_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
+    clear_window_above "$window"
+    DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowlower "$window" >/dev/null 2>&1 || true
+  fi
 }
 
 launch_error_veil() {
