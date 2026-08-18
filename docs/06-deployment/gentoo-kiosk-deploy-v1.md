@@ -1374,3 +1374,28 @@ The `close_transition_veil`, `close_error_veil`, and `close_background_veil` fun
 Fix: each veil launch function (`launch_transition_veil`, `launch_error_veil`, `ensure_background_veil`) now writes the Chromium PID to `$profile/veil.pid` after spawning. The close functions read that PID file and kill only the specific process tree (`pkill -P $pid` + `kill $pid`), then remove the file. `close_transition_veil` uses `xdotool search --pid` to find the window for its fade animation, replacing the O(n) `first_window_for_profile` scan. `park_transition_veil` now skips its `wait_for_profile_window` call entirely when no PID file exists.
 
 This reduces veil cleanup from O(n) process/window scans to O(1) PID lookup, eliminating the multi-second latency on provider switches.
+
+### Timing Validation (2026-08-18)
+
+Two rounds of random provider switching (20 total) on Gentoo `192.168.10.115`:
+
+| Round | Min | Max | Median | Notes |
+| --- | --- | --- | --- | --- |
+| Round 1 | 2,063ms | 2,806ms | 2,215ms | Async trigger, first QQ Music had stale veil |
+| Round 2 | 2,063ms | 2,638ms | 2,215ms | Sequential, all resident=1 |
+
+Before the PID file fix, a single provider switch after NetEase failure took 42,900ms. After the fix, all 20 switches completed in 2.0-2.8s. The optimization eliminates the O(n) `pkill -f` scan that was the primary bottleneck.
+
+Verification commands:
+```bash
+# Check veil PID files exist during Explore
+ls -la /home/moode/.tikpal/web-mode-profiles/{transition,error,background}/veil.pid
+
+# Monitor reveal timing in real-time
+journalctl -t tikpal-web-mode -f | grep reveal_ms
+
+# Force a stale-veil scenario (should no longer cause >5s reveal)
+curl -s -X POST http://127.0.0.1:8787/api/v1/web-mode/actions \
+  -H 'Content-Type: application/json' \
+  -d '{"type":"open","provider":"netease_music"}'
+```
