@@ -3331,7 +3331,13 @@ ensure_side_panel() {
     launch_side_panel "$opening_provider" 1 >/dev/null 2>&1 &
     return 0
   fi
-  if [[ -n "$panel_window" ]] || side_panel_window_visible "$panel_profile"; then
+  if [[ -n "$panel_window" ]]; then
+    # Re-tile to final position — the panel may have been staged off-screen
+    # by a previous hidden-mode launch (prewarm, prepare-entry).
+    tile_window_fast "$panel_window" "$TIKPAL_WEB_MODE_PANEL_POSITION" "$TIKPAL_WEB_MODE_PANEL_WINDOW"
+    return 0
+  fi
+  if side_panel_window_visible "$panel_profile"; then
     return 0
   fi
   close_side_panel
@@ -3344,9 +3350,11 @@ prepare_entry_surfaces() {
 
   # This is deliberately only an initial-entry stage. It never launches or
   # reveals a provider, so the API can run it alongside the local-audio gate.
+  # Use non-hidden mode so the panel appears at its final position (PANEL_POSITION)
+  # immediately, making it visible during the audio gate and CDP wait.
   [[ -z "$(read_runtime_active_provider)" ]] || return 0
   hide_onboard
-  ensure_side_panel "$provider" 1 || true
+  ensure_side_panel "$provider" 0 || true
 }
 
 park_prepared_entry_surfaces() {
@@ -3982,17 +3990,12 @@ open_provider_pool() {
   fi
 
   hide_onboard
-  if ! ensure_side_panel "$provider" "$entry_stage"; then
+  # Use non-hidden mode so the panel is placed at its final position
+  # immediately, rather than being staged off-screen and re-tiled later.
+  # This makes the side panel visible during the long CDP/provider wait.
+  if ! ensure_side_panel "$provider" 0; then
     close_web_mode
     fail "Explore side panel did not open"
-  fi
-  # Early panel positioning: tile the side panel to its final position
-  # immediately after launch, so it is visible during the long CDP wait
-  # (cold open can block 45+s on provider page load).
-  if [[ "$entry_stage" == "1" ]]; then
-    local _early_panel
-    _early_panel="$(wait_for_profile_window "$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel" 15 || true)"
-    [[ -n "$_early_panel" ]] && tile_window_fast "$_early_panel" "$TIKPAL_WEB_MODE_PANEL_POSITION" "$TIKPAL_WEB_MODE_PANEL_WINDOW"
   fi
   proxy_line="$(read_proxy_settings)"
   proxy_enabled="$(effective_provider_proxy_enabled "$provider" "${proxy_line%%$'\t'*}")"
