@@ -2727,6 +2727,10 @@ run_window_guard() {
     while any_provider_process_exists || side_panel_window_visible "$panel_profile"; do
       active_provider="$(read_runtime_active_provider)"
       if [[ -z "$active_provider" ]]; then
+        # Guard was told to stop (PID file removed) — exit without parking
+        if [[ "$(cat "$(window_guard_pid_file)" 2>/dev/null || true)" != "$$" ]]; then
+          return 0
+        fi
         close_web_mode_from_guard
         return 0
       fi
