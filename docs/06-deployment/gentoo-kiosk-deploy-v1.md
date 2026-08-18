@@ -1366,3 +1366,11 @@ When switching to a provider that shows `check_setup` (e.g. NetEase Cloud Music)
 Root cause: `stop_window_guard` sends SIGTERM to the bash window guard, but the guard may be mid-tiling-cycle. It finishes tiling, loops back, reads `active_provider=""` (already cleared by `open_provider_pool`), and calls `close_web_mode_from_guard` which parks all surfaces offscreen (since `CLOSE_KEEP_RESIDENT=1`).
 
 Fix: before calling `close_web_mode_from_guard`, the guard now verifies the PID file still contains its own PID (`$$`). If `stop_window_guard` already removed the PID file, the guard exits cleanly without parking surfaces. This prevents the race between `stop_window_guard` and the guard's tiling cycle.
+
+## Veil PID File Optimization (August 2026)
+
+The `close_transition_veil`, `close_error_veil`, and `close_background_veil` functions previously used `pkill -f "--user-data-dir=$profile"` to terminate veil Chromium processes. This scanned all ~510 processes on every call. When a provider failure (e.g. NetEase `check_setup`) left stale veils, the cleanup path in `reveal_resident_provider_window` called these functions multiple times, causing the reveal to take 42.9s instead of the normal ~3s.
+
+Fix: each veil launch function (`launch_transition_veil`, `launch_error_veil`, `ensure_background_veil`) now writes the Chromium PID to `$profile/veil.pid` after spawning. The close functions read that PID file and kill only the specific process tree (`pkill -P $pid` + `kill $pid`), then remove the file. `close_transition_veil` uses `xdotool search --pid` to find the window for its fade animation, replacing the O(n) `first_window_for_profile` scan. `park_transition_veil` now skips its `wait_for_profile_window` call entirely when no PID file exists.
+
+This reduces veil cleanup from O(n) process/window scans to O(1) PID lookup, eliminating the multi-second latency on provider switches.
