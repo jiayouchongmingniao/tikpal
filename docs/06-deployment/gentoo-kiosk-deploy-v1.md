@@ -1451,3 +1451,46 @@ Distribution:
 - PID file is stored at a fixed path (`transition-veil.pid`) outside the unique profile directory
 - `close_transition_veil` is fire-and-forget (no wait, no xdotool); the unique profile approach makes stale-lock waits unnecessary
 - `launch_transition_veil` uses `xdotool search --pid` with the spawned PID instead of `wait_for_profile_window` to avoid the O(n) window scan
+
+### Close Overlay PID File Fix (2026-08-19)
+
+The `close_close_overlay_veil` and `with_web_mode_lock` functions used `pkill -f "close-overlay"` to terminate the full-screen close overlay Chromium process. On Gentoo, Node.js `execFileAsync("sh", ["-lc", commandWithEnv])` passes environment variables as part of the command line, so `TIKPAL_WEB_MODE_CLOSE_OVERLAY_URL=...close-overlay.html` appeared in `/proc/PID/cmdline`. This caused `pkill -f "close-overlay"` to match the parent `sh -lc` process instead of the Chromium process, sending SIGHUP to the shell and interrupting the `sleep 3.5s` in `park_web_mode_surfaces_for_reopen`.
+
+Fix: replace all `pkill -f "close-overlay"` / `pgrep -f "user-data-dir.*close-overlay\."` with PID-file-only cleanup:
+- `with_web_mode_lock`: reads `close-overlay-veil.pid`, kills children via `pkill -P`, kills parent via `kill`
+- `close_close_overlay_veil`: keeps existing PID-file kill, removes `pkill -f` fallback (orphan cleanup handled by `with_web_mode_lock` at next entry)
+
+Also fixed fragile `sleep "$(awk ...)"` inline substitution by assigning to a local variable first.
+
+Validation: after open → close cycles, `ps aux | grep close-overlay | grep -v grep | wc -l` returns 0 and the PID file is cleaned up.
+
+### Gentoo moodeutl Compatibility (2026-08-19)
+
+The `.env.kiosk` on moOde hosts references `moodeutl` directly for bluetooth and airplay disable commands:
+
+```conf
+TIKPAL_BLUETOOTH_DISABLE_COMMAND="moodeutl -Ro --bluetooth off"
+TIKPAL_AIRPLAY_DISABLE_COMMAND="moodeutl -Ro --airplay off"
+```
+
+Gentoo does not have `moodeutl`. When `enforceConnectionGate` runs during Explore open, the raw command fails and the open action returns BAD_REQUEST.
+
+Fix: use wrapper scripts that guard with `command -v moodeutl`:
+
+```conf
+TIKPAL_BLUETOOTH_DISABLE_COMMAND="./deploy/moode/tikpal-bluetooth-disable.sh"
+TIKPAL_AIRPLAY_DISABLE_COMMAND="./deploy/moode/tikpal-airplay-disable.sh"
+```
+
+The scripts (`tikpal-bluetooth-disable.sh`, `tikpal-airplay-disable.sh`) exit cleanly when `moodeutl` is absent. On moOde hosts they call `moodeutl` as before.
+
+**Required `.env.kiosk` changes for Gentoo:**
+
+```diff
+-TIKPAL_BLUETOOTH_DISABLE_COMMAND="moodeutl -Ro --bluetooth off"
+-TIKPAL_AIRPLAY_DISABLE_COMMAND="moodeutl -Ro --airplay off"
++TIKPAL_BLUETOOTH_DISABLE_COMMAND="./deploy/moode/tikpal-bluetooth-disable.sh"
++TIKPAL_AIRPLAY_DISABLE_COMMAND="./deploy/moode/tikpal-airplay-disable.sh"
+```
+
+Note: `.env.kiosk` is excluded from rsync (`--exclude='.env.kiosk'`), so this change must be applied manually on each Gentoo device after deploy.
