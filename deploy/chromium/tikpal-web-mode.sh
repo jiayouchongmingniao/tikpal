@@ -156,10 +156,15 @@ fail() {
 
 with_web_mode_lock() {
   mkdir -p "$TIKPAL_WEB_MODE_PROFILE_ROOT"
-  # Clean up orphan close-overlay Chromium processes from prior SIGKILL'd
-  # invocations before acquiring the lock.  pkill is safe here: the overlay
-  # URL is unique to close-overlay windows.
-  pkill -f "close-overlay" 2>/dev/null || true
+  # Kill orphan close-overlay Chromium via PID file only.
+  # Do NOT use pgrep/pkill -f which matches parent sh -lc env vars
+  # containing the overlay URL and kills the wrong process.
+  local _orphan_pid
+  _orphan_pid="$(cat "$TIKPAL_WEB_MODE_PROFILE_ROOT/close-overlay-veil.pid" 2>/dev/null || true)"
+  if [[ -n "$_orphan_pid" ]]; then
+    pkill -P "$_orphan_pid" 2>/dev/null || true
+    kill "$_orphan_pid" 2>/dev/null || true
+  fi
   rm -f "$TIKPAL_WEB_MODE_PROFILE_ROOT/close-overlay-veil.pid" 2>/dev/null
   rm -rf "$TIKPAL_WEB_MODE_PROFILE_ROOT/close-overlay."* 2>/dev/null
   if command -v flock >/dev/null 2>&1; then
@@ -2098,8 +2103,8 @@ close_close_overlay_veil() {
     done
     rm -f "$pid_file"
   fi
-  # Also kill any orphan close-overlay chromium processes (survived SIGKILL).
-  pkill -f "close-overlay" 2>/dev/null || true
+  # Note: no pgrep -f fallback here — it matches parent sh -lc env vars.
+  # Orphan cleanup is handled by with_web_mode_lock at next entry.
   # Clean up old close-overlay profiles (keep none)
   rm -rf "$TIKPAL_WEB_MODE_PROFILE_ROOT/close-overlay."* 2>/dev/null || true
   # Clean up stale lock file if no process holds it
@@ -2158,7 +2163,9 @@ park_web_mode_surfaces_for_reopen() {
   # Wait for fade to complete (3s fade + 0.5s buffer for page load)
   local fade_seconds="$TIKPAL_WEB_MODE_CLOSE_OVERLAY_FADE_SECONDS"
   [[ "$fade_seconds" =~ ^[0-9]+$ ]] || fade_seconds=3
-  sleep "$(awk "BEGIN { printf "%.1f", $fade_seconds + 0.5 }")"
+  local _sleep_val
+  _sleep_val="$(awk "BEGIN { printf "%.1f", $fade_seconds + 0.5 }")"
+  sleep "$_sleep_val"
   # The fade is done — dismiss the overlay immediately so it never lingers
   # if downstream park operations block or the caller hits a timeout.
   close_close_overlay_veil
@@ -2233,7 +2240,9 @@ close_web_mode_full() {
   # Wait for fade to complete (3s fade + 0.5s buffer for page load)
   local fade_seconds="$TIKPAL_WEB_MODE_CLOSE_OVERLAY_FADE_SECONDS"
   [[ "$fade_seconds" =~ ^[0-9]+$ ]] || fade_seconds=3
-  sleep "$(awk "BEGIN { printf "%.1f", $fade_seconds + 0.5 }")"
+  local _sleep_val
+  _sleep_val="$(awk "BEGIN { printf "%.1f", $fade_seconds + 0.5 }")"
+  sleep "$_sleep_val"
   # The fade is done — dismiss the overlay immediately so it never lingers.
   close_close_overlay_veil
   # Kill provider windows and close side panel (overlay is gone)
