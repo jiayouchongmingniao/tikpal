@@ -328,7 +328,7 @@ export function WebModeSidePanel() {
 
   return (
     <main
-      className={`web-mode-panel ${panelState === "closing" ? "is-closing" : ""} ${panelState === "switching" ? "is-switching" : ""}`}
+      className={`web-mode-panel ${panelState === "switching" ? "is-switching" : ""}`}
       style={{ "--panel-tone": panelTone } as CSSProperties}
       data-web-mode-panel
       data-web-mode-state={panelState}
@@ -441,7 +441,6 @@ export function WebModeSidePanel() {
       <footer className="web-mode-panel-footer" role="status" title={error ?? undefined}>
         {friendlyError(error, "error.explore") ?? (pendingProvider ? `${t("common.connecting")} ${providerLabels[pendingProvider]}` : t("explore.footer"))}
       </footer>
-      <div className={"web-mode-close-overlay" + (panelState === "closing" ? " active" : "")} />
       <div className={"web-mode-open-overlay" + (exploreOpening ? " active" : "")} />
     </main>
   );

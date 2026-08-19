@@ -9375,45 +9375,12 @@ select {
   animation: webModePanelSignal 900ms ease-in-out infinite alternate;
 }
 
-.web-mode-panel.is-closing::before {
-  opacity: 0;
-  transition: opacity 600ms ease-out;
-}
-
-.web-mode-panel.is-switching .web-mode-active-card,
-.web-mode-panel.is-closing .web-mode-active-card {
-  border-color: color-mix(in srgb, var(--panel-tone) 42%, rgba(180, 210, 230, 0.16));
-}
-
-.web-mode-panel.is-closing {
-  pointer-events: none;
-}
-
-/* Prevent disabled-button opacity override during close fade */
-.web-mode-panel.is-closing .web-mode-provider:disabled,
-.web-mode-panel.is-closing .web-mode-proxy-chip:disabled,
-.web-mode-panel.is-closing .web-mode-top-back:disabled {
-  opacity: 1;
-}
 
 
 
-.web-mode-close-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 9999;
-  background: #080b0e;
-  opacity: 0;
-  visibility: hidden;
-  transition: opacity 3000ms ease-out, visibility 0s linear 3050ms;
-  pointer-events: none;
-}
 
-.web-mode-close-overlay.active {
-  opacity: 1;
-  visibility: visible;
-  transition: opacity 3000ms ease-out, visibility 0s linear 0s;
-}
+
+
 
 .web-mode-open-overlay {
   position: fixed;
@@ -9709,14 +9676,7 @@ select {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .web-mode-close-overlay {
-    transition: none;
-  }
 
-  .web-mode-close-overlay.active {
-    opacity: 1;
-    visibility: visible;
-  }
 
   .app-explore-close-overlay {
     transition: none;
@@ -9755,10 +9715,6 @@ select {
     transform: scaleX(1);
   }
 
-  .web-mode-panel.is-closing::before {
-    opacity: 0;
-    transition: none;
-  }
 
   .web-mode-provider.is-connecting::after {
     opacity: 0.82;

@@ -46,6 +46,9 @@ fi
 : "${TIKPAL_WEB_MODE_BACKGROUND_URL:=http://127.0.0.1:4173/web-mode-background.html}"
 : "${TIKPAL_WEB_MODE_TRANSITION_URL:=http://127.0.0.1:4173/web-mode-transition.html}"
 : "${TIKPAL_WEB_MODE_TRANSITION_DEBUG_PORT:=9250}"
+: "${TIKPAL_WEB_MODE_CLOSE_OVERLAY_URL:=http://127.0.0.1:4173/web-mode-close-overlay.html}"
+: "${TIKPAL_WEB_MODE_CLOSE_OVERLAY_FADE_SECONDS:=3}"
+: "${TIKPAL_WEB_MODE_CLOSE_OVERLAY_DEBUG_PORT:=9251}"
 : "${TIKPAL_WEB_MODE_ENTRY_STAGE_POSITION:=0,0}"
 : "${TIKPAL_WEB_MODE_ENTRY_STAGE_WINDOW:=2560x720}"
 : "${TIKPAL_WEB_MODE_ENTRY_REVEAL_SETTLE_SECONDS:=0.45}"
@@ -153,6 +156,12 @@ fail() {
 
 with_web_mode_lock() {
   mkdir -p "$TIKPAL_WEB_MODE_PROFILE_ROOT"
+  # Clean up orphan close-overlay Chromium processes from prior SIGKILL'd
+  # invocations before acquiring the lock.  pkill is safe here: the overlay
+  # URL is unique to close-overlay windows.
+  pkill -f "close-overlay" 2>/dev/null || true
+  rm -f "$TIKPAL_WEB_MODE_PROFILE_ROOT/close-overlay-veil.pid" 2>/dev/null
+  rm -rf "$TIKPAL_WEB_MODE_PROFILE_ROOT/close-overlay."* 2>/dev/null
   if command -v flock >/dev/null 2>&1; then
     (
       flock -x -w "$TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS" 9 || fail "Explore is already switching"
@@ -2075,14 +2084,100 @@ park_left_web_mode_surfaces_for_reopen() {
   park_provider_windows_for_reopen "$active_provider"
 }
 
+close_close_overlay_veil() {
+  local pid_file="$TIKPAL_WEB_MODE_PROFILE_ROOT/close-overlay-veil.pid"
+  local pid _w
+  pid="$(cat "$pid_file" 2>/dev/null || true)"
+  if [[ -n "$pid" ]]; then
+    log "closing close-overlay veil (pid=$pid)"
+    pkill -P "$pid" 2>/dev/null || true
+    kill "$pid" 2>/dev/null || true
+    for _w in $(seq 1 30); do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 0.1
+    done
+    rm -f "$pid_file"
+  fi
+  # Also kill any orphan close-overlay chromium processes (survived SIGKILL).
+  pkill -f "close-overlay" 2>/dev/null || true
+  # Clean up old close-overlay profiles (keep none)
+  rm -rf "$TIKPAL_WEB_MODE_PROFILE_ROOT/close-overlay."* 2>/dev/null || true
+  # Clean up stale lock file if no process holds it
+  local lock_file="$TIKPAL_WEB_MODE_PROFILE_ROOT/web-mode.lock"
+  if [[ -f "$lock_file" ]] && ! fuser "$lock_file" >/dev/null 2>&1; then
+    rm -f "$lock_file"
+  fi
+}
+
+launch_close_overlay_veil() {
+  local close_overlay_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/close-overlay"
+  local close_overlay_url="$TIKPAL_WEB_MODE_CLOSE_OVERLAY_URL"
+  local window
+  log "launching close-overlay veil"
+  close_close_overlay_veil
+
+  # Use a unique profile directory each time to avoid Chromium lock contention.
+  close_overlay_profile="$close_overlay_profile.$(date +%s%N)"
+  # Clean up old unique close-overlay profiles (keep last 3)
+  local _old
+  for _old in $(ls -dt "$TIKPAL_WEB_MODE_PROFILE_ROOT/close-overlay."* 2>/dev/null | tail -n +4); do
+    rm -rf "$_old" &
+  done
+  mkdir -p "$close_overlay_profile"
+  ensure_chromium_profile_prefs "$close_overlay_profile"
+  mapfile -t flags < <(read_flags)
+  mapfile -t base_args < <(chromium_base_args)
+  DISPLAY="$TIKPAL_KIOSK_DISPLAY" "$TIKPAL_CHROMIUM_BIN" \
+    "${flags[@]}" \
+    "${base_args[@]}" \
+    "--app=$close_overlay_url" \
+    "--user-data-dir=$close_overlay_profile" \
+    "--window-position=0,0" \
+    "--window-size=$(normalize_window_size "$TIKPAL_WEB_MODE_ENTRY_STAGE_WINDOW")" \
+    "--remote-debugging-port=$TIKPAL_WEB_MODE_CLOSE_OVERLAY_DEBUG_PORT" \
+    >/dev/null 2>&1 9>&- &
+  local _chrome_pid=$!
+  printf '%s\n' "$_chrome_pid" > "$TIKPAL_WEB_MODE_PROFILE_ROOT/close-overlay-veil.pid"
+  # Fast path: search --pid on the spawned process and its children.
+  window="$(find_window_for_pid "$_chrome_pid" || true)"
+  if [[ -z "$window" ]]; then
+    invalidate_chromium_window_cache
+    window="$(wait_for_profile_window "$close_overlay_profile" 20 || true)"
+  fi
+  if [[ -n "$window" ]]; then
+    tile_window_fast "$window" "0,0" "$TIKPAL_WEB_MODE_ENTRY_STAGE_WINDOW"
+    # Ensure the veil is on top
+    DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowfocus "$window" >/dev/null 2>&1 || true
+  fi
+}
+
 park_web_mode_surfaces_for_reopen() {
   local active_provider="${1:-}"
-  park_left_web_mode_surfaces_for_reopen "$active_provider" &
-  local left_pid=$!
+  # Launch full-screen close-overlay veil that fades from transparent to dark
+  launch_close_overlay_veil
+  # Wait for fade to complete (3s fade + 0.5s buffer for page load)
+  local fade_seconds="$TIKPAL_WEB_MODE_CLOSE_OVERLAY_FADE_SECONDS"
+  [[ "$fade_seconds" =~ ^[0-9]+$ ]] || fade_seconds=3
+  sleep "$(awk "BEGIN { printf "%.1f", $fade_seconds + 0.5 }")"
+  # The fade is done — dismiss the overlay immediately so it never lingers
+  # if downstream park operations block or the caller hits a timeout.
+  close_close_overlay_veil
+  # Park windows off-screen (overlay is gone; these are fast xdotool moves)
+  park_provider_windows_for_reopen "$active_provider" &
+  local providers_pid=$!
   park_side_panel_for_reopen &
   local panel_pid=$!
-  wait "$left_pid" 2>/dev/null || true
+  # Safety: cap waits so a stuck xdotool call never blocks the whole close
+  ( sleep 10; kill "$providers_pid" "$panel_pid" 2>/dev/null ) &
+  local watchdog=$!
+  wait "$providers_pid" 2>/dev/null || true
   wait "$panel_pid" 2>/dev/null || true
+  kill "$watchdog" 2>/dev/null || true
+  # Close old veils now that windows are parked
+  close_transition_veil
+  close_error_veil
+  close_transition_veil
+  close_background_veil
 }
 
 close_web_mode_process_surfaces() {
@@ -2133,7 +2228,17 @@ schedule_provider_pool_refill_after_close() {
 close_web_mode_full() {
   close_legacy_exit_stage
   hide_onboard
+  # Launch full-screen close-overlay veil that fades from transparent to dark
+  launch_close_overlay_veil
+  # Wait for fade to complete (3s fade + 0.5s buffer for page load)
+  local fade_seconds="$TIKPAL_WEB_MODE_CLOSE_OVERLAY_FADE_SECONDS"
+  [[ "$fade_seconds" =~ ^[0-9]+$ ]] || fade_seconds=3
+  sleep "$(awk "BEGIN { printf "%.1f", $fade_seconds + 0.5 }")"
+  # The fade is done — dismiss the overlay immediately so it never lingers.
+  close_close_overlay_veil
+  # Kill provider windows and close side panel (overlay is gone)
   close_web_mode_process_surfaces
+  # Close old veils now that windows are gone
   close_transition_veil
   close_error_veil
   close_transition_veil
@@ -2863,6 +2968,9 @@ close_transition_veil() {
 }
 
 close_error_veil() {
+
+
+
   local pid_file="$TIKPAL_WEB_MODE_PROFILE_ROOT/error/veil.pid"
   local pid
   pid="$(cat "$pid_file" 2>/dev/null || true)"
