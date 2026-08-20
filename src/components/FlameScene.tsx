@@ -9,6 +9,7 @@ const VIDEO_SYNC_TOLERANCE_SECONDS = 2;
 const VIDEO_SEEK_SETTLE_MS = 650;
 const VIDEO_METADATA_SETTLE_MS = 1200;
 const VIDEO_FRAME_READY_SETTLE_MS = 900;
+const VIDEO_PLAY_SETTLE_MS = 1200;
 const SCENE_AUDIO_GAIN_MIN_DB = -24;
 const SCENE_AUDIO_GAIN_MAX_DB = 12;
 const LOOP_PREPARE_LEAD_SECONDS = 1.2;
@@ -116,6 +117,24 @@ function waitForVideoEvent(video: HTMLVideoElement, eventName: keyof HTMLMediaEl
     const handleEvent = () => finish(true);
     const timeout = window.setTimeout(() => finish(false), timeoutMs);
     video.addEventListener(eventName, handleEvent, { once: true });
+  });
+}
+
+function playVideoWithTimeout(video: HTMLVideoElement) {
+  return new Promise<boolean>((resolve) => {
+    let settled = false;
+    const finish = (started: boolean) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timeout);
+      resolve(started);
+    };
+    const timeout = window.setTimeout(() => finish(false), VIDEO_PLAY_SETTLE_MS);
+    try {
+      void video.play().then(() => finish(true)).catch(() => finish(false));
+    } catch {
+      finish(false);
+    }
   });
 }
 
@@ -325,7 +344,8 @@ async function alignVideoWithPlayback(video: HTMLVideoElement, playback: FlameSc
   if (targetTime !== null && (forceSync || getLoopAwareDrift(video, targetTime) > VIDEO_SYNC_TOLERANCE_SECONDS)) {
     try {
       video.currentTime = targetTime;
-      await waitForVideoEvent(video, "seeked", VIDEO_SEEK_SETTLE_MS);
+      const seeked = await waitForVideoEvent(video, "seeked", VIDEO_SEEK_SETTLE_MS);
+      if (!seeked && video.seeking) return false;
     } catch {
       // Some browsers reject seeks while metadata is still settling. Playback state is still enforced below.
     }
@@ -335,13 +355,11 @@ async function alignVideoWithPlayback(video: HTMLVideoElement, playback: FlameSc
   if (video.paused) {
     muteSceneVideo(video);
   }
-  await video.play().then(() => {
-    if (shouldRestoreAudible && video.dataset.sceneAudible === "true") {
-      unmuteSceneVideo(video);
-    }
-  }).catch(() => {
-    // Inline scene video can still be blocked briefly while a new layer mounts.
-  });
+  const started = await playVideoWithTimeout(video);
+  if (!started || video.seeking) return false;
+  if (shouldRestoreAudible && video.dataset.sceneAudible === "true") {
+    unmuteSceneVideo(video);
+  }
 
   return true;
 }
@@ -566,6 +584,30 @@ export function FlameScene({ lowPower = false, playback, singleLoop = false, sta
     if (singleVideoHealthRef.current !== "fallback") return;
     patchSingleLayerFrameReady(singleActiveLayerIdRef.current, false);
     resetSingleLoopWatchdog(health);
+  }
+
+  function reloadSingleLoopVideo(video: HTMLVideoElement) {
+    if (singleVideoRef.current !== video) return;
+    const watchdog = singleLoopWatchdogRef.current;
+    if (watchdog.recovering) return;
+
+    watchdog.recovering = true;
+    patchSingleLoopVideoHealth("recovering");
+    video.load();
+    void waitForVideoEvent(video, "canplay", VIDEO_METADATA_SETTLE_MS).then((canPlay) => {
+      if (singleVideoRef.current !== video || singleVideoHealthRef.current === "fallback") return;
+      watchdog.recovering = false;
+      if (!canPlay && video.readyState < 2) {
+        patchSingleLayerFrameReady(singleActiveLayerIdRef.current, false);
+        if (watchdog.stallCount >= SINGLE_LOOP_STALL_FALLBACK_LIMIT) {
+          fallBackSingleLoopVideo(video);
+        } else {
+          patchSingleLoopVideoHealth("stalled");
+        }
+        return;
+      }
+      recoverSingleLoopVideo(video, watchdog.stallCount);
+    });
   }
 
   function recoverSingleLoopVideo(video: HTMLVideoElement, stallCount: number) {
@@ -1413,20 +1455,15 @@ export function FlameScene({ lowPower = false, playback, singleLoop = false, sta
         // (e.g. AUDIO_RENDERER_ERROR). The onError handler reloads the
         // video, but if it is still stuck after SINGLE_LOOP_STALL_MS,
         // force another reload.
-        if (video.readyState < 2 && !video.seeking) {
-          watchdog.stalledSinceMs ??= now;
-          if (now - watchdog.stalledSinceMs >= SINGLE_LOOP_STALL_MS && !watchdog.recovering) {
-            watchdog.recovering = true;
-            patchSingleLoopVideoHealth("recovering");
-            video.load();
-            video.addEventListener("canplay", () => {
-              if (singleVideoRef.current === video) {
-                watchdog.recovering = false;
-                watchdog.stalledSinceMs = null;
-                void recoverSingleLoopVideo(video, watchdog.stallCount);
-              }
-            }, { once: true });
+        watchdog.stalledSinceMs ??= now;
+        if (now - watchdog.stalledSinceMs >= SINGLE_LOOP_STALL_MS && !watchdog.recovering) {
+          watchdog.stallCount += 1;
+          watchdog.lastStallAtMs = now;
+          if (watchdog.stallCount >= SINGLE_LOOP_STALL_FALLBACK_LIMIT) {
+            fallBackSingleLoopVideo(video);
+            return;
           }
+          reloadSingleLoopVideo(video);
         }
         scheduleWatchdog();
         return;
@@ -1686,13 +1723,11 @@ export function FlameScene({ lowPower = false, playback, singleLoop = false, sta
                     // cannot fix a broken audio pipeline — force a full
                     // media reload instead.
                     if (video.readyState < 2) {
-                      patchSingleLoopVideoHealth("recovering");
-                      video.load();
-                      video.addEventListener("canplay", () => {
-                        if (singleVideoRef.current === video && singleVideoHealthRef.current !== "fallback") {
-                          void recoverSingleLoopVideo(video, watchdog.stallCount);
-                        }
-                      }, { once: true });
+                      if (watchdog.stallCount >= SINGLE_LOOP_STALL_FALLBACK_LIMIT) {
+                        fallBackSingleLoopVideo(video);
+                        return;
+                      }
+                      reloadSingleLoopVideo(video);
                       return;
                     }
                     patchSingleLoopVideoHealth("stalled");

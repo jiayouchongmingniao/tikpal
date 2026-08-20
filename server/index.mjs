@@ -999,10 +999,10 @@ function buildKioskHeartbeatStatus(now = Date.now()) {
     }
   }
 
-  const playback = asPlainObject(payload.playback);
   const scene = asPlainObject(payload.scene);
   const activeSceneVideo = asPlainObject(payload.activeSceneVideo);
-  if (playback.source === "scene" && scene.sceneVideoEnabled === true) {
+  const pageMode = String(payload.pageMode ?? "").trim().toLowerCase();
+  if (pageMode === "ambient" && scene.sceneVideoEnabled === true) {
     const sceneTransitionActive = activeSceneVideo.transition === "scene"
       && activeSceneVideo.transitionPhase
       && activeSceneVideo.transitionPhase !== "idle";
@@ -1016,7 +1016,7 @@ function buildKioskHeartbeatStatus(now = Date.now()) {
     }
 
     const readyState = finiteNumber(activeSceneVideo.readyState);
-    if (scene.sceneSoundEnabled === true && readyState !== null && readyState < 2) {
+    if (readyState !== null && readyState < 2 && !sceneTransitionActive) {
       reasons.push("scene-video-not-ready");
     }
   }
@@ -14044,7 +14044,10 @@ async function applyWebModeAction(action) {
       && previousRuntimeState.activeProvider !== providerId;
     if (isResidentSwitch) {
       await writeWebModeRuntimeState({ activeProvider: providerId, lastProvider: providerId, lastError: null, closeRequestId: null });
-      runWebModeCommand("open", providerId, { TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS: "2" }).catch(() => {});
+      runWebModeCommand("open", providerId, {
+        TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS: "2",
+        TIKPAL_WEB_MODE_OPEN_EXPECTED_ACTIVE_PROVIDER: providerId
+      }).catch(() => {});
       return await buildWebModeState();
     }
     providerOpenCommandStarted = true;

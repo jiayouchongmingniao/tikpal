@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const port = Number.parseInt(process.env.TIKPAL_WEB_MODE_PROVIDER_DEBUG_PORT || "9234", 10);
@@ -172,6 +171,7 @@ const qqMusicAutoPlayStates = new Map();
 const qqMvCinemaStates = new Map();
 const qqMvAutoPlayStates = new Map();
 const neteaseAutoPlayStates = new Map();
+const pendingResidentStatus = new Set();
 let lastOnboardVisible = null;
 let lastOnboardActionMs = 0;
 const providerNativeFailureIds = new Set(["amazon_music", "qobuz", "deezer"]);
@@ -270,38 +270,34 @@ function isExpectedProviderPage(target) {
 
 function writeResidentProviderStatus(status) {
   if (!statePath || !providerId) return;
-  if (status !== "active") return;
-  const normalizedStatus = status === "active" ? "active" : "ready";
   let state;
   try {
     state = JSON.parse(readFileSync(statePath, "utf8"));
   } catch {
     return;
   }
-  if (state.activeProvider !== providerId) return;
   const residentProviders = state.residentProviders && typeof state.residentProviders === "object"
     ? state.residentProviders
     : {};
   const current = residentProviders[providerId] && typeof residentProviders[providerId] === "object"
     ? residentProviders[providerId]
     : {};
+  // Read the current state only to avoid spawning a helper for an already
+  // settled card. The launcher repeats this active/ready choice under its
+  // provider-state lock, so a late inactive guard cannot demote a new active
+  // provider between this read and the write.
+  const normalizedStatus = status === "active" && state.activeProvider === providerId ? "active" : "ready";
   if (current.status === normalizedStatus && !current.lastError) return;
-  const now = new Date().toISOString();
-  residentProviders[providerId] = {
-    ...current,
-    status: normalizedStatus,
-    lastError: null,
-    updatedAt: now
-  };
-  state.residentProviders = residentProviders;
-  state.updatedAt = now;
-  if (normalizedStatus === "active") state.lastError = null;
-  try {
-    mkdirSync(dirname(statePath), { recursive: true });
-    const temporaryPath = `${statePath}.${process.pid}.${Date.now()}.tmp`;
-    writeFileSync(temporaryPath, `${JSON.stringify(state, null, 2)}\n`);
-    renameSync(temporaryPath, statePath);
-  } catch {}
+  const requestKey = `${providerId}:${normalizedStatus}`;
+  if (pendingResidentStatus.has(requestKey)) return;
+  pendingResidentStatus.add(requestKey);
+  const child = spawn(launcherPath, ["provider-status", providerId, normalizedStatus], {
+    detached: true,
+    stdio: "ignore"
+  });
+  child.once("error", () => pendingResidentStatus.delete(requestKey));
+  child.once("exit", () => pendingResidentStatus.delete(requestKey));
+  child.unref();
 }
 
 function syncResidentProviderStatus(targets, active) {

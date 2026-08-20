@@ -56,6 +56,7 @@ const requiredFiles = [
   "deploy/moode/tikpal-upnp-metadata.sh",
   "public/web-mode-error.html",
   "public/web-mode-background.html",
+  "public/web-mode-close-overlay.html",
   "src/components/OnboardingGuide.tsx",
   "deploy/moode/tikpal-alsa-loopback.sh",
   "deploy/moode/tikpal-airplay-enable.sh",
@@ -679,11 +680,76 @@ esac
   assert(staleReconcile.status === 0, `stale resident reconcile should exit cleanly: ${staleReconcile.stderr || staleReconcile.stdout}`);
   const reconcileState = JSON.parse(await readFile(reconcileStatePath, "utf8"));
   assert(reconcileState.activeProvider === "spotify", "stale resident reconcile should not overwrite a newer activeProvider");
+  const closeOwnershipStatePath = path.join(reconcileSmokeDir, "close-owned-state.json");
+  writeFileSync(closeOwnershipStatePath, JSON.stringify({
+    activeProvider: null,
+    lastProvider: "spotify",
+    closeRequestId: "close-owns-state",
+    residentProviders: { spotify: { status: "active" } }
+  }));
+  const webModeFunctions = webModeScript.slice(0, webModeScript.indexOf('\ncase "${1:-open}" in'));
+  const delayedOpenStateWrite = spawnSync("bash", ["-s"], {
+    cwd: ROOT,
+    input: `${webModeFunctions}\nwrite_runtime_provider_state deezer\n`,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      TIKPAL_KIOSK_SKIP_ENV_SOURCE: "1",
+      TIKPAL_WEB_MODE_PROFILE_ROOT: reconcileProfileRoot,
+      TIKPAL_WEB_MODE_STATE_PATH: closeOwnershipStatePath
+    }
+  });
+  assert(delayedOpenStateWrite.status === 0, `close-owned state should ignore a delayed resident open: ${delayedOpenStateWrite.stderr || delayedOpenStateWrite.stdout}`);
+  const closeOwnedState = JSON.parse(await readFile(closeOwnershipStatePath, "utf8"));
+  assert(
+    closeOwnedState.activeProvider === null && closeOwnedState.closeRequestId === "close-owns-state",
+    "a delayed resident open must not reclaim state after Close owns it"
+  );
+  const staleResidentOpen = spawnSync("bash", ["-s"], {
+    cwd: ROOT,
+    input: `${webModeFunctions}\nif runtime_open_request_is_current; then exit 1; fi\nexit 0\n`,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      TIKPAL_KIOSK_SKIP_ENV_SOURCE: "1",
+      TIKPAL_WEB_MODE_PROFILE_ROOT: reconcileProfileRoot,
+      TIKPAL_WEB_MODE_STATE_PATH: closeOwnershipStatePath,
+      TIKPAL_WEB_MODE_OPEN_EXPECTED_ACTIVE_PROVIDER: "deezer"
+    }
+  });
+  assert(staleResidentOpen.status === 0, `a close-owned state should cancel a delayed resident open before it changes surfaces: ${staleResidentOpen.stderr || staleResidentOpen.stdout}`);
+  const closeStatusSync = spawnSync("bash", ["-s"], {
+    cwd: ROOT,
+    input: `${webModeFunctions}
+provider_ids() { printf 'spotify\\n'; }
+profile_process_exists() { return 0; }
+provider_has_real_provider_page() { return 0; }
+provider_debug_port() { printf '9234\\n'; }
+sync_runtime_provider_pool_process_statuses ""
+`,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      TIKPAL_KIOSK_SKIP_ENV_SOURCE: "1",
+      TIKPAL_WEB_MODE_PROFILE_ROOT: reconcileProfileRoot,
+      TIKPAL_WEB_MODE_STATE_PATH: closeOwnershipStatePath,
+      TIKPAL_WEB_MODE_CLOSE_REQUEST_ID: "close-owns-state"
+    }
+  });
+  assert(closeStatusSync.status === 0, `close-owned resident status sync should exit cleanly: ${closeStatusSync.stderr || closeStatusSync.stdout}`);
+  const closeSyncedState = JSON.parse(await readFile(closeOwnershipStatePath, "utf8"));
+  assert(
+    closeSyncedState.activeProvider === null &&
+      closeSyncedState.closeRequestId === "close-owns-state" &&
+      closeSyncedState.residentProviders.spotify?.status === "ready",
+    "a close-owned sync should self-heal a real resident HTTPS page to ready without reopening Explore"
+  );
   const onboardImeToggleScript = await readFile(path.join(ROOT, "deploy/chromium/onboard-scripts/tikpalImeToggle.py"), "utf8");
   const onboardTheme = await readFile(path.join(ROOT, "deploy/chromium/onboard-themes/Tikpal-Classic.colors"), "utf8");
   const serverSource = await readFile(path.join(ROOT, "server/index.mjs"), "utf8");
   const webModeErrorPage = await readFile(path.join(ROOT, "public/web-mode-error.html"), "utf8");
   const webModeBackgroundPage = await readFile(path.join(ROOT, "public/web-mode-background.html"), "utf8");
+  const webModeCloseOverlayPage = await readFile(path.join(ROOT, "public/web-mode-close-overlay.html"), "utf8");
   const webModeCrossfadeScript = await readFile(path.join(ROOT, "deploy/moode/tikpal-web-mode-crossfade.sh"), "utf8");
   const audioAdaptScript = await readFile(path.join(ROOT, "deploy/moode/tikpal-audio-adapt.sh"), "utf8");
   const localLibrarySyncScript = await readFile(path.join(ROOT, "deploy/moode/tikpal-local-library-sync.sh"), "utf8");
@@ -1035,7 +1101,18 @@ esac
       && !remoteControlSource.includes("Back to Tikpal"),
     "portable remote should keep action errors visible with low-friction labels"
   );
-  assert(!flameSceneSource.includes("video.load()"), "single-loop recovery should not leak Chromium media decoders by reloading the video element");
+  assert(
+    flameSceneSource.includes("function reloadSingleLoopVideo")
+      && flameSceneSource.includes('waitForVideoEvent(video, "canplay", VIDEO_METADATA_SETTLE_MS)')
+      && flameSceneSource.includes("if (video.readyState < 2 || video.seeking)"),
+    "single-loop recovery should bound metadata-only and permanently-seeking video stalls through the watchdog"
+  );
+  assert(
+    flameSceneSource.includes("function playVideoWithTimeout")
+      && flameSceneSource.includes("VIDEO_PLAY_SETTLE_MS")
+      && flameSceneSource.includes("if (!started || video.seeking) return false"),
+    "single-loop recovery should return timed-out video.play() calls to the watchdog instead of waiting forever"
+  );
   assert(kioskLauncher.includes("TIKPAL_KIOSK_X_COMMAND_TIMEOUT_SECONDS"), "kiosk launcher should expose an X command timeout");
   assert(kioskLauncher.includes("run_x_command xrandr"), "kiosk launcher should bound xrandr commands");
   assert(kioskLauncher.includes("run_x_command xset"), "kiosk launcher should bound xset commands");
@@ -1460,6 +1537,54 @@ esac
   assert(webModeCheck.stdout.includes("qq scoped auto confirm: 1"), "web mode should keep QQ auto-confirm scoped inside the provider guard");
   assert(webModeCheck.stdout.includes("proxy: enabled http://127.0.0.1:7897"), "web mode should default to the HTTP development proxy");
 
+  const providerStatusStatePath = path.join(webModeCheckDir, "provider-status-state.json");
+  const providerStatusEnv = {
+    ...process.env,
+    TIKPAL_KIOSK_SKIP_ENV_SOURCE: "1",
+    TIKPAL_WEB_MODE_PROFILE_ROOT: path.join(webModeCheckDir, "provider-status-profiles"),
+    TIKPAL_WEB_MODE_STATE_PATH: providerStatusStatePath
+  };
+  writeFileSync(providerStatusStatePath, JSON.stringify({
+    activeProvider: "spotify",
+    residentProviders: {
+      spotify: { status: "active", lastError: null },
+      amazon_music: { status: "prewarming", lastError: null }
+    }
+  }));
+  const inactiveReady = spawnSync("bash", ["deploy/chromium/tikpal-web-mode.sh", "provider-status", "amazon_music", "ready"], {
+    cwd: ROOT,
+    env: providerStatusEnv,
+    encoding: "utf8"
+  });
+  assert(inactiveReady.status === 0, `inactive provider ready update failed:\n${inactiveReady.stdout}\n${inactiveReady.stderr}`);
+  let providerStatusState = JSON.parse(readFileSync(providerStatusStatePath, "utf8"));
+  assert(
+    providerStatusState.residentProviders.amazon_music?.status === "ready" &&
+      providerStatusState.residentProviders.spotify?.status === "active",
+    "the locked provider-status action should promote an inactive real page without changing the active provider"
+  );
+  providerStatusState.activeProvider = "amazon_music";
+  providerStatusState.residentProviders.amazon_music.status = "active";
+  writeFileSync(providerStatusStatePath, JSON.stringify(providerStatusState));
+  const staleReady = spawnSync("bash", ["deploy/chromium/tikpal-web-mode.sh", "provider-status", "amazon_music", "ready"], {
+    cwd: ROOT,
+    env: providerStatusEnv,
+    encoding: "utf8"
+  });
+  assert(staleReady.status === 0, `stale ready update failed:\n${staleReady.stdout}\n${staleReady.stderr}`);
+  providerStatusState = JSON.parse(readFileSync(providerStatusStatePath, "utf8"));
+  assert(providerStatusState.residentProviders.amazon_music?.status === "active", "a late ready update must not demote the active provider");
+  providerStatusState.activeProvider = "spotify";
+  writeFileSync(providerStatusStatePath, JSON.stringify(providerStatusState));
+  const staleActive = spawnSync("bash", ["deploy/chromium/tikpal-web-mode.sh", "provider-status", "amazon_music", "active"], {
+    cwd: ROOT,
+    env: providerStatusEnv,
+    encoding: "utf8"
+  });
+  assert(staleActive.status === 0, `stale active update failed:\n${staleActive.stdout}\n${staleActive.stderr}`);
+  providerStatusState = JSON.parse(readFileSync(providerStatusStatePath, "utf8"));
+  assert(providerStatusState.residentProviders.amazon_music?.status === "ready", "a stale active guard must not claim the active provider");
+
   assert(!quickSettingsSource.includes("handleWebModeSettingsSave"), "Explore settings should auto-save without a Save button");
   assert(!quickSettingsSource.includes("handleWebModeProxyTest"), "Explore settings should not need a manual Test button");
   assert(
@@ -1641,11 +1766,37 @@ esac
   assert(webModeScript.indexOf('ensure_entry_stage_veil "$provider"') < webModeScript.indexOf('if ! ensure_side_panel "$provider" "$entry_stage"; then'), "Explore should cover the full stage before launching the side panel on initial entry");
   assert(webModeScript.includes("TIKPAL_WEB_MODE_ENTRY_PROVIDER_PAINT_TIMEOUT_SECONDS") && webModeScript.includes("wait_for_entry_provider_paint"), "Explore initial entry should keep the branded veil until the selected provider has painted or the short paint gate expires");
   assert(webModeScript.indexOf('wait_for_entry_provider_paint "$(provider_debug_port "$provider")" "$provider"') < webModeScript.indexOf('reveal_initial_entry_surfaces "$target_window"'), "Explore should wait for initial provider paint before revealing the entry stage");
-  assert(webModeScript.includes('! provider_uses_direct_bootstrap "$provider" && ! wait_for_real_provider_url'), "direct-bootstrap providers should not pay the transition URL gate before first-paint reveal");
+  assert(webModeScript.includes('if ! wait_for_real_provider_url "$provider_port"; then'), "every foreground provider launch should confirm a real HTTPS page before it can reveal");
   assert(!webModeScript.includes("TIKPAL_WEB_MODE_EXIT_"), "Explore close should not create a separate room-return veil");
   assert(webModeScript.includes("close_legacy_exit_stage") && !webModeScript.includes("ensure_exit_room_veil"), "Explore close should remove any legacy exit-stage window without creating one");
+  const closeOverlayLaunchStart = webModeScript.indexOf("launch_close_overlay_veil() {");
+  const closeOverlayLaunchEnd = webModeScript.indexOf("\n}\n\npark_web_mode_surfaces_for_reopen()", closeOverlayLaunchStart);
+  const closeOverlayLaunchBody = webModeScript.slice(closeOverlayLaunchStart, closeOverlayLaunchEnd);
+  assert(
+      webModeCloseOverlayPage.includes("transition: opacity 3000ms ease-out") &&
+      webModeScript.includes("TIKPAL_WEB_MODE_CLOSE_OVERLAY_POSITION:=-1,-1") &&
+      webModeScript.includes("TIKPAL_WEB_MODE_CLOSE_OVERLAY_WINDOW:=2562x722") &&
+      webModeScript.includes("TIKPAL_WEB_MODE_CLOSE_PARK_TIMEOUT_SECONDS:=3"),
+    "Explore close overlay should overdraw the physical edge and retain its three-second fade"
+  );
+  assert(
+    closeOverlayLaunchBody.includes('"--window-position=$TIKPAL_WEB_MODE_CLOSE_OVERLAY_POSITION"') &&
+      closeOverlayLaunchBody.includes('"--window-size=$(normalize_window_size "$TIKPAL_WEB_MODE_CLOSE_OVERLAY_WINDOW")"') &&
+      closeOverlayLaunchBody.includes('tile_window_fast "$window" "$TIKPAL_WEB_MODE_CLOSE_OVERLAY_POSITION" "$TIKPAL_WEB_MODE_CLOSE_OVERLAY_WINDOW"') &&
+      !closeOverlayLaunchBody.includes("TIKPAL_WEB_MODE_ENTRY_STAGE_WINDOW"),
+    "Explore close overlay should use its own overscan geometry without changing the entry stage"
+  );
+  assert(
+    webModeScript.includes("close_overlay_process_matches()") &&
+      webModeScript.includes('"/proc/$pid/cmdline"') &&
+      webModeScript.includes('pkill -KILL -P "$pid"') &&
+      webModeScript.includes('kill -KILL "$pid"') &&
+      !webModeScript.includes("schedule_close_overlay_failsafe"),
+    "Explore close overlay cleanup should only force-close its PID-tracked disposable surface"
+  );
   assert(serverSource.includes("runWebModeCloseInBackground(closeRequestId, activeProvider)"), "Explore close should retain its background close transaction without room-veil state");
   assert(webModeScript.includes("TIKPAL_WEB_MODE_CLOSE_REQUEST_ID") && serverSource.includes("TIKPAL_WEB_MODE_CLOSE_REQUEST_ID: closeRequestId"), "Explore close should pass a close request id into the shell transaction");
+  assert(webModeScript.includes("runtime_open_request_is_current") && serverSource.includes("TIKPAL_WEB_MODE_OPEN_EXPECTED_ACTIVE_PROVIDER: providerId"), "a delayed resident open should stop when Close has cleared its optimistic owner");
   assert(webModeScript.includes("TIKPAL_WEB_MODE_CLOSE_ACTIVE_PROVIDER") && webModeScript.includes('park_web_mode_surfaces_for_reopen "$active_provider"'), "Explore warm close should park the active provider before scanning resident providers");
   assert(serverSource.includes("webModeClosePromise") && serverSource.includes("webModeCloseRequestIsCurrent") && serverSource.includes("closeRequestId: null"), "Explore background close should suppress duplicate close transactions and not clear a newer provider open");
   assert(!serverSource.includes("activeProvider: null,\n      residentProviders: {},\n      lastError: null,\n      closeRequestId"), "Explore close should preserve resident provider state while clearing the visible active provider");
@@ -1665,7 +1816,7 @@ esac
   const fullCloseEnd = webModeScript.indexOf("\n}\n\nclose_web_mode_warm()", fullCloseStart);
   const fullCloseBody = webModeScript.slice(fullCloseStart, fullCloseEnd);
   assert(
-    fullCloseBody.indexOf("close_legacy_exit_stage") < fullCloseBody.indexOf("close_web_mode_process_surfaces")
+    fullCloseBody.indexOf("close_legacy_exit_stage") < fullCloseBody.indexOf("close_provider_windows &")
       && !fullCloseBody.includes("ensure_exit_room_veil"),
     "Explore full close should clear any legacy exit stage before shutting down visible surfaces"
   );
@@ -1686,11 +1837,33 @@ esac
     "Explore resident status sync should only mark real provider pages ready and downgrade stale bootstrap pages"
   );
   const parkSurfacesBody = webModeScript.slice(webModeScript.indexOf("park_web_mode_surfaces_for_reopen() {"), webModeScript.indexOf("\n}\n\nclose_web_mode_process_surfaces()", webModeScript.indexOf("park_web_mode_surfaces_for_reopen() {")));
-  assert(parkSurfacesBody.includes('park_left_web_mode_surfaces_for_reopen "$active_provider" &') && parkSurfacesBody.includes("park_side_panel_for_reopen &"), "Explore warm close should park left providers and right side panel in parallel");
+  assert(
+    parkSurfacesBody.indexOf("launch_close_overlay_veil") < parkSurfacesBody.indexOf("close_close_overlay_veil") &&
+      parkSurfacesBody.indexOf('park_provider_windows_for_reopen "$active_provider"') < parkSurfacesBody.indexOf("wait_for_close_overlay_fade") &&
+      parkSurfacesBody.indexOf("park_side_panel_for_reopen &") < parkSurfacesBody.indexOf("wait_for_close_overlay_fade") &&
+      parkSurfacesBody.indexOf('park_provider_windows_for_reopen "$active_provider"') < parkSurfacesBody.indexOf("close_close_overlay_veil") &&
+      parkSurfacesBody.includes("park_side_panel_for_reopen &") &&
+      webModeScript.includes("wait_for_window_position") &&
+      parkSurfacesBody.includes("close overlay retained because provider or side panel did not park"),
+    "Explore warm close should park both columns during the fade and retain the overlay until they are offscreen"
+  );
+  assert(
+    webModeScript.includes("wait_for_close_overlay_fade()") &&
+      fullCloseBody.indexOf("close_provider_windows &") < fullCloseBody.indexOf("wait_for_close_overlay_fade") &&
+      fullCloseBody.indexOf("close_side_panel &") < fullCloseBody.indexOf("wait_for_close_overlay_fade") &&
+      fullCloseBody.indexOf("wait_for_close_overlay_fade") < fullCloseBody.indexOf("close_close_overlay_veil"),
+    "Explore full close should tear down both columns during the fade and close the overlay last"
+  );
   const parkLeftStart = webModeScript.indexOf("park_left_web_mode_surfaces_for_reopen() {");
   const parkLeftEnd = webModeScript.indexOf("\n}\n\npark_web_mode_surfaces_for_reopen()", parkLeftStart);
   const parkLeftBody = webModeScript.slice(parkLeftStart, parkLeftEnd);
-  assert(parkLeftBody.includes("close_entry_stage_veil") && !parkLeftBody.includes("raise_entry_stage_veil"), "Explore exit should dispose entry-stage instead of repurposing it as the return veil");
+  assert(
+    parkLeftBody.includes("close_transition_veil") &&
+      parkLeftBody.includes("close_error_veil") &&
+      parkLeftBody.includes("close_background_veil") &&
+      !parkLeftBody.includes("raise_entry_stage_veil"),
+    "Explore exit should clear left-pane covers instead of repurposing an entry stage"
+  );
   assert(webModeScript.includes("close_web_mode_process_surfaces()") && webModeScript.includes("close_provider_windows &") && webModeScript.includes("close_side_panel &"), "Explore full close should close provider and side-panel surfaces in parallel");
   assert(webModeScript.includes("cleanup-warm") && webModeScript.includes("cleanup_warm_web_mode") && webModeScript.includes("close-full"), "Explore should keep delayed/full cleanup as an explicit maintenance path");
   assert(webModeScript.includes("TIKPAL_WEB_MODE_CLOSE_AUDIO_GATE_SETTLE_SECONDS") && webModeScript.includes('if ! is_enabled "$TIKPAL_WEB_MODE_CLOSE_KEEP_RESIDENT"; then') && webModeScript.includes("stop_provider_guard"), "Explore warm close should keep provider guards alive in resident mode and only stop them for non-resident cleanup");
@@ -1722,7 +1895,19 @@ esac
   );
   assert(webModeScript.includes("provider_friendly_error_reason()") && webModeScript.includes('friendly_error_reason="$(provider_friendly_error_reason "$provider_port")"'), "Explore prewarm should preserve an explicit region-unavailable page instead of misclassifying it as setup failure");
   assert(webModeScript.includes("fs.renameSync(temporaryPath, statePath)"), "Explore runtime-state writes should atomically replace the state file");
-  assert(providerGuardSource.includes('if (status !== "active") return;') && providerGuardSource.includes("state.activeProvider !== providerId"), "Inactive provider guards should not race to overwrite the active Explore provider");
+  const providerStatusWriterStart = providerGuardSource.indexOf("function writeResidentProviderStatus(status)");
+  const providerStatusWriterEnd = providerGuardSource.indexOf("\n}\n\nfunction syncResidentProviderStatus", providerStatusWriterStart);
+  const providerStatusWriter = providerGuardSource.slice(providerStatusWriterStart, providerStatusWriterEnd);
+  assert(
+    providerStatusWriter.includes('spawn(launcherPath, ["provider-status", providerId, normalizedStatus]') &&
+      !providerStatusWriter.includes("writeFileSync") &&
+      webModeScript.includes("provider-status)"),
+    "provider guards should promote real pages through the launcher's locked provider-status action"
+  );
+  assert(
+    webModeScript.includes('state.activeProvider === provider && (status === "active" || status === "ready")'),
+    "a late ready update must retain active provider ownership under the provider-state lock"
+  );
   assert(
     webModeScript.includes("sync-status)") &&
       (webModeScript.includes("sync-status|keyboard") || webModeScript.includes("sync-status|refresh-guards|keyboard")),
@@ -1760,7 +1945,12 @@ esac
   assert(webModeScript.includes("start_entry_stage_guard") && webModeScript.includes("entry-guard") && webModeScript.includes("TIKPAL_WEB_MODE_ENTRY_GUARD_INTERVAL_SECONDS"), "Explore entry veil should stay above newly-created provider windows until reveal");
   assert(webModeScript.includes("fade_entry_stage_veil") && webModeBackgroundPage.includes("is-revealing"), "Explore entry veil should use a soft dissolve before closing");
   const guardCloseBody = webModeScript.match(/close_web_mode_from_guard\(\) \{[\s\S]*?\n\}/)?.[0] ?? "";
-  assert(guardCloseBody.includes('is_enabled "$TIKPAL_WEB_MODE_CLOSE_KEEP_RESIDENT"') && guardCloseBody.includes('park_web_mode_surfaces_for_reopen ""'), "Explore window guard should park resident surfaces instead of killing providers when runtime active provider is cleared");
+  assert(
+    guardCloseBody.includes('is_enabled "$TIKPAL_WEB_MODE_CLOSE_KEEP_RESIDENT"') &&
+      guardCloseBody.includes('park_web_mode_surfaces_for_reopen ""') &&
+      guardCloseBody.includes("close_web_mode_full"),
+    "Explore window guard should use the same concurrent-cover flow for resident and full closes"
+  );
   assert(
     guardCloseBody.includes("close_legacy_exit_stage") &&
       !guardCloseBody.includes("ensure_exit_room_veil"),
@@ -2016,6 +2206,7 @@ esac
   assert(watchdogCheck.stdout.includes("page heartbeat enabled: 1"), "watchdog --check should report page heartbeat scanning");
   assert(watchdogCheck.stdout.includes("/api/v1/kiosk/heartbeat"), "watchdog --check should report the heartbeat endpoint");
   assert(watchdogCheck.stdout.includes("web mode profile root:"), "watchdog --check should report the Explore profile root used for heartbeat bypass");
+  assert(watchdogCheck.stdout.includes("web mode state path:"), "watchdog --check should report the Explore runtime state used for heartbeat bypass");
   assert(watchdogCheck.stdout.includes("physical display check: 0"), "watchdog --check should report periodic physical display probing disabled by default");
   assert(watchdogCheck.stdout.includes("physical display prepare:"), "watchdog --check should report the physical display helper");
   assert(watchdogCheck.stdout.includes("check passed"), "watchdog --check should report success");
@@ -2027,6 +2218,13 @@ esac
       && watchdogSource.includes("nouveau-rebind")
       && watchdogSource.includes("physical display recovered without restarting"),
     "watchdog should try physical-display soft-kick and optional GPU rebind before restarting the kiosk"
+  );
+  assert(
+    watchdogSource.includes("TIKPAL_WEB_MODE_STATE_PATH")
+      && watchdogSource.includes("activeProvider")
+      && watchdogSource.includes("closeRequestId")
+      && !watchdogSource.includes('pgrep -af -- "--user-data-dir=$root/providers/"'),
+    "watchdog should bypass heartbeats only for an active or closing Explore transaction, not the resident warm pool"
   );
 
   const heartbeatSmokeDir = mkdtempSync(path.join(tmpdir(), "tikpal-heartbeat-smoke-"));

@@ -42,6 +42,7 @@ fi
 : "${TIKPAL_KIOSK_DISPLAY:=:0}"
 : "${TIKPAL_KIOSK_SERVICE_USER:=moode}"
 : "${TIKPAL_WEB_MODE_PROFILE_ROOT:=$HOME/.config/tikpal-web-mode}"
+: "${TIKPAL_WEB_MODE_STATE_PATH:=$APP_DIR/.tikpal/web-mode-state.json}"
 
 MODE="run"
 if [[ "${1:-}" == "--check" ]]; then
@@ -97,6 +98,7 @@ print_check() {
   log "page heartbeat url: $TIKPAL_KIOSK_WATCHDOG_PAGE_HEARTBEAT_URL"
   log "web mode heartbeat bypass: $TIKPAL_KIOSK_WATCHDOG_WEB_MODE_HEARTBEAT_BYPASS"
   log "web mode profile root: $TIKPAL_WEB_MODE_PROFILE_ROOT"
+  log "web mode state path: $TIKPAL_WEB_MODE_STATE_PATH"
   log "physical display check: $TIKPAL_KIOSK_PHYSICAL_DISPLAY_CHECK_ENABLED"
   log "physical display prepare: $TIKPAL_KIOSK_PHYSICAL_DISPLAY_PREPARE_COMMAND"
   log "physical display soft-kick before restart: $TIKPAL_KIOSK_PHYSICAL_DISPLAY_SOFT_KICK_BEFORE_RESTART"
@@ -232,25 +234,24 @@ sanitize_reason_detail() {
 }
 
 page_heartbeat_detail=""
-web_mode_provider_active_for_root() {
-  local root="$1"
-  [[ -n "$root" ]] || return 1
-  pgrep -af -- "--user-data-dir=$root/providers/" >/dev/null 2>&1
-}
-
 web_mode_provider_active() {
   is_enabled "$TIKPAL_KIOSK_WATCHDOG_WEB_MODE_HEARTBEAT_BYPASS" || return 1
-  command -v pgrep >/dev/null 2>&1 || return 1
-
-  local root
-  for root in \
-    "$TIKPAL_WEB_MODE_PROFILE_ROOT" \
-    "/home/$TIKPAL_KIOSK_SERVICE_USER/.config/tikpal-web-mode" \
-    "/home/moode/.config/tikpal-web-mode"; do
-    web_mode_provider_active_for_root "$root" && return 0
-  done
-
-  return 1
+  [[ -r "$TIKPAL_WEB_MODE_STATE_PATH" ]] || return 1
+  if command -v node >/dev/null 2>&1; then
+    node -e '
+      const fs = require("node:fs");
+      try {
+        const state = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+        const activeProvider = typeof state.activeProvider === "string" && state.activeProvider.trim();
+        const closeRequestId = typeof state.closeRequestId === "string" && state.closeRequestId.trim();
+        process.exit(activeProvider || closeRequestId ? 0 : 1);
+      } catch {
+        process.exit(1);
+      }
+    ' "$TIKPAL_WEB_MODE_STATE_PATH" >/dev/null 2>&1
+    return
+  fi
+  grep -Eq '"(activeProvider|closeRequestId)"[[:space:]]*:[[:space:]]*"[^\"]+"' "$TIKPAL_WEB_MODE_STATE_PATH"
 }
 
 check_page_heartbeat() {

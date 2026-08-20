@@ -5168,6 +5168,35 @@ async function run() {
     assert(fallbackHeartbeat.body.healthy === false, "scene fallback heartbeat should be unhealthy");
     assert(fallbackHeartbeat.body.reasons.includes("scene-video-fallback"), "scene fallback heartbeat should expose scene-video-fallback");
 
+    const visualFallbackHeartbeat = await request("/api/v1/kiosk/heartbeat", {
+      method: "POST",
+      body: JSON.stringify({
+        ...healthyHeartbeatPayload,
+        playback: { source: "mpd", state: "paused", title: "Ambient visual only" },
+        activeSceneVideo: {
+          ...healthyHeartbeatPayload.activeSceneVideo,
+          health: "fallback"
+        }
+      })
+    });
+    assert(visualFallbackHeartbeat.body.healthy === false, "Ambient visual fallback should be unhealthy even when Scene Sound is off");
+    assert(visualFallbackHeartbeat.body.reasons.includes("scene-video-fallback"), "Ambient visual fallback should retain the scene-video reason");
+
+    const visualNotReadyHeartbeat = await request("/api/v1/kiosk/heartbeat", {
+      method: "POST",
+      body: JSON.stringify({
+        ...healthyHeartbeatPayload,
+        playback: { source: "mpd", state: "paused", title: "Ambient visual only" },
+        activeSceneVideo: {
+          ...healthyHeartbeatPayload.activeSceneVideo,
+          readyState: 1,
+          health: "recovering"
+        }
+      })
+    });
+    assert(visualNotReadyHeartbeat.body.healthy === false, "Ambient visual metadata-only video should be unhealthy even when Scene Sound is off");
+    assert(visualNotReadyHeartbeat.body.reasons.includes("scene-video-not-ready"), "Ambient visual metadata-only video should expose scene-video-not-ready");
+
     const transitionHeartbeat = await request("/api/v1/kiosk/heartbeat", {
       method: "POST",
       body: JSON.stringify({
