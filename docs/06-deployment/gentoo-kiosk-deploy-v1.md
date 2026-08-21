@@ -1301,7 +1301,7 @@ Architecture details: `docs/03-architecture/explore-provider-pool-v1.md`
 1. **`.env.kiosk` deletion**: `rsync --delete` previously wiped `.env.kiosk` on the remote because it was gitignored. The script now excludes `.env`, `.env.*`, and `.tikpal/` from rsync.
 2. **Permission breakage**: rsync runs as root, changing all files to `root:root`. The kiosk service runs as `User=moode`, causing EACCES on `.tikpal/web-mode-state.json`. The script runs `chown -R moode:` after rsync.
 
-It builds `dist` before syncing, then restarts `tikpal-api` and `tikpal-kiosk`. The source tree is otherwise synced with `--delete`, but device runtime state (`.env*`, `.env.kiosk`, `.tikpal/`), Git metadata, dependencies, Codex work artifacts, and local `tikpal-web-mode.sh` backup copies are deliberately excluded. A release must never treat a screenshot or a hand-made rollback copy as deployable product code.
+It builds `dist` before syncing, fixes the service-user ownership, then runs the synchronized systemd installer for API, web, audio-adapt, and library-sync units before restarting the physical kiosk. This keeps updated unit files (including the API's device-local `.env.kiosk` load) aligned with the copied backend and frontend. The installer does not replace a kiosk unit during an ordinary release, so the deploy script restarts the existing physical kiosk only after the non-kiosk services are installed. The source tree is otherwise synced with `--delete`, but device runtime state (`.env*`, `.env.kiosk`, `.tikpal/`), Git metadata, dependencies, Codex work artifacts, and local `tikpal-web-mode.sh` backup copies are deliberately excluded. A release must never treat a screenshot or a hand-made rollback copy as deployable product code.
 
 Usage:
 
@@ -1328,6 +1328,14 @@ After the script succeeds, verify the running device rather than only the rsync 
 systemctl is-active tikpal-api tikpal-kiosk
 curl -fsS http://127.0.0.1:8787/api/v1/health
 curl -fsS http://127.0.0.1:8787/api/v1/web-mode/state
+```
+
+The script treats a non-active API, web, or kiosk service, or a failed API-health request, as a failed release. To confirm that the running unit and the copied API are the same release, run the following on 115 after deployment:
+
+```bash
+systemctl cat tikpal-api.service | grep -F 'EnvironmentFile=-/home/moode/code/tikpal/.env.kiosk'
+sha256sum /home/moode/code/tikpal/server/index.mjs
+find /home/moode/code/tikpal/dist/assets -maxdepth 1 -type f -name 'index-*.js' -print -exec sha256sum {} \;
 ```
 
 For this release, Settings -> Link -> Explore Proxy validates a candidate URL through Google, Apple Music, and Spotify before Proxy On can persist and request a reboot. All three checks must pass. The manual `Check Proxy` action has no side effects; failed or cancelled validation must not save settings or restart the kiosk. During a provider open, `/api/v1/web-mode/state.openingProvider` is the transient truth; keep the side panel in `Opening` until it becomes `activeProvider` or reports an error.
@@ -1507,6 +1515,31 @@ TIKPAL_UPNP_DISABLE_COMMAND="./deploy/moode/tikpal-upnp-disable.sh"
 `deploy/deploy-gentoo.sh` checks both device-local `.env` and `.env.kiosk` before it builds or syncs. It rejects bare `moodeutl` in any Spotify/Bluetooth/AirPlay/UPnP activate, enable, or disable hook and prints only the offending file and key. Replace that key with the corresponding helper before retrying. The environment files are deliberately excluded from rsync, so correcting an existing device remains a manual configuration change.
 
 After deploying the helpers, select each available external source once and confirm `/api/v1/system/state` reports it as `armed`/`waiting`; only an actual sender connection may promote it to `connected`. AirPlay additionally requires `shairport-sync.service` to be active after selection. Do not treat an inactive optional receiver before selection as a failed deployment.
+
+### DLNA Fingerprint Recognition And Cross-Surface State (2026-08-22)
+
+A connected DLNA stream first uses trustworthy DIDL metadata for immediate lyrics. When the stream has no usable title/artist, Tikpal may capture six seconds through an MPD `httpd` tap bound only to `127.0.0.1:8001` and send that bounded audio sample to the configured recognition provider. The result remains `lyrics.sourceScope: "upnp_input"`, so Ambient, Player, Hi-Fi, and the portable Remote consume the same artwork/lyrics state rather than introducing a DLNA-only UI path. Recognition is valid only for the current DLNA connection and is refreshed at `TIKPAL_UPNP_RECOGNITION_REFRESH_MS` (default `90000` milliseconds).
+
+The ordinary deploy invokes the existing guarded installer. It installs `Tikpal DLNA Recognition Tap` outside the managed physical-audio output block, leaves the tap disabled at rest, and sets `TIKPAL_UPNP_CAPTURE_COMMAND` in the existing device-local environment only after MPD, MPC, FFmpeg, the MPD `httpd` plugin, and FLAC encoder preflight successfully. A failed preflight leaves capture disabled; DIDL metadata behaviour and the real DAC route remain unchanged. The first successful install restarts MPD once, so schedule it outside active listening when possible.
+
+On 115, check the safe idle state before accepting the feature:
+
+```bash
+cd /home/moode/code/tikpal
+./deploy/moode/tikpal-upnp-capture-install.sh check
+mpc outputs
+ss -ltnp '( sport = :8001 )' # no listener while the tap is disabled
+```
+
+Run a manual capture only while a real DLNA sender is playing; it enables the tap for the bounded recording and disables it on success, error, or signal:
+
+```bash
+capture="$(mktemp --suffix=.wav)"
+./deploy/moode/tikpal-upnp-capture.sh "$capture" 6
+file "$capture"
+rm -f "$capture"
+ss -ltnp '( sport = :8001 )' # still no listener after capture
+```
 
 ### AirPlay Session Truth And Lyrics Wall (2026-08-21)
 

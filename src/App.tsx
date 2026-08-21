@@ -234,8 +234,12 @@ function isRememberedLibraryTrackCurrent(state: TikpalState, localTrackPath: str
 
 function shouldRestoreRememberedSource(state: TikpalState, rememberedSource: RememberedAudioSource | null | undefined) {
   if (!rememberedSource || !isSourceSwitchTarget(rememberedSource.target)) return false;
-  const currentSourceId: string = state.audio.currentSource.id;
-  if (isVisibleListeningSourceTarget(currentSourceId)) return false;
+  const currentSource = state.audio.currentSource;
+  const currentSourceId: string = currentSource.id;
+  const currentExternalSourceIsOpen = !isExternalHandoffTarget(currentSourceId as SourceSwitchTarget)
+    || currentSource.connectionState === "armed"
+    || currentSource.connectionState === "connected";
+  if (isVisibleListeningSourceTarget(currentSourceId) && currentExternalSourceIsOpen) return false;
   if (rememberedSource.target === "mpd" && rememberedSource.localTrackPath) {
     if (currentSourceId !== "mpd") return true;
     return !isRememberedLibraryTrackCurrent(state, rememberedSource.localTrackPath);
@@ -244,7 +248,7 @@ function shouldRestoreRememberedSource(state: TikpalState, rememberedSource: Rem
     if (currentSourceId !== "radio") return true;
     return state.audio.currentSource.radioStationId !== rememberedSource.radioStationId;
   }
-  if (currentSourceId === rememberedSource.target) return false;
+  if (currentSourceId === rememberedSource.target && currentExternalSourceIsOpen) return false;
   return true;
 }
 

@@ -233,7 +233,6 @@
   injectNeteaseAudioMirror();
   document.addEventListener("DOMContentLoaded", injectNeteaseAudioMirror, { once: true });
 
-  const bootstrapUrl = "http://127.0.0.1:4173/web-mode-transition.html";
   const providerHostIds = [
     { id: "suno", pattern: /(^|\.)suno\.com$/i },
     { id: "spotify", pattern: /(^|\.)open\.spotify\.com$/i },
@@ -485,8 +484,7 @@ html[data-tikpal-provider-font-theme] textarea {
     if (syncing) return;
     syncing = true;
     try {
-      const isBootstrap = window.location.href.startsWith(bootstrapUrl);
-      const providerId = isBootstrap ? new URL(window.location.href).searchParams.get("provider") : inferProviderId();
+      const providerId = inferProviderId();
       const result = await new Promise((resolve) => {
         chrome.runtime.sendMessage({ type: "sync-proxy", providerId, providerPage: !isBootstrap && isProviderPage() }, resolve);
       });

@@ -251,6 +251,7 @@ const UPNP_CAPTURE_DURATION_SECONDS = Number(process.env.TIKPAL_UPNP_CAPTURE_DUR
 const BLUETOOTH_RECOGNITION_SETTLE_MS = Number(process.env.TIKPAL_BLUETOOTH_RECOGNITION_SETTLE_MS ?? 4000);
 const AIRPLAY_RECOGNITION_SETTLE_MS = Number(process.env.TIKPAL_AIRPLAY_RECOGNITION_SETTLE_MS ?? 1000);
 const UPNP_RECOGNITION_SETTLE_MS = Number(process.env.TIKPAL_UPNP_RECOGNITION_SETTLE_MS ?? 1000);
+const UPNP_RECOGNITION_REFRESH_MS = parseEnvPositiveInteger(process.env.TIKPAL_UPNP_RECOGNITION_REFRESH_MS, 90_000);
 const BLUETOOTH_RECOGNITION_RETRY_MS = Number(process.env.TIKPAL_BLUETOOTH_RECOGNITION_RETRY_MS ?? 45000);
 const BLUETOOTH_RECOGNITION_NOT_FOUND_RETRY_MS = Number(process.env.TIKPAL_BLUETOOTH_RECOGNITION_NOT_FOUND_RETRY_MS ?? 30000);
 const UPNP_CAPTURE_COMMAND = process.env.TIKPAL_UPNP_CAPTURE_COMMAND ?? "";
@@ -699,7 +700,8 @@ const lyricsRetryAfter = new Map();
 const lyricsInFlight = new Map();
 const remoteArtworkCache = new Map();
 const remoteArtworkInFlight = new Map();
-let bluetoothRecognitionSession = buildBluetoothRecognitionSession();
+const proxyInputRecognitionSessions = new Map();
+let activeProxyInputRecognition = null;
 let displayBrightnessSnapshotCache = null;
 let displayBrightnessRefreshPromise = null;
 let displayBrightnessUnavailableUntilMs = 0;
@@ -1005,9 +1007,12 @@ function buildKioskHeartbeatStatus(now = Date.now()) {
   }
 
   const scene = asPlainObject(payload.scene);
+  const room = asPlainObject(payload.room);
   const activeSceneVideo = asPlainObject(payload.activeSceneVideo);
   const pageMode = String(payload.pageMode ?? "").trim().toLowerCase();
-  if (pageMode === "ambient" && scene.sceneVideoEnabled === true) {
+  const roomMode = String(room.mode ?? "").trim().toLowerCase();
+  const sceneVideoExpected = pageMode === "ambient" && scene.sceneVideoEnabled === true && roomMode !== "hifi";
+  if (sceneVideoExpected) {
     const sceneTransitionActive = activeSceneVideo.transition === "scene"
       && activeSceneVideo.transitionPhase
       && activeSceneVideo.transitionPhase !== "idle";
@@ -8058,13 +8063,15 @@ async function applyAudioPlaylistAction(action) {
   await writeMusicLibraryState(state);
 }
 
-async function getSourceStatusFromCommands({ readyCommand, activeCommand, labelCommand, armed, supported, gateConnectionUntilArmed = false }) {
+async function getSourceStatusFromCommands({ readyCommand, activeCommand, labelCommand, armed, supported, gateConnectionUntilArmed = false, requireReadyForArmed = false }) {
   const [ready, rawConnected, label] = await Promise.all([
     commandSucceeds(readyCommand, { timeout: 2500 }),
     commandSucceeds(activeCommand, { timeout: 2500 }),
     labelCommand.trim() ? runCommand(labelCommand, { allowFailure: true, timeout: 2500 }) : Promise.resolve("")
   ]);
-  const nextArmed = gateConnectionUntilArmed && rawConnected ? true : armed;
+  const nextArmed = gateConnectionUntilArmed && rawConnected
+    ? true
+    : armed && (!requireReadyForArmed || ready);
   const connected = gateConnectionUntilArmed ? nextArmed && rawConnected : rawConnected;
 
   return {
@@ -8624,6 +8631,7 @@ async function getMpcAudioSnapshot(currentFile, status = null, options = {}) {
       labelCommand: UPNP_LABEL_COMMAND,
       armed: mockArmedSource === "upnp",
       gateConnectionUntilArmed: true,
+      requireReadyForArmed: true,
       supported: Boolean(
         UPNP_READY_COMMAND
         || UPNP_ACTIVE_COMMAND
@@ -8637,15 +8645,17 @@ async function getMpcAudioSnapshot(currentFile, status = null, options = {}) {
   const activeMultiroomSource = activeMultiroomEcosystem ? getMultiroomSourceId(activeMultiroomEcosystem.id) : null;
   const radioReady = Boolean(RADIO_ACTIVATE_COMMAND || RADIO_DEFAULT_URI || radioStations.length > 0);
   const radioActive = isStreamUri(currentFile);
+  const knownRadioStreamActive = Boolean(findActiveRadioStationFromList(currentFile, radioStations));
   const mpcPlaybackState = String(status?.state ?? "").trim().toLowerCase();
   const mpdPlaybackActive = Boolean(currentFile) && mpcPlaybackState !== "stopped";
-  const hasUpnpPlaybackMetadata = Boolean(options.upnpPlaybackMetadata?.title);
-  const canUseUpnpPlaybackMetadata = hasUpnpPlaybackMetadata
-    && (mockArmedSource === "upnp" || upnpState.armed || upnpState.connected || hasUpnpMpdReleaseMarker());
   const upnpMpdPlaybackActive = mockArmedSource === "upnp"
     && mpdPlaybackActive
     && hasUpnpMpdReleaseMarker()
-    && canUseUpnpPlaybackMetadata;
+    // A live UPnP stream can legitimately have no DIDL metadata.  Keep a
+    // configured Radio URI authoritative so merely opening DLNA never steals
+    // Radio playback, but classify any other stream after MPD was released to
+    // UPnP as DLNA so fingerprint recognition can run.
+    && !knownRadioStreamActive;
   const effectiveUpnpState = upnpMpdPlaybackActive
     ? {
         ...upnpState,
@@ -11269,13 +11279,15 @@ function buildLyricsState(overrides = {}) {
   };
 }
 
-function buildBluetoothRecognitionSession(overrides = {}) {
+function buildProxyInputRecognitionSession(overrides = {}) {
   return {
     connectionKey: null,
     connectedAtMs: 0,
     resolvedState: null,
     retryAfterMs: 0,
+    refreshAfterMs: 0,
     inFlight: null,
+    inFlightId: 0,
     ...overrides
   };
 }
@@ -11492,6 +11504,11 @@ function looksLikeUntrustedTrackMetadata(candidate) {
   const artist = normalizeMetadataValue(candidate?.artist).toLowerCase();
   const album = normalizeMetadataValue(candidate?.album).toLowerCase();
   if (!title) return true;
+  // MPD uses the stream URL and `Unknown Artist` as an upnp playback fallback.
+  // That is not DIDL sender metadata, so route it to the DLNA fingerprint path.
+  if (candidate?.sourceScope === "upnp_input" && (!artist || artist === "unknown artist")) {
+    return true;
+  }
   const placeholderPhrases = new Set([
     "bluetooth ready",
     "bluetooth pairing",
@@ -11561,7 +11578,8 @@ function lyricsErrorMessage(error) {
     if (lowerMessage.includes("acrcloud credentials are not configured")
       || lowerMessage.includes("acrcloud host is not configured")
       || lowerMessage.includes("bluetooth recognition provider is not configured")
-      || lowerMessage.includes("airplay recognition provider is not configured")) {
+      || lowerMessage.includes("airplay recognition provider is not configured")
+      || lowerMessage.includes("dlna recognition provider is not configured")) {
       return "Track identification is not configured";
     }
     if (rawMessage.length > 140 || error.message.includes("\n")) {
@@ -12448,31 +12466,73 @@ async function captureBluetoothSample(source = "bluetooth") {
   }
 }
 
-function resetBluetoothRecognitionSession(overrides = {}) {
-  bluetoothRecognitionSession = buildBluetoothRecognitionSession(overrides);
+function resetProxyInputRecognitionSession(source) {
+  proxyInputRecognitionSessions.delete(source);
+  if (activeProxyInputRecognition?.source === source) {
+    activeProxyInputRecognition = null;
+  }
 }
 
-function syncBluetoothRecognitionSession(sourceSummary, source = "bluetooth") {
+function resetProxyInputRecognitionSessions() {
+  proxyInputRecognitionSessions.clear();
+  activeProxyInputRecognition = null;
+}
+
+function resetBluetoothRecognitionSession() {
+  resetProxyInputRecognitionSessions();
+}
+
+function syncProxyInputRecognitionSession(sourceSummary, source = "bluetooth") {
   if (sourceSummary?.connectionState !== "connected") {
-    resetBluetoothRecognitionSession();
+    resetProxyInputRecognitionSession(source);
     return null;
   }
 
   const connectionKey = buildProxyInputConnectionKey(sourceSummary, source);
-  if (bluetoothRecognitionSession.connectionKey !== connectionKey) {
-    resetBluetoothRecognitionSession({
+  let session = proxyInputRecognitionSessions.get(source);
+  if (session?.connectionKey !== connectionKey) {
+    session = buildProxyInputRecognitionSession({
       connectionKey,
       connectedAtMs: Date.now()
     });
+    proxyInputRecognitionSessions.set(source, session);
   }
-  return bluetoothRecognitionSession;
+  return session;
+}
+
+function syncActiveProxyInputRecognition(candidate) {
+  if (candidate?.recognitionMode !== "fingerprint") {
+    if (activeProxyInputRecognition?.source) {
+      proxyInputRecognitionSessions.delete(activeProxyInputRecognition.source);
+    }
+    activeProxyInputRecognition = null;
+    return;
+  }
+  if (activeProxyInputRecognition?.source
+    && (activeProxyInputRecognition.source !== candidate.source
+      || activeProxyInputRecognition.connectionKey !== candidate.connectionKey)) {
+    proxyInputRecognitionSessions.delete(activeProxyInputRecognition.source);
+  }
+  activeProxyInputRecognition = {
+    source: candidate.source,
+    connectionKey: candidate.connectionKey
+  };
+}
+
+function isActiveProxyInputRecognition(source, connectionKey, requestId, expectedSession) {
+  const session = proxyInputRecognitionSessions.get(source);
+  return activeProxyInputRecognition?.source === source
+    && activeProxyInputRecognition.connectionKey === connectionKey
+    && session === expectedSession
+    && session.connectionKey === connectionKey
+    && session.inFlightId === requestId;
 }
 
 function buildProxyInputRecognitionMessage(source) {
   return `Listening to ${getProxyInputLabel(source)} audio...`;
 }
 
-function buildBluetoothRecognizingState(candidate) {
+function buildProxyInputRecognizingState(candidate) {
   return buildLyricsState({
     status: "recognizing",
     sourceScope: candidate.sourceScope ?? getProxyInputScope(candidate.source ?? "bluetooth"),
@@ -12635,10 +12695,10 @@ function scheduleMetadataLyricsRecognition(candidate, options = {}) {
   return lyricsState;
 }
 
-async function resolveBluetoothRecognition(candidate, sourceSummary, { force = false } = {}) {
+async function resolveProxyInputRecognition(candidate, sourceSummary, { force = false } = {}) {
   const source = candidate?.source ?? "bluetooth";
   const sourceScope = candidate?.sourceScope ?? getProxyInputScope(source);
-  const session = syncBluetoothRecognitionSession(sourceSummary, source);
+  const session = syncProxyInputRecognitionSession(sourceSummary, source);
   const activeConnectionKey = session?.connectionKey ?? null;
   if (!activeConnectionKey) {
     return buildLyricsState({
@@ -12678,7 +12738,12 @@ async function resolveBluetoothRecognition(candidate, sourceSummary, { force = f
         title: recognizedTrack.title,
         artist: recognizedTrack.artist,
         album: recognizedTrack.album,
-        durationSeconds: Number.isFinite(candidate.durationMs) ? candidate.durationMs / 1000 : null
+        // A DLNA stream can revise its reported duration while the sender is
+        // still playing the same track.  Its periodic refresh must compare
+        // recognition identity, not that volatile stream detail.
+        durationSeconds: source === "upnp"
+          ? null
+          : Number.isFinite(candidate.durationMs) ? candidate.durationMs / 1000 : null
       }),
       title: recognizedTrack.title,
       artist: normalizeMetadataValue(recognizedTrack.artist),
@@ -12696,7 +12761,7 @@ async function resolveBluetoothRecognition(candidate, sourceSummary, { force = f
       recognitionConfidence: recognizedTrack.confidence
     });
   } catch (error) {
-    console.warn("tikpal-api bluetooth recognition failed:", error instanceof Error ? error.message : error);
+    console.warn(`tikpal-api ${source} recognition failed:`, error instanceof Error ? error.message : error);
     return buildLyricsState({
       status: "error",
       sourceScope,
@@ -12712,11 +12777,12 @@ async function resolveBluetoothRecognition(candidate, sourceSummary, { force = f
   }
 }
 
-function scheduleBluetoothLyricsRecognition(snapshot, candidate, options = {}) {
+function scheduleProxyInputLyricsRecognition(snapshot, candidate, options = {}) {
   const source = candidate?.source ?? "bluetooth";
   const sourceScope = candidate?.sourceScope ?? getProxyInputScope(source);
   const sourceSummary = getProxyInputSourceSummary(snapshot.audio, source);
-  const session = syncBluetoothRecognitionSession(sourceSummary, source);
+  const session = syncProxyInputRecognitionSession(sourceSummary, source);
+  syncActiveProxyInputRecognition(candidate);
   const shouldForce = options.force === true;
   if (!session) {
     return updateLyricsState(buildLyricsState({
@@ -12735,55 +12801,85 @@ function scheduleBluetoothLyricsRecognition(snapshot, candidate, options = {}) {
   }
 
   if (shouldForce) {
-    bluetoothRecognitionSession.resolvedState = null;
-    bluetoothRecognitionSession.retryAfterMs = 0;
+    session.resolvedState = null;
+    session.retryAfterMs = 0;
+    session.refreshAfterMs = 0;
   }
 
-  if (!shouldForce && bluetoothRecognitionSession.resolvedState) {
-    const resolvedState = bluetoothRecognitionSession.resolvedState;
-    const retryAfterMs = bluetoothRecognitionSession.retryAfterMs ?? 0;
-    if (resolvedState.status === "ready" || retryAfterMs > Date.now()) {
+  const now = Date.now();
+  const isDlnaRefresh = source === "upnp"
+    && !shouldForce
+    && session.resolvedState
+    && (session.refreshAfterMs ?? 0) <= now;
+
+  if (!shouldForce && session.resolvedState && !isDlnaRefresh) {
+    const resolvedState = session.resolvedState;
+    const retryAfterMs = session.retryAfterMs ?? 0;
+    if (resolvedState.status === "ready" || retryAfterMs > now) {
       return updateLyricsState(resolvedState);
     }
-    bluetoothRecognitionSession.resolvedState = null;
+    session.resolvedState = null;
   }
 
-  const settleUntil = bluetoothRecognitionSession.connectedAtMs + getProxyInputRecognitionSettleMs(source);
+  const settleUntil = session.connectedAtMs + getProxyInputRecognitionSettleMs(source);
   if (!shouldForce && Date.now() < settleUntil) {
-    return updateLyricsState(buildBluetoothRecognizingState(candidate));
+    return updateLyricsState(buildProxyInputRecognizingState(candidate));
   }
 
-  if (!shouldForce && bluetoothRecognitionSession.retryAfterMs > Date.now() && bluetoothRecognitionSession.resolvedState) {
-    return updateLyricsState(bluetoothRecognitionSession.resolvedState);
+  if (!shouldForce && session.retryAfterMs > Date.now() && session.resolvedState) {
+    return updateLyricsState(session.resolvedState);
   }
 
-  if (bluetoothRecognitionSession.inFlight && !shouldForce) {
-    return updateLyricsState(buildBluetoothRecognizingState(candidate));
+  if (session.inFlight && !shouldForce) {
+    return isDlnaRefresh && session.resolvedState
+      ? lyricsState
+      : updateLyricsState(buildProxyInputRecognizingState(candidate));
   }
 
-  updateLyricsState(buildBluetoothRecognizingState(candidate));
-  const activeConnectionKey = bluetoothRecognitionSession.connectionKey;
-  const pending = resolveBluetoothRecognition(candidate, sourceSummary, { force: shouldForce })
+  if (!isDlnaRefresh) {
+    updateLyricsState(buildProxyInputRecognizingState(candidate));
+  }
+  const activeConnectionKey = session.connectionKey;
+  const requestId = session.inFlightId + 1;
+  session.inFlightId = requestId;
+  const previousResolvedState = session.resolvedState;
+  const pending = resolveProxyInputRecognition(candidate, sourceSummary, { force: shouldForce })
     .then((result) => {
-      if (bluetoothRecognitionSession.connectionKey === activeConnectionKey) {
-        bluetoothRecognitionSession.resolvedState = result;
-        if (result.status === "error") {
-          bluetoothRecognitionSession.retryAfterMs = Date.now() + BLUETOOTH_RECOGNITION_RETRY_MS;
-        } else if (result.status === "not_found") {
-          bluetoothRecognitionSession.retryAfterMs = Date.now() + BLUETOOTH_RECOGNITION_NOT_FOUND_RETRY_MS;
-        } else {
-          bluetoothRecognitionSession.retryAfterMs = 0;
+      if (isActiveProxyInputRecognition(source, activeConnectionKey, requestId, session)) {
+        const recognizedTrackChanged = result.status !== "ready"
+          || previousResolvedState?.trackKey !== result.trackKey;
+        const retainDlnaLyricsWall = isDlnaRefresh
+          && previousResolvedState?.status === "ready"
+          && !recognizedTrackChanged;
+
+        if (!retainDlnaLyricsWall) {
+          session.resolvedState = result;
         }
-        updateLyricsState(result);
+        if (result.status === "error") {
+          session.retryAfterMs = Date.now() + BLUETOOTH_RECOGNITION_RETRY_MS;
+        } else if (result.status === "not_found") {
+          session.retryAfterMs = Date.now() + BLUETOOTH_RECOGNITION_NOT_FOUND_RETRY_MS;
+        } else {
+          session.retryAfterMs = 0;
+        }
+        if (source === "upnp") {
+          session.refreshAfterMs = Date.now() + UPNP_RECOGNITION_REFRESH_MS;
+          if (result.status === "error" || result.status === "not_found") {
+            session.retryAfterMs = session.refreshAfterMs;
+          }
+        }
+        if (!retainDlnaLyricsWall) {
+          updateLyricsState(result);
+        }
       }
       return result;
     })
     .finally(() => {
-      if (bluetoothRecognitionSession.connectionKey === activeConnectionKey) {
-        bluetoothRecognitionSession.inFlight = null;
+      if (proxyInputRecognitionSessions.get(source) === session && session.inFlightId === requestId) {
+        session.inFlight = null;
       }
     });
-  bluetoothRecognitionSession.inFlight = pending;
+  session.inFlight = pending;
   return lyricsState;
 }
 
@@ -12791,6 +12887,10 @@ function scheduleLyricsRecognition(snapshot, options = {}) {
   const candidate = getLyricsCandidate(snapshot);
 
   if (!candidate.supported) {
+    syncActiveProxyInputRecognition(null);
+    if (isProxyInputSource(snapshot.playback?.source)) {
+      syncProxyInputRecognitionSession(getProxyInputSourceSummary(snapshot.audio, snapshot.playback.source), snapshot.playback.source);
+    }
     return updateLyricsState(buildLyricsState({
       status: "idle",
       sourceScope: candidate.sourceScope ?? "local_playback",
@@ -12806,9 +12906,10 @@ function scheduleLyricsRecognition(snapshot, options = {}) {
   }
 
   if (candidate.recognitionMode === "fingerprint") {
-    return scheduleBluetoothLyricsRecognition(snapshot, candidate, options);
+    return scheduleProxyInputLyricsRecognition(snapshot, candidate, options);
   }
 
+  syncActiveProxyInputRecognition(null);
   return scheduleMetadataLyricsRecognition(candidate, options);
 }
 

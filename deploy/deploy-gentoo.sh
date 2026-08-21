@@ -4,6 +4,9 @@ set -euo pipefail
 # Deploy tikpal to a remote Gentoo/Pi device.
 # Preserves .env.kiosk, .env, and .tikpal/ on the remote.
 # Fixes ownership after rsync (rsync runs as root, services run as moode).
+# Reinstalls the synchronized non-kiosk systemd units before restarting the
+# physical kiosk, so service definitions and device-local configuration stay
+# aligned with the released code.
 # Backs up remote .env.kiosk with timestamp before each deploy.
 # Uses the SSH agent by default. Set TIKPAL_DEPLOY_PASSWORD only for a
 # one-off password-authenticated deployment; never put it in an env file.
@@ -114,8 +117,14 @@ rsync_cmd -az --delete \
 echo "--- Fixing ownership ---"
 ssh_cmd "chown -R ${SERVICE_USER}: ${REMOTE_DIR}/"
 
-# Restart services
-echo "--- Restarting services ---"
-ssh_cmd "systemctl restart tikpal-api tikpal-kiosk || true"
+# Install the synchronized API/web/audio units. This also performs the guarded
+# DLNA recognition-tap preflight without replacing device-local .env files.
+echo "--- Installing synchronized systemd services ---"
+ssh_cmd "cd '$REMOTE_DIR' && ./deploy/systemd/install-systemd-services.sh --app-dir '$REMOTE_DIR' --user '$SERVICE_USER' --restart"
+
+# The installer intentionally leaves the existing physical kiosk unit alone;
+# restart it here to load the newly built frontend and kiosk scripts.
+echo "--- Restarting kiosk and verifying services ---"
+ssh_cmd "systemctl restart tikpal-kiosk && systemctl is-active --quiet tikpal-api tikpal-web tikpal-kiosk && curl -fsS http://127.0.0.1:8787/api/v1/health >/dev/null"
 
 echo "=== Deploy complete ==="

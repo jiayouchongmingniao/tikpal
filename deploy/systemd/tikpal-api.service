@@ -11,6 +11,7 @@ Environment=NODE_ENV=production
 Environment=TIKPAL_API_HOST=127.0.0.1
 Environment=TIKPAL_API_PORT=8787
 EnvironmentFile=-@APP_DIR@/.env
+EnvironmentFile=-@APP_DIR@/.env.kiosk
 ExecStart=/usr/bin/node @APP_DIR@/server/index.mjs
 Restart=on-failure
 RestartSec=3

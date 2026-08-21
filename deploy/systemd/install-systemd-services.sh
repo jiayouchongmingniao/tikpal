@@ -411,6 +411,54 @@ ensure_roonbridge_env() {
   echo "updated $env_file with Multi-room Audio and Audio Output commands"
 }
 
+set_env_value() {
+  local env_file="$1"
+  local key="$2"
+  local value="$3"
+  if grep -q "^${key}=" "$env_file"; then
+    sed -i "\\|^${key}=|c\\${key}=${value}" "$env_file"
+  else
+    printf '%s=%s\n' "$key" "$value" >> "$env_file"
+  fi
+}
+
+disable_upnp_recognition_capture() {
+  local env_file="$1"
+  set_env_value "$env_file" "TIKPAL_UPNP_CAPTURE_COMMAND" ""
+  chown "$SERVICE_USER":"$SERVICE_USER" "$env_file" || true
+}
+
+ensure_upnp_recognition_capture() {
+  [[ "${TIKPAL_INSTALL_UPNP_RECOGNITION_CAPTURE:-1}" != "0" ]] || return 0
+  local env_file="$APP_DIR/.env"
+  if [[ ! -f "$env_file" && -f "$APP_DIR/.env.kiosk" ]]; then
+    env_file="$APP_DIR/.env.kiosk"
+  fi
+  local helper="$APP_DIR/deploy/moode/tikpal-upnp-capture-install.sh"
+  [[ -f "$env_file" ]] || {
+    echo "WARN: neither $APP_DIR/.env nor $APP_DIR/.env.kiosk exists; leaving DLNA fingerprint capture disabled" >&2
+    return 0
+  }
+  [[ -x "$helper" ]] || {
+    echo "WARN: $helper is missing or not executable; leaving DLNA fingerprint capture disabled" >&2
+    return 0
+  }
+
+  if ! "$helper" install; then
+    disable_upnp_recognition_capture "$env_file"
+    echo "WARN: DLNA fingerprint capture preflight failed; metadata lyrics remain available" >&2
+    return 0
+  fi
+
+  set_env_value "$env_file" "TIKPAL_UPNP_CAPTURE_COMMAND" '"./deploy/moode/tikpal-upnp-capture.sh"'
+  set_env_value "$env_file" "TIKPAL_UPNP_CAPTURE_OUTPUT_NAME" '"Tikpal DLNA Recognition Tap"'
+  set_env_value "$env_file" "TIKPAL_UPNP_CAPTURE_URL" 'http://127.0.0.1:8001/'
+  set_env_value "$env_file" "TIKPAL_UPNP_CAPTURE_DURATION_SECONDS" '6'
+  set_env_value "$env_file" "TIKPAL_UPNP_RECOGNITION_REFRESH_MS" '90000'
+  chown "$SERVICE_USER":"$SERVICE_USER" "$env_file" || true
+  echo "enabled DLNA fingerprint capture in $env_file"
+}
+
 ensure_radio_presets() {
   [[ "${TIKPAL_INSTALL_RADIO_PRESETS:-1}" != "0" ]] || return 0
   local helper="$APP_DIR/deploy/moode/tikpal-radio-presets-sync.sh"
@@ -442,6 +490,7 @@ ensure_turzx_brightness_env
 install_roonbridge_helpers
 ensure_roonbridge_env
 ensure_radio_presets
+ensure_upnp_recognition_capture
 
 install_unit "$SCRIPT_DIR/tikpal-api.service"
 install_unit "$SCRIPT_DIR/tikpal-web.service"

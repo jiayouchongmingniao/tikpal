@@ -873,6 +873,40 @@ function createProviderServer() {
           return;
         }
 
+        if (body.includes("DLNA_ONE")) {
+          sendProviderJson(response, 200, {
+            status: { code: 0, msg: "Success" },
+            metadata: {
+              music: [
+                {
+                  title: "Get Lucky (feat. Pharrell Williams)",
+                  artists: [{ name: "Daft Punk" }],
+                  album: { name: "Random Access Memories" },
+                  score: 97
+                }
+              ]
+            }
+          });
+          return;
+        }
+
+        if (body.includes("DLNA_TWO")) {
+          sendProviderJson(response, 200, {
+            status: { code: 0, msg: "Success" },
+            metadata: {
+              music: [
+                {
+                  title: "Instant Crush",
+                  artists: [{ name: "Daft Punk" }],
+                  album: { name: "Random Access Memories" },
+                  score: 96
+                }
+              ]
+            }
+          });
+          return;
+        }
+
         sendProviderJson(response, 200, {
           status: { code: 3003, msg: "No result" }
         });
@@ -3862,6 +3896,9 @@ async function runMpcAirplayHandoffRefreshSmoke(roomExperienceStatePath) {
   const fakeBluetoothMetadataCommandPath = path.join(workspace, "bluetooth-metadata.mjs");
   const fakeUpnpMetadataPath = path.join(workspace, "upnp-metadata.txt");
   const fakeUpnpMetadataCommandPath = path.join(workspace, "upnp-metadata.mjs");
+  const fakeUpnpCaptureScenarioPath = path.join(workspace, "upnp-capture-scenario.txt");
+  const fakeUpnpCaptureLogPath = path.join(workspace, "upnp-capture.log");
+  const fakeUpnpCaptureCommandPath = path.join(workspace, "upnp-capture.mjs");
   const fakeBluetoothTransportLogPath = path.join(workspace, "bluetooth-transport.log");
   const fakeBluetoothTransportCommandPath = path.join(workspace, "bluetooth-transport.mjs");
   const fakeExternalCommandLogPath = path.join(workspace, "external-command.log");
@@ -4059,6 +4096,18 @@ import { readFileSync } from "node:fs";
 process.stdout.write(readFileSync(process.env.TIKPAL_FAKE_UPNP_METADATA_PATH, "utf8"));
 `);
   await chmod(fakeUpnpMetadataCommandPath, 0o755);
+  await writeFile(fakeUpnpCaptureScenarioPath, "DLNA_ONE\n");
+  await writeFile(fakeUpnpCaptureLogPath, "");
+  await writeFile(fakeUpnpCaptureCommandPath, `#!/usr/bin/env node
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+
+const [outputPath] = process.argv.slice(2);
+const scenario = readFileSync(process.env.TIKPAL_FAKE_UPNP_CAPTURE_SCENARIO_PATH, "utf8").trim();
+appendFileSync(process.env.TIKPAL_FAKE_UPNP_CAPTURE_LOG_PATH, scenario + "\\n");
+if (scenario === "DLNA_DELAY") await new Promise((resolve) => setTimeout(resolve, 1000));
+writeFileSync(outputPath, scenario === "DLNA_DELAY" ? "DLNA_TWO" : scenario);
+`);
+  await chmod(fakeUpnpCaptureCommandPath, 0o755);
   await writeFile(fakeBluetoothTransportLogPath, "");
   await writeFile(fakeBluetoothTransportCommandPath, `#!/usr/bin/env node
 import { appendFileSync, readFileSync } from "node:fs";
@@ -4128,9 +4177,15 @@ appendFileSync(${JSON.stringify(fakeBluetoothTransportLogPath)}, action + "\\n")
       TIKPAL_UPNP_DISABLE_COMMAND: `${process.execPath} ${fakeExternalCommandPath} upnp-disable`,
       TIKPAL_UPNP_LABEL_COMMAND: "printf 'Tikpal Speaker'",
       TIKPAL_UPNP_METADATA_COMMAND: `${process.execPath} ${fakeUpnpMetadataCommandPath}`,
+      TIKPAL_UPNP_CAPTURE_COMMAND: `${process.execPath} ${fakeUpnpCaptureCommandPath}`,
+      TIKPAL_UPNP_CAPTURE_DURATION_SECONDS: "1",
+      TIKPAL_UPNP_RECOGNITION_SETTLE_MS: "1",
+      TIKPAL_UPNP_RECOGNITION_REFRESH_MS: "60",
       TIKPAL_FAKE_EXTERNAL_STATE_PATH: fakeExternalStatePath,
       TIKPAL_FAKE_BLUETOOTH_METADATA_PATH: fakeBluetoothMetadataPath,
       TIKPAL_FAKE_UPNP_METADATA_PATH: fakeUpnpMetadataPath,
+      TIKPAL_FAKE_UPNP_CAPTURE_SCENARIO_PATH: fakeUpnpCaptureScenarioPath,
+      TIKPAL_FAKE_UPNP_CAPTURE_LOG_PATH: fakeUpnpCaptureLogPath,
       TIKPAL_AIRPLAY_ENABLE_COMMAND: `${process.execPath} ${fakeExternalCommandPath} airplay-enable`,
       TIKPAL_AIRPLAY_READY_COMMAND: "true",
       TIKPAL_AIRPLAY_ACTIVE_COMMAND: "true",
@@ -4153,6 +4208,10 @@ appendFileSync(${JSON.stringify(fakeBluetoothTransportLogPath)}, action + "\\n")
       TIKPAL_LYRICS_OVH_BASE_URL: PROVIDER_URL,
       TIKPAL_LRCLIB_TIMEOUT_MS: "250",
       TIKPAL_LRCLIB_BASE_URL: PROVIDER_URL,
+      TIKPAL_RECOGNITION_PROVIDER: "acrcloud",
+      TIKPAL_ACRCLOUD_HOST: PROVIDER_URL,
+      TIKPAL_ACRCLOUD_ACCESS_KEY: "mock-key",
+      TIKPAL_ACRCLOUD_ACCESS_SECRET: "mock-secret",
       TIKPAL_THEAUDIODB_BASE_URL: PROVIDER_URL,
       TIKPAL_ITUNES_SEARCH_BASE_URL: `${PROVIDER_URL}/itunes/search`
     }),
@@ -4210,7 +4269,7 @@ appendFileSync(${JSON.stringify(fakeBluetoothTransportLogPath)}, action + "\\n")
       method: "POST",
       body: JSON.stringify({ target: "airplay" })
     });
-    assert(switched.response.ok, "mpc airplay source switch should return 200");
+    assert(switched.response.ok, `mpc airplay source switch should return 200: ${switched.response.status} ${JSON.stringify(switched.body)}`);
     assert(switched.body.audio.currentSource.id === "airplay", "mpc airplay switch should mark AirPlay current");
     assert(switched.body.audio.currentSource.armed === true, "mpc airplay switch should arm AirPlay");
     assert(
@@ -4890,6 +4949,99 @@ appendFileSync(${JSON.stringify(fakeBluetoothTransportLogPath)}, action + "\\n")
     assert(metadataOnlyDlnaLyrics.status === "idle", "metadata-only DLNA should not enter the lyrics wall without connected audio");
     assert(metadataOnlyDlnaLyrics.sourceScope === "upnp_input", "metadata-only DLNA lyrics should keep upnp scope");
     assert(metadataOnlyDlnaLyrics.message === "Waiting for DLNA audio", "metadata-only DLNA lyrics should explain that audio is still waiting");
+
+    await writeFile(fakeUpnpMetadataPath, "");
+    const externalStateBeforeDlnaFingerprint = JSON.parse(await readFile(fakeExternalStatePath, "utf8"));
+    await writeFile(fakeExternalStatePath, JSON.stringify({
+      ...externalStateBeforeDlnaFingerprint,
+      upnpActive: true
+    }, null, 2) + "\n");
+    const stateBeforeDlnaFingerprint = JSON.parse(await readFile(fakeMpcStatePath, "utf8"));
+    await writeFile(fakeMpcStatePath, JSON.stringify({
+      ...stateBeforeDlnaFingerprint,
+      currentFile: "http://dlna.example/fingerprint-track.flac",
+      title: "",
+      artist: "",
+      album: "",
+      duration: "3:34",
+      elapsed: "0:42",
+      failedStreamUri: null,
+      playbackState: "playing"
+    }, null, 2) + "\n");
+    await writeFile(fakeUpnpCaptureScenarioPath, "DLNA_ONE\n");
+    let dlnaFingerprintReady = null;
+    let dlnaFingerprintState = null;
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      dlnaFingerprintState = await requestFrom(baseUrl, "/api/v1/system/state");
+      const lyrics = dlnaFingerprintState.body.lyrics;
+      if (lyrics?.status === "ready" && lyrics.title === "Get Lucky (feat. Pharrell Williams)" && lyrics.artist === "Daft Punk") {
+        dlnaFingerprintReady = lyrics;
+        break;
+      }
+      await wait(100);
+    }
+    assert(
+      dlnaFingerprintReady,
+      `DLNA fingerprint did not resolve: ${JSON.stringify({
+        lyrics: dlnaFingerprintState?.body?.lyrics,
+        currentSource: dlnaFingerprintState?.body?.audio?.currentSource,
+        playback: dlnaFingerprintState?.body?.playback,
+        captures: await readFile(fakeUpnpCaptureLogPath, "utf8")
+      })}`
+    );
+    assert(dlnaFingerprintReady.sourceScope === "upnp_input", "DLNA fingerprint lyrics should keep upnp scope");
+    assert(dlnaFingerprintReady.recognitionMode === "fingerprint", "DLNA without trusted DIDL metadata should use fingerprint recognition");
+    assert(dlnaFingerprintReady.recognitionProvider === "acrcloud", "DLNA fingerprint lyrics should report ACRCloud");
+    const initialDlnaLyricsUpdatedAt = dlnaFingerprintReady.updatedAt;
+    assert((await readFile(fakeUpnpCaptureLogPath, "utf8")).trim().split("\n").filter(Boolean).length === 1, "DLNA should capture once for its first unidentified stream");
+
+    const stateBeforeSameTrackDlnaRefresh = JSON.parse(await readFile(fakeMpcStatePath, "utf8"));
+    await writeFile(fakeMpcStatePath, JSON.stringify({
+      ...stateBeforeSameTrackDlnaRefresh,
+      duration: "3:35"
+    }, null, 2) + "\n");
+    await wait(90);
+    const dlnaSameTrackRefresh = await requestFrom(baseUrl, "/api/v1/system/state");
+    assert(dlnaSameTrackRefresh.body.lyrics.status === "ready", "DLNA periodic recheck should retain the existing lyrics wall while identification runs");
+    await wait(180);
+    const dlnaSameTrackLyrics = await requestFrom(baseUrl, "/api/v1/lyrics/status");
+    assert(dlnaSameTrackLyrics.body.updatedAt === initialDlnaLyricsUpdatedAt, "DLNA periodic recheck must not replace lyrics when the recognized track is unchanged");
+    assert((await readFile(fakeUpnpCaptureLogPath, "utf8")).trim().split("\n").filter(Boolean).length >= 2, "DLNA should recapture after its configured refresh interval");
+
+    await writeFile(fakeUpnpCaptureScenarioPath, "DLNA_TWO\n");
+    await wait(90);
+    await requestFrom(baseUrl, "/api/v1/system/state");
+    const dlnaChangedTrackLyrics = await waitForLyricsTrackAt(baseUrl, {
+      title: "Instant Crush",
+      artist: "Daft Punk"
+    });
+    assert(dlnaChangedTrackLyrics.recognitionMode === "fingerprint", "a changed DLNA fingerprint result should replace the shared lyrics state");
+
+    await writeFile(fakeUpnpCaptureScenarioPath, "DLNA_DELAY\n");
+    await wait(90);
+    await requestFrom(baseUrl, "/api/v1/system/state");
+    const stateBeforeDlnaDisconnect = JSON.parse(await readFile(fakeMpcStatePath, "utf8"));
+    const externalStateBeforeDlnaDisconnect = JSON.parse(await readFile(fakeExternalStatePath, "utf8"));
+    await writeFile(fakeExternalStatePath, JSON.stringify({
+      ...externalStateBeforeDlnaDisconnect,
+      upnpActive: false
+    }, null, 2) + "\n");
+    await writeFile(fakeMpcStatePath, JSON.stringify({
+      ...stateBeforeDlnaDisconnect,
+      currentFile: "",
+      title: "",
+      artist: "",
+      album: "",
+      duration: "",
+      elapsed: "0:00",
+      playbackState: "stopped"
+    }, null, 2) + "\n");
+    const dlnaDisconnected = await requestFrom(baseUrl, "/api/v1/system/state");
+    assert(dlnaDisconnected.body.lyrics.status === "idle", "DLNA disconnect should immediately clear fingerprint lyrics");
+    assert(dlnaDisconnected.body.lyrics.message === "Waiting for DLNA audio", "DLNA disconnect should return to the existing waiting state");
+    await wait(350);
+    const afterStaleDlnaResult = await requestFrom(baseUrl, "/api/v1/lyrics/status");
+    assert(afterStaleDlnaResult.body.status === "idle", "a delayed DLNA fingerprint result must be discarded after disconnect");
   } finally {
     if (server.exitCode === null && server.signalCode === null) {
       server.kill("SIGTERM");
@@ -4903,6 +5055,20 @@ appendFileSync(${JSON.stringify(fakeBluetoothTransportLogPath)}, action + "\\n")
 }
 
 async function run() {
+  if (process.env.TIKPAL_API_SMOKE_SCOPE === "upnp") {
+    const workspace = await mkdtemp(path.join(tmpdir(), "tikpal-api-upnp-scope-"));
+    const providerServer = createProviderServer();
+    await new Promise((resolve) => providerServer.listen(PROVIDER_PORT, HOST, resolve));
+    try {
+      await runMpcAirplayHandoffRefreshSmoke(path.join(workspace, "room-experience.json"));
+      console.log("UPnP API smoke passed");
+    } finally {
+      await new Promise((resolve) => providerServer.close(resolve));
+      await rm(workspace, { recursive: true, force: true });
+    }
+    return;
+  }
+
   runAccessControlHelperSmoke();
   await runGeneratedArtworkSourceSmoke();
   await runAirplayMetadataHelperClockSmoke();
@@ -5357,6 +5523,19 @@ exit 0
     assert(postedHeartbeat.body.healthy === true, "healthy kiosk heartbeat should be healthy");
     const freshHeartbeat = await request("/api/v1/kiosk/heartbeat");
     assert(freshHeartbeat.body.healthy === true, "kiosk heartbeat read should return the latest healthy heartbeat");
+
+    const hifiHeartbeat = await request("/api/v1/kiosk/heartbeat", {
+      method: "POST",
+      body: JSON.stringify({
+        ...healthyHeartbeatPayload,
+        room: { mode: "hifi", phase: "idle" },
+        playback: { source: "upnp", state: "stopped", title: "DLNA Ready" },
+        source: { current: "upnp" },
+        activeSceneVideo: { present: false, scenePresent: false, transition: null, transitionPhase: null }
+      })
+    });
+    assert(hifiHeartbeat.body.healthy === true, "Hi-Fi visual heartbeat should not require a scene video");
+    assert(!hifiHeartbeat.body.reasons.includes("scene-video-missing"), "Hi-Fi heartbeat should not report a missing scene video");
 
     const visibleLagHeartbeat = await request("/api/v1/kiosk/heartbeat", {
       method: "POST",
