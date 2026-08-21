@@ -143,7 +143,15 @@ export function buildOpenApiDocument({ appVersion = "0.1.0" } = {}) {
       "/web-mode/proxy-test": {
         post: {
           tags: ["web-mode"],
-          summary: "Validate Explore proxy configuration",
+          summary: "Validate an Explore proxy URL against Google, Apple Music, and Spotify",
+          requestBody: {
+            required: false,
+            content: {
+              "application/json": {
+                schema: ref("WebModeProxyTestRequest")
+              }
+            }
+          },
           responses: {
             200: jsonResponse("Proxy test result", "WebModeProxyTestResponse"),
             400: jsonResponse("Bad request", "ErrorResponse")
@@ -264,15 +272,17 @@ export function buildOpenApiDocument({ appVersion = "0.1.0" } = {}) {
         },
         WebModeState: {
           type: "object",
-          required: ["enabled", "activeProvider", "lastProvider", "providers", "settings", "lastError", "updatedAt"],
+          required: ["enabled", "activeProvider", "openingProvider", "lastProvider", "providers", "prewarmComplete", "settings", "lastError", "updatedAt"],
           properties: {
             enabled: { type: "boolean" },
             activeProvider: { type: "string", enum: WEB_MODE_PROVIDERS, nullable: true },
+            openingProvider: { type: "string", enum: WEB_MODE_PROVIDERS, nullable: true },
             lastProvider: { type: "string", enum: WEB_MODE_PROVIDERS, nullable: true },
             providers: {
               type: "array",
               items: ref("WebModeProvider")
             },
+            prewarmComplete: { type: "boolean" },
             settings: ref("WebModeSettings"),
             lastError: { type: "string", nullable: true },
             updatedAt: { type: "string", format: "date-time", nullable: true }
@@ -301,11 +311,32 @@ export function buildOpenApiDocument({ appVersion = "0.1.0" } = {}) {
         },
         WebModeProxyTestResponse: {
           type: "object",
-          required: ["ok", "message", "proxyUrl"],
+          required: ["ok", "message", "proxyUrl", "checks"],
           properties: {
             ok: { type: "boolean" },
             message: { type: "string" },
+            proxyUrl: { type: "string" },
+            checks: {
+              type: "array",
+              items: ref("WebModeProxyTestCheck")
+            }
+          }
+        },
+        WebModeProxyTestRequest: {
+          type: "object",
+          properties: {
             proxyUrl: { type: "string" }
+          },
+          additionalProperties: false
+        },
+        WebModeProxyTestCheck: {
+          type: "object",
+          required: ["id", "label", "url", "ok"],
+          properties: {
+            id: { type: "string", enum: ["google", "apple_music", "spotify"] },
+            label: { type: "string" },
+            url: { type: "string" },
+            ok: { type: "boolean" }
           }
         },
         MultiroomEcosystemState: {

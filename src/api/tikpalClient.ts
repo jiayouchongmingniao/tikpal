@@ -32,6 +32,7 @@ import type {
   TikpalState,
   WebModeActionRequest,
   WebModeSettingsPatch,
+  WebModeProxyTestResponse,
   WebModeState
 } from "../types";
 
@@ -443,16 +444,16 @@ export async function updateWebModeSettings(patch: WebModeSettingsPatch): Promis
   return readJson<WebModeState>(response);
 }
 
-export async function testWebModeProxy(): Promise<{ ok: boolean; message: string; proxyUrl: string }> {
+export async function testWebModeProxy(proxyUrl?: string): Promise<WebModeProxyTestResponse> {
   const response = await fetchWithTimeout(`${API_ROOT}/web-mode/proxy-test`, {
     method: "POST",
     headers: {
       Accept: "application/json",
       "Content-Type": "application/json"
     },
-    body: JSON.stringify({})
+    body: JSON.stringify(proxyUrl === undefined ? {} : { proxyUrl })
   }, DEFAULT_POST_TIMEOUT_MS);
-  return readJson<{ ok: boolean; message: string; proxyUrl: string }>(response);
+  return readJson<WebModeProxyTestResponse>(response);
 }
 
 export async function sendKioskHeartbeat(payload: Record<string, unknown>, signal?: AbortSignal): Promise<void> {

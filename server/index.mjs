@@ -338,7 +338,12 @@ const MPD_SHUFFLE_POST_JUMP_SETTLE_MS = parseEnvPositiveInteger(process.env.TIKP
 const WEB_MODE_COMMAND = process.env.TIKPAL_WEB_MODE_COMMAND ?? (API_MODE === "mpc" ? "./deploy/chromium/tikpal-web-mode.sh" : "");
 const WEB_MODE_COMMAND_TIMEOUT_MS = Number(process.env.TIKPAL_WEB_MODE_COMMAND_TIMEOUT_MS ?? 45_000);
 const WEB_MODE_OPEN_COMMAND_TIMEOUT_MS = Number(process.env.TIKPAL_WEB_MODE_OPEN_COMMAND_TIMEOUT_MS ?? 110_000);
-const WEB_MODE_PROXY_TEST_URL = process.env.TIKPAL_WEB_MODE_PROXY_TEST_URL ?? "https://open.spotify.com/";
+const WEB_MODE_PROXY_TEST_TARGETS = [
+  { id: "google", label: "Google", url: "https://www.google.com/" },
+  { id: "apple_music", label: "Apple Music", url: "https://music.apple.com/" },
+  { id: "spotify", label: "Spotify", url: "https://open.spotify.com/" }
+];
+const WEB_MODE_PROXY_TEST_CURL_BIN = process.env.TIKPAL_WEB_MODE_PROXY_TEST_CURL_BIN ?? "curl";
 const WEB_MODE_DEFAULT_PROXY_URL = process.env.TIKPAL_WEB_MODE_DEFAULT_PROXY_URL ?? "http://127.0.0.1:7897";
 const WEB_MODE_PROVIDER_TEXT_SCALE_VALUES = [1, 1.1, 1.2];
 function normalizeWebModeProviderTextScale(value, fallback = null) {
@@ -350,7 +355,6 @@ function normalizeWebModeProviderTextScale(value, fallback = null) {
   throw new Error("Explore provider text scale must be 1.00, 1.10, or 1.20");
 }
 const WEB_MODE_DEFAULT_PROVIDER_TEXT_SCALE = normalizeWebModeProviderTextScale(process.env.TIKPAL_WEB_MODE_PROVIDER_TEXT_SCALE ?? "1.10", 1.1);
-const WEB_MODE_PROXY_TEST_NETWORK = parseEnvBoolean(process.env.TIKPAL_WEB_MODE_PROXY_TEST_NETWORK ?? "0");
 const WEB_MODE_KEYBOARD_STICKY_PROTECT_MS = parseEnvPositiveInteger(process.env.TIKPAL_WEB_MODE_KEYBOARD_STICKY_PROTECT_MS, 60_000);
 const UI_LOCALE_INPUT_METHODS = {
   en: "keyboard-us",
@@ -711,6 +715,7 @@ let hifiRuntimeRecoveryQuietUntilMs = 0;
 let webModeOpenInFlight = false;
 let webModeCloseInFlight = false;
 let webModeClosePromise = null;
+let webModeResidentOpenPromise = null;
 let sourceSwitchInFlightCount = 0;
 let mpdRecoveryPromise = null;
 let mpcRadioWeakNetworkRecoveryPromise = null;
@@ -5223,10 +5228,17 @@ function normalizeWebModeRuntimeState(raw = {}) {
       updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : null
     };
   }
+  const activeProvider = raw.activeProvider ? normalizeWebModeProviderId(raw.activeProvider, null) : null;
+  const openingProvider = raw.openingProvider ? normalizeWebModeProviderId(raw.openingProvider, null) : null;
   return {
-    activeProvider: raw.activeProvider ? normalizeWebModeProviderId(raw.activeProvider, null) : null,
+    activeProvider,
+    openingProvider: openingProvider && openingProvider !== activeProvider ? openingProvider : null,
+    openRequestId: openingProvider && openingProvider !== activeProvider && typeof raw.openRequestId === "string" && raw.openRequestId.trim()
+      ? raw.openRequestId.trim()
+      : null,
     lastProvider: raw.lastProvider ? normalizeWebModeProviderId(raw.lastProvider, null) : null,
     residentProviders,
+    prewarmComplete: raw.prewarmComplete === true,
     lastError: normalizeWebModeVisibleError(raw.lastError),
     closeRequestId: typeof raw.closeRequestId === "string" ? raw.closeRequestId : null,
     proxyAppliedSettingsUpdatedAt: typeof raw.proxyAppliedSettingsUpdatedAt === "string" ? raw.proxyAppliedSettingsUpdatedAt : null,
@@ -5282,7 +5294,8 @@ async function readWebModeRuntimeState() {
 }
 
 async function shouldSuspendMpcRadioBackgroundRecovery() {
-  return webModeOpenInFlight || webModeCloseInFlight || Boolean((await readWebModeRuntimeState()).activeProvider);
+  const runtimeState = await readWebModeRuntimeState();
+  return webModeOpenInFlight || webModeCloseInFlight || Boolean(runtimeState.activeProvider || runtimeState.openingProvider);
 }
 
 async function writeWebModeRuntimeState(patch) {
@@ -5478,9 +5491,11 @@ async function buildWebModeState() {
   return {
     enabled: true,
     activeProvider: runtimeState.activeProvider,
+    openingProvider: runtimeState.openingProvider,
     lastProvider: runtimeState.lastProvider,
     providers: WEB_MODE_PROVIDERS,
     residentProviders: runtimeState.residentProviders,
+    prewarmComplete: runtimeState.prewarmComplete,
     settings,
     preferences,
     lastError: runtimeState.lastError,
@@ -13687,7 +13702,64 @@ async function parkPreparedWebModeEntry(providerId) {
 async function webModeCloseRequestIsCurrent(closeRequestId) {
   if (!closeRequestId) return true;
   const runtimeState = await readWebModeRuntimeState();
-  return runtimeState.closeRequestId === closeRequestId && !runtimeState.activeProvider;
+  return runtimeState.closeRequestId === closeRequestId && !runtimeState.activeProvider && !runtimeState.openingProvider;
+}
+
+async function residentWebModeOpenRequestIsCurrent(providerId, openRequestId) {
+  const runtimeState = await readWebModeRuntimeState();
+  return runtimeState.openingProvider === providerId
+    && runtimeState.openRequestId === openRequestId
+    && !runtimeState.closeRequestId;
+}
+
+function runResidentWebModeOpenInBackground() {
+  if (webModeResidentOpenPromise) return webModeResidentOpenPromise;
+
+  const runner = (async () => {
+    while (true) {
+      const runtimeState = await readWebModeRuntimeState();
+      const providerId = runtimeState.openingProvider;
+      const openRequestId = runtimeState.openRequestId;
+      if (!providerId || !openRequestId || runtimeState.closeRequestId) return;
+
+      try {
+        await runWebModeCommand("open", providerId, {
+          // A resident choice is serialized here, so it should never spend its
+          // lifetime waiting behind another resident command for this lock.
+          TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS: "25",
+          TIKPAL_WEB_MODE_OPEN_EXPECTED_ACTIVE_PROVIDER: providerId,
+          TIKPAL_WEB_MODE_OPEN_REQUEST_ID: openRequestId
+        });
+        if (await residentWebModeOpenRequestIsCurrent(providerId, openRequestId)) {
+          await writeWebModeRuntimeState({
+            activeProvider: providerId,
+            openingProvider: null,
+            openRequestId: null,
+            lastProvider: providerId,
+            lastError: null,
+            closeRequestId: null
+          });
+        }
+      } catch (error) {
+        if (await residentWebModeOpenRequestIsCurrent(providerId, openRequestId).catch(() => false)) {
+          await writeWebModeRuntimeState({
+            openingProvider: null,
+            openRequestId: null,
+            lastError: formatWebModeCommandError(error, "open", providerId)
+          }).catch(() => {});
+        }
+      }
+    }
+  })();
+
+  webModeResidentOpenPromise = runner.finally(async () => {
+    webModeResidentOpenPromise = null;
+    const runtimeState = await readWebModeRuntimeState();
+    if (runtimeState.openingProvider && runtimeState.openRequestId && !runtimeState.closeRequestId) {
+      runResidentWebModeOpenInBackground();
+    }
+  });
+  return webModeResidentOpenPromise;
 }
 
 function runWebModeCloseInBackground(closeRequestId = "", activeProvider = "") {
@@ -13722,6 +13794,8 @@ function runWebModeCloseInBackground(closeRequestId = "", activeProvider = "") {
       if (await webModeCloseRequestIsCurrent(closeRequestId).catch(() => false)) {
         await writeWebModeRuntimeState({
           activeProvider: null,
+          openingProvider: null,
+          openRequestId: null,
           lastError: restoreError,
           closeRequestId: null
         }).catch(() => {});
@@ -13911,6 +13985,8 @@ async function applyWebModeAction(action) {
     const activeProvider = typeof runtimeState.activeProvider === "string" ? runtimeState.activeProvider : "";
     await writeWebModeRuntimeState({
       activeProvider: null,
+      openingProvider: null,
+      openRequestId: null,
       lastProvider: runtimeState.lastProvider ?? activeProvider ?? null,
       lastError: null,
       closeRequestId
@@ -14036,23 +14112,26 @@ async function applyWebModeAction(action) {
       if (preparationResult.status === "rejected") throw preparationResult.reason;
     }
     await writeWebModeRuntimeState({ lastError: null, closeRequestId: null });
-    // Resident switch: optimistic update + background execution.
-    // Providers are already loaded in Chromium windows; the actual
-    // switch just raises one above another. Return immediately so
-    // the frontend is not blocked for the full shell-script duration.
+    // Resident switches return immediately, but activeProvider remains the
+    // physically visible provider until the launcher has revealed the target.
+    // openingProvider/openRequestId own the in-flight request and make a newer
+    // choice or Close cancel a delayed shell writer safely.
     const isResidentSwitch = previousRuntimeState.activeProvider
       && previousRuntimeState.activeProvider !== providerId;
     if (isResidentSwitch) {
-      await writeWebModeRuntimeState({ activeProvider: providerId, lastProvider: providerId, lastError: null, closeRequestId: null });
-      runWebModeCommand("open", providerId, {
-        TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS: "2",
-        TIKPAL_WEB_MODE_OPEN_EXPECTED_ACTIVE_PROVIDER: providerId
-      }).catch(() => {});
+      const openRequestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      await writeWebModeRuntimeState({
+        openingProvider: providerId,
+        openRequestId,
+        lastError: null,
+        closeRequestId: null
+      });
+      runResidentWebModeOpenInBackground();
       return await buildWebModeState();
     }
     providerOpenCommandStarted = true;
     await runWebModeCommand("open", providerId, { TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS: "25" });
-    await writeWebModeRuntimeState({ activeProvider: providerId, lastProvider: providerId, lastError: null, closeRequestId: null });
+    await writeWebModeRuntimeState({ activeProvider: providerId, openingProvider: null, openRequestId: null, lastProvider: providerId, lastError: null, closeRequestId: null });
   } catch (error) {
     const message = formatWebModeCommandError(error, "open", providerId);
     // Auto-fallback: try a provider that does not need proxy.
@@ -14074,7 +14153,7 @@ async function applyWebModeAction(action) {
     if (fallbackId) {
       try {
         await runWebModeCommand("open", fallbackId, { TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS: "30" });
-        await writeWebModeRuntimeState({ activeProvider: fallbackId, lastProvider: fallbackId, lastError: null, closeRequestId: null });
+        await writeWebModeRuntimeState({ activeProvider: fallbackId, openingProvider: null, openRequestId: null, lastProvider: fallbackId, lastError: null, closeRequestId: null });
         return await buildWebModeState();
       } catch (_) { /* fallback also failed; fall through to original error */ }
     }
@@ -14085,6 +14164,8 @@ async function applyWebModeAction(action) {
       activeProvider: previousRuntimeState.activeProvider && !clearFailedCurrentProvider
         ? previousRuntimeState.activeProvider
         : null,
+      openingProvider: null,
+      openRequestId: null,
       lastError: message
     });
     if (entryPreparationStarted && !providerOpenCommandStarted) {
@@ -14122,24 +14203,39 @@ async function confirmWebModeProxyApplied(payload) {
   return { ok: true, settingsUpdatedAt };
 }
 
-async function testWebModeProxy() {
+async function testWebModeProxy(payload = {}) {
   const settings = await readWebModeSettings();
-  if (!settings.proxyEnabled) {
-    return { ok: true, message: "Explore proxy is disabled", proxyUrl: settings.proxyUrl };
-  }
-  const proxyUrl = normalizeWebModeProxyUrl(settings.proxyUrl);
-  if (!WEB_MODE_PROXY_TEST_NETWORK) {
-    return { ok: true, message: "Proxy URL format accepted", proxyUrl };
-  }
+  const proxyUrl = normalizeWebModeProxyUrl(
+    Object.prototype.hasOwnProperty.call(payload ?? {}, "proxyUrl") ? payload.proxyUrl : settings.proxyUrl
+  );
+
   try {
-    await runCommand(
-      `command -v curl >/dev/null 2>&1 && curl -I -L -m 5 -x ${shellQuote(proxyUrl)} ${shellQuote(WEB_MODE_PROXY_TEST_URL)} >/dev/null`,
-      { allowFailure: false, timeout: 7000 }
-    );
-    return { ok: true, message: "Proxy connectivity check passed", proxyUrl };
-  } catch (error) {
-    return { ok: false, message: error instanceof Error ? error.message : "Proxy connectivity check failed", proxyUrl };
+    await runCommand(`command -v ${shellQuote(WEB_MODE_PROXY_TEST_CURL_BIN)} >/dev/null 2>&1`, { allowFailure: false, timeout: 1500 });
+  } catch {
+    const checks = WEB_MODE_PROXY_TEST_TARGETS.map((target) => ({ ...target, ok: false }));
+    return { ok: false, message: "Proxy connectivity check could not start", proxyUrl, checks };
   }
+
+  const checks = await Promise.all(WEB_MODE_PROXY_TEST_TARGETS.map(async (target) => {
+    try {
+      await runCommand(
+        `${shellQuote(WEB_MODE_PROXY_TEST_CURL_BIN)} --fail --location --max-time 5 --silent --show-error --output /dev/null --proxy ${shellQuote(proxyUrl)} ${shellQuote(target.url)}`,
+        { allowFailure: false, timeout: 7000 }
+      );
+      return { ...target, ok: true };
+    } catch {
+      return { ...target, ok: false };
+    }
+  }));
+  const failedChecks = checks.filter((check) => !check.ok);
+  return {
+    ok: failedChecks.length === 0,
+    message: failedChecks.length === 0
+      ? "Proxy connectivity check passed"
+      : `Proxy cannot reach ${failedChecks.map((check) => check.label).join(", ")}`,
+    proxyUrl,
+    checks
+  };
 }
 
 function buildPlaybackMutationRefreshOptions(action) {
@@ -14549,7 +14645,7 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "POST" && url.pathname === "/api/v1/web-mode/proxy-test") {
-      sendJson(response, 200, await testWebModeProxy());
+      sendJson(response, 200, await testWebModeProxy(await readJson(request)));
       return;
     }
 

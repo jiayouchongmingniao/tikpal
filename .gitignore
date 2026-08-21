@@ -18,3 +18,6 @@ yarn-error.log*
 pnpm-debug.log*
 .tmp-api-smoke-bluetooth-metadata.txt
 .tmp-api-smoke-bluetooth.txt
+.codex/
+deploy/chromium/tikpal-web-mode.sh.bak
+deploy/chromium/tikpal-web-mode.sh.pre-*

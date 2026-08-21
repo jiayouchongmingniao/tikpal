@@ -105,9 +105,11 @@ export interface WebModeSettings {
 export interface WebModeState {
   enabled: boolean;
   activeProvider: WebModeProviderId | null;
+  openingProvider: WebModeProviderId | null;
   lastProvider: WebModeProviderId | null;
   providers: WebModeProviderSummary[];
   residentProviders: Partial<Record<WebModeProviderId, WebModeResidentProviderState>>;
+  prewarmComplete: boolean;
   settings: WebModeSettings;
   preferences: UiPreferences;
   lastError: string | null;
@@ -133,6 +135,20 @@ export interface WebModeSettingsPatch {
   proxyEnabled?: boolean;
   proxyUrl?: string;
   providerTextScale?: number;
+}
+
+export interface WebModeProxyTestCheck {
+  id: "google" | "apple_music" | "spotify";
+  label: string;
+  url: string;
+  ok: boolean;
+}
+
+export interface WebModeProxyTestResponse {
+  ok: boolean;
+  message: string;
+  proxyUrl: string;
+  checks: WebModeProxyTestCheck[];
 }
 
 export interface RadioStationSummary {

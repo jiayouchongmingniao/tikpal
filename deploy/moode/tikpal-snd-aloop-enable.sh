@@ -5,7 +5,7 @@ set -euo pipefail
 # Run with sudo on the Pi before enabling Hi-Fi spectrum capture through Loopback.
 
 MODULES_LOAD_PATH="${MODULES_LOAD_PATH:-/etc/modules-load.d/tikpal-snd-aloop.conf}"
-ALSALOOP_CONF="${ALSALOOP_CONF:-/etc/alsa/conf.d/_sndaloop.conf}"
+ALSALOOP_CONF="${ALSALOOP_CONF:-/etc/tikpal/alsa-loopback.conf}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 TIKPAL_ALSA_LOG_PREFIX="${TIKPAL_ALSA_LOG_PREFIX:-tikpal-snd-aloop}"

@@ -2,6 +2,8 @@
 set -eu
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/tikpal-moodeutl.sh"
 
 run_as_root() {
   if [ "$(id -u)" -eq 0 ]; then
@@ -17,7 +19,7 @@ ensure_loopback_output() {
   TIKPAL_ALSA_LOG_PREFIX="${TIKPAL_ALSA_LOG_PREFIX:-tikpal-airplay}"
   # shellcheck disable=SC1091
   . "$SCRIPT_DIR/tikpal-alsa-loopback.sh"
-  tikpal_enable_alsa_loopback_output /etc/alsa/conf.d/_sndaloop.conf
+  tikpal_enable_alsa_loopback_output
 }
 
 shairport_config_changed=0
@@ -195,8 +197,30 @@ write_shairport_config() {
   rm -f "$tmp_path"
 }
 
+shairport_config_path() {
+  if [ -n "${TIKPAL_SHAIRPORT_SYNC_CONFIG:-}" ]; then
+    printf '%s\n' "$TIKPAL_SHAIRPORT_SYNC_CONFIG"
+    return 0
+  fi
+
+  if command -v systemctl >/dev/null 2>&1; then
+    config_path="$(
+      systemctl show --property=ExecStart --value shairport-sync.service 2>/dev/null \
+        | awk '{ for (i = 1; i < NF; i++) if ($i == "-c") { print $(i + 1); exit } }' \
+        | sed 's/^"//;s/"$//;s/[;}].*$//' \
+        | head -n 1
+    )"
+    if [ -n "$config_path" ] && [ -f "$config_path" ]; then
+      printf '%s\n' "$config_path"
+      return 0
+    fi
+  fi
+
+  printf '%s\n' /etc/shairport-sync.conf
+}
+
 ensure_shairport_config() {
-  config_path="${TIKPAL_SHAIRPORT_SYNC_CONFIG:-/etc/shairport-sync.conf}"
+  config_path="$(shairport_config_path)"
   output_device="${TIKPAL_AIRPLAY_ALSA_OUTPUT_DEVICE:-_audioout}"
 
   [ -f "$config_path" ] || return 0
@@ -234,6 +258,18 @@ shairport_receiver_running() {
   pgrep -f '[s]hairport-sync' >/dev/null 2>&1
 }
 
+nqptp_unit_available() {
+  systemctl show --property=LoadState --value nqptp.service 2>/dev/null | grep -qx 'loaded'
+}
+
+start_nqptp_when_available() {
+  nqptp_unit_available || return 0
+  systemctl start nqptp.service >/dev/null 2>&1 \
+    || sudo -n systemctl start nqptp.service >/dev/null 2>&1 \
+    || true
+  sleep 2
+}
+
 ensure_loopback_output
 ensure_shairport_hooks
 ensure_shairport_config
@@ -243,14 +279,10 @@ if [ -n "$airplay_artwork_root" ]; then
   run_as_root chown -R shairport-sync:shairport-sync "$airplay_artwork_root" >/dev/null 2>&1 || true
 fi
 
-moodeutl -Ro --airplay on
+tikpal_moodeutl -Ro --airplay on
 
 if command -v systemctl >/dev/null 2>&1; then
-  systemctl start nqptp.service >/dev/null 2>&1 \
-    || sudo -n systemctl start nqptp.service >/dev/null 2>&1 \
-    || true
-
-  sleep 2
+  start_nqptp_when_available
   if shairport_receiver_running; then
     systemctl reset-failed shairport-sync.service >/dev/null 2>&1 \
       || sudo -n systemctl reset-failed shairport-sync.service >/dev/null 2>&1 \

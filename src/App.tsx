@@ -11,11 +11,10 @@ import { useBrowserKioskGuard } from "./hooks/useBrowserKioskGuard";
 import { useKioskGestures } from "./hooks/useKioskGestures";
 import { useRoomExperience } from "./hooks/useRoomExperience";
 import { useTikpalState } from "./hooks/useTikpalState";
-import { fetchWebModeState, sendKioskHeartbeat, sendWebModeAction, updatePreferences } from "./api/tikpalClient";
+import { fetchWebModeState, sendKioskHeartbeat, sendWebModeAction } from "./api/tikpalClient";
 import { useI18n } from "./i18n";
-import type { AppMode, BackgroundVideoSummary, DisplaySleepStyle, FontTheme, LyricsFontSize, RememberedAudioSource, RoomExperienceActionRequest, RoomExperienceState, RoomMode, SourceSwitchTarget, SurfaceTheme, TikpalState } from "./types";
+import type { AppMode, BackgroundVideoSummary, DisplaySleepStyle, LyricsFontSize, RememberedAudioSource, RoomExperienceActionRequest, RoomExperienceState, RoomMode, SourceSwitchTarget, SurfaceTheme, TikpalState, WebModeState } from "./types";
 
-const FONT_THEME_STORAGE_KEY = "tikpal.fontTheme";
 const SURFACE_THEME_STORAGE_KEY = "tikpal.surfaceTheme";
 const LYRICS_VISIBLE_STORAGE_KEY = "tikpal.lyricsVisible.v3";
 const LYRICS_VISIBLE_AUTO_RESTORE_KEY = "tikpal.lyricsVisible.autoRestored.v1";
@@ -51,27 +50,12 @@ const DEFAULT_SCENE_VIDEO: BackgroundVideoSummary = {
   src: ""
 };
 
-type RoomModeChooserContext = "startup" | "explore-return";
+type RoomModeChooserContext = "startup";
 
 function readInitialMode(): AppMode {
   const mode = new URLSearchParams(window.location.search).get("mode");
   if (mode === "player" || mode === "quickSettings" || mode === "quickMenu") return mode;
   return "ambient";
-}
-
-function readInitialFontTheme(): FontTheme {
-  const savedTheme = window.localStorage.getItem(FONT_THEME_STORAGE_KEY);
-  if (
-    savedTheme === "system"
-    || savedTheme === "hardware"
-    || savedTheme === "precision"
-    || savedTheme === "sans"
-    || savedTheme === "serif"
-    || savedTheme === "mono"
-  ) {
-    return savedTheme;
-  }
-  return "system";
 }
 
 function readInitialSurfaceTheme(): SurfaceTheme {
@@ -300,7 +284,6 @@ function readActiveSceneVideoSnapshot() {
 
 export default function App() {
   const [now, setNow] = useState(() => new Date());
-  const [fontTheme, setFontTheme] = useState<FontTheme>(readInitialFontTheme);
   const [surfaceTheme, setSurfaceTheme] = useState<SurfaceTheme>(readInitialSurfaceTheme);
   const [lyricsVisible, setLyricsVisible] = useState(readInitialLyricsVisible);
   const [lyricsFontSize, setLyricsFontSize] = useState<LyricsFontSize>(readInitialLyricsFontSize);
@@ -309,6 +292,7 @@ export default function App() {
   const [screenOffActive, setScreenOffActive] = useState(false);
   const [screenSaverPreviewIndex, setScreenSaverPreviewIndex] = useState<number | null>(null);
   const [webModeActive, setWebModeActive] = useState(false);
+  const [webModeState, setWebModeState] = useState<WebModeState | null>(null);
   const [exploreClosing, setExploreClosing] = useState(false);
   const [exploreOpening, setExploreOpening] = useState(false);
   const [quickMenuProxyEnabled, setQuickMenuProxyEnabled] = useState<boolean | null>(null);
@@ -343,7 +327,6 @@ export default function App() {
   const webModeActiveRef = useRef(false);
   const sceneVideoReadyRef = useRef(false);
   const observedWebModeActiveRef = useRef(false);
-  const suppressExploreReturnChooserRef = useRef(false);
   const exploreClosingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const displaySleepLastActivityRef = useRef(Date.now());
   const { state: tikpalState, status: tikpalStatus, refresh, sendPlaybackAction, sendSystemAction, sendSourceSwitch } = useTikpalState();
@@ -354,7 +337,8 @@ export default function App() {
     hudAutoHideMs,
     hudAutoHidePaused
   });
-  const { locale, preferences, setDisplaySleepPreferences, t } = useI18n();
+  const { locale, preferences, setDisplaySleepPreferences, setFontTheme, t } = useI18n();
+  const fontTheme = preferences.fontTheme;
 
   useBrowserKioskGuard();
 
@@ -384,18 +368,9 @@ export default function App() {
     observedWebModeActiveRef.current = active;
     setWebModeSleepSuppressed(active);
 
-    if (active) {
-      suppressExploreReturnChooserRef.current = false;
-      setRoomModeChooserContext((current) => current === "explore-return" ? null : current);
-      return;
-    }
-
+    if (active) return;
     if (!wasActive) return;
-    const suppressChooser = suppressExploreReturnChooserRef.current;
-    suppressExploreReturnChooserRef.current = false;
-    if (suppressChooser) return;
     returnAmbient();
-    setRoomModeChooserContext("explore-return");
   }, [returnAmbient, setWebModeSleepSuppressed]);
 
   useEffect(() => {
@@ -475,7 +450,8 @@ export default function App() {
       try {
         const next = await fetchWebModeState();
         if (cancelled) return;
-        observeWebModeActivity(Boolean(next.activeProvider));
+        setWebModeState(next);
+        observeWebModeActivity(Boolean(next.activeProvider || next.openingProvider));
       } catch {
         // Keep the last known Explore state; this only gates the soft screen saver.
       }
@@ -685,14 +661,6 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    document.documentElement.dataset.fontTheme = fontTheme;
-    window.localStorage.setItem(FONT_THEME_STORAGE_KEY, fontTheme);
-    updatePreferences({ fontTheme }).catch(() => {
-      // The kiosk can keep rendering with localStorage; the API sync only keeps external helpers aligned.
-    });
-  }, [fontTheme]);
-
-  useEffect(() => {
     document.documentElement.dataset.surfaceTheme = surfaceTheme;
     window.localStorage.setItem(SURFACE_THEME_STORAGE_KEY, surfaceTheme);
   }, [surfaceTheme]);
@@ -827,7 +795,7 @@ export default function App() {
     // Run animation and API call in parallel
     const apiCall = (async () => {
       const nextWebMode = await sendWebModeAction({ type: "open" });
-      observeWebModeActivity(Boolean(nextWebMode.activeProvider));
+      observeWebModeActivity(Boolean(nextWebMode.activeProvider || nextWebMode.openingProvider));
       return nextWebMode;
     })();
     try {
@@ -1065,7 +1033,7 @@ export default function App() {
     setRoomModeSelectionPending(true);
     try {
       await handleRoomExperienceAction({ type: "set_mode", mode: nextMode });
-      if (chooserContext === "explore-return" || sceneVideoReadyRef.current) {
+      if (sceneVideoReadyRef.current) {
         setRoomModeChooserContext(null);
         setRoomModeSelectionPending(false);
       }
@@ -1114,11 +1082,9 @@ export default function App() {
 
     if (webMode?.activeProvider) {
       try {
-        suppressExploreReturnChooserRef.current = true;
         const nextWebMode = await sendWebModeAction({ type: "close" });
-        observeWebModeActivity(Boolean(nextWebMode.activeProvider));
+        observeWebModeActivity(Boolean(nextWebMode.activeProvider || nextWebMode.openingProvider));
       } catch {
-        suppressExploreReturnChooserRef.current = false;
         // The guide only makes sense on the room screen; if Explore close fails,
         // keep the request local and let the user retry from Settings.
         return;
@@ -1255,6 +1221,7 @@ export default function App() {
         sceneSoundEnabled={roomExperience.sceneSoundEnabled && !(onboardingActive && onboardingSoundMuted)}
         sourcePickerOpenRequest={ambientSourcePickerRequest}
         clockVisible={clockVisible}
+        webModeState={webModeState}
         onPlaybackAction={sendPlaybackAction}
         onSystemAction={sendSystemAction}
         onSourceSwitch={handleSourceSwitch}
@@ -1292,6 +1259,7 @@ export default function App() {
         playback={tikpalState.playback}
         audio={tikpalState.audio}
         system={tikpalState.system}
+        webModeState={webModeState}
         status={tikpalStatus}
         fontTheme={fontTheme}
         onPlaybackAction={sendPlaybackAction}

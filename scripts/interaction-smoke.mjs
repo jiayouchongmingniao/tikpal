@@ -477,6 +477,111 @@ async function restoreInteractionFetchMocks(client) {
   );
 }
 
+async function verifyExplorePrewarmGate(client) {
+  await evaluate(
+    client,
+    `
+      (() => {
+        if (!document.querySelector('[data-ambient-source-picker]')) {
+          document.querySelector('[data-ambient-source-toggle]')?.click();
+        }
+        return true;
+      })()
+    `
+  );
+  await expectEventually(client, "document.querySelector('[data-ambient-source-option=\"web-mode\"]') !== null", "Ambient source picker exposes Explore for prewarm gating");
+  await evaluate(
+    client,
+    `
+      (async () => {
+        if (window.__tikpalExplorePrewarmOriginalFetch) return true;
+        const nativeFetch = window.fetch.bind(window);
+        const response = await nativeFetch('/api/v1/web-mode/state', { headers: { Accept: 'application/json' } });
+        const webModeState = await response.json();
+        window.__tikpalExplorePrewarmOriginalFetch = nativeFetch;
+        window.__tikpalExplorePrewarmGateMode = 'prewarming';
+        window.__tikpalExplorePrewarmRequests = 0;
+        window.fetch = async (input, init) => {
+          const rawUrl = typeof input === 'string' ? input : input?.url;
+          const pathname = rawUrl ? new URL(rawUrl, window.location.href).pathname : '';
+          if (pathname !== '/api/v1/web-mode/state') return nativeFetch(input, init);
+          window.__tikpalExplorePrewarmRequests += 1;
+          if (window.__tikpalExplorePrewarmGateMode === 'failed') {
+            return new Response('unavailable', { status: 503, headers: { 'content-type': 'text/plain' } });
+          }
+          const terminalStatuses = ['ready', 'active', 'check_proxy', 'check_setup', 'region_unavailable'];
+          const residentProviders = Object.fromEntries(webModeState.providers.map((provider, index) => [
+            provider.id,
+            { status: terminalStatuses[index % terminalStatuses.length], lastError: null, updatedAt: null }
+          ]));
+          if (window.__tikpalExplorePrewarmGateMode === 'prewarming') {
+            residentProviders[webModeState.providers[0].id].status = 'prewarming';
+          }
+          if (window.__tikpalExplorePrewarmGateMode === 'missing') {
+            delete residentProviders[webModeState.providers[0].id];
+          }
+          return new Response(JSON.stringify({
+            ...webModeState,
+            residentProviders,
+            prewarmComplete: window.__tikpalExplorePrewarmGateMode === 'ready'
+          }), {
+            headers: { 'content-type': 'application/json' }
+          });
+        };
+        return true;
+      })()
+    `
+  );
+  await expectEventually(
+    client,
+    "document.querySelector('[data-ambient-source-option=\"web-mode\"]')?.disabled === true && document.querySelector('[data-ambient-source-option=\"web-mode\"]')?.getAttribute('aria-busy') === 'true' && document.querySelector('[data-ambient-source-option=\"web-mode\"] span:last-child')?.textContent?.trim() === 'Prewarming'",
+    "Explore stays disabled while any provider is prewarming",
+    30,
+    150
+  );
+  await evaluate(client, "window.__tikpalExplorePrewarmGateMode = 'missing'; true");
+  await expectEventually(
+    client,
+    "document.querySelector('[data-ambient-source-option=\"web-mode\"]')?.disabled === true && document.querySelector('[data-ambient-source-option=\"web-mode\"] span:last-child')?.textContent?.trim() === 'Prewarming'",
+    "Explore fails closed when a provider has no resident status",
+    30,
+    150
+  );
+  const failedPrewarmRequestsBefore = await evaluate(client, "window.__tikpalExplorePrewarmRequests");
+  await evaluate(client, "window.__tikpalExplorePrewarmGateMode = 'failed'; true");
+  await expectEventually(
+    client,
+    `window.__tikpalExplorePrewarmRequests > ${Number(failedPrewarmRequestsBefore)} && document.querySelector('[data-ambient-source-option="web-mode"]')?.disabled === true`,
+    "Explore remains disabled when the prewarm state request fails",
+    30,
+    150
+  );
+  await evaluate(client, "window.__tikpalExplorePrewarmGateMode = 'ready'; true");
+  await expectEventually(
+    client,
+    "document.querySelector('[data-ambient-source-option=\"web-mode\"]')?.disabled === false && document.querySelector('[data-ambient-source-option=\"web-mode\"]')?.getAttribute('aria-busy') === 'false' && document.querySelector('[data-ambient-source-option=\"web-mode\"] span:last-child')?.textContent?.trim() === 'Ready'",
+    "Explore shows Ready once every provider reaches a terminal prewarm state",
+    30,
+    150
+  );
+  await evaluate(
+    client,
+    `
+      (() => {
+        if (window.__tikpalExplorePrewarmOriginalFetch) {
+          window.fetch = window.__tikpalExplorePrewarmOriginalFetch;
+          delete window.__tikpalExplorePrewarmOriginalFetch;
+        }
+        delete window.__tikpalExplorePrewarmGateMode;
+        delete window.__tikpalExplorePrewarmRequests;
+        document.querySelector('[data-ambient-source-toggle]')?.click();
+        return true;
+      })()
+    `
+  );
+  await expectEventually(client, "document.querySelector('[data-ambient-source-picker]') === null", "Explore prewarm gate check restores the source picker state");
+}
+
 async function switchRoomModeAndNavigate(client, mode, label) {
   await restoreInteractionFetchMocks(client);
   await postExperienceAction(client, { type: "set_mode", mode });
@@ -1532,6 +1637,7 @@ try {
     `document.querySelector('.startup-mode-chooser') === null && document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') === ${JSON.stringify(startupDefaultMode)}`,
     "startup mode chooser defaults to the persisted room mode after 8 seconds"
   );
+  await verifyExplorePrewarmGate(client);
   await evaluate(
     client,
     `
@@ -1552,7 +1658,8 @@ try {
           if (pathname !== "/api/v1/web-mode/state") return nativeFetch(input, init);
           return new Response(JSON.stringify({
             ...webModeState,
-            activeProvider: window.__tikpalExploreReturnState === "active" ? "qq_music" : null
+            activeProvider: window.__tikpalExploreReturnState === "active" ? "qq_music" : null,
+            openingProvider: null
           }), {
             headers: { "content-type": "application/json" }
           });
@@ -1564,76 +1671,29 @@ try {
   await expectEventually(
     client,
     "document.querySelector('[data-room-mode-chooser-context=\"explore-return\"]') === null",
-    "Explore return chooser waits for an active-to-idle transition"
+    "Explore does not show a return chooser while active"
   );
+  const roomModeBeforeExploreClose = await evaluate(client, "document.querySelector('.ambient-screen')?.getAttribute('data-room-mode')");
   await wait(2300);
   await evaluate(client, "window.__tikpalExploreReturnState = 'idle'; true");
   await expectEventually(
     client,
-    "document.querySelector('[data-room-mode-chooser-context=\"explore-return\"]') !== null",
-    "Explore return chooser appears in the first idle poll after Explore closes",
+    `document.querySelector('[data-room-mode-chooser-context="explore-return"]') === null && document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') === ${JSON.stringify(roomModeBeforeExploreClose)} && window.__tikpalExploreReturnModePosts === 0`,
+    "Explore close returns directly to Ambient without changing the room mode",
     8,
     120
-  );
-  await expectEventually(
-    client,
-    `
-      (() => {
-        const chooser = document.querySelector('[data-room-mode-chooser-context="explore-return"]');
-        const cards = chooser?.querySelectorAll('.startup-mode-grid button') ?? [];
-        if (!chooser || cards.length !== 4) return false;
-        const chooserRect = chooser.getBoundingClientRect();
-        return chooserRect.width >= innerWidth - 1
-          && chooserRect.height >= innerHeight - 1
-          && getComputedStyle(chooser).backgroundImage.includes('rgba(0, 0, 0, 0.72)')
-          && [...cards].every((card) => {
-            const style = getComputedStyle(card);
-            return style.minHeight === '220px' && card.getBoundingClientRect().height >= 220;
-          });
-      })()
-    `,
-    "Explore close presents four large high-contrast room cards over a full return cover",
-    30,
-    150
   );
   await evaluate(client, "window.__tikpalExploreReturnState = 'active'; true");
   await expectEventually(
     client,
     "document.querySelector('[data-room-mode-chooser-context=\"explore-return\"]') === null",
-    "quick Explore reopen clears the previous return chooser"
+    "Explore reopen keeps the Ambient return surface clear"
   );
   await evaluate(client, "window.__tikpalExploreReturnState = 'idle'; true");
   await expectEventually(
     client,
-    "document.querySelector('[data-room-mode-chooser-context=\"explore-return\"]') !== null",
-    "Explore return chooser reopens after the next close"
-  );
-  const roomModeBeforeExploreReturnChoice = await evaluate(client, "document.querySelector('.ambient-screen')?.getAttribute('data-room-mode')");
-  await wait(5200);
-  await expectEventually(
-    client,
-    `document.querySelector('[data-room-mode-chooser-context="explore-return"]') === null && document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') === ${JSON.stringify(roomModeBeforeExploreReturnChoice)}`,
-    "Explore return chooser keeps the previous room mood when no card is selected"
-  );
-  await evaluate(client, "window.__tikpalExploreReturnState = 'active'; true");
-  await wait(2300);
-  await evaluate(client, "window.__tikpalExploreReturnState = 'idle'; true");
-  await expectEventually(client, "document.querySelector('[data-room-mode-chooser-context=\"explore-return\"]') !== null", "Explore return chooser opens again after a later close");
-  const exploreReturnModePostsBefore = await evaluate(client, "window.__tikpalExploreReturnModePosts");
-  await evaluate(
-    client,
-    `
-      (() => {
-        const target = document.querySelector('[data-room-mode-chooser-context="explore-return"] [data-startup-mode="sleep"]');
-        target?.click();
-        return Boolean(target);
-      })()
-    `
-  );
-  await expectEventually(
-    client,
-    `document.querySelector('[data-room-mode-chooser-context="explore-return"]') === null && document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') === 'sleep' && window.__tikpalExploreReturnModePosts === ${JSON.stringify(Number(exploreReturnModePostsBefore) + 1)}`,
-    "Explore return room choice applies once and closes the chooser"
+    `document.querySelector('[data-room-mode-chooser-context="explore-return"]') === null && document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') === ${JSON.stringify(roomModeBeforeExploreClose)} && window.__tikpalExploreReturnModePosts === 0`,
+    "later Explore closes also return directly without room-mode actions"
   );
   await evaluate(
     client,
@@ -4873,8 +4933,28 @@ try {
       (() => {
         window.__tikpalProxyRestartNativeFetch = window.fetch.bind(window);
         window.__tikpalProxyRestartRequests = [];
+        window.__tikpalProxyTestRequests = [];
+        window.__tikpalProxyTestMode = 'success';
         window.fetch = async (input, init) => {
           const url = String(input instanceof Request ? input.url : input);
+          if (url.includes('/api/v1/web-mode/proxy-test')) {
+            const body = JSON.parse(String(init?.body ?? '{}'));
+            window.__tikpalProxyTestRequests.push({ url, body });
+            const failed = window.__tikpalProxyTestMode === 'fail';
+            if (window.__tikpalProxyTestMode === 'deferred') {
+              return await new Promise((resolve) => { window.__tikpalResolveProxyTest = resolve; });
+            }
+            return new Response(JSON.stringify({
+              ok: !failed,
+              message: failed ? 'Proxy cannot reach Apple Music' : 'Proxy connectivity check passed',
+              proxyUrl: body.proxyUrl,
+              checks: [
+                { id: 'google', label: 'Google', url: 'https://www.google.com/', ok: true },
+                { id: 'apple_music', label: 'Apple Music', url: 'https://music.apple.com/', ok: !failed },
+                { id: 'spotify', label: 'Spotify', url: 'https://open.spotify.com/', ok: true }
+              ]
+            }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+          }
           if (url.includes('/api/v1/web-mode/settings') || url.includes('/api/v1/system/actions')) {
             window.__tikpalProxyRestartRequests.push({ url, body: JSON.parse(String(init?.body ?? '{}')) });
           }
@@ -4884,15 +4964,29 @@ try {
           return window.__tikpalProxyRestartNativeFetch(input, init);
         };
         window.__tikpalOriginalProxyEnabled = document.querySelector('[data-web-mode-proxy-toggle]')?.getAttribute('aria-pressed') === 'true';
-        document.querySelector('[data-web-mode-proxy-toggle]')?.click();
+        document.querySelector('[data-web-mode-proxy-test]')?.click();
         return window.__tikpalOriginalProxyEnabled;
       })()
     `
   );
-  await expect(
+  await expectEventually(
     client,
-    "document.querySelector('[data-web-mode-proxy-restart-confirm]')?.textContent.includes('Confirm proxy setting') && (window.__tikpalOriginalProxyEnabled ? document.querySelector('[data-web-mode-proxy-restart-confirm]')?.textContent.includes('Direct') : document.querySelector('[data-web-mode-proxy-restart-confirm]')?.textContent.includes('Proxy On')) && document.querySelector('[data-web-mode-proxy-toggle]')?.getAttribute('aria-pressed') === String(window.__tikpalOriginalProxyEnabled) && window.__tikpalProxyRestartRequests.length === 0",
-    "Console Proxy toggle asks for restart confirmation before saving"
+    "document.querySelector('[data-web-mode-proxy-validation].is-passed')?.textContent.includes('Google, Apple Music, and Spotify are reachable') && window.__tikpalProxyTestRequests.length === 1 && window.__tikpalProxyRestartRequests.length === 0",
+    "Console Proxy manually checks the current Proxy URL without saving or restarting"
+  );
+  await evaluate(
+    client,
+    `
+      (() => {
+        document.querySelector('[data-web-mode-proxy-toggle]')?.click();
+        return true;
+      })()
+    `
+  );
+  await expectEventually(
+    client,
+    "document.querySelector('[data-web-mode-proxy-restart-confirm]')?.textContent.includes('Confirm proxy setting') && (window.__tikpalOriginalProxyEnabled ? document.querySelector('[data-web-mode-proxy-restart-confirm]')?.textContent.includes('Direct') : document.querySelector('[data-web-mode-proxy-restart-confirm]')?.textContent.includes('Proxy On')) && document.querySelector('[data-web-mode-proxy-toggle]')?.getAttribute('aria-pressed') === String(window.__tikpalOriginalProxyEnabled) && window.__tikpalProxyRestartRequests.length === 0 && (window.__tikpalOriginalProxyEnabled || document.querySelector('[data-web-mode-proxy-restart-apply]')?.disabled === true)",
+    "Console Proxy toggle asks for restart confirmation before saving, and disables restart while Proxy On is being checked"
   );
   await evaluate(
     client,
@@ -4903,7 +4997,7 @@ try {
       })()
     `
   );
-  await expect(
+  await expectEventually(
     client,
     "document.querySelector('[data-web-mode-proxy-restart-confirm]') === null && document.querySelector('[data-web-mode-proxy-toggle]')?.getAttribute('aria-pressed') === String(window.__tikpalOriginalProxyEnabled) && window.__tikpalProxyRestartRequests.length === 0",
     "Console Proxy restart confirmation cancels without saving or restarting"
@@ -4913,6 +5007,19 @@ try {
     `
       (() => {
         document.querySelector('[data-web-mode-proxy-toggle]')?.click();
+        return true;
+      })()
+    `
+  );
+  await expectEventually(
+    client,
+    "document.querySelector('[data-web-mode-proxy-restart-confirm]') !== null && document.querySelector('[data-web-mode-proxy-restart-apply]')?.disabled === false && (window.__tikpalOriginalProxyEnabled || window.__tikpalProxyTestRequests.length >= 2)",
+    "Console Proxy enables restart only after a successful Proxy On check"
+  );
+  await evaluate(
+    client,
+    `
+      (() => {
         document.querySelector('[data-web-mode-proxy-restart-apply]')?.click();
         return true;
       })()
@@ -4937,6 +5044,19 @@ try {
           return currentFetch(input, init);
         };
         document.querySelector('[data-web-mode-proxy-toggle]')?.click();
+        return true;
+      })()
+    `
+  );
+  await expectEventually(
+    client,
+    "document.querySelector('[data-web-mode-proxy-restart-apply]')?.disabled === false && (!window.__tikpalOriginalProxyEnabled || window.__tikpalProxyTestRequests.length >= 1)",
+    "Console Proxy waits for its required connectivity check before reboot-error handling"
+  );
+  await evaluate(
+    client,
+    `
+      (() => {
         document.querySelector('[data-web-mode-proxy-restart-apply]')?.click();
         return true;
       })()
@@ -4990,12 +5110,99 @@ try {
     "!document.querySelector('.settings-detail-header p')?.textContent.includes('Enter a complete proxy URL')",
     "Console Proxy clears the invalid URL warning after a valid URL is restored"
   );
+  await evaluate(
+    client,
+    `
+      (() => {
+        window.__tikpalProxyTestMode = 'fail';
+        window.__tikpalProxyFailureRequestCount = window.__tikpalProxyRestartRequests.length;
+        document.querySelector('[data-web-mode-proxy-toggle]')?.click();
+        return true;
+      })()
+    `
+  );
+  await expectEventually(
+    client,
+    "document.querySelector('[data-web-mode-proxy-validation].is-failed')?.textContent.includes('Cannot reach Apple Music') && document.querySelector('[data-web-mode-proxy-restart-apply]')?.disabled === true && window.__tikpalProxyRestartRequests.length === window.__tikpalProxyFailureRequestCount",
+    "Console Proxy keeps restart disabled and does not save when Apple Music cannot be reached"
+  );
+  await evaluate(
+    client,
+    `
+      (() => {
+        document.querySelector('[data-web-mode-proxy-restart-apply]')?.click();
+        document.querySelector('[data-web-mode-proxy-restart-cancel]')?.click();
+        window.__tikpalProxyTestMode = 'success';
+        return true;
+      })()
+    `
+  );
+  await expect(
+    client,
+    "document.querySelector('[data-web-mode-proxy-restart-confirm]') === null && window.__tikpalProxyRestartRequests.length === window.__tikpalProxyFailureRequestCount",
+    "Console Proxy failure can be cancelled without saving or restarting"
+  );
+  await evaluate(
+    client,
+    `
+      (() => {
+        window.__tikpalProxyTestMode = 'deferred';
+        window.__tikpalProxyDeferredTestCount = window.__tikpalProxyTestRequests.length;
+        window.__tikpalProxyDeferredRestartCount = window.__tikpalProxyRestartRequests.length;
+        document.querySelector('[data-web-mode-proxy-toggle]')?.click();
+        return true;
+      })()
+    `
+  );
+  await expectEventually(
+    client,
+    "window.__tikpalProxyTestRequests.length === window.__tikpalProxyDeferredTestCount + 1 && document.querySelector('[data-web-mode-proxy-restart-apply]')?.disabled === true && typeof window.__tikpalResolveProxyTest === 'function'",
+    "Console Proxy keeps restart disabled while a current Proxy check is pending"
+  );
+  await evaluate(
+    client,
+    `
+      (() => {
+        document.querySelector('[data-web-mode-proxy-restart-cancel]')?.click();
+        window.__tikpalResolveProxyTest(new Response(JSON.stringify({
+          ok: true,
+          message: 'Proxy connectivity check passed',
+          proxyUrl: 'http://127.0.0.1:7897',
+          checks: [
+            { id: 'google', label: 'Google', url: 'https://www.google.com/', ok: true },
+            { id: 'apple_music', label: 'Apple Music', url: 'https://music.apple.com/', ok: true },
+            { id: 'spotify', label: 'Spotify', url: 'https://open.spotify.com/', ok: true }
+          ]
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+        window.__tikpalProxyTestMode = 'success';
+        return true;
+      })()
+    `
+  );
+  await expectEventually(
+    client,
+    "document.querySelector('[data-web-mode-proxy-restart-confirm]') === null && window.__tikpalProxyRestartRequests.length === window.__tikpalProxyDeferredRestartCount",
+    "Console Proxy ignores a completed check after its confirmation is cancelled"
+  );
   if (await evaluate(client, "window.__tikpalOriginalProxyEnabled")) {
     await evaluate(
       client,
       `
         (() => {
           document.querySelector('[data-web-mode-proxy-toggle]')?.click();
+          return true;
+        })()
+      `
+    );
+    await expectEventually(
+      client,
+      "document.querySelector('[data-web-mode-proxy-restart-apply]')?.disabled === false && window.__tikpalProxyTestRequests.length >= 1",
+      "Console Proxy rechecks a restored Proxy On setting before allowing restart"
+    );
+    await evaluate(
+      client,
+      `
+        (() => {
           document.querySelector('[data-web-mode-proxy-restart-apply]')?.click();
           return true;
         })()
@@ -5014,6 +5221,12 @@ try {
         if (window.__tikpalProxyRestartNativeFetch) window.fetch = window.__tikpalProxyRestartNativeFetch;
         delete window.__tikpalProxyRestartNativeFetch;
         delete window.__tikpalProxyRestartRequests;
+        delete window.__tikpalProxyTestRequests;
+        delete window.__tikpalProxyTestMode;
+        delete window.__tikpalProxyFailureRequestCount;
+        delete window.__tikpalProxyDeferredTestCount;
+        delete window.__tikpalProxyDeferredRestartCount;
+        delete window.__tikpalResolveProxyTest;
         delete window.__tikpalOriginalProxyEnabled;
         return true;
       })()

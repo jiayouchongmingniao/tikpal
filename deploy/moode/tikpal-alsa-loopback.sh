@@ -1,9 +1,11 @@
 #!/bin/sh
 
-# Shared guard for moOde ALSA Loopback. Tikpal should follow moOde's current
-# physical output, and most installs use a USB speaker or amplifier rather than HDMI.
+# Shared guard for Tikpal ALSA Loopback. The device owns its base _audioout
+# route; Tikpal mirrors that route only after the base configuration is loaded.
 
 TIKPAL_ALSA_LOG_PREFIX="${TIKPAL_ALSA_LOG_PREFIX:-tikpal-alsa}"
+TIKPAL_ALSA_POSTLOAD_BEGIN="# BEGIN Tikpal ALSA Loopback"
+TIKPAL_ALSA_POSTLOAD_END="# END Tikpal ALSA Loopback"
 
 tikpal_alsa_log() {
   printf '[%s] %s\n' "$TIKPAL_ALSA_LOG_PREFIX" "$*"
@@ -61,26 +63,21 @@ tikpal_modprobe_snd_aloop() {
     || tikpal_run_as_root "$modprobe_cmd" snd-aloop >/dev/null 2>&1
 }
 
-tikpal_alsa_config_targets() {
-  config_path="$1"
-  awk '
-    {
-      line = $0
-      while (match(line, /pcm[[:space:]]+"[^"]+"/)) {
-        token = substr(line, RSTART, RLENGTH)
-        sub(/^pcm[[:space:]]+"/, "", token)
-        sub(/"$/, "", token)
-        if (token != "" && token !~ /Loopback/) print token
-        line = substr(line, RSTART + RLENGTH)
-      }
-    }
-  ' "$config_path" | awk 'NF && !seen[$0]++'
-}
-
 tikpal_alsa_target_is_hdmi() {
   target="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
   case "$target" in
     *vc4hdmi*|*bcm2835*|*hdmi*)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+tikpal_alsa_target_is_loopback() {
+  case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
+    *loopback*)
       return 0
       ;;
     *)
@@ -114,25 +111,80 @@ tikpal_alsa_normalize_pcm_target() {
   printf '%s\n' "$target"
 }
 
+# Extract only the PCM that the currently configured _audioout routes to. Do
+# not scan every PCM value: that is how an arbitrary sound card became MID.
+tikpal_alsa_audioout_slave_target() {
+  config_path="$1"
+  [ -r "$config_path" ] || return 1
+
+  awk '
+    function brace_delta(value, copy) {
+      copy = value
+      opens = gsub(/\{/, "", copy)
+      copy = value
+      closes = gsub(/\}/, "", copy)
+      return opens - closes
+    }
+    function quoted_pcm(value, token) {
+      token = value
+      sub(/^[^"]*"/, "", token)
+      sub(/".*$/, "", token)
+      return token
+    }
+    {
+      line = $0
+      sub(/[[:space:]]*#.*/, "", line)
+      if (!inside) {
+        if (line ~ /^[[:space:]]*pcm\._audioout[[:space:]]*\{/) {
+          inside = 1
+          depth = brace_delta(line)
+        }
+        next
+      }
+
+      if (line ~ /slave\.pcm[[:space:]]+"[^"]+"/) {
+        print quoted_pcm(line)
+        exit
+      }
+      if (line ~ /^[[:space:]]*slave[[:space:]]*\{/) {
+        inside_slave = 1
+        slave_depth = brace_delta(line)
+      }
+      if (inside_slave && line ~ /pcm[[:space:]]+"[^"]+"/) {
+        print quoted_pcm(line)
+        exit
+      }
+
+      depth += brace_delta(line)
+      if (inside_slave) {
+        slave_depth += brace_delta(line)
+        if (slave_depth <= 0) inside_slave = 0
+      }
+      if (depth <= 0) exit
+    }
+  ' "$config_path" | head -n 1
+}
+
 tikpal_alsa_base_audioout_target() {
-  config_path="${1:-/etc/alsa/conf.d/_audioout.conf}"
-  [ -f "$config_path" ] || return 1
-  target="$(
-    tikpal_alsa_config_targets "$config_path" \
-      | while IFS= read -r candidate; do
-          [ -n "$candidate" ] || continue
-          case "$candidate" in
-            *Loopback*) continue ;;
-          esac
-          normalized="$(tikpal_alsa_normalize_pcm_target "$candidate")"
-          if [ -n "$normalized" ] && ! tikpal_alsa_target_is_hdmi "$normalized"; then
-            printf '%s\n' "$normalized"
-            break
-          fi
-        done
-  )"
-  [ -n "$target" ] || return 1
-  printf '%s\n' "$target"
+  if [ -n "${TIKPAL_ALSA_BASE_AUDIOOUT_CONFIG:-}" ]; then
+    config_paths="$TIKPAL_ALSA_BASE_AUDIOOUT_CONFIG"
+  else
+    config_paths="${TIKPAL_ALSA_BASE_AUDIOOUT_CONFIGS:-/etc/asound.conf /etc/alsa/conf.d/_audioout.conf}"
+  fi
+
+  for config_path in $config_paths; do
+    target="$(tikpal_alsa_audioout_slave_target "$config_path" || true)"
+    [ -n "$target" ] || continue
+    target="$(tikpal_alsa_normalize_pcm_target "$target")"
+    case "$target" in
+      _audioout|!_audioout) continue ;;
+    esac
+    tikpal_alsa_target_is_loopback "$target" && continue
+    printf '%s\n' "$target"
+    return 0
+  done
+
+  return 1
 }
 
 tikpal_alsa_detect_playback_target() {
@@ -141,71 +193,112 @@ tikpal_alsa_detect_playback_target() {
     return 0
   fi
 
-  base_target="$(tikpal_alsa_base_audioout_target "${TIKPAL_ALSA_BASE_AUDIOOUT_CONFIG:-/etc/alsa/conf.d/_audioout.conf}" || true)"
-  if [ -n "$base_target" ]; then
-    printf '%s\n' "$base_target"
+  tikpal_alsa_base_audioout_target
+}
+
+tikpal_alsa_backup_path() {
+  printf '%s.bak.%s\n' "$1" "$(date +%Y%m%d%H%M%S)"
+}
+
+tikpal_alsa_install_managed_file() {
+  source_path="$1"
+  target_path="$2"
+  TIKPAL_ALSA_INSTALL_BACKUP=""
+  TIKPAL_ALSA_INSTALL_CREATED=0
+
+  if [ -f "$target_path" ] && cmp -s "$source_path" "$target_path"; then
     return 0
   fi
+  if [ -f "$target_path" ]; then
+    TIKPAL_ALSA_INSTALL_BACKUP="$(tikpal_alsa_backup_path "$target_path")"
+    tikpal_run_as_root cp -p "$target_path" "$TIKPAL_ALSA_INSTALL_BACKUP" || return 1
+  else
+    TIKPAL_ALSA_INSTALL_CREATED=1
+  fi
 
-  aplay -l 2>/dev/null | awk '
-    /^card [0-9]+:/ && / device [0-9]+:/ {
-      line = $0
-      low = tolower(line)
-      if (low ~ /loopback|vc4-hdmi|vc4hdmi|bcm2835|hdmi/) next
-      card_id = $3
-      device_id = $6
-      sub(/:$/, "", device_id)
-      if (card_id != "" && device_id != "") {
-        print "plughw:CARD=" card_id ",DEV=" device_id
-        exit
-      }
-    }
-  '
+  tikpal_run_as_root install -d -o root -g root -m 0755 "$(dirname "$target_path")" || return 1
+  tikpal_run_as_root install -o root -g root -m 0644 "$source_path" "$target_path"
+}
+
+tikpal_alsa_rollback_managed_file() {
+  target_path="$1"
+  backup_path="$2"
+  created="$3"
+
+  if [ -n "$backup_path" ]; then
+    tikpal_run_as_root cp -p "$backup_path" "$target_path"
+  elif [ "$created" -eq 1 ]; then
+    tikpal_run_as_root rm -f "$target_path"
+  fi
 }
 
 tikpal_write_alsa_loopback_config() {
   config_path="$1"
   physical_target="$2"
+  case "$physical_target" in
+    *'"'*|*'\\'*)
+      tikpal_alsa_warn "refusing an unsafe _audioout PCM target"
+      return 1
+      ;;
+  esac
   tmp_path="$(mktemp)"
 
   {
     printf '%s\n' '#########################################'
-    printf '%s\n' '# This file is managed by Tikpal for moOde ALSA Loopback'
+    printf '%s\n' '# This file is managed by Tikpal for ALSA Loopback'
+    printf '%s\n' '# It is included after the device-owned _audioout route.'
     printf '%s\n' '#########################################'
     printf '%s\n' 'pcm.!_audioout {'
-    printf '%s\n' 'type plug'
-    printf '%s\n' 'slave.pcm {'
-    printf '%s\n' 'type multi'
-    printf '%s\n' 'slaves {'
-    printf '%s\n' "a { channels 2 pcm \"$physical_target\" }"
-    printf '%s\n' 'b { channels 2 pcm "hw:CARD=Loopback,DEV=0" }'
-    printf '%s\n' '}'
-    printf '%s\n' 'bindings {'
-    printf '%s\n' '0 { slave a channel 0 }'
-    printf '%s\n' '1 { slave a channel 1 }'
-    printf '%s\n' '2 { slave b channel 0 }'
-    printf '%s\n' '3 { slave b channel 1 }'
-    printf '%s\n' '}'
-    printf '%s\n' '}'
-    printf '%s\n' 'ttable ['
-    printf '%s\n' '[ 1 0 1 0 ]'
-    printf '%s\n' '[ 0 1 0 1 ]'
-    printf '%s\n' ']'
+    printf '%s\n' '  type plug'
+    printf '%s\n' '  slave.pcm {'
+    printf '%s\n' '    type multi'
+    printf '%s\n' '    slaves {'
+    printf '%s\n' "      a { channels 2 pcm \"$physical_target\" }"
+    printf '%s\n' '      b { channels 2 pcm "hw:CARD=Loopback,DEV=0" }'
+    printf '%s\n' '    }'
+    printf '%s\n' '    bindings {'
+    printf '%s\n' '      0 { slave a channel 0 }'
+    printf '%s\n' '      1 { slave a channel 1 }'
+    printf '%s\n' '      2 { slave b channel 0 }'
+    printf '%s\n' '      3 { slave b channel 1 }'
+    printf '%s\n' '    }'
+    printf '%s\n' '  }'
+    printf '%s\n' '  ttable ['
+    printf '%s\n' '    [ 1 0 1 0 ]'
+    printf '%s\n' '    [ 0 1 0 1 ]'
+    printf '%s\n' '  ]'
     printf '%s\n' '}'
   } > "$tmp_path" || {
     rm -f "$tmp_path"
     return 1
   }
 
-  tikpal_run_as_root cp "$tmp_path" "$config_path" || {
-    rm -f "$tmp_path"
-    return 1
-  }
+  tikpal_alsa_install_managed_file "$tmp_path" "$config_path"
+  result=$?
+  TIKPAL_ALSA_CONFIG_BACKUP="$TIKPAL_ALSA_INSTALL_BACKUP"
+  TIKPAL_ALSA_CONFIG_CREATED="$TIKPAL_ALSA_INSTALL_CREATED"
   rm -f "$tmp_path"
+  return "$result"
+}
+
+tikpal_alsa_config_targets() {
+  config_path="$1"
+  awk '
+    {
+      line = $0
+      while (match(line, /pcm[[:space:]]+"[^"]+"/)) {
+        token = substr(line, RSTART, RLENGTH)
+        sub(/^pcm[[:space:]]+"/, "", token)
+        sub(/"$/, "", token)
+        if (token != "" && token !~ /Loopback/) print token
+        line = substr(line, RSTART + RLENGTH)
+      }
+    }
+  ' "$config_path" | awk 'NF && !seen[$0]++'
 }
 
 tikpal_validate_alsa_loopback_config() {
-  config_path="${1:-/etc/alsa/conf.d/_sndaloop.conf}"
+  config_path="${1:-${TIKPAL_ALSA_LOOPBACK_CONFIG:-/etc/tikpal/alsa-loopback.conf}}"
 
   [ -f "$config_path" ] || return 0
 
@@ -234,8 +327,57 @@ tikpal_validate_alsa_loopback_config() {
   fi
 
   tikpal_alsa_warn "$config_path routes _audioout only to HDMI target(s): $hdmi_targets"
-  tikpal_alsa_warn "select the USB output in moOde before enabling Tikpal Loopback, or set TIKPAL_ALSA_LOOPBACK_ALLOW_HDMI=1 for an intentional HDMI install"
+  tikpal_alsa_warn "select a non-HDMI output before enabling Tikpal Loopback, or set TIKPAL_ALSA_LOOPBACK_ALLOW_HDMI=1 for an intentional HDMI install"
   return 1
+}
+
+tikpal_alsa_disable_legacy_loopback_config() {
+  legacy_path="$1"
+  [ -f "$legacy_path" ] || return 0
+  if ! grep -Eq 'managed by Tikpal|Tikpal Gentoo' "$legacy_path"; then
+    tikpal_alsa_warn "refusing to move unrecognised legacy ALSA config: $legacy_path"
+    return 1
+  fi
+
+  TIKPAL_ALSA_LEGACY_BACKUP="${legacy_path}.disabled.$(date +%Y%m%d%H%M%S)"
+  tikpal_run_as_root mv "$legacy_path" "$TIKPAL_ALSA_LEGACY_BACKUP" || return 1
+  tikpal_alsa_log "disabled legacy preloaded config $legacy_path"
+}
+
+tikpal_alsa_restore_legacy_loopback_config() {
+  legacy_path="$1"
+  [ -n "${TIKPAL_ALSA_LEGACY_BACKUP:-}" ] || return 0
+  [ -f "$TIKPAL_ALSA_LEGACY_BACKUP" ] || return 0
+  tikpal_run_as_root mv "$TIKPAL_ALSA_LEGACY_BACKUP" "$legacy_path"
+}
+
+tikpal_alsa_write_postload_include() {
+  base_config="$1"
+  loopback_config="$2"
+  tmp_path="$(mktemp)"
+
+  if [ -f "$base_config" ]; then
+    awk -v begin="$TIKPAL_ALSA_POSTLOAD_BEGIN" -v end="$TIKPAL_ALSA_POSTLOAD_END" '
+      $0 == begin { skipping = 1; next }
+      skipping && $0 == end { skipping = 0; next }
+      !skipping { print }
+      END { if (skipping) exit 2 }
+    ' "$base_config" > "$tmp_path" || {
+      rm -f "$tmp_path"
+      tikpal_alsa_warn "could not update Tikpal ALSA include in $base_config"
+      return 1
+    }
+  else
+    : > "$tmp_path"
+  fi
+
+  printf '\n%s\n<%s>\n%s\n' "$TIKPAL_ALSA_POSTLOAD_BEGIN" "$loopback_config" "$TIKPAL_ALSA_POSTLOAD_END" >> "$tmp_path"
+  tikpal_alsa_install_managed_file "$tmp_path" "$base_config"
+  result=$?
+  TIKPAL_ALSA_BASE_BACKUP="$TIKPAL_ALSA_INSTALL_BACKUP"
+  TIKPAL_ALSA_BASE_CREATED="$TIKPAL_ALSA_INSTALL_CREATED"
+  rm -f "$tmp_path"
+  return "$result"
 }
 
 tikpal_ensure_snd_aloop_loaded() {
@@ -255,27 +397,51 @@ tikpal_ensure_snd_aloop_loaded() {
   return 1
 }
 
+tikpal_alsa_config_parses() {
+  aplay -L >/dev/null 2>&1
+}
+
 tikpal_enable_alsa_loopback_output() {
-  config_path="${1:-/etc/alsa/conf.d/_sndaloop.conf}"
+  config_path="${1:-${TIKPAL_ALSA_LOOPBACK_CONFIG:-/etc/tikpal/alsa-loopback.conf}}"
+  base_config="${TIKPAL_ALSA_BASE_CONFIG:-/etc/asound.conf}"
+  legacy_config="${TIKPAL_ALSA_LEGACY_LOOPBACK_CONFIG:-/etc/alsa/conf.d/_sndaloop.conf}"
   physical_target="$(tikpal_alsa_detect_playback_target || true)"
 
-  if [ -n "$physical_target" ]; then
-    if tikpal_alsa_target_is_hdmi "$physical_target" && ! tikpal_alsa_bool_enabled "${TIKPAL_ALSA_LOOPBACK_ALLOW_HDMI:-0}"; then
-      tikpal_alsa_warn "detected HDMI-only ALSA Loopback target: $physical_target"
-      tikpal_alsa_warn "select the USB output in moOde before enabling Tikpal Loopback, or set TIKPAL_ALSA_LOOPBACK_ALLOW_HDMI=1 for an intentional HDMI install"
-      return 1
-    fi
-    tikpal_write_alsa_loopback_config "$config_path" "$physical_target" || return 1
-    tikpal_alsa_log "wrote $config_path for physical output $physical_target"
+  if [ -z "$physical_target" ]; then
+    tikpal_alsa_warn "could not resolve the active _audioout route; refusing to choose an arbitrary sound card"
+    return 1
+  fi
+  if tikpal_alsa_target_is_hdmi "$physical_target" && ! tikpal_alsa_bool_enabled "${TIKPAL_ALSA_LOOPBACK_ALLOW_HDMI:-0}"; then
+    tikpal_alsa_warn "detected HDMI-only ALSA Loopback target: $physical_target"
+    tikpal_alsa_warn "select a non-HDMI output before enabling Tikpal Loopback, or set TIKPAL_ALSA_LOOPBACK_ALLOW_HDMI=1 for an intentional HDMI install"
+    return 1
+  fi
+  if ! tikpal_ensure_snd_aloop_loaded; then
+    return 1
   fi
 
-  if [ -f "$config_path" ]; then
-    tikpal_validate_alsa_loopback_config "$config_path" || return 1
-    tikpal_run_as_root sed -i '0,/_audioout__ {/s//_audioout {/' "$config_path" || return 1
-    tikpal_alsa_log "ensured $config_path overrides _audioout"
-  else
-    tikpal_alsa_warn "$config_path is not present; loading snd-aloop is still safe"
+  TIKPAL_ALSA_LEGACY_BACKUP=""
+  tikpal_write_alsa_loopback_config "$config_path" "$physical_target" || return 1
+  if ! tikpal_validate_alsa_loopback_config "$config_path"; then
+    tikpal_alsa_rollback_managed_file "$config_path" "$TIKPAL_ALSA_CONFIG_BACKUP" "$TIKPAL_ALSA_CONFIG_CREATED"
+    return 1
+  fi
+  if [ "$legacy_config" != "$config_path" ] && ! tikpal_alsa_disable_legacy_loopback_config "$legacy_config"; then
+    tikpal_alsa_rollback_managed_file "$config_path" "$TIKPAL_ALSA_CONFIG_BACKUP" "$TIKPAL_ALSA_CONFIG_CREATED"
+    return 1
+  fi
+  if ! tikpal_alsa_write_postload_include "$base_config" "$config_path"; then
+    tikpal_alsa_restore_legacy_loopback_config "$legacy_config"
+    tikpal_alsa_rollback_managed_file "$config_path" "$TIKPAL_ALSA_CONFIG_BACKUP" "$TIKPAL_ALSA_CONFIG_CREATED"
+    return 1
+  fi
+  if ! tikpal_alsa_config_parses; then
+    tikpal_alsa_warn "ALSA rejected the Tikpal postload configuration; restoring the prior files"
+    tikpal_alsa_rollback_managed_file "$base_config" "$TIKPAL_ALSA_BASE_BACKUP" "$TIKPAL_ALSA_BASE_CREATED"
+    tikpal_alsa_restore_legacy_loopback_config "$legacy_config"
+    tikpal_alsa_rollback_managed_file "$config_path" "$TIKPAL_ALSA_CONFIG_BACKUP" "$TIKPAL_ALSA_CONFIG_CREATED"
+    return 1
   fi
 
-  tikpal_ensure_snd_aloop_loaded
+  tikpal_alsa_log "mirroring _audioout through $physical_target and ALSA Loopback"
 }

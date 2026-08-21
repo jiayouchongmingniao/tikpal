@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-moodeutl -Ro --spotify off >/dev/null 2>&1 || true
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/tikpal-moodeutl.sh"
+
+tikpal_moodeutl -Ro --spotify off >/dev/null 2>&1 || true
 
 command -v pgrep >/dev/null 2>&1 || exit 0
 mapfile -t pids < <(

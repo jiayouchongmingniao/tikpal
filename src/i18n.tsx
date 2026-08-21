@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from "react";
 import { fetchPreferences, updatePreferences } from "./api/tikpalClient";
 import type { AudioLibraryStorageId, AudioOutputCustomSettings, AudioOutputProfile, DisplaySleepStyle, FontTheme, MpdBitPerfectMode, PlaybackState, SourceState, UiLocale, UiPreferences, UiInputMethodId, RoomMode } from "./types";
 
@@ -2535,6 +2535,9 @@ Object.assign(dictionaries.en, {
   "settings.proxyRestartConfirmBody": "Switch to {state}? Confirm only if this setting is correct. The system will restart to apply it.",
   "settings.proxyRestartConfirmWithUrlBody": "Save Proxy URL {url} and restart to apply?",
   "settings.proxyRestartConfirmAction": "Confirm & restart",
+  "settings.proxyCheckChecking": "Checking Google, Apple Music, and Spotify through this Proxy URL…",
+  "settings.proxyCheckPassed": "Google, Apple Music, and Spotify are reachable. You can restart now.",
+  "settings.proxyCheckFailed": "Cannot reach {sites} through this Proxy URL. Update it to try again.",
   "settings.systemRestarting": "Restarting system…",
 });
 
@@ -2543,6 +2546,9 @@ Object.assign(dictionaries["zh-CN"], {
   "settings.proxyRestartConfirmTitle": "确认代理设置",
   "settings.proxyRestartConfirmBody": "将切换为 {state}。请确认设置正确；系统将重启以应用此设置。",
   "settings.proxyRestartConfirmAction": "确认并重启",
+  "settings.proxyCheckChecking": "正在通过此代理 URL 检查 Google、Apple Music 和 Spotify…",
+  "settings.proxyCheckPassed": "Google、Apple Music 和 Spotify 均可访问，现在可以重启。",
+  "settings.proxyCheckFailed": "无法通过此代理 URL 访问 {sites}。请修改后重试。",
   "settings.systemRestarting": "系统正在重启…",
 });
 
@@ -2551,6 +2557,9 @@ Object.assign(dictionaries.de, {
   "settings.proxyRestartConfirmTitle": "Proxy-Einstellung bestätigen",
   "settings.proxyRestartConfirmBody": "Zu {state} wechseln? Nur bestätigen, wenn diese Einstellung korrekt ist. Das System startet zum Anwenden neu.",
   "settings.proxyRestartConfirmAction": "Bestätigen & neu starten",
+  "settings.proxyCheckChecking": "Google, Apple Music und Spotify werden über diese Proxy-URL geprüft…",
+  "settings.proxyCheckPassed": "Google, Apple Music und Spotify sind erreichbar. Sie können jetzt neu starten.",
+  "settings.proxyCheckFailed": "{sites} ist über diese Proxy-URL nicht erreichbar. Aktualisieren Sie die URL und versuchen Sie es erneut.",
   "settings.systemRestarting": "System wird neu gestartet…",
 });
 
@@ -2559,6 +2568,9 @@ Object.assign(dictionaries.it, {
   "settings.proxyRestartConfirmTitle": "Conferma impostazione proxy",
   "settings.proxyRestartConfirmBody": "Passare a {state}? Conferma solo se questa impostazione è corretta. Il sistema si riavvierà per applicarla.",
   "settings.proxyRestartConfirmAction": "Conferma e riavvia",
+  "settings.proxyCheckChecking": "Verifica di Google, Apple Music e Spotify tramite questo URL proxy…",
+  "settings.proxyCheckPassed": "Google, Apple Music e Spotify sono raggiungibili. Ora puoi riavviare.",
+  "settings.proxyCheckFailed": "Impossibile raggiungere {sites} tramite questo URL proxy. Aggiornalo e riprova.",
   "settings.systemRestarting": "Riavvio del sistema…",
 });
 
@@ -2567,6 +2579,9 @@ Object.assign(dictionaries.ko, {
   "settings.proxyRestartConfirmTitle": "프록시 설정 확인",
   "settings.proxyRestartConfirmBody": "{state}(으)로 전환할까요? 설정이 올바른 경우에만 확인하세요. 적용하려면 시스템이 재시작됩니다.",
   "settings.proxyRestartConfirmAction": "확인 후 재시작",
+  "settings.proxyCheckChecking": "이 프록시 URL로 Google, Apple Music, Spotify를 확인하는 중…",
+  "settings.proxyCheckPassed": "Google, Apple Music, Spotify에 연결할 수 있습니다. 이제 재시작할 수 있습니다.",
+  "settings.proxyCheckFailed": "이 프록시 URL로 {sites}에 연결할 수 없습니다. URL을 수정한 뒤 다시 시도하세요.",
   "settings.systemRestarting": "시스템을 재시작하는 중…",
 });
 
@@ -2575,6 +2590,9 @@ Object.assign(dictionaries.ja, {
   "settings.proxyRestartConfirmTitle": "プロキシ設定を確認",
   "settings.proxyRestartConfirmBody": "{state} に切り替えますか？設定が正しい場合のみ確認してください。適用するためシステムを再起動します。",
   "settings.proxyRestartConfirmAction": "確認して再起動",
+  "settings.proxyCheckChecking": "このプロキシURLでGoogle、Apple Music、Spotifyを確認しています…",
+  "settings.proxyCheckPassed": "Google、Apple Music、Spotifyに接続できます。再起動できます。",
+  "settings.proxyCheckFailed": "このプロキシURLで{sites}に接続できません。URLを修正して再試行してください。",
   "settings.systemRestarting": "システムを再起動しています…",
 });
 
@@ -2583,6 +2601,9 @@ Object.assign(dictionaries.es, {
   "settings.proxyRestartConfirmTitle": "Confirmar ajuste de proxy",
   "settings.proxyRestartConfirmBody": "¿Cambiar a {state}? Confirma solo si este ajuste es correcto. El sistema se reiniciará para aplicarlo.",
   "settings.proxyRestartConfirmAction": "Confirmar y reiniciar",
+  "settings.proxyCheckChecking": "Comprobando Google, Apple Music y Spotify con esta URL proxy…",
+  "settings.proxyCheckPassed": "Google, Apple Music y Spotify son accesibles. Ya puedes reiniciar.",
+  "settings.proxyCheckFailed": "No se puede acceder a {sites} con esta URL proxy. Actualízala y vuelve a intentarlo.",
   "settings.systemRestarting": "Reiniciando el sistema…",
 });
 
@@ -2609,6 +2630,17 @@ function readStoredLocale(): UiLocale | null {
   return languageOptions.some((option) => option.locale === storedLocale) ? locale : null;
 }
 
+function fontThemeFromValue(value: unknown): FontTheme {
+  const theme = String(value ?? "").trim() as FontTheme;
+  return fontThemeOptions.includes(theme) ? theme : defaultPreferences.fontTheme;
+}
+
+function readStoredFontTheme(): FontTheme | null {
+  const storedTheme = window.localStorage.getItem(FONT_THEME_STORAGE_KEY);
+  if (storedTheme === null) return null;
+  return fontThemeOptions.includes(storedTheme as FontTheme) ? storedTheme as FontTheme : null;
+}
+
 function audioProfileFromMpdMode(mode: unknown): AudioOutputProfile {
   return String(mode ?? "").trim().toLowerCase() === "strict" ? "pure" : "everyday";
 }
@@ -2630,7 +2662,7 @@ function normalizeAudioOutputCustomSettings(value: Partial<AudioOutputCustomSett
 
 function normalizePreferences(value: UiPreferences): UiPreferences {
   const locale = localeFromValue(value?.locale);
-  const fontTheme = String(value?.fontTheme ?? "").trim() as FontTheme;
+  const fontTheme = fontThemeFromValue(value?.fontTheme);
   const rawAudioProfile = String(value?.audioOutputProfile ?? "").trim().toLowerCase() as AudioOutputProfile;
   const audioOutputProfile = audioOutputProfileOptions.includes(rawAudioProfile)
     ? rawAudioProfile
@@ -2641,7 +2673,7 @@ function normalizePreferences(value: UiPreferences): UiPreferences {
   return {
     locale,
     inputMethodId: "keyboard-us",
-    fontTheme: fontThemeOptions.includes(fontTheme) ? fontTheme : defaultPreferences.fontTheme,
+    fontTheme,
     audioOutputProfile,
     audioOutputCustomSettings: normalizeAudioOutputCustomSettings(value?.audioOutputCustomSettings),
     mpdBitPerfectMode: mpdModeFromAudioProfile(audioOutputProfile),
@@ -2662,6 +2694,7 @@ interface I18nContextValue {
   error: string | null;
   t: (key: string, params?: TranslationParams) => string;
   setLocale: (locale: UiLocale) => Promise<UiPreferences>;
+  setFontTheme: (theme: FontTheme) => Promise<UiPreferences>;
   setDisplaySleepPreferences: (patch: Partial<Pick<UiPreferences, "displaySleepEnabled" | "displaySleepMinutes" | "displaySleepStyle">>) => Promise<UiPreferences>;
   setAudioOutputProfile: (profile: AudioOutputProfile) => Promise<UiPreferences>;
   setAudioOutputCustomSettings: (settings: Partial<AudioOutputCustomSettings>) => Promise<UiPreferences>;
@@ -2679,9 +2712,11 @@ const I18nContext = createContext<I18nContextValue | null>(null);
 
 export function I18nProvider({ children }: { children: ReactNode }) {
   const [initialLocale] = useState<UiLocale | null>(readStoredLocale);
+  const [initialFontTheme] = useState<FontTheme | null>(readStoredFontTheme);
   const [preferences, setPreferences] = useState<UiPreferences>(() => ({
     ...defaultPreferences,
-    locale: initialLocale ?? defaultPreferences.locale
+    locale: initialLocale ?? defaultPreferences.locale,
+    fontTheme: initialFontTheme ?? defaultPreferences.fontTheme
   }));
   const [preferencesReady, setPreferencesReady] = useState(initialLocale !== null);
   const [pending, setPending] = useState(false);
@@ -2712,7 +2747,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
     window.localStorage.setItem(LOCALE_STORAGE_KEY, locale);
   }, [locale]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     document.documentElement.dataset.fontTheme = preferences.fontTheme;
     window.localStorage.setItem(FONT_THEME_STORAGE_KEY, preferences.fontTheme);
   }, [preferences.fontTheme]);
@@ -2734,6 +2769,25 @@ export function I18nProvider({ children }: { children: ReactNode }) {
     } catch (caught) {
       await refreshPreferences();
       const message = caught instanceof Error ? caught.message : "Language did not save";
+      setError(message);
+      throw caught;
+    } finally {
+      setPending(false);
+    }
+  }, [refreshPreferences]);
+
+  const setFontTheme = useCallback(async (nextTheme: FontTheme) => {
+    const fontTheme = fontThemeFromValue(nextTheme);
+    setPending(true);
+    setError(null);
+    setPreferences((current) => ({ ...current, fontTheme, warning: null }));
+    try {
+      const next = normalizePreferences(await updatePreferences({ fontTheme }));
+      setPreferences(next);
+      return next;
+    } catch (caught) {
+      await refreshPreferences();
+      const message = caught instanceof Error ? caught.message : "Font did not save";
       setError(message);
       throw caught;
     } finally {
@@ -2869,6 +2923,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
       error,
       t,
       setLocale,
+      setFontTheme,
       setDisplaySleepPreferences,
       setAudioOutputProfile,
       setAudioOutputCustomSettings,
@@ -2881,7 +2936,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
       playbackStateLabel,
       friendlyError
     };
-  }, [error, locale, pending, preferences, refreshPreferences, setAudioOutputCustomSettings, setAudioOutputProfile, setDisplaySleepPreferences, setLocale, setMpdBitPerfectMode]);
+  }, [error, locale, pending, preferences, refreshPreferences, setAudioOutputCustomSettings, setAudioOutputProfile, setDisplaySleepPreferences, setFontTheme, setLocale, setMpdBitPerfectMode]);
 
   if (!preferencesReady) return null;
 

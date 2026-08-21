@@ -116,5 +116,12 @@
             <color element="label"  rgb="#001f1c"/>
             TIKPAL-IME-ACTIVE
         </key_group>
+        <key_group>
+            <color element="fill"   rgb="#35d0ba"/>
+            <color element="fill"   rgb="#21a99b" pressed="true"/>
+            <color element="stroke" rgb="#064e45"/>
+            <color element="label"  rgb="#001f1c"/>
+            TIKPAL-KEY-MOVE
+        </key_group>
     </key_group>
 </color_scheme>

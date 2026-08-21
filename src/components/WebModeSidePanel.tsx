@@ -93,6 +93,8 @@ export function WebModeSidePanel() {
   const actionLockRef = useRef(false);
   const [exploreOpening, setExploreOpening] = useState(false);
   const activeProvider = webMode?.activeProvider ?? null;
+  const openingProvider = webMode?.openingProvider ?? null;
+  const displayedOpeningProvider = pendingProvider ?? openingProvider;
   const volumePercent = tikpalState?.system.volume.percent ?? 0;
   const providerTextScale = webMode?.settings.providerTextScale ?? 1.1;
   const proxyEnabled = webMode?.settings.proxyEnabled ?? true;
@@ -117,10 +119,10 @@ export function WebModeSidePanel() {
     return providerLabels[effectiveActiveProvider] ?? "Web player";
   }, [effectiveActiveProvider, t]);
 
-  const displayProviderLabel = pendingProvider ? providerLabels[pendingProvider] : failedProvider ? providerLabels[failedProvider] : activeProviderLabel;
-  const panelState = pendingAction === "close" ? "closing" : pendingProvider ? "switching" : "ready";
-  const panelTone = pendingProvider
-    ? providerTones[pendingProvider]
+  const displayProviderLabel = displayedOpeningProvider ? providerLabels[displayedOpeningProvider] : failedProvider ? providerLabels[failedProvider] : activeProviderLabel;
+  const panelState = pendingAction === "close" ? "closing" : displayedOpeningProvider ? "switching" : "ready";
+  const panelTone = displayedOpeningProvider
+    ? providerTones[displayedOpeningProvider]
     : effectiveActiveProvider
       ? providerTones[effectiveActiveProvider]
       : "#81d7ff";
@@ -132,7 +134,7 @@ export function WebModeSidePanel() {
     failed: boolean;
     experimental: boolean;
   }) {
-    if (flags.connecting) return t("common.connecting");
+    if (flags.connecting) return t("common.opening");
     if (flags.current) return t("common.current");
     if (flags.active) return t("common.active");
     if (flags.failed) return failedProviderNeedsProxy && providerId === failedProvider ? t("common.needProxyOn") : t("common.failed");
@@ -187,12 +189,12 @@ export function WebModeSidePanel() {
       }
     }
     void tick();
-    const timer = window.setInterval(() => void tick(), 2000);
+    const timer = window.setInterval(() => void tick(), displayedOpeningProvider ? 250 : 2000);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, []);
+  }, [displayedOpeningProvider]);
 
 
   // Listen for explore opening signal from main window
@@ -254,7 +256,6 @@ export function WebModeSidePanel() {
         setError(nextError instanceof Error ? nextError.message : "Provider switch failed");
       }
     } finally {
-      setPendingProvider(null);
       await refresh().catch(() => undefined);
       actionLockRef.current = false;
     }
@@ -370,18 +371,18 @@ export function WebModeSidePanel() {
         <div>
           <span>{t("explore.pickLeft")}</span>
           <strong>{displayProviderLabel}</strong>
-          <p>{pendingProvider ? t("explore.openLeft") : failedProvider ? t("explore.couldNotOpen") : effectiveActiveProvider ? (webMode?.residentProviders?.[effectiveActiveProvider]?.status === "check_proxy" ? t("explore.proxyRequired") : proxyEnabled ? t("explore.proxyActive") : t("explore.directConnection")) : t("explore.chooseBelow")}</p>
+          <p>{displayedOpeningProvider ? t("explore.openLeft") : failedProvider ? t("explore.couldNotOpen") : effectiveActiveProvider ? (webMode?.residentProviders?.[effectiveActiveProvider]?.status === "check_proxy" ? t("explore.proxyRequired") : proxyEnabled ? t("explore.proxyActive") : t("explore.directConnection")) : t("explore.chooseBelow")}</p>
         </div>
       </section>
 
       <section className="web-mode-provider-grid" aria-label={t("explore.webPlayers")}>
         {providers.map((provider) => {
           const Icon = providerIcons[provider.id] ?? Music2;
-          const failed = failedProvider === provider.id && pendingProvider !== provider.id;
+          const failed = failedProvider === provider.id && displayedOpeningProvider !== provider.id;
           const selected = effectiveActiveProvider === provider.id;
-          const connecting = pendingProvider === provider.id;
-          const current = selected && Boolean(pendingProvider) && !connecting;
-          const active = selected && !pendingProvider;
+          const connecting = displayedOpeningProvider === provider.id;
+          const current = selected && Boolean(displayedOpeningProvider) && !connecting;
+          const active = selected && !displayedOpeningProvider;
           const residentStatus = webMode?.residentProviders?.[provider.id]?.status;
           const warming = residentStatus === "opening" || residentStatus === "prewarming";
           const proxyUnavailable = residentStatus === "check_proxy";
@@ -439,7 +440,7 @@ export function WebModeSidePanel() {
       </section>
 
       <footer className="web-mode-panel-footer" role="status" title={error ?? undefined}>
-        {friendlyError(error, "error.explore") ?? (pendingProvider ? `${t("common.connecting")} ${providerLabels[pendingProvider]}` : t("explore.footer"))}
+        {friendlyError(error, "error.explore") ?? (displayedOpeningProvider ? `${t("common.opening")} ${providerLabels[displayedOpeningProvider]}` : t("explore.footer"))}
       </footer>
       <div className={"web-mode-open-overlay" + (exploreOpening ? " active" : "")} />
     </main>

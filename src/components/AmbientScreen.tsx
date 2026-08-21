@@ -6,10 +6,10 @@ import { EqVisualScene, type HifiLyricsPanel } from "./EqVisualScene";
 import { FlameScene } from "./FlameScene";
 import { useI18n } from "../i18n";
 import { roomModeOptions } from "../roomExperienceTruth";
-import { getSourceDisplayStatusLabel } from "../sourceStatus";
+import { getSourceDisplayStatus, isExplorePrewarmComplete } from "../sourceStatus";
 import { friendlyUiError } from "../uiCopy";
 import type { TikpalDataStatus } from "../hooks/useTikpalState";
-import type { AudioState, BackgroundVideoSummary, FontTheme, LyricsFontSize, LyricsState, PlaybackActionType, PlaybackMode, PlaybackSummary, RoomExperienceActionRequest, RoomExperienceState, RoomMode, SceneContextSummary, SceneDayPart, SceneWeatherCondition, SourceSwitchTarget, SystemActionType, SystemState, TikpalState } from "../types";
+import type { AudioState, BackgroundVideoSummary, FontTheme, LyricsFontSize, LyricsState, PlaybackActionType, PlaybackMode, PlaybackSummary, RoomExperienceActionRequest, RoomExperienceState, RoomMode, SceneContextSummary, SceneDayPart, SceneWeatherCondition, SourceSwitchTarget, SystemActionType, SystemState, TikpalState, WebModeState } from "../types";
 
 interface AmbientScreenProps {
   hudVisible: boolean;
@@ -28,6 +28,7 @@ interface AmbientScreenProps {
   sceneSoundEnabled: boolean;
   sourcePickerOpenRequest: number;
   clockVisible: boolean;
+  webModeState: WebModeState | null;
   onPlaybackAction: (type: PlaybackActionType, value?: number, mode?: PlaybackMode) => Promise<TikpalState>;
   onSystemAction: (type: SystemActionType, value?: number) => Promise<TikpalState>;
   onSourceSwitch: (target: SourceSwitchTarget) => Promise<TikpalState>;
@@ -135,8 +136,8 @@ function getAmbientSourceLabel(sourceId: SourceSwitchTarget) {
   return ambientMusicSources.find((source) => source.id === sourceId)?.label ?? "Source";
 }
 
-function getAmbientSourceStatusLabel(source: AudioState["currentSource"] | undefined, pending: boolean) {
-  return getSourceDisplayStatusLabel(source, { pending });
+function getAmbientSourceStatusKind(source: AudioState["currentSource"] | undefined, pending: boolean) {
+  return getSourceDisplayStatus(source, { pending }).kind;
 }
 
 function isAmbientHandoffSourceTarget(sourceId: AmbientMusicSourceTarget | null): sourceId is AmbientMusicSourceTarget {
@@ -175,6 +176,7 @@ function getAmbientSourceNotificationDetail(
   }
 
   if (source?.connectionState === "connected") {
+    if (sourceId === "spotify") return labels.connected;
     return source.connectedLabel ? labels.connectedTo(source.connectedLabel) : labels.connected;
   }
 
@@ -361,6 +363,7 @@ export function AmbientScreen({
   sceneSoundEnabled,
   sourcePickerOpenRequest,
   clockVisible,
+  webModeState,
   onPlaybackAction,
   onSystemAction,
   onSourceSwitch,
@@ -417,6 +420,7 @@ export function AmbientScreen({
   const [sceneContext, setSceneContext] = useState<SceneContextSummary | null>(null);
   const [sceneVideoThermalPaused, setSceneVideoThermalPaused] = useState(false);
   const [ambientSceneAudioSuppressed, setAmbientSceneAudioSuppressed] = useState(false);
+  const explorePrewarmComplete = isExplorePrewarmComplete(webModeState);
   const [hifiLyricsFakeControlsVisible, setHifiLyricsFakeControlsVisible] = useState(false);
   const indexedBackgroundVideo = backgroundVideos[backgroundVideoIndex] ?? DEFAULT_BACKGROUND_VIDEO;
   const isHifiMode = roomExperience.mode === "hifi";
@@ -991,7 +995,7 @@ export function AmbientScreen({
 
   async function handleOpenWebModeClick() {
     onHudActivity();
-    if (status.pending || pendingAmbientSource || webModePending) return;
+    if (!explorePrewarmComplete || status.pending || pendingAmbientSource || webModePending) return;
     setWebModePending(true);
     setAmbientSourceError(null);
     setSourcePickerOpen(false);
@@ -1698,7 +1702,7 @@ export function AmbientScreen({
                       {pending ? <LoaderCircle size={27} className="is-spinning" /> : <Icon size={27} strokeWidth={1.8} />}
                     </span>
                     <strong>{sourceLabel(id, label)}</strong>
-                    <span>{getAmbientSourceStatusLabel(source, pending)}</span>
+                    <span>{t(`common.${getAmbientSourceStatusKind(source, pending)}`)}</span>
                   </button>
                 );
               })}
@@ -1706,15 +1710,16 @@ export function AmbientScreen({
                 className="ambient-source-option ambient-source-option-web"
                 type="button"
                 role="menuitem"
-                disabled={status.pending || pendingAmbientSource !== null || webModePending}
+                disabled={!explorePrewarmComplete || status.pending || pendingAmbientSource !== null || webModePending}
+                aria-busy={webModePending || !explorePrewarmComplete}
                 data-ambient-source-option="web-mode"
                 onClick={() => void handleOpenWebModeClick()}
               >
                 <span className="ambient-source-option-icon" aria-hidden="true">
-                  {webModePending ? <LoaderCircle size={27} className="is-spinning" /> : <Globe2 size={27} strokeWidth={1.8} />}
+                  {webModePending || !explorePrewarmComplete ? <LoaderCircle size={27} className="is-spinning" /> : <Globe2 size={27} strokeWidth={1.8} />}
                 </span>
                 <strong>{t("source.explore")}</strong>
-                <span>{webModePending ? t("common.opening") : t("source.webPlayers")}</span>
+                <span>{webModePending ? t("common.opening") : !explorePrewarmComplete ? t("common.prewarming") : t("common.ready")}</span>
               </button>
             </div>
           )}

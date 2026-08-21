@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_SOURCE="${BASH_SOURCE[0]:-$0}"
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_SOURCE")" && pwd)"
 APP_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 ENV_FILE="${TIKPAL_KIOSK_ENV_FILE:-$APP_DIR/.env.kiosk}"
 export TIKPAL_APP_DIR="${TIKPAL_APP_DIR:-$APP_DIR}"
 FLAGS_FILE="${TIKPAL_CHROMIUM_FLAGS_FILE:-$SCRIPT_DIR/chromium-flags.conf}"
+WEB_MODE_COMMAND_ARGS=("$@")
 
 should_source_env_file() {
   local value
@@ -46,6 +48,7 @@ fi
 : "${TIKPAL_WEB_MODE_BACKGROUND_URL:=http://127.0.0.1:4173/web-mode-background.html}"
 : "${TIKPAL_WEB_MODE_TRANSITION_URL:=http://127.0.0.1:4173/web-mode-transition.html}"
 : "${TIKPAL_WEB_MODE_TRANSITION_DEBUG_PORT:=9250}"
+: "${TIKPAL_WEB_MODE_TRANSITION_VEIL_READY_TIMEOUT_SECONDS:=3}"
 : "${TIKPAL_WEB_MODE_CLOSE_OVERLAY_URL:=http://127.0.0.1:4173/web-mode-close-overlay.html}"
 : "${TIKPAL_WEB_MODE_CLOSE_OVERLAY_FADE_SECONDS:=3}"
 : "${TIKPAL_WEB_MODE_CLOSE_OVERLAY_DEBUG_PORT:=9251}"
@@ -75,11 +78,11 @@ fi
 : "${TIKPAL_WEB_MODE_CLOSE_WARM_TTL_SECONDS:=45}"
 : "${TIKPAL_WEB_MODE_CLOSE_AUDIO_GATE_SETTLE_SECONDS:=0.35}"
 : "${TIKPAL_WEB_MODE_CLOSE_REFILL_PROVIDER_POOL_ENABLED:=1}"
-: "${TIKPAL_WEB_MODE_RESIDENT_SWITCH_SETTLE_SECONDS:=0.3}"
+: "${TIKPAL_WEB_MODE_RESIDENT_SWITCH_SETTLE_SECONDS:=0.16}"
 : "${TIKPAL_WEB_MODE_RESIDENT_SWITCH_PAINT_TIMEOUT_SECONDS:=0.6}"
 : "${TIKPAL_WEB_MODE_RESIDENT_SWITCH_PAINT_POLL_SECONDS:=0.08}"
-: "${TIKPAL_WEB_MODE_PROVIDER_SWITCH_FADE_SECONDS:=1.2}"
-: "${TIKPAL_WEB_MODE_TRANSITION_MIN_VISIBLE_SECONDS:=1.5}"
+: "${TIKPAL_WEB_MODE_PROVIDER_SWITCH_FADE_SECONDS:=0.16}"
+: "${TIKPAL_WEB_MODE_TRANSITION_MIN_VISIBLE_SECONDS:=0.5}"
 : "${TIKPAL_WEB_MODE_ONBOARD_LOCK_TIMEOUT_SECONDS:=8}"
 : "${TIKPAL_WEB_MODE_DEFAULT_PROXY_URL:=http://127.0.0.1:7897}"
 : "${TIKPAL_WEB_MODE_ONBOARD:=1}"
@@ -159,6 +162,10 @@ fail() {
 }
 
 with_web_mode_lock() {
+  if [[ "${TIKPAL_WEB_MODE_LOCKED:-0}" == "1" ]]; then
+    "$@"
+    return
+  fi
   mkdir -p "$TIKPAL_WEB_MODE_PROFILE_ROOT"
   # Kill orphan close-overlay Chromium via PID file only.
   # Do NOT use pgrep/pkill -f which matches parent sh -lc env vars
@@ -171,11 +178,16 @@ with_web_mode_lock() {
   rm -f "$TIKPAL_WEB_MODE_PROFILE_ROOT/close-overlay-veil.pid" 2>/dev/null
   rm -rf "$TIKPAL_WEB_MODE_PROFILE_ROOT/close-overlay."* 2>/dev/null
   if command -v flock >/dev/null 2>&1; then
-    (
-      flock -x -w "$TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS" 9 || fail "Explore is already switching"
-      "$@"
-    ) 9>"$TIKPAL_WEB_MODE_PROFILE_ROOT/web-mode.lock"
-    return
+    local lock_status
+    # Keep the lock in flock's parent and close its descriptor before the
+    # launcher runs. Background veil/probe helpers then cannot inherit it and
+    # extend a completed foreground switch indefinitely.
+    flock -E 75 -o -x -w "$TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS" \
+      "$TIKPAL_WEB_MODE_PROFILE_ROOT/web-mode.lock" \
+      env TIKPAL_WEB_MODE_LOCKED=1 "$0" "${WEB_MODE_COMMAND_ARGS[@]}"
+    lock_status=$?
+    [[ "$lock_status" == "75" ]] && fail "Explore is already switching"
+    return "$lock_status"
   fi
   "$@"
 }
@@ -635,7 +647,7 @@ wait_for_provider_ready() {
 const [port, timeoutSeconds, provider] = process.argv.slice(2);
 const deadline = Date.now() + Math.max(1, Number(timeoutSeconds) || 18) * 1000;
 const readyExpression = `(() => {
-  if (!document.body || document.readyState === "loading") return false;
+  if (!document.body || document.readyState !== "complete") return false;
   const textLength = String(document.body.innerText || "").replace(/\\s+/g, " ").trim().length;
   const candidates = Array.from(document.querySelectorAll("main,nav,header,button,a,input,[role='button'],audio,video")).slice(0, 200);
   const visibleCount = candidates.filter((element) => {
@@ -645,12 +657,6 @@ const readyExpression = `(() => {
   }).length;
   return textLength >= 80 || visibleCount >= 3;
 })()`;
-const urlReadyHosts = new Set(
-  provider === "apple_music" ? ["music.apple.com"] :
-  provider === "tidal" ? ["listen.tidal.com", "tidal.com"] :
-  []
-);
-
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function evaluate(wsUrl, expression) {
@@ -678,22 +684,13 @@ async function evaluate(wsUrl, expression) {
   });
 }
 
-function targetHost(url) {
-  try {
-    return new URL(String(url || "")).hostname;
-  } catch {
-    return "";
-  }
-}
-
 let stableChecks = 0;
 while (Date.now() < deadline) {
   try {
     const response = await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(800) });
     const targets = await response.json();
     const target = targets.find((item) => item.type === "page" && String(item.url || "").startsWith("https://") && item.webSocketDebuggerUrl);
-    const host = targetHost(target?.url);
-    const isReady = target && (urlReadyHosts.has(host) || await evaluate(target.webSocketDebuggerUrl, readyExpression));
+    const isReady = target && await evaluate(target.webSocketDebuggerUrl, readyExpression);
     if (isReady) {
       stableChecks += 1;
       if (stableChecks >= 2) process.exit(0);
@@ -712,9 +709,11 @@ NODE
 wait_for_entry_provider_paint() {
   local provider_port="$1"
   local provider="${2:-}"
+  local target_window="${3:-}"
   local timeout_seconds="${TIKPAL_WEB_MODE_ENTRY_PROVIDER_PAINT_TIMEOUT_SECONDS:-0}"
   [[ "$timeout_seconds" == "0" ]] && return 0
-  wait_for_provider_ready "$provider_port" "$provider" "$timeout_seconds"
+  wait_for_provider_ready "$provider_port" "$provider" "$timeout_seconds" || return 1
+  [[ -z "$target_window" ]] || wait_for_provider_window_nonblank_x11_frame "$target_window"
 }
 
 navigate_provider_target() {
@@ -950,8 +949,12 @@ const providerIds = String(providerList || "").split(",").filter(Boolean);
 let state = {};
 try { state = JSON.parse(fs.readFileSync(statePath, "utf8")); } catch {}
 const closeRequestId = String(process.env.TIKPAL_WEB_MODE_CLOSE_REQUEST_ID || "");
-const closeOwnsState = Boolean(state.closeRequestId && !state.activeProvider);
+const openRequestId = String(process.env.TIKPAL_WEB_MODE_OPEN_REQUEST_ID || "");
+const expectedProvider = String(process.env.TIKPAL_WEB_MODE_OPEN_EXPECTED_ACTIVE_PROVIDER || "");
+const startupReset = process.env.TIKPAL_WEB_MODE_STARTUP_RESET === "1";
+const closeOwnsState = !startupReset && Boolean(state.closeRequestId && !state.activeProvider);
 if (closeOwnsState && closeRequestId !== state.closeRequestId) process.exit(0);
+if (openRequestId && (state.openRequestId !== openRequestId || state.openingProvider !== expectedProvider || provider !== expectedProvider)) process.exit(0);
 const preserveCloseRequest = closeOwnsState && closeRequestId === state.closeRequestId;
 state.activeProvider = provider || null;
 if (state.activeProvider) state.lastProvider = state.activeProvider;
@@ -959,8 +962,12 @@ state.lastError = null;
 state.updatedAt = new Date().toISOString();
 if (!state.activeProvider) {
   state.closeRequestId = preserveCloseRequest ? closeRequestId : null;
+  state.openingProvider = null;
+  state.openRequestId = null;
 } else {
   state.closeRequestId = null;
+  state.openingProvider = null;
+  state.openRequestId = null;
   const residentProviders = state.residentProviders && typeof state.residentProviders === "object"
     ? state.residentProviders
     : {};
@@ -971,6 +978,9 @@ if (!state.activeProvider) {
     if (id === state.activeProvider) {
       residentProviders[id] = { ...current, status: "active", lastError: null, updatedAt: state.updatedAt };
     } else if (current.status === "active") {
+      // A former active provider has already shown a real provider page. Do
+      // not send its card back through the prewarm queue while guards run
+      // their later diagnostics.
       residentProviders[id] = { ...current, status: "ready", lastError: null, updatedAt: state.updatedAt };
     }
   }
@@ -985,6 +995,28 @@ NODE
 
 write_runtime_provider_status() {
   with_provider_state_lock write_runtime_provider_status_unlocked "$@"
+}
+
+write_runtime_prewarm_complete() {
+  local complete="$1"
+  with_provider_state_lock write_runtime_prewarm_complete_unlocked "$complete"
+}
+
+write_runtime_prewarm_complete_unlocked() {
+  local complete="$1"
+  node - "$TIKPAL_WEB_MODE_STATE_PATH" "$complete" <<'NODE'
+const fs = require("node:fs");
+const path = require("node:path");
+const [statePath, complete] = process.argv.slice(2);
+let state = {};
+try { state = JSON.parse(fs.readFileSync(statePath, "utf8")); } catch {}
+state.prewarmComplete = complete === "1";
+state.updatedAt = new Date().toISOString();
+fs.mkdirSync(path.dirname(statePath), { recursive: true });
+const temporaryPath = `${statePath}.${process.pid}.${Date.now()}.tmp`;
+fs.writeFileSync(temporaryPath, `${JSON.stringify(state, null, 2)}\n`);
+fs.renameSync(temporaryPath, statePath);
+NODE
 }
 
 write_runtime_provider_status_unlocked() {
@@ -1062,6 +1094,7 @@ for (const provider of providerIds) {
   };
 }
 state.residentProviders = residentProviders;
+state.prewarmComplete = false;
 state.updatedAt = now;
 fs.mkdirSync(path.dirname(statePath), { recursive: true });
 const temporaryPath = `${statePath}.${process.pid}.${Date.now()}.tmp`;
@@ -1098,7 +1131,22 @@ NODE
 
 runtime_open_request_is_current() {
   local expected_provider="${TIKPAL_WEB_MODE_OPEN_EXPECTED_ACTIVE_PROVIDER:-}"
-  [[ -z "$expected_provider" || "$(read_runtime_active_provider)" == "$expected_provider" ]]
+  local open_request_id="${TIKPAL_WEB_MODE_OPEN_REQUEST_ID:-}"
+  [[ -z "$expected_provider" ]] && return 0
+  node - "$TIKPAL_WEB_MODE_STATE_PATH" "$expected_provider" "$open_request_id" <<'NODE'
+const fs = require("node:fs");
+const [statePath, expectedProvider, openRequestId] = process.argv.slice(2);
+try {
+  const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
+  const ownsRequest = state.openingProvider === expectedProvider
+    && (!openRequestId || state.openRequestId === openRequestId)
+    && !state.closeRequestId;
+  const legacyOwner = !openRequestId && state.activeProvider === expectedProvider && !state.closeRequestId;
+  process.exit(ownsRequest || legacyOwner ? 0 : 1);
+} catch {
+  process.exit(1);
+}
+NODE
 }
 
 read_runtime_provider_status() {
@@ -1468,6 +1516,9 @@ def patch_key(key: ET.Element, variant: dict[str, object]) -> None:
     if group == "alphanumeric":
         key.set("theme_id", key_theme)
 
+    if group == "bottomrow" and key_id == "move":
+        key.set("theme_id", "TIKPAL-KEY-MOVE")
+
     if group == "bottomrow" and key_id == "LWIN":
         key.set("id", "TIKPAL-IME")
         key.set("svg_id", "LWIN")
@@ -1801,6 +1852,8 @@ provider_pool_needs_prewarm() {
     profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/$provider"
     profile_process_exists "$profile" || return 0
     provider_port="$(provider_debug_port "$provider")"
+    # A resident pool is warm once CDP has exposed the provider's real HTTPS
+    # page. Full DOM readiness belongs to foreground cold starts only.
     if provider_has_real_provider_page "$provider_port"; then
       continue
     fi
@@ -1828,6 +1881,8 @@ sync_runtime_provider_pool_process_statuses() {
         if [[ "$provider" == "$active_provider" ]]; then
           write_runtime_provider_status "$provider" "active"
         else
+          # Do not make a confirmed real page wait on a slow DOM probe, or let
+          # an asynchronous guard demote it back to Prewarming.
           write_runtime_provider_status "$provider" "ready"
         fi
         continue
@@ -2104,12 +2159,11 @@ park_provider_windows_for_reopen() {
 
 park_left_web_mode_surfaces_for_reopen() {
   local active_provider="${1:-}"
-  close_transition_veil
+  park_transition_veil
   close_error_veil
   # The entry stage is strictly an Explore-open surface. Exit has its own
   # full-width stage, so never leave or raise entry-stage during a return.
-  close_transition_veil
-  close_background_veil
+  park_background_veil
   park_provider_windows_for_reopen "$active_provider"
 }
 
@@ -2229,11 +2283,10 @@ park_web_mode_surfaces_for_reopen() {
     log "ERROR: close overlay retained because provider or side panel did not park"
     return 1
   fi
-  # Close old veils now that windows are parked
-  close_transition_veil
+  # Keep the reusable covers parked for the next resident open.
+  park_transition_veil
   close_error_veil
-  close_transition_veil
-  close_background_veil
+  park_background_veil
   close_close_overlay_veil
 }
 
@@ -2306,7 +2359,11 @@ close_web_mode_full() {
   close_close_overlay_veil
   write_audio_bus_state ""
   write_runtime_provider_state ""
-  # Keep pool warm stamp — providers stay resident across close/open cycles
+  if is_enabled "${TIKPAL_WEB_MODE_STARTUP_RESET:-0}"; then
+    rm -f "$(pool_warm_stamp_file)"
+  fi
+  # Keep the warm marker for ordinary close/reopen cycles. A physical kiosk
+  # startup has just terminated every provider, so it must rebuild the pool.
   sync_runtime_provider_pool_process_statuses ""
 }
 
@@ -2763,7 +2820,33 @@ provider_launch_position() {
 }
 
 xdotool_safe() {
-  timeout 3 xdotool "$@" 2>/dev/null || true
+  local timeout_seconds=3
+  # Window discovery is repeated throughout a resident reveal. On this X11
+  # stack a missing Chromium class can block the query for the whole command
+  # timeout, so a stale scan must not keep the foreground switch lock alive.
+  if [[ "${1:-}" == "search" ]]; then
+    timeout_seconds="${TIKPAL_WEB_MODE_X11_SEARCH_TIMEOUT_SECONDS:-0.35}"
+  fi
+  timeout "$timeout_seconds" xdotool "$@" 2>/dev/null || true
+}
+
+park_pointer_in_side_panel() {
+  local panel_x panel_y panel_width panel_height target_x target_y
+  command -v xdotool >/dev/null 2>&1 || return 0
+  panel_x="$(position_x "$TIKPAL_WEB_MODE_PANEL_POSITION")"
+  panel_y="$(position_y "$TIKPAL_WEB_MODE_PANEL_POSITION")"
+  panel_width="$(window_width "$TIKPAL_WEB_MODE_PANEL_WINDOW")"
+  panel_height="$(window_height "$TIKPAL_WEB_MODE_PANEL_WINDOW")"
+  [[ "$panel_x" =~ ^[0-9]+$ && "$panel_y" =~ ^[0-9]+$ && "$panel_width" =~ ^[1-9][0-9]*$ && "$panel_height" =~ ^[1-9][0-9]*$ ]] || return 0
+  target_x="$((panel_x + panel_width - 1))"
+  target_y="$((panel_y + panel_height - 1))"
+  DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe mousemove "$target_x" "$target_y"
+}
+
+commit_visible_provider_state() {
+  local provider="$1"
+  park_pointer_in_side_panel
+  write_runtime_provider_state "$provider"
 }
 
 all_chromium_windows() {
@@ -3037,19 +3120,49 @@ refresh_provider_pool_guards() {
   log "refreshed provider guards"
 }
 
+transition_veil_profile() {
+  printf '%s\n' "$TIKPAL_WEB_MODE_PROFILE_ROOT/transition"
+}
+
+transition_veil_url() {
+  local provider="${1:-}"
+  local url="$TIKPAL_WEB_MODE_TRANSITION_URL"
+  [[ -n "$provider" ]] && url="$url?provider=$provider"
+  printf '%s\n' "$url"
+}
+
+transition_veil_has_cdp_page() {
+  provider_cdp_json_list "$TIKPAL_WEB_MODE_TRANSITION_DEBUG_PORT" \
+    | node -e 'let body=""; process.stdin.on("data", (chunk) => body += chunk); process.stdin.on("end", () => { try { process.exit(JSON.parse(body).some((target) => target.type === "page" && target.webSocketDebuggerUrl) ? 0 : 1); } catch { process.exit(1); } });'
+}
+
+transition_veil_is_healthy() {
+  local profile window
+  profile="$(transition_veil_profile)"
+  profile_process_exists "$profile" || return 1
+  window="$(first_window_for_profile "$profile" || true)"
+  [[ -n "$window" ]] || return 1
+  transition_veil_has_cdp_page
+}
+
+wait_for_transition_veil_healthy() {
+  local timeout_seconds="$TIKPAL_WEB_MODE_TRANSITION_VEIL_READY_TIMEOUT_SECONDS"
+  local deadline
+  [[ "$timeout_seconds" =~ ^[0-9]+([.][0-9]+)?$ ]] || timeout_seconds=3
+  deadline="$(awk -v now="$(now_ms)" -v timeout="$timeout_seconds" 'BEGIN { printf "%.0f", now + timeout * 1000 }')"
+  while (( $(now_ms) < deadline )); do
+    transition_veil_is_healthy && return 0
+    sleep 0.1
+  done
+  transition_veil_is_healthy
+}
+
 close_transition_veil() {
-  local pid_file="$TIKPAL_WEB_MODE_PROFILE_ROOT/transition-veil.pid"
-  local pid _w
-  pid="$(cat "$pid_file" 2>/dev/null || true)"
-  if [[ -n "$pid" ]]; then
-    pkill -P "$pid" 2>/dev/null || true
-    kill "$pid" 2>/dev/null || true
-    for _w in $(seq 1 30); do
-      kill -0 "$pid" 2>/dev/null || break
-      sleep 0.1
-    done
-    rm -f "$pid_file"
-  fi
+  local profile pid_file
+  profile="$(transition_veil_profile)"
+  pid_file="$TIKPAL_WEB_MODE_PROFILE_ROOT/transition-veil.pid"
+  close_provider_profile "$profile"
+  rm -f "$pid_file" "$(profile_window_cache_path "$profile")"
 }
 
 close_error_veil() {
@@ -3159,11 +3272,9 @@ PYEOF
 }
 
 park_transition_veil() {
-  local pid window
-  [[ -f "$TIKPAL_WEB_MODE_PROFILE_ROOT/transition-veil.pid" ]] || return 0
-  pid="$(cat "$TIKPAL_WEB_MODE_PROFILE_ROOT/transition-veil.pid" 2>/dev/null || true)"
-  [[ -n "$pid" && "$pid" =~ ^[0-9]+$ ]] || return 0
-  window="$(find_window_for_pid "$pid" || true)"
+  local profile window
+  profile="$(transition_veil_profile)"
+  window="$(first_window_for_profile "$profile" || true)"
   [[ -n "$window" ]] || return 0
   tile_window_fast "$window" "$TIKPAL_WEB_MODE_STAGE_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
   clear_window_above "$window"
@@ -3264,8 +3375,8 @@ fade_profile_window_for_provider_switch() {
 }
 
 raise_transition_veil() {
-  local transition_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/transition"
-  local window
+  local transition_profile window
+  transition_profile="$(transition_veil_profile)"
   window="$(wait_for_profile_window "$transition_profile" 2 || true)"
   [[ -n "$window" ]] || return 1
   tile_window_fast "$window" "$TIKPAL_WEB_MODE_LEFT_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
@@ -3287,7 +3398,7 @@ begin_provider_switch_transition() {
   local current_profile="$1"
   local provider="$2"
   local current_window
-  local _t_started _t_now _bg_pid _bg_watchdog
+  local _t_started _t_now _bg_pid _bg_watchdog background_ready=0
   _t_started="$(now_ms)"
   TIKPAL_WEB_MODE_TRANSITION_SHOWN_MS=0
   invalidate_chromium_window_cache
@@ -3299,7 +3410,9 @@ begin_provider_switch_transition() {
   _bg_pid=$!
   ( sleep 3; kill "$_bg_pid" 2>/dev/null ) &
   _bg_watchdog=$!
-  wait "$_bg_pid" 2>/dev/null || true
+  if wait "$_bg_pid" 2>/dev/null; then
+    background_ready=1
+  fi
   kill "$_bg_watchdog" 2>/dev/null || true
   wait "$_bg_watchdog" 2>/dev/null || true
   _t_now="$(now_ms)"; log_stage "transition_bg_veil provider=$provider ms=$(( _t_now - _t_started ))"
@@ -3311,17 +3424,25 @@ begin_provider_switch_transition() {
   _t_now="$(now_ms)"; log_stage "transition_raise_current provider=$provider ms=$(( _t_now - _t_started ))"
   # Keep the branded background directly under the current provider. Its
   # dissolve therefore never exposes the underlying room/kiosk window.
-  reveal_background_veil_below_current_provider >/dev/null 2>&1 || true
+  reveal_background_veil_below_current_provider >/dev/null 2>&1 || background_ready=0
   _t_now="$(now_ms)"; log_stage "transition_reveal_bg provider=$provider ms=$(( _t_now - _t_started ))"
-  if [[ -n "$current_window" ]]; then
+  if [[ -n "$current_window" && "$background_ready" == "1" ]]; then
     fade_profile_window_for_provider_switch "$current_profile"
   fi
   _t_now="$(now_ms)"; log_stage "transition_fade provider=$provider ms=$(( _t_now - _t_started ))"
 
-  launch_transition_veil "$provider"
-  _t_now="$(now_ms)"; log_stage "transition_launch_veil provider=$provider ms=$(( _t_now - _t_started ))"
-  if raise_transition_veil; then
+  if prepare_transition_veil "$provider" && raise_transition_veil; then
+    if [[ -n "$current_window" && "$background_ready" != "1" ]]; then
+      # If the fallback cover could not start, retain the old provider until
+      # the reusable transition veil has actually reached the foreground.
+      fade_profile_window_for_provider_switch "$current_profile"
+    fi
     TIKPAL_WEB_MODE_TRANSITION_SHOWN_MS="$(now_ms)"
+    _t_now="$(now_ms)"; log_stage "transition_veil_visible provider=$provider ms=$(( _t_now - _t_started ))"
+  else
+    # The background veil remains directly below the old provider. It is the
+    # bounded fallback cover while the target's own X11 frame is verified.
+    _t_now="$(now_ms)"; log_stage "transition_veil_unavailable provider=$provider fallback=background ready=$background_ready ms=$(( _t_now - _t_started ))"
   fi
   _t_now="$(now_ms)"; log_stage "transition_done provider=$provider ms=$(( _t_now - _t_started ))"
 }
@@ -3342,24 +3463,12 @@ wait_for_transition_minimum_visibility() {
 
 launch_transition_veil() {
   local provider="${1:-}"
-  local transition_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/transition"
-  local transition_url="$TIKPAL_WEB_MODE_TRANSITION_URL"
-  local window
-  [[ -n "$provider" ]] && transition_url="$transition_url?provider=$provider"
-  close_error_veil
-  close_transition_veil
-  # Use a unique profile directory each time to avoid Chromium lock contention.
-  # A killed Chromium may hold OS-level locks on the profile for seconds.
-  transition_profile="$transition_profile.$(date +%s%N)"
-  # Clean up old unique transition profiles (keep last 3)
-  local _old
-  for _old in $(ls -dt "$TIKPAL_WEB_MODE_PROFILE_ROOT/transition."* 2>/dev/null | tail -n +4); do
-    rm -rf "$_old" &
-  done
+  local transition_profile transition_url window
+  transition_profile="$(transition_veil_profile)"
+  transition_url="$(transition_veil_url "$provider")"
   mkdir -p "$transition_profile"
   ensure_chromium_profile_prefs "$transition_profile"
-  # Always spawn a fresh instance — close_transition_veil already killed the old one.
-  # Reusing a half-dead Chromium window via CDP navigate hangs for 10+ seconds.
+  cleanup_stale_profile_singletons "$transition_profile"
   mapfile -t flags < <(read_flags)
   mapfile -t base_args < <(chromium_base_args)
   DISPLAY="$TIKPAL_KIOSK_DISPLAY" "$TIKPAL_CHROMIUM_BIN" \
@@ -3369,12 +3478,11 @@ launch_transition_veil() {
     "--user-data-dir=$transition_profile" \
     "--window-position=$TIKPAL_WEB_MODE_STAGE_POSITION" \
     "--window-size=$(normalize_window_size "$TIKPAL_WEB_MODE_LEFT_WINDOW")" \
+    "--remote-debugging-address=127.0.0.1" \
     "--remote-debugging-port=$TIKPAL_WEB_MODE_TRANSITION_DEBUG_PORT" \
     >/dev/null 2>&1 9>&- &
   local _chrome_pid=$!
   printf '%s\n' "$_chrome_pid" > "$TIKPAL_WEB_MODE_PROFILE_ROOT/transition-veil.pid"
-  # Fast path: search --pid on the spawned process and its children.
-  # Falls back to full window scan only if _NET_WM_PID is unavailable.
   window="$(find_window_for_pid "$_chrome_pid" || true)"
   if [[ -z "$window" ]]; then
     invalidate_chromium_window_cache
@@ -3384,6 +3492,59 @@ launch_transition_veil() {
     tile_window_fast "$window" "$TIKPAL_WEB_MODE_STAGE_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
     clear_window_above "$window"
     DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowlower "$window" >/dev/null 2>&1 || true
+    return 0
+  fi
+  return 1
+}
+
+prepare_transition_veil() {
+  local provider="${1:-}"
+  local transition_url profile window mode="reused"
+  transition_url="$(transition_veil_url "$provider")"
+  profile="$(transition_veil_profile)"
+
+  if transition_veil_is_healthy && navigate_transition_veil "$transition_url"; then
+    :
+  else
+    # A switch gets at most one rebuild. If this fails, the background veil
+    # stays up and the target still has to pass its non-blank X11 frame check.
+    mode="rebuilt"
+    close_transition_veil
+    if ! launch_transition_veil "$provider"; then
+      log_stage "transition_veil=$mode provider=$provider result=unavailable"
+      return 1
+    fi
+    if ! wait_for_transition_veil_healthy; then
+      log_stage "transition_veil=$mode provider=$provider result=unhealthy"
+      return 1
+    fi
+  fi
+
+  window="$(first_window_for_profile "$profile" || true)"
+  [[ -n "$window" ]] || {
+    log_stage "transition_veil=$mode provider=$provider result=no-window"
+    return 1
+  }
+  restore_window_opacity "$window"
+  tile_window_fast "$window" "$TIKPAL_WEB_MODE_STAGE_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
+  clear_window_above "$window"
+  DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowlower "$window" >/dev/null 2>&1 || true
+  log_stage "transition_veil=$mode provider=$provider result=ready"
+  return 0
+}
+
+warm_transition_veil() {
+  local started_ms
+  started_ms="$(now_ms)"
+  # Keep both covers off-screen before the resident queue begins. The
+  # background page is the fail-safe if the transition veil later fails.
+  ensure_background_veil "" 1 || log_stage "boot_veil_background result=unavailable"
+  if prepare_transition_veil ""; then
+    park_transition_veil
+    park_background_veil
+    log_stage "boot_veil_ready ms=$(( $(now_ms) - started_ms ))"
+  else
+    log_stage "boot_veil_unavailable ms=$(( $(now_ms) - started_ms ))"
   fi
 }
 
@@ -3661,7 +3822,6 @@ reveal_resident_provider_window() {
   fi
   wait_for_transition_minimum_visibility "$transition_shown_ms"
   close_error_veil
-  close_transition_veil
   # Keep background veil in position behind the provider window so that the
   # next provider switch never exposes the underlying room/environment.
   {
@@ -3778,9 +3938,17 @@ launch_provider_for_pool() {
     if [[ "$launch_role" == "prewarm" && -z "$(read_runtime_active_provider)" ]] && ! is_enabled "${TIKPAL_WEB_MODE_IDLE_POOL_WARMUP:-0}"; then
       return 0
     fi
-    if [[ "$launch_role" == "prewarm" && "$force_existing" == "1" ]]; then
-      write_runtime_provider_status "$provider" "ready"
+    if [[ "$launch_role" == "prewarm" ]]; then
+      if provider_has_real_provider_page "$provider_port"; then
+        write_runtime_provider_status "$provider" "ready"
+        return 0
+      fi
+      write_runtime_provider_status "$provider" "check_setup" "$(provider_label "$provider") did not enter the provider page"
       return 0
+    fi
+    if ! wait_for_provider_ready "$provider_port" "$provider"; then
+      write_runtime_provider_status "$provider" "check_setup" "$(provider_label "$provider") did not become ready"
+      return 1
     fi
     write_runtime_provider_status "$provider" "ready"
     return 0
@@ -3860,8 +4028,12 @@ launch_provider_for_pool() {
   if [[ "$launch_role" == "prewarm" && -z "$(read_runtime_active_provider)" ]] && ! is_enabled "${TIKPAL_WEB_MODE_IDLE_POOL_WARMUP:-0}"; then
     return 0
   fi
-  if [[ "$launch_role" == "prewarm" && "$wait_for_full_ready" != "1" ]]; then
-    write_runtime_provider_status "$provider" "prewarming"
+  if [[ "$wait_for_full_ready" != "1" ]]; then
+    if [[ "$launch_role" == "prewarm" ]]; then
+      # Prewarm is complete as soon as a real HTTPS provider page exists. The
+      # slower DOM probe remains reserved for foreground cold starts.
+      write_runtime_provider_status "$provider" "ready"
+    fi
     return 0
   fi
   write_runtime_provider_status "$provider" "ready"
@@ -3905,14 +4077,19 @@ launch_provider_prewarm_worker() {
   local active_provider="$2"
   local force_existing="$3"
   local queue_mode="$4"
-  local current_active
+  local current_active started_ms elapsed_ms status
   provider_prewarm_queue_can_continue "$active_provider" "$queue_mode" || return 0
+  started_ms="$(now_ms)"
+  log_stage "prewarm_launch provider=$provider mode=$queue_mode"
   current_active="$(read_runtime_active_provider)"
   if [[ "$queue_mode" == "idle" || -z "$current_active" ]]; then
-    TIKPAL_WEB_MODE_IDLE_POOL_WARMUP=1 launch_provider_for_pool "$provider" 0 prewarm "$force_existing" || true
-    return 0
+    TIKPAL_WEB_MODE_IDLE_POOL_WARMUP=1 launch_provider_for_pool "$provider" entry prewarm "$force_existing" || true
+  else
+    launch_provider_for_pool "$provider" entry prewarm "$force_existing" || true
   fi
-  launch_provider_for_pool "$provider" 0 prewarm "$force_existing" || true
+  elapsed_ms="$(( $(now_ms) - started_ms ))"
+  status="$(read_runtime_provider_status "$provider")"
+  log_stage "prewarm_page_ready provider=$provider status=$status ms=$elapsed_ms"
 }
 
 # After the main prewarm queue completes, retry providers that ended up in
@@ -3933,10 +4110,26 @@ retry_failed_prewarm_providers() {
     provider_port="$(provider_debug_port "$provider")"
     log "retrying prewarm for $provider (was check_setup)"
     write_runtime_provider_status "$provider" "prewarming"
-    launch_provider_for_pool "$provider" 0 prewarm 1 || true
+    launch_provider_for_pool "$provider" entry prewarm 1 || true
     retried=$((retried + 1))
   done < <(provider_prewarm_order)
   [[ "$retried" -eq 0 ]] || log "retried $retried failed prewarm providers"
+}
+
+provider_prewarm_queue_is_complete() {
+  node - "$TIKPAL_WEB_MODE_STATE_PATH" "$(provider_ids | tr '\n' ',' | sed 's/,$//')" <<'NODE'
+const fs = require("node:fs");
+const [statePath, providerList] = process.argv.slice(2);
+const completeStatuses = new Set(["ready", "active", "check_setup", "check_proxy", "region_unavailable"]);
+try {
+  const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
+  const providers = state.residentProviders && typeof state.residentProviders === "object" ? state.residentProviders : {};
+  const ids = String(providerList || "").split(",").filter(Boolean);
+  process.exit(ids.every((id) => completeStatuses.has(String(providers[id]?.status || ""))) ? 0 : 1);
+} catch {
+  process.exit(1);
+}
+NODE
 }
 
 run_provider_prewarm_queue() {
@@ -3992,9 +4185,12 @@ run_provider_prewarm_queue() {
   fi
   current_active="$(read_runtime_active_provider)"
   sync_runtime_provider_pool_process_statuses "$current_active"
-  retry_failed_prewarm_providers "$active_provider" "$queue_mode"
-  sync_runtime_provider_pool_process_statuses "$current_active"
-  log "provider prewarm queue completed: max-concurrent=$maximum"
+  if provider_prewarm_queue_is_complete; then
+    write_runtime_prewarm_complete 1
+    log "provider prewarm queue completed: max-concurrent=$maximum"
+  else
+    log "provider prewarm queue incomplete: max-concurrent=$maximum"
+  fi
 }
 
 prewarm_provider_pool() {
@@ -4042,6 +4238,7 @@ start_provider_pool_prewarm() {
   stop_provider_pool_prewarm
   if [[ "$seed_mode" != "force" ]] && ! provider_pool_needs_prewarm "$active_provider"; then
     sync_runtime_provider_pool_process_statuses "$active_provider" "$allow_active_clear"
+    write_runtime_prewarm_complete 1
     log "provider pool already resident; prewarm skipped"
     return 0
   fi
@@ -4113,7 +4310,6 @@ open_provider_pool() {
     target_window="$(first_window_for_profile "$provider_profile" || true)"
     if [[ -n "$target_window" ]] && provider_has_real_provider_page "$provider_port"; then
       fast_resident=1
-      [[ "$resident_status" == "ready" || "$resident_status" == "active" ]] || write_runtime_provider_status "$provider" "ready"
     fi
   fi
   log_stage "open_pool_init provider=$provider fast_resident=$fast_resident switching=$switching_provider entry=$entry_stage ms=$(( $(now_ms) - started_ms ))"
@@ -4131,6 +4327,14 @@ open_provider_pool() {
   if [[ -f "$(pool_warm_stamp_file)" ]]; then
     stop_provider_pool_prewarm
   fi
+  # A newer sidebar choice owns the pending request. Do not carry this stale
+  # foreground command through another resident reveal while it holds the
+  # shared web-mode lock; the server will run the newest request next.
+  if ! runtime_open_request_is_current; then
+    clear_provider_switch_guard
+    log "open abandoned before resident reveal: $provider"
+    return 0
+  fi
   # A single bounded CDP read can lose a just-woken resident renderer. Retry
   # only after the shared transition has covered the old page, with the normal
   # bootstrap deadline; do not cold-restart a profile that then proves to have
@@ -4140,7 +4344,6 @@ open_provider_pool() {
     if wait_for_real_provider_url "$provider_port"; then
       log_stage "open_pool_bootstrap provider=$provider result=ok ms=$(( $(now_ms) - started_ms ))"
       fast_resident=1
-      [[ "$resident_status" == "ready" || "$resident_status" == "active" ]] || write_runtime_provider_status "$provider" "ready"
     elif [[ "$resident_status" == "ready" || "$resident_status" == "active" ]]; then
       write_runtime_provider_status "$provider" "check_setup" "$(provider_label "$provider") did not enter the provider page"
       log_stage "open_pool_bootstrap provider=$provider result=fail ms=$(( $(now_ms) - started_ms ))"
@@ -4150,18 +4353,20 @@ open_provider_pool() {
   fi
   if [[ "$fast_resident" == "1" && "$entry_stage" != "1" ]]; then
     stop_window_guard
+    if ! runtime_open_request_is_current; then
+      clear_provider_switch_guard
+      log "open abandoned before resident reveal: $provider"
+      return 0
+    fi
     if [[ "$entry_stage" != "1" && "$switching_provider" == "1" ]]; then
-      if [[ "$transition_shown_ms" == "0" ]]; then
-        begin_provider_switch_transition "$current_profile" "$provider"
-        transition_shown_ms="$TIKPAL_WEB_MODE_TRANSITION_SHOWN_MS"
-        # Pre-position the target window under the transition and start
-        # a parallel paint probe so reveal can skip the synchronous wait.
-        if [[ -n "$target_window" ]]; then
-          tile_window_fast "$target_window" "$TIKPAL_WEB_MODE_LEFT_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
-          clear_window_above "$target_window"
-          DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowlower "$target_window" >/dev/null 2>&1 || true
-          probe_target_window_background "$target_window"
-        fi
+      # begin_provider_switch_transition ran exactly once before the resident
+      # path. Even if its veil is unavailable, the background cover remains
+      # while this target probe verifies a non-empty frame.
+      if [[ -n "$target_window" ]]; then
+        tile_window_fast "$target_window" "$TIKPAL_WEB_MODE_LEFT_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
+        clear_window_above "$target_window"
+        DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowlower "$target_window" >/dev/null 2>&1 || true
+        probe_target_window_background "$target_window"
       fi
     fi
     if reveal_resident_provider_window "$target_window" "$current_profile" "$provider_profile" "$transition_shown_ms" "$provider_port"; then
@@ -4169,7 +4374,11 @@ open_provider_pool() {
       reveal_ms="$(( $(now_ms) - started_ms ))"
       log_stage "reveal_ms=$reveal_ms provider=$provider resident=1"
       clear_provider_switch_guard
-      write_runtime_provider_state "$provider"
+      if ! runtime_open_request_is_current; then
+        log "open abandoned before resident commit: $provider"
+        return 0
+      fi
+      commit_visible_provider_state "$provider"
       write_audio_bus_state ""
       start_window_guard "$provider_profile" "$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"
       reconcile_provider_pool_in_background "$provider"
@@ -4202,12 +4411,6 @@ open_provider_pool() {
     fail "$message"
   fi
   stop_window_guard
-  if [[ "$entry_stage" != "1" && "$switching_provider" == "1" ]]; then
-    if [[ "$transition_shown_ms" == "0" ]]; then
-      begin_provider_switch_transition "$current_profile" "$provider"
-      transition_shown_ms="$TIKPAL_WEB_MODE_TRANSITION_SHOWN_MS"
-    fi
-  fi
   if [[ "$fast_resident" != "1" ]] && profile_process_exists "$provider_profile"; then
     close_provider_profile "$provider_profile"
   fi
@@ -4234,7 +4437,7 @@ open_provider_pool() {
     fail "$(provider_label "$provider") did not open"
   fi
   if [[ "$fast_resident" != "1" && "$entry_stage" == "1" ]]; then
-    wait_for_entry_provider_paint "$(provider_debug_port "$provider")" "$provider" || log "WARN: $(provider_label "$provider") did not paint before entry reveal"
+    wait_for_entry_provider_paint "$(provider_debug_port "$provider")" "$provider" "$target_window" || log "WARN: $(provider_label "$provider") did not complete DOM/X11 paint checks before entry reveal"
   elif [[ "$fast_resident" != "1" ]]; then
     if ! wait_for_provider_ready "$(provider_debug_port "$provider")" "$provider"; then
       message="$(provider_label "$provider") did not become ready"
@@ -4242,7 +4445,6 @@ open_provider_pool() {
       fail "$message"
     fi
   fi
-  write_runtime_provider_status "$provider" "ready"
   if [[ "$entry_stage" == "1" ]]; then
     if [[ "$fast_resident" == "1" ]]; then
       reveal_resident_initial_entry_surfaces "$target_window" "$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"
@@ -4253,7 +4455,11 @@ open_provider_pool() {
   else
     reveal_resident_provider_surfaces "$target_window" "$provider_profile" "$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel" "$current_profile" "$transition_shown_ms"
   fi
-  write_runtime_provider_state "$provider"
+  if ! runtime_open_request_is_current; then
+    log "open abandoned before provider commit: $provider"
+    return 0
+  fi
+  commit_visible_provider_state "$provider"
   reveal_ms="$(( $(now_ms) - started_ms ))"
   log_stage "reveal_ms=$reveal_ms provider=$provider resident=$fast_resident"
   clear_provider_switch_guard
@@ -4437,7 +4643,7 @@ open_provider() {
     close_other_provider_profiles "$provider_profile"
   fi
   write_audio_bus_state "$target_audio_bus"
-  write_runtime_provider_state "$provider"
+  commit_visible_provider_state "$provider"
   start_window_guard "$provider_profile" "$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"
   log "opened $provider"
 }
@@ -4571,6 +4777,9 @@ case "${1:-open}" in
   warm-pool)
     warm_provider_pool
     ;;
+  warm-veil)
+    warm_transition_veil
+    ;;
   guard)
     run_window_guard "${2:-}" "${3:-}"
     ;;
@@ -4590,7 +4799,15 @@ case "${1:-open}" in
       fail "Unknown provider: $provider_id"
     fi
     case "$provider_status" in
-      ready|active) write_runtime_provider_status "$provider_id" "$provider_status" ;;
+      ready|active)
+        if provider_has_real_provider_page "$(provider_debug_port "$provider_id")"; then
+          write_runtime_provider_status "$provider_id" "$provider_status"
+        elif [[ "$provider_status" == "active" && "$(read_runtime_active_provider)" != "$provider_id" ]]; then
+          # A stale guard must not overwrite a confirmed Ready card while its
+          # asynchronous diagnostics decide whether this is terminal.
+          log "ignored stale provider-status active for $provider_id without a real HTTPS page"
+        fi
+        ;;
       *) fail "Provider status must be ready or active" ;;
     esac
     ;;

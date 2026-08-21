@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Airplay, Bluetooth, Captions, Cast, CheckCircle2, CircleHelp, Clock3, Cpu, Database, EthernetPort, Eye, EyeOff, Globe2, HardDrive, Info, Monitor, Moon, Music2, Palette, PanelRightClose, Plus, Power, Radio as RadioIcon, RotateCcw, Search, Server, SlidersHorizontal, Target, Trash2, Type, Usb, Volume2, Waves } from "lucide-react";
-import { deleteNasSource, discoverNasSources, fetchAudioLibrary, fetchAudioOutputDiagnostics, fetchMultiroom, fetchNasSources, fetchWebModeState, mountNasSource, saveNasSource, sendWebModeAction, testNasSource, unmountNasSource, updateMultiroomEcosystem, updateWebModeSettings } from "../api/tikpalClient";
+import { deleteNasSource, discoverNasSources, fetchAudioLibrary, fetchAudioOutputDiagnostics, fetchMultiroom, fetchNasSources, fetchWebModeState, mountNasSource, saveNasSource, sendWebModeAction, testNasSource, testWebModeProxy, unmountNasSource, updateMultiroomEcosystem, updateWebModeSettings } from "../api/tikpalClient";
 import { languageOptions, useI18n } from "../i18n";
 import { getSourceDisplayStatus, getSourceDisplayStatusLabel } from "../sourceStatus";
 import type { TikpalDataStatus } from "../hooks/useTikpalState";
 import { useOverlayReturnGesture } from "../hooks/useOverlayReturnGesture";
-import type { AudioOutputCustomSettingId, AudioOutputDiagnostics, AudioOutputProfile, AudioState, DisplaySleepStyle, FontTheme, LyricsFontSize, MultiroomAudioState, MultiroomEcosystemId, NasDiscoverCandidate, NasSourceInput, NasSourcesResponse, NightScheduleState, PlaybackSummary, RoomExperienceActionRequest, RoomExperienceState, RoomMode, RuntimeState, SurfaceTheme, SystemActionType, SystemState, UiLocale, WebModeState } from "../types";
+import type { AudioOutputCustomSettingId, AudioOutputDiagnostics, AudioOutputProfile, AudioState, DisplaySleepStyle, FontTheme, LyricsFontSize, MultiroomAudioState, MultiroomEcosystemId, NasDiscoverCandidate, NasSourceInput, NasSourcesResponse, NightScheduleState, PlaybackSummary, RoomExperienceActionRequest, RoomExperienceState, RoomMode, RuntimeState, SurfaceTheme, SystemActionType, SystemState, UiLocale, UiPreferences, WebModeState } from "../types";
 
 interface QuickSettingsOverlayProps {
   active: boolean;
@@ -19,7 +19,7 @@ interface QuickSettingsOverlayProps {
   lyricsVisible: boolean;
   lyricsFontSize: LyricsFontSize;
   roomExperience: RoomExperienceState;
-  onFontThemeChange: (theme: FontTheme) => void;
+  onFontThemeChange: (theme: FontTheme) => Promise<UiPreferences>;
   onSurfaceThemeChange: (theme: SurfaceTheme) => void;
   onLyricsVisibleChange: (visible: boolean) => void;
   onLyricsFontSizeChange: (size: LyricsFontSize) => void;
@@ -42,6 +42,7 @@ type LibraryStorageCounts = {
   nas: number | null;
   usb: number | null;
 };
+type WebModeProxyValidationStatus = "idle" | "checking" | "passed" | "failed";
 
 const NAS_PANEL_PAGE_SIZE = 3;
 const displaySleepMinuteChoices = [5, 10, 15, 30, 60] as const;
@@ -425,6 +426,7 @@ export function QuickSettingsOverlay({
   const [audioDiagnosticsError, setAudioDiagnosticsError] = useState<string | null>(null);
   const audioDiagnosticsTimerRef = useRef<number | null>(null);
   const webModeProxyUrlSaveNonceRef = useRef(0);
+  const webModeProxyTestNonceRef = useRef(0);
   const wasActiveRef = useRef(active);
   const initialDetailConsumedRef = useRef(false);
   const [webModeProxyEnabled, setWebModeProxyEnabled] = useState(true);
@@ -433,6 +435,9 @@ export function QuickSettingsOverlay({
   const [webModeProxyConfirmMode, setWebModeProxyConfirmMode] = useState<"toggle" | "url">("toggle");
   const [pendingProxyUrl, setPendingProxyUrl] = useState<string | null>(null);
   const [webModeProxyRestartPending, setWebModeProxyRestartPending] = useState(false);
+  const [webModeProxyValidationStatus, setWebModeProxyValidationStatus] = useState<WebModeProxyValidationStatus>("idle");
+  const [webModeProxyValidatedUrl, setWebModeProxyValidatedUrl] = useState<string | null>(null);
+  const [webModeProxyFailedSites, setWebModeProxyFailedSites] = useState<string[]>([]);
   const [webModeError, setWebModeError] = useState<string | null>(null);
   const [libraryStorageCounts, setLibraryStorageCounts] = useState<LibraryStorageCounts>({
     local: null,
@@ -710,6 +715,49 @@ export function QuickSettingsOverlay({
       window.clearTimeout(timer);
     };
   }, [active, localizedErrorMessage, t, webModeProxyUrl, webModeState]);
+
+  useEffect(() => {
+    const shouldValidateProxy = webModeProxyConfirmEnabled === true;
+    const candidateProxyUrl = normalizeProxyUrl(
+      webModeProxyConfirmMode === "url" && pendingProxyUrl ? pendingProxyUrl : webModeProxyUrl
+    );
+    const requestNonce = ++webModeProxyTestNonceRef.current;
+
+    if (!shouldValidateProxy || candidateProxyUrl === null) {
+      setWebModeProxyValidationStatus("idle");
+      setWebModeProxyValidatedUrl(null);
+      setWebModeProxyFailedSites([]);
+      return undefined;
+    }
+
+    let cancelled = false;
+    setWebModeProxyValidationStatus("checking");
+    setWebModeProxyValidatedUrl(null);
+    setWebModeProxyFailedSites([]);
+    const timer = window.setTimeout(() => {
+      void testWebModeProxy(candidateProxyUrl)
+        .then((result) => {
+          if (cancelled || webModeProxyTestNonceRef.current !== requestNonce) return;
+          if (result.ok) {
+            setWebModeProxyValidationStatus("passed");
+            setWebModeProxyValidatedUrl(candidateProxyUrl);
+            return;
+          }
+          setWebModeProxyValidationStatus("failed");
+          setWebModeProxyFailedSites(result.checks.filter((check) => !check.ok).map((check) => check.label));
+        })
+        .catch(() => {
+          if (cancelled || webModeProxyTestNonceRef.current !== requestNonce) return;
+          setWebModeProxyValidationStatus("failed");
+          setWebModeProxyFailedSites(["Google", "Apple Music", "Spotify"]);
+        });
+    }, 400);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [pendingProxyUrl, webModeProxyConfirmEnabled, webModeProxyConfirmMode, webModeProxyUrl]);
 
   const librarySourceKind = system.library.source.trim().toLowerCase();
   const displayedAudioOutputProfile = audioOutputPendingProfile ?? preferences.audioOutputProfile;
@@ -1438,6 +1486,9 @@ export function QuickSettingsOverlay({
     setDetailView(nextDetail);
     setConfirmAction(null);
     setWebModeProxyConfirmEnabled(null);
+    setWebModeProxyValidationStatus("idle");
+    setWebModeProxyValidatedUrl(null);
+    setWebModeProxyFailedSites([]);
   }
 
   function requestWebModeProxyChange(enabled: boolean) {
@@ -1449,6 +1500,9 @@ export function QuickSettingsOverlay({
     setWebModeError(null);
     setPendingProxyUrl(null);
     setWebModeProxyConfirmMode("toggle");
+    setWebModeProxyValidationStatus("idle");
+    setWebModeProxyValidatedUrl(null);
+    setWebModeProxyFailedSites([]);
     setWebModeProxyConfirmEnabled(enabled);
   }
 
@@ -1465,13 +1519,52 @@ export function QuickSettingsOverlay({
     setWebModeError(null);
     setPendingProxyUrl(normalizedProxyUrl);
     setWebModeProxyConfirmMode("url");
+    setWebModeProxyValidationStatus("idle");
+    setWebModeProxyValidatedUrl(null);
+    setWebModeProxyFailedSites([]);
     setWebModeProxyConfirmEnabled(true);
+  }
+
+  function checkWebModeProxy() {
+    if (webModeProxyRestartPending || webModeProxyValidationStatus === "checking") return;
+
+    const candidateProxyUrl = normalizeProxyUrl(webModeProxyUrl);
+    if (candidateProxyUrl === null) {
+      setWebModeError(t("settings.enterProxyUrl"));
+      return;
+    }
+
+    const requestNonce = ++webModeProxyTestNonceRef.current;
+    setWebModeError(null);
+    setWebModeProxyValidationStatus("checking");
+    setWebModeProxyValidatedUrl(null);
+    setWebModeProxyFailedSites([]);
+    void testWebModeProxy(candidateProxyUrl)
+      .then((result) => {
+        if (webModeProxyTestNonceRef.current !== requestNonce) return;
+        if (result.ok) {
+          setWebModeProxyValidationStatus("passed");
+          setWebModeProxyValidatedUrl(candidateProxyUrl);
+          return;
+        }
+        setWebModeProxyValidationStatus("failed");
+        setWebModeProxyFailedSites(result.checks.filter((check) => !check.ok).map((check) => check.label));
+      })
+      .catch(() => {
+        if (webModeProxyTestNonceRef.current !== requestNonce) return;
+        setWebModeProxyValidationStatus("failed");
+        setWebModeProxyFailedSites(["Google", "Apple Music", "Spotify"]);
+      });
   }
 
   function cancelWebModeProxyChange() {
     if (webModeProxyRestartPending) return;
+    webModeProxyTestNonceRef.current += 1;
     setWebModeProxyConfirmEnabled(null);
     setPendingProxyUrl(null);
+    setWebModeProxyValidationStatus("idle");
+    setWebModeProxyValidatedUrl(null);
+    setWebModeProxyFailedSites([]);
   }
 
   async function confirmWebModeProxyChange() {
@@ -1483,6 +1576,7 @@ export function QuickSettingsOverlay({
       setWebModeError(t("settings.enterProxyUrl"));
       return;
     }
+    if (nextEnabled && (webModeProxyValidationStatus !== "passed" || webModeProxyValidatedUrl !== normalizedProxyUrl)) return;
 
     webModeProxyUrlSaveNonceRef.current += 1;
     setWebModeError(null);
@@ -1562,7 +1656,10 @@ export function QuickSettingsOverlay({
               key={choice.id}
               className={`font-theme-option ${fontTheme === choice.id ? "is-active" : ""}`}
               type="button"
-              onClick={() => onFontThemeChange(choice.id)}
+              disabled={preferencesPending || fontTheme === choice.id}
+              onClick={() => void onFontThemeChange(choice.id).catch(() => {
+                // Preference state refreshes after a failed save; keep the control responsive.
+              })}
             >
               <strong>{choice.label}</strong>
               <span>{choice.sample}</span>
@@ -2402,6 +2499,18 @@ export function QuickSettingsOverlay({
 
   function renderWebModeDetail() {
     const normalizedPendingProxyUrl = pendingProxyUrl ? (normalizeProxyUrl(pendingProxyUrl) ?? pendingProxyUrl) : null;
+    const proxyUrlToValidate = normalizeProxyUrl(webModeProxyConfirmMode === "url" && pendingProxyUrl ? pendingProxyUrl : webModeProxyUrl);
+    const proxyWillBeEnabled = webModeProxyConfirmEnabled === true;
+    const proxyValidationPassed = !proxyWillBeEnabled
+      || (webModeProxyValidationStatus === "passed" && webModeProxyValidatedUrl === proxyUrlToValidate);
+    const proxyRestartDisabled = webModeProxyRestartPending || !proxyValidationPassed;
+    const proxyValidationText = webModeProxyValidationStatus === "checking"
+      ? t("settings.proxyCheckChecking")
+      : webModeProxyValidationStatus === "passed"
+        ? t("settings.proxyCheckPassed")
+        : webModeProxyValidationStatus === "failed"
+          ? t("settings.proxyCheckFailed", { sites: webModeProxyFailedSites.join(", ") || "Google, Apple Music, Spotify" })
+          : null;
 
     const statusText = webModeError
       ?? (webModeState?.settings.proxyEnabled ? t("settings.proxyReady") : t("explore.directConnection"));
@@ -2413,7 +2522,7 @@ export function QuickSettingsOverlay({
       <section className="settings-detail-panel" aria-label="Explore detail" data-settings-detail="web-mode">
         <div className="settings-detail-header">
           <button className="settings-detail-back" type="button" onClick={() => {
-            setWebModeProxyConfirmEnabled(null);
+            cancelWebModeProxyChange();
             setDetailView(null);
           }}>
             {t("common.close")}
@@ -2441,18 +2550,40 @@ export function QuickSettingsOverlay({
             </span>
           </button>
 
-          <label className="night-field web-mode-proxy-field">
-            <span>Proxy URL</span>
-            <input
-              type="url"
-              value={webModeProxyUrl}
-              inputMode="url"
-              spellCheck={false}
-              disabled={webModeProxyRestartPending}
-              onChange={(event) => setWebModeProxyUrl(event.currentTarget.value)}
-              onKeyDown={(event) => { if (event.key === "Enter") { window.dispatchEvent(new Event("tikpal:keyboard-context-clear")); requestWebModeProxyUrlChange(); (event.currentTarget as HTMLInputElement).blur(); } }}
-            />
-          </label>
+          <div className="web-mode-proxy-url-control">
+            <label className="night-field web-mode-proxy-field">
+              <span>Proxy URL</span>
+              <input
+                type="url"
+                value={webModeProxyUrl}
+                inputMode="url"
+                spellCheck={false}
+                disabled={webModeProxyRestartPending}
+                onChange={(event) => setWebModeProxyUrl(event.currentTarget.value)}
+                onKeyDown={(event) => { if (event.key === "Enter") { window.dispatchEvent(new Event("tikpal:keyboard-context-clear")); requestWebModeProxyUrlChange(); (event.currentTarget as HTMLInputElement).blur(); } }}
+              />
+            </label>
+            <button
+              className="web-mode-proxy-test"
+              type="button"
+              disabled={webModeProxyRestartPending || webModeProxyValidationStatus === "checking"}
+              aria-busy={webModeProxyValidationStatus === "checking"}
+              data-web-mode-proxy-test
+              onClick={checkWebModeProxy}
+            >
+              {t("common.checkProxy")}
+            </button>
+          </div>
+
+          {proxyValidationText ? (
+            <p
+              className={`web-mode-proxy-validation is-${webModeProxyValidationStatus}`}
+              data-web-mode-proxy-validation
+              aria-live="polite"
+            >
+              {proxyValidationText}
+            </p>
+          ) : null}
 
           {proxyChangeTarget ? (
             <section className="web-mode-proxy-restart-confirm" data-web-mode-proxy-restart-confirm aria-live="polite">
@@ -2464,7 +2595,7 @@ export function QuickSettingsOverlay({
                 <button type="button" disabled={webModeProxyRestartPending} data-web-mode-proxy-restart-cancel onClick={cancelWebModeProxyChange}>
                   {t("common.cancel")}
                 </button>
-                <button type="button" disabled={webModeProxyRestartPending} data-web-mode-proxy-restart-apply onClick={() => void confirmWebModeProxyChange()}>
+                <button type="button" disabled={proxyRestartDisabled} data-web-mode-proxy-restart-apply onClick={() => void confirmWebModeProxyChange()}>
                   {webModeProxyRestartPending ? t("common.applying") : t("settings.proxyRestartConfirmAction")}
                 </button>
               </div>
@@ -2719,7 +2850,7 @@ export function QuickSettingsOverlay({
               {roomShortcuts.map((shortcut) => {
                 const Icon = shortcut.Icon;
                 const activeShortcut = shortcut.id === "explore"
-                  ? Boolean(webModeState?.activeProvider)
+                  ? Boolean(webModeState?.activeProvider || webModeState?.openingProvider)
                   : roomExperience.mode === shortcut.id;
                 const pendingShortcut = pendingRoomShortcut === shortcut.id;
                 return (

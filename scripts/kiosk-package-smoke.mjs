@@ -5,7 +5,7 @@ import { request as httpRequest } from "node:http";
 import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { buildProxyConfig, buildProxyKey, normalizeProviderTextScale } from "../deploy/chromium/web-mode-extension/background.js";
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
@@ -54,6 +54,7 @@ const requiredFiles = [
   "deploy/moode/tikpal-upnp-disable.sh",
   "deploy/moode/tikpal-upnp-label.sh",
   "deploy/moode/tikpal-upnp-metadata.sh",
+  "deploy/moode/tikpal-moodeutl.sh",
   "public/web-mode-error.html",
   "public/web-mode-background.html",
   "public/web-mode-close-overlay.html",
@@ -201,6 +202,7 @@ async function run() {
   await assertExecutable("deploy/moode/tikpal-upnp-disable.sh");
   await assertExecutable("deploy/moode/tikpal-upnp-label.sh");
   await assertExecutable("deploy/moode/tikpal-upnp-metadata.sh");
+  await assertExecutable("deploy/moode/tikpal-moodeutl.sh");
   await assertExecutable("deploy/moode/tikpal-alsa-loopback.sh");
   await assertExecutable("deploy/moode/tikpal-airplay-transport.sh");
   await assertExecutable("deploy/moode/tikpal-output-volume.sh");
@@ -208,6 +210,51 @@ async function run() {
   await assertExecutable("deploy/moode/tikpal-quiet-boot-enable.sh");
   await assertExecutable("deploy/moode/tikpal-locale-enable.sh");
   await assertExecutable("deploy/systemd/install-systemd-services.sh");
+
+  const moodeutlHelperSource = await readFile(path.join(ROOT, "deploy/moode/tikpal-moodeutl.sh"), "utf8");
+  assert(
+    /if command -v moodeutl >\/dev\/null 2>&1; then\s*moodeutl "\$@"/s.test(moodeutlHelperSource),
+    "shared moodeutl helper should call moodeutl only when it is installed"
+  );
+  const moodeutlSyntax = spawnSync("sh", ["-n", path.join(ROOT, "deploy/moode/tikpal-moodeutl.sh")], { encoding: "utf8" });
+  assert(moodeutlSyntax.status === 0, `shared moodeutl helper should pass sh syntax validation: ${moodeutlSyntax.stderr}`);
+  const moodeutlInvocation = `. "${path.join(ROOT, "deploy/moode/tikpal-moodeutl.sh")}"; tikpal_moodeutl -Ro --airplay on`;
+  const absentMoodeutl = spawnSync("/bin/sh", ["-c", moodeutlInvocation], { env: { PATH: "" }, encoding: "utf8" });
+  assert(absentMoodeutl.status === 0, "shared moodeutl helper should be a successful no-op when moodeutl is absent");
+  const moodeutlTestDir = mkdtempSync(path.join(tmpdir(), "tikpal-moodeutl-"));
+  writeFileSync(path.join(moodeutlTestDir, "moodeutl"), "#!/bin/sh\nexit 23\n", { mode: 0o755 });
+  const failingMoodeutl = spawnSync("/bin/sh", ["-c", moodeutlInvocation], { env: { PATH: moodeutlTestDir }, encoding: "utf8" });
+  assert(failingMoodeutl.status === 23, "shared moodeutl helper should preserve a present moodeutl failure");
+  const externalSourceHelpers = [
+    "deploy/moode/tikpal-spotify-enable.sh",
+    "deploy/moode/tikpal-spotify-disable.sh",
+    "deploy/moode/tikpal-bluetooth-enable.sh",
+    "deploy/moode/tikpal-bluetooth-disable.sh",
+    "deploy/moode/tikpal-airplay-enable.sh",
+    "deploy/moode/tikpal-airplay-disable.sh",
+    "deploy/moode/tikpal-upnp-enable.sh",
+    "deploy/moode/tikpal-upnp-disable.sh"
+  ];
+  for (const helper of externalSourceHelpers) {
+    const source = await readFile(path.join(ROOT, helper), "utf8");
+    const shell = helper.endsWith("airplay-enable.sh") || helper.endsWith("bluetooth-enable.sh") ? "sh" : "bash";
+    const syntax = spawnSync(shell, ["-n", path.join(ROOT, helper)], { encoding: "utf8" });
+    assert(syntax.status === 0, `${helper} should pass ${shell} syntax validation: ${syntax.stderr}`);
+    assert(source.includes('tikpal-moodeutl.sh'), `${helper} should use the shared moodeutl helper`);
+    assert(!/\bmoodeutl\s+-Ro\b/.test(source), `${helper} should not call moodeutl directly`);
+  }
+  const envExampleSource = await readFile(path.join(ROOT, ".env.example"), "utf8");
+  assert(
+    !/^TIKPAL_(SPOTIFY|BLUETOOTH|AIRPLAY|UPNP)_(ACTIVATE|ENABLE|DISABLE)_COMMAND=.*\bmoodeutl\b/m.test(envExampleSource),
+    "default source commands should not invoke moodeutl directly"
+  );
+  const gentooDeploySource = await readFile(path.join(ROOT, "deploy/deploy-gentoo.sh"), "utf8");
+  assert(
+    gentooDeploySource.includes("for env_file in .env .env.kiosk")
+      && gentooDeploySource.includes("TIKPAL_(SPOTIFY|BLUETOOTH|AIRPLAY|UPNP)_(ACTIVATE|ENABLE|DISABLE)_COMMAND")
+      && gentooDeploySource.includes("Gentoo deployment blocked"),
+    "Gentoo deployment should block bare moodeutl source commands in both environment files"
+  );
 
   const onboardingGuideSource = await readFile(path.join(ROOT, "src/components/OnboardingGuide.tsx"), "utf8");
   for (const visibleHardcodedText of [
@@ -724,6 +771,7 @@ esac
 provider_ids() { printf 'spotify\\n'; }
 profile_process_exists() { return 0; }
 provider_has_real_provider_page() { return 0; }
+wait_for_provider_ready() { return 1; }
 provider_debug_port() { printf '9234\\n'; }
 sync_runtime_provider_pool_process_statuses ""
 `,
@@ -742,11 +790,92 @@ sync_runtime_provider_pool_process_statuses ""
     closeSyncedState.activeProvider === null &&
       closeSyncedState.closeRequestId === "close-owns-state" &&
       closeSyncedState.residentProviders.spotify?.status === "ready",
-    "a close-owned sync should self-heal a real resident HTTPS page to ready without reopening Explore"
+    "a close-owned sync should promote a real HTTPS page without waiting for full DOM readiness"
   );
+  const startupResetStatePath = path.join(reconcileSmokeDir, "startup-reset-state.json");
+  const startupResetProfileRoot = path.join(reconcileSmokeDir, "startup-reset-profiles");
+  mkdirSync(startupResetProfileRoot);
+  writeFileSync(startupResetStatePath, JSON.stringify({
+    activeProvider: null,
+    lastProvider: "spotify",
+    closeRequestId: "stale-close-request",
+    residentProviders: { spotify: { status: "active" } }
+  }));
+  writeFileSync(path.join(startupResetProfileRoot, "pool-warm.stamp"), "old pool\n");
+  const startupResetFullClose = spawnSync("bash", ["-s"], {
+    cwd: ROOT,
+    input: `${webModeFunctions}
+provider_ids() { printf 'spotify\\n'; }
+close_legacy_exit_stage() { :; }
+hide_onboard() { :; }
+launch_close_overlay_veil() { :; }
+close_provider_windows() { :; }
+close_side_panel() { :; }
+wait_for_close_overlay_fade() { :; }
+close_transition_veil() { :; }
+close_error_veil() { :; }
+close_background_veil() { :; }
+close_close_overlay_veil() { :; }
+write_audio_bus_state() { :; }
+sync_runtime_provider_pool_process_statuses() { :; }
+close_web_mode_full
+[[ ! -e "$(pool_warm_stamp_file)" ]]
+`,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      TIKPAL_KIOSK_SKIP_ENV_SOURCE: "1",
+      TIKPAL_WEB_MODE_STARTUP_RESET: "1",
+      TIKPAL_WEB_MODE_PROFILE_ROOT: startupResetProfileRoot,
+      TIKPAL_WEB_MODE_STATE_PATH: startupResetStatePath
+    }
+  });
+  assert(startupResetFullClose.status === 0, `startup reset should clear stale pool state: ${startupResetFullClose.stderr || startupResetFullClose.stdout}`);
+  const startupResetState = JSON.parse(await readFile(startupResetStatePath, "utf8"));
+  assert(
+    startupResetState.activeProvider === null &&
+      startupResetState.closeRequestId === null &&
+      startupResetState.openingProvider === null &&
+      startupResetState.openRequestId === null,
+    "startup reset must release a stale Close owner before boot prewarm starts"
+  );
+  const startupResetStatusSync = spawnSync("bash", ["-s"], {
+    cwd: ROOT,
+    input: `${webModeFunctions}
+provider_ids() { printf 'spotify\\n'; }
+profile_process_exists() { return 0; }
+provider_has_real_provider_page() { return 0; }
+wait_for_provider_ready() { return 0; }
+provider_debug_port() { printf '9234\\n'; }
+sync_runtime_provider_pool_process_statuses ""
+`,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      TIKPAL_KIOSK_SKIP_ENV_SOURCE: "1",
+      TIKPAL_WEB_MODE_PROFILE_ROOT: startupResetProfileRoot,
+      TIKPAL_WEB_MODE_STATE_PATH: startupResetStatePath
+    }
+  });
+  assert(startupResetStatusSync.status === 0, `startup prewarm status sync should exit cleanly: ${startupResetStatusSync.stderr || startupResetStatusSync.stdout}`);
+  const startupResetSyncedState = JSON.parse(await readFile(startupResetStatePath, "utf8"));
+  assert(startupResetSyncedState.residentProviders.spotify?.status === "ready", "a real provider page should become Ready after startup reset releases the stale Close owner");
+  const proxyPolicySmoke = spawnSync("bash", ["-s"], {
+    cwd: ROOT,
+    input: `${webModeFunctions}
+[[ "$(effective_provider_proxy_enabled spotify 1)" == "1" ]]
+[[ "$(effective_provider_proxy_enabled spotify 0)" == "0" ]]
+[[ "$(effective_provider_proxy_enabled qq_music 1)" == "0" ]]
+[[ "$(effective_provider_proxy_enabled netease_music 1)" == "0" ]]
+`,
+    encoding: "utf8",
+    env: { ...process.env, TIKPAL_KIOSK_SKIP_ENV_SOURCE: "1" }
+  });
+  assert(proxyPolicySmoke.status === 0, `boot prewarm proxy policy should honor Proxy On/Off and direct-provider exceptions: ${proxyPolicySmoke.stderr || proxyPolicySmoke.stdout}`);
   const onboardImeToggleScript = await readFile(path.join(ROOT, "deploy/chromium/onboard-scripts/tikpalImeToggle.py"), "utf8");
   const onboardTheme = await readFile(path.join(ROOT, "deploy/chromium/onboard-themes/Tikpal-Classic.colors"), "utf8");
   const serverSource = await readFile(path.join(ROOT, "server/index.mjs"), "utf8");
+  const prewarmProviderGuardSource = await readFile(path.join(ROOT, "deploy/chromium/tikpal-web-mode-guard.mjs"), "utf8");
   const webModeErrorPage = await readFile(path.join(ROOT, "public/web-mode-error.html"), "utf8");
   const webModeBackgroundPage = await readFile(path.join(ROOT, "public/web-mode-background.html"), "utf8");
   const webModeCloseOverlayPage = await readFile(path.join(ROOT, "public/web-mode-close-overlay.html"), "utf8");
@@ -765,6 +894,7 @@ sync_runtime_provider_pool_process_statuses ""
   const quickSettingsSource = await readFile(path.join(ROOT, "src/components/QuickSettingsOverlay.tsx"), "utf8");
   const remoteControlSource = await readFile(path.join(ROOT, "src/components/RemoteControlApp.tsx"), "utf8");
   const ambientScreenSource = await readFile(path.join(ROOT, "src/components/AmbientScreen.tsx"), "utf8");
+  const sourceStatusSource = await readFile(path.join(ROOT, "src/sourceStatus.ts"), "utf8");
   const startupModeChooserSource = await readFile(path.join(ROOT, "src/components/StartupModeChooser.tsx"), "utf8");
   const appModeSource = await readFile(path.join(ROOT, "src/hooks/useAppMode.ts"), "utf8");
   const playerOverlaySource = await readFile(path.join(ROOT, "src/components/PlayerOverlay.tsx"), "utf8");
@@ -816,15 +946,17 @@ sync_runtime_provider_pool_process_statuses ""
     "Quick Menu should visibly darken and blur the room behind the switches"
   );
   assert(
-    startupModeChooserSource.includes('context: "startup" | "explore-return"')
+    startupModeChooserSource.includes('context: "startup"')
       && startupModeChooserSource.includes("data-room-mode-chooser-context={context}")
       && startupModeChooserSource.includes("videoReady: boolean")
       && startupModeChooserSource.includes("!videoReady")
-      && appSource.includes('setRoomModeChooserContext("explore-return")')
+      && !startupModeChooserSource.includes("explore-return")
+      && !appSource.includes('setRoomModeChooserContext("explore-return")')
+      && appSource.includes("returnAmbient();")
       && appSource.includes("onSceneVideoReadyChange={handleSceneVideoReadyChange}")
       && appSource.includes("roomModeSelectionPending")
       && appSource.includes("observedWebModeActiveRef"),
-    "Explore close should keep the room-mode chooser visible until its scene video is ready after an observed active-to-idle transition"
+    "Explore close should return directly to Ambient after an observed active-to-idle transition; the room-mode chooser is startup-only"
   );
   assert(
     i18nSource.includes('const LOCALE_STORAGE_KEY = "tikpal.locale"')
@@ -835,10 +967,8 @@ sync_runtime_provider_pool_process_statuses ""
     "Saved UI locales should render before the first visible UI frame and cache every supported locale"
   );
   assert(
-    stylesSource.includes(".startup-mode-chooser.is-explore-return")
-      && stylesSource.includes("backdrop-filter: blur(24px) saturate(0.42) brightness(0.5)")
-      && stylesSource.includes("min-height: 220px"),
-    "Explore return chooser should visibly darken and blur ambient behind four large room cards"
+    !stylesSource.includes(".startup-mode-chooser.is-explore-return"),
+    "Explore return-only room-mode chooser styles should be removed"
   );
   assert(appModeSource.includes("HUD_AUTO_HIDE_MS = 8000") && appModeSource.includes("HUD_SOURCE_PICKER_AUTO_HIDE_MS = 12000") && appModeSource.includes("hudAutoHidePaused"), "Ambient HUD should use 8s normally, 12s with the source picker, and pause auto-hide during pending work");
   assert(stylesSource.includes(".ambient-source-toggle.is-source-primary:not(:disabled)") && stylesSource.includes(".ambient-source-toggle.is-source-primary.is-active:not(:disabled)"), "Ambient source picker toggle should keep a skin-aware primary state after the shelf closes");
@@ -912,7 +1042,7 @@ sync_runtime_provider_pool_process_statuses ""
   assert(extensionBackground.includes("DIRECT_PROXY_PROVIDER_IDS") && extensionBackground.includes('"qq_music"') && extensionBackground.includes('"netease_music"'), "Explore extension should keep QQ Music and NetEase direct even when global proxy is on");
   assert(extensionContent.includes("tikpal-netease-fetch-audio") && extensionContent.includes('chrome.runtime.sendMessage({ type: "fetch-audio"') && extensionContent.includes('message?.type !== "fetch-audio-result"'), "NetEase page script should be able to request chunked extension-backed audio bytes");
   assert(extensionContent.includes("providerHostIds") && extensionContent.includes('id: "qq_music"') && extensionContent.includes("inferProviderId"), "Explore provider pages should infer their provider id after bootstrap navigation");
-  assert(extensionContent.includes('chrome.runtime.sendMessage({ type: "keyboard", enabled, force }'), "Explore extension should distinguish new input focus from keyboard hide requests");
+  assert(extensionContent.includes('chrome.runtime.sendMessage({ type: "keyboard", enabled, force, dismissSticky }'), "Explore extension should distinguish new input focus from ordinary hides and explicit dismiss requests");
   assert(extensionContent.includes("suno\\.com") && extensionContent.includes('event.type === "focusin" && !allowProgrammaticInputFocus'), "Suno should ignore page-driven autofocus until the user taps an input");
   assert(extensionContent.includes("editableTarget(document.activeElement)"), "Explore extension should hide Onboard after provider input focus ends");
   assert(extensionContent.includes("inputSessionActive") && extensionContent.includes("active || (inputSessionActive && lastEditable?.isConnected) || !outsidePointerDown"), "Explore extension should not hide Onboard when the keyboard takes focus from a provider input");
@@ -925,7 +1055,7 @@ sync_runtime_provider_pool_process_statuses ""
   assert(!sidePanelSource.includes('sendWebModeAction({ type: "proxy"') && !sidePanelSource.includes("data-web-mode-proxy-toggle"), "Explore side panel should not hot-toggle Proxy from the resident provider pool");
   assert(sidePanelSource.includes("data-web-mode-proxy-status") && sidePanelSource.includes('"explore.proxyChangeInSettings"'), "Explore side panel should show Proxy On/Off as status and point users to Settings");
   assert(sidePanelSource.includes('sendWebModeAction({ type: "provider_text_scale"') && sidePanelSource.includes("data-web-mode-text-scale-option"), "Explore side panel should expose the provider text scale action");
-  assert(sidePanelSource.includes("data-web-mode-state={panelState}") && sidePanelSource.includes('panelState === "closing"') && sidePanelSource.includes('panelState === "switching"'), "Explore side panel should expose synchronized closing and provider-switching states");
+  assert(sidePanelSource.includes("data-web-mode-state={panelState}") && sidePanelSource.includes('pendingAction === "close" ? "closing"') && sidePanelSource.includes('panelState === "switching"') && sidePanelSource.includes("displayedOpeningProvider"), "Explore side panel should expose synchronized closing and opening-provider states");
   assert(sidePanelSource.includes("inferFailedProviderFromError") && sidePanelSource.includes('"common.failed"') && sidePanelSource.includes("is-failed"), "Explore side panel should show provider-open failures without marking the provider active");
   assert(sidePanelSource.includes('residentStatus === "check_proxy"') && sidePanelSource.includes('"common.needProxyOn"'), "Explore side panel should show Need Proxy On from live provider probe state");
   assert(sidePanelSource.includes("isProxyNeededError") && sidePanelSource.includes("needs proxy(?: on)?"), "Explore side panel should show Need Proxy On for proxy-related provider failures");
@@ -941,6 +1071,7 @@ sync_runtime_provider_pool_process_statuses ""
   assert(!quickSettingsSource.includes("webModeProviderTextScale") && !quickSettingsSource.includes("webModeTextScaleChoices") && !quickSettingsSource.includes("data-web-mode-settings-scale"), "Console Explore settings should not expose provider text scale controls");
   assert(quickSettingsSource.includes("requestWebModeProxyChange") && quickSettingsSource.includes("data-web-mode-proxy-restart-confirm") && quickSettingsSource.includes('await onSystemAction("reboot")'), "Console Proxy toggles should require confirmation, save settings, and then request a reboot");
   assert(quickSettingsSource.includes('if (enabled && normalizeProxyUrl(webModeProxyUrl) === null)') && quickSettingsSource.includes("if (nextEnabled && normalizedProxyUrl === null)"), "Console Proxy should reject an invalid URL before confirmation and before saving Proxy On");
+  assert(quickSettingsSource.includes("testWebModeProxy(candidateProxyUrl)") && quickSettingsSource.includes("checkWebModeProxy") && quickSettingsSource.includes("data-web-mode-proxy-test") && quickSettingsSource.includes("data-web-mode-proxy-validation") && quickSettingsSource.includes("disabled={proxyRestartDisabled}"), "Console Proxy should expose a manual candidate check and require validation before enabling its restart action");
   assert(quickSettingsSource.includes("proxyUrl: normalizedProxyUrl") && !quickSettingsSource.includes("proxyEnabled: webModeProxyEnabled"), "Console Proxy URL drafts should auto-save without hot-applying proxy state");
   assert(["focus", "calm", "sleep", "hifi", "explore"].every((id) => quickSettingsSource.includes(`id: "${id}"`)), "Console should expose five room shortcuts");
   assert(quickSettingsSource.includes('data-room-shortcut={shortcut.id}') && quickSettingsSource.includes("disabled={pendingRoomShortcut !== null}"), "Console room shortcuts should expose state and lock while switching");
@@ -1175,10 +1306,35 @@ sync_runtime_provider_pool_process_statuses ""
       kioskLauncher.includes("TIKPAL_WEB_MODE_BOOT_PREWARM_READY_TIMEOUT_SECONDS:=30") &&
       kioskLauncher.includes("kiosk_profile_has_visible_window()") &&
       kioskLauncher.includes("wait_for_kiosk_profile_window") &&
+      kioskLauncher.includes('"$SCRIPT_DIR/tikpal-web-mode.sh" warm-veil') &&
       kioskLauncher.includes('"$SCRIPT_DIR/tikpal-web-mode.sh" warm-pool'),
-    "kiosk launcher should wait for two visible main-profile samples before boot prewarming the resident Explore pool"
+    "kiosk launcher should prewarm the reusable switch veil and resident Explore pool after two visible main-profile samples"
   );
   assert(webModeScript.includes("nohup \"$SCRIPT_DIR/tikpal-web-mode.sh\" guard"), "web mode should keep the window guard alive after the launcher exits");
+  const prewarmWorkerStart = webModeScript.indexOf("launch_provider_prewarm_worker() {");
+  const prewarmWorkerEnd = webModeScript.indexOf("\n}\n\n# After the main prewarm queue", prewarmWorkerStart);
+  const prewarmWorkerBody = webModeScript.slice(prewarmWorkerStart, prewarmWorkerEnd);
+  assert(
+    prewarmWorkerBody.includes('launch_provider_for_pool "$provider" entry prewarm')
+      && !prewarmWorkerBody.includes("wait_for_provider_ready")
+      && webModeScript.includes('if provider_has_real_provider_page "$provider_port"; then')
+      && webModeScript.includes("provider_prewarm_queue_is_complete()")
+      && webModeScript.includes('write_runtime_prewarm_complete 1')
+      && !webModeScript.includes('transition_profile="$transition_profile.$(date +%s%N)"'),
+    "prewarm should finish workers at real HTTPS pages, while the transition veil keeps one stable profile"
+  );
+  assert(
+    prewarmProviderGuardSource.includes('spawn(launcherPath, ["provider-status", providerId, normalizedStatus]')
+      && webModeScript.includes('if provider_has_real_provider_page "$(provider_debug_port "$provider_id")"; then'),
+    "guard status promotion must require a real HTTPS page without blocking on full DOM readiness"
+  );
+  assert(
+    serverSource.includes('prewarmComplete: raw.prewarmComplete === true')
+      && ambientScreenSource.includes("isExplorePrewarmComplete(webModeState)")
+      && sourceStatusSource.includes('status === "ready"')
+      && sourceStatusSource.includes('status === "check_setup"'),
+    "the source picker must wait until the queue reaches real pages or terminal provider states"
+  );
   assert(webModeScript.includes("detect_non_hdmi_card_id"), "web mode should detect the actual non-HDMI ALSA card");
   assert(webModeScript.includes("tikpal-audio-adapt.sh") && webModeScript.includes("resolve-browser"), "web mode should use the shared audio adapter for auto ALSA output");
   assert(webModeScript.includes("resolve_web_mode_audio_devices()"), "web mode should lazily resolve auto ALSA output for provider windows");
@@ -1219,7 +1375,7 @@ sync_runtime_provider_pool_process_statuses ""
   assert(webModeScript.includes("window-guard.pid"), "web mode should track the persistent window guard pid");
   assert(webModeScript.includes("TIKPAL_WEB_MODE_QQ_MV_AUTO_FULLSCREEN:=0"), "web mode should keep QQ MV auto fullscreen off by default");
   assert(webModeScript.includes("TIKPAL_WEB_MODE_QQ_AUDIO_PRIME:=1") && webModeScript.includes('TIKPAL_WEB_MODE_QQ_AUDIO_PRIME="$TIKPAL_WEB_MODE_QQ_AUDIO_PRIME"'), "web mode should enable and pass QQ Music audio prime by default");
-  assert(webModeScript.includes("TIKPAL_WEB_MODE_QQ_MUSIC_AUTO_PLAY:=1") && webModeScript.includes('TIKPAL_WEB_MODE_QQ_MUSIC_AUTO_PLAY="$TIKPAL_WEB_MODE_QQ_MUSIC_AUTO_PLAY"'), "web mode should enable and pass QQ Music one-shot auto play by default");
+  assert(webModeScript.includes("TIKPAL_WEB_MODE_QQ_MUSIC_AUTO_PLAY:=0") && webModeScript.includes('TIKPAL_WEB_MODE_QQ_MUSIC_AUTO_PLAY="$TIKPAL_WEB_MODE_QQ_MUSIC_AUTO_PLAY"'), "web mode should keep QQ Music one-shot auto play opt-in while passing the device setting to the provider guard");
   assert(webModeScript.includes('TIKPAL_WEB_MODE_QQ_MV_AUTO_FULLSCREEN="$TIKPAL_WEB_MODE_QQ_MV_AUTO_FULLSCREEN"'), "web mode should pass the QQ MV fullscreen switch to the provider guard");
   assert(webModeScript.includes("TIKPAL_WEB_MODE_QQ_MV_CINEMA_MODE:=1"), "web mode should enable QQ MV cinema mode by default");
   assert(webModeScript.includes('TIKPAL_WEB_MODE_QQ_MV_CINEMA_MODE="$TIKPAL_WEB_MODE_QQ_MV_CINEMA_MODE"'), "web mode should pass the QQ MV cinema switch to the provider guard");
@@ -1236,8 +1392,21 @@ sync_runtime_provider_pool_process_statuses ""
       && serverSource.includes("hasFontThemePatch"),
     "API should persist the selected font theme and sync Onboard keycap visuals"
   );
-  assert(appSource.includes("updatePreferences({ fontTheme })"), "kiosk should sync the selected font theme to device preferences");
-  assert(i18nSource.includes("document.documentElement.dataset.fontTheme = preferences.fontTheme"), "shared React roots should apply the persisted font theme to the document");
+  assert(
+    appSource.includes("const fontTheme = preferences.fontTheme")
+      && appSource.includes("onFontThemeChange={setFontTheme}")
+      && !appSource.includes("readInitialFontTheme")
+      && !appSource.includes("updatePreferences({ fontTheme })"),
+    "App should consume the shared font preference instead of owning a second startup font state"
+  );
+  assert(
+    i18nSource.includes("readStoredFontTheme")
+      && i18nSource.includes("useLayoutEffect(() => {")
+      && i18nSource.includes("document.documentElement.dataset.fontTheme = preferences.fontTheme")
+      && i18nSource.includes("setFontTheme: (theme: FontTheme) => Promise<UiPreferences>")
+      && i18nSource.includes("const setFontTheme = useCallback(async"),
+    "shared preferences should restore the cached font and apply it before the first visible kiosk frame"
+  );
   assert(stylesSource.includes(".web-mode-panel") && stylesSource.includes("font-family: var(--app-font-family);"), "Explore side panel should use the shared Tikpal font family");
   assert(serverSource.includes("DISPLAY_SLEEP_STYLES") && serverSource.includes("meteor_shower") && serverSource.includes("signal"), "API should persist the selected screen sleep saver style");
   assert(i18nSource.includes('UiLocale = "en" | "zh-CN" | "de" | "it" | "ko" | "ja" | "es"') || i18nSource.includes('"zh-CN"'), "kiosk i18n should include the seven supported UI locales");
@@ -1275,7 +1444,14 @@ sync_runtime_provider_pool_process_statuses ""
   assert(webModeScript.includes('export TIKPAL_APP_DIR="${TIKPAL_APP_DIR:-$APP_DIR}"'), "web mode should expose the app dir so Onboard scripts can read UI preferences");
   assert(webModeErrorPage.includes("/api/v1/preferences") && webModeErrorPage.includes('"zh-CN"') && webModeErrorPage.includes("applyLocale"), "Explore error page should localize itself from device preferences");
   assert(webModeScript.includes('node --experimental-websocket "$helper"'), "web mode should enable the Node 20 WebSocket API for the provider guard");
-  assert(webModeScript.includes('flock -x -w "$TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS"'), "web mode should not wait forever on provider switch locks");
+  assert(
+    webModeScript.includes('flock -E 75 -o -x -w "$TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS"'),
+    "web mode should bound its switch lock and keep its descriptor out of background children"
+  );
+  assert(
+    webModeScript.includes('TIKPAL_WEB_MODE_X11_SEARCH_TIMEOUT_SECONDS:-0.35'),
+    "resident window discovery should have a sub-second budget so a stalled X11 search cannot hold the switch lock"
+  );
   assert(webModeScript.includes("9>&- &"), "web mode background children should not inherit the provider switch lock");
   assert(
     webModeScript.indexOf('export DBUS_SESSION_BUS_ADDRESS="$session_bus"') < webModeScript.indexOf('systemd-run --user --quiet --unit=tikpal-onboard'),
@@ -1290,13 +1466,13 @@ sync_runtime_provider_pool_process_statuses ""
   assert(!webModeScript.includes("windowunmap"), "web mode should not unmap Onboard because that terminates the resident process");
   assert(webModeScript.includes("Class: InputOnly"), "web mode should ignore Onboard's transparent input-only helper window");
   assert(webModeScript.includes('getwindowname "$window"'), "web mode should ignore Onboard's cold-start placeholder window");
-  assert(webModeScript.includes("xdotool windowraise"), "web mode should raise Onboard above Chromium without relying on a window manager");
+  assert(webModeScript.includes("xdotool_safe windowraise"), "web mode should time-bound and raise Onboard above Chromium without relying on a window manager");
   assert(!webModeScript.slice(webModeScript.indexOf("keyboard)"), webModeScript.indexOf("proxy)")).includes("check_runtime"), "keyboard actions should skip the full Explore runtime check for responsive input");
   assert(!webModeScript.slice(webModeScript.indexOf("keyboard)"), webModeScript.indexOf("proxy)")).includes("with_web_mode_lock"), "keyboard actions should not wait for Explore provider switch locks");
   assert(!webModeScript.slice(webModeScript.indexOf("keyboard)"), webModeScript.indexOf("proxy)")).includes("resolve_web_mode_audio_devices"), "keyboard actions should not run Explore audio auto-detection");
   assert(webModeScript.includes("with_onboard_lock()"), "keyboard actions should use a dedicated Onboard lock instead of the provider switch lock");
   assert(webModeScript.includes("onboard_visible_windows"), "web mode should detect whether Onboard is already visible");
-  assert(webModeScript.includes("xdotool windowfocus"), "web mode should still have a browser focus helper for fallback paths");
+  assert(webModeScript.includes("xdotool_safe windowfocus"), "web mode should keep a time-bounded browser focus helper for fallback paths");
   assert(webModeScript.includes("focused_browser_window"), "web mode should recover browser focus even when X has no active window");
   assert(webModeScript.includes("window_uses_profile"), "web mode should return keyboard focus to the active provider window, not the kiosk window");
   assert(webModeScript.includes("read_runtime_active_provider"), "keyboard focus recovery should find the active provider window");
@@ -1405,22 +1581,27 @@ sync_runtime_provider_pool_process_statuses ""
     "web mode should show the right provider panel before the left loading veil"
   );
   assert(openProviderBody.includes('ensure_side_panel "$provider"'), "initial Explore should tell the side panel which provider is opening");
-  assert(openProviderBody.includes('ensure_background_veil "$provider"'), "initial Explore should start a branded left background before provider switching");
+  assert(
+    !openProviderBody.includes('ensure_background_veil "$provider"')
+      && webModeScript.includes("prepare_entry_surfaces()")
+      && webModeScript.includes('ensure_side_panel "$provider" 0'),
+    "initial Explore should prepare the final-position side panel without creating a provider-switch background"
+  );
   assert(openProviderBody.includes('begin_provider_switch_transition "$current_profile" "$provider"') && webModeScript.includes('launch_transition_veil "$provider"'), "the visible Explore veil should receive the target provider");
   assert(webModeScript.includes("ensure_background_veil()") && webModeScript.includes("close_background_veil"), "Explore should own a branded left background that closes with Explore");
   assert(webModeScript.includes("launch_error_veil()") && webModeScript.includes("recover_or_cover_provider_failure()"), "provider failures should keep a complete left Explore surface");
-  assert(openProviderBody.includes("recover_or_cover_provider_failure") && openProviderBody.includes("close_error_veil"), "provider open failures should recover an old provider or show the friendly error veil");
+  assert(webModeScript.includes("recover_or_cover_provider_failure") && webModeScript.includes("close_error_veil"), "provider open failures should recover an old provider or show the friendly error veil");
   assert(webModeScript.includes("TIKPAL_WEB_MODE_PROXY_CONNECT_ERROR:=Proxy did not connect. Try again."), "proxy failures should use a short user-facing retry message");
   assert(webModeScript.includes('panel_url="$panel_url?opening=$opening_provider"'), "initial side panel URL should carry its pending provider");
-  assert(webModeScript.includes('transition_url="$transition_url?provider=$provider"'), "transition veil URL should carry its provider identity");
+  assert(webModeScript.includes('url="$url?provider=$provider"'), "transition veil URL should carry its provider identity");
   assert(webModeScript.includes('error_url="$TIKPAL_WEB_MODE_ERROR_PAGE_URL?provider=$provider_param&label=$label_param&reason=$reason_param&proxy=$proxy_param"'), "friendly Explore error pages should carry provider, reason, and proxy state");
   assert(
     webModeScript.includes("prepare_entry_surfaces()") &&
-      webModeScript.includes('ensure_side_panel "$provider" 1') &&
+      webModeScript.includes('ensure_side_panel "$provider" 0') &&
       webModeScript.includes("park_prepared_entry_surfaces()") &&
       webModeScript.includes("prepare-entry)") &&
       webModeScript.includes("park-entry)"),
-    "Explore should support an initial-entry veil and parked panel before the audio gate completes"
+    "Explore should prepare and park its final-position side panel around the initial audio gate"
   );
   assert(
     serverSource.includes("prepareWebModeEntry(providerId)") &&
@@ -1457,6 +1638,58 @@ sync_runtime_provider_pool_process_statuses ""
     encoding: "utf8"
   });
   assert(externalGuardCheck.status === 0, `ALSA Loopback guard should accept non-HDMI physical output:\n${externalGuardCheck.stdout}\n${externalGuardCheck.stderr}`);
+
+  const audiooutFixture = (name, source) => {
+    const file = path.join(loopbackGuardDir, name);
+    writeFileSync(file, source);
+    return file;
+  };
+  const resolveAudiooutFixture = (file) => spawnSync(
+    "sh",
+    ["-c", ". ./deploy/moode/tikpal-alsa-loopback.sh; TIKPAL_ALSA_BASE_AUDIOOUT_CONFIG=\"$1\" tikpal_alsa_detect_playback_target", "sh", file],
+    { cwd: ROOT, encoding: "utf8" }
+  );
+  const namedBt66Audioout = audiooutFixture(
+    "asound-named-bt66.conf",
+    'pcm.tikpal_bt66_dmix {\n  type dmix\n  slave.pcm "hw:CARD=BT66,DEV=0"\n}\npcm._audioout {\n  type plug\n  slave.pcm "tikpal_bt66_dmix"\n}\n'
+  );
+  const namedBt66Resolve = resolveAudiooutFixture(namedBt66Audioout);
+  assert(namedBt66Resolve.status === 0 && namedBt66Resolve.stdout.trim() === "tikpal_bt66_dmix", `Loopback should follow the named _audioout target:\n${namedBt66Resolve.stdout}\n${namedBt66Resolve.stderr}`);
+
+  const directPlughwAudioout = audiooutFixture(
+    "asound-direct-plughw.conf",
+    'pcm._audioout {\n  type plug\n  slave {\n    pcm "plughw:CARD=USB_DAC,DEV=0"\n  }\n}\n'
+  );
+  const directPlughwResolve = resolveAudiooutFixture(directPlughwAudioout);
+  assert(directPlughwResolve.status === 0 && directPlughwResolve.stdout.trim() === "plughw:CARD=USB_DAC,DEV=0", `Loopback should accept a direct plughw _audioout target:\n${directPlughwResolve.stdout}\n${directPlughwResolve.stderr}`);
+
+  const midFirstAudioout = audiooutFixture(
+    "asound-mid-first.conf",
+    'pcm.tikpal_bad { type plug slave.pcm "plughw:CARD=MID,DEV=0" }\npcm._audioout {\n  type plug\n  slave.pcm "hw:CARD=BT66,DEV=0"\n}\n'
+  );
+  const midFirstResolve = resolveAudiooutFixture(midFirstAudioout);
+  assert(midFirstResolve.status === 0 && midFirstResolve.stdout.trim() === "hw:CARD=BT66,DEV=0", `Loopback must ignore unrelated MID definitions:\n${midFirstResolve.stdout}\n${midFirstResolve.stderr}`);
+
+  const missingAudioout = audiooutFixture("asound-missing-audioout.conf", 'pcm.default { type null }\n');
+  const missingAudiooutResolve = resolveAudiooutFixture(missingAudioout);
+  assert(missingAudiooutResolve.status !== 0 && missingAudiooutResolve.stdout.trim() === "", "Loopback should refuse to guess a card when _audioout is missing");
+
+  const hdmiAudioout = audiooutFixture("asound-hdmi.conf", 'pcm._audioout {\n  type plug\n  slave.pcm "default:vc4hdmi0"\n}\n');
+  const hdmiAudiooutResolve = resolveAudiooutFixture(hdmiAudioout);
+  assert(hdmiAudiooutResolve.status === 0 && hdmiAudiooutResolve.stdout.trim() === "default:vc4hdmi0", "Loopback should preserve the configured HDMI route for the HDMI guard to reject");
+
+  const legacyLoopbackConfig = audiooutFixture(
+    "_sndaloop-legacy.conf",
+    '#########################################\n# This file is managed by Tikpal for moOde ALSA Loopback\n#########################################\npcm.!_audioout {\n  type plug\n  slave.pcm "plughw:CARD=MID,DEV=MID],"\n}\n'
+  );
+  const legacyConfigTargets = spawnSync("sh", ["-c", ". ./deploy/moode/tikpal-alsa-loopback.sh; tikpal_alsa_config_targets \"$1\"", "sh", legacyLoopbackConfig], {
+    cwd: ROOT,
+    encoding: "utf8"
+  });
+  assert(legacyConfigTargets.stdout.includes("plughw:CARD=MID,DEV=MID],"), "legacy malformed loopback fixtures should remain detectable for safe migration");
+  assert(alsaLoopbackScript.includes("/etc/tikpal/alsa-loopback.conf") && alsaLoopbackScript.includes("TIKPAL_ALSA_POSTLOAD_BEGIN"), "Loopback should use a postloaded Tikpal-owned configuration instead of a preloaded conf.d override");
+  assert(!alsaLoopbackScript.includes("aplay -l 2>/dev/null | awk"), "Loopback must not fall back to the first non-HDMI card");
+  assert(airplayEnableScript.includes("shairport_config_path()") && airplayEnableScript.includes("--property=ExecStart") && airplayEnableScript.includes("nqptp_unit_available()"), "AirPlay should discover the configured Shairport path and skip absent nqptp units");
 
   const check = spawnSync("bash", ["deploy/chromium/launch-tikpal-kiosk.sh", "--check"], {
     cwd: ROOT,
@@ -1559,9 +1792,9 @@ sync_runtime_provider_pool_process_statuses ""
   assert(inactiveReady.status === 0, `inactive provider ready update failed:\n${inactiveReady.stdout}\n${inactiveReady.stderr}`);
   let providerStatusState = JSON.parse(readFileSync(providerStatusStatePath, "utf8"));
   assert(
-    providerStatusState.residentProviders.amazon_music?.status === "ready" &&
+    providerStatusState.residentProviders.amazon_music?.status === "prewarming" &&
       providerStatusState.residentProviders.spotify?.status === "active",
-    "the locked provider-status action should promote an inactive real page without changing the active provider"
+    "the locked provider-status action should keep an inactive card prewarming without a real HTTPS page"
   );
   providerStatusState.activeProvider = "amazon_music";
   providerStatusState.residentProviders.amazon_music.status = "active";
@@ -1575,6 +1808,7 @@ sync_runtime_provider_pool_process_statuses ""
   providerStatusState = JSON.parse(readFileSync(providerStatusStatePath, "utf8"));
   assert(providerStatusState.residentProviders.amazon_music?.status === "active", "a late ready update must not demote the active provider");
   providerStatusState.activeProvider = "spotify";
+  providerStatusState.residentProviders.amazon_music.status = "ready";
   writeFileSync(providerStatusStatePath, JSON.stringify(providerStatusState));
   const staleActive = spawnSync("bash", ["deploy/chromium/tikpal-web-mode.sh", "provider-status", "amazon_music", "active"], {
     cwd: ROOT,
@@ -1583,7 +1817,7 @@ sync_runtime_provider_pool_process_statuses ""
   });
   assert(staleActive.status === 0, `stale active update failed:\n${staleActive.stdout}\n${staleActive.stderr}`);
   providerStatusState = JSON.parse(readFileSync(providerStatusStatePath, "utf8"));
-  assert(providerStatusState.residentProviders.amazon_music?.status === "ready", "a stale active guard must not claim the active provider");
+  assert(providerStatusState.residentProviders.amazon_music?.status === "ready", "a stale active guard must not claim the active provider or demote a confirmed Ready card");
 
   assert(!quickSettingsSource.includes("handleWebModeSettingsSave"), "Explore settings should auto-save without a Save button");
   assert(!quickSettingsSource.includes("handleWebModeProxyTest"), "Explore settings should not need a manual Test button");
@@ -1761,11 +1995,10 @@ sync_runtime_provider_pool_process_statuses ""
   assert(!webModeBackgroundPage.includes("repeating-linear-gradient"), "Explore background page should not draw repeated vertical texture lines");
   assert(!webModeBackgroundPage.includes("radial-gradient"), "Explore background page should avoid radial glow decoration");
   assert(webModeScript.includes("background_windows") && webModeScript.includes('TIKPAL_WEB_MODE_STAGE_POSITION') && webModeScript.includes("windowlower"), "Explore window guard should park the branded background offscreen while an active provider is visible");
-  assert(webModeScript.includes("ensure_entry_stage_veil") && webModeScript.includes("TIKPAL_WEB_MODE_ENTRY_STAGE_WINDOW:=2560x720"), "Explore initial entry should use a full-width branded veil");
-  assert(webModeScript.includes("--user-data-dir=$TIKPAL_WEB_MODE_PROFILE_ROOT/entry-stage") && webModeScript.includes("close_entry_stage_veil"), "Explore entry veil should be isolated and closed with the rest of Explore");
-  assert(webModeScript.indexOf('ensure_entry_stage_veil "$provider"') < webModeScript.indexOf('if ! ensure_side_panel "$provider" "$entry_stage"; then'), "Explore should cover the full stage before launching the side panel on initial entry");
-  assert(webModeScript.includes("TIKPAL_WEB_MODE_ENTRY_PROVIDER_PAINT_TIMEOUT_SECONDS") && webModeScript.includes("wait_for_entry_provider_paint"), "Explore initial entry should keep the branded veil until the selected provider has painted or the short paint gate expires");
-  assert(webModeScript.indexOf('wait_for_entry_provider_paint "$(provider_debug_port "$provider")" "$provider"') < webModeScript.indexOf('reveal_initial_entry_surfaces "$target_window"'), "Explore should wait for initial provider paint before revealing the entry stage");
+  assert(!webModeScript.includes("ensure_entry_stage_veil") && !webModeScript.includes("close_entry_stage_veil"), "Explore initial entry should not retain the removed full-width branded veil");
+  assert(webModeScript.includes("prepare_entry_surfaces()") && webModeScript.includes('ensure_side_panel "$provider" 0'), "Explore should prepare the final-position side panel before initial entry");
+  assert(webModeScript.includes("TIKPAL_WEB_MODE_ENTRY_PROVIDER_PAINT_TIMEOUT_SECONDS") && webModeScript.includes("wait_for_entry_provider_paint"), "Explore initial entry should wait for the selected provider to paint or the short paint gate to expire");
+  assert(webModeScript.indexOf('wait_for_entry_provider_paint "$(provider_debug_port "$provider")" "$provider"') < webModeScript.indexOf('reveal_initial_entry_surfaces "$target_window"'), "Explore should wait for initial provider paint before revealing the provider and side panel");
   assert(webModeScript.includes('if ! wait_for_real_provider_url "$provider_port"; then'), "every foreground provider launch should confirm a real HTTPS page before it can reveal");
   assert(!webModeScript.includes("TIKPAL_WEB_MODE_EXIT_"), "Explore close should not create a separate room-return veil");
   assert(webModeScript.includes("close_legacy_exit_stage") && !webModeScript.includes("ensure_exit_room_veil"), "Explore close should remove any legacy exit-stage window without creating one");
@@ -1858,11 +2091,11 @@ sync_runtime_provider_pool_process_statuses ""
   const parkLeftEnd = webModeScript.indexOf("\n}\n\npark_web_mode_surfaces_for_reopen()", parkLeftStart);
   const parkLeftBody = webModeScript.slice(parkLeftStart, parkLeftEnd);
   assert(
-    parkLeftBody.includes("close_transition_veil") &&
-      parkLeftBody.includes("close_error_veil") &&
-      parkLeftBody.includes("close_background_veil") &&
+    parkLeftBody.includes("park_transition_veil") &&
+    parkLeftBody.includes("close_error_veil") &&
+      parkLeftBody.includes("park_background_veil") &&
       !parkLeftBody.includes("raise_entry_stage_veil"),
-    "Explore exit should clear left-pane covers instead of repurposing an entry stage"
+    "Explore warm exit should park reusable left-pane covers instead of repurposing an entry stage"
   );
   assert(webModeScript.includes("close_web_mode_process_surfaces()") && webModeScript.includes("close_provider_windows &") && webModeScript.includes("close_side_panel &"), "Explore full close should close provider and side-panel surfaces in parallel");
   assert(webModeScript.includes("cleanup-warm") && webModeScript.includes("cleanup_warm_web_mode") && webModeScript.includes("close-full"), "Explore should keep delayed/full cleanup as an explicit maintenance path");
@@ -1876,7 +2109,7 @@ sync_runtime_provider_pool_process_statuses ""
       webModeScript.includes('sleep "$delay"'),
     "Explore prewarm should use the shared bounded-concurrency queue with a stagger"
   );
-  assert(webModeScript.includes("TIKPAL_WEB_MODE_PROVIDER_PREWARM_CONTINUE_AFTER_CLOSE:=1") && webModeScript.includes('TIKPAL_WEB_MODE_IDLE_POOL_WARMUP=1 launch_provider_for_pool "$provider" 0 prewarm "$force_existing"'), "Explore provider prewarm should keep opening providers offscreen after visible Explore closes");
+  assert(webModeScript.includes("TIKPAL_WEB_MODE_PROVIDER_PREWARM_CONTINUE_AFTER_CLOSE:=1") && webModeScript.includes('TIKPAL_WEB_MODE_IDLE_POOL_WARMUP=1 launch_provider_for_pool "$provider" entry prewarm "$force_existing"'), "Explore provider prewarm should keep opening providers offscreen after visible Explore closes");
   assert(webModeScript.includes('log "idle provider pool warmup paused because Explore is active"'), "Explore idle provider pool refill should stop if Explore reopens");
   assert(webModeScript.includes("warm-pool)") && webModeScript.includes("warm_provider_pool") && !webModeScript.includes("with_web_mode_lock warm_provider_pool"), "Explore boot prewarm should not hold the foreground web-mode lock");
   assert(
@@ -1914,10 +2147,16 @@ sync_runtime_provider_pool_process_statuses ""
     "Explore should expose an explicit resident status sync command for live recovery"
   );
   assert(webModeScript.includes("TIKPAL_WEB_MODE_X11_SYNC_WINDOW_OPS:=0") && webModeScript.includes('wmctrl -i -r "$window" -e') && webModeScript.includes('windowmove "$window" "$x" "$y"'), "Explore hot window moves should default to async X11 operations instead of xdotool --sync");
+  const reusableVeilOpenPoolStart = webModeScript.indexOf("open_provider_pool() {");
+  const reusableVeilOpenPoolEnd = webModeScript.indexOf("\n}\n\nopen_provider()", reusableVeilOpenPoolStart);
+  const reusableVeilOpenPoolBody = webModeScript.slice(reusableVeilOpenPoolStart, reusableVeilOpenPoolEnd);
   assert(
-      webModeScript.includes("park_background_veil()") &&
-      webModeScript.includes("close_transition_veil\n  close_error_veil"),
-    "Explore should discard the provider-specific transition window once the target is safe to reveal"
+    webModeScript.includes("prepare_transition_veil()") &&
+      webModeScript.includes("navigate_transition_veil") &&
+      webModeScript.includes("park_transition_veil") &&
+      webModeScript.includes("transition_veil_unavailable") &&
+      (reusableVeilOpenPoolBody.match(/begin_provider_switch_transition "\$current_profile" "\$provider"/g) ?? []).length === 1,
+    "resident switches should reuse one parked veil, rebuild it at most once, and retain the background cover without a duplicate transition"
   );
   const tileVisibleWindowsBody = webModeScript.slice(webModeScript.indexOf("tile_visible_web_mode_windows() {"), webModeScript.indexOf("\n}\n\nstart_window_guard()", webModeScript.indexOf("tile_visible_web_mode_windows() {")));
   assert(
@@ -1928,6 +2167,7 @@ sync_runtime_provider_pool_process_statuses ""
   );
   assert(
     webModeScript.includes("TIKPAL_WEB_MODE_RESIDENT_SWITCH_SETTLE_SECONDS:=0.16") &&
+      webModeScript.includes("TIKPAL_WEB_MODE_RESIDENT_SWITCH_PAINT_TIMEOUT_SECONDS:=0.6") &&
       webModeScript.includes("TIKPAL_WEB_MODE_PROVIDER_SWITCH_FADE_SECONDS:=0.16") &&
       webModeScript.includes("TIKPAL_WEB_MODE_TRANSITION_MIN_VISIBLE_SECONDS:=0.5") &&
       webModeScript.includes("fade_profile_window_for_provider_switch()") &&
@@ -1938,12 +2178,20 @@ sync_runtime_provider_pool_process_statuses ""
       !webModeScript.includes("TIKPAL_WEB_MODE_SWITCH_COVER_"),
     "Explore should fade the old provider and use one shared transition veil rather than a provider-specific cover"
   );
+  const commitVisibleProviderStateStart = webModeScript.indexOf("commit_visible_provider_state() {");
+  const commitVisibleProviderStateEnd = webModeScript.indexOf("\n}\n\nall_chromium_windows()", commitVisibleProviderStateStart);
+  const commitVisibleProviderStateBody = webModeScript.slice(commitVisibleProviderStateStart, commitVisibleProviderStateEnd);
+  assert(
+    commitVisibleProviderStateBody.includes("park_pointer_in_side_panel")
+      && commitVisibleProviderStateBody.includes('write_runtime_provider_state "$provider"')
+      && commitVisibleProviderStateBody.indexOf("park_pointer_in_side_panel") < commitVisibleProviderStateBody.indexOf('write_runtime_provider_state "$provider"'),
+    "Explore should park the pointer in the side-panel corner before it commits the newly visible provider"
+  );
   const stopProviderGuardBody = webModeScript.match(/stop_provider_guard\(\) \{[\s\S]*?\n\}/)?.[0] ?? "";
   assert(!stopProviderGuardBody.includes("waited=0"), "Explore close should not wait one second per provider guard");
-  assert(webModeScript.includes('ensure_side_panel "$provider" "$entry_stage"') && webModeScript.includes('[[ "$hidden" == "1" ]] && panel_position="$TIKPAL_WEB_MODE_STAGE_POSITION"') && webModeScript.includes('tile_window_fast "$panel_window" "$TIKPAL_WEB_MODE_STAGE_POSITION"'), "Explore side panel should launch or reuse offscreen during the unified initial entry");
+  assert(webModeScript.includes('ensure_side_panel "$provider" 0') && webModeScript.includes('tile_window_fast "$panel_window" "$TIKPAL_WEB_MODE_PANEL_POSITION"'), "Explore initial entry should place the side panel at its final geometry");
   assert(webModeScript.includes("reveal_initial_entry_surfaces") && webModeScript.includes("TIKPAL_WEB_MODE_ENTRY_REVEAL_SETTLE_SECONDS"), "Explore initial entry should reveal provider and side panel together after a short paint settle");
-  assert(webModeScript.includes("start_entry_stage_guard") && webModeScript.includes("entry-guard") && webModeScript.includes("TIKPAL_WEB_MODE_ENTRY_GUARD_INTERVAL_SECONDS"), "Explore entry veil should stay above newly-created provider windows until reveal");
-  assert(webModeScript.includes("fade_entry_stage_veil") && webModeBackgroundPage.includes("is-revealing"), "Explore entry veil should use a soft dissolve before closing");
+  assert(!webModeScript.includes("start_entry_stage_guard") && !webModeScript.includes("fade_entry_stage_veil"), "Explore should remove stale entry-veil guards and dissolves");
   const guardCloseBody = webModeScript.match(/close_web_mode_from_guard\(\) \{[\s\S]*?\n\}/)?.[0] ?? "";
   assert(
     guardCloseBody.includes('is_enabled "$TIKPAL_WEB_MODE_CLOSE_KEEP_RESIDENT"') &&
@@ -1980,8 +2228,8 @@ sync_runtime_provider_pool_process_statuses ""
       revealResidentWindowBody.indexOf("wait_for_transition_minimum_visibility") &&
       revealResidentWindowBody.indexOf("wait_for_transition_minimum_visibility") <
       revealResidentWindowBody.indexOf('raise_window "$target_window"') <
-        revealResidentWindowBody.lastIndexOf("close_transition_veil"),
-    "Explore should keep the transition over a resident target until its own X11 frame is nonblank"
+        revealResidentWindowBody.lastIndexOf("park_transition_veil"),
+    "Explore should keep the transition over a resident target until its own X11 frame is nonblank, then park it"
   );
   const openProviderPoolStart = webModeScript.indexOf("open_provider_pool() {");
   const openProviderPoolEnd = webModeScript.indexOf("\n}\n\nopen_provider()", openProviderPoolStart);
@@ -1990,16 +2238,16 @@ sync_runtime_provider_pool_process_statuses ""
   const residentHotRevealIndex = openProviderPoolBody.indexOf('reveal_resident_provider_window "$target_window"');
   const poolTransitionIndexes = [...openProviderPoolBody.matchAll(/begin_provider_switch_transition "\$current_profile" "\$provider"/g)].map((match) => match.index);
   assert(
-    poolTransitionIndexes.length >= 2 &&
+    poolTransitionIndexes.length === 1 &&
       poolTransitionIndexes[0] < residentHotRevealIndex &&
-      poolTransitionIndexes[1] < residentRevealIndex &&
+      poolTransitionIndexes[0] < residentRevealIndex &&
       openProviderPoolBody.includes('[[ "$entry_stage" != "1" && "$switching_provider" == "1" ]]'),
-    "Explore resident and cold provider switches should both start the shared left transition veil"
+    "Explore resident and cold provider switches should enter the shared transition exactly once"
   );
   assert(
     !openProviderPoolBody.includes('[[ "$switching_provider" == "1" || "$entry_stage" == "1" ]]') &&
       openProviderPoolBody.includes('[[ "$entry_stage" != "1" && "$switching_provider" == "1" ]]'),
-    "Explore initial entry should use only the full-width entry veil, never the left transition cover"
+    "Explore initial entry should skip the left provider-switch transition cover"
   );
   assert(
     poolTransitionIndexes[0] < openProviderPoolBody.indexOf("stop_provider_pool_prewarm") &&
@@ -2017,7 +2265,7 @@ sync_runtime_provider_pool_process_statuses ""
   assert(
     !openProviderBody.includes('if [[ "$switching_provider" == "1" ]] || ! provider_uses_direct_bootstrap "$provider"; then') &&
       openProviderBody.includes('if [[ "$switching_provider" == "1" ]]; then'),
-    "non-pooled initial entry should use only the full-width entry veil too"
+    "non-pooled initial entry should also skip the provider-switch transition cover"
   );
   assert(
     !openProviderPoolBody.includes("switch_cover") &&
@@ -2088,8 +2336,8 @@ sync_runtime_provider_pool_process_statuses ""
   assert(
     residentHotRevealIndex >= 0 &&
       residentHotRevealIndex <
-      openProviderPoolBody.indexOf('write_runtime_provider_state "$provider"') &&
-      openProviderPoolBody.indexOf('write_runtime_provider_state "$provider"') <
+      openProviderPoolBody.indexOf('commit_visible_provider_state "$provider"') &&
+      openProviderPoolBody.indexOf('commit_visible_provider_state "$provider"') <
         openProviderPoolBody.indexOf('reconcile_provider_pool_in_background "$provider"'),
     "Explore resident hot switches should reveal, park, and commit activeProvider before background reconcile"
   );
@@ -2098,7 +2346,7 @@ sync_runtime_provider_pool_process_statuses ""
       openProviderPoolBody.indexOf('reveal_resident_provider_window "$target_window"') <
         openProviderPoolBody.indexOf("reveal_ms=") &&
       openProviderPoolBody.indexOf("reveal_ms=") <
-        openProviderPoolBody.indexOf('write_runtime_provider_state "$provider"'),
+        openProviderPoolBody.indexOf('commit_visible_provider_state "$provider"'),
     "Explore should restore the parked provider opacity and commit activeProvider only after visual reveal"
   );
   assert(
@@ -2115,12 +2363,12 @@ sync_runtime_provider_pool_process_statuses ""
     "Explore reconcile should abandon stale work without clearing a newer active provider"
   );
   const webModeOpenCommandIndex = serverSource.indexOf('await runWebModeCommand("open", providerId, { TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS: "25" })');
-  const webModeActiveCommitIndex = serverSource.indexOf('await writeWebModeRuntimeState({ activeProvider: providerId, lastProvider: providerId, lastError: null, closeRequestId: null });', webModeOpenCommandIndex);
+  const webModeActiveCommitIndex = serverSource.indexOf('await writeWebModeRuntimeState({ activeProvider: providerId, openingProvider: null, openRequestId: null, lastProvider: providerId, lastError: null, closeRequestId: null });', webModeOpenCommandIndex);
   assert(
     webModeOpenCommandIndex >= 0 &&
       !serverSource.slice(webModeOpenCommandIndex - 320, webModeOpenCommandIndex).includes("activeProvider: providerId") &&
       webModeActiveCommitIndex > webModeOpenCommandIndex,
-    "Explore entry should keep the provider inactive until the launcher has revealed its entry veil"
+    "Explore entry should keep the provider inactive until the launcher has completed its initial reveal"
   );
   assert(
     serverSource.includes('previousRuntimeState.activeProvider ?? previousRuntimeState.lastProvider ?? "qq_music"')
@@ -2138,7 +2386,7 @@ sync_runtime_provider_pool_process_statuses ""
   assert(
     webModeScript.includes("reassert_visible_provider_surfaces()") &&
       openProviderPoolBody.indexOf('start_window_guard "$provider_profile"') >
-        openProviderPoolBody.indexOf('write_runtime_provider_state "$provider"'),
+        openProviderPoolBody.indexOf('commit_visible_provider_state "$provider"'),
     "Explore should let the background window guard reassert resident surfaces after activeProvider commits"
   );
   const webModeTransitionPage = await readFile(path.join(ROOT, "public/web-mode-transition.html"), "utf8");
@@ -2164,15 +2412,15 @@ sync_runtime_provider_pool_process_statuses ""
   assert(webModeScript.includes("prewarm_provider_pool"), "Explore should prewarm resident providers after entry");
   assert(webModeScript.includes("seed_runtime_provider_pool_statuses") && webModeScript.includes('status: "prewarming"'), "Explore should seed queued resident providers as prewarming before their windows launch");
   assert(webModeScript.includes('const force = seedMode === "force"') && webModeScript.includes('start_provider_pool_prewarm "$provider" force'), "Explore proxy toggles should force resident providers back through prewarm");
-  assert(webModeScript.includes("navigate_provider_target") && webModeScript.includes('TIKPAL_WEB_MODE_PROVIDER_PREWARM_FORCE=1') && webModeScript.includes('launch_provider_for_pool "$provider" 0 prewarm "$force_existing"'), "Forced provider prewarm should re-navigate existing resident pages after proxy changes");
-  assert(webModeScript.includes('if [[ "$launch_role" == "prewarm" && "$force_existing" == "1" ]]; then\n      write_runtime_provider_status "$provider" "ready"\n      return 0\n    fi'), "Forced provider prewarm should mark existing resident pages ready after a successful navigation");
+  assert(webModeScript.includes("navigate_provider_target") && webModeScript.includes('TIKPAL_WEB_MODE_PROVIDER_PREWARM_FORCE=1') && webModeScript.includes('launch_provider_for_pool "$provider" entry prewarm "$force_existing"'), "Forced provider prewarm should re-navigate existing resident pages after proxy changes");
+  assert(webModeScript.includes('if ! wait_for_real_provider_url "$provider_port"; then') && webModeScript.includes('write_runtime_provider_status "$provider" "ready"'), "Forced provider prewarm should write Ready only after a real HTTPS page is observed");
   assert(webModeScript.includes("provider_direct_reachable") && webModeScript.includes("--noproxy '*'") && webModeScript.includes('"check_proxy"') && webModeScript.includes("needs proxy"), "Explore should probe direct provider reachability before marking Check proxy");
   assert(webModeScript.includes("provider_prefers_direct_proxy") && webModeScript.includes("effective_provider_proxy_enabled"), "Explore launcher should support direct-preferred providers such as QQ Music and NetEase");
   assert(webModeScript.includes("deezer|qq_music|netease_music"), "Explore should direct-launch Deezer, QQ Music, and NetEase instead of waiting on the transition bootstrap");
   assert(!webModeScript.includes('provider === "deezer" ? ["deezer.com", "www.deezer.com"]'), "Explore should wait for Deezer page paint instead of treating the Deezer URL alone as ready");
   assert(webModeScript.includes("wait_for_entry=1") && webModeScript.includes("wait_for_full_ready=1") && webModeScript.includes('launch_provider_for_pool "$provider" entry'), "Explore active opens should wait for provider entry without blocking on the full ready probe");
   assert(webModeScript.includes("setsid") && webModeScript.includes("TIKPAL_WEB_MODE_PROVIDER_PREWARM_FORCE=1"), "Explore provider prewarm should detach from the active open command");
-  assert(webModeScript.includes('launch_provider_for_pool "$provider" 0 prewarm'), "Explore background prewarm should not block on slow provider readiness");
+  assert(webModeScript.includes('launch_provider_for_pool "$provider" entry prewarm'), "Explore background prewarm should stop at real HTTPS page readiness before it writes Ready");
   assert(
     webModeScript.includes("provider_prewarm_queue_pids()") &&
       webModeScript.includes('pgrep -f "[t]ikpal-web-mode.sh prewarm"') &&
@@ -2275,6 +2523,7 @@ sync_runtime_provider_pool_process_statuses ""
         TIKPAL_KIOSK_WATCHDOG_WEB_URL_SCAN: "0",
         TIKPAL_KIOSK_WATCHDOG_API_URL_SCAN: "0",
         TIKPAL_KIOSK_WATCHDOG_GPU_LOG_SCAN: "0",
+        TIKPAL_WEB_MODE_STATE_PATH: path.join(mkdtempSync(path.join(tmpdir(), "tikpal-kiosk-watchdog-web-mode-state-")), "web-mode-state.json"),
         TIKPAL_KIOSK_WATCHDOG_PAGE_HEARTBEAT_URL: `http://127.0.0.1:${heartbeatSmokePort}/heartbeat`
       },
       encoding: "utf8"

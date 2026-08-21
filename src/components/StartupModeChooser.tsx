@@ -6,7 +6,7 @@ import type { RoomMode } from "../types";
 
 interface StartupModeChooserProps {
   active: boolean;
-  context: "startup" | "explore-return";
+  context: "startup";
   videoReady: boolean;
   pending: boolean;
   selectedMode: RoomMode;
@@ -26,7 +26,7 @@ export function StartupModeChooser({ active, context, videoReady, pending, selec
   useEffect(() => {
     if (!active || pending || !videoReady) return undefined;
 
-    const dismissMs = context === "explore-return" ? 3_000 : 8_000;
+    const dismissMs = 8_000;
     const timer = window.setTimeout(() => {
       onAutoDismiss();
     }, dismissMs);
@@ -38,7 +38,7 @@ export function StartupModeChooser({ active, context, videoReady, pending, selec
 
   return (
     <section
-      className={`startup-mode-chooser ${context === "explore-return" ? "is-explore-return" : ""}`}
+      className="startup-mode-chooser"
       aria-label={t("ambient.chooseRoomMode")}
       data-gesture-protected
       data-room-mode-chooser-context={context}

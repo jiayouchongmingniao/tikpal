@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/tikpal-moodeutl.sh"
+
 SQLDB="${TIKPAL_MOODE_SQLITE_DB:-/var/local/www/db/moode-sqlite3.db}"
 SPOTMETA_CACHE_FILE="${TIKPAL_SPOTIFY_METADATA_FILE:-/var/local/www/spotmeta.json}"
 ZEROCONF_PORT="${TIKPAL_SPOTIFY_ZEROCONF_PORT:-9000}"
@@ -44,7 +48,7 @@ start_go_librespot() {
     env_args=(HTTP_PROXY="$SPOTIFY_PROXY_URL" HTTPS_PROXY="$SPOTIFY_PROXY_URL" ALL_PROXY="$SPOTIFY_PROXY_URL")
   fi
 
-  moodeutl -Ro --spotify off >/dev/null 2>&1 || true
+  tikpal_moodeutl -Ro --spotify off >/dev/null 2>&1 || true
   stop_librespot_processes
   mkdir -p "$GO_LIBRESPOT_CONFIG_DIR"
   rm -f "$SPOTMETA_CACHE_FILE" >/dev/null 2>&1 || true
@@ -74,7 +78,7 @@ start_custom_librespot() {
     proxy_args=(--proxy "$SPOTIFY_PROXY_URL")
   fi
 
-  moodeutl -Ro --spotify off >/dev/null 2>&1 || true
+  tikpal_moodeutl -Ro --spotify off >/dev/null 2>&1 || true
   stop_librespot_processes
   rm -f "$SPOTMETA_CACHE_FILE" >/dev/null 2>&1 || true
   : > "$SPOTIFY_LOG_FILE" 2>/dev/null || true
@@ -118,4 +122,4 @@ if start_custom_librespot; then
   exit 0
 fi
 
-moodeutl -Ro --spotify on
+tikpal_moodeutl -Ro --spotify on

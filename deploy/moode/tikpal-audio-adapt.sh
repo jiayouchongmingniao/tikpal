@@ -22,7 +22,7 @@ ACTION="${1:-check}"
 : "${TIKPAL_AUDIO_MIXER_CONTROLS:=PCM,Master,Digital,Speaker,Headphone,Line Out}"
 : "${TIKPAL_AUDIOOUT_CONFIG:=/etc/alsa/conf.d/_audioout.conf}"
 : "${TIKPAL_BROWSER_OUTPUT_CONFIG:=/etc/alsa/conf.d/99-tikpal-browser-output.conf}"
-: "${TIKPAL_SNDALOOP_CONFIG:=/etc/alsa/conf.d/_sndaloop.conf}"
+: "${TIKPAL_SNDALOOP_CONFIG:=/etc/tikpal/alsa-loopback.conf}"
 : "${TIKPAL_MOODE_DB:=/var/local/www/db/moode-sqlite3.db}"
 : "${TIKPAL_SND_ALOOP_MODULES_LOAD:=/etc/modules-load.d/tikpal-snd-aloop.conf}"
 

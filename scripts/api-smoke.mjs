@@ -59,6 +59,17 @@ async function requestFrom(baseUrl, path, options = {}) {
   return { response, body };
 }
 
+async function waitForWebModeStateAt(baseUrl, predicate, message) {
+  let latest = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const state = await requestFrom(baseUrl, "/api/v1/web-mode/state");
+    latest = state.body;
+    if (predicate(latest)) return latest;
+    await wait(25);
+  }
+  throw new Error(`${message}: ${JSON.stringify(latest)}`);
+}
+
 async function requestBinary(path) {
   return await requestBinaryFrom(BASE_URL, path);
 }
@@ -918,7 +929,6 @@ async function runMpcHifiCommandGuardSmoke(roomExperienceStatePath) {
     }),
     stdio: ["ignore", "pipe", "pipe"]
   });
-
   try {
     await waitForHealthAt(baseUrl);
     const unsupported = await requestFrom(baseUrl, "/api/v1/experience/actions", {
@@ -1912,6 +1922,8 @@ async function runMpcLocalLibraryPathSmoke(roomExperienceStatePath) {
   const fakeWebModeEntryPrepareReleasePath = path.join(workspace, "web-mode-entry-prepared.release");
   const fakeWebModeRetryMarkerPath = path.join(workspace, "web-mode-retry.marker");
   const fakeWebModeCommandPath = path.join(workspace, "web-mode-command.mjs");
+  const fakeWebModeResidentScenarioPath = path.join(workspace, "web-mode-resident-scenario.json");
+  const fakeWebModeResidentEventsPath = path.join(workspace, "web-mode-resident-events.log");
   const fakeWebModeSettingsPath = path.join(workspace, "web-mode-settings.json");
   const fakeWebModeStatePath = path.join(workspace, "web-mode-state.json");
   const fakeWebModeHandoffStatePath = path.join(workspace, "web-mode-handoff.json");
@@ -2176,6 +2188,28 @@ if (args[0] === "open" && args[1] === ${JSON.stringify(failedProvider)}) {
   process.exit(1);
 }
 `;
+  const fakeDelayedResidentWebModeCommandSource = `#!/usr/bin/env node
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
+
+const args = process.argv.slice(2);
+appendFileSync(${JSON.stringify(fakeWebModeLogPath)}, args.join("\\t") + "\\n");
+if (args[0] !== "open" || !process.env.TIKPAL_WEB_MODE_OPEN_REQUEST_ID) process.exit(0);
+const provider = args[1];
+const scenarios = JSON.parse(readFileSync(${JSON.stringify(fakeWebModeResidentScenarioPath)}, "utf8"));
+const scenario = scenarios[provider];
+if (!scenario) process.exit(0);
+const eventPath = ${JSON.stringify(fakeWebModeResidentEventsPath)};
+appendFileSync(eventPath, "started\\t" + provider + "\\n");
+const releasePath = ${JSON.stringify(fakeWebModeResidentScenarioPath)} + "." + provider + ".release";
+while (!existsSync(releasePath)) {
+  await new Promise((resolve) => setTimeout(resolve, 10));
+}
+appendFileSync(eventPath, "finished\\t" + provider + "\\n");
+if (scenario === "fail") {
+  console.error("[tikpal-web-mode] ERROR: " + provider + " did not open");
+  process.exit(1);
+}
+`;
   await writeFile(fakeWebModeCommandPath, fakeWebModeCommandSource);
   await chmod(fakeWebModeCommandPath, 0o755);
 
@@ -2221,13 +2255,12 @@ if (args[0] === "open" && args[1] === ${JSON.stringify(failedProvider)}) {
 	      TIKPAL_FAKE_MPC_TRACKS: JSON.stringify(fakeMpcTracks),
 	      TIKPAL_FAKE_MPC_USB_TRACKS: JSON.stringify(fakeMpcUsbTracks),
 	      TIKPAL_FAKE_MPC_NAS_TRACKS: JSON.stringify(fakeMpcNasTracks),
-	      TIKPAL_FAKE_MPC_USB_INDEX_PATH: fakeUsbIndexPath,
+      TIKPAL_FAKE_MPC_USB_INDEX_PATH: fakeUsbIndexPath,
       TIKPAL_FAKE_MPC_CURRENT_FILE_ONLY: "1",
       TIKPAL_FAKE_MPC_POSITIONAL_PLAY_STAYS_PAUSED: "1"
     }),
     stdio: ["ignore", "pipe", "pipe"]
   });
-
   try {
     await waitForHealthAt(baseUrl);
     await writeFile(fakeMpcLogPath, "");
@@ -2367,8 +2400,8 @@ if (args[0] === "prepare-entry" && args[1] === "qq_music") {
     assert(webModeFromPlayingLibrary.body.activeProvider === "qq_music", "web mode open from playing Library should activate QQ Music");
     const webModeEntryLog = await readFile(fakeWebModeLogPath, "utf8");
     assert(
-      webModeEntryLog.indexOf("prepare-entry\\tqq_music\\n") >= 0 &&
-        webModeEntryLog.indexOf("prepare-entry\\tqq_music\\n") < webModeEntryLog.indexOf("open\\tqq_music\\n"),
+      webModeEntryLog.indexOf("prepare-entry\tqq_music\n") >= 0 &&
+        webModeEntryLog.indexOf("prepare-entry\tqq_music\n") < webModeEntryLog.indexOf("open\tqq_music\n"),
       "web mode should finish entry preparation before it launches the visible provider"
     );
     const pausedDuringExplore = JSON.parse(await readFile(fakeMpcStatePath, "utf8"));
@@ -2678,6 +2711,135 @@ if (args[0] === "prepare-entry" && args[1] === "qq_music") {
     assert(stateAfterWebMode.body.audio.currentSource.id !== "web_mode", "web mode should not become audio source truth");
     assert(stateAfterWebMode.body.audio.rememberedSource?.target === "bluetooth", "web mode should preserve remembered Bluetooth instead of storing Explore");
 
+    const waitForResidentCommandEvent = async (event, provider) => {
+      const expected = `${event}\t${provider}\n`;
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        let events = "";
+        try {
+          events = await readFile(fakeWebModeResidentEventsPath, "utf8");
+        } catch {}
+        if (events.includes(expected)) return;
+        await wait(25);
+      }
+      throw new Error(`resident ${event} event was not observed for ${provider}`);
+    };
+    const waitForWebModeCommand = async (line) => {
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        const log = await readFile(fakeWebModeLogPath, "utf8");
+        if (log.includes(line)) return;
+        await wait(25);
+      }
+      throw new Error(`web mode command was not observed: ${JSON.stringify(line)}`);
+    };
+    await writeFile(fakeWebModeStatePath, JSON.stringify({ activeProvider: "youtube_music", lastProvider: "youtube_music" }));
+    await writeFile(fakeWebModeResidentScenarioPath, JSON.stringify({ spotify: "success", qq_music: "success" }));
+    await writeFile(fakeWebModeResidentEventsPath, "");
+    await writeFile(fakeWebModeCommandPath, fakeDelayedResidentWebModeCommandSource);
+    const openingSpotify = await requestFrom(baseUrl, "/api/v1/web-mode/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "open", provider: "spotify" })
+    });
+    assert(
+      openingSpotify.response.ok
+        && openingSpotify.body.activeProvider === "youtube_music"
+        && openingSpotify.body.openingProvider === "spotify",
+      "a resident switch should expose the visible provider as Active and only the target as Opening"
+    );
+    await waitForResidentCommandEvent("started", "spotify");
+
+    const openingQq = await requestFrom(baseUrl, "/api/v1/web-mode/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "open", provider: "qq_music" })
+    });
+    assert(
+      openingQq.response.ok
+        && openingQq.body.activeProvider === "youtube_music"
+        && openingQq.body.openingProvider === "qq_music",
+      "a newer resident switch should retain the previous Active provider and replace only Opening"
+    );
+    await wait(100);
+    assert(
+      !(await readFile(fakeWebModeResidentEventsPath, "utf8")).includes("started\tqq_music\n"),
+      "a newer resident target must wait for the current resident command instead of competing for its lock"
+    );
+    await writeFile(`${fakeWebModeResidentScenarioPath}.spotify.release`, "1\n");
+    await waitForResidentCommandEvent("finished", "spotify");
+    await waitForResidentCommandEvent("started", "qq_music");
+    const afterStaleSpotify = await requestFrom(baseUrl, "/api/v1/web-mode/state");
+    assert(
+      afterStaleSpotify.body.activeProvider === "youtube_music" && afterStaleSpotify.body.openingProvider === "qq_music",
+      "a stale resident completion must not overwrite a newer Opening request"
+    );
+    await writeFile(`${fakeWebModeResidentScenarioPath}.qq_music.release`, "1\n");
+    await waitForResidentCommandEvent("finished", "qq_music");
+    const activeQq = await waitForWebModeStateAt(
+      baseUrl,
+      (state) => state.activeProvider === "qq_music" && state.openingProvider === null,
+      "the current resident request should commit Active only after its command completes"
+    );
+    assert(activeQq.lastError === null, "a successful resident completion should clear its Opening error");
+
+    await writeFile(fakeWebModeStatePath, JSON.stringify({ activeProvider: "spotify", lastProvider: "spotify" }));
+    await writeFile(fakeWebModeResidentScenarioPath, JSON.stringify({ youtube_music: "fail" }));
+    await writeFile(fakeWebModeResidentEventsPath, "");
+    const openingFailedProvider = await requestFrom(baseUrl, "/api/v1/web-mode/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "open", provider: "youtube_music" })
+    });
+    assert(
+      openingFailedProvider.response.ok
+        && openingFailedProvider.body.activeProvider === "spotify"
+        && openingFailedProvider.body.openingProvider === "youtube_music",
+      "a pending resident failure should leave the old provider Active while the target is Opening"
+    );
+    await waitForResidentCommandEvent("started", "youtube_music");
+    await writeFile(`${fakeWebModeResidentScenarioPath}.youtube_music.release`, "1\n");
+    await waitForResidentCommandEvent("finished", "youtube_music");
+    const afterResidentFailure = await waitForWebModeStateAt(
+      baseUrl,
+      (state) => state.activeProvider === "spotify" && state.openingProvider === null && state.lastError === "YouTube Music did not open",
+      "a failed resident request should retain the old Active provider and publish its error"
+    );
+    assert(afterResidentFailure.lastProvider === "spotify", "a failed resident request must not replace the last visible provider");
+
+    await writeFile(fakeWebModeStatePath, JSON.stringify({ activeProvider: "spotify", lastProvider: "spotify" }));
+    await writeFile(fakeWebModeResidentScenarioPath, JSON.stringify({ qq_music: "success" }));
+    await rm(`${fakeWebModeResidentScenarioPath}.qq_music.release`, { force: true });
+    await writeFile(fakeWebModeResidentEventsPath, "");
+    const openingBeforeClose = await requestFrom(baseUrl, "/api/v1/web-mode/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "open", provider: "qq_music" })
+    });
+    assert(
+      openingBeforeClose.response.ok
+        && openingBeforeClose.body.activeProvider === "spotify"
+        && openingBeforeClose.body.openingProvider === "qq_music",
+      "Close ownership smoke should begin with an in-flight resident request"
+    );
+    await waitForResidentCommandEvent("started", "qq_music");
+    const closedDuringResidentOpen = await requestFrom(baseUrl, "/api/v1/web-mode/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "close" })
+    });
+    assert(
+      closedDuringResidentOpen.response.ok
+        && closedDuringResidentOpen.body.activeProvider === null
+        && closedDuringResidentOpen.body.openingProvider === null,
+      "Close should clear both Active and Opening ownership immediately"
+    );
+    await waitForWebModeCommand("close\n");
+    await writeFile(`${fakeWebModeResidentScenarioPath}.qq_music.release`, "1\n");
+    await waitForResidentCommandEvent("finished", "qq_music");
+    const afterCloseWins = await waitForWebModeStateAt(
+      baseUrl,
+      (state) => state.activeProvider === null && state.openingProvider === null,
+      "a resident completion released after Close must not reopen Explore"
+    );
+    assert(afterCloseWins.lastProvider === "spotify", "Close should retain the last physically visible provider after cancelling Opening");
+    await writeFile(fakeWebModeStatePath, JSON.stringify({ activeProvider: "qq_music", lastProvider: "qq_music" }));
+    await writeFile(fakeWebModeCommandPath, fakeWebModeCommandSource);
+    await writeFile(fakeWebModeLogPath, "");
+
     await writeFile(fakeWebModeLogPath, "");
     const preloadKeyboard = await requestFrom(baseUrl, "/api/v1/web-mode/actions", {
       method: "POST",
@@ -2741,12 +2903,25 @@ appendFileSync(${JSON.stringify(fakeWebModeLogPath)}, [...args, ...keyboardEnv].
     for (const providerId of ["spotify", "youtube_music", "apple_music", "tidal", "qobuz", "deezer", "amazon_music", "suno", "netease_music"]) {
       await writeFile(fakeExternalDisableLogPath, "");
       await writeFile(fakeWebModeLogPath, "");
+      const beforeProviderSwitch = await requestFrom(baseUrl, "/api/v1/web-mode/state");
       const switchedProvider = await requestFrom(baseUrl, "/api/v1/web-mode/actions", {
         method: "POST",
         body: JSON.stringify({ type: "open", provider: providerId })
       });
       assert(switchedProvider.response.ok, `web mode switch to ${providerId} should return 200`);
-      assert(switchedProvider.body.activeProvider === providerId, `web mode switch should activate ${providerId}`);
+      if (beforeProviderSwitch.body.activeProvider && beforeProviderSwitch.body.activeProvider !== providerId) {
+        assert(
+          switchedProvider.body.activeProvider === beforeProviderSwitch.body.activeProvider
+            && switchedProvider.body.openingProvider === providerId,
+          `resident switch to ${providerId} should retain the visible provider as Active until reveal`
+        );
+      }
+      const settledProviderSwitch = await waitForWebModeStateAt(
+        baseUrl,
+        (state) => state.activeProvider === providerId && state.openingProvider === null,
+        `web mode switch to ${providerId} should settle as Active after the launcher completes`
+      );
+      assert(settledProviderSwitch.lastError === null, `web mode switch to ${providerId} should clear any prior error after reveal`);
       const providerSwitchLog = await readFile(fakeWebModeLogPath, "utf8");
       assert(providerSwitchLog.includes(`open\t${providerId}\n`), `web mode command should open ${providerId}, got ${JSON.stringify(providerSwitchLog)}`);
       const providerSwitchDisableLog = await readFile(fakeExternalDisableLogPath, "utf8");
@@ -2764,29 +2939,41 @@ appendFileSync(${JSON.stringify(fakeWebModeLogPath)}, [...args, ...keyboardEnv].
       method: "POST",
       body: JSON.stringify({ type: "open", provider: "suno" })
     });
-    assert(failedNewProvider.response.status === 400, "failed web mode switch should return 400");
-    const stateAfterFailedNewProvider = await requestFrom(baseUrl, "/api/v1/web-mode/state");
     assert(
-      stateAfterFailedNewProvider.body.activeProvider === "netease_music",
+      failedNewProvider.response.ok
+        && failedNewProvider.body.activeProvider === "netease_music"
+        && failedNewProvider.body.openingProvider === "suno",
+      "a resident failure should first report the target as Opening while the old provider remains Active"
+    );
+    const stateAfterFailedNewProvider = await waitForWebModeStateAt(
+      baseUrl,
+      (state) => state.activeProvider === "netease_music" && state.openingProvider === null && state.lastError === "Suno did not open",
+      "failed resident switches should retain the previous visible provider"
+    );
+    assert(
+      stateAfterFailedNewProvider.activeProvider === "netease_music",
       "failed web mode switch to a new provider should keep the previous provider active"
     );
-    assert(stateAfterFailedNewProvider.body.lastError === "Suno did not open", "failed web mode switch should expose the failed provider message");
+    assert(stateAfterFailedNewProvider.lastError === "Suno did not open", "failed web mode switch should expose the failed provider message");
 
     await writeFile(fakeWebModeCommandPath, fakeFailingWebModeCommandSource("netease_music"));
     const failedCurrentProvider = await requestFrom(baseUrl, "/api/v1/web-mode/actions", {
       method: "POST",
       body: JSON.stringify({ type: "open", provider: "netease_music" })
     });
-    assert(failedCurrentProvider.response.status === 400, "failed web mode reopen should return 400");
+    assert(
+      failedCurrentProvider.response.ok
+        && failedCurrentProvider.body.activeProvider === "qq_music"
+        && failedCurrentProvider.body.openingProvider === null,
+      "failed direct-provider reopen should fall back to the other direct provider"
+    );
     const stateAfterFailedCurrentProvider = await requestFrom(baseUrl, "/api/v1/web-mode/state");
     assert(
-      stateAfterFailedCurrentProvider.body.activeProvider === null,
-      "failed web mode reopen of the current provider should clear stale active provider state"
+      stateAfterFailedCurrentProvider.body.activeProvider === "qq_music"
+        && stateAfterFailedCurrentProvider.body.lastProvider === "qq_music",
+      "failed direct-provider reopen should retain its successful fallback as active and last provider"
     );
-    assert(
-      stateAfterFailedCurrentProvider.body.lastError === "NetEase Cloud Music did not open",
-      "failed web mode reopen should expose the human provider label"
-    );
+    assert(stateAfterFailedCurrentProvider.body.lastError === null, "successful direct-provider fallback should clear the original open error");
     await writeFile(fakeWebModeCommandPath, fakeWebModeCommandSource);
     await writeFile(fakeWebModeLogPath, "");
     const reopenedLastProvider = await requestFrom(baseUrl, "/api/v1/web-mode/actions", {
@@ -2794,10 +2981,10 @@ appendFileSync(${JSON.stringify(fakeWebModeLogPath)}, [...args, ...keyboardEnv].
       body: JSON.stringify({ type: "open" })
     });
     assert(reopenedLastProvider.response.ok, "web mode reopen without a provider should return 200");
-    assert(reopenedLastProvider.body.activeProvider === "netease_music", "web mode reopen without a provider should reuse the provider selected before exit");
-    assert(reopenedLastProvider.body.lastProvider === "netease_music", "web mode reopen should preserve the selected provider for the next exit");
+    assert(reopenedLastProvider.body.activeProvider === "qq_music", "web mode reopen without a provider should reuse the last successful provider");
+    assert(reopenedLastProvider.body.lastProvider === "qq_music", "web mode reopen should preserve the successful fallback for the next exit");
     const reopenedLastProviderLog = await readFile(fakeWebModeLogPath, "utf8");
-    assert(reopenedLastProviderLog.includes("open\tnetease_music\n"), `web mode reopen should target the retained provider, got ${JSON.stringify(reopenedLastProviderLog)}`);
+    assert(reopenedLastProviderLog.includes("open\tqq_music\n"), `web mode reopen should target the retained provider, got ${JSON.stringify(reopenedLastProviderLog)}`);
   } finally {
     if (server.exitCode === null && server.signalCode === null) {
       server.kill("SIGTERM");
@@ -4723,6 +4910,8 @@ async function run() {
   const apiAssetsRoot = await mkdtemp(path.join(tmpdir(), "tikpal-api-assets-"));
   const apiStateRoot = await mkdtemp(path.join(tmpdir(), "tikpal-api-state-"));
   const apiUsbParentRoot = await mkdtemp(path.join(tmpdir(), "tikpal-api-usb-"));
+  const proxyTestScenarioPath = path.join(apiStateRoot, "proxy-test-scenario.txt");
+  const fakeCurlPath = path.join(apiStateRoot, "curl");
   const apiUsbRoot = path.join(apiUsbParentRoot, "Field Recorder");
   const musicLibraryStatePath = path.join(apiStateRoot, "music-library-state.json");
   const roomExperienceStatePath = path.join(apiStateRoot, "room-experience-state.json");
@@ -4813,12 +5002,23 @@ async function run() {
 
   await writeFile(BLUETOOTH_SCENARIO_PATH, "BT_SUCCESS\n");
   await writeFile(BLUETOOTH_METADATA_PATH, "");
+  await writeFile(proxyTestScenarioPath, "success\n");
+  await writeFile(fakeCurlPath, `#!/bin/sh
+scenario=$(cat ${JSON.stringify(proxyTestScenarioPath)})
+case "$scenario:$*" in
+  fail-apple-music:*https://music.apple.com/*) exit 22 ;;
+esac
+exit 0
+`);
+  await chmod(fakeCurlPath, 0o755);
   const providerServer = createProviderServer();
   await new Promise((resolve) => providerServer.listen(PROVIDER_PORT, HOST, resolve));
 
   const server = spawn(process.execPath, ["server/index.mjs"], {
     env: {
       ...process.env,
+      PATH: `${apiStateRoot}${path.delimiter}${process.env.PATH ?? ""}`,
+      TIKPAL_WEB_MODE_PROXY_TEST_CURL_BIN: fakeCurlPath,
       TIKPAL_API_HOST: HOST,
       TIKPAL_API_PORT: String(PORT),
       TIKPAL_PORTABLE_API_KEY: PORTABLE_API_KEY,
@@ -4972,6 +5172,37 @@ async function run() {
     });
     assert(invalidWebModeProxy.response.status === 400, "web mode settings should reject unsupported proxy protocols");
 
+    const webModeSettingsBeforeProxyCheck = await readFile(webModeSettingsPath, "utf8");
+    const candidateProxyCheck = await request("/api/v1/web-mode/proxy-test", {
+      method: "POST",
+      body: JSON.stringify({ proxyUrl: "http://127.0.0.1:7896" })
+    });
+    assert(candidateProxyCheck.response.ok, "candidate proxy check should return 200");
+    assert(candidateProxyCheck.body.ok === true, "candidate proxy check should require every target to pass");
+    assert(candidateProxyCheck.body.proxyUrl === "http://127.0.0.1:7896", "candidate proxy check should normalize and return the unsaved URL");
+    assert(candidateProxyCheck.body.checks.map((check) => check.id).join(",") === "google,apple_music,spotify" && candidateProxyCheck.body.checks.every((check) => check.ok), "candidate proxy check should report Google, Apple Music, and Spotify success");
+    assert(await readFile(webModeSettingsPath, "utf8") === webModeSettingsBeforeProxyCheck, "candidate proxy check should not persist an unsaved URL");
+
+    await writeFile(proxyTestScenarioPath, "fail-apple-music\n");
+    const failedCandidateProxyCheck = await request("/api/v1/web-mode/proxy-test", {
+      method: "POST",
+      body: JSON.stringify({ proxyUrl: "http://127.0.0.1:7895" })
+    });
+    assert(failedCandidateProxyCheck.response.ok, "failed candidate proxy check should return a result instead of a request error");
+    assert(failedCandidateProxyCheck.body.ok === false, "a failed target should reject the candidate proxy");
+    assert(failedCandidateProxyCheck.body.checks.find((check) => check.id === "apple_music")?.ok === false, "failed candidate proxy check should identify Apple Music");
+    assert(await readFile(webModeSettingsPath, "utf8") === webModeSettingsBeforeProxyCheck, "failed candidate proxy check should not modify settings");
+
+    const invalidCandidateProxyCheck = await request("/api/v1/web-mode/proxy-test", {
+      method: "POST",
+      body: JSON.stringify({ proxyUrl: "ftp://127.0.0.1:7897" })
+    });
+    assert(invalidCandidateProxyCheck.response.status === 400, "candidate proxy check should reject unsupported proxy protocols");
+
+    await writeFile(proxyTestScenarioPath, "success\n");
+    const savedProxyCheck = await request("/api/v1/web-mode/proxy-test", { method: "POST", body: JSON.stringify({}) });
+    assert(savedProxyCheck.response.ok && savedProxyCheck.body.proxyUrl === "http://127.0.0.1:7897" && savedProxyCheck.body.ok === true, "proxy check without a candidate should remain compatible with the saved URL");
+
     const invalidWebModeTextScale = await request("/api/v1/web-mode/settings", {
       method: "PATCH",
       body: JSON.stringify({ providerTextScale: 1.25 })
@@ -4994,7 +5225,15 @@ async function run() {
       body: JSON.stringify({ type: "open", provider: "youtube_music" })
     });
     assert(switchedWebMode.response.ok, "web mode provider switch should return 200");
-    assert(switchedWebMode.body.activeProvider === "youtube_music", "web mode provider switch should update active provider");
+    assert(
+      switchedWebMode.body.activeProvider === "spotify" && switchedWebMode.body.openingProvider === "youtube_music",
+      "resident provider switch should leave Spotify Active until YouTube Music is physically revealed"
+    );
+    await waitForWebModeStateAt(
+      BASE_URL,
+      (state) => state.activeProvider === "youtube_music" && state.openingProvider === null,
+      "resident provider switch should commit YouTube Music only after its launcher completes"
+    );
 
     const scaledWebMode = await request("/api/v1/web-mode/actions", {
       method: "POST",

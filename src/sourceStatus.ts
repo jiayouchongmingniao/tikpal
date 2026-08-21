@@ -1,4 +1,4 @@
-import type { SourceSummary } from "./types";
+import type { SourceSummary, WebModeState } from "./types";
 
 export type SourceDisplayStatusKind = "active" | "connected" | "connecting" | "ready" | "unavailable";
 
@@ -39,4 +39,16 @@ export function getSourceDisplayStatusLabel(
   options: SourceDisplayStatusOptions = {}
 ) {
   return getSourceDisplayStatus(source, options).label;
+}
+
+export function isExplorePrewarmComplete(webModeState: WebModeState | null) {
+  if (!webModeState?.prewarmComplete || !webModeState.providers.length) return false;
+  return webModeState.providers.every((provider) => {
+    const status = webModeState.residentProviders[provider.id]?.status;
+    return status === "ready"
+      || status === "active"
+      || status === "check_proxy"
+      || status === "check_setup"
+      || status === "region_unavailable";
+  });
 }

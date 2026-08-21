@@ -2,6 +2,8 @@
 set -eu
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/tikpal-moodeutl.sh"
 SQLDB="${TIKPAL_MOODE_SQLITE_DB:-/var/local/www/db/moode-sqlite3.db}"
 device_name="${TIKPAL_BLUETOOTH_DEVICE_NAME:-Tikpal-Speaker-Bluetooth}"
 
@@ -17,7 +19,7 @@ ensure_loopback_output() {
   TIKPAL_ALSA_LOG_PREFIX="${TIKPAL_ALSA_LOG_PREFIX:-tikpal-bluetooth}"
   # shellcheck disable=SC1091
   . "$SCRIPT_DIR/tikpal-alsa-loopback.sh"
-  tikpal_enable_alsa_loopback_output /etc/alsa/conf.d/_sndaloop.conf
+  tikpal_enable_alsa_loopback_output
 }
 
 ensure_loopback_output
@@ -31,7 +33,7 @@ if [ -n "$device_name" ] && command -v hostnamectl >/dev/null 2>&1; then
   run_as_root hostnamectl set-hostname "$device_name" --pretty >/dev/null 2>&1 || true
 fi
 
-moodeutl -Ro --bluetooth on
+tikpal_moodeutl -Ro --bluetooth on
 
 # Keep the BlueZ agent alive so bluetoothctl and phone-side pairing both see
 # a usable default controller after Tikpal opens the Bluetooth intake path.
