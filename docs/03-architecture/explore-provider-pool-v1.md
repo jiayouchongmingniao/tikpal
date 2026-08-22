@@ -11,7 +11,7 @@ boot → warm_provider_pool() → reset stale state → seed all providers → p
                                  ↓
 user opens Explore → open_provider_pool(active) → provider "active"
                                  ↓
-user switches → fade old → CDP pause old audio → reveal new (CDP fast path) → new "active"
+user switches → CDP pause old audio → raise new window on top (CDP fast path) → park old windows → new "active"
                                  ↓
 close Explore → close_web_mode → providers stay resident (warm close)
                                  ↓
@@ -71,18 +71,25 @@ Each provider switch calls `first_window_for_profile()` multiple times (current 
 3. Side panel (Tikpal UI)
 4. Onboard keyboard (shown on demand)
 
-### Switch Sequence
+### Switch Sequence (CDP Fast Path — prewarmed providers)
 
 1. `begin_provider_switch_guard` — sets switching flag
 2. `stop_window_guard` — stop old provider's X11 guard
 3. `pause_provider_media_via_cdp` — pause old provider audio via CDP `__tikpalProviderAudioGate.setActive(false)`
-4. `begin_provider_switch_transition` — fade out current provider window (0.16 s opacity ramp)
-5. `invalidate_chromium_window_cache` — clear cached window list
-6. Tile new provider window off-screen, lower it below kiosk
-7. `reveal_resident_provider_window` — CDP fast path: if `provider_has_real_provider_page` passes, skip X11 paint check and raise window directly (~200 ms); otherwise fall back to paint check
-8. `commit_visible_provider_state` — write new provider as active
-9. `start_window_guard` — start X11 guard for new provider
-10. `clear_provider_switch_guard` — clear switching flag
+4. Skip fade animation — the new window covers the old one instantly; fade's xprop calls take 1+ s under X server load
+5. `reveal_resident_provider_window` — CDP confirms real page → raise new window on top FIRST (~50 ms), then park old windows off-screen (latency invisible to user)
+6. `commit_visible_provider_state` — write new provider as active
+7. `start_window_guard` — start X11 guard for new provider
+8. `clear_provider_switch_guard` — clear switching flag
+
+### Switch Sequence (Legacy Paint Check Path — cold launches)
+
+1-3. Same as CDP path (guard, stop, CDP pause)
+4. `begin_provider_switch_transition` — fade out current provider window (0.10 s opacity ramp, 3 steps)
+5. Tile + lower new provider window, wait for paint check (up to 3 s timeout)
+6. `park_profile_windows_for_reopen` — move old windows to stage position
+7. `mark_window_above` + `raise_window` — bring new provider to front
+8. Commit state, start guard, clear switching flag
 
 ## Audio Mixing Prevention
 
@@ -114,7 +121,7 @@ The pause is idempotent — multiple calls are safe. When the user switches back
 | `TIKPAL_WEB_MODE_PROVIDER_PREWARM_MAX_CONCURRENT_LAUNCHES` | 3 | Parallel warm-up processes |
 | `TIKPAL_WEB_MODE_RESIDENT_SWITCH_PAINT_TIMEOUT_SECONDS` | 0.6 | Paint check timeout for cold-launch resident switch (CDP fast path skips this) |
 | `TIKPAL_WEB_MODE_RESIDENT_SWITCH_SETTLE_SECONDS` | 0.16 | Settle delay before paint check (CDP fast path skips this) |
-| `TIKPAL_WEB_MODE_PROVIDER_SWITCH_FADE_SECONDS` | 0.16 | Opacity fade-out duration for old provider |
+| `TIKPAL_WEB_MODE_PROVIDER_SWITCH_FADE_SECONDS` | 0.10 | Opacity fade-out duration for old provider (legacy path only; CDP fast path skips fade) |
 | `TIKPAL_WEB_MODE_PROVIDER_WINDOW_TIMEOUT_SECONDS` | 30 | Cold-launch window timeout |
 
 ## Files
