@@ -385,9 +385,9 @@ Keep these receiver names unique while the old moOde host remains online:
 
 | Receiver | Name |
 | --- | --- |
-| UPnP / DLNA | `Tikpal-Gentoo UPNP` |
+| UPnP / DLNA | `Tikpal-Gentoo-UPnP/AV` |
 | AirPlay | `Tikpal-Gentoo-Airplay` |
-| Spotify Connect | `Tikpal-Gentoo Spotify` |
+| Spotify Connect | `Tikpal-Gentoo-Spotify` |
 | Bluetooth | `Tikpal-Gentoo-Bluetooth` |
 
 Bluetooth remains unavailable unless `bluetoothctl list` shows a real HCI controller. Do not make the UI claim Bluetooth is ready before a USB Bluetooth dongle is present and paired through BlueZ/bluez-alsa.

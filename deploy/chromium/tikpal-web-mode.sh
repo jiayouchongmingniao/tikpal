@@ -1790,6 +1790,7 @@ keepalive_onboard() {
 }
 
 close_side_panel() {
+  command -v xsetroot >/dev/null 2>&1 && xsetroot -solid black 2>/dev/null || true
   pkill -f -- "--user-data-dir=$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel" >/dev/null 2>&1 || true
   sleep 0.2
   pkill -KILL -f -- "--user-data-dir=$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel" >/dev/null 2>&1 || true
@@ -2111,6 +2112,7 @@ stop_provider_guard() {
 }
 
 close_provider_windows() {
+  command -v xsetroot >/dev/null 2>&1 && xsetroot -solid black 2>/dev/null || true
   stop_window_guard
   stop_provider_pool_prewarm
   stop_provider_guard

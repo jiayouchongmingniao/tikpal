@@ -5,7 +5,7 @@ SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/tikpal-moodeutl.sh"
 SQLDB="${TIKPAL_MOODE_SQLITE_DB:-/var/local/www/db/moode-sqlite3.db}"
-device_name="${TIKPAL_BLUETOOTH_DEVICE_NAME:-Tikpal-Speaker-Bluetooth}"
+device_name="${TIKPAL_BLUETOOTH_DEVICE_NAME:-Tikpal-Gentoo-Bluetooth}"
 
 run_as_root() {
   if command -v sudo >/dev/null 2>&1; then
