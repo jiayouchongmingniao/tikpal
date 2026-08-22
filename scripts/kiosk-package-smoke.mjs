@@ -813,14 +813,8 @@ sync_runtime_provider_pool_process_statuses ""
 provider_ids() { printf 'spotify\\n'; }
 close_legacy_exit_stage() { :; }
 hide_onboard() { :; }
-launch_close_overlay_veil() { :; }
 close_provider_windows() { :; }
 close_side_panel() { :; }
-wait_for_close_overlay_fade() { :; }
-close_transition_veil() { :; }
-close_error_veil() { :; }
-close_background_veil() { :; }
-close_close_overlay_veil() { :; }
 write_audio_bus_state() { :; }
 sync_runtime_provider_pool_process_statuses() { :; }
 close_web_mode_full
@@ -944,7 +938,7 @@ sync_runtime_provider_pool_process_statuses ""
   );
   assert(
     stylesSource.includes(".quick-menu .overlay-backdrop") &&
-      stylesSource.includes("backdrop-filter: blur(20px) saturate(0.48) brightness(0.52)") &&
+      stylesSource.includes("backdrop-filter: blur(14px) saturate(0.52) brightness(0.56)") &&
       stylesSource.includes(".app-root.is-quick-menu-active .ambient-screen") &&
       stylesSource.includes("filter: blur(14px) saturate(0.6) brightness(0.72)") &&
       appSource.includes('mode === "quickMenu" ? "is-quick-menu-active" : ""'),
@@ -1311,10 +1305,8 @@ sync_runtime_provider_pool_process_statuses ""
       kioskLauncher.includes("TIKPAL_WEB_MODE_BOOT_PREWARM_READY_TIMEOUT_SECONDS:=30") &&
       kioskLauncher.includes("kiosk_profile_has_visible_window()") &&
       kioskLauncher.includes("wait_for_kiosk_profile_window") &&
-      kioskLauncher.includes('"$SCRIPT_DIR/tikpal-web-mode.sh" warm-veil') &&
-      webModeScript.includes("warm-veil)") &&
       kioskLauncher.includes('"$SCRIPT_DIR/tikpal-web-mode.sh" warm-pool'),
-    "kiosk launcher should prewarm the reusable switch veil and resident Explore pool after two visible main-profile samples"
+    "kiosk launcher should prewarm the resident Explore pool after two visible main-profile samples"
   );
   assert(webModeScript.includes("nohup \"$SCRIPT_DIR/tikpal-web-mode.sh\" guard"), "web mode should keep the window guard alive after the launcher exits");
   const prewarmWorkerStart = webModeScript.indexOf("launch_provider_prewarm_worker() {");
@@ -1325,25 +1317,8 @@ sync_runtime_provider_pool_process_statuses ""
       && !prewarmWorkerBody.includes("wait_for_provider_ready")
       && webModeScript.includes('if provider_has_real_provider_page "$provider_port"; then')
       && webModeScript.includes("provider_prewarm_queue_is_complete()")
-      && webModeScript.includes('write_runtime_prewarm_complete 1')
-      && webModeScript.includes("warm_transition_veil()")
-      && !webModeScript.includes('transition_profile="$transition_profile.$(date +%s%N)"'),
-    "prewarm should finish workers at real HTTPS pages, while the transition veil keeps one stable profile"
-  );
-  const prepareTransitionVeilStart = webModeScript.indexOf("prepare_transition_veil() {");
-  const prepareTransitionVeilEnd = webModeScript.indexOf("\n}\n\nwarm_transition_veil()", prepareTransitionVeilStart);
-  const prepareTransitionVeilBody = webModeScript.slice(prepareTransitionVeilStart, prepareTransitionVeilEnd);
-  const beginTransitionStart = webModeScript.indexOf("begin_provider_switch_transition() {");
-  const beginTransitionEnd = webModeScript.indexOf("\n}\n\nwait_for_transition_minimum_visibility()", beginTransitionStart);
-  const beginTransitionBody = webModeScript.slice(beginTransitionStart, beginTransitionEnd);
-  assert(
-    prepareTransitionVeilBody.includes("transition_veil_is_healthy") &&
-      prepareTransitionVeilBody.includes('mode="rebuilt"') &&
-      (prepareTransitionVeilBody.match(/close_transition_veil/g) || []).length === 1 &&
-      beginTransitionBody.includes('ensure_background_veil "$provider" 1') &&
-      beginTransitionBody.includes("transition_veil_unavailable") &&
-      beginTransitionBody.includes("retained-current"),
-    "Explore should reuse one fixed-profile veil, rebuild it at most once, and retain the current provider if neither cover is healthy"
+      && webModeScript.includes('write_runtime_prewarm_complete 1'),
+    "prewarm should finish workers at real HTTPS pages"
   );
   assert(
     prewarmProviderGuardSource.includes('spawn(launcherPath, ["provider-status", providerId, normalizedStatus]')
@@ -1600,7 +1575,7 @@ sync_runtime_provider_pool_process_statuses ""
   assert(
     openProviderBody.indexOf("ensure_side_panel") >= 0 &&
       openProviderBody.indexOf("ensure_side_panel") < openProviderBody.indexOf("begin_provider_switch_transition"),
-    "web mode should show the right provider panel before raising the reusable switch veil"
+    "web mode should show the right provider panel before starting the provider switch"
   );
   assert(openProviderBody.includes('ensure_side_panel "$provider"'), "initial Explore should tell the side panel which provider is opening");
   assert(
@@ -1609,8 +1584,7 @@ sync_runtime_provider_pool_process_statuses ""
       && webModeScript.includes('ensure_side_panel "$provider" 0'),
     "initial Explore should prepare the final-position side panel without creating a provider-switch background"
   );
-  assert(openProviderBody.includes('begin_provider_switch_transition "$current_profile" "$provider"'), "provider switches should use the reusable transition veil exactly once");
-  assert(webModeScript.includes("warm_transition_veil()") && webModeScript.includes("prepare_transition_veil()") && kioskLauncher.includes('"$SCRIPT_DIR/tikpal-web-mode.sh" warm-veil'), "Explore should prewarm and reuse one resident transition veil");
+  assert(openProviderBody.includes('begin_provider_switch_transition "$current_profile" "$provider"'), "provider switches should use begin_provider_switch_transition to fade the current provider");
   assert(webModeScript.includes("recover_or_cover_provider_failure()") && !webModeScript.match(/recover_or_cover_provider_failure\(\)[\s\S]*?launch_error_veil/), "provider failures should restore the previous provider or close Explore without an error veil");
   assert(webModeScript.includes("TIKPAL_WEB_MODE_PROXY_CONNECT_ERROR:=Proxy did not connect. Try again."), "proxy failures should use a short user-facing retry message");
   assert(webModeScript.includes('panel_url="$panel_url?opening=$opening_provider"'), "initial side panel URL should carry its pending provider");
@@ -2027,14 +2001,7 @@ sync_runtime_provider_pool_process_statuses ""
       !webModeScript.match(/park_web_mode_surfaces_for_reopen\(\)[\s\S]*?launch_close_overlay_veil/),
     "Explore close should not configure or launch a close overlay"
   );
-  assert(
-    webModeScript.includes("close_overlay_process_matches()") &&
-      webModeScript.includes('"/proc/$pid/cmdline"') &&
-      webModeScript.includes('pkill -KILL -P "$pid"') &&
-      webModeScript.includes('kill -KILL "$pid"') &&
-      !webModeScript.includes("schedule_close_overlay_failsafe"),
-    "Explore close overlay cleanup should only force-close its PID-tracked disposable surface"
-  );
+  assert(!webModeScript.includes("close-overlay-veil"), "Explore should not reference any close-overlay veil");
   assert(serverSource.includes("runWebModeCloseInBackground(closeRequestId, activeProvider)"), "Explore close should retain its background close transaction without room-veil state");
   assert(webModeScript.includes("TIKPAL_WEB_MODE_CLOSE_REQUEST_ID") && serverSource.includes("TIKPAL_WEB_MODE_CLOSE_REQUEST_ID: closeRequestId"), "Explore close should pass a close request id into the shell transaction");
   assert(webModeScript.includes("runtime_open_request_is_current") && serverSource.includes("TIKPAL_WEB_MODE_OPEN_EXPECTED_ACTIVE_PROVIDER: providerId"), "a delayed resident open should stop when Close has cleared its optimistic owner");
@@ -2096,14 +2063,12 @@ sync_runtime_provider_pool_process_statuses ""
     "Explore full close should tear down both columns in parallel without a close overlay"
   );
   const parkLeftStart = webModeScript.indexOf("park_left_web_mode_surfaces_for_reopen() {");
-  const parkLeftEnd = webModeScript.indexOf("\n}\n\nclose_overlay_process_matches()", parkLeftStart);
+  const parkLeftEnd = webModeScript.indexOf("\n}\n\npark_web_mode_surfaces_for_reopen()", parkLeftStart);
   const parkLeftBody = webModeScript.slice(parkLeftStart, parkLeftEnd);
   assert(
     parkLeftBody.includes('park_provider_windows_for_reopen "$active_provider"') &&
-      parkLeftBody.includes("park_transition_veil") &&
-      parkLeftBody.includes("park_background_veil") &&
       !parkLeftBody.includes("raise_entry_stage_veil"),
-    "Explore warm exit should park provider surfaces and reusable switch covers"
+    "Explore warm exit should park provider surfaces"
   );
   assert(webModeScript.includes("close_web_mode_process_surfaces()") && webModeScript.includes("close_provider_windows &") && webModeScript.includes("close_side_panel &"), "Explore full close should close provider and side-panel surfaces in parallel");
   assert(webModeScript.includes("cleanup-warm") && webModeScript.includes("cleanup_warm_web_mode") && webModeScript.includes("close-full"), "Explore should keep delayed/full cleanup as an explicit maintenance path");
@@ -2160,9 +2125,8 @@ sync_runtime_provider_pool_process_statuses ""
   const veilOpenPoolBody = webModeScript.slice(veilOpenPoolStart, veilOpenPoolEnd);
   assert(
     (veilOpenPoolBody.match(/begin_provider_switch_transition "\$current_profile" "\$provider"/g) ?? []).length === 1 &&
-      veilOpenPoolBody.includes("transition_shown_ms") &&
-      !veilOpenPoolBody.includes("launch_transition_veil"),
-    "resident switches should enter one reusable veil transition instead of launching another veil directly"
+      veilOpenPoolBody.includes("transition_shown_ms"),
+    "resident switches should use one begin_provider_switch_transition call"
   );
   const tileVisibleWindowsBody = webModeScript.slice(webModeScript.indexOf("tile_visible_web_mode_windows() {"), webModeScript.indexOf("\n}\n\nstart_window_guard()", webModeScript.indexOf("tile_visible_web_mode_windows() {")));
   assert(
@@ -2171,13 +2135,15 @@ sync_runtime_provider_pool_process_statuses ""
       tileVisibleWindowsBody.includes('raise_window_without_focus "$preferred_provider_window"'),
     "Explore window guard should keep an OAuth window above its provider page instead of cycling both windows"
   );
+  const beginTransitionStart = webModeScript.indexOf("begin_provider_switch_transition() {");
+  const beginTransitionEnd = webModeScript.indexOf("\n}\n\nrecover_or_cover_provider_failure()", beginTransitionStart);
+  const beginTransitionBody = webModeScript.slice(beginTransitionStart, beginTransitionEnd);
   assert(
       webModeScript.includes("TIKPAL_WEB_MODE_RESIDENT_SWITCH_SETTLE_SECONDS:=0.16") &&
       webModeScript.includes("TIKPAL_WEB_MODE_RESIDENT_SWITCH_PAINT_TIMEOUT_SECONDS:=0.6") &&
       veilOpenPoolBody.includes("begin_provider_switch_transition") &&
-      beginTransitionBody.includes("fade_profile_window_for_provider_switch") &&
-      beginTransitionBody.includes("ensure_background_veil"),
-    "Explore should fade only after the reusable transition or background cover is in place"
+      beginTransitionBody.includes("fade_profile_window_for_provider_switch"),
+    "Explore should fade the current provider during switch transition"
   );
   const commitVisibleProviderStateStart = webModeScript.indexOf("commit_visible_provider_state() {");
   const commitVisibleProviderStateEnd = webModeScript.indexOf("\n}\n\nall_chromium_windows()", commitVisibleProviderStateStart);
@@ -2222,10 +2188,8 @@ sync_runtime_provider_pool_process_statuses ""
       revealResidentWindowBody.indexOf("wait_for_provider_window_nonblank_x11_frame") <
         revealResidentWindowBody.indexOf('park_profile_windows_for_reopen "$previous_profile"') &&
       revealResidentWindowBody.indexOf('park_profile_windows_for_reopen "$previous_profile"') <
-      revealResidentWindowBody.indexOf('raise_window "$target_window"') &&
-      revealResidentWindowBody.includes("wait_for_transition_minimum_visibility") &&
-      revealResidentWindowBody.includes("park_transition_veil"),
-    "Explore should keep the reusable veil above the old provider until a resident target has its own nonblank X11 frame, then park it for reuse"
+      revealResidentWindowBody.indexOf('raise_window "$target_window"'),
+    "Explore should verify a resident target has its own nonblank X11 frame before revealing"
   );
   const openProviderPoolStart = webModeScript.indexOf("open_provider_pool() {");
   const openProviderPoolEnd = webModeScript.indexOf("\n}\n\nopen_provider()", openProviderPoolStart);

@@ -3242,7 +3242,7 @@ try {
         const backdropStyle = backdrop instanceof HTMLElement ? getComputedStyle(backdrop) : null;
         const backdropFilter = backdropStyle ? (backdropStyle.backdropFilter || backdropStyle.getPropertyValue('-webkit-backdrop-filter')) : '';
         const sleep = document.querySelector('[data-quick-menu-toggle="sleep"]');
-        const time = document.querySelector('[data-quick-menu-toggle="time"]');
+        const reboot = document.querySelector('[data-quick-menu-toggle="reboot"]');
         return document.querySelectorAll('.quick-menu-panel [data-quick-menu-toggle]').length === 5
           && document.querySelectorAll('.quick-menu-panel .quick-menu-switch').length === 0
           && document.querySelectorAll('.quick-menu-toggle > span').length === 0
@@ -3251,7 +3251,7 @@ try {
           && text.includes('Screen')
           && !text.includes('Room Mode')
           && text.includes('Volume')
-          && text.includes('Time')
+          && text.includes('System reboot')
           && text.includes('Proxy')
           && text.includes('Sleep')
           && proxy
@@ -3268,8 +3268,8 @@ try {
           && !text.includes('Flame')
           && !text.includes('Screen Off')
           && sleep instanceof HTMLElement
-          && time instanceof HTMLElement
-          && getComputedStyle(sleep).borderColor !== getComputedStyle(time).borderColor;
+          && reboot instanceof HTMLElement
+          && getComputedStyle(sleep).borderColor !== getComputedStyle(reboot).borderColor;
       })()
     `,
     "quick menu exposes five focused toggles with a skin-aware backdrop"
@@ -3301,28 +3301,31 @@ try {
     client,
     `
       (() => {
-        document.querySelector('[data-quick-menu-toggle="time"]')?.click();
+        document.querySelector('[data-quick-menu-toggle="reboot"]')?.click();
         return true;
       })()
     `
   );
-  await expect(client, "document.querySelector('.ambient-clock') === null", "quick menu clock toggle hides ambient clock");
-  await evaluate(client, "document.querySelector('[data-quick-menu-toggle=\"time\"]')?.click();");
-  await expectEventually(
+  await expect(
     client,
     `
       (() => {
-        const time = document.querySelector('[data-quick-menu-toggle="time"]');
-        const screen = document.querySelector('[data-quick-menu-toggle="screen"]');
-        if (!(time instanceof HTMLElement) || !(screen instanceof HTMLElement)) return false;
-        return document.querySelector('.ambient-clock') !== null
-          && time.getAttribute('aria-pressed') === 'true'
-          && time.classList.contains('is-on')
-          && getComputedStyle(time).borderColor === getComputedStyle(screen).borderColor;
+        const overlay = document.querySelector('.quick-menu-overlay');
+        return overlay !== null && (overlay.textContent ?? '').includes('Restart system');
       })()
     `,
-    "quick menu clock toggle restores active state border"
+    "quick menu reboot toggle shows confirmation dialog"
   );
+  await evaluate(
+    client,
+    `
+      (() => {
+        document.querySelector('.quick-menu-overlay-cancel')?.click();
+        return true;
+      })()
+    `
+  );
+  await expect(client, "document.querySelector('.quick-menu-overlay') === null", "quick menu reboot confirmation cancels cleanly");
 
   await evaluate(
     client,
@@ -3693,28 +3696,17 @@ try {
   await expectEventually(client, "document.querySelector('.screen-off-overlay') === null", "single tap wakes screen overlay while scene sound continues");
 
   await navigate(client, `${APP_URL}?mode=quickMenu`);
-  await evaluate(
-    client,
-    `
-      (() => {
-        if (!document.querySelector('.ambient-clock')) {
-          document.querySelector('[data-quick-menu-toggle="time"]')?.click();
-        }
-        return true;
-      })()
-    `
-  );
   await expect(
     client,
     `
       (() => {
-        const time = document.querySelector('[data-quick-menu-toggle="time"]');
-        return document.querySelector('.ambient-clock') !== null
-          && time?.getAttribute('aria-pressed') === 'true'
-          && time?.classList.contains('is-on');
+        const reboot = document.querySelector('[data-quick-menu-toggle="reboot"]');
+        return reboot instanceof HTMLElement
+          && !reboot.disabled
+          && reboot.querySelector('svg') !== null;
       })()
     `,
-    "quick menu clock toggle keeps ambient clock restored"
+    "quick menu reboot toggle remains interactive"
   );
   await evaluate(client, "document.querySelector('.overlay-backdrop')?.click();");
   await expectEventually(client, "document.querySelector('.quick-menu.is-active') === null", "quick menu closes while scene sound remains active");

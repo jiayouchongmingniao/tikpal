@@ -1005,15 +1005,11 @@ export default function App() {
     const options = { capture: true, passive: false } as AddEventListenerOptions;
 
     window.addEventListener("pointerdown", wakeFromInput, options);
-    window.addEventListener("touchstart", wakeFromInput, options);
-    window.addEventListener("mousedown", wakeFromInput, options);
     window.addEventListener("click", wakeFromInput, options);
     window.addEventListener("keydown", wakeFromInput, options);
 
     return () => {
       window.removeEventListener("pointerdown", wakeFromInput, options);
-      window.removeEventListener("touchstart", wakeFromInput, options);
-      window.removeEventListener("mousedown", wakeFromInput, options);
       window.removeEventListener("click", wakeFromInput, options);
       window.removeEventListener("keydown", wakeFromInput, options);
     };
@@ -1040,6 +1036,7 @@ export default function App() {
       if (sceneVideoReadyRef.current) {
         setRoomModeChooserContext(null);
         setRoomModeSelectionPending(false);
+        setAmbientSourcePickerRequest((request) => request + 1);
       }
     } catch {
       setRoomModeChooserContext(chooserContext);
@@ -1051,6 +1048,7 @@ export default function App() {
     if (!roomModeSelectionPending || !sceneVideoReady) return;
     setRoomModeSelectionPending(false);
     setRoomModeChooserContext(null);
+    setAmbientSourcePickerRequest((request) => request + 1);
   }, [roomModeSelectionPending, sceneVideoReady]);
 
   const handleStartupModeAutoDismiss = useCallback(() => {

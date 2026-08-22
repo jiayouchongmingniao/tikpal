@@ -7,11 +7,11 @@ Explore runs each music provider in its own Chromium profile (separate `--user-d
 ## Provider Lifecycle
 
 ```
-boot → warm_provider_pool() → all providers "ready"
+boot → warm_provider_pool() → reset stale state → seed all providers → prewarm queue → all "ready"
                                  ↓
 user opens Explore → open_provider_pool(active) → provider "active"
                                  ↓
-user switches → open_provider_pool(new) → transition → reveal → new "active"
+user switches → fade old → CDP pause old audio → reveal new (CDP fast path) → new "active"
                                  ↓
 close Explore → close_web_mode → providers stay resident (warm close)
                                  ↓
@@ -34,7 +34,7 @@ reboot → close_web_mode_full → kill all profiles → stamp removed → fresh
 
 ### Root Cause
 
-Each provider switch calls `first_window_for_profile()` multiple times (background veil, current window lookup, reveal). Each call iterates ALL Chromium windows via `all_chromium_windows()` → `xdotool search --class chromium`, then for every window calls `xdotool getwindowpid` and `xdotool getwindowgeometry`. With 10+ provider processes (each with a main + minimized 10×10 window), a single switch generated **300-500 xdotool X11 roundtrips**. When the X server is under load, individual `xdotool` calls can block indefinitely.
+Each provider switch calls `first_window_for_profile()` multiple times (current window lookup, reveal). Each call iterates ALL Chromium windows via `all_chromium_windows()` → `xdotool search --class chromium`, then for every window calls `xdotool getwindowpid` and `xdotool getwindowgeometry`. With 10+ provider processes (each with a main + minimized 10×10 window), a single switch generated **300-500 xdotool X11 roundtrips**. When the X server is under load, individual `xdotool` calls can block indefinitely.
 
 ### Mitigations
 
@@ -42,7 +42,7 @@ Each provider switch calls `first_window_for_profile()` multiple times (backgrou
 | --- | --- | --- |
 | `xdotool_safe()` | Wraps every `xdotool` invocation with `timeout 3` | No single call blocks > 3s |
 | `cached_chromium_windows()` | Caches the window list per switch operation | `all_chromium_windows` called once per switch instead of 5-8× |
-| Async background veil | `ensure_background_veil` launches in background with 3s watchdog | `transition_bg_veil` capped at 3s (was 3-6s) |
+| CDP paint check skip | `provider_has_real_provider_page` proves page content via CDP | Skips unreliable X11 paint check for prewarmed providers (~3 s saved) |
 | `invalidate_chromium_window_cache()` | Clears cache at switch boundaries | Fresh window list after window creation/destruction |
 
 ### Call Frequency Before/After
@@ -67,26 +67,34 @@ Each provider switch calls `first_window_for_profile()` multiple times (backgrou
 ### Window Stack (bottom to top)
 
 1. Main kiosk (ambient/hi-fi room)
-2. Background veil (`web-mode-background.html`, dark `#05070b`)
-3. Provider window (active music service)
-4. Transition veil (switch animation, parked off-screen between switches)
-5. Side panel (Tikpal UI)
-6. Entry-stage veil (first-open animation, parked after reveal)
-7. Error veil (load failure, shown on demand)
-8. Onboard keyboard (shown on demand)
+2. Provider window (active music service)
+3. Side panel (Tikpal UI)
+4. Onboard keyboard (shown on demand)
 
 ### Switch Sequence
 
 1. `begin_provider_switch_guard` — sets switching flag
-2. `ensure_background_veil` (async, 3s max) — dark background under provider
-3. `first_window_for_profile(current)` — find current provider window
-4. `reveal_background_veil_below_current_provider` — position background under current
-5. `fade_profile_window_for_provider_switch` — fade out current provider
-6. `launch_transition_veil` — navigate transition to new provider URL
-7. `raise_transition_veil` — show transition above current
-8. `reveal_resident_provider_window` — tile, paint-check, raise new provider
-9. `park_transition_veil` — park transition off-screen for reuse
+2. `stop_window_guard` — stop old provider's X11 guard
+3. `pause_provider_media_via_cdp` — pause old provider audio via CDP `__tikpalProviderAudioGate.setActive(false)`
+4. `begin_provider_switch_transition` — fade out current provider window (0.16 s opacity ramp)
+5. `invalidate_chromium_window_cache` — clear cached window list
+6. Tile new provider window off-screen, lower it below kiosk
+7. `reveal_resident_provider_window` — CDP fast path: if `provider_has_real_provider_page` passes, skip X11 paint check and raise window directly (~200 ms); otherwise fall back to paint check
+8. `commit_visible_provider_state` — write new provider as active
+9. `start_window_guard` — start X11 guard for new provider
 10. `clear_provider_switch_guard` — clear switching flag
+
+## Audio Mixing Prevention
+
+When switching providers, the old provider's Chromium process stays alive (for fast resident switching). Without intervention, both old and new providers would play audio simultaneously through the same ALSA output device.
+
+The guard script (`tikpal-web-mode-guard.mjs`) injects a `__tikpalProviderAudioGate` object into each provider page during prewarm. Before revealing the new provider, `pause_provider_media_via_cdp()` calls `__tikpalProviderAudioGate.setActive(false)` on the old provider via CDP WebSocket, pausing all its media elements. This is called at three points in `open_provider_pool`:
+
+1. Before `begin_provider_switch_transition` (early pause)
+2. Before `reveal_resident_provider_window` (defensive pause)
+3. Before cold-launch reveal (fallback pause)
+
+The pause is idempotent — multiple calls are safe. When the user switches back, the guard re-injects and re-activates the audio gate.
 
 ## Chromium Flags
 
@@ -104,16 +112,17 @@ Each provider switch calls `first_window_for_profile()` multiple times (backgrou
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `TIKPAL_WEB_MODE_PROVIDER_PREWARM_MAX_CONCURRENT_LAUNCHES` | 3 | Parallel warm-up processes |
-| `TIKPAL_WEB_MODE_RESIDENT_SWITCH_PAINT_TIMEOUT_SECONDS` | 0.6 | Paint check timeout for resident switch |
-| `TIKPAL_WEB_MODE_TRANSITION_MIN_VISIBLE_SECONDS` | 0.25 | Minimum transition visibility |
+| `TIKPAL_WEB_MODE_RESIDENT_SWITCH_PAINT_TIMEOUT_SECONDS` | 0.6 | Paint check timeout for cold-launch resident switch (CDP fast path skips this) |
+| `TIKPAL_WEB_MODE_RESIDENT_SWITCH_SETTLE_SECONDS` | 0.16 | Settle delay before paint check (CDP fast path skips this) |
+| `TIKPAL_WEB_MODE_PROVIDER_SWITCH_FADE_SECONDS` | 0.16 | Opacity fade-out duration for old provider |
 | `TIKPAL_WEB_MODE_PROVIDER_WINDOW_TIMEOUT_SECONDS` | 30 | Cold-launch window timeout |
 
 ## Files
 
 | File | Role |
 | --- | --- |
-| `deploy/chromium/tikpal-web-mode.sh` | Shell script: pool lifecycle, X11 management, provider switching |
-| `deploy/chromium/tikpal-web-mode-guard.mjs` | Node.js guard: window focus recovery, QQ dialog dismissal |
+| `deploy/chromium/tikpal-web-mode.sh` | Shell script: pool lifecycle, X11 management, provider switching, CDP media pause |
+| `deploy/chromium/tikpal-web-mode-guard.mjs` | Node.js guard: window focus recovery, QQ dialog dismissal, audio gate injection |
 | `deploy/chromium/web-mode-extension/` | Chromium extension: link retargeting, CTA hiding, audio mirror |
 | `server/index.mjs` | API: `/api/v1/web-mode/actions`, state management, proxy settings |
 | `src/components/WebModeSidePanel.tsx` | Frontend: provider list, status display |

@@ -376,7 +376,6 @@ start_web_mode_boot_prewarm() {
       exit 0
     fi
     log "Explore boot prewarm starting after kiosk window stabilization"
-    "$SCRIPT_DIR/tikpal-web-mode.sh" warm-veil </dev/null &
     "$SCRIPT_DIR/tikpal-web-mode.sh" warm-pool
   ) </dev/null &
 }

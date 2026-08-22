@@ -39,7 +39,7 @@ type AppMode = "ambient" | "player" | "quickSettings" | "quickMenu";
 | --- | --- |
 | One-finger swipe down | 80-120px vertical travel. |
 | Two-finger swipe down | 120-160px vertical travel. |
-| Long press | 800-1000ms. |
+| Long press | 500ms. |
 | Ambient HUD default dwell | 5000ms from startup before auto-hide. The startup room-mode chooser may auto-dismiss to the current persisted mode, but it must not re-send `set_mode` or replay room preset side effects unless the user taps a mode. |
 | Tap-shown HUD dwell | 5000ms before auto-hide. |
 | Player inactivity timeout | 15s. |
@@ -151,7 +151,6 @@ stateDiagram-v2
 - Quick Menu exposes four large shallow controls: Screen Saver, Volume, Proxy, and Sleep.
 - Screen immediately activates the screensaver overlay (tap overlay to wake). Long-press navigates to Screen Saver settings.
 - Volume toggles global output between muted and the last nonzero `system.volume.percent`.
-- Time toggles the Ambient clock display.
 - Sleep enters a black tap-to-wake overlay, lowers brightness and volume while asleep, and restores the previous values on a single tap.
 - Turning Scene Sound on from the Ambient center control forces Scene Video on, switches playback source truth to `scene`, and unmutes only the active Ambient video layer.
 - Turning Scene Sound off restores the remembered visible source: the last Library song, the last successful Radio station, or an external waiting source. If that restore fails, playback falls back to Library/MPD instead of staying stopped on `scene`.
@@ -167,6 +166,7 @@ stateDiagram-v2
 - A cold or non-resident provider switch keeps the left transition cover until the target has a real provider page and window. A resident switch directly hot-reveals the existing target (including Deezer), keeps the right panel stable, then parks the prior provider; it must not add a provider-specific cover or repeat the slow first-load readiness gate.
 - Entering Explore must pause MPD, close external renderer intakes, and close audible Scene Sound before the provider opens. If Tikpal cannot release audio, Explore stays closed; Hi-Fi runtime recovery remains suspended while Explore is opening or active.
 - Explore does not show Tikpal lyrics, artwork truth, fake transport controls, or a manual keyboard toggle for the third-party site. It only offers provider switching, global volume, proxy status, and one Close control in the top-right header.
+- The Quick Menu exposes five focused toggles with a skin-aware backdrop: screen (display on/off), volume (mute/unmute), proxy (enable/disable), sleep (auto-sleep timer), and reboot (system restart). Each toggle uses accent or danger border colors to indicate state. Reboot shows a confirmation dialog before executing.
 - Console Link owns Explore proxy settings. Focusing its proxy URL or a provider text field shows `onboard`; blur, submit, or single-line Enter hides it.
 - The left provider pane must not expose Chromium-native error pages. If a provider fails to load, show the local Tikpal Explore error page with provider name, Proxy/Direct state, and a short retry hint.
 - The left provider pane should feel kiosk-like, not desktop-browser-like: disable right-click context menus, drag/select affordances, and common zoom/refresh shortcuts while preserving normal touch, scrolling, login input, and playback clicks.

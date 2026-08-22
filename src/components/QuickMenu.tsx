@@ -19,7 +19,7 @@ interface QuickMenuProps {
   onNavigateSettings: (detail: "display" | "webMode") => void;
 }
 
-const LONG_PRESS_MS = 600;
+const LONG_PRESS_MS = 400;
 
 export function QuickMenu({
   active,

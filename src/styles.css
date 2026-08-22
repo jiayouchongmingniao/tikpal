@@ -50,7 +50,7 @@
     inset 0 1px 0 rgba(255, 248, 226, 0.12),
     0 36px 140px rgba(0, 0, 0, 0.62),
     0 0 56px rgba(242, 200, 101, 0.07);
-  --surface-blur: blur(22px) saturate(1.16);
+  --surface-blur: blur(14px) saturate(1.08);
   --surface-card-border: rgba(255, 224, 154, 0.16);
   --surface-card-border-hover: rgba(255, 224, 154, 0.34);
   --surface-card-bg:
@@ -592,7 +592,7 @@ select {
   background: rgba(255, 255, 255, 0.055);
   color: var(--theme-text-soft);
   cursor: pointer;
-  transition: border-color 160ms ease, background 160ms ease, color 160ms ease, transform 160ms ease;
+  transition: border-color 120ms ease, background 120ms ease, color 120ms ease, transform 120ms ease;
 }
 
 .ambient-scene-gallery-close:hover,
@@ -622,7 +622,7 @@ select {
   background: rgba(255, 255, 255, 0.055);
   color: var(--theme-text-soft);
   cursor: pointer;
-  transition: border-color 160ms ease, background 160ms ease, color 160ms ease, opacity 160ms ease, transform 160ms ease;
+  transition: border-color 120ms ease, background 120ms ease, color 120ms ease, opacity 160ms ease, transform 120ms ease;
 }
 
 .ambient-scene-gallery-page-button:hover:not(:disabled),
@@ -1118,7 +1118,7 @@ select {
   text-align: center;
   transition:
     top 220ms ease,
-    transform 220ms ease,
+    transform 140ms ease,
     width 220ms ease;
 }
 
@@ -1303,7 +1303,7 @@ select {
   transition:
     color 260ms ease,
     font-size 260ms ease,
-    opacity 260ms ease,
+    opacity 160ms ease,
     transform 260ms ease;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
@@ -1789,7 +1789,7 @@ select {
   transform-origin: bottom center;
   transition:
     height 260ms ease,
-    opacity 260ms ease,
+    opacity 160ms ease,
     transform 260ms ease;
 }
 
@@ -2433,10 +2433,12 @@ select {
   opacity: 0;
   pointer-events: none;
   isolation: isolate;
+  contain: layout style;
+  will-change: transform, opacity;
   transform: translate(-50%, -50%) scale(0.965);
   transition:
-    opacity 220ms ease,
-    transform 220ms ease;
+    opacity 140ms ease,
+    transform 140ms ease;
 }
 
 .ambient-transport::before {
@@ -2512,11 +2514,11 @@ select {
   -webkit-backdrop-filter: var(--surface-blur);
   cursor: pointer;
   transition:
-    border-color 160ms ease,
-    background 160ms ease,
-    box-shadow 160ms ease,
-    color 160ms ease,
-    transform 160ms ease;
+    border-color 120ms ease,
+    background 120ms ease,
+    box-shadow 120ms ease,
+    color 120ms ease,
+    transform 120ms ease;
 }
 
 .ambient-transport-button:hover,
@@ -2584,10 +2586,10 @@ select {
   color: var(--theme-text-muted);
   cursor: pointer;
   transition:
-    background 160ms ease,
-    box-shadow 160ms ease,
-    color 160ms ease,
-    transform 160ms ease;
+    background 120ms ease,
+    box-shadow 120ms ease,
+    color 120ms ease,
+    transform 120ms ease;
 }
 
 .ambient-play-mode-button svg {
@@ -2725,6 +2727,7 @@ select {
   border-radius: 8px;
   background: var(--transport-shell-bg);
   box-shadow: var(--transport-shell-shadow);
+  will-change: transform, opacity;
   transform: translateX(-50%);
   backdrop-filter: var(--surface-blur);
   -webkit-backdrop-filter: var(--surface-blur);
@@ -2819,10 +2822,10 @@ select {
   font: inherit;
   cursor: pointer;
   transition:
-    border-color 160ms ease,
-    background 160ms ease,
-    color 160ms ease,
-    transform 160ms ease;
+    border-color 120ms ease,
+    background 120ms ease,
+    color 120ms ease,
+    transform 120ms ease;
 }
 
 .ambient-transport.is-hifi .ambient-source-option {
@@ -3183,6 +3186,7 @@ select {
   right: auto;
   bottom: 56px;
   display: flex;
+  contain: layout style;
   align-items: center;
   justify-content: center;
   width: min(780px, calc(100vw - 112px));
@@ -3198,15 +3202,16 @@ select {
     inset 0 -1px 0 rgba(255, 255, 255, 0.035),
     0 22px 62px rgba(0, 0, 0, 0.38),
     0 0 20px color-mix(in srgb, var(--room-accent-muted) 78%, transparent);
-  backdrop-filter: blur(18px) saturate(1.12);
-  -webkit-backdrop-filter: blur(18px) saturate(1.12);
+  backdrop-filter: blur(12px) saturate(1.06);
+  -webkit-backdrop-filter: blur(12px) saturate(1.06);
   opacity: 0.66;
   pointer-events: none;
+  will-change: transform, opacity;
   transform: translateX(-50%);
   transition:
-    opacity 260ms ease,
-    background 260ms ease,
-    transform 260ms ease;
+    opacity 160ms ease,
+    background 120ms ease,
+    transform 120ms ease;
 }
 
 .ambient-screen.is-hud-visible .ambient-hud {
@@ -3466,8 +3471,8 @@ select {
   opacity: 0;
   transform: translateY(-34px);
   transition:
-    opacity 260ms ease,
-    transform 280ms cubic-bezier(0.2, 0.8, 0.2, 1);
+    opacity 160ms ease,
+    transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 .overlay.is-active,
@@ -3490,14 +3495,14 @@ select {
     radial-gradient(circle at 50% 46%, color-mix(in srgb, var(--theme-info-muted) 24%, transparent), transparent 44%),
     linear-gradient(180deg, rgba(3, 5, 8, 0.36), rgba(3, 5, 8, 0.5)),
     rgba(0, 0, 0, 0.45);
-  backdrop-filter: blur(20px) saturate(0.48) brightness(0.52);
-  -webkit-backdrop-filter: blur(20px) saturate(0.48) brightness(0.52);
+  backdrop-filter: blur(14px) saturate(0.52) brightness(0.56);
+  -webkit-backdrop-filter: blur(14px) saturate(0.52) brightness(0.56);
 }
 
 .app-root.is-quick-menu-active .ambient-screen {
   filter: blur(14px) saturate(0.6) brightness(0.72);
   transform: scale(1.018);
-  transition: filter 220ms ease, transform 220ms ease;
+  transition: filter 140ms ease, transform 140ms ease;
 }
 
 .player-overlay .overlay-backdrop {
@@ -7660,6 +7665,7 @@ select {
   left: 50%;
   top: 50%;
   display: grid;
+  contain: layout style;
   grid-template-columns: repeat(5, 158px);
   gap: 14px;
   padding: 18px;
@@ -7667,6 +7673,7 @@ select {
   border-radius: 8px;
   background: var(--surface-shell-bg);
   box-shadow: var(--surface-shell-shadow);
+  will-change: transform, opacity;
   transform: translate(-50%, -50%);
   backdrop-filter: var(--surface-blur);
   -webkit-backdrop-filter: var(--surface-blur);
@@ -7693,10 +7700,10 @@ select {
     inset 0 1px 0 rgba(255, 255, 255, 0.08),
     0 12px 28px rgba(0, 0, 0, 0.18);
   transition:
-    border-color 160ms ease,
-    background 160ms ease,
-    box-shadow 160ms ease,
-    transform 160ms ease;
+    border-color 120ms ease,
+    background 120ms ease,
+    box-shadow 120ms ease,
+    transform 120ms ease;
 }
 
 .quick-menu-panel button::before {
@@ -8330,7 +8337,7 @@ select {
   transform: translateX(-50%) translateY(-12px);
   transition:
     opacity 160ms ease,
-    transform 160ms ease;
+    transform 120ms ease;
 }
 
 .gesture-cue.is-visible {
