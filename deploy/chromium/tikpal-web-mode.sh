@@ -3316,12 +3316,16 @@ reveal_resident_provider_window() {
   # has visible content.
   if [[ -n "$provider_port" ]] && provider_has_real_provider_page "$provider_port"; then
     log_stage "reveal_cdp_skip_paint target=$target_window port=$provider_port ms=$(( $(now_ms) - started_ms ))"
-    if [[ -n "$previous_profile" && "$previous_profile" != "$provider_profile" ]]; then
-      park_profile_windows_for_reopen "$previous_profile" "$TIKPAL_WEB_MODE_LEFT_WINDOW" || true
-    fi
+    # Raise the new window FIRST so the user sees it immediately.
+    # Park old windows AFTER — the new window covers them, so parking
+    # latency is invisible.  This matters when the X server is busy
+    # rendering the kiosk UI (xdotool calls take 3+ s under load).
     mark_window_above "$target_window"
     raise_window "$target_window"
     log_stage "reveal_physical target=$target_window provider_port=$provider_port ms=$(( $(now_ms) - started_ms ))"
+    if [[ -n "$previous_profile" && "$previous_profile" != "$provider_profile" ]]; then
+      park_profile_windows_for_reopen "$previous_profile" "$TIKPAL_WEB_MODE_LEFT_WINDOW" || true
+    fi
     return 0
   fi
   # Tile and lower only if not already pre-positioned by the caller.
@@ -3868,13 +3872,21 @@ open_provider_pool() {
     if [[ -n "$current_provider" ]]; then
       pause_provider_media_via_cdp "$(provider_debug_port "$current_provider")" "$cdp_json_list" || log "WARN: could not pause $current_provider media via CDP"
     fi
-    if ! begin_provider_switch_transition "$current_profile" "$provider" "$target_window"; then
-      message="Explore transition cover is unavailable"
-      recover_or_cover_provider_failure "$current_provider" "$current_profile" "$provider" "check_setup" "$message" || true
-      fail "$message"
+    if [[ "$fast_resident" == "1" ]]; then
+      # CDP fast path: skip the fade animation.  The new window will be
+      # raised on top of the old one instantly.  The fade's xprop calls
+      # take 1+ seconds when the X server is busy rendering the kiosk UI.
+      transition_shown_ms="$(now_ms)"
+      log_stage "open_pool_transition provider=$provider transition_shown=$transition_shown_ms ms=$(( $(now_ms) - started_ms )) cdp_skip_fade=1"
+    else
+      if ! begin_provider_switch_transition "$current_profile" "$provider" "$target_window"; then
+        message="Explore transition cover is unavailable"
+        recover_or_cover_provider_failure "$current_provider" "$current_profile" "$provider" "check_setup" "$message" || true
+        fail "$message"
+      fi
+      transition_shown_ms="$TIKPAL_WEB_MODE_TRANSITION_SHOWN_MS"
+      log_stage "open_pool_transition provider=$provider transition_shown=$transition_shown_ms ms=$(( $(now_ms) - started_ms ))"
     fi
-    transition_shown_ms="$TIKPAL_WEB_MODE_TRANSITION_SHOWN_MS"
-    log_stage "open_pool_transition provider=$provider transition_shown=$transition_shown_ms ms=$(( $(now_ms) - started_ms ))"
   fi
   if [[ -f "$(pool_warm_stamp_file)" ]]; then
     if provider_prewarm_queue_running; then
