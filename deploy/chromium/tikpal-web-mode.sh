@@ -545,9 +545,12 @@ provider_cdp_json_list() {
 
 pause_provider_media_via_cdp() {
   local provider_port="$1"
+  local cdp_json="${2:-}"
   local ws_url
-  ws_url="$(timeout 1 curl --noproxy '*' -sf --connect-timeout 1 --max-time 1 "http://127.0.0.1:$provider_port/json/list" 2>/dev/null \
-    | node -e 'let b="";process.stdin.on("data",c=>b+=c);process.stdin.on("end",()=>{try{const a=JSON.parse(b);const t=a.find(x=>x.type==="page"&&x.webSocketDebuggerUrl);if(t)process.stdout.write(t.webSocketDebuggerUrl)}catch{}})')"
+  if [[ -z "$cdp_json" ]]; then
+    cdp_json="$(timeout 1 curl --noproxy '*' -sf --connect-timeout 1 --max-time 1 "http://127.0.0.1:$provider_port/json/list" 2>/dev/null)"
+  fi
+  ws_url="$(printf '%s' "$cdp_json" | node -e 'let b="";process.stdin.on("data",c=>b+=c);process.stdin.on("end",()=>{try{const a=JSON.parse(b);const t=a.find(x=>x.type==="page"&&x.webSocketDebuggerUrl);if(t)process.stdout.write(t.webSocketDebuggerUrl)}catch{}})')"
   [[ -n "$ws_url" ]] || return 1
   node --experimental-websocket -e "                                    \
     const ws = new WebSocket(process.argv[1]);                           \
@@ -2130,7 +2133,6 @@ park_profile_windows_for_reopen() {
     restore_window_opacity "$window"
     clear_window_above "$window"
     DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowlower "$window" >/dev/null 2>&1 || true
-    wait_for_window_position "$window" "$TIKPAL_WEB_MODE_STAGE_POSITION" "$size"
     return
   fi
   local failed=0
@@ -2142,7 +2144,6 @@ park_profile_windows_for_reopen() {
     restore_window_opacity "$window"
     clear_window_above "$window"
     DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowlower "$window" >/dev/null 2>&1 || true
-    wait_for_window_position "$window" "$TIKPAL_WEB_MODE_STAGE_POSITION" "$size" || failed=1
   done < <(cached_chromium_windows)
   return "$failed"
 }
@@ -3073,17 +3074,20 @@ close_legacy_exit_stage() {
 
 fade_profile_window_for_provider_switch() {
   local profile="$1"
-  local window duration step opacity
-  window="$(first_window_for_profile "$profile" || true)"
+  local window="${2:-}"
+  local duration step opacity
+  if [[ -z "$window" ]]; then
+    window="$(first_window_for_profile "$profile" || true)"
+  fi
   [[ -n "$window" ]] || return 0
   duration="$TIKPAL_WEB_MODE_PROVIDER_SWITCH_FADE_SECONDS"
-  [[ "$duration" =~ ^[0-9]+([.][0-9]+)?$ ]] || duration=0.16
+  [[ "$duration" =~ ^[0-9]+([.][0-9]+)?$ ]] || duration=0.10
   [[ "$duration" != "0" ]] || return 0
-  step="$(awk -v duration="$duration" 'BEGIN { printf "%.3f", duration / 5 }')"
+  step="$(awk -v duration="$duration" 'BEGIN { printf "%.3f", duration / 3 }')"
 
   # A stale opacity from an interrupted switch must not carry into this one.
   restore_window_opacity "$window"
-  for opacity in 0.85 0.60 0.35 0.12 0.04; do
+  for opacity in 0.70 0.30 0.04; do
     set_window_opacity "$window" "$opacity" >/dev/null 2>&1 || {
       sleep "$duration"
       return 0
@@ -3095,15 +3099,17 @@ fade_profile_window_for_provider_switch() {
 begin_provider_switch_transition() {
   local current_profile="$1"
   local provider="$2"
-  local current_window
+  local current_window="${3:-}"
   local started_ms
   started_ms="$(now_ms)"
   TIKPAL_WEB_MODE_TRANSITION_SHOWN_MS=0
-  invalidate_chromium_window_cache
 
-  current_window="$(first_window_for_profile "$current_profile" || true)"
+  if [[ -z "$current_window" ]]; then
+    invalidate_chromium_window_cache
+    current_window="$(first_window_for_profile "$current_profile" || true)"
+  fi
   if [[ -n "$current_window" ]]; then
-    fade_profile_window_for_provider_switch "$current_profile"
+    fade_profile_window_for_provider_switch "$current_profile" "$current_window"
     TIKPAL_WEB_MODE_TRANSITION_SHOWN_MS="$(now_ms)"
     log_stage "transition_fade provider=$provider ms=$(( TIKPAL_WEB_MODE_TRANSITION_SHOWN_MS - started_ms ))"
   else
@@ -3842,8 +3848,12 @@ open_provider_pool() {
   provider_port="$(provider_debug_port "$provider")"
   if profile_process_exists "$provider_profile"; then
     target_window="$(first_window_for_profile "$provider_profile" || true)"
-    if [[ -n "$target_window" ]] && provider_has_real_provider_page "$provider_port"; then
-      fast_resident=1
+    local cdp_json_list=""
+    if [[ -n "$target_window" ]]; then
+      cdp_json_list="$(timeout 0.8 curl --noproxy '*' -sf --connect-timeout 1 --max-time 1 "http://127.0.0.1:$provider_port/json/list" 2>/dev/null || true)"
+      if printf '%s' "$cdp_json_list" | node -e 'let b="";process.stdin.on("data",c=>b+=c);process.stdin.on("end",()=>{try{process.exit(JSON.parse(b).some(t=>t.type==="page"&&String(t.url||"").startsWith("https://"))?0:1)}catch{process.exit(1)}})'; then
+        fast_resident=1
+      fi
     fi
   fi
   log_stage "open_pool_init provider=$provider fast_resident=$fast_resident switching=$switching_provider entry=$entry_stage ms=$(( $(now_ms) - started_ms ))"
@@ -3856,9 +3866,9 @@ open_provider_pool() {
     stop_window_guard
     # Pause old provider's media before switch to prevent audio mixing.
     if [[ -n "$current_provider" ]]; then
-      pause_provider_media_via_cdp "$(provider_debug_port "$current_provider")" || log "WARN: could not pause $current_provider media via CDP"
+      pause_provider_media_via_cdp "$(provider_debug_port "$current_provider")" "$cdp_json_list" || log "WARN: could not pause $current_provider media via CDP"
     fi
-    if ! begin_provider_switch_transition "$current_profile" "$provider"; then
+    if ! begin_provider_switch_transition "$current_profile" "$provider" "$target_window"; then
       message="Explore transition cover is unavailable"
       recover_or_cover_provider_failure "$current_provider" "$current_profile" "$provider" "check_setup" "$message" || true
       fail "$message"
@@ -3867,7 +3877,9 @@ open_provider_pool() {
     log_stage "open_pool_transition provider=$provider transition_shown=$transition_shown_ms ms=$(( $(now_ms) - started_ms ))"
   fi
   if [[ -f "$(pool_warm_stamp_file)" ]]; then
-    stop_provider_pool_prewarm
+    if provider_prewarm_queue_running; then
+      stop_provider_pool_prewarm
+    fi
   fi
   # A newer sidebar choice owns the pending request. Do not carry this stale
   # foreground command through another resident reveal while it holds the
@@ -3912,7 +3924,7 @@ open_provider_pool() {
     fi
     # Ensure old provider media is paused before reveal.
     if [[ "$switching_provider" == "1" && -n "$current_provider" ]]; then
-      pause_provider_media_via_cdp "$(provider_debug_port "$current_provider")" || true
+      pause_provider_media_via_cdp "$(provider_debug_port "$current_provider")" "$cdp_json_list" || true
     fi
     if reveal_resident_provider_window "$target_window" "$current_profile" "$provider_profile" "$transition_shown_ms" "$provider_port"; then
       invalidate_chromium_window_cache
