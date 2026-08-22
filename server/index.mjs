@@ -264,6 +264,9 @@ const MOCK_UPNP_CONNECT_AFTER_MS = Number(process.env.TIKPAL_MOCK_UPNP_CONNECT_A
 const LRCLIB_BASE_URL = process.env.TIKPAL_LRCLIB_BASE_URL ?? "https://lrclib.net";
 const LRCLIB_TIMEOUT_MS = Number(process.env.TIKPAL_LRCLIB_TIMEOUT_MS ?? 7000);
 const LYRICS_OVH_BASE_URL = process.env.TIKPAL_LYRICS_OVH_BASE_URL ?? "https://api.lyrics.ovh";
+const NETEASE_BASE_URL = process.env.TIKPAL_NETEASE_BASE_URL ?? "https://music.163.com";
+const NETEASE_COOKIE = process.env.TIKPAL_NETEASE_COOKIE ?? "";
+const NETEASE_TIMEOUT_MS = Number(process.env.TIKPAL_NETEASE_TIMEOUT_MS ?? 8000);
 const LYRICS_CUSTOM_URL_TEMPLATE = process.env.TIKPAL_LYRICS_CUSTOM_URL_TEMPLATE ?? "";
 const LYRICS_CUSTOM_AUTH_HEADER = process.env.TIKPAL_LYRICS_CUSTOM_AUTH_HEADER ?? "";
 const THEAUDIODB_BASE_URL = process.env.TIKPAL_THEAUDIODB_BASE_URL ?? "https://www.theaudiodb.com";
@@ -271,14 +274,15 @@ const THEAUDIODB_API_KEY = process.env.TIKPAL_THEAUDIODB_API_KEY ?? "123";
 const ITUNES_SEARCH_BASE_URL = process.env.TIKPAL_ITUNES_SEARCH_BASE_URL ?? "https://itunes.apple.com/search";
 const REMOTE_METADATA_TIMEOUT_MS = Number(process.env.TIKPAL_REMOTE_METADATA_TIMEOUT_MS ?? 4500);
 const LYRICS_ERROR_BACKOFF_MS = Number(process.env.TIKPAL_LYRICS_ERROR_BACKOFF_MS ?? 90000);
-const SUPPORTED_LYRICS_PROVIDERS = new Set(["lrclib", "custom", "lyricsovh"]);
-const LYRICS_PROVIDER_CHAIN = normalizeLyricsProviderChain(process.env.TIKPAL_LYRICS_PROVIDER_CHAIN ?? "lrclib,lyricsovh");
+const SUPPORTED_LYRICS_PROVIDERS = new Set(["lrclib", "netease", "custom", "lyricsovh"]);
+const LYRICS_PROVIDER_CHAIN = normalizeLyricsProviderChain(process.env.TIKPAL_LYRICS_PROVIDER_CHAIN ?? "lrclib,netease,lyricsovh");
 const LYRICS_PROVIDER_CACHE_VERSION = createHash("sha1")
   .update(JSON.stringify({
     chain: LYRICS_PROVIDER_CHAIN,
     lyricsOvhBaseUrl: LYRICS_OVH_BASE_URL,
+    neteaseBaseUrl: NETEASE_BASE_URL,
     customUrlTemplate: LYRICS_CUSTOM_URL_TEMPLATE,
-    matchNormalizer: "unicode-v2",
+    matchNormalizer: "unicode-v3",
     externalDurationPolicy: "proxy-provider-duration-v1"
   }))
   .digest("hex")
@@ -11479,6 +11483,7 @@ function buildMetadataLyricsCandidate(playback, overrides = {}) {
     artist: normalizeMetadataValue(playback.artist),
     album: normalizeMetadataValue(playback.album),
     durationMs: trustedDurationMs,
+    rawMpdDurationMs: durationMs,
     playbackClock
   };
 }
@@ -11805,6 +11810,31 @@ function buildBluetoothSyncedLyricsTiming(lines, durationMs) {
   };
 }
 
+function estimatePlainLyricsTimestamps(plainLines, durationMs, mpdDurationMs) {
+  const effectiveDuration = Number.isFinite(mpdDurationMs) && mpdDurationMs > 0 ? mpdDurationMs : durationMs;
+  const validLines = plainLines.filter((line) => line.text?.trim());
+  if (validLines.length === 0 || !Number.isFinite(effectiveDuration) || effectiveDuration <= 0) return null;
+
+  const charCounts = validLines.map((line) => Math.max(1, line.text.trim().length));
+  const totalChars = charCounts.reduce((sum, count) => sum + count, 0);
+  if (totalChars === 0) return null;
+
+  // Reserve intro/outro padding so lyrics don't start at 0s or fill to the very end
+  const introPadMs = Math.min(Math.round(effectiveDuration * 0.04), 12_000);
+  const outroPadMs = Math.min(Math.round(effectiveDuration * 0.03), 10_000);
+  const singableDuration = Math.max(1, effectiveDuration - introPadMs - outroPadMs);
+
+  let cumulative = 0;
+  return validLines.map((line, index) => {
+    const startMs = introPadMs + Math.round((cumulative / totalChars) * singableDuration);
+    cumulative += charCounts[index];
+    const endMs = index < validLines.length - 1
+      ? introPadMs + Math.round((cumulative / totalChars) * singableDuration)
+      : null;
+    return { text: line.text, startMs, endMs };
+  });
+}
+
 function buildDisplayableLyricsLines(lyricsBody, candidate) {
   const syncedLines = parseSyncedLyrics(lyricsBody?.syncedLyrics);
   const plainLines = parseUnsyncedLyrics(lyricsBody?.plainLyrics);
@@ -11822,6 +11852,14 @@ function buildDisplayableLyricsLines(lyricsBody, candidate) {
         timingStrategy: syncedTiming.timingStrategy,
         lines: displayLines.length > 0 ? displayLines : convertSyncedLinesToStaticLines(syncedLines)
       };
+    }
+
+    if (candidate.playbackClock) {
+      const estimatableLines = parseBluetoothStaticLyrics(lyricsBody?.plainLyrics);
+      const estimatedLines = estimatePlainLyricsTimestamps(estimatableLines, candidate.durationMs, candidate.mpdDurationMs);
+      if (estimatedLines) {
+        return { synced: true, timingStrategy: "estimated_duration", lines: estimatedLines };
+      }
     }
 
     const staticLines = parseBluetoothStaticLyrics(lyricsBody?.plainLyrics);
@@ -11848,13 +11886,15 @@ function buildDisplayableLyricsLines(lyricsBody, candidate) {
   };
 }
 
-async function fetchJsonWithTimeout(url, { timeoutMs = 4500, headers } = {}) {
+async function fetchJsonWithTimeout(url, { timeoutMs = 4500, headers, method, body } = {}) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     const response = await fetch(url, {
+      method,
       headers,
+      body,
       signal: controller.signal
     });
     const text = await response.text();
@@ -11872,12 +11912,12 @@ async function fetchJsonWithTimeout(url, { timeoutMs = 4500, headers } = {}) {
   }
 }
 
-async function fetchBinaryWithTimeout(url, { timeoutMs = 4500 } = {}) {
+async function fetchBinaryWithTimeout(url, { timeoutMs = 4500, headers } = {}) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const response = await fetch(url, { signal: controller.signal });
+    const response = await fetch(url, { headers, signal: controller.signal });
     const arrayBuffer = await response.arrayBuffer();
     return { response, buffer: Buffer.from(arrayBuffer) };
   } finally {
@@ -11888,6 +11928,7 @@ async function fetchBinaryWithTimeout(url, { timeoutMs = 4500 } = {}) {
 function artworkExtensionFromContentType(contentType) {
   switch (String(contentType ?? "").toLowerCase()) {
     case "image/jpeg":
+    case "image/jpg":
       return "jpg";
     case "image/png":
       return "png";
@@ -12044,8 +12085,12 @@ async function cacheRemoteArtwork({ cacheKey, imageUrl }) {
   await mkdir(REMOTE_ARTWORK_CACHE_DIR, { recursive: true });
   await mkdir(REMOTE_ARTWORK_INDEX_DIR, { recursive: true });
 
+  const artworkHeaders = imageUrl.includes("music.126.net")
+    ? { Referer: "https://music.163.com" }
+    : undefined;
   const { response, buffer } = await fetchBinaryWithTimeout(imageUrl, {
-    timeoutMs: REMOTE_METADATA_TIMEOUT_MS
+    timeoutMs: REMOTE_METADATA_TIMEOUT_MS,
+    headers: artworkHeaders
   });
   if (!response.ok) {
     throw new Error(`Artwork request failed: ${response.status}`);
@@ -12471,12 +12516,126 @@ async function fetchLyricsBodyFromCustom(candidate) {
   return null;
 }
 
+
+async function fetchNeteaseJson(url, opts = {}) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), opts.timeoutMs ?? NETEASE_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, { method: opts.method, headers: opts.reqHeaders, body: opts.reqBody, signal: controller.signal });
+    const text = await res.text();
+    let parsed = null;
+    try { parsed = JSON.parse(text); } catch {}
+    return { ok: res.ok, status: res.status, data: parsed };
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function fetchLyricsBodyFromNetease(candidate) {
+  console.log("[lyrics:netease] searching for", candidate.title, "-", candidate.artist);
+  const reqHeaders = {
+    "Referer": "https://music.163.com",
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Content-Type": "application/x-www-form-urlencoded"
+  };
+  if (NETEASE_COOKIE) reqHeaders.Cookie = NETEASE_COOKIE;
+
+  const titleVariants = buildLyricsTitleLookupValues(candidate.title).slice(0, 2);
+  const artistVariants = buildLyricsArtistLookupValues(candidate.artist).slice(0, 2);
+
+  for (const title of titleVariants) {
+    for (const artist of [candidate.artist, ...artistVariants]) {
+      if (!title) continue;
+      const keyword = artist ? `${title} ${artist}` : title;
+      try {
+        const searchUrl = new URL("/api/search/get", NETEASE_BASE_URL);
+        const reqBody = new URLSearchParams({ s: keyword, type: "1", limit: "5", offset: "0" }).toString();
+        const searchResult = await fetchNeteaseJson(searchUrl, { method: "POST", reqHeaders, reqBody, timeoutMs: NETEASE_TIMEOUT_MS });
+        if (!searchResult.ok || !searchResult.data?.result?.songs?.length) {
+          console.log("[lyrics:netease] no search results for", keyword, "status:", searchResult.status);
+          continue;
+        }
+
+        const songs = searchResult.data.result.songs;
+        const titleCandidates = buildNormalizedLyricsTitleCandidates(title);
+        const artistCandidates = artist ? buildNormalizedLyricsArtistCandidates(artist) : [];
+
+        const matched = songs.find((song) => {
+          const songTitle = normalizeLyricsMatchValue(song.name);
+          const songArtists = (song.artists || []).map((a) => normalizeLyricsMatchValue(a.name));
+          const titleOk = titleCandidates.some((t) => t === songTitle || songTitle.includes(t) || t.includes(songTitle));
+          const artistOk = artistCandidates.length === 0 || artistCandidates.some((a) =>
+            songArtists.some((sa) => sa === a || sa.includes(a) || a.includes(sa))
+          );
+          return titleOk && artistOk;
+        }) ?? songs[0];
+
+        if (!matched?.id) continue;
+
+        const lyricsUrl = new URL(`/api/song/lyric?id=${matched.id}&lv=1&kv=1&tv=-1`, NETEASE_BASE_URL);
+        const lyricsResult = await fetchNeteaseJson(lyricsUrl, { method: "GET", reqHeaders: { ...reqHeaders, "Content-Type": "application/json" }, timeoutMs: NETEASE_TIMEOUT_MS });
+        if (!lyricsResult.ok) continue;
+
+        const lrc = lyricsResult.data?.lrc?.lyric ?? "";
+        const tlyric = lyricsResult.data?.tlyric?.lyric ?? "";
+        const syncedLyrics = lrc.trim() || null;
+        const plainLyrics = lrc.trim()
+          ? lrc.replace(/\[\d+:\d+\.\d+\]/g, "").split("\n").filter((l) => l.trim()).join("\n")
+          : null;
+
+        if (!syncedLyrics && !plainLyrics) continue;
+
+        const translatedPlain = tlyric.trim()
+          ? tlyric.replace(/\[\d+:\d+\.\d+\]/g, "").split("\n").filter((l) => l.trim()).join("\n")
+          : null;
+
+        // Fetch album art from NetEase song detail and cache it
+        const neteaseArtistName = (matched.artists || []).map((a) => a.name).join(" / ");
+        const neteaseAlbumName = matched.album?.name ?? candidate.album;
+        void (async () => {
+          try {
+            const detailUrl = new URL(`/api/song/detail?id=${matched.id}&ids=%5B${matched.id}%5D`, NETEASE_BASE_URL);
+            const detailResult = await fetchNeteaseJson(detailUrl, { method: "GET", reqHeaders: { ...reqHeaders, "Content-Type": "application/json" }, timeoutMs: NETEASE_TIMEOUT_MS });
+            const picUrl = detailResult.data?.songs?.[0]?.album?.picUrl;
+            if (picUrl) {
+              const artCacheKey = buildArtworkCacheKey({ artist: neteaseArtistName, album: neteaseAlbumName });
+              if (artCacheKey) {
+                const existing = await readCachedRemoteArtwork(artCacheKey);
+                if (!existing) {
+                  await cacheRemoteArtwork({ cacheKey: artCacheKey, imageUrl: picUrl });
+                  console.log("[lyrics:netease] cached album art for", artCacheKey);
+                }
+              }
+            }
+          } catch (artErr) {
+            console.log("[lyrics:netease] art fetch error:", artErr.message);
+          }
+        })();
+
+        return normalizeProviderLyricsBody(candidate, {
+          trackName: matched.name,
+          artistName: (matched.artists || []).map((a) => a.name).join(" / "),
+          albumName: matched.album?.name ?? candidate.album,
+          syncedLyrics,
+          plainLyrics: translatedPlain ? `${plainLyrics ?? ""}\n\n${translatedPlain}`.trim() : plainLyrics
+        }, "netease");
+      } catch (error) {
+        console.log("[lyrics:netease] error:", error.message);
+      }
+    }
+  }
+  console.log("[lyrics:netease] no matches found");
+  return null;
+}
+
 async function fetchLyricsBodyFromProvider(provider, candidate) {
   switch (provider) {
     case "lrclib":
       return await fetchLyricsBodyFromLrclib(candidate);
     case "lyricsovh":
       return await fetchLyricsBodyFromLyricsOvh(candidate);
+    case "netease":
+      return await fetchLyricsBodyFromNetease(candidate);
     case "custom":
       return await fetchLyricsBodyFromCustom(candidate);
     default:
@@ -12503,6 +12662,9 @@ function buildLyricsStateFromProviderBody(candidate, lyricsBody, provider) {
   const candidateDurationMs = Number(candidate.durationMs);
   const candidateWithProviderDuration = {
     ...candidate,
+    mpdDurationMs: Number.isFinite(candidate.rawMpdDurationMs) && candidate.rawMpdDurationMs > 0
+      ? candidate.rawMpdDurationMs
+      : Number.isFinite(candidateDurationMs) && candidateDurationMs > 0 ? candidateDurationMs : null,
     durationMs: shouldUseProviderLyricsDuration(candidate, providerDurationMs)
       ? providerDurationMs
       : Number.isFinite(candidateDurationMs)
