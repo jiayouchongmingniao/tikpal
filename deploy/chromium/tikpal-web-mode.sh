@@ -2130,10 +2130,10 @@ park_profile_windows_for_reopen() {
     tile_window_fast "$window" "$TIKPAL_WEB_MODE_STAGE_POSITION" "$size"
     clear_window_above "$window"
     DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowlower "$window" >/dev/null 2>&1 || true
-    # Restore opacity AFTER lowering — the wmctrl move is async, so the
-    # window may still be at its old position.  Lowering it first ensures
-    # the full-opacity flash happens behind the kiosk, invisible to the user.
-    restore_window_opacity "$window"
+    # Do NOT restore opacity here — the window is moving off-screen and
+    # wmctrl -e is async (fork).  xprop would set opacity=1.0 while the
+    # window is still at 0,0, causing a visible flash.  The next switch
+    # or reveal will handle opacity as needed.
     return
   fi
   local failed=0
@@ -2144,7 +2144,6 @@ park_profile_windows_for_reopen() {
     tile_window_fast "$window" "$TIKPAL_WEB_MODE_STAGE_POSITION" "$size"
     clear_window_above "$window"
     DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowlower "$window" >/dev/null 2>&1 || true
-    restore_window_opacity "$window"
   done < <(cached_chromium_windows)
   return "$failed"
 }
