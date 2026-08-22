@@ -9376,7 +9376,7 @@ select {
   background: #080b0e;
   opacity: 0;
   visibility: hidden;
-  transition: opacity 300ms ease-out, visibility 0s linear 350ms;
+  transition: opacity 0s, visibility 0s;
   pointer-events: none;
 }
 
