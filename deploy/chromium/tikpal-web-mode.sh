@@ -2128,11 +2128,12 @@ park_profile_windows_for_reopen() {
   window="$(first_window_for_profile "$profile" || true)"
   if [[ -n "$window" ]]; then
     tile_window_fast "$window" "$TIKPAL_WEB_MODE_STAGE_POSITION" "$size"
-    # A switch can fade this window while it is still visible. Restore it only
-    # after it is parked so the next reveal never inherits that opacity.
-    restore_window_opacity "$window"
     clear_window_above "$window"
     DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowlower "$window" >/dev/null 2>&1 || true
+    # Restore opacity AFTER lowering — the wmctrl move is async, so the
+    # window may still be at its old position.  Lowering it first ensures
+    # the full-opacity flash happens behind the kiosk, invisible to the user.
+    restore_window_opacity "$window"
     return
   fi
   local failed=0
@@ -2141,9 +2142,9 @@ park_profile_windows_for_reopen() {
     pid="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe getwindowpid "$window" 2>/dev/null || true)"
     process_tree_uses_profile "$pid" "$profile" || continue
     tile_window_fast "$window" "$TIKPAL_WEB_MODE_STAGE_POSITION" "$size"
-    restore_window_opacity "$window"
     clear_window_above "$window"
     DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowlower "$window" >/dev/null 2>&1 || true
+    restore_window_opacity "$window"
   done < <(cached_chromium_windows)
   return "$failed"
 }
