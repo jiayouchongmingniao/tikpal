@@ -482,7 +482,7 @@ export default function App() {
       exploreClosingTimerRef.current = setTimeout(() => {
         setExploreClosing(false);
         exploreClosingTimerRef.current = null;
-      }, 3200);
+      }, 1200);
       return;
     }
     // Explore is active — listen for close signal from side panel
