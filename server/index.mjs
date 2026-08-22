@@ -704,6 +704,7 @@ const lyricsRetryAfter = new Map();
 const lyricsInFlight = new Map();
 const remoteArtworkCache = new Map();
 const remoteArtworkInFlight = new Map();
+const neteaseArtInFlight = new Map();
 const proxyInputRecognitionSessions = new Map();
 let activeProxyInputRecognition = null;
 let displayBrightnessSnapshotCache = null;
@@ -12093,6 +12094,7 @@ async function cacheRemoteArtwork({ cacheKey, imageUrl }) {
     headers: artworkHeaders
   });
   if (!response.ok) {
+    console.log("[art:cache] download failed:", response.status, response.headers?.get("content-type"));
     throw new Error(`Artwork request failed: ${response.status}`);
   }
 
@@ -12112,6 +12114,7 @@ async function cacheRemoteArtwork({ cacheKey, imageUrl }) {
   await writeFile(filePath, buffer);
   await writeFile(buildArtworkIndexPath(cacheKey), JSON.stringify(metadata));
   remoteArtworkCache.set(cacheKey, metadata);
+  console.log("[art:cache] cached artwork for", cacheKey, "→", filePath);
   return metadata;
 }
 
@@ -12159,6 +12162,61 @@ function splitArtistForLookup(artist) {
     .filter((entry) => entry.length >= 2);
 }
 
+async function fetchNeteaseAlbumArt({ title, artist, album }) {
+  if (!title) return null;
+  const inFlightKey = `${title}|${artist}|${album}`;
+  if (neteaseArtInFlight.has(inFlightKey)) return neteaseArtInFlight.get(inFlightKey);
+
+  const reqHeaders = {
+    "Referer": "https://music.163.com",
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Content-Type": "application/x-www-form-urlencoded"
+  };
+  if (NETEASE_COOKIE) reqHeaders.Cookie = NETEASE_COOKIE;
+
+  const pending = (async () => {
+    const keyword = artist ? `${title} ${artist}` : title;
+    try {
+      const searchUrl = new URL("/api/search/get", NETEASE_BASE_URL);
+      const reqBody = new URLSearchParams({ s: keyword, type: "1", limit: "5", offset: "0" }).toString();
+      const searchResult = await fetchNeteaseJson(searchUrl, { method: "POST", reqHeaders, reqBody, timeoutMs: NETEASE_TIMEOUT_MS });
+      if (!searchResult.ok || !searchResult.data?.result?.songs?.length) { console.log("[art:netease] no results for", keyword); return null; }
+
+      const songs = searchResult.data.result.songs;
+      const titleCandidates = buildNormalizedLyricsTitleCandidates(title);
+      const artistCandidates = artist ? buildNormalizedLyricsArtistCandidates(artist) : [];
+
+      const matched = songs.find((song) => {
+        const songTitle = normalizeLyricsMatchValue(song.name);
+        const songArtists = (song.artists || []).map((a) => normalizeLyricsMatchValue(a.name));
+        const titleOk = titleCandidates.some((t) => t === songTitle || songTitle.includes(t) || t.includes(songTitle));
+        const artistOk = artistCandidates.length === 0 || artistCandidates.some((a) =>
+          songArtists.some((sa) => sa === a || sa.includes(a) || a.includes(sa))
+        );
+        return titleOk && artistOk;
+      }) ?? songs[0];
+
+      if (!matched?.id) return null;
+
+      const detailUrl = new URL(`/api/song/detail?id=${matched.id}&ids=%5B${matched.id}%5D`, NETEASE_BASE_URL);
+      const detailResult = await fetchNeteaseJson(detailUrl, { method: "GET", reqHeaders: { ...reqHeaders, "Content-Type": "application/json" }, timeoutMs: NETEASE_TIMEOUT_MS });
+      const picUrl = detailResult.data?.songs?.[0]?.album?.picUrl || null;
+      return picUrl;
+    } catch (err) {
+      console.log("[art:netease] error:", err.message);
+      return null;
+    }
+  })();
+
+  neteaseArtInFlight.set(inFlightKey, pending);
+  try {
+    return await pending;
+  } finally {
+    neteaseArtInFlight.delete(inFlightKey);
+  }
+}
+
+
 async function fetchRemoteArtworkForAlbum({ title, artist, album }) {
   const cacheKey = buildArtworkCacheKey({ artist, album });
   if (!cacheKey) return null;
@@ -12193,7 +12251,7 @@ async function fetchRemoteArtworkForAlbum({ title, artist, album }) {
     }
 
     // iTunes fallback also tries artist variants
-    const imageUrl = await fetchItunesArtworkUrl({ title, artist, album }).catch(() => null)
+    let imageUrl = await fetchItunesArtworkUrl({ title, artist, album }).catch(() => null)
       || await (async () => {
            for (const artistCandidate of uniqueArtists.slice(1)) {
              const url = await fetchItunesArtworkUrl({ title, artist: artistCandidate, album }).catch(() => null);
@@ -12201,6 +12259,15 @@ async function fetchRemoteArtworkForAlbum({ title, artist, album }) {
            }
            return null;
          })();
+    // NetEase fallback for Chinese/Asian songs
+    if (!imageUrl) {
+      const neteaseKey = `${title}|${artist}|${album}`;
+      const existingNetease = neteaseArtInFlight.get(neteaseKey);
+      const neteasePicUrl = existingNetease
+        ? await existingNetease.catch(() => null)
+        : await fetchNeteaseAlbumArt({ title, artist, album }).catch(() => null);
+      if (neteasePicUrl) imageUrl = neteasePicUrl;
+    }
     if (!imageUrl) return null;
     return cacheRemoteArtwork({ cacheKey, imageUrl });
   })();
@@ -12214,7 +12281,6 @@ async function fetchRemoteArtworkForAlbum({ title, artist, album }) {
 }
 
 async function resolveRemotePlaybackArtworkUrl({ playbackSource, title, artist, album }) {
-  if (!["bluetooth", "airplay", "upnp"].includes(playbackSource)) return null;
   const cacheKey = buildArtworkCacheKey({ artist, album });
   if (!cacheKey) return null;
 
@@ -12233,7 +12299,9 @@ async function resolveRemotePlaybackArtworkUrl({ playbackSource, title, artist, 
     return `/api/v1/media/artwork?track=${encodeURIComponent(cached.token)}`;
   }
 
-  void fetchRemoteArtworkForAlbum({ title, artist, album }).catch(() => null);
+  if (!remoteArtworkInFlight.has(cacheKey)) {
+    void fetchRemoteArtworkForAlbum({ title, artist, album }).catch(() => null);
+  }
   return null;
 }
 
@@ -12588,29 +12656,6 @@ async function fetchLyricsBodyFromNetease(candidate) {
         const translatedPlain = tlyric.trim()
           ? tlyric.replace(/\[\d+:\d+\.\d+\]/g, "").split("\n").filter((l) => l.trim()).join("\n")
           : null;
-
-        // Fetch album art from NetEase song detail and cache it
-        const neteaseArtistName = (matched.artists || []).map((a) => a.name).join(" / ");
-        const neteaseAlbumName = matched.album?.name ?? candidate.album;
-        void (async () => {
-          try {
-            const detailUrl = new URL(`/api/song/detail?id=${matched.id}&ids=%5B${matched.id}%5D`, NETEASE_BASE_URL);
-            const detailResult = await fetchNeteaseJson(detailUrl, { method: "GET", reqHeaders: { ...reqHeaders, "Content-Type": "application/json" }, timeoutMs: NETEASE_TIMEOUT_MS });
-            const picUrl = detailResult.data?.songs?.[0]?.album?.picUrl;
-            if (picUrl) {
-              const artCacheKey = buildArtworkCacheKey({ artist: neteaseArtistName, album: neteaseAlbumName });
-              if (artCacheKey) {
-                const existing = await readCachedRemoteArtwork(artCacheKey);
-                if (!existing) {
-                  await cacheRemoteArtwork({ cacheKey: artCacheKey, imageUrl: picUrl });
-                  console.log("[lyrics:netease] cached album art for", artCacheKey);
-                }
-              }
-            }
-          } catch (artErr) {
-            console.log("[lyrics:netease] art fetch error:", artErr.message);
-          }
-        })();
 
         return normalizeProviderLyricsBody(candidate, {
           trackName: matched.name,
