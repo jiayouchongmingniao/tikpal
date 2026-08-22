@@ -455,6 +455,10 @@ if command -v xset >/dev/null 2>&1; then
   run_x_command xset s noblank || true
 fi
 
+if command -v xsetroot >/dev/null 2>&1; then
+  xsetroot -solid black || true
+fi
+
 if command -v unclutter >/dev/null 2>&1; then
   unclutter -idle 0.1 -root >/dev/null 2>&1 &
 fi

@@ -2123,6 +2123,9 @@ park_profile_windows_for_reopen() {
   local profile="$1"
   local size="${2:-$TIKPAL_WEB_MODE_LEFT_WINDOW}"
   local window pid
+  # Ensure X root window background is black so compositor
+  # transitions never expose a white root-window flash.
+  command -v xsetroot >/dev/null 2>&1 && xsetroot -solid black 2>/dev/null || true
   [[ -n "$profile" ]] || return 0
   command -v xdotool >/dev/null 2>&1 || return 0
   window="$(first_window_for_profile "$profile" || true)"
