@@ -11967,10 +11967,23 @@ function providerLyricsDurationMs(lyricsBody) {
   return Number.isFinite(durationSeconds) && durationSeconds > 0 ? Math.round(durationSeconds * 1000) : null;
 }
 
+function stripLyricsTitleSuffix(normalizedTitle) {
+  return normalizedTitle
+    .replace(/\s*[\[(（【]\s*(?:live|remaster(?:ed)?|version|伴奏|纯音乐|现场|演唱会|explicit|clean|edit|remix|acoustic|deluxe|anniversary|bonus)[^\])）】]*[\])）】]\s*/gi, " ")
+    .replace(/\s+[-–—]\s*(?:live|remaster(?:ed)?|version|伴奏|纯音乐|现场|演唱会|explicit|clean|edit|remix|acoustic|deluxe|anniversary|bonus).*$/i, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function strictLyricsProviderMatch(candidate, lyricsBody) {
   const expectedTitles = buildNormalizedLyricsTitleCandidates(candidate.title);
   const actualTitle = normalizeLyricsMatchValue(lyricsBody?.trackName ?? lyricsBody?.title);
-  if (expectedTitles.length === 0 || !actualTitle || !expectedTitles.includes(actualTitle)) return false;
+  if (expectedTitles.length === 0 || !actualTitle) return false;
+  const strippedActual = stripLyricsTitleSuffix(actualTitle);
+  const hasTitleMatch = expectedTitles.includes(actualTitle)
+    || expectedTitles.some((t) => stripLyricsTitleSuffix(t) === strippedActual)
+    || expectedTitles.some((t) => actualTitle.startsWith(t) || strippedActual.startsWith(stripLyricsTitleSuffix(t)));
+  if (!hasTitleMatch) return false;
 
   const expectedArtist = normalizeLyricsMatchValue(candidate.artist);
   if (expectedArtist) {
@@ -12079,7 +12092,26 @@ async function fetchItunesArtworkUrl({ title, artist, album }) {
   const entry = matches.find((candidate) => (
     normalizedAlbum && normalizeLyricsMatchValue(candidate?.collectionName) === normalizedAlbum
   )) ?? matches[0];
+  // If strict matching found nothing, try relaxed: just require some artist overlap
+  if (!entry && Array.isArray(body?.results)) {
+    const artistCandidates = buildNormalizedLyricsArtistCandidates(artist);
+    const relaxed = body.results.find((r) => {
+      const entryArtists = buildNormalizedLyricsArtistCandidates(r?.artistName ?? r?.artist);
+      return artistCandidates.some((expected) => entryArtists.some((actual) =>
+        actual === expected || actual.includes(expected) || expected.includes(actual)
+      ));
+    });
+    if (relaxed) return highResolutionItunesArtworkUrl(relaxed?.artworkUrl100) || null;
+  }
   return highResolutionItunesArtworkUrl(entry?.artworkUrl100) || null;
+}
+
+function splitArtistForLookup(artist) {
+  if (!artist) return [];
+  return artist
+    .split(/\s*(?:,|，|、|\/|／|;|；|\+|＋|&|and|feat\.?|ft\.?|featuring|with|x|和|与)\s*/i)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length >= 2);
 }
 
 async function fetchRemoteArtworkForAlbum({ title, artist, album }) {
@@ -12094,24 +12126,38 @@ async function fetchRemoteArtworkForAlbum({ title, artist, album }) {
   }
 
   const pending = (async () => {
-    const searchUrl = new URL(`/api/v1/json/${THEAUDIODB_API_KEY}/searchalbum.php`, THEAUDIODB_BASE_URL);
-    searchUrl.searchParams.set("s", artist);
-    searchUrl.searchParams.set("a", album);
+    // Try artist variants: full name first, then split parts (e.g. "伍佰 & China Blue" → "伍佰")
+    const artistVariants = [artist, ...splitArtistForLookup(artist)].filter(Boolean);
+    const uniqueArtists = [...new Set(artistVariants)];
 
-    const albumEntry = await fetchJsonWithTimeout(searchUrl, {
-      timeoutMs: REMOTE_METADATA_TIMEOUT_MS
-    }).then(({ response, body }) => (
-      response.ok && Array.isArray(body?.album)
-        ? body.album.find((entry) => entry?.strAlbumThumb) ?? null
-        : null
-    )).catch(() => null);
-    const imageUrl = albumEntry?.strAlbumThumb
-      || await fetchItunesArtworkUrl({ title, artist, album }).catch(() => null);
+    for (const artistCandidate of uniqueArtists) {
+      const searchUrl = new URL(`/api/v1/json/${THEAUDIODB_API_KEY}/searchalbum.php`, THEAUDIODB_BASE_URL);
+      searchUrl.searchParams.set("s", artistCandidate);
+      searchUrl.searchParams.set("a", album);
+
+      const albumEntry = await fetchJsonWithTimeout(searchUrl, {
+        timeoutMs: REMOTE_METADATA_TIMEOUT_MS
+      }).then(({ response, body }) => (
+        response.ok && Array.isArray(body?.album)
+          ? body.album.find((entry) => entry?.strAlbumThumb) ?? null
+          : null
+      )).catch(() => null);
+      if (albumEntry?.strAlbumThumb) {
+        return cacheRemoteArtwork({ cacheKey, imageUrl: albumEntry.strAlbumThumb });
+      }
+    }
+
+    // iTunes fallback also tries artist variants
+    const imageUrl = await fetchItunesArtworkUrl({ title, artist, album }).catch(() => null)
+      || await (async () => {
+           for (const artistCandidate of uniqueArtists.slice(1)) {
+             const url = await fetchItunesArtworkUrl({ title, artist: artistCandidate, album }).catch(() => null);
+             if (url) return url;
+           }
+           return null;
+         })();
     if (!imageUrl) return null;
-    return cacheRemoteArtwork({
-      cacheKey,
-      imageUrl
-    });
+    return cacheRemoteArtwork({ cacheKey, imageUrl });
   })();
 
   remoteArtworkInFlight.set(cacheKey, pending);
