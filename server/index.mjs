@@ -11397,6 +11397,22 @@ function normalizeLyricsProviderChain(value) {
   return deduped.length > 0 ? deduped : ["lrclib", "lyricsovh"];
 }
 
+
+function hasCjkChars(text) {
+  if (!text) return false;
+  // CJK Unified Ideographs + common ranges (Chinese, Japanese, Korean)
+  return /\p{Script=Han}|\p{Script=Hiragana}|\p{Script=Katakana}|\p{Script=Hangul}/u.test(text);
+}
+
+function reorderLyricsChainForCandidate(candidate) {
+  if (!hasCjkChars(candidate?.title) && !hasCjkChars(candidate?.artist)) return LYRICS_PROVIDER_CHAIN;
+  // CJK songs: try netease first (best Chinese/Japanese/Korean coverage)
+  const chain = [];
+  if (LYRICS_PROVIDER_CHAIN.includes('netease')) chain.push('netease');
+  for (const p of LYRICS_PROVIDER_CHAIN) { if (!chain.includes(p)) chain.push(p); }
+  return chain;
+}
+
 function lyricsProviderChainLabel() {
   return LYRICS_PROVIDER_CHAIN.join(", ");
 }
@@ -12743,10 +12759,11 @@ function buildLyricsStateFromProviderBody(candidate, lyricsBody, provider) {
 }
 
 async function fetchLyricsFromProvider(candidate) {
+  const effectiveChain = reorderLyricsChainForCandidate(candidate);
   let sawNoMatch = false;
   let firstError = null;
 
-  for (const provider of LYRICS_PROVIDER_CHAIN) {
+  for (const provider of effectiveChain) {
     try {
       const lyricsBody = await fetchLyricsBodyFromProvider(provider, candidate);
       if (lyricsBody) return buildLyricsStateFromProviderBody(candidate, lyricsBody, provider);
@@ -12757,7 +12774,7 @@ async function fetchLyricsFromProvider(candidate) {
   }
 
   if (!sawNoMatch && firstError) throw firstError;
-  return buildLyricsStateFromProviderBody(candidate, null, LYRICS_PROVIDER_CHAIN.at(-1) ?? "lrclib");
+  return buildLyricsStateFromProviderBody(candidate, null, effectiveChain.at(-1) ?? "lrclib");
 }
 
 function getProxyInputCaptureCommand(source) {
