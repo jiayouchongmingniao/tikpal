@@ -486,15 +486,9 @@ html[data-tikpal-provider-font-theme] textarea {
     try {
       const providerId = inferProviderId();
       const result = await new Promise((resolve) => {
-        chrome.runtime.sendMessage({ type: "sync-proxy", providerId, providerPage: !isBootstrap && isProviderPage() }, resolve);
+        chrome.runtime.sendMessage({ type: "sync-proxy", providerId, providerPage: isProviderPage() }, resolve);
       });
       if (!result?.ok) return;
-
-      if (isBootstrap) {
-        const provider = result.providers?.find((item) => item.id === providerId);
-        if (provider?.url) window.location.replace(provider.url);
-        return;
-      }
 
       if (typeof result.providerTextScale === "number") {
         setDesiredProviderTextScale(result.providerTextScale);

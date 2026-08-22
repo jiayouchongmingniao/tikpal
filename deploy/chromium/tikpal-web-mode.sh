@@ -2127,13 +2127,12 @@ park_profile_windows_for_reopen() {
   command -v xdotool >/dev/null 2>&1 || return 0
   window="$(first_window_for_profile "$profile" || true)"
   if [[ -n "$window" ]]; then
+    # Hide instantly before the async off-screen move so the X compositor
+    # cannot expose a white root-window flash during the wmctrl transition.
+    set_window_opacity "$window" 0 >/dev/null 2>&1 || true
     tile_window_fast "$window" "$TIKPAL_WEB_MODE_STAGE_POSITION" "$size"
     clear_window_above "$window"
     DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowlower "$window" >/dev/null 2>&1 || true
-    # Do NOT restore opacity here — the window is moving off-screen and
-    # wmctrl -e is async (fork).  xprop would set opacity=1.0 while the
-    # window is still at 0,0, causing a visible flash.  The next switch
-    # or reveal will handle opacity as needed.
     return
   fi
   local failed=0
@@ -2141,6 +2140,7 @@ park_profile_windows_for_reopen() {
     [[ -n "$window" ]] || continue
     pid="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe getwindowpid "$window" 2>/dev/null || true)"
     process_tree_uses_profile "$pid" "$profile" || continue
+    set_window_opacity "$window" 0 >/dev/null 2>&1 || true
     tile_window_fast "$window" "$TIKPAL_WEB_MODE_STAGE_POSITION" "$size"
     clear_window_above "$window"
     DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowlower "$window" >/dev/null 2>&1 || true
@@ -3295,6 +3295,7 @@ reveal_resident_provider_surfaces() {
   local panel_window
   panel_window="$(wait_for_profile_window "$panel_profile" 8 || true)"
   if [[ -n "$panel_window" ]]; then
+    restore_window_opacity "$panel_window"
     tile_window_fast "$panel_window" "$TIKPAL_WEB_MODE_PANEL_POSITION" "$TIKPAL_WEB_MODE_PANEL_WINDOW"
     mark_window_above "$panel_window"
     raise_window_without_focus "$panel_window"
@@ -3310,6 +3311,9 @@ reveal_resident_provider_window() {
   local transition_shown_ms="${4:-0}"
   local provider_port="${5:-}"
   local started_ms="$(now_ms)"
+  # Restore opacity before reveal — park_profile_windows_for_reopen sets 0
+  # to avoid white flash during the async off-screen move.
+  restore_window_opacity "$target_window"
   # If CDP already proves the provider has a real HTTPS page, the compositor
   # has rendered meaningful content.  Skip the slow X11 paint check and settle
   # delay entirely — the 3 s timeout on 115 always fails even when the window
