@@ -497,7 +497,10 @@ export function AmbientScreen({
   const proxyLyricsClockUsable = playback.timingDiagnostics?.positionTrusted === true
     || playback.timingDiagnostics?.positionConfidence === "estimated";
   const playbackLyricsClockTrusted = Number.isFinite(playback.elapsedSeconds)
-    && ((playback.source !== "airplay" && playback.source !== "upnp") || proxyLyricsClockUsable);
+    && (playback.source !== "airplay" && playback.source !== "upnp"
+      ? true
+      : proxyLyricsClockUsable
+        || (playback.source === "upnp" && !playback.timingDiagnostics));
   const canAdvanceLyrics = lyrics.synced
     && (playback.source === "mpd" || playback.source === "radio" || playback.source === "bluetooth" || playback.source === "airplay" || playback.source === "upnp")
     && playback.state === "playing"
@@ -1862,6 +1865,10 @@ export function AmbientScreen({
           fontTheme={fontTheme}
           lyricsPanel={hifiLyricsPanel}
           lyricsControls={hifiLyricsControls}
+          lyricsStatus={lyrics.status}
+          lyricsTitle={lyrics.title}
+          lyricsArtist={lyrics.artist}
+          lyricsSourceScope={lyrics.sourceScope}
         />
       ) : (
         <FlameScene

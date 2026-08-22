@@ -2947,8 +2947,54 @@ function normalizeAirplayPlaybackMetadata(metadata) {
   return metadata;
 }
 
+function splitUpnpCompoundTrackLabel(raw) {
+  const value = normalizeMetadataValue(raw);
+  for (const separator of [" — ", " – ", " - "]) {
+    const parts = value.split(separator).map((part) => normalizeMetadataValue(part)).filter(Boolean);
+    if (parts.length === 2) {
+      return { title: parts[0], artist: parts[1] };
+    }
+  }
+  return null;
+}
+
+function normalizeUpnpCompoundTrackMetadata(metadata) {
+  // Try splitting artist field first (e.g. "SongTitle — ArtistName")
+  const artistSplit = splitUpnpCompoundTrackLabel(metadata?.artist);
+  if (artistSplit && looksLikeAirplayCompoundTrackTitle(artistSplit.title)) {
+    const currentTitleKey = normalizeLyricsMatchValue(metadata.title);
+    const splitTitleKey = normalizeLyricsMatchValue(artistSplit.title);
+    const titleAlreadyMatches = currentTitleKey && splitTitleKey && currentTitleKey === splitTitleKey;
+    if (!titleAlreadyMatches && !currentTitleKey) {
+      return { ...metadata, title: artistSplit.title, artist: artistSplit.artist };
+    }
+  }
+  // Try splitting title field (e.g. "SongTitle - ArtistName")
+  const titleSplit = splitUpnpCompoundTrackLabel(metadata?.title);
+  if (titleSplit && looksLikeAirplayCompoundTrackTitle(titleSplit.title)) {
+    return { ...metadata, title: titleSplit.title, artist: metadata.artist || titleSplit.artist };
+  }
+  return metadata;
+}
+
 function normalizeUpnpPlaybackMetadata(metadata) {
   if (!isUsableAirplayPlaybackMetadata(metadata)) return null;
+  metadata = normalizeUpnpCompoundTrackMetadata(metadata);
+  const positionMs = Number(metadata.positionMs);
+  const durationMs = Number(metadata.durationMs);
+  // DLNA streams can report position > duration.  Never discard the entire
+  // metadata (title/artist/album) because that causes the recognition session
+  // and trackKey to flip, losing cached lyrics.  Instead, null out just the
+  // unreliable position.
+  if (
+    metadata.status === "playing"
+    && Number.isFinite(positionMs)
+    && Number.isFinite(durationMs)
+    && durationMs > 0
+    && positionMs > durationMs + AIRPLAY_METADATA_POSITION_GRACE_MS
+  ) {
+    return { ...metadata, positionMs: null };
+  }
   return metadata;
 }
 
@@ -9187,13 +9233,22 @@ async function getMpcSnapshot(options = {}) {
         album: trustedAirplayPlaybackMetadata.album
       })
     : null;
-  const upnpRemoteArtworkUrl = playbackSource === "upnp" && activeUpnpPlaybackMetadata?.title && !activeUpnpPlaybackMetadata.artworkUrl
-    ? await resolveRemotePlaybackArtworkUrl({
-        playbackSource,
-        title: activeUpnpPlaybackMetadata.title,
-        artist: activeUpnpPlaybackMetadata.artist,
-        album: activeUpnpPlaybackMetadata.album
-      })
+  const upnpRemoteArtworkUrl = playbackSource === "upnp"
+    ? activeUpnpPlaybackMetadata?.title && !activeUpnpPlaybackMetadata.artworkUrl
+      ? await resolveRemotePlaybackArtworkUrl({
+          playbackSource,
+          title: activeUpnpPlaybackMetadata.title,
+          artist: activeUpnpPlaybackMetadata.artist,
+          album: activeUpnpPlaybackMetadata.album
+        })
+      : !activeUpnpPlaybackMetadata && hasCurrentTrack
+        ? await resolveRemotePlaybackArtworkUrl({
+            playbackSource,
+            title,
+            artist,
+            album
+          })
+        : null
     : null;
   const metadata = hasCurrentTrack
     ? includeSlowRuntimeStatus
@@ -9209,7 +9264,7 @@ async function getMpcSnapshot(options = {}) {
       };
 
   if (includeSlowRuntimeStatus && !isExternalOutputSource) {
-    currentArtworkState = hasCurrentTrack
+    const resolvedArtwork = hasCurrentTrack
       ? await resolveCurrentArtworkState({
           playbackSource,
           metadata,
@@ -9218,6 +9273,15 @@ async function getMpcSnapshot(options = {}) {
           fallbackAlbum: activeUpnpPlaybackMetadata?.album || radioPlaybackMetadata?.album || album || "MPD Queue"
         })
       : null;
+    // Preserve remote artwork if the new state is just a generated fallback
+    // for the same track — remote artwork was fetched async and is better.
+    if (resolvedArtwork?.kind === "generated" && currentArtworkState?.kind === "remote"
+      && currentArtworkState.title === resolvedArtwork.title
+      && currentArtworkState.artist === resolvedArtwork.artist) {
+      // keep existing remote artwork
+    } else {
+      currentArtworkState = resolvedArtwork;
+    }
   }
 
   return {
@@ -9260,7 +9324,7 @@ async function getMpcSnapshot(options = {}) {
           : isMultiroomSource
             ? multiroomPlaybackLabel
           : playbackSource === "upnp"
-            ? activeUpnpPlaybackMetadata?.title || (hasCurrentTrack ? metadata.title || title || trackTitleFromFile(file) : "DLNA Ready")
+            ? activeUpnpPlaybackMetadata?.title || (hasCurrentTrack ? (isStreamUri(file) ? title || metadata.title : metadata.title || title) || trackTitleFromFile(file) : "DLNA Ready")
           : playbackSource === "bluetooth"
             ? bluetoothPlaybackMetadata?.title || "Bluetooth Ready"
             : playbackSource === "airplay"
@@ -9277,7 +9341,7 @@ async function getMpcSnapshot(options = {}) {
             ? `Playing from ${multiroomPlaybackBrand}.`
           : playbackSource === "upnp"
             ? activeUpnpPlaybackMetadata?.artist || (hasCurrentTrack
-              ? metadata.artist || artist || null
+              ? (isStreamUri(file) ? artist || metadata.artist : metadata.artist || artist) || null
               : playbackAudio.currentSource.connectedLabel
                 || (playbackAudio.currentSource.advertisedLabel ? `Cast to ${playbackAudio.currentSource.advertisedLabel} with DLNA` : "Cast to Tikpal with DLNA"))
           : playbackSource === "bluetooth"
@@ -9300,7 +9364,7 @@ async function getMpcSnapshot(options = {}) {
           : isMultiroomSource
             ? multiroomPlaybackLabel
           : playbackSource === "upnp"
-            ? activeUpnpPlaybackMetadata?.album || (hasCurrentTrack ? metadata.album || album || "DLNA Source" : "DLNA Source")
+            ? activeUpnpPlaybackMetadata?.album || (hasCurrentTrack ? (isStreamUri(file) ? album || metadata.album : metadata.album || album) || "DLNA Source" : "DLNA Source")
           : playbackSource === "bluetooth"
             ? bluetoothPlaybackMetadata?.album || null
             : playbackSource === "airplay"
@@ -11342,15 +11406,20 @@ function buildLyricsCacheKey(candidate) {
   ].join("|");
 }
 
-function buildPlaybackTrackKey({ source, title, artist, album, durationSeconds }) {
+function buildPlaybackTrackKey({ source, title, artist, album, durationSeconds, sourceScope }) {
   const normalizedTitle = normalizeMetadataValue(title);
   if (!normalizedTitle) return null;
+  // DLNA streams can revise duration while playing the same track.
+  // Omit duration from the key to avoid spurious trackKey changes.
+  const stableDuration = sourceScope === "upnp_input" || source === "upnp"
+    ? ""
+    : Number.isFinite(durationSeconds) ? String(Math.round(durationSeconds)) : "";
   const payload = [
     source,
     normalizedTitle.toLowerCase(),
     normalizeMetadataValue(artist).toLowerCase(),
     normalizeMetadataValue(album).toLowerCase(),
-    Number.isFinite(durationSeconds) ? String(Math.round(durationSeconds)) : ""
+    stableDuration
   ].join("|");
   return createHash("sha1").update(payload).digest("hex");
 }
@@ -11362,6 +11431,10 @@ function isUnreliableProxyLyricsDuration(sourceScope, durationMs) {
   }
   if (sourceScope === "bluetooth_input") {
     return durationMs <= BLUETOOTH_LYRICS_UNRELIABLE_DURATION_MS;
+  }
+  // DLNA streams can revise duration while playing the same track
+  if (sourceScope === "upnp_input") {
+    return true;
   }
   return false;
 }
@@ -11399,6 +11472,7 @@ function buildMetadataLyricsCandidate(playback, overrides = {}) {
     recognitionProvider: LYRICS_PROVIDER_CHAIN[0] ?? "lrclib",
     trackKey: buildPlaybackTrackKey({
       ...playback,
+      sourceScope,
       durationSeconds: Number.isFinite(trustedDurationMs) ? trustedDurationMs / 1000 : null
     }),
     title: normalizeMetadataValue(playback.title),
@@ -11504,10 +11578,23 @@ function looksLikeUntrustedTrackMetadata(candidate) {
   const artist = normalizeMetadataValue(candidate?.artist).toLowerCase();
   const album = normalizeMetadataValue(candidate?.album).toLowerCase();
   if (!title) return true;
-  // MPD uses the stream URL and `Unknown Artist` as an upnp playback fallback.
-  // That is not DIDL sender metadata, so route it to the DLNA fingerprint path.
-  if (candidate?.sourceScope === "upnp_input" && (!artist || artist === "unknown artist")) {
-    return true;
+  // For DLNA: if we have a non-synthetic title from DIDL metadata, trust it
+  // even when artist is missing. Only fall back to fingerprint when the title
+  // itself looks like a stream URL or file name.
+  if (candidate?.sourceScope === "upnp_input") {
+    if (!artist || artist === "unknown artist") {
+      const titleLooksSynthetic = title.includes("http")
+        || title.includes(".mp3")
+        || title.includes(".aac")
+        || title.includes(".flac")
+        || title.includes(".ogg")
+        || title.includes("_")
+        || title.startsWith("stream")
+        || title.startsWith("dlna");
+      if (titleLooksSynthetic) return true;
+      // Non-synthetic title without artist: trust for metadata lookup
+      return false;
+    }
   }
   const placeholderPhrases = new Set([
     "bluetooth ready",
@@ -12036,7 +12123,7 @@ async function fetchRemoteArtworkForAlbum({ title, artist, album }) {
 }
 
 async function resolveRemotePlaybackArtworkUrl({ playbackSource, title, artist, album }) {
-  if (!["bluetooth", "airplay"].includes(playbackSource)) return null;
+  if (!["bluetooth", "airplay", "upnp"].includes(playbackSource)) return null;
   const cacheKey = buildArtworkCacheKey({ artist, album });
   if (!cacheKey) return null;
 
@@ -12060,9 +12147,13 @@ async function resolveRemotePlaybackArtworkUrl({ playbackSource, title, artist, 
 }
 
 async function resolveCurrentArtworkState({ playbackSource, metadata, fallbackTitle, fallbackArtist, fallbackAlbum }) {
-  const title = metadata.title || fallbackTitle || trackTitleFromFile("") || "Not Playing";
-  const artist = metadata.artist || fallbackArtist || "Unknown Artist";
-  const album = metadata.album || fallbackAlbum || "MPD Queue";
+  // When readMediaMetadata cannot resolve a local file (stream URIs), it
+  // returns the URL filename as title and "Unknown Artist" as artist.
+  // Prefer the fallback values from MPD's %title%/%artist% in that case.
+  const unreliableMeta = metadata.absolutePath === null;
+  const title = (unreliableMeta ? null : metadata.title) || fallbackTitle || trackTitleFromFile("") || "Not Playing";
+  const artist = (unreliableMeta ? null : metadata.artist) || fallbackArtist || "Unknown Artist";
+  const album = (unreliableMeta ? null : metadata.album) || fallbackAlbum || "MPD Queue";
 
   if (metadata.absolutePath && metadata.artworkMimeType) {
     return {
@@ -12502,9 +12593,9 @@ function syncProxyInputRecognitionSession(sourceSummary, source = "bluetooth") {
 
 function syncActiveProxyInputRecognition(candidate) {
   if (candidate?.recognitionMode !== "fingerprint") {
-    if (activeProxyInputRecognition?.source) {
-      proxyInputRecognitionSessions.delete(activeProxyInputRecognition.source);
-    }
+    // When the candidate is metadata-mode (not fingerprint), keep the
+    // existing proxy session alive so a future fingerprint fallback can
+    // reuse cached results.  Only clear the active tracking pointer.
     activeProxyInputRecognition = null;
     return;
   }
@@ -12735,12 +12826,10 @@ async function resolveProxyInputRecognition(candidate, sourceSummary, { force = 
       recognitionConfidence: recognizedTrack.confidence,
       trackKey: buildPlaybackTrackKey({
         source,
+        sourceScope,
         title: recognizedTrack.title,
         artist: recognizedTrack.artist,
         album: recognizedTrack.album,
-        // A DLNA stream can revise its reported duration while the sender is
-        // still playing the same track.  Its periodic refresh must compare
-        // recognition identity, not that volatile stream detail.
         durationSeconds: source === "upnp"
           ? null
           : Number.isFinite(candidate.durationMs) ? candidate.durationMs / 1000 : null

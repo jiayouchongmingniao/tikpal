@@ -79,6 +79,9 @@ Exact wire shapes should be finalized during implementation, but these concepts 
 | Volume | Ambient status, player source header, volume panel, portable remote | `system.volume.percent` is the global truth; Ambient edge gestures, Player and Remote range sliders, and scene video audio all sync through `volume_set`. |
 | Audio format | Player status card | Format, bit depth, sample rate. |
 | Output device | Player status card, Console | USB, I2S, HDMI, DAC name, volume mode. |
+| DLNA metadata normalization | Ambient HUD, Player | Compound "Title — Artist" splitting, DIDL field aliases (`dc:title`, `upnp:originalTrackTitle`, `upnp:performer`), stream URI title/artist/album extraction via MPD `%title%`/`%artist%`/`%album%`. |
+| DLNA artwork | Ambient HUD, Player | Remote artwork from TheAudioDB/iTunes when local metadata unavailable; SVG placeholder until remote arrives; same-track artwork preserved across state updates. |
+| DLNA lyrics | Ambient lyrics wall | Title-only metadata lookup when artist missing; MPD elapsed time drives lyric line progress; active line highlight; recognition spinner and "未找到歌词" states exposed in UI. |
 | Playback source / renderer | Ambient source picker, Player top state, source workspace | Six visible frontstage choices: Library, Radio, Spotify, AirPlay, Bluetooth, DLNA; internal Audio remains backend/status truth. |
 | Scene ambience audio | Ambient video layer, Player current source | Scene Sound is the automatic Ambient default backed by the active background MP4; selecting any visible music/input source replaces it and remutes the browser video. Customers do not get a separate Scene Sound switch. On Pi, Chromium should use the physical USB `dmix` output, while moOde/MPD keeps `_audioout` for Library, Radio, renderer intakes, and Hi-Fi capture. |
 | Network | Player status, Console Link | Ethernet/Wi-Fi, IP, connection state. |
@@ -99,6 +102,7 @@ Allowed:
 - Playback state.
 - Lightweight six-choice source picker for `mpd`, `radio`, `spotify`, `airplay`, `bluetooth`, and `upnp`, displayed as Library, Radio, Spotify, AirPlay, Bluetooth, and DLNA.
 - Unified external handoff state for Spotify Connect, AirPlay, Bluetooth, and DLNA: `armed` means the receiver is open and waiting, while only `connected` ends the waiting UI. Ambient, Player, and the portable remote must read the same source summary instead of inventing separate local readiness. External-to-external switches return the requested target after that intake opens, while old external receivers are cleaned up in the background with target protection; Library and Radio still close external receivers synchronously before reclaiming `_audioout`. AirPlay metadata, artwork, and lyrics are display truth only after AirPlay is `connected`; switching away from AirPlay must close both the moOde renderer and the Shairport receiver, then clear any failed Shairport unit marker, so the next source does not inherit stale AirPlay state.
+- DLNA metadata, artwork, and lyrics follow the same connected-only display-truth rule as AirPlay, with source-specific normalization: the metadata script parses DIDL fields (`dc:title`, `upnp:originalTrackTitle`, `upnp:performer`) and the server normalizes compound "Title — Artist" formats before lookup. DLNA trust detection accepts a non-synthetic title even when artist is missing, avoiding unnecessary ACRCloud fingerprint delays. Artwork is resolved from remote sources (TheAudioDB, iTunes) when local metadata is unavailable; a generated SVG placeholder is shown until remote artwork arrives and is preserved across same-track state updates. Lyrics progress trusts MPD elapsed time when DLNA provides no explicit timing diagnostics, and the lyrics wall highlights the active line in sync with playback. The lyrics wall also exposes recognition state: a spinner while fingerprinting, song title when lyrics are not found, and source scope for diagnostics.
 - Mutually exclusive playback mode: `sequence`, `repeat_one`, or `shuffle`.
 - Volume.
 - Audio spec.
@@ -249,8 +253,8 @@ Production web access uses fixed listeners: `4173` is the full trusted kiosk UI/
 | `/api/v1/media/background-videos` | `GET` | Lists MP4 fireplace/background videos found under `public/assets` and scene OTA videos under `public/assets/scenes`, with optional `order`, `default`, and `catalogVersion` metadata so Ambient can switch the active background without a rebuild. |
 | `/api/v1/media/radio-logo` | `GET` / `HEAD` | Serves official local radio logos by `stationId=radio-<id>`. The API resolves only known moOde station ids, first by exact station-name image file and then by a repo-owned alias map for curated Tikpal station names. It never accepts arbitrary filesystem paths. Successful responses should be cacheable for one day so repeated Radio cover switches can reuse local artwork quickly. |
 | `/api/v1/playback/status` | `GET` | Playback summary only. |
-| `/api/v1/lyrics/status` | `GET` | Current lyrics summary. For AirPlay and Bluetooth input scopes this must stay tied to the same title/artist/source truth as playback state. |
-| `/api/v1/lyrics/refresh` | `POST` | Forces lyrics recognition/lookup for the current playback candidate. AirPlay normally uses trusted metadata first; fingerprint capture is only a fallback when configured. |
+| `/api/v1/lyrics/status` | `GET` | Current lyrics summary. For AirPlay, Bluetooth, and DLNA (`upnp`) input scopes this must stay tied to the same title/artist/source truth as playback state. DLNA trust detection accepts non-synthetic titles even without artist; metadata script `max_age_seconds` defaults to 600 for long-track resilience. |
+| `/api/v1/lyrics/refresh` | `POST` | Forces lyrics recognition/lookup for the current playback candidate. AirPlay and DLNA normally use trusted metadata first; fingerprint capture is only a fallback when configured. DLNA with title-only metadata attempts metadata-mode lookup before falling back to ACRCloud fingerprint. |
 | `/api/v1/system/status` | `GET` | System summary only. |
 | `/api/v1/system/runtime` | `GET` | Kiosk/runtime summary. |
 | `/api/v1/playback/actions` | `POST` | Playback actions: `play_pause`, `play`, `pause`, `next`, `previous`, `seek`, `favorite_toggle`, `play_mode_set` with `mode=sequence\|repeat_one\|shuffle`, and global `volume_set`. While Radio is active, `next` and `previous` cycle adjacent curated station ids instead of sending queue commands to MPD's single stream item. For scene/external handoff sources, `volume_set` targets output volume truth rather than an MPD-only mixer. |
@@ -279,6 +283,9 @@ Both Ambient and Player use the playback summary as display truth for now-playin
 | Library scanning | Show progress but do not block playback. |
 | System overheated | Show warning state and non-blocking prompt. |
 | DDC/CI brightness unavailable | Keep the left ambient control lane non-destructive and show unavailable feedback instead of silently acting like a generic ambient swipe. |
+| DLNA metadata missing or stale | Fall back to MPD stream title/artist/album; if still empty, show generated SVG artwork and "识别 DLNA 音频中…" spinner while awaiting fingerprint result. |
+| DLNA lyrics not found | Show song title prominently with "未找到歌词"; retain artwork and source label; allow manual `/api/v1/lyrics/refresh` retry. |
+| DLNA lyrics out of sync | Trust MPD elapsed time when DLNA provides no timing diagnostics; fall back to static scroll if position remains unavailable. |
 | Scene Sound enabled but silent | Keep Scene Sound state honest, then diagnose Chromium ALSA output, `_audioout` / Loopback, and competing renderer processes instead of showing fake playback success. |
 
 ## Non-Goals

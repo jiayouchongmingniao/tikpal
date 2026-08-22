@@ -3,8 +3,8 @@ set -euo pipefail
 
 metadata_json_file="${TIKPAL_UPNP_METADATA_JSON_FILE:-/var/local/www/upnpmeta.json}"
 metadata_file="${TIKPAL_UPNP_METADATA_FILE:-/var/local/www/upnpmeta.txt}"
-max_age_seconds="${TIKPAL_UPNP_METADATA_MAX_AGE_SECONDS:-300}"
-journal_command="${TIKPAL_UPNP_METADATA_JOURNAL_COMMAND:-journalctl -u upmpdcli.service -n 160 -o short-unix --no-pager}"
+max_age_seconds="${TIKPAL_UPNP_METADATA_MAX_AGE_SECONDS:-600}"
+journal_command="${TIKPAL_UPNP_METADATA_JOURNAL_COMMAND:-journalctl -u upmpdcli.service -n 320 -o short-unix --no-pager}"
 now="$(date +%s)"
 
 case "$max_age_seconds" in
@@ -102,9 +102,9 @@ def parse_didl(value):
     for element in root.iter():
         name = local_name(element.tag)
         text = clean(element.text)
-        if name == "title" and text and not result.get("title"):
+        if name in ("title", "originaltracktitle") and text and not result.get("title"):
             result["title"] = text
-        elif name in ("artist", "creator") and text and not result.get("artist"):
+        elif name in ("artist", "creator", "performer") and text and not result.get("artist"):
             result["artist"] = text
         elif name == "album" and text and not result.get("album"):
             result["album"] = text
@@ -135,8 +135,8 @@ def read_json_payload():
     ]))
     result = {
         **didl,
-        "title": first_value(payload, ["title", "dc:title", "track", "name"]) or didl.get("title", ""),
-        "artist": first_value(payload, ["artist", "upnp:artist", "creator", "dc:creator"]) or didl.get("artist", ""),
+        "title": first_value(payload, ["title", "dc:title", "upnp:originalTrackTitle", "originalTrackTitle", "track", "name"]) or didl.get("title", ""),
+        "artist": first_value(payload, ["artist", "upnp:artist", "upnp:performer", "creator", "dc:creator"]) or didl.get("artist", ""),
         "album": first_value(payload, ["album", "upnp:album"]) or didl.get("album", ""),
         "artworkUrl": remote_artwork_url(first_value(payload, [
             "albumArtURI",

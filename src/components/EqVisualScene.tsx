@@ -25,6 +25,10 @@ interface EqVisualSceneProps {
   fontTheme: FontTheme;
   lyricsPanel?: HifiLyricsPanel | null;
   lyricsControls?: ReactNode;
+  lyricsStatus?: "idle" | "recognizing" | "ready" | "not_found" | "error";
+  lyricsTitle?: string | null;
+  lyricsArtist?: string | null;
+  lyricsSourceScope?: string | null;
 }
 
 interface WaveLane {
@@ -170,7 +174,7 @@ function createHifiAmbientVisuals(seed: number) {
   return { waves, particles };
 }
 
-export function EqVisualScene({ playback, audio, system, fontTheme, lyricsPanel, lyricsControls }: EqVisualSceneProps) {
+export function EqVisualScene({ playback, audio, system, fontTheme, lyricsPanel, lyricsControls, lyricsStatus, lyricsTitle, lyricsArtist, lyricsSourceScope }: EqVisualSceneProps) {
   const isPlaying = playback.state === "playing";
   const visibleLyricsPanel = useMemo(() => {
     if (!lyricsPanel?.lines.length) return null;
@@ -313,18 +317,39 @@ export function EqVisualScene({ playback, audio, system, fontTheme, lyricsPanel,
           {usingGeneratedCoverFallback ? <span>{coverLabel}</span> : null}
         </div>
         {!hasLyricsPanel ? (
-          <div className="hifi-now-playing-copy" data-hifi-track-info>
-            <span>Now Playing</span>
-            <strong>{playbackTruth.title}</strong>
-            <em>{playbackTruth.artist} - {playbackTruth.album}</em>
-            <div className="hifi-now-playing-meta" aria-label="Hi-Fi playback details">
-              <span>{playbackTruth.sourceLabel}</span>
-              <span>{playback.state}</span>
-              <span>{formatDuration(playbackTruth.elapsedSeconds)}</span>
-              <span>{system.audioFormat.codec} {system.bitDepth}bit / {formatSampleRate(system.sampleRate)}</span>
-              <span>{system.volume.percent}%</span>
+          lyricsStatus === "recognizing" ? (
+            <div className="hifi-lyrics-recognizing" data-hifi-track-info>
+              <header className="hifi-lyrics-heading">
+                <strong>{trackHeading}</strong>
+              </header>
+              <div className="hifi-lyrics-recognizing-status">
+                <span className="hifi-lyrics-recognizing-spinner" aria-hidden="true" />
+                <span>{lyricsSourceScope === "upnp_input" ? "识别 DLNA 音频中…" : lyricsSourceScope === "airplay_input" ? "识别 AirPlay 音频中…" : lyricsSourceScope === "bluetooth_input" ? "识别蓝牙音频中…" : "正在识别…"}</span>
+              </div>
             </div>
-          </div>
+          ) : (lyricsStatus === "not_found" || lyricsStatus === "error") && (lyricsTitle || playbackTruth.title) ? (
+            <div className="hifi-lyrics-recognized" data-hifi-track-info>
+              <header className="hifi-lyrics-heading">
+                <strong>{[lyricsTitle || playbackTruth.title, lyricsArtist || playbackTruth.artist].filter(Boolean).join(" - ")}</strong>
+              </header>
+              <div className="hifi-lyrics-recognized-status">
+                <span>未找到歌词</span>
+              </div>
+            </div>
+          ) : (
+            <div className="hifi-now-playing-copy" data-hifi-track-info>
+              <span>Now Playing</span>
+              <strong>{playbackTruth.title}</strong>
+              <em>{playbackTruth.artist} - {playbackTruth.album}</em>
+              <div className="hifi-now-playing-meta" aria-label="Hi-Fi playback details">
+                <span>{playbackTruth.sourceLabel}</span>
+                <span>{playback.state}</span>
+                <span>{formatDuration(playbackTruth.elapsedSeconds)}</span>
+                <span>{system.audioFormat.codec} {system.bitDepth}bit / {formatSampleRate(system.sampleRate)}</span>
+                <span>{system.volume.percent}%</span>
+              </div>
+            </div>
+          )
         ) : null}
       </div>
       {hasLyricsPanel && visibleLyricsPanel ? (
