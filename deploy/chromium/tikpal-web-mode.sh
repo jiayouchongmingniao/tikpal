@@ -576,7 +576,7 @@ import socket, json, base64, os, sys, select
 def recv_exact(s, n):
     buf = b""
     while len(buf) < n:
-        if not select.select([s], [], [], 2.0)[0]: return buf
+        if not select.select([s], [], [], 1.0)[0]: return buf
         d = s.recv(n - len(buf))
         if not d: return buf
         buf += d
@@ -585,7 +585,7 @@ ws_url = sys.argv[1]
 host_port = ws_url.split("/")[2]
 host, port = host_port.split(":", 1)
 path = "/" + "/".join(ws_url.split("/")[3:])
-sock = socket.create_connection((host, int(port)), timeout=2)
+sock = socket.create_connection((host, int(port)), timeout=1)
 key = base64.b64encode(os.urandom(16)).decode()
 req = "GET " + path + " HTTP/1.1\r\nHost: " + host_port + "\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: " + key + "\r\nSec-WebSocket-Version: 13\r\n\r\n"
 sock.sendall(req.encode())
@@ -700,8 +700,8 @@ cleanup_target_window_probe() {
 
 provider_has_real_provider_page() {
   local provider_port="$1"
-  provider_cdp_json_list "$provider_port" \
-    | node -e 'let body=""; process.stdin.on("data", chunk => body += chunk); process.stdin.on("end", () => { try { process.exit(JSON.parse(body).some(target => target.type === "page" && String(target.url || "").startsWith("https://")) ? 0 : 1); } catch { process.exit(1); } });'
+  # grep avoids ~460 ms node startup; "url": "https:// only appears in real provider pages.
+  provider_cdp_json_list "$provider_port" | grep -q '"url": "https://'
 }
 
 provider_friendly_error_reason() {
@@ -2175,13 +2175,14 @@ close_provider_windows() {
 park_profile_windows_for_reopen() {
   local profile="$1"
   local size="${2:-$TIKPAL_WEB_MODE_LEFT_WINDOW}"
+  local known_window="${3:-}"
   local window pid
   # Ensure X root window background is black so compositor
   # transitions never expose a white root-window flash.
   command -v xsetroot >/dev/null 2>&1 && xsetroot -solid black 2>/dev/null || true
   [[ -n "$profile" ]] || return 0
   command -v xdotool >/dev/null 2>&1 || return 0
-  window="$(first_window_for_profile "$profile" || true)"
+  window="${known_window:-$(first_window_for_profile "$profile" || true)}"
   if [[ -n "$window" ]]; then
     # Hide instantly before the async off-screen move so the X compositor
     # cannot expose a white root-window flash during the wmctrl transition.
@@ -2191,17 +2192,8 @@ park_profile_windows_for_reopen() {
     DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowlower "$window" >/dev/null 2>&1 || true
     return
   fi
-  local failed=0
-  while IFS= read -r window; do
-    [[ -n "$window" ]] || continue
-    pid="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe getwindowpid "$window" 2>/dev/null || true)"
-    process_tree_uses_profile "$pid" "$profile" || continue
-    set_window_opacity "$window" 0 >/dev/null 2>&1 || true
-    tile_window_fast "$window" "$TIKPAL_WEB_MODE_STAGE_POSITION" "$size"
-    clear_window_above "$window"
-    DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowlower "$window" >/dev/null 2>&1 || true
-  done < <(cached_chromium_windows)
-  return "$failed"
+  # No window found — old provider already gone, nothing to park.
+  return 0
 }
 
 park_side_panel_for_reopen() {
@@ -2710,6 +2702,13 @@ restore_window_opacity() {
   set_window_opacity "$window" 1 >/dev/null 2>&1 || true
 }
 
+# Quick existence check — 1 X11 round-trip instead of 3.
+# Window ID reuse risk is minimal; guard loop corrects within 250 ms.
+validate_profile_window_fast() {
+  [[ "$1" =~ ^[0-9]+$ ]] || return 1
+  DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe getwindowgeometry "$1" >/dev/null 2>&1
+}
+
 first_window_for_profile() {
   local profile="$1"
   local window pid geometry width height area best_window="" best_area=0
@@ -2718,12 +2717,29 @@ first_window_for_profile() {
   cache_path="$(profile_window_cache_path "$profile")"
   if [[ -r "$cache_path" ]]; then
     cached_window="$(cat "$cache_path" 2>/dev/null || true)"
-    if validate_profile_window "$cached_window" "$profile"; then
+    if validate_profile_window_fast "$cached_window"; then
       printf '%s\n' "$cached_window"
       return 0
     fi
     rm -f "$cache_path"
   fi
+  # PID-based targeted lookup — avoids full cached_chromium_windows scan.
+  pid="$(pgrep -f -- "--user-data-dir=$profile" 2>/dev/null | head -1 || true)"
+  if [[ -n "$pid" ]]; then
+    window="$(find_window_for_pid "$pid" || true)"
+    if [[ -n "$window" ]]; then
+      geometry="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe getwindowgeometry "$window" 2>/dev/null || true)"
+      width="$(printf '%s\n' "$geometry" | awk -F'[ x]+' '/Geometry:/{print $3}')"
+      height="$(printf '%s\n' "$geometry" | awk -F'[ x]+' '/Geometry:/{print $4}')"
+      if [[ "$width" =~ ^[0-9]+$ && "$height" =~ ^[0-9]+$ ]] && [[ "$((width * height))" -gt 100000 ]]; then
+        mkdir -p "$(dirname "$cache_path")"
+        printf '%s\n' "$window" > "$cache_path"
+        printf '%s\n' "$window"
+        return 0
+      fi
+    fi
+  fi
+  # Fallback: full scan (only when PID lookup fails, e.g. process not yet started).
   while IFS= read -r window; do
     [[ -n "$window" ]] || continue
     pid="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe getwindowpid "$window" 2>/dev/null || true)"
@@ -3258,7 +3274,14 @@ ensure_side_panel() {
   local hidden="${2:-0}"
   local panel_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"
   local panel_window
+  # Clear stale cache to prevent window ID reuse from hiding a missing panel.
+  rm -f "$(profile_window_cache_path "$panel_profile")" 2>/dev/null || true
   panel_window="$(first_window_for_profile "$panel_profile" || true)"
+  # Double-check with full validation — fast check may match a reused window ID.
+  if [[ -n "$panel_window" ]] && ! validate_profile_window "$panel_window" "$panel_profile"; then
+    rm -f "$(profile_window_cache_path "$panel_profile")" 2>/dev/null || true
+    panel_window=""
+  fi
   if [[ "$hidden" == "1" ]]; then
     if [[ -n "$panel_window" ]]; then
       tile_window_fast "$panel_window" "$TIKPAL_WEB_MODE_STAGE_POSITION" "$TIKPAL_WEB_MODE_PANEL_WINDOW"
@@ -3372,6 +3395,7 @@ reveal_resident_provider_window() {
   local provider_profile="${3:-}"
   local transition_shown_ms="${4:-0}"
   local provider_port="${5:-}"
+  local previous_window="${6:-}"
   local started_ms="$(now_ms)"
   # Restore opacity before reveal — park_profile_windows_for_reopen sets 0
   # to avoid white flash during the async off-screen move.
@@ -3387,10 +3411,12 @@ reveal_resident_provider_window() {
     # latency is invisible.  This matters when the X server is busy
     # rendering the kiosk UI (xdotool calls take 3+ s under load).
     mark_window_above "$target_window"
+    log_stage "reveal_mark_above target=$target_window ms=$(( $(now_ms) - started_ms ))"
     raise_window "$target_window"
     log_stage "reveal_physical target=$target_window provider_port=$provider_port ms=$(( $(now_ms) - started_ms ))"
-    if [[ -n "$previous_profile" && "$previous_profile" != "$provider_profile" ]]; then
-      park_profile_windows_for_reopen "$previous_profile" "$TIKPAL_WEB_MODE_LEFT_WINDOW" || true
+    if [[ -n "$previous_window" ]]; then
+      # Sync: hide old window instantly to prevent white flash.
+      set_window_opacity "$previous_window" 0 >/dev/null 2>&1 || true
     fi
     return 0
   fi
@@ -3934,9 +3960,11 @@ open_provider_pool() {
   if [[ "$switching_provider" == "1" ]]; then
     begin_provider_switch_guard
     stop_window_guard
-    # Pause old provider's media before switch to prevent audio mixing.
+    # Pause old provider's media — fire-and-forget so it does not block the reveal.
+    # The transition veil covers the old page; the 2 s audio crossfade masks any
+    # brief overlap while the WebSocket round-trip completes in the background.
     if [[ -n "$current_provider" ]]; then
-      pause_provider_media_via_cdp "$(provider_debug_port "$current_provider")" "$cdp_json_list" || log "WARN: could not pause $current_provider media via CDP"
+      ( pause_provider_media_via_cdp "$(provider_debug_port "$current_provider")" "$cdp_json_list" || true ) &
     fi
     if [[ "$fast_resident" == "1" ]]; then
       # CDP fast path: skip the fade animation.  The new window will be
@@ -3990,21 +4018,17 @@ open_provider_pool() {
       log "open abandoned before resident reveal: $provider"
       return 0
     fi
-    if [[ "$entry_stage" != "1" && "$switching_provider" == "1" ]]; then
-      # begin_provider_switch_transition ran exactly once before the resident
-      # path. Its transition or background cover remains visible while this
-      # target probe verifies a non-empty X11 frame.
-      if [[ -n "$target_window" ]]; then
-        tile_window_fast "$target_window" "$TIKPAL_WEB_MODE_LEFT_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
-        clear_window_above "$target_window"
-        DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowlower "$target_window" >/dev/null 2>&1 || true
-      fi
+    # Ensure side panel exists — skip if process already running (persists across switches).
+    if ! pgrep -f -- "--user-data-dir=$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel" >/dev/null 2>&1; then
+      ensure_side_panel "$provider" 0 || true
     fi
-    # Ensure old provider media is paused before reveal.
-    if [[ "$switching_provider" == "1" && -n "$current_provider" ]]; then
-      pause_provider_media_via_cdp "$(provider_debug_port "$current_provider")" "$cdp_json_list" || true
+    # Pre-reveal tile+lower removed: mark_window_above + raise_window in
+    # reveal_resident_provider_window immediately covers the transition.
+    local _prev_window=""
+    if [[ -n "$current_profile" && "$current_profile" != "$provider_profile" ]]; then
+      _prev_window="$(first_window_for_profile "$current_profile" || true)"
     fi
-    if reveal_resident_provider_window "$target_window" "$current_profile" "$provider_profile" "$transition_shown_ms" "$provider_port"; then
+    if reveal_resident_provider_window "$target_window" "$current_profile" "$provider_profile" "$transition_shown_ms" "$provider_port" "$_prev_window"; then
       invalidate_chromium_window_cache
       reveal_ms="$(( $(now_ms) - started_ms ))"
       log_stage "reveal_ms=$reveal_ms provider=$provider resident=1"
