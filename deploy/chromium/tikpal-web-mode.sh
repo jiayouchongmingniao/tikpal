@@ -24,6 +24,22 @@ fi
 
 : "${TIKPAL_KIOSK_DISPLAY:=:0}"
 : "${TIKPAL_CHROMIUM_BIN:=/usr/lib/chromium-browser/chromium-browser}"
+# When running as root (e.g. via SSH), $HOME is /root but the kiosk data
+# lives under the kiosk user's home.  Detect it from the running Chromium
+# process or fall back to the first /home/* user with a tikpal-web-mode dir.
+if [[ "$(id -u)" == "0" && "$HOME" != "/home/"* ]]; then
+  _kiosk_home="$(ps -eo user,args 2>/dev/null | awk '/chromium.*--user-data-dir=.*tikpal-web-mode/ && !/root/{print $1; exit}' | head -1)"
+  if [[ -n "$_kiosk_home" ]]; then
+    _kiosk_home="$(eval echo "~$_kiosk_home" 2>/dev/null || true)"
+  fi
+  if [[ -z "$_kiosk_home" || ! -d "$_kiosk_home" ]]; then
+    _kiosk_home="$(ls -d /home/*/.config/tikpal-web-mode 2>/dev/null | head -1 | sed 's|/.config/tikpal-web-mode||')"
+  fi
+  if [[ -n "$_kiosk_home" && -d "$_kiosk_home" ]]; then
+    HOME="$_kiosk_home"
+    export HOME
+  fi
+fi
 : "${TIKPAL_CHROMIUM_PROFILE_DIR:=$HOME/.config/tikpal-chromium-kiosk}"
 : "${TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE:=}"
 : "${TIKPAL_AUDIO_ADAPT_BIN:=$APP_DIR/deploy/moode/tikpal-audio-adapt.sh}"
