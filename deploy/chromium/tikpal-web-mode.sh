@@ -544,28 +544,63 @@ provider_cdp_json_list() {
 }
 
 pause_provider_media_via_cdp() {
+  local _pause_started_ms="$(now_ms)"
   local provider_port="$1"
   local cdp_json="${2:-}"
   local ws_url
   if [[ -z "$cdp_json" ]]; then
     cdp_json="$(timeout 1 curl --noproxy '*' -sf --connect-timeout 1 --max-time 1 "http://127.0.0.1:$provider_port/json/list" 2>/dev/null)"
   fi
-  ws_url="$(printf '%s' "$cdp_json" | node -e 'let b="";process.stdin.on("data",c=>b+=c);process.stdin.on("end",()=>{try{const a=JSON.parse(b);const t=a.find(x=>x.type==="page"&&x.webSocketDebuggerUrl);if(t)process.stdout.write(t.webSocketDebuggerUrl)}catch{}})')"
+  # Extract ws_url with grep (no node startup).
+  ws_url="$(printf '%s\n' "$cdp_json" | grep -A2 '"type": "page"' | grep -o '"ws://[^"]*"' | head -1 | tr -d '"')"
   [[ -n "$ws_url" ]] || return 1
-  node --experimental-websocket -e "                                    \
-    const ws = new WebSocket(process.argv[1]);                           \
-    ws.addEventListener('open', () => {                                  \
-      ws.send(JSON.stringify({id:1, method:'Runtime.evaluate', params:{  \
-        expression: '(window.__tikpalProviderAudioGate?.setActive(false) || {}).active', \
-        returnByValue: true                                              \
-      }}));                                                              \
-    });                                                                  \
-    ws.addEventListener('message', e => {                                \
-      try{const m=JSON.parse(e.data); if(m.id===1){ws.close();process.exit(m.error?1:0)}}catch{} \
-    });                                                                  \
-    ws.addEventListener('error', () => { try{ws.close()}catch{}; process.exit(1) }); \
-    setTimeout(() => { try{ws.close()}catch{}; process.exit(1) }, 2000); \
-  " "$ws_url" 2>/dev/null
+  # Python raw socket WebSocket — avoids ~460ms node startup per call.
+  python3 -c '
+import socket, json, base64, os, sys, select
+def recv_exact(s, n):
+    buf = b""
+    while len(buf) < n:
+        if not select.select([s], [], [], 2.0)[0]: return buf
+        d = s.recv(n - len(buf))
+        if not d: return buf
+        buf += d
+    return buf
+ws_url = sys.argv[1]
+host_port = ws_url.split("/")[2]
+host, port = host_port.split(":", 1)
+path = "/" + "/".join(ws_url.split("/")[3:])
+sock = socket.create_connection((host, int(port)), timeout=2)
+key = base64.b64encode(os.urandom(16)).decode()
+req = "GET " + path + " HTTP/1.1\r\nHost: " + host_port + "\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: " + key + "\r\nSec-WebSocket-Version: 13\r\n\r\n"
+sock.sendall(req.encode())
+resp = b""
+while b"\r\n\r\n" not in resp:
+    d = sock.recv(4096)
+    if not d: break
+    resp += d
+if b"101" not in resp.split(b"\r\n")[0]:
+    sock.close(); sys.exit(1)
+cmd = json.dumps({"id":1,"method":"Runtime.evaluate","params":{
+    "expression":"(window.__tikpalProviderAudioGate?.setActive(false) || {}).active",
+    "returnByValue":True}}).encode()
+mask = os.urandom(4)
+masked = bytes(cmd[i] ^ mask[i%4] for i in range(len(cmd)))
+hdr = bytearray([0x81])
+n = len(cmd)
+if n < 126:
+    hdr.append(0x80 | n)
+elif n < 65536:
+    hdr.append(0x80 | 126)
+    hdr.extend(n.to_bytes(2, "big"))
+hdr.extend(mask)
+sock.sendall(bytes(hdr) + masked)
+hdr2 = recv_exact(sock, 2)
+if len(hdr2) < 2: sock.close(); sys.exit(1)
+plen = hdr2[1] & 0x7F
+if plen == 126: plen = int.from_bytes(recv_exact(sock, 2), "big")
+recv_exact(sock, plen)
+sock.close()
+' "$ws_url" 2>/dev/null
 }
 
 provider_window_has_nonblank_x11_frame() {
@@ -2291,6 +2326,12 @@ close_web_mode_full() {
   # Keep the warm marker for ordinary close/reopen cycles. A physical kiosk
   # startup has just terminated every provider, so it must rebuild the pool.
   sync_runtime_provider_pool_process_statuses ""
+  # Clean stale launch lock files from previous boot.
+  rm -f "$TIKPAL_WEB_MODE_PROFILE_ROOT"/provider-*.launch.lock 2>/dev/null || true
+  # Trigger pool warmup so providers are resident before the first Explore open.
+  # Without this, a fresh boot leaves the pool cold and every open is a slow
+  # cold start that hangs on network probes.
+  schedule_provider_pool_refill_after_close
 }
 
 close_web_mode_warm() {
@@ -3864,7 +3905,7 @@ open_provider_pool() {
     local cdp_json_list=""
     if [[ -n "$target_window" ]]; then
       cdp_json_list="$(timeout 0.8 curl --noproxy '*' -sf --connect-timeout 1 --max-time 1 "http://127.0.0.1:$provider_port/json/list" 2>/dev/null || true)"
-      if printf '%s' "$cdp_json_list" | node -e 'let b="";process.stdin.on("data",c=>b+=c);process.stdin.on("end",()=>{try{process.exit(JSON.parse(b).some(t=>t.type==="page"&&String(t.url||"").startsWith("https://"))?0:1)}catch{process.exit(1)}})'; then
+      if printf '%s' "$cdp_json_list" | grep -q '"url": "https://'; then
         fast_resident=1
       fi
     fi
@@ -4057,7 +4098,8 @@ open_provider_pool() {
   else
     # Pause old provider media before reveal to prevent audio mixing.
     if [[ "$switching_provider" == "1" && -n "$current_provider" ]]; then
-      pause_provider_media_via_cdp "$(provider_debug_port "$current_provider")" || true
+      local _slow_cdp_json="$(timeout 0.8 curl --noproxy '*' -sf --connect-timeout 1 --max-time 1 "http://127.0.0.1:$(provider_debug_port "$current_provider")/json/list" 2>/dev/null || true)"
+      pause_provider_media_via_cdp "$(provider_debug_port "$current_provider")" "$_slow_cdp_json" || true
     fi
     reveal_resident_provider_surfaces "$target_window" "$provider_profile" "$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel" "$current_profile" "$transition_shown_ms" "$provider_port"
   fi

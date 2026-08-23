@@ -9597,6 +9597,7 @@ select {
   font: inherit;
   text-align: left;
   overflow: hidden;
+  transition: box-shadow 160ms ease, border-color 160ms ease, opacity 160ms ease, transform 160ms ease, background 160ms ease;
 }
 
 .web-mode-provider span {
@@ -9629,6 +9630,7 @@ select {
 .web-mode-provider.is-active {
   border-color: var(--provider-tone);
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16);
+  transform: translateY(-1px);
 }
 
 .web-mode-provider.is-current {
@@ -9802,7 +9804,7 @@ select {
   accent-color: #81d7ff;
 }
 
-.web-mode-provider:disabled,
+.web-mode-provider:disabled:not(.is-active),
 .web-mode-proxy-chip:disabled,
 .web-mode-top-back:disabled {
   opacity: 0.5;

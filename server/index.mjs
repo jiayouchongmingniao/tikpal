@@ -5544,6 +5544,11 @@ async function buildWebModeState() {
     readWebModeRuntimeState(),
     readUiPreferences()
   ]);
+  const activationPhase = runtimeState.openingProvider
+    ? "pending"
+    : runtimeState.activeProvider
+      ? "ready"
+      : null;
   return {
     enabled: true,
     activeProvider: runtimeState.activeProvider,
@@ -5555,7 +5560,8 @@ async function buildWebModeState() {
     settings,
     preferences,
     lastError: runtimeState.lastError,
-    updatedAt: runtimeState.updatedAt ?? settings.updatedAt ?? new Date(0).toISOString()
+    updatedAt: runtimeState.updatedAt ?? settings.updatedAt ?? new Date(0).toISOString(),
+    activationPhase
   };
 }
 

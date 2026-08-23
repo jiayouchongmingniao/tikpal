@@ -650,9 +650,9 @@ esac
   assert(kioskEnv.includes("TIKPAL_WEB_MODE_TRANSITION_URL=http://127.0.0.1:4173/web-mode-transition.html"), "kiosk env should configure the reusable Explore transition veil");
   assert(!kioskEnv.includes("TIKPAL_WEB_MODE_EXIT_"), "kiosk env should not configure a separate Explore exit veil");
   assert(
-      kioskEnv.includes("TIKPAL_WEB_MODE_RESIDENT_SWITCH_SETTLE_SECONDS=0.16") &&
+      kioskEnv.includes("TIKPAL_WEB_MODE_RESIDENT_SWITCH_SETTLE_SECONDS=0.08") &&
       kioskEnv.includes("TIKPAL_WEB_MODE_RESIDENT_SWITCH_PAINT_TIMEOUT_SECONDS=0.6") &&
-      kioskEnv.includes("TIKPAL_WEB_MODE_RESIDENT_SWITCH_PAINT_POLL_SECONDS=0.08") &&
+      kioskEnv.includes("TIKPAL_WEB_MODE_RESIDENT_SWITCH_PAINT_POLL_SECONDS=0.05") &&
       kioskEnv.includes("TIKPAL_WEB_MODE_PROVIDER_SWITCH_FADE_SECONDS=0.16") &&
       kioskEnv.includes("TIKPAL_WEB_MODE_TRANSITION_MIN_VISIBLE_SECONDS=0.5"),
     "kiosk env should make every provider switch fade briefly and hold the transition feedback"
@@ -698,7 +698,7 @@ esac
       webModeScript.includes("-f x11grab -window_id") &&
       webModeScript.includes("max - min >= 18") &&
       webModeScript.includes('wait_for_provider_window_nonblank_x11_frame "$target_window"') &&
-      webModeScript.includes('resident $provider did not paint under the transition; reopening'),
+      webModeScript.includes('resident $provider did not paint and CDP confirms no real page; reopening'),
     "resident hot switching should verify a nonblank target X11 window under the transition before cold-reopening a blank target"
   );
   const exploreAcceptanceScript = await readFile(path.join(ROOT, "deploy/chromium/tikpal-explore-switch-acceptance.sh"), "utf8");

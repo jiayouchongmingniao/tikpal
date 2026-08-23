@@ -91,16 +91,27 @@ export function WebModeSidePanel() {
   const pendingActionRef = useRef<"close" | "scale" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const actionLockRef = useRef(false);
+  const optimisticProviderRef = useRef<WebModeProviderId | null>(null);
   const [exploreOpening, setExploreOpening] = useState(false);
   const activeProvider = webMode?.activeProvider ?? null;
   const openingProvider = webMode?.openingProvider ?? null;
-  const displayedOpeningProvider = pendingProvider ?? openingProvider;
+  const activationPhase = webMode?.activationPhase ?? null;
+  const activationPending = activationPhase === "pending";
+  const displayedOpeningProvider = activationPending
+    ? (pendingProvider ?? openingProvider)
+    : (pendingProvider ?? openingProvider);
   const volumePercent = tikpalState?.system.volume.percent ?? 0;
   const providerTextScale = webMode?.settings.providerTextScale ?? 1.1;
   const proxyEnabled = webMode?.settings.proxyEnabled ?? true;
+  const [lastNonPendingActiveProvider, setLastNonPendingActiveProvider] = useState<WebModeProviderId | null>(activeProvider);
+  const [activationEnterProvider, setActivationEnterProvider] = useState<WebModeProviderId | null>(null);
+  const activationEnterTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const prevActivationPhaseRef = useRef<typeof activationPhase>(activationPhase);
   const failedProvider = useMemo(() => inferFailedProviderFromError(error), [error]);
   const failedProviderNeedsProxy = isProxyNeededError(error, failedProvider);
-  const effectiveActiveProvider = activeProvider && activeProvider !== failedProvider ? activeProvider : null;
+  const effectiveActiveProvider = activationPending
+    ? (lastNonPendingActiveProvider ?? null)
+    : (activeProvider && activeProvider !== failedProvider ? activeProvider : null);
   const providers = useMemo<WebModeProviderSummary[]>(() => {
     const byId = new Map(webMode?.providers.map((provider) => [provider.id, provider]) ?? []);
     return providerOrder.map((id) => {
@@ -119,7 +130,29 @@ export function WebModeSidePanel() {
     return providerLabels[effectiveActiveProvider] ?? "Web player";
   }, [effectiveActiveProvider, t]);
 
-  const displayProviderLabel = displayedOpeningProvider ? providerLabels[displayedOpeningProvider] : failedProvider ? providerLabels[failedProvider] : activeProviderLabel;
+  const resolvedActiveLabel = activationEnterProvider
+    ? (providerLabels[activationEnterProvider] ?? "Web player")
+    : activeProviderLabel;
+  const displayProviderLabel = displayedOpeningProvider ? providerLabels[displayedOpeningProvider] : failedProvider ? providerLabels[failedProvider] : resolvedActiveLabel;
+  const [displayedActiveLabel, setDisplayedActiveLabel] = useState(displayProviderLabel);
+  const [activeLabelVisible, setActiveLabelVisible] = useState(true);
+  const activeLabelTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (displayedActiveLabel === displayProviderLabel) return;
+    setActiveLabelVisible(false);
+    if (activeLabelTimerRef.current) clearTimeout(activeLabelTimerRef.current);
+    activeLabelTimerRef.current = setTimeout(() => {
+      setDisplayedActiveLabel(displayProviderLabel);
+      setActiveLabelVisible(true);
+      activeLabelTimerRef.current = null;
+    }, 120);
+    return () => {
+      if (activeLabelTimerRef.current) {
+        clearTimeout(activeLabelTimerRef.current);
+        activeLabelTimerRef.current = null;
+      }
+    };
+  }, [displayProviderLabel, displayedActiveLabel]);
   const panelState = pendingAction === "close" ? "closing" : displayedOpeningProvider ? "switching" : "ready";
   const panelTone = displayedOpeningProvider
     ? providerTones[displayedOpeningProvider]
@@ -150,11 +183,34 @@ export function WebModeSidePanel() {
   }
 
   function applyWebModeState(next: WebModeState) {
+    const nextPhase = next.activationPhase ?? null;
     setWebMode(next);
     setError(next.lastError);
     setPendingProvider((current) => (
-      current && (next.activeProvider === current || next.lastError) ? null : current
+      current && (nextPhase !== "pending" && next.activeProvider === current || next.lastError) ? null : current
     ));
+    if (optimisticProviderRef.current && (next.activeProvider === optimisticProviderRef.current || next.lastError)) {
+      optimisticProviderRef.current = null;
+    }
+    if (nextPhase !== "pending") {
+      setLastNonPendingActiveProvider(next.activeProvider);
+    }
+    if (nextPhase === "pending") {
+      if (activationEnterTimerRef.current) {
+        clearTimeout(activationEnterTimerRef.current);
+        activationEnterTimerRef.current = null;
+      }
+      setActivationEnterProvider(next.openingProvider ?? pendingProvider ?? openingProvider);
+    } else if (prevActivationPhaseRef.current === "pending") {
+      if (activationEnterTimerRef.current) {
+        clearTimeout(activationEnterTimerRef.current);
+      }
+      activationEnterTimerRef.current = setTimeout(() => {
+        activationEnterTimerRef.current = null;
+        setActivationEnterProvider(null);
+      }, 160);
+    }
+    prevActivationPhaseRef.current = nextPhase;
     // Reset close state when web mode becomes active again (reopen after close),
     // but only if no close action is in flight — polling may return activeProvider
     // while the background close is still running, which would abort the fade.
@@ -235,6 +291,7 @@ export function WebModeSidePanel() {
     if (activeProvider === providerId) return;
     actionLockRef.current = true;
     setPendingProvider(providerId);
+    optimisticProviderRef.current = providerId;
     setError(null);
     try {
       const next = await sendWebModeAction({ type: "open", provider: providerId });
@@ -243,18 +300,21 @@ export function WebModeSidePanel() {
       const fallback = findNextAvailableProvider(providerId);
       if (fallback) {
         try {
-          setPendingProvider(fallback);
-          const next = await sendWebModeAction({ type: "open", provider: fallback });
+         setPendingProvider(fallback);
+          optimisticProviderRef.current = fallback;
+         const next = await sendWebModeAction({ type: "open", provider: fallback });
           applyWebModeState(next);
           setError(null);
-        } catch (fallbackError) {
-          setPendingProvider(null);
-          setError(fallbackError instanceof Error ? fallbackError.message : "Provider switch failed");
-        }
-      } else {
-        setPendingProvider(null);
-        setError(nextError instanceof Error ? nextError.message : "Provider switch failed");
-      }
+       } catch (fallbackError) {
+         setPendingProvider(null);
+          optimisticProviderRef.current = null;
+         setError(fallbackError instanceof Error ? fallbackError.message : "Provider switch failed");
+       }
+     } else {
+       setPendingProvider(null);
+        optimisticProviderRef.current = null;
+       setError(nextError instanceof Error ? nextError.message : "Provider switch failed");
+     }
     } finally {
       await refresh().catch(() => undefined);
       actionLockRef.current = false;
@@ -266,8 +326,9 @@ export function WebModeSidePanel() {
     actionLockRef.current = true;
     setPendingAction("close");
     pendingActionRef.current = "close";
-    try { new BroadcastChannel("tikpal-explore-close").postMessage("closing"); } catch {}
-    setError(null);
+   try { new BroadcastChannel("tikpal-explore-close").postMessage("closing"); } catch {}
+   setError(null);
+    optimisticProviderRef.current = null;
     await new Promise(r => setTimeout(r, 3050));
     try {
       await sendWebModeAction({ type: "close" });
@@ -339,7 +400,7 @@ export function WebModeSidePanel() {
       <header className="web-mode-panel-header">
         <div>
           <span>Explore</span>
-          <strong>{displayProviderLabel}</strong>
+          <strong style={{ opacity: activeLabelVisible ? 1 : 0, transition: "opacity 120ms ease" }}>{displayedActiveLabel}</strong>
         </div>
         <div className="web-mode-header-actions">
           <div
@@ -380,9 +441,9 @@ export function WebModeSidePanel() {
           const Icon = providerIcons[provider.id] ?? Music2;
           const failed = failedProvider === provider.id && displayedOpeningProvider !== provider.id;
           const selected = effectiveActiveProvider === provider.id;
-          const connecting = displayedOpeningProvider === provider.id;
+          const connecting = displayedOpeningProvider === provider.id && optimisticProviderRef.current !== provider.id;
           const current = selected && Boolean(displayedOpeningProvider) && !connecting;
-          const active = selected && !displayedOpeningProvider;
+          const active = (selected && !displayedOpeningProvider) || optimisticProviderRef.current === provider.id;
           const residentStatus = webMode?.residentProviders?.[provider.id]?.status;
           const warming = residentStatus === "opening" || residentStatus === "prewarming";
           const proxyUnavailable = residentStatus === "check_proxy";

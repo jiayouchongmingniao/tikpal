@@ -114,6 +114,7 @@ export interface WebModeState {
   preferences: UiPreferences;
   lastError: string | null;
   updatedAt: string;
+  activationPhase?: "pending" | "ready" | null;
 }
 
 export interface WebModeActionRequest {
