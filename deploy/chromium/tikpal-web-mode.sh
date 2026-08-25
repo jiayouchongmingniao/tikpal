@@ -45,6 +45,7 @@ fi
 : "${TIKPAL_AUDIO_ADAPT_BIN:=$APP_DIR/deploy/moode/tikpal-audio-adapt.sh}"
 : "${TIKPAL_WEB_MODE_PROFILE_ROOT:=$HOME/.config/tikpal-web-mode}"
 : "${TIKPAL_WEB_MODE_PHYSICAL_REVEAL_STAMP_PATH:=$TIKPAL_WEB_MODE_PROFILE_ROOT/last-physical-reveal.tsv}"
+: "${TIKPAL_WEB_MODE_SWITCH_SEGMENT_TIMING_ONCE_PATH:=$TIKPAL_WEB_MODE_PROFILE_ROOT/switch-segment-timing.once}"
 : "${TIKPAL_WEB_MODE_SETTINGS_PATH:=$APP_DIR/.tikpal/web-mode-settings.json}"
 : "${TIKPAL_WEB_MODE_STATE_PATH:=$APP_DIR/.tikpal/web-mode-state.json}"
 : "${TIKPAL_WEB_MODE_EXTENSION_DIR:=$SCRIPT_DIR/web-mode-extension}"
@@ -166,6 +167,17 @@ now_ms() {
     return 0
   fi
   node -e 'process.stdout.write(String(Date.now()))'
+}
+
+switch_detail_timing_path() {
+  printf '%s.details\n' "$TIKPAL_WEB_MODE_SWITCH_SEGMENT_TIMING_ONCE_PATH"
+}
+
+record_switch_detail_timing() {
+  local enabled="$1"
+  shift
+  [[ "$enabled" == "1" && -e "$TIKPAL_WEB_MODE_SWITCH_SEGMENT_TIMING_ONCE_PATH" ]] || return 0
+  printf '%s\n' "$*" >> "$(switch_detail_timing_path)"
 }
 
 fail() {
@@ -2835,6 +2847,37 @@ restore_window_opacity() {
   set_window_opacity "$window" 1 >/dev/null 2>&1 || true
 }
 
+window_opacity_value() {
+  local window="$1"
+  local window_id output value
+  [[ "$window" =~ ^[0-9]+$ ]] || return 1
+  command -v xprop >/dev/null 2>&1 || return 1
+  window_id="$(printf '0x%x' "$window")"
+  output="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xprop -id "$window_id" _NET_WM_WINDOW_OPACITY 2>/dev/null)" || return 1
+  value="$(printf '%s\n' "$output" | awk -F'= ' 'NF > 1 { print $2; exit }')"
+  printf '%s\n' "${value:-unset}"
+}
+
+window_opacity_is_full() {
+  case "$1" in
+    unset|4294967295|0xffffffff|0xFFFFFFFF) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+window_geometry_compact() {
+  local window="$1"
+  local geometry x y width height
+  [[ "$window" =~ ^[0-9]+$ ]] || return 1
+  geometry="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_probe getwindowgeometry --shell "$window")" || return 1
+  x="$(printf '%s\n' "$geometry" | awk -F= '$1 == "X" { print $2 }')"
+  y="$(printf '%s\n' "$geometry" | awk -F= '$1 == "Y" { print $2 }')"
+  width="$(printf '%s\n' "$geometry" | awk -F= '$1 == "WIDTH" { print $2 }')"
+  height="$(printf '%s\n' "$geometry" | awk -F= '$1 == "HEIGHT" { print $2 }')"
+  [[ "$x" =~ ^-?[0-9]+$ && "$y" =~ ^-?[0-9]+$ && "$width" =~ ^[1-9][0-9]*$ && "$height" =~ ^[1-9][0-9]*$ ]] || return 1
+  printf '%s,%s_%sx%s\n' "$x" "$y" "$width" "$height"
+}
+
 xdotool_probe() {
   local timeout_seconds=3
   if [[ "${1:-}" == "search" ]]; then
@@ -2849,65 +2892,168 @@ xdotool_probe() {
 validate_profile_window_fast() {
   local window="$1"
   local profile="$2"
-  local probe pid width height
+  local timing_enabled="${3:-0}"
+  local probe pid x y width height segment_started_ms=0
+  if [[ "$timing_enabled" == "1" ]]; then
+    TIKPAL_VALIDATE_PROFILE_WINDOW_X11_MS=-1
+    TIKPAL_VALIDATE_PROFILE_WINDOW_PID_PARSE_MS=-1
+    TIKPAL_VALIDATE_PROFILE_WINDOW_PROFILE_MS=-1
+    TIKPAL_VALIDATE_PROFILE_WINDOW_GEOMETRY_MS=-1
+    TIKPAL_VALIDATE_PROFILE_WINDOW_PID=none
+    TIKPAL_VALIDATE_PROFILE_WINDOW_GEOMETRY=not_parsed
+    TIKPAL_VALIDATE_PROFILE_WINDOW_RESULT=invalid_input
+  fi
   [[ "$window" =~ ^[0-9]+$ && -n "$profile" ]] || return 1
-  probe="$(
+
+  [[ "$timing_enabled" != "1" ]] || segment_started_ms="$(now_ms)"
+  if ! probe="$(
     DISPLAY="$TIKPAL_KIOSK_DISPLAY" \
       xdotool_probe getwindowpid "$window" getwindowgeometry --shell "$window"
-  )" || return 1
+  )"; then
+    if [[ "$timing_enabled" == "1" ]]; then
+      TIKPAL_VALIDATE_PROFILE_WINDOW_X11_MS="$(( $(now_ms) - segment_started_ms ))"
+      TIKPAL_VALIDATE_PROFILE_WINDOW_RESULT=x11_failed
+    fi
+    return 1
+  fi
+  [[ "$timing_enabled" != "1" ]] \
+    || TIKPAL_VALIDATE_PROFILE_WINDOW_X11_MS="$(( $(now_ms) - segment_started_ms ))"
+
+  [[ "$timing_enabled" != "1" ]] || segment_started_ms="$(now_ms)"
   pid="$(printf '%s\n' "$probe" | sed -n '1p')"
-  process_tree_uses_profile "$pid" "$profile" || return 1
+  if [[ "$timing_enabled" == "1" ]]; then
+    TIKPAL_VALIDATE_PROFILE_WINDOW_PID_PARSE_MS="$(( $(now_ms) - segment_started_ms ))"
+    TIKPAL_VALIDATE_PROFILE_WINDOW_PID="${pid:-none}"
+  fi
+
+  [[ "$timing_enabled" != "1" ]] || segment_started_ms="$(now_ms)"
+  if ! process_tree_uses_profile "$pid" "$profile"; then
+    if [[ "$timing_enabled" == "1" ]]; then
+      TIKPAL_VALIDATE_PROFILE_WINDOW_PROFILE_MS="$(( $(now_ms) - segment_started_ms ))"
+      TIKPAL_VALIDATE_PROFILE_WINDOW_RESULT=profile_mismatch
+    fi
+    return 1
+  fi
+  [[ "$timing_enabled" != "1" ]] \
+    || TIKPAL_VALIDATE_PROFILE_WINDOW_PROFILE_MS="$(( $(now_ms) - segment_started_ms ))"
+
+  [[ "$timing_enabled" != "1" ]] || segment_started_ms="$(now_ms)"
+  x="$(printf '%s\n' "$probe" | awk -F= '$1 == "X" { print $2 }')"
+  y="$(printf '%s\n' "$probe" | awk -F= '$1 == "Y" { print $2 }')"
   width="$(printf '%s\n' "$probe" | awk -F= '$1 == "WIDTH" { print $2 }')"
   height="$(printf '%s\n' "$probe" | awk -F= '$1 == "HEIGHT" { print $2 }')"
-  [[ "$width" =~ ^[1-9][0-9]*$ && "$height" =~ ^[1-9][0-9]*$ ]] || return 1
-  (( width * height > 100000 ))
+  if [[ "$timing_enabled" == "1" ]]; then
+    TIKPAL_VALIDATE_PROFILE_WINDOW_GEOMETRY_MS="$(( $(now_ms) - segment_started_ms ))"
+    TIKPAL_VALIDATE_PROFILE_WINDOW_GEOMETRY="${x:-?},${y:-?}_${width:-?}x${height:-?}"
+  fi
+  if [[ ! "$width" =~ ^[1-9][0-9]*$ || ! "$height" =~ ^[1-9][0-9]*$ ]]; then
+    [[ "$timing_enabled" != "1" ]] || TIKPAL_VALIDATE_PROFILE_WINDOW_RESULT=geometry_invalid
+    return 1
+  fi
+  if (( width * height <= 100000 )); then
+    [[ "$timing_enabled" != "1" ]] || TIKPAL_VALIDATE_PROFILE_WINDOW_RESULT=area_too_small
+    return 1
+  fi
+  [[ "$timing_enabled" != "1" ]] || TIKPAL_VALIDATE_PROFILE_WINDOW_RESULT=ok
+  return 0
 }
 
 first_window_for_profile() {
   local profile="$1"
+  local timing_enabled="${2:-0}"
+  local timing_role="${3:-profile}"
   local window pid command_line executable_name
-  local cache_path cached_window
+  local cache_path cached_window result_window="" outcome=recovery cache_present=0 retry=0 recovery=0
+  local function_started_ms=0 segment_started_ms=0 cache_path_ms=-1 cache_read_ms=-1 recovery_ms=-1 total_ms=-1
+  local attempt1_result=not_run attempt1_x11_ms=-1 attempt1_pid_parse_ms=-1 attempt1_profile_ms=-1 attempt1_geometry_ms=-1
+  local attempt1_pid=none attempt1_geometry=not_parsed
+  local attempt2_result=not_run attempt2_x11_ms=-1 attempt2_pid_parse_ms=-1 attempt2_profile_ms=-1 attempt2_geometry_ms=-1
+  local attempt2_pid=none attempt2_geometry=not_parsed
   command -v xdotool >/dev/null 2>&1 || return 1
+  [[ "$timing_enabled" != "1" ]] || function_started_ms="$(now_ms)"
+  [[ "$timing_enabled" != "1" ]] || segment_started_ms="$(now_ms)"
   cache_path="$(profile_window_cache_path "$profile")"
+  [[ "$timing_enabled" != "1" ]] || cache_path_ms="$(( $(now_ms) - segment_started_ms ))"
   if [[ -r "$cache_path" ]]; then
+    cache_present=1
+    [[ "$timing_enabled" != "1" ]] || segment_started_ms="$(now_ms)"
     cached_window="$(cat "$cache_path" 2>/dev/null || true)"
-    if validate_profile_window_fast "$cached_window" "$profile"; then
-      printf '%s\n' "$cached_window"
-      return 0
+    [[ "$timing_enabled" != "1" ]] || cache_read_ms="$(( $(now_ms) - segment_started_ms ))"
+    if validate_profile_window_fast "$cached_window" "$profile" "$timing_enabled"; then
+      attempt1_result=ok
+      result_window="$cached_window"
+      outcome=cache_hit
+    else
+      attempt1_result="${TIKPAL_VALIDATE_PROFILE_WINDOW_RESULT:-failed}"
     fi
-    # A known XID can miss one bounded X11 probe while the device is busy.
-    # Retry the same identity-sensitive lookup once before discarding it and
-    # entering the more expensive browser-root recovery path.
-    sleep 0.05
-    if validate_profile_window_fast "$cached_window" "$profile"; then
-      printf '%s\n' "$cached_window"
-      return 0
+    if [[ "$timing_enabled" == "1" ]]; then
+      attempt1_x11_ms="${TIKPAL_VALIDATE_PROFILE_WINDOW_X11_MS:--1}"
+      attempt1_pid_parse_ms="${TIKPAL_VALIDATE_PROFILE_WINDOW_PID_PARSE_MS:--1}"
+      attempt1_profile_ms="${TIKPAL_VALIDATE_PROFILE_WINDOW_PROFILE_MS:--1}"
+      attempt1_geometry_ms="${TIKPAL_VALIDATE_PROFILE_WINDOW_GEOMETRY_MS:--1}"
+      attempt1_pid="${TIKPAL_VALIDATE_PROFILE_WINDOW_PID:-none}"
+      attempt1_geometry="${TIKPAL_VALIDATE_PROFILE_WINDOW_GEOMETRY:-not_parsed}"
     fi
-    rm -f "$cache_path"
+    if [[ -z "$result_window" ]]; then
+      # A known XID can miss one bounded X11 probe while the device is busy.
+      # Retry the same identity-sensitive lookup once before discarding it and
+      # entering the more expensive browser-root recovery path.
+      retry=1
+      sleep 0.05
+      if validate_profile_window_fast "$cached_window" "$profile" "$timing_enabled"; then
+        attempt2_result=ok
+        result_window="$cached_window"
+        outcome=cache_hit_retry
+      else
+        attempt2_result="${TIKPAL_VALIDATE_PROFILE_WINDOW_RESULT:-failed}"
+      fi
+      if [[ "$timing_enabled" == "1" ]]; then
+        attempt2_x11_ms="${TIKPAL_VALIDATE_PROFILE_WINDOW_X11_MS:--1}"
+        attempt2_pid_parse_ms="${TIKPAL_VALIDATE_PROFILE_WINDOW_PID_PARSE_MS:--1}"
+        attempt2_profile_ms="${TIKPAL_VALIDATE_PROFILE_WINDOW_PROFILE_MS:--1}"
+        attempt2_geometry_ms="${TIKPAL_VALIDATE_PROFILE_WINDOW_GEOMETRY_MS:--1}"
+        attempt2_pid="${TIKPAL_VALIDATE_PROFILE_WINDOW_PID:-none}"
+        attempt2_geometry="${TIKPAL_VALIDATE_PROFILE_WINDOW_GEOMETRY:-not_parsed}"
+      fi
+      [[ -n "$result_window" ]] || rm -f "$cache_path"
+    fi
   fi
-  # Target only Chromium processes for this profile. A provider guard also has
-  # the profile in its argv and must never be mistaken for the browser root.
-  while IFS= read -r pid; do
-    [[ "$pid" =~ ^[0-9]+$ && -r "/proc/$pid/cmdline" ]] || continue
-    command_line="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
-    profile_command_line_matches "$profile" "$command_line" || continue
-    # pgrep also returns every renderer/gpu/utility child because Chromium
-    # repeats --user-data-dir on them. Only the untyped browser process is a
-    # recovery root; find_window_for_pid walks its descendants itself.
-    [[ "$command_line" == *" --type="* ]] && continue
-    executable_name="$(basename "$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)")"
-    case "$executable_name" in
-      chrome|chromium|chromium-browser) ;;
-      *) continue ;;
-    esac
-    window="$(find_window_for_pid "$pid" || true)"
-    validate_profile_window_fast "$window" "$profile" || continue
-    mkdir -p "$(dirname "$cache_path")"
-    printf '%s\n' "$window" > "$cache_path"
-    printf '%s\n' "$window"
-    return 0
-  done < <(pgrep -f -- "--user-data-dir=$profile" 2>/dev/null || true)
-  return 1
+  if [[ -z "$result_window" ]]; then
+    recovery=1
+    [[ "$timing_enabled" != "1" ]] || segment_started_ms="$(now_ms)"
+    # Target only Chromium processes for this profile. A provider guard also has
+    # the profile in its argv and must never be mistaken for the browser root.
+    while IFS= read -r pid; do
+      [[ "$pid" =~ ^[0-9]+$ && -r "/proc/$pid/cmdline" ]] || continue
+      command_line="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
+      profile_command_line_matches "$profile" "$command_line" || continue
+      # pgrep also returns every renderer/gpu/utility child because Chromium
+      # repeats --user-data-dir on them. Only the untyped browser process is a
+      # recovery root; find_window_for_pid walks its descendants itself.
+      [[ "$command_line" == *" --type="* ]] && continue
+      executable_name="$(basename "$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)")"
+      case "$executable_name" in
+        chrome|chromium|chromium-browser) ;;
+        *) continue ;;
+      esac
+      window="$(find_window_for_pid "$pid" || true)"
+      validate_profile_window_fast "$window" "$profile" || continue
+      mkdir -p "$(dirname "$cache_path")"
+      printf '%s\n' "$window" > "$cache_path"
+      result_window="$window"
+      outcome=recovered
+      break
+    done < <(pgrep -f -- "--user-data-dir=$profile" 2>/dev/null || true)
+    [[ "$timing_enabled" != "1" ]] || recovery_ms="$(( $(now_ms) - segment_started_ms ))"
+    [[ -n "$result_window" ]] || outcome=not_found
+  fi
+  if [[ "$timing_enabled" == "1" ]]; then
+    total_ms="$(( $(now_ms) - function_started_ms ))"
+    record_switch_detail_timing "$timing_enabled" \
+      "switch_detail cache role=$timing_role profile=${profile##*/} total_ms=$total_ms cache_path_ms=$cache_path_ms cache_read_ms=$cache_read_ms cache_present=$cache_present outcome=$outcome xid=${result_window:-none} retry=$retry recovery=$recovery recovery_ms=$recovery_ms attempt1_result=$attempt1_result attempt1_x11_ms=$attempt1_x11_ms attempt1_pid_parse_ms=$attempt1_pid_parse_ms attempt1_pid=$attempt1_pid attempt1_profile_ms=$attempt1_profile_ms attempt1_geometry_ms=$attempt1_geometry_ms attempt1_geometry=$attempt1_geometry attempt2_result=$attempt2_result attempt2_x11_ms=$attempt2_x11_ms attempt2_pid_parse_ms=$attempt2_pid_parse_ms attempt2_pid=$attempt2_pid attempt2_profile_ms=$attempt2_profile_ms attempt2_geometry_ms=$attempt2_geometry_ms attempt2_geometry=$attempt2_geometry"
+  fi
+  [[ -n "$result_window" ]] || return 1
+  printf '%s\n' "$result_window"
 }
 
 profile_window_cache_path() {
@@ -3213,8 +3359,15 @@ tile_guard_windows_fast() {
   local provider_profile="$1"
   local panel_profile="$2"
   local force_raise="${3:-0}"
+  local validate_identity="${4:-1}"
   local list_path kind profile window provider_window="" panel_window="" kiosk_window=""
+  local probe geometry_fields provider_fields panel_fields kiosk_fields normalized_size
+  local provider_pid provider_x provider_y provider_width provider_height
+  local panel_pid panel_x panel_y panel_width panel_height
+  local kiosk_pid kiosk_x kiosk_y kiosk_width kiosk_height
+  local expected_x expected_y expected_width expected_height
   local provider_changed=0 panel_changed=0
+  local -a xdotool_args=()
   list_path="$(guard_window_list_file)"
   [[ -r "$list_path" ]] || return 1
   while IFS=$'\t' read -r kind profile window; do
@@ -3234,16 +3387,82 @@ tile_guard_windows_fast() {
     esac
   done < "$list_path"
 
-  validate_profile_window_fast "$provider_window" "$provider_profile" || return 1
-  validate_profile_window_fast "$panel_window" "$panel_profile" || return 1
+  [[ "$provider_window" =~ ^[0-9]+$ && "$panel_window" =~ ^[0-9]+$ ]] || return 1
+  if [[ "$validate_identity" == "1" ]]; then
+    xdotool_args+=(getwindowpid "$provider_window")
+  fi
+  xdotool_args+=(getwindowgeometry --shell "$provider_window")
+  if [[ "$validate_identity" == "1" ]]; then
+    xdotool_args+=(getwindowpid "$panel_window")
+  fi
+  xdotool_args+=(getwindowgeometry --shell "$panel_window")
   if [[ -n "$kiosk_window" ]]; then
-    validate_profile_window_fast "$kiosk_window" "$TIKPAL_CHROMIUM_PROFILE_DIR" || return 1
+    [[ "$kiosk_window" =~ ^[0-9]+$ ]] || return 1
+    if [[ "$validate_identity" == "1" ]]; then
+      xdotool_args+=(getwindowpid "$kiosk_window")
+    fi
+    xdotool_args+=(getwindowgeometry --shell "$kiosk_window")
   fi
 
-  tile_window "$provider_window" "$TIKPAL_WEB_MODE_LEFT_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
-  provider_changed="${TIKPAL_TILE_WINDOW_CHANGED:-0}"
-  tile_window "$panel_window" "$TIKPAL_WEB_MODE_PANEL_POSITION" "$TIKPAL_WEB_MODE_PANEL_WINDOW"
-  panel_changed="${TIKPAL_TILE_WINDOW_CHANGED:-0}"
+  # Query every known surface through one X11 connection. Stable ticks only
+  # need usable geometry; every fourth tick also checks PID/profile ownership.
+  probe="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_probe "${xdotool_args[@]}")" || return 1
+  geometry_fields="$(awk -F= -v provider="$provider_window" -v panel="$panel_window" -v kiosk="$kiosk_window" '
+    /^[0-9]+$/ { pending_pid=$0; next }
+    $1=="WINDOW" { window=$2; pid[window]=pending_pid; pending_pid="" }
+    $1=="X" { x[window]=$2 }
+    $1=="Y" { y[window]=$2 }
+    $1=="WIDTH" { width[window]=$2 }
+    $1=="HEIGHT" { height[window]=$2 }
+    END {
+      printf "%s,%s,%s,%s,%s\t%s,%s,%s,%s,%s\t%s,%s,%s,%s,%s\n",
+        pid[provider], x[provider], y[provider], width[provider], height[provider],
+        pid[panel], x[panel], y[panel], width[panel], height[panel],
+        pid[kiosk], x[kiosk], y[kiosk], width[kiosk], height[kiosk]
+    }' <<< "$probe")"
+  IFS=$'\t' read -r provider_fields panel_fields kiosk_fields <<< "$geometry_fields"
+  IFS=, read -r provider_pid provider_x provider_y provider_width provider_height <<< "$provider_fields"
+  IFS=, read -r panel_pid panel_x panel_y panel_width panel_height <<< "$panel_fields"
+  IFS=, read -r kiosk_pid kiosk_x kiosk_y kiosk_width kiosk_height <<< "$kiosk_fields"
+
+  [[ "$provider_width" =~ ^[1-9][0-9]*$ && "$provider_height" =~ ^[1-9][0-9]*$ ]] || return 1
+  [[ "$panel_width" =~ ^[1-9][0-9]*$ && "$panel_height" =~ ^[1-9][0-9]*$ ]] || return 1
+  (( provider_width * provider_height > 100000 && panel_width * panel_height > 100000 )) || return 1
+  if [[ -n "$kiosk_window" ]]; then
+    [[ "$kiosk_width" =~ ^[1-9][0-9]*$ && "$kiosk_height" =~ ^[1-9][0-9]*$ ]] || return 1
+    (( kiosk_width * kiosk_height > 100000 )) || return 1
+  fi
+  if [[ "$validate_identity" == "1" ]]; then
+    process_tree_uses_profile "$provider_pid" "$provider_profile" || return 1
+    process_tree_uses_profile "$panel_pid" "$panel_profile" || return 1
+    if [[ -n "$kiosk_window" ]]; then
+      process_tree_uses_profile "$kiosk_pid" "$TIKPAL_CHROMIUM_PROFILE_DIR" || return 1
+    fi
+  fi
+
+  expected_x="${TIKPAL_WEB_MODE_LEFT_POSITION%,*}"
+  expected_y="${TIKPAL_WEB_MODE_LEFT_POSITION#*,}"
+  normalized_size="$(normalize_window_size "$TIKPAL_WEB_MODE_LEFT_WINDOW")"
+  expected_width="${normalized_size%,*}"
+  expected_height="${normalized_size#*,}"
+  if [[ "$provider_x" != "$expected_x" || "$provider_y" != "$expected_y" \
+    || "$provider_width" != "$expected_width" || "$provider_height" != "$expected_height" ]]
+  then
+    tile_window_fast "$provider_window" "$TIKPAL_WEB_MODE_LEFT_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
+    provider_changed=1
+  fi
+
+  expected_x="${TIKPAL_WEB_MODE_PANEL_POSITION%,*}"
+  expected_y="${TIKPAL_WEB_MODE_PANEL_POSITION#*,}"
+  normalized_size="$(normalize_window_size "$TIKPAL_WEB_MODE_PANEL_WINDOW")"
+  expected_width="${normalized_size%,*}"
+  expected_height="${normalized_size#*,}"
+  if [[ "$panel_x" != "$expected_x" || "$panel_y" != "$expected_y" \
+    || "$panel_width" != "$expected_width" || "$panel_height" != "$expected_height" ]]
+  then
+    tile_window_fast "$panel_window" "$TIKPAL_WEB_MODE_PANEL_POSITION" "$TIKPAL_WEB_MODE_PANEL_WINDOW"
+    panel_changed=1
+  fi
   if [[ "$force_raise" == "1" || "$provider_changed" == "1" || "$panel_changed" == "1" ]]; then
     mark_window_above "$provider_window"
     mark_window_above "$panel_window"
@@ -3299,6 +3518,9 @@ run_window_guard() {
   local panel_profile="$2"
   local force_raise=0
   local stack_refresh_ticks=0
+  local identity_refresh_ticks=0
+  local fast_ticks_remaining=4
+  local validate_identity=1
   local active_provider active_profile
   [[ -n "$provider_profile" ]] || is_enabled "$TIKPAL_WEB_MODE_PROVIDER_POOL" || return 0
 
@@ -3314,40 +3536,75 @@ run_window_guard() {
         return 0
       fi
       active_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/$active_provider"
-      if ! tile_guard_windows_fast "$active_profile" "$panel_profile" "$force_raise"; then
+      validate_identity=0
+      if [[ "$identity_refresh_ticks" -eq 0 ]]; then
+        validate_identity=1
+      fi
+      if ! tile_guard_windows_fast "$active_profile" "$panel_profile" "$force_raise" "$validate_identity"; then
         log "WARN: Explore guard window identity changed; running explicit recovery"
         recover_guard_window_list "$active_profile" "$panel_profile" || {
           profile_process_exists "$active_profile" || return 0
+          fast_ticks_remaining=4
+          identity_refresh_ticks=0
           sleep 0.25
           continue
         }
+        fast_ticks_remaining=4
+        identity_refresh_ticks=0
       fi
       provider_profile="$active_profile"
       force_raise=0
+      identity_refresh_ticks=$((identity_refresh_ticks + 1))
+      if [[ "$identity_refresh_ticks" -ge 4 ]]; then
+        identity_refresh_ticks=0
+      fi
       stack_refresh_ticks=$((stack_refresh_ticks + 1))
       if [[ "$stack_refresh_ticks" -ge 4 ]]; then
         force_raise=1
         stack_refresh_ticks=0
       fi
-      sleep 0.25
+      if [[ "$fast_ticks_remaining" -gt 0 ]]; then
+        fast_ticks_remaining=$((fast_ticks_remaining - 1))
+        sleep 0.25
+      else
+        sleep 1
+      fi
     done
     return 0
   fi
 
-  while profile_process_exists "$provider_profile"; do
-    if ! tile_guard_windows_fast "$provider_profile" "$panel_profile" "$force_raise"; then
+  while true; do
+    validate_identity=0
+    if [[ "$identity_refresh_ticks" -eq 0 ]]; then
+      validate_identity=1
+    fi
+    if ! tile_guard_windows_fast "$provider_profile" "$panel_profile" "$force_raise" "$validate_identity"; then
       recover_guard_window_list "$provider_profile" "$panel_profile" || {
+        profile_process_exists "$provider_profile" || return 0
+        fast_ticks_remaining=4
+        identity_refresh_ticks=0
         sleep 0.25
         continue
       }
+      fast_ticks_remaining=4
+      identity_refresh_ticks=0
     fi
     force_raise=0
+    identity_refresh_ticks=$((identity_refresh_ticks + 1))
+    if [[ "$identity_refresh_ticks" -ge 4 ]]; then
+      identity_refresh_ticks=0
+    fi
     stack_refresh_ticks=$((stack_refresh_ticks + 1))
     if [[ "$stack_refresh_ticks" -ge 4 ]]; then
       force_raise=1
       stack_refresh_ticks=0
     fi
-    sleep 0.25
+    if [[ "$fast_ticks_remaining" -gt 0 ]]; then
+      fast_ticks_remaining=$((fast_ticks_remaining - 1))
+      sleep 0.25
+    else
+      sleep 1
+    fi
   done
 }
 
@@ -3582,11 +3839,38 @@ ensure_side_panel() {
 keep_side_panel_visible_during_switch() {
   local opening_provider="${1:-}"
   local known_window="${2:-}"
+  local timing_enabled="${3:-0}"
   local panel_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"
   local panel_window="$known_window"
+  local started_ms=0 segment_started_ms=0 geometry_read_ms=-1 mutation_ms=-1 total_ms=-1 before_geometry=not_read
+  local expected_geometry="${TIKPAL_WEB_MODE_PANEL_POSITION}_${TIKPAL_WEB_MODE_PANEL_WINDOW}" panel_mutation=not_run
+
+  [[ "$timing_enabled" != "1" ]] || started_ms="$(now_ms)"
 
   if [[ "$panel_window" =~ ^[0-9]+$ ]]; then
-    tile_window_fast "$panel_window" "$TIKPAL_WEB_MODE_PANEL_POSITION" "$TIKPAL_WEB_MODE_PANEL_WINDOW"
+    [[ "$timing_enabled" != "1" ]] || segment_started_ms="$(now_ms)"
+    before_geometry="$(window_geometry_compact "$panel_window" || printf unreadable)"
+    if [[ "$timing_enabled" == "1" ]]; then
+      geometry_read_ms="$(( $(now_ms) - segment_started_ms ))"
+    fi
+    if [[ "$before_geometry" == "$expected_geometry" ]]; then
+      mutation_ms=0
+      panel_mutation=skipped
+    else
+      if [[ "$timing_enabled" == "1" ]]; then
+        segment_started_ms="$(now_ms)"
+      fi
+      tile_window_fast "$panel_window" "$TIKPAL_WEB_MODE_PANEL_POSITION" "$TIKPAL_WEB_MODE_PANEL_WINDOW"
+      if [[ "$timing_enabled" == "1" ]]; then
+        mutation_ms="$(( $(now_ms) - segment_started_ms ))"
+      fi
+      panel_mutation=applied
+    fi
+    if [[ "$timing_enabled" == "1" ]]; then
+      total_ms="$(( $(now_ms) - started_ms ))"
+      record_switch_detail_timing "$timing_enabled" \
+        "switch_detail panel known=1 xid=$panel_window before=$before_geometry geometry_read_ms=$geometry_read_ms mutation_ms=$mutation_ms mutation=$panel_mutation total_ms=$total_ms"
+    fi
     printf '%s\n' "$panel_window"
     return 0
   fi
@@ -3601,9 +3885,15 @@ keep_side_panel_visible_during_switch() {
 
   restore_window_opacity "$panel_window"
   tile_window_fast "$panel_window" "$TIKPAL_WEB_MODE_PANEL_POSITION" "$TIKPAL_WEB_MODE_PANEL_WINDOW"
+  panel_mutation=recovery
   wait_for_window_position "$panel_window" "$TIKPAL_WEB_MODE_PANEL_POSITION" "$TIKPAL_WEB_MODE_PANEL_WINDOW" 1 || return 1
   mark_window_above "$panel_window"
   raise_window_without_focus "$panel_window"
+  if [[ "$timing_enabled" == "1" ]]; then
+    total_ms="$(( $(now_ms) - started_ms ))"
+    record_switch_detail_timing "$timing_enabled" \
+      "switch_detail panel known=0 xid=$panel_window before=$before_geometry geometry_read_ms=$geometry_read_ms mutation_ms=$mutation_ms mutation=$panel_mutation total_ms=$total_ms"
+  fi
   printf '%s\n' "$panel_window"
 }
 
@@ -3693,9 +3983,20 @@ reveal_resident_provider_surfaces() {
 position_resident_switch_windows_fast() {
   local target_window="$1"
   local previous_window="${2:-}"
+  local timing_enabled="${3:-0}"
   local target_x target_y target_width target_height normalized_size
   local previous_x previous_y
+  local probe geometries segment_started_ms=0 result=not_run
   local -a xdotool_args=()
+  local -a geometry_args=()
+
+  if [[ "$timing_enabled" == "1" ]]; then
+    TIKPAL_POSITION_RESIDENT_PRE_GEOMETRY_MS=-1
+    TIKPAL_POSITION_RESIDENT_TARGET_BEFORE=not_read
+    TIKPAL_POSITION_RESIDENT_PREVIOUS_BEFORE=not_read
+    TIKPAL_POSITION_RESIDENT_MUTATION_MS=-1
+    TIKPAL_POSITION_RESIDENT_RESULT=not_run
+  fi
 
   [[ "$target_window" =~ ^[0-9]+$ ]] || return 1
   command -v xdotool >/dev/null 2>&1 || return 1
@@ -3723,7 +4024,51 @@ position_resident_switch_windows_fast() {
     )
   fi
 
-  DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_probe "${xdotool_args[@]}" >/dev/null 2>&1
+  if [[ "$timing_enabled" == "1" ]]; then
+    geometry_args=(getwindowgeometry --shell "$target_window")
+    if [[ "$previous_window" =~ ^[0-9]+$ && "$previous_window" != "$target_window" ]]; then
+      geometry_args+=(getwindowgeometry --shell "$previous_window")
+    fi
+    segment_started_ms="$(now_ms)"
+    if probe="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_probe "${geometry_args[@]}")"; then
+      geometries="$(printf '%s\n' "$probe" | awk -F= -v target="$target_window" -v previous="$previous_window" '
+        $1=="WINDOW" { window=$2 }
+        $1=="X" { x[window]=$2 }
+        $1=="Y" { y[window]=$2 }
+        $1=="WIDTH" { width[window]=$2 }
+        $1=="HEIGHT" { height[window]=$2 }
+        END {
+          printf "%s,%s_%sx%s\t%s,%s_%sx%s\n",
+            x[target], y[target], width[target], height[target],
+            x[previous], y[previous], width[previous], height[previous]
+        }')"
+      IFS=$'\t' read -r TIKPAL_POSITION_RESIDENT_TARGET_BEFORE TIKPAL_POSITION_RESIDENT_PREVIOUS_BEFORE <<< "$geometries"
+      [[ -n "$TIKPAL_POSITION_RESIDENT_TARGET_BEFORE" ]] || TIKPAL_POSITION_RESIDENT_TARGET_BEFORE=unreadable
+      if [[ -z "$previous_window" ]]; then
+        TIKPAL_POSITION_RESIDENT_PREVIOUS_BEFORE=none
+      elif [[ -z "$TIKPAL_POSITION_RESIDENT_PREVIOUS_BEFORE" ]]; then
+        TIKPAL_POSITION_RESIDENT_PREVIOUS_BEFORE=unreadable
+      fi
+    else
+      TIKPAL_POSITION_RESIDENT_TARGET_BEFORE=unreadable
+      [[ -z "$previous_window" ]] \
+        && TIKPAL_POSITION_RESIDENT_PREVIOUS_BEFORE=none \
+        || TIKPAL_POSITION_RESIDENT_PREVIOUS_BEFORE=unreadable
+    fi
+    TIKPAL_POSITION_RESIDENT_PRE_GEOMETRY_MS="$(( $(now_ms) - segment_started_ms ))"
+    segment_started_ms="$(now_ms)"
+  fi
+
+  if DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_probe "${xdotool_args[@]}" >/dev/null 2>&1; then
+    result=ok
+  else
+    result=failed
+  fi
+  if [[ "$timing_enabled" == "1" ]]; then
+    TIKPAL_POSITION_RESIDENT_MUTATION_MS="$(( $(now_ms) - segment_started_ms ))"
+    TIKPAL_POSITION_RESIDENT_RESULT="$result"
+  fi
+  [[ "$result" == "ok" ]]
 }
 
 resident_switch_windows_at_geometry() {
@@ -3772,6 +4117,28 @@ write_physical_reveal_stamp() {
   fi
 }
 
+log_switch_segment_summary_once() {
+  local enabled="$1"
+  local provider_profile="$2"
+  local cached_xid_ms="$3"
+  local first_cdp_ms="$4"
+  local guard_stop_ms="$5"
+  local panel_retile_ms="$6"
+  local target_opacity_ms="$7"
+  local combined_x11_ms="$8"
+  local provider detail detail_path
+  [[ "$enabled" == "1" && -e "$TIKPAL_WEB_MODE_SWITCH_SEGMENT_TIMING_ONCE_PATH" ]] || return 0
+  provider="${provider_profile##*/}"
+  detail_path="$(switch_detail_timing_path)"
+  if [[ -r "$detail_path" ]]; then
+    while IFS= read -r detail; do
+      [[ -n "$detail" ]] && log_stage "$detail"
+    done < "$detail_path"
+  fi
+  log_stage "switch_segments provider=$provider cached_xid_ms=$cached_xid_ms first_cdp_ms=$first_cdp_ms guard_stop_ms=$guard_stop_ms panel_retile_ms=$panel_retile_ms target_opacity_ms=$target_opacity_ms combined_x11_ms=$combined_x11_ms"
+  rm -f "$detail_path" "$TIKPAL_WEB_MODE_SWITCH_SEGMENT_TIMING_ONCE_PATH"
+}
+
 reveal_resident_provider_window() {
   local target_window="$1"
   local previous_profile="${2:-}"
@@ -3780,11 +4147,32 @@ reveal_resident_provider_window() {
   local provider_port="${5:-}"
   local previous_window="${6:-}"
   local resident_page_ready="${7:-0}"
+  local segment_timing_once="${8:-0}"
+  local cached_xid_ms="${9:--1}"
+  local first_cdp_ms="${10:--1}"
+  local guard_stop_ms="${11:--1}"
+  local panel_retile_ms="${12:--1}"
   local TIKPAL_WEB_MODE_TRUSTED_PROVIDER_PAGE_PORT=""
-  local physical_ms started_ms="$(now_ms)"
+  local physical_ms segment_started_ms=0 target_opacity_ms=-1 combined_x11_ms=-1 started_ms="$(now_ms)"
+  local opacity_read_ms=-1 opacity_before=not_read opacity_mutation=not_run
+  local combined_pre_geometry_ms=-1 target_before=not_read previous_before=not_read combined_result=not_run
+  local stamp_write_ms=-1 stamp_result=not_run
   # Restore opacity before reveal — park_profile_windows_for_reopen sets 0
   # to avoid white flash during the async off-screen move.
-  restore_window_opacity "$target_window"
+  [[ "$segment_timing_once" != "1" ]] || segment_started_ms="$(now_ms)"
+  opacity_before="$(window_opacity_value "$target_window" || printf unreadable)"
+  if [[ "$segment_timing_once" == "1" ]]; then
+    opacity_read_ms="$(( $(now_ms) - segment_started_ms ))"
+  fi
+  if window_opacity_is_full "$opacity_before"; then
+    target_opacity_ms=0
+    opacity_mutation=skipped
+  else
+    [[ "$segment_timing_once" != "1" ]] || segment_started_ms="$(now_ms)"
+    restore_window_opacity "$target_window"
+    [[ "$segment_timing_once" != "1" ]] || target_opacity_ms="$(( $(now_ms) - segment_started_ms ))"
+    opacity_mutation=applied
+  fi
   # If CDP already proves the provider has a real HTTPS page, the compositor
   # has rendered meaningful content.  Skip the slow X11 paint check and settle
   # delay entirely — the 3 s timeout on 115 always fails even when the window
@@ -3798,17 +4186,43 @@ reveal_resident_provider_window() {
     # excluded from this first-visible transaction. Geometry is still checked
     # before the visible owner can commit; the existing staged path remains
     # the fallback for any command or confirmation failure.
-    if position_resident_switch_windows_fast "$target_window" "$previous_window"; then
+    if position_resident_switch_windows_fast "$target_window" "$previous_window" "$segment_timing_once"; then
+      if [[ "$segment_timing_once" == "1" ]]; then
+        combined_pre_geometry_ms="${TIKPAL_POSITION_RESIDENT_PRE_GEOMETRY_MS:--1}"
+        target_before="${TIKPAL_POSITION_RESIDENT_TARGET_BEFORE:-unreadable}"
+        previous_before="${TIKPAL_POSITION_RESIDENT_PREVIOUS_BEFORE:-unreadable}"
+        combined_x11_ms="${TIKPAL_POSITION_RESIDENT_MUTATION_MS:--1}"
+        combined_result="${TIKPAL_POSITION_RESIDENT_RESULT:-ok}"
+      fi
       physical_ms="$(now_ms)"
-      write_physical_reveal_stamp "$provider_profile" "$target_window" "$previous_window" "$physical_ms" \
-        || log_stage "reveal_physical_stamp_failed target=$target_window physical_ms=$physical_ms"
+      [[ "$segment_timing_once" != "1" ]] || segment_started_ms="$(now_ms)"
+      if ! write_physical_reveal_stamp "$provider_profile" "$target_window" "$previous_window" "$physical_ms"; then
+        stamp_result=failed
+        log_stage "reveal_physical_stamp_failed target=$target_window physical_ms=$physical_ms"
+      else
+        stamp_result=ok
+      fi
+      if [[ "$segment_timing_once" == "1" ]]; then
+        stamp_write_ms="$(( $(now_ms) - segment_started_ms ))"
+        record_switch_detail_timing "$segment_timing_once" \
+          "switch_detail reveal target=$target_window previous=${previous_window:-none} opacity_read_ms=$opacity_read_ms opacity_before=$opacity_before opacity_mutation_ms=$target_opacity_ms opacity_mutation=$opacity_mutation pre_geometry_ms=$combined_pre_geometry_ms target_before=$target_before previous_before=$previous_before combined_mutation_ms=$combined_x11_ms combined_result=$combined_result target_ops=move,size,move,raise previous_ops=move,size,move stamp_write_ms=$stamp_write_ms stamp_result=$stamp_result"
+      fi
       log_stage "reveal_physical target=$target_window provider_port=$provider_port mode=combined physical_ms=$physical_ms ms=$(( physical_ms - started_ms ))"
+      log_switch_segment_summary_once "$segment_timing_once" "$provider_profile" "$cached_xid_ms" "$first_cdp_ms" "$guard_stop_ms" "$panel_retile_ms" "$target_opacity_ms" "$combined_x11_ms"
       if resident_switch_windows_at_geometry "$target_window" "$previous_window"; then
         persist_resident_window_above "$target_window"
         log_stage "reveal_geometry_verified target=$target_window mode=combined ms=$(( $(now_ms) - started_ms ))"
         return 0
       fi
       log_stage "reveal_combined_fallback target=$target_window ms=$(( $(now_ms) - started_ms ))"
+    elif [[ "$segment_timing_once" == "1" ]]; then
+      combined_pre_geometry_ms="${TIKPAL_POSITION_RESIDENT_PRE_GEOMETRY_MS:--1}"
+      target_before="${TIKPAL_POSITION_RESIDENT_TARGET_BEFORE:-unreadable}"
+      previous_before="${TIKPAL_POSITION_RESIDENT_PREVIOUS_BEFORE:-unreadable}"
+      combined_x11_ms="${TIKPAL_POSITION_RESIDENT_MUTATION_MS:--1}"
+      combined_result="${TIKPAL_POSITION_RESIDENT_RESULT:-failed}"
+      record_switch_detail_timing "$segment_timing_once" \
+        "switch_detail reveal target=$target_window previous=${previous_window:-none} opacity_read_ms=$opacity_read_ms opacity_before=$opacity_before opacity_mutation_ms=$target_opacity_ms opacity_mutation=$opacity_mutation pre_geometry_ms=$combined_pre_geometry_ms target_before=$target_before previous_before=$previous_before combined_mutation_ms=$combined_x11_ms combined_result=$combined_result target_ops=move,size,move,raise previous_ops=move,size,move stamp_write_ms=not_measured stamp_result=not_measured"
     fi
     # A resident starts at the off-screen stage. Raising it is not enough: the
     # foreground switch owns the complete physical geometry transaction.
@@ -3825,6 +4239,7 @@ reveal_resident_provider_window() {
     write_physical_reveal_stamp "$provider_profile" "$target_window" "$previous_window" "$physical_ms" \
       || log_stage "reveal_physical_stamp_failed target=$target_window physical_ms=$physical_ms"
     log_stage "reveal_physical target=$target_window provider_port=$provider_port physical_ms=$physical_ms ms=$(( physical_ms - started_ms ))"
+    log_switch_segment_summary_once "$segment_timing_once" "$provider_profile" "$cached_xid_ms" "$first_cdp_ms" "$guard_stop_ms" "$panel_retile_ms" "$target_opacity_ms" "$combined_x11_ms"
     return 0
   fi
   # Tile and lower only if not already pre-positioned by the caller.
@@ -3863,6 +4278,7 @@ reveal_resident_provider_window() {
   write_physical_reveal_stamp "$provider_profile" "$target_window" "$previous_window" "$physical_ms" \
     || log_stage "reveal_physical_stamp_failed target=$target_window physical_ms=$physical_ms"
   log_stage "reveal_physical target=$target_window provider_port=$provider_port physical_ms=$physical_ms ms=$(( physical_ms - started_ms ))"
+  log_switch_segment_summary_once "$segment_timing_once" "$provider_profile" "$cached_xid_ms" "$first_cdp_ms" "$guard_stop_ms" "$panel_retile_ms" "$target_opacity_ms" "$combined_x11_ms"
   # The transition profile is kept alive and off-screen for the next switch;
   # do not tear it down after a successful reveal.
 }
@@ -4330,10 +4746,11 @@ warm_provider_pool() {
 open_provider_pool() {
   local provider="$1"
   local provider_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/$provider"
-  local current_provider current_profile target_window="" previous_window="" panel_window="" proxy_line proxy_enabled message extension_enabled=0 entry_stage=0
+  local current_provider current_profile target_window="" previous_window="" panel_window="" known_panel_window="" proxy_line proxy_enabled message extension_enabled=0 entry_stage=0
   local panel_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"
   local resident_status resident_page_ready=0 fast_resident=0 switching_provider=0 current_port provider_port
   local started_ms reveal_ms command_return_ms transition_shown_ms=0
+  local segment_timing_once=0 segment_started_ms=0 cached_xid_ms=-1 first_cdp_ms=-1 guard_stop_ms=-1 panel_retile_ms=-1
   if ! runtime_open_request_is_current; then
     log "open abandoned: active provider no longer ${TIKPAL_WEB_MODE_OPEN_EXPECTED_ACTIVE_PROVIDER}"
     return 0
@@ -4346,14 +4763,22 @@ open_provider_pool() {
   fi
   [[ -z "$current_provider" ]] && entry_stage=1
   [[ "$entry_stage" != "1" && "$current_provider" != "$provider" ]] && switching_provider=1
+  if [[ "$switching_provider" == "1" && -e "$TIKPAL_WEB_MODE_SWITCH_SEGMENT_TIMING_ONCE_PATH" ]]; then
+    segment_timing_once=1
+    rm -f "$(switch_detail_timing_path)"
+  fi
   resident_status="$(read_runtime_provider_status "$provider")"
   provider_port="$(provider_debug_port "$provider")"
-  target_window="$(first_window_for_profile "$provider_profile" || true)"
+  [[ "$segment_timing_once" != "1" ]] || segment_started_ms="$(now_ms)"
+  target_window="$(first_window_for_profile "$provider_profile" "$segment_timing_once" target || true)"
+  [[ "$segment_timing_once" != "1" ]] || cached_xid_ms="$(( $(now_ms) - segment_started_ms ))"
   if [[ -n "$target_window" || "$resident_status" == "ready" || "$resident_status" == "active" ]]; then
+    [[ "$segment_timing_once" != "1" ]] || segment_started_ms="$(now_ms)"
     if provider_has_real_provider_page "$provider_port"; then
       resident_page_ready=1
       [[ -n "$target_window" ]] && fast_resident=1
     fi
+    [[ "$segment_timing_once" != "1" ]] || first_cdp_ms="$(( $(now_ms) - segment_started_ms ))"
   fi
   log_stage "open_pool_init provider=$provider target=$target_window resident_page_ready=$resident_page_ready fast_resident=$fast_resident switching=$switching_provider entry=$entry_stage ms=$(( $(now_ms) - started_ms ))"
   # A foreground choice owns the pool from this point. Stop both idle and
@@ -4362,24 +4787,29 @@ open_provider_pool() {
   # while terminating a prewarm worker, which exposes its black first frame.
   if [[ "$switching_provider" == "1" ]]; then
     begin_provider_switch_guard
+    [[ "$segment_timing_once" != "1" ]] || segment_started_ms="$(now_ms)"
     stop_window_guard
+    [[ "$segment_timing_once" != "1" ]] || guard_stop_ms="$(( $(now_ms) - segment_started_ms ))"
     previous_window="$(read_guard_window provider "$current_profile" || true)"
     if [[ -z "$previous_window" ]]; then
-      previous_window="$(first_window_for_profile "$current_profile" || true)"
+      previous_window="$(first_window_for_profile "$current_profile" "$segment_timing_once" previous || true)"
     fi
     if [[ -z "$previous_window" ]]; then
       message="Current Explore provider window is unavailable"
       recover_or_cover_provider_failure "$current_provider" "$current_profile" "$provider" "check_setup" "$message" || true
       fail "$message"
     fi
-    panel_window="$(keep_side_panel_visible_during_switch "$provider" "$(read_guard_window panel "$panel_profile" || true)" || true)"
+    known_panel_window="$(read_guard_window panel "$panel_profile" || true)"
+    [[ "$segment_timing_once" != "1" ]] || segment_started_ms="$(now_ms)"
+    panel_window="$(keep_side_panel_visible_during_switch "$provider" "$known_panel_window" "$segment_timing_once" || true)"
+    [[ "$segment_timing_once" != "1" ]] || panel_retile_ms="$(( $(now_ms) - segment_started_ms ))"
     if [[ -z "$panel_window" ]]; then
       message="Explore side panel is unavailable"
       recover_or_cover_provider_failure "$current_provider" "$current_profile" "$provider" "check_setup" "$message" || true
       fail "$message"
     fi
     if [[ -z "$target_window" && "$resident_page_ready" == "1" ]]; then
-      target_window="$(first_window_for_profile "$provider_profile" || true)"
+      target_window="$(first_window_for_profile "$provider_profile" "$segment_timing_once" target_retry || true)"
       if [[ -n "$target_window" ]]; then
         fast_resident=1
         log_stage "open_pool_resident_window_recovered provider=$provider target=$target_window ms=$(( $(now_ms) - started_ms ))"
@@ -4448,7 +4878,8 @@ open_provider_pool() {
       log "open abandoned before resident reveal: $provider"
       return 0
     fi
-    if reveal_resident_provider_window "$target_window" "$current_profile" "$provider_profile" "$transition_shown_ms" "$provider_port" "$previous_window" "$resident_page_ready"; then
+    if reveal_resident_provider_window "$target_window" "$current_profile" "$provider_profile" "$transition_shown_ms" "$provider_port" "$previous_window" "$resident_page_ready" \
+      "$segment_timing_once" "$cached_xid_ms" "$first_cdp_ms" "$guard_stop_ms" "$panel_retile_ms"; then
       invalidate_chromium_window_cache
       reveal_ms="$(( $(now_ms) - started_ms ))"
       log_stage "reveal_ms=$reveal_ms provider=$provider resident=1"

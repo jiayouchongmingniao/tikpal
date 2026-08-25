@@ -1501,13 +1501,14 @@ The field evidence invalidated five assumptions: window-ID reuse risk is small e
 The known-ID repair described above is implemented in `tikpal-web-mode.sh` and its kiosk smoke coverage:
 
 - Cached XIDs retain real `xdotool` failure status and are validated against PID/profile ownership and usable geometry. A cache miss searches only the target Chromium profile tree.
-- The normal guard consumes atomically published provider/panel/kiosk IDs from `guard-windows.tsv`; only invalid-ID recovery may enumerate visible Chromium windows.
-- A switch stops the old guard and child X11 process, keeps the right Side Panel at `1920,0 640x720`, restores target opacity, and moves/raises the target while parking the previous provider in one ordered `xdotool` transaction.
+- The normal guard consumes atomically published provider/panel/kiosk IDs from `guard-windows.tsv`; one combined X11 query checks those known surfaces, PID/profile ownership is refreshed every fourth tick, and only invalid-ID recovery may enumerate visible Chromium windows. The first four post-switch ticks use `250 ms`; stable ticks use one second.
+- A switch stops the old guard and child X11 process, keeps the right Side Panel at `1920,0 640x720`, restores target opacity when needed, and moves/raises the target while parking the previous provider in one ordered `xdotool` transaction.
+- The existing panel geometry read is reused: exact `1920,0 640x720` skips the retile, while a mismatch, incomplete result, or read failure preserves the original repair. The existing opacity read is also reused: absent/full opacity skips `xprop -set`, while non-full, malformed, or unreadable values preserve the original restore. Neither optimization adds a second read.
 - The foreground path writes `last-physical-reveal.tsv` immediately after that transaction and verifies final target/previous geometry before committing state.
 - The first streamed CDP page result is reused by reveal. HTTPS readiness can skip the slow paint-wait fallback, but it cannot skip physical geometry, the acceptance frame, state, lock, or audio-gate checks.
 - Close preserves `activeProvider` until all provider and panel surfaces are off-screen. The API waits for the close command; a residual physical surface returns an error instead of reporting a successful close.
 
-Only the two target scripts were atomically updated during the 2026-08-25 timing work, with no service or provider restart. Product source/build health and the physical run remain separate acceptance layers.
+The latest skip-only field deployment atomically updated only `deploy/chromium/tikpal-web-mode.sh` and `scripts/kiosk-package-smoke.mjs`, with no service, provider Chromium, or guard restart. The acceptance observer change was already present and was not part of that two-file deployment. Product source/build health, isolated staging, deployed hashes, and the next physical run remain separate acceptance layers.
 
 ### Physical Timestamp Contract
 
@@ -1517,7 +1518,7 @@ The reveal stamp has exactly four tab-separated fields:
 provider<TAB>target_xid<TAB>previous_xid<TAB>absolute_epoch_ms
 ```
 
-The acceptance tool clears the prior stamp before the real Side Panel click. It rejects missing, malformed/half-written, stale, future, wrong-provider, wrong-target, and wrong-previous stamps. It then waits for lock release, checks target `0,0 1920x720`, previous `2560,0 1920x720`, panel `1920,0 640x720`, captures a nonblank frame, confirms runtime/API state, inspects all real HTTPS CDP pages and audio gates, and retains the complete round directory.
+The acceptance tool clears the prior stamp before the real Side Panel click. It rejects missing, malformed/half-written, stale, future, wrong-provider, wrong-target, and wrong-previous stamps. It then waits for lock release, checks target `0,0 1920x720`, previous `2560,0 1920x720`, panel `1920,0 640x720`, captures a nonblank frame, confirms runtime/API state, inspects all real HTTPS CDP pages and audio gates, and retains the complete round directory. Empty or incomplete fields from a busy combined geometry query are retried at most three times with `150 ms` spacing; a complete wrong geometry still fails immediately. This observer retry never changes the physical stamp or the `5 s` gate.
 
 `rounds.tsv` records physical `visible_ms`, independent `observer_delay_ms`, and full `settled_elapsed_ms`. Only the physical stamp decides the per-round `<=5 s` ceiling; observer overhead must never be substituted for physical time or used to excuse a slow physical reveal.
 
@@ -1561,8 +1562,10 @@ Do not run the full script under `bash -x`; per-command tracing changes device l
 | formal 20-round run, round 1 | NetEase → Suno | 7,426 ms | 8,744 ms | failed `visible-over-5s` |
 | post-CDP reverse validation | Suno → NetEase | 4,073 ms | 5,614 ms | passed |
 | post-CDP same-direction retry | NetEase → Suno | 7,471 ms | 7,672 ms | failed `visible-over-5s` |
+| one-shot segment probe after guard tuning | NetEase → Suno | 7,439 ms | not retried | failed `visible-over-5s` |
+| setup before skip-only deployment | Suno → NetEase | 5,662 ms | three incomplete observer geometry reads | failed `visible-over-5s` |
 
-The formal run stopped immediately after round 1: planned `20`, executed `1`, passed `0`, failed `1`, not executed `19`. This is the rollback baseline and must be reported as **not accepted**.
+The formal run stopped immediately after round 1: planned `20`, executed `1`, passed `0`, failed `1`, not executed `19`. This remains the formal rollback baseline and must be reported as **not accepted**. The two later actions were bounded diagnostics, not additional formal rounds; neither passed the physical ceiling.
 
 The before/after stage comparison for NetEase → Suno was:
 
@@ -1575,18 +1578,26 @@ The before/after stage comparison for NetEase → Suno was:
 | geometry confirmation after stamp | 3,381 ms | 3,360 ms | -21 ms |
 | command tail after reveal | 2,680 ms | 1,464 ms | -1,216 ms |
 
-The CDP reuse saved at most `67 ms` inside the reveal aggregate and did not improve the physical result. The `1,216 ms` command-tail improvement occurred after the stamp and explains the shorter observer/lock delay. The remaining pre-stamp work is not currently proven redundant: Suno's cache XID is validated once, target opacity is written once, target/previous orchestration is already combined, and the mandatory geometry query is after the stamp.
+The CDP reuse saved at most `67 ms` inside the reveal aggregate and did not improve the physical result. The `1,216 ms` command-tail improvement occurred after the stamp and explains the shorter observer/lock delay.
 
-Before changing behavior again, add sub-stage timing for cached-XID validation, first CDP judgment, guard shutdown, Side Panel placement, target opacity, and the ordered X11 transaction. Collect those timestamps before the stamp but emit one consolidated log after it. Only a measured synchronous duplicate justifies another minimal patch. Then rerun NetEase → Suno once, Suno → NetEase once, and restart the formal 20 rounds only after both directions pass every gate in `<=5 s`.
+The one-shot timing marker `TIKPAL_WEB_MODE_SWITCH_SEGMENT_TIMING_ONCE_PATH` was then added. It records cache, first-CDP, guard-stop, panel, opacity, combined-X11, and stamp-write details for one resident switch, emits the consolidated result after the physical stamp, and consumes both the marker and `.details` file. The sole marked NetEase → Suno action was `7,439 ms`; its useful segments were `first_cdp_ms=12`, `guard_stop_ms=71`, `target_opacity_ms=962`, and `combined_x11_ms=2292`. The initial `cached_xid_ms=2788` and `panel_retile_ms=811` remain contaminated upper bounds because the approved action was not retried.
+
+The following Suno → NetEase setup took `5,662 ms`: click → runtime start `265 ms`, runtime → `open_pool_init` `2,043 ms`, init → transition `838 ms`, transition → reveal `225 ms`, reveal → CDP ready `976 ms`, and CDP ready → physical stamp `1,315 ms`. Runtime geometry confirmation followed `1,792 ms` later and command return another `1,432 ms` later. Final windows, HTTPS, audio, state, and lock were correct; the observer's three incomplete geometry reads were a secondary X11-congestion failure and do not cancel the physical overrun.
+
+The panel-retile and target-opacity skips were selected from that evidence and deployed, but no physical provider click has run afterward. The next field action is exactly one NetEase → Suno switch with an atomically created one-shot marker. Stop at the first mismatch or any physical time over `5,000 ms`; do not retry, switch back, or start the 20-round sequence. If it fails, use the new `.details` record to choose between cached-XID validation, PID/profile parsing, and the combined X11 mutation.
 
 Scope remains already-prewarmed resident switching. It says nothing about first Explore entry, cold launch, or Close. Historical `600–620 ms` shell timing is not current physical acceptance.
 
 ### Snapshot Validation Before Publication (2026-08-25)
 
-The rollback snapshot was checked with the following local results:
+The current skip-only snapshot was checked with the following local and remote results:
 
-- Passed: `bash -n` for both web-mode and physical-acceptance scripts; physical reveal stamp fixtures; Node syntax for the guard, server, and smoke files; `git diff --check`; production `npm run build`; and `npm run test:kiosk` (`kiosk package smoke passed`).
-- Build note: Vite completed successfully and retained its existing warning that the main minified JavaScript chunk is larger than `500 kB`.
+- Passed locally: `bash -n` for both modified shell scripts, Node syntax for `scripts/kiosk-package-smoke.mjs`, `git diff --check`, and `npm run test:kiosk` (`kiosk package smoke passed`).
+- Passed in isolated Gentoo staging: candidate SHA-256 `7bcd413323fcdb0551db079a118c5293d202ee77f0dedf8c9dd6613468a9630b` for web-mode and `6d82370cee8340402e7f3b943826ac043fecf0c51f8b1bd23f0509e06b551c16` for smoke, shell/Node syntax, isolated CDP port `19334`, and the complete kiosk smoke. The staging tree contained hard-linked deployed dependencies and only the two independent candidate files; it did not copy `.env.kiosk`, `.tikpal`, or `node_modules`.
+- Staging caveat: the existing watchdog smoke inherits `TIKPAL_WEB_MODE_STATE_PATH` in one branch. With `.tikpal` deliberately absent, the first staging run exposed that implicit local-state dependency. The green rerun injected a temporary synthetic active-provider state explicitly; it did not read the live device state or change either candidate hash.
+- Passed after atomic deployment: formal hashes matched the candidates; backups `tikpal-web-mode.sh.bak.20260825T133628Z` and `kiosk-package-smoke.mjs.bak.20260825T133628Z` retained the previous hashes and modes; `tikpal-api`, `tikpal-web`, `tikpal-kiosk`, all ten provider Chromium processes, and all provider/window guards retained their PIDs.
+- Passed in the post-deploy read-only field check: NetEase remained active at `0,0 1920x720`, Suno remained parked at `2560,0 1920x720`, the Panel remained at `1920,0 640x720`, all three opacity values were `4294967295`, every provider had a real HTTPS CDP page, the lock was free, and neither `.once` nor `.details` existed.
+- Prior build note: the last production Vite build completed successfully and retained its existing warning that the main minified JavaScript chunk is larger than `500 kB`; the skip-only snapshot does not change frontend/build inputs.
 - Not green: `npm run test:api` still stops at `scene context should prefer IP timezone over a conflicting requested timezone`. This is the existing timezone assertion and is not evidence that the Explore physical path passed or failed.
 - Not green: the full interaction smoke passed the Quick Menu skin/toggle assertion in this run, then stopped at `single tap wakes the quick menu screen overlay`. Because the suite stopped there, later Proxy and `640x720` Side Panel assertions were not reached in that complete run; static kiosk smoke and the retained physical frame evidence are separate checks, not a substitute for a green full suite.
 

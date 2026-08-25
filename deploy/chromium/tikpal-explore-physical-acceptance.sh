@@ -504,6 +504,11 @@ targeted_switch_geometries() {
     }'
 }
 
+switch_geometry_complete() {
+  local geometry="$1"
+  [[ "$geometry" =~ ^-?[0-9]+,-?[0-9]+[[:space:]][1-9][0-9]*x[1-9][0-9]*$ ]]
+}
+
 capture_frame() {
   local path="$1"
   ffmpeg -hide_banner -loglevel error -y \
@@ -727,6 +732,7 @@ wait_switch_settled_targeted() {
   local deadline=$((SECONDS + TIKPAL_EXPLORE_ACCEPTANCE_TIMEOUT_SECONDS))
   local lock_seen=0 stable=0 first_visible_ms="" observer_visible_ms="" settled_ms="" result="stamp-missing"
   local sample_ms geometries target_geometry previous_geometry panel_geometry lock_state stamp_ready=0
+  local geometry_attempt geometry_complete=0
   local state fields active opening close_request gate_path
   local target_window="${switch_provider_windows[$provider]:-}"
   local previous_window="${switch_provider_windows[$previous]:-}"
@@ -759,18 +765,36 @@ wait_switch_settled_targeted() {
       lock_seen=1
     fi
     if [[ "$stamp_ready" == "1" && "$lock_state" == "free" ]]; then
-      geometries="$(targeted_switch_geometries "$provider" "$previous" || true)"
-      IFS=$'\t' read -r target_geometry previous_geometry panel_geometry <<< "$geometries"
+      geometry_complete=0
+      for geometry_attempt in 1 2 3; do
+        sample_ms="$(now_ms)"
+        geometries="$(targeted_switch_geometries "$provider" "$previous" || true)"
+        IFS=$'\t' read -r target_geometry previous_geometry panel_geometry <<< "$geometries"
+        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+          "$sample_ms" "${physical_stamp_ms:--1}" "$physical_stamp_status" \
+          "$target_geometry" "$previous_geometry" "$panel_geometry" "$lock_state" \
+          >> "$round_dir/targeted-observer.tsv"
+        if switch_geometry_complete "$target_geometry" \
+          && switch_geometry_complete "$previous_geometry" \
+          && switch_geometry_complete "$panel_geometry"
+        then
+          geometry_complete=1
+          break
+        fi
+        [[ "$geometry_attempt" -ge 3 ]] || sleep 0.15
+      done
+    else
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$sample_ms" "${physical_stamp_ms:--1}" "$physical_stamp_status" \
+        "$target_geometry" "$previous_geometry" "$panel_geometry" "$lock_state" \
+        >> "$round_dir/targeted-observer.tsv"
     fi
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-      "$sample_ms" "${physical_stamp_ms:--1}" "$physical_stamp_status" \
-      "$target_geometry" "$previous_geometry" "$panel_geometry" "$lock_state" \
-      >> "$round_dir/targeted-observer.tsv"
     if [[ "$result" == stamp-* && "$result" != "stamp-missing" ]]; then
       break
     fi
     if [[ "$stamp_ready" == "1" && "$lock_state" == "free" ]]; then
-      if [[ "$target_geometry" != "0,0 1920x720" \
+      if [[ "$geometry_complete" != "1" \
+        || "$target_geometry" != "0,0 1920x720" \
         || "$previous_geometry" != "2560,0 1920x720" \
         || "$panel_geometry" != "1920,0 640x720" ]]
       then

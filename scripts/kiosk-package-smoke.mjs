@@ -754,6 +754,8 @@ esac
   }));
   const webModeFunctions = webModeScript.slice(0, webModeScript.indexOf('\ncase "${1:-open}" in'));
   const windowIdentityCachePath = path.join(reconcileSmokeDir, "dead-window.id");
+  const switchTimingOncePath = path.join(reconcileSmokeDir, "switch-segment-timing.once");
+  const panelMutationPath = path.join(reconcileSmokeDir, "panel-mutations.log");
   const windowIdentitySmoke = spawnSync("bash", ["-s"], {
     cwd: ROOT,
     input: `${webModeFunctions}
@@ -771,15 +773,39 @@ pgrep() { return 1; }
 validate_profile_window_fast 101 /profiles/spotify
 if validate_profile_window_fast 999 /profiles/spotify; then exit 11; fi
 if validate_profile_window_fast 101 /profiles/deezer; then exit 12; fi
+printf '101\\n' > "$TIKPAL_SMOKE_WINDOW_CACHE"
+: > "$TIKPAL_WEB_MODE_SWITCH_SEGMENT_TIMING_ONCE_PATH"
+[[ "$(first_window_for_profile /profiles/spotify 1 target)" == "101" ]]
+grep -q 'switch_detail cache role=target profile=spotify .*outcome=cache_hit .*attempt1_result=ok' "$TIKPAL_WEB_MODE_SWITCH_SEGMENT_TIMING_ONCE_PATH.details"
+rm -f "$TIKPAL_WEB_MODE_SWITCH_SEGMENT_TIMING_ONCE_PATH" "$TIKPAL_WEB_MODE_SWITCH_SEGMENT_TIMING_ONCE_PATH.details"
 printf '999\\n' > "$TIKPAL_SMOKE_WINDOW_CACHE"
-if first_window_for_profile /profiles/spotify; then exit 13; fi
+: > "$TIKPAL_WEB_MODE_SWITCH_SEGMENT_TIMING_ONCE_PATH"
+if first_window_for_profile /profiles/spotify 1 target; then exit 13; fi
 [[ ! -e "$TIKPAL_SMOKE_WINDOW_CACHE" ]]
+grep -q 'outcome=not_found .*retry=1 recovery=1 .*attempt1_result=x11_failed .*attempt2_result=x11_failed' "$TIKPAL_WEB_MODE_SWITCH_SEGMENT_TIMING_ONCE_PATH.details"
+rm -f "$TIKPAL_WEB_MODE_SWITCH_SEGMENT_TIMING_ONCE_PATH" "$TIKPAL_WEB_MODE_SWITCH_SEGMENT_TIMING_ONCE_PATH.details"
+window_geometry_compact() { printf '%s\n' "$TIKPAL_SMOKE_PANEL_GEOMETRY"; }
+tile_window_fast() { printf '%s\n' "$*" >> "$TIKPAL_SMOKE_PANEL_MUTATIONS"; }
+: > "$TIKPAL_SMOKE_PANEL_MUTATIONS"
+TIKPAL_SMOKE_PANEL_GEOMETRY=1920,0_640x720
+[[ "$(keep_side_panel_visible_during_switch spotify 202 0)" == "202" ]]
+[[ ! -s "$TIKPAL_SMOKE_PANEL_MUTATIONS" ]]
+TIKPAL_SMOKE_PANEL_GEOMETRY=2560,0_640x720
+[[ "$(keep_side_panel_visible_during_switch spotify 202 0)" == "202" ]]
+grep -q '^202 1920,0 640x720$' "$TIKPAL_SMOKE_PANEL_MUTATIONS"
+window_opacity_is_full unset
+window_opacity_is_full 4294967295
+window_opacity_is_full 0xffffffff
+if window_opacity_is_full 0; then exit 14; fi
+if window_opacity_is_full unreadable; then exit 15; fi
 `,
     encoding: "utf8",
     env: {
       ...process.env,
       TIKPAL_KIOSK_SKIP_ENV_SOURCE: "1",
-      TIKPAL_SMOKE_WINDOW_CACHE: windowIdentityCachePath
+      TIKPAL_SMOKE_WINDOW_CACHE: windowIdentityCachePath,
+      TIKPAL_WEB_MODE_SWITCH_SEGMENT_TIMING_ONCE_PATH: switchTimingOncePath,
+      TIKPAL_SMOKE_PANEL_MUTATIONS: panelMutationPath
     }
   });
   assert(
@@ -1923,6 +1949,7 @@ sync_runtime_provider_pool_process_statuses ""
   const providerStatusEnv = {
     ...process.env,
     TIKPAL_KIOSK_SKIP_ENV_SOURCE: "1",
+    TIKPAL_WEB_MODE_PROVIDER_DEBUG_PORT: "19334",
     TIKPAL_WEB_MODE_PROFILE_ROOT: path.join(webModeCheckDir, "provider-status-profiles"),
     TIKPAL_WEB_MODE_STATE_PATH: providerStatusStatePath
   };
@@ -2417,7 +2444,7 @@ sync_runtime_provider_pool_process_statuses ""
     "Explore cached windows should preserve X11 failures, validate profile ownership, and stop target-PID discovery after finding a usable app window"
   );
   assert(
-    openProviderPoolInitBody.includes('target_window="$(first_window_for_profile "$provider_profile" || true)"')
+    openProviderPoolInitBody.includes('target_window="$(first_window_for_profile "$provider_profile" "$segment_timing_once" target || true)"')
       && !openProviderPoolInitBody.includes('profile_process_exists "$provider_profile"')
       && !openProviderPoolInitBody.includes('profile_process_exists "$current_profile"'),
     "resident hot-switch initialization should use validated window IDs before any target-profile process scan"
@@ -2439,7 +2466,10 @@ sync_runtime_provider_pool_process_statuses ""
   const keepPanelEnd = webModeScript.indexOf("\n}\n\nprepare_entry_surfaces()", keepPanelStart);
   const keepPanelBody = webModeScript.slice(keepPanelStart, keepPanelEnd);
   assert(
-    keepPanelBody.includes('restore_window_opacity "$panel_window"')
+    keepPanelBody.includes('before_geometry="$(window_geometry_compact "$panel_window" || printf unreadable)"')
+      && keepPanelBody.includes('[[ "$before_geometry" == "$expected_geometry" ]]')
+      && keepPanelBody.includes("panel_mutation=skipped")
+      && keepPanelBody.includes('restore_window_opacity "$panel_window"')
       && keepPanelBody.includes('tile_window_fast "$panel_window" "$TIKPAL_WEB_MODE_PANEL_POSITION" "$TIKPAL_WEB_MODE_PANEL_WINDOW"')
       && keepPanelBody.includes('mark_window_above "$panel_window"')
       && keepPanelBody.includes('raise_window_without_focus "$panel_window"')
@@ -2578,6 +2608,9 @@ sync_runtime_provider_pool_process_statuses ""
   );
   assert(
     webModeScript.includes("restore_window_opacity") &&
+      webModeScript.includes("window_opacity_is_full") &&
+      revealResidentWindowBody.includes('if window_opacity_is_full "$opacity_before"; then') &&
+      revealResidentWindowBody.includes("opacity_mutation=skipped") &&
       openProviderPoolBody.indexOf('reveal_resident_provider_window "$target_window"') <
         openProviderPoolBody.indexOf("reveal_ms=") &&
       openProviderPoolBody.indexOf("reveal_ms=") <
@@ -2621,6 +2654,24 @@ sync_runtime_provider_pool_process_statuses ""
   const revealResidentProviderWindowBody = webModeScript.slice(
     webModeScript.indexOf("reveal_resident_provider_window() {"),
     webModeScript.indexOf("\n}\n\nreassert_visible_provider_surfaces()", webModeScript.indexOf("reveal_resident_provider_window() {"))
+  );
+  const segmentSummary = 'switch_segments provider=$provider cached_xid_ms=$cached_xid_ms first_cdp_ms=$first_cdp_ms guard_stop_ms=$guard_stop_ms panel_retile_ms=$panel_retile_ms target_opacity_ms=$target_opacity_ms combined_x11_ms=$combined_x11_ms';
+  assert(
+    webModeScript.includes('TIKPAL_WEB_MODE_SWITCH_SEGMENT_TIMING_ONCE_PATH') &&
+      webModeScript.includes(segmentSummary) &&
+      webModeScript.includes('switch_detail cache role=$timing_role') &&
+      webModeScript.includes('attempt1_x11_ms=$attempt1_x11_ms') &&
+      webModeScript.includes('attempt2_x11_ms=$attempt2_x11_ms') &&
+      webModeScript.includes('switch_detail panel known=1') &&
+      webModeScript.includes('geometry_read_ms=$geometry_read_ms mutation_ms=$mutation_ms') &&
+      webModeScript.includes('switch_detail reveal target=$target_window') &&
+      webModeScript.includes('opacity_read_ms=$opacity_read_ms') &&
+      webModeScript.includes('combined_mutation_ms=$combined_x11_ms') &&
+      webModeScript.includes('stamp_write_ms=$stamp_write_ms') &&
+      revealResidentProviderWindowBody.indexOf('write_physical_reveal_stamp "$provider_profile" "$target_window" "$previous_window" "$physical_ms"') <
+        revealResidentProviderWindowBody.indexOf('log_switch_segment_summary_once "$segment_timing_once"') &&
+      webModeScript.includes('rm -f "$detail_path" "$TIKPAL_WEB_MODE_SWITCH_SEGMENT_TIMING_ONCE_PATH"'),
+    "one-shot resident switch timing should report cache, panel, opacity, grouped X11, stamp, and coarse segments only after the physical reveal stamp"
   );
   assert(
     revealResidentProviderWindowBody.includes('wait_for_provider_window_nonblank_x11_frame "$target_window"') &&

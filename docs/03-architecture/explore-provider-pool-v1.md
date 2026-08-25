@@ -84,12 +84,14 @@ In rounded terms, the API median was `131 ms`, target-window placement median wa
 The known-ID and foreground-X11 repair is now implemented. Its runtime contract is:
 
 1. `xdotool_probe()` preserves command failure for identity-sensitive operations. A cached XID is accepted only after one combined PID/geometry query proves that the window still belongs to the expected Chromium profile and has a usable area. A busy X server gets one retry of the same known ID; only a real miss enters target-profile PID-tree discovery.
-2. The foreground switch resolves the target, previous provider, and Side Panel once. It stops the current guard and its child X11 command, keeps the existing panel at `1920,0 640x720`, restores the target's opacity, and submits the target reveal plus previous-provider parking in one ordered `xdotool` transaction.
+2. The foreground switch resolves the target, previous provider, and Side Panel once. It stops the current guard and its child X11 command, keeps the existing panel at `1920,0 640x720`, restores the target's opacity when needed, and submits the target reveal plus previous-provider parking in one ordered `xdotool` transaction.
 3. `guard-windows.tsv` is replaced atomically with the known provider, panel, and kiosk IDs. Normal guard ticks validate and use only those IDs. Full visible-window discovery is reserved for explicit invalid-ID recovery.
 4. The target is not committed as visible merely because CDP has a real HTTPS page. The foreground transaction writes a physical reveal stamp, then verifies the target at `0,0 1920x720` and the previous window at `2560,0 1920x720`; a failure restores the old visible owner instead of accepting the new provider.
 5. A provider switch does not close, park, restart, or replace the right Side Panel. Close is a separate lifecycle: `activeProvider` remains the physical owner until every provider/panel surface is transparent and off-screen. A failed Close keeps that active provider and publishes the physical residual as an error.
 
 The first CDP readiness result is streamed through `grep` and passed into the reveal helper. The reveal helper therefore does not fetch the same `/json/list` a second time. This removes duplicate CDP work without making HTTPS proof a substitute for X11 geometry, a nonblank frame, or audio-gate verification.
+
+The normal guard uses one combined X11 query for its cached provider, panel, and kiosk IDs. It checks PID/profile ownership every fourth tick, uses `250 ms` only for the first four ticks after a switch, and then settles to one-second stable ticks. This reduced the observed guard CPU from roughly `3.3%` to `0.5–0.7%`; it did not by itself make foreground switching pass the physical latency gate.
 
 ### Physical reveal timestamp and observer boundary
 
@@ -99,7 +101,7 @@ The first CDP readiness result is streamed through `grep` and passed into the re
 provider<TAB>target_xid<TAB>previous_xid<TAB>absolute_epoch_ms
 ```
 
-The physical acceptance script clears the previous stamp immediately before the real panel click and rejects a missing, malformed, half-written, stale, future, wrong-provider, wrong-target, or wrong-previous stamp. A valid timestamp must be at or after the round input time. The observer then independently waits for lock release, verifies target/previous/panel geometry, captures a nonblank frame, confirms API/runtime ownership, checks all real HTTPS CDP pages and audio gates, and records the final evidence.
+The physical acceptance script clears the previous stamp immediately before the real panel click and rejects a missing, malformed, half-written, stale, future, wrong-provider, wrong-target, or wrong-previous stamp. A valid timestamp must be at or after the round input time. The observer then independently waits for lock release, verifies target/previous/panel geometry, captures a nonblank frame, confirms API/runtime ownership, checks all real HTTPS CDP pages and audio gates, and records the final evidence. If a bounded combined geometry query returns empty or incomplete fields while the X server is busy, the observer retries that read up to three times with `150 ms` spacing. A complete-but-wrong geometry still fails immediately. This observer tolerance cannot change or excuse the physical reveal timestamp.
 
 `rounds.tsv` intentionally separates three boundaries:
 
@@ -119,8 +121,10 @@ The field evidence distinguishes successful single-direction checks from the for
 | formal `switch-only`, round 1 | NetEase → Suno | 7,426 ms | 8,744 ms | failed `visible-over-5s`; rounds 2–20 not run |
 | after CDP reuse | Suno → NetEase | 4,073 ms | 5,614 ms | passed all gates |
 | after CDP reuse | NetEase → Suno | 7,471 ms | 7,672 ms | failed `visible-over-5s` |
+| one-shot segment probe after guard tuning | NetEase → Suno | 7,439 ms | not retried | failed `visible-over-5s` |
+| setup for the skip-only patch | Suno → NetEase | 5,662 ms | geometry observer exhausted three incomplete reads | failed `visible-over-5s` |
 
-The formal result is therefore **0/1 passed, 1/1 failed, and 19/20 not executed**. It is not 20/20 acceptance. The stop-on-first-mismatch rule and the `5 s` physical ceiling were not relaxed.
+The formal result remains **0/1 passed, 1/1 failed, and 19/20 not executed**. It is not 20/20 acceptance. The two later one-shot/setup actions are diagnostics, not extra formal rounds; both also exceeded `5 s`. The stop-on-first-mismatch rule and the physical ceiling were not relaxed.
 
 The before/after NetEase → Suno stage audit explains why the CDP change did not repair the physical path:
 
@@ -135,11 +139,35 @@ The before/after NetEase → Suno stage audit explains why the CDP change did no
 
 The `67 ms` reveal-stage reduction is only an upper bound on the duplicate-CDP saving because the older aggregate also included opacity restoration. The large improvement is after the physical stamp, so it shortens lock/observer delay but cannot help the `5 s` gate. The ordered X11 transaction is effectively unchanged. The latest nonblank frame, final target/previous/panel geometry, runtime owner, ten real HTTPS pages, audio gates, and free lock all matched; the only failed gate was physical time.
 
-### Current next-work boundary
+### One-shot segment evidence and current deployed boundary
 
-There is no evidence-backed behavior change after this snapshot. The cached Suno XID was validated once and reused; target opacity was written once; target reveal and previous parking were already combined; final geometry was intentionally checked after the physical stamp; and no state persistence or log write blocked the stamp. Removing any of those gates without a new measurement would weaken correctness.
+`TIKPAL_WEB_MODE_SWITCH_SEGMENT_TIMING_ONCE_PATH` enables timing for exactly one resident switch. The foreground path records detailed cache, panel, opacity, combined-X11, and stamp-write fields, emits them only after the physical reveal stamp, and then removes both the marker and its `.details` file. The marker must be created atomically immediately before the approved click; a diagnostic run is never retried automatically.
 
-Before another behavior patch, capture separate durations for cached-XID validation, the first CDP test, guard shutdown, Side Panel placement, target opacity restoration, and the combined X11 transaction. Store the timestamps during the foreground path and emit their consolidated log after the physical stamp so measurement logging does not become a new pre-display cost. If that evidence identifies a removable synchronous duplicate, rerun NetEase → Suno with `switch-once`, then Suno → NetEase, and restart the formal 20 rounds only after both directions pass every gate in `<=5 s`.
+The only NetEase → Suno run with this marker took `7,439 ms` from click to physical stamp and failed the `5 s` gate. Its coarse segments were `first_cdp_ms=12`, `guard_stop_ms=71`, `target_opacity_ms=962`, and `combined_x11_ms=2292`. The initial `cached_xid_ms=2788` and `panel_retile_ms=811` are contaminated upper bounds from the already-busy X11 path, so the no-retry rule deliberately left them unconfirmed.
+
+The following Suno → NetEase setup also failed at `5,662 ms`, even though its final target, previous, panel, HTTPS, audio, state, and lock were correct. Its stage boundaries were:
+
+| Stage | Duration |
+| --- | ---: |
+| click → runtime start | 265 ms |
+| runtime start → `open_pool_init` | 2,043 ms |
+| init → transition | 838 ms |
+| transition → reveal | 225 ms |
+| reveal → CDP ready | 976 ms |
+| CDP ready → physical stamp | 1,315 ms |
+| physical stamp → runtime geometry confirmation | 1,792 ms |
+| geometry confirmation → command return | 1,432 ms |
+
+The geometry observer timed out on three incomplete combined queries during that setup. This was a secondary observer failure caused by tail-end X11 congestion; it does not overturn the `5,662 ms` physical failure.
+
+Two skip-only foreground changes were then implemented and deployed on Gentoo 115:
+
+- The existing Side Panel geometry probe is reused. Exact `1920,0 640x720` skips `tile_window_fast`; a mismatch, incomplete result, or read failure still executes the original repair. No second geometry query was added.
+- The existing target-opacity read is reused. An absent property or full value (`4294967295`/`0xffffffff`) skips `xprop -set`; a non-full, malformed, or unreadable result still executes the original restore. No second opacity query was added.
+
+The candidates passed isolated remote staging and were atomically deployed without restarting any service, provider Chromium, or guard. The post-deploy read-only state had NetEase active at `0,0 1920x720`, Suno parked at `2560,0 1920x720`, the Panel at `1920,0 640x720`, full opacity on all three, ten real HTTPS CDP pages, a free lock, and no timing marker. No provider click has occurred with the deployed skip-only version, so there is no performance claim yet.
+
+The next authorized measurement boundary is exactly one NetEase → Suno click with an atomically created one-shot marker. Stop on any mismatch or physical time over `5,000 ms`; do not retry, run the reverse direction, or start the formal 20 rounds. If it still fails, use the new `.details` evidence to choose between cached-XID validation, PID/profile parsing, and the combined X11 mutation.
 
 These limits apply only to already-prewarmed resident switches. They do not cover first Explore entry, cold launch, or Close. The historical `600–620 ms` result is context only and is not a current acceptance baseline.
 
