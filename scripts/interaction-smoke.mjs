@@ -4877,8 +4877,18 @@ try {
   await wait(220);
   await expect(
     client,
-    "Array.isArray(window.__tikpalKeyboardActions) && window.__tikpalKeyboardActions.some((action) => action.type === 'keyboard' && action.enabled === true && action.force === true) && !window.__tikpalKeyboardActions.some((action) => action.type === 'keyboard' && action.enabled === false)",
-    "Console Explore proxy input blur alone keeps Onboard visible"
+    `
+      (() => {
+        const input = document.querySelector('.web-mode-proxy-field input');
+        const action = window.__tikpalKeyboardActions.find((entry) => entry.type === 'keyboard' && entry.enabled === true && entry.force === true);
+        if (!input || !action || action.keyboardWindow !== '900x280' || typeof action.keyboardPosition !== 'string') return false;
+        const [x, y] = action.keyboardPosition.split(',').map(Number);
+        const rect = input.getBoundingClientRect();
+        return y === 24 && (x + 900 <= rect.left || x >= rect.right || y + 280 <= rect.top || y >= rect.bottom)
+          && !window.__tikpalKeyboardActions.some((entry) => entry.type === 'keyboard' && entry.enabled === false);
+      })()
+    `,
+    "Console Explore Proxy URL places Onboard above the input instead of its default overlap"
   );
   await evaluate(
     client,
@@ -5007,6 +5017,20 @@ try {
     client,
     "document.querySelector('[data-web-mode-proxy-restart-confirm]') !== null && document.querySelector('[data-web-mode-proxy-restart-apply]')?.disabled === false && (window.__tikpalOriginalProxyEnabled || window.__tikpalProxyTestRequests.length >= 2)",
     "Console Proxy enables restart only after a successful Proxy On check"
+  );
+  await expect(
+    client,
+    `
+      (() => {
+        const panel = document.querySelector('.web-mode-settings-panel');
+        const confirm = document.querySelector('[data-web-mode-proxy-restart-confirm]');
+        if (!panel || !confirm) return false;
+        const panelRect = panel.getBoundingClientRect();
+        const confirmRect = confirm.getBoundingClientRect();
+        return confirmRect.top >= panelRect.top - 0.5 && confirmRect.bottom <= panelRect.bottom + 0.5;
+      })()
+    `,
+    "Console Proxy restart confirmation scrolls fully into the 2560x720 settings viewport"
   );
   await evaluate(
     client,
@@ -5251,9 +5275,41 @@ try {
   await click(client, 10, 10);
   await expect(client, "document.querySelector('.quick-settings.is-active') === null", "Console backdrop click exits Console");
 
+  await client.send("Emulation.setDeviceMetricsOverride", {
+    width: 640,
+    height: 720,
+    deviceScaleFactor: 1,
+    mobile: false
+  });
   await navigate(client, new URL("/side-panel", APP_URL).toString());
   await expect(client, "document.querySelector('[data-web-mode-panel]') !== null && document.querySelector('.app-root') === null", "Explore side panel renders without the main kiosk app");
   await expect(client, "document.querySelectorAll('[data-web-mode-provider]').length >= 10", "Explore side panel exposes common web player providers");
+  await expect(
+    client,
+    `
+      (() => {
+        const panel = document.querySelector('[data-web-mode-panel]');
+        const grid = document.querySelector('.web-mode-provider-grid');
+        const controls = document.querySelector('.web-mode-control-stack');
+        const qq = document.querySelector('[data-web-mode-provider="qq_music"]');
+        const netease = document.querySelector('[data-web-mode-provider="netease_music"]');
+        if (!panel || !grid || !controls || !qq || !netease) return false;
+        const panelRect = panel.getBoundingClientRect();
+        const gridRect = grid.getBoundingClientRect();
+        const controlsRect = controls.getBoundingClientRect();
+        const cards = [qq, netease].map((card) => card.getBoundingClientRect());
+        const textShiftedDown = [qq, netease].every((card) => [card.querySelector('strong'), card.querySelector('em')]
+          .every((node) => getComputedStyle(node).transform === 'matrix(1, 0, 0, 1, 0, 2)'));
+        return Math.round(panelRect.width) === 640
+          && Math.round(panelRect.height) === 720
+          && Math.round(gridRect.height) >= 352
+          && cards.every((card) => Math.round(card.height) >= 64 && card.bottom <= gridRect.bottom + 0.5)
+          && gridRect.bottom <= controlsRect.top - 7.5
+          && textShiftedDown;
+      })()
+    `,
+    "Explore 640x720 side panel keeps QQ Music and NetEase cards complete with lowered card text"
+  );
   await expect(
     client,
     "document.querySelector('[data-web-mode-proxy-status]')?.tagName !== 'BUTTON' && document.querySelector('[data-web-mode-top-back]') !== null && document.querySelector('[data-web-mode-text-scale]')?.textContent.includes('Font') && [...document.querySelectorAll('[data-web-mode-text-scale-option]')].map((node) => node.textContent?.trim()).join(',') === 'Small,Medium,Large' && document.querySelector('[data-web-mode-text-scale-option=\"1.1\"].is-active') !== null && document.querySelector('[data-web-mode-keyboard-toggle]') === null && document.querySelector('.web-mode-actions') === null",

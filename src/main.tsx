@@ -87,7 +87,7 @@ const keyboardPlacementForTarget = (target: HTMLElement): KeyboardPlacement => {
   const belowY = targetRect.bottom + onboardKeyboardMargin;
   const leftX = onboardKeyboardMargin;
   const rightX = viewportWidth - onboardKeyboardWindow.width - onboardKeyboardMargin;
-  const candidates = [
+  const defaultCandidates = [
     fit(onboardKeyboardDefaultPosition.x, onboardKeyboardDefaultPosition.y),
     fit(centeredX, aboveY),
     fit(centeredX, belowY),
@@ -98,6 +98,21 @@ const keyboardPlacementForTarget = (target: HTMLElement): KeyboardPlacement => {
     fit(leftX, bottomY),
     fit(rightX, bottomY)
   ];
+  const proxyUrlCandidates = [
+    fit(centeredX, topY),
+    fit(centeredX, aboveY),
+    fit(centeredX, belowY),
+    fit(leftX, topY),
+    fit(rightX, topY),
+    fit(centeredX, bottomY),
+    fit(leftX, bottomY),
+    fit(rightX, bottomY),
+    fit(onboardKeyboardDefaultPosition.x, onboardKeyboardDefaultPosition.y)
+  ];
+  const candidates = target.matches(".web-mode-proxy-field input")
+    && target.closest("[data-settings-detail='web-mode']")
+    ? proxyUrlCandidates
+    : defaultCandidates;
   const chosen = candidates.find((candidate) => !rectsOverlap(keyboardRect(candidate.x, candidate.y), safeTarget))
     ?? (targetRect.top > viewportHeight / 2 ? fit(centeredX, topY) : fit(centeredX, bottomY));
 

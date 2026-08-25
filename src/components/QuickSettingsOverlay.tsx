@@ -1483,6 +1483,7 @@ export function QuickSettingsOverlay({
   }
 
   function openDetail(nextDetail: Exclude<SettingsDetailView, null>) {
+    if (nextDetail === "webMode") hideLocalKeyboard();
     setDetailView(nextDetail);
     setConfirmAction(null);
     setWebModeProxyConfirmEnabled(null);
@@ -1503,6 +1504,7 @@ export function QuickSettingsOverlay({
     setWebModeProxyValidationStatus("idle");
     setWebModeProxyValidatedUrl(null);
     setWebModeProxyFailedSites([]);
+    hideLocalKeyboard();
     setWebModeProxyConfirmEnabled(enabled);
   }
 
@@ -1534,6 +1536,9 @@ export function QuickSettingsOverlay({
       return;
     }
 
+    const input = document.querySelector<HTMLInputElement>("[data-settings-detail='web-mode'] .web-mode-proxy-field input");
+    input?.blur();
+    hideLocalKeyboard();
     const requestNonce = ++webModeProxyTestNonceRef.current;
     setWebModeError(null);
     setWebModeProxyValidationStatus("checking");
@@ -2536,7 +2541,7 @@ export function QuickSettingsOverlay({
 
         <div className="web-mode-settings-panel">
           <button
-            className={`night-toggle ${webModeProxyEnabled ? "is-active" : ""}`}
+            className={`night-toggle web-mode-proxy-toggle ${webModeProxyEnabled ? "is-active" : ""}`}
             type="button"
             aria-pressed={webModeProxyEnabled}
             disabled={webModeProxyRestartPending || webModeProxyConfirmEnabled !== null}
@@ -2546,7 +2551,7 @@ export function QuickSettingsOverlay({
             <Globe2 size={26} />
             <span>
               <strong>{t("common.proxy")}</strong>
-              <em>{webModeProxyEnabled ? t("common.on") : t("common.direct")}</em>
+              <em>{t(webModeProxyEnabled ? "common.proxyOn" : "common.proxyOff")}</em>
             </span>
           </button>
 

@@ -9352,7 +9352,7 @@ select {
   height: 100vh;
   box-sizing: border-box;
   display: grid;
-  grid-template-rows: auto auto 1fr auto auto;
+  grid-template-rows: auto auto minmax(352px, 1fr) auto auto;
   gap: 8px;
   padding: 16px;
   color: #eef7fb;
@@ -9619,12 +9619,14 @@ select {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  transform: translateY(2px);
 }
 
 .web-mode-provider em {
   margin-top: 5px;
   font-style: normal;
   text-transform: none;
+  transform: translateY(2px);
 }
 
 .web-mode-provider.is-active {
@@ -9738,7 +9740,7 @@ select {
   display: grid;
   align-items: center;
   gap: 8px;
-  padding: 8px 10px;
+  padding: 4px 10px;
 }
 
 .web-mode-text-scale {
@@ -9825,7 +9827,7 @@ select {
   align-content: start;
   gap: 12px;
   min-height: 0;
-  overflow-y: auto;
+  overflow: hidden;
 }
 
 .web-mode-settings-panel .night-toggle,
@@ -9841,6 +9843,48 @@ select {
 
 .web-mode-settings-panel .night-toggle em {
   font-size: 16px;
+}
+
+.web-mode-proxy-toggle {
+  border: 2px solid rgba(176, 193, 205, 0.44);
+  background: linear-gradient(135deg, rgba(104, 119, 130, 0.22), rgba(15, 19, 24, 0.74));
+}
+
+.web-mode-proxy-toggle svg {
+  color: #c8d2da;
+}
+
+.web-mode-proxy-toggle strong {
+  color: #f3f7fa;
+}
+
+.web-mode-proxy-toggle em {
+  width: fit-content;
+  min-width: 76px;
+  margin-top: 5px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  color: #e4ebf0;
+  background: rgba(194, 207, 217, 0.16);
+  font-size: 16px;
+  font-weight: 850;
+  letter-spacing: 0.03em;
+}
+
+.web-mode-proxy-toggle.is-active {
+  border-color: #49d88d;
+  background: linear-gradient(135deg, rgba(52, 195, 119, 0.42), rgba(18, 83, 51, 0.82));
+  box-shadow: inset 0 0 0 1px rgba(191, 255, 218, 0.16), 0 0 22px rgba(53, 205, 122, 0.2);
+}
+
+.web-mode-proxy-toggle.is-active svg,
+.web-mode-proxy-toggle.is-active strong {
+  color: #e7ffef;
+}
+
+.web-mode-proxy-toggle.is-active em {
+  color: #063e20;
+  background: #82edab;
 }
 
 .web-mode-proxy-url-control {
@@ -9971,6 +10015,53 @@ select {
   color: var(--muted);
   font-size: 15px;
   line-height: 1.35;
+}
+
+@media (min-width: 1281px) and (max-height: 720px) {
+  .settings-detail-panel[data-settings-detail="web-mode"] {
+    gap: 10px;
+    padding: 16px;
+  }
+
+  .web-mode-settings-panel {
+    gap: 8px;
+  }
+
+  .web-mode-settings-panel .night-toggle,
+  .web-mode-settings-panel .night-field,
+  .web-mode-proxy-test {
+    min-height: 76px;
+  }
+
+  .web-mode-settings-panel .night-toggle,
+  .web-mode-settings-panel .night-field {
+    padding: 10px 14px;
+  }
+
+  .web-mode-proxy-validation {
+    min-height: 44px;
+    padding: 8px 12px;
+    font-size: 16px;
+  }
+
+  .web-mode-proxy-restart-confirm {
+    gap: 10px;
+    padding: 10px 12px;
+  }
+
+  .web-mode-proxy-restart-confirm p {
+    margin-top: 3px;
+    font-size: 14px;
+  }
+
+  .web-mode-proxy-restart-confirm-actions button {
+    min-height: 42px;
+  }
+
+  .web-mode-settings-help {
+    font-size: 14px;
+    line-height: 1.25;
+  }
 }
 
 @media (max-width: 1280px) {

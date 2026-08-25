@@ -245,7 +245,7 @@ export function WebModeSidePanel() {
       }
     }
     void tick();
-    const timer = window.setInterval(() => void tick(), displayedOpeningProvider ? 250 : 2000);
+    const timer = window.setInterval(() => void tick(), displayedOpeningProvider ? 100 : 2000);
     return () => {
       cancelled = true;
       window.clearInterval(timer);

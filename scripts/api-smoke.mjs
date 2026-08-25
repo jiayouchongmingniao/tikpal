@@ -2870,6 +2870,32 @@ if (args[0] === "prepare-entry" && args[1] === "qq_music") {
       "a resident completion released after Close must not reopen Explore"
     );
     assert(afterCloseWins.lastProvider === "spotify", "Close should retain the last physically visible provider after cancelling Opening");
+
+    await writeFile(fakeWebModeStatePath, JSON.stringify({ activeProvider: "spotify", lastProvider: "spotify" }));
+    await writeFile(fakeWebModeCommandPath, [
+      "#!/usr/bin/env node",
+      "import { appendFileSync } from \"node:fs\";",
+      "",
+      "const args = process.argv.slice(2);",
+      "appendFileSync(" + JSON.stringify(fakeWebModeLogPath) + ", args.join(\"\\\\t\") + \"\\\\n\");",
+      "if (args[0] === \"close\") {",
+      "  console.error(\"[tikpal-web-mode] ERROR: Explore close left provider or side-panel windows on screen\");",
+      "  process.exit(1);",
+      "}"
+    ].join("\n"));
+    const failedPhysicalClose = await requestFrom(baseUrl, "/api/v1/web-mode/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "close" })
+    });
+    assert(failedPhysicalClose.response.status === 400, "a physical Explore window residual should make the Close API return an error");
+    const stateAfterFailedPhysicalClose = await requestFrom(baseUrl, "/api/v1/web-mode/state");
+    assert(
+      stateAfterFailedPhysicalClose.body.activeProvider === "spotify"
+        && stateAfterFailedPhysicalClose.body.closeRequestId === null
+        && /provider or side-panel windows on screen/i.test(stateAfterFailedPhysicalClose.body.lastError),
+      "a failed physical Close should preserve the visible Active provider and publish a diagnostic error"
+    );
+
     await writeFile(fakeWebModeStatePath, JSON.stringify({ activeProvider: "qq_music", lastProvider: "qq_music" }));
     await writeFile(fakeWebModeCommandPath, fakeWebModeCommandSource);
     await writeFile(fakeWebModeLogPath, "");

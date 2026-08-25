@@ -2341,7 +2341,8 @@ const consentConfirmExpression = `(() => {
 const safeDismissPromptExpression = `(() => {
   const providerId = ${JSON.stringify(providerId)};
   const cookieContextText = /(cookie|cookies|cookie policy|privacy|gdpr|tracking|personal data|personal information|クッキー|プライバシー|쿠키|개인정보|隐私|隱私|个人信息|個人資料)/i;
-  const trialContextText = /(free trial|trial|try free|premium|subscribe|subscription|upgrade|membership|vip|免费试用|免費試用|试用|試用|会员|會員|订阅|訂閱|开通|開通|ทดลองใช้ฟรี|無料体験|プレミアム|구독|프리미엄)/i;
+  const trialContextText = /(free trial|trial|try for free|try it free|try free|try.*free|\$0[.,]00.*(?:days?|months?)|0[.,]00.*(?:days?|months?)|(?:days?|months?).*(?:\$?0[.,]00|free)|unlimited.*(?:access|songs?|music)|(?:access|songs?|music).*unlimited|(?:100|millions?).*songs?|premium|subscribe|subscription|upgrade|membership|vip|免费试用|免費試用|试用|試用|试听|会员|會員|订阅|訂閱|开通|開通|ทดลองใช้ฟรี|無料体験|プレミアム|구독|프리미엄)/i;
+  const trialActionText = /(free trial|try for free|try it free|try free|start (?:a )?trial|subscribe|subscription|upgrade|join (?:premium|vip)|get (?:premium|vip)|go premium|免费试用|免費試用|开始试用|開始試用|开通|開通|订阅|訂閱|ทดลองใช้ฟรี|無料体験|プレミアム|구독|프리미엄)/i;
   const localAccessContextText = /(other apps and services on this device|other applications and services on this device|apps and services on this device|local network|nearby devices|nearby services|访问此设备上的其他应用和服务|訪問此裝置上的其他應用程式和服務|访问本设备上的其他应用和服务|其他应用和服务|其他應用程式和服務)/i;
   const safeDismissActionText = /(close|dismiss|not now|no thanks|no, thanks|maybe later|skip|cancel|block|deny|don't allow|do not allow|×|关闭|關閉|取消|不用了|不了|稍后|稍後|阻止|拒绝|拒絕|不允许|不允許|나중에|닫기|거부|キャンセル|閉じる|あとで|許可しない|拒否)/i;
   const dangerousActionText = /(start|try|subscribe|get premium|go premium|continue|accept|agree|allow|login|log in|sign in|pay|purchase|buy|join|开始|開始|试用|試用|订阅|訂閱|购买|購買|支付|登录|登入|加入|开通|開通|允许|允許|同意|続行|許可|허용|동의)/i;
@@ -2408,6 +2409,12 @@ const safeDismissPromptExpression = `(() => {
     textOf(element),
     metadataOf(element)
   ].filter(Boolean).join(" ");
+  const actionLabelOf = (element) => [
+    attr(element, "aria-label"),
+    attr(element, "title"),
+    String(element?.value || "").trim(),
+    textOf(element)
+  ].filter(Boolean).join(" ");
   const isMediaControl = (element, actionText) => Boolean(element.closest?.(mediaControlSelectors)) || mediaControlText.test(actionText);
   const visible = (element) => {
     if (!element) return false;
@@ -2452,6 +2459,8 @@ const safeDismissPromptExpression = `(() => {
       const candidate = clickableElement(raw);
       if (!candidate || seen.has(candidate) || !visible(candidate)) continue;
       seen.add(candidate);
+      const actionLabel = actionLabelOf(candidate);
+      if (trialActionText.test(actionLabel)) continue;
       const actionText = actionTextOf(candidate);
       if (isMediaControl(candidate, actionText)) continue;
       if (!safeDismissActionText.test(actionText)) continue;

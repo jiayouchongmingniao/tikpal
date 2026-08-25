@@ -12179,7 +12179,7 @@ async function fetchItunesArtworkUrl({ title, artist, album }) {
 function splitArtistForLookup(artist) {
   if (!artist) return [];
   return artist
-    .split(/\s*(?:,|，|、|\/|／|;|；|\+|＋|&|and|feat\.?|ft\.?|featuring|with|x|和|与)\s*/i)
+    .split(/\s*(?:,|，|、|\/|／|;|；|\+|＋|&|\band\b|\bfeat\b\.?|\bft\b\.?|\bfeaturing\b|\bwith\b|\bx\b|和|与)\s*/i)
     .map((entry) => entry.trim())
     .filter((entry) => entry.length >= 2);
 }
@@ -14168,7 +14168,7 @@ async function parkPreparedWebModeEntry(providerId) {
 async function webModeCloseRequestIsCurrent(closeRequestId) {
   if (!closeRequestId) return true;
   const runtimeState = await readWebModeRuntimeState();
-  return runtimeState.closeRequestId === closeRequestId && !runtimeState.activeProvider && !runtimeState.openingProvider;
+  return runtimeState.closeRequestId === closeRequestId && !runtimeState.openingProvider;
 }
 
 async function residentWebModeOpenRequestIsCurrent(providerId, openRequestId) {
@@ -14254,7 +14254,16 @@ function runWebModeCloseInBackground(closeRequestId = "", activeProvider = "") {
         }
       }
     } catch (error) {
-      restoreError = formatWebModeCommandError(error, "close");
+      const closeError = formatWebModeCommandError(error, "close");
+      if (await webModeCloseRequestIsCurrent(closeRequestId).catch(() => false)) {
+        await writeWebModeRuntimeState({
+          openingProvider: null,
+          openRequestId: null,
+          lastError: closeError,
+          closeRequestId: null
+        }).catch(() => {});
+      }
+      throw new Error(closeError);
     } finally {
       webModeCloseInFlight = false;
       if (await webModeCloseRequestIsCurrent(closeRequestId).catch(() => false)) {
@@ -14440,24 +14449,20 @@ async function applyWebModeAction(action) {
   const type = String(action?.type ?? "").trim().toLowerCase();
   if (type === "close") {
     if (webModeClosePromise) {
-      const runtimeState = await readWebModeRuntimeState();
-      if (!runtimeState.activeProvider && runtimeState.closeRequestId) {
-        await writeWebModeRuntimeState({ closeRequestId: null });
-      }
+      await webModeClosePromise;
       return await buildWebModeState();
     }
     const closeRequestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const runtimeState = await readWebModeRuntimeState();
     const activeProvider = typeof runtimeState.activeProvider === "string" ? runtimeState.activeProvider : "";
     await writeWebModeRuntimeState({
-      activeProvider: null,
       openingProvider: null,
       openRequestId: null,
       lastProvider: runtimeState.lastProvider ?? activeProvider ?? null,
       lastError: null,
       closeRequestId
     });
-    runWebModeCloseInBackground(closeRequestId, activeProvider);
+    await runWebModeCloseInBackground(closeRequestId, activeProvider);
     return await buildWebModeState();
   }
 

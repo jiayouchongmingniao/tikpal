@@ -621,7 +621,7 @@ Opening Explore places the right side panel at its final geometry while Tikpal a
 
 Boot prewarm begins only after the main kiosk Chromium profile has a visible X11 window in two consecutive samples. It waits at most `TIKPAL_WEB_MODE_BOOT_PREWARM_READY_TIMEOUT_SECONDS` (30 seconds by default), then applies `TIKPAL_WEB_MODE_BOOT_PREWARM_INITIAL_DELAY_SECONDS` (5 seconds by default) as a post-stability delay; a missing or disappearing kiosk window skips that boot's prewarm rather than adding load to a failed startup. Background prewarm uses the fixed provider order with a `0.75` second stagger and at most `TIKPAL_WEB_MODE_PROVIDER_PREWARM_MAX_CONCURRENT_LAUNCHES=2` workers. A worker waits for the full readiness probe before it writes `Ready`: a real HTTPS CDP page, `document` no longer loading, and either 80 body characters or three visible interactive/media elements in two samples 200 ms apart, bounded by `TIKPAL_WEB_MODE_PROVIDER_READY_TIMEOUT_SECONDS` (18 seconds by default). The same probe gates sync and guard promotions. The background prewarm process remains detached from the active open command with `setsid` or `nohup`, otherwise a finished active open can still look slow while the background queue continues. With `TIKPAL_WEB_MODE_PROVIDER_PREWARM_CONTINUE_AFTER_CLOSE=1`, that detached prewarm queue continues after a user closes Explore, so opened provider processes are not killed merely because the visible stage returned to the main room; windows must remain offscreen at `2560,0` until the user explicitly selects that provider or runs `close-full`. A foreground non-resident open cancels the remaining queue before it launches another background worker. Active provider opens still use their first-paint gate for visible entry; full readiness is promoted independently. The launcher seeds queued providers as `Prewarming` before their individual launch turn, records `prewarmComplete` only after the entire queue and final reconciliation finish, and the Ambient source picker requires both this queue marker and terminal card states. `Opening` is reserved for the provider the user explicitly selected. Short state-write locking plus the final pool sync preserve concurrent workers' `residentProviders` updates. When Proxy is off, the launcher must run a short direct reachability probe against each provider's own URL; only providers that fail that probe are marked internally as `check_proxy`, shown to the user as `Needs proxy`, and skipped, while direct-reachable providers continue to open or prewarm. QQ Music and NetEase Cloud Music are direct-preferred providers: even when global Proxy is on, the launcher and MV3 extension keep these two providers in direct mode, including after navigation to `y.qq.com` or `music.163.com`; they also direct-launch their official URL, skip the transition URL bootstrap gate, and rely only on the short first-paint gate before reveal.
 
-Every real provider switch pauses the old provider's media via CDP `__tikpalProviderAudioGate.setActive(false)` to prevent audio mixing. The reveal uses a CDP fast path: if `provider_has_real_provider_page` confirms the new provider has a real HTTPS page loaded, the fade animation, X11 paint check, and settle delay are all skipped. The new window is raised on top first (~50 ms), then old windows are parked off-screen — parking latency is invisible since the new window already covers them. This avoids both the unreliable 3-second X11 paint check timeout and the 1+ second xprop fade overhead under X server load on Gentoo 115. If CDP does not confirm a real page, the legacy fade-then-paint-check path runs as a fallback. A second CDP check in `open_provider_pool` catches any edge case where the inner CDP check fails but the page is still alive, preventing unnecessary cold relaunches. The foreground path preserves the right panel at `1920,0 640x720`, then writes `activeProvider`. Only then does a detached reconcile rescan resident status and supplement prewarm. It checks that `activeProvider` still matches before and after its work, so a stale reconcile cannot clear or replace a newer selection. The right side panel remains visible and stable at `1920,0 640x720`. Resident switching must not re-run the first-load readiness gate or roll back to the previous provider just because a site like YouTube Music, Apple Music, TIDAL, or Deezer has a slow provider-ready probe. Provider and side-panel window ids are cached under the web-mode profile root, and hot switching defaults to asynchronous `wmctrl -e` / non-sync `xdotool` movement through `TIKPAL_WEB_MODE_X11_SYNC_WINDOW_OPS=0`; set it to `1` only as a fallback for an X11 window manager that needs synchronous `xdotool` confirmation.
+Every real provider switch pauses the old provider's media via CDP `__tikpalProviderAudioGate.setActive(false)` to prevent audio mixing. A real HTTPS CDP page allows the resident path to skip the cold fade/paint gate, but CDP readiness is not physical-window readiness. The foreground switch must validate the target, previous, and panel windows, move the target from the `2560,0` stage into `0,0 1920x720`, keep the panel at `1920,0 640x720`, hide and park the previous provider, then write `activeProvider`. It must not rely on a later guard scan to make those surfaces true. Detached reconcile still checks ownership before and after its work so stale jobs cannot overwrite a newer choice. Synchronous `xdotool --sync` remains a compatibility fallback; the normal path may use asynchronous X11 movement only when subsequent physical geometry proves it completed.
 
 Resident state is page-based, not process-based: `Ready` requires a CDP `type:"page"` target at a real `https://` provider URL, a complete document, and either 80 body characters or three visible interactive/media elements in two samples 200 ms apart. A cached Chromium window, local transition page, error page, or a real page that has not passed both full probes must remain `Prewarming` or show `Check setup`; the side panel never promotes a stale bootstrap surface. State files are atomically replaced, and inactive guards may not change `activeProvider`; together with the active-provider check around detached reconcile work, this prevents concurrent guards or older prewarm jobs from overwriting a newer selection. A provider error page whose reason is `region_unavailable` is retained as that explicit state instead of being reduced to `Check setup`: the side panel and error page tell the user to choose a Proxy exit that supports the service. QQ's scoped `QQ音乐提醒您` reminder may press only its `取消` control; login, client-download, payment, membership, and authorization prompts remain manual.
 
@@ -664,7 +664,7 @@ Provider guard behavior:
 - Blocks browser zoom keyboard and gesture shortcuts inside provider pages.
 - Retargets `_blank` links into the same provider window.
 - Keeps QQ Music single-pane and closes duplicate QQ player windows.
-- May close safe cookie/trial/client prompts, but must not click login, payment, membership, subscription, purchase, authorization, or native-client download actions.
+- May close safe cookie/trial/client prompts, but must not click login, payment, membership, subscription, purchase, authorization, or native-client download actions. Trial context and the candidate action label are checked separately, so a dismiss-looking element inside a `Try it free`, `$0.00`, unlimited-access, or subscription action is never clicked.
 - For QQ Music, may unmute the web player when playback is active but the QQ volume button is muted.
 - QQ Music ordinary playback uses `TIKPAL_WEB_MODE_QQ_MUSIC_AUTO_PLAY=1` to start a paused resident QQ player. The guard treats the bottom global play button as insufficient by itself: if QQ shows a false playing state but has no current row or recent playback resource, it clicks the first real queue-row play button instead. After real playback is detected, `TIKPAL_WEB_MODE_QQ_AUDIO_PRIME=1` keeps a very-low-gain WebAudio keepalive running while QQ is playing so Chromium does not release the ALSA device mid-track. The one-shot play gate prevents Tikpal from fighting a later manual pause, and the keepalive closes when QQ is paused, muted, or hidden. QQ Music MV uses wrapper cinema mode by default: `TIKPAL_WEB_MODE_QQ_MV_CINEMA_MODE=1`, `TIKPAL_WEB_MODE_QQ_MV_AUTO_PLAY=1`, and `TIKPAL_WEB_MODE_QQ_MV_AUTO_FULLSCREEN=0`.
 - MV cinema mode must not click QQ Music's fullscreen button, call `requestFullscreen()`, press `F11`, retile Chromium, or hide the right side panel. It only applies CSS/DOM inside the left `1920x720` provider page so the largest visible MV `<video>` sits on a black `100vw x 100vh` stage with `object-fit: contain`.
@@ -1089,7 +1089,7 @@ process, cached X11 window id, local transition page, or Tikpal error page is
 not readiness evidence and should remain `Check setup` (or the explicit
 regional-unavailable state) until CDP reports the provider page.
 
-Resident-provider switching checks should cover at least one Chinese provider and several slow western providers:
+API-only resident-provider diagnostics should cover at least one Chinese provider and several slow western providers:
 
 ```bash
 for provider in youtube_music apple_music tidal deezer qq_music; do
@@ -1104,9 +1104,9 @@ DISPLAY=:0 XAUTHORITY=/home/moode/.Xauthority \
   getwindowname %@ getwindowgeometry %@
 ```
 
-Expected geometry after switching: the active provider is at `0,0 1920x720`, the side panel is at `1920,0 640x720`, and inactive resident providers remain at `2560,0 1920x720`.
+The geometry snapshot after each diagnostic action should show the active provider at `0,0 1920x720`, the side panel at `1920,0 640x720`, and inactive resident providers at `2560,0 1920x720`. This snapshot is useful for debugging but does not establish click-to-settled physical performance.
 
-For one visual acceptance lap across all ten resident providers, with a single 30fps recording, API round-trip timing, responses, and one X11 geometry snapshot per target, start from any active provider after the pool is warm:
+For one API/command diagnostic lap across all ten resident providers, with a single 30fps recording, API round-trip timing, responses, and one X11 geometry snapshot per target, start from any active provider after the pool is warm:
 
 ```bash
 cd /home/moode/code/tikpal
@@ -1114,7 +1114,7 @@ DISPLAY=:0 XAUTHORITY=/home/moode/.Xauthority \
   deploy/chromium/tikpal-explore-switch-acceptance.sh
 ```
 
-The command returns to the starting provider and writes an evidence directory under `.tikpal/` containing `explore-ten-provider-switches.mp4`, `switches.tsv`, `summary.txt`, API responses, X11 geometry snapshots, and the recorder log. A failed API switch is retained in the TSV instead of being silently skipped; review its matching video segment before treating the lap as accepted.
+The command returns to the starting provider and writes a diagnostic directory under `.tikpal/` containing `explore-ten-provider-switches.mp4`, `switches.tsv`, `summary.txt`, API responses, X11 geometry snapshots, and the recorder log. A failed API switch is retained in the TSV instead of being silently skipped. Because this script posts API actions rather than performing real X11 panel clicks, its timing and video cannot accept physical switch performance.
 
 To verify stale setup recovery, inject a temporary failed state for a provider that is already on its real site and wait for its guard to repair it:
 
@@ -1262,7 +1262,7 @@ If the URL is `about:blank` after a provider switch command, the provider naviga
 
 ## Resident Provider Optimistic Switch (August 2026)
 
-When switching between two providers that are both already loaded (resident), `server/index.mjs` returns the switch response immediately to the frontend and runs the shell-level provider switch command in the background. This eliminates the ~2–4 s blocking delay that previously occurred when the API waited for the shell script to finish before responding.
+When switching between two providers that are both already loaded (resident), `server/index.mjs` returns the switch response immediately to the frontend and runs the shell-level provider switch command in the background. This removes the old API blocking delay, but it does not measure when the physical provider window becomes visible or settled.
 
 The frontend side panel uses this fast response to update the active provider highlight immediately. The actual Chromium tab focus/visibility change happens asynchronously in the background.
 
@@ -1340,6 +1340,8 @@ find /home/moode/code/tikpal/dist/assets -maxdepth 1 -type f -name 'index-*.js' 
 
 For this release, Settings -> Link -> Explore Proxy validates a candidate URL through Google, Apple Music, and Spotify before Proxy On can persist and request a reboot. All three checks must pass. The manual `Check Proxy` action has no side effects; failed or cancelled validation must not save settings or restart the kiosk. During a provider open, `/api/v1/web-mode/state.openingProvider` is the transient truth; keep the side panel in `Opening` until it becomes `activeProvider` or reports an error.
 
+At `2560x720`, the Explore Proxy detail keeps all controls and the pre-reboot confirmation inside the visible settings panel without vertical page scrolling. The status card says `Proxy On` or `Proxy Off`: enabled is a green high-contrast state, disabled is neutral gray. Touching the Proxy URL places the `900x280` Onboard window at the top (`y=24`) before considering the normal default position, so it does not cover the field. Starting validation or opening the enable/disable confirmation blurs the URL input and hides the keyboard; the validated restart confirmation scrolls into the remaining panel viewport. The separate `640x720` Side Panel reserves at least `352px` for the ten provider cards and keeps the bottom QQ Music/NetEase cards complete above the font/volume controls.
+
 ### `.env.kiosk` Recovery
 
 The `.env.kiosk` file is machine-local and gitignored. If lost, copy from `.env.example` and set Gentoo-specific overrides:
@@ -1374,7 +1376,7 @@ The entry-stage veil (a separate 1920x720 Chromium instance used to cover the le
 
 This eliminates one Chromium instance from the Explore cold-start path and removes the `entry-stage-guard` watchdog that continuously raised the left-side veil.
 
-Provider switching (between already-loaded providers) uses a CDP-based fast path: skip fade, raise new window on top first, then park old windows off-screen. The legacy fade-then-reveal flow is used only for cold launches.
+Provider switching between already-loaded providers uses CDP only to prove that a real provider page exists and to control media. A correct hot path must still tile the target on-screen and park the old provider itself; `raise` on an off-screen resident window is insufficient. The legacy fade-then-reveal flow is reserved for cold or unverified pages.
 
 ## Volume Control Device Discovery Fix (August 2026)
 
@@ -1396,11 +1398,11 @@ Root cause: `stop_window_guard` sends SIGTERM to the bash window guard, but the 
 
 Fix: before calling `close_web_mode_from_guard`, the guard now verifies the PID file still contains its own PID (`$$`). If `stop_window_guard` already removed the PID file, the guard exits cleanly without parking surfaces. This prevents the race between `stop_window_guard` and the guard's tiling cycle.
 
-## Veil PID File Optimization (August 2026)
+## Historical Veil/PID Optimization (August 2026)
 
-~~The `close_transition_veil`, `close_error_veil`, and `close_background_veil` functions previously used `pkill -f "--user-data-dir=$profile"` to terminate veil Chromium processes.~~ All transition, background, error, and close-overlay veil functions have been removed. Provider switching now uses a CDP-verified fast path that skips the fade entirely for prewarmed providers, raising the new window on top instantly. This eliminates all veil-related Chromium processes, PID management, and cleanup overhead.
+~~The `close_transition_veil`, `close_error_veil`, and `close_background_veil` functions previously used `pkill -f "--user-data-dir=$profile"` to terminate veil Chromium processes.~~ All transition, background, error, and close-overlay veil functions were later removed. The following measurements describe that historical optimization sequence; they are not current physical acceptance results.
 
-### Timing Validation (2026-08-18)
+### Historical Timing Validation (2026-08-18)
 
 Two rounds of random provider switching (20 total) on Gentoo `192.168.10.115`:
 
@@ -1409,21 +1411,20 @@ Two rounds of random provider switching (20 total) on Gentoo `192.168.10.115`:
 | Round 1 | ~200ms | ~500ms | ~1,600ms | CDP fast path, no paint check timeout |
 | Round 2 | 2,063ms | 2,638ms | 2,215ms | Sequential, all resident=1 |
 
-Before the PID file fix, a single provider switch after NetEase failure took 42,900ms. After the fix, all 20 switches completed in 2.0-2.8s. The optimization eliminates the O(n) `pkill -f` scan that was the primary bottleneck.
+Before that PID-file experiment, a single provider switch after a NetEase failure took 42,900ms. Its API/script-log boundary later reported 20 switches in `2.0–2.8 s`. Keep this as dated 2026-08-18 history only: it did not wait for physical geometry, a nonblank frame, state/lock convergence, and old-window parking, and the 2026-08-24 physical test disproved it as a description of the current user-visible path.
 
-Verification commands:
+Historical diagnostic commands were:
 ```bash
-# Check veil PID files exist during Explore
-ls -la /home/moode/.tikpal/web-mode-profiles/{transition,error,background}/veil.pid
-
 # Monitor reveal timing in real-time
 journalctl -t tikpal-web-mode -f | grep reveal_ms
 
-# Verify CDP fast path is active (should show reveal_cdp_skip_paint in logs)
+# Exercise the API path only; this is not physical acceptance.
 curl -s -X POST http://127.0.0.1:8787/api/v1/web-mode/actions \
   -H 'Content-Type: application/json' \
   -d '{"type":"open","provider":"netease_music"}'
 ```
+
+The removed veil PID files must not be used as a current verification step. `reveal_ms` and API return remain diagnostic stage timers, not physical convergence.
 
 ### Post-Reboot Validation (2026-08-18, after wait-for-exit fix)
 
@@ -1442,11 +1443,11 @@ Gentoo `192.168.10.115` rebooted, kiosk cold-started, boot prewarm completed, th
 | 9 | suno | 1,954 |
 | 10 | amazon_music | 2,020 |
 
-All switches under 2.1 seconds. The 23.7s post-NetEase failure delay is fixed.
+That dated run reported every script-level switch under 2.1 seconds. It does not establish the current physical latency or prove that the post-NetEase delay remains fixed.
 
-### Final Optimization: 100-Switch Stress Test (2026-08-18)
+### Historical 100-Switch Stress Test (2026-08-18)
 
-After eliminating the remaining `xdotool search --class chromium` bottleneck (~9s per call scanning 27+ windows), ran 10 rounds × 10 providers = 100 sequential switches:
+After eliminating the remaining `xdotool search --class chromium` bottleneck (~9s per call scanning 27+ windows), the API/script harness ran 10 rounds × 10 providers = 100 sequential switches. This was not a real-panel physical-convergence test:
 
 | Metric | Value |
 | --- | --- |
@@ -1463,7 +1464,7 @@ Distribution:
 - 2.5-5s: 7 (7%)
 - \>5s: 0 (0%)
 
-**Root causes resolved (in order of discovery):**
+**Root causes addressed in that historical build:**
 
 1. `pkill -f` scanning all 510 processes → PID file + targeted kill
 2. `xdotool search --pid` in `close_transition_veil` scanning 27 windows (~9s) → removed; fire-and-forget kill
@@ -1476,6 +1477,120 @@ Distribution:
 - PID file is stored at a fixed path (`transition-veil.pid`) outside the unique profile directory
 - `close_transition_veil` is fire-and-forget (no wait, no xdotool); the unique profile approach makes stale-lock waits unnecessary
 - `launch_transition_veil` uses `xdotool search --pid` with the spawned PID instead of `wait_for_profile_window` to avoid the O(n) window scan
+
+### Physical Baseline Before the Known-ID Repair (2026-08-24)
+
+The current field result on Gentoo `192.168.10.115` used real X11 clicks on the right-side provider cards. API and CDP were read-only evidence. The fixed ten-provider sequence ran twice and all 20 rounds eventually reached the correct provider, panel, state, lock, nonblank frame, and audio-gate state:
+
+| Boundary | min | median | p95 | max |
+| --- | ---: | ---: | ---: | ---: |
+| click command return | 107 ms | 110 ms | 127 ms | 133 ms |
+| API accepts switch | 128 ms | 131 ms | 224 ms | 235 ms |
+| target geometry at `0,0` | 16,601 ms | 18,275 ms | 34,875 ms | 36,696 ms |
+| first nonblank target frame | 17,079 ms | 18,848 ms | 35,555 ms | 40,558 ms |
+| fully settled | 18,321 ms | 20,219 ms | 36,832 ms | 41,622 ms |
+
+In rounded terms, the API median was `131 ms`, target geometry median was `18.28 s`, first nonblank frame median was `18.85 s`, and full stability median was `20.22 s`; full-stability p95 was `36.83 s` and maximum was `41.62 s`. The first ten settled at a 20,175 ms median and the second ten at 20,219 ms, so a second warm pass did not improve the result. The historical 2026-08-23 `600–620 ms`, 2026-08-18 `2.0–2.8 s`, and 100-switch roughly-`2 s` results must not be quoted as current performance or as a final optimization result.
+
+The field evidence invalidated five assumptions: window-ID reuse risk is small enough for geometry-only cache validation; a `250 ms` guard can correct the physical layout within `250 ms`; `raise` can reveal an off-screen target without a preceding tile; old-window parking can be left entirely to the guard; and the panel is already stable and needs no explicit once-per-switch placement.
+
+`deploy/chromium/tikpal-explore-switch-acceptance.sh` posts API actions and is useful for API/command diagnostics only. It cannot establish physical switch performance. Physical acceptance must use X11 card clicks and retain per-round API timing, X11 geometry, nonblank frames, CDP URL/audio evidence, lock state, and the final visible-surface count; stop at the first mismatch.
+
+### Current Resident Hot-Switch Implementation (2026-08-25)
+
+The known-ID repair described above is implemented in `tikpal-web-mode.sh` and its kiosk smoke coverage:
+
+- Cached XIDs retain real `xdotool` failure status and are validated against PID/profile ownership and usable geometry. A cache miss searches only the target Chromium profile tree.
+- The normal guard consumes atomically published provider/panel/kiosk IDs from `guard-windows.tsv`; only invalid-ID recovery may enumerate visible Chromium windows.
+- A switch stops the old guard and child X11 process, keeps the right Side Panel at `1920,0 640x720`, restores target opacity, and moves/raises the target while parking the previous provider in one ordered `xdotool` transaction.
+- The foreground path writes `last-physical-reveal.tsv` immediately after that transaction and verifies final target/previous geometry before committing state.
+- The first streamed CDP page result is reused by reveal. HTTPS readiness can skip the slow paint-wait fallback, but it cannot skip physical geometry, the acceptance frame, state, lock, or audio-gate checks.
+- Close preserves `activeProvider` until all provider and panel surfaces are off-screen. The API waits for the close command; a residual physical surface returns an error instead of reporting a successful close.
+
+Only the two target scripts were atomically updated during the 2026-08-25 timing work, with no service or provider restart. Product source/build health and the physical run remain separate acceptance layers.
+
+### Physical Timestamp Contract
+
+The reveal stamp has exactly four tab-separated fields:
+
+```text
+provider<TAB>target_xid<TAB>previous_xid<TAB>absolute_epoch_ms
+```
+
+The acceptance tool clears the prior stamp before the real Side Panel click. It rejects missing, malformed/half-written, stale, future, wrong-provider, wrong-target, and wrong-previous stamps. It then waits for lock release, checks target `0,0 1920x720`, previous `2560,0 1920x720`, panel `1920,0 640x720`, captures a nonblank frame, confirms runtime/API state, inspects all real HTTPS CDP pages and audio gates, and retains the complete round directory.
+
+`rounds.tsv` records physical `visible_ms`, independent `observer_delay_ms`, and full `settled_elapsed_ms`. Only the physical stamp decides the per-round `<=5 s` ceiling; observer overhead must never be substituted for physical time or used to excuse a slow physical reveal.
+
+### Resident Physical Acceptance Commands
+
+Run syntax and fixtures locally before any field click:
+
+```bash
+bash -n deploy/chromium/tikpal-web-mode.sh
+bash -n deploy/chromium/tikpal-explore-physical-acceptance.sh
+deploy/chromium/tikpal-explore-physical-acceptance.sh stamp-fixtures
+npm run test:kiosk
+git diff --check
+```
+
+Use `switch-once` to test one explicit direction without weakening any preflight or correctness gate:
+
+```bash
+cd /home/moode/code/tikpal
+TIKPAL_EXPLORE_ACCEPTANCE_SWITCH_ROUNDS=1 \
+TIKPAL_EXPLORE_ACCEPTANCE_SEQUENCE=suno \
+TIKPAL_EXPLORE_ACCEPTANCE_OUTPUT_DIR="$PWD/.tikpal/explore-physical-acceptance-single-netease-to-suno-$(date +%Y%m%d-%H%M%S)" \
+./deploy/chromium/tikpal-explore-physical-acceptance.sh switch-once
+```
+
+`switch-only` is the formal path. It requires exactly 20 rounds and, without an explicit sequence, starts after the current provider and covers all ten providers twice:
+
+```bash
+cd /home/moode/code/tikpal
+TIKPAL_EXPLORE_ACCEPTANCE_OUTPUT_DIR="$PWD/.tikpal/explore-physical-acceptance-formal-20-$(date +%Y%m%d-%H%M%S)" \
+./deploy/chromium/tikpal-explore-physical-acceptance.sh switch-only
+```
+
+Do not run the full script under `bash -x`; per-command tracing changes device load and can invalidate timing. API and CDP remain read-only evidence channels. Stop on the first timestamp, geometry, surface, frame, state, lock, HTTPS, or audio mismatch and retain the partial directory.
+
+### Current Field Baseline (2026-08-25)
+
+| Run | Direction | Physical time | Observer extra delay | Result |
+| --- | --- | ---: | ---: | --- |
+| initial one-round validation | QQ Music → NetEase | 3,895 ms | 5,885 ms | passed |
+| formal 20-round run, round 1 | NetEase → Suno | 7,426 ms | 8,744 ms | failed `visible-over-5s` |
+| post-CDP reverse validation | Suno → NetEase | 4,073 ms | 5,614 ms | passed |
+| post-CDP same-direction retry | NetEase → Suno | 7,471 ms | 7,672 ms | failed `visible-over-5s` |
+
+The formal run stopped immediately after round 1: planned `20`, executed `1`, passed `0`, failed `1`, not executed `19`. This is the rollback baseline and must be reported as **not accepted**.
+
+The before/after stage comparison for NetEase → Suno was:
+
+| Stage | Before CDP reuse | After CDP reuse | Delta |
+| --- | ---: | ---: | ---: |
+| `open_pool_init` | 2,779 ms | 2,856 ms | +77 ms |
+| reveal opacity/readiness aggregate | 1,057 ms | 990 ms | -67 ms |
+| ordered X11 transaction before physical stamp | 2,340 ms | 2,348 ms | +8 ms |
+| click to physical stamp | 7,426 ms | 7,471 ms | +45 ms |
+| geometry confirmation after stamp | 3,381 ms | 3,360 ms | -21 ms |
+| command tail after reveal | 2,680 ms | 1,464 ms | -1,216 ms |
+
+The CDP reuse saved at most `67 ms` inside the reveal aggregate and did not improve the physical result. The `1,216 ms` command-tail improvement occurred after the stamp and explains the shorter observer/lock delay. The remaining pre-stamp work is not currently proven redundant: Suno's cache XID is validated once, target opacity is written once, target/previous orchestration is already combined, and the mandatory geometry query is after the stamp.
+
+Before changing behavior again, add sub-stage timing for cached-XID validation, first CDP judgment, guard shutdown, Side Panel placement, target opacity, and the ordered X11 transaction. Collect those timestamps before the stamp but emit one consolidated log after it. Only a measured synchronous duplicate justifies another minimal patch. Then rerun NetEase → Suno once, Suno → NetEase once, and restart the formal 20 rounds only after both directions pass every gate in `<=5 s`.
+
+Scope remains already-prewarmed resident switching. It says nothing about first Explore entry, cold launch, or Close. Historical `600–620 ms` shell timing is not current physical acceptance.
+
+### Snapshot Validation Before Publication (2026-08-25)
+
+The rollback snapshot was checked with the following local results:
+
+- Passed: `bash -n` for both web-mode and physical-acceptance scripts; physical reveal stamp fixtures; Node syntax for the guard, server, and smoke files; `git diff --check`; production `npm run build`; and `npm run test:kiosk` (`kiosk package smoke passed`).
+- Build note: Vite completed successfully and retained its existing warning that the main minified JavaScript chunk is larger than `500 kB`.
+- Not green: `npm run test:api` still stops at `scene context should prefer IP timezone over a conflicting requested timezone`. This is the existing timezone assertion and is not evidence that the Explore physical path passed or failed.
+- Not green: the full interaction smoke passed the Quick Menu skin/toggle assertion in this run, then stopped at `single tap wakes the quick menu screen overlay`. Because the suite stopped there, later Proxy and `640x720` Side Panel assertions were not reached in that complete run; static kiosk smoke and the retained physical frame evidence are separate checks, not a substitute for a green full suite.
+
+These failures are part of the published baseline. Do not describe the snapshot as fully green, and do not silently move either assertion while working on the next NetEase → Suno timing change.
 
 ### Close Overlay PID File Fix (2026-08-19)
 

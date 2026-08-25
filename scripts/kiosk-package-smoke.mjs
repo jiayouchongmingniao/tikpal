@@ -25,6 +25,7 @@ const requiredFiles = [
   "deploy/chromium/tikpal-kiosk-healthcheck.sh",
   "deploy/chromium/tikpal-physical-display-prepare.sh",
   "deploy/chromium/tikpal-kiosk-viewerctl.sh",
+  "deploy/chromium/tikpal-explore-physical-acceptance.sh",
   "deploy/chromium/tikpal-explore-switch-acceptance.sh",
   "deploy/chromium/tikpal-web-mode.sh",
   "deploy/chromium/tikpal-web-mode-guard.mjs",
@@ -186,6 +187,7 @@ async function run() {
   await assertExecutable("deploy/chromium/tikpal-kiosk-healthcheck.sh");
   await assertExecutable("deploy/chromium/tikpal-physical-display-prepare.sh");
   await assertExecutable("deploy/chromium/tikpal-kiosk-viewerctl.sh");
+  await assertExecutable("deploy/chromium/tikpal-explore-physical-acceptance.sh");
   await assertExecutable("deploy/chromium/tikpal-explore-switch-acceptance.sh");
   await assertExecutable("deploy/chromium/tikpal-web-mode.sh");
   await assertExecutable("deploy/turzx/install-turzx-evdi-display.sh");
@@ -709,6 +711,17 @@ esac
       exploreAcceptanceScript.includes("xdotool search --onlyvisible --class chromium"),
     "Explore acceptance should record the complete ten-provider lap with API timings and X11 geometry evidence"
   );
+  const physicalExploreAcceptanceScript = await readFile(path.join(ROOT, "deploy/chromium/tikpal-explore-physical-acceptance.sh"), "utf8");
+  assert(
+    physicalExploreAcceptanceScript.includes('acceptance_mode="${1:-full}"')
+      && physicalExploreAcceptanceScript.includes("switch_only_preflight()")
+      && physicalExploreAcceptanceScript.includes('full|switch-only)')
+      && physicalExploreAcceptanceScript.includes("for pass in 1 2")
+      && physicalExploreAcceptanceScript.includes('[[ "$surfaces" == "2" ]]')
+      && physicalExploreAcceptanceScript.includes('click_provider_card "$target"')
+      && !physicalExploreAcceptanceScript.includes("/api/v1/web-mode/actions"),
+    "physical Explore acceptance should offer a 20-click switch-only mode whose API and CDP channels are read-only"
+  );
   const reconcileSmokeDir = mkdtempSync(path.join(tmpdir(), "tikpal-reconcile-"));
   const reconcileStatePath = path.join(reconcileSmokeDir, "web-mode-state.json");
   const reconcileProfileRoot = path.join(reconcileSmokeDir, "profiles");
@@ -740,6 +753,141 @@ esac
     residentProviders: { spotify: { status: "active" } }
   }));
   const webModeFunctions = webModeScript.slice(0, webModeScript.indexOf('\ncase "${1:-open}" in'));
+  const windowIdentityCachePath = path.join(reconcileSmokeDir, "dead-window.id");
+  const windowIdentitySmoke = spawnSync("bash", ["-s"], {
+    cwd: ROOT,
+    input: `${webModeFunctions}
+xdotool() { return 0; }
+xdotool_probe() {
+  if [[ "$*" == "getwindowpid 101 getwindowgeometry --shell 101" ]]; then
+    printf '4242\\nWINDOW=101\\nWIDTH=1920\\nHEIGHT=720\\n'
+    return 0
+  fi
+  return 1
+}
+process_tree_uses_profile() { [[ "$1" == "4242" && "$2" == "/profiles/spotify" ]]; }
+profile_window_cache_path() { printf '%s\\n' "$TIKPAL_SMOKE_WINDOW_CACHE"; }
+pgrep() { return 1; }
+validate_profile_window_fast 101 /profiles/spotify
+if validate_profile_window_fast 999 /profiles/spotify; then exit 11; fi
+if validate_profile_window_fast 101 /profiles/deezer; then exit 12; fi
+printf '999\\n' > "$TIKPAL_SMOKE_WINDOW_CACHE"
+if first_window_for_profile /profiles/spotify; then exit 13; fi
+[[ ! -e "$TIKPAL_SMOKE_WINDOW_CACHE" ]]
+`,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      TIKPAL_KIOSK_SKIP_ENV_SOURCE: "1",
+      TIKPAL_SMOKE_WINDOW_CACHE: windowIdentityCachePath
+    }
+  });
+  assert(
+    windowIdentitySmoke.status === 0,
+    `Explore window identity should reject dead cached IDs and mismatched profiles: ${windowIdentitySmoke.stderr || windowIdentitySmoke.stdout}`
+  );
+  const activeCloseOwnershipStatePath = path.join(reconcileSmokeDir, "active-close-owned-state.json");
+  writeFileSync(activeCloseOwnershipStatePath, JSON.stringify({
+    activeProvider: "spotify",
+    lastProvider: "spotify",
+    closeRequestId: "active-close-owns-state"
+  }));
+  const activeCloseOwnership = spawnSync("bash", ["-s"], {
+    cwd: ROOT,
+    input: [
+      webModeFunctions,
+      "write_runtime_provider_state deezer"
+    ].join("\n"),
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      TIKPAL_KIOSK_SKIP_ENV_SOURCE: "1",
+      TIKPAL_WEB_MODE_PROFILE_ROOT: reconcileProfileRoot,
+      TIKPAL_WEB_MODE_STATE_PATH: activeCloseOwnershipStatePath
+    }
+  });
+  assert(activeCloseOwnership.status === 0, "Close should own runtime state while the physically visible provider remains Active");
+  const activeCloseOwnedState = JSON.parse(readFileSync(activeCloseOwnershipStatePath, "utf8"));
+  assert(
+    activeCloseOwnedState.activeProvider === "spotify" && activeCloseOwnedState.closeRequestId === "active-close-owns-state",
+    "a delayed provider writer must not clear or replace Active before Close verifies every surface"
+  );
+  const activeCloseRequestCurrent = spawnSync("bash", ["-s"], {
+    cwd: ROOT,
+    input: [webModeFunctions, "runtime_close_request_is_current"].join("\n"),
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      TIKPAL_KIOSK_SKIP_ENV_SOURCE: "1",
+      TIKPAL_WEB_MODE_PROFILE_ROOT: reconcileProfileRoot,
+      TIKPAL_WEB_MODE_STATE_PATH: activeCloseOwnershipStatePath,
+      TIKPAL_WEB_MODE_CLOSE_REQUEST_ID: "active-close-owns-state"
+    }
+  });
+  assert(activeCloseRequestCurrent.status === 0, "the matching Close request should remain current while Active is still physically visible");
+
+  const closeSurfaceCountPath = path.join(reconcileSmokeDir, "close-surface-count");
+  const closeSurfaceOperationsPath = path.join(reconcileSmokeDir, "close-surface-operations");
+  const closeSurfaceMocks = [
+    webModeFunctions,
+    "web_mode_surface_windows_on_screen() {",
+    "  local count=0",
+    "  [[ -r \"$TIKPAL_SMOKE_COUNT\" ]] && count=\"$(sed -n '1p' \"$TIKPAL_SMOKE_COUNT\")\"",
+    "  [[ \"$count\" =~ ^[0-9]+$ ]] || count=0",
+    "  count=$((count + 1))",
+    "  printf '%s\\n' \"$count\" > \"$TIKPAL_SMOKE_COUNT\"",
+    "  if [[ \"$count\" == \"1\" ]]; then",
+    "    printf '101\\tprovider\\n102\\tprovider\\n201\\tpanel\\n'",
+    "  elif [[ \"$TIKPAL_SMOKE_RESIDUAL\" == \"1\" ]]; then",
+    "    printf '202\\tpanel\\n'",
+    "  fi",
+    "}",
+    "set_window_opacity() { printf 'hide\\t%s\\n' \"$1\" >> \"$TIKPAL_SMOKE_OPS\"; }",
+    "tile_window_fast() { printf 'move\\t%s\\t%s\\t%s\\n' \"$1\" \"$2\" \"$3\" >> \"$TIKPAL_SMOKE_OPS\"; }",
+    "clear_window_above() { printf 'lower-hint\\t%s\\n' \"$1\" >> \"$TIKPAL_SMOKE_OPS\"; }",
+    "xdotool_safe() { printf 'lower\\t%s\\n' \"$2\" >> \"$TIKPAL_SMOKE_OPS\"; }"
+  ];
+  writeFileSync(closeSurfaceCountPath, "0\n");
+  writeFileSync(closeSurfaceOperationsPath, "");
+  const closeSurfaceSuccess = spawnSync("bash", ["-s"], {
+    cwd: ROOT,
+    input: [...closeSurfaceMocks, "park_web_mode_surfaces_for_reopen spotify"].join("\n"),
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      TIKPAL_KIOSK_SKIP_ENV_SOURCE: "1",
+      TIKPAL_SMOKE_COUNT: closeSurfaceCountPath,
+      TIKPAL_SMOKE_OPS: closeSurfaceOperationsPath,
+      TIKPAL_SMOKE_RESIDUAL: "0"
+    }
+  });
+  assert(
+    closeSurfaceSuccess.status === 0,
+    "multi-window Explore close should park provider main, popup, and side panel: " + (closeSurfaceSuccess.stderr || closeSurfaceSuccess.stdout)
+  );
+  const closeSurfaceOperations = readFileSync(closeSurfaceOperationsPath, "utf8").trim().split("\n");
+  assert(
+    closeSurfaceOperations.slice(0, 3).every((operation) => operation.startsWith("hide\t"))
+      && new Set(closeSurfaceOperations.slice(0, 3).map((operation) => operation.split("\t")[1])).size === 3
+      && ["101", "102", "201"].every((window) => closeSurfaceOperations.some((operation) => operation.startsWith("move\t" + window + "\t"))),
+    "every Explore surface should become transparent before any provider or panel window moves"
+  );
+  writeFileSync(closeSurfaceCountPath, "0\n");
+  writeFileSync(closeSurfaceOperationsPath, "");
+  const closeSurfaceResidual = spawnSync("bash", ["-s"], {
+    cwd: ROOT,
+    input: [...closeSurfaceMocks, "if park_web_mode_surfaces_for_reopen spotify; then exit 1; fi"].join("\n"),
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      TIKPAL_KIOSK_SKIP_ENV_SOURCE: "1",
+      TIKPAL_SMOKE_COUNT: closeSurfaceCountPath,
+      TIKPAL_SMOKE_OPS: closeSurfaceOperationsPath,
+      TIKPAL_SMOKE_RESIDUAL: "1"
+    }
+  });
+  assert(closeSurfaceResidual.status === 0, "any provider or side-panel residual should make Explore close fail");
+
   const delayedOpenStateWrite = spawnSync("bash", ["-s"], {
     cwd: ROOT,
     input: `${webModeFunctions}\nwrite_runtime_provider_state deezer\n`,
@@ -874,6 +1022,14 @@ sync_runtime_provider_pool_process_statuses ""
   const onboardImeToggleScript = await readFile(path.join(ROOT, "deploy/chromium/onboard-scripts/tikpalImeToggle.py"), "utf8");
   const onboardTheme = await readFile(path.join(ROOT, "deploy/chromium/onboard-themes/Tikpal-Classic.colors"), "utf8");
   const serverSource = await readFile(path.join(ROOT, "server/index.mjs"), "utf8");
+  const splitArtistSource = serverSource.match(/function splitArtistForLookup\(artist\) \{[\s\S]*?\n\}/)?.[0] ?? "";
+  const splitArtistForLookup = Function('"use strict"; ' + splitArtistSource + "; return splitArtistForLookup;")();
+  assert(!serverSource.includes("\u0008"), "server source should not contain backspace control characters");
+  assert(
+    JSON.stringify(splitArtistForLookup("Daft Punk and Pharrell Williams feat. Nile Rodgers"))
+      === JSON.stringify(["Daft Punk", "Pharrell Williams", "Nile Rodgers"]),
+    "artist lookup splitting should use JavaScript word boundaries for English separators"
+  );
   const prewarmProviderGuardSource = await readFile(path.join(ROOT, "deploy/chromium/tikpal-web-mode-guard.mjs"), "utf8");
   const webModeErrorPage = await readFile(path.join(ROOT, "public/web-mode-error.html"), "utf8");
   const webModeBackgroundPage = await readFile(path.join(ROOT, "public/web-mode-background.html"), "utf8");
@@ -1023,7 +1179,7 @@ sync_runtime_provider_pool_process_statuses ""
   assert(extensionContent.includes("window.setInterval(() => void syncProxy(), 750)"), "provider pages should poll the proxy settings revision every 750ms");
   assert(extensionContent.includes("initialProxyKey") && !extensionContent.includes("initialRevision"), "provider pages should reload only when the proxy key changes");
   assert(extensionContent.includes("window.location.reload()"), "provider pages should refresh after a proxy revision change");
-  assert(extensionContent.includes("window.location.replace(provider.url)"), "provider bootstrap should navigate only after proxy sync succeeds");
+  assert(!extensionContent.includes("window.location.replace(provider.url)"), "provider content script should not restore the removed bootstrap redirect");
   assert(!extensionBackground.includes("setZoom(") && !extensionBackground.includes("setZoomSettings") && !extensionBackground.includes("getZoom"), "Explore extension should avoid Chrome tab zoom so the browser zoom bubble never appears");
   assert(extensionContent.includes("tikpal-provider-text-scale-style") && extensionContent.includes("scaleProviderTextElements") && extensionContent.includes("element.style.fontSize") && extensionContent.includes("window.__tikpalProviderTextScale"), "provider pages should apply text scale to detected text elements");
   assert(
@@ -1866,6 +2022,13 @@ sync_runtime_provider_pool_process_statuses ""
   assert(providerGuardSource.includes("safeDismissPromptExpression"), "provider guard should keep safe prompt dismiss handling separate from consent acceptance");
   assert(providerGuardSource.includes("spotify") && providerGuardSource.includes("cookieContextText"), "provider guard should close Spotify cookie policy prompts only from cookie context");
   assert(providerGuardSource.includes("trialContextText") && providerGuardSource.includes("dangerousActionText"), "provider guard should require trial context and block dangerous trial actions");
+  const trialActionPattern = providerGuardSource.match(/const trialActionText = \/(.*?)\/i;/)?.[1] ?? "";
+  const trialActionText = new RegExp(trialActionPattern, "i");
+  assert(
+    ["Try it free", "Try for free", "Start a trial", "免费试用", "開通"].every((label) => trialActionText.test(label))
+      && providerGuardSource.includes("if (trialActionText.test(actionLabel)) continue;"),
+    "provider guard should never click trial or subscription action labels even when their prompt has a Close affordance"
+  );
   assert(providerGuardSource.includes('attr(element, "aria-label")'), "provider guard should read aria-label text from cookie buttons");
   assert(providerGuardSource.includes('attr(element, "title")'), "provider guard should read title text from cookie buttons");
   assert(providerGuardSource.includes("[class*='confirm']"), "provider guard should recognize QQ confirm-style modal containers");
@@ -2001,16 +2164,37 @@ sync_runtime_provider_pool_process_statuses ""
       !webModeScript.match(/park_web_mode_surfaces_for_reopen\(\)[\s\S]*?launch_close_overlay_veil/),
     "Explore close should not configure or launch a close overlay"
   );
-  assert(!webModeScript.includes("close-overlay-veil"), "Explore should not reference any close-overlay veil");
-  assert(serverSource.includes("runWebModeCloseInBackground(closeRequestId, activeProvider)"), "Explore close should retain its background close transaction without room-veil state");
+  assert(
+    webModeScript.includes("close-overlay-veil.pid")
+      && webModeScript.includes('close_overlay_process_matches "$_orphan_pid"')
+      && !webModeScript.includes("launch_close_overlay_veil()"),
+    "Explore may clean a legacy close-overlay PID but must not restore the removed veil launcher"
+  );
+  assert(serverSource.includes("await runWebModeCloseInBackground(closeRequestId, activeProvider)"), "Explore close should return only after its physical close transaction succeeds");
   assert(webModeScript.includes("TIKPAL_WEB_MODE_CLOSE_REQUEST_ID") && serverSource.includes("TIKPAL_WEB_MODE_CLOSE_REQUEST_ID: closeRequestId"), "Explore close should pass a close request id into the shell transaction");
-  assert(webModeScript.includes("runtime_open_request_is_current") && serverSource.includes("TIKPAL_WEB_MODE_OPEN_EXPECTED_ACTIVE_PROVIDER: providerId"), "a delayed resident open should stop when Close has cleared its optimistic owner");
+  assert(webModeScript.includes("runtime_open_request_is_current") && serverSource.includes("TIKPAL_WEB_MODE_OPEN_EXPECTED_ACTIVE_PROVIDER: providerId"), "a delayed resident open should stop when Close owns the runtime state");
   assert(webModeScript.includes("TIKPAL_WEB_MODE_CLOSE_ACTIVE_PROVIDER") && webModeScript.includes('park_web_mode_surfaces_for_reopen "$active_provider"'), "Explore warm close should park the active provider before scanning resident providers");
-  assert(serverSource.includes("webModeClosePromise") && serverSource.includes("webModeCloseRequestIsCurrent") && serverSource.includes("closeRequestId: null"), "Explore background close should suppress duplicate close transactions and not clear a newer provider open");
+  assert(serverSource.includes("webModeClosePromise") && serverSource.includes("webModeCloseRequestIsCurrent") && serverSource.includes("throw new Error(closeError)"), "Explore close should suppress duplicate transactions, preserve a newer owner, and return parking failures");
   assert(!serverSource.includes("activeProvider: null,\n      residentProviders: {},\n      lastError: null,\n      closeRequestId"), "Explore close should preserve resident provider state while clearing the visible active provider");
   assert(webModeScript.includes("TIKPAL_WEB_MODE_CLOSE_WARM_ENABLED:=1") && webModeScript.includes("TIKPAL_WEB_MODE_CLOSE_KEEP_RESIDENT:=1") && webModeScript.includes("TIKPAL_WEB_MODE_CLOSE_WARM_TTL_SECONDS:=45"), "Explore close should default to a resident warm pool for instant reopen");
   assert(webModeScript.includes("TIKPAL_WEB_MODE_CLOSE_REFILL_PROVIDER_POOL_ENABLED:=1") && webModeScript.includes("schedule_provider_pool_refill_after_close"), "Explore warm close should refill the resident provider pool after visual exit");
   assert(webModeScript.includes("close_web_mode_warm()") && webModeScript.includes("park_side_panel_for_reopen") && webModeScript.includes("park_provider_windows_for_reopen"), "Explore warm close should park the side panel and providers offscreen instead of cold-closing them");
+  const surfaceEnumerationBody = webModeScript.match(/web_mode_surface_windows_on_screen\(\) \{[\s\S]*?\n\}/)?.[0] ?? "";
+  const processTreeBody = webModeScript.match(/process_tree_uses_profile\(\) \{[\s\S]*?\n\}/)?.[0] ?? "";
+  const parkAllSurfacesStart = webModeScript.indexOf("park_web_mode_surfaces_for_reopen() {");
+  const parkAllSurfacesBody = webModeScript.slice(parkAllSurfacesStart, webModeScript.indexOf("\n}\n\nweb_mode_surface_kind_for_pid()", parkAllSurfacesStart));
+  assert(
+    surfaceEnumerationBody.includes("visible_chromium_windows")
+      && surfaceEnumerationBody.includes("web_mode_surface_kind_for_pid")
+      && processTreeBody.includes('"$depth" -lt 8'),
+    "Explore close should enumerate every visible Chromium surface and trace window PIDs through multiple ancestor levels"
+  );
+  assert(
+    parkAllSurfacesBody.includes("surfaces+=(\"$surface\")")
+      && parkAllSurfacesBody.indexOf('set_window_opacity "$window" 0') < parkAllSurfacesBody.indexOf('tile_window_fast "$window"')
+      && parkAllSurfacesBody.includes("web_mode_surface_windows_on_screen | grep -q ."),
+    "Explore close should hide the complete snapshot before parallel parking and reject any on-screen residual"
+  );
   const warmCloseStart = webModeScript.indexOf("close_web_mode_warm() {");
   const warmCloseEnd = webModeScript.indexOf("\n}\n\nclose_web_mode()", warmCloseStart);
   const warmCloseBody = webModeScript.slice(warmCloseStart, warmCloseEnd);
@@ -2049,11 +2233,12 @@ sync_runtime_provider_pool_process_statuses ""
     !parkSurfacesBody.includes("launch_close_overlay_veil") &&
       !parkSurfacesBody.includes("wait_for_close_overlay_fade") &&
       !parkSurfacesBody.includes("close_close_overlay_veil") &&
-      parkSurfacesBody.includes('park_provider_windows_for_reopen "$active_provider" &') &&
-      parkSurfacesBody.includes("park_side_panel_for_reopen &") &&
-      webModeScript.includes("wait_for_window_position") &&
-      parkSurfacesBody.includes("provider or side panel did not park"),
-    "Explore warm close should park both columns concurrently without launching a close overlay"
+      parkSurfacesBody.includes("surfaces+=(\"$surface\")") &&
+      parkSurfacesBody.includes('set_window_opacity "$window" 0') &&
+      parkSurfacesBody.includes('tile_window_fast "$window"') &&
+      parkSurfacesBody.includes("park_pids") &&
+      parkSurfacesBody.includes("web_mode_surface_windows_on_screen | grep -q ."),
+    "Explore warm close should hide every provider and panel surface before parking them concurrently and reject residuals"
   );
   assert(
     fullCloseBody.includes("close_provider_windows &") &&
@@ -2177,23 +2362,105 @@ sync_runtime_provider_pool_process_statuses ""
   const revealResidentWindowStart = webModeScript.indexOf("reveal_resident_provider_window() {");
   const revealResidentWindowEnd = webModeScript.indexOf("\n}\n\nreassert_visible_provider_surfaces()", revealResidentWindowStart);
   const revealResidentWindowBody = webModeScript.slice(revealResidentWindowStart, revealResidentWindowEnd);
+  const residentFastPathStart = revealResidentWindowBody.indexOf('if [[ -n "$provider_port" ]] && provider_has_real_provider_page "$provider_port"; then');
+  const residentFastPathEnd = revealResidentWindowBody.indexOf("\n    return 0", residentFastPathStart);
+  const residentFastPathBody = revealResidentWindowBody.slice(residentFastPathStart, residentFastPathEnd);
+  const residentFallbackBody = revealResidentWindowBody.slice(residentFastPathEnd);
+  const parkProfileWindowStart = webModeScript.indexOf("park_profile_windows_for_reopen() {");
+  const parkProfileWindowEnd = webModeScript.indexOf("\n}\n\npark_side_panel_for_reopen()", parkProfileWindowStart);
+  const parkProfileWindowBody = webModeScript.slice(parkProfileWindowStart, parkProfileWindowEnd);
   assert(
-      revealResidentWindowBody.includes('tile_window_fast "$target_window"') &&
-      revealResidentWindowBody.includes('raise_window "$target_window"') &&
-      revealResidentWindowBody.includes('sleep "$TIKPAL_WEB_MODE_RESIDENT_SWITCH_SETTLE_SECONDS"') &&
-      revealResidentWindowBody.includes("wait_for_provider_window_nonblank_x11_frame") &&
-      revealResidentWindowBody.includes('park_profile_windows_for_reopen "$previous_profile"') &&
-      revealResidentWindowBody.indexOf('tile_window_fast "$target_window"') <
-        revealResidentWindowBody.indexOf("wait_for_provider_window_nonblank_x11_frame") &&
-      revealResidentWindowBody.indexOf("wait_for_provider_window_nonblank_x11_frame") <
-        revealResidentWindowBody.indexOf('park_profile_windows_for_reopen "$previous_profile"') &&
-      revealResidentWindowBody.indexOf('park_profile_windows_for_reopen "$previous_profile"') <
-      revealResidentWindowBody.indexOf('raise_window "$target_window"'),
-    "Explore should verify a resident target has its own nonblank X11 frame before revealing"
+    residentFastPathBody.indexOf('tile_window_fast "$target_window"')
+        < residentFastPathBody.indexOf('mark_window_above "$target_window"')
+      && residentFastPathBody.indexOf('mark_window_above "$target_window"')
+        < residentFastPathBody.indexOf('raise_window "$target_window"')
+      && residentFastPathBody.includes('tile_window_fast "$previous_window" "$TIKPAL_WEB_MODE_STAGE_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"')
+      && residentFastPathBody.includes('wait_for_window_position "$previous_window" "$TIKPAL_WEB_MODE_STAGE_POSITION"')
+      && residentFallbackBody.indexOf("wait_for_provider_window_nonblank_x11_frame")
+        < residentFallbackBody.indexOf('park_profile_windows_for_reopen "$previous_profile"')
+      && residentFallbackBody.indexOf('park_profile_windows_for_reopen "$previous_profile"')
+        < residentFallbackBody.lastIndexOf('raise_window "$target_window"')
+      && parkProfileWindowBody.indexOf('set_window_opacity "$window" 0')
+        < parkProfileWindowBody.indexOf('tile_window_fast "$window"'),
+    "Explore resident reveal should tile before raise and park the known previous provider without re-running the Close helper"
   );
   const openProviderPoolStart = webModeScript.indexOf("open_provider_pool() {");
   const openProviderPoolEnd = webModeScript.indexOf("\n}\n\nopen_provider()", openProviderPoolStart);
   const openProviderPoolBody = webModeScript.slice(openProviderPoolStart, openProviderPoolEnd);
+  const openProviderPoolInitBody = openProviderPoolBody.slice(0, openProviderPoolBody.indexOf('log_stage "open_pool_init'));
+  const xdotoolProbeStart = webModeScript.indexOf("xdotool_probe() {");
+  const xdotoolProbeEnd = webModeScript.indexOf("\n}\n\n# Cache hits", xdotoolProbeStart);
+  const xdotoolProbeBody = webModeScript.slice(xdotoolProbeStart, xdotoolProbeEnd);
+  const firstWindowForProfileStart = webModeScript.indexOf("first_window_for_profile() {");
+  const firstWindowForProfileEnd = webModeScript.indexOf("\n}\n\nprofile_window_cache_path()", firstWindowForProfileStart);
+  const firstWindowForProfileBody = webModeScript.slice(firstWindowForProfileStart, firstWindowForProfileEnd);
+  const findWindowForPidStart = webModeScript.indexOf("find_window_for_pid() {");
+  const findWindowForPidEnd = webModeScript.indexOf("\n}\n\nprovider_profile_for_pid()", findWindowForPidStart);
+  const findWindowForPidBody = webModeScript.slice(findWindowForPidStart, findWindowForPidEnd);
+  const writeGuardWindowListStart = webModeScript.indexOf("write_guard_window_list() {");
+  const writeGuardWindowListEnd = webModeScript.indexOf("\n}\n\ntile_guard_windows_fast()", writeGuardWindowListStart);
+  const writeGuardWindowListBody = webModeScript.slice(writeGuardWindowListStart, writeGuardWindowListEnd);
+  const recoverGuardWindowListStart = webModeScript.indexOf("recover_guard_window_list() {");
+  const recoverGuardWindowListEnd = webModeScript.indexOf("\n}\n\nstart_window_guard()", recoverGuardWindowListStart);
+  const recoverGuardWindowListBody = webModeScript.slice(recoverGuardWindowListStart, recoverGuardWindowListEnd);
+  const runWindowGuardStart = webModeScript.indexOf("run_window_guard() {");
+  const runWindowGuardEnd = webModeScript.indexOf("\n}\n\nstart_provider_guard()", runWindowGuardStart);
+  const runWindowGuardBody = webModeScript.slice(runWindowGuardStart, runWindowGuardEnd);
+  assert(
+    xdotoolProbeBody.includes('timeout "$timeout_seconds" xdotool "$@"')
+      && !xdotoolProbeBody.includes("|| true")
+      && firstWindowForProfileBody.includes('validate_profile_window_fast "$cached_window" "$profile"')
+      && firstWindowForProfileBody.includes('find_window_for_pid "$pid"')
+      && findWindowForPidBody.includes("TIKPAL_WEB_MODE_X11_SEARCH_TIMEOUT_SECONDS=2")
+      && findWindowForPidBody.includes('[[ "$best_area" -gt 100000 ]] && break')
+      && !firstWindowForProfileBody.includes("cached_chromium_windows"),
+    "Explore cached windows should preserve X11 failures, validate profile ownership, and stop target-PID discovery after finding a usable app window"
+  );
+  assert(
+    openProviderPoolInitBody.includes('target_window="$(first_window_for_profile "$provider_profile" || true)"')
+      && !openProviderPoolInitBody.includes('profile_process_exists "$provider_profile"')
+      && !openProviderPoolInitBody.includes('profile_process_exists "$current_profile"'),
+    "resident hot-switch initialization should use validated window IDs before any target-profile process scan"
+  );
+  assert(
+    writeGuardWindowListBody.includes('temporary_path="$list_path.$$.$RANDOM.tmp"')
+      && writeGuardWindowListBody.includes('mv -f "$temporary_path" "$list_path"')
+      && writeGuardWindowListBody.includes('kiosk_window="$(kiosk_browser_window || true)"')
+      && writeGuardWindowListBody.includes("printf 'kiosk\\t%s\\t%s\\n'")
+      && runWindowGuardBody.includes("tile_guard_windows_fast")
+      && runWindowGuardBody.includes("recover_guard_window_list")
+      && !runWindowGuardBody.includes("tile_visible_web_mode_windows")
+      && !runWindowGuardBody.includes("visible_chromium_windows")
+      && !runWindowGuardBody.includes("side_panel_window_visible")
+      && recoverGuardWindowListBody.includes("tile_visible_web_mode_windows"),
+    "Explore guard should atomically use known IDs and reserve full-window discovery for explicit invalid-ID recovery"
+  );
+  const keepPanelStart = webModeScript.indexOf("keep_side_panel_visible_during_switch() {");
+  const keepPanelEnd = webModeScript.indexOf("\n}\n\nprepare_entry_surfaces()", keepPanelStart);
+  const keepPanelBody = webModeScript.slice(keepPanelStart, keepPanelEnd);
+  assert(
+    keepPanelBody.includes('restore_window_opacity "$panel_window"')
+      && keepPanelBody.includes('tile_window_fast "$panel_window" "$TIKPAL_WEB_MODE_PANEL_POSITION" "$TIKPAL_WEB_MODE_PANEL_WINDOW"')
+      && keepPanelBody.includes('mark_window_above "$panel_window"')
+      && keepPanelBody.includes('raise_window_without_focus "$panel_window"')
+      && !keepPanelBody.includes("TIKPAL_WEB_MODE_STAGE_POSITION")
+      && !keepPanelBody.includes("close_side_panel"),
+    "provider switches should keep the existing side panel opaque, in its right-column geometry, and never park or restart it"
+  );
+  assert(
+    openProviderPoolBody.indexOf('stop_window_guard') < openProviderPoolBody.indexOf('keep_side_panel_visible_during_switch "$provider"')
+      && openProviderPoolBody.includes('previous_window="$(read_guard_window provider "$current_profile" || true)"')
+      && openProviderPoolBody.includes('read_guard_window panel "$panel_profile"')
+      && [...openProviderPoolBody.matchAll(/keep_side_panel_visible_during_switch "\$provider"/g)].length === 1
+      && openProviderPoolBody.includes('if [[ "$switching_provider" != "1" ]] && ! ensure_side_panel "$provider" 0; then')
+      && !residentFastPathBody.includes("panel_window"),
+    "provider switching should orchestrate the side panel exactly once and must not fall back to side-panel setup"
+  );
+  assert(
+    openProviderPoolBody.includes('( pause_provider_media_via_cdp "$(provider_debug_port "$current_provider")" || true ) &')
+      && !openProviderPoolBody.includes('( pause_provider_media_via_cdp "$(provider_debug_port "$current_provider")" "$cdp_json_list"'),
+    "resident switching should pause the old provider through its own CDP port and target list without blocking the reveal"
+  );
   const residentRevealIndex = openProviderPoolBody.indexOf('reveal_resident_provider_surfaces "$target_window"');
   const residentHotRevealIndex = openProviderPoolBody.indexOf('reveal_resident_provider_window "$target_window"');
   const poolTransitionIndexes = [...openProviderPoolBody.matchAll(/begin_provider_switch_transition "\$current_profile" "\$provider"/g)].map((match) => match.index);
@@ -2201,12 +2468,13 @@ sync_runtime_provider_pool_process_statuses ""
     poolTransitionIndexes.length === 1 &&
       poolTransitionIndexes[0] < residentHotRevealIndex &&
       poolTransitionIndexes[0] < residentRevealIndex &&
-      openProviderPoolBody.includes('[[ "$entry_stage" != "1" && "$switching_provider" == "1" ]]'),
-    "Explore resident and cold provider switches should begin one reusable veil transition exactly once"
+      openProviderPoolBody.includes('if [[ "$switching_provider" == "1" ]]; then') &&
+      openProviderPoolBody.includes("cdp_skip_fade=1"),
+    "Explore provider switches should keep one reusable cold-transition path while fast residents skip its fade"
   );
   assert(
     !openProviderPoolBody.includes('[[ "$switching_provider" == "1" || "$entry_stage" == "1" ]]') &&
-      openProviderPoolBody.includes('[[ "$entry_stage" != "1" && "$switching_provider" == "1" ]]'),
+      openProviderPoolBody.includes('if [[ "$switching_provider" == "1" ]]; then'),
     "Explore initial entry should skip the switch transition because no provider is visible yet"
   );
   assert(
@@ -2296,9 +2564,9 @@ sync_runtime_provider_pool_process_statuses ""
     "background reconcile must not create, park, or close a veil"
   );
   assert(
-    reconcileProviderPoolBody.includes("provider_switch_in_progress") &&
-      reconcileProviderPoolBody.indexOf("provider_switch_in_progress") < reconcileProviderPoolBody.indexOf("reassert_visible_provider_surfaces"),
-    "a stale background reconcile should abandon before it touches provider window geometry during a foreground switch"
+    reconcileProviderPoolBody.includes("provider_switch_in_progress")
+      && !reconcileProviderPoolBody.includes("reassert_visible_provider_surfaces"),
+    "background reconcile should not repeat foreground provider or panel geometry orchestration"
   );
   assert(
     residentHotRevealIndex >= 0 &&
@@ -2356,14 +2624,14 @@ sync_runtime_provider_pool_process_statuses ""
   );
   assert(
     revealResidentProviderWindowBody.includes('wait_for_provider_window_nonblank_x11_frame "$target_window"') &&
-      !revealResidentProviderWindowBody.includes('provider_has_real_provider_page "$provider_port"'),
-    "Explore resident reveal must keep the current provider visible until the target has a nonblank X11 frame; HTTPS CDP alone cannot expose a compositor-black page"
+      revealResidentProviderWindowBody.includes('provider_has_real_provider_page "$provider_port"'),
+    "Explore resident reveal should retain both the real-HTTPS fast path and the nonblank-X11 fallback"
   );
   assert(
     webModeScript.includes("reassert_visible_provider_surfaces()") &&
       openProviderPoolBody.indexOf('start_window_guard "$provider_profile"') >
         openProviderPoolBody.indexOf('commit_visible_provider_state "$provider"'),
-    "Explore should let the background window guard reassert resident surfaces after activeProvider commits"
+    "Explore should start the known-ID window guard only after activeProvider commits"
   );
   const webModeTransitionPage = await readFile(path.join(ROOT, "public/web-mode-transition.html"), "utf8");
   assert(webModeBackgroundPage.includes("/assets/tikpal-scene-logo.png") && !webModeTransitionPage.includes("/assets/tikpal-scene-logo.png"), "Explore transition page should not stack a second Tikpal logo above the background veil");
