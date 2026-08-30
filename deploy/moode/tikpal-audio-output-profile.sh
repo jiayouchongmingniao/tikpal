@@ -2,9 +2,15 @@
 set -euo pipefail
 
 profile="${1:-status}"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 mpd_conf="${TIKPAL_MPD_CONF:-/etc/mpd.conf}"
 standard_device="${TIKPAL_MPD_STANDARD_ALSA_DEVICE:-_audioout}"
-pure_device="${TIKPAL_MPD_PURE_ALSA_DEVICE:-${TIKPAL_MPD_BITPERFECT_ALSA_DEVICE:-}}"
+pure_path="${TIKPAL_MPD_PURE_PATH:-unknown}"
+pure_target_rate="${TIKPAL_MPD_PURE_TARGET_RATE:-48000}"
+resampler_plugin="${TIKPAL_MPD_RESAMPLER_PLUGIN:-soxr}"
+resampler_quality="${TIKPAL_MPD_RESAMPLER_QUALITY:-high}"
+resampler_threads="${TIKPAL_MPD_RESAMPLER_THREADS:-0}"
+mpd_bin="${TIKPAL_MPD_BIN:-mpd}"
 sleep_rate="${TIKPAL_MPD_SLEEP_SAMPLE_RATE:-48000}"
 sleep_volume_limit="${TIKPAL_MPD_SLEEP_VOLUME_LIMIT:-45}"
 mpc_timeout_seconds="${TIKPAL_MPC_TIMEOUT_SECONDS:-1}"
@@ -20,6 +26,8 @@ custom_replaygain="${TIKPAL_MPD_CUSTOM_REPLAYGAIN:-}"
 custom_crossfade="${TIKPAL_MPD_CUSTOM_CROSSFADE:-}"
 marker_start="# Tikpal managed MPD audio output: start"
 marker_end="# Tikpal managed MPD audio output: end"
+src_marker_start="# Tikpal managed MPD resampler: start"
+src_marker_end="# Tikpal managed MPD resampler: end"
 
 env_enabled() {
   case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
@@ -64,46 +72,19 @@ normalize_profile() {
 }
 
 detect_pure_device() {
-  if [[ -n "$pure_device" ]]; then
-    printf '%s\n' "$pure_device"
-    return
+  local audio_adapt_bin="${TIKPAL_AUDIO_ADAPT_BIN:-}"
+  if [[ -z "$audio_adapt_bin" && -x "$script_dir/tikpal-audio-adapt.sh" ]]; then
+    audio_adapt_bin="$script_dir/tikpal-audio-adapt.sh"
+  elif [[ -z "$audio_adapt_bin" && -x "$script_dir/tikpal-audio-adapt" ]]; then
+    audio_adapt_bin="$script_dir/tikpal-audio-adapt"
+  elif [[ -z "$audio_adapt_bin" && -x /usr/local/sbin/tikpal-audio-adapt ]]; then
+    audio_adapt_bin=/usr/local/sbin/tikpal-audio-adapt
   fi
-
-  local forced_card="${TIKPAL_AUDIO_CARD_FORCE:-}"
-  if [[ -n "$forced_card" ]] && command -v aplay >/dev/null 2>&1; then
-    local detected
-    detected="$(aplay -l 2>/dev/null | awk -v forced="$forced_card" '
-      $0 ~ /^card / {
-        card=$2; sub(/:$/, "", card);
-        name=$3; gsub(/\[|\]/, "", name);
-        device=$6; sub(/:$/, "", device);
-        if (name == forced || $0 ~ forced) {
-          print "hw:CARD=" name ",DEV=" device;
-          exit
-        }
-      }')"
-    if [[ -n "$detected" ]]; then
-      printf '%s\n' "$detected"
-      return
-    fi
-  fi
-
-  if command -v aplay >/dev/null 2>&1; then
-    local detected
-    detected="$(aplay -l 2>/dev/null | awk '
-      $0 ~ /^card / && $0 !~ /Loopback|HDMI|NVidia|Intel/ {
-        name=$3; gsub(/\[|\]/, "", name);
-        device=$6; sub(/:$/, "", device);
-        print "hw:CARD=" name ",DEV=" device;
-        exit
-      }')"
-    if [[ -n "$detected" ]]; then
-      printf '%s\n' "$detected"
-      return
-    fi
-  fi
-
-  printf 'hw:0,0\n'
+  [[ -n "$audio_adapt_bin" && -x "$audio_adapt_bin" ]] || {
+    printf 'Tikpal audio resolver was not found; set TIKPAL_AUDIO_ADAPT_BIN\n' >&2
+    return 1
+  }
+  "$audio_adapt_bin" resolve-hw
 }
 
 build_block() {
@@ -117,10 +98,21 @@ build_block() {
 
   case "$selected_profile" in
     pure)
+      case "$pure_path" in
+        native|resampled|unknown) ;;
+        *) printf 'invalid TIKPAL_MPD_PURE_PATH=%s\n' "$pure_path" >&2; return 1 ;;
+      esac
       device="$(detect_pure_device)"
       output_name="Tikpal Pure Listening"
       mixer_type="none"
       replay_gain_handler="none"
+      if [[ "$pure_path" == "resampled" ]]; then
+        [[ "$pure_target_rate" =~ ^[1-9][0-9]*$ ]] || {
+          printf 'invalid TIKPAL_MPD_PURE_TARGET_RATE=%s\n' "$pure_target_rate" >&2
+          return 1
+        }
+        format_line="        format          \"${pure_target_rate}:16:2\""
+      fi
       ;;
     sleep)
       output_name="Tikpal Sleep Meditation"
@@ -180,6 +172,125 @@ $(printf '%b' "$option_lines")
 }
 $marker_end
 EOF
+}
+
+validate_src_settings() {
+  [[ "$resampler_plugin" =~ ^[A-Za-z0-9_-]+$ ]] || {
+    printf 'invalid TIKPAL_MPD_RESAMPLER_PLUGIN=%s\n' "$resampler_plugin" >&2
+    return 1
+  }
+  [[ "$resampler_quality" =~ ^[A-Za-z0-9_-]+([[:space:]][A-Za-z0-9_-]+)*$ ]] || {
+    printf 'invalid TIKPAL_MPD_RESAMPLER_QUALITY=%s\n' "$resampler_quality" >&2
+    return 1
+  }
+  [[ "$resampler_threads" =~ ^[0-9]+$ ]] || {
+    printf 'invalid TIKPAL_MPD_RESAMPLER_THREADS=%s\n' "$resampler_threads" >&2
+    return 1
+  }
+}
+
+build_resampler_block() {
+  validate_src_settings
+  cat <<EOF
+$src_marker_start
+resampler {
+        plugin          "$resampler_plugin"
+EOF
+  if [[ "$resampler_plugin" == "soxr" ]]; then
+    printf '        quality         "%s"\n' "$resampler_quality"
+    printf '        threads         "%s"\n' "$resampler_threads"
+  fi
+  printf '%s\n%s\n' '}' "$src_marker_end"
+}
+
+print_resampler_block() {
+  [[ -f "$mpd_conf" ]] || return 0
+  awk -v start="$src_marker_start" -v end="$src_marker_end" '
+    $0 == start { show=1 }
+    show == 1 { print }
+    $0 == end { show=0 }
+  ' "$mpd_conf" 2>/dev/null || true
+}
+
+src_check() {
+  [[ -f "$mpd_conf" ]] || { printf '%s not found\n' "$mpd_conf" >&2; return 66; }
+  validate_src_settings
+  local expected actual version
+  expected="$(mktemp)"
+  actual="$(mktemp)"
+  build_resampler_block >"$expected"
+  print_resampler_block >"$actual"
+  if ! cmp -s "$expected" "$actual"; then
+    printf 'managed MPD resampler block does not match requested settings\n' >&2
+    rm -f "$expected" "$actual"
+    return 1
+  fi
+  rm -f "$expected" "$actual"
+
+  command -v "$mpd_bin" >/dev/null 2>&1 || {
+    printf '%s was not found\n' "$mpd_bin" >&2
+    return 127
+  }
+  version="$("$mpd_bin" --version 2>&1 || true)"
+  if ! grep -Eq "(^|[[:space:]])${resampler_plugin}([[:space:]]|$)" <<<"$version"; then
+    printf 'MPD does not list resampler plugin %s\n' "$resampler_plugin" >&2
+    return 1
+  fi
+  printf 'srcPlugin=%s\n' "$resampler_plugin"
+  if [[ "$resampler_plugin" == "soxr" ]]; then
+    printf 'srcQuality=%s\n' "$resampler_quality"
+    printf 'srcThreads=%s\n' "$resampler_threads"
+  fi
+  printf 'srcManaged=1\n'
+}
+
+write_src() {
+  [[ -f "$mpd_conf" ]] || { printf '%s not found\n' "$mpd_conf" >&2; exit 66; }
+  validate_src_settings
+
+  local tmp_file backup_file
+  tmp_file="$(mktemp)"
+  if grep -Fq "$src_marker_start" "$mpd_conf"; then
+    awk -v start="$src_marker_start" -v end="$src_marker_end" '
+      $0 == start { skip=1; next }
+      $0 == end { skip=0; next }
+      skip != 1 { print }
+    ' "$mpd_conf" >"$tmp_file"
+  else
+    cp "$mpd_conf" "$tmp_file"
+  fi
+  {
+    sed -e '${/^$/d;}' "$tmp_file"
+    printf '\n'
+    build_resampler_block
+  } >"${tmp_file}.next"
+
+  if cmp -s "${tmp_file}.next" "$mpd_conf"; then
+    rm -f "$tmp_file" "${tmp_file}.next"
+    src_check
+    return
+  fi
+
+  backup_file="${mpd_conf}.tikpal-src-$(date +%Y%m%d%H%M%S).bak"
+  cp -p "$mpd_conf" "$backup_file"
+
+  if [[ "$(id -u)" == "0" ]]; then
+    install -m 0644 "${tmp_file}.next" "$mpd_conf"
+  else
+    sudo -n install -m 0644 "${tmp_file}.next" "$mpd_conf"
+  fi
+  rm -f "$tmp_file" "${tmp_file}.next"
+  if ! src_check; then
+    if [[ "$(id -u)" == "0" ]]; then
+      cp -p "$backup_file" "$mpd_conf"
+    else
+      sudo -n cp -p "$backup_file" "$mpd_conf"
+    fi
+    printf 'restored %s after SRC validation failure\n' "$backup_file" >&2
+    return 1
+  fi
+  restart_mpd_quickly
+  wait_for_mpd
 }
 
 profile_output_name() {
@@ -341,7 +452,7 @@ write_profile() {
 
   {
     sed -e '${/^$/d;}' "$tmp_file"
-    printf '\n\n'
+    printf '\n'
     build_block "$selected_profile"
   } > "${tmp_file}.next"
 
@@ -370,9 +481,17 @@ print_managed_block() {
 
 diagnostics() {
   printf 'profile=%s\n' "$(current_profile)"
+  printf 'purePath=%s\n' "$pure_path"
+  if [[ "$pure_path" == "resampled" ]]; then
+    printf 'pureTargetRateHz=%s\n' "$pure_target_rate"
+  fi
+  printf 'resamplerPlugin=%s\n' "$resampler_plugin"
   printf 'mpd_conf=%s\n' "$mpd_conf"
   printf 'output_block<<EOF\n'
   print_managed_block
+  printf 'EOF\n'
+  printf 'resampler_block<<EOF\n'
+  print_resampler_block
   printf 'EOF\n'
   if command -v mpc >/dev/null 2>&1; then
     printf 'mpc_replaygain=%s\n' "$(mpc replaygain 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//' || true)"
@@ -398,9 +517,15 @@ case "$profile" in
   diagnostics)
     diagnostics
     ;;
+  src-check)
+    src_check
+    ;;
+  src-apply)
+    write_src
+    ;;
   *)
     selected_profile="$(normalize_profile "$profile")" || {
-      printf 'usage: %s {pure|everyday|sleep|custom|status|diagnostics}\n' "$0" >&2
+      printf 'usage: %s {pure|everyday|sleep|custom|status|diagnostics|src-apply|src-check}\n' "$0" >&2
       exit 64
     }
     write_profile "$selected_profile"

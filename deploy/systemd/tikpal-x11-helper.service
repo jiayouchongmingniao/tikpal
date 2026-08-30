@@ -1,0 +1,26 @@
+[Unit]
+Description=Tikpal native X11 transaction helper
+After=tikpal-kiosk.service
+Wants=tikpal-kiosk.service
+PartOf=tikpal-kiosk.service
+
+[Service]
+Type=simple
+User=@SERVICE_USER@
+Group=@SERVICE_USER@
+WorkingDirectory=@APP_DIR@
+EnvironmentFile=-@APP_DIR@/.env.kiosk
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=/home/@SERVICE_USER@/.Xauthority
+RuntimeDirectory=tikpal
+RuntimeDirectoryMode=0750
+UMask=0077
+ExecStart=/usr/local/libexec/tikpal-x11-helper daemon --socket /run/tikpal/x11-helper.sock --display :0 --generation-file /home/@SERVICE_USER@/.config/tikpal-web-mode/x11-helper-generation --transaction-timeout-ms 250
+Restart=on-failure
+RestartSec=1
+TimeoutStopSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -100,7 +100,7 @@ export async function fetchTikpalState(signal?: AbortSignal): Promise<TikpalStat
 }
 
 export async function fetchPreferences(signal?: AbortSignal): Promise<UiPreferences> {
-  const response = await fetchWithTimeout(`${API_ROOT}/preferences`, {
+  const response = await fetchWithTimeout(`${API_ROOT}/ui/preferences`, {
     headers: { Accept: "application/json" },
     signal
   }, DEFAULT_GET_TIMEOUT_MS);
@@ -108,7 +108,7 @@ export async function fetchPreferences(signal?: AbortSignal): Promise<UiPreferen
 }
 
 export async function updatePreferences(patch: UiPreferencesPatch): Promise<UiPreferences> {
-  const response = await fetchWithTimeout(`${API_ROOT}/preferences`, {
+  const response = await fetchWithTimeout(`${API_ROOT}/ui/preferences`, {
     method: "PATCH",
     headers: {
       Accept: "application/json",

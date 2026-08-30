@@ -27,6 +27,7 @@ const requiredFiles = [
   "deploy/chromium/tikpal-kiosk-viewerctl.sh",
   "deploy/chromium/tikpal-explore-physical-acceptance.sh",
   "deploy/chromium/tikpal-explore-switch-acceptance.sh",
+  "deploy/chromium/tikpal-x11-helper.c",
   "deploy/chromium/tikpal-web-mode.sh",
   "deploy/chromium/tikpal-web-mode-guard.mjs",
   "deploy/chromium/tikpal-web-mode-qq-confirm.mjs",
@@ -39,6 +40,7 @@ const requiredFiles = [
   "deploy/chromium/env.kiosk.example",
   "deploy/turzx/install-turzx-evdi-display.sh",
   "deploy/turzx/README.md",
+  "deploy/udev/70-tikpal-usb-audio-display-power.rules",
   "src/i18n.tsx",
   "deploy/moode/tikpal-audio-adapt.sh",
   "deploy/moode/tikpal-audio-output-profile.sh",
@@ -77,6 +79,8 @@ const requiredFiles = [
   "deploy/systemd/tikpal-kiosk-viewer.service",
   "deploy/systemd/tikpal-kiosk-watchdog.service",
   "deploy/systemd/tikpal-kiosk-watchdog.timer",
+  "deploy/systemd/tikpal-kiosk-x11-helper.conf",
+  "deploy/systemd/tikpal-x11-helper.service",
   "deploy/systemd/install-systemd-services.sh",
   "public/web-mode-transition.html"
 ];
@@ -254,12 +258,45 @@ async function run() {
     !/^TIKPAL_(SPOTIFY|BLUETOOTH|AIRPLAY|UPNP)_(ACTIVATE|ENABLE|DISABLE)_COMMAND=.*\bmoodeutl\b/m.test(envExampleSource),
     "default source commands should not invoke moodeutl directly"
   );
+  for (const audioSrcSetting of [
+    "TIKPAL_AUDIO_PREFER_SINGLE_USB=1",
+    "TIKPAL_ALSA_RATE_CONVERTER=",
+    "TIKPAL_MPD_RESAMPLER_PLUGIN=soxr",
+    "TIKPAL_MPD_RESAMPLER_QUALITY=high",
+    "TIKPAL_MPD_RESAMPLER_THREADS=0",
+    "TIKPAL_MPD_PURE_PATH=unknown",
+    "TIKPAL_MPD_PURE_TARGET_RATE=48000"
+  ]) {
+    assert(envExampleSource.includes(audioSrcSetting), `.env.example should include ${audioSrcSetting}`);
+  }
+  const gentooDeployDocSource = await readFile(path.join(ROOT, "docs/06-deployment/gentoo-kiosk-deploy-v1.md"), "utf8");
+  assert(gentooDeployDocSource.includes("Gentoo 207 Hardware-free Audio and TURZX Staging") && gentooDeployDocSource.includes("src-apply") && gentooDeployDocSource.includes("=x11-drivers/evdi-1.14.16"), "Gentoo deployment docs should preserve the 207 hardware-free staging gate");
+  assert(gentooDeployDocSource.includes("three cold boots") && gentooDeployDocSource.includes("S16_LE") && gentooDeployDocSource.includes("44.1/48/88.2/96 kHz"), "Gentoo deployment docs should preserve display/audio/final-DAC hardware acceptance gates");
   const gentooDeploySource = await readFile(path.join(ROOT, "deploy/deploy-gentoo.sh"), "utf8");
   assert(
     gentooDeploySource.includes("for env_file in .env .env.kiosk")
       && gentooDeploySource.includes("TIKPAL_(SPOTIFY|BLUETOOTH|AIRPLAY|UPNP)_(ACTIVATE|ENABLE|DISABLE)_COMMAND")
       && gentooDeploySource.includes("Gentoo deployment blocked"),
     "Gentoo deployment should block bare moodeutl source commands in both environment files"
+  );
+  assert(
+    gentooDeploySource.includes("--local-preflight")
+      && gentooDeploySource.includes("remoteActions=0")
+      && gentooDeploySource.includes("broadDeployReady=0")
+      && gentooDeploySource.includes("audioStagingManifest<<EOF")
+      && gentooDeploySource.includes("--allow-dirty")
+      && gentooDeploySource.indexOf("check_worktree_policy") < gentooDeploySource.indexOf("SSH_OPTS=("),
+    "Gentoo deployment should offer a repository-only preflight and block dirty broad deploys before network setup"
+  );
+  assert(
+    gentooDeployDocSource.includes("Local Deployment Preflight")
+      && gentooDeployDocSource.includes("never calls SSH or rsync")
+      && gentooDeployDocSource.includes("Do not use the broad deploy command for the 207 hardware-free gate"),
+    "Gentoo deployment docs should separate local preflight from the scoped 207 staging path"
+  );
+  assert(
+    gentooDeploySource.indexOf("--include='/.env.example'") < gentooDeploySource.indexOf("--exclude='.env.*'"),
+    "Gentoo rsync should ship the tracked environment contract before excluding device-owned environment variants"
   );
 
   const onboardingGuideSource = await readFile(path.join(ROOT, "src/components/OnboardingGuide.tsx"), "utf8");
@@ -304,6 +341,10 @@ async function run() {
   }
 
   const audioProfileHelperSource = await readFile(path.join(ROOT, "deploy/moode/tikpal-audio-output-profile.sh"), "utf8");
+  const usbPowerRulesSource = await readFile(path.join(ROOT, "deploy/udev/70-tikpal-usb-audio-display-power.rules"), "utf8");
+  assert(usbPowerRulesSource.includes('ATTR{idVendor}=="1a86"') && usbPowerRulesSource.includes('ATTR{idProduct}=="ad11"'), "USB power rules should target only the TURZX display id");
+  assert(usbPowerRulesSource.includes('ATTR{idVendor}=="8087"') && usbPowerRulesSource.includes('ATTR{idProduct}=="1024"'), "USB power rules should target only the BT66 id");
+  assert(usbPowerRulesSource.includes('ATTR{power/control}="on"') && usbPowerRulesSource.includes('ATTR{power/autosuspend_delay_ms}="-1"') && !usbPowerRulesSource.includes("usbcore.autosuspend="), "USB power rules should disable autosuspend per device without changing the global kernel policy");
   assert(audioProfileHelperSource.includes("Tikpal Pure Listening"), "Audio Output helper should include Pure Listening");
   assert(audioProfileHelperSource.includes("Tikpal Everyday"), "Audio Output helper should include Everyday");
   assert(audioProfileHelperSource.includes("Tikpal Sleep Meditation"), "Audio Output helper should include Sleep / Meditation");
@@ -316,11 +357,18 @@ async function run() {
   assert(audioProfileHelperSource.includes("TIKPAL_MPD_CUSTOM_PLAYBACK_STABILITY") && audioProfileHelperSource.includes("buffer_time"), "Custom Audio Output helper should support Playback Stability");
   assert(audioProfileHelperSource.includes("${sleep_rate}:*:*"), "Sleep profile should use MPD format sample-rate wildcard semantics");
   assert(audioProfileHelperSource.includes("mixer_type=\"none\"") || audioProfileHelperSource.includes("mixer_type=\"none\""), "Pure profile should disable MPD mixer");
+  assert(audioProfileHelperSource.includes('"$audio_adapt_bin" resolve-hw') && !audioProfileHelperSource.includes("hw:0,0"), "Pure should use the shared hardware resolver and never fall back to hw:0,0");
+  assert(audioProfileHelperSource.includes("Tikpal managed MPD resampler") && audioProfileHelperSource.includes("src-apply") && audioProfileHelperSource.includes("src-check"), "Audio Output helper should manage and verify an independent MPD resampler block");
   const bitperfectWrapperSource = await readFile(path.join(ROOT, "deploy/moode/tikpal-mpd-bitperfect-profile.sh"), "utf8");
   assert(bitperfectWrapperSource.includes("exec \"$profile_helper\" pure"), "Legacy strict mode should map to Pure profile");
   assert(bitperfectWrapperSource.includes("exec \"$profile_helper\" everyday"), "Legacy standard mode should map to Everyday profile");
   const quickSettingsAudioSource = await readFile(path.join(ROOT, "src/components/QuickSettingsOverlay.tsx"), "utf8");
   assert(quickSettingsAudioSource.includes("data-audio-output-profile={choice.id}"), "Settings Audio Output should expose profile test hooks");
+  assert(quickSettingsAudioSource.includes("audioOutputCapabilities") && quickSettingsAudioSource.includes("pureTraitsResampled") && quickSettingsAudioSource.includes("pureTraitsNative") && quickSettingsAudioSource.includes("pureTraitsUnknown"), "Pure profile copy should follow the read-only output capability");
+  for (const capabilityCopyKey of ["settings.audioProfile.pureTraitsResampled", "settings.audioProfile.pureTraitsNative", "settings.audioProfile.pureTraitsUnknown"]) {
+    const localeCount = onboardingI18nSource.match(new RegExp(`"${capabilityCopyKey.replaceAll(".", "\\.")}"`, "g"))?.length ?? 0;
+    assert(localeCount === 7, `${capabilityCopyKey} should be translated for all seven locales`);
+  }
   assert(quickSettingsAudioSource.includes('id: "custom"'), "Settings Audio Output should show a Custom profile card");
   assert(quickSettingsAudioSource.includes("data-custom-audio-settings"), "Settings Audio Output should expose Custom switches when Custom is selected");
   assert(quickSettingsAudioSource.includes("data-custom-audio-warning"), "Custom Audio Output should show a visible caution line");
@@ -457,6 +505,21 @@ case "$card:$control" in
   *) exit 1 ;;
 esac
 `, { mode: 0o755 });
+  writeFileSync(path.join(audioAdaptBinDir, "id"), `#!/bin/sh
+if [ "$1" = "-u" ]; then echo 0; exit 0; fi
+exec /usr/bin/id "$@"
+`, { mode: 0o755 });
+  writeFileSync(path.join(audioAdaptBinDir, "install"), `#!/bin/sh
+set -- "$@"
+filtered=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o|-g) shift 2 ;;
+    *) filtered="$filtered $(printf '%s' "$1" | sed "s/'/'\\\\''/g" | sed "s/^/'/;s/$/'/")"; shift ;;
+  esac
+done
+eval "exec /usr/bin/install $filtered"
+`, { mode: 0o755 });
   const audioAdaptHelper = path.join(ROOT, "deploy/moode/tikpal-audio-adapt.sh");
   const runAudioAdapt = (cards, args, extraEnv = {}) => spawnSync("bash", [audioAdaptHelper, ...args], {
     cwd: ROOT,
@@ -474,18 +537,139 @@ esac
   const hdmiCard = "card 0: vc4hdmi0 [vc4-hdmi-0], device 0: MAI PCM i2s-hifi-0 [MAI PCM i2s-hifi-0]";
   const mysteryCard = "card 4: Mystery [Mystery USB DAC], device 0: USB Audio [USB Audio]";
   const otherCard = "card 5: Other [Other USB DAC], device 0: USB Audio [USB Audio]";
+  const pchCard = "card 3: PCH [HDA Intel PCH], device 0: ALC897 Analog [ALC897 Analog]";
+  const analogCard = "card 7: Analog [Built-in Analog], device 0: Line Out [Line Out]";
+  const sharedNameCardA = "card 8: SharedA [Studio DAC (USB)], device 0: USB Audio [USB Audio]";
+  const sharedNameCardB = "card 9: SharedB [Studio DAC (USB)], device 0: USB Audio [USB Audio]";
+  const loopbackCard = "card 6: Loopback [Loopback], device 0: Loopback PCM [Loopback PCM]";
   const bt66Resolve = runAudioAdapt(`${hdmiCard}\n${crimsonCard}\n${bt66Card}`, ["resolve-browser"]);
   assert(bt66Resolve.status === 0 && bt66Resolve.stdout.trim() === "dmix:CARD=BT66,DEV=0", `audio adapter should prefer BT66 and use dmix:\n${bt66Resolve.stdout}\n${bt66Resolve.stderr}`);
   const crimsonResolve = runAudioAdapt(`${hdmiCard}\n${crimsonCard}`, ["resolve-browser"]);
   assert(crimsonResolve.status === 0 && crimsonResolve.stdout.trim() === "tikpal_browser_output", `audio adapter should use a shared conversion PCM for S24-only Crimson browser audio:\n${crimsonResolve.stdout}\n${crimsonResolve.stderr}`);
   const crimsonAudioout = runAudioAdapt(`${hdmiCard}\n${crimsonCard}`, ["resolve-audioout"]);
   assert(crimsonAudioout.status === 0 && crimsonAudioout.stdout.trim() === "plughw:CARD=Crimson,DEV=0", "audio adapter should use plughw for moOde audioout");
+  const crimsonHw = runAudioAdapt(`${hdmiCard}\n${crimsonCard}`, ["resolve-hw"]);
+  assert(crimsonHw.status === 0 && crimsonHw.stdout.trim() === "hw:CARD=Crimson,DEV=0", "MPD Pure should share the audio adapter's hardware resolver");
   const mysteryCheck = runAudioAdapt(`${hdmiCard}\n${mysteryCard}`, ["check"]);
   assert(mysteryCheck.status === 0 && mysteryCheck.stdout.includes("selectedCard=Mystery") && mysteryCheck.stdout.includes("volumeStrategy=alsa:Master"), `audio adapter should accept one unknown USB card and probe its mixer:\n${mysteryCheck.stdout}\n${mysteryCheck.stderr}`);
+  const usbOverPch = runAudioAdapt(`${hdmiCard}\n${pchCard}\n${mysteryCard}`, ["resolve-hw"], { TIKPAL_AUDIO_CARD_PRIORITY: "" });
+  assert(usbOverPch.status === 0 && usbOverPch.stdout.trim() === "hw:CARD=Mystery,DEV=0", "audio adapter should prefer one USB playback endpoint over an onboard PCH endpoint");
+  const pchOnly = runAudioAdapt(`${hdmiCard}\n${pchCard}`, ["resolve-hw"], { TIKPAL_AUDIO_CARD_PRIORITY: "" });
+  assert(pchOnly.status === 0 && pchOnly.stdout.trim() === "hw:CARD=PCH,DEV=0", "audio adapter should accept one non-HDMI playback endpoint when no USB endpoint exists");
+  const forcedPch = runAudioAdapt(`${hdmiCard}\n${pchCard}\n${mysteryCard}`, ["resolve-hw"], { TIKPAL_AUDIO_CARD_FORCE: "PCH", TIKPAL_AUDIO_CARD_PRIORITY: "" });
+  assert(forcedPch.status === 0 && forcedPch.stdout.trim() === "hw:CARD=PCH,DEV=0", "an explicit forced card should override USB preference");
+  const invalidForce = runAudioAdapt(`${hdmiCard}\n${mysteryCard}`, ["resolve-hw"], { TIKPAL_AUDIO_CARD_FORCE: "missing", TIKPAL_AUDIO_CARD_PRIORITY: "" });
+  assert(invalidForce.status !== 0 && invalidForce.stdout.trim() === "" && invalidForce.stderr.includes("was not detected"), "an invalid forced card should fail without emitting a fallback PCM");
+  const ambiguousPriority = runAudioAdapt(`${hdmiCard}\n${sharedNameCardA}\n${sharedNameCardB}`, ["resolve-hw"], { TIKPAL_AUDIO_CARD_PRIORITY: "Studio DAC (USB)" });
+  assert(ambiguousPriority.status !== 0 && ambiguousPriority.stdout.trim() === "" && ambiguousPriority.stderr.includes("matched multiple playback endpoints"), "a priority name shared by multiple cards should fail instead of selecting the first match");
+  const forcedSharedName = runAudioAdapt(`${hdmiCard}\n${sharedNameCardA}\n${sharedNameCardB}`, ["resolve-hw"], { TIKPAL_AUDIO_CARD_FORCE: "9", TIKPAL_AUDIO_CARD_PRIORITY: "Studio DAC (USB)" });
+  assert(forcedSharedName.status === 0 && forcedSharedName.stdout.trim() === "hw:CARD=SharedB,DEV=0" && forcedSharedName.stderr.trim() === "", "a unique card index should resolve cards whose labels contain spaces and parentheses or share a name");
   const multipleUnknown = runAudioAdapt(`${hdmiCard}\n${mysteryCard}\n${otherCard}`, ["check"]);
   assert(multipleUnknown.status !== 0 && multipleUnknown.stderr.includes("TIKPAL_AUDIO_CARD_FORCE"), "audio adapter should reject multiple unknown USB cards without a forced card");
-  const noUsb = runAudioAdapt(hdmiCard, ["check"]);
-  assert(noUsb.status !== 0 && !noUsb.stdout.includes("vc4hdmi"), "audio adapter should not select HDMI as a fallback output");
+  const multipleNonUsb = runAudioAdapt(`${hdmiCard}\n${pchCard}\n${analogCard}`, ["resolve-hw"], { TIKPAL_AUDIO_CARD_PRIORITY: "" });
+  assert(multipleNonUsb.status !== 0 && multipleNonUsb.stdout.trim() === "" && multipleNonUsb.stderr.includes("ambiguous non-HDMI"), "audio adapter should reject multiple non-HDMI cards when none is a unique USB endpoint");
+  const noUsb = runAudioAdapt(hdmiCard, ["resolve-hw"], { TIKPAL_AUDIO_CARD_PRIORITY: "" });
+  assert(noUsb.status !== 0 && noUsb.stdout.trim() === "" && noUsb.stderr.includes("no non-HDMI"), "audio adapter should reject an empty candidate set without selecting HDMI or emitting a fallback PCM");
+
+  const audioAdaptApplyDir = path.join(audioAdaptTempDir, "apply");
+  mkdirSync(audioAdaptApplyDir);
+  const audioAdaptApply = runAudioAdapt(`${hdmiCard}\n${bt66Card}\n${loopbackCard}`, ["apply"], {
+    TIKPAL_ALSA_RATE_CONVERTER: "samplerate_best",
+    TIKPAL_AUDIOOUT_CONFIG: path.join(audioAdaptApplyDir, "_audioout.conf"),
+    TIKPAL_BROWSER_OUTPUT_CONFIG: path.join(audioAdaptApplyDir, "browser.conf"),
+    TIKPAL_SNDALOOP_CONFIG: path.join(audioAdaptApplyDir, "loopback.conf"),
+    TIKPAL_SND_ALOOP_MODULES_LOAD: path.join(audioAdaptApplyDir, "snd-aloop.conf"),
+    TIKPAL_ALSA_BASE_CONFIG: path.join(audioAdaptApplyDir, "asound.conf"),
+    TIKPAL_ALSA_LEGACY_LOOPBACK_CONFIG: path.join(audioAdaptApplyDir, "legacy.conf"),
+    TIKPAL_MOODE_DB: path.join(audioAdaptApplyDir, "missing.db")
+  });
+  assert(audioAdaptApply.status === 0, `audio adapter should generate configured ALSA SRC nodes:\n${audioAdaptApply.stdout}\n${audioAdaptApply.stderr}`);
+  const generatedBrowserPcm = await readFile(path.join(audioAdaptApplyDir, "browser.conf"), "utf8");
+  const generatedLoopbackPcm = await readFile(path.join(audioAdaptApplyDir, "loopback.conf"), "utf8");
+  assert(generatedBrowserPcm.includes('rate_converter "samplerate_best"'), "shared browser plug should use the configured ALSA rate converter");
+  assert(generatedLoopbackPcm.includes('rate_converter "samplerate_best"'), "managed _audioout plug should use the configured ALSA rate converter");
+
+  writeFileSync(path.join(audioAdaptBinDir, "systemctl"), `#!/bin/sh
+case "$1" in
+  cat) exit 0 ;;
+  is-active) echo inactive; exit 0 ;;
+  *) exit 0 ;;
+esac
+`, { mode: 0o755 });
+  writeFileSync(path.join(audioAdaptBinDir, "mpc"), `#!/bin/sh
+case "$1" in
+  status) echo "volume: 30%   repeat: off   random: off   single: off   consume: off" ;;
+  outputs) : ;;
+esac
+exit 0
+`, { mode: 0o755 });
+  writeFileSync(path.join(audioAdaptBinDir, "mpd"), `#!/bin/sh
+echo "Music Player Daemon"
+echo "Resampler plugins: internal libsamplerate soxr"
+`, { mode: 0o755 });
+  const mpdProfileConfig = path.join(audioAdaptTempDir, "mpd.conf");
+  writeFileSync(mpdProfileConfig, `music_directory "/var/lib/mpd/music"
+
+# Tikpal managed MPD resampler: start
+resampler {
+        plugin          "internal"
+}
+# Tikpal managed MPD resampler: end
+
+# Tikpal managed MPD audio output: start
+audio_output {
+        type            "alsa"
+        name            "Tikpal Everyday"
+        device          "_audioout"
+        mixer_type      "software"
+        replay_gain_handler "software"
+}
+# Tikpal managed MPD audio output: end
+`);
+  const audioProfileHelper = path.join(ROOT, "deploy/moode/tikpal-audio-output-profile.sh");
+  const mpdProfileEnv = {
+    ...process.env,
+    PATH: `${audioAdaptBinDir}:${process.env.PATH}`,
+    TIKPAL_MPD_CONF: mpdProfileConfig,
+    TIKPAL_MPD_BIN: "mpd",
+    TIKPAL_MPD_RESAMPLER_PLUGIN: "soxr",
+    TIKPAL_MPD_RESAMPLER_QUALITY: "high",
+    TIKPAL_MPD_RESAMPLER_THREADS: "0",
+    TIKPAL_AUDIO_CARD_PRIORITY: "BT66,Crimson",
+    TIKPAL_FAKE_APLAY_CARDS: `${hdmiCard}\n${bt66Card}`
+  };
+  const srcApply = spawnSync("bash", [audioProfileHelper, "src-apply"], { cwd: ROOT, env: mpdProfileEnv, encoding: "utf8" });
+  assert(srcApply.status === 0 && srcApply.stdout.includes("srcManaged=1"), `MPD SRC apply should validate the managed SoXR block:\n${srcApply.stdout}\n${srcApply.stderr}`);
+  const firstSrcConfig = await readFile(mpdProfileConfig, "utf8");
+  const srcApplyAgain = spawnSync("bash", [audioProfileHelper, "src-apply"], { cwd: ROOT, env: mpdProfileEnv, encoding: "utf8" });
+  const secondSrcConfig = await readFile(mpdProfileConfig, "utf8");
+  assert(srcApplyAgain.status === 0 && secondSrcConfig === firstSrcConfig, `MPD SRC apply should be byte-stable on a second run:\n${srcApplyAgain.stdout}\n${srcApplyAgain.stderr}`);
+  const srcCheck = spawnSync("bash", [audioProfileHelper, "src-check"], { cwd: ROOT, env: mpdProfileEnv, encoding: "utf8" });
+  assert(srcCheck.status === 0 && srcCheck.stdout.includes("srcManaged=1"), `MPD SRC check should accept the idempotent managed block:\n${srcCheck.stdout}\n${srcCheck.stderr}`);
+  const resampledPure = spawnSync("bash", [audioProfileHelper, "pure"], {
+    cwd: ROOT,
+    env: { ...mpdProfileEnv, TIKPAL_MPD_PURE_PATH: "resampled", TIKPAL_MPD_PURE_TARGET_RATE: "48000" },
+    encoding: "utf8"
+  });
+  assert(resampledPure.status === 0, `resampled Pure profile should apply:\n${resampledPure.stdout}\n${resampledPure.stderr}`);
+  const resampledPureConfig = await readFile(mpdProfileConfig, "utf8");
+  assert(resampledPureConfig.includes('device          "hw:CARD=BT66,DEV=0"') && resampledPureConfig.includes('format          "48000:16:2"'), "BT66 Pure should use the shared resolver and fixed S16/48 kHz output");
+  assert((resampledPureConfig.match(/# Tikpal managed MPD resampler: start/g) ?? []).length === 1 && resampledPureConfig.includes('plugin          "soxr"'), "profile switching should preserve exactly one managed resampler block");
+  assert((resampledPureConfig.match(/# Tikpal managed MPD audio output: start/g) ?? []).length === 1, "profile switching should preserve exactly one managed audio output block");
+
+  const nativePure = spawnSync("bash", [audioProfileHelper, "pure"], {
+    cwd: ROOT,
+    env: {
+      ...mpdProfileEnv,
+      TIKPAL_MPD_PURE_PATH: "native",
+      TIKPAL_AUDIO_CARD_PRIORITY: "",
+      TIKPAL_FAKE_APLAY_CARDS: `${hdmiCard}\n${mysteryCard}`
+    },
+    encoding: "utf8"
+  });
+  assert(nativePure.status === 0, `native Pure profile should apply:\n${nativePure.stdout}\n${nativePure.stderr}`);
+  const nativePureConfig = await readFile(mpdProfileConfig, "utf8");
+  assert(nativePureConfig.includes('device          "hw:CARD=Mystery,DEV=0"') && !nativePureConfig.includes('format          "48000:16:2"'), "native Pure should follow the resolved DAC without forcing a target rate");
 
   const audioAdaptUnit = await readFile(path.join(ROOT, "deploy/systemd/tikpal-audio-adapt.service"), "utf8");
   const librarySyncUnit = await readFile(path.join(ROOT, "deploy/systemd/tikpal-library-sync.service"), "utf8");
@@ -499,6 +683,9 @@ esac
   const kioskViewerUnit = await readFile(path.join(ROOT, "deploy/systemd/tikpal-kiosk-viewer.service"), "utf8");
   const kioskWatchdogUnit = await readFile(path.join(ROOT, "deploy/systemd/tikpal-kiosk-watchdog.service"), "utf8");
   const kioskWatchdogTimer = await readFile(path.join(ROOT, "deploy/systemd/tikpal-kiosk-watchdog.timer"), "utf8");
+  const x11HelperUnit = await readFile(path.join(ROOT, "deploy/systemd/tikpal-x11-helper.service"), "utf8");
+  const x11HelperKioskDropIn = await readFile(path.join(ROOT, "deploy/systemd/tikpal-kiosk-x11-helper.conf"), "utf8");
+  const x11HelperSource = await readFile(path.join(ROOT, "deploy/chromium/tikpal-x11-helper.c"), "utf8");
   const systemdInstaller = await readFile(path.join(ROOT, "deploy/systemd/install-systemd-services.sh"), "utf8");
   const physicalDisplayPrepare = await readFile(path.join(ROOT, "deploy/chromium/tikpal-physical-display-prepare.sh"), "utf8");
   const deployDoc = await readFile(path.join(ROOT, "docs/06-deployment/raspberry-pi-kiosk-deploy-v1.md"), "utf8");
@@ -528,7 +715,54 @@ esac
   assert(!kioskWatchdogUnit.includes("PartOf=tikpal-kiosk.service"), "kiosk watchdog should survive kiosk restarts");
   assert(kioskWatchdogTimer.includes("OnUnitActiveSec=75s"), "kiosk watchdog timer should run inside the 60-90s cadence");
   assert(kioskWatchdogTimer.includes("tikpal-kiosk-watchdog.service"), "kiosk watchdog timer should target the watchdog service");
+  assert(
+    x11HelperUnit.includes("PartOf=tikpal-kiosk.service")
+      && x11HelperUnit.includes("After=tikpal-kiosk.service")
+      && x11HelperUnit.includes("RuntimeDirectory=tikpal")
+      && x11HelperUnit.includes("--transaction-timeout-ms 250"),
+    "the native X11 helper should follow kiosk/Xorg lifecycle with a private runtime socket"
+  );
+  assert(
+    x11HelperSource.includes("SOCK_STREAM")
+      && x11HelperSource.includes("htonl(")
+      && x11HelperSource.includes("ntohl(")
+      && x11HelperSource.includes("MAX_PACKET_BYTES 16384")
+      && x11HelperSource.includes("SO_PEERCRED")
+      && x11HelperSource.includes("TIKPAL_WEB_MODE_X11_HELPER_SOCKET")
+      && x11HelperSource.includes("TIKPAL_WEB_MODE_X11_HELPER_CONNECT_TIMEOUT_MS")
+      && x11HelperSource.includes("TIKPAL_WEB_MODE_X11_HELPER_RESPONSE_TIMEOUT_MS")
+      && x11HelperSource.includes("xcb_poll_for_reply(state->connection")
+      && x11HelperSource.includes("xcb_get_file_descriptor(state->connection)")
+      && x11HelperSource.includes("xcb_translate_coordinates(")
+      && x11HelperSource.includes("connection_epoch++")
+      && x11HelperSource.includes("state->watch_valid = false")
+      && x11HelperSource.includes('strcmp(operation, "switch") == 0')
+      && x11HelperSource.includes("xcb_configure_window_checked(")
+      && x11HelperSource.includes("xcb_change_property_checked(")
+      && x11HelperSource.includes("xcb_get_input_focus(")
+      && x11HelperSource.includes('"XCB_CHECK_NOT_READY_AFTER_FENCE"')
+      && x11HelperSource.includes("verify_identity_unchanged(")
+      && x11HelperSource.includes("request_matches_active_lease(")
+      && x11HelperSource.includes("revoke_response(")
+      && x11HelperSource.includes("run_owner_allows(")
+      && x11HelperSource.includes('"mutationStartedMonotonicNs"')
+      && x11HelperSource.includes('"fenceCompletedMonotonicNs"')
+      && x11HelperSource.includes('"finalSnapshotCompletedMonotonicNs"')
+      && x11HelperSource.includes('code = "FINAL_STATE_MISMATCH"')
+      && x11HelperSource.includes('strcmp(argv[1], "monotonic-ns") == 0')
+      && x11HelperSource.includes('strcmp(argv[index], "--all")')
+      && x11HelperSource.includes('strcmp(argv[index], "--generation-file")')
+      && x11HelperSource.includes('"REQUEST_ID_CONFLICT"')
+      && x11HelperSource.includes("WINDOW_PID_REUSED")
+      && x11HelperSource.includes("WINDOW_UID_MISMATCH")
+      && x11HelperSource.includes("--user-data-dir")
+      && x11HelperSource.includes("run_self_test(")
+      && !x11HelperSource.includes("xcb_wait_for_reply(")
+      && !x11HelperSource.includes("xcb_request_check("),
+    "Phase 1 X11 helper should be framed, peer-checked, deadline-bounded, identity-safe, lease-safe, and checked-mutation capable"
+  );
   assert(systemdInstaller.includes("tikpal-audio-adapt.service"), "systemd installer should install the audio adapter service");
+  assert(systemdInstaller.includes('/usr/local/sbin/tikpal-alsa-loopback.sh'), "systemd installer should keep the installed audio adapter's ALSA loopback dependency beside it");
   assert(systemdInstaller.includes("tikpal-library-sync.service"), "systemd installer should install the library sync service");
   assert(systemdInstaller.includes("tikpal-radio-presets-sync.sh") && systemdInstaller.includes("ensure_radio_presets"), "systemd installer should sync single-layer Radio presets");
   assert(systemdInstaller.includes("ensure_library_scan_env"), "systemd installer should keep Library Scan pointed at the combined sync helper");
@@ -537,6 +771,16 @@ esac
   assert(systemdInstaller.indexOf("systemctl restart tikpal-library-sync.service") < systemdInstaller.indexOf("systemctl restart tikpal-api.service"), "systemd installer restart should sync MPD libraries before the API starts");
   assert(systemdInstaller.includes("tikpal-kiosk-watchdog.service"), "systemd installer should install the kiosk watchdog service");
   assert(systemdInstaller.includes("tikpal-kiosk-watchdog.timer"), "systemd installer should install and enable the kiosk watchdog timer");
+  assert(
+    systemdInstaller.includes("--enable-x11-helper")
+      && systemdInstaller.includes("pkg-config --exists xcb json-c")
+      && systemdInstaller.includes("mktemp -d")
+      && systemdInstaller.includes('"$temporary_binary" self-test')
+      && systemdInstaller.includes("tikpal-x11-helper.service")
+      && systemdInstaller.includes("tikpal-kiosk-x11-helper.conf")
+      && x11HelperKioskDropIn.includes("Wants=tikpal-x11-helper.service"),
+    "systemd installer should build the native helper and make the kiosk pull it in explicitly"
+  );
   assert(
     systemdInstaller.includes("install_physical_display_prepare")
       && systemdInstaller.includes("/usr/local/sbin/tikpal-physical-display-prepare")
@@ -677,6 +921,18 @@ esac
   const kioskSession = await readFile(path.join(ROOT, "deploy/chromium/start-tikpal-kiosk-session.sh"), "utf8");
   const watchdogSource = await readFile(path.join(ROOT, "deploy/chromium/tikpal-kiosk-healthcheck.sh"), "utf8");
   const webModeScript = await readFile(path.join(ROOT, "deploy/chromium/tikpal-web-mode.sh"), "utf8");
+  assert(
+    webModeScript.includes("x11_helper_prepare_switch()")
+      && webModeScript.includes("x11_helper_begin_switch()")
+      && webModeScript.includes("x11_helper_enter_fallback()")
+      && webModeScript.includes("x11_helper_finish_success()")
+      && webModeScript.includes("x11_helper_guard_may_write()")
+      && webModeScript.includes("x11_helper_guard_may_recover_all()")
+      && webModeScript.includes("guard_maintain_windows()")
+      && webModeScript.includes("write_guard_window_list \"$provider_profile\"")
+      && webModeScript.includes("window_guard_running || start_window_guard"),
+    "Phase 1 switching should arbitrate exact Helper ownership while keeping an existing window Guard alive"
+  );
   const realProviderUrlWaitStart = webModeScript.indexOf("wait_for_real_provider_url() {");
   const realProviderUrlWaitEnd = webModeScript.indexOf("\n}\n\nprovider_cdp_json_list()", realProviderUrlWaitStart);
   const realProviderUrlWaitBody = webModeScript.slice(realProviderUrlWaitStart, realProviderUrlWaitEnd);
@@ -715,12 +971,71 @@ esac
   assert(
     physicalExploreAcceptanceScript.includes('acceptance_mode="${1:-full}"')
       && physicalExploreAcceptanceScript.includes("switch_only_preflight()")
-      && physicalExploreAcceptanceScript.includes('full|switch-only)')
+      && physicalExploreAcceptanceScript.includes('full|switch-only|switch-strict|switch-diagnostic)')
       && physicalExploreAcceptanceScript.includes("for pass in 1 2")
       && physicalExploreAcceptanceScript.includes('[[ "$surfaces" == "2" ]]')
       && physicalExploreAcceptanceScript.includes('click_provider_card "$target"')
+      && physicalExploreAcceptanceScript.includes("events.jsonl")
+      && physicalExploreAcceptanceScript.includes("rounds.csv")
+      && physicalExploreAcceptanceScript.includes("summary.json")
+      && physicalExploreAcceptanceScript.includes("report.md")
+      && physicalExploreAcceptanceScript.includes("switch_mode_is_strict()")
+      && physicalExploreAcceptanceScript.includes('result="stable-over-5s"')
+      && physicalExploreAcceptanceScript.includes('error_code="stable_over_5s"')
       && !physicalExploreAcceptanceScript.includes("/api/v1/web-mode/actions"),
-    "physical Explore acceptance should offer a 20-click switch-only mode whose API and CDP channels are read-only"
+    "physical Explore acceptance should offer strict and diagnostic 20-click modes with correlated artifacts while API and CDP remain read-only"
+  );
+  const physicalAcceptanceExitContract = spawnSync(
+    "bash",
+    ["deploy/chromium/tikpal-explore-physical-acceptance.sh", "exit-contract-fixtures"],
+    { cwd: ROOT, encoding: "utf8" }
+  );
+  assert(
+    physicalAcceptanceExitContract.status === 0,
+    `strict physical acceptance should preserve failures and reject a failed summary: ${physicalAcceptanceExitContract.stderr || physicalAcceptanceExitContract.stdout}`
+  );
+  const physicalAcceptanceSummaryContract = spawnSync(
+    "bash",
+    ["deploy/chromium/tikpal-explore-physical-acceptance.sh", "summary-contract-fixtures"],
+    { cwd: ROOT, encoding: "utf8" }
+  );
+  assert(
+    physicalAcceptanceSummaryContract.status === 0,
+    `physical acceptance should gate one-shot and formal visible/stable timing independently: ${physicalAcceptanceSummaryContract.stderr || physicalAcceptanceSummaryContract.stdout}`
+  );
+  const unwritableX11TraceCheck = spawnSync(
+    "bash",
+    ["deploy/chromium/tikpal-web-mode.sh", "--check"],
+    {
+      cwd: ROOT,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        TIKPAL_KIOSK_SKIP_ENV_SOURCE: "1",
+        TIKPAL_WEB_MODE_X11_MUTATION_TRACE_PATH: "/dev/null/tikpal-x11-trace.jsonl"
+      }
+    }
+  );
+  assert(
+    unwritableX11TraceCheck.status !== 0 &&
+      `${unwritableX11TraceCheck.stdout}\n${unwritableX11TraceCheck.stderr}`.includes("TRACE_NOT_WRITABLE"),
+    "every Explore command should reject an unwritable X11 trace before it can enter a state or X11 transaction"
+  );
+  assert(
+    webModeScript.includes("x11_helper_cleanup_active_transaction()")
+      && webModeScript.includes("trap x11_helper_cleanup_on_exit EXIT")
+      && webModeScript.includes("X11_TRACE_APPEND_FAILED")
+      && webModeScript.includes("SWITCH_TRACE_APPEND_FAILED"),
+    "Explore trace failures should remain diagnostic while Helper cleanup runs from an independent exit trap"
+  );
+  assert(
+    webModeScript.includes("record_switch_trace_event()")
+      && webModeScript.includes("target_resolve_started")
+      && webModeScript.includes("guard_prepare_started")
+      && webModeScript.includes("foreground_switch_started")
+      && webModeScript.includes("runtime_geometry_verified")
+      && webModeScript.includes("lock_released"),
+    "Explore resident switching should emit correlated trace boundaries without changing the foreground action"
   );
   const reconcileSmokeDir = mkdtempSync(path.join(tmpdir(), "tikpal-reconcile-"));
   const reconcileStatePath = path.join(reconcileSmokeDir, "web-mode-state.json");
@@ -811,6 +1126,78 @@ if window_opacity_is_full unreadable; then exit 15; fi
   assert(
     windowIdentitySmoke.status === 0,
     `Explore window identity should reject dead cached IDs and mismatched profiles: ${windowIdentitySmoke.stderr || windowIdentitySmoke.stdout}`
+  );
+  const providerGuardLifecycleDir = mkdtempSync(path.join(tmpdir(), "tikpal-provider-guard-lifecycle-"));
+  const providerGuardProcRoot = path.join(providerGuardLifecycleDir, "proc");
+  const providerGuardProfileRoot = path.join(providerGuardLifecycleDir, "profiles");
+  const providerGuardProfile = path.join(providerGuardProfileRoot, "providers/qobuz");
+  const providerGuardHelperPath = path.join(ROOT, "deploy/chromium/tikpal-web-mode-guard.mjs");
+  const providerGuardKillLog = path.join(providerGuardLifecycleDir, "kills.tsv");
+  mkdirSync(providerGuardProcRoot, { recursive: true });
+  mkdirSync(providerGuardProfileRoot, { recursive: true });
+  const writeProviderGuardProcess = (pid, argv, environment) => {
+    const processDir = path.join(providerGuardProcRoot, String(pid));
+    mkdirSync(processDir, { recursive: true });
+    writeFileSync(path.join(processDir, "cmdline"), Buffer.from(`${argv.join("\0")}\0`));
+    writeFileSync(path.join(processDir, "environ"), Buffer.from(`${environment.join("\0")}\0`));
+  };
+  const qobuzGuardEnvironment = [
+    "TIKPAL_WEB_MODE_PROVIDER_ID=qobuz",
+    `TIKPAL_WEB_MODE_PROVIDER_PROFILE=${providerGuardProfile}`,
+    "TIKPAL_WEB_MODE_PROVIDER_DEBUG_PORT=9238",
+    "TIKPAL_WEB_MODE_PROXY_MODE=proxy"
+  ];
+  writeProviderGuardProcess(101, ["node", "--experimental-websocket", providerGuardHelperPath], qobuzGuardEnvironment);
+  writeProviderGuardProcess(102, ["node", "--experimental-websocket", providerGuardHelperPath], qobuzGuardEnvironment);
+  writeProviderGuardProcess(103, ["node", "--experimental-websocket", providerGuardHelperPath], [
+    ...qobuzGuardEnvironment.filter((entry) => !entry.startsWith("TIKPAL_WEB_MODE_PROVIDER_ID=")),
+    "TIKPAL_WEB_MODE_PROVIDER_ID=deezer"
+  ]);
+  writeProviderGuardProcess(104, ["node", "--experimental-websocket", `${providerGuardHelperPath}.decoy`], qobuzGuardEnvironment);
+  writeFileSync(path.join(providerGuardProfileRoot, "provider-guard-qobuz.pid"), "101\n");
+  const providerGuardLifecycleSmoke = spawnSync("bash", ["-s"], {
+    cwd: ROOT,
+    input: `${webModeFunctions}
+SCRIPT_DIR="$TIKPAL_SMOKE_SCRIPT_DIR"
+kill() {
+  local signal=TERM pid
+  case "$1" in
+    -0) signal=0; pid="$2" ;;
+    -TERM) signal=TERM; pid="$2" ;;
+    -KILL) signal=KILL; pid="$2" ;;
+    *) pid="$1" ;;
+  esac
+  if [[ "$signal" == "0" ]]; then
+    [[ -d "$TIKPAL_WEB_MODE_PROC_ROOT/$pid" ]]
+    return
+  fi
+  printf '%s\t%s\n' "$signal" "$pid" >> "$TIKPAL_SMOKE_PROVIDER_GUARD_KILL_LOG"
+  rm -rf "$TIKPAL_WEB_MODE_PROC_ROOT/$pid"
+}
+sleep() { :; }
+[[ "$(provider_guard_matching_pids qobuz "$TIKPAL_SMOKE_PROVIDER_PROFILE" 1 9238)" == $'101\n102' ]]
+stop_provider_guard_instances qobuz "$TIKPAL_SMOKE_PROVIDER_PROFILE" 1 9238
+[[ ! -e "$TIKPAL_WEB_MODE_PROFILE_ROOT/provider-guard-qobuz.pid" ]]
+[[ ! -d "$TIKPAL_WEB_MODE_PROC_ROOT/101" && ! -d "$TIKPAL_WEB_MODE_PROC_ROOT/102" ]]
+[[ -d "$TIKPAL_WEB_MODE_PROC_ROOT/103" && -d "$TIKPAL_WEB_MODE_PROC_ROOT/104" ]]
+[[ "$(sort "$TIKPAL_SMOKE_PROVIDER_GUARD_KILL_LOG")" == $'TERM\t101\nTERM\t102' ]]
+printf '103\n' > "$TIKPAL_WEB_MODE_PROFILE_ROOT/provider-guard-qobuz.pid"
+if provider_guard_process_matches qobuz "$TIKPAL_SMOKE_PROVIDER_PROFILE" 1 9238; then exit 21; fi
+`,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      TIKPAL_KIOSK_SKIP_ENV_SOURCE: "1",
+      TIKPAL_WEB_MODE_PROC_ROOT: providerGuardProcRoot,
+      TIKPAL_WEB_MODE_PROFILE_ROOT: providerGuardProfileRoot,
+      TIKPAL_SMOKE_SCRIPT_DIR: path.join(ROOT, "deploy/chromium"),
+      TIKPAL_SMOKE_PROVIDER_PROFILE: providerGuardProfile,
+      TIKPAL_SMOKE_PROVIDER_GUARD_KILL_LOG: providerGuardKillLog
+    }
+  });
+  assert(
+    providerGuardLifecycleSmoke.status === 0,
+    `provider guard cleanup should remove canonical and orphan instances without touching mismatched processes: ${providerGuardLifecycleSmoke.stderr || providerGuardLifecycleSmoke.stdout}`
   );
   const activeCloseOwnershipStatePath = path.join(reconcileSmokeDir, "active-close-owned-state.json");
   writeFileSync(activeCloseOwnershipStatePath, JSON.stringify({
@@ -1048,6 +1435,15 @@ sync_runtime_provider_pool_process_statuses ""
   const onboardImeToggleScript = await readFile(path.join(ROOT, "deploy/chromium/onboard-scripts/tikpalImeToggle.py"), "utf8");
   const onboardTheme = await readFile(path.join(ROOT, "deploy/chromium/onboard-themes/Tikpal-Classic.colors"), "utf8");
   const serverSource = await readFile(path.join(ROOT, "server/index.mjs"), "utf8");
+  assert(
+    serverSource.includes("consumeWebModeSwitchTraceContext")
+      && serverSource.includes('recordWebModeSwitchTraceEvent(trace, "api_received"')
+      && serverSource.includes('recordWebModeSwitchTraceEvent(trace, "opening_provider_written"')
+      && serverSource.includes('recordWebModeSwitchTraceEvent(trace, "runner_created"')
+      && serverSource.includes('recordWebModeSwitchTraceEvent(trace, "runner_started"')
+      && serverSource.includes("...webModeSwitchTraceEnv(trace)"),
+    "Explore API should correlate request preparation and runner timing with the physical switch trace"
+  );
   const splitArtistSource = serverSource.match(/function splitArtistForLookup\(artist\) \{[\s\S]*?\n\}/)?.[0] ?? "";
   const splitArtistForLookup = Function('"use strict"; ' + splitArtistSource + "; return splitArtistForLookup;")();
   assert(!serverSource.includes("\u0008"), "server source should not contain backspace control characters");
@@ -1205,6 +1601,14 @@ sync_runtime_provider_pool_process_statuses ""
   assert(extensionContent.includes("window.setInterval(() => void syncProxy(), 750)"), "provider pages should poll the proxy settings revision every 750ms");
   assert(extensionContent.includes("initialProxyKey") && !extensionContent.includes("initialRevision"), "provider pages should reload only when the proxy key changes");
   assert(extensionContent.includes("window.location.reload()"), "provider pages should refresh after a proxy revision change");
+  assert(
+    extensionContent.includes("clickSpotifyReloadPage")
+      && extensionContent.includes("open\\.spotify\\.com")
+      && extensionContent.includes('labels.includes("reload page")')
+      && extensionContent.includes("lastSpotifyReloadClickMs < 3000")
+      && extensionContent.includes("element.click()"),
+    "Spotify should auto-click only a visible exact Reload page action without repeated clicks"
+  );
   assert(!extensionContent.includes("window.location.replace(provider.url)"), "provider content script should not restore the removed bootstrap redirect");
   assert(!extensionBackground.includes("setZoom(") && !extensionBackground.includes("setZoomSettings") && !extensionBackground.includes("getZoom"), "Explore extension should avoid Chrome tab zoom so the browser zoom bubble never appears");
   assert(extensionContent.includes("tikpal-provider-text-scale-style") && extensionContent.includes("scaleProviderTextElements") && extensionContent.includes("element.style.fontSize") && extensionContent.includes("window.__tikpalProviderTextScale"), "provider pages should apply text scale to detected text elements");
@@ -1529,10 +1933,11 @@ sync_runtime_provider_pool_process_statuses ""
   assert(webModeCrossfadeScript.includes("resolve-browser") && webModeCrossfadeScript.includes("not safe for Explore softvol crossfade"), "Explore crossfade should use the adapter and decline non-dmix outputs");
   assert(!webModeCrossfadeScript.includes("BT66"), "Explore crossfade should not pin one ALSA card id");
   assert(audioAdaptScript.includes("TIKPAL_AUDIO_CARD_PRIORITY:=BT66,Crimson"), "audio adapter should prefer known USB cards in the configured order");
-  assert(audioAdaptScript.includes("TIKPAL_AUDIO_ALLOW_UNKNOWN_SINGLE:=1"), "audio adapter should allow one unknown USB card by default");
-  assert(audioAdaptScript.includes("multiple unknown non-HDMI audio cards detected"), "audio adapter should reject multiple unknown cards without a forced card");
-  assert(audioAdaptScript.includes("resolve-browser") && audioAdaptScript.includes("resolve-audioout"), "audio adapter should expose browser and moOde PCM resolvers");
+  assert(audioAdaptScript.includes("TIKPAL_AUDIO_PREFER_SINGLE_USB") && audioAdaptScript.includes("single-usb"), "audio adapter should prefer one unknown USB playback endpoint");
+  assert(audioAdaptScript.includes("single-non-hdmi") && audioAdaptScript.includes("ambiguous non-HDMI playback endpoints detected"), "audio adapter should accept one non-HDMI endpoint and reject ambiguous endpoints");
+  assert(audioAdaptScript.includes("resolve-browser") && audioAdaptScript.includes("resolve-audioout") && audioAdaptScript.includes("resolve-hw"), "audio adapter should expose browser, moOde, and raw hardware PCM resolvers");
   assert(audioAdaptScript.includes("write_browser_output_config") && audioAdaptScript.includes("TIKPAL_AUDIO_BROWSER_SHARED_PCM"), "audio adapter should generate a shared conversion PCM for S24-only browser outputs");
+  assert(audioAdaptScript.includes("TIKPAL_ALSA_RATE_CONVERTER") && alsaLoopbackScript.includes("TIKPAL_ALSA_RATE_CONVERTER"), "browser and _audioout plug nodes should share the optional ALSA rate converter");
   assert(audioAdaptScript.includes("printf 'snd_aloop\\n'") && audioAdaptScript.includes("snd_aloop is not visible after applying Loopback config"), "audio adapter apply should persist and verify the real snd_aloop module name");
   assert(audioAdaptScript.includes("wait_for_loopback_visible") && audioAdaptScript.includes("ensure_loopback_visible"), "audio adapter should wait for the real Loopback card after loading snd_aloop");
   assert(usbLibrarySyncScript.includes("USB_LIBRARY_AUTO_ROOTS") && usbLibrarySyncScript.includes("/media,/run/media"), "USB library sync should discover arbitrary mounted USB roots");
@@ -1677,8 +2082,8 @@ sync_runtime_provider_pool_process_statuses ""
   assert(webModeScript.includes("clear_window_above()") && webModeScript.includes("-b remove,above"), "Explore background and inactive provider windows should not keep the above hint");
   assert(webModeScript.includes("pids+=(\"$pid\")") && webModeScript.includes('kill -KILL "$pid"'), "provider guard shutdown should force-kill stale guards without waiting one second per resident provider");
   assert(webModeScript.includes("TIKPAL_TILE_WINDOW_CHANGED=0"), "web mode guard should track whether a Chromium window actually needed retile");
-  assert(webModeScript.includes('local force_raise="${3:-0}"'), "web mode guard should force a single provider raise when the guard first starts");
-  assert(webModeScript.includes("stack_refresh_ticks") && webModeScript.includes('if [[ "$stack_refresh_ticks" -ge 4 ]]'), "web mode guard should periodically reassert provider stacking above the kiosk without doing it every tick");
+  assert(webModeScript.includes("guard_root_stack_order()") && webModeScript.includes("xwininfo -root -children"), "web mode guard should inspect root-child stacking before planning a repair");
+  assert(!webModeScript.includes("stack_refresh_ticks"), "web mode guard should not periodically rewrite correct stacking state");
   assert(webModeScript.includes('[[ "$did_restack" == "1" ]] && raise_onboard'), "web mode guard should not raise Onboard on every polling pass");
   assert(webModeScript.includes('pkill -KILL -f -- "--user-data-dir=$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"'), "Explore close should force-exit a side panel that ignores graceful shutdown");
   assert(webModeScript.includes("org.onboard.window force-to-top true"), "Onboard should enable its Always on Top setting");
@@ -1945,6 +2350,40 @@ sync_runtime_provider_pool_process_statuses ""
   assert(webModeCheck.stdout.includes("qq scoped auto confirm: 1"), "web mode should keep QQ auto-confirm scoped inside the provider guard");
   assert(webModeCheck.stdout.includes("proxy: enabled http://127.0.0.1:7897"), "web mode should default to the HTTP development proxy");
 
+  const configuredProxyUrl = "http://proxy-settings.test:16005";
+  writeFileSync(
+    path.join(webModeCheckDir, "settings.json"),
+    JSON.stringify({ proxyEnabled: true, proxyUrl: configuredProxyUrl })
+  );
+  const configuredProxyCheck = spawnSync("bash", ["deploy/chromium/tikpal-web-mode.sh", "--check"], {
+    cwd: ROOT,
+    env: {
+      ...process.env,
+      PATH: `${fakeXdoToolDir}:${process.env.PATH ?? ""}`,
+      TIKPAL_CHROMIUM_BIN: process.execPath,
+      TIKPAL_KIOSK_XRANDR_MODE: "none",
+      TIKPAL_KIOSK_SKIP_ENV_SOURCE: "1",
+      TIKPAL_WEB_MODE_EXTENSION_ENABLED: "1",
+      TIKPAL_WEB_MODE_SETTINGS_PATH: path.join(webModeCheckDir, "settings.json"),
+      TIKPAL_WEB_MODE_STATE_PATH: path.join(webModeCheckDir, "state.json")
+    },
+    encoding: "utf8"
+  });
+  assert(
+    configuredProxyCheck.status === 0 && configuredProxyCheck.stdout.includes(`proxy: enabled ${configuredProxyUrl}`),
+    `web mode should read the Chromium proxy URL from settings: ${configuredProxyCheck.stderr || configuredProxyCheck.stdout}`
+  );
+  const providerProxyArgumentWrites = webModeScript.match(/args\+=\("--proxy-server=[^"]+"\)/g) ?? [];
+  assert(
+    providerProxyArgumentWrites.length === 2 &&
+      providerProxyArgumentWrites.every((write) => write === 'args+=("--proxy-server=$proxy_url")'),
+    "pool and non-pool provider Chromium launches should use only the proxy URL read from settings"
+  );
+  assert(
+    !/--proxy-server=(?!\$proxy_url)[^"'\s)]+/.test(webModeScript),
+    "provider Chromium launch arguments should not hard-code a proxy endpoint"
+  );
+
   const providerStatusStatePath = path.join(webModeCheckDir, "provider-status-state.json");
   const providerStatusEnv = {
     ...process.env,
@@ -2009,6 +2448,7 @@ sync_runtime_provider_pool_process_statuses ""
   });
   assert(providerGuardCheck.status === 0, `provider guard --check failed:\n${providerGuardCheck.stdout}\n${providerGuardCheck.stderr}`);
   assert(providerGuardCheck.stdout.includes("check passed"), "provider guard should report check passed");
+  assert(providerGuardCheck.stdout.includes("spotify schedule fixtures: 1"), "provider guard should verify Spotify inactive, staged-active, reset, reuse, refresh, and non-Spotify scheduling fixtures");
   assert(providerGuardCheck.stdout.includes("kiosk interaction blocking: 1"), "provider guard should disable browser-like context gestures");
   assert(providerGuardCheck.stdout.includes("friendly error redirect: 1"), "provider guard should redirect Chromium error pages");
   assert(providerGuardCheck.stdout.includes("provider native failure redirect: 1"), "provider guard should redirect provider-native failure pages");
@@ -2328,10 +2768,59 @@ sync_runtime_provider_pool_process_statuses ""
   );
   assert(
     webModeScript.includes("sync-status)") &&
-      (webModeScript.includes("sync-status|keyboard") || webModeScript.includes("sync-status|refresh-guards|keyboard")),
+      webModeScript.includes("|sync-status|"),
     "Explore should expose an explicit resident status sync command for live recovery"
   );
-  assert(webModeScript.includes("TIKPAL_WEB_MODE_X11_SYNC_WINDOW_OPS:=0") && webModeScript.includes('wmctrl -i -r "$window" -e') && webModeScript.includes('windowmove "$window" "$x" "$y"'), "Explore hot window moves should default to async X11 operations instead of xdotool --sync");
+  assert(
+    webModeScript.includes("TIKPAL_WEB_MODE_X11_SYNC_WINDOW_OPS:=0")
+      && webModeScript.includes('wmctrl_mutation geometry "$window"')
+      && webModeScript.includes('windowmove "$window" "$x" "$y"'),
+    "Explore hot window moves should default to traced async X11 operations instead of xdotool --sync"
+  );
+  assert(
+    webModeScript.includes("x11_mutation_run() {")
+      && webModeScript.includes('\\"writer_pid\\"')
+      && webModeScript.includes('\\"writer_role\\"')
+      && webModeScript.includes('\\"registry_generation\\"')
+      && webModeScript.includes('\\"observed_geometry_after\\"')
+      && webModeScript.includes("x11_trace_control_event helper_switch_finished")
+      && webModeScript.includes("x11_trace_control_event helper_revoke_finished")
+      && webModeScript.includes("x11_trace_control_event guard_registry_published")
+      && webModeScript.includes("x11_helper_legacy_writer_may_write")
+      && webModeScript.includes("reason=stale_generation")
+      && webModeScript.includes("guard_generation_refreshed")
+      && webModeScript.includes("mutation=skipped"),
+    "Explore X11 writers should share one opt-in lifecycle trace across Shell, Guard, and Helper control events"
+  );
+  const x11TraceControlEventStart = webModeScript.indexOf("x11_trace_control_event() {");
+  const x11TraceControlEventEnd = webModeScript.indexOf("\n}\n\nswitch_trace_enabled()", x11TraceControlEventStart);
+  const x11TraceControlEventBody = webModeScript.slice(x11TraceControlEventStart, x11TraceControlEventEnd);
+  assert(
+    x11TraceControlEventBody.includes('observed_geometry="not_sampled_control"') &&
+      !x11TraceControlEventBody.includes("x11_trace_observed_geometries"),
+    "Explore control trace should not synchronously sample X11 geometry on the foreground path"
+  );
+  const tracedRunWindowGuardStart = webModeScript.indexOf("run_window_guard() {");
+  const tracedRunWindowGuardEnd = webModeScript.indexOf("\n}\n\nstart_provider_guard()", tracedRunWindowGuardStart);
+  const tracedRunWindowGuardBody = webModeScript.slice(tracedRunWindowGuardStart, tracedRunWindowGuardEnd);
+  assert(
+    tracedRunWindowGuardBody.includes("x11_trace_control_event guard_started 0"),
+    "Explore no-click readiness should have a deterministic low-overhead window Guard startup event"
+  );
+  assert(
+    webModeScript.includes("guard_inspect_windows() {") &&
+      webModeScript.includes("guard_root_stack_order() {") &&
+      webModeScript.includes("guard_apply_repair_plan() {") &&
+      webModeScript.includes('x11_trace_control_event guard_tick_completed "$status"') &&
+      webModeScript.includes("repair_required=$TIKPAL_GUARD_REPAIR_REQUIRED") &&
+      webModeScript.includes("mutation_count=$TIKPAL_GUARD_MUTATION_COUNT"),
+    "Explore window Guard should complete one inspect-plan-apply tick with a deterministic mutation count"
+  );
+  assert(
+    !tracedRunWindowGuardBody.includes("stack_refresh_ticks") &&
+      !tracedRunWindowGuardBody.includes("force_raise=1"),
+    "Explore window Guard should inspect real stacking state instead of periodically forcing five legacy writes"
+  );
   const veilOpenPoolStart = webModeScript.indexOf("open_provider_pool() {");
   const veilOpenPoolEnd = webModeScript.indexOf("\n}\n\nopen_provider()", veilOpenPoolStart);
   const veilOpenPoolBody = webModeScript.slice(veilOpenPoolStart, veilOpenPoolEnd);
@@ -2361,10 +2850,11 @@ sync_runtime_provider_pool_process_statuses ""
   const commitVisibleProviderStateEnd = webModeScript.indexOf("\n}\n\nall_chromium_windows()", commitVisibleProviderStateStart);
   const commitVisibleProviderStateBody = webModeScript.slice(commitVisibleProviderStateStart, commitVisibleProviderStateEnd);
   assert(
-    commitVisibleProviderStateBody.includes("park_pointer_in_side_panel")
+    webModeScript.includes("park_pointer_in_side_panel_async()")
+      && commitVisibleProviderStateBody.includes("park_pointer_in_side_panel_async")
       && commitVisibleProviderStateBody.includes('write_runtime_provider_state "$provider"')
-      && commitVisibleProviderStateBody.indexOf("park_pointer_in_side_panel") < commitVisibleProviderStateBody.indexOf('write_runtime_provider_state "$provider"'),
-    "Explore should park the pointer in the side-panel corner before it commits the newly visible provider"
+      && commitVisibleProviderStateBody.indexOf('write_runtime_provider_state "$provider"') < commitVisibleProviderStateBody.indexOf("park_pointer_in_side_panel_async"),
+    "Explore should commit the physically visible provider before parking the pointer outside the critical path"
   );
   const stopProviderGuardBody = webModeScript.match(/stop_provider_guard\(\) \{[\s\S]*?\n\}/)?.[0] ?? "";
   assert(!stopProviderGuardBody.includes("waited=0"), "Explore close should not wait one second per provider guard");
@@ -2427,9 +2917,12 @@ sync_runtime_provider_pool_process_statuses ""
   const writeGuardWindowListStart = webModeScript.indexOf("write_guard_window_list() {");
   const writeGuardWindowListEnd = webModeScript.indexOf("\n}\n\ntile_guard_windows_fast()", writeGuardWindowListStart);
   const writeGuardWindowListBody = webModeScript.slice(writeGuardWindowListStart, writeGuardWindowListEnd);
-  const recoverGuardWindowListStart = webModeScript.indexOf("recover_guard_window_list() {");
+  const recoverGuardWindowListStart = webModeScript.indexOf("recover_guard_window_list_locked() {");
   const recoverGuardWindowListEnd = webModeScript.indexOf("\n}\n\nstart_window_guard()", recoverGuardWindowListStart);
   const recoverGuardWindowListBody = webModeScript.slice(recoverGuardWindowListStart, recoverGuardWindowListEnd);
+  const guardMaintainWindowsStart = webModeScript.indexOf("guard_maintain_windows() {");
+  const guardMaintainWindowsEnd = webModeScript.indexOf("\n}\n\nguard_close_web_mode()", guardMaintainWindowsStart);
+  const guardMaintainWindowsBody = webModeScript.slice(guardMaintainWindowsStart, guardMaintainWindowsEnd);
   const runWindowGuardStart = webModeScript.indexOf("run_window_guard() {");
   const runWindowGuardEnd = webModeScript.indexOf("\n}\n\nstart_provider_guard()", runWindowGuardStart);
   const runWindowGuardBody = webModeScript.slice(runWindowGuardStart, runWindowGuardEnd);
@@ -2454,13 +2947,20 @@ sync_runtime_provider_pool_process_statuses ""
       && writeGuardWindowListBody.includes('mv -f "$temporary_path" "$list_path"')
       && writeGuardWindowListBody.includes('kiosk_window="$(kiosk_browser_window || true)"')
       && writeGuardWindowListBody.includes("printf 'kiosk\\t%s\\t%s\\n'")
-      && runWindowGuardBody.includes("tile_guard_windows_fast")
-      && runWindowGuardBody.includes("recover_guard_window_list")
+      && runWindowGuardBody.includes("guard_run_tick")
       && !runWindowGuardBody.includes("tile_visible_web_mode_windows")
       && !runWindowGuardBody.includes("visible_chromium_windows")
       && !runWindowGuardBody.includes("side_panel_window_visible")
-      && recoverGuardWindowListBody.includes("tile_visible_web_mode_windows"),
-    "Explore guard should atomically use known IDs and reserve full-window discovery for explicit invalid-ID recovery"
+      && guardMaintainWindowsBody.includes("x11_helper_guard_may_write")
+      && guardMaintainWindowsBody.includes("tile_guard_windows_fast")
+      && guardMaintainWindowsBody.includes("TIKPAL_GUARD_RECOVERY_REQUIRED")
+      && webModeScript.includes("TIKPAL_GUARD_TICK_OUTCOME=inspect_failed")
+      && guardMaintainWindowsBody.includes("recover_guard_window_list")
+      && recoverGuardWindowListBody.includes('visible_chromium_windows > "$recovery_window_list"')
+      && (recoverGuardWindowListBody.match(/x11_helper_guard_may_recover_all/g) || []).length >= 2
+      && recoverGuardWindowListBody.includes('tile_visible_web_mode_windows "$provider_profile" "$panel_profile" 1 "$recovery_window_list"')
+      && recoverGuardWindowListBody.includes("TIKPAL_WEB_MODE_GUARD_LOCKED=1"),
+    "Explore guard should atomically use exact IDs and require locked, twice-checked all-surface ownership for recovery"
   );
   const keepPanelStart = webModeScript.indexOf("keep_side_panel_visible_during_switch() {");
   const keepPanelEnd = webModeScript.indexOf("\n}\n\nprepare_entry_surfaces()", keepPanelStart);
@@ -2630,6 +3130,33 @@ sync_runtime_provider_pool_process_statuses ""
       reconcileProviderPoolBody.includes("abandoned=1"),
     "Explore reconcile should abandon stale work without clearing a newer active provider"
   );
+  const providerGuardIdentityBody = webModeScript.match(/provider_guard_process_identity_matches\(\) \{[\s\S]*?\n\}/)?.[0] ?? "";
+  const providerGuardMatchingPidsBody = webModeScript.match(/provider_guard_matching_pids\(\) \{[\s\S]*?\n\}/)?.[0] ?? "";
+  const stopProviderGuardInstancesBody = webModeScript.match(/stop_provider_guard_instances\(\) \{[\s\S]*?\n\}/)?.[0] ?? "";
+  const startProviderGuardBody = webModeScript.match(/start_provider_guard\(\) \{[\s\S]*?\n\}/)?.[0] ?? "";
+  const providerGuardProcessMatchesBody = webModeScript.match(/provider_guard_process_matches\(\) \{[\s\S]*?\n\}/)?.[0] ?? "";
+  const ensureProviderGuardBody = webModeScript.match(/ensure_provider_guard\(\) \{[\s\S]*?\n\}/)?.[0] ?? "";
+  assert(
+    reconcileProviderPoolBody.includes('ensure_provider_guard "$active_provider"') &&
+      !reconcileProviderPoolBody.includes('start_provider_guard "$active_provider"') &&
+      providerGuardProcessMatchesBody.includes('provider_guard_pid_file "$provider"') &&
+      providerGuardProcessMatchesBody.includes("provider_guard_process_identity_matches") &&
+      providerGuardIdentityBody.includes("TIKPAL_WEB_MODE_PROC_ROOT:-/proc") &&
+      providerGuardIdentityBody.includes('[[ "$argument" == "$helper" ]]') &&
+      providerGuardIdentityBody.includes('TIKPAL_WEB_MODE_PROVIDER_ID=$provider') &&
+      providerGuardIdentityBody.includes('TIKPAL_WEB_MODE_PROVIDER_PROFILE=$provider_profile') &&
+      providerGuardIdentityBody.includes('TIKPAL_WEB_MODE_PROVIDER_DEBUG_PORT=$provider_port') &&
+      providerGuardIdentityBody.includes('TIKPAL_WEB_MODE_PROXY_MODE=$proxy_mode') &&
+      providerGuardMatchingPidsBody.includes('"$proc_root"/[1-9]*') &&
+      providerGuardMatchingPidsBody.includes("provider_guard_process_identity_matches") &&
+      stopProviderGuardInstancesBody.includes("provider_guard_matching_pids") &&
+      stopProviderGuardInstancesBody.includes('kill -TERM "$pid"') &&
+      stopProviderGuardInstancesBody.includes('kill -KILL "$pid"') &&
+      startProviderGuardBody.includes('stop_provider_guard_instances "$provider" "$provider_profile" "$proxy_enabled" "$provider_port"') &&
+      !providerGuardIdentityBody.includes("pgrep") &&
+      ensureProviderGuardBody.includes('start_provider_guard "$provider"'),
+    "Explore provider guard lifecycle should reuse an exact canonical process and remove all exact orphan instances before restart"
+  );
   const webModeOpenCommandIndex = serverSource.indexOf('await runWebModeCommand("open", providerId, { TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS: "25" })');
   const webModeActiveCommitIndex = serverSource.indexOf('await writeWebModeRuntimeState({ activeProvider: providerId, openingProvider: null, openRequestId: null, lastProvider: providerId, lastError: null, closeRequestId: null });', webModeOpenCommandIndex);
   assert(
@@ -2654,6 +3181,12 @@ sync_runtime_provider_pool_process_statuses ""
   const revealResidentProviderWindowBody = webModeScript.slice(
     webModeScript.indexOf("reveal_resident_provider_window() {"),
     webModeScript.indexOf("\n}\n\nreassert_visible_provider_surfaces()", webModeScript.indexOf("reveal_resident_provider_window() {"))
+  );
+  assert(
+    revealResidentProviderWindowBody.includes("runtime_geometry_verified helper_final_snapshot")
+      && !revealResidentProviderWindowBody.includes("x11_helper_postcheck")
+      && !webModeScript.includes("resident_switch_surfaces_at_geometry()"),
+    "Helper success should use its checked final snapshot and leave the independent geometry postcheck to acceptance"
   );
   const segmentSummary = 'switch_segments provider=$provider cached_xid_ms=$cached_xid_ms first_cdp_ms=$first_cdp_ms guard_stop_ms=$guard_stop_ms panel_retile_ms=$panel_retile_ms target_opacity_ms=$target_opacity_ms combined_x11_ms=$combined_x11_ms';
   assert(
@@ -2728,10 +3261,55 @@ sync_runtime_provider_pool_process_statuses ""
   assert(providerGuardSource.includes("tikpal-provider-audio-muted") && extensionBackground.includes("provider-audio-muted"), "Explore provider gate should ask the extension to tab-mute inactive providers");
   assert(providerGuardSource.includes("version: 3"), "Explore provider audio gate should use the active keepalive v3 contract");
   assert(providerGuardSource.includes("state.active === nextActive") && providerGuardSource.includes("setAudioContextsActive(true)"), "Active provider audio polling should keep WebAudio contexts alive");
+  const providerGuardOnceStart = providerGuardSource.indexOf("async function guardOnce() {");
+  const providerGuardOnceEnd = providerGuardSource.indexOf("\n}\n\nif (process.argv.includes", providerGuardOnceStart);
+  const providerGuardOnceBody = providerGuardSource.slice(providerGuardOnceStart, providerGuardOnceEnd);
+  assert(
+      providerGuardSource.includes("function providerGuardSchedule(currentProviderId, active, activePass)") &&
+      providerGuardSource.includes("function runProviderGuardScheduleFixtures()") &&
+      providerGuardSource.includes("function providerAudioGateEnabled(opening)") &&
+      providerGuardSource.includes("function providerAudioGateActive(active, deactivating)") &&
+      providerGuardSource.includes("function providerRuntimeMaintenanceEnabled(currentProviderId, opening)") &&
+      providerGuardSource.includes("let spotifyActivePass = 0") &&
+      providerGuardOnceBody.includes("const runtimeState = readProviderRuntimeState()") &&
+      providerGuardOnceBody.includes("const audioGateEnabled = providerAudioGateEnabled(opening)") &&
+      providerGuardOnceBody.includes("const audioGateActive = providerAudioGateActive(active, deactivating)") &&
+      providerGuardOnceBody.includes("const runtimeMaintenanceEnabled = providerRuntimeMaintenanceEnabled(providerId, opening)") &&
+      providerGuardOnceBody.includes("if (!runtimeMaintenanceEnabled)") &&
+      providerGuardOnceBody.indexOf("if (!runtimeMaintenanceEnabled)") < providerGuardOnceBody.indexOf("await installKioskGuard(target)") &&
+      providerGuardOnceBody.includes("if (audioGateEnabled) await runProviderAudioGate(targets, audioGateActive)") &&
+      providerGuardOnceBody.indexOf("if (audioGateEnabled) await runProviderAudioGate(targets, audioGateActive)") < providerGuardOnceBody.indexOf("if (schedule.consent) await runConsentFeatures(targets)") &&
+      providerGuardOnceBody.includes("if (schedule.dismiss) await runSafeDismissFeatures(targets)") &&
+      providerGuardOnceBody.includes("if (schedule.activeFeatures)"),
+    "provider guards should mute the previous owner, yield opening-target audio to foreground, and keep Spotify Runtime handoff light"
+  );
   assert(providerGuardSource.includes("__tikpalQqAudioPrime") && providerGuardSource.includes("persistent: true"), "QQ Music audio prime should keep ALSA alive while QQ is playing");
   assert(!providerGuardSource.includes("setTimeout(resolve, 180)"), "QQ Music audio prime should not fall back to a short pulse");
   assert(providerGuardSource.includes("previous.wasPlaying = previous.wasPlaying ||"), "Inactive provider audio polling should not forget playback that must resume");
   assert(providerGuardSource.includes("element.muted = false"), "Returning to a resident provider should unmute media elements");
+  assert(
+    webModeScript.includes("set_provider_media_active_via_cdp()") &&
+      webModeScript.includes("activate_target_provider_audio_gate()") &&
+      webModeScript.includes("timeout 2 python3 -c") &&
+      webModeScript.includes("target_audio_gate_activation_started") &&
+      webModeScript.includes("target_audio_gate_activated"),
+    "Explore should activate the revealed provider audio gate through one bounded traced CDP call"
+  );
+  const poolTargetAudioGateIndexes = [...openProviderPoolBody.matchAll(/activate_target_provider_audio_gate "\$provider" "\$provider_port"/g)].map((match) => match.index);
+  const poolCommitIndexes = [...openProviderPoolBody.matchAll(/commit_visible_provider_state "\$provider"/g)].map((match) => match.index);
+  const directTargetAudioGateIndex = openProviderBody.indexOf('activate_target_provider_audio_gate "$provider" "$provider_port"');
+  const directCommitIndex = openProviderBody.indexOf('commit_visible_provider_state "$provider"');
+  assert(
+    poolTargetAudioGateIndexes.length === 2 &&
+      poolCommitIndexes.length === 2 &&
+      residentHotRevealIndex < poolTargetAudioGateIndexes[0] &&
+      poolTargetAudioGateIndexes[0] < poolCommitIndexes[0] &&
+      residentRevealIndex < poolTargetAudioGateIndexes[1] &&
+      poolTargetAudioGateIndexes[1] < poolCommitIndexes[1] &&
+      openProviderBody.lastIndexOf("reassert_visible_provider_surfaces") < directTargetAudioGateIndex &&
+      directTargetAudioGateIndex < directCommitIndex,
+    "Explore should activate only the revealed target after reveal and before active-state commit on every open path"
+  );
   assert(providerGuardSource.includes("syncResidentProviderStatus") && providerGuardSource.includes("providerReadyHosts"), "Resident provider guards should clear stale check_setup once the provider reaches its real host");
   assert(stylesSource.includes("webModeProviderSignalTrace"), "Explore provider cards should use the short signal trace");
   assert(!stylesSource.includes("webModeProviderOpeningSpin"), "Explore provider cards should remove the full rotating border");

@@ -21,12 +21,18 @@ export type AudioOutputCustomSettingId =
 
 export type AudioOutputCustomSettings = Record<AudioOutputCustomSettingId, boolean>;
 
+export interface AudioOutputCapabilities {
+  purePath: "native" | "resampled" | "unknown";
+  targetRateHz: number | null;
+}
+
 export interface UiPreferences {
   locale: UiLocale;
   inputMethodId: UiInputMethodId;
   fontTheme: FontTheme;
   audioOutputProfile: AudioOutputProfile;
   audioOutputCustomSettings: AudioOutputCustomSettings;
+  audioOutputCapabilities: AudioOutputCapabilities;
   mpdBitPerfectMode: MpdBitPerfectMode;
   displaySleepEnabled: boolean;
   displaySleepMinutes: 5 | 10 | 15 | 30 | 60;

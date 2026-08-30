@@ -129,6 +129,48 @@
     });
   };
 
+  const spotifyReloadPageSelector = [
+    "button",
+    "[role='button']",
+    "input[type='button']",
+    "input[type='submit']"
+  ].join(",");
+  let lastSpotifyReloadClickMs = 0;
+  const clickSpotifyReloadPage = (root = document) => {
+    if (!/(^|\.)open\.spotify\.com$/i.test(window.location.hostname)) return false;
+    const now = Date.now();
+    if (now - lastSpotifyReloadClickMs < 3000) return false;
+    const normalizeLabel = (value) => String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
+    for (const element of root.querySelectorAll?.(spotifyReloadPageSelector) || []) {
+      if (element.matches?.(":disabled") || element.getAttribute?.("aria-disabled") === "true") continue;
+      const labels = [
+        element.getAttribute?.("aria-label"),
+        element.getAttribute?.("title"),
+        element.value,
+        element.innerText,
+        element.textContent
+      ].map(normalizeLabel);
+      if (!labels.includes("reload page")) continue;
+      const rect = element.getBoundingClientRect();
+      const view = element.ownerDocument?.defaultView || window;
+      const style = view.getComputedStyle(element);
+      const visible = rect.width >= 8 &&
+        rect.height >= 8 &&
+        rect.right > 0 &&
+        rect.bottom > 0 &&
+        rect.left < view.innerWidth &&
+        rect.top < view.innerHeight &&
+        style.display !== "none" &&
+        style.visibility !== "hidden" &&
+        Number(style.opacity || "1") > 0.05;
+      if (!visible) continue;
+      lastSpotifyReloadClickMs = now;
+      element.click();
+      return true;
+    }
+    return false;
+  };
+
   // Block native "Open in Music" CTA (Apple Music & similar providers)
   const NATIVE_CTA_SELECTORS = [
     '.native-cta',
@@ -164,14 +206,17 @@
   );
 
   if (document.documentElement) retarget();
+  clickSpotifyReloadPage();
   hideNativeCta();
   document.addEventListener("DOMContentLoaded", () => {
     retarget();
+    clickSpotifyReloadPage();
     hideNativeCta();
     let mutationIdleId = null;
     const processMutations = () => {
       mutationIdleId = null;
       retarget();
+      clickSpotifyReloadPage();
       hideNativeCta();
     };
     const scheduleMutationProcess = () => {

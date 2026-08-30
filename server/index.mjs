@@ -1,7 +1,7 @@
 import http from "node:http";
 import { execFile, spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { chmod, copyFile, mkdir, open, readFile, readdir, rename, stat, statfs, unlink, writeFile } from "node:fs/promises";
+import { appendFile, chmod, copyFile, mkdir, open, readFile, readdir, rename, stat, statfs, unlink, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { basename, dirname, extname, posix, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
@@ -334,6 +334,7 @@ const NAS_DISCOVERY_HINTS = process.env.TIKPAL_NAS_DISCOVERY_HINTS ?? "";
 const WEB_MODE_SETTINGS_PATH = resolve(process.env.TIKPAL_WEB_MODE_SETTINGS_PATH ?? resolve(process.cwd(), ".tikpal", "web-mode-settings.json"));
 const WEB_MODE_STATE_PATH = resolve(process.env.TIKPAL_WEB_MODE_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "web-mode-state.json"));
 const WEB_MODE_HANDOFF_STATE_PATH = resolve(process.env.TIKPAL_WEB_MODE_HANDOFF_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "web-mode-handoff.json"));
+const WEB_MODE_SWITCH_TRACE_CONTEXT_PATH = resolve(process.env.TIKPAL_WEB_MODE_SWITCH_TRACE_CONTEXT_PATH ?? resolve(process.cwd(), ".tikpal", "explore-switch-trace-context.json"));
 const MULTIROOM_AUDIO_STATE_PATH = resolve(process.env.TIKPAL_MULTIROOM_AUDIO_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "multiroom-audio.json"));
 const MULTIROOM_HANDOFF_STATE_PATH = resolve(process.env.TIKPAL_MULTIROOM_HANDOFF_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "multiroom-handoff.json"));
 const ROONBRIDGE_HANDOFF_STATE_PATH = resolve(process.env.TIKPAL_ROONBRIDGE_HANDOFF_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "roonbridge-handoff.json"));
@@ -4771,6 +4772,18 @@ function mpdBitPerfectModeToAudioOutputProfile(mode) {
   return normalizeMpdBitPerfectMode(mode) === "strict" ? "pure" : "everyday";
 }
 
+function buildAudioOutputCapabilities() {
+  const configuredPurePath = String(process.env.TIKPAL_MPD_PURE_PATH ?? "unknown").trim().toLowerCase();
+  const purePath = configuredPurePath === "native" || configuredPurePath === "resampled"
+    ? configuredPurePath
+    : "unknown";
+  const targetRateHz = Number(process.env.TIKPAL_MPD_PURE_TARGET_RATE);
+  if (purePath === "resampled" && Number.isInteger(targetRateHz) && targetRateHz > 0) {
+    return { purePath, targetRateHz };
+  }
+  return { purePath: purePath === "resampled" ? "unknown" : purePath, targetRateHz: null };
+}
+
 function buildUiPreferences(locale = "en", updatedAt = null, warning = null, displaySleep = {}, fontTheme = DEFAULT_FONT_THEME, mpdBitPerfectMode = DEFAULT_MPD_BITPERFECT_MODE, audioOutputProfile = null, audioOutputCustomSettings = DEFAULT_AUDIO_OUTPUT_CUSTOM_SETTINGS) {
   const normalizedLocale = normalizeUiLocale(locale) ?? "en";
   const displaySleepMinutes = normalizeDisplaySleepMinutes(displaySleep?.displaySleepMinutes);
@@ -4782,6 +4795,7 @@ function buildUiPreferences(locale = "en", updatedAt = null, warning = null, dis
     fontTheme: normalizeFontTheme(fontTheme),
     audioOutputProfile: normalizedProfile,
     audioOutputCustomSettings: normalizeAudioOutputCustomSettings(audioOutputCustomSettings),
+    audioOutputCapabilities: buildAudioOutputCapabilities(),
     mpdBitPerfectMode: audioOutputProfileToMpdBitPerfectMode(normalizedProfile),
     displaySleepEnabled: displaySleep?.displaySleepEnabled === undefined ? true : displaySleep.displaySleepEnabled !== false,
     displaySleepMinutes,
@@ -5029,6 +5043,10 @@ async function restoreMpdBitPerfectPlayback(snapshot) {
 }
 
 async function writeUiPreferences(patch, options = {}) {
+  const readOnlyAudioOutputFields = ["audioOutputCapabilities", "purePath", "targetRateHz"];
+  if (readOnlyAudioOutputFields.some((field) => Object.prototype.hasOwnProperty.call(patch ?? {}, field))) {
+    throw new Error("Audio output capabilities are read-only");
+  }
   const current = await readUiPreferences();
   const hasLocalePatch = Object.prototype.hasOwnProperty.call(patch ?? {}, "locale");
   const locale = hasLocalePatch ? normalizeUiLocale(patch?.locale) : current.locale;
@@ -5090,7 +5108,8 @@ async function writeUiPreferences(patch, options = {}) {
     displaySleepStyle
   }, fontTheme, mpdBitPerfectMode, audioOutputProfile, audioOutputCustomSettings);
   await mkdir(dirname(UI_PREFERENCES_STATE_PATH), { recursive: true });
-  await writeFile(UI_PREFERENCES_STATE_PATH, `${JSON.stringify(next, null, 2)}\n`);
+  const { audioOutputCapabilities: _readOnlyCapabilities, ...persistedPreferences } = next;
+  await writeFile(UI_PREFERENCES_STATE_PATH, `${JSON.stringify(persistedPreferences, null, 2)}\n`);
   const shouldSyncInputMethod = options.syncInputMethod !== false && hasLocalePatch;
   const shouldSyncKeyboardVisual = options.syncInputMethod !== false && hasFontThemePatch;
   const warning = shouldSyncInputMethod
@@ -14151,6 +14170,85 @@ async function runWebModeCommand(action, providerId = "", env = {}) {
   });
 }
 
+const webModeSwitchTraceByRequestId = new Map();
+let webModeSwitchTraceWritePromise = Promise.resolve();
+
+function monotonicNowMs() {
+  return Number(process.hrtime.bigint() / 1_000_000n);
+}
+
+function normalizeWebModeSwitchTraceContext(raw, fromProvider, toProvider) {
+  if (!raw || typeof raw !== "object") return null;
+  const runId = String(raw.run_id ?? "").trim();
+  const roundId = Number(raw.round_id);
+  const passIndex = Number(raw.pass_index);
+  const requestId = String(raw.request_id ?? "").trim();
+  const expectedFrom = String(raw.from_provider ?? "").trim();
+  const expectedTo = String(raw.to_provider ?? "").trim();
+  const eventsPath = String(raw.events_path ?? "").trim();
+  const expiresAtMs = Number(raw.expires_at_ms);
+  const safeId = /^[A-Za-z0-9._:-]+$/;
+  if (!safeId.test(runId) || !safeId.test(requestId)) return null;
+  if (!Number.isInteger(roundId) || roundId < 1 || !Number.isInteger(passIndex) || passIndex < 1) return null;
+  if (expectedFrom !== fromProvider || expectedTo !== toProvider || !eventsPath) return null;
+  if (!Number.isFinite(expiresAtMs) || expiresAtMs < Date.now()) return null;
+  return {
+    runId,
+    roundId,
+    passIndex,
+    requestId,
+    fromProvider,
+    toProvider,
+    eventsPath: resolve(eventsPath),
+    monotonicOffsetMs: Date.now() - monotonicNowMs()
+  };
+}
+
+async function consumeWebModeSwitchTraceContext(fromProvider, toProvider) {
+  let raw;
+  try {
+    raw = JSON.parse(await readFile(WEB_MODE_SWITCH_TRACE_CONTEXT_PATH, "utf8"));
+  } catch {
+    return null;
+  }
+  await unlink(WEB_MODE_SWITCH_TRACE_CONTEXT_PATH).catch(() => {});
+  return normalizeWebModeSwitchTraceContext(raw, fromProvider, toProvider);
+}
+
+function recordWebModeSwitchTraceEvent(trace, event, { timestamp = monotonicNowMs(), elapsedMs = 0, result = "ok", errorCode = "" } = {}) {
+  if (!trace?.eventsPath) return;
+  const row = {
+    run_id: trace.runId,
+    round_id: trace.roundId,
+    from_provider: trace.fromProvider,
+    to_provider: trace.toProvider,
+    pass_index: trace.passIndex,
+    request_id: trace.requestId,
+    event,
+    timestamp,
+    elapsed_ms: elapsedMs,
+    result,
+    error_code: errorCode
+  };
+  webModeSwitchTraceWritePromise = webModeSwitchTraceWritePromise
+    .then(() => appendFile(trace.eventsPath, `${JSON.stringify(row)}\n`))
+    .catch(() => {});
+}
+
+function webModeSwitchTraceEnv(trace) {
+  if (!trace) return {};
+  return {
+    TIKPAL_WEB_MODE_SWITCH_TRACE_EVENTS_PATH: trace.eventsPath,
+    TIKPAL_WEB_MODE_SWITCH_TRACE_RUN_ID: trace.runId,
+    TIKPAL_WEB_MODE_SWITCH_TRACE_ROUND_ID: String(trace.roundId),
+    TIKPAL_WEB_MODE_SWITCH_TRACE_PASS_INDEX: String(trace.passIndex),
+    TIKPAL_WEB_MODE_SWITCH_TRACE_FROM_PROVIDER: trace.fromProvider,
+    TIKPAL_WEB_MODE_SWITCH_TRACE_TO_PROVIDER: trace.toProvider,
+    TIKPAL_WEB_MODE_SWITCH_TRACE_REQUEST_ID: trace.requestId,
+    TIKPAL_WEB_MODE_SWITCH_TRACE_MONOTONIC_OFFSET_MS: String(trace.monotonicOffsetMs)
+  };
+}
+
 async function prepareWebModeEntry(providerId) {
   await runWebModeCommand("prepare-entry", providerId, {
     // Entry preparation runs beside Tikpal's audio release. Give its short
@@ -14187,6 +14285,8 @@ function runResidentWebModeOpenInBackground() {
       const providerId = runtimeState.openingProvider;
       const openRequestId = runtimeState.openRequestId;
       if (!providerId || !openRequestId || runtimeState.closeRequestId) return;
+      const trace = webModeSwitchTraceByRequestId.get(openRequestId) ?? null;
+      recordWebModeSwitchTraceEvent(trace, "runner_started");
 
       try {
         await runWebModeCommand("open", providerId, {
@@ -14194,7 +14294,8 @@ function runResidentWebModeOpenInBackground() {
           // lifetime waiting behind another resident command for this lock.
           TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS: "25",
           TIKPAL_WEB_MODE_OPEN_EXPECTED_ACTIVE_PROVIDER: providerId,
-          TIKPAL_WEB_MODE_OPEN_REQUEST_ID: openRequestId
+          TIKPAL_WEB_MODE_OPEN_REQUEST_ID: openRequestId,
+          ...webModeSwitchTraceEnv(trace)
         });
         if (await residentWebModeOpenRequestIsCurrent(providerId, openRequestId)) {
           await writeWebModeRuntimeState({
@@ -14206,6 +14307,7 @@ function runResidentWebModeOpenInBackground() {
             closeRequestId: null
           });
         }
+        recordWebModeSwitchTraceEvent(trace, "runner_completed");
       } catch (error) {
         if (await residentWebModeOpenRequestIsCurrent(providerId, openRequestId).catch(() => false)) {
           await writeWebModeRuntimeState({
@@ -14214,6 +14316,9 @@ function runResidentWebModeOpenInBackground() {
             lastError: formatWebModeCommandError(error, "open", providerId)
           }).catch(() => {});
         }
+        recordWebModeSwitchTraceEvent(trace, "runner_completed", { result: "failed", errorCode: "open_command_failed" });
+      } finally {
+        webModeSwitchTraceByRequestId.delete(openRequestId);
       }
     }
   })();
@@ -14445,7 +14550,7 @@ async function pauseTikpalForWebMode() {
 
 let webModeKeyboardStickyUntilMs = 0;
 
-async function applyWebModeAction(action) {
+async function applyWebModeAction(action, { receivedMonotonicMs = monotonicNowMs() } = {}) {
   const type = String(action?.type ?? "").trim().toLowerCase();
   if (type === "close") {
     if (webModeClosePromise) {
@@ -14590,13 +14695,18 @@ async function applyWebModeAction(action) {
     const isResidentSwitch = previousRuntimeState.activeProvider
       && previousRuntimeState.activeProvider !== providerId;
     if (isResidentSwitch) {
-      const openRequestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const trace = await consumeWebModeSwitchTraceContext(previousRuntimeState.activeProvider, providerId);
+      const openRequestId = trace?.requestId ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      recordWebModeSwitchTraceEvent(trace, "api_received", { timestamp: receivedMonotonicMs });
       await writeWebModeRuntimeState({
         openingProvider: providerId,
         openRequestId,
         lastError: null,
         closeRequestId: null
       });
+      recordWebModeSwitchTraceEvent(trace, "opening_provider_written");
+      if (trace) webModeSwitchTraceByRequestId.set(openRequestId, trace);
+      recordWebModeSwitchTraceEvent(trace, "runner_created");
       runResidentWebModeOpenInBackground();
       return await buildWebModeState();
     }
@@ -15033,12 +15143,12 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    if (request.method === "GET" && url.pathname === "/api/v1/preferences") {
+    if (request.method === "GET" && (url.pathname === "/api/v1/preferences" || url.pathname === "/api/v1/ui/preferences")) {
       sendJson(response, 200, await readUiPreferences());
       return;
     }
 
-    if (request.method === "PATCH" && url.pathname === "/api/v1/preferences") {
+    if (request.method === "PATCH" && (url.pathname === "/api/v1/preferences" || url.pathname === "/api/v1/ui/preferences")) {
       sendJson(response, 200, await writeUiPreferences(await readJson(request)));
       return;
     }
@@ -15101,7 +15211,8 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "POST" && url.pathname === "/api/v1/web-mode/actions") {
-      sendJson(response, 200, await applyWebModeAction(await readJson(request)));
+      const receivedMonotonicMs = monotonicNowMs();
+      sendJson(response, 200, await applyWebModeAction(await readJson(request), { receivedMonotonicMs }));
       return;
     }
 

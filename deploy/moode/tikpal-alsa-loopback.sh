@@ -235,9 +235,17 @@ tikpal_alsa_rollback_managed_file() {
 tikpal_write_alsa_loopback_config() {
   config_path="$1"
   physical_target="$2"
+  rate_converter="${TIKPAL_ALSA_RATE_CONVERTER:-}"
   case "$physical_target" in
     *'"'*|*'\\'*)
       tikpal_alsa_warn "refusing an unsafe _audioout PCM target"
+      return 1
+      ;;
+  esac
+  case "$rate_converter" in
+    "") ;;
+    *[!A-Za-z0-9_-]*)
+      tikpal_alsa_warn "refusing unsafe ALSA rate converter '$rate_converter'"
       return 1
       ;;
   esac
@@ -250,6 +258,9 @@ tikpal_write_alsa_loopback_config() {
     printf '%s\n' '#########################################'
     printf '%s\n' 'pcm.!_audioout {'
     printf '%s\n' '  type plug'
+    if [ -n "$rate_converter" ]; then
+      printf '  rate_converter "%s"\n' "$rate_converter"
+    fi
     printf '%s\n' '  slave.pcm {'
     printf '%s\n' '    type multi'
     printf '%s\n' '    slaves {'

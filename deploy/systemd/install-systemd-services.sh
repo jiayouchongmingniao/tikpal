@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 SERVICE_USER="${SUDO_USER:-moode}"
 INSTALL_KIOSK=0
+INSTALL_X11_HELPER=0
 RESTART_SERVICES=0
 KIOSK_PACKAGES=(
   xvfb
@@ -30,6 +31,7 @@ Options:
   --app-dir PATH       App directory on the Pi (default: current repo root)
   --user NAME          Service user (default: current user)
   --enable-kiosk       Install and enable tikpal-kiosk.service and watchdog timer
+  --enable-x11-helper  Build and install the native X11 transaction helper
   --restart            Restart installed services after daemon-reload
   -h, --help           Show this help
 USAGE
@@ -47,6 +49,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --enable-kiosk)
       INSTALL_KIOSK=1
+      shift
+      ;;
+    --enable-x11-helper)
+      INSTALL_X11_HELPER=1
       shift
       ;;
     --restart)
@@ -81,6 +87,80 @@ install_unit() {
     "$template" > "$target"
   chmod 0644 "$target"
   echo "installed $target"
+}
+
+install_x11_helper() {
+  local source="$APP_DIR/deploy/chromium/tikpal-x11-helper.c"
+  local target_dir="/usr/local/libexec"
+  local target="$target_dir/tikpal-x11-helper"
+  local temporary_dir
+  local temporary_binary
+  local dropin_dir="/etc/systemd/system/tikpal-kiosk.service.d"
+  local unit_target="/etc/systemd/system/tikpal-x11-helper.service"
+  local backup_suffix
+  [[ -f "$source" ]] || {
+    echo "Missing $source" >&2
+    return 1
+  }
+  command -v cc >/dev/null 2>&1 || {
+    echo "cc is required to build tikpal-x11-helper" >&2
+    return 1
+  }
+  command -v pkg-config >/dev/null 2>&1 || {
+    echo "pkg-config is required to build tikpal-x11-helper" >&2
+    return 1
+  }
+  pkg-config --exists xcb json-c || {
+    echo "xcb and json-c development packages are required to build tikpal-x11-helper" >&2
+    return 1
+  }
+  temporary_dir="$(mktemp -d /tmp/tikpal-x11-helper.XXXXXX)"
+  temporary_binary="$temporary_dir/tikpal-x11-helper"
+  if ! cc -std=c11 -O2 -Wall -Wextra -Werror \
+    -D_POSIX_C_SOURCE=200809L \
+    $(pkg-config --cflags xcb json-c) \
+    "$source" -o "$temporary_binary" \
+    $(pkg-config --libs xcb json-c); then
+    rm -rf "$temporary_dir"
+    return 1
+  fi
+  if ! "$temporary_binary" self-test; then
+    rm -rf "$temporary_dir"
+    return 1
+  fi
+  mkdir -p "$target_dir" "$dropin_dir"
+  backup_suffix="$(date +%Y%m%d%H%M%S)"
+  if [[ -e "$target" ]]; then
+    echo "existing helper: $(sha256sum "$target") owner_mode=$(stat -c '%U:%G %a' "$target")"
+    cp -a "$target" "$target.bak.$backup_suffix"
+  fi
+  if [[ -e "$unit_target" ]]; then
+    cp -a "$unit_target" "$unit_target.bak.$backup_suffix"
+  fi
+  if [[ -e "$dropin_dir/x11-helper.conf" ]]; then
+    cp -a "$dropin_dir/x11-helper.conf" "$dropin_dir/x11-helper.conf.bak.$backup_suffix"
+  fi
+  install -o root -g root -m 0755 "$temporary_binary" "$target.new.$$"
+  mv -f "$target.new.$$" "$target"
+  rm -rf "$temporary_dir"
+  install_unit "$SCRIPT_DIR/tikpal-x11-helper.service"
+  install -o root -g root -m 0644 \
+    "$SCRIPT_DIR/tikpal-kiosk-x11-helper.conf" "$dropin_dir/x11-helper.conf.new.$$"
+  mv -f "$dropin_dir/x11-helper.conf.new.$$" "$dropin_dir/x11-helper.conf"
+  echo "installed helper: $(sha256sum "$target") owner_mode=$(stat -c '%U:%G %a' "$target")"
+  echo "installed $dropin_dir/x11-helper.conf"
+}
+
+wait_x11_helper_health() {
+  local attempt
+  for attempt in {1..20}; do
+    if /usr/local/libexec/tikpal-x11-helper client health >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.25
+  done
+  systemctl status --no-pager -l tikpal-x11-helper.service >&2 || true
+  return 1
 }
 
 install_kiosk_packages() {
@@ -200,6 +280,8 @@ EOF
 install_roonbridge_helpers() {
   local multiroom_helper="/usr/local/sbin/tikpal-multiroom-state"
   local roon_helper="/usr/local/sbin/tikpal-roonbridge-state"
+  local alsa_loopback_helper="/usr/local/sbin/tikpal-alsa-loopback.sh"
+  local audio_adapt_helper="/usr/local/sbin/tikpal-audio-adapt"
   local audio_profile_helper="/usr/local/sbin/tikpal-audio-output-profile"
   local mpd_profile_helper="/usr/local/sbin/tikpal-mpd-bitperfect-profile"
   local sudoers_file="/etc/sudoers.d/tikpal-roonbridge-mpd"
@@ -212,6 +294,10 @@ install_roonbridge_helpers() {
     echo "installed $roon_helper"
   fi
   if [[ -f "$APP_DIR/deploy/moode/tikpal-audio-output-profile.sh" ]]; then
+    install -o root -g root -m 0755 "$APP_DIR/deploy/moode/tikpal-alsa-loopback.sh" "$alsa_loopback_helper"
+    echo "installed $alsa_loopback_helper"
+    install -o root -g root -m 0755 "$APP_DIR/deploy/moode/tikpal-audio-adapt.sh" "$audio_adapt_helper"
+    echo "installed $audio_adapt_helper"
     install -o root -g root -m 0755 "$APP_DIR/deploy/moode/tikpal-audio-output-profile.sh" "$audio_profile_helper"
     echo "installed $audio_profile_helper"
   fi
@@ -223,7 +309,7 @@ install_roonbridge_helpers() {
     local tmp_sudoers
     tmp_sudoers="$(mktemp)"
     cat > "$tmp_sudoers" <<EOF
-Defaults:$SERVICE_USER env_keep += "TIKPAL_MULTIROOM_ROON_SERVICE TIKPAL_MULTIROOM_ROON_LABEL TIKPAL_MULTIROOM_LYRION_SERVICE TIKPAL_MULTIROOM_LYRION_LABEL TIKPAL_MULTIROOM_TIKPAL_SERVICE TIKPAL_MULTIROOM_TIKPAL_LABEL TIKPAL_ROONBRIDGE_SERVICE TIKPAL_ROONBRIDGE_LABEL TIKPAL_MPD_CONF TIKPAL_MPD_STANDARD_ALSA_DEVICE TIKPAL_MPD_PURE_ALSA_DEVICE TIKPAL_MPD_BITPERFECT_ALSA_DEVICE TIKPAL_MPD_SLEEP_SAMPLE_RATE TIKPAL_MPD_SLEEP_VOLUME_LIMIT TIKPAL_AUDIO_CARD_FORCE"
+Defaults:$SERVICE_USER env_keep += "TIKPAL_MULTIROOM_ROON_SERVICE TIKPAL_MULTIROOM_ROON_LABEL TIKPAL_MULTIROOM_LYRION_SERVICE TIKPAL_MULTIROOM_LYRION_LABEL TIKPAL_MULTIROOM_TIKPAL_SERVICE TIKPAL_MULTIROOM_TIKPAL_LABEL TIKPAL_ROONBRIDGE_SERVICE TIKPAL_ROONBRIDGE_LABEL TIKPAL_MPD_CONF TIKPAL_MPD_STANDARD_ALSA_DEVICE TIKPAL_MPD_SLEEP_SAMPLE_RATE TIKPAL_MPD_SLEEP_VOLUME_LIMIT TIKPAL_MPD_RESAMPLER_PLUGIN TIKPAL_MPD_RESAMPLER_QUALITY TIKPAL_MPD_RESAMPLER_THREADS TIKPAL_MPD_PURE_PATH TIKPAL_MPD_PURE_TARGET_RATE TIKPAL_AUDIO_CARD_FORCE TIKPAL_AUDIO_CARD_PRIORITY TIKPAL_AUDIO_PREFER_SINGLE_USB"
 $SERVICE_USER ALL=(root) NOPASSWD:SETENV: $multiroom_helper, $roon_helper, $audio_profile_helper, $mpd_profile_helper
 EOF
     if visudo -cf "$tmp_sudoers" >/dev/null; then
@@ -390,12 +476,15 @@ ensure_roonbridge_env() {
     printf 'TIKPAL_MPD_STANDARD_ALSA_DEVICE=_audioout\n' >> "$env_file"
     updated=1
   fi
-  if ! grep -q '^TIKPAL_MPD_PURE_ALSA_DEVICE=' "$env_file"; then
-    printf 'TIKPAL_MPD_PURE_ALSA_DEVICE=\n' >> "$env_file"
+  if ! grep -q '^TIKPAL_MPD_RESAMPLER_PLUGIN=' "$env_file"; then
+    printf 'TIKPAL_MPD_RESAMPLER_PLUGIN=soxr\n' >> "$env_file"
+    printf 'TIKPAL_MPD_RESAMPLER_QUALITY=high\n' >> "$env_file"
+    printf 'TIKPAL_MPD_RESAMPLER_THREADS=0\n' >> "$env_file"
     updated=1
   fi
-  if ! grep -q '^TIKPAL_MPD_BITPERFECT_ALSA_DEVICE=' "$env_file"; then
-    printf 'TIKPAL_MPD_BITPERFECT_ALSA_DEVICE=\n' >> "$env_file"
+  if ! grep -q '^TIKPAL_MPD_PURE_PATH=' "$env_file"; then
+    printf 'TIKPAL_MPD_PURE_PATH=unknown\n' >> "$env_file"
+    printf 'TIKPAL_MPD_PURE_TARGET_RATE=48000\n' >> "$env_file"
     updated=1
   fi
   if ! grep -q '^TIKPAL_MPD_SLEEP_SAMPLE_RATE=' "$env_file"; then
@@ -497,6 +586,10 @@ install_unit "$SCRIPT_DIR/tikpal-web.service"
 install_unit "$SCRIPT_DIR/tikpal-audio-adapt.service"
 install_unit "$SCRIPT_DIR/tikpal-library-sync.service"
 
+if [[ "$INSTALL_X11_HELPER" -eq 1 ]]; then
+  install_x11_helper
+fi
+
 if [[ "$INSTALL_KIOSK" -eq 1 ]]; then
   if [[ "${TIKPAL_INSTALL_KIOSK_PACKAGES:-1}" != "0" ]]; then
     install_kiosk_packages
@@ -536,6 +629,10 @@ done
 systemctl daemon-reload
 systemctl enable tikpal-audio-adapt.service tikpal-library-sync.service tikpal-api.service tikpal-web.service
 
+if [[ "$INSTALL_X11_HELPER" -eq 1 ]]; then
+  systemctl enable tikpal-x11-helper.service
+fi
+
 if [[ "$INSTALL_KIOSK" -eq 1 ]]; then
   loginctl enable-linger "$SERVICE_USER"
   systemctl enable tikpal-kiosk.service tikpal-kiosk-viewer.service tikpal-kiosk-devtools.service tikpal-kiosk-watchdog.timer
@@ -549,6 +646,10 @@ if [[ "$RESTART_SERVICES" -eq 1 ]]; then
   systemctl restart tikpal-library-sync.service
   systemctl restart tikpal-api.service
   systemctl restart tikpal-web.service
+  if [[ "$INSTALL_X11_HELPER" -eq 1 ]]; then
+    systemctl restart tikpal-x11-helper.service
+    wait_x11_helper_health
+  fi
   if [[ "$INSTALL_KIOSK" -eq 1 ]]; then
     systemctl restart tikpal-kiosk.service
     systemctl restart tikpal-kiosk-viewer.service
@@ -567,6 +668,10 @@ echo "  systemctl is-active tikpal-api.service tikpal-web.service"
 echo "  curl -fsS http://127.0.0.1:8787/api/v1/health"
 echo "  curl -fsSI http://127.0.0.1:4173/"
 echo "  curl -fsSI http://127.0.0.1:4174/"
+if [[ "$INSTALL_X11_HELPER" -eq 1 ]]; then
+  echo "  systemctl status tikpal-x11-helper.service"
+  echo "  /usr/local/libexec/tikpal-x11-helper health"
+fi
 if [[ "$INSTALL_KIOSK" -eq 1 ]]; then
   echo "  $APP_DIR/deploy/chromium/launch-tikpal-kiosk.sh --check"
   echo "  systemctl status tikpal-kiosk.service"

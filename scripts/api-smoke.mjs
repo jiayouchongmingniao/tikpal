@@ -167,11 +167,11 @@ function runAccessControlHelperSmoke() {
   assert(
     getTikpalApiAccessDecision({
       method: "GET",
-      pathname: "/api/v1/preferences",
+      pathname: "/api/v1/ui/preferences",
       remoteAddress: "192.168.10.44",
       portableApiKey: PORTABLE_API_KEY
     }).allowed === true,
-    "external clients should be able to read device language preferences"
+    "external clients should be able to read device UI preferences"
   );
   assert(
     getTikpalApiAccessDecision({
@@ -5222,6 +5222,8 @@ exit 0
       TIKPAL_ROOM_EXPERIENCE_STATE_PATH: roomExperienceStatePath,
       TIKPAL_AUDIO_SOURCE_MEMORY_STATE_PATH: audioSourceMemoryStatePath,
       TIKPAL_UI_PREFERENCES_STATE_PATH: uiPreferencesStatePath,
+      TIKPAL_MPD_PURE_PATH: "resampled",
+      TIKPAL_MPD_PURE_TARGET_RATE: "48000",
       TIKPAL_WEB_MODE_SETTINGS_PATH: webModeSettingsPath,
       TIKPAL_WEB_MODE_STATE_PATH: webModeStatePath,
       TIKPAL_NAS_SOURCES_STATE_PATH: nasSourcesStatePath,
@@ -5273,6 +5275,20 @@ exit 0
     assert(initial.body.preferences.audioOutputCustomSettings?.volumeNormalization === true, "preferences should default Custom volume normalization on");
     assert(initial.body.preferences.audioOutputCustomSettings?.dsdMode === false, "preferences should default Custom DSD mode off");
     assert(initial.body.preferences.mpdBitPerfectMode === "standard", "legacy MPD quality should derive from Everyday");
+    assert(initial.body.preferences.audioOutputCapabilities?.purePath === "resampled" && initial.body.preferences.audioOutputCapabilities?.targetRateHz === 48000, "preferences should expose the configured read-only Pure SRC capability");
+
+    const uiPreferences = await request("/api/v1/ui/preferences");
+    assert(uiPreferences.response.ok && uiPreferences.body.audioOutputCapabilities?.targetRateHz === 48000, "UI preferences route should expose audio output capabilities");
+    const readOnlyCapabilitiesPatch = await request("/api/v1/ui/preferences", {
+      method: "PATCH",
+      body: JSON.stringify({ audioOutputCapabilities: { purePath: "native", targetRateHz: null } })
+    });
+    assert(readOnlyCapabilitiesPatch.response.status === 400, "preferences should reject writes to audio output capabilities");
+    const directReadOnlyCapabilitiesPatch = await request("/api/v1/ui/preferences", {
+      method: "PATCH",
+      body: JSON.stringify({ purePath: "native", targetRateHz: 96000 })
+    });
+    assert(directReadOnlyCapabilitiesPatch.response.status === 400, "preferences should reject direct writes to audio output capability fields");
 
     const pureAudioProfile = await request("/api/v1/preferences", {
       method: "PATCH",
@@ -5329,6 +5345,8 @@ exit 0
       body: JSON.stringify({ audioOutputProfile: "everyday" })
     });
     assert(everydayAudioProfile.response.ok, "preferences should switch Audio Output back to Everyday");
+    const persistedUiPreferences = JSON.parse(await readFile(uiPreferencesStatePath, "utf8"));
+    assert(!Object.prototype.hasOwnProperty.call(persistedUiPreferences, "audioOutputCapabilities"), "read-only audio output capabilities should not be persisted in writable preferences state");
 
     const audioDiagnostics = await request("/api/v1/audio/output-diagnostics");
     assert(audioDiagnostics.response.ok, "Audio Output diagnostics should return 200 for the local kiosk API");

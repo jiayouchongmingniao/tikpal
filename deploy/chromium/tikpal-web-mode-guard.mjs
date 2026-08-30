@@ -211,14 +211,32 @@ function profileProcessExists() {
   return result.status === 0;
 }
 
-function providerIsActive() {
-  if (!statePath || !providerId) return true;
+function providerRuntimeRole(currentProviderId, activeProvider, openingProvider) {
+  const active = activeProvider === currentProviderId;
+  const opening = openingProvider === currentProviderId;
+  return {
+    active,
+    opening,
+    deactivating: active && Boolean(openingProvider) && !opening
+  };
+}
+
+function readProviderRuntimeState() {
+  if (!statePath || !providerId) return { active: true, opening: false, deactivating: false };
   try {
     const state = JSON.parse(readFileSync(statePath, "utf8"));
-    return String(state?.activeProvider || "") === providerId;
+    return providerRuntimeRole(
+      providerId,
+      String(state?.activeProvider || ""),
+      String(state?.openingProvider || "")
+    );
   } catch {
-    return true;
+    return { active: true, opening: false, deactivating: false };
   }
+}
+
+function providerIsActive() {
+  return readProviderRuntimeState().active;
 }
 
 async function readTargets() {
@@ -2640,21 +2658,129 @@ async function runProviderAudioGate(targets, active) {
   }
 }
 
+function providerGuardSchedule(currentProviderId, active, activePass) {
+  if (currentProviderId !== "spotify") {
+    return { activePass, phase: "full", consent: true, dismiss: true, activeFeatures: active };
+  }
+  const nextActivePass = active ? activePass + 1 : 0;
+  if (!active || nextActivePass <= 2) {
+    return { activePass: nextActivePass, phase: active ? "light" : "inactive", consent: false, dismiss: false, activeFeatures: false };
+  }
+  if (nextActivePass === 3) {
+    return { activePass: nextActivePass, phase: "consent", consent: true, dismiss: false, activeFeatures: false };
+  }
+  if (nextActivePass === 4) {
+    return { activePass: nextActivePass, phase: "dismiss", consent: false, dismiss: true, activeFeatures: false };
+  }
+  return { activePass: nextActivePass, phase: "full", consent: true, dismiss: true, activeFeatures: true };
+}
+
+function providerAudioGateEnabled(opening) {
+  return !opening;
+}
+
+function providerAudioGateActive(active, deactivating) {
+  return active && !deactivating;
+}
+
+function providerRuntimeMaintenanceEnabled(currentProviderId, opening) {
+  return currentProviderId !== "spotify" || !opening;
+}
+
+function runProviderGuardScheduleFixtures() {
+  const expect = (condition, message) => {
+    if (!condition) throw new Error(`provider guard schedule fixture failed: ${message}`);
+  };
+  let activePass = 0;
+  const nextSpotify = (active) => {
+    const schedule = providerGuardSchedule("spotify", active, activePass);
+    activePass = schedule.activePass;
+    return schedule;
+  };
+
+  for (let pass = 1; pass <= 3; pass += 1) {
+    const schedule = nextSpotify(false);
+    expect(schedule.phase === "inactive" && !schedule.consent && !schedule.dismiss && activePass === 0, `inactive pass ${pass}`);
+  }
+  for (const [pass, expectedPhase] of ["light", "light", "consent", "dismiss", "full"].entries()) {
+    const schedule = nextSpotify(true);
+    expect(schedule.phase === expectedPhase && schedule.activePass === pass + 1, `active pass ${pass + 1}`);
+  }
+  expect(activePass === 5, "active pass state should reach five");
+  expect(nextSpotify(false).activePass === 0, "active to inactive should reset pass state");
+  expect(nextSpotify(true).activePass === 1, "reactivation should restart at pass one");
+
+  const startedActive = providerGuardSchedule("spotify", true, 0);
+  expect(startedActive.phase === "light" && startedActive.activePass === 1, "active startup should begin at pass one");
+  const reusedActive = providerGuardSchedule("spotify", true, 5);
+  expect(reusedActive.phase === "full" && reusedActive.activePass === 6, "reconcile reuse should preserve active pass state");
+  const refreshedActive = providerGuardSchedule("spotify", true, 0);
+  expect(refreshedActive.phase === "light" && refreshedActive.activePass === 1, "explicit refresh should reset active pass state");
+
+  const inactiveOther = providerGuardSchedule("youtube_music", false, 0);
+  const activeOther = providerGuardSchedule("youtube_music", true, 0);
+  expect(inactiveOther.consent && inactiveOther.dismiss && !inactiveOther.activeFeatures, "inactive non-Spotify behavior should stay unchanged");
+  expect(activeOther.consent && activeOther.dismiss && activeOther.activeFeatures, "active non-Spotify behavior should stay unchanged");
+  expect(providerAudioGateEnabled(false), "settled providers should keep Guard audio-gate ownership");
+  expect(!providerAudioGateEnabled(true), "every opening target should yield audio-gate ownership to the foreground handoff");
+  expect(providerAudioGateActive(true, false), "a settled active provider should keep audio enabled");
+  expect(!providerAudioGateActive(true, true), "the previous provider should mute as soon as a handoff starts");
+  expect(!providerAudioGateActive(false, false), "ordinary inactive providers should stay muted");
+  const previousRole = providerRuntimeRole("youtube_music", "youtube_music", "qobuz");
+  const targetRole = providerRuntimeRole("qobuz", "youtube_music", "qobuz");
+  const settledRole = providerRuntimeRole("qobuz", "qobuz", "");
+  expect(previousRole.active && previousRole.deactivating && !previousRole.opening, "the previous provider should be classified as deactivating");
+  expect(!targetRole.active && targetRole.opening && !targetRole.deactivating, "the target provider should be classified as opening");
+  expect(settledRole.active && !settledRole.opening && !settledRole.deactivating, "the committed target should be classified as settled active");
+  expect(!providerRuntimeMaintenanceEnabled("spotify", true), "opening Spotify should yield all guard Runtime maintenance");
+  expect(providerRuntimeMaintenanceEnabled("spotify", false), "settled Spotify should keep guard Runtime maintenance");
+  expect(providerRuntimeMaintenanceEnabled("youtube_music", true), "non-Spotify Runtime maintenance should stay unchanged");
+}
+
+let spotifyActivePass = 0;
+let spotifyInactivePass = 0;
+let spotifyOpeningPass = 0;
+
 async function guardOnce() {
   if (typeof WebSocket !== "function") return;
-  const active = providerIsActive();
+  const runtimeState = readProviderRuntimeState();
+  const { active, opening, deactivating } = runtimeState;
+  const schedule = providerGuardSchedule(providerId, active, spotifyActivePass);
+  const audioGateEnabled = providerAudioGateEnabled(opening);
+  const audioGateActive = providerAudioGateActive(active, deactivating);
+  const runtimeMaintenanceEnabled = providerRuntimeMaintenanceEnabled(providerId, opening);
+  spotifyActivePass = schedule.activePass;
+  spotifyInactivePass = providerId === "spotify" && !active ? spotifyInactivePass + 1 : 0;
+  spotifyOpeningPass = providerId === "spotify" && opening ? spotifyOpeningPass + 1 : 0;
+  if (providerId === "spotify" && (active ? spotifyActivePass <= 5 : opening ? spotifyOpeningPass <= 5 : spotifyInactivePass <= 5)) {
+    const phase = audioGateEnabled ? schedule.phase : "handoff";
+    console.log(`[tikpal-web-mode-guard] spotify schedule active=${active ? 1 : 0} opening=${opening ? 1 : 0} deactivating=${deactivating ? 1 : 0} active_pass=${spotifyActivePass} inactive_pass=${spotifyInactivePass} opening_pass=${spotifyOpeningPass} phase=${phase} runtime=${runtimeMaintenanceEnabled ? 1 : 0} audio_gate_owner=${audioGateEnabled ? 1 : 0} audio_active=${audioGateActive ? 1 : 0} consent=${schedule.consent ? 1 : 0} dismiss=${schedule.dismiss ? 1 : 0}`);
+  }
   const targets = (await readTargets()).filter(isPageTarget);
+  // While Spotify is opening, the foreground switch exclusively owns Runtime
+  // until its one bounded setActive(true) call and active-state commit finish.
+  // The resident status sync below is file/process based and does not touch CDP.
+  if (!runtimeMaintenanceEnabled) {
+    syncResidentProviderStatus(targets, active);
+    return;
+  }
   await Promise.all(targets.map(async (target) => {
     attachEarlyErrorRedirect(target);
     await installKioskGuard(target);
     await maybeRedirectErrorPage(target);
   }));
   syncResidentProviderStatus(targets, active);
-  await runProviderAudioGate(targets, active);
+  // The foreground switch exclusively owns setActive(true) for the opening
+  // target. Its previous active owner is muted immediately instead of being
+  // reactivated by Guard until activeProvider commits the handoff.
+  if (audioGateEnabled) await runProviderAudioGate(targets, audioGateActive);
   if (active) await runInputFocusKeyboard(targets);
-  await runConsentFeatures(targets);
-  await runSafeDismissFeatures(targets);
-  if (active) {
+  // Spotify's inactive consent/dismiss scans can overlap the serialized audio
+  // gate that runs before activeProvider is committed. Keep inactive passes
+  // light, then spread the first expensive active scans across separate ticks.
+  if (schedule.consent) await runConsentFeatures(targets);
+  if (schedule.dismiss) await runSafeDismissFeatures(targets);
+  if (schedule.activeFeatures) {
     await runSafePromptFeatures(targets);
     await runQqMusicAutoPlayFeatures(targets);
     await runQqAudioFeatures(targets);
@@ -2666,7 +2792,9 @@ async function guardOnce() {
 }
 
 if (process.argv.includes("--check")) {
+  runProviderGuardScheduleFixtures();
   console.log("[tikpal-web-mode-guard] check passed");
+  console.log("[tikpal-web-mode-guard] spotify schedule fixtures: 1");
   console.log(`[tikpal-web-mode-guard] port: ${Number.isFinite(port) ? port : 9234}`);
   console.log("[tikpal-web-mode-guard] kiosk interaction blocking: 1");
   console.log("[tikpal-web-mode-guard] friendly error redirect: 1");

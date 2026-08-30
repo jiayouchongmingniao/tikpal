@@ -17,6 +17,10 @@ export const defaultPreferences: UiPreferences = {
     dsdMode: false,
     playbackStability: true
   },
+  audioOutputCapabilities: {
+    purePath: "unknown",
+    targetRateHz: null
+  },
   mpdBitPerfectMode: "standard",
   displaySleepEnabled: true,
   displaySleepMinutes: 10,
@@ -1302,7 +1306,9 @@ Object.assign(dictionaries.en, {
   "settings.audioProfile.everydayHint": "Comfortable daily playback",
   "settings.audioProfile.sleepHint": "Gentle and capped",
   "settings.audioProfile.customHint": "Your saved setup",
-  "settings.audioProfile.pureTraits": "Bit-perfect · DAC exclusive · ReplayGain off",
+  "settings.audioProfile.pureTraitsNative": "Native rate when supported · DAC exclusive · ReplayGain off",
+  "settings.audioProfile.pureTraitsResampled": "SoXR → {rate} kHz · DAC exclusive · ReplayGain off",
+  "settings.audioProfile.pureTraitsUnknown": "Rate path unverified · DAC exclusive · ReplayGain off",
   "settings.audioProfile.everydayTraits": "ReplayGain auto · Crossfade 2s · Preload on",
   "settings.audioProfile.sleepTraits": "48 kHz · Crossfade 5s · Stops in 60 min",
   "settings.audioProfile.customTraits": "Custom MPD output · Saved helper values",
@@ -1413,7 +1419,9 @@ Object.assign(dictionaries["zh-CN"], {
   "settings.audioProfile.everydayHint": "日常顺手播放",
   "settings.audioProfile.sleepHint": "柔和限音量",
   "settings.audioProfile.customHint": "使用你的保存配置",
-  "settings.audioProfile.pureTraits": "Bit-perfect · DAC 独占 · ReplayGain 关",
+  "settings.audioProfile.pureTraitsNative": "支持时原生采样率 · DAC 独占 · ReplayGain 关",
+  "settings.audioProfile.pureTraitsResampled": "SoXR → {rate} kHz · DAC 独占 · ReplayGain 关",
+  "settings.audioProfile.pureTraitsUnknown": "采样率路径未验证 · DAC 独占 · ReplayGain 关",
   "settings.audioProfile.everydayTraits": "ReplayGain 自动 · 2 秒交叉淡化 · 预加载",
   "settings.audioProfile.sleepTraits": "48 kHz · 5 秒交叉淡化 · 60 分钟停止",
   "settings.audioProfile.customTraits": "自定义 MPD 输出 · 保留 helper 参数",
@@ -1524,7 +1532,9 @@ Object.assign(dictionaries.de, {
   "settings.audioProfile.everydayHint": "Bequemes tägliches Hören",
   "settings.audioProfile.sleepHint": "Sanft und begrenzt",
   "settings.audioProfile.customHint": "Dein gespeichertes Setup",
-  "settings.audioProfile.pureTraits": "Bit-perfect · DAC exklusiv · ReplayGain aus",
+  "settings.audioProfile.pureTraitsNative": "Native Rate wenn unterstützt · DAC exklusiv · ReplayGain aus",
+  "settings.audioProfile.pureTraitsResampled": "SoXR → {rate} kHz · DAC exklusiv · ReplayGain aus",
+  "settings.audioProfile.pureTraitsUnknown": "Rate-Pfad ungeprüft · DAC exklusiv · ReplayGain aus",
   "settings.audioProfile.everydayTraits": "ReplayGain auto · Crossfade 2s · Preload an",
   "settings.audioProfile.sleepTraits": "48 kHz · Crossfade 5s · Stoppt in 60 min",
   "settings.audioProfile.customTraits": "Custom MPD Ausgang · Helper Werte",
@@ -1635,7 +1645,9 @@ Object.assign(dictionaries.it, {
   "settings.audioProfile.everydayHint": "Ascolto quotidiano comodo",
   "settings.audioProfile.sleepHint": "Dolce e limitato",
   "settings.audioProfile.customHint": "Configurazione salvata",
-  "settings.audioProfile.pureTraits": "Bit-perfect · DAC esclusivo · ReplayGain off",
+  "settings.audioProfile.pureTraitsNative": "Frequenza nativa se supportata · DAC esclusivo · ReplayGain off",
+  "settings.audioProfile.pureTraitsResampled": "SoXR → {rate} kHz · DAC esclusivo · ReplayGain off",
+  "settings.audioProfile.pureTraitsUnknown": "Percorso frequenza non verificato · DAC esclusivo · ReplayGain off",
   "settings.audioProfile.everydayTraits": "ReplayGain auto · Crossfade 2s · Preload on",
   "settings.audioProfile.sleepTraits": "48 kHz · Crossfade 5s · Stop tra 60 min",
   "settings.audioProfile.customTraits": "Uscita MPD custom · Valori helper",
@@ -1746,7 +1758,9 @@ Object.assign(dictionaries.ko, {
   "settings.audioProfile.everydayHint": "편한 일상 재생",
   "settings.audioProfile.sleepHint": "부드럽고 제한됨",
   "settings.audioProfile.customHint": "저장된 설정 사용",
-  "settings.audioProfile.pureTraits": "Bit-perfect · DAC 독점 · ReplayGain 끔",
+  "settings.audioProfile.pureTraitsNative": "지원 시 네이티브 레이트 · DAC 독점 · ReplayGain 끔",
+  "settings.audioProfile.pureTraitsResampled": "SoXR → {rate} kHz · DAC 독점 · ReplayGain 끔",
+  "settings.audioProfile.pureTraitsUnknown": "샘플레이트 경로 미검증 · DAC 독점 · ReplayGain 끔",
   "settings.audioProfile.everydayTraits": "ReplayGain 자동 · Crossfade 2초 · Preload 켬",
   "settings.audioProfile.sleepTraits": "48 kHz · Crossfade 5초 · 60분 후 정지",
   "settings.audioProfile.customTraits": "사용자 MPD 출력 · Helper 값",
@@ -1857,7 +1871,9 @@ Object.assign(dictionaries.ja, {
   "settings.audioProfile.everydayHint": "普段使いの再生",
   "settings.audioProfile.sleepHint": "穏やかで制限あり",
   "settings.audioProfile.customHint": "保存した設定",
-  "settings.audioProfile.pureTraits": "Bit-perfect · DAC専有 · ReplayGainオフ",
+  "settings.audioProfile.pureTraitsNative": "対応時はネイティブレート · DAC専有 · ReplayGainオフ",
+  "settings.audioProfile.pureTraitsResampled": "SoXR → {rate} kHz · DAC専有 · ReplayGainオフ",
+  "settings.audioProfile.pureTraitsUnknown": "レート経路未検証 · DAC専有 · ReplayGainオフ",
   "settings.audioProfile.everydayTraits": "ReplayGain自動 · Crossfade 2秒 · Preloadオン",
   "settings.audioProfile.sleepTraits": "48 kHz · Crossfade 5秒 · 60分で停止",
   "settings.audioProfile.customTraits": "カスタムMPD出力 · Helper値",
@@ -1968,7 +1984,9 @@ Object.assign(dictionaries.es, {
   "settings.audioProfile.everydayHint": "Escucha diaria cómoda",
   "settings.audioProfile.sleepHint": "Suave y limitado",
   "settings.audioProfile.customHint": "Tu ajuste guardado",
-  "settings.audioProfile.pureTraits": "Bit-perfect · DAC exclusivo · ReplayGain off",
+  "settings.audioProfile.pureTraitsNative": "Frecuencia nativa si es compatible · DAC exclusivo · ReplayGain off",
+  "settings.audioProfile.pureTraitsResampled": "SoXR → {rate} kHz · DAC exclusivo · ReplayGain off",
+  "settings.audioProfile.pureTraitsUnknown": "Ruta de frecuencia sin verificar · DAC exclusivo · ReplayGain off",
   "settings.audioProfile.everydayTraits": "ReplayGain auto · Crossfade 2s · Preload on",
   "settings.audioProfile.sleepTraits": "48 kHz · Crossfade 5s · Se detiene en 60 min",
   "settings.audioProfile.customTraits": "Salida MPD custom · Valores helper",
@@ -2670,12 +2688,22 @@ function normalizePreferences(value: UiPreferences): UiPreferences {
   const minutes = Number(value?.displaySleepMinutes);
   const rawStyle = String(value?.displaySleepStyle ?? "").trim().toLowerCase().replaceAll("-", "_");
   const style = (rawStyle === "blank" || rawStyle === "dim_waves" ? "meteor_shower" : rawStyle === "dvd" || rawStyle === "dvd_bounce" ? "signal" : rawStyle) as DisplaySleepStyle;
+  const purePath = ["native", "resampled", "unknown"].includes(value?.audioOutputCapabilities?.purePath)
+    ? value.audioOutputCapabilities.purePath
+    : "unknown";
+  const rawTargetRateHz = Number(value?.audioOutputCapabilities?.targetRateHz);
   return {
     locale,
     inputMethodId: "keyboard-us",
     fontTheme,
     audioOutputProfile,
     audioOutputCustomSettings: normalizeAudioOutputCustomSettings(value?.audioOutputCustomSettings),
+    audioOutputCapabilities: {
+      purePath,
+      targetRateHz: purePath === "resampled" && Number.isInteger(rawTargetRateHz) && rawTargetRateHz > 0
+        ? rawTargetRateHz
+        : null
+    },
     mpdBitPerfectMode: mpdModeFromAudioProfile(audioOutputProfile),
     displaySleepEnabled: value?.displaySleepEnabled === undefined ? true : value.displaySleepEnabled !== false,
     displaySleepMinutes: displaySleepMinuteOptions.includes(minutes as typeof displaySleepMinuteOptions[number])

@@ -6,6 +6,7 @@ const SAFE_REMOTE_GET_PATHS = new Set([
   "/api/v1/health",
   "/api/v1/system/health",
   "/api/v1/preferences",
+  "/api/v1/ui/preferences",
   "/api/v1/multiroom",
   "/api/v1/roonbridge",
   "/api/v1/remote/state",

@@ -439,6 +439,10 @@ export const fallbackTikpalState: TikpalState = {
       dsdMode: false,
       playbackStability: true
     },
+    audioOutputCapabilities: {
+      purePath: "unknown",
+      targetRateHz: null
+    },
     mpdBitPerfectMode: "standard",
     displaySleepEnabled: true,
     displaySleepMinutes: 10,

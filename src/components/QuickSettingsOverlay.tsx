@@ -1716,13 +1716,22 @@ export function QuickSettingsOverlay({
   }
 
   function renderAudioOutputDetail() {
+    const pureCapabilities = preferences.audioOutputCapabilities;
+    const pureTargetRateKhz = pureCapabilities.targetRateHz === null
+      ? null
+      : Number((pureCapabilities.targetRateHz / 1000).toFixed(1));
+    const pureTraits = pureCapabilities.purePath === "native"
+      ? t("settings.audioProfile.pureTraitsNative")
+      : pureCapabilities.purePath === "resampled" && pureTargetRateKhz !== null
+        ? t("settings.audioProfile.pureTraitsResampled", { rate: pureTargetRateKhz })
+        : t("settings.audioProfile.pureTraitsUnknown");
     const profileChoices: Array<{ id: AudioOutputProfile; icon: typeof Waves; label: string; sample: string; traits: string }> = [
       {
         id: "pure",
         icon: Target,
         label: t("settings.audioProfile.pure"),
         sample: t("settings.audioProfile.pureHint"),
-        traits: t("settings.audioProfile.pureTraits")
+        traits: pureTraits
       },
       {
         id: "everyday",

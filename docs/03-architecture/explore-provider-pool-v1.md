@@ -107,9 +107,9 @@ The physical acceptance script clears the previous stamp immediately before the 
 
 - `visible_ms`: click to the web-mode physical reveal timestamp. The resident performance ceiling remains `5,000 ms`.
 - `observer_delay_ms`: extra time from that physical timestamp until the acceptance observer has confirmed geometry, lock release, and the first nonblank frame.
-- `settled_elapsed_ms`: click until two stable state/audio samples complete. This is recorded only after the round has passed the physical ceiling and all correctness gates.
+- `settled_elapsed_ms`: click until two stable state/audio samples complete. Strict acceptance applies the same `5,000 ms` single-round ceiling to this completion boundary; the physical stamp remains the sole source of `visible_ms`, so observer delay is never substituted for physical latency.
 
-`switch-only` requires exactly 20 rounds and derives two passes over all ten providers from the current provider. `switch-once` requires exactly one explicit target and retains the same preflight, click, timestamp, geometry, frame, state, HTTPS/CDP, audio, lock, and evidence rules. `stamp-fixtures` covers the timestamp parser and atomic-file failure cases without touching X11.
+`switch-only` requires exactly 20 rounds and derives two passes over all ten providers from the current provider. Both `visible_ms` and `settled_elapsed_ms` must meet median `<=2,000 ms`, p95 `<=3,000 ms`, and max `<=5,000 ms`. `switch-once` requires exactly one explicit target and applies the meaningful single-sample rule—both values must be `<=5,000 ms`—while retaining the same preflight, click, timestamp, geometry, frame, state, HTTPS/CDP, audio, lock, and evidence rules. `stamp-fixtures` covers the timestamp parser and atomic-file failure cases without touching X11.
 
 ### 2026-08-25 field result after the repair
 

@@ -75,6 +75,14 @@ fi
 : "${TIKPAL_WEB_MODE_CLOSE_ACTIVE_PROVIDER:=}"
 : "${TIKPAL_WEB_MODE_CLOSE_REQUEST_ID:=}"
 : "${TIKPAL_WEB_MODE_OPEN_EXPECTED_ACTIVE_PROVIDER:=}"
+: "${TIKPAL_WEB_MODE_SWITCH_TRACE_EVENTS_PATH:=}"
+: "${TIKPAL_WEB_MODE_SWITCH_TRACE_RUN_ID:=}"
+: "${TIKPAL_WEB_MODE_SWITCH_TRACE_ROUND_ID:=}"
+: "${TIKPAL_WEB_MODE_SWITCH_TRACE_PASS_INDEX:=}"
+: "${TIKPAL_WEB_MODE_SWITCH_TRACE_FROM_PROVIDER:=}"
+: "${TIKPAL_WEB_MODE_SWITCH_TRACE_TO_PROVIDER:=}"
+: "${TIKPAL_WEB_MODE_SWITCH_TRACE_REQUEST_ID:=}"
+: "${TIKPAL_WEB_MODE_SWITCH_TRACE_MONOTONIC_OFFSET_MS:=}"
 : "${TIKPAL_WEB_MODE_STAGE_POSITION:=2560,0}"
 : "${TIKPAL_WEB_MODE_STAGE_REVEAL_MS:=650}"
 : "${TIKPAL_WEB_MODE_AUDIO_CROSSFADE_ENABLED:=1}"
@@ -86,6 +94,20 @@ fi
 : "${TIKPAL_WEB_MODE_AUDIO_BUS_STATE_PATH:=$TIKPAL_WEB_MODE_PROFILE_ROOT/active-audio-bus}"
 : "${TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS:=2}"
 : "${TIKPAL_WEB_MODE_X11_SYNC_WINDOW_OPS:=0}"
+: "${TIKPAL_WEB_MODE_X11_HELPER_MODE:=disabled}"
+: "${TIKPAL_WEB_MODE_X11_HELPER_BINARY:=/usr/local/libexec/tikpal-x11-helper}"
+: "${TIKPAL_WEB_MODE_X11_HELPER_SOCKET:=/run/tikpal/x11-helper.sock}"
+: "${TIKPAL_WEB_MODE_X11_HELPER_CONNECT_TIMEOUT_MS:=50}"
+: "${TIKPAL_WEB_MODE_X11_HELPER_RESPONSE_TIMEOUT_MS:=300}"
+: "${TIKPAL_WEB_MODE_X11_HELPER_GENERATION_PATH:=$TIKPAL_WEB_MODE_PROFILE_ROOT/x11-helper-generation}"
+: "${TIKPAL_WEB_MODE_X11_HELPER_OWNER_PATH:=$TIKPAL_WEB_MODE_PROFILE_ROOT/x11-helper-owner.json}"
+: "${TIKPAL_WEB_MODE_X11_HELPER_LEASE_MS:=350}"
+: "${TIKPAL_WEB_MODE_X11_MUTATION_TRACE_PATH:=}"
+: "${TIKPAL_WEB_MODE_X11_TRACE_GEOMETRY_COMMAND:=}"
+: "${TIKPAL_WEB_MODE_X11_MUTATION_BARRIER_FIFO:=}"
+: "${TIKPAL_WEB_MODE_X11_MUTATION_BARRIER_READY_PATH:=}"
+: "${TIKPAL_WEB_MODE_X11_MUTATION_BARRIER_MATCH:=}"
+: "${TIKPAL_WEB_MODE_X11_PROCESS_GENERATION:=}"
 : "${TIKPAL_WEB_MODE_CLOSE_WARM_ENABLED:=1}"
 : "${TIKPAL_WEB_MODE_CLOSE_KEEP_RESIDENT:=1}"
 : "${TIKPAL_WEB_MODE_CLOSE_WARM_TTL_SECONDS:=45}"
@@ -140,6 +162,24 @@ if [[ -n "${TIKPAL_WEB_MODE_ONBOARD_ACTION_WINDOW:-}" ]]; then
   TIKPAL_WEB_MODE_ONBOARD_WINDOW="$TIKPAL_WEB_MODE_ONBOARD_ACTION_WINDOW"
 fi
 
+TIKPAL_X11_HELPER_PREPARED=0
+TIKPAL_X11_HELPER_ACTIVE=0
+TIKPAL_X11_HELPER_UNKNOWN=0
+TIKPAL_X11_HELPER_DAEMON_INSTANCE_ID=""
+TIKPAL_X11_HELPER_CONNECTION_EPOCH=""
+TIKPAL_X11_HELPER_GENERATION=""
+TIKPAL_X11_HELPER_LEASE_ID=""
+TIKPAL_X11_HELPER_LAST_RESPONSE=""
+TIKPAL_X11_HELPER_REQUEST_ID=""
+TIKPAL_X11_TRACE_APPEND_WARNING_EMITTED=0
+TIKPAL_SWITCH_TRACE_APPEND_WARNING_EMITTED=0
+if [[ -z "$TIKPAL_WEB_MODE_X11_PROCESS_GENERATION" &&
+      -r "$TIKPAL_WEB_MODE_X11_HELPER_GENERATION_PATH" ]]; then
+  IFS= read -r TIKPAL_WEB_MODE_X11_PROCESS_GENERATION \
+    < "$TIKPAL_WEB_MODE_X11_HELPER_GENERATION_PATH" ||
+    TIKPAL_WEB_MODE_X11_PROCESS_GENERATION=""
+fi
+
 export DISPLAY="$TIKPAL_KIOSK_DISPLAY"
 export XAUTHORITY="${XAUTHORITY:-$HOME/.Xauthority}"
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
@@ -169,6 +209,403 @@ now_ms() {
   node -e 'process.stdout.write(String(Date.now()))'
 }
 
+x11_monotonic_ns() {
+  local value uptime seconds fraction
+  if [[ -x "$TIKPAL_WEB_MODE_X11_HELPER_BINARY" ]]; then
+    value="$("$TIKPAL_WEB_MODE_X11_HELPER_BINARY" monotonic-ns 2>/dev/null || true)"
+    if [[ "$value" =~ ^[1-9][0-9]*$ ]]; then
+      printf '%s\n' "$value"
+      return 0
+    fi
+  fi
+  if [[ -r /proc/uptime ]]; then
+    IFS=' ' read -r uptime _ < /proc/uptime || uptime=""
+    if [[ "$uptime" =~ ^([0-9]+)[.]([0-9]+)$ ]]; then
+      seconds="${BASH_REMATCH[1]}"
+      fraction="${BASH_REMATCH[2]}000000000"
+      fraction="${fraction:0:9}"
+      printf '%s\n' "$((10#$seconds * 1000000000 + 10#$fraction))"
+      return 0
+    fi
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import time; print(time.monotonic_ns())'
+    return
+  fi
+  node -e 'process.stdout.write(process.hrtime.bigint().toString())'
+}
+
+x11_trace_enabled() {
+  [[ -n "$TIKPAL_WEB_MODE_X11_MUTATION_TRACE_PATH" ]]
+}
+
+x11_trace_require_writable() {
+  local trace_dir trace_fd=""
+  x11_trace_enabled || return 0
+  trace_dir="$(dirname "$TIKPAL_WEB_MODE_X11_MUTATION_TRACE_PATH")"
+  [[ -d "$trace_dir" && -x "$trace_dir" ]] || return 1
+  [[ -f "$TIKPAL_WEB_MODE_X11_MUTATION_TRACE_PATH" ]] || return 1
+  if ! { exec {trace_fd}>>"$TIKPAL_WEB_MODE_X11_MUTATION_TRACE_PATH"; } 2>/dev/null; then
+    return 1
+  fi
+  exec {trace_fd}>&-
+}
+
+x11_trace_json_escape() {
+  local value="${1:-}"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//$'\n'/\\n}"
+  value="${value//$'\r'/\\r}"
+  value="${value//$'\t'/\\t}"
+  printf '%s' "$value"
+}
+
+x11_trace_read_active_provider() {
+  local line
+  [[ -r "$TIKPAL_WEB_MODE_STATE_PATH" ]] || return 0
+  while IFS= read -r line; do
+    if [[ "$line" =~ \"activeProvider\"[[:space:]]*:[[:space:]]*\"([^\"]+)\" ]]; then
+      printf '%s\n' "${BASH_REMATCH[1]}"
+      return 0
+    fi
+  done < "$TIKPAL_WEB_MODE_STATE_PATH"
+}
+
+x11_trace_read_registry_generation() {
+  local kind value _rest list_path
+  list_path="$TIKPAL_WEB_MODE_PROFILE_ROOT/guard-windows.tsv"
+  [[ -r "$list_path" ]] || return 0
+  while IFS=$'\t' read -r kind value _rest; do
+    if [[ "$kind" == "generation" ]]; then
+      printf '%s\n' "$value"
+      return 0
+    fi
+  done < "$list_path"
+}
+
+x11_trace_load_snapshot() {
+  local packet="" remainder
+  TIKPAL_X11_TRACE_OWNER=missing
+  TIKPAL_X11_TRACE_GENERATION=missing
+  TIKPAL_X11_TRACE_LEASE_ID=""
+  TIKPAL_X11_TRACE_ACTIVE_PROVIDER="$(x11_trace_read_active_provider || true)"
+  TIKPAL_X11_TRACE_REGISTRY_GENERATION="$(x11_trace_read_registry_generation || true)"
+  [[ -n "$TIKPAL_X11_TRACE_ACTIVE_PROVIDER" ]] || TIKPAL_X11_TRACE_ACTIVE_PROVIDER=none
+  [[ -n "$TIKPAL_X11_TRACE_REGISTRY_GENERATION" ]] || TIKPAL_X11_TRACE_REGISTRY_GENERATION=missing
+  if [[ -r "$TIKPAL_WEB_MODE_X11_HELPER_GENERATION_PATH" ]]; then
+    IFS= read -r TIKPAL_X11_TRACE_GENERATION < "$TIKPAL_WEB_MODE_X11_HELPER_GENERATION_PATH" ||
+      TIKPAL_X11_TRACE_GENERATION=unreadable
+  fi
+  [[ -r "$TIKPAL_WEB_MODE_X11_HELPER_OWNER_PATH" ]] || return 0
+  IFS= read -r packet < "$TIKPAL_WEB_MODE_X11_HELPER_OWNER_PATH" || packet=""
+  if [[ "$packet" == *'"owner":"'* ]]; then
+    remainder="${packet#*\"owner\":\"}"
+    TIKPAL_X11_TRACE_OWNER="${remainder%%\"*}"
+  else
+    TIKPAL_X11_TRACE_OWNER=malformed
+  fi
+  if [[ "$packet" == *'"leaseId":"'* ]]; then
+    remainder="${packet#*\"leaseId\":\"}"
+    TIKPAL_X11_TRACE_LEASE_ID="${remainder%%\"*}"
+  fi
+}
+
+x11_trace_writer_role() {
+  local command="${WEB_MODE_COMMAND_ARGS[0]:-source}"
+  if [[ -n "${TIKPAL_WEB_MODE_X11_WRITER_ROLE:-}" ]]; then
+    printf '%s\n' "$TIKPAL_WEB_MODE_X11_WRITER_ROLE"
+    return 0
+  fi
+  case "$command" in
+    guard) printf 'window_guard\n' ;;
+    prewarm) printf 'prewarm_worker\n' ;;
+    warm-pool) printf 'idle_prewarm_worker\n' ;;
+    reconcile) printf 'reconcile_worker\n' ;;
+    close|close-full|cleanup-warm) printf 'close_shell\n' ;;
+    open|prepare-entry|park-entry) printf 'foreground_shell\n' ;;
+    *) printf 'shell_%s\n' "$command" ;;
+  esac
+}
+
+x11_trace_writer_provider() {
+  local value="${TIKPAL_WEB_MODE_X11_WRITER_PROVIDER:-${provider:-${active_provider:-}}}"
+  if [[ -z "$value" && -n "${provider_profile:-}" ]]; then
+    value="${provider_profile##*/}"
+  fi
+  if [[ -z "$value" ]]; then
+    value="$(x11_trace_read_active_provider || true)"
+  fi
+  printf '%s\n' "${value:-none}"
+}
+
+x11_trace_observed_geometries() {
+  local xid output result="" separator=""
+  local x y width height
+  local -a xids=()
+  IFS=',' read -r -a xids <<< "${1:-}"
+  for xid in "${xids[@]:-}"; do
+    [[ "$xid" =~ ^[1-9][0-9]*$ ]] || continue
+    output=""
+    if [[ -n "$TIKPAL_WEB_MODE_X11_TRACE_GEOMETRY_COMMAND" ]]; then
+      output="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" "$TIKPAL_WEB_MODE_X11_TRACE_GEOMETRY_COMMAND" geometry "$xid" 2>/dev/null || true)"
+    elif command -v xdotool >/dev/null 2>&1; then
+      output="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_probe getwindowgeometry --shell "$xid" 2>/dev/null || true)"
+    fi
+    if [[ "$output" =~ ^-?[0-9]+,-?[0-9]+_[1-9][0-9]*x[1-9][0-9]*$ ]]; then
+      result+="$separator$xid:$output"
+      separator=";"
+      continue
+    fi
+    x="$(printf '%s\n' "$output" | awk -F= '$1 == "X" { print $2 }')"
+    y="$(printf '%s\n' "$output" | awk -F= '$1 == "Y" { print $2 }')"
+    width="$(printf '%s\n' "$output" | awk -F= '$1 == "WIDTH" { print $2 }')"
+    height="$(printf '%s\n' "$output" | awk -F= '$1 == "HEIGHT" { print $2 }')"
+    if [[ "$x" =~ ^-?[0-9]+$ && "$y" =~ ^-?[0-9]+$ &&
+          "$width" =~ ^[1-9][0-9]*$ && "$height" =~ ^[1-9][0-9]*$ ]]; then
+      result+="$separator$xid:$x,${y}_${width}x${height}"
+    else
+      result+="$separator$xid:unreadable"
+    fi
+    separator=";"
+  done
+  printf '%s\n' "${result:-not_applicable}"
+}
+
+x11_trace_append_line() {
+  local line="$1" trace_fd=""
+  if [[ ! -f "$TIKPAL_WEB_MODE_X11_MUTATION_TRACE_PATH" ]]; then
+    if [[ "$TIKPAL_X11_TRACE_APPEND_WARNING_EMITTED" != "1" ]]; then
+      log_stage "WARN: X11_TRACE_APPEND_FAILED path=$TIKPAL_WEB_MODE_X11_MUTATION_TRACE_PATH reason=missing"
+      TIKPAL_X11_TRACE_APPEND_WARNING_EMITTED=1
+    fi
+    return 0
+  fi
+  if command -v flock >/dev/null 2>&1; then
+    if ! { exec {trace_fd}>>"$TIKPAL_WEB_MODE_X11_MUTATION_TRACE_PATH"; } 2>/dev/null; then
+      if [[ "$TIKPAL_X11_TRACE_APPEND_WARNING_EMITTED" != "1" ]]; then
+        log_stage "WARN: X11_TRACE_APPEND_FAILED path=$TIKPAL_WEB_MODE_X11_MUTATION_TRACE_PATH reason=not_writable"
+        TIKPAL_X11_TRACE_APPEND_WARNING_EMITTED=1
+      fi
+      return 0
+    fi
+    if ! flock -x "$trace_fd" || ! printf '%s\n' "$line" >&"$trace_fd" 2>/dev/null; then
+      if [[ "$TIKPAL_X11_TRACE_APPEND_WARNING_EMITTED" != "1" ]]; then
+        log_stage "WARN: X11_TRACE_APPEND_FAILED path=$TIKPAL_WEB_MODE_X11_MUTATION_TRACE_PATH reason=append_failed"
+        TIKPAL_X11_TRACE_APPEND_WARNING_EMITTED=1
+      fi
+    fi
+    flock -u "$trace_fd" >/dev/null 2>&1 || true
+    exec {trace_fd}>&-
+    return 0
+  fi
+  if ! { printf '%s\n' "$line" >> "$TIKPAL_WEB_MODE_X11_MUTATION_TRACE_PATH"; } 2>/dev/null; then
+    if [[ "$TIKPAL_X11_TRACE_APPEND_WARNING_EMITTED" != "1" ]]; then
+      log_stage "WARN: X11_TRACE_APPEND_FAILED path=$TIKPAL_WEB_MODE_X11_MUTATION_TRACE_PATH reason=append_failed"
+      TIKPAL_X11_TRACE_APPEND_WARNING_EMITTED=1
+    fi
+  fi
+  return 0
+}
+
+x11_trace_record() {
+  local operation="$1" xids="$2" requested_geometry="$3"
+  local command_started="$4" command_finished="$5" exit_status="$6"
+  local observed_geometry="$7" detail="${8:-}"
+  local writer_role writer_provider lock_acquired line
+  local owner_after generation_after lease_after active_after registry_after
+  x11_trace_enabled || return 0
+  writer_role="$(x11_trace_writer_role)"
+  writer_provider="$(x11_trace_writer_provider)"
+  lock_acquired=0
+  if [[ "${TIKPAL_WEB_MODE_LOCKED:-0}" == "1" ||
+        "${TIKPAL_WEB_MODE_GUARD_LOCKED:-0}" == "1" ||
+        "${TIKPAL_WEB_MODE_X11_MUTATION_LOCKED:-0}" == "1" ]]; then
+    lock_acquired=1
+  fi
+  owner_after="$TIKPAL_X11_TRACE_OWNER"
+  generation_after="$TIKPAL_X11_TRACE_GENERATION"
+  lease_after="$TIKPAL_X11_TRACE_LEASE_ID"
+  active_after="$TIKPAL_X11_TRACE_ACTIVE_PROVIDER"
+  registry_after="$TIKPAL_X11_TRACE_REGISTRY_GENERATION"
+  x11_trace_load_snapshot
+  line="{\"monotonic_ns\":$command_finished,\"writer_pid\":$BASHPID,\"ppid\":$PPID,\"command_pid\":${TIKPAL_X11_TRACE_COMMAND_PID:-$BASHPID},\"writer_role\":\"$(x11_trace_json_escape "$writer_role")\",\"provider\":\"$(x11_trace_json_escape "$writer_provider")\",\"operation\":\"$(x11_trace_json_escape "$operation")\",\"xid\":\"$(x11_trace_json_escape "$xids")\",\"requested_geometry\":\"$(x11_trace_json_escape "$requested_geometry")\",\"owner\":\"$(x11_trace_json_escape "$owner_after")\",\"generation\":\"$(x11_trace_json_escape "$generation_after")\",\"lease_id\":\"$(x11_trace_json_escape "$lease_after")\",\"active_provider\":\"$(x11_trace_json_escape "$active_after")\",\"registry_generation\":\"$(x11_trace_json_escape "$registry_after")\",\"lock_acquired\":$lock_acquired,\"command_started\":$command_started,\"command_finished\":$command_finished,\"observed_geometry_after\":\"$(x11_trace_json_escape "$observed_geometry")\",\"exit_status\":$exit_status,\"owner_after\":\"$(x11_trace_json_escape "$TIKPAL_X11_TRACE_OWNER")\",\"generation_after\":\"$(x11_trace_json_escape "$TIKPAL_X11_TRACE_GENERATION")\",\"lease_id_after\":\"$(x11_trace_json_escape "$TIKPAL_X11_TRACE_LEASE_ID")\",\"active_provider_after\":\"$(x11_trace_json_escape "$TIKPAL_X11_TRACE_ACTIVE_PROVIDER")\",\"registry_generation_after\":\"$(x11_trace_json_escape "$TIKPAL_X11_TRACE_REGISTRY_GENERATION")\",\"detail\":\"$(x11_trace_json_escape "$detail")\"}"
+  x11_trace_append_line "$line"
+}
+
+x11_mutation_run() {
+  local operation="$1" xids="$2" requested_geometry="$3"
+  local command_started=0 command_finished=0 exit_status=0 observed_geometry=not_recorded
+  local trace_detail="" current_generation="" mutation_lock_fd=""
+  local gate_required=0 acquired_here=0 tracing=0
+  local TIKPAL_WEB_MODE_X11_MUTATION_LOCKED="${TIKPAL_WEB_MODE_X11_MUTATION_LOCKED:-0}"
+  local TIKPAL_X11_TRACE_COMMAND_PID=""
+  shift 3
+  if x11_trace_enabled; then
+    tracing=1
+    x11_trace_load_snapshot
+  fi
+  if [[ -n "$TIKPAL_WEB_MODE_X11_MUTATION_BARRIER_FIFO" &&
+        ( -z "$TIKPAL_WEB_MODE_X11_MUTATION_BARRIER_MATCH" ||
+          "$operation" == *"$TIKPAL_WEB_MODE_X11_MUTATION_BARRIER_MATCH"* ) ]]; then
+    if [[ -n "$TIKPAL_WEB_MODE_X11_MUTATION_BARRIER_READY_PATH" ]]; then
+      printf '%s\n' "$BASHPID" > "$TIKPAL_WEB_MODE_X11_MUTATION_BARRIER_READY_PATH"
+    fi
+    IFS= read -r _ < "$TIKPAL_WEB_MODE_X11_MUTATION_BARRIER_FIFO"
+  fi
+
+  if x11_helper_switch_enabled && [[ -n "$xids" ]]; then
+    gate_required=1
+    if [[ "${TIKPAL_WEB_MODE_LOCKED:-0}" != "1" &&
+          "${TIKPAL_WEB_MODE_GUARD_LOCKED:-0}" != "1" &&
+          "$TIKPAL_WEB_MODE_X11_MUTATION_LOCKED" != "1" ]]; then
+      if ! command -v flock >/dev/null 2>&1; then
+        exit_status=78
+        trace_detail="permission=blocked reason=flock_missing expected_generation=${TIKPAL_WEB_MODE_X11_PROCESS_GENERATION:-missing}"
+      else
+        mkdir -p "$TIKPAL_WEB_MODE_PROFILE_ROOT"
+        exec {mutation_lock_fd}>"$TIKPAL_WEB_MODE_PROFILE_ROOT/web-mode.lock"
+        if flock -x -w "$TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS" "$mutation_lock_fd"; then
+          acquired_here=1
+          TIKPAL_WEB_MODE_X11_MUTATION_LOCKED=1
+        else
+          exit_status=75
+          trace_detail="permission=blocked reason=lock_timeout expected_generation=${TIKPAL_WEB_MODE_X11_PROCESS_GENERATION:-missing}"
+        fi
+      fi
+    fi
+    if [[ "$exit_status" == "0" ]]; then
+      if [[ -r "$TIKPAL_WEB_MODE_X11_HELPER_GENERATION_PATH" ]]; then
+        IFS= read -r current_generation < "$TIKPAL_WEB_MODE_X11_HELPER_GENERATION_PATH" ||
+          current_generation=unreadable
+      else
+        current_generation=missing
+      fi
+      if [[ ! "${TIKPAL_WEB_MODE_X11_PROCESS_GENERATION:-}" =~ ^[1-9][0-9]*$ ||
+            "$current_generation" != "$TIKPAL_WEB_MODE_X11_PROCESS_GENERATION" ]]; then
+        exit_status=76
+        trace_detail="permission=blocked reason=stale_generation expected_generation=${TIKPAL_WEB_MODE_X11_PROCESS_GENERATION:-missing} current_generation=$current_generation"
+      elif ! x11_helper_legacy_writer_may_write; then
+        exit_status=77
+        trace_detail="permission=blocked reason=helper_owner expected_generation=$TIKPAL_WEB_MODE_X11_PROCESS_GENERATION current_generation=$current_generation"
+      else
+        trace_detail="permission=allowed expected_generation=$TIKPAL_WEB_MODE_X11_PROCESS_GENERATION current_generation=$current_generation"
+      fi
+    fi
+  fi
+
+  if [[ "$exit_status" == "0" ]]; then
+    if [[ "${TIKPAL_WEB_MODE_GUARD_TICK_ACTIVE:-0}" == "1" ]]; then
+      [[ "${TIKPAL_GUARD_MUTATION_COUNT:-}" =~ ^[0-9]+$ ]] || TIKPAL_GUARD_MUTATION_COUNT=0
+      TIKPAL_GUARD_MUTATION_COUNT=$((TIKPAL_GUARD_MUTATION_COUNT + 1))
+    fi
+    [[ "$tracing" == "0" ]] || command_started="$(x11_monotonic_ns)"
+    if [[ "$tracing" == "1" ]]; then
+      "$@" &
+      TIKPAL_X11_TRACE_COMMAND_PID=$!
+      if wait "$TIKPAL_X11_TRACE_COMMAND_PID"; then
+        exit_status=0
+      else
+        exit_status=$?
+      fi
+    elif "$@"; then
+      exit_status=0
+    else
+      exit_status=$?
+    fi
+  fi
+
+  if [[ "$tracing" == "1" ]]; then
+    command_finished="$(x11_monotonic_ns)"
+    observed_geometry="$(x11_trace_observed_geometries "$xids")"
+    x11_trace_record "$operation" "$xids" "$requested_geometry" \
+      "$command_started" "$command_finished" "$exit_status" "$observed_geometry" \
+      "$trace_detail"
+  fi
+  if [[ "$acquired_here" == "1" ]]; then
+    flock -u "$mutation_lock_fd" >/dev/null 2>&1 || true
+    exec {mutation_lock_fd}>&-
+  elif [[ -n "$mutation_lock_fd" ]]; then
+    exec {mutation_lock_fd}>&-
+  fi
+  if [[ "$gate_required" == "1" && "$exit_status" != "0" ]]; then
+    return "$exit_status"
+  fi
+  if [[ "$exit_status" == "0" ]]; then
+    return 0
+  else
+    return "$exit_status"
+  fi
+}
+
+x11_trace_control_event() {
+  local operation="$1" exit_status="${2:-0}" detail="${3:-}" xids="${4:-}"
+  local timestamp observed_geometry="not_sampled_control"
+  x11_trace_enabled || return 0
+  timestamp="$(x11_monotonic_ns)"
+  x11_trace_load_snapshot
+  x11_trace_record "$operation" "$xids" "control" "$timestamp" "$timestamp" \
+    "$exit_status" "$observed_geometry" "$detail"
+}
+
+switch_trace_enabled() {
+  [[ -n "$TIKPAL_WEB_MODE_SWITCH_TRACE_EVENTS_PATH" \
+    && -n "$TIKPAL_WEB_MODE_SWITCH_TRACE_RUN_ID" \
+    && "$TIKPAL_WEB_MODE_SWITCH_TRACE_ROUND_ID" =~ ^[1-9][0-9]*$ \
+    && "$TIKPAL_WEB_MODE_SWITCH_TRACE_PASS_INDEX" =~ ^[1-9][0-9]*$ \
+    && -n "$TIKPAL_WEB_MODE_SWITCH_TRACE_FROM_PROVIDER" \
+    && -n "$TIKPAL_WEB_MODE_SWITCH_TRACE_TO_PROVIDER" \
+    && -n "$TIKPAL_WEB_MODE_SWITCH_TRACE_REQUEST_ID" \
+    && "$TIKPAL_WEB_MODE_SWITCH_TRACE_MONOTONIC_OFFSET_MS" =~ ^-?[0-9]+$ ]]
+}
+
+switch_trace_now_ms() {
+  local output_variable="$1"
+  local realtime="${EPOCHREALTIME:-}" seconds fraction computed_ms
+  if [[ "$realtime" =~ ^([0-9]+)[.]([0-9]+)$ ]]; then
+    seconds="${BASH_REMATCH[1]}"
+    fraction="${BASH_REMATCH[2]}000"
+    fraction="${fraction:0:3}"
+    computed_ms=$((seconds * 1000 + 10#$fraction - TIKPAL_WEB_MODE_SWITCH_TRACE_MONOTONIC_OFFSET_MS))
+  else
+    computed_ms="$(( $(now_ms) - TIKPAL_WEB_MODE_SWITCH_TRACE_MONOTONIC_OFFSET_MS ))"
+  fi
+  printf -v "$output_variable" '%s' "$computed_ms"
+}
+
+record_switch_trace_event() {
+  local event="$1"
+  local result="${2:-ok}"
+  local error_code="${3:-}"
+  local elapsed_ms="${4:-0}"
+  local timestamp
+  switch_trace_enabled || return 0
+  switch_trace_now_ms timestamp
+  if [[ ! -f "$TIKPAL_WEB_MODE_SWITCH_TRACE_EVENTS_PATH" ]]; then
+    if [[ "$TIKPAL_SWITCH_TRACE_APPEND_WARNING_EMITTED" != "1" ]]; then
+      log_stage "WARN: SWITCH_TRACE_APPEND_FAILED path=$TIKPAL_WEB_MODE_SWITCH_TRACE_EVENTS_PATH reason=missing"
+      TIKPAL_SWITCH_TRACE_APPEND_WARNING_EMITTED=1
+    fi
+    return 0
+  fi
+  if ! { printf '{"run_id":"%s","round_id":%s,"from_provider":"%s","to_provider":"%s","pass_index":%s,"request_id":"%s","event":"%s","timestamp":%s,"elapsed_ms":%s,"result":"%s","error_code":"%s"}\n' \
+      "$TIKPAL_WEB_MODE_SWITCH_TRACE_RUN_ID" \
+      "$TIKPAL_WEB_MODE_SWITCH_TRACE_ROUND_ID" \
+      "$TIKPAL_WEB_MODE_SWITCH_TRACE_FROM_PROVIDER" \
+      "$TIKPAL_WEB_MODE_SWITCH_TRACE_TO_PROVIDER" \
+      "$TIKPAL_WEB_MODE_SWITCH_TRACE_PASS_INDEX" \
+      "$TIKPAL_WEB_MODE_SWITCH_TRACE_REQUEST_ID" \
+      "$event" "$timestamp" "$elapsed_ms" "$result" "$error_code" \
+      >> "$TIKPAL_WEB_MODE_SWITCH_TRACE_EVENTS_PATH"; } 2>/dev/null
+  then
+    if [[ "$TIKPAL_SWITCH_TRACE_APPEND_WARNING_EMITTED" != "1" ]]; then
+      log_stage "WARN: SWITCH_TRACE_APPEND_FAILED path=$TIKPAL_WEB_MODE_SWITCH_TRACE_EVENTS_PATH"
+      TIKPAL_SWITCH_TRACE_APPEND_WARNING_EMITTED=1
+    fi
+  fi
+  return 0
+}
+
 switch_detail_timing_path() {
   printf '%s.details\n' "$TIKPAL_WEB_MODE_SWITCH_SEGMENT_TIMING_ONCE_PATH"
 }
@@ -187,6 +624,14 @@ fail() {
 
 with_web_mode_lock() {
   if [[ "${TIKPAL_WEB_MODE_LOCKED:-0}" == "1" ]]; then
+    local lock_acquired_ms lock_wait_ms=0
+    if switch_trace_enabled; then
+      switch_trace_now_ms lock_acquired_ms
+      if [[ "${TIKPAL_WEB_MODE_SWITCH_TRACE_LOCK_REQUESTED_MS:-}" =~ ^[0-9]+$ ]]; then
+        lock_wait_ms=$((lock_acquired_ms - TIKPAL_WEB_MODE_SWITCH_TRACE_LOCK_REQUESTED_MS))
+      fi
+      record_switch_trace_event lock_acquired ok "" "$lock_wait_ms"
+    fi
     "$@"
     return
   fi
@@ -202,18 +647,388 @@ with_web_mode_lock() {
   rm -f "$TIKPAL_WEB_MODE_PROFILE_ROOT/close-overlay-veil.pid" 2>/dev/null
   rm -rf "$TIKPAL_WEB_MODE_PROFILE_ROOT/close-overlay."* 2>/dev/null
   if command -v flock >/dev/null 2>&1; then
-    local lock_status
+    local lock_status lock_requested_ms=0 lock_released_ms lock_held_ms=0
+    if switch_trace_enabled; then
+      switch_trace_now_ms lock_requested_ms
+      record_switch_trace_event lock_requested
+    fi
     # Keep the lock in flock's parent and close its descriptor before the
     # launcher runs. Background veil/probe helpers then cannot inherit it and
     # extend a completed foreground switch indefinitely.
-    flock -E 75 -o -x -w "$TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS" \
+    if flock -E 75 -o -x -w "$TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS" \
       "$TIKPAL_WEB_MODE_PROFILE_ROOT/web-mode.lock" \
-      env TIKPAL_WEB_MODE_LOCKED=1 "$0" "${WEB_MODE_COMMAND_ARGS[@]}"
-    lock_status=$?
+      env TIKPAL_WEB_MODE_LOCKED=1 TIKPAL_WEB_MODE_SWITCH_TRACE_LOCK_REQUESTED_MS="$lock_requested_ms" \
+      "$0" "${WEB_MODE_COMMAND_ARGS[@]}"
+    then
+      lock_status=0
+    else
+      lock_status=$?
+    fi
+    if switch_trace_enabled; then
+      switch_trace_now_ms lock_released_ms
+      lock_held_ms=$((lock_released_ms - lock_requested_ms))
+      if [[ "$lock_status" == "75" ]]; then
+        record_switch_trace_event lock_released failed lock_failed "$lock_held_ms"
+      else
+        record_switch_trace_event lock_released ok "" "$lock_held_ms"
+      fi
+    fi
     [[ "$lock_status" == "75" ]] && fail "Explore is already switching"
     return "$lock_status"
   fi
   "$@"
+}
+
+x11_helper_switch_enabled() {
+  [[ "$TIKPAL_WEB_MODE_X11_HELPER_MODE" == "switch" ||
+     "$TIKPAL_WEB_MODE_X11_HELPER_MODE" == "auto" ]]
+}
+
+x11_helper_new_id() {
+  local value=""
+  if [[ -r /proc/sys/kernel/random/uuid ]]; then
+    value="$(head -1 /proc/sys/kernel/random/uuid 2>/dev/null || true)"
+  fi
+  [[ "$value" =~ ^[A-Za-z0-9._:-]+$ ]] || value="${BASHPID}-$(now_ms)-${RANDOM}"
+  printf '%s\n' "$value"
+}
+
+x11_helper_increment_generation() {
+  local output_variable="$1"
+  local current=0 next temporary_path
+  [[ "${TIKPAL_WEB_MODE_LOCKED:-0}" == "1" ]] || return 1
+  if [[ -e "$TIKPAL_WEB_MODE_X11_HELPER_GENERATION_PATH" ]]; then
+    current="$(cat "$TIKPAL_WEB_MODE_X11_HELPER_GENERATION_PATH" 2>/dev/null || true)"
+    [[ "$current" =~ ^[0-9]+$ ]] || return 1
+  fi
+  (( current < 9223372036854775806 )) || return 1
+  next=$((current + 1))
+  mkdir -p "$(dirname "$TIKPAL_WEB_MODE_X11_HELPER_GENERATION_PATH")"
+  temporary_path="$TIKPAL_WEB_MODE_X11_HELPER_GENERATION_PATH.$$.$RANDOM.tmp"
+  if ! printf '%s\n' "$next" > "$temporary_path" ||
+     ! mv -f "$temporary_path" "$TIKPAL_WEB_MODE_X11_HELPER_GENERATION_PATH"; then
+    rm -f "$temporary_path" 2>/dev/null || true
+    return 1
+  fi
+  printf -v "$output_variable" '%s' "$next"
+  TIKPAL_WEB_MODE_X11_PROCESS_GENERATION="$next"
+  x11_trace_control_event generation_published 0 "generation=$next"
+}
+
+x11_helper_publish_owner() {
+  local owner="$1"
+  local generation="$2"
+  local target_window="${3:-}"
+  local previous_window="${4:-}"
+  local panel_window="${5:-}"
+  local temporary_path
+  [[ "${TIKPAL_WEB_MODE_LOCKED:-0}" == "1" && "$generation" =~ ^[1-9][0-9]*$ ]] || return 1
+  mkdir -p "$(dirname "$TIKPAL_WEB_MODE_X11_HELPER_OWNER_PATH")"
+  temporary_path="$TIKPAL_WEB_MODE_X11_HELPER_OWNER_PATH.$$.$RANDOM.tmp"
+  if [[ "$owner" == "helper" ]]; then
+    [[ "$TIKPAL_X11_HELPER_DAEMON_INSTANCE_ID" =~ ^[A-Za-z0-9._:-]+$ &&
+       "$TIKPAL_X11_HELPER_CONNECTION_EPOCH" =~ ^[1-9][0-9]*$ &&
+       "$TIKPAL_X11_HELPER_LEASE_ID" =~ ^[A-Za-z0-9._:-]+$ &&
+       "$target_window" =~ ^[1-9][0-9]*$ && "$previous_window" =~ ^[1-9][0-9]*$ &&
+       "$panel_window" =~ ^[1-9][0-9]*$ ]] || return 1
+    printf '{"owner":"helper","daemonInstanceId":"%s","connectionEpoch":%s,"generation":%s,"leaseId":"%s","surfaces":[{"role":"target","xid":%s},{"role":"previous","xid":%s},{"role":"panel","xid":%s}]}\n' \
+      "$TIKPAL_X11_HELPER_DAEMON_INSTANCE_ID" "$TIKPAL_X11_HELPER_CONNECTION_EPOCH" \
+      "$generation" "$TIKPAL_X11_HELPER_LEASE_ID" "$target_window" "$previous_window" \
+      "$panel_window" > "$temporary_path" || return 1
+  else
+    printf '{"owner":"shell","generation":%s,"surfaces":[]}\n' "$generation" > "$temporary_path" || return 1
+  fi
+  if ! mv -f "$temporary_path" "$TIKPAL_WEB_MODE_X11_HELPER_OWNER_PATH"; then
+    rm -f "$temporary_path" 2>/dev/null || true
+    return 1
+  fi
+  x11_trace_control_event "owner_published_$owner" 0 \
+    "generation=$generation lease=${TIKPAL_X11_HELPER_LEASE_ID:-}" \
+    "${target_window:-}${previous_window:+,$previous_window}${panel_window:+,$panel_window}"
+}
+
+x11_helper_prepare_switch() {
+  local health request_id
+  x11_helper_switch_enabled || return 1
+  [[ -x "$TIKPAL_WEB_MODE_X11_HELPER_BINARY" ]] || return 1
+  x11_helper_increment_generation TIKPAL_X11_HELPER_GENERATION || return 1
+  request_id="$(x11_helper_new_id)"
+  if ! health="$(
+    TIKPAL_X11_HELPER_CALLER_ROLE="$(x11_trace_writer_role)" \
+    TIKPAL_WEB_MODE_X11_HELPER_SOCKET="$TIKPAL_WEB_MODE_X11_HELPER_SOCKET" \
+    TIKPAL_WEB_MODE_X11_HELPER_CONNECT_TIMEOUT_MS="$TIKPAL_WEB_MODE_X11_HELPER_CONNECT_TIMEOUT_MS" \
+    TIKPAL_WEB_MODE_X11_HELPER_RESPONSE_TIMEOUT_MS="$TIKPAL_WEB_MODE_X11_HELPER_RESPONSE_TIMEOUT_MS" \
+      "$TIKPAL_WEB_MODE_X11_HELPER_BINARY" client health --request-id "$request_id" --format tsv
+  )"; then
+    return 1
+  fi
+  IFS=$'\t' read -r TIKPAL_X11_HELPER_DAEMON_INSTANCE_ID \
+    TIKPAL_X11_HELPER_CONNECTION_EPOCH TIKPAL_X11_HELPER_HEALTH_IN_FLIGHT \
+    TIKPAL_X11_HELPER_GENERATION_STATE <<< "$health"
+  [[ "$TIKPAL_X11_HELPER_DAEMON_INSTANCE_ID" =~ ^[A-Za-z0-9._:-]+$ &&
+     "$TIKPAL_X11_HELPER_CONNECTION_EPOCH" =~ ^[1-9][0-9]*$ &&
+     "$TIKPAL_X11_HELPER_HEALTH_IN_FLIGHT" == "0" &&
+     "$TIKPAL_X11_HELPER_GENERATION_STATE" == "ok" ]] || return 1
+  TIKPAL_X11_HELPER_LEASE_ID="$(x11_helper_new_id)"
+  TIKPAL_X11_HELPER_PREPARED=1
+  return 0
+}
+
+x11_helper_begin_switch() {
+  local target_window="$1"
+  local target_profile="$2"
+  local previous_window="$3"
+  local previous_profile="$4"
+  local panel_window="$5"
+  local panel_profile="$6"
+  local target_size target_width target_height panel_size panel_width panel_height
+  local target_x target_y previous_x previous_y panel_x panel_y request_id response status
+  [[ "$TIKPAL_X11_HELPER_PREPARED" == "1" ]] || return 20
+  target_size="$(normalize_window_size "$TIKPAL_WEB_MODE_LEFT_WINDOW")"
+  target_width="${target_size%,*}"
+  target_height="${target_size#*,}"
+  panel_size="$(normalize_window_size "$TIKPAL_WEB_MODE_PANEL_WINDOW")"
+  panel_width="${panel_size%,*}"
+  panel_height="${panel_size#*,}"
+  target_x="${TIKPAL_WEB_MODE_LEFT_POSITION%,*}"
+  target_y="${TIKPAL_WEB_MODE_LEFT_POSITION#*,}"
+  previous_x="${TIKPAL_WEB_MODE_STAGE_POSITION%,*}"
+  previous_y="${TIKPAL_WEB_MODE_STAGE_POSITION#*,}"
+  panel_x="${TIKPAL_WEB_MODE_PANEL_POSITION%,*}"
+  panel_y="${TIKPAL_WEB_MODE_PANEL_POSITION#*,}"
+  x11_helper_publish_owner helper "$TIKPAL_X11_HELPER_GENERATION" \
+    "$target_window" "$previous_window" "$panel_window" || return 20
+  TIKPAL_X11_HELPER_ACTIVE=1
+  request_id="$(x11_helper_new_id)"
+  TIKPAL_X11_HELPER_REQUEST_ID="$request_id"
+  x11_trace_control_event helper_switch_started 0 \
+    "request_id=$request_id generation=$TIKPAL_X11_HELPER_GENERATION lease=$TIKPAL_X11_HELPER_LEASE_ID" \
+    "$target_window,$previous_window,$panel_window"
+  if response="$(
+    TIKPAL_X11_HELPER_CALLER_ROLE="$(x11_trace_writer_role)" \
+    TIKPAL_WEB_MODE_X11_HELPER_SOCKET="$TIKPAL_WEB_MODE_X11_HELPER_SOCKET" \
+    TIKPAL_WEB_MODE_X11_HELPER_CONNECT_TIMEOUT_MS="$TIKPAL_WEB_MODE_X11_HELPER_CONNECT_TIMEOUT_MS" \
+    TIKPAL_WEB_MODE_X11_HELPER_RESPONSE_TIMEOUT_MS="$TIKPAL_WEB_MODE_X11_HELPER_RESPONSE_TIMEOUT_MS" \
+      "$TIKPAL_WEB_MODE_X11_HELPER_BINARY" client switch \
+        --request-id "$request_id" \
+        --daemon-instance-id "$TIKPAL_X11_HELPER_DAEMON_INSTANCE_ID" \
+        --connection-epoch "$TIKPAL_X11_HELPER_CONNECTION_EPOCH" \
+        --generation "$TIKPAL_X11_HELPER_GENERATION" \
+        --lease-id "$TIKPAL_X11_HELPER_LEASE_ID" \
+        --lease-duration-ms "$TIKPAL_WEB_MODE_X11_HELPER_LEASE_MS" \
+        --surface target "$target_window" "$target_profile" "$target_x" "$target_y" "$target_width" "$target_height" 4294967295 \
+        --surface previous "$previous_window" "$previous_profile" "$previous_x" "$previous_y" "$target_width" "$target_height" keep \
+        --surface panel "$panel_window" "$panel_profile" "$panel_x" "$panel_y" "$panel_width" "$panel_height" 4294967295
+  )"; then
+    status=0
+  else
+    status=$?
+  fi
+  TIKPAL_X11_HELPER_LAST_RESPONSE="$response"
+  x11_trace_control_event helper_switch_finished "$status" \
+    "request_id=$request_id response=$response" \
+    "$target_window,$previous_window,$panel_window"
+  log_stage "x11_helper_switch generation=$TIKPAL_X11_HELPER_GENERATION lease=$TIKPAL_X11_HELPER_LEASE_ID status=$status response=$response"
+  if [[ "$status" == "70" ]]; then
+    TIKPAL_X11_HELPER_UNKNOWN=1
+  fi
+  return "$status"
+}
+
+x11_helper_revoke() {
+  local request_id response
+  [[ "$TIKPAL_X11_HELPER_ACTIVE" == "1" ]] || return 0
+  request_id="$(x11_helper_new_id)"
+  x11_trace_control_event helper_revoke_started 0 \
+    "request_id=$request_id switch_request_id=$TIKPAL_X11_HELPER_REQUEST_ID generation=$TIKPAL_X11_HELPER_GENERATION lease=$TIKPAL_X11_HELPER_LEASE_ID"
+  if ! response="$(
+    TIKPAL_X11_HELPER_CALLER_ROLE="$(x11_trace_writer_role)" \
+    TIKPAL_WEB_MODE_X11_HELPER_SOCKET="$TIKPAL_WEB_MODE_X11_HELPER_SOCKET" \
+    TIKPAL_WEB_MODE_X11_HELPER_CONNECT_TIMEOUT_MS="$TIKPAL_WEB_MODE_X11_HELPER_CONNECT_TIMEOUT_MS" \
+    TIKPAL_WEB_MODE_X11_HELPER_RESPONSE_TIMEOUT_MS="$TIKPAL_WEB_MODE_X11_HELPER_RESPONSE_TIMEOUT_MS" \
+      "$TIKPAL_WEB_MODE_X11_HELPER_BINARY" client revoke \
+        --request-id "$request_id" \
+        --daemon-instance-id "$TIKPAL_X11_HELPER_DAEMON_INSTANCE_ID" \
+        --connection-epoch "$TIKPAL_X11_HELPER_CONNECTION_EPOCH" \
+        --generation "$TIKPAL_X11_HELPER_GENERATION" \
+        --lease-id "$TIKPAL_X11_HELPER_LEASE_ID"
+  )"; then
+    x11_trace_control_event helper_revoke_finished 1 \
+      "request_id=$request_id result=failed response=$response"
+    log_stage "x11_helper_revoke generation=$TIKPAL_X11_HELPER_GENERATION result=failed response=$response"
+    return 1
+  fi
+  x11_trace_control_event helper_revoke_finished 0 \
+    "request_id=$request_id result=ok response=$response"
+  log_stage "x11_helper_revoke generation=$TIKPAL_X11_HELPER_GENERATION result=ok response=$response"
+  TIKPAL_X11_HELPER_ACTIVE=0
+  return 0
+}
+
+x11_helper_finish_success() {
+  [[ "$TIKPAL_X11_HELPER_UNKNOWN" == "0" ]] || return 1
+  x11_helper_revoke || return 1
+  x11_helper_publish_owner shell "$TIKPAL_X11_HELPER_GENERATION" || return 1
+  TIKPAL_X11_HELPER_PREPARED=0
+}
+
+x11_helper_cleanup_active_transaction() {
+  local cleanup_status=0
+  [[ "$TIKPAL_X11_HELPER_ACTIVE" == "1" ]] || return 0
+  if [[ "$TIKPAL_X11_HELPER_UNKNOWN" == "1" ]]; then
+    log_stage "WARN: X11_HELPER_CLEANUP_BLOCKED reason=unknown_outcome generation=${TIKPAL_X11_HELPER_GENERATION:-missing}"
+    return 1
+  fi
+  if ! x11_helper_revoke; then
+    log_stage "WARN: X11_HELPER_CLEANUP_FAILED stage=revoke generation=${TIKPAL_X11_HELPER_GENERATION:-missing}"
+    return 1
+  fi
+  if ! x11_helper_publish_owner shell "$TIKPAL_X11_HELPER_GENERATION"; then
+    log_stage "WARN: X11_HELPER_CLEANUP_FAILED stage=owner_restore generation=${TIKPAL_X11_HELPER_GENERATION:-missing}"
+    cleanup_status=1
+  else
+    TIKPAL_X11_HELPER_PREPARED=0
+    log_stage "x11_helper_cleanup generation=$TIKPAL_X11_HELPER_GENERATION result=ok"
+  fi
+  return "$cleanup_status"
+}
+
+x11_helper_cleanup_on_exit() {
+  local status=$? cleanup_status=0
+  trap - EXIT
+  set +e
+  if [[ "$TIKPAL_X11_HELPER_ACTIVE" == "1" ]]; then
+    x11_helper_cleanup_active_transaction
+    cleanup_status=$?
+    if [[ "$status" == "0" && "$cleanup_status" != "0" ]]; then
+      status=1
+    fi
+  fi
+  if [[ "${WEB_MODE_COMMAND_ARGS[0]:-}" == "guard" ]]; then
+    window_guard_cleanup_pid_on_exit || true
+  fi
+  exit "$status"
+}
+
+x11_helper_enter_fallback() {
+  local switch_status="$1"
+  local fallback_generation
+  [[ "$switch_status" != "70" && "$TIKPAL_X11_HELPER_UNKNOWN" == "0" ]] || return 1
+  if [[ "$switch_status" != "69" ]]; then
+    x11_helper_revoke || return 1
+  else
+    TIKPAL_X11_HELPER_ACTIVE=0
+  fi
+  x11_helper_increment_generation fallback_generation || return 1
+  TIKPAL_X11_HELPER_GENERATION="$fallback_generation"
+  x11_helper_publish_owner shell "$fallback_generation" || return 1
+  TIKPAL_X11_HELPER_PREPARED=0
+  return 0
+}
+
+x11_helper_restore_shell_owner() {
+  local owner_state health request_id owner generation current_generation
+  local daemon_instance connection_epoch lease_id in_flight health_lease restore_generation
+  [[ "${TIKPAL_WEB_MODE_LOCKED:-0}" == "1" ]] || return 1
+  if [[ ! -e "$TIKPAL_WEB_MODE_X11_HELPER_OWNER_PATH" ]]; then
+    [[ "$TIKPAL_WEB_MODE_X11_HELPER_MODE" == "disabled" ]]
+    return
+  fi
+  command -v jq >/dev/null 2>&1 || return 1
+  owner_state="$(cat "$TIKPAL_WEB_MODE_X11_HELPER_OWNER_PATH" 2>/dev/null || true)"
+  owner="$(jq -r '.owner // empty' <<< "$owner_state" 2>/dev/null || true)"
+  generation="$(jq -r '.generation // empty' <<< "$owner_state" 2>/dev/null || true)"
+  current_generation="$(cat "$TIKPAL_WEB_MODE_X11_HELPER_GENERATION_PATH" 2>/dev/null || true)"
+  [[ "$generation" =~ ^[1-9][0-9]*$ && "$current_generation" == "$generation" ]] || return 1
+  if [[ "$owner" == "shell" || "$owner" == "none" ]]; then
+    return 0
+  fi
+  [[ "$owner" == "helper" && -x "$TIKPAL_WEB_MODE_X11_HELPER_BINARY" ]] || return 1
+  daemon_instance="$(jq -r '.daemonInstanceId // empty' <<< "$owner_state")"
+  connection_epoch="$(jq -r '.connectionEpoch // empty' <<< "$owner_state")"
+  lease_id="$(jq -r '.leaseId // empty' <<< "$owner_state")"
+  [[ "$daemon_instance" =~ ^[A-Za-z0-9._:-]+$ &&
+     "$connection_epoch" =~ ^[1-9][0-9]*$ &&
+     "$lease_id" =~ ^[A-Za-z0-9._:-]+$ ]] || return 1
+  request_id="cleanup-health-$(x11_helper_new_id)"
+  health="$(
+    TIKPAL_X11_HELPER_CALLER_ROLE=cleanup_shell \
+    TIKPAL_WEB_MODE_X11_HELPER_SOCKET="$TIKPAL_WEB_MODE_X11_HELPER_SOCKET" \
+    TIKPAL_WEB_MODE_X11_HELPER_CONNECT_TIMEOUT_MS="$TIKPAL_WEB_MODE_X11_HELPER_CONNECT_TIMEOUT_MS" \
+    TIKPAL_WEB_MODE_X11_HELPER_RESPONSE_TIMEOUT_MS="$TIKPAL_WEB_MODE_X11_HELPER_RESPONSE_TIMEOUT_MS" \
+      "$TIKPAL_WEB_MODE_X11_HELPER_BINARY" client health --request-id "$request_id"
+  )" || return 1
+  in_flight="$(jq -r '.inFlight | tostring' <<< "$health")"
+  health_lease="$(jq -r '.leaseId // empty' <<< "$health")"
+  if [[ "$in_flight" == "true" || -n "$health_lease" ]]; then
+    [[ "$(jq -r '.daemonInstanceId // empty' <<< "$health")" == "$daemon_instance" &&
+       "$(jq -r '.connectionEpoch // empty' <<< "$health")" == "$connection_epoch" &&
+       "$health_lease" == "$lease_id" ]] || return 1
+    TIKPAL_X11_HELPER_DAEMON_INSTANCE_ID="$daemon_instance"
+    TIKPAL_X11_HELPER_CONNECTION_EPOCH="$connection_epoch"
+    TIKPAL_X11_HELPER_GENERATION="$generation"
+    TIKPAL_X11_HELPER_LEASE_ID="$lease_id"
+    TIKPAL_X11_HELPER_ACTIVE=1
+    TIKPAL_X11_HELPER_UNKNOWN=0
+    x11_helper_revoke || return 1
+  fi
+  x11_helper_increment_generation restore_generation || return 1
+  TIKPAL_X11_HELPER_GENERATION="$restore_generation"
+  x11_helper_publish_owner shell "$restore_generation" || return 1
+  TIKPAL_X11_HELPER_PREPARED=0
+  TIKPAL_X11_HELPER_ACTIVE=0
+  TIKPAL_X11_HELPER_UNKNOWN=0
+  log_stage "x11_helper_cleanup_owner_restored generation=$restore_generation"
+}
+
+x11_helper_guard_may_write() {
+  local -a arguments=(client owner-allows
+    --file "$TIKPAL_WEB_MODE_X11_HELPER_OWNER_PATH"
+    --generation-file "$TIKPAL_WEB_MODE_X11_HELPER_GENERATION_PATH")
+  local xid
+  if [[ ! -e "$TIKPAL_WEB_MODE_X11_HELPER_OWNER_PATH" ]]; then
+    [[ "$TIKPAL_WEB_MODE_X11_HELPER_MODE" == "disabled" ]]
+    return
+  fi
+  [[ -x "$TIKPAL_WEB_MODE_X11_HELPER_BINARY" ]] || return 1
+  for xid in "$@"; do
+    [[ "$xid" =~ ^[1-9][0-9]*$ ]] && arguments+=(--xid "$xid")
+  done
+  [[ "${#arguments[@]}" -gt 6 ]] || return 1
+  "$TIKPAL_WEB_MODE_X11_HELPER_BINARY" "${arguments[@]}" >/dev/null 2>&1
+}
+
+x11_helper_guard_may_recover_all() {
+  local diagnostic status
+  if [[ ! -e "$TIKPAL_WEB_MODE_X11_HELPER_OWNER_PATH" ]]; then
+    [[ "$TIKPAL_WEB_MODE_X11_HELPER_MODE" == "disabled" ]]
+    return
+  fi
+  [[ -x "$TIKPAL_WEB_MODE_X11_HELPER_BINARY" ]] || return 1
+  if diagnostic="$(
+    "$TIKPAL_WEB_MODE_X11_HELPER_BINARY" client owner-allows \
+      --file "$TIKPAL_WEB_MODE_X11_HELPER_OWNER_PATH" \
+      --generation-file "$TIKPAL_WEB_MODE_X11_HELPER_GENERATION_PATH" \
+      --all 2>&1
+  )"; then
+    return 0
+  else
+    status=$?
+  fi
+  [[ -z "$diagnostic" ]] || log "ERROR: Explore recovery arbitration failed: $diagnostic"
+  return "$status"
+}
+
+x11_helper_legacy_writer_may_write() {
+  if [[ ! -e "$TIKPAL_WEB_MODE_X11_HELPER_OWNER_PATH" ]]; then
+    [[ "$TIKPAL_WEB_MODE_X11_HELPER_MODE" == "disabled" ]]
+    return
+  fi
+  [[ -x "$TIKPAL_WEB_MODE_X11_HELPER_BINARY" ]] || return 1
+  "$TIKPAL_WEB_MODE_X11_HELPER_BINARY" client owner-allows \
+    --file "$TIKPAL_WEB_MODE_X11_HELPER_OWNER_PATH" \
+    --generation-file "$TIKPAL_WEB_MODE_X11_HELPER_GENERATION_PATH" \
+    --all >/dev/null 2>&1
 }
 
 provider_state_lock_path() {
@@ -572,10 +1387,11 @@ provider_cdp_json_list() {
   timeout 0.8 curl --noproxy '*' -sf --connect-timeout 1 --max-time 1 "http://127.0.0.1:$provider_port/json/list" 2>/dev/null
 }
 
-pause_provider_media_via_cdp() {
-  local _pause_started_ms="$(now_ms)"
+set_provider_media_active_via_cdp() {
+  local _gate_started_ms="$(now_ms)"
   local provider_port="$1"
-  local cdp_json="${2:-}"
+  local active="${2:-0}"
+  local cdp_json="${3:-}"
   local ws_url
   if [[ -z "$cdp_json" ]]; then
     cdp_json="$(timeout 1 curl --noproxy '*' -sf --connect-timeout 1 --max-time 1 "http://127.0.0.1:$provider_port/json/list" 2>/dev/null)"
@@ -584,7 +1400,7 @@ pause_provider_media_via_cdp() {
   ws_url="$(printf '%s\n' "$cdp_json" | grep -A2 '"type": "page"' | grep -o '"ws://[^"]*"' | head -1 | tr -d '"')"
   [[ -n "$ws_url" ]] || return 1
   # Python raw socket WebSocket — avoids ~460ms node startup per call.
-  python3 -c '
+  timeout 2 python3 -c '
 import socket, json, base64, os, sys, select
 def recv_exact(s, n):
     buf = b""
@@ -595,6 +1411,7 @@ def recv_exact(s, n):
         buf += d
     return buf
 ws_url = sys.argv[1]
+active = sys.argv[2] == "1"
 host_port = ws_url.split("/")[2]
 host, port = host_port.split(":", 1)
 path = "/" + "/".join(ws_url.split("/")[3:])
@@ -610,7 +1427,7 @@ while b"\r\n\r\n" not in resp:
 if b"101" not in resp.split(b"\r\n")[0]:
     sock.close(); sys.exit(1)
 cmd = json.dumps({"id":1,"method":"Runtime.evaluate","params":{
-    "expression":"(window.__tikpalProviderAudioGate?.setActive(false) || {}).active",
+    "expression":"(window.__tikpalProviderAudioGate?.setActive(" + ("true" if active else "false") + ") || {}).active",
     "returnByValue":True}}).encode()
 mask = os.urandom(4)
 masked = bytes(cmd[i] ^ mask[i%4] for i in range(len(cmd)))
@@ -627,9 +1444,37 @@ hdr2 = recv_exact(sock, 2)
 if len(hdr2) < 2: sock.close(); sys.exit(1)
 plen = hdr2[1] & 0x7F
 if plen == 126: plen = int.from_bytes(recv_exact(sock, 2), "big")
-recv_exact(sock, plen)
+payload = recv_exact(sock, plen)
 sock.close()
-' "$ws_url" 2>/dev/null
+try:
+    message = json.loads(payload.decode())
+    value = message.get("result", {}).get("result", {}).get("value")
+except Exception:
+    sys.exit(1)
+sys.exit(0 if value is active else 1)
+' "$ws_url" "$active" 2>/dev/null
+}
+
+pause_provider_media_via_cdp() {
+  set_provider_media_active_via_cdp "$1" 0 "${2:-}"
+}
+
+activate_target_provider_audio_gate() {
+  local provider="$1"
+  local provider_port="$2"
+  local started_ms elapsed_ms
+  started_ms="$(now_ms)"
+  record_switch_trace_event target_audio_gate_activation_started
+  if set_provider_media_active_via_cdp "$provider_port" 1; then
+    elapsed_ms="$(( $(now_ms) - started_ms ))"
+    log_stage "target_audio_gate provider=$provider result=active ms=$elapsed_ms"
+    record_switch_trace_event target_audio_gate_activated ok "" "$elapsed_ms"
+    return 0
+  fi
+  elapsed_ms="$(( $(now_ms) - started_ms ))"
+  log "WARN: target provider audio gate did not activate synchronously: $provider"
+  record_switch_trace_event target_audio_gate_activated failed target_audio_gate_failed "$elapsed_ms"
+  return 1
 }
 
 provider_window_has_nonblank_x11_frame() {
@@ -1311,7 +2156,8 @@ position_onboard() {
   fi
 
   if command -v wmctrl >/dev/null 2>&1 && [[ -n "$keyboard_window" ]]; then
-    DISPLAY="$TIKPAL_KIOSK_DISPLAY" wmctrl -i -r "$keyboard_window" -b add,above >/dev/null 2>&1 || true
+    wmctrl_mutation add_above "$keyboard_window" above \
+      -i -r "$keyboard_window" -b add,above >/dev/null 2>&1 || true
   fi
 }
 
@@ -1336,7 +2182,8 @@ raise_onboard() {
     [[ -n "$window" ]] || continue
     DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowraise "$window" >/dev/null 2>&1 || true
     if command -v wmctrl >/dev/null 2>&1; then
-      DISPLAY="$TIKPAL_KIOSK_DISPLAY" wmctrl -i -r "$window" -b add,above >/dev/null 2>&1 || true
+      wmctrl_mutation add_above "$window" above \
+        -i -r "$window" -b add,above >/dev/null 2>&1 || true
     fi
   done < <(onboard_visible_windows)
 }
@@ -1372,7 +2219,8 @@ move_onboard_if_requested() {
     "$(position_x "$TIKPAL_WEB_MODE_ONBOARD_POSITION")" "$(position_y "$TIKPAL_WEB_MODE_ONBOARD_POSITION")" >/dev/null 2>&1 || true
   DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowraise "$keyboard_window" >/dev/null 2>&1 || true
   if command -v wmctrl >/dev/null 2>&1; then
-    DISPLAY="$TIKPAL_KIOSK_DISPLAY" wmctrl -i -r "$keyboard_window" -b add,above >/dev/null 2>&1 || true
+    wmctrl_mutation add_above "$keyboard_window" above \
+      -i -r "$keyboard_window" -b add,above >/dev/null 2>&1 || true
   fi
 }
 
@@ -1855,7 +2703,8 @@ keepalive_onboard() {
 }
 
 close_side_panel() {
-  command -v xsetroot >/dev/null 2>&1 && xsetroot -solid black 2>/dev/null || true
+  command -v xsetroot >/dev/null 2>&1 &&
+    xsetroot_mutation solid_root black -solid black 2>/dev/null || true
   pkill -f -- "--user-data-dir=$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel" >/dev/null 2>&1 || true
   sleep 0.2
   pkill -KILL -f -- "--user-data-dir=$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel" >/dev/null 2>&1 || true
@@ -1877,6 +2726,273 @@ side_panel_window_visible() {
 
 window_guard_pid_file() {
   printf '%s\n' "$TIKPAL_WEB_MODE_PROFILE_ROOT/window-guard.pid"
+}
+
+window_guard_starttime_file() {
+  printf '%s.starttime\n' "$(window_guard_pid_file)"
+}
+
+window_guard_lifecycle_lock_file() {
+  printf '%s\n' "$TIKPAL_WEB_MODE_PROFILE_ROOT/window-guard.lock"
+}
+
+window_guard_read_pid_file() {
+  local pid
+  pid="$(head -n 1 "$(window_guard_pid_file)" 2>/dev/null || true)"
+  [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
+  printf '%s\n' "$pid"
+}
+
+window_guard_read_recorded_starttime() {
+  local starttime
+  starttime="$(head -n 1 "$(window_guard_starttime_file)" 2>/dev/null || true)"
+  [[ -n "$starttime" ]] || return 1
+  printf '%s\n' "$starttime"
+}
+
+window_guard_process_starttime() {
+  local pid="$1" stat_line stat_tail starttime
+  local -a stat_fields=()
+  [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
+  if [[ -r "/proc/$pid/stat" ]]; then
+    stat_line="$(<"/proc/$pid/stat")"
+    stat_tail="${stat_line##*) }"
+    read -r -a stat_fields <<< "$stat_tail"
+    [[ "${#stat_fields[@]}" -ge 20 && "${stat_fields[19]}" =~ ^[0-9]+$ ]] || return 1
+    printf '%s\n' "${stat_fields[19]}"
+    return 0
+  fi
+  starttime="$(ps -p "$pid" -o lstart= 2>/dev/null || true)"
+  starttime="${starttime#"${starttime%%[![:space:]]*}"}"
+  starttime="${starttime%"${starttime##*[![:space:]]}"}"
+  [[ -n "$starttime" ]] || return 1
+  printf '%s\n' "$starttime"
+}
+
+window_guard_pid_record_matches() {
+  local expected_pid="$1" expected_starttime="$2"
+  local recorded_pid recorded_starttime
+  recorded_pid="$(window_guard_read_pid_file || true)"
+  recorded_starttime="$(window_guard_read_recorded_starttime || true)"
+  [[ "$recorded_pid" == "$expected_pid" &&
+     -n "$expected_starttime" &&
+     "$recorded_starttime" == "$expected_starttime" ]]
+}
+
+window_guard_write_pid_file() {
+  local pid="$1" expected_starttime="${2:-}"
+  local pid_file starttime_file pid_temporary_path starttime_temporary_path starttime
+  [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
+  pid_file="$(window_guard_pid_file)"
+  starttime_file="$(window_guard_starttime_file)"
+  starttime="$(window_guard_process_starttime "$pid" || true)"
+  [[ -n "$starttime" &&
+     ( -z "$expected_starttime" || "$starttime" == "$expected_starttime" ) ]] || return 1
+  mkdir -p "$(dirname "$pid_file")"
+  pid_temporary_path="$pid_file.$$.$RANDOM.tmp"
+  starttime_temporary_path="$starttime_file.$$.$RANDOM.tmp"
+  if ! printf '%s\n' "$pid" > "$pid_temporary_path" ||
+     ! printf '%s\n' "$starttime" > "$starttime_temporary_path"; then
+    rm -f "$pid_temporary_path" "$starttime_temporary_path" 2>/dev/null || true
+    return 1
+  fi
+  if [[ -e "$pid_file" ]]; then
+    chown --reference="$pid_file" "$pid_temporary_path" 2>/dev/null || true
+    chmod --reference="$pid_file" "$pid_temporary_path" 2>/dev/null || true
+  else
+    chmod 0644 "$pid_temporary_path" 2>/dev/null || true
+  fi
+  if [[ -e "$starttime_file" ]]; then
+    chown --reference="$starttime_file" "$starttime_temporary_path" 2>/dev/null || true
+    chmod --reference="$starttime_file" "$starttime_temporary_path" 2>/dev/null || true
+  else
+    chmod 0644 "$starttime_temporary_path" 2>/dev/null || true
+  fi
+  if ! mv -f "$starttime_temporary_path" "$starttime_file" ||
+     ! mv -f "$pid_temporary_path" "$pid_file"; then
+    rm -f "$pid_temporary_path" "$starttime_temporary_path" 2>/dev/null || true
+    return 1
+  fi
+}
+
+window_guard_remove_pid_file_if_owned() {
+  local expected_pid="$1" expected_starttime="${2:-}"
+  local pid_file starttime_file current_pid current_starttime
+  pid_file="$(window_guard_pid_file)"
+  starttime_file="$(window_guard_starttime_file)"
+  current_pid="$(window_guard_read_pid_file || true)"
+  current_starttime="$(window_guard_read_recorded_starttime || true)"
+  [[ "$current_pid" == "$expected_pid" ]] || return 0
+  [[ -z "$expected_starttime" || "$current_starttime" == "$expected_starttime" ]] || return 0
+  rm -f "$pid_file" "$starttime_file"
+}
+
+window_guard_process_matches() {
+  local pid="$1" expected_starttime="${2:-}" argument previous="" command_line=""
+  local current_starttime
+  local -a words=()
+  [[ "$pid" =~ ^[1-9][0-9]*$ && "$pid" != "$$" && "$pid" != "$BASHPID" ]] || return 1
+  kill -0 "$pid" >/dev/null 2>&1 || return 1
+  if [[ -n "$expected_starttime" ]]; then
+    current_starttime="$(window_guard_process_starttime "$pid" || true)"
+    [[ "$current_starttime" == "$expected_starttime" ]] || return 1
+  fi
+  if [[ -r "/proc/$pid/cmdline" ]]; then
+    while IFS= read -r -d '' argument; do
+      read -r -a words <<< "$argument"
+      for argument in "${words[@]}"; do
+        if [[ "$previous" == */tikpal-web-mode.sh && "$argument" == "guard" ]]; then
+          return 0
+        fi
+        previous="$argument"
+      done
+    done < "/proc/$pid/cmdline"
+    return 1
+  fi
+  command_line="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+  [[ "$command_line" == *"/tikpal-web-mode.sh guard "* ||
+     "$command_line" == *"/tikpal-web-mode.sh guard" ]]
+}
+
+window_guard_matching_pids() {
+  local proc_path pid
+  if [[ -d /proc ]]; then
+    for proc_path in /proc/[1-9]*; do
+      [[ -d "$proc_path" ]] || continue
+      pid="${proc_path##*/}"
+      window_guard_process_matches "$pid" && printf '%s\n' "$pid"
+    done
+    return 0
+  fi
+  command -v pgrep >/dev/null 2>&1 || return 0
+  while IFS= read -r pid; do
+    window_guard_process_matches "$pid" && printf '%s\n' "$pid"
+  done < <(pgrep -f '[t]ikpal-web-mode.sh guard' 2>/dev/null || true)
+}
+
+window_guard_collect_matching_pids() {
+  local pid
+  TIKPAL_WINDOW_GUARD_MATCHING_PIDS=()
+  while IFS= read -r pid; do
+    [[ "$pid" =~ ^[1-9][0-9]*$ ]] || continue
+    TIKPAL_WINDOW_GUARD_MATCHING_PIDS+=("$pid")
+  done < <(window_guard_matching_pids)
+}
+
+window_guard_state() {
+  local canonical_pid canonical_starttime matches
+  canonical_pid="$(window_guard_read_pid_file || true)"
+  canonical_starttime="$(window_guard_read_recorded_starttime || true)"
+  window_guard_collect_matching_pids
+  matches="$(IFS=,; printf '%s' "${TIKPAL_WINDOW_GUARD_MATCHING_PIDS[*]}")"
+  printf 'canonical_pid\t%s\ncanonical_starttime\t%s\nmatching_pids\t%s\nmatching_count\t%s\n' \
+    "${canonical_pid:-missing}" "${canonical_starttime:-missing}" \
+    "${matches:-none}" "${#TIKPAL_WINDOW_GUARD_MATCHING_PIDS[@]}"
+}
+
+window_guard_launch_process() {
+  local provider_profile="$1" panel_profile="$2" log_path
+  local lifecycle_fd="${TIKPAL_WINDOW_GUARD_LIFECYCLE_FD:-}"
+  log_path="${TIKPAL_WEB_MODE_WINDOW_GUARD_LOG_PATH:-/dev/null}"
+  if [[ -n "$lifecycle_fd" ]]; then
+    exec {lifecycle_fd}>&-
+  fi
+  nohup "$SCRIPT_DIR/tikpal-web-mode.sh" guard "$provider_profile" "$panel_profile" \
+    </dev/null >>"$log_path" 2>&1 9>&- &
+  printf '%s\n' "$!"
+}
+
+window_guard_terminate_process() {
+  local pid="$1" expected_starttime="$2" attempt
+  window_guard_process_matches "$pid" "$expected_starttime" || return 0
+  pkill -TERM -P "$pid" >/dev/null 2>&1 || true
+  window_guard_process_matches "$pid" "$expected_starttime" || return 0
+  kill -TERM "$pid" >/dev/null 2>&1 || true
+  for attempt in 1 2 3 4 5 6 7 8 9 10; do
+    window_guard_process_matches "$pid" "$expected_starttime" || return 0
+    sleep 0.02
+  done
+  pkill -KILL -P "$pid" >/dev/null 2>&1 || true
+  window_guard_process_matches "$pid" "$expected_starttime" || return 0
+  kill -KILL "$pid" >/dev/null 2>&1 || true
+  for attempt in 1 2 3 4 5; do
+    window_guard_process_matches "$pid" "$expected_starttime" || return 0
+    sleep 0.02
+  done
+  return 1
+}
+
+window_guard_ensure_process() {
+  local provider_profile="$1" panel_profile="$2"
+  local lock_path lifecycle_fd="" pid_file_pid="" pid_file_starttime=""
+  local guard_pid="" guard_starttime="" attempt
+  command -v flock >/dev/null 2>&1 || return 78
+  lock_path="$(window_guard_lifecycle_lock_file)"
+  mkdir -p "$(dirname "$lock_path")"
+  exec {lifecycle_fd}>"$lock_path"
+  if ! flock -x -w "$TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS" "$lifecycle_fd"; then
+    exec {lifecycle_fd}>&-
+    return 75
+  fi
+  TIKPAL_WINDOW_GUARD_CREATED_PID=""
+  pid_file_pid="$(window_guard_read_pid_file || true)"
+  pid_file_starttime="$(window_guard_read_recorded_starttime || true)"
+  window_guard_collect_matching_pids
+  if [[ "${#TIKPAL_WINDOW_GUARD_MATCHING_PIDS[@]}" -gt 1 ]]; then
+    log "ERROR: multiple Explore window guards: ${TIKPAL_WINDOW_GUARD_MATCHING_PIDS[*]}"
+    flock -u "$lifecycle_fd" >/dev/null 2>&1 || true
+    exec {lifecycle_fd}>&-
+    return 72
+  fi
+  if [[ "${#TIKPAL_WINDOW_GUARD_MATCHING_PIDS[@]}" == 1 ]]; then
+    guard_pid="${TIKPAL_WINDOW_GUARD_MATCHING_PIDS[0]}"
+    guard_starttime="$(window_guard_process_starttime "$guard_pid" || true)"
+    [[ -n "$guard_starttime" ]] || {
+      flock -u "$lifecycle_fd" >/dev/null 2>&1 || true
+      exec {lifecycle_fd}>&-
+      return 73
+    }
+    if [[ "$pid_file_pid" != "$guard_pid" ||
+          "$pid_file_starttime" != "$guard_starttime" ]]; then
+      window_guard_write_pid_file "$guard_pid" || {
+        flock -u "$lifecycle_fd" >/dev/null 2>&1 || true
+        exec {lifecycle_fd}>&-
+        return 1
+      }
+      log_stage "window_guard_claimed pid=$guard_pid previous_pid=${pid_file_pid:-missing}"
+    else
+      log_stage "window_guard_reused pid=$guard_pid"
+    fi
+    flock -u "$lifecycle_fd" >/dev/null 2>&1 || true
+    exec {lifecycle_fd}>&-
+    return 0
+  fi
+
+  guard_pid="$(TIKPAL_WINDOW_GUARD_LIFECYCLE_FD="$lifecycle_fd" \
+    window_guard_launch_process "$provider_profile" "$panel_profile")"
+  if [[ ! "$guard_pid" =~ ^[1-9][0-9]*$ ]] || ! window_guard_write_pid_file "$guard_pid"; then
+    flock -u "$lifecycle_fd" >/dev/null 2>&1 || true
+    exec {lifecycle_fd}>&-
+    return 1
+  fi
+  guard_starttime="$(window_guard_read_recorded_starttime || true)"
+  for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    window_guard_process_matches "$guard_pid" "$guard_starttime" && break
+    sleep 0.02
+  done
+  window_guard_collect_matching_pids
+  if [[ "${#TIKPAL_WINDOW_GUARD_MATCHING_PIDS[@]}" != 1 ||
+        "${TIKPAL_WINDOW_GUARD_MATCHING_PIDS[0]:-}" != "$guard_pid" ]] ||
+     ! window_guard_process_matches "$guard_pid" "$guard_starttime"; then
+    window_guard_remove_pid_file_if_owned "$guard_pid" "$guard_starttime" || true
+    flock -u "$lifecycle_fd" >/dev/null 2>&1 || true
+    exec {lifecycle_fd}>&-
+    return 73
+  fi
+  TIKPAL_WINDOW_GUARD_CREATED_PID="$guard_pid"
+  log_stage "window_guard_created pid=$guard_pid"
+  flock -u "$lifecycle_fd" >/dev/null 2>&1 || true
+  exec {lifecycle_fd}>&-
 }
 
 provider_switch_marker_path() {
@@ -2038,7 +3154,7 @@ reconcile_provider_pool() {
   }
   proxy_line="$(read_proxy_settings)"
   proxy_enabled="$(effective_provider_proxy_enabled "$active_provider" "${proxy_line%%$'\t'*}")"
-  start_provider_guard "$active_provider" "$provider_profile" "$(provider_url "$active_provider")" "$proxy_enabled" "$(provider_debug_port "$active_provider")"
+  ensure_provider_guard "$active_provider" "$provider_profile" "$(provider_url "$active_provider")" "$proxy_enabled" "$(provider_debug_port "$active_provider")"
   if provider_prewarm_queue_running; then
     elapsed_ms="$(( $(now_ms) - started_ms ))"
     log_stage "reconcile_ms=$elapsed_ms provider=$active_provider pool=prewarming"
@@ -2070,26 +3186,48 @@ reconcile_provider_pool() {
 }
 
 stop_window_guard() {
-  local pid_file pid
-  pid_file="$(window_guard_pid_file)"
-  [[ -r "$pid_file" ]] || return 0
-  pid="$(cat "$pid_file" 2>/dev/null || true)"
-  if [[ "$pid" =~ ^[0-9]+$ ]]; then
-    # Stop the guard and any X11 command it currently owns before starting a
-    # foreground switch. Leaving a child scan alive defeats the known-window
-    # fast path even after the guard shell has received SIGTERM.
-    pkill -TERM -P "$pid" >/dev/null 2>&1 || true
-    kill "$pid" >/dev/null 2>&1 || true
-    for _ in 1 2 3 4 5 6 7 8 9 10; do
-      kill -0 "$pid" >/dev/null 2>&1 || break
-      sleep 0.02
-    done
-    if kill -0 "$pid" >/dev/null 2>&1; then
-      pkill -KILL -P "$pid" >/dev/null 2>&1 || true
-      kill -KILL "$pid" >/dev/null 2>&1 || true
-    fi
+  local lock_path lifecycle_fd="" pid_file_pid="" guard_pid="" guard_starttime=""
+  command -v flock >/dev/null 2>&1 || return 78
+  lock_path="$(window_guard_lifecycle_lock_file)"
+  mkdir -p "$(dirname "$lock_path")"
+  exec {lifecycle_fd}>"$lock_path"
+  if ! flock -x -w "$TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS" "$lifecycle_fd"; then
+    exec {lifecycle_fd}>&-
+    return 75
   fi
-  rm -f "$pid_file"
+  pid_file_pid="$(window_guard_read_pid_file || true)"
+  window_guard_collect_matching_pids
+  if [[ "${#TIKPAL_WINDOW_GUARD_MATCHING_PIDS[@]}" -gt 1 ]]; then
+    log "ERROR: refusing to stop multiple Explore window guards: ${TIKPAL_WINDOW_GUARD_MATCHING_PIDS[*]}"
+    flock -u "$lifecycle_fd" >/dev/null 2>&1 || true
+    exec {lifecycle_fd}>&-
+    return 72
+  fi
+  if [[ "${#TIKPAL_WINDOW_GUARD_MATCHING_PIDS[@]}" == 1 ]]; then
+    guard_pid="${TIKPAL_WINDOW_GUARD_MATCHING_PIDS[0]}"
+    guard_starttime="$(window_guard_process_starttime "$guard_pid" || true)"
+    if [[ -z "$guard_starttime" ]] ||
+       ! window_guard_terminate_process "$guard_pid" "$guard_starttime"; then
+      flock -u "$lifecycle_fd" >/dev/null 2>&1 || true
+      exec {lifecycle_fd}>&-
+      return 73
+    fi
+    window_guard_remove_pid_file_if_owned "$guard_pid" "$guard_starttime" || true
+  elif [[ -n "$pid_file_pid" ]]; then
+    window_guard_remove_pid_file_if_owned "$pid_file_pid" || true
+  fi
+  flock -u "$lifecycle_fd" >/dev/null 2>&1 || true
+  exec {lifecycle_fd}>&-
+}
+
+window_guard_running() {
+  local pid starttime
+  pid="$(window_guard_read_pid_file || true)"
+  starttime="$(window_guard_read_recorded_starttime || true)"
+  window_guard_process_matches "$pid" "$starttime" || return 1
+  window_guard_collect_matching_pids
+  [[ "${#TIKPAL_WINDOW_GUARD_MATCHING_PIDS[@]}" == 1 &&
+     "${TIKPAL_WINDOW_GUARD_MATCHING_PIDS[0]}" == "$pid" ]]
 }
 
 
@@ -2188,7 +3326,8 @@ stop_provider_guard() {
 }
 
 close_provider_windows() {
-  command -v xsetroot >/dev/null 2>&1 && xsetroot -solid black 2>/dev/null || true
+  command -v xsetroot >/dev/null 2>&1 &&
+    xsetroot_mutation solid_root black -solid black 2>/dev/null || true
   stop_window_guard
   stop_provider_pool_prewarm
   stop_provider_guard
@@ -2204,7 +3343,8 @@ park_profile_windows_for_reopen() {
   local window pid
   # Ensure X root window background is black so compositor
   # transitions never expose a white root-window flash.
-  command -v xsetroot >/dev/null 2>&1 && xsetroot -solid black 2>/dev/null || true
+  command -v xsetroot >/dev/null 2>&1 &&
+    xsetroot_mutation solid_root black -solid black 2>/dev/null || true
   [[ -n "$profile" ]] || return 0
   command -v xdotool >/dev/null 2>&1 || return 0
   window="${known_window:-$(first_window_for_profile "$profile" || true)}"
@@ -2730,9 +3870,11 @@ tile_window() {
   fi
   TIKPAL_TILE_WINDOW_CHANGED=1
   if command -v wmctrl >/dev/null 2>&1; then
-    DISPLAY="$TIKPAL_KIOSK_DISPLAY" wmctrl -i -r "$window" -b remove,fullscreen,maximized_vert,maximized_horz >/dev/null 2>&1 || true
+    wmctrl_mutation clear_maximize "$window" normal \
+      -i -r "$window" -b remove,fullscreen,maximized_vert,maximized_horz >/dev/null 2>&1 || true
     if ! is_enabled "$TIKPAL_WEB_MODE_X11_SYNC_WINDOW_OPS"; then
-      DISPLAY="$TIKPAL_KIOSK_DISPLAY" wmctrl -i -r "$window" -e "0,$x,$y,$width,$height" >/dev/null 2>&1 && return 0
+      wmctrl_mutation geometry "$window" "$x,$y_${width}x${height}" \
+        -i -r "$window" -e "0,$x,$y,$width,$height" >/dev/null 2>&1 && return 0
     fi
   fi
   if is_enabled "$TIKPAL_WEB_MODE_X11_SYNC_WINDOW_OPS"; then
@@ -2759,7 +3901,8 @@ tile_window_fast() {
   height="$(window_height "$size")"
   TIKPAL_TILE_WINDOW_CHANGED=1
   if command -v wmctrl >/dev/null 2>&1 && ! is_enabled "$TIKPAL_WEB_MODE_X11_SYNC_WINDOW_OPS"; then
-    DISPLAY="$TIKPAL_KIOSK_DISPLAY" wmctrl -i -r "$window" -e "0,$x,$y,$width,$height" >/dev/null 2>&1 && return 0
+    wmctrl_mutation geometry "$window" "$x,$y_${width}x${height}" \
+      -i -r "$window" -e "0,$x,$y,$width,$height" >/dev/null 2>&1 && return 0
   fi
   if is_enabled "$TIKPAL_WEB_MODE_X11_SYNC_WINDOW_OPS"; then
     tile_window "$window" "$position" "$size"
@@ -2820,14 +3963,16 @@ mark_window_above() {
   local window="$1"
   [[ -n "$window" ]] || return 0
   command -v wmctrl >/dev/null 2>&1 || return 0
-  DISPLAY="$TIKPAL_KIOSK_DISPLAY" wmctrl -i -r "$window" -b add,above >/dev/null 2>&1 || true
+  wmctrl_mutation add_above "$window" above \
+    -i -r "$window" -b add,above >/dev/null 2>&1 || true
 }
 
 clear_window_above() {
   local window="$1"
   [[ -n "$window" ]] || return 0
   command -v wmctrl >/dev/null 2>&1 || return 0
-  DISPLAY="$TIKPAL_KIOSK_DISPLAY" wmctrl -i -r "$window" -b remove,above >/dev/null 2>&1 || true
+  wmctrl_mutation remove_above "$window" normal \
+    -i -r "$window" -b remove,above >/dev/null 2>&1 || true
 }
 
 set_window_opacity() {
@@ -2839,7 +3984,8 @@ set_window_opacity() {
   [[ "$opacity" =~ ^0([.][0-9]+)?$|^1([.]0+)?$ ]] || return 1
   window_id="$(printf '0x%x' "$window")"
   value="$(awk -v opacity="$opacity" 'BEGIN { printf "0x%08x", int(4294967295 * opacity) }')"
-  DISPLAY="$TIKPAL_KIOSK_DISPLAY" xprop -id "$window_id" -f _NET_WM_WINDOW_OPACITY 32c -set _NET_WM_WINDOW_OPACITY "$value" >/dev/null 2>&1
+  xprop_mutation opacity "$window" "$value" \
+    -id "$window_id" -f _NET_WM_WINDOW_OPACITY 32c -set _NET_WM_WINDOW_OPACITY "$value" >/dev/null 2>&1
 }
 
 restore_window_opacity() {
@@ -2969,6 +4115,10 @@ first_window_for_profile() {
   local attempt1_pid=none attempt1_geometry=not_parsed
   local attempt2_result=not_run attempt2_x11_ms=-1 attempt2_pid_parse_ms=-1 attempt2_profile_ms=-1 attempt2_geometry_ms=-1
   local attempt2_pid=none attempt2_geometry=not_parsed
+  local trace_started_ms=0 trace_finished_ms=0 trace_elapsed_ms=0
+  if switch_trace_enabled; then
+    switch_trace_now_ms trace_started_ms
+  fi
   command -v xdotool >/dev/null 2>&1 || return 1
   [[ "$timing_enabled" != "1" ]] || function_started_ms="$(now_ms)"
   [[ "$timing_enabled" != "1" ]] || segment_started_ms="$(now_ms)"
@@ -3052,6 +4202,11 @@ first_window_for_profile() {
     record_switch_detail_timing "$timing_enabled" \
       "switch_detail cache role=$timing_role profile=${profile##*/} total_ms=$total_ms cache_path_ms=$cache_path_ms cache_read_ms=$cache_read_ms cache_present=$cache_present outcome=$outcome xid=${result_window:-none} retry=$retry recovery=$recovery recovery_ms=$recovery_ms attempt1_result=$attempt1_result attempt1_x11_ms=$attempt1_x11_ms attempt1_pid_parse_ms=$attempt1_pid_parse_ms attempt1_pid=$attempt1_pid attempt1_profile_ms=$attempt1_profile_ms attempt1_geometry_ms=$attempt1_geometry_ms attempt1_geometry=$attempt1_geometry attempt2_result=$attempt2_result attempt2_x11_ms=$attempt2_x11_ms attempt2_pid_parse_ms=$attempt2_pid_parse_ms attempt2_pid=$attempt2_pid attempt2_profile_ms=$attempt2_profile_ms attempt2_geometry_ms=$attempt2_geometry_ms attempt2_geometry=$attempt2_geometry"
   fi
+  if switch_trace_enabled; then
+    switch_trace_now_ms trace_finished_ms
+    trace_elapsed_ms=$((trace_finished_ms - trace_started_ms))
+    record_switch_trace_event "${timing_role}_window_resolved" "$outcome" "" "$trace_elapsed_ms"
+  fi
   [[ -n "$result_window" ]] || return 1
   printf '%s\n' "$result_window"
 }
@@ -3061,6 +4216,16 @@ profile_window_cache_path() {
   local key
   key="$(printf '%s' "$profile" | cksum | awk '{print $1 "-" $2}')"
   printf '%s\n' "$TIKPAL_WEB_MODE_PROFILE_ROOT/window-$key.id"
+}
+
+read_profile_window_cache_raw() {
+  local profile="$1"
+  local cache_path window
+  cache_path="$(profile_window_cache_path "$profile")"
+  [[ -r "$cache_path" ]] || return 1
+  window="$(cat "$cache_path" 2>/dev/null || true)"
+  [[ "$window" =~ ^[1-9][0-9]*$ ]] || return 1
+  printf '%s\n' "$window"
 }
 
 validate_profile_window() {
@@ -3136,6 +4301,64 @@ provider_launch_position() {
   printf '%s\n' "$TIKPAL_WEB_MODE_LEFT_POSITION"
 }
 
+xdotool_mutation_metadata() {
+  local operation="" xids="" requested="" separator="" xid="" x="" y="" width="" height=""
+  local -a arguments=("$@")
+  local index=0
+  while [[ "$index" -lt "${#arguments[@]}" ]]; do
+    case "${arguments[$index]}" in
+      windowmove)
+        index=$((index + 1))
+        [[ "${arguments[$index]:-}" != "--sync" ]] || index=$((index + 1))
+        xid="${arguments[$index]:-}"
+        x="${arguments[$((index + 1))]:-}"
+        y="${arguments[$((index + 2))]:-}"
+        operation+="${operation:+,}windowmove"
+        requested+="${separator}${xid}:position=$x,$y"
+        separator=";"
+        index=$((index + 3))
+        ;;
+      windowsize)
+        index=$((index + 1))
+        [[ "${arguments[$index]:-}" != "--sync" ]] || index=$((index + 1))
+        xid="${arguments[$index]:-}"
+        width="${arguments[$((index + 1))]:-}"
+        height="${arguments[$((index + 2))]:-}"
+        operation+="${operation:+,}windowsize"
+        requested+="${separator}${xid}:size=${width}x${height}"
+        separator=";"
+        index=$((index + 3))
+        ;;
+      windowraise|windowlower|windowactivate|windowfocus|windowclose|windowmap)
+        operation+="${operation:+,}${arguments[$index]}"
+        xid="${arguments[$((index + 1))]:-}"
+        requested+="${separator}${xid}:${arguments[$index]}"
+        separator=";"
+        index=$((index + 2))
+        ;;
+      mousemove)
+        operation+="${operation:+,}mousemove"
+        x="${arguments[$((index + 1))]:-}"
+        y="${arguments[$((index + 2))]:-}"
+        requested+="${separator}pointer:$x,$y"
+        separator=";"
+        index=$((index + 3))
+        ;;
+      *)
+        index=$((index + 1))
+        continue
+        ;;
+    esac
+    if [[ "$xid" =~ ^[1-9][0-9]*$ && ",$xids," != *",$xid,"* ]]; then
+      xids+="${xids:+,}$xid"
+    fi
+  done
+  [[ -n "$operation" ]] || return 1
+  TIKPAL_X11_MUTATION_OPERATION="xdotool:$operation"
+  TIKPAL_X11_MUTATION_XIDS="$xids"
+  TIKPAL_X11_MUTATION_REQUESTED="$requested"
+}
+
 xdotool_safe() {
   local timeout_seconds=3
   # Window discovery is repeated throughout a resident reveal. On this X11
@@ -3144,7 +4367,39 @@ xdotool_safe() {
   if [[ "${1:-}" == "search" ]]; then
     timeout_seconds="${TIKPAL_WEB_MODE_X11_SEARCH_TIMEOUT_SECONDS:-0.35}"
   fi
+  if xdotool_mutation_metadata "$@"; then
+    x11_mutation_run "$TIKPAL_X11_MUTATION_OPERATION" "$TIKPAL_X11_MUTATION_XIDS" \
+      "$TIKPAL_X11_MUTATION_REQUESTED" timeout "$timeout_seconds" xdotool "$@" 2>/dev/null || true
+    return 0
+  fi
   timeout "$timeout_seconds" xdotool "$@" 2>/dev/null || true
+}
+
+xdotool_mutate() {
+  xdotool_mutation_metadata "$@" || return 64
+  x11_mutation_run "$TIKPAL_X11_MUTATION_OPERATION" "$TIKPAL_X11_MUTATION_XIDS" \
+    "$TIKPAL_X11_MUTATION_REQUESTED" timeout 3 xdotool "$@" 2>/dev/null
+}
+
+wmctrl_mutation() {
+  local operation="$1" window="$2" requested="$3"
+  shift 3
+  x11_mutation_run "wmctrl:$operation" "$window" "$requested" \
+    env DISPLAY="$TIKPAL_KIOSK_DISPLAY" wmctrl "$@"
+}
+
+xprop_mutation() {
+  local operation="$1" window="$2" requested="$3"
+  shift 3
+  x11_mutation_run "xprop:$operation" "$window" "$requested" \
+    env DISPLAY="$TIKPAL_KIOSK_DISPLAY" xprop "$@"
+}
+
+xsetroot_mutation() {
+  local requested="$1"
+  shift
+  x11_mutation_run xsetroot "" "$requested" \
+    env DISPLAY="$TIKPAL_KIOSK_DISPLAY" xsetroot "$@"
 }
 
 park_pointer_in_side_panel() {
@@ -3160,10 +4415,22 @@ park_pointer_in_side_panel() {
   DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe mousemove "$target_x" "$target_y"
 }
 
+park_pointer_in_side_panel_async() {
+  (
+    local started_ms finished_ms
+    started_ms="$(now_ms)"
+    x11_trace_control_event pointer_park_started 0
+    park_pointer_in_side_panel
+    finished_ms="$(now_ms)"
+    x11_trace_control_event pointer_park_finished 0 "elapsed_ms=$((finished_ms - started_ms))"
+  ) </dev/null >/dev/null 2>&1 &
+}
+
 commit_visible_provider_state() {
   local provider="$1"
-  park_pointer_in_side_panel
   write_runtime_provider_state "$provider"
+  x11_trace_control_event runtime_state_committed 0 "provider=$provider"
+  park_pointer_in_side_panel_async
 }
 
 all_chromium_windows() {
@@ -3190,16 +4457,27 @@ tile_visible_web_mode_windows() {
   local provider_profile="$1"
   local panel_profile="$2"
   local force_raise="${3:-0}"
+  local recovery_window_list="${4:-}"
   local did_restack=0
   local window pid title active_window active_provider_window oauth_provider_window preferred_provider_window keep_window provider_window_count provider_entry provider_entry_id provider_entry_profile
   local background_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/background"
   local background_windows=()
   local provider_windows=()
+  local visible_windows=()
   command -v xdotool >/dev/null 2>&1 || return 0
   active_window="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe getactivewindow 2>/dev/null || true)"
 
-  while IFS= read -r window; do
-    [[ -n "$window" ]] || continue
+  if [[ -n "$recovery_window_list" ]]; then
+    while IFS= read -r window; do
+      [[ -n "$window" ]] && visible_windows+=("$window")
+    done < "$recovery_window_list"
+  else
+    while IFS= read -r window; do
+      [[ -n "$window" ]] && visible_windows+=("$window")
+    done < <(visible_chromium_windows)
+  fi
+
+  for window in "${visible_windows[@]}"; do
     pid="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe getwindowpid "$window" 2>/dev/null || true)"
     title="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe getwindowname "$window" 2>/dev/null || true)"
 
@@ -3254,7 +4532,7 @@ tile_visible_web_mode_windows() {
         oauth_provider_window="$window"
       fi
     fi
-  done < <(visible_chromium_windows)
+  done
 
   for window in "${background_windows[@]}"; do
     if [[ "${#provider_windows[@]}" -gt 0 ]]; then
@@ -3331,7 +4609,7 @@ write_guard_window_list() {
   local provider_window="${2:-}"
   local panel_profile="$3"
   local panel_window="${4:-}"
-  local kiosk_window="" list_path temporary_path
+  local kiosk_window="" list_path temporary_path registry_generation=missing
   [[ "$provider_window" =~ ^[0-9]+$ && "$panel_window" =~ ^[0-9]+$ ]] || return 1
 
   if [[ -n "$TIKPAL_CHROMIUM_PROFILE_DIR" ]]; then
@@ -3345,7 +4623,12 @@ write_guard_window_list() {
   list_path="$(guard_window_list_file)"
   mkdir -p "$(dirname "$list_path")"
   temporary_path="$list_path.$$.$RANDOM.tmp"
+  if [[ -r "$TIKPAL_WEB_MODE_X11_HELPER_GENERATION_PATH" ]]; then
+    IFS= read -r registry_generation < "$TIKPAL_WEB_MODE_X11_HELPER_GENERATION_PATH" ||
+      registry_generation=unreadable
+  fi
   {
+    printf 'generation\t%s\t%s\n' "$registry_generation" "$(now_ms)"
     printf 'provider\t%s\t%s\n' "$provider_profile" "$provider_window"
     printf 'panel\t%s\t%s\n' "$panel_profile" "$panel_window"
     if [[ "$kiosk_window" =~ ^[0-9]+$ ]]; then
@@ -3353,61 +4636,38 @@ write_guard_window_list() {
     fi
   } > "$temporary_path"
   mv -f "$temporary_path" "$list_path"
+  x11_trace_control_event guard_registry_published 0 \
+    "generation=$registry_generation provider=$provider_window panel=$panel_window" \
+    "$provider_window,$panel_window"
 }
 
-tile_guard_windows_fast() {
-  local provider_profile="$1"
-  local panel_profile="$2"
-  local force_raise="${3:-0}"
-  local validate_identity="${4:-1}"
-  local list_path kind profile window provider_window="" panel_window="" kiosk_window=""
-  local probe geometry_fields provider_fields panel_fields kiosk_fields normalized_size
-  local provider_pid provider_x provider_y provider_width provider_height
-  local panel_pid panel_x panel_y panel_width panel_height
-  local kiosk_pid kiosk_x kiosk_y kiosk_width kiosk_height
-  local expected_x expected_y expected_width expected_height
-  local provider_changed=0 panel_changed=0
-  local -a xdotool_args=()
-  list_path="$(guard_window_list_file)"
-  [[ -r "$list_path" ]] || return 1
-  while IFS=$'\t' read -r kind profile window; do
-    case "$kind" in
-      provider)
-        [[ "$profile" == "$provider_profile" ]] || return 1
-        provider_window="$window"
-        ;;
-      panel)
-        [[ "$profile" == "$panel_profile" ]] || return 1
-        panel_window="$window"
-        ;;
-      kiosk)
-        [[ "$profile" == "$TIKPAL_CHROMIUM_PROFILE_DIR" ]] || continue
-        kiosk_window="$window"
-        ;;
-    esac
-  done < "$list_path"
+guard_window_map_state() {
+  local window="$1" output
+  command -v xwininfo >/dev/null 2>&1 || return 1
+  output="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xwininfo -id "$window" 2>/dev/null)" || return 1
+  if grep -q 'Map State: IsViewable' <<< "$output"; then
+    printf 'viewable\n'
+  elif grep -q 'Map State:' <<< "$output"; then
+    printf 'not_viewable\n'
+  else
+    return 1
+  fi
+}
 
-  [[ "$provider_window" =~ ^[0-9]+$ && "$panel_window" =~ ^[0-9]+$ ]] || return 1
-  if [[ "$validate_identity" == "1" ]]; then
-    xdotool_args+=(getwindowpid "$provider_window")
+guard_inspect_windows_shell() {
+  local provider_profile="$1" panel_profile="$2" provider_window="$3" panel_window="$4"
+  local kiosk_window="${5:-}" probe rows provider_fields panel_fields kiosk_fields
+  local provider_pid provider_x provider_y provider_width provider_height provider_map provider_opacity
+  local panel_pid panel_x panel_y panel_width panel_height panel_map panel_opacity
+  local kiosk_pid kiosk_x kiosk_y kiosk_width kiosk_height kiosk_map=not_viewable
+  local provider_opacity_full=false panel_opacity_full=false stack_order
+  local -a arguments=(getwindowpid "$provider_window" getwindowgeometry --shell "$provider_window"
+    getwindowpid "$panel_window" getwindowgeometry --shell "$panel_window")
+  if [[ "$kiosk_window" =~ ^[1-9][0-9]*$ ]]; then
+    arguments+=(getwindowpid "$kiosk_window" getwindowgeometry --shell "$kiosk_window")
   fi
-  xdotool_args+=(getwindowgeometry --shell "$provider_window")
-  if [[ "$validate_identity" == "1" ]]; then
-    xdotool_args+=(getwindowpid "$panel_window")
-  fi
-  xdotool_args+=(getwindowgeometry --shell "$panel_window")
-  if [[ -n "$kiosk_window" ]]; then
-    [[ "$kiosk_window" =~ ^[0-9]+$ ]] || return 1
-    if [[ "$validate_identity" == "1" ]]; then
-      xdotool_args+=(getwindowpid "$kiosk_window")
-    fi
-    xdotool_args+=(getwindowgeometry --shell "$kiosk_window")
-  fi
-
-  # Query every known surface through one X11 connection. Stable ticks only
-  # need usable geometry; every fourth tick also checks PID/profile ownership.
-  probe="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_probe "${xdotool_args[@]}")" || return 1
-  geometry_fields="$(awk -F= -v provider="$provider_window" -v panel="$panel_window" -v kiosk="$kiosk_window" '
+  probe="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_probe "${arguments[@]}")" || return 1
+  rows="$(awk -F= -v provider="$provider_window" -v panel="$panel_window" -v kiosk="$kiosk_window" '
     /^[0-9]+$/ { pending_pid=$0; next }
     $1=="WINDOW" { window=$2; pid[window]=pending_pid; pending_pid="" }
     $1=="X" { x[window]=$2 }
@@ -3419,72 +4679,571 @@ tile_guard_windows_fast() {
         pid[provider], x[provider], y[provider], width[provider], height[provider],
         pid[panel], x[panel], y[panel], width[panel], height[panel],
         pid[kiosk], x[kiosk], y[kiosk], width[kiosk], height[kiosk]
-    }' <<< "$probe")"
-  IFS=$'\t' read -r provider_fields panel_fields kiosk_fields <<< "$geometry_fields"
+    }
+  ' <<< "$probe")"
+  IFS=$'\t' read -r provider_fields panel_fields kiosk_fields <<< "$rows"
   IFS=, read -r provider_pid provider_x provider_y provider_width provider_height <<< "$provider_fields"
   IFS=, read -r panel_pid panel_x panel_y panel_width panel_height <<< "$panel_fields"
   IFS=, read -r kiosk_pid kiosk_x kiosk_y kiosk_width kiosk_height <<< "$kiosk_fields"
-
-  [[ "$provider_width" =~ ^[1-9][0-9]*$ && "$provider_height" =~ ^[1-9][0-9]*$ ]] || return 1
-  [[ "$panel_width" =~ ^[1-9][0-9]*$ && "$panel_height" =~ ^[1-9][0-9]*$ ]] || return 1
-  (( provider_width * provider_height > 100000 && panel_width * panel_height > 100000 )) || return 1
-  if [[ -n "$kiosk_window" ]]; then
+  [[ "$provider_width" =~ ^[1-9][0-9]*$ && "$provider_height" =~ ^[1-9][0-9]*$ &&
+     "$panel_width" =~ ^[1-9][0-9]*$ && "$panel_height" =~ ^[1-9][0-9]*$ ]] || return 1
+  process_tree_uses_profile "$provider_pid" "$provider_profile" || return 1
+  process_tree_uses_profile "$panel_pid" "$panel_profile" || return 1
+  provider_map="$(guard_window_map_state "$provider_window")" || return 1
+  panel_map="$(guard_window_map_state "$panel_window")" || return 1
+  provider_opacity="$(window_opacity_value "$provider_window" 2>/dev/null || printf unset)"
+  panel_opacity="$(window_opacity_value "$panel_window" 2>/dev/null || printf unset)"
+  window_opacity_is_full "$provider_opacity" && provider_opacity_full=true
+  window_opacity_is_full "$panel_opacity" && panel_opacity_full=true
+  if [[ "$kiosk_window" =~ ^[1-9][0-9]*$ ]]; then
     [[ "$kiosk_width" =~ ^[1-9][0-9]*$ && "$kiosk_height" =~ ^[1-9][0-9]*$ ]] || return 1
-    (( kiosk_width * kiosk_height > 100000 )) || return 1
+    process_tree_uses_profile "$kiosk_pid" "$TIKPAL_CHROMIUM_PROFILE_DIR" || return 1
+    kiosk_map="$(guard_window_map_state "$kiosk_window")" || return 1
   fi
-  if [[ "$validate_identity" == "1" ]]; then
-    process_tree_uses_profile "$provider_pid" "$provider_profile" || return 1
-    process_tree_uses_profile "$panel_pid" "$panel_profile" || return 1
-    if [[ -n "$kiosk_window" ]]; then
-      process_tree_uses_profile "$kiosk_pid" "$TIKPAL_CHROMIUM_PROFILE_DIR" || return 1
-    fi
+  TIKPAL_GUARD_INSPECT_RESPONSE="$(jq -cn \
+    --argjson provider "$provider_window" --argjson providerPid "$provider_pid" \
+    --arg providerMap "$provider_map" --argjson providerX "$provider_x" --argjson providerY "$provider_y" \
+    --argjson providerWidth "$provider_width" --argjson providerHeight "$provider_height" \
+    --argjson providerOpacityFull "$provider_opacity_full" \
+    --argjson panel "$panel_window" --argjson panelPid "$panel_pid" \
+    --arg panelMap "$panel_map" --argjson panelX "$panel_x" --argjson panelY "$panel_y" \
+    --argjson panelWidth "$panel_width" --argjson panelHeight "$panel_height" \
+    --argjson panelOpacityFull "$panel_opacity_full" \
+    --argjson kiosk "${kiosk_window:-0}" --argjson kioskPid "${kiosk_pid:-0}" --arg kioskMap "$kiosk_map" \
+    --argjson kioskX "${kiosk_x:-0}" --argjson kioskY "${kiosk_y:-0}" \
+    --argjson kioskWidth "${kiosk_width:-1}" --argjson kioskHeight "${kiosk_height:-1}" '
+      def surface($role; $xid; $pid; $map; $x; $y; $width; $height; $opacityFull):
+        {role:$role, xid:$xid, pid:$pid, profileMatched:true,
+         code:(if $map == "viewable" then "OK" else "WINDOW_NOT_VIEWABLE" end),
+         mapState:$map, geometry:{x:$x,y:$y,width:$width,height:$height},
+         opacity:{full:$opacityFull}};
+      {operation:"inspect", surfaces:
+        [surface("provider"; $provider; $providerPid; $providerMap; $providerX; $providerY;
+          $providerWidth; $providerHeight; $providerOpacityFull),
+         surface("panel"; $panel; $panelPid; $panelMap; $panelX; $panelY;
+          $panelWidth; $panelHeight; $panelOpacityFull)] +
+        (if $kiosk > 0 then
+          [surface("kiosk"; $kiosk; $kioskPid; $kioskMap; $kioskX; $kioskY;
+            $kioskWidth; $kioskHeight; true)] else [] end)}
+    ')" || return 1
+  if stack_order="$(guard_root_stack_order "$provider_window" "$panel_window" "$kiosk_window")"; then
+    TIKPAL_GUARD_STACK_ORDER="$stack_order"
+    TIKPAL_GUARD_STACK_STATE=known
+  else
+    TIKPAL_GUARD_STACK_ORDER=""
+    TIKPAL_GUARD_STACK_STATE=unknown
   fi
+}
 
+guard_inspect_windows() {
+  local provider_profile="$1"
+  local panel_profile="$2"
+  local provider_window="$3"
+  local panel_window="$4"
+  local kiosk_window="${5:-}"
+  local generation=0 request_id response="" status=0 stack_order
+  local inspect_started_ns inspect_finished_ns inspect_elapsed_ns response_code="unknown"
+  local -a arguments=(client inspect)
+  request_id="guard-$(x11_helper_new_id)"
+  inspect_started_ns="$(x11_monotonic_ns)"
+  x11_trace_control_event inspect_started 0 \
+    "request_id=$request_id operation=inspect caller_pid=$BASHPID caller_role=window_guard generation=${TIKPAL_WEB_MODE_X11_PROCESS_GENERATION:-0}" \
+    "$provider_window,$panel_window${kiosk_window:+,$kiosk_window}"
+  if [[ ! -x "$TIKPAL_WEB_MODE_X11_HELPER_BINARY" || ! -S "$TIKPAL_WEB_MODE_X11_HELPER_SOCKET" ]]; then
+    if [[ "$TIKPAL_WEB_MODE_X11_HELPER_MODE" != "disabled" ]]; then
+      inspect_finished_ns="$(x11_monotonic_ns)"
+      inspect_elapsed_ns=$((inspect_finished_ns - inspect_started_ns))
+      x11_trace_control_event inspect_failed 69 \
+        "request_id=$request_id operation=inspect caller_pid=$BASHPID caller_role=window_guard reason=helper_unavailable total_ns=$inspect_elapsed_ns" \
+        "$provider_window,$panel_window${kiosk_window:+,$kiosk_window}"
+      return 1
+    fi
+    if guard_inspect_windows_shell "$provider_profile" "$panel_profile" \
+      "$provider_window" "$panel_window" "$kiosk_window"; then
+      inspect_finished_ns="$(x11_monotonic_ns)"
+      inspect_elapsed_ns=$((inspect_finished_ns - inspect_started_ns))
+      x11_trace_control_event inspect_completed 0 \
+        "request_id=$request_id operation=inspect_shell caller_pid=$BASHPID caller_role=window_guard total_ns=$inspect_elapsed_ns" \
+      "$provider_window,$panel_window${kiosk_window:+,$kiosk_window}"
+      return 0
+    else
+      status=$?
+    fi
+    inspect_finished_ns="$(x11_monotonic_ns)"
+    inspect_elapsed_ns=$((inspect_finished_ns - inspect_started_ns))
+    x11_trace_control_event inspect_failed "$status" \
+      "request_id=$request_id operation=inspect_shell caller_pid=$BASHPID caller_role=window_guard total_ns=$inspect_elapsed_ns" \
+      "$provider_window,$panel_window${kiosk_window:+,$kiosk_window}"
+    return 1
+  fi
+  [[ "${TIKPAL_WEB_MODE_X11_PROCESS_GENERATION:-}" =~ ^[1-9][0-9]*$ ]] &&
+    generation="$TIKPAL_WEB_MODE_X11_PROCESS_GENERATION"
+  arguments+=(--request-id "$request_id" --generation "$generation"
+    --surface provider "$provider_window" "$provider_profile"
+    --surface panel "$panel_window" "$panel_profile")
+  if [[ "$kiosk_window" =~ ^[1-9][0-9]*$ && -n "$TIKPAL_CHROMIUM_PROFILE_DIR" ]]; then
+    arguments+=(--surface kiosk "$kiosk_window" "$TIKPAL_CHROMIUM_PROFILE_DIR")
+  fi
+  if response="$(
+    TIKPAL_X11_HELPER_CALLER_ROLE=window_guard \
+    TIKPAL_WEB_MODE_X11_HELPER_SOCKET="$TIKPAL_WEB_MODE_X11_HELPER_SOCKET" \
+    TIKPAL_WEB_MODE_X11_HELPER_CONNECT_TIMEOUT_MS="$TIKPAL_WEB_MODE_X11_HELPER_CONNECT_TIMEOUT_MS" \
+    TIKPAL_WEB_MODE_X11_HELPER_RESPONSE_TIMEOUT_MS="$TIKPAL_WEB_MODE_X11_HELPER_RESPONSE_TIMEOUT_MS" \
+      "$TIKPAL_WEB_MODE_X11_HELPER_BINARY" "${arguments[@]}"
+  )"; then
+    status=0
+  else
+    status=$?
+  fi
+  inspect_finished_ns="$(x11_monotonic_ns)"
+  inspect_elapsed_ns=$((inspect_finished_ns - inspect_started_ns))
+  response_code="$(jq -r '.code // .errorCode // "unknown"' <<< "$response" 2>/dev/null || printf unknown)"
+  if [[ "$status" != "0" && "$status" != "20" ]]; then
+    x11_trace_control_event inspect_failed "$status" \
+      "request_id=$request_id operation=inspect caller_pid=$BASHPID caller_role=window_guard response_code=$response_code total_ns=$inspect_elapsed_ns response=$response" \
+      "$provider_window,$panel_window${kiosk_window:+,$kiosk_window}"
+    return 1
+  fi
+  if ! jq -e '.operation == "inspect" and (.surfaces | type == "array")' \
+    <<< "$response" >/dev/null 2>&1; then
+    x11_trace_control_event inspect_failed 1 \
+      "request_id=$request_id operation=inspect caller_pid=$BASHPID caller_role=window_guard response_code=$response_code total_ns=$inspect_elapsed_ns response=$response" \
+      "$provider_window,$panel_window${kiosk_window:+,$kiosk_window}"
+    return 1
+  fi
+  TIKPAL_GUARD_INSPECT_RESPONSE="$response"
+  x11_trace_control_event inspect_completed 0 \
+    "request_id=$request_id operation=inspect caller_pid=$BASHPID caller_role=window_guard response_code=$response_code client_status=$status total_ns=$inspect_elapsed_ns response=$response" \
+    "$provider_window,$panel_window${kiosk_window:+,$kiosk_window}"
+  if stack_order="$(guard_root_stack_order "$provider_window" "$panel_window" "$kiosk_window")"; then
+    TIKPAL_GUARD_STACK_ORDER="$stack_order"
+    TIKPAL_GUARD_STACK_STATE=known
+  else
+    TIKPAL_GUARD_STACK_ORDER=""
+    TIKPAL_GUARD_STACK_STATE=unknown
+  fi
+}
+
+guard_root_stack_order() {
+  local provider_window="$1"
+  local panel_window="$2"
+  local kiosk_window="${3:-}"
+  local provider_hex panel_hex kiosk_hex snapshot
+  command -v xwininfo >/dev/null 2>&1 || return 1
+  provider_hex="$(printf '0x%x' "$provider_window")"
+  panel_hex="$(printf '0x%x' "$panel_window")"
+  if [[ "$kiosk_window" =~ ^[1-9][0-9]*$ ]]; then
+    kiosk_hex="$(printf '0x%x' "$kiosk_window")"
+  fi
+  snapshot="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xwininfo -root -children 2>/dev/null)" || return 1
+  awk -v provider="$provider_hex" -v panel="$panel_hex" -v kiosk="$kiosk_hex" '
+    {
+      xid=tolower($1)
+      if (xid == tolower(provider)) provider_rank=NR
+      if (xid == tolower(panel)) panel_rank=NR
+      if (kiosk && xid == tolower(kiosk)) kiosk_rank=NR
+    }
+    END {
+      if (!provider_rank || !panel_rank || (kiosk && !kiosk_rank)) exit 1
+      printf "%d\t%d\t%d\n", provider_rank, panel_rank, kiosk_rank
+    }
+  ' <<< "$snapshot"
+}
+
+guard_append_repair() {
+  local action="$1" window="$2"
+  TIKPAL_GUARD_REPAIR_PLAN+="${TIKPAL_GUARD_REPAIR_PLAN:+$'\n'}$action"$'\t'"$window"
+}
+
+guard_inspected_identity_valid() {
+  local code="$1" pid="$2" profile_matched="$3" profile="$4"
+  if [[ "$code" == "OK" ]]; then
+    if [[ "$profile_matched" == "true" ]]; then
+      return 0
+    fi
+    TIKPAL_GUARD_RECOVERY_REQUIRED=true
+    return 1
+  fi
+  if [[ "$code" == "WINDOW_NOT_VIEWABLE" && "$pid" =~ ^[1-9][0-9]*$ ]] &&
+     process_tree_uses_profile "$pid" "$profile"; then
+    return 0
+  fi
+  TIKPAL_GUARD_RECOVERY_REQUIRED=true
+  return 1
+}
+
+guard_plan_repair() {
+  local provider_profile="$1"
+  local panel_profile="$2"
+  local provider_window="$3"
+  local panel_window="$4"
+  local kiosk_window="${5:-}"
+  local rows provider_fields panel_fields kiosk_fields normalized_size
+  local provider_code provider_pid provider_profile_matched provider_map
+  local provider_x provider_y provider_width provider_height provider_opacity_full
+  local panel_code panel_pid panel_profile_matched panel_map
+  local panel_x panel_y panel_width panel_height panel_opacity_full
+  local kiosk_code kiosk_pid kiosk_profile_matched kiosk_map
+  local expected_x expected_y expected_width expected_height
+  local provider_rank panel_rank kiosk_rank map_repair=0
+  rows="$(jq -r --argjson provider "$provider_window" --argjson panel "$panel_window" \
+      --argjson kiosk "${kiosk_window:-0}" '
+    def row($x):
+      (.surfaces[] | select(.xid == $x)) as $surface |
+      [$surface.code, ($surface.pid | tostring), ($surface.profileMatched | tostring),
+       $surface.mapState, ($surface.geometry.x // "missing"),
+       ($surface.geometry.y // "missing"), ($surface.geometry.width // "missing"),
+       ($surface.geometry.height // "missing"), ($surface.opacity.full | tostring)] | @tsv;
+    row($provider), row($panel), (if $kiosk > 0 then row($kiosk) else empty end)
+  ' <<< "$TIKPAL_GUARD_INSPECT_RESPONSE")" || return 1
+  provider_fields="$(sed -n '1p' <<< "$rows")"
+  panel_fields="$(sed -n '2p' <<< "$rows")"
+  kiosk_fields="$(sed -n '3p' <<< "$rows")"
+  IFS=$'\t' read -r provider_code provider_pid provider_profile_matched provider_map \
+    provider_x provider_y provider_width provider_height provider_opacity_full <<< "$provider_fields"
+  IFS=$'\t' read -r panel_code panel_pid panel_profile_matched panel_map \
+    panel_x panel_y panel_width panel_height panel_opacity_full <<< "$panel_fields"
+  guard_inspected_identity_valid "$provider_code" "$provider_pid" \
+    "$provider_profile_matched" "$provider_profile" || return 1
+  guard_inspected_identity_valid "$panel_code" "$panel_pid" \
+    "$panel_profile_matched" "$panel_profile" || return 1
+  if [[ "$kiosk_window" =~ ^[1-9][0-9]*$ ]]; then
+    IFS=$'\t' read -r kiosk_code kiosk_pid kiosk_profile_matched kiosk_map _ <<< "$kiosk_fields"
+    guard_inspected_identity_valid "$kiosk_code" "$kiosk_pid" \
+      "$kiosk_profile_matched" "$TIKPAL_CHROMIUM_PROFILE_DIR" || return 1
+  fi
+  [[ "$provider_x" =~ ^-?[0-9]+$ && "$provider_y" =~ ^-?[0-9]+$ &&
+     "$provider_width" =~ ^[1-9][0-9]*$ && "$provider_height" =~ ^[1-9][0-9]*$ &&
+     "$panel_x" =~ ^-?[0-9]+$ && "$panel_y" =~ ^-?[0-9]+$ &&
+     "$panel_width" =~ ^[1-9][0-9]*$ && "$panel_height" =~ ^[1-9][0-9]*$ ]] || return 1
+
+  TIKPAL_GUARD_REPAIR_PLAN=""
+  if [[ "$provider_map" != "viewable" ]]; then
+    guard_append_repair provider_map "$provider_window"
+    map_repair=1
+  fi
   expected_x="${TIKPAL_WEB_MODE_LEFT_POSITION%,*}"
   expected_y="${TIKPAL_WEB_MODE_LEFT_POSITION#*,}"
   normalized_size="$(normalize_window_size "$TIKPAL_WEB_MODE_LEFT_WINDOW")"
   expected_width="${normalized_size%,*}"
   expected_height="${normalized_size#*,}"
-  if [[ "$provider_x" != "$expected_x" || "$provider_y" != "$expected_y" \
-    || "$provider_width" != "$expected_width" || "$provider_height" != "$expected_height" ]]
-  then
-    tile_window_fast "$provider_window" "$TIKPAL_WEB_MODE_LEFT_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
-    provider_changed=1
+  if [[ "$provider_x" != "$expected_x" || "$provider_y" != "$expected_y" ||
+        "$provider_width" != "$expected_width" || "$provider_height" != "$expected_height" ]]; then
+    guard_append_repair provider_geometry "$provider_window"
   fi
+  [[ "$provider_opacity_full" == "true" ]] || guard_append_repair provider_opacity "$provider_window"
 
+  if [[ "$panel_map" != "viewable" ]]; then
+    guard_append_repair panel_map "$panel_window"
+    map_repair=1
+  fi
   expected_x="${TIKPAL_WEB_MODE_PANEL_POSITION%,*}"
   expected_y="${TIKPAL_WEB_MODE_PANEL_POSITION#*,}"
   normalized_size="$(normalize_window_size "$TIKPAL_WEB_MODE_PANEL_WINDOW")"
   expected_width="${normalized_size%,*}"
   expected_height="${normalized_size#*,}"
-  if [[ "$panel_x" != "$expected_x" || "$panel_y" != "$expected_y" \
-    || "$panel_width" != "$expected_width" || "$panel_height" != "$expected_height" ]]
-  then
-    tile_window_fast "$panel_window" "$TIKPAL_WEB_MODE_PANEL_POSITION" "$TIKPAL_WEB_MODE_PANEL_WINDOW"
-    panel_changed=1
+  if [[ "$panel_x" != "$expected_x" || "$panel_y" != "$expected_y" ||
+        "$panel_width" != "$expected_width" || "$panel_height" != "$expected_height" ]]; then
+    guard_append_repair panel_geometry "$panel_window"
   fi
-  if [[ "$force_raise" == "1" || "$provider_changed" == "1" || "$panel_changed" == "1" ]]; then
-    mark_window_above "$provider_window"
-    mark_window_above "$panel_window"
-    if [[ -n "$kiosk_window" ]]; then
-      DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowlower "$kiosk_window" >/dev/null 2>&1 || true
+  [[ "$panel_opacity_full" == "true" ]] || guard_append_repair panel_opacity "$panel_window"
+
+  if [[ "$map_repair" == "0" && "$TIKPAL_GUARD_STACK_STATE" == "known" ]]; then
+    IFS=$'\t' read -r provider_rank panel_rank kiosk_rank <<< "$TIKPAL_GUARD_STACK_ORDER"
+    [[ "$provider_rank" =~ ^[1-9][0-9]*$ && "$panel_rank" =~ ^[1-9][0-9]*$ ]] || return 1
+    if (( panel_rank > provider_rank )); then
+      guard_append_repair panel_raise "$panel_window"
     fi
-    raise_window_without_focus "$provider_window"
-    raise_window_without_focus "$panel_window"
-    raise_onboard
+    if [[ "$kiosk_window" =~ ^[1-9][0-9]*$ ]]; then
+      [[ "$kiosk_rank" =~ ^[1-9][0-9]*$ ]] || return 1
+      if (( provider_rank > kiosk_rank )); then
+        guard_append_repair kiosk_lower "$kiosk_window"
+      fi
+    fi
   fi
+  if [[ -n "$TIKPAL_GUARD_REPAIR_PLAN" ]]; then
+    TIKPAL_GUARD_REPAIR_REQUIRED=true
+  fi
+}
+
+guard_apply_repair_plan() {
+  local action window
+  while IFS=$'\t' read -r action window; do
+    [[ -n "$action" && "$window" =~ ^[1-9][0-9]*$ ]] || continue
+    case "$action" in
+      provider_map|panel_map)
+        DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowmap "$window" >/dev/null 2>&1 || true
+        ;;
+      provider_geometry)
+        tile_window_fast "$window" "$TIKPAL_WEB_MODE_LEFT_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
+        ;;
+      panel_geometry)
+        tile_window_fast "$window" "$TIKPAL_WEB_MODE_PANEL_POSITION" "$TIKPAL_WEB_MODE_PANEL_WINDOW"
+        ;;
+      provider_opacity|panel_opacity)
+        restore_window_opacity "$window"
+        ;;
+      panel_raise)
+        raise_window_without_focus "$window"
+        ;;
+      kiosk_lower)
+        DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowlower "$window" >/dev/null 2>&1 || true
+        ;;
+      *) return 1 ;;
+    esac
+  done <<< "$TIKPAL_GUARD_REPAIR_PLAN"
+}
+
+tile_guard_windows_fast() {
+  local provider_profile="$1"
+  local panel_profile="$2"
+  local list_path kind profile window provider_window="" panel_window="" kiosk_window=""
+  TIKPAL_GUARD_RECOVERY_REQUIRED="${TIKPAL_GUARD_RECOVERY_REQUIRED:-false}"
+  list_path="$(guard_window_list_file)"
+  if [[ ! -r "$list_path" ]]; then
+    TIKPAL_GUARD_RECOVERY_REQUIRED=true
+    return 1
+  fi
+  while IFS=$'\t' read -r kind profile window; do
+    case "$kind" in
+      provider)
+        if [[ "$profile" != "$provider_profile" ]]; then
+          TIKPAL_GUARD_RECOVERY_REQUIRED=true
+          return 1
+        fi
+        provider_window="$window"
+        ;;
+      panel)
+        if [[ "$profile" != "$panel_profile" ]]; then
+          TIKPAL_GUARD_RECOVERY_REQUIRED=true
+          return 1
+        fi
+        panel_window="$window"
+        ;;
+      kiosk)
+        [[ "$profile" == "$TIKPAL_CHROMIUM_PROFILE_DIR" ]] || continue
+        kiosk_window="$window"
+        ;;
+    esac
+  done < "$list_path"
+
+  if [[ ! "$provider_window" =~ ^[0-9]+$ || ! "$panel_window" =~ ^[0-9]+$ ]]; then
+    TIKPAL_GUARD_RECOVERY_REQUIRED=true
+    return 1
+  fi
+  if ! guard_inspect_windows "$provider_profile" "$panel_profile" \
+      "$provider_window" "$panel_window" "$kiosk_window"; then
+    TIKPAL_GUARD_TICK_OUTCOME=inspect_failed
+    return 75
+  fi
+  if ! guard_plan_repair "$provider_profile" "$panel_profile" \
+      "$provider_window" "$panel_window" "$kiosk_window"; then
+    [[ "$TIKPAL_GUARD_RECOVERY_REQUIRED" == "true" ]] && return 1
+    TIKPAL_GUARD_TICK_OUTCOME=plan_failed
+    return 75
+  fi
+  if ! guard_apply_repair_plan; then
+    TIKPAL_GUARD_TICK_OUTCOME=apply_failed
+    return 75
+  fi
+  if [[ "$TIKPAL_GUARD_REPAIR_REQUIRED" == "true" ]]; then
+    TIKPAL_GUARD_TICK_OUTCOME=repaired
+  elif [[ "$TIKPAL_GUARD_STACK_STATE" == "known" ]]; then
+    TIKPAL_GUARD_TICK_OUTCOME=steady
+  else
+    TIKPAL_GUARD_TICK_OUTCOME=stack_unknown
+  fi
+}
+
+recover_guard_window_list_locked() {
+  local provider_profile="$1"
+  local panel_profile="$2"
+  local provider_window panel_window recovery_window_list
+  [[ "${TIKPAL_WEB_MODE_LOCKED:-0}" == "1" ||
+     "${TIKPAL_WEB_MODE_GUARD_LOCKED:-0}" == "1" ]] || return 1
+  if ! x11_helper_guard_may_recover_all; then
+    record_x11_helper_guard_skip || true
+    return 0
+  fi
+  recovery_window_list="$TIKPAL_WEB_MODE_PROFILE_ROOT/guard-recovery-windows.$$.$RANDOM.tmp"
+  if ! visible_chromium_windows > "$recovery_window_list"; then
+    rm -f "$recovery_window_list"
+    return 1
+  fi
+  if ! x11_helper_guard_may_recover_all; then
+    rm -f "$recovery_window_list"
+    record_x11_helper_guard_skip || true
+    return 0
+  fi
+  # This is the explicit recovery path. Normal guard ticks never enumerate the
+  # desktop; a failed known XID is required before this full repair is allowed.
+  tile_visible_web_mode_windows "$provider_profile" "$panel_profile" 1 "$recovery_window_list"
+  rm -f "$recovery_window_list"
+  provider_window="$(first_window_for_profile "$provider_profile" || true)"
+  panel_window="$(first_window_for_profile "$panel_profile" || true)"
+  write_guard_window_list "$provider_profile" "$provider_window" "$panel_profile" "$panel_window"
 }
 
 recover_guard_window_list() {
   local provider_profile="$1"
   local panel_profile="$2"
-  local provider_window panel_window
-  # This is the explicit recovery path. Normal guard ticks never enumerate the
-  # desktop; a failed known XID is required before this full repair is allowed.
-  tile_visible_web_mode_windows "$provider_profile" "$panel_profile" 1
-  provider_window="$(first_window_for_profile "$provider_profile" || true)"
-  panel_window="$(first_window_for_profile "$panel_profile" || true)"
-  write_guard_window_list "$provider_profile" "$provider_window" "$panel_profile" "$panel_window"
+  local lock_path="$TIKPAL_WEB_MODE_PROFILE_ROOT/web-mode.lock"
+  local recovery_lock_fd="" result=0
+  if [[ "${TIKPAL_WEB_MODE_LOCKED:-0}" == "1" ||
+        "${TIKPAL_WEB_MODE_GUARD_LOCKED:-0}" == "1" ]]; then
+    recover_guard_window_list_locked "$provider_profile" "$panel_profile"
+    return
+  fi
+  mkdir -p "$TIKPAL_WEB_MODE_PROFILE_ROOT"
+  if ! command -v flock >/dev/null 2>&1; then
+    [[ "$TIKPAL_WEB_MODE_X11_HELPER_MODE" == "disabled" ]] || return 1
+    TIKPAL_WEB_MODE_GUARD_LOCKED=1 \
+      recover_guard_window_list_locked "$provider_profile" "$panel_profile"
+    return
+  fi
+  exec {recovery_lock_fd}>"$lock_path"
+  if ! flock -x -w "$TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS" "$recovery_lock_fd"; then
+    exec {recovery_lock_fd}>&-
+    return 0
+  fi
+  TIKPAL_WEB_MODE_GUARD_LOCKED=1 \
+    recover_guard_window_list_locked "$provider_profile" "$panel_profile" || result=$?
+  flock -u "$recovery_lock_fd" >/dev/null 2>&1 || true
+  exec {recovery_lock_fd}>&-
+  return "$result"
+}
+
+record_x11_helper_guard_skip() {
+  local path="$TIKPAL_WEB_MODE_PROFILE_ROOT/x11-helper-guard-skips"
+  local count=0 temporary_path
+  if [[ -r "$path" ]]; then
+    count="$(cat "$path" 2>/dev/null || true)"
+    [[ "$count" =~ ^[0-9]+$ ]] || count=0
+  fi
+  count=$((count + 1))
+  temporary_path="$path.$$.$RANDOM.tmp"
+  printf '%s\n' "$count" > "$temporary_path" && mv -f "$temporary_path" "$path"
+}
+
+guard_maintain_windows() {
+  local provider_profile="$1"
+  local panel_profile="$2"
+  local lock_path="$TIKPAL_WEB_MODE_PROFILE_ROOT/web-mode.lock"
+  local provider_window panel_window kiosk_window result=0 guard_lock_fd="" fast_status=0
+  local registry_generation="" current_generation=""
+  local TIKPAL_WEB_MODE_GUARD_LOCKED=0
+  mkdir -p "$TIKPAL_WEB_MODE_PROFILE_ROOT"
+  if command -v flock >/dev/null 2>&1; then
+    exec {guard_lock_fd}>"$lock_path"
+    if ! flock -x -w "$TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS" "$guard_lock_fd"; then
+      exec {guard_lock_fd}>&-
+      TIKPAL_GUARD_TICK_OUTCOME=lock_busy
+      return 0
+    fi
+    TIKPAL_WEB_MODE_GUARD_LOCKED=1
+  fi
+  if x11_helper_switch_enabled; then
+    registry_generation="$(x11_trace_read_registry_generation || true)"
+    if [[ -r "$TIKPAL_WEB_MODE_X11_HELPER_GENERATION_PATH" ]]; then
+      IFS= read -r current_generation < "$TIKPAL_WEB_MODE_X11_HELPER_GENERATION_PATH" ||
+        current_generation=unreadable
+    fi
+    if [[ "$registry_generation" =~ ^[1-9][0-9]*$ &&
+          "$registry_generation" != "${TIKPAL_WEB_MODE_X11_PROCESS_GENERATION:-}" ]]; then
+      if [[ "$registry_generation" == "$current_generation" ]]; then
+        TIKPAL_WEB_MODE_X11_PROCESS_GENERATION="$registry_generation"
+        TIKPAL_GUARD_TICK_OUTCOME=generation_refreshed
+        x11_trace_control_event guard_generation_refreshed 0 \
+          "generation=$registry_generation mutation=skipped"
+      else
+        TIKPAL_GUARD_TICK_OUTCOME=generation_blocked
+        x11_trace_control_event guard_generation_refresh_blocked 76 \
+          "registry_generation=$registry_generation current_generation=${current_generation:-missing} mutation=skipped"
+      fi
+      if [[ -n "${guard_lock_fd:-}" ]]; then
+        flock -u "$guard_lock_fd" >/dev/null 2>&1 || true
+        exec {guard_lock_fd}>&-
+      fi
+      return 0
+    fi
+  fi
+  provider_window="$(read_guard_window provider "$provider_profile" || true)"
+  panel_window="$(read_guard_window panel "$panel_profile" || true)"
+  kiosk_window="$(read_guard_window kiosk "$TIKPAL_CHROMIUM_PROFILE_DIR" || true)"
+  if ! x11_helper_guard_may_write "$provider_window" "$panel_window" "$kiosk_window"; then
+    record_x11_helper_guard_skip || true
+    TIKPAL_GUARD_TICK_OUTCOME=helper_owned
+    result=0
+  elif tile_guard_windows_fast "$provider_profile" "$panel_profile"; then
+    :
+  else
+    fast_status=$?
+    if [[ "${TIKPAL_GUARD_RECOVERY_REQUIRED:-false}" == "true" ]]; then
+      log "WARN: Explore guard window identity changed; running explicit recovery"
+      TIKPAL_GUARD_REPAIR_REQUIRED=true
+      TIKPAL_GUARD_TICK_OUTCOME=registry_recovery
+      TIKPAL_WEB_MODE_GUARD_LOCKED=1 \
+        recover_guard_window_list "$provider_profile" "$panel_profile" || result=1
+    else
+      [[ "$TIKPAL_GUARD_TICK_OUTCOME" != "steady" ]] ||
+        TIKPAL_GUARD_TICK_OUTCOME="fast_path_failed_$fast_status"
+      result=0
+    fi
+  fi
+  if [[ -n "${guard_lock_fd:-}" ]]; then
+    flock -u "$guard_lock_fd" >/dev/null 2>&1 || true
+    exec {guard_lock_fd}>&-
+  fi
+  return "$result"
+}
+
+guard_run_tick() {
+  local provider_profile="$1"
+  local panel_profile="$2"
+  local status=0
+  local TIKPAL_WEB_MODE_GUARD_TICK_ACTIVE=1
+  local TIKPAL_GUARD_REPAIR_REQUIRED=false
+  local TIKPAL_GUARD_RECOVERY_REQUIRED=false
+  local TIKPAL_GUARD_MUTATION_COUNT=0
+  local TIKPAL_GUARD_TICK_OUTCOME=steady
+  local TIKPAL_GUARD_STACK_STATE=unknown
+  local TIKPAL_GUARD_STACK_ORDER=""
+  local TIKPAL_GUARD_INSPECT_RESPONSE=""
+  local TIKPAL_GUARD_REPAIR_PLAN=""
+  if guard_maintain_windows "$provider_profile" "$panel_profile"; then
+    status=0
+  else
+    status=$?
+  fi
+  x11_trace_control_event guard_tick_completed "$status" \
+    "repair_required=$TIKPAL_GUARD_REPAIR_REQUIRED mutation_count=$TIKPAL_GUARD_MUTATION_COUNT outcome=$TIKPAL_GUARD_TICK_OUTCOME stack=$TIKPAL_GUARD_STACK_STATE"
+  return "$status"
+}
+
+guard_close_web_mode() {
+  local lock_path="$TIKPAL_WEB_MODE_PROFILE_ROOT/web-mode.lock"
+  local provider_window panel_window guard_close_fd=""
+  local TIKPAL_WEB_MODE_GUARD_LOCKED=0
+  mkdir -p "$TIKPAL_WEB_MODE_PROFILE_ROOT"
+  if command -v flock >/dev/null 2>&1; then
+    exec {guard_close_fd}>"$lock_path"
+    if ! flock -x -w "$TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS" "$guard_close_fd"; then
+      exec {guard_close_fd}>&-
+      return 0
+    fi
+    TIKPAL_WEB_MODE_GUARD_LOCKED=1
+  fi
+  provider_window="$(read_guard_window provider || true)"
+  panel_window="$(read_guard_window panel || true)"
+  if x11_helper_guard_may_write "$provider_window" "$panel_window"; then
+    close_web_mode_from_guard
+  else
+    record_x11_helper_guard_skip || true
+  fi
+  if [[ -n "${guard_close_fd:-}" ]]; then
+    flock -u "$guard_close_fd" >/dev/null 2>&1 || true
+    exec {guard_close_fd}>&-
+  fi
 }
 
 start_window_guard() {
@@ -3497,7 +5256,6 @@ start_window_guard() {
   local panel_window="${4:-}"
   [[ -n "$provider_profile" ]] || is_enabled "$TIKPAL_WEB_MODE_PROVIDER_POOL" || return 0
 
-  stop_window_guard
   mkdir -p "$TIKPAL_WEB_MODE_PROFILE_ROOT"
   if [[ -z "$provider_window" ]]; then
     provider_window="$(first_window_for_profile "$provider_profile" || true)"
@@ -3509,60 +5267,173 @@ start_window_guard() {
     log "WARN: rebuilding Explore guard window list"
     recover_guard_window_list "$provider_profile" "$panel_profile" || return 1
   fi
-  nohup "$SCRIPT_DIR/tikpal-web-mode.sh" guard "$provider_profile" "$panel_profile" >/dev/null 2>&1 9>&- &
-  printf '%s\n' "$!" > "$(window_guard_pid_file)"
+  window_guard_ensure_process "$provider_profile" "$panel_profile"
+}
+
+reload_window_guard() {
+  local provider_profile="$1" panel_profile="$2"
+  local lock_path lifecycle_fd="" old_guard="" old_starttime=""
+  local new_guard="" new_starttime="" attempt
+  command -v flock >/dev/null 2>&1 || return 78
+  lock_path="$(window_guard_lifecycle_lock_file)"
+  mkdir -p "$(dirname "$lock_path")"
+  exec {lifecycle_fd}>"$lock_path"
+  if ! flock -x -w "$TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS" "$lifecycle_fd"; then
+    exec {lifecycle_fd}>&-
+    return 75
+  fi
+  window_guard_collect_matching_pids
+  if [[ "${#TIKPAL_WINDOW_GUARD_MATCHING_PIDS[@]}" -gt 1 ]]; then
+    log "ERROR: refusing to reload multiple Explore window guards: ${TIKPAL_WINDOW_GUARD_MATCHING_PIDS[*]}"
+    flock -u "$lifecycle_fd" >/dev/null 2>&1 || true
+    exec {lifecycle_fd}>&-
+    return 72
+  fi
+  if [[ "${#TIKPAL_WINDOW_GUARD_MATCHING_PIDS[@]}" == 1 ]]; then
+    old_guard="${TIKPAL_WINDOW_GUARD_MATCHING_PIDS[0]}"
+    old_starttime="$(window_guard_process_starttime "$old_guard" || true)"
+    [[ -n "$old_starttime" ]] || {
+      flock -u "$lifecycle_fd" >/dev/null 2>&1 || true
+      exec {lifecycle_fd}>&-
+      return 73
+    }
+    window_guard_write_pid_file "$old_guard" || {
+      flock -u "$lifecycle_fd" >/dev/null 2>&1 || true
+      exec {lifecycle_fd}>&-
+      return 1
+    }
+    if ! window_guard_terminate_process "$old_guard" "$old_starttime" ||
+       window_guard_process_matches "$old_guard" "$old_starttime"; then
+      log "ERROR: Explore window guard $old_guard did not exit; refusing to launch a replacement"
+      flock -u "$lifecycle_fd" >/dev/null 2>&1 || true
+      exec {lifecycle_fd}>&-
+      return 73
+    fi
+    window_guard_remove_pid_file_if_owned "$old_guard" "$old_starttime" || true
+  fi
+  new_guard="$(TIKPAL_WINDOW_GUARD_LIFECYCLE_FD="$lifecycle_fd" \
+    window_guard_launch_process "$provider_profile" "$panel_profile")"
+  if [[ ! "$new_guard" =~ ^[1-9][0-9]*$ ]]; then
+    log "ERROR: Explore window guard replacement did not return a valid PID"
+    flock -u "$lifecycle_fd" >/dev/null 2>&1 || true
+    exec {lifecycle_fd}>&-
+    return 1
+  fi
+  for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    new_starttime="$(window_guard_process_starttime "$new_guard" || true)"
+    if [[ -n "$new_starttime" ]] && window_guard_process_matches "$new_guard" "$new_starttime"; then
+      break
+    fi
+    new_starttime=""
+    sleep 0.02
+  done
+  window_guard_collect_matching_pids
+  if [[ "${#TIKPAL_WINDOW_GUARD_MATCHING_PIDS[@]}" != 1 ||
+        "${TIKPAL_WINDOW_GUARD_MATCHING_PIDS[0]:-}" != "$new_guard" ]] ||
+     ! window_guard_process_matches "$new_guard" "$new_starttime"; then
+    log "ERROR: Explore window guard replacement identity could not be proven for PID $new_guard"
+    flock -u "$lifecycle_fd" >/dev/null 2>&1 || true
+    exec {lifecycle_fd}>&-
+    return 73
+  fi
+  if ! window_guard_write_pid_file "$new_guard" "$new_starttime"; then
+    log "ERROR: Explore window guard replacement identity changed before PID publication"
+    flock -u "$lifecycle_fd" >/dev/null 2>&1 || true
+    exec {lifecycle_fd}>&-
+    return 73
+  fi
+  TIKPAL_WINDOW_GUARD_CREATED_PID="$new_guard"
+  log_stage "window_guard_reloaded old_pid=${old_guard:-missing} new_pid=$new_guard"
+  flock -u "$lifecycle_fd" >/dev/null 2>&1 || true
+  exec {lifecycle_fd}>&-
+}
+
+stop_window_guard_owned() {
+  local created_pid="$1" created_starttime="$2" lock_path lifecycle_fd=""
+  local status=0 pid unknown_found=0
+  [[ "$created_pid" =~ ^[1-9][0-9]*$ && -n "$created_starttime" ]] || return 64
+  command -v flock >/dev/null 2>&1 || return 78
+  lock_path="$(window_guard_lifecycle_lock_file)"
+  mkdir -p "$(dirname "$lock_path")"
+  exec {lifecycle_fd}>"$lock_path"
+  if ! flock -x -w "$TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS" "$lifecycle_fd"; then
+    exec {lifecycle_fd}>&-
+    return 75
+  fi
+  window_guard_collect_matching_pids
+  for pid in "${TIKPAL_WINDOW_GUARD_MATCHING_PIDS[@]}"; do
+    if [[ "$pid" != "$created_pid" ]] ||
+       ! window_guard_process_matches "$pid" "$created_starttime"; then
+      unknown_found=1
+    fi
+  done
+  if window_guard_process_matches "$created_pid" "$created_starttime"; then
+    window_guard_terminate_process "$created_pid" "$created_starttime" || status=73
+    [[ "$status" != 0 ]] ||
+      window_guard_remove_pid_file_if_owned "$created_pid" "$created_starttime" || true
+  else
+    window_guard_remove_pid_file_if_owned "$created_pid" "$created_starttime" || true
+  fi
+  window_guard_collect_matching_pids
+  if [[ "$unknown_found" == 1 || "${#TIKPAL_WINDOW_GUARD_MATCHING_PIDS[@]}" -gt 1 ]]; then
+    status=72
+  fi
+  flock -u "$lifecycle_fd" >/dev/null 2>&1 || true
+  exec {lifecycle_fd}>&-
+  return "$status"
+}
+
+window_guard_cleanup_pid_on_exit() {
+  local pid="${BASHPID:-$$}" starttime lock_path lifecycle_fd=""
+  command -v flock >/dev/null 2>&1 || return 0
+  lock_path="$(window_guard_lifecycle_lock_file)"
+  starttime="$(window_guard_process_starttime "$pid" || true)"
+  [[ -n "$starttime" ]] || return 0
+  mkdir -p "$(dirname "$lock_path")"
+  exec {lifecycle_fd}>"$lock_path"
+  # A stop/reload controller holds this lock while it waits for the Guard to
+  # exit and removes the owned PID file itself. Do not make the EXIT trap wait
+  # on that controller; spontaneous exits can still claim the lock and clean up.
+  if flock -x -w 0 "$lifecycle_fd"; then
+    window_guard_remove_pid_file_if_owned "$pid" "$starttime" || true
+    flock -u "$lifecycle_fd" >/dev/null 2>&1 || true
+  fi
+  exec {lifecycle_fd}>&-
 }
 
 run_window_guard() {
   local provider_profile="$1"
   local panel_profile="$2"
-  local force_raise=0
-  local stack_refresh_ticks=0
-  local identity_refresh_ticks=0
   local fast_ticks_remaining=4
-  local validate_identity=1
-  local active_provider active_profile
+  local active_provider active_profile guard_pid guard_starttime
   [[ -n "$provider_profile" ]] || is_enabled "$TIKPAL_WEB_MODE_PROVIDER_POOL" || return 0
+  guard_pid="${BASHPID:-$$}"
+  guard_starttime="$(window_guard_process_starttime "$guard_pid" || true)"
+  x11_trace_control_event guard_started 0 \
+    "pid=$guard_pid provider_profile=$provider_profile panel_profile=$panel_profile"
 
   if is_enabled "$TIKPAL_WEB_MODE_PROVIDER_POOL"; then
     while true; do
       active_provider="$(read_runtime_active_provider)"
       if [[ -z "$active_provider" ]]; then
         # Guard was told to stop (PID file removed) — exit without parking
-        if [[ "$(cat "$(window_guard_pid_file)" 2>/dev/null || true)" != "$$" ]]; then
+        if ! window_guard_pid_record_matches "$guard_pid" "$guard_starttime"; then
           return 0
         fi
-        close_web_mode_from_guard
+        guard_close_web_mode
         return 0
       fi
       active_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/$active_provider"
-      validate_identity=0
-      if [[ "$identity_refresh_ticks" -eq 0 ]]; then
-        validate_identity=1
-      fi
-      if ! tile_guard_windows_fast "$active_profile" "$panel_profile" "$force_raise" "$validate_identity"; then
-        log "WARN: Explore guard window identity changed; running explicit recovery"
-        recover_guard_window_list "$active_profile" "$panel_profile" || {
+      if ! guard_run_tick "$active_profile" "$panel_profile"; then
+        {
           profile_process_exists "$active_profile" || return 0
           fast_ticks_remaining=4
-          identity_refresh_ticks=0
           sleep 0.25
           continue
         }
         fast_ticks_remaining=4
-        identity_refresh_ticks=0
       fi
       provider_profile="$active_profile"
-      force_raise=0
-      identity_refresh_ticks=$((identity_refresh_ticks + 1))
-      if [[ "$identity_refresh_ticks" -ge 4 ]]; then
-        identity_refresh_ticks=0
-      fi
-      stack_refresh_ticks=$((stack_refresh_ticks + 1))
-      if [[ "$stack_refresh_ticks" -ge 4 ]]; then
-        force_raise=1
-        stack_refresh_ticks=0
-      fi
       if [[ "$fast_ticks_remaining" -gt 0 ]]; then
         fast_ticks_remaining=$((fast_ticks_remaining - 1))
         sleep 0.25
@@ -3574,36 +5445,89 @@ run_window_guard() {
   fi
 
   while true; do
-    validate_identity=0
-    if [[ "$identity_refresh_ticks" -eq 0 ]]; then
-      validate_identity=1
-    fi
-    if ! tile_guard_windows_fast "$provider_profile" "$panel_profile" "$force_raise" "$validate_identity"; then
-      recover_guard_window_list "$provider_profile" "$panel_profile" || {
+    if ! guard_run_tick "$provider_profile" "$panel_profile"; then
+      {
         profile_process_exists "$provider_profile" || return 0
         fast_ticks_remaining=4
-        identity_refresh_ticks=0
         sleep 0.25
         continue
       }
       fast_ticks_remaining=4
-      identity_refresh_ticks=0
-    fi
-    force_raise=0
-    identity_refresh_ticks=$((identity_refresh_ticks + 1))
-    if [[ "$identity_refresh_ticks" -ge 4 ]]; then
-      identity_refresh_ticks=0
-    fi
-    stack_refresh_ticks=$((stack_refresh_ticks + 1))
-    if [[ "$stack_refresh_ticks" -ge 4 ]]; then
-      force_raise=1
-      stack_refresh_ticks=0
     fi
     if [[ "$fast_ticks_remaining" -gt 0 ]]; then
       fast_ticks_remaining=$((fast_ticks_remaining - 1))
       sleep 0.25
     else
       sleep 1
+    fi
+  done
+}
+
+provider_guard_process_identity_matches() {
+  local pid="$1"
+  local provider="$2"
+  local provider_profile="$3"
+  local proxy_enabled="$4"
+  local provider_port="$5"
+  local proc_root="${TIKPAL_WEB_MODE_PROC_ROOT:-/proc}"
+  local proc_path="$proc_root/$pid"
+  local helper="$SCRIPT_DIR/tikpal-web-mode-guard.mjs"
+  local proxy_mode="direct" argument environment_entry
+  local helper_matched=0 provider_matched=0 profile_matched=0 port_matched=0 proxy_matched=0
+  [[ "$proxy_enabled" == "1" ]] && proxy_mode="proxy"
+  [[ "$pid" =~ ^[1-9][0-9]*$ && -r "$proc_path/cmdline" && -r "$proc_path/environ" ]] || return 1
+  kill -0 "$pid" >/dev/null 2>&1 || return 1
+  while IFS= read -r -d '' argument; do
+    [[ "$argument" == "$helper" ]] && helper_matched=1
+  done 2>/dev/null < "$proc_path/cmdline" || return 1
+  [[ "$helper_matched" == "1" ]] || return 1
+  while IFS= read -r -d '' environment_entry; do
+    case "$environment_entry" in
+      "TIKPAL_WEB_MODE_PROVIDER_ID=$provider") provider_matched=1 ;;
+      "TIKPAL_WEB_MODE_PROVIDER_PROFILE=$provider_profile") profile_matched=1 ;;
+      "TIKPAL_WEB_MODE_PROVIDER_DEBUG_PORT=$provider_port") port_matched=1 ;;
+      "TIKPAL_WEB_MODE_PROXY_MODE=$proxy_mode") proxy_matched=1 ;;
+    esac
+  done 2>/dev/null < "$proc_path/environ" || return 1
+  [[ "$provider_matched" == "1" && "$profile_matched" == "1" &&
+     "$port_matched" == "1" && "$proxy_matched" == "1" ]]
+}
+
+provider_guard_matching_pids() {
+  local provider="$1"
+  local provider_profile="$2"
+  local proxy_enabled="$3"
+  local provider_port="$4"
+  local proc_root="${TIKPAL_WEB_MODE_PROC_ROOT:-/proc}" proc_path pid
+  for proc_path in "$proc_root"/[1-9]*; do
+    [[ -d "$proc_path" ]] || continue
+    pid="${proc_path##*/}"
+    provider_guard_process_identity_matches \
+      "$pid" "$provider" "$provider_profile" "$proxy_enabled" "$provider_port" &&
+      printf '%s\n' "$pid"
+  done
+}
+
+stop_provider_guard_instances() {
+  local provider="$1"
+  local provider_profile="$2"
+  local proxy_enabled="$3"
+  local provider_port="$4"
+  local pid_file pid
+  local pids=()
+  pid_file="$(provider_guard_pid_file "$provider")"
+  while IFS= read -r pid; do
+    [[ "$pid" =~ ^[1-9][0-9]*$ ]] || continue
+    kill -TERM "$pid" >/dev/null 2>&1 || true
+    pids+=("$pid")
+  done < <(provider_guard_matching_pids "$provider" "$provider_profile" "$proxy_enabled" "$provider_port")
+  rm -f "$pid_file"
+  [[ "${#pids[@]}" -gt 0 ]] || return 0
+  sleep 0.2
+  for pid in "${pids[@]}"; do
+    if provider_guard_process_identity_matches \
+      "$pid" "$provider" "$provider_profile" "$proxy_enabled" "$provider_port"; then
+      kill -KILL "$pid" >/dev/null 2>&1 || true
     fi
   done
 }
@@ -3628,7 +5552,7 @@ start_provider_guard() {
   [[ "$proxy_enabled" == "1" ]] && proxy_mode="proxy"
 
   if is_enabled "$TIKPAL_WEB_MODE_PROVIDER_POOL"; then
-    stop_provider_guard "$provider"
+    stop_provider_guard_instances "$provider" "$provider_profile" "$proxy_enabled" "$provider_port"
   else
     stop_provider_guard
   fi
@@ -3657,6 +5581,33 @@ start_provider_guard() {
   else
     printf '%s\n' "$!" > "$(provider_guard_pid_file)"
   fi
+}
+
+provider_guard_process_matches() {
+  local provider="$1"
+  local provider_profile="$2"
+  local proxy_enabled="$3"
+  local provider_port="$4"
+  local pid_file pid
+  pid_file="$(provider_guard_pid_file "$provider")"
+  pid="$(cat "$pid_file" 2>/dev/null || true)"
+  provider_guard_process_identity_matches \
+    "$pid" "$provider" "$provider_profile" "$proxy_enabled" "$provider_port"
+}
+
+ensure_provider_guard() {
+  local provider="$1"
+  local provider_profile="$2"
+  local provider_url_value="$3"
+  local proxy_enabled="$4"
+  local provider_port="$5"
+  local pid
+  if provider_guard_process_matches "$provider" "$provider_profile" "$proxy_enabled" "$provider_port"; then
+    pid="$(cat "$(provider_guard_pid_file "$provider")" 2>/dev/null || true)"
+    log_stage "provider_guard_reused provider=$provider pid=$pid"
+    return 0
+  fi
+  start_provider_guard "$provider" "$provider_profile" "$provider_url_value" "$proxy_enabled" "$provider_port"
 }
 
 refresh_provider_pool_guards() {
@@ -4059,7 +6010,7 @@ position_resident_switch_windows_fast() {
     segment_started_ms="$(now_ms)"
   fi
 
-  if DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_probe "${xdotool_args[@]}" >/dev/null 2>&1; then
+  if DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_mutate "${xdotool_args[@]}" >/dev/null 2>&1; then
     result=ok
   else
     result=failed
@@ -4152,11 +6103,62 @@ reveal_resident_provider_window() {
   local first_cdp_ms="${10:--1}"
   local guard_stop_ms="${11:--1}"
   local panel_retile_ms="${12:--1}"
+  local helper_candidate="${13:-0}"
+  local panel_window="${14:-}"
+  local panel_profile="${15:-$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel}"
   local TIKPAL_WEB_MODE_TRUSTED_PROVIDER_PAGE_PORT=""
   local physical_ms segment_started_ms=0 target_opacity_ms=-1 combined_x11_ms=-1 started_ms="$(now_ms)"
   local opacity_read_ms=-1 opacity_before=not_read opacity_mutation=not_run
   local combined_pre_geometry_ms=-1 target_before=not_read previous_before=not_read combined_result=not_run
   local stamp_write_ms=-1 stamp_result=not_run
+  local trace_foreground_started_ms=0 trace_foreground_finished_ms=0 trace_foreground_elapsed_ms=0
+  if switch_trace_enabled; then
+    switch_trace_now_ms trace_foreground_started_ms
+    record_switch_trace_event foreground_switch_started
+  fi
+  if [[ "$helper_candidate" == "1" ]]; then
+    local helper_status=0
+    if x11_helper_begin_switch "$target_window" "$provider_profile" \
+      "$previous_window" "$previous_profile" "$panel_window" "$panel_profile"; then
+      helper_status=0
+    else
+      helper_status=$?
+    fi
+    if [[ "$helper_status" == "0" ]]; then
+      physical_ms="$(now_ms)"
+      # A successful Helper response already includes checked mutations, an X11
+      # fence, and an exact final snapshot for target, previous, and panel. The
+      # acceptance observer performs the independent post-release geometry gate.
+      write_physical_reveal_stamp "$provider_profile" "$target_window" "$previous_window" "$physical_ms" \
+        || log_stage "reveal_physical_stamp_failed target=$target_window physical_ms=$physical_ms"
+      if switch_trace_enabled; then
+        switch_trace_now_ms trace_foreground_finished_ms
+        trace_foreground_elapsed_ms=$((trace_foreground_finished_ms - trace_foreground_started_ms))
+        record_switch_trace_event foreground_switch_completed helper "" "$trace_foreground_elapsed_ms"
+        record_switch_trace_event runtime_geometry_verified helper_final_snapshot
+      fi
+      log_stage "reveal_physical target=$target_window provider_port=$provider_port mode=helper generation=$TIKPAL_X11_HELPER_GENERATION physical_ms=$physical_ms ms=$(( physical_ms - started_ms ))"
+      log_switch_segment_summary_once "$segment_timing_once" "$provider_profile" "$cached_xid_ms" "$first_cdp_ms" 0 0 0 0
+      return 0
+    elif [[ "$helper_status" == "70" ]]; then
+      fail "X11 helper switch outcome is unknown; leaving helper ownership fail-closed"
+    else
+      x11_helper_enter_fallback "$helper_status" ||
+        fail "X11 helper failed and ownership could not be safely returned to Shell"
+      helper_candidate=0
+    fi
+    if [[ "$helper_candidate" != "1" ]]; then
+      local fallback_started_ms
+      fallback_started_ms="$(now_ms)"
+      stop_window_guard
+      target_window="$(first_window_for_profile "$provider_profile" "$segment_timing_once" helper_fallback_target || true)"
+      previous_window="$(first_window_for_profile "$previous_profile" "$segment_timing_once" helper_fallback_previous || true)"
+      panel_window="$(keep_side_panel_visible_during_switch "${provider_profile##*/}" "$panel_window" "$segment_timing_once" || true)"
+      [[ "$target_window" =~ ^[1-9][0-9]*$ && "$previous_window" =~ ^[1-9][0-9]*$ &&
+         "$panel_window" =~ ^[1-9][0-9]*$ ]] || return 1
+      guard_stop_ms="$(( $(now_ms) - fallback_started_ms ))"
+    fi
+  fi
   # Restore opacity before reveal — park_profile_windows_for_reopen sets 0
   # to avoid white flash during the async off-screen move.
   [[ "$segment_timing_once" != "1" ]] || segment_started_ms="$(now_ms)"
@@ -4202,6 +6204,11 @@ reveal_resident_provider_window() {
       else
         stamp_result=ok
       fi
+      if switch_trace_enabled; then
+        switch_trace_now_ms trace_foreground_finished_ms
+        trace_foreground_elapsed_ms=$((trace_foreground_finished_ms - trace_foreground_started_ms))
+        record_switch_trace_event foreground_switch_completed "$stamp_result" "" "$trace_foreground_elapsed_ms"
+      fi
       if [[ "$segment_timing_once" == "1" ]]; then
         stamp_write_ms="$(( $(now_ms) - segment_started_ms ))"
         record_switch_detail_timing "$segment_timing_once" \
@@ -4211,6 +6218,7 @@ reveal_resident_provider_window() {
       log_switch_segment_summary_once "$segment_timing_once" "$provider_profile" "$cached_xid_ms" "$first_cdp_ms" "$guard_stop_ms" "$panel_retile_ms" "$target_opacity_ms" "$combined_x11_ms"
       if resident_switch_windows_at_geometry "$target_window" "$previous_window"; then
         persist_resident_window_above "$target_window"
+        record_switch_trace_event runtime_geometry_verified
         log_stage "reveal_geometry_verified target=$target_window mode=combined ms=$(( $(now_ms) - started_ms ))"
         return 0
       fi
@@ -4238,6 +6246,12 @@ reveal_resident_provider_window() {
     physical_ms="$(now_ms)"
     write_physical_reveal_stamp "$provider_profile" "$target_window" "$previous_window" "$physical_ms" \
       || log_stage "reveal_physical_stamp_failed target=$target_window physical_ms=$physical_ms"
+    if switch_trace_enabled; then
+      switch_trace_now_ms trace_foreground_finished_ms
+      trace_foreground_elapsed_ms=$((trace_foreground_finished_ms - trace_foreground_started_ms))
+      record_switch_trace_event foreground_switch_completed fallback "" "$trace_foreground_elapsed_ms"
+      record_switch_trace_event runtime_geometry_verified fallback
+    fi
     log_stage "reveal_physical target=$target_window provider_port=$provider_port physical_ms=$physical_ms ms=$(( physical_ms - started_ms ))"
     log_switch_segment_summary_once "$segment_timing_once" "$provider_profile" "$cached_xid_ms" "$first_cdp_ms" "$guard_stop_ms" "$panel_retile_ms" "$target_opacity_ms" "$combined_x11_ms"
     return 0
@@ -4277,6 +6291,12 @@ reveal_resident_provider_window() {
   physical_ms="$(now_ms)"
   write_physical_reveal_stamp "$provider_profile" "$target_window" "$previous_window" "$physical_ms" \
     || log_stage "reveal_physical_stamp_failed target=$target_window physical_ms=$physical_ms"
+  if switch_trace_enabled; then
+    switch_trace_now_ms trace_foreground_finished_ms
+    trace_foreground_elapsed_ms=$((trace_foreground_finished_ms - trace_foreground_started_ms))
+    record_switch_trace_event foreground_switch_completed staged "" "$trace_foreground_elapsed_ms"
+    record_switch_trace_event runtime_geometry_verified staged
+  fi
   log_stage "reveal_physical target=$target_window provider_port=$provider_port physical_ms=$physical_ms ms=$(( physical_ms - started_ms ))"
   log_switch_segment_summary_once "$segment_timing_once" "$provider_profile" "$cached_xid_ms" "$first_cdp_ms" "$guard_stop_ms" "$panel_retile_ms" "$target_opacity_ms" "$combined_x11_ms"
   # The transition profile is kept alive and off-screen for the next switch;
@@ -4749,8 +6769,10 @@ open_provider_pool() {
   local current_provider current_profile target_window="" previous_window="" panel_window="" known_panel_window="" proxy_line proxy_enabled message extension_enabled=0 entry_stage=0
   local panel_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"
   local resident_status resident_page_ready=0 fast_resident=0 switching_provider=0 current_port provider_port
+  local helper_candidate=0 helper_target_raw=0
   local started_ms reveal_ms command_return_ms transition_shown_ms=0
   local segment_timing_once=0 segment_started_ms=0 cached_xid_ms=-1 first_cdp_ms=-1 guard_stop_ms=-1 panel_retile_ms=-1
+  local trace_started_ms=0 trace_finished_ms=0 trace_elapsed_ms=0 trace_cdp_started_ms=0 trace_cdp_elapsed_ms=0
   if ! runtime_open_request_is_current; then
     log "open abandoned: active provider no longer ${TIKPAL_WEB_MODE_OPEN_EXPECTED_ACTIVE_PROVIDER}"
     return 0
@@ -4769,16 +6791,47 @@ open_provider_pool() {
   fi
   resident_status="$(read_runtime_provider_status "$provider")"
   provider_port="$(provider_debug_port "$provider")"
+  if switch_trace_enabled; then
+    switch_trace_now_ms trace_started_ms
+    record_switch_trace_event target_resolve_started
+  fi
   [[ "$segment_timing_once" != "1" ]] || segment_started_ms="$(now_ms)"
-  target_window="$(first_window_for_profile "$provider_profile" "$segment_timing_once" target || true)"
+  if [[ "$switching_provider" == "1" ]] && x11_helper_switch_enabled; then
+    target_window="$(read_profile_window_cache_raw "$provider_profile" || true)"
+    [[ -z "$target_window" ]] || helper_target_raw=1
+  fi
+  if [[ -z "$target_window" ]]; then
+    target_window="$(first_window_for_profile "$provider_profile" "$segment_timing_once" target || true)"
+  fi
   [[ "$segment_timing_once" != "1" ]] || cached_xid_ms="$(( $(now_ms) - segment_started_ms ))"
   if [[ -n "$target_window" || "$resident_status" == "ready" || "$resident_status" == "active" ]]; then
     [[ "$segment_timing_once" != "1" ]] || segment_started_ms="$(now_ms)"
+    switch_trace_enabled && switch_trace_now_ms trace_cdp_started_ms
     if provider_has_real_provider_page "$provider_port"; then
       resident_page_ready=1
       [[ -n "$target_window" ]] && fast_resident=1
     fi
     [[ "$segment_timing_once" != "1" ]] || first_cdp_ms="$(( $(now_ms) - segment_started_ms ))"
+    if switch_trace_enabled; then
+      switch_trace_now_ms trace_finished_ms
+      trace_cdp_elapsed_ms=$((trace_finished_ms - trace_cdp_started_ms))
+      if [[ "$resident_page_ready" == "1" ]]; then
+        record_switch_trace_event cdp_target_resolved ready "" "$trace_cdp_elapsed_ms"
+      else
+        record_switch_trace_event cdp_target_resolved not_ready cdp_not_ready "$trace_cdp_elapsed_ms"
+      fi
+    fi
+  fi
+  if switch_trace_enabled; then
+    switch_trace_now_ms trace_finished_ms
+    trace_elapsed_ms=$((trace_finished_ms - trace_started_ms))
+    if [[ "$fast_resident" == "1" ]]; then
+      record_switch_trace_event target_resolve_completed fast_resident "" "$trace_elapsed_ms"
+    elif [[ -n "$target_window" ]]; then
+      record_switch_trace_event target_resolve_completed xid_only cdp_not_ready "$trace_elapsed_ms"
+    else
+      record_switch_trace_event target_resolve_completed unresolved target_window_missing "$trace_elapsed_ms"
+    fi
   fi
   log_stage "open_pool_init provider=$provider target=$target_window resident_page_ready=$resident_page_ready fast_resident=$fast_resident switching=$switching_provider entry=$entry_stage ms=$(( $(now_ms) - started_ms ))"
   # A foreground choice owns the pool from this point. Stop both idle and
@@ -4786,27 +6839,49 @@ open_provider_pool() {
   # Stop the old X11 guard first: it otherwise keeps raising the old provider
   # while terminating a prewarm worker, which exposes its black first frame.
   if [[ "$switching_provider" == "1" ]]; then
+    if switch_trace_enabled; then
+      switch_trace_now_ms trace_started_ms
+      record_switch_trace_event guard_prepare_started
+    fi
     begin_provider_switch_guard
-    [[ "$segment_timing_once" != "1" ]] || segment_started_ms="$(now_ms)"
-    stop_window_guard
-    [[ "$segment_timing_once" != "1" ]] || guard_stop_ms="$(( $(now_ms) - segment_started_ms ))"
     previous_window="$(read_guard_window provider "$current_profile" || true)"
-    if [[ -z "$previous_window" ]]; then
-      previous_window="$(first_window_for_profile "$current_profile" "$segment_timing_once" previous || true)"
+    known_panel_window="$(read_guard_window panel "$panel_profile" || true)"
+    if [[ "$helper_target_raw" == "1" && "$previous_window" =~ ^[1-9][0-9]*$ &&
+       "$known_panel_window" =~ ^[1-9][0-9]*$ ]] && x11_helper_prepare_switch; then
+      helper_candidate=1
+      panel_window="$known_panel_window"
+      guard_stop_ms=0
+      panel_retile_ms=0
+      log_stage "x11_helper_prepared generation=$TIKPAL_X11_HELPER_GENERATION epoch=$TIKPAL_X11_HELPER_CONNECTION_EPOCH target=$target_window previous=$previous_window panel=$panel_window"
+    else
+      if [[ "$helper_target_raw" == "1" ]]; then
+        target_window="$(first_window_for_profile "$provider_profile" "$segment_timing_once" target || true)"
+        [[ -n "$target_window" && "$resident_page_ready" == "1" ]] && fast_resident=1 || fast_resident=0
+      fi
+      [[ "$segment_timing_once" != "1" ]] || segment_started_ms="$(now_ms)"
+      stop_window_guard
+      [[ "$segment_timing_once" != "1" ]] || guard_stop_ms="$(( $(now_ms) - segment_started_ms ))"
+      if [[ -z "$previous_window" ]]; then
+        previous_window="$(first_window_for_profile "$current_profile" "$segment_timing_once" previous || true)"
+      fi
+      [[ "$segment_timing_once" != "1" ]] || segment_started_ms="$(now_ms)"
+      panel_window="$(keep_side_panel_visible_during_switch "$provider" "$known_panel_window" "$segment_timing_once" || true)"
+      [[ "$segment_timing_once" != "1" ]] || panel_retile_ms="$(( $(now_ms) - segment_started_ms ))"
     fi
     if [[ -z "$previous_window" ]]; then
       message="Current Explore provider window is unavailable"
       recover_or_cover_provider_failure "$current_provider" "$current_profile" "$provider" "check_setup" "$message" || true
       fail "$message"
     fi
-    known_panel_window="$(read_guard_window panel "$panel_profile" || true)"
-    [[ "$segment_timing_once" != "1" ]] || segment_started_ms="$(now_ms)"
-    panel_window="$(keep_side_panel_visible_during_switch "$provider" "$known_panel_window" "$segment_timing_once" || true)"
-    [[ "$segment_timing_once" != "1" ]] || panel_retile_ms="$(( $(now_ms) - segment_started_ms ))"
     if [[ -z "$panel_window" ]]; then
       message="Explore side panel is unavailable"
       recover_or_cover_provider_failure "$current_provider" "$current_profile" "$provider" "check_setup" "$message" || true
       fail "$message"
+    fi
+    if switch_trace_enabled; then
+      switch_trace_now_ms trace_finished_ms
+      trace_elapsed_ms=$((trace_finished_ms - trace_started_ms))
+      record_switch_trace_event guard_prepare_completed ok "" "$trace_elapsed_ms"
     fi
     if [[ -z "$target_window" && "$resident_page_ready" == "1" ]]; then
       target_window="$(first_window_for_profile "$provider_profile" "$segment_timing_once" target_retry || true)"
@@ -4863,34 +6938,50 @@ open_provider_pool() {
     && profile_process_exists "$provider_profile"; then
     if wait_for_real_provider_url "$provider_port"; then
       log_stage "open_pool_bootstrap provider=$provider result=ok ms=$(( $(now_ms) - started_ms ))"
+      record_switch_trace_event cdp_fallback_completed recovered
       fast_resident=1
     elif [[ "$resident_status" == "ready" || "$resident_status" == "active" ]]; then
+      record_switch_trace_event cdp_fallback_completed failed cdp_not_ready
       write_runtime_provider_status "$provider" "check_setup" "$(provider_label "$provider") did not enter the provider page"
       log_stage "open_pool_bootstrap provider=$provider result=fail ms=$(( $(now_ms) - started_ms ))"
     else
+      record_switch_trace_event cdp_fallback_completed failed cdp_not_ready
       log_stage "open_pool_bootstrap provider=$provider result=fail ms=$(( $(now_ms) - started_ms ))"
     fi
   fi
   if [[ "$fast_resident" == "1" && "$entry_stage" != "1" ]]; then
-    stop_window_guard
+    [[ "$helper_candidate" == "1" ]] || stop_window_guard
     if ! runtime_open_request_is_current; then
       clear_provider_switch_guard
       log "open abandoned before resident reveal: $provider"
       return 0
     fi
     if reveal_resident_provider_window "$target_window" "$current_profile" "$provider_profile" "$transition_shown_ms" "$provider_port" "$previous_window" "$resident_page_ready" \
-      "$segment_timing_once" "$cached_xid_ms" "$first_cdp_ms" "$guard_stop_ms" "$panel_retile_ms"; then
+      "$segment_timing_once" "$cached_xid_ms" "$first_cdp_ms" "$guard_stop_ms" "$panel_retile_ms" \
+      "$helper_candidate" "$panel_window" "$panel_profile"; then
       invalidate_chromium_window_cache
       reveal_ms="$(( $(now_ms) - started_ms ))"
       log_stage "reveal_ms=$reveal_ms provider=$provider resident=1"
       clear_provider_switch_guard
       if ! runtime_open_request_is_current; then
+        if [[ "$TIKPAL_X11_HELPER_ACTIVE" == "1" ]]; then
+          x11_helper_finish_success || fail "X11 helper ownership could not be released after an abandoned switch"
+        fi
         log "open abandoned before resident commit: $provider"
         return 0
       fi
+      activate_target_provider_audio_gate "$provider" "$provider_port" || true
       commit_visible_provider_state "$provider"
       write_audio_bus_state ""
-      start_window_guard "$provider_profile" "$panel_profile" "$target_window" "$panel_window"
+      record_switch_trace_event runtime_state_committed
+      if [[ "$TIKPAL_X11_HELPER_ACTIVE" == "1" ]]; then
+        write_guard_window_list "$provider_profile" "$target_window" "$panel_profile" "$panel_window" ||
+          fail "Explore guard registry could not be updated before releasing Helper ownership"
+        x11_helper_finish_success || fail "X11 helper ownership could not be safely returned to Shell"
+        window_guard_running || start_window_guard "$provider_profile" "$panel_profile" "$target_window" "$panel_window"
+      else
+        start_window_guard "$provider_profile" "$panel_profile" "$target_window" "$panel_window"
+      fi
       reconcile_provider_pool_in_background "$provider"
       command_return_ms="$(( $(now_ms) - started_ms ))"
       log_stage "command_return_ms=$command_return_ms provider=$provider resident=1"
@@ -4982,11 +7073,13 @@ open_provider_pool() {
     log "open abandoned before provider commit: $provider"
     return 0
   fi
+  activate_target_provider_audio_gate "$provider" "$provider_port" || true
   commit_visible_provider_state "$provider"
   reveal_ms="$(( $(now_ms) - started_ms ))"
   log_stage "reveal_ms=$reveal_ms provider=$provider resident=$fast_resident"
   clear_provider_switch_guard
   write_audio_bus_state ""
+  record_switch_trace_event runtime_state_committed
   start_window_guard "$provider_profile" "$panel_profile" "$target_window" "$panel_window"
   reconcile_provider_pool_in_background "$provider"
   command_return_ms="$(( $(now_ms) - started_ms ))"
@@ -5167,6 +7260,7 @@ open_provider() {
     fi
     close_other_provider_profiles "$provider_profile"
   fi
+  activate_target_provider_audio_gate "$provider" "$provider_port" || true
   write_audio_bus_state "$target_audio_bus"
   commit_visible_provider_state "$provider"
   start_window_guard "$provider_profile" "$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"
@@ -5267,6 +7361,16 @@ check_runtime_quiet() {
   command -v xdotool >/dev/null 2>&1 || fail "xdotool is required for Explore provider window detection"
 }
 
+if [[ "${TIKPAL_WEB_MODE_SOURCE_ONLY:-0}" == "1" ]]; then
+  [[ "${BASH_SOURCE[0]}" != "$0" ]] || fail "TIKPAL_WEB_MODE_SOURCE_ONLY requires sourcing"
+  return 0
+fi
+
+x11_trace_require_writable ||
+  fail "TRACE_NOT_WRITABLE: $TIKPAL_WEB_MODE_X11_MUTATION_TRACE_PATH"
+
+trap x11_helper_cleanup_on_exit EXIT
+
 case "${1:-open}" in
   --check)
     check_runtime
@@ -5302,6 +7406,22 @@ case "${1:-open}" in
     ;;
   guard)
     run_window_guard "${2:-}" "${3:-}"
+    ;;
+  guard-state)
+    window_guard_state
+    ;;
+  reload-guard)
+    provider_id="${2:-$(read_runtime_active_provider)}"
+    provider_ids | grep -Fx -- "$provider_id" >/dev/null || fail "Unknown provider: $provider_id"
+    with_web_mode_lock reload_window_guard \
+      "$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/$provider_id" \
+      "$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"
+    ;;
+  stop-owned-guard)
+    stop_window_guard_owned "${2:-}" "${3:-}"
+    ;;
+  restore-helper-owner)
+    with_web_mode_lock x11_helper_restore_shell_owner
     ;;
   prewarm)
     prewarm_provider_pool "${2:-}"
@@ -5351,6 +7471,6 @@ case "${1:-open}" in
     with_web_mode_lock apply_proxy_settings "${2:-spotify}"
     ;;
   *)
-    fail "Usage: $0 open <provider>|prepare-entry <provider>|park-entry|close|close-full|cleanup-warm|warm-pool|prewarm <provider>|reconcile <provider> [started-ms]|sync-status|refresh-guards|keyboard [show|hide|toggle]|proxy <provider>|--check"
+    fail "Usage: $0 open <provider>|prepare-entry <provider>|park-entry|close|close-full|cleanup-warm|warm-pool|prewarm <provider>|reconcile <provider> [started-ms]|sync-status|refresh-guards|guard-state|reload-guard [provider]|stop-owned-guard <pid> <starttime>|restore-helper-owner|keyboard [show|hide|toggle]|proxy <provider>|--check"
     ;;
 esac

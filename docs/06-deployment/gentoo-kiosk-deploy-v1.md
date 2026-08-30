@@ -381,6 +381,8 @@ next, and finish should use the active locale.
 
 The Gentoo audio base uses ALSA direct output to the BT66 USB DAC. The validated `_audioout` route points at BT66, and Chromium provider audio uses the shareable `tikpal_bt66_dmix` device.
 
+Do not keep a second device-guessing path for MPD Pure. `tikpal-audio-adapt` resolves every playback endpoint in this order: `TIKPAL_AUDIO_CARD_FORCE`, known `TIKPAL_AUDIO_CARD_PRIORITY`, the unique USB endpoint when `TIKPAL_AUDIO_PREFER_SINGLE_USB=1`, the unique non-HDMI endpoint, then refusal. `resolve-browser`, `resolve-audioout`, and `resolve-hw` reuse that selection. Set `TIKPAL_ALSA_RATE_CONVERTER=samplerate_best` only on a staged device that has the libsamplerate ALSA module; leave it empty elsewhere so existing ALSA behavior does not change.
+
 Keep these receiver names unique while the old moOde host remains online:
 
 | Receiver | Name |
@@ -429,10 +431,12 @@ For the production Gentoo kiosk, install the root-owned helpers and allow only t
 ```bash
 install -o root -g root -m 0755 /home/moode/code/tikpal/deploy/moode/tikpal-multiroom-state.sh /usr/local/sbin/tikpal-multiroom-state
 install -o root -g root -m 0755 /home/moode/code/tikpal/deploy/moode/tikpal-roonbridge-state.sh /usr/local/sbin/tikpal-roonbridge-state
+install -o root -g root -m 0755 /home/moode/code/tikpal/deploy/moode/tikpal-alsa-loopback.sh /usr/local/sbin/tikpal-alsa-loopback.sh
+install -o root -g root -m 0755 /home/moode/code/tikpal/deploy/moode/tikpal-audio-adapt.sh /usr/local/sbin/tikpal-audio-adapt
 install -o root -g root -m 0755 /home/moode/code/tikpal/deploy/moode/tikpal-audio-output-profile.sh /usr/local/sbin/tikpal-audio-output-profile
 install -o root -g root -m 0755 /home/moode/code/tikpal/deploy/moode/tikpal-mpd-bitperfect-profile.sh /usr/local/sbin/tikpal-mpd-bitperfect-profile
 cat >/etc/sudoers.d/tikpal-roonbridge-mpd <<'EOF'
-Defaults:moode env_keep += "TIKPAL_MULTIROOM_ROON_SERVICE TIKPAL_MULTIROOM_ROON_LABEL TIKPAL_MULTIROOM_LYRION_SERVICE TIKPAL_MULTIROOM_LYRION_LABEL TIKPAL_MULTIROOM_TIKPAL_SERVICE TIKPAL_MULTIROOM_TIKPAL_LABEL TIKPAL_ROONBRIDGE_SERVICE TIKPAL_ROONBRIDGE_LABEL TIKPAL_MPD_CONF TIKPAL_MPD_STANDARD_ALSA_DEVICE TIKPAL_MPD_PURE_ALSA_DEVICE TIKPAL_MPD_BITPERFECT_ALSA_DEVICE TIKPAL_MPD_SLEEP_SAMPLE_RATE TIKPAL_MPD_SLEEP_VOLUME_LIMIT TIKPAL_MPD_CUSTOM_OUTPUT_NAME TIKPAL_MPD_CUSTOM_ALSA_DEVICE TIKPAL_MPD_CUSTOM_PURE_DIRECT TIKPAL_MPD_CUSTOM_VOLUME_NORMALIZATION TIKPAL_MPD_CUSTOM_SMOOTH_TRANSITION TIKPAL_MPD_CUSTOM_AUTOMATIC_SAMPLE_RATE TIKPAL_MPD_CUSTOM_DSD_MODE TIKPAL_MPD_CUSTOM_PLAYBACK_STABILITY TIKPAL_MPD_CUSTOM_MIXER_TYPE TIKPAL_MPD_CUSTOM_REPLAY_GAIN_HANDLER TIKPAL_MPD_CUSTOM_FORMAT TIKPAL_MPD_CUSTOM_FIXED_SAMPLE_RATE TIKPAL_MPD_CUSTOM_REPLAYGAIN TIKPAL_MPD_CUSTOM_CROSSFADE TIKPAL_AUDIO_CARD_FORCE"
+Defaults:moode env_keep += "TIKPAL_MULTIROOM_ROON_SERVICE TIKPAL_MULTIROOM_ROON_LABEL TIKPAL_MULTIROOM_LYRION_SERVICE TIKPAL_MULTIROOM_LYRION_LABEL TIKPAL_MULTIROOM_TIKPAL_SERVICE TIKPAL_MULTIROOM_TIKPAL_LABEL TIKPAL_ROONBRIDGE_SERVICE TIKPAL_ROONBRIDGE_LABEL TIKPAL_MPD_CONF TIKPAL_MPD_STANDARD_ALSA_DEVICE TIKPAL_MPD_SLEEP_SAMPLE_RATE TIKPAL_MPD_SLEEP_VOLUME_LIMIT TIKPAL_MPD_RESAMPLER_PLUGIN TIKPAL_MPD_RESAMPLER_QUALITY TIKPAL_MPD_RESAMPLER_THREADS TIKPAL_MPD_PURE_PATH TIKPAL_MPD_PURE_TARGET_RATE TIKPAL_MPD_CUSTOM_OUTPUT_NAME TIKPAL_MPD_CUSTOM_ALSA_DEVICE TIKPAL_MPD_CUSTOM_PURE_DIRECT TIKPAL_MPD_CUSTOM_VOLUME_NORMALIZATION TIKPAL_MPD_CUSTOM_SMOOTH_TRANSITION TIKPAL_MPD_CUSTOM_AUTOMATIC_SAMPLE_RATE TIKPAL_MPD_CUSTOM_DSD_MODE TIKPAL_MPD_CUSTOM_PLAYBACK_STABILITY TIKPAL_MPD_CUSTOM_MIXER_TYPE TIKPAL_MPD_CUSTOM_REPLAY_GAIN_HANDLER TIKPAL_MPD_CUSTOM_FORMAT TIKPAL_MPD_CUSTOM_FIXED_SAMPLE_RATE TIKPAL_MPD_CUSTOM_REPLAYGAIN TIKPAL_MPD_CUSTOM_CROSSFADE TIKPAL_AUDIO_CARD_FORCE TIKPAL_AUDIO_CARD_PRIORITY TIKPAL_AUDIO_PREFER_SINGLE_USB"
 moode ALL=(root) NOPASSWD:SETENV: /usr/local/sbin/tikpal-multiroom-state, /usr/local/sbin/tikpal-roonbridge-state, /usr/local/sbin/tikpal-audio-output-profile, /usr/local/sbin/tikpal-mpd-bitperfect-profile
 EOF
 chmod 0440 /etc/sudoers.d/tikpal-roonbridge-mpd
@@ -488,7 +492,7 @@ mpc status
 
 Settings -> Preferences -> Audio Output exposes four MPD listening profiles:
 
-- `Pure Listening` rewrites only the Tikpal-managed MPD output block, backs up `/etc/mpd.conf`, uses a real hardware ALSA device such as `hw:CARD=BT66,DEV=0`, sets `mixer_type "none"`, disables ReplayGain handling, avoids output `format` conversion, and locks MPD software volume. User-facing volume still adjusts the output level through `TIKPAL_OUTPUT_VOLUME_SET_COMMAND` when that helper is configured; it must not be silently disabled just because MPD software volume is locked.
+- `Pure Listening` rewrites only the Tikpal-managed MPD output block, backs up `/etc/mpd.conf`, and asks `tikpal-audio-adapt resolve-hw` for the same DAC selected by Chromium and Everyday. It sets `mixer_type "none"`, disables ReplayGain handling, and locks MPD software volume. `TIKPAL_MPD_PURE_PATH=resampled` fixes the output to `TIKPAL_MPD_PURE_TARGET_RATE:16:2`; `native` leaves output `format` unset; `unknown` makes no absolute bit-perfect claim. User-facing volume still adjusts the output level through `TIKPAL_OUTPUT_VOLUME_SET_COMMAND` when that helper is configured.
 - `Everyday` is the default. It keeps `_audioout`, MPD software volume, ReplayGain auto, two-second crossfade, and the shared route that works well with Tikpal Library and Radio.
 - `Sleep / Meditation` keeps `_audioout`, sets MPD output `format "48000:*:*"`, uses ReplayGain track, five-second crossfade, caps MPD/Radio volume at `45%`, and schedules MPD stop after 60 minutes. [MPD documents audio output `format`](https://mpd.readthedocs.io/en/stable/mpd.conf.5.html#audio-output) as `sample_rate:bits:channels`, and any field can be `*` when it should not be forced.
 - `Custom` uses six user-facing switches saved in `.tikpal/ui-preferences.json`: `Pure Direct`, `Volume Normalization`, `Smooth Transition`, `Automatic Sample Rate`, `DSD Mode`, and `Playback Stability`. The API passes those switches to the root helper as `TIKPAL_MPD_CUSTOM_*` environment flags whenever Custom is applied. Keep lower-level buffer, IRQ, and resampler details in Audio Diagnostics, not in the normal user flow.
@@ -512,8 +516,11 @@ Recommended Gentoo `.env` values:
 TIKPAL_AUDIO_OUTPUT_PROFILE_COMMAND="sudo -n -E /usr/local/sbin/tikpal-audio-output-profile %PROFILE%"
 TIKPAL_MPD_BITPERFECT_PROFILE_COMMAND="sudo -n -E /usr/local/sbin/tikpal-mpd-bitperfect-profile %MODE%"
 TIKPAL_MPD_STANDARD_ALSA_DEVICE=_audioout
-TIKPAL_MPD_PURE_ALSA_DEVICE=hw:CARD=BT66,DEV=0
-TIKPAL_MPD_BITPERFECT_ALSA_DEVICE=hw:CARD=BT66,DEV=0
+TIKPAL_MPD_RESAMPLER_PLUGIN=soxr
+TIKPAL_MPD_RESAMPLER_QUALITY=high
+TIKPAL_MPD_RESAMPLER_THREADS=0
+TIKPAL_MPD_PURE_PATH=unknown
+TIKPAL_MPD_PURE_TARGET_RATE=48000
 TIKPAL_MPD_SLEEP_SAMPLE_RATE=48000
 TIKPAL_MPD_SLEEP_VOLUME_LIMIT=45
 TIKPAL_MPD_CUSTOM_OUTPUT_NAME="Tikpal Custom"
@@ -531,6 +538,10 @@ TIKPAL_MPD_CUSTOM_FIXED_SAMPLE_RATE=48000
 TIKPAL_MPD_CUSTOM_REPLAYGAIN=
 TIKPAL_MPD_CUSTOM_CROSSFADE=
 ```
+
+The resampler is a separate Tikpal-managed block in `/etc/mpd.conf`. `src-apply` atomically replaces only that block and restores its backup if the requested plugin is not listed by `mpd --version`; later profile switches replace only the output block and preserve SRC. MPD's official plugin reference defines the global `resampler {}` block and SoXR's `quality`/`threads` settings. ALSA's independent `TIKPAL_ALSA_RATE_CONVERTER` is written only into Tikpal-owned `plug` nodes when non-empty.
+
+`GET /api/v1/ui/preferences` exposes `audioOutputCapabilities` from the device environment. The field is read-only: PATCH requests containing it are rejected. Quick Settings renders `SoXR → 48 kHz` for a resampled BT66, `Native rate when supported` for an accepted native-rate DAC, and an unverified-rate label for `unknown`; it never infers bit-perfect playback from a profile name alone.
 
 `Pure Listening` is intentionally not the default. It can make MPD software volume, Loopback spectrum, ReplayGain, and shared-output convenience unavailable. However, the Player/side-panel volume slider should remain usable on Gentoo when the output-volume helper can write the hardware or system output level. Roon, AirPlay, Spotify, DLNA, Explore, and provider audio are outside these MPD presets.
 
@@ -553,6 +564,8 @@ Validation:
 
 ```bash
 sudo -n -E /usr/local/sbin/tikpal-audio-output-profile pure
+sudo -n -E /usr/local/sbin/tikpal-audio-output-profile src-apply
+sudo -n -E /usr/local/sbin/tikpal-audio-output-profile src-check
 mpc clear && mpc add "Codex/<known-flac-or-wav>" && mpc play
 cat /proc/asound/card*/pcm*p/sub*/hw_params
 sudo -n -E /usr/local/sbin/tikpal-audio-output-profile everyday
@@ -580,6 +593,116 @@ On the 2026-08-01 Gentoo `192.168.10.115` validation run, `Custom`, `Sleep`, and
 On the same host, Pure Listening / strict mode was validated with Radio playing: `POST /api/v1/playback/actions {"type":"volume_set","value":46}` moved `system.volume.percent` from `45` to `46`, and a second write restored `45` without interrupting Radio playback. This is the expected contract: MPD software volume stays locked for the direct-output profile, while the physical output level remains adjustable.
 
 Startup volume is deliberately conservative. Keep `TIKPAL_MPD_STARTUP_VOLUME=30` in the Gentoo environment: on `tikpal-api` start, the backend first sets MPD software volume and the configured output-volume helper to 30% before any remembered Library/Radio/Scene restore runs. This is the reboot anti-blast guard, not a new remembered playback volume; the user's last nonzero volume in `.tikpal/audio-volume-state.json` remains available for later playback restore. If the physical helper is unavailable, MPD is still primed and the failure is logged without blocking boot.
+
+## Local Deployment Preflight
+
+Before any Gentoo deployment, run the repository-only gate:
+
+```bash
+./deploy/deploy-gentoo.sh --local-preflight
+```
+
+It checks every deployment shell script, typechecks and builds the UI, runs the kiosk package smoke, verifies `dist/index.html`, runs `git diff --check`, and prints a SHA-256 manifest for the reviewed 207 audio staging files. It prints the configured target for review but never calls SSH or rsync. A dirty local preflight continues with `broadDeployReady=0`; a real deployment refuses that same dirty worktree before any network action. `--allow-dirty` is an explicit override that permits every listed tracked and untracked path into the broad rsync payload, not approval to change a device. Broad rsync preserves device-owned `.env`, `.env.kiosk`, and their backups while explicitly carrying the repository's `.env.example` contract.
+
+Do not use the broad deploy command for the 207 hardware-free gate below: it installs/enables shared services and restarts the kiosk. Transfer only the reviewed staging files and follow the phase gates in order.
+
+## Gentoo 207 Hardware-free Audio and TURZX Staging
+
+This gate prepares `192.168.10.207` without starting Chromium, a real audio probe, or any hardware display path. Preserve the device-only `.env`, `.env.kiosk`, Portage files, MPD/ALSA configuration, Tikpal units, and `/usr/local/sbin/tikpal-*` before changing anything. Store the backup off the live paths and verify that its manifest can be read before continuing.
+
+Mask every hardware-facing unit first and prove there is no queued systemd job:
+
+```bash
+systemctl mask --now \
+  tikpal-kiosk.service \
+  tikpal-kiosk-watchdog.service \
+  tikpal-kiosk-watchdog.timer \
+  tikpal-x11-helper.service \
+  tikpal-audio-adapt.service
+systemctl is-enabled tikpal-kiosk.service tikpal-kiosk-watchdog.timer tikpal-x11-helper.service tikpal-audio-adapt.service
+systemctl is-active tikpal-kiosk.service tikpal-kiosk-watchdog.service tikpal-x11-helper.service tikpal-audio-adapt.service
+systemctl list-jobs --no-legend
+```
+
+Keep Chromium 150 as the rollback package and block the 151 upgrade only for this staging window:
+
+```text
+# /etc/portage/package.mask/tikpal-chromium-staging
+>=www-client/chromium-151
+```
+
+Use the minimum audio USE changes, rebuild MPD only, and install the two SRC providers:
+
+```text
+# /etc/portage/package.use/tikpal-audio-src
+media-sound/mpd flac libsamplerate libsoxr
+media-plugins/alsa-plugins libsamplerate
+```
+
+```bash
+emerge --ask=n --oneshot media-libs/soxr media-plugins/alsa-plugins
+emerge --ask=n --oneshot media-sound/mpd
+mpd --version
+test -e /usr/lib64/alsa-lib/libasound_module_rate_samplerate.so
+```
+
+`mpd --version` must list both `libsamplerate` and `soxr`. Do not accept only a successful emerge. Deploy the repository and root-owned audio helpers without running the full service-enabling installer, keep `tikpal-audio-adapt.service` masked, and set the 207-specific overrides in the preserved device-only `.env.kiosk`:
+
+```conf
+TIKPAL_AUDIO_PREFER_SINGLE_USB=1
+TIKPAL_ALSA_RATE_CONVERTER=samplerate_best
+TIKPAL_MPD_RESAMPLER_PLUGIN=soxr
+TIKPAL_MPD_RESAMPLER_QUALITY=high
+TIKPAL_MPD_RESAMPLER_THREADS=0
+TIKPAL_MPD_PURE_PATH=resampled
+TIKPAL_MPD_PURE_TARGET_RATE=48000
+TIKPAL_TURZX_HARDWARE_BRIGHTNESS_ENABLED=0
+TIKPAL_TURZX_USB_RECOVERY_ENABLED=0
+```
+
+Apply and verify only the MPD SRC block while MPD remains active:
+
+```bash
+sudo -n -E /usr/local/sbin/tikpal-audio-output-profile src-apply
+sudo -n -E /usr/local/sbin/tikpal-audio-output-profile src-check
+systemctl is-active mpd.service
+```
+
+Enable the GURU overlay, pin and locally build `=x11-drivers/evdi-1.14.16`, then verify the module against the running `6.18.43-gentoo-dist-bin` kernel. Never copy `evdi.ko` from 115:
+
+```bash
+eselect repository enable guru
+emaint sync -r guru
+emerge --ask=n =x11-drivers/evdi-1.14.16
+emerge --ask=n @module-rebuild
+modinfo -F version evdi
+modinfo -F vermagic evdi
+uname -r
+```
+
+Copy the approved TURZX source tree from 115 only between the two owned devices. Exclude build outputs, `target`, and backup files, then generate and retain a complete sorted SHA-256 manifest on both sides. Install userspace with no package install and no service start:
+
+```bash
+TIKPAL_TURZX_ENABLE_SERVICE=0 \
+TIKPAL_TURZX_INSTALL_PACKAGES=0 \
+deploy/turzx/install-turzx-evdi-display.sh --source /root/evdi-display-linux-turzx2 install
+systemctl mask display_turzx.service
+systemctl is-active display_turzx.service
+```
+
+Install `deploy/udev/70-tikpal-usb-audio-display-power.rules` as `/etc/udev/rules.d/70-tikpal-usb-audio-display-power.rules`. It writes `power/control=on` and `power/autosuspend_delay_ms=-1` only for TURZX `1a86:ad11` and BT66 `8087:1024`. Keep global `usbcore.autosuspend=2` and the CPU governor on `schedutil`; do not enable controller rebind without real `-71` or `-110` evidence.
+
+The hardware-free gate passes only when all hardware-facing units, including `display_turzx.service`, are masked and inactive; `systemctl list-jobs` is empty; MPD lists and applies SoXR; the ALSA samplerate module exists; TURZX userspace and EVDI metadata are complete but idle; and `emerge --pretend --update --deep --newuse @world` is blocked from Chromium 151 by the temporary package mask. Stop on the first failure, retain the logs, and restore only the corresponding verified backup.
+
+### 207 Hardware Connection Acceptance
+
+Connect TURZX and BT66 before unmasking anything. Unmask only `display_turzx.service` and `tikpal-audio-adapt.service`; kiosk and both watchdog units remain masked. TURZX must enumerate as `1a86:ad11`, expose a connected EVDI RandR output at `2560x720@29.95`, and report `turzx-soft`. Do not test the unverified hardware backlight path.
+
+BT66 must enumerate as `8087:1024`; `tikpal-audio-adapt.sh check` must select `BT66,DEV=0`. Bounded 44.1 and 48 kHz inputs must both finish at hardware `S16_LE`, `48000`, two channels, with no xrun, and Quick Settings must say `SoXR → 48 kHz` rather than bit-perfect.
+
+After display and audio pass independently, unmask and start the kiosk once. Keep the watchdog disabled through three cold boots that each prove the physical image, `2560x720` geometry, CDP, audio ownership and hw_params, and no xrun. Enable the watchdog only after all three boots pass.
+
+For the final DAC, require a stable USB ID plus PCM 24-bit support at 44.1/48/88.2/96 kHz. Play known 44.1, 48, and 96 kHz local files in Pure and prove the hardware `hw_params` rate matches each source. Only then set `TIKPAL_MPD_PURE_PATH=native` and make the API return `targetRateHz: null`. DSD is outside this gate. After every kernel upgrade, run `emerge @module-rebuild`, compare EVDI vermagic to the running kernel, and only then permit the next kiosk reboot.
 
 ## Explore Provider Mode
 
@@ -621,7 +744,7 @@ Opening Explore places the right side panel at its final geometry while Tikpal a
 
 Boot prewarm begins only after the main kiosk Chromium profile has a visible X11 window in two consecutive samples. It waits at most `TIKPAL_WEB_MODE_BOOT_PREWARM_READY_TIMEOUT_SECONDS` (30 seconds by default), then applies `TIKPAL_WEB_MODE_BOOT_PREWARM_INITIAL_DELAY_SECONDS` (5 seconds by default) as a post-stability delay; a missing or disappearing kiosk window skips that boot's prewarm rather than adding load to a failed startup. Background prewarm uses the fixed provider order with a `0.75` second stagger and at most `TIKPAL_WEB_MODE_PROVIDER_PREWARM_MAX_CONCURRENT_LAUNCHES=2` workers. A worker waits for the full readiness probe before it writes `Ready`: a real HTTPS CDP page, `document` no longer loading, and either 80 body characters or three visible interactive/media elements in two samples 200 ms apart, bounded by `TIKPAL_WEB_MODE_PROVIDER_READY_TIMEOUT_SECONDS` (18 seconds by default). The same probe gates sync and guard promotions. The background prewarm process remains detached from the active open command with `setsid` or `nohup`, otherwise a finished active open can still look slow while the background queue continues. With `TIKPAL_WEB_MODE_PROVIDER_PREWARM_CONTINUE_AFTER_CLOSE=1`, that detached prewarm queue continues after a user closes Explore, so opened provider processes are not killed merely because the visible stage returned to the main room; windows must remain offscreen at `2560,0` until the user explicitly selects that provider or runs `close-full`. A foreground non-resident open cancels the remaining queue before it launches another background worker. Active provider opens still use their first-paint gate for visible entry; full readiness is promoted independently. The launcher seeds queued providers as `Prewarming` before their individual launch turn, records `prewarmComplete` only after the entire queue and final reconciliation finish, and the Ambient source picker requires both this queue marker and terminal card states. `Opening` is reserved for the provider the user explicitly selected. Short state-write locking plus the final pool sync preserve concurrent workers' `residentProviders` updates. When Proxy is off, the launcher must run a short direct reachability probe against each provider's own URL; only providers that fail that probe are marked internally as `check_proxy`, shown to the user as `Needs proxy`, and skipped, while direct-reachable providers continue to open or prewarm. QQ Music and NetEase Cloud Music are direct-preferred providers: even when global Proxy is on, the launcher and MV3 extension keep these two providers in direct mode, including after navigation to `y.qq.com` or `music.163.com`; they also direct-launch their official URL, skip the transition URL bootstrap gate, and rely only on the short first-paint gate before reveal.
 
-Every real provider switch pauses the old provider's media via CDP `__tikpalProviderAudioGate.setActive(false)` to prevent audio mixing. A real HTTPS CDP page allows the resident path to skip the cold fade/paint gate, but CDP readiness is not physical-window readiness. The foreground switch must validate the target, previous, and panel windows, move the target from the `2560,0` stage into `0,0 1920x720`, keep the panel at `1920,0 640x720`, hide and park the previous provider, then write `activeProvider`. It must not rely on a later guard scan to make those surfaces true. Detached reconcile still checks ownership before and after its work so stale jobs cannot overwrite a newer choice. Synchronous `xdotool --sync` remains a compatibility fallback; the normal path may use asynchronous X11 movement only when subsequent physical geometry proves it completed.
+Every real provider switch pauses the old provider's media via CDP `__tikpalProviderAudioGate.setActive(false)` to prevent audio mixing. After the target reaches its physical geometry, the foreground path synchronously calls `setActive(true)` once before writing `activeProvider`; the resident guard then owns keepalive polling. This prevents the first active guard cycle and external readiness probes from racing to resume the same page. A real HTTPS CDP page allows the resident path to skip the cold fade/paint gate, but CDP readiness is not physical-window readiness. The foreground switch must validate the target, previous, and panel windows, move the target from the `2560,0` stage into `0,0 1920x720`, keep the panel at `1920,0 640x720`, hide and park the previous provider, then write `activeProvider`. It must not rely on a later guard scan to make those surfaces true. Detached reconcile still checks ownership before and after its work so stale jobs cannot overwrite a newer choice. Synchronous `xdotool --sync` remains a compatibility fallback; the normal path may use asynchronous X11 movement only when subsequent physical geometry proves it completed.
 
 Resident state is page-based, not process-based: `Ready` requires a CDP `type:"page"` target at a real `https://` provider URL, a complete document, and either 80 body characters or three visible interactive/media elements in two samples 200 ms apart. A cached Chromium window, local transition page, error page, or a real page that has not passed both full probes must remain `Prewarming` or show `Check setup`; the side panel never promotes a stale bootstrap surface. State files are atomically replaced, and inactive guards may not change `activeProvider`; together with the active-provider check around detached reconcile work, this prevents concurrent guards or older prewarm jobs from overwriting a newer selection. A provider error page whose reason is `region_unavailable` is retained as that explicit state instead of being reduced to `Check setup`: the side panel and error page tell the user to choose a Proxy exit that supports the service. QQ's scoped `QQ音乐提醒您` reminder may press only its `取消` control; login, client-download, payment, membership, and authorization prompts remain manual.
 
@@ -1520,7 +1643,7 @@ provider<TAB>target_xid<TAB>previous_xid<TAB>absolute_epoch_ms
 
 The acceptance tool clears the prior stamp before the real Side Panel click. It rejects missing, malformed/half-written, stale, future, wrong-provider, wrong-target, and wrong-previous stamps. It then waits for lock release, checks target `0,0 1920x720`, previous `2560,0 1920x720`, panel `1920,0 640x720`, captures a nonblank frame, confirms runtime/API state, inspects all real HTTPS CDP pages and audio gates, and retains the complete round directory. Empty or incomplete fields from a busy combined geometry query are retried at most three times with `150 ms` spacing; a complete wrong geometry still fails immediately. This observer retry never changes the physical stamp or the `5 s` gate.
 
-`rounds.tsv` records physical `visible_ms`, independent `observer_delay_ms`, and full `settled_elapsed_ms`. Only the physical stamp decides the per-round `<=5 s` ceiling; observer overhead must never be substituted for physical time or used to excuse a slow physical reveal.
+`rounds.tsv` records physical `visible_ms`, independent `observer_delay_ms`, and full `settled_elapsed_ms`. For `switch-once`, both `visible_ms` and `settled_elapsed_ms` must be `<=5 s`; for the formal 20 rounds, both distributions must satisfy median `<=2 s`, p95 `<=3 s`, and max `<=5 s`. Only the physical stamp decides `visible_ms`; observer overhead must never be substituted for physical time or used to excuse a slow physical reveal.
 
 ### Resident Physical Acceptance Commands
 

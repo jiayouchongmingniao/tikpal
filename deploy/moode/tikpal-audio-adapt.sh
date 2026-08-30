@@ -9,7 +9,9 @@ ACTION="${1:-check}"
 : "${TIKPAL_AUDIO_ADAPT_MODE:=auto}"
 : "${TIKPAL_AUDIO_CARD_PRIORITY:=BT66,Crimson}"
 : "${TIKPAL_AUDIO_CARD_FORCE:=}"
-: "${TIKPAL_AUDIO_ALLOW_UNKNOWN_SINGLE:=1}"
+: "${TIKPAL_AUDIO_PREFER_SINGLE_USB:=${TIKPAL_AUDIO_ALLOW_UNKNOWN_SINGLE:-1}}"
+: "${TIKPAL_AUDIO_SYS_CLASS_SOUND_ROOT:=/sys/class/sound}"
+: "${TIKPAL_ALSA_RATE_CONVERTER:=}"
 : "${TIKPAL_AUDIO_BROWSER_PROBE:=1}"
 : "${TIKPAL_AUDIO_BROWSER_PROBE_TIMEOUT_SECONDS:=2}"
 : "${TIKPAL_AUDIO_BROWSER_PROBE_FORMAT:=S16_LE}"
@@ -157,7 +159,7 @@ card_matches_token() {
   [[ "$token_l" == "$index" || "$token_l" == "$card_l" || "$token_l" == "$label_l" || "$raw_l" == *"$token_l"* ]]
 }
 
-find_matching_card() {
+find_matching_cards() {
   local cards="$1"
   local token="$2"
   local line
@@ -165,22 +167,46 @@ find_matching_card() {
     [[ -n "$line" ]] || continue
     if card_matches_token "$line" "$token"; then
       printf '%s\n' "$line"
-      return 0
     fi
   done <<<"$cards"
-  return 1
+}
+
+card_line_is_usb() {
+  local line="$1"
+  local index card_id device_id label raw device_path
+  IFS=$'\t' read -r index card_id device_id label raw <<<"$line"
+  device_path="$(readlink -f "$TIKPAL_AUDIO_SYS_CLASS_SOUND_ROOT/card${index}/device" 2>/dev/null || true)"
+  if [[ "$device_path" == *"/usb"* || "$device_path" == *"/usb/"* ]]; then
+    return 0
+  fi
+  [[ "$(lower "$raw")" == *usb* ]]
+}
+
+usb_playback_cards() {
+  local cards="$1"
+  local line
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    card_line_is_usb "$line" && printf '%s\n' "$line"
+  done <<<"$cards"
+}
+
+card_line_count() {
+  awk 'NF { count += 1 } END { print count + 0 }' <<<"$1"
 }
 
 select_card() {
-  local cards force token matched card_count
+  local cards force token matched match_count card_count usb_cards usb_count
   local priority_line
   cards="$(list_playback_cards || true)"
   [[ -n "$cards" ]] || fail "no non-HDMI playback card detected"
 
   force="$(trim "$TIKPAL_AUDIO_CARD_FORCE")"
   if [[ -n "$force" ]]; then
-    matched="$(find_matching_card "$cards" "$force" || true)"
-    [[ -n "$matched" ]] || fail "forced audio card '$force' was not detected"
+    matched="$(find_matching_cards "$cards" "$force")"
+    match_count="$(card_line_count "$matched")"
+    [[ "$match_count" -gt 0 ]] || fail "forced audio card '$force' was not detected"
+    [[ "$match_count" -eq 1 ]] || fail "forced audio card '$force' matched multiple playback endpoints; use its unique card index"
     printf '%s\tforce:%s\n' "$matched" "$force"
     return 0
   fi
@@ -188,21 +214,34 @@ select_card() {
   while IFS= read -r token; do
     token="$(trim "$token")"
     [[ -n "$token" ]] || continue
-    matched="$(find_matching_card "$cards" "$token" || true)"
-    if [[ -n "$matched" ]]; then
+    matched="$(find_matching_cards "$cards" "$token")"
+    match_count="$(card_line_count "$matched")"
+    if [[ "$match_count" -gt 1 ]]; then
+      fail "priority audio card '$token' matched multiple playback endpoints; set TIKPAL_AUDIO_CARD_FORCE to a unique card index"
+    elif [[ "$match_count" -eq 1 ]]; then
       printf '%s\tpriority:%s\n' "$matched" "$token"
       return 0
     fi
   done < <(printf '%s\n' "$TIKPAL_AUDIO_CARD_PRIORITY" | tr ',' '\n')
 
-  card_count="$(printf '%s\n' "$cards" | awk 'NF { count += 1 } END { print count + 0 }')"
-  if [[ "$card_count" -eq 1 ]] && is_enabled "$TIKPAL_AUDIO_ALLOW_UNKNOWN_SINGLE"; then
+  if is_enabled "$TIKPAL_AUDIO_PREFER_SINGLE_USB"; then
+    usb_cards="$(usb_playback_cards "$cards")"
+    usb_count="$(card_line_count "$usb_cards")"
+    if [[ "$usb_count" -eq 1 ]]; then
+      priority_line="$(printf '%s\n' "$usb_cards" | awk 'NF { print; exit }')"
+      printf '%s\tsingle-usb\n' "$priority_line"
+      return 0
+    fi
+  fi
+
+  card_count="$(card_line_count "$cards")"
+  if [[ "$card_count" -eq 1 ]]; then
     priority_line="$(printf '%s\n' "$cards" | awk 'NF { print; exit }')"
-    printf '%s\tsingle-unknown\n' "$priority_line"
+    printf '%s\tsingle-non-hdmi\n' "$priority_line"
     return 0
   fi
 
-  fail "multiple unknown non-HDMI audio cards detected; set TIKPAL_AUDIO_CARD_FORCE to choose one"
+  fail "ambiguous non-HDMI playback endpoints detected; set TIKPAL_AUDIO_CARD_FORCE to choose one"
 }
 
 selected_field() {
@@ -217,6 +256,22 @@ selected_audioout_pcm() {
   card_id="$(selected_field "$selected" 2)"
   device_id="$(selected_field "$selected" 3)"
   printf 'plughw:CARD=%s,DEV=%s\n' "$card_id" "$device_id"
+}
+
+selected_hw_pcm() {
+  local selected="$1"
+  local card_id device_id
+  card_id="$(selected_field "$selected" 2)"
+  device_id="$(selected_field "$selected" 3)"
+  printf 'hw:CARD=%s,DEV=%s\n' "$card_id" "$device_id"
+}
+
+alsa_rate_converter_line() {
+  local converter
+  converter="$(trim "$TIKPAL_ALSA_RATE_CONVERTER")"
+  [[ -n "$converter" ]] || return 0
+  printf '%s\n' "$converter" | grep -Eq '^[A-Za-z0-9_-]+$' || fail "invalid ALSA rate converter '$converter'"
+  printf 'rate_converter "%s"\n' "$converter"
 }
 
 sample_bytes_for_format() {
@@ -433,7 +488,7 @@ EOF
 write_browser_output_config() {
   local selected="$1"
   local format="$2"
-  local card_id device_id
+  local card_id device_id rate_converter_line
   [[ -n "$format" ]] || return 0
   card_id="$(selected_field "$selected" 2)"
   device_id="$(selected_field "$selected" 3)"
@@ -441,12 +496,14 @@ write_browser_output_config() {
   printf '%s\n' "$card_id" | grep -Eq '^[A-Za-z0-9_-]+$' || fail "invalid ALSA card id '$card_id'"
   printf '%s\n' "$device_id" | grep -Eq '^[0-9]+$' || fail "invalid ALSA device id '$device_id'"
   printf '%s\n' "$format" | grep -Eq '^[A-Za-z0-9_]+$' || fail "invalid ALSA format '$format'"
+  rate_converter_line="$(alsa_rate_converter_line)"
   write_root_file "$TIKPAL_BROWSER_OUTPUT_CONFIG" <<EOF
 #########################################
 # This file is managed by Tikpal for shared browser audio
 #########################################
 pcm.$TIKPAL_AUDIO_BROWSER_SHARED_PCM {
 type plug
+${rate_converter_line}
 slave.pcm {
 type dmix
 ipc_key $TIKPAL_AUDIO_BROWSER_SHARED_IPC_KEY
@@ -524,6 +581,8 @@ check_audio() {
   printf 'browserPcm=%s\n' "$browser_pcm"
   printf 'browserSharedFormat=%s\n' "${browser_shared_format:-none}"
   printf 'audiooutPcm=%s\n' "$audioout_pcm"
+  printf 'hwPcm=%s\n' "$(selected_hw_pcm "$selected")"
+  printf 'alsaRateConverter=%s\n' "${TIKPAL_ALSA_RATE_CONVERTER:-default}"
   printf 'mixerControl=%s\n' "${mixer_control:-none}"
   printf 'volumeStrategy=%s\n' "$volume_strategy"
   if loopback_visible; then
@@ -573,12 +632,18 @@ case "$ACTION" in
     apply_audio
     ;;
   resolve-browser)
-    selected_browser_pcm "$(select_card)"
+    resolved_card="$(select_card)"
+    selected_browser_pcm "$resolved_card"
     ;;
   resolve-audioout)
-    selected_audioout_pcm "$(select_card)"
+    resolved_card="$(select_card)"
+    selected_audioout_pcm "$resolved_card"
+    ;;
+  resolve-hw)
+    resolved_card="$(select_card)"
+    selected_hw_pcm "$resolved_card"
     ;;
   *)
-    fail "usage: $0 check|apply|resolve-browser|resolve-audioout"
+    fail "usage: $0 check|apply|resolve-browser|resolve-audioout|resolve-hw"
     ;;
 esac
