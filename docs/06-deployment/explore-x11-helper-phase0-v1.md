@@ -27,4 +27,19 @@ On 2026-08-31, only the Helper source/binary and `.env.kiosk` were atomically up
 
 The Helper reports Phase 0 with only `health` and `inspect`; API Shell mode remains disabled. Twenty serial batch inspections of Spotify, parked Qobuz, and the Side Panel kept the same daemon instance and epoch. Daemon p95 was `0.412 ms`, socket p95 was `0.645 ms`, and mutation, timeout, reconnect, and inspect-failure counts were zero. Evidence is retained on 115 at `.tikpal/x11-helper-phase0-stable-20260831-221727/`.
 
-Do not synthesize the remaining competition period by opening or switching a provider. It must observe 20 existing production switch windows with the same read-only assertions and p95 below `100 ms`; only then can Phase 1 be considered.
+Do not synthesize the remaining competition period by opening or switching a provider. It must observe 20 batch samples during an existing production resident switch with the same read-only assertions and p95 below `100 ms`; only then can Phase 1 be considered.
+
+## Competition-period sampler
+
+`deploy/chromium/tikpal-x11-helper-phase0-competition.sh` is the only Phase 0 observer for the remaining gate. It must be started by the kiosk service user while a Provider is already active and no request is opening. It writes `armed.json` before waiting for the next existing resident switch; it never calls the API, `switch`, `revoke`, X11 mutation commands, the Guard, or Chromium.
+
+For the next normal switch, create one new evidence directory and arm the sampler first:
+
+```bash
+sudo -u moode /home/moode/code/tikpal/deploy/chromium/tikpal-x11-helper-phase0-competition.sh \
+  --output-dir /home/moode/code/tikpal/.tikpal/x11-helper-phase0-competition-<utc>
+```
+
+After `armed.json` is present, allow exactly one already-authorized production resident switch to proceed. Do not use this command to create a switch. The sampler detects its persisted `openingProvider`, reads the cached target, previous, and Panel XIDs once, and makes 20 serial read-only `inspect` batches. It records the raw response for every batch, including client/socket, daemon queue, XCB batch-send, reply-wait, `/proc` identity, and total timings.
+
+It passes only when the daemon instance, `connectionEpoch`, target/previous/Panel process identity and start-time stay constant; every surface has a matched viewable profile and no XCB error; and Helper mutation, timeout, reconnect, failure, and mutation-operation counters remain zero. `summary.json` calculates nearest-rank p95 for all timing dimensions and rejects any competition p95 at or above `100 ms`. A failure leaves the output directory and exits immediately; it does not retry, change state, or mutate X11.

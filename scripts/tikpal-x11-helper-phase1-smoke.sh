@@ -11,8 +11,15 @@ XSERVER_PID=""
 HELPER_PID=""
 LOG_READER_PID=""
 PHASE0_SURFACE_PID=""
+PHASE0_TARGET_SURFACE_PID=""
+PHASE0_PANEL_SURFACE_PID=""
+PHASE0_COMPETITION_PID=""
 
 cleanup() {
+  if [[ -n "$PHASE0_COMPETITION_PID" ]]; then
+    kill "$PHASE0_COMPETITION_PID" >/dev/null 2>&1 || true
+    wait "$PHASE0_COMPETITION_PID" 2>/dev/null || true
+  fi
   if [[ -n "$LOG_READER_PID" ]]; then
     kill "$LOG_READER_PID" >/dev/null 2>&1 || true
     wait "$LOG_READER_PID" 2>/dev/null || true
@@ -24,6 +31,14 @@ cleanup() {
   if [[ -n "$PHASE0_SURFACE_PID" ]]; then
     kill "$PHASE0_SURFACE_PID" >/dev/null 2>&1 || true
     wait "$PHASE0_SURFACE_PID" 2>/dev/null || true
+  fi
+  if [[ -n "$PHASE0_TARGET_SURFACE_PID" ]]; then
+    kill "$PHASE0_TARGET_SURFACE_PID" >/dev/null 2>&1 || true
+    wait "$PHASE0_TARGET_SURFACE_PID" 2>/dev/null || true
+  fi
+  if [[ -n "$PHASE0_PANEL_SURFACE_PID" ]]; then
+    kill "$PHASE0_PANEL_SURFACE_PID" >/dev/null 2>&1 || true
+    wait "$PHASE0_PANEL_SURFACE_PID" 2>/dev/null || true
   fi
   if [[ -n "$XSERVER_PID" ]]; then
     kill -CONT "$XSERVER_PID" >/dev/null 2>&1 || true
@@ -103,9 +118,16 @@ DISPLAY="$DISPLAY_VALUE" "$X11_HELPER_TEST" self-test \
 PHASE0_SOCKET="$FIXTURE_DIR/phase0-helper.sock"
 PHASE0_LOG="$FIXTURE_DIR/phase0-helper.log"
 PHASE0_GENERATION="$FIXTURE_DIR/phase0-generation"
-PHASE0_PROFILE="$FIXTURE_DIR/phase0-profile"
+PHASE0_PROFILE_ROOT="$FIXTURE_DIR/phase0-profiles"
+PHASE0_PROFILE="$PHASE0_PROFILE_ROOT/providers/spotify"
+PHASE0_TARGET_PROFILE="$PHASE0_PROFILE_ROOT/providers/qobuz"
+PHASE0_PANEL_PROFILE="$PHASE0_PROFILE_ROOT/side-panel"
 PHASE0_XID_PATH="$FIXTURE_DIR/phase0.xid"
-mkdir -p "$PHASE0_PROFILE"
+PHASE0_TARGET_XID_PATH="$FIXTURE_DIR/phase0-target.xid"
+PHASE0_PANEL_XID_PATH="$FIXTURE_DIR/phase0-panel.xid"
+PHASE0_STATE_PATH="$FIXTURE_DIR/phase0-state.json"
+PHASE0_COMPETITION_OUTPUT="$FIXTURE_DIR/phase0-competition"
+mkdir -p "$PHASE0_PROFILE" "$PHASE0_TARGET_PROFILE" "$PHASE0_PANEL_PROFILE"
 printf '1\n' > "$PHASE0_GENERATION"
 "$PHASE0_CLIENT" surface --display "$DISPLAY_VALUE" --output "$PHASE0_XID_PATH" \
   --user-data-dir="$PHASE0_PROFILE" --x 0 --y 0 --width 1920 --height 720 &
@@ -172,6 +194,63 @@ jq -e '.ok == false and .errorCode == "OPERATION_DISABLED_PHASE0" and .mutationS
   <<< "$phase0_switch" >/dev/null || fail_fixture "Phase 0 switch rejection was incomplete"
 jq -e '.ok == false and .errorCode == "OPERATION_DISABLED_PHASE0" and .mutationStarted == false' \
   <<< "$phase0_revoke" >/dev/null || fail_fixture "Phase 0 revoke rejection was incomplete"
+"$PHASE0_CLIENT" surface --display "$DISPLAY_VALUE" --output "$PHASE0_TARGET_XID_PATH" \
+  --user-data-dir="$PHASE0_TARGET_PROFILE" --x 2560 --y 0 --width 1920 --height 720 &
+PHASE0_TARGET_SURFACE_PID=$!
+"$PHASE0_CLIENT" surface --display "$DISPLAY_VALUE" --output "$PHASE0_PANEL_XID_PATH" \
+  --user-data-dir="$PHASE0_PANEL_PROFILE" --x 1920 --y 0 --width 640 --height 720 &
+PHASE0_PANEL_SURFACE_PID=$!
+for attempt in {1..100}; do
+  [[ -s "$PHASE0_TARGET_XID_PATH" && -s "$PHASE0_PANEL_XID_PATH" ]] && break
+  kill -0 "$PHASE0_TARGET_SURFACE_PID" >/dev/null 2>&1 ||
+    fail_fixture "Phase 0 target surface exited before publishing its XID"
+  kill -0 "$PHASE0_PANEL_SURFACE_PID" >/dev/null 2>&1 ||
+    fail_fixture "Phase 0 Panel surface exited before publishing its XID"
+  sleep 0.02
+done
+[[ -s "$PHASE0_TARGET_XID_PATH" && -s "$PHASE0_PANEL_XID_PATH" ]] ||
+  fail_fixture "Phase 0 competition surfaces did not publish XIDs"
+PHASE0_TARGET_XID="$(<"$PHASE0_TARGET_XID_PATH")"
+PHASE0_PANEL_XID="$(<"$PHASE0_PANEL_XID_PATH")"
+for profile in "$PHASE0_PROFILE" "$PHASE0_TARGET_PROFILE" "$PHASE0_PANEL_PROFILE"; do
+  key="$(printf '%s' "$profile" | cksum | awk '{print $1 "-" $2}')"
+  case "$profile" in
+    "$PHASE0_PROFILE") xid="$PHASE0_XID" ;;
+    "$PHASE0_TARGET_PROFILE") xid="$PHASE0_TARGET_XID" ;;
+    "$PHASE0_PANEL_PROFILE") xid="$PHASE0_PANEL_XID" ;;
+  esac
+  printf '%s\n' "$xid" > "$PHASE0_PROFILE_ROOT/window-$key.id"
+done
+printf '%s\n' '{"activeProvider":"spotify","openingProvider":null,"openRequestId":null,"openXSessionGeneration":null}' \
+  > "$PHASE0_STATE_PATH"
+TIKPAL_WEB_MODE_PROFILE_ROOT="$PHASE0_PROFILE_ROOT" \
+  TIKPAL_WEB_MODE_STATE_PATH="$PHASE0_STATE_PATH" \
+  TIKPAL_WEB_MODE_X11_HELPER_BINARY="$X11_HELPER" \
+  TIKPAL_WEB_MODE_X11_HELPER_SOCKET="$PHASE0_SOCKET" \
+  TIKPAL_WEB_MODE_X11_HELPER_GENERATION_PATH="$PHASE0_GENERATION" \
+  "$ROOT_DIR/deploy/chromium/tikpal-x11-helper-phase0-competition.sh" \
+    --samples 20 --wait-timeout-ms 2000 --poll-interval-ms 10 \
+    --output-dir "$PHASE0_COMPETITION_OUTPUT" \
+    > "$FIXTURE_DIR/phase0-competition.log" 2>&1 &
+PHASE0_COMPETITION_PID=$!
+for attempt in {1..100}; do
+  [[ -s "$PHASE0_COMPETITION_OUTPUT/armed.json" ]] && break
+  kill -0 "$PHASE0_COMPETITION_PID" >/dev/null 2>&1 ||
+    fail_fixture "Phase 0 competition sampler did not arm: $(tr '\n' ' ' < "$FIXTURE_DIR/phase0-competition.log")"
+  sleep 0.02
+done
+[[ -s "$PHASE0_COMPETITION_OUTPUT/armed.json" ]] || fail_fixture "Phase 0 competition sampler did not arm"
+printf '%s\n' '{"activeProvider":"spotify","openingProvider":"qobuz","openRequestId":"fixture-open","openXSessionGeneration":"fixture-session"}' \
+  > "$PHASE0_STATE_PATH"
+if ! wait "$PHASE0_COMPETITION_PID"; then
+  fail_fixture "Phase 0 competition sampler failed: $(tr '\n' ' ' < "$FIXTURE_DIR/phase0-competition.log")"
+fi
+PHASE0_COMPETITION_PID=""
+assert_file_json '.status == "passed" and .samples == 20 and .inspectDelta >= 20 and
+  .mutationDelta == 0 and .timeoutDelta == 0 and .reconnectDelta == 0 and
+  .p95Ms.clientSocket < 100 and .p95Ms.daemonTotal < 100 and
+  .context.previousProvider == "spotify" and .context.targetProvider == "qobuz"' \
+  "$PHASE0_COMPETITION_OUTPUT/summary.json"
 phase0_final_health="$(
   "$X11_HELPER" client health \
     --socket "$PHASE0_SOCKET" \
@@ -179,10 +258,14 @@ phase0_final_health="$(
     --response-timeout-ms 1000 \
     --request-id phase0-final-health
 )" || fail_fixture "Phase 0 final health failed"
-jq -e '.counters.inspectRequests == 1 and .counters.switchRequests == 0 and
+jq -e '.counters.inspectRequests == 21 and .counters.switchRequests == 0 and
   .counters.mutationRequests == 0 and .counters.revokeRequests == 0 and
   .mutationStarted == false and .leaseReleased == true' \
   <<< "$phase0_final_health" >/dev/null || fail_fixture "Phase 0 inspect changed mutation state"
+if [[ "${TIKPAL_X11_HELPER_PHASE0_ONLY:-0}" == "1" ]]; then
+  printf 'tikpal X11 Helper Phase 0 competition fixture passed\n'
+  exit 0
+fi
 kill "$HELPER_PID" >/dev/null 2>&1 || true
 wait "$HELPER_PID" 2>/dev/null || true
 HELPER_PID=""
