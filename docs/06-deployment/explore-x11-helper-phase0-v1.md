@@ -2,6 +2,8 @@
 
 Status: local validation and the 115 stable read-only deployment passed; the required 20-sample real-switch competition period remains pending. This is the plan-defined Phase 0 gate; it is distinct from the earlier disabled-Helper initial-entry diagnostic.
 
+**2026-09-01 update:** the stable-period evidence below is no longer an active Phase 0 pass. A subsequent read-only Guard inspection on 115 timed out, reset the Helper connection, and reconnected. Do not deploy the competition sampler or begin Phase 1 until the display-stack interference is understood and a new complete Phase 0 period passes.
+
 ## Boundary
 
 The native Helper defaults to daemon Phase 0. It serves only `health` and `inspect`; `switch` and `revoke` fail before any X11 connection or mutation with `OPERATION_DISABLED_PHASE0`.
@@ -28,6 +30,12 @@ On 2026-08-31, only the Helper source/binary and `.env.kiosk` were atomically up
 The Helper reports Phase 0 with only `health` and `inspect`; API Shell mode remains disabled. Twenty serial batch inspections of Spotify, parked Qobuz, and the Side Panel kept the same daemon instance and epoch. Daemon p95 was `0.412 ms`, socket p95 was `0.645 ms`, and mutation, timeout, reconnect, and inspect-failure counts were zero. Evidence is retained on 115 at `.tikpal/x11-helper-phase0-stable-20260831-221727/`.
 
 Do not synthesize the remaining competition period by opening or switching a provider. It must observe 20 batch samples during an existing production resident switch with the same read-only assertions and p95 below `100 ms`; only then can Phase 1 be considered.
+
+## Field gate invalidation
+
+At `2026-08-31 22:39:54 +08:00`, the unchanged read-only Helper instance `b2355fa3-c7e1-4874-99cc-d9fc33bf1b61` timed out a Window Guard `inspect` batch for Spotify (`71303171`), Side Panel (`23068675`), and kiosk (`8388611`). The reply wait was `500.850 ms`; the Helper recorded `X11_REPLY_TIMEOUT`, connection reset `1 -> 2`, and the next Guard tick reconnected `2 -> 3` at `22:39:55`. It performed no mutation and did not restart Chromium, API, kiosk, or the Guard.
+
+Kernel logs immediately around that request repeatedly report `evdi` connector/EDID updates and nouveau DDC-without-EDID messages. That is a time correlation to investigate in the X server/EVDI display stack, not a proven root cause. The current Helper counters retain one inspect failure, one timeout, and one reconnect, so they cannot satisfy a new Phase 0 sampling gate. The Phase 0 competition sampler was kept local and was not deployed to 115.
 
 ## Competition-period sampler
 
