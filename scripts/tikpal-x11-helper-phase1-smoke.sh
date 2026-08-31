@@ -6,9 +6,11 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 FIXTURE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/tikpal-x11-helper-phase1.XXXXXX")"
 X11_HELPER="$FIXTURE_DIR/tikpal-x11-helper"
 X11_HELPER_TEST="$FIXTURE_DIR/tikpal-x11-helper-test"
+PHASE0_CLIENT="$FIXTURE_DIR/tikpal-x11-fixture-client"
 XSERVER_PID=""
 HELPER_PID=""
 LOG_READER_PID=""
+PHASE0_SURFACE_PID=""
 
 cleanup() {
   if [[ -n "$LOG_READER_PID" ]]; then
@@ -18,6 +20,10 @@ cleanup() {
   if [[ -n "$HELPER_PID" ]]; then
     kill "$HELPER_PID" >/dev/null 2>&1 || true
     wait "$HELPER_PID" 2>/dev/null || true
+  fi
+  if [[ -n "$PHASE0_SURFACE_PID" ]]; then
+    kill "$PHASE0_SURFACE_PID" >/dev/null 2>&1 || true
+    wait "$PHASE0_SURFACE_PID" 2>/dev/null || true
   fi
   if [[ -n "$XSERVER_PID" ]]; then
     kill -CONT "$XSERVER_PID" >/dev/null 2>&1 || true
@@ -46,7 +52,7 @@ command -v jq >/dev/null 2>&1 || fail_fixture "jq is required"
 command -v Xvfb >/dev/null 2>&1 || fail_fixture "Xvfb is required"
 pkg-config --exists xcb json-c || fail_fixture "xcb and json-c development packages are required"
 
-cc -std=c11 -Wall -Wextra -Werror \
+cc -std=c11 -Wall -Wextra -Werror -DTIKPAL_X11_HELPER_LOCAL_FIXTURE \
   $(pkg-config --cflags xcb json-c) \
   "$ROOT_DIR/deploy/chromium/tikpal-x11-helper.c" \
   -o "$X11_HELPER" \
@@ -56,6 +62,11 @@ cc -std=c11 -Wall -Wextra -Werror -DTIKPAL_X11_HELPER_SELF_TEST_SEAMS \
   "$ROOT_DIR/deploy/chromium/tikpal-x11-helper.c" \
   -o "$X11_HELPER_TEST" \
   $(pkg-config --libs xcb json-c)
+cc -std=c11 -Wall -Wextra -Werror \
+  $(pkg-config --cflags xcb) \
+  "$ROOT_DIR/scripts/fixtures/tikpal-x11-late-writer-client.c" \
+  -o "$PHASE0_CLIENT" \
+  $(pkg-config --libs xcb)
 "$X11_HELPER" self-test
 
 DISPLAY_NUMBER=""
@@ -88,6 +99,103 @@ kill -0 "$XSERVER_PID" >/dev/null 2>&1 || fail_fixture "Xvfb did not survive tim
 DISPLAY="$DISPLAY_VALUE" "$X11_HELPER_TEST" self-test \
   --x11-sequence \
   --display "$DISPLAY_VALUE"
+
+PHASE0_SOCKET="$FIXTURE_DIR/phase0-helper.sock"
+PHASE0_LOG="$FIXTURE_DIR/phase0-helper.log"
+PHASE0_GENERATION="$FIXTURE_DIR/phase0-generation"
+PHASE0_PROFILE="$FIXTURE_DIR/phase0-profile"
+PHASE0_XID_PATH="$FIXTURE_DIR/phase0.xid"
+mkdir -p "$PHASE0_PROFILE"
+printf '1\n' > "$PHASE0_GENERATION"
+"$PHASE0_CLIENT" surface --display "$DISPLAY_VALUE" --output "$PHASE0_XID_PATH" \
+  --user-data-dir="$PHASE0_PROFILE" --x 0 --y 0 --width 1920 --height 720 &
+PHASE0_SURFACE_PID=$!
+for attempt in {1..100}; do
+  [[ -s "$PHASE0_XID_PATH" ]] && break
+  kill -0 "$PHASE0_SURFACE_PID" >/dev/null 2>&1 ||
+    fail_fixture "Phase 0 inspect surface exited before publishing its XID"
+  sleep 0.02
+done
+[[ -s "$PHASE0_XID_PATH" ]] || fail_fixture "Phase 0 inspect surface did not publish its XID"
+PHASE0_XID="$(<"$PHASE0_XID_PATH")"
+DISPLAY="$DISPLAY_VALUE" "$X11_HELPER" daemon \
+  --socket "$PHASE0_SOCKET" \
+  --display "$DISPLAY_VALUE" \
+  --generation-file "$PHASE0_GENERATION" \
+  --transaction-timeout-ms 250 \
+  > /dev/null 2> "$PHASE0_LOG" &
+HELPER_PID=$!
+for attempt in {1..100}; do
+  [[ -S "$PHASE0_SOCKET" ]] && break
+  kill -0 "$HELPER_PID" >/dev/null 2>&1 ||
+    fail_fixture "Phase 0 Helper daemon exited before creating its socket: $(tr '\n' ' ' < "$PHASE0_LOG")"
+  sleep 0.02
+done
+[[ -S "$PHASE0_SOCKET" ]] || fail_fixture "Phase 0 Helper socket did not appear"
+phase0_health="$(
+  "$X11_HELPER" client health \
+    --socket "$PHASE0_SOCKET" \
+    --connect-timeout-ms 100 \
+    --response-timeout-ms 1000 \
+    --request-id phase0-health
+)" || fail_fixture "Phase 0 Helper health failed"
+jq -e '.ok == true and .phase == 0 and .readOnly == true and .mutationsAllowed == false and
+  .supportedOperations == ["health", "inspect"]' <<< "$phase0_health" >/dev/null ||
+  fail_fixture "Phase 0 Helper health advertised mutation support"
+phase0_inspect="$(
+  "$X11_HELPER" client inspect --socket "$PHASE0_SOCKET" \
+    --connect-timeout-ms 100 --response-timeout-ms 1000 \
+    --request-id phase0-inspect --generation 1 \
+    --surface provider "$PHASE0_XID" "$PHASE0_PROFILE"
+)" || fail_fixture "Phase 0 Helper inspect failed"
+jq -e --argjson xid "$PHASE0_XID" '.ok == true and .code == "OK" and .mutationStarted == false and
+  (.surfaces | length == 1) and
+  (.surfaces[0] | .role == "provider" and .xid == $xid and .ok == true and .code == "OK")' \
+  <<< "$phase0_inspect" >/dev/null || fail_fixture "Phase 0 inspect result was incomplete"
+set +e
+phase0_switch="$(
+  printf '%s' '{"version":1,"requestId":"phase0-switch","operation":"switch"}' |
+    "$X11_HELPER" client request --socket "$PHASE0_SOCKET" \
+      --connect-timeout-ms 100 --response-timeout-ms 1000
+)"
+phase0_switch_status=$?
+phase0_revoke="$(
+  printf '%s' '{"version":1,"requestId":"phase0-revoke","operation":"revoke"}' |
+    "$X11_HELPER" client request --socket "$PHASE0_SOCKET" \
+      --connect-timeout-ms 100 --response-timeout-ms 1000
+)"
+phase0_revoke_status=$?
+set -e
+[[ "$phase0_switch_status" == 20 && "$phase0_revoke_status" == 20 ]] ||
+  fail_fixture "Phase 0 mutation requests did not fail closed"
+jq -e '.ok == false and .errorCode == "OPERATION_DISABLED_PHASE0" and .mutationStarted == false' \
+  <<< "$phase0_switch" >/dev/null || fail_fixture "Phase 0 switch rejection was incomplete"
+jq -e '.ok == false and .errorCode == "OPERATION_DISABLED_PHASE0" and .mutationStarted == false' \
+  <<< "$phase0_revoke" >/dev/null || fail_fixture "Phase 0 revoke rejection was incomplete"
+phase0_final_health="$(
+  "$X11_HELPER" client health \
+    --socket "$PHASE0_SOCKET" \
+    --connect-timeout-ms 100 \
+    --response-timeout-ms 1000 \
+    --request-id phase0-final-health
+)" || fail_fixture "Phase 0 final health failed"
+jq -e '.counters.inspectRequests == 1 and .counters.switchRequests == 0 and
+  .counters.mutationRequests == 0 and .counters.revokeRequests == 0 and
+  .mutationStarted == false and .leaseReleased == true' \
+  <<< "$phase0_final_health" >/dev/null || fail_fixture "Phase 0 inspect changed mutation state"
+kill "$HELPER_PID" >/dev/null 2>&1 || true
+wait "$HELPER_PID" 2>/dev/null || true
+HELPER_PID=""
+kill "$PHASE0_SURFACE_PID" >/dev/null 2>&1 || true
+wait "$PHASE0_SURFACE_PID" 2>/dev/null || true
+PHASE0_SURFACE_PID=""
+set +e
+DISPLAY="$DISPLAY_VALUE" "$X11_HELPER" daemon --phase 2 --display "$DISPLAY_VALUE" \
+  --socket "$FIXTURE_DIR/invalid-phase.sock" --generation-file "$FIXTURE_DIR/invalid-phase-generation" \
+  > /dev/null 2>&1
+invalid_phase_status=$?
+set -e
+[[ "$invalid_phase_status" == 64 ]] || fail_fixture "Helper accepted an invalid phase"
 
 MOCK_LOG="$FIXTURE_DIR/mock-helper.log"
 MOCK_SWITCH_STATUS_FILE="$FIXTURE_DIR/mock-switch-status"
@@ -461,6 +569,7 @@ DISPLAY="$DISPLAY_VALUE" "$X11_HELPER" daemon \
   --socket "$TIMEOUT_SOCKET" \
   --display "$DISPLAY_VALUE" \
   --generation-file "$TIKPAL_WEB_MODE_X11_HELPER_GENERATION_PATH" \
+  --phase 1 \
   --transaction-timeout-ms 250 \
   > "$TIMEOUT_DAEMON_STDOUT" 2> "$TIMEOUT_DAEMON_LOG" &
 HELPER_PID=$!
@@ -559,6 +668,7 @@ jq -s -e --arg request_id "$timeout_request_id" '
    "$_CHROMIUM_WINDOW_CACHE" == timeout-cache-sentinel ]] ||
   fail_fixture "Guard timeout changed registry or window cache state"
 jq -e '.ok == true and .leaseReleased == true and .inFlight == false and
+  .phase == 1 and .readOnly == false and .mutationsAllowed == true and
   .connectionEpoch >= 3 and .counters.xcbTimeouts >= 1 and .counters.reconnects >= 1' \
   <<< "$timeout_health_response" >/dev/null ||
   fail_fixture "Helper timeout cleanup/reconnect health was incomplete"
@@ -576,6 +686,7 @@ DISPLAY="$DISPLAY_VALUE" "$X11_HELPER" daemon \
   --socket "$LOG_FAILURE_SOCKET" \
   --display "$DISPLAY_VALUE" \
   --generation-file "$TIKPAL_WEB_MODE_X11_HELPER_GENERATION_PATH" \
+  --phase 1 \
   --transaction-timeout-ms 250 \
   > /dev/null 2> "$LOG_FAILURE_FIFO" &
 HELPER_PID=$!

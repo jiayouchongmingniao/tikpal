@@ -755,6 +755,9 @@ audio_output {
       && x11HelperSource.includes('strcmp(argv[1], "monotonic-ns") == 0')
       && x11HelperSource.includes('strcmp(argv[index], "--all")')
       && x11HelperSource.includes('strcmp(argv[index], "--generation-file")')
+      && x11HelperSource.includes('strcmp(argv[index], "--phase")')
+      && x11HelperSource.includes('"OPERATION_DISABLED_PHASE0"')
+      && x11HelperSource.includes('TIKPAL_X11_HELPER_PHASE')
       && x11HelperSource.includes('"REQUEST_ID_CONFLICT"')
       && x11HelperSource.includes("WINDOW_PID_REUSED")
       && x11HelperSource.includes("WINDOW_UID_MISMATCH")
@@ -850,6 +853,7 @@ audio_output {
 
   const kioskEnv = await readFile(path.join(ROOT, "deploy/chromium/env.kiosk.example"), "utf8");
   assert(kioskEnv.includes("TIKPAL_KIOSK_REMOTE_DEBUG=0"), "kiosk env should default remote debugging off");
+  assert(kioskEnv.includes("TIKPAL_X11_HELPER_PHASE=0"), "kiosk env should default the native Helper to Phase 0 read-only");
   assert(kioskEnv.includes("TIKPAL_KIOSK_VIEWER=none"), "kiosk env should default noVNC viewer off");
   assert(kioskEnv.includes("TIKPAL_KIOSK_DISPLAY_MODE=auto"), "kiosk env should document automatic physical/virtual display selection");
   assert(kioskEnv.includes("TIKPAL_KIOSK_X_COMMAND_TIMEOUT_SECONDS=5"), "kiosk env should document bounded xset/xrandr commands");

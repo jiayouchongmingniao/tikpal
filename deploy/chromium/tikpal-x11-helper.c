@@ -175,6 +175,7 @@ typedef struct {
   uint64_t reconnects;
   CachedRequest request_cache[REQUEST_CACHE_SIZE];
   size_t next_cache_slot;
+  int phase;
   int transaction_timeout_ms;
 } HelperState;
 
@@ -969,15 +970,17 @@ static json_object *health_response(const HelperState *state, const char *reques
   json_object *operations = json_object_new_array();
   json_object_array_add(operations, json_object_new_string("health"));
   json_object_array_add(operations, json_object_new_string("inspect"));
-  json_object_array_add(operations, json_object_new_string("switch"));
-  json_object_array_add(operations, json_object_new_string("revoke"));
+  if (state->phase == 1) {
+    json_object_array_add(operations, json_object_new_string("switch"));
+    json_object_array_add(operations, json_object_new_string("revoke"));
+  }
   json_object_object_add(response, "ok", json_object_new_boolean(state->connection != NULL));
   json_object_object_add(response, "code",
                          json_object_new_string(state->connection ? "OK" : "XCB_DISCONNECTED"));
-  json_object_object_add(response, "phase", json_object_new_int(1));
-  json_object_object_add(response, "readOnly", json_object_new_boolean(false));
+  json_object_object_add(response, "phase", json_object_new_int(state->phase));
+  json_object_object_add(response, "readOnly", json_object_new_boolean(state->phase == 0));
   json_object_object_add(response, "mutationsAllowed",
-                         json_object_new_boolean(state->connection != NULL &&
+                         json_object_new_boolean(state->phase == 1 && state->connection != NULL &&
                                                  state->generation_state == GENERATION_OK));
   json_object_object_add(response, "generationFloor", json_object_new_int64((int64_t)state->generation_floor));
   json_object_object_add(response, "generationState",
@@ -2100,13 +2103,19 @@ static json_object *process_request(HelperState *state, const char *packet, size
     load_generation_floor(state);
     response = inspect_response(state, request, request_id, received_ns);
   } else if (strcmp(operation, "switch") == 0) {
-    if (!state->connection) {
-      (void)connect_xcb(state, true,
-                        received_ns + (int64_t)state->transaction_timeout_ms * 1000000LL);
+    if (state->phase == 0) {
+      response = error_response(state, request_id, operation, "OPERATION_DISABLED_PHASE0");
+    } else {
+      if (!state->connection) {
+        (void)connect_xcb(state, true,
+                          received_ns + (int64_t)state->transaction_timeout_ms * 1000000LL);
+      }
+      response = switch_response(state, request, request_id, received_ns);
     }
-    response = switch_response(state, request, request_id, received_ns);
   } else if (strcmp(operation, "revoke") == 0) {
-    response = revoke_response(state, request, request_id);
+    response = state->phase == 0
+      ? error_response(state, request_id, operation, "OPERATION_DISABLED_PHASE0")
+      : revoke_response(state, request, request_id);
   } else {
     response = error_response(state, request_id, operation, "OPERATION_NOT_IMPLEMENTED");
   }
@@ -2443,6 +2452,18 @@ static int positive_env_ms(const char *name, int fallback) {
   parsed = strtol(value, &end, 10);
   if (errno != 0 || end == value || *end != '\0' || parsed <= 0 || parsed >= 10000) return fallback;
   return (int)parsed;
+}
+
+static bool parse_phase(const char *value, int *phase) {
+  if (strcmp(value, "0") == 0) {
+    *phase = 0;
+    return true;
+  }
+  if (strcmp(value, "1") == 0) {
+    *phase = 1;
+    return true;
+  }
+  return false;
 }
 
 static int run_owner_allows(int argc, char **argv) {
@@ -2982,14 +3003,28 @@ static int protocol_self_test(void) {
   HelperState state = {0};
   const char request[] = "{\"version\":1,\"requestId\":\"same\",\"operation\":\"health\"}";
   const char conflict[] = "{\"version\":1,\"requestId\":\"same\",\"operation\":\"inspect\",\"surfaces\":[]}";
-  const char mutation[] = "{\"version\":1,\"requestId\":\"mutation\",\"operation\":\"switch\"}";
+  const char phase0_switch[] = "{\"version\":1,\"requestId\":\"phase0-switch\",\"operation\":\"switch\"}";
+  const char phase0_revoke[] = "{\"version\":1,\"requestId\":\"phase0-revoke\",\"operation\":\"revoke\"}";
+  const char phase1_switch[] = "{\"version\":1,\"requestId\":\"phase1-switch\",\"operation\":\"switch\"}";
   json_object *first;
   json_object *second;
   json_object *value = NULL;
+  json_object *operations = NULL;
   char first_encoded[MAX_PACKET_BYTES + 1];
   snprintf(state.daemon_instance_id, sizeof(state.daemon_instance_id), "self-test");
   first = process_request(&state, request, sizeof(request) - 1, monotonic_ns());
-  if (!first) return self_test_failure("health fixture");
+  if (!first || !json_object_object_get_ex(first, "phase", &value) ||
+      json_object_get_int(value) != 0 ||
+      !json_object_object_get_ex(first, "readOnly", &value) || !json_object_get_boolean(value) ||
+      !json_object_object_get_ex(first, "mutationsAllowed", &value) || json_object_get_boolean(value) ||
+      !json_object_object_get_ex(first, "supportedOperations", &operations) ||
+      !json_object_is_type(operations, json_type_array) ||
+      json_object_array_length(operations) != 2 ||
+      strcmp(json_object_get_string(json_object_array_get_idx(operations, 0)), "health") != 0 ||
+      strcmp(json_object_get_string(json_object_array_get_idx(operations, 1)), "inspect") != 0) {
+    if (first) json_object_put(first);
+    return self_test_failure("Phase 0 health response");
+  }
   snprintf(first_encoded, sizeof(first_encoded), "%s",
            json_object_to_json_string_ext(first, JSON_C_TO_STRING_PLAIN));
   json_object_put(first);
@@ -3007,11 +3042,26 @@ static int protocol_self_test(void) {
     return self_test_failure("requestId conflict");
   }
   json_object_put(second);
-  second = process_request(&state, mutation, sizeof(mutation) - 1, monotonic_ns());
+  second = process_request(&state, phase0_switch, sizeof(phase0_switch) - 1, monotonic_ns());
+  if (!second || !json_object_object_get_ex(second, "errorCode", &value) ||
+      strcmp(json_object_get_string(value), "OPERATION_DISABLED_PHASE0") != 0) {
+    if (second) json_object_put(second);
+    return self_test_failure("Phase 0 switch rejection");
+  }
+  json_object_put(second);
+  second = process_request(&state, phase0_revoke, sizeof(phase0_revoke) - 1, monotonic_ns());
+  if (!second || !json_object_object_get_ex(second, "errorCode", &value) ||
+      strcmp(json_object_get_string(value), "OPERATION_DISABLED_PHASE0") != 0) {
+    if (second) json_object_put(second);
+    return self_test_failure("Phase 0 revoke rejection");
+  }
+  json_object_put(second);
+  state.phase = 1;
+  second = process_request(&state, phase1_switch, sizeof(phase1_switch) - 1, monotonic_ns());
   if (!second || !json_object_object_get_ex(second, "errorCode", &value) ||
       strcmp(json_object_get_string(value), "INVALID_SWITCH_REQUEST") != 0) {
     if (second) json_object_put(second);
-    return self_test_failure("invalid switch rejection");
+    return self_test_failure("Phase 1 switch validation");
   }
   json_object_put(second);
   return 0;
@@ -4236,7 +4286,7 @@ static int run_self_test(int argc, char **argv) {
 static void usage(FILE *output) {
   fprintf(output,
           "Usage:\n"
-          "  tikpal-x11-helper daemon [--socket PATH] [--display DISPLAY] [--generation-file PATH] [--transaction-timeout-ms N]\n"
+          "  tikpal-x11-helper daemon [--socket PATH] [--display DISPLAY] [--generation-file PATH] [--phase 0|1] [--transaction-timeout-ms N]\n"
           "  tikpal-x11-helper client health [--socket PATH] [--request-id ID]\n"
           "  tikpal-x11-helper client inspect --request-id ID [--generation N] --surface ROLE XID PROFILE [...]\n"
           "  tikpal-x11-helper client switch --request-id ID --daemon-instance-id ID --connection-epoch N --generation N --lease-id ID --surface ROLE XID PROFILE X Y WIDTH HEIGHT OPACITY|keep [...]\n"
@@ -4284,11 +4334,21 @@ int main(int argc, char **argv) {
   const char *socket_path = DEFAULT_SOCKET_PATH;
   const char *display = getenv("DISPLAY");
   const char *generation_path = DEFAULT_GENERATION_PATH;
+  const char *phase_environment = getenv("TIKPAL_X11_HELPER_PHASE");
+  state.phase = 0;
   state.transaction_timeout_ms = DEFAULT_TRANSACTION_TIMEOUT_MS;
+  if (phase_environment && phase_environment[0] &&
+      !parse_phase(phase_environment, &state.phase)) {
+    usage(stderr);
+    return 64;
+  }
   for (int index = 2; index < argc; index++) {
     if (strcmp(argv[index], "--socket") == 0 && index + 1 < argc) socket_path = argv[++index];
     else if (strcmp(argv[index], "--display") == 0 && index + 1 < argc) display = argv[++index];
     else if (strcmp(argv[index], "--generation-file") == 0 && index + 1 < argc) generation_path = argv[++index];
+    else if (strcmp(argv[index], "--phase") == 0 && index + 1 < argc &&
+             parse_phase(argv[++index], &state.phase)) {
+    }
     else if (strcmp(argv[index], "--transaction-timeout-ms") == 0 && index + 1 < argc) state.transaction_timeout_ms = atoi(argv[++index]);
     else {
       usage(stderr);

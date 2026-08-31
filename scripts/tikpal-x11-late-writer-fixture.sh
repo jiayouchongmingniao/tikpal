@@ -171,7 +171,7 @@ mkfifo "$BARRIER_FIFO"
 
 DISPLAY="$DISPLAY_VALUE" "$HELPER" daemon \
   --socket "$SOCKET_PATH" --display "$DISPLAY_VALUE" \
-  --generation-file "$GENERATION_PATH" --transaction-timeout-ms 250 \
+  --generation-file "$GENERATION_PATH" --phase 1 --transaction-timeout-ms 250 \
   >"$FIXTURE_DIR/helper.log" 2>&1 &
 HELPER_PID=$!
 for _ in {1..200}; do
