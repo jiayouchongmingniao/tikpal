@@ -987,6 +987,8 @@ audio_output {
       && physicalExploreAcceptanceScript.includes("rounds.csv")
       && physicalExploreAcceptanceScript.includes("summary.json")
       && physicalExploreAcceptanceScript.includes("report.md")
+      && physicalExploreAcceptanceScript.includes("timeout 8s ffmpeg")
+      && physicalExploreAcceptanceScript.includes("curl ffmpeg flock node sha256sum timeout xdotool")
       && physicalExploreAcceptanceScript.includes("switch_mode_is_strict()")
       && physicalExploreAcceptanceScript.includes('result="stable-over-5s"')
       && physicalExploreAcceptanceScript.includes('error_code="stable_over_5s"')

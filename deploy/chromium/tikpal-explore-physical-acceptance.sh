@@ -364,7 +364,7 @@ declare -A switch_provider_windows=()
 
 require_commands() {
   local command
-  for command in curl ffmpeg flock node sha256sum xdotool; do
+  for command in curl ffmpeg flock node sha256sum timeout xdotool; do
     command -v "$command" >/dev/null 2>&1 || fail "missing required command: $command"
   done
   [[ -r "$XAUTHORITY" ]] || fail "missing Xauthority: $XAUTHORITY"
@@ -688,7 +688,7 @@ switch_geometry_complete() {
 
 capture_frame() {
   local path="$1"
-  ffmpeg -hide_banner -loglevel error -y \
+  timeout 8s ffmpeg -hide_banner -loglevel error -y \
     -f x11grab -video_size 2560x720 -i "$DISPLAY.0+0,0" \
     -frames:v 1 "$path"
   printf '%s\t%s\n' "$(sha256sum "$path" | awk '{print $1}')" "$path" >> "$frames_path"
