@@ -31,6 +31,7 @@ const requiredFiles = [
   "deploy/chromium/tikpal-web-mode.sh",
   "deploy/chromium/tikpal-web-mode-guard.mjs",
   "deploy/chromium/tikpal-web-mode-qq-confirm.mjs",
+  "scripts/tikpal-initial-entry-fixture.sh",
   "deploy/chromium/web-mode-extension/manifest.json",
   "deploy/chromium/web-mode-extension/background.js",
   "deploy/chromium/web-mode-extension/content.js",
@@ -42,6 +43,7 @@ const requiredFiles = [
   "deploy/turzx/README.md",
   "deploy/udev/70-tikpal-usb-audio-display-power.rules",
   "src/i18n.tsx",
+  "src/exploreOpenVeil.ts",
   "deploy/moode/tikpal-audio-adapt.sh",
   "deploy/moode/tikpal-audio-output-profile.sh",
   "deploy/moode/tikpal-local-library-sync.sh",
@@ -194,6 +196,7 @@ async function run() {
   await assertExecutable("deploy/chromium/tikpal-explore-physical-acceptance.sh");
   await assertExecutable("deploy/chromium/tikpal-explore-switch-acceptance.sh");
   await assertExecutable("deploy/chromium/tikpal-web-mode.sh");
+  await assertExecutable("scripts/tikpal-initial-entry-fixture.sh");
   await assertExecutable("deploy/turzx/install-turzx-evdi-display.sh");
   await assertExecutable("deploy/moode/tikpal-audio-adapt.sh");
   await assertExecutable("deploy/moode/tikpal-audio-output-profile.sh");
@@ -921,6 +924,7 @@ audio_output {
   const kioskSession = await readFile(path.join(ROOT, "deploy/chromium/start-tikpal-kiosk-session.sh"), "utf8");
   const watchdogSource = await readFile(path.join(ROOT, "deploy/chromium/tikpal-kiosk-healthcheck.sh"), "utf8");
   const webModeScript = await readFile(path.join(ROOT, "deploy/chromium/tikpal-web-mode.sh"), "utf8");
+  const initialEntryFixture = await readFile(path.join(ROOT, "scripts/tikpal-initial-entry-fixture.sh"), "utf8");
   assert(
     webModeScript.includes("x11_helper_prepare_switch()")
       && webModeScript.includes("x11_helper_begin_switch()")
@@ -1396,7 +1400,9 @@ close_web_mode_full
     startupResetState.activeProvider === null &&
       startupResetState.closeRequestId === null &&
       startupResetState.openingProvider === null &&
-      startupResetState.openRequestId === null,
+      startupResetState.openRequestId === null &&
+      startupResetState.openStartedAt === null &&
+      startupResetState.openXSessionGeneration === null,
     "startup reset must release a stale Close owner before boot prewarm starts"
   );
   const startupResetStatusSync = spawnSync("bash", ["-s"], {
@@ -1478,8 +1484,18 @@ sync_runtime_provider_pool_process_statuses ""
   const uiCopySource = await readFile(path.join(ROOT, "src/uiCopy.ts"), "utf8");
   const flameSceneSource = await readFile(path.join(ROOT, "src/components/FlameScene.tsx"), "utf8");
   const appSource = await readFile(path.join(ROOT, "src/App.tsx"), "utf8");
+  const exploreOpenVeilSource = await readFile(path.join(ROOT, "src/exploreOpenVeil.ts"), "utf8");
   const playbackTruthSource = await readFile(path.join(ROOT, "src/playbackTruth.ts"), "utf8");
   const stylesSource = await readFile(path.join(ROOT, "src/styles.css"), "utf8");
+  assert(
+    appSource.includes("EXPLORE_OPEN_OVERLAY_MAX_MS = 8_000")
+      && appSource.includes("openRequestId: requestId")
+      && appSource.includes('logExploreOpenVeil("timeout"')
+      && appSource.includes('logExploreOpenVeil("remove_ignored"')
+      && exploreOpenVeilSource.includes("if (this.requestId !== requestId) return false")
+      && exploreOpenVeilSource.includes("if (this.timeout) clearTimeout(this.timeout)"),
+    "Explore entry veil should have a short request-owned timeout that stale callbacks cannot remove"
+  );
   assert(stylesSource.includes("--transport-play-icon") && stylesSource.includes("--transport-play-border"), "Transport play buttons should expose skin-aware icon and border tokens");
   assert(stylesSource.includes(".screen-saver-wake-hint"), "Screen sleep should include a subtle touch-to-wake hint");
   assert(stylesSource.includes(".audio-output-diagnostics-chip"), "Audio Output should style the advanced-info hint as a light chip");
@@ -1887,6 +1903,13 @@ sync_runtime_provider_pool_process_statuses ""
   assert(kioskSession.includes("fcitx5 -d --replace"), "kiosk session should start Fcitx5 before Chromium");
   assert(kioskSession.includes("TIKPAL_KIOSK_RESET_WEB_MODE_ON_START") && kioskSession.includes('"$SCRIPT_DIR/tikpal-web-mode.sh" close-full'), "kiosk session should fully clear stale Explore windows before launching the main kiosk");
   assert(
+    kioskSession.includes("publish_x_session_generation")
+      && kioskSession.includes("kiosk-x-session-generation")
+      && kioskSession.includes('mv -f "$temporary_path" "$TIKPAL_KIOSK_X_SESSION_GENERATION_PATH"')
+      && kioskSession.lastIndexOf("publish_x_session_generation\n") < kioskSession.indexOf("run_x_command xset"),
+    "kiosk session should atomically publish an independent X-session generation before any X command"
+  );
+  assert(
     kioskLauncher.includes("TIKPAL_WEB_MODE_BOOT_PREWARM_ENABLED:=1") &&
       kioskLauncher.includes("TIKPAL_WEB_MODE_BOOT_PREWARM_READY_TIMEOUT_SECONDS:=30") &&
       kioskLauncher.includes("kiosk_profile_has_visible_window()") &&
@@ -2172,6 +2195,13 @@ sync_runtime_provider_pool_process_statuses ""
     "initial Explore should prepare the final-position side panel without creating a provider-switch background"
   );
   assert(openProviderBody.includes('begin_provider_switch_transition "$current_profile" "$provider"'), "provider switches should use begin_provider_switch_transition to fade the current provider");
+  assert(
+    webModeScript.includes('result=legacy_selected reason=helper_mode_$TIKPAL_WEB_MODE_X11_HELPER_MODE')
+      && webModeScript.includes("reason=legacy_reveal_failed")
+      && webModeScript.includes("stage=$stage open_request_id=${TIKPAL_WEB_MODE_OPEN_REQUEST_ID:-legacy}")
+      && webModeScript.includes("x_session_generation=${TIKPAL_WEB_MODE_OPEN_X_SESSION_GENERATION:-legacy}"),
+    "Helper-disabled and legacy reveal paths should emit explicit request-correlated routing and failure reasons"
+  );
   assert(webModeScript.includes("recover_or_cover_provider_failure()") && !webModeScript.match(/recover_or_cover_provider_failure\(\)[\s\S]*?launch_error_veil/), "provider failures should restore the previous provider or close Explore without an error veil");
   assert(webModeScript.includes("TIKPAL_WEB_MODE_PROXY_CONNECT_ERROR:=Proxy did not connect. Try again."), "proxy failures should use a short user-facing retry message");
   assert(webModeScript.includes('panel_url="$panel_url?opening=$opening_provider"'), "initial side panel URL should carry its pending provider");
@@ -2184,10 +2214,19 @@ sync_runtime_provider_pool_process_statuses ""
     "Explore should prepare and park its final-position side panel around the initial audio gate"
   );
   assert(
-    serverSource.includes("prepareWebModeEntry(providerId)") &&
+    serverSource.includes("prepareWebModeEntry(providerId, openRequestId, xSessionGeneration)") &&
       serverSource.includes("Promise.allSettled([") &&
-      serverSource.indexOf("prepareWebModeEntry(providerId)") < serverSource.indexOf('runWebModeCommand("open", providerId'),
+      serverSource.indexOf("prepareWebModeEntry(providerId, openRequestId, xSessionGeneration)", serverSource.indexOf("async function applyWebModeAction")) <
+        serverSource.indexOf('runWebModeCommand("open", providerId', serverSource.indexOf("async function applyWebModeAction")),
     "API should prepare entry surfaces alongside the initial audio release before opening a provider"
+  );
+  assert(
+    serverSource.includes('logWebModeEntryStage("request_accepted"')
+      && serverSource.includes("openStartedAt")
+      && serverSource.includes("openXSessionGeneration")
+      && serverSource.indexOf("openingProvider: providerId", serverSource.indexOf("async function applyWebModeAction")) <
+        serverSource.indexOf("prepareWebModeEntry(providerId, openRequestId, xSessionGeneration)", serverSource.indexOf("async function applyWebModeAction")),
+    "API should persist a correlated opening owner before initial entry preparation"
   );
   assert(openProviderBody.includes('launch_url="$url"') && !openProviderBody.includes('launch_url="$TIKPAL_WEB_MODE_TRANSITION_URL?provider=$provider"'), "extension-enabled providers should start directly on their provider page");
   assert(webModeScript.includes("provider_uses_direct_bootstrap()") && webModeScript.includes("deezer|qq_music|netease_music") && openProviderBody.includes('if [[ "$proxy_enabled" == "1" && -n "$proxy_url" ]]'), "command-line proxy switches should apply to all providers when proxy is enabled");
@@ -2622,6 +2661,39 @@ sync_runtime_provider_pool_process_statuses ""
   assert(webModeScript.includes("prepare_entry_surfaces()") && webModeScript.includes('ensure_side_panel "$provider" 0'), "Explore should prepare the final-position side panel before initial entry");
   assert(webModeScript.includes("TIKPAL_WEB_MODE_ENTRY_PROVIDER_PAINT_TIMEOUT_SECONDS") && webModeScript.includes("wait_for_entry_provider_paint"), "Explore initial entry should wait for the selected provider to paint or the short paint gate to expire");
   assert(webModeScript.indexOf('wait_for_entry_provider_paint "$(provider_debug_port "$provider")" "$provider"') < webModeScript.indexOf('reveal_initial_entry_surfaces "$target_window"'), "Explore should wait for initial provider paint before revealing the provider and side panel");
+  assert(
+    webModeScript.includes("initial_entry_surface_plan()")
+      && webModeScript.includes("initial_entry_step_started")
+      && webModeScript.includes("initial_entry_step_completed")
+      && webModeScript.includes("initial_entry_step_failed")
+      && webModeScript.includes("initial_entry_aborted"),
+    "Explore initial entry should emit a request-correlated result for every explicit X11 step"
+  );
+  const initialEntryPlanStart = webModeScript.indexOf("initial_entry_surface_plan() {");
+  const initialEntryPlanEnd = webModeScript.indexOf("\n}\n\nreveal_initial_entry_surfaces()", initialEntryPlanStart);
+  const initialEntryPlanBody = webModeScript.slice(initialEntryPlanStart, initialEntryPlanEnd);
+  const initialEntryPrepareStart = webModeScript.indexOf("initial_entry_prepare_context() {");
+  const initialEntryPrepareEnd = webModeScript.indexOf("\n}\n\ninitial_entry_pre_reveal_step()", initialEntryPrepareStart);
+  const initialEntryPrepareBody = webModeScript.slice(initialEntryPrepareStart, initialEntryPrepareEnd);
+  assert(
+    initialEntryPrepareBody.includes("initial_entry_trace_require_writable")
+      && initialEntryPlanBody.indexOf("initial_entry_prepare_context") < initialEntryPlanBody.indexOf("initial_entry_require_step 2")
+      && initialEntryPlanBody.indexOf("initial_entry_verify_final_surfaces") < initialEntryPlanBody.indexOf("write_physical_reveal_stamp"),
+    "Explore initial entry should fail trace preflight before X11 mutation and stamp only after final surface verification"
+  );
+  assert(
+    initialEntryFixture.includes("Xvfb")
+      && initialEntryFixture.includes("destroy_after_validation")
+      && initialEntryFixture.includes("trace_loss")
+      && initialEntryFixture.includes("target_move_fail")
+      && initialEntryFixture.includes("target_resize_fail")
+      && initialEntryFixture.includes("final_geometry_mismatch")
+      && initialEntryFixture.includes("run_pool_pre_reveal")
+      && initialEntryFixture.includes("proxy_settings_fail")
+      && initialEntryFixture.includes("guard_stop_fail")
+      && initialEntryFixture.includes("pre_reveal_trace_loss"),
+    "the initial-entry fixture should inject real X11 destruction, pre-reveal proxy and Guard failures, final mismatch, and trace-loss cleanup"
+  );
   assert(webModeScript.includes('if ! wait_for_real_provider_url "$provider_port"; then'), "every foreground provider launch should confirm a real HTTPS page before it can reveal");
   assert(!webModeScript.includes("TIKPAL_WEB_MODE_EXIT_"), "Explore close should not create a separate room-return veil");
   assert(webModeScript.includes("close_legacy_exit_stage") && !webModeScript.includes("ensure_exit_room_veil"), "Explore close should remove any legacy exit-stage window without creating one");
@@ -3157,8 +3229,9 @@ sync_runtime_provider_pool_process_statuses ""
       ensureProviderGuardBody.includes('start_provider_guard "$provider"'),
     "Explore provider guard lifecycle should reuse an exact canonical process and remove all exact orphan instances before restart"
   );
-  const webModeOpenCommandIndex = serverSource.indexOf('await runWebModeCommand("open", providerId, { TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS: "25" })');
-  const webModeActiveCommitIndex = serverSource.indexOf('await writeWebModeRuntimeState({ activeProvider: providerId, openingProvider: null, openRequestId: null, lastProvider: providerId, lastError: null, closeRequestId: null });', webModeOpenCommandIndex);
+  const applyWebModeActionIndex = serverSource.indexOf("async function applyWebModeAction");
+  const webModeOpenCommandIndex = serverSource.indexOf('await runWebModeCommand("open", providerId, webModeOpenCommandEnv', applyWebModeActionIndex);
+  const webModeActiveCommitIndex = serverSource.indexOf("commitWebModeOpenRequestIfOwned(providerId, openRequestId, xSessionGeneration)", webModeOpenCommandIndex);
   assert(
     webModeOpenCommandIndex >= 0 &&
       !serverSource.slice(webModeOpenCommandIndex - 320, webModeOpenCommandIndex).includes("activeProvider: providerId") &&
@@ -3166,13 +3239,17 @@ sync_runtime_provider_pool_process_statuses ""
     "Explore entry should keep the provider inactive until the launcher has completed its initial reveal"
   );
   assert(
-    serverSource.includes('previousRuntimeState.activeProvider ?? previousRuntimeState.lastProvider ?? "qq_music"')
+      serverSource.includes('previousRuntimeState.activeProvider ?? previousRuntimeState.lastProvider ?? "qq_music"')
       && serverSource.includes("lastProvider: runtimeState.lastProvider ?? activeProvider ?? null")
-      && appSource.includes('sendWebModeAction({ type: "open" })')
+      && appSource.includes('sendWebModeAction({ type: "open", openRequestId: requestId })')
       && webModeScript.includes("if (state.activeProvider) state.lastProvider = state.activeProvider;"),
     "Ambient and Hi-Fi Explore reopen should retain the last successful provider after activeProvider clears on close"
   );
-  assert(serverSource.includes('runWebModeCommand("open", providerId, { TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS: "25" })'), "Explore open should wait for an in-flight close transaction to release the web-mode lock");
+  assert(
+    serverSource.includes('runWebModeCommand("open", providerId, webModeOpenCommandEnv')
+      && serverSource.includes('TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS: "25"'),
+    "Explore open should retain its correlated generation while waiting for an in-flight close transaction to release the web-mode lock"
+  );
   assert(
     residentHotRevealIndex >= 0 &&
       poolTransitionIndexes[0] < residentHotRevealIndex,
@@ -3343,9 +3420,20 @@ sync_runtime_provider_pool_process_statuses ""
   assert(
     watchdogSource.includes("TIKPAL_WEB_MODE_STATE_PATH")
       && watchdogSource.includes("activeProvider")
+      && watchdogSource.includes("openingProvider")
+      && watchdogSource.includes("openRequestId")
+      && watchdogSource.includes("openXSessionGeneration")
       && watchdogSource.includes("closeRequestId")
       && !watchdogSource.includes('pgrep -af -- "--user-data-dir=$root/providers/"'),
-    "watchdog should bypass heartbeats only for an active or closing Explore transaction, not the resident warm pool"
+    "watchdog should bypass heartbeats only for a correlated opening, active, or closing Explore transaction, not the resident warm pool"
+  );
+  assert(
+    watchdogSource.includes("heartbeat decision=$decision")
+      && watchdogSource.includes("scene_ready_state=$ready_state")
+      && watchdogSource.includes("scene_current_time=$current_time")
+      && watchdogSource.includes("scene_stalled=$stalled")
+      && watchdogSource.includes("scene_not_ready=$not_ready"),
+    "watchdog should journal its correlated Explore bypass or restart decision with complete scene-video diagnostics"
   );
 
   const heartbeatSmokeDir = mkdtempSync(path.join(tmpdir(), "tikpal-heartbeat-smoke-"));
@@ -3355,8 +3443,12 @@ sync_runtime_provider_pool_process_statuses ""
     `
       const fs = require("node:fs");
       const http = require("node:http");
-      const server = http.createServer((_request, response) => {
+      const server = http.createServer((request, response) => {
         response.writeHead(200, { "content-type": "application/json" });
+        if (request.url === "/invalid") {
+          response.end("{");
+          return;
+        }
         response.end(JSON.stringify({
           ok: true,
           healthy: false,
@@ -3404,6 +3496,26 @@ sync_runtime_provider_pool_process_statuses ""
     assert(watchdogDryRun.status === 0, `watchdog dry-run unhealthy page smoke failed:\n${watchdogDryRun.stdout}\n${watchdogDryRun.stderr}`);
     assert(watchdogDryRun.stdout.includes("page-unhealthy:pending-stuck:source:mpd"), "watchdog dry-run should include the page-unhealthy reason");
     assert(watchdogDryRun.stdout.includes("dry-run restart suppressed"), "watchdog dry-run should suppress the real service restart");
+
+    const invalidHeartbeatDryRun = spawnSync("bash", ["deploy/chromium/tikpal-kiosk-healthcheck.sh"], {
+      cwd: ROOT,
+      env: {
+        ...process.env,
+        TIKPAL_KIOSK_WATCHDOG_STATE_DIR: mkdtempSync(path.join(tmpdir(), "tikpal-kiosk-watchdog-invalid-heartbeat-")),
+        TIKPAL_KIOSK_WATCHDOG_DRY_RUN: "1",
+        TIKPAL_KIOSK_WATCHDOG_X_DISPLAY_SCAN: "0",
+        TIKPAL_KIOSK_WATCHDOG_CHROMIUM_PROCESS_SCAN: "0",
+        TIKPAL_KIOSK_WATCHDOG_WEB_URL_SCAN: "0",
+        TIKPAL_KIOSK_WATCHDOG_API_URL_SCAN: "0",
+        TIKPAL_KIOSK_WATCHDOG_GPU_LOG_SCAN: "0",
+        TIKPAL_WEB_MODE_STATE_PATH: path.join(mkdtempSync(path.join(tmpdir(), "tikpal-kiosk-watchdog-invalid-state-")), "web-mode-state.json"),
+        TIKPAL_KIOSK_WATCHDOG_PAGE_HEARTBEAT_URL: `http://127.0.0.1:${heartbeatSmokePort}/invalid`
+      },
+      encoding: "utf8"
+    });
+    assert(invalidHeartbeatDryRun.status === 0, `watchdog invalid heartbeat smoke failed:\n${invalidHeartbeatDryRun.stdout}\n${invalidHeartbeatDryRun.stderr}`);
+    assert(/heartbeat decision=restart reason=heartbeat-invalid-json/.test(invalidHeartbeatDryRun.stdout), "watchdog should classify malformed heartbeat JSON as unhealthy");
+    assert(/dry-run restart suppressed/.test(invalidHeartbeatDryRun.stdout), "watchdog should keep malformed-heartbeat recovery in dry-run mode");
 
     const webModeProfileRoot = mkdtempSync(path.join(tmpdir(), "tikpal-web-mode-profile-"));
     const fakeProvider = spawn(process.execPath, [

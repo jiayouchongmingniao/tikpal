@@ -833,6 +833,9 @@ LOCK_RUNNER_SCRIPT
 
   # Shell owns the lock first, publishes Helper ownership, commits the new
   # registry, revokes, and restores Shell ownership before Guard can proceed.
+  # A long-lived Guard that inherits the previous generation must refresh its
+  # token without mutating once, then use the committed registry on its next
+  # tick.
   : > "$GUARD_WRITE_LOG"
   printf '101\n202\n303\n' > "$GUARD_REGISTRY_FILE"
   exec {held_lock_fd}>"$LOCK_PATH"
@@ -845,13 +848,22 @@ LOCK_RUNNER_SCRIPT
     101 "$FIXTURE_DIR/previous-profile" \
     808 "$FIXTURE_DIR/panel-profile" ||
     fail_fixture "Shell-first Helper transaction failed"
-  guard_maintain_windows "$FIXTURE_DIR/target-profile" "$FIXTURE_DIR/panel-profile" 1 0 &
+  (
+    guard_maintain_windows "$FIXTURE_DIR/target-profile" "$FIXTURE_DIR/panel-profile" 1 0
+    guard_maintain_windows "$FIXTURE_DIR/target-profile" "$FIXTURE_DIR/panel-profile" 1 0
+  ) &
   blocked_guard_pid=$!
   sleep 0.1
   kill -0 "$blocked_guard_pid" >/dev/null 2>&1 ||
     fail_fixture "Guard did not block behind the Shell lock"
   printf 'runtime\n' >> "$GUARD_WRITE_LOG"
   printf '707\n808\n909\n' > "$GUARD_REGISTRY_FILE"
+  {
+    printf 'generation\t%s\t0\n' "$TIKPAL_X11_HELPER_GENERATION"
+    printf 'provider\t%s\t707\n' "$FIXTURE_DIR/target-profile"
+    printf 'panel\t%s\t808\n' "$FIXTURE_DIR/panel-profile"
+    printf 'kiosk\t%s\t909\n' "$TIKPAL_CHROMIUM_PROFILE_DIR"
+  } > "$(guard_window_list_file)"
   printf 'registry\n' >> "$GUARD_WRITE_LOG"
   x11_helper_finish_success || fail_fixture "Shell-first Helper revoke failed"
   cleanup_generation="$TIKPAL_X11_HELPER_GENERATION"
@@ -900,11 +912,20 @@ LOCK_RUNNER_SCRIPT
   TIKPAL_X11_HELPER_GENERATION="$cleanup_generation"
   x11_helper_publish_owner shell "$cleanup_generation" ||
     fail_fixture "manual recovery Shell owner publish failed"
+  {
+    printf 'generation\t%s\t0\n' "$cleanup_generation"
+    printf 'provider\t%s\t101\n' "$FIXTURE_DIR/target-profile"
+    printf 'panel\t%s\t202\n' "$FIXTURE_DIR/panel-profile"
+    printf 'kiosk\t%s\t303\n' "$TIKPAL_CHROMIUM_PROFILE_DIR"
+  } > "$(guard_window_list_file)"
   flock -u "$held_lock_fd"
   exec {held_lock_fd}>&-
   : > "$GUARD_WRITE_LOG"
   TIKPAL_GUARD_RECOVERY_REQUIRED=true
-  guard_maintain_windows "$FIXTURE_DIR/target-profile" "$FIXTURE_DIR/panel-profile" 1 0
+  (
+    guard_maintain_windows "$FIXTURE_DIR/target-profile" "$FIXTURE_DIR/panel-profile" 1 0
+    guard_maintain_windows "$FIXTURE_DIR/target-profile" "$FIXTURE_DIR/panel-profile" 1 0
+  )
   [[ "$(tail -3 "$GUARD_WRITE_LOG" | tr '\n' ' ')" == "enumerate recover registry " ]] ||
     fail_fixture "manual revoke/new-epoch recovery did not restore full recovery"
   GUARD_FAST_RESULT=0

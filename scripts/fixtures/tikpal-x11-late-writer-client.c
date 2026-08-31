@@ -224,6 +224,67 @@ static int run_geometry(int argc, char **argv) {
   return status;
 }
 
+static int run_map_state(int argc, char **argv) {
+  if (argc != 3) return 64;
+  uint32_t window = 0;
+  if (!parse_u32(argv[2], &window)) return 64;
+  xcb_screen_t *screen = NULL;
+  xcb_connection_t *connection = connect_display(getenv("DISPLAY"), &screen);
+  (void)screen;
+  if (!connection) return 1;
+  xcb_generic_error_t *error = NULL;
+  xcb_get_window_attributes_reply_t *attributes =
+    xcb_get_window_attributes_reply(connection, xcb_get_window_attributes(connection, window), &error);
+  int status = 1;
+  if (attributes && !error) {
+    switch (attributes->map_state) {
+      case XCB_MAP_STATE_VIEWABLE: puts("viewable"); break;
+      case XCB_MAP_STATE_UNVIEWABLE: puts("unviewable"); break;
+      default: puts("unmapped"); break;
+    }
+    status = 0;
+  }
+  free(attributes);
+  free(error);
+  xcb_disconnect(connection);
+  return status;
+}
+
+static int run_cardinal_property(int argc, char **argv, const char *atom_name,
+                                 const char *missing_value) {
+  if (argc != 3) return 64;
+  uint32_t window = 0;
+  if (!parse_u32(argv[2], &window)) return 64;
+  xcb_screen_t *screen = NULL;
+  xcb_connection_t *connection = connect_display(getenv("DISPLAY"), &screen);
+  (void)screen;
+  if (!connection) return 1;
+  xcb_atom_t atom = intern_atom(connection, atom_name);
+  if (atom == XCB_ATOM_NONE) {
+    xcb_disconnect(connection);
+    return 1;
+  }
+  xcb_generic_error_t *error = NULL;
+  xcb_get_property_reply_t *property = xcb_get_property_reply(
+    connection,
+    xcb_get_property(connection, 0, window, atom, XCB_ATOM_CARDINAL, 0, 1),
+    &error);
+  int status = 1;
+  if (property && !error) {
+    if (xcb_get_property_value_length(property) >= (int)sizeof(uint32_t)) {
+      const uint32_t *value = xcb_get_property_value(property);
+      printf("%u\n", *value);
+    } else {
+      puts(missing_value);
+    }
+    status = 0;
+  }
+  free(property);
+  free(error);
+  xcb_disconnect(connection);
+  return status;
+}
+
 static int run_window(int argc, char **argv) {
   const char *display = NULL;
   const char *action = NULL;
@@ -337,6 +398,11 @@ int main(int argc, char **argv) {
   if (strcmp(argv[1], "surface") == 0) return run_surface(argc, argv);
   if (strcmp(argv[1], "mutate") == 0) return run_mutate(argc, argv);
   if (strcmp(argv[1], "geometry") == 0) return run_geometry(argc, argv);
+  if (strcmp(argv[1], "map-state") == 0) return run_map_state(argc, argv);
+  if (strcmp(argv[1], "opacity") == 0)
+    return run_cardinal_property(argc, argv, "_NET_WM_WINDOW_OPACITY", "unset");
+  if (strcmp(argv[1], "pid") == 0)
+    return run_cardinal_property(argc, argv, "_NET_WM_PID", "missing");
   if (strcmp(argv[1], "window") == 0) return run_window(argc, argv);
   if (strcmp(argv[1], "stack") == 0) return run_stack(argc, argv);
   return 64;

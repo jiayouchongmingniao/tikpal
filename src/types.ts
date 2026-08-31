@@ -112,6 +112,9 @@ export interface WebModeState {
   enabled: boolean;
   activeProvider: WebModeProviderId | null;
   openingProvider: WebModeProviderId | null;
+  openRequestId: string | null;
+  openStartedAt: string | null;
+  openXSessionGeneration: string | null;
   lastProvider: WebModeProviderId | null;
   providers: WebModeProviderSummary[];
   residentProviders: Partial<Record<WebModeProviderId, WebModeResidentProviderState>>;
@@ -126,6 +129,7 @@ export interface WebModeState {
 export interface WebModeActionRequest {
   type: "open" | "close" | "keyboard" | "proxy" | "provider_text_scale";
   provider?: WebModeProviderId;
+  openRequestId?: string;
   enabled?: boolean;
   force?: boolean;
   keepAlive?: boolean;

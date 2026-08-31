@@ -1,6 +1,6 @@
 # Explore X11 Mutation Writer Audit
 
-Status: local static audit, pre-fix Xvfb reproduction, and post-fix stale-writer rejection. This document does not authorize a 115 deployment or canary.
+Status: local static audit, pre-fix Xvfb reproduction, and post-fix stale-writer rejection. The later disabled-Helper initial-entry diagnostic and one-request field acceptance are recorded separately in [Explore initial-entry Phase 1 v1](explore-initial-entry-phase1-v1.md); this document does not authorize Helper enablement or a multi-provider canary.
 
 ## Mutation transport inventory
 

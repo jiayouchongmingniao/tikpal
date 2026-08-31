@@ -64,6 +64,7 @@ This directory is the source of truth for Tikpal product, UX, visual, architectu
 | --- | --- | --- |
 | [Raspberry Pi kiosk deploy v1](06-deployment/raspberry-pi-kiosk-deploy-v1.md) | Current reference | Pi sync, systemd install, Chromium kiosk launch, verification, and rollback. |
 | [Gentoo kiosk deploy v1](06-deployment/gentoo-kiosk-deploy-v1.md) | Current reference | Gentoo systemd migration, physical display, Portage audio/kiosk setup, Explore provider validation, and rollback. |
+| [Explore initial-entry Phase 1 v1](06-deployment/explore-initial-entry-phase1-v1.md) | Acceptance baseline | Disabled-Helper initial reveal trace contract, Xvfb failures, and one-request field acceptance boundary. |
 
 ### Marketing
 

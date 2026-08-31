@@ -37,10 +37,15 @@
 #define DEFAULT_TRANSACTION_TIMEOUT_MS 250
 #define DEFAULT_CONNECT_TIMEOUT_MS 50
 #define DEFAULT_RESPONSE_TIMEOUT_MS 300
+#define MIN_INSPECT_TRANSACTION_TIMEOUT_MS 500
 #ifdef TIKPAL_X11_HELPER_SELF_TEST_SEAMS
-#define SELF_TEST_TRANSACTION_TIMEOUT_MS 300
+#define SELF_TEST_TRANSACTION_TIMEOUT_MS 1000
+#define SELF_TEST_LEASE_DURATION_MS 1250
+#define MAX_LEASE_DURATION_MS 1250
 #else
 #define SELF_TEST_TRANSACTION_TIMEOUT_MS DEFAULT_TRANSACTION_TIMEOUT_MS
+#define SELF_TEST_LEASE_DURATION_MS 350
+#define MAX_LEASE_DURATION_MS 350
 #endif
 #define MAX_PACKET_BYTES 16384
 #define MAX_SURFACES 8
@@ -270,6 +275,14 @@ static int remaining_timeout_ms(int64_t deadline_ns) {
   remaining = deadline_ns - now;
   remaining = (remaining + 999999LL) / 1000000LL;
   return remaining > INT_MAX ? INT_MAX : (int)remaining;
+}
+
+static int64_t inspect_deadline_ns(const HelperState *state, int64_t received_ns) {
+  int timeout_ms = state->transaction_timeout_ms;
+  if (timeout_ms < MIN_INSPECT_TRANSACTION_TIMEOUT_MS) {
+    timeout_ms = MIN_INSPECT_TRANSACTION_TIMEOUT_MS;
+  }
+  return received_ns + (int64_t)timeout_ms * 1000000LL;
 }
 
 static const char *generation_state_name(GenerationState state) {
@@ -1577,7 +1590,8 @@ static json_object *switch_response(HelperState *state, json_object *request,
       return error_response(state, request_id, "switch", "INVALID_LEASE_DURATION");
     }
     lease_duration_ms = json_object_get_int64(lease_duration_value);
-    if (lease_duration_ms <= state->transaction_timeout_ms || lease_duration_ms > 350) {
+    if (lease_duration_ms <= state->transaction_timeout_ms ||
+        lease_duration_ms > MAX_LEASE_DURATION_MS) {
       state->switch_failures++;
       return error_response(state, request_id, "switch", "INVALID_LEASE_DURATION");
     }
@@ -1851,7 +1865,7 @@ static json_object *inspect_response(HelperState *state, json_object *request,
   AsyncError async_error = {0};
   size_t surface_count;
   size_t pending_count = 0;
-  int64_t deadline_ns = received_ns + (int64_t)state->transaction_timeout_ms * 1000000LL;
+  int64_t deadline_ns = inspect_deadline_ns(state, received_ns);
   int64_t queue_started_ns = monotonic_ns();
   int64_t queue_completed_ns;
   int64_t replies_completed_ns;
@@ -3198,7 +3212,8 @@ static json_object *x11_self_test_switch_request(const HelperState *state,
                          json_object_new_int64((int64_t)state->connection_epoch));
   json_object_object_add(request, "generation", json_object_new_int64((int64_t)generation));
   json_object_object_add(request, "leaseId", json_object_new_string(lease_id));
-  json_object_object_add(request, "leaseDurationMs", json_object_new_int64(350));
+  json_object_object_add(request, "leaseDurationMs",
+                         json_object_new_int64(SELF_TEST_LEASE_DURATION_MS));
   json_object_array_add(surfaces, x11_self_test_surface("target", target, profile,
                                                        0, 0, 1920, 720, true, UINT32_MAX));
   json_object_array_add(surfaces, x11_self_test_surface("previous", previous, profile,
@@ -3483,7 +3498,8 @@ static int x11_transaction_self_test(const char *display, const char *profile,
                          json_object_new_int64((int64_t)state.connection_epoch));
   json_object_object_add(request, "generation", json_object_new_int64(1));
   json_object_object_add(request, "leaseId", json_object_new_string("x11-basic-lease"));
-  json_object_object_add(request, "leaseDurationMs", json_object_new_int64(350));
+  json_object_object_add(request, "leaseDurationMs",
+                         json_object_new_int64(SELF_TEST_LEASE_DURATION_MS));
   json_object_array_add(surfaces, x11_self_test_surface("target", target, profile,
                                                        0, 0, 1920, 720, true, UINT32_MAX));
   json_object_array_add(surfaces, x11_self_test_surface("previous", previous, profile,
@@ -4022,7 +4038,11 @@ static int x11_transaction_self_test(const char *display, const char *profile,
       goto cleanup;
     }
     if (resume_child == 0) {
-      struct timespec delay = {.tv_sec = 0, .tv_nsec = 450000000L};
+      int delay_ms = SELF_TEST_TRANSACTION_TIMEOUT_MS + 200;
+      struct timespec delay = {
+        .tv_sec = delay_ms / 1000,
+        .tv_nsec = (long)(delay_ms % 1000) * 1000000L
+      };
       while (nanosleep(&delay, &delay) != 0 && errno == EINTR) {}
       _exit(kill(xserver_pid, SIGCONT) == 0 ? 0 : 1);
     }
@@ -4052,7 +4072,8 @@ static int x11_transaction_self_test(const char *display, const char *profile,
         json_object_get_boolean(timeout_started) ||
         !json_object_object_get_ex(response, "leaseReleased", &timeout_released) ||
         !json_object_get_boolean(timeout_released) ||
-        timeout_elapsed_ns < 200000000LL || timeout_elapsed_ns >= 325000000LL ||
+        timeout_elapsed_ns < (int64_t)(SELF_TEST_TRANSACTION_TIMEOUT_MS - 50) * 1000000LL ||
+        timeout_elapsed_ns >= (int64_t)(SELF_TEST_TRANSACTION_TIMEOUT_MS + 150) * 1000000LL ||
         state.connection != NULL || state.connection_epoch != epoch_before_timeout + 1) {
       fprintf(stderr, "self-test X11 timeout response elapsed_ms=%.3f response=%s\n",
               (double)timeout_elapsed_ns / 1000000.0,

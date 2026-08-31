@@ -335,6 +335,7 @@ const WEB_MODE_SETTINGS_PATH = resolve(process.env.TIKPAL_WEB_MODE_SETTINGS_PATH
 const WEB_MODE_STATE_PATH = resolve(process.env.TIKPAL_WEB_MODE_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "web-mode-state.json"));
 const WEB_MODE_HANDOFF_STATE_PATH = resolve(process.env.TIKPAL_WEB_MODE_HANDOFF_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "web-mode-handoff.json"));
 const WEB_MODE_SWITCH_TRACE_CONTEXT_PATH = resolve(process.env.TIKPAL_WEB_MODE_SWITCH_TRACE_CONTEXT_PATH ?? resolve(process.cwd(), ".tikpal", "explore-switch-trace-context.json"));
+const KIOSK_X_SESSION_GENERATION_PATH = resolve(process.env.TIKPAL_KIOSK_X_SESSION_GENERATION_PATH ?? resolve(process.cwd(), ".tikpal", "kiosk-x-session-generation"));
 const MULTIROOM_AUDIO_STATE_PATH = resolve(process.env.TIKPAL_MULTIROOM_AUDIO_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "multiroom-audio.json"));
 const MULTIROOM_HANDOFF_STATE_PATH = resolve(process.env.TIKPAL_MULTIROOM_HANDOFF_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "multiroom-handoff.json"));
 const ROONBRIDGE_HANDOFF_STATE_PATH = resolve(process.env.TIKPAL_ROONBRIDGE_HANDOFF_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "roonbridge-handoff.json"));
@@ -724,6 +725,7 @@ let webModeOpenInFlight = false;
 let webModeCloseInFlight = false;
 let webModeClosePromise = null;
 let webModeResidentOpenPromise = null;
+let webModeRuntimeStateWritePromise = Promise.resolve();
 let sourceSwitchInFlightCount = 0;
 let mpdRecoveryPromise = null;
 let mpcRadioWeakNetworkRecoveryPromise = null;
@@ -958,7 +960,15 @@ function setKioskHeartbeat(payload) {
     receivedAtMs: Date.now(),
     payload: asPlainObject(payload)
   };
-  return buildKioskHeartbeatStatus();
+  const status = buildKioskHeartbeatStatus();
+  console.log(`[tikpal-kiosk-heartbeat] ${JSON.stringify({
+    receivedAtMs: kioskHeartbeat.receivedAtMs,
+    healthy: status.healthy,
+    reasons: status.reasons,
+    ignoredReasons: status.ignoredReasons,
+    payload: kioskHeartbeat.payload
+  })}`);
+  return status;
 }
 
 function buildKioskHeartbeatStatus(now = Date.now()) {
@@ -5286,6 +5296,11 @@ function normalizeWebModeVisibleError(error) {
   return message.replace(/\bneeds Proxy On\b/gi, "needs proxy");
 }
 
+function normalizeWebModeOpenRequestId(value) {
+  const requestId = typeof value === "string" ? value.trim() : "";
+  return /^[A-Za-z0-9._:-]{1,160}$/.test(requestId) ? requestId : null;
+}
+
 function normalizeWebModeRuntimeState(raw = {}) {
   const residentProviders = {};
   const rawResidentProviders = raw.residentProviders && typeof raw.residentProviders === "object"
@@ -5305,11 +5320,21 @@ function normalizeWebModeRuntimeState(raw = {}) {
   }
   const activeProvider = raw.activeProvider ? normalizeWebModeProviderId(raw.activeProvider, null) : null;
   const openingProvider = raw.openingProvider ? normalizeWebModeProviderId(raw.openingProvider, null) : null;
+  const openRequestId = normalizeWebModeOpenRequestId(raw.openRequestId);
+  const hasOpeningRequest = Boolean(openingProvider && openRequestId);
   return {
     activeProvider,
-    openingProvider: openingProvider && openingProvider !== activeProvider ? openingProvider : null,
-    openRequestId: openingProvider && openingProvider !== activeProvider && typeof raw.openRequestId === "string" && raw.openRequestId.trim()
-      ? raw.openRequestId.trim()
+    openingProvider: hasOpeningRequest ? openingProvider : null,
+    openRequestId: hasOpeningRequest ? openRequestId : null,
+    openStartedAt: hasOpeningRequest && typeof raw.openStartedAt === "string" && raw.openStartedAt.trim()
+      ? raw.openStartedAt.trim()
+      : null,
+    openXSessionGeneration: hasOpeningRequest && typeof raw.openXSessionGeneration === "string" && raw.openXSessionGeneration.trim()
+      ? raw.openXSessionGeneration.trim()
+      : null,
+    lastOpenedRequestId: normalizeWebModeOpenRequestId(raw.lastOpenedRequestId),
+    lastOpenedXSessionGeneration: typeof raw.lastOpenedXSessionGeneration === "string" && raw.lastOpenedXSessionGeneration.trim()
+      ? raw.lastOpenedXSessionGeneration.trim()
       : null,
     lastProvider: raw.lastProvider ? normalizeWebModeProviderId(raw.lastProvider, null) : null,
     residentProviders,
@@ -5374,17 +5399,28 @@ async function shouldSuspendMpcRadioBackgroundRecovery() {
 }
 
 async function writeWebModeRuntimeState(patch) {
-  const current = await readWebModeRuntimeState();
-  const next = normalizeWebModeRuntimeState({
-    ...current,
-    ...patch,
-    updatedAt: new Date().toISOString()
+  const result = await updateWebModeRuntimeState(() => patch);
+  return result.state;
+}
+
+async function updateWebModeRuntimeState(updater) {
+  const operation = webModeRuntimeStateWritePromise.then(async () => {
+    const current = await readWebModeRuntimeState();
+    const patch = await updater(current);
+    if (!patch) return { state: current, updated: false };
+    const next = normalizeWebModeRuntimeState({
+      ...current,
+      ...patch,
+      updatedAt: new Date().toISOString()
+    });
+    await mkdir(dirname(WEB_MODE_STATE_PATH), { recursive: true });
+    const temporaryPath = `${WEB_MODE_STATE_PATH}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
+    await writeFile(temporaryPath, `${JSON.stringify(next, null, 2)}\n`);
+    await rename(temporaryPath, WEB_MODE_STATE_PATH);
+    return { state: next, updated: true };
   });
-  await mkdir(dirname(WEB_MODE_STATE_PATH), { recursive: true });
-  const temporaryPath = `${WEB_MODE_STATE_PATH}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
-  await writeFile(temporaryPath, `${JSON.stringify(next, null, 2)}\n`);
-  await rename(temporaryPath, WEB_MODE_STATE_PATH);
-  return next;
+  webModeRuntimeStateWritePromise = operation.then(() => undefined, () => undefined);
+  return await operation;
 }
 
 async function readWebModeHandoffState() {
@@ -5572,6 +5608,9 @@ async function buildWebModeState() {
     enabled: true,
     activeProvider: runtimeState.activeProvider,
     openingProvider: runtimeState.openingProvider,
+    openRequestId: runtimeState.openRequestId,
+    openStartedAt: runtimeState.openStartedAt,
+    openXSessionGeneration: runtimeState.openXSessionGeneration,
     lastProvider: runtimeState.lastProvider,
     providers: WEB_MODE_PROVIDERS,
     residentProviders: runtimeState.residentProviders,
@@ -14170,6 +14209,38 @@ async function runWebModeCommand(action, providerId = "", env = {}) {
   });
 }
 
+function logWebModeEntryStage(stage, { requestId = "", providerId = "", xSessionGeneration = "", detail = null } = {}) {
+  console.log(`[tikpal-web-mode-entry] ${JSON.stringify({
+    stage,
+    requestId,
+    providerId,
+    xSessionGeneration,
+    ...(detail !== null && detail !== "" ? { detail } : {}),
+    timestamp: new Date().toISOString()
+  })}`);
+}
+
+async function readKioskXSessionGeneration() {
+  try {
+    const generation = (await readFile(KIOSK_X_SESSION_GENERATION_PATH, "utf8")).trim();
+    if (/^[A-Za-z0-9._:-]+$/.test(generation)) return generation;
+  } catch {
+    // The kiosk session publishes this before Chromium starts.
+  }
+  if (API_MODE !== "mpc") return "mock-x-session";
+  throw new Error("Explore X session generation is unavailable");
+}
+
+function webModeOpenCommandEnv(providerId, openRequestId, xSessionGeneration, extra = {}) {
+  return {
+    TIKPAL_WEB_MODE_OPEN_EXPECTED_ACTIVE_PROVIDER: providerId,
+    TIKPAL_WEB_MODE_OPEN_REQUEST_ID: openRequestId,
+    TIKPAL_WEB_MODE_OPEN_X_SESSION_GENERATION: xSessionGeneration,
+    TIKPAL_KIOSK_X_SESSION_GENERATION_PATH: KIOSK_X_SESSION_GENERATION_PATH,
+    ...extra
+  };
+}
+
 const webModeSwitchTraceByRequestId = new Map();
 let webModeSwitchTraceWritePromise = Promise.resolve();
 
@@ -14249,18 +14320,18 @@ function webModeSwitchTraceEnv(trace) {
   };
 }
 
-async function prepareWebModeEntry(providerId) {
-  await runWebModeCommand("prepare-entry", providerId, {
+async function prepareWebModeEntry(providerId, openRequestId, xSessionGeneration) {
+  await runWebModeCommand("prepare-entry", providerId, webModeOpenCommandEnv(providerId, openRequestId, xSessionGeneration, {
     // Entry preparation runs beside Tikpal's audio release. Give its short
     // foreground lock the same room as the following open command.
     TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS: "25"
-  });
+  }));
 }
 
-async function parkPreparedWebModeEntry(providerId) {
-  await runWebModeCommand("park-entry", providerId, {
+async function parkPreparedWebModeEntry(providerId, openRequestId, xSessionGeneration) {
+  await runWebModeCommand("park-entry", providerId, webModeOpenCommandEnv(providerId, openRequestId, xSessionGeneration, {
     TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS: "25"
-  });
+  }));
 }
 
 async function webModeCloseRequestIsCurrent(closeRequestId) {
@@ -14269,11 +14340,114 @@ async function webModeCloseRequestIsCurrent(closeRequestId) {
   return runtimeState.closeRequestId === closeRequestId && !runtimeState.openingProvider;
 }
 
-async function residentWebModeOpenRequestIsCurrent(providerId, openRequestId) {
+async function readWebModeOpenRequestStatus(providerId, openRequestId, xSessionGeneration) {
   const runtimeState = await readWebModeRuntimeState();
-  return runtimeState.openingProvider === providerId
+  if (runtimeState.openingProvider !== providerId
+    || runtimeState.openRequestId !== openRequestId
+    || runtimeState.openXSessionGeneration !== xSessionGeneration
+    || runtimeState.closeRequestId) {
+    return {
+      current: false,
+      reason: runtimeState.closeRequestId ? "close-request" : "superseded-request",
+      currentXSessionGeneration: null
+    };
+  }
+  const currentXSessionGeneration = await readKioskXSessionGeneration().catch(() => null);
+  return {
+    current: currentXSessionGeneration === xSessionGeneration,
+    reason: currentXSessionGeneration === xSessionGeneration ? null : "stale-session",
+    currentXSessionGeneration
+  };
+}
+
+async function webModeOpenRequestIsCurrent(providerId, openRequestId, xSessionGeneration) {
+  return (await readWebModeOpenRequestStatus(providerId, openRequestId, xSessionGeneration)).current;
+}
+
+async function requireCurrentWebModeOpenRequest(providerId, openRequestId, xSessionGeneration, boundary) {
+  const status = await readWebModeOpenRequestStatus(providerId, openRequestId, xSessionGeneration);
+  if (status.current) return;
+  logWebModeEntryStage("request_invalidated", {
+    requestId: openRequestId,
+    providerId,
+    xSessionGeneration,
+    detail: {
+      boundary,
+      reason: status.reason,
+      currentXSessionGeneration: status.currentXSessionGeneration
+    }
+  });
+  if (status.reason === "stale-session") {
+    throw new Error(`Explore open stopped for stale X session at ${boundary}`);
+  }
+  throw new Error(`Explore open request was superseded at ${boundary}`);
+}
+
+async function webModeOpenCommandCompletedInCurrentSession(providerId, openRequestId, xSessionGeneration) {
+  if (await readKioskXSessionGeneration().catch(() => null) !== xSessionGeneration) return false;
+  const runtimeState = await readWebModeRuntimeState();
+  return (runtimeState.openingProvider === providerId
     && runtimeState.openRequestId === openRequestId
-    && !runtimeState.closeRequestId;
+    && runtimeState.openXSessionGeneration === xSessionGeneration
+    && !runtimeState.closeRequestId)
+    || (runtimeState.activeProvider === providerId
+      && runtimeState.lastOpenedRequestId === openRequestId
+      && runtimeState.lastOpenedXSessionGeneration === xSessionGeneration
+      && !runtimeState.openingProvider
+      && !runtimeState.closeRequestId);
+}
+
+async function clearWebModeOpenRequestIfOwned(providerId, openRequestId, xSessionGeneration, patch = {}) {
+  const result = await updateWebModeRuntimeState((runtimeState) => {
+    if (runtimeState.openingProvider !== providerId
+      || runtimeState.openRequestId !== openRequestId
+      || runtimeState.openXSessionGeneration !== xSessionGeneration) return null;
+    return {
+      ...patch,
+      openingProvider: null,
+      openRequestId: null,
+      openStartedAt: null,
+      openXSessionGeneration: null
+    };
+  });
+  return result.updated;
+}
+
+async function commitWebModeOpenRequestIfOwned(providerId, openRequestId, xSessionGeneration) {
+  const result = await updateWebModeRuntimeState((runtimeState) => {
+    if (runtimeState.openingProvider !== providerId
+      || runtimeState.openRequestId !== openRequestId
+      || runtimeState.openXSessionGeneration !== xSessionGeneration
+      || runtimeState.closeRequestId) return null;
+    return {
+      activeProvider: providerId,
+      openingProvider: null,
+      openRequestId: null,
+      openStartedAt: null,
+      openXSessionGeneration: null,
+      lastOpenedRequestId: openRequestId,
+      lastOpenedXSessionGeneration: xSessionGeneration,
+      lastProvider: providerId,
+      lastError: null,
+      closeRequestId: null
+    };
+  });
+  return result.updated;
+}
+
+async function retargetWebModeOpenRequestIfOwned(providerId, fallbackId, openRequestId, xSessionGeneration) {
+  const result = await updateWebModeRuntimeState((runtimeState) => {
+    if (runtimeState.openingProvider !== providerId
+      || runtimeState.openRequestId !== openRequestId
+      || runtimeState.openXSessionGeneration !== xSessionGeneration
+      || runtimeState.closeRequestId) return null;
+    return {
+      openingProvider: fallbackId,
+      lastError: null,
+      closeRequestId: null
+    };
+  });
+  return result.updated;
 }
 
 function runResidentWebModeOpenInBackground() {
@@ -14284,38 +14458,38 @@ function runResidentWebModeOpenInBackground() {
       const runtimeState = await readWebModeRuntimeState();
       const providerId = runtimeState.openingProvider;
       const openRequestId = runtimeState.openRequestId;
-      if (!providerId || !openRequestId || runtimeState.closeRequestId) return;
+      const xSessionGeneration = runtimeState.openXSessionGeneration;
+      if (!providerId || !openRequestId || !xSessionGeneration || runtimeState.closeRequestId) return;
       const trace = webModeSwitchTraceByRequestId.get(openRequestId) ?? null;
       recordWebModeSwitchTraceEvent(trace, "runner_started");
+      logWebModeEntryStage("resident_open_started", { requestId: openRequestId, providerId, xSessionGeneration });
 
       try {
-        await runWebModeCommand("open", providerId, {
+        await requireCurrentWebModeOpenRequest(providerId, openRequestId, xSessionGeneration, "resident-open-start");
+        await runWebModeCommand("open", providerId, webModeOpenCommandEnv(providerId, openRequestId, xSessionGeneration, {
           // A resident choice is serialized here, so it should never spend its
           // lifetime waiting behind another resident command for this lock.
           TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS: "25",
-          TIKPAL_WEB_MODE_OPEN_EXPECTED_ACTIVE_PROVIDER: providerId,
-          TIKPAL_WEB_MODE_OPEN_REQUEST_ID: openRequestId,
           ...webModeSwitchTraceEnv(trace)
-        });
-        if (await residentWebModeOpenRequestIsCurrent(providerId, openRequestId)) {
-          await writeWebModeRuntimeState({
-            activeProvider: providerId,
-            openingProvider: null,
-            openRequestId: null,
-            lastProvider: providerId,
-            lastError: null,
-            closeRequestId: null
-          });
+        }));
+        if (!await webModeOpenCommandCompletedInCurrentSession(providerId, openRequestId, xSessionGeneration)) {
+          await requireCurrentWebModeOpenRequest(providerId, openRequestId, xSessionGeneration, "resident-open-complete");
+          throw new Error("Explore resident open command did not preserve its request ownership");
         }
+        if (await webModeOpenRequestIsCurrent(providerId, openRequestId, xSessionGeneration)) {
+          await commitWebModeOpenRequestIfOwned(providerId, openRequestId, xSessionGeneration);
+        }
+        logWebModeEntryStage("resident_open_completed", { requestId: openRequestId, providerId, xSessionGeneration });
         recordWebModeSwitchTraceEvent(trace, "runner_completed");
       } catch (error) {
-        if (await residentWebModeOpenRequestIsCurrent(providerId, openRequestId).catch(() => false)) {
-          await writeWebModeRuntimeState({
-            openingProvider: null,
-            openRequestId: null,
-            lastError: formatWebModeCommandError(error, "open", providerId)
-          }).catch(() => {});
-        }
+        const message = formatWebModeCommandError(error, "open", providerId);
+        await clearWebModeOpenRequestIfOwned(providerId, openRequestId, xSessionGeneration, { lastError: message }).catch(() => {});
+        logWebModeEntryStage("resident_open_failed", {
+          requestId: openRequestId,
+          providerId,
+          xSessionGeneration,
+          detail: error instanceof Error ? error.message : String(error ?? "unknown error")
+        });
         recordWebModeSwitchTraceEvent(trace, "runner_completed", { result: "failed", errorCode: "open_command_failed" });
       } finally {
         webModeSwitchTraceByRequestId.delete(openRequestId);
@@ -14364,6 +14538,8 @@ function runWebModeCloseInBackground(closeRequestId = "", activeProvider = "") {
         await writeWebModeRuntimeState({
           openingProvider: null,
           openRequestId: null,
+          openStartedAt: null,
+          openXSessionGeneration: null,
           lastError: closeError,
           closeRequestId: null
         }).catch(() => {});
@@ -14376,6 +14552,8 @@ function runWebModeCloseInBackground(closeRequestId = "", activeProvider = "") {
           activeProvider: null,
           openingProvider: null,
           openRequestId: null,
+          openStartedAt: null,
+          openXSessionGeneration: null,
           lastError: restoreError,
           closeRequestId: null
         }).catch(() => {});
@@ -14563,6 +14741,8 @@ async function applyWebModeAction(action, { receivedMonotonicMs = monotonicNowMs
     await writeWebModeRuntimeState({
       openingProvider: null,
       openRequestId: null,
+      openStartedAt: null,
+      openXSessionGeneration: null,
       lastProvider: runtimeState.lastProvider ?? activeProvider ?? null,
       lastError: null,
       closeRequestId
@@ -14670,59 +14850,113 @@ async function applyWebModeAction(action, { receivedMonotonicMs = monotonicNowMs
     action.provider,
     previousRuntimeState.activeProvider ?? previousRuntimeState.lastProvider ?? "qq_music"
   );
+  if (previousRuntimeState.activeProvider === providerId && !previousRuntimeState.openingProvider) {
+    return await buildWebModeState();
+  }
+  const isInitialEntry = !previousRuntimeState.activeProvider;
+  const isResidentSwitch = Boolean(previousRuntimeState.activeProvider)
+    && previousRuntimeState.activeProvider !== providerId;
+  const trace = isResidentSwitch
+    ? await consumeWebModeSwitchTraceContext(previousRuntimeState.activeProvider, providerId)
+    : null;
+  const requestedOpenRequestId = action?.openRequestId === undefined
+    ? null
+    : normalizeWebModeOpenRequestId(action.openRequestId);
+  if (action?.openRequestId !== undefined && !requestedOpenRequestId) {
+    throw new Error("Explore openRequestId is invalid");
+  }
+  const openRequestId = trace?.requestId ?? requestedOpenRequestId ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const xSessionGeneration = await readKioskXSessionGeneration();
+  const openStartedAt = new Date().toISOString();
+  let requestProviderId = providerId;
   let providerOpenCommandStarted = false;
   let entryPreparationStarted = false;
   webModeOpenInFlight = true;
   try {
-    if (!previousRuntimeState.activeProvider) {
+    recordWebModeSwitchTraceEvent(trace, "api_received", { timestamp: receivedMonotonicMs });
+    logWebModeEntryStage("request_accepted", { requestId: openRequestId, providerId, xSessionGeneration });
+    await writeWebModeRuntimeState({
+      openingProvider: providerId,
+      openRequestId,
+      openStartedAt,
+      openXSessionGeneration: xSessionGeneration,
+      lastError: null,
+      closeRequestId: null
+    });
+    recordWebModeSwitchTraceEvent(trace, "opening_provider_written");
+    logWebModeEntryStage("request_persisted", { requestId: openRequestId, providerId, xSessionGeneration });
+
+    // Resident switches return immediately, but activeProvider remains the
+    // physically visible provider until the launcher has revealed the target.
+    if (isResidentSwitch) {
+      if (trace) webModeSwitchTraceByRequestId.set(openRequestId, trace);
+      recordWebModeSwitchTraceEvent(trace, "runner_created");
+      logWebModeEntryStage("resident_runner_created", { requestId: openRequestId, providerId, xSessionGeneration });
+      runResidentWebModeOpenInBackground();
+      return await buildWebModeState();
+    }
+
+    if (isInitialEntry) {
+      await requireCurrentWebModeOpenRequest(providerId, openRequestId, xSessionGeneration, "entry-prepare-start");
+      logWebModeEntryStage("handoff_capture_started", { requestId: openRequestId, providerId, xSessionGeneration });
       await captureWebModePlaybackHandoff();
+      logWebModeEntryStage("handoff_capture_completed", { requestId: openRequestId, providerId, xSessionGeneration });
       // The full-width entry veil and parked panel do not expose a provider or
       // browser audio. Stage them while Scene/MPD releases audio, then keep
       // the actual provider open behind that completed audio gate.
       entryPreparationStarted = true;
       const [pauseResult, preparationResult] = await Promise.allSettled([
-        pauseTikpalForWebMode(),
-        prepareWebModeEntry(providerId)
+        (async () => {
+          logWebModeEntryStage("audio_pause_started", { requestId: openRequestId, providerId, xSessionGeneration });
+          await pauseTikpalForWebMode();
+          logWebModeEntryStage("audio_pause_completed", { requestId: openRequestId, providerId, xSessionGeneration });
+        })(),
+        (async () => {
+          logWebModeEntryStage("entry_prepare_started", { requestId: openRequestId, providerId, xSessionGeneration });
+          await prepareWebModeEntry(providerId, openRequestId, xSessionGeneration);
+          logWebModeEntryStage("entry_prepare_completed", { requestId: openRequestId, providerId, xSessionGeneration });
+        })()
       ]);
       if (pauseResult.status === "rejected") throw pauseResult.reason;
       if (preparationResult.status === "rejected") throw preparationResult.reason;
+      await requireCurrentWebModeOpenRequest(providerId, openRequestId, xSessionGeneration, "entry-prepare-complete");
     }
-    await writeWebModeRuntimeState({ lastError: null, closeRequestId: null });
-    // Resident switches return immediately, but activeProvider remains the
-    // physically visible provider until the launcher has revealed the target.
-    // openingProvider/openRequestId own the in-flight request and make a newer
-    // choice or Close cancel a delayed shell writer safely.
-    const isResidentSwitch = previousRuntimeState.activeProvider
-      && previousRuntimeState.activeProvider !== providerId;
-    if (isResidentSwitch) {
-      const trace = await consumeWebModeSwitchTraceContext(previousRuntimeState.activeProvider, providerId);
-      const openRequestId = trace?.requestId ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      recordWebModeSwitchTraceEvent(trace, "api_received", { timestamp: receivedMonotonicMs });
-      await writeWebModeRuntimeState({
-        openingProvider: providerId,
-        openRequestId,
-        lastError: null,
-        closeRequestId: null
-      });
-      recordWebModeSwitchTraceEvent(trace, "opening_provider_written");
-      if (trace) webModeSwitchTraceByRequestId.set(openRequestId, trace);
-      recordWebModeSwitchTraceEvent(trace, "runner_created");
-      runResidentWebModeOpenInBackground();
-      return await buildWebModeState();
-    }
+
     providerOpenCommandStarted = true;
-    await runWebModeCommand("open", providerId, { TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS: "25" });
-    await writeWebModeRuntimeState({ activeProvider: providerId, openingProvider: null, openRequestId: null, lastProvider: providerId, lastError: null, closeRequestId: null });
+    logWebModeEntryStage("provider_open_started", { requestId: openRequestId, providerId, xSessionGeneration });
+    await runWebModeCommand("open", providerId, webModeOpenCommandEnv(providerId, openRequestId, xSessionGeneration, {
+      TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS: "25"
+    }));
+    if (!await webModeOpenCommandCompletedInCurrentSession(providerId, openRequestId, xSessionGeneration)) {
+      await requireCurrentWebModeOpenRequest(providerId, openRequestId, xSessionGeneration, "provider-open-complete");
+      throw new Error("Explore provider open command did not preserve its request ownership");
+    }
+    if (await webModeOpenRequestIsCurrent(providerId, openRequestId, xSessionGeneration)) {
+      await commitWebModeOpenRequestIfOwned(providerId, openRequestId, xSessionGeneration);
+    }
+    logWebModeEntryStage("provider_open_completed", { requestId: openRequestId, providerId, xSessionGeneration });
   } catch (error) {
     const message = formatWebModeCommandError(error, "open", providerId);
+    logWebModeEntryStage("request_failed", {
+      requestId: openRequestId,
+      providerId: requestProviderId,
+      xSessionGeneration,
+      detail: error instanceof Error ? error.message : String(error ?? "unknown error")
+    });
     // Auto-fallback: try a provider that does not need proxy.
     // Providers not in check_proxy/region_unavailable/check_setup are candidates
     // (includes prewarming, ready, active). Retry briefly if all candidates are
     // still prewarming — the warm pool may be mid-launch.
     const DIRECT_PROXY_IDS = new Set(["qq_music", "netease_music"]);
     let fallbackId = null;
+    let fallbackBlockedReason = "no-candidate";
     for (let attempt = 0; attempt < 3 && !fallbackId; attempt++) {
       if (attempt > 0) await new Promise((r) => setTimeout(r, 2000));
+      const requestStatus = await readWebModeOpenRequestStatus(requestProviderId, openRequestId, xSessionGeneration);
+      if (!requestStatus.current) {
+        fallbackBlockedReason = requestStatus.reason ?? "request-invalid";
+        break;
+      }
       const st = await readWebModeRuntimeState();
       fallbackId = WEB_MODE_PROVIDERS.find((p) => {
         if (p.id === providerId) return false;
@@ -14733,25 +14967,54 @@ async function applyWebModeAction(action, { receivedMonotonicMs = monotonicNowMs
     }
     if (fallbackId) {
       try {
-        await runWebModeCommand("open", fallbackId, { TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS: "30" });
-        await writeWebModeRuntimeState({ activeProvider: fallbackId, openingProvider: null, openRequestId: null, lastProvider: fallbackId, lastError: null, closeRequestId: null });
+        if (!await retargetWebModeOpenRequestIfOwned(requestProviderId, fallbackId, openRequestId, xSessionGeneration)) {
+          fallbackBlockedReason = "superseded-request";
+          throw new Error("Explore fallback was blocked because the open request was superseded");
+        }
+        requestProviderId = fallbackId;
+        await requireCurrentWebModeOpenRequest(fallbackId, openRequestId, xSessionGeneration, "fallback-open-start");
+        logWebModeEntryStage("fallback_open_started", { requestId: openRequestId, providerId: fallbackId, xSessionGeneration });
+        await runWebModeCommand("open", fallbackId, webModeOpenCommandEnv(fallbackId, openRequestId, xSessionGeneration, {
+          TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS: "30"
+        }));
+        if (!await webModeOpenCommandCompletedInCurrentSession(fallbackId, openRequestId, xSessionGeneration)) {
+          await requireCurrentWebModeOpenRequest(fallbackId, openRequestId, xSessionGeneration, "fallback-open-complete");
+          throw new Error("Explore fallback command did not preserve its request ownership");
+        }
+        if (await webModeOpenRequestIsCurrent(fallbackId, openRequestId, xSessionGeneration)) {
+          await commitWebModeOpenRequestIfOwned(fallbackId, openRequestId, xSessionGeneration);
+        }
+        logWebModeEntryStage("fallback_open_completed", { requestId: openRequestId, providerId: fallbackId, xSessionGeneration });
         return await buildWebModeState();
-      } catch (_) { /* fallback also failed; fall through to original error */ }
+      } catch (fallbackError) {
+        logWebModeEntryStage("fallback_open_failed", {
+          requestId: openRequestId,
+          providerId: fallbackId,
+          xSessionGeneration,
+          detail: fallbackError instanceof Error ? fallbackError.message : String(fallbackError ?? "unknown error")
+        });
+      }
     }
-    const clearFailedCurrentProvider = providerOpenCommandStarted
-      && previousRuntimeState.activeProvider === providerId
-      && /\bdid not open\b|\bdid not enter\b|\bdid not become ready\b/i.test(message);
-    await writeWebModeRuntimeState({
-      activeProvider: previousRuntimeState.activeProvider && !clearFailedCurrentProvider
-        ? previousRuntimeState.activeProvider
-        : null,
-      openingProvider: null,
-      openRequestId: null,
+    const finalRequestStatus = await readWebModeOpenRequestStatus(requestProviderId, openRequestId, xSessionGeneration);
+    if (!fallbackId || !finalRequestStatus.current) {
+      fallbackBlockedReason = finalRequestStatus.reason ?? fallbackBlockedReason;
+      logWebModeEntryStage("fallback_blocked", {
+        requestId: openRequestId,
+        providerId: requestProviderId,
+        xSessionGeneration,
+        detail: { reason: fallbackBlockedReason }
+      });
+    }
+    if (entryPreparationStarted && !providerOpenCommandStarted
+      && await webModeOpenRequestIsCurrent(requestProviderId, openRequestId, xSessionGeneration).catch(() => false)) {
+      logWebModeEntryStage("entry_rollback_started", { requestId: openRequestId, providerId: requestProviderId, xSessionGeneration });
+      await parkPreparedWebModeEntry(requestProviderId, openRequestId, xSessionGeneration).catch(() => undefined);
+      logWebModeEntryStage("entry_rollback_completed", { requestId: openRequestId, providerId: requestProviderId, xSessionGeneration });
+    }
+    await clearWebModeOpenRequestIfOwned(requestProviderId, openRequestId, xSessionGeneration, {
+      activeProvider: previousRuntimeState.activeProvider ?? null,
       lastError: message
     });
-    if (entryPreparationStarted && !providerOpenCommandStarted) {
-      await parkPreparedWebModeEntry(providerId).catch(() => undefined);
-    }
     throw new Error(message);
   } finally {
     webModeOpenInFlight = false;

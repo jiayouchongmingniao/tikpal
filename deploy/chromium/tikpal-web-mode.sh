@@ -99,15 +99,20 @@ fi
 : "${TIKPAL_WEB_MODE_X11_HELPER_SOCKET:=/run/tikpal/x11-helper.sock}"
 : "${TIKPAL_WEB_MODE_X11_HELPER_CONNECT_TIMEOUT_MS:=50}"
 : "${TIKPAL_WEB_MODE_X11_HELPER_RESPONSE_TIMEOUT_MS:=300}"
+: "${TIKPAL_WEB_MODE_X11_HELPER_INSPECT_RESPONSE_TIMEOUT_MS:=700}"
 : "${TIKPAL_WEB_MODE_X11_HELPER_GENERATION_PATH:=$TIKPAL_WEB_MODE_PROFILE_ROOT/x11-helper-generation}"
 : "${TIKPAL_WEB_MODE_X11_HELPER_OWNER_PATH:=$TIKPAL_WEB_MODE_PROFILE_ROOT/x11-helper-owner.json}"
 : "${TIKPAL_WEB_MODE_X11_HELPER_LEASE_MS:=350}"
 : "${TIKPAL_WEB_MODE_X11_MUTATION_TRACE_PATH:=}"
+: "${TIKPAL_WEB_MODE_INITIAL_ENTRY_TRACE_PATH:=}"
+: "${TIKPAL_WEB_MODE_INITIAL_ENTRY_TRACE_OUTPUT_LIMIT_BYTES:=2048}"
 : "${TIKPAL_WEB_MODE_X11_TRACE_GEOMETRY_COMMAND:=}"
 : "${TIKPAL_WEB_MODE_X11_MUTATION_BARRIER_FIFO:=}"
 : "${TIKPAL_WEB_MODE_X11_MUTATION_BARRIER_READY_PATH:=}"
 : "${TIKPAL_WEB_MODE_X11_MUTATION_BARRIER_MATCH:=}"
 : "${TIKPAL_WEB_MODE_X11_PROCESS_GENERATION:=}"
+: "${TIKPAL_KIOSK_X_SESSION_GENERATION_PATH:=$APP_DIR/.tikpal/kiosk-x-session-generation}"
+: "${TIKPAL_WEB_MODE_OPEN_X_SESSION_GENERATION:=}"
 : "${TIKPAL_WEB_MODE_CLOSE_WARM_ENABLED:=1}"
 : "${TIKPAL_WEB_MODE_CLOSE_KEEP_RESIDENT:=1}"
 : "${TIKPAL_WEB_MODE_CLOSE_WARM_TTL_SECONDS:=45}"
@@ -173,6 +178,16 @@ TIKPAL_X11_HELPER_LAST_RESPONSE=""
 TIKPAL_X11_HELPER_REQUEST_ID=""
 TIKPAL_X11_TRACE_APPEND_WARNING_EMITTED=0
 TIKPAL_SWITCH_TRACE_APPEND_WARNING_EMITTED=0
+TIKPAL_INITIAL_ENTRY_TRACE_APPEND_WARNING_EMITTED=0
+TIKPAL_INITIAL_ENTRY_MUTATION_STARTED=0
+TIKPAL_INITIAL_ENTRY_FAILED_STEP=""
+TIKPAL_INITIAL_ENTRY_FAILED_STATUS=0
+TIKPAL_INITIAL_ENTRY_PANEL_WINDOW=""
+TIKPAL_INITIAL_ENTRY_KIOSK_WINDOW=""
+TIKPAL_INITIAL_ENTRY_TARGET_WINDOW=""
+TIKPAL_INITIAL_ENTRY_PROXY_LINE=""
+TIKPAL_INITIAL_ENTRY_PROXY_ENABLED=""
+TIKPAL_INITIAL_ENTRY_TRACE_CONTEXT_KEY=""
 if [[ -z "$TIKPAL_WEB_MODE_X11_PROCESS_GENERATION" &&
       -r "$TIKPAL_WEB_MODE_X11_HELPER_GENERATION_PATH" ]]; then
   IFS= read -r TIKPAL_WEB_MODE_X11_PROCESS_GENERATION \
@@ -197,6 +212,12 @@ log_stage() {
   if command -v logger >/dev/null 2>&1; then
     logger -t tikpal-web-mode -- "$*" >/dev/null 2>&1 || true
   fi
+}
+
+log_open_stage() {
+  local stage="$1"
+  shift
+  log_stage "stage=$stage open_request_id=${TIKPAL_WEB_MODE_OPEN_REQUEST_ID:-legacy} x_session_generation=${TIKPAL_WEB_MODE_OPEN_X_SESSION_GENERATION:-legacy} helper_mode=$TIKPAL_WEB_MODE_X11_HELPER_MODE $*"
 }
 
 now_ms() {
@@ -259,6 +280,161 @@ x11_trace_json_escape() {
   value="${value//$'\r'/\\r}"
   value="${value//$'\t'/\\t}"
   printf '%s' "$value"
+}
+
+initial_entry_trace_enabled() {
+  [[ -n "$TIKPAL_WEB_MODE_INITIAL_ENTRY_TRACE_PATH" ]]
+}
+
+initial_entry_trace_require_writable() {
+  local trace_dir trace_fd=""
+  initial_entry_trace_enabled || return 0
+  trace_dir="$(dirname "$TIKPAL_WEB_MODE_INITIAL_ENTRY_TRACE_PATH")"
+  [[ -d "$trace_dir" && -x "$trace_dir" &&
+     -f "$TIKPAL_WEB_MODE_INITIAL_ENTRY_TRACE_PATH" ]] || return 1
+  if ! { exec {trace_fd}>>"$TIKPAL_WEB_MODE_INITIAL_ENTRY_TRACE_PATH"; } 2>/dev/null; then
+    return 1
+  fi
+  exec {trace_fd}>&-
+}
+
+initial_entry_trace_append_line() {
+  local line="$1" trace_fd=""
+  initial_entry_trace_enabled || return 0
+  [[ -f "$TIKPAL_WEB_MODE_INITIAL_ENTRY_TRACE_PATH" ]] || return 1
+  if ! { exec {trace_fd}>>"$TIKPAL_WEB_MODE_INITIAL_ENTRY_TRACE_PATH"; } 2>/dev/null; then
+    return 1
+  fi
+  if command -v flock >/dev/null 2>&1; then
+    if ! flock -x "$trace_fd" || ! printf '%s\n' "$line" >&"$trace_fd" 2>/dev/null; then
+      flock -u "$trace_fd" >/dev/null 2>&1 || true
+      exec {trace_fd}>&-
+      return 1
+    fi
+    flock -u "$trace_fd" >/dev/null 2>&1 || true
+  elif ! printf '%s\n' "$line" >&"$trace_fd" 2>/dev/null; then
+    exec {trace_fd}>&-
+    return 1
+  fi
+  exec {trace_fd}>&-
+}
+
+initial_entry_trace_warn() {
+  local reason="$1"
+  if [[ "$TIKPAL_INITIAL_ENTRY_TRACE_APPEND_WARNING_EMITTED" != "1" ]]; then
+    log_stage "WARN: INITIAL_ENTRY_TRACE_APPEND_FAILED path=$TIKPAL_WEB_MODE_INITIAL_ENTRY_TRACE_PATH reason=$reason"
+    TIKPAL_INITIAL_ENTRY_TRACE_APPEND_WARNING_EMITTED=1
+  fi
+}
+
+initial_entry_trace_generation() {
+  local generation="${TIKPAL_WEB_MODE_X11_PROCESS_GENERATION:-}"
+  if [[ -z "$generation" && -r "$TIKPAL_WEB_MODE_X11_HELPER_GENERATION_PATH" ]]; then
+    IFS= read -r generation < "$TIKPAL_WEB_MODE_X11_HELPER_GENERATION_PATH" || generation=""
+  fi
+  printf '%s\n' "${generation:-missing}"
+}
+
+initial_entry_trace_read_bounded() {
+  local path="$1" limit="$TIKPAL_WEB_MODE_INITIAL_ENTRY_TRACE_OUTPUT_LIMIT_BYTES"
+  [[ "$limit" =~ ^[1-9][0-9]*$ ]] || limit=2048
+  [[ -r "$path" ]] || return 0
+  head -c "$limit" "$path" 2>/dev/null || true
+}
+
+initial_entry_window_snapshot() {
+  local xid geometry map_state opacity result="" separator=""
+  local -a xids=()
+  IFS=',' read -r -a xids <<< "${1:-}"
+  for xid in "${xids[@]:-}"; do
+    [[ "$xid" =~ ^[1-9][0-9]*$ ]] || continue
+    geometry="$(window_geometry_compact "$xid" 2>/dev/null || printf unreadable)"
+    map_state="$(initial_entry_window_map_state "$xid" 2>/dev/null || printf unreadable)"
+    opacity="$(window_opacity_value "$xid" 2>/dev/null || printf unreadable)"
+    result+="$separator$xid:geometry=$geometry,map=$map_state,opacity=$opacity"
+    separator=";"
+  done
+  printf '%s\n' "${result:-not_available}"
+}
+
+initial_entry_trace_event() {
+  local event="$1" provider="$2" phase="$3" step_number="$4" step="$5"
+  local xids="$6" command_type="$7" expected_geometry="$8"
+  local started_ns="$9" finished_ns="${10}" exit_status="${11}"
+  local stdout_text="${12}" stderr_text="${13}" mutation_started="${14}"
+  local before_snapshot="${15}" after_snapshot="${16}"
+  local generation line
+  initial_entry_trace_enabled || return 0
+  generation="$(initial_entry_trace_generation)"
+  printf -v line '%s' \
+    "{\"event\":\"$(x11_trace_json_escape "$event")\",\"request_id\":\"$(x11_trace_json_escape "${TIKPAL_WEB_MODE_OPEN_REQUEST_ID:-legacy}")\",\"provider\":\"$(x11_trace_json_escape "$provider")\",\"phase\":\"$(x11_trace_json_escape "$phase")\",\"step_number\":$step_number,\"step\":\"$(x11_trace_json_escape "$step")\",\"xid\":\"$(x11_trace_json_escape "$xids")\",\"generation\":\"$(x11_trace_json_escape "$generation")\",\"caller_pid\":$BASHPID,\"command_type\":\"$(x11_trace_json_escape "$command_type")\",\"expected_geometry\":\"$(x11_trace_json_escape "$expected_geometry")\",\"monotonic_started_ns\":$started_ns,\"monotonic_finished_ns\":$finished_ns,\"exit_status\":$exit_status,\"stdout\":\"$(x11_trace_json_escape "$stdout_text")\",\"stderr\":\"$(x11_trace_json_escape "$stderr_text")\",\"mutation_started\":$mutation_started,\"before_snapshot\":\"$(x11_trace_json_escape "$before_snapshot")\",\"after_snapshot\":\"$(x11_trace_json_escape "$after_snapshot")\"}"
+  initial_entry_trace_append_line "$line"
+}
+
+initial_entry_step_run() {
+  local step_number="$1" provider="$2" phase="$3" step="$4" xids="$5"
+  local command_type="$6" expected_geometry="$7" mutation_expected="$8"
+  local started_ns finished_ns status=0 event mutation_started=false
+  local before_snapshot after_snapshot stdout_text stderr_text
+  local stdout_path stderr_path
+  shift 8
+
+  stdout_path="$(mktemp "${TMPDIR:-/tmp}/tikpal-initial-entry.stdout.XXXXXX")" || return 91
+  stderr_path="$(mktemp "${TMPDIR:-/tmp}/tikpal-initial-entry.stderr.XXXXXX")" || {
+    rm -f "$stdout_path"
+    return 91
+  }
+  before_snapshot="$(initial_entry_window_snapshot "$xids" || true)"
+  started_ns="$(x11_monotonic_ns)"
+  log_open_stage initial_entry_step_started \
+    "provider=$provider phase=$phase step_number=$step_number step=$step xids=${xids:-none} command_type=$command_type expected_geometry=$expected_geometry"
+  if ! initial_entry_trace_event initial_entry_step_started "$provider" "$phase" \
+      "$step_number" "$step" "$xids" "$command_type" "$expected_geometry" \
+      "$started_ns" "$started_ns" 0 "" "" false "$before_snapshot" "$before_snapshot"; then
+    initial_entry_trace_warn started_append_failed
+    rm -f "$stdout_path" "$stderr_path"
+    TIKPAL_INITIAL_ENTRY_FAILED_STEP="$step"
+    TIKPAL_INITIAL_ENTRY_FAILED_STATUS=90
+    log_open_stage initial_entry_step_failed \
+      "provider=$provider phase=$phase step_number=$step_number step=$step status=90 reason=trace_not_writable mutation_started=false"
+    return 90
+  fi
+
+  if [[ "$mutation_expected" == "1" ]]; then
+    TIKPAL_INITIAL_ENTRY_MUTATION_STARTED=1
+    mutation_started=true
+  fi
+  if "$@" >"$stdout_path" 2>"$stderr_path"; then
+    status=0
+  else
+    status=$?
+  fi
+  finished_ns="$(x11_monotonic_ns)"
+  after_snapshot="$(initial_entry_window_snapshot "$xids" || true)"
+  stdout_text="$(initial_entry_trace_read_bounded "$stdout_path")"
+  stderr_text="$(initial_entry_trace_read_bounded "$stderr_path")"
+  [[ "$status" == "0" ]] && event=initial_entry_step_completed || event=initial_entry_step_failed
+  if ! initial_entry_trace_event "$event" "$provider" "$phase" \
+      "$step_number" "$step" "$xids" "$command_type" "$expected_geometry" \
+      "$started_ns" "$finished_ns" "$status" "$stdout_text" "$stderr_text" \
+      "$mutation_started" "$before_snapshot" "$after_snapshot"; then
+    initial_entry_trace_warn result_append_failed
+    if [[ "$TIKPAL_INITIAL_ENTRY_MUTATION_STARTED" != "1" && "$status" == "0" ]]; then
+      status=90
+      event=initial_entry_step_failed
+    fi
+  fi
+  rm -f "$stdout_path" "$stderr_path"
+  if [[ "$status" == "0" ]]; then
+    log_open_stage initial_entry_step_completed \
+      "provider=$provider phase=$phase step_number=$step_number step=$step status=0 mutation_started=$mutation_started"
+    return 0
+  fi
+  TIKPAL_INITIAL_ENTRY_FAILED_STEP="$step"
+  TIKPAL_INITIAL_ENTRY_FAILED_STATUS="$status"
+  log_open_stage initial_entry_step_failed \
+    "provider=$provider phase=$phase step_number=$step_number step=$step status=$status mutation_started=$mutation_started"
+  return "$status"
 }
 
 x11_trace_read_active_provider() {
@@ -1881,10 +2057,20 @@ try { state = JSON.parse(fs.readFileSync(statePath, "utf8")); } catch {}
 const closeRequestId = String(process.env.TIKPAL_WEB_MODE_CLOSE_REQUEST_ID || "");
 const openRequestId = String(process.env.TIKPAL_WEB_MODE_OPEN_REQUEST_ID || "");
 const expectedProvider = String(process.env.TIKPAL_WEB_MODE_OPEN_EXPECTED_ACTIVE_PROVIDER || "");
+const expectedXSessionGeneration = String(process.env.TIKPAL_WEB_MODE_OPEN_X_SESSION_GENERATION || "");
+const xSessionGenerationPath = String(process.env.TIKPAL_KIOSK_X_SESSION_GENERATION_PATH || "");
 const startupReset = process.env.TIKPAL_WEB_MODE_STARTUP_RESET === "1";
 const closeOwnsState = !startupReset && Boolean(state.closeRequestId);
 if (closeOwnsState && closeRequestId !== state.closeRequestId) process.exit(0);
-if (openRequestId && (state.openRequestId !== openRequestId || state.openingProvider !== expectedProvider || provider !== expectedProvider)) process.exit(0);
+let currentXSessionGeneration = "";
+try { currentXSessionGeneration = fs.readFileSync(xSessionGenerationPath, "utf8").trim(); } catch {}
+if (openRequestId && (
+  state.openRequestId !== openRequestId
+  || state.openingProvider !== expectedProvider
+  || state.openXSessionGeneration !== expectedXSessionGeneration
+  || currentXSessionGeneration !== expectedXSessionGeneration
+  || provider !== expectedProvider
+)) process.exit(0);
 const preserveCloseRequest = closeOwnsState && closeRequestId === state.closeRequestId;
 state.activeProvider = provider || null;
 if (state.activeProvider) state.lastProvider = state.activeProvider;
@@ -1894,10 +2080,18 @@ if (!state.activeProvider) {
   state.closeRequestId = preserveCloseRequest ? closeRequestId : null;
   state.openingProvider = null;
   state.openRequestId = null;
+  state.openStartedAt = null;
+  state.openXSessionGeneration = null;
 } else {
   state.closeRequestId = null;
   state.openingProvider = null;
   state.openRequestId = null;
+  state.openStartedAt = null;
+  state.openXSessionGeneration = null;
+  if (openRequestId) {
+    state.lastOpenedRequestId = openRequestId;
+    state.lastOpenedXSessionGeneration = expectedXSessionGeneration;
+  }
   const residentProviders = state.residentProviders && typeof state.residentProviders === "object"
     ? state.residentProviders
     : {};
@@ -2062,14 +2256,19 @@ NODE
 runtime_open_request_is_current() {
   local expected_provider="${TIKPAL_WEB_MODE_OPEN_EXPECTED_ACTIVE_PROVIDER:-}"
   local open_request_id="${TIKPAL_WEB_MODE_OPEN_REQUEST_ID:-}"
+  local expected_x_session_generation="${TIKPAL_WEB_MODE_OPEN_X_SESSION_GENERATION:-}"
   [[ -z "$expected_provider" ]] && return 0
-  node - "$TIKPAL_WEB_MODE_STATE_PATH" "$expected_provider" "$open_request_id" <<'NODE'
+  node - "$TIKPAL_WEB_MODE_STATE_PATH" "$TIKPAL_KIOSK_X_SESSION_GENERATION_PATH" \
+    "$expected_provider" "$open_request_id" "$expected_x_session_generation" <<'NODE'
 const fs = require("node:fs");
-const [statePath, expectedProvider, openRequestId] = process.argv.slice(2);
+const [statePath, xSessionGenerationPath, expectedProvider, openRequestId, expectedXSessionGeneration] = process.argv.slice(2);
 try {
   const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
+  const currentXSessionGeneration = fs.readFileSync(xSessionGenerationPath, "utf8").trim();
   const ownsRequest = state.openingProvider === expectedProvider
     && (!openRequestId || state.openRequestId === openRequestId)
+    && (!openRequestId || state.openXSessionGeneration === expectedXSessionGeneration)
+    && (!openRequestId || currentXSessionGeneration === expectedXSessionGeneration)
     && !state.closeRequestId;
   const legacyOwner = !openRequestId && state.activeProvider === expectedProvider && !state.closeRequestId;
   process.exit(ownsRequest || legacyOwner ? 0 : 1);
@@ -2077,6 +2276,14 @@ try {
   process.exit(1);
 }
 NODE
+}
+
+runtime_open_request_is_current_or_log() {
+  local boundary="$1" current_x_session_generation=""
+  runtime_open_request_is_current && return 0
+  current_x_session_generation="$(cat "$TIKPAL_KIOSK_X_SESSION_GENERATION_PATH" 2>/dev/null || true)"
+  log_open_stage request_invalidated "boundary=$boundary reason=stale_or_superseded_session current_x_session_generation=${current_x_session_generation:-missing}"
+  return 1
 }
 
 read_runtime_provider_status() {
@@ -3873,7 +4080,7 @@ tile_window() {
     wmctrl_mutation clear_maximize "$window" normal \
       -i -r "$window" -b remove,fullscreen,maximized_vert,maximized_horz >/dev/null 2>&1 || true
     if ! is_enabled "$TIKPAL_WEB_MODE_X11_SYNC_WINDOW_OPS"; then
-      wmctrl_mutation geometry "$window" "$x,$y_${width}x${height}" \
+      wmctrl_mutation geometry "$window" "${x},${y}_${width}x${height}" \
         -i -r "$window" -e "0,$x,$y,$width,$height" >/dev/null 2>&1 && return 0
     fi
   fi
@@ -3901,7 +4108,7 @@ tile_window_fast() {
   height="$(window_height "$size")"
   TIKPAL_TILE_WINDOW_CHANGED=1
   if command -v wmctrl >/dev/null 2>&1 && ! is_enabled "$TIKPAL_WEB_MODE_X11_SYNC_WINDOW_OPS"; then
-    wmctrl_mutation geometry "$window" "$x,$y_${width}x${height}" \
+    wmctrl_mutation geometry "$window" "${x},${y}_${width}x${height}" \
       -i -r "$window" -e "0,$x,$y,$width,$height" >/dev/null 2>&1 && return 0
   fi
   if is_enabled "$TIKPAL_WEB_MODE_X11_SYNC_WINDOW_OPS"; then
@@ -4788,7 +4995,7 @@ guard_inspect_windows() {
     TIKPAL_X11_HELPER_CALLER_ROLE=window_guard \
     TIKPAL_WEB_MODE_X11_HELPER_SOCKET="$TIKPAL_WEB_MODE_X11_HELPER_SOCKET" \
     TIKPAL_WEB_MODE_X11_HELPER_CONNECT_TIMEOUT_MS="$TIKPAL_WEB_MODE_X11_HELPER_CONNECT_TIMEOUT_MS" \
-    TIKPAL_WEB_MODE_X11_HELPER_RESPONSE_TIMEOUT_MS="$TIKPAL_WEB_MODE_X11_HELPER_RESPONSE_TIMEOUT_MS" \
+    TIKPAL_WEB_MODE_X11_HELPER_RESPONSE_TIMEOUT_MS="$TIKPAL_WEB_MODE_X11_HELPER_INSPECT_RESPONSE_TIMEOUT_MS" \
       "$TIKPAL_WEB_MODE_X11_HELPER_BINARY" "${arguments[@]}"
   )"; then
     status=0
@@ -5851,6 +6058,7 @@ keep_side_panel_visible_during_switch() {
 prepare_entry_surfaces() {
   local provider="${1:-qq_music}"
 
+  runtime_open_request_is_current_or_log prepare-entry-start || return 0
   # This is deliberately only an initial-entry stage. It never launches or
   # reveals a provider, so the API can run it alongside the local-audio gate.
   # Use non-hidden mode so the panel appears at its final position (PANEL_POSITION)
@@ -5863,53 +6071,324 @@ prepare_entry_surfaces() {
 park_prepared_entry_surfaces() {
   # Audio release can fail after preparation has started. Restore the staged
   # surfaces off-screen so a failed Explore entry never leaves a visible veil.
+  runtime_open_request_is_current_or_log park-entry-start || return 0
   [[ -z "$(read_runtime_active_provider)" ]] || return 0
   park_side_panel_for_reopen
 }
 
-reveal_initial_entry_surfaces() {
-  local target_window="$1"
-  local panel_profile="$2"
-  local panel_window
-  panel_window="$(wait_for_profile_window "$panel_profile" 8 || true)"
+initial_entry_window_map_state() {
+  local window="$1" state window_id
+  [[ "$window" =~ ^[1-9][0-9]*$ ]] || return 1
+  state="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_probe getwindowmapstate "$window" 2>/dev/null || true)"
+  case "$state" in
+    *IsViewable*) printf 'viewable\n' ;;
+    *IsUnMapped*) printf 'unmapped\n' ;;
+    *IsUnviewable*) printf 'unviewable\n' ;;
+    *)
+      command -v xwininfo >/dev/null 2>&1 || return 1
+      window_id="$(printf '0x%x' "$window")"
+      state="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" timeout 3 xwininfo -id "$window_id" 2>/dev/null || true)"
+      case "$state" in
+        *'Map State: IsViewable'*) printf 'viewable\n' ;;
+        *'Map State: IsUnMapped'*) printf 'unmapped\n' ;;
+        *'Map State: IsUnviewable'*) printf 'unviewable\n' ;;
+        *) return 1 ;;
+      esac
+      ;;
+  esac
+}
 
-  if [[ -n "$panel_window" ]]; then
-    tile_window_fast "$panel_window" "$TIKPAL_WEB_MODE_PANEL_POSITION" "$TIKPAL_WEB_MODE_PANEL_WINDOW"
-    clear_window_above "$panel_window"
-    DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowlower "$panel_window" >/dev/null 2>&1 || true
+initial_entry_ensure_mapped() {
+  local window="$1" state
+  state="$(initial_entry_window_map_state "$window")" || return 1
+  xdotool_mutate windowmap --sync "$window" || return $?
+  [[ "$(initial_entry_window_map_state "$window")" == "viewable" ]]
+}
+
+initial_entry_set_geometry() {
+  local window="$1" position="$2" size="$3" x y width height
+  x="$(position_x "$position")"
+  y="$(position_y "$position")"
+  width="$(window_width "$size")"
+  height="$(window_height "$size")"
+  xdotool_mutate \
+    windowmove --sync "$window" "$x" "$y" \
+    windowsize --sync "$window" "$width" "$height" \
+    windowmove "$window" "$x" "$y"
+}
+
+initial_entry_move_window() {
+  local window="$1" position="$2"
+  xdotool_mutate windowmove --sync "$window" \
+    "$(position_x "$position")" "$(position_y "$position")"
+}
+
+initial_entry_resize_window() {
+  local window="$1" size="$2"
+  xdotool_mutate windowsize --sync "$window" \
+    "$(window_width "$size")" "$(window_height "$size")"
+}
+
+initial_entry_restore_opacity() {
+  set_window_opacity "$1" 1
+}
+
+initial_entry_raise_window() {
+  xdotool_mutate windowraise "$1"
+}
+
+initial_entry_lower_window() {
+  [[ -n "${1:-}" ]] || return 0
+  xdotool_mutate windowlower "$1"
+}
+
+initial_entry_resolve_surfaces() {
+  local target_window="$1" provider_profile="$2" panel_profile="$3"
+  local panel_window kiosk_window
+  validate_profile_window_fast "$target_window" "$provider_profile" || return 1
+  panel_window="$(wait_for_profile_window "$panel_profile" 8 || true)"
+  [[ "$panel_window" =~ ^[1-9][0-9]*$ ]] || return 1
+  validate_profile_window_fast "$panel_window" "$panel_profile" || return 1
+  kiosk_window="$(first_window_for_profile "$TIKPAL_CHROMIUM_PROFILE_DIR" || true)"
+  if [[ -n "$kiosk_window" ]]; then
+    validate_profile_window_fast "$kiosk_window" "$TIKPAL_CHROMIUM_PROFILE_DIR" || return 1
   fi
-  tile_window_fast "$target_window" "$TIKPAL_WEB_MODE_LEFT_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
-  clear_window_above "$target_window"
-  DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowlower "$target_window" >/dev/null 2>&1 || true
-  sleep "$TIKPAL_WEB_MODE_ENTRY_REVEAL_SETTLE_SECONDS"
-  [[ -n "$panel_window" ]] && raise_window_without_focus "$panel_window"
-  raise_window "$target_window"
+  TIKPAL_INITIAL_ENTRY_PANEL_WINDOW="$panel_window"
+  TIKPAL_INITIAL_ENTRY_KIOSK_WINDOW="$kiosk_window"
+  printf 'target=%s panel=%s kiosk=%s\n' \
+    "$target_window" "$panel_window" "${kiosk_window:-missing}"
+}
+
+initial_entry_reassert_foreground() {
+  local target_window="$1" panel_window="$2"
+  initial_entry_ensure_mapped "$panel_window" || return $?
+  initial_entry_set_geometry "$panel_window" "$TIKPAL_WEB_MODE_PANEL_POSITION" "$TIKPAL_WEB_MODE_PANEL_WINDOW" || return $?
+  initial_entry_restore_opacity "$panel_window" || return $?
+  initial_entry_raise_window "$panel_window" || return $?
+  initial_entry_ensure_mapped "$target_window" || return $?
+  initial_entry_set_geometry "$target_window" "$TIKPAL_WEB_MODE_LEFT_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW" || return $?
+  initial_entry_restore_opacity "$target_window" || return $?
+  initial_entry_raise_window "$target_window"
+}
+
+initial_entry_verify_final_surfaces() {
+  local target_window="$1" panel_window="$2"
+  local target_geometry panel_geometry target_map panel_map target_opacity panel_opacity
+  target_geometry="$(window_geometry_compact "$target_window")" || return 1
+  panel_geometry="$(window_geometry_compact "$panel_window")" || return 1
+  target_map="$(initial_entry_window_map_state "$target_window")" || return 1
+  panel_map="$(initial_entry_window_map_state "$panel_window")" || return 1
+  target_opacity="$(window_opacity_value "$target_window")" || return 1
+  panel_opacity="$(window_opacity_value "$panel_window")" || return 1
+  printf 'target=%s/%s/%s panel=%s/%s/%s\n' \
+    "$target_geometry" "$target_map" "$target_opacity" \
+    "$panel_geometry" "$panel_map" "$panel_opacity"
+  [[ "$target_geometry" == "${TIKPAL_WEB_MODE_LEFT_POSITION}_${TIKPAL_WEB_MODE_LEFT_WINDOW}" &&
+     "$panel_geometry" == "${TIKPAL_WEB_MODE_PANEL_POSITION}_${TIKPAL_WEB_MODE_PANEL_WINDOW}" &&
+     "$target_map" == "viewable" && "$panel_map" == "viewable" ]] || return 1
+  window_opacity_is_full "$target_opacity" && window_opacity_is_full "$panel_opacity"
+}
+
+initial_entry_cleanup_surfaces() {
+  local target_window="$1" panel_window="$2" cleanup_status=0
+  if [[ "$target_window" =~ ^[1-9][0-9]*$ ]]; then
+    set_window_opacity "$target_window" 0 >/dev/null 2>&1 || cleanup_status=1
+    initial_entry_set_geometry "$target_window" "$TIKPAL_WEB_MODE_STAGE_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW" >/dev/null 2>&1 || cleanup_status=1
+    initial_entry_lower_window "$target_window" >/dev/null 2>&1 || cleanup_status=1
+  fi
+  if [[ "$panel_window" =~ ^[1-9][0-9]*$ ]]; then
+    set_window_opacity "$panel_window" 0 >/dev/null 2>&1 || cleanup_status=1
+    initial_entry_set_geometry "$panel_window" "$TIKPAL_WEB_MODE_STAGE_POSITION" "$TIKPAL_WEB_MODE_PANEL_WINDOW" >/dev/null 2>&1 || cleanup_status=1
+    initial_entry_lower_window "$panel_window" >/dev/null 2>&1 || cleanup_status=1
+  fi
+  return "$cleanup_status"
+}
+
+initial_entry_abort() {
+  local provider="$1" phase="$2" target_window="$3" status="$4"
+  local panel_window="$TIKPAL_INITIAL_ENTRY_PANEL_WINDOW" mutation_started=false
+  local before_snapshot after_snapshot cleanup_status=0 timestamp
+  [[ "$TIKPAL_INITIAL_ENTRY_MUTATION_STARTED" == "1" ]] && mutation_started=true
+  before_snapshot="$(initial_entry_window_snapshot "$target_window${panel_window:+,$panel_window}" || true)"
+  initial_entry_cleanup_surfaces "$target_window" "$panel_window" || cleanup_status=$?
+  after_snapshot="$(initial_entry_window_snapshot "$target_window${panel_window:+,$panel_window}" || true)"
+  timestamp="$(x11_monotonic_ns)"
+  if ! initial_entry_trace_event initial_entry_aborted "$provider" "$phase" 0 \
+      "${TIKPAL_INITIAL_ENTRY_FAILED_STEP:-unknown}" "$target_window${panel_window:+,$panel_window}" \
+      cleanup offscreen "$timestamp" "$timestamp" "$status" \
+      "cleanup_status=$cleanup_status" "" "$mutation_started" "$before_snapshot" "$after_snapshot"; then
+    initial_entry_trace_warn aborted_append_failed
+  fi
+  log_open_stage initial_entry_aborted \
+    "provider=$provider phase=$phase step=${TIKPAL_INITIAL_ENTRY_FAILED_STEP:-unknown} status=$status mutation_started=$mutation_started cleanup_status=$cleanup_status"
+  return "$status"
+}
+
+initial_entry_require_step() {
+  local step_number="$1" provider="$2" phase="$3" step="$4" xids="$5"
+  local command_type="$6" expected_geometry="$7" mutation_expected="$8"
+  local target_window="$9" status
+  shift 9
+  if initial_entry_step_run "$step_number" "$provider" "$phase" "$step" "$xids" \
+      "$command_type" "$expected_geometry" "$mutation_expected" "$@"; then
+    return 0
+  else
+    status=$?
+  fi
+  initial_entry_abort "$provider" "$phase" "$target_window" "$status"
+}
+
+initial_entry_prepare_context() {
+  local provider="$1" phase="$2" target_window="${3:-}" context_key
+  context_key="$provider:$phase:${TIKPAL_WEB_MODE_OPEN_REQUEST_ID:-legacy}"
+  if [[ "$TIKPAL_INITIAL_ENTRY_TRACE_CONTEXT_KEY" == "$context_key" ]]; then
+    [[ -n "$target_window" ]] && TIKPAL_INITIAL_ENTRY_TARGET_WINDOW="$target_window"
+    return 0
+  fi
+
+  TIKPAL_INITIAL_ENTRY_MUTATION_STARTED=0
+  TIKPAL_INITIAL_ENTRY_FAILED_STEP=""
+  TIKPAL_INITIAL_ENTRY_FAILED_STATUS=0
+  TIKPAL_INITIAL_ENTRY_PANEL_WINDOW=""
+  TIKPAL_INITIAL_ENTRY_KIOSK_WINDOW=""
+  TIKPAL_INITIAL_ENTRY_TARGET_WINDOW="$target_window"
+  TIKPAL_INITIAL_ENTRY_PROXY_LINE=""
+  TIKPAL_INITIAL_ENTRY_PROXY_ENABLED=""
+  TIKPAL_INITIAL_ENTRY_TRACE_CONTEXT_KEY="$context_key"
+  if initial_entry_trace_require_writable; then
+    return 0
+  fi
+  TIKPAL_INITIAL_ENTRY_FAILED_STEP=trace_preflight
+  TIKPAL_INITIAL_ENTRY_FAILED_STATUS=90
+  log_open_stage initial_entry_aborted \
+    "provider=$provider phase=$phase step=trace_preflight status=90 mutation_started=false cleanup_status=0"
+  return 90
+}
+
+initial_entry_pre_reveal_step() {
+  local step_number="$1" provider="$2" phase="$3" step="$4" xids="$5"
+  local command_type="$6" expected_geometry="$7" mutation_expected="$8"
+  local target_window="$9" status
+  shift 9
+  if initial_entry_step_run "$step_number" "$provider" "$phase" "$step" "$xids" \
+      "$command_type" "$expected_geometry" "$mutation_expected" "$@"; then
+    return 0
+  else
+    status=$?
+  fi
+  initial_entry_abort "$provider" "$phase" "$target_window" "$status" || true
+  return "$status"
+}
+
+initial_entry_probe_request_ownership() {
+  if runtime_open_request_is_current_or_log resident-reveal-start; then
+    printf 'current\n'
+  else
+    printf 'superseded\n'
+  fi
+}
+
+initial_entry_load_proxy_settings() {
+  TIKPAL_INITIAL_ENTRY_PROXY_LINE="$(read_proxy_settings)"
+}
+
+initial_entry_resolve_proxy_enabled() {
+  TIKPAL_INITIAL_ENTRY_PROXY_ENABLED="$(effective_provider_proxy_enabled "$1" "${TIKPAL_INITIAL_ENTRY_PROXY_LINE%%$'\t'*}")"
+}
+
+initial_entry_proxy_is_available() {
+  local provider="$1" proxy_enabled="$2"
+  [[ "$proxy_enabled" == "1" ]] || provider_prefers_direct_proxy "$provider" || provider_direct_reachable "$provider"
+}
+
+initial_entry_prepare_side_panel() {
+  # The legacy panel helper may still call exit under its inherited set -e
+  # context. Keep that exit inside a child so the step wrapper records it and
+  # can restore the staged surfaces before returning the original failure.
+  (
+    set +e
+    ensure_side_panel "$@"
+  )
+}
+
+initial_entry_wait_for_target_window() {
+  TIKPAL_INITIAL_ENTRY_TARGET_WINDOW="$(wait_for_profile_window "$1" "$2")"
+}
+
+initial_entry_wait_for_entry_paint_optional() {
+  if wait_for_entry_provider_paint "$1" "$2" "$3"; then
+    printf 'ready\n'
+  else
+    log "WARN: $(provider_label "$2") did not complete DOM/X11 paint checks before entry reveal"
+    printf 'warning\n'
+  fi
+}
+
+initial_entry_surface_plan() {
+  local target_window="$1" provider_profile="$2" panel_profile="$3" phase="$4"
+  local provider="${provider_profile##*/}" panel_window kiosk_window physical_ms
+  local settle paint_settle kiosk_mutation=0
+  initial_entry_prepare_context "$provider" "$phase" "$target_window" || return $?
+  initial_entry_require_step 1 "$provider" "$phase" resolve_and_validate "$target_window" \
+    xid_validation identity false "$target_window" \
+    initial_entry_resolve_surfaces "$target_window" "$provider_profile" "$panel_profile" || return $?
+  panel_window="$TIKPAL_INITIAL_ENTRY_PANEL_WINDOW"
+  kiosk_window="$TIKPAL_INITIAL_ENTRY_KIOSK_WINDOW"
+  [[ -z "$kiosk_window" ]] || kiosk_mutation=1
+  initial_entry_require_step 2 "$provider" "$phase" panel_map "$panel_window" \
+    map viewable 1 "$target_window" initial_entry_ensure_mapped "$panel_window" || return $?
+  initial_entry_require_step 3 "$provider" "$phase" panel_geometry "$panel_window" \
+    move_resize "${TIKPAL_WEB_MODE_PANEL_POSITION}_${TIKPAL_WEB_MODE_PANEL_WINDOW}" 1 "$target_window" \
+    initial_entry_set_geometry "$panel_window" "$TIKPAL_WEB_MODE_PANEL_POSITION" "$TIKPAL_WEB_MODE_PANEL_WINDOW" || return $?
+  initial_entry_require_step 4 "$provider" "$phase" panel_opacity "$panel_window" \
+    opacity full 1 "$target_window" initial_entry_restore_opacity "$panel_window" || return $?
+  initial_entry_require_step 5 "$provider" "$phase" target_map "$target_window" \
+    map viewable 1 "$target_window" initial_entry_ensure_mapped "$target_window" || return $?
+  initial_entry_require_step 6 "$provider" "$phase" target_opacity "$target_window" \
+    opacity full 1 "$target_window" initial_entry_restore_opacity "$target_window" || return $?
+  initial_entry_require_step 7 "$provider" "$phase" target_move "$target_window" \
+    move "$TIKPAL_WEB_MODE_LEFT_POSITION" 1 "$target_window" \
+    initial_entry_move_window "$target_window" "$TIKPAL_WEB_MODE_LEFT_POSITION" || return $?
+  initial_entry_require_step 8 "$provider" "$phase" target_resize "$target_window" \
+    resize "$TIKPAL_WEB_MODE_LEFT_WINDOW" 1 "$target_window" \
+    initial_entry_resize_window "$target_window" "$TIKPAL_WEB_MODE_LEFT_WINDOW" || return $?
+  initial_entry_require_step 9 "$provider" "$phase" target_raise "$target_window" \
+    raise foreground 1 "$target_window" initial_entry_raise_window "$target_window" || return $?
+  initial_entry_require_step 10 "$provider" "$phase" kiosk_lower "$kiosk_window" \
+    lower background "$kiosk_mutation" "$target_window" initial_entry_lower_window "$kiosk_window" || return $?
+
+  if [[ "$phase" == "resident_initial_entry" ]]; then
+    settle="$TIKPAL_WEB_MODE_RESIDENT_ENTRY_SETTLE_SECONDS"
+    paint_settle="$TIKPAL_WEB_MODE_RESIDENT_ENTRY_PAINT_SETTLE_SECONDS"
+    [[ "$settle" =~ ^[0-9]+([.][0-9]+)?$ ]] || settle=0.16
+    [[ "$paint_settle" =~ ^[0-9]+([.][0-9]+)?$ ]] || paint_settle=0.5
+    sleep "$settle"
+    sleep "$paint_settle"
+  else
+    settle="$TIKPAL_WEB_MODE_ENTRY_REVEAL_SETTLE_SECONDS"
+    [[ "$settle" =~ ^[0-9]+([.][0-9]+)?$ ]] || settle=0.45
+    sleep "$settle"
+  fi
+  initial_entry_require_step 11 "$provider" "$phase" foreground_reassert "$target_window,$panel_window" \
+    reassert visible 1 "$target_window" initial_entry_reassert_foreground "$target_window" "$panel_window" || return $?
+  initial_entry_require_step 12 "$provider" "$phase" final_surface_snapshot "$target_window,$panel_window" \
+    geometry_verify "${TIKPAL_WEB_MODE_LEFT_POSITION}_${TIKPAL_WEB_MODE_LEFT_WINDOW};${TIKPAL_WEB_MODE_PANEL_POSITION}_${TIKPAL_WEB_MODE_PANEL_WINDOW}" \
+    0 "$target_window" initial_entry_verify_final_surfaces "$target_window" "$panel_window" || return $?
+  physical_ms="$(now_ms)"
+  initial_entry_require_step 13 "$provider" "$phase" physical_stamp "$target_window,$panel_window" \
+    stamp "$TIKPAL_WEB_MODE_PHYSICAL_REVEAL_STAMP_PATH" 0 "$target_window" \
+    write_physical_reveal_stamp "$provider_profile" "$target_window" "" "$physical_ms" || return $?
+  log_stage "reveal_physical target=$target_window mode=initial-entry physical_ms=$physical_ms"
+  log_open_stage reveal \
+    "provider=$provider result=success route=initial-entry phase=$phase target_window=$target_window panel_window=$panel_window physical_ms=$physical_ms"
+}
+
+reveal_initial_entry_surfaces() {
+  initial_entry_surface_plan "$1" "$2" "$3" cold_initial_entry
 }
 
 reveal_resident_initial_entry_surfaces() {
-  local target_window="$1"
-  local panel_profile="$2"
-  local panel_window settle paint_settle
-  panel_window="$(wait_for_profile_window "$panel_profile" 2 || true)"
-  settle="$TIKPAL_WEB_MODE_RESIDENT_ENTRY_SETTLE_SECONDS"
-  paint_settle="$TIKPAL_WEB_MODE_RESIDENT_ENTRY_PAINT_SETTLE_SECONDS"
-  [[ "$settle" =~ ^[0-9]+([.][0-9]+)?$ ]] || settle=0.16
-  [[ "$paint_settle" =~ ^[0-9]+([.][0-9]+)?$ ]] || paint_settle=0.5
-
-  if [[ -n "$panel_window" ]]; then
-    tile_window_fast "$panel_window" "$TIKPAL_WEB_MODE_PANEL_POSITION" "$TIKPAL_WEB_MODE_PANEL_WINDOW"
-    clear_window_above "$panel_window"
-    DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowlower "$panel_window" >/dev/null 2>&1 || true
-  fi
-  tile_window_fast "$target_window" "$TIKPAL_WEB_MODE_LEFT_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
-  clear_window_above "$target_window"
-  DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe windowlower "$target_window" >/dev/null 2>&1 || true
-  sleep "$settle"
-  sleep "$paint_settle"
-  tile_window_fast "$target_window" "$TIKPAL_WEB_MODE_LEFT_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
-  mark_window_above "$target_window"
-  raise_window "$target_window"
-  [[ -n "$panel_window" ]] && raise_window_without_focus "$panel_window"
+  initial_entry_surface_plan "$1" "$2" "$3" resident_initial_entry
 }
 
 reveal_resident_provider_surfaces() {
@@ -6124,6 +6603,7 @@ reveal_resident_provider_window() {
     else
       helper_status=$?
     fi
+    log_open_stage helper_call "provider=${provider_profile##*/} result=$([[ "$helper_status" == "0" ]] && printf success || printf failed) status=$helper_status response=${TIKPAL_X11_HELPER_LAST_RESPONSE:-none}"
     if [[ "$helper_status" == "0" ]]; then
       physical_ms="$(now_ms)"
       # A successful Helper response already includes checked mutations, an X11
@@ -6138,13 +6618,16 @@ reveal_resident_provider_window() {
         record_switch_trace_event runtime_geometry_verified helper_final_snapshot
       fi
       log_stage "reveal_physical target=$target_window provider_port=$provider_port mode=helper generation=$TIKPAL_X11_HELPER_GENERATION physical_ms=$physical_ms ms=$(( physical_ms - started_ms ))"
+      log_open_stage reveal "provider=${provider_profile##*/} result=success route=helper target_window=$target_window physical_ms=$physical_ms"
       log_switch_segment_summary_once "$segment_timing_once" "$provider_profile" "$cached_xid_ms" "$first_cdp_ms" 0 0 0 0
       return 0
     elif [[ "$helper_status" == "70" ]]; then
+      log_open_stage reveal "provider=${provider_profile##*/} result=failed route=helper reason=unknown_outcome status=$helper_status"
       fail "X11 helper switch outcome is unknown; leaving helper ownership fail-closed"
     else
       x11_helper_enter_fallback "$helper_status" ||
         fail "X11 helper failed and ownership could not be safely returned to Shell"
+      log_open_stage helper_route "provider=${provider_profile##*/} result=legacy_selected reason=helper_call_failed status=$helper_status"
       helper_candidate=0
     fi
     if [[ "$helper_candidate" != "1" ]]; then
@@ -6770,10 +7253,11 @@ open_provider_pool() {
   local panel_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"
   local resident_status resident_page_ready=0 fast_resident=0 switching_provider=0 current_port provider_port
   local helper_candidate=0 helper_target_raw=0
-  local started_ms reveal_ms command_return_ms transition_shown_ms=0
+  local started_ms reveal_ms command_return_ms transition_shown_ms=0 initial_entry_status=0
+  local initial_entry_phase=""
   local segment_timing_once=0 segment_started_ms=0 cached_xid_ms=-1 first_cdp_ms=-1 guard_stop_ms=-1 panel_retile_ms=-1
   local trace_started_ms=0 trace_finished_ms=0 trace_elapsed_ms=0 trace_cdp_started_ms=0 trace_cdp_elapsed_ms=0
-  if ! runtime_open_request_is_current; then
+  if ! runtime_open_request_is_current_or_log open-pool-start; then
     log "open abandoned: active provider no longer ${TIKPAL_WEB_MODE_OPEN_EXPECTED_ACTIVE_PROVIDER}"
     return 0
   fi
@@ -6834,6 +7318,15 @@ open_provider_pool() {
     fi
   fi
   log_stage "open_pool_init provider=$provider target=$target_window resident_page_ready=$resident_page_ready fast_resident=$fast_resident switching=$switching_provider entry=$entry_stage ms=$(( $(now_ms) - started_ms ))"
+  log_open_stage resident_page_ready "provider=$provider ready=$resident_page_ready target_window=${target_window:-missing} resident_status=${resident_status:-missing}"
+  if [[ "$entry_stage" == "1" && initial_entry_trace_enabled ]]; then
+    if [[ "$fast_resident" == "1" ]]; then
+      initial_entry_phase=resident_initial_entry
+    else
+      initial_entry_phase=cold_initial_entry
+    fi
+    initial_entry_prepare_context "$provider" "$initial_entry_phase" "$target_window" || return $?
+  fi
   # A foreground choice owns the pool from this point. Stop both idle and
   # active background queues before a hot reveal as well as a cold launch.
   # Stop the old X11 guard first: it otherwise keeps raising the old provider
@@ -6846,6 +7339,9 @@ open_provider_pool() {
     begin_provider_switch_guard
     previous_window="$(read_guard_window provider "$current_profile" || true)"
     known_panel_window="$(read_guard_window panel "$panel_profile" || true)"
+    if ! x11_helper_switch_enabled; then
+      log_open_stage helper_route "provider=$provider result=legacy_selected reason=helper_mode_$TIKPAL_WEB_MODE_X11_HELPER_MODE"
+    fi
     if [[ "$helper_target_raw" == "1" && "$previous_window" =~ ^[1-9][0-9]*$ &&
        "$known_panel_window" =~ ^[1-9][0-9]*$ ]] && x11_helper_prepare_switch; then
       helper_candidate=1
@@ -6853,7 +7349,11 @@ open_provider_pool() {
       guard_stop_ms=0
       panel_retile_ms=0
       log_stage "x11_helper_prepared generation=$TIKPAL_X11_HELPER_GENERATION epoch=$TIKPAL_X11_HELPER_CONNECTION_EPOCH target=$target_window previous=$previous_window panel=$panel_window"
+      log_open_stage helper_route "provider=$provider result=prepared generation=$TIKPAL_X11_HELPER_GENERATION target_window=$target_window previous_window=$previous_window panel_window=$panel_window"
     else
+      if x11_helper_switch_enabled; then
+        log_open_stage helper_route "provider=$provider result=legacy_selected reason=helper_prepare_unavailable"
+      fi
       if [[ "$helper_target_raw" == "1" ]]; then
         target_window="$(first_window_for_profile "$provider_profile" "$segment_timing_once" target || true)"
         [[ -n "$target_window" && "$resident_page_ready" == "1" ]] && fast_resident=1 || fast_resident=0
@@ -6919,13 +7419,22 @@ open_provider_pool() {
   fi
   if [[ -f "$(pool_warm_stamp_file)" ]]; then
     if provider_prewarm_queue_running; then
-      stop_provider_pool_prewarm
+      if [[ "$entry_stage" == "1" && initial_entry_trace_enabled ]]; then
+        initial_entry_pre_reveal_step 50 "$provider" "$initial_entry_phase" prewarm_queue_stop "$target_window" \
+          queue_stop stopped_or_idle 1 "$target_window" stop_provider_pool_prewarm || return $?
+      else
+        stop_provider_pool_prewarm
+      fi
     fi
   fi
   # A newer sidebar choice owns the pending request. Do not carry this stale
   # foreground command through another resident reveal while it holds the
   # shared web-mode lock; the server will run the newest request next.
-  if ! runtime_open_request_is_current; then
+  if [[ "$entry_stage" == "1" && initial_entry_trace_enabled ]]; then
+    initial_entry_pre_reveal_step 51 "$provider" "$initial_entry_phase" request_ownership "$target_window" \
+      state_check current 0 "$target_window" initial_entry_probe_request_ownership || return $?
+  fi
+  if ! runtime_open_request_is_current_or_log resident-reveal-start; then
     clear_provider_switch_guard
     log "open abandoned before resident reveal: $provider"
     return 0
@@ -6951,19 +7460,21 @@ open_provider_pool() {
   fi
   if [[ "$fast_resident" == "1" && "$entry_stage" != "1" ]]; then
     [[ "$helper_candidate" == "1" ]] || stop_window_guard
-    if ! runtime_open_request_is_current; then
+    if ! runtime_open_request_is_current_or_log hot-reveal-start; then
       clear_provider_switch_guard
       log "open abandoned before resident reveal: $provider"
       return 0
     fi
+    log_open_stage surface_plan_begin "provider=$provider route=$([[ "$helper_candidate" == "1" ]] && printf helper || printf legacy) operations=layout,map,raise target_window=$target_window previous_window=$previous_window panel_window=$panel_window"
     if reveal_resident_provider_window "$target_window" "$current_profile" "$provider_profile" "$transition_shown_ms" "$provider_port" "$previous_window" "$resident_page_ready" \
       "$segment_timing_once" "$cached_xid_ms" "$first_cdp_ms" "$guard_stop_ms" "$panel_retile_ms" \
       "$helper_candidate" "$panel_window" "$panel_profile"; then
       invalidate_chromium_window_cache
       reveal_ms="$(( $(now_ms) - started_ms ))"
       log_stage "reveal_ms=$reveal_ms provider=$provider resident=1"
+      log_open_stage surface_plan_end "provider=$provider result=revealed target_window=$target_window reveal_ms=$reveal_ms"
       clear_provider_switch_guard
-      if ! runtime_open_request_is_current; then
+      if ! runtime_open_request_is_current_or_log hot-commit-start; then
         if [[ "$TIKPAL_X11_HELPER_ACTIVE" == "1" ]]; then
           x11_helper_finish_success || fail "X11 helper ownership could not be released after an abandoned switch"
         fi
@@ -6985,9 +7496,10 @@ open_provider_pool() {
       reconcile_provider_pool_in_background "$provider"
       command_return_ms="$(( $(now_ms) - started_ms ))"
       log_stage "command_return_ms=$command_return_ms provider=$provider resident=1"
-      log "opened $provider"
+      log_open_stage opened "provider=$provider target_window=$target_window command_return_ms=$command_return_ms"
       return 0
     fi
+    log_open_stage surface_plan_end "provider=$provider result=failed reason=resident_reveal_failed target_window=$target_window"
     # A real CDP page is not permission to commit failed X11 geometry. Restore
     # the old visible owner and leave the resident target available for retry.
     if provider_has_real_provider_page "$provider_port"; then
@@ -7004,34 +7516,87 @@ open_provider_pool() {
     extension_enabled=1
   fi
 
-  hide_onboard
+  if [[ "$entry_stage" == "1" && initial_entry_trace_enabled ]]; then
+    initial_entry_pre_reveal_step 52 "$provider" "$initial_entry_phase" onboard_hide "$target_window" \
+      onboard_hide hidden_or_absent 1 "$target_window" hide_onboard || return $?
+  else
+    hide_onboard
+  fi
   # Use non-hidden mode so the panel is placed at its final position
   # immediately, rather than being staged off-screen and re-tiled later.
   # This makes the side panel visible during the long CDP/provider wait.
-  if [[ "$switching_provider" != "1" ]] && ! ensure_side_panel "$provider" 0; then
+  if [[ "$switching_provider" != "1" && "$entry_stage" == "1" && initial_entry_trace_enabled ]]; then
+    if initial_entry_pre_reveal_step 53 "$provider" "$initial_entry_phase" side_panel_prepare "$target_window" \
+        panel_place "${TIKPAL_WEB_MODE_PANEL_POSITION}_${TIKPAL_WEB_MODE_PANEL_WINDOW}" 1 "$target_window" \
+        initial_entry_prepare_side_panel "$provider" 0; then
+      TIKPAL_INITIAL_ENTRY_PANEL_WINDOW="$(first_window_for_profile "$panel_profile" || true)"
+    else
+      close_web_mode
+      fail "Explore side panel did not open"
+    fi
+  elif [[ "$switching_provider" != "1" ]] && ! ensure_side_panel "$provider" 0; then
     close_web_mode
     fail "Explore side panel did not open"
   fi
-  proxy_line="$(read_proxy_settings)"
-  proxy_enabled="$(effective_provider_proxy_enabled "$provider" "${proxy_line%%$'\t'*}")"
-  if [[ "$proxy_enabled" != "1" ]] && ! provider_prefers_direct_proxy "$provider" && ! provider_direct_reachable "$provider"; then
+  if [[ "$entry_stage" == "1" && initial_entry_trace_enabled ]]; then
+    initial_entry_pre_reveal_step 54 "$provider" "$initial_entry_phase" proxy_settings "$target_window" \
+      settings_read configured 0 "$target_window" initial_entry_load_proxy_settings || return $?
+    proxy_line="$TIKPAL_INITIAL_ENTRY_PROXY_LINE"
+    initial_entry_pre_reveal_step 55 "$provider" "$initial_entry_phase" proxy_mode "$target_window" \
+      proxy_resolve enabled_or_direct 0 "$target_window" initial_entry_resolve_proxy_enabled "$provider" || return $?
+    proxy_enabled="$TIKPAL_INITIAL_ENTRY_PROXY_ENABLED"
+    if ! initial_entry_pre_reveal_step 56 "$provider" "$initial_entry_phase" proxy_reachability "$target_window" \
+        reachability proxy_or_direct 0 "$target_window" initial_entry_proxy_is_available "$provider" "$proxy_enabled"; then
+      message="$(provider_needs_proxy_message "$provider")"
+      recover_or_cover_provider_failure "$current_provider" "$current_profile" "$provider" "check_proxy" "$message" || true
+      fail "$message"
+    fi
+  else
+    proxy_line="$(read_proxy_settings)"
+    proxy_enabled="$(effective_provider_proxy_enabled "$provider" "${proxy_line%%$'\t'*}")"
+  fi
+  if [[ "$entry_stage" != "1" || ! initial_entry_trace_enabled ]] && [[ "$proxy_enabled" != "1" ]] && ! provider_prefers_direct_proxy "$provider" && ! provider_direct_reachable "$provider"; then
     message="$(provider_needs_proxy_message "$provider")"
     recover_or_cover_provider_failure "$current_provider" "$current_profile" "$provider" "check_proxy" "$message" || true
     fail "$message"
   fi
-  stop_window_guard
+  if [[ "$entry_stage" == "1" && initial_entry_trace_enabled ]]; then
+    initial_entry_pre_reveal_step 57 "$provider" "$initial_entry_phase" window_guard_stop \
+      "$target_window${TIKPAL_INITIAL_ENTRY_PANEL_WINDOW:+,$TIKPAL_INITIAL_ENTRY_PANEL_WINDOW}" \
+      guard_stop stopped 1 "$target_window" stop_window_guard || return $?
+  else
+    stop_window_guard
+  fi
   if [[ "$fast_resident" != "1" ]] && profile_process_exists "$provider_profile"; then
-    close_provider_profile "$provider_profile"
+    if [[ "$entry_stage" == "1" && initial_entry_trace_enabled ]]; then
+      initial_entry_pre_reveal_step 58 "$provider" "$initial_entry_phase" provider_profile_close "$target_window" \
+        profile_close stopped 1 "$target_window" close_provider_profile "$provider_profile" || return $?
+    else
+      close_provider_profile "$provider_profile"
+    fi
   fi
 
   if profile_process_exists "$provider_profile"; then
     if [[ "$fast_resident" != "1" ]]; then
-      start_provider_guard "$provider" "$provider_profile" "$(provider_url "$provider")" "$proxy_enabled" "$(provider_debug_port "$provider")"
+      if [[ "$entry_stage" == "1" && initial_entry_trace_enabled ]]; then
+        initial_entry_pre_reveal_step 59 "$provider" "$initial_entry_phase" provider_guard_start "$target_window" \
+          provider_guard started 1 "$target_window" start_provider_guard "$provider" "$provider_profile" \
+          "$(provider_url "$provider")" "$proxy_enabled" "$(provider_debug_port "$provider")" || return $?
+      else
+        start_provider_guard "$provider" "$provider_profile" "$(provider_url "$provider")" "$proxy_enabled" "$(provider_debug_port "$provider")"
+      fi
       if [[ "$extension_enabled" == "1" ]] && ! provider_uses_direct_bootstrap "$provider" && ! wait_for_real_provider_url "$(provider_debug_port "$provider")"; then
         message="$(provider_label "$provider") did not enter the provider page"
         recover_or_cover_provider_failure "$current_provider" "$current_profile" "$provider" "check_setup" "$message" || true
         fail "$message"
       fi
+    fi
+  elif [[ "$entry_stage" == "1" && initial_entry_trace_enabled ]]; then
+    if ! initial_entry_pre_reveal_step 60 "$provider" "$initial_entry_phase" provider_launch "$target_window" \
+        provider_launch launched 1 "$target_window" launch_provider_for_pool "$provider" entry; then
+      message="$(provider_label "$provider") did not enter the provider page"
+      recover_or_cover_provider_failure "$current_provider" "$current_profile" "$provider" "check_setup" "$message" || true
+      fail "$message"
     fi
   elif ! launch_provider_for_pool "$provider" entry; then
     message="$(provider_label "$provider") did not enter the provider page"
@@ -7039,14 +7604,29 @@ open_provider_pool() {
     fail "$message"
   fi
 
-  target_window="$(wait_for_profile_window "$provider_profile" "$(profile_window_timeout_attempts "$TIKPAL_WEB_MODE_PROVIDER_WINDOW_TIMEOUT_SECONDS")" || true)"
+  if [[ "$entry_stage" == "1" && initial_entry_trace_enabled ]]; then
+    if initial_entry_pre_reveal_step 61 "$provider" "$initial_entry_phase" target_window_wait "$target_window" \
+        window_wait available 0 "$target_window" initial_entry_wait_for_target_window "$provider_profile" \
+        "$(profile_window_timeout_attempts "$TIKPAL_WEB_MODE_PROVIDER_WINDOW_TIMEOUT_SECONDS")"; then
+      target_window="$TIKPAL_INITIAL_ENTRY_TARGET_WINDOW"
+    else
+      target_window=""
+    fi
+  else
+    target_window="$(wait_for_profile_window "$provider_profile" "$(profile_window_timeout_attempts "$TIKPAL_WEB_MODE_PROVIDER_WINDOW_TIMEOUT_SECONDS")" || true)"
+  fi
   if [[ -z "$target_window" ]]; then
     message="$(provider_label "$provider") window is unavailable"
     recover_or_cover_provider_failure "$current_provider" "$current_profile" "$provider" "check_setup" "$message" || true
     fail "$(provider_label "$provider") did not open"
   fi
   if [[ "$fast_resident" != "1" && "$entry_stage" == "1" ]]; then
-    wait_for_entry_provider_paint "$(provider_debug_port "$provider")" "$provider" "$target_window" || log "WARN: $(provider_label "$provider") did not complete DOM/X11 paint checks before entry reveal"
+    if [[ "$entry_stage" == "1" && initial_entry_trace_enabled ]]; then
+      initial_entry_pre_reveal_step 62 "$provider" "$initial_entry_phase" entry_paint_check "$target_window" \
+        paint_check ready_or_warning 0 "$target_window" initial_entry_wait_for_entry_paint_optional || return $?
+    else
+      wait_for_entry_provider_paint "$(provider_debug_port "$provider")" "$provider" "$target_window" || log "WARN: $(provider_label "$provider") did not complete DOM/X11 paint checks before entry reveal"
+    fi
   elif [[ "$fast_resident" != "1" ]]; then
     if ! wait_for_provider_ready "$(provider_debug_port "$provider")" "$provider"; then
       message="$(provider_label "$provider") did not become ready"
@@ -7054,22 +7634,39 @@ open_provider_pool() {
       fail "$message"
     fi
   fi
+  log_open_stage target_window_found "provider=$provider target_window=$target_window resident_page_ready=$resident_page_ready"
+  log_open_stage surface_plan_begin "provider=$provider route=$([[ "$entry_stage" == "1" ]] && printf initial || printf legacy) operations=layout,map,raise target_window=$target_window"
   if [[ "$entry_stage" == "1" ]]; then
     if [[ "$fast_resident" == "1" ]]; then
-      reveal_resident_initial_entry_surfaces "$target_window" "$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"
+      if reveal_resident_initial_entry_surfaces "$target_window" "$provider_profile" "$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"; then
+        :
+      else
+        initial_entry_status=$?
+        log_open_stage surface_plan_end "provider=$provider result=failed reason=initial_entry_reveal_failed target_window=$target_window"
+        return "$initial_entry_status"
+      fi
     else
-      reveal_initial_entry_surfaces "$target_window" "$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"
+      if reveal_initial_entry_surfaces "$target_window" "$provider_profile" "$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"; then
+        :
+      else
+        initial_entry_status=$?
+        log_open_stage surface_plan_end "provider=$provider result=failed reason=initial_entry_reveal_failed target_window=$target_window"
+        return "$initial_entry_status"
+      fi
     fi
-    reassert_visible_provider_surfaces "$target_window" "$provider_profile" "$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"
   else
     # Pause old provider media before reveal to prevent audio mixing.
     if [[ "$switching_provider" == "1" && -n "$current_provider" ]]; then
       local _slow_cdp_json="$(timeout 0.8 curl --noproxy '*' -sf --connect-timeout 1 --max-time 1 "http://127.0.0.1:$(provider_debug_port "$current_provider")/json/list" 2>/dev/null || true)"
       pause_provider_media_via_cdp "$(provider_debug_port "$current_provider")" "$_slow_cdp_json" || true
     fi
-    reveal_resident_provider_surfaces "$target_window" "$provider_profile" "$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel" "$current_profile" "$transition_shown_ms" "$provider_port"
+    if ! reveal_resident_provider_surfaces "$target_window" "$provider_profile" "$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel" "$current_profile" "$transition_shown_ms" "$provider_port"; then
+      log_open_stage surface_plan_end "provider=$provider result=failed reason=legacy_reveal_failed target_window=$target_window"
+      return 1
+    fi
   fi
-  if ! runtime_open_request_is_current; then
+  log_open_stage surface_plan_end "provider=$provider result=revealed target_window=$target_window"
+  if ! runtime_open_request_is_current_or_log provider-commit-start; then
     log "open abandoned before provider commit: $provider"
     return 0
   fi
@@ -7084,11 +7681,12 @@ open_provider_pool() {
   reconcile_provider_pool_in_background "$provider"
   command_return_ms="$(( $(now_ms) - started_ms ))"
   log_stage "command_return_ms=$command_return_ms provider=$provider resident=$fast_resident"
-  log "opened $provider"
+  log_open_stage opened "provider=$provider target_window=$target_window command_return_ms=$command_return_ms"
 }
 
 open_provider() {
   local provider="$1"
+  runtime_open_request_is_current_or_log open-start || return 0
   if is_enabled "$TIKPAL_WEB_MODE_PROVIDER_POOL"; then
     open_provider_pool "$provider"
     return
@@ -7103,7 +7701,7 @@ open_provider() {
   local current_audio_bus="" target_audio_bus="" target_audio_device="" crossfade_switch=0
   local proxy_line proxy_enabled proxy_url
   local message
-  local entry_stage=0 switching_provider=0 transition_shown_ms=0
+  local entry_stage=0 switching_provider=0 transition_shown_ms=0 initial_entry_status=0
   url="$(provider_url "$provider")"
   provider_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/$provider"
   provider_port="$(provider_debug_port "$provider")"
@@ -7242,11 +7840,26 @@ open_provider() {
     recover_or_cover_provider_failure "$current_provider" "$current_profile" "$provider" "check_setup" "$message" || true
     fail "$message"
   fi
+  if ! runtime_open_request_is_current_or_log provider-reveal-start; then
+    log "open abandoned before provider reveal: $provider"
+    return 0
+  fi
+  log_open_stage target_window_found "provider=$provider target_window=$target_window resident_page_ready=1"
+  log_open_stage helper_route "provider=$provider result=legacy_selected reason=provider_pool_disabled"
+  log_open_stage surface_plan_begin "provider=$provider route=legacy operations=layout,map,raise target_window=$target_window"
   if [[ "$entry_stage" == "1" ]]; then
-    reveal_initial_entry_surfaces "$target_window" "$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"
-    reassert_visible_provider_surfaces "$target_window" "$provider_profile" "$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"
+    if reveal_initial_entry_surfaces "$target_window" "$provider_profile" "$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"; then
+      :
+    else
+      initial_entry_status=$?
+      log_open_stage surface_plan_end "provider=$provider result=failed reason=initial_entry_reveal_failed target_window=$target_window"
+      return "$initial_entry_status"
+    fi
   else
-    reveal_resident_provider_window "$target_window" "$current_profile" "$provider_profile" "$transition_shown_ms" "$provider_port"
+    if ! reveal_resident_provider_window "$target_window" "$current_profile" "$provider_profile" "$transition_shown_ms" "$provider_port"; then
+      log_open_stage surface_plan_end "provider=$provider result=failed reason=legacy_reveal_failed target_window=$target_window"
+      return 1
+    fi
     reassert_visible_provider_surfaces "$target_window" "$provider_profile" "$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"
     sleep 0.05
     if [[ "$crossfade_switch" == "1" ]]; then
@@ -7260,11 +7873,16 @@ open_provider() {
     fi
     close_other_provider_profiles "$provider_profile"
   fi
+  log_open_stage surface_plan_end "provider=$provider result=revealed target_window=$target_window"
+  if ! runtime_open_request_is_current_or_log provider-commit-start; then
+    log "open abandoned before provider commit: $provider"
+    return 0
+  fi
   activate_target_provider_audio_gate "$provider" "$provider_port" || true
   write_audio_bus_state "$target_audio_bus"
   commit_visible_provider_state "$provider"
   start_window_guard "$provider_profile" "$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"
-  log "opened $provider"
+  log_open_stage opened "provider=$provider target_window=$target_window"
 }
 
 apply_proxy_settings() {

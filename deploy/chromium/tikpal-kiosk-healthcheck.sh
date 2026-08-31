@@ -43,6 +43,7 @@ fi
 : "${TIKPAL_KIOSK_SERVICE_USER:=moode}"
 : "${TIKPAL_WEB_MODE_PROFILE_ROOT:=$HOME/.config/tikpal-web-mode}"
 : "${TIKPAL_WEB_MODE_STATE_PATH:=$APP_DIR/.tikpal/web-mode-state.json}"
+: "${TIKPAL_KIOSK_X_SESSION_GENERATION_PATH:=$APP_DIR/.tikpal/kiosk-x-session-generation}"
 
 MODE="run"
 if [[ "${1:-}" == "--check" ]]; then
@@ -99,6 +100,7 @@ print_check() {
   log "web mode heartbeat bypass: $TIKPAL_KIOSK_WATCHDOG_WEB_MODE_HEARTBEAT_BYPASS"
   log "web mode profile root: $TIKPAL_WEB_MODE_PROFILE_ROOT"
   log "web mode state path: $TIKPAL_WEB_MODE_STATE_PATH"
+  log "X session generation path: $TIKPAL_KIOSK_X_SESSION_GENERATION_PATH"
   log "physical display check: $TIKPAL_KIOSK_PHYSICAL_DISPLAY_CHECK_ENABLED"
   log "physical display prepare: $TIKPAL_KIOSK_PHYSICAL_DISPLAY_PREPARE_COMMAND"
   log "physical display soft-kick before restart: $TIKPAL_KIOSK_PHYSICAL_DISPLAY_SOFT_KICK_BEFORE_RESTART"
@@ -234,31 +236,77 @@ sanitize_reason_detail() {
 }
 
 page_heartbeat_detail=""
+web_mode_bypass_reason="none"
+web_mode_active_provider="none"
+web_mode_opening_provider="none"
+web_mode_open_request_id="none"
+web_mode_open_started_at="none"
+web_mode_x_session_generation="none"
+web_mode_current_x_session_generation="none"
 web_mode_provider_active() {
   is_enabled "$TIKPAL_KIOSK_WATCHDOG_WEB_MODE_HEARTBEAT_BYPASS" || return 1
   [[ -r "$TIKPAL_WEB_MODE_STATE_PATH" ]] || return 1
   if command -v node >/dev/null 2>&1; then
-    node -e '
+    local result status
+    set +e
+    result="$(node -e '
       const fs = require("node:fs");
       try {
         const state = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
         const activeProvider = typeof state.activeProvider === "string" && state.activeProvider.trim();
+        const openingProvider = typeof state.openingProvider === "string" && state.openingProvider.trim();
+        const openRequestId = typeof state.openRequestId === "string" && state.openRequestId.trim();
+        const openStartedAt = typeof state.openStartedAt === "string" && state.openStartedAt.trim();
+        const xSessionGeneration = typeof state.openXSessionGeneration === "string" && state.openXSessionGeneration.trim();
         const closeRequestId = typeof state.closeRequestId === "string" && state.closeRequestId.trim();
-        process.exit(activeProvider || closeRequestId ? 0 : 1);
+        let currentXSessionGeneration = "";
+        try {
+          currentXSessionGeneration = fs.readFileSync(process.argv[2], "utf8").trim();
+        } catch {}
+        const openingRequestCurrent = openingProvider && openRequestId && xSessionGeneration
+          && xSessionGeneration === currentXSessionGeneration;
+        const reason = activeProvider
+          ? "active-provider"
+          : openingRequestCurrent
+            ? "opening-request"
+            : openingProvider && openRequestId && xSessionGeneration
+              ? "stale-opening-request"
+            : closeRequestId
+              ? "close-request"
+              : "none";
+        console.log([reason, activeProvider || "none", openingProvider || "none", openRequestId || "none", openStartedAt || "none", xSessionGeneration || "none", currentXSessionGeneration || "none"].join("\t"));
+        process.exit(reason === "active-provider" || reason === "opening-request" || reason === "close-request" ? 0 : 1);
       } catch {
         process.exit(1);
       }
-    ' "$TIKPAL_WEB_MODE_STATE_PATH" >/dev/null 2>&1
-    return
+    ' "$TIKPAL_WEB_MODE_STATE_PATH" "$TIKPAL_KIOSK_X_SESSION_GENERATION_PATH" 2>/dev/null)"
+    status="$?"
+    set -e
+    if [[ -n "$result" ]]; then
+      IFS=$'\t' read -r web_mode_bypass_reason web_mode_active_provider web_mode_opening_provider \
+        web_mode_open_request_id web_mode_open_started_at web_mode_x_session_generation \
+        web_mode_current_x_session_generation <<< "$result"
+    fi
+    return "$status"
   fi
-  grep -Eq '"(activeProvider|closeRequestId)"[[:space:]]*:[[:space:]]*"[^\"]+"' "$TIKPAL_WEB_MODE_STATE_PATH"
+  if grep -Eq '"(activeProvider|closeRequestId)"[[:space:]]*:[[:space:]]*"[^\"]+"' "$TIKPAL_WEB_MODE_STATE_PATH"; then
+    web_mode_bypass_reason="legacy-state"
+    return 0
+  fi
+  return 1
+}
+
+log_page_heartbeat_decision() {
+  local decision="$1" reason="$2" ready_state="$3" current_time="$4" health="$5" stalled="$6" not_ready="$7"
+  log "heartbeat decision=$decision reason=$(sanitize_reason_detail "$reason") bypass_reason=$web_mode_bypass_reason active_provider=$web_mode_active_provider opening_provider=$web_mode_opening_provider open_request_id=$web_mode_open_request_id open_started_at=$web_mode_open_started_at x_session_generation=$web_mode_x_session_generation current_x_session_generation=$web_mode_current_x_session_generation scene_ready_state=$ready_state scene_current_time=$current_time scene_health=$health scene_stalled=$stalled scene_not_ready=$not_ready"
 }
 
 check_page_heartbeat() {
   page_heartbeat_detail=""
   is_enabled "$TIKPAL_KIOSK_WATCHDOG_PAGE_HEARTBEAT_ENABLED" || return 0
   command -v curl >/dev/null 2>&1 || return 0
-  web_mode_provider_active && return 0
+  local bypass=0
+  web_mode_provider_active && bypass=1
 
   local body
   if ! body="$(
@@ -266,40 +314,68 @@ check_page_heartbeat() {
       curl -fsS --max-time "$TIKPAL_KIOSK_WATCHDOG_WEB_TIMEOUT_SECONDS" \
       "$TIKPAL_KIOSK_WATCHDOG_PAGE_HEARTBEAT_URL" 2>/dev/null
   )"; then
+    if [[ "$bypass" == "1" ]]; then
+      log_page_heartbeat_decision bypass heartbeat-request-failed unknown unknown unknown unknown unknown
+      return 0
+    fi
     page_heartbeat_detail="heartbeat-request-failed"
+    log_page_heartbeat_decision restart "$page_heartbeat_detail" unknown unknown unknown unknown unknown
     return 1
   fi
 
   if command -v node >/dev/null 2>&1; then
     local result
-    local status
-    set +e
+    local heartbeat_status heartbeat_reason ready_state current_time scene_health scene_stalled scene_not_ready
     result="$(
       PAGE_HEARTBEAT_BODY="$body" node -e '
-        const data = JSON.parse(process.env.PAGE_HEARTBEAT_BODY || "{}");
-        if (data.healthy === true) {
-          console.log("healthy");
+        let data;
+        try {
+          data = JSON.parse(process.env.PAGE_HEARTBEAT_BODY || "{}");
+        } catch {
+          console.log(["unhealthy", "heartbeat-invalid-json", "unknown", "unknown", "unknown", "0", "0"].join("\t"));
           process.exit(0);
         }
         const reasons = Array.isArray(data.reasons) ? data.reasons.join("+") : "";
-        console.log(reasons || data.status || "heartbeat-unhealthy");
-        process.exit(1);
+        const video = data.heartbeat && typeof data.heartbeat.activeSceneVideo === "object" ? data.heartbeat.activeSceneVideo : {};
+        const reason = data.healthy === true ? "healthy" : reasons || data.status || "heartbeat-unhealthy";
+        const stalled = video.health === "stalled" || reasons.includes("scene-video-stalled");
+        const notReady = reasons.includes("scene-video-not-ready");
+        console.log([
+          data.healthy === true ? "healthy" : "unhealthy",
+          reason,
+          Number.isFinite(Number(video.readyState)) ? String(video.readyState) : "unknown",
+          Number.isFinite(Number(video.currentTime)) ? String(video.currentTime) : "unknown",
+          String(video.health || "unknown"),
+          stalled ? "1" : "0",
+          notReady ? "1" : "0"
+        ].join("\t"));
       ' 2>/dev/null
     )"
-    status="$?"
-    set -e
-    if [[ "$status" -eq 0 ]]; then
+    IFS=$'\t' read -r heartbeat_status heartbeat_reason ready_state current_time scene_health scene_stalled scene_not_ready <<< "$result"
+    if [[ "$bypass" == "1" ]]; then
+      log_page_heartbeat_decision bypass "$heartbeat_reason" "$ready_state" "$current_time" "$scene_health" "$scene_stalled" "$scene_not_ready"
       return 0
     fi
-    page_heartbeat_detail="$(sanitize_reason_detail "$result")"
+    if [[ "$heartbeat_status" == "healthy" ]]; then
+      log_page_heartbeat_decision healthy "$heartbeat_reason" "$ready_state" "$current_time" "$scene_health" "$scene_stalled" "$scene_not_ready"
+      return 0
+    fi
+    page_heartbeat_detail="$(sanitize_reason_detail "$heartbeat_reason")"
+    log_page_heartbeat_decision restart "$page_heartbeat_detail" "$ready_state" "$current_time" "$scene_health" "$scene_stalled" "$scene_not_ready"
     return 1
   fi
 
+  if [[ "$bypass" == "1" ]]; then
+    log_page_heartbeat_decision bypass legacy-parser unknown unknown unknown unknown unknown
+    return 0
+  fi
   if printf '%s\n' "$body" | grep -Eq '"healthy"[[:space:]]*:[[:space:]]*true'; then
+    log_page_heartbeat_decision healthy legacy-parser unknown unknown unknown unknown unknown
     return 0
   fi
 
   page_heartbeat_detail="heartbeat-unhealthy"
+  log_page_heartbeat_decision restart "$page_heartbeat_detail" unknown unknown unknown unknown unknown
   return 1
 }
 

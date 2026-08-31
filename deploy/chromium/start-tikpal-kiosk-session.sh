@@ -29,7 +29,9 @@ fi
 : "${TIKPAL_KIOSK_DISPLAY:=:0}"
 : "${TIKPAL_KIOSK_X_COMMAND_TIMEOUT_SECONDS:=5}"
 : "${TIKPAL_KIOSK_RESET_WEB_MODE_ON_START:=1}"
+: "${TIKPAL_KIOSK_X_SESSION_GENERATION_PATH:=$APP_DIR/.tikpal/kiosk-x-session-generation}"
 export DISPLAY="$TIKPAL_KIOSK_DISPLAY"
+export TIKPAL_KIOSK_X_SESSION_GENERATION_PATH
 
 is_enabled() {
   local value
@@ -205,6 +207,21 @@ reset_web_mode_runtime() {
   fi
   TIKPAL_KIOSK_SKIP_ENV_SOURCE=1 TIKPAL_WEB_MODE_STARTUP_RESET=1 "$SCRIPT_DIR/tikpal-web-mode.sh" close-full >/dev/null 2>&1 || true
 }
+
+publish_x_session_generation() {
+  local generation temporary_path
+  generation="$(head -n 1 /proc/sys/kernel/random/uuid 2>/dev/null || true)"
+  [[ "$generation" =~ ^[A-Za-z0-9._:-]+$ ]] || generation="${BASHPID}-$(date +%s)-${RANDOM}"
+  mkdir -p "$(dirname "$TIKPAL_KIOSK_X_SESSION_GENERATION_PATH")"
+  temporary_path="$TIKPAL_KIOSK_X_SESSION_GENERATION_PATH.$$.$RANDOM.tmp"
+  if ! printf '%s\n' "$generation" > "$temporary_path" \
+    || ! mv -f "$temporary_path" "$TIKPAL_KIOSK_X_SESSION_GENERATION_PATH"; then
+    rm -f "$temporary_path" 2>/dev/null || true
+    return 1
+  fi
+}
+
+publish_x_session_generation
 
 if command -v xset >/dev/null 2>&1; then
   run_x_command xset -dpms || true

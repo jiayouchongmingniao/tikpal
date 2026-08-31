@@ -12,6 +12,7 @@ import { useKioskGestures } from "./hooks/useKioskGestures";
 import { useRoomExperience } from "./hooks/useRoomExperience";
 import { useTikpalState } from "./hooks/useTikpalState";
 import { fetchWebModeState, sendKioskHeartbeat, sendWebModeAction } from "./api/tikpalClient";
+import { createExploreOpenRequestId, ExploreOpenVeilController } from "./exploreOpenVeil";
 import { useI18n } from "./i18n";
 import type { AppMode, BackgroundVideoSummary, DisplaySleepStyle, LyricsFontSize, RememberedAudioSource, RoomExperienceActionRequest, RoomExperienceState, RoomMode, SourceSwitchTarget, SurfaceTheme, TikpalState, WebModeState } from "./types";
 
@@ -30,9 +31,14 @@ const DEFAULT_QUICK_MENU_RESTORE_BRIGHTNESS_PERCENT = 72;
 const EXTERNAL_HANDOFF_TIMEOUT_MS = 60_000;
 const EXTERNAL_HANDOFF_POLL_MS = 1_000;
 const KIOSK_HEARTBEAT_MS = 10_000;
+const EXPLORE_OPEN_OVERLAY_MAX_MS = 8_000;
 const EVENT_LOOP_LAG_SAMPLE_MS = 1_000;
 const DISPLAY_SLEEP_CHECK_MS = 5_000;
 const SCREEN_SAVER_PREVIEW_INTERVAL_MS = 8_000;
+
+function logExploreOpenVeil(stage: string, requestId: string, detail = "") {
+  console.info(`[tikpal-explore-veil] ${JSON.stringify({ stage, requestId, ...(detail ? { detail } : {}), timestamp: new Date().toISOString() })}`);
+}
 const WEB_MODE_IDLE_POLL_MS = 2_000;
 const WEB_MODE_ACTIVE_POLL_MS = 350;
 const SOURCE_SWITCH_TARGETS = new Set<SourceSwitchTarget>(["mpd", "audio", "scene", "radio", "spotify", "bluetooth", "airplay", "upnp"]);
@@ -332,6 +338,8 @@ export default function App() {
   const sceneVideoReadyRef = useRef(false);
   const observedWebModeActiveRef = useRef(false);
   const exploreClosingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const exploreOpenVeilRef = useRef<ExploreOpenVeilController | null>(null);
+  if (!exploreOpenVeilRef.current) exploreOpenVeilRef.current = new ExploreOpenVeilController();
   const displaySleepLastActivityRef = useRef(Date.now());
   const { state: tikpalState, status: tikpalStatus, refresh, sendPlaybackAction, sendSystemAction, sendSourceSwitch } = useTikpalState();
   const { experience: roomExperience, status: roomExperienceStatus, refresh: refreshRoomExperience, sendExperienceAction } = useRoomExperience();
@@ -495,14 +503,11 @@ export default function App() {
     return () => { bc.close(); };
   }, [webModeActive]);
 
-  // Clear exploreOpening when Explore becomes active
   useEffect(() => {
-    if (webModeActive && exploreOpening) {
-      const t = setTimeout(() => setExploreOpening(false), 1500);
-      return () => clearTimeout(t);
-    }
-    if (!webModeActive) setExploreOpening(false);
-  }, [webModeActive, exploreOpening]);
+    return () => {
+      exploreOpenVeilRef.current?.dispose();
+    };
+  }, []);
 
 
   useEffect(() => {
@@ -567,6 +572,13 @@ export default function App() {
       activeSceneVideoId: activeSceneVideo.id,
       activeSceneVideoLabel: activeSceneVideo.label,
       activeSceneVideoSrc: activeSceneVideo.src,
+      webModeActive,
+      exploreOpening,
+      webModeActiveProvider: webModeState?.activeProvider ?? null,
+      webModeOpeningProvider: webModeState?.openingProvider ?? null,
+      webModeOpenRequestId: webModeState?.openRequestId ?? exploreOpenVeilRef.current?.currentRequestId ?? null,
+      webModeOpenStartedAt: webModeState?.openStartedAt ?? null,
+      webModeOpenXSessionGeneration: webModeState?.openXSessionGeneration ?? null,
       tikpalStatus,
       roomExperienceStatus
     };
@@ -629,6 +641,15 @@ export default function App() {
         },
         source: {
           current: snapshot.audioSourceId ?? null
+        },
+        explore: {
+          active: snapshot.webModeActive === true,
+          opening: snapshot.exploreOpening === true,
+          activeProvider: snapshot.webModeActiveProvider ?? null,
+          openingProvider: snapshot.webModeOpeningProvider ?? null,
+          openRequestId: snapshot.webModeOpenRequestId ?? null,
+          openStartedAt: snapshot.webModeOpenStartedAt ?? null,
+          xSessionGeneration: snapshot.webModeOpenXSessionGeneration ?? null
         },
         scene: {
           videoId: snapshot.sceneVideoId ?? null,
@@ -778,42 +799,48 @@ export default function App() {
   }, [refresh, refreshRoomExperience, roomExperience.mode, sendSourceSwitch, tikpalState.audio.currentSource.connectionState, tikpalState.audio.currentSource.id]);
 
   const handleOpenWebMode = useCallback(async () => {
+    const requestId = createExploreOpenRequestId();
+    const veil = exploreOpenVeilRef.current;
+    const previousRequestId = veil?.currentRequestId ?? null;
+    if (previousRequestId && previousRequestId !== requestId) {
+      logExploreOpenVeil("remove", previousRequestId, `reason=superseded_by:${requestId}`);
+    }
     setWebModeSleepSuppressed(true);
     setExploreOpening(true);
-    // Create fullscreen overlay and start fade-in animation
-    const overlay = document.createElement("div");
-    overlay.style.cssText = "position:fixed;inset:0;z-index:9999;background:#080b0e;opacity:0;pointer-events:none;";
-    document.body.appendChild(overlay);
-    const fadeAnim = new Promise<void>(resolve => {
-      const duration = 3000;
-      const start = performance.now();
-      const animate = (now: number) => {
-        const progress = Math.min((now - start) / duration, 1);
-        overlay.style.opacity = String(progress);
-        if (progress < 1) requestAnimationFrame(animate);
-        else resolve();
-      };
-      requestAnimationFrame(animate);
+    logExploreOpenVeil("create", requestId);
+    logExploreOpenVeil("fade", requestId, "direction=in");
+    veil?.begin(requestId, EXPLORE_OPEN_OVERLAY_MAX_MS, (timedOutRequestId) => {
+      setExploreOpening(false);
+      logExploreOpenVeil("timeout", timedOutRequestId, `timeoutMs=${EXPLORE_OPEN_OVERLAY_MAX_MS}`);
+      logExploreOpenVeil("remove", timedOutRequestId, "reason=timeout");
     });
-    try { new BroadcastChannel("tikpal-explore-open").postMessage("opening"); } catch {}
-    // Run animation and API call in parallel
-    const apiCall = (async () => {
-      const nextWebMode = await sendWebModeAction({ type: "open" });
-      observeWebModeActivity(Boolean(nextWebMode.activeProvider || nextWebMode.openingProvider));
-      return nextWebMode;
-    })();
     try {
-      await Promise.all([fadeAnim, apiCall]);
-      // Both done — remove overlay immediately, Explore is ready behind it
-      overlay.remove();
+      const channel = new BroadcastChannel("tikpal-explore-open");
+      channel.postMessage("opening");
+      channel.close();
+    } catch {}
+    let veilRemovalReason = "opened";
+    try {
+      const nextWebMode = await sendWebModeAction({ type: "open", openRequestId: requestId });
+      observeWebModeActivity(Boolean(nextWebMode.activeProvider || nextWebMode.openingProvider));
     } catch (error) {
-      overlay.remove();
+      veilRemovalReason = error instanceof Error && /stale X session/i.test(error.message)
+        ? "stale-session"
+        : "api-failed";
       setWebModeSleepSuppressed(false);
       throw error;
+    } finally {
+      if (veil?.finish(requestId)) {
+        setExploreOpening(false);
+        logExploreOpenVeil("fade", requestId, "direction=out");
+        logExploreOpenVeil("remove", requestId, `reason=${veilRemovalReason}`);
+      } else {
+        logExploreOpenVeil("remove_ignored", requestId, "reason=request_not_owner");
+      }
     }
     await Promise.all([refresh(), refreshRoomExperience()]);
     returnAmbient();
-  }, [observeWebModeActivity, refresh, refreshRoomExperience, returnAmbient, setExploreOpening, setWebModeSleepSuppressed]);
+  }, [observeWebModeActivity, refresh, refreshRoomExperience, returnAmbient, setWebModeSleepSuppressed]);
 
   useEffect(() => {
     const previousMode = previousRoomModeRef.current;
