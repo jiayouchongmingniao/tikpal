@@ -57,6 +57,8 @@
 #define MAX_CLASS 256
 #define REQUEST_CACHE_SIZE 32
 #define SERVER_FRAME_TIMEOUT_MS 300
+#define SURFACE_QUERY_FAILED -3
+#define SURFACE_QUERY_DEADLINE_EXCEEDED -6
 
 _Static_assert(sizeof(((xcb_get_geometry_cookie_t *)0)->sequence) == sizeof(uint32_t),
                "generated XCB cookies must expose a 32-bit sequence");
@@ -86,6 +88,37 @@ typedef struct {
   xcb_generic_error_t *error;
   bool done;
 } PendingReply;
+
+typedef enum {
+  COLLECT_OK = 0,
+  COLLECT_REPLY_TIMEOUT = -1,
+  COLLECT_XCB_CONNECTION_ERROR = -2,
+  COLLECT_POLL_ERROR = -4,
+  COLLECT_INTERRUPTED = -5,
+} CollectResult;
+
+typedef struct {
+  uint32_t sequence;
+  PendingKind kind;
+  size_t surface_index;
+  bool done;
+  bool reply_ready;
+  bool error_ready;
+} PendingDiagnostic;
+
+typedef struct {
+  CollectResult result;
+  int connection_error;
+  int poll_errno;
+  short poll_revents;
+  size_t pending_count;
+  size_t completed_count;
+  size_t pending_diagnostic_count;
+  bool final_scan;
+  bool final_scan_progressed;
+  bool stop_requested;
+  PendingDiagnostic pending[MAX_PENDING];
+} CollectorDiagnostics;
 
 typedef struct {
   char role[MAX_ROLE];
@@ -173,6 +206,7 @@ typedef struct {
   uint64_t revoke_requests;
   uint64_t xcb_timeouts;
   uint64_t reconnects;
+  CollectorDiagnostics last_collect;
   CachedRequest request_cache[REQUEST_CACHE_SIZE];
   size_t next_cache_slot;
   int phase;
@@ -217,6 +251,8 @@ static void (*self_test_before_mutation_hook)(void) = NULL;
 static void (*self_test_before_final_query_hook)(void) = NULL;
 static xcb_window_t self_test_bad_match_sibling = XCB_WINDOW_NONE;
 static bool self_test_checked_not_ready = false;
+static bool self_test_defer_reply_scan_once = false;
+static bool self_test_force_poll_timeout_once = false;
 #endif
 
 #ifndef __linux__
@@ -344,9 +380,9 @@ static void capture_async_error(AsyncError *target, const xcb_generic_error_t *e
   target->sequence = error->sequence;
 }
 
-static void drain_events(xcb_connection_t *connection, AsyncError *async_error) {
+static void drain_queued_events(xcb_connection_t *connection, AsyncError *async_error) {
   xcb_generic_event_t *event;
-  while ((event = xcb_poll_for_event(connection)) != NULL) {
+  while ((event = xcb_poll_for_queued_event(connection)) != NULL) {
     if ((event->response_type & 0x7fU) == 0) {
       capture_async_error(async_error, (xcb_generic_error_t *)event);
     }
@@ -354,45 +390,143 @@ static void drain_events(xcb_connection_t *connection, AsyncError *async_error) 
   }
 }
 
-static int collect_replies(HelperState *state, PendingReply *pending, size_t count,
-                           int64_t deadline_ns, AsyncError *async_error) {
-  struct pollfd descriptor = {0};
+static size_t scan_pending_replies(HelperState *state, PendingReply *pending, size_t count,
+                                   bool *progressed) {
   size_t completed = 0;
+#ifdef TIKPAL_X11_HELPER_SELF_TEST_SEAMS
+  if (self_test_defer_reply_scan_once) {
+    self_test_defer_reply_scan_once = false;
+    for (size_t index = 0; index < count; index++) {
+      if (pending[index].done) completed++;
+    }
+    return completed;
+  }
+#endif
+  for (size_t index = 0; index < count; index++) {
+    void *reply = NULL;
+    xcb_generic_error_t *error = NULL;
+    int ready;
+    if (pending[index].done) {
+      completed++;
+      continue;
+    }
+    ready = xcb_poll_for_reply(state->connection, pending[index].sequence, &reply, &error);
+    if (ready) {
+      pending[index].reply = reply;
+      pending[index].error = error;
+      pending[index].done = true;
+      completed++;
+      *progressed = true;
+    }
+  }
+  return completed;
+}
+
+static void snapshot_pending_diagnostics(CollectorDiagnostics *diagnostics,
+                                         const PendingReply *pending, size_t count) {
+  diagnostics->pending_diagnostic_count = count > MAX_PENDING ? MAX_PENDING : count;
+  for (size_t index = 0; index < diagnostics->pending_diagnostic_count; index++) {
+    diagnostics->pending[index] = (PendingDiagnostic){
+      .sequence = pending[index].sequence,
+      .kind = pending[index].kind,
+      .surface_index = pending[index].surface_index,
+      .done = pending[index].done,
+      .reply_ready = pending[index].reply != NULL,
+      .error_ready = pending[index].error != NULL,
+    };
+  }
+}
+
+static CollectResult finish_collect(HelperState *state, CollectResult result,
+                                    const PendingReply *pending, size_t pending_count,
+                                    size_t completed) {
+  CollectorDiagnostics *diagnostics = &state->last_collect;
+  diagnostics->result = result;
+  diagnostics->completed_count = completed;
+  snapshot_pending_diagnostics(diagnostics, pending, pending_count);
+  diagnostics->connection_error = state->connection
+    ? xcb_connection_has_error(state->connection) : XCB_CONN_ERROR;
+  diagnostics->stop_requested = stop_requested != 0;
+  return result;
+}
+
+static CollectResult final_reply_scan(HelperState *state, PendingReply *pending, size_t count,
+                                      AsyncError *async_error) {
+  CollectorDiagnostics *diagnostics = &state->last_collect;
+  bool progressed = false;
+  size_t completed;
+  diagnostics->final_scan = true;
+  completed = scan_pending_replies(state, pending, count, &progressed);
+  diagnostics->final_scan_progressed = progressed;
+  drain_queued_events(state->connection, async_error);
+  if (stop_requested) return finish_collect(state, COLLECT_INTERRUPTED, pending, count, completed);
+  if (xcb_connection_has_error(state->connection) != 0) {
+    return finish_collect(state, COLLECT_XCB_CONNECTION_ERROR, pending, count, completed);
+  }
+  return finish_collect(state, completed == count ? COLLECT_OK : COLLECT_REPLY_TIMEOUT,
+                        pending, count, completed);
+}
+
+static CollectResult collect_replies(HelperState *state, PendingReply *pending, size_t count,
+                                     int64_t deadline_ns, AsyncError *async_error) {
+  struct pollfd descriptor = {0};
+  CollectorDiagnostics *diagnostics = &state->last_collect;
   descriptor.fd = xcb_get_file_descriptor(state->connection);
   descriptor.events = POLLIN | POLLERR | POLLHUP;
+  *diagnostics = (CollectorDiagnostics){.result = COLLECT_OK, .pending_count = count};
 
-  while (completed < count) {
+  for (;;) {
     bool progressed = false;
-    for (size_t index = 0; index < count; index++) {
-      void *reply = NULL;
-      xcb_generic_error_t *error = NULL;
-      int ready;
-      if (pending[index].done) continue;
-      ready = xcb_poll_for_reply(state->connection, pending[index].sequence, &reply, &error);
-      if (ready) {
-        pending[index].reply = reply;
-        pending[index].error = error;
-        pending[index].done = true;
-        completed++;
-        progressed = true;
-      }
+    size_t completed;
+    int remaining_ms;
+    int poll_result;
+    if (stop_requested) return finish_collect(state, COLLECT_INTERRUPTED, pending, count, 0);
+    completed = scan_pending_replies(state, pending, count, &progressed);
+    drain_queued_events(state->connection, async_error);
+    if (xcb_connection_has_error(state->connection) != 0) {
+      return finish_collect(state, COLLECT_XCB_CONNECTION_ERROR, pending, count, completed);
     }
-    drain_events(state->connection, async_error);
-    if (completed == count) return 0;
-    if (xcb_connection_has_error(state->connection) != 0) return -2;
-    if (remaining_timeout_ms(deadline_ns) <= 0) return -1;
+    if (completed == count) return finish_collect(state, COLLECT_OK, pending, count, completed);
+    remaining_ms = remaining_timeout_ms(deadline_ns);
+    if (remaining_ms <= 0) return final_reply_scan(state, pending, count, async_error);
     if (progressed) continue;
 
     descriptor.revents = 0;
-    int poll_result = poll(&descriptor, 1, remaining_timeout_ms(deadline_ns));
-    if (poll_result == 0) return -1;
-    if (poll_result < 0) {
-      if (errno == EINTR) continue;
-      return -2;
+    diagnostics->poll_errno = 0;
+    diagnostics->poll_revents = 0;
+#ifdef TIKPAL_X11_HELPER_SELF_TEST_SEAMS
+    if (self_test_force_poll_timeout_once) {
+      self_test_force_poll_timeout_once = false;
+      poll_result = 0;
+    } else
+#endif
+    {
+      poll_result = poll(&descriptor, 1, remaining_ms);
     }
-    if (descriptor.revents & (POLLERR | POLLHUP | POLLNVAL)) return -2;
+    if (poll_result == 0) return final_reply_scan(state, pending, count, async_error);
+    if (poll_result < 0) {
+      diagnostics->poll_errno = errno;
+      if (errno == EINTR) {
+        if (stop_requested) {
+          return finish_collect(state, COLLECT_INTERRUPTED, pending, count, completed);
+        }
+        continue;
+      }
+      return finish_collect(state, COLLECT_POLL_ERROR, pending, count, completed);
+    }
+    diagnostics->poll_revents = descriptor.revents;
+    if (descriptor.revents & (POLLERR | POLLHUP | POLLNVAL)) {
+      progressed = false;
+      completed = scan_pending_replies(state, pending, count, &progressed);
+      drain_queued_events(state->connection, async_error);
+      if (stop_requested) return finish_collect(state, COLLECT_INTERRUPTED, pending, count, completed);
+      if (xcb_connection_has_error(state->connection) != 0) {
+        return finish_collect(state, COLLECT_XCB_CONNECTION_ERROR, pending, count, completed);
+      }
+      if (completed == count) return finish_collect(state, COLLECT_OK, pending, count, completed);
+      return finish_collect(state, COLLECT_POLL_ERROR, pending, count, completed);
+    }
   }
-  return 0;
 }
 
 static void free_pending(PendingReply *pending, size_t count) {
@@ -871,14 +1005,14 @@ static int finish_surface_queries(HelperState *state, SurfaceResult *surfaces, s
     assign_pending_reply(surfaces, &pending[index]);
   }
   free_pending(pending, pending_count);
-  if (!verify_identity) return async_error->seen ? -3 : 0;
+  if (!verify_identity) return async_error->seen ? SURFACE_QUERY_FAILED : 0;
   bool all_ok = true;
   for (size_t index = 0; index < surface_count; index++) {
     parse_surface_result(&surfaces[index], deadline_ns);
     if (!surfaces[index].ok) all_ok = false;
   }
-  if (remaining_timeout_ms(deadline_ns) <= 0) return -1;
-  return async_error->seen || !all_ok ? -3 : 0;
+  if (remaining_timeout_ms(deadline_ns) <= 0) return SURFACE_QUERY_DEADLINE_EXCEEDED;
+  return async_error->seen || !all_ok ? SURFACE_QUERY_FAILED : 0;
 }
 
 static void add_xcb_error_json(json_object *target, const xcb_generic_error_t *error) {
@@ -968,19 +1102,20 @@ static json_object *health_response(const HelperState *state, const char *reques
   json_object *response = base_response(state, request_id, "health");
   json_object *counters = json_object_new_object();
   json_object *operations = json_object_new_array();
+  bool connection_ok = state->connection && xcb_connection_has_error(state->connection) == 0;
   json_object_array_add(operations, json_object_new_string("health"));
   json_object_array_add(operations, json_object_new_string("inspect"));
   if (state->phase == 1) {
     json_object_array_add(operations, json_object_new_string("switch"));
     json_object_array_add(operations, json_object_new_string("revoke"));
   }
-  json_object_object_add(response, "ok", json_object_new_boolean(state->connection != NULL));
+  json_object_object_add(response, "ok", json_object_new_boolean(connection_ok));
   json_object_object_add(response, "code",
-                         json_object_new_string(state->connection ? "OK" : "XCB_DISCONNECTED"));
+                         json_object_new_string(connection_ok ? "OK" : "XCB_DISCONNECTED"));
   json_object_object_add(response, "phase", json_object_new_int(state->phase));
   json_object_object_add(response, "readOnly", json_object_new_boolean(state->phase == 0));
   json_object_object_add(response, "mutationsAllowed",
-                         json_object_new_boolean(state->phase == 1 && state->connection != NULL &&
+                         json_object_new_boolean(state->phase == 1 && connection_ok &&
                                                  state->generation_state == GENERATION_OK));
   json_object_object_add(response, "generationFloor", json_object_new_int64((int64_t)state->generation_floor));
   json_object_object_add(response, "generationState",
@@ -1018,6 +1153,71 @@ static json_object *error_response(const HelperState *state, const char *request
   json_object_object_add(response, "errorCode", json_object_new_string(code));
   json_object_object_add(response, "fallbackRecommended", json_object_new_boolean(false));
   return response;
+}
+
+static const char *collect_error_code(int result) {
+  switch (result) {
+    case COLLECT_REPLY_TIMEOUT: return "X11_REPLY_TIMEOUT";
+    case COLLECT_XCB_CONNECTION_ERROR: return "XCB_CONNECTION_ERROR";
+    case COLLECT_POLL_ERROR: return "XCB_POLL_ERROR";
+    case COLLECT_INTERRUPTED: return "HELPER_STOPPING";
+  }
+  return "XCB_COLLECTION_FAILED";
+}
+
+static bool collect_requires_connection_reset(int result) {
+  return result == COLLECT_REPLY_TIMEOUT || result == COLLECT_XCB_CONNECTION_ERROR ||
+         result == COLLECT_POLL_ERROR;
+}
+
+static const char *pending_kind_name(PendingKind kind) {
+  switch (kind) {
+    case PENDING_GEOMETRY: return "geometry";
+    case PENDING_TRANSLATE: return "translate";
+    case PENDING_ATTRIBUTES: return "attributes";
+    case PENDING_PID: return "pid";
+    case PENDING_CLASS: return "class";
+    case PENDING_OPACITY: return "opacity";
+    case PENDING_TREE: return "tree";
+  }
+  return "unknown";
+}
+
+static void add_collector_diagnostics(json_object *response,
+                                      const CollectorDiagnostics *diagnostics) {
+  json_object *value;
+  json_object *entries;
+  if (!response || !diagnostics || diagnostics->result == COLLECT_OK) return;
+  value = json_object_new_object();
+  entries = json_object_new_array();
+  json_object_object_add(value, "result", json_object_new_string(collect_error_code(diagnostics->result)));
+  json_object_object_add(value, "xcbConnectionError",
+                         json_object_new_int(diagnostics->connection_error));
+  json_object_object_add(value, "pollErrno", json_object_new_int(diagnostics->poll_errno));
+  json_object_object_add(value, "pollRevents", json_object_new_int(diagnostics->poll_revents));
+  json_object_object_add(value, "pendingCount", json_object_new_int64((int64_t)diagnostics->pending_count));
+  json_object_object_add(value, "completedCount", json_object_new_int64((int64_t)diagnostics->completed_count));
+  json_object_object_add(value, "finalScan", json_object_new_boolean(diagnostics->final_scan));
+  json_object_object_add(value, "finalScanProgressed",
+                         json_object_new_boolean(diagnostics->final_scan_progressed));
+  json_object_object_add(value, "stopRequested", json_object_new_boolean(diagnostics->stop_requested));
+  for (size_t index = 0; index < diagnostics->pending_diagnostic_count; index++) {
+    json_object *entry = json_object_new_object();
+    json_object_object_add(entry, "sequence",
+                           json_object_new_int64((int64_t)diagnostics->pending[index].sequence));
+    json_object_object_add(entry, "kind",
+                           json_object_new_string(pending_kind_name(diagnostics->pending[index].kind)));
+    json_object_object_add(entry, "surfaceIndex",
+                           json_object_new_int64((int64_t)diagnostics->pending[index].surface_index));
+    json_object_object_add(entry, "done", json_object_new_boolean(diagnostics->pending[index].done));
+    json_object_object_add(entry, "replyReady",
+                           json_object_new_boolean(diagnostics->pending[index].reply_ready));
+    json_object_object_add(entry, "errorReady",
+                           json_object_new_boolean(diagnostics->pending[index].error_ready));
+    json_object_array_add(entries, entry);
+  }
+  json_object_object_add(value, "pending", entries);
+  json_object_object_add(response, "collectorDiagnostics", value);
 }
 
 static bool get_required_int64(json_object *object, const char *key, int64_t *output) {
@@ -1154,6 +1354,7 @@ static void log_request_result(const HelperState *state, const char *packet, siz
     if (entry) {
       json_object_object_add(entry, "code", json_object_new_string("X11_REPLY_TIMEOUT"));
       json_object_object_add(entry, "timeout", json_object_new_boolean(true));
+      copy_json_field(entry, "collectorDiagnostics", response, "collectorDiagnostics");
       if (timings && json_object_is_type(timings, json_type_object)) {
         copy_json_field(entry, "replyWaitMs", timings, "replyWaitMs");
       }
@@ -1205,6 +1406,7 @@ static void log_request_result(const HelperState *state, const char *packet, siz
   json_object_object_add(entry, "result", json_object_new_string(ok ? "ok" : "failed"));
   json_object_object_add(entry, "code", json_object_new_string(code));
   copy_json_field(entry, "errorCode", response, "errorCode");
+  copy_json_field(entry, "collectorDiagnostics", response, "collectorDiagnostics");
   copy_json_field(entry, "leaseReleased", response, "leaseReleased");
   copy_json_field(entry, "inFlight", response, "inFlight");
   copy_json_field(entry, "mutationStarted", response, "mutationStarted");
@@ -1524,7 +1726,8 @@ static json_object *switch_result_response(HelperState *state, const char *reque
                                            const char *code, bool ok, bool mutation_started,
                                            SurfaceResult *surfaces, size_t surface_count,
                                            CheckedMutation *mutations, size_t mutation_count,
-                                           json_object *timings) {
+                                           json_object *timings,
+                                           const CollectorDiagnostics *collector_diagnostics) {
   json_object *response = base_response(state, request_id, "switch");
   json_object_object_add(response, "ok", json_object_new_boolean(ok));
   json_object_object_add(response, "code", json_object_new_string(code));
@@ -1535,6 +1738,7 @@ static json_object *switch_result_response(HelperState *state, const char *reque
   json_object_object_add(response, "mutations",
                          checked_mutations_to_json(mutations, mutation_count));
   if (timings) json_object_object_add(response, "timings", timings);
+  add_collector_diagnostics(response, collector_diagnostics);
   return response;
 }
 
@@ -1572,6 +1776,8 @@ static json_object *switch_response(HelperState *state, json_object *request,
   size_t final_pending_count = 0;
   size_t mutation_count = 0;
   int result;
+  CollectorDiagnostics collector_diagnostics = {0};
+  bool has_collector_diagnostics = false;
   bool mutation_started = false;
   const char *code = "OK";
   json_object *timings = NULL;
@@ -1641,16 +1847,30 @@ static json_object *switch_response(HelperState *state, json_object *request,
 
   initial_pending_count = queue_surface_queries(state, surfaces, 3, initial_pending);
   initial_queued_ns = monotonic_ns();
-  result = xcb_flush(state->connection) > 0
-    ? finish_surface_queries(state, surfaces, 3, initial_pending, initial_pending_count,
-                             deadline_ns, &initial_async_error, true)
-    : -2;
+  if (xcb_flush(state->connection) <= 0) {
+    result = COLLECT_XCB_CONNECTION_ERROR;
+    collector_diagnostics = (CollectorDiagnostics){
+      .result = COLLECT_XCB_CONNECTION_ERROR,
+      .connection_error = xcb_connection_has_error(state->connection),
+      .pending_count = initial_pending_count,
+    };
+    snapshot_pending_diagnostics(&collector_diagnostics, initial_pending, initial_pending_count);
+    has_collector_diagnostics = true;
+  } else {
+    result = finish_surface_queries(state, surfaces, 3, initial_pending, initial_pending_count,
+                                    deadline_ns, &initial_async_error, true);
+  }
   initial_completed_ns = monotonic_ns();
   if (result != 0) {
-    code = result == -1 ? "X11_REPLY_TIMEOUT" :
-           result == -2 ? "XCB_CONNECTION_ERROR" : "WINDOW_INSPECTION_FAILED";
-    if (result == -1) state->xcb_timeouts++;
-    if (result == -1 || result == -2) reset_xcb_connection(state);
+    if (!has_collector_diagnostics && state->last_collect.result != COLLECT_OK) {
+      collector_diagnostics = state->last_collect;
+      has_collector_diagnostics = true;
+    }
+    code = result == SURFACE_QUERY_DEADLINE_EXCEEDED ? "TRANSACTION_DEADLINE_EXCEEDED" :
+           result == SURFACE_QUERY_FAILED ? "WINDOW_INSPECTION_FAILED" :
+           collect_error_code(result);
+    if (result == COLLECT_REPLY_TIMEOUT) state->xcb_timeouts++;
+    if (collect_requires_connection_reset(result)) reset_xcb_connection(state);
     goto completed;
   }
 
@@ -1726,11 +1946,27 @@ static json_object *switch_response(HelperState *state, json_object *request,
   xcb_get_input_focus_cookie_t fence = xcb_get_input_focus(state->connection);
   fence_pending.sequence = fence.sequence;
   mutation_queued_ns = monotonic_ns();
-  if (xcb_flush(state->connection) <= 0 ||
-      collect_replies(state, &fence_pending, 1, deadline_ns, &mutation_async_error) != 0 ||
+  if (xcb_flush(state->connection) <= 0) {
+    result = COLLECT_XCB_CONNECTION_ERROR;
+    collector_diagnostics = (CollectorDiagnostics){
+      .result = COLLECT_XCB_CONNECTION_ERROR,
+      .connection_error = xcb_connection_has_error(state->connection),
+      .pending_count = 1,
+    };
+    snapshot_pending_diagnostics(&collector_diagnostics, &fence_pending, 1);
+    has_collector_diagnostics = true;
+  } else {
+    result = collect_replies(state, &fence_pending, 1, deadline_ns, &mutation_async_error);
+  }
+  if (result != COLLECT_OK ||
       fence_pending.error || !fence_pending.reply) {
-    code = remaining_timeout_ms(deadline_ns) <= 0 ? "X11_REPLY_TIMEOUT" : "XCB_FENCE_FAILED";
-    if (remaining_timeout_ms(deadline_ns) <= 0) state->xcb_timeouts++;
+    if (result != COLLECT_OK && !has_collector_diagnostics &&
+        state->last_collect.result != COLLECT_OK) {
+      collector_diagnostics = state->last_collect;
+      has_collector_diagnostics = true;
+    }
+    code = result != COLLECT_OK ? collect_error_code(result) : "XCB_FENCE_FAILED";
+    if (result == COLLECT_REPLY_TIMEOUT) state->xcb_timeouts++;
     free_pending(&fence_pending, 1);
     free_pending(final_pending, final_pending_count);
     reset_xcb_connection(state);
@@ -1752,18 +1988,30 @@ static json_object *switch_response(HelperState *state, json_object *request,
   final_started_ns = monotonic_ns();
   final_pending_count = queue_surface_queries(state, surfaces, 3, final_pending);
   if (xcb_flush(state->connection) <= 0) {
+    result = COLLECT_XCB_CONNECTION_ERROR;
+    collector_diagnostics = (CollectorDiagnostics){
+      .result = COLLECT_XCB_CONNECTION_ERROR,
+      .connection_error = xcb_connection_has_error(state->connection),
+      .pending_count = final_pending_count,
+    };
+    snapshot_pending_diagnostics(&collector_diagnostics, final_pending, final_pending_count);
     free_pending(final_pending, final_pending_count);
-    result = -2;
+    has_collector_diagnostics = true;
   } else {
     result = finish_surface_queries(state, surfaces, 3, final_pending, final_pending_count,
                                     deadline_ns, &mutation_async_error, true);
   }
   final_completed_ns = monotonic_ns();
   if (result != 0) {
-    code = result == -1 ? "X11_REPLY_TIMEOUT" :
-           result == -2 ? "XCB_CONNECTION_ERROR" : "FINAL_QUERY_FAILED";
-    if (result == -1) state->xcb_timeouts++;
-    if (result == -1 || result == -2) reset_xcb_connection(state);
+    if (!has_collector_diagnostics && state->last_collect.result != COLLECT_OK) {
+      collector_diagnostics = state->last_collect;
+      has_collector_diagnostics = true;
+    }
+    code = result == SURFACE_QUERY_DEADLINE_EXCEEDED ? "TRANSACTION_DEADLINE_EXCEEDED" :
+           result == SURFACE_QUERY_FAILED ? "FINAL_QUERY_FAILED" :
+           collect_error_code(result);
+    if (result == COLLECT_REPLY_TIMEOUT) state->xcb_timeouts++;
+    if (collect_requires_connection_reset(result)) reset_xcb_connection(state);
     goto completed;
   }
   target = surface_for_role(surfaces, 3, "target");
@@ -1818,7 +2066,8 @@ completed:
                          duration_ms_json(received_ns, monotonic_ns()));
   response = switch_result_response(state, request_id, code, strcmp(code, "OK") == 0,
                                     mutation_started, surfaces, 3, mutations, mutation_count,
-                                    timings);
+                                    timings,
+                                    has_collector_diagnostics ? &collector_diagnostics : NULL);
   free_checked_mutations(mutations, mutation_count);
   free_surface_results(surfaces, 3);
   return response;
@@ -1874,6 +2123,8 @@ static json_object *inspect_response(HelperState *state, json_object *request,
   int64_t replies_completed_ns;
   int64_t identity_completed_ns;
   int collect_result;
+  CollectorDiagnostics flush_diagnostics = {0};
+  const CollectorDiagnostics *collector_diagnostics = NULL;
   bool all_ok = true;
   const char *overall_code = "OK";
   json_object *response;
@@ -1961,22 +2212,31 @@ static json_object *inspect_response(HelperState *state, json_object *request,
   }
   queue_completed_ns = monotonic_ns();
   if (xcb_flush(state->connection) <= 0) {
-    collect_result = -2;
+    flush_diagnostics = (CollectorDiagnostics){
+      .result = COLLECT_XCB_CONNECTION_ERROR,
+      .connection_error = xcb_connection_has_error(state->connection),
+      .pending_count = pending_count,
+    };
+    snapshot_pending_diagnostics(&flush_diagnostics, pending, pending_count);
+    collect_result = COLLECT_XCB_CONNECTION_ERROR;
+    collector_diagnostics = &flush_diagnostics;
   } else {
     collect_result = collect_replies(state, pending, pending_count, deadline_ns, &async_error);
+    collector_diagnostics = &state->last_collect;
   }
   replies_completed_ns = monotonic_ns();
   if (collect_result != 0) {
     state->inspect_failures++;
-    if (collect_result == -1) {
+    if (collect_result == COLLECT_REPLY_TIMEOUT) {
       state->xcb_timeouts++;
-      overall_code = "X11_REPLY_TIMEOUT";
     } else {
-      overall_code = "XCB_CONNECTION_ERROR";
+      overall_code = collect_error_code(collect_result);
     }
-    free_pending(pending, pending_count);
-    reset_xcb_connection(state);
+    if (collect_result == COLLECT_REPLY_TIMEOUT) overall_code = "X11_REPLY_TIMEOUT";
     response = error_response(state, request_id, "inspect", overall_code);
+    add_collector_diagnostics(response, collector_diagnostics);
+    free_pending(pending, pending_count);
+    if (collect_requires_connection_reset(collect_result)) reset_xcb_connection(state);
     timings = json_object_new_object();
     json_object_object_add(timings, "daemonQueueMs",
                            duration_ms_json(received_ns, queue_started_ns));
@@ -4114,6 +4374,10 @@ static int x11_transaction_self_test(const char *display, const char *profile,
     json_object *timeout_code = NULL;
     json_object *timeout_started = NULL;
     json_object *timeout_released = NULL;
+    json_object *timeout_collector = NULL;
+    json_object *timeout_collector_result = NULL;
+    json_object *timeout_final_scan = NULL;
+    json_object *timeout_pending = NULL;
     if (!response || !json_object_object_get_ex(response, "ok", &value) ||
         json_object_get_boolean(value) ||
         !json_object_object_get_ex(response, "code", &timeout_code) ||
@@ -4122,6 +4386,13 @@ static int x11_transaction_self_test(const char *display, const char *profile,
         json_object_get_boolean(timeout_started) ||
         !json_object_object_get_ex(response, "leaseReleased", &timeout_released) ||
         !json_object_get_boolean(timeout_released) ||
+        !json_object_object_get_ex(response, "collectorDiagnostics", &timeout_collector) ||
+        !json_object_object_get_ex(timeout_collector, "result", &timeout_collector_result) ||
+        strcmp(json_object_get_string(timeout_collector_result), "X11_REPLY_TIMEOUT") != 0 ||
+        !json_object_object_get_ex(timeout_collector, "finalScan", &timeout_final_scan) ||
+        !json_object_get_boolean(timeout_final_scan) ||
+        !json_object_object_get_ex(timeout_collector, "pending", &timeout_pending) ||
+        json_object_array_length(timeout_pending) != 21 ||
         timeout_elapsed_ns < (int64_t)(SELF_TEST_TRANSACTION_TIMEOUT_MS - 50) * 1000000LL ||
         timeout_elapsed_ns >= (int64_t)(SELF_TEST_TRANSACTION_TIMEOUT_MS + 150) * 1000000LL ||
         state.connection != NULL || state.connection_epoch != epoch_before_timeout + 1) {
@@ -4244,15 +4515,69 @@ static int x11_sequence_self_test(const char *display) {
   return 0;
 }
 
+#ifdef TIKPAL_X11_HELPER_SELF_TEST_SEAMS
+static int x11_collector_self_test(const char *display) {
+  HelperState state = {0};
+  PendingReply pending = {0};
+  AsyncError async_error = {0};
+  struct pollfd descriptor = {0};
+  int screen_number = 0;
+  CollectResult result;
+  state.connection = xcb_connect(display, &screen_number);
+  if (!state.connection || xcb_connection_has_error(state.connection) != 0) {
+    if (state.connection) xcb_disconnect(state.connection);
+    return self_test_failure("X11 collector connection");
+  }
+  xcb_get_input_focus_cookie_t fence = xcb_get_input_focus(state.connection);
+  pending.sequence = fence.sequence;
+  if (xcb_flush(state.connection) <= 0) {
+    xcb_disconnect(state.connection);
+    return self_test_failure("X11 collector fence flush");
+  }
+  descriptor.fd = xcb_get_file_descriptor(state.connection);
+  descriptor.events = POLLIN | POLLERR | POLLHUP;
+  if (poll(&descriptor, 1, 1000) <= 0 || !(descriptor.revents & POLLIN)) {
+    xcb_disconnect(state.connection);
+    return self_test_failure("X11 collector reply readiness");
+  }
+  self_test_defer_reply_scan_once = true;
+  self_test_force_poll_timeout_once = true;
+  result = collect_replies(&state, &pending, 1, monotonic_ns() + 1000000000LL,
+                           &async_error);
+  if (result != COLLECT_OK || async_error.seen || pending.error || !pending.reply ||
+      !state.last_collect.final_scan || !state.last_collect.final_scan_progressed ||
+      state.last_collect.completed_count != 1) {
+    free_pending(&pending, 1);
+    xcb_disconnect(state.connection);
+    return self_test_failure("X11 collector final reply scan");
+  }
+  free_pending(&pending, 1);
+  pending = (PendingReply){.sequence = UINT32_MAX};
+  stop_requested = 1;
+  result = collect_replies(&state, &pending, 1, monotonic_ns() + 1000000000LL,
+                           &async_error);
+  stop_requested = 0;
+  if (result != COLLECT_INTERRUPTED || !state.last_collect.stop_requested ||
+      state.last_collect.result != COLLECT_INTERRUPTED) {
+    xcb_disconnect(state.connection);
+    return self_test_failure("X11 collector interrupted status");
+  }
+  xcb_disconnect(state.connection);
+  return 0;
+}
+#endif
+
 static int run_self_test(int argc, char **argv) {
   const char *display = NULL;
   const char *profile = NULL;
   pid_t xserver_pid = 0;
   bool x11_sequence = false;
   bool x11_transaction = false;
+  bool x11_collector = false;
   for (int index = 2; index < argc; index++) {
     if (strcmp(argv[index], "--x11-sequence") == 0) x11_sequence = true;
     else if (strcmp(argv[index], "--x11-transaction") == 0) x11_transaction = true;
+    else if (strcmp(argv[index], "--x11-collector") == 0) x11_collector = true;
     else if (strcmp(argv[index], "--display") == 0 && index + 1 < argc) display = argv[++index];
     else if (strcmp(argv[index], "--xserver-pid") == 0 && index + 1 < argc) {
       char *end = NULL;
@@ -4277,9 +4602,18 @@ static int run_self_test(int argc, char **argv) {
     if (!display || !display[0] || !profile || !profile[0] ||
         x11_transaction_self_test(display, profile, xserver_pid) != 0) return 1;
   }
-  printf("tikpal-x11-helper self-test passed%s%s\n",
+#ifdef TIKPAL_X11_HELPER_SELF_TEST_SEAMS
+  if (x11_collector) {
+    if (!display || !display[0]) display = getenv("DISPLAY");
+    if (!display || !display[0] || x11_collector_self_test(display) != 0) return 1;
+  }
+#else
+  if (x11_collector) return 64;
+#endif
+  printf("tikpal-x11-helper self-test passed%s%s%s\n",
          x11_sequence ? " with X11 sequence rollover" : "",
-         x11_transaction ? " with X11 transaction" : "");
+         x11_transaction ? " with X11 transaction" : "",
+         x11_collector ? " with X11 collector" : "");
   return 0;
 }
 
