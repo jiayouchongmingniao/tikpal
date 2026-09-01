@@ -1,6 +1,6 @@
 import http from "node:http";
 import { execFile, spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { appendFile, chmod, copyFile, mkdir, open, readFile, readdir, rename, stat, statfs, unlink, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { basename, dirname, extname, posix, relative, resolve, sep } from "node:path";
@@ -5398,14 +5398,35 @@ async function shouldSuspendMpcRadioBackgroundRecovery() {
   return webModeOpenInFlight || webModeCloseInFlight || Boolean(runtimeState.activeProvider || runtimeState.openingProvider);
 }
 
-async function writeWebModeRuntimeState(patch) {
-  const result = await updateWebModeRuntimeState(() => patch);
+async function writeWebModeRuntimeState(patch, trace = null) {
+  const result = await updateWebModeRuntimeState(() => patch, trace);
   return result.state;
 }
 
-async function updateWebModeRuntimeState(updater) {
+async function updateWebModeRuntimeState(updater, trace = null) {
+  const queuedAtMs = monotonicNowMs();
+  recordWebModeSwitchTraceEvent(trace, "runtime_state_write_queued", { timestamp: queuedAtMs });
   const operation = webModeRuntimeStateWritePromise.then(async () => {
-    const current = await readWebModeRuntimeState();
+    const startedAtMs = monotonicNowMs();
+    recordWebModeSwitchTraceEvent(trace, "runtime_state_write_started", {
+      timestamp: startedAtMs,
+      elapsedMs: startedAtMs - queuedAtMs
+    });
+    // This file is the handoff fence for a visible resident switch. It is
+    // tiny and already serialized below, so avoid a shared libuv I/O tail
+    // before the launcher can begin.
+    const readStartedAtMs = monotonicNowMs();
+    let current;
+    try {
+      current = normalizeWebModeRuntimeState(JSON.parse(readFileSync(WEB_MODE_STATE_PATH, "utf8")));
+    } catch {
+      current = normalizeWebModeRuntimeState();
+    }
+    const readCompletedAtMs = monotonicNowMs();
+    recordWebModeSwitchTraceEvent(trace, "runtime_state_read_completed", {
+      timestamp: readCompletedAtMs,
+      elapsedMs: readCompletedAtMs - readStartedAtMs
+    });
     const patch = await updater(current);
     if (!patch) return { state: current, updated: false };
     const next = normalizeWebModeRuntimeState({
@@ -5413,10 +5434,16 @@ async function updateWebModeRuntimeState(updater) {
       ...patch,
       updatedAt: new Date().toISOString()
     });
-    await mkdir(dirname(WEB_MODE_STATE_PATH), { recursive: true });
+    const writeStartedAtMs = monotonicNowMs();
+    mkdirSync(dirname(WEB_MODE_STATE_PATH), { recursive: true });
     const temporaryPath = `${WEB_MODE_STATE_PATH}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
-    await writeFile(temporaryPath, `${JSON.stringify(next, null, 2)}\n`);
-    await rename(temporaryPath, WEB_MODE_STATE_PATH);
+    writeFileSync(temporaryPath, `${JSON.stringify(next, null, 2)}\n`);
+    renameSync(temporaryPath, WEB_MODE_STATE_PATH);
+    const writeCompletedAtMs = monotonicNowMs();
+    recordWebModeSwitchTraceEvent(trace, "runtime_state_write_completed", {
+      timestamp: writeCompletedAtMs,
+      elapsedMs: writeCompletedAtMs - writeStartedAtMs
+    });
     return { state: next, updated: true };
   });
   webModeRuntimeStateWritePromise = operation.then(() => undefined, () => undefined);
@@ -14891,7 +14918,7 @@ async function applyWebModeAction(action, { receivedMonotonicMs = monotonicNowMs
       openXSessionGeneration: xSessionGeneration,
       lastError: null,
       closeRequestId: null
-    });
+    }, trace);
     recordWebModeSwitchTraceEvent(trace, "opening_provider_written");
     logWebModeEntryStage("request_persisted", { requestId: openRequestId, providerId, xSessionGeneration });
 

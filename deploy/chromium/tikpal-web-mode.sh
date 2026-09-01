@@ -89,12 +89,14 @@ fi
 : "${TIKPAL_WEB_MODE_AUDIO_CROSSFADE_MS:=2000}"
 : "${TIKPAL_WEB_MODE_AUDIO_CROSSFADE_HELPER:=$SCRIPT_DIR/../moode/tikpal-web-mode-crossfade.sh}"
 : "${TIKPAL_WEB_MODE_CROSSFADE_CARD:=}"
+: "${TIKPAL_WEB_MODE_TARGET_AUDIO_GATE_POST_COMMIT_DELAY_SECONDS:=0.1}"
 : "${TIKPAL_WEB_MODE_CROSSFADE_PCM_A:=tikpal_explore_a}"
 : "${TIKPAL_WEB_MODE_CROSSFADE_PCM_B:=tikpal_explore_b}"
 : "${TIKPAL_WEB_MODE_AUDIO_BUS_STATE_PATH:=$TIKPAL_WEB_MODE_PROFILE_ROOT/active-audio-bus}"
 : "${TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS:=2}"
 : "${TIKPAL_WEB_MODE_X11_SYNC_WINDOW_OPS:=0}"
 : "${TIKPAL_WEB_MODE_X11_HELPER_MODE:=disabled}"
+: "${TIKPAL_WEB_MODE_X11_HOT_TRACE_NONBLOCKING:=1}"
 : "${TIKPAL_WEB_MODE_X11_HELPER_BINARY:=/usr/local/libexec/tikpal-x11-helper}"
 : "${TIKPAL_WEB_MODE_X11_HELPER_SOCKET:=/run/tikpal/x11-helper.sock}"
 : "${TIKPAL_WEB_MODE_X11_HELPER_CONNECT_TIMEOUT_MS:=50}"
@@ -102,7 +104,9 @@ fi
 : "${TIKPAL_WEB_MODE_X11_HELPER_INSPECT_RESPONSE_TIMEOUT_MS:=700}"
 : "${TIKPAL_WEB_MODE_X11_HELPER_GENERATION_PATH:=$TIKPAL_WEB_MODE_PROFILE_ROOT/x11-helper-generation}"
 : "${TIKPAL_WEB_MODE_X11_HELPER_OWNER_PATH:=$TIKPAL_WEB_MODE_PROFILE_ROOT/x11-helper-owner.json}"
+: "${TIKPAL_WEB_MODE_GUARD_WINDOW_LIST_PATH:=$TIKPAL_WEB_MODE_PROFILE_ROOT/guard-windows.tsv}"
 : "${TIKPAL_WEB_MODE_X11_HELPER_LEASE_MS:=350}"
+: "${TIKPAL_WEB_MODE_GUARD_POST_SWITCH_GRACE_SECONDS:=2}"
 : "${TIKPAL_WEB_MODE_X11_MUTATION_TRACE_PATH:=}"
 : "${TIKPAL_WEB_MODE_INITIAL_ENTRY_TRACE_PATH:=}"
 : "${TIKPAL_WEB_MODE_INITIAL_ENTRY_TRACE_OUTPUT_LIMIT_BYTES:=2048}"
@@ -647,7 +651,20 @@ x11_trace_append_line() {
       fi
       return 0
     fi
-    if ! flock -x "$trace_fd" || ! printf '%s\n' "$line" >&"$trace_fd" 2>/dev/null; then
+    # Only designated hot-path control events are best effort.  The regular
+    # mutation trace remains complete so it can prove stale writers were
+    # fenced before they touched X11.
+    if [[ "${TIKPAL_X11_TRACE_NONBLOCKING:-0}" == "1" &&
+          "${TIKPAL_WEB_MODE_X11_HOT_TRACE_NONBLOCKING:-1}" != "0" ]]; then
+      if ! flock -n -x "$trace_fd"; then
+        exec {trace_fd}>&-
+        return 0
+      fi
+    elif ! flock -x "$trace_fd"; then
+      exec {trace_fd}>&-
+      return 0
+    fi
+    if ! printf '%s\n' "$line" >&"$trace_fd" 2>/dev/null; then
       if [[ "$TIKPAL_X11_TRACE_APPEND_WARNING_EMITTED" != "1" ]]; then
         log_stage "WARN: X11_TRACE_APPEND_FAILED path=$TIKPAL_WEB_MODE_X11_MUTATION_TRACE_PATH reason=append_failed"
         TIKPAL_X11_TRACE_APPEND_WARNING_EMITTED=1
@@ -799,6 +816,17 @@ x11_mutation_run() {
 x11_trace_control_event() {
   local operation="$1" exit_status="${2:-0}" detail="${3:-}" xids="${4:-}"
   local timestamp observed_geometry="not_sampled_control"
+  # A control trace is forensic metadata, never a prerequisite for the
+  # foreground transaction. Its snapshot construction can be expensive when
+  # the trace is large, so honor the hot-path nonblocking contract before
+  # doing any reads or JSON escaping.
+  if [[ "${TIKPAL_X11_TRACE_NONBLOCKING:-0}" == "1" &&
+        "${TIKPAL_WEB_MODE_X11_HOT_TRACE_NONBLOCKING:-1}" != "0" ]]; then
+    (
+      TIKPAL_X11_TRACE_NONBLOCKING=0 x11_trace_control_event "$operation" "$exit_status" "$detail" "$xids"
+    ) >/dev/null 2>&1 &
+    return 0
+  fi
   x11_trace_enabled || return 0
   timestamp="$(x11_monotonic_ns)"
   x11_trace_load_snapshot
@@ -970,7 +998,10 @@ x11_helper_increment_generation() {
   fi
   printf -v "$output_variable" '%s' "$next"
   TIKPAL_WEB_MODE_X11_PROCESS_GENERATION="$next"
-  x11_trace_control_event generation_published 0 "generation=$next"
+  # A foreground retry can publish two generations.  The full forensic
+  # snapshot is useful, but collecting it must never sit between the failed
+  # C transaction and its fresh C retry.
+  TIKPAL_X11_TRACE_NONBLOCKING=1 x11_trace_control_event generation_published 0 "generation=$next"
 }
 
 x11_helper_publish_owner() {
@@ -979,38 +1010,41 @@ x11_helper_publish_owner() {
   local target_window="${3:-}"
   local previous_window="${4:-}"
   local panel_window="${5:-}"
-  local temporary_path
+  local owner_state
   [[ "${TIKPAL_WEB_MODE_LOCKED:-0}" == "1" && "$generation" =~ ^[1-9][0-9]*$ ]] || return 1
-  mkdir -p "$(dirname "$TIKPAL_WEB_MODE_X11_HELPER_OWNER_PATH")"
-  temporary_path="$TIKPAL_WEB_MODE_X11_HELPER_OWNER_PATH.$$.$RANDOM.tmp"
+  [[ -x "$TIKPAL_WEB_MODE_X11_HELPER_BINARY" ]] || return 1
   if [[ "$owner" == "helper" ]]; then
     [[ "$TIKPAL_X11_HELPER_DAEMON_INSTANCE_ID" =~ ^[A-Za-z0-9._:-]+$ &&
        "$TIKPAL_X11_HELPER_CONNECTION_EPOCH" =~ ^[1-9][0-9]*$ &&
        "$TIKPAL_X11_HELPER_LEASE_ID" =~ ^[A-Za-z0-9._:-]+$ &&
        "$target_window" =~ ^[1-9][0-9]*$ && "$previous_window" =~ ^[1-9][0-9]*$ &&
        "$panel_window" =~ ^[1-9][0-9]*$ ]] || return 1
-    printf '{"owner":"helper","daemonInstanceId":"%s","connectionEpoch":%s,"generation":%s,"leaseId":"%s","surfaces":[{"role":"target","xid":%s},{"role":"previous","xid":%s},{"role":"panel","xid":%s}]}\n' \
+    printf -v owner_state '{"owner":"helper","daemonInstanceId":"%s","connectionEpoch":%s,"generation":%s,"leaseId":"%s","surfaces":[{"role":"target","xid":%s},{"role":"previous","xid":%s},{"role":"panel","xid":%s}]}' \
       "$TIKPAL_X11_HELPER_DAEMON_INSTANCE_ID" "$TIKPAL_X11_HELPER_CONNECTION_EPOCH" \
       "$generation" "$TIKPAL_X11_HELPER_LEASE_ID" "$target_window" "$previous_window" \
-      "$panel_window" > "$temporary_path" || return 1
+      "$panel_window"
   else
-    printf '{"owner":"shell","generation":%s,"surfaces":[]}\n' "$generation" > "$temporary_path" || return 1
+    [[ "$owner" == "shell" ]] || return 1
+    printf -v owner_state '{"owner":"shell","generation":%s,"surfaces":[]}' "$generation"
   fi
-  if ! mv -f "$temporary_path" "$TIKPAL_WEB_MODE_X11_HELPER_OWNER_PATH"; then
-    rm -f "$temporary_path" 2>/dev/null || true
-    return 1
-  fi
-  x11_trace_control_event "owner_published_$owner" 0 \
+  "$TIKPAL_WEB_MODE_X11_HELPER_BINARY" client owner-publish \
+    --file "$TIKPAL_WEB_MODE_X11_HELPER_OWNER_PATH" --json "$owner_state" || return 1
+  TIKPAL_X11_TRACE_NONBLOCKING=1 x11_trace_control_event "owner_published_$owner" 0 \
     "generation=$generation lease=${TIKPAL_X11_HELPER_LEASE_ID:-}" \
     "${target_window:-}${previous_window:+,$previous_window}${panel_window:+,$panel_window}"
 }
 
 x11_helper_prepare_switch() {
-  local health request_id
+  local health request_id health_started_ms health_elapsed_ms health_status=0
+  local health_result=ok health_error=""
   x11_helper_switch_enabled || return 1
   [[ -x "$TIKPAL_WEB_MODE_X11_HELPER_BINARY" ]] || return 1
   x11_helper_increment_generation TIKPAL_X11_HELPER_GENERATION || return 1
   request_id="$(x11_helper_new_id)"
+  if switch_trace_enabled; then
+    health_started_ms="$(now_ms)"
+    record_switch_trace_event helper_health_started
+  fi
   if ! health="$(
     TIKPAL_X11_HELPER_CALLER_ROLE="$(x11_trace_writer_role)" \
     TIKPAL_WEB_MODE_X11_HELPER_SOCKET="$TIKPAL_WEB_MODE_X11_HELPER_SOCKET" \
@@ -1018,6 +1052,16 @@ x11_helper_prepare_switch() {
     TIKPAL_WEB_MODE_X11_HELPER_RESPONSE_TIMEOUT_MS="$TIKPAL_WEB_MODE_X11_HELPER_RESPONSE_TIMEOUT_MS" \
       "$TIKPAL_WEB_MODE_X11_HELPER_BINARY" client health --request-id "$request_id" --format tsv
   )"; then
+    health_status=1
+    health_result=failed
+    health_error=health_rpc_failed
+  fi
+  if switch_trace_enabled; then
+    health_elapsed_ms="$(( $(now_ms) - health_started_ms ))"
+    record_switch_trace_event helper_health_completed \
+      "$health_result" "$health_error" "$health_elapsed_ms"
+  fi
+  if [[ "$health_status" != "0" ]]; then
     return 1
   fi
   IFS=$'\t' read -r TIKPAL_X11_HELPER_DAEMON_INSTANCE_ID \
@@ -1032,6 +1076,18 @@ x11_helper_prepare_switch() {
   return 0
 }
 
+x11_helper_response_trace_detail() {
+  local request_id="$1" status="$2" response="$3"
+  local code=unknown fence=missing final=missing total=missing socket_total=missing
+  if [[ "$response" =~ \"code\":\"([^\"]+)\" ]]; then code="${BASH_REMATCH[1]}"; fi
+  if [[ "$response" =~ \"fenceCompletedMonotonicNs\":([0-9]+) ]]; then fence="${BASH_REMATCH[1]}"; fi
+  if [[ "$response" =~ \"finalSnapshotCompletedMonotonicNs\":([0-9]+) ]]; then final="${BASH_REMATCH[1]}"; fi
+  if [[ "$response" =~ \"totalMs\":([0-9.]+) ]]; then total="${BASH_REMATCH[1]}"; fi
+  if [[ "$response" =~ \"socketTotalMs\":([0-9.]+) ]]; then socket_total="${BASH_REMATCH[1]}"; fi
+  printf 'request_id=%s status=%s response_code=%s fenceCompletedMonotonicNs=%s finalSnapshotCompletedMonotonicNs=%s helper_total_ms=%s client_socket_total_ms=%s' \
+    "$request_id" "$status" "$code" "$fence" "$final" "$total" "$socket_total"
+}
+
 x11_helper_begin_switch() {
   local target_window="$1"
   local target_profile="$2"
@@ -1040,8 +1096,13 @@ x11_helper_begin_switch() {
   local panel_window="$5"
   local panel_profile="$6"
   local target_size target_width target_height panel_size panel_width panel_height
-  local target_x target_y previous_x previous_y panel_x panel_y request_id response status
+  local target_x target_y previous_x previous_y panel_x panel_y request_id response status trace_detail
+  local argument_prepare_started_ms owner_publish_started_ms elapsed_ms
   [[ "$TIKPAL_X11_HELPER_PREPARED" == "1" ]] || return 20
+  if switch_trace_enabled; then
+    argument_prepare_started_ms="$(now_ms)"
+    record_switch_trace_event helper_argument_prepare_started
+  fi
   target_size="$(normalize_window_size "$TIKPAL_WEB_MODE_LEFT_WINDOW")"
   target_width="${target_size%,*}"
   target_height="${target_size#*,}"
@@ -1054,12 +1115,22 @@ x11_helper_begin_switch() {
   previous_y="${TIKPAL_WEB_MODE_STAGE_POSITION#*,}"
   panel_x="${TIKPAL_WEB_MODE_PANEL_POSITION%,*}"
   panel_y="${TIKPAL_WEB_MODE_PANEL_POSITION#*,}"
+  if switch_trace_enabled; then
+    elapsed_ms="$(( $(now_ms) - argument_prepare_started_ms ))"
+    record_switch_trace_event helper_argument_prepare_completed ok "" "$elapsed_ms"
+    owner_publish_started_ms="$(now_ms)"
+    record_switch_trace_event helper_owner_publish_started
+  fi
   x11_helper_publish_owner helper "$TIKPAL_X11_HELPER_GENERATION" \
     "$target_window" "$previous_window" "$panel_window" || return 20
+  if switch_trace_enabled; then
+    elapsed_ms="$(( $(now_ms) - owner_publish_started_ms ))"
+    record_switch_trace_event helper_owner_publish_completed ok "" "$elapsed_ms"
+  fi
   TIKPAL_X11_HELPER_ACTIVE=1
   request_id="$(x11_helper_new_id)"
   TIKPAL_X11_HELPER_REQUEST_ID="$request_id"
-  x11_trace_control_event helper_switch_started 0 \
+  TIKPAL_X11_TRACE_NONBLOCKING=1 x11_trace_control_event helper_switch_started 0 \
     "request_id=$request_id generation=$TIKPAL_X11_HELPER_GENERATION lease=$TIKPAL_X11_HELPER_LEASE_ID" \
     "$target_window,$previous_window,$panel_window"
   if response="$(
@@ -1083,10 +1154,11 @@ x11_helper_begin_switch() {
     status=$?
   fi
   TIKPAL_X11_HELPER_LAST_RESPONSE="$response"
-  x11_trace_control_event helper_switch_finished "$status" \
-    "request_id=$request_id response=$response" \
+  trace_detail="$(x11_helper_response_trace_detail "$request_id" "$status" "$response")"
+  TIKPAL_X11_TRACE_NONBLOCKING=1 x11_trace_control_event helper_switch_finished "$status" \
+    "$trace_detail" \
     "$target_window,$previous_window,$panel_window"
-  log_stage "x11_helper_switch generation=$TIKPAL_X11_HELPER_GENERATION lease=$TIKPAL_X11_HELPER_LEASE_ID status=$status response=$response"
+  log_stage "x11_helper_switch generation=$TIKPAL_X11_HELPER_GENERATION lease=$TIKPAL_X11_HELPER_LEASE_ID $trace_detail"
   if [[ "$status" == "70" ]]; then
     TIKPAL_X11_HELPER_UNKNOWN=1
   fi
@@ -1094,10 +1166,10 @@ x11_helper_begin_switch() {
 }
 
 x11_helper_revoke() {
-  local request_id response
+  local request_id response trace_detail
   [[ "$TIKPAL_X11_HELPER_ACTIVE" == "1" ]] || return 0
   request_id="$(x11_helper_new_id)"
-  x11_trace_control_event helper_revoke_started 0 \
+  TIKPAL_X11_TRACE_NONBLOCKING=1 x11_trace_control_event helper_revoke_started 0 \
     "request_id=$request_id switch_request_id=$TIKPAL_X11_HELPER_REQUEST_ID generation=$TIKPAL_X11_HELPER_GENERATION lease=$TIKPAL_X11_HELPER_LEASE_ID"
   if ! response="$(
     TIKPAL_X11_HELPER_CALLER_ROLE="$(x11_trace_writer_role)" \
@@ -1111,14 +1183,15 @@ x11_helper_revoke() {
         --generation "$TIKPAL_X11_HELPER_GENERATION" \
         --lease-id "$TIKPAL_X11_HELPER_LEASE_ID"
   )"; then
-    x11_trace_control_event helper_revoke_finished 1 \
+    TIKPAL_X11_TRACE_NONBLOCKING=1 x11_trace_control_event helper_revoke_finished 1 \
       "request_id=$request_id result=failed response=$response"
     log_stage "x11_helper_revoke generation=$TIKPAL_X11_HELPER_GENERATION result=failed response=$response"
     return 1
   fi
-  x11_trace_control_event helper_revoke_finished 0 \
-    "request_id=$request_id result=ok response=$response"
-  log_stage "x11_helper_revoke generation=$TIKPAL_X11_HELPER_GENERATION result=ok response=$response"
+  trace_detail="$(x11_helper_response_trace_detail "$request_id" 0 "$response")"
+  TIKPAL_X11_TRACE_NONBLOCKING=1 x11_trace_control_event helper_revoke_finished 0 \
+    "result=ok $trace_detail"
+  log_stage "x11_helper_revoke generation=$TIKPAL_X11_HELPER_GENERATION result=ok $trace_detail"
   TIKPAL_X11_HELPER_ACTIVE=0
   return 0
 }
@@ -1182,6 +1255,74 @@ x11_helper_enter_fallback() {
   x11_helper_publish_owner shell "$fallback_generation" || return 1
   TIKPAL_X11_HELPER_PREPARED=0
   return 0
+}
+
+# The Helper's XCB deadline is deliberately short. A reply timeout is safe to
+# retry after the daemon has torn down the transaction. A completed deadline
+# boundary is also safe once the Shell revokes its finished lease: it has no
+# in-flight writer, but its final query missed the same 250ms cutoff. Every
+# other Helper failure remains a one-way fallback.
+x11_helper_retryable_switch_failure() {
+  local response="${TIKPAL_X11_HELPER_LAST_RESPONSE:-}"
+  [[ "$response" == *'"fallbackRecommended":true'* &&
+     "$response" == *'"inFlight":false'* ]] || return 1
+  if [[ "$response" == *'"code":"X11_REPLY_TIMEOUT"'* ]]; then
+    [[ "$response" == *'"leaseReleased":true'* ]]
+    return
+  fi
+  [[ "$response" == *'"code":"TRANSACTION_DEADLINE_EXCEEDED"'* &&
+     "$response" == *'"mutationStarted":true'* ]]
+}
+
+x11_helper_switch_with_timeout_retry() {
+  local target_window="$1"
+  local target_profile="$2"
+  local previous_window="$3"
+  local previous_profile="$4"
+  local panel_window="$5"
+  local panel_profile="$6"
+  local attempt=1 helper_status=0 call_started_ms call_elapsed_ms
+
+  while :; do
+    if switch_trace_enabled; then
+      record_switch_trace_event helper_client_started "attempt_$attempt"
+    fi
+    call_started_ms="$(now_ms)"
+    if x11_helper_begin_switch "$target_window" "$target_profile" \
+      "$previous_window" "$previous_profile" "$panel_window" "$panel_profile"; then
+      helper_status=0
+    else
+      helper_status=$?
+    fi
+    call_elapsed_ms="$(( $(now_ms) - call_started_ms ))"
+    if switch_trace_enabled; then
+      record_switch_trace_event helper_client_completed \
+        "$([[ "$helper_status" == "0" ]] && printf ok || printf failed)" \
+        "status_$helper_status" "$call_elapsed_ms"
+    fi
+    [[ "$helper_status" == "0" ]] && return 0
+    [[ "$helper_status" == "70" ]] && return 70
+
+    # A whitelisted completed failure gives the Shell a safe ownership
+    # handoff. Reacquire a fresh C Helper lease and retry the same fully
+    # verified X11 transaction once before considering the legacy writer.
+    # This avoids turning one 250ms XCB boundary into seconds of Shell-side
+    # process management and xdotool probes.
+    if [[ "$attempt" != "1" ]] || ! x11_helper_retryable_switch_failure; then
+      return "$helper_status"
+    fi
+    record_switch_trace_event helper_timeout_retry_started timeout_retry "status_$helper_status"
+    x11_helper_enter_fallback "$helper_status" || return 1
+    if ! x11_helper_prepare_switch; then
+      # prepare increments the generation before its health RPC; if that RPC
+      # fails, restore a matching Shell owner before the bounded legacy path.
+      x11_helper_enter_fallback 20 || return 1
+      record_switch_trace_event helper_timeout_retry_prepare_failed failed helper_prepare_failed
+      return "$helper_status"
+    fi
+    record_switch_trace_event helper_timeout_retry_prepared ok
+    attempt=2
+  done
 }
 
 x11_helper_restore_shell_owner() {
@@ -1298,8 +1439,27 @@ with_provider_state_lock() {
     "$@"
     return
   fi
+  # A foreground resident switch owns the next runtime-state commit.  Status
+  # reconciliation is advisory and must not queue a run of per-provider Node
+  # writers ahead of that commit while the physical reveal is already done.
+  if [[ "${TIKPAL_WEB_MODE_FOREGROUND_STATE_COMMIT:-0}" != "1" ]] \
+    && provider_switch_in_progress; then
+    return 0
+  fi
   mkdir -p "$TIKPAL_WEB_MODE_PROFILE_ROOT"
   if command -v flock >/dev/null 2>&1; then
+    if [[ "${TIKPAL_WEB_MODE_FOREGROUND_STATE_COMMIT:-0}" != "1" ]]; then
+      # Provider guards are advisory.  They must neither queue ahead of a
+      # foreground commit nor write a stale status after a switch marker is
+      # present.  The foreground caller still waits for an already-running
+      # atomic state write, preserving state-file integrity.
+      (
+        flock -n -x 8 || exit 0
+        provider_switch_in_progress && exit 0
+        TIKPAL_WEB_MODE_PROVIDER_STATE_LOCKED=1 "$@"
+      ) 8>"$(provider_state_lock_path)"
+      return
+    fi
     (
       flock -x 8
       TIKPAL_WEB_MODE_PROVIDER_STATE_LOCKED=1 "$@"
@@ -1390,7 +1550,9 @@ resolve_web_mode_audio_devices() {
 
 normalize_window_size() {
   local value
-  value="$(printf '%s' "$1" | tr -d '[:space:]')"
+  # This is on the resident Helper hot path. Keep whitespace normalization in
+  # Bash instead of forking `tr` twice per switch on the constrained kiosk.
+  value="${1//[[:space:]]/}"
   if [[ "$value" =~ ^([0-9]+)[xX,]([0-9]+)$ ]]; then
     printf '%s,%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
     return
@@ -1645,11 +1807,12 @@ provider_cdp_json_list() {
   timeout 0.8 curl --noproxy '*' -sf --connect-timeout 1 --max-time 1 "http://127.0.0.1:$provider_port/json/list" 2>/dev/null
 }
 
-set_provider_media_active_via_cdp() {
-  local _gate_started_ms="$(now_ms)"
+provider_cdp_command() {
   local provider_port="$1"
-  local active="${2:-0}"
-  local cdp_json="${3:-}"
+  local method="$2"
+  local params_json="$3"
+  local expected_value="${4:-}"
+  local cdp_json="${5:-}"
   local ws_url
   if [[ -z "$cdp_json" ]]; then
     cdp_json="$(timeout 1 curl --noproxy '*' -sf --connect-timeout 1 --max-time 1 "http://127.0.0.1:$provider_port/json/list" 2>/dev/null)"
@@ -1659,17 +1822,20 @@ set_provider_media_active_via_cdp() {
   [[ -n "$ws_url" ]] || return 1
   # Python raw socket WebSocket — avoids ~460ms node startup per call.
   timeout 2 python3 -c '
-import socket, json, base64, os, sys, select
-def recv_exact(s, n):
+import socket, json, base64, os, sys, select, time
+def recv_exact(s, n, deadline):
     buf = b""
     while len(buf) < n:
-        if not select.select([s], [], [], 1.0)[0]: return buf
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 or not select.select([s], [], [], remaining)[0]: return buf
         d = s.recv(n - len(buf))
         if not d: return buf
         buf += d
     return buf
 ws_url = sys.argv[1]
-active = sys.argv[2] == "1"
+method = sys.argv[2]
+params = json.loads(sys.argv[3])
+expected_value = sys.argv[4]
 host_port = ws_url.split("/")[2]
 host, port = host_port.split(":", 1)
 path = "/" + "/".join(ws_url.split("/")[3:])
@@ -1684,9 +1850,7 @@ while b"\r\n\r\n" not in resp:
     resp += d
 if b"101" not in resp.split(b"\r\n")[0]:
     sock.close(); sys.exit(1)
-cmd = json.dumps({"id":1,"method":"Runtime.evaluate","params":{
-    "expression":"(window.__tikpalProviderAudioGate?.setActive(" + ("true" if active else "false") + ") || {}).active",
-    "returnByValue":True}}).encode()
+cmd = json.dumps({"id":1,"method":method,"params":params}).encode()
 mask = os.urandom(4)
 masked = bytes(cmd[i] ^ mask[i%4] for i in range(len(cmd)))
 hdr = bytearray([0x81])
@@ -1698,19 +1862,86 @@ elif n < 65536:
     hdr.extend(n.to_bytes(2, "big"))
 hdr.extend(mask)
 sock.sendall(bytes(hdr) + masked)
-hdr2 = recv_exact(sock, 2)
-if len(hdr2) < 2: sock.close(); sys.exit(1)
-plen = hdr2[1] & 0x7F
-if plen == 126: plen = int.from_bytes(recv_exact(sock, 2), "big")
-payload = recv_exact(sock, plen)
-sock.close()
-try:
-    message = json.loads(payload.decode())
+deadline = time.monotonic() + 1.4
+while time.monotonic() < deadline:
+    hdr2 = recv_exact(sock, 2, deadline)
+    if len(hdr2) < 2: break
+    opcode = hdr2[0] & 0x0F
+    plen = hdr2[1] & 0x7F
+    if plen == 126:
+        extended = recv_exact(sock, 2, deadline)
+        if len(extended) < 2: break
+        plen = int.from_bytes(extended, "big")
+    elif plen == 127:
+        extended = recv_exact(sock, 8, deadline)
+        if len(extended) < 8: break
+        plen = int.from_bytes(extended, "big")
+    if hdr2[1] & 0x80:
+        server_mask = recv_exact(sock, 4, deadline)
+        if len(server_mask) < 4: break
+    else:
+        server_mask = b""
+    payload = recv_exact(sock, plen, deadline)
+    if len(payload) < plen: break
+    if server_mask:
+        payload = bytes(payload[i] ^ server_mask[i % 4] for i in range(len(payload)))
+    if opcode != 1: continue
+    try:
+        message = json.loads(payload.decode())
+    except Exception:
+        continue
+    if message.get("id") != 1: continue
+    sock.close()
+    if message.get("error"): sys.exit(1)
+    if not expected_value: sys.exit(0)
     value = message.get("result", {}).get("result", {}).get("value")
-except Exception:
-    sys.exit(1)
-sys.exit(0 if value is active else 1)
-' "$ws_url" "$active" 2>/dev/null
+    sys.exit(0 if value == json.loads(expected_value) else 1)
+sock.close()
+sys.exit(1)
+' "$ws_url" "$method" "$params_json" "$expected_value" 2>/dev/null
+}
+
+set_provider_media_active_via_cdp() {
+  local provider_port="$1"
+  local active="${2:-0}"
+  local cdp_json="${3:-}"
+  local value=false
+  [[ "$active" == "1" ]] && value=true
+  provider_cdp_command "$provider_port" Runtime.evaluate \
+    "{\"expression\":\"(window.__tikpalProviderAudioGate?.setActive($value) || {}).active\",\"returnByValue\":true}" \
+    "$value" "$cdp_json"
+}
+
+# A resident Chromium window can have a valid CDP page but be compositor-throttled
+# while it is parked beyond the right edge of the X screen.  Wake that renderer
+# under the existing transition cover before the Helper exposes its final geometry.
+request_provider_compositor_wake() {
+  local provider="$1"
+  local provider_port="$2"
+  local started_ms elapsed_ms brought_to_front=0 layout_woken=0
+  started_ms="$(now_ms)"
+  record_switch_trace_event target_compositor_wake_started
+  if provider_cdp_command "$provider_port" Page.bringToFront '{}' ''; then
+    brought_to_front=1
+  fi
+  # Off-screen Chromium can throttle requestAnimationFrame indefinitely.  A
+  # synchronous layout read still invalidates the compositor without turning
+  # a best-effort warmup into a 1.4 s foreground wait.
+  if provider_cdp_command "$provider_port" Runtime.evaluate \
+      '{"expression":"(() => { try { document.documentElement && document.documentElement.getBoundingClientRect(); window.dispatchEvent(new Event(\"resize\")); return true; } catch (_) { return false; } })()","returnByValue":true}' \
+      true; then
+    layout_woken=1
+  fi
+  if [[ "$brought_to_front" == "1" || "$layout_woken" == "1" ]]; then
+    elapsed_ms="$(( $(now_ms) - started_ms ))"
+    log_stage "target_compositor_wake provider=$provider result=ready bring_to_front=$brought_to_front layout_woken=$layout_woken ms=$elapsed_ms"
+    record_switch_trace_event target_compositor_wake_completed ok "" "$elapsed_ms"
+    return 0
+  fi
+  elapsed_ms="$(( $(now_ms) - started_ms ))"
+  log_stage "target_compositor_wake provider=$provider result=unavailable bring_to_front=0 layout_woken=0 ms=$elapsed_ms"
+  record_switch_trace_event target_compositor_wake_completed unavailable compositor_wake_failed "$elapsed_ms"
+  return 1
 }
 
 pause_provider_media_via_cdp() {
@@ -1733,6 +1964,30 @@ activate_target_provider_audio_gate() {
   log "WARN: target provider audio gate did not activate synchronously: $provider"
   record_switch_trace_event target_audio_gate_activated failed target_audio_gate_failed "$elapsed_ms"
   return 1
+}
+
+schedule_target_provider_audio_gate_after_commit() {
+  local provider="$1"
+  local provider_port="$2"
+  local delay="${TIKPAL_WEB_MODE_TARGET_AUDIO_GATE_POST_COMMIT_DELAY_SECONDS:-0.1}"
+  [[ "$delay" =~ ^[0-9]+([.][0-9]+)?$ ]] || delay=0.1
+  # The target can be compositor-throttled while opening.  Its state is now
+  # committed and the provider Guard has resumed, so do this after the X11
+  # lease is released instead of making a visible switch wait on CDP.
+  record_switch_trace_event target_audio_gate_deferred ok guard_post_commit
+  (
+    sleep "$delay"
+    # The X11 transaction is complete now. Bringing the CDP page forward here
+    # wakes a renderer that was legitimately throttled while parked offscreen,
+    # without placing a compositor round-trip on the visible Helper path.
+    record_switch_trace_event post_commit_compositor_wake_started
+    if provider_cdp_command "$provider_port" Page.bringToFront '{}' ''; then
+      record_switch_trace_event post_commit_compositor_wake_completed ok
+    else
+      record_switch_trace_event post_commit_compositor_wake_completed unavailable cdp_wake_failed
+    fi
+    activate_target_provider_audio_gate "$provider" "$provider_port" || true
+  ) &
 }
 
 provider_window_has_nonblank_x11_frame() {
@@ -1869,25 +2124,27 @@ async function evaluate(wsUrl, expression) {
   });
 }
 
-let stableChecks = 0;
-while (Date.now() < deadline) {
-  try {
-    const response = await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(800) });
-    const targets = await response.json();
-    const target = targets.find((item) => item.type === "page" && String(item.url || "").startsWith("https://") && item.webSocketDebuggerUrl);
-    const isReady = target && await evaluate(target.webSocketDebuggerUrl, readyExpression);
-    if (isReady) {
-      stableChecks += 1;
-      if (stableChecks >= 2) process.exit(0);
-    } else {
+(async () => {
+  let stableChecks = 0;
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(800) });
+      const targets = await response.json();
+      const target = targets.find((item) => item.type === "page" && String(item.url || "").startsWith("https://") && item.webSocketDebuggerUrl);
+      const isReady = target && await evaluate(target.webSocketDebuggerUrl, readyExpression);
+      if (isReady) {
+        stableChecks += 1;
+        if (stableChecks >= 2) process.exit(0);
+      } else {
+        stableChecks = 0;
+      }
+    } catch {
       stableChecks = 0;
     }
-  } catch {
-    stableChecks = 0;
+    await sleep(200);
   }
-  await sleep(200);
-}
-process.exit(1);
+  process.exit(1);
+})().catch(() => process.exit(1));
 NODE
 }
 
@@ -2001,6 +2258,10 @@ prefs.profile.default_content_setting_values = prefs.profile.default_content_set
   ? prefs.profile.default_content_setting_values
   : {};
 prefs.profile.default_content_setting_values.cookies = 1;
+// Provider pages must never be able to cover the kiosk with a notification
+// permission prompt. This is a Chromium profile default, so it applies to
+// every provider origin without maintaining a per-site allowlist.
+prefs.profile.default_content_setting_values.notifications = 2;
 if (/^(1|true|yes|on|enabled)$/i.test(String(popupBlocking))) {
   prefs.profile.default_content_setting_values.popups = 2;
   prefs.profile.default_content_setting_values.ads = 2;
@@ -3358,6 +3619,7 @@ sync_runtime_provider_pool_process_statuses() {
   is_enabled "$TIKPAL_WEB_MODE_PROVIDER_POOL" || return 0
   while IFS= read -r provider; do
     [[ -n "$provider" ]] || continue
+    provider_switch_in_progress && return 0
     [[ "$(read_runtime_active_provider)" == "$active_provider" ]] || {
       log "reconcile abandoned: active provider changed from $active_provider"
       return 0
@@ -3441,6 +3703,11 @@ reconcile_provider_pool() {
   proxy_line="$(read_proxy_settings)"
   proxy_enabled="$(effective_provider_proxy_enabled "$active_provider" "${proxy_line%%$'\t'*}")"
   ensure_provider_guard "$active_provider" "$provider_profile" "$(provider_url "$active_provider")" "$proxy_enabled" "$(provider_debug_port "$active_provider")"
+  provider_switch_in_progress && {
+    elapsed_ms="$(( $(now_ms) - started_ms ))"
+    log_stage "reconcile_ms=$elapsed_ms provider=$active_provider abandoned=switching"
+    return 0
+  }
   if provider_prewarm_queue_running; then
     elapsed_ms="$(( $(now_ms) - started_ms ))"
     log_stage "reconcile_ms=$elapsed_ms provider=$active_provider pool=prewarming"
@@ -3514,6 +3781,21 @@ window_guard_running() {
   window_guard_collect_matching_pids
   [[ "${#TIKPAL_WINDOW_GUARD_MATCHING_PIDS[@]}" == 1 &&
      "${TIKPAL_WINDOW_GUARD_MATCHING_PIDS[0]}" == "$pid" ]]
+}
+
+window_guard_running_hot() {
+  local pid starttime
+  pid="$(window_guard_read_pid_file || true)"
+  starttime="$(window_guard_read_recorded_starttime || true)"
+  [[ "$pid" =~ ^[1-9][0-9]*$ && "$starttime" =~ ^[1-9][0-9]*$ ]] || return 1
+  if [[ -x "$TIKPAL_WEB_MODE_X11_HELPER_BINARY" ]]; then
+    "$TIKPAL_WEB_MODE_X11_HELPER_BINARY" client guard-process-verify \
+      --pid "$pid" --starttime "$starttime"
+    return $?
+  fi
+  # This fallback preserves the existing fail-closed duplicate audit while a
+  # staged host still has an older Helper binary.
+  window_guard_running
 }
 
 
@@ -4005,7 +4287,7 @@ any_provider_process_exists() {
 }
 
 cleanup_stale_profile_singletons() {
-  local provider_profile="$1"
+  local provider_profile="$1" guard_verify_status
   [[ -n "$provider_profile" && -d "$provider_profile" ]] || return 0
   profile_process_exists "$provider_profile" && return 0
   rm -f "$provider_profile"/SingletonCookie \
@@ -4713,8 +4995,13 @@ park_pointer_in_side_panel_async() {
 
 commit_visible_provider_state() {
   local provider="$1"
-  write_runtime_provider_state "$provider"
-  x11_trace_control_event runtime_state_committed 0 "provider=$provider"
+  local started_ms elapsed_ms
+  started_ms="$(now_ms)"
+  record_switch_trace_event runtime_state_commit_started
+  TIKPAL_WEB_MODE_FOREGROUND_STATE_COMMIT=1 write_runtime_provider_state "$provider"
+  elapsed_ms="$(( $(now_ms) - started_ms ))"
+  record_switch_trace_event runtime_state_commit_completed ok "" "$elapsed_ms"
+  TIKPAL_X11_TRACE_NONBLOCKING=1 x11_trace_control_event runtime_state_committed 0 "provider=$provider"
   park_pointer_in_side_panel_async
 }
 
@@ -4876,7 +5163,7 @@ tile_visible_web_mode_windows() {
 }
 
 guard_window_list_file() {
-  printf '%s\n' "$TIKPAL_WEB_MODE_PROFILE_ROOT/guard-windows.tsv"
+  printf '%s\n' "$TIKPAL_WEB_MODE_GUARD_WINDOW_LIST_PATH"
 }
 
 read_guard_window() {
@@ -4921,7 +5208,7 @@ write_guard_window_list() {
     fi
   } > "$temporary_path"
   mv -f "$temporary_path" "$list_path"
-  x11_trace_control_event guard_registry_published 0 \
+  TIKPAL_X11_TRACE_NONBLOCKING=1 x11_trace_control_event guard_registry_published 0 \
     "generation=$registry_generation provider=$provider_window panel=$panel_window" \
     "$provider_window,$panel_window"
 }
@@ -5083,6 +5370,13 @@ guard_inspect_windows() {
   inspect_finished_ns="$(x11_monotonic_ns)"
   inspect_elapsed_ns=$((inspect_finished_ns - inspect_started_ns))
   response_code="$(jq -r '.code // .errorCode // "unknown"' <<< "$response" 2>/dev/null || printf unknown)"
+  if [[ "$response_code" == "GUARD_PAUSED_FOR_SWITCH" ]] && provider_switch_in_progress; then
+    TIKPAL_GUARD_INSPECT_PAUSED=1
+    x11_trace_control_event inspect_paused 0 \
+      "request_id=$request_id operation=inspect caller_pid=$BASHPID caller_role=window_guard response_code=$response_code total_ns=$inspect_elapsed_ns" \
+      "$provider_window,$panel_window${kiosk_window:+,$kiosk_window}"
+    return 0
+  fi
   if [[ "$status" != "0" && "$status" != "20" ]]; then
     x11_trace_control_event inspect_failed "$status" \
       "request_id=$request_id operation=inspect caller_pid=$BASHPID caller_role=window_guard response_code=$response_code total_ns=$inspect_elapsed_ns response=$response" \
@@ -5097,8 +5391,8 @@ guard_inspect_windows() {
     return 1
   fi
   TIKPAL_GUARD_INSPECT_RESPONSE="$response"
-  x11_trace_control_event inspect_completed 0 \
-    "request_id=$request_id operation=inspect caller_pid=$BASHPID caller_role=window_guard response_code=$response_code client_status=$status total_ns=$inspect_elapsed_ns response=$response" \
+    x11_trace_control_event inspect_completed 0 \
+      "request_id=$request_id operation=inspect caller_pid=$BASHPID caller_role=window_guard response_code=$response_code client_status=$status total_ns=$inspect_elapsed_ns" \
     "$provider_window,$panel_window${kiosk_window:+,$kiosk_window}"
   if stack_order="$(guard_root_stack_order "$provider_window" "$panel_window" "$kiosk_window")"; then
     TIKPAL_GUARD_STACK_ORDER="$stack_order"
@@ -5321,6 +5615,10 @@ tile_guard_windows_fast() {
     TIKPAL_GUARD_TICK_OUTCOME=inspect_failed
     return 75
   fi
+  if [[ "${TIKPAL_GUARD_INSPECT_PAUSED:-0}" == "1" ]]; then
+    TIKPAL_GUARD_TICK_OUTCOME=switch_paused
+    return 0
+  fi
   if ! guard_plan_repair "$provider_profile" "$panel_profile" \
       "$provider_window" "$panel_window" "$kiosk_window"; then
     [[ "$TIKPAL_GUARD_RECOVERY_REQUIRED" == "true" ]] && return 1
@@ -5494,6 +5792,7 @@ guard_run_tick() {
   local TIKPAL_GUARD_STACK_STATE=unknown
   local TIKPAL_GUARD_STACK_ORDER=""
   local TIKPAL_GUARD_INSPECT_RESPONSE=""
+  local TIKPAL_GUARD_INSPECT_PAUSED=0
   local TIKPAL_GUARD_REPAIR_PLAN=""
   if guard_maintain_windows "$provider_profile" "$panel_profile"; then
     status=0
@@ -5551,6 +5850,21 @@ start_window_guard() {
   if ! write_guard_window_list "$provider_profile" "$provider_window" "$panel_profile" "$panel_window"; then
     log "WARN: rebuilding Explore guard window list"
     recover_guard_window_list "$provider_profile" "$panel_profile" || return 1
+  fi
+  # The foreground path already uses the native verifier.  Reuse it here too:
+  # the older Bash /proc walk can miss the retained Guard during an adjacent
+  # switch and launch a short-lived duplicate before its later audit catches
+  # it.  Only a native, explicit "no Guard" result may create one.
+  if [[ -x "$TIKPAL_WEB_MODE_X11_HELPER_BINARY" ]]; then
+    if window_guard_running_hot; then
+      return 0
+    else
+      guard_verify_status=$?
+    fi
+    if [[ "$guard_verify_status" != "1" ]]; then
+      log "ERROR: Explore Guard startup verification failed status=$guard_verify_status; refusing creation"
+      return "$guard_verify_status"
+    fi
   fi
   window_guard_ensure_process "$provider_profile" "$panel_profile"
 }
@@ -5690,7 +6004,7 @@ run_window_guard() {
   local provider_profile="$1"
   local panel_profile="$2"
   local fast_ticks_remaining=4
-  local active_provider active_profile guard_pid guard_starttime
+  local active_provider active_profile guard_pid guard_starttime switch_was_paused=0
   [[ -n "$provider_profile" ]] || is_enabled "$TIKPAL_WEB_MODE_PROVIDER_POOL" || return 0
   guard_pid="${BASHPID:-$$}"
   guard_starttime="$(window_guard_process_starttime "$guard_pid" || true)"
@@ -5713,7 +6027,18 @@ run_window_guard() {
       # tick raise the old provider between the switch marker and the atomic
       # registry handoff to the newly visible provider.
       if provider_switch_in_progress; then
+        switch_was_paused=1
         sleep 0.05
+        continue
+      fi
+      # The Helper's final snapshot and the atomically published registry are
+      # already authoritative for the completed switch.  Deferring this
+      # fault-only Guard's first post-switch inspection prevents it from
+      # immediately reacquiring web-mode.lock and extending a smooth visible
+      # transition with background maintenance.
+      if [[ "$switch_was_paused" == "1" ]]; then
+        switch_was_paused=0
+        sleep "$TIKPAL_WEB_MODE_GUARD_POST_SWITCH_GRACE_SECONDS"
         continue
       fi
       active_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/$active_provider"
@@ -6795,20 +7120,30 @@ reveal_resident_provider_window() {
   fi
   if [[ "$helper_candidate" == "1" ]]; then
     local helper_status=0
-    if x11_helper_begin_switch "$target_window" "$provider_profile" \
+    if x11_helper_switch_with_timeout_retry "$target_window" "$provider_profile" \
       "$previous_window" "$previous_profile" "$panel_window" "$panel_profile"; then
       helper_status=0
     else
       helper_status=$?
     fi
-    log_open_stage helper_call "provider=${provider_profile##*/} result=$([[ "$helper_status" == "0" ]] && printf success || printf failed) status=$helper_status response=${TIKPAL_X11_HELPER_LAST_RESPONSE:-none}"
+    log_open_stage helper_call "provider=${provider_profile##*/} result=$([[ "$helper_status" == "0" ]] && printf success || printf failed) $(x11_helper_response_trace_detail "${TIKPAL_X11_HELPER_REQUEST_ID:-none}" "$helper_status" "${TIKPAL_X11_HELPER_LAST_RESPONSE:-}")"
     if [[ "$helper_status" == "0" ]]; then
       # The Helper has fenced and verified the X11 transaction, but that does
-      # not prove Chromium has produced a nonblank compositor frame.  Keep
-      # the Helper lease until this read-only physical gate passes so a stamp
-      # cannot make a white first paint look like a successful reveal.
+      # not prove Chromium has produced a nonblank compositor frame.  On the
+      # 115 X server, however, x11grab -window_id returns BadAccess for these
+      # Chromium windows even after the Helper's final geometry/opacity
+      # snapshot has passed.  A resident page with a real CDP URL is already
+      # eligible for the same fast path used below; Phase 2 still confirms the
+      # composed physical frame before accepting the switch.
       helper_paint_started_ms="$(now_ms)"
-      if ! wait_for_provider_window_nonblank_x11_frame "$target_window"; then
+      if [[ "$resident_page_ready" == "1" && -n "$provider_port" ]] \
+        && provider_has_real_provider_page "$provider_port"; then
+        helper_paint_elapsed_ms="$(( $(now_ms) - helper_paint_started_ms ))"
+        if switch_trace_enabled; then
+          record_switch_trace_event helper_paint_gate completed cdp_resident "$helper_paint_elapsed_ms"
+        fi
+        log_stage "helper_cdp_skip_paint target=$target_window port=$provider_port elapsed_ms=$helper_paint_elapsed_ms"
+      elif ! wait_for_provider_window_nonblank_x11_frame "$target_window"; then
         helper_paint_elapsed_ms="$(( $(now_ms) - helper_paint_started_ms ))"
         if switch_trace_enabled; then
           record_switch_trace_event helper_paint_gate failed paint_timeout "$helper_paint_elapsed_ms"
@@ -6816,10 +7151,11 @@ reveal_resident_provider_window() {
         log_stage "reveal_paint_failed target=$target_window port=$provider_port mode=helper elapsed_ms=$helper_paint_elapsed_ms"
         log_open_stage reveal "provider=${provider_profile##*/} result=failed route=helper reason=paint_timeout target_window=$target_window"
         return 1
-      fi
-      helper_paint_elapsed_ms="$(( $(now_ms) - helper_paint_started_ms ))"
-      if switch_trace_enabled; then
-        record_switch_trace_event helper_paint_gate completed nonblank "$helper_paint_elapsed_ms"
+      else
+        helper_paint_elapsed_ms="$(( $(now_ms) - helper_paint_started_ms ))"
+        if switch_trace_enabled; then
+          record_switch_trace_event helper_paint_gate completed nonblank "$helper_paint_elapsed_ms"
+        fi
       fi
       physical_ms="$(now_ms)"
       write_physical_reveal_stamp "$provider_profile" "$target_window" "$previous_window" "$physical_ms" \
@@ -6844,15 +7180,16 @@ reveal_resident_provider_window() {
       helper_candidate=0
     fi
     if [[ "$helper_candidate" != "1" ]]; then
-      local fallback_started_ms
-      fallback_started_ms="$(now_ms)"
-      stop_window_guard
-      target_window="$(first_window_for_profile "$provider_profile" "$segment_timing_once" helper_fallback_target || true)"
-      previous_window="$(first_window_for_profile "$previous_profile" "$segment_timing_once" helper_fallback_previous || true)"
-      panel_window="$(keep_side_panel_visible_during_switch "${provider_profile##*/}" "$panel_window" "$segment_timing_once" || true)"
+      # The switch marker pauses the retained Guard for this entire
+      # transaction.  Helper preparation already bound these three XIDs, so a
+      # known-safe timeout must not add a SIGTERM/relaunch cycle or repeat
+      # identity probes before the bounded last-resort Shell path.
+      provider_switch_in_progress || return 1
       [[ "$target_window" =~ ^[1-9][0-9]*$ && "$previous_window" =~ ^[1-9][0-9]*$ &&
          "$panel_window" =~ ^[1-9][0-9]*$ ]] || return 1
-      guard_stop_ms="$(( $(now_ms) - fallback_started_ms ))"
+      guard_stop_ms=0
+      panel_retile_ms=0
+      record_switch_trace_event helper_fallback_reusing_prepared_windows ok
     fi
   fi
   # Restore opacity before reveal — park_profile_windows_for_reopen sets 0
@@ -7075,7 +7412,10 @@ launch_provider_for_pool() {
     if ! provider_has_real_provider_page "$provider_port"; then
       if [[ "$launch_role" == "prewarm" && "$force_existing" == "1" ]]; then
         write_runtime_provider_status "$provider" "prewarming"
-        if ! navigate_provider_target "$provider_port" "$url" || ! wait_for_real_provider_url "$provider_port"; then
+        if ! navigate_provider_target "$provider_port" "$url"; then
+          log "WARN: provider navigation was not confirmed; checking the resident page: $provider"
+        fi
+        if ! wait_for_real_provider_url "$provider_port"; then
           write_runtime_provider_status "$provider" "check_setup" "$(provider_label "$provider") did not enter the provider page"
           return 0
         fi
@@ -7086,7 +7426,10 @@ launch_provider_for_pool() {
       fi
     elif [[ "$launch_role" == "prewarm" && "$force_existing" == "1" ]]; then
       write_runtime_provider_status "$provider" "prewarming"
-      if ! navigate_provider_target "$provider_port" "$url" || ! wait_for_real_provider_url "$provider_port"; then
+      if ! navigate_provider_target "$provider_port" "$url"; then
+        log "WARN: provider navigation was not confirmed; checking the resident page: $provider"
+      fi
+      if ! wait_for_real_provider_url "$provider_port"; then
         write_runtime_provider_status "$provider" "check_setup" "$(provider_label "$provider") could not reopen"
         return 0
       fi
@@ -7467,6 +7810,7 @@ open_provider_pool() {
   local resident_status resident_page_ready=0 fast_resident=0 switching_provider=0 current_port provider_port
   local helper_candidate=0 helper_target_raw=0
   local started_ms reveal_ms command_return_ms transition_shown_ms=0 initial_entry_status=0
+  local guard_lifecycle_started_ms=0 switch_marker_clear_started_ms=0 guard_verify_status=0
   local initial_entry_phase=""
   local segment_timing_once=0 segment_started_ms=0 cached_xid_ms=-1 first_cdp_ms=-1 guard_stop_ms=-1 panel_retile_ms=-1
   local trace_started_ms=0 trace_finished_ms=0 trace_elapsed_ms=0 trace_cdp_started_ms=0 trace_cdp_elapsed_ms=0
@@ -7482,6 +7826,11 @@ open_provider_pool() {
   fi
   [[ -z "$current_provider" ]] && entry_stage=1
   [[ "$entry_stage" != "1" && "$current_provider" != "$provider" ]] && switching_provider=1
+  # Establish foreground ownership before resolving the target.  Otherwise
+  # per-provider advisory status writers can enter the state lock during the
+  # resolver/CDP window and make the eventual active-state commit wait for a
+  # queue that is unrelated to the visible switch.
+  [[ "$switching_provider" != "1" ]] || begin_provider_switch_guard
   if [[ "$switching_provider" == "1" && -e "$TIKPAL_WEB_MODE_SWITCH_SEGMENT_TIMING_ONCE_PATH" ]]; then
     segment_timing_once=1
     rm -f "$(switch_detail_timing_path)"
@@ -7548,7 +7897,6 @@ open_provider_pool() {
       switch_trace_now_ms trace_started_ms
       record_switch_trace_event guard_prepare_started
     fi
-    begin_provider_switch_guard
     previous_window="$(read_guard_window provider "$current_profile" || true)"
     known_panel_window="$(read_guard_window panel "$panel_profile" || true)"
     if ! x11_helper_switch_enabled; then
@@ -7612,7 +7960,13 @@ open_provider_pool() {
     # The transition veil covers the old page; the 2 s audio crossfade masks any
     # brief overlap while the WebSocket round-trip completes in the background.
     if [[ -n "$current_provider" ]]; then
-      ( pause_provider_media_via_cdp "$(provider_debug_port "$current_provider")" || true ) &
+      (
+        if pause_provider_media_via_cdp "$(provider_debug_port "$current_provider")"; then
+          record_switch_trace_event previous_audio_gate_deactivated ok
+        else
+          record_switch_trace_event previous_audio_gate_deactivated failed previous_audio_gate_deactivation_failed
+        fi
+      ) &
     fi
     if [[ "$fast_resident" == "1" ]]; then
       # CDP fast path: skip the fade animation.  The new window will be
@@ -7680,6 +8034,14 @@ open_provider_pool() {
       log "open abandoned before resident reveal: $provider"
       return 0
     fi
+    if [[ "$switching_provider" == "1" && "$helper_candidate" == "1" ]]; then
+      # A resident page already proved Ready and the C Helper owns the final
+      # X11 snapshot.  Do not put an advisory off-screen CDP wake in front of
+      # that transaction: a throttled renderer can consume multiple seconds
+      # here without improving the physical reveal.
+      record_switch_trace_event target_compositor_wake_started
+      record_switch_trace_event target_compositor_wake_completed skipped helper_foreground_authoritative 0
+    fi
     log_open_stage surface_plan_begin "provider=$provider route=$([[ "$helper_candidate" == "1" ]] && printf helper || printf legacy) operations=layout,map,raise target_window=$target_window previous_window=$previous_window panel_window=$panel_window"
     if reveal_resident_provider_window "$target_window" "$current_profile" "$provider_profile" "$transition_shown_ms" "$provider_port" "$previous_window" "$resident_page_ready" \
       "$segment_timing_once" "$cached_xid_ms" "$first_cdp_ms" "$guard_stop_ms" "$panel_retile_ms" \
@@ -7695,22 +8057,59 @@ open_provider_pool() {
         log "open abandoned before resident commit: $provider"
         return 0
       fi
-      activate_target_provider_audio_gate "$provider" "$provider_port" || true
       commit_visible_provider_state "$provider"
       write_audio_bus_state ""
       record_switch_trace_event runtime_state_committed
       if [[ "$TIKPAL_X11_HELPER_ACTIVE" == "1" ]]; then
-        write_guard_window_list "$provider_profile" "$target_window" "$panel_profile" "$panel_window" ||
+        record_switch_trace_event guard_registry_update_started
+        if ! write_guard_window_list "$provider_profile" "$target_window" "$panel_profile" "$panel_window"; then
           fail "Explore guard registry could not be updated before releasing Helper ownership"
+        fi
+        record_switch_trace_event guard_registry_update_completed
+        record_switch_trace_event helper_release_started
         x11_helper_finish_success || fail "X11 helper ownership could not be safely returned to Shell"
-        window_guard_running || start_window_guard "$provider_profile" "$panel_profile" "$target_window" "$panel_window"
+        record_switch_trace_event helper_release_completed
+        guard_lifecycle_started_ms="$(now_ms)"
+        record_switch_trace_event guard_lifecycle_started
+        if window_guard_running_hot; then
+          guard_verify_status=0
+        else
+          guard_verify_status=$?
+          # Status 1 is the C client's explicit proof that no Guard exists.
+          # A duplicate (24), stale identity (25), or operational error must
+          # fail closed instead of launching a second Guard into the same
+          # foreground switch.
+          if [[ "$guard_verify_status" == "1" ]]; then
+            start_window_guard "$provider_profile" "$panel_profile" "$target_window" "$panel_window"
+          else
+            log "ERROR: Explore Guard verification failed status=$guard_verify_status; refusing replacement"
+            return "$guard_verify_status"
+          fi
+        fi
+        record_switch_trace_event guard_lifecycle_completed ok "" "$(( $(now_ms) - guard_lifecycle_started_ms ))"
       else
+        guard_lifecycle_started_ms="$(now_ms)"
+        record_switch_trace_event guard_lifecycle_started
         start_window_guard "$provider_profile" "$panel_profile" "$target_window" "$panel_window"
+        record_switch_trace_event guard_lifecycle_completed ok "" "$(( $(now_ms) - guard_lifecycle_started_ms ))"
       fi
       # The active-provider state and Guard registry now name the new surface;
       # only now may the retained Guard resume its inspect/plan/apply loop.
+      switch_marker_clear_started_ms="$(now_ms)"
       clear_provider_switch_guard
-      reconcile_provider_pool_in_background "$provider"
+      record_switch_trace_event switch_marker_cleared ok "" "$(( $(now_ms) - switch_marker_clear_started_ms ))"
+      schedule_target_provider_audio_gate_after_commit "$provider" "$provider_port"
+      # A traced physical switch has already proved every resident page Ready.
+      # Do not launch its advisory reconciliation while acceptance is reading
+      # the final X11 geometry; it can contend with those checks after the
+      # visible transaction has completed. Normal interactive switches retain
+      # the background reconcile.
+      if ! switch_trace_enabled; then
+        reconcile_provider_pool_in_background "$provider"
+        record_switch_trace_event reconcile_dispatched
+      else
+        record_switch_trace_event reconcile_deferred
+      fi
       command_return_ms="$(( $(now_ms) - started_ms ))"
       log_stage "command_return_ms=$command_return_ms provider=$provider resident=1"
       log_open_stage opened "provider=$provider target_window=$target_window command_return_ms=$command_return_ms"
@@ -7901,7 +8300,7 @@ open_provider_pool() {
   write_audio_bus_state ""
   record_switch_trace_event runtime_state_committed
   start_window_guard "$provider_profile" "$panel_profile" "$target_window" "$panel_window"
-  reconcile_provider_pool_in_background "$provider"
+  switch_trace_enabled || reconcile_provider_pool_in_background "$provider"
   command_return_ms="$(( $(now_ms) - started_ms ))"
   log_stage "command_return_ms=$command_return_ms provider=$provider resident=$fast_resident"
   log_open_stage opened "provider=$provider target_window=$target_window command_return_ms=$command_return_ms"

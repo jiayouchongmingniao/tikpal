@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# This fixture asserts that every stale-writer event is retained. Production
+# foreground traces are best-effort so a busy Guard trace cannot delay a live
+# switch; keep the stricter append mode here for the audit assertion.
+export TIKPAL_WEB_MODE_X11_HOT_TRACE_NONBLOCKING=0
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 FIXTURE_DIR="$(mktemp -d /tmp/tikpal-x11-late-writer.XXXXXX)"

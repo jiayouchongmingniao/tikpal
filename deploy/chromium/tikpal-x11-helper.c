@@ -6,6 +6,7 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <ctype.h>
+#include <dirent.h>
 #include <fcntl.h>
 #include <inttypes.h>
 #include <json-c/json.h>
@@ -56,7 +57,10 @@
 #define MAX_CALLER_ROLE 64
 #define MAX_CLASS 256
 #define REQUEST_CACHE_SIZE 32
-#define SERVER_FRAME_TIMEOUT_MS 300
+/* Every supported local client writes its framed request immediately after
+ * connect.  Keep an incomplete peer from monopolising the single-threaded
+ * daemon long enough to delay a foreground switch behind several 300 ms reads. */
+#define SERVER_FRAME_TIMEOUT_MS 50
 #define SURFACE_QUERY_FAILED -3
 #define SURFACE_QUERY_DEADLINE_EXCEEDED -6
 
@@ -206,6 +210,8 @@ typedef struct {
   uint64_t total_requests;
   uint64_t inspect_requests;
   uint64_t inspect_failures;
+  uint64_t guard_paused_requests;
+  uint64_t protocol_frame_timeouts;
   uint64_t switch_requests;
   uint64_t switch_failures;
   uint64_t mutation_requests;
@@ -362,6 +368,43 @@ static void load_generation_floor(HelperState *state) {
   }
   if ((uint64_t)parsed > state->generation_floor) state->generation_floor = (uint64_t)parsed;
   state->generation_state = GENERATION_OK;
+}
+
+/* The Shell writes this sibling marker before it asks the Helper to reveal a
+ * resident provider.  The daemon is intentionally single-threaded, so queued
+ * Guard inspections must yield without starting an X11 transaction; otherwise
+ * they can delay that foreground request by several inspect deadlines. */
+static bool foreground_switch_marker_active(const HelperState *state) {
+  char marker_path[PATH_MAX];
+  char buffer[128];
+  const char *slash;
+  char *end = NULL;
+  FILE *input;
+  long parsed;
+  int written;
+  slash = strrchr(state->generation_path, '/');
+  if (!slash) return false;
+  if (slash == state->generation_path) {
+    written = snprintf(marker_path, sizeof(marker_path), "/provider-switch.pid");
+  } else {
+    written = snprintf(marker_path, sizeof(marker_path), "%.*s/provider-switch.pid",
+                       (int)(slash - state->generation_path), state->generation_path);
+  }
+  if (written < 0 || (size_t)written >= sizeof(marker_path)) return false;
+  input = fopen(marker_path, "re");
+  if (!input) return false;
+  if (!fgets(buffer, sizeof(buffer), input)) {
+    fclose(input);
+    return false;
+  }
+  fclose(input);
+  errno = 0;
+  parsed = strtol(buffer, &end, 10);
+  while (end && (*end == ' ' || *end == '\t' || *end == '\r' || *end == '\n')) end++;
+  if (errno != 0 || end == buffer || (end && *end != '\0') || parsed <= 1 ||
+      parsed > INT_MAX) return false;
+  if (kill((pid_t)parsed, 0) == 0) return true;
+  return errno == EPERM;
 }
 
 static void load_instance_id(char output[80]) {
@@ -531,6 +574,46 @@ static CollectResult collect_replies(HelperState *state, PendingReply *pending, 
       }
       if (completed == count) return finish_collect(state, COLLECT_OK, pending, count, completed);
       return finish_collect(state, COLLECT_POLL_ERROR, pending, count, completed);
+    }
+  }
+}
+
+/* A physical display probe needs one large GetImage reply rather than the
+ * surface-query bundle above.  Keep its reply wait bounded and nonblocking so
+ * an overloaded X server cannot monopolise the Helper daemon. */
+static CollectResult collect_single_reply(HelperState *state, uint32_t sequence,
+                                          int64_t deadline_ns, void **reply_output,
+                                          xcb_generic_error_t **error_output) {
+  struct pollfd descriptor = {0};
+  AsyncError async_error = {0};
+  descriptor.fd = xcb_get_file_descriptor(state->connection);
+  descriptor.events = POLLIN | POLLERR | POLLHUP;
+  *reply_output = NULL;
+  *error_output = NULL;
+  for (;;) {
+    void *reply = NULL;
+    xcb_generic_error_t *error = NULL;
+    int ready = xcb_poll_for_reply(state->connection, sequence, &reply, &error);
+    if (ready) {
+      *reply_output = reply;
+      *error_output = error;
+      return error ? SURFACE_QUERY_FAILED : COLLECT_OK;
+    }
+    drain_queued_events(state->connection, &async_error);
+    if (async_error.seen || xcb_connection_has_error(state->connection) != 0) {
+      return COLLECT_XCB_CONNECTION_ERROR;
+    }
+    int remaining_ms = remaining_timeout_ms(deadline_ns);
+    if (remaining_ms <= 0) return COLLECT_REPLY_TIMEOUT;
+    descriptor.revents = 0;
+    int poll_result = poll(&descriptor, 1, remaining_ms);
+    if (poll_result == 0) return COLLECT_REPLY_TIMEOUT;
+    if (poll_result < 0) {
+      if (errno == EINTR) continue;
+      return COLLECT_POLL_ERROR;
+    }
+    if (descriptor.revents & (POLLERR | POLLHUP | POLLNVAL)) {
+      return COLLECT_XCB_CONNECTION_ERROR;
     }
   }
 }
@@ -1124,6 +1207,7 @@ static json_object *health_response(const HelperState *state, const char *reques
   json_object_array_add(operations, json_object_new_string("health"));
   json_object_array_add(operations, json_object_new_string("inspect"));
   if (state->phase == 1) {
+    json_object_array_add(operations, json_object_new_string("screen-probe"));
     json_object_array_add(operations, json_object_new_string("switch"));
     json_object_array_add(operations, json_object_new_string("revoke"));
   }
@@ -1144,6 +1228,10 @@ static json_object *health_response(const HelperState *state, const char *reques
   json_object_object_add(counters, "totalRequests", json_object_new_int64((int64_t)state->total_requests));
   json_object_object_add(counters, "inspectRequests", json_object_new_int64((int64_t)state->inspect_requests));
   json_object_object_add(counters, "inspectFailures", json_object_new_int64((int64_t)state->inspect_failures));
+  json_object_object_add(counters, "guardPausedRequests",
+                         json_object_new_int64((int64_t)state->guard_paused_requests));
+  json_object_object_add(counters, "protocolFrameTimeouts",
+                         json_object_new_int64((int64_t)state->protocol_frame_timeouts));
   json_object_object_add(counters, "switchRequests", json_object_new_int64((int64_t)state->switch_requests));
   json_object_object_add(counters, "switchFailures", json_object_new_int64((int64_t)state->switch_failures));
   json_object_object_add(counters, "mutationRequests", json_object_new_int64((int64_t)state->mutation_requests));
@@ -1161,6 +1249,13 @@ static bool get_required_string(json_object *object, const char *key, const char
   }
   *output = json_object_get_string(value);
   return *output && (*output)[0];
+}
+
+static bool request_has_caller_role(json_object *request, const char *role) {
+  json_object *value = NULL;
+  return json_object_object_get_ex(request, "callerRole", &value) &&
+         json_object_is_type(value, json_type_string) &&
+         strcmp(json_object_get_string(value), role) == 0;
 }
 
 static json_object *error_response(const HelperState *state, const char *request_id,
@@ -1181,6 +1276,107 @@ static const char *collect_error_code(int result) {
     case COLLECT_INTERRUPTED: return "HELPER_STOPPING";
   }
   return "XCB_COLLECTION_FAILED";
+}
+
+static bool image_reply_range(const xcb_get_image_reply_t *reply, uint16_t width,
+                              uint16_t height, int *range_output) {
+  const uint8_t *pixels;
+  size_t pixel_count;
+  size_t byte_count;
+  size_t bytes_per_pixel;
+  uint8_t minimum = UINT8_MAX;
+  uint8_t maximum = 0;
+  if (!reply || width == 0 || height == 0) return false;
+  pixel_count = (size_t)width * (size_t)height;
+  byte_count = (size_t)xcb_get_image_data_length(reply);
+  if (pixel_count == 0 || byte_count == 0 || byte_count % pixel_count != 0) return false;
+  bytes_per_pixel = byte_count / pixel_count;
+  /* The kiosk root is 24-bit RGB in a 32-bit X11 pixel.  Support tightly
+   * packed RGB too, but reject unexpected encodings rather than treating an
+   * alpha/filler byte as visible content. */
+  if (bytes_per_pixel < 3 || bytes_per_pixel > 8) return false;
+  pixels = xcb_get_image_data(reply);
+  if (!pixels) return false;
+  for (size_t pixel = 0; pixel < pixel_count; pixel++) {
+    const uint8_t *channels = pixels + pixel * bytes_per_pixel;
+    for (size_t channel = 0; channel < 3; channel++) {
+      if (channels[channel] < minimum) minimum = channels[channel];
+      if (channels[channel] > maximum) maximum = channels[channel];
+    }
+  }
+  *range_output = (int)maximum - (int)minimum;
+  return true;
+}
+
+static json_object *screen_probe_response(HelperState *state, const char *request_id,
+                                          int64_t received_ns) {
+  const uint16_t provider_width = 1920;
+  const uint16_t panel_width = 640;
+  const uint16_t height = 720;
+  const int64_t deadline_ns = received_ns +
+    (int64_t)state->transaction_timeout_ms * 1000000LL;
+  xcb_get_image_cookie_t provider_cookie;
+  xcb_get_image_cookie_t panel_cookie;
+  xcb_get_image_reply_t *provider_reply = NULL;
+  xcb_get_image_reply_t *panel_reply = NULL;
+  xcb_generic_error_t *provider_error = NULL;
+  xcb_generic_error_t *panel_error = NULL;
+  CollectResult result;
+  int provider_range = 0;
+  int panel_range = 0;
+  const char *code = "OK";
+  bool ok = false;
+  json_object *response;
+
+  if (state->phase != 1) return error_response(state, request_id, "screen-probe",
+                                                "OPERATION_DISABLED_PHASE0");
+  if (!state->connection || !state->screen || state->screen->width_in_pixels < provider_width + panel_width ||
+      state->screen->height_in_pixels < height) {
+    return error_response(state, request_id, "screen-probe", "SCREEN_UNAVAILABLE");
+  }
+  provider_cookie = xcb_get_image(state->connection, XCB_IMAGE_FORMAT_Z_PIXMAP,
+                                  state->screen->root, 0, 0, provider_width, height,
+                                  UINT32_MAX);
+  panel_cookie = xcb_get_image(state->connection, XCB_IMAGE_FORMAT_Z_PIXMAP,
+                               state->screen->root, provider_width, 0, panel_width, height,
+                               UINT32_MAX);
+  if (xcb_flush(state->connection) <= 0) {
+    code = "XCB_CONNECTION_ERROR";
+  } else {
+    result = collect_single_reply(state, provider_cookie.sequence, deadline_ns,
+                                  (void **)&provider_reply, &provider_error);
+    if (result == COLLECT_OK) {
+      result = collect_single_reply(state, panel_cookie.sequence, deadline_ns,
+                                    (void **)&panel_reply, &panel_error);
+    }
+    if (result != COLLECT_OK) {
+      code = result == SURFACE_QUERY_FAILED ? "SCREEN_PROBE_FAILED" : collect_error_code(result);
+    } else if (!image_reply_range(provider_reply, provider_width, height, &provider_range) ||
+               !image_reply_range(panel_reply, panel_width, height, &panel_range)) {
+      code = "SCREEN_PROBE_FORMAT_UNSUPPORTED";
+    } else if (provider_range < 12 || panel_range < 12) {
+      code = "SCREEN_REGIONS_BLANK";
+    } else {
+      ok = true;
+    }
+  }
+  free(provider_reply);
+  free(panel_reply);
+  free(provider_error);
+  free(panel_error);
+  if (!ok && (strcmp(code, "X11_REPLY_TIMEOUT") == 0 ||
+              strcmp(code, "XCB_CONNECTION_ERROR") == 0 ||
+              strcmp(code, "XCB_POLL_ERROR") == 0)) {
+    if (strcmp(code, "X11_REPLY_TIMEOUT") == 0) state->xcb_timeouts++;
+    reset_xcb_connection(state);
+  }
+  response = base_response(state, request_id, "screen-probe");
+  json_object_object_add(response, "ok", json_object_new_boolean(ok));
+  json_object_object_add(response, "code", json_object_new_string(code));
+  json_object_object_add(response, "errorCode", ok ? NULL : json_object_new_string(code));
+  json_object_object_add(response, "providerRange", json_object_new_int(provider_range));
+  json_object_object_add(response, "panelRange", json_object_new_int(panel_range));
+  return response;
 }
 
 static bool collect_requires_connection_reset(int result) {
@@ -2419,6 +2615,11 @@ static json_object *process_request(HelperState *state, const char *packet, size
     }
     load_generation_floor(state);
     response = health_response(state, request_id);
+  } else if (strcmp(operation, "inspect") == 0 &&
+             request_has_caller_role(request, "window_guard") &&
+             foreground_switch_marker_active(state)) {
+    state->guard_paused_requests++;
+    response = error_response(state, request_id, operation, "GUARD_PAUSED_FOR_SWITCH");
   } else if (strcmp(operation, "inspect") == 0) {
     if (!state->connection) {
       (void)connect_xcb(state, true,
@@ -2426,6 +2627,12 @@ static json_object *process_request(HelperState *state, const char *packet, size
     }
     load_generation_floor(state);
     response = inspect_response(state, request, request_id, received_ns);
+  } else if (strcmp(operation, "screen-probe") == 0) {
+    if (foreground_switch_marker_active(state)) {
+      response = error_response(state, request_id, operation, "SCREEN_PROBE_PAUSED_FOR_SWITCH");
+    } else {
+      response = screen_probe_response(state, request_id, received_ns);
+    }
   } else if (strcmp(operation, "switch") == 0) {
     if (state->phase == 0) {
       response = error_response(state, request_id, operation, "OPERATION_DISABLED_PHASE0");
@@ -2659,6 +2866,7 @@ static int serve(HelperState *state, const char *socket_path) {
         response = frame_result == FRAME_OK
           ? process_request(state, packet, packet_length, received_ns)
           : error_response(state, "unknown", "unknown", frame_error_code(frame_result));
+        if (frame_result == FRAME_TIMEOUT) state->protocol_frame_timeouts++;
         if (frame_result == FRAME_OK && response) {
           log_request_result(state, packet, packet_length, response, received_ns,
                              monotonic_ns(), epoch_before, timeouts_before,
@@ -2788,6 +2996,267 @@ static bool parse_phase(const char *value, int *phase) {
     return true;
   }
   return false;
+}
+
+static bool owner_publish_state_valid(json_object *state) {
+  json_object *owner_value = NULL;
+  json_object *generation_value = NULL;
+  json_object *surfaces = NULL;
+  const char *owner;
+  bool seen_target = false;
+  bool seen_previous = false;
+  bool seen_panel = false;
+  if (!state || !json_object_is_type(state, json_type_object) ||
+      !json_object_object_get_ex(state, "owner", &owner_value) ||
+      !json_object_is_type(owner_value, json_type_string) ||
+      !json_object_object_get_ex(state, "generation", &generation_value) ||
+      !json_object_is_type(generation_value, json_type_int) ||
+      json_object_get_int64(generation_value) <= 0 ||
+      !json_object_object_get_ex(state, "surfaces", &surfaces) ||
+      !json_object_is_type(surfaces, json_type_array)) {
+    return false;
+  }
+  owner = json_object_get_string(owner_value);
+  if (strcmp(owner, "shell") == 0) return json_object_array_length(surfaces) == 0;
+  if (strcmp(owner, "helper") != 0 || json_object_array_length(surfaces) != 3) return false;
+  for (size_t index = 0; index < json_object_array_length(surfaces); index++) {
+    json_object *surface = json_object_array_get_idx(surfaces, index);
+    json_object *role_value = NULL;
+    json_object *xid_value = NULL;
+    const char *role;
+    int64_t xid;
+    if (!surface || !json_object_is_type(surface, json_type_object) ||
+        !json_object_object_get_ex(surface, "role", &role_value) ||
+        !json_object_is_type(role_value, json_type_string) ||
+        !json_object_object_get_ex(surface, "xid", &xid_value) ||
+        !json_object_is_type(xid_value, json_type_int)) {
+      return false;
+    }
+    role = json_object_get_string(role_value);
+    xid = json_object_get_int64(xid_value);
+    if (xid <= 0 || xid > UINT32_MAX) return false;
+    if (strcmp(role, "target") == 0 && !seen_target) seen_target = true;
+    else if (strcmp(role, "previous") == 0 && !seen_previous) seen_previous = true;
+    else if (strcmp(role, "panel") == 0 && !seen_panel) seen_panel = true;
+    else return false;
+  }
+  return seen_target && seen_previous && seen_panel;
+}
+
+static int ensure_owner_parent_directory(const char *path) {
+  char parent[PATH_MAX];
+  char *slash;
+  struct stat metadata;
+  if (!path || strlen(path) >= sizeof(parent)) return -1;
+  snprintf(parent, sizeof(parent), "%s", path);
+  slash = strrchr(parent, '/');
+  if (!slash) return 0;
+  if (slash == parent) return 0;
+  *slash = '\0';
+  if (stat(parent, &metadata) == 0) return S_ISDIR(metadata.st_mode) ? 0 : -1;
+  for (char *cursor = parent + 1; *cursor; cursor++) {
+    if (*cursor != '/') continue;
+    *cursor = '\0';
+    if (mkdir(parent, 0700) != 0 && errno != EEXIST) return -1;
+    *cursor = '/';
+  }
+  return mkdir(parent, 0700) == 0 || errno == EEXIST ? 0 : -1;
+}
+
+static int write_owner_state_atomically(const char *path, const char *state_json) {
+  char temporary_path[PATH_MAX];
+  struct stat existing;
+  int descriptor = -1;
+  size_t offset = 0;
+  size_t length;
+  if (!path || !state_json || ensure_owner_parent_directory(path) != 0 ||
+      snprintf(temporary_path, sizeof(temporary_path), "%s.tmp.XXXXXX", path) >=
+        (int)sizeof(temporary_path)) {
+    return -1;
+  }
+  descriptor = mkstemp(temporary_path);
+  if (descriptor < 0) return -1;
+  if (stat(path, &existing) == 0 && fchmod(descriptor, existing.st_mode & 07777) != 0) goto failed;
+  length = strlen(state_json);
+  while (offset < length) {
+    ssize_t written = write(descriptor, state_json + offset, length - offset);
+    if (written < 0 && errno == EINTR) continue;
+    if (written <= 0) goto failed;
+    offset += (size_t)written;
+  }
+  if (write(descriptor, "\n", 1) != 1 || close(descriptor) != 0) {
+    descriptor = -1;
+    goto failed;
+  }
+  descriptor = -1;
+  if (rename(temporary_path, path) != 0) goto failed;
+  return 0;
+
+failed:
+  if (descriptor >= 0) close(descriptor);
+  unlink(temporary_path);
+  return -1;
+}
+
+static int run_owner_publish(int argc, char **argv) {
+  const char *path = NULL;
+  const char *state_text = NULL;
+  json_object *state = NULL;
+  const char *canonical = NULL;
+  for (int index = 2; index < argc; index++) {
+    if (strcmp(argv[index], "--file") == 0 && index + 1 < argc) path = argv[++index];
+    else if (strcmp(argv[index], "--json") == 0 && index + 1 < argc) state_text = argv[++index];
+    else return 64;
+  }
+  if (!path || !state_text || strlen(path) >= PATH_MAX || strlen(state_text) >= MAX_PACKET_BYTES) return 64;
+  state = json_tokener_parse(state_text);
+  if (!owner_publish_state_valid(state)) {
+    if (state) json_object_put(state);
+    return 64;
+  }
+  canonical = json_object_to_json_string_ext(state, JSON_C_TO_STRING_PLAIN);
+  if (!canonical || write_owner_state_atomically(path, canonical) != 0) {
+    json_object_put(state);
+    return 1;
+  }
+  json_object_put(state);
+  return 0;
+}
+
+/* The resident switch must prove that it is resuming exactly one known Guard.
+ * Doing this in Bash used a command substitution per /proc entry, which could
+ * consume several seconds after a completed X11 transaction.  Keep the same
+ * PID/starttime and duplicate-Guard checks, but perform the single /proc scan
+ * in the native client. */
+static bool guard_cmdline_matches(uint32_t pid) {
+  char path[64];
+  unsigned char command[8192];
+  ssize_t length;
+  int descriptor;
+  bool script_seen = false;
+  size_t cursor = 0;
+  if (snprintf(path, sizeof(path), "/proc/%u/cmdline", pid) >= (int)sizeof(path)) return false;
+  descriptor = open(path, O_RDONLY | O_CLOEXEC);
+  if (descriptor < 0) return false;
+  length = read(descriptor, command, sizeof(command));
+  close(descriptor);
+  if (length <= 0 || (size_t)length == sizeof(command)) return false;
+  while (cursor < (size_t)length) {
+    size_t next = cursor;
+    while (next < (size_t)length && command[next] != '\0') next++;
+    if (next == cursor) {
+      cursor = next + 1;
+      continue;
+    }
+    const char *argument = (const char *)command + cursor;
+    size_t argument_length = next - cursor;
+    static const char script_suffix[] = "/tikpal-web-mode.sh";
+    bool is_script = argument_length == sizeof("tikpal-web-mode.sh") - 1 &&
+                     memcmp(argument, "tikpal-web-mode.sh", argument_length) == 0;
+    if (!is_script && argument_length >= sizeof(script_suffix) - 1) {
+      is_script = memcmp(argument + argument_length - (sizeof(script_suffix) - 1),
+                         script_suffix, sizeof(script_suffix) - 1) == 0;
+    }
+    if (script_seen && argument_length == sizeof("guard") - 1 &&
+        memcmp(argument, "guard", sizeof("guard") - 1) == 0) {
+      return true;
+    }
+    script_seen = is_script;
+    cursor = next + 1;
+  }
+  return false;
+}
+
+static void log_guard_cmdline(uint32_t pid) {
+  char path[64];
+  unsigned char command[512];
+  ssize_t length;
+  int descriptor;
+  size_t cursor = 0;
+  size_t argument_count = 0;
+  if (snprintf(path, sizeof(path), "/proc/%u/cmdline", pid) >= (int)sizeof(path)) return;
+  descriptor = open(path, O_RDONLY | O_CLOEXEC);
+  if (descriptor < 0) return;
+  length = read(descriptor, command, sizeof(command) - 1);
+  close(descriptor);
+  if (length <= 0) return;
+  command[length] = '\0';
+  fprintf(stderr, " guard_pid=%u argv=", pid);
+  while (cursor < (size_t)length && argument_count < 4) {
+    size_t next = cursor;
+    while (next < (size_t)length && command[next] != '\0') next++;
+    if (next > cursor) {
+      if (argument_count > 0) fputc('|', stderr);
+      fwrite(command + cursor, 1, next - cursor, stderr);
+      argument_count++;
+    }
+    cursor = next + 1;
+  }
+}
+
+static int run_guard_process_verify(int argc, char **argv) {
+  uint32_t expected_pid = 0;
+  unsigned long long expected_starttime = 0;
+  char *end = NULL;
+  DIR *directory;
+  struct dirent *entry;
+  size_t matching_count = 0;
+  uint32_t matching_pids[8] = {0};
+  bool expected_matches = false;
+  for (int index = 2; index < argc; index++) {
+    if (strcmp(argv[index], "--pid") == 0 && index + 1 < argc) {
+      errno = 0;
+      unsigned long value = strtoul(argv[++index], &end, 10);
+      if (errno != 0 || !end || *end || value == 0 || value > UINT32_MAX) return 64;
+      expected_pid = (uint32_t)value;
+    } else if (strcmp(argv[index], "--starttime") == 0 && index + 1 < argc) {
+      errno = 0;
+      expected_starttime = strtoull(argv[++index], &end, 10);
+      if (errno != 0 || !end || *end || expected_starttime == 0) return 64;
+    } else {
+      return 64;
+    }
+  }
+  if (expected_pid == 0 || expected_starttime == 0) return 64;
+  directory = opendir("/proc");
+  if (!directory) return 1;
+  while ((entry = readdir(directory)) != NULL) {
+    uint32_t pid;
+    uint32_t parent = 0;
+    uid_t uid;
+    unsigned long long starttime = 0;
+    errno = 0;
+    unsigned long value = strtoul(entry->d_name, &end, 10);
+    if (errno != 0 || !end || *end || value == 0 || value > UINT32_MAX) continue;
+    pid = (uint32_t)value;
+    if (!guard_cmdline_matches(pid) ||
+        !read_proc_identity(pid, &uid, &parent, &starttime) ||
+        uid != geteuid()) continue;
+    /* Bash command substitutions retain the Guard argv while they run under
+     * the real Guard.  They are not separately launched Guard loops. */
+    if (parent > 1 && parent != pid && guard_cmdline_matches(parent)) continue;
+    if (matching_count < sizeof(matching_pids) / sizeof(matching_pids[0])) {
+      matching_pids[matching_count] = pid;
+    }
+    matching_count++;
+    if (pid == expected_pid && starttime == expected_starttime) {
+      expected_matches = true;
+    }
+  }
+  closedir(directory);
+  if (matching_count == 0) return 1;
+  if (matching_count > 1) {
+    fprintf(stderr, "guard-process-verify: duplicate guards");
+    for (size_t index = 0; index < matching_count && index < sizeof(matching_pids) / sizeof(matching_pids[0]); index++) {
+      fprintf(stderr, "%s%u", index == 0 ? " " : ",", matching_pids[index]);
+    }
+    for (size_t index = 0; index < matching_count && index < sizeof(matching_pids) / sizeof(matching_pids[0]); index++) {
+      log_guard_cmdline(matching_pids[index]);
+    }
+    fputc('\n', stderr);
+    return 24;
+  }
+  return expected_matches ? 0 : 25;
 }
 
 static int run_owner_allows(int argc, char **argv) {
@@ -3113,6 +3582,8 @@ static int run_client(int argc, char **argv) {
   int64_t total_elapsed_ns = 0;
   bool health_tsv = false;
   if (strcmp(command, "owner-allows") == 0) return run_owner_allows(argc, argv);
+  if (strcmp(command, "owner-publish") == 0) return run_owner_publish(argc, argv);
+  if (strcmp(command, "guard-process-verify") == 0) return run_guard_process_verify(argc, argv);
   if (!socket_path || !socket_path[0]) socket_path = getenv("TIKPAL_X11_HELPER_SOCKET");
   if (!socket_path || !socket_path[0]) socket_path = DEFAULT_SOCKET_PATH;
 
@@ -3140,6 +3611,23 @@ static int run_client(int argc, char **argv) {
     request_object = build_inspect_request(argc, argv, 2, &socket_path,
                                            &connect_timeout_ms, &response_timeout_ms);
     if (!request_object) return 64;
+    add_client_metadata(request_object);
+    snprintf(request, sizeof(request), "%s",
+             json_object_to_json_string_ext(request_object, JSON_C_TO_STRING_PLAIN));
+  } else if (strcmp(command, "screen-probe") == 0) {
+    const char *request_id = NULL;
+    for (int index = 2; index < argc; index++) {
+      if (strcmp(argv[index], "--socket") == 0 && index + 1 < argc) socket_path = argv[++index];
+      else if (strcmp(argv[index], "--request-id") == 0 && index + 1 < argc) request_id = argv[++index];
+      else if (strcmp(argv[index], "--connect-timeout-ms") == 0 && index + 1 < argc) connect_timeout_ms = atoi(argv[++index]);
+      else if (strcmp(argv[index], "--response-timeout-ms") == 0 && index + 1 < argc) response_timeout_ms = atoi(argv[++index]);
+      else return 64;
+    }
+    if (!request_id || !request_id[0] || connect_timeout_ms <= 0 || response_timeout_ms <= 0) return 64;
+    request_object = json_object_new_object();
+    json_object_object_add(request_object, "version", json_object_new_int(1));
+    json_object_object_add(request_object, "requestId", json_object_new_string(request_id));
+    json_object_object_add(request_object, "operation", json_object_new_string("screen-probe"));
     add_client_metadata(request_object);
     snprintf(request, sizeof(request), "%s",
              json_object_to_json_string_ext(request_object, JSON_C_TO_STRING_PLAIN));
@@ -3389,6 +3877,50 @@ static int protocol_self_test(void) {
   }
   json_object_put(second);
   return 0;
+}
+
+static int guard_pause_self_test(void) {
+  HelperState state = {0};
+  char directory[] = "/tmp/tikpal-x11-guard-pause.XXXXXX";
+  char generation_path[PATH_MAX];
+  char marker_path[PATH_MAX];
+  const char paused_request[] =
+    "{\"version\":1,\"requestId\":\"guard-paused\",\"operation\":\"inspect\","
+    "\"callerRole\":\"window_guard\",\"surfaces\":[]}";
+  json_object *response = NULL;
+  json_object *value = NULL;
+  bool passed = false;
+  if (!mkdtemp(directory) ||
+      snprintf(generation_path, sizeof(generation_path), "%s/generation", directory) < 0 ||
+      snprintf(marker_path, sizeof(marker_path), "%s/provider-switch.pid", directory) < 0) {
+    return self_test_failure("Guard pause fixture path");
+  }
+  FILE *marker = fopen(marker_path, "we");
+  if (!marker) {
+    unlink(marker_path);
+    rmdir(directory);
+    return self_test_failure("Guard pause fixture marker");
+  }
+  int marker_write_result = fprintf(marker, "%ld\n", (long)getpid());
+  int marker_close_result = fclose(marker);
+  if (marker_write_result < 0 || marker_close_result != 0) {
+    unlink(marker_path);
+    rmdir(directory);
+    return self_test_failure("Guard pause fixture marker");
+  }
+  snprintf(state.daemon_instance_id, sizeof(state.daemon_instance_id), "self-test");
+  snprintf(state.generation_path, sizeof(state.generation_path), "%s", generation_path);
+  response = process_request(&state, paused_request, sizeof(paused_request) - 1, monotonic_ns());
+  if (response && json_object_object_get_ex(response, "errorCode", &value) &&
+      strcmp(json_object_get_string(value), "GUARD_PAUSED_FOR_SWITCH") == 0 &&
+      state.guard_paused_requests == 1 && state.inspect_requests == 0 &&
+      state.inspect_failures == 0) {
+    passed = true;
+  }
+  if (response) json_object_put(response);
+  unlink(marker_path);
+  rmdir(directory);
+  return passed ? 0 : self_test_failure("Guard inspection pause");
 }
 
 static int command_line_self_test(void) {
@@ -4723,7 +5255,7 @@ static int run_self_test(int argc, char **argv) {
     else return 64;
   }
   if (command_line_self_test() != 0 || owner_file_self_test() != 0 ||
-      framing_self_test() != 0 || protocol_self_test() != 0 ||
+      framing_self_test() != 0 || protocol_self_test() != 0 || guard_pause_self_test() != 0 ||
       lease_arbitration_self_test() != 0) return 1;
   if (x11_sequence) {
     if (!display || !display[0]) display = getenv("DISPLAY");
@@ -4755,9 +5287,12 @@ static void usage(FILE *output) {
           "  tikpal-x11-helper daemon [--socket PATH] [--display DISPLAY] [--generation-file PATH] [--phase 0|1] [--transaction-timeout-ms N]\n"
           "  tikpal-x11-helper client health [--socket PATH] [--request-id ID]\n"
           "  tikpal-x11-helper client inspect --request-id ID [--generation N] --surface ROLE XID PROFILE [...]\n"
+          "  tikpal-x11-helper client screen-probe --request-id ID\n"
           "  tikpal-x11-helper client switch --request-id ID --daemon-instance-id ID --connection-epoch N --generation N --lease-id ID --surface ROLE XID PROFILE X Y WIDTH HEIGHT OPACITY|keep [...]\n"
           "  tikpal-x11-helper client revoke --request-id ID --daemon-instance-id ID --connection-epoch N --generation N --lease-id ID\n"
+          "  tikpal-x11-helper client owner-publish --file PATH --json OWNER_STATE_JSON\n"
           "  tikpal-x11-helper client owner-allows --file PATH --generation-file PATH (--xid XID [...]|--all)\n"
+          "  tikpal-x11-helper client guard-process-verify --pid PID --starttime STARTTIME\n"
           "  tikpal-x11-helper client request [--socket PATH] < request.json\n"
           "  tikpal-x11-helper monotonic-ns\n"
           "  tikpal-x11-helper self-test [--x11-sequence] [--x11-transaction --user-data-dir=PROFILE] [--display DISPLAY] [--xserver-pid PID]\n");

@@ -938,7 +938,8 @@ audio_output {
       && webModeScript.includes("x11_helper_guard_may_recover_all()")
       && webModeScript.includes("guard_maintain_windows()")
       && webModeScript.includes("write_guard_window_list \"$provider_profile\"")
-      && webModeScript.includes("window_guard_running || start_window_guard"),
+      && webModeScript.includes("window_guard_running_hot")
+      && webModeScript.includes("guard-process-verify"),
     "Phase 1 switching should arbitrate exact Helper ownership while keeping an existing window Guard alive"
   );
   const realProviderUrlWaitStart = webModeScript.indexOf("wait_for_real_provider_url() {");
@@ -1662,6 +1663,10 @@ sync_runtime_provider_pool_process_statuses ""
   assert(spawnSync("test", ["-f", localSyncStaleTrack]).status !== 0, "Local library sync should still prune stale repo-owned Local files");
   assert(extensionManifest.permissions.includes("proxy"), "Explore extension should declare the proxy permission");
   assert(extensionManifest.permissions.includes("tabs"), "Explore extension should declare tabs permission for provider bootstrap navigation");
+  assert(webModeScript.includes("prefs.profile.default_content_setting_values.notifications = 2;"), "Explore Chromium profiles should block notification prompts by default");
+  assert(webModeScript.includes("helper_cdp_skip_paint"), "Helper resident reveals should use their verified CDP fast path when x11grab cannot read Chromium windows");
+  const readinessFunction = webModeScript.slice(webModeScript.indexOf("wait_for_provider_ready()"), webModeScript.indexOf("wait_for_entry_provider_paint()"));
+  assert(readinessFunction.includes("(async () => {") && readinessFunction.includes("})().catch(() => process.exit(1));"), "Provider readiness should not use top-level await when Node executes stdin as CommonJS");
   assert(extensionManifest.version !== "1.0.0", "Explore extension should bump its version when provider scaling behavior changes so Chromium refreshes cached service workers");
   assert(extensionManifest.key, "Explore extension should use a stable id for managed-policy allowlisting");
   assert(extensionManifest.host_permissions.includes("http://127.0.0.1:8787/*"), "Explore extension should only call the loopback API");
@@ -3135,7 +3140,8 @@ sync_runtime_provider_pool_process_statuses ""
     "provider switching should orchestrate the side panel exactly once and must not fall back to side-panel setup"
   );
   assert(
-    openProviderPoolBody.includes('( pause_provider_media_via_cdp "$(provider_debug_port "$current_provider")" || true ) &')
+    openProviderPoolBody.includes('pause_provider_media_via_cdp "$(provider_debug_port "$current_provider")"')
+      && openProviderPoolBody.includes("previous_audio_gate_deactivated")
       && !openProviderPoolBody.includes('( pause_provider_media_via_cdp "$(provider_debug_port "$current_provider")" "$cdp_json_list"'),
     "resident switching should pause the old provider through its own CDP port and target list without blocking the reveal"
   );
@@ -3430,6 +3436,7 @@ sync_runtime_provider_pool_process_statuses ""
   assert(
       providerGuardSource.includes("function providerGuardSchedule(currentProviderId, active, activePass)") &&
       providerGuardSource.includes("function runProviderGuardScheduleFixtures()") &&
+      providerGuardSource.includes("function runKioskGuardInjectionFixtures()") &&
       providerGuardSource.includes("function providerAudioGateEnabled(opening)") &&
       providerGuardSource.includes("function providerAudioGateActive(active, deactivating)") &&
       providerGuardSource.includes("function providerRuntimeMaintenanceEnabled(currentProviderId, opening)") &&
@@ -3453,25 +3460,31 @@ sync_runtime_provider_pool_process_statuses ""
   assert(
     webModeScript.includes("set_provider_media_active_via_cdp()") &&
       webModeScript.includes("activate_target_provider_audio_gate()") &&
+      webModeScript.includes("schedule_target_provider_audio_gate_after_commit()") &&
       webModeScript.includes("timeout 2 python3 -c") &&
       webModeScript.includes("target_audio_gate_activation_started") &&
-      webModeScript.includes("target_audio_gate_activated"),
-    "Explore should activate the revealed provider audio gate through one bounded traced CDP call"
+      webModeScript.includes("target_audio_gate_activated") &&
+      webModeScript.includes("target_audio_gate_deferred"),
+    "Explore should activate the revealed provider audio gate through a bounded, traced post-commit CDP call"
   );
   const poolTargetAudioGateIndexes = [...openProviderPoolBody.matchAll(/activate_target_provider_audio_gate "\$provider" "\$provider_port"/g)].map((match) => match.index);
+  const poolDeferredAudioGateIndexes = [...openProviderPoolBody.matchAll(/schedule_target_provider_audio_gate_after_commit "\$provider" "\$provider_port"/g)].map((match) => match.index);
   const poolCommitIndexes = [...openProviderPoolBody.matchAll(/commit_visible_provider_state "\$provider"/g)].map((match) => match.index);
+  const helperSwitchMarkerClearIndex = openProviderPoolBody.indexOf('switch_marker_clear_started_ms="$(now_ms)"');
   const directTargetAudioGateIndex = openProviderBody.indexOf('activate_target_provider_audio_gate "$provider" "$provider_port"');
   const directCommitIndex = openProviderBody.indexOf('commit_visible_provider_state "$provider"');
   assert(
-    poolTargetAudioGateIndexes.length === 2 &&
+    poolTargetAudioGateIndexes.length === 1 &&
+      poolDeferredAudioGateIndexes.length === 1 &&
       poolCommitIndexes.length === 2 &&
-      residentHotRevealIndex < poolTargetAudioGateIndexes[0] &&
-      poolTargetAudioGateIndexes[0] < poolCommitIndexes[0] &&
-      residentRevealIndex < poolTargetAudioGateIndexes[1] &&
-      poolTargetAudioGateIndexes[1] < poolCommitIndexes[1] &&
+      residentHotRevealIndex < poolCommitIndexes[0] &&
+      poolCommitIndexes[0] < helperSwitchMarkerClearIndex &&
+      helperSwitchMarkerClearIndex < poolDeferredAudioGateIndexes[0] &&
+      residentRevealIndex < poolTargetAudioGateIndexes[0] &&
+      poolTargetAudioGateIndexes[0] < poolCommitIndexes[1] &&
       openProviderBody.lastIndexOf("reassert_visible_provider_surfaces") < directTargetAudioGateIndex &&
       directTargetAudioGateIndex < directCommitIndex,
-    "Explore should activate only the revealed target after reveal and before active-state commit on every open path"
+    "Explore should defer resident-helper audio activation until after state commit and X11 release, while fallback paths still activate only the revealed target before commit"
   );
   assert(providerGuardSource.includes("syncResidentProviderStatus") && providerGuardSource.includes("providerReadyHosts"), "Resident provider guards should clear stale check_setup once the provider reaches its real host");
   assert(stylesSource.includes("webModeProviderSignalTrace"), "Explore provider cards should use the short signal trace");

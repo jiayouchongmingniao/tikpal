@@ -1,6 +1,6 @@
 # Explore X11 Helper Phase 0
 
-Status: Phase 0 completed on 115 and the controlled Phase 1 two-Canary promotion passed on 2026-09-01. The Helper now runs with `TIKPAL_X11_HELPER_PHASE=1` and Shell mode `switch`; the 20-round Phase 1 run remains explicitly out of scope.
+Status: Phase 0 completed on 115 and the controlled Phase 1 two-Canary promotion passed on 2026-09-01. The Helper now runs with `TIKPAL_X11_HELPER_PHASE=1` and Shell mode `switch`; the 20-round Phase 1 run remains explicitly out of scope. The subsequent Phase 2 scoped pass and full-run boundary are recorded in [Explore X11 Helper Phase 2 v1](explore-x11-helper-phase2-v1.md).
 
 **2026-09-01 final Phase 0/1 record:** after a fresh Phase 0 Helper restart, 20 stable three-window batches passed with client socket p95 `0.750 ms` and daemon p95 `0.486 ms`. The competition sampler then observed the single YouTube Music → Spotify resident switch with 20 identity-checked, read-only batches: client socket p95 was `25.892 ms`, below the required `100 ms`; connection epoch was unchanged and timeout, reconnect, inspect-failure, and mutation counts remained zero. The first preparation switch exposed a stale, pre-deployment Window Guard that restored Spotify after the new state had committed. `reload-guard youtube_music` replaced it with one current Guard and restored the expected YouTube Music/Spotify/Panel geometry before the competition switch. This was a Guard lifecycle repair, not a Helper failure.
 

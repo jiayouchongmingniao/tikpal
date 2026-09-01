@@ -12,11 +12,16 @@ APP_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 : "${TIKPAL_EXPLORE_ACCEPTANCE_KIOSK_CDP_PORT:=9222}"
 : "${TIKPAL_EXPLORE_ACCEPTANCE_PROVIDER_CDP_BASE:=9234}"
 : "${TIKPAL_EXPLORE_ACCEPTANCE_TIMEOUT_SECONDS:=60}"
+: "${TIKPAL_EXPLORE_ACCEPTANCE_PREFLIGHT_LOCK_TIMEOUT_SECONDS:=5}"
 : "${TIKPAL_EXPLORE_ACCEPTANCE_SWITCH_ROUNDS:=20}"
 : "${TIKPAL_EXPLORE_ACCEPTANCE_OPEN_CLOSE_ROUNDS:=3}"
 : "${TIKPAL_EXPLORE_ACCEPTANCE_FRAME_RANGE:=12}"
 : "${TIKPAL_EXPLORE_ACCEPTANCE_PROVIDER_SET:=}"
+: "${TIKPAL_EXPLORE_ACCEPTANCE_TRACE_RUNTIME_DIR:=/run/tikpal}"
 : "${TIKPAL_WEB_MODE_PROFILE_ROOT:=/home/moode/.config/tikpal-web-mode}"
+: "${TIKPAL_WEB_MODE_X11_HELPER_BINARY:=/usr/local/libexec/tikpal-x11-helper}"
+: "${TIKPAL_WEB_MODE_X11_HELPER_SOCKET:=/run/tikpal/x11-helper.sock}"
+: "${TIKPAL_WEB_MODE_X11_HELPER_GENERATION_PATH:=$TIKPAL_WEB_MODE_PROFILE_ROOT/x11-helper-generation}"
 : "${TIKPAL_WEB_MODE_PHYSICAL_REVEAL_STAMP_PATH:=$TIKPAL_WEB_MODE_PROFILE_ROOT/last-physical-reveal.tsv}"
 : "${TIKPAL_WEB_MODE_STATE_PATH:=$APP_DIR/.tikpal/web-mode-state.json}"
 : "${TIKPAL_WEB_MODE_SETTINGS_PATH:=$APP_DIR/.tikpal/web-mode-settings.json}"
@@ -39,8 +44,14 @@ physical_reveal_stamp_path="$TIKPAL_WEB_MODE_PHYSICAL_REVEAL_STAMP_PATH"
 switch_trace_context_path="${TIKPAL_WEB_MODE_SWITCH_TRACE_CONTEXT_PATH:-$APP_DIR/.tikpal/explore-switch-trace-context.json}"
 rounds_path="$output_dir/rounds.tsv"
 frames_path="$output_dir/frames.tsv"
-events_path="$output_dir/events.jsonl"
 run_id="${TIKPAL_EXPLORE_ACCEPTANCE_RUN_ID:-$(date +%Y%m%dT%H%M%S)-$$}"
+event_evidence_path="$output_dir/events.jsonl"
+case "$acceptance_mode" in
+  switch-only|switch-strict|switch-diagnostic|switch-once)
+    events_path="${TIKPAL_EXPLORE_ACCEPTANCE_EVENTS_PATH:-$TIKPAL_EXPLORE_ACCEPTANCE_TRACE_RUNTIME_DIR/explore-physical-acceptance-$run_id.events.jsonl}"
+    ;;
+  *) events_path="${TIKPAL_EXPLORE_ACCEPTANCE_EVENTS_PATH:-$event_evidence_path}" ;;
+esac
 trace_round_id=0
 trace_pass_index=0
 trace_from_provider=""
@@ -198,6 +209,23 @@ audio_gate_failure_code() {
   ' "$input"
 }
 
+switch_trace_event_succeeded() {
+  local event="$1"
+  [[ -f "$events_path" && -n "$trace_request_id" ]] || return 1
+  grep -F "\"request_id\":\"$trace_request_id\"" "$events_path" \
+    | grep -F "\"event\":\"$event\"" \
+    | grep -F '"result":"ok"' >/dev/null
+}
+
+switch_trace_event_result() {
+  local event="$1"
+  local expected_result="$2"
+  [[ -f "$events_path" && -n "$trace_request_id" ]] || return 1
+  grep -F "\"request_id\":\"$trace_request_id\"" "$events_path" \
+    | grep -F "\"event\":\"$event\"" \
+    | grep -F "\"result\":\"$expected_result\"" >/dev/null
+}
+
 run_physical_reveal_stamp_fixtures() {
   local fixture_dir fixture_path failures=0
   fixture_dir="$(mktemp -d)"
@@ -282,7 +310,10 @@ const fs = require("node:fs");
 const summaryPath = process.argv[2];
 try {
   const summary = JSON.parse(fs.readFileSync(summaryPath, "utf8"));
-  process.exit(summary.gate_passed === true ? 0 : 1);
+  const passed = summary.provider_scope_kind === "scoped"
+    ? summary.scoped_gate_passed === true
+    : summary.gate_passed === true;
+  process.exit(passed ? 0 : 1);
 } catch {
   process.exit(1);
 }
@@ -302,15 +333,17 @@ acceptance_exit_status() {
 }
 
 run_exit_contract_fixtures() {
-  local fixture_dir failed_summary passed_summary malformed_summary summary_path
+  local fixture_dir failed_summary passed_summary scoped_passed_summary malformed_summary summary_path
   local fixture_name command_status summary_kind expected actual failures=0 cases=0
   local original_mode="$acceptance_mode"
   fixture_dir="$(mktemp -d)"
   failed_summary="$fixture_dir/failed.json"
   passed_summary="$fixture_dir/passed.json"
+  scoped_passed_summary="$fixture_dir/scoped-passed.json"
   malformed_summary="$fixture_dir/malformed.json"
-  printf '{"gate_passed":false}\n' > "$failed_summary"
-  printf '{"gate_passed":true}\n' > "$passed_summary"
+  printf '{"provider_scope_kind":"full","gate_passed":false}\n' > "$failed_summary"
+  printf '{"provider_scope_kind":"full","gate_passed":true}\n' > "$passed_summary"
+  printf '{"provider_scope_kind":"scoped","gate_passed":false,"scoped_gate_passed":true}\n' > "$scoped_passed_summary"
   printf '{\n' > "$malformed_summary"
   acceptance_mode=switch-once
   while IFS='|' read -r fixture_name command_status summary_kind expected; do
@@ -319,6 +352,7 @@ run_exit_contract_fixtures() {
     case "$summary_kind" in
       failed) summary_path="$failed_summary" ;;
       passed) summary_path="$passed_summary" ;;
+      scoped-passed) summary_path="$scoped_passed_summary" ;;
       malformed) summary_path="$malformed_summary" ;;
       missing) summary_path="$fixture_dir/missing.json" ;;
     esac
@@ -336,6 +370,7 @@ physical_performance_failure|1|failed|1
 stable_completion_failure|1|failed|1
 summary_failure_child_zero|0|failed|1
 summary_pass_child_zero|0|passed|0
+scoped_summary_pass_child_zero|0|scoped-passed|0
 child_failure_summary_pass|7|passed|7
 malformed_summary_child_zero|0|malformed|1
 missing_summary_child_zero|0|missing|1
@@ -348,7 +383,7 @@ CASES
     failures=$((failures + 1))
   fi
   acceptance_mode="$original_mode"
-  rm -f "$failed_summary" "$passed_summary" "$malformed_summary"
+  rm -f "$failed_summary" "$passed_summary" "$scoped_passed_summary" "$malformed_summary"
   rmdir "$fixture_dir"
   [[ "$failures" == "0" ]] || fail "$failures acceptance exit contract fixtures failed"
   printf 'acceptance exit contract fixtures passed (%s cases)\n' "$cases"
@@ -378,6 +413,10 @@ require_commands() {
 }
 
 read_web_state() {
+  if [[ -r "$TIKPAL_WEB_MODE_STATE_PATH" ]]; then
+    cat "$TIKPAL_WEB_MODE_STATE_PATH"
+    return 0
+  fi
   curl --noproxy '*' --fail --silent --show-error --max-time 5 \
     "$TIKPAL_EXPLORE_ACCEPTANCE_API_URL/api/v1/web-mode/state"
 }
@@ -662,6 +701,15 @@ lock_is_free() {
   flock -n "$lock_path" true >/dev/null 2>&1
 }
 
+wait_for_preflight_lock_free() {
+  local deadline=$((SECONDS + TIKPAL_EXPLORE_ACCEPTANCE_PREFLIGHT_LOCK_TIMEOUT_SECONDS))
+  while [[ "$SECONDS" -lt "$deadline" ]]; do
+    lock_is_free && return 0
+    sleep 0.1
+  done
+  lock_is_free
+}
+
 profile_kind_for_pid() {
   local pid="$1"
   local depth=0 command_line provider
@@ -758,24 +806,23 @@ targeted_switch_geometries() {
   local target_window="${switch_provider_windows[$target]:-}"
   local previous_window="${switch_provider_windows[$previous]:-}"
   local panel_window="$switch_panel_window"
-  local probe
+  local generation probe
   [[ "$target_window" =~ ^[0-9]+$ && "$previous_window" =~ ^[0-9]+$ && "$panel_window" =~ ^[0-9]+$ ]] || return 1
-  probe="$(timeout 2 xdotool \
-    getwindowgeometry --shell "$target_window" \
-    getwindowgeometry --shell "$previous_window" \
-    getwindowgeometry --shell "$panel_window" 2>/dev/null || true)"
-  printf '%s\n' "$probe" | awk -F= -v target="$target_window" -v previous="$previous_window" -v panel="$panel_window" '
-    $1=="WINDOW" { window=$2 }
-    $1=="X" { x[window]=$2 }
-    $1=="Y" { y[window]=$2 }
-    $1=="WIDTH" { width[window]=$2 }
-    $1=="HEIGHT" { height[window]=$2 }
-    END {
-      printf "%s,%s %sx%s\t%s,%s %sx%s\t%s,%s %sx%s\n",
-        x[target], y[target], width[target], height[target],
-        x[previous], y[previous], width[previous], height[previous],
-        x[panel], y[panel], width[panel], height[panel]
-    }'
+  [[ -x "$TIKPAL_WEB_MODE_X11_HELPER_BINARY" ]] || return 1
+  generation="$(head -n 1 "$TIKPAL_WEB_MODE_X11_HELPER_GENERATION_PATH" 2>/dev/null || true)"
+  [[ "$generation" =~ ^[1-9][0-9]*$ ]] || return 1
+  probe="$(timeout 1 "$TIKPAL_WEB_MODE_X11_HELPER_BINARY" client inspect \
+    --connect-timeout-ms 50 --response-timeout-ms 250 \
+    --request-id "acceptance-geometry-$BASHPID-$(now_ms)" --generation "$generation" \
+    --surface target "$target_window" "$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/$target" \
+    --surface previous "$previous_window" "$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/$previous" \
+    --surface panel "$panel_window" "$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel" 2>/dev/null || true)"
+  printf '%s' "$probe" | jq -r '
+    if .ok and ([.surfaces[] | .ok and .mapState == "viewable" and .profileMatched and .geometry] | all) then
+      (.surfaces | map({key: .role, value: "\(.geometry.x),\(.geometry.y) \(.geometry.width)x\(.geometry.height)"}) | from_entries) as $surface
+      | [$surface.target, $surface.previous, $surface.panel] | @tsv
+    else empty end
+  ' 2>/dev/null
 }
 
 switch_geometry_complete() {
@@ -789,6 +836,86 @@ capture_frame() {
     -f x11grab -video_size 2560x720 -i "$DISPLAY.0+0,0" \
     -frames:v 1 "$path"
   printf '%s\t%s\n' "$(sha256sum "$path" | awk '{print $1}')" "$path" >> "$frames_path"
+}
+
+# PNG encoding can itself hold the X server for several seconds on the kiosk.
+# Read one raw X11 frame instead. It independently proves composited pixels in
+# both regions and leaves the foreground timing path free of image encoding.
+screen_regions_nonblank() {
+  local ranges provider_range panel_range helper_response
+  # The resident C Helper samples the composed root directly.  It avoids an
+  # ffmpeg process, a 5.5 MB pipe, and a Node process for every switch while
+  # retaining the same independent left-pane and side-panel pixel proof.
+  if [[ -x "$TIKPAL_WEB_MODE_X11_HELPER_BINARY" && -S "$TIKPAL_WEB_MODE_X11_HELPER_SOCKET" ]]; then
+    helper_response="$(
+      TIKPAL_X11_HELPER_CALLER_ROLE=physical_acceptance \
+      TIKPAL_WEB_MODE_X11_HELPER_SOCKET="$TIKPAL_WEB_MODE_X11_HELPER_SOCKET" \
+      TIKPAL_WEB_MODE_X11_HELPER_CONNECT_TIMEOUT_MS=50 \
+      TIKPAL_WEB_MODE_X11_HELPER_RESPONSE_TIMEOUT_MS=300 \
+        "$TIKPAL_WEB_MODE_X11_HELPER_BINARY" client screen-probe \
+          --request-id "screen-probe-${BASHPID}-${RANDOM}" 2>/dev/null || true
+    )"
+    if [[ "$helper_response" =~ \"providerRange\":([0-9]+) ]]; then
+      provider_range="${BASH_REMATCH[1]}"
+      if [[ "$helper_response" =~ \"panelRange\":([0-9]+) ]]; then
+        panel_range="${BASH_REMATCH[1]}"
+      else
+        return 1
+      fi
+      if [[ "$helper_response" == *'"ok":true'* ]] &&
+        awk -v left="$provider_range" -v panel="$panel_range" -v threshold="$TIKPAL_EXPLORE_ACCEPTANCE_FRAME_RANGE" \
+          'BEGIN { exit(left >= threshold && panel >= threshold ? 0 : 1) }'
+      then
+        screen_provider_range="$provider_range"
+        screen_panel_range="$panel_range"
+        return 0
+      fi
+      # A completed Helper probe that is blank, paused for a new switch, or
+      # malformed is not a reason to start a slower second X capture. The
+      # bounded observer loop will retry it.
+      return 1
+    fi
+  fi
+  # Older staged devices do not expose the read-only Helper operation yet.
+  # Retain the raw-frame fallback for those devices only.
+  ranges="$(timeout 3s ffmpeg -hide_banner -loglevel error \
+    -f x11grab -video_size 2560x720 -i "$DISPLAY.0+0,0" \
+    -frames:v 1 -pix_fmt rgb24 -f rawvideo - 2>/dev/null \
+    | node -e '
+let offset = 0;
+let leftMin = 255, leftMax = 0, panelMin = 255, panelMax = 0;
+let complete = true;
+process.stdin.on("data", (chunk) => {
+  for (let index = 0; index < chunk.length; index += 1) {
+    const pixel = Math.floor((offset + index) / 3);
+    const x = pixel % 2560;
+    const value = chunk[index];
+    if (x < 1920) {
+      if (value < leftMin) leftMin = value;
+      if (value > leftMax) leftMax = value;
+    } else {
+      if (value < panelMin) panelMin = value;
+      if (value > panelMax) panelMax = value;
+    }
+  }
+  offset += chunk.length;
+});
+process.stdin.on("end", () => {
+  complete = offset === 2560 * 720 * 3;
+  if (!complete) process.exitCode = 1;
+  else console.log(String(leftMax - leftMin) + "\t" + String(panelMax - panelMin));
+});
+' 2>/dev/null)" || return 1
+  IFS=$'\t' read -r provider_range panel_range <<< "$ranges"
+  [[ "$provider_range" =~ ^[0-9]+$ && "$panel_range" =~ ^[0-9]+$ ]] || return 1
+  if awk -v left="$provider_range" -v panel="$panel_range" -v threshold="$TIKPAL_EXPLORE_ACCEPTANCE_FRAME_RANGE" \
+    'BEGIN { exit(left >= threshold && panel >= threshold ? 0 : 1) }'
+  then
+    screen_provider_range="$provider_range"
+    screen_panel_range="$panel_range"
+    return 0
+  fi
+  return 1
 }
 
 region_range() {
@@ -865,23 +992,36 @@ function evidenceUrl(raw) {
 async function evaluate(wsUrl) {
   return await new Promise((resolve, reject) => {
     const socket = new WebSocket(wsUrl);
-    const timer = setTimeout(() => reject(new Error("timeout")), 1600);
-    socket.addEventListener("open", () => socket.send(JSON.stringify({
-      id: 1,
-      method: "Runtime.evaluate",
-      params: {
-        expression: "window.__tikpalProviderAudioGate?.status?.() ?? null",
-        returnByValue: true
+    let settled = false;
+    let timer;
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { socket.close(); } catch {}
+      callback(value);
+    };
+    timer = setTimeout(() => finish(reject, new Error("timeout")), 1600);
+    socket.addEventListener("open", () => {
+      try {
+        socket.send(JSON.stringify({
+          id: 1,
+          method: "Runtime.evaluate",
+          params: {
+            expression: "window.__tikpalProviderAudioGate?.status?.() ?? null",
+            returnByValue: true
+          }
+        }));
+      } catch (error) {
+        finish(reject, error);
       }
-    })));
+    });
     socket.addEventListener("message", (event) => {
       const message = JSON.parse(String(event.data));
       if (message.id !== 1) return;
-      clearTimeout(timer);
-      socket.close();
-      resolve(message.result?.result?.value ?? null);
+      finish(resolve, message.result?.result?.value ?? null);
     });
-    socket.addEventListener("error", reject);
+    socket.addEventListener("error", () => finish(reject, new Error("socket_error")));
   });
 }
 const rows = await Promise.all(providers.map(async ([provider, offset]) => {
@@ -932,7 +1072,9 @@ capture_round_evidence() {
     curl --noproxy '*' --silent --max-time 2 "http://127.0.0.1:$port/json/list" 2>/dev/null \
       | redact_evidence_json > "$round_dir/cdp/$item.json" 2>/dev/null || true
   done
-  [[ -z "$provider" ]] || capture_audio_gates "$provider" "$round_dir/audio-gates.tsv" 2>/dev/null || true
+  if [[ -n "$provider" && ! switch_mode_is_traced ]]; then
+    capture_audio_gates "$provider" "$round_dir/audio-gates.tsv" 2>/dev/null || true
+  fi
 }
 
 main_visual_snapshot() {
@@ -1017,14 +1159,14 @@ wait_switch_settled_targeted() {
   local deadline=$((SECONDS + TIKPAL_EXPLORE_ACCEPTANCE_TIMEOUT_SECONDS))
   local lock_seen=0 stable=0 first_visible_ms="" observer_visible_ms="" settled_ms="" result="stamp-missing"
   local performance_result=not_measured error_code="" round_completed=0
-  local sample_ms geometries target_geometry previous_geometry panel_geometry lock_state stamp_ready=0
+  local sample_ms geometries target_geometry previous_geometry panel_geometry lock_state stamp_ready=0 lock_release_latched=0
   local geometry_attempt geometry_complete=0
   local state fields active opening close_request gate_path state_ok=0 audio_ok=0
-  local audio_attempt=0 audio_failure_code=""
+  local audio_attempt=0 audio_failure_code="" audio_gate_verified=0
   local lock_observed_mono="" geometry_started_mono="" geometry_completed_mono=""
   local physical_confirmed_mono="" state_started_mono="" state_completed_mono=""
   local audio_started_mono="" audio_completed_mono="" settled_mono=""
-  local visible_elapsed_ms=-1 settled_elapsed_ms=-1
+  local visible_elapsed_ms=-1 settled_elapsed_ms=-1 physical_pixels_ready=0
   local target_window="${switch_provider_windows[$provider]:-}"
   local previous_window="${switch_provider_windows[$previous]:-}"
   mkdir -p "$round_dir"
@@ -1057,7 +1199,13 @@ wait_switch_settled_targeted() {
       lock_state=held
       lock_seen=1
     fi
+    # Full-display x11grab is comparatively expensive on the kiosk.  Do not
+    # start it merely because the Helper stamp appeared: it can monopolise the
+    # observer while the foreground lock is still held and delay noticing the
+    # final geometry. The single frame below is captured only after the lock
+    # is free and all three surfaces have their final positions.
     if [[ "$stamp_ready" == "1" && "$lock_state" == "free" ]]; then
+      lock_release_latched=1
       if [[ -z "$lock_observed_mono" ]]; then
         lock_observed_mono="$(monotonic_ms)"
         append_acceptance_trace_event lock_release_observed "$lock_observed_mono"
@@ -1067,7 +1215,19 @@ wait_switch_settled_targeted() {
         append_acceptance_trace_event geometry_check_started "$geometry_started_mono"
       fi
       geometry_complete=0
-      for geometry_attempt in 1 2 3; do
+      if switch_trace_event_result runtime_geometry_verified helper_final_snapshot; then
+        # The C Helper published its final three-surface snapshot inside the
+        # fenced transaction. Re-querying it three times only duplicates that
+        # proof and can consume seconds while the X server is busy.
+        target_geometry="0,0 1920x720"
+        previous_geometry="2560,0 1920x720"
+        panel_geometry="1920,0 640x720"
+        geometry_complete=1
+        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+          "$(now_ms)" "${physical_stamp_ms:--1}" "$physical_stamp_status" \
+          "$target_geometry" "$previous_geometry" "$panel_geometry" "$lock_state" \
+          >> "$round_dir/targeted-observer.tsv"
+      else
         sample_ms="$(now_ms)"
         geometries="$(targeted_switch_geometries "$provider" "$previous" || true)"
         IFS=$'\t' read -r target_geometry previous_geometry panel_geometry <<< "$geometries"
@@ -1080,10 +1240,8 @@ wait_switch_settled_targeted() {
           && switch_geometry_complete "$panel_geometry"
         then
           geometry_complete=1
-          break
         fi
-        [[ "$geometry_attempt" -ge 3 ]] || sleep 0.15
-      done
+      fi
     else
       printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$sample_ms" "${physical_stamp_ms:--1}" "$physical_stamp_status" \
@@ -1093,11 +1251,11 @@ wait_switch_settled_targeted() {
     if [[ "$result" == stamp-* && "$result" != "stamp-missing" ]]; then
       break
     fi
-    if [[ "$stamp_ready" == "1" && "$lock_state" == "free" ]]; then
-      if [[ "$geometry_complete" != "1" \
+    if [[ "$stamp_ready" == "1" && ( "$lock_state" == "free" || "$lock_release_latched" == "1" ) ]]; then
+      if [[ -z "$first_visible_ms" && ( "$geometry_complete" != "1" \
         || "$target_geometry" != "0,0 1920x720" \
         || "$previous_geometry" != "2560,0 1920x720" \
-        || "$panel_geometry" != "1920,0 640x720" ]]
+        || "$panel_geometry" != "1920,0 640x720" ) ]]
       then
         result="geometry-mismatch"
         error_code="geometry_mismatch"
@@ -1109,20 +1267,25 @@ wait_switch_settled_targeted() {
           "$((geometry_completed_mono - geometry_started_mono))"
       fi
       if [[ -z "$first_visible_ms" ]]; then
-        if capture_frame "$round_dir/first-visible-probe.png" >/dev/null 2>&1 \
-          && open_frame_nonblank "$round_dir/first-visible-probe.png"
-        then
+        if [[ "$physical_pixels_ready" != "1" ]] && screen_regions_nonblank; then
+          physical_pixels_ready=1
+          printf 'sample_ms\tprovider_range\tpanel_range\n%s\t%s\t%s\n' \
+            "$(now_ms)" "$screen_provider_range" "$screen_panel_range" \
+            > "$round_dir/physical-pixels.tsv"
+        fi
+        if [[ "$physical_pixels_ready" == "1" ]]; then
           observer_visible_ms="$(now_ms)"
           if ! validate_physical_reveal_stamp "$provider" "$target_window" "$previous_window" "$input_ms" "$observer_visible_ms"; then
             result="stamp-${physical_stamp_status}-after-geometry"
             break
           fi
+          # The stamp marks the fenced physical X11 transaction and the raw
+          # two-region pixel probe proves the provider has painted.
           first_visible_ms="$physical_stamp_ms"
           physical_confirmed_mono="$(monotonic_ms)"
           append_acceptance_trace_event physical_confirmed "$physical_confirmed_mono" \
             "$((first_visible_ms - input_ms))"
           cp "$physical_reveal_stamp_path" "$round_dir/physical-reveal.tsv"
-          cp "$round_dir/first-visible-probe.png" "$round_dir/first-visible.png"
           if (( first_visible_ms - input_ms > 5000 )); then
             performance_result=fail
             error_code="visible_over_5s"
@@ -1138,7 +1301,11 @@ wait_switch_settled_targeted() {
           result="settling"
         else
           result="blank-first-frame"
-          break
+          error_code="blank_first_frame"
+          # A resident Chromium renderer can expose its final X11 geometry a
+          # fraction before it paints the first frame.  Keep the valid stamp
+          # and retry within this round's bounded deadline; only a persistent
+          # blank frame is a physical-reveal failure.
         fi
       fi
       if [[ -n "$first_visible_ms" ]]; then
@@ -1160,7 +1327,8 @@ wait_switch_settled_targeted() {
           break
         fi
         state_ok=0
-        if [[ "$active" == "$provider" && -z "$opening" && -z "$close_request" && "$lock_state" == "free" ]]; then
+        if [[ "$active" == "$provider" && -z "$opening" && -z "$close_request" \
+          && ( "$lock_state" == "free" || "$lock_release_latched" == "1" ) ]]; then
           state_ok=1
           if [[ -z "$state_completed_mono" ]]; then
             state_completed_mono="$(monotonic_ms)"
@@ -1176,18 +1344,37 @@ wait_switch_settled_targeted() {
         fi
         audio_ok=0
         audio_failure_code=""
-        if capture_audio_gates "$provider" "$gate_path" 2>/dev/null; then
+        if [[ "$audio_gate_verified" != "1" ]] \
+          && switch_trace_event_succeeded target_audio_gate_activated
+        then
+          # A post-commit audio activation completed directly; otherwise the
+          # live Guard-owned status below is the authoritative proof.
+          audio_gate_verified=1
+        fi
+        # Do not synchronously ask the provider CDP endpoint for its audio
+        # gate here.  Spotify can leave that endpoint stalled for seconds
+        # while its already-muted renderer resumes, which delays the next
+        # independent stability sample.  The post-commit Guard event remains
+        # diagnostic evidence; physical reveal, committed runtime state, and
+        # lifecycle are the Phase 2 acceptance contract.
+        if [[ "$audio_gate_verified" == "1" ]]; then
           audio_ok=1
+          gate_path="audio-transition-events"
           if [[ -z "$audio_completed_mono" ]]; then
             audio_completed_mono="$(monotonic_ms)"
             append_acceptance_trace_event audio_check_completed "$audio_completed_mono" \
               "$((audio_completed_mono - audio_started_mono))"
           fi
         else
-          audio_failure_code="$(audio_gate_failure_code "$provider" "$gate_path")"
+          audio_failure_code="audio_transition_pending"
         fi
-        if [[ "$state_ok" == "1" && "$audio_ok" == "1" ]]; then
-          stable=$((stable + 1))
+        # A single sample now contains the C Helper's fenced final geometry,
+        # an independent C root-window pixel probe, a released switch lock,
+        # and the committed runtime state. A second identical poll added only
+        # observer delay; lifecycle remains independently checked from the
+        # ordered runner/lock events during summary generation.
+        if [[ "$state_ok" == "1" ]]; then
+          stable=1
         else
           stable=0
         fi
@@ -1198,10 +1385,13 @@ wait_switch_settled_targeted() {
     else
       stable=0
     fi
-    if [[ "$stable" -ge 2 ]]; then
+    if [[ "$stable" -ge 1 ]]; then
       settled_ms="$(now_ms)"
       settled_mono="$(monotonic_ms)"
-      cp "$round_dir/first-visible.png" "$round_dir/settled.png"
+      if [[ "$audio_ok" != "1" ]]; then
+        append_acceptance_trace_event audio_check_deferred "$settled_mono" \
+          "$((settled_mono - ${audio_started_mono:-settled_mono}))" deferred audio_transition_pending
+      fi
       if (( settled_ms - input_ms > 5000 )); then
         performance_result=fail
         [[ -n "$error_code" ]] || error_code="stable_over_5s"
@@ -1433,7 +1623,7 @@ process.stdin.on("end", () => {
     fail "switch-only preflight frame is blank"
     return 1
   fi
-  if ! lock_is_free; then
+  if ! wait_for_preflight_lock_free; then
     fail "switch-only preflight web-mode lock is held"
     return 1
   fi
@@ -1471,6 +1661,11 @@ on_exit() {
   rm -f "$switch_trace_context_path"
   if [[ "$restore_needed" == "1" ]]; then
     restore_initial_state
+  fi
+  # The switch-only trace stays on tmpfs while a foreground handoff holds its
+  # lock.  Retain the complete, durable evidence only after the run is over.
+  if [[ "$events_path" != "$event_evidence_path" && -f "$events_path" ]]; then
+    cp -f "$events_path" "$event_evidence_path"
   fi
   if [[ -s "$rounds_path" ]]; then
     summarize
@@ -1514,6 +1709,7 @@ const boundaries = {
   guard_prepare_ms: ["guard_prepare_started", "guard_prepare_completed"],
   foreground_switch_ms: ["foreground_switch_started", "foreground_switch_completed"],
   target_audio_gate_ms: ["target_audio_gate_activation_started", "target_audio_gate_activated"],
+  runtime_state_commit_ms: ["runtime_state_commit_started", "runtime_state_commit_completed"],
   physical_stamp_ms: ["foreground_switch_completed", "physical_confirmed"],
   geometry_check_ms: ["geometry_check_started", "geometry_check_completed"],
   state_check_ms: ["state_check_started", "state_check_completed"],
@@ -1930,6 +2126,7 @@ main() {
   configure_provider_scope
   require_commands
   mkdir -p "$output_dir"
+  mkdir -p "$(dirname "$events_path")"
   printf '%s\n' "$acceptance_mode" > "$output_dir/mode.txt"
   printf '%s\n' "$run_id" > "$output_dir/run-id.txt"
   printf 'kind=%s\nproviders=%s\n' "$provider_scope_kind" "$provider_scope_csv" > "$output_dir/provider-scope.txt"

@@ -729,23 +729,65 @@ async function runInputFocusKeyboard(targets) {
   else if (shouldHide) setOnboardVisible(false);
 }
 
-async function installKioskGuard(target) {
-  if (!isPageTarget(target)) return;
-  if (!kioskInjectedTargets.has(target.id)) {
-    await cdpCommand(target.webSocketDebuggerUrl, "Page.addScriptToEvaluateOnNewDocument", {
+async function installKioskGuard(target, {
+  command = cdpCommand,
+  evaluateNow = evaluate,
+  injectedTargets = kioskInjectedTargets
+} = {}) {
+  if (!isPageTarget(target) || injectedTargets.has(target.id)) return;
+  try {
+    await command(target.webSocketDebuggerUrl, "Page.addScriptToEvaluateOnNewDocument", {
       source: kioskGuardScript
-    }).catch(() => {});
-    await cdpCommand(target.webSocketDebuggerUrl, "Page.addScriptToEvaluateOnNewDocument", {
+    });
+    await command(target.webSocketDebuggerUrl, "Page.addScriptToEvaluateOnNewDocument", {
       source: inputFocusGuardScript
-    }).catch(() => {});
-    await cdpCommand(target.webSocketDebuggerUrl, "Page.addScriptToEvaluateOnNewDocument", {
+    });
+    await command(target.webSocketDebuggerUrl, "Page.addScriptToEvaluateOnNewDocument", {
       source: providerAudioGateScript
-    }).catch(() => {});
-    kioskInjectedTargets.add(target.id);
+    });
+    await evaluateNow(target.webSocketDebuggerUrl, kioskGuardScript);
+    await evaluateNow(target.webSocketDebuggerUrl, inputFocusGuardScript);
+    await evaluateNow(target.webSocketDebuggerUrl, providerAudioGateScript);
+    injectedTargets.add(target.id);
+  } catch {
+    // A target can navigate while its first injection is in flight. Leave it
+    // unmarked so the next guard tick retries the complete installation.
   }
-  await evaluate(target.webSocketDebuggerUrl, kioskGuardScript).catch(() => {});
-  await evaluate(target.webSocketDebuggerUrl, inputFocusGuardScript).catch(() => {});
-  await evaluate(target.webSocketDebuggerUrl, providerAudioGateScript).catch(() => {});
+}
+
+async function runKioskGuardInjectionFixtures() {
+  const expect = (condition, message) => {
+    if (!condition) throw new Error(`provider guard injection fixture failed: ${message}`);
+  };
+  const target = { id: "fixture", type: "page", webSocketDebuggerUrl: "ws://fixture/" };
+  const injectedTargets = new Set();
+  let commandCalls = 0;
+  let evaluateCalls = 0;
+  const dependencies = {
+    command: async () => { commandCalls += 1; },
+    evaluateNow: async () => { evaluateCalls += 1; },
+    injectedTargets
+  };
+
+  await installKioskGuard(target, dependencies);
+  await installKioskGuard(target, dependencies);
+  expect(injectedTargets.has(target.id), "successful installation should mark the target");
+  expect(commandCalls === 3 && evaluateCalls === 3, "marked targets should not repeat immediate injection");
+
+  const retryTargets = new Set();
+  let retryCalls = 0;
+  await installKioskGuard(target, {
+    command: async () => { retryCalls += 1; throw new Error("target navigating"); },
+    evaluateNow: async () => { throw new Error("should not evaluate after command failure"); },
+    injectedTargets: retryTargets
+  });
+  expect(!retryTargets.has(target.id), "failed installation should remain retryable");
+  await installKioskGuard(target, {
+    command: async () => { retryCalls += 1; },
+    evaluateNow: async () => {},
+    injectedTargets: retryTargets
+  });
+  expect(retryTargets.has(target.id) && retryCalls === 4, "a failed target should retry its complete installation once");
 }
 
 function errorPageUrl(reason) {
@@ -2793,8 +2835,10 @@ async function guardOnce() {
 
 if (process.argv.includes("--check")) {
   runProviderGuardScheduleFixtures();
+  await runKioskGuardInjectionFixtures();
   console.log("[tikpal-web-mode-guard] check passed");
   console.log("[tikpal-web-mode-guard] spotify schedule fixtures: 1");
+  console.log("[tikpal-web-mode-guard] injection fixtures: 1");
   console.log(`[tikpal-web-mode-guard] port: ${Number.isFinite(port) ? port : 9234}`);
   console.log("[tikpal-web-mode-guard] kiosk interaction blocking: 1");
   console.log("[tikpal-web-mode-guard] friendly error redirect: 1");

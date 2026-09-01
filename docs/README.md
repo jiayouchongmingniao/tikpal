@@ -66,6 +66,7 @@ This directory is the source of truth for Tikpal product, UX, visual, architectu
 | [Gentoo kiosk deploy v1](06-deployment/gentoo-kiosk-deploy-v1.md) | Current reference | Gentoo systemd migration, physical display, Portage audio/kiosk setup, Explore provider validation, and rollback. |
 | [Explore initial-entry Phase 1 v1](06-deployment/explore-initial-entry-phase1-v1.md) | Acceptance baseline | Disabled-Helper initial reveal trace contract, Xvfb failures, and first-entry field evidence. |
 | [Explore X11 Helper Phase 0](06-deployment/explore-x11-helper-phase0-v1.md) | Phase 1 promoted | Native Helper Phase 0 evidence, two-Canary promotion record, and 20-round boundary. |
+| [Explore X11 Helper Phase 2 v1](06-deployment/explore-x11-helper-phase2-v1.md) | Scoped pass | Foreground priority, composited-frame observer, controlled 9-provider pass, and full-run boundary. |
 
 ### Marketing
 

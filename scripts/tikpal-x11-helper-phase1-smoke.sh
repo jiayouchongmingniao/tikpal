@@ -314,6 +314,11 @@ case "$command_name" in
     printf 'switch status=%s\n' "$status" >> "$MOCK_LOG"
     if [[ "$status" == "0" ]]; then
       printf '{"ok":true,"code":"OK","mutationStarted":true}\n'
+    elif [[ "$status" == "21" ]]; then
+      # Model the daemon's known-safe timeout response once; the retry must
+      # reacquire a fresh Helper lease and keep the next X11 write in C.
+      printf '0\n' > "$MOCK_SWITCH_STATUS_FILE"
+      printf '{"ok":false,"code":"X11_REPLY_TIMEOUT","fallbackRecommended":true,"leaseReleased":true,"inFlight":false,"mutationStarted":true}\n'
     else
       printf '{"ok":false,"code":"FIXTURE_FAILURE","mutationStarted":%s}\n' \
         "$(cat "$MOCK_MUTATION_STARTED_FILE")"
@@ -328,6 +333,10 @@ case "$command_name" in
     ;;
   owner-allows)
     printf 'owner-allows %s\n' "$*" >> "$MOCK_LOG"
+    exec "$FIXTURE_REAL_HELPER" "$@"
+    ;;
+  owner-publish)
+    printf 'owner-publish %s\n' "$*" >> "$MOCK_LOG"
     exec "$FIXTURE_REAL_HELPER" "$@"
     ;;
   *)
@@ -561,6 +570,26 @@ registry_line="$(grep -n '^registry$' "$MOCK_LOG" | head -1 | cut -d: -f1)"
 revoke_line="$(grep -n '^revoke ' "$MOCK_LOG" | head -1 | cut -d: -f1)"
 (( switch_line < runtime_line && runtime_line < registry_line && registry_line < revoke_line )) ||
   fail_fixture "runtime/registry/revoke order is wrong"
+
+# A known-safe X11 timeout must retry through the C Helper once, rather than
+# dropping into the Shell X11 writer.  The mocked first call returns 21 and
+# arms a successful second call.
+printf '21\n' > "$MOCK_SWITCH_STATUS_FILE"
+printf '0\n' > "$MOCK_REVOKE_STATUS_FILE"
+reset_helper_shell_state
+retry_switch_count_before="$(grep -c '^switch ' "$MOCK_LOG" || true)"
+x11_helper_prepare_switch || fail_fixture "timeout retry Helper prepare failed"
+x11_helper_switch_with_timeout_retry \
+  101 "$FIXTURE_DIR/target-profile" \
+  202 "$FIXTURE_DIR/previous-profile" \
+  303 "$FIXTURE_DIR/panel-profile" ||
+  fail_fixture "known-safe timeout did not retry through Helper"
+retry_switch_count_after="$(grep -c '^switch ' "$MOCK_LOG" || true)"
+(( retry_switch_count_after == retry_switch_count_before + 2 )) ||
+  fail_fixture "timeout retry did not issue exactly two Helper switches"
+[[ "$TIKPAL_X11_HELPER_ACTIVE" == "1" && "$TIKPAL_X11_HELPER_UNKNOWN" == "0" ]] ||
+  fail_fixture "timeout retry did not retain the second Helper lease"
+x11_helper_finish_success || fail_fixture "timeout retry Helper ownership release failed"
 
 printf '0\n' > "$MOCK_SWITCH_STATUS_FILE"
 printf '0\n' > "$MOCK_REVOKE_STATUS_FILE"
