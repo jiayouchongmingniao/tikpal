@@ -981,7 +981,11 @@ audio_output {
     physicalExploreAcceptanceScript.includes('acceptance_mode="${1:-full}"')
       && physicalExploreAcceptanceScript.includes("switch_only_preflight()")
       && physicalExploreAcceptanceScript.includes('full|switch-only|switch-strict|switch-diagnostic)')
-      && physicalExploreAcceptanceScript.includes("for pass in 1 2")
+      && physicalExploreAcceptanceScript.includes("TIKPAL_EXPLORE_ACCEPTANCE_PROVIDER_SET")
+      && physicalExploreAcceptanceScript.includes("configure_provider_scope()")
+      && physicalExploreAcceptanceScript.includes("provider_scope_kind")
+      && physicalExploreAcceptanceScript.includes("scoped_gate_passed")
+      && physicalExploreAcceptanceScript.includes("for ((pass=1;")
       && physicalExploreAcceptanceScript.includes('[[ "$surfaces" == "2" ]]')
       && physicalExploreAcceptanceScript.includes('click_provider_card "$target"')
       && physicalExploreAcceptanceScript.includes("events.jsonl")
@@ -1013,6 +1017,15 @@ audio_output {
   assert(
     physicalAcceptanceSummaryContract.status === 0,
     `physical acceptance should gate one-shot and formal visible/stable timing independently: ${physicalAcceptanceSummaryContract.stderr || physicalAcceptanceSummaryContract.stdout}`
+  );
+  const physicalAcceptanceScopeFixtures = spawnSync(
+    "bash",
+    ["deploy/chromium/tikpal-explore-physical-acceptance.sh", "scope-fixtures"],
+    { cwd: ROOT, encoding: "utf8" }
+  );
+  assert(
+    physicalAcceptanceScopeFixtures.status === 0,
+    `physical acceptance should validate explicit scoped Provider sets: ${physicalAcceptanceScopeFixtures.stderr || physicalAcceptanceScopeFixtures.stdout}`
   );
   const unwritableX11TraceCheck = spawnSync(
     "bash",

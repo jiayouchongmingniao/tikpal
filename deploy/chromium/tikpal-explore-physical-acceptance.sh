@@ -15,6 +15,7 @@ APP_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 : "${TIKPAL_EXPLORE_ACCEPTANCE_SWITCH_ROUNDS:=20}"
 : "${TIKPAL_EXPLORE_ACCEPTANCE_OPEN_CLOSE_ROUNDS:=3}"
 : "${TIKPAL_EXPLORE_ACCEPTANCE_FRAME_RANGE:=12}"
+: "${TIKPAL_EXPLORE_ACCEPTANCE_PROVIDER_SET:=}"
 : "${TIKPAL_WEB_MODE_PROFILE_ROOT:=/home/moode/.config/tikpal-web-mode}"
 : "${TIKPAL_WEB_MODE_PHYSICAL_REVEAL_STAMP_PATH:=$TIKPAL_WEB_MODE_PROFILE_ROOT/last-physical-reveal.tsv}"
 : "${TIKPAL_WEB_MODE_STATE_PATH:=$APP_DIR/.tikpal/web-mode-state.json}"
@@ -29,6 +30,9 @@ providers=(
   suno spotify youtube_music apple_music tidal
   qobuz deezer amazon_music qq_music netease_music
 )
+scoped_providers=("${providers[@]}")
+provider_scope_kind="full"
+provider_scope_csv="$(IFS=,; printf '%s' "${providers[*]}")"
 output_dir="$TIKPAL_EXPLORE_ACCEPTANCE_OUTPUT_DIR"
 lock_path="$TIKPAL_WEB_MODE_PROFILE_ROOT/web-mode.lock"
 physical_reveal_stamp_path="$TIKPAL_WEB_MODE_PHYSICAL_REVEAL_STAMP_PATH"
@@ -546,6 +550,99 @@ provider_index() {
   return 1
 }
 
+scope_has_provider() {
+  local target="$1" provider
+  for provider in "${scoped_providers[@]}"; do
+    [[ "$provider" == "$target" ]] && return 0
+  done
+  return 1
+}
+
+scoped_provider_index() {
+  local target="$1"
+  local index=0 provider
+  for provider in "${scoped_providers[@]}"; do
+    if [[ "$provider" == "$target" ]]; then
+      printf '%s\n' "$index"
+      return 0
+    fi
+    index=$((index + 1))
+  done
+  return 1
+}
+
+configure_provider_scope() {
+  local raw="${TIKPAL_EXPLORE_ACCEPTANCE_PROVIDER_SET:-}"
+  local provider
+  local -a parsed=()
+
+  scoped_providers=()
+  if [[ -z "$raw" ]]; then
+    scoped_providers=("${providers[@]}")
+    provider_scope_kind="full"
+  else
+    if [[ "$raw" =~ (^|,)[[:space:]]*(,|$) ]]; then
+      fail "TIKPAL_EXPLORE_ACCEPTANCE_PROVIDER_SET contains an empty provider"
+      return 1
+    fi
+    while IFS= read -r provider; do
+      [[ -n "$provider" ]] && parsed+=("$provider")
+    done < <(printf '%s\n' "$raw" | tr ',[:space:]' '\n')
+    [[ "${#parsed[@]}" -ge 2 ]] || {
+      fail "TIKPAL_EXPLORE_ACCEPTANCE_PROVIDER_SET must contain at least two providers"
+      return 1
+    }
+    for provider in "${parsed[@]}"; do
+      provider_index "$provider" >/dev/null || {
+        fail "TIKPAL_EXPLORE_ACCEPTANCE_PROVIDER_SET has an unknown provider: $provider"
+        return 1
+      }
+      if scope_has_provider "$provider"; then
+        fail "TIKPAL_EXPLORE_ACCEPTANCE_PROVIDER_SET has a duplicate provider: $provider"
+        return 1
+      fi
+      scoped_providers+=("$provider")
+    done
+    provider_scope_kind="scoped"
+  fi
+  provider_scope_csv="$(IFS=,; printf '%s' "${scoped_providers[*]}")"
+}
+
+run_provider_scope_fixtures() (
+  local cases=0 failures=0 snapshot
+
+  TIKPAL_EXPLORE_ACCEPTANCE_PROVIDER_SET=""
+  configure_provider_scope
+  cases=$((cases + 1))
+  snapshot="$(IFS=,; printf '%s' "${scoped_providers[*]}")"
+  if [[ "$provider_scope_kind" != "full" || "$snapshot" != "suno,spotify,youtube_music,apple_music,tidal,qobuz,deezer,amazon_music,qq_music,netease_music" ]]; then
+    printf 'scope fixture full default failed: kind=%s providers=%s\n' "$provider_scope_kind" "$snapshot" >&2
+    failures=$((failures + 1))
+  fi
+
+  TIKPAL_EXPLORE_ACCEPTANCE_PROVIDER_SET="spotify, qq_music"
+  configure_provider_scope
+  cases=$((cases + 1))
+  snapshot="$(IFS=,; printf '%s' "${scoped_providers[*]}")"
+  if [[ "$provider_scope_kind" != "scoped" || "$snapshot" != "spotify,qq_music" ]] \
+    || ! scope_has_provider qq_music || scope_has_provider youtube_music
+  then
+    printf 'scope fixture explicit set failed: kind=%s providers=%s\n' "$provider_scope_kind" "$snapshot" >&2
+    failures=$((failures + 1))
+  fi
+
+  for TIKPAL_EXPLORE_ACCEPTANCE_PROVIDER_SET in "spotify" "spotify,spotify" "spotify,,qq_music" "spotify,unknown"; do
+    cases=$((cases + 1))
+    if configure_provider_scope >/dev/null 2>&1; then
+      printf 'scope fixture invalid set accepted: %s\n' "$TIKPAL_EXPLORE_ACCEPTANCE_PROVIDER_SET" >&2
+      failures=$((failures + 1))
+    fi
+  done
+
+  [[ "$failures" == "0" ]] || fail "$failures provider scope fixtures failed"
+  printf 'provider scope fixtures passed (%s cases)\n' "$cases"
+)
+
 click_provider_card() {
   local provider="$1"
   local index column row x y
@@ -650,7 +747,7 @@ load_switch_observer_windows() {
     fi
   done < "$windows"
   [[ "$switch_panel_window" =~ ^[0-9]+$ ]] || return 1
-  for item in "${providers[@]}"; do
+  for item in "${scoped_providers[@]}"; do
     [[ "${switch_provider_windows[$item]:-}" =~ ^[0-9]+$ ]] || return 1
   done
 }
@@ -1259,10 +1356,10 @@ let body = "";
 process.stdin.on("data", (chunk) => body += chunk);
 process.stdin.on("end", () => {
   const state = JSON.parse(body);
-  for (const provider of ["suno","spotify","youtube_music","apple_music","tidal","qobuz","deezer","amazon_music","qq_music","netease_music"]) {
+  for (const provider of process.argv.slice(1)) {
     if (["ready", "active"].includes(state.residentProviders?.[provider]?.status)) console.log(provider);
   }
-});'
+});' "${scoped_providers[@]}"
 }
 
 switch_only_preflight() {
@@ -1283,19 +1380,23 @@ switch_only_preflight() {
     fail "switch-only preflight requires an active, idle, fully prewarmed Explore session"
     return 1
   fi
+  if ! scope_has_provider "$active"; then
+    fail "switch-only preflight requires active provider $active to be in the configured provider scope"
+    return 1
+  fi
   if ! printf '%s' "$state" | node -e '
 let body = "";
 process.stdin.on("data", (chunk) => body += chunk);
 process.stdin.on("end", () => {
   const state = JSON.parse(body);
-  const ids = ["suno","spotify","youtube_music","apple_music","tidal","qobuz","deezer","amazon_music","qq_music","netease_music"];
+  const ids = process.argv.slice(1);
   process.exit(ids.every((id) => ["ready", "active"].includes(state.residentProviders?.[id]?.status)) ? 0 : 1);
-});'
+});' "${scoped_providers[@]}"
   then
-    fail "switch-only preflight requires all ten providers to be resident and Ready"
+    fail "switch-only preflight requires every provider in the configured scope to be resident and Ready"
     return 1
   fi
-  for provider in "${providers[@]}"; do
+  for provider in "${scoped_providers[@]}"; do
     if ! provider_has_real_page "$provider"; then
       fail "switch-only preflight found no real HTTPS page for $provider"
       return 1
@@ -1377,9 +1478,10 @@ on_exit() {
 trap on_exit EXIT
 
 summarize() {
-  node - "$rounds_path" "$events_path" "$output_dir" "$acceptance_mode" "$run_id" <<'NODE' | tee "$output_dir/summary.txt"
+  node - "$rounds_path" "$events_path" "$output_dir" "$acceptance_mode" "$run_id" "$provider_scope_kind" "$provider_scope_csv" <<'NODE' | tee "$output_dir/summary.txt"
 const fs = require("node:fs");
-const [roundsPath, eventsPath, outputDir, mode, runId] = process.argv.slice(2);
+const [roundsPath, eventsPath, outputDir, mode, runId, scopeKind, scopeCsv] = process.argv.slice(2);
+const scopeProviders = scopeCsv.split(",").filter(Boolean);
 const tsv = fs.readFileSync(roundsPath, "utf8").trim().split("\n");
 const headers = (tsv.shift() || "").split("\t");
 const rows = tsv.filter(Boolean).map((line) => Object.fromEntries(headers.map((header, index) => [header, line.split("\t")[index] ?? ""])));
@@ -1561,16 +1663,19 @@ const visibleThresholdPassed = mode === "switch-once"
 const stableThresholdPassed = mode === "switch-once"
   ? singleRoundThresholdPassed(stable)
   : distributionThresholdPassed(stable);
-const gatePassed = summaryGateMode &&
+const scopedGatePassed = summaryGateMode &&
   detailed.length === expectedRounds &&
   correctnessPassed === expectedRounds &&
   performancePassed === expectedRounds &&
   lifecyclePassed === expectedRounds &&
   visibleThresholdPassed &&
   stableThresholdPassed;
+const gatePassed = scopeKind === "full" && scopedGatePassed;
 const summary = {
   run_id: runId,
   mode,
+  provider_scope: scopeProviders,
+  provider_scope_kind: scopeKind,
   expected_rounds: expectedRounds,
   completed_rounds: detailed.length,
   correctness_passed: correctnessPassed,
@@ -1580,8 +1685,10 @@ const summary = {
   total_visible_ms: visible,
   total_stable_ms: stable,
   thresholds,
+  scoped_gate_passed: scopedGatePassed,
   gate_passed: gatePassed,
   gate_checks: {
+    full_provider_set: scopeKind === "full",
     rounds: detailed.length === expectedRounds,
     correctness: correctnessPassed === expectedRounds,
     performance_rounds: performancePassed === expectedRounds,
@@ -1607,7 +1714,7 @@ fs.writeFileSync(`${outputDir}/summary.json`, JSON.stringify(summary, null, 2) +
 
 const fmt = (value) => Number.isFinite(value) ? String(value) : "n/a";
 const report = [];
-report.push(`# Explore Provider 切换报告`, "", `- run_id: \`${runId}\``, `- mode: \`${mode}\``, `- 完成轮次: ${detailed.length}/${expectedRounds}`, `- 正确轮次: ${correctnessPassed}/${detailed.length}`, `- 性能达标轮次: ${performancePassed}/${detailed.length}`, `- 生命周期闭环轮次: ${lifecyclePassed}/${detailed.length}`, `- 总门槛: ${summary.gate_passed ? "PASS" : "FAIL"}`, "");
+report.push(`# Explore Provider 切换报告`, "", `- run_id: \`${runId}\``, `- mode: \`${mode}\``, `- Provider 范围: \`${scopeKind}\` (${scopeProviders.join(", ")})`, `- 完成轮次: ${detailed.length}/${expectedRounds}`, `- 正确轮次: ${correctnessPassed}/${detailed.length}`, `- 性能达标轮次: ${performancePassed}/${detailed.length}`, `- 生命周期闭环轮次: ${lifecyclePassed}/${detailed.length}`, `- 范围门槛: ${summary.scoped_gate_passed ? "PASS" : "FAIL"}`, `- 全量门槛: ${summary.gate_passed ? "PASS" : "FAIL"}${scopeKind === "full" ? "" : "（scoped 证据不计入全量门禁）"}`, "");
 report.push(`- 单轮门槛: visible/stable 均 <= ${thresholds.max_ms}ms`, `- 20 轮门槛: visible/stable 的 median <= ${thresholds.median_ms}ms、p95 <= ${thresholds.p95_ms}ms、max <= ${thresholds.max_ms}ms`, "");
 report.push("## 总体分布", "", "| 指标 | median | p95 | max | mean |", "| --- | ---: | ---: | ---: | ---: |", `| total_visible_ms | ${fmt(visible.median)} | ${fmt(visible.p95)} | ${fmt(visible.max)} | ${fmt(visible.mean)} |`, `| total_stable_ms | ${fmt(stable.median)} | ${fmt(stable.p95)} | ${fmt(stable.max)} | ${fmt(stable.mean)} |`, "");
 report.push("## 最慢 5 轮", "", "| round | from | to | visible_ms | stable_ms | error |", "| ---: | --- | --- | ---: | ---: | --- |");
@@ -1624,7 +1731,7 @@ if (!anomalies.length) report.push("无。");
 for (const row of anomalies) report.push(`- round ${row.round_id} ${row.from_provider} → ${row.to_provider}: result=${row.result}, performance=${row.performance_result}, lifecycle=${row.lifecycle_result}, error=${row.error_code || row.lifecycle_error_code || "none"}, visible=${row.visible_ms}ms, stable=${row.stable_ms}ms`);
 fs.writeFileSync(`${outputDir}/report.md`, report.join("\n") + "\n");
 
-console.log(`switch: rounds=${detailed.length} correctness=${correctnessPassed} performance=${performancePassed} lifecycle=${lifecyclePassed} gate=${summary.gate_passed ? "PASS" : "FAIL"}`);
+console.log(`switch: scope=${scopeKind} rounds=${detailed.length} correctness=${correctnessPassed} performance=${performancePassed} lifecycle=${lifecyclePassed} scoped_gate=${summary.scoped_gate_passed ? "PASS" : "FAIL"} full_gate=${summary.gate_passed ? "PASS" : "FAIL"}`);
 console.log(`  total_visible_ms: median=${fmt(visible.median)} p95=${fmt(visible.p95)} max=${fmt(visible.max)}`);
 console.log(`  total_stable_ms: median=${fmt(stable.median)} p95=${fmt(stable.p95)} max=${fmt(stable.max)}`);
 console.log(`  fast_path=${summary.fast_path_hits}/${detailed.length} xid_fallbacks=${summary.xid_fallbacks} cdp_fallbacks=${summary.cdp_fallbacks}`);
@@ -1645,6 +1752,7 @@ run_summary_contract_fixture() (
   local fixture_root="$1" fixture_name="$2" fixture_mode="$3" fixture_rounds="$4"
   local visible_value="$5" stable_value="$6" result="$7" performance_result="$8"
   local lifecycle="$9" expected_gate="${10}" expected_rounds="${11}" expected_lifecycle="${12}"
+  local scope_kind="${13:-full}" scope_csv="${14:-$(IFS=,; printf '%s' "${providers[*]}")}" expected_scoped_gate="${15:-$expected_gate}"
   local fixture_dir input_ms first_visible_ms settled_ms round pass_index visible_ms stable_ms request_id
   fixture_dir="$fixture_root/$fixture_name"
   mkdir -p "$fixture_dir"
@@ -1653,6 +1761,8 @@ run_summary_contract_fixture() (
   events_path="$fixture_dir/events.jsonl"
   acceptance_mode="$fixture_mode"
   run_id="summary-fixture-$fixture_name"
+  provider_scope_kind="$scope_kind"
+  provider_scope_csv="$scope_csv"
   printf 'action\tround\tpass_index\tfrom_provider\ttarget\trequest_id\tinput_ms\tfirst_visible_ms\tsettled_ms\tvisible_ms\tsettled_elapsed_ms\tlock_seen\tresult\tperformance_result\terror_code\tobserver_visible_ms\tobserver_delay_ms\n' > "$rounds_path"
   : > "$events_path"
   for ((round=1; round<=fixture_rounds; round++)); do
@@ -1721,21 +1831,27 @@ run_summary_contract_fixture() (
     esac
   done
   summarize > "$fixture_dir/console.log"
-  node - "$fixture_dir/summary.json" "$expected_gate" "$expected_rounds" "$expected_lifecycle" <<'NODE'
+  node - "$fixture_dir/summary.json" "$expected_gate" "$expected_rounds" "$expected_lifecycle" "$scope_kind" "$expected_scoped_gate" <<'NODE'
 const fs = require("node:fs");
-const [summaryPath, expectedGateText, expectedRoundsText, expectedLifecycleText] = process.argv.slice(2);
+const [summaryPath, expectedGateText, expectedRoundsText, expectedLifecycleText, expectedScopeKind, expectedScopedGateText] = process.argv.slice(2);
 const summary = JSON.parse(fs.readFileSync(summaryPath, "utf8"));
 const expectedGate = expectedGateText === "true";
 const expectedRounds = Number(expectedRoundsText);
 const expectedLifecycle = expectedLifecycleText === "true";
+const expectedScopedGate = expectedScopedGateText === "true";
 if (summary.gate_passed !== expectedGate || summary.expected_rounds !== expectedRounds ||
-    summary.gate_checks?.lifecycle !== expectedLifecycle) {
+    summary.gate_checks?.lifecycle !== expectedLifecycle || summary.provider_scope_kind !== expectedScopeKind ||
+    summary.scoped_gate_passed !== expectedScopedGate) {
   console.error(JSON.stringify({
     gate_passed: summary.gate_passed,
     expected_gate: expectedGate,
     expected_rounds: summary.expected_rounds,
     wanted_rounds: expectedRounds,
     expected_lifecycle: expectedLifecycle,
+    provider_scope_kind: summary.provider_scope_kind,
+    expected_scope_kind: expectedScopeKind,
+    scoped_gate_passed: summary.scoped_gate_passed,
+    expected_scoped_gate: expectedScopedGate,
     gate_checks: summary.gate_checks
   }));
   process.exit(1);
@@ -1746,11 +1862,12 @@ NODE
 run_summary_contract_fixtures() {
   local fixture_root fixture failures=0 cases=0
   fixture_root="$(mktemp -d)"
-  while IFS='|' read -r fixture mode rounds visible stable result performance lifecycle expected_gate expected_rounds expected_lifecycle; do
+  while IFS='|' read -r fixture mode rounds visible stable result performance lifecycle expected_gate expected_rounds expected_lifecycle scope_kind scope_csv expected_scoped_gate; do
     [[ -n "$fixture" ]] || continue
     cases=$((cases + 1))
     if ! run_summary_contract_fixture "$fixture_root" "$fixture" "$mode" "$rounds" \
-      "$visible" "$stable" "$result" "$performance" "$lifecycle" "$expected_gate" "$expected_rounds" "$expected_lifecycle"
+      "$visible" "$stable" "$result" "$performance" "$lifecycle" "$expected_gate" "$expected_rounds" "$expected_lifecycle" \
+      "${scope_kind:-full}" "${scope_csv:-$(IFS=,; printf '%s' "${providers[*]}")}" "${expected_scoped_gate:-$expected_gate}"
     then
       printf 'summary fixture failed: %s\n' "$fixture" >&2
       failures=$((failures + 1))
@@ -1776,6 +1893,7 @@ formal_stable_median_fail|switch-only|20|1500|median-over|ok|pass|success|false|
 formal_stable_p95_fail|switch-only|20|1500|p95-over|ok|pass|success|false|20|true
 formal_stable_max_fail|switch-only|20|1500|max-over|ok|pass|success|false|20|true
 formal_incomplete_fail|switch-only|19|1500|1800|ok|pass|success|false|20|false
+scoped_twenty_metrics_pass|switch-diagnostic|20|1500|1800|ok|pass|success|false|20|true|scoped|spotify,qq_music|true
 CASES
   rm -rf "$fixture_root"
   [[ "$failures" == "0" ]] || fail "$failures acceptance summary contract fixtures failed"
@@ -1795,14 +1913,20 @@ main() {
       run_summary_contract_fixtures
       return 0
       ;;
+    scope-fixtures)
+      run_provider_scope_fixtures
+      return 0
+      ;;
     full|switch-only|switch-strict|switch-diagnostic) ;;
     switch-once) ;;
-    *) fail "usage: $0 [full|switch-only|switch-strict|switch-diagnostic|switch-once|stamp-fixtures|exit-contract-fixtures|summary-contract-fixtures]" ;;
+    *) fail "usage: $0 [full|switch-only|switch-strict|switch-diagnostic|switch-once|stamp-fixtures|exit-contract-fixtures|summary-contract-fixtures|scope-fixtures]" ;;
   esac
+  configure_provider_scope
   require_commands
   mkdir -p "$output_dir"
   printf '%s\n' "$acceptance_mode" > "$output_dir/mode.txt"
   printf '%s\n' "$run_id" > "$output_dir/run-id.txt"
+  printf 'kind=%s\nproviders=%s\n' "$provider_scope_kind" "$provider_scope_csv" > "$output_dir/provider-scope.txt"
   : > "$events_path"
   chown --reference="$TIKPAL_WEB_MODE_STATE_PATH" "$events_path" 2>/dev/null || chmod 0666 "$events_path"
   printf 'action\tround\tpass_index\tfrom_provider\ttarget\trequest_id\tinput_ms\tfirst_visible_ms\tsettled_ms\tvisible_ms\tsettled_elapsed_ms\tlock_seen\tresult\tperformance_result\terror_code\tobserver_visible_ms\tobserver_delay_ms\n' > "$rounds_path"
@@ -1861,15 +1985,21 @@ main() {
     current="$setup_provider"
   fi
 
+  if ! scope_has_provider "$current"; then
+    fail "provider scope must include the current provider: $current"
+  fi
+
   if [[ -n "${TIKPAL_EXPLORE_ACCEPTANCE_SEQUENCE:-}" ]]; then
     while IFS= read -r target; do
-      [[ -n "$target" ]] && requested+=("$target")
+      [[ -n "$target" ]] || continue
+      scope_has_provider "$target" || fail "provider sequence includes a provider outside the configured scope: $target"
+      requested+=("$target")
     done < <(printf '%s\n' "$TIKPAL_EXPLORE_ACCEPTANCE_SEQUENCE" | tr ', ' '\n\n')
   elif [[ "$acceptance_mode" == "switch-only" || "$acceptance_mode" == "switch-strict" || "$acceptance_mode" == "switch-diagnostic" ]]; then
-    start_index="$(provider_index "$current")"
-    for pass in 1 2; do
-      for ((offset=1; offset<=${#providers[@]}; offset++)); do
-        requested+=("${providers[$(((start_index + offset) % ${#providers[@]}))]}")
+    start_index="$(scoped_provider_index "$current")"
+    for ((pass=1; ${#requested[@]}<TIKPAL_EXPLORE_ACCEPTANCE_SWITCH_ROUNDS; pass++)); do
+      for ((offset=1; offset<=${#scoped_providers[@]} && ${#requested[@]}<TIKPAL_EXPLORE_ACCEPTANCE_SWITCH_ROUNDS; offset++)); do
+        requested+=("${scoped_providers[$(((start_index + offset) % ${#scoped_providers[@]}))]}")
       done
     done
   else

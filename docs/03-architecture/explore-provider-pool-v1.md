@@ -111,6 +111,8 @@ The physical acceptance script clears the previous stamp immediately before the 
 
 `switch-only` requires exactly 20 rounds and derives two passes over all ten providers from the current provider. Both `visible_ms` and `settled_elapsed_ms` must meet median `<=2,000 ms`, p95 `<=3,000 ms`, and max `<=5,000 ms`. `switch-once` requires exactly one explicit target and applies the meaningful single-sample rule—both values must be `<=5,000 ms`—while retaining the same preflight, click, timestamp, geometry, frame, state, HTTPS/CDP, audio, lock, and evidence rules. `stamp-fixtures` covers the timestamp parser and atomic-file failure cases without touching X11.
 
+`TIKPAL_EXPLORE_ACCEPTANCE_PROVIDER_SET` may explicitly select two or more known providers for an incident-scoped run. Its active source, every requested target, residency/HTTPS checks, and cached XID checks must all be inside that set. The run writes `provider-scope.txt`, and its summary reports `scoped_gate_passed`; it deliberately keeps `gate_passed=false`, so a scoped result can never be represented as the ten-provider Phase 2 acceptance.
+
 ### 2026-08-25 field result after the repair
 
 The field evidence distinguishes successful single-direction checks from the formal 20-round result:

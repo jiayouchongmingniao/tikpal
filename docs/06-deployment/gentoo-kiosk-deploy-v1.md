@@ -1675,6 +1675,15 @@ TIKPAL_EXPLORE_ACCEPTANCE_OUTPUT_DIR="$PWD/.tikpal/explore-physical-acceptance-f
 ./deploy/chromium/tikpal-explore-physical-acceptance.sh switch-only
 ```
 
+When a known provider is region-unavailable, an explicitly scoped diagnostic can keep the remaining Provider evidence moving without weakening the formal gate. Include the currently active source in the set; this command still performs 20 real clicks and every physical correctness check, but records `provider_scope_kind=scoped`, reports only `scoped_gate_passed`, and cannot pass the full ten-provider gate:
+
+```bash
+cd /home/moode/code/tikpal
+TIKPAL_EXPLORE_ACCEPTANCE_PROVIDER_SET=spotify,qq_music \
+TIKPAL_EXPLORE_ACCEPTANCE_OUTPUT_DIR="$PWD/.tikpal/explore-physical-acceptance-scoped-$(date +%Y%m%d-%H%M%S)" \
+./deploy/chromium/tikpal-explore-physical-acceptance.sh switch-diagnostic
+```
+
 Do not run the full script under `bash -x`; per-command tracing changes device load and can invalidate timing. API and CDP remain read-only evidence channels. Stop on the first timestamp, geometry, surface, frame, state, lock, HTTPS, or audio mismatch and retain the partial directory.
 
 ### Current Field Baseline (2026-08-25)
