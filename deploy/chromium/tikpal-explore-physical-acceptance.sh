@@ -837,13 +837,19 @@ process.stdin.on("end", () => {
 capture_audio_gates() {
   local target="$1"
   local output="$2"
-  node --experimental-websocket - "$TIKPAL_EXPLORE_ACCEPTANCE_PROVIDER_CDP_BASE" "$target" > "$output" <<'NODE'
-const [baseText, targetProvider] = process.argv.slice(2);
+  node --experimental-websocket - "$TIKPAL_EXPLORE_ACCEPTANCE_PROVIDER_CDP_BASE" "$target" "${scoped_providers[@]}" > "$output" <<'NODE'
+const [baseText, targetProvider, ...scopeProviders] = process.argv.slice(2);
 const base = Number(baseText);
-const providers = [
+const allProviders = [
   ["suno", 9], ["spotify", 0], ["youtube_music", 1], ["apple_music", 2], ["tidal", 3],
   ["qobuz", 4], ["deezer", 5], ["amazon_music", 6], ["qq_music", 7], ["netease_music", 8]
 ];
+const providersById = new Map(allProviders);
+const providers = scopeProviders.map((provider) => {
+  const offset = providersById.get(provider);
+  if (!Number.isInteger(offset)) throw new Error(`unknown scoped provider: ${provider}`);
+  return [provider, offset];
+});
 function evidenceUrl(raw) {
   try {
     const url = new URL(String(raw || ""));
@@ -921,7 +927,7 @@ capture_round_evidence() {
   capture_windows "$round_dir/windows.tsv"
   if lock_is_free; then printf 'free\n'; else printf 'held\n'; fi > "$round_dir/lock.txt"
   local item port
-  for item in "${providers[@]}"; do
+  for item in "${scoped_providers[@]}"; do
     port="$(provider_debug_port "$item")"
     curl --noproxy '*' --silent --max-time 2 "http://127.0.0.1:$port/json/list" 2>/dev/null \
       | redact_evidence_json > "$round_dir/cdp/$item.json" 2>/dev/null || true

@@ -985,6 +985,8 @@ audio_output {
       && physicalExploreAcceptanceScript.includes("configure_provider_scope()")
       && physicalExploreAcceptanceScript.includes("provider_scope_kind")
       && physicalExploreAcceptanceScript.includes("scoped_gate_passed")
+      && physicalExploreAcceptanceScript.includes("const [baseText, targetProvider, ...scopeProviders]")
+      && physicalExploreAcceptanceScript.includes("for item in \"${scoped_providers[@]}\"")
       && physicalExploreAcceptanceScript.includes("for ((pass=1;")
       && physicalExploreAcceptanceScript.includes('[[ "$surfaces" == "2" ]]')
       && physicalExploreAcceptanceScript.includes('click_provider_card "$target"')
