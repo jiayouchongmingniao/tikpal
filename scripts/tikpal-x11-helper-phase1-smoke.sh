@@ -421,6 +421,48 @@ export BASHPID="${BASHPID:-$$}"
 mkdir -p "$TIKPAL_WEB_MODE_PROFILE_ROOT"
 source "$ROOT_DIR/deploy/chromium/tikpal-web-mode.sh"
 
+# A successful Helper transaction is only an X11 correctness proof.  The
+# physical stamp must wait for the target's own nonblank frame, and a failed
+# read-only paint gate must leave the lease for the normal caller cleanup.
+HELPER_PAINT_GATE_LOG="$FIXTURE_DIR/helper-paint-gate.log"
+helper_paint_gate_fixture() (
+  x11_helper_begin_switch() {
+    TIKPAL_X11_HELPER_ACTIVE=1
+    return 0
+  }
+  wait_for_provider_window_nonblank_x11_frame() {
+    printf 'paint:%s\n' "$1" >> "$HELPER_PAINT_GATE_LOG"
+    return "$HELPER_PAINT_RESULT"
+  }
+  write_physical_reveal_stamp() {
+    printf 'stamp:%s\n' "$2" >> "$HELPER_PAINT_GATE_LOG"
+  }
+  log_stage() { :; }
+  log_open_stage() { :; }
+  log_switch_segment_summary_once() { :; }
+  switch_trace_enabled() { return 1; }
+
+  : > "$HELPER_PAINT_GATE_LOG"
+  HELPER_PAINT_RESULT=0
+  TIKPAL_X11_HELPER_ACTIVE=0
+  reveal_resident_provider_window \
+    101 "$FIXTURE_DIR/previous-profile" "$FIXTURE_DIR/target-profile" 0 9234 202 1 0 -1 -1 -1 -1 \
+    1 303 "$FIXTURE_DIR/panel-profile" || exit 1
+  [[ "$(<"$HELPER_PAINT_GATE_LOG")" == $'paint:101\nstamp:101' ]] || exit 1
+
+  : > "$HELPER_PAINT_GATE_LOG"
+  HELPER_PAINT_RESULT=1
+  TIKPAL_X11_HELPER_ACTIVE=0
+  if reveal_resident_provider_window \
+      202 "$FIXTURE_DIR/previous-profile" "$FIXTURE_DIR/target-profile" 0 9234 101 1 0 -1 -1 -1 -1 \
+      1 303 "$FIXTURE_DIR/panel-profile"; then
+    exit 1
+  fi
+  [[ "$(<"$HELPER_PAINT_GATE_LOG")" == 'paint:202' && "$TIKPAL_X11_HELPER_ACTIVE" == '1' ]]
+)
+helper_paint_gate_fixture ||
+  fail_fixture "Helper paint gate stamped before a nonblank frame or released its lease on failure"
+
 TRACE_PATH="$FIXTURE_DIR/x11-writers.jsonl"
 printf 'trace-sentinel\n' > "$TRACE_PATH"
 printf '{"activeProvider":"fixture"}\n' > "$TIKPAL_WEB_MODE_STATE_PATH"

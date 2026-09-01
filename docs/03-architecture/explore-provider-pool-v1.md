@@ -223,12 +223,14 @@ This allows `bash tikpal-web-mode.sh open spotify` to work directly from an SSH 
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `TIKPAL_WEB_MODE_PROVIDER_PREWARM_MAX_CONCURRENT_LAUNCHES` | 3 | Parallel warm-up processes |
-| `TIKPAL_WEB_MODE_RESIDENT_SWITCH_PAINT_TIMEOUT_SECONDS` | 0.6 | Paint check timeout for cold-launch resident switch (CDP fast path skips this) |
-| `TIKPAL_WEB_MODE_RESIDENT_SWITCH_SETTLE_SECONDS` | 0.08 | Settle delay before paint check (CDP fast path skips this) |
+| `TIKPAL_WEB_MODE_RESIDENT_SWITCH_PAINT_TIMEOUT_SECONDS` | 0.6 | Paint check timeout before a resident success stamp, including the Helper path |
+| `TIKPAL_WEB_MODE_RESIDENT_SWITCH_SETTLE_SECONDS` | 0.08 | Settle delay before the legacy-path paint check |
 | `TIKPAL_WEB_MODE_RESIDENT_SWITCH_PAINT_POLL_SECONDS` | 0.05 | Paint check poll interval |
 | `TIKPAL_WEB_MODE_PROVIDER_SWITCH_FADE_SECONDS` | 0.10 | Opacity fade-out duration for old provider (legacy path only; CDP fast path skips fade) |
 | `TIKPAL_WEB_MODE_PROVIDER_WINDOW_TIMEOUT_SECONDS` | 30 | Cold-launch window timeout |
 | `TIKPAL_WEB_MODE_X11_SEARCH_TIMEOUT_SECONDS` | 0.35 | xdotool search timeout (prevents X11 contention from cascading) |
+
+The paint gate samples the target X11 window itself. It rejects a flat white or gray first frame by contrast range, but accepts a sparse rendered state such as a provider error or consent page; a whole-frame variance requirement would otherwise misclassify that visible content as blank.
 
 ## Files
 

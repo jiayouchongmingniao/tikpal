@@ -959,13 +959,14 @@ audio_output {
     "provider bootstrap polling should have one total deadline rather than accumulating per-request timeouts"
   );
   assert(
-    webModeScript.includes("provider_window_has_nonblank_x11_frame()") &&
+      webModeScript.includes("provider_window_has_nonblank_x11_frame()") &&
       webModeScript.includes("wait_for_provider_window_nonblank_x11_frame()") &&
       webModeScript.includes("-f x11grab -window_id") &&
-      webModeScript.includes("max - min >= 18") &&
+      webModeScript.includes("process.exit(max - min >= 18 ? 0 : 1)") &&
+      !webModeScript.includes("deviation / count >= 3") &&
       webModeScript.includes('wait_for_provider_window_nonblank_x11_frame "$target_window"') &&
       webModeScript.includes('resident $provider did not paint and CDP confirms no real page; reopening'),
-    "resident hot switching should verify a nonblank target X11 window under the transition before cold-reopening a blank target"
+    "resident hot switching should reject flat X11 blank frames without rejecting sparse rendered page content"
   );
   const exploreAcceptanceScript = await readFile(path.join(ROOT, "deploy/chromium/tikpal-explore-switch-acceptance.sh"), "utf8");
   assert(
@@ -3032,6 +3033,8 @@ sync_runtime_provider_pool_process_statuses ""
   const openProviderPoolStart = webModeScript.indexOf("open_provider_pool() {");
   const openProviderPoolEnd = webModeScript.indexOf("\n}\n\nopen_provider()", openProviderPoolStart);
   const openProviderPoolBody = webModeScript.slice(openProviderPoolStart, openProviderPoolEnd);
+  const failedResidentRevealStart = openProviderPoolBody.indexOf('result=failed reason=resident_reveal_failed');
+  const failedResidentRevealBody = openProviderPoolBody.slice(failedResidentRevealStart);
   const openProviderPoolInitBody = openProviderPoolBody.slice(0, openProviderPoolBody.indexOf('log_stage "open_pool_init'));
   const xdotoolProbeStart = webModeScript.indexOf("xdotool_probe() {");
   const xdotoolProbeEnd = webModeScript.indexOf("\n}\n\n# Cache hits", xdotoolProbeStart);
@@ -3344,8 +3347,17 @@ sync_runtime_provider_pool_process_statuses ""
   );
   assert(
     revealResidentProviderWindowBody.includes('wait_for_provider_window_nonblank_x11_frame "$target_window"') &&
+      revealResidentProviderWindowBody.includes('record_switch_trace_event helper_paint_gate failed paint_timeout') &&
+      revealResidentProviderWindowBody.indexOf('wait_for_provider_window_nonblank_x11_frame "$target_window"') <
+        revealResidentProviderWindowBody.indexOf('write_physical_reveal_stamp "$provider_profile" "$target_window" "$previous_window" "$physical_ms"') &&
       revealResidentProviderWindowBody.includes('provider_has_real_provider_page "$provider_port"'),
-    "Explore resident reveal should retain both the real-HTTPS fast path and the nonblank-X11 fallback"
+    "Explore resident reveal should physically gate both Helper and legacy success before stamping"
+  );
+  assert(
+    failedResidentRevealStart >= 0 &&
+      failedResidentRevealBody.indexOf("x11_helper_cleanup_active_transaction") <
+        failedResidentRevealBody.indexOf("recover_or_cover_provider_failure"),
+    "Explore failed Helper reveal should restore Shell ownership before legacy recovery mutations"
   );
   assert(
     webModeScript.includes("reassert_visible_provider_surfaces()") &&

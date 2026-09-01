@@ -1742,8 +1742,10 @@ provider_window_has_nonblank_x11_frame() {
   # Read the target X11 window itself while the transition veil is still on
   # top.  Sampling the composed left pane made a blank Chromium target look
   # healthy whenever the old provider, transition, or kiosk beneath it was
-  # bright.  A flat white/gray first paint has no useful contrast and must
-  # remain covered until the already-resident provider redraws.
+  # bright. A flat white/gray first paint has no useful contrast and must
+  # remain covered until the already-resident provider redraws. Do not require
+  # whole-frame texture: a fully rendered provider error or consent page can
+  # be a dark surface with a small but physically visible text treatment.
   DISPLAY="$TIKPAL_KIOSK_DISPLAY" XAUTHORITY="$XAUTHORITY" \
     timeout 1 ffmpeg -hide_banner -loglevel error \
       -f x11grab -window_id "$target_window" -i "$TIKPAL_KIOSK_DISPLAY.0" \
@@ -1756,18 +1758,13 @@ provider_window_has_nonblank_x11_frame() {
         const pixels = Buffer.concat(chunks);
         if (pixels.length < 512) process.exit(1);
         const stride = Math.max(1, Math.floor(pixels.length / 4096));
-        let min = 255, max = 0, sum = 0, count = 0;
+        let min = 255, max = 0;
         for (let index = 0; index < pixels.length; index += stride) {
           const value = pixels[index];
           min = Math.min(min, value);
           max = Math.max(max, value);
-          sum += value;
-          count += 1;
         }
-        const mean = sum / count;
-        let deviation = 0;
-        for (let index = 0; index < pixels.length; index += stride) deviation += Math.abs(pixels[index] - mean);
-        process.exit(max - min >= 18 && deviation / count >= 3 ? 0 : 1);
+        process.exit(max - min >= 18 ? 0 : 1);
       });
     '
 }
@@ -6791,6 +6788,7 @@ reveal_resident_provider_window() {
   local combined_pre_geometry_ms=-1 target_before=not_read previous_before=not_read combined_result=not_run
   local stamp_write_ms=-1 stamp_result=not_run
   local trace_foreground_started_ms=0 trace_foreground_finished_ms=0 trace_foreground_elapsed_ms=0
+  local helper_paint_started_ms=0 helper_paint_elapsed_ms=0
   if switch_trace_enabled; then
     switch_trace_now_ms trace_foreground_started_ms
     record_switch_trace_event foreground_switch_started
@@ -6805,10 +6803,25 @@ reveal_resident_provider_window() {
     fi
     log_open_stage helper_call "provider=${provider_profile##*/} result=$([[ "$helper_status" == "0" ]] && printf success || printf failed) status=$helper_status response=${TIKPAL_X11_HELPER_LAST_RESPONSE:-none}"
     if [[ "$helper_status" == "0" ]]; then
+      # The Helper has fenced and verified the X11 transaction, but that does
+      # not prove Chromium has produced a nonblank compositor frame.  Keep
+      # the Helper lease until this read-only physical gate passes so a stamp
+      # cannot make a white first paint look like a successful reveal.
+      helper_paint_started_ms="$(now_ms)"
+      if ! wait_for_provider_window_nonblank_x11_frame "$target_window"; then
+        helper_paint_elapsed_ms="$(( $(now_ms) - helper_paint_started_ms ))"
+        if switch_trace_enabled; then
+          record_switch_trace_event helper_paint_gate failed paint_timeout "$helper_paint_elapsed_ms"
+        fi
+        log_stage "reveal_paint_failed target=$target_window port=$provider_port mode=helper elapsed_ms=$helper_paint_elapsed_ms"
+        log_open_stage reveal "provider=${provider_profile##*/} result=failed route=helper reason=paint_timeout target_window=$target_window"
+        return 1
+      fi
+      helper_paint_elapsed_ms="$(( $(now_ms) - helper_paint_started_ms ))"
+      if switch_trace_enabled; then
+        record_switch_trace_event helper_paint_gate completed nonblank "$helper_paint_elapsed_ms"
+      fi
       physical_ms="$(now_ms)"
-      # A successful Helper response already includes checked mutations, an X11
-      # fence, and an exact final snapshot for target, previous, and panel. The
-      # acceptance observer performs the independent post-release geometry gate.
       write_physical_reveal_stamp "$provider_profile" "$target_window" "$previous_window" "$physical_ms" \
         || log_stage "reveal_physical_stamp_failed target=$target_window physical_ms=$physical_ms"
       if switch_trace_enabled; then
@@ -7706,6 +7719,12 @@ open_provider_pool() {
     log_open_stage surface_plan_end "provider=$provider result=failed reason=resident_reveal_failed target_window=$target_window"
     # A real CDP page is not permission to commit failed X11 geometry. Restore
     # the old visible owner and leave the resident target available for retry.
+    # A failed Helper paint gate intentionally retains its lease. Release it
+    # before invoking the Shell-owned recovery mutations below.
+    if [[ "$TIKPAL_X11_HELPER_ACTIVE" == "1" ]]; then
+      x11_helper_cleanup_active_transaction ||
+        fail "X11 helper ownership could not be returned before failed reveal recovery"
+    fi
     if provider_has_real_provider_page "$provider_port"; then
       clear_provider_switch_guard
       message="$(provider_label "$provider") window did not reach its physical geometry"
