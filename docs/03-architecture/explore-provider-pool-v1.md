@@ -93,6 +93,8 @@ The first CDP readiness result is streamed through `grep` and passed into the re
 
 The normal guard uses one combined X11 query for its cached provider, panel, and kiosk IDs. It checks PID/profile ownership every fourth tick, uses `250 ms` only for the first four ticks after a switch, and then settles to one-second stable ticks. This reduced the observed guard CPU from roughly `3.3%` to `0.5–0.7%`; it did not by itself make foreground switching pass the physical latency gate.
 
+The native Helper keeps its `250 ms` switch deadline. Before mutation it verifies each surface's Chromium class, UID, PID starttime, and profile ancestry; after the checked X11 fence it re-reads all X11 state and requires the same PID, UID, and starttime. It deliberately does not repeat the already-established profile-ancestry walk in that final snapshot, so a slow `/proc` walk cannot consume the remaining transaction budget after mutation. A final identity change or deadline expiry still fails the transaction and triggers the existing fallback.
+
 ### Physical reveal timestamp and observer boundary
 
 `tikpal-web-mode.sh` atomically replaces `last-physical-reveal.tsv` immediately after the ordered reveal transaction returns:

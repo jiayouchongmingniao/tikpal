@@ -160,6 +160,12 @@ typedef struct {
 } SurfaceResult;
 
 typedef struct {
+  uint32_t pid;
+  uid_t uid;
+  unsigned long long starttime;
+} SurfaceIdentity;
+
+typedef struct {
   uint32_t sequence;
   char action[40];
   xcb_window_t xid;
@@ -829,7 +835,8 @@ static void copy_wm_class(SurfaceResult *surface) {
   }
 }
 
-static void parse_surface_result(SurfaceResult *surface, int64_t deadline_ns) {
+static void parse_surface_result(SurfaceResult *surface, int64_t deadline_ns,
+                                 bool verify_profile_identity) {
   surface->code = "OK";
   surface->opacity = UINT32_MAX;
   surface->opacity_full = true;
@@ -884,6 +891,10 @@ static void parse_surface_result(SurfaceResult *surface, int64_t deadline_ns) {
     surface->opacity_present = true;
     memcpy(&surface->opacity, xcb_get_property_value(surface->opacity_property), sizeof(uint32_t));
     surface->opacity_full = surface->opacity == UINT32_MAX;
+  }
+  if (!verify_profile_identity) {
+    surface->ok = true;
+    return;
   }
   if (!read_proc_identity(surface->pid, &surface->uid, NULL, &surface->pid_starttime)) {
     surface->code = "WINDOW_PID_IDENTITY_UNAVAILABLE";
@@ -995,7 +1006,7 @@ static size_t queue_surface_queries(HelperState *state, SurfaceResult *surfaces,
 static int finish_surface_queries(HelperState *state, SurfaceResult *surfaces, size_t surface_count,
                                   PendingReply pending[MAX_PENDING], size_t pending_count,
                                   int64_t deadline_ns, AsyncError *async_error,
-                                  bool verify_identity) {
+                                  bool verify_profile_identity) {
   int collect_result = collect_replies(state, pending, pending_count, deadline_ns, async_error);
   if (collect_result != 0) {
     free_pending(pending, pending_count);
@@ -1005,10 +1016,17 @@ static int finish_surface_queries(HelperState *state, SurfaceResult *surfaces, s
     assign_pending_reply(surfaces, &pending[index]);
   }
   free_pending(pending, pending_count);
-  if (!verify_identity) return async_error->seen ? SURFACE_QUERY_FAILED : 0;
+  if (!verify_profile_identity) {
+    bool all_ok = !async_error->seen;
+    for (size_t index = 0; index < surface_count; index++) {
+      parse_surface_result(&surfaces[index], deadline_ns, false);
+      if (!surfaces[index].ok) all_ok = false;
+    }
+    return all_ok ? 0 : SURFACE_QUERY_FAILED;
+  }
   bool all_ok = true;
   for (size_t index = 0; index < surface_count; index++) {
-    parse_surface_result(&surfaces[index], deadline_ns);
+    parse_surface_result(&surfaces[index], deadline_ns, true);
     if (!surfaces[index].ok) all_ok = false;
   }
   if (remaining_timeout_ms(deadline_ns) <= 0) return SURFACE_QUERY_DEADLINE_EXCEEDED;
@@ -1668,6 +1686,39 @@ static bool verify_identity_unchanged(SurfaceResult *surfaces, size_t count, int
   return true;
 }
 
+static void capture_surface_identities(const SurfaceResult *surfaces,
+                                       SurfaceIdentity identities[MAX_SURFACES], size_t count) {
+  for (size_t index = 0; index < count; index++) {
+    identities[index] = (SurfaceIdentity){
+      .pid = surfaces[index].pid,
+      .uid = surfaces[index].uid,
+      .starttime = surfaces[index].pid_starttime,
+    };
+  }
+}
+
+static bool verify_final_surface_identities(SurfaceResult *surfaces,
+                                            const SurfaceIdentity identities[MAX_SURFACES],
+                                            size_t count, int64_t deadline_ns) {
+  for (size_t index = 0; index < count; index++) {
+    uid_t uid = (uid_t)-1;
+    unsigned long long starttime = 0;
+    if (remaining_timeout_ms(deadline_ns) <= 0) {
+      surfaces[index].ok = false;
+      surfaces[index].code = "TRANSACTION_DEADLINE_EXCEEDED";
+      return false;
+    }
+    if (surfaces[index].pid != identities[index].pid ||
+        !read_proc_identity(surfaces[index].pid, &uid, NULL, &starttime) ||
+        uid != identities[index].uid || starttime != identities[index].starttime) {
+      surfaces[index].ok = false;
+      surfaces[index].code = "WINDOW_IDENTITY_CHANGED";
+      return false;
+    }
+  }
+  return true;
+}
+
 static bool request_matches_active_lease(const HelperState *state, const char *instance_id,
                                          uint64_t epoch, uint64_t generation,
                                          const char *lease_id) {
@@ -1745,6 +1796,7 @@ static json_object *switch_result_response(HelperState *state, const char *reque
 static json_object *switch_response(HelperState *state, json_object *request,
                                     const char *request_id, int64_t received_ns) {
   SurfaceResult surfaces[3] = {0};
+  SurfaceIdentity initial_identities[MAX_SURFACES] = {0};
   SurfaceResult *target;
   SurfaceResult *previous;
   SurfaceResult *panel;
@@ -1772,6 +1824,7 @@ static json_object *switch_response(HelperState *state, json_object *request,
   int64_t checked_completed_ns = -1;
   int64_t final_started_ns = -1;
   int64_t final_completed_ns = -1;
+  int64_t final_identity_completed_ns = -1;
   size_t initial_pending_count = 0;
   size_t final_pending_count = 0;
   size_t mutation_count = 0;
@@ -1895,6 +1948,7 @@ static json_object *switch_response(HelperState *state, json_object *request,
     goto completed;
   }
   identity_completed_ns = monotonic_ns();
+  capture_surface_identities(surfaces, initial_identities, 3);
 #ifdef TIKPAL_X11_HELPER_SELF_TEST_SEAMS
   if (self_test_before_mutation_hook) self_test_before_mutation_hook();
 #endif
@@ -1999,7 +2053,7 @@ static json_object *switch_response(HelperState *state, json_object *request,
     has_collector_diagnostics = true;
   } else {
     result = finish_surface_queries(state, surfaces, 3, final_pending, final_pending_count,
-                                    deadline_ns, &mutation_async_error, true);
+                                    deadline_ns, &mutation_async_error, false);
   }
   final_completed_ns = monotonic_ns();
   if (result != 0) {
@@ -2014,6 +2068,12 @@ static json_object *switch_response(HelperState *state, json_object *request,
     if (collect_requires_connection_reset(result)) reset_xcb_connection(state);
     goto completed;
   }
+  if (!verify_final_surface_identities(surfaces, initial_identities, 3, deadline_ns)) {
+    code = remaining_timeout_ms(deadline_ns) <= 0
+      ? "TRANSACTION_DEADLINE_EXCEEDED" : "WINDOW_IDENTITY_CHANGED";
+    goto completed;
+  }
+  final_identity_completed_ns = monotonic_ns();
   target = surface_for_role(surfaces, 3, "target");
   previous = surface_for_role(surfaces, 3, "previous");
   panel = surface_for_role(surfaces, 3, "panel");
@@ -2048,6 +2108,8 @@ completed:
                          json_object_new_int64(final_started_ns));
   json_object_object_add(timings, "finalSnapshotCompletedMonotonicNs",
                          json_object_new_int64(final_completed_ns));
+  json_object_object_add(timings, "finalIdentityCompletedMonotonicNs",
+                         json_object_new_int64(final_identity_completed_ns));
   json_object_object_add(timings, "initialBatchSendMs",
                          duration_ms_json(initial_started_ns, initial_queued_ns));
   json_object_object_add(timings, "initialReplyAndIdentityMs",
@@ -2062,6 +2124,8 @@ completed:
                          duration_ms_json(fence_completed_ns, checked_completed_ns));
   json_object_object_add(timings, "finalQueryMs",
                          duration_ms_json(checked_completed_ns, final_completed_ns));
+  json_object_object_add(timings, "finalIdentityRecheckMs",
+                         duration_ms_json(final_completed_ns, final_identity_completed_ns));
   json_object_object_add(timings, "totalMs",
                          duration_ms_json(received_ns, monotonic_ns()));
   response = switch_result_response(state, request_id, code, strcmp(code, "OK") == 0,
@@ -2253,7 +2317,7 @@ static json_object *inspect_response(HelperState *state, json_object *request,
   for (size_t index = 0; index < pending_count; index++) assign_pending_reply(surfaces, &pending[index]);
   free_pending(pending, pending_count);
   for (size_t index = 0; index < surface_count; index++) {
-    parse_surface_result(&surfaces[index], deadline_ns);
+    parse_surface_result(&surfaces[index], deadline_ns, true);
     if (!surfaces[index].ok) all_ok = false;
   }
   identity_completed_ns = monotonic_ns();
@@ -3406,6 +3470,7 @@ static int owner_file_self_test(void) {
 #ifdef TIKPAL_X11_HELPER_SELF_TEST_SEAMS
 static xcb_connection_t *self_test_hook_connection = NULL;
 static xcb_window_t self_test_hook_window = XCB_WINDOW_NONE;
+static xcb_atom_t self_test_hook_pid_atom = XCB_ATOM_NONE;
 static bool self_test_hook_failed = false;
 
 static void x11_self_test_destroy_before_mutation(void) {
@@ -3440,6 +3505,29 @@ static void x11_self_test_move_before_final_query(void) {
   }
   xcb_configure_window(self_test_hook_connection, self_test_hook_window,
                        XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y, values);
+  xcb_get_input_focus_cookie_t fence = xcb_get_input_focus(self_test_hook_connection);
+  pending.sequence = fence.sequence;
+  if (xcb_flush(self_test_hook_connection) <= 0 ||
+      collect_replies(&hook_state, &pending, 1,
+                      monotonic_ns() + 1000000000LL, &async_error) != 0 ||
+      async_error.seen || pending.error || !pending.reply) {
+    self_test_hook_failed = true;
+  }
+  free_pending(&pending, 1);
+}
+
+static void x11_self_test_change_pid_before_final_query(void) {
+  HelperState hook_state = {.connection = self_test_hook_connection};
+  PendingReply pending = {0};
+  AsyncError async_error = {0};
+  uint32_t replacement_pid = (uint32_t)getpid() + 1;
+  if (!self_test_hook_connection || self_test_hook_window == XCB_WINDOW_NONE ||
+      self_test_hook_pid_atom == XCB_ATOM_NONE) {
+    self_test_hook_failed = true;
+    return;
+  }
+  xcb_change_property(self_test_hook_connection, XCB_PROP_MODE_REPLACE, self_test_hook_window,
+                      self_test_hook_pid_atom, XCB_ATOM_CARDINAL, 32, 1, &replacement_pid);
   xcb_get_input_focus_cookie_t fence = xcb_get_input_focus(self_test_hook_connection);
   pending.sequence = fence.sequence;
   if (xcb_flush(self_test_hook_connection) <= 0 ||
@@ -4447,6 +4535,49 @@ static int x11_transaction_self_test(const char *display, const char *profile,
     json_object_put(request);
     request = NULL;
     release_lease(&state);
+
+    uint64_t final_identity_generation = clean_generation + 1;
+    if (!x11_self_test_publish_generation(generation_path, final_identity_generation)) {
+      self_test_failure("X11 final-identity generation publish");
+      goto cleanup;
+    }
+    uint64_t epoch_before_final_identity = state.connection_epoch;
+    request = x11_self_test_switch_request(&state, "x11-final-identity",
+                                           final_identity_generation, nested_target,
+                                           nested_previous, nested_panel, profile);
+    self_test_hook_connection = fixture_connection;
+    self_test_hook_window = nested_target;
+    self_test_hook_pid_atom = state.net_wm_pid;
+    self_test_hook_failed = false;
+    self_test_before_final_query_hook = x11_self_test_change_pid_before_final_query;
+    response = switch_response(&state, request, "x11-final-identity", monotonic_ns());
+    self_test_before_final_query_hook = NULL;
+    self_test_hook_connection = NULL;
+    self_test_hook_window = XCB_WINDOW_NONE;
+    self_test_hook_pid_atom = XCB_ATOM_NONE;
+    json_object *final_identity_code = NULL;
+    json_object *final_identity_started = NULL;
+    json_object *final_identity_target = x11_self_test_response_surface(response, "target");
+    json_object *final_identity_target_code = NULL;
+    if (self_test_hook_failed || !response ||
+        !json_object_object_get_ex(response, "ok", &value) || json_object_get_boolean(value) ||
+        !json_object_object_get_ex(response, "code", &final_identity_code) ||
+        strcmp(json_object_get_string(final_identity_code), "WINDOW_IDENTITY_CHANGED") != 0 ||
+        !json_object_object_get_ex(response, "mutationStarted", &final_identity_started) ||
+        !json_object_get_boolean(final_identity_started) || !final_identity_target ||
+        !json_object_object_get_ex(final_identity_target, "code", &final_identity_target_code) ||
+        strcmp(json_object_get_string(final_identity_target_code), "WINDOW_IDENTITY_CHANGED") != 0 ||
+        state.connection_epoch != epoch_before_final_identity || !state.lease_active) {
+      fprintf(stderr, "self-test X11 final identity response: %s\n",
+              response ? json_object_to_json_string_ext(response, JSON_C_TO_STRING_PLAIN) : "null");
+      self_test_failure("X11 final identity rejection");
+      goto cleanup;
+    }
+    json_object_put(response);
+    response = NULL;
+    json_object_put(request);
+    request = NULL;
+    release_lease(&state);
   }
 #endif
   result = 0;
@@ -4479,6 +4610,7 @@ cleanup:
   self_test_identity_read_count = 0;
   self_test_before_mutation_hook = NULL;
   self_test_before_final_query_hook = NULL;
+  self_test_hook_pid_atom = XCB_ATOM_NONE;
   self_test_bad_match_sibling = XCB_WINDOW_NONE;
   self_test_checked_not_ready = false;
   self_test_hook_connection = NULL;
