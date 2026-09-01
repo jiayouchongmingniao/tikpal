@@ -1,6 +1,10 @@
 # Explore X11 Helper Phase 0
 
-Status: local validation and the 115 stable read-only deployment passed; the required 20-sample real-switch competition period remains pending. This is the plan-defined Phase 0 gate; it is distinct from the earlier disabled-Helper initial-entry diagnostic.
+Status: Phase 0 completed on 115 and the controlled Phase 1 two-Canary promotion passed on 2026-09-01. The Helper now runs with `TIKPAL_X11_HELPER_PHASE=1` and Shell mode `switch`; the 20-round Phase 1 run remains explicitly out of scope.
+
+**2026-09-01 final Phase 0/1 record:** after a fresh Phase 0 Helper restart, 20 stable three-window batches passed with client socket p95 `0.750 ms` and daemon p95 `0.486 ms`. The competition sampler then observed the single YouTube Music → Spotify resident switch with 20 identity-checked, read-only batches: client socket p95 was `25.892 ms`, below the required `100 ms`; connection epoch was unchanged and timeout, reconnect, inspect-failure, and mutation counts remained zero. The first preparation switch exposed a stale, pre-deployment Window Guard that restored Spotify after the new state had committed. `reload-guard youtube_music` replaced it with one current Guard and restored the expected YouTube Music/Spotify/Panel geometry before the competition switch. This was a Guard lifecycle repair, not a Helper failure.
+
+The configuration change was atomic and retained `.env.kiosk` owner/mode. Only the Helper and API were restarted; kiosk PID `2403755` stayed unchanged. The Phase 1 Helper then completed Spotify → YouTube Music and YouTube Music → Spotify Canaries with visible/stable timings `834/3259 ms` and `830/3069 ms`, respectively. Both acceptance summaries passed correctness, performance, and lifecycle gates. Final Helper health recorded `switchRequests=2`, `switchFailures=0`, `mutationRequests=2`, `revokeRequests=2`, `xcbTimeouts=0`, `reconnects=0`, with no in-flight lease. Raw field evidence is retained on 115 in `.tikpal/phase0-gate-20260901-0900/` and `.tikpal/phase1-enable-20260901-0908/`.
 
 **2026-09-01 update:** the stable-period evidence below is no longer an active Phase 0 pass. A subsequent read-only Guard inspection on 115 timed out, reset the Helper connection, and reconnected. Do not deploy the competition sampler or begin Phase 1 until the display-stack interference is understood and a new complete Phase 0 period passes.
 
@@ -27,7 +31,7 @@ The device-local setting is `TIKPAL_X11_HELPER_PHASE=0` in `.env.kiosk`. The com
 
 `scripts/tikpal-x11-helper-phase1-smoke.sh` proves the default daemon rejects both mutation operations, then starts isolated `--phase 1` daemons for the existing transaction, timeout, and cleanup regression tests. `scripts/tikpal-x11-late-writer-fixture.sh` also opts its mutation fixture into `--phase 1` explicitly.
 
-No Phase 1 canary, Shell duplicate-read removal, or provider switch is authorized by this document. Field Phase 0 rollout is limited to the Helper binary/configuration, a Helper restart, and read-only health/inspect evidence while Shell mode remains disabled.
+At the time this document was first written, Phase 0 rollout was limited to the Helper binary/configuration, a Helper restart, and read-only health/inspect evidence while Shell mode remained disabled. The dated final record above supersedes that historical boundary for the completed two-Canary promotion only.
 
 ## 115 stable-period evidence
 

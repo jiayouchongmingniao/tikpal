@@ -14619,7 +14619,11 @@ function formatWebModeCommandError(error, action, providerId = "") {
 async function captureWebModePlaybackHandoff() {
   const snapshot = await collectTikpalStateSnapshot({
     includeSlowRuntimeStatus: false,
-    includeSourceRuntimeStatus: true,
+    // Handoff needs the current source and playback position, both of which
+    // come from MPD plus the recently refreshed state cache.  Synchronously
+    // probing every external source here delays audio pause and physical
+    // initial entry, while not contributing to the handoff payload.
+    includeSourceRuntimeStatus: false,
     includeOutputVolumeStatus: false,
     skipExperienceReconcile: true
   });
@@ -14635,13 +14639,15 @@ async function captureWebModePlaybackHandoff() {
       ?? await resolveCurrentOrRememberedRadioStationId()
     : null;
 
-  return await writeWebModeHandoffState({
+  const handoff = {
     sourceId,
     playbackState: snapshot.playback?.state,
     localTrackPath,
     radioStationId,
     elapsedSeconds: snapshot.playback?.elapsedSeconds
-  });
+  };
+  await writeWebModeHandoffState(handoff);
+  return handoff;
 }
 
 async function restoreMpdWebModeLibraryHandoff(handoff) {
@@ -14696,7 +14702,7 @@ async function restoreWebModePlaybackHandoff() {
   }
 }
 
-async function pauseTikpalForWebMode() {
+async function pauseTikpalForWebMode(handoffSourceId = "") {
   const room = await readRoomExperienceState();
   if (room.sceneSoundEnabled) {
     await applyRoomExperienceAction({
@@ -14709,9 +14715,12 @@ async function pauseTikpalForWebMode() {
   if (API_MODE === "mpc") {
     await withMpcMutationLock(async () => {
       const before = parseMpcStatus(await runMpc(["status"], { timeout: 2500 }));
-      const currentFile = (await runMpc(["--format", "%file%", "current"], { allowFailure: true, timeout: 2500 })).trim();
       if (before.state === "playing") {
-        await runMpc([isStreamUri(currentFile) ? "stop" : "pause"], { timeout: 2500 });
+        // The handoff capture immediately preceding this gate has already
+        // identified the active source. Avoid a second serial `mpc current`
+        // probe before hiding the local playback; radio alone must stop.
+        const command = handoffSourceId === "radio" ? "stop" : "pause";
+        await runMpc([command], { timeout: 2500 });
       }
       const after = parseMpcStatus(await runMpc(["status"], { timeout: 2500 }));
       if (after.state === "playing") {
@@ -14899,7 +14908,7 @@ async function applyWebModeAction(action, { receivedMonotonicMs = monotonicNowMs
     if (isInitialEntry) {
       await requireCurrentWebModeOpenRequest(providerId, openRequestId, xSessionGeneration, "entry-prepare-start");
       logWebModeEntryStage("handoff_capture_started", { requestId: openRequestId, providerId, xSessionGeneration });
-      await captureWebModePlaybackHandoff();
+      const handoff = await captureWebModePlaybackHandoff();
       logWebModeEntryStage("handoff_capture_completed", { requestId: openRequestId, providerId, xSessionGeneration });
       // The full-width entry veil and parked panel do not expose a provider or
       // browser audio. Stage them while Scene/MPD releases audio, then keep
@@ -14908,7 +14917,7 @@ async function applyWebModeAction(action, { receivedMonotonicMs = monotonicNowMs
       const [pauseResult, preparationResult] = await Promise.allSettled([
         (async () => {
           logWebModeEntryStage("audio_pause_started", { requestId: openRequestId, providerId, xSessionGeneration });
-          await pauseTikpalForWebMode();
+          await pauseTikpalForWebMode(handoff.sourceId);
           logWebModeEntryStage("audio_pause_completed", { requestId: openRequestId, providerId, xSessionGeneration });
         })(),
         (async () => {

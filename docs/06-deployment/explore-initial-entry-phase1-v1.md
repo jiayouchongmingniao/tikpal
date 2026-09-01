@@ -1,6 +1,6 @@
 # Explore Initial-entry Phase 1 v1
 
-Status: Phase 1 completed on the Gentoo kiosk in disabled-Helper mode. This is a diagnostic and lifecycle baseline, not authorization to enable the native Helper, run a provider-switch loop, or broaden deployment.
+Status: the disabled-Helper initial-entry diagnostic and lifecycle baseline completed on the Gentoo kiosk. It later supplied the evidence needed for the separately recorded native-Helper Phase 1 two-Canary promotion; it does not authorize a provider-switch loop.
 
 ## Purpose
 
@@ -63,4 +63,4 @@ This is device-side physical-surface evidence (stamp, map state, geometry, opaci
 
 ## Follow-on boundary
 
-Do not use this result to turn on the native Helper or to start a multi-provider/20-round run. A later phase must request that scope explicitly, start with a fresh service/X-session/lock/owner preflight, and retain this trace for the first field request.
+The native-Helper Phase 1 two-Canary promotion is recorded in [Explore X11 Helper Phase 0](explore-x11-helper-phase0-v1.md). Do not use this initial-entry result or that promotion to start a multi-provider/20-round run without a fresh explicit authorization, service/X-session/lock/owner preflight, and retained first-request trace.

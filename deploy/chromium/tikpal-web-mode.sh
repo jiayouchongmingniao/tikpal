@@ -185,6 +185,7 @@ TIKPAL_INITIAL_ENTRY_FAILED_STATUS=0
 TIKPAL_INITIAL_ENTRY_PANEL_WINDOW=""
 TIKPAL_INITIAL_ENTRY_KIOSK_WINDOW=""
 TIKPAL_INITIAL_ENTRY_TARGET_WINDOW=""
+TIKPAL_INITIAL_ENTRY_PROVIDER=""
 TIKPAL_INITIAL_ENTRY_PROXY_LINE=""
 TIKPAL_INITIAL_ENTRY_PROXY_ENABLED=""
 TIKPAL_INITIAL_ENTRY_TRACE_CONTEXT_KEY=""
@@ -342,8 +343,89 @@ initial_entry_trace_read_bounded() {
   head -c "$limit" "$path" 2>/dev/null || true
 }
 
+initial_entry_inspect_profile() {
+  local window="$1"
+  if [[ "$window" == "$TIKPAL_INITIAL_ENTRY_TARGET_WINDOW" &&
+        -n "$TIKPAL_INITIAL_ENTRY_PROVIDER" ]]; then
+    printf '%s\n' "$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/$TIKPAL_INITIAL_ENTRY_PROVIDER"
+  elif [[ "$window" == "$TIKPAL_INITIAL_ENTRY_PANEL_WINDOW" ]]; then
+    printf '%s\n' "$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"
+  elif [[ "$window" == "$TIKPAL_INITIAL_ENTRY_KIOSK_WINDOW" ]]; then
+    printf '%s\n' "$TIKPAL_CHROMIUM_PROFILE_DIR"
+  else
+    return 1
+  fi
+}
+
+initial_entry_inspect_surfaces() {
+  local xids="$1" xid profile response generation=0 index=0 status
+  local -a arguments=(client inspect)
+  [[ -x "$TIKPAL_WEB_MODE_X11_HELPER_BINARY" &&
+     -S "$TIKPAL_WEB_MODE_X11_HELPER_SOCKET" ]] || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+  [[ "$TIKPAL_WEB_MODE_X11_PROCESS_GENERATION" =~ ^[1-9][0-9]*$ ]] &&
+    generation="$TIKPAL_WEB_MODE_X11_PROCESS_GENERATION"
+  arguments+=(--request-id "initial-entry-inspect-$(x11_helper_new_id)" --generation "$generation")
+  while IFS= read -r xid; do
+    [[ "$xid" =~ ^[1-9][0-9]*$ ]] || continue
+    profile="$(initial_entry_inspect_profile "$xid")" || return 1
+    arguments+=(--surface "initial_$index" "$xid" "$profile")
+    index=$((index + 1))
+  done < <(tr ',' '\n' <<< "$xids")
+  (( index > 0 )) || return 1
+  if response="$(
+    TIKPAL_X11_HELPER_CALLER_ROLE=initial_entry_inspect \
+    TIKPAL_WEB_MODE_X11_HELPER_SOCKET="$TIKPAL_WEB_MODE_X11_HELPER_SOCKET" \
+    TIKPAL_WEB_MODE_X11_HELPER_CONNECT_TIMEOUT_MS=50 \
+    TIKPAL_WEB_MODE_X11_HELPER_RESPONSE_TIMEOUT_MS=450 \
+      "$TIKPAL_WEB_MODE_X11_HELPER_BINARY" "${arguments[@]}"
+  )"; then
+    status=0
+  else
+    status=$?
+  fi
+  [[ "$status" == "0" ]] || return "$status"
+  jq -e --arg xids "$xids" '
+    (.operation == "inspect" and .readOnly == true and .ok == true) as $header |
+    ([ $xids | split(",")[] | tonumber ] | sort) as $expected |
+    ([.surfaces[] | select(.ok == true and .profileMatched == true) | .xid] | sort) as $actual |
+    $header and $actual == $expected
+  ' <<< "$response" >/dev/null || return 1
+  printf '%s\n' "$response"
+}
+
+initial_entry_snapshot_from_inspect() {
+  jq -r '
+    [.surfaces[] |
+      "\(.xid):geometry=\(.geometry.x),\(.geometry.y)_\(.geometry.width)x\(.geometry.height),map=\(.mapState),opacity=\(if .opacity.present then (.opacity.value | tostring) else \"unset\" end)"
+    ] | join(";")
+  '
+}
+
+initial_entry_inspected_surface_state() {
+  local response="$1" window="$2"
+  jq -r --argjson window "$window" '
+    .surfaces[] | select(.xid == $window) |
+    [
+      .mapState,
+      "\(.geometry.x),\(.geometry.y)_\(.geometry.width)x\(.geometry.height)",
+      (if .opacity.present then (.opacity.value | tostring) else "unset" end)
+    ] | @tsv
+  ' <<< "$response"
+}
+
+initial_entry_expected_geometry() {
+  local position="$1" size="$2" normalized_size
+  normalized_size="$(normalize_window_size "$size")" || return 1
+  printf '%s_%s\n' "$position" "${normalized_size/,/x}"
+}
+
 initial_entry_window_snapshot() {
-  local xid geometry map_state opacity result="" separator=""
+  local xid geometry map_state opacity result="" separator="" inspect_response
+  if inspect_response="$(initial_entry_inspect_surfaces "$1")"; then
+    initial_entry_snapshot_from_inspect <<< "$inspect_response"
+    return 0
+  fi
   local -a xids=()
   IFS=',' read -r -a xids <<< "${1:-}"
   for xid in "${xids[@]:-}"; do
@@ -3801,16 +3883,15 @@ close_web_mode_full() {
   write_runtime_provider_state ""
   if is_enabled "${TIKPAL_WEB_MODE_STARTUP_RESET:-0}"; then
     rm -f "$(pool_warm_stamp_file)"
+  else
+    schedule_provider_pool_refill_after_close
   fi
-  # Keep the warm marker for ordinary close/reopen cycles. A physical kiosk
-  # startup has just terminated every provider, so it must rebuild the pool.
+  # The kiosk launcher starts boot prewarm after its own Chromium window is
+  # stable. A startup reset runs before that point, so it must not create a
+  # second warm-pool worker against the same provider profiles.
   sync_runtime_provider_pool_process_statuses ""
   # Clean stale launch lock files from previous boot.
   rm -f "$TIKPAL_WEB_MODE_PROFILE_ROOT"/provider-*.launch.lock 2>/dev/null || true
-  # Trigger pool warmup so providers are resident before the first Explore open.
-  # Without this, a fresh boot leaves the pool cold and every open is a slow
-  # cold start that hangs on network probes.
-  schedule_provider_pool_refill_after_close
 }
 
 close_web_mode_warm() {
@@ -5630,6 +5711,14 @@ run_window_guard() {
         guard_close_web_mode
         return 0
       fi
+      # A foreground resident switch has already captured the current Guard
+      # window list.  Keep this one process alive, but do not let an in-flight
+      # tick raise the old provider between the switch marker and the atomic
+      # registry handoff to the newly visible provider.
+      if provider_switch_in_progress; then
+        sleep 0.05
+        continue
+      fi
       active_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/$active_provider"
       if ! guard_run_tick "$active_profile" "$panel_profile"; then
         {
@@ -6065,7 +6154,7 @@ prepare_entry_surfaces() {
   # immediately, making it visible during the audio gate and CDP wait.
   [[ -z "$(read_runtime_active_provider)" ]] || return 0
   hide_onboard
-  ensure_side_panel "$provider" 0 || true
+  initial_entry_prepare_side_panel "$provider" 0 || true
 }
 
 park_prepared_entry_surfaces() {
@@ -6160,20 +6249,95 @@ initial_entry_resolve_surfaces() {
 }
 
 initial_entry_reassert_foreground() {
-  local target_window="$1" panel_window="$2"
-  initial_entry_ensure_mapped "$panel_window" || return $?
-  initial_entry_set_geometry "$panel_window" "$TIKPAL_WEB_MODE_PANEL_POSITION" "$TIKPAL_WEB_MODE_PANEL_WINDOW" || return $?
-  initial_entry_restore_opacity "$panel_window" || return $?
-  initial_entry_raise_window "$panel_window" || return $?
-  initial_entry_ensure_mapped "$target_window" || return $?
-  initial_entry_set_geometry "$target_window" "$TIKPAL_WEB_MODE_LEFT_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW" || return $?
-  initial_entry_restore_opacity "$target_window" || return $?
-  initial_entry_raise_window "$target_window"
+  local target_window="$1" panel_window="$2" inspect_response
+  if inspect_response="$(initial_entry_inspect_surfaces "$target_window,$panel_window")"; then
+    printf 'inspect=helper\n'
+    initial_entry_reassert_surface_from_inspect "$inspect_response" "$panel_window" \
+      "$TIKPAL_WEB_MODE_PANEL_POSITION" "$TIKPAL_WEB_MODE_PANEL_WINDOW" || return $?
+    initial_entry_reassert_surface_from_inspect "$inspect_response" "$target_window" \
+      "$TIKPAL_WEB_MODE_LEFT_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
+    return
+  fi
+  initial_entry_reassert_surface "$panel_window" \
+    "$TIKPAL_WEB_MODE_PANEL_POSITION" "$TIKPAL_WEB_MODE_PANEL_WINDOW" || return $?
+  initial_entry_reassert_surface "$target_window" \
+    "$TIKPAL_WEB_MODE_LEFT_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
+}
+
+initial_entry_reassert_surface_from_inspect() {
+  local response="$1" window="$2" position="$3" size="$4"
+  local expected_geometry map_state geometry opacity mutated=0 corrections=""
+  expected_geometry="$(initial_entry_expected_geometry "$position" "$size")" || return 1
+  IFS=$'\t' read -r map_state geometry opacity < <(
+    initial_entry_inspected_surface_state "$response" "$window"
+  )
+  [[ -n "$map_state" && -n "$geometry" && -n "$opacity" ]] || return 1
+  if [[ "$map_state" != "viewable" ]]; then
+    initial_entry_ensure_mapped "$window" || return $?
+    mutated=1
+    corrections="${corrections:+$corrections,}map"
+  fi
+  if [[ "$geometry" != "$expected_geometry" ]]; then
+    initial_entry_set_geometry "$window" "$position" "$size" || return $?
+    mutated=1
+    corrections="${corrections:+$corrections,}geometry"
+  fi
+  if ! window_opacity_is_full "$opacity"; then
+    initial_entry_restore_opacity "$window" || return $?
+    mutated=1
+    corrections="${corrections:+$corrections,}opacity"
+  fi
+
+  # Step 9 has already raised the target and step 10 has lowered kiosk.  A
+  # second synchronous raise is only needed after correcting a drift seen in
+  # this reassert snapshot; otherwise it can block physical reveal on X11.
+  if ((mutated)); then
+    initial_entry_raise_window "$window" || return $?
+  fi
+  printf 'xid=%s map=%s geometry=%s opacity=%s corrections=%s\n' \
+    "$window" "$map_state" "$geometry" "$opacity" "${corrections:-none}"
+  return 0
+}
+
+initial_entry_reassert_surface() {
+  local window="$1" position="$2" size="$3" expected_geometry geometry opacity
+  expected_geometry="$(initial_entry_expected_geometry "$position" "$size")" || return 1
+
+  # The first nine steps already establish map state, geometry, and opacity.
+  # Repeating synchronous map/resize requests here can stall an otherwise
+  # visible initial entry. Reassert only a surface that drifted while the short
+  # paint settle elapsed; the following strict snapshot remains the gate.
+  [[ "$(initial_entry_window_map_state "$window")" == "viewable" ]] ||
+    initial_entry_ensure_mapped "$window" || return $?
+  geometry="$(window_geometry_compact "$window")" || return $?
+  [[ "$geometry" == "$expected_geometry" ]] ||
+    initial_entry_set_geometry "$window" "$position" "$size" || return $?
+  opacity="$(window_opacity_value "$window")" || return $?
+  window_opacity_is_full "$opacity" || initial_entry_restore_opacity "$window" || return $?
+  initial_entry_raise_window "$window"
 }
 
 initial_entry_verify_final_surfaces() {
   local target_window="$1" panel_window="$2"
   local target_geometry panel_geometry target_map panel_map target_opacity panel_opacity
+  local inspect_response
+  if inspect_response="$(initial_entry_inspect_surfaces "$target_window,$panel_window")"; then
+    IFS=$'\t' read -r target_map target_geometry target_opacity < <(
+      initial_entry_inspected_surface_state "$inspect_response" "$target_window"
+    )
+    IFS=$'\t' read -r panel_map panel_geometry panel_opacity < <(
+      initial_entry_inspected_surface_state "$inspect_response" "$panel_window"
+    )
+    [[ -n "$target_geometry" && -n "$panel_geometry" ]] || return 1
+    printf 'target=%s/%s/%s panel=%s/%s/%s inspect=helper\n' \
+      "$target_geometry" "$target_map" "$target_opacity" \
+      "$panel_geometry" "$panel_map" "$panel_opacity"
+    [[ "$target_geometry" == "${TIKPAL_WEB_MODE_LEFT_POSITION}_${TIKPAL_WEB_MODE_LEFT_WINDOW}" &&
+       "$panel_geometry" == "${TIKPAL_WEB_MODE_PANEL_POSITION}_${TIKPAL_WEB_MODE_PANEL_WINDOW}" &&
+       "$target_map" == "viewable" && "$panel_map" == "viewable" ]] || return 1
+    window_opacity_is_full "$target_opacity" && window_opacity_is_full "$panel_opacity"
+    return
+  fi
   target_geometry="$(window_geometry_compact "$target_window")" || return 1
   panel_geometry="$(window_geometry_compact "$panel_window")" || return 1
   target_map="$(initial_entry_window_map_state "$target_window")" || return 1
@@ -6242,6 +6406,7 @@ initial_entry_prepare_context() {
   local provider="$1" phase="$2" target_window="${3:-}" context_key
   context_key="$provider:$phase:${TIKPAL_WEB_MODE_OPEN_REQUEST_ID:-legacy}"
   if [[ "$TIKPAL_INITIAL_ENTRY_TRACE_CONTEXT_KEY" == "$context_key" ]]; then
+    TIKPAL_INITIAL_ENTRY_PROVIDER="$provider"
     [[ -n "$target_window" ]] && TIKPAL_INITIAL_ENTRY_TARGET_WINDOW="$target_window"
     return 0
   fi
@@ -6252,6 +6417,7 @@ initial_entry_prepare_context() {
   TIKPAL_INITIAL_ENTRY_PANEL_WINDOW=""
   TIKPAL_INITIAL_ENTRY_KIOSK_WINDOW=""
   TIKPAL_INITIAL_ENTRY_TARGET_WINDOW="$target_window"
+  TIKPAL_INITIAL_ENTRY_PROVIDER="$provider"
   TIKPAL_INITIAL_ENTRY_PROXY_LINE=""
   TIKPAL_INITIAL_ENTRY_PROXY_ENABLED=""
   TIKPAL_INITIAL_ENTRY_TRACE_CONTEXT_KEY="$context_key"
@@ -6302,12 +6468,46 @@ initial_entry_proxy_is_available() {
 }
 
 initial_entry_prepare_side_panel() {
+  local opening_provider="${1:-}" hidden="${2:-0}"
+  local panel_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"
+  local panel_window inspect_response map_state geometry opacity expected_geometry
+  expected_geometry="$(initial_entry_expected_geometry "$TIKPAL_WEB_MODE_PANEL_POSITION" "$TIKPAL_WEB_MODE_PANEL_WINDOW")" || return 1
+
+  # prepare-entry has already created the panel in parallel with the audio
+  # gate. Reusing its cached XID through the native Helper avoids clearing the
+  # cache and scanning every Chromium process a second time. A failed identity
+  # check deliberately falls through to the established full recovery path.
+  panel_window="$(read_profile_window_cache_raw "$panel_profile" || true)"
+  if [[ "$panel_window" =~ ^[1-9][0-9]*$ ]]; then
+    TIKPAL_INITIAL_ENTRY_PANEL_WINDOW="$panel_window"
+    if inspect_response="$(initial_entry_inspect_surfaces "$panel_window")"; then
+      IFS=$'\t' read -r map_state geometry opacity < <(
+        initial_entry_inspected_surface_state "$inspect_response" "$panel_window"
+      )
+      if [[ -n "$map_state" && -n "$geometry" && -n "$opacity" ]]; then
+        if [[ "$map_state" != "viewable" ]]; then
+          initial_entry_ensure_mapped "$panel_window" || return $?
+        fi
+        if [[ "$geometry" != "$expected_geometry" ]]; then
+          initial_entry_set_geometry "$panel_window" "$TIKPAL_WEB_MODE_PANEL_POSITION" \
+            "$TIKPAL_WEB_MODE_PANEL_WINDOW" || return $?
+        fi
+        if ! window_opacity_is_full "$opacity"; then
+          initial_entry_restore_opacity "$panel_window" || return $?
+        fi
+        printf 'reuse=helper xid=%s map=%s geometry=%s opacity=%s\n' \
+          "$panel_window" "$map_state" "$geometry" "$opacity"
+        return 0
+      fi
+    fi
+  fi
+
   # The legacy panel helper may still call exit under its inherited set -e
   # context. Keep that exit inside a child so the step wrapper records it and
   # can restore the staged surfaces before returning the original failure.
   (
     set +e
-    ensure_side_panel "$@"
+    ensure_side_panel "$opening_provider" "$hidden"
   )
 }
 
@@ -7327,10 +7527,9 @@ open_provider_pool() {
     fi
     initial_entry_prepare_context "$provider" "$initial_entry_phase" "$target_window" || return $?
   fi
-  # A foreground choice owns the pool from this point. Stop both idle and
-  # active background queues before a hot reveal as well as a cold launch.
-  # Stop the old X11 guard first: it otherwise keeps raising the old provider
-  # while terminating a prewarm worker, which exposes its black first frame.
+  # A foreground choice owns the pool from this point.  The switch marker
+  # pauses the existing Guard before a hot reveal, so it cannot raise the old
+  # provider while the foreground transaction owns both resident surfaces.
   if [[ "$switching_provider" == "1" ]]; then
     if switch_trace_enabled; then
       switch_trace_now_ms trace_started_ms
@@ -7358,9 +7557,10 @@ open_provider_pool() {
         target_window="$(first_window_for_profile "$provider_profile" "$segment_timing_once" target || true)"
         [[ -n "$target_window" && "$resident_page_ready" == "1" ]] && fast_resident=1 || fast_resident=0
       fi
-      [[ "$segment_timing_once" != "1" ]] || segment_started_ms="$(now_ms)"
-      stop_window_guard
-      [[ "$segment_timing_once" != "1" ]] || guard_stop_ms="$(( $(now_ms) - segment_started_ms ))"
+      # Reuse the one live Guard after commit.  Its switch-marker pause is
+      # sufficient to prevent foreground interference and avoids a synchronous
+      # SIGTERM/wait/relaunch cycle on the physical reveal path.
+      guard_stop_ms=0
       if [[ -z "$previous_window" ]]; then
         previous_window="$(first_window_for_profile "$current_profile" "$segment_timing_once" previous || true)"
       fi
@@ -7459,7 +7659,9 @@ open_provider_pool() {
     fi
   fi
   if [[ "$fast_resident" == "1" && "$entry_stage" != "1" ]]; then
-    [[ "$helper_candidate" == "1" ]] || stop_window_guard
+    if [[ "$helper_candidate" != "1" && "$switching_provider" != "1" ]]; then
+      stop_window_guard
+    fi
     if ! runtime_open_request_is_current_or_log hot-reveal-start; then
       clear_provider_switch_guard
       log "open abandoned before resident reveal: $provider"
@@ -7473,7 +7675,6 @@ open_provider_pool() {
       reveal_ms="$(( $(now_ms) - started_ms ))"
       log_stage "reveal_ms=$reveal_ms provider=$provider resident=1"
       log_open_stage surface_plan_end "provider=$provider result=revealed target_window=$target_window reveal_ms=$reveal_ms"
-      clear_provider_switch_guard
       if ! runtime_open_request_is_current_or_log hot-commit-start; then
         if [[ "$TIKPAL_X11_HELPER_ACTIVE" == "1" ]]; then
           x11_helper_finish_success || fail "X11 helper ownership could not be released after an abandoned switch"
@@ -7493,6 +7694,9 @@ open_provider_pool() {
       else
         start_window_guard "$provider_profile" "$panel_profile" "$target_window" "$panel_window"
       fi
+      # The active-provider state and Guard registry now name the new surface;
+      # only now may the retained Guard resume its inspect/plan/apply loop.
+      clear_provider_switch_guard
       reconcile_provider_pool_in_background "$provider"
       command_return_ms="$(( $(now_ms) - started_ms ))"
       log_stage "command_return_ms=$command_return_ms provider=$provider resident=1"

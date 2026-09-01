@@ -1081,6 +1081,9 @@ audio_output {
   const windowIdentityCachePath = path.join(reconcileSmokeDir, "dead-window.id");
   const switchTimingOncePath = path.join(reconcileSmokeDir, "switch-segment-timing.once");
   const panelMutationPath = path.join(reconcileSmokeDir, "panel-mutations.log");
+  const guardPauseCallsPath = path.join(reconcileSmokeDir, "guard-pause-calls");
+  const guardTickPath = path.join(reconcileSmokeDir, "guard-ticks.log");
+  const guardActiveReadsPath = path.join(reconcileSmokeDir, "guard-active-reads");
   const windowIdentitySmoke = spawnSync("bash", ["-s"], {
     cwd: ROOT,
     input: `${webModeFunctions}
@@ -1123,6 +1126,31 @@ window_opacity_is_full 4294967295
 window_opacity_is_full 0xffffffff
 if window_opacity_is_full 0; then exit 14; fi
 if window_opacity_is_full unreadable; then exit 15; fi
+: > "$TIKPAL_SMOKE_GUARD_TICKS"
+printf '0\n' > "$TIKPAL_SMOKE_GUARD_PAUSE_CALLS"
+printf '0\n' > "$TIKPAL_SMOKE_GUARD_ACTIVE_READS"
+TIKPAL_WEB_MODE_PROVIDER_POOL=1
+x11_trace_control_event() { :; }
+sleep() { command sleep 0.005; }
+provider_switch_in_progress() {
+  local calls
+  calls="$(cat "$TIKPAL_SMOKE_GUARD_PAUSE_CALLS")"
+  calls=$((calls + 1))
+  printf '%s\n' "$calls" > "$TIKPAL_SMOKE_GUARD_PAUSE_CALLS"
+  [[ "$calls" -le 2 ]]
+}
+read_runtime_active_provider() {
+  local reads
+  reads="$(cat "$TIKPAL_SMOKE_GUARD_ACTIVE_READS")"
+  reads=$((reads + 1))
+  printf '%s\n' "$reads" > "$TIKPAL_SMOKE_GUARD_ACTIVE_READS"
+  [[ "$reads" -le 2 ]] && printf 'spotify\n'
+  return 0
+}
+guard_run_tick() { printf 'tick\n' >> "$TIKPAL_SMOKE_GUARD_TICKS"; }
+run_window_guard /profiles/spotify /profiles/side-panel
+[[ "$(cat "$TIKPAL_SMOKE_GUARD_PAUSE_CALLS")" == 2 ]]
+[[ ! -s "$TIKPAL_SMOKE_GUARD_TICKS" ]]
 `,
     encoding: "utf8",
     env: {
@@ -1130,7 +1158,12 @@ if window_opacity_is_full unreadable; then exit 15; fi
       TIKPAL_KIOSK_SKIP_ENV_SOURCE: "1",
       TIKPAL_SMOKE_WINDOW_CACHE: windowIdentityCachePath,
       TIKPAL_WEB_MODE_SWITCH_SEGMENT_TIMING_ONCE_PATH: switchTimingOncePath,
-      TIKPAL_SMOKE_PANEL_MUTATIONS: panelMutationPath
+      TIKPAL_SMOKE_PANEL_MUTATIONS: panelMutationPath,
+      TIKPAL_SMOKE_GUARD_PAUSE_CALLS: guardPauseCallsPath,
+      TIKPAL_SMOKE_GUARD_TICKS: guardTickPath,
+      TIKPAL_SMOKE_GUARD_ACTIVE_READS: guardActiveReadsPath,
+      TIKPAL_WEB_MODE_PROFILE_ROOT: path.join(reconcileSmokeDir, "guard-pause-profiles"),
+      TIKPAL_WEB_MODE_X11_MUTATION_TRACE_PATH: ""
     }
   });
   assert(
@@ -1916,6 +1949,13 @@ sync_runtime_provider_pool_process_statuses ""
     "kiosk session should atomically publish an independent X-session generation before any X command"
   );
   assert(
+    webModeScript.includes('if is_enabled "${TIKPAL_WEB_MODE_STARTUP_RESET:-0}"; then')
+      && webModeScript.includes(`else
+    schedule_provider_pool_refill_after_close
+  fi`),
+    "startup reset should defer provider prewarm to the stabilized kiosk launcher, preventing duplicate pool workers"
+  );
+  assert(
     kioskLauncher.includes("TIKPAL_WEB_MODE_BOOT_PREWARM_ENABLED:=1") &&
       kioskLauncher.includes("TIKPAL_WEB_MODE_BOOT_PREWARM_READY_TIMEOUT_SECONDS:=30") &&
       kioskLauncher.includes("kiosk_profile_has_visible_window()") &&
@@ -2688,6 +2728,16 @@ sync_runtime_provider_pool_process_statuses ""
     "Explore initial entry should fail trace preflight before X11 mutation and stamp only after final surface verification"
   );
   assert(
+    webModeScript.includes("initial_entry_inspect_surfaces()")
+      && webModeScript.includes('TIKPAL_WEB_MODE_X11_HELPER_RESPONSE_TIMEOUT_MS=450')
+      && webModeScript.includes('.readOnly == true')
+      && webModeScript.includes("initial_entry_reassert_surface_from_inspect")
+      && webModeScript.includes("read_profile_window_cache_raw \"$panel_profile\"")
+      && webModeScript.includes("initial_entry_expected_geometry()")
+      && webModeScript.includes('if ((mutated)); then'),
+    "Explore initial entry should use the bounded read-only Helper inspect before falling back to legacy X11 probes"
+  );
+  assert(
     initialEntryFixture.includes("Xvfb")
       && initialEntryFixture.includes("destroy_after_validation")
       && initialEntryFixture.includes("trace_loss")
@@ -3056,7 +3106,9 @@ sync_runtime_provider_pool_process_statuses ""
     "provider switches should keep the existing side panel opaque, in its right-column geometry, and never park or restart it"
   );
   assert(
-    openProviderPoolBody.indexOf('stop_window_guard') < openProviderPoolBody.indexOf('keep_side_panel_visible_during_switch "$provider"')
+    runWindowGuardBody.indexOf('if provider_switch_in_progress; then') >= 0
+      && runWindowGuardBody.indexOf('if provider_switch_in_progress; then') < runWindowGuardBody.indexOf('guard_run_tick')
+      && openProviderPoolBody.indexOf('guard_stop_ms=0') < openProviderPoolBody.indexOf('keep_side_panel_visible_during_switch "$provider"')
       && openProviderPoolBody.includes('previous_window="$(read_guard_window provider "$current_profile" || true)"')
       && openProviderPoolBody.includes('read_guard_window panel "$panel_profile"')
       && [...openProviderPoolBody.matchAll(/keep_side_panel_visible_during_switch "\$provider"/g)].length === 1
@@ -3095,8 +3147,9 @@ sync_runtime_provider_pool_process_statuses ""
       openProviderPoolBody.includes("begin_provider_switch_guard") &&
       openProviderPoolBody.indexOf("begin_provider_switch_guard") < openProviderPoolBody.indexOf("stop_provider_pool_prewarm") &&
       openProviderPoolBody.indexOf('begin_provider_switch_transition "$current_profile" "$provider"') < openProviderPoolBody.indexOf("stop_provider_pool_prewarm") &&
-      openProviderPoolBody.indexOf("stop_window_guard") < openProviderPoolBody.indexOf("stop_provider_pool_prewarm"),
-    "Explore should cover the old provider before cancelling prewarm, so neither the old guard nor a slow worker exposes its page"
+      openProviderPoolBody.indexOf("guard_stop_ms=0") < openProviderPoolBody.indexOf("stop_provider_pool_prewarm") &&
+      runWindowGuardBody.includes("if provider_switch_in_progress; then"),
+    "Explore should pause the old Guard before cancelling prewarm, so neither it nor a slow worker exposes the old page"
   );
   assert(
     !openProviderBody.includes('if [[ "$switching_provider" == "1" ]] || ! provider_uses_direct_bootstrap "$provider"; then') &&

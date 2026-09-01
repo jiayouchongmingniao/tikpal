@@ -530,7 +530,7 @@ click_open_explore() {
   # The physical source card is in the HUD's top row. Its transparent gesture
   # layer can make elementFromPoint unreliable on this compositor, so click
   # the measured center of the actual Explore card rather than an API action.
-  xdotool mousemove --sync 2415 127 click 1
+  xdotool mousemove --sync 1838 160 click 1
 }
 
 provider_index() {
