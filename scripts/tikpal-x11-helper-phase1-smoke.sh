@@ -66,11 +66,14 @@ command -v pkg-config >/dev/null 2>&1 || fail_fixture "pkg-config is required"
 command -v jq >/dev/null 2>&1 || fail_fixture "jq is required"
 command -v Xvfb >/dev/null 2>&1 || fail_fixture "Xvfb is required"
 pkg-config --exists xcb json-c || fail_fixture "xcb and json-c development packages are required"
-grep -Fq 'xcb_poll_for_queued_event' "$ROOT_DIR/deploy/chromium/tikpal-x11-helper.c" ||
+collector_source="$(sed -n '/^static void drain_queued_events(/,/^}/p' "$ROOT_DIR/deploy/chromium/tikpal-x11-helper.c")"
+grep -Fq 'xcb_poll_for_queued_event' <<< "$collector_source" ||
   fail_fixture "Helper must drain queued XCB events without reading the connection"
-if grep -Fq 'xcb_poll_for_event(' "$ROOT_DIR/deploy/chromium/tikpal-x11-helper.c"; then
-  fail_fixture "Helper event draining must not consume socket replies"
+if grep -Fq 'xcb_poll_for_event(' <<< "$collector_source"; then
+  fail_fixture "Helper reply collector must not consume socket replies"
 fi
+grep -Fq 'xcb_poll_for_event(' "$ROOT_DIR/deploy/chromium/tikpal-x11-helper.c" ||
+  fail_fixture "Phase 3 watch must read daemon-loop XCB events"
 
 cc -std=c11 -Wall -Wextra -Werror -DTIKPAL_X11_HELPER_LOCAL_FIXTURE \
   $(pkg-config --cflags xcb json-c) \
@@ -121,6 +124,9 @@ DISPLAY="$DISPLAY_VALUE" "$X11_HELPER_TEST" self-test \
   --display "$DISPLAY_VALUE"
 DISPLAY="$DISPLAY_VALUE" "$X11_HELPER_TEST" self-test \
   --x11-collector \
+  --display "$DISPLAY_VALUE"
+DISPLAY="$DISPLAY_VALUE" "$X11_HELPER_TEST" self-test \
+  --x11-watch \
   --display "$DISPLAY_VALUE"
 
 PHASE0_SOCKET="$FIXTURE_DIR/phase0-helper.sock"

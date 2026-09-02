@@ -104,6 +104,8 @@ fi
 : "${TIKPAL_WEB_MODE_X11_HELPER_INSPECT_RESPONSE_TIMEOUT_MS:=700}"
 : "${TIKPAL_WEB_MODE_X11_HELPER_GENERATION_PATH:=$TIKPAL_WEB_MODE_PROFILE_ROOT/x11-helper-generation}"
 : "${TIKPAL_WEB_MODE_X11_HELPER_OWNER_PATH:=$TIKPAL_WEB_MODE_PROFILE_ROOT/x11-helper-owner.json}"
+: "${TIKPAL_WEB_MODE_X11_HELPER_WATCH_DOWNSHIFT:=0}"
+: "${TIKPAL_WEB_MODE_X11_HELPER_WATCH_INTERVAL_SECONDS:=2}"
 : "${TIKPAL_WEB_MODE_GUARD_WINDOW_LIST_PATH:=$TIKPAL_WEB_MODE_PROFILE_ROOT/guard-windows.tsv}"
 : "${TIKPAL_WEB_MODE_X11_HELPER_LEASE_MS:=350}"
 : "${TIKPAL_WEB_MODE_GUARD_POST_SWITCH_GRACE_SECONDS:=2}"
@@ -401,7 +403,7 @@ initial_entry_inspect_surfaces() {
 initial_entry_snapshot_from_inspect() {
   jq -r '
     [.surfaces[] |
-      "\(.xid):geometry=\(.geometry.x),\(.geometry.y)_\(.geometry.width)x\(.geometry.height),map=\(.mapState),opacity=\(if .opacity.present then (.opacity.value | tostring) else \"unset\" end)"
+      "\(.xid):geometry=\(.geometry.x),\(.geometry.y)_\(.geometry.width)x\(.geometry.height),map=\(.mapState),opacity=\(if .opacity.present then (.opacity.value | tostring) else "unset" end)"
     ] | join(";")
   '
 }
@@ -536,7 +538,7 @@ x11_trace_read_active_provider() {
 
 x11_trace_read_registry_generation() {
   local kind value _rest list_path
-  list_path="$TIKPAL_WEB_MODE_PROFILE_ROOT/guard-windows.tsv"
+  list_path="${TIKPAL_WEB_MODE_GUARD_WINDOW_LIST_PATH:-$TIKPAL_WEB_MODE_PROFILE_ROOT/guard-windows.tsv}"
   [[ -r "$list_path" ]] || return 0
   while IFS=$'\t' read -r kind value _rest; do
     if [[ "$kind" == "generation" ]]; then
@@ -970,6 +972,55 @@ x11_helper_switch_enabled() {
      "$TIKPAL_WEB_MODE_X11_HELPER_MODE" == "auto" ]]
 }
 
+x11_helper_watch_downshift_enabled() {
+  is_enabled "$TIKPAL_WEB_MODE_X11_HELPER_WATCH_DOWNSHIFT" || return 1
+  [[ "$TIKPAL_WEB_MODE_X11_HELPER_MODE" == "watch" ||
+     "$TIKPAL_WEB_MODE_X11_HELPER_MODE" == "auto" ]]
+}
+
+x11_helper_watch_interval_seconds() {
+  if [[ "$TIKPAL_WEB_MODE_X11_HELPER_WATCH_INTERVAL_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
+    printf '%s\n' "$TIKPAL_WEB_MODE_X11_HELPER_WATCH_INTERVAL_SECONDS"
+  else
+    printf '2\n'
+  fi
+}
+
+# Phase 3D's only steady-state shortcut. The Guard accepts a downshift only
+# for a live Phase-3C full-provider lease which names the same active and
+# panel XIDs as the registry. It deliberately does not create, renew, or
+# revoke leases: those lifecycle transitions remain under the foreground
+# owner and a failed check falls through to the existing Shell recovery tick.
+x11_helper_watch_lease_healthy() {
+  local provider_profile="$1"
+  local panel_profile="$2"
+  local provider_window panel_window health
+  x11_helper_watch_downshift_enabled || return 1
+  [[ -x "$TIKPAL_WEB_MODE_X11_HELPER_BINARY" && -S "$TIKPAL_WEB_MODE_X11_HELPER_SOCKET" ]] || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+  provider_window="$(read_guard_window provider "$provider_profile" || true)"
+  panel_window="$(read_guard_window panel "$panel_profile" || true)"
+  [[ "$provider_window" =~ ^[1-9][0-9]*$ && "$panel_window" =~ ^[1-9][0-9]*$ ]] || return 1
+  health="$(
+    TIKPAL_X11_HELPER_CALLER_ROLE=window_guard \
+    TIKPAL_WEB_MODE_X11_HELPER_SOCKET="$TIKPAL_WEB_MODE_X11_HELPER_SOCKET" \
+    TIKPAL_WEB_MODE_X11_HELPER_CONNECT_TIMEOUT_MS="$TIKPAL_WEB_MODE_X11_HELPER_CONNECT_TIMEOUT_MS" \
+    TIKPAL_WEB_MODE_X11_HELPER_RESPONSE_TIMEOUT_MS="$TIKPAL_WEB_MODE_X11_HELPER_RESPONSE_TIMEOUT_MS" \
+      "$TIKPAL_WEB_MODE_X11_HELPER_BINARY" client health \
+        --request-id "guard-watch-$(x11_helper_new_id)"
+  )" || return 1
+  jq -e --argjson provider "$provider_window" --argjson panel "$panel_window" '
+    .ok == true and .phase == 3 and .watchValid == true and
+    .watchRepairScope == "provider" and .watchRepairPending == false and
+    .leaseReleased == false and .inFlight == false and
+    (.connectionEpoch | type == "number" and . > 0) and
+    (.watchSurfaces | length == 3) and
+    ([.watchSurfaces[] | select(.role == "active" and .xid == $provider)] | length == 1) and
+    ([.watchSurfaces[] | select(.role == "panel" and .xid == $panel)] | length == 1) and
+    ([.watchSurfaces[] | select(.role == "previous" and (.xid | type == "number") and .xid > 0)] | length == 1)
+  ' <<< "$health" >/dev/null
+}
+
 x11_helper_new_id() {
   local value=""
   if [[ -r /proc/sys/kernel/random/uuid ]]; then
@@ -1386,7 +1437,8 @@ x11_helper_guard_may_write() {
     --generation-file "$TIKPAL_WEB_MODE_X11_HELPER_GENERATION_PATH")
   local xid
   if [[ ! -e "$TIKPAL_WEB_MODE_X11_HELPER_OWNER_PATH" ]]; then
-    [[ "$TIKPAL_WEB_MODE_X11_HELPER_MODE" == "disabled" ]]
+    [[ "$TIKPAL_WEB_MODE_X11_HELPER_MODE" == "disabled" ]] ||
+      x11_helper_watch_downshift_enabled
     return
   fi
   [[ -x "$TIKPAL_WEB_MODE_X11_HELPER_BINARY" ]] || return 1
@@ -6042,6 +6094,14 @@ run_window_guard() {
         continue
       fi
       active_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/$active_provider"
+      if x11_helper_watch_lease_healthy "$active_profile" "$panel_profile"; then
+        provider_profile="$active_profile"
+        fast_ticks_remaining=0
+        x11_trace_control_event guard_tick_completed 0 \
+          "repair_required=false mutation_count=0 outcome=helper_watch_healthy stack=helper_owned"
+        sleep "$(x11_helper_watch_interval_seconds)"
+        continue
+      fi
       if ! guard_run_tick "$active_profile" "$panel_profile"; then
         {
           profile_process_exists "$active_profile" || return 0
@@ -6063,6 +6123,13 @@ run_window_guard() {
   fi
 
   while true; do
+    if x11_helper_watch_lease_healthy "$provider_profile" "$panel_profile"; then
+      fast_ticks_remaining=0
+      x11_trace_control_event guard_tick_completed 0 \
+        "repair_required=false mutation_count=0 outcome=helper_watch_healthy stack=helper_owned"
+      sleep "$(x11_helper_watch_interval_seconds)"
+      continue
+    fi
     if ! guard_run_tick "$provider_profile" "$panel_profile"; then
       {
         profile_process_exists "$provider_profile" || return 0

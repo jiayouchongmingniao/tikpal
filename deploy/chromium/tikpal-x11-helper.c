@@ -38,6 +38,8 @@
 #define DEFAULT_TRANSACTION_TIMEOUT_MS 250
 #define DEFAULT_CONNECT_TIMEOUT_MS 50
 #define DEFAULT_RESPONSE_TIMEOUT_MS 300
+#define DEFAULT_WATCH_LEASE_DURATION_MS 5000
+#define MAX_WATCH_LEASE_DURATION_MS 5000
 #define MIN_INSPECT_TRANSACTION_TIMEOUT_MS 500
 #ifdef TIKPAL_X11_HELPER_SELF_TEST_SEAMS
 #define SELF_TEST_TRANSACTION_TIMEOUT_MS 1000
@@ -56,6 +58,8 @@
 #define MAX_ROLE 32
 #define MAX_CALLER_ROLE 64
 #define MAX_CLASS 256
+#define MAX_WATCH_INVALID_REASON 64
+#define MAX_WATCH_EVENT_HISTORY 64
 #define REQUEST_CACHE_SIZE 32
 /* Every supported local client writes its framed request immediately after
  * connect.  Keep an incomplete peer from monopolising the single-threaded
@@ -73,6 +77,12 @@ typedef enum {
   GENERATION_MALFORMED,
   GENERATION_IO_ERROR,
 } GenerationState;
+
+typedef enum {
+  WATCH_REPAIR_OBSERVE,
+  WATCH_REPAIR_PANEL,
+  WATCH_REPAIR_PROVIDER,
+} WatchRepairScope;
 
 typedef enum {
   PENDING_GEOMETRY,
@@ -187,6 +197,17 @@ typedef struct {
 } CachedRequest;
 
 typedef struct {
+  uint16_t sequence;
+  uint8_t response_type;
+  xcb_window_t xid;
+  xcb_atom_t property;
+  bool root_forwarded;
+  bool would_repair;
+  char role[MAX_ROLE];
+  char type[24];
+} WatchEvent;
+
+typedef struct {
   xcb_connection_t *connection;
   xcb_screen_t *screen;
   xcb_atom_t net_wm_pid;
@@ -197,7 +218,36 @@ typedef struct {
   char generation_path[PATH_MAX];
   uint64_t generation_floor;
   GenerationState generation_state;
+  /* Phase 3A is observation-only.  This state is deliberately separate from
+   * the short switch lease so enabling a watch never changes switch ownership. */
   bool watch_valid;
+  char watch_invalid_reason[MAX_WATCH_INVALID_REASON];
+  char watch_lease_id[80];
+  uint64_t watch_generation;
+  uint64_t watch_epoch;
+  int64_t watch_expires_ns;
+  xcb_window_t watch_surfaces[MAX_SURFACES];
+  char watch_roles[MAX_SURFACES][MAX_ROLE];
+  SurfaceRequest watch_targets[MAX_SURFACES];
+  size_t watch_surface_count;
+  WatchRepairScope watch_repair_scope;
+  bool watch_repair_pending;
+  bool watch_repair_in_flight;
+  uint64_t watch_events_received;
+  uint64_t watch_events_reported;
+  uint64_t watch_events_would_repair;
+  uint64_t watch_events_stale_dropped;
+  uint64_t watch_events_unrelated_dropped;
+  uint64_t watch_events_duplicate_dropped;
+  uint64_t watch_repair_requests;
+  uint64_t watch_repair_mutations;
+  uint64_t watch_repair_failures;
+  WatchEvent watch_event_history[MAX_WATCH_EVENT_HISTORY];
+  size_t watch_event_history_count;
+  size_t next_watch_event_slot;
+  uint64_t watch_requests;
+  uint64_t watch_renew_requests;
+  uint64_t watch_unwatch_requests;
   bool in_flight;
   bool mutation_started;
   bool lease_active;
@@ -429,11 +479,197 @@ static void capture_async_error(AsyncError *target, const xcb_generic_error_t *e
   target->sequence = error->sequence;
 }
 
-static void drain_queued_events(xcb_connection_t *connection, AsyncError *async_error) {
+static const char *watch_repair_scope_name(WatchRepairScope scope) {
+  switch (scope) {
+    case WATCH_REPAIR_OBSERVE: return "observe";
+    case WATCH_REPAIR_PANEL: return "panel";
+    case WATCH_REPAIR_PROVIDER: return "provider";
+  }
+  return "observe";
+}
+
+static bool watch_repair_scope_has_writes(const HelperState *state) {
+  return state->watch_repair_scope != WATCH_REPAIR_OBSERVE;
+}
+
+/* Repairs are dispatched only by the daemon event loop, never while a client
+ * request is collecting replies.  The declaration lives here because event
+ * observation intentionally precedes the bounded query/mutation helpers. */
+static void repair_watched_surfaces(HelperState *state);
+
+static void invalidate_watch(HelperState *state, const char *reason) {
+  state->watch_valid = false;
+  state->watch_repair_pending = false;
+  snprintf(state->watch_invalid_reason, sizeof(state->watch_invalid_reason), "%s",
+           reason && reason[0] ? reason : "WATCH_INVALID");
+}
+
+static void refresh_watch_validity(HelperState *state) {
+  if (!state->watch_valid) return;
+  if (state->watch_epoch != state->connection_epoch) {
+    invalidate_watch(state, "CONNECTION_EPOCH_MISMATCH");
+  } else if (state->generation_state != GENERATION_OK ||
+             state->watch_generation != state->generation_floor) {
+    invalidate_watch(state, "GENERATION_ADVANCED");
+  } else if (monotonic_ns() >= state->watch_expires_ns) {
+    invalidate_watch(state, "LEASE_EXPIRED");
+  }
+}
+
+static int watch_surface_index(const HelperState *state, xcb_window_t xid) {
+  for (size_t index = 0; index < state->watch_surface_count; index++) {
+    if (state->watch_surfaces[index] == xid) return (int)index;
+  }
+  return -1;
+}
+
+static bool watch_property_managed(const HelperState *state, xcb_atom_t property) {
+  return property == state->net_wm_pid || property == XCB_ATOM_WM_CLASS ||
+         property == state->net_wm_opacity;
+}
+
+static const char *watch_event_type_name(uint8_t response_type) {
+  switch (response_type) {
+    case XCB_CONFIGURE_NOTIFY: return "ConfigureNotify";
+    case XCB_MAP_NOTIFY: return "MapNotify";
+    case XCB_UNMAP_NOTIFY: return "UnmapNotify";
+    case XCB_DESTROY_NOTIFY: return "DestroyNotify";
+    case XCB_PROPERTY_NOTIFY: return "PropertyNotify";
+    case XCB_REPARENT_NOTIFY: return "ReparentNotify";
+  }
+  return NULL;
+}
+
+static bool watch_event_already_reported(const HelperState *state, uint16_t sequence,
+                                         uint8_t response_type, xcb_window_t xid,
+                                         xcb_atom_t property) {
+  for (size_t index = 0; index < state->watch_event_history_count; index++) {
+    const WatchEvent *event = &state->watch_event_history[index];
+    if (event->sequence == sequence && event->response_type == response_type &&
+        event->xid == xid && event->property == property) return true;
+  }
+  return false;
+}
+
+static void record_watch_event(HelperState *state, uint16_t sequence, uint8_t response_type,
+                               xcb_window_t xid, xcb_atom_t property, bool root_forwarded,
+                               bool would_repair, const char *role) {
+  WatchEvent *entry;
+  const char *type = watch_event_type_name(response_type);
+  if (!type || watch_event_already_reported(state, sequence, response_type, xid, property)) {
+    state->watch_events_duplicate_dropped++;
+    return;
+  }
+  entry = &state->watch_event_history[
+    state->next_watch_event_slot++ % MAX_WATCH_EVENT_HISTORY];
+  *entry = (WatchEvent){
+    .sequence = sequence,
+    .response_type = response_type,
+    .xid = xid,
+    .property = property,
+    .root_forwarded = root_forwarded,
+    .would_repair = would_repair,
+  };
+  snprintf(entry->role, sizeof(entry->role), "%s", role);
+  snprintf(entry->type, sizeof(entry->type), "%s", type);
+  if (state->watch_event_history_count < MAX_WATCH_EVENT_HISTORY) {
+    state->watch_event_history_count++;
+  }
+  state->watch_events_reported++;
+  if (would_repair) state->watch_events_would_repair++;
+}
+
+static void observe_xcb_event(HelperState *state, const xcb_generic_event_t *event) {
+  uint8_t response_type;
+  xcb_window_t xid = XCB_WINDOW_NONE;
+  xcb_window_t recipient = XCB_WINDOW_NONE;
+  xcb_atom_t property = XCB_ATOM_NONE;
+  bool root_forwarded;
+  int surface_index;
+  if (!event || (event->response_type & 0x7fU) == 0) return;
+  response_type = event->response_type & 0x7fU;
+  if (!watch_event_type_name(response_type)) return;
+  switch (response_type) {
+    case XCB_CONFIGURE_NOTIFY: {
+      const xcb_configure_notify_event_t *value = (const xcb_configure_notify_event_t *)event;
+      xid = value->window;
+      recipient = value->event;
+      break;
+    }
+    case XCB_MAP_NOTIFY: {
+      const xcb_map_notify_event_t *value = (const xcb_map_notify_event_t *)event;
+      xid = value->window;
+      recipient = value->event;
+      break;
+    }
+    case XCB_UNMAP_NOTIFY: {
+      const xcb_unmap_notify_event_t *value = (const xcb_unmap_notify_event_t *)event;
+      xid = value->window;
+      recipient = value->event;
+      break;
+    }
+    case XCB_DESTROY_NOTIFY: {
+      const xcb_destroy_notify_event_t *value = (const xcb_destroy_notify_event_t *)event;
+      xid = value->window;
+      recipient = value->event;
+      break;
+    }
+    case XCB_PROPERTY_NOTIFY: {
+      const xcb_property_notify_event_t *value = (const xcb_property_notify_event_t *)event;
+      xid = value->window;
+      property = value->atom;
+      recipient = xid;
+      break;
+    }
+    case XCB_REPARENT_NOTIFY: {
+      const xcb_reparent_notify_event_t *value = (const xcb_reparent_notify_event_t *)event;
+      xid = value->window;
+      recipient = value->event;
+      break;
+    }
+  }
+  load_generation_floor(state);
+  refresh_watch_validity(state);
+  if (!state->watch_valid) {
+    if (state->watch_lease_id[0]) state->watch_events_stale_dropped++;
+    return;
+  }
+  state->watch_events_received++;
+  surface_index = watch_surface_index(state, xid);
+  if (surface_index < 0 ||
+      (response_type == XCB_PROPERTY_NOTIFY && !watch_property_managed(state, property))) {
+    state->watch_events_unrelated_dropped++;
+    return;
+  }
+  root_forwarded = state->screen && recipient == state->screen->root;
+  record_watch_event(state, event->sequence, response_type, xid, property, root_forwarded, true,
+                     state->watch_roles[surface_index]);
+  if (response_type == XCB_DESTROY_NOTIFY) {
+    invalidate_watch(state, "WATCHED_WINDOW_DESTROYED");
+  } else if (watch_repair_scope_has_writes(state) &&
+             response_type == XCB_PROPERTY_NOTIFY &&
+             (property == state->net_wm_pid || property == XCB_ATOM_WM_CLASS)) {
+    invalidate_watch(state, "WATCHED_WINDOW_IDENTITY_CHANGED");
+  } else if (watch_repair_scope_has_writes(state) && response_type == XCB_UNMAP_NOTIFY &&
+             (state->watch_repair_scope == WATCH_REPAIR_PANEL ||
+              strcmp(state->watch_roles[surface_index], "active") == 0 ||
+              strcmp(state->watch_roles[surface_index], "panel") == 0)) {
+    invalidate_watch(state, "WATCHED_WINDOW_UNMAPPED");
+  } else if (watch_repair_scope_has_writes(state)) {
+    /* Configure, reparent and opacity/map events are coalesced into a single
+     * bounded snapshot.  A failed snapshot revokes this write lease instead
+     * of discovering or touching any unleased window. */
+    state->watch_repair_pending = true;
+  }
+}
+
+static void drain_queued_events(HelperState *state, AsyncError *async_error) {
   xcb_generic_event_t *event;
-  while ((event = xcb_poll_for_queued_event(connection)) != NULL) {
+  while ((event = xcb_poll_for_queued_event(state->connection)) != NULL) {
     if ((event->response_type & 0x7fU) == 0) {
       capture_async_error(async_error, (xcb_generic_error_t *)event);
+    } else {
+      observe_xcb_event(state, event);
     }
     free(event);
   }
@@ -507,7 +743,7 @@ static CollectResult final_reply_scan(HelperState *state, PendingReply *pending,
   diagnostics->final_scan = true;
   completed = scan_pending_replies(state, pending, count, &progressed);
   diagnostics->final_scan_progressed = progressed;
-  drain_queued_events(state->connection, async_error);
+  drain_queued_events(state, async_error);
   if (stop_requested) return finish_collect(state, COLLECT_INTERRUPTED, pending, count, completed);
   if (xcb_connection_has_error(state->connection) != 0) {
     return finish_collect(state, COLLECT_XCB_CONNECTION_ERROR, pending, count, completed);
@@ -531,7 +767,7 @@ static CollectResult collect_replies(HelperState *state, PendingReply *pending, 
     int poll_result;
     if (stop_requested) return finish_collect(state, COLLECT_INTERRUPTED, pending, count, 0);
     completed = scan_pending_replies(state, pending, count, &progressed);
-    drain_queued_events(state->connection, async_error);
+    drain_queued_events(state, async_error);
     if (xcb_connection_has_error(state->connection) != 0) {
       return finish_collect(state, COLLECT_XCB_CONNECTION_ERROR, pending, count, completed);
     }
@@ -567,7 +803,7 @@ static CollectResult collect_replies(HelperState *state, PendingReply *pending, 
     if (descriptor.revents & (POLLERR | POLLHUP | POLLNVAL)) {
       progressed = false;
       completed = scan_pending_replies(state, pending, count, &progressed);
-      drain_queued_events(state->connection, async_error);
+      drain_queued_events(state, async_error);
       if (stop_requested) return finish_collect(state, COLLECT_INTERRUPTED, pending, count, completed);
       if (xcb_connection_has_error(state->connection) != 0) {
         return finish_collect(state, COLLECT_XCB_CONNECTION_ERROR, pending, count, completed);
@@ -599,7 +835,7 @@ static CollectResult collect_single_reply(HelperState *state, uint32_t sequence,
       *error_output = error;
       return error ? SURFACE_QUERY_FAILED : COLLECT_OK;
     }
-    drain_queued_events(state->connection, &async_error);
+    drain_queued_events(state, &async_error);
     if (async_error.seen || xcb_connection_has_error(state->connection) != 0) {
       return COLLECT_XCB_CONNECTION_ERROR;
     }
@@ -671,6 +907,8 @@ static int connect_xcb(HelperState *state, bool reconnecting, int64_t deadline_n
   }
   state->connection_epoch++;
   state->watch_valid = false;
+  snprintf(state->watch_invalid_reason, sizeof(state->watch_invalid_reason), "%s",
+           reconnecting ? "XCB_RECONNECTED" : "NOT_WATCHING");
   if (reconnecting) state->reconnects++;
   return 0;
 }
@@ -691,6 +929,8 @@ static void reset_xcb_connection(HelperState *state) {
   state->connection = NULL;
   state->screen = NULL;
   state->watch_valid = false;
+  snprintf(state->watch_invalid_reason, sizeof(state->watch_invalid_reason), "%s",
+           "XCB_RECONNECTED");
   release_lease(state);
   state->connection_epoch++;
 }
@@ -1172,28 +1412,38 @@ static json_object *surface_to_json(const SurfaceResult *surface) {
 static json_object *base_response(const HelperState *state, const char *request_id,
                                   const char *operation) {
   json_object *response = json_object_new_object();
+  bool has_active_lease = state->lease_active || state->watch_lease_id[0];
+  const char *active_lease_id = state->lease_active ? state->lease_id : state->watch_lease_id;
+  uint64_t active_generation = state->lease_active
+    ? state->lease_generation : state->watch_lease_id[0]
+      ? state->watch_generation : state->generation_floor;
+  int64_t active_expires_ns = state->lease_active ? state->lease_expires_ns : state->watch_expires_ns;
   json_object_object_add(response, "version", json_object_new_int(1));
   json_object_object_add(response, "requestId", json_object_new_string(request_id ? request_id : "unknown"));
   json_object_object_add(response, "operation", json_object_new_string(operation ? operation : "unknown"));
   json_object_object_add(response, "daemonInstanceId", json_object_new_string(state->daemon_instance_id));
   json_object_object_add(response, "connectionEpoch", json_object_new_int64((int64_t)state->connection_epoch));
-  json_object_object_add(response, "generation",
-                         json_object_new_int64((int64_t)(state->lease_active
-                           ? state->lease_generation : state->generation_floor)));
-  if (state->lease_id[0]) {
-    json_object_object_add(response, "leaseId", json_object_new_string(state->lease_id));
+  json_object_object_add(response, "generation", json_object_new_int64((int64_t)active_generation));
+  if (has_active_lease && active_lease_id[0]) {
+    json_object_object_add(response, "leaseId", json_object_new_string(active_lease_id));
   } else {
     json_object_object_add(response, "leaseId", NULL);
   }
   json_object_object_add(response, "watchValid", json_object_new_boolean(state->watch_valid));
   json_object_object_add(response, "watchInvalidReason",
-                         json_object_new_string("NOT_WATCHING"));
+                         json_object_new_string(state->watch_invalid_reason[0]
+                           ? state->watch_invalid_reason : "NOT_WATCHING"));
+  json_object_object_add(response, "watchRepairScope",
+                         json_object_new_string(watch_repair_scope_name(state->watch_repair_scope)));
+  json_object_object_add(response, "watchRepairPending",
+                         json_object_new_boolean(state->watch_repair_pending ||
+                                                 state->watch_repair_in_flight));
   json_object_object_add(response, "mutationStarted", json_object_new_boolean(state->mutation_started));
-  json_object_object_add(response, "leaseReleased", json_object_new_boolean(!state->lease_active));
+  json_object_object_add(response, "leaseReleased", json_object_new_boolean(!has_active_lease));
   json_object_object_add(response, "inFlight", json_object_new_boolean(state->in_flight));
   json_object_object_add(response, "leaseExpiresMonotonicMs",
-                         state->lease_active
-                           ? json_object_new_int64(state->lease_expires_ns / 1000000LL)
+                         has_active_lease
+                           ? json_object_new_int64(active_expires_ns / 1000000LL)
                            : NULL);
   json_object_object_add(response, "errorCode", NULL);
   return response;
@@ -1203,6 +1453,8 @@ static json_object *health_response(const HelperState *state, const char *reques
   json_object *response = base_response(state, request_id, "health");
   json_object *counters = json_object_new_object();
   json_object *operations = json_object_new_array();
+  json_object *watch_events = json_object_new_array();
+  json_object *watch_surfaces = json_object_new_array();
   bool connection_ok = state->connection && xcb_connection_has_error(state->connection) == 0;
   json_object_array_add(operations, json_object_new_string("health"));
   json_object_array_add(operations, json_object_new_string("inspect"));
@@ -1210,14 +1462,24 @@ static json_object *health_response(const HelperState *state, const char *reques
     json_object_array_add(operations, json_object_new_string("screen-probe"));
     json_object_array_add(operations, json_object_new_string("switch"));
     json_object_array_add(operations, json_object_new_string("revoke"));
+  } else if (state->phase == 3) {
+    json_object_array_add(operations, json_object_new_string("watch"));
+    json_object_array_add(operations, json_object_new_string("renew-watch"));
+    json_object_array_add(operations, json_object_new_string("unwatch"));
+    json_object_array_add(operations, json_object_new_string("revoke"));
   }
   json_object_object_add(response, "ok", json_object_new_boolean(connection_ok));
   json_object_object_add(response, "code",
                          json_object_new_string(connection_ok ? "OK" : "XCB_DISCONNECTED"));
   json_object_object_add(response, "phase", json_object_new_int(state->phase));
-  json_object_object_add(response, "readOnly", json_object_new_boolean(state->phase == 0));
+  json_object_object_add(response, "readOnly",
+                         json_object_new_boolean(state->phase != 1 &&
+                                                 !watch_repair_scope_has_writes(state)));
   json_object_object_add(response, "mutationsAllowed",
-                         json_object_new_boolean(state->phase == 1 && connection_ok &&
+                         json_object_new_boolean((state->phase == 1 ||
+                                                  (state->phase == 3 && state->watch_valid &&
+                                                   watch_repair_scope_has_writes(state))) &&
+                                                 connection_ok &&
                                                  state->generation_state == GENERATION_OK));
   json_object_object_add(response, "generationFloor", json_object_new_int64((int64_t)state->generation_floor));
   json_object_object_add(response, "generationState",
@@ -1238,6 +1500,52 @@ static json_object *health_response(const HelperState *state, const char *reques
   json_object_object_add(counters, "revokeRequests", json_object_new_int64((int64_t)state->revoke_requests));
   json_object_object_add(counters, "xcbTimeouts", json_object_new_int64((int64_t)state->xcb_timeouts));
   json_object_object_add(counters, "reconnects", json_object_new_int64((int64_t)state->reconnects));
+  json_object_object_add(counters, "watchRequests", json_object_new_int64((int64_t)state->watch_requests));
+  json_object_object_add(counters, "watchRenewRequests",
+                         json_object_new_int64((int64_t)state->watch_renew_requests));
+  json_object_object_add(counters, "watchUnwatchRequests",
+                         json_object_new_int64((int64_t)state->watch_unwatch_requests));
+  json_object_object_add(counters, "watchEventsReceived",
+                         json_object_new_int64((int64_t)state->watch_events_received));
+  json_object_object_add(counters, "watchEventsReported",
+                         json_object_new_int64((int64_t)state->watch_events_reported));
+  json_object_object_add(counters, "watchEventsWouldRepair",
+                         json_object_new_int64((int64_t)state->watch_events_would_repair));
+  json_object_object_add(counters, "watchEventsStaleDropped",
+                         json_object_new_int64((int64_t)state->watch_events_stale_dropped));
+  json_object_object_add(counters, "watchEventsUnrelatedDropped",
+                         json_object_new_int64((int64_t)state->watch_events_unrelated_dropped));
+  json_object_object_add(counters, "watchEventsDuplicateDropped",
+                         json_object_new_int64((int64_t)state->watch_events_duplicate_dropped));
+  json_object_object_add(counters, "watchRepairRequests",
+                         json_object_new_int64((int64_t)state->watch_repair_requests));
+  json_object_object_add(counters, "watchRepairMutations",
+                         json_object_new_int64((int64_t)state->watch_repair_mutations));
+  json_object_object_add(counters, "watchRepairFailures",
+                         json_object_new_int64((int64_t)state->watch_repair_failures));
+  for (size_t offset = 0; offset < state->watch_event_history_count; offset++) {
+    size_t index = state->watch_event_history_count == MAX_WATCH_EVENT_HISTORY
+      ? (state->next_watch_event_slot + offset) % MAX_WATCH_EVENT_HISTORY : offset;
+    const WatchEvent *event = &state->watch_event_history[index];
+    json_object *entry = json_object_new_object();
+    json_object_object_add(entry, "sequence", json_object_new_int(event->sequence));
+    json_object_object_add(entry, "type", json_object_new_string(event->type));
+    json_object_object_add(entry, "role", json_object_new_string(event->role));
+    json_object_object_add(entry, "xid", json_object_new_int64(event->xid));
+    json_object_object_add(entry, "property", event->property
+                           ? json_object_new_int64(event->property) : NULL);
+    json_object_object_add(entry, "rootForwarded", json_object_new_boolean(event->root_forwarded));
+    json_object_object_add(entry, "wouldRepair", json_object_new_boolean(event->would_repair));
+    json_object_array_add(watch_events, entry);
+  }
+  json_object_object_add(response, "watchEvents", watch_events);
+  for (size_t index = 0; index < state->watch_surface_count; index++) {
+    json_object *surface = json_object_new_object();
+    json_object_object_add(surface, "role", json_object_new_string(state->watch_roles[index]));
+    json_object_object_add(surface, "xid", json_object_new_int64(state->watch_surfaces[index]));
+    json_object_array_add(watch_surfaces, surface);
+  }
+  json_object_object_add(response, "watchSurfaces", watch_surfaces);
   json_object_object_add(response, "counters", counters);
   return response;
 }
@@ -1865,6 +2173,241 @@ static json_object *checked_mutations_to_json(const CheckedMutation mutations[MA
   return array;
 }
 
+static int watch_snapshot_surfaces(HelperState *state, SurfaceResult *surfaces,
+                                   size_t surface_count, xcb_query_tree_reply_t **root_tree,
+                                   int64_t deadline_ns) {
+  PendingReply pending[MAX_PENDING] = {0};
+  PendingReply root_pending = {0};
+  AsyncError async_error = {0};
+  size_t pending_count;
+  int result;
+  *root_tree = NULL;
+  pending_count = queue_surface_queries(state, surfaces, surface_count, pending);
+  root_pending.sequence = xcb_query_tree(state->connection, state->screen->root).sequence;
+  if (xcb_flush(state->connection) <= 0) {
+    free_pending(pending, pending_count);
+    return COLLECT_XCB_CONNECTION_ERROR;
+  }
+  result = finish_surface_queries(state, surfaces, surface_count, pending, pending_count,
+                                  deadline_ns, &async_error, true);
+  if (result == COLLECT_OK) {
+    result = collect_replies(state, &root_pending, 1, deadline_ns, &async_error);
+  }
+  if (result == COLLECT_OK && (!root_pending.reply || root_pending.error || async_error.seen)) {
+    result = SURFACE_QUERY_FAILED;
+  }
+  if (result == COLLECT_OK) {
+    *root_tree = root_pending.reply;
+    root_pending.reply = NULL;
+  }
+  free_pending(&root_pending, 1);
+  return result;
+}
+
+static int watch_root_stack_index(const xcb_query_tree_reply_t *root_tree, xcb_window_t xid) {
+  xcb_window_t *children;
+  int child_count;
+  if (!root_tree || xid == XCB_WINDOW_NONE) return -1;
+  children = xcb_query_tree_children(root_tree);
+  child_count = xcb_query_tree_children_length(root_tree);
+  for (int index = 0; index < child_count; index++) {
+    if (children[index] == xid) return index;
+  }
+  return -1;
+}
+
+static bool watch_panel_stack_mismatch(const xcb_query_tree_reply_t *root_tree,
+                                       const SurfaceResult *panel) {
+  int panel_index = watch_root_stack_index(root_tree, panel->request.xid);
+  int child_count = root_tree ? xcb_query_tree_children_length(root_tree) : 0;
+  return panel_index >= 0 && panel_index + 1 < child_count;
+}
+
+static bool watch_provider_stack_mismatch(const xcb_query_tree_reply_t *root_tree,
+                                          const SurfaceResult *previous,
+                                          const SurfaceResult *active,
+                                          const SurfaceResult *panel) {
+  int previous_index = watch_root_stack_index(root_tree, previous->request.xid);
+  int active_index = watch_root_stack_index(root_tree, active->request.xid);
+  int panel_index = watch_root_stack_index(root_tree, panel->request.xid);
+  if (previous_index < 0 || active_index < 0 || panel_index < 0) return false;
+  return !(previous_index < active_index && active_index < panel_index);
+}
+
+static bool watch_repair_final_state(const HelperState *state,
+                                     const SurfaceResult *surfaces, size_t count,
+                                     const xcb_query_tree_reply_t *root_tree) {
+  for (size_t index = 0; index < count; index++) {
+    const SurfaceResult *surface = &surfaces[index];
+    if (!surface->ok || !surface_at_target_geometry(surface) ||
+        !surface_at_target_opacity(surface)) return false;
+  }
+  if (state->watch_repair_scope == WATCH_REPAIR_PANEL) {
+    return count == 1 && !watch_panel_stack_mismatch(root_tree, &surfaces[0]);
+  }
+  if (count != 3) return false;
+  SurfaceResult *active = surface_for_role((SurfaceResult *)surfaces, count, "active");
+  SurfaceResult *previous = surface_for_role((SurfaceResult *)surfaces, count, "previous");
+  SurfaceResult *panel = surface_for_role((SurfaceResult *)surfaces, count, "panel");
+  return active && previous && panel &&
+         !watch_provider_stack_mismatch(root_tree, previous, active, panel);
+}
+
+static void repair_watched_surfaces(HelperState *state) {
+  SurfaceResult surfaces[MAX_SURFACES] = {0};
+  CheckedMutation mutations[MAX_MUTATIONS] = {0};
+  xcb_query_tree_reply_t *root_tree = NULL;
+  SurfaceResult *active = NULL;
+  SurfaceResult *previous = NULL;
+  SurfaceResult *panel = NULL;
+  size_t mutation_count = 0;
+  int result;
+  int64_t deadline_ns;
+  bool stack_mismatch = false;
+
+  if (!state->watch_repair_pending || !state->watch_valid ||
+      !watch_repair_scope_has_writes(state) || state->in_flight ||
+      state->watch_repair_in_flight || !state->connection || !state->screen) {
+    return;
+  }
+  state->watch_repair_pending = false;
+  state->watch_repair_in_flight = true;
+  state->watch_repair_requests++;
+  deadline_ns = monotonic_ns() + (int64_t)state->transaction_timeout_ms * 1000000LL;
+  for (size_t index = 0; index < state->watch_surface_count; index++) {
+    surfaces[index].request = state->watch_targets[index];
+  }
+  result = watch_snapshot_surfaces(state, surfaces, state->watch_surface_count, &root_tree,
+                                   deadline_ns);
+  if (result != COLLECT_OK) {
+    if (result == COLLECT_REPLY_TIMEOUT) state->xcb_timeouts++;
+    if (collect_requires_connection_reset(result)) reset_xcb_connection(state);
+    invalidate_watch(state, result == SURFACE_QUERY_DEADLINE_EXCEEDED
+                     ? "WATCH_REPAIR_DEADLINE_EXCEEDED" : "WATCH_REPAIR_INSPECTION_FAILED");
+    state->watch_repair_failures++;
+    goto completed;
+  }
+
+  if (state->watch_repair_scope == WATCH_REPAIR_PANEL) {
+    panel = &surfaces[0];
+    if (strcmp(panel->request.role, "panel") != 0) {
+      invalidate_watch(state, "WATCH_REPAIR_ROLE_MISMATCH");
+      state->watch_repair_failures++;
+      goto completed;
+    }
+    if (!surface_at_target_geometry(panel) &&
+        !queue_geometry_mutation(state, panel, false, mutations, &mutation_count,
+                                 "panel_geometry")) {
+      invalidate_watch(state, "WATCH_REPAIR_PARENT_MISMATCH");
+      state->watch_repair_failures++;
+      goto completed;
+    }
+    if (!surface_at_target_opacity(panel)) {
+      queue_opacity_mutation(state, panel, mutations, &mutation_count, "panel_opacity");
+    }
+    stack_mismatch = watch_panel_stack_mismatch(root_tree, panel);
+    if (stack_mismatch) {
+      queue_raise_mutation(state, panel, mutations, &mutation_count, "panel_raise");
+    }
+  } else {
+    active = surface_for_role(surfaces, state->watch_surface_count, "active");
+    previous = surface_for_role(surfaces, state->watch_surface_count, "previous");
+    panel = surface_for_role(surfaces, state->watch_surface_count, "panel");
+    if (!active || !previous || !panel) {
+      invalidate_watch(state, "WATCH_REPAIR_ROLE_MISMATCH");
+      state->watch_repair_failures++;
+      goto completed;
+    }
+    if (!surface_at_target_geometry(previous) &&
+        !queue_geometry_mutation(state, previous, false, mutations, &mutation_count,
+                                 "previous_geometry")) {
+      invalidate_watch(state, "WATCH_REPAIR_PARENT_MISMATCH");
+      state->watch_repair_failures++;
+      goto completed;
+    }
+    if (!surface_at_target_opacity(active)) {
+      queue_opacity_mutation(state, active, mutations, &mutation_count, "active_opacity");
+    }
+    if (!surface_at_target_geometry(active) &&
+        !queue_geometry_mutation(state, active, false, mutations, &mutation_count,
+                                 "active_geometry")) {
+      invalidate_watch(state, "WATCH_REPAIR_PARENT_MISMATCH");
+      state->watch_repair_failures++;
+      goto completed;
+    }
+    if (!surface_at_target_geometry(panel) &&
+        !queue_geometry_mutation(state, panel, false, mutations, &mutation_count,
+                                 "panel_geometry")) {
+      invalidate_watch(state, "WATCH_REPAIR_PARENT_MISMATCH");
+      state->watch_repair_failures++;
+      goto completed;
+    }
+    if (!surface_at_target_opacity(panel)) {
+      queue_opacity_mutation(state, panel, mutations, &mutation_count, "panel_opacity");
+    }
+    stack_mismatch = watch_provider_stack_mismatch(root_tree, previous, active, panel);
+    if (stack_mismatch) {
+      queue_raise_mutation(state, active, mutations, &mutation_count, "active_raise");
+      queue_raise_mutation(state, panel, mutations, &mutation_count, "panel_raise");
+    }
+  }
+  if (mutation_count == 0) goto completed;
+
+  state->mutation_started = true;
+  state->mutation_requests++;
+  xcb_get_input_focus_cookie_t fence = xcb_get_input_focus(state->connection);
+  if (xcb_flush(state->connection) <= 0) {
+    invalidate_watch(state, "WATCH_REPAIR_XCB_DISCONNECTED");
+    state->watch_repair_failures++;
+    reset_xcb_connection(state);
+    goto completed;
+  }
+  PendingReply fence_pending = {.sequence = fence.sequence};
+  AsyncError mutation_async_error = {0};
+  result = collect_replies(state, &fence_pending, 1, deadline_ns, &mutation_async_error);
+  if (result != COLLECT_OK || fence_pending.error || !fence_pending.reply ||
+      mutation_async_error.seen || collect_checked_mutations(state, mutations, mutation_count) != 0) {
+    if (result == COLLECT_REPLY_TIMEOUT) state->xcb_timeouts++;
+    if (collect_requires_connection_reset(result) || xcb_connection_has_error(state->connection) != 0) {
+      reset_xcb_connection(state);
+    }
+    invalidate_watch(state, "WATCH_REPAIR_MUTATION_FAILED");
+    state->watch_repair_failures++;
+    free_pending(&fence_pending, 1);
+    goto completed;
+  }
+  free_pending(&fence_pending, 1);
+  state->watch_repair_mutations += mutation_count;
+  free(root_tree);
+  root_tree = NULL;
+  free_surface_results(surfaces, state->watch_surface_count);
+  memset(surfaces, 0, sizeof(surfaces));
+  for (size_t index = 0; index < state->watch_surface_count; index++) {
+    surfaces[index].request = state->watch_targets[index];
+  }
+  result = watch_snapshot_surfaces(state, surfaces, state->watch_surface_count, &root_tree,
+                                   deadline_ns);
+  if (result != COLLECT_OK || !watch_repair_final_state(state, surfaces,
+                                                        state->watch_surface_count, root_tree)) {
+    if (result == COLLECT_REPLY_TIMEOUT) state->xcb_timeouts++;
+    if (collect_requires_connection_reset(result)) reset_xcb_connection(state);
+    invalidate_watch(state, "WATCH_REPAIR_FINAL_MISMATCH");
+    state->watch_repair_failures++;
+  } else {
+    /* The final snapshot is after our checked writes, so discard the
+     * Configure/Property notifications those writes generated. A later
+     * external event will re-arm the lease through the normal event loop. */
+    state->watch_repair_pending = false;
+  }
+
+completed:
+  state->mutation_started = false;
+  state->watch_repair_in_flight = false;
+  free(root_tree);
+  free_checked_mutations(mutations, mutation_count);
+  free_surface_results(surfaces, state->watch_surface_count);
+}
+
 static bool verify_identity_unchanged(SurfaceResult *surfaces, size_t count, int64_t deadline_ns) {
   for (size_t index = 0; index < count; index++) {
     uid_t uid = (uid_t)-1;
@@ -2369,6 +2912,417 @@ static json_object *revoke_response(HelperState *state, json_object *request,
   return response;
 }
 
+static bool watch_target_has_geometry(const SurfaceRequest *target, int32_t x, int32_t y,
+                                      uint32_t width, uint32_t height) {
+  return target->has_target_geometry && target->target_x == x && target->target_y == y &&
+         target->target_width == width && target->target_height == height;
+}
+
+static bool validate_watch_repair_targets(WatchRepairScope scope,
+                                          const SurfaceRequest targets[MAX_SURFACES],
+                                          size_t surface_count) {
+  bool active_seen = false;
+  bool previous_seen = false;
+  bool panel_seen = false;
+  if (scope == WATCH_REPAIR_OBSERVE) return true;
+  if (scope == WATCH_REPAIR_PANEL) {
+    return surface_count == 1 && strcmp(targets[0].role, "panel") == 0 &&
+           targets[0].profile[0] &&
+           watch_target_has_geometry(&targets[0], 1920, 0, 640, 720) &&
+           targets[0].has_target_opacity && targets[0].target_opacity == UINT32_MAX;
+  }
+  if (surface_count != 3) return false;
+  for (size_t index = 0; index < surface_count; index++) {
+    const SurfaceRequest *target = &targets[index];
+    if (!target->profile[0] || !target->has_target_geometry) return false;
+    if (strcmp(target->role, "active") == 0 && !active_seen) {
+      active_seen = true;
+      if (!watch_target_has_geometry(target, 0, 0, 1920, 720) ||
+          !target->has_target_opacity || target->target_opacity != UINT32_MAX) return false;
+    } else if (strcmp(target->role, "previous") == 0 && !previous_seen) {
+      previous_seen = true;
+      if (!watch_target_has_geometry(target, 2560, 0, 1920, 720) ||
+          target->has_target_opacity) return false;
+    } else if (strcmp(target->role, "panel") == 0 && !panel_seen) {
+      panel_seen = true;
+      if (!watch_target_has_geometry(target, 1920, 0, 640, 720) ||
+          !target->has_target_opacity || target->target_opacity != UINT32_MAX) return false;
+    } else {
+      return false;
+    }
+  }
+  return active_seen && previous_seen && panel_seen;
+}
+
+static bool parse_watch_request(json_object *request, const char **instance_id,
+                                const char **lease_id, uint64_t *epoch, uint64_t *generation,
+                                int64_t *lease_duration_ms,
+                                SurfaceRequest targets[MAX_SURFACES],
+                                WatchRepairScope *repair_scope, size_t *surface_count) {
+  json_object *surfaces_value = NULL;
+  json_object *duration_value = NULL;
+  json_object *scope_value = NULL;
+  int64_t epoch_value;
+  int64_t generation_value;
+  int64_t duration = DEFAULT_WATCH_LEASE_DURATION_MS;
+  const char *scope_name = "observe";
+  if (!get_required_string(request, "daemonInstanceId", instance_id) ||
+      !get_required_string(request, "leaseId", lease_id) || strlen(*lease_id) >= 80 ||
+      !get_required_int64(request, "connectionEpoch", &epoch_value) || epoch_value <= 0 ||
+      !get_required_int64(request, "generation", &generation_value) || generation_value <= 0 ||
+      !json_object_object_get_ex(request, "surfaces", &surfaces_value) ||
+      !json_object_is_type(surfaces_value, json_type_array)) {
+    return false;
+  }
+  if (json_object_object_get_ex(request, "leaseDurationMs", &duration_value)) {
+    if (!json_object_is_type(duration_value, json_type_int)) return false;
+    duration = json_object_get_int64(duration_value);
+  }
+  if (json_object_object_get_ex(request, "repairScope", &scope_value)) {
+    if (!json_object_is_type(scope_value, json_type_string)) return false;
+    scope_name = json_object_get_string(scope_value);
+  }
+  if (strcmp(scope_name, "observe") == 0) *repair_scope = WATCH_REPAIR_OBSERVE;
+  else if (strcmp(scope_name, "panel") == 0) *repair_scope = WATCH_REPAIR_PANEL;
+  else if (strcmp(scope_name, "provider") == 0) *repair_scope = WATCH_REPAIR_PROVIDER;
+  else return false;
+  *surface_count = json_object_array_length(surfaces_value);
+  if (*surface_count == 0 || *surface_count > MAX_SURFACES || duration <= 0 ||
+      duration > MAX_WATCH_LEASE_DURATION_MS) return false;
+  for (size_t index = 0; index < *surface_count; index++) {
+    json_object *surface = json_object_array_get_idx(surfaces_value, index);
+    json_object *xid_value = NULL;
+    const char *role;
+    const char *profile = "";
+    int64_t xid;
+    if (!surface || !json_object_is_type(surface, json_type_object) ||
+        !get_required_string(surface, "role", &role) || strlen(role) >= MAX_ROLE ||
+        !json_object_object_get_ex(surface, "xid", &xid_value) ||
+        !json_object_is_type(xid_value, json_type_int)) {
+      return false;
+    }
+    xid = json_object_get_int64(xid_value);
+    if (xid <= 0 || xid > UINT32_MAX) return false;
+    strncpy(targets[index].role, role, sizeof(targets[index].role) - 1);
+    targets[index].role[sizeof(targets[index].role) - 1] = '\0';
+    targets[index].xid = (xcb_window_t)xid;
+    if (*repair_scope != WATCH_REPAIR_OBSERVE) {
+      if (!get_required_string(surface, "profile", &profile) || strlen(profile) >= PATH_MAX ||
+          !parse_target_geometry(surface, &targets[index]) ||
+          !parse_target_opacity(surface, &targets[index])) return false;
+      snprintf(targets[index].profile, sizeof(targets[index].profile), "%s", profile);
+    }
+    for (size_t previous = 0; previous < index; previous++) {
+      if (targets[previous].xid == targets[index].xid) return false;
+    }
+  }
+  *epoch = (uint64_t)epoch_value;
+  *generation = (uint64_t)generation_value;
+  *lease_duration_ms = duration;
+  return validate_watch_repair_targets(*repair_scope, targets, *surface_count);
+}
+
+static bool parse_watch_lease_request(json_object *request, const char **instance_id,
+                                      const char **lease_id, uint64_t *epoch,
+                                      uint64_t *generation, int64_t *lease_duration_ms,
+                                      bool allow_default_duration) {
+  json_object *duration_value = NULL;
+  int64_t epoch_value;
+  int64_t generation_value;
+  int64_t duration = DEFAULT_WATCH_LEASE_DURATION_MS;
+  if (!get_required_string(request, "daemonInstanceId", instance_id) ||
+      !get_required_string(request, "leaseId", lease_id) ||
+      !get_required_int64(request, "connectionEpoch", &epoch_value) || epoch_value <= 0 ||
+      !get_required_int64(request, "generation", &generation_value) || generation_value <= 0) {
+    return false;
+  }
+  if (json_object_object_get_ex(request, "leaseDurationMs", &duration_value)) {
+    if (!json_object_is_type(duration_value, json_type_int)) return false;
+    duration = json_object_get_int64(duration_value);
+  } else if (!allow_default_duration) {
+    duration = 0;
+  }
+  if (duration < 0 || duration > MAX_WATCH_LEASE_DURATION_MS) return false;
+  *epoch = (uint64_t)epoch_value;
+  *generation = (uint64_t)generation_value;
+  *lease_duration_ms = duration;
+  return true;
+}
+
+static int select_watch_subscriptions(HelperState *state, int64_t deadline_ns) {
+  xcb_void_cookie_t subscriptions[MAX_SURFACES + 1] = {0};
+  PendingReply fence = {0};
+  AsyncError async_error = {0};
+  size_t count = 0;
+  uint32_t surface_mask = XCB_EVENT_MASK_STRUCTURE_NOTIFY | XCB_EVENT_MASK_PROPERTY_CHANGE;
+  uint32_t root_mask = XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY;
+  int result;
+  for (size_t index = 0; index < state->watch_surface_count; index++) {
+    subscriptions[count++] = xcb_change_window_attributes_checked(
+      state->connection, state->watch_surfaces[index], XCB_CW_EVENT_MASK, &surface_mask);
+  }
+  subscriptions[count++] = xcb_change_window_attributes_checked(
+    state->connection, state->screen->root, XCB_CW_EVENT_MASK, &root_mask);
+  fence.sequence = xcb_get_input_focus(state->connection).sequence;
+  if (xcb_flush(state->connection) <= 0) return COLLECT_XCB_CONNECTION_ERROR;
+  result = collect_replies(state, &fence, 1, deadline_ns, &async_error);
+  if (result == COLLECT_OK && !async_error.seen && !fence.error && fence.reply) {
+    for (size_t index = 0; index < count; index++) {
+      void *reply = NULL;
+      xcb_generic_error_t *error = NULL;
+      int ready = xcb_poll_for_reply(state->connection, subscriptions[index].sequence,
+                                     &reply, &error);
+      free(reply);
+      if (!ready || error) result = SURFACE_QUERY_FAILED;
+      free(error);
+    }
+  } else if (result == COLLECT_OK) {
+    result = SURFACE_QUERY_FAILED;
+  }
+  free_pending(&fence, 1);
+  return result;
+}
+
+static void clear_watch_subscriptions(HelperState *state) {
+  uint32_t mask = 0;
+  if (!state->connection || !state->screen) return;
+  for (size_t index = 0; index < state->watch_surface_count; index++) {
+    (void)xcb_change_window_attributes(state->connection, state->watch_surfaces[index],
+                                       XCB_CW_EVENT_MASK, &mask);
+  }
+  (void)xcb_change_window_attributes(state->connection, state->screen->root,
+                                     XCB_CW_EVENT_MASK, &mask);
+  (void)xcb_flush(state->connection);
+}
+
+static void release_watch(HelperState *state, const char *reason, bool clear_subscriptions) {
+  if (clear_subscriptions) clear_watch_subscriptions(state);
+  state->watch_valid = false;
+  state->watch_lease_id[0] = '\0';
+  state->watch_generation = 0;
+  state->watch_epoch = 0;
+  state->watch_expires_ns = 0;
+  state->watch_surface_count = 0;
+  state->watch_repair_scope = WATCH_REPAIR_OBSERVE;
+  state->watch_repair_pending = false;
+  state->watch_repair_in_flight = false;
+  memset(state->watch_surfaces, 0, sizeof(state->watch_surfaces));
+  memset(state->watch_roles, 0, sizeof(state->watch_roles));
+  memset(state->watch_targets, 0, sizeof(state->watch_targets));
+  snprintf(state->watch_invalid_reason, sizeof(state->watch_invalid_reason), "%s",
+           reason && reason[0] ? reason : "NOT_WATCHING");
+}
+
+static void add_watch_surfaces(json_object *response, const HelperState *state) {
+  json_object *surfaces = json_object_new_array();
+  for (size_t index = 0; index < state->watch_surface_count; index++) {
+    json_object *surface = json_object_new_object();
+    json_object_object_add(surface, "role", json_object_new_string(state->watch_roles[index]));
+    json_object_object_add(surface, "xid", json_object_new_int64(state->watch_surfaces[index]));
+    if (watch_repair_scope_has_writes(state)) {
+      json_object_object_add(surface, "profile",
+                             json_object_new_string(state->watch_targets[index].profile));
+    }
+    json_object_array_add(surfaces, surface);
+  }
+  json_object_object_add(response, "surfaces", surfaces);
+}
+
+static bool watch_request_matches_active(const HelperState *state,
+                                         WatchRepairScope repair_scope,
+                                         const SurfaceRequest targets[MAX_SURFACES],
+                                         size_t surface_count) {
+  if (state->watch_surface_count != surface_count ||
+      state->watch_repair_scope != repair_scope) return false;
+  for (size_t index = 0; index < surface_count; index++) {
+    const SurfaceRequest *active = &state->watch_targets[index];
+    const SurfaceRequest *target = &targets[index];
+    if (state->watch_surfaces[index] != target->xid ||
+        strcmp(state->watch_roles[index], target->role) != 0 ||
+        strcmp(active->profile, target->profile) != 0 ||
+        active->has_target_geometry != target->has_target_geometry ||
+        active->has_target_opacity != target->has_target_opacity ||
+        (active->has_target_geometry &&
+         (active->target_x != target->target_x || active->target_y != target->target_y ||
+          active->target_width != target->target_width ||
+          active->target_height != target->target_height)) ||
+        (active->has_target_opacity && active->target_opacity != target->target_opacity)) return false;
+  }
+  return true;
+}
+
+static json_object *watch_response(HelperState *state, json_object *request,
+                                   const char *request_id, int64_t received_ns) {
+  const char *instance_id;
+  const char *lease_id;
+  SurfaceRequest targets[MAX_SURFACES] = {0};
+  SurfaceResult initial_surfaces[MAX_SURFACES] = {0};
+  xcb_query_tree_reply_t *initial_root_tree = NULL;
+  WatchRepairScope repair_scope;
+  uint64_t epoch;
+  uint64_t generation;
+  int64_t duration_ms;
+  size_t surface_count;
+  int result;
+  json_object *response;
+  state->watch_requests++;
+  if (!parse_watch_request(request, &instance_id, &lease_id, &epoch, &generation, &duration_ms,
+                           targets, &repair_scope, &surface_count)) {
+    return error_response(state, request_id, "watch", "INVALID_WATCH_REQUEST");
+  }
+  load_generation_floor(state);
+  refresh_watch_validity(state);
+  if (!state->connection || !state->screen) {
+    return error_response(state, request_id, "watch", "XCB_DISCONNECTED");
+  }
+  if (strcmp(instance_id, state->daemon_instance_id) != 0) {
+    return error_response(state, request_id, "watch", "DAEMON_INSTANCE_MISMATCH");
+  }
+  if (epoch != state->connection_epoch) {
+    return error_response(state, request_id, "watch", "CONNECTION_EPOCH_MISMATCH");
+  }
+  if (state->generation_state != GENERATION_OK || generation != state->generation_floor) {
+    return error_response(state, request_id, "watch", "GENERATION_MISMATCH");
+  }
+  if (state->watch_valid && (strcmp(lease_id, state->watch_lease_id) != 0 ||
+                             !watch_request_matches_active(state, repair_scope,
+                                                           targets, surface_count))) {
+    return error_response(state, request_id, "watch", "LEASE_CONFLICT");
+  }
+  if (state->watch_valid) {
+    response = base_response(state, request_id, "watch");
+    json_object_object_add(response, "ok", json_object_new_boolean(true));
+    json_object_object_add(response, "code", json_object_new_string("ALREADY_WATCHING"));
+    json_object_object_add(response, "readOnly",
+                           json_object_new_boolean(!watch_repair_scope_has_writes(state)));
+    json_object_object_add(response, "repairScope",
+                           json_object_new_string(watch_repair_scope_name(state->watch_repair_scope)));
+    add_watch_surfaces(response, state);
+    return response;
+  }
+  if (state->watch_lease_id[0]) release_watch(state, "WATCH_REPLACED", true);
+  if (repair_scope != WATCH_REPAIR_OBSERVE) {
+    for (size_t index = 0; index < surface_count; index++) {
+      initial_surfaces[index].request = targets[index];
+    }
+    result = watch_snapshot_surfaces(state, initial_surfaces, surface_count, &initial_root_tree,
+                                     received_ns + (int64_t)state->transaction_timeout_ms * 1000000LL);
+    free(initial_root_tree);
+    if (result != COLLECT_OK) {
+      const char *inspection_code = initial_surfaces[0].code
+        ? initial_surfaces[0].code : "UNKNOWN";
+      response = error_response(state, request_id, "watch", "WATCH_LEASE_INSPECTION_FAILED");
+      json_object_object_add(response, "leaseInspectionCode",
+                             json_object_new_string(inspection_code));
+      free_surface_results(initial_surfaces, surface_count);
+      if (result == COLLECT_REPLY_TIMEOUT) state->xcb_timeouts++;
+      if (collect_requires_connection_reset(result)) reset_xcb_connection(state);
+      return response;
+    }
+    free_surface_results(initial_surfaces, surface_count);
+  }
+  for (size_t index = 0; index < surface_count; index++) {
+    state->watch_surfaces[index] = targets[index].xid;
+    memcpy(state->watch_roles[index], targets[index].role,
+           sizeof(state->watch_roles[index]));
+    state->watch_roles[index][sizeof(state->watch_roles[index]) - 1] = '\0';
+    state->watch_targets[index] = targets[index];
+  }
+  state->watch_surface_count = surface_count;
+  state->watch_repair_scope = repair_scope;
+  state->watch_generation = generation;
+  state->watch_epoch = epoch;
+  state->watch_expires_ns = monotonic_ns() + duration_ms * 1000000LL;
+  snprintf(state->watch_lease_id, sizeof(state->watch_lease_id), "%s", lease_id);
+  state->watch_event_history_count = 0;
+  state->next_watch_event_slot = 0;
+  memset(state->watch_event_history, 0, sizeof(state->watch_event_history));
+  result = select_watch_subscriptions(state, received_ns + 1000000000LL);
+  if (result != COLLECT_OK) {
+    release_watch(state, "WATCH_SUBSCRIPTION_FAILED", true);
+    if (collect_requires_connection_reset(result)) reset_xcb_connection(state);
+    return error_response(state, request_id, "watch", "WATCH_SUBSCRIPTION_FAILED");
+  }
+  state->watch_valid = true;
+  snprintf(state->watch_invalid_reason, sizeof(state->watch_invalid_reason), "%s", "OK");
+  response = base_response(state, request_id, "watch");
+  json_object_object_add(response, "ok", json_object_new_boolean(true));
+  json_object_object_add(response, "code", json_object_new_string("WATCHING"));
+  json_object_object_add(response, "readOnly",
+                         json_object_new_boolean(!watch_repair_scope_has_writes(state)));
+  json_object_object_add(response, "repairScope",
+                         json_object_new_string(watch_repair_scope_name(state->watch_repair_scope)));
+  json_object_object_add(response, "subscriptionMask",
+                         json_object_new_string("StructureNotifyMask|PropertyChangeMask|SubstructureNotifyMask"));
+  add_watch_surfaces(response, state);
+  return response;
+}
+
+static json_object *renew_watch_response(HelperState *state, json_object *request,
+                                          const char *request_id) {
+  const char *instance_id;
+  const char *lease_id;
+  uint64_t epoch;
+  uint64_t generation;
+  int64_t duration_ms;
+  json_object *response;
+  state->watch_renew_requests++;
+  if (!parse_watch_lease_request(request, &instance_id, &lease_id, &epoch, &generation,
+                                 &duration_ms, true)) {
+    return error_response(state, request_id, "renew-watch", "INVALID_RENEW_WATCH_REQUEST");
+  }
+  load_generation_floor(state);
+  refresh_watch_validity(state);
+  if (!state->watch_valid) return error_response(state, request_id, "renew-watch", "WATCH_INVALID");
+  if (strcmp(instance_id, state->daemon_instance_id) != 0 || epoch != state->watch_epoch ||
+      generation != state->watch_generation || strcmp(lease_id, state->watch_lease_id) != 0) {
+    return error_response(state, request_id, "renew-watch", "LEASE_MISMATCH");
+  }
+  state->watch_expires_ns = monotonic_ns() + duration_ms * 1000000LL;
+  response = base_response(state, request_id, "renew-watch");
+  json_object_object_add(response, "ok", json_object_new_boolean(true));
+  json_object_object_add(response, "code", json_object_new_string("WATCH_RENEWED"));
+  json_object_object_add(response, "readOnly",
+                         json_object_new_boolean(!watch_repair_scope_has_writes(state)));
+  json_object_object_add(response, "repairScope",
+                         json_object_new_string(watch_repair_scope_name(state->watch_repair_scope)));
+  add_watch_surfaces(response, state);
+  return response;
+}
+
+static json_object *unwatch_response(HelperState *state, json_object *request,
+                                      const char *request_id, const char *operation,
+                                      const char *released_code) {
+  const char *instance_id;
+  const char *lease_id;
+  uint64_t epoch;
+  uint64_t generation;
+  int64_t ignored_duration;
+  json_object *response;
+  state->watch_unwatch_requests++;
+  if (!parse_watch_lease_request(request, &instance_id, &lease_id, &epoch, &generation,
+                                 &ignored_duration, false)) {
+    return error_response(state, request_id, operation, "INVALID_UNWATCH_REQUEST");
+  }
+  if (!state->watch_lease_id[0]) {
+    response = base_response(state, request_id, operation);
+    json_object_object_add(response, "ok", json_object_new_boolean(true));
+    json_object_object_add(response, "code", json_object_new_string("ALREADY_RELEASED"));
+    json_object_object_add(response, "readOnly", json_object_new_boolean(true));
+    return response;
+  }
+  if (strcmp(instance_id, state->daemon_instance_id) != 0 || epoch != state->watch_epoch ||
+      generation != state->watch_generation || strcmp(lease_id, state->watch_lease_id) != 0) {
+    return error_response(state, request_id, operation, "LEASE_MISMATCH");
+  }
+  release_watch(state, "UNWATCHED", true);
+  response = base_response(state, request_id, operation);
+  json_object_object_add(response, "ok", json_object_new_boolean(true));
+  json_object_object_add(response, "code", json_object_new_string(released_code));
+  json_object_object_add(response, "readOnly", json_object_new_boolean(true));
+  return response;
+}
+
 static json_object *inspect_response(HelperState *state, json_object *request,
                                      const char *request_id, int64_t received_ns) {
   json_object *surfaces_value = NULL;
@@ -2614,6 +3568,7 @@ static json_object *process_request(HelperState *state, const char *packet, size
                         received_ns + (int64_t)state->transaction_timeout_ms * 1000000LL);
     }
     load_generation_floor(state);
+    refresh_watch_validity(state);
     response = health_response(state, request_id);
   } else if (strcmp(operation, "inspect") == 0 &&
              request_has_caller_role(request, "window_guard") &&
@@ -2634,8 +3589,10 @@ static json_object *process_request(HelperState *state, const char *packet, size
       response = screen_probe_response(state, request_id, received_ns);
     }
   } else if (strcmp(operation, "switch") == 0) {
-    if (state->phase == 0) {
-      response = error_response(state, request_id, operation, "OPERATION_DISABLED_PHASE0");
+    if (state->phase != 1) {
+      response = error_response(state, request_id, operation,
+                                state->phase == 0 ? "OPERATION_DISABLED_PHASE0" :
+                                                    "OPERATION_DISABLED_PHASE3");
     } else {
       if (!state->connection) {
         (void)connect_xcb(state, true,
@@ -2643,10 +3600,33 @@ static json_object *process_request(HelperState *state, const char *packet, size
       }
       response = switch_response(state, request, request_id, received_ns);
     }
+  } else if (strcmp(operation, "watch") == 0) {
+    response = state->phase == 3
+      ? watch_response(state, request, request_id, received_ns)
+      : error_response(state, request_id, operation,
+                       state->phase == 0 ? "OPERATION_DISABLED_PHASE0" :
+                                           "OPERATION_DISABLED_PHASE1");
+  } else if (strcmp(operation, "renew-watch") == 0) {
+    response = state->phase == 3
+      ? renew_watch_response(state, request, request_id)
+      : error_response(state, request_id, operation,
+                       state->phase == 0 ? "OPERATION_DISABLED_PHASE0" :
+                                           "OPERATION_DISABLED_PHASE1");
+  } else if (strcmp(operation, "unwatch") == 0) {
+    response = state->phase == 3
+      ? unwatch_response(state, request, request_id, "unwatch", "UNWATCHED")
+      : error_response(state, request_id, operation,
+                       state->phase == 0 ? "OPERATION_DISABLED_PHASE0" :
+                                           "OPERATION_DISABLED_PHASE1");
   } else if (strcmp(operation, "revoke") == 0) {
-    response = state->phase == 0
-      ? error_response(state, request_id, operation, "OPERATION_DISABLED_PHASE0")
-      : revoke_response(state, request, request_id);
+    if (state->phase == 0) {
+      response = error_response(state, request_id, operation, "OPERATION_DISABLED_PHASE0");
+    } else if (state->phase == 3) {
+      state->revoke_requests++;
+      response = unwatch_response(state, request, request_id, "revoke", "REVOKED");
+    } else {
+      response = revoke_response(state, request, request_id);
+    }
   } else {
     response = error_response(state, request_id, operation, "OPERATION_NOT_IMPLEMENTED");
   }
@@ -2817,19 +3797,48 @@ static bool peer_allowed(int descriptor) {
 
 static int serve(HelperState *state, const char *socket_path) {
   int listener = create_listener(socket_path);
-  struct pollfd poll_descriptor;
   if (listener < 0) return 1;
-  poll_descriptor = (struct pollfd){.fd = listener, .events = POLLIN | POLLERR | POLLHUP};
   while (!stop_requested) {
-    int poll_result = poll(&poll_descriptor, 1, 1000);
+    struct pollfd descriptors[2] = {
+      {.fd = listener, .events = POLLIN | POLLERR | POLLHUP},
+      {.fd = -1, .events = POLLIN | POLLERR | POLLHUP},
+    };
+    nfds_t descriptor_count = 1;
+    int poll_result;
+    load_generation_floor(state);
+    refresh_watch_validity(state);
+    if (state->watch_valid && state->connection) {
+      descriptors[descriptor_count++].fd = xcb_get_file_descriptor(state->connection);
+    }
+    poll_result = poll(descriptors, descriptor_count, 1000);
     if (poll_result < 0) {
       if (errno == EINTR) continue;
       perror("poll listener");
       break;
     }
     if (poll_result == 0) continue;
-    if (poll_descriptor.revents & (POLLERR | POLLHUP | POLLNVAL)) break;
-    if (poll_descriptor.revents & POLLIN) {
+    if (descriptors[0].revents & (POLLERR | POLLHUP | POLLNVAL)) break;
+    if (descriptor_count == 2 && descriptors[1].revents) {
+      if (descriptors[1].revents & (POLLERR | POLLHUP | POLLNVAL)) {
+        reset_xcb_connection(state);
+      } else if (descriptors[1].revents & POLLIN) {
+        xcb_generic_event_t *event;
+        bool reset_connection = false;
+        while ((event = xcb_poll_for_event(state->connection)) != NULL) {
+          if ((event->response_type & 0x7fU) == 0) {
+            reset_connection = true;
+          } else {
+            observe_xcb_event(state, event);
+          }
+          free(event);
+          if (reset_connection) break;
+        }
+        if (reset_connection || xcb_connection_has_error(state->connection) != 0) {
+          reset_xcb_connection(state);
+        }
+      }
+    }
+    if (descriptors[0].revents & POLLIN) {
       int client = accept_cloexec(listener);
       char packet[MAX_PACKET_BYTES + 1];
       size_t packet_length = 0;
@@ -2889,6 +3898,10 @@ static int serve(HelperState *state, const char *socket_path) {
       json_object_put(response);
       close(client);
     }
+    /* A watch event can arrive while an inspect/watch request is draining its
+     * reply queue.  Defer the lease-owned write until that client is fully
+     * answered so the two bounded XCB transactions never interleave. */
+    repair_watched_surfaces(state);
   }
   close(listener);
   unlink(socket_path);
@@ -2993,6 +4006,10 @@ static bool parse_phase(const char *value, int *phase) {
   }
   if (strcmp(value, "1") == 0) {
     *phase = 1;
+    return true;
+  }
+  if (strcmp(value, "3") == 0) {
+    *phase = 3;
     return true;
   }
   return false;
@@ -4154,6 +5171,50 @@ static json_object *x11_self_test_switch_request(const HelperState *state,
   return request;
 }
 
+static json_object *x11_self_test_watch_request(const HelperState *state,
+                                                const char *request_id,
+                                                uint64_t generation,
+                                                xcb_window_t xid) {
+  json_object *request = json_object_new_object();
+  json_object *surfaces = json_object_new_array();
+  json_object *surface = json_object_new_object();
+  json_object_object_add(request, "version", json_object_new_int(1));
+  json_object_object_add(request, "requestId", json_object_new_string(request_id));
+  json_object_object_add(request, "operation", json_object_new_string("watch"));
+  json_object_object_add(request, "daemonInstanceId",
+                         json_object_new_string(state->daemon_instance_id));
+  json_object_object_add(request, "connectionEpoch",
+                         json_object_new_int64((int64_t)state->connection_epoch));
+  json_object_object_add(request, "generation", json_object_new_int64((int64_t)generation));
+  json_object_object_add(request, "leaseId", json_object_new_string("watch-self-test-lease"));
+  json_object_object_add(request, "leaseDurationMs", json_object_new_int(1000));
+  json_object_object_add(surface, "role", json_object_new_string("provider"));
+  json_object_object_add(surface, "xid", json_object_new_int64((int64_t)xid));
+  json_object_array_add(surfaces, surface);
+  json_object_object_add(request, "surfaces", surfaces);
+  return request;
+}
+
+static json_object *x11_self_test_watch_lease_request(const HelperState *state,
+                                                      const char *request_id,
+                                                      const char *operation,
+                                                      uint64_t generation) {
+  json_object *request = json_object_new_object();
+  json_object_object_add(request, "version", json_object_new_int(1));
+  json_object_object_add(request, "requestId", json_object_new_string(request_id));
+  json_object_object_add(request, "operation", json_object_new_string(operation));
+  json_object_object_add(request, "daemonInstanceId",
+                         json_object_new_string(state->daemon_instance_id));
+  json_object_object_add(request, "connectionEpoch",
+                         json_object_new_int64((int64_t)state->connection_epoch));
+  json_object_object_add(request, "generation", json_object_new_int64((int64_t)generation));
+  json_object_object_add(request, "leaseId", json_object_new_string("watch-self-test-lease"));
+  if (strcmp(operation, "renew-watch") == 0) {
+    json_object_object_add(request, "leaseDurationMs", json_object_new_int(1000));
+  }
+  return request;
+}
+
 static bool x11_self_test_publish_generation(const char *path, uint64_t generation) {
   char value[32];
   int length = snprintf(value, sizeof(value), "%" PRIu64 "\n", generation);
@@ -4162,6 +5223,201 @@ static bool x11_self_test_publish_generation(const char *path, uint64_t generati
             write(descriptor, value, (size_t)length) == length;
   if (descriptor >= 0 && close(descriptor) != 0) ok = false;
   return ok;
+}
+
+static bool x11_self_test_fence(xcb_connection_t *connection) {
+  xcb_generic_error_t *error = NULL;
+  xcb_get_input_focus_reply_t *reply = xcb_get_input_focus_reply(
+    connection, xcb_get_input_focus(connection), &error);
+  bool ok = reply && !error;
+  free(reply);
+  free(error);
+  return ok;
+}
+
+static bool x11_self_test_pump_watch(HelperState *state, int64_t deadline_ns) {
+  bool saw_event = false;
+  while (remaining_timeout_ms(deadline_ns) > 0) {
+    xcb_generic_event_t *event;
+    bool progressed = false;
+    while ((event = xcb_poll_for_event(state->connection)) != NULL) {
+      progressed = true;
+      saw_event = true;
+      if ((event->response_type & 0x7fU) == 0) {
+        invalidate_watch(state, "XCB_ASYNC_ERROR");
+      } else {
+        observe_xcb_event(state, event);
+      }
+      free(event);
+    }
+    if (!state->watch_valid || progressed) {
+      if (!state->watch_valid) return true;
+      continue;
+    }
+    struct pollfd descriptor = {
+      .fd = xcb_get_file_descriptor(state->connection), .events = POLLIN | POLLERR | POLLHUP
+    };
+    int timeout_ms = remaining_timeout_ms(deadline_ns);
+    int poll_result = poll(&descriptor, 1, timeout_ms > 20 ? 20 : timeout_ms);
+    if (poll_result < 0 && errno != EINTR) return false;
+    if (poll_result > 0 && (descriptor.revents & (POLLERR | POLLHUP | POLLNVAL))) return false;
+    if (poll_result == 0 && saw_event) return true;
+  }
+  return true;
+}
+
+static int x11_watch_self_test(const char *display) {
+  HelperState state = {.phase = 3, .transaction_timeout_ms = SELF_TEST_TRANSACTION_TIMEOUT_MS};
+  xcb_connection_t *fixture_connection = NULL;
+  xcb_screen_t *fixture_screen = NULL;
+  xcb_window_t watched = XCB_WINDOW_NONE;
+  char generation_path[] = "/tmp/tikpal-x11-watch-generation.XXXXXX";
+  int generation_descriptor = -1;
+  json_object *request = NULL;
+  json_object *response = NULL;
+  json_object *value = NULL;
+  uint64_t reported_before_unwatch;
+  uint64_t stale_before;
+  int result = 1;
+
+  generation_descriptor = mkstemp(generation_path);
+  if (generation_descriptor < 0 || write(generation_descriptor, "1\n", 2) != 2 ||
+      close(generation_descriptor) != 0) {
+    if (generation_descriptor >= 0) close(generation_descriptor);
+    return self_test_failure("X11 watch generation fixture");
+  }
+  generation_descriptor = -1;
+  snprintf(state.display, sizeof(state.display), "%s", display);
+  snprintf(state.generation_path, sizeof(state.generation_path), "%s", generation_path);
+  snprintf(state.daemon_instance_id, sizeof(state.daemon_instance_id), "watch-self-test");
+  load_generation_floor(&state);
+  if (state.generation_state != GENERATION_OK ||
+      connect_xcb(&state, false, monotonic_ns() + 1000000000LL) != 0) {
+    self_test_failure("X11 watch helper connection");
+    goto cleanup;
+  }
+  fixture_connection = xcb_connect(display, NULL);
+  if (!fixture_connection || xcb_connection_has_error(fixture_connection) != 0) {
+    self_test_failure("X11 watch fixture connection");
+    goto cleanup;
+  }
+  fixture_screen = screen_for_number(fixture_connection, 0);
+  if (!fixture_screen) {
+    self_test_failure("X11 watch fixture screen");
+    goto cleanup;
+  }
+  watched = create_x11_self_test_window(fixture_connection, fixture_screen, fixture_screen->root,
+                                        state.net_wm_pid, state.net_wm_opacity,
+                                        40, 40, 1200, 600, 0, true, UINT32_MAX);
+  if (xcb_flush(fixture_connection) <= 0 || !x11_self_test_fence(fixture_connection)) {
+    self_test_failure("X11 watch fixture map");
+    goto cleanup;
+  }
+  request = x11_self_test_watch_request(&state, "watch-start", 1, watched);
+  response = watch_response(&state, request, "watch-start", monotonic_ns());
+  if (!response || !json_object_object_get_ex(response, "ok", &value) ||
+      !json_object_get_boolean(value) || !state.watch_valid || state.mutation_requests != 0 ||
+      state.mutation_started) {
+    self_test_failure("X11 watch subscription");
+    goto cleanup;
+  }
+  json_object_put(response);
+  response = NULL;
+  json_object_put(request);
+  request = NULL;
+
+  uint32_t geometry[] = {80, 40};
+  uint32_t opacity = 0xffffff00U;
+  const char title[] = "unmanaged";
+  xcb_configure_window(fixture_connection, watched,
+                       XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y, geometry);
+  xcb_change_property(fixture_connection, XCB_PROP_MODE_REPLACE, watched, state.net_wm_opacity,
+                      XCB_ATOM_CARDINAL, 32, 1, &opacity);
+  xcb_change_property(fixture_connection, XCB_PROP_MODE_REPLACE, watched, XCB_ATOM_WM_NAME,
+                      XCB_ATOM_STRING, 8, sizeof(title) - 1, title);
+  if (xcb_flush(fixture_connection) <= 0 || !x11_self_test_fence(fixture_connection) ||
+      !x11_self_test_pump_watch(&state, monotonic_ns() + 1000000000LL)) {
+    self_test_failure("X11 watch event pump");
+    goto cleanup;
+  }
+  bool saw_configure = false;
+  bool saw_property = false;
+  for (size_t index = 0; index < state.watch_event_history_count; index++) {
+    const WatchEvent *event = &state.watch_event_history[index];
+    if (strcmp(event->type, "ConfigureNotify") == 0) saw_configure = true;
+    if (strcmp(event->type, "PropertyNotify") == 0 && event->property == state.net_wm_opacity) {
+      saw_property = true;
+    }
+  }
+  if (!saw_configure || !saw_property || state.watch_events_would_repair < 2 ||
+      state.watch_events_unrelated_dropped == 0 || state.mutation_requests != 0 ||
+      state.mutation_started) {
+    self_test_failure("X11 watch would-repair classification");
+    goto cleanup;
+  }
+
+  request = x11_self_test_watch_lease_request(&state, "watch-renew", "renew-watch", 1);
+  response = renew_watch_response(&state, request, "watch-renew");
+  if (!response || !json_object_object_get_ex(response, "code", &value) ||
+      strcmp(json_object_get_string(value), "WATCH_RENEWED") != 0 || !state.watch_valid) {
+    self_test_failure("X11 watch lease renew");
+    goto cleanup;
+  }
+  json_object_put(response);
+  response = NULL;
+  json_object_put(request);
+  request = NULL;
+
+  stale_before = state.watch_events_stale_dropped;
+  if (!x11_self_test_publish_generation(generation_path, 2)) {
+    self_test_failure("X11 watch generation advance");
+    goto cleanup;
+  }
+  geometry[0] = 120;
+  xcb_configure_window(fixture_connection, watched,
+                       XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y, geometry);
+  if (xcb_flush(fixture_connection) <= 0 || !x11_self_test_fence(fixture_connection) ||
+      !x11_self_test_pump_watch(&state, monotonic_ns() + 1000000000LL) || state.watch_valid ||
+      strcmp(state.watch_invalid_reason, "GENERATION_ADVANCED") != 0 ||
+      state.watch_events_stale_dropped <= stale_before) {
+    self_test_failure("X11 watch stale generation discard");
+    goto cleanup;
+  }
+
+  request = x11_self_test_watch_lease_request(&state, "watch-stop", "unwatch", 1);
+  response = unwatch_response(&state, request, "watch-stop", "unwatch", "UNWATCHED");
+  if (!response || !json_object_object_get_ex(response, "code", &value) ||
+      strcmp(json_object_get_string(value), "UNWATCHED") != 0 || state.watch_valid ||
+      state.watch_lease_id[0] || state.mutation_requests != 0) {
+    self_test_failure("X11 watch release");
+    goto cleanup;
+  }
+  reported_before_unwatch = state.watch_events_reported;
+  json_object_put(response);
+  response = NULL;
+  json_object_put(request);
+  request = NULL;
+  xcb_change_property(fixture_connection, XCB_PROP_MODE_REPLACE, watched, state.net_wm_opacity,
+                      XCB_ATOM_CARDINAL, 32, 1, &opacity);
+  if (xcb_flush(fixture_connection) <= 0 || !x11_self_test_fence(fixture_connection) ||
+      !x11_self_test_pump_watch(&state, monotonic_ns() + 100000000LL) ||
+      state.watch_events_reported != reported_before_unwatch || state.mutation_requests != 0) {
+    self_test_failure("X11 watch unwatch no-repair");
+    goto cleanup;
+  }
+  result = 0;
+
+cleanup:
+  if (response) json_object_put(response);
+  if (request) json_object_put(request);
+  if (fixture_connection) {
+    if (watched != XCB_WINDOW_NONE) xcb_destroy_window(fixture_connection, watched);
+    xcb_flush(fixture_connection);
+    xcb_disconnect(fixture_connection);
+  }
+  if (state.connection) xcb_disconnect(state.connection);
+  unlink(generation_path);
+  return result;
 }
 
 static size_t x11_self_test_mutation_count(json_object *response, const char *action) {
@@ -5238,10 +6494,12 @@ static int run_self_test(int argc, char **argv) {
   bool x11_sequence = false;
   bool x11_transaction = false;
   bool x11_collector = false;
+  bool x11_watch = false;
   for (int index = 2; index < argc; index++) {
     if (strcmp(argv[index], "--x11-sequence") == 0) x11_sequence = true;
     else if (strcmp(argv[index], "--x11-transaction") == 0) x11_transaction = true;
     else if (strcmp(argv[index], "--x11-collector") == 0) x11_collector = true;
+    else if (strcmp(argv[index], "--x11-watch") == 0) x11_watch = true;
     else if (strcmp(argv[index], "--display") == 0 && index + 1 < argc) display = argv[++index];
     else if (strcmp(argv[index], "--xserver-pid") == 0 && index + 1 < argc) {
       char *end = NULL;
@@ -5266,6 +6524,10 @@ static int run_self_test(int argc, char **argv) {
     if (!display || !display[0] || !profile || !profile[0] ||
         x11_transaction_self_test(display, profile, xserver_pid) != 0) return 1;
   }
+  if (x11_watch) {
+    if (!display || !display[0]) display = getenv("DISPLAY");
+    if (!display || !display[0] || x11_watch_self_test(display) != 0) return 1;
+  }
 #ifdef TIKPAL_X11_HELPER_SELF_TEST_SEAMS
   if (x11_collector) {
     if (!display || !display[0]) display = getenv("DISPLAY");
@@ -5274,17 +6536,18 @@ static int run_self_test(int argc, char **argv) {
 #else
   if (x11_collector) return 64;
 #endif
-  printf("tikpal-x11-helper self-test passed%s%s%s\n",
+  printf("tikpal-x11-helper self-test passed%s%s%s%s\n",
          x11_sequence ? " with X11 sequence rollover" : "",
          x11_transaction ? " with X11 transaction" : "",
-         x11_collector ? " with X11 collector" : "");
+         x11_collector ? " with X11 collector" : "",
+         x11_watch ? " with X11 watch" : "");
   return 0;
 }
 
 static void usage(FILE *output) {
   fprintf(output,
           "Usage:\n"
-          "  tikpal-x11-helper daemon [--socket PATH] [--display DISPLAY] [--generation-file PATH] [--phase 0|1] [--transaction-timeout-ms N]\n"
+          "  tikpal-x11-helper daemon [--socket PATH] [--display DISPLAY] [--generation-file PATH] [--phase 0|1|3] [--transaction-timeout-ms N]\n"
           "  tikpal-x11-helper client health [--socket PATH] [--request-id ID]\n"
           "  tikpal-x11-helper client inspect --request-id ID [--generation N] --surface ROLE XID PROFILE [...]\n"
           "  tikpal-x11-helper client screen-probe --request-id ID\n"
@@ -5295,7 +6558,7 @@ static void usage(FILE *output) {
           "  tikpal-x11-helper client guard-process-verify --pid PID --starttime STARTTIME\n"
           "  tikpal-x11-helper client request [--socket PATH] < request.json\n"
           "  tikpal-x11-helper monotonic-ns\n"
-          "  tikpal-x11-helper self-test [--x11-sequence] [--x11-transaction --user-data-dir=PROFILE] [--display DISPLAY] [--xserver-pid PID]\n");
+          "  tikpal-x11-helper self-test [--x11-sequence] [--x11-transaction --user-data-dir=PROFILE] [--x11-watch] [--display DISPLAY] [--xserver-pid PID]\n");
 }
 
 int main(int argc, char **argv) {
