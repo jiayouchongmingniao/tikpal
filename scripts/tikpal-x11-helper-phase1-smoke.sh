@@ -298,11 +298,13 @@ MOCK_LOG="$FIXTURE_DIR/mock-helper.log"
 MOCK_SWITCH_STATUS_FILE="$FIXTURE_DIR/mock-switch-status"
 MOCK_REVOKE_STATUS_FILE="$FIXTURE_DIR/mock-revoke-status"
 MOCK_MUTATION_STARTED_FILE="$FIXTURE_DIR/mock-mutation-started"
+MOCK_PRE_MUTATION_RETRY_FILE="$FIXTURE_DIR/mock-pre-mutation-retry"
 MOCK_EPOCH_FILE="$FIXTURE_DIR/mock-epoch"
 MOCK_HELPER="$FIXTURE_DIR/mock-helper"
 printf '0\n' > "$MOCK_SWITCH_STATUS_FILE"
 printf '0\n' > "$MOCK_REVOKE_STATUS_FILE"
 printf '0\n' > "$MOCK_MUTATION_STARTED_FILE"
+printf '0\n' > "$MOCK_PRE_MUTATION_RETRY_FILE"
 printf '1\n' > "$MOCK_EPOCH_FILE"
 : > "$MOCK_LOG"
 
@@ -325,6 +327,12 @@ case "$command_name" in
       # reacquire a fresh Helper lease and keep the next X11 write in C.
       printf '0\n' > "$MOCK_SWITCH_STATUS_FILE"
       printf '{"ok":false,"code":"X11_REPLY_TIMEOUT","fallbackRecommended":true,"leaseReleased":true,"inFlight":false,"mutationStarted":true}\n'
+    elif [[ "$status" == "20" && "$(cat "$MOCK_PRE_MUTATION_RETRY_FILE")" == "1" ]]; then
+      # The retry-safe case is explicitly before any X11 mutation.  Arm the
+      # second C Helper call only for this fixture.
+      printf '0\n' > "$MOCK_SWITCH_STATUS_FILE"
+      printf '0\n' > "$MOCK_PRE_MUTATION_RETRY_FILE"
+      printf '{"ok":false,"code":"X11_REPLY_TIMEOUT","fallbackRecommended":true,"leaseReleased":true,"inFlight":false,"mutationStarted":false}\n'
     else
       printf '{"ok":false,"code":"FIXTURE_FAILURE","mutationStarted":%s}\n' \
         "$(cat "$MOCK_MUTATION_STARTED_FILE")"
@@ -420,7 +428,7 @@ fi
 
 export FIXTURE_REAL_HELPER="$X11_HELPER"
 export MOCK_LOG MOCK_SWITCH_STATUS_FILE MOCK_REVOKE_STATUS_FILE
-export MOCK_MUTATION_STARTED_FILE MOCK_EPOCH_FILE
+export MOCK_MUTATION_STARTED_FILE MOCK_PRE_MUTATION_RETRY_FILE MOCK_EPOCH_FILE
 export TIKPAL_WEB_MODE_SOURCE_ONLY=1
 export TIKPAL_WEB_MODE_PROFILE_ROOT="$FIXTURE_DIR/web-mode"
 export TIKPAL_WEB_MODE_X11_HELPER_MODE=disabled
@@ -597,9 +605,9 @@ retry_switch_count_after="$(grep -c '^switch ' "$MOCK_LOG" || true)"
   fail_fixture "timeout retry did not retain the second Helper lease"
 x11_helper_finish_success || fail_fixture "timeout retry Helper ownership release failed"
 
-# Strict field acceptance must stop after the first known-safe timeout. It may
-# reclaim ownership, but cannot issue a second Helper switch or fall back to a
-# Shell writer.
+# Strict field acceptance must stop after a timeout whose X11 transaction may
+# already have begun. It may reclaim ownership, but cannot issue a second
+# Helper switch or fall back to a Shell writer.
 printf '21\n' > "$MOCK_SWITCH_STATUS_FILE"
 printf '0\n' > "$MOCK_REVOKE_STATUS_FILE"
 reset_helper_shell_state
@@ -626,6 +634,29 @@ jq -e --argjson previous "$strict_generation" \
   '.owner == "shell" and .generation == ($previous + 1)' \
   "$TIKPAL_WEB_MODE_X11_HELPER_OWNER_PATH" >/dev/null ||
   fail_fixture "strict timeout did not restore a fresh Shell generation"
+TIKPAL_WEB_MODE_STRICT_HELPER_TRANSACTION=0
+
+# Conversely, a strict run may reconnect exactly once after the Helper proves
+# that the timeout happened before any X11 mutation. The second call is still
+# the only visible transaction and remains in the C Helper.
+printf '20\n' > "$MOCK_SWITCH_STATUS_FILE"
+printf '1\n' > "$MOCK_PRE_MUTATION_RETRY_FILE"
+printf '0\n' > "$MOCK_REVOKE_STATUS_FILE"
+reset_helper_shell_state
+TIKPAL_WEB_MODE_STRICT_HELPER_TRANSACTION=1
+strict_pre_mutation_count_before="$(grep -c '^switch ' "$MOCK_LOG" || true)"
+x11_helper_prepare_switch || fail_fixture "strict pre-mutation Helper prepare failed"
+x11_helper_switch_with_timeout_retry \
+  101 "$FIXTURE_DIR/target-profile" \
+  202 "$FIXTURE_DIR/previous-profile" \
+  303 "$FIXTURE_DIR/panel-profile" ||
+  fail_fixture "strict pre-mutation timeout did not retry through Helper"
+strict_pre_mutation_count_after="$(grep -c '^switch ' "$MOCK_LOG" || true)"
+(( strict_pre_mutation_count_after == strict_pre_mutation_count_before + 2 )) ||
+  fail_fixture "strict pre-mutation timeout did not issue exactly two Helper calls"
+[[ "$TIKPAL_X11_HELPER_ACTIVE" == "1" && "$TIKPAL_X11_HELPER_UNKNOWN" == "0" ]] ||
+  fail_fixture "strict pre-mutation retry did not retain the second Helper lease"
+x11_helper_finish_success || fail_fixture "strict pre-mutation Helper ownership release failed"
 TIKPAL_WEB_MODE_STRICT_HELPER_TRANSACTION=0
 
 printf '0\n' > "$MOCK_SWITCH_STATUS_FILE"

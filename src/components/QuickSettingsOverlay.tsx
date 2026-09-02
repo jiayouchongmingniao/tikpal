@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Airplay, Bluetooth, Captions, Cast, CheckCircle2, CircleHelp, Clock3, Cpu, Database, EthernetPort, Eye, EyeOff, Globe2, HardDrive, Info, Monitor, Moon, Music2, Palette, PanelRightClose, Plus, Power, Radio as RadioIcon, RotateCcw, Search, Server, SlidersHorizontal, Target, Trash2, Type, Usb, Volume2, Waves } from "lucide-react";
-import { deleteNasSource, discoverNasSources, fetchAudioLibrary, fetchAudioOutputDiagnostics, fetchMultiroom, fetchNasSources, fetchWebModeState, mountNasSource, saveNasSource, sendWebModeAction, testNasSource, testWebModeProxy, unmountNasSource, updateMultiroomEcosystem, updateWebModeSettings } from "../api/tikpalClient";
+import { checkWebModeOwnership, deleteNasSource, discoverNasSources, fetchAudioLibrary, fetchAudioOutputDiagnostics, fetchMultiroom, fetchNasSources, fetchWebModeState, mountNasSource, repairWebModeOwnership, saveNasSource, sendWebModeAction, testNasSource, testWebModeProxy, unmountNasSource, updateMultiroomEcosystem, updateWebModeSettings } from "../api/tikpalClient";
 import { languageOptions, useI18n } from "../i18n";
 import { getSourceDisplayStatus, getSourceDisplayStatusLabel } from "../sourceStatus";
 import type { TikpalDataStatus } from "../hooks/useTikpalState";
 import { useOverlayReturnGesture } from "../hooks/useOverlayReturnGesture";
-import type { AudioOutputCustomSettingId, AudioOutputDiagnostics, AudioOutputProfile, AudioState, DisplaySleepStyle, FontTheme, LyricsFontSize, MultiroomAudioState, MultiroomEcosystemId, NasDiscoverCandidate, NasSourceInput, NasSourcesResponse, NightScheduleState, PlaybackSummary, RoomExperienceActionRequest, RoomExperienceState, RoomMode, RuntimeState, SurfaceTheme, SystemActionType, SystemState, UiLocale, UiPreferences, WebModeState } from "../types";
+import type { AudioOutputCustomSettingId, AudioOutputDiagnostics, AudioOutputProfile, AudioState, DisplaySleepStyle, FontTheme, LyricsFontSize, MultiroomAudioState, MultiroomEcosystemId, NasDiscoverCandidate, NasSourceInput, NasSourcesResponse, NightScheduleState, PlaybackSummary, RoomExperienceActionRequest, RoomExperienceState, RoomMode, RuntimeState, SurfaceTheme, SystemActionType, SystemState, UiLocale, UiPreferences, WebModeOwnershipCheck, WebModeState } from "../types";
 
 interface QuickSettingsOverlayProps {
   active: boolean;
@@ -439,6 +439,8 @@ export function QuickSettingsOverlay({
   const [webModeProxyValidatedUrl, setWebModeProxyValidatedUrl] = useState<string | null>(null);
   const [webModeProxyFailedSites, setWebModeProxyFailedSites] = useState<string[]>([]);
   const [webModeError, setWebModeError] = useState<string | null>(null);
+  const [webModeOwnership, setWebModeOwnership] = useState<WebModeOwnershipCheck | null>(null);
+  const [webModeOwnershipPending, setWebModeOwnershipPending] = useState(false);
   const [libraryStorageCounts, setLibraryStorageCounts] = useState<LibraryStorageCounts>({
     local: null,
     nas: null,
@@ -544,6 +546,35 @@ export function QuickSettingsOverlay({
     setPendingRoomShortcut(null);
     setRoomShortcutError(null);
   }, [active]);
+
+  useEffect(() => {
+    if (!active || detailView !== "webMode") return undefined;
+    let cancelled = false;
+    setWebModeOwnershipPending(true);
+    void checkWebModeOwnership()
+      .then((result) => {
+        if (!cancelled) setWebModeOwnership(result);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setWebModeOwnership({
+            supported: true,
+            ok: false,
+            repaired: false,
+            mismatches: [],
+            repairedPaths: [],
+            blockedPaths: [],
+            message: localizedErrorMessage(error, "error.explore")
+          });
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setWebModeOwnershipPending(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [active, detailView, localizedErrorMessage]);
   // Handle initialDetail from QuickMenu long-press navigation
   useEffect(() => {
     if (!active || !initialDetail) {
@@ -1605,6 +1636,26 @@ export function QuickSettingsOverlay({
     }
   }
 
+  async function repairExploreOwnership() {
+    if (webModeOwnershipPending || webModeOwnership?.supported === false) return;
+    setWebModeOwnershipPending(true);
+    try {
+      setWebModeOwnership(await repairWebModeOwnership());
+    } catch (error) {
+      setWebModeOwnership({
+        supported: true,
+        ok: false,
+        repaired: false,
+        mismatches: [],
+        repairedPaths: [],
+        blockedPaths: [],
+        message: localizedErrorMessage(error, "error.explore")
+      });
+    } finally {
+      setWebModeOwnershipPending(false);
+    }
+  }
+
   function renderAppearanceDetail() {
     return (
       <section className="settings-detail-panel" aria-label={t("settings.skin")} data-settings-detail="appearance">
@@ -2531,6 +2582,25 @@ export function QuickSettingsOverlay({
     const proxyChangeTarget = webModeProxyConfirmEnabled === null
       ? null
       : webModeProxyConfirmEnabled ? t("common.proxyOn") : t("common.direct");
+    const ownershipAttention = webModeOwnership !== null && (!webModeOwnership.ok || webModeOwnership.blockedPaths.length > 0);
+    const ownershipStatusText = webModeOwnershipPending
+      ? t("settings.runtimeSelfCheckChecking")
+      : webModeOwnership?.supported === false
+        ? t("settings.runtimeSelfCheckUnavailable")
+        : webModeOwnership?.repaired
+          ? t("settings.runtimeSelfCheckRepaired")
+          : webModeOwnership?.ok
+            ? t("settings.runtimeSelfCheckHealthy")
+            : t("settings.needsAttention");
+    const ownershipHelp = webModeOwnership?.supported === false
+      ? t("settings.runtimeSelfCheckUnavailable")
+      : webModeOwnership?.blockedPaths.length
+        ? t("settings.runtimeSelfCheckBlocked")
+        : webModeOwnership?.repaired
+          ? t("settings.runtimeSelfCheckRepairedHelp")
+          : webModeOwnership?.ok
+            ? t("settings.runtimeSelfCheckHealthyHelp")
+            : t("settings.runtimeSelfCheckHelp");
 
     return (
       <section className="settings-detail-panel" aria-label="Explore detail" data-settings-detail="web-mode">
@@ -2615,6 +2685,22 @@ export function QuickSettingsOverlay({
               </div>
             </section>
           ) : null}
+
+          <button
+            className={`night-toggle web-mode-runtime-check ${ownershipAttention ? "is-attention" : "is-healthy"}`}
+            type="button"
+            disabled={webModeOwnershipPending || webModeOwnership?.supported === false}
+            aria-busy={webModeOwnershipPending}
+            data-web-mode-ownership-repair
+            onClick={() => void repairExploreOwnership()}
+          >
+            <RotateCcw size={26} />
+            <span>
+              <strong>{t("settings.runtimeSelfCheck")}</strong>
+              <em>{ownershipStatusText}</em>
+            </span>
+          </button>
+          <p className="web-mode-runtime-help" aria-live="polite">{ownershipHelp}</p>
 
           <p className="web-mode-settings-help">{t("settings.exploreHelp")}</p>
         </div>

@@ -23,6 +23,7 @@
     "test:ota:package:mp4": "node scripts/generate-mp4-resource-otas-smoke.mjs",
     "test:ota:resources": "node scripts/resource-ota-smoke.mjs",
     "test:kiosk": "node scripts/kiosk-package-smoke.mjs && node scripts/explore-open-lifecycle-smoke.mjs",
+    "test:cdp-manager": "node scripts/tikpal-cdp-session-manager-smoke.mjs",
     "test:initial-entry": "bash scripts/tikpal-initial-entry-fixture.sh",
     "test:explore-lifecycle": "node scripts/explore-open-lifecycle-smoke.mjs",
     "test:interaction": "node scripts/interaction-smoke.mjs"

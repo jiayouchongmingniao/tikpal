@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { createConnection } from "node:net";
 import { fileURLToPath } from "node:url";
 
 const port = Number.parseInt(process.env.TIKPAL_WEB_MODE_PROVIDER_DEBUG_PORT || "9234", 10);
@@ -18,6 +19,8 @@ const qqMvAutoFullscreen = /^(1|true|yes|on|enabled)$/i.test(process.env.TIKPAL_
 const qqMvCinemaMode = /^(1|true|yes|on|enabled)$/i.test(process.env.TIKPAL_WEB_MODE_QQ_MV_CINEMA_MODE || "1");
 const qqMvAutoPlay = /^(1|true|yes|on|enabled)$/i.test(process.env.TIKPAL_WEB_MODE_QQ_MV_AUTO_PLAY || "1");
 const neteaseAutoPlay = /^(1|true|yes|on|enabled)$/i.test(process.env.TIKPAL_WEB_MODE_NETEASE_AUTO_PLAY || "1");
+const cdpSessionManagerEnabled = /^(1|true|yes|on|enabled)$/i.test(process.env.TIKPAL_WEB_MODE_CDP_SESSION_MANAGER || "0");
+const cdpSessionManagerSocket = process.env.TIKPAL_WEB_MODE_CDP_SESSION_MANAGER_SOCKET || "/run/tikpal/cdp-session-manager.sock";
 const onboardAutoFocus = /^(1|true|yes|on|enabled)$/i.test(process.env.TIKPAL_WEB_MODE_ONBOARD_AUTO_FOCUS || "1");
 const allowProgrammaticInputFocus = providerId !== "suno";
 const launcherPath = fileURLToPath(new URL("./tikpal-web-mode.sh", import.meta.url));
@@ -25,6 +28,7 @@ const keyboardActionUrl = `http://127.0.0.1:${process.env.TIKPAL_API_PORT || "87
 const emptyPageTimeoutMs = Math.max(5, Number.parseInt(process.env.TIKPAL_WEB_MODE_EMPTY_PAGE_ERROR_SECONDS || "18", 10) || 18) * 1000;
 const activePollMs = 250;
 const idlePollMs = Math.max(activePollMs, Number.parseInt(process.env.TIKPAL_WEB_MODE_PROVIDER_GUARD_IDLE_POLL_MS || "2000", 10) || 2000);
+const spotifyInactivePollMs = Math.min(idlePollMs, 500);
 const onboardInputSelector = [
   "textarea",
   "[contenteditable='true']",
@@ -187,6 +191,11 @@ const providerReadyHosts = {
   qq_music: ["y.qq.com"],
   netease_music: ["music.163.com"]
 };
+const providerPortOffsets = {
+  0: "spotify", 1: "youtube_music", 2: "apple_music", 3: "tidal", 4: "qobuz",
+  5: "deezer", 6: "amazon_music", 7: "qq_music", 8: "netease_music", 9: "suno"
+};
+const managerProviderId = providerId || providerPortOffsets[port - (Number.parseInt(process.env.TIKPAL_WEB_MODE_PROVIDER_DEBUG_PORT_BASE || "9234", 10) || 9234)] || "";
 const qqAudioUnmuteCooldownMs = 5000;
 const qqAudioPrimeCooldownMs = 12000;
 const qqMusicAutoPlayDelayMs = 1800;
@@ -240,11 +249,53 @@ function providerIsActive() {
 }
 
 async function readTargets() {
+  if (cdpSessionManagerEnabled) {
+    const response = await managerRequest({ op: "targets", provider: managerProviderId, priority: "maintenance" });
+    return response?.ok ? response.targets || [] : [];
+  }
   const response = await fetch(`http://127.0.0.1:${port}/json`, {
     signal: AbortSignal.timeout(800)
   });
   if (!response.ok) return [];
   return response.json();
+}
+
+function isManagerTarget(wsUrl) {
+  return cdpSessionManagerEnabled && String(wsUrl || "").startsWith("manager://");
+}
+
+function managerTargetId(wsUrl) {
+  try { return new URL(wsUrl).pathname.replace(/^\//, ""); } catch { return ""; }
+}
+
+function managerRequest(payload) {
+  return new Promise((resolve, reject) => {
+    const socket = createConnection({ path: cdpSessionManagerSocket });
+    let buffer = "";
+    const timer = setTimeout(() => {
+      try { socket.destroy(); } catch {}
+      reject(new Error("CDP Manager IPC timed out"));
+    // The Manager permits a bounded 1.8s maintenance command so a background
+    // renderer can finish without forcing a browser-session reconnect.  Keep
+    // this IPC deadline slightly beyond it; otherwise the Guard abandons a
+    // valid response and creates false maintenance failures.
+    }, 2200);
+    socket.setEncoding("utf8");
+    socket.on("connect", () => socket.write(`${JSON.stringify(payload)}\n`));
+    socket.on("data", (chunk) => {
+      buffer += chunk;
+      const newline = buffer.indexOf("\n");
+      if (newline < 0) return;
+      clearTimeout(timer);
+      socket.end();
+      try { resolve(JSON.parse(buffer.slice(0, newline))); }
+      catch { reject(new Error("CDP Manager returned invalid JSON")); }
+    });
+    socket.on("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+  });
 }
 
 function isPageTarget(target) {
@@ -354,6 +405,20 @@ function isNeteaseMusicPage(target) {
 }
 
 function cdpCommand(wsUrl, method, params = {}) {
+  if (isManagerTarget(wsUrl)) {
+    return managerRequest({
+      op: "command",
+      provider: managerProviderId,
+      targetId: managerTargetId(wsUrl),
+      method,
+      params,
+      retryable: false,
+      priority: "maintenance"
+    }).then((response) => {
+      if (!response?.ok) throw new Error(response?.error || "CDP Manager command failed");
+      return response.result || null;
+    });
+  }
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(wsUrl);
     const timer = setTimeout(() => {
@@ -835,6 +900,17 @@ function parseErrorReason(text, title, href) {
 function attachEarlyErrorRedirect(target) {
   if (!isExpectedProviderPage(target) || earlyRedirectTargets.has(target.id)) return;
   earlyRedirectTargets.add(target.id);
+
+  if (isManagerTarget(target.webSocketDebuggerUrl)) {
+    managerRequest({
+      op: "watch-early-error",
+      provider: managerProviderId,
+      targetId: target.id,
+      errorPageUrl: errorPageUrl("load_failed"),
+      priority: "maintenance"
+    }).catch(() => earlyRedirectTargets.delete(target.id));
+    return;
+  }
 
   const ws = new WebSocket(target.webSocketDebuggerUrl);
   let messageId = 1;
@@ -2137,6 +2213,15 @@ async function installSinglePaneNavigation(target) {
 
 async function closeTarget(target) {
   if (!target?.id) return;
+  if (isManagerTarget(target.webSocketDebuggerUrl)) {
+    await managerRequest({
+      op: "close-target",
+      provider: managerProviderId,
+      targetId: target.id,
+      priority: "maintenance"
+    }).catch(() => {});
+    return;
+  }
   await fetch(`http://127.0.0.1:${port}/json/close/${encodeURIComponent(target.id)}`, {
     signal: AbortSignal.timeout(800)
   }).catch(() => {});
@@ -2695,9 +2780,23 @@ async function runNeteaseAudioFeatures(targets) {
 }
 
 async function runProviderAudioGate(targets, active) {
+  let applied = false;
   for (const target of targets.filter((item) => isProviderWebPage(item) && !isFriendlyErrorPage(item))) {
-    await evaluate(target.webSocketDebuggerUrl, providerAudioGateExpression(active)).catch(() => null);
+    const status = await evaluate(target.webSocketDebuggerUrl, providerAudioGateExpression(active)).catch(() => null);
+    applied ||= status?.active === active;
   }
+  return applied;
+}
+
+async function runProviderAudioGateWithRetries(active) {
+  const deadline = Date.now() + 2_800;
+  do {
+    const targets = (await readTargets()).filter(isPageTarget);
+    if (await runProviderAudioGate(targets, active)) return true;
+    if (Date.now() >= deadline) break;
+    await new Promise((resolve) => setTimeout(resolve, 80));
+  } while (Date.now() < deadline);
+  return false;
 }
 
 function providerGuardSchedule(currentProviderId, active, activePass) {
@@ -2782,6 +2881,11 @@ function runProviderGuardScheduleFixtures() {
 let spotifyActivePass = 0;
 let spotifyInactivePass = 0;
 let spotifyOpeningPass = 0;
+
+if (process.argv.includes("--audio-gate-active") || process.argv.includes("--audio-gate-inactive")) {
+  const active = process.argv.includes("--audio-gate-active");
+  process.exit(await runProviderAudioGateWithRetries(active) ? 0 : 1);
+}
 
 async function guardOnce() {
   if (typeof WebSocket !== "function") return;
@@ -2906,5 +3010,8 @@ while (profileProcessExists()) {
   // Only the visible provider needs sub-second input and prompt handling.
   // The other resident pages still get safety/consent checks, but must not
   // compete with foreground X11 work on every 250ms tick.
-  await sleep(providerIsActive() ? activePollMs : idlePollMs);
+  const pollMs = providerIsActive()
+    ? activePollMs
+    : providerId === "spotify" ? spotifyInactivePollMs : idlePollMs;
+  await sleep(pollMs);
 }

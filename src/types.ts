@@ -162,6 +162,16 @@ export interface WebModeProxyTestResponse {
   checks: WebModeProxyTestCheck[];
 }
 
+export interface WebModeOwnershipCheck {
+  supported: boolean;
+  ok: boolean;
+  repaired: boolean;
+  mismatches: string[];
+  repairedPaths: string[];
+  blockedPaths: string[];
+  message: string;
+}
+
 export interface RadioStationSummary {
   id: string;
   label: string;

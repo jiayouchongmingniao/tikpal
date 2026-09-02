@@ -224,7 +224,7 @@ window_guard_launch_process() {
   pid=$((9000 + launch_count))
   mock_guard_add "$pid" "mock-start-$launch_count"
   printf 'launch\t%s\n' "$pid" >> "$mock_guard_event_log"
-  printf '%s\n' "$pid"
+  TIKPAL_WINDOW_GUARD_LAUNCHED_PID="$pid"
 }
 
 window_guard_write_pid_file() {

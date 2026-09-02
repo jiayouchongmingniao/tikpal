@@ -9887,6 +9887,44 @@ select {
   background: #82edab;
 }
 
+.web-mode-runtime-check {
+  border: 2px solid rgba(91, 214, 139, 0.54);
+  background: linear-gradient(135deg, rgba(31, 112, 67, 0.34), rgba(12, 45, 27, 0.76));
+}
+
+.web-mode-runtime-check svg,
+.web-mode-runtime-check strong {
+  color: #dcffe8;
+}
+
+.web-mode-runtime-check em {
+  color: #083f21;
+  background: #80edaa;
+}
+
+.web-mode-runtime-check.is-attention {
+  border-color: color-mix(in srgb, var(--danger) 72%, transparent);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--danger) 32%, transparent), rgba(61, 18, 24, 0.82));
+}
+
+.web-mode-runtime-check.is-attention svg,
+.web-mode-runtime-check.is-attention strong {
+  color: #ffe0df;
+}
+
+.web-mode-runtime-check.is-attention em {
+  color: #570d16;
+  background: #ffb6b3;
+}
+
+.web-mode-runtime-help {
+  grid-column: 1 / -1;
+  margin: -3px 0 0;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1.35;
+}
+
 .web-mode-proxy-url-control {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(168px, 0.28fr);
@@ -10059,6 +10097,11 @@ select {
   }
 
   .web-mode-settings-help {
+    font-size: 14px;
+    line-height: 1.25;
+  }
+
+  .web-mode-runtime-help {
     font-size: 14px;
     line-height: 1.25;
   }

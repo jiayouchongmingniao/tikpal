@@ -31,6 +31,7 @@ import type {
   SystemActionType,
   TikpalState,
   WebModeActionRequest,
+  WebModeOwnershipCheck,
   WebModeSettingsPatch,
   WebModeProxyTestResponse,
   WebModeState
@@ -454,6 +455,21 @@ export async function testWebModeProxy(proxyUrl?: string): Promise<WebModeProxyT
     body: JSON.stringify(proxyUrl === undefined ? {} : { proxyUrl })
   }, DEFAULT_POST_TIMEOUT_MS);
   return readJson<WebModeProxyTestResponse>(response);
+}
+
+export async function checkWebModeOwnership(): Promise<WebModeOwnershipCheck> {
+  const response = await fetchWithTimeout(`${API_ROOT}/web-mode/ownership-check`, {
+    headers: { Accept: "application/json" }
+  }, DEFAULT_GET_TIMEOUT_MS);
+  return readJson<WebModeOwnershipCheck>(response);
+}
+
+export async function repairWebModeOwnership(): Promise<WebModeOwnershipCheck> {
+  const response = await fetchWithTimeout(`${API_ROOT}/web-mode/ownership-repair`, {
+    method: "POST",
+    headers: { Accept: "application/json" }
+  }, DEFAULT_POST_TIMEOUT_MS);
+  return readJson<WebModeOwnershipCheck>(response);
 }
 
 export async function sendKioskHeartbeat(payload: Record<string, unknown>, signal?: AbortSignal): Promise<void> {

@@ -61,6 +61,7 @@
 #define MAX_WATCH_INVALID_REASON 64
 #define MAX_WATCH_EVENT_HISTORY 64
 #define REQUEST_CACHE_SIZE 32
+#define PROFILE_IDENTITY_CACHE_SIZE 16
 /* Every supported local client writes its framed request immediately after
  * connect.  Keep an incomplete peer from monopolising the single-threaded
  * daemon long enough to delay a foreground switch behind several 300 ms reads. */
@@ -180,6 +181,19 @@ typedef struct {
 } SurfaceIdentity;
 
 typedef struct {
+  bool valid;
+  uint32_t pid;
+  uid_t uid;
+  unsigned long long starttime;
+} ProfileAnchor;
+
+typedef struct {
+  bool used;
+  ProfileAnchor anchor;
+  char profile[PATH_MAX];
+} ProfileIdentityCacheEntry;
+
+typedef struct {
   uint32_t sequence;
   char action[40];
   xcb_window_t xid;
@@ -271,6 +285,8 @@ typedef struct {
   CollectorDiagnostics last_collect;
   CachedRequest request_cache[REQUEST_CACHE_SIZE];
   size_t next_cache_slot;
+  ProfileIdentityCacheEntry profile_identity_cache[PROFILE_IDENTITY_CACHE_SIZE];
+  size_t next_profile_identity_cache_slot;
   int phase;
   int transaction_timeout_ms;
 } HelperState;
@@ -1086,41 +1102,123 @@ static bool read_proc_identity(uint32_t pid, uid_t *uid, uint32_t *parent,
   return field > 22;
 }
 
-static bool pid_tree_matches_profile(uint32_t initial_pid, const char *profile, int64_t deadline_ns) {
+static bool process_command_line_matches_profile(uint32_t pid, const char *profile,
+                                                 const char *canonical_profile) {
+  char path[64];
+  char command_line[65536];
+  int descriptor;
+  ssize_t length;
+  snprintf(path, sizeof(path), "/proc/%u/cmdline", pid);
+  descriptor = open(path, O_RDONLY | O_CLOEXEC);
+  if (descriptor < 0) return false;
+  length = read(descriptor, command_line, sizeof(command_line) - 1);
+  close(descriptor);
+  if (length <= 0) return false;
+  command_line[length] = '\0';
+  return command_line_matches_profile(command_line, length, profile, canonical_profile);
+}
+
+static bool pid_tree_matches_profile(uint32_t initial_pid, const char *profile, int64_t deadline_ns,
+                                     ProfileAnchor *anchor) {
 #ifdef TIKPAL_X11_HELPER_LOCAL_FIXTURE
   (void)deadline_ns;
+  if (anchor) {
+    anchor->valid = read_proc_identity(initial_pid, &anchor->uid, NULL, &anchor->starttime);
+    anchor->pid = initial_pid;
+  }
   return initial_pid != 0 && profile && profile[0];
 #endif
 #ifdef TIKPAL_X11_HELPER_SELF_TEST_SEAMS
   if (self_test_identity_pid != 0 && initial_pid == self_test_identity_pid) {
+    if (anchor) {
+      anchor->valid = read_proc_identity(initial_pid, &anchor->uid, NULL, &anchor->starttime);
+      anchor->pid = initial_pid;
+    }
     return self_test_identity_profile && strcmp(profile, self_test_identity_profile) == 0;
   }
 #endif
   uint32_t pid = initial_pid;
   char canonical_profile[PATH_MAX] = "";
-  char path[64];
-  char command_line[65536];
   if (!realpath(profile, canonical_profile)) canonical_profile[0] = '\0';
 
   for (int depth = 0; depth < 16 && pid > 1; depth++) {
-    int descriptor;
-    ssize_t length;
     uint32_t parent = 0;
     if (remaining_timeout_ms(deadline_ns) <= 0) return false;
-    snprintf(path, sizeof(path), "/proc/%u/cmdline", pid);
-    descriptor = open(path, O_RDONLY | O_CLOEXEC);
-    if (descriptor >= 0) {
-      length = read(descriptor, command_line, sizeof(command_line) - 1);
-      close(descriptor);
-      if (length > 0) {
-        command_line[length] = '\0';
-        if (command_line_matches_profile(command_line, length, profile, canonical_profile)) return true;
+    if (process_command_line_matches_profile(pid, profile, canonical_profile)) {
+      if (anchor) {
+        anchor->valid = read_proc_identity(pid, &anchor->uid, NULL, &anchor->starttime);
+        anchor->pid = pid;
       }
+      return true;
     }
     if (!read_proc_identity(pid, NULL, &parent, NULL) || parent == 0 || parent == pid) break;
     pid = parent;
   }
   return false;
+}
+
+static bool profile_leaf_descends_from_anchor(uint32_t leaf_pid, uid_t leaf_uid,
+                                              const ProfileAnchor *anchor,
+                                              int64_t deadline_ns) {
+  uint32_t pid = leaf_pid;
+  for (int depth = 0; depth < 16 && pid > 1; depth++) {
+    uid_t uid = (uid_t)-1;
+    uint32_t parent = 0;
+    unsigned long long starttime = 0;
+    if (remaining_timeout_ms(deadline_ns) <= 0 ||
+        !read_proc_identity(pid, &uid, &parent, &starttime) || uid != leaf_uid) {
+      return false;
+    }
+    if (pid == anchor->pid) {
+      return uid == anchor->uid && starttime == anchor->starttime;
+    }
+    if (parent == 0 || parent == pid) break;
+    pid = parent;
+  }
+  return false;
+}
+
+static bool profile_identity_cache_matches(const HelperState *state,
+                                           const SurfaceResult *surface,
+                                           int64_t deadline_ns) {
+  char canonical_profile[PATH_MAX] = "";
+  for (size_t index = 0; index < PROFILE_IDENTITY_CACHE_SIZE; index++) {
+    const ProfileIdentityCacheEntry *entry = &state->profile_identity_cache[index];
+    uid_t anchor_uid = (uid_t)-1;
+    unsigned long long anchor_starttime = 0;
+    if (!entry->used || strcmp(entry->profile, surface->request.profile) != 0 ||
+        !entry->anchor.valid) continue;
+    if (!realpath(surface->request.profile, canonical_profile)) canonical_profile[0] = '\0';
+    if (!read_proc_identity(entry->anchor.pid, &anchor_uid, NULL, &anchor_starttime) ||
+        anchor_uid != entry->anchor.uid || anchor_starttime != entry->anchor.starttime ||
+        !process_command_line_matches_profile(entry->anchor.pid, surface->request.profile,
+                                              canonical_profile)) continue;
+    return profile_leaf_descends_from_anchor(surface->pid, surface->uid, &entry->anchor,
+                                             deadline_ns);
+  }
+  return false;
+}
+
+static void remember_profile_identity(HelperState *state, const SurfaceResult *surface,
+                                      const ProfileAnchor *anchor) {
+  ProfileIdentityCacheEntry *entry = NULL;
+  if (!anchor || !anchor->valid) return;
+  for (size_t index = 0; index < PROFILE_IDENTITY_CACHE_SIZE; index++) {
+    if (state->profile_identity_cache[index].used &&
+        strcmp(state->profile_identity_cache[index].profile, surface->request.profile) == 0) {
+      entry = &state->profile_identity_cache[index];
+      break;
+    }
+  }
+  if (!entry) {
+    entry = &state->profile_identity_cache[state->next_profile_identity_cache_slot++ %
+                                           PROFILE_IDENTITY_CACHE_SIZE];
+  }
+  *entry = (ProfileIdentityCacheEntry){
+    .used = true,
+    .anchor = *anchor,
+  };
+  snprintf(entry->profile, sizeof(entry->profile), "%s", surface->request.profile);
 }
 
 static bool wm_class_is_chromium(const SurfaceResult *surface) {
@@ -1158,7 +1256,7 @@ static void copy_wm_class(SurfaceResult *surface) {
   }
 }
 
-static void parse_surface_result(SurfaceResult *surface, int64_t deadline_ns,
+static void parse_surface_result(HelperState *state, SurfaceResult *surface, int64_t deadline_ns,
                                  bool verify_profile_identity) {
   surface->code = "OK";
   surface->opacity = UINT32_MAX;
@@ -1227,7 +1325,10 @@ static void parse_surface_result(SurfaceResult *surface, int64_t deadline_ns,
     surface->code = "WINDOW_UID_MISMATCH";
     return;
   }
-  surface->profile_matched = pid_tree_matches_profile(surface->pid, surface->request.profile, deadline_ns);
+  ProfileAnchor profile_anchor = {0};
+  bool profile_cache_hit = profile_identity_cache_matches(state, surface, deadline_ns);
+  surface->profile_matched = profile_cache_hit ||
+    pid_tree_matches_profile(surface->pid, surface->request.profile, deadline_ns, &profile_anchor);
   if (!surface->profile_matched) {
     surface->code = remaining_timeout_ms(deadline_ns) <= 0
       ? "TRANSACTION_DEADLINE_EXCEEDED"
@@ -1240,6 +1341,7 @@ static void parse_surface_result(SurfaceResult *surface, int64_t deadline_ns,
     surface->code = "WINDOW_PID_REUSED";
     return;
   }
+  if (!profile_cache_hit) remember_profile_identity(state, surface, &profile_anchor);
   surface->ok = true;
 }
 
@@ -1272,11 +1374,32 @@ static void free_surface_results(SurfaceResult *surfaces, size_t count) {
   }
 }
 
-static void clear_surface_result_data(SurfaceResult *surface) {
-  SurfaceRequest request = surface->request;
-  free_surface_results(surface, 1);
-  memset(surface, 0, sizeof(*surface));
-  surface->request = request;
+/* The final, fenced snapshot needs the state that can change after the
+ * mutation: root geometry, visibility, PID and opacity.  Keep the initial
+ * class/tree/profile proof so the response remains attributable to the same
+ * fully authenticated surface; final PID/UID/starttime verification below
+ * rejects replacement before the response is accepted. */
+static void clear_final_surface_state(SurfaceResult *surface) {
+  free(surface->geometry);
+  free(surface->translate);
+  free(surface->attributes);
+  free(surface->pid_property);
+  free(surface->opacity_property);
+  free(surface->first_error);
+  surface->geometry = NULL;
+  surface->translate = NULL;
+  surface->attributes = NULL;
+  surface->pid_property = NULL;
+  surface->opacity_property = NULL;
+  surface->first_error = NULL;
+  surface->pid = 0;
+  surface->map_viewable = false;
+  surface->geometry_usable = false;
+  surface->opacity_present = false;
+  surface->opacity = UINT32_MAX;
+  surface->opacity_full = true;
+  surface->ok = false;
+  surface->code = "OK";
 }
 
 static size_t queue_surface_queries(HelperState *state, SurfaceResult *surfaces, size_t count,
@@ -1326,6 +1449,92 @@ static size_t queue_surface_queries(HelperState *state, SurfaceResult *surfaces,
   return pending_count;
 }
 
+static size_t queue_final_surface_queries(HelperState *state, SurfaceResult *surfaces,
+                                          size_t count, PendingReply pending[MAX_PENDING]) {
+  size_t pending_count = 0;
+  for (size_t index = 0; index < count; index++) {
+    xcb_get_geometry_cookie_t geometry =
+      xcb_get_geometry(state->connection, surfaces[index].request.xid);
+    xcb_translate_coordinates_cookie_t translate =
+      xcb_translate_coordinates(state->connection, surfaces[index].request.xid,
+                                state->screen->root, 0, 0);
+    xcb_get_window_attributes_cookie_t attributes =
+      xcb_get_window_attributes(state->connection, surfaces[index].request.xid);
+    xcb_get_property_cookie_t pid =
+      xcb_get_property(state->connection, 0, surfaces[index].request.xid,
+                       state->net_wm_pid, XCB_ATOM_CARDINAL, 0, 1);
+    xcb_get_property_cookie_t opacity =
+      xcb_get_property(state->connection, 0, surfaces[index].request.xid,
+                       state->net_wm_opacity, XCB_ATOM_CARDINAL, 0, 1);
+    pending[pending_count++] = (PendingReply){
+      .sequence = geometry.sequence, .kind = PENDING_GEOMETRY, .surface_index = index
+    };
+    pending[pending_count++] = (PendingReply){
+      .sequence = translate.sequence, .kind = PENDING_TRANSLATE, .surface_index = index
+    };
+    pending[pending_count++] = (PendingReply){
+      .sequence = attributes.sequence, .kind = PENDING_ATTRIBUTES, .surface_index = index
+    };
+    pending[pending_count++] = (PendingReply){
+      .sequence = pid.sequence, .kind = PENDING_PID, .surface_index = index
+    };
+    pending[pending_count++] = (PendingReply){
+      .sequence = opacity.sequence, .kind = PENDING_OPACITY, .surface_index = index
+    };
+  }
+  return pending_count;
+}
+
+static void parse_final_surface_result(SurfaceResult *surface) {
+  surface->code = "OK";
+  surface->opacity = UINT32_MAX;
+  surface->opacity_full = true;
+  if (surface->first_error) {
+    surface->code = "XCB_REQUEST_ERROR";
+    return;
+  }
+  if (!surface->geometry || !surface->translate || !surface->attributes ||
+      !surface->pid_property || !surface->opacity_property) {
+    surface->code = "INCOMPLETE_XCB_REPLY";
+    return;
+  }
+  if (surface->pid_property->type != XCB_ATOM_CARDINAL ||
+      surface->pid_property->format != 32 || surface->pid_property->bytes_after != 0 ||
+      xcb_get_property_value_length(surface->pid_property) != (int)sizeof(uint32_t)) {
+    surface->code = "WINDOW_PID_MISSING";
+    return;
+  }
+  memcpy(&surface->pid, xcb_get_property_value(surface->pid_property), sizeof(uint32_t));
+  if (surface->pid == 0) {
+    surface->code = "WINDOW_PID_MISSING";
+    return;
+  }
+  surface->map_viewable = surface->attributes->map_state == XCB_MAP_STATE_VIEWABLE;
+  if (!surface->map_viewable) {
+    surface->code = "WINDOW_NOT_VIEWABLE";
+    return;
+  }
+  surface->geometry_usable = surface->geometry->width > 0 && surface->geometry->height > 0 &&
+      (uint64_t)surface->geometry->width * surface->geometry->height > 100000;
+  if (!surface->geometry_usable || surface->geometry->root == XCB_WINDOW_NONE) {
+    surface->code = "WINDOW_GEOMETRY_INVALID";
+    return;
+  }
+  if (surface->opacity_property->type != XCB_ATOM_NONE &&
+      (surface->opacity_property->type != XCB_ATOM_CARDINAL ||
+       surface->opacity_property->format != 32 || surface->opacity_property->bytes_after != 0 ||
+       xcb_get_property_value_length(surface->opacity_property) != (int)sizeof(uint32_t))) {
+    surface->code = "WINDOW_OPACITY_INVALID";
+    return;
+  }
+  if (surface->opacity_property->type != XCB_ATOM_NONE) {
+    surface->opacity_present = true;
+    memcpy(&surface->opacity, xcb_get_property_value(surface->opacity_property), sizeof(uint32_t));
+    surface->opacity_full = surface->opacity == UINT32_MAX;
+  }
+  surface->ok = true;
+}
+
 static int finish_surface_queries(HelperState *state, SurfaceResult *surfaces, size_t surface_count,
                                   PendingReply pending[MAX_PENDING], size_t pending_count,
                                   int64_t deadline_ns, AsyncError *async_error,
@@ -1342,14 +1551,14 @@ static int finish_surface_queries(HelperState *state, SurfaceResult *surfaces, s
   if (!verify_profile_identity) {
     bool all_ok = !async_error->seen;
     for (size_t index = 0; index < surface_count; index++) {
-      parse_surface_result(&surfaces[index], deadline_ns, false);
+      parse_surface_result(state, &surfaces[index], deadline_ns, false);
       if (!surfaces[index].ok) all_ok = false;
     }
     return all_ok ? 0 : SURFACE_QUERY_FAILED;
   }
   bool all_ok = true;
   for (size_t index = 0; index < surface_count; index++) {
-    parse_surface_result(&surfaces[index], deadline_ns, true);
+    parse_surface_result(state, &surfaces[index], deadline_ns, true);
     if (!surfaces[index].ok) all_ok = false;
   }
   if (remaining_timeout_ms(deadline_ns) <= 0) return SURFACE_QUERY_DEADLINE_EXCEEDED;
@@ -2412,10 +2621,14 @@ static bool verify_identity_unchanged(SurfaceResult *surfaces, size_t count, int
   for (size_t index = 0; index < count; index++) {
     uid_t uid = (uid_t)-1;
     unsigned long long starttime = 0;
+    /* The initial snapshot has already proved the profile ancestry.  Before
+     * mutation, identity continuity only needs to prove this is still the
+     * same process; repeating the full /proc ancestor walk adds no stronger
+     * guarantee (and the final identity check intentionally uses this same
+     * PID/UID/starttime proof). */
     if (remaining_timeout_ms(deadline_ns) <= 0 ||
         !read_proc_identity(surfaces[index].pid, &uid, NULL, &starttime) ||
-        uid != surfaces[index].uid || starttime != surfaces[index].pid_starttime ||
-        !pid_tree_matches_profile(surfaces[index].pid, surfaces[index].request.profile, deadline_ns)) {
+        uid != surfaces[index].uid || starttime != surfaces[index].pid_starttime) {
       surfaces[index].ok = false;
       surfaces[index].code = remaining_timeout_ms(deadline_ns) <= 0
         ? "TRANSACTION_DEADLINE_EXCEEDED" : "WINDOW_IDENTITY_CHANGED";
@@ -2695,7 +2908,6 @@ static json_object *switch_response(HelperState *state, json_object *request,
     code = monotonic_ns() >= state->lease_expires_ns ? "LEASE_EXPIRED" : "LEASE_MISMATCH";
     goto completed;
   }
-
   state->mutation_started = true;
   mutation_started = true;
   state->mutation_requests++;
@@ -2709,7 +2921,8 @@ static json_object *switch_response(HelperState *state, json_object *request,
   if (!surface_at_target_opacity(target)) {
     queue_opacity_mutation(state, target, mutations, &mutation_count, "target_opacity");
   }
-  if (!surface_at_target_geometry(target) &&
+  bool target_geometry_mutated = !surface_at_target_geometry(target);
+  if (target_geometry_mutated &&
       !queue_geometry_mutation(state, target, true, mutations, &mutation_count,
                                "target_geometry")) {
     code = "WINDOW_PARENT_MISMATCH";
@@ -2724,7 +2937,9 @@ static json_object *switch_response(HelperState *state, json_object *request,
   if (!surface_at_target_opacity(panel)) {
     queue_opacity_mutation(state, panel, mutations, &mutation_count, "panel_opacity");
   }
-  queue_raise_mutation(state, target, mutations, &mutation_count, "target_raise");
+  if (!target_geometry_mutated) {
+    queue_raise_mutation(state, target, mutations, &mutation_count, "target_raise");
+  }
   queue_raise_mutation(state, panel, mutations, &mutation_count, "panel_raise");
 #ifdef TIKPAL_X11_HELPER_SELF_TEST_SEAMS
   if (self_test_bad_match_sibling != XCB_WINDOW_NONE) {
@@ -2736,50 +2951,22 @@ static json_object *switch_response(HelperState *state, json_object *request,
       "self_test_bad_match", target->request.xid);
   }
 #endif
-  xcb_get_input_focus_cookie_t fence = xcb_get_input_focus(state->connection);
-  fence_pending.sequence = fence.sequence;
-  mutation_queued_ns = monotonic_ns();
-  if (xcb_flush(state->connection) <= 0) {
-    result = COLLECT_XCB_CONNECTION_ERROR;
-    collector_diagnostics = (CollectorDiagnostics){
-      .result = COLLECT_XCB_CONNECTION_ERROR,
-      .connection_error = xcb_connection_has_error(state->connection),
-      .pending_count = 1,
-    };
-    snapshot_pending_diagnostics(&collector_diagnostics, &fence_pending, 1);
-    has_collector_diagnostics = true;
-  } else {
-    result = collect_replies(state, &fence_pending, 1, deadline_ns, &mutation_async_error);
-  }
-  if (result != COLLECT_OK ||
-      fence_pending.error || !fence_pending.reply) {
-    if (result != COLLECT_OK && !has_collector_diagnostics &&
-        state->last_collect.result != COLLECT_OK) {
-      collector_diagnostics = state->last_collect;
-      has_collector_diagnostics = true;
-    }
-    code = result != COLLECT_OK ? collect_error_code(result) : "XCB_FENCE_FAILED";
-    if (result == COLLECT_REPLY_TIMEOUT) state->xcb_timeouts++;
-    free_pending(&fence_pending, 1);
-    free_pending(final_pending, final_pending_count);
-    reset_xcb_connection(state);
-    goto completed;
-  }
-  free_pending(&fence_pending, 1);
-  fence_completed_ns = monotonic_ns();
-  result = collect_checked_mutations(state, mutations, mutation_count);
-  checked_completed_ns = monotonic_ns();
-  if (result != 0) {
-    code = result == -1 ? "XCB_CHECK_NOT_READY_AFTER_FENCE" : "XCB_MUTATION_ERROR";
-    reset_xcb_connection(state);
-    goto completed;
-  }
+  /* X11 is ordered: final snapshot requests issued after the checked writes
+   * already observe those writes. Put them before one trailing fence so the
+   * daemon does not spend an extra client/server round trip between commit
+   * and verification. The fence reply proves both the writes and snapshot
+   * were processed before the response is accepted. */
 #ifdef TIKPAL_X11_HELPER_SELF_TEST_SEAMS
   if (self_test_before_final_query_hook) self_test_before_final_query_hook();
 #endif
-  for (size_t index = 0; index < 3; index++) clear_surface_result_data(&surfaces[index]);
+  for (size_t index = 0; index < 3; index++) clear_final_surface_state(&surfaces[index]);
   final_started_ns = monotonic_ns();
-  final_pending_count = queue_surface_queries(state, surfaces, 3, final_pending);
+  final_pending_count = queue_final_surface_queries(state, surfaces, 3, final_pending);
+  size_t final_surface_pending_count = final_pending_count;
+  xcb_get_input_focus_cookie_t fence = xcb_get_input_focus(state->connection);
+  fence_pending.sequence = fence.sequence;
+  final_pending[final_pending_count++] = fence_pending;
+  mutation_queued_ns = monotonic_ns();
   if (xcb_flush(state->connection) <= 0) {
     result = COLLECT_XCB_CONNECTION_ERROR;
     collector_diagnostics = (CollectorDiagnostics){
@@ -2788,23 +2975,46 @@ static json_object *switch_response(HelperState *state, json_object *request,
       .pending_count = final_pending_count,
     };
     snapshot_pending_diagnostics(&collector_diagnostics, final_pending, final_pending_count);
-    free_pending(final_pending, final_pending_count);
     has_collector_diagnostics = true;
   } else {
-    result = finish_surface_queries(state, surfaces, 3, final_pending, final_pending_count,
-                                    deadline_ns, &mutation_async_error, false);
+    result = collect_replies(state, final_pending, final_pending_count, deadline_ns,
+                             &mutation_async_error);
   }
-  final_completed_ns = monotonic_ns();
-  if (result != 0) {
-    if (!has_collector_diagnostics && state->last_collect.result != COLLECT_OK) {
+  fence_completed_ns = monotonic_ns();
+  if (result != COLLECT_OK ||
+      final_pending[final_surface_pending_count].error ||
+      !final_pending[final_surface_pending_count].reply) {
+    if (result != COLLECT_OK && !has_collector_diagnostics &&
+        state->last_collect.result != COLLECT_OK) {
       collector_diagnostics = state->last_collect;
       has_collector_diagnostics = true;
     }
-    code = result == SURFACE_QUERY_DEADLINE_EXCEEDED ? "TRANSACTION_DEADLINE_EXCEEDED" :
-           result == SURFACE_QUERY_FAILED ? "FINAL_QUERY_FAILED" :
-           collect_error_code(result);
+    code = result != COLLECT_OK ? collect_error_code(result) : "XCB_FENCE_FAILED";
     if (result == COLLECT_REPLY_TIMEOUT) state->xcb_timeouts++;
-    if (collect_requires_connection_reset(result)) reset_xcb_connection(state);
+    free_pending(final_pending, final_pending_count);
+    reset_xcb_connection(state);
+    goto completed;
+  }
+  result = collect_checked_mutations(state, mutations, mutation_count);
+  checked_completed_ns = monotonic_ns();
+  if (mutation_async_error.seen || result != 0) {
+    code = result == -1 ? "XCB_CHECK_NOT_READY_AFTER_FENCE" : "XCB_MUTATION_ERROR";
+    free_pending(final_pending, final_pending_count);
+    reset_xcb_connection(state);
+    goto completed;
+  }
+  bool final_ok = true;
+  for (size_t index = 0; index < final_surface_pending_count; index++) {
+    assign_pending_reply(surfaces, &final_pending[index]);
+  }
+  free_pending(final_pending, final_pending_count);
+  for (size_t index = 0; index < 3; index++) {
+    parse_final_surface_result(&surfaces[index]);
+    if (!surfaces[index].ok) final_ok = false;
+  }
+  final_completed_ns = monotonic_ns();
+  if (!final_ok) {
+    code = "FINAL_QUERY_FAILED";
     goto completed;
   }
   if (!verify_final_surface_identities(surfaces, initial_identities, 3, deadline_ns)) {
@@ -2862,7 +3072,7 @@ completed:
   json_object_object_add(timings, "checkedMs",
                          duration_ms_json(fence_completed_ns, checked_completed_ns));
   json_object_object_add(timings, "finalQueryMs",
-                         duration_ms_json(checked_completed_ns, final_completed_ns));
+                         duration_ms_json(final_started_ns, final_completed_ns));
   json_object_object_add(timings, "finalIdentityRecheckMs",
                          duration_ms_json(final_completed_ns, final_identity_completed_ns));
   json_object_object_add(timings, "totalMs",
@@ -3467,7 +3677,7 @@ static json_object *inspect_response(HelperState *state, json_object *request,
   for (size_t index = 0; index < pending_count; index++) assign_pending_reply(surfaces, &pending[index]);
   free_pending(pending, pending_count);
   for (size_t index = 0; index < surface_count; index++) {
-    parse_surface_result(&surfaces[index], deadline_ns, true);
+    parse_surface_result(state, &surfaces[index], deadline_ns, true);
     if (!surfaces[index].ok) all_ok = false;
   }
   identity_completed_ns = monotonic_ns();
@@ -5713,7 +5923,7 @@ static int x11_transaction_self_test(const char *display, const char *profile,
   }
   json_object *mutations = NULL;
   if (!json_object_object_get_ex(response, "mutations", &mutations) ||
-      json_object_array_length(mutations) != 7) {
+      json_object_array_length(mutations) != 6) {
     self_test_failure("X11 checked mutation count");
     goto cleanup;
   }

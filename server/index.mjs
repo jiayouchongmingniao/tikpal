@@ -345,6 +345,8 @@ const MPD_SHUFFLE_POST_JUMP_SETTLE_MS = parseEnvPositiveInteger(process.env.TIKP
 const WEB_MODE_COMMAND = process.env.TIKPAL_WEB_MODE_COMMAND ?? (API_MODE === "mpc" ? "./deploy/chromium/tikpal-web-mode.sh" : "");
 const WEB_MODE_COMMAND_TIMEOUT_MS = Number(process.env.TIKPAL_WEB_MODE_COMMAND_TIMEOUT_MS ?? 45_000);
 const WEB_MODE_OPEN_COMMAND_TIMEOUT_MS = Number(process.env.TIKPAL_WEB_MODE_OPEN_COMMAND_TIMEOUT_MS ?? 110_000);
+const WEB_MODE_OWNER_REPAIR_COMMAND = process.env.TIKPAL_WEB_MODE_OWNER_REPAIR_COMMAND
+  ?? (API_MODE === "mpc" ? "sudo -n /usr/local/sbin/tikpal-web-mode-owner-repair" : "");
 const WEB_MODE_PROXY_TEST_TARGETS = [
   { id: "google", label: "Google", url: "https://www.google.com/" },
   { id: "apple_music", label: "Apple Music", url: "https://music.apple.com/" },
@@ -5650,6 +5652,50 @@ async function buildWebModeState() {
   };
 }
 
+function normalizeWebModeOwnershipPathList(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item) => typeof item === "string")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0 && item.length <= 280)
+    .slice(0, 32);
+}
+
+function normalizeWebModeOwnershipResult(raw = {}, supported = true) {
+  return {
+    supported,
+    ok: raw?.ok === true,
+    repaired: raw?.repaired === true,
+    mismatches: normalizeWebModeOwnershipPathList(raw?.mismatches),
+    repairedPaths: normalizeWebModeOwnershipPathList(raw?.repairedPaths),
+    blockedPaths: normalizeWebModeOwnershipPathList(raw?.blockedPaths),
+    message: typeof raw?.message === "string" && raw.message.trim()
+      ? raw.message.trim().slice(0, 240)
+      : raw?.ok === true ? "Explore runtime ownership is healthy" : "Explore runtime ownership needs attention"
+  };
+}
+
+async function inspectWebModeOwnership(repair = false) {
+  if (!WEB_MODE_OWNER_REPAIR_COMMAND.trim()) {
+    return normalizeWebModeOwnershipResult({
+      ok: false,
+      message: "Explore owner self-check is not configured"
+    }, false);
+  }
+  try {
+    const output = await runCommand(`${WEB_MODE_OWNER_REPAIR_COMMAND} ${repair ? "repair" : "check"}`, {
+      timeout: 7_000,
+      maxBuffer: 32 * 1024
+    });
+    return normalizeWebModeOwnershipResult(JSON.parse(output));
+  } catch (error) {
+    return normalizeWebModeOwnershipResult({
+      ok: false,
+      message: `Explore owner self-check failed: ${error instanceof Error ? error.message : "unknown error"}`
+    });
+  }
+}
+
 let audioVolumeStateCache = null;
 let playbackModeStateCache = null;
 
@@ -10687,8 +10733,13 @@ async function applyStartupVolumeGuard() {
   }
 }
 
+async function webModeOwnsAudio() {
+  const webMode = await readWebModeRuntimeState();
+  return Boolean(webMode.activeProvider || webMode.openingProvider);
+}
+
 async function startStartupSceneSoundPlayback() {
-  if (!STARTUP_SCENE_SOUND_ENABLED) return false;
+  if (!STARTUP_SCENE_SOUND_ENABLED || await webModeOwnsAudio()) return false;
 
   try {
     const current = await readRoomExperienceState();
@@ -10897,6 +10948,7 @@ function recoverHifiRuntimePlaybackIfNeeded(snapshot) {
 
 async function applyStartupPlaybackPolicy() {
   await applyStartupVolumeGuard();
+  if (await webModeOwnsAudio()) return;
   if (await getConnectedStartupExternalSource()) return;
   if (await restoreHifiRememberedSourcePlayback()) return;
   if (await startStartupSceneSoundPlayback()) return;
@@ -14732,7 +14784,7 @@ async function restoreWebModePlaybackHandoff() {
   }
 }
 
-async function pauseTikpalForWebMode(handoffSourceId = "") {
+async function disableSceneSoundForWebMode() {
   const room = await readRoomExperienceState();
   if (room.sceneSoundEnabled) {
     await applyRoomExperienceAction({
@@ -14741,6 +14793,10 @@ async function pauseTikpalForWebMode(handoffSourceId = "") {
       sceneVideoId: room.sceneVideoId
     });
   }
+}
+
+async function pauseTikpalForWebMode(handoffSourceId = "") {
+  await disableSceneSoundForWebMode();
 
   if (API_MODE === "mpc") {
     await withMpcMutationLock(async () => {
@@ -14890,6 +14946,7 @@ async function applyWebModeAction(action, { receivedMonotonicMs = monotonicNowMs
     previousRuntimeState.activeProvider ?? previousRuntimeState.lastProvider ?? "qq_music"
   );
   if (previousRuntimeState.activeProvider === providerId && !previousRuntimeState.openingProvider) {
+    await disableSceneSoundForWebMode();
     return await buildWebModeState();
   }
   const isInitialEntry = !previousRuntimeState.activeProvider;
@@ -15509,6 +15566,16 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "GET" && url.pathname === "/api/v1/web-mode/state") {
       sendJson(response, 200, await buildWebModeState());
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/v1/web-mode/ownership-check") {
+      sendJson(response, 200, await inspectWebModeOwnership(false));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/v1/web-mode/ownership-repair") {
+      sendJson(response, 200, await inspectWebModeOwnership(true));
       return;
     }
 

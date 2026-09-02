@@ -86,7 +86,8 @@ export function WebModeSidePanel() {
   const { t, friendlyError } = useI18n();
   const [webMode, setWebMode] = useState<WebModeState | null>(null);
   const [tikpalState, setTikpalState] = useState<TikpalState | null>(null);
-  const [pendingProvider, setPendingProvider] = useState<WebModeProviderId | null>(readInitialOpeningProvider);
+  const initialOpeningProviderRef = useRef<WebModeProviderId | null>(readInitialOpeningProvider());
+  const [pendingProvider, setPendingProvider] = useState<WebModeProviderId | null>(initialOpeningProviderRef.current);
   const [pendingAction, setPendingAction] = useState<"close" | "scale" | null>(null);
   const pendingActionRef = useRef<"close" | "scale" | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -186,9 +187,18 @@ export function WebModeSidePanel() {
     const nextPhase = next.activationPhase ?? null;
     setWebMode(next);
     setError(next.lastError);
-    setPendingProvider((current) => (
-      current && (nextPhase !== "pending" && next.activeProvider === current || next.lastError) ? null : current
-    ));
+    setPendingProvider((current) => {
+      // The panel is reused across resident switches. Its startup URL can
+      // still contain the provider from a much older initial entry, so that
+      // hint must never keep every card disabled once the API says otherwise.
+      const initialOpeningProvider = initialOpeningProviderRef.current;
+      if (current && current === initialOpeningProvider && next.openingProvider !== initialOpeningProvider) {
+        initialOpeningProviderRef.current = null;
+        return null;
+      }
+      if (next.openingProvider === initialOpeningProvider) initialOpeningProviderRef.current = null;
+      return current && (nextPhase !== "pending" && next.activeProvider === current || next.lastError) ? null : current;
+    });
     if (optimisticProviderRef.current && (next.activeProvider === optimisticProviderRef.current || next.lastError)) {
       optimisticProviderRef.current = null;
     }

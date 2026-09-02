@@ -2625,6 +2625,30 @@ Object.assign(dictionaries.es, {
   "settings.systemRestarting": "Reiniciando el sistema…",
 });
 
+Object.assign(dictionaries.en, {
+  "settings.runtimeSelfCheck": "Explore self-check & repair",
+  "settings.runtimeSelfCheckChecking": "Checking…",
+  "settings.runtimeSelfCheckHealthy": "Ready",
+  "settings.runtimeSelfCheckHealthyHelp": "Runtime ownership is healthy.",
+  "settings.runtimeSelfCheckRepaired": "Repaired",
+  "settings.runtimeSelfCheckRepairedHelp": "Only known runtime files and verified stale guards were repaired.",
+  "settings.runtimeSelfCheckHelp": "Checks runtime ownership and fixes only known safe paths.",
+  "settings.runtimeSelfCheckBlocked": "A live runtime file cannot be changed yet. Try again after the current Explore action finishes.",
+  "settings.runtimeSelfCheckUnavailable": "Self-check is unavailable on this device.",
+});
+
+Object.assign(dictionaries["zh-CN"], {
+  "settings.runtimeSelfCheck": "Explore 自检并修复",
+  "settings.runtimeSelfCheckChecking": "正在检查…",
+  "settings.runtimeSelfCheckHealthy": "运行正常",
+  "settings.runtimeSelfCheckHealthyHelp": "Explore 运行时属主正常。",
+  "settings.runtimeSelfCheckRepaired": "已修复",
+  "settings.runtimeSelfCheckRepairedHelp": "仅修复已知运行时文件和已验证的陈旧 Guard。",
+  "settings.runtimeSelfCheckHelp": "检查运行时属主，并且只修复已知的安全路径。",
+  "settings.runtimeSelfCheckBlocked": "当前 Explore 操作仍在使用某个文件，结束后再试。",
+  "settings.runtimeSelfCheckUnavailable": "此设备尚未安装自检修复功能。",
+});
+
 function template(value: string, params: TranslationParams = {}) {
   return value.replace(/\{([^}]+)\}/g, (_, key: string) => {
     const replacement = params[key];

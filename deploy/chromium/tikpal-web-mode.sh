@@ -44,7 +44,8 @@ fi
 : "${TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE:=}"
 : "${TIKPAL_AUDIO_ADAPT_BIN:=$APP_DIR/deploy/moode/tikpal-audio-adapt.sh}"
 : "${TIKPAL_WEB_MODE_PROFILE_ROOT:=$HOME/.config/tikpal-web-mode}"
-: "${TIKPAL_WEB_MODE_PHYSICAL_REVEAL_STAMP_PATH:=$TIKPAL_WEB_MODE_PROFILE_ROOT/last-physical-reveal.tsv}"
+: "${TIKPAL_WEB_MODE_PROVIDER_SWITCH_MARKER_PATH:=/run/tikpal/provider-switch.pid}"
+: "${TIKPAL_WEB_MODE_PHYSICAL_REVEAL_STAMP_PATH:=/run/tikpal/last-physical-reveal.tsv}"
 : "${TIKPAL_WEB_MODE_SWITCH_SEGMENT_TIMING_ONCE_PATH:=$TIKPAL_WEB_MODE_PROFILE_ROOT/switch-segment-timing.once}"
 : "${TIKPAL_WEB_MODE_SETTINGS_PATH:=$APP_DIR/.tikpal/web-mode-settings.json}"
 : "${TIKPAL_WEB_MODE_STATE_PATH:=$APP_DIR/.tikpal/web-mode-state.json}"
@@ -90,7 +91,7 @@ fi
 : "${TIKPAL_WEB_MODE_AUDIO_CROSSFADE_MS:=2000}"
 : "${TIKPAL_WEB_MODE_AUDIO_CROSSFADE_HELPER:=$SCRIPT_DIR/../moode/tikpal-web-mode-crossfade.sh}"
 : "${TIKPAL_WEB_MODE_CROSSFADE_CARD:=}"
-: "${TIKPAL_WEB_MODE_TARGET_AUDIO_GATE_POST_COMMIT_DELAY_SECONDS:=0.1}"
+: "${TIKPAL_WEB_MODE_TARGET_AUDIO_GATE_POST_COMMIT_DELAY_SECONDS:=0}"
 : "${TIKPAL_WEB_MODE_CROSSFADE_PCM_A:=tikpal_explore_a}"
 : "${TIKPAL_WEB_MODE_CROSSFADE_PCM_B:=tikpal_explore_b}"
 : "${TIKPAL_WEB_MODE_AUDIO_BUS_STATE_PATH:=$TIKPAL_WEB_MODE_PROFILE_ROOT/active-audio-bus}"
@@ -154,6 +155,9 @@ fi
 : "${TIKPAL_WEB_MODE_POPUP_BLOCKING:=1}"
 : "${TIKPAL_WEB_MODE_PROVIDER_DEBUG_PORT:=9234}"
 : "${TIKPAL_WEB_MODE_PROVIDER_GUARD:=1}"
+: "${TIKPAL_WEB_MODE_CDP_SESSION_MANAGER:=0}"
+: "${TIKPAL_WEB_MODE_CDP_SESSION_MANAGER_SOCKET:=/run/tikpal/cdp-session-manager.sock}"
+: "${TIKPAL_WEB_MODE_CDP_SESSION_MANAGER_CLIENT:=$SCRIPT_DIR/tikpal-web-mode-cdp-client.py}"
 : "${TIKPAL_WEB_MODE_DISABLE_HANG_MONITOR:=1}"
 : "${TIKPAL_WEB_MODE_REFRESH_EXTENSION_CACHE:=1}"
 : "${TIKPAL_WEB_MODE_ERROR_PAGE_URL:=http://127.0.0.1:4173/web-mode-error.html}"
@@ -226,6 +230,13 @@ log_open_stage() {
   local stage="$1"
   shift
   log_stage "stage=$stage open_request_id=${TIKPAL_WEB_MODE_OPEN_REQUEST_ID:-legacy} x_session_generation=${TIKPAL_WEB_MODE_OPEN_X_SESSION_GENERATION:-legacy} helper_mode=$TIKPAL_WEB_MODE_X11_HELPER_MODE $*"
+}
+
+report_unexpected_command_failure() {
+  local status="$1" line="$2" command="$3"
+  # The API only receives launcher stdout/stderr.  Keep an otherwise silent
+  # errexit failure actionable without changing the switch transaction.
+  log "ERROR: unexpected command failure status=$status line=$line command=$command"
 }
 
 now_ms() {
@@ -867,6 +878,7 @@ record_switch_trace_event() {
   local result="${2:-ok}"
   local error_code="${3:-}"
   local elapsed_ms="${4:-0}"
+  local session_generation="${5:-0}"
   local timestamp
   switch_trace_enabled || return 0
   switch_trace_now_ms timestamp
@@ -877,14 +889,14 @@ record_switch_trace_event() {
     fi
     return 0
   fi
-  if ! { printf '{"run_id":"%s","round_id":%s,"from_provider":"%s","to_provider":"%s","pass_index":%s,"request_id":"%s","event":"%s","timestamp":%s,"elapsed_ms":%s,"result":"%s","error_code":"%s"}\n' \
+  if ! { printf '{"run_id":"%s","round_id":%s,"from_provider":"%s","to_provider":"%s","pass_index":%s,"request_id":"%s","event":"%s","timestamp":%s,"elapsed_ms":%s,"result":"%s","error_code":"%s","session_generation":%s}\n' \
       "$TIKPAL_WEB_MODE_SWITCH_TRACE_RUN_ID" \
       "$TIKPAL_WEB_MODE_SWITCH_TRACE_ROUND_ID" \
       "$TIKPAL_WEB_MODE_SWITCH_TRACE_FROM_PROVIDER" \
       "$TIKPAL_WEB_MODE_SWITCH_TRACE_TO_PROVIDER" \
       "$TIKPAL_WEB_MODE_SWITCH_TRACE_PASS_INDEX" \
       "$TIKPAL_WEB_MODE_SWITCH_TRACE_REQUEST_ID" \
-      "$event" "$timestamp" "$elapsed_ms" "$result" "$error_code" \
+      "$event" "$timestamp" "$elapsed_ms" "$result" "$error_code" "$session_generation" \
       >> "$TIKPAL_WEB_MODE_SWITCH_TRACE_EVENTS_PATH"; } 2>/dev/null
   then
     if [[ "$TIKPAL_SWITCH_TRACE_APPEND_WARNING_EMITTED" != "1" ]]; then
@@ -1131,13 +1143,30 @@ x11_helper_prepare_switch() {
 x11_helper_response_trace_detail() {
   local request_id="$1" status="$2" response="$3"
   local code=unknown fence=missing final=missing total=missing socket_total=missing
+  local initial=missing identity=missing mutation=missing fence_ms=missing checked=missing final_query=missing final_identity=missing
   if [[ "$response" =~ \"code\":\"([^\"]+)\" ]]; then code="${BASH_REMATCH[1]}"; fi
   if [[ "$response" =~ \"fenceCompletedMonotonicNs\":([0-9]+) ]]; then fence="${BASH_REMATCH[1]}"; fi
   if [[ "$response" =~ \"finalSnapshotCompletedMonotonicNs\":([0-9]+) ]]; then final="${BASH_REMATCH[1]}"; fi
   if [[ "$response" =~ \"totalMs\":([0-9.]+) ]]; then total="${BASH_REMATCH[1]}"; fi
   if [[ "$response" =~ \"socketTotalMs\":([0-9.]+) ]]; then socket_total="${BASH_REMATCH[1]}"; fi
-  printf 'request_id=%s status=%s response_code=%s fenceCompletedMonotonicNs=%s finalSnapshotCompletedMonotonicNs=%s helper_total_ms=%s client_socket_total_ms=%s' \
-    "$request_id" "$status" "$code" "$fence" "$final" "$total" "$socket_total"
+  if [[ "$response" =~ \"initialReplyAndIdentityMs\":([0-9.]+) ]]; then initial="${BASH_REMATCH[1]}"; fi
+  if [[ "$response" =~ \"identityRecheckMs\":([0-9.]+) ]]; then identity="${BASH_REMATCH[1]}"; fi
+  if [[ "$response" =~ \"mutationBatchSendMs\":([0-9.]+) ]]; then mutation="${BASH_REMATCH[1]}"; fi
+  if [[ "$response" =~ \"fenceMs\":([0-9.]+) ]]; then fence_ms="${BASH_REMATCH[1]}"; fi
+  if [[ "$response" =~ \"checkedMs\":([0-9.]+) ]]; then checked="${BASH_REMATCH[1]}"; fi
+  if [[ "$response" =~ \"finalQueryMs\":([0-9.]+) ]]; then final_query="${BASH_REMATCH[1]}"; fi
+  if [[ "$response" =~ \"finalIdentityRecheckMs\":([0-9.]+) ]]; then final_identity="${BASH_REMATCH[1]}"; fi
+  printf 'request_id=%s status=%s response_code=%s fenceCompletedMonotonicNs=%s finalSnapshotCompletedMonotonicNs=%s helper_total_ms=%s client_socket_total_ms=%s initial_reply_identity_ms=%s identity_recheck_ms=%s mutation_batch_send_ms=%s fence_ms=%s checked_ms=%s final_query_ms=%s final_identity_recheck_ms=%s' \
+    "$request_id" "$status" "$code" "$fence" "$final" "$total" "$socket_total" \
+    "$initial" "$identity" "$mutation" "$fence_ms" "$checked" "$final_query" "$final_identity"
+}
+
+x11_helper_response_transaction_ms() {
+  local response="$1" total=""
+  if [[ "$response" =~ \"totalMs\":([0-9]+([.][0-9]+)?) ]]; then
+    total="${BASH_REMATCH[1]}"
+  fi
+  printf '%s' "$total"
 }
 
 x11_helper_begin_switch() {
@@ -1170,6 +1199,8 @@ x11_helper_begin_switch() {
   if switch_trace_enabled; then
     elapsed_ms="$(( $(now_ms) - argument_prepare_started_ms ))"
     record_switch_trace_event helper_argument_prepare_completed ok "" "$elapsed_ms"
+  fi
+  if switch_trace_enabled; then
     owner_publish_started_ms="$(now_ms)"
     record_switch_trace_event helper_owner_publish_started
   fi
@@ -1185,6 +1216,7 @@ x11_helper_begin_switch() {
   TIKPAL_X11_TRACE_NONBLOCKING=1 x11_trace_control_event helper_switch_started 0 \
     "request_id=$request_id generation=$TIKPAL_X11_HELPER_GENERATION lease=$TIKPAL_X11_HELPER_LEASE_ID" \
     "$target_window,$previous_window,$panel_window"
+  TIKPAL_X11_HELPER_LAST_TRANSACTION_MS=""
   if response="$(
     TIKPAL_X11_HELPER_CALLER_ROLE="$(x11_trace_writer_role)" \
     TIKPAL_WEB_MODE_X11_HELPER_SOCKET="$TIKPAL_WEB_MODE_X11_HELPER_SOCKET" \
@@ -1206,7 +1238,13 @@ x11_helper_begin_switch() {
     status=$?
   fi
   TIKPAL_X11_HELPER_LAST_RESPONSE="$response"
+  TIKPAL_X11_HELPER_LAST_TRANSACTION_MS="$(x11_helper_response_transaction_ms "$response")"
   trace_detail="$(x11_helper_response_trace_detail "$request_id" "$status" "$response")"
+  if switch_trace_enabled; then
+    record_switch_trace_event helper_native_timing_components \
+      "$([[ "$status" == "0" ]] && printf ok || printf failed)" \
+      "$trace_detail" "${TIKPAL_X11_HELPER_LAST_TRANSACTION_MS:-0}"
+  fi
   TIKPAL_X11_TRACE_NONBLOCKING=1 x11_trace_control_event helper_switch_finished "$status" \
     "$trace_detail" \
     "$target_window,$previous_window,$panel_window"
@@ -1326,6 +1364,18 @@ x11_helper_retryable_switch_failure() {
      "$response" == *'"mutationStarted":true'* ]]
 }
 
+# Strict acceptance may only retry a timeout when the Helper confirms that no
+# X11 mutation began.  That makes the retry a control-plane reconnect, not a
+# duplicate visible transaction.
+x11_helper_pre_mutation_switch_failure() {
+  local response="${TIKPAL_X11_HELPER_LAST_RESPONSE:-}"
+  [[ "$response" == *'"code":"X11_REPLY_TIMEOUT"'* &&
+     "$response" == *'"fallbackRecommended":true'* &&
+     "$response" == *'"leaseReleased":true'* &&
+     "$response" == *'"inFlight":false'* &&
+     "$response" == *'"mutationStarted":false'* ]]
+}
+
 x11_helper_switch_with_timeout_retry() {
   local target_window="$1"
   local target_profile="$2"
@@ -1333,10 +1383,13 @@ x11_helper_switch_with_timeout_retry() {
   local previous_profile="$4"
   local panel_window="$5"
   local panel_profile="$6"
-  local attempt=1 helper_status=0 call_started_ms call_elapsed_ms
+  local attempt=1 helper_status=0 call_started_ms call_elapsed_ms helper_transaction_ms
+  local strict_pre_mutation_failure=0
 
   while :; do
-    if switch_trace_enabled; then
+    # A first strict pre-mutation timeout is transparent control-plane
+    # recovery. Defer its canonical trace until the permitted retry completes.
+    if switch_trace_enabled && [[ "$TIKPAL_WEB_MODE_STRICT_HELPER_TRANSACTION" != "1" ]]; then
       record_switch_trace_event helper_client_started "attempt_$attempt"
     fi
     call_started_ms="$(now_ms)"
@@ -1347,10 +1400,31 @@ x11_helper_switch_with_timeout_retry() {
       helper_status=$?
     fi
     call_elapsed_ms="$(( $(now_ms) - call_started_ms ))"
+    strict_pre_mutation_failure=0
+    if [[ "$TIKPAL_WEB_MODE_STRICT_HELPER_TRANSACTION" == "1" &&
+          "$attempt" == "1" && "$helper_status" != "0" ]] &&
+      x11_helper_pre_mutation_switch_failure; then
+      strict_pre_mutation_failure=1
+    fi
     if switch_trace_enabled; then
-      record_switch_trace_event helper_client_completed \
-        "$([[ "$helper_status" == "0" ]] && printf ok || printf failed)" \
-        "status_$helper_status" "$call_elapsed_ms"
+      helper_transaction_ms="${TIKPAL_X11_HELPER_LAST_TRANSACTION_MS:-}"
+      if [[ ! "$helper_transaction_ms" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+        helper_transaction_ms="$call_elapsed_ms"
+      fi
+      if [[ "$strict_pre_mutation_failure" == "1" ]]; then
+        record_switch_trace_event helper_pre_mutation_timeout retryable \
+          "status_$helper_status" "$helper_transaction_ms"
+      else
+        if [[ "$TIKPAL_WEB_MODE_STRICT_HELPER_TRANSACTION" == "1" ]]; then
+          record_switch_trace_event helper_client_started attempt_1
+        fi
+        record_switch_trace_event helper_client_completed \
+          "$([[ "$helper_status" == "0" ]] && printf ok || printf failed)" \
+          "status_$helper_status" "$helper_transaction_ms"
+        record_switch_trace_event helper_client_outer_completed \
+          "$([[ "$helper_status" == "0" ]] && printf ok || printf failed)" \
+          "status_$helper_status" "$call_elapsed_ms"
+      fi
     fi
     [[ "$helper_status" == "0" ]] && return 0
     [[ "$helper_status" == "70" ]] && return 70
@@ -1364,10 +1438,25 @@ x11_helper_switch_with_timeout_retry() {
       return "$helper_status"
     fi
     if [[ "$TIKPAL_WEB_MODE_STRICT_HELPER_TRANSACTION" == "1" ]]; then
-      # Formal acceptance allows the completed timeout to relinquish its lease,
-      # but it must not turn that failure into either a second Helper mutation
-      # or a legacy Shell X11 write.  Restore safe Shell ownership, then leave
-      # this one-shot failed for the caller to record and stop.
+      # Never retry a completed deadline or an ambiguous transaction in strict
+      # mode. Only an explicit zero-mutation timeout may reconnect once.
+      if [[ "$strict_pre_mutation_failure" == "1" ]]; then
+        record_switch_trace_event helper_pre_mutation_retry_started retryable "status_$helper_status"
+        x11_helper_enter_fallback "$helper_status" || return 1
+        if ! x11_helper_prepare_switch; then
+          # Preserve a canonical failed pair if ownership recovery fails.
+          if switch_trace_enabled; then
+            record_switch_trace_event helper_client_started attempt_1
+            record_switch_trace_event helper_client_completed failed helper_prepare_failed "$helper_transaction_ms"
+            record_switch_trace_event helper_client_outer_completed failed helper_prepare_failed "$call_elapsed_ms"
+          fi
+          record_switch_trace_event helper_pre_mutation_retry_prepare_failed failed helper_prepare_failed
+          return "$helper_status"
+        fi
+        record_switch_trace_event helper_pre_mutation_retry_prepared ok
+        attempt=2
+        continue
+      fi
       record_switch_trace_event helper_timeout_retry_suppressed failed "status_$helper_status"
       x11_helper_enter_fallback "$helper_status" || return 1
       return "$helper_status"
@@ -1752,6 +1841,72 @@ provider_debug_port() {
   printf '%s\n' "$((base + offset))"
 }
 
+provider_id_for_debug_port() {
+  local candidate="$1" provider
+  for provider in $(provider_ids); do
+    [[ "$(provider_debug_port "$provider")" == "$candidate" ]] && {
+      printf '%s\n' "$provider"
+      return 0
+    }
+  done
+  return 1
+}
+
+cdp_session_manager_requested() {
+  case "${TIKPAL_WEB_MODE_CDP_SESSION_MANAGER:-0}" in
+    1|true|TRUE|yes|YES|on|ON|enabled|ENABLED) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+cdp_session_manager_client_available() {
+  [[ -x "$TIKPAL_WEB_MODE_CDP_SESSION_MANAGER_CLIENT" ]]
+}
+
+cdp_session_manager_retryable() {
+  local method="$1" params_json="$2"
+  [[ "$method" == "Page.bringToFront" ]] && return 0
+  [[ "$method" == "Runtime.evaluate" ]] || return 1
+  [[ "$params_json" == *'__tikpalProviderAudioGate?.setActive'* \
+    || "$params_json" == *'dispatchEvent(new Event("resize"))'* \
+    || "$params_json" == *"dispatchEvent(new Event('resize'))"* \
+    || "$params_json" == *'getBoundingClientRect()'* ]]
+}
+
+record_cdp_session_manager_trace() {
+  local manager_response="$1" command_status="$2"
+  local detail queue_ms lookup_ms response_ms recovery_ms generation error_code recovered
+  switch_trace_enabled || return 0
+  detail="$(printf '%s' "$manager_response" | python3 -c '
+import json, sys
+try:
+  body=json.load(sys.stdin)
+except Exception:
+  body={}
+timings=body.get("timings") or {}
+target=body.get("target") or {}
+print("|".join(str(value) for value in (
+  timings.get("queueMs", 0), timings.get("sessionLookupMs", 0),
+  timings.get("cdpResponseMs", 0), timings.get("recoveryMs", 0),
+  target.get("sessionGeneration", 0), body.get("errorCode", ""),
+  1 if body.get("recovered") else 0, 1 if body.get("ok") else 0)))
+' 2>/dev/null || true)"
+  IFS='|' read -r queue_ms lookup_ms response_ms recovery_ms generation error_code recovered _ <<< "$detail"
+  queue_ms="${queue_ms:-0}"; lookup_ms="${lookup_ms:-0}"; response_ms="${response_ms:-0}"
+  recovery_ms="${recovery_ms:-0}"; generation="${generation:-0}"; error_code="${error_code:-CDP_MANAGER_FAILED}"
+  record_switch_trace_event cdp_manager_queue ok '' "$queue_ms" "$generation"
+  record_switch_trace_event cdp_manager_session_lookup ok '' "$lookup_ms" "$generation"
+  if [[ "$command_status" == "0" ]]; then
+    record_switch_trace_event cdp_manager_response ok '' "$response_ms" "$generation"
+    if [[ "$recovered" == "1" ]]; then
+      record_switch_trace_event cdp_session_recovery_completed ok '' "$recovery_ms" "$generation"
+    fi
+  else
+    record_switch_trace_event cdp_manager_response failed "$error_code" "$response_ms" "$generation"
+    [[ "$recovery_ms" != "0" ]] && record_switch_trace_event cdp_session_recovery_failed failed "$error_code" "$recovery_ms" "$generation"
+  fi
+}
+
 read_flags() {
   local flags=()
   local line
@@ -1860,6 +2015,15 @@ wait_for_real_provider_url() {
 
 provider_cdp_json_list() {
   local provider_port="$1"
+  local provider
+  if cdp_session_manager_requested; then
+    provider="$(provider_id_for_debug_port "$provider_port")" || return 1
+    cdp_session_manager_client_available || return 1
+    timeout 2 "$TIKPAL_WEB_MODE_CDP_SESSION_MANAGER_CLIENT" \
+      --socket "$TIKPAL_WEB_MODE_CDP_SESSION_MANAGER_SOCKET" \
+      --provider "$provider" --op targets --priority foreground --raw-targets 2>/dev/null
+    return
+  fi
   # Chromium can accept a DevTools connection while its renderer is wedged.
   # This check is part of the foreground switch path, so it must never inherit
   # the API command's much longer timeout.
@@ -1875,6 +2039,24 @@ provider_cdp_command() {
   local params_json="$3"
   local expected_value="${4:-}"
   local cdp_json="${5:-}"
+  local provider manager_response manager_status=0 retry_flag=() expected_args=()
+  local priority="${6:-foreground}" trace_manager="${7:-1}"
+  if cdp_session_manager_requested; then
+    provider="$(provider_id_for_debug_port "$provider_port")" || return 1
+    cdp_session_manager_client_available || return 1
+    if [[ "$priority" == "foreground" ]] && cdp_session_manager_retryable "$method" "$params_json"; then
+      retry_flag=(--retryable)
+    fi
+    [[ -n "$expected_value" ]] && expected_args=(--expected-value "$expected_value")
+    manager_response="$(timeout 3 "$TIKPAL_WEB_MODE_CDP_SESSION_MANAGER_CLIENT" \
+      --socket "$TIKPAL_WEB_MODE_CDP_SESSION_MANAGER_SOCKET" \
+      --provider "$provider" --op command --method "$method" --params "$params_json" \
+      --priority "$priority" "${retry_flag[@]}" \
+      "${expected_args[@]}" 2>&1)" || manager_status=$?
+    [[ "$trace_manager" != "1" ]] || record_cdp_session_manager_trace "$manager_response" "$manager_status"
+    [[ "$manager_status" == "0" ]]
+    return
+  fi
   local ws_url
   if [[ -z "$cdp_json" ]]; then
     cdp_json="$(timeout 1 curl --noproxy '*' -sf --connect-timeout 1 --max-time 1 "http://127.0.0.1:$provider_port/json/list" 2>/dev/null)"
@@ -1967,11 +2149,47 @@ set_provider_media_active_via_cdp() {
   local provider_port="$1"
   local active="${2:-0}"
   local cdp_json="${3:-}"
-  local value=false
+  local prefer_direct="${4:-0}"
+  local priority="${5:-foreground}"
+  local trace_manager="${6:-1}"
+  local value=false audio_gate_mode
   [[ "$active" == "1" ]] && value=true
-  provider_cdp_command "$provider_port" Runtime.evaluate \
+  # The persistent session owns the page's existing gate. Prefer that direct
+  # operation for every activation; launching a Guard CLI first can make a
+  # healthy Spotify target wait behind its background maintenance queue.
+  if [[ "$active" == "1" ]] \
+    && provider_cdp_command "$provider_port" Runtime.evaluate \
+      "{\"expression\":\"(window.__tikpalProviderAudioGate?.setActive($value) || {}).active\",\"returnByValue\":true}" \
+      "$value" "$cdp_json" "$priority" "$trace_manager"; then
+    return 0
+  fi
+  # A full provider reload can remove the injected object.  For the target
+  # activation, let the Guard install and set it in one CDP evaluation before
+  # attempting the lightweight direct call.
+  # The active target can take one renderer turn to resume after
+  # Page.bringToFront. This remains within the five-second Phase 4 settle
+  # budget once the post-commit delay below is removed.
+  if [[ "$active" == "1" && -f "$SCRIPT_DIR/tikpal-web-mode-guard.mjs" ]] \
+    && TIKPAL_WEB_MODE_PROVIDER_DEBUG_PORT="$provider_port" \
+      TIKPAL_WEB_MODE_STATE_PATH="$TIKPAL_WEB_MODE_STATE_PATH" \
+      timeout 3 node --experimental-websocket "$SCRIPT_DIR/tikpal-web-mode-guard.mjs" \
+        --audio-gate-active >/dev/null 2>&1; then
+    return 0
+  fi
+  if [[ "$active" != "1" ]] && provider_cdp_command "$provider_port" Runtime.evaluate \
     "{\"expression\":\"(window.__tikpalProviderAudioGate?.setActive($value) || {}).active\",\"returnByValue\":true}" \
-    "$value" "$cdp_json"
+    "$value" "$cdp_json" "$priority" "$trace_manager"; then
+    return 0
+  fi
+  # A provider can perform a full page reload after its resident Guard first
+  # installed the gate.  Reuse that same Guard implementation only when the
+  # direct call proves the in-page object is gone.
+  [[ -f "$SCRIPT_DIR/tikpal-web-mode-guard.mjs" ]] || return 1
+  [[ "$active" == "1" ]] && audio_gate_mode=active || audio_gate_mode=inactive
+  TIKPAL_WEB_MODE_PROVIDER_DEBUG_PORT="$provider_port" \
+  TIKPAL_WEB_MODE_STATE_PATH="$TIKPAL_WEB_MODE_STATE_PATH" \
+    timeout 2 node --experimental-websocket "$SCRIPT_DIR/tikpal-web-mode-guard.mjs" \
+      "--audio-gate-$audio_gate_mode" >/dev/null 2>&1
 }
 
 # A resident Chromium window can have a valid CDP page but be compositor-throttled
@@ -2007,7 +2225,11 @@ request_provider_compositor_wake() {
 }
 
 pause_provider_media_via_cdp() {
-  set_provider_media_active_via_cdp "$1" 0 "${2:-}"
+  # This best-effort deactivation is asynchronous with the visible reveal.
+  # Keep it off the Manager foreground queue and out of hot-path acceptance
+  # accounting; the actual post-switch audio gate remains independently
+  # verified before a round passes.
+  set_provider_media_active_via_cdp "$1" 0 "${2:-}" 0 maintenance 0
 }
 
 activate_target_provider_audio_gate() {
@@ -2031,24 +2253,31 @@ activate_target_provider_audio_gate() {
 schedule_target_provider_audio_gate_after_commit() {
   local provider="$1"
   local provider_port="$2"
-  local delay="${TIKPAL_WEB_MODE_TARGET_AUDIO_GATE_POST_COMMIT_DELAY_SECONDS:-0.1}"
-  [[ "$delay" =~ ^[0-9]+([.][0-9]+)?$ ]] || delay=0.1
+  local delay="${TIKPAL_WEB_MODE_TARGET_AUDIO_GATE_POST_COMMIT_DELAY_SECONDS:-0}"
+  [[ "$delay" =~ ^[0-9]+([.][0-9]+)?$ ]] || delay=0
   # The target can be compositor-throttled while opening.  Its state is now
   # committed and the provider Guard has resumed, so do this after the X11
   # lease is released instead of making a visible switch wait on CDP.
   record_switch_trace_event target_audio_gate_deferred ok guard_post_commit
   (
     sleep "$delay"
-    # The X11 transaction is complete now. Bringing the CDP page forward here
-    # wakes a renderer that was legitimately throttled while parked offscreen,
-    # without placing a compositor round-trip on the visible Helper path.
-    record_switch_trace_event post_commit_compositor_wake_started
-    if provider_cdp_command "$provider_port" Page.bringToFront '{}' ''; then
-      record_switch_trace_event post_commit_compositor_wake_completed ok
-    else
-      record_switch_trace_event post_commit_compositor_wake_completed unavailable cdp_wake_failed
-    fi
+    # The X11 transaction has already made the target foreground. Prioritize
+    # its audio gate: a throttled renderer can make an optional CDP wake wait
+    # for seconds, but that wake must not consume the stability budget.
     activate_target_provider_audio_gate "$provider" "$provider_port" || true
+    # Deezer alone needs an explicit layout invalidation after being parked
+    # off-screen. It remains best-effort and runs only after the gate proves
+    # the target audio is active.
+    if [[ "$provider" == "deezer" ]]; then
+      record_switch_trace_event post_commit_compositor_layout_wake_started
+      if provider_cdp_command "$provider_port" Runtime.evaluate \
+          '{"expression":"(() => { try { document.documentElement && document.documentElement.getBoundingClientRect(); window.dispatchEvent(new Event(\"resize\")); return true; } catch (_) { return false; } })()","returnByValue":true}' \
+          true; then
+        record_switch_trace_event post_commit_compositor_layout_wake_completed ok
+      else
+        record_switch_trace_event post_commit_compositor_layout_wake_completed unavailable cdp_layout_wake_failed
+      fi
+    fi
   ) &
 }
 
@@ -2131,6 +2360,12 @@ cleanup_target_window_probe() {
 provider_has_real_provider_page() {
   local provider_port="$1"
   [[ "${TIKPAL_WEB_MODE_TRUSTED_PROVIDER_PAGE_PORT:-}" == "$provider_port" ]] && return 0
+  if cdp_session_manager_requested; then
+    # Manager target JSON is deliberately compact. Avoid reintroducing a Node
+    # startup on the foreground path merely to parse this invariant.
+    provider_cdp_json_list "$provider_port" | grep -q '"url":"https://'
+    return
+  fi
   # grep avoids ~460 ms node startup; "url": "https:// only appears in real provider pages.
   provider_cdp_json_list "$provider_port" | grep -q '"url": "https://'
 }
@@ -3500,15 +3735,20 @@ window_guard_state() {
 }
 
 window_guard_launch_process() {
-  local provider_profile="$1" panel_profile="$2" log_path
-  local lifecycle_fd="${TIKPAL_WINDOW_GUARD_LIFECYCLE_FD:-}"
+  local provider_profile="$1" panel_profile="$2" lifecycle_fd="${3:-}" log_path
   log_path="${TIKPAL_WEB_MODE_WINDOW_GUARD_LOG_PATH:-/dev/null}"
-  if [[ -n "$lifecycle_fd" ]]; then
-    exec {lifecycle_fd}>&-
-  fi
-  nohup "$SCRIPT_DIR/tikpal-web-mode.sh" guard "$provider_profile" "$panel_profile" \
-    </dev/null >>"$log_path" 2>&1 9>&- &
-  printf '%s\n' "$!"
+  # Do not launch through command substitution: its subshell can disappear
+  # before the lifecycle controller proves the new Guard's PID/starttime.
+  # Close the controller lock only in the detached child, then retain its PID
+  # in the caller for the existing identity checks.
+  (
+    if [[ "$lifecycle_fd" =~ ^[0-9]+$ ]]; then
+      eval "exec ${lifecycle_fd}>&-"
+    fi
+    exec nohup "$SCRIPT_DIR/tikpal-web-mode.sh" guard "$provider_profile" "$panel_profile" \
+      </dev/null >>"$log_path" 2>&1 9>&-
+  ) &
+  TIKPAL_WINDOW_GUARD_LAUNCHED_PID="$!"
 }
 
 window_guard_terminate_process() {
@@ -3577,8 +3817,8 @@ window_guard_ensure_process() {
     return 0
   fi
 
-  guard_pid="$(TIKPAL_WINDOW_GUARD_LIFECYCLE_FD="$lifecycle_fd" \
-    window_guard_launch_process "$provider_profile" "$panel_profile")"
+  window_guard_launch_process "$provider_profile" "$panel_profile" "$lifecycle_fd"
+  guard_pid="${TIKPAL_WINDOW_GUARD_LAUNCHED_PID:-}"
   if [[ ! "$guard_pid" =~ ^[1-9][0-9]*$ ]] || ! window_guard_write_pid_file "$guard_pid"; then
     flock -u "$lifecycle_fd" >/dev/null 2>&1 || true
     exec {lifecycle_fd}>&-
@@ -3605,14 +3845,27 @@ window_guard_ensure_process() {
 }
 
 provider_switch_marker_path() {
-  printf '%s\n' "$TIKPAL_WEB_MODE_PROFILE_ROOT/provider-switch.pid"
+  printf '%s\n' "$TIKPAL_WEB_MODE_PROVIDER_SWITCH_MARKER_PATH"
 }
 
 begin_provider_switch_guard() {
-  local marker
-  marker="$(provider_switch_marker_path)"
-  mkdir -p "$(dirname "$marker")"
+  # This marker pauses resident Guards while the foreground transaction owns
+  # both surfaces. It is hot-path state, so keep it on the existing tmpfs
+  # runtime plane rather than letting storage I/O delay a physical reveal.
+  local marker parent
+  marker="$TIKPAL_WEB_MODE_PROVIDER_SWITCH_MARKER_PATH"
+  parent="${marker%/*}"
+  if switch_trace_enabled; then
+    record_switch_trace_event provider_switch_marker_started
+  fi
+  [[ "$parent" == "$marker" || -d "$parent" ]] || mkdir -p "$parent"
+  if switch_trace_enabled; then
+    record_switch_trace_event provider_switch_marker_root_ready
+  fi
   printf '%s\n' "$BASHPID" > "$marker"
+  if switch_trace_enabled; then
+    record_switch_trace_event provider_switch_marker_written
+  fi
 }
 
 provider_switch_in_progress() {
@@ -3628,10 +3881,9 @@ provider_switch_in_progress() {
 }
 
 clear_provider_switch_guard() {
-  local marker pid
-  marker="$(provider_switch_marker_path)"
+  local marker="$TIKPAL_WEB_MODE_PROVIDER_SWITCH_MARKER_PATH" pid=""
   [[ -r "$marker" ]] || return 0
-  pid="$(cat "$marker" 2>/dev/null || true)"
+  IFS= read -r pid < "$marker" || true
   if [[ "$pid" == "$BASHPID" ]]; then
     rm -f "$marker"
   fi
@@ -3776,9 +4028,16 @@ reconcile_provider_pool() {
     return 0
   fi
   if [[ -f "$(pool_warm_stamp_file)" ]]; then
-    elapsed_ms="$(( $(now_ms) - started_ms ))"
-    log_stage "reconcile_ms=$elapsed_ms provider=$active_provider pool=trusted"
-    return 0
+    if ! provider_pool_needs_prewarm "$active_provider"; then
+      elapsed_ms="$(( $(now_ms) - started_ms ))"
+      log_stage "reconcile_ms=$elapsed_ms provider=$active_provider pool=trusted"
+      return 0
+    fi
+    # An interrupted idle warmup (for example after an API restart) can leave
+    # its stamp behind while some Chromium provider profiles no longer exist.
+    # The stamp is not proof of a resident pool in that case.
+    rm -f "$(pool_warm_stamp_file)"
+    write_runtime_prewarm_complete 0
   fi
   sync_runtime_provider_pool_process_statuses "$active_provider" 0
   [[ "$(read_runtime_active_provider)" == "$active_provider" ]] || {
@@ -4222,9 +4481,11 @@ close_web_mode_full() {
   fi
   write_audio_bus_state ""
   write_runtime_provider_state ""
-  if is_enabled "${TIKPAL_WEB_MODE_STARTUP_RESET:-0}"; then
-    rm -f "$(pool_warm_stamp_file)"
-  else
+  # A full close has killed every resident Chromium. Its warm stamp is no
+  # longer evidence of a reusable pool, including when this was not a startup
+  # reset, so the normal refill path must not trust it.
+  rm -f "$(pool_warm_stamp_file)"
+  if ! is_enabled "${TIKPAL_WEB_MODE_STARTUP_RESET:-0}"; then
     schedule_provider_pool_refill_after_close
   fi
   # The kiosk launcher starts boot prewarm after its own Chromium window is
@@ -5972,8 +6233,8 @@ reload_window_guard() {
     fi
     window_guard_remove_pid_file_if_owned "$old_guard" "$old_starttime" || true
   fi
-  new_guard="$(TIKPAL_WINDOW_GUARD_LIFECYCLE_FD="$lifecycle_fd" \
-    window_guard_launch_process "$provider_profile" "$panel_profile")"
+  window_guard_launch_process "$provider_profile" "$panel_profile" "$lifecycle_fd"
+  new_guard="${TIKPAL_WINDOW_GUARD_LAUNCHED_PID:-}"
   if [[ ! "$new_guard" =~ ^[1-9][0-9]*$ ]]; then
     log "ERROR: Explore window guard replacement did not return a valid PID"
     flock -u "$lifecycle_fd" >/dev/null 2>&1 || true
@@ -6260,6 +6521,9 @@ start_provider_guard() {
   TIKPAL_WEB_MODE_PROXY_MODE="$proxy_mode" \
   TIKPAL_WEB_MODE_ERROR_PAGE_URL="$TIKPAL_WEB_MODE_ERROR_PAGE_URL" \
   TIKPAL_WEB_MODE_PROVIDER_DEBUG_PORT="$provider_port" \
+  TIKPAL_WEB_MODE_PROVIDER_DEBUG_PORT_BASE="$TIKPAL_WEB_MODE_PROVIDER_DEBUG_PORT" \
+  TIKPAL_WEB_MODE_CDP_SESSION_MANAGER="$TIKPAL_WEB_MODE_CDP_SESSION_MANAGER" \
+  TIKPAL_WEB_MODE_CDP_SESSION_MANAGER_SOCKET="$TIKPAL_WEB_MODE_CDP_SESSION_MANAGER_SOCKET" \
   TIKPAL_WEB_MODE_QQ_AUTO_CONFIRM="$TIKPAL_WEB_MODE_QQ_AUTO_CONFIRM" \
   TIKPAL_WEB_MODE_QQ_AUDIO_PRIME="$TIKPAL_WEB_MODE_QQ_AUDIO_PRIME" \
   TIKPAL_WEB_MODE_QQ_MUSIC_AUTO_PLAY="$TIKPAL_WEB_MODE_QQ_MUSIC_AUTO_PLAY" \
@@ -7219,7 +7483,10 @@ reveal_resident_provider_window() {
         if switch_trace_enabled; then
           record_switch_trace_event helper_paint_gate completed cdp_resident "$helper_paint_elapsed_ms"
         fi
-        log_stage "helper_cdp_skip_paint target=$target_window port=$provider_port elapsed_ms=$helper_paint_elapsed_ms"
+        # This is on the physical-reveal critical path.  Keep the diagnostic
+        # in the command output, but do not synchronously invoke `logger`
+        # before writing the fenced physical stamp.
+        log "helper_cdp_skip_paint target=$target_window port=$provider_port elapsed_ms=$helper_paint_elapsed_ms"
       elif ! wait_for_provider_window_nonblank_x11_frame "$target_window"; then
         helper_paint_elapsed_ms="$(( $(now_ms) - helper_paint_started_ms ))"
         if switch_trace_enabled; then
@@ -7707,7 +7974,7 @@ try {
   const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
   const providers = state.residentProviders && typeof state.residentProviders === "object" ? state.residentProviders : {};
   const ids = String(providerList || "").split(",").filter(Boolean);
-  process.exit(ids.every((id) => { const s = String(providers[id]?.status || ""); return !s || completeStatuses.has(s); }) ? 0 : 1);
+  process.exit(ids.every((id) => completeStatuses.has(String(providers[id]?.status || ""))) ? 0 : 1);
 } catch {
   process.exit(1);
 }
@@ -7894,12 +8161,15 @@ open_provider_pool() {
   local initial_entry_phase=""
   local segment_timing_once=0 segment_started_ms=0 cached_xid_ms=-1 first_cdp_ms=-1 guard_stop_ms=-1 panel_retile_ms=-1
   local trace_started_ms=0 trace_finished_ms=0 trace_elapsed_ms=0 trace_cdp_started_ms=0 trace_cdp_elapsed_ms=0
+  switch_trace_enabled && record_switch_trace_event open_pool_entered
   if ! runtime_open_request_is_current_or_log open-pool-start; then
     log "open abandoned: active provider no longer ${TIKPAL_WEB_MODE_OPEN_EXPECTED_ACTIVE_PROVIDER}"
     return 0
   fi
+  switch_trace_enabled && record_switch_trace_event open_pool_request_confirmed
   started_ms="$(now_ms)"
   current_provider="$(read_runtime_active_provider)"
+  switch_trace_enabled && record_switch_trace_event open_pool_active_provider_read ok "$current_provider"
   current_profile=""
   if [[ -n "$current_provider" ]]; then
     current_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/$current_provider"
@@ -7911,11 +8181,13 @@ open_provider_pool() {
   # resolver/CDP window and make the eventual active-state commit wait for a
   # queue that is unrelated to the visible switch.
   [[ "$switching_provider" != "1" ]] || begin_provider_switch_guard
+  switch_trace_enabled && record_switch_trace_event open_pool_switch_marker_written ok "$switching_provider"
   if [[ "$switching_provider" == "1" && -e "$TIKPAL_WEB_MODE_SWITCH_SEGMENT_TIMING_ONCE_PATH" ]]; then
     segment_timing_once=1
     rm -f "$(switch_detail_timing_path)"
   fi
   resident_status="$(read_runtime_provider_status "$provider")"
+  switch_trace_enabled && record_switch_trace_event open_pool_resident_status_read ok "$resident_status"
   provider_port="$(provider_debug_port "$provider")"
   if switch_trace_enabled; then
     switch_trace_now_ms trace_started_ms
@@ -8036,6 +8308,9 @@ open_provider_pool() {
         fail "$message"
       fi
     fi
+    # Keep optional audio-gate work off the physical reveal path. A dormant
+    # renderer may need a session recovery, which is safe after commit but
+    # must never delay the first visible provider frame.
     # Pause old provider's media — fire-and-forget so it does not block the reveal.
     # The transition veil covers the old page; the 2 s audio crossfade masks any
     # brief overlap while the WebSocket round-trip completes in the background.
@@ -8173,12 +8448,15 @@ open_provider_pool() {
         start_window_guard "$provider_profile" "$panel_profile" "$target_window" "$panel_window"
         record_switch_trace_event guard_lifecycle_completed ok "" "$(( $(now_ms) - guard_lifecycle_started_ms ))"
       fi
+      # The explicit audio-gate handoff needs only the committed target state
+      # and released Helper lease. Dispatch it before marker cleanup so a
+      # contended marker read cannot consume the five-second settle budget.
+      schedule_target_provider_audio_gate_after_commit "$provider" "$provider_port"
       # The active-provider state and Guard registry now name the new surface;
       # only now may the retained Guard resume its inspect/plan/apply loop.
       switch_marker_clear_started_ms="$(now_ms)"
       clear_provider_switch_guard
       record_switch_trace_event switch_marker_cleared ok "" "$(( $(now_ms) - switch_marker_clear_started_ms ))"
-      schedule_target_provider_audio_gate_after_commit "$provider" "$provider_port"
       # A traced physical switch has already proved every resident page Ready.
       # Do not launch its advisory reconciliation while acceptance is reading
       # the final X11 geometry; it can contend with those checks after the
@@ -8686,12 +8964,29 @@ if [[ "${TIKPAL_WEB_MODE_SOURCE_ONLY:-0}" == "1" ]]; then
   return 0
 fi
 
+web_mode_action="${1:-open}"
+if [[ "$(id -u)" == "0" && "$web_mode_action" != "--check" && "$web_mode_action" != "guard-state" ]]; then
+  runtime_user="${TIKPAL_WEB_MODE_RUNTIME_USER:-moode}"
+  runtime_home="$(getent passwd "$runtime_user" 2>/dev/null | awk -F: 'NR == 1 { print $6 }' || true)"
+  if [[ -z "$runtime_home" || ! -d "$runtime_home" ]]; then
+    printf '%s\n' "Web Mode runtime user is unavailable: $runtime_user" >&2
+    exit 1
+  fi
+  if ! command -v runuser >/dev/null 2>&1; then
+    printf '%s\n' "runuser is required to start Web Mode as $runtime_user" >&2
+    exit 1
+  fi
+  exec runuser -u "$runtime_user" -- env \
+    HOME="$runtime_home" USER="$runtime_user" LOGNAME="$runtime_user" \
+    "$SCRIPT_SOURCE" "${WEB_MODE_COMMAND_ARGS[@]}"
+fi
+
 x11_trace_require_writable ||
   fail "TRACE_NOT_WRITABLE: $TIKPAL_WEB_MODE_X11_MUTATION_TRACE_PATH"
 
 trap x11_helper_cleanup_on_exit EXIT
 
-case "${1:-open}" in
+case "$web_mode_action" in
   --check)
     check_runtime
     ;;

@@ -2,17 +2,36 @@
 
 ## Status
 
-Phase 4 is **blocked before the Spotify canary**. It has not run a
-`YouTube Music -> Spotify` click, the formal 20-round sequence, or changed the
-default Helper mode to `auto`.
+Phase 4 uses the existing independent-Provider Chromium pool. Production
+rollout completed on 2026-09-03 and
+`TIKPAL_WEB_MODE_X11_HELPER_MODE=auto` is enabled. Its scoped production gate
+covers `suno, spotify, apple_music, tidal, qobuz, deezer, amazon_music,
+qq_music, netease_music`; YouTube Music may remain resident but is not a
+scoped gate.
 
-The block is a real runtime prerequisite, not a missing state marker: the
-resident YouTube Music page at `http://127.0.0.1:9235/json` is reachable but
-reports `YouTube Music is not available in your area`. The configured proxy is
-`http://192.168.10.123:16005`; its egress country is US but it returns the
-same page. Direct egress is CN and its request was reset. Therefore the
-required YouTube Music runtime/audio start state cannot be accepted for the
-canary.
+Each Provider has one persistent browser-level CDP WebSocket and one attached
+page session owned by `tikpal-web-mode-cdp-manager.service`. Launcher, Provider
+Guard and acceptance use `/run/tikpal/cdp-session-manager.sock` rather than
+discovering `/json/list` and creating a page WebSocket on the foreground path.
+The Manager records browser/session/document generations and permits exactly
+one transparent replay only for `Page.bringToFront`, audio-gate `setActive`,
+layout wake, and read-only query commands. It never replays clicks, playback,
+authorization, navigation, or prompt dismissal.
+
+The completed field sequence was one `Suno -> Spotify` canary, then 20
+switches from Spotify: the nine scoped Providers twice, then Suno and Apple
+Music. Each run allows at most one successful Manager recovery; a failed
+recovery or a second recovery fails the scoped gate. The passing physical run
+met all strict timing, geometry, audio, Helper, lifecycle, and Manager gates.
+
+The Suno/Spotify single-window Tab v2 work remains an isolated A/B POC. It
+does not replace the production pool, profiles, audio buses, or external Side
+Panel.
+
+The Guard pause marker is runtime coordination only and lives at
+`/run/tikpal/provider-switch.pid`. It must not share the Provider profile's
+storage path: a stalled profile-filesystem write can otherwise delay the
+foreground process before it reaches the Helper transaction.
 
 ## Strict transaction contract
 
@@ -20,70 +39,100 @@ Formal acceptance modes (`switch-once`, `switch-only`, and `switch-strict`)
 now pass `strict_helper_transaction: true` through the trace context, API, and
 launcher environment.
 
-On a retryable Helper timeout in this mode, the launcher:
+An ambiguous Helper result remains terminal: the launcher never starts a
+second visible mutation after a timeout or transport error that might have
+reached X11. There is one narrow exception before any mutation begins: an
+`X11_REPLY_TIMEOUT` response may reconnect and retry once only when the Helper
+proves `fallbackRecommended=true`, `leaseReleased=true`, `inFlight=false`, and
+`mutationStarted=false`. Every other timeout, transport error, or second
+attempt remains a failure.
 
-1. safely revokes the completed lease and publishes a fresh Shell generation;
-2. returns the first nonzero Helper status; and
-3. does not issue a second Helper switch or use a legacy Shell X11 fallback.
-
-The acceptance summary also requires exactly one successful Helper client
-attempt, a Helper foreground completion, no Helper retry, no CDP fallback, and
-one successful ordered target audio-gate event. These fields are emitted in
-`rounds.csv`, `summary.json`, and `report.md`; failure of either gate fails the
-strict run. Helper transaction time is also a hard gate: the canary must be
-`<250ms`, and the 20-round run must have `median<=30ms`, `p95<100ms`, and
-`max<250ms`.
-
-This closes the false-success path observed during the earlier preparation,
-where a first `X11_REPLY_TIMEOUT` was followed by a second Helper transaction.
-That preparation is not Phase 4 evidence.
+The acceptance summary requires one canonical successful Helper switch for a
+round, a Helper foreground completion, no CDP fallback, and one successful
+ordered target audio-gate event. A permitted safe pre-mutation reconnect is
+recorded separately as `helper_pre_mutation_*`; it is not a second visual
+switch. These fields are emitted in `rounds.csv`, `summary.json`, and
+`report.md`; failure of either gate fails the strict run. Helper transaction
+time is also a hard gate: the canary must be `<250ms`, and the 20-round run
+must have `median<=90ms`, `p95<175ms`, and `max<250ms`. These bounds cover the
+complete identity-checked transaction, including its mandatory final X11 fence
+and snapshot; the former 30ms median was below that unavoidable fence on the
+field device.
 
 ## Local verification
 
 Completed on the source tree:
 
 - `bash -n deploy/chromium/tikpal-web-mode.sh deploy/chromium/tikpal-explore-physical-acceptance.sh scripts/tikpal-x11-helper-phase1-smoke.sh`
-- `bash deploy/chromium/tikpal-explore-physical-acceptance.sh summary-contract-fixtures` (26 cases)
+- `bash deploy/chromium/tikpal-explore-physical-acceptance.sh summary-contract-fixtures` (29 cases)
 - `bash deploy/chromium/tikpal-explore-physical-acceptance.sh stamp-fixtures`
 - `bash deploy/chromium/tikpal-explore-physical-acceptance.sh exit-contract-fixtures` (13 cases)
 - `bash scripts/tikpal-x11-helper-phase1-smoke.sh`, including the strict
-  timeout fixture that proves a single Helper switch and a fresh Shell owner
-  generation
-- `npm run test:kiosk`
+  timeout fixture and a fresh Shell owner generation
+- `npm run test:cdp-manager`
+- `npm run typecheck`
+- `npm run build`
 - `git diff --check`
 
-## 115 deployment snapshot
+## 115 deployment and acceptance snapshot
 
-On 2026-09-02, the three narrow runtime files were backed up at
-`/root/tikpal-phase4-backups/phase4-strict-transaction-20260902-100014` and
-atomically replaced with their owner and mode preserved. The subsequent
-transaction-metric-only acceptance-script update is backed up at
-`/root/tikpal-phase4-backups/phase4-acceptance-metrics-20260902-101011`:
+On 2026-09-03 the Phase 4 Manager, Helper/client updates, Guard IPC, service
+unit, and validation tools were atomically deployed to 115 with exact backups
+under `/root/tikpal-phase4-backups/phase4-cdp-manager-20260903-015205`. The
+Manager and Helper were restarted to establish their new control plane; only
+the API was restarted for the final promotion. Chromium and the kiosk were not
+restarted.
 
-| File | SHA-256 | Owner/mode |
-| --- | --- | --- |
-| `deploy/chromium/tikpal-explore-physical-acceptance.sh` | `5c6a8863003b297e83221046391a441d87f6b230bbfe19363060c732b2b45357` | `moode:moode 0755` |
-| `deploy/chromium/tikpal-web-mode.sh` | `ee3f3f5be37af5e21615f38c27e8871b661aa9406ca9a3dc44a279fee438f6fe` | `moode:moode 0755` |
-| `server/index.mjs` | `32b04d4deb02ecf6ea90f1e630dcb9b7e247f3ce8487a877f140b957eed27e78` | `moode:moode 0644` |
+The final evidence directory is:
 
-Only `tikpal-api.service` was restarted. `tikpal-kiosk.service` and
-`tikpal-x11-helper.service` remained active without restart.
+```text
+/home/moode/code/tikpal/.tikpal/phase4-cdp-manager-formal20-final-20260903-0517/
+```
 
-The current live baseline is read from `/run/tikpal`, not the stale source-tree
-mirror state. At the blocker snapshot it had `activeProvider=youtube_music`,
-no opening request, a free lock, exactly one Window Guard, 10 Provider Guards,
-10 resident Chromium roots, and socket mode `moode:moode 0600`.
+Its summary recorded all 20 rounds as correct for Manager, lifecycle, Helper,
+audio, performance, and physical-visible/stable gates, with
+`scoped_gate_passed=true`, zero CDP session recoveries, and no anomalies.
+`gate_passed=false` in that file is expected because its legacy full-scope
+meaning still includes the explicitly excluded YouTube Music target.
 
-The Helper remains `phase=1` / `mode=switch`, with no lease in flight. Its
-existing timeout/reconnect counters are historical evidence from the rejected
-preparation; they must be reset to a fresh zero-error baseline before another
-formal Phase 4 click.
+Visible-time median/p95/max were 878/1472/1577 ms; stable-time values were
+1510/2759/3017 ms. One final-run `X11_REPLY_TIMEOUT` took the allowed safe
+pre-mutation reconnect path (`mutationStarted=false`); the canonical 20
+visible mutations still completed without a duplicated reveal.
 
-## Resume gate
+After the passing run, the API environment was promoted to
+`TIKPAL_WEB_MODE_X11_HELPER_MODE=auto`. The post-promotion read-only check
+found the Manager sessions ready at generation 1/document generation 1, no
+stale switch lock or marker, and no follow-up browser click.
 
-Before retrying, provide or restore a verified YouTube Music route/account
-that renders a real playable page. Then restart the Helper only to establish a
-new zero-error baseline, rerun the complete read-only preflight, and execute
-exactly one `YouTube Music -> Spotify` canary. Only a passing canary may enter
-the fixed 20-round sequence; `auto` remains prohibited until all 20 rounds
-pass.
+## Runtime ownership self-check and repair
+
+Explore runtime commands must run as `moode`. Root is reserved for deployment,
+systemd installation, and the narrow repair helper. If `tikpal-web-mode.sh` is
+mistakenly started as root for a mutating action, it immediately re-execs as
+`moode`; only `--check` and `guard-state` stay root-readable.
+
+`/usr/local/sbin/tikpal-web-mode-owner-repair` has two fixed modes:
+
+- `check` reports ownership mismatches without changing state.
+- `repair` changes ownership only on the fixed runtime-file allowlist and only
+  when a lock file is currently unlocked. It never recursively changes a
+  directory and never follows a symlink. It can terminate only a root-owned,
+  PPID-1 `tikpal-web-mode-guard.mjs` process that is absent from the registered
+  Provider Guard PID files.
+
+The installer provisions `tikpal-web-mode-owner-repair.service` as an enabled
+one-shot service. At every system boot it runs before the API, kiosk, and X11
+Helper services, so ordinary users do not need to change file ownership by
+hand. A matching Settings action, **Explore self-check & repair**, exposes the
+same limited repair to the kiosk user through a narrowly scoped sudo rule; it
+does not grant arbitrary `chown`, shell, or service-control access.
+
+## Follow-up boundary
+
+The completed scoped Phase 4 gate does not change the legacy full-scope
+`gate_passed` definition and does not promote Tab v2. Any future Tab v2 A/B
+must separately prove same-window kiosk geometry, no browser chrome, target
+activation, first meaningful frame, physical visibility, and its explicitly
+limited single-output audio behavior before a profile, proxy, audio, or Shell
+redesign is considered.

@@ -30,6 +30,10 @@ const requiredFiles = [
   "deploy/chromium/tikpal-x11-helper.c",
   "deploy/chromium/tikpal-web-mode.sh",
   "deploy/chromium/tikpal-web-mode-guard.mjs",
+  "deploy/chromium/tikpal-web-mode-cdp-manager.mjs",
+  "deploy/chromium/tikpal-web-mode-cdp-client.py",
+  "deploy/systemd/tikpal-web-mode-cdp-manager.service",
+  "scripts/tikpal-cdp-session-manager-smoke.mjs",
   "deploy/chromium/tikpal-web-mode-qq-confirm.mjs",
   "scripts/tikpal-initial-entry-fixture.sh",
   "deploy/chromium/web-mode-extension/manifest.json",
@@ -928,6 +932,8 @@ audio_output {
   const kioskSession = await readFile(path.join(ROOT, "deploy/chromium/start-tikpal-kiosk-session.sh"), "utf8");
   const watchdogSource = await readFile(path.join(ROOT, "deploy/chromium/tikpal-kiosk-healthcheck.sh"), "utf8");
   const webModeScript = await readFile(path.join(ROOT, "deploy/chromium/tikpal-web-mode.sh"), "utf8");
+  const cdpManagerSource = await readFile(path.join(ROOT, "deploy/chromium/tikpal-web-mode-cdp-manager.mjs"), "utf8");
+  const cdpManagerClient = await readFile(path.join(ROOT, "deploy/chromium/tikpal-web-mode-cdp-client.py"), "utf8");
   const initialEntryFixture = await readFile(path.join(ROOT, "scripts/tikpal-initial-entry-fixture.sh"), "utf8");
   assert(
     webModeScript.includes("x11_helper_prepare_switch()")
@@ -953,6 +959,19 @@ audio_output {
       cdpJsonListBody.includes("--connect-timeout 1 --max-time 1") &&
       webModeScript.includes('provider_cdp_json_list "$provider_port"'),
     "foreground provider readiness checks should bound a wedged local DevTools response"
+  );
+  assert(
+    webModeScript.includes("TIKPAL_WEB_MODE_CDP_SESSION_MANAGER") &&
+      webModeScript.includes("cdp_session_manager_requested()") &&
+      webModeScript.includes("cdp_manager_response") &&
+      cdpManagerSource.includes("Target.attachToTarget") &&
+      cdpManagerSource.includes("Runtime.enable") &&
+      cdpManagerSource.includes("sessionGeneration") &&
+      cdpManagerSource.includes("documentGeneration") &&
+      cdpManagerSource.includes("/json/version") &&
+      !cdpManagerSource.includes("/json/list") &&
+      cdpManagerClient.includes("CDP_IPC_UNAVAILABLE"),
+    "Phase 4 should use one persistent browser CDP session per provider and preserve explicit IPC failures"
   );
   assert(
     realProviderUrlWaitBody.includes("deadline=$((SECONDS + TIKPAL_WEB_MODE_PROVIDER_BOOTSTRAP_TIMEOUT_SECONDS))") &&
@@ -1078,6 +1097,7 @@ audio_output {
     env: {
       ...process.env,
       TIKPAL_KIOSK_SKIP_ENV_SOURCE: "1",
+      TIKPAL_CHROMIUM_BIN: process.execPath,
       TIKPAL_WEB_MODE_PROFILE_ROOT: reconcileProfileRoot,
       TIKPAL_WEB_MODE_STATE_PATH: reconcileStatePath,
       TIKPAL_WEB_MODE_PROVIDER_POOL: "1",
@@ -1094,7 +1114,8 @@ audio_output {
     closeRequestId: "close-owns-state",
     residentProviders: { spotify: { status: "active" } }
   }));
-  const webModeFunctions = webModeScript.slice(0, webModeScript.indexOf('\ncase "${1:-open}" in'));
+  const webModeDispatchIndex = webModeScript.indexOf('\ncase "$web_mode_action" in');
+  const webModeFunctions = webModeScript.slice(0, webModeDispatchIndex >= 0 ? webModeDispatchIndex : webModeScript.indexOf('\ncase "${1:-open}" in'));
   const windowIdentityCachePath = path.join(reconcileSmokeDir, "dead-window.id");
   const switchTimingOncePath = path.join(reconcileSmokeDir, "switch-segment-timing.once");
   const panelMutationPath = path.join(reconcileSmokeDir, "panel-mutations.log");
@@ -1173,6 +1194,7 @@ run_window_guard /profiles/spotify /profiles/side-panel
     env: {
       ...process.env,
       TIKPAL_KIOSK_SKIP_ENV_SOURCE: "1",
+      TIKPAL_CHROMIUM_BIN: process.execPath,
       TIKPAL_SMOKE_WINDOW_CACHE: windowIdentityCachePath,
       TIKPAL_WEB_MODE_SWITCH_SEGMENT_TIMING_ONCE_PATH: switchTimingOncePath,
       TIKPAL_SMOKE_PANEL_MUTATIONS: panelMutationPath,
@@ -1719,6 +1741,7 @@ sync_runtime_provider_pool_process_statuses ""
   assert(sidePanelSource.includes("data-web-mode-proxy-status") && sidePanelSource.includes('"explore.proxyChangeInSettings"'), "Explore side panel should show Proxy On/Off as status and point users to Settings");
   assert(sidePanelSource.includes('sendWebModeAction({ type: "provider_text_scale"') && sidePanelSource.includes("data-web-mode-text-scale-option"), "Explore side panel should expose the provider text scale action");
   assert(sidePanelSource.includes("data-web-mode-state={panelState}") && sidePanelSource.includes('pendingAction === "close" ? "closing"') && sidePanelSource.includes('panelState === "switching"') && sidePanelSource.includes("displayedOpeningProvider"), "Explore side panel should expose synchronized closing and opening-provider states");
+  assert(sidePanelSource.includes("initialOpeningProviderRef") && sidePanelSource.includes("next.openingProvider !== initialOpeningProvider"), "Explore side panel should discard a stale startup opening hint when the API reports a different or idle request");
   assert(sidePanelSource.includes("inferFailedProviderFromError") && sidePanelSource.includes('"common.failed"') && sidePanelSource.includes("is-failed"), "Explore side panel should show provider-open failures without marking the provider active");
   assert(sidePanelSource.includes('residentStatus === "check_proxy"') && sidePanelSource.includes('"common.needProxyOn"'), "Explore side panel should show Need Proxy On from live provider probe state");
   assert(sidePanelSource.includes("isProxyNeededError") && sidePanelSource.includes("needs proxy(?: on)?"), "Explore side panel should show Need Proxy On for proxy-related provider failures");
@@ -3460,9 +3483,10 @@ sync_runtime_provider_pool_process_statuses ""
   assert(providerGuardSource.includes("previous.wasPlaying = previous.wasPlaying ||"), "Inactive provider audio polling should not forget playback that must resume");
   assert(providerGuardSource.includes("element.muted = false"), "Returning to a resident provider should unmute media elements");
   assert(
-    webModeScript.includes("set_provider_media_active_via_cdp()") &&
+      webModeScript.includes("set_provider_media_active_via_cdp()") &&
       webModeScript.includes("activate_target_provider_audio_gate()") &&
       webModeScript.includes("schedule_target_provider_audio_gate_after_commit()") &&
+      webModeScript.includes("cdp_session_manager_requested") &&
       webModeScript.includes("timeout 2 python3 -c") &&
       webModeScript.includes("target_audio_gate_activation_started") &&
       webModeScript.includes("target_audio_gate_activated") &&

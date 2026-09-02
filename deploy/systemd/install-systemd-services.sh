@@ -277,6 +277,48 @@ EOF
   fi
 }
 
+install_web_mode_owner_repair_helper() {
+  local helper="$APP_DIR/deploy/chromium/tikpal-web-mode-owner-repair.sh"
+  local target="/usr/local/sbin/tikpal-web-mode-owner-repair"
+  local sudoers_file="/etc/sudoers.d/tikpal-web-mode-owner-repair"
+  local unit="/etc/systemd/system/tikpal-web-mode-owner-repair.service"
+  [[ -f "$helper" ]] || return 0
+  install -o root -g root -m 0755 "$helper" "$target"
+  echo "installed $target"
+  cat > "$unit" <<EOF
+[Unit]
+Description=Tikpal Explore runtime ownership self-check
+After=local-fs.target
+Before=tikpal-api.service tikpal-kiosk.service tikpal-x11-helper.service
+
+[Service]
+Type=oneshot
+ExecStart=$target repair
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  chmod 0644 "$unit"
+  systemctl daemon-reload
+  systemctl enable tikpal-web-mode-owner-repair.service >/dev/null
+  echo "installed $unit"
+  if command -v visudo >/dev/null 2>&1; then
+    local tmp_sudoers
+    tmp_sudoers="$(mktemp)"
+    cat > "$tmp_sudoers" <<EOF
+$SERVICE_USER ALL=(root) NOPASSWD: $target check, $target repair
+EOF
+    if visudo -cf "$tmp_sudoers" >/dev/null; then
+      install -o root -g root -m 0440 "$tmp_sudoers" "$sudoers_file"
+      echo "installed $sudoers_file"
+    else
+      echo "WARN: generated sudoers for Explore owner repair did not validate; skipping" >&2
+    fi
+    rm -f "$tmp_sudoers"
+  fi
+}
+
 install_roonbridge_helpers() {
   local multiroom_helper="/usr/local/sbin/tikpal-multiroom-state"
   local roon_helper="/usr/local/sbin/tikpal-roonbridge-state"
@@ -575,6 +617,7 @@ fi
 ensure_library_scan_env
 ensure_kiosk_audio_release_env
 install_turzx_brightness_helper
+install_web_mode_owner_repair_helper
 ensure_turzx_brightness_env
 install_roonbridge_helpers
 ensure_roonbridge_env
@@ -585,6 +628,7 @@ install_unit "$SCRIPT_DIR/tikpal-api.service"
 install_unit "$SCRIPT_DIR/tikpal-web.service"
 install_unit "$SCRIPT_DIR/tikpal-audio-adapt.service"
 install_unit "$SCRIPT_DIR/tikpal-library-sync.service"
+install_unit "$SCRIPT_DIR/tikpal-web-mode-cdp-manager.service"
 
 if [[ "$INSTALL_X11_HELPER" -eq 1 ]]; then
   install_x11_helper
@@ -627,7 +671,7 @@ for policy_dir in /etc/chromium/policies/managed /etc/chromium-browser/policies/
 done
 
 systemctl daemon-reload
-systemctl enable tikpal-audio-adapt.service tikpal-library-sync.service tikpal-api.service tikpal-web.service
+systemctl enable tikpal-audio-adapt.service tikpal-library-sync.service tikpal-api.service tikpal-web.service tikpal-web-mode-cdp-manager.service
 
 if [[ "$INSTALL_X11_HELPER" -eq 1 ]]; then
   systemctl enable tikpal-x11-helper.service
@@ -646,6 +690,7 @@ if [[ "$RESTART_SERVICES" -eq 1 ]]; then
   systemctl restart tikpal-library-sync.service
   systemctl restart tikpal-api.service
   systemctl restart tikpal-web.service
+  systemctl restart tikpal-web-mode-cdp-manager.service
   if [[ "$INSTALL_X11_HELPER" -eq 1 ]]; then
     systemctl restart tikpal-x11-helper.service
     wait_x11_helper_health
@@ -665,6 +710,7 @@ echo "  $APP_DIR/deploy/moode/tikpal-audio-adapt.sh check"
 echo "  systemctl status tikpal-library-sync.service"
 echo "  $APP_DIR/deploy/moode/tikpal-library-sync.sh check"
 echo "  systemctl is-active tikpal-api.service tikpal-web.service"
+echo "  systemctl is-active tikpal-web-mode-cdp-manager.service"
 echo "  curl -fsS http://127.0.0.1:8787/api/v1/health"
 echo "  curl -fsSI http://127.0.0.1:4173/"
 echo "  curl -fsSI http://127.0.0.1:4174/"
