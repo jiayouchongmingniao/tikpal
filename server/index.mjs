@@ -14285,6 +14285,7 @@ function normalizeWebModeSwitchTraceContext(raw, fromProvider, toProvider) {
   const expectedTo = String(raw.to_provider ?? "").trim();
   const eventsPath = String(raw.events_path ?? "").trim();
   const expiresAtMs = Number(raw.expires_at_ms);
+  const strictHelperTransaction = raw.strict_helper_transaction === true;
   const safeId = /^[A-Za-z0-9._:-]+$/;
   if (!safeId.test(runId) || !safeId.test(requestId)) return null;
   if (!Number.isInteger(roundId) || roundId < 1 || !Number.isInteger(passIndex) || passIndex < 1) return null;
@@ -14298,6 +14299,7 @@ function normalizeWebModeSwitchTraceContext(raw, fromProvider, toProvider) {
     fromProvider,
     toProvider,
     eventsPath: resolve(eventsPath),
+    strictHelperTransaction,
     monotonicOffsetMs: Date.now() - monotonicNowMs()
   };
 }
@@ -14343,7 +14345,8 @@ function webModeSwitchTraceEnv(trace) {
     TIKPAL_WEB_MODE_SWITCH_TRACE_FROM_PROVIDER: trace.fromProvider,
     TIKPAL_WEB_MODE_SWITCH_TRACE_TO_PROVIDER: trace.toProvider,
     TIKPAL_WEB_MODE_SWITCH_TRACE_REQUEST_ID: trace.requestId,
-    TIKPAL_WEB_MODE_SWITCH_TRACE_MONOTONIC_OFFSET_MS: String(trace.monotonicOffsetMs)
+    TIKPAL_WEB_MODE_SWITCH_TRACE_MONOTONIC_OFFSET_MS: String(trace.monotonicOffsetMs),
+    TIKPAL_WEB_MODE_STRICT_HELPER_TRANSACTION: trace.strictHelperTransaction ? "1" : "0"
   };
 }
 

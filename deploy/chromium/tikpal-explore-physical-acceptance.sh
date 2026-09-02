@@ -106,13 +106,16 @@ append_acceptance_trace_event() {
 }
 
 prepare_switch_trace_context() {
-  local temporary_path expires_at_ms
+  local temporary_path expires_at_ms strict_helper_transaction=false
   temporary_path="$switch_trace_context_path.$$.$RANDOM.tmp"
   expires_at_ms=$(( $(now_ms) + 15000 ))
+  if switch_mode_is_strict; then
+    strict_helper_transaction=true
+  fi
   node - "$temporary_path" "$run_id" "$trace_round_id" "$trace_pass_index" "$trace_request_id" \
-    "$trace_from_provider" "$trace_to_provider" "$events_path" "$expires_at_ms" <<'NODE'
+    "$trace_from_provider" "$trace_to_provider" "$events_path" "$expires_at_ms" "$strict_helper_transaction" <<'NODE'
 const fs = require("node:fs");
-const [path, runId, roundId, passIndex, requestId, fromProvider, toProvider, eventsPath, expiresAtMs] = process.argv.slice(2);
+const [path, runId, roundId, passIndex, requestId, fromProvider, toProvider, eventsPath, expiresAtMs, strictHelperTransaction] = process.argv.slice(2);
 fs.writeFileSync(path, JSON.stringify({
   run_id: runId,
   round_id: Number(roundId),
@@ -121,7 +124,8 @@ fs.writeFileSync(path, JSON.stringify({
   from_provider: fromProvider,
   to_provider: toProvider,
   events_path: eventsPath,
-  expires_at_ms: Number(expiresAtMs)
+  expires_at_ms: Number(expiresAtMs),
+  strict_helper_transaction: strictHelperTransaction === "true"
 }) + "\n");
 NODE
   mv -f "$temporary_path" "$switch_trace_context_path"
@@ -1352,11 +1356,10 @@ wait_switch_settled_targeted() {
           audio_gate_verified=1
         fi
         # Do not synchronously ask the provider CDP endpoint for its audio
-        # gate here.  Spotify can leave that endpoint stalled for seconds
-        # while its already-muted renderer resumes, which delays the next
-        # independent stability sample.  The post-commit Guard event remains
-        # diagnostic evidence; physical reveal, committed runtime state, and
-        # lifecycle are the Phase 2 acceptance contract.
+        # gate here. Spotify can leave that endpoint stalled for seconds while
+        # its already-muted renderer resumes. The ordered post-commit event is
+        # the bounded authoritative confirmation, and Phase 4 must not accept
+        # the round until it has completed successfully.
         if [[ "$audio_gate_verified" == "1" ]]; then
           audio_ok=1
           gate_path="audio-transition-events"
@@ -1373,7 +1376,7 @@ wait_switch_settled_targeted() {
         # and the committed runtime state. A second identical poll added only
         # observer delay; lifecycle remains independently checked from the
         # ordered runner/lock events during summary generation.
-        if [[ "$state_ok" == "1" ]]; then
+        if [[ "$state_ok" == "1" && "$audio_ok" == "1" ]]; then
           stable=1
         else
           stable=0
@@ -1731,10 +1734,42 @@ const detailed = switchRows.map((row) => {
   const list = (byRoundEvents.get(round) || []).filter((event) => event.request_id === row.request_id);
   const targetWindow = list.find((event) => event.event === "target_window_resolved");
   const cdpFallback = list.find((event) => event.event === "cdp_fallback_completed");
+  const audioGateEvents = list.filter((event) => event.event === "target_audio_gate_activated");
+  const helperStarts = list.filter((event) => event.event === "helper_client_started");
+  const helperCompletions = list.filter((event) => event.event === "helper_client_completed");
+  const helperRetries = list.filter((event) => event.event === "helper_timeout_retry_started");
+  const foregroundCompletions = list.filter((event) => event.event === "foreground_switch_completed");
   const runnerCompletions = list.filter((event) => event.event === "runner_completed");
   const lockReleases = list.filter((event) => event.event === "lock_released");
+  const audioGateCompleted = audioGateEvents.length === 1 ? audioGateEvents[0] : null;
+  const helperStart = helperStarts.length === 1 ? helperStarts[0] : null;
+  const helperCompleted = helperCompletions.length === 1 ? helperCompletions[0] : null;
+  const foregroundCompleted = foregroundCompletions.length === 1 ? foregroundCompletions[0] : null;
   const runnerCompleted = runnerCompletions.length === 1 ? runnerCompletions[0] : null;
   const lockReleased = lockReleases.length === 1 ? lockReleases[0] : null;
+  const audioGateOk = audioGateCompleted?.result === "ok" && !audioGateCompleted?.error_code;
+  const audioGateErrorCode = audioGateEvents.length === 0 ? "target_audio_gate_missing"
+    : audioGateEvents.length > 1 ? "target_audio_gate_duplicate"
+    : !audioGateOk ? audioGateCompleted.error_code || "target_audio_gate_failed"
+    : "";
+  const helperTransactionMs = helperStart && helperCompleted
+    ? Number(helperCompleted.timestamp) - Number(helperStart.timestamp)
+    : null;
+  const helperErrorCode = helperStarts.length === 0 ? "helper_client_started_missing"
+    : helperStarts.length > 1 ? "helper_client_started_duplicate"
+    : helperStart.result !== "attempt_1" ? "helper_client_attempt_invalid"
+    : helperCompletions.length === 0 ? "helper_client_completed_missing"
+    : helperCompletions.length > 1 ? "helper_client_completed_duplicate"
+    : helperCompleted.result !== "ok" || !["", "status_0"].includes(helperCompleted.error_code || "")
+      ? helperCompleted.error_code || "helper_client_failed"
+    : helperRetries.length > 0 ? "helper_retry_observed"
+    : cdpFallback ? "helper_cdp_fallback_observed"
+    : foregroundCompletions.length === 0 ? "foreground_switch_completed_missing"
+    : foregroundCompletions.length > 1 ? "foreground_switch_completed_duplicate"
+    : foregroundCompleted.result !== "helper" || (foregroundCompleted.error_code || "")
+      ? foregroundCompleted.error_code || "foreground_switch_not_helper"
+    : !Number.isFinite(helperTransactionMs) || helperTransactionMs < 0 ? "helper_transaction_invalid"
+    : "";
   const runnerOk = runnerCompleted?.result === "ok" && !runnerCompleted?.error_code;
   const lockReleaseOk = lockReleased?.result === "ok" && !lockReleased?.error_code;
   const lifecycleOrderOk = runnerOk && lockReleaseOk && Number(lockReleased.timestamp) < Number(runnerCompleted.timestamp);
@@ -1763,6 +1798,11 @@ const detailed = switchRows.map((row) => {
     fast_path: targetWindow?.result === "cache_hit",
     xid_outcome: targetWindow?.result ?? "missing",
     cdp_fallback: Boolean(cdpFallback),
+    audio_gate_result: audioGateCompleted?.result ?? "missing",
+    audio_gate_error_code: audioGateErrorCode,
+    helper_result: helperCompleted?.result ?? "missing",
+    helper_error_code: helperErrorCode,
+    helper_transaction_ms: helperTransactionMs,
     runner_result: runnerCompleted?.result ?? "missing",
     runner_error_code: runnerCompleted?.error_code ?? "",
     lock_release_result: lockReleased?.result ?? "missing",
@@ -1775,7 +1815,7 @@ const detailed = switchRows.map((row) => {
 
 const csvColumns = [
   "run_id", "round_id", "pass_index", "from_provider", "to_provider", "request_id", "result", "performance_result", "error_code",
-  "visible_ms", "stable_ms", "observer_delay_ms", "fast_path", "xid_outcome", "cdp_fallback",
+  "visible_ms", "stable_ms", "observer_delay_ms", "fast_path", "xid_outcome", "cdp_fallback", "audio_gate_result", "audio_gate_error_code", "helper_result", "helper_error_code", "helper_transaction_ms",
   "runner_result", "runner_error_code", "lock_release_result", "lock_release_error_code", "lifecycle_result", "lifecycle_error_code",
   ...Object.keys(boundaries)
 ];
@@ -1804,8 +1844,11 @@ const stats = (values) => {
 };
 const visible = stats(detailed.map((row) => row.visible_ms).filter((value) => value >= 0));
 const stable = stats(detailed.map((row) => row.stable_ms).filter((value) => value >= 0));
+const helperTransaction = stats(detailed.map((row) => row.helper_transaction_ms));
 const correctnessPassed = detailed.filter((row) => row.result === "ok").length;
 const performancePassed = detailed.filter((row) => row.performance_result === "pass").length;
+const audioPassed = detailed.filter((row) => !row.audio_gate_error_code).length;
+const helperPassed = detailed.filter((row) => !row.helper_error_code).length;
 const lifecyclePassed = detailed.filter((row) => row.lifecycle_result === "ok").length;
 const providerGroups = Object.values(detailed.reduce((groups, row) => {
   const group = groups[row.to_provider] ??= { provider: row.to_provider, rounds: 0, visible: [], stable: [] };
@@ -1841,13 +1884,22 @@ const topStages = detailed.map((row) => ({
     .slice(0, 3)
 }));
 const gaps = detailed.filter((row) => row.stable_ms >= 0 && row.visible_ms >= 0).map((row) => row.stable_ms - row.visible_ms);
-const anomalies = detailed.filter((row) => row.result !== "ok" || row.performance_result === "fail" || row.error_code || row.lifecycle_result !== "ok")
-  .map(({ round_id, from_provider, to_provider, result, performance_result, error_code, lifecycle_result, lifecycle_error_code, visible_ms, stable_ms }) => ({
+const anomalies = detailed.filter((row) => row.result !== "ok" || row.performance_result === "fail" || row.error_code || row.audio_gate_error_code || row.helper_error_code || row.lifecycle_result !== "ok")
+  .map(({ round_id, from_provider, to_provider, result, performance_result, error_code, audio_gate_result, audio_gate_error_code, helper_result, helper_error_code, helper_transaction_ms, lifecycle_result, lifecycle_error_code, visible_ms, stable_ms }) => ({
     round_id, from_provider, to_provider, result, performance_result, error_code,
+    audio_gate_result, audio_gate_error_code, helper_result, helper_error_code, helper_transaction_ms,
     lifecycle_result, lifecycle_error_code, visible_ms, stable_ms
   }));
 const expectedRounds = mode === "switch-once" ? 1 : mode.startsWith("switch-") || mode === "switch-only" ? 20 : switchRows.length;
-const thresholds = { median_ms: 2000, p95_ms: 3000, max_ms: 5000 };
+const thresholds = {
+  median_ms: 2000,
+  p95_ms: 3000,
+  max_ms: 5000,
+  helper_transaction_single_max_ms: 250,
+  helper_transaction_median_ms: 30,
+  helper_transaction_p95_ms: 100,
+  helper_transaction_max_ms: 250
+};
 const thresholdValuesPresent = (distribution) =>
   distribution.count === expectedRounds &&
   Number.isFinite(distribution.median) && Number.isFinite(distribution.p95) && Number.isFinite(distribution.max);
@@ -1858,6 +1910,12 @@ const distributionThresholdPassed = (distribution) =>
   distribution.median <= thresholds.median_ms &&
   distribution.p95 <= thresholds.p95_ms &&
   distribution.max <= thresholds.max_ms;
+const helperTransactionThresholdPassed = mode === "switch-once"
+  ? thresholdValuesPresent(helperTransaction) && helperTransaction.max < thresholds.helper_transaction_single_max_ms
+  : thresholdValuesPresent(helperTransaction) &&
+    helperTransaction.median <= thresholds.helper_transaction_median_ms &&
+    helperTransaction.p95 < thresholds.helper_transaction_p95_ms &&
+    helperTransaction.max < thresholds.helper_transaction_max_ms;
 const summaryGateMode = mode === "switch-once" || mode === "switch-only" || mode === "switch-strict" || mode === "switch-diagnostic";
 const visibleThresholdPassed = mode === "switch-once"
   ? singleRoundThresholdPassed(visible)
@@ -1869,6 +1927,9 @@ const scopedGatePassed = summaryGateMode &&
   detailed.length === expectedRounds &&
   correctnessPassed === expectedRounds &&
   performancePassed === expectedRounds &&
+  audioPassed === expectedRounds &&
+  helperPassed === expectedRounds &&
+  helperTransactionThresholdPassed &&
   lifecyclePassed === expectedRounds &&
   visibleThresholdPassed &&
   stableThresholdPassed;
@@ -1883,6 +1944,9 @@ const summary = {
   correctness_passed: correctnessPassed,
   correctness_success_rate: detailed.length ? correctnessPassed / detailed.length : 0,
   performance_passed: performancePassed,
+  audio_passed: audioPassed,
+  helper_passed: helperPassed,
+  helper_transaction_ms: helperTransaction,
   lifecycle_passed: lifecyclePassed,
   total_visible_ms: visible,
   total_stable_ms: stable,
@@ -1894,6 +1958,9 @@ const summary = {
     rounds: detailed.length === expectedRounds,
     correctness: correctnessPassed === expectedRounds,
     performance_rounds: performancePassed === expectedRounds,
+    audio: audioPassed === expectedRounds,
+    helper: helperPassed === expectedRounds,
+    helper_transaction: helperTransactionThresholdPassed,
     lifecycle: lifecyclePassed === expectedRounds,
     visible: visibleThresholdPassed,
     stable: stableThresholdPassed
@@ -1916,9 +1983,9 @@ fs.writeFileSync(`${outputDir}/summary.json`, JSON.stringify(summary, null, 2) +
 
 const fmt = (value) => Number.isFinite(value) ? String(value) : "n/a";
 const report = [];
-report.push(`# Explore Provider 切换报告`, "", `- run_id: \`${runId}\``, `- mode: \`${mode}\``, `- Provider 范围: \`${scopeKind}\` (${scopeProviders.join(", ")})`, `- 完成轮次: ${detailed.length}/${expectedRounds}`, `- 正确轮次: ${correctnessPassed}/${detailed.length}`, `- 性能达标轮次: ${performancePassed}/${detailed.length}`, `- 生命周期闭环轮次: ${lifecyclePassed}/${detailed.length}`, `- 范围门槛: ${summary.scoped_gate_passed ? "PASS" : "FAIL"}`, `- 全量门槛: ${summary.gate_passed ? "PASS" : "FAIL"}${scopeKind === "full" ? "" : "（scoped 证据不计入全量门禁）"}`, "");
+report.push(`# Explore Provider 切换报告`, "", `- run_id: \`${runId}\``, `- mode: \`${mode}\``, `- Provider 范围: \`${scopeKind}\` (${scopeProviders.join(", ")})`, `- 完成轮次: ${detailed.length}/${expectedRounds}`, `- 正确轮次: ${correctnessPassed}/${detailed.length}`, `- 性能达标轮次: ${performancePassed}/${detailed.length}`, `- audio gate 轮次: ${audioPassed}/${detailed.length}`, `- Helper 事务轮次: ${helperPassed}/${detailed.length}`, `- 生命周期闭环轮次: ${lifecyclePassed}/${detailed.length}`, `- 范围门槛: ${summary.scoped_gate_passed ? "PASS" : "FAIL"}`, `- 全量门槛: ${summary.gate_passed ? "PASS" : "FAIL"}${scopeKind === "full" ? "" : "（scoped 证据不计入全量门禁）"}`, "");
 report.push(`- 单轮门槛: visible/stable 均 <= ${thresholds.max_ms}ms`, `- 20 轮门槛: visible/stable 的 median <= ${thresholds.median_ms}ms、p95 <= ${thresholds.p95_ms}ms、max <= ${thresholds.max_ms}ms`, "");
-report.push("## 总体分布", "", "| 指标 | median | p95 | max | mean |", "| --- | ---: | ---: | ---: | ---: |", `| total_visible_ms | ${fmt(visible.median)} | ${fmt(visible.p95)} | ${fmt(visible.max)} | ${fmt(visible.mean)} |`, `| total_stable_ms | ${fmt(stable.median)} | ${fmt(stable.p95)} | ${fmt(stable.max)} | ${fmt(stable.mean)} |`, "");
+report.push("## 总体分布", "", "| 指标 | median | p95 | max | mean |", "| --- | ---: | ---: | ---: | ---: |", `| total_visible_ms | ${fmt(visible.median)} | ${fmt(visible.p95)} | ${fmt(visible.max)} | ${fmt(visible.mean)} |`, `| total_stable_ms | ${fmt(stable.median)} | ${fmt(stable.p95)} | ${fmt(stable.max)} | ${fmt(stable.mean)} |`, `| helper_transaction_ms | ${fmt(helperTransaction.median)} | ${fmt(helperTransaction.p95)} | ${fmt(helperTransaction.max)} | ${fmt(helperTransaction.mean)} |`, "");
 report.push("## 最慢 5 轮", "", "| round | from | to | visible_ms | stable_ms | error |", "| ---: | --- | --- | ---: | ---: | --- |");
 for (const row of slowest) report.push(`| ${row.round_id} | ${row.from_provider} | ${row.to_provider} | ${row.visible_ms} | ${row.stable_ms} | ${row.error_code || ""} |`);
 report.push("", "## Provider 分组", "", "| provider | rounds | visible avg | visible max | stable avg | stable max |", "| --- | ---: | ---: | ---: | ---: | ---: |");
@@ -1930,12 +1997,13 @@ for (const row of topStages) report.push(`| ${row.round_id} | ${row.to_provider}
 report.push("", "## 路径与锁", "", `- 快速路径命中: ${summary.fast_path_hits}/${detailed.length}`, `- XID 完整回退: ${summary.xid_fallbacks}`, `- XID 轻量重试: ${summary.xid_retries}`, `- CDP 回退: ${summary.cdp_fallbacks}`, `- 锁等待: ${summary.lock_waits}，最长 ${fmt(summary.longest_lock_wait_ms)}ms`, `- visible → stable 差值: median ${fmt(summary.visible_to_stable_gap_ms.median)}ms，max ${fmt(summary.visible_to_stable_gap_ms.max)}ms`, "");
 report.push("## 异常", "");
 if (!anomalies.length) report.push("无。");
-for (const row of anomalies) report.push(`- round ${row.round_id} ${row.from_provider} → ${row.to_provider}: result=${row.result}, performance=${row.performance_result}, lifecycle=${row.lifecycle_result}, error=${row.error_code || row.lifecycle_error_code || "none"}, visible=${row.visible_ms}ms, stable=${row.stable_ms}ms`);
+for (const row of anomalies) report.push(`- round ${row.round_id} ${row.from_provider} → ${row.to_provider}: result=${row.result}, performance=${row.performance_result}, audio=${row.audio_gate_result}, helper=${row.helper_result}, lifecycle=${row.lifecycle_result}, error=${row.error_code || row.audio_gate_error_code || row.helper_error_code || row.lifecycle_error_code || "none"}, visible=${row.visible_ms}ms, stable=${row.stable_ms}ms, transaction=${fmt(row.helper_transaction_ms)}ms`);
 fs.writeFileSync(`${outputDir}/report.md`, report.join("\n") + "\n");
 
-console.log(`switch: scope=${scopeKind} rounds=${detailed.length} correctness=${correctnessPassed} performance=${performancePassed} lifecycle=${lifecyclePassed} scoped_gate=${summary.scoped_gate_passed ? "PASS" : "FAIL"} full_gate=${summary.gate_passed ? "PASS" : "FAIL"}`);
+console.log(`switch: scope=${scopeKind} rounds=${detailed.length} correctness=${correctnessPassed} performance=${performancePassed} audio=${audioPassed} helper=${helperPassed} lifecycle=${lifecyclePassed} scoped_gate=${summary.scoped_gate_passed ? "PASS" : "FAIL"} full_gate=${summary.gate_passed ? "PASS" : "FAIL"}`);
 console.log(`  total_visible_ms: median=${fmt(visible.median)} p95=${fmt(visible.p95)} max=${fmt(visible.max)}`);
 console.log(`  total_stable_ms: median=${fmt(stable.median)} p95=${fmt(stable.p95)} max=${fmt(stable.max)}`);
+console.log(`  helper_transaction_ms: median=${fmt(helperTransaction.median)} p95=${fmt(helperTransaction.p95)} max=${fmt(helperTransaction.max)}`);
 console.log(`  fast_path=${summary.fast_path_hits}/${detailed.length} xid_fallbacks=${summary.xid_fallbacks} cdp_fallbacks=${summary.cdp_fallbacks}`);
 NODE
 }
@@ -1950,12 +2018,22 @@ summary_fixture_metric_value() {
   esac
 }
 
+summary_fixture_helper_transaction_value() {
+  local value="$1" round="$2" rounds="$3"
+  case "$value" in
+    median-over) printf '31\n' ;;
+    single-max) printf '250\n' ;;
+    *) printf '%s\n' "$value" ;;
+  esac
+}
+
 run_summary_contract_fixture() (
   local fixture_root="$1" fixture_name="$2" fixture_mode="$3" fixture_rounds="$4"
   local visible_value="$5" stable_value="$6" result="$7" performance_result="$8"
   local lifecycle="$9" expected_gate="${10}" expected_rounds="${11}" expected_lifecycle="${12}"
   local scope_kind="${13:-full}" scope_csv="${14:-$(IFS=,; printf '%s' "${providers[*]}")}" expected_scoped_gate="${15:-$expected_gate}"
-  local fixture_dir input_ms first_visible_ms settled_ms round pass_index visible_ms stable_ms request_id
+  local helper_transaction_value="${16:-15}"
+  local fixture_dir input_ms first_visible_ms settled_ms round pass_index visible_ms stable_ms helper_transaction_ms helper_started_ms helper_completed_ms foreground_completed_ms request_id
   fixture_dir="$fixture_root/$fixture_name"
   mkdir -p "$fixture_dir"
   output_dir="$fixture_dir"
@@ -1971,6 +2049,7 @@ run_summary_contract_fixture() (
     pass_index=$(( (round - 1) / 10 + 1 ))
     visible_ms="$(summary_fixture_metric_value "$visible_value" "$round" "$fixture_rounds")"
     stable_ms="$(summary_fixture_metric_value "$stable_value" "$round" "$fixture_rounds")"
+    helper_transaction_ms="$(summary_fixture_helper_transaction_value "$helper_transaction_value" "$round" "$fixture_rounds")"
     input_ms=$((100000 + round * 10000))
     first_visible_ms=$((input_ms + visible_ms))
     settled_ms=$((input_ms + stable_ms))
@@ -1980,6 +2059,25 @@ run_summary_contract_fixture() (
       "$visible_ms" "$stable_ms" "$result" "$performance_result" "$first_visible_ms" >> "$rounds_path"
     printf '{"round_id":%s,"request_id":"%s","event":"runtime_geometry_verified","timestamp":%s,"result":"ok","error_code":""}\n' \
       "$round" "$request_id" "$((input_ms + 700))" >> "$events_path"
+    if [[ "$lifecycle" != "missing-helper" ]]; then
+      helper_started_ms=$((input_ms + 100))
+      helper_completed_ms=$((helper_started_ms + helper_transaction_ms))
+      foreground_completed_ms=$((helper_completed_ms + 5))
+      printf '{"round_id":%s,"request_id":"%s","event":"helper_client_started","timestamp":%s,"result":"attempt_1","error_code":""}\n' \
+        "$round" "$request_id" "$helper_started_ms" >> "$events_path"
+      printf '{"round_id":%s,"request_id":"%s","event":"helper_client_completed","timestamp":%s,"result":"ok","error_code":"status_0"}\n' \
+        "$round" "$request_id" "$helper_completed_ms" >> "$events_path"
+      printf '{"round_id":%s,"request_id":"%s","event":"foreground_switch_completed","timestamp":%s,"result":"helper","error_code":""}\n' \
+        "$round" "$request_id" "$foreground_completed_ms" >> "$events_path"
+    fi
+    if [[ "$lifecycle" == "helper-retry" ]]; then
+      printf '{"round_id":%s,"request_id":"%s","event":"helper_timeout_retry_started","timestamp":%s,"result":"timeout_retry","error_code":"status_21"}\n' \
+        "$round" "$request_id" "$((input_ms + 740))" >> "$events_path"
+    fi
+    if [[ "$lifecycle" != "missing-audio" ]]; then
+      printf '{"round_id":%s,"request_id":"%s","event":"target_audio_gate_activated","timestamp":%s,"result":"ok","error_code":""}\n' \
+        "$round" "$request_id" "$((input_ms + 750))" >> "$events_path"
+    fi
     case "$lifecycle" in
       success)
         printf '{"round_id":%s,"request_id":"%s","event":"lock_released","timestamp":%s,"result":"ok","error_code":""}\n' \
@@ -1998,6 +2096,24 @@ run_summary_contract_fixture() (
           "$round" "$request_id" "$((input_ms + 800))" >> "$events_path"
         ;;
       missing-lock-release)
+        printf '{"round_id":%s,"request_id":"%s","event":"runner_completed","timestamp":%s,"result":"ok","error_code":""}\n' \
+          "$round" "$request_id" "$((input_ms + 900))" >> "$events_path"
+        ;;
+      missing-audio)
+        printf '{"round_id":%s,"request_id":"%s","event":"lock_released","timestamp":%s,"result":"ok","error_code":""}\n' \
+          "$round" "$request_id" "$((input_ms + 800))" >> "$events_path"
+        printf '{"round_id":%s,"request_id":"%s","event":"runner_completed","timestamp":%s,"result":"ok","error_code":""}\n' \
+          "$round" "$request_id" "$((input_ms + 900))" >> "$events_path"
+        ;;
+      missing-helper)
+        printf '{"round_id":%s,"request_id":"%s","event":"lock_released","timestamp":%s,"result":"ok","error_code":""}\n' \
+          "$round" "$request_id" "$((input_ms + 800))" >> "$events_path"
+        printf '{"round_id":%s,"request_id":"%s","event":"runner_completed","timestamp":%s,"result":"ok","error_code":""}\n' \
+          "$round" "$request_id" "$((input_ms + 900))" >> "$events_path"
+        ;;
+      helper-retry)
+        printf '{"round_id":%s,"request_id":"%s","event":"lock_released","timestamp":%s,"result":"ok","error_code":""}\n' \
+          "$round" "$request_id" "$((input_ms + 800))" >> "$events_path"
         printf '{"round_id":%s,"request_id":"%s","event":"runner_completed","timestamp":%s,"result":"ok","error_code":""}\n' \
           "$round" "$request_id" "$((input_ms + 900))" >> "$events_path"
         ;;
@@ -2064,12 +2180,12 @@ NODE
 run_summary_contract_fixtures() {
   local fixture_root fixture failures=0 cases=0
   fixture_root="$(mktemp -d)"
-  while IFS='|' read -r fixture mode rounds visible stable result performance lifecycle expected_gate expected_rounds expected_lifecycle scope_kind scope_csv expected_scoped_gate; do
+  while IFS='|' read -r fixture mode rounds visible stable result performance lifecycle expected_gate expected_rounds expected_lifecycle scope_kind scope_csv expected_scoped_gate helper_transaction; do
     [[ -n "$fixture" ]] || continue
     cases=$((cases + 1))
     if ! run_summary_contract_fixture "$fixture_root" "$fixture" "$mode" "$rounds" \
       "$visible" "$stable" "$result" "$performance" "$lifecycle" "$expected_gate" "$expected_rounds" "$expected_lifecycle" \
-      "${scope_kind:-full}" "${scope_csv:-$(IFS=,; printf '%s' "${providers[*]}")}" "${expected_scoped_gate:-$expected_gate}"
+      "${scope_kind:-full}" "${scope_csv:-$(IFS=,; printf '%s' "${providers[*]}")}" "${expected_scoped_gate:-$expected_gate}" "${helper_transaction:-15}"
     then
       printf 'summary fixture failed: %s\n' "$fixture" >&2
       failures=$((failures + 1))
@@ -2087,7 +2203,12 @@ one_shot_reversed_lifecycle_order|switch-once|1|933|1200|ok|pass|reversed-lifecy
 one_shot_stable_fail|switch-once|1|933|6925|ok|pass|success|false|1|true
 one_shot_physical_fail|switch-once|1|5001|4900|ok|fail|success|false|1|true
 one_shot_correctness_fail|switch-once|1|933|1200|failed|pass|success|false|1|true
+one_shot_missing_audio|switch-once|1|933|1200|ok|pass|missing-audio|false|1|true
+one_shot_missing_helper|switch-once|1|933|1200|ok|pass|missing-helper|false|1|true
+one_shot_helper_retry|switch-once|1|933|1200|ok|pass|helper-retry|false|1|true
+one_shot_helper_transaction_fail|switch-once|1|933|1200|ok|pass|success|false|1|true|full||false|single-max
 formal_twenty_pass|switch-only|20|1500|1800|ok|pass|success|true|20|true
+formal_helper_transaction_median_fail|switch-only|20|1500|1800|ok|pass|success|false|20|true|full||false|median-over
 formal_visible_median_fail|switch-only|20|median-over|1800|ok|pass|success|false|20|true
 formal_visible_p95_fail|switch-only|20|p95-over|1800|ok|pass|success|false|20|true
 formal_visible_max_fail|switch-only|20|max-over|1800|ok|pass|success|false|20|true

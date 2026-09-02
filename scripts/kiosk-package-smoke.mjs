@@ -1503,7 +1503,9 @@ sync_runtime_provider_pool_process_statuses ""
       && serverSource.includes('recordWebModeSwitchTraceEvent(trace, "opening_provider_written"')
       && serverSource.includes('recordWebModeSwitchTraceEvent(trace, "runner_created"')
       && serverSource.includes('recordWebModeSwitchTraceEvent(trace, "runner_started"')
-      && serverSource.includes("...webModeSwitchTraceEnv(trace)"),
+      && serverSource.includes("...webModeSwitchTraceEnv(trace)")
+      && serverSource.includes("strictHelperTransaction")
+      && serverSource.includes('TIKPAL_WEB_MODE_STRICT_HELPER_TRANSACTION: trace.strictHelperTransaction ? "1" : "0"'),
     "Explore API should correlate request preparation and runner timing with the physical switch trace"
   );
   const splitArtistSource = serverSource.match(/function splitArtistForLookup\(artist\) \{[\s\S]*?\n\}/)?.[0] ?? "";

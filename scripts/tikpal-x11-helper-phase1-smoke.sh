@@ -597,6 +597,37 @@ retry_switch_count_after="$(grep -c '^switch ' "$MOCK_LOG" || true)"
   fail_fixture "timeout retry did not retain the second Helper lease"
 x11_helper_finish_success || fail_fixture "timeout retry Helper ownership release failed"
 
+# Strict field acceptance must stop after the first known-safe timeout. It may
+# reclaim ownership, but cannot issue a second Helper switch or fall back to a
+# Shell writer.
+printf '21\n' > "$MOCK_SWITCH_STATUS_FILE"
+printf '0\n' > "$MOCK_REVOKE_STATUS_FILE"
+reset_helper_shell_state
+TIKPAL_WEB_MODE_STRICT_HELPER_TRANSACTION=1
+strict_switch_count_before="$(grep -c '^switch ' "$MOCK_LOG" || true)"
+x11_helper_prepare_switch || fail_fixture "strict timeout Helper prepare failed"
+strict_generation="$TIKPAL_X11_HELPER_GENERATION"
+if x11_helper_switch_with_timeout_retry \
+  101 "$FIXTURE_DIR/target-profile" \
+  202 "$FIXTURE_DIR/previous-profile" \
+  303 "$FIXTURE_DIR/panel-profile"
+then
+  fail_fixture "strict timeout unexpectedly retried or succeeded"
+else
+  strict_status=$?
+fi
+[[ "$strict_status" == "21" ]] || fail_fixture "strict timeout status was not preserved"
+strict_switch_count_after="$(grep -c '^switch ' "$MOCK_LOG" || true)"
+(( strict_switch_count_after == strict_switch_count_before + 1 )) ||
+  fail_fixture "strict timeout issued more than one Helper switch"
+[[ "$TIKPAL_X11_HELPER_ACTIVE" == "0" ]] ||
+  fail_fixture "strict timeout did not relinquish Helper ownership"
+jq -e --argjson previous "$strict_generation" \
+  '.owner == "shell" and .generation == ($previous + 1)' \
+  "$TIKPAL_WEB_MODE_X11_HELPER_OWNER_PATH" >/dev/null ||
+  fail_fixture "strict timeout did not restore a fresh Shell generation"
+TIKPAL_WEB_MODE_STRICT_HELPER_TRANSACTION=0
+
 printf '0\n' > "$MOCK_SWITCH_STATUS_FILE"
 printf '0\n' > "$MOCK_REVOKE_STATUS_FILE"
 reset_helper_shell_state

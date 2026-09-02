@@ -83,6 +83,7 @@ fi
 : "${TIKPAL_WEB_MODE_SWITCH_TRACE_TO_PROVIDER:=}"
 : "${TIKPAL_WEB_MODE_SWITCH_TRACE_REQUEST_ID:=}"
 : "${TIKPAL_WEB_MODE_SWITCH_TRACE_MONOTONIC_OFFSET_MS:=}"
+: "${TIKPAL_WEB_MODE_STRICT_HELPER_TRANSACTION:=0}"
 : "${TIKPAL_WEB_MODE_STAGE_POSITION:=2560,0}"
 : "${TIKPAL_WEB_MODE_STAGE_REVEAL_MS:=650}"
 : "${TIKPAL_WEB_MODE_AUDIO_CROSSFADE_ENABLED:=1}"
@@ -1360,6 +1361,15 @@ x11_helper_switch_with_timeout_retry() {
     # This avoids turning one 250ms XCB boundary into seconds of Shell-side
     # process management and xdotool probes.
     if [[ "$attempt" != "1" ]] || ! x11_helper_retryable_switch_failure; then
+      return "$helper_status"
+    fi
+    if [[ "$TIKPAL_WEB_MODE_STRICT_HELPER_TRANSACTION" == "1" ]]; then
+      # Formal acceptance allows the completed timeout to relinquish its lease,
+      # but it must not turn that failure into either a second Helper mutation
+      # or a legacy Shell X11 write.  Restore safe Shell ownership, then leave
+      # this one-shot failed for the caller to record and stop.
+      record_switch_trace_event helper_timeout_retry_suppressed failed "status_$helper_status"
+      x11_helper_enter_fallback "$helper_status" || return 1
       return "$helper_status"
     fi
     record_switch_trace_event helper_timeout_retry_started timeout_retry "status_$helper_status"
@@ -7237,6 +7247,9 @@ reveal_resident_provider_window() {
       log_open_stage reveal "provider=${provider_profile##*/} result=success route=helper target_window=$target_window physical_ms=$physical_ms"
       log_switch_segment_summary_once "$segment_timing_once" "$provider_profile" "$cached_xid_ms" "$first_cdp_ms" 0 0 0 0
       return 0
+    elif [[ "$TIKPAL_WEB_MODE_STRICT_HELPER_TRANSACTION" == "1" ]]; then
+      log_open_stage reveal "provider=${provider_profile##*/} result=failed route=helper reason=strict_transaction status=$helper_status"
+      return "$helper_status"
     elif [[ "$helper_status" == "70" ]]; then
       log_open_stage reveal "provider=${provider_profile##*/} result=failed route=helper reason=unknown_outcome status=$helper_status"
       fail "X11 helper switch outcome is unknown; leaving helper ownership fail-closed"
