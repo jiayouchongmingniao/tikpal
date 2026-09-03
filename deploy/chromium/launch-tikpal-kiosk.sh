@@ -37,8 +37,9 @@ fi
 : "${TIKPAL_KIOSK_XRANDR_RATE:=}"
 : "${TIKPAL_KIOSK_XRANDR_USB_RATE:=29.95}"
 : "${TIKPAL_KIOSK_XRANDR_USB_OUTPUT_PATTERN:=^(DVI-I|DVI-D)-[0-9]+-[0-9]+$}"
+: "${TIKPAL_KIOSK_XRANDR_DIRECT_OUTPUT_PATTERN:=^(HDMI|DP|DisplayPort)-}"
 : "${TIKPAL_KIOSK_XRANDR_CLONE_OUTPUTS:=}"
-: "${TIKPAL_KIOSK_XRANDR_PRIMARY_PREFERRED_OUTPUTS:=HDMI-1 HDMI-A-1}"
+: "${TIKPAL_KIOSK_XRANDR_PRIMARY_PREFERRED_OUTPUTS:=}"
 : "${TIKPAL_KIOSK_XRANDR_FALLBACK_TO_CONNECTED:=1}"
 : "${TIKPAL_KIOSK_X_COMMAND_TIMEOUT_SECONDS:=5}"
 : "${TIKPAL_CHROMIUM_BIN:=/usr/lib/chromium-browser/chromium-browser}"
@@ -186,6 +187,17 @@ choose_auto_xrandr_output() {
   while read -r output _; do
     [[ -n "$output" ]] || continue
     first="${first:-$output}"
+    if [[ "$output" =~ $TIKPAL_KIOSK_XRANDR_DIRECT_OUTPUT_PATTERN ]]; then
+      printf '%s\n' "$output"
+      return 0
+    fi
+  done < <(printf '%s\n' "$query" | awk '$2 == "connected" { print $1 }')
+  while read -r output _; do
+    [[ -n "$output" ]] || continue
+    if [[ ! "$output" =~ $TIKPAL_KIOSK_XRANDR_USB_OUTPUT_PATTERN ]]; then
+      printf '%s\n' "$output"
+      return 0
+    fi
   done < <(printf '%s\n' "$query" | awk '$2 == "connected" { print $1 }')
   [[ -n "$first" ]] || return 1
   printf '%s\n' "$first"

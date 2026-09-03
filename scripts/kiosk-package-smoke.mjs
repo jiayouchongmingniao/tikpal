@@ -867,10 +867,12 @@ audio_output {
       && kioskEnv.includes("TIKPAL_PHYSICAL_DISPLAY_SAFE_CONTRAST=50")
       && kioskEnv.includes("TIKPAL_PHYSICAL_DISPLAY_INPUT_SOURCE=")
       && kioskEnv.includes("TIKPAL_KIOSK_XRANDR_OUTPUT=auto")
-      && kioskEnv.includes("TIKPAL_KIOSK_XRANDR_PRIMARY_PREFERRED_OUTPUTS=\"HDMI-1 HDMI-A-1\"")
+      && kioskEnv.includes("TIKPAL_KIOSK_XRANDR_DIRECT_OUTPUT_PATTERN=\"^(HDMI|DP|DisplayPort)-\"")
+      && kioskEnv.includes("TIKPAL_KIOSK_XRANDR_PRIMARY_PREFERRED_OUTPUTS=")
       && kioskEnv.includes("TIKPAL_KIOSK_XRANDR_FALLBACK_TO_CONNECTED=1")
       && kioskEnv.includes("TIKPAL_PHYSICAL_DISPLAY_DRM_CONNECTOR=auto")
       && kioskEnv.includes("TIKPAL_PHYSICAL_DISPLAY_DRM_CONNECTORS=auto")
+      && kioskEnv.includes("TIKPAL_PHYSICAL_DISPLAY_DRM_PREFERRED_CONNECTORS=")
       && kioskEnv.includes("TIKPAL_PHYSICAL_DISPLAY_DRM_FALLBACK_TO_CONNECTED=1")
       && kioskEnv.includes("TIKPAL_PHYSICAL_DISPLAY_WAIT_READY_TIMEOUT_SECONDS=45")
       && kioskEnv.includes("TIKPAL_PHYSICAL_DISPLAY_DELAYED_KICK_SECONDS=none")
@@ -1021,6 +1023,15 @@ audio_output {
       && physicalExploreAcceptanceScript.includes('error_code="stable_over_5s"')
       && !physicalExploreAcceptanceScript.includes("/api/v1/web-mode/actions"),
     "physical Explore acceptance should offer strict and diagnostic 20-click modes with correlated artifacts while API and CDP remain read-only"
+  );
+  assert(
+    physicalExploreAcceptanceScript.includes('click_kiosk_selector ".ambient-screen"')
+      && physicalExploreAcceptanceScript.includes("click_kiosk_selector_when_ready '[data-ambient-source-option=\"web-mode\"]'")
+      && physicalExploreAcceptanceScript.includes("click_kiosk_selector '[data-ambient-source-toggle]'")
+      && physicalExploreAcceptanceScript.includes("click_kiosk_selector '[data-ambient-source-option=\"web-mode\"]'")
+      && !physicalExploreAcceptanceScript.includes("xdotool mousemove --sync 700 360 click 1")
+      && !physicalExploreAcceptanceScript.includes("xdotool mousemove --sync 1838 160 click 1"),
+    "physical Explore entry should use DOM-derived centers for the ambient, source-toggle, and Explore controls"
   );
   const physicalAcceptanceExitContract = spawnSync(
     "bash",
@@ -1937,12 +1948,19 @@ sync_runtime_provider_pool_process_statuses ""
   assert(kioskLauncher.includes("detect_non_hdmi_card_id"), "kiosk launcher should detect the actual non-HDMI ALSA card");
   assert(kioskLauncher.includes("tikpal-audio-adapt.sh") && kioskLauncher.includes("resolve-browser"), "kiosk launcher should use the shared audio adapter for auto ALSA output");
   assert(kioskLauncher.includes('TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE="$(resolve_physical_alsa_output_device'), "kiosk launcher should resolve auto ALSA output before launching Chromium");
-  assert(kioskLauncher.includes("resolve_xrandr_primary_output") && kioskLauncher.includes("TIKPAL_KIOSK_XRANDR_FALLBACK_TO_CONNECTED"), "kiosk launcher should support HDMI-first, connected-output fallback");
+  assert(
+    kioskLauncher.includes("resolve_xrandr_primary_output")
+      && kioskLauncher.includes("TIKPAL_KIOSK_XRANDR_DIRECT_OUTPUT_PATTERN")
+      && kioskLauncher.includes('[[ "$output" =~ $TIKPAL_KIOSK_XRANDR_DIRECT_OUTPUT_PATTERN ]]')
+      && kioskLauncher.includes("TIKPAL_KIOSK_XRANDR_FALLBACK_TO_CONNECTED"),
+    "kiosk launcher should prefer a connected direct output before EVDI fallback"
+  );
   assert(
     physicalDisplayPrepare.includes("TIKPAL_PHYSICAL_DISPLAY_RESET_MODE:=1280x720")
       && physicalDisplayPrepare.includes("TIKPAL_PHYSICAL_DISPLAY_INPUT_SOURCE:=")
       && physicalDisplayPrepare.includes("TIKPAL_KIOSK_XRANDR_OUTPUT:=auto")
-      && physicalDisplayPrepare.includes("TIKPAL_KIOSK_XRANDR_PRIMARY_PREFERRED_OUTPUTS:=HDMI-1 HDMI-A-1")
+      && physicalDisplayPrepare.includes("TIKPAL_KIOSK_XRANDR_DIRECT_OUTPUT_PATTERN:=^(HDMI|DP|DisplayPort)-")
+      && physicalDisplayPrepare.includes("TIKPAL_KIOSK_XRANDR_PRIMARY_PREFERRED_OUTPUTS:=}")
       && physicalDisplayPrepare.includes("TIKPAL_PHYSICAL_DISPLAY_DRM_CONNECTOR:=auto")
       && physicalDisplayPrepare.includes("TIKPAL_PHYSICAL_DISPLAY_DRM_CONNECTORS:=$TIKPAL_PHYSICAL_DISPLAY_DRM_CONNECTOR")
       && physicalDisplayPrepare.includes("TIKPAL_PHYSICAL_DISPLAY_DRM_FALLBACK_TO_CONNECTED:=1")
@@ -1954,6 +1972,9 @@ sync_runtime_provider_pool_process_statuses ""
       && physicalDisplayPrepare.includes("drm_connector_ready()")
       && physicalDisplayPrepare.includes("drm_connector_bases()")
       && physicalDisplayPrepare.includes("resolve_primary_output()")
+      && physicalDisplayPrepare.includes('[[ "$output" =~ $TIKPAL_KIOSK_XRANDR_DIRECT_OUTPUT_PATTERN ]]')
+      && physicalDisplayPrepare.includes("xrandr_output_has_property()")
+      && physicalDisplayPrepare.includes("apply_xrandr_property_if_supported()")
       && physicalDisplayPrepare.includes("wait_for_drm_connector()")
       && physicalDisplayPrepare.includes("pci_stabilize()")
       && physicalDisplayPrepare.includes("drm_poll_stabilize()")

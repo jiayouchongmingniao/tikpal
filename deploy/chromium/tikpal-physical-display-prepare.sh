@@ -38,8 +38,9 @@ fi
 : "${TIKPAL_KIOSK_XRANDR_RATE:=}"
 : "${TIKPAL_KIOSK_XRANDR_USB_RATE:=29.95}"
 : "${TIKPAL_KIOSK_XRANDR_USB_OUTPUT_PATTERN:=^(DVI-I|DVI-D)-[0-9]+-[0-9]+$}"
+: "${TIKPAL_KIOSK_XRANDR_DIRECT_OUTPUT_PATTERN:=^(HDMI|DP|DisplayPort)-}"
 : "${TIKPAL_KIOSK_XRANDR_CLONE_OUTPUTS:=}"
-: "${TIKPAL_KIOSK_XRANDR_PRIMARY_PREFERRED_OUTPUTS:=HDMI-1 HDMI-A-1}"
+: "${TIKPAL_KIOSK_XRANDR_PRIMARY_PREFERRED_OUTPUTS:=}"
 : "${TIKPAL_KIOSK_XRANDR_FALLBACK_TO_CONNECTED:=1}"
 : "${TIKPAL_KIOSK_WINDOW_POSITION:=0,0}"
 : "${TIKPAL_KIOSK_X_COMMAND_TIMEOUT_SECONDS:=5}"
@@ -53,7 +54,7 @@ fi
 : "${TIKPAL_PHYSICAL_DISPLAY_INPUT_SOURCE:=}"
 : "${TIKPAL_PHYSICAL_DISPLAY_DRM_CONNECTOR:=auto}"
 : "${TIKPAL_PHYSICAL_DISPLAY_DRM_CONNECTORS:=$TIKPAL_PHYSICAL_DISPLAY_DRM_CONNECTOR}"
-: "${TIKPAL_PHYSICAL_DISPLAY_DRM_PREFERRED_CONNECTORS:=card0-HDMI-A-1 card0-HDMI-A-2}"
+: "${TIKPAL_PHYSICAL_DISPLAY_DRM_PREFERRED_CONNECTORS:=}"
 : "${TIKPAL_PHYSICAL_DISPLAY_DRM_FALLBACK_TO_CONNECTED:=1}"
 : "${TIKPAL_PHYSICAL_DISPLAY_ALLOW_NO_EDID:=0}"
 : "${TIKPAL_PHYSICAL_DISPLAY_NO_EDID_CONNECTOR_PATTERN:=card[0-9]+-DVI-I-[0-9]+}"
@@ -527,6 +528,17 @@ choose_auto_xrandr_output() {
   while read -r output _; do
     [[ -n "$output" ]] || continue
     first="${first:-$output}"
+    if [[ "$output" =~ $TIKPAL_KIOSK_XRANDR_DIRECT_OUTPUT_PATTERN ]]; then
+      printf '%s\n' "$output"
+      return 0
+    fi
+  done < <(awk '$2 == "connected" { print $1 }' "$XRANDR_TMP")
+  while read -r output _; do
+    [[ -n "$output" ]] || continue
+    if [[ ! "$output" =~ $TIKPAL_KIOSK_XRANDR_USB_OUTPUT_PATTERN ]]; then
+      printf '%s\n' "$output"
+      return 0
+    fi
   done < <(awk '$2 == "connected" { print $1 }' "$XRANDR_TMP")
   [[ -n "$first" ]] || return 1
   printf '%s\n' "$first"
@@ -643,10 +655,39 @@ apply_x_safety() {
   run_optional xset -dpms
 }
 
+xrandr_output_has_property() {
+  local output="$1"
+  local property="$2"
+  run_with_timeout "$TIKPAL_KIOSK_X_COMMAND_TIMEOUT_SECONDS" xrandr --prop 2>/dev/null |
+    awk -v want_output="$output" -v want_property="$property" '
+      $1 == want_output && $2 == "connected" { in_output = 1; next }
+      in_output && $0 !~ /^[[:space:]]/ { exit }
+      in_output {
+        line = $0
+        sub(/^[[:space:]]+/, "", line)
+        if (index(line, want_property ":") == 1) {
+          found = 1
+          exit
+        }
+      }
+      END { exit found ? 0 : 1 }
+    '
+}
+
+apply_xrandr_property_if_supported() {
+  local property="$1"
+  local value="$2"
+  if ! xrandr_output_has_property "$TIKPAL_KIOSK_XRANDR_OUTPUT" "$property"; then
+    log "xrandr property unsupported on $TIKPAL_KIOSK_XRANDR_OUTPUT: $property; skipping"
+    return 0
+  fi
+  run_optional xrandr --output "$TIKPAL_KIOSK_XRANDR_OUTPUT" --set "$property" "$value"
+}
+
 apply_xrandr_properties() {
-  run_optional xrandr --output "$TIKPAL_KIOSK_XRANDR_OUTPUT" --set "dithering depth" "8 bpc"
-  run_optional xrandr --output "$TIKPAL_KIOSK_XRANDR_OUTPUT" --set "dithering mode" "off"
-  run_optional xrandr --output "$TIKPAL_KIOSK_XRANDR_OUTPUT" --set "scaling mode" "Full"
+  apply_xrandr_property_if_supported "dithering depth" "8 bpc"
+  apply_xrandr_property_if_supported "dithering mode" "off"
+  apply_xrandr_property_if_supported "scaling mode" "Full"
 }
 
 xrandr_rate_for_output() {
@@ -832,6 +873,7 @@ case "$MODE" in
     log "rate: ${TIKPAL_KIOSK_XRANDR_RATE:-auto}"
     log "USB output rate: ${TIKPAL_KIOSK_XRANDR_USB_RATE:-auto}"
     log "USB output pattern: $TIKPAL_KIOSK_XRANDR_USB_OUTPUT_PATTERN"
+    log "direct output pattern: $TIKPAL_KIOSK_XRANDR_DIRECT_OUTPUT_PATTERN"
     log "reset mode: $TIKPAL_PHYSICAL_DISPLAY_RESET_MODE"
     log "safe brightness: $TIKPAL_PHYSICAL_DISPLAY_SAFE_BRIGHTNESS"
     log "safe contrast: $TIKPAL_PHYSICAL_DISPLAY_SAFE_CONTRAST"

@@ -10,14 +10,19 @@ of Git.
 
 ## 207 runtime profile
 
-The production `.env.kiosk` selects the constrained renderer, a TURZX/EVDI
-half-refresh display mode, CDP lifecycle freezing, and the kiosk-only CPU
-governor:
+The production `.env.kiosk` selects the constrained renderer, dynamic display
+selection, CDP lifecycle freezing, and the kiosk-only CPU governor:
 
 ```conf
-TIKPAL_KIOSK_XRANDR_OUTPUT=DVI-I-1-1
+TIKPAL_KIOSK_XRANDR_OUTPUT=auto
 TIKPAL_KIOSK_XRANDR_MODE=2560x720
-TIKPAL_KIOSK_XRANDR_RATE=29.95
+TIKPAL_KIOSK_XRANDR_RATE=
+TIKPAL_KIOSK_XRANDR_USB_RATE=29.95
+TIKPAL_KIOSK_XRANDR_USB_OUTPUT_PATTERN="^(DVI-I|DVI-D)-[0-9]+-[0-9]+$"
+TIKPAL_KIOSK_XRANDR_DIRECT_OUTPUT_PATTERN="^(HDMI|DP|DisplayPort)-"
+TIKPAL_KIOSK_XRANDR_PRIMARY_PREFERRED_OUTPUTS=
+TIKPAL_PHYSICAL_DISPLAY_DRM_CONNECTORS=auto
+TIKPAL_PHYSICAL_DISPLAY_DRM_PREFERRED_CONNECTORS=
 TIKPAL_KIOSK_APPLY_PHYSICAL_DISPLAY_MODE=1
 TIKPAL_RENDER_PROFILE=constrained
 TIKPAL_WEB_MODE_CDP_SESSION_MANAGER=1
@@ -28,8 +33,14 @@ TIKPAL_KIOSK_CPU_GOVERNOR=performance
 
 The physical-display soft-kick runs after X starts and before Chromium. It is
 best-effort: a failed kick is logged once and never creates a restart loop.
-The desired RandR result is `2560x720` with `29.95*`; the adjacent `59.90`
-mode may remain advertised but must not be active.
+With `auto`, an explicitly configured connected output wins; otherwise the
+scripts select a connected HDMI/DP output, then another non-EVDI output, and
+only then an EVDI-style DVI output. Direct HDMI/DP uses the panel's native
+refresh because no `--rate` is passed. An EVDI-style DVI primary instead uses
+`29.95Hz`, so the same profile adapts safely when the USB TURZX is reattached.
+On the 2026-09-03 HDMI check, the connected `HDMI-0` was `2560x720@60.00`.
+Output-specific RandR properties are queried before use, so unsupported HDMI
+properties are skipped rather than reported as failed EVDI tuning.
 
 `tikpal-kiosk-performance.service` records each cpufreq policy's original
 governor before applying `performance`. Its stop action restores only those
@@ -115,6 +126,33 @@ foreground in 774ms; this is one sample, not a median or p95 claim. The target
 for further acceptance remains rAF p95 at or below 42ms with video drops below
 4% when video is active, or a clean automatic static fallback without repeated
 long stalls.
+
+## Physical Explore entry and HDMI record
+
+`tikpal-explore-physical-acceptance.sh` keeps the action API and CDP input
+read-only. It queries the rendered center of the actual control, then uses
+`xdotool` for the X11 click. This avoids fixed coordinates, which are invalid
+when the connected panel, compositor geometry, or Room/Hi-Fi presentation
+changes. A Room-mode ambient click may reveal the Explore picker directly; if
+it does not, the script uses the Hi-Fi source-toggle control and then waits for
+the real Explore option. These are mouse-injection checks, not proof from a
+touch digitizer; a separately connected USB touch interface still requires its
+own hardware acceptance.
+
+When diagnostic CDP access is temporarily needed on a field unit, keep both
+Chromium and its proxy bound to `127.0.0.1`; do not expose a DevTools port on
+the LAN. On 2026-09-03, the HDMI panel was confirmed as
+`HDMI-0 2560x720@60.00`, and one strict pass through all ten Providers completed
+with physical-visible timing median/p95/max of `773/797/797ms`. Settled timing
+was `1255/2437/2437ms`; opening Explore settled in `5448ms`, closing it in
+`6123ms`, and the full recorded run was `128151ms`, including its preflight.
+This is field evidence for the ten-round run, not a substitute for the wider
+Phase 4 acceptance suite.
+
+For capture support, build `media-video/ffmpeg` with its `X` USE flag and
+confirm `x11grab` appears in `ffmpeg -devices`. Any shell-driven FFmpeg capture
+that shares its caller's standard input must use `-nostdin`; otherwise FFmpeg
+can consume subsequent shell commands.
 
 ## Rollback boundary
 

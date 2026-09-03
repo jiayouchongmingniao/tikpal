@@ -97,9 +97,11 @@ modprobe_snd_aloop() {
 
 write_root_file() {
   local target="$1"
-  local tmp
+  local parent tmp
+  parent="$(dirname "$target")"
   tmp="$(mktemp)"
   cat >"$tmp"
+  run_as_root install -d -m 0755 "$parent"
   run_as_root install -m 0644 "$tmp" "$target"
   rm -f "$tmp"
 }

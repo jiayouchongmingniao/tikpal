@@ -644,10 +644,11 @@ process.stdin.on("end", () => {
 });'
 }
 
-click_kiosk_selector() {
+click_kiosk_selector_when_ready() {
   local selector="$1"
-  local center x y attempts
-  for attempts in 1 2 3 4 5 6 7 8 9 10; do
+  local max_attempts="${2:-10}"
+  local center x y attempt
+  for ((attempt=1; attempt<=max_attempts; attempt++)); do
     center="$(kiosk_element_center "$selector" || true)"
     if [[ -n "$center" ]]; then
       IFS=$'\t' read -r x y <<< "$center"
@@ -656,16 +657,25 @@ click_kiosk_selector() {
     fi
     sleep 0.1
   done
-  fail "kiosk element is not physically clickable: $selector"
+  return 1
+}
+
+click_kiosk_selector() {
+  local selector="$1"
+  click_kiosk_selector_when_ready "$selector" || \
+    fail "kiosk element is not physically clickable: $selector"
 }
 
 click_open_explore() {
-  xdotool mousemove --sync 700 360 click 1
-  sleep 0.3
-  # The physical source card is in the HUD's top row. Its transparent gesture
-  # layer can make elementFromPoint unreliable on this compositor, so click
-  # the measured center of the actual Explore card rather than an API action.
-  xdotool mousemove --sync 1838 160 click 1
+  # A Room-mode ambient tap opens the source picker directly. Hi-Fi only opens
+  # the HUD, so use its source button solely when the Explore option did not
+  # become targetable during the bounded wait.
+  click_kiosk_selector ".ambient-screen"
+  if click_kiosk_selector_when_ready '[data-ambient-source-option="web-mode"]'; then
+    return 0
+  fi
+  click_kiosk_selector '[data-ambient-source-toggle]'
+  click_kiosk_selector '[data-ambient-source-option="web-mode"]'
 }
 
 provider_index() {
