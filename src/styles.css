@@ -486,6 +486,55 @@ select {
   overscroll-behavior: none;
 }
 
+/* Constrained is an explicit host runtime profile for GPU/EVDI kiosks. */
+.app-root.is-render-constrained .ambient-screen::before,
+.app-root.is-render-constrained .ambient-screen.is-scene-gallery-open::before,
+.app-root.is-render-constrained .ambient-scene-gallery-panel,
+.app-root.is-render-constrained .quick-menu .overlay-backdrop,
+.app-root.is-render-constrained .quick-settings-overlay,
+.app-root.is-render-constrained .player-overlay,
+.app-root.is-render-constrained .player-shell,
+.app-root.is-render-constrained .settings-shell,
+.app-root.is-render-constrained .hifi-lyrics-fake-control,
+.app-root.is-render-constrained .startup-mode-chooser,
+.app-root.is-render-constrained .onboarding-guide {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.app-root.is-render-constrained .flame-video,
+.app-root.is-render-constrained .scene-logo-mark,
+.app-root.is-render-constrained .hifi-ambient-visuals::before,
+.app-root.is-render-constrained .hifi-wave-field,
+.app-root.is-render-constrained .hifi-playback-presence {
+  filter: none;
+}
+
+.app-root.is-render-constrained .hifi-wave-line,
+.app-root.is-render-constrained .hifi-particle,
+.app-root.is-render-constrained .hifi-playback-presence,
+.app-root.is-render-constrained .hifi-playback-presence::after {
+  animation: none;
+}
+
+.app-root.is-render-constrained.is-quick-menu-active .ambient-screen {
+  filter: none;
+}
+
+.ambient-performance-status {
+  position: absolute;
+  z-index: 8;
+  right: clamp(16px, 2vw, 34px);
+  bottom: clamp(16px, 2vh, 28px);
+  padding: 6px 10px;
+  border-radius: 999px;
+  color: rgba(255, 255, 255, 0.72);
+  background: rgba(0, 0, 0, 0.38);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  pointer-events: none;
+}
+
 .ambient-screen,
 .flame-scene,
 .ambient-vignette {

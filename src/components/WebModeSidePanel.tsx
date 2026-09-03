@@ -172,7 +172,9 @@ export function WebModeSidePanel() {
     if (flags.current) return t("common.current");
     if (flags.active) return t("common.active");
     if (flags.failed) return failedProviderNeedsProxy && providerId === failedProvider ? t("common.needProxyOn") : t("common.failed");
-    const residentStatus = webMode?.residentProviders?.[providerId]?.status;
+    const resident = webMode?.residentProviders?.[providerId];
+    const residentStatus = resident?.status;
+    if (resident?.activity === "frozen") return t("common.frozen");
     if (residentStatus === "opening") return t("common.opening");
     if (residentStatus === "prewarming") return t("common.prewarming");
     if (residentStatus === "check_setup") return t("common.checkSetup");
@@ -455,6 +457,7 @@ export function WebModeSidePanel() {
           const current = selected && Boolean(displayedOpeningProvider) && !connecting;
           const active = (selected && !displayedOpeningProvider) || optimisticProviderRef.current === provider.id;
           const residentStatus = webMode?.residentProviders?.[provider.id]?.status;
+          const residentActivity = webMode?.residentProviders?.[provider.id]?.activity;
           const warming = residentStatus === "opening" || residentStatus === "prewarming";
           const proxyUnavailable = residentStatus === "check_proxy";
           return (
@@ -466,6 +469,7 @@ export function WebModeSidePanel() {
               style={{ "--provider-tone": providerTones[provider.id] } as CSSProperties}
               aria-busy={connecting || warming}
               data-web-mode-provider={provider.id}
+              data-web-mode-provider-activity={residentActivity ?? "unknown"}
               onClick={() => void openProvider(provider.id)}
             >
               <span>

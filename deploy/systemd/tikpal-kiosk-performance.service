@@ -1,0 +1,13 @@
+[Unit]
+Description=Tikpal kiosk CPU performance governor
+PartOf=tikpal-kiosk.service
+Before=tikpal-kiosk.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=-@APP_DIR@/.env.kiosk
+Environment=TIKPAL_KIOSK_ENV_FILE=@APP_DIR@/.env.kiosk
+Environment=TIKPAL_KIOSK_SKIP_ENV_SOURCE=1
+ExecStart=-@APP_DIR@/deploy/chromium/tikpal-kiosk-performance-governor.sh apply
+ExecStop=-@APP_DIR@/deploy/chromium/tikpal-kiosk-performance-governor.sh restore
+RemainAfterExit=yes

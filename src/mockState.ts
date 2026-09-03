@@ -419,6 +419,7 @@ export const fallbackTikpalState: TikpalState = {
   runtime: {
     rendererType: "media",
     requestedRenderer: "media",
+    renderProfile: "standard",
     kioskWindow: "2560x720",
     appVersion: "0.1.0",
     apiMode: "mock",

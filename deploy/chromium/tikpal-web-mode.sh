@@ -158,6 +158,8 @@ fi
 : "${TIKPAL_WEB_MODE_CDP_SESSION_MANAGER:=0}"
 : "${TIKPAL_WEB_MODE_CDP_SESSION_MANAGER_SOCKET:=/run/tikpal/cdp-session-manager.sock}"
 : "${TIKPAL_WEB_MODE_CDP_SESSION_MANAGER_CLIENT:=$SCRIPT_DIR/tikpal-web-mode-cdp-client.py}"
+: "${TIKPAL_WEB_MODE_PROVIDER_BACKGROUND_FREEZE_ENABLED:=0}"
+: "${TIKPAL_WEB_MODE_PROVIDER_BACKGROUND_FREEZE_DELAY_SECONDS:=8}"
 : "${TIKPAL_WEB_MODE_DISABLE_HANG_MONITOR:=1}"
 : "${TIKPAL_WEB_MODE_REFRESH_EXTENSION_CACHE:=1}"
 : "${TIKPAL_WEB_MODE_ERROR_PAGE_URL:=http://127.0.0.1:4173/web-mode-error.html}"
@@ -187,6 +189,7 @@ TIKPAL_X11_HELPER_GENERATION=""
 TIKPAL_X11_HELPER_LEASE_ID=""
 TIKPAL_X11_HELPER_LAST_RESPONSE=""
 TIKPAL_X11_HELPER_REQUEST_ID=""
+TIKPAL_PROVIDER_FOREGROUND_LIFECYCLE_CONFIRMED=0
 TIKPAL_X11_TRACE_APPEND_WARNING_EMITTED=0
 TIKPAL_SWITCH_TRACE_APPEND_WARNING_EMITTED=0
 TIKPAL_INITIAL_ENTRY_TRACE_APPEND_WARNING_EMITTED=0
@@ -2145,6 +2148,122 @@ sys.exit(1)
 ' "$ws_url" "$method" "$params_json" "$expected_value" 2>/dev/null
 }
 
+read_runtime_provider_activity() {
+  local provider="$1"
+  node - "$TIKPAL_WEB_MODE_STATE_PATH" "$provider" <<'NODE'
+const fs = require("node:fs");
+const [statePath, provider] = process.argv.slice(2);
+try {
+  const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
+  const activity = state.residentProviders?.[provider]?.activity;
+  process.stdout.write(typeof activity === "string" ? activity : "");
+} catch {}
+NODE
+}
+
+write_runtime_provider_activity() {
+  local provider="$1" activity="$2"
+  with_provider_state_lock write_runtime_provider_activity_unlocked "$provider" "$activity"
+}
+
+write_runtime_provider_activity_unlocked() {
+  local provider="$1" activity="$2"
+  node - "$TIKPAL_WEB_MODE_STATE_PATH" "$provider" "$activity" <<'NODE'
+const fs = require("node:fs");
+const path = require("node:path");
+const [statePath, provider, activity] = process.argv.slice(2);
+const allowed = new Set(["active", "parked", "frozen", "unsupported"]);
+if (!provider || !allowed.has(activity)) process.exit(1);
+let state = {};
+try { state = JSON.parse(fs.readFileSync(statePath, "utf8")); } catch {}
+const current = state.residentProviders?.[provider];
+if (!current || typeof current !== "object") process.exit(0);
+const now = new Date().toISOString();
+state.residentProviders = state.residentProviders && typeof state.residentProviders === "object" ? state.residentProviders : {};
+state.residentProviders[provider] = { ...current, activity, updatedAt: now };
+state.updatedAt = now;
+fs.mkdirSync(path.dirname(statePath), { recursive: true });
+const temporaryPath = `${statePath}.${process.pid}.${Date.now()}.tmp`;
+fs.writeFileSync(temporaryPath, `${JSON.stringify(state, null, 2)}\n`);
+fs.renameSync(temporaryPath, statePath);
+NODE
+}
+
+provider_background_freeze_enabled() {
+  is_enabled "$TIKPAL_WEB_MODE_PROVIDER_BACKGROUND_FREEZE_ENABLED" || return 1
+  cdp_session_manager_requested || return 1
+  cdp_session_manager_client_available
+}
+
+provider_cdp_lifecycle() {
+  local provider="$1" state="$2" priority="${3:-maintenance}" response status=0
+  provider_background_freeze_enabled || return 1
+  response="$(timeout 3 "$TIKPAL_WEB_MODE_CDP_SESSION_MANAGER_CLIENT" \
+    --socket "$TIKPAL_WEB_MODE_CDP_SESSION_MANAGER_SOCKET" \
+    --provider "$provider" --op lifecycle --state "$state" --priority "$priority" 2>&1)" || status=$?
+  if [[ "$status" == "0" ]]; then
+    return 0
+  fi
+  log "provider lifecycle $state failed for $provider: ${response:-unknown}"
+  return 1
+}
+
+resume_provider_for_foreground() {
+  local provider="$1" activity
+  TIKPAL_PROVIDER_FOREGROUND_LIFECYCLE_CONFIRMED=0
+  activity="$(read_runtime_provider_activity "$provider")"
+  [[ "$activity" == "frozen" ]] || return 0
+  if provider_cdp_lifecycle "$provider" active foreground; then
+    # A successful lifecycle request is made through the Manager's READY
+    # target session.  Keep the card frozen in runtime state until the X11
+    # transaction and foreground commit complete; this avoids a second state
+    # write and preserves a single visible-owner commit point.
+    TIKPAL_PROVIDER_FOREGROUND_LIFECYCLE_CONFIRMED=1
+    log_stage "provider_resume provider=$provider"
+    return 0
+  fi
+  write_runtime_provider_activity "$provider" unsupported || true
+  # Existing screen-off parking remains safe when Chromium rejects lifecycle.
+  return 0
+}
+
+freeze_background_provider() {
+  local provider="$1" active_provider="$2" status
+  [[ -n "$provider" && "$provider" != "$active_provider" ]] || return 0
+  provider_switch_in_progress && return 0
+  status="$(read_runtime_provider_status "$provider")"
+  [[ "$status" == "ready" ]] || return 0
+  if provider_cdp_lifecycle "$provider" frozen maintenance; then
+    write_runtime_provider_activity "$provider" frozen || true
+    log_stage "provider_freeze provider=$provider"
+  else
+    write_runtime_provider_activity "$provider" unsupported || true
+  fi
+}
+
+schedule_background_provider_freeze() {
+  local expected_active_provider="$1" prewarm_owner_pid="${2:-}" delay="$TIKPAL_WEB_MODE_PROVIDER_BACKGROUND_FREEZE_DELAY_SECONDS"
+  provider_background_freeze_enabled || return 0
+  [[ "$delay" =~ ^[0-9]+([.][0-9]+)?$ ]] || delay=8
+  (
+    sleep "$delay"
+    provider_switch_in_progress && exit 0
+    [[ "$(read_runtime_active_provider)" == "$expected_active_provider" ]] || exit 0
+    # The prewarm queue schedules this only after it has waited for every
+    # worker. Its own top-level process remains alive while the delayed child
+    # starts, so treating that owner as a pending queue would permanently skip
+    # the first idle freeze. A later prewarm marks its cards non-ready and is
+    # therefore still excluded by freeze_background_provider below.
+    if [[ -z "$prewarm_owner_pid" ]] && provider_prewarm_queue_running; then
+      exit 0
+    fi
+    while IFS= read -r provider; do
+      [[ -n "$provider" ]] || continue
+      freeze_background_provider "$provider" "$expected_active_provider"
+    done < <(provider_ids)
+  ) >/dev/null 2>&1 &
+}
+
 set_provider_media_active_via_cdp() {
   local provider_port="$1"
   local active="${2:-0}"
@@ -2737,12 +2856,12 @@ if (!state.activeProvider) {
       ? residentProviders[id]
       : {};
     if (id === state.activeProvider) {
-      residentProviders[id] = { ...current, status: "active", lastError: null, updatedAt: state.updatedAt };
+      residentProviders[id] = { ...current, status: "active", activity: "active", lastError: null, updatedAt: state.updatedAt };
     } else if (current.status === "active") {
       // A former active provider has already shown a real provider page. Do
       // not send its card back through the prewarm queue while guards run
       // their later diagnostics.
-      residentProviders[id] = { ...current, status: "ready", lastError: null, updatedAt: state.updatedAt };
+      residentProviders[id] = { ...current, status: "ready", activity: "parked", lastError: null, updatedAt: state.updatedAt };
     }
   }
   state.residentProviders = residentProviders;
@@ -2809,6 +2928,11 @@ if (provider && allowed.has(nextStatus)) {
     state.residentProviders[provider] = {
       ...(state.residentProviders[provider] || {}),
       status: nextStatus,
+      activity: nextStatus === "active"
+        ? "active"
+        : (nextStatus === "opening" || nextStatus === "prewarming")
+          ? "parked"
+          : state.residentProviders[provider]?.activity || "parked",
       lastError: message || null,
       updatedAt: now
     };
@@ -2850,6 +2974,7 @@ for (const provider of providerIds) {
   residentProviders[provider] = {
     ...current,
     status: "prewarming",
+    activity: "parked",
     lastError: null,
     updatedAt: now
   };
@@ -4029,6 +4154,7 @@ reconcile_provider_pool() {
   fi
   if [[ -f "$(pool_warm_stamp_file)" ]]; then
     if ! provider_pool_needs_prewarm "$active_provider"; then
+      schedule_background_provider_freeze "$active_provider"
       elapsed_ms="$(( $(now_ms) - started_ms ))"
       log_stage "reconcile_ms=$elapsed_ms provider=$active_provider pool=trusted"
       return 0
@@ -4051,6 +4177,7 @@ reconcile_provider_pool() {
     return 0
   }
   start_provider_pool_prewarm "$active_provider" preserve 0
+  schedule_background_provider_freeze "$active_provider"
   elapsed_ms="$(( $(now_ms) - started_ms ))"
   if [[ "$(read_runtime_active_provider)" == "$active_provider" ]]; then
     log_stage "reconcile_ms=$elapsed_ms provider=$active_provider"
@@ -4523,6 +4650,7 @@ close_web_mode_warm() {
     stop_provider_guard
   fi
   schedule_provider_pool_refill_after_close
+  schedule_background_provider_freeze ""
   schedule_web_mode_warm_cleanup
 }
 
@@ -7085,6 +7213,13 @@ initial_entry_prepare_context() {
   TIKPAL_INITIAL_ENTRY_PROXY_ENABLED=""
   TIKPAL_INITIAL_ENTRY_TRACE_CONTEXT_KEY="$context_key"
   if initial_entry_trace_require_writable; then
+    initial_entry_bootstrap_helper_shell_owner || {
+      TIKPAL_INITIAL_ENTRY_FAILED_STEP=helper_bootstrap
+      TIKPAL_INITIAL_ENTRY_FAILED_STATUS=92
+      log_open_stage initial_entry_aborted \
+        "provider=$provider phase=$phase step=helper_bootstrap status=92 mutation_started=false cleanup_status=0"
+      return 92
+    }
     return 0
   fi
   TIKPAL_INITIAL_ENTRY_FAILED_STEP=trace_preflight
@@ -7092,6 +7227,28 @@ initial_entry_prepare_context() {
   log_open_stage initial_entry_aborted \
     "provider=$provider phase=$phase step=trace_preflight status=90 mutation_started=false cleanup_status=0"
   return 90
+}
+
+initial_entry_bootstrap_helper_shell_owner() {
+  local generation owner_state owner owner_generation
+  x11_helper_switch_enabled || return 0
+  [[ "${TIKPAL_WEB_MODE_LOCKED:-0}" == "1" ]] || return 1
+
+  if [[ -e "$TIKPAL_WEB_MODE_X11_HELPER_GENERATION_PATH" ||
+        -e "$TIKPAL_WEB_MODE_X11_HELPER_OWNER_PATH" ]]; then
+    generation="$(cat "$TIKPAL_WEB_MODE_X11_HELPER_GENERATION_PATH" 2>/dev/null || true)"
+    owner_state="$(cat "$TIKPAL_WEB_MODE_X11_HELPER_OWNER_PATH" 2>/dev/null || true)"
+    owner="$(jq -r '.owner // empty' <<< "$owner_state" 2>/dev/null || true)"
+    owner_generation="$(jq -r '.generation // empty' <<< "$owner_state" 2>/dev/null || true)"
+    [[ "$generation" =~ ^[1-9][0-9]*$ &&
+       "$owner" == "shell" && "$owner_generation" == "$generation" ]] || return 1
+    TIKPAL_WEB_MODE_X11_PROCESS_GENERATION="$generation"
+    return 0
+  fi
+
+  x11_helper_increment_generation generation || return 1
+  x11_helper_publish_owner shell "$generation" || return 1
+  log_open_stage helper_bootstrap "generation=$generation owner=shell"
 }
 
 initial_entry_pre_reveal_step() {
@@ -7473,12 +7630,12 @@ reveal_resident_provider_window() {
       # not prove Chromium has produced a nonblank compositor frame.  On the
       # 115 X server, however, x11grab -window_id returns BadAccess for these
       # Chromium windows even after the Helper's final geometry/opacity
-      # snapshot has passed.  A resident page with a real CDP URL is already
-      # eligible for the same fast path used below; Phase 2 still confirms the
-      # composed physical frame before accepting the switch.
+      # snapshot has passed. resident_page_ready was confirmed either by the
+      # Manager lifecycle resume or by the direct provider-page probe before
+      # this fenced transaction began; Phase 2 still confirms the composed
+      # physical frame before accepting the switch.
       helper_paint_started_ms="$(now_ms)"
-      if [[ "$resident_page_ready" == "1" && -n "$provider_port" ]] \
-        && provider_has_real_provider_page "$provider_port"; then
+      if [[ "$resident_page_ready" == "1" && -n "$provider_port" ]]; then
         helper_paint_elapsed_ms="$(( $(now_ms) - helper_paint_started_ms ))"
         if switch_trace_enabled; then
           record_switch_trace_event helper_paint_gate completed cdp_resident "$helper_paint_elapsed_ms"
@@ -7555,12 +7712,12 @@ reveal_resident_provider_window() {
     [[ "$segment_timing_once" != "1" ]] || target_opacity_ms="$(( $(now_ms) - segment_started_ms ))"
     opacity_mutation=applied
   fi
-  # If CDP already proves the provider has a real HTTPS page, the compositor
-  # has rendered meaningful content.  Skip the slow X11 paint check and settle
-  # delay entirely — the 3 s timeout on 115 always fails even when the window
-  # has visible content.
+  # The caller established resident_page_ready from either the Manager's
+  # successful lifecycle resume or a direct CDP provider-page probe. Reuse
+  # that confirmation instead of making another synchronous probe on the
+  # physical reveal path. The 3 s X11 paint timeout remains the fallback.
   [[ "$resident_page_ready" == "1" ]] && TIKPAL_WEB_MODE_TRUSTED_PROVIDER_PAGE_PORT="$provider_port"
-  if [[ -n "$provider_port" ]] && provider_has_real_provider_page "$provider_port"; then
+  if [[ "$resident_page_ready" == "1" && -n "$provider_port" ]]; then
     log_stage "reveal_cdp_skip_paint target=$target_window port=$provider_port ms=$(( $(now_ms) - started_ms ))"
     # One xdotool connection keeps the move/size/raise ordering on the X
     # server without paying one process and one round trip per operation. The
@@ -8042,6 +8199,7 @@ run_provider_prewarm_queue() {
   sync_runtime_provider_pool_process_statuses "$current_active"
   if provider_prewarm_queue_is_complete; then
     write_runtime_prewarm_complete 1
+    schedule_background_provider_freeze "$current_active" "$BASHPID"
     log "provider prewarm queue completed: max-concurrent=$maximum"
   else
     log "provider prewarm queue incomplete: max-concurrent=$maximum"
@@ -8154,7 +8312,7 @@ open_provider_pool() {
   local provider_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/$provider"
   local current_provider current_profile target_window="" previous_window="" panel_window="" known_panel_window="" proxy_line proxy_enabled message extension_enabled=0 entry_stage=0
   local panel_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"
-  local resident_status resident_page_ready=0 fast_resident=0 switching_provider=0 current_port provider_port
+  local resident_status resident_page_ready=0 fast_resident=0 switching_provider=0 current_port provider_port target_lifecycle_confirmed=0
   local helper_candidate=0 helper_target_raw=0
   local started_ms reveal_ms command_return_ms transition_shown_ms=0 initial_entry_status=0
   local guard_lifecycle_started_ms=0 switch_marker_clear_started_ms=0 guard_verify_status=0
@@ -8176,6 +8334,11 @@ open_provider_pool() {
   fi
   [[ -z "$current_provider" ]] && entry_stage=1
   [[ "$entry_stage" != "1" && "$current_provider" != "$provider" ]] && switching_provider=1
+  provider_port="$(provider_debug_port "$provider")"
+  # Wake an intentionally frozen resident before the Guard acquires the
+  # foreground lease. A lifecycle rejection falls back to ordinary parking.
+  resume_provider_for_foreground "$provider"
+  target_lifecycle_confirmed="$TIKPAL_PROVIDER_FOREGROUND_LIFECYCLE_CONFIRMED"
   # Establish foreground ownership before resolving the target.  Otherwise
   # per-provider advisory status writers can enter the state lock during the
   # resolver/CDP window and make the eventual active-state commit wait for a
@@ -8188,7 +8351,6 @@ open_provider_pool() {
   fi
   resident_status="$(read_runtime_provider_status "$provider")"
   switch_trace_enabled && record_switch_trace_event open_pool_resident_status_read ok "$resident_status"
-  provider_port="$(provider_debug_port "$provider")"
   if switch_trace_enabled; then
     switch_trace_now_ms trace_started_ms
     record_switch_trace_event target_resolve_started
@@ -8205,7 +8367,11 @@ open_provider_pool() {
   if [[ -n "$target_window" || "$resident_status" == "ready" || "$resident_status" == "active" ]]; then
     [[ "$segment_timing_once" != "1" ]] || segment_started_ms="$(now_ms)"
     switch_trace_enabled && switch_trace_now_ms trace_cdp_started_ms
-    if provider_has_real_provider_page "$provider_port"; then
+    # A target restored by the Manager has just completed Page lifecycle work
+    # against its READY CDP session. That is the same provider-page proof that
+    # the direct probe obtains, so do not serially repeat the probe before the
+    # physical X11 transaction. Non-frozen pages retain the direct fallback.
+    if [[ "$target_lifecycle_confirmed" == "1" ]] || provider_has_real_provider_page "$provider_port"; then
       resident_page_ready=1
       [[ -n "$target_window" ]] && fast_resident=1
     fi
@@ -9045,7 +9211,11 @@ case "$web_mode_action" in
     reconcile_provider_pool "${2:-}" "${3:-}"
     ;;
   sync-status)
-    sync_runtime_provider_pool_process_statuses "$(read_runtime_active_provider)"
+    active_provider="$(read_runtime_active_provider)"
+    sync_runtime_provider_pool_process_statuses "$active_provider"
+    if provider_prewarm_queue_is_complete; then
+      write_runtime_prewarm_complete 1
+    fi
     ;;
   provider-status)
     provider_id="${2:-}"

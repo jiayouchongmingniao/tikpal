@@ -129,6 +129,9 @@ const UPNP_DISABLE_COMMAND = process.env.TIKPAL_UPNP_DISABLE_COMMAND ?? "";
 const UPNP_LABEL_COMMAND = process.env.TIKPAL_UPNP_LABEL_COMMAND ?? "";
 const UPNP_METADATA_COMMAND = process.env.TIKPAL_UPNP_METADATA_COMMAND ?? "";
 const ROONBRIDGE_SERVICE = process.env.TIKPAL_ROONBRIDGE_SERVICE ?? "roonbridge.service";
+const RENDER_PROFILE = String(process.env.TIKPAL_RENDER_PROFILE ?? "standard").trim().toLowerCase() === "constrained"
+  ? "constrained"
+  : "standard";
 const ROONBRIDGE_READY_COMMAND = process.env.TIKPAL_ROONBRIDGE_READY_COMMAND ?? "./deploy/moode/tikpal-roonbridge-state.sh ready";
 const ROONBRIDGE_ACTIVE_COMMAND = process.env.TIKPAL_ROONBRIDGE_ACTIVE_COMMAND ?? "./deploy/moode/tikpal-roonbridge-state.sh active";
 const ROONBRIDGE_ENABLE_COMMAND = process.env.TIKPAL_ROONBRIDGE_ENABLE_COMMAND ?? "./deploy/moode/tikpal-roonbridge-state.sh enable";
@@ -1034,7 +1037,8 @@ function buildKioskHeartbeatStatus(now = Date.now()) {
     const sceneTransitionActive = activeSceneVideo.transition === "scene"
       && activeSceneVideo.transitionPhase
       && activeSceneVideo.transitionPhase !== "idle";
-    if (activeSceneVideo.present === false && !sceneTransitionActive) {
+    const intentionalStaticScene = activeSceneVideo.staticOnly === true;
+    if (activeSceneVideo.present === false && !sceneTransitionActive && !intentionalStaticScene) {
       reasons.push("scene-video-missing");
     }
 
@@ -1044,7 +1048,7 @@ function buildKioskHeartbeatStatus(now = Date.now()) {
     }
 
     const readyState = finiteNumber(activeSceneVideo.readyState);
-    if (readyState !== null && readyState < 2 && !sceneTransitionActive) {
+    if (readyState !== null && readyState < 2 && !sceneTransitionActive && !intentionalStaticScene) {
       reasons.push("scene-video-not-ready");
     }
   }
@@ -3688,6 +3692,7 @@ function buildRuntimeSnapshot(kioskWindow = REQUESTED_KIOSK_WINDOW) {
   return {
     rendererType: REQUESTED_RENDERER === "webgl" ? "webgl" : "media",
     requestedRenderer: REQUESTED_RENDERER,
+    renderProfile: RENDER_PROFILE,
     kioskWindow,
     appVersion: APP_VERSION,
     apiMode: API_MODE,
@@ -5316,6 +5321,9 @@ function normalizeWebModeRuntimeState(raw = {}) {
     if (!allowedProviderStatuses.has(status) || status === "closed") continue;
     residentProviders[provider.id] = {
       status,
+      activity: ["active", "parked", "frozen", "unsupported"].includes(String(value.activity ?? ""))
+        ? String(value.activity)
+        : undefined,
       lastError: normalizeWebModeVisibleError(value.lastError),
       updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : null
     };

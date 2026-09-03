@@ -13,7 +13,7 @@ const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..")
 const temporary = mkdtempSync(path.join(tmpdir(), "tikpal-cdp-manager-smoke-"));
 const socketPath = path.join(temporary, "manager.sock");
 const statePath = path.join(temporary, "manager.json");
-const targetId = "spotify-target";
+let targetId = "spotify-target";
 let browserConnections = 0;
 let getTargets = 0;
 let sessionGeneration = 0;
@@ -87,11 +87,15 @@ browser.on("upgrade", (request, socket) => {
         return reply({ targetInfos: [{ targetId, type: "page", title: "Spotify", url: "https://open.spotify.com/" }] });
       }
       if (message.method === "Target.attachToTarget") {
+        if (message.params?.targetId !== targetId) {
+          return socket.write(frame({ id: message.id, error: { message: "No target with given id found" } }));
+        }
         sessionGeneration += 1;
         return reply({ sessionId: `session-${sessionGeneration}` });
       }
       if (message.method === "Page.bringToFront" && dropNextSafeCommand) {
         dropNextSafeCommand = false;
+        targetId = "spotify-target-restarted";
         socket.destroy();
         return;
       }
@@ -159,6 +163,13 @@ try {
   assert(targets.ok && targets.target.state === "READY", `manager should attach a real HTTPS page session: ${JSON.stringify(targets)}`);
   assert(pageEnableAttempts === 2 && targets.target.sessionGeneration === 1, "an incomplete maintenance attach should reuse its session and finish enable");
   assert(browserConnections === 1 && getTargets === 1, "initial discovery should use one browser connection and target enumeration");
+  const browserInfo = await managerRequest({ op: "browser-info", provider: "spotify", priority: "maintenance" });
+  assert(browserInfo.ok, "browser diagnostics should use the existing browser CDP connection");
+  const frozen = await managerRequest({ op: "lifecycle", provider: "spotify", state: "frozen", priority: "maintenance" });
+  assert(frozen.ok && frozen.target.lifecycleState === "frozen", "inactive provider lifecycle should freeze without closing its session");
+  const active = await managerRequest({ op: "lifecycle", provider: "spotify", state: "active", priority: "foreground" });
+  assert(active.ok && active.target.lifecycleState === "active", "foreground provider lifecycle should resume before switch work");
+  assert(browserConnections === 1 && getTargets === 1, "lifecycle changes must keep the resident browser and target hot");
   const hot = await managerRequest({ op: "command", provider: "spotify", method: "Page.bringToFront", params: {}, retryable: true, priority: "foreground" });
   assert(hot.ok && !hot.recovered, "healthy foreground command should use the cached session");
   assert(browserConnections === 1 && getTargets === 1, "healthy foreground command must not rediscover or reconnect");
@@ -166,6 +177,7 @@ try {
   const recovered = await managerRequest({ op: "command", provider: "spotify", method: "Page.bringToFront", params: {}, retryable: true, priority: "foreground" });
   assert(recovered.ok && recovered.recovered, "safe foreground command should recover once");
   assert(browserConnections === 2 && getTargets === 2 && recovered.target.sessionGeneration === 2, "recovery should establish exactly one replacement session");
+  assert(recovered.target.targetId === "spotify-target-restarted", "recovery should discard stale targets after the browser is replaced");
   const unsafe = await managerRequest({ op: "command", provider: "spotify", method: "Page.navigate", params: { url: "https://example.invalid/" }, retryable: false, priority: "foreground" });
   assert(!unsafe.ok && browserConnections === 2, "non-idempotent command must not be replayed after transport loss");
   console.log("[tikpal-cdp-session-manager-smoke] passed");

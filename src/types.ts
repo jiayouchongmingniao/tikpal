@@ -97,6 +97,7 @@ export type WebModeResidentProviderStatus = "opening" | "prewarming" | "ready" |
 
 export interface WebModeResidentProviderState {
   status: WebModeResidentProviderStatus;
+  activity?: "active" | "parked" | "frozen" | "unsupported";
   lastError: string | null;
   updatedAt: string | null;
 }
@@ -702,6 +703,7 @@ export interface QueueEntrySummary {
 export interface RuntimeState {
   rendererType: "media" | "webgl" | "fallback" | "unknown";
   requestedRenderer: string;
+  renderProfile: "standard" | "constrained";
   kioskWindow: "2560x720";
   appVersion: string;
   apiMode: "mock" | "mpc";

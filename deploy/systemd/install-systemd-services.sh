@@ -641,6 +641,7 @@ if [[ "$INSTALL_KIOSK" -eq 1 ]]; then
   install_onboard_scripts
   install_onboard_themes
   install_physical_display_prepare
+  install_unit "$SCRIPT_DIR/tikpal-kiosk-performance.service"
   install_unit "$SCRIPT_DIR/tikpal-kiosk.service"
   install_unit "$SCRIPT_DIR/tikpal-kiosk-viewer.service"
   install_unit "$SCRIPT_DIR/tikpal-kiosk-devtools.service"

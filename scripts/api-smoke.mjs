@@ -5581,6 +5581,23 @@ exit 0
     assert(hifiHeartbeat.body.healthy === true, "Hi-Fi visual heartbeat should not require a scene video");
     assert(!hifiHeartbeat.body.reasons.includes("scene-video-missing"), "Hi-Fi heartbeat should not report a missing scene video");
 
+    const constrainedStaticHeartbeat = await request("/api/v1/kiosk/heartbeat", {
+      method: "POST",
+      body: JSON.stringify({
+        ...healthyHeartbeatPayload,
+        activeSceneVideo: {
+          present: false,
+          scenePresent: true,
+          staticOnly: true,
+          transition: null,
+          transitionPhase: null,
+          sceneClass: "flame-scene is-low-power is-static-only"
+        }
+      })
+    });
+    assert(constrainedStaticHeartbeat.body.healthy === true, "intentional constrained static scene should not restart the kiosk");
+    assert(!constrainedStaticHeartbeat.body.reasons.includes("scene-video-missing"), "intentional constrained static scene should not report a missing video");
+
     const visibleLagHeartbeat = await request("/api/v1/kiosk/heartbeat", {
       method: "POST",
       body: JSON.stringify({

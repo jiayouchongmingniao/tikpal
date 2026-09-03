@@ -220,27 +220,30 @@ function profileProcessExists() {
   return result.status === 0;
 }
 
-function providerRuntimeRole(currentProviderId, activeProvider, openingProvider) {
+function providerRuntimeRole(currentProviderId, activeProvider, openingProvider, activity = "") {
   const active = activeProvider === currentProviderId;
   const opening = openingProvider === currentProviderId;
   return {
     active,
     opening,
-    deactivating: active && Boolean(openingProvider) && !opening
+    deactivating: active && Boolean(openingProvider) && !opening,
+    frozen: activity === "frozen"
   };
 }
 
 function readProviderRuntimeState() {
-  if (!statePath || !providerId) return { active: true, opening: false, deactivating: false };
+  if (!statePath || !providerId) return { active: true, opening: false, deactivating: false, frozen: false };
   try {
     const state = JSON.parse(readFileSync(statePath, "utf8"));
+    const activity = String(state?.residentProviders?.[providerId]?.activity || "");
     return providerRuntimeRole(
       providerId,
       String(state?.activeProvider || ""),
-      String(state?.openingProvider || "")
+      String(state?.openingProvider || ""),
+      activity
     );
   } catch {
-    return { active: true, opening: false, deactivating: false };
+    return { active: true, opening: false, deactivating: false, frozen: false };
   }
 }
 
@@ -2870,9 +2873,11 @@ function runProviderGuardScheduleFixtures() {
   const previousRole = providerRuntimeRole("youtube_music", "youtube_music", "qobuz");
   const targetRole = providerRuntimeRole("qobuz", "youtube_music", "qobuz");
   const settledRole = providerRuntimeRole("qobuz", "qobuz", "");
+  const frozenRole = providerRuntimeRole("qobuz", "youtube_music", "", "frozen");
   expect(previousRole.active && previousRole.deactivating && !previousRole.opening, "the previous provider should be classified as deactivating");
   expect(!targetRole.active && targetRole.opening && !targetRole.deactivating, "the target provider should be classified as opening");
   expect(settledRole.active && !settledRole.opening && !settledRole.deactivating, "the committed target should be classified as settled active");
+  expect(frozenRole.frozen && !frozenRole.active, "frozen background providers should skip Guard maintenance");
   expect(!providerRuntimeMaintenanceEnabled("spotify", true), "opening Spotify should yield all guard Runtime maintenance");
   expect(providerRuntimeMaintenanceEnabled("spotify", false), "settled Spotify should keep guard Runtime maintenance");
   expect(providerRuntimeMaintenanceEnabled("youtube_music", true), "non-Spotify Runtime maintenance should stay unchanged");
@@ -2890,7 +2895,8 @@ if (process.argv.includes("--audio-gate-active") || process.argv.includes("--aud
 async function guardOnce() {
   if (typeof WebSocket !== "function") return;
   const runtimeState = readProviderRuntimeState();
-  const { active, opening, deactivating } = runtimeState;
+  const { active, opening, deactivating, frozen } = runtimeState;
+  if (frozen) return;
   const schedule = providerGuardSchedule(providerId, active, spotifyActivePass);
   const audioGateEnabled = providerAudioGateEnabled(opening);
   const audioGateActive = providerAudioGateActive(active, deactivating);

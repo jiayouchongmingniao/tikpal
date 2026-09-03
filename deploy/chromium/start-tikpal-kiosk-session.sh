@@ -29,6 +29,8 @@ fi
 : "${TIKPAL_KIOSK_DISPLAY:=:0}"
 : "${TIKPAL_KIOSK_X_COMMAND_TIMEOUT_SECONDS:=5}"
 : "${TIKPAL_KIOSK_RESET_WEB_MODE_ON_START:=1}"
+: "${TIKPAL_KIOSK_APPLY_PHYSICAL_DISPLAY_MODE:=0}"
+: "${TIKPAL_KIOSK_PHYSICAL_DISPLAY_PREPARE_COMMAND:=/usr/local/sbin/tikpal-physical-display-prepare}"
 : "${TIKPAL_KIOSK_X_SESSION_GENERATION_PATH:=$APP_DIR/.tikpal/kiosk-x-session-generation}"
 export DISPLAY="$TIKPAL_KIOSK_DISPLAY"
 export TIKPAL_KIOSK_X_SESSION_GENERATION_PATH
@@ -198,6 +200,19 @@ run_x_command() {
   "$@"
 }
 
+apply_physical_display_mode() {
+  is_enabled "$TIKPAL_KIOSK_APPLY_PHYSICAL_DISPLAY_MODE" || return 0
+  [[ "${TIKPAL_KIOSK_ACTIVE_DISPLAY_MODE:-$TIKPAL_KIOSK_DISPLAY_MODE}" == "physical" ]] || return 0
+  if [[ ! -x "$TIKPAL_KIOSK_PHYSICAL_DISPLAY_PREPARE_COMMAND" ]]; then
+    printf '[tikpal-kiosk-session] physical display prepare unavailable: %s\n' \
+      "$TIKPAL_KIOSK_PHYSICAL_DISPLAY_PREPARE_COMMAND" >&2
+    return 0
+  fi
+  if ! TIKPAL_KIOSK_SKIP_ENV_SOURCE=1 "$TIKPAL_KIOSK_PHYSICAL_DISPLAY_PREPARE_COMMAND" soft-kick; then
+    printf '[tikpal-kiosk-session] physical display soft-kick failed; continuing to Chromium\n' >&2
+  fi
+}
+
 reset_web_mode_runtime() {
   if ! is_enabled "$TIKPAL_KIOSK_RESET_WEB_MODE_ON_START"; then
     return 0
@@ -229,6 +244,10 @@ if command -v xset >/dev/null 2>&1; then
   run_x_command xset s noblank || true
 fi
 
+# Apply the configured RandR mode only after X is accepting commands.  This is
+# deliberately a single best-effort action: a display rejection must not turn
+# into a kiosk restart loop.
+apply_physical_display_mode
 configure_fcitx5
 reset_web_mode_runtime
 

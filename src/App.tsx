@@ -267,6 +267,7 @@ function readActiveSceneVideoSnapshot() {
     return {
       present: false,
       scenePresent: Boolean(scene),
+      staticOnly: scene?.classList.contains("is-static-only") === true,
       transition: scene?.getAttribute("data-flame-transition") ?? null,
       transitionPhase: scene?.getAttribute("data-flame-transition-phase") ?? null,
       sceneClass: scene?.className ?? null
@@ -1232,7 +1233,7 @@ export default function App() {
   const onboardingActive = onboardingVisible && !webModeActive;
 
   return (
-    <main className={`app-root ${screenOffActive ? "is-screen-off" : ""} ${systemSleepActive ? "is-system-sleeping" : ""} ${mode === "quickMenu" ? "is-quick-menu-active" : ""} ${onboardingActive && onboardingBackgroundHidden ? "is-wizard-background-hidden" : ""}`} {...gestureHandlers}>
+    <main className={`app-root ${tikpalState.runtime.renderProfile === "constrained" ? "is-render-constrained" : ""} ${screenOffActive ? "is-screen-off" : ""} ${systemSleepActive ? "is-system-sleeping" : ""} ${mode === "quickMenu" ? "is-quick-menu-active" : ""} ${onboardingActive && onboardingBackgroundHidden ? "is-wizard-background-hidden" : ""}`} {...gestureHandlers}>
       <AmbientScreen
         hudVisible={hudVisible}
         timeLabel={timeLabel}
@@ -1246,7 +1247,8 @@ export default function App() {
         system={tikpalState.system}
         status={tikpalStatus}
         sceneVideoEnabled={sceneVideoEnabled}
-        sceneVideoStableLoop={tikpalState.runtime.apiMode === "mpc"}
+        sceneVideoStableLoop={tikpalState.runtime.apiMode === "mpc" || tikpalState.runtime.renderProfile === "constrained"}
+        renderProfile={tikpalState.runtime.renderProfile}
         sceneSoundEnabled={roomExperience.sceneSoundEnabled && !(onboardingActive && onboardingSoundMuted)}
         sourcePickerOpenRequest={ambientSourcePickerRequest}
         clockVisible={clockVisible}

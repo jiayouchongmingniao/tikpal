@@ -1932,6 +1932,7 @@ sync_runtime_provider_pool_process_statuses ""
   );
   assert(kioskLauncher.includes("TIKPAL_KIOSK_X_COMMAND_TIMEOUT_SECONDS"), "kiosk launcher should expose an X command timeout");
   assert(kioskLauncher.includes("run_x_command xrandr"), "kiosk launcher should bound xrandr commands");
+  assert(kioskLauncher.includes("xrandr_rate_for_output()") && kioskLauncher.includes('XRANDR_ARGS+=(--rate "$XRANDR_RATE")'), "kiosk launcher should preserve the selected physical display refresh rate");
   assert(kioskLauncher.includes("run_x_command xset"), "kiosk launcher should bound xset commands");
   assert(kioskLauncher.includes("detect_non_hdmi_card_id"), "kiosk launcher should detect the actual non-HDMI ALSA card");
   assert(kioskLauncher.includes("tikpal-audio-adapt.sh") && kioskLauncher.includes("resolve-browser"), "kiosk launcher should use the shared audio adapter for auto ALSA output");
@@ -1995,10 +1996,14 @@ sync_runtime_provider_pool_process_statuses ""
     "kiosk session should atomically publish an independent X-session generation before any X command"
   );
   assert(
-    webModeScript.includes('if is_enabled "${TIKPAL_WEB_MODE_STARTUP_RESET:-0}"; then')
-      && webModeScript.includes(`else
+    (webModeScript.includes('if is_enabled "${TIKPAL_WEB_MODE_STARTUP_RESET:-0}"; then')
+      || webModeScript.includes('if ! is_enabled "${TIKPAL_WEB_MODE_STARTUP_RESET:-0}"; then'))
+      && (
+        webModeScript.includes(`else
     schedule_provider_pool_refill_after_close
-  fi`),
+  fi`)
+        || webModeScript.includes('if ! is_enabled "${TIKPAL_WEB_MODE_STARTUP_RESET:-0}"; then\n    schedule_provider_pool_refill_after_close\n  fi')
+      ),
     "startup reset should defer provider prewarm to the stabilized kiosk launcher, preventing duplicate pool workers"
   );
   assert(
@@ -3053,7 +3058,10 @@ sync_runtime_provider_pool_process_statuses ""
   const revealResidentWindowStart = webModeScript.indexOf("reveal_resident_provider_window() {");
   const revealResidentWindowEnd = webModeScript.indexOf("\n}\n\nreassert_visible_provider_surfaces()", revealResidentWindowStart);
   const revealResidentWindowBody = webModeScript.slice(revealResidentWindowStart, revealResidentWindowEnd);
-  const residentFastPathStart = revealResidentWindowBody.indexOf('if [[ -n "$provider_port" ]] && provider_has_real_provider_page "$provider_port"; then');
+  const residentFastPathStart = revealResidentWindowBody.indexOf(
+    'if [[ "$resident_page_ready" == "1" && -n "$provider_port" ]]; then',
+    revealResidentWindowBody.lastIndexOf('TIKPAL_WEB_MODE_TRUSTED_PROVIDER_PAGE_PORT="$provider_port"')
+  );
   const residentFastPathEnd = revealResidentWindowBody.indexOf("\n    return 0", residentFastPathStart);
   const residentFastPathBody = revealResidentWindowBody.slice(residentFastPathStart, residentFastPathEnd);
   const residentFallbackBody = revealResidentWindowBody.slice(residentFastPathEnd);
@@ -3396,8 +3404,8 @@ sync_runtime_provider_pool_process_statuses ""
       revealResidentProviderWindowBody.includes('record_switch_trace_event helper_paint_gate failed paint_timeout') &&
       revealResidentProviderWindowBody.indexOf('wait_for_provider_window_nonblank_x11_frame "$target_window"') <
         revealResidentProviderWindowBody.indexOf('write_physical_reveal_stamp "$provider_profile" "$target_window" "$previous_window" "$physical_ms"') &&
-      revealResidentProviderWindowBody.includes('provider_has_real_provider_page "$provider_port"'),
-    "Explore resident reveal should physically gate both Helper and legacy success before stamping"
+      (revealResidentProviderWindowBody.match(/if \[\[ "\$resident_page_ready" == "1" && -n "\$provider_port" \]\]; then/g) || []).length >= 2,
+    "Explore resident reveal should reuse its prior Manager/CDP confirmation while retaining the physical-frame fallback before stamping"
   );
   assert(
     failedResidentRevealStart >= 0 &&
@@ -3496,7 +3504,7 @@ sync_runtime_provider_pool_process_statuses ""
   const poolTargetAudioGateIndexes = [...openProviderPoolBody.matchAll(/activate_target_provider_audio_gate "\$provider" "\$provider_port"/g)].map((match) => match.index);
   const poolDeferredAudioGateIndexes = [...openProviderPoolBody.matchAll(/schedule_target_provider_audio_gate_after_commit "\$provider" "\$provider_port"/g)].map((match) => match.index);
   const poolCommitIndexes = [...openProviderPoolBody.matchAll(/commit_visible_provider_state "\$provider"/g)].map((match) => match.index);
-  const helperSwitchMarkerClearIndex = openProviderPoolBody.indexOf('switch_marker_clear_started_ms="$(now_ms)"');
+  const helperSwitchMarkerClearIndex = openProviderPoolBody.lastIndexOf('switch_marker_clear_started_ms="$(now_ms)"');
   const directTargetAudioGateIndex = openProviderBody.indexOf('activate_target_provider_audio_gate "$provider" "$provider_port"');
   const directCommitIndex = openProviderBody.indexOf('commit_visible_provider_state "$provider"');
   assert(
@@ -3504,8 +3512,8 @@ sync_runtime_provider_pool_process_statuses ""
       poolDeferredAudioGateIndexes.length === 1 &&
       poolCommitIndexes.length === 2 &&
       residentHotRevealIndex < poolCommitIndexes[0] &&
-      poolCommitIndexes[0] < helperSwitchMarkerClearIndex &&
-      helperSwitchMarkerClearIndex < poolDeferredAudioGateIndexes[0] &&
+      poolCommitIndexes[0] < poolDeferredAudioGateIndexes[0] &&
+      poolDeferredAudioGateIndexes[0] < helperSwitchMarkerClearIndex &&
       residentRevealIndex < poolTargetAudioGateIndexes[0] &&
       poolTargetAudioGateIndexes[0] < poolCommitIndexes[1] &&
       openProviderBody.lastIndexOf("reassert_visible_provider_surfaces") < directTargetAudioGateIndex &&

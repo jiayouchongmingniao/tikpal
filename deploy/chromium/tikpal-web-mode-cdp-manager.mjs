@@ -88,6 +88,7 @@ class ProviderSession {
     this.connecting = null;
     this.errorPageUrl = "";
     this.redirectedDocumentGeneration = -1;
+    this.lifecycleState = "active";
   }
 
   snapshot() {
@@ -103,6 +104,7 @@ class ProviderSession {
       failedRecoveryCount: this.failedRecoveryCount,
       lastError: this.lastError || null,
       lastReadyAt: this.lastReadyAt || null,
+      lifecycleState: this.lifecycleState,
       url: this.targetId ? (this.targetInfos.get(this.targetId)?.url || null) : null,
       queued: this.queue.length + (this.running ? 1 : 0)
     };
@@ -119,6 +121,7 @@ class ProviderSession {
     this.targetId = "";
     this.errorPageUrl = "";
     this.redirectedDocumentGeneration = -1;
+    this.lifecycleState = "active";
     if (this.ws) this.setState("RECOVERING", reason);
     else this.setState("ABSENT", reason);
   }
@@ -166,7 +169,7 @@ class ProviderSession {
     });
     await this.sendBrowser("Target.setDiscoverTargets", { discover: true });
     const result = await this.sendBrowser("Target.getTargets");
-    this.updateTargets(result?.targetInfos || []);
+    this.replaceTargets(result?.targetInfos || []);
   }
 
   onClose(ws, epoch) {
@@ -244,6 +247,19 @@ class ProviderSession {
   updateTargets(infos) {
     for (const info of infos) {
       if (info?.targetId) this.targetInfos.set(info.targetId, info);
+    }
+    publishState();
+  }
+
+  replaceTargets(infos) {
+    this.targetInfos = new Map(
+      infos
+        .filter((info) => info?.targetId)
+        .map((info) => [info.targetId, info])
+    );
+    if (this.targetId && !this.targetInfos.has(this.targetId)) {
+      this.invalidateSession("target_absent_from_browser_snapshot");
+      return;
     }
     publishState();
   }
@@ -376,6 +392,11 @@ class ProviderSession {
     const started = nowMs();
     const op = request.op || "command";
     if (op === "status") return { ok: true, provider: this.id, target: this.snapshot(), timings: { totalMs: nowMs() - started } };
+    if (op === "browser-info") {
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) await this.connect();
+      const result = await this.sendBrowser("SystemInfo.getInfo");
+      return { ok: true, result, provider: this.id, target: this.snapshot(), timings: { totalMs: nowMs() - started } };
+    }
     if (op === "targets") {
       try { await this.ensureReady(); } catch (error) { return this.failure(error, { totalMs: nowMs() - started }); }
       return {
@@ -401,6 +422,15 @@ class ProviderSession {
       this.errorPageUrl = String(request.errorPageUrl || "");
       this.redirectedDocumentGeneration = -1;
       return { ok: true, provider: this.id, target: this.snapshot(), timings: { totalMs: nowMs() - started } };
+    }
+    if (op === "lifecycle") {
+      const state = String(request.state || "").toLowerCase();
+      if (state !== "active" && state !== "frozen") throw new Error("invalid lifecycle state");
+      await this.ensureReady();
+      const result = await this.sendSession("Page.setWebLifecycleState", { state });
+      this.lifecycleState = state;
+      publishState();
+      return { ok: true, result, provider: this.id, target: this.snapshot(), timings: { totalMs: nowMs() - started } };
     }
     if (op === "close-target") {
       await this.ensureReady();

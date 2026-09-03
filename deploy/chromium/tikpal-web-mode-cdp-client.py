@@ -29,7 +29,7 @@ def main():
     parser.add_argument("--socket", default="/run/tikpal/cdp-session-manager.sock")
     parser.add_argument("--timeout", type=float, default=2.5)
     parser.add_argument("--provider")
-    parser.add_argument("--op", default="command", choices=("command", "targets", "status", "watch-early-error", "close-target"))
+    parser.add_argument("--op", default="command", choices=("command", "targets", "status", "browser-info", "watch-early-error", "close-target", "lifecycle"))
     parser.add_argument("--method")
     parser.add_argument("--params", default="{}")
     parser.add_argument("--retryable", action="store_true")
@@ -37,6 +37,7 @@ def main():
     parser.add_argument("--expected-value")
     parser.add_argument("--target-id")
     parser.add_argument("--error-page-url")
+    parser.add_argument("--state", choices=("active", "frozen"))
     parser.add_argument("--raw-targets", action="store_true")
     args = parser.parse_args()
     payload = {"op": args.op, "provider": args.provider, "priority": args.priority}
@@ -52,6 +53,10 @@ def main():
         payload["targetId"] = args.target_id
     if args.error_page_url:
         payload["errorPageUrl"] = args.error_page_url
+    if args.op == "lifecycle":
+        if not args.state:
+            parser.error("--state is required for lifecycle")
+        payload["state"] = args.state
     try:
         response = request(args.socket, payload, args.timeout)
     except Exception as error:

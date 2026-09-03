@@ -4,6 +4,7 @@ import type { LucideIcon } from "lucide-react";
 import { fetchBackgroundVideos, fetchSceneContext } from "../api/tikpalClient";
 import { EqVisualScene, type HifiLyricsPanel } from "./EqVisualScene";
 import { FlameScene } from "./FlameScene";
+import { useSceneRenderBudget } from "../hooks/useSceneRenderBudget";
 import { useI18n } from "../i18n";
 import { roomModeOptions } from "../roomExperienceTruth";
 import { getSourceDisplayStatus, isExplorePrewarmComplete } from "../sourceStatus";
@@ -25,6 +26,7 @@ interface AmbientScreenProps {
   status: TikpalDataStatus;
   sceneVideoEnabled: boolean;
   sceneVideoStableLoop: boolean;
+  renderProfile: TikpalState["runtime"]["renderProfile"];
   sceneSoundEnabled: boolean;
   sourcePickerOpenRequest: number;
   clockVisible: boolean;
@@ -360,6 +362,7 @@ export function AmbientScreen({
   status,
   sceneVideoEnabled,
   sceneVideoStableLoop,
+  renderProfile,
   sceneSoundEnabled,
   sourcePickerOpenRequest,
   clockVisible,
@@ -491,7 +494,11 @@ export function AmbientScreen({
   const audioProtectionMode = playback.source === "airplay" && playback.state === "playing";
   const sceneVideoThermalGuardActive = sceneVideoThermalPaused && !isHifiMode;
   const shouldRenderSceneVideo = sceneVideoEnabled && hasSceneVideo && !sceneVideoThermalGuardActive;
-  const sceneVisualLowPower = audioProtectionMode || sceneVideoThermalGuardActive;
+  const { staticOnly: sceneVideoBudgetStaticOnly, diagnostics: sceneRenderDiagnostics } = useSceneRenderBudget({
+    constrained: renderProfile === "constrained" && !isHifiMode,
+    enabled: shouldRenderSceneVideo
+  });
+  const sceneVisualLowPower = audioProtectionMode || sceneVideoThermalGuardActive || renderProfile === "constrained";
   const sceneAudioEnabled = shouldRenderSceneVideo && sceneSoundEnabled && !ambientSceneAudioSuppressed && playback.source === "scene" && playback.state === "playing";
   const useStableSceneLoop = sceneVideoStableLoop && shouldRenderSceneVideo && !isHifiMode;
   const proxyLyricsClockUsable = playback.timingDiagnostics?.positionTrusted === true
@@ -1853,6 +1860,7 @@ export function AmbientScreen({
     <section
       className={`ambient-screen ${ambientHudVisible ? "is-hud-visible" : "is-hud-hidden"} ${sourcePickerOpen ? "is-source-picker-open" : ""} ${sceneGalleryOpen ? "is-scene-gallery-open" : ""}`}
       data-room-mode={roomExperience.mode}
+      data-scene-render-mode={sceneVideoBudgetStaticOnly ? "static" : "video"}
       aria-label="Ambient flame screen"
       onWheelCapture={handleAmbientWheelCapture}
     >
@@ -1876,7 +1884,7 @@ export function AmbientScreen({
           playback={playback}
           singleLoop={useStableSceneLoop}
           videoSrc={currentBackgroundVideo.src}
-          staticOnly={sceneVideoThermalGuardActive && sceneVideoEnabled && hasSceneVideo}
+          staticOnly={(sceneVideoThermalGuardActive || sceneVideoBudgetStaticOnly) && sceneVideoEnabled && hasSceneVideo}
           videoEnabled={shouldRenderSceneVideo}
           audioEnabled={sceneAudioEnabled}
           audioSuspended={ambientSceneAudioSuppressed}
@@ -1886,6 +1894,16 @@ export function AmbientScreen({
         />
       )}
       {!isHifiMode && sceneVideoEnabled && hasSceneVideo ? <div className="ambient-vignette" /> : null}
+      {sceneVideoBudgetStaticOnly ? (
+        <span
+          className="ambient-performance-status"
+          role="status"
+          aria-live="polite"
+          title={`rAF p95 ${sceneRenderDiagnostics.rafP95Ms?.toFixed(0) ?? "?"}ms`}
+        >
+          {t("settings.audioCustom.smoothTransition")}
+        </span>
+      ) : null}
       {sceneGallery}
       <div
         className={`ambient-adjust-zone ambient-adjust-zone-left ${system.display.controllable ? "" : "is-disabled"}`}

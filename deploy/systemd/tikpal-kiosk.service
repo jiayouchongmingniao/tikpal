@@ -1,7 +1,7 @@
 [Unit]
 Description=Tikpal Chromium kiosk
-After=network.target tikpal-audio-adapt.service tikpal-api.service tikpal-web.service
-Wants=network.target tikpal-audio-adapt.service tikpal-api.service tikpal-web.service
+After=network.target tikpal-audio-adapt.service tikpal-api.service tikpal-web.service tikpal-kiosk-performance.service
+Wants=network.target tikpal-audio-adapt.service tikpal-api.service tikpal-web.service tikpal-kiosk-performance.service
 
 [Service]
 Type=simple

@@ -34,6 +34,9 @@ fi
 : "${TIKPAL_KIOSK_ACTIVE_DISPLAY_MODE:=$TIKPAL_KIOSK_DISPLAY_MODE}"
 : "${TIKPAL_KIOSK_XRANDR_MODE:=2560x720}"
 : "${TIKPAL_KIOSK_XRANDR_OUTPUT:=}"
+: "${TIKPAL_KIOSK_XRANDR_RATE:=}"
+: "${TIKPAL_KIOSK_XRANDR_USB_RATE:=29.95}"
+: "${TIKPAL_KIOSK_XRANDR_USB_OUTPUT_PATTERN:=^(DVI-I|DVI-D)-[0-9]+-[0-9]+$}"
 : "${TIKPAL_KIOSK_XRANDR_CLONE_OUTPUTS:=}"
 : "${TIKPAL_KIOSK_XRANDR_PRIMARY_PREFERRED_OUTPUTS:=HDMI-1 HDMI-A-1}"
 : "${TIKPAL_KIOSK_XRANDR_FALLBACK_TO_CONNECTED:=1}"
@@ -152,6 +155,17 @@ is_auto_xrandr_output() {
       return 1
       ;;
   esac
+}
+
+xrandr_rate_for_output() {
+  local output="$1"
+  if [[ -n "$TIKPAL_KIOSK_XRANDR_RATE" && "$TIKPAL_KIOSK_XRANDR_RATE" != "auto" ]]; then
+    printf '%s\n' "$TIKPAL_KIOSK_XRANDR_RATE"
+    return 0
+  fi
+  if [[ -n "$TIKPAL_KIOSK_XRANDR_USB_RATE" && "$TIKPAL_KIOSK_XRANDR_USB_RATE" != "auto" && "$TIKPAL_KIOSK_XRANDR_USB_RATE" != "none" && "$output" =~ $TIKPAL_KIOSK_XRANDR_USB_OUTPUT_PATTERN ]]; then
+    printf '%s\n' "$TIKPAL_KIOSK_XRANDR_USB_RATE"
+  fi
 }
 
 xrandr_output_connected() {
@@ -436,7 +450,10 @@ if [[ "$TIKPAL_KIOSK_ACTIVE_DISPLAY_MODE" != "virtual" && "$TIKPAL_KIOSK_XRANDR_
     if [[ -n "$RESOLVED_XRANDR_OUTPUT" ]]; then
       TIKPAL_KIOSK_XRANDR_OUTPUT="$RESOLVED_XRANDR_OUTPUT"
     fi
-    XRANDR_ARGS=(--output "$TIKPAL_KIOSK_XRANDR_OUTPUT" --mode "$TIKPAL_KIOSK_XRANDR_MODE" --primary)
+    XRANDR_ARGS=(--output "$TIKPAL_KIOSK_XRANDR_OUTPUT" --mode "$TIKPAL_KIOSK_XRANDR_MODE")
+    XRANDR_RATE="$(xrandr_rate_for_output "$TIKPAL_KIOSK_XRANDR_OUTPUT" || true)"
+    [[ -z "$XRANDR_RATE" ]] || XRANDR_ARGS+=(--rate "$XRANDR_RATE")
+    XRANDR_ARGS+=(--primary)
     if [[ -n "$TIKPAL_KIOSK_XRANDR_CLONE_OUTPUTS" ]]; then
       while IFS= read -r clone_output; do
         [[ -n "$clone_output" ]] || continue
