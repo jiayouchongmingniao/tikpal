@@ -90,6 +90,12 @@ target after a target detach. Without that rule the error page could be visible
 while the Manager stayed in discovery and the Guard lost the authoritative
 failure state.
 
+For the active QQ Music page only, the Guard may click the visible exact
+`开始播放` browser-autoplay acknowledgement. This command is foreground
+priority and non-replayable: it bypasses the Manager's background-maintenance
+throttle but cannot be transparently repeated. It does not automate login,
+membership, payment, authorization, download, or native-client prompts.
+
 ## Build and deployment
 
 `public/web-mode-error.html` is copied into `dist/` by `npm run build`. The

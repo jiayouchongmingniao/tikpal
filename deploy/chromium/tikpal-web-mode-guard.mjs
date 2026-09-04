@@ -436,7 +436,7 @@ function isNeteaseMusicPage(target) {
   }
 }
 
-function cdpCommand(wsUrl, method, params = {}) {
+function cdpCommand(wsUrl, method, params = {}, priority = "maintenance") {
   if (isManagerTarget(wsUrl)) {
     return managerRequest({
       op: "command",
@@ -445,7 +445,7 @@ function cdpCommand(wsUrl, method, params = {}) {
       method,
       params,
       retryable: false,
-      priority: "maintenance"
+      priority
     }).then((response) => {
       if (!response?.ok) throw new Error(response?.error || "CDP Manager command failed");
       return response.result || null;
@@ -483,12 +483,12 @@ function cdpCommand(wsUrl, method, params = {}) {
   });
 }
 
-function evaluate(wsUrl, expression) {
+function evaluate(wsUrl, expression, priority = "maintenance") {
   return cdpCommand(wsUrl, "Runtime.evaluate", {
     expression,
     awaitPromise: true,
     returnByValue: true
-  }).then((result) => result?.result?.value ?? null);
+  }, priority).then((result) => result?.result?.value ?? null);
 }
 
 const kioskGuardScript = `(() => {
@@ -2739,7 +2739,7 @@ async function runSafePromptFeatures(targets) {
   const target = providerTargets.find(Boolean);
   if (!target) return;
   if (providerId === "qq_music") {
-    const startPlaybackPrompt = await evaluate(target.webSocketDebuggerUrl, qqStartPlaybackExpression).catch(() => null);
+    const startPlaybackPrompt = await evaluate(target.webSocketDebuggerUrl, qqStartPlaybackExpression, "foreground").catch(() => null);
     if (startPlaybackPrompt?.handled) {
       console.log("[tikpal-web-mode-guard] clicked QQ start playback popup");
       return;

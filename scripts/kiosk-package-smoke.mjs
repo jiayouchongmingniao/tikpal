@@ -2817,6 +2817,7 @@ sync_runtime_provider_pool_process_statuses ""
   assert(providerGuardSource.includes("qqReminderCancelExpression"), "QQ reminder cancellation should remain separate from client-prompt replay");
   assert(providerGuardSource.includes("qqStartPlaybackExpression"), "QQ start-playback handling should remain separate from generic prompt confirmation");
   assert(providerGuardSource.includes('textOf(element) === "开始播放"'), "QQ start-playback handling should click only the exact Start Playback action");
+  assert(providerGuardSource.includes('qqStartPlaybackExpression, "foreground"'), "QQ start-playback handling should bypass Manager maintenance throttling without becoming replayable");
   const safePromptFeaturesOffset = providerGuardSource.indexOf("async function runSafePromptFeatures");
   assert(
     providerGuardSource.indexOf("qqStartPlaybackExpression", safePromptFeaturesOffset) < providerGuardSource.indexOf("qqReminderCancelExpression", safePromptFeaturesOffset),
