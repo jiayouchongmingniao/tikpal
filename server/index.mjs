@@ -14960,6 +14960,7 @@ async function applyWebModeAction(action, { receivedMonotonicMs = monotonicNowMs
   const isInitialEntry = !previousRuntimeState.activeProvider;
   const isResidentSwitch = Boolean(previousRuntimeState.activeProvider)
     && previousRuntimeState.activeProvider !== providerId;
+  const initialEntryStartedMonotonicMs = isInitialEntry ? monotonicNowMs() : 0;
   const trace = isResidentSwitch
     ? await consumeWebModeSwitchTraceContext(previousRuntimeState.activeProvider, providerId)
     : null;
@@ -14989,6 +14990,14 @@ async function applyWebModeAction(action, { receivedMonotonicMs = monotonicNowMs
     }, trace);
     recordWebModeSwitchTraceEvent(trace, "opening_provider_written");
     logWebModeEntryStage("request_persisted", { requestId: openRequestId, providerId, xSessionGeneration });
+    if (isInitialEntry) {
+      logWebModeEntryStage("initial_entry_timing_started", {
+        requestId: openRequestId,
+        providerId,
+        xSessionGeneration,
+        detail: { elapsedMs: monotonicNowMs() - initialEntryStartedMonotonicMs }
+      });
+    }
 
     // Resident switches return immediately, but activeProvider remains the
     // physically visible provider until the launcher has revealed the target.
@@ -15003,31 +15012,69 @@ async function applyWebModeAction(action, { receivedMonotonicMs = monotonicNowMs
     if (isInitialEntry) {
       await requireCurrentWebModeOpenRequest(providerId, openRequestId, xSessionGeneration, "entry-prepare-start");
       logWebModeEntryStage("handoff_capture_started", { requestId: openRequestId, providerId, xSessionGeneration });
+      const handoffStartedMonotonicMs = monotonicNowMs();
       const handoff = await captureWebModePlaybackHandoff();
-      logWebModeEntryStage("handoff_capture_completed", { requestId: openRequestId, providerId, xSessionGeneration });
+      logWebModeEntryStage("handoff_capture_completed", {
+        requestId: openRequestId,
+        providerId,
+        xSessionGeneration,
+        detail: { elapsedMs: monotonicNowMs() - handoffStartedMonotonicMs }
+      });
       // The full-width entry veil and parked panel do not expose a provider or
       // browser audio. Stage them while Scene/MPD releases audio, then keep
       // the actual provider open behind that completed audio gate.
       entryPreparationStarted = true;
+      let audioPauseElapsedMs = null;
+      let entryPreparationElapsedMs = null;
       const [pauseResult, preparationResult] = await Promise.allSettled([
         (async () => {
           logWebModeEntryStage("audio_pause_started", { requestId: openRequestId, providerId, xSessionGeneration });
+          const audioPauseStartedMonotonicMs = monotonicNowMs();
           await pauseTikpalForWebMode(handoff.sourceId);
-          logWebModeEntryStage("audio_pause_completed", { requestId: openRequestId, providerId, xSessionGeneration });
+          audioPauseElapsedMs = monotonicNowMs() - audioPauseStartedMonotonicMs;
+          logWebModeEntryStage("audio_pause_completed", {
+            requestId: openRequestId,
+            providerId,
+            xSessionGeneration,
+            detail: { elapsedMs: audioPauseElapsedMs }
+          });
         })(),
         (async () => {
           logWebModeEntryStage("entry_prepare_started", { requestId: openRequestId, providerId, xSessionGeneration });
+          const entryPreparationStartedMonotonicMs = monotonicNowMs();
           await prepareWebModeEntry(providerId, openRequestId, xSessionGeneration);
-          logWebModeEntryStage("entry_prepare_completed", { requestId: openRequestId, providerId, xSessionGeneration });
+          entryPreparationElapsedMs = monotonicNowMs() - entryPreparationStartedMonotonicMs;
+          logWebModeEntryStage("entry_prepare_completed", {
+            requestId: openRequestId,
+            providerId,
+            xSessionGeneration,
+            detail: { elapsedMs: entryPreparationElapsedMs }
+          });
         })()
       ]);
       if (pauseResult.status === "rejected") throw pauseResult.reason;
       if (preparationResult.status === "rejected") throw preparationResult.reason;
       await requireCurrentWebModeOpenRequest(providerId, openRequestId, xSessionGeneration, "entry-prepare-complete");
+      logWebModeEntryStage("initial_entry_ready", {
+        requestId: openRequestId,
+        providerId,
+        xSessionGeneration,
+        detail: {
+          elapsedMs: monotonicNowMs() - initialEntryStartedMonotonicMs,
+          audioPauseElapsedMs,
+          entryPreparationElapsedMs
+        }
+      });
     }
 
     providerOpenCommandStarted = true;
-    logWebModeEntryStage("provider_open_started", { requestId: openRequestId, providerId, xSessionGeneration });
+    const providerOpenStartedMonotonicMs = monotonicNowMs();
+    logWebModeEntryStage("provider_open_started", {
+      requestId: openRequestId,
+      providerId,
+      xSessionGeneration,
+      detail: isInitialEntry ? { initialEntryElapsedMs: providerOpenStartedMonotonicMs - initialEntryStartedMonotonicMs } : null
+    });
     await runWebModeCommand("open", providerId, webModeOpenCommandEnv(providerId, openRequestId, xSessionGeneration, {
       TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS: "25"
     }));
@@ -15038,7 +15085,15 @@ async function applyWebModeAction(action, { receivedMonotonicMs = monotonicNowMs
     if (await webModeOpenRequestIsCurrent(providerId, openRequestId, xSessionGeneration)) {
       await commitWebModeOpenRequestIfOwned(providerId, openRequestId, xSessionGeneration);
     }
-    logWebModeEntryStage("provider_open_completed", { requestId: openRequestId, providerId, xSessionGeneration });
+    logWebModeEntryStage("provider_open_completed", {
+      requestId: openRequestId,
+      providerId,
+      xSessionGeneration,
+      detail: {
+        commandElapsedMs: monotonicNowMs() - providerOpenStartedMonotonicMs,
+        ...(isInitialEntry ? { initialEntryElapsedMs: monotonicNowMs() - initialEntryStartedMonotonicMs } : {})
+      }
+    });
   } catch (error) {
     const message = formatWebModeCommandError(error, "open", providerId);
     logWebModeEntryStage("request_failed", {

@@ -5,6 +5,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as wait } from "node:timers/promises";
+import { createExploreCloseRequestId, isExploreCloseMessage } from "../src/exploreCloseVeil.ts";
 import { ExploreOpenVeilController } from "../src/exploreOpenVeil.ts";
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
@@ -171,6 +172,17 @@ async function testVeilOwnership() {
   controller.dispose();
 }
 
+function testCloseVeilMessageContract() {
+  assert.match(createExploreCloseRequestId(), /^close-/);
+  assert.equal(isExploreCloseMessage({ type: "cover-requested", requestId: "close-request" }), true);
+  assert.equal(isExploreCloseMessage({ type: "cover-ready", requestId: "close-request" }), true);
+  assert.equal(isExploreCloseMessage({ type: "failed", requestId: "close-request" }), true);
+  assert.equal(isExploreCloseMessage({ type: "closed", requestId: "close-request", state: { activeProvider: null } }), true);
+  assert.equal(isExploreCloseMessage({ type: "closed", requestId: "" }), false);
+  assert.equal(isExploreCloseMessage({ type: "cover-ready" }), false);
+  assert.equal(isExploreCloseMessage("closing"), false);
+}
+
 async function testInitialOpeningAndWatchdogBypass() {
   const api = await startApi("success", { prepareSleepSeconds: 0.6 });
   try {
@@ -237,6 +249,12 @@ async function testInitialOpeningAndWatchdogBypass() {
     const commands = readCommands(api.paths).filter((entry) => entry.action === "prepare-entry" || entry.action === "open");
     assert(commands.every((entry) => entry.requestId === requestId && entry.generation === "session-1"));
     assert.match(api.output(), /\[tikpal-kiosk-heartbeat\].*"currentTime":12\.5/);
+    assert.match(api.output(), /"stage":"initial_entry_timing_started"/);
+    assert.match(api.output(), /"stage":"handoff_capture_completed".*"elapsedMs":/);
+    assert.match(api.output(), /"stage":"audio_pause_completed".*"elapsedMs":/);
+    assert.match(api.output(), /"stage":"entry_prepare_completed".*"elapsedMs":/);
+    assert.match(api.output(), /"stage":"initial_entry_ready".*"audioPauseElapsedMs":/);
+    assert.match(api.output(), /"stage":"provider_open_completed".*"commandElapsedMs":/);
   } finally {
     await api.stop();
   }
@@ -441,6 +459,7 @@ async function testTimeoutClearsOpeningState() {
 }
 
 await testVeilOwnership();
+testCloseVeilMessageContract();
 await testInitialOpeningAndWatchdogBypass();
 await testStaleOpeningDoesNotBypassWatchdog();
 await testFallbackCorrelation();

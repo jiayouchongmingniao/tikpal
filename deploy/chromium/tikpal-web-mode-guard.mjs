@@ -176,6 +176,8 @@ const qqMvCinemaStates = new Map();
 const qqMvAutoPlayStates = new Map();
 const neteaseAutoPlayStates = new Map();
 const pendingResidentStatus = new Set();
+let managerFriendlyError = null;
+let reportedManagerFriendlyError = "";
 let lastOnboardVisible = null;
 let lastOnboardActionMs = 0;
 const providerNativeFailureIds = new Set(["amazon_music", "qobuz", "deezer"]);
@@ -254,8 +256,10 @@ function providerIsActive() {
 async function readTargets() {
   if (cdpSessionManagerEnabled) {
     const response = await managerRequest({ op: "targets", provider: managerProviderId, priority: "maintenance" });
+    managerFriendlyError = response?.ok ? response.target?.friendlyError || null : null;
     return response?.ok ? response.targets || [] : [];
   }
+  managerFriendlyError = null;
   const response = await fetch(`http://127.0.0.1:${port}/json`, {
     signal: AbortSignal.timeout(800)
   });
@@ -373,8 +377,33 @@ function writeResidentProviderStatus(status) {
 }
 
 function syncResidentProviderStatus(targets, active) {
+  if (managerFriendlyError || targets.some((target) => redirectedTargets.has(target.id) || isFriendlyErrorPage(target))) return;
   if (!targets.some(isExpectedProviderPage)) return;
   writeResidentProviderStatus(active ? "active" : "ready");
+}
+
+function syncManagerFriendlyErrorStatus() {
+  const failure = managerFriendlyError;
+  if (!failure || !providerId) {
+    reportedManagerFriendlyError = "";
+    return;
+  }
+  const status = failure.status === "check_proxy" ? "check_proxy" : "check_setup";
+  const key = `${status}:${String(failure.reason || "load_failed")}`;
+  if (reportedManagerFriendlyError === key) return;
+  reportedManagerFriendlyError = key;
+  const message = status === "check_proxy"
+    ? `${providerLabel} proxy unavailable`
+    : `${providerLabel} connection unavailable`;
+  const child = spawn(launcherPath, ["provider-status", providerId, status, message], {
+    detached: true,
+    stdio: "ignore"
+  });
+  child.once("error", () => { reportedManagerFriendlyError = ""; });
+  child.once("exit", (code) => {
+    if (code !== 0) reportedManagerFriendlyError = "";
+  });
+  child.unref();
 }
 
 function isQqMusicPage(target) {
@@ -889,8 +918,14 @@ function parseErrorReason(text, title, href) {
   if (String(`${title || ""} ${text || ""}`).includes("empty_page_timeout")) return "empty_page_timeout";
   const nativeReason = providerNativeFailureReason(text, title, href);
   if (nativeReason) return nativeReason;
-  const match = String(`${title || ""} ${text || ""}`).match(/\b(?:ERR|DNS)_[A-Z0-9_]+\b/);
-  if (match) return match[0];
+  const detail = String(`${title || ""} ${text || ""}`).toUpperCase();
+  if (/ERR_(?:PROXY_CONNECTION_FAILED|TUNNEL_CONNECTION_FAILED|PROXY_AUTH_UNSUPPORTED|PROXY_CERTIFICATE_INVALID)/.test(detail)) {
+    return "proxy_unreachable";
+  }
+  if (/ERR_(?:TIMED_OUT|CONNECTION_TIMED_OUT)/.test(detail)) return "connection_timeout";
+  if (/ERR_(?:NAME_NOT_RESOLVED|INTERNET_DISCONNECTED|NETWORK_CHANGED|CONNECTION_REFUSED|CONNECTION_RESET|CONNECTION_CLOSED)/.test(detail)) {
+    return "site_unreachable";
+  }
   if (/no healthy upstream|upstream connect error|bad gateway|service unavailable|gateway timeout/i.test(`${title || ""} ${text || ""}`)) {
     return "upstream_unavailable";
   }
@@ -901,8 +936,12 @@ function parseErrorReason(text, title, href) {
 }
 
 function attachEarlyErrorRedirect(target) {
-  if (!isExpectedProviderPage(target) || earlyRedirectTargets.has(target.id)) return;
-  earlyRedirectTargets.add(target.id);
+  if (!isExpectedProviderPage(target)) return;
+  const targetKey = isManagerTarget(target.webSocketDebuggerUrl)
+    ? `${target.id}:${target.managerSessionGeneration || 0}`
+    : target.id;
+  if (earlyRedirectTargets.has(targetKey)) return;
+  earlyRedirectTargets.add(targetKey);
 
   if (isManagerTarget(target.webSocketDebuggerUrl)) {
     managerRequest({
@@ -910,8 +949,9 @@ function attachEarlyErrorRedirect(target) {
       provider: managerProviderId,
       targetId: target.id,
       errorPageUrl: errorPageUrl("load_failed"),
+      failureStatus: proxyMode === "proxy" ? "check_proxy" : "check_setup",
       priority: "maintenance"
-    }).catch(() => earlyRedirectTargets.delete(target.id));
+    }).catch(() => earlyRedirectTargets.delete(targetKey));
     return;
   }
 
@@ -949,10 +989,10 @@ function attachEarlyErrorRedirect(target) {
     }
   });
   ws.addEventListener("close", () => {
-    earlyRedirectTargets.delete(target.id);
+    earlyRedirectTargets.delete(targetKey);
   });
   ws.addEventListener("error", () => {
-    earlyRedirectTargets.delete(target.id);
+    earlyRedirectTargets.delete(targetKey);
   });
 }
 
@@ -2930,7 +2970,11 @@ async function guardOnce() {
   if (typeof WebSocket !== "function") return;
   const runtimeState = readProviderRuntimeState();
   const { active, opening, deactivating, frozen } = runtimeState;
-  if (frozen) return;
+  if (frozen) {
+    await readTargets();
+    syncManagerFriendlyErrorStatus();
+    return;
+  }
   const schedule = providerGuardSchedule(providerId, active, spotifyActivePass);
   const audioGateEnabled = providerAudioGateEnabled(opening);
   const audioGateActive = providerAudioGateActive(active, deactivating);
@@ -2943,6 +2987,7 @@ async function guardOnce() {
     console.log(`[tikpal-web-mode-guard] spotify schedule active=${active ? 1 : 0} opening=${opening ? 1 : 0} deactivating=${deactivating ? 1 : 0} active_pass=${spotifyActivePass} inactive_pass=${spotifyInactivePass} opening_pass=${spotifyOpeningPass} phase=${phase} runtime=${runtimeMaintenanceEnabled ? 1 : 0} audio_gate_owner=${audioGateEnabled ? 1 : 0} audio_active=${audioGateActive ? 1 : 0} consent=${schedule.consent ? 1 : 0} dismiss=${schedule.dismiss ? 1 : 0}`);
   }
   const targets = (await readTargets()).filter(isPageTarget);
+  syncManagerFriendlyErrorStatus();
   // While Spotify is opening, the foreground switch exclusively owns Runtime
   // until its one bounded setActive(true) call and active-state commit finish.
   // The resident status sync below is file/process based and does not touch CDP.
@@ -2953,7 +2998,7 @@ async function guardOnce() {
   await Promise.all(targets.map(async (target) => {
     attachEarlyErrorRedirect(target);
     await installKioskGuard(target);
-    await maybeRedirectErrorPage(target);
+    if (!isManagerTarget(target.webSocketDebuggerUrl)) await maybeRedirectErrorPage(target);
   }));
   syncResidentProviderStatus(targets, active);
   // The foreground switch exclusively owns setActive(true) for the opening

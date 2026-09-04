@@ -9462,7 +9462,7 @@ select {
   background: #080b0e;
   opacity: 0;
   visibility: hidden;
-  transition: opacity 0s, visibility 0s;
+  transition: opacity 250ms ease-out, visibility 0s linear 250ms;
   pointer-events: none;
 }
 

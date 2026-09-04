@@ -49,6 +49,36 @@ function errorCode(error) {
 function isHttpsPage(info) {
   return info?.type === "page" && typeof info.url === "string" && info.url.startsWith("https://");
 }
+function friendlyErrorFromUrl(value) {
+  try {
+    const url = new URL(String(value || ""));
+    if (url.protocol !== "http:" || !["127.0.0.1", "localhost"].includes(url.hostname) || url.port !== "4173" || !url.pathname.endsWith("/web-mode-error.html")) {
+      return null;
+    }
+    return {
+      reason: friendlyFailureReason(url.searchParams.get("reason") || "load_failed"),
+      status: url.searchParams.get("proxy") === "proxy" ? "check_proxy" : "check_setup"
+    };
+  } catch {
+    return null;
+  }
+}
+function isHttpsUrl(value) {
+  return String(value || "").startsWith("https://");
+}
+function friendlyFailureReason(detail = "") {
+  const normalized = String(detail || "").trim().toLowerCase();
+  if (["proxy_unreachable", "connection_timeout", "site_unreachable", "load_failed"].includes(normalized)) return normalized;
+  const value = normalized.toUpperCase();
+  if (/ERR_(?:PROXY_CONNECTION_FAILED|TUNNEL_CONNECTION_FAILED|PROXY_AUTH_UNSUPPORTED|PROXY_CERTIFICATE_INVALID)/.test(value)) {
+    return "proxy_unreachable";
+  }
+  if (/ERR_(?:TIMED_OUT|CONNECTION_TIMED_OUT)/.test(value)) return "connection_timeout";
+  if (/ERR_(?:NAME_NOT_RESOLVED|INTERNET_DISCONNECTED|NETWORK_CHANGED|CONNECTION_REFUSED|CONNECTION_RESET|CONNECTION_CLOSED)/.test(value)) {
+    return "site_unreachable";
+  }
+  return "load_failed";
+}
 function canReplay(method, params) {
   if (method === "Page.bringToFront") return true;
   if (method !== "Runtime.evaluate") return false;
@@ -87,6 +117,8 @@ class ProviderSession {
     this.running = false;
     this.connecting = null;
     this.errorPageUrl = "";
+    this.errorStatus = "check_setup";
+    this.friendlyError = null;
     this.redirectedDocumentGeneration = -1;
     this.lifecycleState = "active";
   }
@@ -103,6 +135,7 @@ class ProviderSession {
       recoveryCount: this.recoveryCount,
       failedRecoveryCount: this.failedRecoveryCount,
       lastError: this.lastError || null,
+      friendlyError: this.friendlyError,
       lastReadyAt: this.lastReadyAt || null,
       lifecycleState: this.lifecycleState,
       url: this.targetId ? (this.targetInfos.get(this.targetId)?.url || null) : null,
@@ -119,7 +152,6 @@ class ProviderSession {
   invalidateSession(reason = "session_invalid") {
     this.sessionId = "";
     this.targetId = "";
-    this.errorPageUrl = "";
     this.redirectedDocumentGeneration = -1;
     this.lifecycleState = "active";
     if (this.ws) this.setState("RECOVERING", reason);
@@ -230,18 +262,43 @@ class ProviderSession {
       this.invalidateSession("inspector_detached");
     }
     if (method === "Page.frameNavigated" && sessionId === this.sessionId && !params.frame?.parentId) {
+      const frameUrl = String(params.frame?.url || "");
+      const unreachableUrl = String(params.frame?.unreachableUrl || "");
       this.documentGeneration += 1;
       this.redirectedDocumentGeneration = -1;
+      if (this.errorPageUrl && (frameUrl.startsWith("chrome-error://") || unreachableUrl)) {
+        this.redirectToFriendlyError(unreachableUrl ? "site_unreachable" : friendlyFailureReason(frameUrl));
+      } else if (isHttpsUrl(frameUrl)) {
+        this.friendlyError = null;
+      }
       publishState();
     }
     if (method === "Page.loadingFailed" && sessionId === this.sessionId &&
         params.type === "Document" && this.errorPageUrl && this.redirectedDocumentGeneration !== this.documentGeneration) {
       const detail = String(params.errorText || "");
       if (!/ERR_ABORTED|NS_BINDING_ABORTED/i.test(detail)) {
-        this.redirectedDocumentGeneration = this.documentGeneration;
-        this.sendSession("Page.navigate", { url: this.errorPageUrl }).catch(() => {});
+        this.redirectToFriendlyError(friendlyFailureReason(detail));
       }
     }
+  }
+
+  redirectToFriendlyError(reason) {
+    if (!this.errorPageUrl || this.redirectedDocumentGeneration === this.documentGeneration) return;
+    let url;
+    try {
+      url = new URL(this.errorPageUrl);
+    } catch {
+      return;
+    }
+    const normalizedReason = friendlyFailureReason(reason);
+    url.searchParams.set("reason", normalizedReason);
+    this.redirectedDocumentGeneration = this.documentGeneration;
+    this.friendlyError = {
+      reason: normalizedReason,
+      status: this.errorStatus
+    };
+    publishState();
+    this.sendSession("Page.navigate", { url: url.href }).catch(() => {});
   }
 
   updateTargets(infos) {
@@ -301,19 +358,21 @@ class ProviderSession {
     return this.send(method, params, this.sessionId);
   }
 
-  currentHttpsTarget() {
+  currentManagedTarget() {
     if (this.targetId) {
       const current = this.targetInfos.get(this.targetId);
-      if (isHttpsPage(current)) return current;
+      if (isHttpsPage(current) || friendlyErrorFromUrl(current?.url)) return current;
     }
-    return [...this.targetInfos.values()].find(isHttpsPage) || null;
+    return [...this.targetInfos.values()].find(isHttpsPage)
+      || [...this.targetInfos.values()].find((info) => friendlyErrorFromUrl(info?.url))
+      || null;
   }
 
   async attach() {
-    const target = this.currentHttpsTarget();
+    const target = this.currentManagedTarget();
     if (!target) {
-      this.setState("DISCOVERING", "no_real_https_page");
-      throw new Error("no real HTTPS page target");
+      this.setState("DISCOVERING", "no_provider_or_friendly_page");
+      throw new Error("no provider or friendly error page target");
     }
     if (this.targetId === target.targetId && this.sessionId && this.state === "READY") return;
     this.setState("ATTACHING");
@@ -331,6 +390,9 @@ class ProviderSession {
     }
     await this.sendSession("Runtime.enable");
     await this.sendSession("Page.enable");
+    const friendlyError = friendlyErrorFromUrl(target.url);
+    if (friendlyError) this.friendlyError = friendlyError;
+    else if (isHttpsPage(target)) this.friendlyError = null;
     this.lastReadyAt = nowMs();
     this.setState("READY");
   }
@@ -420,6 +482,8 @@ class ProviderSession {
       await this.ensureReady();
       if (request.targetId && request.targetId !== this.targetId) throw new Error("early-error target is not attached target");
       this.errorPageUrl = String(request.errorPageUrl || "");
+      this.errorStatus = request.failureStatus === "check_proxy" ? "check_proxy" : "check_setup";
+      this.friendlyError = null;
       this.redirectedDocumentGeneration = -1;
       return { ok: true, provider: this.id, target: this.snapshot(), timings: { totalMs: nowMs() - started } };
     }

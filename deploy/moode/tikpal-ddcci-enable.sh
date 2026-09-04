@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Enable DDC/CI display brightness control for Tikpal on a Raspberry Pi/moOde host.
+# Enable DDC/CI display brightness control for Tikpal on a Debian or Gentoo host.
 # Run with sudo from any directory after the app checkout exists.
 
 SERVICE_USER="${SERVICE_USER:-moode}"
 APP_DIR="${APP_DIR:-/home/${SERVICE_USER}/code/tikpal}"
 TIKPAL_DDCUTIL_BIN="${TIKPAL_DDCUTIL_BIN:-ddcutil}"
 TIKPAL_DDCUTIL_DISPLAY="${TIKPAL_DDCUTIL_DISPLAY:-${DDCUTIL_DISPLAY:-}}"
+BACKUP_SUFFIX="${TIKPAL_DDCCI_BACKUP_SUFFIX:-tikpal-ddcci.$(date -u +%Y%m%d%H%M%S)}"
 
 log() {
   printf '\n[tikpal-ddcci] %s\n' "$*"
@@ -15,6 +16,11 @@ log() {
 
 warn() {
   printf '\n[tikpal-ddcci] WARN: %s\n' "$*" >&2
+}
+
+die() {
+  printf '\n[tikpal-ddcci] ERROR: %s\n' "$*" >&2
+  exit 1
 }
 
 require_root() {
@@ -66,8 +72,16 @@ set_env_value() {
 
 configure_packages() {
   log "Installing ddcutil and i2c-tools"
-  DEBIAN_FRONTEND=noninteractive apt-get update -y
-  DEBIAN_FRONTEND=noninteractive apt-get install -y ddcutil i2c-tools
+  if command -v emerge >/dev/null 2>&1; then
+    emerge --ask=n app-misc/ddcutil sys-apps/i2c-tools
+    return
+  fi
+  if command -v apt-get >/dev/null 2>&1; then
+    DEBIAN_FRONTEND=noninteractive apt-get update -y
+    DEBIAN_FRONTEND=noninteractive apt-get install -y ddcutil i2c-tools
+    return
+  fi
+  die "unsupported package manager; install ddcutil and i2c-tools, then rerun"
 }
 
 configure_i2c_access() {
@@ -77,9 +91,11 @@ configure_i2c_access() {
   fi
   usermod -aG i2c "$SERVICE_USER"
 
+  backup_file /etc/modules-load.d/tikpal-ddcci.conf "$BACKUP_SUFFIX"
   printf 'i2c-dev\n' > /etc/modules-load.d/tikpal-ddcci.conf
   modprobe i2c-dev || warn "modprobe i2c-dev failed; reboot may be required"
 
+  backup_file /etc/udev/rules.d/45-tikpal-ddcci-i2c.rules "$BACKUP_SUFFIX"
   cat > /etc/udev/rules.d/45-tikpal-ddcci-i2c.rules <<'EOF_UDEV'
 # Allow the Tikpal service user, via the i2c group, to access DDC/CI adapters.
 KERNEL=="i2c-[0-9]*", GROUP="i2c", MODE="0660"
@@ -112,10 +128,16 @@ configure_boot_i2c() {
 configure_tikpal_env() {
   local env_file="$APP_DIR/.env"
   log "Writing Tikpal DDC/CI env to $env_file"
+  if [[ -e "$env_file" ]]; then
+    backup_file "$env_file" "$BACKUP_SUFFIX"
+  else
+    mkdir -p "$(dirname "$env_file")"
+    touch "$env_file"
+    chown "$SERVICE_USER:$SERVICE_USER" "$env_file"
+    chmod 0640 "$env_file"
+  fi
   set_env_value "$env_file" TIKPAL_DDCUTIL_BIN "$TIKPAL_DDCUTIL_BIN"
   set_env_value "$env_file" TIKPAL_DDCUTIL_DISPLAY "$TIKPAL_DDCUTIL_DISPLAY"
-  chown "$SERVICE_USER:$SERVICE_USER" "$env_file"
-  chmod 0640 "$env_file"
 }
 
 probe_ddcci() {
@@ -130,6 +152,7 @@ probe_ddcci() {
 
   if ! sudo -H -u "$SERVICE_USER" "${ddc_cmd[@]}" getvcp 10 --brief; then
     warn "DDC/CI VCP 0x10 brightness is not readable as ${SERVICE_USER}; reboot or monitor support may be required"
+    return 1
   fi
 }
 
@@ -138,8 +161,13 @@ main() {
   configure_packages
   configure_i2c_access
   configure_boot_i2c
-  configure_tikpal_env
+  if [[ -z "$TIKPAL_DDCUTIL_DISPLAY" ]]; then
+    log "Probing DDC/CI displays before writing Tikpal configuration"
+    "$TIKPAL_DDCUTIL_BIN" detect --brief || warn "ddcutil detect failed; check HDMI/DDC wiring and display support"
+    die "set TIKPAL_DDCUTIL_DISPLAY to the one verified Corsair display number, then rerun; no Tikpal DDC configuration was written"
+  fi
   probe_ddcci
+  configure_tikpal_env
 
   log "Done. Restart tikpal-api.service after changing .env, and reboot if /dev/i2c-* did not appear."
 }

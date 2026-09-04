@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react"
 import { Apple, Cloud, Gem, Globe2, Music2, PanelRightClose, ShoppingBag, SquarePlay, Type, Volume2 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { fetchTikpalState, fetchWebModeState, sendPlaybackAction, sendWebModeAction } from "../api/tikpalClient";
+import { createExploreCloseRequestId, EXPLORE_CLOSE_CHANNEL, EXPLORE_CLOSE_COVER_FALLBACK_MS, isExploreCloseMessage, type ExploreCloseMessage } from "../exploreCloseVeil";
 import { useI18n } from "../i18n";
 import type { TikpalState, WebModeProviderId, WebModeProviderSummary, WebModeState } from "../types";
 
@@ -80,6 +81,43 @@ function isProxyNeededError(error: string | null, providerId: WebModeProviderId 
   if (!error || !providerId) return false;
   const normalizedError = error.trim().toLowerCase();
   return normalizedError.startsWith(providerLabels[providerId].toLowerCase()) && /\bneeds proxy(?: on)?\b/.test(normalizedError);
+}
+
+function postExploreCloseMessage(message: ExploreCloseMessage) {
+  if (typeof BroadcastChannel === "undefined") return;
+  try {
+    const channel = new BroadcastChannel(EXPLORE_CLOSE_CHANNEL);
+    channel.postMessage(message);
+    channel.close();
+  } catch {}
+}
+
+function waitForExploreCloseCover(requestId: string) {
+  if (typeof BroadcastChannel === "undefined") return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    let settled = false;
+    let channel: BroadcastChannel | null = null;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      channel?.close();
+      resolve();
+    };
+    try {
+      channel = new BroadcastChannel(EXPLORE_CLOSE_CHANNEL);
+      channel.onmessage = (event) => {
+        if (!isExploreCloseMessage(event.data)) return;
+        const message = event.data;
+        if (message.type === "cover-ready" && message.requestId === requestId) finish();
+      };
+      timer = setTimeout(finish, EXPLORE_CLOSE_COVER_FALLBACK_MS + 100);
+      channel.postMessage({ type: "cover-requested", requestId });
+    } catch {
+      finish();
+    }
+  });
 }
 
 export function WebModeSidePanel() {
@@ -338,13 +376,15 @@ export function WebModeSidePanel() {
     actionLockRef.current = true;
     setPendingAction("close");
     pendingActionRef.current = "close";
-   try { new BroadcastChannel("tikpal-explore-close").postMessage("closing"); } catch {}
-   setError(null);
+    const closeRequestId = createExploreCloseRequestId();
+    setError(null);
     optimisticProviderRef.current = null;
-    await new Promise(r => setTimeout(r, 3050));
+    await waitForExploreCloseCover(closeRequestId);
     try {
-      await sendWebModeAction({ type: "close" });
+      const next = await sendWebModeAction({ type: "close" });
+      postExploreCloseMessage({ type: "closed", requestId: closeRequestId, state: next });
     } catch (nextError) {
+      postExploreCloseMessage({ type: "failed", requestId: closeRequestId });
       setError(nextError instanceof Error ? nextError.message : "Close failed");
     } finally {
       // Release the action lock so other actions are not blocked, but keep

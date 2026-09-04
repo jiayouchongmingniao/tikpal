@@ -9,14 +9,82 @@
         color-scheme: dark;
         background: #05070c;
         color: #f7fbff;
-        font-family:
+        --app-font-family:
           Inter,
-          ui-sans-serif,
-          system-ui,
-          -apple-system,
-          BlinkMacSystemFont,
+          "SF Pro Display",
+          "SF Pro Text",
+          "Helvetica Neue",
+          "Noto Sans CJK SC",
+          "Noto Sans CJK JP",
+          "Noto Sans CJK KR",
+          "Source Han Sans CN",
+          "PingFang SC",
+          "WenQuanYi Zen Hei",
           "Segoe UI",
           sans-serif;
+        font-family: var(--app-font-family);
+      }
+
+      :root[data-font-theme="serif"] {
+        --app-font-family:
+          "Noto Serif CJK SC",
+          "Noto Serif CJK JP",
+          "Noto Serif CJK KR",
+          "Iowan Old Style",
+          "Palatino Linotype",
+          "Book Antiqua",
+          Georgia,
+          "Times New Roman",
+          "Songti SC",
+          serif;
+      }
+
+      :root[data-font-theme="hardware"] {
+        --app-font-family:
+          "Noto Sans CJK SC",
+          "Noto Sans CJK JP",
+          "Noto Sans CJK KR",
+          "Source Han Sans CN",
+          "WenQuanYi Zen Hei",
+          Inter,
+          sans-serif;
+      }
+
+      :root[data-font-theme="precision"] {
+        --app-font-family:
+          "Source Han Sans CN",
+          "Noto Sans CJK SC",
+          "Noto Sans CJK JP",
+          "Noto Sans CJK KR",
+          "PingFang SC",
+          Inter,
+          sans-serif;
+      }
+
+      :root[data-font-theme="sans"] {
+        --app-font-family:
+          Inter,
+          Roboto,
+          "Fira Sans",
+          "SF Pro Display",
+          "Helvetica Neue",
+          "Noto Sans CJK SC",
+          "Noto Sans CJK JP",
+          "Noto Sans CJK KR",
+          "Source Han Sans CN",
+          sans-serif;
+      }
+
+      :root[data-font-theme="mono"] {
+        --app-font-family:
+          "Noto Sans Mono CJK SC",
+          "Noto Sans Mono CJK JP",
+          "Noto Sans Mono CJK KR",
+          "SF Mono",
+          "IBM Plex Mono",
+          "JetBrains Mono",
+          "Cascadia Mono",
+          monospace;
       }
 
       * {
@@ -238,14 +306,18 @@
         };
         const params = new URLSearchParams(location.search);
         const normalizeLocale = (value) => Object.prototype.hasOwnProperty.call(copy, value || "") ? value : "en";
+        const normalizeFontTheme = (value) => ["system", "hardware", "precision", "sans", "serif", "mono"].includes(value) ? value : "system";
         const friendlyReason = (dict) => {
           const value = String(params.get("reason") || "load_failed").trim();
           const normalized = value.toLowerCase();
+          const proxyActive = params.get("proxy") === "proxy";
           if (/\bneeds proxy(?: on)?\b/.test(normalized)) return dict.needsProxy;
           if (normalized.includes("proxy did not connect")) return dict.proxyFailed;
           if (normalized === "region_unavailable") return dict.regionReason;
-          if (normalized === "load_failed" || normalized.includes("did not respond") || normalized.includes("did not open")) return dict.tryAgain;
-          return value;
+          if (normalized === "proxy_unreachable") return dict.proxyFailed;
+          if (normalized === "connection_timeout") return proxyActive ? dict.proxyFailed : dict.tryAgain;
+          if (normalized === "site_unreachable" || normalized === "load_failed" || normalized.includes("did not respond") || normalized.includes("did not open")) return dict.tryAgain;
+          return dict.tryAgain;
         };
         const applyLocale = (localeValue) => {
           const locale = normalizeLocale(localeValue);
@@ -267,6 +339,7 @@
           .then((response) => response.ok ? response.json() : null)
           .then((preferences) => {
             if (preferences && preferences.locale) applyLocale(preferences.locale);
+            document.documentElement.dataset.fontTheme = normalizeFontTheme(preferences?.fontTheme);
           })
           .catch(() => undefined);
 

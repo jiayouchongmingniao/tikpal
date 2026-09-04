@@ -14,6 +14,7 @@ const temporary = mkdtempSync(path.join(tmpdir(), "tikpal-cdp-manager-smoke-"));
 const socketPath = path.join(temporary, "manager.sock");
 const statePath = path.join(temporary, "manager.json");
 let targetId = "spotify-target";
+let targetUrl = "https://open.spotify.com/";
 let browserConnections = 0;
 let getTargets = 0;
 let sessionGeneration = 0;
@@ -21,6 +22,8 @@ let dropNextSafeCommand = false;
 let dropInitialPageEnable = true;
 let pageEnableAttempts = 0;
 const mockSockets = new Set();
+let browserSocket = null;
+const friendlyErrorNavigations = [];
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -67,6 +70,7 @@ browser.on("upgrade", (request, socket) => {
   const accept = createHash("sha1").update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest("base64");
   socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
   mockSockets.add(socket);
+  browserSocket = socket;
   socket.once("close", () => mockSockets.delete(socket));
   browserConnections += 1;
   let input = Buffer.alloc(0);
@@ -84,7 +88,7 @@ browser.on("upgrade", (request, socket) => {
       if (message.method === "Target.setDiscoverTargets" || message.method === "Runtime.enable") return reply();
       if (message.method === "Target.getTargets") {
         getTargets += 1;
-        return reply({ targetInfos: [{ targetId, type: "page", title: "Spotify", url: "https://open.spotify.com/" }] });
+        return reply({ targetInfos: [{ targetId, type: "page", title: "Spotify", url: targetUrl }] });
       }
       if (message.method === "Target.attachToTarget") {
         if (message.params?.targetId !== targetId) {
@@ -96,10 +100,17 @@ browser.on("upgrade", (request, socket) => {
       if (message.method === "Page.bringToFront" && dropNextSafeCommand) {
         dropNextSafeCommand = false;
         targetId = "spotify-target-restarted";
+        targetUrl = "https://open.spotify.com/";
         socket.destroy();
         return;
       }
       if (message.method === "Page.navigate") {
+        if (String(message.params?.url || "").includes("/web-mode-error.html")) {
+          targetUrl = String(message.params.url);
+          friendlyErrorNavigations.push(targetUrl);
+          socket.write(frame({ method: "Target.targetInfoChanged", params: { targetInfo: { targetId, type: "page", title: "Tikpal Explore", url: targetUrl } } }));
+          return reply();
+        }
         socket.destroy();
         return;
       }
@@ -107,6 +118,11 @@ browser.on("upgrade", (request, socket) => {
     });
   });
 });
+
+function emitPageEvent(method, params, sessionId) {
+  if (!browserSocket) throw new Error("mock browser websocket unavailable");
+  browserSocket.write(frame({ method, params, sessionId }));
+}
 
 function managerRequest(payload) {
   return new Promise((resolve, reject) => {
@@ -163,6 +179,44 @@ try {
   assert(targets.ok && targets.target.state === "READY", `manager should attach a real HTTPS page session: ${JSON.stringify(targets)}`);
   assert(pageEnableAttempts === 2 && targets.target.sessionGeneration === 1, "an incomplete maintenance attach should reuse its session and finish enable");
   assert(browserConnections === 1 && getTargets === 1, "initial discovery should use one browser connection and target enumeration");
+  const errorWatch = await managerRequest({
+    op: "watch-early-error",
+    provider: "spotify",
+    targetId,
+    errorPageUrl: "http://127.0.0.1:4173/web-mode-error.html?provider=spotify&proxy=proxy",
+    failureStatus: "check_proxy",
+    priority: "maintenance"
+  });
+  assert(errorWatch.ok, "manager should arm the friendly error redirect for the attached provider page");
+  emitPageEvent("Page.loadingFailed", { type: "Document", errorText: "net::ERR_TIMED_OUT" }, "session-1");
+  await waitFor(() => friendlyErrorNavigations.length === 1, "document timeout should navigate to the local friendly error page");
+  assert(friendlyErrorNavigations[0].includes("reason=connection_timeout"), "timeout should be converted to a stable friendly reason");
+  emitPageEvent("Page.loadingFailed", { type: "Document", errorText: "net::ERR_TIMED_OUT" }, "session-1");
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert(friendlyErrorNavigations.length === 1, "one document generation should redirect only once");
+  const failedTargets = await managerRequest({ op: "targets", provider: "spotify", priority: "foreground" });
+  assert(
+    failedTargets.target.friendlyError?.reason === "connection_timeout" && failedTargets.target.friendlyError?.status === "check_proxy",
+    "manager should publish the friendly failure without exposing the Chromium error"
+  );
+  emitPageEvent("Target.detachedFromTarget", { sessionId: "session-1" });
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  const reattachedFriendly = await managerRequest({ op: "targets", provider: "spotify", priority: "foreground" });
+  assert(
+    reattachedFriendly.ok && reattachedFriendly.target.state === "READY" && reattachedFriendly.target.friendlyError?.status === "check_proxy",
+    "manager should reattach its own friendly error page after a target detach"
+  );
+  targetUrl = "https://open.spotify.com/";
+  emitPageEvent("Target.targetInfoChanged", { targetInfo: { targetId, type: "page", title: "Spotify", url: targetUrl } });
+  emitPageEvent("Page.frameNavigated", { frame: { id: "root", url: "https://open.spotify.com/" } }, "session-2");
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  const recoveredTargets = await managerRequest({ op: "targets", provider: "spotify", priority: "foreground" });
+  assert(recoveredTargets.target.friendlyError === null, "a real provider navigation should clear the prior friendly failure");
+  emitPageEvent("Page.frameNavigated", {
+    frame: { id: "root", url: "chrome-error://chromewebdata/", unreachableUrl: "https://open.spotify.com/" }
+  }, "session-2");
+  await waitFor(() => friendlyErrorNavigations.length === 2, "unreachable root frame should also navigate to the local friendly error page");
+  assert(friendlyErrorNavigations[1].includes("reason=site_unreachable"), "unreachable root frame should use a stable site-unreachable reason");
   const browserInfo = await managerRequest({ op: "browser-info", provider: "spotify", priority: "maintenance" });
   assert(browserInfo.ok, "browser diagnostics should use the existing browser CDP connection");
   const frozen = await managerRequest({ op: "lifecycle", provider: "spotify", state: "frozen", priority: "maintenance" });
@@ -176,7 +230,7 @@ try {
   dropNextSafeCommand = true;
   const recovered = await managerRequest({ op: "command", provider: "spotify", method: "Page.bringToFront", params: {}, retryable: true, priority: "foreground" });
   assert(recovered.ok && recovered.recovered, "safe foreground command should recover once");
-  assert(browserConnections === 2 && getTargets === 2 && recovered.target.sessionGeneration === 2, "recovery should establish exactly one replacement session");
+  assert(browserConnections === 2 && getTargets === 2 && recovered.target.sessionGeneration === 3, "recovery should establish exactly one replacement session after the friendly-page reattach");
   assert(recovered.target.targetId === "spotify-target-restarted", "recovery should discard stale targets after the browser is replaced");
   const unsafe = await managerRequest({ op: "command", provider: "spotify", method: "Page.navigate", params: { url: "https://example.invalid/" }, retryable: false, priority: "foreground" });
   assert(!unsafe.ok && browserConnections === 2, "non-idempotent command must not be replayed after transport loss");

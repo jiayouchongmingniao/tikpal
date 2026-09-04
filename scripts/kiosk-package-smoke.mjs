@@ -970,10 +970,13 @@ audio_output {
       cdpManagerSource.includes("Runtime.enable") &&
       cdpManagerSource.includes("sessionGeneration") &&
       cdpManagerSource.includes("documentGeneration") &&
+      cdpManagerSource.includes("friendlyError") &&
+      cdpManagerSource.includes("Page.loadingFailed") &&
+      cdpManagerSource.includes("unreachableUrl") &&
       cdpManagerSource.includes("/json/version") &&
       !cdpManagerSource.includes("/json/list") &&
       cdpManagerClient.includes("CDP_IPC_UNAVAILABLE"),
-    "Phase 4 should use one persistent browser CDP session per provider and preserve explicit IPC failures"
+    "Phase 4 should use one persistent browser CDP session per provider, publish friendly document failures, and preserve explicit IPC failures"
   );
   assert(
     realProviderUrlWaitBody.includes("deadline=$((SECONDS + TIKPAL_WEB_MODE_PROVIDER_BOOTSTRAP_TIMEOUT_SECONDS))") &&
@@ -1573,8 +1576,16 @@ sync_runtime_provider_pool_process_statuses ""
   const appModeSource = await readFile(path.join(ROOT, "src/hooks/useAppMode.ts"), "utf8");
   const playerOverlaySource = await readFile(path.join(ROOT, "src/components/PlayerOverlay.tsx"), "utf8");
   const uiCopySource = await readFile(path.join(ROOT, "src/uiCopy.ts"), "utf8");
+  assert(
+    webModeErrorPage.includes('normalized === "proxy_unreachable"') &&
+      webModeErrorPage.includes('normalized === "connection_timeout"') &&
+      webModeErrorPage.includes("return dict.tryAgain;") &&
+      !webModeErrorPage.includes("return value;"),
+    "the local Explore error page should render stable Tikpal copy instead of raw Chromium error text"
+  );
   const flameSceneSource = await readFile(path.join(ROOT, "src/components/FlameScene.tsx"), "utf8");
   const appSource = await readFile(path.join(ROOT, "src/App.tsx"), "utf8");
+  const exploreCloseVeilSource = await readFile(path.join(ROOT, "src/exploreCloseVeil.ts"), "utf8");
   const exploreOpenVeilSource = await readFile(path.join(ROOT, "src/exploreOpenVeil.ts"), "utf8");
   const playbackTruthSource = await readFile(path.join(ROOT, "src/playbackTruth.ts"), "utf8");
   const stylesSource = await readFile(path.join(ROOT, "src/styles.css"), "utf8");
@@ -1586,6 +1597,23 @@ sync_runtime_provider_pool_process_statuses ""
       && exploreOpenVeilSource.includes("if (this.requestId !== requestId) return false")
       && exploreOpenVeilSource.includes("if (this.timeout) clearTimeout(this.timeout)"),
     "Explore entry veil should have a short request-owned timeout that stale callbacks cannot remove"
+  );
+  assert(
+    sidePanelSource.includes("await waitForExploreCloseCover(closeRequestId)")
+      && sidePanelSource.includes('type: "cover-requested"')
+      && sidePanelSource.includes('type: "closed"')
+      && sidePanelSource.includes('type: "failed"')
+      && !sidePanelSource.includes("await new Promise(r => setTimeout(r, 3050))"),
+    "Explore close should wait for a request-owned main-window cover instead of the obsolete three-second delay"
+  );
+  assert(
+    exploreCloseVeilSource.includes('EXPLORE_CLOSE_COVER_FALLBACK_MS = 1_100')
+      && exploreCloseVeilSource.includes('type: "cover-ready"')
+      && appSource.includes("onTransitionEnd")
+      && appSource.includes("acknowledgeExploreCloseCover")
+      && appSource.includes("releaseExploreCloseVeil")
+      && stylesSource.includes("transition: opacity 250ms ease-out, visibility 0s linear 250ms;"),
+    "Explore close should acknowledge an opaque cover, reject stale messages, and release it with a short fade after physical close"
   );
   assert(stylesSource.includes("--transport-play-icon") && stylesSource.includes("--transport-play-border"), "Transport play buttons should expose skin-aware icon and border tokens");
   assert(stylesSource.includes(".screen-saver-wake-hint"), "Screen sleep should include a subtle touch-to-wake hint");
@@ -2593,6 +2621,39 @@ sync_runtime_provider_pool_process_statuses ""
   assert(staleActive.status === 0, `stale active update failed:\n${staleActive.stdout}\n${staleActive.stderr}`);
   providerStatusState = JSON.parse(readFileSync(providerStatusStatePath, "utf8"));
   assert(providerStatusState.residentProviders.amazon_music?.status === "ready", "a stale active guard must not claim the active provider or demote a confirmed Ready card");
+  providerStatusState.activeProvider = "suno";
+  providerStatusState.residentProviders.suno = { status: "active", activity: "active", lastError: null };
+  writeFileSync(providerStatusStatePath, JSON.stringify(providerStatusState));
+  const proxyFailure = spawnSync("bash", ["deploy/chromium/tikpal-web-mode.sh", "provider-status", "suno", "check_proxy", "Suno proxy unavailable"], {
+    cwd: ROOT,
+    env: providerStatusEnv,
+    encoding: "utf8"
+  });
+  assert(proxyFailure.status === 0, `proxy failure status update failed:\n${proxyFailure.stdout}\n${proxyFailure.stderr}`);
+  providerStatusState = JSON.parse(readFileSync(providerStatusStatePath, "utf8"));
+  assert(
+    providerStatusState.activeProvider === "suno" &&
+      providerStatusState.residentProviders.suno?.status === "check_proxy" &&
+      providerStatusState.residentProviders.suno?.activity === "active" &&
+      providerStatusState.residentProviders.suno?.lastError === "Suno proxy unavailable",
+    "a selected proxy failure should retain the visible provider while publishing Check Proxy instead of Active"
+  );
+  providerStatusState.activeProvider = "qq_music";
+  providerStatusState.residentProviders.qq_music = { status: "active", activity: "active", lastError: null };
+  writeFileSync(providerStatusStatePath, JSON.stringify(providerStatusState));
+  const directFailure = spawnSync("bash", ["deploy/chromium/tikpal-web-mode.sh", "provider-status", "qq_music", "check_setup", "QQ Music connection unavailable"], {
+    cwd: ROOT,
+    env: providerStatusEnv,
+    encoding: "utf8"
+  });
+  assert(directFailure.status === 0, `direct failure status update failed:\n${directFailure.stdout}\n${directFailure.stderr}`);
+  providerStatusState = JSON.parse(readFileSync(providerStatusStatePath, "utf8"));
+  assert(
+    providerStatusState.activeProvider === "qq_music" &&
+      providerStatusState.residentProviders.qq_music?.status === "check_setup" &&
+      providerStatusState.residentProviders.qq_music?.lastError === "QQ Music connection unavailable",
+    "a QQ direct failure should remain direct and never be reported as a proxy failure"
+  );
 
   assert(!quickSettingsSource.includes("handleWebModeSettingsSave"), "Explore settings should auto-save without a Save button");
   assert(!quickSettingsSource.includes("handleWebModeProxyTest"), "Explore settings should not need a manual Test button");
@@ -2644,6 +2705,8 @@ sync_runtime_provider_pool_process_statuses ""
   assert(providerGuardCheck.stdout.includes("qq mv cinema frame: 1"), "provider guard should expose the QQ MV cinema frame path");
   assert(providerGuardCheck.stdout.includes("qq mv touch target: 1"), "provider guard should enlarge tiny QQ MV touch targets");
   const providerGuardSource = await readFile(path.join(ROOT, "deploy/chromium/tikpal-web-mode-guard.mjs"), "utf8");
+  assert(providerGuardSource.includes("if (frozen) {\n    await readTargets();\n    syncManagerFriendlyErrorStatus();\n    return;\n  }"), "frozen providers should still report Manager-owned friendly errors");
+  assert(providerGuardSource.includes('child.once("exit", (code) => {\n    if (code !== 0) reportedManagerFriendlyError = "";\n  });'), "friendly-error status reporting should retry after a transient launcher failure");
   assert(providerGuardSource.includes("querySelectorAll(\"iframe\")"), "provider guard should scan same-origin QQ modal iframes");
   assert(providerGuardSource.includes("consentAcceptAllLabels"), "provider guard should keep accept-all cookie labels separate from generic consent labels");
   assert(providerGuardSource.includes("rejectActionText"), "provider guard should skip cookie preference, reject, and settings actions");
@@ -2789,6 +2852,13 @@ sync_runtime_provider_pool_process_statuses ""
   assert(!webModeScript.includes("ensure_entry_stage_veil") && !webModeScript.includes("close_entry_stage_veil"), "Explore initial entry should not retain the removed full-width branded veil");
   assert(webModeScript.includes("prepare_entry_surfaces()") && webModeScript.includes('ensure_side_panel "$provider" 0'), "Explore should prepare the final-position side panel before initial entry");
   assert(webModeScript.includes("TIKPAL_WEB_MODE_ENTRY_PROVIDER_PAINT_TIMEOUT_SECONDS") && webModeScript.includes("wait_for_entry_provider_paint"), "Explore initial entry should wait for the selected provider to paint or the short paint gate to expire");
+  assert(
+    webModeScript.includes("provider_resume_ms=$provider_resume_ms")
+      && webModeScript.includes("target_resolve_ms=$target_resolve_ms")
+      && webModeScript.includes("initial_entry_paint_check")
+      && webModeScript.includes("initial_entry_reveal_completed"),
+    "Explore initial entry should log frozen-page resume, target resolution, paint gate, and final X11 reveal timings"
+  );
   assert(webModeScript.indexOf('wait_for_entry_provider_paint "$(provider_debug_port "$provider")" "$provider"') < webModeScript.indexOf('reveal_initial_entry_surfaces "$target_window"'), "Explore should wait for initial provider paint before revealing the provider and side panel");
   assert(
     webModeScript.includes("initial_entry_surface_plan()")
@@ -2833,7 +2903,11 @@ sync_runtime_provider_pool_process_statuses ""
       && initialEntryFixture.includes("pre_reveal_trace_loss"),
     "the initial-entry fixture should inject real X11 destruction, pre-reveal proxy and Guard failures, final mismatch, and trace-loss cleanup"
   );
-  assert(webModeScript.includes('if ! wait_for_real_provider_url "$provider_port"; then'), "every foreground provider launch should confirm a real HTTPS page before it can reveal");
+  assert(
+    webModeScript.includes('if ! wait_for_provider_page_or_friendly_error "$provider_port"; then')
+      && webModeScript.includes('write_provider_friendly_error_status "$provider" "$provider_port" && return 0'),
+    "every foreground provider launch should confirm a real HTTPS page or an explicit local Tikpal failure page before it can reveal"
+  );
   assert(!webModeScript.includes("TIKPAL_WEB_MODE_EXIT_"), "Explore close should not create a separate room-return veil");
   assert(webModeScript.includes("close_legacy_exit_stage") && !webModeScript.includes("ensure_exit_room_veil"), "Explore close should remove any legacy exit-stage window without creating one");
   assert(
@@ -2963,6 +3037,7 @@ sync_runtime_provider_pool_process_statuses ""
     "Explore should refresh provider ready statuses even when all resident profiles are already running"
   );
   assert(webModeScript.includes("provider_friendly_error_reason()") && webModeScript.includes('friendly_error_reason="$(provider_friendly_error_reason "$provider_port")"'), "Explore prewarm should preserve an explicit region-unavailable page instead of misclassifying it as setup failure");
+  assert(webModeScript.includes("wait_for_provider_page_or_friendly_error") && webModeScript.includes("write_provider_friendly_error_status"), "Explore should reveal a friendly terminal page without relabeling it as a successful provider page");
   assert(webModeScript.includes("fs.renameSync(temporaryPath, statePath)"), "Explore runtime-state writes should atomically replace the state file");
   const providerStatusWriterStart = providerGuardSource.indexOf("function writeResidentProviderStatus(status)");
   const providerStatusWriterEnd = providerGuardSource.indexOf("\n}\n\nfunction syncResidentProviderStatus", providerStatusWriterStart);
@@ -3332,8 +3407,8 @@ sync_runtime_provider_pool_process_statuses ""
       revealResidentWindowBody.includes('if window_opacity_is_full "$opacity_before"; then') &&
       revealResidentWindowBody.includes("opacity_mutation=skipped") &&
       openProviderPoolBody.indexOf('reveal_resident_provider_window "$target_window"') <
-        openProviderPoolBody.indexOf("reveal_ms=") &&
-      openProviderPoolBody.indexOf("reveal_ms=") <
+        openProviderPoolBody.indexOf('log_open_stage surface_plan_end "provider=$provider result=revealed target_window=$target_window reveal_ms=$reveal_ms"') &&
+      openProviderPoolBody.indexOf('log_open_stage surface_plan_end "provider=$provider result=revealed target_window=$target_window reveal_ms=$reveal_ms"') <
         openProviderPoolBody.indexOf('commit_visible_provider_state "$provider"'),
     "Explore should restore the parked provider opacity and commit activeProvider only after visual reveal"
   );
@@ -3475,7 +3550,12 @@ sync_runtime_provider_pool_process_statuses ""
   assert(webModeScript.includes("seed_runtime_provider_pool_statuses") && webModeScript.includes('status: "prewarming"'), "Explore should seed queued resident providers as prewarming before their windows launch");
   assert(webModeScript.includes('const force = seedMode === "force"') && webModeScript.includes('start_provider_pool_prewarm "$provider" force'), "Explore proxy toggles should force resident providers back through prewarm");
   assert(webModeScript.includes("navigate_provider_target") && webModeScript.includes('TIKPAL_WEB_MODE_PROVIDER_PREWARM_FORCE=1') && webModeScript.includes('launch_provider_for_pool "$provider" entry prewarm "$force_existing"'), "Forced provider prewarm should re-navigate existing resident pages after proxy changes");
-  assert(webModeScript.includes('if ! wait_for_real_provider_url "$provider_port"; then') && webModeScript.includes('write_runtime_provider_status "$provider" "ready"'), "Forced provider prewarm should write Ready only after a real HTTPS page is observed");
+  assert(
+    webModeScript.includes('if ! wait_for_provider_page_or_friendly_error "$provider_port"; then')
+      && webModeScript.includes('write_provider_friendly_error_status "$provider" "$provider_port" && return 0')
+      && webModeScript.includes('write_runtime_provider_status "$provider" "ready"'),
+    "Forced provider prewarm should preserve a friendly terminal page instead of writing Ready"
+  );
   assert(webModeScript.includes("provider_direct_reachable") && webModeScript.includes("--noproxy '*'") && webModeScript.includes('"check_proxy"') && webModeScript.includes("needs proxy"), "Explore should probe direct provider reachability before marking Check proxy");
   assert(webModeScript.includes("provider_prefers_direct_proxy") && webModeScript.includes("effective_provider_proxy_enabled"), "Explore launcher should support direct-preferred providers such as QQ Music and NetEase");
   assert(webModeScript.includes("deezer|qq_music|netease_music"), "Explore should direct-launch Deezer, QQ Music, and NetEase instead of waiting on the transition bootstrap");

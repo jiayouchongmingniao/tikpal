@@ -2016,6 +2016,18 @@ wait_for_real_provider_url() {
   return 1
 }
 
+wait_for_provider_page_or_friendly_error() {
+  local provider_port="$1"
+  local deadline
+  deadline=$((SECONDS + TIKPAL_WEB_MODE_PROVIDER_BOOTSTRAP_TIMEOUT_SECONDS))
+  while [[ "$SECONDS" -lt "$deadline" ]]; do
+    provider_has_real_provider_page "$provider_port" && return 0
+    [[ -n "$(provider_friendly_error_reason "$provider_port")" ]] && return 0
+    sleep 0.1
+  done
+  return 1
+}
+
 provider_cdp_json_list() {
   local provider_port="$1"
   local provider
@@ -2212,6 +2224,7 @@ resume_provider_for_foreground() {
   local provider="$1" activity
   TIKPAL_PROVIDER_FOREGROUND_LIFECYCLE_CONFIRMED=0
   activity="$(read_runtime_provider_activity "$provider")"
+  TIKPAL_PROVIDER_FOREGROUND_ACTIVITY="$activity"
   [[ "$activity" == "frozen" ]] || return 0
   if provider_cdp_lifecycle "$provider" active foreground; then
     # A successful lifecycle request is made through the Manager's READY
@@ -2492,7 +2505,31 @@ provider_has_real_provider_page() {
 provider_friendly_error_reason() {
   local provider_port="$1"
   provider_cdp_json_list "$provider_port" \
-    | node -e 'let body=""; process.stdin.on("data", chunk => body += chunk); process.stdin.on("end", () => { try { const target = JSON.parse(body).find(item => { if (item.type !== "page") return false; const url = new URL(String(item.url || "")); return url.pathname.endsWith("/web-mode-error.html"); }); process.stdout.write(target ? new URL(String(target.url)).searchParams.get("reason") || "" : ""); } catch {} });'
+    | node -e 'let body=""; process.stdin.on("data", chunk => body += chunk); process.stdin.on("end", () => { try { const target = JSON.parse(body).find(item => { if (item.type !== "page") return false; const url = new URL(String(item.url || "")); return url.pathname.endsWith("/web-mode-error.html"); }); process.stdout.write(target ? new URL(String(target.url)).searchParams.get("reason") || "" : ""); } catch {} });' || true
+}
+
+provider_friendly_error_status() {
+  local provider="$1" proxy_line proxy_enabled
+  proxy_line="$(read_proxy_settings)"
+  proxy_enabled="$(effective_provider_proxy_enabled "$provider" "${proxy_line%%$'\t'*}")"
+  [[ "$proxy_enabled" == "1" ]] && printf '%s\n' "check_proxy" || printf '%s\n' "check_setup"
+}
+
+write_provider_friendly_error_status() {
+  local provider="$1" provider_port="$2" reason status message
+  reason="$(provider_friendly_error_reason "$provider_port")"
+  [[ -n "$reason" ]] || return 1
+  if [[ "$reason" == "region_unavailable" ]]; then
+    write_runtime_provider_status "$provider" "region_unavailable" "$(provider_label "$provider") is unavailable in the current Proxy region"
+    return 0
+  fi
+  status="$(provider_friendly_error_status "$provider")"
+  if [[ "$status" == "check_proxy" ]]; then
+    message="$(provider_label "$provider") proxy unavailable"
+  else
+    message="$(provider_label "$provider") connection unavailable"
+  fi
+  write_runtime_provider_status "$provider" "$status" "$message"
 }
 
 wait_for_provider_ready() {
@@ -2856,7 +2893,11 @@ if (!state.activeProvider) {
       ? residentProviders[id]
       : {};
     if (id === state.activeProvider) {
-      residentProviders[id] = { ...current, status: "active", activity: "active", lastError: null, updatedAt: state.updatedAt };
+      if (["check_proxy", "check_setup", "region_unavailable"].includes(current.status)) {
+        residentProviders[id] = { ...current, activity: "active", updatedAt: state.updatedAt };
+      } else {
+        residentProviders[id] = { ...current, status: "active", activity: "active", lastError: null, updatedAt: state.updatedAt };
+      }
     } else if (current.status === "active") {
       // A former active provider has already shown a real provider page. Do
       // not send its card back through the prewarm queue while guards run
@@ -4077,8 +4118,8 @@ sync_runtime_provider_pool_process_statuses() {
         continue
       fi
       friendly_error_reason="$(provider_friendly_error_reason "$provider_port")"
-      if [[ "$friendly_error_reason" == "region_unavailable" ]]; then
-        write_runtime_provider_status "$provider" "region_unavailable" "$(provider_label "$provider") is unavailable in the current Proxy region"
+      if [[ -n "$friendly_error_reason" ]]; then
+        write_provider_friendly_error_status "$provider" "$provider_port"
         continue
       fi
       status="$(read_runtime_provider_status "$provider")"
@@ -7914,15 +7955,19 @@ launch_provider_for_pool() {
 
   if profile_process_exists "$provider_profile"; then
     if ! provider_has_real_provider_page "$provider_port"; then
-      if [[ "$launch_role" == "prewarm" && "$force_existing" == "1" ]]; then
+      if [[ "$launch_role" != "prewarm" ]] && write_provider_friendly_error_status "$provider" "$provider_port"; then
+        start_provider_guard "$provider" "$provider_profile" "$url" "$proxy_enabled" "$provider_port"
+        return 0
+      elif [[ "$launch_role" == "prewarm" && "$force_existing" == "1" ]]; then
         write_runtime_provider_status "$provider" "prewarming"
         if ! navigate_provider_target "$provider_port" "$url"; then
           log "WARN: provider navigation was not confirmed; checking the resident page: $provider"
         fi
-        if ! wait_for_real_provider_url "$provider_port"; then
+        if ! wait_for_provider_page_or_friendly_error "$provider_port"; then
           write_runtime_provider_status "$provider" "check_setup" "$(provider_label "$provider") did not enter the provider page"
           return 0
         fi
+        write_provider_friendly_error_status "$provider" "$provider_port" && return 0
       else
         write_runtime_provider_status "$provider" "check_setup" "$(provider_label "$provider") did not enter the provider page"
         [[ "$launch_role" == "prewarm" ]] && return 0
@@ -7933,10 +7978,11 @@ launch_provider_for_pool() {
       if ! navigate_provider_target "$provider_port" "$url"; then
         log "WARN: provider navigation was not confirmed; checking the resident page: $provider"
       fi
-      if ! wait_for_real_provider_url "$provider_port"; then
+      if ! wait_for_provider_page_or_friendly_error "$provider_port"; then
         write_runtime_provider_status "$provider" "check_setup" "$(provider_label "$provider") could not reopen"
         return 0
       fi
+      write_provider_friendly_error_status "$provider" "$provider_port" && return 0
     fi
     start_provider_guard "$provider" "$provider_profile" "$url" "$proxy_enabled" "$provider_port"
     log_stage "provider_https_ready provider=$provider role=$launch_role reused=1 ms=$(( $(now_ms) - launch_started_ms ))"
@@ -8013,13 +8059,14 @@ launch_provider_for_pool() {
   start_provider_guard "$provider" "$provider_profile" "$url" "$proxy_enabled" "$provider_port"
 
   if [[ "$wait_for_entry" == "1" ]]; then
-    if ! wait_for_real_provider_url "$provider_port"; then
+    if ! wait_for_provider_page_or_friendly_error "$provider_port"; then
       if [[ "$launch_role" == "prewarm" && -z "$(read_runtime_active_provider)" ]] && ! is_enabled "${TIKPAL_WEB_MODE_IDLE_POOL_WARMUP:-0}"; then
         return 1
       fi
       write_runtime_provider_status "$provider" "check_setup" "$(provider_label "$provider") did not enter the provider page"
       return 1
     fi
+    write_provider_friendly_error_status "$provider" "$provider_port" && return 0
     log_stage "provider_https_ready provider=$provider role=$launch_role reused=0 ms=$(( $(now_ms) - launch_started_ms ))"
   fi
   if [[ "$wait_for_full_ready" == "1" ]]; then
@@ -8312,9 +8359,11 @@ open_provider_pool() {
   local provider_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/$provider"
   local current_provider current_profile target_window="" previous_window="" panel_window="" known_panel_window="" proxy_line proxy_enabled message extension_enabled=0 entry_stage=0
   local panel_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"
-  local resident_status resident_page_ready=0 fast_resident=0 switching_provider=0 current_port provider_port target_lifecycle_confirmed=0
+  local resident_status resident_page_ready=0 fast_resident=0 switching_provider=0 current_port provider_port target_lifecycle_confirmed=0 friendly_error_reason=""
   local helper_candidate=0 helper_target_raw=0
   local started_ms reveal_ms command_return_ms transition_shown_ms=0 initial_entry_status=0
+  local provider_resume_started_ms=0 provider_resume_ms=0 target_resolve_started_ms=0 target_resolve_ms=0
+  local entry_paint_started_ms=0 entry_paint_ms=0 entry_paint_result=not_applicable entry_reveal_started_ms=0 entry_reveal_ms=0
   local guard_lifecycle_started_ms=0 switch_marker_clear_started_ms=0 guard_verify_status=0
   local initial_entry_phase=""
   local segment_timing_once=0 segment_started_ms=0 cached_xid_ms=-1 first_cdp_ms=-1 guard_stop_ms=-1 panel_retile_ms=-1
@@ -8337,8 +8386,11 @@ open_provider_pool() {
   provider_port="$(provider_debug_port "$provider")"
   # Wake an intentionally frozen resident before the Guard acquires the
   # foreground lease. A lifecycle rejection falls back to ordinary parking.
+  provider_resume_started_ms="$(now_ms)"
   resume_provider_for_foreground "$provider"
+  provider_resume_ms="$(( $(now_ms) - provider_resume_started_ms ))"
   target_lifecycle_confirmed="$TIKPAL_PROVIDER_FOREGROUND_LIFECYCLE_CONFIRMED"
+  log_open_stage provider_resume "provider=$provider activity=${TIKPAL_PROVIDER_FOREGROUND_ACTIVITY:-unknown} lifecycle_confirmed=$target_lifecycle_confirmed ms=$provider_resume_ms"
   # Establish foreground ownership before resolving the target.  Otherwise
   # per-provider advisory status writers can enter the state lock during the
   # resolver/CDP window and make the eventual active-state commit wait for a
@@ -8355,6 +8407,7 @@ open_provider_pool() {
     switch_trace_now_ms trace_started_ms
     record_switch_trace_event target_resolve_started
   fi
+  target_resolve_started_ms="$(now_ms)"
   [[ "$segment_timing_once" != "1" ]] || segment_started_ms="$(now_ms)"
   if [[ "$switching_provider" == "1" ]] && x11_helper_switch_enabled; then
     target_window="$(read_profile_window_cache_raw "$provider_profile" || true)"
@@ -8371,7 +8424,8 @@ open_provider_pool() {
     # against its READY CDP session. That is the same provider-page proof that
     # the direct probe obtains, so do not serially repeat the probe before the
     # physical X11 transaction. Non-frozen pages retain the direct fallback.
-    if [[ "$target_lifecycle_confirmed" == "1" ]] || provider_has_real_provider_page "$provider_port"; then
+    friendly_error_reason="$(provider_friendly_error_reason "$provider_port")"
+    if [[ "$target_lifecycle_confirmed" == "1" ]] || provider_has_real_provider_page "$provider_port" || [[ -n "$friendly_error_reason" ]]; then
       resident_page_ready=1
       [[ -n "$target_window" ]] && fast_resident=1
     fi
@@ -8397,7 +8451,8 @@ open_provider_pool() {
       record_switch_trace_event target_resolve_completed unresolved target_window_missing "$trace_elapsed_ms"
     fi
   fi
-  log_stage "open_pool_init provider=$provider target=$target_window resident_page_ready=$resident_page_ready fast_resident=$fast_resident switching=$switching_provider entry=$entry_stage ms=$(( $(now_ms) - started_ms ))"
+  target_resolve_ms="$(( $(now_ms) - target_resolve_started_ms ))"
+  log_stage "open_pool_init provider=$provider target=$target_window resident_page_ready=$resident_page_ready fast_resident=$fast_resident switching=$switching_provider entry=$entry_stage provider_resume_ms=$provider_resume_ms target_resolve_ms=$target_resolve_ms ms=$(( $(now_ms) - started_ms ))"
   log_open_stage resident_page_ready "provider=$provider ready=$resident_page_ready target_window=${target_window:-missing} resident_status=${resident_status:-missing}"
   if [[ "$entry_stage" == "1" && initial_entry_trace_enabled ]]; then
     if [[ "$fast_resident" == "1" ]]; then
@@ -8546,7 +8601,7 @@ open_provider_pool() {
       log_stage "open_pool_bootstrap provider=$provider result=fail ms=$(( $(now_ms) - started_ms ))"
     fi
   fi
-  if [[ "$fast_resident" == "1" && "$entry_stage" != "1" ]]; then
+  if [[ "$fast_resident" == "1" && ( "$entry_stage" != "1" || -n "$friendly_error_reason" ) ]]; then
     if [[ "$helper_candidate" != "1" && "$switching_provider" != "1" ]]; then
       stop_window_guard
     fi
@@ -8766,13 +8821,20 @@ open_provider_pool() {
     recover_or_cover_provider_failure "$current_provider" "$current_profile" "$provider" "check_setup" "$message" || true
     fail "$(provider_label "$provider") did not open"
   fi
-  if [[ "$fast_resident" != "1" && "$entry_stage" == "1" ]]; then
-    if [[ "$entry_stage" == "1" && initial_entry_trace_enabled ]]; then
+  if [[ "$entry_stage" == "1" ]]; then
+    entry_paint_started_ms="$(now_ms)"
+    if [[ "$fast_resident" != "1" && initial_entry_trace_enabled ]]; then
       initial_entry_pre_reveal_step 62 "$provider" "$initial_entry_phase" entry_paint_check "$target_window" \
         paint_check ready_or_warning 0 "$target_window" initial_entry_wait_for_entry_paint_optional || return $?
-    else
+      entry_paint_result=ready_or_warning
+    elif [[ "$fast_resident" != "1" ]]; then
       wait_for_entry_provider_paint "$(provider_debug_port "$provider")" "$provider" "$target_window" || log "WARN: $(provider_label "$provider") did not complete DOM/X11 paint checks before entry reveal"
+      entry_paint_result=ready_or_warning
+    else
+      entry_paint_result=skipped_resident
     fi
+    entry_paint_ms="$(( $(now_ms) - entry_paint_started_ms ))"
+    log_open_stage initial_entry_paint_check "provider=$provider result=$entry_paint_result ms=$entry_paint_ms"
   elif [[ "$fast_resident" != "1" ]]; then
     if ! wait_for_provider_ready "$(provider_debug_port "$provider")" "$provider"; then
       message="$(provider_label "$provider") did not become ready"
@@ -8783,6 +8845,7 @@ open_provider_pool() {
   log_open_stage target_window_found "provider=$provider target_window=$target_window resident_page_ready=$resident_page_ready"
   log_open_stage surface_plan_begin "provider=$provider route=$([[ "$entry_stage" == "1" ]] && printf initial || printf legacy) operations=layout,map,raise target_window=$target_window"
   if [[ "$entry_stage" == "1" ]]; then
+    entry_reveal_started_ms="$(now_ms)"
     if [[ "$fast_resident" == "1" ]]; then
       if reveal_resident_initial_entry_surfaces "$target_window" "$provider_profile" "$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"; then
         :
@@ -8800,6 +8863,8 @@ open_provider_pool() {
         return "$initial_entry_status"
       fi
     fi
+    entry_reveal_ms="$(( $(now_ms) - entry_reveal_started_ms ))"
+    log_open_stage initial_entry_reveal_completed "provider=$provider route=$([[ "$fast_resident" == "1" ]] && printf resident_initial_entry || printf cold_initial_entry) ms=$entry_reveal_ms"
   else
     # Pause old provider media before reveal to prevent audio mixing.
     if [[ "$switching_provider" == "1" && -n "$current_provider" ]]; then
@@ -9220,6 +9285,7 @@ case "$web_mode_action" in
   provider-status)
     provider_id="${2:-}"
     provider_status="${3:-}"
+    provider_message="${4:-}"
     if ! provider_ids | grep -Fx -- "$provider_id" >/dev/null; then
       fail "Unknown provider: $provider_id"
     fi
@@ -9233,7 +9299,10 @@ case "$web_mode_action" in
           log "ignored stale provider-status active for $provider_id without a real HTTPS page"
         fi
         ;;
-      *) fail "Provider status must be ready or active" ;;
+      check_proxy|check_setup|region_unavailable)
+        write_runtime_provider_status "$provider_id" "$provider_status" "$provider_message"
+        ;;
+      *) fail "Provider status must be ready, active, or a terminal error state" ;;
     esac
     ;;
   refresh-guards)
