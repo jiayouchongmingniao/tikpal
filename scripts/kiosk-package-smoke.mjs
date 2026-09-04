@@ -39,6 +39,7 @@ const requiredFiles = [
   "deploy/chromium/web-mode-extension/manifest.json",
   "deploy/chromium/web-mode-extension/background.js",
   "deploy/chromium/web-mode-extension/content.js",
+  "deploy/chromium/web-mode-extension/provider-audio-gate.js",
   "deploy/chromium/web-mode-extension/netease-audio-mirror.js",
   "deploy/chromium/chromium-flags.conf",
   "deploy/chromium/managed-policies.json",
@@ -1575,6 +1576,7 @@ sync_runtime_provider_pool_process_statuses ""
   const extensionManifest = JSON.parse(await readFile(path.join(ROOT, "deploy/chromium/web-mode-extension/manifest.json"), "utf8"));
   const extensionContent = await readFile(path.join(ROOT, "deploy/chromium/web-mode-extension/content.js"), "utf8");
   const extensionBackground = await readFile(path.join(ROOT, "deploy/chromium/web-mode-extension/background.js"), "utf8");
+  const providerAudioGateSource = await readFile(path.join(ROOT, "deploy/chromium/web-mode-extension/provider-audio-gate.js"), "utf8");
   const i18nSource = await readFile(path.join(ROOT, "src/i18n.tsx"), "utf8");
   const sidePanelSource = await readFile(path.join(ROOT, "src/components/WebModeSidePanel.tsx"), "utf8");
   const quickSettingsSource = await readFile(path.join(ROOT, "src/components/QuickSettingsOverlay.tsx"), "utf8");
@@ -1746,6 +1748,9 @@ sync_runtime_provider_pool_process_statuses ""
   assert(extensionManifest.host_permissions.includes("https://*.music.126.net/*") && extensionManifest.host_permissions.includes("https://*.music.163.com/*"), "Explore extension should allow NetEase audio fetch fallback domains only");
   assert(extensionManifest.background?.service_worker === "background.js" && extensionManifest.background?.type === "module", "Explore extension should use its MV3 module service worker");
   assert(extensionManifest.web_accessible_resources?.some((entry) => entry.resources?.includes("netease-audio-mirror.js") && entry.matches?.includes("https://music.163.com/*")), "Explore extension should expose the NetEase audio mirror to the page world");
+  assert(extensionManifest.content_scripts?.some((entry) => entry.world === "MAIN" && entry.run_at === "document_start" && entry.js?.includes("provider-audio-gate.js")), "Explore extension should install the provider audio gate in the page world before provider scripts run");
+  assert(extensionContent.includes('chrome.runtime.sendMessage({ type: "provider-audio-muted", muted: true }'), "Provider tabs should request browser-level mute at document start");
+  assert(providerAudioGateSource.includes("active: false") && providerAudioGateSource.includes("__tikpalProviderAudioGatePlayPatched") && providerAudioGateSource.includes("rememberPlayingMedia") && providerAudioGateSource.includes("version: 3"), "Provider audio gate should default to silence and retain resumable v3 state");
   assert(extensionContent.includes("window.setInterval(() => void syncProxy(), 750)"), "provider pages should poll the proxy settings revision every 750ms");
   assert(extensionContent.includes("initialProxyKey") && !extensionContent.includes("initialRevision"), "provider pages should reload only when the proxy key changes");
   assert(extensionContent.includes("window.location.reload()"), "provider pages should refresh after a proxy revision change");
@@ -3633,10 +3638,9 @@ sync_runtime_provider_pool_process_statuses ""
       webModeScript.includes("stop_provider_pool_prewarm"),
     "Explore should stop stale prewarm and idle-warm queues before starting a new one"
   );
-  assert(providerGuardSource.includes("__tikpalProviderAudioGate"), "Explore provider guard should install resident provider audio gating");
-  assert(providerGuardSource.includes("tikpal-provider-audio-muted") && extensionBackground.includes("provider-audio-muted"), "Explore provider gate should ask the extension to tab-mute inactive providers");
-  assert(providerGuardSource.includes("version: 3"), "Explore provider audio gate should use the active keepalive v3 contract");
-  assert(providerGuardSource.includes("state.active === nextActive") && providerGuardSource.includes("setAudioContextsActive(true)"), "Active provider audio polling should keep WebAudio contexts alive");
+  assert(providerGuardSource.includes('readFileSync(') && providerGuardSource.includes('provider-audio-gate.js') && providerGuardSource.includes("__tikpalProviderAudioGate"), "Explore provider guard should inject the shared resident provider audio gate");
+  assert(providerAudioGateSource.includes("tikpal-provider-audio-muted") && extensionBackground.includes("provider-audio-muted"), "Explore provider gate should ask the extension to tab-mute inactive providers");
+  assert(providerAudioGateSource.includes("setAudioContextsActive(nextActive)") && providerAudioGateSource.includes("element.muted = false"), "Active provider audio polling should keep WebAudio contexts alive and unmute only on activation");
   const providerGuardOnceStart = providerGuardSource.indexOf("async function guardOnce() {");
   const providerGuardOnceEnd = providerGuardSource.indexOf("\n}\n\nif (process.argv.includes", providerGuardOnceStart);
   const providerGuardOnceBody = providerGuardSource.slice(providerGuardOnceStart, providerGuardOnceEnd);
@@ -3662,8 +3666,8 @@ sync_runtime_provider_pool_process_statuses ""
   );
   assert(providerGuardSource.includes("__tikpalQqAudioPrime") && providerGuardSource.includes("persistent: true"), "QQ Music audio prime should keep ALSA alive while QQ is playing");
   assert(!providerGuardSource.includes("setTimeout(resolve, 180)"), "QQ Music audio prime should not fall back to a short pulse");
-  assert(providerGuardSource.includes("previous.wasPlaying = previous.wasPlaying ||"), "Inactive provider audio polling should not forget playback that must resume");
-  assert(providerGuardSource.includes("element.muted = false"), "Returning to a resident provider should unmute media elements");
+  assert(providerAudioGateSource.includes("previous.wasPlaying = previous.wasPlaying ||") && providerAudioGateSource.includes("rememberPlayingMedia"), "Inactive provider audio polling should not forget playback that must resume");
+  assert(providerAudioGateSource.includes("element.muted = false"), "Returning to a resident provider should unmute media elements");
   assert(
       webModeScript.includes("set_provider_media_active_via_cdp()") &&
       webModeScript.includes("activate_target_provider_audio_gate()") &&

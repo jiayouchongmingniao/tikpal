@@ -2,12 +2,14 @@
 set -euo pipefail
 
 SQLITE_BIN="${TIKPAL_SQLITE_BIN:-sqlite3}"
-SQLDB="${TIKPAL_MOODE_SQLITE_DB:-/var/local/www/db/moode-sqlite3.db}"
+SQLDB="${TIKPAL_RADIO_SQLITE_DB:-${TIKPAL_MOODE_SQLITE_DB:-/var/local/www/db/moode-sqlite3.db}}"
 FORCE="${TIKPAL_RADIO_PRESETS_FORCE:-0}"
 SQL_FILE=""
+BOOTSTRAPPED_DB=0
 
 cleanup() {
   [[ -z "${SQL_FILE:-}" ]] || rm -f "$SQL_FILE"
+  [[ "$BOOTSTRAPPED_DB" != "1" ]] || rm -f "$SQLDB"
 }
 trap cleanup EXIT
 
@@ -52,10 +54,11 @@ rows=(
 
 usage() {
   cat <<USAGE
-Usage: $0 check|apply
+Usage: $0 check|apply|bootstrap
 
 Environment:
-  TIKPAL_MOODE_SQLITE_DB       moOde sqlite DB path (default: /var/local/www/db/moode-sqlite3.db)
+  TIKPAL_RADIO_SQLITE_DB       dedicated Radio sqlite DB path (takes precedence)
+  TIKPAL_MOODE_SQLITE_DB       legacy moOde sqlite DB path (default: /var/local/www/db/moode-sqlite3.db)
   TIKPAL_SQLITE_BIN            sqlite binary (default: sqlite3)
   TIKPAL_RADIO_PRESETS_FORCE   set to 1 to overwrite occupied target ids
 USAGE
@@ -88,16 +91,55 @@ target_names_sql() {
   printf "%s" "${names[*]}"
 }
 
-require_db() {
+require_sqlite() {
   command -v "$SQLITE_BIN" >/dev/null 2>&1 || {
     echo "sqlite3 is unavailable: $SQLITE_BIN" >&2
     exit 1
   }
+}
+
+require_db() {
+  require_sqlite
   [[ -f "$SQLDB" ]] || {
-    echo "moOde sqlite DB not found: $SQLDB" >&2
+    echo "radio sqlite DB not found: $SQLDB" >&2
     exit 1
   }
   "$SQLITE_BIN" "$SQLDB" "SELECT 1 FROM cfg_radio LIMIT 1;" >/dev/null
+}
+
+bootstrap_presets() {
+  require_sqlite
+  [[ ! -e "$SQLDB" ]] || {
+    echo "refusing to bootstrap existing radio sqlite DB: $SQLDB" >&2
+    exit 2
+  }
+  [[ -d "$(dirname "$SQLDB")" ]] || {
+    echo "radio sqlite DB parent directory does not exist: $(dirname "$SQLDB")" >&2
+    exit 1
+  }
+
+  BOOTSTRAPPED_DB=1
+  "$SQLITE_BIN" "$SQLDB" <<'SQL'
+CREATE TABLE cfg_radio (
+  id INTEGER PRIMARY KEY,
+  station TEXT NOT NULL,
+  name TEXT NOT NULL,
+  type TEXT,
+  logo TEXT,
+  genre TEXT,
+  broadcaster TEXT,
+  language TEXT,
+  country TEXT,
+  region TEXT,
+  bitrate TEXT,
+  format TEXT,
+  geo_fenced TEXT,
+  home_page TEXT,
+  monitor TEXT
+);
+SQL
+  apply_presets
+  BOOTSTRAPPED_DB=0
 }
 
 print_conflicts() {
@@ -180,6 +222,9 @@ case "${1:-}" in
     ;;
   apply)
     apply_presets
+    ;;
+  bootstrap)
+    bootstrap_presets
     ;;
   -h|--help|"")
     usage

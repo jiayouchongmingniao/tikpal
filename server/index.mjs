@@ -67,6 +67,7 @@ const RADIO_ACTIVATE_COMMAND = process.env.TIKPAL_RADIO_ACTIVATE_COMMAND ?? "";
 const RADIO_DEFAULT_URI = process.env.TIKPAL_RADIO_DEFAULT_URI ?? "";
 const RADIO_LABEL = process.env.TIKPAL_RADIO_LABEL ?? "Last Station";
 const SQLITE_BIN = process.env.TIKPAL_SQLITE_BIN ?? "sqlite3";
+const RADIO_SQLITE_DB = (process.env.TIKPAL_RADIO_SQLITE_DB ?? "").trim() || "/var/local/www/db/moode-sqlite3.db";
 const RADIO_LOGO_DIR = resolve(process.env.TIKPAL_RADIO_LOGO_DIR ?? "/var/local/www/imagesw/radio-logos");
 const RADIO_VOLUME_DEFAULT_PERCENT_RAW = Number(process.env.TIKPAL_RADIO_VOLUME_DEFAULT_PERCENT ?? 35);
 const RADIO_VOLUME_DEFAULT_PERCENT = Number.isFinite(RADIO_VOLUME_DEFAULT_PERCENT_RAW)
@@ -4012,7 +4013,7 @@ function markActiveRadioStations(stations, currentFile) {
 
 async function readMpcRadioStations() {
   const query = "SELECT id, name, station, genre, broadcaster, bitrate, format, logo FROM cfg_radio ORDER BY id";
-  const raw = await runCommand(`${shellQuote(SQLITE_BIN)} -separator '|' /var/local/www/db/moode-sqlite3.db "${query}"`, { allowFailure: true });
+  const raw = await runCommand(`${shellQuote(SQLITE_BIN)} -separator '|' ${shellQuote(RADIO_SQLITE_DB)} "${query}"`, { allowFailure: true });
   if (!raw) {
     return [];
   }

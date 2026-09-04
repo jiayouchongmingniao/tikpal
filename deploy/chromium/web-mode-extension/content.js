@@ -1,4 +1,10 @@
 (() => {
+  // The page-world gate below is synchronous, while this is a second browser
+  // output guard for any media path it cannot intercept.
+  if (window.top === window) {
+    chrome.runtime.sendMessage({ type: "provider-audio-muted", muted: true }, () => {});
+  }
+
   const inputSelector = [
     "textarea",
     "[contenteditable='true']",

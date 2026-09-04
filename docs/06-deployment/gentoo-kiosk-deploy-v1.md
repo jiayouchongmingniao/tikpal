@@ -412,6 +412,27 @@ sudo fuser -v /dev/snd/*
 
 When QQ Music or another Explore provider is playing, the expected owner is a Chromium audio process holding BT66. When MPD or Radio is playing, the expected owner is MPD.
 
+### Radio Catalog Without moOde
+
+The Gentoo image does not need a full moOde installation to expose Radio. Set a Tikpal-owned catalog path in `.env.kiosk` so the API does not reuse a future moOde database:
+
+```conf
+TIKPAL_RADIO_SQLITE_DB=/var/lib/tikpal/radio.sqlite3
+```
+
+For a new host, create the protected directory and run the checked-in bootstrap once. It creates only the minimal `cfg_radio` table and imports the curated 36-station, 12-category catalog; it never creates or replaces a full moOde database.
+
+```bash
+install -d -o root -g moode -m 0750 /var/lib/tikpal
+TIKPAL_RADIO_SQLITE_DB=/var/lib/tikpal/radio.sqlite3 \
+  deploy/moode/tikpal-radio-presets-sync.sh bootstrap
+chown root:moode /var/lib/tikpal/radio.sqlite3
+chmod 0640 /var/lib/tikpal/radio.sqlite3
+systemctl restart tikpal-api.service
+```
+
+`bootstrap` refuses an existing target database. For later preset updates, run `check` first and use `apply` only after it reports no target-id conflicts; `TIKPAL_RADIO_PRESETS_FORCE=1` remains an explicit last resort. Omitting `TIKPAL_RADIO_SQLITE_DB` preserves the existing `/var/local/www/db/moode-sqlite3.db` compatibility path. Verify the catalog with `GET /api/v1/audio/radios`; Radio is switchable only when that route returns at least one station. Selecting Radio clears MPD's current queue to start the stream, so snapshot and restore a local queue before a live acceptance test.
+
 ### Multi-room Audio
 
 Multi-room Audio is optional and is controlled from Settings -> Preferences -> Multi-room Audio. Roon, Lyrion, and Tikpal Multi-room can be enabled at the same time and wait for playback; Music Assistant is a coming-soon placeholder in the first release. None of these ecosystems appear in the Player source rail, because playback selection and transport remain in their own apps.
@@ -747,7 +768,7 @@ Every real provider switch pauses the old provider's media via CDP `__tikpalProv
 
 Resident state is page-based, not process-based: `Ready` requires a CDP `type:"page"` target at a real `https://` provider URL, a complete document, and either 80 body characters or three visible interactive/media elements in two samples 200 ms apart. A cached Chromium window, local transition page, error page, or a real page that has not passed both full probes must remain `Prewarming` or show `Check setup`; the side panel never promotes a stale bootstrap surface. State files are atomically replaced, and inactive guards may not change `activeProvider`; together with the active-provider check around detached reconcile work, this prevents concurrent guards or older prewarm jobs from overwriting a newer selection. A provider error page whose reason is `region_unavailable` is retained as that explicit state instead of being reduced to `Check setup`: the side panel and error page tell the user to choose a Proxy exit that supports the service. QQ's scoped `QQ音乐提醒您` reminder may press only its `取消` control; login, client-download, payment, membership, and authorization prompts remain manual.
 
-Background providers stay muted and page-paused through the provider audio gate. Returning to a resident provider must clear tab mute, unmute media elements, and resume only the media that was playing when the provider was hidden. Repeated inactive guard polling must not overwrite that resume intent after the page is already paused. Provider guard replacement must wait for the old guard to exit and force-kill it if needed; duplicate guards polling the same QQ Music page can amplify flicker and high CPU on X11/EVDI mirror setups. If an offscreen prewarm times out before the SPA reaches its real host, the per-provider guard must later clear stale `check_setup` once CDP reports an expected provider URL such as `https://tidal.com/`.
+Background providers are silent from `document_start`: the main-world Provider audio gate starts inactive and the extension immediately applies browser-level Tab mute. This prevents autoplay from leaking during boot prewarm before the asynchronous Provider Guard reaches the page. Returning to a resident provider must clear Tab mute, unmute media elements, and resume only media that prewarm suppressed or that was playing when the provider was hidden. Repeated inactive Guard polling must not overwrite that resume intent after the page is already paused. Provider Guard replacement must wait for the old Guard to exit and force-kill it if needed; duplicate Guards polling the same QQ Music page can amplify flicker and high CPU on X11/EVDI mirror setups. If an offscreen prewarm times out before the SPA reaches its real host, the per-provider Guard must later clear stale `check_setup` once CDP reports an expected provider URL such as `https://tidal.com/`.
 
 When close or prewarm discovers provider profile processes already running, it resyncs `residentProviders` through the same full probe. This keeps the side panel aligned with the resident pool after API restarts or warm closes without marking an offscreen provider `Ready` before its page is actually usable.
 
