@@ -7,7 +7,9 @@ APP_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 ACTION="${1:-check}"
 
 : "${TIKPAL_AUDIO_ADAPT_MODE:=auto}"
-: "${TIKPAL_AUDIO_CARD_PRIORITY:=BT66,Crimson}"
+# Keep the default hardware-neutral. Deployments can declare a priority only
+# when their multiple simultaneously connected outputs are intentionally known.
+: "${TIKPAL_AUDIO_CARD_PRIORITY:=}"
 : "${TIKPAL_AUDIO_CARD_FORCE:=}"
 : "${TIKPAL_AUDIO_PREFER_SINGLE_USB:=${TIKPAL_AUDIO_ALLOW_UNKNOWN_SINGLE:-1}}"
 : "${TIKPAL_AUDIO_SYS_CLASS_SOUND_ROOT:=/sys/class/sound}"

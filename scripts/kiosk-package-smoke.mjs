@@ -549,8 +549,8 @@ eval "exec /usr/bin/install $filtered"
   const sharedNameCardA = "card 8: SharedA [Studio DAC (USB)], device 0: USB Audio [USB Audio]";
   const sharedNameCardB = "card 9: SharedB [Studio DAC (USB)], device 0: USB Audio [USB Audio]";
   const loopbackCard = "card 6: Loopback [Loopback], device 0: Loopback PCM [Loopback PCM]";
-  const bt66Resolve = runAudioAdapt(`${hdmiCard}\n${crimsonCard}\n${bt66Card}`, ["resolve-browser"]);
-  assert(bt66Resolve.status === 0 && bt66Resolve.stdout.trim() === "dmix:CARD=BT66,DEV=0", `audio adapter should prefer BT66 and use dmix:\n${bt66Resolve.stdout}\n${bt66Resolve.stderr}`);
+  const bt66Resolve = runAudioAdapt(`${hdmiCard}\n${crimsonCard}\n${bt66Card}`, ["resolve-browser"], { TIKPAL_AUDIO_CARD_PRIORITY: "BT66,Crimson" });
+  assert(bt66Resolve.status === 0 && bt66Resolve.stdout.trim() === "dmix:CARD=BT66,DEV=0", `audio adapter should honor an explicit device priority and use dmix:\n${bt66Resolve.stdout}\n${bt66Resolve.stderr}`);
   const crimsonResolve = runAudioAdapt(`${hdmiCard}\n${crimsonCard}`, ["resolve-browser"]);
   assert(crimsonResolve.status === 0 && crimsonResolve.stdout.trim() === "tikpal_browser_output", `audio adapter should use a shared conversion PCM for S24-only Crimson browser audio:\n${crimsonResolve.stdout}\n${crimsonResolve.stderr}`);
   const crimsonAudioout = runAudioAdapt(`${hdmiCard}\n${crimsonCard}`, ["resolve-audioout"]);
@@ -1947,6 +1947,8 @@ sync_runtime_provider_pool_process_statuses ""
   assert(kioskLauncher.includes("run_x_command xset"), "kiosk launcher should bound xset commands");
   assert(kioskLauncher.includes("detect_non_hdmi_card_id"), "kiosk launcher should detect the actual non-HDMI ALSA card");
   assert(kioskLauncher.includes("tikpal-audio-adapt.sh") && kioskLauncher.includes("resolve-browser"), "kiosk launcher should use the shared audio adapter for auto ALSA output");
+  assert(kioskLauncher.includes(': "${TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE:=auto}"'), "kiosk launcher should default Chromium audio to the physical adapter instead of ALSA default");
+  assert(webModeScript.includes(': "${TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE:=auto}"'), "Explore should default Chromium audio to the physical adapter instead of ALSA default");
   assert(kioskLauncher.includes('TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE="$(resolve_physical_alsa_output_device'), "kiosk launcher should resolve auto ALSA output before launching Chromium");
   assert(
     kioskLauncher.includes("resolve_xrandr_primary_output")
@@ -2073,7 +2075,8 @@ sync_runtime_provider_pool_process_statuses ""
   assert(webModeCrossfadeScript.includes('configured_base_pcm="${TIKPAL_WEB_MODE_ALSA_OUTPUT_DEVICE:-auto}"'), "Explore crossfade should default to auto ALSA output detection");
   assert(webModeCrossfadeScript.includes("resolve-browser") && webModeCrossfadeScript.includes("not safe for Explore softvol crossfade"), "Explore crossfade should use the adapter and decline non-dmix outputs");
   assert(!webModeCrossfadeScript.includes("BT66"), "Explore crossfade should not pin one ALSA card id");
-  assert(audioAdaptScript.includes("TIKPAL_AUDIO_CARD_PRIORITY:=BT66,Crimson"), "audio adapter should prefer known USB cards in the configured order");
+  assert(audioAdaptScript.includes('TIKPAL_AUDIO_CARD_PRIORITY:=}'), "audio adapter should leave card priority empty until a deployment explicitly supplies one");
+  assert(!audioAdaptScript.includes("TIKPAL_AUDIO_CARD_PRIORITY:=BT66,Crimson"), "audio adapter should not pin a browser output to historical card ids");
   assert(audioAdaptScript.includes("TIKPAL_AUDIO_PREFER_SINGLE_USB") && audioAdaptScript.includes("single-usb"), "audio adapter should prefer one unknown USB playback endpoint");
   assert(audioAdaptScript.includes("single-non-hdmi") && audioAdaptScript.includes("ambiguous non-HDMI playback endpoints detected"), "audio adapter should accept one non-HDMI endpoint and reject ambiguous endpoints");
   assert(audioAdaptScript.includes("resolve-browser") && audioAdaptScript.includes("resolve-audioout") && audioAdaptScript.includes("resolve-hw"), "audio adapter should expose browser, moOde, and raw hardware PCM resolvers");
@@ -2627,6 +2630,7 @@ sync_runtime_provider_pool_process_statuses ""
   assert(providerGuardCheck.stdout.includes("dismiss labels:"), "provider guard should allow safe dismiss prompts without accepting upsells");
   assert(providerGuardCheck.stdout.includes("duplicate player pruning: 1"), "provider guard should prune duplicate QQ player pages");
   assert(providerGuardCheck.stdout.includes("single pane navigation: 1"), "provider guard should keep QQ links in the left pane");
+  assert(providerGuardCheck.stdout.includes("qq start playback popup: 1"), "provider guard should enable the QQ start-playback popup handler");
   assert(providerGuardCheck.stdout.includes("qq reminder cancel: 1"), "provider guard should cancel the scoped QQ reminder dialog");
   assert(providerGuardCheck.stdout.includes("qq client prompt close/retry: 1"), "provider guard should close QQ client prompts before one playback retry");
   assert(providerGuardCheck.stdout.includes("qq login prompt preserve: 1"), "provider guard should preserve the QQ login-required prompt");
@@ -2748,6 +2752,13 @@ sync_runtime_provider_pool_process_statuses ""
   assert(providerGuardSource.includes('force ? "show-force" : "show"'), "provider focus guard should distinguish new focus from periodic keyboard show actions");
   assert(providerGuardSource.includes("__tikpalQqClientPromptRetried"), "QQ client prompt retries should stop after one playback attempt");
   assert(providerGuardSource.includes("qqReminderCancelExpression"), "QQ reminder cancellation should remain separate from client-prompt replay");
+  assert(providerGuardSource.includes("qqStartPlaybackExpression"), "QQ start-playback handling should remain separate from generic prompt confirmation");
+  assert(providerGuardSource.includes('textOf(element) === "开始播放"'), "QQ start-playback handling should click only the exact Start Playback action");
+  const safePromptFeaturesOffset = providerGuardSource.indexOf("async function runSafePromptFeatures");
+  assert(
+    providerGuardSource.indexOf("qqStartPlaybackExpression", safePromptFeaturesOffset) < providerGuardSource.indexOf("qqReminderCancelExpression", safePromptFeaturesOffset),
+    "QQ start-playback handling should run before reminder cancellation"
+  );
   assert(providerGuardSource.includes('text.includes("QQ音乐提醒您")'), "QQ reminder cancellation should stay scoped to the actual reminder dialog");
   assert(providerGuardSource.includes('textOf(element) === "取消"'), "QQ reminder cancellation should click only Cancel");
   assert(providerGuardSource.includes('!text.includes("下载客户端体验更多内容")'), "QQ login-required prompt should stay visible for user login");

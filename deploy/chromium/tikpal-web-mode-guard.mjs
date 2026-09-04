@@ -1164,6 +1164,35 @@ const qqReminderCancelExpression = `(() => {
   return { handled: true, cancelled: true };
 })()`;
 
+const qqStartPlaybackExpression = `(() => {
+  const textOf = (element) => String(element?.value || element?.innerText || element?.textContent || "").replace(/\\s+/g, "").trim();
+  const visible = (element) => {
+    if (!element) return false;
+    const rect = element.getBoundingClientRect();
+    const style = getComputedStyle(element);
+    return rect.width >= 8 &&
+      rect.height >= 8 &&
+      rect.right > 0 &&
+      rect.bottom > 0 &&
+      rect.left < innerWidth &&
+      rect.top < innerHeight &&
+      style.display !== "none" &&
+      style.visibility !== "hidden" &&
+      Number(style.opacity || "1") > 0.05;
+  };
+  const dialogs = Array.from(document.querySelectorAll(".yqq-dialog-wrap,[role='dialog'],.yqq-dialog,.mod_popup"))
+    .filter(visible);
+  for (const dialog of dialogs) {
+    const start = Array.from(dialog.querySelectorAll("button,a,[role='button'],input[type='button'],input[type='submit']"))
+      .find((element) => visible(element) && textOf(element) === "开始播放");
+    if (!start || start.dataset.tikpalQqStartPlaybackHandled === "1") continue;
+    start.dataset.tikpalQqStartPlaybackHandled = "1";
+    start.click();
+    return { handled: true, started: true };
+  }
+  return { handled: false };
+})()`;
+
 const qqAudioStateExpression = `(() => {
   const icon = document.querySelector(".btn_big_voice");
   const play = document.querySelector(".btn_big_play,.btn_big_pause");
@@ -2670,6 +2699,11 @@ async function runSafePromptFeatures(targets) {
   const target = providerTargets.find(Boolean);
   if (!target) return;
   if (providerId === "qq_music") {
+    const startPlaybackPrompt = await evaluate(target.webSocketDebuggerUrl, qqStartPlaybackExpression).catch(() => null);
+    if (startPlaybackPrompt?.handled) {
+      console.log("[tikpal-web-mode-guard] clicked QQ start playback popup");
+      return;
+    }
     const reminderPrompt = await evaluate(target.webSocketDebuggerUrl, qqReminderCancelExpression).catch(() => null);
     if (reminderPrompt?.handled) {
       console.log("[tikpal-web-mode-guard] dismissed QQ reminder cancel");
@@ -2984,6 +3018,7 @@ if (process.argv.includes("--check")) {
   console.log(`[tikpal-web-mode-guard] dismiss labels: ${dismissLabels.join(",")}`);
   console.log("[tikpal-web-mode-guard] duplicate player pruning: 1");
   console.log("[tikpal-web-mode-guard] single pane navigation: 1");
+  console.log("[tikpal-web-mode-guard] qq start playback popup: 1");
   console.log("[tikpal-web-mode-guard] qq reminder cancel: 1");
   console.log("[tikpal-web-mode-guard] qq client prompt close/retry: 1");
   console.log("[tikpal-web-mode-guard] qq login prompt preserve: 1");

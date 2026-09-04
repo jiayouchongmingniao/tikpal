@@ -45,7 +45,7 @@ fi
 : "${TIKPAL_CHROMIUM_BIN:=/usr/lib/chromium-browser/chromium-browser}"
 : "${TIKPAL_CHROMIUM_PROFILE_DIR:=$HOME/.config/tikpal-chromium-kiosk}"
 : "${TIKPAL_CHROMIUM_COLOR_SCHEME:=dark}"
-: "${TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE:=}"
+: "${TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE:=auto}"
 : "${TIKPAL_AUDIO_ADAPT_BIN:=$APP_DIR/deploy/moode/tikpal-audio-adapt.sh}"
 : "${TIKPAL_KIOSK_REMOTE_DEBUG:=0}"
 : "${TIKPAL_KIOSK_REMOTE_DEBUG_ADDRESS:=127.0.0.1}"

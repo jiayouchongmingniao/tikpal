@@ -41,7 +41,7 @@ if [[ "$(id -u)" == "0" && "$HOME" != "/home/"* ]]; then
   fi
 fi
 : "${TIKPAL_CHROMIUM_PROFILE_DIR:=$HOME/.config/tikpal-chromium-kiosk}"
-: "${TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE:=}"
+: "${TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE:=auto}"
 : "${TIKPAL_AUDIO_ADAPT_BIN:=$APP_DIR/deploy/moode/tikpal-audio-adapt.sh}"
 : "${TIKPAL_WEB_MODE_PROFILE_ROOT:=$HOME/.config/tikpal-web-mode}"
 : "${TIKPAL_WEB_MODE_PROVIDER_SWITCH_MARKER_PATH:=/run/tikpal/provider-switch.pid}"

@@ -47,6 +47,38 @@ governor before applying `performance`. Its stop action restores only those
 recorded values, so it never guesses or overwrites a governor selected by a
 different owner.
 
+## Dynamic audio routing
+
+Both the kiosk Chromium process and Explore Providers must use the physical
+audio resolver rather than ALSA `default`, which can point to Loopback after
+`snd_aloop` loads:
+
+```conf
+TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE=auto
+TIKPAL_WEB_MODE_ALSA_OUTPUT_DEVICE=auto
+TIKPAL_AUDIO_CARD_PRIORITY=
+TIKPAL_AUDIO_CARD_FORCE=
+```
+
+With no explicit override, the resolver chooses one currently attached USB
+playback endpoint, then one non-HDMI endpoint. If several candidates remain,
+it refuses to guess and requires an intentional `TIKPAL_AUDIO_CARD_FORCE` or
+deployment-specific priority. This is hardware discovery, not a card-name
+pin: on 2026-09-04 the connected USB device happened to resolve to
+`dmix:CARD=BT66,DEV=0`, but that value is neither checked in nor stored in the
+207 runtime configuration.
+
+Verify the active hardware without changing it:
+
+```bash
+runuser -u moode -- \
+  /home/moode/code/tikpal/deploy/moode/tikpal-audio-adapt.sh check
+```
+
+The launcher log and the QQ Chromium command line must show the same resolved
+`--alsa-output-device=` value. A resolved `default` is a configuration error,
+not a valid fallback for browser audio on a Loopback-enabled kiosk.
+
 ## Render behavior
 
 `runtime.renderProfile` is delivered by the API, not inferred from hostname.
