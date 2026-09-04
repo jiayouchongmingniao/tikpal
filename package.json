@@ -20,6 +20,7 @@
     "test:airplay-state": "sh scripts/airplay-state-smoke.sh",
     "test:upnp-recognition": "bash scripts/upnp-recognition-smoke.sh",
     "test:api": "node scripts/api-smoke.mjs",
+    "test:radio-logo-pack": "node scripts/radio-logo-pack-check.mjs",
     "test:ota:package:mp4": "node scripts/generate-mp4-resource-otas-smoke.mjs",
     "test:ota:resources": "node scripts/resource-ota-smoke.mjs",
     "test:kiosk": "node scripts/provider-audio-gate-fixture.mjs && node scripts/kiosk-package-smoke.mjs && node scripts/explore-open-lifecycle-smoke.mjs",

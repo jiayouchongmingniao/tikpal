@@ -124,6 +124,24 @@ Tikpal should leave the DLNA source blocked until a user selects it; then it
 becomes `armed`/`waiting`. Only a real sender and MPD-backed stream may mark
 it `connected`.
 
+### Stream interruption diagnosis
+
+`DLNA Ready` with `playback.state:"stopped"` is a retained, armed DLNA source
+whose incoming stream ended; it is not by itself a renderer disconnect. During
+the 2026-09-04 field run, the same `upmpdcli` PID stayed active with
+`NRestarts=0` while Tikpal briefly showed that state, then a new sender stream
+restored `connected` playback. Do not restart `upmpdcli`, Tikpal, or X11 for
+this symptom because that destroys the evidence and interrupts a sender that
+may be reconnecting.
+
+The observed QQ Music sender uses dynamic `aqqmusic.tc.qq.com` MP3 URLs. MPD
+logged `mpg123` cannot-seek/getformat errors at some replacement-stream
+boundaries, so a single stopped interval does not identify whether the sender
+withdrew transport or MPD rejected the next URL. For a conclusive failure, keep
+the sender untouched through a full track and retain the paired `upmpdcli`, MPD
+and Tikpal API journals; compare the first `DLNA Ready` timestamp with the
+sender's next `SetAVTransportURI`.
+
 ## Render behavior
 
 `runtime.renderProfile` is delivered by the API, not inferred from hostname.

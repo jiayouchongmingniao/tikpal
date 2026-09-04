@@ -418,6 +418,9 @@ The Gentoo image does not need a full moOde installation to expose Radio. Set a 
 
 ```conf
 TIKPAL_RADIO_SQLITE_DB=/var/lib/tikpal/radio.sqlite3
+# Keep curated station artwork inside the deployed Tikpal tree; Gentoo does
+# not provide moOde's /var/local/www/imagesw/radio-logos runtime directory.
+TIKPAL_RADIO_LOGO_DIR=/home/moode/code/tikpal/public/assets/radio-logos
 ```
 
 For a new host, create the protected directory and run the checked-in bootstrap once. It creates only the minimal `cfg_radio` table and imports the curated 36-station, 12-category catalog; it never creates or replaces a full moOde database.
@@ -432,6 +435,8 @@ systemctl restart tikpal-api.service
 ```
 
 `bootstrap` refuses an existing target database. For later preset updates, run `check` first and use `apply` only after it reports no target-id conflicts; `TIKPAL_RADIO_PRESETS_FORCE=1` remains an explicit last resort. Omitting `TIKPAL_RADIO_SQLITE_DB` preserves the existing `/var/local/www/db/moode-sqlite3.db` compatibility path. Verify the catalog with `GET /api/v1/audio/radios`; Radio is switchable only when that route returns at least one station. Selecting Radio clears MPD's current queue to start the stream, so snapshot and restore a local queue before a live acceptance test.
+
+Deploy `public/assets/radio-logos/` together with the catalog. Its `manifest.json` records the curated station-to-file aliases, official source URLs, and SHA-256 values; Tikpal serves these files locally and never fetches station artwork at runtime. The 36 curated stations currently resolve to 35 files because the Podcast and News NPR presets intentionally share the same official mark.
 
 ### Multi-room Audio
 
@@ -1826,6 +1831,8 @@ ss -ltnp | grep -E ':49149|:49152' # proxy and renderer HTTP
 ```
 
 The renderer description path is UUID-scoped, not the fixed `/description.xml` path. From a second device on the same L2 network, an SSDP `M-SEARCH` for `urn:schemas-upnp-org:device:MediaRenderer:1` must return its `LOCATION`; fetch that exact URL and verify `friendlyName` is `Tikpal-Gentoo-UPnP/AV`. A fixed-path HTTP 403 does not indicate a broken Renderer. Tikpal keeps DLNA `blocked` until the user selects it; selection should show `armed`/`waiting`, while only a real sender plus an MPD-backed stream promotes it to `connected`.
+
+If the UI returns to `DLNA Ready` / `stopped` while `upmpdcli.service` remains active with the same PID and `NRestarts=0`, the Renderer did not disconnect: the current UPnP stream ended and MPD no longer has a playable item. Do not restart the service as a first response because that interrupts any reconnecting sender. Preserve the UPnP and MPD journals, then compare the stop with the sender's next `SetAVTransportURI`. In the 207 field run, a QQ Music sender supplied short-lived `aqqmusic.tc.qq.com` MP3 URLs; MPD reported `mpg123` cannot-seek/getformat errors at some new stream boundaries. That is transport/decoder evidence, not proof that the Renderer crashed. Accept a stability fix only after a sender is left untouched through one complete track while the same evidence shows no `DLNA Ready` gap.
 
 #### Standalone AirPlay Receiver On Gentoo (2026-09-04)
 

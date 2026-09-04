@@ -1,0 +1,294 @@
+{
+  "schemaVersion": 1,
+  "description": "Official station logo assets for Tikpal curated Radio presets. The pack is deployed locally; the runtime never fetches these URLs.",
+  "assets": [
+    {
+      "stationId": "radio-500",
+      "station": "Focus - Soma FM Cliqhop",
+      "file": "Soma FM - Cliqhop.jpg",
+      "sourceUrl": "https://somafm.com/img3/cliqhop-400.jpg",
+      "homepage": "https://somafm.com/cliqhop/",
+      "sha256": "6c61a1acead03260a09db3d38bae8727499c7c8d024b817e6ad90d44f80c42cb"
+    },
+    {
+      "stationId": "radio-501",
+      "station": "Focus - Soma FM Beat Blender",
+      "file": "Soma FM - Beat Blender.jpg",
+      "sourceUrl": "https://somafm.com/img3/beatblender-400.jpg",
+      "homepage": "https://somafm.com/beatblender/",
+      "sha256": "ce9353eff07911021333588054c30352175184b314580e34f6f61682feed54a3"
+    },
+    {
+      "stationId": "radio-502",
+      "station": "Focus - Soma FM Groove Salad",
+      "file": "Soma FM - Groove Salad.jpg",
+      "sourceUrl": "https://somafm.com/img3/groovesalad-400.jpg",
+      "homepage": "https://somafm.com/groovesalad/",
+      "sha256": "ffe6880ff44b958d6ce7d6b366ee980de99be87f8bfa0737f3c810bc64394ba0"
+    },
+    {
+      "stationId": "radio-510",
+      "station": "Calm - Positively Meditation",
+      "file": "Positively Meditation.jpg",
+      "sourceUrl": "https://manager.uber.radio/static/uploads/station/6b82f1f4-8ac2-4d42-9908-34c40c79a257.png",
+      "homepage": "https://positivity.radio/",
+      "sha256": "af5ae505dd0cc6277104cbf54ab3bead02b41c178cf2474bf6983b3e3d22b0e3"
+    },
+    {
+      "stationId": "radio-511",
+      "station": "Calm - Soma FM Fluid",
+      "file": "Soma FM - Fluid.jpg",
+      "sourceUrl": "https://somafm.com/img3/fluid-400.jpg",
+      "homepage": "https://somafm.com/fluid/",
+      "sha256": "b8f4c8be7323e2873d41bc10023c294a3b61ee86af8d845bd9a216a550c1f81c"
+    },
+    {
+      "stationId": "radio-512",
+      "station": "Calm - Soma FM Synphaera",
+      "file": "Soma FM - Synphaera.jpg",
+      "sourceUrl": "https://somafm.com/img3/synphaera400.jpg",
+      "homepage": "https://somafm.com/synphaera/",
+      "sha256": "3e3fc691786351c05bda3139c009dd6aa7f109e8e49b593a7e9e0befcb3810c8"
+    },
+    {
+      "stationId": "radio-520",
+      "station": "Sleep - Ambient Sleeping Pill",
+      "file": "Ambient Sleeping Pill.jpg",
+      "sourceUrl": "https://ambientsleepingpill.com/wp-content/uploads/cropped-asp-small-logo-512-trans-192x192.png",
+      "homepage": "https://ambientsleepingpill.com/",
+      "sha256": "2656a0f54339c21d0e453f7546cb5c930421f3369d7c877554cee28be3e35f70"
+    },
+    {
+      "stationId": "radio-521",
+      "station": "Sleep - Soma FM Drone Zone",
+      "file": "Soma FM - Drone Zone.jpg",
+      "sourceUrl": "https://somafm.com/img3/dronezone-400.jpg",
+      "homepage": "https://somafm.com/dronezone/",
+      "sha256": "83ed51d7794201bb14547d6384d4039a726eebfcac0401ec2a4c913699566af9"
+    },
+    {
+      "stationId": "radio-522",
+      "station": "Sleep - Soma FM Deep Space One",
+      "file": "Soma FM - Deep Space One.jpg",
+      "sourceUrl": "https://somafm.com/img3/deepspaceone-400.jpg",
+      "homepage": "https://somafm.com/deepspaceone/",
+      "sha256": "ee7242adb8ac7d185c2e854ce0867eec6b1fcf7fa4a27f46bc3fa8257afab4ec"
+    },
+    {
+      "stationId": "radio-530",
+      "station": "Jazz - Jazz24",
+      "file": "Jazz24.jpg",
+      "sourceUrl": "https://npr.brightspotcdn.com/1c/4c/ac3af4814cfdb0c973b6557b3aa6/jazz24-rgb.png",
+      "homepage": "https://www.jazz24.org/",
+      "sha256": "417622da4c1158978fe953ebe48eda25f638fe7b52771b1056fea868aa924dee"
+    },
+    {
+      "stationId": "radio-531",
+      "station": "Jazz - The Jazz Groove",
+      "file": "The Jazz Groove.jpg",
+      "sourceUrl": "https://assets.jazzgroove.org/logo-circle-white1-no-org.png",
+      "homepage": "https://jazzgroove.org/",
+      "sha256": "c63a3a422462dc645cb9ff0aa5b555af77daa1d4626232db92aee94a77181b69"
+    },
+    {
+      "stationId": "radio-532",
+      "station": "Jazz - Linn Jazz",
+      "file": "Linn Jazz.jpg",
+      "sourceUrl": "https://small.linncdn.com/website/responsive/images/icons/linn-icon-x120.png",
+      "homepage": "https://www.linn.co.uk/linn-radio",
+      "sha256": "d44b6b53f69319a25b2048ca03a275108e27b4315499a0077073d7e4535041fb"
+    },
+    {
+      "stationId": "radio-540",
+      "station": "Blues - 1.FM Blues Radio",
+      "file": "1.FM - Blues Radio.jpg",
+      "sourceUrl": "https://radio.1cloud.fm/og_image.png",
+      "homepage": "https://www.1.fm/",
+      "sha256": "91d9f2ddf5001aeb954bffa0c203eb486da476fd1ae2e29e92cd534f516db87b"
+    },
+    {
+      "stationId": "radio-541",
+      "station": "Blues - WDCB Chicago Jazz & Blues",
+      "file": "WDCB Chicago FM 90.9 - Jazz & Blues.jpg",
+      "sourceUrl": "https://wdcb.org/img/favicons/apple-touch-icon-180x180.png",
+      "homepage": "https://wdcb.org/",
+      "sha256": "24072ed42cf88913209e0f7b522c52031bf8110569569bbd54db8994f7b928f2"
+    },
+    {
+      "stationId": "radio-542",
+      "station": "Blues - WWOZ New Orleans",
+      "file": "WWOZ New Orleans FM 90.7 - Various Artists.jpg",
+      "sourceUrl": "https://www.wwoz.org/sites/all/themes/custom/wwozui/images/wwoz-fb-logo.png",
+      "homepage": "https://www.wwoz.org/",
+      "sha256": "c9ca7f18543fd347656563f7c2313517cdc1adfc525fe992256f9308ce5fd28b"
+    },
+    {
+      "stationId": "radio-550",
+      "station": "Rock - Radio Paradise Rock",
+      "file": "Radio Paradise - Rock.jpg",
+      "sourceUrl": "https://radioparadise.com/apple-touch-icon.png",
+      "homepage": "https://radioparadise.com/",
+      "sha256": "55f984f5408b18e9a24fa21644d4c7992e65768cf9612bc2e2dd1f5ab9cfea14"
+    },
+    {
+      "stationId": "radio-551",
+      "station": "Rock - Radio Caroline",
+      "file": "Radio Caroline.jpg",
+      "sourceUrl": "https://www.radiocaroline.co.uk/images/logo_for_fb.jpg",
+      "homepage": "https://www.radiocaroline.co.uk/",
+      "sha256": "b074f5a0bf8992a70e5e893bf372d38649d28111befb16789b0a10b248f77ff6"
+    },
+    {
+      "stationId": "radio-552",
+      "station": "Rock - Soma FM Digitalis",
+      "file": "Soma FM - Digitalis.jpg",
+      "sourceUrl": "https://somafm.com/img3/digitalis-400.jpg",
+      "homepage": "https://somafm.com/digitalis/",
+      "sha256": "65a2e408729aebefd8da9f7ff44a882c8a5c9c468c29078facbcacb7e19a85d9"
+    },
+    {
+      "stationId": "radio-560",
+      "station": "World - Radio Paradise World",
+      "file": "Radio Paradise - World.jpg",
+      "sourceUrl": "https://radioparadise.com/apple-touch-icon.png",
+      "homepage": "https://radioparadise.com/",
+      "sha256": "55f984f5408b18e9a24fa21644d4c7992e65768cf9612bc2e2dd1f5ab9cfea14"
+    },
+    {
+      "stationId": "radio-561",
+      "station": "World - Hi On Line World",
+      "file": "Hi On Line - World.jpg",
+      "sourceUrl": "https://www.hionline.eu/wp-content/uploads/2015/09/unnamed-kopie.png",
+      "homepage": "https://www.hionline.eu/",
+      "sha256": "f3a1d4004d558966057491f33e08eefcf52f3e99505066b31caff44960fb35dc"
+    },
+    {
+      "stationId": "radio-562",
+      "station": "World - Soma FM Suburbs of Goa",
+      "file": "Soma FM - Suburbs of Goa.jpg",
+      "sourceUrl": "https://somafm.com/img3/suburbsofgoa-400.png",
+      "homepage": "https://somafm.com/suburbsofgoa/",
+      "sha256": "4063fb85623592023b94055dc3c2a95b6a68c7833be02a7a7ed07d6e2fea0aa0"
+    },
+    {
+      "stationId": "radio-570",
+      "station": "Electronic - FluxFM ElectroFlux",
+      "file": "FluxFM - ElectroFlux.jpg",
+      "sourceUrl": "https://www.fluxfm.de/assets/favicons/apple-icon-180x180.png",
+      "homepage": "https://www.fluxfm.de/",
+      "sha256": "d310f40223a069c0f0e6ca63d597f431d46396ee7e79a42eec2ea06f8ffa4b67"
+    },
+    {
+      "stationId": "radio-571",
+      "station": "Electronic - FluxFM Techno Underground",
+      "file": "FluxFM - Techno Underground.jpg",
+      "sourceUrl": "https://fluxmusic.cdn.radiosphere.io/images/84bd1f17-aec2-451f-bb1b-55bf741b95cb?type=medium",
+      "homepage": "https://www.fluxfm.de/channels/39773beb-7f28-4c18-9b8b-2bad32190ce9",
+      "sha256": "5181e87ab578fd6d5c8fcab198b4f609a503caf32dbba3b21ef90276b770cfbd"
+    },
+    {
+      "stationId": "radio-572",
+      "station": "Electronic - Soma FM PopTron",
+      "file": "Soma FM - PopTron.jpg",
+      "sourceUrl": "https://somafm.com/img3/poptron-400.png",
+      "homepage": "https://somafm.com/poptron/",
+      "sha256": "4103171de21b4ca18c80f550a358bdfab9dc0c12bb6016de7102c6f82554b687"
+    },
+    {
+      "stationId": "radio-580",
+      "station": "Podcast - BBC Radio 4",
+      "file": "BBC Radio 4 FM (320K).jpg",
+      "sourceUrl": "https://sounds.files.bbci.co.uk/3.12.0/networks/bbc_radio_four/blocks-colour_600x600.png",
+      "homepage": "https://www.bbc.co.uk/sounds/play/live/bbc_radio_fourfm",
+      "sha256": "da730f74565c2f0d680edb2cfff293662ec23ac532e649ea068a70889f67b554"
+    },
+    {
+      "stationId": "radio-581",
+      "station": "Podcast - France Culture Live",
+      "file": "France Culture Live.jpg",
+      "sourceUrl": "https://www.radiofrance.fr/_app/immutable/assets/franceculture-seosquare.CkEKWaD5.png",
+      "homepage": "https://www.radiofrance.fr/franceculture",
+      "sha256": "faad39de10be8e7e0ca377fe44550d797e985cf46cccd5caa71f06b13b0aefd6"
+    },
+    {
+      "stationId": "radio-582",
+      "station": "Podcast - NPR Program Stream",
+      "file": "NPR Program Stream.jpg",
+      "sourceUrl": "https://static-assets.npr.org/chrome_svg/npr-logo-2025.svg",
+      "homepage": "https://www.npr.org/",
+      "sha256": "fefd6e1ee3a9b777639c1f9f98d66c67568378accd316a23df1a10d6bc572500"
+    },
+    {
+      "stationId": "radio-590",
+      "station": "Classical - BR-Klassik",
+      "file": "BR-Klassik.jpg",
+      "sourceUrl": "https://api.ardmediathek.de/image-service/images/urn:ard:image:476e47d76c4bbf78?w=512",
+      "homepage": "https://www.br-klassik.de/",
+      "sha256": "83b1f18af1457b9ca76af22a943357c28eb404be17909acda3ca02f12736eef1"
+    },
+    {
+      "stationId": "radio-591",
+      "station": "Classical - NPO Klassiek",
+      "file": "NPO Klassiek.jpg",
+      "sourceUrl": "https://www.npoklassiek.nl/svg/npo-klassiek-logo.svg",
+      "homepage": "https://www.npoklassiek.nl/",
+      "sha256": "4d11a4c529ad83834af58d07943497835f8117dec32e77438e6228f21c02571b"
+    },
+    {
+      "stationId": "radio-592",
+      "station": "Classical - Linn Classical",
+      "file": "Linn Classical.jpg",
+      "sourceUrl": "https://small.linncdn.com/website/responsive/images/icons/linn-icon-x120.png",
+      "homepage": "https://www.linn.co.uk/linn-radio",
+      "sha256": "d44b6b53f69319a25b2048ca03a275108e27b4315499a0077073d7e4535041fb"
+    },
+    {
+      "stationId": "radio-600",
+      "station": "News - NPR Program Stream",
+      "file": "NPR Program Stream.jpg",
+      "sourceUrl": "https://static-assets.npr.org/chrome_svg/npr-logo-2025.svg",
+      "homepage": "https://www.npr.org/",
+      "sha256": "fefd6e1ee3a9b777639c1f9f98d66c67568378accd316a23df1a10d6bc572500"
+    },
+    {
+      "stationId": "radio-601",
+      "station": "News - DR P1",
+      "file": "DR P1.jpg",
+      "sourceUrl": "https://asset.dr.dk/imagescaler/?protocol=https&server=www.dr.dk&file=%2Fimages%2Fother%2F2020%2F02%2F10%2Fp1_logo_primaert.jpg",
+      "homepage": "https://www.dr.dk/lyd/p1",
+      "sha256": "7bcaedb1bca13a3407feaef12bb775efb0790e0d1a0a6b4f2b9299769a8953ea"
+    },
+    {
+      "stationId": "radio-602",
+      "station": "News - Radio SRF 4 News",
+      "file": "Radio SRF 4 News.jpg",
+      "sourceUrl": "https://www.srf.ch/build/assets/radio-srf-4-square-CPpwSzVl.svg",
+      "homepage": "https://www.srf.ch/radio-srf-4-news",
+      "sha256": "5571ea8b30e7bc1f60c07d6d08b0a5a6de561fa7afae0fb352ca1a2a5da77cb5"
+    },
+    {
+      "stationId": "radio-610",
+      "station": "Hi-Fi - Radio Paradise FLAC",
+      "file": "Radio Paradise - Main Mix.jpg",
+      "sourceUrl": "https://radioparadise.com/apple-touch-icon.png",
+      "homepage": "https://radioparadise.com/",
+      "sha256": "55f984f5408b18e9a24fa21644d4c7992e65768cf9612bc2e2dd1f5ab9cfea14"
+    },
+    {
+      "stationId": "radio-611",
+      "station": "Hi-Fi - Naim Radio",
+      "file": "Naim Radio.jpg",
+      "sourceUrl": "https://www.naimaudio.com/build/assets/apple-touch-icon-2a4e35a0.png",
+      "homepage": "https://www.naimaudio.com/radio/player",
+      "sha256": "984938e24ce25a66948826ee1bce385067f4fc9b0c39480c1d43debb47ef1296"
+    },
+    {
+      "stationId": "radio-612",
+      "station": "Hi-Fi - Linn Radio",
+      "file": "Linn Radio.jpg",
+      "sourceUrl": "https://small.linncdn.com/website/responsive/images/icons/linn-icon-x120.png",
+      "homepage": "https://www.linn.co.uk/linn-radio",
+      "sha256": "d44b6b53f69319a25b2048ca03a275108e27b4315499a0077073d7e4535041fb"
+    }
+  ]
+}
