@@ -33,12 +33,17 @@ airplay_volume_range_db="${TIKPAL_AIRPLAY_VOLUME_RANGE_DB:-30}"
 airplay_volume_control_profile="${TIKPAL_AIRPLAY_VOLUME_CONTROL_PROFILE:-flat}"
 airplay_pre_hook="/usr/local/bin/tikpal-shairport-spspre"
 airplay_post_hook="/usr/local/bin/tikpal-shairport-spspost"
-airplay_pre_hook_command="${airplay_pre_hook}"
-airplay_post_hook_command="${airplay_post_hook}"
+airplay_pre_hook_command=""
+airplay_post_hook_command=""
+airplay_hooks_available=0
 
 ensure_shairport_hooks() {
   visudo_path="$(command -v visudo 2>/dev/null || printf '%s\n' /usr/sbin/visudo)"
-  if ! command -v sudo >/dev/null 2>&1 || ! [ -x "$visudo_path" ] || ! id shairport-sync >/dev/null 2>&1; then
+  if ! command -v sudo >/dev/null 2>&1 \
+    || ! [ -x "$visudo_path" ] \
+    || ! id shairport-sync >/dev/null 2>&1 \
+    || ! [ -x /var/local/www/commandw/spspre.sh ] \
+    || ! [ -x /var/local/www/commandw/spspost.sh ]; then
     return 0
   fi
 
@@ -55,6 +60,9 @@ ensure_shairport_hooks() {
   run_as_root install -o root -g root -m 755 "$tmp_pre" "$airplay_pre_hook" || return 0
   run_as_root install -o root -g root -m 755 "$tmp_post" "$airplay_post_hook" || return 0
   run_as_root install -o root -g root -m 440 "$tmp_sudoers" /etc/sudoers.d/tikpal-shairport-sync-hooks || return 0
+  airplay_pre_hook_command="$airplay_pre_hook"
+  airplay_post_hook_command="$airplay_post_hook"
+  airplay_hooks_available=1
 }
 
 write_shairport_config() {
@@ -124,19 +132,31 @@ write_shairport_config() {
       updated_default_volume = 1;
       next;
     }
-    !updated_start && $0 ~ /^[[:space:]]*(\/\/[[:space:]]*)?run_this_before_entering_active_state[[:space:]]*=/ {
+    pre_hook != "" && !updated_start && $0 ~ /^[[:space:]]*(\/\/[[:space:]]*)?run_this_before_entering_active_state[[:space:]]*=/ {
       print "run_this_before_entering_active_state = \"" pre_hook "\";";
       updated_start = 1;
       next;
     }
-    !updated_stop && $0 ~ /^[[:space:]]*(\/\/[[:space:]]*)?run_this_after_exiting_active_state[[:space:]]*=/ {
+    pre_hook == "" && $0 ~ /^[[:space:]]*run_this_before_entering_active_state[[:space:]]*=/ {
+      print "//\t" $0;
+      next;
+    }
+    post_hook != "" && !updated_stop && $0 ~ /^[[:space:]]*(\/\/[[:space:]]*)?run_this_after_exiting_active_state[[:space:]]*=/ {
       print "run_this_after_exiting_active_state = \"" post_hook "\";";
       updated_stop = 1;
       next;
     }
-    !updated_wait && $0 ~ /^[[:space:]]*(\/\/[[:space:]]*)?wait_for_completion[[:space:]]*=/ {
+    post_hook == "" && $0 ~ /^[[:space:]]*run_this_after_exiting_active_state[[:space:]]*=/ {
+      print "//\t" $0;
+      next;
+    }
+    pre_hook != "" && !updated_wait && $0 ~ /^[[:space:]]*(\/\/[[:space:]]*)?wait_for_completion[[:space:]]*=/ {
       print "wait_for_completion = \"yes\";";
       updated_wait = 1;
+      next;
+    }
+    pre_hook == "" && $0 ~ /^[[:space:]]*wait_for_completion[[:space:]]*=/ {
+      print "wait_for_completion = \"no\";";
       next;
     }
     !updated_artwork && $0 ~ /^[[:space:]]*(\/\/[[:space:]]*)?cover_art_cache_directory[[:space:]]*=/ {
@@ -232,17 +252,25 @@ ensure_shairport_config() {
   if [ -n "$airplay_service_type" ] && ! grep -Fq "service_type = \"${airplay_service_type}\";" "$config_path"; then
     service_type_ok=0
   fi
+  hooks_ok=1
+  if [ "$airplay_hooks_available" -eq 1 ]; then
+    if ! grep -Fq "run_this_before_entering_active_state = \"${airplay_pre_hook_command}\";" "$config_path" \
+      || ! grep -Fq "run_this_after_exiting_active_state = \"${airplay_post_hook_command}\";" "$config_path" \
+      || ! grep -Fq 'wait_for_completion = "yes";' "$config_path"; then
+      hooks_ok=0
+    fi
+  elif grep -Eq '^[[:space:]]*run_this_(before_entering_active_state|after_exiting_active_state)[[:space:]]*=' "$config_path"; then
+    hooks_ok=0
+  fi
 
   if [ "$name_ok" -eq 1 ] \
     && [ "$service_type_ok" -eq 1 ] \
+    && [ "$hooks_ok" -eq 1 ] \
     && grep -Fq "output_device = \"${output_device}\";" "$config_path" \
     && grep -Fq "ignore_volume_control = \"${airplay_ignore_volume_control}\";" "$config_path" \
     && grep -Fq "volume_range_db = ${airplay_volume_range_db};" "$config_path" \
     && grep -Fq "volume_control_profile = \"${airplay_volume_control_profile}\";" "$config_path" \
     && grep -Fq "default_airplay_volume = ${airplay_default_volume_db};" "$config_path" \
-    && grep -Fq "run_this_before_entering_active_state = \"${airplay_pre_hook_command}\";" "$config_path" \
-    && grep -Fq "run_this_after_exiting_active_state = \"${airplay_post_hook_command}\";" "$config_path" \
-    && grep -Fq 'wait_for_completion = "yes";' "$config_path" \
     && grep -Fq "cover_art_cache_directory = \"${airplay_artwork_root}\";" "$config_path" \
     && grep -Fq 'enabled = "yes";' "$config_path" \
     && grep -Fq 'include_cover_art = "yes";' "$config_path" \

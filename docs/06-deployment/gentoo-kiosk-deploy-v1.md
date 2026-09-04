@@ -1793,6 +1793,22 @@ TIKPAL_UPNP_DISABLE_COMMAND="./deploy/moode/tikpal-upnp-disable.sh"
 
 After deploying the helpers, select each available external source once and confirm `/api/v1/system/state` reports it as `armed`/`waiting`; only an actual sender connection may promote it to `connected`. AirPlay additionally requires `shairport-sync.service` to be active after selection. Do not treat an inactive optional receiver before selection as a failed deployment.
 
+#### Standalone AirPlay Receiver On Gentoo (2026-09-04)
+
+On a minimal Gentoo image, `shairport-sync` may not have a Portage ebuild. Build the pinned upstream `5.2.3` source only after installing `net-dns/avahi` and `dev-libs/libconfig`; the receiver must include ALSA, Avahi, OpenSSL, FFmpeg, metadata pipe, MPRIS, and the systemd startup unit. Its service account needs supplementary `audio` access for the Tikpal ALSA `_audioout` device.
+
+Keep the generated `/etc/shairport-sync.conf` and set the Tikpal values through `tikpal-airplay-enable.sh`: `name = "Tikpal-Gentoo-Airplay"`, `service_type = "classic"`, `output_device = "_audioout"`, the existing volume policy, and `/tmp/shairport-sync-metadata`. The helper now enables `spspre`/`spspost` callbacks only when the corresponding moOde scripts actually exist, so a standalone Gentoo install does not register dead callbacks.
+
+Enable both `avahi-daemon.service` and `shairport-sync.service`. For hosts with an intentionally unassociated WLAN interface, use a local Shairport systemd unit that orders after `network.target` and `avahi-daemon.service` but does not wait for `network-online.target`; otherwise `systemd-networkd-wait-online` can indefinitely postpone the receiver even when the wired LAN is ready. Accept the deployment only when all of these hold:
+
+```bash
+systemctl is-active avahi-daemon.service shairport-sync.service
+ss -ltnp | grep ':5000'
+avahi-browse -rt _raop._tcp | grep 'Tikpal-Gentoo-Airplay'
+```
+
+This proves local classic-AirPlay discovery. A phone still needs to be on the same L2 network without wireless client isolation; phone-side discovery is a separate physical acceptance check.
+
 ### DLNA Fingerprint Recognition And Cross-Surface State (2026-08-22)
 
 A connected DLNA stream first uses trustworthy DIDL metadata for immediate lyrics. When the stream has no usable title/artist, Tikpal may capture six seconds through an MPD `httpd` tap bound only to `127.0.0.1:8001` and send that bounded audio sample to the configured recognition provider. The result remains `lyrics.sourceScope: "upnp_input"`, so Ambient, Player, Hi-Fi, and the portable Remote consume the same artwork/lyrics state rather than introducing a DLNA-only UI path. Recognition is valid only for the current DLNA connection and is refreshed at `TIKPAL_UPNP_RECOGNITION_REFRESH_MS` (default `90000` milliseconds).
