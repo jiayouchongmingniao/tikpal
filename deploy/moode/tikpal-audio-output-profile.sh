@@ -4,6 +4,9 @@ set -euo pipefail
 profile="${1:-status}"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 mpd_conf="${TIKPAL_MPD_CONF:-/etc/mpd.conf}"
+mpd_music_directory="${TIKPAL_MPD_MUSIC_ROOT:-/var/lib/mpd/music}"
+mpd_database_file="${TIKPAL_MPD_DATABASE_FILE:-/var/lib/mpd/database}"
+mpd_playlist_directory="${TIKPAL_MPD_PLAYLIST_DIRECTORY:-/var/lib/mpd/playlists}"
 standard_device="${TIKPAL_MPD_STANDARD_ALSA_DEVICE:-_audioout}"
 pure_path="${TIKPAL_MPD_PURE_PATH:-unknown}"
 pure_target_rate="${TIKPAL_MPD_PURE_TARGET_RATE:-48000}"
@@ -16,6 +19,7 @@ sleep_volume_limit="${TIKPAL_MPD_SLEEP_VOLUME_LIMIT:-45}"
 mpc_timeout_seconds="${TIKPAL_MPC_TIMEOUT_SECONDS:-1}"
 mpd_stop_timeout_seconds="${TIKPAL_MPD_STOP_TIMEOUT_SECONDS:-2}"
 mpd_start_timeout_seconds="${TIKPAL_MPD_START_TIMEOUT_SECONDS:-5}"
+mpd_restart_on_profile_write="${TIKPAL_MPD_RESTART_ON_PROFILE_WRITE:-1}"
 custom_device="${TIKPAL_MPD_CUSTOM_ALSA_DEVICE:-$standard_device}"
 custom_name="${TIKPAL_MPD_CUSTOM_OUTPUT_NAME:-Tikpal Custom}"
 custom_mixer_type="${TIKPAL_MPD_CUSTOM_MIXER_TYPE:-}"
@@ -28,12 +32,77 @@ marker_start="# Tikpal managed MPD audio output: start"
 marker_end="# Tikpal managed MPD audio output: end"
 src_marker_start="# Tikpal managed MPD resampler: start"
 src_marker_end="# Tikpal managed MPD resampler: end"
+library_marker_start="# Tikpal managed MPD library: start"
+library_marker_end="# Tikpal managed MPD library: end"
+
+validate_library_path() {
+  local value="$1"
+  [[ "$value" == /* && "$value" != *$'\n'* && "$value" != *'"'* ]] || {
+    printf 'MPD library paths must be absolute and must not contain quotes or newlines\n' >&2
+    return 1
+  }
+}
+
+build_library_block() {
+  validate_library_path "$mpd_music_directory"
+  validate_library_path "$mpd_database_file"
+  validate_library_path "$mpd_playlist_directory"
+  printf '%s\n' "$library_marker_start"
+  printf 'music_directory "%s"\n' "$mpd_music_directory"
+  printf 'db_file "%s"\n' "$mpd_database_file"
+  printf 'playlist_directory "%s"\n' "$mpd_playlist_directory"
+  printf 'follow_inside_symlinks "yes"\n'
+  printf 'follow_outside_symlinks "yes"\n'
+  printf '%s\n' "$library_marker_end"
+}
+
+write_library_config() {
+  [[ -f "$mpd_conf" ]] || { printf '%s not found\n' "$mpd_conf" >&2; exit 66; }
+
+  local tmp_file backup_file
+  tmp_file="$(mktemp)"
+  if grep -Fq "$library_marker_start" "$mpd_conf"; then
+    awk -v start="$library_marker_start" -v end="$library_marker_end" '
+      $0 == start { skip=1; next }
+      $0 == end { skip=0; next }
+      skip != 1 { print }
+    ' "$mpd_conf" > "$tmp_file"
+  else
+    cp "$mpd_conf" "$tmp_file"
+  fi
+
+  {
+    sed -e '${/^$/d;}' "$tmp_file"
+    printf '\n'
+    build_library_block
+  } > "${tmp_file}.next"
+
+  if cmp -s "${tmp_file}.next" "$mpd_conf"; then
+    rm -f "$tmp_file" "${tmp_file}.next"
+    printf 'libraryManaged=1\n'
+    return 0
+  fi
+
+  backup_file="${mpd_conf}.tikpal-library-$(date +%Y%m%d%H%M%S).bak"
+  cp -p "$mpd_conf" "$backup_file"
+  if [[ "$(id -u)" == "0" ]]; then
+    install -m 0644 "${tmp_file}.next" "$mpd_conf"
+  else
+    sudo -n install -m 0644 "${tmp_file}.next" "$mpd_conf"
+  fi
+  rm -f "$tmp_file" "${tmp_file}.next"
+  printf 'libraryManaged=1\n'
+}
 
 env_enabled() {
   case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
     1|true|yes|on|enabled) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+profile_restart_enabled() {
+  env_enabled "$mpd_restart_on_profile_write"
 }
 
 run_with_timeout() {
@@ -463,11 +532,20 @@ write_profile() {
   fi
 
   rm -f "$tmp_file" "${tmp_file}.next"
-  restart_mpd_quickly
-  wait_for_mpd
-  select_runtime_output "$(profile_output_name "$selected_profile")"
-  apply_runtime_profile "$selected_profile"
+  if profile_restart_enabled; then
+    restart_mpd_quickly
+    wait_for_mpd
+    select_runtime_output "$(profile_output_name "$selected_profile")"
+    apply_runtime_profile "$selected_profile"
+  fi
   printf '%s\n' "$selected_profile"
+}
+
+bootstrap_mpd_config() {
+  write_library_config
+  if ! grep -Fq "$marker_start" "$mpd_conf"; then
+    write_profile "everyday"
+  fi
 }
 
 print_managed_block() {
@@ -514,6 +592,12 @@ case "$profile" in
   status)
     current_profile
     ;;
+  library-setup)
+    write_library_config
+    ;;
+  bootstrap)
+    bootstrap_mpd_config
+    ;;
   diagnostics)
     diagnostics
     ;;
@@ -525,7 +609,7 @@ case "$profile" in
     ;;
   *)
     selected_profile="$(normalize_profile "$profile")" || {
-      printf 'usage: %s {pure|everyday|sleep|custom|status|diagnostics|src-apply|src-check}\n' "$0" >&2
+      printf 'usage: %s {pure|everyday|sleep|custom|status|diagnostics|library-setup|bootstrap|src-apply|src-check}\n' "$0" >&2
       exit 64
     }
     write_profile "$selected_profile"

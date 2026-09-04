@@ -27,6 +27,7 @@ interface AmbientScreenProps {
   sceneVideoEnabled: boolean;
   sceneVideoStableLoop: boolean;
   renderProfile: TikpalState["runtime"]["renderProfile"];
+  ambientActive: boolean;
   sceneSoundEnabled: boolean;
   sourcePickerOpenRequest: number;
   clockVisible: boolean;
@@ -363,6 +364,7 @@ export function AmbientScreen({
   sceneVideoEnabled,
   sceneVideoStableLoop,
   renderProfile,
+  ambientActive,
   sceneSoundEnabled,
   sourcePickerOpenRequest,
   clockVisible,
@@ -496,7 +498,7 @@ export function AmbientScreen({
   const shouldRenderSceneVideo = sceneVideoEnabled && hasSceneVideo && !sceneVideoThermalGuardActive;
   const { staticOnly: sceneVideoBudgetStaticOnly, diagnostics: sceneRenderDiagnostics } = useSceneRenderBudget({
     constrained: renderProfile === "constrained" && !isHifiMode,
-    enabled: shouldRenderSceneVideo
+    enabled: shouldRenderSceneVideo && ambientActive
   });
   const sceneVisualLowPower = audioProtectionMode || sceneVideoThermalGuardActive || renderProfile === "constrained";
   const sceneAudioEnabled = shouldRenderSceneVideo && sceneSoundEnabled && !ambientSceneAudioSuppressed && playback.source === "scene" && playback.state === "playing";

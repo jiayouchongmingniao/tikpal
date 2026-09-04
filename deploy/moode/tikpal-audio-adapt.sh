@@ -29,6 +29,7 @@ ACTION="${1:-check}"
 : "${TIKPAL_SNDALOOP_CONFIG:=/etc/tikpal/alsa-loopback.conf}"
 : "${TIKPAL_MOODE_DB:=/var/local/www/db/moode-sqlite3.db}"
 : "${TIKPAL_SND_ALOOP_MODULES_LOAD:=/etc/modules-load.d/tikpal-snd-aloop.conf}"
+: "${TIKPAL_MPD_MUSIC_ROOT:=/var/lib/mpd/music}"
 
 log() {
   printf '[tikpal-audio-adapt] %s\n' "$*" >&2
@@ -565,6 +566,20 @@ EOF
   ensure_loopback_visible
 }
 
+ensure_mpd_library_config() {
+  local profile_helper="$SCRIPT_DIR/tikpal-audio-output-profile.sh"
+  local mpd_conf="${TIKPAL_MPD_CONF:-/etc/mpd.conf}"
+  [[ -x "$profile_helper" ]] || {
+    log "WARN: MPD library helper is unavailable at $profile_helper"
+    return 0
+  }
+  [[ -f "$mpd_conf" ]] || {
+    log "WARN: MPD configuration is unavailable at $mpd_conf; skipping library setup"
+    return 0
+  }
+  TIKPAL_MPD_MUSIC_ROOT="$TIKPAL_MPD_MUSIC_ROOT" TIKPAL_MPD_RESTART_ON_PROFILE_WRITE=0 "$profile_helper" bootstrap
+}
+
 check_audio() {
   local selected audioout_pcm browser_pcm browser_shared_format mixer_control volume_strategy
   selected="$(select_card)"
@@ -617,6 +632,7 @@ apply_audio() {
   write_browser_output_config "$selected" "$browser_shared_format"
   write_audioout_config "$audioout_pcm"
   enable_loopback_config "$audioout_pcm"
+  ensure_mpd_library_config
   log "selected $(selected_field "$selected" 2) ($(selected_field "$selected" 4)) for $audioout_pcm"
   if [[ -n "$browser_shared_format" ]]; then
     log "browser shared PCM: $TIKPAL_AUDIO_BROWSER_SHARED_PCM ($browser_shared_format)"

@@ -95,6 +95,11 @@ The browser records rAF pacing, Long Tasks, and
   layer again.
 - A repeated failure returns to static for five minutes before the next try.
 
+The budget is active only while Ambient is the foreground Tikpal screen. Opening
+Player, Settings, or Quick Menu clears a stale static fallback; returning to
+Ambient starts a fresh video attempt instead of making the user wait for a
+countdown that began behind an overlay.
+
 The static state is deliberately non-blocking and is reported in the kiosk
 heartbeat as `activeSceneVideo.staticOnly=true`. It is a successful protective
 state, not a missing-scene watchdog failure.

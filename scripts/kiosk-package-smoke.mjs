@@ -645,6 +645,15 @@ audio_output {
     TIKPAL_AUDIO_CARD_PRIORITY: "BT66,Crimson",
     TIKPAL_FAKE_APLAY_CARDS: `${hdmiCard}\n${bt66Card}`
   };
+  const librarySetup = spawnSync("bash", [audioProfileHelper, "bootstrap"], { cwd: ROOT, env: { ...mpdProfileEnv, TIKPAL_MPD_RESTART_ON_PROFILE_WRITE: "0" }, encoding: "utf8" });
+  assert(librarySetup.status === 0 && librarySetup.stdout.includes("libraryManaged=1"), `MPD bootstrap should configure a persistent database:\n${librarySetup.stdout}\n${librarySetup.stderr}`);
+  const librarySetupConfig = await readFile(mpdProfileConfig, "utf8");
+  assert(
+    librarySetupConfig.includes('music_directory "/var/lib/mpd/music"')
+      && librarySetupConfig.includes('db_file "/var/lib/mpd/database"')
+      && librarySetupConfig.includes('follow_outside_symlinks "yes"'),
+    "MPD library setup should keep Tikpal music and removable-drive symlinks indexable"
+  );
   const srcApply = spawnSync("bash", [audioProfileHelper, "src-apply"], { cwd: ROOT, env: mpdProfileEnv, encoding: "utf8" });
   assert(srcApply.status === 0 && srcApply.stdout.includes("srcManaged=1"), `MPD SRC apply should validate the managed SoXR block:\n${srcApply.stdout}\n${srcApply.stderr}`);
   const firstSrcConfig = await readFile(mpdProfileConfig, "utf8");
