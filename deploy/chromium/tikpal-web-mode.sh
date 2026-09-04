@@ -3241,10 +3241,19 @@ call_onboard_method() {
   return 1
 }
 
+onboard_running() {
+  local onboard_bin
+  onboard_bin="$(command -v onboard 2>/dev/null || true)"
+  [[ -n "$onboard_bin" ]] || return 1
+  # Gentoo's console-script entry point runs as Python, so its process name is
+  # python3 rather than onboard. Match the installed entry point in argv.
+  pgrep -u "$(id -u)" -f -- "$onboard_bin" >/dev/null 2>&1
+}
+
 position_onboard() {
   local area height keyboard_area=0 keyboard_window="" window width
   is_enabled "$TIKPAL_WEB_MODE_ONBOARD" || return 0
-  pgrep -u "$(id -u)" -x onboard >/dev/null 2>&1 || return 0
+  onboard_running || return 0
 
   if command -v xdotool >/dev/null 2>&1; then
     while IFS= read -r window; do
@@ -3313,7 +3322,7 @@ move_onboard_if_requested() {
   is_enabled "$TIKPAL_WEB_MODE_ONBOARD" || return 0
   is_enabled "${TIKPAL_WEB_MODE_ONBOARD_REQUESTED_POSITION:-0}" || return 0
   command -v xdotool >/dev/null 2>&1 || return 0
-  pgrep -u "$(id -u)" -x onboard >/dev/null 2>&1 || return 0
+  onboard_running || return 0
 
   while IFS= read -r window; do
     [[ -n "$window" ]] || continue
@@ -3753,7 +3762,7 @@ ensure_onboard() {
     return 0
   }
 
-  if ! pgrep -u "$(id -u)" -x onboard >/dev/null 2>&1; then
+  if ! onboard_running; then
     configure_onboard
     start_onboard_process
     sleep 0.8
@@ -3779,7 +3788,7 @@ preload_onboard() {
   }
   configure_onboard
 
-  if ! pgrep -u "$(id -u)" -x onboard >/dev/null 2>&1; then
+  if ! onboard_running; then
     start_onboard_process
     sleep 0.8
   fi
@@ -3789,14 +3798,14 @@ preload_onboard() {
 
 hide_onboard() {
   is_enabled "$TIKPAL_WEB_MODE_ONBOARD" || return 0
-  pgrep -u "$(id -u)" -x onboard >/dev/null 2>&1 || return 0
+  onboard_running || return 0
   [[ -n "$(onboard_visible_windows)" ]] || return 0
   call_onboard_method Hide 1 0.35 || true
 }
 
 toggle_onboard() {
   is_enabled "$TIKPAL_WEB_MODE_ONBOARD" || return 0
-  if ! pgrep -u "$(id -u)" -x onboard >/dev/null 2>&1 || [[ -z "$(onboard_visible_windows)" ]]; then
+  if ! onboard_running || [[ -z "$(onboard_visible_windows)" ]]; then
     rm -f "$TIKPAL_WEB_MODE_ONBOARD_SUPPRESS_PATH"
     ensure_onboard
     return
@@ -3814,7 +3823,7 @@ force_onboard() {
 keepalive_onboard() {
   is_enabled "$TIKPAL_WEB_MODE_ONBOARD" || return 0
   rm -f "$TIKPAL_WEB_MODE_ONBOARD_SUPPRESS_PATH"
-  if ! pgrep -u "$(id -u)" -x onboard >/dev/null 2>&1; then
+  if ! onboard_running; then
     return
   fi
   [[ -n "$(onboard_visible_windows)" ]] || return 0

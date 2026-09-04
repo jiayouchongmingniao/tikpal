@@ -2222,6 +2222,12 @@ sync_runtime_provider_pool_process_statuses ""
   assert(webModeScript.includes("Onboard.Keyboard.$method"), "web mode should share Onboard DBus Show and Hide calls");
   assert(webModeScript.includes("call_onboard_method Show"), "web mode should keep DBus Show as a fallback when xdotool map is not enough");
   assert(webModeScript.includes("call_onboard_method Hide"), "web mode should hide Onboard without terminating it");
+  assert(
+    webModeScript.includes("onboard_running() {")
+      && webModeScript.includes('pgrep -u "$(id -u)" -f -- "$onboard_bin"')
+      && !webModeScript.includes('pgrep -u "$(id -u)" -x onboard'),
+    "Onboard lifecycle should recognize Gentoo's Python console-script process by its installed executable"
+  );
   assert(!webModeScript.includes("windowunmap"), "web mode should not unmap Onboard because that terminates the resident process");
   assert(webModeScript.includes("Class: InputOnly"), "web mode should ignore Onboard's transparent input-only helper window");
   assert(webModeScript.includes('getwindowname "$window"'), "web mode should ignore Onboard's cold-start placeholder window");
