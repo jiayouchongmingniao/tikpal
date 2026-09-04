@@ -143,6 +143,21 @@ reusable and still receive the normal eight-second resource freeze. Pages that
 were not ready are reconciled and prewarmed only after the next Explore open,
 so the side panel cannot briefly show a post-close `prewarming` state.
 
+## Proxy-friendly-page recovery
+
+When a user selects a resident provider whose card is `Check proxy` (or was
+briefly changed to `Prewarming` by reconciliation) and whose page is the local
+friendly error page, Tikpal performs one bounded probe of that provider's real
+URL through the current Settings proxy. A successful probe returns the existing
+page to its provider URL through the foreground CDP Manager session, waits for
+a real ready HTTPS page, and only then reveals it. The trace logs `proxy_retry`
+with provider, outcome, and elapsed time.
+
+An unreachable proxy, failed navigation, or a repeated friendly error leaves
+the card at `Check proxy` without a reload loop or browser rebuild; an already
+visible different provider remains visible. QQ Music and NetEase Cloud Music
+continue to use their direct route and do not enter this proxy retry path.
+
 ## Diagnostics and graphics policy
 
 Run the read-only report as the kiosk user:

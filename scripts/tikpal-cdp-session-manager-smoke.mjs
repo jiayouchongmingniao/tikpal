@@ -113,10 +113,16 @@ browser.on("upgrade", (request, socket) => {
         return;
       }
       if (message.method === "Page.navigate") {
-        if (String(message.params?.url || "").includes("/web-mode-error.html")) {
-          targetUrl = String(message.params.url);
+        const nextUrl = String(message.params?.url || "");
+        if (nextUrl.includes("/web-mode-error.html")) {
+          targetUrl = nextUrl;
           friendlyErrorNavigations.push(targetUrl);
           socket.write(frame({ method: "Target.targetInfoChanged", params: { targetInfo: { targetId, type: "page", title: "Tikpal Explore", url: targetUrl } } }));
+          return reply();
+        }
+        if (nextUrl === "https://open.spotify.com/") {
+          targetUrl = nextUrl;
+          socket.write(frame({ method: "Target.targetInfoChanged", params: { targetInfo: { targetId, type: "page", title: "Spotify", url: targetUrl } } }));
           return reply();
         }
         socket.destroy();
@@ -214,8 +220,16 @@ try {
     reattachedFriendly.ok && reattachedFriendly.target.state === "READY" && reattachedFriendly.target.friendlyError?.status === "check_proxy",
     "manager should reattach its own friendly error page after a target detach"
   );
-  targetUrl = "https://open.spotify.com/";
-  emitPageEvent("Target.targetInfoChanged", { targetInfo: { targetId, type: "page", title: "Spotify", url: targetUrl } });
+  const retriedNavigation = await managerRequest({
+    op: "command",
+    provider: "spotify",
+    method: "Page.navigate",
+    params: { url: "https://open.spotify.com/" },
+    retryable: false,
+    priority: "foreground"
+  });
+  assert(retriedNavigation.ok && !retriedNavigation.recovered, "a proxy-recovered provider navigation should use the existing foreground session once");
+  assert(browserConnections === 1 && getTargets === 1, "proxy retry navigation should not rebuild the resident browser session");
   emitPageEvent("Page.frameNavigated", { frame: { id: "root", url: "https://open.spotify.com/" } }, "session-2");
   await new Promise((resolve) => setTimeout(resolve, 25));
   const recoveredTargets = await managerRequest({ op: "targets", provider: "spotify", priority: "foreground" });

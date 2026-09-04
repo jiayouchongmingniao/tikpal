@@ -1958,6 +1958,22 @@ provider_direct_reachable() {
   http_code_is_reachable "$code"
 }
 
+provider_proxy_reachable() {
+  local provider="$1" proxy_url="$2"
+  local url code timeout=5
+  [[ -n "$proxy_url" ]] || return 1
+  command -v curl >/dev/null 2>&1 || return 1
+  url="$(provider_url "$provider")"
+  code="$(curl --proxy "$proxy_url" -k -I -L -sS -o /dev/null \
+    --connect-timeout 2 --max-time "$timeout" -w '%{http_code}' "$url" 2>/dev/null || true)"
+  if http_code_is_reachable "$code"; then
+    return 0
+  fi
+  code="$(curl --proxy "$proxy_url" -k -L -r 0-0 -sS -o /dev/null \
+    --connect-timeout 2 --max-time "$timeout" -w '%{http_code}' "$url" 2>/dev/null || true)"
+  http_code_is_reachable "$code"
+}
+
 provider_needs_proxy_message() {
   printf '%s needs proxy' "$(provider_label "$1")"
 }
@@ -2667,6 +2683,83 @@ function navigate(wsUrl, targetUrl) {
   await navigate(target.webSocketDebuggerUrl, url);
 })().catch(() => process.exit(1));
 NODE
+}
+
+navigate_provider_target_foreground() {
+  local provider_port="$1" target_url="$2" params_json
+  if ! cdp_session_manager_requested; then
+    navigate_provider_target "$provider_port" "$target_url"
+    return
+  fi
+  params_json="$(node -e 'process.stdout.write(JSON.stringify({url: process.argv[1] || ""}))' "$target_url")"
+  provider_cdp_command "$provider_port" Page.navigate "$params_json" '' '' foreground 1
+}
+
+provider_friendly_error_url() {
+  local provider="$1" reason="${2:-load_failed}"
+  node - "$TIKPAL_WEB_MODE_ERROR_PAGE_URL" "$provider" "$(provider_label "$provider")" "$reason" <<'NODE'
+const [baseUrl, provider, label, reason] = process.argv.slice(2);
+const url = new URL(baseUrl);
+url.searchParams.set("provider", provider || "web");
+url.searchParams.set("label", label || provider || "Web player");
+url.searchParams.set("reason", reason || "load_failed");
+url.searchParams.set("proxy", "proxy");
+process.stdout.write(url.toString());
+NODE
+}
+
+restore_provider_proxy_friendly_error() {
+  local provider="$1" provider_port="$2" friendly_url
+  friendly_url="$(provider_friendly_error_url "$provider" site_unreachable)"
+  navigate_provider_target_foreground "$provider_port" "$friendly_url" || true
+  write_runtime_provider_status "$provider" "check_proxy" "$(provider_label "$provider") proxy unavailable"
+}
+
+retry_provider_proxy_friendly_error_for_foreground() {
+  local provider="$1" provider_profile="$2" provider_port="$3" proxy_url="$4"
+  local started_ms elapsed_ms url
+  started_ms="$(now_ms)"
+  if ! provider_proxy_reachable "$provider" "$proxy_url"; then
+    elapsed_ms="$(( $(now_ms) - started_ms ))"
+    write_runtime_provider_status "$provider" "check_proxy" "$(provider_label "$provider") proxy unavailable"
+    log_stage "proxy_retry provider=$provider result=unreachable ms=$elapsed_ms"
+    return 1
+  fi
+  write_runtime_provider_status "$provider" "prewarming"
+  url="$(provider_url "$provider")"
+  start_provider_guard "$provider" "$provider_profile" "$url" 1 "$provider_port"
+  if ! navigate_provider_target_foreground "$provider_port" "$url"; then
+    restore_provider_proxy_friendly_error "$provider" "$provider_port"
+    elapsed_ms="$(( $(now_ms) - started_ms ))"
+    log_stage "proxy_retry provider=$provider result=navigate_failed ms=$elapsed_ms"
+    return 1
+  fi
+  if ! wait_for_provider_page_or_friendly_error "$provider_port"; then
+    restore_provider_proxy_friendly_error "$provider" "$provider_port"
+    elapsed_ms="$(( $(now_ms) - started_ms ))"
+    log_stage "proxy_retry provider=$provider result=not_ready ms=$elapsed_ms"
+    return 1
+  fi
+  if ! provider_has_real_provider_page "$provider_port"; then
+    write_provider_friendly_error_status "$provider" "$provider_port" || restore_provider_proxy_friendly_error "$provider" "$provider_port"
+    elapsed_ms="$(( $(now_ms) - started_ms ))"
+    log_stage "proxy_retry provider=$provider result=friendly_error ms=$elapsed_ms"
+    return 1
+  fi
+  if ! wait_for_provider_ready "$provider_port" "$provider"; then
+    case "$(read_runtime_provider_status "$provider")" in
+      ready|active) ;;
+      *)
+        restore_provider_proxy_friendly_error "$provider" "$provider_port"
+        elapsed_ms="$(( $(now_ms) - started_ms ))"
+        log_stage "proxy_retry provider=$provider result=not_ready ms=$elapsed_ms"
+        return 1
+        ;;
+    esac
+  fi
+  write_runtime_provider_status "$provider" "ready"
+  elapsed_ms="$(( $(now_ms) - started_ms ))"
+  log_stage "proxy_retry provider=$provider result=ready ms=$elapsed_ms"
 }
 
 crossfade_helper() {
@@ -8352,7 +8445,7 @@ warm_provider_pool() {
 open_provider_pool() {
   local provider="$1"
   local provider_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/$provider"
-  local current_provider current_profile target_window="" previous_window="" panel_window="" known_panel_window="" proxy_line proxy_enabled message extension_enabled=0 entry_stage=0
+  local current_provider current_profile target_window="" previous_window="" panel_window="" known_panel_window="" proxy_line proxy_enabled proxy_url message extension_enabled=0 entry_stage=0
   local panel_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"
   local resident_status resident_page_ready=0 fast_resident=0 switching_provider=0 current_port provider_port target_lifecycle_confirmed=0 friendly_error_reason=""
   local helper_candidate=0 helper_target_raw=0
@@ -8379,6 +8472,25 @@ open_provider_pool() {
   [[ -z "$current_provider" ]] && entry_stage=1
   [[ "$entry_stage" != "1" && "$current_provider" != "$provider" ]] && switching_provider=1
   provider_port="$(provider_debug_port "$provider")"
+  resident_status="$(read_runtime_provider_status "$provider")"
+  friendly_error_reason="$(provider_friendly_error_reason "$provider_port")"
+  proxy_line="$(read_proxy_settings)"
+  proxy_enabled="$(effective_provider_proxy_enabled "$provider" "${proxy_line%%$'\t'*}")"
+  proxy_url="${proxy_line#*$'\t'}"
+  # A cached proxy friendly page is not a hot resident page.  When the user
+  # explicitly picks it after the proxy has recovered, prove the current
+  # provider route and return the existing page to HTTPS before any X11 work.
+  if [[ -n "$friendly_error_reason" && "$friendly_error_reason" != "region_unavailable" \
+      && "$proxy_enabled" == "1" ]] && ! provider_prefers_direct_proxy "$provider"; then
+    if retry_provider_proxy_friendly_error_for_foreground "$provider" "$provider_profile" "$provider_port" "$proxy_url"; then
+      resident_status="ready"
+      friendly_error_reason=""
+    elif [[ -n "$current_provider" && "$current_provider" != "$provider" ]]; then
+      message="$(provider_label "$provider") proxy unavailable"
+      recover_or_cover_provider_failure "$current_provider" "$current_profile" "$provider" "check_proxy" "$message" || true
+      fail "$message"
+    fi
+  fi
   # Wake an intentionally frozen resident before the Guard acquires the
   # foreground lease. A lifecycle rejection falls back to ordinary parking.
   provider_resume_started_ms="$(now_ms)"
@@ -8396,7 +8508,6 @@ open_provider_pool() {
     segment_timing_once=1
     rm -f "$(switch_detail_timing_path)"
   fi
-  resident_status="$(read_runtime_provider_status "$provider")"
   switch_trace_enabled && record_switch_trace_event open_pool_resident_status_read ok "$resident_status"
   if switch_trace_enabled; then
     switch_trace_now_ms trace_started_ms

@@ -2837,7 +2837,10 @@ sync_runtime_provider_pool_process_statuses ""
   assert(webModeScript.includes('refresh_extension_script_cache "$provider_profile"') && webModeScript.includes("Default/Service Worker") && webModeScript.includes("service_worker_registration_info"), "Explore provider launch should refresh stale extension service-worker state without deleting login state");
   assert(webModeScript.includes("seed_profile_widevine_cdm()") && webModeScript.includes("libwidevinecdm.so"), "Explore should repair empty provider Widevine CDM directories without deleting login state");
   assert((webModeScript.match(/seed_profile_widevine_cdm "\$provider_profile"/g) || []).length >= 2, "Explore pool and direct provider launch paths should seed Widevine before Chromium starts");
-  assert(webModeScript.indexOf('start_provider_guard "$provider" "$provider_profile" "$url" "$proxy_enabled" "$provider_port"') < webModeScript.indexOf('if ! wait_for_provider_ready "$provider_port" "$provider"; then'), "provider guard should start before the ready gate so cookie prompts can be accepted during entry");
+  const launchProviderForPoolStart = webModeScript.indexOf("launch_provider_for_pool() {");
+  const launchProviderForPoolEnd = webModeScript.indexOf("\n}\n\nprovider_prewarm_max_concurrent_launches()", launchProviderForPoolStart);
+  const launchProviderForPoolBody = webModeScript.slice(launchProviderForPoolStart, launchProviderForPoolEnd);
+  assert(launchProviderForPoolBody.indexOf('start_provider_guard "$provider" "$provider_profile" "$url" "$proxy_enabled" "$provider_port"') < launchProviderForPoolBody.indexOf('if ! wait_for_provider_ready "$provider_port" "$provider"; then'), "provider guard should start before the ready gate so cookie prompts can be accepted during entry");
 
   assert(webModeErrorPage.includes("did not respond"), "friendly Explore error page should avoid native Chromium error copy");
   assert(webModeErrorPage.includes("region_unavailable") && webModeErrorPage.includes("regionTail") && webModeErrorPage.includes("regionBody"), "friendly Explore error page should explain regional unavailability and point to a supported Proxy exit");
@@ -3054,6 +3057,40 @@ sync_runtime_provider_pool_process_statuses ""
     startProviderPoolPrewarmBody.includes('! provider_pool_needs_prewarm "$active_provider"') &&
       startProviderPoolPrewarmBody.includes('sync_runtime_provider_pool_process_statuses "$active_provider"'),
     "Explore should refresh provider ready statuses even when all resident profiles are already running"
+  );
+  const proxyRetryStart = webModeScript.indexOf("retry_provider_proxy_friendly_error_for_foreground() {");
+  const proxyRetryEnd = webModeScript.indexOf("\n}\n\ncrossfade_helper()", proxyRetryStart);
+  const proxyRetryBody = webModeScript.slice(proxyRetryStart, proxyRetryEnd);
+  const checkProxyOpenProviderPoolStart = webModeScript.indexOf("open_provider_pool() {");
+  const checkProxyOpenProviderPoolEnd = webModeScript.indexOf("\n}\n\nopen_provider()", checkProxyOpenProviderPoolStart);
+  const checkProxyOpenProviderPoolBody = webModeScript.slice(checkProxyOpenProviderPoolStart, checkProxyOpenProviderPoolEnd);
+  assert(
+    webModeScript.includes("provider_proxy_reachable() {")
+      && webModeScript.includes('curl --proxy "$proxy_url"')
+      && webModeScript.includes('navigate_provider_target_foreground() {')
+      && webModeScript.includes('provider_cdp_command "$provider_port" Page.navigate "$params_json" \'\' \'\' foreground 1'),
+    "Explore should recheck a provider route through the configured proxy and use the hot foreground CDP session for its single retry navigation"
+  );
+  assert(
+    proxyRetryBody.includes('write_runtime_provider_status "$provider" "prewarming"')
+      && proxyRetryBody.includes('wait_for_provider_page_or_friendly_error "$provider_port"')
+      && proxyRetryBody.includes('wait_for_provider_ready "$provider_port" "$provider"')
+      && proxyRetryBody.includes('case "$(read_runtime_provider_status "$provider")" in')
+      && proxyRetryBody.includes('ready|active) ;;')
+      && proxyRetryBody.includes('proxy_retry provider=$provider result=ready')
+      && proxyRetryBody.includes('proxy_retry provider=$provider result=unreachable')
+      && proxyRetryBody.includes('restore_provider_proxy_friendly_error'),
+    "a recovered proxy card should wait for a real ready page while failed retries restore the friendly check_proxy page with bounded diagnostics"
+  );
+  assert(
+    checkProxyOpenProviderPoolBody.includes('resident_status="$(read_runtime_provider_status "$provider")"')
+      && checkProxyOpenProviderPoolBody.includes('friendly_error_reason="$(provider_friendly_error_reason "$provider_port")"')
+      && checkProxyOpenProviderPoolBody.includes('friendly_error_reason" != "region_unavailable"')
+      && checkProxyOpenProviderPoolBody.includes('! provider_prefers_direct_proxy "$provider"')
+      && checkProxyOpenProviderPoolBody.includes('retry_provider_proxy_friendly_error_for_foreground "$provider"')
+      && checkProxyOpenProviderPoolBody.indexOf('retry_provider_proxy_friendly_error_for_foreground "$provider"') < checkProxyOpenProviderPoolBody.indexOf('begin_provider_switch_guard')
+      && checkProxyOpenProviderPoolBody.includes('recover_or_cover_provider_failure "$current_provider" "$current_profile" "$provider" "check_proxy" "$message"'),
+    "only an explicitly selected proxy-friendly error should retry before switch ownership; a failed retry must retain a different current provider"
   );
   assert(webModeScript.includes("provider_friendly_error_reason()") && webModeScript.includes('friendly_error_reason="$(provider_friendly_error_reason "$provider_port")"'), "Explore prewarm should preserve an explicit region-unavailable page instead of misclassifying it as setup failure");
   assert(webModeScript.includes("wait_for_provider_page_or_friendly_error") && webModeScript.includes("write_provider_friendly_error_status"), "Explore should reveal a friendly terminal page without relabeling it as a successful provider page");
