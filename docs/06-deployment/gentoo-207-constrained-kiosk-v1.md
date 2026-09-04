@@ -79,6 +79,51 @@ The launcher log and the QQ Chromium command line must show the same resolved
 `--alsa-output-device=` value. A resolved `default` is a configuration error,
 not a valid fallback for browser audio on a Loopback-enabled kiosk.
 
+## DLNA renderer
+
+207 uses the Portage package `media-sound/upmpdcli` as its DLNA Renderer. It is
+enabled at boot as `upmpdcli.service`; the shared Tikpal UPnP hooks remain in
+`.env.kiosk` and the Renderer configuration is machine-local.
+
+The 2026-09-04 installation runs `upmpdcli 1.9.14` on `192.168.2.207` with:
+
+```conf
+friendlyname = Tikpal-Gentoo
+avfriendlyname = Tikpal-Gentoo-UPnP/AV
+upnpav = 1
+openhome = 0
+checkcontentformat = 0
+ohproductroom = Tikpal-Gentoo
+```
+
+The unit serves SSDP on `1900/UDP`, the Renderer HTTP endpoint on `49152`, and
+its streaming proxy on `49149`. The first configuration backup is retained at
+`/var/backups/tikpal/upmpdcli-first-config-20260904T150233`. Do not use a
+fixed `/description.xml` probe: obtain the UUID-scoped `LOCATION` through
+SSDP and verify the returned `MediaRenderer:1` description names
+`Tikpal-Gentoo-UPnP/AV`.
+
+Run configuration only while DLNA is idle because it restarts `upmpdcli` and
+Avahi. The initial installation's immediate restart reached the upstream
+90-second stop timeout before systemd replaced the process; that completed
+with a healthy active service. The recovery is to let systemd complete this
+first restart, not to restart Tikpal, kiosk, or X11.
+
+Verify without selecting DLNA or disrupting another active source:
+
+```bash
+systemctl is-active upmpdcli.service avahi-daemon.service
+systemctl is-enabled upmpdcli.service
+runuser -u moode -- sh -lc \
+  'cd /home/moode/code/tikpal && ./deploy/moode/tikpal-upnp-ready.sh'
+ss -lunp | grep ':1900'
+ss -ltnp | grep -E ':49149|:49152'
+```
+
+Tikpal should leave the DLNA source blocked until a user selects it; then it
+becomes `armed`/`waiting`. Only a real sender and MPD-backed stream may mark
+it `connected`.
+
 ## Render behavior
 
 `runtime.renderProfile` is delivered by the API, not inferred from hostname.

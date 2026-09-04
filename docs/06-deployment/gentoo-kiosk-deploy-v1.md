@@ -1793,6 +1793,40 @@ TIKPAL_UPNP_DISABLE_COMMAND="./deploy/moode/tikpal-upnp-disable.sh"
 
 After deploying the helpers, select each available external source once and confirm `/api/v1/system/state` reports it as `armed`/`waiting`; only an actual sender connection may promote it to `connected`. AirPlay additionally requires `shairport-sync.service` to be active after selection. Do not treat an inactive optional receiver before selection as a failed deployment.
 
+#### DLNA Renderer On Gentoo (2026-09-04)
+
+Install the system Renderer before trying to select DLNA in Tikpal; the hooks alone cannot create one:
+
+```bash
+emerge --ask=n media-sound/upmpdcli
+
+backup_dir="/var/backups/tikpal/upmpdcli-first-config-$(date +%Y%m%dT%H%M%S)"
+install -d -m 0755 "$backup_dir"
+cp -a /etc/upmpdcli.conf /usr/share/upmpdcli/description.xml "$backup_dir/"
+
+systemctl enable --now upmpdcli.service
+set -a
+. /home/moode/code/tikpal/.env.kiosk
+set +a
+cd /home/moode/code/tikpal
+./deploy/moode/tikpal-upnp-configure.sh
+```
+
+The configure helper writes `friendlyname`, `avfriendlyname`, `upnpav=1`, `openhome=0`, `checkcontentformat=0`, and `ohproductroom`, then restarts both `upmpdcli` and Avahi. It must not run while a DLNA sender is active. On the first Gentoo start, the upstream unit may take its `TimeoutStopSec` interval to finish the immediate configure-triggered restart; let systemd finish the restart instead of sending an extra kill. The `upmpdcli` service is intentionally enabled at boot and runs as the `upmpdcli` account.
+
+Accept the service layer only when all checks pass:
+
+```bash
+systemctl is-active upmpdcli.service avahi-daemon.service
+systemctl is-enabled upmpdcli.service
+runuser -u moode -- sh -lc \
+  'cd /home/moode/code/tikpal && ./deploy/moode/tikpal-upnp-ready.sh'
+ss -lunp | grep ':1900'             # SSDP
+ss -ltnp | grep -E ':49149|:49152' # proxy and renderer HTTP
+```
+
+The renderer description path is UUID-scoped, not the fixed `/description.xml` path. From a second device on the same L2 network, an SSDP `M-SEARCH` for `urn:schemas-upnp-org:device:MediaRenderer:1` must return its `LOCATION`; fetch that exact URL and verify `friendlyName` is `Tikpal-Gentoo-UPnP/AV`. A fixed-path HTTP 403 does not indicate a broken Renderer. Tikpal keeps DLNA `blocked` until the user selects it; selection should show `armed`/`waiting`, while only a real sender plus an MPD-backed stream promotes it to `connected`.
+
 #### Standalone AirPlay Receiver On Gentoo (2026-09-04)
 
 On a minimal Gentoo image, `shairport-sync` may not have a Portage ebuild. Build the pinned upstream `5.2.3` source only after installing `net-dns/avahi` and `dev-libs/libconfig`; the receiver must include ALSA, Avahi, OpenSSL, FFmpeg, metadata pipe, MPRIS, and the systemd startup unit. Its service account needs supplementary `audio` access for the Tikpal ALSA `_audioout` device.
