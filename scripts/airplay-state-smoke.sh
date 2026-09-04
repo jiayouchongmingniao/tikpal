@@ -12,6 +12,10 @@ mkdir -p "$fake_bin"
 
 cat > "$fake_bin/busctl" <<'EOF'
 #!/bin/sh
+case " ${*} " in
+  *" ${TIKPAL_TEST_MPRIS_SERVICE:-org.mpris.MediaPlayer2.ShairportSync} "*) ;;
+  *) exit 1 ;;
+esac
 case "${TIKPAL_TEST_MPRIS_STATUS:-}" in
   Playing|Paused|Stopped) printf 's "%s"\n' "$TIKPAL_TEST_MPRIS_STATUS" ;;
   *) exit 1 ;;
@@ -40,6 +44,7 @@ state_script="$(cd "$(dirname "$0")/.." && pwd)/deploy/moode/tikpal-airplay-stat
 
 env PATH="$fake_bin:$PATH" TIKPAL_MOODE_SQLITE_DB="$workspace/moode.db" TIKPAL_TEST_MPRIS_STATUS=Playing TIKPAL_TEST_AIRPLAY_TCP=1 "$state_script" active
 env PATH="$fake_bin:$PATH" TIKPAL_MOODE_SQLITE_DB="$workspace/moode.db" TIKPAL_TEST_MPRIS_STATUS=Paused TIKPAL_TEST_AIRPLAY_TCP=1 "$state_script" connected
+env PATH="$fake_bin:$PATH" TIKPAL_MOODE_SQLITE_DB="$workspace/moode.db" TIKPAL_AIRPLAY_MPRIS_SERVICE=org.invalid.ShairportSync TIKPAL_TEST_MPRIS_SERVICE=org.gnome.ShairportSync TIKPAL_TEST_MPRIS_STATUS=Playing TIKPAL_TEST_AIRPLAY_TCP=1 "$state_script" active
 
 if env PATH="$fake_bin:$PATH" TIKPAL_MOODE_SQLITE_DB="$workspace/moode.db" TIKPAL_TEST_MPRIS_STATUS=Playing TIKPAL_TEST_AIRPLAY_TCP=0 TIKPAL_TEST_AIRPLAY_ACTIVE=0 "$state_script" active; then
   printf '%s\n' 'expected MPRIS without a sender socket to be inactive' >&2

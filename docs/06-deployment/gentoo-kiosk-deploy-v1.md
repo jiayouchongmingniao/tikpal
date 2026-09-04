@@ -1836,13 +1836,13 @@ ss -ltnp '( sport = :8001 )' # still no listener after capture
 
 ### AirPlay Session Truth And Lyrics Wall (2026-08-21)
 
-Gentoo's standalone Shairport Sync does not write moOde's `cfg_system.aplactive` flag. `deploy/moode/tikpal-airplay-state.sh active` therefore treats a sender as connected only when Shairport's system-bus MPRIS player reports `Playing` or `Paused` **and** `ss` shows an established RAOP client on TCP `5000` or `7000`. The script falls back to `aplactive=1` only when that MPRIS/socket path is unavailable, preserving the moOde deployment contract.
+Gentoo's standalone Shairport Sync does not write moOde's `cfg_system.aplactive` flag. `deploy/moode/tikpal-airplay-state.sh active` therefore treats a sender as connected only when Shairport's system-bus MPRIS player reports `Playing` or `Paused` **and** `ss` shows an established RAOP client on TCP `5000` or `7000`. It reads the current `org.mpris.MediaPlayer2.ShairportSync` service first, with `org.gnome.ShairportSync` as the legacy receiver fallback. The script falls back to `aplactive=1` only when that MPRIS/socket path is unavailable, preserving the moOde deployment contract.
 
 The paired MPRIS/socket check matters because cached MPRIS title, artwork, or `Playing` state can briefly survive after a sender disconnects. A listening Shairport service alone is only `armed`; it must not promote stale metadata or lyrics to the physical screen. Verify the live session before accepting AirPlay metadata or the shared Hi-Fi lyrics wall:
 
 ```bash
 ./deploy/moode/tikpal-airplay-state.sh active
-busctl --system get-property org.gnome.ShairportSync /org/mpris/MediaPlayer2 \
+busctl --system get-property org.mpris.MediaPlayer2.ShairportSync /org/mpris/MediaPlayer2 \
   org.mpris.MediaPlayer2.Player PlaybackStatus
 ss -Htn | awk '$1 == "ESTAB" && $4 ~ /:(5000|7000)$/ { print }'
 curl -fsS http://127.0.0.1:8787/api/v1/system/state \

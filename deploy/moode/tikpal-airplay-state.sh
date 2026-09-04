@@ -13,11 +13,16 @@ moode_flag_is_set() {
 
 shairport_mpris_session_is_active() {
   command -v busctl >/dev/null 2>&1 || return 1
-  playback_status="$(busctl --system get-property org.gnome.ShairportSync /org/mpris/MediaPlayer2 org.mpris.MediaPlayer2.Player PlaybackStatus 2>/dev/null || true)"
-  case "$playback_status" in
-    *'"Playing"'*|*'"Paused"'*) ;;
-    *) return 1 ;;
-  esac
+  for mpris_service in \
+    "${TIKPAL_AIRPLAY_MPRIS_SERVICE:-org.mpris.MediaPlayer2.ShairportSync}" \
+    "${TIKPAL_AIRPLAY_MPRIS_LEGACY_SERVICE:-org.gnome.ShairportSync}"; do
+    playback_status="$(busctl --system get-property "$mpris_service" /org/mpris/MediaPlayer2 org.mpris.MediaPlayer2.Player PlaybackStatus 2>/dev/null || true)"
+    case "$playback_status" in
+      *'"Playing"'*|*'"Paused"'*) break ;;
+      *) playback_status="" ;;
+    esac
+  done
+  [ -n "$playback_status" ] || return 1
 
   # MPRIS can outlive a sender briefly. Require an established RAOP client so
   # stale title/artwork does not promote an armed Gentoo receiver to connected.
