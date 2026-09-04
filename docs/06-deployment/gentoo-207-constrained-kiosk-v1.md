@@ -127,6 +127,22 @@ proof before the X11 reveal while keeping the EVDI foreground path bounded.
 `active`, `parked`, `frozen`, or `unsupported`; it does not change the existing
 Provider status enum or action API.
 
+## Explore close behavior
+
+Close sends the active Provider's idempotent `setActive(false)` audio gate
+through its existing hot CDP Manager session before any provider or side-panel
+window is made transparent or parked. This pauses media, Howler, and audio
+contexts immediately; a gate failure is logged as `close_audio_gate` but does
+not block the visible close transaction. Only after that close transaction
+finishes may the API restore the prior MPD or radio handoff, and only when that
+source had been playing before Explore opened.
+
+Closing Explore stops an in-flight provider prewarm worker and never refills
+the pool while Ambient is visible. Already `ready` resident pages remain
+reusable and still receive the normal eight-second resource freeze. Pages that
+were not ready are reconciled and prewarmed only after the next Explore open,
+so the side panel cannot briefly show a post-close `prewarming` state.
+
 ## Diagnostics and graphics policy
 
 Run the read-only report as the kiosk user:

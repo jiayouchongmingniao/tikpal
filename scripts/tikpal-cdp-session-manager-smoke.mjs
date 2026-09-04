@@ -19,6 +19,7 @@ let browserConnections = 0;
 let getTargets = 0;
 let sessionGeneration = 0;
 let dropNextSafeCommand = false;
+let dropNextAudioGateCommand = false;
 let dropInitialPageEnable = true;
 let pageEnableAttempts = 0;
 const mockSockets = new Set();
@@ -100,6 +101,13 @@ browser.on("upgrade", (request, socket) => {
       if (message.method === "Page.bringToFront" && dropNextSafeCommand) {
         dropNextSafeCommand = false;
         targetId = "spotify-target-restarted";
+        targetUrl = "https://open.spotify.com/";
+        socket.destroy();
+        return;
+      }
+      if (message.method === "Runtime.evaluate" && String(message.params?.expression || "").includes("__tikpalProviderAudioGate?.setActive") && dropNextAudioGateCommand) {
+        dropNextAudioGateCommand = false;
+        targetId = "spotify-target-audio-gate-restarted";
         targetUrl = "https://open.spotify.com/";
         socket.destroy();
         return;
@@ -232,8 +240,20 @@ try {
   assert(recovered.ok && recovered.recovered, "safe foreground command should recover once");
   assert(browserConnections === 2 && getTargets === 2 && recovered.target.sessionGeneration === 3, "recovery should establish exactly one replacement session after the friendly-page reattach");
   assert(recovered.target.targetId === "spotify-target-restarted", "recovery should discard stale targets after the browser is replaced");
+  dropNextAudioGateCommand = true;
+  const muted = await managerRequest({
+    op: "command",
+    provider: "spotify",
+    method: "Runtime.evaluate",
+    params: { expression: "(window.__tikpalProviderAudioGate?.setActive(false) || {}).active", returnByValue: true },
+    retryable: true,
+    priority: "foreground"
+  });
+  assert(muted.ok && muted.recovered, "close audio gate should be a safe foreground command with one transparent recovery");
+  assert(browserConnections === 3 && getTargets === 3 && muted.target.sessionGeneration === 4, "close audio-gate recovery should keep exactly one hot replacement session");
+  assert(muted.target.targetId === "spotify-target-audio-gate-restarted", "close audio gate should attach to the replacement provider target");
   const unsafe = await managerRequest({ op: "command", provider: "spotify", method: "Page.navigate", params: { url: "https://example.invalid/" }, retryable: false, priority: "foreground" });
-  assert(!unsafe.ok && browserConnections === 2, "non-idempotent command must not be replayed after transport loss");
+  assert(!unsafe.ok && browserConnections === 3, "non-idempotent command must not be replayed after transport loss");
   console.log("[tikpal-cdp-session-manager-smoke] passed");
 } finally {
   manager.kill("SIGTERM");

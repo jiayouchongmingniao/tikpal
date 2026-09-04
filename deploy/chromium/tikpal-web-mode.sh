@@ -125,7 +125,6 @@ fi
 : "${TIKPAL_WEB_MODE_CLOSE_KEEP_RESIDENT:=1}"
 : "${TIKPAL_WEB_MODE_CLOSE_WARM_TTL_SECONDS:=45}"
 : "${TIKPAL_WEB_MODE_CLOSE_AUDIO_GATE_SETTLE_SECONDS:=0.35}"
-: "${TIKPAL_WEB_MODE_CLOSE_REFILL_PROVIDER_POOL_ENABLED:=1}"
 : "${TIKPAL_WEB_MODE_RESIDENT_SWITCH_SETTLE_SECONDS:=0.16}"
 : "${TIKPAL_WEB_MODE_RESIDENT_SWITCH_PAINT_TIMEOUT_SECONDS:=0.6}"
 : "${TIKPAL_WEB_MODE_RESIDENT_SWITCH_PAINT_POLL_SECONDS:=0.08}"
@@ -145,7 +144,7 @@ fi
 : "${TIKPAL_WEB_MODE_PROVIDER_POOL:=1}"
 : "${TIKPAL_WEB_MODE_PROVIDER_IDLE_POOL_ENABLED:=1}"
 : "${TIKPAL_WEB_MODE_PROVIDER_PREWARM_ENABLED:=1}"
-: "${TIKPAL_WEB_MODE_PROVIDER_PREWARM_CONTINUE_AFTER_CLOSE:=1}"
+: "${TIKPAL_WEB_MODE_PROVIDER_PREWARM_CONTINUE_AFTER_CLOSE:=0}"
 : "${TIKPAL_WEB_MODE_PROVIDER_PREWARM_DELAY_SECONDS:=0.4}"
 : "${TIKPAL_WEB_MODE_PROVIDER_PREWARM_MAX_CONCURRENT_LAUNCHES:=3}"
 : "${TIKPAL_WEB_MODE_PROVIDER_PREWARM_LOCK_TIMEOUT_SECONDS:=2}"
@@ -2357,11 +2356,29 @@ request_provider_compositor_wake() {
 }
 
 pause_provider_media_via_cdp() {
-  # This best-effort deactivation is asynchronous with the visible reveal.
-  # Keep it off the Manager foreground queue and out of hot-path acceptance
-  # accounting; the actual post-switch audio gate remains independently
-  # verified before a round passes.
-  set_provider_media_active_via_cdp "$1" 0 "${2:-}" 0 maintenance 0
+  local provider_port="$1"
+  local cdp_json="${2:-}"
+  local priority="${3:-maintenance}"
+  local trace_manager="${4:-0}"
+  # Resident switches use the maintenance default asynchronously.  Close opts
+  # into foreground priority so its provider is silent before X11 parking.
+  set_provider_media_active_via_cdp "$provider_port" 0 "$cdp_json" 0 "$priority" "$trace_manager"
+}
+
+mute_active_provider_for_close() {
+  local provider="$1"
+  local started_ms elapsed_ms
+  [[ -n "$provider" ]] || return 0
+  started_ms="$(now_ms)"
+  if pause_provider_media_via_cdp "$(provider_debug_port "$provider")" "" foreground 1; then
+    elapsed_ms="$(( $(now_ms) - started_ms ))"
+    log_stage "close_audio_gate provider=$provider result=inactive ms=$elapsed_ms"
+    return 0
+  fi
+  elapsed_ms="$(( $(now_ms) - started_ms ))"
+  log_stage "close_audio_gate provider=$provider result=failed ms=$elapsed_ms"
+  log "WARN: Explore close could not deactivate provider audio gate: $provider"
+  return 1
 }
 
 activate_target_provider_audio_gate() {
@@ -4598,30 +4615,6 @@ schedule_web_mode_warm_cleanup() {
   fi
 }
 
-schedule_provider_pool_refill_after_close() {
-  is_enabled "$TIKPAL_WEB_MODE_CLOSE_KEEP_RESIDENT" || return 0
-  is_enabled "$TIKPAL_WEB_MODE_CLOSE_REFILL_PROVIDER_POOL_ENABLED" || return 0
-  is_enabled "$TIKPAL_WEB_MODE_PROVIDER_POOL" || return 0
-  is_enabled "$TIKPAL_WEB_MODE_PROVIDER_IDLE_POOL_ENABLED" || return 0
-  is_enabled "$TIKPAL_WEB_MODE_PROVIDER_PREWARM_ENABLED" || return 0
-  [[ -z "$(read_runtime_active_provider)" ]] || return 0
-  provider_prewarm_queue_running && return 0
-  if [[ -f "$(pool_warm_stamp_file)" ]]; then
-    sync_runtime_provider_pool_process_statuses ""
-    return 0
-  fi
-  if ! provider_pool_needs_prewarm ""; then
-    sync_runtime_provider_pool_process_statuses ""
-    return 0
-  fi
-  if command -v setsid >/dev/null 2>&1; then
-    setsid "$SCRIPT_DIR/tikpal-web-mode.sh" warm-pool </dev/null >/dev/null 2>&1 9>&- &
-  else
-    nohup "$SCRIPT_DIR/tikpal-web-mode.sh" warm-pool </dev/null >/dev/null 2>&1 9>&- &
-  fi
-  printf '%s\n' "$!" > "$(prewarm_pid_file)"
-}
-
 close_web_mode_full() {
   local providers_pid panel_pid
   close_legacy_exit_stage
@@ -4653,12 +4646,8 @@ close_web_mode_full() {
   # longer evidence of a reusable pool, including when this was not a startup
   # reset, so the normal refill path must not trust it.
   rm -f "$(pool_warm_stamp_file)"
-  if ! is_enabled "${TIKPAL_WEB_MODE_STARTUP_RESET:-0}"; then
-    schedule_provider_pool_refill_after_close
-  fi
-  # The kiosk launcher starts boot prewarm after its own Chromium window is
-  # stable. A startup reset runs before that point, so it must not create a
-  # second warm-pool worker against the same provider profiles.
+  # Pool creation is deferred until the next Explore open.  The kiosk launcher
+  # owns boot prewarm after its Chromium window is stable.
   sync_runtime_provider_pool_process_statuses ""
   # Clean stale launch lock files from previous boot.
   rm -f "$TIKPAL_WEB_MODE_PROFILE_ROOT"/provider-*.launch.lock 2>/dev/null || true
@@ -4672,6 +4661,14 @@ close_web_mode_warm() {
   [[ "$settle" =~ ^[0-9]+([.][0-9]+)?$ ]] || settle=0.35
   close_legacy_exit_stage
   hide_onboard
+  if ! runtime_close_request_is_current; then
+    return 0
+  fi
+  # Audio must be deactivated before any X11 parking.  This uses the hot,
+  # idempotent Manager command at foreground priority; failure is observable
+  # in the close trace but never leaves the visual close transaction stuck.
+  mute_active_provider_for_close "$active_provider" || true
+  stop_provider_pool_prewarm
   if ! runtime_close_request_is_current; then
     return 0
   fi
@@ -4690,7 +4687,6 @@ close_web_mode_warm() {
   if ! is_enabled "$TIKPAL_WEB_MODE_CLOSE_KEEP_RESIDENT"; then
     stop_provider_guard
   fi
-  schedule_provider_pool_refill_after_close
   schedule_background_provider_freeze ""
   schedule_web_mode_warm_cleanup
 }
@@ -4725,7 +4721,6 @@ close_web_mode_from_guard() {
     write_audio_bus_state ""
     write_runtime_provider_state ""
     sync_runtime_provider_pool_process_statuses ""
-    schedule_provider_pool_refill_after_close
     return 0
   fi
   close_web_mode_full

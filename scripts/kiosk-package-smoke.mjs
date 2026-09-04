@@ -2056,15 +2056,9 @@ sync_runtime_provider_pool_process_statuses ""
     "kiosk session should atomically publish an independent X-session generation before any X command"
   );
   assert(
-    (webModeScript.includes('if is_enabled "${TIKPAL_WEB_MODE_STARTUP_RESET:-0}"; then')
-      || webModeScript.includes('if ! is_enabled "${TIKPAL_WEB_MODE_STARTUP_RESET:-0}"; then'))
-      && (
-        webModeScript.includes(`else
-    schedule_provider_pool_refill_after_close
-  fi`)
-        || webModeScript.includes('if ! is_enabled "${TIKPAL_WEB_MODE_STARTUP_RESET:-0}"; then\n    schedule_provider_pool_refill_after_close\n  fi')
-      ),
-    "startup reset should defer provider prewarm to the stabilized kiosk launcher, preventing duplicate pool workers"
+    !webModeScript.includes("schedule_provider_pool_refill_after_close")
+      && !webModeScript.includes("TIKPAL_WEB_MODE_CLOSE_REFILL_PROVIDER_POOL_ENABLED"),
+    "Explore close should defer incomplete pool warmup until a later Explore open instead of refilling in Ambient"
   );
   assert(
     kioskLauncher.includes("TIKPAL_WEB_MODE_BOOT_PREWARM_ENABLED:=1") &&
@@ -2939,7 +2933,7 @@ sync_runtime_provider_pool_process_statuses ""
   assert(serverSource.includes("webModeClosePromise") && serverSource.includes("webModeCloseRequestIsCurrent") && serverSource.includes("throw new Error(closeError)"), "Explore close should suppress duplicate transactions, preserve a newer owner, and return parking failures");
   assert(!serverSource.includes("activeProvider: null,\n      residentProviders: {},\n      lastError: null,\n      closeRequestId"), "Explore close should preserve resident provider state while clearing the visible active provider");
   assert(webModeScript.includes("TIKPAL_WEB_MODE_CLOSE_WARM_ENABLED:=1") && webModeScript.includes("TIKPAL_WEB_MODE_CLOSE_KEEP_RESIDENT:=1") && webModeScript.includes("TIKPAL_WEB_MODE_CLOSE_WARM_TTL_SECONDS:=45"), "Explore close should default to a resident warm pool for instant reopen");
-  assert(webModeScript.includes("TIKPAL_WEB_MODE_CLOSE_REFILL_PROVIDER_POOL_ENABLED:=1") && webModeScript.includes("schedule_provider_pool_refill_after_close"), "Explore warm close should refill the resident provider pool after visual exit");
+  assert(!webModeScript.includes("schedule_provider_pool_refill_after_close"), "Explore close should not start provider pool refill after visual exit");
   assert(webModeScript.includes("close_web_mode_warm()") && webModeScript.includes("park_side_panel_for_reopen") && webModeScript.includes("park_provider_windows_for_reopen"), "Explore warm close should park the side panel and providers offscreen instead of cold-closing them");
   const surfaceEnumerationBody = webModeScript.match(/web_mode_surface_windows_on_screen\(\) \{[\s\S]*?\n\}/)?.[0] ?? "";
   const processTreeBody = webModeScript.match(/process_tree_uses_profile\(\) \{[\s\S]*?\n\}/)?.[0] ?? "";
@@ -2974,7 +2968,22 @@ sync_runtime_provider_pool_process_statuses ""
       && !fullCloseBody.includes("ensure_exit_room_veil"),
     "Explore full close should clear any legacy exit stage before shutting down visible surfaces"
   );
-  assert(!warmCloseBody.includes("stop_provider_pool_prewarm"), "Explore warm close should not kill the provider prewarm queue");
+  const closeAudioGateStart = webModeScript.indexOf("mute_active_provider_for_close() {");
+  const closeAudioGateEnd = webModeScript.indexOf("\n}\n\nactivate_target_provider_audio_gate", closeAudioGateStart);
+  const closeAudioGateBody = webModeScript.slice(closeAudioGateStart, closeAudioGateEnd);
+  assert(
+    closeAudioGateBody.includes('pause_provider_media_via_cdp "$(provider_debug_port "$provider")" "" foreground 1')
+      && closeAudioGateBody.includes("close_audio_gate provider=$provider result=inactive")
+      && closeAudioGateBody.includes("close_audio_gate provider=$provider result=failed"),
+    "Explore close should foreground-deactivate the active provider audio gate and log either result"
+  );
+  assert(
+    warmCloseBody.includes('mute_active_provider_for_close "$active_provider"')
+      && warmCloseBody.indexOf('mute_active_provider_for_close "$active_provider"') < warmCloseBody.indexOf('park_web_mode_surfaces_for_reopen "$active_provider"')
+      && warmCloseBody.includes("stop_provider_pool_prewarm")
+      && !warmCloseBody.includes("schedule_provider_pool_refill_after_close"),
+    "Explore warm close should mute before parking, stop in-flight prewarm, and avoid Ambient pool refill"
+  );
   assert(
     warmCloseBody.includes("runtime_close_request_is_current") &&
       warmCloseBody.indexOf("runtime_close_request_is_current") < warmCloseBody.indexOf("park_web_mode_surfaces_for_reopen") &&
@@ -3029,7 +3038,7 @@ sync_runtime_provider_pool_process_statuses ""
       webModeScript.includes('sleep "$delay"'),
     "Explore prewarm should use the shared bounded-concurrency queue with a stagger"
   );
-  assert(webModeScript.includes("TIKPAL_WEB_MODE_PROVIDER_PREWARM_CONTINUE_AFTER_CLOSE:=1") && webModeScript.includes('TIKPAL_WEB_MODE_IDLE_POOL_WARMUP=1 launch_provider_for_pool "$provider" entry prewarm "$force_existing"'), "Explore provider prewarm should keep opening providers offscreen after visible Explore closes");
+  assert(webModeScript.includes("TIKPAL_WEB_MODE_PROVIDER_PREWARM_CONTINUE_AFTER_CLOSE:=0") && webModeScript.includes('log "provider prewarm paused because Explore closed"'), "Explore provider prewarm should stop when visible Explore closes");
   assert(webModeScript.includes('log "idle provider pool warmup paused because Explore is active"'), "Explore idle provider pool refill should stop if Explore reopens");
   assert(webModeScript.includes("warm-pool)") && webModeScript.includes("warm_provider_pool") && !webModeScript.includes("with_web_mode_lock warm_provider_pool"), "Explore boot prewarm should not hold the foreground web-mode lock");
   assert(
