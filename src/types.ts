@@ -551,6 +551,8 @@ export interface OutputDeviceState {
 
 export interface DisplayState {
   brightnessPercent: number;
+  minBrightnessPercent?: number;
+  maxBrightnessPercent?: number;
   controllable: boolean;
   transport: "ddcci" | "mock" | "turzx" | "turzx-soft" | "unavailable";
 }

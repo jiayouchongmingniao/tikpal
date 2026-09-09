@@ -493,6 +493,12 @@ export function AmbientScreen({
     : backgroundVideos.filter((video) => Boolean(video.src));
   const hasSceneVideo = Boolean(currentBackgroundVideo.src);
   const brightnessPercent = system.display.brightnessPercent;
+  const brightnessMin = system.display.minBrightnessPercent ?? 0;
+  const brightnessMax = system.display.maxBrightnessPercent ?? 100;
+  const clampAdjustPercent = useCallback((channel: AmbientAdjustChannel, percent: number) => {
+    const value = clampPercent(percent);
+    return channel === "brightness" ? Math.max(brightnessMin, Math.min(brightnessMax, value)) : value;
+  }, [brightnessMin, brightnessMax]);
   const audioProtectionMode = playback.source === "airplay" && playback.state === "playing";
   const sceneVideoThermalGuardActive = sceneVideoThermalPaused && !isHifiMode;
   const shouldRenderSceneVideo = sceneVideoEnabled && hasSceneVideo && !sceneVideoThermalGuardActive;
@@ -1372,7 +1378,7 @@ export function AmbientScreen({
 
   const dispatchAdjust = useCallback(
     (channel: AmbientAdjustChannel, percent: number) => {
-      const nextPercent = clampPercent(percent);
+      const nextPercent = clampAdjustPercent(channel, percent);
       const requestState = requestStateRef.current[channel];
       requestState.queued = nextPercent;
 
@@ -1395,13 +1401,14 @@ export function AmbientScreen({
           const nextState = channel === "volume"
             ? await onPlaybackAction("volume_set", target)
             : await onSystemAction("brightness_set", target);
-          requestState.lastSent = channel === "volume"
+          const appliedPercent = channel === "volume"
             ? nextState.system.volume.percent
             : nextState.system.display.brightnessPercent;
+          requestState.lastSent = appliedPercent;
 
           setAdjustOverlay((current) => (
             current && current.channel === channel && requestState.queued === null
-              ? { ...current, percent: target, error: null }
+              ? { ...current, percent: appliedPercent, error: null }
               : current
           ));
         } catch (error) {
@@ -1423,11 +1430,11 @@ export function AmbientScreen({
 
       void sendNext();
     },
-    [onPlaybackAction, onSystemAction]
+    [onPlaybackAction, onSystemAction, clampAdjustPercent]
   );
 
   function scheduleAdjustDispatch(channel: AmbientAdjustChannel, percent: number) {
-    const nextPercent = clampPercent(percent);
+    const nextPercent = clampAdjustPercent(channel, percent);
     requestStateRef.current[channel].queued = nextPercent;
     clearAdjustCommitTimer(channel);
     adjustCommitTimersRef.current[channel] = window.setTimeout(() => {
@@ -1448,7 +1455,7 @@ export function AmbientScreen({
   }
 
   function startAdjust(channel: AmbientAdjustChannel, pointerId: number, startY: number, input: DragState["input"] = "pointer") {
-    const startPercent = channel === "volume" ? system.volume.percent : brightnessPercent;
+    const startPercent = clampAdjustPercent(channel, channel === "volume" ? system.volume.percent : brightnessPercent);
     dragStateRef.current = {
       channel,
       pointerId,
@@ -1467,7 +1474,7 @@ export function AmbientScreen({
     const dragState = dragStateRef.current;
     if (!dragState) return;
     const deltaPercent = Math.round((dragState.startY - clientY) / DRAG_PIXELS_PER_PERCENT);
-    const nextPercent = clampPercent(dragState.startPercent + deltaPercent);
+    const nextPercent = clampAdjustPercent(dragState.channel, dragState.startPercent + deltaPercent);
     setAdjustOverlay((current) => (
       current
         ? { ...current, percent: nextPercent, error: null }
@@ -1511,7 +1518,7 @@ export function AmbientScreen({
       : Math.round(rawDeltaPercent);
     if (deltaPercent === 0) return;
 
-    const nextPercent = clampPercent(currentAdjustPercent(channel) + deltaPercent);
+    const nextPercent = clampAdjustPercent(channel, currentAdjustPercent(channel) + deltaPercent);
     setAdjustOverlay({
       channel,
       percent: nextPercent,

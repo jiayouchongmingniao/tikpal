@@ -613,8 +613,26 @@ resolve_clone_outputs() {
 }
 
 safe_ddc_values() {
+  local min="${TIKPAL_DDC_BRIGHTNESS_MIN-0}" max="${TIKPAL_DDC_BRIGHTNESS_MAX-100}" brightness
+  if [[ ! "$min" =~ ^[0-9]{1,3}$ || ! "$max" =~ ^[0-9]{1,3}$ ]]; then
+    log "ERROR: invalid TIKPAL_DDC_BRIGHTNESS_MIN/MAX; refusing brightness write"
+    return 1
+  fi
+  min=$((10#$min))
+  max=$((10#$max))
+  if (( min > max || max > 100 )); then
+    log "ERROR: invalid TIKPAL_DDC_BRIGHTNESS_MIN/MAX; refusing brightness write"
+    return 1
+  fi
+  if [[ ! "$TIKPAL_PHYSICAL_DISPLAY_SAFE_BRIGHTNESS" =~ ^[0-9]{1,3}$ ]]; then
+    log "ERROR: invalid TIKPAL_PHYSICAL_DISPLAY_SAFE_BRIGHTNESS; refusing brightness write"
+    return 1
+  fi
+  brightness=$((10#$TIKPAL_PHYSICAL_DISPLAY_SAFE_BRIGHTNESS))
+  (( brightness < min )) && brightness=$min
+  (( brightness > max )) && brightness=$max
   run_optional_ddc --brief setvcp D6 01
-  run_optional_ddc --brief setvcp 10 "$TIKPAL_PHYSICAL_DISPLAY_SAFE_BRIGHTNESS"
+  run_optional_ddc --brief setvcp 10 "$brightness"
   run_optional_ddc --brief setvcp 12 "$TIKPAL_PHYSICAL_DISPLAY_SAFE_CONTRAST"
 
   local input_source

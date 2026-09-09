@@ -446,12 +446,15 @@ control=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -c) card="$2"; shift 2 ;;
-    get|sset) action="$1"; control="$2"; shift 2 ;;
+    get|sset|cget|cset) action="$1"; control="$2"; shift 2 ;;
     *) shift ;;
   esac
 done
 if [ "$card" = "Mystery" ] && [ "$control" = "Master" ]; then
   echo "Front Left: Playback 74 [42%] [on]"
+  exit 0
+fi
+if [ "$card" = "Mystery" ] && [ "$control" = "name='PCM Playback Volume',index=1" ]; then
   exit 0
 fi
 exit 1
@@ -461,7 +464,10 @@ exit 1
     ...process.env,
     PATH: `${outputVolumeMixerBinDir}:${process.env.PATH}`,
     TIKPAL_OUTPUT_VOLUME_ALSA_CONFIGS: outputVolumeMixerConfig,
-    TIKPAL_FAKE_AMIXER_LOG: outputVolumeMixerLog
+    TIKPAL_FAKE_AMIXER_LOG: outputVolumeMixerLog,
+    TIKPAL_OUTPUT_VOLUME_FIXED_AUX_CARD: "Mystery",
+    TIKPAL_OUTPUT_VOLUME_FIXED_AUX_CONTROL: "name='PCM Playback Volume',index=1",
+    TIKPAL_OUTPUT_VOLUME_FIXED_AUX_VALUE: "100"
   };
   const outputVolumeMixerGet = spawnSync("sh", [outputVolumeHelper, "get"], { env: outputVolumeMixerEnv, encoding: "utf8" });
   assert(outputVolumeMixerGet.status === 0 && outputVolumeMixerGet.stdout.includes("[42%]"), "output volume helper should discover non-PCM mixer controls");
@@ -469,6 +475,31 @@ exit 1
   assert(outputVolumeMixerSet.status === 0, "output volume helper should set non-PCM mixer controls");
   const outputVolumeMixerAmixer = await readFile(outputVolumeMixerLog, "utf8");
   assert(outputVolumeMixerAmixer.includes("-c Mystery sset Master 41%"), "output volume helper should set the discovered Master mixer");
+  assert(outputVolumeMixerAmixer.includes("-c Mystery cset name='PCM Playback Volume',index=1 100%"), "output volume helper should keep a matching auxiliary control at its configured fixed gain");
+
+  writeFileSync(outputVolumeMixerLog, "");
+  const outputVolumePrepare = spawnSync("sh", [outputVolumeHelper, "prepare"], { env: outputVolumeMixerEnv, encoding: "utf8" });
+  assert(outputVolumePrepare.status === 0, "output volume helper should prepare a configured auxiliary control");
+  const outputVolumePrepareAmixer = await readFile(outputVolumeMixerLog, "utf8");
+  assert(outputVolumePrepareAmixer.includes("-c Mystery cset name='PCM Playback Volume',index=1 100%"), "output volume helper preparation should set the fixed auxiliary control");
+
+  writeFileSync(outputVolumeMixerLog, "");
+  const outputVolumeMismatch = spawnSync("sh", [outputVolumeHelper, "set", "40"], {
+    env: { ...outputVolumeMixerEnv, TIKPAL_OUTPUT_VOLUME_FIXED_AUX_CARD: "Other" },
+    encoding: "utf8"
+  });
+  assert(outputVolumeMismatch.status === 0, "a nonmatching auxiliary card should not block primary volume changes");
+  const outputVolumeMismatchAmixer = await readFile(outputVolumeMixerLog, "utf8");
+  assert(!outputVolumeMismatchAmixer.includes("cset"), "a nonmatching auxiliary card should not receive a fixed-gain write");
+
+  writeFileSync(outputVolumeMixerLog, "");
+  const outputVolumeMissingAux = spawnSync("sh", [outputVolumeHelper, "set", "40"], {
+    env: { ...outputVolumeMixerEnv, TIKPAL_OUTPUT_VOLUME_FIXED_AUX_CONTROL: "name='PCM Playback Volume',index=9" },
+    encoding: "utf8"
+  });
+  assert(outputVolumeMissingAux.status === 0, "a missing auxiliary index should not block primary volume changes");
+  const outputVolumeMissingAuxAmixer = await readFile(outputVolumeMixerLog, "utf8");
+  assert(!outputVolumeMissingAuxAmixer.includes("cset"), "a missing auxiliary index should be skipped without a write");
 
   const audioAdaptTempDir = mkdtempSync(path.join(tmpdir(), "tikpal-audio-adapt-"));
   const audioAdaptBinDir = path.join(audioAdaptTempDir, "bin");
@@ -581,6 +612,9 @@ eval "exec /usr/bin/install $filtered"
 
   const audioAdaptApplyDir = path.join(audioAdaptTempDir, "apply");
   mkdirSync(audioAdaptApplyDir);
+  const audioAdaptPrepareLog = path.join(audioAdaptApplyDir, "output-volume-prepare.log");
+  const audioAdaptPrepareHelper = path.join(audioAdaptApplyDir, "output-volume-helper.sh");
+  writeFileSync(audioAdaptPrepareHelper, "#!/bin/sh\necho \"$*\" >> \"$TIKPAL_FAKE_OUTPUT_VOLUME_PREPARE_LOG\"\n", { mode: 0o755 });
   const audioAdaptApply = runAudioAdapt(`${hdmiCard}\n${bt66Card}\n${loopbackCard}`, ["apply"], {
     TIKPAL_ALSA_RATE_CONVERTER: "samplerate_best",
     TIKPAL_AUDIOOUT_CONFIG: path.join(audioAdaptApplyDir, "_audioout.conf"),
@@ -589,13 +623,16 @@ eval "exec /usr/bin/install $filtered"
     TIKPAL_SND_ALOOP_MODULES_LOAD: path.join(audioAdaptApplyDir, "snd-aloop.conf"),
     TIKPAL_ALSA_BASE_CONFIG: path.join(audioAdaptApplyDir, "asound.conf"),
     TIKPAL_ALSA_LEGACY_LOOPBACK_CONFIG: path.join(audioAdaptApplyDir, "legacy.conf"),
-    TIKPAL_MOODE_DB: path.join(audioAdaptApplyDir, "missing.db")
+    TIKPAL_MOODE_DB: path.join(audioAdaptApplyDir, "missing.db"),
+    TIKPAL_OUTPUT_VOLUME_HELPER: audioAdaptPrepareHelper,
+    TIKPAL_FAKE_OUTPUT_VOLUME_PREPARE_LOG: audioAdaptPrepareLog
   });
   assert(audioAdaptApply.status === 0, `audio adapter should generate configured ALSA SRC nodes:\n${audioAdaptApply.stdout}\n${audioAdaptApply.stderr}`);
   const generatedBrowserPcm = await readFile(path.join(audioAdaptApplyDir, "browser.conf"), "utf8");
   const generatedLoopbackPcm = await readFile(path.join(audioAdaptApplyDir, "loopback.conf"), "utf8");
   assert(generatedBrowserPcm.includes('rate_converter "samplerate_best"'), "shared browser plug should use the configured ALSA rate converter");
   assert(generatedLoopbackPcm.includes('rate_converter "samplerate_best"'), "managed _audioout plug should use the configured ALSA rate converter");
+  assert((await readFile(audioAdaptPrepareLog, "utf8")).trim() === "prepare", "audio adapter should prepare fixed auxiliary gain after routing the physical output");
 
   writeFileSync(path.join(audioAdaptBinDir, "systemctl"), `#!/bin/sh
 case "$1" in
@@ -1528,6 +1565,32 @@ sync_runtime_provider_pool_process_statuses ""
   assert(startupResetStatusSync.status === 0, `startup prewarm status sync should exit cleanly: ${startupResetStatusSync.stderr || startupResetStatusSync.stdout}`);
   const startupResetSyncedState = JSON.parse(await readFile(startupResetStatePath, "utf8"));
   assert(startupResetSyncedState.residentProviders.spotify?.status === "ready", "a real provider page should become Ready after startup reset releases the stale Close owner");
+  const widevineSeedDir = mkdtempSync(path.join(tmpdir(), "tikpal-widevine-seed-"));
+  const widevineSystemDir = path.join(widevineSeedDir, "system", "WidevineCdm");
+  const widevineTargetProfile = path.join(widevineSeedDir, "provider");
+  const widevineLibraryPath = path.join(widevineSystemDir, "_platform_specific", "linux_x64", "libwidevinecdm.so");
+  mkdirSync(path.dirname(widevineLibraryPath), { recursive: true });
+  mkdirSync(widevineTargetProfile);
+  writeFileSync(widevineLibraryPath, Buffer.alloc(1_000_001));
+  const widevineSystemSeed = spawnSync("bash", ["-s"], {
+    cwd: ROOT,
+    input: `${webModeFunctions}\nseed_profile_widevine_cdm "$TIKPAL_WIDEVINE_TARGET_PROFILE"\n`,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      TIKPAL_KIOSK_SKIP_ENV_SOURCE: "1",
+      TIKPAL_WEB_MODE_SYSTEM_WIDEVINE_CDM_DIR: widevineSystemDir,
+      TIKPAL_WIDEVINE_TARGET_PROFILE: widevineTargetProfile
+    }
+  });
+  assert(widevineSystemSeed.status === 0, `system Widevine seeding should succeed: ${widevineSystemSeed.stderr || widevineSystemSeed.stdout}`);
+  let widevineSeeded = true;
+  try {
+    await access(path.join(widevineTargetProfile, "WidevineCdm", "_platform_specific", "linux_x64", "libwidevinecdm.so"), constants.F_OK);
+  } catch {
+    widevineSeeded = false;
+  }
+  assert(widevineSeeded, "system Widevine CDM should repair an empty provider profile");
   const proxyPolicySmoke = spawnSync("bash", ["-s"], {
     cwd: ROOT,
     input: `${webModeFunctions}
@@ -2846,7 +2909,7 @@ sync_runtime_provider_pool_process_statuses ""
   assert(webModeScript.includes('provider_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/$provider"'), "Explore should keep a stable per-provider Chromium profile for login state");
   assert(!webModeScript.includes('rm -rf "$provider_profile"'), "Explore provider switches should not delete the provider login profile");
   assert(webModeScript.includes('refresh_extension_script_cache "$provider_profile"') && webModeScript.includes("Default/Service Worker") && webModeScript.includes("service_worker_registration_info"), "Explore provider launch should refresh stale extension service-worker state without deleting login state");
-  assert(webModeScript.includes("seed_profile_widevine_cdm()") && webModeScript.includes("libwidevinecdm.so"), "Explore should repair empty provider Widevine CDM directories without deleting login state");
+  assert(webModeScript.includes("seed_profile_widevine_cdm()") && webModeScript.includes("system_widevine_cdm_is_available") && webModeScript.includes("libwidevinecdm.so"), "Explore should repair empty provider Widevine CDM directories from system or profile sources without deleting login state");
   assert((webModeScript.match(/seed_profile_widevine_cdm "\$provider_profile"/g) || []).length >= 2, "Explore pool and direct provider launch paths should seed Widevine before Chromium starts");
   const launchProviderForPoolStart = webModeScript.indexOf("launch_provider_for_pool() {");
   const launchProviderForPoolEnd = webModeScript.indexOf("\n}\n\nprovider_prewarm_max_concurrent_launches()", launchProviderForPoolStart);

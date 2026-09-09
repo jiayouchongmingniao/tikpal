@@ -30,6 +30,7 @@ ACTION="${1:-check}"
 : "${TIKPAL_MOODE_DB:=/var/local/www/db/moode-sqlite3.db}"
 : "${TIKPAL_SND_ALOOP_MODULES_LOAD:=/etc/modules-load.d/tikpal-snd-aloop.conf}"
 : "${TIKPAL_MPD_MUSIC_ROOT:=/var/lib/mpd/music}"
+: "${TIKPAL_OUTPUT_VOLUME_HELPER:=$SCRIPT_DIR/tikpal-output-volume.sh}"
 
 log() {
   printf '[tikpal-audio-adapt] %s\n' "$*" >&2
@@ -580,6 +581,11 @@ ensure_mpd_library_config() {
   TIKPAL_MPD_MUSIC_ROOT="$TIKPAL_MPD_MUSIC_ROOT" TIKPAL_MPD_RESTART_ON_PROFILE_WRITE=0 "$profile_helper" bootstrap
 }
 
+prepare_output_fixed_aux() {
+  [[ -x "$TIKPAL_OUTPUT_VOLUME_HELPER" ]] || return 0
+  "$TIKPAL_OUTPUT_VOLUME_HELPER" prepare || true
+}
+
 check_audio() {
   local selected audioout_pcm browser_pcm browser_shared_format mixer_control volume_strategy
   selected="$(select_card)"
@@ -632,6 +638,7 @@ apply_audio() {
   write_browser_output_config "$selected" "$browser_shared_format"
   write_audioout_config "$audioout_pcm"
   enable_loopback_config "$audioout_pcm"
+  prepare_output_fixed_aux
   ensure_mpd_library_config
   log "selected $(selected_field "$selected" 2) ($(selected_field "$selected" 4)) for $audioout_pcm"
   if [[ -n "$browser_shared_format" ]]; then

@@ -43,6 +43,7 @@ fi
 : "${TIKPAL_CHROMIUM_PROFILE_DIR:=$HOME/.config/tikpal-chromium-kiosk}"
 : "${TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE:=auto}"
 : "${TIKPAL_AUDIO_ADAPT_BIN:=$APP_DIR/deploy/moode/tikpal-audio-adapt.sh}"
+: "${TIKPAL_WEB_MODE_SYSTEM_WIDEVINE_CDM_DIR:=/usr/lib64/chromium-browser/WidevineCdm}"
 : "${TIKPAL_WEB_MODE_PROFILE_ROOT:=$HOME/.config/tikpal-web-mode}"
 : "${TIKPAL_WEB_MODE_PROVIDER_SWITCH_MARKER_PATH:=/run/tikpal/provider-switch.pid}"
 : "${TIKPAL_WEB_MODE_PHYSICAL_REVEAL_STAMP_PATH:=/run/tikpal/last-physical-reveal.tsv}"
@@ -2914,11 +2915,24 @@ profile_has_widevine_cdm() {
   find "$profile_dir/WidevineCdm" -path "*/_platform_specific/linux_x64/libwidevinecdm.so" -type f -size +1000000c -print -quit 2>/dev/null | grep -q .
 }
 
+system_widevine_cdm_is_available() {
+  local cdm_dir="$1"
+  [[ -n "$cdm_dir" && -d "$cdm_dir" ]] || return 1
+  find "$cdm_dir" -path "*/_platform_specific/linux_x64/libwidevinecdm.so" -type f -size +1000000c -print -quit 2>/dev/null | grep -q .
+}
+
 seed_profile_widevine_cdm() {
   local target_profile="$1"
   local source_profile source_provider
   [[ -n "$target_profile" && -d "$target_profile" ]] || return 0
   profile_has_widevine_cdm "$target_profile" && return 0
+
+  if system_widevine_cdm_is_available "$TIKPAL_WEB_MODE_SYSTEM_WIDEVINE_CDM_DIR"; then
+    if rm -rf "$target_profile/WidevineCdm" && cp -a "$TIKPAL_WEB_MODE_SYSTEM_WIDEVINE_CDM_DIR" "$target_profile/WidevineCdm"; then
+      log "seeded Widevine CDM for $(basename "$target_profile") from system CDM"
+      return 0
+    fi
+  fi
 
   for source_profile in "$TIKPAL_CHROMIUM_PROFILE_DIR" "$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"; do
     [[ -n "$source_profile" && "$source_profile" != "$target_profile" ]] || continue

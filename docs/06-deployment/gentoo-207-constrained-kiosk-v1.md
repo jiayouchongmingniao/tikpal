@@ -47,6 +47,16 @@ governor before applying `performance`. Its stop action restores only those
 recorded values, so it never guesses or overwrites a governor selected by a
 different owner.
 
+## HDMI brightness profile
+
+For the RTK HDMI panel tested on 2026-09-09, apply the device-specific
+[HDMI brightness limits](../hdmi-brightness-limits.md): DDC minimum 10,
+maximum 45, and startup brightness 45. Hardware value 48 became visibly dimmer
+than 45 despite matching DDC readback. The user confirmed recovery at 45 and
+normal display after a subsequent reboot. Do not reuse the earlier startup
+100 or provisional maximum 48. This is a field-tested control restriction,
+not a calibrated luminance scale or a proven thermal fix.
+
 ## Dynamic audio routing
 
 Both the kiosk Chromium process and Explore Providers must use the physical
@@ -78,6 +88,57 @@ runuser -u moode -- \
 The launcher log and the QQ Chromium command line must show the same resolved
 `--alsa-output-device=` value. A resolved `default` is a configuration error,
 not a valid fallback for browser audio on a Loopback-enabled kiosk.
+
+## Optional fixed auxiliary gain
+
+Some DACs expose a downstream playback control separate from the user-facing
+volume mixer. This opt-in configuration is independent of display brightness:
+
+```conf
+TIKPAL_OUTPUT_VOLUME_FIXED_AUX_CARD=
+TIKPAL_OUTPUT_VOLUME_FIXED_AUX_CONTROL=
+TIKPAL_OUTPUT_VOLUME_FIXED_AUX_VALUE=
+```
+
+Leave all three empty unless the connected card and control have been verified.
+The card must exactly match its stable ALSA card ID; the control is the complete
+`amixer cget/cset` selector, such as `name='PCM Playback Volume',index=1` only
+when that control is confirmed on that card. The value is a fixed percentage
+clamped to 0–100. Do not apply a guessed index to every card or tie this fixed
+value to the user's volume slider.
+
+`tikpal-output-volume.sh prepare` prepares the matched auxiliary control;
+normal volume writes also reassert it. `tikpal-audio-adapt.sh apply` invokes
+the preparation after routing is written. Missing configuration, a different
+card, or an absent control skips the auxiliary write; `get` stays read-only.
+The kiosk fixtures cover exact matches, mismatches, missing controls, and
+audio-adapter preparation. Publishing this source does not change the live
+207 audio settings or constitute new audible playback acceptance.
+
+## System Widevine source
+
+The provider launcher can seed an incomplete CDM directory from
+`TIKPAL_WEB_MODE_SYSTEM_WIDEVINE_CDM_DIR`, defaulting on Gentoo to
+`/usr/lib64/chromium-browser/WidevineCdm`, before trying existing Chromium and
+provider profiles. A candidate must contain a Linux x64 `libwidevinecdm.so`
+larger than 1,000,000 bytes. This is a presence heuristic, not proof of a
+compatible CDM, provider entitlement, license exchange or protected playback.
+An already populated provider CDM is preserved; repair replaces only the
+target `WidevineCdm` subtree, not the provider's login profile. The package
+smoke tests system-to-profile seeding. No proprietary CDM binary is included
+in this source checkpoint; the provider still needs separately verified runtime
+DRM support. See the [Gentoo deployment guide](gentoo-kiosk-deploy-v1.md).
+
+## FT8201P source checkpoint
+
+The `207` branch also contains the independent
+[FT8201P I2C driver draft](../../hardware/ft8201p/README.md). The requested
+coordinate defaults are 2560×720 with ten touch slots, but its assumed CTPM
+point layout still needs capture-based verification, plus an actual I2C address,
+reset GPIO and interrupt. No kernel-module build, installation or touch hardware
+acceptance is claimed by this source checkpoint. The HDMI panel's observed
+USB touchscreen is not evidence for this I2C driver. Do not load it as part of
+the brightness deployment.
 
 ## DLNA renderer
 

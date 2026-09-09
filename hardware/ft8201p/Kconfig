@@ -1,0 +1,13 @@
+# For an in-tree kernel integration, source this file from
+# drivers/input/touchscreen/Kconfig and add ft8201p.o to that directory's Makefile.
+
+config TOUCHSCREEN_FT8201P
+	tristate "FocalTech FT8201P I2C touchscreen"
+	depends on I2C
+	select INPUT_MT
+	help
+	  Say Y or M here to enable the I2C touchscreen interface of the
+	  FocalTech FT8201P integrated display-touch controller.
+
+	  The controller reports up to ten contacts. A TP_EXT_RSTN GPIO and a
+	  falling-edge TP_INT interrupt are required by this driver.

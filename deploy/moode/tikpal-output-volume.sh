@@ -8,6 +8,13 @@ controls="${TIKPAL_OUTPUT_VOLUME_CONTROLS:-PCM,Master,Digital,Speaker,Headphone,
 mirror_loopback="${TIKPAL_OUTPUT_VOLUME_MIRROR_LOOPBACK:-1}"
 fallback_mpc="${TIKPAL_OUTPUT_VOLUME_FALLBACK_MPC:-1}"
 alsa_configs="${TIKPAL_OUTPUT_VOLUME_ALSA_CONFIGS:-/etc/tikpal/alsa-loopback.conf /etc/asound.conf /etc/alsa/conf.d/_sndaloop.conf /etc/alsa/conf.d/_audioout.conf}"
+fixed_aux_card="${TIKPAL_OUTPUT_VOLUME_FIXED_AUX_CARD:-}"
+fixed_aux_control="${TIKPAL_OUTPUT_VOLUME_FIXED_AUX_CONTROL:-}"
+fixed_aux_value="${TIKPAL_OUTPUT_VOLUME_FIXED_AUX_VALUE:-}"
+
+normalize_percent() {
+  printf '%s' "$1" | awk '{ value = int($1 + 0); if (value < 0) value = 0; if (value > 100) value = 100; print value }'
+}
 
 discover_cards_from_config() {
   for config_path in $alsa_configs; do
@@ -130,6 +137,25 @@ set_mpc_volume() {
   mpc volume "$1" >/dev/null 2>&1
 }
 
+fixed_aux_is_configured() {
+  [ -n "$fixed_aux_card" ] && [ -n "$fixed_aux_control" ] && [ -n "$fixed_aux_value" ]
+}
+
+prepare_fixed_aux_for_card() {
+  card="$1"
+  fixed_aux_is_configured || return 0
+  [ "$card" = "$fixed_aux_card" ] || return 0
+  amixer -c "$card" cget "$fixed_aux_control" >/dev/null 2>&1 || return 0
+  amixer -c "$card" cset "$fixed_aux_control" "$(normalize_percent "$fixed_aux_value")%" >/dev/null 2>&1 || true
+}
+
+prepare_fixed_aux() {
+  fixed_aux_is_configured || return 0
+  for card in $(physical_cards); do
+    prepare_fixed_aux_for_card "$card"
+  done
+}
+
 case "$action" in
   get)
     for card in $(physical_cards); do
@@ -150,7 +176,7 @@ case "$action" in
     exit 1
     ;;
   set)
-    numeric_value="$(printf '%s' "$value" | awk '{ value = int($1 + 0); if (value < 0) value = 0; if (value > 100) value = 100; print value }')"
+    numeric_value="$(normalize_percent "$value")"
     changed=0
     failed_cards=""
     for card in $(set_cards | unique_lines); do
@@ -162,6 +188,7 @@ case "$action" in
     done
     if [ "$changed" -eq 0 ]; then
       if set_mpc_volume "$numeric_value"; then
+        prepare_fixed_aux
         exit 0
       fi
       for card in $failed_cards; do
@@ -170,9 +197,13 @@ case "$action" in
       printf 'tikpal-output-volume: no output mixer accepted configured controls\n' >&2
       exit 1
     fi
+    prepare_fixed_aux
+    ;;
+  prepare)
+    prepare_fixed_aux
     ;;
   *)
-    printf 'Usage: %s get|set [0-100]\n' "$0" >&2
+    printf 'Usage: %s get|set [0-100]|prepare\n' "$0" >&2
     exit 2
     ;;
 esac

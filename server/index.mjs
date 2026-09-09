@@ -40,6 +40,8 @@ const SYSTEM_SHUTDOWN_COMMAND = process.env.TIKPAL_SYSTEM_SHUTDOWN_COMMAND ?? "s
 const DSP_PRESET = process.env.TIKPAL_DSP_PRESET ?? "Unknown";
 const DDCUTIL_BIN = process.env.TIKPAL_DDCUTIL_BIN ?? "ddcutil";
 const DDCUTIL_DISPLAY = process.env.TIKPAL_DDCUTIL_DISPLAY ?? "";
+const DDC_BRIGHTNESS_MIN = process.env.TIKPAL_DDC_BRIGHTNESS_MIN ?? "0";
+const DDC_BRIGHTNESS_MAX = process.env.TIKPAL_DDC_BRIGHTNESS_MAX ?? "100";
 const DDCUTIL_READ_CACHE_MS_RAW = Number(process.env.TIKPAL_DDCUTIL_READ_CACHE_MS ?? 300_000);
 const DDCUTIL_READ_CACHE_MS = Number.isFinite(DDCUTIL_READ_CACHE_MS_RAW) && DDCUTIL_READ_CACHE_MS_RAW >= 0
   ? DDCUTIL_READ_CACHE_MS_RAW
@@ -3515,6 +3517,17 @@ function ddcutilArgs(args) {
   return DDCUTIL_DISPLAY ? [...prefix, "--display", DDCUTIL_DISPLAY, ...args] : [...prefix, ...args];
 }
 
+function ddcBrightnessLimits() {
+  const min = Number(DDC_BRIGHTNESS_MIN);
+  const max = Number(DDC_BRIGHTNESS_MAX);
+  if (!/^\d{1,3}$/.test(DDC_BRIGHTNESS_MIN) || !/^\d{1,3}$/.test(DDC_BRIGHTNESS_MAX)
+      || !Number.isInteger(min) || !Number.isInteger(max) || min < 0 || max > 100 || min > max) {
+    console.error("Invalid TIKPAL_DDC_BRIGHTNESS_MIN/MAX; refusing brightness write");
+    throw new Error("Invalid TIKPAL_DDC_BRIGHTNESS_MIN/MAX; refusing brightness write");
+  }
+  return { minBrightnessPercent: min, maxBrightnessPercent: max };
+}
+
 function ddcutilReadCommand(args) {
   const command = `${DDCUTIL_BIN} ${ddcutilArgs(args).join(" ")}`;
   return DDCUTIL_SUPPRESS_READ_WARNINGS ? `${command} 2>/dev/null` : command;
@@ -3579,7 +3592,8 @@ function parseDisplayBrightnessSnapshot(raw) {
   return {
     brightnessPercent: clampPercent((currentNumber / maxNumber) * 100, system.display.brightnessPercent),
     controllable: true,
-    transport: "ddcci"
+    transport: "ddcci",
+    ...ddcBrightnessLimits()
   };
 }
 
@@ -3675,13 +3689,16 @@ async function setDisplayBrightnessPercent(percent) {
     return;
   }
 
-  const command = `${DDCUTIL_BIN} ${ddcutilArgs(["setvcp", "10", String(nextPercent)]).join(" ")}`;
+  const limits = ddcBrightnessLimits();
+  const safePercent = Math.max(limits.minBrightnessPercent, Math.min(limits.maxBrightnessPercent, nextPercent));
+  const command = `${DDCUTIL_BIN} ${ddcutilArgs(["setvcp", "10", String(safePercent)]).join(" ")}`;
   await runCommand(command, { allowFailure: false, timeout: 5000 });
   displayBrightnessSnapshotCache = {
     value: {
-      brightnessPercent: nextPercent,
+      brightnessPercent: safePercent,
       controllable: true,
-      transport: "ddcci"
+      transport: "ddcci",
+      ...limits
     },
     updatedAtMs: Date.now()
   };
