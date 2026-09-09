@@ -436,6 +436,14 @@ systemctl restart tikpal-api.service
 
 `bootstrap` refuses an existing target database. For later preset updates, run `check` first and use `apply` only after it reports no target-id conflicts; `TIKPAL_RADIO_PRESETS_FORCE=1` remains an explicit last resort. Omitting `TIKPAL_RADIO_SQLITE_DB` preserves the existing `/var/local/www/db/moode-sqlite3.db` compatibility path. Verify the catalog with `GET /api/v1/audio/radios`; Radio is switchable only when that route returns at least one station. Selecting Radio clears MPD's current queue to start the stream, so snapshot and restore a local queue before a live acceptance test.
 
+The normal systemd installer uses `tikpal-radio-presets-ensure.sh` to read
+`TIKPAL_RADIO_SQLITE_DB` without executing either environment file. It applies
+the same `.env` then `.env.kiosk` precedence as the API, accepts an explicit
+installer environment override, and retains the legacy moOde path only when no
+dedicated path is configured. A passing `check` leaves the catalog untouched;
+missing curated rows are applied, while target-id conflicts still block the
+installation. The installer never bootstraps a missing database.
+
 Deploy `public/assets/radio-logos/` together with the catalog. Its `manifest.json` records the curated station-to-file aliases, official source URLs, and SHA-256 values; Tikpal serves these files locally and never fetches station artwork at runtime. The 36 curated stations currently resolve to 35 files because the Podcast and News NPR presets intentionally share the same official mark.
 
 ### Multi-room Audio
@@ -1855,6 +1863,16 @@ This proves local classic-AirPlay discovery. A phone still needs to be on the sa
 A connected DLNA stream first uses trustworthy DIDL metadata for immediate lyrics. When the stream has no usable title/artist, Tikpal may capture six seconds through an MPD `httpd` tap bound only to `127.0.0.1:8001` and send that bounded audio sample to the configured recognition provider. The result remains `lyrics.sourceScope: "upnp_input"`, so Ambient, Player, Hi-Fi, and the portable Remote consume the same artwork/lyrics state rather than introducing a DLNA-only UI path. Recognition is valid only for the current DLNA connection and is refreshed at `TIKPAL_UPNP_RECOGNITION_REFRESH_MS` (default `90000` milliseconds).
 
 The ordinary deploy invokes the existing guarded installer. It installs `Tikpal DLNA Recognition Tap` outside the managed physical-audio output block, leaves the tap disabled at rest, and sets `TIKPAL_UPNP_CAPTURE_COMMAND` in the existing device-local environment only after MPD, MPC, FFmpeg, the MPD `httpd` plugin, and FLAC encoder preflight successfully. A failed preflight leaves capture disabled; DIDL metadata behaviour and the real DAC route remain unchanged. The first successful install restarts MPD once, so schedule it outside active listening when possible.
+
+On Gentoo, `./deploy/deploy-gentoo.sh --enable-mpd-httpd` is the explicit
+maintenance action that manages only
+`/etc/portage/package.use/tikpal-mpd` with
+`media-sound/mpd httpd flac`, rebuilds MPD with `--changed-use`, and then
+installs the tap. Ordinary deployments never invoke Portage or restart MPD for
+this feature. The maintenance helper saves the current MPD queue, playback
+state, queue position, elapsed time, volume, and playback modes before the tap
+installer restart, then restores them. The tap remains FLAC on
+`127.0.0.1:8001`, disabled when idle, and is never exposed to the LAN.
 
 On 115, check the safe idle state before accepting the feature:
 

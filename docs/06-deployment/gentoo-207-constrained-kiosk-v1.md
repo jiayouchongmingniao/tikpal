@@ -121,6 +121,39 @@ The launcher log and the QQ Chromium command line must show the same resolved
 `--alsa-output-device=` value. A resolved `default` is a configuration error,
 not a valid fallback for browser audio on a Loopback-enabled kiosk.
 
+## Radio catalog and DLNA recognition tap
+
+207 uses the existing Tikpal-owned `/var/lib/tikpal/radio.sqlite3`, not the
+absent moOde database. Its current catalog contains 36 curated stations across
+12 categories and must be checked before any update; a healthy check does not
+rewrite it. The service installer reads the configured path from the
+device-local `.env` and `.env.kiosk` files without sourcing them.
+
+The DLNA recognition tap requires Gentoo MPD to be built with both `httpd`
+and `flac` USE flags. Enable it only with the explicit release flag:
+
+```bash
+./deploy/deploy-gentoo.sh --host 192.168.10.207 --user root --proxy '' \
+  --allow-dirty --enable-mpd-httpd
+```
+
+This maintenance action recompiles MPD and briefly restarts it. It snapshots
+and restores the active MPD queue and playback state, but should still be run
+outside critical listening. The installed `Tikpal DLNA Recognition Tap` is
+FLAC, listens only on `127.0.0.1:8001`, and stays disabled between bounded
+captures; it neither changes the primary DAC output nor creates a LAN listener.
+
+Verify after the maintenance action:
+
+```bash
+mpd --version
+mpc outputs
+ss -ltn '( sport = :8001 )' # no listener while the tap is disabled
+TIKPAL_RADIO_SQLITE_DB=/var/lib/tikpal/radio.sqlite3 \
+  ./deploy/moode/tikpal-radio-presets-sync.sh check
+curl -fsS 'http://127.0.0.1:8787/api/v1/audio/radios?limit=80' | jq '.total,.categories'
+```
+
 ## Optional fixed auxiliary gain
 
 Some DACs expose a downstream playback control separate from the user-facing

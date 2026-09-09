@@ -23,7 +23,7 @@
     "test:radio-logo-pack": "node scripts/radio-logo-pack-check.mjs",
     "test:ota:package:mp4": "node scripts/generate-mp4-resource-otas-smoke.mjs",
     "test:ota:resources": "node scripts/resource-ota-smoke.mjs",
-    "test:kiosk": "node scripts/provider-audio-gate-fixture.mjs && node scripts/kiosk-package-smoke.mjs && node scripts/explore-open-lifecycle-smoke.mjs",
+    "test:kiosk": "bash scripts/radio-presets-ensure-smoke.sh && bash scripts/mpd-httpd-smoke.sh && node scripts/provider-audio-gate-fixture.mjs && node scripts/kiosk-package-smoke.mjs && node scripts/explore-open-lifecycle-smoke.mjs",
     "test:provider-audio-gate": "node scripts/provider-audio-gate-fixture.mjs",
     "test:cdp-manager": "node scripts/tikpal-cdp-session-manager-smoke.mjs",
     "test:initial-entry": "bash scripts/tikpal-initial-entry-fixture.sh",

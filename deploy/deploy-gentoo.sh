@@ -12,7 +12,7 @@ set -euo pipefail
 # one-off password-authenticated deployment; never put it in an env file.
 #
 # Usage: ./deploy/deploy-gentoo.sh [--host HOST] [--user USER] [--proxy PROXY]
-#                                  [--local-preflight] [--allow-dirty]
+#                                  [--local-preflight] [--allow-dirty] [--enable-mpd-httpd]
 #   Defaults: host=192.168.10.115, user=root, proxy=127.0.0.1:7897
 
 HOST="${TIKPAL_DEPLOY_HOST:-192.168.10.115}"
@@ -22,6 +22,7 @@ REMOTE_DIR="/home/moode/code/tikpal"
 SERVICE_USER="moode"
 LOCAL_PREFLIGHT=0
 ALLOW_DIRTY=0
+ENABLE_MPD_HTTPD=0
 WORKTREE_DIRTY=0
 
 usage() {
@@ -31,6 +32,7 @@ Usage: $0 [--host HOST] [--user USER] [--proxy PROXY] [options]
 Options:
   --local-preflight  Run repository-only release checks; never call SSH or rsync
   --allow-dirty      Explicitly allow tracked or untracked workspace changes
+  --enable-mpd-httpd Rebuild MPD with httpd/flac and install the local-only DLNA recognition tap
   -h, --help         Show this help
 USAGE
 }
@@ -42,6 +44,7 @@ while [[ $# -gt 0 ]]; do
     --proxy) PROXY="$2"; shift 2 ;;
     --local-preflight) LOCAL_PREFLIGHT=1; shift ;;
     --allow-dirty) ALLOW_DIRTY=1; shift ;;
+    --enable-mpd-httpd) ENABLE_MPD_HTTPD=1; shift ;;
     -h|--help)
       usage
       exit 0
@@ -88,12 +91,15 @@ run_local_preflight() {
     "$APP_DIR/deploy/moode/tikpal-alsa-loopback.sh"
     "$APP_DIR/deploy/moode/tikpal-audio-adapt.sh"
     "$APP_DIR/deploy/moode/tikpal-audio-output-profile.sh"
+    "$APP_DIR/deploy/moode/tikpal-radio-presets-ensure.sh"
+    "$APP_DIR/deploy/gentoo/tikpal-mpd-httpd.sh"
     "$APP_DIR/deploy/systemd/install-systemd-services.sh"
     "$APP_DIR/deploy/udev/70-tikpal-usb-audio-display-power.rules"
   )
   local shell_scripts=(
     "$APP_DIR/deploy/deploy-gentoo.sh"
     "$APP_DIR/deploy/moode/"*.sh
+    "$APP_DIR/deploy/gentoo/"*.sh
     "$APP_DIR/deploy/systemd/install-systemd-services.sh"
   )
 
@@ -224,6 +230,11 @@ rsync_cmd -az --delete \
 # Fix ownership (rsync as root changes owner to root)
 echo "--- Fixing ownership ---"
 ssh_cmd "chown -R ${SERVICE_USER}: ${REMOTE_DIR}/"
+
+if [[ "$ENABLE_MPD_HTTPD" -eq 1 ]]; then
+  echo "--- Enabling MPD httpd/FLAC recognition tap ---"
+  ssh_cmd "cd '$REMOTE_DIR' && ./deploy/gentoo/tikpal-mpd-httpd.sh enable"
+fi
 
 # Install the synchronized API/web/audio units. This also performs the guarded
 # DLNA recognition-tap preflight without replacing device-local .env files.

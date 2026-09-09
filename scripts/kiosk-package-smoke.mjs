@@ -58,6 +58,8 @@ const requiredFiles = [
   "deploy/moode/tikpal-nas-mount.sh",
   "deploy/moode/tikpal-usb-library-sync.sh",
   "deploy/moode/tikpal-radio-presets-sync.sh",
+  "deploy/moode/tikpal-radio-presets-ensure.sh",
+  "deploy/gentoo/tikpal-mpd-httpd.sh",
   "deploy/moode/tikpal-upnp-ready.sh",
   "deploy/moode/tikpal-upnp-configure.sh",
   "deploy/moode/tikpal-upnp-enable.sh",
@@ -212,6 +214,8 @@ async function run() {
   await assertExecutable("deploy/moode/tikpal-nas-mount.sh");
   await assertExecutable("deploy/moode/tikpal-usb-library-sync.sh");
   await assertExecutable("deploy/moode/tikpal-radio-presets-sync.sh");
+  await assertExecutable("deploy/moode/tikpal-radio-presets-ensure.sh");
+  await assertExecutable("deploy/gentoo/tikpal-mpd-httpd.sh");
   await assertExecutable("deploy/moode/tikpal-upnp-ready.sh");
   await assertExecutable("deploy/moode/tikpal-upnp-configure.sh");
   await assertExecutable("deploy/moode/tikpal-upnp-enable.sh");
@@ -295,6 +299,11 @@ async function run() {
       && gentooDeploySource.includes("--allow-dirty")
       && gentooDeploySource.indexOf("check_worktree_policy") < gentooDeploySource.indexOf("SSH_OPTS=("),
     "Gentoo deployment should offer a repository-only preflight and block dirty broad deploys before network setup"
+  );
+  assert(
+    gentooDeploySource.includes("--enable-mpd-httpd")
+      && gentooDeploySource.includes("tikpal-mpd-httpd.sh enable"),
+    "Gentoo deployment should opt into MPD httpd/FLAC maintenance explicitly"
   );
   assert(
     gentooDeployDocSource.includes("Local Deployment Preflight")
@@ -818,7 +827,7 @@ audio_output {
   assert(systemdInstaller.includes("tikpal-audio-adapt.service"), "systemd installer should install the audio adapter service");
   assert(systemdInstaller.includes('/usr/local/sbin/tikpal-alsa-loopback.sh'), "systemd installer should keep the installed audio adapter's ALSA loopback dependency beside it");
   assert(systemdInstaller.includes("tikpal-library-sync.service"), "systemd installer should install the library sync service");
-  assert(systemdInstaller.includes("tikpal-radio-presets-sync.sh") && systemdInstaller.includes("ensure_radio_presets") && systemdInstaller.includes("SQLite database is unavailable"), "systemd installer should sync Radio presets only when its SQLite database exists");
+  assert(systemdInstaller.includes("tikpal-radio-presets-ensure.sh") && systemdInstaller.includes("ensure_radio_presets") && systemdInstaller.includes("TIKPAL_APP_DIR"), "systemd installer should resolve the device-owned Radio SQLite configuration safely");
   assert(systemdInstaller.includes("ensure_library_scan_env"), "systemd installer should keep Library Scan pointed at the combined sync helper");
   assert(systemdInstaller.includes("ensure_kiosk_audio_release_env") && systemdInstaller.includes("tikpal-release-kiosk-audio.sh"), "systemd installer should add the kiosk audio release hook on mpc Pi installs");
   assert(systemdInstaller.includes("systemctl restart tikpal-audio-adapt.service"), "systemd installer restart should run the audio adapter before app services");

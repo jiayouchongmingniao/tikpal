@@ -592,17 +592,12 @@ ensure_upnp_recognition_capture() {
 
 ensure_radio_presets() {
   [[ "${TIKPAL_INSTALL_RADIO_PRESETS:-1}" != "0" ]] || return 0
-  local helper="$APP_DIR/deploy/moode/tikpal-radio-presets-sync.sh"
-  local database="${TIKPAL_RADIO_SQLITE_DB:-${TIKPAL_MOODE_SQLITE_DB:-/var/local/www/db/moode-sqlite3.db}}"
+  local helper="$APP_DIR/deploy/moode/tikpal-radio-presets-ensure.sh"
   [[ -x "$helper" ]] || {
     echo "WARN: $helper not found; skipping Tikpal Radio preset sync" >&2
     return 0
   }
-  [[ -f "$database" ]] || {
-    echo "WARN: Tikpal Radio preset sync skipped; SQLite database is unavailable: $database" >&2
-    return 0
-  }
-  "$helper" apply
+  TIKPAL_APP_DIR="$APP_DIR" "$helper" ensure
 }
 
 if [[ ! -f "$APP_DIR/server/index.mjs" || ! -f "$APP_DIR/server/web.mjs" ]]; then
