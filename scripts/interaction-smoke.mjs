@@ -1156,6 +1156,8 @@ try {
               ...next.lyrics,
               status: "not_found",
               trackKey: "smoke-no-ready-lyrics",
+              title: "No Lyrics Study",
+              artist: "Tikpal Smoke",
               synced: false,
               activeLineIndex: null,
               lines: [],
@@ -1897,6 +1899,21 @@ try {
     client,
     "document.querySelector('[data-hifi-now-playing][data-hifi-centered-now-playing]') !== null && document.querySelector('[data-hifi-playback-presence][data-hifi-playback-state=\"playing\"]') !== null && document.querySelector('[data-hifi-lyrics-panel]') === null && document.querySelector('.ambient-lyrics-ticker') === null && document.querySelector('[data-ambient-lyrics]')?.getAttribute('aria-hidden') === 'true'",
     "Hi-Fi without ready lyrics returns to centered now-playing with playback presence"
+  );
+  await expect(
+    client,
+    `
+      (() => {
+        const trackInfo = document.querySelector('.hifi-lyrics-recognized[data-hifi-track-info]');
+        if (!trackInfo) return false;
+        const rect = trackInfo.getBoundingClientRect();
+        return trackInfo.textContent?.includes('No Lyrics Study - Tikpal Smoke')
+          && rect.width >= 800
+          && rect.left >= window.innerWidth * 0.4
+          && rect.right <= window.innerWidth - 80;
+      })()
+    `,
+    "Hi-Fi lyrics fallback keeps song information visible in the full-width metadata region"
   );
   const pausedNoReadyLyricsPatchVersion = await setStatePatchMode(client, "pausedNoReadyLyrics");
   await waitForStatePatchRefresh(client, pausedNoReadyLyricsPatchVersion, "Hi-Fi paused no-ready lyrics fixture refreshes");

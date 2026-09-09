@@ -8813,6 +8813,8 @@ select {
   }
 
   .hifi-lyrics-panel,
+  .hifi-lyrics-recognizing,
+  .hifi-lyrics-recognized,
   .ambient-screen[data-room-mode="hifi"].is-hud-visible .eq-visual-scene.has-lyrics-panel .hifi-lyrics-panel {
     top: 174px;
     right: 24px;

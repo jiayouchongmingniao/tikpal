@@ -194,6 +194,10 @@ export function EqVisualScene({ playback, audio, system, fontTheme, lyricsPanel,
     : playbackTruth.albumArtUrl;
   const usingGeneratedCoverFallback = !playbackTruth.hasPlaybackArtwork || displayedAlbumArtUrl === playbackTruth.fallbackAlbumArtUrl;
   const hasLyricsPanel = Boolean(visibleLyricsPanel?.lines.length);
+  const isRecognizingLyrics = !hasLyricsPanel && lyricsStatus === "recognizing";
+  const hasUnavailableLyrics = !hasLyricsPanel
+    && (lyricsStatus === "not_found" || lyricsStatus === "error")
+    && Boolean(lyricsTitle || playbackTruth.title);
   const themeSeedParts = useMemo(
     () => [
       playbackTruth.title,
@@ -316,27 +320,7 @@ export function EqVisualScene({ playback, audio, system, fontTheme, lyricsPanel,
           />
           {usingGeneratedCoverFallback ? <span>{coverLabel}</span> : null}
         </div>
-        {!hasLyricsPanel ? (
-          lyricsStatus === "recognizing" ? (
-            <div className="hifi-lyrics-recognizing" data-hifi-track-info>
-              <header className="hifi-lyrics-heading">
-                <strong>{trackHeading}</strong>
-              </header>
-              <div className="hifi-lyrics-recognizing-status">
-                <span className="hifi-lyrics-recognizing-spinner" aria-hidden="true" />
-                <span>{lyricsSourceScope === "upnp_input" ? "识别 DLNA 音频中…" : lyricsSourceScope === "airplay_input" ? "识别 AirPlay 音频中…" : lyricsSourceScope === "bluetooth_input" ? "识别蓝牙音频中…" : "正在识别…"}</span>
-              </div>
-            </div>
-          ) : (lyricsStatus === "not_found" || lyricsStatus === "error") && (lyricsTitle || playbackTruth.title) ? (
-            <div className="hifi-lyrics-recognized" data-hifi-track-info>
-              <header className="hifi-lyrics-heading">
-                <strong>{[lyricsTitle || playbackTruth.title, lyricsArtist || playbackTruth.artist].filter(Boolean).join(" - ")}</strong>
-              </header>
-              <div className="hifi-lyrics-recognized-status">
-                <span>未找到歌词</span>
-              </div>
-            </div>
-          ) : (
+        {!hasLyricsPanel && !isRecognizingLyrics && !hasUnavailableLyrics ? (
             <div className="hifi-now-playing-copy" data-hifi-track-info>
               <span>Now Playing</span>
               <strong>{playbackTruth.title}</strong>
@@ -349,9 +333,29 @@ export function EqVisualScene({ playback, audio, system, fontTheme, lyricsPanel,
                 <span>{system.volume.percent}%</span>
               </div>
             </div>
-          )
         ) : null}
       </div>
+      {isRecognizingLyrics ? (
+        <div className="hifi-lyrics-recognizing" data-hifi-track-info>
+          <header className="hifi-lyrics-heading">
+            <strong>{trackHeading}</strong>
+          </header>
+          <div className="hifi-lyrics-recognizing-status">
+            <span className="hifi-lyrics-recognizing-spinner" aria-hidden="true" />
+            <span>{lyricsSourceScope === "upnp_input" ? "识别 DLNA 音频中…" : lyricsSourceScope === "airplay_input" ? "识别 AirPlay 音频中…" : lyricsSourceScope === "bluetooth_input" ? "识别蓝牙音频中…" : "正在识别…"}</span>
+          </div>
+        </div>
+      ) : null}
+      {hasUnavailableLyrics ? (
+        <div className="hifi-lyrics-recognized" data-hifi-track-info>
+          <header className="hifi-lyrics-heading">
+            <strong>{[lyricsTitle || playbackTruth.title, lyricsArtist || playbackTruth.artist].filter(Boolean).join(" - ")}</strong>
+          </header>
+          <div className="hifi-lyrics-recognized-status">
+            <span>未找到歌词</span>
+          </div>
+        </div>
+      ) : null}
       {hasLyricsPanel && visibleLyricsPanel ? (
         <aside className={`hifi-lyrics-panel ${visibleLyricsPanel.synced ? "is-synced" : "is-static"}`} aria-label="Lyrics" data-hifi-lyrics-panel>
           <header className="hifi-lyrics-heading" data-hifi-track-info>
