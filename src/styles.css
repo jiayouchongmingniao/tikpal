@@ -1327,12 +1327,15 @@ select {
 .hifi-lyrics-recognizing,
 .hifi-lyrics-recognized {
   position: absolute;
-  inset: 72px clamp(260px, 12vw, 360px) 132px clamp(640px, 42vw, 1080px);
+  top: 50%;
+  left: calc(50% + clamp(170px, 8.5vw, 210px));
+  width: min(660px, calc(50vw - clamp(260px, 12vw, 360px)));
   display: grid;
   grid-template-rows: auto auto;
   row-gap: 24px;
   align-content: start;
   overflow: hidden;
+  transform: translateY(-50%);
   pointer-events: none;
 }
 
@@ -1792,6 +1795,16 @@ select {
   justify-items: start;
   gap: 18px;
   text-align: left;
+  transform: translateX(-50%);
+}
+
+.ambient-screen[data-room-mode="hifi"].is-hud-visible .hifi-lyrics-recognizing,
+.ambient-screen[data-room-mode="hifi"].is-hud-visible .hifi-lyrics-recognized {
+  top: 30px;
+  left: 50%;
+  width: min(980px, calc(100vw - 120px));
+  box-sizing: border-box;
+  padding-left: 146px;
   transform: translateX(-50%);
 }
 
@@ -8826,7 +8839,10 @@ select {
     right: 24px;
     bottom: 118px;
     left: 24px;
+    width: auto;
+    padding-left: 0;
     opacity: 1;
+    transform: none;
   }
 
   .hifi-lyrics-wall,

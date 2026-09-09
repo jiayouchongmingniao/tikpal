@@ -1905,18 +1905,45 @@ try {
     `
       (() => {
         const trackInfo = document.querySelector('.hifi-lyrics-recognized[data-hifi-track-info]');
-        if (!trackInfo) return false;
+        const cover = document.querySelector('.hifi-cover-art');
+        const heading = trackInfo?.querySelector('.hifi-lyrics-heading strong');
+        if (!trackInfo || !cover || !heading) return false;
         const rect = trackInfo.getBoundingClientRect();
-        const heading = trackInfo.querySelector('.hifi-lyrics-heading strong');
+        const headingRect = heading.getBoundingClientRect();
+        const coverRect = cover.getBoundingClientRect();
         const fontSize = Number.parseFloat(getComputedStyle(heading).fontSize);
         return trackInfo.textContent?.includes('No Lyrics Study - Tikpal Smoke')
-          && rect.width >= 800
-          && rect.left >= window.innerWidth * 0.4
+          && rect.width >= 600
+          && headingRect.left >= coverRect.right
+          && headingRect.left - coverRect.right <= 80
           && rect.right <= window.innerWidth - 260
           && fontSize <= 34;
       })()
     `,
-    "Hi-Fi lyrics fallback keeps song information visible in the full-width metadata region"
+    "Hi-Fi lyrics fallback keeps song information beside the cover"
+  );
+  await expect(
+    client,
+    `
+      (() => {
+        const screen = document.querySelector('.ambient-screen[data-room-mode="hifi"]');
+        const trackInfo = document.querySelector('.hifi-lyrics-recognized[data-hifi-track-info]');
+        const cover = document.querySelector('.hifi-cover-art');
+        const heading = trackInfo?.querySelector('.hifi-lyrics-heading strong');
+        if (!screen || !trackInfo || !cover || !heading) return false;
+        screen.classList.add('is-hud-visible');
+        try {
+          const headingRect = heading.getBoundingClientRect();
+          const coverRect = cover.getBoundingClientRect();
+          return headingRect.left >= coverRect.right
+            && headingRect.left - coverRect.right <= 24
+            && Math.abs(headingRect.top - coverRect.top) <= 2;
+        } finally {
+          screen.classList.remove('is-hud-visible');
+        }
+      })()
+    `,
+    "Hi-Fi lyrics fallback stays adjacent to the compact cover when the HUD is visible"
   );
   const pausedNoReadyLyricsPatchVersion = await setStatePatchMode(client, "pausedNoReadyLyrics");
   await waitForStatePatchRefresh(client, pausedNoReadyLyricsPatchVersion, "Hi-Fi paused no-ready lyrics fixture refreshes");
