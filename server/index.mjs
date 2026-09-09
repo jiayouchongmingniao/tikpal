@@ -3228,7 +3228,7 @@ async function readAudioFileInfo(absolutePath) {
         "-v",
         "error",
         "-show_entries",
-        "format=duration,bit_rate,format_name:format_tags=title,artist,album:stream=codec_name,codec_type,sample_rate,channels,bits_per_sample,bits_per_raw_sample,bit_rate",
+        "format=duration,bit_rate,format_name:format_tags=title,artist,album:stream=codec_name,codec_type,sample_rate,channels,bits_per_sample,bits_per_raw_sample,bit_rate:stream_tags=title,artist,album",
         "-of",
         "json",
         absolutePath
@@ -3246,7 +3246,12 @@ async function readAudioFileInfo(absolutePath) {
   const audioStream = Array.isArray(probe?.streams)
     ? probe.streams.find((stream) => stream?.codec_type === "audio") ?? null
     : null;
-  const tags = probe?.format?.tags ?? {};
+  // Ogg/Vorbis stores common tags on the audio stream, while MP3/FLAC usually
+  // expose them at the container level. Prefer container tags when both exist.
+  const tags = {
+    ...(audioStream?.tags ?? {}),
+    ...(probe?.format?.tags ?? {})
+  };
   const durationSeconds = parsePositiveNumber(probe?.format?.duration);
   const streamBitrate = parsePositiveNumber(audioStream?.bit_rate);
   const formatBitrate = parsePositiveNumber(probe?.format?.bit_rate);
@@ -12586,15 +12591,16 @@ function normalizeProviderLyricsBody(candidate, lyricsBody, provider, fallback =
 
   const hasLyrics = Boolean(normalizeMetadataValue(lyricsBody.plainLyrics) || normalizeMetadataValue(lyricsBody.syncedLyrics));
   if (!hasLyrics) return null;
-  if ((lyricsBody.trackName || lyricsBody.title || lyricsBody.artistName || lyricsBody.artist) && !strictLyricsProviderMatch(candidate, lyricsBody)) {
+  const requiresStrictMatch = shouldUseStrictLyricsProviderMatch(candidate);
+  if (requiresStrictMatch && (lyricsBody.trackName || lyricsBody.title || lyricsBody.artistName || lyricsBody.artist) && !strictLyricsProviderMatch(candidate, lyricsBody)) {
     return null;
   }
 
   return {
     ...lyricsBody,
-    trackName: lyricsBody.trackName ?? lyricsBody.title ?? fallback.title ?? candidate.title,
-    artistName: lyricsBody.artistName ?? lyricsBody.artist ?? fallback.artist ?? candidate.artist,
-    albumName: lyricsBody.albumName ?? lyricsBody.album ?? fallback.album ?? candidate.album,
+    trackName: requiresStrictMatch ? (lyricsBody.trackName ?? lyricsBody.title ?? fallback.title ?? candidate.title) : (fallback.title ?? candidate.title),
+    artistName: requiresStrictMatch ? (lyricsBody.artistName ?? lyricsBody.artist ?? fallback.artist ?? candidate.artist) : (fallback.artist ?? candidate.artist),
+    albumName: requiresStrictMatch ? (lyricsBody.albumName ?? lyricsBody.album ?? fallback.album ?? candidate.album) : (fallback.album ?? candidate.album),
     provider
   };
 }
