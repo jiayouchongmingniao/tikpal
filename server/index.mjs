@@ -8,6 +8,7 @@ import { promisify } from "node:util";
 import { buildAccessDeniedBody, getTikpalApiAccessDecision, hasValidTikpalKey } from "./accessControl.mjs";
 import { buildOpenApiDocsHtml, buildOpenApiDocument } from "./openapi.mjs";
 import { recognizeWithAcrCloud } from "./recognitionProviders/acrcloud.mjs";
+import { getCpuThermalPolicy, readCpuTemperatureFromSysfs } from "./thermal.mjs";
 
 const PORT = Number(process.env.TIKPAL_API_PORT ?? 8787);
 const HOST = process.env.TIKPAL_API_HOST ?? "127.0.0.1";
@@ -34,6 +35,7 @@ const MPD_MUSIC_ROOT = process.env.TIKPAL_MPD_MUSIC_ROOT ?? "/var/lib/mpd/music"
 const APP_VERSION = process.env.TIKPAL_APP_VERSION ?? "0.1.0";
 const REQUESTED_RENDERER = (process.env.TIKPAL_RENDERER ?? "media").toLowerCase();
 const REQUESTED_KIOSK_WINDOW = process.env.TIKPAL_KIOSK_WINDOW ?? "2560x720";
+const CPU_THERMAL_POLICY = getCpuThermalPolicy();
 const LIBRARY_SCAN_COMMAND = process.env.TIKPAL_LIBRARY_SCAN_COMMAND ?? "";
 const SYSTEM_REBOOT_COMMAND = process.env.TIKPAL_SYSTEM_REBOOT_COMMAND ?? "sudo -n systemctl --no-wall --no-block reboot";
 const SYSTEM_SHUTDOWN_COMMAND = process.env.TIKPAL_SYSTEM_SHUTDOWN_COMMAND ?? "sudo -n systemctl --no-wall --no-block poweroff";
@@ -785,6 +787,11 @@ const system = {
   sampleRate: 96000,
   bitDepth: 24,
   cpuTemp: 48,
+  thermal: {
+    cpuSource: "mock",
+    videoPauseCelsius: CPU_THERMAL_POLICY.pauseCelsius,
+    videoResumeCelsius: CPU_THERMAL_POLICY.resumeCelsius
+  },
   dspState: {
     enabled: true,
     preset: "Flat",
@@ -3480,20 +3487,17 @@ async function getNetworkSnapshot() {
   };
 }
 
-async function getCpuTempSnapshot() {
+async function getCpuThermalSnapshot() {
   const vcgencmdRaw = await runCommand("vcgencmd measure_temp", { allowFailure: true });
   const vcgencmdMatch = vcgencmdRaw.match(/temp=([0-9.]+)/);
   if (vcgencmdMatch) {
-    return Math.round(Number(vcgencmdMatch[1]));
+    return {
+      celsius: Math.round(Number(vcgencmdMatch[1])),
+      source: "vcgencmd"
+    };
   }
 
-  const sysfsRaw = await runCommand("cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null", { allowFailure: true });
-  const tempMilli = Number(sysfsRaw);
-  if (Number.isFinite(tempMilli) && tempMilli > 0) {
-    return Math.round(tempMilli / 1000);
-  }
-
-  return system.cpuTemp;
+  return await readCpuTemperatureFromSysfs();
 }
 
 async function getUptimeSnapshot() {
@@ -3750,12 +3754,12 @@ async function getOutputDeviceSnapshot() {
 async function getMpcSystemSnapshot(statusRaw, statsRaw) {
   const status = applyTikpalPlaybackModeToStatus(parseMpcStatus(statusRaw));
   const stats = parseMpcStats(statsRaw);
-  const [network, display, outputDevice, dspState, cpuTemp, uptime, multiroom] = await Promise.all([
+  const [network, display, outputDevice, dspState, cpuThermal, uptime, multiroom] = await Promise.all([
     getNetworkSnapshot(),
     readDisplayBrightnessSnapshot(),
     getOutputDeviceSnapshot(),
     getDspSnapshot(),
-    getCpuTempSnapshot(),
+    getCpuThermalSnapshot(),
     getUptimeSnapshot(),
     readMultiroomState({ releaseMpd: false })
   ]);
@@ -3767,7 +3771,12 @@ async function getMpcSystemSnapshot(statusRaw, statsRaw) {
     network,
     display,
     outputDevice,
-    cpuTemp,
+    cpuTemp: cpuThermal?.celsius ?? null,
+    thermal: {
+      cpuSource: cpuThermal?.source ?? null,
+      videoPauseCelsius: CPU_THERMAL_POLICY.pauseCelsius,
+      videoResumeCelsius: CPU_THERMAL_POLICY.resumeCelsius
+    },
     uptime,
     dspState,
     multiroom,

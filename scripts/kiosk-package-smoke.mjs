@@ -322,28 +322,25 @@ async function run() {
     assert(!onboardingGuideSource.includes(visibleHardcodedText), `Onboarding guide should not expose ${visibleHardcodedText}`);
   }
   for (const onboardingKey of [
-    "onboarding.previous",
-    "onboarding.sampleAria",
-    "onboarding.sampleTrack",
-    "onboarding.sampleBrightness",
-    "onboarding.sampleVolume",
-    "onboarding.samplePlayer",
-    "onboarding.sampleTry",
-    "onboarding.scopeNote"
+    "onboarding.ariaLabel",
+    "onboarding.scopeNote",
+    "onboarding.getStarted"
   ]) {
     assert(onboardingGuideSource.includes(`t("${onboardingKey}")`), `Onboarding guide should use ${onboardingKey}`);
   }
   const onboardingI18nSource = await readFile(path.join(ROOT, "src/i18n.tsx"), "utf8");
   for (const onboardingKey of [
-    "onboarding.previous",
-    "onboarding.sampleAria",
-    "onboarding.sampleTrack",
-    "onboarding.sampleBrightness",
-    "onboarding.sampleVolume",
-    "onboarding.samplePlayer",
-    "onboarding.sampleTry",
-    "onboarding.scopeNote"
+    "onboarding.tapTitle",
+    "onboarding.brightnessTitle",
+    "onboarding.volumeTitle",
+    "onboarding.playerTitle",
+    "onboarding.menuTitle",
+    "onboarding.returnTitle",
+    "onboarding.ariaLabel",
+    "onboarding.scopeNote",
+    "onboarding.getStarted"
   ]) {
+    assert(onboardingGuideSource.includes(`"${onboardingKey}"`), `Onboarding guide should expose ${onboardingKey}`);
     const localeCount = onboardingI18nSource.match(new RegExp(`"${onboardingKey.replace(".", "\\.")}"`, "g"))?.length ?? 0;
     assert(localeCount >= 7, `${onboardingKey} should be translated for all supported locales`);
   }
@@ -821,7 +818,7 @@ audio_output {
   assert(systemdInstaller.includes("tikpal-audio-adapt.service"), "systemd installer should install the audio adapter service");
   assert(systemdInstaller.includes('/usr/local/sbin/tikpal-alsa-loopback.sh'), "systemd installer should keep the installed audio adapter's ALSA loopback dependency beside it");
   assert(systemdInstaller.includes("tikpal-library-sync.service"), "systemd installer should install the library sync service");
-  assert(systemdInstaller.includes("tikpal-radio-presets-sync.sh") && systemdInstaller.includes("ensure_radio_presets"), "systemd installer should sync single-layer Radio presets");
+  assert(systemdInstaller.includes("tikpal-radio-presets-sync.sh") && systemdInstaller.includes("ensure_radio_presets") && systemdInstaller.includes("SQLite database is unavailable"), "systemd installer should sync Radio presets only when its SQLite database exists");
   assert(systemdInstaller.includes("ensure_library_scan_env"), "systemd installer should keep Library Scan pointed at the combined sync helper");
   assert(systemdInstaller.includes("ensure_kiosk_audio_release_env") && systemdInstaller.includes("tikpal-release-kiosk-audio.sh"), "systemd installer should add the kiosk audio release hook on mpc Pi installs");
   assert(systemdInstaller.includes("systemctl restart tikpal-audio-adapt.service"), "systemd installer restart should run the audio adapter before app services");

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { Bluetooth, Captions, CaptionsOff, Cast, ChevronLeft, ChevronRight, GalleryHorizontalEnd, Globe2, Heart, LibraryBig, ListMusic, LoaderCircle, Moon, Music2, Network, PanelRightClose, Pause, Play, Radio as RadioIcon, Repeat1, Settings, Shuffle, SkipBack, SkipForward, SlidersHorizontal, SunMedium, Target, Volume2, Waves } from "lucide-react";
+import { AlertTriangle, Bluetooth, Captions, CaptionsOff, Cast, ChevronLeft, ChevronRight, GalleryHorizontalEnd, Globe2, Heart, LibraryBig, ListMusic, LoaderCircle, Moon, Music2, Network, PanelRightClose, Pause, Play, Radio as RadioIcon, Repeat1, Settings, Shuffle, SkipBack, SkipForward, SlidersHorizontal, SunMedium, Target, Volume2, Waves } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { fetchBackgroundVideos, fetchSceneContext } from "../api/tikpalClient";
 import { EqVisualScene, type HifiLyricsPanel } from "./EqVisualScene";
@@ -60,8 +60,8 @@ const ADJUST_OVERLAY_AUTO_CLOSE_MS = 3_000;
 const HIFI_LYRICS_FAKE_CONTROLS_VISIBLE_MS = 3_000;
 const AMBIENT_SOURCE_NOTIFICATION_VISIBLE_MS = 3_000;
 const AMBIENT_SOURCE_NOTIFICATION_EXIT_MS = 240;
-const SCENE_VIDEO_THERMAL_PAUSE_C = 76;
-const SCENE_VIDEO_THERMAL_RESUME_C = 68;
+const LEGACY_SCENE_VIDEO_THERMAL_PAUSE_C = 76;
+const LEGACY_SCENE_VIDEO_THERMAL_RESUME_C = 68;
 const LYRICS_CLOCK_TICK_MS = 250;
 const LYRICS_CLOCK_REWIND_TOLERANCE_SECONDS = 4;
 const SCENE_GALLERY_SWIPE_THRESHOLD_PX = 64;
@@ -500,6 +500,8 @@ export function AmbientScreen({
     return channel === "brightness" ? Math.max(brightnessMin, Math.min(brightnessMax, value)) : value;
   }, [brightnessMin, brightnessMax]);
   const audioProtectionMode = playback.source === "airplay" && playback.state === "playing";
+  const thermalPauseCelsius = system.thermal?.videoPauseCelsius ?? LEGACY_SCENE_VIDEO_THERMAL_PAUSE_C;
+  const thermalResumeCelsius = system.thermal?.videoResumeCelsius ?? LEGACY_SCENE_VIDEO_THERMAL_RESUME_C;
   const sceneVideoThermalGuardActive = sceneVideoThermalPaused && !isHifiMode;
   const shouldRenderSceneVideo = sceneVideoEnabled && hasSceneVideo && !sceneVideoThermalGuardActive;
   const { staticOnly: sceneVideoBudgetStaticOnly, diagnostics: sceneRenderDiagnostics } = useSceneRenderBudget({
@@ -679,11 +681,11 @@ export function AmbientScreen({
     if (cpuTemp === null || !Number.isFinite(cpuTemp)) return;
 
     setSceneVideoThermalPaused((paused) => {
-      if (cpuTemp >= SCENE_VIDEO_THERMAL_PAUSE_C) return true;
-      if (paused && cpuTemp <= SCENE_VIDEO_THERMAL_RESUME_C) return false;
+      if (cpuTemp >= thermalPauseCelsius) return true;
+      if (paused && cpuTemp <= thermalResumeCelsius) return false;
       return paused;
     });
-  }, [system.cpuTemp]);
+  }, [system.cpuTemp, thermalPauseCelsius, thermalResumeCelsius]);
 
   useEffect(() => {
     let active = true;
@@ -1893,6 +1895,7 @@ export function AmbientScreen({
           playback={playback}
           singleLoop={useStableSceneLoop}
           videoSrc={currentBackgroundVideo.src}
+          staticImageSrc={currentBackgroundVideo.thumbnailSrc}
           staticOnly={(sceneVideoThermalGuardActive || sceneVideoBudgetStaticOnly) && sceneVideoEnabled && hasSceneVideo}
           videoEnabled={shouldRenderSceneVideo}
           audioEnabled={sceneAudioEnabled}
@@ -1903,6 +1906,15 @@ export function AmbientScreen({
         />
       )}
       {!isHifiMode && sceneVideoEnabled && hasSceneVideo ? <div className="ambient-vignette" /> : null}
+      {sceneVideoThermalPaused && system.cpuTemp !== null ? (
+        <div className="ambient-thermal-warning" role="alert" aria-live="assertive" data-ambient-thermal-warning>
+          <AlertTriangle size={20} aria-hidden="true" />
+          <span>
+            <strong>{t("ambient.thermalWarningTitle")}</strong>
+            <span>{t("ambient.thermalWarningDetail", { temperature: system.cpuTemp })}</span>
+          </span>
+        </div>
+      ) : null}
       {sceneVideoBudgetStaticOnly ? (
         <span
           className="ambient-performance-status"

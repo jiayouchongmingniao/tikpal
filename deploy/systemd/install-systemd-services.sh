@@ -593,8 +593,13 @@ ensure_upnp_recognition_capture() {
 ensure_radio_presets() {
   [[ "${TIKPAL_INSTALL_RADIO_PRESETS:-1}" != "0" ]] || return 0
   local helper="$APP_DIR/deploy/moode/tikpal-radio-presets-sync.sh"
+  local database="${TIKPAL_RADIO_SQLITE_DB:-${TIKPAL_MOODE_SQLITE_DB:-/var/local/www/db/moode-sqlite3.db}}"
   [[ -x "$helper" ]] || {
     echo "WARN: $helper not found; skipping Tikpal Radio preset sync" >&2
+    return 0
+  }
+  [[ -f "$database" ]] || {
+    echo "WARN: Tikpal Radio preset sync skipped; SQLite database is unavailable: $database" >&2
     return 0
   }
   "$helper" apply

@@ -156,6 +156,8 @@ const dictionaries: Record<UiLocale, Record<string, string>> = {
     "ambient.brightness": "Brightness",
     "ambient.displayLevel": "Display level",
     "ambient.closeAdjustment": "Close {channel} adjustment",
+    "ambient.thermalWarningTitle": "Device temperature is too high",
+    "ambient.thermalWarningDetail": "CPU {temperature}°C. Video has switched to a static image. Shut down and let the device cool before using it again.",
     "source.library": "Library",
     "source.audio": "Audio",
     "source.scene": "Scene Sound",
@@ -648,7 +650,7 @@ Object.assign(dictionaries.es, {
 });
 
 Object.assign(dictionaries["zh-CN"], {
-  "app.name": "Tikpal", "source.localQueueReady": "本地队列就绪",
+  "app.name": "Tikpal", "source.localQueueReady": "本地队列就绪", "ambient.thermalWarningTitle": "设备温度过高", "ambient.thermalWarningDetail": "CPU 温度 {temperature}°C，已切换为静态画面。建议关机散热后再使用。",
   "settings.preferencesDesc": "音频、显示、字体和聆听浮层。", "settings.libraryDesc": "本地音乐、USB、NAS 和扫描状态。", "settings.linkDesc": "连接与远程访问。", "settings.careDesc": "受保护的重启和关机。", "settings.adjustable": "可调", "settings.readOnly": "只读", "settings.screenReady": "屏幕就绪", "settings.brightnessReady": "亮度就绪", "settings.night": "夜间", "settings.auto": "自动", "settings.addNasInSettings": "在 Settings 添加 NAS", "settings.portableStorage": "移动存储", "settings.portableStorageMounted": "移动存储已挂载", "settings.scanInProgress": "扫描中", "settings.chooseTypography": "选择 kiosk 字体", "settings.switchSkin": "切换皮肤", "settings.tuneLyrics": "调整歌词", "settings.limited": "受限", "settings.needsAttention": "需要检查", "settings.systemReboot": "系统重启", "settings.powerOff": "关机", "settings.adjustType": "调整字体", "settings.proxyKeyboard": "代理与键盘", "settings.proxyReady": "代理就绪", "settings.officialWebPlayers": "官方网页播放器", "settings.exploreHelp": "会自动保存。播放器打不开时，切换代理后重试。", "settings.enterProxyUrl": "输入完整代理 URL", "settings.nightBrightness": "夜间亮度 {percent}%", "settings.nasStatus": "NAS 状态",
   "library.localShort": "{count} 本地", "library.nasShort": "{count} NAS", "library.usbShort": "{count} USB", "library.savedShort": "{count} 已保存", "library.newShort": "{count} 新增", "library.localStorage": "本地空间：剩余 {free}", "library.localStorageUnavailable": "本地空间不可用",
   "explore.webPlayers": "音乐网页播放器", "explore.tikpalControls": "Tikpal 控制", "explore.leftFont": "左侧播放器字体",

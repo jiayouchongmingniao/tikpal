@@ -5,6 +5,7 @@ import http from "node:http";
 import { tmpdir } from "node:os";
 import path, { resolve } from "node:path";
 import { getTikpalApiAccessDecision, getTikpalWebProxyApiAccessDecision, hasValidTikpalKey } from "../server/accessControl.mjs";
+import { getCpuThermalPolicy, readCpuTemperatureFromSysfs } from "../server/thermal.mjs";
 
 const PORT = Number(process.env.TIKPAL_API_SMOKE_PORT ?? 18787);
 const HOST = "127.0.0.1";
@@ -101,6 +102,37 @@ async function runGeneratedArtworkSourceSmoke() {
   assert(!generatedArtworkSource.includes('<rect width="1200" height="1200" rx='), "generated media artwork should not round the root SVG background");
   assert(!generatedArtworkSource.includes('clipPath id="posterClip"'), "generated media artwork should not use an inner clipped poster");
   assert(!/<rect\s+x="\d+"[^>]*\srx=/.test(generatedArtworkSource), "generated media artwork should not draw an inner rounded card");
+}
+
+async function runThermalSensorSmoke() {
+  const workspace = await mkdtemp(path.join(tmpdir(), "tikpal-thermal-smoke-"));
+  try {
+    const hwmon = path.join(workspace, "class", "hwmon", "hwmon0");
+    await mkdir(hwmon, { recursive: true });
+    await writeFile(path.join(hwmon, "name"), "x86_pkg_temp\n");
+    await writeFile(path.join(hwmon, "temp1_input"), "90500\n");
+    await writeFile(path.join(hwmon, "temp1_label"), "Package id 0\n");
+    await writeFile(path.join(hwmon, "temp2_input"), "88750\n");
+    await writeFile(path.join(hwmon, "temp2_label"), "Core 0\n");
+
+    const x86Temperature = await readCpuTemperatureFromSysfs({ sysfsRoot: workspace, architecture: "x64" });
+    assert(x86Temperature?.celsius === 91, "x86 package sensor should round and report the hottest CPU temperature");
+    assert(x86Temperature?.source === "x86_pkg_temp:Package id 0", "x86 package sensor should expose its source");
+    assert(getCpuThermalPolicy("x64").pauseCelsius === 90 && getCpuThermalPolicy("x64").resumeCelsius === 80, "x86 should use the 90/80 video thermal policy");
+
+    const missingTemperature = await readCpuTemperatureFromSysfs({ sysfsRoot: path.join(workspace, "missing"), architecture: "x64" });
+    assert(missingTemperature === null, "missing x86 sensors should report an unknown CPU temperature");
+
+    const thermalZone = path.join(workspace, "class", "thermal", "thermal_zone0");
+    await mkdir(thermalZone, { recursive: true });
+    await writeFile(path.join(thermalZone, "type"), "cpu-thermal\n");
+    await writeFile(path.join(thermalZone, "temp"), "76100\n");
+    const armTemperature = await readCpuTemperatureFromSysfs({ sysfsRoot: workspace, architecture: "arm" });
+    assert(armTemperature?.celsius === 76 && armTemperature.source === "cpu-thermal", "non-x86 should retain the CPU thermal-zone path");
+    assert(getCpuThermalPolicy("arm").pauseCelsius === 76 && getCpuThermalPolicy("arm").resumeCelsius === 68, "non-x86 should retain the 76/68 video thermal policy");
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
 }
 
 function assert(condition, message) {
@@ -5097,6 +5129,7 @@ async function run() {
 
   runAccessControlHelperSmoke();
   await runGeneratedArtworkSourceSmoke();
+  await runThermalSensorSmoke();
   await runAirplayMetadataHelperClockSmoke();
 
   const apiAssetsRoot = await mkdtemp(path.join(tmpdir(), "tikpal-api-assets-"));
@@ -5266,6 +5299,10 @@ exit 0
     const initial = await request("/api/v1/system/state");
     assert(initial.response.ok, "system state should return 200");
     assert(initial.body.runtime.apiMode === "mock", "runtime should report mock API mode");
+    assert(initial.body.system.cpuTemp === 48, "mock system state should retain its CPU temperature");
+    assert(initial.body.system.thermal?.cpuSource === "mock", "system state should expose the CPU temperature source");
+    const localThermalPolicy = getCpuThermalPolicy();
+    assert(initial.body.system.thermal?.videoPauseCelsius === localThermalPolicy.pauseCelsius && initial.body.system.thermal?.videoResumeCelsius === localThermalPolicy.resumeCelsius, "mock state should expose the local video thermal policy");
     assert(initial.body.playback.title, "playback title should be present");
     assert(initial.body.playback.settings.playMode === "sequence", "playback should expose sequence mode by default");
     assert(initial.body.audio.currentSource.id === "mpd", "system state should expose current audio source");

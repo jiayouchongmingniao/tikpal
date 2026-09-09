@@ -105,6 +105,11 @@ export const systemState: SystemState = {
   sampleRate: 96000,
   bitDepth: 24,
   cpuTemp: 48,
+  thermal: {
+    cpuSource: "mock",
+    videoPauseCelsius: 90,
+    videoResumeCelsius: 80
+  },
   dspState: {
     enabled: true,
     preset: "Flat",

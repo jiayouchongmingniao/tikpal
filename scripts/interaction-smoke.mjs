@@ -1084,6 +1084,21 @@ try {
 
         function applyPatch(state) {
           const mode = window.__tikpalSmokeStatePatchMode ?? "";
+          if (mode === "thermalHigh" || mode === "thermalRecovered" || mode === "thermalUnknown") {
+            const next = clone(state);
+            next.system = {
+              ...next.system,
+              cpuTemp: mode === "thermalHigh" ? 90 : mode === "thermalRecovered" ? 80 : null,
+              thermal: {
+                ...(next.system.thermal ?? {}),
+                cpuSource: mode === "thermalUnknown" ? null : "x86_pkg_temp:Package id 0",
+                videoPauseCelsius: 90,
+                videoResumeCelsius: 80
+              }
+            };
+            return next;
+          }
+
           if (mode === "syncedLyrics") {
             const next = clone(state);
             next.playback = {
@@ -1639,6 +1654,65 @@ try {
     `document.querySelector('.startup-mode-chooser') === null && document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') === ${JSON.stringify(startupDefaultMode)}`,
     "startup mode chooser defaults to the persisted room mode after 8 seconds"
   );
+  await switchRoomModeAndNavigate(client, "calm", "Ambient thermal checks start in Calm mode");
+  await expectEventually(
+    client,
+    "document.querySelector('.flame-video.is-active') instanceof HTMLVideoElement",
+    "Ambient thermal checks start with a scene video"
+  );
+  const thermalHighPatchVersion = await setStatePatchMode(client, "thermalHigh");
+  await waitForStatePatchRefresh(client, thermalHighPatchVersion, "high CPU thermal fixture refreshes");
+  await expectEventually(
+    client,
+    `
+      (() => {
+        const warning = document.querySelector('[data-ambient-thermal-warning]');
+        const staticImage = document.querySelector('.flame-scene.is-static-only .scene-static-image');
+        return warning?.getAttribute('role') === 'alert'
+          && warning?.textContent?.includes('CPU 90°C')
+          && warning?.textContent?.includes('Shut down and let the device cool')
+          && staticImage?.getAttribute('src')?.includes('rainy-window.webp')
+          && document.querySelector('.flame-video') === null;
+      })()
+    `,
+    "high CPU temperature replaces the current scene video with its static thumbnail and warning",
+    35,
+    150
+  );
+  const thermalRecoveredPatchVersion = await setStatePatchMode(client, "thermalRecovered");
+  await waitForStatePatchRefresh(client, thermalRecoveredPatchVersion, "recovered CPU thermal fixture refreshes");
+  await expectEventually(
+    client,
+    "document.querySelector('[data-ambient-thermal-warning]') === null && document.querySelector('.flame-scene.is-static-only') === null && document.querySelector('.flame-video.is-active') instanceof HTMLVideoElement",
+    "CPU cooling to the resume threshold restores the selected scene video",
+    35,
+    150
+  );
+  const thermalUnknownPatchVersion = await setStatePatchMode(client, "thermalUnknown");
+  await waitForStatePatchRefresh(client, thermalUnknownPatchVersion, "unknown CPU thermal fixture refreshes");
+  await expectEventually(
+    client,
+    "document.querySelector('[data-ambient-thermal-warning]') === null && document.querySelector('.flame-scene.is-static-only') === null",
+    "unknown CPU temperature does not trigger a scene downgrade"
+  );
+  await setStatePatchMode(client, "");
+  await switchRoomModeAndNavigate(client, "hifi", "Hi-Fi thermal warning check enters Hi-Fi mode");
+  const hifiThermalHighPatchVersion = await setStatePatchMode(client, "thermalHigh");
+  await waitForStatePatchRefresh(client, hifiThermalHighPatchVersion, "Hi-Fi high CPU thermal fixture refreshes");
+  await expectEventually(
+    client,
+    "document.querySelector('[data-ambient-thermal-warning]')?.textContent?.includes('CPU 90°C') === true && document.querySelector('.flame-scene') === null",
+    "high CPU temperature keeps the warning visible in Hi-Fi without creating a scene video"
+  );
+  const hifiThermalRecoveredPatchVersion = await setStatePatchMode(client, "thermalRecovered");
+  await waitForStatePatchRefresh(client, hifiThermalRecoveredPatchVersion, "Hi-Fi recovered CPU thermal fixture refreshes");
+  await expectEventually(
+    client,
+    "document.querySelector('[data-ambient-thermal-warning]') === null",
+    "Hi-Fi thermal warning clears at the resume threshold"
+  );
+  await setStatePatchMode(client, "");
+  await switchRoomModeAndNavigate(client, "calm", "Ambient thermal checks restore Calm mode");
   await verifyExplorePrewarmGate(client);
   await evaluate(
     client,

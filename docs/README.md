@@ -64,7 +64,7 @@ This directory is the source of truth for Tikpal product, UX, visual, architectu
 | --- | --- | --- |
 | [Raspberry Pi kiosk deploy v1](06-deployment/raspberry-pi-kiosk-deploy-v1.md) | Current reference | Pi sync, systemd install, Chromium kiosk launch, verification, and rollback. |
 | [Gentoo kiosk deploy v1](06-deployment/gentoo-kiosk-deploy-v1.md) | Current reference | Gentoo systemd migration, physical display, Portage audio/kiosk setup, Explore provider validation, and rollback. |
-| [Gentoo 207 constrained kiosk v1](06-deployment/gentoo-207-constrained-kiosk-v1.md) | Current reference | Weak-GPU/EVDI render profile, Provider lifecycle freezing, governor, diagnostics, and physical acceptance boundary. |
+| [Gentoo 207 constrained kiosk v1](06-deployment/gentoo-207-constrained-kiosk-v1.md) | Current reference | Weak-GPU/EVDI render profile, CPU thermal scene guard, Provider lifecycle freezing, governor, diagnostics, and physical acceptance boundary. |
 | [HDMI brightness limits](hdmi-brightness-limits.md) | Scoped field acceptance | 207 RTK DDC limits 10–45, startup 45, gesture/API protection, non-monotonic brightness evidence, backups and 2026-09-09 reboot acceptance. |
 | [Startup Guide 轻量提示](startup-guide.md) | Current reference | 六条手势、多语言与系统字体、首次启动顺序、持久化和 207 部署验收边界。 |
 | [Explore provider Proxy failure v1](06-deployment/explore-provider-proxy-failure-v1.md) | Current reference | Friendly provider failure surface, Proxy/direct policy, font continuity, and 207 verification. |

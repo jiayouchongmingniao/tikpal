@@ -57,6 +57,38 @@ normal display after a subsequent reboot. Do not reuse the earlier startup
 100 or provisional maximum 48. This is a field-tested control restriction,
 not a calibrated luminance scale or a proven thermal fix.
 
+## CPU thermal scene guard
+
+The x86 scene guard protects the host CPU only. It does not infer motherboard,
+panel, DAC, or display-driver temperature. On 207 it reads an x86 package
+sensor from `/sys/class/hwmon` (including `x86_pkg_temp`, `coretemp`,
+`k10temp`, or `zenpower`); if no supported sensor is available, the API reports
+the temperature source as unknown and does not activate a thermal fallback.
+
+At **90°C** the Ambient scene video and its scene-audio track are replaced by
+the selected scene's static thumbnail. A scene without a thumbnail uses the
+bundled fireplace image. The page keeps showing the current CPU temperature and
+“设备温度过高，已切换为静态画面。建议关机散热后再使用。” until the CPU
+falls to **80°C** or below, when the selected scene video resumes. This guard
+does not shut down the host and does not stop MPD, AirPlay, Bluetooth, DLNA, or
+other external music playback.
+
+This fallback is distinct from the user's Scene Video setting: when the user
+turns Scene Video off, the intended ambient backdrop remains black. The static
+thumbnail is only an automatic high-temperature safeguard.
+
+Verify the reported policy and sensor without forcing a temperature change:
+
+```bash
+curl -fsS http://127.0.0.1:8787/api/v1/system/state | \
+  jq '.system | {cpuTemp, thermal}'
+```
+
+For the 207 x86 profile, `thermal.videoPauseCelsius` must be `90` and
+`thermal.videoResumeCelsius` must be `80`; `thermal.cpuSource` identifies the
+accepted sensor, while `cpuTemp: null` means no automatic temperature-based
+scene downgrade is applied.
+
 ## Dynamic audio routing
 
 Both the kiosk Chromium process and Explore Providers must use the physical

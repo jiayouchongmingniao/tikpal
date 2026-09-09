@@ -626,6 +626,12 @@ export interface AudioOutputDiagnostics {
   updatedAt: string;
 }
 
+export interface ThermalState {
+  cpuSource: string | null;
+  videoPauseCelsius: number;
+  videoResumeCelsius: number;
+}
+
 export interface SystemState {
   network: NetworkState;
   display: DisplayState;
@@ -635,6 +641,7 @@ export interface SystemState {
   sampleRate: number | null;
   bitDepth: number | null;
   cpuTemp: number | null;
+  thermal: ThermalState;
   dspState: DspState;
   multiroom: MultiroomAudioState;
   roonBridge: RoonBridgeState;

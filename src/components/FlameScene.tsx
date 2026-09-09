@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { PlaybackState } from "../types";
 
 const SCENE_LOGO_SRC = "/assets/tikpal-scene-logo.png";
+const DEFAULT_STATIC_SCENE_IMAGE_SRC = "/assets/fireplace-bg-2560x720.png";
 const DEFAULT_FLAME_VIDEO_SRC = "";
 const SCENE_DIM_MS = 420;
 const SCENE_REVEAL_MS = 760;
@@ -41,6 +42,7 @@ interface FlameSceneProps {
   audioSuspended?: boolean;
   volumePercent?: number;
   videoSrc?: string;
+  staticImageSrc?: string;
   audioGainDb?: number;
   onVideoReadyChange?: (ready: boolean) => void;
 }
@@ -380,7 +382,29 @@ function SceneLogoBackdrop() {
   );
 }
 
-export function FlameScene({ lowPower = false, playback, singleLoop = false, staticOnly = false, videoEnabled = true, audioEnabled = false, audioSuspended = false, volumePercent = 100, videoSrc = DEFAULT_FLAME_VIDEO_SRC, audioGainDb = 0, onVideoReadyChange }: FlameSceneProps) {
+function SceneStaticBackdrop({ src }: { src?: string }) {
+  return (
+    <div className="scene-static-backdrop" aria-hidden="true">
+      <img
+        className="scene-static-image"
+        src={src || DEFAULT_STATIC_SCENE_IMAGE_SRC}
+        alt=""
+        draggable={false}
+        onError={(event) => {
+          const image = event.currentTarget;
+          if (image.dataset.fallbackLoaded === "true") {
+            image.hidden = true;
+            return;
+          }
+          image.dataset.fallbackLoaded = "true";
+          image.src = DEFAULT_STATIC_SCENE_IMAGE_SRC;
+        }}
+      />
+    </div>
+  );
+}
+
+export function FlameScene({ lowPower = false, playback, singleLoop = false, staticOnly = false, videoEnabled = true, audioEnabled = false, audioSuspended = false, volumePercent = 100, videoSrc = DEFAULT_FLAME_VIDEO_SRC, staticImageSrc, audioGainDb = 0, onVideoReadyChange }: FlameSceneProps) {
   const nextLayerIdRef = useRef(0);
   const nextSingleLayerIdRef = useRef(0);
   const activeVideoSrcRef = useRef(videoSrc);
@@ -1595,7 +1619,7 @@ export function FlameScene({ lowPower = false, playback, singleLoop = false, sta
   if (staticOnly && videoSrc) {
     return (
       <div className="flame-scene is-low-power is-static-only" aria-hidden="true">
-        <SceneLogoBackdrop />
+        <SceneStaticBackdrop src={staticImageSrc} />
       </div>
     );
   }
