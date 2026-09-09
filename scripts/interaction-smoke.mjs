@@ -1907,10 +1907,13 @@ try {
         const trackInfo = document.querySelector('.hifi-lyrics-recognized[data-hifi-track-info]');
         if (!trackInfo) return false;
         const rect = trackInfo.getBoundingClientRect();
+        const heading = trackInfo.querySelector('.hifi-lyrics-heading strong');
+        const fontSize = Number.parseFloat(getComputedStyle(heading).fontSize);
         return trackInfo.textContent?.includes('No Lyrics Study - Tikpal Smoke')
           && rect.width >= 800
           && rect.left >= window.innerWidth * 0.4
-          && rect.right <= window.innerWidth - 80;
+          && rect.right <= window.innerWidth - 260
+          && fontSize <= 34;
       })()
     `,
     "Hi-Fi lyrics fallback keeps song information visible in the full-width metadata region"

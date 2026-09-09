@@ -1327,13 +1327,19 @@ select {
 .hifi-lyrics-recognizing,
 .hifi-lyrics-recognized {
   position: absolute;
-  inset: 72px clamp(88px, 8vw, 180px) 132px clamp(640px, 42vw, 1080px);
+  inset: 72px clamp(260px, 12vw, 360px) 132px clamp(640px, 42vw, 1080px);
   display: grid;
   grid-template-rows: auto auto;
   row-gap: 24px;
   align-content: start;
   overflow: hidden;
   pointer-events: none;
+}
+
+.hifi-lyrics-recognizing .hifi-lyrics-heading strong,
+.hifi-lyrics-recognized .hifi-lyrics-heading strong {
+  font-size: clamp(28px, 1.35vw, 34px);
+  line-height: 1.16;
 }
 
 .hifi-lyrics-recognizing-status,
