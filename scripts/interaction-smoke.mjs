@@ -1986,15 +1986,17 @@ try {
         const headingRect = heading.getBoundingClientRect();
         const coverRect = cover.getBoundingClientRect();
         const fontSize = Number.parseFloat(getComputedStyle(heading).fontSize);
+        const headingCenter = headingRect.left + headingRect.width / 2;
+        const coverCenter = coverRect.left + coverRect.width / 2;
         return trackInfo.textContent?.includes('No Lyrics Study - Tikpal Smoke')
           && rect.width >= 600
-          && headingRect.left >= coverRect.right
-          && headingRect.left - coverRect.right <= 80
-          && rect.right <= window.innerWidth - 260
+          && headingRect.top >= coverRect.bottom + 16
+          && Math.abs(headingCenter - coverCenter) <= 2
+          && rect.bottom <= window.innerHeight - 72
           && fontSize <= 34;
       })()
     `,
-    "Hi-Fi lyrics fallback keeps song information beside the cover"
+    "Hi-Fi lyrics fallback places song information below the cover"
   );
   await expect(
     client,
