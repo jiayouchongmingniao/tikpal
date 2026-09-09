@@ -66,6 +66,7 @@ This directory is the source of truth for Tikpal product, UX, visual, architectu
 | [Gentoo kiosk deploy v1](06-deployment/gentoo-kiosk-deploy-v1.md) | Current reference | Gentoo systemd migration, physical display, Portage audio/kiosk setup, Explore provider validation, and rollback. |
 | [Gentoo 207 constrained kiosk v1](06-deployment/gentoo-207-constrained-kiosk-v1.md) | Current reference | Weak-GPU/EVDI render profile, Provider lifecycle freezing, governor, diagnostics, and physical acceptance boundary. |
 | [HDMI brightness limits](hdmi-brightness-limits.md) | Scoped field acceptance | 207 RTK DDC limits 10–45, startup 45, gesture/API protection, non-monotonic brightness evidence, backups and 2026-09-09 reboot acceptance. |
+| [Startup Guide 轻量提示](startup-guide.md) | Current reference | 六条手势、多语言与系统字体、首次启动顺序、持久化和 207 部署验收边界。 |
 | [Explore provider Proxy failure v1](06-deployment/explore-provider-proxy-failure-v1.md) | Current reference | Friendly provider failure surface, Proxy/direct policy, font continuity, and 207 verification. |
 | [Explore initial-entry Phase 1 v1](06-deployment/explore-initial-entry-phase1-v1.md) | Acceptance baseline | Disabled-Helper initial reveal trace contract, Xvfb failures, and first-entry field evidence. |
 | [Explore X11 Helper Phase 0](06-deployment/explore-x11-helper-phase0-v1.md) | Phase 1 promoted | Native Helper Phase 0 evidence, two-Canary promotion record, and 20-round boundary. |

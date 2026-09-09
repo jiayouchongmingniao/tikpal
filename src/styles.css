@@ -2473,6 +2473,71 @@ select {
   opacity: 0.4;
 }
 
+.onboarding-tips {
+  padding: 24px;
+  overflow-y: auto;
+  outline: none;
+  background: rgba(2, 4, 7, 0.35);
+}
+
+.onboarding-tips-panel {
+  width: min(760px, 100%);
+  margin: auto;
+  padding: 28px;
+  display: grid;
+  gap: 24px;
+  border: 1px solid var(--surface-card-border);
+  border-radius: 16px;
+  background: var(--surface-card, #101317);
+  color: var(--theme-text);
+}
+
+.onboarding-tips-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.onboarding-tips-heading h2 {
+  margin: 0;
+  font-size: 28px;
+}
+
+.onboarding-tips-heading button {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  flex-shrink: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.onboarding-tips-list {
+  display: grid;
+  gap: 20px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.onboarding-tips-list li {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  font-size: 22px;
+  line-height: 1.4;
+}
+
+.onboarding-tips-list svg {
+  flex-shrink: 0;
+  color: var(--theme-info);
+}
+
 .onboarding-guide-footer {
   display: grid;
   justify-items: center;

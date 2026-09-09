@@ -332,9 +332,6 @@ export default function App() {
   const [roomModeSelectionPending, setRoomModeSelectionPending] = useState(false);
   const [sceneVideoReady, setSceneVideoReady] = useState(false);
   const [onboardingVisible, setOnboardingVisible] = useState(() => !readStoredFlag(ONBOARDING_STORAGE_KEY));
-  const [onboardingStep, setOnboardingStep] = useState(0);
-  const [onboardingBackgroundHidden, setOnboardingBackgroundHidden] = useState(true);
-  const [onboardingSoundMuted, setOnboardingSoundMuted] = useState(true);
   const [activeSceneVideo, setActiveSceneVideo] = useState<BackgroundVideoSummary>(DEFAULT_SCENE_VIDEO);
   const eventLoopLagRef = useRef(0);
   const heartbeatStateRef = useRef<Record<string, unknown>>({});
@@ -1188,23 +1185,9 @@ export default function App() {
 
   const handleOnboardingDismiss = useCallback(() => {
     setOnboardingVisible(false);
-    setOnboardingStep(0);
-    setOnboardingBackgroundHidden(false);
-    setOnboardingSoundMuted(false);
-  }, []);
-
-  const handleOnboardingNext = useCallback(() => {
-    setOnboardingStep((step) => Math.min(step + 1, 2));
-  }, []);
-
-  const handleOnboardingBack = useCallback(() => {
-    setOnboardingStep((step) => Math.max(step - 1, 0));
   }, []);
 
   const showWizard = useCallback(() => {
-    setOnboardingStep(0);
-    setOnboardingBackgroundHidden(true);
-    setOnboardingSoundMuted(true);
     setOnboardingVisible(true);
   }, []);
 
@@ -1231,11 +1214,6 @@ export default function App() {
 
     showWizard();
   }, [observeWebModeActivity, refresh, refreshRoomExperience, returnAmbient, showWizard]);
-
-  useEffect(() => {
-    if (!onboardingVisible) return;
-    setOnboardingStep((current) => Math.min(current, 2));
-  }, [onboardingVisible]);
 
   const handleAmbientTap = useCallback(() => {
     if (mode === "ambient" && roomExperience.mode !== "hifi") {
@@ -1336,7 +1314,7 @@ export default function App() {
   const onboardingActive = onboardingVisible && !webModeActive;
 
   return (
-    <main className={`app-root ${tikpalState.runtime.renderProfile === "constrained" ? "is-render-constrained" : ""} ${screenOffActive ? "is-screen-off" : ""} ${systemSleepActive ? "is-system-sleeping" : ""} ${mode === "quickMenu" ? "is-quick-menu-active" : ""} ${onboardingActive && onboardingBackgroundHidden ? "is-wizard-background-hidden" : ""}`} {...gestureHandlers}>
+    <main className={`app-root ${tikpalState.runtime.renderProfile === "constrained" ? "is-render-constrained" : ""} ${screenOffActive ? "is-screen-off" : ""} ${systemSleepActive ? "is-system-sleeping" : ""} ${mode === "quickMenu" ? "is-quick-menu-active" : ""}`} {...gestureHandlers}>
       <AmbientScreen
         hudVisible={hudVisible}
         timeLabel={timeLabel}
@@ -1353,7 +1331,7 @@ export default function App() {
         sceneVideoStableLoop={tikpalState.runtime.apiMode === "mpc" || tikpalState.runtime.renderProfile === "constrained"}
         renderProfile={tikpalState.runtime.renderProfile}
         ambientActive={mode === "ambient"}
-        sceneSoundEnabled={roomExperience.sceneSoundEnabled && !(onboardingActive && onboardingSoundMuted)}
+        sceneSoundEnabled={roomExperience.sceneSoundEnabled}
         sourcePickerOpenRequest={ambientSourcePickerRequest}
         clockVisible={clockVisible}
         webModeState={webModeState}
@@ -1373,7 +1351,7 @@ export default function App() {
         onExperienceAction={handleRoomExperienceAction}
       />
       <StartupModeChooser
-        active={roomModeChooserContext !== null && mode === "ambient"}
+        active={roomModeChooserContext !== null && mode === "ambient" && !onboardingActive}
         context={roomModeChooserContext ?? "startup"}
         videoReady={sceneVideoReady}
         pending={tikpalStatus.pending || roomModeSelectionPending}
@@ -1383,10 +1361,7 @@ export default function App() {
       />
       <OnboardingGuide
         active={onboardingActive}
-        step={onboardingStep}
         onDismiss={handleOnboardingDismiss}
-        onNext={handleOnboardingNext}
-        onBack={handleOnboardingBack}
       />
 
       <PlayerOverlay
