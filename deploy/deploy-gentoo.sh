@@ -13,6 +13,7 @@ set -euo pipefail
 #
 # Usage: ./deploy/deploy-gentoo.sh [--host HOST] [--user USER] [--proxy PROXY]
 #                                  [--local-preflight] [--allow-dirty] [--enable-mpd-httpd]
+#                                  [--new-device]
 #   Defaults: host=192.168.10.115, user=root, proxy=127.0.0.1:7897
 
 HOST="${TIKPAL_DEPLOY_HOST:-192.168.10.115}"
@@ -23,6 +24,7 @@ SERVICE_USER="moode"
 LOCAL_PREFLIGHT=0
 ALLOW_DIRTY=0
 ENABLE_MPD_HTTPD=0
+NEW_DEVICE=0
 WORKTREE_DIRTY=0
 
 usage() {
@@ -33,6 +35,7 @@ Options:
   --local-preflight  Run repository-only release checks; never call SSH or rsync
   --allow-dirty      Explicitly allow tracked or untracked workspace changes
   --enable-mpd-httpd Rebuild MPD with httpd/flac and install the local-only DLNA recognition tap
+  --new-device       Clear Tikpal provider browser profiles before release; removes provider logins and cookies
   -h, --help         Show this help
 USAGE
 }
@@ -45,6 +48,7 @@ while [[ $# -gt 0 ]]; do
     --local-preflight) LOCAL_PREFLIGHT=1; shift ;;
     --allow-dirty) ALLOW_DIRTY=1; shift ;;
     --enable-mpd-httpd) ENABLE_MPD_HTTPD=1; shift ;;
+    --new-device) NEW_DEVICE=1; shift ;;
     -h|--help)
       usage
       exit 0
@@ -173,6 +177,16 @@ rsync_cmd() {
   fi
 }
 
+reset_remote_provider_profiles_for_new_device() {
+  echo "--- Clearing provider login state for new-device release ---"
+  ssh_cmd "set -eu
+service_home=\$(getent passwd '$SERVICE_USER' | awk -F: '{print \$6}')
+[ -n \"\$service_home\" ] || { echo 'Cannot resolve kiosk service home' >&2; exit 1; }
+systemctl stop tikpal-kiosk tikpal-api tikpal-web >/dev/null 2>&1 || true
+runuser -u '$SERVICE_USER' -- env HOME=\"\$service_home\" TIKPAL_KIOSK_ENV_FILE='$REMOTE_DIR/.env.kiosk' '$REMOTE_DIR/deploy/chromium/tikpal-web-mode.sh' close-full
+runuser -u '$SERVICE_USER' -- env HOME=\"\$service_home\" TIKPAL_KIOSK_ENV_FILE='$REMOTE_DIR/.env.kiosk' '$REMOTE_DIR/deploy/chromium/tikpal-new-device-provider-reset.sh' --clear-provider-profiles"
+}
+
 check_remote_source_command_compatibility() {
   ssh_cmd "cd '$REMOTE_DIR' || exit 2
 invalid=0
@@ -230,6 +244,10 @@ rsync_cmd -az --delete \
 # Fix ownership (rsync as root changes owner to root)
 echo "--- Fixing ownership ---"
 ssh_cmd "chown -R ${SERVICE_USER}: ${REMOTE_DIR}/"
+
+if [[ "$NEW_DEVICE" -eq 1 ]]; then
+  reset_remote_provider_profiles_for_new_device
+fi
 
 if [[ "$ENABLE_MPD_HTTPD" -eq 1 ]]; then
   echo "--- Enabling MPD httpd/FLAC recognition tap ---"

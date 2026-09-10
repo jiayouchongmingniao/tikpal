@@ -29,6 +29,7 @@ const requiredFiles = [
   "deploy/chromium/tikpal-explore-switch-acceptance.sh",
   "deploy/chromium/tikpal-x11-helper.c",
   "deploy/chromium/tikpal-web-mode.sh",
+  "deploy/chromium/tikpal-new-device-provider-reset.sh",
   "deploy/chromium/tikpal-web-mode-guard.mjs",
   "deploy/chromium/tikpal-web-mode-cdp-manager.mjs",
   "deploy/chromium/tikpal-web-mode-cdp-client.py",
@@ -36,6 +37,7 @@ const requiredFiles = [
   "scripts/tikpal-cdp-session-manager-smoke.mjs",
   "deploy/chromium/tikpal-web-mode-qq-confirm.mjs",
   "scripts/tikpal-initial-entry-fixture.sh",
+  "scripts/tikpal-new-device-provider-reset-fixture.sh",
   "deploy/chromium/web-mode-extension/manifest.json",
   "deploy/chromium/web-mode-extension/background.js",
   "deploy/chromium/web-mode-extension/content.js",
@@ -305,6 +307,15 @@ async function run() {
       && gentooDeploySource.includes("tikpal-mpd-httpd.sh enable"),
     "Gentoo deployment should opt into MPD httpd/FLAC maintenance explicitly"
   );
+  assert(
+    gentooDeploySource.includes("--new-device")
+      && gentooDeploySource.includes("reset_remote_provider_profiles_for_new_device")
+      && gentooDeploySource.includes("tikpal-new-device-provider-reset.sh")
+      && gentooDeploySource.includes("tikpal-web-mode.sh' close-full"),
+    "new-device deployment should stop Tikpal web processes and clear only provider browser profiles"
+  );
+  const newDeviceResetFixture = spawnSync("bash", [path.join(ROOT, "scripts/tikpal-new-device-provider-reset-fixture.sh")], { encoding: "utf8" });
+  assert(newDeviceResetFixture.status === 0, `new-device provider reset fixture should pass: ${newDeviceResetFixture.stderr}`);
   assert(
     gentooDeployDocSource.includes("Local Deployment Preflight")
       && gentooDeployDocSource.includes("never calls SSH or rsync")
@@ -2843,6 +2854,8 @@ sync_runtime_provider_pool_process_statuses ""
   assert(providerGuardSource.includes('child.once("exit", (code) => {\n    if (code !== 0) reportedManagerFriendlyError = "";\n  });'), "friendly-error status reporting should retry after a transient launcher failure");
   assert(providerGuardSource.includes("querySelectorAll(\"iframe\")"), "provider guard should scan same-origin QQ modal iframes");
   assert(providerGuardSource.includes("consentAcceptAllLabels"), "provider guard should keep accept-all cookie labels separate from generic consent labels");
+  assert(providerGuardSource.includes("#gdpr-btn-accept-all") && providerGuardSource.includes("clicked Deezer GDPR consent"), "provider guard should accept Deezer's identified GDPR cookie banner");
+  assert(providerGuardSource.includes("#onetrust-accept-btn-handler") && providerGuardSource.includes('providerId === "deezer" || providerId === "tidal"'), "provider guard should prioritize TIDAL's identified OneTrust cookie banner while foregrounded");
   assert(providerGuardSource.includes("rejectActionText"), "provider guard should skip cookie preference, reject, and settings actions");
   assert(providerGuardSource.includes("safeDismissPromptExpression"), "provider guard should keep safe prompt dismiss handling separate from consent acceptance");
   assert(providerGuardSource.includes("spotify") && providerGuardSource.includes("cookieContextText"), "provider guard should close Spotify cookie policy prompts only from cookie context");
@@ -3779,7 +3792,7 @@ sync_runtime_provider_pool_process_statuses ""
       providerGuardOnceBody.includes("if (!runtimeMaintenanceEnabled)") &&
       providerGuardOnceBody.indexOf("if (!runtimeMaintenanceEnabled)") < providerGuardOnceBody.indexOf("await installKioskGuard(target)") &&
       providerGuardOnceBody.includes("if (audioGateEnabled) await runProviderAudioGate(targets, audioGateActive)") &&
-      providerGuardOnceBody.indexOf("if (audioGateEnabled) await runProviderAudioGate(targets, audioGateActive)") < providerGuardOnceBody.indexOf("if (schedule.consent) await runConsentFeatures(targets)") &&
+      providerGuardOnceBody.indexOf("if (audioGateEnabled) await runProviderAudioGate(targets, audioGateActive)") < providerGuardOnceBody.indexOf("if (schedule.consent) await runConsentFeatures(") &&
       providerGuardOnceBody.includes("if (schedule.dismiss) await runSafeDismissFeatures(targets)") &&
       providerGuardOnceBody.includes("if (schedule.activeFeatures)"),
     "provider guards should mute the previous owner, yield opening-target audio to foreground, and keep Spotify Runtime handoff light"

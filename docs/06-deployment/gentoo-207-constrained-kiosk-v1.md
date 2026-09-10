@@ -3,10 +3,12 @@
 ## Purpose
 
 `192.168.10.207` uses a lower-performance Radeon/EVDI path than the primary
-Gentoo reference host. This profile keeps the 2560 x 720 kiosk usable without
-discarding resident Provider profiles or their login state. It is a
-machine-local runtime profile: keep `.env`, `.env.kiosk`, and `.tikpal/*` out
-of Git.
+Gentoo reference host. Normal runtime keeps the resident Provider profiles and
+their login state. A transfer to a new owner must instead use the explicit
+`--new-device` release mode in the Gentoo deployment guide, which clears only
+Provider browser profiles while preserving source-owned Cookie handling. This
+is a machine-local runtime profile: keep `.env`, `.env.kiosk`, and `.tikpal/*`
+out of Git.
 
 ## 207 runtime profile
 

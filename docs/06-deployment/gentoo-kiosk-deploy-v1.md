@@ -638,6 +638,29 @@ Before any Gentoo deployment, run the repository-only gate:
 
 It checks every deployment shell script, typechecks and builds the UI, runs the kiosk package smoke, verifies `dist/index.html`, runs `git diff --check`, and prints a SHA-256 manifest for the reviewed 207 audio staging files. It prints the configured target for review but never calls SSH or rsync. A dirty local preflight continues with `broadDeployReady=0`; a real deployment refuses that same dirty worktree before any network action. `--allow-dirty` is an explicit override that permits every listed tracked and untracked path into the broad rsync payload, not approval to change a device. Broad rsync preserves device-owned `.env`, `.env.kiosk`, and their backups while explicitly carrying the repository's `.env.example` contract.
 
+### New-device release: remove provider logins
+
+An ordinary update intentionally preserves each installed device's Provider
+profiles. Before transferring a release image to a new owner, use the explicit
+new-device mode instead:
+
+```bash
+./deploy/deploy-gentoo.sh --host <new-device-host> --user root --proxy '' --new-device
+```
+
+It stops Tikpal's kiosk, API, and web services, fully closes the Provider
+Chromium processes, and removes only
+`~moode/.config/tikpal-web-mode/providers`. This removes provider logins,
+cookies, local storage, IndexedDB, caches, and DRM session state. It preserves
+`.env`, `.env.kiosk`, `.tikpal`, the side-panel profile, and hardware/runtime
+configuration. The next boot recreates empty provider profiles.
+
+Do not use `--new-device` for an already delivered device: it is deliberately
+destructive to its web-player sessions. The source-owned Provider Guard is not
+part of those profiles, so the restricted Deezer and TIDAL Cookie “accept all”
+actions remain available after the first foreground open. It still never
+clicks login, registration, subscription, payment, or authorization prompts.
+
 Do not use the broad deploy command for the 207 hardware-free gate below: it installs/enables shared services and restarts the kiosk. Transfer only the reviewed staging files and follow the phase gates in order.
 
 ## Gentoo 207 Hardware-free Audio and TURZX Staging
@@ -785,7 +808,7 @@ Background providers are silent from `document_start`: the main-world Provider a
 
 When close or prewarm discovers provider profile processes already running, it resyncs `residentProviders` through the same full probe. This keeps the side panel aligned with the resident pool after API restarts or warm closes without marking an offscreen provider `Ready` before its page is actually usable.
 
-Provider profiles keep their login state and normal Chromium disk cache across a system shutdown, including cookies, local storage, IndexedDB, and service-worker resources. A reboot still needs to restart browser processes, restore network sessions, and revalidate provider/DRM state; it does not reuse media payloads as offline content. Before launching a provider, the launcher only repairs an empty or missing Widevine CDM directory, first from `TIKPAL_WEB_MODE_SYSTEM_WIDEVINE_CDM_DIR` (Gentoo default: `/usr/lib64/chromium-browser/WidevineCdm`), then from an existing Chromium or provider profile that already has `libwidevinecdm.so`; it must not delete the provider profile to solve protected-playback failures such as TIDAL `S6001`.
+Provider profiles keep their login state and normal Chromium disk cache across a system shutdown, including cookies, local storage, IndexedDB, and service-worker resources. This is normal installed-device behavior; the explicit new-device release mode above is the only deployment path that clears those profiles. A reboot still needs to restart browser processes, restore network sessions, and revalidate provider/DRM state; it does not reuse media payloads as offline content. Before launching a provider, the launcher only repairs an empty or missing Widevine CDM directory, first from `TIKPAL_WEB_MODE_SYSTEM_WIDEVINE_CDM_DIR` (Gentoo default: `/usr/lib64/chromium-browser/WidevineCdm`), then from an existing Chromium or provider profile that already has `libwidevinecdm.so`; it must not delete the provider profile to solve protected-playback failures such as TIDAL `S6001`.
 
 Close uses the warm resident path by default. Before its right side panel or provider window is made transparent or parked, it sends the active provider's idempotent CDP `setActive(false)` audio gate; that pauses media, Howler, and audio contexts immediately. A `close_audio_gate` failure is logged but does not block the visible close. Only after the provider is silent and physically closed may MPD or Radio resume, and only if that source was playing before Explore opened. The close then moves the side panel and resident provider windows offscreen, leaves per-provider guards running so inactive pages remain paused/muted, and keeps already `Ready` pages reusable for the next Explore open. It does not refill an incomplete pool while Ambient is visible; unfinished providers resume normal reconcile/prewarm only when Explore opens again. The already-running main kiosk returns directly to Ambient; the room-state chooser is startup-only, so close introduces no extra return card, overlay, or visible delay. The delayed eight-second resource freeze is reclamation only, not the audio-stop path. If `TIKPAL_WEB_MODE_CLOSE_KEEP_RESIDENT=0`, delayed full cleanup runs after `TIKPAL_WEB_MODE_CLOSE_WARM_TTL_SECONDS` when Explore is not reopened. This makes close -> immediate reopen feel like a reveal from a warm pool instead of a full Chromium cold start. API-side close cleanup carries a runtime `closeRequestId`: if the user opens Explore again before cleanup and playback restore finish, the stale close must not clear the newer `activeProvider`, close the newly revealed provider through the window guard, or resume MPD/Radio behind it. Closing also removes any legacy `exit-stage` window from earlier versions.
 

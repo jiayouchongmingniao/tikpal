@@ -163,6 +163,24 @@ const tidalOneTrustConsentExpression = `(() => {
   button.click();
   return { clicked: true, label: "Accept" };
 })()`;
+const deezerGdprConsentExpression = `(() => {
+  const button = document.querySelector("#gdpr-btn-accept-all");
+  if (!(button instanceof HTMLElement)) return { clicked: false };
+  const rect = button.getBoundingClientRect();
+  const style = getComputedStyle(button);
+  const visible = rect.width >= 8 &&
+    rect.height >= 8 &&
+    rect.right > 0 &&
+    rect.bottom > 0 &&
+    rect.left < innerWidth &&
+    rect.top < innerHeight &&
+    style.display !== "none" &&
+    style.visibility !== "hidden" &&
+    Number(style.opacity || "1") > 0.05;
+  if (!visible) return { clicked: false };
+  button.click();
+  return { clicked: true, label: "Accept all" };
+})()`;
 const kioskInjectedTargets = new Set();
 const qqInjectedTargets = new Set();
 const earlyRedirectTargets = new Set();
@@ -2579,17 +2597,24 @@ const safeDismissPromptExpression = `(() => {
   return { clicked: false };
 })()`;
 
-async function runConsentFeatures(targets) {
+async function runConsentFeatures(targets, priority = "maintenance") {
   const providerTargets = targets.filter((target) => isProviderWebPage(target) && !isFriendlyErrorPage(target));
   for (const target of providerTargets) {
     if (providerId === "tidal") {
-      const tidalResult = await evaluate(target.webSocketDebuggerUrl, tidalOneTrustConsentExpression).catch(() => null);
+      const tidalResult = await evaluate(target.webSocketDebuggerUrl, tidalOneTrustConsentExpression, priority).catch(() => null);
       if (tidalResult?.clicked) {
         console.log("[tikpal-web-mode-guard] clicked TIDAL OneTrust consent");
         return;
       }
     }
-    const result = await evaluate(target.webSocketDebuggerUrl, consentConfirmExpression).catch(() => null);
+    if (providerId === "deezer") {
+      const deezerResult = await evaluate(target.webSocketDebuggerUrl, deezerGdprConsentExpression, priority).catch(() => null);
+      if (deezerResult?.clicked) {
+        console.log("[tikpal-web-mode-guard] clicked Deezer GDPR consent");
+        return;
+      }
+    }
+    const result = await evaluate(target.webSocketDebuggerUrl, consentConfirmExpression, priority).catch(() => null);
     if (result?.clicked) {
       console.log(`[tikpal-web-mode-guard] clicked consent ${providerId} ${result.label}`);
       return;
@@ -2890,7 +2915,11 @@ async function guardOnce() {
   // Spotify's inactive consent/dismiss scans can overlap the serialized audio
   // gate that runs before activeProvider is committed. Keep inactive passes
   // light, then spread the first expensive active scans across separate ticks.
-  if (schedule.consent) await runConsentFeatures(targets);
+  const foregroundCookieConsent = active && (providerId === "deezer" || providerId === "tidal");
+  if (schedule.consent) await runConsentFeatures(
+    targets,
+    foregroundCookieConsent ? "foreground" : "maintenance"
+  );
   if (schedule.dismiss) await runSafeDismissFeatures(targets);
   if (schedule.activeFeatures) {
     await runSafePromptFeatures(targets);
