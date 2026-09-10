@@ -11,6 +11,7 @@ import { buildProxyConfig, buildProxyKey, normalizeProviderTextScale } from "../
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 
 const requiredFiles = [
+  "deploy/chromium/web-mode-extension/deezer-hide-ads.css",
   "server/index.mjs",
   "server/web.mjs",
   "docs/06-deployment/gentoo-kiosk-deploy-v1.md",

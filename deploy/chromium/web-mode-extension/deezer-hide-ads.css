@@ -1,0 +1,5 @@
+/* Confirmed Deezer display-ad slots; never hide generic modal/player containers. */
+#adslot1.ads-top,
+#companion_banner {
+  display: none !important;
+}

@@ -58,3 +58,24 @@ ten providers. On 207, Qobuz recovered without a profile reset, native play/paus
 responded, and screenshots showed preview progress advancing from 00:14 to 00:25.
 A subsequent Qobuz page reload also restored `active:true` automatically.
 Other providers' actual login flows were not individually repeated in this check.
+
+Qobuz initial-load recovery (2026-09-11): only `play.qobuz.com` arms a 15-second
+one-shot timer for HTTPS media sources from playback/loading events on observed media, including detached
+Audio elements. It retries `load()` and `play()` once per source URL per document
+only while foregrounded and visible, at time zero, with no buffered data, no
+media error, readyState 0 and networkState 2. Pause, foreground deactivation,
+playing/canplay, end, error and emptied cancel the timer. Source changes are
+checked again before retry. Ordinary playback has no periodic recovery work;
+other providers do not install recovery listeners or timers. This does not
+recover mid-track stalls, expired authorization or repeated failures, and it
+preserves the existing user-selected source and volume.
+
+`qobuz-stall-recovery-fixture.mjs` covers eligibility, cancellation, source changes,
+retry limits and provider isolation. `qobuz-stall-recovery-browser-fixture.mjs`
+uses a real Chromium Audio element with a deliberately stalled first request and
+a playable second response. Recovery does not perform separate network probes.
+
+207 deployment: the restarted Qobuz page reported the recovery hook loaded.
+The foreground subsequently showed QQ Music and was left unchanged. No artificial
+network stall was injected on the physical device; recovery timing and retry
+count were verified in the isolated Chromium browser fixture.

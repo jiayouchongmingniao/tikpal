@@ -23,6 +23,11 @@
   ],
   "content_scripts": [
     {
+      "matches": ["https://deezer.com/*", "https://*.deezer.com/*"],
+      "css": ["deezer-hide-ads.css"],
+      "run_at": "document_start"
+    },
+    {
       "matches": ["https://tidal.com/*", "https://*.tidal.com/*"],
       "js": ["tidal-dismiss-upsell.js"],
       "run_at": "document_idle"

@@ -2623,10 +2623,26 @@ async function runConsentFeatures(targets, priority = "maintenance") {
   }
 }
 
+const deezerPremiumDismissExpression = `(() => {
+  if (!/(^|\\.)deezer\\.com$/.test(location.hostname)) return { clicked: false };
+  const title = document.querySelector('[data-testid="premium_offer_title"]');
+  const dialog = title?.closest('[role="dialog"][aria-modal="true"]');
+  if (!dialog?.querySelector('[data-testid="premium_offer_primary_cta"]')) return { clicked: false };
+  const close = dialog.querySelector('button.chakra-modal__close-btn[aria-label="Close"]');
+  if (!close || close.disabled || !close.checkVisibility({ visibilityProperty: true, opacityProperty: true })) return { clicked: false };
+  close.click();
+  return { clicked: true, kind: "premium-offer", label: "Close" };
+})()`;
+
 async function runSafeDismissFeatures(targets) {
   const providerTargets = targets.filter((target) => isProviderWebPage(target) && !isFriendlyErrorPage(target));
   for (const target of providerTargets) {
-    const result = await evaluate(target.webSocketDebuggerUrl, safeDismissPromptExpression).catch(() => null);
+    const deezerForeground = providerId === "deezer" && providerIsActive();
+    const premium = deezerForeground
+      ? await evaluate(target.webSocketDebuggerUrl, deezerPremiumDismissExpression, "foreground").catch(() => null)
+      : null;
+    const result = premium?.clicked ? premium
+      : await evaluate(target.webSocketDebuggerUrl, safeDismissPromptExpression).catch(() => null);
     if (result?.clicked) {
       console.log(`[tikpal-web-mode-guard] dismissed ${providerId} ${result.kind || "prompt"} ${result.label || ""}`.trim());
       return;

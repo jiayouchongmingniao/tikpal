@@ -41,6 +41,34 @@
     if (window.webkitAudioContext) window.webkitAudioContext = PatchedAudioContext;
   }
 
+  // Qobuz can leave a detached audio request loading indefinitely at 0 seconds.
+  // One timer per loading element; no polling or page/network probes.
+  const qobuzRecovery = window.location?.hostname === "play.qobuz.com";
+  const recoveryTimers = new Map();
+  const retriedSources = new Set();
+  const cancelRecovery = (element) => {
+    clearTimeout(recoveryTimers.get(element));
+    recoveryTimers.delete(element);
+  };
+  const armRecovery = (element) => {
+    if (!qobuzRecovery || recoveryTimers.has(element)) return;
+    const source = element.currentSrc || element.src;
+    if (!source?.startsWith("https://") || retriedSources.has(source) || !state.active || element.paused
+      || element.ended || element.error || element.currentTime !== 0
+      || element.readyState !== 0 || element.buffered.length) return;
+    recoveryTimers.set(element, setTimeout(() => {
+      recoveryTimers.delete(element);
+      if (!state.active || document.visibilityState !== "visible" || element.paused
+        || element.ended || element.error || element.currentTime !== 0
+        || element.readyState !== 0 || element.networkState !== 2
+        || element.buffered.length || (element.currentSrc || element.src) !== source
+        || retriedSources.has(source)) return;
+      retriedSources.add(source);
+      element.load();
+      element.play().catch(() => {});
+    }, 15000));
+  };
+
   const nativeMediaPlay = window.HTMLMediaElement?.prototype?.play;
   if (typeof nativeMediaPlay === "function" && !window.__tikpalProviderAudioGatePlayPatched) {
     window.__tikpalProviderAudioGatePlayPatched = true;
@@ -52,6 +80,14 @@
           if (state.active) unifyMediaVolume(this);
         });
         this.addEventListener("ended", () => state.playedMedia.delete(this));
+        if (qobuzRecovery) {
+          for (const event of ["pause", "ended", "playing", "canplay", "error", "emptied"]) {
+            this.addEventListener(event, () => cancelRecovery(this));
+          }
+          for (const event of ["waiting", "stalled", "loadstart"]) {
+            this.addEventListener(event, () => armRecovery(this));
+          }
+        }
       }
       if (state.active) unifyMediaVolume(this);
       if (!state.active) {
@@ -59,6 +95,7 @@
         this.muted = true;
       }
       const result = nativeMediaPlay.apply(this, args);
+      armRecovery(this);
       if (!state.active) {
         Promise.resolve(result).then(() => {
           if (!state.active) {
@@ -157,6 +194,7 @@
       window.postMessage({ type: "tikpal-provider-audio-muted", muted: !nextActive }, window.location.origin);
     } catch {}
     state.active = nextActive;
+    if (!nextActive) for (const element of recoveryTimers.keys()) cancelRecovery(element);
     setMediaActive(nextActive);
     setHowlerActive(nextActive);
     setAudioContextsActive(nextActive);
