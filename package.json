@@ -27,6 +27,7 @@
     "test:provider-audio-gate": "node scripts/provider-audio-gate-fixture.mjs",
     "test:cdp-manager": "node scripts/tikpal-cdp-session-manager-smoke.mjs",
     "test:initial-entry": "bash scripts/tikpal-initial-entry-fixture.sh",
+    "test:explore-panel": "node scripts/explore-panel-fixture.mjs && bash scripts/explore-panel-x11-fixture.sh && node scripts/explore-panel-browser-fixture.mjs",
     "test:explore-lifecycle": "node scripts/explore-open-lifecycle-smoke.mjs",
     "test:interaction": "node scripts/interaction-smoke.mjs"
   },

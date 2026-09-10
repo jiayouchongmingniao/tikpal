@@ -6,7 +6,7 @@ const base=new URL('../deploy/chromium/web-mode-extension/',import.meta.url);
 const manifest=JSON.parse(await readFile(new URL('manifest.json',base),'utf8'));
 const rule=manifest.content_scripts.find(s=>s.css?.includes('deezer-hide-ads.css'));
 assert.deepEqual(rule.matches,['https://deezer.com/*','https://*.deezer.com/*']);
-assert.equal(rule.js,undefined,'static CSS needs no runtime script');
+assert.deepEqual(rule.js,['deezer-ad-click-guard.js']);
 const css=await readFile(new URL('deezer-hide-ads.css',base),'utf8');
 const browser=await chromium.launch({headless:true});
 try {

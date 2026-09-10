@@ -1,0 +1,22 @@
+/* TIDAL's home feed uses a fixed --pageWidth even after its window grows.
+   Preserve the site's padding and card rules; only fill the available parent. */
+[data-test="home-page-feed"] {
+  box-sizing: border-box !important;
+  width: 100% !important;
+  max-width: none !important;
+  margin-inline: 0 !important;
+}
+
+/* Album and Mix pages use independently capped modules. Keep their existing
+   padding and vertical spacing, and align the sticky header with the modules. */
+main [data-type="page"]:has(> :is([data-test-module-type="ALBUM_HEADER"], [data-test-module-type="MIX_HEADER"])) {
+  --pageWidth: calc(100vw - var(--sidebarWidth) - var(--playQueueWidth, 0px) - var(--pageHorizontalMargin) * 2);
+  --resonancePageMaxWidth: 100vw;
+}
+
+main [data-type="page"]:has(> :is([data-test-module-type="ALBUM_HEADER"], [data-test-module-type="MIX_HEADER"])) > [data-test-module-type] {
+  box-sizing: border-box !important;
+  width: 100% !important;
+  max-width: none !important;
+  margin-inline: 0 !important;
+}

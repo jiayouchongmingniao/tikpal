@@ -11,6 +11,8 @@ import { buildProxyConfig, buildProxyKey, normalizeProviderTextScale } from "../
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 
 const requiredFiles = [
+  "deploy/chromium/web-mode-extension/deezer-ad-click-guard.js",
+  "deploy/chromium/tikpal-provider-child-windows.mjs",
   "deploy/chromium/web-mode-extension/deezer-hide-ads.css",
   "server/index.mjs",
   "server/web.mjs",
@@ -1252,7 +1254,7 @@ audio_output {
     residentProviders: { spotify: { status: "active" } }
   }));
   const webModeDispatchIndex = webModeScript.indexOf('\ncase "$web_mode_action" in');
-  const webModeFunctions = webModeScript.slice(0, webModeDispatchIndex >= 0 ? webModeDispatchIndex : webModeScript.indexOf('\ncase "${1:-open}" in'));
+  const webModeFunctions = webModeScript.slice(0, webModeDispatchIndex >= 0 ? webModeDispatchIndex : webModeScript.indexOf('\ncase "${1:-open}" in')).replace('source "$SCRIPT_DIR/tikpal-web-mode-panel.sh"', `source ${JSON.stringify(path.join(ROOT, "deploy/chromium/tikpal-web-mode-panel.sh"))}`);
   const windowIdentityCachePath = path.join(reconcileSmokeDir, "dead-window.id");
   const switchTimingOncePath = path.join(reconcileSmokeDir, "switch-segment-timing.once");
   const panelMutationPath = path.join(reconcileSmokeDir, "panel-mutations.log");
@@ -1942,7 +1944,7 @@ sync_runtime_provider_pool_process_statuses ""
   assert(stylesSource.includes(".web-mode-provider.is-proxy-unavailable"), "Explore side panel should give proxy-unavailable providers their own visual state");
   assert(!sidePanelSource.includes("updateWebModeSettings"), "Explore side panel should not reopen the provider to switch proxy mode");
   assert(!sidePanelSource.includes("data-web-mode-keyboard-toggle") && !sidePanelSource.includes("toggleKeyboard"), "Explore side panel should rely on automatic input-focus keyboard behavior");
-  assert((sidePanelSource.match(/onClick=\{\(\) => void closeWebMode\(\)\}/g) ?? []).length === 1, "Explore side panel should keep only the top-right Close button");
+  assert((sidePanelSource.match(/onClick=\{\(\) => void closeWebMode\(\)\}/g) ?? []).length === 2 && sidePanelSource.includes('if (panelMode === "collapsed")'), "Explore should provide one exit in each mutually exclusive panel layout");
   assert(!quickSettingsSource.includes("handleWebModeKeyboard"), "Console should rely on input-focus keyboard behavior instead of a duplicate button");
   assert(quickSettingsSource.includes('detailView !== "webMode"'), "Console should only preload Onboard for the Explore Proxy settings detail");
   assert(quickSettingsSource.includes('sendWebModeAction({ type: "keyboard", preload: true })'), "Console Explore Proxy settings should preload resident Onboard before the first text-field tap");
@@ -1959,15 +1961,14 @@ sync_runtime_provider_pool_process_statuses ""
   assert(quickSettingsSource.includes('data-room-shortcut="back"') && quickSettingsSource.includes("data-console-back-button") && quickSettingsSource.includes("onClick={handleReturnAmbient}"), "Console should expose a Close shortcut next to Explore");
   assert(
     quickSettingsSource.includes("PanelRightClose")
-      && sidePanelSource.includes("PanelRightClose")
+      && sidePanelSource.includes("LogOut")
       && playerOverlaySource.includes("PanelRightClose")
       && ambientScreenSource.includes("PanelRightClose")
       && !quickSettingsSource.includes("LogOut")
-      && !sidePanelSource.includes("LogOut")
       && !playerOverlaySource.includes("LogOut")
       && !ambientScreenSource.includes("LogOut")
       && !quickSettingsSource.includes("ArrowLeft"),
-    "Close controls should share a panel-close icon without logout or plain-arrow semantics"
+    "Explore exit should have a distinct icon while other Close controls retain their panel-close icon"
   );
   assert(
     i18nSource.includes('"common.online": "Online"')

@@ -40,3 +40,34 @@ screenshot then showed the normal Home page, no modal overlay, hidden display
 slots and the song Pookie playing at 00:28 of a 00:30 preview. This establishes
 preview progression and rendered switch-back recovery, not full subscription
 playback or physical touchscreen acceptance.
+
+## Ad-layer click guard
+
+`deezer-ad-click-guard.js` is a Deezer-only document-start content script. On 207,
+playback ads use `#adContainer` with `iframe[title="Advertisement"]`; the frame
+can be cross-origin, so parent event cancellation alone cannot intercept its
+clicks. The script marks only those frames inert, preventing pointer/keyboard
+interaction while leaving media and frame loading running. Capture listeners
+cancel activation events in that verified ad container, including its blank area.
+Normal navigation, player controls and login UI outside it remain interactive.
+Controls inside the advertising frame also become noninteractive; ad completion
+continues to be owned by Deezer. This does not skip or mute the advertisement.
+
+A MutationObserver examines added subtrees and iframe title changes; there is no
+interval, layout polling or network probe. Deezer's observed lifecycle removes
+the container after advertising. Reuse of an inert ad iframe as non-ad UI has
+not been observed or accepted by this implementation. Existing known-child-window
+closure remains a fallback; no global window.open override is installed.
+
+`node scripts/deezer-ad-click-guard-fixture.mjs` passed with fully intercepted
+local fixtures and real Chromium mouse/touch input: cross-origin ad and blank
+area cannot open a popup; dynamic ads are protected; player/login controls work;
+removal restores ordinary page interaction; non-Deezer pages are untouched.
+The display-ad fixture and kiosk package smoke passed as well.
+
+The 207 manifest/script were updated without restarting/navigating the browser.
+CDP installed the same script in the current Deezer document and for subsequent
+documents of that existing target; normal future browser launches use the
+manifest. Read-only inspection confirmed the hook loaded and the normal Pause
+button was outside inert content. No ad frame was present at that inspection,
+so physical ad-click prevention remains untested; no field ad click was made.

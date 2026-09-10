@@ -110,6 +110,10 @@ export interface WebModeSettings {
 }
 
 export interface WebModeState {
+  panelMode?: "expanded" | "collapsed";
+  panelLayoutSupported?: boolean;
+  panelSessionId?: string | null;
+  panelXSessionGeneration?: string | null;
   enabled: boolean;
   activeProvider: WebModeProviderId | null;
   openingProvider: WebModeProviderId | null;
@@ -128,7 +132,10 @@ export interface WebModeState {
 }
 
 export interface WebModeActionRequest {
-  type: "open" | "close" | "reset_provider_profile" | "keyboard" | "proxy" | "provider_text_scale";
+  panelMode?: "expanded" | "collapsed";
+  panelSessionId?: string | null;
+  panelXSessionGeneration?: string | null;
+  type: "open" | "close" | "reset_provider_profile" | "keyboard" | "proxy" | "provider_text_scale" | "panel_mode";
   provider?: WebModeProviderId;
   openRequestId?: string;
   enabled?: boolean;

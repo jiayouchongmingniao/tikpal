@@ -9586,6 +9586,68 @@ select {
   }
 }
 
+.web-mode-panel-rail {
+  position: relative;
+  width: 56px;
+  height: 100vh;
+  background: #080b0e;
+  color: #eef7fb;
+}
+
+.web-mode-panel-rail button,
+.web-mode-panel-collapse {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  flex-shrink: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  color: inherit;
+  background: transparent;
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.web-mode-panel-rail button:active:not(:disabled),
+.web-mode-panel-collapse:active:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.web-mode-panel-rail button:focus-visible,
+.web-mode-panel-collapse:focus-visible {
+  outline: 2px solid #81d7ff;
+  outline-offset: 1px;
+}
+
+.web-mode-panel-rail button:disabled,
+.web-mode-panel-collapse:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+
+.web-mode-panel-rail .web-mode-rail-expand {
+  position: absolute;
+  left: 4px;
+  top: calc(50% - 44px);
+  height: 88px;
+}
+
+.web-mode-rail-exit {
+  position: absolute;
+  left: 4px;
+  bottom: 16px;
+}
+
+.web-mode-rail-error {
+  position: absolute;
+  bottom: 80px;
+  width: 56px;
+  text-align: center;
+  color: #ffc17a;
+}
+
 .web-mode-panel {
   --panel-tone: #81d7ff;
   position: relative;

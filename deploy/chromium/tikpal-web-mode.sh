@@ -746,7 +746,8 @@ x11_mutation_run() {
     IFS= read -r _ < "$TIKPAL_WEB_MODE_X11_MUTATION_BARRIER_FIFO"
   fi
 
-  if x11_helper_switch_enabled && [[ -n "$xids" ]]; then
+  if [[ -n "$xids" ]] && { x11_helper_switch_enabled || [[ "${TIKPAL_PANEL_PROCESS_MODE:-expanded}" == collapsed ]] ||
+      [[ "$(jq -r ".panelLayoutSupported // false" "$TIKPAL_WEB_MODE_STATE_PATH" 2>/dev/null)" == true ]]; }; then
     gate_required=1
     if [[ "${TIKPAL_WEB_MODE_LOCKED:-0}" != "1" &&
           "${TIKPAL_WEB_MODE_GUARD_LOCKED:-0}" != "1" &&
@@ -766,7 +767,11 @@ x11_mutation_run() {
         fi
       fi
     fi
-    if [[ "$exit_status" == "0" ]]; then
+    if [[ "$exit_status" == "0" ]] && ! panel_writer_is_current; then
+      exit_status=76
+      trace_detail="permission=blocked reason=stale_panel_layout"
+    fi
+    if [[ "$exit_status" == "0" ]] && x11_helper_switch_enabled; then
       if [[ -r "$TIKPAL_WEB_MODE_X11_HELPER_GENERATION_PATH" ]]; then
         IFS= read -r current_generation < "$TIKPAL_WEB_MODE_X11_HELPER_GENERATION_PATH" ||
           current_generation=unreadable
@@ -936,6 +941,7 @@ with_web_mode_lock() {
       fi
       record_switch_trace_event lock_acquired ok "" "$lock_wait_ms"
     fi
+    panel_refresh_layout || return 1
     "$@"
     return
   fi
@@ -2994,6 +3000,8 @@ if (state.activeProvider) state.lastProvider = state.activeProvider;
 state.lastError = null;
 state.updatedAt = new Date().toISOString();
 if (!state.activeProvider) {
+  state.panelMode = "expanded";
+  state.panelLayoutSupported = false;
   state.closeRequestId = preserveCloseRequest ? closeRequestId : null;
   state.openingProvider = null;
   state.openRequestId = null;
@@ -3006,6 +3014,8 @@ if (!state.activeProvider) {
   state.openStartedAt = null;
   state.openXSessionGeneration = null;
   if (openRequestId) {
+    state.panelMode = "expanded";
+    state.panelLayoutSupported = process.env.TIKPAL_PANEL_LAYOUT_SUPPORTED === "1";
     state.lastOpenedRequestId = openRequestId;
     state.lastOpenedXSessionGeneration = expectedXSessionGeneration;
   }
@@ -6275,6 +6285,7 @@ tile_guard_windows_fast() {
 }
 
 recover_guard_window_list_locked() {
+  panel_refresh_layout || return 1
   local provider_profile="$1"
   local panel_profile="$2"
   local provider_window panel_window recovery_window_list
@@ -6360,6 +6371,10 @@ guard_maintain_windows() {
       return 0
     fi
     TIKPAL_WEB_MODE_GUARD_LOCKED=1
+  fi
+  if ! panel_refresh_layout; then
+    [[ -z "$guard_lock_fd" ]] || exec {guard_lock_fd}>&-
+    return 1
   fi
   if x11_helper_switch_enabled; then
     registry_generation="$(x11_trace_read_registry_generation || true)"
@@ -9060,6 +9075,7 @@ open_provider_pool() {
 open_provider() {
   local provider="$1"
   runtime_open_request_is_current_or_log open-start || return 0
+  panel_prepare_open || return 1
   if is_enabled "$TIKPAL_WEB_MODE_PROVIDER_POOL"; then
     open_provider_pool "$provider"
     return
@@ -9352,6 +9368,9 @@ check_runtime_quiet() {
   command -v xdotool >/dev/null 2>&1 || fail "xdotool is required for Explore provider window detection"
 }
 
+source "$SCRIPT_DIR/tikpal-web-mode-panel.sh"
+panel_refresh_layout
+
 if [[ "${TIKPAL_WEB_MODE_SOURCE_ONLY:-0}" == "1" ]]; then
   [[ "${BASH_SOURCE[0]}" != "$0" ]] || fail "TIKPAL_WEB_MODE_SOURCE_ONLY requires sourcing"
   return 0
@@ -9380,6 +9399,10 @@ x11_trace_require_writable ||
 trap x11_helper_cleanup_on_exit EXIT
 
 case "$web_mode_action" in
+  panel-mode)
+    TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS=0
+    with_web_mode_lock set_panel_mode "${2:-}"
+    ;;
   --check)
     check_runtime
     ;;

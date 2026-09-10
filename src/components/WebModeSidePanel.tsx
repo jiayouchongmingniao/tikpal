@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { Apple, Cloud, Gem, Globe2, Music2, PanelRightClose, ShoppingBag, SquarePlay, Type, Volume2 } from "lucide-react";
+import { Apple, Cloud, Gem, Globe2, Music2, ChevronsLeft, ChevronsRight, LogOut, ShoppingBag, SquarePlay, Type, Volume2 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { fetchTikpalState, fetchWebModeState, sendPlaybackAction, sendWebModeAction } from "../api/tikpalClient";
 import { createExploreCloseRequestId, EXPLORE_CLOSE_CHANNEL, EXPLORE_CLOSE_COVER_FALLBACK_MS, isExploreCloseMessage, type ExploreCloseMessage } from "../exploreCloseVeil";
@@ -126,8 +126,14 @@ export function WebModeSidePanel() {
   const [tikpalState, setTikpalState] = useState<TikpalState | null>(null);
   const initialOpeningProviderRef = useRef<WebModeProviderId | null>(readInitialOpeningProvider());
   const [pendingProvider, setPendingProvider] = useState<WebModeProviderId | null>(initialOpeningProviderRef.current);
-  const [pendingAction, setPendingAction] = useState<"close" | "scale" | null>(null);
-  const pendingActionRef = useRef<"close" | "scale" | null>(null);
+  const [pendingAction, setPendingAction] = useState<"close" | "scale" | "panel" | null>(null);
+  const pendingActionRef = useRef<"close" | "scale" | "panel" | null>(null);
+  const [requestedPanelMode, setRequestedPanelMode] = useState<"expanded" | "collapsed" | null>(null);
+  const [panelError, setPanelError] = useState(false);
+  const panelActionRef = useRef(false);
+  // Keep the reachable rail until expansion is confirmed; the full header's
+  // exit button would otherwise sit offscreen while the window is moving.
+  const panelMode = requestedPanelMode === "collapsed" ? "collapsed" : webMode?.panelMode ?? "expanded";
   const [error, setError] = useState<string | null>(null);
   const actionLockRef = useRef(false);
   const optimisticProviderRef = useRef<WebModeProviderId | null>(null);
@@ -371,8 +377,39 @@ export function WebModeSidePanel() {
     }
   }
 
+  async function changePanelMode(mode: "expanded" | "collapsed") {
+    if (panelActionRef.current || actionLockRef.current || pendingAction || pendingProvider || displayedOpeningProvider) return;
+    if (!webMode?.panelLayoutSupported || !webMode.panelSessionId || !webMode.panelXSessionGeneration) return;
+    panelActionRef.current = true;
+    actionLockRef.current = true;
+    pendingActionRef.current = "panel";
+    setPendingAction("panel");
+    setPanelError(false);
+    setRequestedPanelMode(mode);
+    try {
+      const next = await sendWebModeAction({ type: "panel_mode", panelMode: mode,
+        panelSessionId: webMode.panelSessionId, panelXSessionGeneration: webMode.panelXSessionGeneration });
+      if (pendingActionRef.current === "panel") applyWebModeState(next);
+    } catch {
+      setPanelError(true);
+      // A timed-out response is not proof that the geometry change failed.
+      try {
+        const next = await fetchWebModeState();
+        if (pendingActionRef.current === "panel") applyWebModeState(next);
+      } catch { /* Periodic state polling will reconcile once the API returns. */ }
+    } finally {
+      panelActionRef.current = false;
+      setRequestedPanelMode(null);
+      if (pendingActionRef.current === "panel") {
+        pendingActionRef.current = null;
+        setPendingAction(null);
+        actionLockRef.current = false;
+      }
+    }
+  }
+
   async function closeWebMode() {
-    if (actionLockRef.current || pendingAction || pendingProvider) return;
+    if (pendingActionRef.current !== "panel" && (actionLockRef.current || pendingAction || pendingProvider)) return;
     actionLockRef.current = true;
     setPendingAction("close");
     pendingActionRef.current = "close";
@@ -440,21 +477,43 @@ export function WebModeSidePanel() {
     }
   }
 
+  if (panelMode === "collapsed") {
+    return (
+      <main className="web-mode-panel-rail" data-web-mode-panel data-panel-mode="collapsed" aria-busy={pendingAction === "panel"}>
+        <button type="button" className="web-mode-rail-expand" data-panel-expand
+          aria-label={t("explore.expandPanel")} title={t("explore.expandPanel")}
+          disabled={Boolean(pendingAction || pendingProvider || displayedOpeningProvider)}
+          onClick={() => void changePanelMode("expanded")}><ChevronsLeft size={28} /></button>
+        {panelError && <span className="web-mode-rail-error" role="status" title={t("explore.panelChangeFailed")} aria-label={t("explore.panelChangeFailed")}>!</span>}
+        <button type="button" className="web-mode-rail-exit" data-panel-exit
+          aria-label={t("explore.exit")} title={t("explore.exit")}
+          disabled={pendingAction === "close" || Boolean(pendingProvider)}
+          onClick={() => void closeWebMode()}><LogOut size={24} /></button>
+      </main>
+    );
+  }
+
   return (
     <main
-      className={`web-mode-panel ${panelState === "switching" ? "is-switching" : ""}`}
+      className={`web-mode-panel ${webMode?.panelLayoutSupported ? "has-panel-toggle" : ""} ${panelState === "switching" ? "is-switching" : ""}`}
       style={{ "--panel-tone": panelTone } as CSSProperties}
       data-web-mode-panel
+      data-panel-mode="expanded"
       data-web-mode-state={panelState}
-      aria-busy={panelState !== "ready"}
+      aria-busy={panelState !== "ready" || pendingAction === "panel"}
       onContextMenu={(e) => e.preventDefault()}
     >
+
       <header className="web-mode-panel-header">
         <div>
           <span>Explore</span>
           <strong style={{ opacity: activeLabelVisible ? 1 : 0, transition: "opacity 120ms ease" }}>{displayedActiveLabel}</strong>
         </div>
         <div className="web-mode-header-actions">
+      {webMode?.panelLayoutSupported && <button type="button" className="web-mode-panel-collapse" data-panel-collapse
+        disabled={Boolean(pendingAction || pendingProvider || displayedOpeningProvider)}
+        aria-label={t("explore.collapsePanel")} title={t("explore.collapsePanel")}
+        onClick={() => void changePanelMode("collapsed")}><ChevronsRight size={28} /></button>}
           <div
             className={`web-mode-proxy-chip web-mode-proxy-status ${proxyEnabled ? "is-proxy" : "is-off"}`}
             role="status"
@@ -468,13 +527,13 @@ export function WebModeSidePanel() {
           <button
             className="web-mode-top-back"
             type="button"
-            disabled={Boolean(pendingAction || pendingProvider)}
+            disabled={Boolean((pendingAction && pendingAction !== "panel") || pendingProvider)}
             data-web-mode-top-back
-            aria-label={t("common.close")}
+            aria-label={t("explore.exit")}
             onClick={() => void closeWebMode()}
           >
-            <PanelRightClose size={17} />
-            <span>{pendingAction === "close" ? t("common.closing") : t("common.close")}</span>
+            <LogOut size={17} />
+            <span>{pendingAction === "close" ? t("common.closing") : t("explore.exit")}</span>
           </button>
         </div>
       </header>
@@ -555,7 +614,7 @@ export function WebModeSidePanel() {
       </section>
 
       <footer className="web-mode-panel-footer" role="status" title={error ?? undefined}>
-        {friendlyError(error, "error.explore") ?? (displayedOpeningProvider ? `${t("common.opening")} ${providerLabels[displayedOpeningProvider]}` : t("explore.footer"))}
+        {panelError ? t("explore.panelChangeFailed") : friendlyError(error, "error.explore") ?? (displayedOpeningProvider ? `${t("common.opening")} ${providerLabels[displayedOpeningProvider]}` : t("explore.footer"))}
       </footer>
       <div className={"web-mode-open-overlay" + (exploreOpening ? " active" : "")} />
     </main>

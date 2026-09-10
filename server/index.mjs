@@ -732,6 +732,8 @@ let hifiRuntimeRecoveryPromise = null;
 let hifiRuntimeRecoveryLastAttemptAtMs = 0;
 let hifiRuntimeRecoveryQuietUntilMs = 0;
 let webModeOpenInFlight = false;
+let webModePanelPromise = null;
+let webModePanelCloseRequested = false;
 let webModeCloseInFlight = false;
 let webModeClosePromise = null;
 let webModeResidentOpenPromise = null;
@@ -5366,6 +5368,8 @@ function normalizeWebModeRuntimeState(raw = {}) {
   const hasOpeningRequest = Boolean(openingProvider && openRequestId);
   return {
     activeProvider,
+    panelMode: activeProvider && raw.panelMode === "collapsed" ? "collapsed" : "expanded",
+    panelLayoutSupported: raw.panelLayoutSupported === true,
     openingProvider: hasOpeningRequest ? openingProvider : null,
     openRequestId: hasOpeningRequest ? openRequestId : null,
     openStartedAt: hasOpeningRequest && typeof raw.openStartedAt === "string" && raw.openStartedAt.trim()
@@ -5446,6 +5450,9 @@ async function writeWebModeRuntimeState(patch, trace = null) {
 }
 
 async function updateWebModeRuntimeState(updater, trace = null) {
+  // Shell layout commits hold provider-state.lock. Keep API writers out until
+  // that bounded command completes, then re-read instead of overwriting it.
+  if (webModePanelPromise) await webModePanelPromise.catch(() => undefined);
   const queuedAtMs = monotonicNowMs();
   recordWebModeSwitchTraceEvent(trace, "runtime_state_write_queued", { timestamp: queuedAtMs });
   const operation = webModeRuntimeStateWritePromise.then(async () => {
@@ -5676,6 +5683,10 @@ async function buildWebModeState() {
   return {
     enabled: true,
     activeProvider: runtimeState.activeProvider,
+    panelMode: runtimeState.panelMode,
+    panelLayoutSupported: runtimeState.panelLayoutSupported && Boolean(WEB_MODE_COMMAND.trim()),
+    panelSessionId: runtimeState.lastOpenedRequestId,
+    panelXSessionGeneration: runtimeState.lastOpenedXSessionGeneration,
     openingProvider: runtimeState.openingProvider,
     openRequestId: runtimeState.openRequestId,
     openStartedAt: runtimeState.openStartedAt,
@@ -14322,6 +14333,29 @@ async function runWebModeCommand(action, providerId = "", env = {}) {
     ? `${WEB_MODE_COMMAND} ${shellQuote(action)} ${shellQuote(providerId)}`
     : `${WEB_MODE_COMMAND} ${shellQuote(action)}`;
   const commandWithEnv = envPrefix ? `${envPrefix} ${command}` : command;
+  if (action === "panel-mode") {
+    // Kill the entire layout command group on timeout. Killing only sh would
+    // leave a late state writer racing Close after the API releases its gate.
+    await new Promise((resolveCommand, rejectCommand) => {
+      const child = spawn("sh", ["-lc", commandWithEnv], { detached: true, stdio: ["ignore", "pipe", "pipe"] });
+      let details = "";
+      let timedOut = false;
+      const collect = chunk => { details = (details + chunk).slice(-16384); };
+      child.stdout.on("data", collect);
+      child.stderr.on("data", collect);
+      const timer = setTimeout(() => {
+        timedOut = true;
+        try { process.kill(-child.pid, "SIGKILL"); } catch { /* Already exited. */ }
+      }, Math.min(WEB_MODE_COMMAND_TIMEOUT_MS, 12000));
+      child.once("error", error => { clearTimeout(timer); rejectCommand(error); });
+      child.once("close", code => {
+        clearTimeout(timer);
+        if (code === 0 && !timedOut) resolveCommand();
+        else rejectCommand(new Error(timedOut ? "PANEL_LAYOUT_TIMEOUT" : details.trim() || "PANEL_LAYOUT_FAILED"));
+      });
+    });
+    return;
+  }
   await runCommand(commandWithEnv, {
     allowFailure: false,
     timeout: action === "open" ? WEB_MODE_OPEN_COMMAND_TIMEOUT_MS : WEB_MODE_COMMAND_TIMEOUT_MS,
@@ -14868,24 +14902,58 @@ let webModeKeyboardStickyUntilMs = 0;
 async function applyWebModeAction(action, { receivedMonotonicMs = monotonicNowMs() } = {}) {
   const type = String(action?.type ?? "").trim().toLowerCase();
   if (type === "close") {
-    if (webModeClosePromise) {
-      await webModeClosePromise;
+    webModePanelCloseRequested = true;
+    try {
+      if (webModePanelPromise) await webModePanelPromise.catch(() => undefined);
+      if (webModeClosePromise) {
+        await webModeClosePromise;
+        return await buildWebModeState();
+      }
+      const closeRequestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const runtimeState = await readWebModeRuntimeState();
+      const activeProvider = typeof runtimeState.activeProvider === "string" ? runtimeState.activeProvider : "";
+      await writeWebModeRuntimeState({
+        openingProvider: null,
+        openRequestId: null,
+        openStartedAt: null,
+        openXSessionGeneration: null,
+        lastProvider: runtimeState.lastProvider ?? activeProvider ?? null,
+        lastError: null,
+        closeRequestId
+      });
+      await runWebModeCloseInBackground(closeRequestId, activeProvider);
       return await buildWebModeState();
+    } finally { webModePanelCloseRequested = false; }
+  }
+
+  if (type === "panel_mode") {
+    if (!["expanded", "collapsed"].includes(action.panelMode)) throw new Error("PANEL_INVALID_MODE");
+    if (webModePanelPromise || webModePanelCloseRequested || webModeOpenInFlight || webModeCloseInFlight || webModeClosePromise) {
+      throw new Error("PANEL_BUSY_OR_STALE");
     }
-    const closeRequestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const runtimeState = await readWebModeRuntimeState();
-    const activeProvider = typeof runtimeState.activeProvider === "string" ? runtimeState.activeProvider : "";
-    await writeWebModeRuntimeState({
-      openingProvider: null,
-      openRequestId: null,
-      openStartedAt: null,
-      openXSessionGeneration: null,
-      lastProvider: runtimeState.lastProvider ?? activeProvider ?? null,
-      lastError: null,
-      closeRequestId
-    });
-    await runWebModeCloseInBackground(closeRequestId, activeProvider);
+    const operation = (async () => {
+      await webModeRuntimeStateWritePromise;
+      const state = await readWebModeRuntimeState();
+      const generation = await readKioskXSessionGeneration();
+      if (!WEB_MODE_COMMAND.trim() || !state.panelLayoutSupported) throw new Error("PANEL_LAYOUT_UNSUPPORTED");
+      if (!state.activeProvider || state.openingProvider || state.closeRequestId || !generation
+          || !state.lastOpenedRequestId || action.panelSessionId !== state.lastOpenedRequestId
+          || action.panelXSessionGeneration !== generation || state.lastOpenedXSessionGeneration !== generation) {
+        throw new Error("PANEL_BUSY_OR_STALE");
+      }
+      await runWebModeCommand("panel-mode", action.panelMode, {
+        TIKPAL_PANEL_EXPECTED_PROVIDER: state.activeProvider,
+        TIKPAL_PANEL_EXPECTED_SESSION: state.lastOpenedRequestId,
+        TIKPAL_PANEL_EXPECTED_GENERATION: generation
+      });
+    })();
+    webModePanelPromise = operation;
+    try { await operation; } finally { if (webModePanelPromise === operation) webModePanelPromise = null; }
     return await buildWebModeState();
+  }
+
+  if (webModePanelPromise && ["open", "reset_provider_profile", "proxy"].includes(type)) {
+    throw new Error("PANEL_BUSY_OR_STALE");
   }
 
   if (type === "reset_provider_profile") {
@@ -15031,6 +15099,11 @@ async function applyWebModeAction(action, { receivedMonotonicMs = monotonicNowMs
     previousRuntimeState.activeProvider ?? previousRuntimeState.lastProvider ?? "qq_music"
   );
   if (previousRuntimeState.activeProvider === providerId && !previousRuntimeState.openingProvider) {
+    if (previousRuntimeState.panelMode === "collapsed") {
+      await applyWebModeAction({ type: "panel_mode", panelMode: "expanded",
+        panelSessionId: previousRuntimeState.lastOpenedRequestId,
+        panelXSessionGeneration: previousRuntimeState.lastOpenedXSessionGeneration });
+    }
     await disableSceneSoundForWebMode();
     return await buildWebModeState();
   }

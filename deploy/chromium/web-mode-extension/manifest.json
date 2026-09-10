@@ -25,6 +25,12 @@
     {
       "matches": ["https://deezer.com/*", "https://*.deezer.com/*"],
       "css": ["deezer-hide-ads.css"],
+      "js": ["deezer-ad-click-guard.js"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["https://tidal.com/*", "https://*.tidal.com/*"],
+      "css": ["tidal-home-layout.css"],
       "run_at": "document_start"
     },
     {

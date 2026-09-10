@@ -7,8 +7,10 @@
  * attachment and the page session lifecycle.
  */
 import { createConnection, createServer } from "node:net";
-import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+
+import { createProviderChildWindows } from "./tikpal-provider-child-windows.mjs";
 
 const socketPath = process.env.TIKPAL_WEB_MODE_CDP_SESSION_MANAGER_SOCKET || "/run/tikpal/cdp-session-manager.sock";
 const statePath = process.env.TIKPAL_WEB_MODE_CDP_SESSION_MANAGER_STATE_PATH || "/run/tikpal/cdp-session-manager.json";
@@ -100,6 +102,12 @@ class ProviderSession {
     this.nextId = 1;
     this.pending = new Map();
     this.targetInfos = new Map();
+    this.childWindows = createProviderChildWindows({
+      provider: id,
+      targets: () => this.targetInfos,
+      command: (method, params) => this.sendBrowser(method, params),
+      readState: () => JSON.parse(readFileSync(process.env.TIKPAL_WEB_MODE_STATE_PATH || "/run/tikpal/web-mode-state.json", "utf8"))
+    });
     this.targetId = "";
     this.sessionId = "";
     this.browserGeneration = 0;
@@ -253,6 +261,7 @@ class ProviderSession {
     if (method === "Target.targetInfoChanged") this.updateTargets([params.targetInfo]);
     if (method === "Target.targetDestroyed") {
       this.targetInfos.delete(params.targetId);
+      this.childWindows.forget(params.targetId);
       if (params.targetId === this.targetId) this.invalidateSession("target_destroyed");
     }
     if (method === "Target.detachedFromTarget" && params.sessionId === this.sessionId) {
@@ -305,6 +314,7 @@ class ProviderSession {
     for (const info of infos) {
       if (info?.targetId) this.targetInfos.set(info.targetId, info);
     }
+    for (const info of infos) void this.childWindows.inspect(info);
     publishState();
   }
 
@@ -314,6 +324,7 @@ class ProviderSession {
         .filter((info) => info?.targetId)
         .map((info) => [info.targetId, info])
     );
+    for (const info of infos) void this.childWindows.inspect(info);
     if (this.targetId && !this.targetInfos.has(this.targetId)) {
       this.invalidateSession("target_absent_from_browser_snapshot");
       return;
