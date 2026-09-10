@@ -403,6 +403,12 @@ async function run() {
   assert(quickSettingsAudioSource.includes("audio-output-diagnostics-chip"), "Audio Output detail should expose a touchable advanced-info hint");
   assert(quickSettingsAudioSource.includes('t("settings.openAudioOutput")'), "Preferences cards should use action-oriented Audio Output copy");
   assert(quickSettingsAudioSource.includes('t("settings.manageRooms")'), "Multi-room Settings card should use a concise management action");
+  assert(quickSettingsAudioSource.includes('actionType: "reset_provider_profile"') && quickSettingsAudioSource.includes("profileResetProvider"), "Care Settings should expose a provider-scoped login reset card");
+  assert(quickSettingsAudioSource.includes('sendWebModeAction({ type: "reset_provider_profile", provider: card.provider })'), "Care Settings should send its displayed provider explicitly for profile reset");
+  assert(quickSettingsAudioSource.includes('card.disabled || status.pending || pendingAction !== null'), "Care Settings should disable provider reset until a current or recent player exists");
+  for (const profileResetCopyKey of ["settings.resetProviderProfile", "settings.resetProviderProfileMeta", "settings.tapAgainResetProviderProfile"]) {
+    assert(onboardingI18nSource.includes(`"${profileResetCopyKey}"`), `Settings should include ${profileResetCopyKey} copy`);
+  }
   assert(quickSettingsAudioSource.includes('t("nas.checkSetupNext")'), "NAS setup errors should include a next-step hint");
   assert(!quickSettingsAudioSource.includes('mpdQualityError ?? (preferencesPending ? t("common.applying") : t("settings.mpdQualityMeta"))'), "Audio Output detail should not show redundant profile ids as the default footer");
   assert(!quickSettingsAudioSource.includes('settings-detail-note-grid" aria-label={t("settings.mpdQuality")}'), "Audio Output detail should not use boxed note cards beside profiles");
@@ -2962,6 +2968,7 @@ sync_runtime_provider_pool_process_statuses ""
   assert(providerGuardSource.includes('force ? "show-force" : "show"'), "provider focus guard should distinguish new focus from periodic keyboard show actions");
   assert(providerGuardSource.includes("__tikpalQqClientPromptRetried"), "QQ client prompt retries should stop after one playback attempt");
   assert(providerGuardSource.includes("qqReminderCancelExpression"), "QQ reminder cancellation should remain separate from client-prompt replay");
+  assert(providerGuardSource.includes('qqReminderCancelExpression, "foreground"'), "QQ reminder cancellation should bypass Manager maintenance throttling");
   assert(providerGuardSource.includes("qqStartPlaybackExpression"), "QQ start-playback handling should remain separate from generic prompt confirmation");
   assert(providerGuardSource.includes('textOf(element) === "开始播放"'), "QQ start-playback handling should click only the exact Start Playback action");
   assert(providerGuardSource.includes('qqStartPlaybackExpression, "foreground"'), "QQ start-playback handling should bypass Manager maintenance throttling without becoming replayable");

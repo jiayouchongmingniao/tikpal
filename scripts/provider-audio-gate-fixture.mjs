@@ -104,4 +104,69 @@ for (const handler of listeners.get("play") || []) handler({ target: eventOnly }
 assert.equal(eventOnly.muted, true, "play-event fallback should mute media created outside the patched play path");
 assert.equal(eventOnly.paused, true, "play-event fallback should pause media created outside the patched play path");
 
+// Exercise the guard against a Manager whose maintenance budget is exhausted.
+const guardSource = await readFile(path.join(root, "deploy/chromium/tikpal-web-mode-guard.mjs"), "utf8");
+const guardFunction = (name, nextName) => guardSource.slice(
+  guardSource.indexOf(`async function ${name}(`),
+  guardSource.indexOf(`async function ${nextName}(`)
+);
+let runtime = { active: true, opening: false, deactivating: false, frozen: false };
+let player = { ready: true, playing: true, muted: false };
+let gateActive = false;
+let primeRunning = false;
+let primeCalls = 0;
+const guard = vm.createContext({
+  providerId: "qq_music",
+  qqAudioPrime: true,
+  qqAudioPrimeAttempts: new Map(),
+  qqAudioPrimeCooldownMs: 12000,
+  qqAudioStateExpression: "state",
+  qqAudioPrimeExpression: "prime",
+  providerAudioGateExpression: (active) => active ? "activate" : "deactivate",
+  readProviderRuntimeState: () => runtime,
+  isQqMusicPlayerPage: () => true,
+  isProviderWebPage: () => true,
+  isFriendlyErrorPage: () => false,
+  console: { log() {} },
+  evaluate: async (_url, expression, priority = "maintenance") => {
+    if (priority === "maintenance") throw new Error("CDP maintenance throttled");
+    if (expression === "state") return player;
+    if (expression === "prime") {
+      primeCalls += 1;
+      primeRunning = player.playing && !player.muted;
+      return { primed: primeRunning, state: "running" };
+    }
+    gateActive = expression === "activate";
+    return { active: gateActive };
+  }
+});
+vm.runInContext(
+  guardFunction("runProviderAudioGate", "runProviderAudioGateWithRetries") +
+  guardFunction("runQqAudioPrimeFeatures", "runQqMvTouchTargetFeatures"), guard
+);
+const targets = [{ id: "qq", webSocketDebuggerUrl: "manager://qq_music/qq" }];
+assert.equal(await guard.runProviderAudioGate(targets, true), true, "QQ must repair an inactive gate under maintenance throttling");
+assert.equal(gateActive, true);
+await guard.runQqAudioPrimeFeatures(targets);
+assert.equal(primeRunning, true, "both QQ state check and priming must survive maintenance throttling");
+await guard.runQqAudioPrimeFeatures(targets);
+assert.equal(primeCalls, 1, "successful priming should keep its cooldown");
+for (const state of [{ playing: false, muted: false }, { playing: true, muted: true }]) {
+  player = { ready: true, ...state };
+  primeRunning = true;
+  await guard.runQqAudioPrimeFeatures(targets);
+  assert.equal(primeRunning, false, "pause or mute must stop priming even during cooldown");
+}
+const callsBeforeHandoff = primeCalls;
+player = { ready: true, playing: true, muted: false };
+for (const role of [{ active: false }, { opening: true }, { deactivating: true }, { frozen: true }]) {
+  runtime = { active: true, opening: false, deactivating: false, frozen: false, ...role };
+  await guard.runQqAudioPrimeFeatures(targets);
+}
+assert.equal(primeCalls, callsBeforeHandoff, "QQ priming must yield during switching and while inactive or frozen");
+assert.equal(await guard.runProviderAudioGate(targets, false), true, "QQ deactivation must also survive maintenance throttling");
+assert.equal(gateActive, false);
+guard.providerId = "spotify";
+assert.equal(await guard.runProviderAudioGate(targets, true), false, "other providers should retain their existing priority");
+
 console.log("[provider-audio-gate-fixture] passed");

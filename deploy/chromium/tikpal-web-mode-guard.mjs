@@ -2650,7 +2650,7 @@ async function runSafePromptFeatures(targets) {
       console.log("[tikpal-web-mode-guard] clicked QQ start playback popup");
       return;
     }
-    const reminderPrompt = await evaluate(target.webSocketDebuggerUrl, qqReminderCancelExpression).catch(() => null);
+    const reminderPrompt = await evaluate(target.webSocketDebuggerUrl, qqReminderCancelExpression, "foreground").catch(() => null);
     if (reminderPrompt?.handled) {
       console.log("[tikpal-web-mode-guard] dismissed QQ reminder cancel");
       return;
@@ -2696,17 +2696,19 @@ async function runQqMusicAutoPlayFeatures(targets) {
 
 async function runQqAudioPrimeFeatures(targets) {
   if (providerId !== "qq_music" || !qqAudioPrime) return;
+  const { active, opening, deactivating, frozen } = readProviderRuntimeState();
+  if (!active || opening || deactivating || frozen) return;
   for (const target of targets.filter(isQqMusicPlayerPage)) {
-    const state = await evaluate(target.webSocketDebuggerUrl, qqAudioStateExpression).catch(() => null);
+    const state = await evaluate(target.webSocketDebuggerUrl, qqAudioStateExpression, "foreground").catch(() => null);
     if (!state?.ready) continue;
     if (!state.playing || state.muted) {
-      await evaluate(target.webSocketDebuggerUrl, qqAudioPrimeExpression).catch(() => null);
+      await evaluate(target.webSocketDebuggerUrl, qqAudioPrimeExpression, "foreground").catch(() => null);
       continue;
     }
     const previousAttempt = qqAudioPrimeAttempts.get(target.id) || 0;
     if (Date.now() - previousAttempt < qqAudioPrimeCooldownMs) continue;
     qqAudioPrimeAttempts.set(target.id, Date.now());
-    const result = await evaluate(target.webSocketDebuggerUrl, qqAudioPrimeExpression).catch((error) => ({
+    const result = await evaluate(target.webSocketDebuggerUrl, qqAudioPrimeExpression, "foreground").catch((error) => ({
       primed: false,
       reason: error?.message || "failed"
     }));
@@ -2764,8 +2766,10 @@ async function runNeteaseAudioFeatures(targets) {
 
 async function runProviderAudioGate(targets, active) {
   let applied = false;
+  // QQ's audio ownership must not starve behind earlier maintenance commands.
+  const priority = providerId === "qq_music" ? "foreground" : "maintenance";
   for (const target of targets.filter((item) => isProviderWebPage(item) && !isFriendlyErrorPage(item))) {
-    const status = await evaluate(target.webSocketDebuggerUrl, providerAudioGateExpression(active)).catch(() => null);
+    const status = await evaluate(target.webSocketDebuggerUrl, providerAudioGateExpression(active), priority).catch(() => null);
     applied ||= status?.active === active;
   }
   return applied;

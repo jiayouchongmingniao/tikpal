@@ -32,6 +32,27 @@ check_output="$(HOME="$TEST_HOME" TIKPAL_WEB_MODE_PROFILE_ROOT="$PROFILE_ROOT" "
 [[ -f "$PROVIDER_ROOT/deezer/Default/Cookies" && -f "$PROVIDER_ROOT/tidal/Default/Cookies" ]] ||
   fail_fixture "check changed provider state"
 
+single_clear_output="$(HOME="$TEST_HOME" TIKPAL_WEB_MODE_PROFILE_ROOT="$PROFILE_ROOT" "$RESET_SCRIPT" --clear-provider-profile deezer)"
+[[ "$single_clear_output" == *$'provider=deezer'* && "$single_clear_output" == *$'action=cleared-provider-profile'* ]] ||
+  fail_fixture "single clear did not report the scoped action"
+[[ ! -e "$PROVIDER_ROOT/deezer" && -f "$PROVIDER_ROOT/tidal/Default/Cookies" ]] ||
+  fail_fixture "single clear did not preserve the other provider profile"
+[[ -f "$PROFILE_ROOT/side-panel/Default/Preferences" ]] ||
+  fail_fixture "single clear touched the side-panel profile"
+
+mkdir -p "$PROVIDER_ROOT/deezer/Default"
+printf 'deezer-cookie' > "$PROVIDER_ROOT/deezer/Default/Cookies"
+mkdir -p "$FIXTURE_DIR/outside"
+ln -s "$FIXTURE_DIR/outside" "$PROVIDER_ROOT/spotify"
+if HOME="$TEST_HOME" TIKPAL_WEB_MODE_PROFILE_ROOT="$PROFILE_ROOT" "$RESET_SCRIPT" --clear-provider-profile spotify >/dev/null 2>&1; then
+  fail_fixture "single clear accepted a symlinked provider profile"
+fi
+rm "$PROVIDER_ROOT/spotify"
+
+if HOME="$TEST_HOME" TIKPAL_WEB_MODE_PROFILE_ROOT="$PROFILE_ROOT" "$RESET_SCRIPT" --clear-provider-profile not-a-provider >/dev/null 2>&1; then
+  fail_fixture "single clear accepted an unknown provider"
+fi
+
 clear_output="$(HOME="$TEST_HOME" TIKPAL_WEB_MODE_PROFILE_ROOT="$PROFILE_ROOT" "$RESET_SCRIPT" --clear-provider-profiles)"
 [[ "$clear_output" == *$'action=cleared-provider-profiles'* ]] ||
   fail_fixture "clear did not report the scoped action"

@@ -446,6 +446,73 @@ confirm `x11grab` appears in `ffmpeg -devices`. Any shell-driven FFmpeg capture
 that shares its caller's standard input must use `-nostdin`; otherwise FFmpeg
 can consume subsequent shell commands.
 
+## QQ reminder and audio recovery (2026-09-10)
+
+On `192.168.10.207`, QQ displayed the `QQ音乐提醒您` 30-second preview
+reminder while its automatic Cancel check was enabled. The CDP Manager
+rejected maintenance commands with `CDP maintenance throttled`; the guard
+silently skipped the check. Reminder cancellation now uses foreground
+priority. It still matches only a visible reminder dialog and its exact
+`取消` control, excluding the client-download prompt.
+
+A subsequent silent-playback incident showed `activeProvider=qq_music` in
+Explore, but `window.__tikpalProviderAudioGate.status().active=false` in the
+QQ page. The BT66 mixer was enabled at 32%, while its playback PCM was
+closed. Activating the page audio gate and running the existing QQ audio
+prime restored output, and the user confirmed audible music.
+
+QQ audio-gate activation and deactivation now use foreground priority.
+The QQ prime state check and prime execution use the same priority, avoiding
+starvation behind earlier maintenance commands. Priming retains its 12-second
+cooldown, stops when the player is paused or muted, and yields when QQ is
+inactive, opening, deactivating, or frozen. Other providers retain their
+existing audio-gate priority. This repairs the observed scheduling failure;
+it does not diagnose unrelated USB, network, or provider playback failures.
+
+Only the guard file was updated on the device, with a timestamped backup,
+and only the QQ guard process was restarted. Chromium and mixer settings
+were preserved. A controlled fault closed the prime context and set the QQ
+audio gate inactive; the guard restored `active=true` and a running prime
+context in 4535 ms. That measurement covers one recovery trial, not a
+universal latency bound. Local and deployed guard SHA-256 matched:
+`59a029c496c1c023ff6652f70129b5cb776cd9598b19803afd780e86f490e7b0`.
+
+The regression cases in `scripts/provider-audio-gate-fixture.mjs` cover
+maintenance throttling, activation/deactivation, prime cooldown, pause/mute
+cleanup, handoff/background exclusion, and unchanged non-QQ priority. The
+old guard fails the throttled activation case; the repaired guard passes.
+`scripts/kiosk-package-smoke.mjs` also checks foreground reminder cancellation.
+
+## Reset one Explore provider profile
+
+Settings offers **Reset web player login** for the current or most recently
+used provider, with a second tap to confirm. With no current/recent provider,
+the action is unavailable. Reset removes that provider's local Chromium
+profile, including its login cookies and cache; the user must sign in again.
+It does not delete the remote music-service account or other provider profiles.
+
+The action API accepts `type: "reset_provider_profile"` with the provider ID
+at `POST /api/v1/web-mode/actions`. The server requires the requested provider
+to match the current/recent provider and closes an active Explore session
+through the ordinary close path before reset. The launcher command
+`tikpal-web-mode.sh reset-profile <provider>` serializes reset with the
+provider launch lock, stops its guard/browser, removes its profile, and
+invalidates the warm-pool marker. The deletion helper accepts only known
+provider IDs and rejects a symlinked provider profile.
+
+Profile reset is an explicit user action, not automatic recovery for QQ
+silence or reminder dialogs. API, lifecycle, and temporary-directory reset
+fixtures cover the reset flow; the QQ guard field trial above does not imply
+that this Settings flow was deployed or physically accepted on the device.
+
+Local validation for this change set: production build (including TypeScript),
+provider audio-gate fixture, new-device provider-reset fixture, kiosk package
+smoke, and `git diff --check` passed. The complete API smoke stopped at
+`AirPlay helper should keep MPRIS as playback truth`; the complete Explore
+lifecycle smoke stopped at `prepare-entry did not capture opening state`.
+Both failures occurred before their new profile-reset cases, so those full
+suites and the reset API acceptance must not be reported as passed.
+
 ## Rollback boundary
 
 Keep the profile changes independent. If field observation identifies a

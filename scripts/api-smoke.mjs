@@ -5541,6 +5541,30 @@ exit 0
     });
     assert(invalidKeyboardForceAction.response.status === 400, "web mode keyboard should reject non-boolean force values");
 
+    const missingProfileResetProvider = await request("/api/v1/web-mode/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "reset_provider_profile" })
+    });
+    assert(missingProfileResetProvider.response.status === 400, "profile reset should require an explicit provider");
+    const nonCurrentProfileReset = await request("/api/v1/web-mode/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "reset_provider_profile", provider: "spotify" })
+    });
+    assert(nonCurrentProfileReset.response.status === 400, "profile reset should reject a provider other than the visible one");
+    await writeFile(fakeWebModeLogPath, "");
+    const resetCurrentProfile = await request("/api/v1/web-mode/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "reset_provider_profile", provider: "youtube_music" })
+    });
+    assert(resetCurrentProfile.response.ok, "profile reset should accept the current provider");
+    assert(resetCurrentProfile.body.activeProvider === null, "profile reset should close the visible provider before removing its profile");
+    assert(resetCurrentProfile.body.lastProvider === "youtube_music", "profile reset should retain its target as the recent provider");
+    const resetProfileLog = await readFile(fakeWebModeLogPath, "utf8");
+    assert(
+      resetProfileLog.includes("close\n") && resetProfileLog.includes("reset-profile\tyoutube_music\n"),
+      `profile reset should use the regular close handoff then the scoped shell action, got ${JSON.stringify(resetProfileLog)}`
+    );
+
     const closedWebMode = await request("/api/v1/web-mode/actions", {
       method: "POST",
       body: JSON.stringify({ type: "close" })
@@ -5764,6 +5788,7 @@ exit 0
     assert(openapi.body.openapi === "3.0.3", "OpenAPI JSON should expose OpenAPI 3.0.3");
     assert(openapi.body.paths?.["/remote/actions"]?.post, "OpenAPI JSON should describe remote actions");
     assert(JSON.stringify(openapi.body.components?.schemas?.RemoteActionRequest).includes("explore.proxy_set"), "OpenAPI JSON should describe remote Explore actions");
+    assert(JSON.stringify(openapi.body.components?.schemas?.WebModeActionRequest).includes("reset_provider_profile"), "OpenAPI JSON should describe the scoped provider profile reset action");
     const swagger = await request("/api/v1/swagger.json");
     assert(swagger.response.ok, "Swagger JSON should return 200");
     assert(JSON.stringify(swagger.body.paths) === JSON.stringify(openapi.body.paths), "swagger.json should mirror openapi.json paths");

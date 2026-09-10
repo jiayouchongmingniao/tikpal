@@ -10,16 +10,36 @@ ENV_FILE="${TIKPAL_KIOSK_ENV_FILE:-$APP_DIR/.env.kiosk}"
 
 usage() {
   cat <<'USAGE'
-Usage: tikpal-new-device-provider-reset.sh [check|--clear-provider-profiles]
+Usage: tikpal-new-device-provider-reset.sh [check|--clear-provider-profiles|--clear-provider-profile PROVIDER]
 
 check                       Report the Tikpal provider-profile count only.
 --clear-provider-profiles   Delete provider browser profiles for a new-device release.
+--clear-provider-profile    Delete one provider browser profile only.
 USAGE
 }
 
 mode="${1:-check}"
+provider_id="${2:-}"
 case "$mode" in
   check|--clear-provider-profiles)
+    [[ $# -eq 1 || $# -eq 0 ]] || {
+      usage >&2
+      exit 2
+    }
+    ;;
+  --clear-provider-profile)
+    case "$provider_id" in
+      suno|spotify|youtube_music|apple_music|tidal|qobuz|deezer|amazon_music|qq_music|netease_music)
+        [[ $# -eq 2 ]] || {
+          usage >&2
+          exit 2
+        }
+        ;;
+      *)
+        printf 'Unknown provider profile: %s\n' "$provider_id" >&2
+        exit 2
+        ;;
+    esac
     ;;
   -h|--help)
     usage
@@ -83,6 +103,18 @@ fi
 printf 'profileRoot=%s\nproviderProfiles=%s\n' "$profile_root" "$profile_count"
 if [[ "$mode" == "check" ]]; then
   printf 'action=none\n'
+  exit 0
+fi
+
+if [[ "$mode" == "--clear-provider-profile" ]]; then
+  provider_profile="$provider_root/$provider_id"
+  [[ ! -L "$provider_profile" ]] || {
+    printf 'Refusing symlinked provider profile: %s\n' "$provider_profile" >&2
+    exit 1
+  }
+  rm -rf -- "$provider_profile"
+  printf 'provider=%s\n' "$provider_id"
+  printf 'action=cleared-provider-profile\n'
   exit 0
 fi
 

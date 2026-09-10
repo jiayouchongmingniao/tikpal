@@ -421,6 +421,8 @@ export async function sendWebModeAction(action: WebModeActionRequest): Promise<W
     ? 120000
     : action.type === "close"
       ? 30000
+      : action.type === "reset_provider_profile"
+        ? 60000
       : DEFAULT_POST_TIMEOUT_MS;
   const response = await fetchWithTimeout(`${API_ROOT}/web-mode/actions`, {
     method: "POST",

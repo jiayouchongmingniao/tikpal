@@ -128,7 +128,7 @@ export interface WebModeState {
 }
 
 export interface WebModeActionRequest {
-  type: "open" | "close" | "keyboard" | "proxy" | "provider_text_scale";
+  type: "open" | "close" | "reset_provider_profile" | "keyboard" | "proxy" | "provider_text_scale";
   provider?: WebModeProviderId;
   openRequestId?: string;
   enabled?: boolean;

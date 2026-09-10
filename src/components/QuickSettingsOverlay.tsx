@@ -5,7 +5,7 @@ import { languageOptions, useI18n } from "../i18n";
 import { getSourceDisplayStatus, getSourceDisplayStatusLabel } from "../sourceStatus";
 import type { TikpalDataStatus } from "../hooks/useTikpalState";
 import { useOverlayReturnGesture } from "../hooks/useOverlayReturnGesture";
-import type { AudioOutputCustomSettingId, AudioOutputDiagnostics, AudioOutputProfile, AudioState, DisplaySleepStyle, FontTheme, LyricsFontSize, MultiroomAudioState, MultiroomEcosystemId, NasDiscoverCandidate, NasSourceInput, NasSourcesResponse, NightScheduleState, PlaybackSummary, RoomExperienceActionRequest, RoomExperienceState, RoomMode, RuntimeState, SurfaceTheme, SystemActionType, SystemState, UiLocale, UiPreferences, WebModeOwnershipCheck, WebModeState } from "../types";
+import type { AudioOutputCustomSettingId, AudioOutputDiagnostics, AudioOutputProfile, AudioState, DisplaySleepStyle, FontTheme, LyricsFontSize, MultiroomAudioState, MultiroomEcosystemId, NasDiscoverCandidate, NasSourceInput, NasSourcesResponse, NightScheduleState, PlaybackSummary, RoomExperienceActionRequest, RoomExperienceState, RoomMode, RuntimeState, SurfaceTheme, SystemActionType, SystemState, UiLocale, UiPreferences, WebModeOwnershipCheck, WebModeProviderId, WebModeState } from "../types";
 
 interface QuickSettingsOverlayProps {
   active: boolean;
@@ -34,7 +34,7 @@ interface QuickSettingsOverlayProps {
 }
 
 type CardTone = "cyan" | "gold" | "neutral" | "warn" | "danger";
-type ActionableCardKey = "library_scan" | "wizard" | "reboot" | "shutdown";
+type ActionableCardKey = "library_scan" | "wizard" | "reset_provider_profile" | "reboot" | "shutdown";
 type SettingsSectionKey = "output" | "library" | "network" | "system";
 type SettingsDetailView = "appearance" | "audioDiagnostics" | "audioOutput" | "display" | "font" | "language" | "lyrics" | "multiroom" | "nas" | "night" | "webMode" | null;
 type LibraryStorageCounts = {
@@ -173,6 +173,8 @@ interface ActionCard extends BaseCard {
   actionType: ActionableCardKey;
   buttonLabel: string;
   confirmLabel?: string;
+  disabled?: boolean;
+  provider?: WebModeProviderId;
 }
 
 interface FontCard extends BaseCard {
@@ -465,6 +467,7 @@ export function QuickSettingsOverlay({
   const [actionError, setActionError] = useState<Record<ActionableCardKey, string | null>>({
     library_scan: null,
     wizard: null,
+    reset_provider_profile: null,
     reboot: null,
     shutdown: null
   });
@@ -522,6 +525,7 @@ export function QuickSettingsOverlay({
     setActionError({
       library_scan: null,
       wizard: null,
+      reset_provider_profile: null,
       reboot: null,
       shutdown: null
     });
@@ -848,6 +852,10 @@ export function QuickSettingsOverlay({
     : scannedLibraryTrackCount > 0
       ? t("settings.tracks", { count: scannedLibraryTrackCount.toLocaleString() })
       : t("settings.tracks", { count: system.library.trackCount.toLocaleString() });
+  const profileResetProvider = webModeState?.activeProvider ?? webModeState?.lastProvider ?? null;
+  const profileResetProviderLabel = profileResetProvider
+    ? webModeState?.providers.find((provider) => provider.id === profileResetProvider)?.label ?? profileResetProvider
+    : null;
 
   const settingsCards = useMemo<SettingsCard[]>(
     () => [
@@ -1011,6 +1019,25 @@ export function QuickSettingsOverlay({
         buttonLabel: t("settings.openWizard")
       },
       {
+        kind: "action",
+        key: "reset-provider-profile",
+        section: "system",
+        icon: Trash2,
+        title: t("settings.resetProviderProfile"),
+        value: profileResetProviderLabel ?? t("settings.resetProviderProfileUnavailable"),
+        meta: profileResetProviderLabel
+          ? t("settings.resetProviderProfileMeta", { provider: profileResetProviderLabel })
+          : t("settings.resetProviderProfileUnavailableMeta"),
+        tone: "danger",
+        actionType: "reset_provider_profile",
+        buttonLabel: profileResetProviderLabel ? t("settings.resetProviderProfileAction") : t("common.unavailable"),
+        confirmLabel: profileResetProviderLabel
+          ? t("settings.tapAgainResetProviderProfile", { provider: profileResetProviderLabel })
+          : undefined,
+        disabled: !profileResetProvider,
+        provider: profileResetProvider ?? undefined
+      },
+      {
         kind: "webMode",
         key: "web-mode",
         section: "network",
@@ -1047,7 +1074,7 @@ export function QuickSettingsOverlay({
         confirmLabel: t("settings.tapAgainPowerOff")
       }
     ],
-    [activeMultiroom, displayedAudioOutputProfile, enabledMultiroomCount, fontTheme, libraryScanMeta, libraryScanValue, localTrackCount, lyricsFontSize, lyricsVisible, multiroomMeta, multiroomNeedsSetup, multiroomValue, nasCardMeta, nasCardTone, nasCardValue, preferences.displaySleepEnabled, preferences.displaySleepMinutes, preferences.displaySleepStyle, preferences.locale, roomExperience.nightSchedule.active, roomExperience.nightSchedule.enabled, roomExperience.nightSchedule.end, roomExperience.nightSchedule.start, roomExperience.nightSchedule.timeZone, status.error, status.source, surfaceTheme, system.cpuTemp, system.display.brightnessPercent, system.display.controllable, system.library.scanning, system.network.ip, system.network.label, system.network.speed, system.uptime, t, usbCardMeta, usbCardValue, usbTrackCount, webModeProxyEnabled, webModeProxyUrl]
+    [activeMultiroom, displayedAudioOutputProfile, enabledMultiroomCount, fontTheme, libraryScanMeta, libraryScanValue, localTrackCount, lyricsFontSize, lyricsVisible, multiroomMeta, multiroomNeedsSetup, multiroomValue, nasCardMeta, nasCardTone, nasCardValue, preferences.displaySleepEnabled, preferences.displaySleepMinutes, preferences.displaySleepStyle, preferences.locale, profileResetProvider, profileResetProviderLabel, roomExperience.nightSchedule.active, roomExperience.nightSchedule.enabled, roomExperience.nightSchedule.end, roomExperience.nightSchedule.start, roomExperience.nightSchedule.timeZone, status.error, status.source, surfaceTheme, system.cpuTemp, system.display.brightnessPercent, system.display.controllable, system.library.scanning, system.network.ip, system.network.label, system.network.speed, system.uptime, t, usbCardMeta, usbCardValue, usbTrackCount, webModeProxyEnabled, webModeProxyUrl]
   );
 
   const visibleCards = useMemo(() => {
@@ -1234,7 +1261,7 @@ export function QuickSettingsOverlay({
       return;
     }
 
-    if (card.actionType === "reboot" || card.actionType === "shutdown") {
+    if (card.actionType === "reboot" || card.actionType === "shutdown" || card.actionType === "reset_provider_profile") {
       if (confirmAction !== card.actionType) {
         setConfirmAction(card.actionType);
         return;
@@ -1245,7 +1272,13 @@ export function QuickSettingsOverlay({
     setPendingAction(card.actionType);
 
     try {
-      await onSystemAction(card.actionType);
+      if (card.actionType === "reset_provider_profile") {
+        if (!card.provider) return;
+        const nextState = await sendWebModeAction({ type: "reset_provider_profile", provider: card.provider });
+        setWebModeState(nextState);
+      } else {
+        await onSystemAction(card.actionType);
+      }
       if (card.actionType === "library_scan") {
         void refreshLibraryStorageCounts().catch(() => undefined);
       }
@@ -3270,7 +3303,7 @@ export function QuickSettingsOverlay({
               const isConfirming = confirmAction === card.actionType;
               const isPending = pendingAction === card.actionType;
               const error = actionError[card.actionType];
-              const disabled = status.pending || pendingAction !== null;
+              const disabled = card.disabled || status.pending || pendingAction !== null;
 
               return (
                 <button

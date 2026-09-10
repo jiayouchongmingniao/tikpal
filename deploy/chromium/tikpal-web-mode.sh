@@ -4920,6 +4920,39 @@ close_provider_profile() {
   cleanup_stale_profile_singletons "$provider_profile"
 }
 
+reset_provider_profile_locked() {
+  local provider="$1"
+  local provider_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/$provider"
+
+  stop_provider_guard "$provider"
+  close_provider_profile "$provider_profile"
+  TIKPAL_KIOSK_ENV_FILE="$ENV_FILE" \
+    TIKPAL_WEB_MODE_PROFILE_ROOT="$TIKPAL_WEB_MODE_PROFILE_ROOT" \
+    "$SCRIPT_DIR/tikpal-new-device-provider-reset.sh" --clear-provider-profile "$provider"
+  write_runtime_provider_status "$provider" "closed"
+  write_runtime_prewarm_complete 0
+  rm -f "$(pool_warm_stamp_file)"
+  sync_runtime_provider_pool_process_statuses ""
+  log "reset provider profile: $provider"
+}
+
+reset_provider_profile() {
+  local provider="$1"
+  local launch_lock="$TIKPAL_WEB_MODE_PROFILE_ROOT/provider-$provider.launch.lock"
+  local lock_timeout="$TIKPAL_WEB_MODE_PROVIDER_WINDOW_TIMEOUT_SECONDS"
+
+  provider_ids | grep -Fx -- "$provider" >/dev/null || fail "Unknown provider: $provider"
+  if command -v flock >/dev/null 2>&1; then
+    mkdir -p "$TIKPAL_WEB_MODE_PROFILE_ROOT"
+    (
+      flock -x -w "$lock_timeout" 8 || fail "Provider profile reset is busy: $provider"
+      TIKPAL_WEB_MODE_PROVIDER_LAUNCH_LOCKED=1 reset_provider_profile_locked "$provider"
+    ) 8>"$launch_lock"
+    return
+  fi
+  reset_provider_profile_locked "$provider"
+}
+
 close_other_provider_profiles() {
   local keep_profile="$1"
   local profile
@@ -9369,6 +9402,11 @@ case "$web_mode_action" in
     with_web_mode_lock close_web_mode_full
     log "closed full"
     ;;
+  reset-profile)
+    provider_id="${2:-}"
+    provider_ids | grep -Fx -- "$provider_id" >/dev/null || fail "Unknown provider: $provider_id"
+    with_web_mode_lock reset_provider_profile "$provider_id"
+    ;;
   cleanup-warm)
     cleanup_ttl="$TIKPAL_WEB_MODE_CLOSE_WARM_TTL_SECONDS"
     [[ "$cleanup_ttl" =~ ^[0-9]+([.][0-9]+)?$ ]] || cleanup_ttl=45
@@ -9454,6 +9492,6 @@ case "$web_mode_action" in
     with_web_mode_lock apply_proxy_settings "${2:-spotify}"
     ;;
   *)
-    fail "Usage: $0 open <provider>|prepare-entry <provider>|park-entry|close|close-full|cleanup-warm|warm-pool|prewarm <provider>|reconcile <provider> [started-ms]|sync-status|refresh-guards|guard-state|reload-guard [provider]|stop-owned-guard <pid> <starttime>|restore-helper-owner|keyboard [show|hide|toggle]|proxy <provider>|--check"
+    fail "Usage: $0 open <provider>|prepare-entry <provider>|park-entry|close|close-full|reset-profile <provider>|cleanup-warm|warm-pool|prewarm <provider>|reconcile <provider> [started-ms]|sync-status|refresh-guards|guard-state|reload-guard [provider]|stop-owned-guard <pid> <starttime>|restore-helper-owner|keyboard [show|hide|toggle]|proxy <provider>|--check"
     ;;
 esac

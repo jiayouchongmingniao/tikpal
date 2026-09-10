@@ -27,7 +27,7 @@ const PLAYBACK_MODES = ["sequence", "repeat_one", "shuffle"];
 const SOURCE_TARGETS = ["mpd", "radio", "spotify", "bluetooth", "airplay", "upnp"];
 const HIFI_EQ_PRESETS = ["flat", "warm", "vocal"];
 const WEB_MODE_PROVIDERS = ["suno", "spotify", "youtube_music", "apple_music", "tidal", "qobuz", "deezer", "amazon_music", "qq_music", "netease_music"];
-const WEB_MODE_ACTION_TYPES = ["open", "close", "keyboard", "proxy", "provider_text_scale"];
+const WEB_MODE_ACTION_TYPES = ["open", "close", "reset_provider_profile", "keyboard", "proxy", "provider_text_scale"];
 const MULTIROOM_ECOSYSTEMS = ["roon", "lyrion", "tikpal", "music_assistant"];
 
 function ref(name) {

@@ -14725,6 +14725,7 @@ function formatWebModeCommandError(error, action, providerId = "") {
     return firstLine.slice(0, 160) || `${webModeProviderLabel(providerId)} did not open`;
   }
   if (action === "close") return firstLine.slice(0, 160) || "Explore close failed";
+  if (action === "reset-profile") return firstLine.slice(0, 160) || `${webModeProviderLabel(providerId)} profile reset failed`;
   if (action === "keyboard") return firstLine.slice(0, 160) || "Keyboard update failed";
   if (action === "proxy") {
     if (/needs proxy(?: on)?/i.test(raw)) {
@@ -14887,6 +14888,49 @@ async function applyWebModeAction(action, { receivedMonotonicMs = monotonicNowMs
     return await buildWebModeState();
   }
 
+  if (type === "reset_provider_profile") {
+    const providerId = normalizeWebModeProviderId(action?.provider, null);
+    if (!providerId) {
+      throw new Error("Explore profile reset requires a provider");
+    }
+    const runtimeState = await readWebModeRuntimeState();
+    const resetTarget = runtimeState.activeProvider ?? runtimeState.lastProvider;
+    if (!resetTarget) {
+      throw new Error("Explore profile reset requires a current or recent provider");
+    }
+    if (providerId !== resetTarget) {
+      throw new Error("Explore profile reset only supports the current or recent provider");
+    }
+
+    // Settings normally reaches this action after Explore is already closed.
+    // Keep the active-path safe too: close through the ordinary handoff so
+    // playback is restored before removing the visible provider's profile.
+    if (runtimeState.activeProvider || runtimeState.openingProvider) {
+      await applyWebModeAction({ type: "close" });
+    }
+
+    try {
+      await runWebModeCommand("reset-profile", providerId, {
+        TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS: "10"
+      });
+      await writeWebModeRuntimeState({
+        activeProvider: null,
+        openingProvider: null,
+        openRequestId: null,
+        openStartedAt: null,
+        openXSessionGeneration: null,
+        lastProvider: providerId,
+        lastError: null,
+        closeRequestId: null
+      });
+    } catch (error) {
+      const message = formatWebModeCommandError(error, "reset-profile", providerId);
+      await writeWebModeRuntimeState({ lastError: message });
+      throw new Error(message);
+    }
+    return await buildWebModeState();
+  }
+
   if (type === "keyboard") {
     if (action?.enabled !== undefined && typeof action.enabled !== "boolean") {
       throw new Error("Explore keyboard enabled value must be boolean");
@@ -14978,7 +15022,7 @@ async function applyWebModeAction(action, { receivedMonotonicMs = monotonicNowMs
   }
 
   if (type !== "open") {
-    throw new Error("Explore action type must be open, close, keyboard, proxy, or provider_text_scale");
+    throw new Error("Explore action type must be open, close, reset_provider_profile, keyboard, proxy, or provider_text_scale");
   }
 
   const previousRuntimeState = await readWebModeRuntimeState();

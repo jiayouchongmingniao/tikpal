@@ -458,6 +458,48 @@ async function testTimeoutClearsOpeningState() {
   }
 }
 
+async function testScopedProviderProfileReset() {
+  const api = await startApi("success");
+  try {
+    const missingProvider = await postJson(api.port, "/api/v1/web-mode/actions", { type: "reset_provider_profile" });
+    assert.equal(missingProvider.status, 400, "profile reset should require an explicit provider");
+
+    const noRecentProvider = await postJson(api.port, "/api/v1/web-mode/actions", { type: "reset_provider_profile", provider: "spotify" });
+    assert.equal(noRecentProvider.status, 400, "profile reset should require a current or recent provider");
+
+    writeFileSync(api.paths.state, `${JSON.stringify({
+      activeProvider: "spotify",
+      openingProvider: null,
+      openRequestId: null,
+      openStartedAt: null,
+      openXSessionGeneration: null,
+      lastProvider: "spotify",
+      residentProviders: {
+        spotify: { status: "active", activity: "active", lastError: null, updatedAt: null },
+        tidal: { status: "ready", activity: "parked", lastError: null, updatedAt: null }
+      },
+      prewarmComplete: true,
+      lastError: null,
+      closeRequestId: null
+    })}\n`);
+    const nonCurrentProvider = await postJson(api.port, "/api/v1/web-mode/actions", { type: "reset_provider_profile", provider: "tidal" });
+    assert.equal(nonCurrentProvider.status, 400, "profile reset should reject a provider other than the visible one");
+
+    const reset = await postJson(api.port, "/api/v1/web-mode/actions", { type: "reset_provider_profile", provider: "spotify" });
+    assert.equal(reset.status, 200, "profile reset should accept the current provider");
+    assert.equal(reset.body.activeProvider, null, "profile reset should close the active provider before clearing it");
+    assert.equal(reset.body.lastProvider, "spotify", "profile reset should retain its target as the recent provider");
+    const commands = readCommands(api.paths).filter((entry) => entry.action === "close" || entry.action === "reset-profile");
+    assert.deepEqual(
+      commands.map((entry) => [entry.action, entry.provider]),
+      [["close", ""], ["reset-profile", "spotify"]],
+      "profile reset should use the normal close handoff before the scoped shell action"
+    );
+  } finally {
+    await api.stop();
+  }
+}
+
 await testVeilOwnership();
 testCloseVeilMessageContract();
 await testInitialOpeningAndWatchdogBypass();
@@ -468,4 +510,5 @@ await testStaleSessionStopsFallback();
 await testSupersededRequestCannotOverwriteNewRequest();
 await testOldGenerationCannotClearReusedRequestIdentity();
 await testTimeoutClearsOpeningState();
+await testScopedProviderProfileReset();
 console.log("Explore open lifecycle smoke passed");
