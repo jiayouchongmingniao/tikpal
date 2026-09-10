@@ -18,11 +18,12 @@ ACTION="${1:-check}"
 : "${TIKPAL_AUDIO_BROWSER_PROBE_TIMEOUT_SECONDS:=2}"
 : "${TIKPAL_AUDIO_BROWSER_PROBE_FORMAT:=S16_LE}"
 : "${TIKPAL_AUDIO_BROWSER_PROBE_FORMATS:=$TIKPAL_AUDIO_BROWSER_PROBE_FORMAT}"
-: "${TIKPAL_AUDIO_BROWSER_SHARED_FORMATS:=S24_3LE,S32_LE}"
+: "${TIKPAL_AUDIO_BROWSER_SHARED_FORMATS:=S32_LE,S24_3LE,S16_LE}"
 : "${TIKPAL_AUDIO_BROWSER_SHARED_PCM:=tikpal_browser_output}"
 : "${TIKPAL_AUDIO_BROWSER_SHARED_IPC_KEY:=742110}"
 : "${TIKPAL_AUDIO_BROWSER_PROBE_RATE:=48000}"
 : "${TIKPAL_AUDIO_BROWSER_PROBE_CHANNELS:=2}"
+: "${TIKPAL_AUDIO_PROC_ASOUND_ROOT:=/proc/asound}"
 : "${TIKPAL_AUDIO_MIXER_CONTROLS:=PCM,Master,Digital,Speaker,Headphone,Line Out}"
 : "${TIKPAL_AUDIOOUT_CONFIG:=/etc/alsa/conf.d/_audioout.conf}"
 : "${TIKPAL_BROWSER_OUTPUT_CONFIG:=/etc/alsa/conf.d/99-tikpal-browser-output.conf}"
@@ -280,56 +281,11 @@ alsa_rate_converter_line() {
   printf 'rate_converter "%s"\n' "$converter"
 }
 
-sample_bytes_for_format() {
-  case "$(printf '%s' "${1:-}" | tr '[:lower:]' '[:upper:]')" in
-    U8|S8)
-      printf '1\n'
-      ;;
-    S24_3LE|S24_3BE)
-      printf '3\n'
-      ;;
-    S32_LE|S32_BE|FLOAT_LE|FLOAT_BE)
-      printf '4\n'
-      ;;
-    *)
-      printf '2\n'
-      ;;
-  esac
-}
-
-configured_browser_probe_formats() {
-  printf '%s\n' "$TIKPAL_AUDIO_BROWSER_PROBE_FORMATS" | tr ',' '\n' | while IFS= read -r format; do
-    format="$(trim "$format")"
-    [[ -n "$format" ]] && printf '%s\n' "$format"
-  done | awk '!seen[$0]++'
-}
-
 configured_browser_shared_formats() {
   printf '%s\n' "$TIKPAL_AUDIO_BROWSER_SHARED_FORMATS" | tr ',' '\n' | while IFS= read -r format; do
     format="$(trim "$format")"
     [[ -n "$format" ]] && printf '%s\n' "$format"
   done | awk '!seen[$0]++'
-}
-
-probe_browser_pcm_format() {
-  local pcm="$1"
-  local format="$2"
-  local rate="$TIKPAL_AUDIO_BROWSER_PROBE_RATE"
-  local channels="$TIKPAL_AUDIO_BROWSER_PROBE_CHANNELS"
-  local sample_bytes
-  local bytes
-  is_enabled "$TIKPAL_AUDIO_BROWSER_PROBE" || return 0
-  command -v aplay >/dev/null 2>&1 || return 1
-  sample_bytes="$(sample_bytes_for_format "$format")"
-  bytes=$((rate * channels * sample_bytes / 20))
-  if command -v timeout >/dev/null 2>&1; then
-    dd if=/dev/zero bs="$bytes" count=1 2>/dev/null \
-      | timeout -k 1s "${TIKPAL_AUDIO_BROWSER_PROBE_TIMEOUT_SECONDS}s" \
-          aplay -q -D "$pcm" -t raw -f "$format" -r "$rate" -c "$channels" >/dev/null 2>&1
-  else
-    dd if=/dev/zero bs="$bytes" count=1 2>/dev/null \
-      | aplay -q -D "$pcm" -t raw -f "$format" -r "$rate" -c "$channels" >/dev/null 2>&1
-  fi
 }
 
 card_stream_supports_playback_format() {
@@ -342,16 +298,15 @@ card_stream_supports_playback_format() {
     /^Capture:/ { in_playback = 0; next }
     in_playback && $1 == "Format:" && $2 == wanted { found = 1 }
     END { exit(found ? 0 : 1) }
-  ' /proc/asound/card"${card_index}"/stream* >/dev/null 2>&1
+  ' "$TIKPAL_AUDIO_PROC_ASOUND_ROOT"/card"${card_index}"/stream* >/dev/null 2>&1
 }
 
 selected_browser_shared_format() {
   local selected="$1"
-  local dmix_pcm="$2"
   local format
   while IFS= read -r format; do
     [[ -n "$format" ]] || continue
-    if card_stream_supports_playback_format "$selected" "$format" || probe_browser_pcm_format "$dmix_pcm" "$format"; then
+    if card_stream_supports_playback_format "$selected" "$format"; then
       printf '%s\n' "$format"
       return 0
     fi
@@ -361,26 +316,17 @@ selected_browser_shared_format() {
 
 selected_browser_pcm() {
   local selected="$1"
-  local card_id device_id dmix_pcm plughw_pcm format formats_label shared_format
+  local card_id device_id plughw_pcm formats_label shared_format
   card_id="$(selected_field "$selected" 2)"
   device_id="$(selected_field "$selected" 3)"
-  dmix_pcm="dmix:CARD=$card_id,DEV=$device_id"
   plughw_pcm="plughw:CARD=$card_id,DEV=$device_id"
-  formats_label="$(configured_browser_probe_formats | paste -sd, -)"
-  while IFS= read -r format; do
-    [[ -n "$format" ]] || continue
-    if probe_browser_pcm_format "$dmix_pcm" "$format"; then
-      printf '%s\n' "$dmix_pcm"
-      return 0
-    fi
-  done < <(configured_browser_probe_formats)
-  shared_format="$(selected_browser_shared_format "$selected" "$dmix_pcm" || true)"
+  formats_label="$(configured_browser_shared_formats | paste -sd, -)"
+  shared_format="$(selected_browser_shared_format "$selected" || true)"
   if [[ -n "$shared_format" ]]; then
-    log "WARN: $dmix_pcm did not accept ${formats_label}/${TIKPAL_AUDIO_BROWSER_PROBE_RATE}Hz/${TIKPAL_AUDIO_BROWSER_PROBE_CHANNELS}ch; using shared $TIKPAL_AUDIO_BROWSER_SHARED_PCM with $shared_format conversion"
     printf '%s\n' "$TIKPAL_AUDIO_BROWSER_SHARED_PCM"
     return 0
   fi
-  log "WARN: $dmix_pcm did not accept ${formats_label}/${TIKPAL_AUDIO_BROWSER_PROBE_RATE}Hz/${TIKPAL_AUDIO_BROWSER_PROBE_CHANNELS}ch and no shared conversion format was found; using $plughw_pcm"
+  log "WARN: selected card $card_id does not advertise a stable shared browser format (${formats_label:-none}); using $plughw_pcm"
   printf '%s\n' "$plughw_pcm"
 }
 
@@ -495,7 +441,10 @@ write_browser_output_config() {
   local selected="$1"
   local format="$2"
   local card_id device_id rate_converter_line
-  [[ -n "$format" ]] || return 0
+  if [[ -z "$format" ]]; then
+    remove_managed_browser_output_config
+    return 0
+  fi
   card_id="$(selected_field "$selected" 2)"
   device_id="$(selected_field "$selected" 3)"
   printf '%s\n' "$TIKPAL_AUDIO_BROWSER_SHARED_PCM" | grep -Eq '^[A-Za-z0-9_-]+$' || fail "invalid shared browser PCM '$TIKPAL_AUDIO_BROWSER_SHARED_PCM'"
@@ -506,6 +455,9 @@ write_browser_output_config() {
   write_root_file "$TIKPAL_BROWSER_OUTPUT_CONFIG" <<EOF
 #########################################
 # This file is managed by Tikpal for shared browser audio
+# Tikpal browser source card: $card_id
+# Tikpal browser source device: $device_id
+# Tikpal browser source format: $format
 #########################################
 pcm.$TIKPAL_AUDIO_BROWSER_SHARED_PCM {
 type plug
@@ -525,6 +477,15 @@ buffer_size 4096
 }
 }
 EOF
+}
+
+remove_managed_browser_output_config() {
+  [[ -f "$TIKPAL_BROWSER_OUTPUT_CONFIG" ]] || return 0
+  if ! grep -Fqx '# This file is managed by Tikpal for shared browser audio' "$TIKPAL_BROWSER_OUTPUT_CONFIG"; then
+    log "WARN: browser output config is not Tikpal-managed; leaving $TIKPAL_BROWSER_OUTPUT_CONFIG unchanged"
+    return 0
+  fi
+  run_as_root rm -f -- "$TIKPAL_BROWSER_OUTPUT_CONFIG"
 }
 
 enable_loopback_config() {
@@ -591,7 +552,7 @@ check_audio() {
   selected="$(select_card)"
   audioout_pcm="$(selected_audioout_pcm "$selected")"
   browser_pcm="$(selected_browser_pcm "$selected")"
-  browser_shared_format="$(selected_browser_shared_format "$selected" "dmix:CARD=$(selected_field "$selected" 2),DEV=$(selected_field "$selected" 3)" || true)"
+  browser_shared_format="$(selected_browser_shared_format "$selected" || true)"
   mixer_control="$(selected_mixer_control "$selected" || true)"
   if [[ -n "$mixer_control" ]]; then
     volume_strategy="alsa:$mixer_control"
@@ -632,7 +593,7 @@ apply_audio() {
 
   selected="$(select_card)"
   audioout_pcm="$(selected_audioout_pcm "$selected")"
-  browser_shared_format="$(selected_browser_shared_format "$selected" "dmix:CARD=$(selected_field "$selected" 2),DEV=$(selected_field "$selected" 3)" || true)"
+  browser_shared_format="$(selected_browser_shared_format "$selected" || true)"
   mixer_control="$(selected_mixer_control "$selected" || true)"
   update_moode_db "$selected" "$mixer_control"
   write_browser_output_config "$selected" "$browser_shared_format"

@@ -121,6 +121,22 @@ The launcher log and the QQ Chromium command line must show the same resolved
 `--alsa-output-device=` value. A resolved `default` is a configuration error,
 not a valid fallback for browser audio on a Loopback-enabled kiosk.
 
+For a DAC that advertises a stable USB playback format, the adapter generates
+one `tikpal_browser_output` PCM during boot and gives that same name to the
+kiosk and every Explore provider. It selects the highest advertised format in
+`S32_LE`, `S24_3LE`, `S16_LE` order; BT66 therefore uses `S16_LE` at 48 kHz.
+The generated file records its card ID, device, and format, replacing a
+Tikpal-managed file for a previous DAC. If a DAC does not advertise one of
+those formats, browsers use a direct `plughw` fallback and the old managed
+browser PCM is removed rather than reused.
+
+This is intentionally a boot-time decision. Replacing a USB DAC while the
+kiosk is running does not restart Chromium or repoint active pages; restart
+the host before accepting browser playback on the new device. After startup,
+check that every Chromium command line uses
+`--alsa-output-device=tikpal_browser_output` before doing a provider listening
+test.
+
 ### BT66 reconnect recovery
 
 The BT66 DAC must be electrically present before changing any audio routing.

@@ -509,7 +509,9 @@ exit 1
 
   const audioAdaptTempDir = mkdtempSync(path.join(tmpdir(), "tikpal-audio-adapt-"));
   const audioAdaptBinDir = path.join(audioAdaptTempDir, "bin");
+  const audioAdaptProcDir = path.join(audioAdaptTempDir, "proc-asound");
   mkdirSync(audioAdaptBinDir);
+  mkdirSync(audioAdaptProcDir);
   writeFileSync(path.join(audioAdaptBinDir, "aplay"), `#!/bin/sh
 if [ "$1" = "-l" ]; then
   printf '%s\\n' "$TIKPAL_FAKE_APLAY_CARDS"
@@ -573,6 +575,7 @@ eval "exec /usr/bin/install $filtered"
       ...extraEnv,
       PATH: `${audioAdaptBinDir}:${process.env.PATH}`,
       TIKPAL_FAKE_APLAY_CARDS: cards,
+      TIKPAL_AUDIO_PROC_ASOUND_ROOT: audioAdaptProcDir,
       TIKPAL_AUDIO_BROWSER_PROBE_TIMEOUT_SECONDS: "1"
     },
     encoding: "utf8"
@@ -582,15 +585,26 @@ eval "exec /usr/bin/install $filtered"
   const hdmiCard = "card 0: vc4hdmi0 [vc4-hdmi-0], device 0: MAI PCM i2s-hifi-0 [MAI PCM i2s-hifi-0]";
   const mysteryCard = "card 4: Mystery [Mystery USB DAC], device 0: USB Audio [USB Audio]";
   const otherCard = "card 5: Other [Other USB DAC], device 0: USB Audio [USB Audio]";
+  const hiResCard = "card 10: HiRes [HiRes USB DAC], device 0: USB Audio [USB Audio]";
   const pchCard = "card 3: PCH [HDA Intel PCH], device 0: ALC897 Analog [ALC897 Analog]";
   const analogCard = "card 7: Analog [Built-in Analog], device 0: Line Out [Line Out]";
   const sharedNameCardA = "card 8: SharedA [Studio DAC (USB)], device 0: USB Audio [USB Audio]";
   const sharedNameCardB = "card 9: SharedB [Studio DAC (USB)], device 0: USB Audio [USB Audio]";
   const loopbackCard = "card 6: Loopback [Loopback], device 0: Loopback PCM [Loopback PCM]";
+  const writePlaybackFormats = (cardIndex, formats) => {
+    const cardDir = path.join(audioAdaptProcDir, `card${cardIndex}`);
+    mkdirSync(cardDir, { recursive: true });
+    writeFileSync(path.join(cardDir, "stream0"), `Playback:\n${formats.map((format) => `  Format: ${format}`).join("\n")}\nCapture:\n`);
+  };
+  writePlaybackFormats(1, ["S24_3LE"]);
+  writePlaybackFormats(2, ["S16_LE"]);
+  writePlaybackFormats(10, ["S16_LE", "S24_3LE", "S32_LE"]);
   const bt66Resolve = runAudioAdapt(`${hdmiCard}\n${crimsonCard}\n${bt66Card}`, ["resolve-browser"], { TIKPAL_AUDIO_CARD_PRIORITY: "BT66,Crimson" });
-  assert(bt66Resolve.status === 0 && bt66Resolve.stdout.trim() === "dmix:CARD=BT66,DEV=0", `audio adapter should honor an explicit device priority and use dmix:\n${bt66Resolve.stdout}\n${bt66Resolve.stderr}`);
+  assert(bt66Resolve.status === 0 && bt66Resolve.stdout.trim() === "tikpal_browser_output", `audio adapter should route BT66 through the fixed shared PCM:\n${bt66Resolve.stdout}\n${bt66Resolve.stderr}`);
   const crimsonResolve = runAudioAdapt(`${hdmiCard}\n${crimsonCard}`, ["resolve-browser"]);
   assert(crimsonResolve.status === 0 && crimsonResolve.stdout.trim() === "tikpal_browser_output", `audio adapter should use a shared conversion PCM for S24-only Crimson browser audio:\n${crimsonResolve.stdout}\n${crimsonResolve.stderr}`);
+  const hiResCheck = runAudioAdapt(`${hdmiCard}\n${hiResCard}`, ["check"]);
+  assert(hiResCheck.status === 0 && hiResCheck.stdout.includes("browserSharedFormat=S32_LE"), `audio adapter should prefer the highest stable shared format:\n${hiResCheck.stdout}\n${hiResCheck.stderr}`);
   const crimsonAudioout = runAudioAdapt(`${hdmiCard}\n${crimsonCard}`, ["resolve-audioout"]);
   assert(crimsonAudioout.status === 0 && crimsonAudioout.stdout.trim() === "plughw:CARD=Crimson,DEV=0", "audio adapter should use plughw for moOde audioout");
   const crimsonHw = runAudioAdapt(`${hdmiCard}\n${crimsonCard}`, ["resolve-hw"]);
@@ -621,10 +635,12 @@ eval "exec /usr/bin/install $filtered"
   const audioAdaptPrepareLog = path.join(audioAdaptApplyDir, "output-volume-prepare.log");
   const audioAdaptPrepareHelper = path.join(audioAdaptApplyDir, "output-volume-helper.sh");
   writeFileSync(audioAdaptPrepareHelper, "#!/bin/sh\necho \"$*\" >> \"$TIKPAL_FAKE_OUTPUT_VOLUME_PREPARE_LOG\"\n", { mode: 0o755 });
+  const generatedBrowserOutputPath = path.join(audioAdaptApplyDir, "browser.conf");
+  writeFileSync(generatedBrowserOutputPath, `#########################################\n# This file is managed by Tikpal for shared browser audio\n# Tikpal browser source card: SXWMDL7601INTCL\n# Tikpal browser source device: 0\n# Tikpal browser source format: S24_3LE\n#########################################\npcm.tikpal_browser_output { type plug }\n`);
   const audioAdaptApply = runAudioAdapt(`${hdmiCard}\n${bt66Card}\n${loopbackCard}`, ["apply"], {
     TIKPAL_ALSA_RATE_CONVERTER: "samplerate_best",
     TIKPAL_AUDIOOUT_CONFIG: path.join(audioAdaptApplyDir, "_audioout.conf"),
-    TIKPAL_BROWSER_OUTPUT_CONFIG: path.join(audioAdaptApplyDir, "browser.conf"),
+    TIKPAL_BROWSER_OUTPUT_CONFIG: generatedBrowserOutputPath,
     TIKPAL_SNDALOOP_CONFIG: path.join(audioAdaptApplyDir, "loopback.conf"),
     TIKPAL_SND_ALOOP_MODULES_LOAD: path.join(audioAdaptApplyDir, "snd-aloop.conf"),
     TIKPAL_ALSA_BASE_CONFIG: path.join(audioAdaptApplyDir, "asound.conf"),
@@ -634,11 +650,46 @@ eval "exec /usr/bin/install $filtered"
     TIKPAL_FAKE_OUTPUT_VOLUME_PREPARE_LOG: audioAdaptPrepareLog
   });
   assert(audioAdaptApply.status === 0, `audio adapter should generate configured ALSA SRC nodes:\n${audioAdaptApply.stdout}\n${audioAdaptApply.stderr}`);
-  const generatedBrowserPcm = await readFile(path.join(audioAdaptApplyDir, "browser.conf"), "utf8");
+  const generatedBrowserPcm = await readFile(generatedBrowserOutputPath, "utf8");
   const generatedLoopbackPcm = await readFile(path.join(audioAdaptApplyDir, "loopback.conf"), "utf8");
   assert(generatedBrowserPcm.includes('rate_converter "samplerate_best"'), "shared browser plug should use the configured ALSA rate converter");
+  assert(generatedBrowserPcm.includes("Tikpal browser source card: BT66") && generatedBrowserPcm.includes("Tikpal browser source format: S16_LE") && !generatedBrowserPcm.includes("SXWMDL7601INTCL"), "audio adapter should replace a stale browser PCM with BT66's stable S16 format");
   assert(generatedLoopbackPcm.includes('rate_converter "samplerate_best"'), "managed _audioout plug should use the configured ALSA rate converter");
   assert((await readFile(audioAdaptPrepareLog, "utf8")).trim() === "prepare", "audio adapter should prepare fixed auxiliary gain after routing the physical output");
+
+  const unsupportedBrowserOutputPath = path.join(audioAdaptApplyDir, "unsupported-browser.conf");
+  writeFileSync(unsupportedBrowserOutputPath, "# This file is managed by Tikpal for shared browser audio\npcm.tikpal_browser_output { type plug }\n");
+  const unsupportedApply = runAudioAdapt(`${hdmiCard}\n${mysteryCard}\n${loopbackCard}`, ["apply"], {
+    TIKPAL_AUDIOOUT_CONFIG: path.join(audioAdaptApplyDir, "unsupported-audioout.conf"),
+    TIKPAL_BROWSER_OUTPUT_CONFIG: unsupportedBrowserOutputPath,
+    TIKPAL_SNDALOOP_CONFIG: path.join(audioAdaptApplyDir, "unsupported-loopback.conf"),
+    TIKPAL_SND_ALOOP_MODULES_LOAD: path.join(audioAdaptApplyDir, "unsupported-snd-aloop.conf"),
+    TIKPAL_ALSA_BASE_CONFIG: path.join(audioAdaptApplyDir, "unsupported-asound.conf"),
+    TIKPAL_ALSA_LEGACY_LOOPBACK_CONFIG: path.join(audioAdaptApplyDir, "unsupported-legacy.conf"),
+    TIKPAL_MOODE_DB: path.join(audioAdaptApplyDir, "missing.db"),
+    TIKPAL_OUTPUT_VOLUME_HELPER: audioAdaptPrepareHelper,
+    TIKPAL_FAKE_OUTPUT_VOLUME_PREPARE_LOG: audioAdaptPrepareLog
+  });
+  assert(unsupportedApply.status === 0, `audio adapter should safely apply an unadvertised DAC:\n${unsupportedApply.stdout}\n${unsupportedApply.stderr}`);
+  let unsupportedBrowserOutputExists = true;
+  try { await access(unsupportedBrowserOutputPath); } catch { unsupportedBrowserOutputExists = false; }
+  assert(!unsupportedBrowserOutputExists, "audio adapter should remove a stale managed browser PCM when the selected DAC has no stable shared format");
+
+  const unmanagedBrowserOutputPath = path.join(audioAdaptApplyDir, "unmanaged-browser.conf");
+  writeFileSync(unmanagedBrowserOutputPath, "pcm.custom_browser_output { type plug }\n");
+  const unmanagedApply = runAudioAdapt(`${hdmiCard}\n${mysteryCard}\n${loopbackCard}`, ["apply"], {
+    TIKPAL_AUDIOOUT_CONFIG: path.join(audioAdaptApplyDir, "unmanaged-audioout.conf"),
+    TIKPAL_BROWSER_OUTPUT_CONFIG: unmanagedBrowserOutputPath,
+    TIKPAL_SNDALOOP_CONFIG: path.join(audioAdaptApplyDir, "unmanaged-loopback.conf"),
+    TIKPAL_SND_ALOOP_MODULES_LOAD: path.join(audioAdaptApplyDir, "unmanaged-snd-aloop.conf"),
+    TIKPAL_ALSA_BASE_CONFIG: path.join(audioAdaptApplyDir, "unmanaged-asound.conf"),
+    TIKPAL_ALSA_LEGACY_LOOPBACK_CONFIG: path.join(audioAdaptApplyDir, "unmanaged-legacy.conf"),
+    TIKPAL_MOODE_DB: path.join(audioAdaptApplyDir, "missing.db"),
+    TIKPAL_OUTPUT_VOLUME_HELPER: audioAdaptPrepareHelper,
+    TIKPAL_FAKE_OUTPUT_VOLUME_PREPARE_LOG: audioAdaptPrepareLog
+  });
+  assert(unmanagedApply.status === 0, `audio adapter should leave an unmanaged browser PCM alone:\n${unmanagedApply.stdout}\n${unmanagedApply.stderr}`);
+  assert((await readFile(unmanagedBrowserOutputPath, "utf8")).includes("pcm.custom_browser_output"), "audio adapter should not delete an unmanaged browser PCM");
 
   writeFileSync(path.join(audioAdaptBinDir, "systemctl"), `#!/bin/sh
 case "$1" in
