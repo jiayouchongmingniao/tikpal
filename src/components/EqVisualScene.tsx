@@ -1,5 +1,6 @@
 import { type CSSProperties, type ReactNode, useEffect, useMemo, useState } from "react";
 import { buildHifiCoverTheme, buildHifiSeedTheme, hifiThemeToCssVariables } from "../hifiLyricsVisual";
+import { useI18n } from "../i18n";
 import { formatDuration, formatSampleRate } from "../mockState";
 import { getPlaybackDisplayTruth } from "../playbackTruth";
 import type { AudioState, FontTheme, HifiEqPresetId, PlaybackSummary, SystemState } from "../types";
@@ -175,6 +176,7 @@ function createHifiAmbientVisuals(seed: number) {
 }
 
 export function EqVisualScene({ playback, audio, system, fontTheme, lyricsPanel, lyricsControls, lyricsStatus, lyricsTitle, lyricsArtist, lyricsSourceScope }: EqVisualSceneProps) {
+  const { t } = useI18n();
   const isPlaying = playback.state === "playing";
   const visibleLyricsPanel = useMemo(() => {
     if (!lyricsPanel?.lines.length) return null;
@@ -229,6 +231,13 @@ export function EqVisualScene({ playback, audio, system, fontTheme, lyricsPanel,
     .slice(0, 3)
     .toUpperCase();
   const trackHeading = [playbackTruth.title, playbackTruth.artist].filter(Boolean).join(" - ");
+  const lyricsRecognitionLabel = lyricsSourceScope === "upnp_input"
+    ? t("lyrics.listeningTo", { source: "DLNA" })
+    : lyricsSourceScope === "airplay_input"
+      ? t("lyrics.listeningTo", { source: "AirPlay" })
+      : lyricsSourceScope === "bluetooth_input"
+        ? t("lyrics.listeningTo", { source: "Bluetooth" })
+        : t("lyrics.identifying");
   const lyricsProgressPercent = `${Math.round(playbackTruth.progress * 1000) / 10}%`;
   const lyricsTimeLabel = `${formatDuration(playbackTruth.elapsedSeconds)}/${formatDuration(playbackTruth.durationSeconds)}`;
 
@@ -251,7 +260,7 @@ export function EqVisualScene({ playback, audio, system, fontTheme, lyricsPanel,
       className={`eq-visual-scene hifi-now-playing-scene ${isPlaying ? "is-playing" : "is-paused"} ${hasLyricsPanel ? "has-lyrics-panel" : ""}`}
       data-hifi-now-playing
       data-hifi-centered-now-playing={hasLyricsPanel ? undefined : true}
-      aria-label="Hi-Fi now playing"
+      aria-label={t("hifi.nowPlayingScene")}
       style={themeStyle}
     >
       <div className="eq-visual-backdrop" aria-hidden="true" />
@@ -322,10 +331,10 @@ export function EqVisualScene({ playback, audio, system, fontTheme, lyricsPanel,
         </div>
         {!hasLyricsPanel && !isRecognizingLyrics && !hasUnavailableLyrics ? (
             <div className="hifi-now-playing-copy" data-hifi-track-info>
-              <span>Now Playing</span>
+              <span>{t("hifi.nowPlaying")}</span>
               <strong>{playbackTruth.title}</strong>
               <em>{playbackTruth.artist} - {playbackTruth.album}</em>
-              <div className="hifi-now-playing-meta" aria-label="Hi-Fi playback details">
+              <div className="hifi-now-playing-meta" aria-label={t("hifi.playbackDetails")}>
                 <span>{playbackTruth.sourceLabel}</span>
                 <span>{playback.state}</span>
                 <span>{formatDuration(playbackTruth.elapsedSeconds)}</span>
@@ -342,7 +351,7 @@ export function EqVisualScene({ playback, audio, system, fontTheme, lyricsPanel,
           </header>
           <div className="hifi-lyrics-recognizing-status">
             <span className="hifi-lyrics-recognizing-spinner" aria-hidden="true" />
-            <span>{lyricsSourceScope === "upnp_input" ? "识别 DLNA 音频中…" : lyricsSourceScope === "airplay_input" ? "识别 AirPlay 音频中…" : lyricsSourceScope === "bluetooth_input" ? "识别蓝牙音频中…" : "正在识别…"}</span>
+            <span>{lyricsRecognitionLabel}</span>
           </div>
         </div>
       ) : null}
@@ -351,13 +360,10 @@ export function EqVisualScene({ playback, audio, system, fontTheme, lyricsPanel,
           <header className="hifi-lyrics-heading">
             <strong>{[lyricsTitle || playbackTruth.title, lyricsArtist || playbackTruth.artist].filter(Boolean).join(" - ")}</strong>
           </header>
-          <div className="hifi-lyrics-recognized-status">
-            <span>未找到歌词</span>
-          </div>
         </div>
       ) : null}
       {hasLyricsPanel && visibleLyricsPanel ? (
-        <aside className={`hifi-lyrics-panel ${visibleLyricsPanel.synced ? "is-synced" : "is-static"}`} aria-label="Lyrics" data-hifi-lyrics-panel>
+        <aside className={`hifi-lyrics-panel ${visibleLyricsPanel.synced ? "is-synced" : "is-static"}`} aria-label={t("settings.lyrics")} data-hifi-lyrics-panel>
           <header className="hifi-lyrics-heading" data-hifi-track-info>
             <strong>{trackHeading}</strong>
           </header>

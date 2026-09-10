@@ -1409,8 +1409,7 @@ select {
   line-height: 1.16;
 }
 
-.hifi-lyrics-recognizing-status,
-.hifi-lyrics-recognized-status {
+.hifi-lyrics-recognizing-status {
   display: flex;
   align-items: center;
   justify-content: center;

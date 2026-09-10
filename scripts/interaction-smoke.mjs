@@ -121,6 +121,17 @@ async function resetInteractionRoomExperience() {
   }
 }
 
+async function resetInteractionUiLocale() {
+  const response = await fetch(new URL("/api/v1/ui/preferences", APP_URL), {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ locale: "en" })
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to reset interaction locale: ${response.status}`);
+  }
+}
+
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -360,6 +371,29 @@ async function sampleLoopAudioState(client) {
 async function navigate(client, url) {
   await client.send("Page.navigate", { url });
   await wait(750);
+}
+
+async function setInteractionLocale(client, locale) {
+  const updated = await evaluate(
+    client,
+    `
+      (() => {
+        window.localStorage.setItem('tikpal.locale', ${JSON.stringify(locale)});
+        return fetch('/api/v1/ui/preferences', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ locale: ${JSON.stringify(locale)} })
+        }).then(async (response) => response.ok && (await response.json()).locale === ${JSON.stringify(locale)});
+      })()
+    `
+  );
+  if (!updated) throw new Error(`Failed to set interaction locale: ${locale}`);
+  await navigate(client, APP_URL);
+  await expectEventually(
+    client,
+    `document.documentElement.lang === ${JSON.stringify(locale)}`,
+    `Hi-Fi locale ${locale} applies after reload`
+  );
 }
 
 async function evaluate(client, expression) {
@@ -1029,6 +1063,7 @@ const CHROME_BIN = await detectChromeBinary();
 const profileDir = await mkdtemp(path.join(tmpdir(), "tikpal-chrome-"));
 const interactionSceneVideoSrc = await prepareInteractionSceneFixture();
 await resetInteractionRoomExperience();
+await resetInteractionUiLocale();
 const chrome = spawn(CHROME_BIN, [
   "--headless=new",
   "--disable-gpu=false",
@@ -1165,18 +1200,60 @@ try {
             return next;
           }
 
-          if (mode === "noReadyLyrics") {
+          if (mode === "noReadyLyrics" || mode === "errorNoReadyLyrics") {
             const next = clone(state);
             next.lyrics = {
               ...next.lyrics,
-              status: "not_found",
-              trackKey: "smoke-no-ready-lyrics",
+              status: mode === "errorNoReadyLyrics" ? "error" : "not_found",
+              trackKey: mode === "errorNoReadyLyrics" ? "smoke-error-no-ready-lyrics" : "smoke-no-ready-lyrics",
               title: "No Lyrics Study",
               artist: "Tikpal Smoke",
               synced: false,
               activeLineIndex: null,
               lines: [],
-              message: "No lyrics found",
+              message: mode === "errorNoReadyLyrics" ? "Lyrics service unavailable" : "No lyrics found",
+              updatedAt: new Date().toISOString()
+            };
+            return next;
+          }
+
+          if (mode === "idleLyrics") {
+            const next = clone(state);
+            next.lyrics = {
+              ...next.lyrics,
+              status: "idle",
+              trackKey: null,
+              title: null,
+              artist: null,
+              synced: false,
+              activeLineIndex: null,
+              lines: [],
+              message: null,
+              updatedAt: new Date().toISOString()
+            };
+            return next;
+          }
+
+          if (mode === "recognizingLyrics" || mode === "recognizingAirPlayLyrics" || mode === "recognizingDlnaLyrics" || mode === "recognizingBluetoothLyrics") {
+            const next = clone(state);
+            const sourceScope = mode === "recognizingAirPlayLyrics"
+              ? "airplay_input"
+              : mode === "recognizingDlnaLyrics"
+                ? "upnp_input"
+                : mode === "recognizingBluetoothLyrics"
+                  ? "bluetooth_input"
+                  : "local_playback";
+            next.lyrics = {
+              ...next.lyrics,
+              status: "recognizing",
+              sourceScope,
+              trackKey: "smoke-recognizing-lyrics",
+              title: "Recognition Study",
+              artist: "Tikpal Smoke",
+              synced: false,
+              activeLineIndex: null,
+              lines: [],
+              message: "Identifying track...",
               updatedAt: new Date().toISOString()
             };
             return next;
@@ -1989,6 +2066,8 @@ try {
         const headingCenter = headingRect.left + headingRect.width / 2;
         const coverCenter = coverRect.left + coverRect.width / 2;
         return trackInfo.textContent?.includes('No Lyrics Study - Tikpal Smoke')
+          && trackInfo.querySelector('.hifi-lyrics-recognized-status') === null
+          && !trackInfo.textContent?.includes('未找到歌词')
           && rect.width >= 600
           && headingRect.top >= coverRect.bottom + 16
           && Math.abs(headingCenter - coverCenter) <= 2
@@ -2021,6 +2100,77 @@ try {
     `,
     "Hi-Fi lyrics fallback stays adjacent to the compact cover when the HUD is visible"
   );
+  const hifiLocaleCases = [
+    { locale: "en", scene: "Hi-Fi now playing", nowPlaying: "Now Playing", details: "Hi-Fi playback details", identifying: "Identifying track..." },
+    { locale: "zh-CN", scene: "Hi-Fi 正在播放", nowPlaying: "正在播放", details: "Hi-Fi 播放详情", identifying: "正在识别歌曲..." },
+    { locale: "de", scene: "Hi-Fi Wiedergabe", nowPlaying: "Wird abgespielt", details: "Hi-Fi Wiedergabedetails", identifying: "Titel wird erkannt..." },
+    { locale: "it", scene: "Hi-Fi in riproduzione", nowPlaying: "In riproduzione", details: "Dettagli riproduzione Hi-Fi", identifying: "Riconoscimento brano..." },
+    { locale: "ko", scene: "Hi-Fi 재생 중", nowPlaying: "재생 중", details: "Hi-Fi 재생 정보", identifying: "곡 인식 중..." },
+    { locale: "ja", scene: "Hi-Fi 再生中", nowPlaying: "再生中", details: "Hi-Fi 再生詳細", identifying: "曲を認識中..." },
+    { locale: "es", scene: "Reproducción Hi-Fi", nowPlaying: "Reproduciendo", details: "Detalles de reproducción Hi-Fi", identifying: "Identificando canción..." }
+  ];
+  for (const localeCase of hifiLocaleCases) {
+    await setInteractionLocale(client, localeCase.locale);
+    await postExperienceAction(client, { type: "set_mode", mode: "hifi" });
+
+    const localizedFallbackPatchVersion = await setStatePatchMode(client, "noReadyLyrics");
+    await waitForStatePatchRefresh(client, localizedFallbackPatchVersion, `Hi-Fi ${localeCase.locale} no-lyrics fixture refreshes`);
+    await expect(
+      client,
+      `
+        (() => {
+          const scene = document.querySelector('[data-hifi-now-playing]');
+          const fallback = document.querySelector('.hifi-lyrics-recognized[data-hifi-track-info]');
+          return document.documentElement.lang === ${JSON.stringify(localeCase.locale)}
+            && scene?.getAttribute('aria-label') === ${JSON.stringify(localeCase.scene)}
+            && fallback?.textContent?.trim() === 'No Lyrics Study - Tikpal Smoke'
+            && fallback?.querySelector('.hifi-lyrics-recognized-status') === null;
+        })()
+      `,
+      `Hi-Fi ${localeCase.locale} keeps the no-lyrics fallback silent and localized`
+    );
+
+    const idleLyricsPatchVersion = await setStatePatchMode(client, "idleLyrics");
+    await waitForStatePatchRefresh(client, idleLyricsPatchVersion, `Hi-Fi ${localeCase.locale} idle lyrics fixture refreshes`);
+    await expect(
+      client,
+      `
+        (() => {
+          const copy = document.querySelector('.hifi-now-playing-copy');
+          const details = document.querySelector('.hifi-now-playing-meta');
+          return copy?.querySelector('span')?.textContent?.trim() === ${JSON.stringify(localeCase.nowPlaying)}
+            && details?.getAttribute('aria-label') === ${JSON.stringify(localeCase.details)};
+        })()
+      `,
+      `Hi-Fi ${localeCase.locale} localizes playback labels`
+    );
+
+    const recognizingLyricsPatchVersion = await setStatePatchMode(client, "recognizingLyrics");
+    await waitForStatePatchRefresh(client, recognizingLyricsPatchVersion, `Hi-Fi ${localeCase.locale} recognizing fixture refreshes`);
+    await expect(
+      client,
+      `document.querySelector('.hifi-lyrics-recognizing-status')?.textContent?.trim() === ${JSON.stringify(localeCase.identifying)}`,
+      `Hi-Fi ${localeCase.locale} localizes local-track recognition`
+    );
+  }
+  await setInteractionLocale(client, "en");
+  await postExperienceAction(client, { type: "set_mode", mode: "hifi" });
+  const errorNoReadyLyricsPatchVersion = await setStatePatchMode(client, "errorNoReadyLyrics");
+  await waitForStatePatchRefresh(client, errorNoReadyLyricsPatchVersion, "Hi-Fi error no-lyrics fixture refreshes");
+  await expect(
+    client,
+    "document.querySelector('.hifi-lyrics-recognized[data-hifi-track-info]')?.textContent?.trim() === 'No Lyrics Study - Tikpal Smoke' && document.querySelector('.hifi-lyrics-recognized-status') === null",
+    "Hi-Fi lyrics errors keep the fallback silent"
+  );
+  for (const [mode, source] of [["recognizingAirPlayLyrics", "AirPlay"], ["recognizingDlnaLyrics", "DLNA"], ["recognizingBluetoothLyrics", "Bluetooth"]]) {
+    const externalRecognitionPatchVersion = await setStatePatchMode(client, mode);
+    await waitForStatePatchRefresh(client, externalRecognitionPatchVersion, `Hi-Fi ${source} recognition fixture refreshes`);
+    await expect(
+      client,
+      `document.querySelector('.hifi-lyrics-recognizing-status')?.textContent?.trim() === ${JSON.stringify(`Listening to ${source} audio...`)}`,
+      `Hi-Fi ${source} recognition uses the shared localized copy`
+    );
+  }
   const pausedNoReadyLyricsPatchVersion = await setStatePatchMode(client, "pausedNoReadyLyrics");
   await waitForStatePatchRefresh(client, pausedNoReadyLyricsPatchVersion, "Hi-Fi paused no-ready lyrics fixture refreshes");
   await expectEventually(

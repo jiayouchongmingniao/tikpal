@@ -2674,6 +2674,48 @@ Object.assign(dictionaries["zh-CN"], {
   "settings.runtimeSelfCheckUnavailable": "此设备尚未安装自检修复功能。",
 });
 
+Object.assign(dictionaries.en, {
+  "hifi.nowPlaying": "Now Playing",
+  "hifi.nowPlayingScene": "Hi-Fi now playing",
+  "hifi.playbackDetails": "Hi-Fi playback details",
+});
+
+Object.assign(dictionaries["zh-CN"], {
+  "hifi.nowPlaying": "正在播放",
+  "hifi.nowPlayingScene": "Hi-Fi 正在播放",
+  "hifi.playbackDetails": "Hi-Fi 播放详情",
+});
+
+Object.assign(dictionaries.de, {
+  "hifi.nowPlaying": "Wird abgespielt",
+  "hifi.nowPlayingScene": "Hi-Fi Wiedergabe",
+  "hifi.playbackDetails": "Hi-Fi Wiedergabedetails",
+});
+
+Object.assign(dictionaries.it, {
+  "hifi.nowPlaying": "In riproduzione",
+  "hifi.nowPlayingScene": "Hi-Fi in riproduzione",
+  "hifi.playbackDetails": "Dettagli riproduzione Hi-Fi",
+});
+
+Object.assign(dictionaries.ko, {
+  "hifi.nowPlaying": "재생 중",
+  "hifi.nowPlayingScene": "Hi-Fi 재생 중",
+  "hifi.playbackDetails": "Hi-Fi 재생 정보",
+});
+
+Object.assign(dictionaries.ja, {
+  "hifi.nowPlaying": "再生中",
+  "hifi.nowPlayingScene": "Hi-Fi 再生中",
+  "hifi.playbackDetails": "Hi-Fi 再生詳細",
+});
+
+Object.assign(dictionaries.es, {
+  "hifi.nowPlaying": "Reproduciendo",
+  "hifi.nowPlayingScene": "Reproducción Hi-Fi",
+  "hifi.playbackDetails": "Detalles de reproducción Hi-Fi",
+});
+
 function template(value: string, params: TranslationParams = {}) {
   return value.replace(/\{([^}]+)\}/g, (_, key: string) => {
     const replacement = params[key];
