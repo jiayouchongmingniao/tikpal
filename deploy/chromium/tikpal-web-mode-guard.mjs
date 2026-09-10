@@ -3,6 +3,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { createConnection } from "node:net";
 import { fileURLToPath } from "node:url";
+import { createOAuthWindowLayout } from "./tikpal-oauth-window-layout.mjs";
 
 const port = Number.parseInt(process.env.TIKPAL_WEB_MODE_PROVIDER_DEBUG_PORT || "9234", 10);
 const profile = process.env.TIKPAL_WEB_MODE_PROVIDER_PROFILE || "";
@@ -2766,8 +2767,9 @@ async function runNeteaseAudioFeatures(targets) {
 
 async function runProviderAudioGate(targets, active) {
   let applied = false;
-  // QQ's audio ownership must not starve behind earlier maintenance commands.
-  const priority = providerId === "qq_music" ? "foreground" : "maintenance";
+  // A new document starts muted. Foreground ownership must survive maintenance
+  // throttling after login/reload; QQ also requires immediate background muting.
+  const priority = active || providerId === "qq_music" ? "foreground" : "maintenance";
   for (const target of targets.filter((item) => isProviderWebPage(item) && !isFriendlyErrorPage(item))) {
     const status = await evaluate(target.webSocketDebuggerUrl, providerAudioGateExpression(active), priority).catch(() => null);
     applied ||= status?.active === active;
@@ -2867,6 +2869,8 @@ function runProviderGuardScheduleFixtures() {
   expect(providerRuntimeMaintenanceEnabled("youtube_music", true), "non-Spotify Runtime maintenance should stay unchanged");
 }
 
+const oauthWindowLayout = createOAuthWindowLayout();
+
 let spotifyActivePass = 0;
 let spotifyInactivePass = 0;
 let spotifyOpeningPass = 0;
@@ -2880,8 +2884,14 @@ async function guardOnce() {
   if (typeof WebSocket !== "function") return;
   const runtimeState = readProviderRuntimeState();
   const { active, opening, deactivating, frozen } = runtimeState;
+  const targets = (await readTargets()).filter(isPageTarget);
+  if (targets.length) {
+    await oauthWindowLayout.sync(targets,
+      (method, params) => cdpCommand(targets[0].webSocketDebuggerUrl, method, params, "foreground"),
+      (target) => isProviderWebPage(target) && (providerReadyHosts[providerId] || []).some(
+        (host) => hostMatches(new URL(target.url).hostname, host)), runtimeState);
+  }
   if (frozen) {
-    await readTargets();
     syncManagerFriendlyErrorStatus();
     return;
   }
@@ -2896,7 +2906,6 @@ async function guardOnce() {
     const phase = audioGateEnabled ? schedule.phase : "handoff";
     console.log(`[tikpal-web-mode-guard] spotify schedule active=${active ? 1 : 0} opening=${opening ? 1 : 0} deactivating=${deactivating ? 1 : 0} active_pass=${spotifyActivePass} inactive_pass=${spotifyInactivePass} opening_pass=${spotifyOpeningPass} phase=${phase} runtime=${runtimeMaintenanceEnabled ? 1 : 0} audio_gate_owner=${audioGateEnabled ? 1 : 0} audio_active=${audioGateActive ? 1 : 0} consent=${schedule.consent ? 1 : 0} dismiss=${schedule.dismiss ? 1 : 0}`);
   }
-  const targets = (await readTargets()).filter(isPageTarget);
   syncManagerFriendlyErrorStatus();
   // While Spotify is opening, the foreground switch exclusively owns Runtime
   // until its one bounded setActive(true) call and active-state commit finish.
@@ -3010,7 +3019,7 @@ while (profileProcessExists()) {
   // Only the visible provider needs sub-second input and prompt handling.
   // The other resident pages still get safety/consent checks, but must not
   // compete with foreground X11 work on every 250ms tick.
-  const pollMs = providerIsActive()
+  const pollMs = providerIsActive() || oauthWindowLayout.hasWindows()
     ? activePollMs
     : providerId === "spotify" ? spotifyInactivePollMs : idlePollMs;
   await sleep(pollMs);

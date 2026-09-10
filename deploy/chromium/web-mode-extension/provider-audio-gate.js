@@ -4,11 +4,19 @@
   const state = {
     active: false,
     media: new WeakMap(),
+    playedMedia: new Set(),
+    observedMedia: new WeakSet(),
     howlerSounds: [],
     audioContexts: new Set(),
     suspendedContexts: new Set()
   };
-  const mediaElements = () => Array.from(document.querySelectorAll("audio,video"));
+  const mediaElements = () => Array.from(new Set([
+    ...document.querySelectorAll("audio,video"), ...state.playedMedia
+  ]));
+  // Provider gain is unity; the Tikpal output mixer owns listening volume.
+  const unifyMediaVolume = (element) => {
+    if (element.volume !== 1) element.volume = 1;
+  };
   const rememberPlayingMedia = (element) => {
     const previous = state.media.get(element) || { wasPlaying: false };
     previous.wasPlaying = true;
@@ -37,6 +45,15 @@
   if (typeof nativeMediaPlay === "function" && !window.__tikpalProviderAudioGatePlayPatched) {
     window.__tikpalProviderAudioGatePlayPatched = true;
     window.HTMLMediaElement.prototype.play = function (...args) {
+      state.playedMedia.add(this);
+      if (!state.observedMedia.has(this)) {
+        state.observedMedia.add(this);
+        this.addEventListener("volumechange", () => {
+          if (state.active) unifyMediaVolume(this);
+        });
+        this.addEventListener("ended", () => state.playedMedia.delete(this));
+      }
+      if (state.active) unifyMediaVolume(this);
       if (!state.active) {
         rememberPlayingMedia(this);
         this.muted = true;
@@ -64,10 +81,11 @@
         try { element.pause(); } catch {}
       } else {
         element.muted = false;
+        unifyMediaVolume(element);
         if (previous.wasPlaying && element.paused && !element.ended) {
           element.play().catch(() => {});
         }
-        state.media.set(element, { ...previous, wasPlaying: false });
+        state.media.set(element, { wasPlaying: false });
       }
     }
   };
@@ -91,7 +109,16 @@
         try { howl.pause(id); } catch {}
       }
     } else {
-      try { howler.mute(false); } catch {}
+      try {
+        if (howler.volume?.() !== 1) howler.volume?.(1);
+        howler.mute(false);
+        for (const howl of howls) {
+          if (howl.volume?.() !== 1) howl.volume?.(1);
+          for (const sound of howl._sounds || []) {
+            if (sound._volume !== 1) howl.volume?.(1, sound._id);
+          }
+        }
+      } catch {}
       for (const [howl, id] of state.howlerSounds.splice(0)) {
         try { howl.play(id); } catch {}
       }
@@ -116,6 +143,7 @@
   };
 
   const status = () => ({
+    volumePolicy: "system",
     active: state.active,
     mediaCount: mediaElements().length,
     playingCount: mediaElements().filter((element) => !element.paused && !element.ended).length,
@@ -136,9 +164,12 @@
   };
 
   document.addEventListener("play", (event) => {
-    if (state.active) return;
     const element = event.target;
     if (!(element instanceof HTMLMediaElement)) return;
+    if (state.active) {
+      unifyMediaVolume(element);
+      return;
+    }
     rememberPlayingMedia(element);
     element.muted = true;
     setTimeout(() => {
@@ -146,6 +177,12 @@
         try { element.pause(); } catch {}
       }
     }, 0);
+  }, true);
+
+  document.addEventListener("volumechange", (event) => {
+    if (state.active && event.target instanceof HTMLMediaElement) {
+      unifyMediaVolume(event.target);
+    }
   }, true);
 
   window.__tikpalProviderAudioGate = { version: 3, setActive, status };

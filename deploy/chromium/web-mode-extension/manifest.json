@@ -23,6 +23,11 @@
   ],
   "content_scripts": [
     {
+      "matches": ["https://tidal.com/*", "https://*.tidal.com/*"],
+      "js": ["tidal-dismiss-upsell.js"],
+      "run_at": "document_idle"
+    },
+    {
       "matches": ["<all_urls>"],
       "js": ["provider-audio-gate.js"],
       "run_at": "document_start",

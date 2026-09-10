@@ -8,12 +8,12 @@ interface OnboardingGuideProps {
 }
 
 const tips = [
-  { icon: Pointer, title: "onboarding.tapTitle" },
-  { icon: Sun, title: "onboarding.brightnessTitle" },
-  { icon: Volume2, title: "onboarding.volumeTitle" },
-  { icon: ArrowDown, title: "onboarding.playerTitle" },
-  { icon: Hand, title: "onboarding.menuTitle" },
-  { icon: ArrowUp, title: "onboarding.returnTitle" }
+  { icon: Pointer, title: "onboarding.tapTitle", body: "onboarding.tapBody" },
+  { icon: Hand, title: "onboarding.menuTitle", body: "onboarding.menuBody" },
+  { icon: Sun, title: "onboarding.brightnessTitle", body: "onboarding.brightnessBody" },
+  { icon: Volume2, title: "onboarding.volumeTitle", body: "onboarding.volumeBody" },
+  { icon: ArrowDown, title: "onboarding.playerTitle", body: "onboarding.playerBody" },
+  { icon: ArrowUp, title: "onboarding.returnTitle", body: "onboarding.returnBody" }
 ] as const;
 
 export function OnboardingGuide({ active, onDismiss }: OnboardingGuideProps) {
@@ -66,8 +66,11 @@ export function OnboardingGuide({ active, onDismiss }: OnboardingGuideProps) {
           <button type="button" onClick={onDismiss} aria-label={t("common.close")}><X size={24} /></button>
         </header>
         <ul className="onboarding-tips-list">
-          {tips.map(({ icon: Icon, title }) => (
-            <li key={title}><Icon size={28} aria-hidden="true" /><span>{t(title)}</span></li>
+          {tips.map(({ icon: Icon, title, body }) => (
+            <li key={title}>
+              <Icon size={32} aria-hidden="true" />
+              <div><strong>{t(title)}</strong><span>{t(body)}</span></div>
+            </li>
           ))}
         </ul>
         <footer className="onboarding-guide-footer">

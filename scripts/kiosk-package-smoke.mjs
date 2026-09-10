@@ -40,6 +40,7 @@ const requiredFiles = [
   "scripts/tikpal-new-device-provider-reset-fixture.sh",
   "deploy/chromium/web-mode-extension/manifest.json",
   "deploy/chromium/web-mode-extension/background.js",
+  "deploy/chromium/tikpal-oauth-window-layout.mjs",
   "deploy/chromium/web-mode-extension/content.js",
   "deploy/chromium/web-mode-extension/provider-audio-gate.js",
   "deploy/chromium/web-mode-extension/netease-audio-mirror.js",
@@ -2856,7 +2857,7 @@ sync_runtime_provider_pool_process_statuses ""
   assert(providerGuardCheck.stdout.includes("qq mv cinema frame: 1"), "provider guard should expose the QQ MV cinema frame path");
   assert(providerGuardCheck.stdout.includes("qq mv touch target: 1"), "provider guard should enlarge tiny QQ MV touch targets");
   const providerGuardSource = await readFile(path.join(ROOT, "deploy/chromium/tikpal-web-mode-guard.mjs"), "utf8");
-  assert(providerGuardSource.includes("if (frozen) {\n    await readTargets();\n    syncManagerFriendlyErrorStatus();\n    return;\n  }"), "frozen providers should still report Manager-owned friendly errors");
+  assert(providerGuardSource.includes("if (frozen) {\n    syncManagerFriendlyErrorStatus();\n    return;\n  }"), "frozen providers should still report Manager-owned friendly errors");
   assert(providerGuardSource.includes('child.once("exit", (code) => {\n    if (code !== 0) reportedManagerFriendlyError = "";\n  });'), "friendly-error status reporting should retry after a transient launcher failure");
   assert(providerGuardSource.includes("querySelectorAll(\"iframe\")"), "provider guard should scan same-origin QQ modal iframes");
   assert(providerGuardSource.includes("consentAcceptAllLabels"), "provider guard should keep accept-all cookie labels separate from generic consent labels");

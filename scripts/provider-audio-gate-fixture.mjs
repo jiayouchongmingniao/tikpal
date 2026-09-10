@@ -11,11 +11,14 @@ const messages = [];
 
 class FakeMediaElement {
   constructor() {
+    this.volume = 0.4;
     this.ended = false;
     this.muted = false;
     this.paused = true;
     this.playCalls = 0;
   }
+
+  addEventListener() {}
 
   play() {
     this.playCalls += 1;
@@ -104,6 +107,51 @@ for (const handler of listeners.get("play") || []) handler({ target: eventOnly }
 assert.equal(eventOnly.muted, true, "play-event fallback should mute media created outside the patched play path");
 assert.equal(eventOnly.paused, true, "play-event fallback should pause media created outside the patched play path");
 
+// MusicKit propagates media mute into its persisted player volume.
+const reactive = new FakeMediaElement();
+reactive.volume = 0.6;
+Object.defineProperty(reactive, "muted", {
+  get() { return this._muted || false; },
+  set(value) { this._muted = value; if (value) this.volume = 0; }
+});
+mediaElements.push(reactive);
+gate.setActive(true);
+await reactive.play();
+gate.setActive(false);
+gate.setActive(false);
+assert.equal(reactive.volume, 0, "fixture should reproduce player volume following mute");
+gate.setActive(true);
+assert.equal(reactive.volume, 1, "activation must restore unity gain after reactive mute");
+assert.equal(reactive.paused, false, "volume recovery must preserve playback resume");
+reactive.volume = 0;
+gate.setActive(false);
+gate.setActive(true);
+assert.equal(reactive.volume, 1, "provider gain must use unity even if the site saved zero");
+reactive.volume = 0.2;
+for (const handler of listeners.get("volumechange") || []) handler({ target: reactive });
+assert.equal(reactive.volume, 1, "foreground site volume changes must not introduce a second gain control");
+const detached = new FakeMediaElement();
+await detached.play();
+assert.equal(detached.volume, 1, "detached media must use unified gain before play");
+gate.setActive(false);
+assert.equal(detached.paused, true, "detached playback must be isolated in background");
+gate.setActive(true);
+assert.equal(detached.paused, false, "detached playback must resume");
+const sound = { _id: 7, _paused: true, _volume: 0.3 };
+const howl = { _sounds: [sound], _volume: 0.2, volume(value, id) {
+  if (value === undefined) return this._volume;
+  if (id === undefined) this._volume = value;
+  else sound._volume = value;
+} };
+window.Howler = { _howls: [howl], _volume: 0.1, volume(value) {
+  if (value === undefined) return this._volume;
+  this._volume = value;
+}, mute() {} };
+gate.setActive(true);
+assert.equal(window.Howler._volume, 1);
+assert.equal(howl._volume, 1);
+assert.equal(sound._volume, 1, "Howler per-sound gain must also use unity");
+
 // Exercise the guard against a Manager whose maintenance budget is exhausted.
 const guardSource = await readFile(path.join(root, "deploy/chromium/tikpal-web-mode-guard.mjs"), "utf8");
 const guardFunction = (name, nextName) => guardSource.slice(
@@ -166,7 +214,12 @@ for (const role of [{ active: false }, { opening: true }, { deactivating: true }
 assert.equal(primeCalls, callsBeforeHandoff, "QQ priming must yield during switching and while inactive or frozen");
 assert.equal(await guard.runProviderAudioGate(targets, false), true, "QQ deactivation must also survive maintenance throttling");
 assert.equal(gateActive, false);
-guard.providerId = "spotify";
-assert.equal(await guard.runProviderAudioGate(targets, true), false, "other providers should retain their existing priority");
+for (const provider of ["qobuz", "spotify", "apple_music", "suno", "tidal", "deezer", "amazon_music", "youtube_music", "netease_music"]) {
+  guard.providerId = provider;
+  gateActive = false; // A fresh document after login starts with playback blocked.
+  assert.equal(await guard.runProviderAudioGate(targets, true), true, `${provider} must restore foreground playback under maintenance throttling`);
+  assert.equal(gateActive, true);
+  assert.equal(await guard.runProviderAudioGate(targets, false), false, "ordinary background maintenance should retain its throttle");
+}
 
 console.log("[provider-audio-gate-fixture] passed");

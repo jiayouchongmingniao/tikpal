@@ -2558,13 +2558,16 @@ select {
 
 .onboarding-tips {
   padding: 24px;
+  min-height: 0;
+  align-items: safe center;
   overflow-y: auto;
   outline: none;
   background: rgba(2, 4, 7, 0.35);
 }
 
 .onboarding-tips-panel {
-  width: min(760px, 100%);
+  width: min(1100px, 100%);
+  min-width: 0;
   margin: auto;
   padding: 28px;
   display: grid;
@@ -2584,7 +2587,9 @@ select {
 
 .onboarding-tips-heading h2 {
   margin: 0;
-  font-size: 28px;
+  font-size: 32px;
+  hyphens: auto;
+  overflow-wrap: anywhere;
 }
 
 .onboarding-tips-heading button {
@@ -2602,7 +2607,8 @@ select {
 
 .onboarding-tips-list {
   display: grid;
-  gap: 20px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 24px 32px;
   list-style: none;
   margin: 0;
   padding: 0;
@@ -2610,10 +2616,43 @@ select {
 
 .onboarding-tips-list li {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 20px;
   font-size: 22px;
   line-height: 1.4;
+}
+
+.onboarding-tips-list li div {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+  overflow-wrap: anywhere;
+}
+
+.onboarding-tips-list strong {
+  font-size: 28px;
+}
+
+.onboarding-tips-list span {
+  color: var(--theme-text-soft);
+}
+
+@media (max-width: 899px) {
+  .onboarding-tips {
+    padding: 16px;
+  }
+
+  .onboarding-tips-panel {
+    padding: 20px;
+  }
+
+  .onboarding-tips-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .onboarding-tips-list strong {
+    font-size: 24px;
+  }
 }
 
 .onboarding-tips-list svg {

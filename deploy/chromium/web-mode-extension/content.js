@@ -153,10 +153,13 @@
         element.getAttribute?.("aria-label"),
         element.getAttribute?.("title"),
         element.value,
-        element.innerText,
         element.textContent
       ].map(normalizeLabel);
-      if (!labels.includes("reload page")) continue;
+      if (!labels.includes("reload page")) {
+        // Reading innerText on every button can render deferred Spotify cards.
+        const text = labels[labels.length - 1].replace(/\s/g, "");
+        if (!text.includes("reload") || !text.includes("page") || normalizeLabel(element.innerText) !== "reload page") continue;
+      }
       const rect = element.getBoundingClientRect();
       const view = element.ownerDocument?.defaultView || window;
       const style = view.getComputedStyle(element);
@@ -356,12 +359,13 @@
       style.id = providerTextScaleStyleId;
       document.head.appendChild(style);
     }
-    style.textContent = `
+    const css = `
 html[data-tikpal-provider-text-scale] {
   -webkit-text-size-adjust: 100% !important;
   text-size-adjust: 100% !important;
 }
 `;
+    if (style.textContent !== css) style.textContent = css;
     root.style.setProperty("--tikpal-provider-text-density", density.toFixed(3));
   };
   const ensureProviderFontThemeStyle = (theme) => {
@@ -373,7 +377,7 @@ html[data-tikpal-provider-text-scale] {
       style.id = providerFontThemeStyleId;
       document.head.appendChild(style);
     }
-    style.textContent = `
+    const css = `
 html[data-tikpal-provider-font-theme] {
   --tikpal-provider-font-family: ${providerFontFamily(theme)};
 }
@@ -385,6 +389,7 @@ html[data-tikpal-provider-font-theme] textarea {
   font-family: var(--tikpal-provider-font-family) !important;
 }
 `;
+    if (style.textContent !== css) style.textContent = css;
     root.dataset.tikpalProviderFontTheme = normalizeProviderFontTheme(theme);
   };
   const hasDirectText = (element) => {
@@ -393,14 +398,21 @@ html[data-tikpal-provider-font-theme] textarea {
     }
     return false;
   };
+  const providerTextHasVisibleBox = (element) => {
+    if (typeof element.checkVisibility === "function") {
+      // Do not force Spotify's off-screen content-visibility subtrees to render.
+      return element.checkVisibility({ contentVisibilityAuto: true, opacityProperty: true, visibilityProperty: true });
+    }
+    const rect = element.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  };
   const shouldScaleProviderTextElement = (element) => {
     if (!(element instanceof HTMLElement)) return false;
     if (element.matches(providerTextScaleSkipSelector) || element.closest(providerTextScaleSkipSelector)) return false;
     const tagName = element.tagName.toLowerCase();
     const isTextControl = ["button", "input", "select", "textarea"].includes(tagName);
     if (!isTextControl && !hasDirectText(element)) return false;
-    const rect = element.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) return false;
+    if (!providerTextHasVisibleBox(element)) return false;
     const style = getComputedStyle(element);
     if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity || 1) <= 0) return false;
     const fontSize = Number.parseFloat(style.fontSize);
@@ -413,8 +425,7 @@ html[data-tikpal-provider-font-theme] textarea {
     const tagName = element.tagName.toLowerCase();
     const isTextControl = ["button", "input", "select", "textarea"].includes(tagName);
     if (!isTextControl && !hasDirectText(element)) return false;
-    const rect = element.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) return false;
+    if (!providerTextHasVisibleBox(element)) return false;
     const style = getComputedStyle(element);
     if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity || 1) <= 0) return false;
     if (providerIconFontPattern.test(style.fontFamily) || providerIconFontPattern.test(String(element.className || ""))) return false;
@@ -438,25 +449,35 @@ html[data-tikpal-provider-font-theme] textarea {
     const density = providerTextDensity(scale);
     const active = Math.abs(density - 1) > 0.001;
     let elementCount = 0;
+    const updates = [];
     document.querySelectorAll(providerTextScaleSelector).forEach((element) => {
       const tracked = element instanceof HTMLElement && element.dataset.tikpalTextScaleBaseFontSize;
       if (!tracked && !shouldScaleProviderTextElement(element)) return;
       if (!(element instanceof HTMLElement)) return;
       if (!active) {
-        if (tracked) restoreProviderTextElement(element);
+        if (tracked) updates.push(() => restoreProviderTextElement(element));
         return;
       }
+      let baseFontSize = Number.parseFloat(element.dataset.tikpalTextScaleBaseFontSize || "");
       if (!tracked) {
         const fontSize = Number.parseFloat(getComputedStyle(element).fontSize);
         if (!Number.isFinite(fontSize)) return;
-        element.dataset.tikpalTextScaleBaseFontSize = fontSize.toFixed(3);
-        element.dataset.tikpalTextScaleInlineFontSize = element.style.fontSize || "";
+        baseFontSize = Number(fontSize.toFixed(3));
+        const originalInline = element.style.fontSize || "";
+        updates.push(() => {
+          element.dataset.tikpalTextScaleBaseFontSize = fontSize.toFixed(3);
+          element.dataset.tikpalTextScaleInlineFontSize = originalInline;
+        });
       }
-      const baseFontSize = Number.parseFloat(element.dataset.tikpalTextScaleBaseFontSize || "");
       if (!Number.isFinite(baseFontSize)) return;
-      element.style.fontSize = `${Math.max(8, Math.min(58, baseFontSize * density)).toFixed(2)}px`;
+      const fontSize = `${Math.max(8, Math.min(58, baseFontSize * density)).toFixed(2)}px`;
+      updates.push(() => {
+        if (Number.parseFloat(element.style.fontSize) !== Number.parseFloat(fontSize)) element.style.fontSize = fontSize;
+      });
       elementCount += 1;
     });
+    // Finish layout reads before changing any font sizes.
+    updates.forEach((apply) => apply());
     lastProviderTextScaleElementCount = elementCount;
   };
   const recordProviderTextScale = (scale, source = "extension") => {
@@ -491,17 +512,24 @@ html[data-tikpal-provider-font-theme] textarea {
     if (force || now - lastProviderFontThemeScanMs >= 1200) {
       lastProviderFontThemeScanMs = now;
       let elementCount = 0;
+      const updates = [];
       document.querySelectorAll(providerTextScaleSelector).forEach((element) => {
         const tracked = element instanceof HTMLElement && element.dataset.tikpalFontThemeApplied === "1";
         if (!tracked && !shouldApplyProviderFontElement(element)) return;
         if (!(element instanceof HTMLElement)) return;
-        if (!tracked) {
-          element.dataset.tikpalFontThemeInlineFontFamily = element.style.fontFamily || "";
-          element.dataset.tikpalFontThemeApplied = "1";
-        }
-        element.style.setProperty("font-family", "var(--tikpal-provider-font-family)", "important");
+        const originalInline = element.style.fontFamily || "";
+        updates.push(() => {
+          if (!tracked) {
+            element.dataset.tikpalFontThemeInlineFontFamily = originalInline;
+            element.dataset.tikpalFontThemeApplied = "1";
+          }
+          if (element.style.getPropertyValue("font-family") !== "var(--tikpal-provider-font-family)" || element.style.getPropertyPriority("font-family") !== "important") {
+            element.style.setProperty("font-family", "var(--tikpal-provider-font-family)", "important");
+          }
+        });
         elementCount += 1;
       });
+      updates.forEach((apply) => apply());
       lastProviderFontThemeElementCount = elementCount;
     }
     recordProviderFontTheme(activeProviderFontTheme, "content-font-theme");
