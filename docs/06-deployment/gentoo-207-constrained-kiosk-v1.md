@@ -121,6 +121,23 @@ The launcher log and the QQ Chromium command line must show the same resolved
 `--alsa-output-device=` value. A resolved `default` is a configuration error,
 not a valid fallback for browser audio on a Loopback-enabled kiosk.
 
+### BT66 reconnect recovery
+
+The BT66 DAC must be electrically present before changing any audio routing.
+After a cable or port change, confirm `lsusb -d 8087:1024`,
+`/proc/asound/cards`, and `aplay -l` twice about 30 seconds apart. The ALSA
+card number is allowed to change; the stable check is the `BT66` card name
+with playback `device 0`.
+
+Do not add `TIKPAL_AUDIO_CARD_FORCE` merely because the DAC is absent: no
+configuration can select a device that has not enumerated. Once it returns,
+`tikpal-audio-adapt.sh check` must resolve `_audioout` to
+`plughw:CARD=BT66,DEV=0`. If `mpc status` still reports a previous
+`Failed to open ALSA device "_audioout"`, schedule an MPD restart, wait for
+the queue state to reload, then require both a clean `mpc status` and
+`/proc/asound/card*/pcm0p/sub0/status` reporting `RUNNING` before accepting
+audible playback. Do not change the user volume as part of this recovery.
+
 ## Radio catalog and DLNA recognition tap
 
 207 uses the existing Tikpal-owned `/var/lib/tikpal/radio.sqlite3`, not the
