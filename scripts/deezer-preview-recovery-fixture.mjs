@@ -10,7 +10,7 @@ function fixture(hostname = 'www.deezer.com') {
   const gate = { active: true, playingCount: 0 };
   const player = { playing: true, paused: false, loading: false, position: 0, audioAds: null,
     getCurrentSong: () => song, control: { play: () => { plays++; }, nextSong: () => { skips++; } } };
-  const document = { visibilityState: 'visible', addEventListener: (type, fn) => listeners.set(type, fn) };
+  const document = { querySelectorAll: () => [], visibilityState: 'visible', addEventListener: (type, fn) => listeners.set(type, fn) };
   const window = { dzPlayer: player, __tikpalProviderAudioGate: { status: () => gate } };
   vm.runInNewContext(source, { window, document, location: { hostname }, URL, Map, Promise, console,
     Date: { now: () => now }, setTimeout: (fn, ms) => { timers.set(++nextId, { fn, at: now + ms }); return nextId; }, clearTimeout: id => timers.delete(id) });
@@ -61,4 +61,25 @@ await progressing.advance(1000);progressing.player.position=15;await progressing
 assert.deepEqual(progressing.counts(),{plays:1,skips:0});
 for(const error of [{code:3},{code:4}]){const f=fixture();f.window.__tikpalDeezerPreviewRecovery.mediaError({error,src:f.url});await f.advance(5000);assert.equal(f.counts().plays,0);}
 const otherMedia=fixture();otherMedia.window.__tikpalDeezerPreviewRecovery.mediaError({error:{code:2},src:'https://cdnt-preview.dzcdn.net/api/1/other.mp3'});await otherMedia.advance(5000);assert.equal(otherMedia.counts().plays,0);
-console.log('Deezer media read recovery passed: current preview only, progress required, decode/unsupported excluded');
+console.log('Deezer media read recovery passed: current preview only, progress required, decode and unconfirmed unsupported errors excluded');
+
+function errorDialog(f, text='Error\nAn error occurred, please try again later\nOK') {
+ let clicks=0, shown=true;
+ const button={innerText:'OK',disabled:false,getClientRects:()=>[{}],click(){clicks++;shown=false;}};
+ const dialog={innerText:text,getClientRects:()=>shown?[{}]:[],querySelectorAll:()=>[button]};
+ f.document.querySelectorAll=()=>[dialog];
+ return {clicks:()=>clicks,show:()=>{shown=true;},button};
+}
+const unsupported=fixture(), popup=errorDialog(unsupported);
+unsupported.window.__tikpalDeezerPreviewRecovery.mediaError({error:{code:4},src:unsupported.url});
+await unsupported.advance(5000);assert.deepEqual(unsupported.counts(),{plays:1,skips:1});assert.equal(popup.clicks(),1);
+for(const change of [f=>f.player.paused=true,f=>f.gate.active=false,f=>f.listeners.get('pointerdown')({isTrusted:true})]){
+ const f=fixture(),p=errorDialog(f);f.window.__tikpalDeezerPreviewRecovery.mediaError({error:{code:4},src:f.url});change(f);await f.advance(16000);assert.equal(p.clicks(),0);assert.equal(f.counts().skips,0);
+}
+const unknown=fixture(),other=errorDialog(unknown,'Error Please log in OK');unknown.window.__tikpalDeezerPreviewRecovery.mediaError({error:{code:4},src:unknown.url});await unknown.advance(16000);assert.equal(other.clicks(),0);assert.equal(unknown.counts().plays,0);assert.equal(unknown.timers.size,0);
+const delayed=fixture();delayed.window.__tikpalDeezerPreviewRecovery.mediaError({error:{code:4},src:delayed.url});await delayed.advance(2000);const late=errorDialog(delayed);await delayed.advance(5000);assert.equal(late.clicks(),1);assert.equal(delayed.counts().skips,1);
+const capped=fixture(),capPopup=errorDialog(capped);for(let i=0;i<4;i++){capPopup.show();capped.window.__tikpalDeezerPreviewRecovery.mediaError({error:{code:4},src:capped.url});await capped.advance(5000);}assert.equal(capped.counts().skips,3);assert.equal(capPopup.clicks(),3,'last error remains visible after recovery limit');
+console.log('Deezer code 4 dialog recovery passed: exact dialog, delayed insertion, cancellation and visible failure at cap');
+const interrupted=fixture(),interruptedPopup=errorDialog(interrupted);interrupted.window.__tikpalDeezerPreviewRecovery.mediaError({error:{code:4},src:interrupted.url});await interrupted.advance(1000);interrupted.listeners.get('pointerdown')({isTrusted:true});await interrupted.advance(5000);assert.equal(interruptedPopup.clicks(),1);assert.equal(interrupted.counts().skips,0);
+const unrelated=fixture(),unrelatedPopup=errorDialog(unrelated);unrelated.window.__tikpalDeezerPreviewRecovery.mediaError({error:{code:4},src:'https://cdnt-preview.dzcdn.net/api/1/unrelated.mp3'});await unrelated.advance(16000);assert.equal(unrelatedPopup.clicks(),0);
+const disabled=fixture(),disabledPopup=errorDialog(disabled);disabledPopup.button.disabled=true;disabled.window.__tikpalDeezerPreviewRecovery.mediaError({error:{code:4},src:disabled.url});await disabled.advance(16000);assert.equal(disabledPopup.clicks(),0);assert.equal(disabled.counts().skips,0);

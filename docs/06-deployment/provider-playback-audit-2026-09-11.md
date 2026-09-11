@@ -101,3 +101,44 @@ Final clean-page samples showed Deezer preview progress advancing from 18.16 to
 The three deployed runtime source hashes matched the workspace. Gate and Deezer
 fixtures also passed directly on 207. The manager smoke additionally verifies
 that a same-origin child-window beforeunload prompt is not accepted.
+
+## Follow-up: code 4 with the confirmed Deezer error dialog
+
+A later field incident showed the current preview at zero, no audible output,
+and media error 4 with an empty message. The exact site dialog read `Error / An
+error occurred, please try again later / OK`. This is a site modal, not Chromium's
+beforeunload prompt, and code 4 alone does not prove HTTP 403 or a temporary
+network error.
+
+Recovery now remembers an error-4 event only for the current preview CDN MP3.
+For up to 15 seconds, the existing event-triggered timer looks for one visible
+role=dialog whose complete normalized text matches that confirmed message and
+which has one visible, enabled OK button. It clicks that real button, then uses
+the existing single Play attempt and bounded Next action. A matching modal that
+reappears during the failed attempt is closed before Next. Unknown text, missing
+or disabled/ambiguous controls, unrelated media and decode errors are retained.
+No modal CSS hiding, full-page observer, permanent polling, network probing or
+new permission was added. User interaction cancels pending recovery. After three
+skips in two minutes, the last site error remains visible and recovery stops.
+
+The module was applied to the actual failed live element. The modal disappeared
+by the one-second sample and the playlist advanced 19 -> 20 at four seconds.
+Subsequent previews also failed; it advanced through 21 to 22 and stopped with
+the error dialog retained. This confirms the cap and does not mean the upstream
+media was repaired. Evidence: `/tmp/deezer-code4-live.log` and the follow-up
+incident inspection on 207. A single operator refresh was then performed to
+request a fresh page; it is not an added automatic-refresh loop. Chromium's
+beforeunload confirmation was automatically accepted in 21ms.
+
+The module file is deployed persistently and loaded on new documents by the
+restarted CDP manager. The already-open page received the same module after its
+old recovery timers were stopped, without resetting the provider profile or
+volume. Backup: `tikpal.deploy-backups/20260911-deezer-code4/`.
+The full kiosk suite passed. Additional fixture checks cover delayed modal
+insertion, absent/unknown dialogs, disabled OK, unrelated previews, cancellation
+before and after dismissal, and keeping the last error visible at the skip cap.
+After the single refresh, normal playlist playback reached 12.37 seconds with
+Chromium audible=true. The newly loaded document reported the code-4 handler
+present and no visible error dialog. Deployed module SHA-256 matched the
+workspace. The side panel was restored to its original collapsed state; login
+and 35% volume were retained. No GitHub commit/push was performed in this fix.
