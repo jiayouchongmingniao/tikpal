@@ -11,8 +11,10 @@ import { buildProxyConfig, buildProxyKey, normalizeProviderTextScale } from "../
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 
 const requiredFiles = [
+  "deploy/chromium/tikpal-close-audio.mjs",
   "deploy/chromium/web-mode-extension/deezer-ad-click-guard.js",
   "deploy/chromium/tikpal-provider-child-windows.mjs",
+  "deploy/chromium/deezer-preview-recovery.js",
   "deploy/chromium/web-mode-extension/deezer-hide-ads.css",
   "server/index.mjs",
   "server/web.mjs",
@@ -1751,21 +1753,11 @@ sync_runtime_provider_pool_process_statuses ""
     "Explore entry veil should have a short request-owned timeout that stale callbacks cannot remove"
   );
   assert(
-    sidePanelSource.includes("await waitForExploreCloseCover(closeRequestId)")
-      && sidePanelSource.includes('type: "cover-requested"')
-      && sidePanelSource.includes('type: "closed"')
+    !sidePanelSource.includes("await waitForExploreCloseCover")
+      && sidePanelSource.includes('closeRequestId: requestId')
       && sidePanelSource.includes('type: "failed"')
-      && !sidePanelSource.includes("await new Promise(r => setTimeout(r, 3050))"),
-    "Explore close should wait for a request-owned main-window cover instead of the obsolete three-second delay"
-  );
-  assert(
-    exploreCloseVeilSource.includes('EXPLORE_CLOSE_COVER_FALLBACK_MS = 1_100')
-      && exploreCloseVeilSource.includes('type: "cover-ready"')
-      && appSource.includes("onTransitionEnd")
-      && appSource.includes("acknowledgeExploreCloseCover")
-      && appSource.includes("releaseExploreCloseVeil")
-      && stylesSource.includes("transition: opacity 250ms ease-out, visibility 0s linear 250ms;"),
-    "Explore close should acknowledge an opaque cover, reject stale messages, and release it with a short fade after physical close"
+      && !appSource.includes('className={"app-explore-close-overlay"'),
+    "Explore close should dispatch immediately and return without an opaque cover"
   );
   assert(stylesSource.includes("--transport-play-icon") && stylesSource.includes("--transport-play-border"), "Transport play buttons should expose skin-aware icon and border tokens");
   assert(stylesSource.includes(".screen-saver-wake-hint"), "Screen sleep should include a subtle touch-to-wake hint");
@@ -3083,7 +3075,7 @@ sync_runtime_provider_pool_process_statuses ""
       && !webModeScript.includes("launch_close_overlay_veil()"),
     "Explore may clean a legacy close-overlay PID but must not restore the removed veil launcher"
   );
-  assert(serverSource.includes("await runWebModeCloseInBackground(closeRequestId, activeProvider)"), "Explore close should return only after its physical close transaction succeeds");
+  assert(serverSource.includes("await runWebModeCloseInBackground(closeRequestId, snapshot.activeProvider || \"\", snapshot)"), "Explore close should return only after its physical close transaction succeeds");
   assert(webModeScript.includes("TIKPAL_WEB_MODE_CLOSE_REQUEST_ID") && serverSource.includes("TIKPAL_WEB_MODE_CLOSE_REQUEST_ID: closeRequestId"), "Explore close should pass a close request id into the shell transaction");
   assert(webModeScript.includes("runtime_open_request_is_current") && serverSource.includes("TIKPAL_WEB_MODE_OPEN_EXPECTED_ACTIVE_PROVIDER: providerId"), "a delayed resident open should stop when Close owns the runtime state");
   assert(webModeScript.includes("TIKPAL_WEB_MODE_CLOSE_ACTIVE_PROVIDER") && webModeScript.includes('park_web_mode_surfaces_for_reopen "$active_provider"'), "Explore warm close should park the active provider before scanning resident providers");
@@ -3148,7 +3140,7 @@ sync_runtime_provider_pool_process_statuses ""
       warmCloseBody.lastIndexOf("runtime_close_request_is_current") < warmCloseBody.indexOf('write_runtime_provider_state ""'),
     "Explore stale warm close should not park or clear a provider after a newer open starts"
   );
-  assert(warmCloseBody.includes("sync_runtime_provider_pool_process_statuses"), "Explore warm close should sync resident provider statuses from surviving profile processes");
+  assert(!warmCloseBody.includes("sync_runtime_provider_pool_process_statuses") && !warmCloseBody.includes('sleep "$settle"'), "Explore warm close should not wait for a pool-wide status scan or fixed settle delay");
   const syncProviderStatusBody = webModeScript.slice(webModeScript.indexOf("sync_runtime_provider_pool_process_statuses() {"), webModeScript.indexOf("\n}\n\nstop_window_guard()", webModeScript.indexOf("sync_runtime_provider_pool_process_statuses() {")));
   assert(
     webModeScript.includes("provider_has_real_provider_page()") &&
@@ -3673,7 +3665,7 @@ sync_runtime_provider_pool_process_statuses ""
   );
   assert(
       serverSource.includes('previousRuntimeState.activeProvider ?? previousRuntimeState.lastProvider ?? "qq_music"')
-      && serverSource.includes("lastProvider: runtimeState.lastProvider ?? activeProvider ?? null")
+      && serverSource.includes("lastProvider: activeProvider || snapshot?.lastProvider || null")
       && appSource.includes('sendWebModeAction({ type: "open", openRequestId: requestId })')
       && webModeScript.includes("if (state.activeProvider) state.lastProvider = state.activeProvider;"),
     "Ambient and Hi-Fi Explore reopen should retain the last successful provider after activeProvider clears on close"

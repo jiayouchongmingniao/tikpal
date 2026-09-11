@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { createConnection } from "node:net";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -177,6 +177,7 @@ await new Promise((resolve) => browser.listen(0, "127.0.0.1", resolve));
 const manager = spawn(process.execPath, ["--experimental-websocket", "deploy/chromium/tikpal-web-mode-cdp-manager.mjs"], {
   cwd: root,
   env: {
+    TIKPAL_WEB_MODE_STATE_PATH: path.join(temporary, "runtime.json"),
     ...process.env,
     TIKPAL_WEB_MODE_PROVIDER_DEBUG_PORT: String(browser.address().port),
     TIKPAL_WEB_MODE_CDP_SESSION_MANAGER_SOCKET: socketPath,
@@ -266,6 +267,16 @@ try {
   assert(muted.ok && muted.recovered, "close audio gate should be a safe foreground command with one transparent recovery");
   assert(browserConnections === 3 && getTargets === 3 && muted.target.sessionGeneration === 4, "close audio-gate recovery should keep exactly one hot replacement session");
   assert(muted.target.targetId === "spotify-target-audio-gate-restarted", "close audio gate should attach to the replacement provider target");
+  const runtimeFile = path.join(temporary, "runtime.json");
+  writeFileSync(runtimeFile, JSON.stringify({activeProvider:"spotify",lastOpenedRequestId:"open-1",lastOpenedXSessionGeneration:"x-1"}));
+  writeFileSync(`${runtimeFile}.close-audio.json`, JSON.stringify({provider:"spotify",session:"open-1",generation:"x-1",requestId:"close-1"}));
+  const blocked = await managerRequest({op:"command",provider:"spotify",method:"Runtime.evaluate",params:{expression:"window.__tikpalProviderAudioGate?.setActive(true)"},retryable:true,priority:"foreground"});
+  assert(!blocked.ok && blocked.error === "PROVIDER_CLOSING", "queued activation cannot undo close mute");
+  const staleClose = await managerRequest({op:"command",provider:"spotify",closeRequestId:"old-close",method:"Runtime.evaluate",params:{expression:"window.__tikpalProviderAudioGate?.setActive(false)"},priority:"foreground"});
+  assert(!staleClose.ok && staleClose.error === "CLOSE_AUDIO_STALE", "old close command cannot pause a newer owner");
+  writeFileSync(runtimeFile, JSON.stringify({activeProvider:"spotify",lastOpenedRequestId:"open-2",lastOpenedXSessionGeneration:"x-1"}));
+  const reopened = await managerRequest({op:"command",provider:"spotify",method:"Runtime.evaluate",params:{expression:"window.__tikpalProviderAudioGate?.setActive(true)"},priority:"foreground"});
+  assert(reopened.ok, "old close marker does not block a new session");
   const unsafe = await managerRequest({ op: "command", provider: "spotify", method: "Page.navigate", params: { url: "https://example.invalid/" }, retryable: false, priority: "foreground" });
   assert(!unsafe.ok && browserConnections === 3, "non-idempotent command must not be replayed after transport loss");
   console.log("[tikpal-cdp-session-manager-smoke] passed");

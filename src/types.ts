@@ -132,6 +132,7 @@ export interface WebModeState {
 }
 
 export interface WebModeActionRequest {
+  closeRequestId?: string;
   panelMode?: "expanded" | "collapsed";
   panelSessionId?: string | null;
   panelXSessionGeneration?: string | null;

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react"
 import { Apple, Cloud, Gem, Globe2, Music2, ChevronsLeft, ChevronsRight, LogOut, ShoppingBag, SquarePlay, Type, Volume2 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { fetchTikpalState, fetchWebModeState, sendPlaybackAction, sendWebModeAction } from "../api/tikpalClient";
-import { createExploreCloseRequestId, EXPLORE_CLOSE_CHANNEL, EXPLORE_CLOSE_COVER_FALLBACK_MS, isExploreCloseMessage, type ExploreCloseMessage } from "../exploreCloseVeil";
+import { createExploreCloseRequestId, EXPLORE_CLOSE_CHANNEL, isExploreCloseMessage, type ExploreCloseMessage } from "../exploreCloseVeil";
 import { useI18n } from "../i18n";
 import type { TikpalState, WebModeProviderId, WebModeProviderSummary, WebModeState } from "../types";
 
@@ -92,34 +92,6 @@ function postExploreCloseMessage(message: ExploreCloseMessage) {
   } catch {}
 }
 
-function waitForExploreCloseCover(requestId: string) {
-  if (typeof BroadcastChannel === "undefined") return Promise.resolve();
-  return new Promise<void>((resolve) => {
-    let settled = false;
-    let channel: BroadcastChannel | null = null;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    const finish = () => {
-      if (settled) return;
-      settled = true;
-      if (timer) clearTimeout(timer);
-      channel?.close();
-      resolve();
-    };
-    try {
-      channel = new BroadcastChannel(EXPLORE_CLOSE_CHANNEL);
-      channel.onmessage = (event) => {
-        if (!isExploreCloseMessage(event.data)) return;
-        const message = event.data;
-        if (message.type === "cover-ready" && message.requestId === requestId) finish();
-      };
-      timer = setTimeout(finish, EXPLORE_CLOSE_COVER_FALLBACK_MS + 100);
-      channel.postMessage({ type: "cover-requested", requestId });
-    } catch {
-      finish();
-    }
-  });
-}
-
 export function WebModeSidePanel() {
   const { t, friendlyError } = useI18n();
   const [webMode, setWebMode] = useState<WebModeState | null>(null);
@@ -134,6 +106,9 @@ export function WebModeSidePanel() {
   // Keep the reachable rail until expansion is confirmed; the full header's
   // exit button would otherwise sit offscreen while the window is moving.
   const panelMode = requestedPanelMode === "collapsed" ? "collapsed" : webMode?.panelMode ?? "expanded";
+  const closeRequestRef = useRef<string | null>(null);
+  const [closeSlow, setCloseSlow] = useState(false);
+  const [closeFailed, setCloseFailed] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const actionLockRef = useRef(false);
   const optimisticProviderRef = useRef<WebModeProviderId | null>(null);
@@ -409,34 +384,39 @@ export function WebModeSidePanel() {
   }
 
   async function closeWebMode() {
-    if (pendingActionRef.current !== "panel" && (actionLockRef.current || pendingAction || pendingProvider)) return;
+    if (closeRequestRef.current || (pendingActionRef.current !== "panel" && (actionLockRef.current || pendingAction || pendingProvider))) return;
+    const requestId = createExploreCloseRequestId();
+    closeRequestRef.current = requestId;
     actionLockRef.current = true;
     setPendingAction("close");
     pendingActionRef.current = "close";
-    const closeRequestId = createExploreCloseRequestId();
+    setCloseSlow(false);
+    setCloseFailed(false);
     setError(null);
-    optimisticProviderRef.current = null;
-    await waitForExploreCloseCover(closeRequestId);
+    const started = performance.now();
+    console.info("[explore-close]", {requestId, stage:"click", elapsedMs:0});
+    const timer = setTimeout(() => { if (closeRequestRef.current === requestId) setCloseSlow(true); }, 1000);
+    postExploreCloseMessage({ type: "cover-requested", requestId });
     try {
-      const next = await sendWebModeAction({ type: "close" });
-      postExploreCloseMessage({ type: "closed", requestId: closeRequestId, state: next });
+      const next = await sendWebModeAction({ type: "close", closeRequestId: requestId, panelSessionId: webMode?.panelSessionId, panelXSessionGeneration: webMode?.panelXSessionGeneration });
+      if (closeRequestRef.current !== requestId) return;
+      if (next.activeProvider || next.openingProvider) throw new Error("Close incomplete");
+      postExploreCloseMessage({ type: "closed", requestId, state: next });
+      console.info("[explore-close]", {requestId, stage:"close_confirmed", elapsedMs:performance.now()-started});
     } catch (nextError) {
-      postExploreCloseMessage({ type: "failed", requestId: closeRequestId });
+      if (closeRequestRef.current !== requestId) return;
+      postExploreCloseMessage({ type: "failed", requestId });
+      setCloseFailed(true);
       setError(nextError instanceof Error ? nextError.message : "Close failed");
     } finally {
-      // Release the action lock so other actions are not blocked, but keep
-      // pendingAction = "close" so the fade animation continues until polling
-      // confirms the close completed (webModeActive becomes false). The
-      // applyWebModeState handler or the component unmount will clear it.
-      actionLockRef.current = false;
-      // Safety: if polling never clears the close state (e.g. API error), reset
-      // after the full fade-out duration so reopening is not permanently blocked.
-      setTimeout(() => {
-        if (pendingActionRef.current === "close") {
-          pendingActionRef.current = null;
-          setPendingAction(null);
-        }
-      }, 3500);
+      clearTimeout(timer);
+      if (closeRequestRef.current === requestId) {
+        closeRequestRef.current = null;
+        actionLockRef.current = false;
+        pendingActionRef.current = null;
+        setPendingAction(null);
+        setCloseSlow(false);
+      }
     }
   }
 
@@ -479,11 +459,12 @@ export function WebModeSidePanel() {
 
   if (panelMode === "collapsed") {
     return (
-      <main className="web-mode-panel-rail" data-web-mode-panel data-panel-mode="collapsed" aria-busy={pendingAction === "panel"}>
+      <main className="web-mode-panel-rail" data-web-mode-panel data-panel-mode="collapsed" aria-busy={pendingAction === "panel" || pendingAction === "close"}>
         <button type="button" className="web-mode-rail-expand" data-panel-expand
           aria-label={t("explore.expandPanel")} title={t("explore.expandPanel")}
           disabled={Boolean(pendingAction || pendingProvider || displayedOpeningProvider)}
           onClick={() => void changePanelMode("expanded")}><ChevronsLeft size={28} /></button>
+        {(closeSlow || closeFailed) && <span className="web-mode-rail-error" role="status" title={t(closeFailed ? "explore.closeFailed" : "common.closing")} aria-label={t(closeFailed ? "explore.closeFailed" : "common.closing")}>{closeFailed ? "!" : "…"}</span>}
         {panelError && <span className="web-mode-rail-error" role="status" title={t("explore.panelChangeFailed")} aria-label={t("explore.panelChangeFailed")}>!</span>}
         <button type="button" className="web-mode-rail-exit" data-panel-exit
           aria-label={t("explore.exit")} title={t("explore.exit")}
@@ -500,7 +481,7 @@ export function WebModeSidePanel() {
       data-web-mode-panel
       data-panel-mode="expanded"
       data-web-mode-state={panelState}
-      aria-busy={panelState !== "ready" || pendingAction === "panel"}
+      aria-busy={panelState !== "ready" || pendingAction === "panel" || pendingAction === "close"}
       onContextMenu={(e) => e.preventDefault()}
     >
 
@@ -614,7 +595,7 @@ export function WebModeSidePanel() {
       </section>
 
       <footer className="web-mode-panel-footer" role="status" title={error ?? undefined}>
-        {panelError ? t("explore.panelChangeFailed") : friendlyError(error, "error.explore") ?? (displayedOpeningProvider ? `${t("common.opening")} ${providerLabels[displayedOpeningProvider]}` : t("explore.footer"))}
+        {closeFailed ? t("explore.closeFailed") : closeSlow ? t("common.closing") : panelError ? t("explore.panelChangeFailed") : friendlyError(error, "error.explore") ?? (displayedOpeningProvider ? `${t("common.opening")} ${providerLabels[displayedOpeningProvider]}` : t("explore.footer"))}
       </footer>
       <div className={"web-mode-open-overlay" + (exploreOpening ? " active" : "")} />
     </main>

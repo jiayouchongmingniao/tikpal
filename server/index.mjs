@@ -14333,7 +14333,7 @@ async function runWebModeCommand(action, providerId = "", env = {}) {
     ? `${WEB_MODE_COMMAND} ${shellQuote(action)} ${shellQuote(providerId)}`
     : `${WEB_MODE_COMMAND} ${shellQuote(action)}`;
   const commandWithEnv = envPrefix ? `${envPrefix} ${command}` : command;
-  if (action === "panel-mode") {
+  if (action === "panel-mode" || action === "close-audio") {
     // Kill the entire layout command group on timeout. Killing only sh would
     // leave a late state writer racing Close after the API releases its gate.
     await new Promise((resolveCommand, rejectCommand) => {
@@ -14346,21 +14346,25 @@ async function runWebModeCommand(action, providerId = "", env = {}) {
       const timer = setTimeout(() => {
         timedOut = true;
         try { process.kill(-child.pid, "SIGKILL"); } catch { /* Already exited. */ }
-      }, Math.min(WEB_MODE_COMMAND_TIMEOUT_MS, 12000));
+      }, Math.min(WEB_MODE_COMMAND_TIMEOUT_MS, action === "close-audio" ? 4000 : 12000));
       child.once("error", error => { clearTimeout(timer); rejectCommand(error); });
       child.once("close", code => {
         clearTimeout(timer);
-        if (code === 0 && !timedOut) resolveCommand();
+        if (code === 0 && !timedOut) {
+          if (action === "close-audio" && details.trim()) console.log(`[tikpal-close-audio] ${details.trim()}`);
+          resolveCommand();
+        }
         else rejectCommand(new Error(timedOut ? "PANEL_LAYOUT_TIMEOUT" : details.trim() || "PANEL_LAYOUT_FAILED"));
       });
     });
     return;
   }
-  await runCommand(commandWithEnv, {
+  const output = await runCommand(commandWithEnv, {
     allowFailure: false,
     timeout: action === "open" ? WEB_MODE_OPEN_COMMAND_TIMEOUT_MS : WEB_MODE_COMMAND_TIMEOUT_MS,
     includeStdoutOnFailure: true
   });
+  if (action === "close" && output?.trim()) console.log(`[tikpal-close-shell] ${output.trim()}`);
 }
 
 function logWebModeEntryStage(stage, { requestId = "", providerId = "", xSessionGeneration = "", detail = null } = {}) {
@@ -14664,19 +14668,43 @@ function runResidentWebModeOpenInBackground() {
   return webModeResidentOpenPromise;
 }
 
-function runWebModeCloseInBackground(closeRequestId = "", activeProvider = "") {
+function runWebModeCloseInBackground(closeRequestId = "", activeProvider = "", snapshot = null) {
   if (webModeClosePromise) {
     return webModeClosePromise;
   }
   webModeCloseInFlight = true;
   webModeClosePromise = (async () => {
     let restoreError = null;
+    let completed = false;
+    const started = monotonicNowMs();
+    const stage = name => console.log(`[tikpal-explore-close] ${JSON.stringify({requestId:closeRequestId, provider:activeProvider, stage:name, elapsedMs:monotonicNowMs()-started})}`);
+    stage("api_received");
     try {
+      if (snapshot && activeProvider) {
+        await runWebModeCommand("close-audio", activeProvider, {
+          TIKPAL_WEB_MODE_CLOSE_REQUEST_ID: closeRequestId,
+          TIKPAL_WEB_MODE_CLOSE_SESSION: snapshot.lastOpenedRequestId || "",
+          TIKPAL_WEB_MODE_CLOSE_AUDIO_DEADLINE: String(Date.now()+500),
+          TIKPAL_WEB_MODE_CLOSE_GENERATION: snapshot.lastOpenedXSessionGeneration || ""
+        });
+        stage("audio_confirmed");
+      }
+      if (webModePanelPromise) await webModePanelPromise.catch(() => undefined);
+      if (snapshot) {
+        const current = await readWebModeRuntimeState();
+        if (current.activeProvider !== snapshot.activeProvider || current.lastOpenedRequestId !== snapshot.lastOpenedRequestId
+            || current.lastOpenedXSessionGeneration !== snapshot.lastOpenedXSessionGeneration) throw new Error("CLOSE_AUDIO_STALE");
+      }
+      await writeWebModeRuntimeState({openingProvider:null, openRequestId:null, openStartedAt:null,
+        openXSessionGeneration:null, lastProvider: activeProvider || snapshot?.lastProvider || null, lastError:null, closeRequestId});
       await runWebModeCommand("close", "", {
         TIKPAL_WEB_MODE_CLOSE_ACTIVE_PROVIDER: activeProvider,
+        TIKPAL_WEB_MODE_CLOSE_AUDIO_CONFIRMED: snapshot && activeProvider ? "1" : "0",
         TIKPAL_WEB_MODE_CLOSE_REQUEST_ID: closeRequestId,
         TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS: "10"
       });
+      completed = true;
+      stage("windows_hidden");
       if (await webModeCloseRequestIsCurrent(closeRequestId)) {
         try {
           const restoredPlayback = await restoreWebModePlaybackHandoff();
@@ -14704,7 +14732,7 @@ function runWebModeCloseInBackground(closeRequestId = "", activeProvider = "") {
       throw new Error(closeError);
     } finally {
       webModeCloseInFlight = false;
-      if (await webModeCloseRequestIsCurrent(closeRequestId).catch(() => false)) {
+      if (completed && await webModeCloseRequestIsCurrent(closeRequestId).catch(() => false)) {
         await writeWebModeRuntimeState({
           activeProvider: null,
           openingProvider: null,
@@ -14902,26 +14930,17 @@ let webModeKeyboardStickyUntilMs = 0;
 async function applyWebModeAction(action, { receivedMonotonicMs = monotonicNowMs() } = {}) {
   const type = String(action?.type ?? "").trim().toLowerCase();
   if (type === "close") {
+    if (webModeClosePromise) { await webModeClosePromise; return await buildWebModeState(); }
+    if (webModePanelCloseRequested) throw new Error("EXPLORE_CLOSE_BUSY");
     webModePanelCloseRequested = true;
     try {
-      if (webModePanelPromise) await webModePanelPromise.catch(() => undefined);
-      if (webModeClosePromise) {
-        await webModeClosePromise;
-        return await buildWebModeState();
-      }
-      const closeRequestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      const runtimeState = await readWebModeRuntimeState();
-      const activeProvider = typeof runtimeState.activeProvider === "string" ? runtimeState.activeProvider : "";
-      await writeWebModeRuntimeState({
-        openingProvider: null,
-        openRequestId: null,
-        openStartedAt: null,
-        openXSessionGeneration: null,
-        lastProvider: runtimeState.lastProvider ?? activeProvider ?? null,
-        lastError: null,
-        closeRequestId
-      });
-      await runWebModeCloseInBackground(closeRequestId, activeProvider);
+      const suppliedId = typeof action.closeRequestId === "string" ? action.closeRequestId : "";
+      if (suppliedId && !/^[A-Za-z0-9._:-]{1,128}$/.test(suppliedId)) throw new Error("INVALID_CLOSE_REQUEST_ID");
+      const closeRequestId = suppliedId || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const snapshot = await readWebModeRuntimeState();
+      if ((action.panelSessionId && action.panelSessionId !== snapshot.lastOpenedRequestId)
+          || (action.panelXSessionGeneration && action.panelXSessionGeneration !== snapshot.lastOpenedXSessionGeneration)) throw new Error("CLOSE_AUDIO_STALE");
+      await runWebModeCloseInBackground(closeRequestId, snapshot.activeProvider || "", snapshot);
       return await buildWebModeState();
     } finally { webModePanelCloseRequested = false; }
   }
@@ -14952,7 +14971,7 @@ async function applyWebModeAction(action, { receivedMonotonicMs = monotonicNowMs
     return await buildWebModeState();
   }
 
-  if (webModePanelPromise && ["open", "reset_provider_profile", "proxy"].includes(type)) {
+  if ((webModePanelPromise || webModePanelCloseRequested || webModeCloseInFlight) && ["open", "reset_provider_profile", "proxy"].includes(type)) {
     throw new Error("PANEL_BUSY_OR_STALE");
   }
 

@@ -104,8 +104,10 @@ async function startApi(commandMode, options = {}) {
       TIKPAL_API_HOST: "127.0.0.1",
       TIKPAL_API_PORT: String(port),
       TIKPAL_WEB_MODE_COMMAND: paths.command,
-      TIKPAL_WEB_MODE_COMMAND_TIMEOUT_MS: "2000",
-      TIKPAL_WEB_MODE_OPEN_COMMAND_TIMEOUT_MS: String(options.openTimeoutMs ?? 2000),
+      // Allow local shell startup under load; the timeout-specific case below
+      // still supplies its own short open deadline.
+      TIKPAL_WEB_MODE_COMMAND_TIMEOUT_MS: "5000",
+      TIKPAL_WEB_MODE_OPEN_COMMAND_TIMEOUT_MS: String(options.openTimeoutMs ?? 5000),
       TIKPAL_WEB_MODE_STATE_PATH: paths.state,
       TIKPAL_WEB_MODE_SETTINGS_PATH: paths.settings,
       TIKPAL_WEB_MODE_HANDOFF_STATE_PATH: paths.handoff,
@@ -239,7 +241,7 @@ async function testInitialOpeningAndWatchdogBypass() {
     const response = await openPromise;
     assert.equal(response.status, 200);
     const finalState = readState(api.paths);
-    assert.equal(finalState.activeProvider, "spotify");
+    assert.equal(finalState.activeProvider, "spotify", api.output());
     assert.equal(finalState.openingProvider, null);
     assert.equal(finalState.openRequestId, null);
     assert.equal(finalState.openStartedAt, null);

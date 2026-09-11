@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readCloseAudioOwner } from "./tikpal-close-audio.mjs";
 /*
  * One persistent browser-level CDP connection per resident provider.
  *
@@ -11,6 +12,7 @@ import { readFileSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node
 import { dirname } from "node:path";
 
 import { createProviderChildWindows } from "./tikpal-provider-child-windows.mjs";
+const deezerPreviewRecovery = readFileSync(new URL('./deezer-preview-recovery.js', import.meta.url), 'utf8');
 
 const socketPath = process.env.TIKPAL_WEB_MODE_CDP_SESSION_MANAGER_SOCKET || "/run/tikpal/cdp-session-manager.sock";
 const statePath = process.env.TIKPAL_WEB_MODE_CDP_SESSION_MANAGER_STATE_PATH || "/run/tikpal/cdp-session-manager.json";
@@ -257,6 +259,22 @@ class ProviderSession {
   }
 
   onEvent(method, params, sessionId) {
+    // Worker-loaded previews also surface as page network errors in Log.
+    const previewFailureUrl = method === 'Network.responseReceived' && params.response?.status === 403
+      ? params.response.url
+      : method === 'Log.entryAdded' && params.entry?.source === 'network'
+        && /status of 403\b/.test(params.entry.text || '') ? params.entry.url : null;
+    if (this.id === 'deezer' && sessionId === this.sessionId && previewFailureUrl) {
+      let url;
+      try { url = new URL(previewFailureUrl); } catch {}
+      if (url?.protocol === 'https:' && url.hostname === 'cdnt-preview.dzcdn.net' && /^\/api\/1\/.*\.mp3$/.test(url.pathname)) {
+        const state = (() => { try { return JSON.parse(readFileSync(process.env.TIKPAL_WEB_MODE_STATE_PATH || '/run/tikpal/web-mode-state.json', 'utf8')); } catch { return null; } })();
+        if (state?.activeProvider === 'deezer' && !state.openingProvider && !state.closeRequestId
+            && !readCloseAudioOwner(process.env.TIKPAL_WEB_MODE_STATE_PATH || '/run/tikpal/web-mode-state.json', 'deezer')) {
+          this.sendSession('Runtime.evaluate', { expression: `${deezerPreviewRecovery}\nwindow.__tikpalDeezerPreviewRecovery?.rejected(${JSON.stringify(url.origin + url.pathname)});` }).catch(() => {});
+        }
+      }
+    }
     if (method === "Target.targetCreated") this.updateTargets([params.targetInfo]);
     if (method === "Target.targetInfoChanged") this.updateTargets([params.targetInfo]);
     if (method === "Target.targetDestroyed") {
@@ -401,6 +419,12 @@ class ProviderSession {
     }
     await this.sendSession("Runtime.enable");
     await this.sendSession("Page.enable");
+    if (this.id === 'deezer') {
+      await this.sendSession('Network.enable');
+      await this.sendSession('Log.enable');
+      await this.sendSession('Page.addScriptToEvaluateOnNewDocument', { source: deezerPreviewRecovery });
+      await this.sendSession('Runtime.evaluate', { expression: deezerPreviewRecovery });
+    }
     const friendlyError = friendlyErrorFromUrl(target.url);
     if (friendlyError) this.friendlyError = friendlyError;
     else if (isHttpsPage(target)) this.friendlyError = null;
@@ -538,13 +562,17 @@ class ProviderSession {
       await this.ensureReady();
       timings.sessionLookupMs = nowMs() - lookupStarted;
       const commandStarted = nowMs();
+      const needsCloseFence = request.closeRequestId || (method === "Runtime.evaluate" && /\.setActive\(\s*true\s*\)/.test(params.expression || ""));
+      const closing = needsCloseFence && readCloseAudioOwner(process.env.TIKPAL_WEB_MODE_STATE_PATH || "/run/tikpal/web-mode-state.json", this.id);
+      if (request.closeRequestId && closing?.requestId !== request.closeRequestId) throw new Error("CLOSE_AUDIO_STALE");
+      if (closing && method === "Runtime.evaluate" && /\.setActive\(\s*true\s*\)/.test(params.expression || "")) throw new Error("PROVIDER_CLOSING");
       const result = await this.sendSession(method, params);
       timings.cdpResponseMs = nowMs() - commandStarted;
       timings.totalMs = nowMs() - started;
       this.lastCommandAt = nowMs();
       return { ok: true, result, provider: this.id, target: this.snapshot(), recovered, timings };
     } catch (firstError) {
-      const replayAllowed = request.retryable === true && canReplay(method, params) && priorSession > 0;
+      const replayAllowed = !["PROVIDER_CLOSING", "CLOSE_AUDIO_STALE"].includes(firstError.message) && request.retryable === true && canReplay(method, params) && priorSession > 0;
       if (!replayAllowed) {
         timings.totalMs = nowMs() - started;
         return this.failure(firstError, timings);
@@ -554,6 +582,10 @@ class ProviderSession {
         await this.recover();
         timings.recoveryMs = nowMs() - recoveryStarted;
         const commandStarted = nowMs();
+        const needsCloseFence = request.closeRequestId || (method === "Runtime.evaluate" && /\.setActive\(\s*true\s*\)/.test(params.expression || ""));
+        const closing = needsCloseFence && readCloseAudioOwner(process.env.TIKPAL_WEB_MODE_STATE_PATH || "/run/tikpal/web-mode-state.json", this.id);
+        if (request.closeRequestId && closing?.requestId !== request.closeRequestId) throw new Error("CLOSE_AUDIO_STALE");
+        if (closing && method === "Runtime.evaluate" && /\.setActive\(\s*true\s*\)/.test(params.expression || "")) throw new Error("PROVIDER_CLOSING");
         const result = await this.sendSession(method, params);
         timings.cdpResponseMs += nowMs() - commandStarted;
         timings.totalMs = nowMs() - started;

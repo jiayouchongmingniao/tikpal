@@ -482,6 +482,22 @@ initial_entry_step_run() {
   local stdout_path stderr_path
   shift 8
 
+  # Detailed before/after snapshots and capture files belong to opt-in field
+  # tracing. Normal entry still runs every operation and final verification.
+  if ! initial_entry_trace_enabled; then
+    [[ "$mutation_expected" != "1" ]] || TIKPAL_INITIAL_ENTRY_MUTATION_STARTED=1
+    if "$@"; then
+      return 0
+    else
+      status=$?
+    fi
+    TIKPAL_INITIAL_ENTRY_FAILED_STEP="$step"
+    TIKPAL_INITIAL_ENTRY_FAILED_STATUS="$status"
+    log_open_stage initial_entry_step_failed \
+      "provider=$provider phase=$phase step_number=$step_number step=$step status=$status"
+    return "$status"
+  fi
+
   stdout_path="$(mktemp "${TMPDIR:-/tmp}/tikpal-initial-entry.stdout.XXXXXX")" || return 91
   stderr_path="$(mktemp "${TMPDIR:-/tmp}/tikpal-initial-entry.stderr.XXXXXX")" || {
     rm -f "$stdout_path"
@@ -2307,6 +2323,14 @@ set_provider_media_active_via_cdp() {
   local priority="${5:-foreground}"
   local trace_manager="${6:-1}"
   local value=false audio_gate_mode
+  if [[ "$active" == 1 && -r "$TIKPAL_WEB_MODE_STATE_PATH.close-audio.json" ]] &&
+      jq -e --slurpfile close "$TIKPAL_WEB_MODE_STATE_PATH.close-audio.json" '
+        .activeProvider == $close[0].provider and
+        (.lastOpenedRequestId // "") == $close[0].session and
+        (.lastOpenedXSessionGeneration // "") == $close[0].generation
+      ' "$TIKPAL_WEB_MODE_STATE_PATH" >/dev/null 2>&1; then
+    return 1
+  fi
   [[ "$active" == "1" ]] && value=true
   # The persistent session owns the page's existing gate. Prefer that direct
   # operation for every activation; launching a Guard CLI first can make a
@@ -3000,6 +3024,19 @@ if (state.activeProvider) state.lastProvider = state.activeProvider;
 state.lastError = null;
 state.updatedAt = new Date().toISOString();
 if (!state.activeProvider) {
+  // The close helper already knows whether the last provider survived. Update
+  // that one card without a CDP/process scan of the whole resident pool.
+  try {
+    const audio = JSON.parse(fs.readFileSync(`${statePath}.close-audio.json`, "utf8"));
+    if (audio.requestId === closeRequestId && audio.session === state.lastOpenedRequestId
+        && audio.generation === state.lastOpenedXSessionGeneration && state.residentProviders?.[audio.provider]) {
+      if (audio.outcome === "close_audio_process_stopped") delete state.residentProviders[audio.provider];
+      else if (audio.outcome === "close_audio_confirmed") {
+        const current = state.residentProviders[audio.provider];
+        state.residentProviders[audio.provider] = {...current, status:current.status === "active" ? "ready" : current.status, activity:"parked", updatedAt:state.updatedAt};
+      }
+    }
+  } catch {}
   state.panelMode = "expanded";
   state.panelLayoutSupported = false;
   state.closeRequestId = preserveCloseRequest ? closeRequestId : null;
@@ -4676,46 +4713,67 @@ park_web_mode_surfaces_for_reopen() {
 }
 
 web_mode_surface_kind_for_pid() {
-  local pid="$1"
-  local provider profile
-  if process_tree_uses_profile "$pid" "$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"; then
-    printf 'panel\n'
-    return 0
-  fi
-  while IFS= read -r provider; do
-    [[ -n "$provider" ]] || continue
-    profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/$provider"
-    if process_tree_uses_profile "$pid" "$profile"; then
-      printf 'provider\n'
-      return 0
+  local pid="$1" depth=0 argument command_line provider key value
+  # Read each ancestor once, instead of repeating the walk for all ten profiles.
+  while [[ "$pid" =~ ^[0-9]+$ && "$pid" != 1 && "$depth" -lt 8 ]]; do
+    if [[ -r "/proc/$pid/cmdline" ]]; then
+      # Chromium can rewrite argv into a single flattened process title.
+      command_line="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
+      if [[ " $command_line " == *" --user-data-dir="* ]]; then
+        # Exact configured paths are the normal case. Avoid resolving every
+        # nonmatching profile's symlink before reaching the actual provider.
+        [[ " $command_line " != *" --user-data-dir=$TIKPAL_CHROMIUM_PROFILE_DIR "* ]] || return 1
+        if [[ " $command_line " == *" --user-data-dir=$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel "* ]]; then
+          printf 'panel\n'; return 0
+        fi
+        while IFS= read -r provider; do
+          if [[ " $command_line " == *" --user-data-dir=$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/$provider "* ]]; then
+            printf 'provider\n'; return 0
+          fi
+        done < <(provider_ids)
+        if profile_command_line_matches "$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel" "$command_line"; then
+          printf 'panel\n'; return 0
+        fi
+        while IFS= read -r provider; do
+          if profile_command_line_matches "$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/$provider" "$command_line"; then
+            printf 'provider\n'; return 0
+          fi
+        done < <(provider_ids)
+        return 1
+      fi
     fi
-  done < <(provider_ids)
+    [[ -r "/proc/$pid/status" ]] || break
+    value=""
+    while read -r key value; do [[ "$key" != PPid: ]] || break; done < "/proc/$pid/status"
+    [[ "$key" == PPid: ]] || break
+    pid="$value"
+    depth=$((depth + 1))
+  done
   return 1
 }
 
 window_intersects_kiosk_screen() {
   local window="$1"
-  local geometry x y width height screen_width screen_height
+  local geometry x="" y="" width="" height="" screen_width="$2" screen_height="$3" key value
   geometry="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe getwindowgeometry --shell "$window" 2>/dev/null || true)"
-  x="$(printf '%s\n' "$geometry" | awk -F= '$1 == "X" { print $2 }')"
-  y="$(printf '%s\n' "$geometry" | awk -F= '$1 == "Y" { print $2 }')"
-  width="$(printf '%s\n' "$geometry" | awk -F= '$1 == "WIDTH" { print $2 }')"
-  height="$(printf '%s\n' "$geometry" | awk -F= '$1 == "HEIGHT" { print $2 }')"
+  while IFS='=' read -r key value; do
+    case "$key" in X) x="$value";; Y) y="$value";; WIDTH) width="$value";; HEIGHT) height="$value";; esac
+  done <<< "$geometry"
   [[ "$x" =~ ^-?[0-9]+$ && "$y" =~ ^-?[0-9]+$ && "$width" =~ ^[1-9][0-9]*$ && "$height" =~ ^[1-9][0-9]*$ ]] || return 1
-  screen_width=$(( $(window_width "$TIKPAL_WEB_MODE_LEFT_WINDOW") + $(window_width "$TIKPAL_WEB_MODE_PANEL_WINDOW") ))
-  screen_height="$(window_height "$TIKPAL_WEB_MODE_LEFT_WINDOW")"
   [[ "$screen_width" =~ ^[1-9][0-9]*$ && "$screen_height" =~ ^[1-9][0-9]*$ ]] || return 1
   (( x < screen_width && x + width > 0 && y < screen_height && y + height > 0 ))
 }
 
 web_mode_surface_windows_on_screen() {
-  local window pid kind
+  local window pid kind screen_width screen_height
+  screen_width=$(( $(window_width "$TIKPAL_PANEL_BASE_LEFT_WINDOW") + $(window_width "$TIKPAL_PANEL_BASE_PANEL_WINDOW") ))
+  screen_height="$(window_height "$TIKPAL_PANEL_BASE_LEFT_WINDOW")"
   while IFS= read -r window; do
     [[ "$window" =~ ^[0-9]+$ ]] || continue
+    window_intersects_kiosk_screen "$window" "$screen_width" "$screen_height" || continue
     pid="$(DISPLAY="$TIKPAL_KIOSK_DISPLAY" xdotool_safe getwindowpid "$window" 2>/dev/null || true)"
     kind="$(web_mode_surface_kind_for_pid "$pid" || true)"
     [[ -n "$kind" ]] || continue
-    window_intersects_kiosk_screen "$window" || continue
     printf '%s\t%s\n' "$window" "$kind"
   done < <(visible_chromium_windows)
 }
@@ -4780,11 +4838,10 @@ close_web_mode_full() {
 }
 
 close_web_mode_warm() {
-  local active_provider settle
+  local active_provider close_started_ms prewarm_stop_pid guard_stop_pid
+  close_started_ms="$(now_ms)"
   active_provider="${TIKPAL_WEB_MODE_CLOSE_ACTIVE_PROVIDER:-}"
   [[ -n "$active_provider" ]] || active_provider="$(read_runtime_active_provider)"
-  settle="$TIKPAL_WEB_MODE_CLOSE_AUDIO_GATE_SETTLE_SECONDS"
-  [[ "$settle" =~ ^[0-9]+([.][0-9]+)?$ ]] || settle=0.35
   close_legacy_exit_stage
   hide_onboard
   if ! runtime_close_request_is_current; then
@@ -4792,24 +4849,31 @@ close_web_mode_warm() {
   fi
   # Audio must be deactivated before any X11 parking.  This uses the hot,
   # idempotent Manager command at foreground priority; failure is observable
-  # in the close trace but never leaves the visual close transaction stuck.
-  mute_active_provider_for_close "$active_provider" || true
-  stop_provider_pool_prewarm
-  if ! runtime_close_request_is_current; then
-    return 0
+  # in the close trace and must not be reported as a successful silent exit.
+  if [[ "${TIKPAL_WEB_MODE_CLOSE_AUDIO_CONFIRMED:-0}" != 1 ]]; then
+    mute_active_provider_for_close "$active_provider" || return 1
   fi
-  stop_window_guard
+  # Independent workers have separate ownership locks. Join both before X11
+  # parking, while the enclosing close still owns web-mode.lock.
+  stop_provider_pool_prewarm &
+  prewarm_stop_pid=$!
+  stop_window_guard &
+  guard_stop_pid=$!
+  wait "$prewarm_stop_pid" || { wait "$guard_stop_pid" || true; return 1; }
+  wait "$guard_stop_pid" || return 1
+  log "close_timing request=${TIKPAL_WEB_MODE_CLOSE_REQUEST_ID:-internal} stage=workers_stopped ms=$(( $(now_ms) - close_started_ms ))"
   if ! runtime_close_request_is_current; then
     return 0
   fi
   park_web_mode_surfaces_for_reopen "$active_provider" || return 1
+  log "close_timing request=${TIKPAL_WEB_MODE_CLOSE_REQUEST_ID:-internal} stage=park_web_mode_surfaces_for_reopen ms=$(( $(now_ms) - close_started_ms ))"
   if ! runtime_close_request_is_current; then
     return 0
   fi
   write_audio_bus_state ""
   write_runtime_provider_state ""
-  sync_runtime_provider_pool_process_statuses ""
-  sleep "$settle"
+  log "close_timing request=${TIKPAL_WEB_MODE_CLOSE_REQUEST_ID:-internal} stage=write_runtime_provider_state ms=$(( $(now_ms) - close_started_ms ))"
+  # The next open refreshes resident process statuses; do not scan the pool on Exit.
   if ! is_enabled "$TIKPAL_WEB_MODE_CLOSE_KEEP_RESIDENT"; then
     stop_provider_guard
   fi
@@ -8631,7 +8695,7 @@ open_provider_pool() {
   target_resolve_ms="$(( $(now_ms) - target_resolve_started_ms ))"
   log_stage "open_pool_init provider=$provider target=$target_window resident_page_ready=$resident_page_ready fast_resident=$fast_resident switching=$switching_provider entry=$entry_stage provider_resume_ms=$provider_resume_ms target_resolve_ms=$target_resolve_ms ms=$(( $(now_ms) - started_ms ))"
   log_open_stage resident_page_ready "provider=$provider ready=$resident_page_ready target_window=${target_window:-missing} resident_status=${resident_status:-missing}"
-  if [[ "$entry_stage" == "1" && initial_entry_trace_enabled ]]; then
+  if [[ "$entry_stage" == "1" ]] && initial_entry_trace_enabled; then
     if [[ "$fast_resident" == "1" ]]; then
       initial_entry_phase=resident_initial_entry
     else
@@ -8739,7 +8803,7 @@ open_provider_pool() {
   fi
   if [[ -f "$(pool_warm_stamp_file)" ]]; then
     if provider_prewarm_queue_running; then
-      if [[ "$entry_stage" == "1" && initial_entry_trace_enabled ]]; then
+      if [[ "$entry_stage" == "1" ]] && initial_entry_trace_enabled; then
         initial_entry_pre_reveal_step 50 "$provider" "$initial_entry_phase" prewarm_queue_stop "$target_window" \
           queue_stop stopped_or_idle 1 "$target_window" stop_provider_pool_prewarm || return $?
       else
@@ -8750,7 +8814,7 @@ open_provider_pool() {
   # A newer sidebar choice owns the pending request. Do not carry this stale
   # foreground command through another resident reveal while it holds the
   # shared web-mode lock; the server will run the newest request next.
-  if [[ "$entry_stage" == "1" && initial_entry_trace_enabled ]]; then
+  if [[ "$entry_stage" == "1" ]] && initial_entry_trace_enabled; then
     initial_entry_pre_reveal_step 51 "$provider" "$initial_entry_phase" request_ownership "$target_window" \
       state_check current 0 "$target_window" initial_entry_probe_request_ownership || return $?
   fi
@@ -8894,7 +8958,7 @@ open_provider_pool() {
     extension_enabled=1
   fi
 
-  if [[ "$entry_stage" == "1" && initial_entry_trace_enabled ]]; then
+  if [[ "$entry_stage" == "1" ]] && initial_entry_trace_enabled; then
     initial_entry_pre_reveal_step 52 "$provider" "$initial_entry_phase" onboard_hide "$target_window" \
       onboard_hide hidden_or_absent 1 "$target_window" hide_onboard || return $?
   else
@@ -8903,7 +8967,7 @@ open_provider_pool() {
   # Use non-hidden mode so the panel is placed at its final position
   # immediately, rather than being staged off-screen and re-tiled later.
   # This makes the side panel visible during the long CDP/provider wait.
-  if [[ "$switching_provider" != "1" && "$entry_stage" == "1" && initial_entry_trace_enabled ]]; then
+  if [[ "$switching_provider" != "1" && "$entry_stage" == "1" ]] && initial_entry_trace_enabled; then
     if initial_entry_pre_reveal_step 53 "$provider" "$initial_entry_phase" side_panel_prepare "$target_window" \
         panel_place "${TIKPAL_WEB_MODE_PANEL_POSITION}_${TIKPAL_WEB_MODE_PANEL_WINDOW}" 1 "$target_window" \
         initial_entry_prepare_side_panel "$provider" 0; then
@@ -8916,7 +8980,7 @@ open_provider_pool() {
     close_web_mode
     fail "Explore side panel did not open"
   fi
-  if [[ "$entry_stage" == "1" && initial_entry_trace_enabled ]]; then
+  if [[ "$entry_stage" == "1" ]] && initial_entry_trace_enabled; then
     initial_entry_pre_reveal_step 54 "$provider" "$initial_entry_phase" proxy_settings "$target_window" \
       settings_read configured 0 "$target_window" initial_entry_load_proxy_settings || return $?
     proxy_line="$TIKPAL_INITIAL_ENTRY_PROXY_LINE"
@@ -8933,12 +8997,12 @@ open_provider_pool() {
     proxy_line="$(read_proxy_settings)"
     proxy_enabled="$(effective_provider_proxy_enabled "$provider" "${proxy_line%%$'\t'*}")"
   fi
-  if [[ "$entry_stage" != "1" || ! initial_entry_trace_enabled ]] && [[ "$proxy_enabled" != "1" ]] && ! provider_prefers_direct_proxy "$provider" && ! provider_direct_reachable "$provider"; then
+  if { [[ "$entry_stage" != "1" ]] || ! initial_entry_trace_enabled; } && [[ "$proxy_enabled" != "1" ]] && ! provider_prefers_direct_proxy "$provider" && ! provider_direct_reachable "$provider"; then
     message="$(provider_needs_proxy_message "$provider")"
     recover_or_cover_provider_failure "$current_provider" "$current_profile" "$provider" "check_proxy" "$message" || true
     fail "$message"
   fi
-  if [[ "$entry_stage" == "1" && initial_entry_trace_enabled ]]; then
+  if [[ "$entry_stage" == "1" ]] && initial_entry_trace_enabled; then
     initial_entry_pre_reveal_step 57 "$provider" "$initial_entry_phase" window_guard_stop \
       "$target_window${TIKPAL_INITIAL_ENTRY_PANEL_WINDOW:+,$TIKPAL_INITIAL_ENTRY_PANEL_WINDOW}" \
       guard_stop stopped 1 "$target_window" stop_window_guard || return $?
@@ -8946,7 +9010,7 @@ open_provider_pool() {
     stop_window_guard
   fi
   if [[ "$fast_resident" != "1" ]] && profile_process_exists "$provider_profile"; then
-    if [[ "$entry_stage" == "1" && initial_entry_trace_enabled ]]; then
+    if [[ "$entry_stage" == "1" ]] && initial_entry_trace_enabled; then
       initial_entry_pre_reveal_step 58 "$provider" "$initial_entry_phase" provider_profile_close "$target_window" \
         profile_close stopped 1 "$target_window" close_provider_profile "$provider_profile" || return $?
     else
@@ -8956,7 +9020,7 @@ open_provider_pool() {
 
   if profile_process_exists "$provider_profile"; then
     if [[ "$fast_resident" != "1" ]]; then
-      if [[ "$entry_stage" == "1" && initial_entry_trace_enabled ]]; then
+      if [[ "$entry_stage" == "1" ]] && initial_entry_trace_enabled; then
         initial_entry_pre_reveal_step 59 "$provider" "$initial_entry_phase" provider_guard_start "$target_window" \
           provider_guard started 1 "$target_window" start_provider_guard "$provider" "$provider_profile" \
           "$(provider_url "$provider")" "$proxy_enabled" "$(provider_debug_port "$provider")" || return $?
@@ -8969,7 +9033,7 @@ open_provider_pool() {
         fail "$message"
       fi
     fi
-  elif [[ "$entry_stage" == "1" && initial_entry_trace_enabled ]]; then
+  elif [[ "$entry_stage" == "1" ]] && initial_entry_trace_enabled; then
     if ! initial_entry_pre_reveal_step 60 "$provider" "$initial_entry_phase" provider_launch "$target_window" \
         provider_launch launched 1 "$target_window" launch_provider_for_pool "$provider" entry; then
       message="$(provider_label "$provider") did not enter the provider page"
@@ -8982,7 +9046,7 @@ open_provider_pool() {
     fail "$message"
   fi
 
-  if [[ "$entry_stage" == "1" && initial_entry_trace_enabled ]]; then
+  if [[ "$entry_stage" == "1" ]] && initial_entry_trace_enabled; then
     if initial_entry_pre_reveal_step 61 "$provider" "$initial_entry_phase" target_window_wait "$target_window" \
         window_wait available 0 "$target_window" initial_entry_wait_for_target_window "$provider_profile" \
         "$(profile_window_timeout_attempts "$TIKPAL_WEB_MODE_PROVIDER_WINDOW_TIMEOUT_SECONDS")"; then
@@ -9000,9 +9064,10 @@ open_provider_pool() {
   fi
   if [[ "$entry_stage" == "1" ]]; then
     entry_paint_started_ms="$(now_ms)"
-    if [[ "$fast_resident" != "1" && initial_entry_trace_enabled ]]; then
+    if [[ "$fast_resident" != "1" ]] && initial_entry_trace_enabled; then
       initial_entry_pre_reveal_step 62 "$provider" "$initial_entry_phase" entry_paint_check "$target_window" \
-        paint_check ready_or_warning 0 "$target_window" initial_entry_wait_for_entry_paint_optional || return $?
+        paint_check ready_or_warning 0 "$target_window" initial_entry_wait_for_entry_paint_optional \
+        "$(provider_debug_port "$provider")" "$provider" "$target_window" || return $?
       entry_paint_result=ready_or_warning
     elif [[ "$fast_resident" != "1" ]]; then
       wait_for_entry_provider_paint "$(provider_debug_port "$provider")" "$provider" "$target_window" || log "WARN: $(provider_label "$provider") did not complete DOM/X11 paint checks before entry reveal"
@@ -9367,6 +9432,12 @@ check_runtime_quiet() {
   [[ -x "$TIKPAL_CHROMIUM_BIN" ]] || fail "Chromium binary is missing or not executable"
   command -v xdotool >/dev/null 2>&1 || fail "xdotool is required for Explore provider window detection"
 }
+
+if [[ "${1:-}" == "close-audio" ]]; then
+  exec node "$SCRIPT_DIR/tikpal-close-audio.mjs" "$TIKPAL_WEB_MODE_STATE_PATH" "$TIKPAL_WEB_MODE_PROFILE_ROOT" \
+    "$TIKPAL_WEB_MODE_CDP_SESSION_MANAGER_SOCKET" "${2:-}" "$TIKPAL_WEB_MODE_CLOSE_REQUEST_ID" \
+    "${TIKPAL_WEB_MODE_CLOSE_SESSION:-}" "${TIKPAL_WEB_MODE_CLOSE_GENERATION:-}" "${TIKPAL_WEB_MODE_CLOSE_AUDIO_DEADLINE:-}"
+fi
 
 source "$SCRIPT_DIR/tikpal-web-mode-panel.sh"
 panel_refresh_layout

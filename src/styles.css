@@ -9709,24 +9709,6 @@ select {
 }
 
 
-.app-explore-close-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 9999;
-  background: #080b0e;
-  opacity: 0;
-  visibility: hidden;
-  transition: opacity 250ms ease-out, visibility 0s linear 250ms;
-  pointer-events: none;
-}
-
-.app-explore-close-overlay.active {
-  opacity: 1;
-  visibility: visible;
-  transition: opacity 800ms ease-out, visibility 0s linear 0s;
-}
-
-
 .app-explore-open-overlay {
   position: fixed;
   inset: 0;
@@ -9991,14 +9973,7 @@ select {
 @media (prefers-reduced-motion: reduce) {
 
 
-  .app-explore-close-overlay {
-    transition: none;
-  }
 
-  .app-explore-close-overlay.active {
-    opacity: 1;
-    visibility: visible;
-  }
 
   .web-mode-open-overlay {
     transition: none;

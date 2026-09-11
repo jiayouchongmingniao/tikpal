@@ -486,10 +486,10 @@ run_pool_pre_reveal() {
           }
           ;;
         proxy_settings_fail)
-          read_proxy_settings() { printf "proxy settings injected failure\n" >&2; return 44; }
+          initial_entry_load_proxy_settings() { printf "proxy settings injected failure\n" >&2; return 44; }
           ;;
         proxy_mode_fail)
-          effective_provider_proxy_enabled() { printf "proxy mode injected failure\n" >&2; return 45; }
+          initial_entry_resolve_proxy_enabled() { printf "proxy mode injected failure\n" >&2; return 45; }
           ;;
         guard_stop_fail)
           stop_window_guard() { printf "guard stop injected failure\n" >&2; return 46; }

@@ -1,8 +1,6 @@
 import type { WebModeState } from "./types";
 
 export const EXPLORE_CLOSE_CHANNEL = "tikpal-explore-close";
-export const EXPLORE_CLOSE_COVER_FALLBACK_MS = 1_100;
-export const EXPLORE_CLOSE_RELEASE_DELAY_MS = 250;
 
 export type ExploreCloseMessage =
   | { type: "cover-requested"; requestId: string }

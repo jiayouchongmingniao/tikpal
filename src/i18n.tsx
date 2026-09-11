@@ -2828,6 +2828,7 @@ Object.assign(dictionaries["en"], {
   "explore.collapsePanel": "Collapse panel",
   "explore.expandPanel": "Expand panel",
   "explore.exit": "Exit Explore",
+  "explore.closeFailed": "Could not exit. Tap Exit to retry.",
   "explore.panelChangeFailed": "Could not confirm the panel layout. Try again."
 });
 
@@ -2835,6 +2836,7 @@ Object.assign(dictionaries["zh-CN"], {
   "explore.collapsePanel": "收起面板",
   "explore.expandPanel": "展开面板",
   "explore.exit": "退出 Explore",
+  "explore.closeFailed": "退出未完成，请再次点击退出重试。",
   "explore.panelChangeFailed": "未能确认面板布局，请重试。"
 });
 
@@ -2842,6 +2844,7 @@ Object.assign(dictionaries["de"], {
   "explore.collapsePanel": "Leiste einklappen",
   "explore.expandPanel": "Leiste ausklappen",
   "explore.exit": "Explore verlassen",
+  "explore.closeFailed": "Beenden fehlgeschlagen. Zum Wiederholen erneut beenden.",
   "explore.panelChangeFailed": "Die Anordnung konnte nicht bestätigt werden. Bitte erneut versuchen."
 });
 
@@ -2849,6 +2852,7 @@ Object.assign(dictionaries["it"], {
   "explore.collapsePanel": "Comprimi pannello",
   "explore.expandPanel": "Espandi pannello",
   "explore.exit": "Esci da Explore",
+  "explore.closeFailed": "Uscita non riuscita. Premi Esci per riprovare.",
   "explore.panelChangeFailed": "Impossibile confermare la disposizione. Riprova."
 });
 
@@ -2856,6 +2860,7 @@ Object.assign(dictionaries["ko"], {
   "explore.collapsePanel": "패널 접기",
   "explore.expandPanel": "패널 펼치기",
   "explore.exit": "Explore 나가기",
+  "explore.closeFailed": "종료하지 못했습니다. 종료를 눌러 다시 시도하세요.",
   "explore.panelChangeFailed": "패널 배치를 확인하지 못했습니다. 다시 시도하세요."
 });
 
@@ -2863,6 +2868,7 @@ Object.assign(dictionaries["ja"], {
   "explore.collapsePanel": "パネルを折りたたむ",
   "explore.expandPanel": "パネルを展開",
   "explore.exit": "Exploreを終了",
+  "explore.closeFailed": "終了できませんでした。終了を押して再試行してください。",
   "explore.panelChangeFailed": "パネルの配置を確認できませんでした。もう一度お試しください。"
 });
 
@@ -2870,6 +2876,7 @@ Object.assign(dictionaries["es"], {
   "explore.collapsePanel": "Contraer panel",
   "explore.expandPanel": "Expandir panel",
   "explore.exit": "Salir de Explore",
+  "explore.closeFailed": "No se pudo salir. Pulsa Salir para reintentar.",
   "explore.panelChangeFailed": "No se pudo confirmar la disposición del panel. Inténtalo de nuevo."
 });
 

@@ -12,7 +12,7 @@ import { useKioskGestures } from "./hooks/useKioskGestures";
 import { useRoomExperience } from "./hooks/useRoomExperience";
 import { useTikpalState } from "./hooks/useTikpalState";
 import { fetchWebModeState, sendKioskHeartbeat, sendWebModeAction } from "./api/tikpalClient";
-import { EXPLORE_CLOSE_CHANNEL, EXPLORE_CLOSE_COVER_FALLBACK_MS, EXPLORE_CLOSE_RELEASE_DELAY_MS, isExploreCloseMessage, type ExploreCloseMessage } from "./exploreCloseVeil";
+import { EXPLORE_CLOSE_CHANNEL, isExploreCloseMessage, type ExploreCloseMessage } from "./exploreCloseVeil";
 import { createExploreOpenRequestId, ExploreOpenVeilController } from "./exploreOpenVeil";
 import { useI18n } from "./i18n";
 import type { AppMode, BackgroundVideoSummary, DisplaySleepStyle, LyricsFontSize, RememberedAudioSource, RoomExperienceActionRequest, RoomExperienceState, RoomMode, SourceSwitchTarget, SurfaceTheme, TikpalState, WebModeState } from "./types";
@@ -319,7 +319,6 @@ export default function App() {
   const [screenSaverPreviewIndex, setScreenSaverPreviewIndex] = useState<number | null>(null);
   const [webModeActive, setWebModeActive] = useState(false);
   const [webModeState, setWebModeState] = useState<WebModeState | null>(null);
-  const [exploreClosing, setExploreClosing] = useState(false);
   const [exploreCloseRequestId, setExploreCloseRequestId] = useState<string | null>(null);
   const [exploreOpening, setExploreOpening] = useState(false);
   const [quickMenuProxyEnabled, setQuickMenuProxyEnabled] = useState<boolean | null>(null);
@@ -351,11 +350,8 @@ export default function App() {
   const webModeActiveRef = useRef(false);
   const sceneVideoReadyRef = useRef(false);
   const observedWebModeActiveRef = useRef(false);
-  const exploreClosingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const exploreCloseCoverFallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const exploreCloseRequestIdRef = useRef<string | null>(null);
   const exploreCloseWasActiveRef = useRef(false);
-  const exploreCloseCoverAcknowledgedRequestRef = useRef<string | null>(null);
   const exploreOpenVeilRef = useRef<ExploreOpenVeilController | null>(null);
   if (!exploreOpenVeilRef.current) exploreOpenVeilRef.current = new ExploreOpenVeilController();
   const displaySleepLastActivityRef = useRef(Date.now());
@@ -405,56 +401,24 @@ export default function App() {
 
   const clearExploreCloseVeil = useCallback((expectedRequestId = "") => {
     if (expectedRequestId && exploreCloseRequestIdRef.current !== expectedRequestId) return false;
-    if (exploreClosingTimerRef.current) {
-      clearTimeout(exploreClosingTimerRef.current);
-      exploreClosingTimerRef.current = null;
-    }
-    if (exploreCloseCoverFallbackTimerRef.current) {
-      clearTimeout(exploreCloseCoverFallbackTimerRef.current);
-      exploreCloseCoverFallbackTimerRef.current = null;
-    }
     exploreCloseRequestIdRef.current = null;
     exploreCloseWasActiveRef.current = false;
-    exploreCloseCoverAcknowledgedRequestRef.current = null;
     setExploreCloseRequestId(null);
-    setExploreClosing(false);
     return true;
   }, []);
 
   const releaseExploreCloseVeil = useCallback((requestId: string) => {
-    if (exploreCloseRequestIdRef.current !== requestId) return;
-    if (exploreClosingTimerRef.current) clearTimeout(exploreClosingTimerRef.current);
-    exploreClosingTimerRef.current = setTimeout(() => {
-      clearExploreCloseVeil(requestId);
-    }, EXPLORE_CLOSE_RELEASE_DELAY_MS);
+    if (!clearExploreCloseVeil(requestId)) return;
+    requestAnimationFrame(() => console.info("[explore-close]", {requestId, stage:"home_frame_ready", timestamp:Date.now()}));
   }, [clearExploreCloseVeil]);
-
-  const acknowledgeExploreCloseCover = useCallback((requestId: string) => {
-    if (exploreCloseRequestIdRef.current !== requestId
-      || exploreCloseCoverAcknowledgedRequestRef.current === requestId) return;
-    exploreCloseCoverAcknowledgedRequestRef.current = requestId;
-    if (exploreCloseCoverFallbackTimerRef.current) {
-      clearTimeout(exploreCloseCoverFallbackTimerRef.current);
-      exploreCloseCoverFallbackTimerRef.current = null;
-    }
-    postExploreCloseMessage({ type: "cover-ready", requestId });
-  }, []);
 
   const beginExploreCloseVeil = useCallback((requestId: string) => {
     if (!requestId) return;
-    if (exploreClosingTimerRef.current) {
-      clearTimeout(exploreClosingTimerRef.current);
-      exploreClosingTimerRef.current = null;
-    }
-    if (exploreCloseCoverFallbackTimerRef.current) {
-      clearTimeout(exploreCloseCoverFallbackTimerRef.current);
-      exploreCloseCoverFallbackTimerRef.current = null;
-    }
     exploreCloseRequestIdRef.current = requestId;
     exploreCloseWasActiveRef.current = webModeActiveRef.current;
-    exploreCloseCoverAcknowledgedRequestRef.current = null;
     setExploreCloseRequestId(requestId);
-    setExploreClosing(true);
+    // Compatibility with older panels: acknowledge immediately, without a cover.
+    postExploreCloseMessage({ type: "cover-ready", requestId });
   }, []);
 
   useEffect(() => {
@@ -579,24 +543,6 @@ export default function App() {
   }, [beginExploreCloseVeil, clearExploreCloseVeil, observeWebModeActivity, releaseExploreCloseVeil]);
 
   useEffect(() => {
-    if (!exploreClosing || !exploreCloseRequestId) return;
-    const requestId = exploreCloseRequestId;
-    if (prefersReducedMotion()) {
-      const frame = window.requestAnimationFrame(() => acknowledgeExploreCloseCover(requestId));
-      return () => window.cancelAnimationFrame(frame);
-    }
-    exploreCloseCoverFallbackTimerRef.current = setTimeout(() => {
-      acknowledgeExploreCloseCover(requestId);
-    }, EXPLORE_CLOSE_COVER_FALLBACK_MS);
-    return () => {
-      if (exploreCloseCoverFallbackTimerRef.current) {
-        clearTimeout(exploreCloseCoverFallbackTimerRef.current);
-        exploreCloseCoverFallbackTimerRef.current = null;
-      }
-    };
-  }, [acknowledgeExploreCloseCover, exploreCloseRequestId, exploreClosing]);
-
-  useEffect(() => {
     if (webModeActive || !exploreCloseRequestId || !exploreCloseWasActiveRef.current) return;
     releaseExploreCloseVeil(exploreCloseRequestId);
   }, [exploreCloseRequestId, releaseExploreCloseVeil, webModeActive]);
@@ -604,8 +550,6 @@ export default function App() {
   useEffect(() => {
     return () => {
       exploreOpenVeilRef.current?.dispose();
-      if (exploreClosingTimerRef.current) clearTimeout(exploreClosingTimerRef.current);
-      if (exploreCloseCoverFallbackTimerRef.current) clearTimeout(exploreCloseCoverFallbackTimerRef.current);
     };
   }, []);
 
@@ -1477,17 +1421,6 @@ export default function App() {
           <i style={{ width: `${idleTotalMs ? 100 - ((idleRemainingMs ?? 0) / idleTotalMs) * 100 : 0}%` }} />
         </div>
       </div>
-      {createPortal(
-        <div
-          className={"app-explore-close-overlay" + (exploreClosing ? " active" : "")}
-          onTransitionEnd={(event) => {
-            if (event.target !== event.currentTarget || event.propertyName !== "opacity" || !exploreClosing) return;
-            const requestId = exploreCloseRequestIdRef.current;
-            if (requestId) acknowledgeExploreCloseCover(requestId);
-          }}
-        />,
-        document.body
-      )}
       {createPortal(<div className={"app-explore-open-overlay" + (exploreOpening ? " active" : "")} />, document.body)}
     </main>
   );

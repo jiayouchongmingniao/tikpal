@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readCloseAudioOwner } from './tikpal-close-audio.mjs';
 import { spawn, spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { createConnection } from "node:net";
@@ -257,12 +258,14 @@ function readProviderRuntimeState() {
   try {
     const state = JSON.parse(readFileSync(statePath, "utf8"));
     const activity = String(state?.residentProviders?.[providerId]?.activity || "");
-    return providerRuntimeRole(
+    const role = providerRuntimeRole(
       providerId,
       String(state?.activeProvider || ""),
       String(state?.openingProvider || ""),
       activity
     );
+    if (state.closeRequestId || readCloseAudioOwner(statePath, providerId)) role.deactivating = role.active;
+    return role;
   } catch {
     return { active: true, opening: false, deactivating: false, frozen: false };
   }

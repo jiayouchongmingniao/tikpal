@@ -11,7 +11,7 @@ try {
 for(const locale of ['en','zh-CN','de','it','ko','ja','es']){
  const context=await browser.newContext({viewport:{width:640,height:720}});const page=await context.newPage();
  const errors=[];page.on('pageerror',e=>errors.push(e.message));
- let mode='expanded',failed=false,supported=true;const actions=[];
+ let mode='expanded',failed=false,supported=true,failClose=false;const actions=[];
  const state=()=>({activeProvider:'netease_music',openingProvider:null,activationPhase:'ready',panelMode:mode,panelLayoutSupported:supported,panelSessionId:'s1',panelXSessionGeneration:'x1',providers:[],residentProviders:{netease_music:{status:'active'}},settings:{providerTextScale:1.1,proxyEnabled:false},lastError:null,updatedAt:new Date().toISOString()});
  await page.addInitScript(locale=>localStorage.setItem('tikpal.locale',locale),locale);
  await page.route('**/api/v1/**',async route=>{
@@ -25,6 +25,10 @@ for(const locale of ['en','zh-CN','de','it','ko','ja','es']){
     await new Promise(r=>setTimeout(r,300));
     if(failed){await route.fulfill({status:400,json:{error:'PANEL_BUSY_OR_STALE'}});return;}
     mode=action.panelMode;
+   }
+   if(action.type==='close') {
+    if(failClose){await new Promise(r=>setTimeout(r,1100));await route.fulfill({status:500,json:{error:'CLOSE_AUDIO_TIMEOUT'}});return;}
+    await route.fulfill({json:{...state(),activeProvider:null}});return;
    }
    body=state();
   }
@@ -65,7 +69,16 @@ for(const locale of ['en','zh-CN','de','it','ko','ja','es']){
  assert.ok(pendingExit.x+pendingExit.width<=56,'exit remains onscreen during expansion');
  assert.ok(await page.locator('[data-panel-exit]').isEnabled());
  await collapse.waitFor();
- await collapse.click();await page.locator('[data-panel-expand]:enabled').waitFor();await page.locator('[data-panel-exit]').click();
+ await collapse.click();await page.locator('[data-panel-expand]:enabled').waitFor();if(locale==='en') {
+  failClose=true;const before=actions.filter(a=>a.type==='close').length;const started=Date.now();
+  await page.locator('[data-panel-exit]').evaluate(e=>{e.click();e.click();});
+  for(let i=0;i<30&&actions.filter(a=>a.type==='close').length===before;i++)await page.waitForTimeout(10);
+  assert.ok(Date.now()-started<300,'no main window/cover acknowledgement is required');
+  assert.equal(actions.filter(a=>a.type==='close').length,before+1,'duplicate clicks suppressed');
+  await page.locator('[data-panel-exit]:enabled').waitFor();
+  assert.ok(await page.locator('[role="status"][title*="retry"]').count());failClose=false;
+ }
+ await page.locator('[data-panel-exit]').click();
  for(let i=0;i<80&&actions.at(-1)?.type!=='close';i++)await page.waitForTimeout(50);assert.equal(actions.at(-1).type,'close');assert.deepEqual(errors,[]);
  supported=false;mode='expanded';await page.reload();await page.locator('.web-mode-panel-header').waitFor();
  assert.equal(await collapse.count(),0);assert.equal((await page.locator('.web-mode-panel-header').boundingBox()).x,16);

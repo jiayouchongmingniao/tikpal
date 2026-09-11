@@ -79,7 +79,10 @@
         this.addEventListener("volumechange", () => {
           if (state.active) unifyMediaVolume(this);
         });
-        this.addEventListener("ended", () => state.playedMedia.delete(this));
+        this.addEventListener("ended", () => {
+          state.playedMedia.delete(this);
+          window.__tikpalDeezerPreviewRecovery?.afterEnded();
+        });
         if (qobuzRecovery) {
           for (const event of ["pause", "ended", "playing", "canplay", "error", "emptied"]) {
             this.addEventListener(event, () => cancelRecovery(this));
@@ -194,6 +197,7 @@
       window.postMessage({ type: "tikpal-provider-audio-muted", muted: !nextActive }, window.location.origin);
     } catch {}
     state.active = nextActive;
+    window.__tikpalDeezerPreviewRecovery?.setActive(nextActive);
     if (!nextActive) for (const element of recoveryTimers.keys()) cancelRecovery(element);
     setMediaActive(nextActive);
     setHowlerActive(nextActive);
