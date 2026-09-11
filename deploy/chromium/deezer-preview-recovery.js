@@ -31,11 +31,14 @@
       }
       schedule(); return;
     }
-    if (gate.playingCount > 0 && player.position > 0) { failures.delete(path); pending = undefined; schedule(); return; }
+    if (pending?.path === path && pending.id === String(song.SNG_ID)
+        && gate.playingCount > 0 && player.position > pending.position + 0.05) {
+      failures.delete(path); pending = undefined; schedule(); return;
+    }
     const id = String(song.SNG_ID);
     if (!pending || pending.id !== id || pending.path !== path) {
       if (typeof player.control?.play !== 'function') { failures.delete(path); return; }
-      pending = { id, path, since: now };
+      pending = { id, path, since: now, position: Number(player.position) || 0 };
       const currentRevision = revision;
       // Use the site's own license-checked playback flow; never change tokens,
       // subscription rules, preview duration or the requested media URL.
@@ -67,6 +70,13 @@
       // a bounded, event-triggered watch; only small player fields are read.
       failures.set(path, Date.now() + 300000);
       schedule();
+    },
+    mediaError(element) {
+      if (element?.error?.code !== 2 || !foreground()) return;
+      const path = pathOf(element.currentSrc || element.src);
+      const song = window.dzPlayer?.getCurrentSong?.();
+      if (!path || !(song?.MEDIA || []).some(m => m.TYPE === 'preview' && pathOf(m.HREF) === path)) return;
+      this.rejected(element.currentSrc || element.src);
     },
     afterEnded() { if (foreground()) { watchUntil = Date.now() + 15000; schedule(); } },
     setActive(nextActive) {

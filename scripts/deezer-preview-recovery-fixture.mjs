@@ -51,3 +51,14 @@ runtime = { activeProvider: 'deezer', openingProvider: 'suno' };emit('Network.re
 runtime = { activeProvider: 'deezer' };closing = true;emit('Network.responseReceived', { response: { status: 403, url: signed } });
 assert.equal(sent.length, 2);
 console.log('Deezer manager dispatch passed: Network/Log 403, session ownership and URL redaction');
+
+const midTrack = fixture();midTrack.player.position=14;midTrack.gate.playingCount=1;
+midTrack.window.__tikpalDeezerPreviewRecovery.mediaError({error:{code:2},currentSrc:midTrack.url});
+await midTrack.advance(5000);assert.deepEqual(midTrack.counts(),{plays:1,skips:1},'a stuck nonzero position is not successful recovery');
+const progressing=fixture();progressing.player.position=14;progressing.gate.playingCount=1;
+progressing.window.__tikpalDeezerPreviewRecovery.mediaError({error:{code:2},src:progressing.url});
+await progressing.advance(1000);progressing.player.position=15;await progressing.advance(5000);
+assert.deepEqual(progressing.counts(),{plays:1,skips:0});
+for(const error of [{code:3},{code:4}]){const f=fixture();f.window.__tikpalDeezerPreviewRecovery.mediaError({error,src:f.url});await f.advance(5000);assert.equal(f.counts().plays,0);}
+const otherMedia=fixture();otherMedia.window.__tikpalDeezerPreviewRecovery.mediaError({error:{code:2},src:'https://cdnt-preview.dzcdn.net/api/1/other.mp3'});await otherMedia.advance(5000);assert.equal(otherMedia.counts().plays,0);
+console.log('Deezer media read recovery passed: current preview only, progress required, decode/unsupported excluded');

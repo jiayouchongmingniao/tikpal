@@ -83,6 +83,7 @@
           state.playedMedia.delete(this);
           window.__tikpalDeezerPreviewRecovery?.afterEnded();
         });
+        this.addEventListener("error", () => window.__tikpalDeezerPreviewRecovery?.mediaError(this));
         if (qobuzRecovery) {
           for (const event of ["pause", "ended", "playing", "canplay", "error", "emptied"]) {
             this.addEventListener(event, () => cancelRecovery(this));
@@ -122,6 +123,7 @@
       } else {
         element.muted = false;
         unifyMediaVolume(element);
+        if (previous.wasPlaying && element.error) window.__tikpalDeezerPreviewRecovery?.mediaError(element);
         if (previous.wasPlaying && element.paused && !element.ended) {
           element.play().catch(() => {});
         }
@@ -186,7 +188,7 @@
     volumePolicy: "system",
     active: state.active,
     mediaCount: mediaElements().length,
-    playingCount: mediaElements().filter((element) => !element.paused && !element.ended).length,
+    playingCount: mediaElements().filter((element) => !element.paused && !element.ended && !element.error).length,
     contextCount: state.audioContexts.size,
     contextStates: Array.from(state.audioContexts).map((context) => context?.state || "unknown")
   });

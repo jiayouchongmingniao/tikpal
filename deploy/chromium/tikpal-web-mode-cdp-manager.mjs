@@ -38,6 +38,24 @@ const providerOffsets = {
   netease_music: 8
 };
 
+// Only the music application's own top-level beforeunload prompt is automatic.
+// External authentication, child windows, alerts, confirms and prompts remain untouched.
+const providerPageHosts = {
+  suno: ['suno.com', 'www.suno.com'], spotify: ['open.spotify.com'],
+  youtube_music: ['music.youtube.com'], apple_music: ['music.apple.com'],
+  tidal: ['tidal.com', 'www.tidal.com', 'listen.tidal.com'], qobuz: ['play.qobuz.com'],
+  deezer: ['deezer.com', 'www.deezer.com'], amazon_music: ['music.amazon.com'],
+  qq_music: ['y.qq.com'], netease_music: ['music.163.com']
+};
+function isProviderBeforeUnload(provider, params, target) {
+  if (params.type !== 'beforeunload' || target?.type !== 'page' || target.openerId) return false;
+  try {
+    const source = new URL(params.url), page = new URL(target.url);
+    return source.protocol === 'https:' && source.origin === page.origin
+      && providerPageHosts[provider]?.includes(source.hostname) === true;
+  } catch { return false; }
+}
+
 function nowMs() { return Date.now(); }
 function positiveInt(value, fallback) {
   const parsed = Number.parseInt(String(value), 10);
@@ -274,6 +292,14 @@ class ProviderSession {
           this.sendSession('Runtime.evaluate', { expression: `${deezerPreviewRecovery}\nwindow.__tikpalDeezerPreviewRecovery?.rejected(${JSON.stringify(url.origin + url.pathname)});` }).catch(() => {});
         }
       }
+    }
+    if (method === 'Page.javascriptDialogOpening' && sessionId === this.sessionId
+        && isProviderBeforeUnload(this.id, params, this.targetInfos.get(this.targetId))) {
+      // Bypass the renderer command queue: an in-flight evaluation can be
+      // blocked by this very dialog. Never replay the answer in a new session.
+      this.send('Page.handleJavaScriptDialog', { accept: true }, sessionId)
+        .then(() => console.log(`[provider-dialog] accepted beforeunload provider=${this.id}`))
+        .catch(error => console.warn(`[provider-dialog] beforeunload failed provider=${this.id} code=${errorCode(error)}`));
     }
     if (method === "Target.targetCreated") this.updateTargets([params.targetInfo]);
     if (method === "Target.targetInfoChanged") this.updateTargets([params.targetInfo]);

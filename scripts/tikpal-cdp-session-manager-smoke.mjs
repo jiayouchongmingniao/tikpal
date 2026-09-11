@@ -25,6 +25,8 @@ let pageEnableAttempts = 0;
 const mockSockets = new Set();
 let browserSocket = null;
 const friendlyErrorNavigations = [];
+const dialogReplies = [];
+let blockedEvaluationReply;
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -78,6 +80,12 @@ browser.on("upgrade", (request, socket) => {
   socket.on("data", (chunk) => {
     input = parseFrames(Buffer.concat([input, chunk]), (message) => {
       const reply = (result = {}) => socket.write(frame({ id: message.id, result }));
+      if (message.method === 'Page.handleJavaScriptDialog') {
+        dialogReplies.push({ ...message.params, sessionId: message.sessionId });
+        blockedEvaluationReply?.({result:{value:true}});
+        blockedEvaluationReply = null;
+        return reply();
+      }
       if (message.method === "Page.enable") {
         pageEnableAttempts += 1;
         if (dropInitialPageEnable) {
@@ -103,6 +111,10 @@ browser.on("upgrade", (request, socket) => {
         targetId = "spotify-target-restarted";
         targetUrl = "https://open.spotify.com/";
         socket.destroy();
+        return;
+      }
+      if (message.method === 'Runtime.evaluate' && message.params?.expression === 'waiting-for-beforeunload') {
+        blockedEvaluationReply = reply;
         return;
       }
       if (message.method === "Runtime.evaluate" && String(message.params?.expression || "").includes("__tikpalProviderAudioGate?.setActive") && dropNextAudioGateCommand) {
@@ -194,6 +206,20 @@ try {
   assert(targets.ok && targets.target.state === "READY", `manager should attach a real HTTPS page session: ${JSON.stringify(targets)}`);
   assert(pageEnableAttempts === 2 && targets.target.sessionGeneration === 1, "an incomplete maintenance attach should reuse its session and finish enable");
   assert(browserConnections === 1 && getTargets === 1, "initial discovery should use one browser connection and target enumeration");
+  for (const type of ['alert', 'confirm', 'prompt']) emitPageEvent('Page.javascriptDialogOpening', {type, url: targetUrl}, 'session-1');
+  emitPageEvent('Page.javascriptDialogOpening', {type:'beforeunload',url:'https://accounts.google.com/'}, 'session-1');
+  emitPageEvent('Page.javascriptDialogOpening', {type:'beforeunload',url:targetUrl}, 'old-session');
+  emitPageEvent('Target.targetInfoChanged', {targetInfo:{targetId,type:'page',url:targetUrl,openerId:'parent'}});
+  emitPageEvent('Page.javascriptDialogOpening', {type:'beforeunload',url:targetUrl}, 'session-1');
+  await new Promise(resolve => setTimeout(resolve, 50));
+  emitPageEvent('Target.targetInfoChanged', {targetInfo:{targetId,type:'page',url:targetUrl}});
+  assert(dialogReplies.length === 0, 'ordinary dialogs, authentication, child windows and stale sessions must remain untouched');
+  const blockedEvaluation = managerRequest({op:'command',provider:'spotify',method:'Runtime.evaluate',params:{expression:'waiting-for-beforeunload'},retryable:false,priority:'foreground'});
+  await waitFor(() => Boolean(blockedEvaluationReply), 'test evaluation should reach the blocked renderer');
+  emitPageEvent('Page.javascriptDialogOpening', {type:'beforeunload',url:targetUrl}, 'session-1');
+  await waitFor(() => dialogReplies.length === 1, 'provider reload prompt should be accepted without renderer evaluation');
+  assert((await blockedEvaluation).ok, 'dialog acceptance must unblock an already-running renderer command');
+  assert(dialogReplies[0].accept === true && dialogReplies[0].sessionId === 'session-1', 'reload response must stay on its original page session');
   const errorWatch = await managerRequest({
     op: "watch-early-error",
     provider: "spotify",

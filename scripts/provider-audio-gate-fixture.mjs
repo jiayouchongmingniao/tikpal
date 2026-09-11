@@ -18,7 +18,10 @@ class FakeMediaElement {
     this.playCalls = 0;
   }
 
-  addEventListener() {}
+  addEventListener(type, handler) {
+    this.handlers ||= new Map();
+    this.handlers.set(type, handler);
+  }
 
   play() {
     this.playCalls += 1;
@@ -153,6 +156,21 @@ assert.equal(howl._volume, 1);
 assert.equal(sound._volume, 1, "Howler per-sound gain must also use unity");
 
 // Exercise the guard against a Manager whose maintenance budget is exhausted.
+const failedMedia = new FakeMediaElement();
+gate.setActive(true);
+await failedMedia.play();
+const playingBeforeFailure = gate.status().playingCount;
+failedMedia.error = {code:2};
+assert.equal(gate.status().playingCount, playingBeforeFailure - 1, 'errored media cannot count as healthy playback');
+let reportedFailures = 0;
+window.__tikpalDeezerPreviewRecovery = { mediaError: element => { assert.equal(element, failedMedia); reportedFailures++; }, setActive() {} };
+failedMedia.handlers.get('error')();
+assert.equal(reportedFailures, 1, 'media read error must reach the provider recovery hook');
+gate.setActive(false);gate.setActive(true);
+assert.equal(reportedFailures, 2, 'returning to a failed previously-playing element must report the existing error');
+delete window.__tikpalDeezerPreviewRecovery;
+failedMedia.pause();
+
 const guardSource = await readFile(path.join(root, "deploy/chromium/tikpal-web-mode-guard.mjs"), "utf8");
 const guardFunction = (name, nextName) => guardSource.slice(
   guardSource.indexOf(`async function ${name}(`),
