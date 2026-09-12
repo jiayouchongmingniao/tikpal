@@ -180,28 +180,6 @@
     return false;
   };
 
-  // Block native "Open in Music" CTA (Apple Music & similar providers)
-  const NATIVE_CTA_SELECTORS = [
-    '.native-cta',
-    '.navigation__native-cta',
-    '[data-testid="native-cta-button"]',
-  ].join(',');
-
-  const hideNativeCta = (root = document) => {
-    root.querySelectorAll?.(NATIVE_CTA_SELECTORS).forEach((el) => {
-      el.style.setProperty('display', 'none', 'important');
-    });
-  };
-
-  // Intercept clicks on native CTA buttons (capture phase, before any handler)
-  document.addEventListener('click', (event) => {
-    if (event.target?.closest?.(NATIVE_CTA_SELECTORS)) {
-      event.preventDefault();
-      event.stopPropagation();
-    }
-  }, true);
-
-
   document.addEventListener(
     "click",
     (event) => {
@@ -216,17 +194,14 @@
 
   if (document.documentElement) retarget();
   clickSpotifyReloadPage();
-  hideNativeCta();
   document.addEventListener("DOMContentLoaded", () => {
     retarget();
     clickSpotifyReloadPage();
-    hideNativeCta();
     let mutationIdleId = null;
     const processMutations = () => {
       mutationIdleId = null;
       retarget();
       clickSpotifyReloadPage();
-      hideNativeCta();
     };
     const scheduleMutationProcess = () => {
       if (mutationIdleId !== null) return;

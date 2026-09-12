@@ -13,9 +13,11 @@ const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..")
 const requiredFiles = [
   "deploy/chromium/tikpal-close-audio.mjs",
   "deploy/chromium/web-mode-extension/deezer-ad-click-guard.js",
+  "deploy/chromium/web-mode-extension/apple-external-app-guard.js",
   "deploy/chromium/tikpal-provider-child-windows.mjs",
   "deploy/chromium/deezer-preview-recovery.js",
   "deploy/chromium/web-mode-extension/deezer-hide-ads.css",
+  "deploy/chromium/web-mode-extension/apple-hide-external-ctas.css",
   "server/index.mjs",
   "server/web.mjs",
   "docs/06-deployment/gentoo-kiosk-deploy-v1.md",
@@ -1718,6 +1720,8 @@ sync_runtime_provider_pool_process_statuses ""
   const quietBootScript = await readFile(path.join(ROOT, "deploy/moode/tikpal-quiet-boot-enable.sh"), "utf8");
   const extensionManifest = JSON.parse(await readFile(path.join(ROOT, "deploy/chromium/web-mode-extension/manifest.json"), "utf8"));
   const extensionContent = await readFile(path.join(ROOT, "deploy/chromium/web-mode-extension/content.js"), "utf8");
+  const appleExternalAppGuardSource = await readFile(path.join(ROOT, "deploy/chromium/web-mode-extension/apple-external-app-guard.js"), "utf8");
+  const appleExternalAppCtaCss = await readFile(path.join(ROOT, "deploy/chromium/web-mode-extension/apple-hide-external-ctas.css"), "utf8");
   const extensionBackground = await readFile(path.join(ROOT, "deploy/chromium/web-mode-extension/background.js"), "utf8");
   const providerAudioGateSource = await readFile(path.join(ROOT, "deploy/chromium/web-mode-extension/provider-audio-gate.js"), "utf8");
   const i18nSource = await readFile(path.join(ROOT, "src/i18n.tsx"), "utf8");
@@ -1882,6 +1886,24 @@ sync_runtime_provider_pool_process_statuses ""
   assert(extensionManifest.background?.service_worker === "background.js" && extensionManifest.background?.type === "module", "Explore extension should use its MV3 module service worker");
   assert(extensionManifest.web_accessible_resources?.some((entry) => entry.resources?.includes("netease-audio-mirror.js") && entry.matches?.includes("https://music.163.com/*")), "Explore extension should expose the NetEase audio mirror to the page world");
   assert(extensionManifest.content_scripts?.some((entry) => entry.world === "MAIN" && entry.run_at === "document_start" && entry.js?.includes("provider-audio-gate.js")), "Explore extension should install the provider audio gate in the page world before provider scripts run");
+  const appleCtaCssRule = extensionManifest.content_scripts?.find((entry) => entry.css?.includes("apple-hide-external-ctas.css"));
+  const appleCtaGuardRule = extensionManifest.content_scripts?.find((entry) => entry.js?.includes("apple-external-app-guard.js"));
+  assert(
+    appleCtaCssRule?.run_at === "document_start" && JSON.stringify(appleCtaCssRule.matches) === JSON.stringify(["https://music.apple.com/*"]),
+    "Apple Music external-app CTA CSS should be document-start and exact-host scoped"
+  );
+  assert(
+    appleCtaGuardRule?.world === "MAIN" && appleCtaGuardRule.run_at === "document_start" && JSON.stringify(appleCtaGuardRule.matches) === JSON.stringify(["https://music.apple.com/*"]),
+    "Apple Music external-app guard should run in the page world at document start"
+  );
+  assert(
+    appleExternalAppCtaCss.includes('[data-test="upsell-personal-student"]')
+      && appleExternalAppCtaCss.includes('[data-test="upsell-banner"]')
+      && appleExternalAppGuardSource.includes('[data-test="upsell-personal-student"]')
+      && appleExternalAppGuardSource.includes('[data-test="upsell-banner"] [data-test="cta-button"]')
+      && !appleExternalAppGuardSource.includes("window.open"),
+    "Apple Music guard should hide the exact locale-neutral student and banner hosts without a window.open override"
+  );
   assert(extensionContent.includes('chrome.runtime.sendMessage({ type: "provider-audio-muted", muted: true }'), "Provider tabs should request browser-level mute at document start");
   assert(providerAudioGateSource.includes("active: false") && providerAudioGateSource.includes("__tikpalProviderAudioGatePlayPatched") && providerAudioGateSource.includes("rememberPlayingMedia") && providerAudioGateSource.includes("version: 3"), "Provider audio gate should default to silence and retain resumable v3 state");
   assert(extensionContent.includes("window.setInterval(() => void syncProxy(), 750)"), "provider pages should poll the proxy settings revision every 750ms");

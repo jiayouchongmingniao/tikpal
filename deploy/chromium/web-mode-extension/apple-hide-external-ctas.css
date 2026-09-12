@@ -1,0 +1,10 @@
+/* Apple Music external-app and trial entry points confirmed on 207. */
+[data-testid="native-cta"],
+[data-testid="native-cta-button"],
+.native-cta,
+.navigation__native-cta,
+[data-test="upsell-personal-cta"],
+[data-test="upsell-personal-student"],
+[data-test="upsell-banner"] {
+  display: none !important;
+}
