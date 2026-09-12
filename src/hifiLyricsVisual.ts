@@ -222,8 +222,8 @@ export function hifiThemeToCssVariables(palette: HifiThemePalette) {
 export function buildBluetoothGeneratedCoverArtUrl(title: string, artist: string, album: string) {
   const palette = buildHifiSeedTheme([title, artist, album, "bluetooth"]);
   const safeTitle = escapeXml(truncateSvgText(title || "Bluetooth Audio", 22));
-  const safeArtist = escapeXml(truncateSvgText(artist || "Unknown Artist", 28));
-  const safeAlbum = escapeXml(truncateSvgText(album || "Bluetooth Source", 28));
+  const safeArtist = escapeXml(truncateSvgText(artist, 28));
+  const safeAlbum = escapeXml(truncateSvgText(album, 28));
 
   const svg = `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1200" viewBox="0 0 1200 1200">

@@ -37,9 +37,9 @@ export function buildGeneratedCoverArtUrl(title: string, artist: string, album: 
   const hueA = seed % 360;
   const hueB = (hueA + 72 + (seed % 90)) % 360;
   const fontFamily = escapeXml(COVER_FONT_FAMILIES[fontTheme]);
-  const safeTitle = escapeXml(truncateSvgText(title || "Not Playing", 22));
-  const safeArtist = escapeXml(truncateSvgText(artist || "Unknown Artist", 28));
-  const safeAlbum = escapeXml(truncateSvgText(album || "MPD Queue", 28));
+  const safeTitle = escapeXml(truncateSvgText(title || "Tikpal", 22));
+  const safeArtist = escapeXml(truncateSvgText(artist, 28));
+  const safeAlbum = escapeXml(truncateSvgText(album, 28));
   const label = (album || title || "TK")
     .split(/\s+/)
     .map((word) => word[0] ?? "")

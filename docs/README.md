@@ -62,6 +62,8 @@ This directory is the source of truth for Tikpal product, UX, visual, architectu
 
 | Document | Status | Purpose |
 | --- | --- | --- |
+| [Provider Guard OTA v1](06-deployment/provider-guard-ota-v1.md) | Current reference | Signed, device-independent R2 Provider Guard updates, activation, rollback, and release procedure. |
+| [场景环境音与 P2 体验交付（207）](06-deployment/ambient-p2-207-20260912.md) | Acceptance baseline | 场景音/Hi-Fi 互斥交接、P2 行为、多语言、构建检查与 207 窄部署验收边界。 |
 | [Raspberry Pi kiosk deploy v1](06-deployment/raspberry-pi-kiosk-deploy-v1.md) | Current reference | Pi sync, systemd install, Chromium kiosk launch, verification, and rollback. |
 | [Gentoo kiosk deploy v1](06-deployment/gentoo-kiosk-deploy-v1.md) | Current reference | Gentoo systemd migration, physical display, Portage audio/kiosk setup, Explore provider validation, and rollback. |
 | [Gentoo 207 constrained kiosk v1](06-deployment/gentoo-207-constrained-kiosk-v1.md) | Current reference | Weak-GPU/EVDI render profile, CPU thermal scene guard, Provider lifecycle freezing, governor, diagnostics, and physical acceptance boundary. |

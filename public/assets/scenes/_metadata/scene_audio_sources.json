@@ -7,7 +7,8 @@
   "transformation": {
     "output": "48 kHz stereo Opus Ogg, 96 kbps VBR, 15 minutes",
     "looping": "tail-to-head 0.8 second crossfade before long render",
-    "loudness": "-23 LUFS integrated target, -1.5 dBTP ceiling"
+    "loudness": "-23 LUFS integrated target, -1.5 dBTP ceiling",
+    "rainyWindowEnvelope": "45 seconds rain, 15 seconds quiet, with 2.5 second fades"
   },
   "sources": [
     {
@@ -21,10 +22,10 @@
     {
       "sceneId": "cloud-sunrise",
       "audioFilename": "audio/cloud-sunrise.ogg",
-      "title": "Ambient Spring Forest",
-      "author": "SoundReality",
-      "sourceUrl": "https://pixabay.com/sound-effects/nature-ambient-spring-forest-323801/",
-      "downloadedFilename": "soundreality-ambient-spring-forest-323801.mp3"
+      "title": "Gentle Wind Sounds",
+      "author": "DRAGON-STUDIO",
+      "sourceUrl": "https://pixabay.com/sound-effects/nature-gentle-wind-sounds-584728/",
+      "downloadedFilename": "dragon-studio-gentle-wind-sounds-584728.mp3"
     },
     {
       "sceneId": "deep-blue-ocean",
@@ -37,18 +38,18 @@
     {
       "sceneId": "midnight-library",
       "audioFilename": "audio/midnight-library.ogg",
-      "title": "Library ambience",
-      "author": "u_dreamysoul",
-      "sourceUrl": "https://pixabay.com/sound-effects/film-special-effects-library-ambience-542977/",
-      "downloadedFilename": "u_dreamysoul-library-ambience-542977.mp3"
+      "title": "Fire Ambience",
+      "author": "SoundReality",
+      "sourceUrl": "https://pixabay.com/sound-effects/film-special-effects-fire-ambience-528618/",
+      "downloadedFilename": "soundreality-fire-ambience-528618.mp3"
     },
     {
       "sceneId": "rainy-window",
       "audioFilename": "audio/rainy-window.ogg",
-      "title": "Gentle Rain on Window for Sleep",
-      "author": "Eryliaa",
-      "sourceUrl": "https://pixabay.com/sound-effects/nature-gentle-rain-on-window-for-sleep-422420/",
-      "downloadedFilename": "eryliaa-gentle-rain-on-window-for-sleep-422420.mp3"
+      "title": "Rain on window",
+      "author": "esnow (Freesound)",
+      "sourceUrl": "https://pixabay.com/sound-effects/film-special-effects-rain-on-window-50256/",
+      "downloadedFilename": "freesound_community-rain-on-window-50256.mp3"
     },
     {
       "sceneId": "vinyl-lounge",
@@ -69,10 +70,10 @@
     {
       "sceneId": "zen-courtyard",
       "audioFilename": "audio/zen-courtyard.ogg",
-      "title": "River Sounds",
+      "title": "Creek Trickling Calmly",
       "author": "DRAGON-STUDIO",
-      "sourceUrl": "https://pixabay.com/sound-effects/river-sounds-420904/",
-      "downloadedFilename": "dragon-studio-river-sounds-420904.mp3"
+      "sourceUrl": "https://pixabay.com/sound-effects/nature-creek-trickling-calmly-478387/",
+      "downloadedFilename": "dragon-studio-creek-trickling-calmly-478387.mp3"
     }
   ]
 }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { createPortal } from "react-dom";
 import { AmbientScreen } from "./components/AmbientScreen";
 import { PlayerOverlay } from "./components/PlayerOverlay";
@@ -15,7 +15,8 @@ import { fetchWebModeState, sendKioskHeartbeat, sendWebModeAction } from "./api/
 import { EXPLORE_CLOSE_CHANNEL, isExploreCloseMessage, type ExploreCloseMessage } from "./exploreCloseVeil";
 import { createExploreOpenRequestId, ExploreOpenVeilController } from "./exploreOpenVeil";
 import { useI18n } from "./i18n";
-import type { AppMode, BackgroundVideoSummary, DisplaySleepStyle, LyricsFontSize, RememberedAudioSource, RoomExperienceActionRequest, RoomExperienceState, RoomMode, SourceSwitchTarget, SurfaceTheme, TikpalState, WebModeState } from "./types";
+import { getPlaybackDisplayTruth } from "./playbackTruth";
+import type { AppMode, BackgroundVideoSummary, DisplaySleepStyle, LyricsFontSize, PlaybackActionType, RememberedAudioSource, RoomExperienceActionRequest, RoomExperienceState, RoomMode, SourceSwitchTarget, SurfaceTheme, TikpalState, WebModeState } from "./types";
 
 const SURFACE_THEME_STORAGE_KEY = "tikpal.surfaceTheme";
 const LYRICS_VISIBLE_STORAGE_KEY = "tikpal.lyricsVisible.v3";
@@ -330,7 +331,8 @@ export default function App() {
   const [roomModeChooserContext, setRoomModeChooserContext] = useState<RoomModeChooserContext | null>(() => readInitialMode() === "ambient" ? "startup" : null);
   const [roomModeSelectionPending, setRoomModeSelectionPending] = useState(false);
   const [sceneVideoReady, setSceneVideoReady] = useState(false);
-  const [onboardingVisible, setOnboardingVisible] = useState(() => !readStoredFlag(ONBOARDING_STORAGE_KEY));
+  const [onboardingMode, setOnboardingMode] = useState<"first-use" | "reference" | null>(() => readStoredFlag(ONBOARDING_STORAGE_KEY) ? null : "first-use");
+  const [onboardingStep, setOnboardingStep] = useState<"show-controls" | "playback">("show-controls");
   const [activeSceneVideo, setActiveSceneVideo] = useState<BackgroundVideoSummary>(DEFAULT_SCENE_VIDEO);
   const eventLoopLagRef = useRef(0);
   const heartbeatStateRef = useRef<Record<string, unknown>>({});
@@ -758,10 +760,6 @@ export default function App() {
   }, [clockVisible]);
 
   useEffect(() => {
-    window.localStorage.setItem(ONBOARDING_STORAGE_KEY, onboardingVisible ? "false" : "true");
-  }, [onboardingVisible]);
-
-  useEffect(() => {
     const percent = tikpalState.system.volume.percent;
     if (percent <= 0) return;
     quickMenuVolumeRestoreRef.current = Math.round(percent);
@@ -1105,11 +1103,10 @@ export default function App() {
     setRoomModeSelectionPending(true);
     try {
       await handleRoomExperienceAction({ type: "set_mode", mode: nextMode });
-      if (sceneVideoReadyRef.current) {
-        setRoomModeChooserContext(null);
-        setRoomModeSelectionPending(false);
-        setAmbientSourcePickerRequest((request) => request + 1);
-      }
+      // A mode choice is complete as soon as it is accepted. Waiting for video
+      // readiness here could strand first-use guidance behind the chooser.
+      setRoomModeChooserContext(null);
+      setRoomModeSelectionPending(false);
     } catch {
       setRoomModeChooserContext(chooserContext);
       setRoomModeSelectionPending(false);
@@ -1120,7 +1117,6 @@ export default function App() {
     if (!roomModeSelectionPending || !sceneVideoReady) return;
     setRoomModeSelectionPending(false);
     setRoomModeChooserContext(null);
-    setAmbientSourcePickerRequest((request) => request + 1);
   }, [roomModeSelectionPending, sceneVideoReady]);
 
   const handleStartupModeAutoDismiss = useCallback(() => {
@@ -1128,11 +1124,14 @@ export default function App() {
   }, []);
 
   const handleOnboardingDismiss = useCallback(() => {
-    setOnboardingVisible(false);
+    setOnboardingMode((current) => {
+      if (current === "first-use") window.localStorage.setItem(ONBOARDING_STORAGE_KEY, "true");
+      return null;
+    });
   }, []);
 
   const showWizard = useCallback(() => {
-    setOnboardingVisible(true);
+    setOnboardingMode("reference");
   }, []);
 
   const handleOpenWizard = useCallback(async () => {
@@ -1162,6 +1161,10 @@ export default function App() {
   const handleAmbientTap = useCallback(() => {
     if (mode === "ambient" && roomExperience.mode !== "hifi") {
       showHud();
+      if (onboardingMode === "first-use" && onboardingStep === "show-controls") {
+        setOnboardingStep("playback");
+        return;
+      }
       if (!ambientSourcePickerOpen) {
         setAmbientSourcePickerRequest((request) => request + 1);
       }
@@ -1169,15 +1172,46 @@ export default function App() {
     }
 
     toggleHud();
-  }, [ambientSourcePickerOpen, mode, roomExperience.mode, showHud, toggleHud]);
+  }, [ambientSourcePickerOpen, mode, onboardingMode, onboardingStep, roomExperience.mode, showHud, toggleHud]);
+
+  const handleFirstUseBlankClick = useCallback((event: ReactMouseEvent<HTMLElement>) => {
+    if (onboardingMode !== "first-use" || onboardingStep !== "show-controls" || mode !== "ambient") return;
+    if (event.target instanceof Element && event.target.closest("[data-gesture-protected]")) return;
+    showHud();
+    setOnboardingStep("playback");
+  }, [mode, onboardingMode, onboardingStep, showHud]);
+
+  const handlePlaybackAction = useCallback(async (type: PlaybackActionType, value?: number, playbackMode?: Parameters<typeof sendPlaybackAction>[2]) => {
+    const next = await sendPlaybackAction(type, value, playbackMode);
+    if (onboardingMode === "first-use" && onboardingStep === "playback" && type === "play_pause") {
+      handleOnboardingDismiss();
+    }
+    return next;
+  }, [handleOnboardingDismiss, onboardingMode, onboardingStep, sendPlaybackAction]);
+
+  const handleCoachOpenPlayer = useCallback(() => {
+    handleOnboardingDismiss();
+    changeMode("player");
+  }, [changeMode, handleOnboardingDismiss]);
 
   function renderScreenSaverContent(style: DisplaySleepStyle) {
     const playback = tikpalState.playback;
-    const title = playback.title?.trim() || t("playback.nothingPlaying");
-    const artist = playback.artist?.trim() || t("playback.unknownArtist");
-    const duration = playback.durationSeconds ?? 0;
-    const elapsed = playback.elapsedSeconds ?? 0;
-    const progress = duration > 0 ? Math.max(0, Math.min(1, elapsed / duration)) : 0;
+    const playbackTruth = getPlaybackDisplayTruth(playback, tikpalState.audio, fontTheme);
+    const title = playbackTruth.title ?? (playback.state === "playing" ? t("playback.audioPlaying") : t("playback.nothingPlaying"));
+    const artist = playbackTruth.artist ?? playbackTruth.sourceLabel;
+    const duration = playbackTruth.durationSeconds ?? 0;
+    const elapsed = playbackTruth.elapsedSeconds ?? 0;
+    const progress = playbackTruth.progress;
+    const sceneId = activeSceneVideo.id !== DEFAULT_SCENE_VIDEO.id
+      ? activeSceneVideo.id
+      : roomExperience.sceneVideoId;
+    const sceneNameKey = `scene.name.${sceneId}`;
+    const translatedSceneName = sceneId ? t(sceneNameKey) : null;
+    const screenSaverSourceLabel = tikpalState.audio.currentSource.id === "scene"
+      && translatedSceneName
+      && translatedSceneName !== sceneNameKey
+      ? translatedSceneName
+      : tikpalState.audio.currentSource.label || t("source.library");
 
     if (style === "meteor_shower") {
       return (
@@ -1206,13 +1240,13 @@ export default function App() {
             {playback.albumArtUrl ? <img src={playback.albumArtUrl} alt="" /> : <span>{title.slice(0, 1).toLocaleUpperCase()}</span>}
           </div>
           <div className="screen-saver-track">
-            <span>{tikpalState.audio.currentSource.label || t("source.library")}</span>
+            <span data-screen-saver-source>{screenSaverSourceLabel}</span>
             <strong>{title}</strong>
             <em>{artist}</em>
             <div className="screen-saver-progress">
               <i style={{ width: `${progress * 100}%` }} />
             </div>
-            <small>{formatScreenSaverDuration(elapsed)} / {formatScreenSaverDuration(duration)}</small>
+            {duration > 0 ? <small>{formatScreenSaverDuration(elapsed)} / {formatScreenSaverDuration(duration)}</small> : null}
           </div>
         </div>
       );
@@ -1237,7 +1271,7 @@ export default function App() {
           ))}
         </div>
         <div className="screen-saver-signal-copy">
-          <span>{tikpalState.audio.currentSource.label || t("source.library")}</span>
+          <span data-screen-saver-source>{screenSaverSourceLabel}</span>
           <strong>Tikpal Signal</strong>
           <em>{title}</em>
         </div>
@@ -1255,10 +1289,10 @@ export default function App() {
     onActivity: () => registerDisplayActivity(mode)
   });
 
-  const onboardingActive = onboardingVisible && !webModeActive;
+  const onboardingActive = onboardingMode !== null && roomModeChooserContext === null && mode === "ambient" && !webModeActive;
 
   return (
-    <main className={`app-root ${tikpalState.runtime.renderProfile === "constrained" ? "is-render-constrained" : ""} ${screenOffActive ? "is-screen-off" : ""} ${systemSleepActive ? "is-system-sleeping" : ""} ${mode === "quickMenu" ? "is-quick-menu-active" : ""}`} {...gestureHandlers}>
+    <main className={`app-root ${tikpalState.runtime.renderProfile === "constrained" ? "is-render-constrained" : ""} ${screenOffActive ? "is-screen-off" : ""} ${systemSleepActive ? "is-system-sleeping" : ""} ${mode === "quickMenu" ? "is-quick-menu-active" : ""}`} onClick={handleFirstUseBlankClick} {...gestureHandlers}>
       <AmbientScreen
         hudVisible={hudVisible}
         timeLabel={timeLabel}
@@ -1279,7 +1313,7 @@ export default function App() {
         sourcePickerOpenRequest={ambientSourcePickerRequest}
         clockVisible={clockVisible}
         webModeState={webModeState}
-        onPlaybackAction={sendPlaybackAction}
+        onPlaybackAction={handlePlaybackAction}
         onSystemAction={sendSystemAction}
         onSourceSwitch={handleSourceSwitch}
         onOpenWebMode={handleOpenWebMode}
@@ -1305,7 +1339,11 @@ export default function App() {
       />
       <OnboardingGuide
         active={onboardingActive}
+        variant={onboardingMode ?? "reference"}
+        step={onboardingStep}
+        canControlPlayback={tikpalState.playback.transportCapabilities?.playPause !== false}
         onDismiss={handleOnboardingDismiss}
+        onOpenPlayer={handleCoachOpenPlayer}
       />
 
       <PlayerOverlay
@@ -1316,7 +1354,7 @@ export default function App() {
         webModeState={webModeState}
         status={tikpalStatus}
         fontTheme={fontTheme}
-        onPlaybackAction={sendPlaybackAction}
+        onPlaybackAction={handlePlaybackAction}
         onSourceSwitch={handleSourceSwitch}
         onOpenWebMode={handleOpenWebMode}
         onReturnAmbient={returnAmbient}

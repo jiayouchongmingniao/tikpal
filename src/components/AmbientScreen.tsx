@@ -386,6 +386,11 @@ export function AmbientScreen({
   onExperienceAction
 }: AmbientScreenProps) {
   const { t, sourceLabel, roomLabel, roomIntent, friendlyError } = useI18n();
+  const sceneLabel = useCallback((video: BackgroundVideoSummary) => {
+    const key = `scene.name.${video.id}`;
+    const translated = t(key);
+    return translated === key ? video.label : translated;
+  }, [t]);
   const dragStateRef = useRef<DragState | null>(null);
   const sourcePickerRef = useRef<HTMLDivElement | null>(null);
   const lastSourcePickerOpenRequestRef = useRef(sourcePickerOpenRequest);
@@ -456,9 +461,9 @@ export function AmbientScreen({
       .sort((left, right) => (
         sceneGalleryModes.indexOf(left.mode) - sceneGalleryModes.indexOf(right.mode)
         || (left.video.order ?? Number.MAX_SAFE_INTEGER) - (right.video.order ?? Number.MAX_SAFE_INTEGER)
-        || left.video.label.localeCompare(right.video.label)
+        || sceneLabel(left.video).localeCompare(sceneLabel(right.video))
       ))
-  ), [backgroundVideos]);
+  ), [backgroundVideos, sceneLabel]);
   const sceneGalleryPageCount = Math.max(1, Math.ceil(sceneGalleryVideos.length / sceneGalleryPageSize));
   const safeSceneGalleryPage = Math.min(Math.max(0, sceneGalleryPage), sceneGalleryPageCount - 1);
   const visibleSceneGalleryVideos = useMemo(() => {
@@ -1831,7 +1836,7 @@ export function AmbientScreen({
                       type="button"
                       role="option"
                       aria-selected={selected}
-                      aria-label={t("ambient.sceneGallerySelect", { scene: video.label, mode: roomLabel(mode) })}
+                      aria-label={t("ambient.sceneGallerySelect", { scene: sceneLabel(video), mode: roomLabel(mode) })}
                       disabled={sceneGalleryPending}
                       data-ambient-scene-card={video.id}
                       data-scene-mode={mode}
@@ -1842,7 +1847,7 @@ export function AmbientScreen({
                         {video.thumbnailSrc ? <img src={video.thumbnailSrc} alt="" /> : <GalleryHorizontalEnd size={32} strokeWidth={1.6} />}
                       </span>
                       <span className="ambient-scene-gallery-card-copy">
-                        <strong>{video.label}</strong>
+                        <strong>{sceneLabel(video)}</strong>
                         <span>{roomLabel(mode)}</span>
                       </span>
                       {selected ? <span className="ambient-scene-gallery-selected">{t("common.current")}</span> : null}

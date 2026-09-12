@@ -36,11 +36,16 @@ const requiredFiles = [
   "deploy/chromium/tikpal-explore-switch-acceptance.sh",
   "deploy/chromium/tikpal-x11-helper.c",
   "deploy/chromium/tikpal-web-mode.sh",
+  "deploy/chromium/tikpal-guard-ota.mjs",
+  "deploy/chromium/tikpal-guard-ota-run.sh",
+  "deploy/chromium/guard-ota-extension-key.sha256",
   "deploy/chromium/tikpal-new-device-provider-reset.sh",
   "deploy/chromium/tikpal-web-mode-guard.mjs",
   "deploy/chromium/tikpal-web-mode-cdp-manager.mjs",
   "deploy/chromium/tikpal-web-mode-cdp-client.py",
   "deploy/systemd/tikpal-web-mode-cdp-manager.service",
+  "deploy/systemd/tikpal-guard-ota.service",
+  "deploy/systemd/tikpal-guard-ota.timer",
   "scripts/tikpal-cdp-session-manager-smoke.mjs",
   "deploy/chromium/tikpal-web-mode-qq-confirm.mjs",
   "scripts/tikpal-initial-entry-fixture.sh",
@@ -438,6 +443,41 @@ async function run() {
   assert(audioDiagnosticsStylesSource.includes(".audio-output-detail-body.is-custom-active .audio-profile-option"), "Custom Audio Output should compact the preset cards so all switches fit");
   assert(!quickSettingsAudioSource.includes("settings-diagnostics-chip-row"), "Audio Diagnostics should not duplicate summary chips above the cards");
   assert(audioDiagnosticsStylesSource.includes(".settings-diagnostics-raw"), "Audio Diagnostics should keep raw text folded separately");
+  assert(
+    quickSettingsAudioSource.includes('section: "system" as const')
+      && quickSettingsAudioSource.includes('maintenance: "ownership" as const')
+      && quickSettingsAudioSource.includes('maintenance: "guardOta" as const')
+      && quickSettingsAudioSource.includes('data-device-maintenance={card.maintenance}'),
+    "Device Settings should expose local Explore repair and Provider Guard maintenance cards"
+  );
+  const webModeDetailStart = quickSettingsAudioSource.indexOf("function renderWebModeDetail()");
+  const webModeDetailEnd = quickSettingsAudioSource.indexOf("function renderDisplayDetail()", webModeDetailStart);
+  const webModeDetailSource = quickSettingsAudioSource.slice(webModeDetailStart, webModeDetailEnd);
+  assert(
+    webModeDetailStart >= 0
+      && webModeDetailEnd > webModeDetailStart
+      && !webModeDetailSource.includes("settings.runtimeSelfCheck")
+      && !webModeDetailSource.includes("settings.guardOta"),
+    "Explore Settings should retain proxy controls without device maintenance actions"
+  );
+  assert(
+    quickSettingsAudioSource.includes('const localDeviceMaintenanceAvailable = !window.__TIKPAL_REMOTE_MODE__ && localKioskHosts.has(window.location.hostname);'),
+    "Device maintenance controls should remain unavailable to the portable controller"
+  );
+  for (const selfCheckCopyKey of [
+    "settings.runtimeSelfCheck",
+    "settings.runtimeSelfCheckChecking",
+    "settings.runtimeSelfCheckHealthy",
+    "settings.runtimeSelfCheckHealthyHelp",
+    "settings.runtimeSelfCheckRepaired",
+    "settings.runtimeSelfCheckRepairedHelp",
+    "settings.runtimeSelfCheckHelp",
+    "settings.runtimeSelfCheckBlocked",
+    "settings.runtimeSelfCheckUnavailable"
+  ]) {
+    const localeCount = onboardingI18nSource.match(new RegExp(`"${selfCheckCopyKey.replaceAll(".", "\\.")}"`, "g"))?.length ?? 0;
+    assert(localeCount >= 7, `${selfCheckCopyKey} should be translated for all seven locales`);
+  }
 
   const outputVolumeTempDir = mkdtempSync(path.join(tmpdir(), "tikpal-output-volume-"));
   const outputVolumeBinDir = path.join(outputVolumeTempDir, "bin");
@@ -1437,6 +1477,7 @@ run_window_guard /profiles/spotify /profiles/side-panel
     cwd: ROOT,
     input: `${webModeFunctions}
 SCRIPT_DIR="$TIKPAL_SMOKE_SCRIPT_DIR"
+TIKPAL_WEB_MODE_GUARD_SCRIPT="$TIKPAL_SMOKE_SCRIPT_DIR/tikpal-web-mode-guard.mjs"
 kill() {
   local signal=TERM pid
   case "$1" in

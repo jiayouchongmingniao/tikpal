@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Airplay, Bluetooth, Captions, Cast, CheckCircle2, CircleHelp, Clock3, Cpu, Database, EthernetPort, Eye, EyeOff, Globe2, HardDrive, Info, Monitor, Moon, Music2, Palette, PanelRightClose, Plus, Power, Radio as RadioIcon, RotateCcw, Search, Server, SlidersHorizontal, Target, Trash2, Type, Usb, Volume2, Waves } from "lucide-react";
-import { checkWebModeOwnership, deleteNasSource, discoverNasSources, fetchAudioLibrary, fetchAudioOutputDiagnostics, fetchMultiroom, fetchNasSources, fetchWebModeState, mountNasSource, repairWebModeOwnership, saveNasSource, sendWebModeAction, testNasSource, testWebModeProxy, unmountNasSource, updateMultiroomEcosystem, updateWebModeSettings } from "../api/tikpalClient";
+import { checkGuardOta, checkWebModeOwnership, deleteNasSource, discoverNasSources, fetchAudioLibrary, fetchAudioOutputDiagnostics, fetchGuardOtaStatus, fetchMultiroom, fetchNasSources, fetchWebModeState, mountNasSource, repairWebModeOwnership, saveNasSource, sendWebModeAction, testNasSource, testWebModeProxy, unmountNasSource, updateMultiroomEcosystem, updateWebModeSettings } from "../api/tikpalClient";
 import { languageOptions, useI18n } from "../i18n";
+import { getPlaybackDisplayTruth } from "../playbackTruth";
 import { getSourceDisplayStatus, getSourceDisplayStatusLabel } from "../sourceStatus";
 import type { TikpalDataStatus } from "../hooks/useTikpalState";
 import { useOverlayReturnGesture } from "../hooks/useOverlayReturnGesture";
-import type { AudioOutputCustomSettingId, AudioOutputDiagnostics, AudioOutputProfile, AudioState, DisplaySleepStyle, FontTheme, LyricsFontSize, MultiroomAudioState, MultiroomEcosystemId, NasDiscoverCandidate, NasSourceInput, NasSourcesResponse, NightScheduleState, PlaybackSummary, RoomExperienceActionRequest, RoomExperienceState, RoomMode, RuntimeState, SurfaceTheme, SystemActionType, SystemState, UiLocale, UiPreferences, WebModeOwnershipCheck, WebModeProviderId, WebModeState } from "../types";
+import type { AudioOutputCustomSettingId, AudioOutputDiagnostics, AudioOutputProfile, AudioState, DisplaySleepStyle, FontTheme, GuardOtaStatus, LyricsFontSize, MultiroomAudioState, MultiroomEcosystemId, NasDiscoverCandidate, NasSourceInput, NasSourcesResponse, NightScheduleState, PlaybackSummary, RoomExperienceActionRequest, RoomExperienceState, RoomMode, RuntimeState, SurfaceTheme, SystemActionType, SystemState, UiLocale, UiPreferences, WebModeOwnershipCheck, WebModeProviderId, WebModeState } from "../types";
 
 interface QuickSettingsOverlayProps {
   active: boolean;
@@ -209,11 +210,18 @@ interface WebModeCard extends BaseCard {
   kind: "webMode";
 }
 
+interface MaintenanceCard extends BaseCard {
+  kind: "maintenance";
+  maintenance: "ownership" | "guardOta";
+  buttonLabel: string;
+  disabled?: boolean;
+}
+
 interface LanguageCard extends BaseCard {
   kind: "language";
 }
 
-type SettingsCard = ReadOnlyCard | AudioOutputCard | ActionCard | FontCard | AppearanceCard | LanguageCard | LyricsCard | DisplayCard | MultiroomCard | NightCard | NasCard | WebModeCard;
+type SettingsCard = ReadOnlyCard | AudioOutputCard | ActionCard | FontCard | AppearanceCard | LanguageCard | LyricsCard | DisplayCard | MultiroomCard | NightCard | NasCard | WebModeCard | MaintenanceCard;
 
 const fontChoices: Array<{ id: FontTheme; label: string; sample: string }> = [
   { id: "system", label: "System Neo", sample: "Inter + Noto CJK" },
@@ -443,6 +451,9 @@ export function QuickSettingsOverlay({
   const [webModeError, setWebModeError] = useState<string | null>(null);
   const [webModeOwnership, setWebModeOwnership] = useState<WebModeOwnershipCheck | null>(null);
   const [webModeOwnershipPending, setWebModeOwnershipPending] = useState(false);
+  const [guardOtaStatus, setGuardOtaStatus] = useState<GuardOtaStatus | null>(null);
+  const [guardOtaPending, setGuardOtaPending] = useState(false);
+  const [guardOtaError, setGuardOtaError] = useState<string | null>(null);
   const [libraryStorageCounts, setLibraryStorageCounts] = useState<LibraryStorageCounts>({
     local: null,
     nas: null,
@@ -479,13 +490,14 @@ export function QuickSettingsOverlay({
   const ConsoleSourceIcon = getConsoleSourceIcon(currentSource.id);
   const consoleStateLabel = getConsoleStateLabel(playback, currentSource);
   const consoleStateClass = getConsoleStateClass(playback, currentSource);
-  const consoleTitle = playback.title?.trim()
+  const consolePlaybackTruth = getPlaybackDisplayTruth(playback, audio, fontTheme);
+  const consoleTitle = consolePlaybackTruth.title
     || currentSource.connectedLabel
     || currentSource.advertisedLabel
     || currentSource.secondaryStatus
     || currentSource.label;
   const consoleSubtitle = [
-    playback.artist?.trim() || playback.album?.trim() || currentSource.secondaryStatus || currentSource.label,
+    consolePlaybackTruth.artist || consolePlaybackTruth.album || currentSource.secondaryStatus || currentSource.label,
     `${currentSource.label} ${consoleStateLabel}`
   ].filter(Boolean).join(" · ");
   const sectionLabel = useCallback(
@@ -537,6 +549,7 @@ export function QuickSettingsOverlay({
     setAudioOutputPendingCustomSettings(null);
     setMpdQualityError(null);
     setWebModeError(null);
+    setGuardOtaError(null);
     setNasFormVisible(false);
     setNasForm(blankNasForm);
     setNasPasswordVisible(false);
@@ -552,7 +565,7 @@ export function QuickSettingsOverlay({
   }, [active]);
 
   useEffect(() => {
-    if (!active || detailView !== "webMode") return undefined;
+    if (!active || activeSection !== "system" || window.__TIKPAL_REMOTE_MODE__ || !localKioskHosts.has(window.location.hostname)) return undefined;
     let cancelled = false;
     setWebModeOwnershipPending(true);
     void checkWebModeOwnership()
@@ -568,7 +581,7 @@ export function QuickSettingsOverlay({
             mismatches: [],
             repairedPaths: [],
             blockedPaths: [],
-            message: localizedErrorMessage(error, "error.explore")
+            message: localizedErrorMessage(error, "error.generic")
           });
         }
       })
@@ -578,7 +591,21 @@ export function QuickSettingsOverlay({
     return () => {
       cancelled = true;
     };
-  }, [active, detailView, localizedErrorMessage]);
+  }, [active, activeSection, localizedErrorMessage]);
+
+  useEffect(() => {
+    if (!active || activeSection !== "system" || window.__TIKPAL_REMOTE_MODE__ || !localKioskHosts.has(window.location.hostname)) return undefined;
+    const controller = new AbortController();
+    void fetchGuardOtaStatus(controller.signal)
+      .then((result) => {
+        setGuardOtaStatus(result);
+        setGuardOtaError(null);
+      })
+      .catch((error) => {
+        if (!controller.signal.aborted) setGuardOtaError(localizedErrorMessage(error, "error.generic"));
+      });
+    return () => controller.abort();
+  }, [active, activeSection, localizedErrorMessage]);
   // Handle initialDetail from QuickMenu long-press navigation
   useEffect(() => {
     if (!active || !initialDetail) {
@@ -856,6 +883,52 @@ export function QuickSettingsOverlay({
   const profileResetProviderLabel = profileResetProvider
     ? webModeState?.providers.find((provider) => provider.id === profileResetProvider)?.label ?? profileResetProvider
     : null;
+  const localDeviceMaintenanceAvailable = !window.__TIKPAL_REMOTE_MODE__ && localKioskHosts.has(window.location.hostname);
+  const ownershipAttention = webModeOwnership !== null && (!webModeOwnership.ok || webModeOwnership.blockedPaths.length > 0);
+  const ownershipStatusText = webModeOwnershipPending
+    ? t("settings.runtimeSelfCheckChecking")
+    : webModeOwnership?.supported === false
+      ? t("settings.runtimeSelfCheckUnavailable")
+      : webModeOwnership?.repaired
+        ? t("settings.runtimeSelfCheckRepaired")
+        : webModeOwnership?.ok
+          ? t("settings.runtimeSelfCheckHealthy")
+          : t("settings.needsAttention");
+  const ownershipHelp = webModeOwnership?.supported === false
+    ? t("settings.runtimeSelfCheckUnavailable")
+    : webModeOwnership?.blockedPaths.length
+      ? t("settings.runtimeSelfCheckBlocked")
+      : webModeOwnership?.repaired
+        ? t("settings.runtimeSelfCheckRepairedHelp")
+        : webModeOwnership?.ok
+          ? t("settings.runtimeSelfCheckHealthyHelp")
+          : t("settings.runtimeSelfCheckHelp");
+  const guardOtaAttention = guardOtaStatus?.state === "failed" || guardOtaStatus?.state === "rolled_back";
+  const guardOtaStatusText = guardOtaError ?? (guardOtaPending || guardOtaStatus?.state === "checking" || guardOtaStatus?.state === "downloading"
+      ? t("settings.guardOtaChecking")
+      : guardOtaStatus?.enabled === false
+        ? t("settings.guardOtaDisabled")
+        : guardOtaStatus?.state === "pending_idle"
+          ? t("settings.guardOtaPendingIdle")
+          : guardOtaStatus?.state === "pending_activation"
+            ? t("settings.guardOtaPendingActivation")
+            : guardOtaAttention
+              ? t("settings.guardOtaAttention")
+              : t("settings.guardOtaReady"));
+  const guardOtaCheckTime = guardOtaStatus?.lastCheckedAt
+    ? new Intl.DateTimeFormat(undefined, { dateStyle: "short", timeStyle: "short" }).format(new Date(guardOtaStatus.lastCheckedAt))
+    : null;
+  const guardOtaHelp = guardOtaError
+    ? guardOtaError
+    : guardOtaAttention && guardOtaStatus?.lastErrorCode
+      ? t("settings.guardOtaError", { code: guardOtaStatus.lastErrorCode })
+      : [
+          guardOtaStatus?.installedVersion ? t("settings.guardOtaVersion", { version: guardOtaStatus.installedVersion }) : null,
+          guardOtaStatus?.candidateVersion && guardOtaStatus.candidateVersion !== guardOtaStatus.installedVersion
+            ? t("settings.guardOtaCandidate", { version: guardOtaStatus.candidateVersion })
+            : null,
+          guardOtaCheckTime ? t("settings.guardOtaCheckedAt", { time: guardOtaCheckTime }) : null
+        ].filter(Boolean).join(" · ") || t("settings.guardOtaHelp");
 
   const settingsCards = useMemo<SettingsCard[]>(
     () => [
@@ -1006,6 +1079,34 @@ export function QuickSettingsOverlay({
         meta: status.error ? t("settings.needsAttention") : `CPU ${system.cpuTemp}C - ${system.uptime}`,
         tone: status.source === "api" ? "neutral" : "warn"
       },
+      ...(localDeviceMaintenanceAvailable ? [
+        {
+          kind: "maintenance" as const,
+          key: "explore-runtime-maintenance",
+          section: "system" as const,
+          icon: RotateCcw,
+          title: t("settings.runtimeSelfCheck"),
+          value: ownershipStatusText,
+          meta: ownershipHelp,
+          tone: ownershipAttention ? "warn" as const : "cyan" as const,
+          maintenance: "ownership" as const,
+          buttonLabel: t("settings.runtimeSelfCheck"),
+          disabled: webModeOwnershipPending || webModeOwnership?.supported === false
+        },
+        {
+          kind: "maintenance" as const,
+          key: "provider-guard-ota",
+          section: "system" as const,
+          icon: RotateCcw,
+          title: t("settings.guardOta"),
+          value: guardOtaStatusText,
+          meta: guardOtaHelp,
+          tone: guardOtaAttention ? "warn" as const : "cyan" as const,
+          maintenance: "guardOta" as const,
+          buttonLabel: t("settings.guardOta"),
+          disabled: guardOtaPending || guardOtaStatus?.enabled === false
+        }
+      ] : []),
       {
         kind: "action",
         key: "wizard",
@@ -1074,7 +1175,7 @@ export function QuickSettingsOverlay({
         confirmLabel: t("settings.tapAgainPowerOff")
       }
     ],
-    [activeMultiroom, displayedAudioOutputProfile, enabledMultiroomCount, fontTheme, libraryScanMeta, libraryScanValue, localTrackCount, lyricsFontSize, lyricsVisible, multiroomMeta, multiroomNeedsSetup, multiroomValue, nasCardMeta, nasCardTone, nasCardValue, preferences.displaySleepEnabled, preferences.displaySleepMinutes, preferences.displaySleepStyle, preferences.locale, profileResetProvider, profileResetProviderLabel, roomExperience.nightSchedule.active, roomExperience.nightSchedule.enabled, roomExperience.nightSchedule.end, roomExperience.nightSchedule.start, roomExperience.nightSchedule.timeZone, status.error, status.source, surfaceTheme, system.cpuTemp, system.display.brightnessPercent, system.display.controllable, system.library.scanning, system.network.ip, system.network.label, system.network.speed, system.uptime, t, usbCardMeta, usbCardValue, usbTrackCount, webModeProxyEnabled, webModeProxyUrl]
+    [activeMultiroom, displayedAudioOutputProfile, enabledMultiroomCount, fontTheme, guardOtaAttention, guardOtaHelp, guardOtaPending, guardOtaStatus?.enabled, guardOtaStatusText, libraryScanMeta, libraryScanValue, localDeviceMaintenanceAvailable, localTrackCount, lyricsFontSize, lyricsVisible, multiroomMeta, multiroomNeedsSetup, multiroomValue, nasCardMeta, nasCardTone, nasCardValue, ownershipAttention, ownershipHelp, ownershipStatusText, preferences.displaySleepEnabled, preferences.displaySleepMinutes, preferences.displaySleepStyle, preferences.locale, profileResetProvider, profileResetProviderLabel, roomExperience.nightSchedule.active, roomExperience.nightSchedule.enabled, roomExperience.nightSchedule.end, roomExperience.nightSchedule.start, roomExperience.nightSchedule.timeZone, status.error, status.source, surfaceTheme, system.cpuTemp, system.display.brightnessPercent, system.display.controllable, system.library.scanning, system.network.ip, system.network.label, system.network.speed, system.uptime, t, usbCardMeta, usbCardValue, usbTrackCount, webModeOwnership?.supported, webModeOwnershipPending, webModeProxyEnabled, webModeProxyUrl]
   );
 
   const visibleCards = useMemo(() => {
@@ -1682,10 +1783,28 @@ export function QuickSettingsOverlay({
         mismatches: [],
         repairedPaths: [],
         blockedPaths: [],
-        message: localizedErrorMessage(error, "error.explore")
+        message: localizedErrorMessage(error, "error.generic")
       });
     } finally {
       setWebModeOwnershipPending(false);
+    }
+  }
+
+  async function checkProviderGuardUpdate() {
+    if (guardOtaPending || guardOtaStatus?.enabled === false) return;
+    setGuardOtaPending(true);
+    setGuardOtaError(null);
+    try {
+      setGuardOtaStatus(await checkGuardOta());
+      window.setTimeout(() => {
+        void fetchGuardOtaStatus()
+          .then(setGuardOtaStatus)
+          .catch(() => undefined);
+      }, 900);
+    } catch (error) {
+      setGuardOtaError(localizedErrorMessage(error, "error.generic"));
+    } finally {
+      setGuardOtaPending(false);
     }
   }
 
@@ -1809,36 +1928,41 @@ export function QuickSettingsOverlay({
       : pureCapabilities.purePath === "resampled" && pureTargetRateKhz !== null
         ? t("settings.audioProfile.pureTraitsResampled", { rate: pureTargetRateKhz })
         : t("settings.audioProfile.pureTraitsUnknown");
-    const profileChoices: Array<{ id: AudioOutputProfile; icon: typeof Waves; label: string; sample: string; traits: string }> = [
+    const profileChoices: Array<{ id: AudioOutputProfile; icon: typeof Waves; label: string; sample: string; effect: string; technical: string }> = [
       {
         id: "pure",
         icon: Target,
         label: t("settings.audioProfile.pure"),
         sample: t("settings.audioProfile.pureHint"),
-        traits: pureTraits
+        effect: t("settings.audioProfile.pureEffect"),
+        technical: pureTraits
       },
       {
         id: "everyday",
         icon: Volume2,
         label: t("settings.audioProfile.everyday"),
         sample: t("settings.audioProfile.everydayHint"),
-        traits: t("settings.audioProfile.everydayTraits")
+        effect: t("settings.audioProfile.everydayEffect"),
+        technical: t("settings.audioProfile.everydayTraits")
       },
       {
         id: "sleep",
         icon: Moon,
         label: t("settings.audioProfile.sleep"),
         sample: t("settings.audioProfile.sleepHint"),
-        traits: t("settings.audioProfile.sleepTraits")
+        effect: t("settings.audioProfile.sleepEffect"),
+        technical: t("settings.audioProfile.sleepTraits")
       },
       {
         id: "custom",
         icon: SlidersHorizontal,
         label: t("settings.audioProfile.custom"),
         sample: t("settings.audioProfile.customHint"),
-        traits: t("settings.audioProfile.customTraits")
+        effect: t("settings.audioProfile.customEffect"),
+        technical: t("settings.audioProfile.customTraits")
       }
     ];
+    const activeProfileChoice = profileChoices.find((choice) => choice.id === displayedAudioOutputProfile) ?? profileChoices[0];
     const customSettingChoices: Array<{ id: AudioOutputCustomSettingId; label: string; hint: string }> = [
       {
         id: "pureDirect",
@@ -1903,12 +2027,7 @@ export function QuickSettingsOverlay({
                 <Info size={14} />
                 <span>{t("settings.audioDiagnosticsChip")}</span>
               </button>
-              <p className="audio-output-header-dac">
-                <span>DAC:</span>
-                <em>{system.outputDevice.label} · {system.outputDevice.detail}</em>
-              </p>
             </div>
-            <p className="audio-output-header-hint">{t("settings.audioDiagnosticsTitleHint")}</p>
           </div>
         </div>
 
@@ -1929,11 +2048,16 @@ export function QuickSettingsOverlay({
                 <Icon size={22} />
                 <strong>{choice.label}</strong>
                 <span>{choice.sample}</span>
-                <em>{choice.traits}</em>
+                <em>{choice.effect}</em>
               </button>
               );
             })}
           </div>
+          <details className="audio-profile-technical-details">
+            <summary>{t("settings.audioProfile.technicalDetails")}</summary>
+            <p>{activeProfileChoice.technical}</p>
+            <p>{t("settings.audioProfile.outputDetails", { device: system.outputDevice.label, detail: system.outputDevice.detail })}</p>
+          </details>
           {displayedAudioOutputProfile === "custom" ? (
             <div className="custom-audio-settings-panel" role="group" aria-label={t("settings.audioProfile.custom")} data-custom-audio-settings>
               <p className="custom-audio-warning" data-custom-audio-warning>{t("settings.audioCustom.warning")}</p>
@@ -2615,26 +2739,6 @@ export function QuickSettingsOverlay({
     const proxyChangeTarget = webModeProxyConfirmEnabled === null
       ? null
       : webModeProxyConfirmEnabled ? t("common.proxyOn") : t("common.direct");
-    const ownershipAttention = webModeOwnership !== null && (!webModeOwnership.ok || webModeOwnership.blockedPaths.length > 0);
-    const ownershipStatusText = webModeOwnershipPending
-      ? t("settings.runtimeSelfCheckChecking")
-      : webModeOwnership?.supported === false
-        ? t("settings.runtimeSelfCheckUnavailable")
-        : webModeOwnership?.repaired
-          ? t("settings.runtimeSelfCheckRepaired")
-          : webModeOwnership?.ok
-            ? t("settings.runtimeSelfCheckHealthy")
-            : t("settings.needsAttention");
-    const ownershipHelp = webModeOwnership?.supported === false
-      ? t("settings.runtimeSelfCheckUnavailable")
-      : webModeOwnership?.blockedPaths.length
-        ? t("settings.runtimeSelfCheckBlocked")
-        : webModeOwnership?.repaired
-          ? t("settings.runtimeSelfCheckRepairedHelp")
-          : webModeOwnership?.ok
-            ? t("settings.runtimeSelfCheckHealthyHelp")
-            : t("settings.runtimeSelfCheckHelp");
-
     return (
       <section className="settings-detail-panel" aria-label="Explore detail" data-settings-detail="web-mode">
         <div className="settings-detail-header">
@@ -2718,22 +2822,6 @@ export function QuickSettingsOverlay({
               </div>
             </section>
           ) : null}
-
-          <button
-            className={`night-toggle web-mode-runtime-check ${ownershipAttention ? "is-attention" : "is-healthy"}`}
-            type="button"
-            disabled={webModeOwnershipPending || webModeOwnership?.supported === false}
-            aria-busy={webModeOwnershipPending}
-            data-web-mode-ownership-repair
-            onClick={() => void repairExploreOwnership()}
-          >
-            <RotateCcw size={26} />
-            <span>
-              <strong>{t("settings.runtimeSelfCheck")}</strong>
-              <em>{ownershipStatusText}</em>
-            </span>
-          </button>
-          <p className="web-mode-runtime-help" aria-live="polite">{ownershipHelp}</p>
 
           <p className="web-mode-settings-help">{t("settings.exploreHelp")}</p>
         </div>
@@ -3274,6 +3362,38 @@ export function QuickSettingsOverlay({
                       <strong>{card.value}</strong>
                       <p>{card.meta}</p>
                       <em className="settings-card-action">{t("nas.manage")}</em>
+                    </div>
+                  </button>
+                );
+              }
+
+              if (card.kind === "maintenance") {
+                const isOwnershipMaintenance = card.maintenance === "ownership";
+                const pending = isOwnershipMaintenance ? webModeOwnershipPending : guardOtaPending;
+                return (
+                  <button
+                    className={`settings-card settings-card-button settings-card-maintenance tone-${card.tone} ${pending ? "is-pending" : ""}`}
+                    key={card.key}
+                    type="button"
+                    disabled={card.disabled || pendingAction !== null}
+                    aria-busy={pending}
+                    data-device-maintenance={card.maintenance}
+                    onClick={() => {
+                      if (isOwnershipMaintenance) {
+                        void repairExploreOwnership();
+                      } else {
+                        void checkProviderGuardUpdate();
+                      }
+                    }}
+                  >
+                    <div className="settings-icon">
+                      <Icon size={32} />
+                    </div>
+                    <div>
+                      <span>{card.title}</span>
+                      <strong>{card.value}</strong>
+                      <p>{card.meta}</p>
+                      <em className={`settings-card-action ${pending ? "is-applying" : ""}`}>{pending ? t("common.applying") : card.buttonLabel}</em>
                     </div>
                   </button>
                 );

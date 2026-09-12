@@ -27,7 +27,7 @@
       "audioGainDb": 0,
       "sha256": "9a27e8c0da70bf570c461d4b39bf17c0a5d06733ca1520c76b7bc0a242617590",
       "audioFilename": "audio/cloud-sunrise.ogg",
-      "audioSha256": "cf960051e790ac20e233eb35769db1914d289e239b6b446418db9c2eee76d3d3"
+      "audioSha256": "aa15d4ade6ec2d3b81673eea706a07c8fca79c7b9d69d86ab203b1122a6ed17a"
     },
     {
       "id": "deep-blue-ocean",
@@ -52,10 +52,10 @@
       "roomModes": [
         "focus"
       ],
-      "audioGainDb": 0,
+      "audioGainDb": -8,
       "sha256": "7099db1325c7c099dc6f5a52e34806eee6ad304bae9c4d44691f96ba3a7d5968",
       "audioFilename": "audio/midnight-library.ogg",
-      "audioSha256": "33bd9f9dd0625c6b6617cdf1defa28b4b80d193ffe5d2136bd98d8f06b4a3bd3"
+      "audioSha256": "20c2f11598a30e632312a0c5b88df0baeb785df39a1bff398a2c7e33081e0462"
     },
     {
       "id": "rainy-window",
@@ -69,7 +69,7 @@
       "audioGainDb": 0,
       "sha256": "10ddc99aa237e9ca8ba39abeae84d946ca5ec3724e208c25815ee065343dd12f",
       "audioFilename": "audio/rainy-window.ogg",
-      "audioSha256": "a8c502843b8ea282a6a3e5bdafb68bf7da7111db3a710bca5587a0a11532fe80"
+      "audioSha256": "a4b5c78ee45ecd3127b63e7e9c358d5baf4b977941b62af4a2ec62ebe303bc83"
     },
     {
       "id": "vinyl-lounge",
@@ -104,10 +104,10 @@
       "roomModes": [
         "calm"
       ],
-      "audioGainDb": 0,
+      "audioGainDb": -6,
       "sha256": "2618f99e0b6a396cebb130afd2969e6d07a2d3d97acf8229f75724ad0f8b37d7",
       "audioFilename": "audio/zen-courtyard.ogg",
-      "audioSha256": "0f99014a1a7025e2269a95ecbb11cf36dbc7d4570481c369ed0dd25e4027649d"
+      "audioSha256": "40c4378f586470a56e0cde24d0eb65ee27c4250a460bcccb779b7c11b59aff01"
     }
   ]
 }

@@ -398,11 +398,11 @@ export function PlayerOverlay({
     localizedSourceStatusLabel(playbackSource, pendingSource === playback.source),
     status.pending ? t("status.updating") : status.source === "api" ? t("status.live") : t("status.offlineView")
   ];
-  const playbackQueuePositionLabel = playbackTruth.queuePositionLabel === "No active queue"
-    ? playback.state === "playing" && displayedDurationSeconds === null
-      ? t("playback.liveStream")
-      : ""
-    : playbackTruth.queuePositionLabel;
+  const playbackQueuePositionLabel = playbackTruth.isLive
+    ? t("playback.liveStream")
+    : playbackTruth.queuePositionLabel ?? "";
+  const playbackTitle = playbackTruth.title
+    ?? (playback.state === "playing" ? t("playback.audioPlaying") : t("playback.nothingPlaying"));
 
   function localizedSourceStatusLabel(source: AudioState["currentSource"] | undefined, pending: boolean) {
     const statusInfo = getSourceDisplayStatus(source, { pending });
@@ -1200,42 +1200,44 @@ export function PlayerOverlay({
             </div>
 
             <div className="track-stack">
-              <h1>{playback.title ?? t("playback.nothingPlaying")}</h1>
-              <p className="artist">{playback.artist ?? t("playback.unknownArtist")}</p>
-              <p>{playback.album ?? t("playback.noAlbum")}</p>
+              <h1>{playbackTitle}</h1>
+              {playbackTruth.artist ? <p className="artist">{playbackTruth.artist}</p> : null}
+              {playbackTruth.album ? <p>{playbackTruth.album}</p> : null}
               {playbackQueuePositionLabel ? <p>{playbackQueuePositionLabel}</p> : null}
             </div>
 
-            <div className="progress-row">
-              <span>{formatDuration(displayedElapsedSeconds)}</span>
-              <div className={`progress-control ${seekSupported ? "is-interactive" : "is-readonly"}`}>
-                <div className="progress-bar" aria-hidden="true">
-                  <span style={{ width: `${progress * 100}%` }} />
+            {displayedDurationSeconds !== null ? (
+              <div className="progress-row">
+                <span>{formatDuration(displayedElapsedSeconds)}</span>
+                <div className={`progress-control ${seekSupported ? "is-interactive" : "is-readonly"}`}>
+                  <div className="progress-bar" aria-hidden="true">
+                    <span style={{ width: `${progress * 100}%` }} />
+                  </div>
+                  {seekSupported ? (
+                    <input
+                      className="progress-slider"
+                      type="range"
+                      min={0}
+                      max={durationSeconds}
+                      step={1}
+                      value={seekDraftSeconds ?? seekPendingSeconds ?? elapsedSeconds}
+                      aria-label={t("playback.seekPosition")}
+                      disabled={status.pending}
+                      onChange={(event) => handleSeekDraft(event.currentTarget.value)}
+                      onPointerUp={(event) => void commitSeek(Number(event.currentTarget.value))}
+                      onPointerCancel={() => setSeekDraftSeconds(null)}
+                      onBlur={(event) => void commitSeek(Number(event.currentTarget.value))}
+                      onKeyUp={(event) => {
+                        if (event.key === "ArrowLeft" || event.key === "ArrowRight" || event.key === "Home" || event.key === "End" || event.key === "PageUp" || event.key === "PageDown") {
+                          void commitSeek(Number(event.currentTarget.value));
+                        }
+                      }}
+                    />
+                  ) : null}
                 </div>
-                {seekSupported ? (
-                  <input
-                    className="progress-slider"
-                    type="range"
-                    min={0}
-                    max={durationSeconds}
-                    step={1}
-                    value={seekDraftSeconds ?? seekPendingSeconds ?? elapsedSeconds}
-                    aria-label={t("playback.seekPosition")}
-                    disabled={status.pending}
-                    onChange={(event) => handleSeekDraft(event.currentTarget.value)}
-                    onPointerUp={(event) => void commitSeek(Number(event.currentTarget.value))}
-                    onPointerCancel={() => setSeekDraftSeconds(null)}
-                    onBlur={(event) => void commitSeek(Number(event.currentTarget.value))}
-                    onKeyUp={(event) => {
-                      if (event.key === "ArrowLeft" || event.key === "ArrowRight" || event.key === "Home" || event.key === "End" || event.key === "PageUp" || event.key === "PageDown") {
-                        void commitSeek(Number(event.currentTarget.value));
-                      }
-                    }}
-                  />
-                ) : null}
+                <span>{formatDuration(displayedDurationSeconds)}</span>
               </div>
-              <span>{formatDuration(displayedDurationSeconds)}</span>
-            </div>
+            ) : null}
             {seekError ? <p className="player-inline-message is-error">{friendlyError(seekError, "error.seek") ?? seekError}</p> : null}
             {!seekError && seekPendingSeconds !== null ? <p className="player-inline-message">{t("playback.seekingTo", { time: formatDuration(seekPendingSeconds) })}</p> : null}
             {!seekError && seekPendingSeconds === null && seekUnavailableMessage ? <p className="player-inline-message">{seekUnavailableMessage}</p> : null}

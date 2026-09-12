@@ -1088,7 +1088,9 @@ try {
     source: `
       (() => {
         window.localStorage.setItem('tikpal.lyricsVisible.v3', 'false');
-        window.localStorage.setItem('tikpal.onboardingDismissed.v1', 'true');
+        if (window.sessionStorage.getItem('tikpal.interactionTestFirstUse') !== 'true') {
+          window.localStorage.setItem('tikpal.onboardingDismissed.v1', 'true');
+        }
         const nativeFetch = window.fetch.bind(window);
         const realBluetoothCover = "data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22120%22%20height%3D%22120%22%3E%3Crect%20width%3D%22120%22%20height%3D%22120%22%20fill%3D%22%2318405a%22%2F%3E%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2232%22%20fill%3D%22%23f2d36b%22%2F%3E%3C%2Fsvg%3E";
         const realRadioCover = "data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22120%22%20height%3D%22120%22%3E%3Crect%20width%3D%22120%22%20height%3D%22120%22%20fill%3D%22%231f2937%22%2F%3E%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2238%22%20fill%3D%22%23d6b761%22%2F%3E%3Ctext%20x%3D%2260%22%20y%3D%2268%22%20font-family%3D%22Arial%22%20font-size%3D%2228%22%20font-weight%3D%22700%22%20text-anchor%3D%22middle%22%20fill%3D%22%231f2937%22%3ER%3C%2Ftext%3E%3C%2Fsvg%3E";
@@ -1731,6 +1733,56 @@ try {
     `document.querySelector('.startup-mode-chooser') === null && document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') === ${JSON.stringify(startupDefaultMode)}`,
     "startup mode chooser defaults to the persisted room mode after 8 seconds"
   );
+  await evaluate(client, "fetch('/api/v1/web-mode/actions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'close' }) }).then((response) => response.ok)");
+  await evaluate(client, "window.sessionStorage.setItem('tikpal.interactionTestFirstUse', 'true'); window.localStorage.setItem('tikpal.onboardingDismissed.v1', 'false'); true");
+  await navigate(client, APP_URL);
+  await expect(
+    client,
+    "document.querySelector('.startup-mode-chooser') !== null && document.querySelector('.onboarding-tips') === null && document.querySelector('[data-onboarding-coach]') === null",
+    "first use keeps the room chooser separate from the full gesture reference"
+  );
+  await evaluate(client, "document.querySelector('.startup-mode-grid button.is-active')?.click(); true");
+  await wait(400);
+  await expectEventually(
+    client,
+    "document.querySelector('[data-onboarding-coach][data-onboarding-step=\"show-controls\"]') !== null",
+    "first use shows the non-blocking first coach step after room selection",
+    80,
+    150
+  );
+  const firstUseTapPoint = await evaluate(
+    client,
+    `
+      (() => {
+        const scene = document.querySelector('.flame-scene');
+        const rect = scene?.getBoundingClientRect();
+        return rect ? { x: Math.round(rect.left + rect.width * 0.3), y: Math.round(rect.top + rect.height / 2) } : { x: 720, y: 360 };
+      })()
+    `
+  );
+  await evaluate(
+    client,
+    `
+      (() => {
+        const target = document.elementFromPoint(${Number(firstUseTapPoint.x)}, ${Number(firstUseTapPoint.y)});
+        if (!target) return false;
+        target.click();
+        return true;
+      })()
+    `
+  );
+  await expectEventually(
+    client,
+    "document.querySelector('[data-onboarding-coach][data-onboarding-step=\"playback\"]') !== null",
+    "first use advances only after an ambient tap and does not open a source"
+  );
+  await evaluate(client, "document.querySelector('[data-onboarding-coach] button:last-child')?.click(); true");
+  await expect(
+    client,
+    "window.localStorage.getItem('tikpal.onboardingDismissed.v1') === 'true' && document.querySelector('[data-onboarding-coach]') === null",
+    "skipping first-use coaching persists completion without starting audio"
+  );
+  await evaluate(client, "window.sessionStorage.removeItem('tikpal.interactionTestFirstUse'); true");
   await switchRoomModeAndNavigate(client, "calm", "Ambient thermal checks start in Calm mode");
   await expectEventually(
     client,
@@ -4318,6 +4370,18 @@ try {
     `,
     "player long now-playing title stays inside the left pane"
   );
+  await expect(
+    client,
+    "document.querySelector('.track-stack h1')?.textContent?.trim().startsWith('WolfgangAmadeusMozart') === true && !document.querySelector('.track-stack')?.textContent?.includes('Unknown Artist') && !document.querySelector('.track-stack')?.textContent?.includes('Untitled')",
+    "player suppresses placeholder artist and album metadata"
+  );
+  const playerLivePatchVersion = await setStatePatchMode(client, "hifiRememberedDifferentRadio");
+  await waitForStatePatchRefresh(client, playerLivePatchVersion, "Player live-radio fixture refreshes");
+  await expectEventually(
+    client,
+    "document.querySelector('.track-stack')?.textContent?.includes('Live') === true && document.querySelector('.progress-row') === null && !document.body.textContent?.includes('--:--')",
+    "player keeps live identity without a fake duration or progress"
+  );
   const playerBrokenArtworkPatchVersion = await setStatePatchMode(client, "brokenArtwork");
   await waitForStatePatchRefresh(client, playerBrokenArtworkPatchVersion, "Player broken artwork fixture refreshes");
   await expectEventually(
@@ -4899,6 +4963,24 @@ try {
   await expect(client, "document.querySelector('[data-settings-section=\"output\"]') !== null", "Console Preferences section opens");
   await expect(client, "document.querySelector('[data-settings-detail]') === null", "Console Preferences summary stays summary-first");
   await expect(client, settingsSummaryExpression("output", ["Audio Output", "Multi-room Audio", "Display", "Time & Night", "Font", "Skin", "Lyrics"]), "Console Preferences remains a fixed hardware tile grid");
+
+  await evaluate(
+    client,
+    `
+      (() => {
+        const target = [...document.querySelectorAll('.settings-card-button')].find((node) => node.textContent.includes('Audio Output'));
+        target?.click();
+        return Boolean(target);
+      })()
+    `
+  );
+  await expect(
+    client,
+    "document.querySelector('[data-settings-detail=\"audio-output\"]') !== null && document.querySelectorAll('[data-audio-output-profile]').length === 4 && ![...document.querySelectorAll('[data-audio-output-profile]')].some((node) => node.textContent.includes('DAC')) && document.querySelector('.audio-profile-technical-details')?.open === false",
+    "audio profiles lead with listening intent and keep technical details collapsed"
+  );
+  await evaluate(client, "document.querySelector('.settings-detail-back')?.click(); true");
+  await expect(client, "document.querySelector('[data-settings-detail]') === null", "audio profile drawer returns to Console summary");
 
   await evaluate(
     client,

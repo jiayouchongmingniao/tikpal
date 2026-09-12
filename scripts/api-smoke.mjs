@@ -5448,6 +5448,20 @@ appendFileSync(${JSON.stringify(fakeWebModeLogPath)}, process.argv.slice(2).join
     assert(typeof webMode.body.settings.updatedAt === "string", "web mode settings should always expose a revision for the extension");
     assert(webMode.body.providers.some((provider) => provider.id === "spotify"), "web mode should expose Spotify provider");
 
+    const guardOta = await request("/api/v1/system/guard-ota");
+    assert(guardOta.response.ok, "Provider Guard OTA status should return 200");
+    assert(guardOta.body.enabled === false && guardOta.body.state === "disabled", "Provider Guard OTA should be explicitly disabled until a device installs its public release key");
+    const guardOtaCheck = await request("/api/v1/system/guard-ota/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "check" })
+    });
+    assert(guardOtaCheck.response.ok && guardOtaCheck.body.state === "disabled", "disabled Provider Guard OTA checks should be safe no-ops");
+    const invalidGuardOtaAction = await request("/api/v1/system/guard-ota/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "apply" })
+    });
+    assert(invalidGuardOtaAction.response.status === 400, "Provider Guard OTA should reject unsupported actions");
+
     const savedWebMode = await request("/api/v1/web-mode/settings", {
       method: "PATCH",
       body: JSON.stringify({ proxyEnabled: true, proxyUrl: "http://127.0.0.1:7897", providerTextScale: 1.2 })
@@ -5842,6 +5856,7 @@ appendFileSync(${JSON.stringify(fakeWebModeLogPath)}, process.argv.slice(2).join
     assert(openapi.body.paths?.["/remote/actions"]?.post, "OpenAPI JSON should describe remote actions");
     assert(JSON.stringify(openapi.body.components?.schemas?.RemoteActionRequest).includes("explore.proxy_set"), "OpenAPI JSON should describe remote Explore actions");
     assert(JSON.stringify(openapi.body.components?.schemas?.WebModeActionRequest).includes("reset_provider_profile"), "OpenAPI JSON should describe the scoped provider profile reset action");
+    assert(openapi.body.paths?.["/system/guard-ota"]?.get && openapi.body.paths?.["/system/guard-ota/actions"]?.post, "OpenAPI JSON should describe local Provider Guard OTA status and checks");
     const swagger = await request("/api/v1/swagger.json");
     assert(swagger.response.ok, "Swagger JSON should return 200");
     assert(JSON.stringify(swagger.body.paths) === JSON.stringify(openapi.body.paths), "swagger.json should mirror openapi.json paths");

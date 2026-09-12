@@ -629,6 +629,14 @@ install_unit "$SCRIPT_DIR/tikpal-web.service"
 install_unit "$SCRIPT_DIR/tikpal-audio-adapt.service"
 install_unit "$SCRIPT_DIR/tikpal-library-sync.service"
 install_unit "$SCRIPT_DIR/tikpal-web-mode-cdp-manager.service"
+install_unit "$SCRIPT_DIR/tikpal-guard-ota.service"
+install_unit "$SCRIPT_DIR/tikpal-guard-ota.timer"
+
+# Create the device-local Guard release layout before the first timer run.
+# This copies only the bundled browser Guard and never touches provider profiles.
+runuser -u "$SERVICE_USER" -- env HOME="$(getent passwd "$SERVICE_USER" | awk -F: 'NR == 1 { print $6 }')" \
+  TIKPAL_KIOSK_ENV_FILE="$APP_DIR/.env.kiosk" \
+  "$APP_DIR/deploy/chromium/tikpal-guard-ota-run.sh" --bootstrap >/dev/null
 
 if [[ "$INSTALL_X11_HELPER" -eq 1 ]]; then
   install_x11_helper
@@ -672,7 +680,7 @@ for policy_dir in /etc/chromium/policies/managed /etc/chromium-browser/policies/
 done
 
 systemctl daemon-reload
-systemctl enable tikpal-audio-adapt.service tikpal-library-sync.service tikpal-api.service tikpal-web.service tikpal-web-mode-cdp-manager.service
+systemctl enable tikpal-audio-adapt.service tikpal-library-sync.service tikpal-api.service tikpal-web.service tikpal-web-mode-cdp-manager.service tikpal-guard-ota.timer
 
 if [[ "$INSTALL_X11_HELPER" -eq 1 ]]; then
   systemctl enable tikpal-x11-helper.service
@@ -692,6 +700,7 @@ if [[ "$RESTART_SERVICES" -eq 1 ]]; then
   systemctl restart tikpal-api.service
   systemctl restart tikpal-web.service
   systemctl restart tikpal-web-mode-cdp-manager.service
+  systemctl restart tikpal-guard-ota.timer
   if [[ "$INSTALL_X11_HELPER" -eq 1 ]]; then
     systemctl restart tikpal-x11-helper.service
     wait_x11_helper_health
@@ -712,6 +721,7 @@ echo "  systemctl status tikpal-library-sync.service"
 echo "  $APP_DIR/deploy/moode/tikpal-library-sync.sh check"
 echo "  systemctl is-active tikpal-api.service tikpal-web.service"
 echo "  systemctl is-active tikpal-web-mode-cdp-manager.service"
+echo "  systemctl status tikpal-guard-ota.timer"
 echo "  curl -fsS http://127.0.0.1:8787/api/v1/health"
 echo "  curl -fsSI http://127.0.0.1:4173/"
 echo "  curl -fsSI http://127.0.0.1:4174/"

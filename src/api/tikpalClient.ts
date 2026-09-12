@@ -30,6 +30,7 @@ import type {
   SystemActionRequest,
   SystemActionType,
   TikpalState,
+  GuardOtaStatus,
   WebModeActionRequest,
   WebModeOwnershipCheck,
   WebModeSettingsPatch,
@@ -414,6 +415,26 @@ export async function fetchWebModeState(signal?: AbortSignal): Promise<WebModeSt
     signal
   }, DEFAULT_GET_TIMEOUT_MS);
   return readJson<WebModeState>(response);
+}
+
+export async function fetchGuardOtaStatus(signal?: AbortSignal): Promise<GuardOtaStatus> {
+  const response = await fetchWithTimeout(`${API_ROOT}/system/guard-ota`, {
+    headers: { Accept: "application/json" },
+    signal
+  }, DEFAULT_GET_TIMEOUT_MS);
+  return readJson<GuardOtaStatus>(response);
+}
+
+export async function checkGuardOta(): Promise<GuardOtaStatus> {
+  const response = await fetchWithTimeout(`${API_ROOT}/system/guard-ota/actions`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ type: "check" })
+  }, DEFAULT_POST_TIMEOUT_MS);
+  return readJson<GuardOtaStatus>(response);
 }
 
 export async function sendWebModeAction(action: WebModeActionRequest): Promise<WebModeState> {

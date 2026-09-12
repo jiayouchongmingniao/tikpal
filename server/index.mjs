@@ -3,7 +3,7 @@ import { execFile, spawn } from "node:child_process";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { appendFile, chmod, copyFile, mkdir, open, readFile, readdir, rename, stat, statfs, unlink, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
-import { basename, dirname, extname, posix, relative, resolve, sep } from "node:path";
+import { basename, dirname, extname, join, posix, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { buildAccessDeniedBody, getTikpalApiAccessDecision, hasValidTikpalKey } from "./accessControl.mjs";
 import { buildOpenApiDocsHtml, buildOpenApiDocument } from "./openapi.mjs";
@@ -342,6 +342,12 @@ const NAS_DISCOVERY_COMMAND = process.env.TIKPAL_NAS_DISCOVERY_COMMAND ?? "";
 const NAS_DISCOVERY_HINTS = process.env.TIKPAL_NAS_DISCOVERY_HINTS ?? "";
 const WEB_MODE_SETTINGS_PATH = resolve(process.env.TIKPAL_WEB_MODE_SETTINGS_PATH ?? resolve(process.cwd(), ".tikpal", "web-mode-settings.json"));
 const WEB_MODE_STATE_PATH = resolve(process.env.TIKPAL_WEB_MODE_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "web-mode-state.json"));
+const GUARD_OTA_ROOT = resolve(process.env.TIKPAL_GUARD_OTA_ROOT ?? resolve(process.cwd(), ".tikpal", "guard-ota"));
+const GUARD_OTA_STATE_PATH = join(GUARD_OTA_ROOT, "state.json");
+const GUARD_OTA_ENABLED = parseEnvBoolean(process.env.TIKPAL_GUARD_OTA_ENABLED ?? "0");
+const GUARD_OTA_CONFIGURED_CHANNEL = String(process.env.TIKPAL_GUARD_OTA_CHANNEL ?? "stable").trim().toLowerCase();
+const GUARD_OTA_CHANNEL = /^[a-z][a-z0-9-]{0,31}$/.test(GUARD_OTA_CONFIGURED_CHANNEL) ? GUARD_OTA_CONFIGURED_CHANNEL : "invalid";
+const GUARD_OTA_RUNNER = resolve(process.env.TIKPAL_GUARD_OTA_RUNNER ?? "./deploy/chromium/tikpal-guard-ota-run.sh");
 const WEB_MODE_HANDOFF_STATE_PATH = resolve(process.env.TIKPAL_WEB_MODE_HANDOFF_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "web-mode-handoff.json"));
 const WEB_MODE_SWITCH_TRACE_CONTEXT_PATH = resolve(process.env.TIKPAL_WEB_MODE_SWITCH_TRACE_CONTEXT_PATH ?? resolve(process.cwd(), ".tikpal", "explore-switch-trace-context.json"));
 const KIOSK_X_SESSION_GENERATION_PATH = resolve(process.env.TIKPAL_KIOSK_X_SESSION_GENERATION_PATH ?? resolve(process.cwd(), ".tikpal", "kiosk-x-session-generation"));
@@ -739,6 +745,7 @@ let webModePanelPromise = null;
 let webModePanelCloseRequested = false;
 let webModeCloseInFlight = false;
 let webModeClosePromise = null;
+let guardOtaRunnerInFlight = false;
 let webModeResidentOpenPromise = null;
 let webModeRuntimeStateWritePromise = Promise.resolve();
 let sourceSwitchInFlightCount = 0;
@@ -5704,6 +5711,58 @@ async function buildWebModeState() {
     updatedAt: runtimeState.updatedAt ?? settings.updatedAt ?? new Date(0).toISOString(),
     activationPhase
   };
+}
+
+function normalizeGuardOtaStatus(raw = {}) {
+  const allowedStates = new Set(["disabled", "idle", "checking", "downloading", "pending_idle", "pending_activation", "rolled_back", "failed"]);
+  const version = value => typeof value === "string" && /^\d+\.\d+\.\d+$/.test(value) ? value : null;
+  const timestamp = value => typeof value === "string" && Number.isFinite(Date.parse(value)) ? value : null;
+  return {
+    enabled: GUARD_OTA_ENABLED,
+    channel: GUARD_OTA_CHANNEL,
+    installedVersion: version(raw.installedVersion),
+    previousVersion: version(raw.previousVersion),
+    candidateVersion: version(raw.candidateVersion),
+    stagedVersion: version(raw.stagedVersion),
+    state: allowedStates.has(raw.state) ? raw.state : GUARD_OTA_ENABLED ? "idle" : "disabled",
+    lastCheckedAt: timestamp(raw.lastCheckedAt),
+    lastAppliedAt: timestamp(raw.lastAppliedAt),
+    lastRollbackAt: timestamp(raw.lastRollbackAt),
+    nextCheckAt: timestamp(raw.lastCheckedAt) ? new Date(Date.parse(raw.lastCheckedAt) + 60 * 60 * 1000).toISOString() : null,
+    lastErrorCode: typeof raw.lastErrorCode === "string" ? raw.lastErrorCode.slice(0, 80) : null
+  };
+}
+
+async function readGuardOtaStatus() {
+  try {
+    return normalizeGuardOtaStatus(JSON.parse(await readFile(GUARD_OTA_STATE_PATH, "utf8")));
+  } catch {
+    return normalizeGuardOtaStatus();
+  }
+}
+
+async function startGuardOtaRunner({ applyOnly = false } = {}) {
+  const status = await readGuardOtaStatus();
+  if (!GUARD_OTA_ENABLED) return status;
+  if (guardOtaRunnerInFlight || ["checking", "downloading"].includes(status.state)) {
+    return { ...status, state: status.state === "downloading" ? "downloading" : "checking", busy: true };
+  }
+  guardOtaRunnerInFlight = true;
+  try {
+    const child = spawn(GUARD_OTA_RUNNER, applyOnly ? ["--activate-only"] : [], {
+      cwd: process.cwd(),
+      env: process.env,
+      detached: true,
+      stdio: "ignore"
+    });
+    child.once("error", error => console.warn(`[tikpal-guard-ota] runner did not start: ${error.message}`));
+    child.once("close", () => { guardOtaRunnerInFlight = false; });
+    child.unref();
+    return { ...status, state: applyOnly ? status.state : "checking", busy: true };
+  } catch (error) {
+    guardOtaRunnerInFlight = false;
+    throw error;
+  }
 }
 
 function normalizeWebModeOwnershipPathList(value) {
@@ -14936,6 +14995,11 @@ function runWebModeCloseInBackground(closeRequestId = "", activeProvider = "", s
           lastError: restoreError,
           closeRequestId: null
         }).catch(() => {});
+        // A previously verified download can now switch without interrupting
+        // Explore. The launcher retakes its lock and rechecks idleness.
+        void startGuardOtaRunner({ applyOnly: true }).catch(error => {
+          console.warn(`[tikpal-guard-ota] idle activation did not start: ${error instanceof Error ? error.message : String(error)}`);
+        });
       }
       webModeClosePromise = null;
     }
@@ -15992,6 +16056,19 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "GET" && url.pathname === "/api/v1/web-mode/state") {
       sendJson(response, 200, await buildWebModeState());
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/v1/system/guard-ota") {
+      sendJson(response, 200, await readGuardOtaStatus());
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/v1/system/guard-ota/actions") {
+      const action = await readJson(request);
+      if (action?.type !== "check") throw new Error("Guard OTA action must be check");
+      const result = await startGuardOtaRunner();
+      sendJson(response, result.busy ? 202 : 200, result);
       return;
     }
 

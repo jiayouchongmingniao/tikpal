@@ -109,6 +109,7 @@ export function WebModeSidePanel() {
   const closeRequestRef = useRef<string | null>(null);
   const [closeSlow, setCloseSlow] = useState(false);
   const [closeFailed, setCloseFailed] = useState(false);
+  const [railNoticeOpen, setRailNoticeOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const actionLockRef = useRef(false);
   const openOperationRef = useRef(0);
@@ -158,6 +159,7 @@ export function WebModeSidePanel() {
     ? (providerLabels[activationEnterProvider] ?? "Web player")
     : activeProviderLabel;
   const displayProviderLabel = displayedOpeningProvider ? providerLabels[displayedOpeningProvider] : failedProvider ? providerLabels[failedProvider] : resolvedActiveLabel;
+  const railErrorKind = closeFailed ? "close" : panelError ? "panel" : null;
   const activeProviderDetail = effectiveActiveProviderStatus === "region_unavailable"
     ? `${t("common.regionUnavailable")}. ${t("explore.chooseBelow")}`
     : effectiveActiveProviderStatus === "check_setup"
@@ -184,6 +186,10 @@ export function WebModeSidePanel() {
       }
     };
   }, [displayProviderLabel, displayedActiveLabel]);
+
+  useEffect(() => {
+    if (!railErrorKind) setRailNoticeOpen(false);
+  }, [railErrorKind]);
   const panelState = pendingAction === "close" ? "closing" : displayedOpeningProvider ? "switching" : "ready";
   const panelTone = displayedOpeningProvider
     ? providerTones[displayedOpeningProvider]
@@ -483,6 +489,16 @@ export function WebModeSidePanel() {
     }
   }
 
+  function retryRailError() {
+    if (railErrorKind === "close") void closeWebMode();
+    if (railErrorKind === "panel") void changePanelMode("expanded");
+  }
+
+  function continueFromRailError() {
+    if (railErrorKind === "close") void changePanelMode("expanded");
+    if (railErrorKind === "panel") void closeWebMode();
+  }
+
   if (panelMode === "collapsed") {
     return (
       <main className="web-mode-panel-rail" data-web-mode-panel data-panel-mode="collapsed" aria-busy={pendingAction === "panel" || pendingAction === "close"}>
@@ -490,8 +506,30 @@ export function WebModeSidePanel() {
           aria-label={t("explore.expandPanel")} title={t("explore.expandPanel")}
           disabled={Boolean(pendingAction || pendingProvider || displayedOpeningProvider)}
           onClick={() => void changePanelMode("expanded")}><ChevronsLeft size={28} /></button>
-        {(closeSlow || closeFailed) && <span className="web-mode-rail-error" role="status" title={t(closeFailed ? "explore.closeFailed" : "common.closing")} aria-label={t(closeFailed ? "explore.closeFailed" : "common.closing")}>{closeFailed ? "!" : "…"}</span>}
-        {panelError && <span className="web-mode-rail-error" role="status" title={t("explore.panelChangeFailed")} aria-label={t("explore.panelChangeFailed")}>!</span>}
+        {closeSlow && !railErrorKind ? <span className="web-mode-rail-pending" role="status" aria-label={t("common.closing")}>…</span> : null}
+        {railErrorKind ? (
+          <>
+            <button
+              type="button"
+              className="web-mode-rail-error"
+              data-panel-rail-error
+              aria-label={t(railErrorKind === "close" ? "explore.closeFailed" : "explore.panelChangeFailed")}
+              aria-expanded={railNoticeOpen}
+              onClick={() => setRailNoticeOpen((open) => !open)}
+            >!</button>
+            {railNoticeOpen ? (
+              <aside className="web-mode-rail-notice" role="alert" data-panel-rail-notice>
+                <p>{t(railErrorKind === "close" ? "explore.closeFailed" : "explore.panelChangeFailed")}</p>
+                <button type="button" disabled={Boolean(pendingAction || pendingProvider)} onClick={retryRailError}>
+                  {t(railErrorKind === "close" ? "explore.retryExit" : "explore.retryExpand")}
+                </button>
+                <button type="button" disabled={Boolean(pendingAction || pendingProvider)} onClick={continueFromRailError}>
+                  {t(railErrorKind === "close" ? "explore.showPanel" : "explore.exit")}
+                </button>
+              </aside>
+            ) : null}
+          </>
+        ) : null}
         <button type="button" className="web-mode-rail-exit" data-panel-exit
           aria-label={t("explore.exit")} title={t("explore.exit")}
           disabled={pendingAction === "close"}

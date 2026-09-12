@@ -83,6 +83,13 @@ export function useOverlayReturnGesture(onReturnAmbient: () => void) {
       const deltaY = gesture.currentY - gesture.startY;
       const distance = Math.hypot(deltaX, deltaY);
 
+      // Controls own their touch interaction. A touch-screen release can drift
+      // upward enough to resemble the global return gesture after a button tap.
+      if (gesture.startedOnClickControl) {
+        resetGesture();
+        return;
+      }
+
       if (isIntentionalSwipeUp(deltaX, deltaY)) {
         suppressClickRef.current = true;
         event.preventDefault();

@@ -1,0 +1,12 @@
+[Unit]
+Description=Check Tikpal Provider Guard OTA updates
+
+[Timer]
+OnBootSec=7m
+OnUnitActiveSec=1h
+RandomizedDelaySec=10m
+Persistent=true
+Unit=tikpal-guard-ota.service
+
+[Install]
+WantedBy=timers.target

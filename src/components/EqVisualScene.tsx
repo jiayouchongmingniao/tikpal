@@ -190,6 +190,8 @@ export function EqVisualScene({ playback, audio, system, fontTheme, lyricsPanel,
     };
   }, [lyricsPanel]);
   const playbackTruth = getPlaybackDisplayTruth(playback, audio, fontTheme);
+  const displayedTitle = playbackTruth.title ?? (isPlaying ? t("playback.audioPlaying") : t("playback.nothingPlaying"));
+  const displayedMetadata = [playbackTruth.artist, playbackTruth.album].filter((value): value is string => Boolean(value)).join(" · ");
   const [failedAlbumArtUrl, setFailedAlbumArtUrl] = useState<string | null>(null);
   const displayedAlbumArtUrl = playbackTruth.hasPlaybackArtwork && failedAlbumArtUrl === playbackTruth.albumArtUrl
     ? playbackTruth.fallbackAlbumArtUrl
@@ -202,35 +204,35 @@ export function EqVisualScene({ playback, audio, system, fontTheme, lyricsPanel,
     && Boolean(lyricsTitle || playbackTruth.title);
   const themeSeedParts = useMemo(
     () => [
-      playbackTruth.title,
-      playbackTruth.artist,
-      playbackTruth.album,
+      displayedTitle,
+      playbackTruth.artist ?? "",
+      playbackTruth.album ?? "",
       playbackTruth.sourceLabel,
       playback.source
     ],
-    [playback.source, playbackTruth.album, playbackTruth.artist, playbackTruth.sourceLabel, playbackTruth.title]
+    [displayedTitle, playback.source, playbackTruth.album, playbackTruth.artist, playbackTruth.sourceLabel]
   );
   const [themePalette, setThemePalette] = useState(() => buildHifiSeedTheme(themeSeedParts));
   const ambientVisuals = useMemo(
     () => createHifiAmbientVisuals(hashSeed([
-      playbackTruth.title,
-      playbackTruth.artist,
-      playbackTruth.album,
+      displayedTitle,
+      playbackTruth.artist ?? "",
+      playbackTruth.album ?? "",
       playbackTruth.sourceLabel
     ])),
-    [playbackTruth.album, playbackTruth.artist, playbackTruth.sourceLabel, playbackTruth.title]
+    [displayedTitle, playbackTruth.album, playbackTruth.artist, playbackTruth.sourceLabel]
   );
   const themeStyle = useMemo(
     () => hifiThemeToCssVariables(themePalette) as CSSProperties,
     [themePalette]
   );
-  const coverLabel = playbackTruth.album
+  const coverLabel = (playbackTruth.album ?? displayedTitle)
     .split(/\s+/)
     .map((word) => word[0])
     .join("")
     .slice(0, 3)
     .toUpperCase();
-  const trackHeading = [playbackTruth.title, playbackTruth.artist].filter(Boolean).join(" - ");
+  const trackHeading = [displayedTitle, playbackTruth.artist].filter(Boolean).join(" - ");
   const lyricsRecognitionLabel = lyricsSourceScope === "upnp_input"
     ? t("lyrics.listeningTo", { source: "DLNA" })
     : lyricsSourceScope === "airplay_input"
@@ -239,7 +241,9 @@ export function EqVisualScene({ playback, audio, system, fontTheme, lyricsPanel,
         ? t("lyrics.listeningTo", { source: "Bluetooth" })
         : t("lyrics.identifying");
   const lyricsProgressPercent = `${Math.round(playbackTruth.progress * 1000) / 10}%`;
-  const lyricsTimeLabel = `${formatDuration(playbackTruth.elapsedSeconds)}/${formatDuration(playbackTruth.durationSeconds)}`;
+  const lyricsTimeLabel = playbackTruth.durationSeconds !== null
+    ? `${formatDuration(playbackTruth.elapsedSeconds)}/${formatDuration(playbackTruth.durationSeconds)}`
+    : null;
 
   useEffect(() => {
     let cancelled = false;
@@ -332,12 +336,12 @@ export function EqVisualScene({ playback, audio, system, fontTheme, lyricsPanel,
         {!hasLyricsPanel && !isRecognizingLyrics && !hasUnavailableLyrics ? (
             <div className="hifi-now-playing-copy" data-hifi-track-info>
               <span>{t("hifi.nowPlaying")}</span>
-              <strong>{playbackTruth.title}</strong>
-              <em>{playbackTruth.artist} - {playbackTruth.album}</em>
+              <strong>{displayedTitle}</strong>
+              {displayedMetadata ? <em>{displayedMetadata}</em> : null}
               <div className="hifi-now-playing-meta" aria-label={t("hifi.playbackDetails")}>
                 <span>{playbackTruth.sourceLabel}</span>
                 <span>{playback.state}</span>
-                <span>{formatDuration(playbackTruth.elapsedSeconds)}</span>
+                {playbackTruth.elapsedSeconds !== null ? <span>{formatDuration(playbackTruth.elapsedSeconds)}</span> : null}
                 <span>{system.audioFormat.codec} {system.bitDepth}bit / {formatSampleRate(system.sampleRate)}</span>
                 <span>{system.volume.percent}%</span>
               </div>
@@ -358,7 +362,7 @@ export function EqVisualScene({ playback, audio, system, fontTheme, lyricsPanel,
       {hasUnavailableLyrics ? (
         <div className="hifi-lyrics-recognized" data-hifi-track-info>
           <header className="hifi-lyrics-heading">
-            <strong>{[lyricsTitle || playbackTruth.title, lyricsArtist || playbackTruth.artist].filter(Boolean).join(" - ")}</strong>
+            <strong>{[lyricsTitle || displayedTitle, lyricsArtist || playbackTruth.artist].filter(Boolean).join(" - ")}</strong>
           </header>
         </div>
       ) : null}
@@ -413,7 +417,7 @@ export function EqVisualScene({ playback, audio, system, fontTheme, lyricsPanel,
               <div className="hifi-lyrics-progress-track">
                 <span style={{ width: lyricsProgressPercent }} />
               </div>
-              <span className="hifi-lyrics-time" data-hifi-lyrics-time>{lyricsTimeLabel}</span>
+              {lyricsTimeLabel ? <span className="hifi-lyrics-time" data-hifi-lyrics-time>{lyricsTimeLabel}</span> : null}
             </div>
           </div>
           {lyricsControls ? (

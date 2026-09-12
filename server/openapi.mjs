@@ -158,6 +158,34 @@ export function buildOpenApiDocument({ appVersion = "0.1.0" } = {}) {
           }
         }
       },
+      "/system/guard-ota": {
+        get: {
+          tags: ["system"],
+          summary: "Read local Provider Guard OTA status",
+          responses: {
+            200: jsonResponse("Provider Guard OTA status", "GuardOtaStatus")
+          }
+        }
+      },
+      "/system/guard-ota/actions": {
+        post: {
+          tags: ["system"],
+          summary: "Request a local Provider Guard update check",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: ref("GuardOtaActionRequest")
+              }
+            }
+          },
+          responses: {
+            200: jsonResponse("Provider Guard OTA status", "GuardOtaStatus"),
+            202: jsonResponse("Provider Guard OTA check started", "GuardOtaStatus"),
+            400: jsonResponse("Bad request", "ErrorResponse")
+          }
+        }
+      },
       "/multiroom": {
         get: {
           tags: ["multiroom"],
@@ -269,6 +297,33 @@ export function buildOpenApiDocument({ appVersion = "0.1.0" } = {}) {
             providerTextScale: { type: "number", enum: [1, 1.1, 1.2] },
             updatedAt: { type: "string", nullable: true }
           }
+        },
+        GuardOtaStatus: {
+          type: "object",
+          required: ["enabled", "channel", "installedVersion", "previousVersion", "candidateVersion", "stagedVersion", "state", "lastCheckedAt", "lastAppliedAt", "lastRollbackAt", "nextCheckAt", "lastErrorCode"],
+          properties: {
+            enabled: { type: "boolean" },
+            channel: { type: "string", pattern: "^[a-z][a-z0-9-]{0,31}$" },
+            installedVersion: { type: "string", nullable: true },
+            previousVersion: { type: "string", nullable: true },
+            candidateVersion: { type: "string", nullable: true },
+            stagedVersion: { type: "string", nullable: true },
+            state: { type: "string", enum: ["disabled", "idle", "checking", "downloading", "pending_idle", "pending_activation", "rolled_back", "failed"] },
+            lastCheckedAt: { type: "string", format: "date-time", nullable: true },
+            lastAppliedAt: { type: "string", format: "date-time", nullable: true },
+            lastRollbackAt: { type: "string", format: "date-time", nullable: true },
+            nextCheckAt: { type: "string", format: "date-time", nullable: true },
+            lastErrorCode: { type: "string", nullable: true },
+            busy: { type: "boolean" }
+          }
+        },
+        GuardOtaActionRequest: {
+          type: "object",
+          required: ["type"],
+          properties: {
+            type: { type: "string", enum: ["check"] }
+          },
+          additionalProperties: false
         },
         WebModeState: {
           type: "object",

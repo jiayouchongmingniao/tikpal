@@ -51,6 +51,14 @@ fi
 : "${TIKPAL_WEB_MODE_SETTINGS_PATH:=$APP_DIR/.tikpal/web-mode-settings.json}"
 : "${TIKPAL_WEB_MODE_STATE_PATH:=$APP_DIR/.tikpal/web-mode-state.json}"
 : "${TIKPAL_WEB_MODE_EXTENSION_DIR:=$SCRIPT_DIR/web-mode-extension}"
+: "${TIKPAL_WEB_MODE_GUARD_SCRIPT:=$SCRIPT_DIR/tikpal-web-mode-guard.mjs}"
+: "${TIKPAL_WEB_MODE_QQ_CONFIRM_SCRIPT:=$SCRIPT_DIR/tikpal-web-mode-qq-confirm.mjs}"
+: "${TIKPAL_GUARD_OTA_ENABLED:=0}"
+: "${TIKPAL_GUARD_OTA_ROOT:=$APP_DIR/.tikpal/guard-ota}"
+: "${TIKPAL_GUARD_OTA_UPDATER:=$SCRIPT_DIR/tikpal-guard-ota.mjs}"
+: "${TIKPAL_GUARD_OTA_MARKER_TIMEOUT_SECONDS:=3}"
+: "${TIKPAL_GUARD_OTA_CURRENT_VERSION:=}"
+: "${TIKPAL_GUARD_OTA_PENDING_ACTIVATION_VERSION:=}"
 : "${TIKPAL_WEB_MODE_EXTENSION_ENABLED:=1}"
 : "${TIKPAL_WEB_MODE_EXTENSION_ID:=dlaggcjljagbfgfidblabfdonkemimfe}"
 : "${TIKPAL_WEB_MODE_PROXY_APPLY_TIMEOUT_SECONDS:=5}"
@@ -1663,6 +1671,112 @@ is_enabled() {
   [[ "$value" == "1" || "$value" == "true" || "$value" == "yes" || "$value" == "on" || "$value" == "enabled" ]]
 }
 
+select_guard_ota_bundle() {
+  local current_dir release_json version pending
+  # Keep the app-bundled Guard as the safe default. An OTA directory is used
+  # only after the updater has atomically promoted a complete release.
+  TIKPAL_WEB_MODE_GUARD_SCRIPT="$SCRIPT_DIR/tikpal-web-mode-guard.mjs"
+  TIKPAL_WEB_MODE_QQ_CONFIRM_SCRIPT="$SCRIPT_DIR/tikpal-web-mode-qq-confirm.mjs"
+  TIKPAL_WEB_MODE_EXTENSION_DIR="${TIKPAL_WEB_MODE_BUNDLED_EXTENSION_DIR:-$SCRIPT_DIR/web-mode-extension}"
+  TIKPAL_GUARD_OTA_CURRENT_VERSION=""
+  TIKPAL_GUARD_OTA_PENDING_ACTIVATION_VERSION=""
+  is_enabled "$TIKPAL_GUARD_OTA_ENABLED" || return 0
+  current_dir="$TIKPAL_GUARD_OTA_ROOT/current"
+  release_json="$current_dir/release.json"
+  [[ -f "$release_json" && -f "$current_dir/web-mode-extension/manifest.json" \
+     && -f "$current_dir/tikpal-web-mode-guard.mjs" && -f "$current_dir/tikpal-web-mode-qq-confirm.mjs" ]] || return 0
+  version="$(node - "$release_json" <<'NODE'
+const fs = require("node:fs");
+try {
+  const value = JSON.parse(fs.readFileSync(process.argv[2], "utf8")).version;
+  if (/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(String(value || ""))) process.stdout.write(String(value));
+} catch {}
+NODE
+)"
+  [[ -n "$version" ]] || return 0
+  pending="$(node - "$TIKPAL_GUARD_OTA_ROOT/state.json" <<'NODE'
+const fs = require("node:fs");
+try {
+  const value = JSON.parse(fs.readFileSync(process.argv[2], "utf8")).pendingActivationVersion;
+  if (/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(String(value || ""))) process.stdout.write(String(value));
+} catch {}
+NODE
+)"
+  TIKPAL_WEB_MODE_EXTENSION_DIR="$current_dir/web-mode-extension"
+  TIKPAL_WEB_MODE_GUARD_SCRIPT="$current_dir/tikpal-web-mode-guard.mjs"
+  TIKPAL_WEB_MODE_QQ_CONFIRM_SCRIPT="$current_dir/tikpal-web-mode-qq-confirm.mjs"
+  TIKPAL_GUARD_OTA_CURRENT_VERSION="$version"
+  TIKPAL_GUARD_OTA_PENDING_ACTIVATION_VERSION="$pending"
+}
+
+guard_ota_runtime_is_idle() {
+  node - "$TIKPAL_WEB_MODE_STATE_PATH" <<'NODE'
+const fs = require("node:fs");
+try {
+  const state = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+  process.exit(state?.activeProvider || state?.openingProvider || state?.openRequestId || state?.closeRequestId ? 1 : 0);
+} catch {
+  // A missing state file is the idle bootstrap case. A malformed existing file
+  // is handled conservatively by the launcher lock on the next action.
+  process.exit(fs.existsSync(process.argv[2]) ? 1 : 0);
+}
+NODE
+}
+
+guard_ota_has_staged_release() {
+  node - "$TIKPAL_GUARD_OTA_ROOT/state.json" <<'NODE'
+const fs = require("node:fs");
+try {
+  const state = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+  process.exit(/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(String(state?.stagedVersion || "")) ? 0 : 1);
+} catch {
+  process.exit(1);
+}
+NODE
+}
+
+guard_ota_activate_when_idle() {
+  is_enabled "$TIKPAL_GUARD_OTA_ENABLED" || return 0
+  [[ -x "$TIKPAL_GUARD_OTA_UPDATER" ]] || return 0
+  guard_ota_has_staged_release || return 0
+  guard_ota_runtime_is_idle || {
+    log "Guard OTA deferred: Explore is not idle"
+    return 0
+  }
+  # Current resident browsers keep an unpacked extension in memory. Full close
+  # happens only while idle and preserves the per-provider profile directory.
+  close_web_mode_full || return 1
+  "$TIKPAL_GUARD_OTA_UPDATER" activate >/dev/null
+  select_guard_ota_bundle
+  log "Guard OTA activation checked"
+}
+
+wait_for_guard_ota_marker() {
+  local provider_port="$1" expected="$TIKPAL_GUARD_OTA_PENDING_ACTIVATION_VERSION" attempts
+  [[ -n "$expected" && "$expected" == "$TIKPAL_GUARD_OTA_CURRENT_VERSION" ]] || return 0
+  attempts="$(awk -v seconds="$TIKPAL_GUARD_OTA_MARKER_TIMEOUT_SECONDS" 'BEGIN { value = int(seconds * 10); print value > 0 ? value : 30 }')"
+  while [[ "$attempts" -gt 0 ]]; do
+    if provider_cdp_command "$provider_port" Runtime.evaluate \
+      '{"expression":"document.documentElement?.getAttribute(\\"data-tikpal-explore-guard-version\\") || null","returnByValue":true}' \
+      "\"$expected\""; then
+      "$TIKPAL_GUARD_OTA_UPDATER" confirm-activation >/dev/null || true
+      TIKPAL_GUARD_OTA_PENDING_ACTIVATION_VERSION=""
+      return 0
+    fi
+    sleep 0.1
+    attempts=$((attempts - 1))
+  done
+  return 1
+}
+
+guard_ota_rollback_after_marker_failure() {
+  local reason="$1"
+  [[ -n "$TIKPAL_GUARD_OTA_PENDING_ACTIVATION_VERSION" && -x "$TIKPAL_GUARD_OTA_UPDATER" ]] || return 1
+  "$TIKPAL_GUARD_OTA_UPDATER" rollback "$reason" >/dev/null || return 1
+  select_guard_ota_bundle
+  return 0
+}
+
 detect_non_hdmi_card_id() {
   command -v aplay >/dev/null 2>&1 || return 1
   aplay -l 2>/dev/null | awk '
@@ -2347,10 +2461,10 @@ set_provider_media_active_via_cdp() {
   # The active target can take one renderer turn to resume after
   # Page.bringToFront. This remains within the five-second Phase 4 settle
   # budget once the post-commit delay below is removed.
-  if [[ "$active" == "1" && -f "$SCRIPT_DIR/tikpal-web-mode-guard.mjs" ]] \
+  if [[ "$active" == "1" && -f "$TIKPAL_WEB_MODE_GUARD_SCRIPT" ]] \
     && TIKPAL_WEB_MODE_PROVIDER_DEBUG_PORT="$provider_port" \
       TIKPAL_WEB_MODE_STATE_PATH="$TIKPAL_WEB_MODE_STATE_PATH" \
-      timeout 3 node --experimental-websocket "$SCRIPT_DIR/tikpal-web-mode-guard.mjs" \
+      timeout 3 node --experimental-websocket "$TIKPAL_WEB_MODE_GUARD_SCRIPT" \
         --audio-gate-active >/dev/null 2>&1; then
     return 0
   fi
@@ -2362,11 +2476,11 @@ set_provider_media_active_via_cdp() {
   # A provider can perform a full page reload after its resident Guard first
   # installed the gate.  Reuse that same Guard implementation only when the
   # direct call proves the in-page object is gone.
-  [[ -f "$SCRIPT_DIR/tikpal-web-mode-guard.mjs" ]] || return 1
+  [[ -f "$TIKPAL_WEB_MODE_GUARD_SCRIPT" ]] || return 1
   [[ "$active" == "1" ]] && audio_gate_mode=active || audio_gate_mode=inactive
   TIKPAL_WEB_MODE_PROVIDER_DEBUG_PORT="$provider_port" \
   TIKPAL_WEB_MODE_STATE_PATH="$TIKPAL_WEB_MODE_STATE_PATH" \
-    timeout 2 node --experimental-websocket "$SCRIPT_DIR/tikpal-web-mode-guard.mjs" \
+    timeout 2 node --experimental-websocket "$TIKPAL_WEB_MODE_GUARD_SCRIPT" \
       "--audio-gate-$audio_gate_mode" >/dev/null 2>&1
 }
 
@@ -6819,7 +6933,7 @@ provider_guard_process_identity_matches() {
   local provider_port="$5"
   local proc_root="${TIKPAL_WEB_MODE_PROC_ROOT:-/proc}"
   local proc_path="$proc_root/$pid"
-  local helper="$SCRIPT_DIR/tikpal-web-mode-guard.mjs"
+  local helper="$TIKPAL_WEB_MODE_GUARD_SCRIPT"
   local proxy_mode="direct" argument environment_entry
   local helper_matched=0 provider_matched=0 profile_matched=0 port_matched=0 proxy_matched=0
   [[ "$proxy_enabled" == "1" ]] && proxy_mode="proxy"
@@ -6886,7 +7000,7 @@ start_provider_guard() {
   local provider_url_value="$3"
   local proxy_enabled="$4"
   local provider_port="${5:-$TIKPAL_WEB_MODE_PROVIDER_DEBUG_PORT}"
-  local helper="$SCRIPT_DIR/tikpal-web-mode-guard.mjs"
+  local helper="$TIKPAL_WEB_MODE_GUARD_SCRIPT"
   local proxy_mode="direct"
   is_enabled "$TIKPAL_WEB_MODE_PROVIDER_GUARD" || return 0
   [[ -f "$helper" ]] || {
@@ -8224,6 +8338,17 @@ launch_provider_for_pool() {
       write_runtime_provider_status "$provider" "check_setup" "$(provider_label "$provider") did not become ready"
       return 1
     fi
+    if ! wait_for_guard_ota_marker "$provider_port"; then
+      log "Guard OTA activation marker was not observed for $provider"
+      if [[ "${TIKPAL_GUARD_OTA_RETRY_AFTER_ROLLBACK:-0}" != "1" ]] \
+        && guard_ota_rollback_after_marker_failure "marker_missing:$provider"; then
+        close_provider_profile "$provider_profile"
+        TIKPAL_GUARD_OTA_RETRY_AFTER_ROLLBACK=1 launch_provider_for_pool "$provider" "$wait_ready" "$launch_role" "$force_existing"
+        return $?
+      fi
+      write_runtime_provider_status "$provider" "check_setup" "$(provider_label "$provider") Guard did not activate"
+      return 1
+    fi
     write_runtime_provider_status "$provider" "ready"
     return 0
   fi
@@ -8298,6 +8423,17 @@ launch_provider_for_pool() {
         return 1
       fi
       write_runtime_provider_status "$provider" "check_setup" "$(provider_label "$provider") did not become ready"
+      return 1
+    fi
+    if ! wait_for_guard_ota_marker "$provider_port"; then
+      log "Guard OTA activation marker was not observed for $provider"
+      if [[ "${TIKPAL_GUARD_OTA_RETRY_AFTER_ROLLBACK:-0}" != "1" ]] \
+        && guard_ota_rollback_after_marker_failure "marker_missing:$provider"; then
+        close_provider_profile "$provider_profile"
+        TIKPAL_GUARD_OTA_RETRY_AFTER_ROLLBACK=1 launch_provider_for_pool "$provider" "$wait_ready" "$launch_role" "$force_existing"
+        return $?
+      fi
+      write_runtime_provider_status "$provider" "check_setup" "$(provider_label "$provider") Guard did not activate"
       return 1
     fi
   fi
@@ -9469,6 +9605,8 @@ x11_trace_require_writable ||
 
 trap x11_helper_cleanup_on_exit EXIT
 
+select_guard_ota_bundle
+
 case "$web_mode_action" in
   panel-mode)
     TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS=0
@@ -9495,6 +9633,9 @@ case "$web_mode_action" in
   close-full)
     with_web_mode_lock close_web_mode_full
     log "closed full"
+    ;;
+  guard-ota-activate)
+    with_web_mode_lock guard_ota_activate_when_idle
     ;;
   reset-profile)
     provider_id="${2:-}"
@@ -9586,6 +9727,6 @@ case "$web_mode_action" in
     with_web_mode_lock apply_proxy_settings "${2:-spotify}"
     ;;
   *)
-    fail "Usage: $0 open <provider>|prepare-entry <provider>|park-entry|close|close-full|reset-profile <provider>|cleanup-warm|warm-pool|prewarm <provider>|reconcile <provider> [started-ms]|sync-status|refresh-guards|guard-state|reload-guard [provider]|stop-owned-guard <pid> <starttime>|restore-helper-owner|keyboard [show|hide|toggle]|proxy <provider>|--check"
+    fail "Usage: $0 open <provider>|prepare-entry <provider>|park-entry|close|close-full|guard-ota-activate|reset-profile <provider>|cleanup-warm|warm-pool|prewarm <provider>|reconcile <provider> [started-ms]|sync-status|refresh-guards|guard-state|reload-guard [provider]|stop-owned-guard <pid> <starttime>|restore-helper-owner|keyboard [show|hide|toggle]|proxy <provider>|--check"
     ;;
 esac

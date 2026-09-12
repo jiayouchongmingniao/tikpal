@@ -1,0 +1,16 @@
+[Unit]
+Description=Tikpal Provider Guard OTA checker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=@SERVICE_USER@
+Group=@SERVICE_USER@
+WorkingDirectory=@APP_DIR@
+EnvironmentFile=-@APP_DIR@/.env.kiosk
+Environment=TIKPAL_KIOSK_ENV_FILE=@APP_DIR@/.env.kiosk
+UMask=0077
+ExecStart=@APP_DIR@/deploy/chromium/tikpal-guard-ota-run.sh
+NoNewPrivileges=true
+PrivateTmp=true

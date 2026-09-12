@@ -1,4 +1,22 @@
 (() => {
+  // The launcher uses this document-start marker only to verify that an OTA
+  // Guard actually loaded. It carries no provider or account information.
+  const markGuardVersion = () => {
+    try {
+      const version = chrome.runtime.getManifest().version;
+      if (document.documentElement) {
+        document.documentElement.setAttribute("data-tikpal-explore-guard-version", version);
+        return true;
+      }
+    } catch {
+      // Keep provider controls working if Chromium has not exposed the manifest.
+    }
+    return false;
+  };
+  if (!markGuardVersion()) {
+    document.addEventListener("DOMContentLoaded", markGuardVersion, { once: true });
+  }
+
   // The page-world gate below is synchronous, while this is a second browser
   // output guard for any media path it cannot intercept.
   if (window.top === window) {

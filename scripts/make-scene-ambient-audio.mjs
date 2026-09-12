@@ -8,10 +8,10 @@ const DEFAULT_CROSSFADE_SECONDS = 0.8;
 
 function usage() {
   return [
-    "Usage: node scripts/make-scene-ambient-audio.mjs --input <source-audio> --output <scene.ogg> [--duration <seconds>] [--crossfade <seconds>]",
+    "Usage: node scripts/make-scene-ambient-audio.mjs --input <source-audio> --output <scene.ogg> [--duration <seconds>] [--crossfade <seconds>] [--active-seconds <seconds> --quiet-seconds <seconds> --envelope-fade-seconds <seconds>]",
     "",
     "Builds a tail-to-head crossfaded loop unit from a reviewed source recording and renders a long Opus asset.",
-    `Defaults: --duration ${DEFAULT_DURATION_SECONDS} --crossfade ${DEFAULT_CROSSFADE_SECONDS}`
+    `Defaults: --duration ${DEFAULT_DURATION_SECONDS} --crossfade ${DEFAULT_CROSSFADE_SECONDS}. The optional active/quiet envelope softly alternates the rendered ambience with silence.`
   ].join("\n");
 }
 
@@ -20,7 +20,10 @@ function parseArgs(argv) {
     input: null,
     output: null,
     durationSeconds: DEFAULT_DURATION_SECONDS,
-    crossfadeSeconds: DEFAULT_CROSSFADE_SECONDS
+    crossfadeSeconds: DEFAULT_CROSSFADE_SECONDS,
+    activeSeconds: null,
+    quietSeconds: null,
+    envelopeFadeSeconds: 3
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -49,6 +52,21 @@ function parseArgs(argv) {
       index += 1;
       continue;
     }
+    if (arg === "--active-seconds") {
+      options.activeSeconds = Number(argv[index + 1]);
+      index += 1;
+      continue;
+    }
+    if (arg === "--quiet-seconds") {
+      options.quietSeconds = Number(argv[index + 1]);
+      index += 1;
+      continue;
+    }
+    if (arg === "--envelope-fade-seconds") {
+      options.envelopeFadeSeconds = Number(argv[index + 1]);
+      index += 1;
+      continue;
+    }
     throw new Error(`Unknown argument: ${arg}`);
   }
 
@@ -59,12 +77,33 @@ function parseArgs(argv) {
   if (!Number.isFinite(options.crossfadeSeconds) || options.crossfadeSeconds <= 0) {
     throw new Error("--crossfade must be a positive number of seconds");
   }
+  const hasEnvelope = options.activeSeconds !== null || options.quietSeconds !== null;
+  if (hasEnvelope && (options.activeSeconds === null || options.quietSeconds === null)) {
+    throw new Error("--active-seconds and --quiet-seconds must be used together");
+  }
+  if (hasEnvelope && (!Number.isFinite(options.activeSeconds) || options.activeSeconds <= options.envelopeFadeSeconds)) {
+    throw new Error("--active-seconds must exceed --envelope-fade-seconds");
+  }
+  if (hasEnvelope && (!Number.isFinite(options.quietSeconds) || options.quietSeconds <= options.envelopeFadeSeconds)) {
+    throw new Error("--quiet-seconds must exceed --envelope-fade-seconds");
+  }
+  if (hasEnvelope && (!Number.isFinite(options.envelopeFadeSeconds) || options.envelopeFadeSeconds <= 0)) {
+    throw new Error("--envelope-fade-seconds must be a positive number of seconds");
+  }
 
   return {
     ...options,
     input: path.resolve(options.input),
     output: path.resolve(options.output)
   };
+}
+
+function buildActiveQuietEnvelope({ activeSeconds, quietSeconds, envelopeFadeSeconds }) {
+  const cycleSeconds = activeSeconds + quietSeconds;
+  const fadeOutStart = activeSeconds - envelopeFadeSeconds;
+  const fadeInStart = cycleSeconds - envelopeFadeSeconds;
+  const phase = `mod(t\\,${cycleSeconds})`;
+  return `volume='if(lt(${phase}\\,${fadeOutStart})\\,1\\,if(lt(${phase}\\,${activeSeconds})\\,(${activeSeconds}-${phase})/${envelopeFadeSeconds}\\,if(lt(${phase}\\,${fadeInStart})\\,0\\,(${phase}-${fadeInStart})/${envelopeFadeSeconds})))':eval=frame`;
 }
 
 function run(command, args, { capture = false } = {}) {
@@ -120,6 +159,9 @@ async function main() {
   const cutSeconds = options.crossfadeSeconds * 2;
   const headSeconds = cutSeconds + (1 / 48_000);
   const loopUnitDurationSeconds = duration - options.crossfadeSeconds + (1 / 48_000);
+  const envelope = options.activeSeconds === null
+    ? null
+    : buildActiveQuietEnvelope(options);
 
   try {
     run("ffmpeg", [
@@ -144,6 +186,7 @@ async function main() {
       "-i", loopUnitPath,
       "-t", String(options.durationSeconds),
       "-map", "0:a:0",
+      ...(envelope ? ["-af", envelope] : []),
       "-c:a", "libopus",
       "-b:a", "96k",
       "-vbr", "on",
@@ -173,6 +216,9 @@ async function main() {
     loopUnitDurationSeconds,
     outputDurationSeconds: options.durationSeconds,
     crossfadeSeconds: options.crossfadeSeconds,
+    activeSeconds: options.activeSeconds,
+    quietSeconds: options.quietSeconds,
+    envelopeFadeSeconds: options.activeSeconds === null ? null : options.envelopeFadeSeconds,
     codec: "opus",
     bitrate: "96k"
   }, null, 2));

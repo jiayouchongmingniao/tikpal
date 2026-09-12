@@ -109,6 +109,24 @@ export interface WebModeSettings {
   updatedAt: string | null;
 }
 
+export type GuardOtaState = "disabled" | "idle" | "checking" | "downloading" | "pending_idle" | "pending_activation" | "rolled_back" | "failed";
+
+export interface GuardOtaStatus {
+  enabled: boolean;
+  channel: string;
+  installedVersion: string | null;
+  previousVersion: string | null;
+  candidateVersion: string | null;
+  stagedVersion: string | null;
+  state: GuardOtaState;
+  lastCheckedAt: string | null;
+  lastAppliedAt: string | null;
+  lastRollbackAt: string | null;
+  nextCheckAt: string | null;
+  lastErrorCode: string | null;
+  busy?: boolean;
+}
+
 export interface WebModeState {
   panelMode?: "expanded" | "collapsed";
   panelLayoutSupported?: boolean;

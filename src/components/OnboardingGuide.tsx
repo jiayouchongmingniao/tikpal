@@ -2,9 +2,16 @@ import { useEffect, useRef } from "react";
 import { ArrowDown, ArrowUp, Hand, Pointer, Sun, Volume2, X } from "lucide-react";
 import { useI18n } from "../i18n";
 
+type OnboardingVariant = "first-use" | "reference";
+type OnboardingStep = "show-controls" | "playback";
+
 interface OnboardingGuideProps {
   active: boolean;
+  variant: OnboardingVariant;
+  step?: OnboardingStep;
+  canControlPlayback?: boolean;
   onDismiss: () => void;
+  onOpenPlayer?: () => void;
 }
 
 const tips = [
@@ -16,20 +23,43 @@ const tips = [
   { icon: ArrowUp, title: "onboarding.returnTitle", body: "onboarding.returnBody" }
 ] as const;
 
-export function OnboardingGuide({ active, onDismiss }: OnboardingGuideProps) {
+export function OnboardingGuide({ active, variant, step = "show-controls", canControlPlayback = false, onDismiss, onOpenPlayer }: OnboardingGuideProps) {
   const { t } = useI18n();
   const panelRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
-    if (!active) return;
+    if (!active || variant !== "reference") return;
     const previousFocus = document.activeElement;
     panelRef.current?.focus();
     return () => {
       if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus();
     };
-  }, [active]);
+  }, [active, variant]);
 
   if (!active) return null;
+
+  if (variant === "first-use") {
+    const chooseSource = step === "playback" && !canControlPlayback;
+    const title = step === "show-controls"
+      ? t("onboarding.coachTapTitle")
+      : chooseSource ? t("onboarding.coachSourceTitle") : t("onboarding.coachPlaybackTitle");
+    const body = step === "show-controls"
+      ? t("onboarding.coachTapBody")
+      : chooseSource ? t("onboarding.coachSourceBody") : t("onboarding.coachPlaybackBody");
+
+    return (
+      <aside className="onboarding-coachmark" role="status" aria-live="polite" data-gesture-protected data-onboarding-coach data-onboarding-step={step}>
+        <div>
+          <strong>{title}</strong>
+          <p>{body}</p>
+        </div>
+        <div className="onboarding-coachmark-actions">
+          {chooseSource ? <button type="button" onClick={onOpenPlayer}>{t("onboarding.coachOpenPlayer")}</button> : null}
+          <button type="button" onClick={onDismiss}>{t("onboarding.coachSkip")}</button>
+        </div>
+      </aside>
+    );
+  }
 
   return (
     <section
