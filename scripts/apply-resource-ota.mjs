@@ -18,6 +18,7 @@ const SCENE_MANIFEST_TARGET = "scenes/_metadata/scene_videos.json";
 const AUDIO_EXTENSIONS = new Set([".aac", ".flac", ".m4a", ".mp3", ".ogg", ".wav"]);
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".webp"]);
 const SCENE_VIDEO_EXTENSIONS = new Set([".mp4"]);
+const SCENE_AUDIO_EXTENSIONS = new Set([".ogg"]);
 const COVER_COLUMNS = ["cover_relative_path", "cover_path", "album_art_relative_path", "artwork_relative_path"];
 const SCENE_ROOM_MODES = new Set(["focus", "calm", "sleep"]);
 const SCENE_AUDIO_GAIN_MIN_DB = -24;
@@ -141,6 +142,21 @@ async function validateMp4(filePath, label = "MP4 file") {
   };
 }
 
+async function validateOgg(filePath, label = "Ogg file") {
+  const info = await stat(filePath);
+  if (!info.isFile() || info.size <= 0) {
+    throw new Error(`${label} is empty or not a file: ${filePath}`);
+  }
+  const header = (await readFile(filePath)).subarray(0, 4).toString("ascii");
+  if (header !== "OggS") {
+    throw new Error(`${label} does not look like an Ogg file: ${filePath}`);
+  }
+  return {
+    bytes: info.size,
+    sha256: await readSha256(filePath)
+  };
+}
+
 function normalizeSceneVideoId(value, index) {
   const id = String(value ?? "").trim();
   if (!/^[a-z0-9][a-z0-9._-]*$/i.test(id)) {
@@ -181,6 +197,7 @@ async function validateSceneVideosManifest({ manifestPath, packageSceneRoot }) {
 
   const ids = new Set();
   const filenames = new Set();
+  const audioFilenames = new Set();
   const videos = [];
   let defaultCount = 0;
 
@@ -217,6 +234,31 @@ async function validateSceneVideosManifest({ manifestPath, packageSceneRoot }) {
     filenames.add(filename);
     const roomModes = normalizeSceneRoomModes(video.roomModes);
     const audioGainDb = normalizeSceneAudioGainDb(video.audioGainDb);
+    const audioFilename = String(video.audioFilename ?? "").trim();
+    const audioSha256 = String(video.audioSha256 ?? "").trim().toLowerCase();
+    const hasAudio = Boolean(audioFilename || audioSha256);
+    if (hasAudio && (!audioFilename || !audioSha256)) {
+      throw new Error(`Scene video ${id} must include both audioFilename and audioSha256`);
+    }
+    let audio = null;
+    let audioSourcePath = null;
+    if (hasAudio) {
+      if (!isSafeRelativePath(audioFilename) || !SCENE_AUDIO_EXTENSIONS.has(path.extname(audioFilename).toLowerCase())) {
+        throw new Error(`Scene video ${id} audioFilename must be an Ogg file`);
+      }
+      if (!/^[a-f0-9]{64}$/.test(audioSha256)) {
+        throw new Error(`Scene video ${id} audioSha256 must be a sha256 checksum`);
+      }
+      if (audioFilenames.has(audioFilename)) {
+        throw new Error(`Scene video manifest contains duplicate audioFilename: ${audioFilename}`);
+      }
+      audioSourcePath = path.join(packageSceneRoot, audioFilename);
+      audio = await validateOgg(audioSourcePath, `Scene audio ${id}`);
+      if (audio.sha256 !== audioSha256) {
+        throw new Error(`Scene audio ${id} sha256 mismatch: expected ${audioSha256}, got ${audio.sha256}`);
+      }
+      audioFilenames.add(audioFilename);
+    }
     videos.push({
       id,
       filename,
@@ -227,7 +269,13 @@ async function validateSceneVideosManifest({ manifestPath, packageSceneRoot }) {
       audioGainDb,
       sha256: mp4.sha256,
       bytes: mp4.bytes,
-      sourcePath
+      sourcePath,
+      ...(audio ? {
+        audioFilename,
+        audioSha256: audio.sha256,
+        audioBytes: audio.bytes,
+        audioSourcePath
+      } : {})
     });
   }
 
@@ -324,6 +372,7 @@ function toSceneManifestVideo(video) {
     ...(video.default ? { default: true } : {}),
     ...(video.roomModes?.length ? { roomModes: video.roomModes } : {}),
     ...(video.audioGainDb !== null && video.audioGainDb !== undefined ? { audioGainDb: video.audioGainDb } : {}),
+    ...(video.audioFilename ? { audioFilename: video.audioFilename, audioSha256: video.audioSha256 } : {}),
     sha256: video.sha256
   };
 }
@@ -354,6 +403,9 @@ function mergeSceneManifests(installedManifest, scenePackage) {
       ...(video.default === true ? { default: true } : {}),
       ...(normalizeSceneRoomModes(video.roomModes).length ? { roomModes: normalizeSceneRoomModes(video.roomModes) } : {}),
       ...(normalizeSceneAudioGainDb(video.audioGainDb) !== null ? { audioGainDb: normalizeSceneAudioGainDb(video.audioGainDb) } : {}),
+      ...(typeof video.audioFilename === "string" && video.audioFilename && typeof video.audioSha256 === "string" && video.audioSha256
+        ? { audioFilename: video.audioFilename, audioSha256: video.audioSha256 }
+        : {}),
       ...(typeof video.sha256 === "string" && video.sha256 ? { sha256: video.sha256 } : {})
     });
   }
@@ -408,6 +460,13 @@ async function syncSceneVideos({ scenePackage, publicAssetsDir, distAssetsDir, d
       .then((saved) => { if (saved) backups.push(`public/assets/scenes/${video.filename}`); });
     await mkdir(path.dirname(publicTarget), { recursive: true });
     await cp(video.sourcePath, publicTarget, { force: true });
+    if (video.audioSourcePath && video.audioFilename) {
+      const publicAudioTarget = path.join(publicSceneRoot, video.audioFilename);
+      await backupFile(publicAudioTarget, backupRoot, `public/assets/scenes/${video.audioFilename}`)
+        .then((saved) => { if (saved) backups.push(`public/assets/scenes/${video.audioFilename}`); });
+      await mkdir(path.dirname(publicAudioTarget), { recursive: true });
+      await cp(video.audioSourcePath, publicAudioTarget, { force: true });
+    }
   }
   await writeFile(publicSceneManifestPath, `${JSON.stringify(mergedManifest, null, 2)}\n`);
 
@@ -418,6 +477,11 @@ async function syncSceneVideos({ scenePackage, publicAssetsDir, distAssetsDir, d
       const distTarget = path.join(distSceneRoot, video.filename);
       await mkdir(path.dirname(distTarget), { recursive: true });
       await cp(video.sourcePath, distTarget, { force: true });
+      if (video.audioSourcePath && video.audioFilename) {
+        const distAudioTarget = path.join(distSceneRoot, video.audioFilename);
+        await mkdir(path.dirname(distAudioTarget), { recursive: true });
+        await cp(video.audioSourcePath, distAudioTarget, { force: true });
+      }
     }
     await writeFile(distSceneManifestPath, `${JSON.stringify(mergedManifest, null, 2)}\n`);
   }
@@ -557,6 +621,9 @@ async function run() {
         default: video.default,
         roomModes: video.roomModes,
         audioGainDb: video.audioGainDb,
+        audioFilename: video.audioFilename ?? null,
+        audioSha256: video.audioSha256 ?? null,
+        audioBytes: video.audioBytes ?? null,
         bytes: video.bytes,
         sha256: video.sha256
       }))

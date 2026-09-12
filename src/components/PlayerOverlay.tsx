@@ -842,7 +842,12 @@ export function PlayerOverlay({
     try {
       const nextState = await onSourceSwitch(target, radioStationId, localTrackPath);
       const nextSource = nextState.audio.sources.find((source) => source.id === target);
-      if (target === "mpd" && localTrackPath) {
+      const libraryResumedPlayback = target === "mpd"
+        && nextState.audio.currentSource.id === "mpd"
+        && nextState.playback.state === "playing";
+      if (libraryResumedPlayback) {
+        setSourceHint(t("source.libraryPlaying"));
+      } else if (target === "mpd" && localTrackPath) {
         setSourceHint(localizedLibraryPlaybackHint(libraryStorage));
       } else if (target === "mpd") {
         setSourceHint(t("source.libraryReadyPickTrack"));

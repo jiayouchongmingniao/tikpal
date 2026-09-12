@@ -34,6 +34,7 @@ async function run() {
   const manifestPath = path.join(packageMusicDir, "_metadata", "library_manifest.json");
   const videoPath = path.join(packageDir, "assets", "output_2560x720-4k.mp4");
   const sceneVideoPath = path.join(packageDir, "assets", "scenes", "Rainy-Window.mp4");
+  const sceneAudioPath = path.join(packageDir, "assets", "scenes", "audio", "rainy-window.ogg");
   const sceneManifestPath = path.join(packageDir, "assets", "scenes", "_metadata", "scene_videos.json");
 
   try {
@@ -63,7 +64,11 @@ async function run() {
     await writeFile(videoPath, Buffer.from("000000 ftypisom tikpal smoke mp4"));
     const sceneBytes = Buffer.from("000000 ftypisom tikpal rainy window smoke mp4");
     const sceneSha256 = createHash("sha256").update(sceneBytes).digest("hex");
+    const sceneAudioBytes = Buffer.from("OggS tikpal rainy window smoke audio");
+    const sceneAudioSha256 = createHash("sha256").update(sceneAudioBytes).digest("hex");
     await writeFile(sceneVideoPath, sceneBytes);
+    await mkdir(path.dirname(sceneAudioPath), { recursive: true });
+    await writeFile(sceneAudioPath, sceneAudioBytes);
     await writeFile(
       sceneManifestPath,
       `${JSON.stringify({
@@ -76,6 +81,8 @@ async function run() {
             order: 30,
             roomModes: ["calm"],
             audioGainDb: 11.1,
+            audioFilename: "audio/rainy-window.ogg",
+            audioSha256: sceneAudioSha256,
             default: false,
             sha256: sceneSha256
           }
@@ -102,6 +109,7 @@ async function run() {
     assert(summary.scenes.videos[0].id === "rainy-window", "resource OTA should preserve scene video id");
     assert(JSON.stringify(summary.scenes.videos[0].roomModes) === JSON.stringify(["calm"]), "resource OTA should preserve scene room modes");
     assert(summary.scenes.videos[0].audioGainDb === 11.1, "resource OTA should preserve scene audio gain");
+    assert(summary.scenes.videos[0].audioSha256 === sceneAudioSha256, "resource OTA should verify scene audio checksum");
     assert(summary.sync.publicSynced === true, "resource OTA should sync public assets");
     assert(summary.sync.distSynced === true, "resource OTA should sync dist assets when present");
     assert(summary.sync.sceneSynced === true, "resource OTA should sync scene assets");
@@ -112,6 +120,8 @@ async function run() {
     assert(await exists(path.join(targetDistAssets, "output_2560x720-4k.mp4")), "dist fireplace video should be copied");
     assert(await exists(path.join(targetPublicAssets, "scenes", "Rainy-Window.mp4")), "public scene video should be copied");
     assert(await exists(path.join(targetDistAssets, "scenes", "Rainy-Window.mp4")), "dist scene video should be copied");
+    assert(await exists(path.join(targetPublicAssets, "scenes", "audio", "rainy-window.ogg")), "public scene audio should be copied");
+    assert(await exists(path.join(targetDistAssets, "scenes", "audio", "rainy-window.ogg")), "dist scene audio should be copied");
     assert(await exists(path.join(targetPublicAssets, "scenes", "_metadata", "scene_videos.json")), "public scene manifest should be copied");
 
     const state = JSON.parse(await readFile(path.join(stateDir, "resource-ota-state.json"), "utf8"));
@@ -121,6 +131,7 @@ async function run() {
     assert(state.scenes.videos[0].audioGainDb === 11.1, "resource OTA state should persist scene audio gain");
     const installedSceneManifest = JSON.parse(await readFile(path.join(targetPublicAssets, "scenes", "_metadata", "scene_videos.json"), "utf8"));
     assert(installedSceneManifest.videos[0].audioGainDb === 11.1, "resource OTA should write scene audio gain to installed manifest");
+    assert(installedSceneManifest.videos[0].audioSha256 === sceneAudioSha256, "resource OTA should write scene audio checksum to installed manifest");
     const videoInfo = await stat(path.join(targetPublicAssets, "output_2560x720-4k.mp4"));
     assert(videoInfo.size === summary.fireplaceVideo.bytes, "copied video size should match summary");
     const sceneInfo = await stat(path.join(targetPublicAssets, "scenes", "Rainy-Window.mp4"));

@@ -4,6 +4,7 @@ import type { LucideIcon } from "lucide-react";
 import { fetchBackgroundVideos, fetchSceneContext } from "../api/tikpalClient";
 import { EqVisualScene, type HifiLyricsPanel } from "./EqVisualScene";
 import { FlameScene } from "./FlameScene";
+import { SceneAudioTransport } from "./SceneAudioTransport";
 import { useSceneRenderBudget } from "../hooks/useSceneRenderBudget";
 import { useI18n } from "../i18n";
 import { roomModeOptions } from "../roomExperienceTruth";
@@ -504,12 +505,16 @@ export function AmbientScreen({
   const thermalResumeCelsius = system.thermal?.videoResumeCelsius ?? LEGACY_SCENE_VIDEO_THERMAL_RESUME_C;
   const sceneVideoThermalGuardActive = sceneVideoThermalPaused && !isHifiMode;
   const shouldRenderSceneVideo = sceneVideoEnabled && hasSceneVideo && !sceneVideoThermalGuardActive;
+  const sceneAudioAvailable = Boolean(currentBackgroundVideo.audioSrc);
+  const sceneAudioEligible = sceneAudioAvailable && sceneSoundEnabled && !ambientSceneAudioSuppressed && playback.source === "scene";
+  const sceneAudioEnabled = sceneAudioEligible && playback.state === "playing";
   const { staticOnly: sceneVideoBudgetStaticOnly, diagnostics: sceneRenderDiagnostics } = useSceneRenderBudget({
     constrained: renderProfile === "constrained" && !isHifiMode,
-    enabled: shouldRenderSceneVideo && ambientActive
+    // Scene audio is independent from the visual layer. Keep the visual loop
+    // out of its 60s fallback while a selected scene owns the audio source.
+    enabled: shouldRenderSceneVideo && ambientActive && !sceneAudioEligible
   });
   const sceneVisualLowPower = audioProtectionMode || sceneVideoThermalGuardActive || renderProfile === "constrained";
-  const sceneAudioEnabled = shouldRenderSceneVideo && sceneSoundEnabled && !ambientSceneAudioSuppressed && playback.source === "scene" && playback.state === "playing";
   const useStableSceneLoop = sceneVideoStableLoop && shouldRenderSceneVideo && !isHifiMode;
   const proxyLyricsClockUsable = playback.timingDiagnostics?.positionTrusted === true
     || playback.timingDiagnostics?.positionConfidence === "estimated";
@@ -864,7 +869,13 @@ export function AmbientScreen({
     onHudActivity();
     if (sceneGalleryPending) return;
 
-    if (roomExperience.mode === mode && roomExperience.sceneVideoId === video.id) {
+    if (
+      roomExperience.mode === mode
+      && roomExperience.sceneVideoId === video.id
+      && sceneSoundEnabled
+      && playback.source === "scene"
+      && playback.state === "playing"
+    ) {
       closeSceneGallery();
       return;
     }
@@ -874,8 +885,8 @@ export function AmbientScreen({
     try {
       await onExperienceAction(
         roomExperience.mode === mode
-          ? { type: "set_scene", sceneVideoId: video.id }
-          : { type: "set_mode", mode, sceneVideoId: video.id }
+          ? { type: "set_scene", sceneVideoId: video.id, sceneSoundEnabled: true }
+          : { type: "set_mode", mode, sceneVideoId: video.id, sceneSoundEnabled: true }
       );
       const selectedIndex = backgroundVideos.findIndex((entry) => entry.id === video.id);
       if (selectedIndex !== -1) setBackgroundVideoIndex(selectedIndex);
@@ -1898,13 +1909,19 @@ export function AmbientScreen({
           staticImageSrc={currentBackgroundVideo.thumbnailSrc}
           staticOnly={(sceneVideoThermalGuardActive || sceneVideoBudgetStaticOnly) && sceneVideoEnabled && hasSceneVideo}
           videoEnabled={shouldRenderSceneVideo}
-          audioEnabled={sceneAudioEnabled}
-          audioSuspended={ambientSceneAudioSuppressed}
-          volumePercent={system.volume.percent}
-          audioGainDb={currentBackgroundVideo.audioGainDb}
+          audioEnabled={false}
           onVideoReadyChange={onSceneVideoReadyChange}
         />
       )}
+      {!isHifiMode ? (
+        <SceneAudioTransport
+          audioSrc={currentBackgroundVideo.audioSrc}
+          enabled={sceneAudioEligible}
+          playing={sceneAudioEnabled}
+          volumePercent={system.volume.percent}
+          audioGainDb={currentBackgroundVideo.audioGainDb}
+        />
+      ) : null}
       {!isHifiMode && sceneVideoEnabled && hasSceneVideo ? <div className="ambient-vignette" /> : null}
       {sceneVideoThermalPaused && system.cpuTemp !== null ? (
         <div className="ambient-thermal-warning" role="alert" aria-live="assertive" data-ambient-thermal-warning>
@@ -2103,6 +2120,18 @@ export function AmbientScreen({
                 <strong>{roomModeLabel}</strong>
                 <span>{roomModeIntent}</span>
               </div>
+              <button
+                className="ambient-transport-button ambient-transport-play"
+                type="button"
+                aria-label={isPlaying ? t("playback.pause") : t("playback.play")}
+                title={playPauseTitle}
+                tabIndex={ambientHudVisible ? 0 : -1}
+                disabled={playPauseDisabled}
+                data-ambient-scene-pause
+                onClick={() => handleAmbientPlaybackAction("play_pause")}
+              >
+                {isPlaying ? <Pause size={34} fill="currentColor" strokeWidth={1.6} /> : <Play size={34} fill="currentColor" strokeWidth={1.6} />}
+              </button>
               {sourcePickerControl}
             </>
           )}

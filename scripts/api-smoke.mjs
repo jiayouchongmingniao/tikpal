@@ -441,6 +441,8 @@ if (property === "Metadata") {
 }
 `);
     await chmod(fakeBusctlPath, 0o755);
+    const fakeBusctlProbe = await runProcess(fakeBusctlPath, ["--json=short", "--system", "get-property", "org.mpris.MediaPlayer2.ShairportSync", "/org/mpris/MediaPlayer2", "org.mpris.MediaPlayer2.Player", "Metadata"]);
+    assert(fakeBusctlProbe.code === 0 && fakeBusctlProbe.stdout.includes('"xesam:title"'), `AirPlay MPRIS fixture should return Metadata, stdout: ${JSON.stringify(fakeBusctlProbe.stdout)}, stderr: ${JSON.stringify(fakeBusctlProbe.stderr)}`);
 
     const mprisResult = await runProcess("sh", ["deploy/moode/tikpal-airplay-metadata.sh"], {
       env: {
@@ -574,9 +576,12 @@ let outputBuffer = "";
 function mpcFocusedSmokeEnv(overrides = {}) {
   const playbackModeStatePath = overrides.TIKPAL_PLAYBACK_MODE_STATE_PATH
     ?? path.join(tmpdir(), `tikpal-api-smoke-playback-mode-${process.pid}-${Math.random().toString(36).slice(2)}.json`);
+  const webModeStatePath = overrides.TIKPAL_WEB_MODE_STATE_PATH
+    ?? path.join(tmpdir(), `tikpal-api-smoke-web-mode-${process.pid}-${Math.random().toString(36).slice(2)}.json`);
   return {
     ...process.env,
     TIKPAL_PLAYBACK_MODE_STATE_PATH: playbackModeStatePath,
+    TIKPAL_WEB_MODE_STATE_PATH: webModeStatePath,
     ...overrides,
     TIKPAL_STARTUP_SCENE_SOUND_ENABLED: "0"
   };
@@ -1072,6 +1077,10 @@ async function runMpcStartupSceneDefaultSmoke() {
   const fakeMpcPath = path.join(workspace, "mpc-fake.mjs");
   const fakeMpcStatePath = path.join(workspace, "mpc-state.json");
   const roomExperienceStatePath = path.join(workspace, "room-experience-state.json");
+  const webModeStatePath = path.join(workspace, "web-mode-state.json");
+  const audioSourceMemoryStatePath = path.join(workspace, "audio-source-memory.json");
+  const roomSceneAudioHandoffStatePath = path.join(workspace, "room-scene-audio-handoff.json");
+  const playbackModeStatePath = path.join(workspace, "playback-mode.json");
 
   await writeFile(fakeMpcStatePath, `${JSON.stringify({
     title: "",
@@ -1197,6 +1206,7 @@ switch (command) {
       }
     }, null, 2)}\n`
   );
+  await writeFile(webModeStatePath, `${JSON.stringify({ activeProvider: null, openingProvider: null }, null, 2)}\n`);
 
   const server = spawn(process.execPath, ["server/index.mjs"], {
     env: {
@@ -1209,6 +1219,10 @@ switch (command) {
       TIKPAL_MPD_HOST: "127.0.0.1",
       TIKPAL_MPD_PORT: "6600",
       TIKPAL_ROOM_EXPERIENCE_STATE_PATH: roomExperienceStatePath,
+      TIKPAL_WEB_MODE_STATE_PATH: webModeStatePath,
+      TIKPAL_AUDIO_SOURCE_MEMORY_STATE_PATH: audioSourceMemoryStatePath,
+      TIKPAL_ROOM_SCENE_AUDIO_HANDOFF_STATE_PATH: roomSceneAudioHandoffStatePath,
+      TIKPAL_PLAYBACK_MODE_STATE_PATH: playbackModeStatePath,
       TIKPAL_OUTPUT_VOLUME_GET_COMMAND: "",
       TIKPAL_RADIO_START_VERIFY_WINDOW_MS: "40",
       TIKPAL_RADIO_START_VERIFY_POLL_MS: "20",
@@ -1223,7 +1237,7 @@ switch (command) {
   try {
     await waitForHealthAt(baseUrl);
     let startupSceneState = null;
-    for (let attempt = 0; attempt < 40; attempt += 1) {
+    for (let attempt = 0; attempt < 30; attempt += 1) {
       const [state, experience] = await Promise.all([
         requestFrom(baseUrl, "/api/v1/system/state"),
         requestFrom(baseUrl, "/api/v1/experience/state")
@@ -4354,6 +4368,20 @@ appendFileSync(${JSON.stringify(fakeBluetoothTransportLogPath)}, action + "\\n")
     const repeatedAirplayLog = await readFile(fakeExternalCommandLogPath, "utf8").catch(() => "");
     assert(!repeatedAirplayLog.includes("airplay-enable\n"), "mpc repeated AirPlay switch should not reopen the receiver");
 
+    const librarySwitch = await requestFrom(baseUrl, "/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({ target: "mpd" })
+    });
+    assert(librarySwitch.response.ok, "mpc Library source switch should return 200");
+    assert(librarySwitch.body.audio.currentSource.id === "mpd", "mpc Library source switch should mark Library current");
+    assert(librarySwitch.body.system.volume.percent === 43, "mpc Library source switch should return the confirmed output volume instead of a transient MPD volume");
+    const airplayAfterLibrary = await requestFrom(baseUrl, "/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({ target: "airplay" })
+    });
+    assert(airplayAfterLibrary.response.ok, "mpc Library-to-AirPlay source switch should return 200");
+    assert(airplayAfterLibrary.body.audio.currentSource.id === "airplay", "mpc Library-to-AirPlay source switch should restore AirPlay before the next handoff test");
+
     await writeFile(fakeExternalCommandLogPath, "");
     const bluetoothSwitch = await requestFrom(baseUrl, "/api/v1/audio/source", {
       method: "POST",
@@ -5140,9 +5168,12 @@ async function run() {
   const apiUsbRoot = path.join(apiUsbParentRoot, "Field Recorder");
   const musicLibraryStatePath = path.join(apiStateRoot, "music-library-state.json");
   const roomExperienceStatePath = path.join(apiStateRoot, "room-experience-state.json");
+  const roomSceneAudioHandoffStatePath = path.join(apiStateRoot, "room-scene-audio-handoff.json");
   const audioSourceMemoryStatePath = path.join(apiStateRoot, "audio-source-memory.json");
   const webModeSettingsPath = path.join(apiStateRoot, "web-mode-settings.json");
   const webModeStatePath = path.join(apiStateRoot, "web-mode-state.json");
+  const fakeWebModeLogPath = path.join(apiStateRoot, "web-mode.log");
+  const fakeWebModeCommandPath = path.join(apiStateRoot, "web-mode-command.mjs");
   const uiPreferencesStatePath = path.join(apiStateRoot, "ui-preferences.json");
   const nasSourcesStatePath = path.join(apiStateRoot, "nas-sources.json");
   const nasCredentialsDir = path.join(apiStateRoot, "nas-credentials");
@@ -5152,6 +5183,8 @@ async function run() {
   const warmSceneSha256 = createHash("sha256").update(warmSceneBytes).digest("hex");
   const midnightLibrarySceneBytes = Buffer.from("000000 ftypisom tikpal midnight library api smoke mp4");
   const midnightLibrarySceneSha256 = createHash("sha256").update(midnightLibrarySceneBytes).digest("hex");
+  const sceneAudioBytes = Buffer.from("OggS tikpal api smoke scene audio");
+  const sceneAudioSha256 = createHash("sha256").update(sceneAudioBytes).digest("hex");
   await mkdir(path.join(apiAssetsRoot, "scenes", "_metadata"), { recursive: true });
   await mkdir(path.join(apiUsbRoot, "Bootleg Set"), { recursive: true });
   await writeFile(path.join(apiUsbRoot, "Bootleg Set", "Stage Test.flac"), "fake flac bytes");
@@ -5160,6 +5193,8 @@ async function run() {
   await writeFile(path.join(apiAssetsRoot, "scenes", "Midnight-Library.mp4"), midnightLibrarySceneBytes);
   await writeFile(path.join(apiAssetsRoot, "scenes", "Rainy-Window.mp4"), sceneBytes);
   await writeFile(path.join(apiAssetsRoot, "scenes", "Warm-Fireplace.mp4"), warmSceneBytes);
+  await mkdir(path.join(apiAssetsRoot, "scenes", "audio"), { recursive: true });
+  await writeFile(path.join(apiAssetsRoot, "scenes", "audio", "scene-smoke.ogg"), sceneAudioBytes);
   await writeFile(
     path.join(apiAssetsRoot, "scenes", "_metadata", "scene_videos.json"),
     `${JSON.stringify({
@@ -5172,6 +5207,8 @@ async function run() {
           order: 20,
           roomModes: ["focus"],
           audioGainDb: 0,
+          audioFilename: "audio/scene-smoke.ogg",
+          audioSha256: sceneAudioSha256,
           default: false,
           sha256: midnightLibrarySceneSha256
         },
@@ -5182,6 +5219,8 @@ async function run() {
           order: 30,
           roomModes: ["calm"],
           audioGainDb: 11.1,
+          audioFilename: "audio/scene-smoke.ogg",
+          audioSha256: sceneAudioSha256,
           default: false,
           sha256: sceneSha256
         },
@@ -5192,6 +5231,8 @@ async function run() {
           order: 40,
           roomModes: ["calm"],
           audioGainDb: 1.3,
+          audioFilename: "audio/scene-smoke.ogg",
+          audioSha256: sceneAudioSha256,
           default: false,
           sha256: warmSceneSha256
         }
@@ -5236,6 +5277,13 @@ esac
 exit 0
 `);
   await chmod(fakeCurlPath, 0o755);
+  await writeFile(fakeWebModeLogPath, "");
+  await writeFile(fakeWebModeCommandPath, `#!/usr/bin/env node
+import { appendFileSync } from "node:fs";
+
+appendFileSync(${JSON.stringify(fakeWebModeLogPath)}, process.argv.slice(2).join("\\t") + "\\n");
+`);
+  await chmod(fakeWebModeCommandPath, 0o755);
   const providerServer = createProviderServer();
   await new Promise((resolve) => providerServer.listen(PROVIDER_PORT, HOST, resolve));
 
@@ -5253,12 +5301,14 @@ exit 0
       TIKPAL_USB_LIBRARY_MPD_PREFIX: "USB",
       TIKPAL_MUSIC_LIBRARY_STATE_PATH: musicLibraryStatePath,
       TIKPAL_ROOM_EXPERIENCE_STATE_PATH: roomExperienceStatePath,
+      TIKPAL_ROOM_SCENE_AUDIO_HANDOFF_STATE_PATH: roomSceneAudioHandoffStatePath,
       TIKPAL_AUDIO_SOURCE_MEMORY_STATE_PATH: audioSourceMemoryStatePath,
       TIKPAL_UI_PREFERENCES_STATE_PATH: uiPreferencesStatePath,
       TIKPAL_MPD_PURE_PATH: "resampled",
       TIKPAL_MPD_PURE_TARGET_RATE: "48000",
       TIKPAL_WEB_MODE_SETTINGS_PATH: webModeSettingsPath,
       TIKPAL_WEB_MODE_STATE_PATH: webModeStatePath,
+      TIKPAL_WEB_MODE_COMMAND: `${process.execPath} ${fakeWebModeCommandPath}`,
       TIKPAL_NAS_SOURCES_STATE_PATH: nasSourcesStatePath,
       TIKPAL_NAS_CREDENTIALS_DIR: nasCredentialsDir,
       TIKPAL_NAS_DISCOVERY_HINTS: "//192.168.10.103:1445/TikpalNAS",
@@ -5774,7 +5824,10 @@ exit 0
 
     const sceneContext = await request("/api/v1/scene/context?timeZone=Europe/London");
     assert(sceneContext.response.ok, "scene context should return 200");
-    assert(sceneContext.body.timeZone === "Asia/Shanghai", "scene context should prefer IP timezone over a conflicting requested timezone");
+    assert(
+      sceneContext.body.timeZone === "Asia/Shanghai",
+      `scene context should prefer IP timezone over a conflicting requested timezone, got ${JSON.stringify(sceneContext.body)}`
+    );
     assert(sceneContext.body.locationLabel === "Shanghai", "scene context should expose IP-derived city");
     assert(sceneContext.body.countryCode === "CN", "scene context should expose IP-derived country code");
     assert(sceneContext.body.weather?.condition === "rainy", "scene context should expose IP-location weather");
@@ -5901,15 +5954,28 @@ exit 0
     assert(focusBeforeSceneSound.response.ok, "focus mode after scene memory check should return 200");
     assert(focusBeforeSceneSound.body.sceneVideoId === "midnight-library", "focus should keep its own scene after calm scene memory");
     assert(focusBeforeSceneSound.body.sceneSoundEnabled === false, "focus mode should still require manual Scene Sound enable");
+    const libraryBeforeScene = await request("/api/v1/audio/library?storage=local&limit=1");
+    const libraryTrackBeforeScene = libraryBeforeScene.body.tracks?.[0]?.path;
+    assert(libraryBeforeScene.response.ok && libraryTrackBeforeScene, "scene handoff smoke requires a concrete Library track");
+    const startedLibraryBeforeScene = await request("/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({ target: "mpd", localTrackPath: libraryTrackBeforeScene })
+    });
+    assert(startedLibraryBeforeScene.response.ok && startedLibraryBeforeScene.body.playback.state === "playing", "scene handoff smoke should start its selected Library track");
 
     const focusSceneSound = await request("/api/v1/experience/actions", {
       method: "POST",
-      body: JSON.stringify({ type: "set_scene_sound", sceneSoundEnabled: true, sceneVideoId: "rainy-window" })
+      body: JSON.stringify({ type: "set_scene", sceneSoundEnabled: true, sceneVideoId: "midnight-library" })
     });
-    assert(focusSceneSound.response.ok, "set_scene_sound should return 200");
-    assert(focusSceneSound.body.sceneSoundEnabled === true, "explicit scene sound should persist on");
+    assert(focusSceneSound.response.ok, "scene selection with sceneSoundEnabled should return 200");
+    assert(focusSceneSound.body.sceneSoundEnabled === true, "scene selection should persist Scene Sound on");
+    assert(focusSceneSound.body.sceneVideoId === "midnight-library", "scene selection should retain the chosen focus scene");
     const stateAfterSceneSound = await request("/api/v1/system/state");
-    assert(stateAfterSceneSound.body.audio.currentSource.id === "scene", "explicit scene sound should switch to Scene Sound");
+    assert(stateAfterSceneSound.body.audio.currentSource.id === "scene", "scene selection should switch to Scene Sound");
+    const librarySceneHandoff = JSON.parse(await readFile(roomSceneAudioHandoffStatePath, "utf8"));
+    assert(librarySceneHandoff.target === "mpd", "scene selection should save a dedicated Library handoff");
+    assert(librarySceneHandoff.localTrackPath === libraryTrackBeforeScene, "scene handoff should preserve the active Library track");
+    assert(librarySceneHandoff.wasPlaying === true, "scene handoff should preserve active Library playback");
     assert(stateAfterSceneSound.body.audio.sources.some((source) => source.id === "spotify" && source.armed === false), "scene sound should close spotify intake");
     assert(stateAfterSceneSound.body.audio.sources.some((source) => source.id === "bluetooth" && source.armed === false), "scene sound should close bluetooth intake");
     assert(stateAfterSceneSound.body.audio.sources.some((source) => source.id === "airplay" && source.armed === false), "scene sound should close airplay intake");
@@ -5925,7 +5991,10 @@ exit 0
     assert(hifiExperience.body.hifiEqPresetId === "flat", "hifi should keep the existing EQ preset");
     assert(hifiExperience.body.hifiVisualPresetId === "spectrum-bars", "hifi should keep the default visual preset");
     const stateAfterHifi = await request("/api/v1/system/state");
-    assert(stateAfterHifi.body.audio.currentSource.id === "mpd", "hifi should return from Scene Sound to MPD without selecting scene");
+    assert(stateAfterHifi.body.audio.currentSource.id === "mpd", "hifi should restore the dedicated Library handoff");
+    assert(stateAfterHifi.body.playback.state === "playing", "hifi should resume Library only when it was playing before Scene Sound");
+    const libraryHandoffConsumed = await readFile(roomSceneAudioHandoffStatePath, "utf8").then(() => false).catch(() => true);
+    assert(libraryHandoffConsumed, "hifi restore should consume the dedicated Library handoff");
 
     const hifiEq = await request("/api/v1/experience/actions", {
       method: "POST",
@@ -5979,6 +6048,11 @@ exit 0
     assert(nightExit.body.nightSchedule.active === false, "disabling night schedule should exit night mode");
     const stateAfterNight = await request("/api/v1/system/state");
     assert(stateAfterNight.body.system.display.brightnessPercent === stateAfterHifi.body.system.display.brightnessPercent, "auto night should restore the prior brightness when disabled");
+    const restoredDefaultLibrary = await request("/api/v1/audio/source", {
+      method: "POST",
+      body: JSON.stringify({ target: "mpd" })
+    });
+    assert(restoredDefaultLibrary.response.ok && restoredDefaultLibrary.body.playback.state === "playing", "lyrics smoke should restore the default mock Library track after the scene handoff");
 
     const initialLyrics = await waitForLyricsStatus(["ready"]);
     assert(initialLyrics.synced === true, "initial MPD track should resolve synced lyrics");
@@ -6395,6 +6469,7 @@ exit 0
     assert(rainyWindow?.order === 30, "background video catalog should expose scene manifest order");
     assert(JSON.stringify(rainyWindow?.roomModes) === JSON.stringify(["calm"]), "background video catalog should expose scene room modes");
     assert(rainyWindow?.audioGainDb === 11.1, "background video catalog should expose scene audio gain");
+    assert(rainyWindow?.audioSrc === "/assets/scenes/audio/scene-smoke.ogg", "background video catalog should expose scene audio URL");
     assert(backgroundVideos.body.catalogVersion, "background video catalog should expose a catalog version");
 
     const radios = await request("/api/v1/audio/radios?q=cliqhop&category=focus");
@@ -6672,13 +6747,20 @@ exit 0
     const stateAfterFocusWithAirplay = await request("/api/v1/system/state");
     assert(stateAfterFocusWithAirplay.body.audio.currentSource.id === "airplay", "focus mode from hifi should preserve AirPlay");
     assert(stateAfterFocusWithAirplay.body.playback.source === "airplay", "focus mode from hifi should not replace AirPlay with Scene Sound");
-    const hifiAfterFocusWithAirplay = await request("/api/v1/experience/actions", {
+    const airplayScene = await request("/api/v1/experience/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "set_scene", sceneVideoId: "midnight-library", sceneSoundEnabled: true })
+    });
+    assert(airplayScene.response.ok && airplayScene.body.sceneSoundEnabled === true, "scene selection should replace AirPlay with Scene Sound");
+    assert((await readFile(roomSceneAudioHandoffStatePath, "utf8").then(() => false).catch(() => true)), "scene selection should not save an external-source handoff");
+    const hifiAfterAirplayScene = await request("/api/v1/experience/actions", {
       method: "POST",
       body: JSON.stringify({ type: "set_mode", mode: "hifi" })
     });
-    assert(hifiAfterFocusWithAirplay.response.ok, "hifi mode after focus with AirPlay should return 200");
+    assert(hifiAfterAirplayScene.response.ok, "hifi mode after Scene Sound should return 200");
     const stateAfterHifiWithAirplay = await request("/api/v1/system/state");
-    assert(stateAfterHifiWithAirplay.body.audio.currentSource.id === "airplay", "hifi mode after focus should preserve AirPlay");
+    assert(stateAfterHifiWithAirplay.body.audio.currentSource.id === "scene", "hifi after an external-source scene should not reconnect AirPlay");
+    assert(stateAfterHifiWithAirplay.body.playback.state === "stopped", "hifi after an external-source scene should remain silent");
 
     const dlna = await request("/api/v1/audio/source", {
       method: "POST",
@@ -6710,29 +6792,52 @@ exit 0
     assert(radio.body.audio.sources.some((source) => source.id === "airplay" && source.armed === false), "radio switch should close airplay intake");
     assert(radio.body.audio.sources.some((source) => source.id === "upnp" && source.armed === false), "radio switch should close dlna intake");
 
-    const sceneAfterRadio = await request("/api/v1/audio/source", {
+    const calmBeforeRadioScene = await request("/api/v1/experience/actions", {
       method: "POST",
-      body: JSON.stringify({
-        target: "scene",
-        sceneVideoId: "rainy-window",
-        sceneVideoLabel: "Rainy Window",
-        sceneVideoSrc: "/assets/scenes/Rainy-Window.mp4"
-      })
+      body: JSON.stringify({ type: "set_mode", mode: "calm" })
     });
-    assert(sceneAfterRadio.response.ok, "scene source switch after Radio should return 200");
-    assert(sceneAfterRadio.body.audio.currentSource.id === "scene", "scene source switch after Radio should activate Scene Sound");
-    assert(sceneAfterRadio.body.audio.rememberedSource?.target === "radio", "scene source switch should preserve remembered Radio");
+    assert(calmBeforeRadioScene.response.ok && calmBeforeRadioScene.body.sceneSoundEnabled === false, "calm mode should preserve Radio before scene selection");
+    const pauseRadioBeforeScene = await request("/api/v1/playback/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "pause" })
+    });
+    assert(pauseRadioBeforeScene.response.ok && pauseRadioBeforeScene.body.playback.state === "paused", "Radio should pause before scene handoff");
+    const sceneAfterRadio = await request("/api/v1/experience/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "set_scene", sceneVideoId: "rainy-window", sceneSoundEnabled: true })
+    });
+    assert(sceneAfterRadio.response.ok, "scene selection after Radio should return 200");
+    assert(sceneAfterRadio.body.sceneSoundEnabled === true, "scene selection after Radio should activate Scene Sound");
+    const radioSceneHandoff = JSON.parse(await readFile(roomSceneAudioHandoffStatePath, "utf8"));
+    assert(radioSceneHandoff.target === "radio" && radioSceneHandoff.radioStationId === "radio-510", "scene selection should save the active Radio station");
+    assert(radioSceneHandoff.wasPlaying === false, "scene selection should preserve a paused Radio state");
+    const hifiAfterRadioScene = await request("/api/v1/experience/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "set_mode", mode: "hifi" })
+    });
+    assert(hifiAfterRadioScene.response.ok, "hifi should restore a paused Radio handoff");
+    const stateAfterHifiRadio = await request("/api/v1/system/state");
+    assert(stateAfterHifiRadio.body.audio.currentSource.id === "radio" && stateAfterHifiRadio.body.audio.currentSource.radioStationId === "radio-510", "hifi should restore the original Radio station");
+    assert(stateAfterHifiRadio.body.playback.state === "paused", "hifi should keep a previously paused Radio station paused");
+    const calmBeforeManualSceneStop = await request("/api/v1/experience/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "set_mode", mode: "calm" })
+    });
+    assert(calmBeforeManualSceneStop.response.ok, "calm mode should prepare the manual Scene Sound stop check");
+    const manualSceneStart = await request("/api/v1/experience/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "set_scene", sceneVideoId: "rainy-window", sceneSoundEnabled: true })
+    });
+    assert(manualSceneStart.response.ok, "manual Scene Sound stop check should start Scene Sound");
     const sceneSoundOffAfterRadio = await request("/api/v1/experience/actions", {
       method: "POST",
       body: JSON.stringify({ type: "set_scene_sound", sceneSoundEnabled: false })
     });
-    assert(sceneSoundOffAfterRadio.response.ok, "turning scene sound off after Radio should return 200");
-    assert(sceneSoundOffAfterRadio.body.sceneSoundEnabled === false, "turning scene sound off after Radio should persist off");
+    assert(sceneSoundOffAfterRadio.response.ok && sceneSoundOffAfterRadio.body.sceneSoundEnabled === false, "turning Scene Sound off should persist off");
     const stateAfterSceneSoundOffRadio = await request("/api/v1/system/state");
-    assert(stateAfterSceneSoundOffRadio.body.audio.currentSource.id === "radio", "turning scene sound off after Radio should restore Radio");
-    assert(stateAfterSceneSoundOffRadio.body.audio.currentSource.radioStationId === "radio-510", "turning scene sound off after Radio should restore the remembered station");
-    assert(stateAfterSceneSoundOffRadio.body.playback.source === "radio", "turning scene sound off after Radio should expose Radio playback");
-    assert(stateAfterSceneSoundOffRadio.body.playback.state === "playing", "turning scene sound off after Radio should not leave playback stopped");
+    assert(stateAfterSceneSoundOffRadio.body.audio.currentSource.id === "scene", "turning Scene Sound off should not restore Radio outside Hi-Fi");
+    assert(stateAfterSceneSoundOffRadio.body.playback.state === "stopped", "turning Scene Sound off should leave the room silent");
+    assert((await readFile(roomSceneAudioHandoffStatePath, "utf8").then(() => false).catch(() => true)), "manual Scene Sound stop should clear its handoff");
 
     const mpd = await request("/api/v1/audio/source", {
       method: "POST",

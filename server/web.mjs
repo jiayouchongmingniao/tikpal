@@ -30,6 +30,7 @@ const MIME_TYPES = new Map([
   [".jpg", "image/jpeg"],
   [".jpeg", "image/jpeg"],
   [".mp4", "video/mp4"],
+  [".ogg", "audio/ogg"],
   [".webp", "image/webp"],
   [".ico", "image/x-icon"],
   [".woff", "font/woff"],

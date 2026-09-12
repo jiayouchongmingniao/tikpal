@@ -3035,14 +3035,14 @@ try {
           && !labels.includes('Mute scene sound')
           && !labels.includes('Previous track')
           && !labels.includes('Next track')
-          && !labels.includes('Play')
-          && !labels.includes('Pause')
+          && (labels.includes('Play') || labels.includes('Pause'))
           && !labels.includes('Favorite')
           && !labels.includes('Remove favorite')
+          && transport.querySelector('[data-ambient-scene-pause].ambient-transport-play')
           && !transport.querySelector('.ambient-play-mode');
       })()
     `,
-    "ambient non-Hi-Fi transport keeps only scene gallery plus source selection"
+    "ambient non-Hi-Fi transport keeps its direct themed play control plus scene and source selection"
   );
   await evaluate(
     client,
@@ -3059,6 +3059,7 @@ try {
                   filename: 'Interaction-Scene.mp4',
                   label: 'Interaction Scene',
                   src: ${JSON.stringify(interactionSceneVideoSrc)},
+                  audioSrc: 'data:audio/ogg;base64,T2dnUw==',
                   roomModes: ['calm'],
                   audioGainDb: 0,
                   source: 'scene'
@@ -3068,6 +3069,7 @@ try {
                   filename: 'Rainy-Window.mp4',
                   label: 'Rainy Window',
                   src: ${JSON.stringify(`${interactionSceneVideoSrc}?ota=rainy`)},
+                  audioSrc: 'data:audio/ogg;base64,T2dnUw==',
                   order: 30,
                   roomModes: ['calm'],
                   audioGainDb: 11.1,
@@ -3078,6 +3080,7 @@ try {
 	                  filename: 'Focus-Smoke.mp4',
 	                  label: 'Focus Smoke',
 	                  src: ${JSON.stringify(`${interactionSceneVideoSrc}?ota=focus`)},
+	                  audioSrc: 'data:audio/ogg;base64,T2dnUw==',
 	                  order: 40,
 	                  roomModes: ['focus'],
 	                  audioGainDb: -6.2,
@@ -3088,6 +3091,7 @@ try {
 	                  filename: 'Sleep-Smoke.mp4',
 	                  label: 'Sleep Smoke',
 	                  src: ${JSON.stringify(`${interactionSceneVideoSrc}?ota=sleep`)},
+	                  audioSrc: 'data:audio/ogg;base64,T2dnUw==',
 	                  order: 50,
 	                  roomModes: ['sleep'],
 	                  audioGainDb: -8.4,
@@ -3196,9 +3200,18 @@ try {
     `
       document.querySelector('.ambient-screen')?.getAttribute('data-room-mode') === 'focus'
       && document.querySelector('[data-ambient-scene-gallery]') === null
-      && fetch('/api/v1/experience/state').then((response) => response.json()).then((experience) => experience.mode === 'focus' && experience.sceneVideoId === 'focus-smoke-scene')
+      && Promise.all([
+        fetch('/api/v1/experience/state').then((response) => response.json()),
+        fetch('/api/v1/system/state').then((response) => response.json())
+      ]).then(([experience, state]) => (
+        experience.mode === 'focus'
+        && experience.sceneVideoId === 'focus-smoke-scene'
+        && experience.sceneSoundEnabled === true
+        && state.playback.source === 'scene'
+        && state.playback.state === 'playing'
+      ))
     `,
-    "scene gallery applies a cross-mode scene and synchronizes the Room Mode"
+    "scene gallery applies a cross-mode scene, synchronizes Room Mode, and starts its environment audio"
   );
   await evaluate(client, "document.querySelector('[data-ambient-scene-gallery-toggle]')?.click(); true");
   await expectEventually(
@@ -3692,6 +3705,23 @@ try {
     "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => state.playback.source === 'scene' && state.playback.state === 'playing')",
     "scene sound switches API source to scene"
   );
+  await expect(
+    client,
+    "document.querySelector('[data-ambient-scene-pause].ambient-transport-play')?.getAttribute('aria-label') === 'Pause'",
+    "scene transport exposes the shared themed Pause control while environment audio is playing"
+  );
+  await evaluate(client, "document.querySelector('[data-ambient-scene-pause]')?.click(); true");
+  await expectEventuallyEvaluate(
+    client,
+    "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => state.playback.source === 'scene' && state.playback.state === 'stopped') && document.querySelector('[data-ambient-scene-pause]')?.getAttribute('aria-label') === 'Play'",
+    "scene transport pause changes its control to Play"
+  );
+  await evaluate(client, "document.querySelector('[data-ambient-scene-pause]')?.click(); true");
+  await expectEventuallyEvaluate(
+    client,
+    "fetch('/api/v1/system/state').then((response) => response.json()).then((state) => state.playback.source === 'scene' && state.playback.state === 'playing') && document.querySelector('[data-ambient-scene-pause]')?.getAttribute('aria-label') === 'Pause'",
+    "scene transport resumes environment audio from its Play control"
+  );
   await expectEventually(
     client,
     `
@@ -3909,8 +3939,9 @@ try {
           && activeVideo.getAttribute('data-flame-slot-index') !== window.__tikpalLoopStartSlot
           && activeVideo.getAttribute('data-flame-audio-slot') === 'active'
           && parkedVideo.getAttribute('data-flame-audio-slot') === 'standby'
-          && activeVideo.muted === false
+          && activeVideo.muted === true
           && parkedVideo.muted === true
+          && document.querySelector('audio[data-scene-audio-transport]') instanceof HTMLAudioElement
           && activeVideo.loop === false
           && parkedVideo.loop === false
           && activeVideo.currentTime < 0.8
@@ -3921,7 +3952,7 @@ try {
           && getComputedStyle(document.querySelector('.flame-video-fade')).opacity === '0';
       })()
     `,
-    "dual scene loop completes with one audible active slot and one muted parked slot"
+    "dual scene loop completes with both MP4 slots muted and one independent scene transport"
   );
   await expectEventually(
     client,
@@ -3930,18 +3961,20 @@ try {
         const videos = [...document.querySelectorAll('.flame-video[data-flame-layer="active"]')];
         const activeVideos = videos.filter((video) => video.getAttribute('data-flame-audio-slot') === 'active');
         const standbyVideos = videos.filter((video) => video.getAttribute('data-flame-audio-slot') === 'standby');
-        const activeVideo = activeVideos[0];
+        const sceneAudio = document.querySelector('audio[data-scene-audio-transport]');
         return videos.length === 2
           && activeVideos.length === 1
           && standbyVideos.length === 1
-          && activeVideo instanceof HTMLVideoElement
-          && activeVideo.paused === false
-          && activeVideo.muted === false
+          && activeVideos[0] instanceof HTMLVideoElement
+          && activeVideos[0].paused === false
+          && activeVideos[0].muted === true
           && standbyVideos.every((video) => video instanceof HTMLVideoElement && video.muted === true)
-          && videos.every((video) => video.getAttribute('data-scene-audio-fading') === null);
+          && videos.every((video) => video.getAttribute('data-scene-audio-fading') === null)
+          && sceneAudio instanceof HTMLAudioElement
+          && sceneAudio.getAttribute('src')?.startsWith('data:audio/ogg');
       })()
     `,
-    "scene loop keeps audio on one active layer only"
+    "scene loop keeps MP4 audio muted and selects the independent scene transport"
   );
 
   await navigate(client, `${APP_URL}?mode=quickMenu`);

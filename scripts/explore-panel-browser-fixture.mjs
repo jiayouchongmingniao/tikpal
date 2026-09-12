@@ -11,8 +11,8 @@ try {
 for(const locale of ['en','zh-CN','de','it','ko','ja','es']){
  const context=await browser.newContext({viewport:{width:640,height:720}});const page=await context.newPage();
  const errors=[];page.on('pageerror',e=>errors.push(e.message));
- let mode='expanded',failed=false,supported=true,failClose=false;const actions=[];
- const state=()=>({activeProvider:'netease_music',openingProvider:null,activationPhase:'ready',panelMode:mode,panelLayoutSupported:supported,panelSessionId:'s1',panelXSessionGeneration:'x1',providers:[],residentProviders:{netease_music:{status:'active'}},settings:{providerTextScale:1.1,proxyEnabled:false},lastError:null,updatedAt:new Date().toISOString()});
+ let mode='expanded',failed=false,supported=true,failClose=false,slowOpen=false,resolveSlowOpen=null;const actions=[];
+ const state=()=>({activeProvider:'netease_music',openingProvider:slowOpen?'spotify':null,activationPhase:slowOpen?'pending':'ready',panelMode:mode,panelLayoutSupported:supported,panelSessionId:'s1',panelXSessionGeneration:'x1',providers:[],residentProviders:{netease_music:{status:'active'},spotify:{status:slowOpen?'opening':'ready'}},settings:{providerTextScale:1.1,proxyEnabled:false},lastError:null,updatedAt:new Date().toISOString()});
  await page.addInitScript(locale=>localStorage.setItem('tikpal.locale',locale),locale);
  await page.route('**/api/v1/**',async route=>{
   const u=new URL(route.request().url());let body={};
@@ -28,8 +28,10 @@ for(const locale of ['en','zh-CN','de','it','ko','ja','es']){
    }
    if(action.type==='close') {
     if(failClose){await new Promise(r=>setTimeout(r,1100));await route.fulfill({status:500,json:{error:'CLOSE_AUDIO_TIMEOUT'}});return;}
+    if(slowOpen){slowOpen=false;resolveSlowOpen?.();resolveSlowOpen=null;}
     await route.fulfill({json:{...state(),activeProvider:null}});return;
    }
+   if(action.type==='open'&&slowOpen){await new Promise(resolve=>{resolveSlowOpen=resolve;});}
    body=state();
   }
   await route.fulfill({json:body});
@@ -80,6 +82,17 @@ for(const locale of ['en','zh-CN','de','it','ko','ja','es']){
  }
  await page.locator('[data-panel-exit]').click();
  for(let i=0;i<80&&actions.at(-1)?.type!=='close';i++)await page.waitForTimeout(50);assert.equal(actions.at(-1).type,'close');assert.deepEqual(errors,[]);
+ if(locale==='en') {
+  await page.locator('[data-panel-expand]').click();await page.locator('[data-web-mode-provider="spotify"]').waitFor();
+  slowOpen=true;const opensBefore=actions.filter(a=>a.type==='open').length,closesBefore=actions.filter(a=>a.type==='close').length;
+  await page.locator('[data-web-mode-provider="spotify"]').click();
+  const exitDuringOpen=page.locator('[data-web-mode-top-back]');await exitDuringOpen.waitFor({state:'visible'});assert.ok(await exitDuringOpen.isEnabled(),'exit stays enabled while opening');
+  await exitDuringOpen.click();
+  for(let i=0;i<40&&actions.filter(a=>a.type==='close').length===closesBefore;i++)await page.waitForTimeout(25);
+  assert.equal(actions.filter(a=>a.type==='open').length,opensBefore+1);
+  assert.equal(actions.filter(a=>a.type==='close').length,closesBefore+1,'exit cancels an in-flight provider open');
+  await page.locator('[data-web-mode-top-back]:enabled').waitFor();
+ }
  supported=false;mode='expanded';await page.reload();await page.locator('.web-mode-panel-header').waitFor();
  assert.equal(await collapse.count(),0);assert.equal((await page.locator('.web-mode-panel-header').boundingBox()).x,16);
  console.log('PASS panel UI',locale);await context.close();

@@ -111,6 +111,7 @@ export function WebModeSidePanel() {
   const [closeFailed, setCloseFailed] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const actionLockRef = useRef(false);
+  const openOperationRef = useRef(0);
   const optimisticProviderRef = useRef<WebModeProviderId | null>(null);
   const [exploreOpening, setExploreOpening] = useState(false);
   const activeProvider = webMode?.activeProvider ?? null;
@@ -132,6 +133,9 @@ export function WebModeSidePanel() {
   const effectiveActiveProvider = activationPending
     ? (lastNonPendingActiveProvider ?? null)
     : (activeProvider && activeProvider !== failedProvider ? activeProvider : null);
+  const effectiveActiveProviderStatus = effectiveActiveProvider
+    ? webMode?.residentProviders?.[effectiveActiveProvider]?.status
+    : null;
   const providers = useMemo<WebModeProviderSummary[]>(() => {
     const byId = new Map(webMode?.providers.map((provider) => [provider.id, provider]) ?? []);
     return providerOrder.map((id) => {
@@ -154,6 +158,13 @@ export function WebModeSidePanel() {
     ? (providerLabels[activationEnterProvider] ?? "Web player")
     : activeProviderLabel;
   const displayProviderLabel = displayedOpeningProvider ? providerLabels[displayedOpeningProvider] : failedProvider ? providerLabels[failedProvider] : resolvedActiveLabel;
+  const activeProviderDetail = effectiveActiveProviderStatus === "region_unavailable"
+    ? `${t("common.regionUnavailable")}. ${t("explore.chooseBelow")}`
+    : effectiveActiveProviderStatus === "check_setup"
+      ? `${t("common.checkSetup")}. ${t("explore.chooseBelow")}`
+      : effectiveActiveProviderStatus === "check_proxy"
+        ? t("explore.proxyRequired")
+        : proxyEnabled ? t("explore.proxyActive") : t("explore.directConnection");
   const [displayedActiveLabel, setDisplayedActiveLabel] = useState(displayProviderLabel);
   const [activeLabelVisible, setActiveLabelVisible] = useState(true);
   const activeLabelTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -320,24 +331,31 @@ export function WebModeSidePanel() {
   async function openProvider(providerId: WebModeProviderId) {
     if (actionLockRef.current || pendingProvider || pendingAction) return;
     if (activeProvider === providerId) return;
+    const operation = openOperationRef.current + 1;
+    openOperationRef.current = operation;
+    const isCurrentOperation = () => openOperationRef.current === operation;
     actionLockRef.current = true;
     setPendingProvider(providerId);
     optimisticProviderRef.current = providerId;
     setError(null);
     try {
       const next = await sendWebModeAction({ type: "open", provider: providerId });
+      if (!isCurrentOperation()) return;
       applyWebModeState(next);
     } catch (nextError) {
+      if (!isCurrentOperation()) return;
       const fallback = findNextAvailableProvider(providerId);
       if (fallback) {
         try {
-         setPendingProvider(fallback);
+          setPendingProvider(fallback);
           optimisticProviderRef.current = fallback;
-         const next = await sendWebModeAction({ type: "open", provider: fallback });
+          const next = await sendWebModeAction({ type: "open", provider: fallback });
+          if (!isCurrentOperation()) return;
           applyWebModeState(next);
           setError(null);
-       } catch (fallbackError) {
-         setPendingProvider(null);
+        } catch (fallbackError) {
+          if (!isCurrentOperation()) return;
+          setPendingProvider(null);
           optimisticProviderRef.current = null;
          setError(fallbackError instanceof Error ? fallbackError.message : "Provider switch failed");
        }
@@ -345,10 +363,12 @@ export function WebModeSidePanel() {
        setPendingProvider(null);
         optimisticProviderRef.current = null;
        setError(nextError instanceof Error ? nextError.message : "Provider switch failed");
-     }
+      }
     } finally {
-      await refresh().catch(() => undefined);
-      actionLockRef.current = false;
+      if (isCurrentOperation()) {
+        await refresh().catch(() => undefined);
+        actionLockRef.current = false;
+      }
     }
   }
 
@@ -384,7 +404,13 @@ export function WebModeSidePanel() {
   }
 
   async function closeWebMode() {
-    if (closeRequestRef.current || (pendingActionRef.current !== "panel" && (actionLockRef.current || pendingAction || pendingProvider))) return;
+    const cancellingOpen = Boolean(pendingProvider || displayedOpeningProvider);
+    if (closeRequestRef.current || pendingAction === "close" || (!cancellingOpen && pendingActionRef.current !== "panel" && (actionLockRef.current || pendingAction))) return;
+    if (cancellingOpen) {
+      openOperationRef.current += 1;
+      setPendingProvider(null);
+      optimisticProviderRef.current = null;
+    }
     const requestId = createExploreCloseRequestId();
     closeRequestRef.current = requestId;
     actionLockRef.current = true;
@@ -468,7 +494,7 @@ export function WebModeSidePanel() {
         {panelError && <span className="web-mode-rail-error" role="status" title={t("explore.panelChangeFailed")} aria-label={t("explore.panelChangeFailed")}>!</span>}
         <button type="button" className="web-mode-rail-exit" data-panel-exit
           aria-label={t("explore.exit")} title={t("explore.exit")}
-          disabled={pendingAction === "close" || Boolean(pendingProvider)}
+          disabled={pendingAction === "close"}
           onClick={() => void closeWebMode()}><LogOut size={24} /></button>
       </main>
     );
@@ -508,7 +534,7 @@ export function WebModeSidePanel() {
           <button
             className="web-mode-top-back"
             type="button"
-            disabled={Boolean((pendingAction && pendingAction !== "panel") || pendingProvider)}
+            disabled={Boolean(pendingAction && pendingAction !== "panel")}
             data-web-mode-top-back
             aria-label={t("explore.exit")}
             onClick={() => void closeWebMode()}
@@ -524,7 +550,7 @@ export function WebModeSidePanel() {
         <div>
           <span>{t("explore.pickLeft")}</span>
           <strong>{displayProviderLabel}</strong>
-          <p>{displayedOpeningProvider ? t("explore.openLeft") : failedProvider ? t("explore.couldNotOpen") : effectiveActiveProvider ? (webMode?.residentProviders?.[effectiveActiveProvider]?.status === "check_proxy" ? t("explore.proxyRequired") : proxyEnabled ? t("explore.proxyActive") : t("explore.directConnection")) : t("explore.chooseBelow")}</p>
+          <p>{displayedOpeningProvider ? t("explore.openLeft") : failedProvider ? t("explore.couldNotOpen") : effectiveActiveProvider ? activeProviderDetail : t("explore.chooseBelow")}</p>
         </div>
       </section>
 
@@ -543,7 +569,7 @@ export function WebModeSidePanel() {
           return (
             <button
               key={provider.id}
-              className={`web-mode-provider ${active && !proxyUnavailable ? "is-active" : ""} ${current ? "is-current" : ""} ${connecting || warming ? "is-connecting" : ""} ${failed || proxyUnavailable || residentStatus === "check_setup" ? "is-failed" : ""} ${proxyUnavailable ? "is-proxy-unavailable" : ""}`}
+              className={`web-mode-provider ${active && !proxyUnavailable ? "is-active" : ""} ${current ? "is-current" : ""} ${connecting || warming ? "is-connecting" : ""} ${failed || proxyUnavailable || residentStatus === "check_setup" || residentStatus === "region_unavailable" ? "is-failed" : ""} ${proxyUnavailable ? "is-proxy-unavailable" : ""}`}
               type="button"
               disabled={Boolean(pendingAction || pendingProvider || (proxyUnavailable && !proxyEnabled))}
               style={{ "--provider-tone": providerTones[provider.id] } as CSSProperties}

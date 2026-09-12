@@ -3848,7 +3848,7 @@ sync_runtime_provider_pool_process_statuses ""
   );
   assert(providerGuardSource.includes('readFileSync(') && providerGuardSource.includes('provider-audio-gate.js') && providerGuardSource.includes("__tikpalProviderAudioGate"), "Explore provider guard should inject the shared resident provider audio gate");
   assert(providerAudioGateSource.includes("tikpal-provider-audio-muted") && extensionBackground.includes("provider-audio-muted"), "Explore provider gate should ask the extension to tab-mute inactive providers");
-  assert(providerAudioGateSource.includes("setAudioContextsActive(nextActive)") && providerAudioGateSource.includes("element.muted = false"), "Active provider audio polling should keep WebAudio contexts alive and unmute only on activation");
+  assert(providerAudioGateSource.includes("setAudioContextsActive(nextActive)") && providerAudioGateSource.includes("element.muted = sunoVideo(element) ?"), "Active provider audio polling should keep WebAudio contexts alive and restore media mute state only on activation");
   const providerGuardOnceStart = providerGuardSource.indexOf("async function guardOnce() {");
   const providerGuardOnceEnd = providerGuardSource.indexOf("\n}\n\nif (process.argv.includes", providerGuardOnceStart);
   const providerGuardOnceBody = providerGuardSource.slice(providerGuardOnceStart, providerGuardOnceEnd);
@@ -3875,7 +3875,7 @@ sync_runtime_provider_pool_process_statuses ""
   assert(providerGuardSource.includes("__tikpalQqAudioPrime") && providerGuardSource.includes("persistent: true"), "QQ Music audio prime should keep ALSA alive while QQ is playing");
   assert(!providerGuardSource.includes("setTimeout(resolve, 180)"), "QQ Music audio prime should not fall back to a short pulse");
   assert(providerAudioGateSource.includes("previous.wasPlaying = previous.wasPlaying ||") && providerAudioGateSource.includes("rememberPlayingMedia"), "Inactive provider audio polling should not forget playback that must resume");
-  assert(providerAudioGateSource.includes("element.muted = false"), "Returning to a resident provider should unmute media elements");
+  assert(providerAudioGateSource.includes("element.muted = sunoVideo(element) ? (previous.muted ?? element.muted) : false"), "Returning to a resident provider should restore media mute state");
   assert(
       webModeScript.includes("set_provider_media_active_via_cdp()") &&
       webModeScript.includes("activate_target_provider_audio_gate()") &&

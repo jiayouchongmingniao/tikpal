@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   fetchTikpalState,
   sendPlaybackAction as postPlaybackAction,
@@ -23,6 +23,7 @@ const RADIO_PENDING_REFRESH_MS = 700;
 
 export function useTikpalState() {
   const [state, setState] = useState<TikpalState>(fallbackTikpalState);
+  const stateRef = useRef(state);
   const [status, setStatus] = useState<TikpalDataStatus>({
     source: "fallback",
     pending: false,
@@ -31,6 +32,10 @@ export function useTikpalState() {
     pendingAction: null,
     pendingSinceMs: null
   });
+
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
     try {
@@ -121,13 +126,26 @@ export function useTikpalState() {
 
   const sendSourceSwitch = useCallback(async (target: SourceSwitchTarget, radioStationId?: string, localTrackPath?: string, sceneVideo?: BackgroundVideoSummary) => {
     const pendingSinceMs = Date.now();
+    const confirmedOutputVolume = stateRef.current.system.volume;
     setStatus((current) => ({ ...current, pending: true, pendingAction: `source:${target}`, pendingSinceMs, error: null }));
     try {
       const nextState = await postSourceSwitch(target, radioStationId, localTrackPath, sceneVideo);
+      // MPD reports its own mixer level while a source handoff settles. Keep
+      // the already-confirmed output level until the normal state refresh can
+      // verify any device-side output change.
+      const stateWithConfirmedOutputVolume = (target === "mpd" || target === "radio")
+        ? {
+            ...nextState,
+            system: {
+              ...nextState.system,
+              volume: confirmedOutputVolume
+            }
+          }
+        : nextState;
       const lastSuccessAtMs = Date.now();
-      setState(nextState);
+      setState(stateWithConfirmedOutputVolume);
       setStatus({ source: "api", pending: false, error: null, lastSuccessAtMs, pendingAction: null, pendingSinceMs: null });
-      return nextState;
+      return stateWithConfirmedOutputVolume;
     } catch (error) {
       const message = error instanceof Error ? error.message : "Source switch failed";
       setStatus((current) => ({

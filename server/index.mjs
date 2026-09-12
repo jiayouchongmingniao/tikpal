@@ -323,6 +323,7 @@ const LOCAL_PLAYLIST_INDEX_PATH = resolve(LOCAL_LIBRARY_ROOT, "_metadata", "play
 const LOCAL_PLAYLIST_ROOT = resolve(LOCAL_LIBRARY_ROOT, "_playlists");
 const MUSIC_LIBRARY_STATE_PATH = resolve(process.env.TIKPAL_MUSIC_LIBRARY_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "music-library-state.json"));
 const ROOM_EXPERIENCE_STATE_PATH = resolve(process.env.TIKPAL_ROOM_EXPERIENCE_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "room-experience-state.json"));
+const ROOM_SCENE_AUDIO_HANDOFF_STATE_PATH = resolve(process.env.TIKPAL_ROOM_SCENE_AUDIO_HANDOFF_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "room-scene-audio-handoff.json"));
 const AUDIO_VOLUME_STATE_PATH = resolve(process.env.TIKPAL_AUDIO_VOLUME_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "audio-volume-state.json"));
 const AUDIO_SOURCE_MEMORY_STATE_PATH = resolve(process.env.TIKPAL_AUDIO_SOURCE_MEMORY_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "audio-source-memory.json"));
 const PLAYBACK_MODE_STATE_PATH = resolve(process.env.TIKPAL_PLAYBACK_MODE_STATE_PATH ?? resolve(process.cwd(), ".tikpal", "playback-mode-state.json"));
@@ -418,6 +419,7 @@ const AMBIENT_BACKGROUND_VIDEO_EXTENSIONS = new Set([".mp4"]);
 const SCENE_THUMBNAIL_EXTENSIONS = new Set([".avif", ".jpg", ".jpeg", ".png", ".webp"]);
 const SCENE_AUDIO_GAIN_MIN_DB = -24;
 const SCENE_AUDIO_GAIN_MAX_DB = 12;
+const SCENE_AUDIO_EXTENSIONS = new Set([".ogg"]);
 const PREFERRED_AMBIENT_BACKGROUND_VIDEOS = [];
 const DEFAULT_SCENE_VIDEO = {
   id: "scene-empty",
@@ -435,6 +437,7 @@ const NAS_STATUS_VALUES = new Set(["ready", "offline", "checking", "check_setup"
 const NAS_SMB_VERSIONS = ["3.0", "2.1", "2.0"];
 const REMOTE_SOURCE_TARGETS = new Set(["mpd", "radio", "spotify", "bluetooth", "airplay", "upnp"]);
 const REMEMBERED_AUDIO_SOURCE_TARGETS = new Set(["mpd", "radio", "spotify", "bluetooth", "airplay", "upnp"]);
+const ROOM_SCENE_AUDIO_HANDOFF_TARGETS = new Set(["mpd", "radio"]);
 const COMMAND_HANDOFF_SOURCE_TARGETS = new Set(["spotify", "bluetooth", "airplay", "upnp"]);
 const WEB_MODE_PROVIDERS = [
   { id: "suno", label: "Suno", url: "https://suno.com/explore", experimental: false },
@@ -2048,7 +2051,7 @@ function getPlayback() {
   if (mockActiveSource === "radio") {
     const activeRadio = getMockRadioStations().find((station) => station.id === mockActiveRadioStationId) ?? getMockRadioStations()[0];
     return {
-      state: "playing",
+      state: playbackState === "stopped" ? "paused" : playbackState,
       source: "radio",
       albumArtUrl: activeRadio?.logoUrl ?? null,
       title: activeRadio?.label ?? RADIO_LABEL,
@@ -5855,6 +5858,52 @@ function buildRememberedSourceSwitchAction() {
   };
 }
 
+function normalizeRoomSceneAudioHandoff(raw = {}) {
+  const target = String(raw?.target ?? "").trim().toLowerCase();
+  if (!ROOM_SCENE_AUDIO_HANDOFF_TARGETS.has(target)) return null;
+
+  const localTrackPath = normalizeLocalLibraryStateTrackPath(raw.localTrackPath);
+  const radioStationId = normalizeRememberedRadioStationId(raw.radioStationId);
+  if (target === "mpd" && !localTrackPath) return null;
+  if (target === "radio" && !radioStationId) return null;
+
+  return {
+    target,
+    ...(localTrackPath ? { localTrackPath } : {}),
+    ...(radioStationId ? { radioStationId } : {}),
+    wasPlaying: raw?.wasPlaying === true,
+    updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : null
+  };
+}
+
+async function readRoomSceneAudioHandoff() {
+  try {
+    return normalizeRoomSceneAudioHandoff(JSON.parse(await readFile(ROOM_SCENE_AUDIO_HANDOFF_STATE_PATH, "utf8")));
+  } catch {
+    return null;
+  }
+}
+
+async function writeRoomSceneAudioHandoff(handoff) {
+  const normalized = normalizeRoomSceneAudioHandoff({
+    ...handoff,
+    updatedAt: new Date().toISOString()
+  });
+  if (!normalized) return null;
+
+  await mkdir(dirname(ROOM_SCENE_AUDIO_HANDOFF_STATE_PATH), { recursive: true });
+  await writeFile(ROOM_SCENE_AUDIO_HANDOFF_STATE_PATH, `${JSON.stringify(normalized, null, 2)}\n`);
+  return normalized;
+}
+
+async function clearRoomSceneAudioHandoff() {
+  try {
+    await unlink(ROOM_SCENE_AUDIO_HANDOFF_STATE_PATH);
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+}
+
 async function resolveExistingRadioStationId(radioStationId) {
   const safeRadioStationId = normalizeRememberedRadioStationId(radioStationId);
   if (!safeRadioStationId) return null;
@@ -5876,6 +5925,78 @@ async function resolveCurrentOrRememberedRadioStationId(radioStationId = null) {
     ?? await resolveExistingRadioStationId(currentRadioStationId)
     ?? await resolveExistingRadioStationId(mockRadioStationId)
     ?? await resolveExistingRadioStationId(getCachedRememberedRadioStationId());
+}
+
+async function captureRoomSceneAudioHandoff() {
+  const webMode = await readWebModeRuntimeState().catch(() => null);
+  if (webMode?.activeProvider || webMode?.openingProvider || webMode?.closeRequestId) {
+    // Explore owns an external browser audio path. It must be closed for scene
+    // sound, but never becomes a scene-to-Hi-Fi restore candidate.
+    await clearRoomSceneAudioHandoff();
+    return null;
+  }
+
+  const snapshot = await collectTikpalStateSnapshot({
+    includeSlowRuntimeStatus: false,
+    includeSourceRuntimeStatus: true,
+    includeOutputVolumeStatus: false,
+    skipExperienceReconcile: true
+  });
+  const currentSource = snapshot.audio?.currentSource;
+  const sourceId = String(currentSource?.id ?? "");
+  if (sourceId === "scene") return await readRoomSceneAudioHandoff();
+
+  if (sourceId === "mpd") {
+    const localTrackPath = await resolveCurrentLocalLibraryTrackPath();
+    if (!localTrackPath) {
+      await clearRoomSceneAudioHandoff();
+      return null;
+    }
+    return await writeRoomSceneAudioHandoff({
+      target: "mpd",
+      localTrackPath,
+      wasPlaying: snapshot.playback?.state === "playing"
+    });
+  }
+
+  if (sourceId === "radio") {
+    const radioStationId = await resolveExistingRadioStationId(currentSource?.radioStationId);
+    if (!radioStationId) {
+      await clearRoomSceneAudioHandoff();
+      return null;
+    }
+    return await writeRoomSceneAudioHandoff({
+      target: "radio",
+      radioStationId,
+      wasPlaying: snapshot.playback?.state === "playing"
+    });
+  }
+
+  await clearRoomSceneAudioHandoff();
+  return null;
+}
+
+async function buildRoomSceneAudioRestoreAction() {
+  const handoff = await readRoomSceneAudioHandoff();
+  if (!handoff) return null;
+
+  if (handoff.target === "mpd") {
+    const localTrackPath = await resolveExistingLocalLibraryTrackPath(handoff.localTrackPath);
+    if (!localTrackPath) return null;
+    return {
+      target: "mpd",
+      localTrackPath,
+      wasPlaying: handoff.wasPlaying
+    };
+  }
+
+  const radioStationId = await resolveExistingRadioStationId(handoff.radioStationId);
+  if (!radioStationId) return null;
+  return {
+    target: "radio",
+    radioStationId,
+    wasPlaying: handoff.wasPlaying
+  };
 }
 
 async function rememberAudioSourceSwitch(action, { allowMpcRadio = false } = {}) {
@@ -5981,7 +6102,7 @@ async function applyBrightnessSafely(percent) {
   }
 }
 
-async function stopSceneSourceSafely() {
+async function stopSceneSourceSafely({ restoreRoomSceneHandoff = false } = {}) {
   try {
     const state = await collectTikpalStateSnapshot({
       includeSlowRuntimeStatus: false,
@@ -5990,21 +6111,39 @@ async function stopSceneSourceSafely() {
       skipExperienceReconcile: true
     });
     const sourceIsScene = mockArmedSource === "scene" || state.audio.currentSource.id === "scene";
-    if (!sourceIsScene) return;
+    if (!sourceIsScene) {
+      await clearRoomSceneAudioHandoff();
+      return;
+    }
 
-    const fallbackAction = { target: "mpd" };
-    const restoreAction = buildRememberedSourceSwitchAction() ?? fallbackAction;
-
-    try {
-      await applySourceSwitch(restoreAction, { rememberSource: false });
-    } catch {
-      if (restoreAction.target !== fallbackAction.target) {
-        await applySourceSwitch(fallbackAction, { rememberSource: false });
+    let restoredSource = null;
+    if (restoreRoomSceneHandoff) {
+      const restoreAction = await buildRoomSceneAudioRestoreAction();
+      if (restoreAction) {
+        try {
+          await applySourceSwitch(restoreAction, { rememberSource: false });
+          if (!restoreAction.wasPlaying) {
+            await applyPlaybackActionForCurrentBackend({ type: "pause" });
+          }
+          restoredSource = restoreAction.target;
+        } catch {
+          // A missing local track or unavailable station must leave Hi-Fi quiet,
+          // not fall through to the unrelated global remembered source.
+        }
       }
     }
+
+    if (!restoredSource) {
+      try {
+        await applyPlaybackActionForCurrentBackend({ type: "pause" });
+      } catch {
+        stopSceneAudio();
+      }
+    }
+    await clearRoomSceneAudioHandoff();
     await refreshTikpalStateSnapshotAfterMutation({
-      includeSourceRuntimeStatus: restoreAction.target === "mpd" || restoreAction.target === "radio" || COMMAND_HANDOFF_SOURCE_TARGETS.has(restoreAction.target),
-      includeOutputVolumeStatus: COMMAND_HANDOFF_SOURCE_TARGETS.has(restoreAction.target)
+      includeSourceRuntimeStatus: restoredSource === "mpd" || restoredSource === "radio",
+      includeOutputVolumeStatus: false
     });
   } catch {
     // The browser-side video is muted by state; the next playback refresh will reconcile the source.
@@ -6242,6 +6381,21 @@ async function resolveSceneThumbnailSrc(value) {
   }
 }
 
+async function resolveSceneAudioSrc(value) {
+  const audioPath = normalizeSafeRelativePath(value);
+  if (!audioPath || !SCENE_AUDIO_EXTENSIONS.has(extname(audioPath).toLowerCase())) return null;
+
+  const absolutePath = resolve(PUBLIC_SCENES_ROOT, ...audioPath.split("/"));
+  if (absolutePath !== PUBLIC_SCENES_ROOT && !absolutePath.startsWith(`${PUBLIC_SCENES_ROOT}${sep}`)) return null;
+
+  try {
+    const info = await stat(absolutePath);
+    return info.isFile() ? `/assets/scenes/${encodeAssetRelativePath(audioPath)}` : null;
+  } catch {
+    return null;
+  }
+}
+
 async function readSceneBackgroundVideos() {
   let manifest;
   try {
@@ -6271,6 +6425,7 @@ async function readSceneBackgroundVideos() {
     const roomModes = normalizeSceneVideoRoomModes(video.roomModes);
     const audioGainDb = normalizeSceneAudioGainDb(video.audioGainDb);
     const thumbnailSrc = await resolveSceneThumbnailSrc(video.thumbnailSrc);
+    const audioSrc = await resolveSceneAudioSrc(video.audioFilename);
     videos.push({
       id,
       filename,
@@ -6280,6 +6435,7 @@ async function readSceneBackgroundVideos() {
       ...(video.default === true ? { default: true } : {}),
       ...(roomModes.length > 0 ? { roomModes } : {}),
       ...(audioGainDb !== null ? { audioGainDb } : {}),
+      ...(audioSrc ? { audioSrc } : {}),
       ...(thumbnailSrc ? { thumbnailSrc } : {}),
       source: "scene"
     });
@@ -6314,7 +6470,7 @@ async function getAmbientBackgroundVideosPayload() {
   const sceneVideos = await readSceneBackgroundVideos();
   const videos = [...legacyVideos, ...sceneVideos].sort(sortAmbientBackgroundVideos);
   const catalogVersion = createHash("sha1")
-    .update(videos.map((video) => `${video.id}:${video.src}:${video.thumbnailSrc ?? ""}:${video.label}:${video.order ?? ""}:${video.default ? "1" : "0"}:${(video.roomModes ?? []).join(",")}:${video.audioGainDb ?? ""}`).join("|"))
+    .update(videos.map((video) => `${video.id}:${video.src}:${video.audioSrc ?? ""}:${video.thumbnailSrc ?? ""}:${video.label}:${video.order ?? ""}:${video.default ? "1" : "0"}:${(video.roomModes ?? []).join(",")}:${video.audioGainDb ?? ""}`).join("|"))
     .digest("hex")
     .slice(0, 12);
 
@@ -10307,6 +10463,15 @@ async function switchToUpnpSource() {
 }
 
 async function switchToSceneSource(action = {}) {
+  const webMode = await readWebModeRuntimeState();
+  if (webMode.activeProvider || webMode.openingProvider || webMode.closeRequestId) {
+    await runWebModeCloseInBackground(
+      `scene-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      webMode.activeProvider || "",
+      webMode,
+      { restorePlayback: false }
+    );
+  }
   activateSceneAudio(action);
   await enforceConnectionGate("scene");
   await stopMpdForExternalSource("scene");
@@ -10796,7 +10961,7 @@ async function startStartupSceneSoundPlayback() {
     const current = await readRoomExperienceState();
     if (current.mode === "hifi") return false;
 
-    const sceneVideo = await resolveSceneAudioVideo(current);
+    const sceneVideo = await resolveSceneAudioVideo(current, { requireAudio: true });
     if (!current.sceneSoundEnabled) {
       await writeRoomExperienceState({
         ...current,
@@ -12109,15 +12274,15 @@ async function fetchJsonWithTimeout(url, { timeoutMs = 4500, headers, method, bo
       signal: controller.signal
     });
     const text = await response.text();
-    let body = null;
+    let parsedBody = null;
     if (text) {
       try {
-        body = JSON.parse(text);
+        parsedBody = JSON.parse(text);
       } catch {
-        body = null;
+        parsedBody = null;
       }
     }
-    return { response, body, text };
+    return { response, body: parsedBody, text };
   } finally {
     clearTimeout(timeoutId);
   }
@@ -13921,11 +14086,13 @@ async function syncRoomSceneSoundForSource(target) {
     return;
   }
 
-  if (!current.sceneSoundEnabled) return;
-  await writeRoomExperienceState({
-    ...current,
-    sceneSoundEnabled: false
-  });
+  if (current.sceneSoundEnabled) {
+    await writeRoomExperienceState({
+      ...current,
+      sceneSoundEnabled: false
+    });
+  }
+  await clearRoomSceneAudioHandoff();
 }
 
 async function applySourceSwitch(action, { syncSceneSoundState = true, rememberSource = true } = {}) {
@@ -14063,7 +14230,7 @@ function resolveRoomActionSceneSoundEnabled(action, current, mode) {
   return current.mode !== "hifi" && current.sceneSoundEnabled === true;
 }
 
-async function resolveSceneAudioVideo(experience) {
+async function resolveSceneAudioVideo(experience, { requireAudio = false } = {}) {
   const preset = getRoomModePreset(experience.mode);
   const fallbackVideo = {
     id: preset.sceneVideoId,
@@ -14074,18 +14241,20 @@ async function resolveSceneAudioVideo(experience) {
   try {
     const catalog = await getAmbientBackgroundVideosPayload();
     const matchedVideo = catalog.videos.find((video) => video.id === experience.sceneVideoId);
-    if (matchedVideo?.src) {
+    if (matchedVideo?.src && (!requireAudio || matchedVideo.audioSrc)) {
       return matchedVideo;
     }
   } catch {
     // Fall through to the room preset scene; switching will still fail if no video exists.
   }
 
-  if (fallbackVideo.src) {
+  if (fallbackVideo.src && !requireAudio) {
     return fallbackVideo;
   }
 
-  throw new Error("scene sound requires a scene video");
+  throw new Error(requireAudio
+    ? "scene sound requires a scene audio asset"
+    : "scene sound requires a scene video");
 }
 
 async function applyRoomExperienceSideEffects(experience, { applyScene = false, applyLevels = true } = {}) {
@@ -14105,7 +14274,7 @@ async function applyRoomExperienceSideEffects(experience, { applyScene = false, 
   }
 
   if (applyScene && experience.sceneSoundEnabled) {
-    const sceneVideo = await resolveSceneAudioVideo(experience);
+    const sceneVideo = await resolveSceneAudioVideo(experience, { requireAudio: true });
     await applySourceSwitch({
       target: "scene",
       sceneVideoId: sceneVideo.id,
@@ -14122,6 +14291,8 @@ async function applyRoomExperienceAction(action) {
   let applyScene = false;
   let applyLevels = true;
   let stopScene = false;
+  let captureSceneHandoff = false;
+  let restoreRoomSceneHandoff = false;
 
   switch (type) {
     case "set_mode": {
@@ -14150,6 +14321,8 @@ async function applyRoomExperienceAction(action) {
       applyScene = sceneSoundEnabled;
       applyLevels = mode !== "hifi";
       stopScene = !sceneSoundEnabled;
+      captureSceneHandoff = sceneSoundEnabled && !current.sceneSoundEnabled;
+      restoreRoomSceneHandoff = mode === "hifi";
       break;
     }
     case "apply_preset": {
@@ -14178,6 +14351,8 @@ async function applyRoomExperienceAction(action) {
       applyScene = sceneSoundEnabled;
       applyLevels = mode !== "hifi";
       stopScene = !sceneSoundEnabled;
+      captureSceneHandoff = sceneSoundEnabled && !current.sceneSoundEnabled;
+      restoreRoomSceneHandoff = mode === "hifi";
       break;
     }
     case "start_session": {
@@ -14206,6 +14381,8 @@ async function applyRoomExperienceAction(action) {
       applyScene = sceneSoundEnabled;
       applyLevels = mode !== "hifi";
       stopScene = !sceneSoundEnabled;
+      captureSceneHandoff = sceneSoundEnabled && !current.sceneSoundEnabled;
+      restoreRoomSceneHandoff = mode === "hifi";
       break;
     }
     case "stop_session":
@@ -14231,12 +14408,20 @@ async function applyRoomExperienceAction(action) {
         throw new Error("set_scene is not available in Hi-Fi mode");
       }
       const sceneVideo = await findSceneVideoForRoomMode(action.sceneVideoId, current.mode);
+      const sceneSoundEnabled = action.sceneSoundEnabled === undefined
+        ? current.sceneSoundEnabled
+        : action.sceneSoundEnabled === true;
+      if (sceneSoundEnabled && !sceneVideo.audioSrc) {
+        throw new Error("set_scene requires a scene audio asset when Scene Sound is enabled");
+      }
       next = rememberSceneVideoForRoomMode({
         ...current,
-        sceneVideoId: sceneVideo.id
+        sceneVideoId: sceneVideo.id,
+        sceneSoundEnabled
       }, current.mode, sceneVideo.id);
-      applyScene = current.sceneSoundEnabled;
+      applyScene = sceneSoundEnabled;
       applyLevels = false;
+      captureSceneHandoff = sceneSoundEnabled && !current.sceneSoundEnabled;
       break;
     }
     case "set_scene_sound": {
@@ -14250,11 +14435,12 @@ async function applyRoomExperienceAction(action) {
         sceneSoundEnabled: enabled
       };
       if (enabled) {
-        await resolveSceneAudioVideo(next);
+        await resolveSceneAudioVideo(next, { requireAudio: true });
       }
       applyScene = enabled;
       applyLevels = false;
       stopScene = !enabled;
+      captureSceneHandoff = enabled && !current.sceneSoundEnabled;
       break;
     }
     case "set_hifi_eq": {
@@ -14295,6 +14481,9 @@ async function applyRoomExperienceAction(action) {
       throw new Error(`Unsupported experience action: ${type}`);
   }
 
+  if (captureSceneHandoff) {
+    await captureRoomSceneAudioHandoff();
+  }
   const saved = await writeRoomExperienceState(next);
   try {
     await applyRoomExperienceSideEffects(saved, { applyScene, applyLevels });
@@ -14305,11 +14494,12 @@ async function applyRoomExperienceAction(action) {
         sceneSoundEnabled: false
       });
     }
+    if (captureSceneHandoff) await clearRoomSceneAudioHandoff();
     throw error;
   }
 
   if (stopScene) {
-    await stopSceneSourceSafely();
+    await stopSceneSourceSafely({ restoreRoomSceneHandoff });
   }
 
   return await getRoomExperienceState();
@@ -14668,7 +14858,7 @@ function runResidentWebModeOpenInBackground() {
   return webModeResidentOpenPromise;
 }
 
-function runWebModeCloseInBackground(closeRequestId = "", activeProvider = "", snapshot = null) {
+function runWebModeCloseInBackground(closeRequestId = "", activeProvider = "", snapshot = null, { restorePlayback = true } = {}) {
   if (webModeClosePromise) {
     return webModeClosePromise;
   }
@@ -14706,15 +14896,19 @@ function runWebModeCloseInBackground(closeRequestId = "", activeProvider = "", s
       completed = true;
       stage("windows_hidden");
       if (await webModeCloseRequestIsCurrent(closeRequestId)) {
-        try {
-          const restoredPlayback = await restoreWebModePlaybackHandoff();
-          if (restoredPlayback) {
-            await refreshTikpalStateSnapshotAfterMutation({
-              includeSourceRuntimeStatus: true
-            });
+        if (restorePlayback) {
+          try {
+            const restoredPlayback = await restoreWebModePlaybackHandoff();
+            if (restoredPlayback) {
+              await refreshTikpalStateSnapshotAfterMutation({
+                includeSourceRuntimeStatus: true
+              });
+            }
+          } catch (error) {
+            restoreError = `Explore closed; playback restore failed: ${error instanceof Error ? error.message : "unknown error"}`;
           }
-        } catch (error) {
-          restoreError = `Explore closed; playback restore failed: ${error instanceof Error ? error.message : "unknown error"}`;
+        } else {
+          await clearWebModeHandoffState();
         }
       }
     } catch (error) {
@@ -15624,7 +15818,7 @@ async function applyRemoteAction(action) {
         localTrackPath: action.localTrackPath
       });
       refreshOptions.includeSourceRuntimeStatus = target === "mpd" || target === "radio" || COMMAND_HANDOFF_SOURCE_TARGETS.has(target);
-      refreshOptions.includeOutputVolumeStatus = target === "scene" || COMMAND_HANDOFF_SOURCE_TARGETS.has(target);
+      refreshOptions.includeOutputVolumeStatus = target === "mpd" || target === "radio" || target === "scene" || COMMAND_HANDOFF_SOURCE_TARGETS.has(target);
       break;
     }
     case "room.set_mode":
@@ -16048,7 +16242,7 @@ const server = http.createServer(async (request, response) => {
       await applySourceSwitch(action);
       sendJson(response, 200, await refreshTikpalStateSnapshotAfterMutation({
         includeSourceRuntimeStatus: action?.target === "mpd" || action?.target === "radio" || COMMAND_HANDOFF_SOURCE_TARGETS.has(action?.target),
-        includeOutputVolumeStatus: action?.target === "scene" || COMMAND_HANDOFF_SOURCE_TARGETS.has(action?.target)
+        includeOutputVolumeStatus: action?.target === "mpd" || action?.target === "radio" || action?.target === "scene" || COMMAND_HANDOFF_SOURCE_TARGETS.has(action?.target)
       }));
       return;
     }

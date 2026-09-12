@@ -1,0 +1,78 @@
+{
+  "license": {
+    "name": "Pixabay Content License",
+    "url": "https://pixabay.com/service/license-summary/",
+    "retrievedAt": "2026-09-12"
+  },
+  "transformation": {
+    "output": "48 kHz stereo Opus Ogg, 96 kbps VBR, 15 minutes",
+    "looping": "tail-to-head 0.8 second crossfade before long render",
+    "loudness": "-23 LUFS integrated target, -1.5 dBTP ceiling"
+  },
+  "sources": [
+    {
+      "sceneId": "aurora-snowfield",
+      "audioFilename": "audio/aurora-snowfield.ogg",
+      "title": "Smooth Cold Wind - Looped",
+      "author": "Shut_Up_Ghost",
+      "sourceUrl": "https://pixabay.com/sound-effects/nature-smooth-cold-wind-looped-135538/",
+      "downloadedFilename": "shut_up_ghost-smooth-cold-wind-looped-135538.mp3"
+    },
+    {
+      "sceneId": "cloud-sunrise",
+      "audioFilename": "audio/cloud-sunrise.ogg",
+      "title": "Ambient Spring Forest",
+      "author": "SoundReality",
+      "sourceUrl": "https://pixabay.com/sound-effects/nature-ambient-spring-forest-323801/",
+      "downloadedFilename": "soundreality-ambient-spring-forest-323801.mp3"
+    },
+    {
+      "sceneId": "deep-blue-ocean",
+      "audioFilename": "audio/deep-blue-ocean.ogg",
+      "title": "Deep Sea Underwater Ambience",
+      "author": "DRAGON-STUDIO",
+      "sourceUrl": "https://pixabay.com/sound-effects/nature-deep-sea-underwater-ambience-472383/",
+      "downloadedFilename": "dragon-studio-deep-sea-underwater-ambience-472383.mp3"
+    },
+    {
+      "sceneId": "midnight-library",
+      "audioFilename": "audio/midnight-library.ogg",
+      "title": "Library ambience",
+      "author": "u_dreamysoul",
+      "sourceUrl": "https://pixabay.com/sound-effects/film-special-effects-library-ambience-542977/",
+      "downloadedFilename": "u_dreamysoul-library-ambience-542977.mp3"
+    },
+    {
+      "sceneId": "rainy-window",
+      "audioFilename": "audio/rainy-window.ogg",
+      "title": "Gentle Rain on Window for Sleep",
+      "author": "Eryliaa",
+      "sourceUrl": "https://pixabay.com/sound-effects/nature-gentle-rain-on-window-for-sleep-422420/",
+      "downloadedFilename": "eryliaa-gentle-rain-on-window-for-sleep-422420.mp3"
+    },
+    {
+      "sceneId": "vinyl-lounge",
+      "audioFilename": "audio/vinyl-lounge.ogg",
+      "title": "Vinyl Crackle (Real)",
+      "author": "beautifuldaymonster1968 (Freesound)",
+      "sourceUrl": "https://pixabay.com/sound-effects/film-special-effects-vinyl-crackle-real-69409/",
+      "downloadedFilename": "freesound_community-vinyl-crackle-real-69409.mp3"
+    },
+    {
+      "sceneId": "warm-fireplace",
+      "audioFilename": "audio/warm-fireplace.ogg",
+      "title": "Fire Ambience",
+      "author": "SoundReality",
+      "sourceUrl": "https://pixabay.com/sound-effects/film-special-effects-fire-ambience-528618/",
+      "downloadedFilename": "soundreality-fire-ambience-528618.mp3"
+    },
+    {
+      "sceneId": "zen-courtyard",
+      "audioFilename": "audio/zen-courtyard.ogg",
+      "title": "River Sounds",
+      "author": "DRAGON-STUDIO",
+      "sourceUrl": "https://pixabay.com/sound-effects/river-sounds-420904/",
+      "downloadedFilename": "dragon-studio-river-sounds-420904.mp3"
+    }
+  ]
+}

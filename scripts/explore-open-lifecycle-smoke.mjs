@@ -75,6 +75,9 @@ case "\${TEST_COMMAND_MODE:-success}" in
   timeout)
     sleep 1
     ;;
+  slow-open)
+    sleep 1
+    ;;
 esac
 `;
 
@@ -460,6 +463,39 @@ async function testTimeoutClearsOpeningState() {
   }
 }
 
+async function testCloseCancelsSlowOpening() {
+  const api = await startApi("slow-open");
+  try {
+    const requestId = "cancelled-opening-request";
+    const openingPromise = postJson(api.port, "/api/v1/web-mode/actions", {
+      type: "open",
+      provider: "spotify",
+      openRequestId: requestId
+    });
+    await waitFor(() => {
+      const commands = readCommands(api.paths);
+      return commands.some((entry) => entry.action === "open" && entry.requestId === requestId);
+    }, "slow open command did not start");
+
+    const close = await postJson(api.port, "/api/v1/web-mode/actions", {
+      type: "close",
+      closeRequestId: "cancelled-opening-close"
+    });
+    assert.equal(close.status, 200, JSON.stringify(close));
+    const opening = await openingPromise;
+    assert.equal(opening.status, 400, "cancelled open must not complete or fall back");
+    const state = readState(api.paths);
+    assert.equal(state.activeProvider, null);
+    assert.equal(state.openingProvider, null);
+    assert.equal(state.openRequestId, null);
+    assert.equal(state.closeRequestId, null);
+    const opens = readCommands(api.paths).filter((entry) => entry.action === "open");
+    assert.deepEqual(opens.map((entry) => entry.provider), ["spotify"], "cancelled opens must not start a fallback provider");
+  } finally {
+    await api.stop();
+  }
+}
+
 async function testScopedProviderProfileReset() {
   const api = await startApi("success");
   try {
@@ -512,5 +548,6 @@ await testStaleSessionStopsFallback();
 await testSupersededRequestCannotOverwriteNewRequest();
 await testOldGenerationCannotClearReusedRequestIdentity();
 await testTimeoutClearsOpeningState();
+await testCloseCancelsSlowOpening();
 await testScopedProviderProfileReset();
 console.log("Explore open lifecycle smoke passed");

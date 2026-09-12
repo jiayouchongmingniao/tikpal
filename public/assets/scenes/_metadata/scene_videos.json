@@ -10,8 +10,10 @@
       "roomModes": [
         "sleep"
       ],
-      "audioGainDb": -5.8,
-      "sha256": "d45ad816f6802775c86e9d99b210a43adf98fd717a1fefaaedb4f9307f8214b3"
+      "audioGainDb": 0,
+      "sha256": "1992a32c6bb7376298eae582683ee6b63f08b265ffded90050e259fe2af1c2e2",
+      "audioFilename": "audio/aurora-snowfield.ogg",
+      "audioSha256": "f7895f57011084e12cd870d2aa6fb269b0bec6d6f1974a1c9b9db0c3c6e4cb42"
     },
     {
       "id": "cloud-sunrise",
@@ -22,8 +24,10 @@
       "roomModes": [
         "focus"
       ],
-      "audioGainDb": -4.6,
-      "sha256": "01b1036adc87150df4166683d4d38f449754b93bc6aa6b32aa3411e0f9c397c8"
+      "audioGainDb": 0,
+      "sha256": "9a27e8c0da70bf570c461d4b39bf17c0a5d06733ca1520c76b7bc0a242617590",
+      "audioFilename": "audio/cloud-sunrise.ogg",
+      "audioSha256": "cf960051e790ac20e233eb35769db1914d289e239b6b446418db9c2eee76d3d3"
     },
     {
       "id": "deep-blue-ocean",
@@ -34,8 +38,10 @@
       "roomModes": [
         "sleep"
       ],
-      "audioGainDb": -7.1,
-      "sha256": "cb866b4eee904fb2f872a6187f892c8cd523cdfd0918b6b992ad549245cdcb8d"
+      "audioGainDb": 0,
+      "sha256": "8d9329ee6d9a9e12159a65afcf177d4801f2aaaa213c2ee085dbb79d233d26d1",
+      "audioFilename": "audio/deep-blue-ocean.ogg",
+      "audioSha256": "148d135f1397cb657427e2adf45d6d63b21c43194e1b399e9d5d67331edd1e0d"
     },
     {
       "id": "midnight-library",
@@ -46,8 +52,10 @@
       "roomModes": [
         "focus"
       ],
-      "audioGainDb": -6.1,
-      "sha256": "84d4afba126356c5e16b59d60ba7e6e107fba07875dce7bb897457e8302df87d"
+      "audioGainDb": 0,
+      "sha256": "7099db1325c7c099dc6f5a52e34806eee6ad304bae9c4d44691f96ba3a7d5968",
+      "audioFilename": "audio/midnight-library.ogg",
+      "audioSha256": "33bd9f9dd0625c6b6617cdf1defa28b4b80d193ffe5d2136bd98d8f06b4a3bd3"
     },
     {
       "id": "rainy-window",
@@ -58,16 +66,20 @@
       "roomModes": [
         "calm"
       ],
-      "audioGainDb": 11.1,
-      "sha256": "401505d3f6f15ed2e0dcc2f2d0745ce0700c0390a19460798ecf40ce50149ca3"
+      "audioGainDb": 0,
+      "sha256": "10ddc99aa237e9ca8ba39abeae84d946ca5ec3724e208c25815ee065343dd12f",
+      "audioFilename": "audio/rainy-window.ogg",
+      "audioSha256": "a8c502843b8ea282a6a3e5bdafb68bf7da7111db3a710bca5587a0a11532fe80"
     },
     {
       "id": "vinyl-lounge",
       "filename": "Vinyl-Lounge.mp4",
       "label": "Vinyl Lounge",
       "order": 150,
-      "audioGainDb": -10.9,
-      "sha256": "206bf921f7399c6cfdc6d95d125b1a0a5f042e47090749233d570443a7195415"
+      "audioGainDb": 0,
+      "sha256": "00b09a0647af608418b4d17859ba4f1a92629deb41d799394fc74dc1c21e23b0",
+      "audioFilename": "audio/vinyl-lounge.ogg",
+      "audioSha256": "c797ee6dbf6bb46fea88c1a056d73299337d47d26159c657cfd414ba420807db"
     },
     {
       "id": "warm-fireplace",
@@ -78,8 +90,10 @@
       "roomModes": [
         "calm"
       ],
-      "audioGainDb": 1.3,
-      "sha256": "2ea598b8086a85e02aa93d7455af75b36d526ef14bc4ab5fca368379e6832d9f"
+      "audioGainDb": 0,
+      "sha256": "2d62fe6705bdc71060dcfe98f7bb5d59282fc5efc5d85bbfb1b2ad4d881a3a82",
+      "audioFilename": "audio/warm-fireplace.ogg",
+      "audioSha256": "85949b8c73eca278147b0772e69a14718a3a129cbd671daad81b3fd0116cb6ee"
     },
     {
       "id": "zen-courtyard",
@@ -90,8 +104,10 @@
       "roomModes": [
         "calm"
       ],
-      "audioGainDb": -5.1,
-      "sha256": "221bd1c402f157f4f51accf739de432354cbf1ed8e92f07261c569fcb78e472d"
+      "audioGainDb": 0,
+      "sha256": "2618f99e0b6a396cebb130afd2969e6d07a2d3d97acf8229f75724ad0f8b37d7",
+      "audioFilename": "audio/zen-courtyard.ogg",
+      "audioSha256": "0f99014a1a7025e2269a95ecbb11cf36dbc7d4570481c369ed0dd25e4027649d"
     }
   ]
 }

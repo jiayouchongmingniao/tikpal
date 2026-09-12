@@ -19,5 +19,7 @@ pnpm-debug.log*
 .tmp-api-smoke-bluetooth-metadata.txt
 .tmp-api-smoke-bluetooth.txt
 .codex/
+.codex-artifacts/
+public/assets/scenes/.*.seamless-*.mp4
 deploy/chromium/tikpal-web-mode.sh.bak
 deploy/chromium/tikpal-web-mode.sh.pre-*

@@ -5,16 +5,20 @@ import path from "node:path";
 const DEFAULT_INPUT = "public/assets/output_2560x720-4k.mp4";
 const DEFAULT_CROSSFADE_SECONDS = 0.9;
 const DEFAULT_FPS = 24;
+const DEFAULT_REPEATS = 1;
 
 function printUsage() {
   console.log([
-    "Usage: node scripts/make-seamless-loop.mjs [--input <mp4>] [--output <mp4>] [--crossfade <seconds>]",
+    "Usage: node scripts/make-seamless-loop.mjs [--input <mp4>] [--output <mp4>] [--crossfade <seconds>] [--repeats <count>] [--mute]",
     "",
     "Defaults:",
     `  --input ${DEFAULT_INPUT}`,
     "  --output <input>",
     `  --crossfade ${DEFAULT_CROSSFADE_SECONDS}`,
+    `  --repeats ${DEFAULT_REPEATS}`,
     "",
+    "--repeats 1 preserves the legacy tail-to-head loop rewrite. Higher values build a longer master from crossfaded source repetitions.",
+    "--mute strips the source audio so a separate long scene-audio asset can own playback.",
     "The script keeps the same public asset URL by default, writing a backup under .codex-artifacts first."
   ].join("\n"));
 }
@@ -24,7 +28,9 @@ function parseArgs(argv) {
     input: DEFAULT_INPUT,
     output: null,
     crossfadeSeconds: DEFAULT_CROSSFADE_SECONDS,
-    fps: DEFAULT_FPS
+    fps: DEFAULT_FPS,
+    repeats: DEFAULT_REPEATS,
+    mute: false
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -53,6 +59,15 @@ function parseArgs(argv) {
       index += 1;
       continue;
     }
+    if (arg === "--repeats") {
+      options.repeats = Number(argv[index + 1]);
+      index += 1;
+      continue;
+    }
+    if (arg === "--mute") {
+      options.mute = true;
+      continue;
+    }
     throw new Error(`Unknown argument: ${arg}`);
   }
 
@@ -66,8 +81,49 @@ function parseArgs(argv) {
   if (!Number.isFinite(options.fps) || options.fps <= 0) {
     throw new Error("--fps must be a positive number");
   }
+  if (!Number.isInteger(options.repeats) || options.repeats <= 0) {
+    throw new Error("--repeats must be a positive integer");
+  }
 
   return options;
+}
+
+function buildRepeatedFilter({ duration, crossfadeSeconds, fps, repeats, hasAudio, mute }) {
+  const filterParts = [];
+  const videoInputs = [];
+  const audioInputs = [];
+  for (let index = 0; index < repeats; index += 1) {
+    const videoLabel = `v${index}`;
+    filterParts.push(`[${index}:v]fps=${fps},format=yuv420p,setpts=PTS-STARTPTS[${videoLabel}]`);
+    videoInputs.push(videoLabel);
+    if (hasAudio && !mute) {
+      const audioLabel = `a${index}`;
+      filterParts.push(`[${index}:a]asetpts=PTS-STARTPTS[${audioLabel}]`);
+      audioInputs.push(audioLabel);
+    }
+  }
+
+  let videoOutput = videoInputs[0];
+  let audioOutput = audioInputs[0] ?? null;
+  let outputDurationSeconds = duration;
+  for (let index = 1; index < repeats; index += 1) {
+    const nextVideoOutput = `vx${index}`;
+    filterParts.push(`[${videoOutput}][${videoInputs[index]}]xfade=transition=fade:duration=${crossfadeSeconds}:offset=${outputDurationSeconds - crossfadeSeconds}[${nextVideoOutput}]`);
+    videoOutput = nextVideoOutput;
+    if (audioOutput) {
+      const nextAudioOutput = `ax${index}`;
+      filterParts.push(`[${audioOutput}][${audioInputs[index]}]acrossfade=d=${crossfadeSeconds}:c1=tri:c2=tri[${nextAudioOutput}]`);
+      audioOutput = nextAudioOutput;
+    }
+    outputDurationSeconds += duration - crossfadeSeconds;
+  }
+
+  return {
+    filter: filterParts.join(";"),
+    videoOutput,
+    audioOutput,
+    outputDurationSeconds
+  };
 }
 
 function run(command, args, options = {}) {
@@ -119,34 +175,47 @@ async function main() {
   const backupOutput = sameOutput
     ? path.join(backupDir, `${path.basename(output)}.bak-${new Date().toISOString().replace(/[:.]/g, "-")}`)
     : null;
-  const frameSeconds = 1 / options.fps;
-  const cutSeconds = options.crossfadeSeconds * 2;
-  const headSeconds = cutSeconds + frameSeconds;
-  const transitionOffset = duration - cutSeconds - options.crossfadeSeconds;
-  const videoFilter = [
-    `[0:v]trim=start=${cutSeconds}:end=${duration},setpts=PTS-STARTPTS[mainv]`,
-    `[0:v]trim=start=0:end=${headSeconds},setpts=PTS-STARTPTS[headv]`,
-    `[mainv][headv]xfade=transition=fade:duration=${options.crossfadeSeconds}:offset=${transitionOffset},fps=${options.fps},format=yuv420p[v]`
-  ];
-  const filterParts = [...videoFilter];
-  const ffmpegArgs = [
-    "-y",
-    "-i", input,
-    "-filter_complex"
-  ];
-
-  if (hasAudio) {
-    filterParts.push(
-      `[0:a]atrim=start=${cutSeconds}:end=${duration},asetpts=PTS-STARTPTS[maina]`,
-      `[0:a]atrim=start=0:end=${headSeconds},asetpts=PTS-STARTPTS[heada]`,
-      `[maina][heada]acrossfade=d=${options.crossfadeSeconds}:c1=tri:c2=tri[a]`
-    );
+  const ffmpegArgs = ["-y", "-hide_banner", "-loglevel", "error"];
+  for (let index = 0; index < options.repeats; index += 1) {
+    ffmpegArgs.push("-i", input);
   }
 
-  ffmpegArgs.push(filterParts.join(";"));
+  let outputDurationSeconds;
+  if (options.repeats === 1) {
+    const frameSeconds = 1 / options.fps;
+    const cutSeconds = options.crossfadeSeconds * 2;
+    const headSeconds = cutSeconds + frameSeconds;
+    const transitionOffset = duration - cutSeconds - options.crossfadeSeconds;
+    const filterParts = [
+      `[0:v]trim=start=${cutSeconds}:end=${duration},setpts=PTS-STARTPTS[mainv]`,
+      `[0:v]trim=start=0:end=${headSeconds},setpts=PTS-STARTPTS[headv]`,
+      `[mainv][headv]xfade=transition=fade:duration=${options.crossfadeSeconds}:offset=${transitionOffset},fps=${options.fps},format=yuv420p[v]`
+    ];
+    if (hasAudio && !options.mute) {
+      filterParts.push(
+        `[0:a]atrim=start=${cutSeconds}:end=${duration},asetpts=PTS-STARTPTS[maina]`,
+        `[0:a]atrim=start=0:end=${headSeconds},asetpts=PTS-STARTPTS[heada]`,
+        `[maina][heada]acrossfade=d=${options.crossfadeSeconds}:c1=tri:c2=tri[a]`
+      );
+    }
+    ffmpegArgs.push("-filter_complex", filterParts.join(";"), "-map", "[v]");
+    ffmpegArgs.push(...(hasAudio && !options.mute ? ["-map", "[a]", "-c:a", "aac", "-b:a", "128k"] : ["-an"]));
+    outputDurationSeconds = duration - options.crossfadeSeconds + frameSeconds;
+  } else {
+    const repeated = buildRepeatedFilter({
+      duration,
+      crossfadeSeconds: options.crossfadeSeconds,
+      fps: options.fps,
+      repeats: options.repeats,
+      hasAudio,
+      mute: options.mute
+    });
+    ffmpegArgs.push("-filter_complex", repeated.filter, "-map", `[${repeated.videoOutput}]`);
+    ffmpegArgs.push(...(repeated.audioOutput ? ["-map", `[${repeated.audioOutput}]`, "-c:a", "aac", "-b:a", "128k"] : ["-an"]));
+    outputDurationSeconds = repeated.outputDurationSeconds;
+  }
+
   ffmpegArgs.push(
-    "-map", "[v]",
-    ...(hasAudio ? ["-map", "[a]", "-c:a", "aac", "-b:a", "128k"] : ["-an"]),
     "-c:v", "libx264",
     "-profile:v", "high",
     "-preset", "slow",
@@ -168,9 +237,11 @@ async function main() {
     output,
     backup: backupOutput,
     sourceDurationSeconds: duration,
-    outputDurationSeconds: duration - options.crossfadeSeconds + frameSeconds,
+    outputDurationSeconds,
     crossfadeSeconds: options.crossfadeSeconds,
-    audioCrossfaded: hasAudio
+    repeats: options.repeats,
+    muted: options.mute,
+    audioCrossfaded: hasAudio && !options.mute
   }, null, 2));
 }
 

@@ -522,6 +522,7 @@ export interface BackgroundVideoSummary {
   filename: string;
   label: string;
   src: string;
+  audioSrc?: string;
   thumbnailSrc?: string;
   order?: number;
   default?: boolean;

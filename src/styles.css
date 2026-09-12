@@ -1028,7 +1028,7 @@ select {
   object-position: center center;
   pointer-events: none;
   user-select: none;
-  transition: opacity 360ms linear;
+  transition: opacity 800ms linear;
 }
 
 .flame-video.is-active {

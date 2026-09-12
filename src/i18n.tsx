@@ -2880,6 +2880,14 @@ Object.assign(dictionaries["es"], {
   "explore.panelChangeFailed": "No se pudo confirmar la disposición del panel. Inténtalo de nuevo."
 });
 
+Object.assign(dictionaries.en, { "source.libraryPlaying": "Library is playing." });
+Object.assign(dictionaries["zh-CN"], { "source.libraryPlaying": "曲库正在播放。" });
+Object.assign(dictionaries.de, { "source.libraryPlaying": "Mediathek läuft." });
+Object.assign(dictionaries.it, { "source.libraryPlaying": "La libreria è in riproduzione." });
+Object.assign(dictionaries.ko, { "source.libraryPlaying": "라이브러리 재생 중" });
+Object.assign(dictionaries.ja, { "source.libraryPlaying": "ライブラリを再生中です。" });
+Object.assign(dictionaries.es, { "source.libraryPlaying": "La biblioteca está reproduciendo." });
+
 Object.assign(dictionaries.en, { "remote.localNetworkReady": "Home network remote ready" });
 Object.assign(dictionaries["zh-CN"], { "remote.localNetworkReady": "家庭网络遥控已就绪" });
 Object.assign(dictionaries.de, { "remote.localNetworkReady": "Fernbedienung im Heimnetz bereit" });
