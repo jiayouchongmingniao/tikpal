@@ -2,19 +2,19 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 const source = fs.readFileSync(new URL('../deploy/chromium/deezer-preview-recovery.js', import.meta.url), 'utf8');
-function fixture(hostname = 'www.deezer.com') {
-  let now = 0, nextId = 0, plays = 0, skips = 0;
+function fixture(hostname = 'www.deezer.com', storage = new Map(), start = 0) {
+  let now = start, nextId = 0, plays = 0, skips = 0, reloads = 0;
   const timers = new Map(), listeners = new Map();
   const url = 'https://cdnt-preview.dzcdn.net/api/1/1/abc.mp3';
   let song = { SNG_ID: '1', MEDIA: [{ TYPE: 'preview', HREF: url }] };
   const gate = { active: true, playingCount: 0 };
   const player = { playing: true, paused: false, loading: false, position: 0, audioAds: null,
-    getCurrentSong: () => song, control: { play: () => { plays++; }, nextSong: () => { skips++; } } };
+    getContext: () => ({ID:1,TYPE:"playlist"}), getTrackList: () => [song], getIndexSong: () => 0, playTrackAtIndex: () => { plays++; }, getCurrentSong: () => song, control: { play: () => { plays++; }, nextSong: () => { skips++; } } };
   const document = { querySelectorAll: () => [], visibilityState: 'visible', addEventListener: (type, fn) => listeners.set(type, fn) };
   const window = { dzPlayer: player, __tikpalProviderAudioGate: { status: () => gate } };
-  vm.runInNewContext(source, { window, document, location: { hostname }, URL, Map, Promise, console,
+  vm.runInNewContext(source, { window, document, location: { hostname, reload: () => { reloads++; } }, sessionStorage: { getItem: k => storage.get(k), setItem: (k,v) => storage.set(k,v) }, URL, Map, Promise, console,
     Date: { now: () => now }, setTimeout: (fn, ms) => { timers.set(++nextId, { fn, at: now + ms }); return nextId; }, clearTimeout: id => timers.delete(id) });
-  return { window, player, gate, document, url, timers, listeners, counts: () => ({ plays, skips }),
+  return { window, player, gate, document, url, timers, listeners, reloads: () => reloads, counts: () => ({ plays, skips }),
     song: s => { song = s; }, async advance(ms) { const end = now + ms; for (;;) { const next = [...timers].sort((a,b) => a[1].at-b[1].at)[0]; if (!next || next[1].at > end) break; now = next[1].at; timers.delete(next[0]); next[1].fn(); await Promise.resolve(); await Promise.resolve(); } now = end; } };
 }
 const a = fixture();a.window.__tikpalDeezerPreviewRecovery.rejected(a.url);await a.advance(5000);
@@ -83,3 +83,55 @@ console.log('Deezer code 4 dialog recovery passed: exact dialog, delayed inserti
 const interrupted=fixture(),interruptedPopup=errorDialog(interrupted);interrupted.window.__tikpalDeezerPreviewRecovery.mediaError({error:{code:4},src:interrupted.url});await interrupted.advance(1000);interrupted.listeners.get('pointerdown')({isTrusted:true});await interrupted.advance(5000);assert.equal(interruptedPopup.clicks(),1);assert.equal(interrupted.counts().skips,0);
 const unrelated=fixture(),unrelatedPopup=errorDialog(unrelated);unrelated.window.__tikpalDeezerPreviewRecovery.mediaError({error:{code:4},src:'https://cdnt-preview.dzcdn.net/api/1/unrelated.mp3'});await unrelated.advance(16000);assert.equal(unrelatedPopup.clicks(),0);
 const disabled=fixture(),disabledPopup=errorDialog(disabled);disabledPopup.button.disabled=true;disabled.window.__tikpalDeezerPreviewRecovery.mediaError({error:{code:4},src:disabled.url});await disabled.advance(16000);assert.equal(disabledPopup.clicks(),0);assert.equal(disabled.counts().skips,0);
+
+const reloadStorage = new Map();
+const expired = fixture('www.deezer.com', reloadStorage, 100000), expiredPopup = errorDialog(expired);
+expired.song({SNG_ID:'1',MEDIA:[{TYPE:'preview',HREF:expired.url+'?hdnea=exp=99~acl=test~hmac=secret'}]});
+expired.window.__tikpalDeezerPreviewRecovery.mediaError({error:{code:4},src:expired.url});
+await expired.advance(2000);assert.equal(expired.reloads(),1);assert.equal(expiredPopup.clicks(),1);assert.deepEqual(expired.counts(),{plays:0,skips:0});
+assert.ok(!JSON.stringify([...reloadStorage]).includes('secret'));
+const resumed=fixture('www.deezer.com',reloadStorage,103000);
+resumed.song({SNG_ID:'1',MEDIA:[{TYPE:'preview',HREF:resumed.url+'?hdnea=exp=200~hmac=x'}]});
+resumed.window.__tikpalDeezerPreviewRecovery.setActive(true);await resumed.advance(2000);assert.equal(resumed.counts().plays,1);
+resumed.song({SNG_ID:'1',MEDIA:[{TYPE:'preview',HREF:resumed.url+'?hdnea=exp=99~hmac=x'}]});errorDialog(resumed);
+resumed.window.__tikpalDeezerPreviewRecovery.mediaError({error:{code:4},src:resumed.url});await resumed.advance(5000);assert.equal(resumed.reloads(),0);assert.equal(resumed.counts().skips,0);
+for(const change of [f=>f.listeners.get('pointerdown')({isTrusted:true}),f=>f.window.__tikpalDeezerPreviewRecovery.setActive(false),f=>f.song({SNG_ID:'2',MEDIA:[]})]){
+ const storage=new Map([['__tikpalDeezerPreviewReload',JSON.stringify({at:100000,id:'1',contextId:'1',contextType:'playlist',resume:true})]]);
+ const f=fixture('www.deezer.com',storage,101000);f.window.__tikpalDeezerPreviewRecovery.setActive(true);change(f);await f.advance(31000);assert.equal(f.counts().skips,0);assert.equal(f.counts().plays,0);
+}
+const stale=fixture('www.deezer.com',new Map([['__tikpalDeezerPreviewReload',JSON.stringify({at:100000,id:'1',contextId:'1',contextType:'playlist',resume:true})]]),101000);
+stale.window.__tikpalDeezerPreviewRecovery.setActive(true);await stale.advance(31000);assert.equal(stale.counts().plays,0);assert.equal(stale.timers.size,0);
+console.log('Deezer expired URLs passed: one refresh, fresh same-track resume, navigation budget, manual/ownership cancellation and timeout');
+const restoreList=fixture('www.deezer.com',new Map([['__tikpalDeezerPreviewReload',JSON.stringify({at:100000,id:'2',contextId:'1',contextType:'playlist',resume:true})]]),101000);
+let restoredIndex;
+restoreList.player.getTrackList=()=>[{SNG_ID:'1'}, {SNG_ID:'2',MEDIA:[{TYPE:'preview',HREF:restoreList.url+'?hdnea=exp=200~hmac=x'}]}];
+restoreList.player.playTrackAtIndex=index=>{restoredIndex=index;};
+restoreList.window.__tikpalDeezerPreviewRecovery.setActive(true);await restoreList.advance(2000);assert.equal(restoredIndex,1);
+const movedContext=fixture('www.deezer.com',new Map([['__tikpalDeezerPreviewReload',JSON.stringify({at:100000,id:'1',contextId:'2',contextType:'playlist',resume:true})]]),101000);
+movedContext.window.__tikpalDeezerPreviewRecovery.setActive(true);await movedContext.advance(31000);assert.equal(movedContext.counts().plays,0);
+
+// The document-start audio gate starts muted before backend ownership arrives.
+// That initialization must not erase a refresh continuation ticket.
+const initializingStorage = new Map([['__tikpalDeezerPreviewReload', JSON.stringify({at:100000,id:'1',contextId:'1',contextType:'playlist',resume:true})]]);
+const initializing = fixture('www.deezer.com', initializingStorage, 101000);
+initializing.song({SNG_ID:'1',MEDIA:[{TYPE:'preview',HREF:initializing.url+'?hdnea=exp=200'}]});
+initializing.gate.active = false;
+initializing.window.__tikpalDeezerPreviewRecovery.setActive(false, {initializing:true});
+await initializing.advance(2000);
+assert.equal(initializing.counts().plays,0);
+assert.equal(JSON.parse(initializingStorage.get('__tikpalDeezerPreviewReload')).resume,true);
+initializing.gate.active = true;
+initializing.window.__tikpalDeezerPreviewRecovery.setActive(true);
+await initializing.advance(2000);
+assert.equal(initializing.counts().plays,1);
+
+const closedBeforeActivation = fixture('www.deezer.com', new Map([['__tikpalDeezerPreviewReload', JSON.stringify({at:100000,id:'1',contextId:'1',contextType:'playlist',resume:true})]]),101000);
+closedBeforeActivation.song({SNG_ID:'1',MEDIA:[{TYPE:'preview',HREF:closedBeforeActivation.url+'?hdnea=exp=200'}]});
+closedBeforeActivation.gate.active=false;
+closedBeforeActivation.window.__tikpalDeezerPreviewRecovery.setActive(false,{initializing:true});
+closedBeforeActivation.window.__tikpalDeezerPreviewRecovery.setActive(false);
+closedBeforeActivation.gate.active=true;
+closedBeforeActivation.window.__tikpalDeezerPreviewRecovery.setActive(true);
+closedBeforeActivation.player.playing=false;
+await closedBeforeActivation.advance(31000);
+assert.equal(closedBeforeActivation.counts().plays,0,'an actual close before first activation still cancels continuation');

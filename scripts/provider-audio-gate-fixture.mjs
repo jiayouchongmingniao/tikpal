@@ -8,9 +8,12 @@ const source = await readFile(path.join(root, "deploy/chromium/web-mode-extensio
 const mediaElements = [];
 const listeners = new Map();
 const messages = [];
+const recoveryActivations = [];
 
 class FakeMediaElement {
   constructor() {
+    this.tagName = "AUDIO";
+    this.isConnected = true;
     this.volume = 0.4;
     this.ended = false;
     this.muted = false;
@@ -61,9 +64,10 @@ const document = {
   }
 };
 const window = {
+  __tikpalDeezerPreviewRecovery: { setActive: (active, options) => recoveryActivations.push({active, initializing: options.initializing}) },
   AudioContext: FakeAudioContext,
   HTMLMediaElement: FakeMediaElement,
-  location: { origin: "https://example.test" },
+  location: { origin: "https://suno.com", hostname: "suno.com" },
   postMessage(message) {
     messages.push(message);
   }
@@ -79,6 +83,9 @@ vm.runInNewContext(source, {
 });
 
 const gate = window.__tikpalProviderAudioGate;
+assert.deepEqual(recoveryActivations, [{active:false, initializing:true}]);
+gate.setActive(false);
+assert.deepEqual(recoveryActivations.at(-1), {active:false, initializing:false}, "explicit close must not look like initialization");
 assert.equal(gate?.version, 3, "document-start gate should expose the v3 contract");
 assert.equal(gate.status().active, false, "prewarm gate should start inactive");
 assert.equal(messages[0]?.type, "tikpal-provider-audio-muted", "prewarm gate should request a muted tab immediately");
@@ -91,6 +98,17 @@ await suppressed.play();
 assert.equal(suppressed.muted, true, "inactive gate should mute media before playback");
 assert.equal(suppressed.paused, true, "inactive gate should pause suppressed playback");
 
+const decorativeVideo = new FakeMediaElement();
+decorativeVideo.tagName = "VIDEO";
+decorativeVideo.muted = true;
+mediaElements.push(decorativeVideo);
+await decorativeVideo.play();
+const orphanVideo = new FakeMediaElement();
+orphanVideo.tagName = "VIDEO";
+await orphanVideo.play();
+orphanVideo.isConnected = false;
+const orphanPlayCalls = orphanVideo.playCalls;
+
 const context = new window.AudioContext();
 await Promise.resolve();
 assert.equal(context.state, "suspended", "inactive gate should suspend newly-created Web Audio contexts");
@@ -101,6 +119,15 @@ assert.equal(suppressed.muted, false, "foreground activation should unmute suppr
 assert.equal(suppressed.paused, false, "foreground activation should resume suppressed media");
 assert.equal(untouched.playCalls, 0, "foreground activation must not start media that prewarm never tried to play");
 assert.equal(context.state, "running", "foreground activation should resume suspended Web Audio contexts");
+
+assert.equal(decorativeVideo.muted, true, "Suno decorative video must keep its original mute");
+assert.equal(decorativeVideo.volume, 0.4, "Suno video gain must remain provider-owned");
+assert.equal(orphanVideo.paused, true, "detached Suno video must stay paused");
+assert.equal(orphanVideo.playCalls, orphanPlayCalls, "activation must not resume detached Suno video");
+gate.setActive(false);
+gate.setActive(false);
+gate.setActive(true);
+assert.equal(decorativeVideo.muted, true, "repeated gate transitions must preserve video mute");
 
 gate.setActive(false);
 const eventOnly = new FakeMediaElement();

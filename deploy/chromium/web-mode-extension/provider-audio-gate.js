@@ -13,12 +13,15 @@
   const mediaElements = () => Array.from(new Set([
     ...document.querySelectorAll("audio,video"), ...state.playedMedia
   ]));
+  const sunoVideo = (element) => window.location?.hostname === "suno.com" && element.tagName === "VIDEO";
   // Provider gain is unity; the Tikpal output mixer owns listening volume.
   const unifyMediaVolume = (element) => {
+    if (sunoVideo(element)) return;
     if (element.volume !== 1) element.volume = 1;
   };
   const rememberPlayingMedia = (element) => {
     const previous = state.media.get(element) || { wasPlaying: false };
+    if (sunoVideo(element) && previous.muted === undefined) previous.muted = element.muted;
     previous.wasPlaying = true;
     state.media.set(element, previous);
   };
@@ -115,13 +118,20 @@
     for (const element of mediaElements()) {
       if (!(element instanceof HTMLMediaElement)) continue;
       const previous = state.media.get(element) || { wasPlaying: false };
+      if (sunoVideo(element) && !element.isConnected) {
+        try { element.pause(); } catch {}
+        state.playedMedia.delete(element);
+        state.media.delete(element);
+        continue;
+      }
       if (!active) {
+        if (sunoVideo(element) && previous.muted === undefined) previous.muted = element.muted;
         previous.wasPlaying = previous.wasPlaying || (!element.paused && !element.ended);
         state.media.set(element, previous);
         element.muted = true;
         try { element.pause(); } catch {}
       } else {
-        element.muted = false;
+        element.muted = sunoVideo(element) ? (previous.muted ?? element.muted) : false;
         unifyMediaVolume(element);
         if (previous.wasPlaying && element.error) window.__tikpalDeezerPreviewRecovery?.mediaError(element);
         if (previous.wasPlaying && element.paused && !element.ended) {
@@ -193,13 +203,13 @@
     contextStates: Array.from(state.audioContexts).map((context) => context?.state || "unknown")
   });
 
-  const setActive = (active) => {
+  const setActive = (active, { initializing = false } = {}) => {
     const nextActive = active === true;
     try {
       window.postMessage({ type: "tikpal-provider-audio-muted", muted: !nextActive }, window.location.origin);
     } catch {}
     state.active = nextActive;
-    window.__tikpalDeezerPreviewRecovery?.setActive(nextActive);
+    window.__tikpalDeezerPreviewRecovery?.setActive(nextActive, { initializing });
     if (!nextActive) for (const element of recoveryTimers.keys()) cancelRecovery(element);
     setMediaActive(nextActive);
     setHowlerActive(nextActive);
@@ -230,5 +240,6 @@
   }, true);
 
   window.__tikpalProviderAudioGate = { version: 3, setActive, status };
-  setActive(false);
+  // Initial mute is not an ownership loss or an explicit user exit.
+  setActive(false, { initializing: true });
 })();
