@@ -81,8 +81,9 @@ function maybeInjectPortableKey(request, pathname) {
   if (
     isRemoteActionProxyRequest(request, pathname)
     && PORTABLE_API_KEY.trim()
-    && !headers[TIKPAL_KEY_HEADER]
   ) {
+    // The 4174 remote UI is authorized by the device-held key. Always replace
+    // a browser-supplied value so stale local storage cannot break controls.
     headers[TIKPAL_KEY_HEADER] = PORTABLE_API_KEY.trim();
   }
   return headers;

@@ -2880,6 +2880,14 @@ Object.assign(dictionaries["es"], {
   "explore.panelChangeFailed": "No se pudo confirmar la disposición del panel. Inténtalo de nuevo."
 });
 
+Object.assign(dictionaries.en, { "remote.localNetworkReady": "Home network remote ready" });
+Object.assign(dictionaries["zh-CN"], { "remote.localNetworkReady": "家庭网络遥控已就绪" });
+Object.assign(dictionaries.de, { "remote.localNetworkReady": "Fernbedienung im Heimnetz bereit" });
+Object.assign(dictionaries.it, { "remote.localNetworkReady": "Telecomando rete domestica pronto" });
+Object.assign(dictionaries.ko, { "remote.localNetworkReady": "홈 네트워크 리모컨 준비됨" });
+Object.assign(dictionaries.ja, { "remote.localNetworkReady": "ホームネットワークのリモコンは準備完了です" });
+Object.assign(dictionaries.es, { "remote.localNetworkReady": "Control remoto de red doméstica listo" });
+
 
 function template(value: string, params: TranslationParams = {}) {
   return value.replace(/\{([^}]+)\}/g, (_, key: string) => {

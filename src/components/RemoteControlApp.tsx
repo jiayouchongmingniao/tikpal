@@ -1,6 +1,6 @@
 import { Airplay, Bluetooth, Globe2, Music, PanelRightClose, Pause, Play, Radio, RefreshCw, SkipBack, SkipForward, SlidersHorizontal, Sun, Volume2, Wifi } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { fetchRemoteCatalog, fetchRemoteState, readStoredRemoteKey, sendRemoteAction, storeRemoteKey } from "../api/remoteClient";
+import { fetchRemoteCatalog, fetchRemoteState, sendRemoteAction } from "../api/remoteClient";
 import { useI18n } from "../i18n";
 import type { RemoteActionRequest, RemoteCatalogResponse, RemoteStateResponse, RoomMode, SourceState } from "../types";
 
@@ -35,7 +35,6 @@ export function RemoteControlApp() {
   const { t, roomLabel, sourceLabel, playbackStateLabel, friendlyError } = useI18n();
   const [remoteState, setRemoteState] = useState<RemoteStateResponse | null>(null);
   const [catalog, setCatalog] = useState<RemoteCatalogResponse | null>(null);
-  const [remoteKey, setRemoteKey] = useState(readStoredRemoteKey);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
   const [refreshError, setRefreshError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -89,23 +88,17 @@ export function RemoteControlApp() {
   }, []);
 
   const applyAction = useCallback(async (action: RemoteActionRequest) => {
-    const actionKey = remoteKey.trim();
-    storeRemoteKey(actionKey);
     setPendingAction(action.type);
     setActionError(null);
     try {
-      const nextState = await sendRemoteAction(action, actionKey || undefined);
+      const nextState = await sendRemoteAction(action);
       setRemoteState(nextState);
     } catch (caught) {
       setActionError(caught instanceof Error ? caught.message : "Remote action failed");
     } finally {
       setPendingAction(null);
     }
-  }, [remoteKey]);
-
-  const handleKeySave = useCallback(() => {
-    storeRemoteKey(remoteKey);
-  }, [remoteKey]);
+  }, []);
 
   const commitVolume = useCallback(() => {
     if (volumeCommitTimerRef.current !== null) {
@@ -177,23 +170,9 @@ export function RemoteControlApp() {
           <span>{remoteState ? roomLabel(remoteState.room.mode) : t("remote.room")}</span>
         </section>
 
-        <section className="remote-key-panel">
-          <label>
-            <span>{t("remote.accessKey")}</span>
-            <input
-              data-remote-key
-              type="password"
-              autoComplete="current-password"
-              value={remoteKey}
-              onChange={(event) => setRemoteKey(event.currentTarget.value)}
-              onBlur={handleKeySave}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") handleKeySave();
-              }}
-              placeholder={t("remote.optionalAccessKey")}
-            />
-          </label>
-          <strong>{remoteKey.trim() ? t("common.ready") : t("remote.noKey")}</strong>
+        <section className="remote-key-panel" data-remote-lan-status aria-live="polite">
+          <span>{t("remote.localNetworkReady")}</span>
+          <strong>{t("common.ready")}</strong>
         </section>
 
         {visibleError ? (

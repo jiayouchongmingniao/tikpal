@@ -5689,8 +5689,8 @@ try {
   await expect(client, "document.querySelector('.remote-root') !== null", "portable remote renders on the remote port");
   await expect(
     client,
-    "document.querySelector('[data-remote-key]') !== null && document.querySelector('[data-remote-volume-slider]') !== null && document.querySelector('[data-remote-explore]') !== null && document.querySelector('[data-remote-explore-open]') !== null && document.querySelector('[data-remote-explore-close]') !== null && document.querySelector('[data-remote-explore-proxy]') !== null",
-    "portable remote exposes its key field, volume slider, Explore start, close, and proxy controls"
+    "document.querySelector('[data-remote-key]') === null && document.querySelector('[data-remote-lan-status]') !== null && document.querySelector('[data-remote-volume-slider]') !== null && document.querySelector('[data-remote-explore]') !== null && document.querySelector('[data-remote-explore-open]') !== null && document.querySelector('[data-remote-explore-close]') !== null && document.querySelector('[data-remote-explore-proxy]') !== null",
+    "portable remote exposes device-held LAN authorization, volume slider, Explore start, close, and proxy controls"
   );
   await expect(
     client,
@@ -5699,8 +5699,8 @@ try {
   );
   await expect(
     client,
-    "document.querySelector('.remote-key-panel span')?.textContent?.trim() === 'Access key' && document.querySelector('.remote-key-panel strong')?.textContent?.trim() === 'No key'",
-    "portable remote defaults to no-key mode without setup friction"
+    "document.querySelector('.remote-key-panel span')?.textContent?.trim() === 'Home network remote ready' && document.querySelector('.remote-key-panel strong')?.textContent?.trim() === 'Ready'",
+    "portable remote shows ready home-network authorization without exposing an access key"
   );
   await expectEventually(
     client,

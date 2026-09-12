@@ -1,7 +1,7 @@
 import { access, readFile, stat } from "node:fs/promises";
 import { constants } from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
-import { request as httpRequest } from "node:http";
+import { createServer as createHttpServer, request as httpRequest } from "node:http";
 import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -136,14 +136,14 @@ async function getFreePorts(count) {
   return ports;
 }
 
-function requestWeb(port, pathname = "/", method = "GET") {
+function requestWeb(port, pathname = "/", method = "GET", options = {}) {
   return new Promise((resolve, reject) => {
     const request = httpRequest({
       hostname: "127.0.0.1",
       port,
       path: pathname,
       method,
-      headers: { Host: `192.0.2.10:${port}` }
+      headers: { Host: `192.0.2.10:${port}`, ...(options.headers ?? {}) }
     }, (response) => {
       const chunks = [];
       response.on("data", (chunk) => chunks.push(chunk));
@@ -153,6 +153,7 @@ function requestWeb(port, pathname = "/", method = "GET") {
       }));
     });
     request.once("error", reject);
+    if (options.body) request.write(options.body);
     request.end();
   });
 }
@@ -838,6 +839,7 @@ audio_output {
   assert(webUnit.includes("server/web.mjs"), "web unit should use the production static server");
   assert(webUnit.includes("tikpal-audio-adapt.service"), "web unit should pull the audio adapter before startup");
   assert(webUnit.includes("TIKPAL_WEB_REMOTE_PORT=4174"), "web unit should expose portable remote control separately from the kiosk UI");
+  assert(webUnit.includes("EnvironmentFile=-@APP_DIR@/.env.kiosk"), "web unit should load the protected device-local portable remote key");
   assert(kioskDevtoolsUnit.includes("start-tikpal-kiosk-devtools-proxy.sh"), "kiosk DevTools unit should launch the LAN proxy");
   assert(kioskDevtoolsUnit.includes("PartOf=tikpal-kiosk.service"), "kiosk DevTools proxy should follow kiosk service lifecycle");
   assert(kioskUnit.includes("start-tikpal-kiosk-display.sh"), "kiosk unit should launch the display-mode wrapper");
@@ -947,7 +949,38 @@ audio_output {
 
   const webSmokeDir = mkdtempSync(path.join(tmpdir(), "tikpal-web-surfaces-"));
   writeFileSync(path.join(webSmokeDir, "index.html"), "<!doctype html><html><head></head><body>Tikpal</body></html>");
-  const [kioskPort, remotePort, unusedApiPort] = await getFreePorts(3);
+  const [kioskPort, remotePort, apiPort] = await getFreePorts(3);
+  const proxiedRemoteRequests = [];
+  const upstreamApi = createHttpServer((request, response) => {
+    const chunks = [];
+    request.on("data", (chunk) => chunks.push(chunk));
+    request.on("end", () => {
+      const pathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
+      const key = String(request.headers["x-tikpal-key"] ?? "");
+      proxiedRemoteRequests.push({
+        pathname,
+        hasExpectedKey: key === "kiosk-package-remote-key",
+        hasAnyKey: key.length > 0,
+        body: Buffer.concat(chunks).toString("utf8")
+      });
+      if (pathname === "/api/v1/remote/state") {
+        response.writeHead(200, { "Content-Type": "application/json" });
+        response.end(JSON.stringify({ state: true }));
+        return;
+      }
+      if (pathname === "/api/v1/remote/actions") {
+        response.writeHead(200, { "Content-Type": "application/json" });
+        response.end(JSON.stringify({ action: true }));
+        return;
+      }
+      response.writeHead(404, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({ error: "NOT_FOUND" }));
+    });
+  });
+  await new Promise((resolve, reject) => {
+    upstreamApi.once("error", reject);
+    upstreamApi.listen(apiPort, "127.0.0.1", resolve);
+  });
   const webProcess = spawn(process.execPath, ["server/web.mjs"], {
     cwd: ROOT,
     env: {
@@ -956,7 +989,8 @@ audio_output {
       TIKPAL_WEB_PORT: String(kioskPort),
       TIKPAL_WEB_REMOTE_PORT: String(remotePort),
       TIKPAL_WEB_DIST_DIR: webSmokeDir,
-      TIKPAL_API_ORIGIN: `http://127.0.0.1:${unusedApiPort}`
+      TIKPAL_API_ORIGIN: `http://127.0.0.1:${apiPort}`,
+      TIKPAL_PORTABLE_API_KEY: "kiosk-package-remote-key"
     },
     stdio: "ignore"
   });
@@ -973,19 +1007,38 @@ audio_output {
     const remoteApi = await requestWeb(remotePort, "/api/v1/system/state");
     const remoteWebModeAction = await requestWeb(remotePort, "/api/v1/web-mode/actions", "POST");
     const remoteHeartbeat = await requestWeb(kioskPort, "/api/v1/kiosk/heartbeat", "POST");
-    assert(kioskApi.status === 502, "kiosk web port should allow the LAN full-UI API through to its configured origin");
+    const remoteState = await requestWeb(remotePort, "/api/v1/remote/state");
+    const remoteAction = await requestWeb(remotePort, "/api/v1/remote/actions", "POST", {
+      headers: {
+        "Content-Type": "application/json",
+        "X-Tikpal-Key": "stale-browser-value"
+      },
+      body: JSON.stringify({ type: "volume_set", value: 42 })
+    });
+    assert(kioskApi.status === 404, "kiosk web port should allow the LAN full-UI API through to its configured origin");
     assert(remoteApi.status === 403, "remote web port should block the full kiosk API");
     assert(remoteWebModeAction.status === 403, "remote web port should keep direct Explore actions behind the portable facade");
     assert(remoteHeartbeat.status === 403, "LAN kiosk views should not overwrite the physical kiosk heartbeat");
+    assert(remoteState.status === 200, "remote web port should proxy the portable state read");
+    assert(remoteAction.status === 200, "remote web port should proxy a LAN remote action without browser-held credentials");
+    const proxiedState = proxiedRemoteRequests.find((entry) => entry.pathname === "/api/v1/remote/state");
+    const proxiedAction = proxiedRemoteRequests.find((entry) => entry.pathname === "/api/v1/remote/actions");
+    assert(proxiedState && !proxiedState.hasAnyKey, "remote state reads should not receive the portable action key");
+    assert(
+      proxiedAction?.hasExpectedKey && proxiedAction.body === JSON.stringify({ type: "volume_set", value: 42 }),
+      "remote action proxy should replace a stale browser key with its device-held key"
+    );
   } finally {
     if (webProcess.exitCode === null) {
       webProcess.kill("SIGTERM");
       await new Promise((resolve) => webProcess.once("exit", resolve));
     }
+    await new Promise((resolve, reject) => upstreamApi.close((error) => error ? reject(error) : resolve()));
   }
 
   const kioskEnv = await readFile(path.join(ROOT, "deploy/chromium/env.kiosk.example"), "utf8");
   assert(kioskEnv.includes("TIKPAL_KIOSK_REMOTE_DEBUG=0"), "kiosk env should default remote debugging off");
+  assert(kioskEnv.includes("TIKPAL_PORTABLE_API_KEY="), "kiosk env should reserve the protected portable remote key");
   assert(kioskEnv.includes("TIKPAL_X11_HELPER_PHASE=0"), "kiosk env should default the native Helper to Phase 0 read-only");
   assert(kioskEnv.includes("TIKPAL_KIOSK_VIEWER=none"), "kiosk env should default noVNC viewer off");
   assert(kioskEnv.includes("TIKPAL_KIOSK_DISPLAY_MODE=auto"), "kiosk env should document automatic physical/virtual display selection");
@@ -2109,17 +2162,15 @@ sync_runtime_provider_pool_process_statuses ""
     ambientScreenSource.includes('onTouchStart={handleZoneTouchStart("volume")}') && ambientScreenSource.includes('startAdjust(channel, touch.identifier, touch.clientY, "touch")'),
     "ambient right-edge volume control should include a touch-event fallback for physical touchscreens"
   );
-  assert(remoteControlSource.includes("data-remote-key") && !remoteControlSource.includes("window.prompt"), "portable remote should keep its key field visible instead of relying on a browser prompt");
+  assert(!remoteControlSource.includes("data-remote-key") && remoteControlSource.includes("data-remote-lan-status"), "portable remote should use device-held LAN authorization without a browser key field");
   assert(remoteControlSource.includes("data-remote-volume-slider"), "portable remote should expose a stable volume slider hook");
-  assert(!remoteControlSource.includes("Enter the Remote key before using controls") && remoteControlSource.includes("actionKey || undefined"), "portable remote should let the 4174 proxy/API decide remote-key validity instead of blocking actions locally");
+  assert(!remoteControlSource.includes("Enter the Remote key before using controls") && !remoteControlSource.includes("storeRemoteKey"), "portable remote should not store or send an access key from the browser");
   assert(
     remoteControlSource.includes("setActionError")
       && remoteControlSource.includes("setRefreshError")
       && remoteControlSource.includes("friendlyError")
-      && remoteControlSource.includes('t("remote.accessKey")')
-      && remoteControlSource.includes('t("remote.noKey")')
-      && i18nSource.includes('"remote.accessKey": "Access key"')
-      && i18nSource.includes('"remote.noKey": "No key"')
+      && remoteControlSource.includes('t("remote.localNetworkReady")')
+      && i18nSource.includes('"remote.localNetworkReady": "Home network remote ready"')
       && remoteControlSource.includes("PanelRightClose")
       && !remoteControlSource.includes("Remote key")
       && !remoteControlSource.includes("Back to Tikpal"),

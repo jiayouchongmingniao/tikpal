@@ -54,6 +54,16 @@ TIKPAL_AUDIO_CARD_FORCE=BT66
 
 If a future Gentoo host runs virtual kiosk only, set `TIKPAL_KIOSK_DISPLAY=:1`, `TIKPAL_KIOSK_DISPLAY_MODE=virtual`, `TIKPAL_KIOSK_LOCAL_SCREEN=0`, and keep noVNC enabled only for debugging.
 
+## Portable Remote Authorization
+
+Port `4174` serves the narrow portable remote. Set a non-empty `TIKPAL_PORTABLE_API_KEY` once in the device-local `.env.kiosk` (`openssl rand -hex 32` is suitable) and keep that file mode `0600 moode:moode`. Both `tikpal-api.service` and `tikpal-web.service` load it. A LAN browser never receives or stores the key: the web service injects it only while proxying its exact `POST /api/v1/remote/actions` request, replacing stale browser-supplied values. The key remains required for direct non-loopback API clients; do not put it in URLs, browser storage, source control, or logs.
+
+### 2026-09-12 207 P0 recovery
+
+On 207, `TIKPAL_PORTABLE_API_KEY` existed but was empty, and `tikpal-web.service` loaded only `.env`; read-only remote calls therefore worked while every remote action returned `403`. The repair generates one device-local key when absent, adds `.env.kiosk` to the Web service, and limits automatic injection to the exact remote action route. The 4174 page removes its key field and reports the LAN remote as ready. The field check used an action that retained the current volume, then confirmed the page rendered without a key input.
+
+`TIKPAL_PORTABLE_API_KEY` is a device root credential, not an App credential. A future native remote app must pair with the device and receive a revocable, device-bound capability token; it must never embed, display, or persist this root key. Pairing, token issuance, expiry, and revocation are future work and do not change the current 4174 LAN browser contract.
+
 ## Gentoo System Setup
 
 Install the base audio and kiosk dependencies with Portage. The validated stack includes ALSA tools/plugins, MPD/MPC, Avahi, upmpdcli, BlueZ/bluez-alsa where hardware exists, ffmpeg, sqlite, jq, sudo, Node.js, Chromium, Xorg/Xvfb, xdotool, wmctrl, x11vnc, noVNC, websockify, and socat.

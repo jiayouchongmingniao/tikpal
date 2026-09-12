@@ -13,6 +13,7 @@ Environment=TIKPAL_WEB_PORT=4173
 Environment=TIKPAL_WEB_REMOTE_PORT=4174
 Environment=TIKPAL_API_ORIGIN=http://127.0.0.1:8787
 EnvironmentFile=-@APP_DIR@/.env
+EnvironmentFile=-@APP_DIR@/.env.kiosk
 ExecStart=/usr/bin/node @APP_DIR@/server/web.mjs
 Restart=on-failure
 RestartSec=3
