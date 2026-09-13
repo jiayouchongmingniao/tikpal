@@ -11,6 +11,7 @@
     "preview": "vite preview --host 0.0.0.0",
     "start:api": "node server/index.mjs",
     "start:web": "node server/web.mjs",
+    "debug:207": "bash scripts/open-207-debug-tunnel.sh",
     "media:loop": "node scripts/make-seamless-loop.mjs",
     "scene:clear": "node scripts/clear-scene-videos.mjs",
     "ota:package:mp4": "node scripts/generate-mp4-resource-otas.mjs",

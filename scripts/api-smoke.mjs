@@ -1208,7 +1208,7 @@ switch (command) {
   );
   await writeFile(webModeStatePath, `${JSON.stringify({ activeProvider: null, openingProvider: null }, null, 2)}\n`);
 
-  const server = spawn(process.execPath, ["server/index.mjs"], {
+  const launchServer = () => spawn(process.execPath, ["server/index.mjs"], {
     env: {
       ...process.env,
       TIKPAL_API_HOST: HOST,
@@ -1233,6 +1233,7 @@ switch (command) {
     },
     stdio: ["ignore", "pipe", "pipe"]
   });
+  const server = launchServer();
 
   try {
     await waitForHealthAt(baseUrl);
@@ -1264,6 +1265,52 @@ switch (command) {
       startupSceneState.experience.body.sceneVideoId === "rainy-window",
       "mpc startup scene should keep the calm room scene video"
     );
+
+    server.kill("SIGTERM");
+    await Promise.race([
+      new Promise((resolve) => server.once("exit", resolve)),
+      wait(1000)
+    ]);
+    await writeFile(fakeMpcStatePath, `${JSON.stringify({
+      title: "Already playing",
+      artist: "Tikpal",
+      album: "Local library",
+      currentFile: "Focus/already-playing.flac",
+      duration: "3:20",
+      elapsed: "0:18",
+      playbackState: "playing",
+      stopFails: false
+    }, null, 2)}\n`);
+    await writeFile(roomExperienceStatePath, `${JSON.stringify({
+      mode: "calm",
+      sceneVideoId: "rainy-window",
+      sceneSoundEnabled: false
+    }, null, 2)}\n`);
+    const activePlaybackServer = launchServer();
+    try {
+      await waitForHealthAt(baseUrl);
+      let preservedPlayback = null;
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        const [state, experience] = await Promise.all([
+          requestFrom(baseUrl, "/api/v1/system/state"),
+          requestFrom(baseUrl, "/api/v1/experience/state")
+        ]);
+        if (state.response.ok && experience.response.ok && state.body.playback.state === "playing" && experience.body.sceneSoundEnabled === false) {
+          preservedPlayback = { state, experience };
+          break;
+        }
+        await wait(100);
+      }
+      assert(preservedPlayback, "mpc startup should preserve active local playback instead of replacing it with Scene Sound");
+    } finally {
+      if (activePlaybackServer.exitCode === null && activePlaybackServer.signalCode === null) {
+        activePlaybackServer.kill("SIGTERM");
+        await Promise.race([
+          new Promise((resolve) => activePlaybackServer.once("exit", resolve)),
+          wait(1000)
+        ]);
+      }
+    }
   } finally {
     if (server.exitCode === null && server.signalCode === null) {
       server.kill("SIGTERM");

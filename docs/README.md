@@ -12,7 +12,7 @@ This directory is the source of truth for Tikpal product, UX, visual, architectu
 
 ## Current Scope
 
-- Tikpal targets a Raspberry Pi 4 or Gentoo systemd host running Chromium kiosk at 2560 x 720.
+- Tikpal currently runs on the 207 x86 Gentoo systemd kiosk at 2560 x 720; the next hardware target is RK3576 ARM64 on Debian 12 Bookworm, initially with KDE/X11.
 - The current implementation uses Vite + React + TypeScript, a local Node API, and a fireplace image plus local MP4 ambience layer. WebGL remains an architecture/performance track for future renderers rather than the active flame surface.
 - The default screen is an ambient flame screen, not a conventional app homepage.
 - moOde / MPD remains the original playback and system capability owner; the Gentoo migration path keeps the MPD contract while using Portage, systemd, ALSA direct output, and Gentoo-managed kiosk dependencies.
@@ -64,6 +64,7 @@ This directory is the source of truth for Tikpal product, UX, visual, architectu
 | --- | --- | --- |
 | [Provider Guard OTA v1](06-deployment/provider-guard-ota-v1.md) | Current reference | Signed, device-independent R2 Provider Guard updates, activation, rollback, and release procedure. |
 | [场景环境音与 P2 体验交付（207）](06-deployment/ambient-p2-207-20260912.md) | Acceptance baseline | 场景音/Hi-Fi 互斥交接、P2 行为、多语言、构建检查与 207 窄部署验收边界。 |
+| [207 可迁移基线 v1](06-deployment/207-portability-baseline-v1.md) | Current reference | 207 分支的源码、LFS 场景资产和电台 SQLite 种子，以及 ARM/其他平台迁移时必须重新建立的硬件与私有运行状态。 |
 | [Raspberry Pi kiosk deploy v1](06-deployment/raspberry-pi-kiosk-deploy-v1.md) | Current reference | Pi sync, systemd install, Chromium kiosk launch, verification, and rollback. |
 | [Gentoo kiosk deploy v1](06-deployment/gentoo-kiosk-deploy-v1.md) | Current reference | Gentoo systemd migration, physical display, Portage audio/kiosk setup, Explore provider validation, and rollback. |
 | [Gentoo 207 constrained kiosk v1](06-deployment/gentoo-207-constrained-kiosk-v1.md) | Current reference | Weak-GPU/EVDI render profile, CPU thermal scene guard, Provider lifecycle freezing, governor, diagnostics, and physical acceptance boundary. |

@@ -75,10 +75,21 @@ function cleanMetadata(value: string | null | undefined) {
   return trimmed;
 }
 
+function getFilenameStem(value: string | null | undefined) {
+  if (!value || /^https?:/i.test(value)) return null;
+  const filename = value.split(/[\\/]/).pop()?.replace(/\?.*$/, "").replace(/#.*$/, "") ?? "";
+  const stem = filename
+    .replace(/\.(?:mp3|m4a|flac|wav|aac|ogg|opus|aiff|alac)$/i, "")
+    .replace(/[_]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return stem || null;
+}
+
 function parseFilename(value: string | null | undefined) {
   if (!value || /^https?:/i.test(value)) return { title: null, artist: null, album: null };
   const filename = value.split(/[\\/]/).pop()?.replace(/\?.*$/, "").replace(/#.*$/, "") ?? "";
-  const stem = filename.replace(/\.(?:mp3|m4a|flac|wav|aac|ogg|opus|aiff|alac)$/i, "").replace(/[_]+/g, " ").trim();
+  const stem = getFilenameStem(value);
   if (!stem || stem === filename || PLACEHOLDER_METADATA.has(stem.toLowerCase())) return { title: null, artist: null, album: null };
   const withoutTrackNumber = stem.replace(/^\d{1,3}\s*[-._]\s*/, "");
   const parts = withoutTrackNumber.split(/\s+-\s+/).map(cleanMetadata).filter((part): part is string => Boolean(part));
@@ -95,9 +106,28 @@ function resolveMetadata(playback: PlaybackSummary, source: SourceSummary | unde
     album: cleanMetadata(activeQueueEntry.album)
   } : null;
   const sourceTitle = source?.connectedLabel ?? source?.advertisedLabel ?? null;
+  const playbackTitle = cleanMetadata(playback.title);
+  const playbackFilename = getFilenameStem(playback.title)?.toLowerCase();
+  const queueFilename = getFilenameStem(activeQueueEntry?.id)?.toLowerCase();
+  const playbackTitleIsRawQueueFilename = Boolean(
+    playbackTitle
+    && queueMetadata?.title
+    && playbackFilename
+    && queueFilename
+    && playbackFilename === queueFilename
+  );
+  const queueTitleIsRawQueueFilename = Boolean(
+    queueMetadata?.title
+    && queueFilename
+    && getFilenameStem(queueMetadata.title)?.toLowerCase() === queueFilename
+  );
 
   return {
-    title: cleanMetadata(playback.title) ?? queueMetadata?.title ?? filenameMetadata.title ?? cleanMetadata(sourceTitle),
+    title: playbackTitleIsRawQueueFilename
+      ? queueTitleIsRawQueueFilename
+        ? filenameMetadata.title ?? queueMetadata?.title ?? playbackTitle
+        : queueMetadata?.title ?? filenameMetadata.title ?? playbackTitle
+      : playbackTitle ?? queueMetadata?.title ?? filenameMetadata.title ?? cleanMetadata(sourceTitle),
     artist: cleanMetadata(playback.artist) ?? queueMetadata?.artist ?? filenameMetadata.artist,
     album: cleanMetadata(playback.album) ?? queueMetadata?.album ?? filenameMetadata.album
   };
@@ -120,6 +150,7 @@ export function getPlaybackDisplayTruth(playback: PlaybackSummary, audio: AudioS
   const progress = elapsedSeconds !== null && durationSeconds !== null
     ? Math.max(0, Math.min(1, elapsedSeconds / durationSeconds))
     : 0;
+  const isRadioStream = playback.source === "radio" || source?.id === "radio";
 
   return {
     title,
@@ -134,6 +165,6 @@ export function getPlaybackDisplayTruth(playback: PlaybackSummary, audio: AudioS
     durationSeconds,
     progress,
     queuePositionLabel: playback.queueLength > 0 ? `${playback.currentTrackIndex} of ${playback.queueLength}` : null,
-    isLive: playback.state === "playing" && durationSeconds === null
+    isLive: isRadioStream && playback.state === "playing" && durationSeconds === null
   };
 }

@@ -3077,6 +3077,111 @@ Object.assign(dictionaries.es, {
   "settings.guardOtaHelp": "Instala actualizaciones firmadas de Provider Guard sin interrumpir la música."
 });
 
+Object.assign(dictionaries.en, {
+  "settings.preferencesDesc": "Listening, display, appearance, and language.",
+  "settings.link": "Network & Explore",
+  "settings.linkDesc": "Device network and Explore web players.",
+  "settings.care": "Device & maintenance",
+  "settings.careDesc": "Status, maintenance, and power.",
+  "settings.appearanceLanguage": "Appearance & language",
+  "settings.appearanceLanguageMeta": "{font} · {skin}",
+  "settings.appearanceLanguageDetail": "Choose language, font, or skin without leaving Preferences.",
+  "settings.openAppearance": "Customize",
+  "settings.deviceStatus": "Status & updates",
+  "settings.advancedMaintenance": "Advanced maintenance",
+  "settings.power": "Power"
+});
+
+Object.assign(dictionaries["zh-CN"], {
+  "settings.preferencesDesc": "聆听、显示、外观与语言。",
+  "settings.link": "网络与 Explore",
+  "settings.linkDesc": "设备网络与 Explore 网页播放器。",
+  "settings.care": "设备与维护",
+  "settings.careDesc": "状态、维护与电源操作。",
+  "settings.appearanceLanguage": "外观与语言",
+  "settings.appearanceLanguageMeta": "{font} · {skin}",
+  "settings.appearanceLanguageDetail": "在偏好中选择语言、字体或皮肤。",
+  "settings.openAppearance": "自定义",
+  "settings.deviceStatus": "状态与更新",
+  "settings.advancedMaintenance": "高级维护",
+  "settings.power": "电源"
+});
+
+Object.assign(dictionaries.de, {
+  "settings.preferencesDesc": "Hören, Display, Erscheinungsbild und Sprache.",
+  "settings.link": "Netzwerk & Explore",
+  "settings.linkDesc": "Gerätenetzwerk und Explore-Webplayer.",
+  "settings.care": "Gerät & Wartung",
+  "settings.careDesc": "Status, Wartung und Stromversorgung.",
+  "settings.appearanceLanguage": "Erscheinungsbild & Sprache",
+  "settings.appearanceLanguageMeta": "{font} · {skin}",
+  "settings.appearanceLanguageDetail": "Sprache, Schrift oder Skin in den Einstellungen wählen.",
+  "settings.openAppearance": "Anpassen",
+  "settings.deviceStatus": "Status & Updates",
+  "settings.advancedMaintenance": "Erweiterte Wartung",
+  "settings.power": "Stromversorgung"
+});
+
+Object.assign(dictionaries.it, {
+  "settings.preferencesDesc": "Ascolto, display, aspetto e lingua.",
+  "settings.link": "Rete e Explore",
+  "settings.linkDesc": "Rete del dispositivo e web player Explore.",
+  "settings.care": "Dispositivo e manutenzione",
+  "settings.careDesc": "Stato, manutenzione e alimentazione.",
+  "settings.appearanceLanguage": "Aspetto e lingua",
+  "settings.appearanceLanguageMeta": "{font} · {skin}",
+  "settings.appearanceLanguageDetail": "Scegli lingua, carattere o tema nelle Preferenze.",
+  "settings.openAppearance": "Personalizza",
+  "settings.deviceStatus": "Stato e aggiornamenti",
+  "settings.advancedMaintenance": "Manutenzione avanzata",
+  "settings.power": "Alimentazione"
+});
+
+Object.assign(dictionaries.ko, {
+  "settings.preferencesDesc": "감상, 화면, 모양과 언어 설정.",
+  "settings.link": "네트워크 및 Explore",
+  "settings.linkDesc": "기기 네트워크와 Explore 웹 플레이어.",
+  "settings.care": "기기 및 유지 관리",
+  "settings.careDesc": "상태, 유지 관리 및 전원.",
+  "settings.appearanceLanguage": "모양 및 언어",
+  "settings.appearanceLanguageMeta": "{font} · {skin}",
+  "settings.appearanceLanguageDetail": "환경설정에서 언어, 글꼴 또는 스킨을 선택하세요.",
+  "settings.openAppearance": "사용자화",
+  "settings.deviceStatus": "상태 및 업데이트",
+  "settings.advancedMaintenance": "고급 유지 관리",
+  "settings.power": "전원"
+});
+
+Object.assign(dictionaries.ja, {
+  "settings.preferencesDesc": "リスニング、表示、外観と言語。",
+  "settings.link": "ネットワークと Explore",
+  "settings.linkDesc": "端末ネットワークと Explore の Web プレイヤー。",
+  "settings.care": "端末とメンテナンス",
+  "settings.careDesc": "状態、メンテナンス、電源操作。",
+  "settings.appearanceLanguage": "外観と言語",
+  "settings.appearanceLanguageMeta": "{font} · {skin}",
+  "settings.appearanceLanguageDetail": "環境設定で言語、フォント、スキンを選択します。",
+  "settings.openAppearance": "カスタマイズ",
+  "settings.deviceStatus": "状態とアップデート",
+  "settings.advancedMaintenance": "高度なメンテナンス",
+  "settings.power": "電源"
+});
+
+Object.assign(dictionaries.es, {
+  "settings.preferencesDesc": "Escucha, pantalla, apariencia e idioma.",
+  "settings.link": "Red y Explore",
+  "settings.linkDesc": "Red del dispositivo y reproductores web de Explore.",
+  "settings.care": "Dispositivo y mantenimiento",
+  "settings.careDesc": "Estado, mantenimiento y energía.",
+  "settings.appearanceLanguage": "Apariencia e idioma",
+  "settings.appearanceLanguageMeta": "{font} · {skin}",
+  "settings.appearanceLanguageDetail": "Elige idioma, fuente o tema desde Preferencias.",
+  "settings.openAppearance": "Personalizar",
+  "settings.deviceStatus": "Estado y actualizaciones",
+  "settings.advancedMaintenance": "Mantenimiento avanzado",
+  "settings.power": "Energía"
+});
+
 
 function template(value: string, params: TranslationParams = {}) {
   return value.replace(/\{([^}]+)\}/g, (_, key: string) => {
@@ -3173,7 +3278,7 @@ Object.assign(dictionaries.en, {
   "settings.audioProfile.everydayHint": "For relaxed daily listening", "settings.audioProfile.pureHint": "For the shortest signal path", "settings.audioProfile.sleepHint": "For winding down before sleep", "settings.audioProfile.customHint": "Use your saved choices",
   "settings.audioProfile.everydayEffect": "Keeps library and radio comfortable.", "settings.audioProfile.pureEffect": "Prioritizes direct playback.", "settings.audioProfile.sleepEffect": "Keeps listening gentle at night.", "settings.audioProfile.customEffect": "Uses the choices you have saved.",
   "settings.audioProfile.technicalDetails": "Technical details", "settings.audioProfile.outputDetails": "Output: {device} · {detail}", "settings.proxyUrl": "Proxy URL",
-  "settings.runtimeSelfCheck": "Explore window & process check", "settings.runtimeSelfCheckHealthy": "Check passed", "settings.runtimeSelfCheckHealthyHelp": "The Explore window and supporting process are available. This does not verify website access, account status, regional availability, or playback.", "settings.runtimeSelfCheckHelp": "Checks only the Explore window and supporting process; it does not test websites or playback.",
+  "settings.runtimeSelfCheck": "Explore window & process check", "settings.runtimeSelfCheckRetry": "Check again", "settings.runtimeSelfCheckHealthy": "Check passed", "settings.runtimeSelfCheckHealthyHelp": "The Explore window and supporting process are available. This does not verify website access, account status, regional availability, or playback.", "settings.runtimeSelfCheckHelp": "Checks only the Explore window and supporting process; it does not test websites or playback.",
   "playback.audioPlaying": "Audio playing",
   "onboarding.coachTapTitle": "Tap an empty area to show controls", "onboarding.coachTapBody": "This quick start never begins music or scene sound on its own.", "onboarding.coachPlaybackTitle": "Play or pause here", "onboarding.coachPlaybackBody": "Use the current center control when you are ready.", "onboarding.coachSourceTitle": "Choose a source in Player", "onboarding.coachSourceBody": "There is no controllable playback yet. Open Player to choose music when ready.", "onboarding.coachOpenPlayer": "Open Player", "onboarding.coachSkip": "Skip quick start",
   "explore.retryExpand": "Retry expand", "explore.retryExit": "Retry exit", "explore.showPanel": "Expand to view"
@@ -3183,7 +3288,7 @@ Object.assign(dictionaries["zh-CN"], {
   "settings.audioProfile.everydayHint": "适合日常轻松听", "settings.audioProfile.pureHint": "追求最短信号路径", "settings.audioProfile.sleepHint": "适合睡前放松", "settings.audioProfile.customHint": "使用已保存的选择",
   "settings.audioProfile.everydayEffect": "让曲库和电台的日常聆听更舒适。", "settings.audioProfile.pureEffect": "优先直连播放。", "settings.audioProfile.sleepEffect": "夜间聆听更柔和。", "settings.audioProfile.customEffect": "按你保存的选择播放。",
   "settings.audioProfile.technicalDetails": "高级技术信息", "settings.audioProfile.outputDetails": "输出设备：{device} · {detail}", "settings.proxyUrl": "代理地址",
-  "settings.runtimeSelfCheck": "Explore 窗口与进程检查", "settings.runtimeSelfCheckHealthy": "检查通过", "settings.runtimeSelfCheckHealthyHelp": "Explore 窗口和配套进程可用。此检查不验证网站可用性、账号状态、地区限制或实际播放。", "settings.runtimeSelfCheckHelp": "仅检查 Explore 窗口与配套进程；不会测试网站或播放。",
+  "settings.runtimeSelfCheck": "Explore 窗口与进程检查", "settings.runtimeSelfCheckRetry": "再次检查", "settings.runtimeSelfCheckHealthy": "检查通过", "settings.runtimeSelfCheckHealthyHelp": "Explore 窗口和配套进程可用。此检查不验证网站可用性、账号状态、地区限制或实际播放。", "settings.runtimeSelfCheckHelp": "仅检查 Explore 窗口与配套进程；不会测试网站或播放。",
   "playback.audioPlaying": "正在播放音频",
   "onboarding.coachTapTitle": "轻点空白处显示控制", "onboarding.coachTapBody": "此快速引导不会自行播放音乐或场景声。", "onboarding.coachPlaybackTitle": "在这里播放或暂停", "onboarding.coachPlaybackBody": "准备好后，使用当前中央控制按钮。", "onboarding.coachSourceTitle": "在 Player 选择音源", "onboarding.coachSourceBody": "当前没有可控制的播放。准备好后在 Player 选择音乐。", "onboarding.coachOpenPlayer": "打开 Player", "onboarding.coachSkip": "跳过快速引导",
   "explore.retryExpand": "重试展开", "explore.retryExit": "重试退出", "explore.showPanel": "展开查看"
@@ -3193,7 +3298,7 @@ Object.assign(dictionaries.de, {
   "settings.audioProfile.everydayHint": "Für entspanntes tägliches Hören", "settings.audioProfile.pureHint": "Für den kürzesten Signalweg", "settings.audioProfile.sleepHint": "Zum Entspannen vor dem Schlafen", "settings.audioProfile.customHint": "Gespeicherte Auswahl verwenden",
   "settings.audioProfile.everydayEffect": "Hält Mediathek und Radio angenehm.", "settings.audioProfile.pureEffect": "Priorisiert direkte Wiedergabe.", "settings.audioProfile.sleepEffect": "Hält das Hören nachts sanft.", "settings.audioProfile.customEffect": "Verwendet deine gespeicherten Optionen.",
   "settings.audioProfile.technicalDetails": "Technische Details", "settings.audioProfile.outputDetails": "Ausgabe: {device} · {detail}", "settings.proxyUrl": "Proxy-URL",
-  "settings.runtimeSelfCheck": "Explore-Fenster- und Prozessprüfung", "settings.runtimeSelfCheckHealthy": "Prüfung bestanden", "settings.runtimeSelfCheckHealthyHelp": "Explore-Fenster und zugehöriger Prozess sind verfügbar. Dies prüft weder Website-Zugang, Konto, regionale Verfügbarkeit noch Wiedergabe.", "settings.runtimeSelfCheckHelp": "Prüft nur Explore-Fenster und Prozess, nicht Websites oder Wiedergabe.",
+  "settings.runtimeSelfCheck": "Explore-Fenster- und Prozessprüfung", "settings.runtimeSelfCheckRetry": "Erneut prüfen", "settings.runtimeSelfCheckHealthy": "Prüfung bestanden", "settings.runtimeSelfCheckHealthyHelp": "Explore-Fenster und zugehöriger Prozess sind verfügbar. Dies prüft weder Website-Zugang, Konto, regionale Verfügbarkeit noch Wiedergabe.", "settings.runtimeSelfCheckHelp": "Prüft nur Explore-Fenster und Prozess, nicht Websites oder Wiedergabe.",
   "playback.audioPlaying": "Audio wird wiedergegeben",
   "onboarding.coachTapTitle": "Auf eine freie Stelle tippen", "onboarding.coachTapBody": "Dieser Schnellstart startet weder Musik noch Szenenklang selbst.", "onboarding.coachPlaybackTitle": "Hier abspielen oder pausieren", "onboarding.coachPlaybackBody": "Nutze den mittleren Regler, wenn du bereit bist.", "onboarding.coachSourceTitle": "Quelle im Player wählen", "onboarding.coachSourceBody": "Es gibt noch keine steuerbare Wiedergabe. Wähle Musik im Player.", "onboarding.coachOpenPlayer": "Player öffnen", "onboarding.coachSkip": "Schnellstart überspringen",
   "explore.retryExpand": "Erneut erweitern", "explore.retryExit": "Beenden wiederholen", "explore.showPanel": "Zum Anzeigen erweitern"
@@ -3203,7 +3308,7 @@ Object.assign(dictionaries.it, {
   "settings.audioProfile.everydayHint": "Per l'ascolto quotidiano rilassato", "settings.audioProfile.pureHint": "Per il percorso più diretto", "settings.audioProfile.sleepHint": "Per rilassarsi prima di dormire", "settings.audioProfile.customHint": "Usa le scelte salvate",
   "settings.audioProfile.everydayEffect": "Mantiene comodi libreria e radio.", "settings.audioProfile.pureEffect": "Dà priorità alla riproduzione diretta.", "settings.audioProfile.sleepEffect": "Rende l'ascolto notturno più delicato.", "settings.audioProfile.customEffect": "Usa le scelte che hai salvato.",
   "settings.audioProfile.technicalDetails": "Dettagli tecnici", "settings.audioProfile.outputDetails": "Uscita: {device} · {detail}", "settings.proxyUrl": "URL proxy",
-  "settings.runtimeSelfCheck": "Controllo finestra e processo Explore", "settings.runtimeSelfCheckHealthy": "Controllo superato", "settings.runtimeSelfCheckHealthyHelp": "La finestra Explore e il processo di supporto sono disponibili. Non verifica sito, account, disponibilità regionale o riproduzione.", "settings.runtimeSelfCheckHelp": "Controlla solo finestra e processo Explore, non siti o riproduzione.",
+  "settings.runtimeSelfCheck": "Controllo finestra e processo Explore", "settings.runtimeSelfCheckRetry": "Controlla di nuovo", "settings.runtimeSelfCheckHealthy": "Controllo superato", "settings.runtimeSelfCheckHealthyHelp": "La finestra Explore e il processo di supporto sono disponibili. Non verifica sito, account, disponibilità regionale o riproduzione.", "settings.runtimeSelfCheckHelp": "Controlla solo finestra e processo Explore, non siti o riproduzione.",
   "playback.audioPlaying": "Audio in riproduzione",
   "onboarding.coachTapTitle": "Tocca uno spazio vuoto", "onboarding.coachTapBody": "Questo avvio rapido non avvia da solo musica o audio della scena.", "onboarding.coachPlaybackTitle": "Riproduci o metti in pausa qui", "onboarding.coachPlaybackBody": "Quando sei pronto, usa il controllo centrale.", "onboarding.coachSourceTitle": "Scegli una fonte in Player", "onboarding.coachSourceBody": "Non c'è ancora una riproduzione controllabile. Scegli musica in Player.", "onboarding.coachOpenPlayer": "Apri Player", "onboarding.coachSkip": "Salta avvio rapido",
   "explore.retryExpand": "Riprova ad espandere", "explore.retryExit": "Riprova a uscire", "explore.showPanel": "Espandi per vedere"
@@ -3213,7 +3318,7 @@ Object.assign(dictionaries.ko, {
   "settings.audioProfile.everydayHint": "편안한 일상 감상용", "settings.audioProfile.pureHint": "가장 짧은 신호 경로용", "settings.audioProfile.sleepHint": "잠들기 전 휴식용", "settings.audioProfile.customHint": "저장한 선택 사용",
   "settings.audioProfile.everydayEffect": "라이브러리와 라디오를 편안하게 듣습니다.", "settings.audioProfile.pureEffect": "직결 재생을 우선합니다.", "settings.audioProfile.sleepEffect": "밤에는 더 부드럽게 들립니다.", "settings.audioProfile.customEffect": "저장한 선택을 사용합니다.",
   "settings.audioProfile.technicalDetails": "기술 세부 정보", "settings.audioProfile.outputDetails": "출력: {device} · {detail}", "settings.proxyUrl": "프록시 URL",
-  "settings.runtimeSelfCheck": "Explore 창 및 프로세스 확인", "settings.runtimeSelfCheckHealthy": "확인 완료", "settings.runtimeSelfCheckHealthyHelp": "Explore 창과 보조 프로세스를 사용할 수 있습니다. 웹사이트, 계정, 지역 제한 또는 실제 재생은 확인하지 않습니다.", "settings.runtimeSelfCheckHelp": "Explore 창과 보조 프로세스만 확인하며 웹사이트나 재생은 테스트하지 않습니다.",
+  "settings.runtimeSelfCheck": "Explore 창 및 프로세스 확인", "settings.runtimeSelfCheckRetry": "다시 확인", "settings.runtimeSelfCheckHealthy": "확인 완료", "settings.runtimeSelfCheckHealthyHelp": "Explore 창과 보조 프로세스를 사용할 수 있습니다. 웹사이트, 계정, 지역 제한 또는 실제 재생은 확인하지 않습니다.", "settings.runtimeSelfCheckHelp": "Explore 창과 보조 프로세스만 확인하며 웹사이트나 재생은 테스트하지 않습니다.",
   "playback.audioPlaying": "오디오 재생 중",
   "onboarding.coachTapTitle": "빈 곳을 탭해 제어 표시", "onboarding.coachTapBody": "이 빠른 시작은 음악이나 장면음을 자동으로 재생하지 않습니다.", "onboarding.coachPlaybackTitle": "여기서 재생 또는 일시 정지", "onboarding.coachPlaybackBody": "준비되면 가운데 제어를 사용하세요.", "onboarding.coachSourceTitle": "Player에서 소스 선택", "onboarding.coachSourceBody": "아직 제어할 재생이 없습니다. Player에서 음악을 선택하세요.", "onboarding.coachOpenPlayer": "Player 열기", "onboarding.coachSkip": "빠른 시작 건너뛰기",
   "explore.retryExpand": "확장 다시 시도", "explore.retryExit": "종료 다시 시도", "explore.showPanel": "펼쳐서 보기"
@@ -3223,7 +3328,7 @@ Object.assign(dictionaries.ja, {
   "settings.audioProfile.everydayHint": "日常のゆったりした再生に", "settings.audioProfile.pureHint": "最短の信号経路に", "settings.audioProfile.sleepHint": "就寝前のくつろぎに", "settings.audioProfile.customHint": "保存した選択を使用",
   "settings.audioProfile.everydayEffect": "ライブラリとラジオを快適にします。", "settings.audioProfile.pureEffect": "ダイレクト再生を優先します。", "settings.audioProfile.sleepEffect": "夜のリスニングを穏やかにします。", "settings.audioProfile.customEffect": "保存した選択を使います。",
   "settings.audioProfile.technicalDetails": "技術詳細", "settings.audioProfile.outputDetails": "出力：{device} · {detail}", "settings.proxyUrl": "プロキシURL",
-  "settings.runtimeSelfCheck": "Explore のウィンドウとプロセスを確認", "settings.runtimeSelfCheckHealthy": "確認に合格", "settings.runtimeSelfCheckHealthyHelp": "Explore のウィンドウと補助プロセスを利用できます。サイト、アカウント、地域制限、実際の再生は確認しません。", "settings.runtimeSelfCheckHelp": "Explore のウィンドウと補助プロセスだけを確認し、サイトや再生は確認しません。",
+  "settings.runtimeSelfCheck": "Explore のウィンドウとプロセスを確認", "settings.runtimeSelfCheckRetry": "もう一度確認", "settings.runtimeSelfCheckHealthy": "確認に合格", "settings.runtimeSelfCheckHealthyHelp": "Explore のウィンドウと補助プロセスを利用できます。サイト、アカウント、地域制限、実際の再生は確認しません。", "settings.runtimeSelfCheckHelp": "Explore のウィンドウと補助プロセスだけを確認し、サイトや再生は確認しません。",
   "playback.audioPlaying": "オーディオを再生中",
   "onboarding.coachTapTitle": "空いている場所をタップ", "onboarding.coachTapBody": "このクイックスタートが音楽やシーン音を自動で再生することはありません。", "onboarding.coachPlaybackTitle": "ここで再生・一時停止", "onboarding.coachPlaybackBody": "準備ができたら中央の操作を使います。", "onboarding.coachSourceTitle": "Playerで音源を選択", "onboarding.coachSourceBody": "操作できる再生はまだありません。Playerで音楽を選びます。", "onboarding.coachOpenPlayer": "Playerを開く", "onboarding.coachSkip": "クイックスタートをスキップ",
   "explore.retryExpand": "展開を再試行", "explore.retryExit": "終了を再試行", "explore.showPanel": "展開して表示"
@@ -3233,7 +3338,7 @@ Object.assign(dictionaries.es, {
   "settings.audioProfile.everydayHint": "Para escuchar a diario con calma", "settings.audioProfile.pureHint": "Para la ruta de señal más corta", "settings.audioProfile.sleepHint": "Para relajarse antes de dormir", "settings.audioProfile.customHint": "Usa tus elecciones guardadas",
   "settings.audioProfile.everydayEffect": "Mantiene cómoda la biblioteca y la radio.", "settings.audioProfile.pureEffect": "Prioriza la reproducción directa.", "settings.audioProfile.sleepEffect": "Hace más suave la escucha nocturna.", "settings.audioProfile.customEffect": "Usa las opciones guardadas.",
   "settings.audioProfile.technicalDetails": "Detalles técnicos", "settings.audioProfile.outputDetails": "Salida: {device} · {detail}", "settings.proxyUrl": "URL del proxy",
-  "settings.runtimeSelfCheck": "Comprobación de ventana y proceso Explore", "settings.runtimeSelfCheckHealthy": "Comprobación superada", "settings.runtimeSelfCheckHealthyHelp": "La ventana Explore y su proceso de apoyo están disponibles. No verifica sitio web, cuenta, disponibilidad regional ni reproducción.", "settings.runtimeSelfCheckHelp": "Solo comprueba la ventana y el proceso Explore, no sitios web ni reproducción.",
+  "settings.runtimeSelfCheck": "Comprobación de ventana y proceso Explore", "settings.runtimeSelfCheckRetry": "Comprobar de nuevo", "settings.runtimeSelfCheckHealthy": "Comprobación superada", "settings.runtimeSelfCheckHealthyHelp": "La ventana Explore y su proceso de apoyo están disponibles. No verifica sitio web, cuenta, disponibilidad regional ni reproducción.", "settings.runtimeSelfCheckHelp": "Solo comprueba la ventana y el proceso Explore, no sitios web ni reproducción.",
   "playback.audioPlaying": "Audio en reproducción",
   "onboarding.coachTapTitle": "Toca un espacio vacío para mostrar controles", "onboarding.coachTapBody": "Este inicio rápido no inicia por sí solo música ni audio de escena.", "onboarding.coachPlaybackTitle": "Reproduce o pausa aquí", "onboarding.coachPlaybackBody": "Cuando quieras, usa el control central.", "onboarding.coachSourceTitle": "Elige una fuente en Player", "onboarding.coachSourceBody": "Aún no hay reproducción controlable. Elige música en Player.", "onboarding.coachOpenPlayer": "Abrir Player", "onboarding.coachSkip": "Saltar inicio rápido",
   "explore.retryExpand": "Reintentar expansión", "explore.retryExit": "Reintentar salida", "explore.showPanel": "Expandir para ver"

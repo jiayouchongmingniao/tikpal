@@ -20,6 +20,7 @@ const requiredFiles = [
   "deploy/chromium/web-mode-extension/apple-hide-external-ctas.css",
   "server/index.mjs",
   "server/web.mjs",
+  "scripts/open-207-debug-tunnel.sh",
   "docs/06-deployment/gentoo-kiosk-deploy-v1.md",
   "docs/06-deployment/raspberry-pi-kiosk-deploy-v1.md",
   "deploy/chromium/launch-tikpal-kiosk.sh",
@@ -219,6 +220,7 @@ async function run() {
   await assertExecutable("deploy/chromium/tikpal-explore-physical-acceptance.sh");
   await assertExecutable("deploy/chromium/tikpal-explore-switch-acceptance.sh");
   await assertExecutable("deploy/chromium/tikpal-web-mode.sh");
+  await assertExecutable("scripts/open-207-debug-tunnel.sh");
   await assertExecutable("scripts/tikpal-initial-entry-fixture.sh");
   await assertExecutable("deploy/turzx/install-turzx-evdi-display.sh");
   await assertExecutable("deploy/moode/tikpal-audio-adapt.sh");
@@ -412,13 +414,14 @@ async function run() {
   assert(quickSettingsAudioSource.includes("data-custom-audio-settings"), "Settings Audio Output should expose Custom switches when Custom is selected");
   assert(quickSettingsAudioSource.includes("data-custom-audio-warning"), "Custom Audio Output should show a visible caution line");
   assert(quickSettingsAudioSource.includes("data-custom-audio-toggle={choice.id}"), "Custom Audio Output switches should expose per-setting test hooks");
-  assert(quickSettingsAudioSource.includes("is-custom-active"), "Custom Audio Output layout should use the compact profile rail");
+  assert(quickSettingsAudioSource.includes('data-settings-detail="audio-custom"'), "Custom Audio Output should open in a dedicated kiosk-height page");
+  assert(!quickSettingsAudioSource.includes("audioCustomEditorOpen") && !quickSettingsAudioSource.includes("customEditorVisible"), "Custom Audio Output should not add a scrolling editor to the profile page");
   assert(quickSettingsAudioSource.includes("audio-output-header-dac"), "Audio Output detail should place DAC detail in the header");
   assert(quickSettingsAudioSource.includes("audio-output-diagnostics-chip"), "Audio Output detail should expose a touchable advanced-info hint");
   assert(quickSettingsAudioSource.includes('t("settings.openAudioOutput")'), "Preferences cards should use action-oriented Audio Output copy");
   assert(quickSettingsAudioSource.includes('t("settings.manageRooms")'), "Multi-room Settings card should use a concise management action");
   assert(quickSettingsAudioSource.includes('actionType: "reset_provider_profile"') && quickSettingsAudioSource.includes("profileResetProvider"), "Care Settings should expose a provider-scoped login reset card");
-  assert(quickSettingsAudioSource.includes('sendWebModeAction({ type: "reset_provider_profile", provider: card.provider })'), "Care Settings should send its displayed provider explicitly for profile reset");
+  assert(/sendWebModeAction\(\{\s*type: "reset_provider_profile",\s*provider: card\.provider\s*\}\)/.test(quickSettingsAudioSource), "Care Settings should send its displayed provider explicitly for profile reset");
   assert(quickSettingsAudioSource.includes('card.disabled || status.pending || pendingAction !== null'), "Care Settings should disable provider reset until a current or recent player exists");
   for (const profileResetCopyKey of ["settings.resetProviderProfile", "settings.resetProviderProfileMeta", "settings.tapAgainResetProviderProfile"]) {
     assert(onboardingI18nSource.includes(`"${profileResetCopyKey}"`), `Settings should include ${profileResetCopyKey} copy`);
@@ -427,6 +430,7 @@ async function run() {
   assert(!quickSettingsAudioSource.includes('mpdQualityError ?? (preferencesPending ? t("common.applying") : t("settings.mpdQualityMeta"))'), "Audio Output detail should not show redundant profile ids as the default footer");
   assert(!quickSettingsAudioSource.includes('settings-detail-note-grid" aria-label={t("settings.mpdQuality")}'), "Audio Output detail should not use boxed note cards beside profiles");
   assert(quickSettingsAudioSource.includes("audioDiagnostics"), "Audio Output should keep diagnostics behind a hidden detail");
+  assert(quickSettingsAudioSource.includes("audioProfileDetails") && quickSettingsAudioSource.includes("data-audio-profile-technical-details"), "Audio Output technical details should open in a separate kiosk-height page");
   assert(quickSettingsAudioSource.includes("parseAudioDiagnosticsText"), "Audio Diagnostics should parse helper text into friendly groups");
   assert(quickSettingsAudioSource.includes('kind: "multiroom"'), "Settings should expose Multi-room Audio instead of a Roon-only card");
   assert(quickSettingsAudioSource.includes('multiroomEcosystemChoices: MultiroomEcosystemId[] = ["roon", "lyrion", "tikpal", "music_assistant"]'), "Settings Multi-room should show all four ecosystems in order");
@@ -439,8 +443,8 @@ async function run() {
   assert(quickSettingsAudioSource.includes("settings.audioDiagnosticsNoActiveStream"), "Audio Diagnostics should show a friendly empty stream state");
   const audioDiagnosticsStylesSource = await readFile(path.join(ROOT, "src/styles.css"), "utf8");
   assert(audioDiagnosticsStylesSource.includes(".audio-output-title-row"), "Audio Output should style the title/DAC row");
-  assert(audioDiagnosticsStylesSource.includes('.settings-detail-panel[data-settings-detail="audio-output"].is-custom-active'), "Custom Audio Output should compact the full detail panel");
-  assert(audioDiagnosticsStylesSource.includes(".audio-output-detail-body.is-custom-active .audio-profile-option"), "Custom Audio Output should compact the preset cards so all switches fit");
+  assert(audioDiagnosticsStylesSource.includes(".custom-audio-detail-panel") && audioDiagnosticsStylesSource.includes(".custom-audio-settings-panel") && audioDiagnosticsStylesSource.includes("grid-template-columns: repeat(3, minmax(0, 1fr));"), "Custom Audio Output should use its dedicated compact three-column detail page");
+  assert(audioDiagnosticsStylesSource.includes(".audio-profile-details-card") && !audioDiagnosticsStylesSource.includes(".audio-output-detail-body {\n  display: grid;\n  gap: 12px;\n  align-content: start;\n  min-height: 0;\n  overflow-y: auto;"), "Audio Output technical details should fit without making the main panel scroll");
   assert(!quickSettingsAudioSource.includes("settings-diagnostics-chip-row"), "Audio Diagnostics should not duplicate summary chips above the cards");
   assert(audioDiagnosticsStylesSource.includes(".settings-diagnostics-raw"), "Audio Diagnostics should keep raw text folded separately");
   assert(
@@ -450,6 +454,24 @@ async function run() {
       && quickSettingsAudioSource.includes('data-device-maintenance={card.maintenance}'),
     "Device Settings should expose local Explore repair and Provider Guard maintenance cards"
   );
+  assert(
+    quickSettingsAudioSource.includes("deviceCardGroups")
+      && quickSettingsAudioSource.includes('data-settings-card-group={group.id}')
+      && quickSettingsAudioSource.includes('data-settings-appearance-tab={tab}'),
+    "Settings should group Device cards and combine appearance controls behind one entry"
+  );
+  for (const settingsCategoryCopyKey of [
+    "settings.appearanceLanguage",
+    "settings.appearanceLanguageMeta",
+    "settings.appearanceLanguageDetail",
+    "settings.openAppearance",
+    "settings.deviceStatus",
+    "settings.advancedMaintenance",
+    "settings.power"
+  ]) {
+    const localeCount = onboardingI18nSource.match(new RegExp(`"${settingsCategoryCopyKey.replaceAll(".", "\\.")}"`, "g"))?.length ?? 0;
+    assert(localeCount === 7, `${settingsCategoryCopyKey} should be translated for all seven locales`);
+  }
   const webModeDetailStart = quickSettingsAudioSource.indexOf("function renderWebModeDetail()");
   const webModeDetailEnd = quickSettingsAudioSource.indexOf("function renderDisplayDetail()", webModeDetailStart);
   const webModeDetailSource = quickSettingsAudioSource.slice(webModeDetailStart, webModeDetailEnd);
@@ -878,6 +900,8 @@ audio_output {
   assert(!apiUnit.includes("network-online.target"), "api unit should not wait for network-online.target");
   assert(webUnit.includes("server/web.mjs"), "web unit should use the production static server");
   assert(webUnit.includes("tikpal-audio-adapt.service"), "web unit should pull the audio adapter before startup");
+  assert(webUnit.includes("TIKPAL_WEB_KIOSK_HOST=127.0.0.1"), "web unit should bind the trusted kiosk UI to loopback");
+  assert(webUnit.includes("TIKPAL_WEB_REMOTE_HOST=0.0.0.0"), "web unit should keep the portable remote available on the LAN");
   assert(webUnit.includes("TIKPAL_WEB_REMOTE_PORT=4174"), "web unit should expose portable remote control separately from the kiosk UI");
   assert(webUnit.includes("EnvironmentFile=-@APP_DIR@/.env.kiosk"), "web unit should load the protected device-local portable remote key");
   assert(kioskDevtoolsUnit.includes("start-tikpal-kiosk-devtools-proxy.sh"), "kiosk DevTools unit should launch the LAN proxy");
@@ -1025,7 +1049,8 @@ audio_output {
     cwd: ROOT,
     env: {
       ...process.env,
-      TIKPAL_WEB_HOST: "127.0.0.1",
+      TIKPAL_WEB_KIOSK_HOST: "127.0.0.1",
+      TIKPAL_WEB_REMOTE_HOST: "127.0.0.1",
       TIKPAL_WEB_PORT: String(kioskPort),
       TIKPAL_WEB_REMOTE_PORT: String(remotePort),
       TIKPAL_WEB_DIST_DIR: webSmokeDir,
@@ -1039,7 +1064,7 @@ audio_output {
     await waitForWeb(kioskPort);
     const kioskPage = await requestWeb(kioskPort);
     const remotePage = await requestWeb(remotePort);
-    assert(kioskPage.status === 200, "kiosk web port should serve the full UI to LAN hosts");
+    assert(kioskPage.status === 200, "loopback kiosk web port should serve the full UI");
     assert(!kioskPage.body.includes("__TIKPAL_REMOTE_MODE__"), "kiosk web port should not inject portable remote mode");
     assert(remotePage.body.includes("__TIKPAL_REMOTE_MODE__=true"), "remote web port should inject portable remote mode");
 
@@ -2103,8 +2128,8 @@ sync_runtime_provider_pool_process_statuses ""
   );
   assert(
     playerOverlaySource.includes('status.pending ? t("status.updating")')
-      && playerOverlaySource.includes('t("status.live")')
-      && playerOverlaySource.includes('t("status.offlineView")')
+      && playerOverlaySource.includes('status.source !== "api" ? t("status.offlineView") : null')
+      && !playerOverlaySource.includes('status.source === "api" ? t("status.live")')
       && i18nSource.includes('"status.live": "Live"')
       && i18nSource.includes('"status.offlineView": "Offline view"')
       && i18nSource.includes('"status.updating": "Updating"')
@@ -4078,6 +4103,9 @@ sync_runtime_provider_pool_process_statuses ""
     assert(/dry-run restart suppressed/.test(invalidHeartbeatDryRun.stdout), "watchdog should keep malformed-heartbeat recovery in dry-run mode");
 
     const webModeProfileRoot = mkdtempSync(path.join(tmpdir(), "tikpal-web-mode-profile-"));
+    const webModeStateDir = mkdtempSync(path.join(tmpdir(), "tikpal-web-mode-watchdog-state-"));
+    const webModeStatePath = path.join(webModeStateDir, "web-mode-state.json");
+    writeFileSync(webModeStatePath, JSON.stringify({ activeProvider: "qq_music", openingProvider: null }, null, 2));
     const fakeProvider = spawn(process.execPath, [
       "-e",
       "setTimeout(() => {}, 60000)",
@@ -4099,7 +4127,8 @@ sync_runtime_provider_pool_process_statuses ""
           TIKPAL_KIOSK_WATCHDOG_API_URL_SCAN: "0",
           TIKPAL_KIOSK_WATCHDOG_GPU_LOG_SCAN: "0",
           TIKPAL_KIOSK_WATCHDOG_PAGE_HEARTBEAT_URL: `http://127.0.0.1:${heartbeatSmokePort}/heartbeat`,
-          TIKPAL_WEB_MODE_PROFILE_ROOT: webModeProfileRoot
+          TIKPAL_WEB_MODE_PROFILE_ROOT: webModeProfileRoot,
+          TIKPAL_WEB_MODE_STATE_PATH: webModeStatePath
         },
         encoding: "utf8"
       });

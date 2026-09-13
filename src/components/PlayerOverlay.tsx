@@ -396,8 +396,8 @@ export function PlayerOverlay({
   const sourceLine = [
     sourceLabel(playback.source, playbackTruth.sourceLabel),
     localizedSourceStatusLabel(playbackSource, pendingSource === playback.source),
-    status.pending ? t("status.updating") : status.source === "api" ? t("status.live") : t("status.offlineView")
-  ];
+    status.pending ? t("status.updating") : status.source !== "api" ? t("status.offlineView") : null
+  ].filter((line): line is string => Boolean(line));
   const playbackQueuePositionLabel = playbackTruth.isLive
     ? t("playback.liveStream")
     : playbackTruth.queuePositionLabel ?? "";

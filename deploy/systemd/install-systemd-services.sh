@@ -508,10 +508,16 @@ ensure_roonbridge_env() {
     printf '\n# MPD listening profile switcher used by Settings -> Audio Output.\n' >> "$env_file"
     printf 'TIKPAL_AUDIO_OUTPUT_PROFILE_COMMAND="sudo -n -E /usr/local/sbin/tikpal-audio-output-profile %%PROFILE%%"\n' >> "$env_file"
     updated=1
+  elif grep -qF 'TIKPAL_AUDIO_OUTPUT_PROFILE_COMMAND="./deploy/moode/tikpal-audio-output-profile.sh %PROFILE%"' "$env_file"; then
+    sed -i 's|^TIKPAL_AUDIO_OUTPUT_PROFILE_COMMAND=.*$|TIKPAL_AUDIO_OUTPUT_PROFILE_COMMAND="sudo -n -E /usr/local/sbin/tikpal-audio-output-profile %PROFILE%"|' "$env_file"
+    updated=1
   fi
   if ! grep -q '^TIKPAL_MPD_BITPERFECT_PROFILE_COMMAND=' "$env_file"; then
     printf '# Legacy Standard/Bit-perfect wrapper kept for old clients and rollback.\n' >> "$env_file"
     printf 'TIKPAL_MPD_BITPERFECT_PROFILE_COMMAND="sudo -n -E /usr/local/sbin/tikpal-mpd-bitperfect-profile %%MODE%%"\n' >> "$env_file"
+    updated=1
+  elif grep -qF 'TIKPAL_MPD_BITPERFECT_PROFILE_COMMAND="./deploy/moode/tikpal-mpd-bitperfect-profile.sh %MODE%"' "$env_file"; then
+    sed -i 's|^TIKPAL_MPD_BITPERFECT_PROFILE_COMMAND=.*$|TIKPAL_MPD_BITPERFECT_PROFILE_COMMAND="sudo -n -E /usr/local/sbin/tikpal-mpd-bitperfect-profile %MODE%"|' "$env_file"
     updated=1
   fi
   if ! grep -q '^TIKPAL_MPD_STANDARD_ALSA_DEVICE=' "$env_file"; then

@@ -5834,6 +5834,52 @@ select {
   min-width: 0;
 }
 
+.settings-grid.is-grouped-system {
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+  grid-auto-rows: auto;
+  gap: 12px;
+}
+
+.settings-card-group {
+  display: grid;
+  grid-template-rows: auto 118px;
+  align-content: start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.settings-card-group[data-settings-card-group="status"] {
+  grid-column: 1 / -1;
+}
+
+.settings-card-group[data-settings-card-group="maintenance"],
+.settings-card-group[data-settings-card-group="power"] {
+  grid-column: span 2;
+}
+
+.settings-card-group-header {
+  min-height: 16px;
+  color: var(--theme-text-soft);
+  font-size: 11px;
+  font-weight: 760;
+  letter-spacing: 0.08em;
+  line-height: 16px;
+  text-transform: uppercase;
+}
+
+.settings-card-group-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-auto-rows: 118px;
+  gap: 16px;
+  min-height: 0;
+}
+
+.settings-card-group[data-settings-card-group="maintenance"] .settings-card-group-grid,
+.settings-card-group[data-settings-card-group="power"] .settings-card-group-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .settings-content {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
@@ -7011,33 +7057,58 @@ select {
   background: var(--surface-panel-bg);
 }
 
+.appearance-language-detail {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.appearance-language-body {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 12px;
+  min-height: 0;
+}
+
+.appearance-language-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.appearance-language-tabs button {
+  min-height: 42px;
+  border: 1px solid var(--surface-control-border);
+  border-radius: 8px;
+  background: var(--surface-control-bg);
+  color: var(--theme-text-soft);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 740;
+  cursor: pointer;
+}
+
+.appearance-language-tabs button:hover,
+.appearance-language-tabs button:focus-visible {
+  border-color: var(--surface-control-border-hover);
+  background: var(--surface-control-bg-hover);
+  color: var(--theme-text);
+  outline: none;
+}
+
+.appearance-language-tabs button.is-active {
+  border-color: var(--theme-info);
+  background: var(--theme-info-muted);
+  color: var(--theme-text);
+}
+
 .settings-detail-panel[data-settings-detail="audio-output"] {
   grid-template-rows: auto minmax(0, 1fr);
   gap: 12px;
-}
-
-.settings-detail-panel[data-settings-detail="audio-output"].is-custom-active {
-  gap: 4px;
-  padding-top: 8px;
 }
 
 .settings-detail-panel[data-settings-detail="audio-output"] > .settings-card-action {
   align-self: start;
   margin: 0;
   padding-top: 2px;
-}
-
-.settings-detail-panel[data-settings-detail="audio-output"].is-custom-active .settings-detail-header {
-  gap: 8px;
-}
-
-.settings-detail-panel[data-settings-detail="audio-output"].is-custom-active .settings-detail-header > div {
-  gap: 2px;
-}
-
-.settings-detail-panel[data-settings-detail="audio-output"].is-custom-active .settings-detail-back {
-  min-height: 34px;
-  padding-inline: 12px;
 }
 
 .settings-detail-header {
@@ -7145,12 +7216,6 @@ select {
   opacity: 0.72;
 }
 
-.settings-detail-panel[data-settings-detail="audio-output"].is-custom-active .audio-output-header-hint {
-  height: 0;
-  opacity: 0;
-  overflow: hidden;
-}
-
 .settings-detail-back {
   min-width: 88px;
   min-height: 42px;
@@ -7220,11 +7285,6 @@ select {
   min-height: 0;
 }
 
-.audio-output-detail-body.is-custom-active {
-  gap: 6px;
-  margin-top: -2px;
-}
-
 .audio-profile-options-detail {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
@@ -7254,51 +7314,75 @@ select {
 }
 
 .audio-profile-technical-details {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  gap: 8px;
+  min-height: 42px;
   padding: 11px 14px;
   border: 1px solid color-mix(in srgb, var(--surface-card-border) 82%, transparent);
   border-radius: 12px;
   background: color-mix(in srgb, var(--surface-card) 72%, transparent);
   color: var(--theme-text-soft);
+  font: inherit;
   font-size: 13px;
   line-height: 1.45;
+  cursor: pointer;
 }
 
-.audio-profile-technical-details summary {
-  cursor: pointer;
+.audio-profile-technical-details:hover,
+.audio-profile-technical-details:focus-visible {
+  border-color: var(--surface-control-border-hover);
+  background: var(--surface-control-bg-hover);
+  color: var(--theme-text);
+  outline: none;
+}
+
+.audio-profile-technical-details span {
   color: var(--theme-text);
   font-weight: 650;
 }
 
-.audio-profile-technical-details p {
-  margin: 8px 0 0;
+.audio-profile-details-panel {
+  display: grid;
+  align-content: start;
+  min-height: 0;
 }
 
-.audio-profile-technical-details p + p {
+.audio-profile-details-card {
+  display: grid;
+  gap: 12px;
+  max-width: 840px;
+  padding: 18px;
+  border: 1px solid color-mix(in srgb, var(--surface-card-border) 82%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface-card) 72%, transparent);
+}
+
+.audio-profile-details-card > span {
+  color: var(--theme-accent-strong);
+  font-size: 13px;
+  font-weight: 760;
+}
+
+.audio-profile-details-card p {
+  margin: 0;
+  color: var(--theme-text-soft);
+  font-size: clamp(15px, 0.84vw, 18px);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.audio-profile-details-card p + p {
   color: var(--theme-text-muted);
 }
 
-.audio-output-detail-body.is-custom-active .audio-profile-option {
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
-  align-content: center;
-  min-height: 74px;
-  padding: 7px 10px;
-  gap: 3px 9px;
-}
 
-.audio-output-detail-body.is-custom-active .audio-profile-option > svg {
-  grid-row: 1 / span 2;
-}
-
-.audio-output-detail-body.is-custom-active .audio-profile-option strong,
-.audio-output-detail-body.is-custom-active .audio-profile-option span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.audio-output-detail-body.is-custom-active .audio-profile-option em {
-  display: none;
+.custom-audio-detail-panel {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-height: 0;
 }
 
 .custom-audio-settings-panel {

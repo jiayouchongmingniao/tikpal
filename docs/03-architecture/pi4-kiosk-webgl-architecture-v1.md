@@ -77,7 +77,7 @@ TIKPAL_MPD_DEFAULT_QUEUE_PATH=Codex
 
 These names are now used by `deploy/chromium/env.kiosk.example`.
 
-`server/web.mjs` owns two fixed production listeners. Port `4173` always serves the full kiosk UI and trusted full API proxy; port `4174` always injects portable remote mode and limits its proxy to `/api/v1/remote/*`. This replaces Host/address-based UI selection, and `TIKPAL_WEB_REMOTE_PORT` must differ from `TIKPAL_WEB_PORT`.
+`server/web.mjs` owns two fixed production listeners. Port `4173` is loopback-only and serves the full Kiosk UI and trusted full API proxy; port `4174` is LAN-facing, injects portable remote mode, and limits its proxy to `/api/v1/remote/*`. `TIKPAL_WEB_KIOSK_HOST` and `TIKPAL_WEB_REMOTE_HOST` set their independent bind addresses, and the ports must differ. Desktop debugging reaches the local Kiosk through SSH forwarding.
 
 ## Explore Runtime
 

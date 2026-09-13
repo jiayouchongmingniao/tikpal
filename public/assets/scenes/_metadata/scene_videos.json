@@ -24,10 +24,10 @@
       "roomModes": [
         "focus"
       ],
-      "audioGainDb": 0,
+      "audioGainDb": -12,
       "sha256": "9a27e8c0da70bf570c461d4b39bf17c0a5d06733ca1520c76b7bc0a242617590",
-      "audioFilename": "audio/cloud-sunrise.ogg",
-      "audioSha256": "aa15d4ade6ec2d3b81673eea706a07c8fca79c7b9d69d86ab203b1122a6ed17a"
+      "audioFilename": "audio/cloud-sunrise-air-dae62d56.ogg",
+      "audioSha256": "dae62d56ed0e483f15861eb582e690188e911c0c2c2c6505cb834117d46312b0"
     },
     {
       "id": "deep-blue-ocean",

@@ -1545,6 +1545,36 @@ try {
             return next;
           }
 
+          if (mode === "localFileMetadata") {
+            const next = withSource(state, "mpd");
+            next.playback = {
+              ...next.playback,
+              state: "playing",
+              source: "mpd",
+              albumArtUrl: null,
+              title: "Light_Music - White Noise - 20m01s - White Noise",
+              artist: "Light_Music",
+              album: "White Noise / Brown Noise",
+              elapsedSeconds: 248,
+              durationSeconds: null,
+              currentTrackIndex: 16,
+              queueLength: 41,
+              favorite: false,
+              queuePreview: [
+                {
+                  id: "Codex/Light_Music - White Noise - 20m01s - White Noise.mp3",
+                  position: 16,
+                  title: "Light_Music - White Noise - 20m01s - White Noise",
+                  artist: "Light_Music",
+                  album: "White Noise / Brown Noise",
+                  durationSeconds: 1201,
+                  active: true
+                }
+              ]
+            };
+            return next;
+          }
+
           if (mode === "hifiRememberedDifferentRadio" || mode === "hifiRememberedSameRadio" || mode === "hifiRememberedRadioPendingMemory") {
             const currentStationId = mode === "hifiRememberedSameRadio" ? "radio-503" : "radio-500";
             const next = withSource(state, "radio", { radioStationId: currentStationId });
@@ -4375,6 +4405,13 @@ try {
     "document.querySelector('.track-stack h1')?.textContent?.trim().startsWith('WolfgangAmadeusMozart') === true && !document.querySelector('.track-stack')?.textContent?.includes('Unknown Artist') && !document.querySelector('.track-stack')?.textContent?.includes('Untitled')",
     "player suppresses placeholder artist and album metadata"
   );
+  const playerLocalMetadataPatchVersion = await setStatePatchMode(client, "localFileMetadata");
+  await waitForStatePatchRefresh(client, playerLocalMetadataPatchVersion, "Player local-file metadata fixture refreshes");
+  await expectEventually(
+    client,
+    "document.querySelector('.track-stack h1')?.textContent?.trim() === 'White Noise' && document.querySelector('.track-stack')?.textContent?.includes('Light_Music') === true && !document.querySelector('.source-line')?.textContent?.includes('Live') && document.querySelector('.track-stack')?.textContent?.includes('Live stream') !== true",
+    "player prefers local queue metadata and never labels an untimed Library track as live"
+  );
   const playerLivePatchVersion = await setStatePatchMode(client, "hifiRememberedDifferentRadio");
   await waitForStatePatchRefresh(client, playerLivePatchVersion, "Player live-radio fixture refreshes");
   await expectEventually(
@@ -4916,7 +4953,7 @@ try {
       (() => {
         const labels = [...document.querySelectorAll('.settings-top-tab span')].map((node) => node.textContent?.trim());
         return !document.querySelector('.settings-nav')
-          && labels.join('|') === 'Preferences|Library|Link|Care'
+          && labels.join('|') === 'Preferences|Library|Network & Explore|Device & maintenance'
           && !labels.includes('Home');
       })()
     `,
@@ -4937,7 +4974,7 @@ try {
     `,
     "Console avoids heavy backdrop blur"
   );
-  await expect(client, settingsSummaryExpression("output", ["Audio Output", "Multi-room Audio", "Display", "Time & Night", "Font", "Skin", "Lyrics"]), "Console Preferences summary keeps fixed hardware tiles");
+  await expect(client, settingsSummaryExpression("output", ["Audio Output", "Multi-room Audio", "Display", "Time & Night", "Appearance & language", "Lyrics"]), "Console Preferences summary keeps daily listening cards and one Appearance & language entry");
   await expect(
     client,
     `
@@ -4962,7 +4999,7 @@ try {
   );
   await expect(client, "document.querySelector('[data-settings-section=\"output\"]') !== null", "Console Preferences section opens");
   await expect(client, "document.querySelector('[data-settings-detail]') === null", "Console Preferences summary stays summary-first");
-  await expect(client, settingsSummaryExpression("output", ["Audio Output", "Multi-room Audio", "Display", "Time & Night", "Font", "Skin", "Lyrics"]), "Console Preferences remains a fixed hardware tile grid");
+  await expect(client, settingsSummaryExpression("output", ["Audio Output", "Multi-room Audio", "Display", "Time & Night", "Appearance & language", "Lyrics"]), "Console Preferences remains a fixed daily-settings grid");
 
   await evaluate(
     client,
@@ -4976,9 +5013,25 @@ try {
   );
   await expect(
     client,
-    "document.querySelector('[data-settings-detail=\"audio-output\"]') !== null && document.querySelectorAll('[data-audio-output-profile]').length === 4 && ![...document.querySelectorAll('[data-audio-output-profile]')].some((node) => node.textContent.includes('DAC')) && document.querySelector('.audio-profile-technical-details')?.open === false",
-    "audio profiles lead with listening intent and keep technical details collapsed"
+    "document.querySelector('[data-settings-detail=\"audio-output\"]') !== null && document.querySelectorAll('[data-audio-output-profile]').length === 4 && ![...document.querySelectorAll('[data-audio-output-profile]')].some((node) => node.textContent.includes('DAC')) && document.querySelector('[data-audio-profile-technical-details]') instanceof HTMLButtonElement",
+    "audio profiles lead with listening intent and put technical details behind a separate page"
   );
+  await evaluate(client, "document.querySelector('[data-audio-profile-technical-details]')?.click(); true");
+  await expect(
+    client,
+    "document.querySelector('[data-settings-detail=\"audio-profile-details\"]') !== null && document.querySelector('.audio-profile-details-card') !== null && document.querySelector('.settings-content')?.scrollHeight <= document.querySelector('.settings-content')?.clientHeight",
+    "audio profile technical details fit in their own kiosk-height page"
+  );
+  await evaluate(client, "document.querySelector('.settings-detail-back')?.click(); true");
+  await expect(client, "document.querySelector('[data-settings-detail=\"audio-output\"]') !== null", "audio profile technical details return to Audio Output");
+  await evaluate(client, "document.querySelector('[data-audio-output-profile=\"custom\"]')?.click(); true");
+  await expect(
+    client,
+    "document.querySelector('[data-settings-detail=\"audio-custom\"]') !== null && document.querySelectorAll('[data-custom-audio-toggle]').length === 6 && document.querySelector('.settings-content')?.scrollHeight <= document.querySelector('.settings-content')?.clientHeight",
+    "custom Audio Output opens its own kiosk-height page without scrolling"
+  );
+  await evaluate(client, "document.querySelector('.settings-detail-back')?.click(); true");
+  await expect(client, "document.querySelector('[data-settings-detail=\"audio-output\"]') !== null", "custom Audio Output returns to Audio Output");
   await evaluate(client, "document.querySelector('.settings-detail-back')?.click(); true");
   await expect(client, "document.querySelector('[data-settings-detail]') === null", "audio profile drawer returns to Console summary");
 
@@ -5060,17 +5113,18 @@ try {
     client,
     `
       (() => {
-        const target = [...document.querySelectorAll('.settings-card-button')].find((node) => node.textContent.includes('Font'));
+        const target = [...document.querySelectorAll('.settings-card-button')].find((node) => node.textContent.includes('Appearance & language'));
         target?.click();
         return Boolean(target);
       })()
     `
   );
-  await expect(client, "document.querySelector('[data-settings-detail=\"font\"]') !== null", "Console font drawer opens");
+  await expect(client, "document.querySelector('[data-settings-detail=\"appearance\"]') !== null && document.querySelector('[data-settings-appearance-tab=\"language\"]')?.getAttribute('aria-selected') === 'true'", "Console Appearance & language drawer opens on the language tab");
+  await evaluate(client, "document.querySelector('[data-settings-appearance-tab=\"font\"]')?.click(); true");
   await expect(
     client,
-    "document.querySelectorAll('.font-theme-options-detail .font-theme-option').length >= 6 && document.querySelector('.font-theme-options-detail')?.textContent?.includes('Hardware UI')",
-    "Console font drawer shows expanded modern font presets"
+    "document.querySelectorAll('[data-settings-detail=\"appearance\"] .font-theme-options-detail .font-theme-option').length >= 6 && document.querySelector('[data-settings-detail=\"appearance\"] .font-theme-options-detail')?.textContent?.includes('Hardware UI')",
+    "Console Appearance & language drawer keeps font presets behind its font tab"
   );
   await expect(
     client,
@@ -5080,7 +5134,7 @@ try {
         return Boolean(content && content.scrollHeight <= content.clientHeight);
       })()
     `,
-    "Console font drawer stays within kiosk height"
+    "Console Appearance & language drawer stays within kiosk height"
   );
 
   await evaluate(
@@ -5093,7 +5147,7 @@ try {
       })()
     `
   );
-  await expect(client, "document.querySelector('[data-settings-detail]') === null", "Console font drawer closes back to summary");
+  await expect(client, "document.querySelector('[data-settings-detail]') === null", "Console Appearance & language drawer closes back to summary");
 
   await evaluate(
     client,
@@ -5154,19 +5208,77 @@ try {
     client,
     `
       (() => {
+        if (window.__tikpalOwnershipCheckOriginalFetch) return true;
+        const nativeFetch = window.fetch.bind(window);
+        window.__tikpalOwnershipCheckOriginalFetch = nativeFetch;
+        window.__tikpalOwnershipCheckRequests = [];
+        window.fetch = async (input, init) => {
+          const rawUrl = typeof input === 'string' ? input : input?.url;
+          const pathname = rawUrl ? new URL(rawUrl, window.location.href).pathname : '';
+          if (pathname !== '/api/v1/web-mode/ownership-check' && pathname !== '/api/v1/web-mode/ownership-repair') {
+            return nativeFetch(input, init);
+          }
+          window.__tikpalOwnershipCheckRequests.push({ pathname, method: init?.method ?? 'GET' });
+          return new Response(JSON.stringify({
+            supported: true,
+            ok: true,
+            repaired: false,
+            mismatches: [],
+            repairedPaths: [],
+            blockedPaths: [],
+            message: 'Explore runtime ownership is healthy'
+          }), { headers: { 'content-type': 'application/json' } });
+        };
+        return true;
+      })()
+    `
+  );
+  await evaluate(
+    client,
+    `
+      (() => {
         const section = document.querySelector('[data-settings-tab="system"]');
         section?.click();
         return Boolean(section);
       })()
     `
   );
-  await expect(client, "document.querySelector('[data-settings-section=\"system\"]') !== null", "Console Care section opens");
+  await expect(client, "document.querySelector('[data-settings-section=\"system\"]') !== null", "Console Device & maintenance section opens");
   await expect(
     client,
-    "[...document.querySelectorAll('.settings-top-tab.is-active')].length === 1 && document.querySelector('.settings-top-tab.is-active')?.textContent?.trim() === 'Care'",
-    "Console only highlights the active Care chip"
+    "[...document.querySelectorAll('.settings-top-tab.is-active')].length === 1 && document.querySelector('.settings-top-tab.is-active')?.textContent?.trim() === 'Device & maintenance'",
+    "Console only highlights the active Device & maintenance chip"
   );
-  await expect(client, settingsSummaryExpression("system", ["System", "Restart", "Shutdown"]), "Console Care summary keeps fixed hardware tiles");
+  await expect(client, settingsSummaryExpression("system", ["System", "Provider Guard updates", "Help", "Explore window & process check", "Reset player login", "Restart", "Shutdown"]), "Console Device & maintenance separates status, maintenance, and power cards");
+  await expect(client, "[...document.querySelectorAll('[data-settings-card-group]')].map((node) => node.getAttribute('data-settings-card-group')).join('|') === 'status|maintenance|power'", "Console Device & maintenance labels status, advanced maintenance, and power groups");
+  await expectEventually(
+    client,
+    "window.__tikpalOwnershipCheckRequests?.length === 1 && document.querySelector('[data-device-maintenance=\"ownership\"]')?.textContent?.includes('Check again') === true",
+    "Device Explore check runs once on entry and exposes an explicit recheck"
+  );
+  await wait(5200);
+  await expect(
+    client,
+    "window.__tikpalOwnershipCheckRequests?.length === 1",
+    "Device Explore check does not repeat while settings refresh in the background"
+  );
+  await evaluate(client, "document.querySelector('[data-device-maintenance=\"ownership\"]')?.click(); true");
+  await expectEventually(
+    client,
+    "window.__tikpalOwnershipCheckRequests?.length === 2 && window.__tikpalOwnershipCheckRequests.every((request) => request.pathname === '/api/v1/web-mode/ownership-check' && request.method === 'GET')",
+    "Device Explore recheck remains read-only"
+  );
+  await evaluate(
+    client,
+    `
+      (() => {
+        window.fetch = window.__tikpalOwnershipCheckOriginalFetch;
+        delete window.__tikpalOwnershipCheckOriginalFetch;
+        delete window.__tikpalOwnershipCheckRequests;
+        return true;
+      })()
+    `
+  );
 
   await evaluate(
     client,
@@ -5190,8 +5302,8 @@ try {
       })()
     `
   );
-  await expect(client, "document.querySelector('[data-settings-section=\"network\"]') !== null", "Console Link section opens");
-  await expect(client, settingsSummaryExpression("network", ["Network", "Explore"]), "Console Link summary keeps fixed hardware tiles");
+  await expect(client, "document.querySelector('[data-settings-section=\"network\"]') !== null", "Console Network & Explore section opens");
+  await expect(client, settingsSummaryExpression("network", ["Network", "Explore"]), "Console Network & Explore summary keeps fixed hardware tiles");
   await expect(
     client,
     `
@@ -5201,7 +5313,7 @@ try {
         return Boolean(shell && content && shell.scrollHeight <= shell.clientHeight && content.scrollHeight <= content.clientHeight);
       })()
     `,
-    "Console Link summary stays within kiosk height"
+    "Console Network & Explore summary stays within kiosk height"
   );
   await evaluate(
     client,

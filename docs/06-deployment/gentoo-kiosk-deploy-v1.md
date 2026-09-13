@@ -56,7 +56,17 @@ If a future Gentoo host runs virtual kiosk only, set `TIKPAL_KIOSK_DISPLAY=:1`, 
 
 ## Portable Remote Authorization
 
-Port `4174` serves the narrow portable remote. Set a non-empty `TIKPAL_PORTABLE_API_KEY` once in the device-local `.env.kiosk` (`openssl rand -hex 32` is suitable) and keep that file mode `0600 moode:moode`. Both `tikpal-api.service` and `tikpal-web.service` load it. A LAN browser never receives or stores the key: the web service injects it only while proxying its exact `POST /api/v1/remote/actions` request, replacing stale browser-supplied values. The key remains required for direct non-loopback API clients; do not put it in URLs, browser storage, source control, or logs.
+Port `4173` is loopback-only and serves the physical Kiosk plus the Explore side panel. Port `4174` serves the narrow portable remote to the LAN. Set a non-empty `TIKPAL_PORTABLE_API_KEY` once in the device-local `.env.kiosk` (`openssl rand -hex 32` is suitable) and keep that file mode `0600 moode:moode`. Both `tikpal-api.service` and `tikpal-web.service` load it. A LAN browser never receives or stores the key: the web service injects it only while proxying its exact `POST /api/v1/remote/actions` request, replacing stale browser-supplied values. The key remains required for direct non-loopback API clients; do not put it in URLs, browser storage, source control, or logs.
+
+### Desktop Kiosk debugging
+
+Use the repository helper on macOS rather than exposing the full Kiosk UI to the LAN:
+
+```bash
+npm run debug:207
+```
+
+It opens authenticated SSH forwards from local `4173` and `9222` to the device loopback ports, then opens `http://127.0.0.1:4173`. The same page has the normal local Kiosk capability boundary; `9222` is available for DevTools. Run `npm run debug:207 -- stop` to close the tunnel. Set `TIKPAL_DEBUG_OPEN_BROWSER=0` when starting it from a terminal-only session.
 
 ### 2026-09-12 207 P0 recovery
 

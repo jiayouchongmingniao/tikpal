@@ -135,7 +135,7 @@ stateDiagram-v2
 - Cards are summary-first.
 - The visible surface is Console, while the internal app mode remains `quickSettings` for compatibility.
 - Console has no Home or Overview category and opens directly to Preferences.
-- The only chips are Preferences, Library, Link, and Care, rendered as a listening console rather than a left sidebar.
+- The only chips are Preferences, Library, Network & Explore, and Device & maintenance, rendered as a listening console rather than a left sidebar. Preferences keeps listening, display, and one Appearance & language entry; Device & maintenance keeps status and updates above Advanced maintenance and Power actions.
 - The header shows current source/playback truth and a top-right `Focus / Calm / Sleep / Hi-Fi / Explore` shortcut group. Selecting the current room mode returns to Ambient without another API write; selecting another mode applies it before returning, while Explore reuses the existing provider flow.
 - Library/NAS controls stay status-first on the kiosk; complex SMB/NFS setup and credentials belong to remote/admin flows.
 - Swipe up returns to ambient even when the gesture starts inside the protected Console panel.

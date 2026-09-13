@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Airplay, Bluetooth, Captions, Cast, CheckCircle2, CircleHelp, Clock3, Cpu, Database, EthernetPort, Eye, EyeOff, Globe2, HardDrive, Info, Monitor, Moon, Music2, Palette, PanelRightClose, Plus, Power, Radio as RadioIcon, RotateCcw, Search, Server, SlidersHorizontal, Target, Trash2, Type, Usb, Volume2, Waves } from "lucide-react";
-import { checkGuardOta, checkWebModeOwnership, deleteNasSource, discoverNasSources, fetchAudioLibrary, fetchAudioOutputDiagnostics, fetchGuardOtaStatus, fetchMultiroom, fetchNasSources, fetchWebModeState, mountNasSource, repairWebModeOwnership, saveNasSource, sendWebModeAction, testNasSource, testWebModeProxy, unmountNasSource, updateMultiroomEcosystem, updateWebModeSettings } from "../api/tikpalClient";
+import { checkGuardOta, checkWebModeOwnership, deleteNasSource, discoverNasSources, fetchAudioLibrary, fetchAudioOutputDiagnostics, fetchGuardOtaStatus, fetchMultiroom, fetchNasSources, fetchWebModeState, mountNasSource, saveNasSource, sendWebModeAction, testNasSource, testWebModeProxy, unmountNasSource, updateMultiroomEcosystem, updateWebModeSettings } from "../api/tikpalClient";
 import { languageOptions, useI18n } from "../i18n";
 import { getPlaybackDisplayTruth } from "../playbackTruth";
 import { getSourceDisplayStatus, getSourceDisplayStatusLabel } from "../sourceStatus";
@@ -37,7 +37,8 @@ interface QuickSettingsOverlayProps {
 type CardTone = "cyan" | "gold" | "neutral" | "warn" | "danger";
 type ActionableCardKey = "library_scan" | "wizard" | "reset_provider_profile" | "reboot" | "shutdown";
 type SettingsSectionKey = "output" | "library" | "network" | "system";
-type SettingsDetailView = "appearance" | "audioDiagnostics" | "audioOutput" | "display" | "font" | "language" | "lyrics" | "multiroom" | "nas" | "night" | "webMode" | null;
+type SettingsDetailView = "appearance" | "audioCustom" | "audioDiagnostics" | "audioOutput" | "audioProfileDetails" | "display" | "font" | "language" | "lyrics" | "multiroom" | "nas" | "night" | "webMode" | null;
+type AppearanceDetailTab = "language" | "font" | "skin";
 type LibraryStorageCounts = {
   local: number | null;
   nas: number | null;
@@ -232,13 +233,21 @@ const fontChoices: Array<{ id: FontTheme; label: string; sample: string }> = [
   { id: "mono", label: "Mono Grid", sample: "Noto Mono CJK" }
 ];
 
-const lyricsSizeChoices: Array<{ id: LyricsFontSize; label: string; sample: string }> = [
+const lyricsSizeChoices: Array<{
+  id: LyricsFontSize;
+  label: string;
+  sample: string;
+}> = [
   { id: "small", label: "Small", sample: "Low profile" },
   { id: "medium", label: "Medium", sample: "Balanced" },
   { id: "large", label: "Large", sample: "Readable distance" }
 ];
 
-const surfaceThemeChoices: Array<{ id: SurfaceTheme; label: string; sample: string }> = [
+const surfaceThemeChoices: Array<{
+  id: SurfaceTheme;
+  label: string;
+  sample: string;
+}> = [
   { id: "warm-gold", label: "Warm Gold", sample: "Amber glass" },
   { id: "graphite-silver", label: "Graphite Silver", sample: "Hi-Fi graphite" },
   { id: "ivory-studio", label: "Ivory Studio", sample: "Soft studio" }
@@ -289,43 +298,19 @@ function nasStatusLabel(status: string, t: Translate) {
   }
 }
 
-const timeZoneChoices = [
-  "Asia/Shanghai",
-  "America/Los_Angeles",
-  "America/New_York",
-  "Europe/London",
-  "Europe/Paris",
-  "Asia/Tokyo",
-  "Australia/Sydney",
-  "UTC"
-];
+const timeZoneChoices = ["Asia/Shanghai", "America/Los_Angeles", "America/New_York", "Europe/London", "Europe/Paris", "Asia/Tokyo", "Australia/Sydney", "UTC"];
 
-const sectionCopy: Record<SettingsSectionKey, { label: string; description: string }> = {
-  output: {
-    label: "Preferences",
-    description: "Audio, display, type, and listening overlays."
-  },
-  library: {
-    label: "Library",
-    description: "Local music, USB, NAS, and scan status."
-  },
-  network: {
-    label: "Connect",
-    description: "Connectivity and remote reachability."
-  },
-  system: {
-    label: "Device",
-    description: "Guarded restart and shutdown actions."
-  }
-};
-
-const settingsTabs: Array<{ id: SettingsSectionKey; label: string; Icon: typeof Database }> = [
-  { id: "output", label: "Preferences", Icon: Volume2 },
-  { id: "library", label: "Library", Icon: Database },
-  { id: "network", label: "Connect", Icon: EthernetPort },
-  { id: "system", label: "Device", Icon: Cpu }
+const settingsTabs: Array<{ id: SettingsSectionKey; Icon: typeof Database }> = [
+  { id: "output", Icon: Volume2 },
+  { id: "library", Icon: Database },
+  { id: "network", Icon: EthernetPort },
+  { id: "system", Icon: Cpu }
 ];
-const roomShortcuts: Array<{ id: RoomMode | "explore"; label: string; Icon: typeof Target }> = [
+const roomShortcuts: Array<{
+  id: RoomMode | "explore";
+  label: string;
+  Icon: typeof Target;
+}> = [
   { id: "focus", label: "Focus", Icon: Target },
   { id: "calm", label: "Calm", Icon: Waves },
   { id: "sleep", label: "Sleep", Icon: Moon },
@@ -354,7 +339,11 @@ function normalizeProxyUrl(value: string) {
 function hideLocalKeyboard() {
   if (!localKioskHosts.has(window.location.hostname) || window.__TIKPAL_REMOTE_MODE__) return;
   window.dispatchEvent(new Event("tikpal:keyboard-context-clear"));
-  void sendWebModeAction({ type: "keyboard", enabled: false, dismissSticky: true }).catch(() => undefined);
+  void sendWebModeAction({
+    type: "keyboard",
+    enabled: false,
+    dismissSticky: true
+  }).catch(() => undefined);
 }
 
 function getConsoleSourceIcon(sourceId: AudioState["currentSource"]["id"]) {
@@ -379,47 +368,14 @@ function getConsoleStateClass(playback: PlaybackSummary, source: AudioState["cur
   return "is-stopped";
 }
 
-export function QuickSettingsOverlay({
-  active,
-  audio,
-  playback,
-  system,
-  runtime,
-  status,
-  fontTheme,
-  surfaceTheme,
-  lyricsVisible,
-  lyricsFontSize,
-  roomExperience,
-  onFontThemeChange,
-  onSurfaceThemeChange,
-  onLyricsVisibleChange,
-  onLyricsFontSizeChange,
-  onExperienceAction,
-  onOpenWebMode,
-  onSystemAction,
-  onPreviewScreenSaver,
-  onOpenWizard,
-  onReturnAmbient,
-  initialDetail,
-  onInitialDetailConsumed
-}: QuickSettingsOverlayProps) {
-  const {
-    t,
-    preferences,
-    pending: preferencesPending,
-    error: preferencesError,
-    setLocale,
-    setDisplaySleepPreferences,
-    setAudioOutputProfile,
-    setAudioOutputCustomSettings,
-    friendlyError
-  } = useI18n();
+export function QuickSettingsOverlay({ active, audio, playback, system, runtime, status, fontTheme, surfaceTheme, lyricsVisible, lyricsFontSize, roomExperience, onFontThemeChange, onSurfaceThemeChange, onLyricsVisibleChange, onLyricsFontSizeChange, onExperienceAction, onOpenWebMode, onSystemAction, onPreviewScreenSaver, onOpenWizard, onReturnAmbient, initialDetail, onInitialDetailConsumed }: QuickSettingsOverlayProps) {
+  const { t, preferences, pending: preferencesPending, error: preferencesError, setLocale, setDisplaySleepPreferences, setAudioOutputProfile, setAudioOutputCustomSettings, friendlyError } = useI18n();
   const localePending = preferencesPending;
   const localeError = preferencesError;
   const overlayReturnGesture = useOverlayReturnGesture(onReturnAmbient);
   const [activeSection, setActiveSection] = useState<SettingsSectionKey>("output");
   const [detailView, setDetailView] = useState<SettingsDetailView>(null);
+  const [appearanceDetailTab, setAppearanceDetailTab] = useState<AppearanceDetailTab>("language");
   const [confirmAction, setConfirmAction] = useState<ActionableCardKey | null>(null);
   const [pendingAction, setPendingAction] = useState<ActionableCardKey | null>(null);
   const [pendingBrightness, setPendingBrightness] = useState<number | null>(null);
@@ -430,6 +386,10 @@ export function QuickSettingsOverlay({
   const [multiroomError, setMultiroomError] = useState<string | null>(null);
   const [audioOutputPendingProfile, setAudioOutputPendingProfile] = useState<AudioOutputProfile | null>(null);
   const [audioOutputPendingCustomSettings, setAudioOutputPendingCustomSettings] = useState<Partial<Record<AudioOutputCustomSettingId, boolean>> | null>(null);
+  const [audioProfileDetails, setAudioProfileDetails] = useState<{
+    title: string;
+    technical: string;
+  } | null>(null);
   const [mpdQualityError, setMpdQualityError] = useState<string | null>(null);
   const [audioDiagnostics, setAudioDiagnostics] = useState<AudioOutputDiagnostics | null>(null);
   const [audioDiagnosticsPending, setAudioDiagnosticsPending] = useState(false);
@@ -491,27 +451,16 @@ export function QuickSettingsOverlay({
   const consoleStateLabel = getConsoleStateLabel(playback, currentSource);
   const consoleStateClass = getConsoleStateClass(playback, currentSource);
   const consolePlaybackTruth = getPlaybackDisplayTruth(playback, audio, fontTheme);
-  const consoleTitle = consolePlaybackTruth.title
-    || currentSource.connectedLabel
-    || currentSource.advertisedLabel
-    || currentSource.secondaryStatus
-    || currentSource.label;
-  const consoleSubtitle = [
-    consolePlaybackTruth.artist || consolePlaybackTruth.album || currentSource.secondaryStatus || currentSource.label,
-    `${currentSource.label} ${consoleStateLabel}`
-  ].filter(Boolean).join(" · ");
-  const sectionLabel = useCallback(
-    (section: SettingsSectionKey) => t(`settings.${section === "output" ? "preferences" : section === "network" ? "link" : section === "system" ? "care" : "library"}`),
-    [t]
-  );
-  const sectionDescription = useCallback(
-    (section: SettingsSectionKey) => t(`settings.${section === "output" ? "preferencesDesc" : section === "network" ? "linkDesc" : section === "system" ? "careDesc" : "libraryDesc"}`),
-    [t]
-  );
-  const localizedErrorMessage = useCallback(
-    (error: unknown, fallbackKey = "error.generic") => friendlyError(error instanceof Error ? error.message : typeof error === "string" ? error : null, fallbackKey) ?? t(fallbackKey),
-    [friendlyError, t]
-  );
+  const consoleTitle = consolePlaybackTruth.title || currentSource.connectedLabel || currentSource.advertisedLabel || currentSource.secondaryStatus || currentSource.label;
+  const consoleSubtitle = [consolePlaybackTruth.artist || consolePlaybackTruth.album || currentSource.secondaryStatus || currentSource.label, `${currentSource.label} ${consoleStateLabel}`].filter(Boolean).join(" · ");
+  const sectionLabel = useCallback((section: SettingsSectionKey) => t(`settings.${section === "output" ? "preferences" : section === "network" ? "link" : section === "system" ? "care" : "library"}`), [t]);
+  const sectionDescription = useCallback((section: SettingsSectionKey) => t(`settings.${section === "output" ? "preferencesDesc" : section === "network" ? "linkDesc" : section === "system" ? "careDesc" : "libraryDesc"}`), [t]);
+  const localizedErrorMessage = useCallback((error: unknown, fallbackKey = "error.generic") => friendlyError(error instanceof Error ? error.message : typeof error === "string" ? error : null, fallbackKey) ?? t(fallbackKey), [friendlyError, t]);
+  const localizedErrorMessageRef = useRef(localizedErrorMessage);
+  const webModeOwnershipCheckInFlightRef = useRef(false);
+  useEffect(() => {
+    localizedErrorMessageRef.current = localizedErrorMessage;
+  }, [localizedErrorMessage]);
   const readableNasErrorMessage = useCallback(
     (error: unknown) => {
       const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
@@ -547,6 +496,7 @@ export function QuickSettingsOverlay({
     setMultiroomError(null);
     setAudioOutputPendingProfile(null);
     setAudioOutputPendingCustomSettings(null);
+    setAudioProfileDetails(null);
     setMpdQualityError(null);
     setWebModeError(null);
     setGuardOtaError(null);
@@ -564,34 +514,32 @@ export function QuickSettingsOverlay({
     setRoomShortcutError(null);
   }, [active]);
 
-  useEffect(() => {
-    if (!active || activeSection !== "system" || window.__TIKPAL_REMOTE_MODE__ || !localKioskHosts.has(window.location.hostname)) return undefined;
-    let cancelled = false;
+  const checkExploreOwnership = useCallback(async () => {
+    if (webModeOwnershipCheckInFlightRef.current) return;
+    webModeOwnershipCheckInFlightRef.current = true;
     setWebModeOwnershipPending(true);
-    void checkWebModeOwnership()
-      .then((result) => {
-        if (!cancelled) setWebModeOwnership(result);
-      })
-      .catch((error) => {
-        if (!cancelled) {
-          setWebModeOwnership({
-            supported: true,
-            ok: false,
-            repaired: false,
-            mismatches: [],
-            repairedPaths: [],
-            blockedPaths: [],
-            message: localizedErrorMessage(error, "error.generic")
-          });
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setWebModeOwnershipPending(false);
+    try {
+      setWebModeOwnership(await checkWebModeOwnership());
+    } catch (error) {
+      setWebModeOwnership({
+        supported: true,
+        ok: false,
+        repaired: false,
+        mismatches: [],
+        repairedPaths: [],
+        blockedPaths: [],
+        message: localizedErrorMessageRef.current(error, "error.generic")
       });
-    return () => {
-      cancelled = true;
-    };
-  }, [active, activeSection, localizedErrorMessage]);
+    } finally {
+      webModeOwnershipCheckInFlightRef.current = false;
+      setWebModeOwnershipPending(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!active || activeSection !== "system" || window.__TIKPAL_REMOTE_MODE__ || !localKioskHosts.has(window.location.hostname)) return;
+    void checkExploreOwnership();
+  }, [active, activeSection, checkExploreOwnership]);
 
   useEffect(() => {
     if (!active || activeSection !== "system" || window.__TIKPAL_REMOTE_MODE__ || !localKioskHosts.has(window.location.hostname)) return undefined;
@@ -602,10 +550,10 @@ export function QuickSettingsOverlay({
         setGuardOtaError(null);
       })
       .catch((error) => {
-        if (!controller.signal.aborted) setGuardOtaError(localizedErrorMessage(error, "error.generic"));
+        if (!controller.signal.aborted) setGuardOtaError(localizedErrorMessageRef.current(error, "error.generic"));
       });
     return () => controller.abort();
-  }, [active, activeSection, localizedErrorMessage]);
+  }, [active, activeSection]);
   // Handle initialDetail from QuickMenu long-press navigation
   useEffect(() => {
     if (!active || !initialDetail) {
@@ -624,7 +572,6 @@ export function QuickSettingsOverlay({
     onInitialDetailConsumed?.();
   }, [active, initialDetail, onInitialDetailConsumed]);
 
-
   useEffect(() => {
     setMultiroomState(system.multiroom ?? null);
   }, [system.multiroom]);
@@ -635,12 +582,15 @@ export function QuickSettingsOverlay({
     setAudioOutputPendingCustomSettings(null);
   }, [preferencesPending]);
 
-  useEffect(() => () => {
-    if (audioDiagnosticsTimerRef.current !== null) {
-      window.clearTimeout(audioDiagnosticsTimerRef.current);
-      audioDiagnosticsTimerRef.current = null;
-    }
-  }, []);
+  useEffect(
+    () => () => {
+      if (audioDiagnosticsTimerRef.current !== null) {
+        window.clearTimeout(audioDiagnosticsTimerRef.current);
+        audioDiagnosticsTimerRef.current = null;
+      }
+    },
+    []
+  );
 
   useEffect(() => {
     if (!active) return undefined;
@@ -656,30 +606,24 @@ export function QuickSettingsOverlay({
     return () => controller.abort();
   }, [active, localizedErrorMessage]);
 
-  const refreshLibraryStorageCounts = useCallback(
-    async (signal?: AbortSignal) => {
-      const library = await fetchAudioLibrary({ storage: "all", limit: 1 }, signal);
-      const storageCount = (storageId: keyof LibraryStorageCounts) => {
-        const count = library.storages.find((storage) => storage.id === storageId)?.trackCount;
-        return Number.isFinite(count) ? Math.max(0, Number(count)) : 0;
-      };
-      setLibraryStorageCounts({
-        local: storageCount("local"),
-        nas: storageCount("nas"),
-        usb: storageCount("usb")
-      });
-    },
-    []
-  );
+  const refreshLibraryStorageCounts = useCallback(async (signal?: AbortSignal) => {
+    const library = await fetchAudioLibrary({ storage: "all", limit: 1 }, signal);
+    const storageCount = (storageId: keyof LibraryStorageCounts) => {
+      const count = library.storages.find((storage) => storage.id === storageId)?.trackCount;
+      return Number.isFinite(count) ? Math.max(0, Number(count)) : 0;
+    };
+    setLibraryStorageCounts({
+      local: storageCount("local"),
+      nas: storageCount("nas"),
+      usb: storageCount("usb")
+    });
+  }, []);
 
-  const refreshNasSources = useCallback(
-    async (signal?: AbortSignal) => {
-      const nextSources = await fetchNasSources(signal);
-      setNasSourcesState(nextSources);
-      return nextSources;
-    },
-    []
-  );
+  const refreshNasSources = useCallback(async (signal?: AbortSignal) => {
+    const nextSources = await fetchNasSources(signal);
+    setNasSourcesState(nextSources);
+    return nextSources;
+  }, []);
 
   useEffect(() => {
     if (!active) return undefined;
@@ -710,8 +654,7 @@ export function QuickSettingsOverlay({
   useEffect(() => {
     if (!active || detailView !== "webMode" || window.__TIKPAL_REMOTE_MODE__ || !localKioskHosts.has(window.location.hostname)) return undefined;
     let inputSessionStarted = false;
-    const isWebModeInputTarget = (target: EventTarget | null) => target instanceof HTMLElement
-      && Boolean(target.closest("[data-settings-detail=\"web-mode\"] input, [data-settings-detail=\"web-mode\"] textarea, [data-settings-detail=\"web-mode\"] [contenteditable='true'], [data-settings-detail=\"web-mode\"] [role='textbox']"));
+    const isWebModeInputTarget = (target: EventTarget | null) => target instanceof HTMLElement && Boolean(target.closest('[data-settings-detail="web-mode"] input, [data-settings-detail="web-mode"] textarea, [data-settings-detail="web-mode"] [contenteditable=\'true\'], [data-settings-detail="web-mode"] [role=\'textbox\']'));
     const markInputSessionStarted = (event: Event) => {
       if (isWebModeInputTarget(event.target)) inputSessionStarted = true;
     };
@@ -739,7 +682,7 @@ export function QuickSettingsOverlay({
       return undefined;
     }
     if (!proxyUrlChanged) {
-      setWebModeError((current) => current === t("settings.enterProxyUrl") || current === t("common.saving") ? null : current);
+      setWebModeError((current) => (current === t("settings.enterProxyUrl") || current === t("common.saving") ? null : current));
       setPendingProxyUrl(null);
       return undefined;
     }
@@ -750,7 +693,7 @@ export function QuickSettingsOverlay({
         setWebModeProxyConfirmMode("url");
         setWebModeProxyConfirmEnabled(true);
       }
-      setWebModeError((current) => current === t("settings.enterProxyUrl") || current === t("common.saving") ? null : current);
+      setWebModeError((current) => (current === t("settings.enterProxyUrl") || current === t("common.saving") ? null : current));
       return undefined;
     }
 
@@ -780,9 +723,7 @@ export function QuickSettingsOverlay({
 
   useEffect(() => {
     const shouldValidateProxy = webModeProxyConfirmEnabled === true;
-    const candidateProxyUrl = normalizeProxyUrl(
-      webModeProxyConfirmMode === "url" && pendingProxyUrl ? pendingProxyUrl : webModeProxyUrl
-    );
+    const candidateProxyUrl = normalizeProxyUrl(webModeProxyConfirmMode === "url" && pendingProxyUrl ? pendingProxyUrl : webModeProxyUrl);
     const requestNonce = ++webModeProxyTestNonceRef.current;
 
     if (!shouldValidateProxy || candidateProxyUrl === null) {
@@ -827,25 +768,52 @@ export function QuickSettingsOverlay({
     ...preferences.audioOutputCustomSettings,
     ...(audioOutputPendingCustomSettings ?? {})
   };
+  const customSettingChoices: Array<{
+    id: AudioOutputCustomSettingId;
+    label: string;
+    hint: string;
+  }> = [
+    {
+      id: "pureDirect",
+      label: t("settings.audioCustom.pureDirect"),
+      hint: t("settings.audioCustom.pureDirectHint")
+    },
+    {
+      id: "volumeNormalization",
+      label: t("settings.audioCustom.volumeNormalization"),
+      hint: t("settings.audioCustom.volumeNormalizationHint")
+    },
+    {
+      id: "smoothTransition",
+      label: t("settings.audioCustom.smoothTransition"),
+      hint: t("settings.audioCustom.smoothTransitionHint")
+    },
+    {
+      id: "automaticSampleRate",
+      label: t("settings.audioCustom.automaticSampleRate"),
+      hint: t("settings.audioCustom.automaticSampleRateHint")
+    },
+    {
+      id: "dsdMode",
+      label: t("settings.audioCustom.dsdMode"),
+      hint: t("settings.audioCustom.dsdModeHint")
+    },
+    {
+      id: "playbackStability",
+      label: t("settings.audioCustom.playbackStability"),
+      hint: t("settings.audioCustom.playbackStabilityHint")
+    }
+  ];
   const effectiveMultiroom = multiroomState ?? system.multiroom;
   const multiroomEcosystems = effectiveMultiroom?.ecosystems;
-  const activeMultiroom = multiroomEcosystemChoices
-    .map((id) => multiroomEcosystems?.[id])
-    .find((entry) => entry?.active);
-  const enabledMultiroomCount = multiroomEcosystemChoices
-    .filter((id) => id !== "music_assistant" && multiroomEcosystems?.[id]?.enabled)
-    .length;
-  const multiroomNeedsSetup = multiroomEcosystemChoices
-    .some((id) => id !== "music_assistant" && multiroomEcosystems?.[id]?.enabled && Boolean(multiroomEcosystems?.[id]?.lastError));
-  const multiroomValue = activeMultiroom
-    ? t("settings.multiroomPlaying")
-    : enabledMultiroomCount > 0
-      ? t("settings.multiroomReadyCount", { count: enabledMultiroomCount })
-      : multiroomNeedsSetup
-        ? t("settings.multiroomCheckSetup")
-        : t("common.off");
+  const activeMultiroom = multiroomEcosystemChoices.map((id) => multiroomEcosystems?.[id]).find((entry) => entry?.active);
+  const enabledMultiroomCount = multiroomEcosystemChoices.filter((id) => id !== "music_assistant" && multiroomEcosystems?.[id]?.enabled).length;
+  const multiroomNeedsSetup = multiroomEcosystemChoices.some((id) => id !== "music_assistant" && multiroomEcosystems?.[id]?.enabled && Boolean(multiroomEcosystems?.[id]?.lastError));
+  const multiroomValue = activeMultiroom ? t("settings.multiroomPlaying") : enabledMultiroomCount > 0 ? t("settings.multiroomReadyCount", { count: enabledMultiroomCount }) : multiroomNeedsSetup ? t("settings.multiroomCheckSetup") : t("common.off");
   const multiroomMeta = activeMultiroom
-    ? t("playback.playingFromMultiroom", { label: activeMultiroom.label.replace(/\s*Bridge$/i, "") })
+    ? t("playback.playingFromMultiroom", {
+        label: activeMultiroom.label.replace(/\s*Bridge$/i, "")
+      })
     : enabledMultiroomCount > 0
       ? t("settings.multiroomReadyMeta")
       : multiroomNeedsSetup
@@ -859,89 +827,63 @@ export function QuickSettingsOverlay({
   const configuredNasSources = nasSourcesState?.sources.filter((source) => source.sourceKind !== "manual") ?? [];
   const readyNasSources = configuredNasSources.filter((source) => source.status === "ready");
   const nasCardTone: CardTone = nasTrackCount > 0 ? "cyan" : "neutral";
-  const nasCardValue = nasTrackCount > 0
-    ? t("nas.trackCountReady", { count: nasTrackCount.toLocaleString() })
-    : readyNasSources.length > 0
-      ? t("nas.status.ready")
+  const nasCardValue = nasTrackCount > 0 ? t("nas.trackCountReady", { count: nasTrackCount.toLocaleString() }) : readyNasSources.length > 0 ? t("nas.status.ready") : configuredNasSources.length > 0 ? t("nas.status.checkSetup") : t("nas.addNas");
+  const nasCardMeta =
+    nasTrackCount > 0
+      ? t("nas.readyHint")
       : configuredNasSources.length > 0
-        ? t("nas.status.checkSetup")
-        : t("nas.addNas");
-  const nasCardMeta = nasTrackCount > 0
-    ? t("nas.readyHint")
-    : configuredNasSources.length > 0
-      ? t("settings.savedCount", { count: configuredNasSources.length.toLocaleString() })
-      : t("settings.addNasInSettings");
+        ? t("settings.savedCount", {
+            count: configuredNasSources.length.toLocaleString()
+          })
+        : t("settings.addNasInSettings");
   const usbCardValue = usbTrackCount > 0 ? t("settings.tracks", { count: usbTrackCount.toLocaleString() }) : t("settings.notMounted");
   const usbCardMeta = usbTrackCount > 0 ? t("settings.portableStorageMounted") : t("settings.portableStorage");
   const libraryScanValue = scannedLibraryTrackCount > 0 ? `${t("library.local")} + ${t("library.usb")}` : system.library.source;
   const libraryScanMeta = system.library.scanning
     ? t("settings.scanInProgress")
     : scannedLibraryTrackCount > 0
-      ? t("settings.tracks", { count: scannedLibraryTrackCount.toLocaleString() })
-      : t("settings.tracks", { count: system.library.trackCount.toLocaleString() });
+      ? t("settings.tracks", {
+          count: scannedLibraryTrackCount.toLocaleString()
+        })
+      : t("settings.tracks", {
+          count: system.library.trackCount.toLocaleString()
+        });
   const profileResetProvider = webModeState?.activeProvider ?? webModeState?.lastProvider ?? null;
-  const profileResetProviderLabel = profileResetProvider
-    ? webModeState?.providers.find((provider) => provider.id === profileResetProvider)?.label ?? profileResetProvider
-    : null;
+  const profileResetProviderLabel = profileResetProvider ? (webModeState?.providers.find((provider) => provider.id === profileResetProvider)?.label ?? profileResetProvider) : null;
   const localDeviceMaintenanceAvailable = !window.__TIKPAL_REMOTE_MODE__ && localKioskHosts.has(window.location.hostname);
   const ownershipAttention = webModeOwnership !== null && (!webModeOwnership.ok || webModeOwnership.blockedPaths.length > 0);
-  const ownershipStatusText = webModeOwnershipPending
-    ? t("settings.runtimeSelfCheckChecking")
-    : webModeOwnership?.supported === false
-      ? t("settings.runtimeSelfCheckUnavailable")
-      : webModeOwnership?.repaired
-        ? t("settings.runtimeSelfCheckRepaired")
-        : webModeOwnership?.ok
-          ? t("settings.runtimeSelfCheckHealthy")
-          : t("settings.needsAttention");
-  const ownershipHelp = webModeOwnership?.supported === false
-    ? t("settings.runtimeSelfCheckUnavailable")
-    : webModeOwnership?.blockedPaths.length
-      ? t("settings.runtimeSelfCheckBlocked")
-      : webModeOwnership?.repaired
-        ? t("settings.runtimeSelfCheckRepairedHelp")
-        : webModeOwnership?.ok
-          ? t("settings.runtimeSelfCheckHealthyHelp")
-          : t("settings.runtimeSelfCheckHelp");
+  const ownershipStatusText = webModeOwnershipPending ? t("settings.runtimeSelfCheckChecking") : webModeOwnership?.supported === false ? t("settings.runtimeSelfCheckUnavailable") : webModeOwnership?.repaired ? t("settings.runtimeSelfCheckRepaired") : webModeOwnership?.ok ? t("settings.runtimeSelfCheckHealthy") : t("settings.needsAttention");
+  const ownershipHelp = webModeOwnership?.supported === false ? t("settings.runtimeSelfCheckUnavailable") : webModeOwnership?.blockedPaths.length ? t("settings.runtimeSelfCheckBlocked") : webModeOwnership?.repaired ? t("settings.runtimeSelfCheckRepairedHelp") : webModeOwnership?.ok ? t("settings.runtimeSelfCheckHealthyHelp") : t("settings.runtimeSelfCheckHelp");
   const guardOtaAttention = guardOtaStatus?.state === "failed" || guardOtaStatus?.state === "rolled_back";
-  const guardOtaStatusText = guardOtaError ?? (guardOtaPending || guardOtaStatus?.state === "checking" || guardOtaStatus?.state === "downloading"
-      ? t("settings.guardOtaChecking")
-      : guardOtaStatus?.enabled === false
-        ? t("settings.guardOtaDisabled")
-        : guardOtaStatus?.state === "pending_idle"
-          ? t("settings.guardOtaPendingIdle")
-          : guardOtaStatus?.state === "pending_activation"
-            ? t("settings.guardOtaPendingActivation")
-            : guardOtaAttention
-              ? t("settings.guardOtaAttention")
-              : t("settings.guardOtaReady"));
+  const guardOtaStatusText = guardOtaError ?? (guardOtaPending || guardOtaStatus?.state === "checking" || guardOtaStatus?.state === "downloading" ? t("settings.guardOtaChecking") : guardOtaStatus?.enabled === false ? t("settings.guardOtaDisabled") : guardOtaStatus?.state === "pending_idle" ? t("settings.guardOtaPendingIdle") : guardOtaStatus?.state === "pending_activation" ? t("settings.guardOtaPendingActivation") : guardOtaAttention ? t("settings.guardOtaAttention") : t("settings.guardOtaReady"));
   const guardOtaCheckTime = guardOtaStatus?.lastCheckedAt
-    ? new Intl.DateTimeFormat(undefined, { dateStyle: "short", timeStyle: "short" }).format(new Date(guardOtaStatus.lastCheckedAt))
+    ? new Intl.DateTimeFormat(undefined, {
+        dateStyle: "short",
+        timeStyle: "short"
+      }).format(new Date(guardOtaStatus.lastCheckedAt))
     : null;
   const guardOtaHelp = guardOtaError
     ? guardOtaError
     : guardOtaAttention && guardOtaStatus?.lastErrorCode
       ? t("settings.guardOtaError", { code: guardOtaStatus.lastErrorCode })
       : [
-          guardOtaStatus?.installedVersion ? t("settings.guardOtaVersion", { version: guardOtaStatus.installedVersion }) : null,
+          guardOtaStatus?.installedVersion
+            ? t("settings.guardOtaVersion", {
+                version: guardOtaStatus.installedVersion
+              })
+            : null,
           guardOtaStatus?.candidateVersion && guardOtaStatus.candidateVersion !== guardOtaStatus.installedVersion
-            ? t("settings.guardOtaCandidate", { version: guardOtaStatus.candidateVersion })
+            ? t("settings.guardOtaCandidate", {
+                version: guardOtaStatus.candidateVersion
+              })
             : null,
           guardOtaCheckTime ? t("settings.guardOtaCheckedAt", { time: guardOtaCheckTime }) : null
-        ].filter(Boolean).join(" · ") || t("settings.guardOtaHelp");
+        ]
+          .filter(Boolean)
+          .join(" · ") || t("settings.guardOtaHelp");
 
   const settingsCards = useMemo<SettingsCard[]>(
     () => [
-      {
-        kind: "language",
-        key: "language",
-        section: "output",
-        icon: Globe2,
-        title: t("settings.language"),
-        value: languageOptions.find((option) => option.locale === preferences.locale)?.label ?? "English",
-        meta: t("settings.languageMeta"),
-        tone: "cyan"
-      },
       {
         kind: "readonly",
         key: "network",
@@ -981,9 +923,9 @@ export function QuickSettingsOverlay({
         value: preferences.displaySleepEnabled ? t("settings.screenSleepOn") : t("settings.screenSleepOff"),
         meta: preferences.displaySleepEnabled
           ? t("settings.sleepSummary", {
-            style: t(`settings.sleepStyle.${preferences.displaySleepStyle}`),
-            minutes: preferences.displaySleepMinutes
-          })
+              style: t(`settings.sleepStyle.${preferences.displaySleepStyle}`),
+              minutes: preferences.displaySleepMinutes
+            })
           : t("settings.screenStaysAwake"),
         tone: "neutral"
       },
@@ -1003,7 +945,9 @@ export function QuickSettingsOverlay({
         section: "library",
         icon: HardDrive,
         title: t("settings.localLibrary"),
-        value: t("settings.tracks", { count: localTrackCount.toLocaleString() }),
+        value: t("settings.tracks", {
+          count: localTrackCount.toLocaleString()
+        }),
         meta: t("settings.savedOnDevice"),
         tone: "gold"
       },
@@ -1040,24 +984,17 @@ export function QuickSettingsOverlay({
         buttonLabel: system.library.scanning ? t("common.scanning") : t("settings.scanLibrary")
       },
       {
-        kind: "font",
-        key: "font",
-        section: "output",
-        icon: Type,
-        title: t("settings.font"),
-        value: fontChoices.find((choice) => choice.id === fontTheme)?.label ?? "System Neo",
-        meta: t("settings.chooseFont"),
-        tone: "cyan"
-      },
-      {
         kind: "appearance",
         key: "appearance",
         section: "output",
         icon: Palette,
-        title: t("settings.skin"),
-        value: surfaceThemeChoices.find((choice) => choice.id === surfaceTheme)?.label ?? "Warm Gold",
-        meta: t("settings.chooseSkin"),
-        tone: "gold"
+        title: t("settings.appearanceLanguage"),
+        value: languageOptions.find((option) => option.locale === preferences.locale)?.label ?? "English",
+        meta: t("settings.appearanceLanguageMeta", {
+          font: fontChoices.find((choice) => choice.id === fontTheme)?.label ?? "System Neo",
+          skin: surfaceThemeChoices.find((choice) => choice.id === surfaceTheme)?.label ?? "Warm Gold"
+        }),
+        tone: "cyan"
       },
       {
         kind: "lyrics",
@@ -1079,34 +1016,36 @@ export function QuickSettingsOverlay({
         meta: status.error ? t("settings.needsAttention") : `CPU ${system.cpuTemp}C - ${system.uptime}`,
         tone: status.source === "api" ? "neutral" : "warn"
       },
-      ...(localDeviceMaintenanceAvailable ? [
-        {
-          kind: "maintenance" as const,
-          key: "explore-runtime-maintenance",
-          section: "system" as const,
-          icon: RotateCcw,
-          title: t("settings.runtimeSelfCheck"),
-          value: ownershipStatusText,
-          meta: ownershipHelp,
-          tone: ownershipAttention ? "warn" as const : "cyan" as const,
-          maintenance: "ownership" as const,
-          buttonLabel: t("settings.runtimeSelfCheck"),
-          disabled: webModeOwnershipPending || webModeOwnership?.supported === false
-        },
-        {
-          kind: "maintenance" as const,
-          key: "provider-guard-ota",
-          section: "system" as const,
-          icon: RotateCcw,
-          title: t("settings.guardOta"),
-          value: guardOtaStatusText,
-          meta: guardOtaHelp,
-          tone: guardOtaAttention ? "warn" as const : "cyan" as const,
-          maintenance: "guardOta" as const,
-          buttonLabel: t("settings.guardOta"),
-          disabled: guardOtaPending || guardOtaStatus?.enabled === false
-        }
-      ] : []),
+      ...(localDeviceMaintenanceAvailable
+        ? [
+            {
+              kind: "maintenance" as const,
+              key: "explore-runtime-maintenance",
+              section: "system" as const,
+              icon: RotateCcw,
+              title: t("settings.runtimeSelfCheck"),
+              value: ownershipStatusText,
+              meta: ownershipHelp,
+              tone: ownershipAttention ? ("warn" as const) : ("cyan" as const),
+              maintenance: "ownership" as const,
+              buttonLabel: t("settings.runtimeSelfCheckRetry"),
+              disabled: webModeOwnershipPending || webModeOwnership?.supported === false
+            },
+            {
+              kind: "maintenance" as const,
+              key: "provider-guard-ota",
+              section: "system" as const,
+              icon: RotateCcw,
+              title: t("settings.guardOta"),
+              value: guardOtaStatusText,
+              meta: guardOtaHelp,
+              tone: guardOtaAttention ? ("warn" as const) : ("cyan" as const),
+              maintenance: "guardOta" as const,
+              buttonLabel: t("settings.guardOta"),
+              disabled: guardOtaPending || guardOtaStatus?.enabled === false
+            }
+          ]
+        : []),
       {
         kind: "action",
         key: "wizard",
@@ -1127,13 +1066,17 @@ export function QuickSettingsOverlay({
         title: t("settings.resetProviderProfile"),
         value: profileResetProviderLabel ?? t("settings.resetProviderProfileUnavailable"),
         meta: profileResetProviderLabel
-          ? t("settings.resetProviderProfileMeta", { provider: profileResetProviderLabel })
+          ? t("settings.resetProviderProfileMeta", {
+              provider: profileResetProviderLabel
+            })
           : t("settings.resetProviderProfileUnavailableMeta"),
         tone: "danger",
         actionType: "reset_provider_profile",
         buttonLabel: profileResetProviderLabel ? t("settings.resetProviderProfileAction") : t("common.unavailable"),
         confirmLabel: profileResetProviderLabel
-          ? t("settings.tapAgainResetProviderProfile", { provider: profileResetProviderLabel })
+          ? t("settings.tapAgainResetProviderProfile", {
+              provider: profileResetProviderLabel
+            })
           : undefined,
         disabled: !profileResetProvider,
         provider: profileResetProvider ?? undefined
@@ -1175,12 +1118,88 @@ export function QuickSettingsOverlay({
         confirmLabel: t("settings.tapAgainPowerOff")
       }
     ],
-    [activeMultiroom, displayedAudioOutputProfile, enabledMultiroomCount, fontTheme, guardOtaAttention, guardOtaHelp, guardOtaPending, guardOtaStatus?.enabled, guardOtaStatusText, libraryScanMeta, libraryScanValue, localDeviceMaintenanceAvailable, localTrackCount, lyricsFontSize, lyricsVisible, multiroomMeta, multiroomNeedsSetup, multiroomValue, nasCardMeta, nasCardTone, nasCardValue, ownershipAttention, ownershipHelp, ownershipStatusText, preferences.displaySleepEnabled, preferences.displaySleepMinutes, preferences.displaySleepStyle, preferences.locale, profileResetProvider, profileResetProviderLabel, roomExperience.nightSchedule.active, roomExperience.nightSchedule.enabled, roomExperience.nightSchedule.end, roomExperience.nightSchedule.start, roomExperience.nightSchedule.timeZone, status.error, status.source, surfaceTheme, system.cpuTemp, system.display.brightnessPercent, system.display.controllable, system.library.scanning, system.network.ip, system.network.label, system.network.speed, system.uptime, t, usbCardMeta, usbCardValue, usbTrackCount, webModeOwnership?.supported, webModeOwnershipPending, webModeProxyEnabled, webModeProxyUrl]
+    [
+      activeMultiroom,
+      displayedAudioOutputProfile,
+      enabledMultiroomCount,
+      fontTheme,
+      guardOtaAttention,
+      guardOtaHelp,
+      guardOtaPending,
+      guardOtaStatus?.enabled,
+      guardOtaStatusText,
+      libraryScanMeta,
+      libraryScanValue,
+      localDeviceMaintenanceAvailable,
+      localTrackCount,
+      lyricsFontSize,
+      lyricsVisible,
+      multiroomMeta,
+      multiroomNeedsSetup,
+      multiroomValue,
+      nasCardMeta,
+      nasCardTone,
+      nasCardValue,
+      ownershipAttention,
+      ownershipHelp,
+      ownershipStatusText,
+      preferences.displaySleepEnabled,
+      preferences.displaySleepMinutes,
+      preferences.displaySleepStyle,
+      preferences.locale,
+      profileResetProvider,
+      profileResetProviderLabel,
+      roomExperience.nightSchedule.active,
+      roomExperience.nightSchedule.enabled,
+      roomExperience.nightSchedule.end,
+      roomExperience.nightSchedule.start,
+      roomExperience.nightSchedule.timeZone,
+      status.error,
+      status.source,
+      surfaceTheme,
+      system.cpuTemp,
+      system.display.brightnessPercent,
+      system.display.controllable,
+      system.library.scanning,
+      system.network.ip,
+      system.network.label,
+      system.network.speed,
+      system.uptime,
+      t,
+      usbCardMeta,
+      usbCardValue,
+      usbTrackCount,
+      webModeOwnership?.supported,
+      webModeOwnershipPending,
+      webModeProxyEnabled,
+      webModeProxyUrl
+    ]
   );
 
   const visibleCards = useMemo(() => {
     return settingsCards.filter((card) => card.section === activeSection);
   }, [activeSection, settingsCards]);
+
+  const deviceCardGroups = useMemo(() => {
+    const cardsFor = (keys: string[]) => settingsCards.filter((card) => keys.includes(card.key));
+    return [
+      {
+        id: "status",
+        label: t("settings.deviceStatus"),
+        cards: cardsFor(["system", "provider-guard-ota", "wizard"])
+      },
+      {
+        id: "maintenance",
+        label: t("settings.advancedMaintenance"),
+        cards: cardsFor(["explore-runtime-maintenance", "reset-provider-profile"])
+      },
+      {
+        id: "power",
+        label: t("settings.power"),
+        cards: cardsFor(["restart", "shutdown"])
+      }
+    ].filter((group) => group.cards.length > 0);
+  }, [settingsCards, t]);
 
   function handleSectionSelect(section: SettingsSectionKey) {
     setConfirmAction(null);
@@ -1217,7 +1236,7 @@ export function QuickSettingsOverlay({
     }
   }
 
-  async function handleDisplaySleepMinutesChange(minutes: typeof displaySleepMinuteChoices[number]) {
+  async function handleDisplaySleepMinutesChange(minutes: (typeof displaySleepMinuteChoices)[number]) {
     if (preferencesPending || preferences.displaySleepMinutes === minutes) return;
     setDisplaySleepError(null);
     try {
@@ -1282,7 +1301,9 @@ export function QuickSettingsOverlay({
   }
 
   async function handleAudioOutputProfileChange(profile: AudioOutputProfile) {
-    if (preferencesPending || displayedAudioOutputProfile === profile) return;
+    if (preferencesPending) return;
+    if (profile === "custom") setDetailView("audioCustom");
+    if (displayedAudioOutputProfile === profile) return;
     setMpdQualityError(null);
     setAudioOutputPendingProfile(profile);
     setAudioOutputPendingCustomSettings(null);
@@ -1333,6 +1354,11 @@ export function QuickSettingsOverlay({
     void loadAudioDiagnostics();
   }
 
+  function openAudioProfileDetails(title: string, technical: string) {
+    setAudioProfileDetails({ title, technical });
+    setDetailView("audioProfileDetails");
+  }
+
   function clearAudioDiagnosticsPressTimer() {
     if (audioDiagnosticsTimerRef.current !== null) {
       window.clearTimeout(audioDiagnosticsTimerRef.current);
@@ -1375,7 +1401,10 @@ export function QuickSettingsOverlay({
     try {
       if (card.actionType === "reset_provider_profile") {
         if (!card.provider) return;
-        const nextState = await sendWebModeAction({ type: "reset_provider_profile", provider: card.provider });
+        const nextState = await sendWebModeAction({
+          type: "reset_provider_profile",
+          provider: card.provider
+        });
         setWebModeState(nextState);
       } else {
         await onSystemAction(card.actionType);
@@ -1448,8 +1477,8 @@ export function QuickSettingsOverlay({
       port: Number.isFinite(Number(nasForm.port)) ? Number(nasForm.port) : 445,
       path: nasForm.path ?? "",
       mountName: nasForm.mountName?.trim() || nasForm.name.trim() || nasForm.share.trim(),
-      username: nasForm.authMode === "password" ? nasForm.username ?? "" : "",
-      password: nasForm.authMode === "password" ? nasForm.password ?? "" : "",
+      username: nasForm.authMode === "password" ? (nasForm.username ?? "") : "",
+      password: nasForm.authMode === "password" ? (nasForm.password ?? "") : "",
       enabled: nasForm.enabled !== false
     };
     if (payload.authMode === "guest" || !payload.password) {
@@ -1459,14 +1488,7 @@ export function QuickSettingsOverlay({
   }
 
   function findSavedNasSource(sources: NasSourcesResponse["sources"], payload: NasSourceInput) {
-    return sources.find((source) => payload.id && source.id === payload.id)
-      ?? sources.find((source) => (
-        !source.readOnly
-        && source.host === payload.host.trim()
-        && source.share === payload.share.trim()
-        && source.mountName === (payload.mountName?.trim() || payload.name.trim() || payload.share.trim())
-      ))
-      ?? sources.find((source) => !source.readOnly && source.host === payload.host.trim() && source.share === payload.share.trim());
+    return sources.find((source) => payload.id && source.id === payload.id) ?? sources.find((source) => !source.readOnly && source.host === payload.host.trim() && source.share === payload.share.trim() && source.mountName === (payload.mountName?.trim() || payload.name.trim() || payload.share.trim())) ?? sources.find((source) => !source.readOnly && source.host === payload.host.trim() && source.share === payload.share.trim());
   }
 
   async function handleNasTest() {
@@ -1479,9 +1501,17 @@ export function QuickSettingsOverlay({
       const payload = buildNasSavePayload();
       const result = await testNasSource(payload, payload.id || "_draft");
       setNasTestReady(result.ok);
-      setNasMessage(result.ok ? (result.trackCount !== undefined ? t("nas.readyTrackCount", { count: result.trackCount.toLocaleString() }) : t("nas.status.ready")) : null);
+      setNasMessage(
+        result.ok
+          ? result.trackCount !== undefined
+            ? t("nas.readyTrackCount", {
+                count: result.trackCount.toLocaleString()
+              })
+            : t("nas.status.ready")
+          : null
+      );
       setNasError(result.ok ? null : result.lastError || t("nas.status.checkSetup"));
-      setNasErrorRaw(result.ok ? null : result.lastRawError ?? result.source?.lastRawError ?? null);
+      setNasErrorRaw(result.ok ? null : (result.lastRawError ?? result.source?.lastRawError ?? null));
       if (result.ok) {
         void refreshLibraryStorageCounts().catch(() => undefined);
         void refreshNasSources().catch(() => undefined);
@@ -1649,6 +1679,7 @@ export function QuickSettingsOverlay({
 
   function openDetail(nextDetail: Exclude<SettingsDetailView, null>) {
     if (nextDetail === "webMode") hideLocalKeyboard();
+    if (nextDetail === "appearance") setAppearanceDetailTab("language");
     setDetailView(nextDetail);
     setConfirmAction(null);
     setWebModeProxyConfirmEnabled(null);
@@ -1752,9 +1783,13 @@ export function QuickSettingsOverlay({
     setWebModeError(null);
     setWebModeProxyRestartPending(true);
     try {
-      const nextState = await updateWebModeSettings(normalizedProxyUrl !== null || webModeProxyConfirmMode === "url"
-        ? { proxyEnabled: nextEnabled, proxyUrl: normalizedProxyUrl ?? pendingProxyUrl ?? webModeProxyUrl }
-        : { proxyEnabled: nextEnabled }
+      const nextState = await updateWebModeSettings(
+        normalizedProxyUrl !== null || webModeProxyConfirmMode === "url"
+          ? {
+              proxyEnabled: nextEnabled,
+              proxyUrl: normalizedProxyUrl ?? pendingProxyUrl ?? webModeProxyUrl
+            }
+          : { proxyEnabled: nextEnabled }
       );
       setWebModeState(nextState);
       setWebModeProxyEnabled(nextState.settings.proxyEnabled);
@@ -1767,26 +1802,6 @@ export function QuickSettingsOverlay({
       setWebModeError(localizedErrorMessage(error, "error.explore"));
     } finally {
       setWebModeProxyRestartPending(false);
-    }
-  }
-
-  async function repairExploreOwnership() {
-    if (webModeOwnershipPending || webModeOwnership?.supported === false) return;
-    setWebModeOwnershipPending(true);
-    try {
-      setWebModeOwnership(await repairWebModeOwnership());
-    } catch (error) {
-      setWebModeOwnership({
-        supported: true,
-        ok: false,
-        repaired: false,
-        mismatches: [],
-        repairedPaths: [],
-        blockedPaths: [],
-        message: localizedErrorMessage(error, "error.generic")
-      });
-    } finally {
-      setWebModeOwnershipPending(false);
     }
   }
 
@@ -1809,36 +1824,79 @@ export function QuickSettingsOverlay({
   }
 
   function renderAppearanceDetail() {
+    const selectedLanguage = languageOptions.find((option) => option.locale === preferences.locale) ?? languageOptions[0];
+    const languageStatus = localeMessage ?? (localeError ? t("error.generic") : t("settings.languageDetail"));
+
     return (
-      <section className="settings-detail-panel" aria-label={t("settings.skin")} data-settings-detail="appearance">
+      <section className="settings-detail-panel appearance-language-detail" aria-label={t("settings.appearanceLanguage")} data-settings-detail="appearance">
         <div className="settings-detail-header">
           <button className="settings-detail-back" type="button" onClick={() => setDetailView(null)}>
             {t("common.close")}
           </button>
           <div>
             <span>{t("settings.preferences")}</span>
-            <strong>{t("settings.skin")}</strong>
-            <p>{t("settings.switchSkin")}</p>
+            <strong>{t("settings.appearanceLanguage")}</strong>
+            <p>{t("settings.appearanceLanguageDetail")}</p>
           </div>
         </div>
 
-        <div className="surface-theme-options" role="group" aria-label="Surface skin">
-          {surfaceThemeChoices.map((choice) => (
-            <button
-              key={choice.id}
-              className={`surface-theme-option surface-theme-option-${choice.id} ${surfaceTheme === choice.id ? "is-active" : ""}`}
-              type="button"
-              onClick={() => onSurfaceThemeChange(choice.id)}
-            >
-              <span className="surface-theme-swatch" aria-hidden="true">
-                <i />
-                <i />
-                <i />
-              </span>
-              <strong>{choice.label}</strong>
-              <span>{choice.sample}</span>
-            </button>
-          ))}
+        <div className="appearance-language-body">
+          <div className="appearance-language-tabs" role="tablist" aria-label={t("settings.appearanceLanguage")}>
+            {(["language", "font", "skin"] as const).map((tab) => (
+              <button key={tab} className={appearanceDetailTab === tab ? "is-active" : ""} type="button" role="tab" aria-selected={appearanceDetailTab === tab} data-settings-appearance-tab={tab} onClick={() => setAppearanceDetailTab(tab)}>
+                {t(`settings.${tab === "skin" ? "skin" : tab}`)}
+              </button>
+            ))}
+          </div>
+
+          {appearanceDetailTab === "language" ? (
+            <>
+              <div className="font-theme-options language-options-detail" role="group" aria-label={t("settings.language")}>
+                {languageOptions.map((option) => (
+                  <button key={option.locale} className={`font-theme-option ${preferences.locale === option.locale ? "is-active" : ""}`} type="button" aria-pressed={preferences.locale === option.locale} disabled={localePending} onClick={() => void handleLocaleSelect(option.locale)}>
+                    <strong>{option.label}</strong>
+                    <span>{preferences.locale === option.locale ? t("common.current") : t("settings.tapToUse")}</span>
+                  </button>
+                ))}
+              </div>
+              <p className={`settings-card-action language-input-status ${localePending ? "is-applying" : ""}`} title={preferences.inputMethodId}>
+                {localePending ? t("common.applying") : `${selectedLanguage.label} · ${t("settings.keyboardDefault")}`}
+              </p>
+            </>
+          ) : appearanceDetailTab === "font" ? (
+            <div className="font-theme-options font-theme-options-detail" role="group" aria-label={t("settings.font")}>
+              {fontChoices.map((choice) => (
+                <button
+                  key={choice.id}
+                  className={`font-theme-option ${fontTheme === choice.id ? "is-active" : ""}`}
+                  type="button"
+                  disabled={preferencesPending || fontTheme === choice.id}
+                  onClick={() =>
+                    void onFontThemeChange(choice.id).catch(() => {
+                      // Preference state refreshes after a failed save; keep the control responsive.
+                    })
+                  }
+                >
+                  <strong>{choice.label}</strong>
+                  <span>{choice.sample}</span>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="surface-theme-options" role="group" aria-label={t("settings.skin")}>
+              {surfaceThemeChoices.map((choice) => (
+                <button key={choice.id} className={`surface-theme-option surface-theme-option-${choice.id} ${surfaceTheme === choice.id ? "is-active" : ""}`} type="button" onClick={() => onSurfaceThemeChange(choice.id)}>
+                  <span className="surface-theme-swatch" aria-hidden="true">
+                    <i />
+                    <i />
+                    <i />
+                  </span>
+                  <strong>{choice.label}</strong>
+                  <span>{choice.sample}</span>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       </section>
     );
@@ -1865,9 +1923,11 @@ export function QuickSettingsOverlay({
               className={`font-theme-option ${fontTheme === choice.id ? "is-active" : ""}`}
               type="button"
               disabled={preferencesPending || fontTheme === choice.id}
-              onClick={() => void onFontThemeChange(choice.id).catch(() => {
-                // Preference state refreshes after a failed save; keep the control responsive.
-              })}
+              onClick={() =>
+                void onFontThemeChange(choice.id).catch(() => {
+                  // Preference state refreshes after a failed save; keep the control responsive.
+                })
+              }
             >
               <strong>{choice.label}</strong>
               <span>{choice.sample}</span>
@@ -1897,14 +1957,7 @@ export function QuickSettingsOverlay({
 
         <div className="font-theme-options language-options-detail" role="group" aria-label={t("settings.language")}>
           {languageOptions.map((option) => (
-            <button
-              key={option.locale}
-              className={`font-theme-option ${preferences.locale === option.locale ? "is-active" : ""}`}
-              type="button"
-              aria-pressed={preferences.locale === option.locale}
-              disabled={localePending}
-              onClick={() => void handleLocaleSelect(option.locale)}
-            >
+            <button key={option.locale} className={`font-theme-option ${preferences.locale === option.locale ? "is-active" : ""}`} type="button" aria-pressed={preferences.locale === option.locale} disabled={localePending} onClick={() => void handleLocaleSelect(option.locale)}>
               <strong>{option.label}</strong>
               <span>{preferences.locale === option.locale ? t("common.current") : t("settings.tapToUse")}</span>
             </button>
@@ -1920,15 +1973,23 @@ export function QuickSettingsOverlay({
 
   function renderAudioOutputDetail() {
     const pureCapabilities = preferences.audioOutputCapabilities;
-    const pureTargetRateKhz = pureCapabilities.targetRateHz === null
-      ? null
-      : Number((pureCapabilities.targetRateHz / 1000).toFixed(1));
-    const pureTraits = pureCapabilities.purePath === "native"
-      ? t("settings.audioProfile.pureTraitsNative")
-      : pureCapabilities.purePath === "resampled" && pureTargetRateKhz !== null
-        ? t("settings.audioProfile.pureTraitsResampled", { rate: pureTargetRateKhz })
-        : t("settings.audioProfile.pureTraitsUnknown");
-    const profileChoices: Array<{ id: AudioOutputProfile; icon: typeof Waves; label: string; sample: string; effect: string; technical: string }> = [
+    const pureTargetRateKhz = pureCapabilities.targetRateHz === null ? null : Number((pureCapabilities.targetRateHz / 1000).toFixed(1));
+    const pureTraits =
+      pureCapabilities.purePath === "native"
+        ? t("settings.audioProfile.pureTraitsNative")
+        : pureCapabilities.purePath === "resampled" && pureTargetRateKhz !== null
+          ? t("settings.audioProfile.pureTraitsResampled", {
+              rate: pureTargetRateKhz
+            })
+          : t("settings.audioProfile.pureTraitsUnknown");
+    const profileChoices: Array<{
+      id: AudioOutputProfile;
+      icon: typeof Waves;
+      label: string;
+      sample: string;
+      effect: string;
+      technical: string;
+    }> = [
       {
         id: "pure",
         icon: Target,
@@ -1963,41 +2024,8 @@ export function QuickSettingsOverlay({
       }
     ];
     const activeProfileChoice = profileChoices.find((choice) => choice.id === displayedAudioOutputProfile) ?? profileChoices[0];
-    const customSettingChoices: Array<{ id: AudioOutputCustomSettingId; label: string; hint: string }> = [
-      {
-        id: "pureDirect",
-        label: t("settings.audioCustom.pureDirect"),
-        hint: t("settings.audioCustom.pureDirectHint")
-      },
-      {
-        id: "volumeNormalization",
-        label: t("settings.audioCustom.volumeNormalization"),
-        hint: t("settings.audioCustom.volumeNormalizationHint")
-      },
-      {
-        id: "smoothTransition",
-        label: t("settings.audioCustom.smoothTransition"),
-        hint: t("settings.audioCustom.smoothTransitionHint")
-      },
-      {
-        id: "automaticSampleRate",
-        label: t("settings.audioCustom.automaticSampleRate"),
-        hint: t("settings.audioCustom.automaticSampleRateHint")
-      },
-      {
-        id: "dsdMode",
-        label: t("settings.audioCustom.dsdMode"),
-        hint: t("settings.audioCustom.dsdModeHint")
-      },
-      {
-        id: "playbackStability",
-        label: t("settings.audioCustom.playbackStability"),
-        hint: t("settings.audioCustom.playbackStabilityHint")
-      }
-    ];
-
     return (
-      <section className={`settings-detail-panel ${displayedAudioOutputProfile === "custom" ? "is-custom-active" : ""}`} aria-label={t("settings.audioOutput")} data-settings-detail="audio-output">
+      <section className="settings-detail-panel" aria-label={t("settings.audioOutput")} data-settings-detail="audio-output">
         <div className="settings-detail-header">
           <button className="settings-detail-back" type="button" onClick={() => setDetailView(null)}>
             {t("common.close")}
@@ -2005,112 +2033,125 @@ export function QuickSettingsOverlay({
           <div>
             <span>{t("settings.preferences")}</span>
             <div className="audio-output-title-row">
-              <strong
-                onPointerDown={armAudioDiagnosticsPress}
-                onPointerUp={clearAudioDiagnosticsPressTimer}
-                onPointerCancel={clearAudioDiagnosticsPressTimer}
-                onPointerLeave={clearAudioDiagnosticsPressTimer}
-                title={t("settings.audioDiagnosticsHint")}
-              >
+              <strong onPointerDown={armAudioDiagnosticsPress} onPointerUp={clearAudioDiagnosticsPressTimer} onPointerCancel={clearAudioDiagnosticsPressTimer} onPointerLeave={clearAudioDiagnosticsPressTimer} title={t("settings.audioDiagnosticsHint")}>
                 {t("settings.audioOutput")}
               </strong>
-              <button
-                className="audio-output-diagnostics-chip"
-                type="button"
-                title={t("settings.audioDiagnosticsHint")}
-                onClick={openAudioDiagnostics}
-                onPointerDown={armAudioDiagnosticsPress}
-                onPointerUp={clearAudioDiagnosticsPressTimer}
-                onPointerCancel={clearAudioDiagnosticsPressTimer}
-                onPointerLeave={clearAudioDiagnosticsPressTimer}
-              >
+              <button className="audio-output-diagnostics-chip" type="button" title={t("settings.audioDiagnosticsHint")} onClick={openAudioDiagnostics} onPointerDown={armAudioDiagnosticsPress} onPointerUp={clearAudioDiagnosticsPressTimer} onPointerCancel={clearAudioDiagnosticsPressTimer} onPointerLeave={clearAudioDiagnosticsPressTimer}>
                 <Info size={14} />
                 <span>{t("settings.audioDiagnosticsChip")}</span>
               </button>
+              <div className="audio-output-header-dac">
+                <span>{t("settings.audioDiagnosticsDevice")}</span>
+                <em>{[system.outputDevice.label, system.outputDevice.detail].filter(Boolean).join(" · ")}</em>
+              </div>
             </div>
           </div>
         </div>
 
-        <div className={`audio-output-detail-body ${displayedAudioOutputProfile === "custom" ? "is-custom-active" : ""}`}>
+        <div className="audio-output-detail-body">
           <div className="font-theme-options audio-profile-options-detail" role="group" aria-label={t("settings.mpdQuality")}>
             {profileChoices.map((choice) => {
               const Icon = choice.icon;
               return (
-              <button
-                key={choice.id}
-                className={`font-theme-option audio-profile-option ${displayedAudioOutputProfile === choice.id ? "is-active" : ""} ${choice.id === "custom" ? "is-custom-profile" : ""}`}
-                type="button"
-                aria-pressed={displayedAudioOutputProfile === choice.id}
-                data-audio-output-profile={choice.id}
-                disabled={preferencesPending}
-                onClick={() => void handleAudioOutputProfileChange(choice.id)}
-              >
-                <Icon size={22} />
-                <strong>{choice.label}</strong>
-                <span>{choice.sample}</span>
-                <em>{choice.effect}</em>
-              </button>
+                <button key={choice.id} className={`font-theme-option audio-profile-option ${displayedAudioOutputProfile === choice.id ? "is-active" : ""} ${choice.id === "custom" ? "is-custom-profile" : ""}`} type="button" aria-pressed={displayedAudioOutputProfile === choice.id} data-audio-output-profile={choice.id} disabled={preferencesPending} onClick={() => void handleAudioOutputProfileChange(choice.id)}>
+                  <Icon size={22} />
+                  <strong>{choice.label}</strong>
+                  <span>{choice.sample}</span>
+                  <em>{choice.effect}</em>
+                </button>
               );
             })}
           </div>
-          <details className="audio-profile-technical-details">
-            <summary>{t("settings.audioProfile.technicalDetails")}</summary>
-            <p>{activeProfileChoice.technical}</p>
-            <p>{t("settings.audioProfile.outputDetails", { device: system.outputDevice.label, detail: system.outputDevice.detail })}</p>
-          </details>
-          {displayedAudioOutputProfile === "custom" ? (
-            <div className="custom-audio-settings-panel" role="group" aria-label={t("settings.audioProfile.custom")} data-custom-audio-settings>
-              <p className="custom-audio-warning" data-custom-audio-warning>{t("settings.audioCustom.warning")}</p>
-              {customSettingChoices.map((choice) => {
-                const enabled = displayedAudioOutputCustomSettings[choice.id];
-                return (
-                  <button
-                    key={choice.id}
-                    className={`custom-audio-toggle ${enabled ? "is-active" : ""}`}
-                    type="button"
-                    role="switch"
-                    aria-checked={enabled}
-                    title={choice.hint}
-                    data-custom-audio-toggle={choice.id}
-                    data-custom-audio-toggle-state={enabled ? "on" : "off"}
-                    disabled={preferencesPending}
-                    onClick={() => void handleAudioOutputCustomSettingChange(choice.id, !enabled)}
-                  >
-                    <span className="custom-audio-switch" aria-hidden="true">
-                      <i />
-                      <b>{enabled ? t("common.on") : t("common.off")}</b>
-                    </span>
-                    <strong>{choice.label}</strong>
-                    <em>{choice.hint}</em>
-                  </button>
-                );
-              })}
-            </div>
-          ) : null}
+          <button className="audio-profile-technical-details" type="button" data-audio-profile-technical-details onClick={() => openAudioProfileDetails(activeProfileChoice.label, activeProfileChoice.technical)}>
+            <Info size={16} aria-hidden="true" />
+            <span>{t("settings.audioProfile.technicalDetails")}</span>
+          </button>
         </div>
 
-        {mpdQualityError || preferencesPending ? (
-          <p className={`settings-card-action ${mpdQualityError ? "is-error" : preferencesPending ? "is-applying" : ""}`}>
-            {mpdQualityError ?? t("common.applying")}
+        {mpdQualityError || preferencesPending ? <p className={`settings-card-action ${mpdQualityError ? "is-error" : preferencesPending ? "is-applying" : ""}`}>{mpdQualityError ?? t("common.applying")}</p> : null}
+      </section>
+    );
+  }
+
+  function renderAudioCustomDetail() {
+    return (
+      <section className="settings-detail-panel" aria-label={t("settings.audioProfile.custom")} data-settings-detail="audio-custom">
+        <div className="settings-detail-header">
+          <button className="settings-detail-back" type="button" onClick={() => setDetailView("audioOutput")}>
+            {t("common.close")}
+          </button>
+          <div>
+            <span>{t("settings.audioOutput")}</span>
+            <strong>{t("settings.audioProfile.custom")}</strong>
+          </div>
+        </div>
+        <div className="custom-audio-detail-panel">
+          <p className="custom-audio-warning" data-custom-audio-warning>
+            {t("settings.audioCustom.warning")}
           </p>
-        ) : null}
+          <div className="custom-audio-settings-panel" role="group" aria-label={t("settings.audioProfile.custom")} data-custom-audio-settings>
+            {customSettingChoices.map((choice) => {
+              const enabled = displayedAudioOutputCustomSettings[choice.id];
+              return (
+                <button key={choice.id} className={`custom-audio-toggle ${enabled ? "is-active" : ""}`} type="button" role="switch" aria-checked={enabled} title={choice.hint} data-custom-audio-toggle={choice.id} data-custom-audio-toggle-state={enabled ? "on" : "off"} disabled={preferencesPending} onClick={() => void handleAudioOutputCustomSettingChange(choice.id, !enabled)}>
+                  <span className="custom-audio-switch" aria-hidden="true">
+                    <i />
+                    <b>{enabled ? t("common.on") : t("common.off")}</b>
+                  </span>
+                  <strong>{choice.label}</strong>
+                  <em>{choice.hint}</em>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {mpdQualityError || preferencesPending ? <p className={`settings-card-action ${mpdQualityError ? "is-error" : preferencesPending ? "is-applying" : ""}`}>{mpdQualityError ?? t("common.applying")}</p> : null}
+      </section>
+    );
+  }
+
+  function renderAudioProfileDetails() {
+    const detail = audioProfileDetails ?? {
+      title: t(`settings.audioProfile.${displayedAudioOutputProfile}`),
+      technical: t("settings.audioProfile.everydayTraits")
+    };
+
+    return (
+      <section className="settings-detail-panel" aria-label={t("settings.audioProfile.technicalDetails")} data-settings-detail="audio-profile-details">
+        <div className="settings-detail-header">
+          <button className="settings-detail-back" type="button" onClick={() => setDetailView("audioOutput")}>
+            {t("common.close")}
+          </button>
+          <div>
+            <span>{t("settings.audioOutput")}</span>
+            <strong>{t("settings.audioProfile.technicalDetails")}</strong>
+          </div>
+        </div>
+        <div className="audio-profile-details-panel">
+          <article className="audio-profile-details-card">
+            <span>{detail.title}</span>
+            <p>{detail.technical}</p>
+            <p>
+              {t("settings.audioProfile.outputDetails", {
+                device: system.outputDevice.label,
+                detail: system.outputDevice.detail
+              })}
+            </p>
+          </article>
+        </div>
       </section>
     );
   }
 
   function renderAudioDiagnosticsDetail() {
     const rawDiagnosticsText = audioDiagnostics?.text?.trim() ?? "";
-    const diagnosticsText = rawDiagnosticsText
-      || (audioDiagnosticsPending ? t("settings.audioDiagnosticsLoading") : t("settings.audioDiagnosticsUnavailable"));
+    const diagnosticsText = rawDiagnosticsText || (audioDiagnosticsPending ? t("settings.audioDiagnosticsLoading") : t("settings.audioDiagnosticsUnavailable"));
     const diagnostics = parseAudioDiagnosticsText(rawDiagnosticsText);
     const profileKey = audioDiagnostics?.profile ?? displayedAudioOutputProfile;
-    const updatedAtLabel = audioDiagnostics?.updatedAt
-      ? new Date(audioDiagnostics.updatedAt).toLocaleTimeString(preferences.locale, { hour: "2-digit", minute: "2-digit", second: "2-digit" })
-      : t("common.unavailable");
+    const updatedAtLabel = audioDiagnostics?.updatedAt ? new Date(audioDiagnostics.updatedAt).toLocaleTimeString(preferences.locale, { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : t("common.unavailable");
     const activeStream = diagnostics.activeHwParams[0] ?? null;
-    const ownerLabel = diagnostics.ownerPids.length > 0
-      ? diagnostics.ownerPids.map((pid) => `PID ${pid}`).join(" · ")
-      : t("settings.audioDiagnosticsNoDacOwner");
+    const ownerLabel = diagnostics.ownerPids.length > 0 ? diagnostics.ownerPids.map((pid) => `PID ${pid}`).join(" · ") : t("settings.audioDiagnosticsNoDacOwner");
 
     return (
       <section className="settings-detail-panel" aria-label={t("settings.audioDiagnostics")} data-settings-detail="audio-diagnostics">
@@ -2256,24 +2297,12 @@ export function QuickSettingsOverlay({
             const state = multiroomEcosystems?.[id];
             const pending = multiroomPendingId === id;
             const comingSoon = id === "music_assistant" || state?.comingSoon;
-            const Icon = id === "roon"
-              ? Waves
-              : id === "lyrion"
-                ? RadioIcon
-                : id === "tikpal"
-                  ? Server
-                  : Info;
+            const Icon = id === "roon" ? Waves : id === "lyrion" ? RadioIcon : id === "tikpal" ? Server : Info;
             const title = t(`settings.multiroom.ecosystem.${id}`);
             const stack = t(`settings.multiroom.stack.${id}`);
             const enabled = state?.enabled === true;
             const status = pending ? t("common.applying") : getMultiroomEcosystemStatus(id);
-            const hint = comingSoon
-              ? t("settings.multiroomComingSoonHint")
-              : state?.active
-                ? t("settings.multiroomActiveHint", { label: title })
-                : enabled
-                  ? t("settings.multiroomWaitingHint")
-                  : t("settings.multiroomReadyToStartHint");
+            const hint = comingSoon ? t("settings.multiroomComingSoonHint") : state?.active ? t("settings.multiroomActiveHint", { label: title }) : enabled ? t("settings.multiroomWaitingHint") : t("settings.multiroomReadyToStartHint");
 
             return (
               <article className={`multiroom-ecosystem-card ${enabled ? "is-enabled" : ""} ${state?.active ? "is-active" : ""} ${comingSoon ? "is-disabled" : ""}`} key={id}>
@@ -2283,18 +2312,16 @@ export function QuickSettingsOverlay({
                   </span>
                   <span>
                     <strong>{title}</strong>
-                    <em className={pending ? "is-applying" : state?.lastError ? "is-error" : undefined} title={state?.lastError ?? undefined}>{status}</em>
+                    <em className={pending ? "is-applying" : state?.lastError ? "is-error" : undefined} title={state?.lastError ?? undefined}>
+                      {status}
+                    </em>
                   </span>
                 </div>
-                <p className="multiroom-ecosystem-stack" title={stack}>{stack}</p>
+                <p className="multiroom-ecosystem-stack" title={stack}>
+                  {stack}
+                </p>
                 <p>{hint}</p>
-                <button
-                  className={`settings-inline-action multiroom-ecosystem-toggle ${enabled ? "is-active" : ""}`}
-                  type="button"
-                  disabled={comingSoon || pending || Boolean(multiroomPendingId && multiroomPendingId !== id)}
-                  aria-pressed={enabled}
-                  onClick={() => void handleMultiroomToggle(id, !enabled)}
-                >
+                <button className={`settings-inline-action multiroom-ecosystem-toggle ${enabled ? "is-active" : ""}`} type="button" disabled={comingSoon || pending || Boolean(multiroomPendingId && multiroomPendingId !== id)} aria-pressed={enabled} onClick={() => void handleMultiroomToggle(id, !enabled)}>
                   {comingSoon ? t("settings.multiroomComingSoon") : enabled ? t("settings.multiroomStop", { label: title }) : t("settings.multiroomStart", { label: title })}
                 </button>
               </article>
@@ -2320,15 +2347,8 @@ export function QuickSettingsOverlay({
         </div>
 
         <div className="lyrics-settings-panel lyrics-settings-panel-detail">
-          <button
-            className={`lyrics-visibility-toggle ${lyricsVisible ? "is-active" : ""}`}
-            type="button"
-            aria-pressed={lyricsVisible}
-            onClick={() => onLyricsVisibleChange(!lyricsVisible)}
-          >
-            <span className="lyrics-visibility-icon">
-              {lyricsVisible ? <Eye size={28} /> : <EyeOff size={28} />}
-            </span>
+          <button className={`lyrics-visibility-toggle ${lyricsVisible ? "is-active" : ""}`} type="button" aria-pressed={lyricsVisible} onClick={() => onLyricsVisibleChange(!lyricsVisible)}>
+            <span className="lyrics-visibility-icon">{lyricsVisible ? <Eye size={28} /> : <EyeOff size={28} />}</span>
             <span>
               <strong>{lyricsVisible ? t("lyrics.hide") : t("lyrics.show")}</strong>
               <em>{lyricsVisible ? t("settings.lyricsVisible") : t("settings.lyricsHidden")}</em>
@@ -2338,13 +2358,7 @@ export function QuickSettingsOverlay({
 
           <div className="lyrics-size-options" role="group" aria-label="Lyrics font size">
             {lyricsSizeChoices.map((choice) => (
-              <button
-                key={choice.id}
-                className={`lyrics-size-option lyrics-size-option-${choice.id} ${lyricsFontSize === choice.id ? "is-active" : ""}`}
-                type="button"
-                aria-pressed={lyricsFontSize === choice.id}
-                onClick={() => onLyricsFontSizeChange(choice.id)}
-              >
+              <button key={choice.id} className={`lyrics-size-option lyrics-size-option-${choice.id} ${lyricsFontSize === choice.id ? "is-active" : ""}`} type="button" aria-pressed={lyricsFontSize === choice.id} onClick={() => onLyricsFontSizeChange(choice.id)}>
                 <strong>{t(`settings.lyricsSize.${choice.id}`)}</strong>
                 <span>{choice.sample}</span>
               </button>
@@ -2371,35 +2385,21 @@ export function QuickSettingsOverlay({
     const showNasForm = nasFormVisible || !selectedSource;
     const requiredNasFieldsReady = nasForm.host.trim().length > 0 && nasForm.share.trim().length > 0;
     const selectedSourceNeedsSetup = Boolean(selectedSource && selectedSource.status !== "ready" && selectedSource.sourceKind !== "manual");
-    const nasFormGuidance = !requiredNasFieldsReady
-      ? t("nas.requiredHint")
-      : nasTestReady
-        ? t("nas.readySaveScan")
-        : t("nas.testFirst");
-    const sourceStatus = nasError
-      ?? nasMessage
-      ?? (showNasForm
-        ? t("nas.addShareHint")
-        : nasTrackCount > 0
-          ? t("nas.trackCountReady", { count: nasTrackCount.toLocaleString() })
-          : selectedSourceNeedsSetup
-            ? t("nas.checkSetupNext")
-            : configuredSources.length > 0
-              ? t("nas.testFirst")
-            : t("settings.addNasInSettings"));
-    const sourceStatusTitle = nasError ? nasErrorRaw ?? nasError : undefined;
+    const nasFormGuidance = !requiredNasFieldsReady ? t("nas.requiredHint") : nasTestReady ? t("nas.readySaveScan") : t("nas.testFirst");
+    const sourceStatus = nasError ?? nasMessage ?? (showNasForm ? t("nas.addShareHint") : nasTrackCount > 0 ? t("nas.trackCountReady", { count: nasTrackCount.toLocaleString() }) : selectedSourceNeedsSetup ? t("nas.checkSetupNext") : configuredSources.length > 0 ? t("nas.testFirst") : t("settings.addNasInSettings"));
+    const sourceStatusTitle = nasError ? (nasErrorRaw ?? nasError) : undefined;
 
     return (
       <section className="settings-detail-panel" aria-label="NAS sources detail" data-settings-detail="nas">
         <div className="settings-detail-header">
-            <button className="settings-detail-back" type="button" onClick={() => setDetailView(null)}>
-              {t("common.close")}
-            </button>
-            <div>
-              <span>{t("settings.library")}</span>
-              <strong>{t("settings.nasSources")}</strong>
-              <p title={sourceStatusTitle}>{sourceStatus}</p>
-            </div>
+          <button className="settings-detail-back" type="button" onClick={() => setDetailView(null)}>
+            {t("common.close")}
+          </button>
+          <div>
+            <span>{t("settings.library")}</span>
+            <strong>{t("settings.nasSources")}</strong>
+            <p title={sourceStatusTitle}>{sourceStatus}</p>
+          </div>
         </div>
 
         <div className="nas-source-detail">
@@ -2407,86 +2407,106 @@ export function QuickSettingsOverlay({
             <div className="nas-source-toolbar">
               <button type="button" onClick={() => openNasAddForm()} disabled={busy}>
                 <Plus size={18} />
-                  <span>{t("nas.addNas")}</span>
-                </button>
-                <button type="button" onClick={() => void handleNasScanNetwork()} disabled={busy}>
-                  <Search size={18} />
-                  <span>{nasPendingAction === "scan" ? t("nas.scanning") : t("nas.scanNetwork")}</span>
-                </button>
-              </div>
+                <span>{t("nas.addNas")}</span>
+              </button>
+              <button type="button" onClick={() => void handleNasScanNetwork()} disabled={busy}>
+                <Search size={18} />
+                <span>{nasPendingAction === "scan" ? t("nas.scanning") : t("nas.scanNetwork")}</span>
+              </button>
+            </div>
 
-              <section className="nas-list-section" aria-label={t("nas.savedNas")}>
-                <div className="nas-list-heading">
-                  <strong>{t("nas.savedNas")}</strong>
-                  <span>{savedSources.length}</span>
-                </div>
-                <div className="nas-list-cards">
-                  {visibleSources.length > 0 ? visibleSources.map((source) => {
+            <section className="nas-list-section" aria-label={t("nas.savedNas")}>
+              <div className="nas-list-heading">
+                <strong>{t("nas.savedNas")}</strong>
+                <span>{savedSources.length}</span>
+              </div>
+              <div className="nas-list-cards">
+                {visibleSources.length > 0 ? (
+                  visibleSources.map((source) => {
                     const badge = source.sourceKind === "manual" ? t("nas.status.manual") : source.status === "ready" ? null : nasStatusLabel(source.status, t);
-                  return (
-                    <button
-                      key={source.id}
-                      className={`nas-list-card ${selectedSource?.id === source.id && !nasFormVisible ? "is-active" : ""}`}
-                      type="button"
-                      onClick={() => {
-                        setSelectedNasId(source.id);
-                        setNasFormVisible(false);
-                        setNasDeleteConfirmId(null);
-                        setNasError(null);
-                        setNasErrorRaw(null);
-                      }}
+                    return (
+                      <button
+                        key={source.id}
+                        className={`nas-list-card ${selectedSource?.id === source.id && !nasFormVisible ? "is-active" : ""}`}
+                        type="button"
+                        onClick={() => {
+                          setSelectedNasId(source.id);
+                          setNasFormVisible(false);
+                          setNasDeleteConfirmId(null);
+                          setNasError(null);
+                          setNasErrorRaw(null);
+                        }}
                       >
                         {badge ? <span>{badge}</span> : null}
                         <strong>{source.name}</strong>
-                      <em title={source.host ? `//${source.host}:${source.port}/${source.share}` : source.mpdPath ?? "NAS"}>
-                        {source.trackCount > 0 ? t("nas.readyTrackCount", { count: source.trackCount.toLocaleString() }) : source.share || source.mpdPath || "NAS"}
-                      </em>
+                        <em title={source.host ? `//${source.host}:${source.port}/${source.share}` : (source.mpdPath ?? "NAS")}>
+                          {source.trackCount > 0
+                            ? t("nas.readyTrackCount", {
+                                count: source.trackCount.toLocaleString()
+                              })
+                            : source.share || source.mpdPath || "NAS"}
+                        </em>
                       </button>
                     );
-                  }) : (
-                    <article className="nas-empty-card">
-                      <strong>{t("nas.noNasYet")}</strong>
-                      <span>{t("nas.scanOrAdd")}</span>
-                    </article>
-                  )}
-                </div>
-                {savedSources.length > NAS_PANEL_PAGE_SIZE ? (
-                  <div className="nas-pager">
-                    <button type="button" disabled={safeSourcePage === 0} onClick={() => setNasSourcePage((page) => Math.max(0, page - 1))}>{t("playback.previous")}</button>
-                    <span>{safeSourcePage + 1} / {sourcePageCount}</span>
-                    <button type="button" disabled={safeSourcePage >= sourcePageCount - 1} onClick={() => setNasSourcePage((page) => Math.min(sourcePageCount - 1, page + 1))}>{t("playback.next")}</button>
-                  </div>
-                ) : null}
-              </section>
-
-              <section className="nas-list-section" aria-label={t("nas.scanResults")}>
-                <div className="nas-list-heading">
-                  <strong>{t("nas.scanResults")}</strong>
-                  <span>{nasCandidates.length}</span>
-                </div>
-              <div className="nas-candidate-list">
-                {visibleCandidates.length > 0 ? visibleCandidates.map((candidate) => (
-                  <button key={`${candidate.host}:${candidate.port}/${candidate.share}/${candidate.path}`} type="button" onClick={() => openNasAddForm(candidate)} disabled={busy}>
-                    <Server size={18} />
-                    <span>
-                      <strong>{candidate.name}</strong>
-                      <em>{`//${candidate.host}:${candidate.port}/${candidate.share}`}</em>
-                    </span>
+                  })
+                ) : (
+                  <article className="nas-empty-card">
+                    <strong>{t("nas.noNasYet")}</strong>
+                    <span>{t("nas.scanOrAdd")}</span>
+                  </article>
+                )}
+              </div>
+              {savedSources.length > NAS_PANEL_PAGE_SIZE ? (
+                <div className="nas-pager">
+                  <button type="button" disabled={safeSourcePage === 0} onClick={() => setNasSourcePage((page) => Math.max(0, page - 1))}>
+                    {t("playback.previous")}
                   </button>
-                  )) : (
-                    <article className="nas-empty-card">
-                      <strong>{t("nas.noResults")}</strong>
-                      <span>{t("nas.noResultsHint")}</span>
-                    </article>
-                  )}
+                  <span>
+                    {safeSourcePage + 1} / {sourcePageCount}
+                  </span>
+                  <button type="button" disabled={safeSourcePage >= sourcePageCount - 1} onClick={() => setNasSourcePage((page) => Math.min(sourcePageCount - 1, page + 1))}>
+                    {t("playback.next")}
+                  </button>
                 </div>
-                {nasCandidates.length > NAS_PANEL_PAGE_SIZE ? (
-                  <div className="nas-pager">
-                    <button type="button" disabled={safeCandidatePage === 0} onClick={() => setNasCandidatePage((page) => Math.max(0, page - 1))}>{t("playback.previous")}</button>
-                    <span>{safeCandidatePage + 1} / {candidatePageCount}</span>
-                    <button type="button" disabled={safeCandidatePage >= candidatePageCount - 1} onClick={() => setNasCandidatePage((page) => Math.min(candidatePageCount - 1, page + 1))}>{t("playback.next")}</button>
-                  </div>
-                ) : null}
+              ) : null}
+            </section>
+
+            <section className="nas-list-section" aria-label={t("nas.scanResults")}>
+              <div className="nas-list-heading">
+                <strong>{t("nas.scanResults")}</strong>
+                <span>{nasCandidates.length}</span>
+              </div>
+              <div className="nas-candidate-list">
+                {visibleCandidates.length > 0 ? (
+                  visibleCandidates.map((candidate) => (
+                    <button key={`${candidate.host}:${candidate.port}/${candidate.share}/${candidate.path}`} type="button" onClick={() => openNasAddForm(candidate)} disabled={busy}>
+                      <Server size={18} />
+                      <span>
+                        <strong>{candidate.name}</strong>
+                        <em>{`//${candidate.host}:${candidate.port}/${candidate.share}`}</em>
+                      </span>
+                    </button>
+                  ))
+                ) : (
+                  <article className="nas-empty-card">
+                    <strong>{t("nas.noResults")}</strong>
+                    <span>{t("nas.noResultsHint")}</span>
+                  </article>
+                )}
+              </div>
+              {nasCandidates.length > NAS_PANEL_PAGE_SIZE ? (
+                <div className="nas-pager">
+                  <button type="button" disabled={safeCandidatePage === 0} onClick={() => setNasCandidatePage((page) => Math.max(0, page - 1))}>
+                    {t("playback.previous")}
+                  </button>
+                  <span>
+                    {safeCandidatePage + 1} / {candidatePageCount}
+                  </span>
+                  <button type="button" disabled={safeCandidatePage >= candidatePageCount - 1} onClick={() => setNasCandidatePage((page) => Math.min(candidatePageCount - 1, page + 1))}>
+                    {t("playback.next")}
+                  </button>
+                </div>
+              ) : null}
             </section>
           </div>
 
@@ -2500,27 +2520,18 @@ export function QuickSettingsOverlay({
                   void handleNasSaveAndScan();
                 }}
               >
-                  <div className="nas-panel-header">
-                    <span>{nasForm.id ? t("nas.editNas") : t("nas.addNas")}</span>
-                    <strong>{nasForm.name || nasForm.share || t("nas.newNas")}</strong>
-                    <p>{nasFormGuidance}</p>
-                  </div>
+                <div className="nas-panel-header">
+                  <span>{nasForm.id ? t("nas.editNas") : t("nas.addNas")}</span>
+                  <strong>{nasForm.name || nasForm.share || t("nas.newNas")}</strong>
+                  <p>{nasFormGuidance}</p>
+                </div>
 
                 <div className="nas-form-actions nas-primary-actions">
-                  <button
-                    type="button"
-                    onClick={() => void handleNasTest()}
-                    disabled={busy || !requiredNasFieldsReady}
-                    title={requiredNasFieldsReady ? t("nas.testFirst") : t("nas.requiredHint")}
-                  >
-                      {nasPendingAction === "test" ? t("nas.testing") : t("nas.test")}
-                    </button>
-                    <button
-                      type="submit"
-                      disabled={busy || !nasTestReady}
-                      title={nasTestReady ? t("nas.readySaveScan") : t("nas.testFirst")}
-                    >
-                      {nasPendingAction === "save" ? t("common.saving") : t("nas.saveScan")}
+                  <button type="button" onClick={() => void handleNasTest()} disabled={busy || !requiredNasFieldsReady} title={requiredNasFieldsReady ? t("nas.testFirst") : t("nas.requiredHint")}>
+                    {nasPendingAction === "test" ? t("nas.testing") : t("nas.test")}
+                  </button>
+                  <button type="submit" disabled={busy || !nasTestReady} title={nasTestReady ? t("nas.readySaveScan") : t("nas.testFirst")}>
+                    {nasPendingAction === "save" ? t("common.saving") : t("nas.saveScan")}
                   </button>
                   <button
                     type="button"
@@ -2533,92 +2544,101 @@ export function QuickSettingsOverlay({
                       setNasMessage(null);
                     }}
                   >
-                      {t("common.cancel")}
+                    {t("common.cancel")}
                   </button>
                 </div>
 
-                  <div className="nas-form-grid">
-                    <label className="night-field">
-                      <span>{t("nas.name")}</span>
+                <div className="nas-form-grid">
+                  <label className="night-field">
+                    <span>{t("nas.name")}</span>
                     <input
                       value={nasForm.name}
                       autoComplete="off"
-                      onChange={(event) => handleNasFormPatch({ name: event.currentTarget.value, mountName: nasForm.mountName || event.currentTarget.value })}
+                      onChange={(event) =>
+                        handleNasFormPatch({
+                          name: event.currentTarget.value,
+                          mountName: nasForm.mountName || event.currentTarget.value
+                        })
+                      }
                     />
                   </label>
-                    <label className="night-field">
-                      <span>{t("nas.serverIp")}</span>
-                    <input
-                      value={nasForm.host}
-                      inputMode="url"
-                      autoComplete="off"
-                      spellCheck={false}
-                      onChange={(event) => handleNasFormPatch({ host: event.currentTarget.value })}
-                    />
+                  <label className="night-field">
+                    <span>{t("nas.serverIp")}</span>
+                    <input value={nasForm.host} inputMode="url" autoComplete="off" spellCheck={false} onChange={(event) => handleNasFormPatch({ host: event.currentTarget.value })} />
                   </label>
-                    <label className="night-field">
-                      <span>{t("nas.share")}</span>
+                  <label className="night-field">
+                    <span>{t("nas.share")}</span>
                     <input
                       value={nasForm.share}
                       autoComplete="off"
                       spellCheck={false}
-                      onChange={(event) => handleNasFormPatch({ share: event.currentTarget.value, mountName: nasForm.mountName || event.currentTarget.value })}
+                      onChange={(event) =>
+                        handleNasFormPatch({
+                          share: event.currentTarget.value,
+                          mountName: nasForm.mountName || event.currentTarget.value
+                        })
+                      }
                     />
                   </label>
-                    <label className="night-field">
-                      <span>{t("nas.folder")}</span>
-                    <input
-                      value={nasForm.path ?? ""}
-                      autoComplete="off"
-                      spellCheck={false}
-                        placeholder={t("nas.optional")}
-                      onChange={(event) => handleNasFormPatch({ path: event.currentTarget.value })}
-                    />
+                  <label className="night-field">
+                    <span>{t("nas.folder")}</span>
+                    <input value={nasForm.path ?? ""} autoComplete="off" spellCheck={false} placeholder={t("nas.optional")} onChange={(event) => handleNasFormPatch({ path: event.currentTarget.value })} />
                   </label>
-                    <label className="night-field">
-                      <span>{t("nas.port")}</span>
+                  <label className="night-field">
+                    <span>{t("nas.port")}</span>
                     <input
                       value={nasForm.port ?? 445}
                       inputMode="numeric"
-                      onChange={(event) => handleNasFormPatch({ port: Number(event.currentTarget.value) || 445 })}
+                      onChange={(event) =>
+                        handleNasFormPatch({
+                          port: Number(event.currentTarget.value) || 445
+                        })
+                      }
                     />
                   </label>
-                    <label className="night-field">
-                      <span>{t("nas.localName")}</span>
+                  <label className="night-field">
+                    <span>{t("nas.localName")}</span>
                     <input
                       value={nasForm.mountName ?? ""}
                       autoComplete="off"
                       spellCheck={false}
-                      onChange={(event) => handleNasFormPatch({ mountName: event.currentTarget.value })}
+                      onChange={(event) =>
+                        handleNasFormPatch({
+                          mountName: event.currentTarget.value
+                        })
+                      }
                     />
                   </label>
                   {nasForm.authMode === "password" ? (
                     <>
-                        <label className="night-field">
-                          <span>{t("nas.username")}</span>
+                      <label className="night-field">
+                        <span>{t("nas.username")}</span>
                         <input
                           value={nasForm.username ?? ""}
                           autoComplete="username"
                           spellCheck={false}
-                          onChange={(event) => handleNasFormPatch({ username: event.currentTarget.value })}
+                          onChange={(event) =>
+                            handleNasFormPatch({
+                              username: event.currentTarget.value
+                            })
+                          }
                         />
                       </label>
-                        <label className="night-field nas-password-field">
-                          <span>{t("nas.password")}</span>
+                      <label className="night-field nas-password-field">
+                        <span>{t("nas.password")}</span>
                         <span className="nas-password-input-wrap">
                           <input
                             value={nasForm.password ?? ""}
                             type={nasPasswordVisible ? "text" : "password"}
                             autoComplete="current-password"
                             spellCheck={false}
-                            onChange={(event) => handleNasFormPatch({ password: event.currentTarget.value })}
+                            onChange={(event) =>
+                              handleNasFormPatch({
+                                password: event.currentTarget.value
+                              })
+                            }
                           />
-                          <button
-                            type="button"
-                              aria-label={nasPasswordVisible ? t("nas.hidePassword") : t("nas.showPassword")}
-                              title={nasPasswordVisible ? t("nas.hidePassword") : t("nas.showPassword")}
-                            onClick={() => setNasPasswordVisible((visible) => !visible)}
-                          >
+                          <button type="button" aria-label={nasPasswordVisible ? t("nas.hidePassword") : t("nas.showPassword")} title={nasPasswordVisible ? t("nas.hidePassword") : t("nas.showPassword")} onClick={() => setNasPasswordVisible((visible) => !visible)}>
                             {nasPasswordVisible ? <EyeOff size={18} /> : <Eye size={18} />}
                           </button>
                         </span>
@@ -2632,24 +2652,25 @@ export function QuickSettingsOverlay({
                     className={`night-toggle ${nasForm.authMode === "guest" ? "is-active" : ""}`}
                     type="button"
                     aria-pressed={nasForm.authMode === "guest"}
-                    onClick={() => handleNasFormPatch({ authMode: "guest", username: "", password: "" })}
+                    onClick={() =>
+                      handleNasFormPatch({
+                        authMode: "guest",
+                        username: "",
+                        password: ""
+                      })
+                    }
                   >
                     <CheckCircle2 size={24} />
-                      <span>
-                        <strong>{t("nas.guest")}</strong>
-                        <em>{t("nas.noPassword")}</em>
+                    <span>
+                      <strong>{t("nas.guest")}</strong>
+                      <em>{t("nas.noPassword")}</em>
                     </span>
                   </button>
-                  <button
-                    className={`night-toggle ${nasForm.authMode === "password" ? "is-active" : ""}`}
-                    type="button"
-                    aria-pressed={nasForm.authMode === "password"}
-                    onClick={() => handleNasFormPatch({ authMode: "password" })}
-                  >
+                  <button className={`night-toggle ${nasForm.authMode === "password" ? "is-active" : ""}`} type="button" aria-pressed={nasForm.authMode === "password"} onClick={() => handleNasFormPatch({ authMode: "password" })}>
                     <Server size={24} />
-                      <span>
-                        <strong>{t("nas.account")}</strong>
-                        <em>{t("nas.accountPassword")}</em>
+                    <span>
+                      <strong>{t("nas.account")}</strong>
+                      <em>{t("nas.accountPassword")}</em>
                     </span>
                   </button>
                 </div>
@@ -2657,60 +2678,64 @@ export function QuickSettingsOverlay({
             ) : selectedSource ? (
               <article className={`nas-source-card nas-panel-card tone-${selectedSource.status === "ready" ? "cyan" : "neutral"}`}>
                 <div className="nas-panel-header">
-                    {selectedSource.sourceKind === "manual" || selectedSource.status !== "ready" ? (
-                      <span>{selectedSource.sourceKind === "manual" ? t("nas.status.manual") : nasStatusLabel(selectedSource.status, t)}</span>
-                    ) : null}
-                    <strong>{selectedSource.name}</strong>
-                    <p>{selectedSource.host ? `//${selectedSource.host}:${selectedSource.port}/${selectedSource.share}` : t("nas.loadedFromEnvironment")}</p>
+                  {selectedSource.sourceKind === "manual" || selectedSource.status !== "ready" ? <span>{selectedSource.sourceKind === "manual" ? t("nas.status.manual") : nasStatusLabel(selectedSource.status, t)}</span> : null}
+                  <strong>{selectedSource.name}</strong>
+                  <p>{selectedSource.host ? `//${selectedSource.host}:${selectedSource.port}/${selectedSource.share}` : t("nas.loadedFromEnvironment")}</p>
+                </div>
+                <dl>
+                  <div>
+                    <dt>{t("nas.tracks")}</dt>
+                    <dd>{selectedSource.trackCount.toLocaleString()}</dd>
                   </div>
-                  <dl>
-                    <div>
-                      <dt>{t("nas.tracks")}</dt>
-                      <dd>{selectedSource.trackCount.toLocaleString()}</dd>
-                    </div>
-                    <div>
-                      <dt>{t("nas.share")}</dt>
-                      <dd title={selectedSource.host ? `//${selectedSource.host}:${selectedSource.port}/${selectedSource.share}` : selectedSource.mpdPath ?? undefined}>
-                        {selectedSource.share || selectedSource.mpdPath || "NAS"}
-                      </dd>
-                    </div>
-                  </dl>
-                  {selectedSource.lastError ? (
-                    <em className="nas-source-error" title={selectedSource.lastRawError ?? selectedSource.lastError}>
-                      {selectedSource.lastError}
-                    </em>
-                  ) : null}
-                  {selectedSource.status !== "ready" && selectedSource.sourceKind !== "manual" ? (
-                    <p className="nas-source-next-step">{t("nas.checkSetupNext")}</p>
-                  ) : null}
-                  {selectedSource.readOnly ? (
-                    <p className="nas-readonly-note">{t("nas.readOnlyEnvironment")}</p>
-                  ) : (
-                    <div className="nas-source-actions nas-panel-actions">
-                      <button type="button" onClick={() => void handleNasMount(selectedSource.id)} disabled={busy}>
-                        {selectedSource.status === "ready" ? t("nas.scan") : t("nas.mount")}
+                  <div>
+                    <dt>{t("nas.share")}</dt>
+                    <dd title={selectedSource.host ? `//${selectedSource.host}:${selectedSource.port}/${selectedSource.share}` : (selectedSource.mpdPath ?? undefined)}>{selectedSource.share || selectedSource.mpdPath || "NAS"}</dd>
+                  </div>
+                </dl>
+                {selectedSource.lastError ? (
+                  <em className="nas-source-error" title={selectedSource.lastRawError ?? selectedSource.lastError}>
+                    {selectedSource.lastError}
+                  </em>
+                ) : null}
+                {selectedSource.status !== "ready" && selectedSource.sourceKind !== "manual" ? <p className="nas-source-next-step">{t("nas.checkSetupNext")}</p> : null}
+                {selectedSource.readOnly ? (
+                  <p className="nas-readonly-note">{t("nas.readOnlyEnvironment")}</p>
+                ) : (
+                  <div className="nas-source-actions nas-panel-actions">
+                    <button type="button" onClick={() => void handleNasMount(selectedSource.id)} disabled={busy}>
+                      {selectedSource.status === "ready" ? t("nas.scan") : t("nas.mount")}
+                    </button>
+                    <button type="button" onClick={() => void handleNasUnmount(selectedSource.id)} disabled={busy}>
+                      {t("nas.unmount")}
+                    </button>
+                    <button type="button" onClick={() => openNasEditForm(selectedSource)} disabled={busy}>
+                      {t("nas.edit")}
+                    </button>
+                    {nasDeleteConfirmId === selectedSource.id ? (
+                      <span className="nas-delete-confirm">
+                        <em>{t("common.deleteQuestion")}</em>
+                        <button type="button" onClick={() => void handleNasDelete(selectedSource.id)} disabled={busy}>
+                          {t("common.yes")}
+                        </button>
+                        <button type="button" onClick={() => setNasDeleteConfirmId(null)} disabled={busy}>
+                          {t("common.no")}
+                        </button>
+                      </span>
+                    ) : (
+                      <button type="button" className="nas-danger-action" onClick={() => void handleNasDelete(selectedSource.id)} disabled={busy}>
+                        {t("nas.delete")}
                       </button>
-                      <button type="button" onClick={() => void handleNasUnmount(selectedSource.id)} disabled={busy}>{t("nas.unmount")}</button>
-                      <button type="button" onClick={() => openNasEditForm(selectedSource)} disabled={busy}>{t("nas.edit")}</button>
-                      {nasDeleteConfirmId === selectedSource.id ? (
-                        <span className="nas-delete-confirm">
-                          <em>{t("common.deleteQuestion")}</em>
-                          <button type="button" onClick={() => void handleNasDelete(selectedSource.id)} disabled={busy}>{t("common.yes")}</button>
-                          <button type="button" onClick={() => setNasDeleteConfirmId(null)} disabled={busy}>{t("common.no")}</button>
-                        </span>
-                      ) : (
-                        <button type="button" className="nas-danger-action" onClick={() => void handleNasDelete(selectedSource.id)} disabled={busy}>{t("nas.delete")}</button>
-                      )}
+                    )}
                   </div>
                 )}
               </article>
             ) : (
-                <article className="nas-source-card nas-panel-card tone-neutral">
-                  <div className="nas-panel-header">
-                    <span>{t("nas.noNasYet")}</span>
-                    <strong>{t("nas.addOrScan")}</strong>
-                    <p>{t("nas.manageHere")}</p>
-                  </div>
+              <article className="nas-source-card nas-panel-card tone-neutral">
+                <div className="nas-panel-header">
+                  <span>{t("nas.noNasYet")}</span>
+                  <strong>{t("nas.addOrScan")}</strong>
+                  <p>{t("nas.manageHere")}</p>
+                </div>
               </article>
             )}
           </div>
@@ -2723,29 +2748,32 @@ export function QuickSettingsOverlay({
     const normalizedPendingProxyUrl = pendingProxyUrl ? (normalizeProxyUrl(pendingProxyUrl) ?? pendingProxyUrl) : null;
     const proxyUrlToValidate = normalizeProxyUrl(webModeProxyConfirmMode === "url" && pendingProxyUrl ? pendingProxyUrl : webModeProxyUrl);
     const proxyWillBeEnabled = webModeProxyConfirmEnabled === true;
-    const proxyValidationPassed = !proxyWillBeEnabled
-      || (webModeProxyValidationStatus === "passed" && webModeProxyValidatedUrl === proxyUrlToValidate);
+    const proxyValidationPassed = !proxyWillBeEnabled || (webModeProxyValidationStatus === "passed" && webModeProxyValidatedUrl === proxyUrlToValidate);
     const proxyRestartDisabled = webModeProxyRestartPending || !proxyValidationPassed;
-    const proxyValidationText = webModeProxyValidationStatus === "checking"
-      ? t("settings.proxyCheckChecking")
-      : webModeProxyValidationStatus === "passed"
-        ? t("settings.proxyCheckPassed")
-        : webModeProxyValidationStatus === "failed"
-          ? t("settings.proxyCheckFailed", { sites: webModeProxyFailedSites.join(", ") || "Google, Apple Music, Spotify" })
-          : null;
+    const proxyValidationText =
+      webModeProxyValidationStatus === "checking"
+        ? t("settings.proxyCheckChecking")
+        : webModeProxyValidationStatus === "passed"
+          ? t("settings.proxyCheckPassed")
+          : webModeProxyValidationStatus === "failed"
+            ? t("settings.proxyCheckFailed", {
+                sites: webModeProxyFailedSites.join(", ") || "Google, Apple Music, Spotify"
+              })
+            : null;
 
-    const statusText = webModeError
-      ?? (webModeState?.settings.proxyEnabled ? t("settings.proxyReady") : t("explore.directConnection"));
-    const proxyChangeTarget = webModeProxyConfirmEnabled === null
-      ? null
-      : webModeProxyConfirmEnabled ? t("common.proxyOn") : t("common.direct");
+    const statusText = webModeError ?? (webModeState?.settings.proxyEnabled ? t("settings.proxyReady") : t("explore.directConnection"));
+    const proxyChangeTarget = webModeProxyConfirmEnabled === null ? null : webModeProxyConfirmEnabled ? t("common.proxyOn") : t("common.direct");
     return (
       <section className="settings-detail-panel" aria-label="Explore detail" data-settings-detail="web-mode">
         <div className="settings-detail-header">
-          <button className="settings-detail-back" type="button" onClick={() => {
-            cancelWebModeProxyChange();
-            setDetailView(null);
-          }}>
+          <button
+            className="settings-detail-back"
+            type="button"
+            onClick={() => {
+              cancelWebModeProxyChange();
+              setDetailView(null);
+            }}
+          >
             {t("common.close")}
           </button>
           <div>
@@ -2756,14 +2784,7 @@ export function QuickSettingsOverlay({
         </div>
 
         <div className="web-mode-settings-panel">
-          <button
-            className={`night-toggle web-mode-proxy-toggle ${webModeProxyEnabled ? "is-active" : ""}`}
-            type="button"
-            aria-pressed={webModeProxyEnabled}
-            disabled={webModeProxyRestartPending || webModeProxyConfirmEnabled !== null}
-            data-web-mode-proxy-toggle
-            onClick={() => requestWebModeProxyChange(!webModeProxyEnabled)}
-          >
+          <button className={`night-toggle web-mode-proxy-toggle ${webModeProxyEnabled ? "is-active" : ""}`} type="button" aria-pressed={webModeProxyEnabled} disabled={webModeProxyRestartPending || webModeProxyConfirmEnabled !== null} data-web-mode-proxy-toggle onClick={() => requestWebModeProxyChange(!webModeProxyEnabled)}>
             <Globe2 size={26} />
             <span>
               <strong>{t("common.proxy")}</strong>
@@ -2781,27 +2802,22 @@ export function QuickSettingsOverlay({
                 spellCheck={false}
                 disabled={webModeProxyRestartPending}
                 onChange={(event) => setWebModeProxyUrl(event.currentTarget.value)}
-                onKeyDown={(event) => { if (event.key === "Enter") { window.dispatchEvent(new Event("tikpal:keyboard-context-clear")); requestWebModeProxyUrlChange(); (event.currentTarget as HTMLInputElement).blur(); } }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    window.dispatchEvent(new Event("tikpal:keyboard-context-clear"));
+                    requestWebModeProxyUrlChange();
+                    (event.currentTarget as HTMLInputElement).blur();
+                  }
+                }}
               />
             </label>
-            <button
-              className="web-mode-proxy-test"
-              type="button"
-              disabled={webModeProxyRestartPending || webModeProxyValidationStatus === "checking"}
-              aria-busy={webModeProxyValidationStatus === "checking"}
-              data-web-mode-proxy-test
-              onClick={checkWebModeProxy}
-            >
+            <button className="web-mode-proxy-test" type="button" disabled={webModeProxyRestartPending || webModeProxyValidationStatus === "checking"} aria-busy={webModeProxyValidationStatus === "checking"} data-web-mode-proxy-test onClick={checkWebModeProxy}>
               {t("common.checkProxy")}
             </button>
           </div>
 
           {proxyValidationText ? (
-            <p
-              className={`web-mode-proxy-validation is-${webModeProxyValidationStatus}`}
-              data-web-mode-proxy-validation
-              aria-live="polite"
-            >
+            <p className={`web-mode-proxy-validation is-${webModeProxyValidationStatus}`} data-web-mode-proxy-validation aria-live="polite">
               {proxyValidationText}
             </p>
           ) : null}
@@ -2810,7 +2826,15 @@ export function QuickSettingsOverlay({
             <section className="web-mode-proxy-restart-confirm" data-web-mode-proxy-restart-confirm aria-live="polite">
               <div>
                 <strong>{t("settings.proxyRestartConfirmTitle")}</strong>
-                <p>{webModeProxyConfirmMode === "url" && normalizedPendingProxyUrl ? t("settings.proxyRestartConfirmWithUrlBody", { url: normalizedPendingProxyUrl }) : t("settings.proxyRestartConfirmBody", { state: proxyChangeTarget })}</p>
+                <p>
+                  {webModeProxyConfirmMode === "url" && normalizedPendingProxyUrl
+                    ? t("settings.proxyRestartConfirmWithUrlBody", {
+                        url: normalizedPendingProxyUrl
+                      })
+                    : t("settings.proxyRestartConfirmBody", {
+                        state: proxyChangeTarget
+                      })}
+                </p>
               </div>
               <div className="web-mode-proxy-restart-confirm-actions">
                 <button type="button" disabled={webModeProxyRestartPending} data-web-mode-proxy-restart-cancel onClick={cancelWebModeProxyChange}>
@@ -2850,47 +2874,27 @@ export function QuickSettingsOverlay({
 
         <div className="display-brightness-panel display-brightness-panel-detail">
           <div className="display-brightness-header">
-            <strong>{brightnessPercent}% {t("settings.displayBrightness")}</strong>
+            <strong>
+              {brightnessPercent}% {t("settings.displayBrightness")}
+            </strong>
             <em title={system.display.transport}>{system.display.controllable ? t("settings.hardware") : t("common.unavailable")}</em>
           </div>
           <div className="display-brightness-bar" aria-hidden="true">
             <span style={{ width: `${brightnessPercent}%` }} />
           </div>
           <div className="display-brightness-controls" role="group" aria-label="Display brightness controls">
-            <button
-              className="display-brightness-step"
-              type="button"
-              disabled={brightnessDisabled || brightnessPercent <= 0}
-              onClick={() => void handleBrightnessAdjust(brightnessPercent - 10)}
-            >
+            <button className="display-brightness-step" type="button" disabled={brightnessDisabled || brightnessPercent <= 0} onClick={() => void handleBrightnessAdjust(brightnessPercent - 10)}>
               {t("settings.dimStep")}
             </button>
-            <button
-              className="display-brightness-step"
-              type="button"
-              disabled={brightnessDisabled || brightnessPercent >= 100}
-              onClick={() => void handleBrightnessAdjust(brightnessPercent + 10)}
-            >
+            <button className="display-brightness-step" type="button" disabled={brightnessDisabled || brightnessPercent >= 100} onClick={() => void handleBrightnessAdjust(brightnessPercent + 10)}>
               {t("settings.boostStep")}
             </button>
           </div>
-          <em className={`settings-card-action ${brightnessBusy ? "is-applying" : ""}`}>
-            {system.display.controllable
-              ? brightnessBusy
-                ? t("settings.applyingPercent", { percent: brightnessPercent })
-                : t("settings.brightnessPanel")
-              : t("common.unavailable")}
-          </em>
+          <em className={`settings-card-action ${brightnessBusy ? "is-applying" : ""}`}>{system.display.controllable ? (brightnessBusy ? t("settings.applyingPercent", { percent: brightnessPercent }) : t("settings.brightnessPanel")) : t("common.unavailable")}</em>
         </div>
 
         <div className="display-sleep-panel" data-settings-display-sleep>
-          <button
-            className={`night-toggle display-sleep-toggle ${sleepEnabled ? "is-active" : ""}`}
-            type="button"
-            aria-pressed={sleepEnabled}
-            disabled={preferencesPending}
-            onClick={() => void handleDisplaySleepEnabledChange(!sleepEnabled)}
-          >
+          <button className={`night-toggle display-sleep-toggle ${sleepEnabled ? "is-active" : ""}`} type="button" aria-pressed={sleepEnabled} disabled={preferencesPending} onClick={() => void handleDisplaySleepEnabledChange(!sleepEnabled)}>
             <Moon size={26} />
             <span>
               <strong>{t("settings.screenSleep")}</strong>
@@ -2901,25 +2905,13 @@ export function QuickSettingsOverlay({
           <div className="night-field display-sleep-field display-sleep-style-field">
             <span className="display-sleep-field-heading">
               <span>{t("settings.sleepStyle")}</span>
-              <button
-                className="display-sleep-preview-button"
-                type="button"
-                disabled={preferencesPending}
-                onClick={onPreviewScreenSaver}
-              >
+              <button className="display-sleep-preview-button" type="button" disabled={preferencesPending} onClick={onPreviewScreenSaver}>
                 {t("settings.previewSleepStyle")}
               </button>
             </span>
             <div className="display-sleep-presets display-sleep-style-presets" role="group" aria-label="Screen sleep style">
               {displaySleepStyleChoices.map((style) => (
-                <button
-                  key={style}
-                  className={`display-brightness-preset ${preferences.displaySleepStyle === style ? "is-active" : ""}`}
-                  type="button"
-                  aria-pressed={preferences.displaySleepStyle === style}
-                  disabled={preferencesPending}
-                  onClick={() => void handleDisplaySleepStyleChange(style)}
-                >
+                <button key={style} className={`display-brightness-preset ${preferences.displaySleepStyle === style ? "is-active" : ""}`} type="button" aria-pressed={preferences.displaySleepStyle === style} disabled={preferencesPending} onClick={() => void handleDisplaySleepStyleChange(style)}>
                   {t(`settings.sleepStyle.${style}`)}
                 </button>
               ))}
@@ -2932,14 +2924,7 @@ export function QuickSettingsOverlay({
             </span>
             <div className="display-sleep-presets" role="group" aria-label="Screen sleep time">
               {displaySleepMinuteChoices.map((minutes) => (
-                <button
-                  key={minutes}
-                  className={`display-brightness-preset ${preferences.displaySleepMinutes === minutes ? "is-active" : ""}`}
-                  type="button"
-                  aria-pressed={preferences.displaySleepMinutes === minutes}
-                  disabled={preferencesPending}
-                  onClick={() => void handleDisplaySleepMinutesChange(minutes)}
-                >
+                <button key={minutes} className={`display-brightness-preset ${preferences.displaySleepMinutes === minutes ? "is-active" : ""}`} type="button" aria-pressed={preferences.displaySleepMinutes === minutes} disabled={preferencesPending} onClick={() => void handleDisplaySleepMinutesChange(minutes)}>
                   {t("settings.sleepAfterMinutes", { minutes })}
                 </button>
               ))}
@@ -2952,9 +2937,7 @@ export function QuickSettingsOverlay({
 
   function renderNightDetail() {
     const schedule = roomExperience.nightSchedule;
-    const zones = timeZoneChoices.includes(schedule.timeZone)
-      ? timeZoneChoices
-      : [schedule.timeZone, ...timeZoneChoices];
+    const zones = timeZoneChoices.includes(schedule.timeZone) ? timeZoneChoices : [schedule.timeZone, ...timeZoneChoices];
     const brightnessLevels = [5, 10, 20, 35];
 
     return (
@@ -2971,13 +2954,7 @@ export function QuickSettingsOverlay({
         </div>
 
         <div className="night-settings-panel">
-          <button
-            className={`night-toggle ${schedule.enabled ? "is-active" : ""}`}
-            type="button"
-            aria-pressed={schedule.enabled}
-            disabled={pendingNight}
-            onClick={() => void handleNightScheduleChange({ enabled: !schedule.enabled })}
-          >
+          <button className={`night-toggle ${schedule.enabled ? "is-active" : ""}`} type="button" aria-pressed={schedule.enabled} disabled={pendingNight} onClick={() => void handleNightScheduleChange({ enabled: !schedule.enabled })}>
             <Clock3 size={26} />
             <span>
               <strong>Auto Night</strong>
@@ -2990,10 +2967,16 @@ export function QuickSettingsOverlay({
             <select
               value={schedule.timeZone}
               disabled={pendingNight}
-              onChange={(event) => void handleNightScheduleChange({ timeZone: event.currentTarget.value })}
+              onChange={(event) =>
+                void handleNightScheduleChange({
+                  timeZone: event.currentTarget.value
+                })
+              }
             >
               {zones.map((zone) => (
-                <option key={zone} value={zone}>{zone}</option>
+                <option key={zone} value={zone}>
+                  {zone}
+                </option>
               ))}
             </select>
           </label>
@@ -3005,7 +2988,11 @@ export function QuickSettingsOverlay({
                 type="time"
                 value={schedule.start}
                 disabled={pendingNight}
-                onChange={(event) => void handleNightScheduleChange({ start: event.currentTarget.value })}
+                onChange={(event) =>
+                  void handleNightScheduleChange({
+                    start: event.currentTarget.value
+                  })
+                }
               />
             </label>
             <label className="night-field">
@@ -3014,20 +3001,18 @@ export function QuickSettingsOverlay({
                 type="time"
                 value={schedule.end}
                 disabled={pendingNight}
-                onChange={(event) => void handleNightScheduleChange({ end: event.currentTarget.value })}
+                onChange={(event) =>
+                  void handleNightScheduleChange({
+                    end: event.currentTarget.value
+                  })
+                }
               />
             </label>
           </div>
 
           <div className="display-brightness-presets night-brightness-presets" role="group" aria-label="Night brightness presets">
             {brightnessLevels.map((level) => (
-              <button
-                key={level}
-                className={`display-brightness-preset ${schedule.brightnessPercent === level ? "is-active" : ""}`}
-                type="button"
-                disabled={pendingNight}
-                onClick={() => void handleNightScheduleChange({ brightnessPercent: level })}
-              >
+              <button key={level} className={`display-brightness-preset ${schedule.brightnessPercent === level ? "is-active" : ""}`} type="button" disabled={pendingNight} onClick={() => void handleNightScheduleChange({ brightnessPercent: level })}>
                 {level}%
               </button>
             ))}
@@ -3037,10 +3022,348 @@ export function QuickSettingsOverlay({
     );
   }
 
+  function renderSettingsCard(card: SettingsCard) {
+    const Icon = card.icon;
+
+    if (card.kind === "readonly") {
+      return (
+        <article className={`settings-card tone-${card.tone}`} key={card.key}>
+          <div className="settings-icon">
+            <Icon size={32} />
+          </div>
+          <div>
+            <span>{card.title}</span>
+            <strong>{card.value}</strong>
+            <p>{card.meta}</p>
+          </div>
+        </article>
+      );
+    }
+
+    if (card.kind === "audioOutput") {
+      return (
+        <button
+          className={`settings-card settings-card-button settings-card-summary settings-card-audio-output tone-${card.tone}`}
+          key={card.key}
+          type="button"
+          onClick={() => openDetail("audioOutput")}
+        >
+          <div className="settings-icon">
+            <Volume2 size={32} />
+          </div>
+          <div>
+            <span>{card.title}</span>
+            <strong>{card.value}</strong>
+            <p>{card.meta}</p>
+            <em className="settings-card-action">
+              {t("settings.openAudioOutput")}
+            </em>
+          </div>
+        </button>
+      );
+    }
+
+    if (card.kind === "multiroom") {
+      return (
+        <button
+          className={`settings-card settings-card-button settings-card-summary settings-card-multiroom tone-${card.tone}`}
+          key={card.key}
+          type="button"
+          onClick={() => openDetail("multiroom")}
+        >
+          <div className="settings-icon">
+            <Waves size={32} />
+          </div>
+          <div>
+            <span>{card.title}</span>
+            <strong>{card.value}</strong>
+            <p>{card.meta}</p>
+            <em
+              className={`settings-card-action ${multiroomPendingId ? "is-applying" : ""}`}
+            >
+              {multiroomPendingId
+                ? t("common.applying")
+                : t("settings.manageRooms")}
+            </em>
+          </div>
+        </button>
+      );
+    }
+
+    if (card.kind === "language") {
+      return (
+        <button
+          className={`settings-card settings-card-button settings-card-summary settings-card-language tone-${card.tone}`}
+          key={card.key}
+          type="button"
+          onClick={() => openDetail("language")}
+        >
+          <div className="settings-icon">
+            <Globe2 size={32} />
+          </div>
+          <div>
+            <span>{card.title}</span>
+            <strong>{card.value}</strong>
+            <p>{card.meta}</p>
+            <em
+              className={`settings-card-action ${localePending ? "is-applying" : ""}`}
+            >
+              {localePending ? t("common.applying") : t("settings.language")}
+            </em>
+          </div>
+        </button>
+      );
+    }
+
+    if (card.kind === "font") {
+      return (
+        <button
+          className={`settings-card settings-card-button settings-card-summary settings-card-font tone-${card.tone}`}
+          key={card.key}
+          type="button"
+          onClick={() => openDetail("font")}
+        >
+          <div className="settings-icon">
+            <Type size={32} />
+          </div>
+          <div>
+            <span>{card.title}</span>
+            <strong>{card.value}</strong>
+            <p>{card.meta}</p>
+            <em className="settings-card-action">{t("settings.openFont")}</em>
+          </div>
+        </button>
+      );
+    }
+
+    if (card.kind === "appearance") {
+      return (
+        <button
+          className={`settings-card settings-card-button settings-card-summary settings-card-appearance tone-${card.tone}`}
+          key={card.key}
+          type="button"
+          onClick={() => openDetail("appearance")}
+        >
+          <div className="settings-icon">
+            <Palette size={32} />
+          </div>
+          <div>
+            <span>{card.title}</span>
+            <strong>{card.value}</strong>
+            <p>{card.meta}</p>
+            <em className="settings-card-action">
+              {t("settings.openAppearance")}
+            </em>
+          </div>
+        </button>
+      );
+    }
+
+    if (card.kind === "lyrics") {
+      return (
+        <button
+          className={`settings-card settings-card-button settings-card-summary settings-card-lyrics tone-${card.tone}`}
+          key={card.key}
+          type="button"
+          onClick={() => openDetail("lyrics")}
+        >
+          <div className="settings-icon">
+            <Captions size={32} />
+          </div>
+          <div>
+            <span>{card.title}</span>
+            <strong>{card.value}</strong>
+            <p>{card.meta}</p>
+            <em className="settings-card-action">{t("settings.openLyrics")}</em>
+          </div>
+        </button>
+      );
+    }
+
+    if (card.kind === "display") {
+      return (
+        <button
+          className={`settings-card settings-card-button settings-card-summary settings-card-display tone-${card.tone}`}
+          key={card.key}
+          type="button"
+          onClick={() => openDetail("display")}
+        >
+          <div className="settings-icon">
+            <Icon size={32} />
+          </div>
+          <div>
+            <span>{card.title}</span>
+            <strong>{card.value}</strong>
+            <p>{card.meta}</p>
+            <em className="settings-card-action">
+              {system.display.controllable
+                ? `${system.display.brightnessPercent}% brightness`
+                : t("settings.display")}
+            </em>
+          </div>
+        </button>
+      );
+    }
+
+    if (card.kind === "night") {
+      return (
+        <button
+          className={`settings-card settings-card-button settings-card-summary settings-card-night tone-${card.tone}`}
+          key={card.key}
+          type="button"
+          onClick={() => openDetail("night")}
+        >
+          <div className="settings-icon">
+            <Clock3 size={32} />
+          </div>
+          <div>
+            <span>{card.title}</span>
+            <strong>{card.value}</strong>
+            <p>{card.meta}</p>
+            <em className="settings-card-action">
+              {t("settings.nightBrightness", {
+                percent: roomExperience.nightSchedule.brightnessPercent,
+              })}
+            </em>
+          </div>
+        </button>
+      );
+    }
+
+    if (card.kind === "nas") {
+      return (
+        <button
+          className={`settings-card settings-card-button settings-card-summary settings-card-nas tone-${card.tone}`}
+          key={card.key}
+          type="button"
+          onClick={() => openDetail("nas")}
+        >
+          <div className="settings-icon">
+            <Server size={32} />
+          </div>
+          <div>
+            <span>{card.title}</span>
+            <strong>{card.value}</strong>
+            <p>{card.meta}</p>
+            <em className="settings-card-action">{t("nas.manage")}</em>
+          </div>
+        </button>
+      );
+    }
+
+    if (card.kind === "maintenance") {
+      const isOwnershipMaintenance = card.maintenance === "ownership";
+      const pending = isOwnershipMaintenance
+        ? webModeOwnershipPending
+        : guardOtaPending;
+      return (
+        <button
+          className={`settings-card settings-card-button settings-card-maintenance tone-${card.tone} ${pending ? "is-pending" : ""}`}
+          key={card.key}
+          type="button"
+          disabled={card.disabled || pendingAction !== null}
+          aria-busy={pending}
+          data-device-maintenance={card.maintenance}
+          onClick={() => {
+            if (isOwnershipMaintenance) {
+              void checkExploreOwnership();
+            } else {
+              void checkProviderGuardUpdate();
+            }
+          }}
+        >
+          <div className="settings-icon">
+            <Icon size={32} />
+          </div>
+          <div>
+            <span>{card.title}</span>
+            <strong>{card.value}</strong>
+            <p>{card.meta}</p>
+            <em
+              className={`settings-card-action ${pending ? "is-applying" : ""}`}
+            >
+              {pending ? t("common.applying") : card.buttonLabel}
+            </em>
+          </div>
+        </button>
+      );
+    }
+
+    if (card.kind === "webMode") {
+      return (
+        <button
+          className={`settings-card settings-card-button settings-card-summary settings-card-web-mode tone-${card.tone}`}
+          key={card.key}
+          type="button"
+          onClick={() => openDetail("webMode")}
+        >
+          <div className="settings-icon">
+            <Globe2 size={32} />
+          </div>
+          <div>
+            <span>{card.title}</span>
+            <strong>{card.value}</strong>
+            <p>{card.meta}</p>
+            <em className="settings-card-action">
+              {t("settings.proxyKeyboard")}
+            </em>
+          </div>
+        </button>
+      );
+    }
+
+    const isConfirming = confirmAction === card.actionType;
+    const isPending = pendingAction === card.actionType;
+    const error = actionError[card.actionType];
+    const disabled = card.disabled || status.pending || pendingAction !== null;
+
+    return (
+      <button
+        className={`settings-card settings-card-button tone-${card.tone} ${isConfirming ? "is-confirming" : ""} ${isPending ? "is-pending" : ""}`}
+        key={card.key}
+        type="button"
+        disabled={disabled}
+        onClick={() => void handleAction(card)}
+      >
+        <div className="settings-icon">
+          <Icon size={32} />
+        </div>
+        <div>
+          <span>{card.title}</span>
+          <strong>{card.value}</strong>
+          <p title={error ?? undefined}>
+            {error ?? (isConfirming ? card.confirmLabel : card.meta)}
+          </p>
+          <em
+            className={`settings-card-action ${isPending ? "is-applying" : ""}`}
+          >
+            {isPending ? t("common.applying") : card.buttonLabel}
+          </em>
+        </div>
+      </button>
+    );
+  }
+
   return (
-    <section className={`overlay quick-settings ${active ? "is-active" : ""}`} aria-label="Console" aria-hidden={!active}>
-      <button className="overlay-backdrop" type="button" tabIndex={active ? 0 : -1} aria-label="Return to ambient" onClick={handleReturnAmbient} />
-      <div className="settings-shell" role="dialog" aria-modal="true" data-gesture-protected {...overlayReturnGesture}>
+    <section
+      className={`overlay quick-settings ${active ? "is-active" : ""}`}
+      aria-label="Console"
+      aria-hidden={!active}
+    >
+      <button
+        className="overlay-backdrop"
+        type="button"
+        tabIndex={active ? 0 : -1}
+        aria-label="Return to ambient"
+        onClick={handleReturnAmbient}
+      />
+      <div
+        className="settings-shell"
+        role="dialog"
+        aria-modal="true"
+        data-gesture-protected
+        {...overlayReturnGesture}
+      >
         <header
           className="console-hero"
           data-console-source={currentSource.id}
@@ -3048,7 +3371,10 @@ export function QuickSettingsOverlay({
           data-console-connection={currentSource.connectionState}
         >
           <div className="console-title-block">
-            <i className={`console-status-dot ${consoleStateClass}`} aria-hidden="true" />
+            <i
+              className={`console-status-dot ${consoleStateClass}`}
+              aria-hidden="true"
+            />
             <div>
               <span>{t("settings.console")}</span>
               <strong>{sectionLabel(activeSection)}</strong>
@@ -3057,22 +3383,36 @@ export function QuickSettingsOverlay({
 
           <div className="console-now-playing" data-console-now-playing>
             <div className="console-source-art">
-              {playback.albumArtUrl ? <img src={playback.albumArtUrl} alt="" /> : <ConsoleSourceIcon size={30} strokeWidth={1.8} />}
+              {playback.albumArtUrl ? (
+                <img src={playback.albumArtUrl} alt="" />
+              ) : (
+                <ConsoleSourceIcon size={30} strokeWidth={1.8} />
+              )}
             </div>
             <div>
-              <span>{currentSource.label} · {consoleStateLabel}</span>
+              <span>
+                {currentSource.label} · {consoleStateLabel}
+              </span>
               <strong>{consoleTitle}</strong>
               <p>{consoleSubtitle}</p>
             </div>
           </div>
 
           <div className="console-room-switcher" aria-label="Room shortcuts">
-            <div className="console-room-switcher-buttons" role="group" aria-label="Choose room state">
+            <div
+              className="console-room-switcher-buttons"
+              role="group"
+              aria-label="Choose room state"
+            >
               {roomShortcuts.map((shortcut) => {
                 const Icon = shortcut.Icon;
-                const activeShortcut = shortcut.id === "explore"
-                  ? Boolean(webModeState?.activeProvider || webModeState?.openingProvider)
-                  : roomExperience.mode === shortcut.id;
+                const activeShortcut =
+                  shortcut.id === "explore"
+                    ? Boolean(
+                        webModeState?.activeProvider ||
+                        webModeState?.openingProvider,
+                      )
+                    : roomExperience.mode === shortcut.id;
                 const pendingShortcut = pendingRoomShortcut === shortcut.id;
                 return (
                   <button
@@ -3085,7 +3425,17 @@ export function QuickSettingsOverlay({
                     onClick={() => void handleRoomShortcut(shortcut.id)}
                   >
                     <Icon size={18} strokeWidth={1.8} />
-                    <span className={pendingShortcut ? "is-applying" : undefined}>{pendingShortcut ? shortcut.id === "explore" ? t("common.opening") : t("common.applying") : shortcut.id === "explore" ? t("source.explore") : t(`room.${shortcut.id}`)}</span>
+                    <span
+                      className={pendingShortcut ? "is-applying" : undefined}
+                    >
+                      {pendingShortcut
+                        ? shortcut.id === "explore"
+                          ? t("common.opening")
+                          : t("common.applying")
+                        : shortcut.id === "explore"
+                          ? t("source.explore")
+                          : t(`room.${shortcut.id}`)}
+                    </span>
                   </button>
                 );
               })}
@@ -3101,7 +3451,9 @@ export function QuickSettingsOverlay({
                 <span>{t("common.close")}</span>
               </button>
             </div>
-            <span className="console-room-switcher-error" role="alert">{roomShortcutError ?? ""}</span>
+            <span className="console-room-switcher-error" role="alert">
+              {roomShortcutError ?? ""}
+            </span>
           </div>
         </header>
 
@@ -3132,321 +3484,55 @@ export function QuickSettingsOverlay({
             <strong>{sectionDescription(activeSection)}</strong>
           </header>
 
-          {detailView === "appearance"
-            ? renderAppearanceDetail()
-            : detailView === "audioDiagnostics"
-              ? renderAudioDiagnosticsDetail()
-            : detailView === "audioOutput"
-              ? renderAudioOutputDetail()
-            : detailView === "display"
-            ? renderDisplayDetail()
-              : detailView === "language"
-                ? renderLanguageDetail()
-                : detailView === "font"
-                  ? renderFontDetail()
-                  : detailView === "lyrics"
-                    ? renderLyricsDetail()
-                    : detailView === "nas"
-                      ? renderNasDetail()
-                      : detailView === "night"
-                        ? renderNightDetail()
-                        : detailView === "multiroom"
-                          ? renderMultiroomDetail()
-                          : detailView === "webMode"
-                            ? renderWebModeDetail()
-              : (
-          <div className="settings-grid" data-settings-section={activeSection}>
-            {visibleCards.map((card) => {
-              const Icon = card.icon;
-
-              if (card.kind === "readonly") {
-                return (
-                  <article className={`settings-card tone-${card.tone}`} key={card.key}>
-                    <div className="settings-icon">
-                      <Icon size={32} />
-                    </div>
-                    <div>
-                      <span>{card.title}</span>
-                      <strong>{card.value}</strong>
-                      <p>{card.meta}</p>
-                    </div>
-                  </article>
-                );
-              }
-
-              if (card.kind === "audioOutput") {
-                return (
-                  <button
-                    className={`settings-card settings-card-button settings-card-summary settings-card-audio-output tone-${card.tone}`}
-                    key={card.key}
-                    type="button"
-                    onClick={() => openDetail("audioOutput")}
-                  >
-                    <div className="settings-icon">
-                      <Volume2 size={32} />
-                    </div>
-                    <div>
-                      <span>{card.title}</span>
-                      <strong>{card.value}</strong>
-                      <p>{card.meta}</p>
-                      <em className="settings-card-action">{t("settings.openAudioOutput")}</em>
-                    </div>
-                  </button>
-                );
-              }
-
-              if (card.kind === "multiroom") {
-                return (
-                  <button
-                    className={`settings-card settings-card-button settings-card-summary settings-card-multiroom tone-${card.tone}`}
-                    key={card.key}
-                    type="button"
-                    onClick={() => openDetail("multiroom")}
-                  >
-                    <div className="settings-icon">
-                      <Waves size={32} />
-                    </div>
-                    <div>
-                      <span>{card.title}</span>
-                      <strong>{card.value}</strong>
-                      <p>{card.meta}</p>
-                      <em className={`settings-card-action ${multiroomPendingId ? "is-applying" : ""}`}>{multiroomPendingId ? t("common.applying") : t("settings.manageRooms")}</em>
-                    </div>
-                  </button>
-                );
-              }
-
-              if (card.kind === "language") {
-                return (
-                  <button
-                    className={`settings-card settings-card-button settings-card-summary settings-card-language tone-${card.tone}`}
-                    key={card.key}
-                    type="button"
-                    onClick={() => openDetail("language")}
-                  >
-                    <div className="settings-icon">
-                      <Globe2 size={32} />
-                    </div>
-                    <div>
-                      <span>{card.title}</span>
-                      <strong>{card.value}</strong>
-                      <p>{card.meta}</p>
-                      <em className={`settings-card-action ${localePending ? "is-applying" : ""}`}>{localePending ? t("common.applying") : t("settings.language")}</em>
-                    </div>
-                  </button>
-                );
-              }
-
-              if (card.kind === "font") {
-                return (
-                  <button
-                    className={`settings-card settings-card-button settings-card-summary settings-card-font tone-${card.tone}`}
-                    key={card.key}
-                    type="button"
-                    onClick={() => openDetail("font")}
-                  >
-                    <div className="settings-icon">
-                      <Type size={32} />
-                    </div>
-                    <div>
-                      <span>{card.title}</span>
-                      <strong>{card.value}</strong>
-                      <p>{card.meta}</p>
-                      <em className="settings-card-action">{t("settings.openFont")}</em>
-                    </div>
-                  </button>
-                );
-              }
-
-              if (card.kind === "appearance") {
-                return (
-                  <button
-                    className={`settings-card settings-card-button settings-card-summary settings-card-appearance tone-${card.tone}`}
-                    key={card.key}
-                    type="button"
-                    onClick={() => openDetail("appearance")}
-                  >
-                    <div className="settings-icon">
-                      <Palette size={32} />
-                    </div>
-                    <div>
-                      <span>{card.title}</span>
-                      <strong>{card.value}</strong>
-                      <p>{card.meta}</p>
-                      <em className="settings-card-action">{t("settings.openSkin")}</em>
-                    </div>
-                  </button>
-                );
-              }
-
-              if (card.kind === "lyrics") {
-                return (
-                  <button
-                    className={`settings-card settings-card-button settings-card-summary settings-card-lyrics tone-${card.tone}`}
-                    key={card.key}
-                    type="button"
-                    onClick={() => openDetail("lyrics")}
-                  >
-                    <div className="settings-icon">
-                      <Captions size={32} />
-                    </div>
-                    <div>
-                      <span>{card.title}</span>
-                      <strong>{card.value}</strong>
-                      <p>{card.meta}</p>
-                      <em className="settings-card-action">{t("settings.openLyrics")}</em>
-                    </div>
-                  </button>
-                );
-              }
-
-              if (card.kind === "display") {
-                return (
-                  <button
-                    className={`settings-card settings-card-button settings-card-summary settings-card-display tone-${card.tone}`}
-                    key={card.key}
-                    type="button"
-                    onClick={() => openDetail("display")}
-                  >
-                    <div className="settings-icon">
-                      <Icon size={32} />
-                    </div>
-                    <div>
-                      <span>{card.title}</span>
-                      <strong>{card.value}</strong>
-                      <p>{card.meta}</p>
-                      <em className="settings-card-action">
-                        {system.display.controllable
-                          ? `${system.display.brightnessPercent}% brightness`
-                          : t("settings.display")}
-                      </em>
-                    </div>
-                  </button>
-                );
-              }
-
-              if (card.kind === "night") {
-                return (
-                  <button
-                    className={`settings-card settings-card-button settings-card-summary settings-card-night tone-${card.tone}`}
-                    key={card.key}
-                    type="button"
-                    onClick={() => openDetail("night")}
-                  >
-                    <div className="settings-icon">
-                      <Clock3 size={32} />
-                    </div>
-                    <div>
-                      <span>{card.title}</span>
-                      <strong>{card.value}</strong>
-                      <p>{card.meta}</p>
-                      <em className="settings-card-action">{t("settings.nightBrightness", { percent: roomExperience.nightSchedule.brightnessPercent })}</em>
-                    </div>
-                  </button>
-                );
-              }
-
-              if (card.kind === "nas") {
-                return (
-                  <button
-                    className={`settings-card settings-card-button settings-card-summary settings-card-nas tone-${card.tone}`}
-                    key={card.key}
-                    type="button"
-                    onClick={() => openDetail("nas")}
-                  >
-                    <div className="settings-icon">
-                      <Server size={32} />
-                    </div>
-                    <div>
-                      <span>{card.title}</span>
-                      <strong>{card.value}</strong>
-                      <p>{card.meta}</p>
-                      <em className="settings-card-action">{t("nas.manage")}</em>
-                    </div>
-                  </button>
-                );
-              }
-
-              if (card.kind === "maintenance") {
-                const isOwnershipMaintenance = card.maintenance === "ownership";
-                const pending = isOwnershipMaintenance ? webModeOwnershipPending : guardOtaPending;
-                return (
-                  <button
-                    className={`settings-card settings-card-button settings-card-maintenance tone-${card.tone} ${pending ? "is-pending" : ""}`}
-                    key={card.key}
-                    type="button"
-                    disabled={card.disabled || pendingAction !== null}
-                    aria-busy={pending}
-                    data-device-maintenance={card.maintenance}
-                    onClick={() => {
-                      if (isOwnershipMaintenance) {
-                        void repairExploreOwnership();
-                      } else {
-                        void checkProviderGuardUpdate();
-                      }
-                    }}
-                  >
-                    <div className="settings-icon">
-                      <Icon size={32} />
-                    </div>
-                    <div>
-                      <span>{card.title}</span>
-                      <strong>{card.value}</strong>
-                      <p>{card.meta}</p>
-                      <em className={`settings-card-action ${pending ? "is-applying" : ""}`}>{pending ? t("common.applying") : card.buttonLabel}</em>
-                    </div>
-                  </button>
-                );
-              }
-
-              if (card.kind === "webMode") {
-                return (
-                  <button
-                    className={`settings-card settings-card-button settings-card-summary settings-card-web-mode tone-${card.tone}`}
-                    key={card.key}
-                    type="button"
-                    onClick={() => openDetail("webMode")}
-                  >
-                    <div className="settings-icon">
-                      <Globe2 size={32} />
-                    </div>
-                    <div>
-                      <span>{card.title}</span>
-                      <strong>{card.value}</strong>
-                      <p>{card.meta}</p>
-                      <em className="settings-card-action">{t("settings.proxyKeyboard")}</em>
-                    </div>
-                  </button>
-                );
-              }
-
-              const isConfirming = confirmAction === card.actionType;
-              const isPending = pendingAction === card.actionType;
-              const error = actionError[card.actionType];
-              const disabled = card.disabled || status.pending || pendingAction !== null;
-
-              return (
-                <button
-                  className={`settings-card settings-card-button tone-${card.tone} ${isConfirming ? "is-confirming" : ""} ${isPending ? "is-pending" : ""}`}
-                  key={card.key}
-                  type="button"
-                  disabled={disabled}
-                  onClick={() => void handleAction(card)}
-                >
-                  <div className="settings-icon">
-                    <Icon size={32} />
-                  </div>
-                  <div>
-                    <span>{card.title}</span>
-                    <strong>{card.value}</strong>
-                    <p title={error ?? undefined}>{error ?? (isConfirming ? card.confirmLabel : card.meta)}</p>
-                    <em className={`settings-card-action ${isPending ? "is-applying" : ""}`}>{isPending ? t("common.applying") : card.buttonLabel}</em>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-              )}
+          {detailView === "appearance" ? (
+            renderAppearanceDetail()
+          ) : detailView === "audioCustom" ? (
+            renderAudioCustomDetail()
+          ) : detailView === "audioDiagnostics" ? (
+            renderAudioDiagnosticsDetail()
+          ) : detailView === "audioProfileDetails" ? (
+            renderAudioProfileDetails()
+          ) : detailView === "audioOutput" ? (
+            renderAudioOutputDetail()
+          ) : detailView === "display" ? (
+            renderDisplayDetail()
+          ) : detailView === "language" ? (
+            renderLanguageDetail()
+          ) : detailView === "font" ? (
+            renderFontDetail()
+          ) : detailView === "lyrics" ? (
+            renderLyricsDetail()
+          ) : detailView === "nas" ? (
+            renderNasDetail()
+          ) : detailView === "night" ? (
+            renderNightDetail()
+          ) : detailView === "multiroom" ? (
+            renderMultiroomDetail()
+          ) : detailView === "webMode" ? (
+            renderWebModeDetail()
+          ) : (
+            <div
+              className={`settings-grid ${activeSection === "system" ? "is-grouped-system" : ""}`}
+              data-settings-section={activeSection}
+            >
+              {activeSection === "system"
+                ? deviceCardGroups.map((group) => (
+                    <section
+                      className="settings-card-group"
+                      data-settings-card-group={group.id}
+                      key={group.id}
+                    >
+                      <header className="settings-card-group-header">
+                        {group.label}
+                      </header>
+                      <div className="settings-card-group-grid">
+                        {group.cards.map((card) => renderSettingsCard(card))}
+                      </div>
+                    </section>
+                  ))
+                : visibleCards.map((card) => renderSettingsCard(card))}
+            </div>
+          )}
         </div>
       </div>
     </section>

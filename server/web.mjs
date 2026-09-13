@@ -13,12 +13,25 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const APP_DIR = path.resolve(__dirname, "..");
 const DIST_DIR = path.resolve(process.env.TIKPAL_WEB_DIST_DIR ?? path.join(APP_DIR, "dist"));
-const HOST = process.env.TIKPAL_WEB_HOST ?? "0.0.0.0";
+// The physical kiosk has access to maintenance APIs and must never be the
+// default LAN surface. Keep it on loopback; desktop developers reach it over
+// an authenticated SSH tunnel. The portable listener stays available to the
+// LAN and exposes only its scoped remote facade.
+//
+// TIKPAL_WEB_HOST used to bind both listeners. Keep it as the remote-host
+// fallback for existing installations, while making the kiosk listener safe
+// by default.
+const KIOSK_HOST = process.env.TIKPAL_WEB_KIOSK_HOST ?? "127.0.0.1";
+const REMOTE_HOST = process.env.TIKPAL_WEB_REMOTE_HOST ?? process.env.TIKPAL_WEB_HOST ?? "0.0.0.0";
 const PORT = Number(process.env.TIKPAL_WEB_PORT ?? 4173);
 const REMOTE_PORT = Number(process.env.TIKPAL_WEB_REMOTE_PORT ?? 4174);
 const API_ORIGIN = new URL(process.env.TIKPAL_API_ORIGIN ?? "http://127.0.0.1:8787");
 const PORTABLE_API_KEY = process.env.TIKPAL_PORTABLE_API_KEY ?? "";
 const REMOTE_MODE_INJECTION = "<script>window.__TIKPAL_REMOTE_MODE__=true;</script>";
+
+if (!isLoopbackRemoteAddress(KIOSK_HOST)) {
+  throw new Error("TIKPAL_WEB_KIOSK_HOST must be a loopback address; use the SSH debug tunnel for desktop Kiosk access");
+}
 
 const MIME_TYPES = new Map([
   [".html", "text/html; charset=utf-8"],
@@ -316,11 +329,11 @@ if (PORT === REMOTE_PORT) {
 }
 
 for (const listener of [
-  { port: PORT, remoteControl: false, label: "kiosk" },
-  { port: REMOTE_PORT, remoteControl: true, label: "remote control" }
+  { host: KIOSK_HOST, port: PORT, remoteControl: false, label: "kiosk" },
+  { host: REMOTE_HOST, port: REMOTE_PORT, remoteControl: true, label: "remote control" }
 ]) {
-  http.createServer(createRequestHandler(listener)).listen(listener.port, HOST, () => {
-    console.log(`tikpal-web ${listener.label} serving ${DIST_DIR} on http://${HOST}:${listener.port}`);
+  http.createServer(createRequestHandler(listener)).listen(listener.port, listener.host, () => {
+    console.log(`tikpal-web ${listener.label} serving ${DIST_DIR} on http://${listener.host}:${listener.port}`);
   });
 }
 console.log(`tikpal-web proxying /api to ${API_ORIGIN.origin}`);

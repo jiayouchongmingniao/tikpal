@@ -32,7 +32,7 @@ Tikpal should use a clear hierarchy:
 | --- | --- | --- |
 | Level 0 | `ambient` / Room Canvas | Scene ambience screen with room mode, time, playback status, weak progress, and fallback settings entry. |
 | Level 1 | `player` / Hi-Fi Console | Playback control overlay with cover art, metadata, progress, transport, volume, source, and audio status. |
-| Level 2 | `quickSettings` / Console | Listening-first device console with Preferences, Library, Link, and Care sections. |
+| Level 2 | `quickSettings` / Console | Listening-first device console with Preferences, Library, Network & Explore, and Device & maintenance sections. |
 | Level 3 | Advanced management | Advanced Web/admin surfaces outside the main touch UI. |
 
 ## Room Experience Model
