@@ -9609,7 +9609,6 @@ select_guard_ota_bundle
 
 case "$web_mode_action" in
   panel-mode)
-    TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS=0
     with_web_mode_lock set_panel_mode "${2:-}"
     ;;
   --check)

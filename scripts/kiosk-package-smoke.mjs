@@ -1186,6 +1186,9 @@ audio_output {
   const kioskSession = await readFile(path.join(ROOT, "deploy/chromium/start-tikpal-kiosk-session.sh"), "utf8");
   const watchdogSource = await readFile(path.join(ROOT, "deploy/chromium/tikpal-kiosk-healthcheck.sh"), "utf8");
   const webModeScript = await readFile(path.join(ROOT, "deploy/chromium/tikpal-web-mode.sh"), "utf8");
+  const panelModeActionStart = webModeScript.indexOf('  panel-mode)');
+  const panelModeActionEnd = webModeScript.indexOf('  ;;', panelModeActionStart);
+  const panelModeActionBody = webModeScript.slice(panelModeActionStart, panelModeActionEnd);
   const cdpManagerSource = await readFile(path.join(ROOT, "deploy/chromium/tikpal-web-mode-cdp-manager.mjs"), "utf8");
   const cdpManagerClient = await readFile(path.join(ROOT, "deploy/chromium/tikpal-web-mode-cdp-client.py"), "utf8");
   const initialEntryFixture = await readFile(path.join(ROOT, "scripts/tikpal-initial-entry-fixture.sh"), "utf8");
@@ -1201,6 +1204,11 @@ audio_output {
       && webModeScript.includes("window_guard_running_hot")
       && webModeScript.includes("guard-process-verify"),
     "Phase 1 switching should arbitrate exact Helper ownership while keeping an existing window Guard alive"
+  );
+  assert(
+    panelModeActionBody.includes('with_web_mode_lock set_panel_mode "${2:-}"')
+      && !panelModeActionBody.includes("TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS=0"),
+    "a direct panel request should retain its bounded Guard-lock wait instead of bouncing immediately"
   );
   const realProviderUrlWaitStart = webModeScript.indexOf("wait_for_real_provider_url() {");
   const realProviderUrlWaitEnd = webModeScript.indexOf("\n}\n\nprovider_cdp_json_list()", realProviderUrlWaitStart);

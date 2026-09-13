@@ -15267,7 +15267,10 @@ async function applyWebModeAction(action, { receivedMonotonicMs = monotonicNowMs
       await runWebModeCommand("panel-mode", action.panelMode, {
         TIKPAL_PANEL_EXPECTED_PROVIDER: state.activeProvider,
         TIKPAL_PANEL_EXPECTED_SESSION: state.lastOpenedRequestId,
-        TIKPAL_PANEL_EXPECTED_GENERATION: generation
+        TIKPAL_PANEL_EXPECTED_GENERATION: generation,
+        // A Guard inspection can outlive its nominal two-second lock wait.
+        // Let a direct panel request wait once, within its 12-second budget.
+        TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS: "5"
       });
     })();
     webModePanelPromise = operation;
