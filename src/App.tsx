@@ -1292,7 +1292,7 @@ export default function App() {
   const onboardingActive = onboardingMode !== null && roomModeChooserContext === null && mode === "ambient" && !webModeActive;
 
   return (
-    <main className={`app-root ${tikpalState.runtime.renderProfile === "constrained" ? "is-render-constrained" : ""} ${screenOffActive ? "is-screen-off" : ""} ${systemSleepActive ? "is-system-sleeping" : ""} ${mode === "quickMenu" ? "is-quick-menu-active" : ""}`} onClick={handleFirstUseBlankClick} {...gestureHandlers}>
+    <main className={`app-root ${tikpalState.runtime.renderProfile === "constrained" ? "is-render-constrained" : ""} ${screenOffActive ? "is-screen-off" : ""} ${systemSleepActive ? "is-system-sleeping" : ""} ${mode === "quickMenu" ? "is-quick-menu-active" : ""} ${onboardingActive ? "is-onboarding-coach" : ""} ${onboardingMode === "first-use" && onboardingStep === "playback" ? "is-onboarding-playback-coach" : ""}`} onClick={handleFirstUseBlankClick} {...gestureHandlers}>
       <AmbientScreen
         hudVisible={hudVisible}
         timeLabel={timeLabel}

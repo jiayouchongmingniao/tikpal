@@ -37,11 +37,13 @@
     },
     {
       "sceneId": "midnight-library",
-      "audioFilename": "audio/midnight-library.ogg",
-      "title": "Fire Ambience",
-      "author": "SoundReality",
-      "sourceUrl": "https://pixabay.com/sound-effects/film-special-effects-fire-ambience-528618/",
-      "downloadedFilename": "soundreality-fire-ambience-528618.mp3"
+      "audioFilename": "audio/midnight-library-night-ambience.ogg",
+      "title": "Night Ambience",
+      "author": "cclaretc (Freesound)",
+      "sourceUrl": "https://pixabay.com/sound-effects/nature-night-ambience-17064/",
+      "downloadedFilename": "freesound_community-night-ambience-17064.mp3",
+      "derivedFromAudioFilename": "freesound_community-night-ambience-17064.mp3",
+      "processing": "0.8 second tail-to-head crossfade, rendered as a 15 minute 48 kHz stereo Opus loop; no EQ or loudness change."
     },
     {
       "sceneId": "rainy-window",

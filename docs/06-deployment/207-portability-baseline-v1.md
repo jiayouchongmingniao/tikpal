@@ -97,3 +97,9 @@ npm run build
 ```
 
 场景音频替换必须同时更新 `scene_videos.json` 中的 `audioFilename`、`audioSha256` 和 `audioGainDb`，并在 `scene_audio_sources.json` 记录来源。音频路径使用长缓存时，改用带内容版本的新文件名，避免已打开浏览器继续命中旧缓存。
+
+### 2026-09-13 Midnight Library 环境音修订
+
+`midnight-library` 当前默认使用 `audio/midnight-library-night-ambience.ogg`：Pixabay 上 cclaretc（Freesound）的 *Night Ambience*，以 0.8 秒尾首交叉淡化渲染为 15 分钟、48 kHz、立体声 Opus。`scene_videos.json` 的 `audioSha256` 为 `c73212dec3c550f04f83b278d3bde31a46007cd6200d4d23ee9f3227a5463d5f`，`audioGainDb` 为 `0`；提交或 OTA 安装前必须同实际文件核对。
+
+`audio/midnight-library-soft.ogg` 与 `audio/midnight-library-night.ogg` 同样作为 15 分钟候选素材保留在 Git LFS，供后续主观听感复核，但没有被场景清单引用，不会被运行时加载。运行时始终以 `scene_videos.json` 的版本化文件名为准；MP4 仅承担视觉循环，永久静音，独立 Ogg 在暂停、继续、视频切换和静态视频降级期间保持自己的连续播放时间线。

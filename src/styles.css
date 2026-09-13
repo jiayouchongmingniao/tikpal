@@ -624,6 +624,51 @@ select {
   -webkit-backdrop-filter: blur(18px) saturate(0.58) brightness(0.46);
 }
 
+/* First-use coaching needs the next action to stand out without stealing the
+ * blank-screen tap or the playback control from the user. The backdrop lives
+ * below transport controls during the playback step, so that control stays
+ * sharp and interactive while the surrounding room recedes. */
+.app-root.is-onboarding-coach .ambient-screen::after {
+  content: "";
+  position: absolute;
+  z-index: 5;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse at 50% 52%, rgba(67, 151, 180, 0.08), transparent 36%),
+    rgba(2, 4, 7, 0.42);
+  backdrop-filter: blur(12px) saturate(0.56) brightness(0.58);
+  -webkit-backdrop-filter: blur(12px) saturate(0.56) brightness(0.58);
+}
+
+.app-root.is-onboarding-playback-coach .ambient-screen::after {
+  z-index: 3;
+  background:
+    radial-gradient(circle at var(--ambient-control-anchor-x) 50%, rgba(112, 222, 255, 0.13), transparent 26%),
+    rgba(2, 4, 7, 0.38);
+}
+
+.app-root.is-onboarding-playback-coach .ambient-transport {
+  z-index: 4;
+}
+
+.app-root.is-onboarding-playback-coach .ambient-transport::before {
+  border-color: color-mix(in srgb, var(--theme-info) 68%, var(--transport-shell-border));
+  box-shadow:
+    inset 0 1px 0 rgba(231, 253, 255, 0.2),
+    0 0 0 4px color-mix(in srgb, var(--theme-info) 14%, transparent),
+    0 26px 88px rgba(0, 0, 0, 0.46),
+    0 0 48px color-mix(in srgb, var(--theme-info) 24%, transparent);
+}
+
+/* The constrained EVDI profile deliberately disables backdrop-filter. A
+ * first-use coach is brief, so blur only its background scene as a visual
+ * fallback instead of turning the rest of the kiosk into a filtered layer. */
+.app-root.is-render-constrained.is-onboarding-coach :is(.flame-video, .scene-static-image) {
+  filter: blur(8px) saturate(0.68) brightness(0.72);
+  transform: scale(1.025);
+}
+
 .ambient-scene-gallery {
   position: absolute;
   z-index: 20;
@@ -2665,26 +2710,35 @@ select {
   z-index: 19;
   left: 50%;
   bottom: 42px;
-  width: min(560px, calc(100vw - 48px));
+  width: min(620px, calc(100vw - 48px));
   transform: translateX(-50%);
   display: grid;
   gap: 14px;
-  padding: 18px 20px;
-  border: 1px solid color-mix(in srgb, var(--theme-info) 54%, var(--surface-card-border));
+  padding: 22px 24px;
+  border: 1px solid color-mix(in srgb, var(--theme-info) 78%, var(--surface-card-border));
   border-radius: 16px;
-  background: color-mix(in srgb, var(--surface-card) 92%, rgba(4, 9, 12, 0.88));
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.34);
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--theme-info) 14%, transparent), transparent 58%),
+    rgba(7, 12, 18, 0.94);
+  box-shadow:
+    inset 0 1px 0 rgba(232, 251, 255, 0.14),
+    0 24px 64px rgba(0, 0, 0, 0.56),
+    0 0 32px color-mix(in srgb, var(--theme-info) 14%, transparent);
+  backdrop-filter: blur(18px) saturate(1.06);
+  -webkit-backdrop-filter: blur(18px) saturate(1.06);
   color: var(--theme-text);
 }
 
 .onboarding-coachmark strong {
-  font-size: clamp(19px, 1.3vw, 25px);
+  display: block;
+  font-size: clamp(23px, 1.55vw, 30px);
+  line-height: 1.15;
 }
 
 .onboarding-coachmark p {
-  margin: 6px 0 0;
-  color: var(--theme-text-soft);
-  font-size: clamp(14px, 0.95vw, 17px);
+  margin: 8px 0 0;
+  color: rgba(244, 251, 255, 0.9);
+  font-size: clamp(16px, 1.05vw, 19px);
   line-height: 1.45;
 }
 

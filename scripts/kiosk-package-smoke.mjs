@@ -380,6 +380,11 @@ async function run() {
     const localeCount = onboardingI18nSource.match(new RegExp(`"${onboardingKey.replace(".", "\\.")}"`, "g"))?.length ?? 0;
     assert(localeCount >= 7, `${onboardingKey} should be translated for all supported locales`);
   }
+  const onboardingStylesSource = await readFile(path.join(ROOT, "src/styles.css"), "utf8");
+  const onboardingAppSource = await readFile(path.join(ROOT, "src/App.tsx"), "utf8");
+  assert(onboardingAppSource.includes('"is-onboarding-coach"') && onboardingAppSource.includes('"is-onboarding-playback-coach"'), "first-use coaching should expose visual step classes");
+  assert(onboardingStylesSource.includes('.app-root.is-onboarding-coach .ambient-screen::after') && onboardingStylesSource.includes('backdrop-filter: blur(12px)') && onboardingStylesSource.includes('.app-root.is-render-constrained.is-onboarding-coach :is(.flame-video, .scene-static-image)'), "first-use coaching should blur and darken the room background across render profiles");
+  assert(onboardingStylesSource.includes('.app-root.is-onboarding-playback-coach .ambient-transport::before'), "playback coaching should keep the transport visually highlighted");
 
   const audioProfileHelperSource = await readFile(path.join(ROOT, "deploy/moode/tikpal-audio-output-profile.sh"), "utf8");
   const usbPowerRulesSource = await readFile(path.join(ROOT, "deploy/udev/70-tikpal-usb-audio-display-power.rules"), "utf8");

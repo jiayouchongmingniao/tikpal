@@ -1775,7 +1775,7 @@ try {
   await wait(400);
   await expectEventually(
     client,
-    "document.querySelector('[data-onboarding-coach][data-onboarding-step=\"show-controls\"]') !== null",
+    "document.querySelector('[data-onboarding-coach][data-onboarding-step=\"show-controls\"]') !== null && document.querySelector('.app-root')?.classList.contains('is-onboarding-coach')",
     "first use shows the non-blocking first coach step after room selection",
     80,
     150
@@ -1803,7 +1803,7 @@ try {
   );
   await expectEventually(
     client,
-    "document.querySelector('[data-onboarding-coach][data-onboarding-step=\"playback\"]') !== null",
+    "document.querySelector('[data-onboarding-coach][data-onboarding-step=\"playback\"]') !== null && document.querySelector('.app-root')?.classList.contains('is-onboarding-playback-coach')",
     "first use advances only after an ambient tap and does not open a source"
   );
   await evaluate(client, "document.querySelector('[data-onboarding-coach] button:last-child')?.click(); true");
