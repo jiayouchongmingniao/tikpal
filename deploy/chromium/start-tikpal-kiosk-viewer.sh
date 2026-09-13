@@ -122,17 +122,31 @@ x11vnc \
 X11VNC_PID=$!
 
 cleanup() {
+  if [[ -n "${WEBSOCKIFY_PID:-}" ]] && kill -0 "$WEBSOCKIFY_PID" >/dev/null 2>&1; then
+    kill "$WEBSOCKIFY_PID" >/dev/null 2>&1 || true
+    wait "$WEBSOCKIFY_PID" 2>/dev/null || true
+  fi
   if kill -0 "$X11VNC_PID" >/dev/null 2>&1; then
     kill "$X11VNC_PID" >/dev/null 2>&1 || true
     wait "$X11VNC_PID" 2>/dev/null || true
   fi
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 0' INT TERM
 
 log "serving noVNC on http://${TIKPAL_KIOSK_NOVNC_ADDRESS}:${TIKPAL_KIOSK_NOVNC_PORT}/"
-websockify \
-  --web "$NOVNC_WEB_ROOT" \
-  "${TIKPAL_KIOSK_NOVNC_ADDRESS}:${TIKPAL_KIOSK_NOVNC_PORT}" \
-  "${TIKPAL_KIOSK_VNC_ADDRESS}:${TIKPAL_KIOSK_VNC_PORT}" &
-WEBSOCKIFY_PID=$!
-wait "$WEBSOCKIFY_PID"
+while true; do
+  # Python 3.14's default worker process can fail to fork on a kiosk whose
+  # Chromium processes reserve a large virtual address space. Run one viewer
+  # session in the listener instead; after it disconnects, immediately accept
+  # the next session while keeping x11vnc alive.
+  websockify \
+    --run-once \
+    --web "$NOVNC_WEB_ROOT" \
+    "${TIKPAL_KIOSK_NOVNC_ADDRESS}:${TIKPAL_KIOSK_NOVNC_PORT}" \
+    "${TIKPAL_KIOSK_VNC_ADDRESS}:${TIKPAL_KIOSK_VNC_PORT}" &
+  WEBSOCKIFY_PID=$!
+  wait "$WEBSOCKIFY_PID" || true
+  WEBSOCKIFY_PID=""
+  sleep 0.2
+done

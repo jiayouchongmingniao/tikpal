@@ -54,6 +54,19 @@ TIKPAL_AUDIO_CARD_FORCE=BT66
 
 If a future Gentoo host runs virtual kiosk only, set `TIKPAL_KIOSK_DISPLAY=:1`, `TIKPAL_KIOSK_DISPLAY_MODE=virtual`, `TIKPAL_KIOSK_LOCAL_SCREEN=0`, and keep noVNC enabled only for debugging.
 
+## Loopback-only Screen Viewer
+
+The optional viewer mirrors the actual X11 kiosk, including separate Explore windows. Enable it only for a diagnostic session, bind it to device loopback, and access it through SSH:
+
+```bash
+ssh -N \
+  -L 5900:127.0.0.1:5900 \
+  -L 6080:127.0.0.1:6080 \
+  root@<device-ip>
+```
+
+Use `vnc://127.0.0.1:5900` in a desktop VNC client, or open `http://127.0.0.1:6080/vnc.html` for noVNC. The direct VNC path is preferable for low-latency observation. noVNC accepts one browser viewer session at a time and is immediately ready for another after it disconnects; this avoids Python 3.14 worker-fork failures on a Chromium kiosk with large virtual memory reservations.
+
 ## Portable Remote Authorization
 
 Port `4173` is loopback-only and serves the physical Kiosk plus the Explore side panel. Port `4174` serves the narrow portable remote to the LAN. Set a non-empty `TIKPAL_PORTABLE_API_KEY` once in the device-local `.env.kiosk` (`openssl rand -hex 32` is suitable) and keep that file mode `0600 moode:moode`. Both `tikpal-api.service` and `tikpal-web.service` load it. A LAN browser never receives or stores the key: the web service injects it only while proxying its exact `POST /api/v1/remote/actions` request, replacing stale browser-supplied values. The key remains required for direct non-loopback API clients; do not put it in URLs, browser storage, source control, or logs.
