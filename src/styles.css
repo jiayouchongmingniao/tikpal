@@ -2909,14 +2909,30 @@ select {
 }
 
 .ambient-transport.is-room-mode {
-  width: fit-content;
-  max-width: calc(100vw - 112px);
+  width: min(840px, calc(100vw - 112px));
   min-height: 108px;
 }
 
 .ambient-transport.is-room-mode .ambient-transport-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) repeat(4, auto);
+  gap: 18px;
+  width: 100%;
+  max-width: none;
+}
+
+.ambient-transport.is-room-mode .ambient-transport-mode-copy {
   width: auto;
-  max-width: 100%;
+  max-width: none;
+  min-width: 0;
+}
+
+.ambient-transport.is-room-mode .ambient-transport-mode-copy strong,
+.ambient-transport.is-room-mode .ambient-transport-mode-copy span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ambient-transport-main {
@@ -9054,8 +9070,7 @@ select {
   }
 
   .ambient-transport.is-room-mode {
-    width: fit-content;
-    max-width: calc(100vw - 48px);
+    width: min(780px, calc(100vw - 48px));
   }
 
   .ambient-transport-main {
@@ -9366,8 +9381,7 @@ select {
   }
 
   .ambient-transport.is-room-mode {
-    width: fit-content;
-    max-width: calc(100vw - 32px);
+    width: min(96vw, 620px);
   }
 
   .ambient-transport-main {
