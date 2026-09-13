@@ -79,7 +79,7 @@ Use the repository helper on macOS rather than exposing the full Kiosk UI to the
 npm run debug:207
 ```
 
-It opens authenticated SSH forwards from local `4173` and `9222` to the device loopback ports, then opens `http://127.0.0.1:4173`. The same page has the normal local Kiosk capability boundary; `9222` is available for DevTools. Run `npm run debug:207 -- stop` to close the tunnel. Set `TIKPAL_DEBUG_OPEN_BROWSER=0` when starting it from a terminal-only session.
+It opens authenticated SSH forwards from local `4173` and `9222` to the device loopback ports, then opens `http://127.0.0.1:4173/?debug=1`. This is the full trusted Kiosk UI for debugging, not the portable remote surface. The `debug=1` view skips only its browser-local startup chooser and first-use coach so they cannot cover the Scene Gallery; it keeps the current device state and the full Kiosk capability boundary. `9222` is available for DevTools. Run `npm run debug:207 -- stop` to close the tunnel. Set `TIKPAL_DEBUG_OPEN_BROWSER=0` when starting it from a terminal-only session.
 
 ### 2026-09-12 207 P0 recovery
 

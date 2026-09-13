@@ -19,6 +19,7 @@ SOCKET_ROOT="${TMPDIR:-/tmp}"
 SAFE_HOST="$(printf '%s' "$TARGET_HOST" | tr -c '[:alnum:].-' '_')"
 CONTROL_PATH="${TIKPAL_DEBUG_CONTROL_PATH:-${SOCKET_ROOT%/}/tikpal-${SAFE_HOST}-debug.sock}"
 ACTION="${1:-start}"
+DEBUG_URL="http://127.0.0.1:${LOCAL_KIOSK_PORT}/?debug=1"
 
 usage() {
   cat <<'EOF'
@@ -61,7 +62,7 @@ ensure_explore_forwards() {
 start_tunnel() {
   if is_running; then
     ensure_explore_forwards
-    printf 'Tikpal debug tunnel is already active: http://127.0.0.1:%s\n' "$LOCAL_KIOSK_PORT"
+    printf 'Tikpal debug tunnel is already active: %s\n' "$DEBUG_URL"
   else
     rm -f "$CONTROL_PATH"
     ssh \
@@ -76,14 +77,14 @@ start_tunnel() {
       -L "${LOCAL_CDP_PORT}:127.0.0.1:${TARGET_CDP_PORT}" \
       "${explore_forward_args[@]}" \
       "$TARGET"
-    printf 'Tikpal debug tunnel is ready: http://127.0.0.1:%s\n' "$LOCAL_KIOSK_PORT"
+    printf 'Tikpal debug tunnel is ready: %s\n' "$DEBUG_URL"
     printf 'Chromium DevTools is available on: http://127.0.0.1:%s\n' "$LOCAL_CDP_PORT"
   fi
 
   printf 'Explore CDP is available on local ports: %s\n' "$EXPLORE_CDP_PORTS"
 
   if [[ "${TIKPAL_DEBUG_OPEN_BROWSER:-1}" != "0" ]] && command -v open >/dev/null 2>&1; then
-    open "http://127.0.0.1:${LOCAL_KIOSK_PORT}"
+    open "$DEBUG_URL"
   fi
 }
 
@@ -93,7 +94,7 @@ case "$ACTION" in
     ;;
   status)
     if is_running; then
-      printf 'Tikpal debug tunnel is active: http://127.0.0.1:%s\n' "$LOCAL_KIOSK_PORT"
+      printf 'Tikpal debug tunnel is active: %s\n' "$DEBUG_URL"
     else
       printf 'Tikpal debug tunnel is not active\n' >&2
       exit 1

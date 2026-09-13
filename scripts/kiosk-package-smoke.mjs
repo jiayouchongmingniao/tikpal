@@ -1904,7 +1904,16 @@ sync_runtime_provider_pool_process_statuses ""
   assert(ambientScreenSource.includes("ambient-source-toggle is-source-primary") && ambientScreenSource.includes('aria-expanded={sourcePickerOpen}'), "Ambient source picker toggle should stay visually primary while aria-expanded only tracks the open shelf");
   assert(ambientScreenSource.includes("is-source-picker-open") && stylesSource.includes(".ambient-screen.is-source-picker-open::before"), "Ambient source picker should dim the room behind the options");
   assert(stylesSource.includes("backdrop-filter: blur(5px) saturate(0.82) brightness(0.72)"), "Ambient source picker dim layer should softly blur and darken the room");
-  assert(ambientScreenSource.includes("if (ambientHudVisible)") && ambientScreenSource.includes("setSourcePickerOpen(true)") && !ambientScreenSource.includes("SOURCE_PICKER_AUTO_CLOSE_MS"), "Ambient and Hi-Fi source pickers should default open with the HUD and avoid the old auto-close timer");
+  assert(!ambientScreenSource.includes("sourcePickerOpenRequest") && ambientScreenSource.includes("if (isHifiMode && ambientHudVisible && hifiSourcePickerDefault)") && ambientScreenSource.includes("if (!ambientHudVisible || !isHifiMode) setSourcePickerOpen(false)") && !ambientScreenSource.includes("SOURCE_PICKER_AUTO_CLOSE_MS"), "Hi-Fi should default open the seven-source picker while scene modes keep it closed until the music button is chosen");
+  assert(stylesSource.includes('--ambient-control-anchor-x: 50%;') && !stylesSource.includes('--ambient-control-anchor-x: calc(50% + clamp(80px, 4vw, 110px));'), "Scene and Hi-Fi controls should share the screen center");
+  assert(ambientScreenSource.includes("data-ambient-room-mode-toggle") && ambientScreenSource.includes("data-ambient-room-mode-picker") && ambientScreenSource.includes("setSourcePickerOpen(false);") && ambientScreenSource.includes("setRoomModePickerOpen((open) => !open);"), "Room modes should open from their own secondary control and never stay open with the source shelf");
+  assert(ambientScreenSource.includes("data-ambient-standby-status") && stylesSource.includes(".ambient-standby-status") && stylesSource.includes(".ambient-screen.is-hud-visible .ambient-standby-status"), "Ambient standby should retain only a fadeable current-identity status chip");
+  assert(stylesSource.includes("min-width: 44px;") && stylesSource.includes("min-height: 44px;") && stylesSource.includes(".ambient-settings"), "Ambient Settings should retain a 44 CSS px minimum touch target");
+  assert(ambientScreenSource.includes("scene.audio.${currentBackgroundVideo.id}") && appSource.includes("scene.audio.${sceneId}"), "Ambient and screen saver playback identity should use the localized scene ambience name");
+  for (const sceneAudioKey of ["scene.audio.aurora-snowfield", "scene.audio.cloud-sunrise", "scene.audio.rainy-window", "scene.audio.zen-courtyard"]) {
+    const localeCount = i18nSource.match(new RegExp(`"${sceneAudioKey.replaceAll(".", "\\.")}"`, "g"))?.length ?? 0;
+    assert(localeCount === 7, `${sceneAudioKey} should be translated for all seven locales`);
+  }
   assert(
     ambientScreenSource.includes("HIFI_LYRICS_FAKE_CONTROLS_VISIBLE_MS = 3_000")
       && ambientScreenSource.includes('data-hifi-lyrics-fake-control="previous"')

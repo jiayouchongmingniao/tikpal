@@ -80,6 +80,10 @@ function readInitialMode(): AppMode {
   return "ambient";
 }
 
+function isDesktopDebugView() {
+  return new URLSearchParams(window.location.search).get("debug") === "1";
+}
+
 function readInitialSurfaceTheme(): SurfaceTheme {
   const savedTheme = window.localStorage.getItem(SURFACE_THEME_STORAGE_KEY);
   if (savedTheme === "warm-gold" || savedTheme === "graphite-silver" || savedTheme === "ivory-studio") {
@@ -326,12 +330,15 @@ export default function App() {
   const [quickMenuProxyPending, setQuickMenuProxyPending] = useState(false);
   const [initialSettingsDetail, setInitialSettingsDetail] = useState<"display" | "webMode" | null>(null);
   const [systemSleepActive, setSystemSleepActive] = useState(false);
-  const [ambientSourcePickerRequest, setAmbientSourcePickerRequest] = useState(0);
   const [ambientSourcePickerOpen, setAmbientSourcePickerOpen] = useState(false);
-  const [roomModeChooserContext, setRoomModeChooserContext] = useState<RoomModeChooserContext | null>(() => readInitialMode() === "ambient" ? "startup" : null);
+  const [roomModeChooserContext, setRoomModeChooserContext] = useState<RoomModeChooserContext | null>(() => (
+    readInitialMode() === "ambient" && !isDesktopDebugView() ? "startup" : null
+  ));
   const [roomModeSelectionPending, setRoomModeSelectionPending] = useState(false);
   const [sceneVideoReady, setSceneVideoReady] = useState(false);
-  const [onboardingMode, setOnboardingMode] = useState<"first-use" | "reference" | null>(() => readStoredFlag(ONBOARDING_STORAGE_KEY) ? null : "first-use");
+  const [onboardingMode, setOnboardingMode] = useState<"first-use" | "reference" | null>(() => (
+    isDesktopDebugView() || readStoredFlag(ONBOARDING_STORAGE_KEY) ? null : "first-use"
+  ));
   const [onboardingStep, setOnboardingStep] = useState<"show-controls" | "playback">("show-controls");
   const [activeSceneVideo, setActiveSceneVideo] = useState<BackgroundVideoSummary>(DEFAULT_SCENE_VIDEO);
   const eventLoopLagRef = useRef(0);
@@ -1163,16 +1170,12 @@ export default function App() {
       showHud();
       if (onboardingMode === "first-use" && onboardingStep === "show-controls") {
         setOnboardingStep("playback");
-        return;
-      }
-      if (!ambientSourcePickerOpen) {
-        setAmbientSourcePickerRequest((request) => request + 1);
       }
       return;
     }
 
     toggleHud();
-  }, [ambientSourcePickerOpen, mode, onboardingMode, onboardingStep, roomExperience.mode, showHud, toggleHud]);
+  }, [mode, onboardingMode, onboardingStep, roomExperience.mode, showHud, toggleHud]);
 
   const handleFirstUseBlankClick = useCallback((event: ReactMouseEvent<HTMLElement>) => {
     if (onboardingMode !== "first-use" || onboardingStep !== "show-controls" || mode !== "ambient") return;
@@ -1197,8 +1200,6 @@ export default function App() {
   function renderScreenSaverContent(style: DisplaySleepStyle) {
     const playback = tikpalState.playback;
     const playbackTruth = getPlaybackDisplayTruth(playback, tikpalState.audio, fontTheme);
-    const title = playbackTruth.title ?? (playback.state === "playing" ? t("playback.audioPlaying") : t("playback.nothingPlaying"));
-    const artist = playbackTruth.artist ?? playbackTruth.sourceLabel;
     const duration = playbackTruth.durationSeconds ?? 0;
     const elapsed = playbackTruth.elapsedSeconds ?? 0;
     const progress = playbackTruth.progress;
@@ -1207,10 +1208,20 @@ export default function App() {
       : roomExperience.sceneVideoId;
     const sceneNameKey = `scene.name.${sceneId}`;
     const translatedSceneName = sceneId ? t(sceneNameKey) : null;
-    const screenSaverSourceLabel = tikpalState.audio.currentSource.id === "scene"
-      && translatedSceneName
-      && translatedSceneName !== sceneNameKey
-      ? translatedSceneName
+    const sceneAudioNameKey = `scene.audio.${sceneId}`;
+    const translatedSceneAudioName = sceneId ? t(sceneAudioNameKey) : null;
+    const isSceneSource = tikpalState.audio.currentSource.id === "scene";
+    const sceneAudioName = translatedSceneAudioName && translatedSceneAudioName !== sceneAudioNameKey
+      ? translatedSceneAudioName
+      : translatedSceneName && translatedSceneName !== sceneNameKey
+        ? translatedSceneName
+        : t("source.scene");
+    const title = isSceneSource
+      ? sceneAudioName
+      : playbackTruth.title ?? (playback.state === "playing" ? t("playback.audioPlaying") : t("playback.nothingPlaying"));
+    const artist = isSceneSource ? t("source.scene") : playbackTruth.artist ?? playbackTruth.sourceLabel;
+    const screenSaverSourceLabel = isSceneSource
+      ? sceneAudioName
       : tikpalState.audio.currentSource.label || t("source.library");
 
     if (style === "meteor_shower") {
@@ -1310,7 +1321,6 @@ export default function App() {
         renderProfile={tikpalState.runtime.renderProfile}
         ambientActive={mode === "ambient"}
         sceneSoundEnabled={roomExperience.sceneSoundEnabled}
-        sourcePickerOpenRequest={ambientSourcePickerRequest}
         clockVisible={clockVisible}
         webModeState={webModeState}
         onPlaybackAction={handlePlaybackAction}

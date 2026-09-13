@@ -8,6 +8,7 @@ import path from "node:path";
 const APP_URL = process.env.TIKPAL_TEST_URL ?? "http://localhost:4173/";
 const REMOTE_APP_URL = process.env.TIKPAL_TEST_REMOTE_URL ?? "http://localhost:4174/";
 const DEVTOOLS_PORT = Number(process.env.TIKPAL_TEST_DEVTOOLS_PORT ?? 9222);
+let useDesktopDebugForNavigation = false;
 const INTERACTION_SCENE_FIXTURE_DIR = path.resolve("public", "assets", ".interaction-smoke");
 const INTERACTION_SCENE_FIXTURE_PATH = path.join(INTERACTION_SCENE_FIXTURE_DIR, "scene.mp4");
 const INTERACTION_SCENE_DIST_FIXTURE_PATH = path.resolve("dist", "assets", ".interaction-smoke", "scene.mp4");
@@ -134,6 +135,16 @@ async function resetInteractionUiLocale() {
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function navigationUrl(url) {
+  if (!useDesktopDebugForNavigation) return url;
+  const candidate = new URL(url);
+  const appUrl = new URL(APP_URL);
+  if (candidate.origin === appUrl.origin && candidate.pathname === appUrl.pathname) {
+    candidate.searchParams.set("debug", "1");
+  }
+  return candidate.toString();
 }
 
 function generatedCoverSquareRootExpression(selector) {
@@ -369,7 +380,7 @@ async function sampleLoopAudioState(client) {
 }
 
 async function navigate(client, url) {
-  await client.send("Page.navigate", { url });
+  await client.send("Page.navigate", { url: navigationUrl(url) });
   await wait(750);
 }
 
@@ -1809,10 +1820,11 @@ try {
   await evaluate(client, "document.querySelector('[data-onboarding-coach] button:last-child')?.click(); true");
   await expect(
     client,
-    "window.localStorage.getItem('tikpal.onboardingDismissed.v1') === 'true' && document.querySelector('[data-onboarding-coach]') === null",
+    "window.localStorage.getItem('tikpal.onboardingDismissed.v1') === 'true' && document.querySelector('[data-onboarding-coach]') === null && document.querySelector('.startup-mode-chooser') === null",
     "skipping first-use coaching persists completion without starting audio"
   );
   await evaluate(client, "window.sessionStorage.removeItem('tikpal.interactionTestFirstUse'); true");
+  useDesktopDebugForNavigation = true;
   await switchRoomModeAndNavigate(client, "calm", "Ambient thermal checks start in Calm mode");
   await expectEventually(
     client,
@@ -1961,13 +1973,13 @@ try {
   );
   await expectEventually(
     client,
-    "document.querySelector('.ambient-adjust-indicator')?.textContent.includes('Volume') && !document.querySelector('.ambient-adjust-indicator')?.textContent.includes('moOde live level')",
-    "ambient right-edge touch swipe shows the volume overlay without the moOde helper copy"
+    "(() => { const overlay = document.querySelector('.ambient-adjust-indicator.ambient-adjust-volume'); return overlay?.querySelector('.ambient-adjust-indicator-copy > span')?.textContent?.trim().endsWith('%') === true && overlay?.querySelector('.ambient-adjust-indicator-copy > p') === null; })()",
+    "ambient right-edge touch swipe shows a concise volume overlay"
   );
   await wait(1100);
   await expect(
     client,
-    "document.querySelector('.ambient-adjust-indicator')?.textContent.includes('Volume') && document.querySelector('[data-ambient-adjust-back]') !== null",
+    "document.querySelector('.ambient-adjust-indicator.ambient-adjust-volume') !== null && document.querySelector('[data-ambient-adjust-back]') !== null",
     "ambient volume overlay offers an explicit Close button while visible"
   );
   await wait(2600);
@@ -2505,17 +2517,16 @@ try {
         const tops = options.map((option) => option.getBoundingClientRect().top);
         const pickerCenter = pickerRect.left + pickerRect.width / 2;
         const transportCenter = transportRect.left + transportRect.width / 2;
-        const isUltraWide = window.innerWidth / window.innerHeight > 2.4;
         return Math.max(...tops) - Math.min(...tops) < 2
           && pickerRect.left >= 0
           && pickerRect.right <= window.innerWidth
           && pickerRect.height <= 122
           && pickerRect.bottom <= transportRect.top + 8
           && Math.abs(pickerCenter - transportCenter) <= 18
-          && (!isUltraWide || transportCenter > window.innerWidth / 2 + 48);
+          && Math.abs(transportCenter - window.innerWidth / 2) <= 18;
       })()
     `,
-    "Hi-Fi source picker renders as a compact shelf above the transport"
+    "Hi-Fi source picker renders as a compact shelf above the centered transport"
   );
   await wait(1200);
   await expect(client, "document.querySelector('[data-ambient-source-picker]') !== null", "Hi-Fi source picker stays open while the HUD is visible");
@@ -2982,10 +2993,36 @@ try {
   await expect(client, "document.querySelector('.ambient-room-beacon') === null", "ambient top-left mood card is removed");
   await expect(
     client,
-    "document.querySelectorAll('.ambient-room-mode-buttons button').length === 4 && document.querySelector('.ambient-room-mode-buttons button[aria-pressed=\"true\"]') !== null",
-    "ambient bottom overlay renders only Focus, Calm, Sleep, and Hi-Fi mood controls"
+    "document.querySelector('[data-ambient-room-mode-picker]')?.getAttribute('aria-hidden') === 'true' && document.querySelector('[data-ambient-source-picker]') !== null",
+    "Hi-Fi defaults to the seven-source shelf while room modes remain a secondary choice"
+  );
+  await evaluate(client, "document.querySelector('[data-ambient-room-mode-toggle]')?.click(); true");
+  await expectEventually(
+    client,
+    "document.querySelector('[data-ambient-room-mode-picker]')?.getAttribute('aria-hidden') === 'false' && document.querySelector('[data-ambient-source-picker]') === null && document.querySelectorAll('.ambient-room-mode-buttons button').length === 4 && document.querySelector('.ambient-room-mode-buttons button[aria-pressed=\"true\"]') !== null",
+    "room mode control replaces the source shelf with one centered secondary picker"
+  );
+  await expect(
+    client,
+    `
+      (() => {
+        const picker = document.querySelector('[data-ambient-room-mode-picker]');
+        const transport = document.querySelector('.ambient-transport');
+        if (!(picker instanceof HTMLElement) || !(transport instanceof HTMLElement)) return false;
+        const pickerCenter = picker.getBoundingClientRect().left + picker.getBoundingClientRect().width / 2;
+        const transportCenter = transport.getBoundingClientRect().left + transport.getBoundingClientRect().width / 2;
+        return Math.abs(pickerCenter - transportCenter) <= 18
+          && Math.abs(transportCenter - window.innerWidth / 2) <= 18;
+      })()
+    `,
+    "room mode capsule and centered transport share the screen center"
   );
   for (const [label, expectedMode] of [["Focus", "focus"], ["Calm", "calm"], ["Sleep", "sleep"]]) {
+    await evaluate(
+      client,
+      "document.querySelector('[data-ambient-room-mode-picker]')?.getAttribute('aria-hidden') === 'true' ? document.querySelector('[data-ambient-room-mode-toggle]')?.click() : true"
+    );
+    await expectEventually(client, "document.querySelector('[data-ambient-room-mode-picker]')?.getAttribute('aria-hidden') === 'false'", `ambient ${label} room mode picker opens`);
     const point = await evaluate(
       client,
       `
@@ -3045,10 +3082,16 @@ try {
 
   await click(client, 1280, 280);
   await expect(client, "document.querySelector('.ambient-screen.is-hud-visible') !== null", "single tap shows ambient HUD");
+  await expect(
+    client,
+    "document.querySelector('[data-ambient-source-picker]') === null",
+    "ambient scene tap keeps the seven-source picker closed"
+  );
+  await evaluate(client, "document.querySelector('[data-ambient-source-toggle]')?.click(); true");
   await expectEventually(
     client,
     "document.querySelectorAll('[data-ambient-source-picker] [data-ambient-source-option]').length === 7 && document.querySelector('[data-ambient-source-option=\"web-mode\"] strong')?.textContent === 'Explore'",
-    "ambient scene single tap opens six source choices plus Explore"
+    "ambient music button opens six source choices plus Explore"
   );
   await expect(
     client,
@@ -3063,13 +3106,12 @@ try {
         const transportRect = transport.getBoundingClientRect();
         const pickerCenter = pickerRect.left + pickerRect.width / 2;
         const transportCenter = transportRect.left + transportRect.width / 2;
-        const isUltraWide = window.innerWidth / window.innerHeight > 2.4;
         return Math.max(...tops) - Math.min(...tops) < 2
           && Math.abs(pickerCenter - transportCenter) <= 22
-          && (!isUltraWide || transportCenter > window.innerWidth / 2 + 48);
+          && Math.abs(transportCenter - window.innerWidth / 2) <= 18;
       })()
     `,
-    "ambient source picker keeps Explore on the first row and follows the shared control anchor"
+    "ambient scene controls and source picker share the screen center"
   );
   await expect(
     client,
@@ -3100,7 +3142,7 @@ try {
   await expectEventually(client, "document.querySelector('[data-ambient-scene-gallery]') !== null", "scene gallery opens from a real click while the source picker is open");
   await click(client, 20, 20);
   await expectEventually(client, "document.querySelector('[data-ambient-scene-gallery]') === null", "scene gallery closes from its backdrop after a real click");
-  await expectEventually(client, "document.querySelector('[data-ambient-source-picker]') !== null", "ambient source picker reopens after closing the scene gallery");
+  await expectEventually(client, "document.querySelector('[data-ambient-source-picker]') === null", "ambient source picker stays closed after closing the scene gallery");
   await evaluate(client, "window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })); true");
   await expectEventually(client, "document.querySelector('[data-ambient-source-picker]') === null", "ambient scene source picker closes with Escape");
   await expect(
@@ -3268,8 +3310,30 @@ try {
   );
   await evaluate(client, "document.querySelector('[data-ambient-scene-gallery-page-previous]')?.click(); true");
   await expectEventually(client, "document.querySelector('[data-ambient-scene-gallery-page-status]')?.textContent?.trim() === 'Page 1 of 2'", "scene gallery returns to the selectable first page after swipe verification");
-  await evaluate(client, "window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })); true");
-  await expectEventually(client, "document.querySelector('[data-ambient-scene-gallery]') === null", "scene gallery closes with Escape");
+  const sceneGalleryCardPoint = await evaluate(
+    client,
+    `
+      (() => {
+        const card = document.querySelector('[data-ambient-scene-card="rainy-window"]');
+        const rect = card?.getBoundingClientRect();
+        return rect ? { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) } : null;
+      })()
+    `
+  );
+  if (!sceneGalleryCardPoint) throw new Error("Failed: Rainy Window scene card is missing for pointer selection");
+  await click(client, sceneGalleryCardPoint.x, sceneGalleryCardPoint.y);
+  await expectEventually(
+    client,
+    `
+      document.querySelector('[data-ambient-scene-gallery]') === null
+      && fetch('/api/v1/experience/state').then((response) => response.json()).then((experience) => (
+        experience.mode === 'calm'
+        && experience.sceneVideoId === 'rainy-window'
+        && experience.sceneSoundEnabled === true
+      ))
+    `,
+    "scene gallery card accepts a real pointer click and applies the selected scene"
+  );
   await evaluate(client, "document.querySelector('[data-ambient-scene-gallery-toggle]')?.click(); true");
   await expectEventually(client, "document.querySelector('[data-ambient-scene-gallery]') !== null", "scene gallery reopens from the Ambient scene control");
   await evaluate(client, "document.querySelector('[data-ambient-scene-gallery-backdrop]')?.click(); true");
