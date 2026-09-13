@@ -11,7 +11,14 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const UPDATER = join(ROOT, "deploy", "chromium", "tikpal-guard-ota.mjs");
 const RUNNER = join(ROOT, "deploy", "chromium", "tikpal-guard-ota-run.sh");
 const PACKAGER = join(ROOT, "scripts", "build-guard-ota-release.mjs");
-const REQUIRED_FILES = ["web-mode-extension", "tikpal-web-mode-guard.mjs", "tikpal-web-mode-qq-confirm.mjs", "guard-ota-extension-key.sha256"];
+const REQUIRED_FILES = [
+  "web-mode-extension",
+  "tikpal-web-mode-guard.mjs",
+  "tikpal-web-mode-qq-confirm.mjs",
+  "tikpal-close-audio.mjs",
+  "tikpal-oauth-window-layout.mjs",
+  "guard-ota-extension-key.sha256"
+];
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -152,6 +159,8 @@ async function main() {
 
     const bootstrap = await runJson(process.execPath, [UPDATER, "bootstrap"], { env: updaterEnv });
     assert(bootstrap.current === "1.1.7", "bootstrap should install the app-bundled Guard before checking R2");
+    const bundledGuard = await run(process.execPath, [join(stateRoot, "current", "tikpal-web-mode-guard.mjs"), "--check"], { env: updaterEnv });
+    assert(bundledGuard.stdout.includes("[tikpal-web-mode-guard] check passed"), "the installed Guard bundle must resolve every local ESM dependency");
     staticServer.setPointerDelay(180);
     const firstCheck = runJson(process.execPath, [UPDATER, "check"], { env: updaterEnv });
     await wait(40);

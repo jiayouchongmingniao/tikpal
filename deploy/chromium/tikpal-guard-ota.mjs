@@ -29,7 +29,13 @@ const STATE_PATH = join(OTA_ROOT, "state.json");
 const LOCK_DIR = join(OTA_ROOT, "ota.lock");
 const RELEASE_SCHEMA = 1;
 const POINTER_SCHEMA = 1;
-const ALLOWED_TOP_LEVEL = new Set(["web-mode-extension", "tikpal-web-mode-guard.mjs", "tikpal-web-mode-qq-confirm.mjs"]);
+const REQUIRED_SCRIPTS = [
+  "tikpal-web-mode-guard.mjs",
+  "tikpal-web-mode-qq-confirm.mjs",
+  "tikpal-close-audio.mjs",
+  "tikpal-oauth-window-layout.mjs"
+];
+const ALLOWED_TOP_LEVEL = new Set(["web-mode-extension", ...REQUIRED_SCRIPTS]);
 
 function isEnabled(value) {
   return ["1", "true", "yes", "on", "enabled"].includes(String(value ?? "").trim().toLowerCase());
@@ -163,12 +169,11 @@ async function listBundleFiles(bundleRoot) {
   const extensionRoot = join(bundleRoot, "web-mode-extension");
   const manifestPath = join(extensionRoot, "manifest.json");
   if (!(await exists(manifestPath))) throw errorWithCode("MISSING_MANIFEST", "Guard bundle is missing web-mode-extension/manifest.json");
-  const requiredScripts = ["tikpal-web-mode-guard.mjs", "tikpal-web-mode-qq-confirm.mjs"];
-  for (const script of requiredScripts) {
+  for (const script of REQUIRED_SCRIPTS) {
     if (!(await exists(join(bundleRoot, script)))) throw errorWithCode("MISSING_FILE", `Guard bundle is missing ${script}`);
   }
   const files = (await recursivelyListFiles(extensionRoot, "web-mode-extension"))
-    .concat(requiredScripts)
+    .concat(REQUIRED_SCRIPTS)
     .map(safeRelativePath);
   if (files.some(file => !file)) throw errorWithCode("UNSAFE_PATH", "Guard bundle contains an unsafe file path");
   return files.sort();
@@ -282,7 +287,7 @@ async function releaseFromBundle(bundleRoot, version, source = "bundled") {
 async function copyBundle(sourceRoot, targetRoot) {
   await mkdir(targetRoot, { recursive: true, mode: 0o700 });
   await cp(join(sourceRoot, "web-mode-extension"), join(targetRoot, "web-mode-extension"), { recursive: true, force: true, verbatimSymlinks: true });
-  for (const script of ["tikpal-web-mode-guard.mjs", "tikpal-web-mode-qq-confirm.mjs"]) {
+  for (const script of REQUIRED_SCRIPTS) {
     await cp(join(sourceRoot, script), join(targetRoot, script), { force: true, verbatimSymlinks: true });
   }
 }

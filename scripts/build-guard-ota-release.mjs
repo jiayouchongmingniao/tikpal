@@ -8,7 +8,15 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_BASE_URL = "https://updates.tikpal.ai";
-const REQUIRED_SCRIPTS = ["tikpal-web-mode-guard.mjs", "tikpal-web-mode-qq-confirm.mjs"];
+// Keep every local ESM dependency of the Guard in the signed, atomic bundle.
+// The Guard executes from the activated release directory, so imports cannot
+// safely fall back to the application source directory.
+const REQUIRED_SCRIPTS = [
+  "tikpal-web-mode-guard.mjs",
+  "tikpal-web-mode-qq-confirm.mjs",
+  "tikpal-close-audio.mjs",
+  "tikpal-oauth-window-layout.mjs"
+];
 const STABLE_EXTENSION_KEY_PATH = join(ROOT, "deploy", "chromium", "guard-ota-extension-key.sha256");
 
 function usage() {

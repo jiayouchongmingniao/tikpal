@@ -1,7 +1,8 @@
 # Provider Guard OTA v1
 
 Provider Guard OTA updates only the browser safety layer: the MV3 extension,
-the document-start page Guard, and the QQ confirmation helper. It does not
+the document-start page Guard, its local audio/OAuth helpers, and the QQ
+confirmation helper. It does not
 update the CDP manager, audio handoff, window manager, systemd units, provider
 profiles, cookies, login state, volume, or any device-specific service code.
 
@@ -135,6 +136,8 @@ Only this content can appear in a Guard archive:
 web-mode-extension/**
 tikpal-web-mode-guard.mjs
 tikpal-web-mode-qq-confirm.mjs
+tikpal-close-audio.mjs
+tikpal-oauth-window-layout.mjs
 ```
 
 The extension identity is pinned in
