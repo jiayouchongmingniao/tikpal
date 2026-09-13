@@ -3017,6 +3017,30 @@ try {
     `,
     "room mode capsule and centered transport share the screen center"
   );
+  await expect(
+    client,
+    `
+      (() => {
+        const title = document.querySelector('.ambient-transport-mode-copy strong');
+        const detail = document.querySelector('.ambient-transport-mode-copy span');
+        const roomButton = document.querySelector('.ambient-room-mode-buttons button');
+        const roomIcon = roomButton?.querySelector('svg');
+        const status = document.querySelector('[data-ambient-standby-status]');
+        const clock = document.querySelector('.ambient-clock');
+        if (!(title instanceof HTMLElement) || !(detail instanceof HTMLElement) || !(roomButton instanceof HTMLElement) || !(roomIcon instanceof SVGElement) || !(status instanceof HTMLElement) || !(clock instanceof HTMLElement)) return false;
+        const statusRect = status.getBoundingClientRect();
+        const clockRect = clock.getBoundingClientRect();
+        return getComputedStyle(title).fontSize === '30px'
+          && getComputedStyle(detail).fontSize === '16px'
+          && getComputedStyle(roomButton).minHeight === '72px'
+          && getComputedStyle(roomButton).fontSize === '17px'
+          && getComputedStyle(roomIcon).width === '23px'
+          && statusRect.right < clockRect.left
+          && statusRect.top < clockRect.top + 8;
+      })()
+    `,
+    "desktop room controls scale independently while standby identity stays left of the clock"
+  );
   for (const [label, expectedMode] of [["Focus", "focus"], ["Calm", "calm"], ["Sleep", "sleep"]]) {
     await evaluate(
       client,
@@ -3046,6 +3070,13 @@ try {
       `ambient ${label} room mode click updates visible state`
     );
   }
+  await evaluate(client, "document.querySelector('[data-ambient-room-mode-toggle]')?.click(); true");
+  await expectEventually(client, "document.querySelector('[data-ambient-room-mode-picker]')?.getAttribute('aria-hidden') === 'false'", "scene room mode picker reopens for fixed transport layout verification");
+  await expect(
+    client,
+    "Math.abs((document.querySelector('.ambient-transport')?.getBoundingClientRect().width ?? 0) - 840) <= 1",
+    "scene transport keeps its fixed centered width after room mode selection"
+  );
   await evaluate(
     client,
     `

@@ -2026,7 +2026,7 @@ export function AmbientScreen({
       </button>
 
       <button
-        className={`ambient-standby-status ${clockVisible ? "has-clock" : ""}`}
+        className="ambient-standby-status"
         type="button"
         data-ambient-standby-status
         data-gesture-protected

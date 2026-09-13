@@ -2805,8 +2805,9 @@ select {
   position: absolute;
   z-index: 3;
   top: 38px;
-  right: 168px;
-  max-width: min(480px, calc(100vw - 272px));
+  left: max(38px, env(safe-area-inset-left));
+  right: auto;
+  max-width: min(480px, calc(100vw - 96px));
   min-height: 38px;
   padding: 8px 13px;
   overflow: hidden;
@@ -2820,7 +2821,7 @@ select {
   font-weight: 660;
   letter-spacing: 0.015em;
   line-height: 1.1;
-  text-align: right;
+  text-align: left;
   text-overflow: ellipsis;
   text-shadow: 0 6px 18px rgba(0, 0, 0, 0.54);
   white-space: nowrap;
@@ -2829,10 +2830,6 @@ select {
   backdrop-filter: blur(12px) saturate(0.92);
   -webkit-backdrop-filter: blur(12px) saturate(0.92);
   transition: opacity 180ms ease, transform 180ms ease, border-color 120ms ease, background 120ms ease;
-}
-
-.ambient-standby-status.has-clock {
-  top: 146px;
 }
 
 .ambient-standby-status:hover,
@@ -3088,7 +3085,7 @@ select {
 
 .ambient-transport-mode-copy strong {
   color: var(--room-accent-strong);
-  font-size: clamp(26px, 1.8vw, 36px);
+  font-size: clamp(22px, 1.45vw, 30px);
   font-weight: 690;
   line-height: 1;
   text-shadow: 0 0 24px var(--room-accent-muted);
@@ -3097,7 +3094,7 @@ select {
 .ambient-transport-mode-copy span {
   overflow: hidden;
   color: var(--theme-text-muted);
-  font-size: clamp(14px, 0.92vw, 18px);
+  font-size: clamp(13px, 0.8vw, 16px);
   font-weight: 620;
   line-height: 1.2;
   text-overflow: ellipsis;
@@ -3754,7 +3751,7 @@ select {
   place-items: center;
   gap: 8px;
   min-width: 0;
-  min-height: 64px;
+  min-height: 72px;
   padding: 0 22px;
   border: 1px solid color-mix(in srgb, var(--surface-control-border) 28%, transparent);
   border-radius: 999px;
@@ -3763,7 +3760,7 @@ select {
     color-mix(in srgb, var(--surface-control-bg) 58%, transparent);
   color: var(--surface-control-text);
   font: inherit;
-  font-size: 16px;
+  font-size: 17px;
   font-weight: 780;
   cursor: pointer;
   pointer-events: auto;
@@ -3804,8 +3801,8 @@ select {
 }
 
 .ambient-room-mode-buttons button svg {
-  width: 21px;
-  height: 21px;
+  width: 23px;
+  height: 23px;
   opacity: 0.82;
 }
 
@@ -9053,14 +9050,14 @@ select {
   }
 
   .ambient-room-mode-buttons button {
-    min-height: 56px;
+    min-height: 64px;
     padding: 0 16px;
-    font-size: 14px;
+    font-size: 16px;
   }
 
   .ambient-room-mode-buttons button svg {
-    width: 19px;
-    height: 19px;
+    width: 21px;
+    height: 21px;
   }
 
   .ambient-transport {
@@ -9146,6 +9143,13 @@ select {
 }
 
 @media (max-width: 900px) {
+  .ambient-standby-status {
+    top: 144px;
+    left: max(20px, env(safe-area-inset-left));
+    right: max(20px, env(safe-area-inset-right));
+    max-width: none;
+  }
+
   .ambient-scene-gallery {
     padding: 14px;
   }
