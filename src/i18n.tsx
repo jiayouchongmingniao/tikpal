@@ -2884,6 +2884,34 @@ Object.assign(dictionaries.es, {
   "hifi.playbackDetails": "Detalles de reproducción Hi-Fi",
 });
 
+Object.assign(dictionaries.en, {
+  "ambient.screen": "Ambient screen",
+});
+
+Object.assign(dictionaries["zh-CN"], {
+  "ambient.screen": "氛围屏幕",
+});
+
+Object.assign(dictionaries.de, {
+  "ambient.screen": "Ambient-Bildschirm",
+});
+
+Object.assign(dictionaries.it, {
+  "ambient.screen": "Schermata ambiente",
+});
+
+Object.assign(dictionaries.ko, {
+  "ambient.screen": "분위기 화면",
+});
+
+Object.assign(dictionaries.ja, {
+  "ambient.screen": "アンビエント画面",
+});
+
+Object.assign(dictionaries.es, {
+  "ambient.screen": "Pantalla ambiental",
+});
+
 Object.assign(dictionaries["en"], {
   "explore.collapsePanel": "Collapse panel",
   "explore.expandPanel": "Expand panel",

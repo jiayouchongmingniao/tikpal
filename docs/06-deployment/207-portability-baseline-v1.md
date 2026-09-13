@@ -103,3 +103,9 @@ npm run build
 `midnight-library` 当前默认使用 `audio/midnight-library-night-ambience.ogg`：Pixabay 上 cclaretc（Freesound）的 *Night Ambience*，以 0.8 秒尾首交叉淡化渲染为 15 分钟、48 kHz、立体声 Opus。`scene_videos.json` 的 `audioSha256` 为 `c73212dec3c550f04f83b278d3bde31a46007cd6200d4d23ee9f3227a5463d5f`，`audioGainDb` 为 `0`；提交或 OTA 安装前必须同实际文件核对。
 
 `audio/midnight-library-soft.ogg` 与 `audio/midnight-library-night.ogg` 同样作为 15 分钟候选素材保留在 Git LFS，供后续主观听感复核，但没有被场景清单引用，不会被运行时加载。运行时始终以 `scene_videos.json` 的版本化文件名为准；MP4 仅承担视觉循环，永久静音，独立 Ogg 在暂停、继续、视频切换和静态视频降级期间保持自己的连续播放时间线。
+
+### 2026-09-13 Rainy Window 环境音修订
+
+`rainy-window.ogg` 的实机听感混入了不适合雨窗场景的鸡叫，已不再由清单引用。Rainy Window 现在使用 Pixabay 上 Eryliaa 的 *Gentle Rain on Window for Sleep*，生成的版本化文件为 `audio/rainy-window-gentle-rain-e038d6cb.ogg`。它以 0.8 秒尾首交叉淡化渲染为 15 分钟、48 kHz、立体声 Opus，并保留每 45 秒雨声、15 秒安静、2.5 秒淡化的低干扰节奏。
+
+清单的 `audioSha256` 为 `4eff5134d9fcb6a842404c328409882ce38779dcdcf7fe7057326c2f345ff5fe`，`audioGainDb` 为 `-4`，以接近旧资产的实际声级。文件名携带内容版本，场景目录更新后已打开的 Chromium 会在下一次目录刷新时改取新 URL，不需要覆盖同名长缓存文件或重启服务。来源、许可和处理方式同时记录在 `scene_audio_sources.json`；部署时必须原子更新该记录、`scene_videos.json` 及 public/dist 两份新音频文件。

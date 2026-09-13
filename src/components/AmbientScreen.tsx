@@ -1930,7 +1930,7 @@ export function AmbientScreen({
       className={`ambient-screen ${ambientHudVisible ? "is-hud-visible" : "is-hud-hidden"} ${sourcePickerOpen ? "is-source-picker-open" : ""} ${roomModePickerOpen ? "is-room-mode-picker-open" : ""} ${sceneGalleryOpen ? "is-scene-gallery-open" : ""}`}
       data-room-mode={roomExperience.mode}
       data-scene-render-mode={sceneVideoBudgetStaticOnly ? "static" : "video"}
-      aria-label="Ambient flame screen"
+      aria-label={t("ambient.screen")}
       onWheelCapture={handleAmbientWheelCapture}
     >
       {isHifiMode ? (
@@ -2062,7 +2062,7 @@ export function AmbientScreen({
           </div>
           {!isHifiMode ? (
             <button
-              className={`ambient-transport-button ambient-transport-scene-gallery ${sceneGalleryOpen ? "is-active" : ""}`}
+              className={`ambient-transport-button ambient-transport-scene-gallery ${currentBackgroundVideo.thumbnailSrc ? "has-thumbnail" : ""} ${sceneGalleryOpen ? "is-active" : ""}`}
               type="button"
               aria-label={t("ambient.openSceneGallery")}
               title={t("ambient.openSceneGallery")}
@@ -2071,7 +2071,11 @@ export function AmbientScreen({
               data-ambient-scene-gallery-toggle
               onClick={openSceneGallery}
             >
-              <GalleryHorizontalEnd size={30} strokeWidth={1.8} />
+              {currentBackgroundVideo.thumbnailSrc ? (
+                <img src={currentBackgroundVideo.thumbnailSrc} alt="" data-ambient-scene-gallery-preview />
+              ) : (
+                <GalleryHorizontalEnd size={30} strokeWidth={1.8} />
+              )}
             </button>
           ) : null}
           {isHifiMode ? (

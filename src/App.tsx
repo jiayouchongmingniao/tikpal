@@ -1223,6 +1223,25 @@ export default function App() {
     const screenSaverSourceLabel = isSceneSource
       ? sceneAudioName
       : tikpalState.audio.currentSource.label || t("source.library");
+    const sceneScreenSaverIdentity = [
+      t(`room.${roomExperience.mode}`),
+      sceneAudioName,
+      t(`playback.${playback.state}`)
+    ].join(" · ");
+
+    if (isSceneSource && style === "now_playing") {
+      return (
+        <div className="screen-saver-content screen-saver-scene" aria-hidden="true" data-screen-saver-scene>
+          {activeSceneVideo.thumbnailSrc ? (
+            <img className="screen-saver-scene-media" src={activeSceneVideo.thumbnailSrc} alt="" />
+          ) : (
+            <span className="screen-saver-scene-media is-fallback" />
+          )}
+          <span className="screen-saver-scene-veil" />
+          <span className="screen-saver-scene-identity" data-screen-saver-scene-identity>{sceneScreenSaverIdentity}</span>
+        </div>
+      );
+    }
 
     if (style === "meteor_shower") {
       return (

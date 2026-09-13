@@ -47,11 +47,12 @@
     },
     {
       "sceneId": "rainy-window",
-      "audioFilename": "audio/rainy-window.ogg",
-      "title": "Rain on window",
-      "author": "esnow (Freesound)",
-      "sourceUrl": "https://pixabay.com/sound-effects/film-special-effects-rain-on-window-50256/",
-      "downloadedFilename": "freesound_community-rain-on-window-50256.mp3"
+      "audioFilename": "audio/rainy-window-gentle-rain-e038d6cb.ogg",
+      "title": "Gentle Rain on Window for Sleep",
+      "author": "Eryliaa",
+      "sourceUrl": "https://pixabay.com/sound-effects/nature-gentle-rain-on-window-for-sleep-422420/",
+      "downloadedFilename": "eryliaa-gentle-rain-on-window-for-sleep-422420.mp3",
+      "processing": "0.8 second tail-to-head crossfade, rendered as a 15 minute 48 kHz stereo Opus loop; 45 seconds rain then 15 seconds quiet with 2.5 second fades."
     },
     {
       "sceneId": "vinyl-lounge",

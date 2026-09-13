@@ -66,10 +66,10 @@
       "roomModes": [
         "calm"
       ],
-      "audioGainDb": 0,
+      "audioGainDb": -4,
       "sha256": "10ddc99aa237e9ca8ba39abeae84d946ca5ec3724e208c25815ee065343dd12f",
-      "audioFilename": "audio/rainy-window.ogg",
-      "audioSha256": "a4b5c78ee45ecd3127b63e7e9c358d5baf4b977941b62af4a2ec62ebe303bc83"
+      "audioFilename": "audio/rainy-window-gentle-rain-e038d6cb.ogg",
+      "audioSha256": "4eff5134d9fcb6a842404c328409882ce38779dcdcf7fe7057326c2f345ff5fe"
     },
     {
       "id": "vinyl-lounge",
