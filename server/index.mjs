@@ -8865,6 +8865,9 @@ async function getAirplaySourceStatus({ readyCommand, activeCommand, labelComman
 }
 
 async function ensureAirplayReceiverState(enabled) {
+  // Core-only Debian installs have no receiver. Avoid a PolicyKit prompt for
+  // an absent system unit during ordinary radio/Explore source handoffs.
+  if (!await commandSucceeds("systemctl cat shairport-sync.service >/dev/null 2>&1", { timeout: 2500 })) return;
   if (enabled && await commandSucceeds(AIRPLAY_RECEIVER_ACTIVE_COMMAND, { timeout: 2500 })) {
     return;
   }

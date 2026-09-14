@@ -3056,13 +3056,18 @@ NODE
 profile_has_widevine_cdm() {
   local profile_dir="$1"
   [[ -n "$profile_dir" && -d "$profile_dir/WidevineCdm" ]] || return 1
-  find "$profile_dir/WidevineCdm" -path "*/_platform_specific/linux_x64/libwidevinecdm.so" -type f -size +1000000c -print -quit 2>/dev/null | grep -q .
+  system_widevine_cdm_is_available "$profile_dir/WidevineCdm"
 }
 
 system_widevine_cdm_is_available() {
-  local cdm_dir="$1"
+  local cdm_dir="$1" platform
   [[ -n "$cdm_dir" && -d "$cdm_dir" ]] || return 1
-  find "$cdm_dir" -path "*/_platform_specific/linux_x64/libwidevinecdm.so" -type f -size +1000000c -print -quit 2>/dev/null | grep -q .
+  case "$(uname -m)" in
+    x86_64) platform=linux_x64 ;;
+    aarch64|arm64) platform=linux_arm64 ;;
+    *) return 1 ;;
+  esac
+  find "$cdm_dir" -path "*/_platform_specific/$platform/libwidevinecdm.so" -type f -size +1000000c -print -quit 2>/dev/null | grep -q .
 }
 
 seed_profile_widevine_cdm() {
@@ -5056,7 +5061,7 @@ profile_process_exists() {
     [[ "$command_line" == "$TIKPAL_CHROMIUM_BIN"* ]] && return 0
     executable_name="$(basename "$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)")"
     case "$executable_name" in
-      chrome|chromium|chromium-browser) return 0 ;;
+      chrome|chromium|chromium-browser|chromium-bin) return 0 ;;
     esac
   done < <(
     pgrep -f -- "--user-data-dir=$profile" 2>/dev/null || true
@@ -5574,7 +5579,7 @@ first_window_for_profile() {
       [[ "$command_line" == *" --type="* ]] && continue
       executable_name="$(basename "$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)")"
       case "$executable_name" in
-        chrome|chromium|chromium-browser) ;;
+        chrome|chromium|chromium-browser|chromium-bin) ;;
         *) continue ;;
       esac
       window="$(find_window_for_pid "$pid" || true)"
