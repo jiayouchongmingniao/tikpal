@@ -34,6 +34,10 @@ The first install writes `.env.kiosk`; later runs preserve it. PipeWire remains
 the audio server. MPD uses the `pipewire` ALSA PCM and its `Master` mixer, so MPD
 and browser volume use the same default output. Select a DAC using `wpctl
 set-default ID`; WirePlumber saves the device name. No ALSA card number is pinned.
+On Debian, inactive Explore residents use CDP lifecycle freeze plus process
+suspension after the configured idle delay. The process is resumed before its
+foreground switch, preserving the provider profile and login state while keeping
+background browser CPU/GPU work away from the active player.
 The radio seed is copied only if `/var/lib/tikpal/radio.sqlite3` does not exist.
 AirPlay, DLNA, Bluetooth reception and Spotify Connect are outside this installer.
 

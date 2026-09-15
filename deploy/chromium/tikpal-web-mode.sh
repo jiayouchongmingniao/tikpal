@@ -167,6 +167,7 @@ fi
 : "${TIKPAL_WEB_MODE_CDP_SESSION_MANAGER_SOCKET:=/run/tikpal/cdp-session-manager.sock}"
 : "${TIKPAL_WEB_MODE_CDP_SESSION_MANAGER_CLIENT:=$SCRIPT_DIR/tikpal-web-mode-cdp-client.py}"
 : "${TIKPAL_WEB_MODE_PROVIDER_BACKGROUND_FREEZE_ENABLED:=0}"
+: "${TIKPAL_WEB_MODE_PROVIDER_BACKGROUND_PROCESS_FREEZE_ENABLED:=0}"
 : "${TIKPAL_WEB_MODE_PROVIDER_BACKGROUND_FREEZE_DELAY_SECONDS:=8}"
 : "${TIKPAL_WEB_MODE_DISABLE_HANG_MONITOR:=1}"
 : "${TIKPAL_WEB_MODE_REFRESH_EXTENSION_CACHE:=1}"
@@ -2359,6 +2360,27 @@ provider_background_freeze_enabled() {
   cdp_session_manager_client_available
 }
 
+provider_background_process_freeze_enabled() {
+  is_enabled "$TIKPAL_WEB_MODE_PROVIDER_BACKGROUND_PROCESS_FREEZE_ENABLED" || return 1
+  provider_background_freeze_enabled
+}
+
+provider_chromium_signal() {
+  local provider="$1" signal="$2" provider_profile pid command count=0
+  [[ "$signal" == "STOP" || "$signal" == "CONT" ]] || return 2
+  provider_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/$provider"
+  while IFS= read -r pid; do
+    [[ "$pid" =~ ^[0-9]+$ && -r "/proc/$pid/cmdline" ]] || continue
+    command="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
+    [[ "$command" == *"--user-data-dir=$provider_profile"* ]] || continue
+    if kill "-$signal" "$pid" 2>/dev/null; then
+      count=$((count + 1))
+    fi
+  done < <(ps -eo pid=,args= | awk -v profile="$provider_profile" 'index($0, "--user-data-dir=" profile) { print $1 }')
+  [[ "$count" -gt 0 ]] || return 1
+  log_stage "provider_process_${signal,,} provider=$provider count=$count"
+}
+
 provider_cdp_lifecycle() {
   local provider="$1" state="$2" priority="${3:-maintenance}" response status=0
   provider_background_freeze_enabled || return 1
@@ -2378,6 +2400,9 @@ resume_provider_for_foreground() {
   activity="$(read_runtime_provider_activity "$provider")"
   TIKPAL_PROVIDER_FOREGROUND_ACTIVITY="$activity"
   [[ "$activity" == "frozen" ]] || return 0
+  if provider_background_process_freeze_enabled; then
+    provider_chromium_signal "$provider" CONT || log "provider process resume found no Chromium processes for $provider"
+  fi
   if provider_cdp_lifecycle "$provider" active foreground; then
     # A successful lifecycle request is made through the Manager's READY
     # target session.  Keep the card frozen in runtime state until the X11
@@ -2400,6 +2425,12 @@ freeze_background_provider() {
   [[ "$status" == "ready" ]] || return 0
   if provider_cdp_lifecycle "$provider" frozen maintenance; then
     write_runtime_provider_activity "$provider" frozen || true
+    if provider_background_process_freeze_enabled && ! provider_chromium_signal "$provider" STOP; then
+      provider_cdp_lifecycle "$provider" active maintenance || true
+      write_runtime_provider_activity "$provider" unsupported || true
+      log "provider process freeze found no Chromium processes for $provider"
+      return 0
+    fi
     log_stage "provider_freeze provider=$provider"
   else
     write_runtime_provider_activity "$provider" unsupported || true

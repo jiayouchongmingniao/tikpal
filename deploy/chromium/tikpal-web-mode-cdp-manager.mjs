@@ -9,13 +9,13 @@ import { readCloseAudioOwner } from "./tikpal-close-audio.mjs";
  */
 import { createConnection, createServer } from "node:net";
 import { readFileSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 
 import { createProviderChildWindows } from "./tikpal-provider-child-windows.mjs";
 const deezerPreviewRecovery = readFileSync(new URL('./deezer-preview-recovery.js', import.meta.url), 'utf8');
 
 const socketPath = process.env.TIKPAL_WEB_MODE_CDP_SESSION_MANAGER_SOCKET || "/run/tikpal/cdp-session-manager.sock";
-const statePath = process.env.TIKPAL_WEB_MODE_CDP_SESSION_MANAGER_STATE_PATH || "/run/tikpal/cdp-session-manager.json";
+const statePath = process.env.TIKPAL_WEB_MODE_CDP_SESSION_MANAGER_STATE_PATH || join(dirname(socketPath), "cdp-session-manager.json");
 const basePort = Number.parseInt(process.env.TIKPAL_WEB_MODE_PROVIDER_DEBUG_PORT || "9234", 10) || 9234;
 const commandTimeoutMs = Math.max(300, Number.parseInt(process.env.TIKPAL_WEB_MODE_CDP_SESSION_MANAGER_COMMAND_TIMEOUT_MS || "1800", 10) || 1800);
 const browserTimeoutMs = Math.max(300, Number.parseInt(process.env.TIKPAL_WEB_MODE_CDP_SESSION_MANAGER_BROWSER_TIMEOUT_MS || "1200", 10) || 1200);
