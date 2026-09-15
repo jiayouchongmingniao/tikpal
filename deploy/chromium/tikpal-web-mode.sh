@@ -6155,11 +6155,11 @@ write_guard_window_list() {
   [[ "$provider_window" =~ ^[0-9]+$ && "$panel_window" =~ ^[0-9]+$ ]] || return 1
 
   if [[ -n "$TIKPAL_CHROMIUM_PROFILE_DIR" ]]; then
-    kiosk_window="$(read_guard_window kiosk "$TIKPAL_CHROMIUM_PROFILE_DIR" || true)"
-    if [[ -z "$kiosk_window" ]]; then
-      kiosk_window="$(kiosk_browser_window || true)"
-      validate_profile_window_fast "$kiosk_window" "$TIKPAL_CHROMIUM_PROFILE_DIR" || kiosk_window=""
-    fi
+    # The kiosk Chromium window can be recreated while the provider Guard is
+    # alive. Never copy its old XID into the next registry: one stale optional
+    # kiosk row makes the Helper reject an otherwise healthy provider and panel.
+    kiosk_window="$(kiosk_browser_window || true)"
+    validate_profile_window_fast "$kiosk_window" "$TIKPAL_CHROMIUM_PROFILE_DIR" || kiosk_window=""
   fi
 
   list_path="$(guard_window_list_file)"
@@ -6340,6 +6340,10 @@ guard_inspect_windows() {
   inspect_finished_ns="$(x11_monotonic_ns)"
   inspect_elapsed_ns=$((inspect_finished_ns - inspect_started_ns))
   response_code="$(jq -r '.code // .errorCode // "unknown"' <<< "$response" 2>/dev/null || printf unknown)"
+  if jq -e '.operation == "inspect" and (.surfaces | type == "array")' \
+    <<< "$response" >/dev/null 2>&1; then
+    TIKPAL_GUARD_INSPECT_RESPONSE="$response"
+  fi
   if [[ "$response_code" == "GUARD_PAUSED_FOR_SWITCH" ]] && provider_switch_in_progress; then
     TIKPAL_GUARD_INSPECT_PAUSED=1
     x11_trace_control_event inspect_paused 0 \
@@ -6353,14 +6357,12 @@ guard_inspect_windows() {
       "$provider_window,$panel_window${kiosk_window:+,$kiosk_window}"
     return 1
   fi
-  if ! jq -e '.operation == "inspect" and (.surfaces | type == "array")' \
-    <<< "$response" >/dev/null 2>&1; then
+  if [[ -z "$TIKPAL_GUARD_INSPECT_RESPONSE" ]]; then
     x11_trace_control_event inspect_failed 1 \
       "request_id=$request_id operation=inspect caller_pid=$BASHPID caller_role=window_guard response_code=$response_code total_ns=$inspect_elapsed_ns response=$response" \
       "$provider_window,$panel_window${kiosk_window:+,$kiosk_window}"
     return 1
   fi
-  TIKPAL_GUARD_INSPECT_RESPONSE="$response"
     x11_trace_control_event inspect_completed 0 \
       "request_id=$request_id operation=inspect caller_pid=$BASHPID caller_role=window_guard response_code=$response_code client_status=$status total_ns=$inspect_elapsed_ns" \
     "$provider_window,$panel_window${kiosk_window:+,$kiosk_window}"
@@ -6371,6 +6373,19 @@ guard_inspect_windows() {
     TIKPAL_GUARD_STACK_ORDER=""
     TIKPAL_GUARD_STACK_STATE=unknown
   fi
+}
+
+guard_inspection_has_only_stale_kiosk() {
+  local provider_window="$1" panel_window="$2" kiosk_window="$3"
+  [[ "$provider_window" =~ ^[1-9][0-9]*$ &&
+     "$panel_window" =~ ^[1-9][0-9]*$ &&
+     "$kiosk_window" =~ ^[1-9][0-9]*$ ]] || return 1
+  jq -e --argjson provider "$provider_window" --argjson panel "$panel_window" \
+    --argjson kiosk "$kiosk_window" '
+      ([.surfaces[] | select(.xid == $provider) | .ok] | first) == true and
+      ([.surfaces[] | select(.xid == $panel) | .ok] | first) == true and
+      ([.surfaces[] | select(.xid == $kiosk) | .ok] | first) == false
+    ' <<< "$TIKPAL_GUARD_INSPECT_RESPONSE" >/dev/null 2>&1
 }
 
 guard_root_stack_order() {
@@ -6458,8 +6473,15 @@ guard_plan_repair() {
     "$panel_profile_matched" "$panel_profile" || return 1
   if [[ "$kiosk_window" =~ ^[1-9][0-9]*$ ]]; then
     IFS=$'\t' read -r kiosk_code kiosk_pid kiosk_profile_matched kiosk_map _ <<< "$kiosk_fields"
-    guard_inspected_identity_valid "$kiosk_code" "$kiosk_pid" \
-      "$kiosk_profile_matched" "$TIKPAL_CHROMIUM_PROFILE_DIR" || return 1
+    # The kiosk is not part of the provider/panel layout. Its XID can change
+    # during a kiosk reload, so discard only that registry entry instead of
+    # forcing a full desktop recovery or failing every later Guard tick.
+    if ! guard_inspected_identity_valid "$kiosk_code" "$kiosk_pid" \
+        "$kiosk_profile_matched" "$TIKPAL_CHROMIUM_PROFILE_DIR"; then
+      TIKPAL_GUARD_RECOVERY_REQUIRED=false
+      TIKPAL_GUARD_STALE_KIOSK_WINDOW=1
+      return 0
+    fi
   fi
   [[ "$provider_x" =~ ^-?[0-9]+$ && "$provider_y" =~ ^-?[0-9]+$ &&
      "$provider_width" =~ ^[1-9][0-9]*$ && "$provider_height" =~ ^[1-9][0-9]*$ &&
@@ -6582,6 +6604,12 @@ tile_guard_windows_fast() {
   fi
   if ! guard_inspect_windows "$provider_profile" "$panel_profile" \
       "$provider_window" "$panel_window" "$kiosk_window"; then
+    if guard_inspection_has_only_stale_kiosk \
+        "$provider_window" "$panel_window" "$kiosk_window" &&
+       write_guard_window_list "$provider_profile" "$provider_window" "$panel_profile" "$panel_window"; then
+      TIKPAL_GUARD_TICK_OUTCOME=kiosk_registry_refreshed
+      return 0
+    fi
     TIKPAL_GUARD_TICK_OUTCOME=inspect_failed
     return 75
   fi
@@ -6593,6 +6621,14 @@ tile_guard_windows_fast() {
       "$provider_window" "$panel_window" "$kiosk_window"; then
     [[ "$TIKPAL_GUARD_RECOVERY_REQUIRED" == "true" ]] && return 1
     TIKPAL_GUARD_TICK_OUTCOME=plan_failed
+    return 75
+  fi
+  if [[ "${TIKPAL_GUARD_STALE_KIOSK_WINDOW:-0}" == "1" ]]; then
+    if write_guard_window_list "$provider_profile" "$provider_window" "$panel_profile" "$panel_window"; then
+      TIKPAL_GUARD_TICK_OUTCOME=kiosk_registry_refreshed
+      return 0
+    fi
+    TIKPAL_GUARD_TICK_OUTCOME=kiosk_registry_refresh_failed
     return 75
   fi
   if ! guard_apply_repair_plan; then
@@ -6768,6 +6804,7 @@ guard_run_tick() {
   local TIKPAL_GUARD_STACK_ORDER=""
   local TIKPAL_GUARD_INSPECT_RESPONSE=""
   local TIKPAL_GUARD_INSPECT_PAUSED=0
+  local TIKPAL_GUARD_STALE_KIOSK_WINDOW=0
   local TIKPAL_GUARD_REPAIR_PLAN=""
   if guard_maintain_windows "$provider_profile" "$panel_profile"; then
     status=0

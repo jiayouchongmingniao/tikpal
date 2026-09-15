@@ -3609,6 +3609,7 @@ sync_runtime_provider_pool_process_statuses ""
     writeGuardWindowListBody.includes('temporary_path="$list_path.$$.$RANDOM.tmp"')
       && writeGuardWindowListBody.includes('mv -f "$temporary_path" "$list_path"')
       && writeGuardWindowListBody.includes('kiosk_window="$(kiosk_browser_window || true)"')
+      && !writeGuardWindowListBody.includes('read_guard_window kiosk')
       && writeGuardWindowListBody.includes("printf 'kiosk\\t%s\\t%s\\n'")
       && runWindowGuardBody.includes("guard_run_tick")
       && !runWindowGuardBody.includes("tile_visible_web_mode_windows")
@@ -3618,6 +3619,10 @@ sync_runtime_provider_pool_process_statuses ""
       && guardMaintainWindowsBody.includes("tile_guard_windows_fast")
       && guardMaintainWindowsBody.includes("TIKPAL_GUARD_RECOVERY_REQUIRED")
       && webModeScript.includes("TIKPAL_GUARD_TICK_OUTCOME=inspect_failed")
+      && webModeScript.includes("guard_inspection_has_only_stale_kiosk")
+      && webModeScript.includes("TIKPAL_GUARD_TICK_OUTCOME=kiosk_registry_refreshed")
+      && webModeScript.includes("TIKPAL_GUARD_STALE_KIOSK_WINDOW=1")
+      && webModeScript.includes("kiosk_registry_refresh_failed")
       && guardMaintainWindowsBody.includes("recover_guard_window_list")
       && recoverGuardWindowListBody.includes('visible_chromium_windows > "$recovery_window_list"')
       && (recoverGuardWindowListBody.match(/x11_helper_guard_may_recover_all/g) || []).length >= 2
