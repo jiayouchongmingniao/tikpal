@@ -180,6 +180,10 @@ fi
 : "${TIKPAL_WEB_MODE_QQ_MV_CINEMA_MODE:=1}"
 : "${TIKPAL_WEB_MODE_QQ_MV_AUTO_PLAY:=1}"
 : "${TIKPAL_WEB_MODE_NETEASE_AUTO_PLAY:=1}"
+# PipeWire's PulseAudio compatibility layer applies this only when Chromium
+# starts. Leave it at zero outside constrained devices so existing latency
+# characteristics remain unchanged.
+: "${TIKPAL_WEB_MODE_NETEASE_MUSIC_PULSE_LATENCY_MSEC:=0}"
 
 if [[ -n "${TIKPAL_WEB_MODE_ONBOARD_ACTION_POSITION:-}" ]]; then
   TIKPAL_WEB_MODE_ONBOARD_POSITION="$TIKPAL_WEB_MODE_ONBOARD_ACTION_POSITION"
@@ -1885,6 +1889,33 @@ provider_url() {
     netease_music) printf '%s\n' "${TIKPAL_WEB_MODE_NETEASE_MUSIC_URL:-https://music.163.com/st/webplayer}" ;;
     *) fail "Unknown Explore provider '$1'" ;;
   esac
+}
+
+provider_chromium_pulse_latency_msec() {
+  local provider="$1" latency_msec=""
+  case "$provider" in
+    netease_music) latency_msec="$TIKPAL_WEB_MODE_NETEASE_MUSIC_PULSE_LATENCY_MSEC" ;;
+    *) return 0 ;;
+  esac
+  [[ "$latency_msec" =~ ^[0-9]+$ ]] || {
+    log "invalid Pulse latency for $provider; using Chromium default"
+    return 0
+  }
+  (( latency_msec > 0 && latency_msec <= 2000 )) || return 0
+  printf '%s\n' "$latency_msec"
+}
+
+launch_provider_chromium() {
+  local provider="$1"
+  shift
+  local pulse_latency_msec
+  pulse_latency_msec="$(provider_chromium_pulse_latency_msec "$provider")"
+  if [[ -n "$pulse_latency_msec" ]]; then
+    PULSE_LATENCY_MSEC="$pulse_latency_msec" DISPLAY="$TIKPAL_KIOSK_DISPLAY" \
+      "$TIKPAL_CHROMIUM_BIN" "$@"
+  else
+    DISPLAY="$TIKPAL_KIOSK_DISPLAY" "$TIKPAL_CHROMIUM_BIN" "$@"
+  fi
 }
 
 provider_label() {
@@ -8493,7 +8524,7 @@ launch_provider_for_pool() {
     args+=("--proxy-bypass-list=localhost;127.0.0.1;<local>")
   fi
 
-  DISPLAY="$TIKPAL_KIOSK_DISPLAY" "$TIKPAL_CHROMIUM_BIN" "${args[@]}" >/dev/null 2>&1 7>&- 9>&- &
+  launch_provider_chromium "$provider" "${args[@]}" >/dev/null 2>&1 7>&- 9>&- &
   target_window="$(wait_for_profile_window "$provider_profile" "$(profile_window_timeout_attempts "$TIKPAL_WEB_MODE_PROVIDER_WINDOW_TIMEOUT_SECONDS")" || true)"
   if [[ -z "$target_window" ]]; then
     close_provider_profile "$provider_profile"
@@ -9506,7 +9537,7 @@ open_provider() {
     args+=("--proxy-bypass-list=localhost;127.0.0.1;<local>")
   fi
 
-  DISPLAY="$TIKPAL_KIOSK_DISPLAY" "$TIKPAL_CHROMIUM_BIN" "${args[@]}" >/dev/null 2>&1 9>&- &
+  launch_provider_chromium "$provider" "${args[@]}" >/dev/null 2>&1 9>&- &
   target_window="$(wait_for_profile_window "$provider_profile" "$(profile_window_timeout_attempts "$TIKPAL_WEB_MODE_PROVIDER_WINDOW_TIMEOUT_SECONDS")" || true)"
   if [[ -z "$target_window" ]]; then
     [[ -n "$target_audio_bus" ]] && crossfade_helper set "$target_audio_bus" 0 >/dev/null 2>&1 || true
