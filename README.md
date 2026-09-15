@@ -49,6 +49,8 @@ Key documents:
 - [MVP backlog and acceptance](docs/05-planning/mvp-backlog-and-acceptance-v1.md)
 - [Raspberry Pi kiosk deploy](docs/06-deployment/raspberry-pi-kiosk-deploy-v1.md)
 - [Gentoo kiosk deploy](docs/06-deployment/gentoo-kiosk-deploy-v1.md)
+- [Radxa Debian migration](docs/06-deployment/136-debian-core-migration.md)
+- [Explore provider status](docs/06-deployment/explore-provider-status-v1.md)
 
 Reference assets:
 

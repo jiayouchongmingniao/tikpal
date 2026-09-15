@@ -21,7 +21,8 @@ async function getFreePort() {
   return port;
 }
 
-async function waitFor(check, message, attempts = 80) {
+// Allow mock shell startup on a busy host; operation deadlines remain separately configured.
+async function waitFor(check, message, attempts = 400) {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
       const value = await check();
@@ -51,6 +52,11 @@ printf '%s\\t%s\\t%s\\t%s\\n' "$action" "$provider" "\${TIKPAL_WEB_MODE_OPEN_REQ
 if [[ "$action" == "prepare-entry" ]]; then
   cp "$TIKPAL_WEB_MODE_STATE_PATH" "$TEST_PREPARE_SNAPSHOT"
   [[ "\${TEST_PREPARE_SLEEP_SECONDS:-0}" == "0" ]] || sleep "$TEST_PREPARE_SLEEP_SECONDS"
+  exit 0
+fi
+if [[ "$action" == "reload" ]]; then
+  [[ "\${TEST_COMMAND_MODE:-}" != "reload-slow" ]] || sleep 0.6
+  [[ "\${TEST_COMMAND_MODE:-}" != "reload-fail" || -f "$TEST_PREPARE_SNAPSHOT" ]] || exit 42
   exit 0
 fi
 [[ "$action" == "open" ]] || exit 0
@@ -109,7 +115,7 @@ async function startApi(commandMode, options = {}) {
       TIKPAL_WEB_MODE_COMMAND: paths.command,
       // Allow local shell startup under load; the timeout-specific case below
       // still supplies its own short open deadline.
-      TIKPAL_WEB_MODE_COMMAND_TIMEOUT_MS: "5000",
+      TIKPAL_WEB_MODE_COMMAND_TIMEOUT_MS: String(options.commandTimeoutMs ?? 5000),
       TIKPAL_WEB_MODE_OPEN_COMMAND_TIMEOUT_MS: String(options.openTimeoutMs ?? 5000),
       TIKPAL_WEB_MODE_STATE_PATH: paths.state,
       TIKPAL_WEB_MODE_SETTINGS_PATH: paths.settings,
@@ -538,6 +544,87 @@ async function testScopedProviderProfileReset() {
   }
 }
 
+async function seedReloadSession(api) {
+  const state = {};
+  writeFileSync(api.paths.state, JSON.stringify({ ...state, activeProvider: "spotify", lastProvider: "spotify",
+    openingProvider: null, openRequestId: null, closeRequestId: null, lastError: null,
+    lastOpenedRequestId: "reload-session", lastOpenedXSessionGeneration: "session-1" }));
+}
+
+async function testProviderReload() {
+  for (const target of ["spotify", "tidal"]) {
+    const api = await startApi("success");
+    try {
+      await seedReloadSession(api);
+      const invalid = await postJson(api.port, "/api/v1/web-mode/actions", { type: "reload" });
+      assert.equal(invalid.status, 400);
+      const response = await postJson(api.port, "/api/v1/web-mode/actions", { type: "reload", provider: target });
+      assert.equal(response.status, 200, JSON.stringify(response.body));
+      assert.equal(response.body.activeProvider, target);
+      const commands = readCommands(api.paths).filter(c => ["open", "reload"].includes(c.action));
+      assert.deepEqual(commands.map(c => [c.action, c.provider]), target === "spotify"
+        ? [["reload", target]] : [["open", target], ["reload", target]]);
+      assert.equal(response.body.lastError, null);
+    } finally { await api.stop(); }
+  }
+  const api = await startApi("reload-fail", { commandTimeoutMs: 15000 });
+  writeFileSync(api.paths.commandLog, "");
+  try {
+    await seedReloadSession(api);
+    const failed = await postJson(api.port, "/api/v1/web-mode/actions", { type: "reload", provider: "spotify" });
+    assert.equal(failed.status, 400);
+    assert.match(readState(api.paths).lastError, /did not become ready after reload/);
+    assert.equal(readState(api.paths).activeProvider, "spotify");
+    assert.ok(!readCommands(api.paths).some(c => c.action === "open"), "failure must not switch provider");
+    writeFileSync(api.paths.prepareSnapshot, "network recovered");
+    const retry = await postJson(api.port, "/api/v1/web-mode/actions", { type: "reload", provider: "spotify" });
+    assert.equal(retry.status, 200, api.output());
+    assert.equal(retry.body.lastError, null);
+  } finally { await api.stop(); }
+}
+
+async function testReloadCancellation() {
+  for (const cancel of ["close", "generation"]) {
+    const api = await startApi("reload-slow", { commandTimeoutMs: 15000 });
+    try {
+      await seedReloadSession(api);
+      const pending = postJson(api.port, "/api/v1/web-mode/actions", { type: "reload", provider: "spotify" });
+      await waitFor(() => readCommands(api.paths).some(c => c.action === "reload"), "reload command did not start", 600);
+      const duplicate = await postJson(api.port, "/api/v1/web-mode/actions", { type: "reload", provider: "spotify" });
+      assert.equal(duplicate.status, 400);
+      const switchResult = await postJson(api.port, "/api/v1/web-mode/actions", { type: "open", provider: "tidal" });
+      assert.equal(switchResult.status, 400);
+      if (cancel === "close") {
+        const closed = await postJson(api.port, "/api/v1/web-mode/actions", { type: "close" });
+        assert.equal(closed.status, 200);
+      } else writeFileSync(api.paths.generation, "session-2\n");
+      const result = await pending;
+      assert.equal(result.status, 400);
+      assert.equal(readState(api.paths).lastError, null, "stale reload must not publish an error");
+      if (cancel === "close") assert.equal(readState(api.paths).activeProvider, null);
+      assert.equal(readCommands(api.paths).filter(c => c.action === "reload").length, 1);
+    } finally { await api.stop(); }
+  }
+}
+
+async function testReloadSwitchCancellation() {
+  const api = await startApi("slow-open", { commandTimeoutMs: 15000 });
+  try {
+    await seedReloadSession(api);
+    const pending = postJson(api.port, "/api/v1/web-mode/actions", { type: "reload", provider: "tidal" });
+    await waitFor(() => readCommands(api.paths).some(c => c.action === "open"), "reload switch did not start", 600);
+    const closed = await postJson(api.port, "/api/v1/web-mode/actions", { type: "close" });
+    assert.equal(closed.status, 200);
+    assert.equal((await pending).status, 400);
+    assert.equal(readState(api.paths).activeProvider, null);
+    assert.ok(!readCommands(api.paths).some(c => c.action === "reload"), "closing during switch must prevent reload dispatch");
+  } finally { await api.stop(); }
+}
+
+await testReloadSwitchCancellation();
+await testProviderReload();
+await testReloadCancellation();
+if (!process.argv.includes("--reload-only")) {
 await testVeilOwnership();
 testCloseVeilMessageContract();
 await testInitialOpeningAndWatchdogBypass();
@@ -550,4 +637,5 @@ await testOldGenerationCannotClearReusedRequestIdentity();
 await testTimeoutClearsOpeningState();
 await testCloseCancelsSlowOpening();
 await testScopedProviderProfileReset();
-console.log("Explore open lifecycle smoke passed");
+}
+console.log(process.argv.includes("--reload-only") ? "Explore reload lifecycle smoke passed" : "Explore open lifecycle smoke passed");

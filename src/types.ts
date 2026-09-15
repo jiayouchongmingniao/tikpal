@@ -154,7 +154,7 @@ export interface WebModeActionRequest {
   panelMode?: "expanded" | "collapsed";
   panelSessionId?: string | null;
   panelXSessionGeneration?: string | null;
-  type: "open" | "close" | "reset_provider_profile" | "keyboard" | "proxy" | "provider_text_scale" | "panel_mode";
+  type: "open" | "reload" | "close" | "reset_provider_profile" | "keyboard" | "proxy" | "provider_text_scale" | "panel_mode";
   provider?: WebModeProviderId;
   openRequestId?: string;
   enabled?: boolean;
@@ -544,6 +544,7 @@ export interface BackgroundVideoSummary {
   thumbnailSrc?: string;
   order?: number;
   default?: boolean;
+  visualOnly?: boolean;
   source?: "legacy" | "scene";
   roomModes?: RoomMode[];
   audioGainDb?: number;

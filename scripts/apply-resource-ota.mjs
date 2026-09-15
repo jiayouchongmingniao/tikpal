@@ -229,6 +229,7 @@ async function validateSceneVideosManifest({ manifestPath, packageSceneRoot }) {
     }
 
     const isDefault = video.default === true;
+    const visualOnly = video.visualOnly === true;
     if (isDefault) defaultCount += 1;
     ids.add(id);
     filenames.add(filename);
@@ -265,6 +266,7 @@ async function validateSceneVideosManifest({ manifestPath, packageSceneRoot }) {
       label: String(video.label ?? "").trim() || path.basename(filename, path.extname(filename)),
       order: normalizeSceneVideoOrder(video.order),
       default: isDefault,
+      visualOnly,
       roomModes,
       audioGainDb,
       sha256: mp4.sha256,
@@ -370,6 +372,7 @@ function toSceneManifestVideo(video) {
     label: video.label,
     ...(video.order !== null ? { order: video.order } : {}),
     ...(video.default ? { default: true } : {}),
+    ...(video.visualOnly ? { visualOnly: true } : {}),
     ...(video.roomModes?.length ? { roomModes: video.roomModes } : {}),
     ...(video.audioGainDb !== null && video.audioGainDb !== undefined ? { audioGainDb: video.audioGainDb } : {}),
     ...(video.audioFilename ? { audioFilename: video.audioFilename, audioSha256: video.audioSha256 } : {}),
@@ -401,6 +404,7 @@ function mergeSceneManifests(installedManifest, scenePackage) {
       label: String(video.label ?? "").trim() || path.basename(filename, path.extname(filename)),
       ...(Number.isFinite(Number(video.order)) ? { order: Number(video.order) } : {}),
       ...(video.default === true ? { default: true } : {}),
+      ...(video.visualOnly === true ? { visualOnly: true } : {}),
       ...(normalizeSceneRoomModes(video.roomModes).length ? { roomModes: normalizeSceneRoomModes(video.roomModes) } : {}),
       ...(normalizeSceneAudioGainDb(video.audioGainDb) !== null ? { audioGainDb: normalizeSceneAudioGainDb(video.audioGainDb) } : {}),
       ...(typeof video.audioFilename === "string" && video.audioFilename && typeof video.audioSha256 === "string" && video.audioSha256
@@ -619,6 +623,7 @@ async function run() {
         label: video.label,
         order: video.order,
         default: video.default,
+        visualOnly: video.visualOnly,
         roomModes: video.roomModes,
         audioGainDb: video.audioGainDb,
         audioFilename: video.audioFilename ?? null,

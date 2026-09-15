@@ -106,6 +106,12 @@ npm run build
 
 ### 2026-09-13 Rainy Window 环境音修订
 
-`rainy-window.ogg` 的实机听感混入了不适合雨窗场景的鸡叫，已不再由清单引用。Rainy Window 现在使用 Pixabay 上 Eryliaa 的 *Gentle Rain on Window for Sleep*，生成的版本化文件为 `audio/rainy-window-gentle-rain-e038d6cb.ogg`。它以 0.8 秒尾首交叉淡化渲染为 15 分钟、48 kHz、立体声 Opus，并保留每 45 秒雨声、15 秒安静、2.5 秒淡化的低干扰节奏。
+`rainy-window.ogg` 的实机听感混入了不适合雨窗场景的鸡叫，已不再由清单引用。第一版替换素材 `audio/rainy-window-gentle-rain-e038d6cb.ogg` 仍在源素材约第 45 秒出现鸡叫，因此同样降为未引用候选。当前 Rainy Window 只使用 Pixabay 上 Eryliaa 的 *Gentle Rain on Window for Sleep* 的前 30 秒，生成的版本化文件为 `audio/rainy-window-gentle-rain-30s-74a3af80.ogg`。30 秒片段以 0.8 秒尾首交叉淡化循环渲染为 15 分钟、48 kHz、立体声 Opus；每轮为 30 秒雨声、15 秒安静，并在边界使用 2.5 秒淡化，因此不会读取源素材第 30 秒之后的内容。
 
-清单的 `audioSha256` 为 `4eff5134d9fcb6a842404c328409882ce38779dcdcf7fe7057326c2f345ff5fe`，`audioGainDb` 为 `-4`，以接近旧资产的实际声级。文件名携带内容版本，场景目录更新后已打开的 Chromium 会在下一次目录刷新时改取新 URL，不需要覆盖同名长缓存文件或重启服务。来源、许可和处理方式同时记录在 `scene_audio_sources.json`；部署时必须原子更新该记录、`scene_videos.json` 及 public/dist 两份新音频文件。
+清单的 `audioSha256` 为 `74a3af807b9c1bf5c49c0ca7135085d9158f8ff07ef7cda1b6d1ac08302f369d`，`audioGainDb` 为 `-4`，以接近旧资产的实际声级。文件名携带内容版本，场景目录更新后已打开的 Chromium 会在下一次目录刷新时改取新 URL，不需要覆盖同名长缓存文件或重启服务。来源、许可、截断边界和处理方式同时记录在 `scene_audio_sources.json`；部署时必须原子更新该记录、`scene_videos.json` 及 public/dist 两份新音频文件。
+
+### 2026-09-13 Cloud Sunrise 静景修订
+
+Cloud Sunrise 不再绑定风声或任何环境音。场景清单移除了 `audioFilename`、`audioSha256` 和增益字段，并显式标为 `visualOnly`；从场景库选择云海时，前端明确以 `sceneSoundEnabled: false` 提交，服务端保留当前本地音乐或外部输入。旧页面若仍缓存云海带声音的目录并提交 `sceneSoundEnabled: true`，服务端会安全降级为纯画面，不显示“需要场景音频”错误。这里的“保留”只适用于音乐库、流媒体或外部输入；若此前正由另一场景音频持有播放权，服务端停止并清理该场景音，再切换为云海画面，绝不让上一场景的环境声搭配云海画面。
+
+此前的 `audio/cloud-sunrise-air-dae62d56.ogg` 保留为未引用历史资产，来源信息移动至 `scene_audio_sources.json` 的 `replacedAudio` 记录。七种语言的场景音频身份改为“静谧云海”等无声表述，避免将纯画面场景显示成风声。

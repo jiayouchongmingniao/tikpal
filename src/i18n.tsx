@@ -2913,6 +2913,9 @@ Object.assign(dictionaries.es, {
 });
 
 Object.assign(dictionaries["en"], {
+  "explore.reload": "Reload",
+  "explore.reloading": "Reloading…",
+  "explore.reloadFailed": "Reload failed. Retry.",
   "explore.collapsePanel": "Collapse panel",
   "explore.expandPanel": "Expand panel",
   "explore.exit": "Exit Explore",
@@ -2921,6 +2924,9 @@ Object.assign(dictionaries["en"], {
 });
 
 Object.assign(dictionaries["zh-CN"], {
+  "explore.reload": "重新加载",
+  "explore.reloading": "正在重新加载…",
+  "explore.reloadFailed": "加载失败，请重试",
   "explore.collapsePanel": "收起面板",
   "explore.expandPanel": "展开面板",
   "explore.exit": "退出 Explore",
@@ -2929,6 +2935,11 @@ Object.assign(dictionaries["zh-CN"], {
 });
 
 Object.assign(dictionaries["de"], {
+  "common.needProxyOn": "Proxy erforderlich",
+  "common.regionUnavailable": "Region nicht verfügbar",
+  "explore.reload": "Neu laden",
+  "explore.reloading": "Wird neu geladen…",
+  "explore.reloadFailed": "Laden fehlgeschlagen",
   "explore.collapsePanel": "Leiste einklappen",
   "explore.expandPanel": "Leiste ausklappen",
   "explore.exit": "Explore verlassen",
@@ -2937,6 +2948,11 @@ Object.assign(dictionaries["de"], {
 });
 
 Object.assign(dictionaries["it"], {
+  "common.needProxyOn": "Proxy necessario",
+  "common.regionUnavailable": "Regione non disponibile",
+  "explore.reload": "Ricarica",
+  "explore.reloading": "Ricaricamento…",
+  "explore.reloadFailed": "Caricamento non riuscito",
   "explore.collapsePanel": "Comprimi pannello",
   "explore.expandPanel": "Espandi pannello",
   "explore.exit": "Esci da Explore",
@@ -2945,6 +2961,11 @@ Object.assign(dictionaries["it"], {
 });
 
 Object.assign(dictionaries["ko"], {
+  "common.needProxyOn": "프록시 필요",
+  "common.regionUnavailable": "현재 지역에서 사용할 수 없음",
+  "explore.reload": "새로고침",
+  "explore.reloading": "새로고침 중…",
+  "explore.reloadFailed": "새로고침 실패",
   "explore.collapsePanel": "패널 접기",
   "explore.expandPanel": "패널 펼치기",
   "explore.exit": "Explore 나가기",
@@ -2953,6 +2974,11 @@ Object.assign(dictionaries["ko"], {
 });
 
 Object.assign(dictionaries["ja"], {
+  "common.needProxyOn": "プロキシが必要",
+  "common.regionUnavailable": "この地域では利用できません",
+  "explore.reload": "再読み込み",
+  "explore.reloading": "再読み込み中…",
+  "explore.reloadFailed": "読み込み失敗・再試行",
   "explore.collapsePanel": "パネルを折りたたむ",
   "explore.expandPanel": "パネルを展開",
   "explore.exit": "Exploreを終了",
@@ -2961,6 +2987,11 @@ Object.assign(dictionaries["ja"], {
 });
 
 Object.assign(dictionaries["es"], {
+  "common.needProxyOn": "Se necesita proxy",
+  "common.regionUnavailable": "Región no disponible",
+  "explore.reload": "Recargar",
+  "explore.reloading": "Recargando…",
+  "explore.reloadFailed": "Error al cargar. Reintenta.",
   "explore.collapsePanel": "Contraer panel",
   "explore.expandPanel": "Expandir panel",
   "explore.exit": "Salir de Explore",
@@ -2978,31 +3009,31 @@ Object.assign(dictionaries.es, { "source.libraryPlaying": "La biblioteca está r
 
 Object.assign(dictionaries.en, {
   "scene.name.aurora-snowfield": "Aurora Snowfield", "scene.name.cloud-sunrise": "Cloud Sunrise", "scene.name.deep-blue-ocean": "Deep Blue Ocean", "scene.name.midnight-library": "Midnight Library", "scene.name.rainy-window": "Rainy Window", "scene.name.vinyl-lounge": "Vinyl Lounge", "scene.name.warm-fireplace": "Warm Fireplace", "scene.name.zen-courtyard": "Zen Courtyard",
-  "scene.audio.aurora-snowfield": "Soft winter wind", "scene.audio.cloud-sunrise": "Gentle cloud breeze", "scene.audio.deep-blue-ocean": "Deep sea drift", "scene.audio.midnight-library": "Quiet library air", "scene.audio.rainy-window": "Rain on the window", "scene.audio.vinyl-lounge": "Warm vinyl crackle", "scene.audio.warm-fireplace": "Steady fireplace", "scene.audio.zen-courtyard": "Gentle courtyard stream"
+  "scene.audio.aurora-snowfield": "Soft winter wind", "scene.audio.cloud-sunrise": "Clouds in silence", "scene.audio.deep-blue-ocean": "Deep sea drift", "scene.audio.midnight-library": "Quiet library air", "scene.audio.rainy-window": "Rain on the window", "scene.audio.vinyl-lounge": "Warm vinyl crackle", "scene.audio.warm-fireplace": "Steady fireplace", "scene.audio.zen-courtyard": "Gentle courtyard stream"
 });
 Object.assign(dictionaries["zh-CN"], {
   "scene.name.aurora-snowfield": "极光雪原", "scene.name.cloud-sunrise": "云海日出", "scene.name.deep-blue-ocean": "深蓝海洋", "scene.name.midnight-library": "午夜图书馆", "scene.name.rainy-window": "雨窗", "scene.name.vinyl-lounge": "黑胶休息室", "scene.name.warm-fireplace": "暖炉", "scene.name.zen-courtyard": "禅意小院",
-  "scene.audio.aurora-snowfield": "轻柔冬风", "scene.audio.cloud-sunrise": "云海微风", "scene.audio.deep-blue-ocean": "深海低鸣", "scene.audio.midnight-library": "静夜环境声", "scene.audio.rainy-window": "窗边雨声", "scene.audio.vinyl-lounge": "温暖黑胶噼啪", "scene.audio.warm-fireplace": "炉火声", "scene.audio.zen-courtyard": "庭院细流"
+  "scene.audio.aurora-snowfield": "轻柔冬风", "scene.audio.cloud-sunrise": "静谧云海", "scene.audio.deep-blue-ocean": "深海低鸣", "scene.audio.midnight-library": "静夜环境声", "scene.audio.rainy-window": "窗边雨声", "scene.audio.vinyl-lounge": "温暖黑胶噼啪", "scene.audio.warm-fireplace": "炉火声", "scene.audio.zen-courtyard": "庭院细流"
 });
 Object.assign(dictionaries.de, {
   "scene.name.aurora-snowfield": "Aurora-Schneefeld", "scene.name.cloud-sunrise": "Sonnenaufgang über den Wolken", "scene.name.deep-blue-ocean": "Tiefblauer Ozean", "scene.name.midnight-library": "Mitternachtsbibliothek", "scene.name.rainy-window": "Regnerisches Fenster", "scene.name.vinyl-lounge": "Vinyl-Lounge", "scene.name.warm-fireplace": "Warmes Kaminfeuer", "scene.name.zen-courtyard": "Zen-Innenhof",
-  "scene.audio.aurora-snowfield": "Sanfter Winterwind", "scene.audio.cloud-sunrise": "Sanfte Wolkenbrise", "scene.audio.deep-blue-ocean": "Tiefes Meeresrauschen", "scene.audio.midnight-library": "Ruhige Bibliotheksluft", "scene.audio.rainy-window": "Regen am Fenster", "scene.audio.vinyl-lounge": "Warmes Vinylknistern", "scene.audio.warm-fireplace": "Ruhiges Kaminfeuer", "scene.audio.zen-courtyard": "Sanfter Hofbrunnen"
+  "scene.audio.aurora-snowfield": "Sanfter Winterwind", "scene.audio.cloud-sunrise": "Stille Wolken", "scene.audio.deep-blue-ocean": "Tiefes Meeresrauschen", "scene.audio.midnight-library": "Ruhige Bibliotheksluft", "scene.audio.rainy-window": "Regen am Fenster", "scene.audio.vinyl-lounge": "Warmes Vinylknistern", "scene.audio.warm-fireplace": "Ruhiges Kaminfeuer", "scene.audio.zen-courtyard": "Sanfter Hofbrunnen"
 });
 Object.assign(dictionaries.it, {
   "scene.name.aurora-snowfield": "Campo di neve aurorale", "scene.name.cloud-sunrise": "Alba sulle nuvole", "scene.name.deep-blue-ocean": "Oceano blu profondo", "scene.name.midnight-library": "Biblioteca di mezzanotte", "scene.name.rainy-window": "Finestra sotto la pioggia", "scene.name.vinyl-lounge": "Salotto del vinile", "scene.name.warm-fireplace": "Caminetto caldo", "scene.name.zen-courtyard": "Cortile Zen",
-  "scene.audio.aurora-snowfield": "Vento invernale lieve", "scene.audio.cloud-sunrise": "Brezza tra le nuvole", "scene.audio.deep-blue-ocean": "Deriva del mare profondo", "scene.audio.midnight-library": "Aria quieta di biblioteca", "scene.audio.rainy-window": "Pioggia alla finestra", "scene.audio.vinyl-lounge": "Crepitio caldo del vinile", "scene.audio.warm-fireplace": "Fuoco costante", "scene.audio.zen-courtyard": "Ruscello lieve del cortile"
+  "scene.audio.aurora-snowfield": "Vento invernale lieve", "scene.audio.cloud-sunrise": "Nuvole silenziose", "scene.audio.deep-blue-ocean": "Deriva del mare profondo", "scene.audio.midnight-library": "Aria quieta di biblioteca", "scene.audio.rainy-window": "Pioggia alla finestra", "scene.audio.vinyl-lounge": "Crepitio caldo del vinile", "scene.audio.warm-fireplace": "Fuoco costante", "scene.audio.zen-courtyard": "Ruscello lieve del cortile"
 });
 Object.assign(dictionaries.ko, {
   "scene.name.aurora-snowfield": "오로라 설원", "scene.name.cloud-sunrise": "구름 위 일출", "scene.name.deep-blue-ocean": "깊고 푸른 바다", "scene.name.midnight-library": "한밤의 도서관", "scene.name.rainy-window": "빗속 창문", "scene.name.vinyl-lounge": "바이닐 라운지", "scene.name.warm-fireplace": "따뜻한 벽난로", "scene.name.zen-courtyard": "젠 정원",
-  "scene.audio.aurora-snowfield": "부드러운 겨울 바람", "scene.audio.cloud-sunrise": "구름 사이 산들바람", "scene.audio.deep-blue-ocean": "깊은 바다의 흐름", "scene.audio.midnight-library": "고요한 도서관 공기", "scene.audio.rainy-window": "창가의 빗소리", "scene.audio.vinyl-lounge": "따뜻한 바이닐 잡음", "scene.audio.warm-fireplace": "잔잔한 벽난로", "scene.audio.zen-courtyard": "고요한 뜰의 물소리"
+  "scene.audio.aurora-snowfield": "부드러운 겨울 바람", "scene.audio.cloud-sunrise": "고요한 구름 바다", "scene.audio.deep-blue-ocean": "깊은 바다의 흐름", "scene.audio.midnight-library": "고요한 도서관 공기", "scene.audio.rainy-window": "창가의 빗소리", "scene.audio.vinyl-lounge": "따뜻한 바이닐 잡음", "scene.audio.warm-fireplace": "잔잔한 벽난로", "scene.audio.zen-courtyard": "고요한 뜰의 물소리"
 });
 Object.assign(dictionaries.ja, {
   "scene.name.aurora-snowfield": "オーロラの雪原", "scene.name.cloud-sunrise": "雲海の日の出", "scene.name.deep-blue-ocean": "深い青の海", "scene.name.midnight-library": "真夜中の図書館", "scene.name.rainy-window": "雨の窓辺", "scene.name.vinyl-lounge": "レコード・ラウンジ", "scene.name.warm-fireplace": "暖かな暖炉", "scene.name.zen-courtyard": "禅の中庭",
-  "scene.audio.aurora-snowfield": "やわらかな冬の風", "scene.audio.cloud-sunrise": "雲海のそよ風", "scene.audio.deep-blue-ocean": "深海のゆらぎ", "scene.audio.midnight-library": "静かな図書館の空気", "scene.audio.rainy-window": "窓辺の雨音", "scene.audio.vinyl-lounge": "暖かなレコードのノイズ", "scene.audio.warm-fireplace": "穏やかな暖炉", "scene.audio.zen-courtyard": "中庭のやさしい水音"
+  "scene.audio.aurora-snowfield": "やわらかな冬の風", "scene.audio.cloud-sunrise": "静かな雲海", "scene.audio.deep-blue-ocean": "深海のゆらぎ", "scene.audio.midnight-library": "静かな図書館の空気", "scene.audio.rainy-window": "窓辺の雨音", "scene.audio.vinyl-lounge": "暖かなレコードのノイズ", "scene.audio.warm-fireplace": "穏やかな暖炉", "scene.audio.zen-courtyard": "中庭のやさしい水音"
 });
 Object.assign(dictionaries.es, {
   "scene.name.aurora-snowfield": "Campo nevado de auroras", "scene.name.cloud-sunrise": "Amanecer sobre las nubes", "scene.name.deep-blue-ocean": "Océano azul profundo", "scene.name.midnight-library": "Biblioteca de medianoche", "scene.name.rainy-window": "Ventana lluviosa", "scene.name.vinyl-lounge": "Sala de vinilos", "scene.name.warm-fireplace": "Chimenea cálida", "scene.name.zen-courtyard": "Patio zen",
-  "scene.audio.aurora-snowfield": "Suave viento invernal", "scene.audio.cloud-sunrise": "Brisa entre las nubes", "scene.audio.deep-blue-ocean": "Deriva de mar profundo", "scene.audio.midnight-library": "Aire tranquilo de biblioteca", "scene.audio.rainy-window": "Lluvia en la ventana", "scene.audio.vinyl-lounge": "Cálido crepitar de vinilo", "scene.audio.warm-fireplace": "Chimenea constante", "scene.audio.zen-courtyard": "Suave arroyo del patio"
+  "scene.audio.aurora-snowfield": "Suave viento invernal", "scene.audio.cloud-sunrise": "Nubes en silencio", "scene.audio.deep-blue-ocean": "Deriva de mar profundo", "scene.audio.midnight-library": "Aire tranquilo de biblioteca", "scene.audio.rainy-window": "Lluvia en la ventana", "scene.audio.vinyl-lounge": "Cálido crepitar de vinilo", "scene.audio.warm-fireplace": "Chimenea constante", "scene.audio.zen-courtyard": "Suave arroyo del patio"
 });
 
 Object.assign(dictionaries.en, { "remote.localNetworkReady": "Home network remote ready" });

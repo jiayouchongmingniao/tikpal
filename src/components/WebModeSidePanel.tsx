@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { Apple, Cloud, Gem, Globe2, Music2, ChevronsLeft, ChevronsRight, LogOut, ShoppingBag, SquarePlay, Type, Volume2 } from "lucide-react";
+import { Apple, Cloud, Gem, Globe2, Music2, ChevronsLeft, ChevronsRight, LogOut, RotateCw, ShoppingBag, SquarePlay, Type, Volume2 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { fetchTikpalState, fetchWebModeState, sendPlaybackAction, sendWebModeAction } from "../api/tikpalClient";
 import { createExploreCloseRequestId, EXPLORE_CLOSE_CHANNEL, isExploreCloseMessage, type ExploreCloseMessage } from "../exploreCloseVeil";
 import { useI18n } from "../i18n";
-import type { TikpalState, WebModeProviderId, WebModeProviderSummary, WebModeState } from "../types";
+import type { TikpalState, WebModeProviderId, WebModeProviderSummary, WebModeResidentProviderState, WebModeState } from "../types";
 
 const providerOrder: WebModeProviderId[] = [
   "suno",
@@ -83,6 +83,60 @@ function isProxyNeededError(error: string | null, providerId: WebModeProviderId 
   return normalizedError.startsWith(providerLabels[providerId].toLowerCase()) && /\bneeds proxy(?: on)?\b/.test(normalizedError);
 }
 
+type ProviderCardStatus = "current" | "opening" | "prewarming" | "ready" | "waiting" | "standby" | "error";
+
+type ProviderCardPresentation = {
+  status: ProviderCardStatus;
+  labelKey: string;
+  busy: boolean;
+  failed: boolean;
+};
+
+function resolveProviderCardStatus({
+  resident,
+  isCurrent,
+  isOpening,
+  failed,
+  failedNeedsProxy
+}: {
+  resident?: WebModeResidentProviderState;
+  isCurrent: boolean;
+  isOpening: boolean;
+  failed: boolean;
+  failedNeedsProxy: boolean;
+}): ProviderCardPresentation {
+  const residentStatus = resident?.status;
+
+  if (failed) {
+    return { status: "error", labelKey: failedNeedsProxy ? "common.needProxyOn" : "common.failed", busy: false, failed: true };
+  }
+  if (residentStatus === "check_setup") {
+    return { status: "error", labelKey: "common.checkSetup", busy: false, failed: true };
+  }
+  if (residentStatus === "check_proxy") {
+    return { status: "error", labelKey: "common.needProxyOn", busy: false, failed: true };
+  }
+  if (residentStatus === "region_unavailable") {
+    return { status: "error", labelKey: "common.regionUnavailable", busy: false, failed: true };
+  }
+  if (isOpening || residentStatus === "opening") {
+    return { status: "opening", labelKey: "common.opening", busy: true, failed: false };
+  }
+  if (residentStatus === "prewarming") {
+    return { status: "prewarming", labelKey: "common.prewarming", busy: true, failed: false };
+  }
+  if (resident?.activity === "frozen") {
+    return { status: "standby", labelKey: "common.frozen", busy: false, failed: false };
+  }
+  if (isCurrent) {
+    return { status: "current", labelKey: "common.current", busy: false, failed: false };
+  }
+  if (residentStatus === "ready" || residentStatus === "active") {
+    return { status: "ready", labelKey: "common.ready", busy: false, failed: false };
+  }
+  return { status: "waiting", labelKey: "common.waiting", busy: false, failed: false };
+}
+
 function postExploreCloseMessage(message: ExploreCloseMessage) {
   if (typeof BroadcastChannel === "undefined") return;
   try {
@@ -98,9 +152,11 @@ export function WebModeSidePanel() {
   const [tikpalState, setTikpalState] = useState<TikpalState | null>(null);
   const initialOpeningProviderRef = useRef<WebModeProviderId | null>(readInitialOpeningProvider());
   const [pendingProvider, setPendingProvider] = useState<WebModeProviderId | null>(initialOpeningProviderRef.current);
-  const [pendingAction, setPendingAction] = useState<"close" | "scale" | "panel" | null>(null);
-  const pendingActionRef = useRef<"close" | "scale" | "panel" | null>(null);
+  const [pendingAction, setPendingAction] = useState<"close" | "scale" | "panel" | "reload" | null>(null);
+  const pendingActionRef = useRef<"close" | "scale" | "panel" | "reload" | null>(null);
   const [requestedPanelMode, setRequestedPanelMode] = useState<"expanded" | "collapsed" | null>(null);
+  const [reloadingProvider, setReloadingProvider] = useState<WebModeProviderId | null>(null);
+  const [reloadFailedProvider, setReloadFailedProvider] = useState<WebModeProviderId | null>(null);
   const [panelError, setPanelError] = useState(false);
   const panelActionRef = useRef(false);
   // Keep the reachable rail until expansion is confirmed; the full header's
@@ -113,7 +169,6 @@ export function WebModeSidePanel() {
   const [error, setError] = useState<string | null>(null);
   const actionLockRef = useRef(false);
   const openOperationRef = useRef(0);
-  const optimisticProviderRef = useRef<WebModeProviderId | null>(null);
   const [exploreOpening, setExploreOpening] = useState(false);
   const activeProvider = webMode?.activeProvider ?? null;
   const openingProvider = webMode?.openingProvider ?? null;
@@ -133,7 +188,7 @@ export function WebModeSidePanel() {
   const failedProviderNeedsProxy = isProxyNeededError(error, failedProvider);
   const effectiveActiveProvider = activationPending
     ? (lastNonPendingActiveProvider ?? null)
-    : (activeProvider && activeProvider !== failedProvider ? activeProvider : null);
+    : activeProvider;
   const effectiveActiveProviderStatus = effectiveActiveProvider
     ? webMode?.residentProviders?.[effectiveActiveProvider]?.status
     : null;
@@ -196,35 +251,40 @@ export function WebModeSidePanel() {
     : effectiveActiveProvider
       ? providerTones[effectiveActiveProvider]
       : "#81d7ff";
-
-  function providerStatusLabel(providerId: WebModeProviderId, flags: {
-    active: boolean;
-    connecting: boolean;
-    current: boolean;
-    failed: boolean;
-    experimental: boolean;
-  }) {
-    if (flags.connecting) return t("common.opening");
-    if (flags.current) return t("common.current");
-    if (flags.active) return t("common.active");
-    if (flags.failed) return failedProviderNeedsProxy && providerId === failedProvider ? t("common.needProxyOn") : t("common.failed");
-    const resident = webMode?.residentProviders?.[providerId];
-    const residentStatus = resident?.status;
-    if (resident?.activity === "frozen") return t("common.frozen");
-    if (residentStatus === "opening") return t("common.opening");
-    if (residentStatus === "prewarming") return t("common.prewarming");
-    if (residentStatus === "check_setup") return t("common.checkSetup");
-    if (residentStatus === "check_proxy") return t("common.needProxyOn");
-    if (residentStatus === "region_unavailable") return t("common.regionUnavailable");
-    if (residentStatus === "ready") return t("common.ready");
-    if (flags.experimental) return t("common.experimental");
-    return t("common.waiting");
-  }
+  const footerProvider = reloadFailedProvider ?? failedProvider ?? displayedOpeningProvider ?? effectiveActiveProvider;
+  const footerPresentation = footerProvider
+    ? resolveProviderCardStatus({
+      resident: webMode?.residentProviders?.[footerProvider],
+      isCurrent: effectiveActiveProvider === footerProvider,
+      isOpening: displayedOpeningProvider === footerProvider,
+      failed: reloadFailedProvider === footerProvider || failedProvider === footerProvider,
+      failedNeedsProxy: failedProviderNeedsProxy && failedProvider === footerProvider
+    })
+    : null;
+  const footerStatusLabel = footerProvider === reloadingProvider
+    ? t("explore.reloading")
+    : footerProvider === reloadFailedProvider
+      ? t("explore.reloadFailed")
+      : footerPresentation
+        ? t(footerPresentation.labelKey)
+        : null;
+  const footerStatusMessage = footerProvider && footerPresentation
+    && (footerPresentation.status === "opening" || footerPresentation.status === "prewarming" || footerPresentation.status === "error" || footerProvider === reloadingProvider)
+    ? `${footerStatusLabel} ${providerLabels[footerProvider]}`
+    : null;
 
   function applyWebModeState(next: WebModeState) {
     const nextPhase = next.activationPhase ?? null;
     setWebMode(next);
     setError(next.lastError);
+    setReloadFailedProvider((current) => (
+      current
+      && next.activeProvider === current
+      && next.residentProviders?.[current]?.status === "active"
+      && !next.lastError
+        ? null
+        : current
+    ));
     setPendingProvider((current) => {
       // The panel is reused across resident switches. Its startup URL can
       // still contain the provider from a much older initial entry, so that
@@ -237,9 +297,6 @@ export function WebModeSidePanel() {
       if (next.openingProvider === initialOpeningProvider) initialOpeningProviderRef.current = null;
       return current && (nextPhase !== "pending" && next.activeProvider === current || next.lastError) ? null : current;
     });
-    if (optimisticProviderRef.current && (next.activeProvider === optimisticProviderRef.current || next.lastError)) {
-      optimisticProviderRef.current = null;
-    }
     if (nextPhase !== "pending") {
       setLastNonPendingActiveProvider(next.activeProvider);
     }
@@ -337,12 +394,12 @@ export function WebModeSidePanel() {
   async function openProvider(providerId: WebModeProviderId) {
     if (actionLockRef.current || pendingProvider || pendingAction) return;
     if (activeProvider === providerId) return;
+    setReloadFailedProvider(null);
     const operation = openOperationRef.current + 1;
     openOperationRef.current = operation;
     const isCurrentOperation = () => openOperationRef.current === operation;
     actionLockRef.current = true;
     setPendingProvider(providerId);
-    optimisticProviderRef.current = providerId;
     setError(null);
     try {
       const next = await sendWebModeAction({ type: "open", provider: providerId });
@@ -354,7 +411,6 @@ export function WebModeSidePanel() {
       if (fallback) {
         try {
           setPendingProvider(fallback);
-          optimisticProviderRef.current = fallback;
           const next = await sendWebModeAction({ type: "open", provider: fallback });
           if (!isCurrentOperation()) return;
           applyWebModeState(next);
@@ -362,17 +418,49 @@ export function WebModeSidePanel() {
         } catch (fallbackError) {
           if (!isCurrentOperation()) return;
           setPendingProvider(null);
-          optimisticProviderRef.current = null;
          setError(fallbackError instanceof Error ? fallbackError.message : "Provider switch failed");
        }
      } else {
        setPendingProvider(null);
-        optimisticProviderRef.current = null;
        setError(nextError instanceof Error ? nextError.message : "Provider switch failed");
       }
     } finally {
       if (isCurrentOperation()) {
         await refresh().catch(() => undefined);
+        actionLockRef.current = false;
+      }
+    }
+  }
+
+  async function reloadProvider(providerId: WebModeProviderId) {
+    if (actionLockRef.current || pendingProvider || pendingAction || displayedOpeningProvider) return;
+    const operation = ++openOperationRef.current;
+    actionLockRef.current = true;
+    pendingActionRef.current = "reload";
+    setPendingAction("reload");
+    setReloadingProvider(providerId);
+    setReloadFailedProvider(null);
+    setError(null);
+    try {
+      const next = await sendWebModeAction({ type: "reload", provider: providerId });
+      if (openOperationRef.current === operation) applyWebModeState(next);
+    } catch {
+      if (openOperationRef.current !== operation) return;
+      // A competing resident transition can release after this request has
+      // timed out. Reconcile once before showing an error over a live player.
+      const reconciled = await fetchWebModeState().catch(() => null);
+      if (openOperationRef.current !== operation) return;
+      if (reconciled) applyWebModeState(reconciled);
+      if (!(reconciled?.activeProvider === providerId
+        && reconciled.residentProviders?.[providerId]?.status === "active"
+        && !reconciled.lastError)) {
+        setReloadFailedProvider(providerId);
+      }
+    } finally {
+      if (openOperationRef.current === operation) {
+        setReloadingProvider(null);
+        pendingActionRef.current = null;
+        setPendingAction(null);
         actionLockRef.current = false;
       }
     }
@@ -410,12 +498,12 @@ export function WebModeSidePanel() {
   }
 
   async function closeWebMode() {
-    const cancellingOpen = Boolean(pendingProvider || displayedOpeningProvider);
+    const cancellingOpen = Boolean(pendingProvider || displayedOpeningProvider || pendingActionRef.current === "reload");
     if (closeRequestRef.current || pendingAction === "close" || (!cancellingOpen && pendingActionRef.current !== "panel" && (actionLockRef.current || pendingAction))) return;
     if (cancellingOpen) {
       openOperationRef.current += 1;
       setPendingProvider(null);
-      optimisticProviderRef.current = null;
+      setReloadingProvider(null);
     }
     const requestId = createExploreCloseRequestId();
     closeRequestRef.current = requestId;
@@ -572,7 +660,7 @@ export function WebModeSidePanel() {
           <button
             className="web-mode-top-back"
             type="button"
-            disabled={Boolean(pendingAction && pendingAction !== "panel")}
+            disabled={Boolean(pendingAction && pendingAction !== "panel" && pendingAction !== "reload")}
             data-web-mode-top-back
             aria-label={t("explore.exit")}
             onClick={() => void closeWebMode()}
@@ -595,33 +683,52 @@ export function WebModeSidePanel() {
       <section className="web-mode-provider-grid" aria-label={t("explore.webPlayers")}>
         {providers.map((provider) => {
           const Icon = providerIcons[provider.id] ?? Music2;
-          const failed = failedProvider === provider.id && displayedOpeningProvider !== provider.id;
-          const selected = effectiveActiveProvider === provider.id;
-          const connecting = displayedOpeningProvider === provider.id && optimisticProviderRef.current !== provider.id;
-          const current = selected && Boolean(displayedOpeningProvider) && !connecting;
-          const active = (selected && !displayedOpeningProvider) || optimisticProviderRef.current === provider.id;
-          const residentStatus = webMode?.residentProviders?.[provider.id]?.status;
-          const residentActivity = webMode?.residentProviders?.[provider.id]?.activity;
-          const warming = residentStatus === "opening" || residentStatus === "prewarming";
+          const resident = webMode?.residentProviders?.[provider.id];
+          const residentStatus = resident?.status;
+          const isCurrent = effectiveActiveProvider === provider.id;
+          const isOpening = displayedOpeningProvider === provider.id;
+          const failed = reloadFailedProvider === provider.id || failedProvider === provider.id;
+          const presentation = resolveProviderCardStatus({
+            resident,
+            isCurrent,
+            isOpening,
+            failed,
+            failedNeedsProxy: failedProviderNeedsProxy && provider.id === failedProvider
+          });
+          const displayStatusLabel = reloadingProvider === provider.id
+            ? t("explore.reloading")
+            : reloadFailedProvider === provider.id
+              ? t("explore.reloadFailed")
+              : t(presentation.labelKey);
           const proxyUnavailable = residentStatus === "check_proxy";
           return (
-            <button
-              key={provider.id}
-              className={`web-mode-provider ${active && !proxyUnavailable ? "is-active" : ""} ${current ? "is-current" : ""} ${connecting || warming ? "is-connecting" : ""} ${failed || proxyUnavailable || residentStatus === "check_setup" || residentStatus === "region_unavailable" ? "is-failed" : ""} ${proxyUnavailable ? "is-proxy-unavailable" : ""}`}
-              type="button"
-              disabled={Boolean(pendingAction || pendingProvider || (proxyUnavailable && !proxyEnabled))}
-              style={{ "--provider-tone": providerTones[provider.id] } as CSSProperties}
-              aria-busy={connecting || warming}
-              data-web-mode-provider={provider.id}
-              data-web-mode-provider-activity={residentActivity ?? "unknown"}
-              onClick={() => void openProvider(provider.id)}
-            >
-              <span>
-                <Icon size={24} />
-              </span>
-              <strong>{provider.label}</strong>
-              <em>{providerStatusLabel(provider.id, { active, connecting, current, failed, experimental: provider.experimental })}</em>
-            </button>
+            <div key={provider.id} className="web-mode-provider-card">
+              <button
+                className={`web-mode-provider ${isCurrent ? "is-current" : ""} ${presentation.status === "opening" || presentation.status === "prewarming" ? "is-opening" : ""} ${presentation.failed ? "is-failed" : ""} ${proxyUnavailable ? "is-proxy-unavailable" : ""}`}
+                type="button"
+                disabled={Boolean(pendingAction || pendingProvider || (proxyUnavailable && !proxyEnabled))}
+                style={{ "--provider-tone": providerTones[provider.id] } as CSSProperties}
+                aria-busy={presentation.busy || reloadingProvider === provider.id}
+                aria-current={isCurrent ? "true" : undefined}
+                aria-label={`${provider.label}: ${displayStatusLabel}`}
+                data-web-mode-provider={provider.id}
+                data-web-mode-provider-status={presentation.status}
+                data-web-mode-provider-activity={resident?.activity ?? "unknown"}
+                onClick={() => void openProvider(provider.id)}
+              >
+                <span>
+                  <Icon size={24} />
+                </span>
+                <strong>{provider.label}</strong>
+                <em>{displayStatusLabel}</em>
+              </button>
+              <button type="button" className="web-mode-provider-reload"
+                data-provider-reload={provider.id}
+                aria-label={`${t("explore.reload")} ${provider.label}`} title={`${t("explore.reload")} ${provider.label}`}
+                aria-busy={reloadingProvider === provider.id}
+                disabled={Boolean(pendingAction || pendingProvider || displayedOpeningProvider)}
+                onClick={() => void reloadProvider(provider.id)}><RotateCw size={18} /></button>
+            </div>
           );
         })}
       </section>
@@ -659,7 +766,7 @@ export function WebModeSidePanel() {
       </section>
 
       <footer className="web-mode-panel-footer" role="status" title={error ?? undefined}>
-        {closeFailed ? t("explore.closeFailed") : closeSlow ? t("common.closing") : panelError ? t("explore.panelChangeFailed") : friendlyError(error, "error.explore") ?? (displayedOpeningProvider ? `${t("common.opening")} ${providerLabels[displayedOpeningProvider]}` : t("explore.footer"))}
+        {closeFailed ? t("explore.closeFailed") : closeSlow ? t("common.closing") : panelError ? t("explore.panelChangeFailed") : friendlyError(error, "error.explore") ?? footerStatusMessage ?? t("explore.footer")}
       </footer>
       <div className={"web-mode-open-overlay" + (exploreOpening ? " active" : "")} />
     </main>

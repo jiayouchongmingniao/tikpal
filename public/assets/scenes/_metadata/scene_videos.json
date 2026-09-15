@@ -21,13 +21,11 @@
       "label": "Cloud Sunrise",
       "thumbnailSrc": "thumbnails/cloud-sunrise.webp",
       "order": 110,
+      "visualOnly": true,
       "roomModes": [
         "focus"
       ],
-      "audioGainDb": -12,
-      "sha256": "9a27e8c0da70bf570c461d4b39bf17c0a5d06733ca1520c76b7bc0a242617590",
-      "audioFilename": "audio/cloud-sunrise-air-dae62d56.ogg",
-      "audioSha256": "dae62d56ed0e483f15861eb582e690188e911c0c2c2c6505cb834117d46312b0"
+      "sha256": "9a27e8c0da70bf570c461d4b39bf17c0a5d06733ca1520c76b7bc0a242617590"
     },
     {
       "id": "deep-blue-ocean",
@@ -68,8 +66,8 @@
       ],
       "audioGainDb": -4,
       "sha256": "10ddc99aa237e9ca8ba39abeae84d946ca5ec3724e208c25815ee065343dd12f",
-      "audioFilename": "audio/rainy-window-gentle-rain-e038d6cb.ogg",
-      "audioSha256": "4eff5134d9fcb6a842404c328409882ce38779dcdcf7fe7057326c2f345ff5fe"
+      "audioFilename": "audio/rainy-window-gentle-rain-30s-74a3af80.ogg",
+      "audioSha256": "74a3af807b9c1bf5c49c0ca7135085d9158f8ff07ef7cda1b6d1ac08302f369d"
     },
     {
       "id": "vinyl-lounge",

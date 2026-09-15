@@ -741,6 +741,7 @@ let hifiRuntimeRecoveryPromise = null;
 let hifiRuntimeRecoveryLastAttemptAtMs = 0;
 let hifiRuntimeRecoveryQuietUntilMs = 0;
 let webModeOpenInFlight = false;
+let webModeReloadOperation = null;
 let webModePanelPromise = null;
 let webModePanelCloseRequested = false;
 let webModeCloseInFlight = false;
@@ -6527,6 +6528,7 @@ async function readSceneBackgroundVideos() {
       src: `/assets/scenes/${encodeAssetRelativePath(filename)}`,
       ...(Number.isFinite(Number(video.order)) ? { order: Number(video.order) } : {}),
       ...(video.default === true ? { default: true } : {}),
+      ...(video.visualOnly === true ? { visualOnly: true } : {}),
       ...(roomModes.length > 0 ? { roomModes } : {}),
       ...(audioGainDb !== null ? { audioGainDb } : {}),
       ...(audioSrc ? { audioSrc } : {}),
@@ -14338,6 +14340,22 @@ function resolveRoomActionSceneSoundEnabled(action, current, mode) {
   return current.mode !== "hifi" && current.sceneSoundEnabled === true;
 }
 
+function resolveSceneVideoSoundEnabled(requestedEnabled, sceneVideo) {
+  if (!requestedEnabled) return false;
+  if (sceneVideo.audioSrc) return true;
+  // A visual-only scene deliberately preserves the current music or input.
+  // This also makes cached clients that still submit `true` safe to use.
+  if (sceneVideo.visualOnly) return false;
+  throw new Error("scene sound requires a scene audio asset");
+}
+
+async function resolveRoomActionSceneSoundEnabledForVideo(action, current, mode, sceneVideoId) {
+  const requestedEnabled = resolveRoomActionSceneSoundEnabled(action, current, mode);
+  if (!requestedEnabled) return false;
+  const sceneVideo = await findSceneVideoForRoomMode(sceneVideoId, mode);
+  return resolveSceneVideoSoundEnabled(true, sceneVideo);
+}
+
 async function resolveSceneAudioVideo(experience, { requireAudio = false } = {}) {
   const preset = getRoomModePreset(experience.mode);
   const fallbackVideo = {
@@ -14410,7 +14428,7 @@ async function applyRoomExperienceAction(action) {
       const hifiEqPatch = buildHifiEqPatch(action, current.hifiEqPresetId ?? preset.hifiEqPresetId);
       const rememberedCurrent = rememberSceneVideoForRoomMode(current);
       const sceneVideoId = await resolveRoomModeSceneVideoId(rememberedCurrent, mode, action.sceneVideoId);
-      const sceneSoundEnabled = resolveRoomActionSceneSoundEnabled(action, current, mode);
+      const sceneSoundEnabled = await resolveRoomActionSceneSoundEnabledForVideo(action, current, mode, sceneVideoId);
       next = {
         ...rememberedCurrent,
         mode,
@@ -14440,7 +14458,7 @@ async function applyRoomExperienceAction(action) {
       const hifiEqPatch = buildHifiEqPatch(action, current.hifiEqPresetId ?? preset.hifiEqPresetId);
       const rememberedCurrent = rememberSceneVideoForRoomMode(current);
       const sceneVideoId = await resolveRoomModeSceneVideoId(rememberedCurrent, mode, action.sceneVideoId);
-      const sceneSoundEnabled = resolveRoomActionSceneSoundEnabled(action, current, mode);
+      const sceneSoundEnabled = await resolveRoomActionSceneSoundEnabledForVideo(action, current, mode, sceneVideoId);
       next = {
         ...rememberedCurrent,
         mode,
@@ -14470,7 +14488,7 @@ async function applyRoomExperienceAction(action) {
       const hifiEqPatch = buildHifiEqPatch(action, current.hifiEqPresetId ?? preset.hifiEqPresetId);
       const rememberedCurrent = rememberSceneVideoForRoomMode(current);
       const sceneVideoId = await resolveRoomModeSceneVideoId(rememberedCurrent, mode, action.sceneVideoId);
-      const sceneSoundEnabled = resolveRoomActionSceneSoundEnabled(action, current, mode);
+      const sceneSoundEnabled = await resolveRoomActionSceneSoundEnabledForVideo(action, current, mode, sceneVideoId);
       next = {
         ...rememberedCurrent,
         mode,
@@ -14516,12 +14534,10 @@ async function applyRoomExperienceAction(action) {
         throw new Error("set_scene is not available in Hi-Fi mode");
       }
       const sceneVideo = await findSceneVideoForRoomMode(action.sceneVideoId, current.mode);
-      const sceneSoundEnabled = action.sceneSoundEnabled === undefined
+      const requestedSceneSoundEnabled = action.sceneSoundEnabled === undefined
         ? current.sceneSoundEnabled
         : action.sceneSoundEnabled === true;
-      if (sceneSoundEnabled && !sceneVideo.audioSrc) {
-        throw new Error("set_scene requires a scene audio asset when Scene Sound is enabled");
-      }
+      const sceneSoundEnabled = resolveSceneVideoSoundEnabled(requestedSceneSoundEnabled, sceneVideo);
       next = rememberSceneVideoForRoomMode({
         ...current,
         sceneVideoId: sceneVideo.id,
@@ -14529,17 +14545,22 @@ async function applyRoomExperienceAction(action) {
       }, current.mode, sceneVideo.id);
       applyScene = sceneSoundEnabled;
       applyLevels = false;
+      stopScene = !sceneSoundEnabled && current.sceneSoundEnabled;
       captureSceneHandoff = sceneSoundEnabled && !current.sceneSoundEnabled;
       break;
     }
     case "set_scene_sound": {
-      const enabled = action.sceneSoundEnabled === true;
-      if (enabled && current.mode === "hifi") {
+      const requestedEnabled = action.sceneSoundEnabled === true;
+      if (requestedEnabled && current.mode === "hifi") {
         throw new Error("scene sound is not available in Hi-Fi mode");
       }
+      const sceneVideoId = String(action.sceneVideoId ?? current.sceneVideoId).trim() || current.sceneVideoId;
+      const enabled = requestedEnabled
+        ? resolveSceneVideoSoundEnabled(true, await findSceneVideoForRoomMode(sceneVideoId, current.mode))
+        : false;
       next = {
         ...current,
-        sceneVideoId: String(action.sceneVideoId ?? current.sceneVideoId).trim() || current.sceneVideoId,
+        sceneVideoId,
         sceneSoundEnabled: enabled
       };
       if (enabled) {
@@ -14631,8 +14652,8 @@ async function runWebModeCommand(action, providerId = "", env = {}) {
     ? `${WEB_MODE_COMMAND} ${shellQuote(action)} ${shellQuote(providerId)}`
     : `${WEB_MODE_COMMAND} ${shellQuote(action)}`;
   const commandWithEnv = envPrefix ? `${envPrefix} ${command}` : command;
-  if (action === "panel-mode" || action === "close-audio") {
-    // Kill the entire layout command group on timeout. Killing only sh would
+  if (action === "panel-mode" || action === "close-audio" || action === "reload") {
+    // Kill the entire command group on timeout. Killing only sh would
     // leave a late state writer racing Close after the API releases its gate.
     await new Promise((resolveCommand, rejectCommand) => {
       const child = spawn("sh", ["-lc", commandWithEnv], { detached: true, stdio: ["ignore", "pipe", "pipe"] });
@@ -14644,7 +14665,7 @@ async function runWebModeCommand(action, providerId = "", env = {}) {
       const timer = setTimeout(() => {
         timedOut = true;
         try { process.kill(-child.pid, "SIGKILL"); } catch { /* Already exited. */ }
-      }, Math.min(WEB_MODE_COMMAND_TIMEOUT_MS, action === "close-audio" ? 4000 : 12000));
+      }, Math.min(WEB_MODE_COMMAND_TIMEOUT_MS, action === "reload" ? WEB_MODE_COMMAND_TIMEOUT_MS : action === "close-audio" ? 4000 : 12000));
       child.once("error", error => { clearTimeout(timer); rejectCommand(error); });
       child.once("close", code => {
         clearTimeout(timer);
@@ -14652,7 +14673,7 @@ async function runWebModeCommand(action, providerId = "", env = {}) {
           if (action === "close-audio" && details.trim()) console.log(`[tikpal-close-audio] ${details.trim()}`);
           resolveCommand();
         }
-        else rejectCommand(new Error(timedOut ? "PANEL_LAYOUT_TIMEOUT" : details.trim() || "PANEL_LAYOUT_FAILED"));
+        else rejectCommand(new Error(timedOut ? (action === "reload" ? "EXPLORE_RELOAD_TIMEOUT" : "PANEL_LAYOUT_TIMEOUT") : details.trim() || (action === "reload" ? "EXPLORE_RELOAD_FAILED" : "PANEL_LAYOUT_FAILED")));
       });
     });
     return;
@@ -15234,9 +15255,66 @@ async function pauseTikpalForWebMode(handoffSourceId = "") {
 
 let webModeKeyboardStickyUntilMs = 0;
 
-async function applyWebModeAction(action, { receivedMonotonicMs = monotonicNowMs() } = {}) {
+async function reloadWebModeProvider(providerId) {
+  if (!providerId) throw new Error("Explore reload requires a provider");
+  if (!WEB_MODE_COMMAND.trim()) throw new Error("Explore reload is unavailable");
+  if (webModeReloadOperation || webModeOpenInFlight || webModeResidentOpenPromise || webModePanelPromise
+    || webModePanelCloseRequested || webModeCloseInFlight || webModeClosePromise) throw new Error("EXPLORE_RELOAD_BUSY");
+  const operation = { cancelled: false };
+  webModeReloadOperation = operation;
+  let sessionId = null;
+  let generation = null;
+  const ownsSession = state => !operation.cancelled && state.activeProvider === providerId
+    && !state.openingProvider && !state.closeRequestId
+    && state.lastOpenedRequestId === sessionId && state.lastOpenedXSessionGeneration === generation;
+  try {
+    const initial = await readWebModeRuntimeState();
+    if (!initial.activeProvider || initial.openingProvider || initial.closeRequestId) throw new Error("EXPLORE_RELOAD_BUSY");
+    generation = await readKioskXSessionGeneration();
+    if (!generation || initial.lastOpenedXSessionGeneration !== generation) throw new Error("EXPLORE_RELOAD_STALE");
+    if (initial.activeProvider !== providerId) {
+      if (operation.cancelled) throw new Error("EXPLORE_RELOAD_CANCELLED");
+      await applyWebModeAction({ type: "open", provider: providerId }, { reloadOperation: operation });
+      // Resident open returns before the target is visible. Join its runner.
+      await webModeResidentOpenPromise;
+    }
+    const state = await readWebModeRuntimeState();
+    sessionId = state.lastOpenedRequestId;
+    if (!sessionId || !ownsSession(state) || await readKioskXSessionGeneration() !== generation) {
+      throw new Error(state.lastError || "EXPLORE_RELOAD_STALE");
+    }
+    await runWebModeCommand("reload", providerId, {
+      TIKPAL_RELOAD_SESSION_ID: sessionId,
+      TIKPAL_RELOAD_X_SESSION_GENERATION: generation,
+      // A resident reconciliation can briefly hold this lock after the page
+      // is already visible. Give a user-requested reload one bounded wait.
+      TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS: "8"
+    });
+    if (await readKioskXSessionGeneration() !== generation) throw new Error("EXPLORE_RELOAD_STALE");
+    const result = await updateWebModeRuntimeState(current => ownsSession(current) ? {
+      lastError: null,
+      residentProviders: { ...current.residentProviders, [providerId]: {
+        ...current.residentProviders?.[providerId], status: "active", lastError: null, updatedAt: new Date().toISOString()
+      } }
+    } : null);
+    if (!result.updated) throw new Error("EXPLORE_RELOAD_CANCELLED");
+    return await buildWebModeState();
+  } catch (error) {
+    logWebModeEntryStage("provider_reload_failed", { providerId, detail: error instanceof Error ? error.message : String(error) });
+    const message = `${WEB_MODE_PROVIDERS.find(provider => provider.id === providerId)?.label ?? providerId} did not become ready after reload`;
+    if (sessionId && await readKioskXSessionGeneration().catch(() => null) === generation) {
+      await updateWebModeRuntimeState(current => ownsSession(current) ? { lastError: message } : null);
+    }
+    throw new Error(message, { cause: error });
+  } finally {
+    if (webModeReloadOperation === operation) webModeReloadOperation = null;
+  }
+}
+
+async function applyWebModeAction(action, { receivedMonotonicMs = monotonicNowMs(), reloadOperation = null } = {}) {
   const type = String(action?.type ?? "").trim().toLowerCase();
   if (type === "close") {
+    if (webModeReloadOperation) webModeReloadOperation.cancelled = true;
     if (webModeClosePromise) { await webModeClosePromise; return await buildWebModeState(); }
     if (webModePanelCloseRequested) throw new Error("EXPLORE_CLOSE_BUSY");
     webModePanelCloseRequested = true;
@@ -15251,6 +15329,10 @@ async function applyWebModeAction(action, { receivedMonotonicMs = monotonicNowMs
       return await buildWebModeState();
     } finally { webModePanelCloseRequested = false; }
   }
+
+  if (type === "reload") return await reloadWebModeProvider(normalizeWebModeProviderId(action.provider, null));
+  if (webModeReloadOperation && ["open", "panel_mode", "reset_provider_profile", "proxy"].includes(type)
+    && (reloadOperation !== webModeReloadOperation || reloadOperation.cancelled)) throw new Error("EXPLORE_RELOAD_BUSY");
 
   if (type === "panel_mode") {
     if (!["expanded", "collapsed"].includes(action.panelMode)) throw new Error("PANEL_INVALID_MODE");
@@ -15419,7 +15501,7 @@ async function applyWebModeAction(action, { receivedMonotonicMs = monotonicNowMs
   }
 
   if (type !== "open") {
-    throw new Error("Explore action type must be open, close, reset_provider_profile, keyboard, proxy, or provider_text_scale");
+    throw new Error("Explore action type must be open, reload, close, reset_provider_profile, keyboard, proxy, or provider_text_scale");
   }
 
   const previousRuntimeState = await readWebModeRuntimeState();
@@ -15455,17 +15537,21 @@ async function applyWebModeAction(action, { receivedMonotonicMs = monotonicNowMs
   let requestProviderId = providerId;
   let providerOpenCommandStarted = false;
   let entryPreparationStarted = false;
+  if (reloadOperation?.cancelled) throw new Error("EXPLORE_RELOAD_CANCELLED");
   webModeOpenInFlight = true;
   try {
     recordWebModeSwitchTraceEvent(trace, "api_received", { timestamp: receivedMonotonicMs });
     logWebModeEntryStage("request_accepted", { requestId: openRequestId, providerId, xSessionGeneration });
-    await writeWebModeRuntimeState({
-      openingProvider: providerId,
-      openRequestId,
-      openStartedAt,
-      openXSessionGeneration: xSessionGeneration,
-      lastError: null,
-      closeRequestId: null
+    await updateWebModeRuntimeState(() => {
+      if (reloadOperation?.cancelled) throw new Error("EXPLORE_RELOAD_CANCELLED");
+      return {
+        openingProvider: providerId,
+        openRequestId,
+        openStartedAt,
+        openXSessionGeneration: xSessionGeneration,
+        lastError: null,
+        closeRequestId: null
+      };
     }, trace);
     recordWebModeSwitchTraceEvent(trace, "opening_provider_written");
     logWebModeEntryStage("request_persisted", { requestId: openRequestId, providerId, xSessionGeneration });
@@ -15588,7 +15674,7 @@ async function applyWebModeAction(action, { receivedMonotonicMs = monotonicNowMs
     const DIRECT_PROXY_IDS = new Set(["qq_music", "netease_music"]);
     let fallbackId = null;
     let fallbackBlockedReason = "no-candidate";
-    for (let attempt = 0; attempt < 3 && !fallbackId; attempt++) {
+    for (let attempt = 0; !reloadOperation && attempt < 3 && !fallbackId; attempt++) {
       if (attempt > 0) await new Promise((r) => setTimeout(r, 2000));
       const requestStatus = await readWebModeOpenRequestStatus(requestProviderId, openRequestId, xSessionGeneration);
       if (!requestStatus.current) {

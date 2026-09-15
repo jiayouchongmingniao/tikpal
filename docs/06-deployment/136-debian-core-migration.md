@@ -87,7 +87,6 @@ SSH is now enabled at boot; its prior disabled policy is saved in
 stopping the active SSH connection. Rollback uses
 `sudo bash /home/radxa/code/tikpal/deploy/debian/rollback-core.sh radxa`, followed
 by a reboot; it retains profiles, source, radio data and dependencies.
-
 ## Isolated Radxa branch — 2026-09-14
 
 `codex/radxa` was created from `b0ae9a6` in `/Users/pom/Code/tikpal-radxa`.
