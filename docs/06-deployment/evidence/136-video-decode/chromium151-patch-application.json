@@ -1,0 +1,92 @@
+[
+  {
+    "patch": "0001-Revert-media-gpu-v4l2-Remove-HEVC-code-for-stateful-.patch",
+    "passed": true,
+    "diagnostic": ""
+  },
+  {
+    "patch": "0002-HACK-media-Support-V4L2-video-decoder.patch",
+    "passed": true,
+    "diagnostic": ""
+  },
+  {
+    "patch": "0003-HACK-media-gpu-v4l2-Enable-V4L2-VEA.patch",
+    "passed": true,
+    "diagnostic": ""
+  },
+  {
+    "patch": "0004-media-gpu-v4l2-Gen-libv4l2_stubs.patch",
+    "passed": true,
+    "diagnostic": ""
+  },
+  {
+    "patch": "0005-media-gpu-v4l2-Support-libv4l2-plugins.patch",
+    "passed": true,
+    "diagnostic": ""
+  },
+  {
+    "patch": "0006-media-capture-linux-Support-libv4l2-plugins.patch",
+    "passed": true,
+    "diagnostic": ""
+  },
+  {
+    "patch": "0007-cld3-Avoid-unaligned-accesses.patch",
+    "passed": true,
+    "diagnostic": ""
+  },
+  {
+    "patch": "0008-media-gpu-v4l2-Use-POLLIN-for-pending-event.patch",
+    "passed": true,
+    "diagnostic": ""
+  },
+  {
+    "patch": "0009-media-capture-linux-Prefer-using-the-first-device.patch",
+    "passed": true,
+    "diagnostic": ""
+  },
+  {
+    "patch": "0010-Create-new-fence-when-there-s-no-in-fences.patch",
+    "passed": true,
+    "diagnostic": ""
+  },
+  {
+    "patch": "0011-HACK-ozone-wayland-Force-disable-implicit-external-s.patch",
+    "passed": true,
+    "diagnostic": ""
+  },
+  {
+    "patch": "0012-HACK-media-capture-linux-Allow-camera-without-suppor.patch",
+    "passed": true,
+    "diagnostic": ""
+  },
+  {
+    "patch": "0013-content-gpu-Only-depend-dri-for-X11.patch",
+    "passed": true,
+    "diagnostic": ""
+  },
+  {
+    "patch": "0014-media-gpu-sandbox-Only-depend-dri-for-X11.patch",
+    "passed": true,
+    "diagnostic": ""
+  },
+  {
+    "patch": "0015-ui-gfx-linux-Force-disabling-modifiers.patch",
+    "passed": true,
+    "diagnostic": ""
+  },
+  {
+    "patch": "0016-HACK-ui-x11-Fix-config-choosing-error-with-Mali-DDK.patch",
+    "passed": true,
+    "diagnostic": ""
+  },
+  {
+    "patch": "0017-ui-ozone-wayland-Prefer-rockchip-drm-render-node.patch",
+    "passed": true,
+    "diagnostic": ""
+  },
+  {
+    "patch": "0018-media-gpu-sandbox-Fix-compile-error.patch",
+    "passed": true,
+    "diagnostic": ""
+  }
+]

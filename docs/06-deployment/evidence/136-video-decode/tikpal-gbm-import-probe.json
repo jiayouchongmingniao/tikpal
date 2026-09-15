@@ -1,0 +1,85 @@
+{
+  "name": "gbm-import-probe",
+  "dir": "/tmp/tikpal-hwdecode-gbm-import-probe.HtJKD5",
+  "state": {
+    "time": 8.070091,
+    "ready": 4,
+    "frames": 198,
+    "dropped": 0
+  },
+  "props": [
+    {
+      "playerId": "674E1C06D528E7D3AD977CE8883289E7",
+      "properties": []
+    },
+    {
+      "playerId": "674E1C06D528E7D3AD977CE8883289E7",
+      "properties": [
+        {
+          "name": "kFrameUrl",
+          "value": "http://localhost:4173/assets/scenes/Midnight-Library.mp4"
+        },
+        {
+          "name": "kStartTime",
+          "value": "0.0"
+        },
+        {
+          "name": "kVideoTracks",
+          "value": "[{\"alpha mode\":\"is_opaque\",\"codec\":\"h264\",\"coded size\":\"2560x720\",\"color space\":{\"matrix\":\"BT709\",\"primaries\":\"BT709\",\"range\":\"LIMITED\",\"transfer\":\"BT709\"},\"encryption scheme\":\"Unencrypted\",\"has extra data\":true,\"hdr metadata\":\"unset\",\"natural size\":\"2560x720\",\"orientation\":\"0°\",\"profile\":\"h264 high\",\"visible rect\":\"0,0 2560x720\"}]"
+        },
+        {
+          "name": "kVideoDecoderName",
+          "value": "V4L2VideoDecoder"
+        },
+        {
+          "name": "kAudioTracks",
+          "value": "[]"
+        },
+        {
+          "name": "kFrameTitle",
+          "value": ""
+        },
+        {
+          "name": "kIsSingleOrigin",
+          "value": "true"
+        },
+        {
+          "name": "kBitrate",
+          "value": "2930563"
+        },
+        {
+          "name": "kMaxDuration",
+          "value": "29.666667"
+        },
+        {
+          "name": "kIsRangeHeaderSupported",
+          "value": "true"
+        },
+        {
+          "name": "kTotalBytes",
+          "value": "0xa5d333"
+        },
+        {
+          "name": "kIsVideoDecryptingDemuxerStream",
+          "value": "false"
+        },
+        {
+          "name": "kRendererName",
+          "value": "RendererImpl"
+        },
+        {
+          "name": "kIsStreaming",
+          "value": "false"
+        },
+        {
+          "name": "kIsPlatformVideoDecoder",
+          "value": "true"
+        },
+        {
+          "name": "kResolution",
+          "value": "2560x720"
+        }
+      ]
+    }
+  ]
+}

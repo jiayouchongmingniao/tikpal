@@ -1,0 +1,135 @@
+{
+  "name": "gbm-import-soak",
+  "dir": "/tmp/tikpal-hwdecode-gbm-import-soak.c9JZU4",
+  "state": {
+    "time": 10.133053,
+    "ready": 4,
+    "frames": 959,
+    "dropped": 1
+  },
+  "props": [
+    {
+      "playerId": "5453FED7488AA8FA8D58E793AA32D839",
+      "properties": []
+    },
+    {
+      "playerId": "5453FED7488AA8FA8D58E793AA32D839",
+      "properties": [
+        {
+          "name": "kFrameUrl",
+          "value": "http://localhost:4173/assets/scenes/Midnight-Library.mp4"
+        },
+        {
+          "name": "kStartTime",
+          "value": "0.0"
+        },
+        {
+          "name": "kVideoTracks",
+          "value": "[{\"alpha mode\":\"is_opaque\",\"codec\":\"h264\",\"coded size\":\"2560x720\",\"color space\":{\"matrix\":\"BT709\",\"primaries\":\"BT709\",\"range\":\"LIMITED\",\"transfer\":\"BT709\"},\"encryption scheme\":\"Unencrypted\",\"has extra data\":true,\"hdr metadata\":\"unset\",\"natural size\":\"2560x720\",\"orientation\":\"0°\",\"profile\":\"h264 high\",\"visible rect\":\"0,0 2560x720\"}]"
+        },
+        {
+          "name": "kVideoDecoderName",
+          "value": "V4L2VideoDecoder"
+        },
+        {
+          "name": "kAudioTracks",
+          "value": "[]"
+        },
+        {
+          "name": "kFrameTitle",
+          "value": ""
+        },
+        {
+          "name": "kIsSingleOrigin",
+          "value": "true"
+        },
+        {
+          "name": "kBitrate",
+          "value": "2930563"
+        },
+        {
+          "name": "kMaxDuration",
+          "value": "29.666667"
+        },
+        {
+          "name": "kIsRangeHeaderSupported",
+          "value": "true"
+        },
+        {
+          "name": "kTotalBytes",
+          "value": "0xa5d333"
+        },
+        {
+          "name": "kIsVideoDecryptingDemuxerStream",
+          "value": "false"
+        },
+        {
+          "name": "kRendererName",
+          "value": "RendererImpl"
+        },
+        {
+          "name": "kIsStreaming",
+          "value": "false"
+        },
+        {
+          "name": "kIsPlatformVideoDecoder",
+          "value": "true"
+        },
+        {
+          "name": "kResolution",
+          "value": "2560x720"
+        }
+      ]
+    }
+  ],
+  "samples": [
+    {
+      "time": 5.085248,
+      "ready": 4,
+      "frames": 126,
+      "dropped": 0
+    },
+    {
+      "time": 10.14355,
+      "ready": 4,
+      "frames": 248,
+      "dropped": 0
+    },
+    {
+      "time": 15.235708,
+      "ready": 4,
+      "frames": 370,
+      "dropped": 0
+    },
+    {
+      "time": 20.290542,
+      "ready": 4,
+      "frames": 491,
+      "dropped": 0
+    },
+    {
+      "time": 25.339437,
+      "ready": 4,
+      "frames": 612,
+      "dropped": 0
+    },
+    {
+      "time": 0,
+      "ready": 1,
+      "frames": 712,
+      "dropped": 1
+    },
+    {
+      "time": 5.025734,
+      "ready": 4,
+      "frames": 837,
+      "dropped": 1
+    },
+    {
+      "time": 10.079977,
+      "ready": 4,
+      "frames": 958,
+      "dropped": 1
+    }
+  ]
+}

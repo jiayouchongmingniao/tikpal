@@ -1,0 +1,28 @@
+minimumLimaVersion: 2.0.0
+base:
+- template:_images/ubuntu-22.04
+vmType: vz
+arch: x86_64
+cpus: 8
+memory: 20GiB
+disk: 20GiB
+mounts: []
+containerd:
+  system: false
+  user: false
+additionalDisks:
+- name: tikpal-chromium-build
+  format: true
+  fsType: ext4
+ssh:
+  forwardAgent: false
+  loadDotSSHPubKeys: false
+provision:
+- mode: system
+  script: |
+    #!/bin/sh
+    set -eu
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y git curl ca-certificates python3 xz-utils lsb-release file rsync
+    mkdir -p /mnt/lima-tikpal-chromium-build/work
+    chown {{.UID}}:$(id -g {{.User}}) /mnt/lima-tikpal-chromium-build/work

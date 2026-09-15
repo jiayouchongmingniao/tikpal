@@ -1,0 +1,105 @@
+# Isolated Chromium ARM64 builder
+
+This builds a candidate browser for ROCK 4D; it does not install or activate it.
+The script has prepared Chromium 151.0.7922.173 and passed GN generation with
+`--fail-on-unused-args` (39,047 targets). Ninja compilation is running with
+93,385 planned steps; a completed binary and device acceptance are still needed.
+
+## Current build host
+
+- Intel macOS 15.7.9, 32GiB RAM; Lima 2.2.0 installed with Homebrew.
+- VM `tikpal-chromium-builder`: Ubuntu 22.04 x86_64, VZ, 8 CPUs, 20GiB RAM.
+- VM system disk: 20GiB sparse image in `~/.lima/tikpal-chromium-builder`.
+- Build disk: 256GiB raw image at
+  `/Volumes/PSSD/tikpal-chromium-build/build.raw`, containing ext4.
+- Lima's `~/.lima/_disks/tikpal-chromium-build/datadisk` is a symlink to that image;
+  Lima metadata remains on the internal filesystem because PSSD is ExFAT.
+- Guest build location: `/mnt/lima-tikpal-chromium-build/work`.
+- No host directories or SSH agent are shared with the VM.
+
+The external disk is not reformatted. ExFAT cannot store the source tree's Unix
+metadata correctly, so source extraction and compilation take place inside ext4.
+The raw image reserves 256GiB and its first writes can require lengthy zeroing.
+Keep PSSD connected while the VM is running. Stop with:
+
+```sh
+limactl stop tikpal-chromium-builder
+```
+
+## Inputs and execution
+
+`../../chromium/patches/chromium-151-sources.json` locks the official tarball,
+Rockchip patches and tarball-build backport by SHA-256. The local NV12 import
+patch is also hashed. `args.gn` selects Linux ARM64, X11, V4L2 plugin decoding,
+H.264 codecs and a release build without debug symbols or ThinLTO.
+
+Copy the `deploy/debian/chromium-build` and `deploy/chromium/patches` directories
+into the VM preserving their relative paths. Then invoke:
+
+```sh
+bash inputs/deploy/debian/chromium-build/build.sh \
+  /mnt/lima-tikpal-chromium-build/work \
+  /mnt/lima-tikpal-chromium-build/work/chromium-151.0.7922.173.tar.xz
+```
+
+The script verifies the tarball, extracts into a new source directory, downloads
+and verifies pinned patches, installs build dependencies **inside the VM**, and
+runs GN and Ninja with six compile jobs. Output is appended to `work/build.log`.
+Successful preparation is marked separately so compilation can be resumed.
+A partial extraction or patch failure stops for inspection instead of silently
+mixing source versions. No packaging or device mutation is automated yet.
+
+Before deployment, package the runtime separately from the vendor browser,
+verify ARM64 ELF dependencies on Debian 12, and repeat decoder, resize, loop,
+software fallback and Explore tests without the diagnostic preload library.
+Back up browser profiles before opening them with a newer major version.
+
+## Current execution logs
+
+Host transcript: `/tmp/tikpal-chromium-build-session.log`.
+Guest transcript: `/mnt/lima-tikpal-chromium-build/work/build.log`.
+The host execution is wrapped in `caffeinate -i` for the lifetime of the build.
+Compilation is running, not yet accepted as a successful browser build.
+
+```sh
+limactl shell tikpal-chromium-builder -- tail -30 \
+  /mnt/lima-tikpal-chromium-build/work/build.log
+```
+
+## Runtime packaging checklist (source verified, execution pending)
+
+Chromium 151 moved its Linux installer inventory to
+`chrome/installer/linux/common/installer.py`. Use its binary/resource inventory
+and `gn desc out/Tikpal //chrome:chrome runtime_deps` together when staging the
+candidate. Runtime dependencies include generated DevTools files; do not assume
+that copying the executable alone produces a usable browser.
+
+- Stage in a new versioned directory; keep vendor Chromium installed and keep
+  staging separate from activation. Do not copy device profiles into a package.
+- Include the ARM64 browser, crashpad handler, sandbox, ICU data, scale-specific
+  resource packs, V8 snapshot, all built locales and built runtime libraries.
+  Preserve relative library/resource paths. Check the generated dependency list
+  for component data and Qt/ANGLE/SwiftShader libraries enabled by this build.
+- The build target is `chrome_sandbox`; the installed filename is
+  `chrome-sandbox`. Sandbox ownership/mode must be established on the target
+  rather than silently disabling the sandbox to make a test pass.
+- Record source manifest, local patch, GN arguments and per-file checksums in the
+  package. Inspect every ELF architecture and needed shared library before
+  starting it on ARM64 Debian 12. Do not execute ARM64 output on the x86 VM.
+- Start isolated tests with a fresh profile and distinct CDP port, without the
+  diagnostic preload. Keep production sessions running until controlled
+  activation is ready. Back up profiles before any major-version migration.
+- Validate hardware decoder identity, rendered frames, dropped frames, repeated
+  resize/loop, software fallback, Explore extension/window behavior and audio.
+  A successful link or `--version` does not establish hardware decode acceptance.
+
+The runtime dependency inventory was generated successfully in the VM at
+`/tmp/tikpal-chrome-runtime-deps.txt` during compilation. Regenerate after any GN
+configuration change and verify all staged files against the completed build.
+
+The current GN runtime inventory contains 5,171 entries (including generated
+DevTools resources and duplicates), all relative to the build output directory.
+It lists ANGLE, SwiftShader, Vulkan and both Qt shims. A copy is retained at
+`docs/06-deployment/evidence/136-video-decode/chromium151-runtime-deps.txt`.
+This inventory is a packaging input, not proof that compilation has produced all
+of those files. The separate sandbox target must also be included.

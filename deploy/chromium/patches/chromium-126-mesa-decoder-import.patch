@@ -1,0 +1,32 @@
+--- a/ui/gfx/linux/gbm_wrapper.cc
++++ b/ui/gfx/linux/gbm_wrapper.cc
+@@ -55,6 +55,15 @@
+ #if defined(MINIGBM)
+   return base::ScopedFD(gbm_bo_get_plane_fd(bo, plane));
+ #else
++  // Mesa may allocate on a render device different from the display device.
++  // Let GBM export its own handle using the correct device.
++  using GetFdForPlane = int (*)(struct gbm_bo*, int);
++  static const auto get_fd_for_plane = reinterpret_cast<GetFdForPlane>(
++      dlsym(RTLD_DEFAULT, "gbm_bo_get_fd_for_plane"));
++  if (get_fd_for_plane) {
++    return base::ScopedFD(get_fd_for_plane(bo, plane));
++  }
++
+   const int plane_count = GetPlaneCount(bo);
+   DCHECK(plane_count > 0 && plane < static_cast<size_t>(plane_count));
+ 
+--- a/gpu/command_buffer/service/shared_image/ozone_image_backing_factory.cc
++++ b/gpu/command_buffer/service/shared_image/ozone_image_backing_factory.cc
+@@ -301,7 +301,10 @@
+     return false;
+   }
+   auto* factory = ui::OzonePlatform::GetInstance()->GetSurfaceFactoryOzone();
+-  if (HasEquivalentBufferFormat(format) &&
++  // Imported decoder frames already have storage. Allocation support does not
++  // imply import support (or vice versa), notably for NV12 on Mesa/Panfrost.
++  // Keep the GL import capability check below and the actual import validation.
++  if (gmb_type != gfx::NATIVE_PIXMAP && HasEquivalentBufferFormat(format) &&
+       !factory->CanCreateNativePixmapForFormat(ToBufferFormat(format))) {
+     return false;
+   }

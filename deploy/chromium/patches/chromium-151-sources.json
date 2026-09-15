@@ -1,0 +1,96 @@
+{
+  "status": "source application verified; compilation pending",
+  "chromium_version": "151.0.7922.173",
+  "rockchip_repository": "https://github.com/JeffyCN/meta-rockchip",
+  "rockchip_commit": "b2393c23f16e6230025499015610d8c0018b1ea7",
+  "reference_recipe_repository": "https://github.com/OSSystems/meta-browser",
+  "reference_recipe_commit": "27755d0648758bac5b6b50143b080c22648a749b",
+  "cld3_revision": "b48dc46512566f5a2d41118c8c1116c4f96dc661",
+  "rockchip_patches": [
+    {
+      "path": "dynamic-layers/recipes-browser/chromium/chromium_151.0.7922/0001-Revert-media-gpu-v4l2-Remove-HEVC-code-for-stateful-.patch",
+      "sha256": "4d8fefaeb0c0a8876c76cf6328922a643ed76507d90fe5ad40ff56dd84d2795f"
+    },
+    {
+      "path": "dynamic-layers/recipes-browser/chromium/chromium_151.0.7922/0002-HACK-media-Support-V4L2-video-decoder.patch",
+      "sha256": "597d1c8ac2779ed184e8052a953f6a76b0587923df4469bc8a0fc3065e6968b9"
+    },
+    {
+      "path": "dynamic-layers/recipes-browser/chromium/chromium_151.0.7922/0003-HACK-media-gpu-v4l2-Enable-V4L2-VEA.patch",
+      "sha256": "c3440e95f052d6fe14caade1a77456e8a65ce3d877dd0bfd345b302dca7d915b"
+    },
+    {
+      "path": "dynamic-layers/recipes-browser/chromium/chromium_151.0.7922/0004-media-gpu-v4l2-Gen-libv4l2_stubs.patch",
+      "sha256": "acfede150f990f21ba0e989b77ca97d232c4a1cfa3bb378f11a409ca02decb18"
+    },
+    {
+      "path": "dynamic-layers/recipes-browser/chromium/chromium_151.0.7922/0005-media-gpu-v4l2-Support-libv4l2-plugins.patch",
+      "sha256": "db0ac9a7af22c9c21d8b9c65dbc014fb8ee2d4be0a8344af4787befb3fb4871c"
+    },
+    {
+      "path": "dynamic-layers/recipes-browser/chromium/chromium_151.0.7922/0006-media-capture-linux-Support-libv4l2-plugins.patch",
+      "sha256": "b045004b9f96bb7048d5c02946c024ce292de75930965a287925a916a6b9cf22"
+    },
+    {
+      "path": "dynamic-layers/recipes-browser/chromium/chromium_151.0.7922/0007-cld3-Avoid-unaligned-accesses.patch",
+      "sha256": "02be382f99b5fc5b8b06829544ae989cfff6ab745e56a1a4c09617a5273fea5f"
+    },
+    {
+      "path": "dynamic-layers/recipes-browser/chromium/chromium_151.0.7922/0008-media-gpu-v4l2-Use-POLLIN-for-pending-event.patch",
+      "sha256": "af2917e529526b9cca5c70791ad10fc23894a8d06daeab5b7a1ac55db2605517"
+    },
+    {
+      "path": "dynamic-layers/recipes-browser/chromium/chromium_151.0.7922/0009-media-capture-linux-Prefer-using-the-first-device.patch",
+      "sha256": "b9a9c83c683c8a8dce2198296c9d8457cbcdb8866aeac89b1ba9f23427a74089"
+    },
+    {
+      "path": "dynamic-layers/recipes-browser/chromium/chromium_151.0.7922/0010-Create-new-fence-when-there-s-no-in-fences.patch",
+      "sha256": "278016fbab20e1fa5401a761772eee74d444340b293a1c9dbaab7857d808522f"
+    },
+    {
+      "path": "dynamic-layers/recipes-browser/chromium/chromium_151.0.7922/0011-HACK-ozone-wayland-Force-disable-implicit-external-s.patch",
+      "sha256": "5008fc784baa4b3ad67e259f0b28abdf31297a41c383d0a501c680c0c0533631"
+    },
+    {
+      "path": "dynamic-layers/recipes-browser/chromium/chromium_151.0.7922/0012-HACK-media-capture-linux-Allow-camera-without-suppor.patch",
+      "sha256": "2c1d29cb9ed8db9ad9aa8cb7a5f74f1059bac2f2c8f45c47781da3d1a8e7a50e"
+    },
+    {
+      "path": "dynamic-layers/recipes-browser/chromium/chromium_151.0.7922/0013-content-gpu-Only-depend-dri-for-X11.patch",
+      "sha256": "082a5ad814fa6120bbcd4b0bfb69af8dae9cc74ee0e8724ee43a55cdcda71663"
+    },
+    {
+      "path": "dynamic-layers/recipes-browser/chromium/chromium_151.0.7922/0014-media-gpu-sandbox-Only-depend-dri-for-X11.patch",
+      "sha256": "66214909ffdd3d5eafa444d80411b1e80cab60ba0b3b50e0b5d6362a2a90432f"
+    },
+    {
+      "path": "dynamic-layers/recipes-browser/chromium/chromium_151.0.7922/0015-ui-gfx-linux-Force-disabling-modifiers.patch",
+      "sha256": "e018c50112aa785b6d89e3f1370d3749fac9c4cd88a9cea8151edee95f5a8d22"
+    },
+    {
+      "path": "dynamic-layers/recipes-browser/chromium/chromium_151.0.7922/0016-HACK-ui-x11-Fix-config-choosing-error-with-Mali-DDK.patch",
+      "sha256": "b7b73a1ac1ff3a115ed842bb4e4d6b388a9d0af29dbc1b641a6cf9625e153e3d"
+    },
+    {
+      "path": "dynamic-layers/recipes-browser/chromium/chromium_151.0.7922/0017-ui-ozone-wayland-Prefer-rockchip-drm-render-node.patch",
+      "sha256": "8015414ff922055a37c77b53bf97562bdc98285aee56b9e99413849aa0bc1db2"
+    },
+    {
+      "path": "dynamic-layers/recipes-browser/chromium/chromium_151.0.7922/0018-media-gpu-sandbox-Fix-compile-error.patch",
+      "sha256": "0343236289aa1d53058d0bd639180ed939c3037611d78f543de86273b4458a2f"
+    }
+  ],
+  "local_patch": {
+    "file": "chromium-151-mesa-decoder-import.patch",
+    "sha256": "5eb1343ffe4d173bd7a47e1a5833209cc7dd2f7f7d2759244378d19c496a3a9a"
+  },
+  "source_archive": {
+    "url": "https://commondatastorage.googleapis.com/chromium-browser-official/chromium-151.0.7922.173.tar.xz",
+    "sha256": "716e1b73f79911ac9a315642ebc989acd62c1cde366b11e7289f8500d4cd9120",
+    "bytes": 5853872864
+  },
+  "tarball_build_patch": {
+    "url": "https://raw.githubusercontent.com/OSSystems/meta-browser/27755d0648758bac5b6b50143b080c22648a749b/meta-chromium/recipes-browser/chromium/files/Backport-152-don-t-depends-on-histograms.xml-if-it-is-not-git-che.patch",
+    "sha256": "5f30d41085d6b5f8989128a38fcb7f3614a81cd627d71e0d22b367f8764ee708"
+  }
+}

@@ -1,0 +1,50 @@
+--- a/gpu/command_buffer/service/shared_image/ozone_image_backing_factory.cc
++++ b/gpu/command_buffer/service/shared_image/ozone_image_backing_factory.cc
+@@ -268,7 +268,10 @@
+     return false;
+   }
+   auto* factory = ui::OzonePlatform::GetInstance()->GetSurfaceFactoryOzone();
+-  if (!factory->CanCreateNativePixmapForFormat(format)) {
++  // Decoder NativePixmaps already have storage. Importing NV12 does not
++  // require GBM to allocate it; keep GL capability and actual import checks.
++  if (gmb_type != gfx::NATIVE_PIXMAP &&
++      !factory->CanCreateNativePixmapForFormat(format)) {
+     return false;
+   }
+ 
+--- a/ui/gfx/linux/gbm_wrapper.cc
++++ b/ui/gfx/linux/gbm_wrapper.cc
+@@ -332,7 +332,7 @@
+       uint32_t flags,
+       const std::vector<uint64_t>& modifiers) override {
+     // HACK: Force disabling modifiers
+-    if (true || modifiers.empty()) {
++    if ((true) || modifiers.empty()) {
+       return CreateBuffer(format, requested_size, flags);
+     }
+ 
+--- a/media/gpu/v4l2/v4l2_queue.cc
++++ b/media/gpu/v4l2/v4l2_queue.cc
+@@ -33,7 +33,9 @@
+ #define V4L2_MEMORY_FLAG_RESTRICTED 0x2
+ 
+ // Maximum number of requests that can be created.
++#if BUILDFLAG(IS_CHROMEOS)
+ constexpr size_t kMaxNumRequests = 32;
++#endif
+ 
+ gfx::Rect V4L2RectToGfxRect(const v4l2_rect& rect) {
+   return gfx::Rect(rect.left, rect.top, rect.width, rect.height);
+--- a/media/gpu/v4l2/v4l2_vda_helpers.cc
++++ b/media/gpu/v4l2/v4l2_vda_helpers.cc
+@@ -298,7 +298,9 @@
+ 
+   // For HEVC, we need to feed HW one frame at a time. This parses the bitstream
+   // to determine frame boundaries.
+-  h265_parser_->SetStream(base::span(data, size));
++  // SAFETY: The caller supplies an input fragment of size bytes at data,
++  // as required by the InputBufferFragmentSplitter pointer/size interface.
++  h265_parser_->SetStream(UNSAFE_BUFFERS(base::span(data, size)));
+   H265NALU nalu;
+   H265Parser::Result result;
+   *endpos = 0;
