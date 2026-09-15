@@ -1916,7 +1916,7 @@ const neteaseAutoPlayStateExpression = `(() => {
       seen.add(element);
       const label = actionTextOf(element);
       const isTransportPlay = transportPlay.test(String(element.className || ""));
-      if ((!includeAction.test(label) && !isTransportPlay) || excludeAction.test(label)) continue;
+      if ((!includeAction.test(label) && !isTransportPlay) || (!isTransportPlay && excludeAction.test(label))) continue;
       const rect = element.getBoundingClientRect();
       if (rect.width > 120 || rect.height > 120) continue;
       const score =

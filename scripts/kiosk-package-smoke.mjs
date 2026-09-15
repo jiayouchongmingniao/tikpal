@@ -3078,7 +3078,7 @@ sync_runtime_provider_pool_process_statuses ""
   assert(providerGuardSource.includes("neteaseAutoPlayStates"), "provider guard should track per-page NetEase auto-play attempts");
   assert(providerGuardSource.includes("claimNeteaseAutoPlayAttempt"), "provider guard should gate NetEase auto play before clicking");
   assert(providerGuardSource.includes("window.Howler?._howls"), "NetEase auto play should inspect Howler playback state");
-  assert(providerGuardSource.includes("playorPauseIconStyle") && providerGuardSource.includes("isTransportPlay ? -8"), "NetEase auto play should prefer the persistent transport control over recommendation-card play buttons");
+  assert(providerGuardSource.includes("playorPauseIconStyle") && providerGuardSource.includes("!isTransportPlay && excludeAction.test(label)") && providerGuardSource.includes("isTransportPlay ? -8"), "NetEase auto play should prefer the persistent transport control over recommendation-card play buttons");
   assert(providerGuardSource.includes("clickNeteasePlayButton"), "NetEase auto play should use a real X11 click for the selected play button");
   assert(providerGuardSource.includes("await runNeteaseAudioFeatures(targets)"), "provider guard main loop should call NetEase auto play behavior");
   assert(!providerGuardSource.includes("await runQqMvFullscreenFeatures(targets)"), "provider guard main loop should not call QQ MV native fullscreen behavior");

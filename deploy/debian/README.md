@@ -39,7 +39,8 @@ suspension after the configured idle delay. The process is resumed before its
 foreground switch, preserving the provider profile and login state while keeping
 background browser CPU/GPU work away from the active player.
 NetEase Cloud Music starts with an 8,192-frame Chromium output buffer on the
-constrained Radxa profile. This absorbs intermittent page or scheduler stalls
+constrained Radxa profile. The validated 48 kHz stereo output has about 0.7
+seconds of queued audio, absorbing intermittent page or scheduler stalls
 without adding a multi-second output queue;
 set `TIKPAL_WEB_MODE_NETEASE_MUSIC_AUDIO_BUFFER_SIZE=0` in `.env.kiosk` to use
 Chromium's normal buffer. The setting applies when that provider's Chromium
