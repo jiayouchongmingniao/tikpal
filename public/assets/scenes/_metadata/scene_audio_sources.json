@@ -8,7 +8,7 @@
     "output": "48 kHz stereo Opus Ogg, 96 kbps VBR, 15 minutes",
     "looping": "tail-to-head 0.8 second crossfade before long render",
     "loudness": "-23 LUFS integrated target, -1.5 dBTP ceiling",
-    "rainyWindowEnvelope": "45 seconds rain, 15 seconds quiet, with 2.5 second fades"
+    "rainyWindowEnvelope": "30 seconds rain, 15 seconds quiet, with 2.5 second fades"
   },
   "sources": [
     {
@@ -21,11 +21,16 @@
     },
     {
       "sceneId": "cloud-sunrise",
-      "audioFilename": "audio/cloud-sunrise-air-dae62d56.ogg",
-      "title": "a gentle breeze, wind 1",
-      "author": "mario1298 (Freesound)",
-      "sourceUrl": "https://pixabay.com/sound-effects/nature-a-gentle-breeze-wind-1-14813/",
-      "downloadedFilename": "freesound_community-a-gentle-breeze-wind-1-14813.mp3"
+      "mode": "visual-only",
+      "title": "Cloud Sunrise",
+      "reason": "The Cloud Sunrise scene intentionally has no ambient audio, so selecting it preserves the current music or input source.",
+      "replacedAudio": {
+        "audioFilename": "audio/cloud-sunrise-air-dae62d56.ogg",
+        "title": "a gentle breeze, wind 1",
+        "author": "mario1298 (Freesound)",
+        "sourceUrl": "https://pixabay.com/sound-effects/nature-a-gentle-breeze-wind-1-14813/",
+        "downloadedFilename": "freesound_community-a-gentle-breeze-wind-1-14813.mp3"
+      }
     },
     {
       "sceneId": "deep-blue-ocean",
@@ -47,12 +52,14 @@
     },
     {
       "sceneId": "rainy-window",
-      "audioFilename": "audio/rainy-window-gentle-rain-e038d6cb.ogg",
+      "audioFilename": "audio/rainy-window-gentle-rain-30s-74a3af80.ogg",
       "title": "Gentle Rain on Window for Sleep",
       "author": "Eryliaa",
       "sourceUrl": "https://pixabay.com/sound-effects/nature-gentle-rain-on-window-for-sleep-422420/",
       "downloadedFilename": "eryliaa-gentle-rain-on-window-for-sleep-422420.mp3",
-      "processing": "0.8 second tail-to-head crossfade, rendered as a 15 minute 48 kHz stereo Opus loop; 45 seconds rain then 15 seconds quiet with 2.5 second fades."
+      "processing": "Only the reviewed first 30 seconds are used; 0.8 second tail-to-head crossfade, rendered as a 15 minute 48 kHz stereo Opus loop; 30 seconds rain then 15 seconds quiet with 2.5 second fades.",
+      "sourceTrimStartSeconds": 0,
+      "sourceTrimEndSeconds": 30
     },
     {
       "sceneId": "vinyl-lounge",

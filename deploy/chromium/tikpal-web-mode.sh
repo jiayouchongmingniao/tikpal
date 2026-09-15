@@ -2710,15 +2710,78 @@ write_provider_friendly_error_status() {
   write_runtime_provider_status "$provider" "$status" "$message"
 }
 
+# Reload uses the committed visible session, not the now-cleared open request.
+runtime_reload_session_is_current() {
+  node - "$TIKPAL_WEB_MODE_STATE_PATH" "$TIKPAL_KIOSK_X_SESSION_GENERATION_PATH" "$1" <<'NODE'
+const fs = require("node:fs");
+const [statePath, generationPath, provider] = process.argv.slice(2);
+try {
+  const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
+  const generation = process.env.TIKPAL_RELOAD_X_SESSION_GENERATION;
+  process.exit(Boolean(process.env.TIKPAL_RELOAD_SESSION_ID) && Boolean(generation)
+    && state.activeProvider === provider && !state.openingProvider && !state.closeRequestId
+    && state.lastOpenedRequestId === process.env.TIKPAL_RELOAD_SESSION_ID
+    && state.lastOpenedXSessionGeneration === generation
+    && fs.readFileSync(generationPath, "utf8").trim() === generation ? 0 : 1);
+} catch { process.exit(1); }
+NODE
+}
+
+reload_provider_document() {
+  local provider="$1" port
+  port="$(provider_debug_port "$provider")"
+  runtime_reload_session_is_current "$provider" || return 1
+  # A marker prevents readiness from accepting the old document before navigation.
+  provider_cdp_command "$port" Runtime.evaluate '{"expression":"window.__tikpalReloadPending = true","returnByValue":true}' true || return 1
+  runtime_reload_session_is_current "$provider" || return 1
+  if [[ -n "$(provider_friendly_error_reason "$port")" ]] || ! provider_has_real_provider_page "$port"; then
+    runtime_reload_session_is_current "$provider" || return 1
+    navigate_provider_target_foreground "$port" "$(provider_url "$provider")"
+  else
+    runtime_reload_session_is_current "$provider" || return 1
+    provider_cdp_command "$port" Page.reload '{"ignoreCache":false}' ''
+  fi
+}
+
+reload_provider() {
+  local provider="$1"
+  # Hold the window lock only during the navigation command, so Exit stays usable
+  # while the readiness probe waits on a slow or unavailable network.
+  with_web_mode_lock reload_provider_document "$provider" || return 1
+  TIKPAL_RELOAD_CHECK=1 TIKPAL_WEB_MODE_STATE_PATH="$TIKPAL_WEB_MODE_STATE_PATH" \
+    TIKPAL_KIOSK_X_SESSION_GENERATION_PATH="$TIKPAL_KIOSK_X_SESSION_GENERATION_PATH" wait_for_provider_ready "$(provider_debug_port "$provider")" "$provider" || return 1
+  runtime_reload_session_is_current "$provider"
+}
+
 wait_for_provider_ready() {
   local provider_port="$1"
   local provider="${2:-}"
-  local timeout_seconds="${3:-$TIKPAL_WEB_MODE_PROVIDER_READY_TIMEOUT_SECONDS}"
+  local timeout_seconds="${3:-}"
+  # A visual app can keep document.readyState at "interactive" while
+  # non-critical client work continues. The bounded deadline still applies;
+  # visible DOM and the later X11 paint gate prove it is safe to reveal.
+  [[ -n "$timeout_seconds" ]] || timeout_seconds="$TIKPAL_WEB_MODE_PROVIDER_READY_TIMEOUT_SECONDS"
   node --experimental-websocket - "$provider_port" "$timeout_seconds" "$provider" <<'NODE'
 const [port, timeoutSeconds, provider] = process.argv.slice(2);
+const fs = require("node:fs");
+const reload = process.env.TIKPAL_RELOAD_CHECK === "1";
+function ownsReloadSession() {
+  if (!reload) return true;
+  try {
+    const state = JSON.parse(fs.readFileSync(process.env.TIKPAL_WEB_MODE_STATE_PATH, "utf8"));
+    const generation = process.env.TIKPAL_RELOAD_X_SESSION_GENERATION;
+    return state.activeProvider === provider && !state.openingProvider && !state.closeRequestId
+      && state.lastOpenedRequestId === process.env.TIKPAL_RELOAD_SESSION_ID
+      && state.lastOpenedXSessionGeneration === generation
+      && fs.readFileSync(process.env.TIKPAL_KIOSK_X_SESSION_GENERATION_PATH, "utf8").trim() === generation;
+  } catch { return false; }
+}
 const deadline = Date.now() + Math.max(1, Number(timeoutSeconds) || 18) * 1000;
 const readyExpression = `(() => {
-  if (!document.body || document.readyState !== "complete") return false;
+  if (${reload} && window.__tikpalReloadPending) return false;
+  if (!document.body) return false;
+  const documentReady = document.readyState === "complete" || document.readyState === "interactive";
+  if (!documentReady) return false;
   const textLength = String(document.body.innerText || "").replace(/\\s+/g, " ").trim().length;
   const candidates = Array.from(document.querySelectorAll("main,nav,header,button,a,input,[role='button'],audio,video")).slice(0, 200);
   const visibleCount = candidates.filter((element) => {
@@ -2758,6 +2821,7 @@ async function evaluate(wsUrl, expression) {
 (async () => {
   let stableChecks = 0;
   while (Date.now() < deadline) {
+    if (!ownsReloadSession()) process.exit(1);
     try {
       const response = await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(800) });
       const targets = await response.json();
@@ -3056,13 +3120,18 @@ NODE
 profile_has_widevine_cdm() {
   local profile_dir="$1"
   [[ -n "$profile_dir" && -d "$profile_dir/WidevineCdm" ]] || return 1
-  find "$profile_dir/WidevineCdm" -path "*/_platform_specific/linux_x64/libwidevinecdm.so" -type f -size +1000000c -print -quit 2>/dev/null | grep -q .
+  system_widevine_cdm_is_available "$profile_dir/WidevineCdm"
 }
 
 system_widevine_cdm_is_available() {
-  local cdm_dir="$1"
+  local cdm_dir="$1" platform
   [[ -n "$cdm_dir" && -d "$cdm_dir" ]] || return 1
-  find "$cdm_dir" -path "*/_platform_specific/linux_x64/libwidevinecdm.so" -type f -size +1000000c -print -quit 2>/dev/null | grep -q .
+  case "$(uname -m)" in
+    x86_64) platform=linux_x64 ;;
+    aarch64|arm64) platform=linux_arm64 ;;
+    *) return 1 ;;
+  esac
+  find "$cdm_dir" -path "*/_platform_specific/$platform/libwidevinecdm.so" -type f -size +1000000c -print -quit 2>/dev/null | grep -q .
 }
 
 seed_profile_widevine_cdm() {
@@ -5056,7 +5125,7 @@ profile_process_exists() {
     [[ "$command_line" == "$TIKPAL_CHROMIUM_BIN"* ]] && return 0
     executable_name="$(basename "$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)")"
     case "$executable_name" in
-      chrome|chromium|chromium-browser) return 0 ;;
+      chrome|chromium|chromium-browser|chromium-bin) return 0 ;;
     esac
   done < <(
     pgrep -f -- "--user-data-dir=$profile" 2>/dev/null || true
@@ -5574,7 +5643,7 @@ first_window_for_profile() {
       [[ "$command_line" == *" --type="* ]] && continue
       executable_name="$(basename "$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)")"
       case "$executable_name" in
-        chrome|chromium|chromium-browser) ;;
+        chrome|chromium|chromium-browser|chromium-bin) ;;
         *) continue ;;
       esac
       window="$(find_window_for_pid "$pid" || true)"
@@ -9657,6 +9726,11 @@ case "$web_mode_action" in
   guard-state)
     window_guard_state
     ;;
+  reload)
+    provider_id="${2:-}"
+    provider_ids | grep -Fx -- "$provider_id" >/dev/null || fail "Unknown provider: $provider_id"
+    reload_provider "$provider_id" || fail "$(provider_label "$provider_id") did not become ready after reload"
+    ;;
   reload-guard)
     provider_id="${2:-$(read_runtime_active_provider)}"
     provider_ids | grep -Fx -- "$provider_id" >/dev/null || fail "Unknown provider: $provider_id"
@@ -9726,6 +9800,6 @@ case "$web_mode_action" in
     with_web_mode_lock apply_proxy_settings "${2:-spotify}"
     ;;
   *)
-    fail "Usage: $0 open <provider>|prepare-entry <provider>|park-entry|close|close-full|guard-ota-activate|reset-profile <provider>|cleanup-warm|warm-pool|prewarm <provider>|reconcile <provider> [started-ms]|sync-status|refresh-guards|guard-state|reload-guard [provider]|stop-owned-guard <pid> <starttime>|restore-helper-owner|keyboard [show|hide|toggle]|proxy <provider>|--check"
+    fail "Usage: $0 open <provider>|reload <provider>|prepare-entry <provider>|park-entry|close|close-full|guard-ota-activate|reset-profile <provider>|cleanup-warm|warm-pool|prewarm <provider>|reconcile <provider> [started-ms]|sync-status|refresh-guards|guard-state|reload-guard [provider]|stop-owned-guard <pid> <starttime>|restore-helper-owner|keyboard [show|hide|toggle]|proxy <provider>|--check"
     ;;
 esac

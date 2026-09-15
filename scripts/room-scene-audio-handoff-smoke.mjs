@@ -86,6 +86,31 @@ async function run() {
       body: JSON.stringify({ target: "mpd", localTrackPath })
     });
     assert(libraryStart.body.playback.state === "playing", "Library precondition must be playing");
+
+    const cloudVisualOnly = await request("/api/v1/experience/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "set_mode", mode: "focus", sceneVideoId: "cloud-sunrise", sceneSoundEnabled: true })
+    });
+    assert(cloudVisualOnly.response.ok && cloudVisualOnly.body.sceneVideoId === "cloud-sunrise" && cloudVisualOnly.body.sceneSoundEnabled === false, "visual-only Cloud Sunrise must downgrade stale Scene Sound requests without an error");
+    const cloudVisualOnlyState = await request("/api/v1/system/state");
+    assert(cloudVisualOnlyState.body.playback.source === "mpd" && cloudVisualOnlyState.body.playback.state === "playing", "visual-only Cloud Sunrise must preserve the active Library playback");
+    const staleCloudSelection = await request("/api/v1/experience/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "set_scene", sceneVideoId: "cloud-sunrise", sceneSoundEnabled: true })
+    });
+    assert(staleCloudSelection.response.ok && staleCloudSelection.body.sceneSoundEnabled === false, "cached set_scene requests must safely select visual-only Cloud Sunrise");
+    const staleCloudSelectionState = await request("/api/v1/system/state");
+    assert(staleCloudSelectionState.body.playback.source === "mpd" && staleCloudSelectionState.body.playback.state === "playing", "cached Cloud Sunrise selection must preserve active Library playback");
+    const staleCloudSoundToggle = await request("/api/v1/experience/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "set_scene_sound", sceneVideoId: "cloud-sunrise", sceneSoundEnabled: true })
+    });
+    assert(staleCloudSoundToggle.response.ok && staleCloudSoundToggle.body.sceneSoundEnabled === false, "cached Scene Sound toggles must safely keep Cloud Sunrise visual-only");
+
+    await request("/api/v1/experience/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "set_mode", mode: "calm" })
+    });
     const libraryScene = await request("/api/v1/experience/actions", {
       method: "POST",
       body: JSON.stringify({ type: "set_scene", sceneVideoId: "rainy-window", sceneSoundEnabled: true })
@@ -104,6 +129,23 @@ async function run() {
     const restoredLibrary = await request("/api/v1/system/state");
     assert(restoredLibrary.body.playback.source === "mpd" && restoredLibrary.body.playback.state === "playing", "Hi-Fi must resume the saved Library track");
     assert(await handoffIsCleared(handoffPath), "Hi-Fi must consume the Library handoff");
+
+    await request("/api/v1/experience/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "set_mode", mode: "calm" })
+    });
+    await request("/api/v1/experience/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "set_scene", sceneVideoId: "rainy-window", sceneSoundEnabled: true })
+    });
+    const sceneToCloud = await request("/api/v1/experience/actions", {
+      method: "POST",
+      body: JSON.stringify({ type: "set_mode", mode: "focus", sceneVideoId: "cloud-sunrise", sceneSoundEnabled: true })
+    });
+    assert(sceneToCloud.response.ok && sceneToCloud.body.sceneSoundEnabled === false, "Cloud Sunrise must reject retained Scene Sound when moving from another scene");
+    const sceneToCloudState = await request("/api/v1/system/state");
+    assert(sceneToCloudState.body.playback.source === "scene" && sceneToCloudState.body.playback.state === "stopped", "Cloud Sunrise must stop the prior scene ambience instead of pairing it with the Cloud visual");
+    assert(await handoffIsCleared(handoffPath), "Cloud Sunrise must clear a prior scene handoff after stopping scene ambience");
 
     const radioStart = await request("/api/v1/audio/source", {
       method: "POST",

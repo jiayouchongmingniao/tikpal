@@ -1222,7 +1222,7 @@ static void remember_profile_identity(HelperState *state, const SurfaceResult *s
 }
 
 static bool wm_class_is_chromium(const SurfaceResult *surface) {
-  static const char *allowed[] = {"chromium", "chromium-browser", "google-chrome"};
+  static const char *allowed[] = {"chromium", "chromium-browser", "google-chrome", "tikpal-chromium"};
   if (!surface->class_property || surface->class_property->type != XCB_ATOM_STRING ||
       surface->class_property->format != 8 || !surface->class_instance[0] || !surface->class_name[0]) {
     return false;

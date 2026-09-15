@@ -903,13 +903,15 @@ export function AmbientScreen({
   async function handleSceneGallerySelect(video: BackgroundVideoSummary, mode: SceneGalleryMode) {
     onHudActivity();
     if (sceneGalleryPending) return;
+    const sceneSoundEnabledForVideo = Boolean(video.audioSrc);
 
     if (
       roomExperience.mode === mode
       && roomExperience.sceneVideoId === video.id
-      && sceneSoundEnabled
-      && playback.source === "scene"
-      && playback.state === "playing"
+      && (
+        (!sceneSoundEnabledForVideo && !sceneSoundEnabled)
+        || (sceneSoundEnabledForVideo && sceneSoundEnabled && playback.source === "scene" && playback.state === "playing")
+      )
     ) {
       closeSceneGallery();
       return;
@@ -920,8 +922,8 @@ export function AmbientScreen({
     try {
       await onExperienceAction(
         roomExperience.mode === mode
-          ? { type: "set_scene", sceneVideoId: video.id, sceneSoundEnabled: true }
-          : { type: "set_mode", mode, sceneVideoId: video.id, sceneSoundEnabled: true }
+          ? { type: "set_scene", sceneVideoId: video.id, sceneSoundEnabled: sceneSoundEnabledForVideo }
+          : { type: "set_mode", mode, sceneVideoId: video.id, sceneSoundEnabled: sceneSoundEnabledForVideo }
       );
       const selectedIndex = backgroundVideos.findIndex((entry) => entry.id === video.id);
       if (selectedIndex !== -1) setBackgroundVideoIndex(selectedIndex);

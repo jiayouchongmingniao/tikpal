@@ -438,7 +438,10 @@ export async function checkGuardOta(): Promise<GuardOtaStatus> {
 }
 
 export async function sendWebModeAction(action: WebModeActionRequest): Promise<WebModeState> {
-  const timeoutMs = action.type === "open"
+  // Reload may first wait for a resident switch (110s), then readiness (45s).
+  const timeoutMs = action.type === "reload"
+    ? 180000
+    : action.type === "open"
     ? 120000
     : action.type === "close"
       ? 30000

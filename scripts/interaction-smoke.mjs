@@ -5937,7 +5937,7 @@ try {
       })()
     `
   );
-  await expectEventually(client, "document.querySelector('[data-web-mode-provider=\"spotify\"]')?.classList.contains('is-active')", "Explore side panel establishes the current provider before a staged switch");
+  await expectEventually(client, "document.querySelector('[data-web-mode-provider=\"spotify\"]')?.classList.contains('is-current') && document.querySelector('[data-web-mode-provider=\"spotify\"] em')?.textContent === 'Current'", "Explore side panel labels the foreground provider Current before a staged switch");
   await evaluate(
     client,
     `
@@ -5970,21 +5970,20 @@ try {
       (() => {
         const target = document.querySelector('[data-web-mode-provider="youtube_music"]');
         const current = document.querySelector('[data-web-mode-provider="spotify"]');
-        return target?.classList.contains('is-connecting')
-          && target.querySelector('em')?.textContent === 'Connecting'
+        return target?.classList.contains('is-opening')
+          && target.querySelector('em')?.textContent === 'Opening'
           && current?.classList.contains('is-current')
           && current.querySelector('em')?.textContent === 'Current'
-          && !target.classList.contains('is-active')
-          && !current.classList.contains('is-active')
-          && document.querySelector('.web-mode-panel-footer')?.textContent === 'Connecting to YouTube Music';
+          && !target.classList.contains('is-current')
+          && document.querySelector('.web-mode-panel-footer')?.textContent === 'Opening YouTube Music';
       })()
     `,
-    "Explore side panel distinguishes Connecting from the previous Current provider"
+    "Explore side panel keeps the previous Current provider separate from an Opening target"
   );
   await expect(
     client,
     "getComputedStyle(document.querySelector('[data-web-mode-provider=\"youtube_music\"]'), '::after').animationName === 'webModeProviderSignalTrace'",
-    "Explore Connecting card runs the lightweight signal trace"
+    "Explore Opening card runs the lightweight signal trace"
   );
   await client.send("Emulation.setEmulatedMedia", {
     features: [{ name: "prefers-reduced-motion", value: "reduce" }]
@@ -5992,7 +5991,7 @@ try {
   await expect(
     client,
     "getComputedStyle(document.querySelector('[data-web-mode-provider=\"youtube_music\"]'), '::after').animationName === 'none'",
-    "Explore Connecting trace becomes static for reduced motion"
+    "Explore Opening trace becomes static for reduced motion"
   );
   await client.send("Emulation.setEmulatedMedia", { features: [] });
   await evaluate(
@@ -6005,7 +6004,7 @@ try {
       })()
     `
   );
-  await expectEventually(client, "document.querySelector('[data-web-mode-provider=\"youtube_music\"]')?.classList.contains('is-active')", "Explore side panel promotes the provider to Active only after switching finishes", 30, 150);
+  await expectEventually(client, "document.querySelector('[data-web-mode-provider=\"youtube_music\"]')?.classList.contains('is-current') && document.querySelector('[data-web-mode-provider=\"youtube_music\"] em')?.textContent === 'Current' && document.querySelector('[data-web-mode-provider=\"spotify\"] em')?.textContent === 'Ready'", "Explore side panel promotes the target to Current and parks the previous provider as Ready", 30, 150);
 
   await navigate(client, REMOTE_APP_URL);
   await expect(client, "document.querySelector('.remote-root') !== null", "portable remote renders on the remote port");
