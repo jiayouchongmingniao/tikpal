@@ -16,8 +16,16 @@ profile_has_widevine_cdm "$fixture/profile"
 fixture_arch=aarch64
 ! profile_has_widevine_cdm "$fixture/profile"
 mkdir -p "$fixture/profile/WidevineCdm/1/_platform_specific/linux_arm64"
-cp "$fixture/profile/WidevineCdm/1/_platform_specific/linux_x64/libwidevinecdm.so" "$fixture/profile/WidevineCdm/1/_platform_specific/linux_arm64/"
+cp "$fixture/profile/WidevineCdm/1/_platform_specific/linux_x64/libwidevinecdm.so" "$fixture/libwidevinecdm.so"
+ln -s "$fixture/libwidevinecdm.so" "$fixture/profile/WidevineCdm/1/_platform_specific/linux_arm64/libwidevinecdm.so"
 profile_has_widevine_cdm "$fixture/profile"
+mkdir "$fixture/seeded-profile"
+TIKPAL_WEB_MODE_SYSTEM_WIDEVINE_CDM_DIR="$fixture/profile/WidevineCdm"
+TIKPAL_WEB_MODE_SYSTEM_WIDEVINE_CDM_FALLBACK_DIR=""
+seed_profile_widevine_cdm "$fixture/seeded-profile"
+[[ -f "$fixture/seeded-profile/WidevineCdm/1/_platform_specific/linux_arm64/libwidevinecdm.so" ]]
+[[ ! -L "$fixture/seeded-profile/WidevineCdm/1/_platform_specific/linux_arm64/libwidevinecdm.so" ]]
+grep -Fqx "{\"Path\":\"$fixture/seeded-profile/WidevineCdm\"}" "$fixture/seeded-profile/latest-component-updated-widevine-cdm"
 fixture_arch=riscv64
 ! profile_has_widevine_cdm "$fixture/profile"
 fixture_arch=arm64

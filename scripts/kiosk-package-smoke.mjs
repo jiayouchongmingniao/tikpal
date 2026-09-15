@@ -1793,7 +1793,8 @@ sync_runtime_provider_pool_process_statuses ""
     env: {
       ...process.env,
       TIKPAL_KIOSK_SKIP_ENV_SOURCE: "1",
-      TIKPAL_WEB_MODE_SYSTEM_WIDEVINE_CDM_DIR: widevineSystemDir,
+      TIKPAL_WEB_MODE_SYSTEM_WIDEVINE_CDM_DIR: path.join(widevineSeedDir, "missing"),
+      TIKPAL_WEB_MODE_SYSTEM_WIDEVINE_CDM_FALLBACK_DIR: widevineSystemDir,
       TIKPAL_WIDEVINE_TARGET_PROFILE: widevineTargetProfile
     }
   });
@@ -1804,7 +1805,9 @@ sync_runtime_provider_pool_process_statuses ""
   } catch {
     widevineSeeded = false;
   }
-  assert(widevineSeeded, "system Widevine CDM should repair an empty provider profile");
+  assert(widevineSeeded, "fallback system Widevine CDM should repair an empty provider profile");
+  const widevineHint = JSON.parse(await readFile(path.join(widevineTargetProfile, "latest-component-updated-widevine-cdm"), "utf8"));
+  assert(widevineHint.Path === path.join(widevineTargetProfile, "WidevineCdm"), "system Widevine seeding should register the profile CDM hint");
   const proxyPolicySmoke = spawnSync("bash", ["-s"], {
     cwd: ROOT,
     input: `${webModeFunctions}

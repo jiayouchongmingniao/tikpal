@@ -80,6 +80,20 @@ uname -m                 # aarch64
 printf '%s %s\n' "$ID" "$VERSION_ID"  # debian 12
 ```
 
+### Chromium / Widevine 升级验收
+
+ARM64 Debian 的 `widevine-installer` 将 CDM 放在
+`/var/lib/widevine/WidevineCdm`，并由 `/usr/lib/chromium/WidevineCdm` 链接给
+Chromium。升级 Chromium 后保留 provider profile 和登录态；先确认该链接和
+`libwidevinecdm.so` 仍存在，再启动一个已登录 provider，验证
+`com.widevine.alpha` 和一段受保护音频可以实际播放。启动器会在系统链接被包
+更新移除时从上述稳定目录补齐 provider 的 `WidevineCdm`，因此检查通过时不需
+重新下载 CDM；补齐时需解析 Debian ARM64 CDM 指向目录外真实库的链接，并写入
+profile 的 `latest-component-updated-widevine-cdm` 提示文件，供 Chromium 在启动时
+登记模块。若库和提示文件均正常、但 `com.widevine.alpha` 仍被浏览器拒绝，说明该
+Chromium 构建未启用 ARM64 Widevine 注册；重新运行安装器不会解决，需升级到带此
+能力的 Chromium 后再验收。
+
 ## 发布前检查
 
 每次更新场景或电台资产后，在推送前执行：

@@ -44,6 +44,7 @@ fi
 : "${TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE:=auto}"
 : "${TIKPAL_AUDIO_ADAPT_BIN:=$APP_DIR/deploy/moode/tikpal-audio-adapt.sh}"
 : "${TIKPAL_WEB_MODE_SYSTEM_WIDEVINE_CDM_DIR:=/usr/lib64/chromium-browser/WidevineCdm}"
+: "${TIKPAL_WEB_MODE_SYSTEM_WIDEVINE_CDM_FALLBACK_DIR:=/var/lib/widevine/WidevineCdm}"
 : "${TIKPAL_WEB_MODE_PROFILE_ROOT:=$HOME/.config/tikpal-web-mode}"
 : "${TIKPAL_WEB_MODE_PROVIDER_SWITCH_MARKER_PATH:=/run/tikpal/provider-switch.pid}"
 : "${TIKPAL_WEB_MODE_PHYSICAL_REVEAL_STAMP_PATH:=/run/tikpal/last-physical-reveal.tsv}"
@@ -3199,6 +3200,17 @@ profile_has_widevine_cdm() {
   system_widevine_cdm_is_available "$profile_dir/WidevineCdm"
 }
 
+write_profile_widevine_cdm_hint() {
+  local profile_dir="$1" cdm_dir escaped_path hint_path temp_path
+  profile_has_widevine_cdm "$profile_dir" || return 0
+  cdm_dir="$profile_dir/WidevineCdm"
+  escaped_path="${cdm_dir//\\/\\\\}"
+  escaped_path="${escaped_path//\"/\\\"}"
+  hint_path="$profile_dir/latest-component-updated-widevine-cdm"
+  temp_path="${hint_path}.tmp-$$"
+  printf '{"Path":"%s"}\n' "$escaped_path" > "$temp_path" && mv "$temp_path" "$hint_path"
+}
+
 system_widevine_cdm_is_available() {
   local cdm_dir="$1" platform
   [[ -n "$cdm_dir" && -d "$cdm_dir" ]] || return 1
@@ -3207,27 +3219,35 @@ system_widevine_cdm_is_available() {
     aarch64|arm64) platform=linux_arm64 ;;
     *) return 1 ;;
   esac
-  find "$cdm_dir" -path "*/_platform_specific/$platform/libwidevinecdm.so" -type f -size +1000000c -print -quit 2>/dev/null | grep -q .
+  find -L "$cdm_dir" -path "*/_platform_specific/$platform/libwidevinecdm.so" -type f -size +1000000c -print -quit 2>/dev/null | grep -q .
 }
 
 seed_profile_widevine_cdm() {
   local target_profile="$1"
-  local source_profile source_provider
+  local source_profile source_provider system_cdm_dir
   [[ -n "$target_profile" && -d "$target_profile" ]] || return 0
-  profile_has_widevine_cdm "$target_profile" && return 0
+  if profile_has_widevine_cdm "$target_profile"; then
+    write_profile_widevine_cdm_hint "$target_profile"
+    return 0
+  fi
 
-  if system_widevine_cdm_is_available "$TIKPAL_WEB_MODE_SYSTEM_WIDEVINE_CDM_DIR"; then
-    if rm -rf "$target_profile/WidevineCdm" && cp -a "$TIKPAL_WEB_MODE_SYSTEM_WIDEVINE_CDM_DIR" "$target_profile/WidevineCdm"; then
+  for system_cdm_dir in \
+    "$TIKPAL_WEB_MODE_SYSTEM_WIDEVINE_CDM_DIR" \
+    "$TIKPAL_WEB_MODE_SYSTEM_WIDEVINE_CDM_FALLBACK_DIR"; do
+    system_widevine_cdm_is_available "$system_cdm_dir" || continue
+    if rm -rf "$target_profile/WidevineCdm" && cp -aL "$system_cdm_dir" "$target_profile/WidevineCdm"; then
       log "seeded Widevine CDM for $(basename "$target_profile") from system CDM"
+      write_profile_widevine_cdm_hint "$target_profile"
       return 0
     fi
-  fi
+  done
 
   for source_profile in "$TIKPAL_CHROMIUM_PROFILE_DIR" "$TIKPAL_WEB_MODE_PROFILE_ROOT/side-panel"; do
     [[ -n "$source_profile" && "$source_profile" != "$target_profile" ]] || continue
     profile_has_widevine_cdm "$source_profile" || continue
-    if rm -rf "$target_profile/WidevineCdm" && cp -a "$source_profile/WidevineCdm" "$target_profile/WidevineCdm"; then
+    if rm -rf "$target_profile/WidevineCdm" && cp -aL "$source_profile/WidevineCdm" "$target_profile/WidevineCdm"; then
       log "seeded Widevine CDM for $(basename "$target_profile") from $(basename "$source_profile")"
+      write_profile_widevine_cdm_hint "$target_profile"
       return 0
     fi
   done
@@ -3237,8 +3257,9 @@ seed_profile_widevine_cdm() {
     source_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/$source_provider"
     [[ "$source_profile" != "$target_profile" ]] || continue
     profile_has_widevine_cdm "$source_profile" || continue
-    if rm -rf "$target_profile/WidevineCdm" && cp -a "$source_profile/WidevineCdm" "$target_profile/WidevineCdm"; then
+    if rm -rf "$target_profile/WidevineCdm" && cp -aL "$source_profile/WidevineCdm" "$target_profile/WidevineCdm"; then
       log "seeded Widevine CDM for $(basename "$target_profile") from $source_provider"
+      write_profile_widevine_cdm_hint "$target_profile"
       return 0
     fi
   done < <(provider_ids)
