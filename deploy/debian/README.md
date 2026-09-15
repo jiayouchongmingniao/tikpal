@@ -38,8 +38,9 @@ On Debian, inactive Explore residents use CDP lifecycle freeze plus process
 suspension after the configured idle delay. The process is resumed before its
 foreground switch, preserving the provider profile and login state while keeping
 background browser CPU/GPU work away from the active player.
-NetEase Cloud Music starts with a 48,000-frame Chromium output buffer on the
-constrained Radxa profile. This absorbs intermittent page or scheduler stalls;
+NetEase Cloud Music starts with an 8,192-frame Chromium output buffer on the
+constrained Radxa profile. This absorbs intermittent page or scheduler stalls
+without adding a multi-second output queue;
 set `TIKPAL_WEB_MODE_NETEASE_MUSIC_AUDIO_BUFFER_SIZE=0` in `.env.kiosk` to use
 Chromium's normal buffer. The setting applies when that provider's Chromium
 process next starts.

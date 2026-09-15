@@ -1884,6 +1884,9 @@ const neteaseAutoPlayStateExpression = `(() => {
   }
 
   const includeAction = /(播放|^play$|\\bplay\\b|cmd-icon-play|icon-play|\\bbtnp\\b|\\bply\\b|u-icn-play)/i;
+  // NetEase's persistent transport control has no text or accessible label.
+  // Prefer it over similarly-labelled play buttons in recommendation cards.
+  const transportPlay = /playorPauseIconStyle/i;
   const excludeAction = /(暂停|暫停|pause|上一|下一|previous|prev|next|voice|volume|sound|mute|unmute|静音|音量|下载|download|登录|login|会员|vip|收藏|like|heart|favorite)/i;
   const clickableSelectors = [
     "button",
@@ -1912,11 +1915,12 @@ const neteaseAutoPlayStateExpression = `(() => {
       if (!element || seen.has(element) || !visible(element)) continue;
       seen.add(element);
       const label = actionTextOf(element);
-      if (!includeAction.test(label) || excludeAction.test(label)) continue;
+      const isTransportPlay = transportPlay.test(String(element.className || ""));
+      if ((!includeAction.test(label) && !isTransportPlay) || excludeAction.test(label)) continue;
       const rect = element.getBoundingClientRect();
       if (rect.width > 120 || rect.height > 120) continue;
       const score =
-        (/(^|\\s)cmd-button(\\s|$)|播放/i.test(label) ? 0 : 8) +
+        (isTransportPlay ? -8 : (/(^|\\s)cmd-button(\\s|$)|播放/i.test(label) ? 0 : 8)) +
         (rect.width >= 24 && rect.width <= 72 && rect.height >= 24 && rect.height <= 72 ? 0 : 4) +
         (rect.top < 64 ? 4 : 0);
       candidates.push({
