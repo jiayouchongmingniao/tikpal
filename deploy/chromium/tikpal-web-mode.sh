@@ -105,6 +105,7 @@ fi
 : "${TIKPAL_WEB_MODE_CROSSFADE_PCM_B:=tikpal_explore_b}"
 : "${TIKPAL_WEB_MODE_AUDIO_BUS_STATE_PATH:=$TIKPAL_WEB_MODE_PROFILE_ROOT/active-audio-bus}"
 : "${TIKPAL_WEB_MODE_LOCK_TIMEOUT_SECONDS:=2}"
+: "${TIKPAL_WEB_MODE_GUARD_TICK_TIMEOUT_SECONDS:=3}"
 : "${TIKPAL_WEB_MODE_X11_SYNC_WINDOW_OPS:=0}"
 : "${TIKPAL_WEB_MODE_X11_HELPER_MODE:=disabled}"
 : "${TIKPAL_WEB_MODE_X11_HOT_TRACE_NONBLOCKING:=1}"
@@ -6764,6 +6765,33 @@ guard_run_tick() {
   return "$status"
 }
 
+guard_tick_timeout_seconds() {
+  local timeout_seconds="$TIKPAL_WEB_MODE_GUARD_TICK_TIMEOUT_SECONDS"
+  [[ "$timeout_seconds" =~ ^[1-9][0-9]*$ && "$timeout_seconds" -le 15 ]] || timeout_seconds=3
+  printf '%s\n' "$timeout_seconds"
+}
+
+guard_run_tick_bounded() {
+  local provider_profile="$1" panel_profile="$2" timeout_seconds status=0
+  timeout_seconds="$(guard_tick_timeout_seconds)"
+  # A Guard tick owns web-mode.lock while it inspects the X11 surfaces. Run it
+  # in a separate session so a blocked helper, X11 call, or pipe read cannot
+  # retain that lock and reject every subsequent Explore action.
+  if command -v setsid >/dev/null 2>&1 && command -v timeout >/dev/null 2>&1; then
+    if setsid timeout --kill-after=1 "$timeout_seconds" \
+      "$SCRIPT_DIR/tikpal-web-mode.sh" guard-tick "$provider_profile" "$panel_profile"; then
+      return 0
+    else
+      status=$?
+    fi
+    if [[ "$status" == 124 || "$status" == 137 ]]; then
+      log "WARN: Explore window guard tick timed out after ${timeout_seconds}s"
+    fi
+    return "$status"
+  fi
+  guard_run_tick "$provider_profile" "$panel_profile"
+}
+
 guard_close_web_mode() {
   local lock_path="$TIKPAL_WEB_MODE_PROFILE_ROOT/web-mode.lock"
   local provider_window panel_window guard_close_fd=""
@@ -6968,6 +6996,9 @@ run_window_guard() {
   [[ -n "$provider_profile" ]] || is_enabled "$TIKPAL_WEB_MODE_PROVIDER_POOL" || return 0
   guard_pid="${BASHPID:-$$}"
   guard_starttime="$(window_guard_process_starttime "$guard_pid" || true)"
+  # A window guard is long-lived maintenance and must never inherit an outer
+  # foreground action's lock ownership or descriptor assumptions.
+  unset TIKPAL_WEB_MODE_LOCKED TIKPAL_WEB_MODE_GUARD_LOCKED
   x11_trace_control_event guard_started 0 \
     "pid=$guard_pid provider_profile=$provider_profile panel_profile=$panel_profile"
 
@@ -7010,7 +7041,7 @@ run_window_guard() {
         sleep "$(x11_helper_watch_interval_seconds)"
         continue
       fi
-      if ! guard_run_tick "$active_profile" "$panel_profile"; then
+      if ! guard_run_tick_bounded "$active_profile" "$panel_profile"; then
         {
           profile_process_exists "$active_profile" || return 0
           fast_ticks_remaining=4
@@ -7038,7 +7069,7 @@ run_window_guard() {
       sleep "$(x11_helper_watch_interval_seconds)"
       continue
     fi
-    if ! guard_run_tick "$provider_profile" "$panel_profile"; then
+    if ! guard_run_tick_bounded "$provider_profile" "$panel_profile"; then
       {
         profile_process_exists "$provider_profile" || return 0
         fast_ticks_remaining=4
@@ -9784,6 +9815,9 @@ case "$web_mode_action" in
     ;;
   guard)
     run_window_guard "${2:-}" "${3:-}"
+    ;;
+  guard-tick)
+    guard_run_tick "${2:-}" "${3:-}"
     ;;
   guard-state)
     window_guard_state
