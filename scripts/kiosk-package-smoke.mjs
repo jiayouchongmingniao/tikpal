@@ -2436,6 +2436,8 @@ sync_runtime_provider_pool_process_statuses ""
   assert(webModeScript.includes('open_provider "${2:-qq_music}"'), "web mode should default initial Explore launch to QQ Music");
   assert(webModeScript.includes("xdotool is required for Explore provider window detection"), "web mode --check should fail clearly when xdotool is missing");
   assert(webModeScript.includes("window-guard.pid"), "web mode should track the persistent window guard pid");
+  assert(webModeScript.includes("provider_chromium_process_stopped") && webModeScript.includes('[[ "$activity" == "frozen" || "$stopped_process" == "1" ]]'), "foreground switching should resume a Chromium tree that is stopped even if resident activity state is stale");
+  assert(webModeScript.includes('TIKPAL_WEB_MODE_FOREGROUND_STATE_COMMIT=1 write_runtime_provider_state "$provider"') && webModeScript.includes('write_runtime_provider_status "$provider" "active"'), "a committed foreground provider should clear its stale resident error status");
   assert(webModeScript.includes("TIKPAL_WEB_MODE_QQ_MV_AUTO_FULLSCREEN:=0"), "web mode should keep QQ MV auto fullscreen off by default");
   assert(webModeScript.includes("TIKPAL_WEB_MODE_QQ_AUDIO_PRIME:=1") && webModeScript.includes('TIKPAL_WEB_MODE_QQ_AUDIO_PRIME="$TIKPAL_WEB_MODE_QQ_AUDIO_PRIME"'), "web mode should enable and pass QQ Music audio prime by default");
   assert(webModeScript.includes("TIKPAL_WEB_MODE_QQ_MUSIC_AUTO_PLAY:=0") && webModeScript.includes('TIKPAL_WEB_MODE_QQ_MUSIC_AUTO_PLAY="$TIKPAL_WEB_MODE_QQ_MUSIC_AUTO_PLAY"'), "web mode should keep QQ Music one-shot auto play opt-in while passing the device setting to the provider guard");

@@ -2410,6 +2410,19 @@ provider_chromium_signal() {
   log_stage "provider_process_${signal,,} provider=$provider count=$count"
 }
 
+provider_chromium_process_stopped() {
+  local provider="$1" provider_profile pid command state
+  provider_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/$provider"
+  while IFS= read -r pid; do
+    [[ "$pid" =~ ^[0-9]+$ && -r "/proc/$pid/cmdline" && -r "/proc/$pid/status" ]] || continue
+    command="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
+    [[ "$command" == *"--user-data-dir=$provider_profile"* ]] || continue
+    state="$(sed -n 's/^State:[[:space:]]*\([A-Za-z]\).*/\1/p' "/proc/$pid/status" 2>/dev/null || true)"
+    [[ "$state" == "T" || "$state" == "t" ]] && return 0
+  done < <(ps -eo pid=,args= | awk -v profile="$provider_profile" 'index($0, "--user-data-dir=" profile) { print $1 }')
+  return 1
+}
+
 provider_cdp_lifecycle() {
   local provider="$1" state="$2" priority="${3:-maintenance}" response status=0
   provider_background_freeze_enabled || return 1
@@ -2424,11 +2437,14 @@ provider_cdp_lifecycle() {
 }
 
 resume_provider_for_foreground() {
-  local provider="$1" activity
+  local provider="$1" activity stopped_process=0
   TIKPAL_PROVIDER_FOREGROUND_LIFECYCLE_CONFIRMED=0
   activity="$(read_runtime_provider_activity "$provider")"
   TIKPAL_PROVIDER_FOREGROUND_ACTIVITY="$activity"
-  [[ "$activity" == "frozen" ]] || return 0
+  if provider_background_process_freeze_enabled && provider_chromium_process_stopped "$provider"; then
+    stopped_process=1
+  fi
+  [[ "$activity" == "frozen" || "$stopped_process" == "1" ]] || return 0
   if provider_background_process_freeze_enabled; then
     provider_chromium_signal "$provider" CONT || log "provider process resume found no Chromium processes for $provider"
   fi
@@ -5952,6 +5968,7 @@ commit_visible_provider_state() {
   started_ms="$(now_ms)"
   record_switch_trace_event runtime_state_commit_started
   TIKPAL_WEB_MODE_FOREGROUND_STATE_COMMIT=1 write_runtime_provider_state "$provider"
+  write_runtime_provider_status "$provider" "active"
   elapsed_ms="$(( $(now_ms) - started_ms ))"
   record_switch_trace_event runtime_state_commit_completed ok "" "$elapsed_ms"
   TIKPAL_X11_TRACE_NONBLOCKING=1 x11_trace_control_event runtime_state_committed 0 "provider=$provider"
