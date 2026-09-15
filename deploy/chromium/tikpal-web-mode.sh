@@ -181,10 +181,10 @@ fi
 : "${TIKPAL_WEB_MODE_QQ_MV_CINEMA_MODE:=1}"
 : "${TIKPAL_WEB_MODE_QQ_MV_AUTO_PLAY:=1}"
 : "${TIKPAL_WEB_MODE_NETEASE_AUTO_PLAY:=1}"
-# PipeWire's PulseAudio compatibility layer applies this only when Chromium
-# starts. Leave it at zero outside constrained devices so existing latency
-# characteristics remain unchanged.
-: "${TIKPAL_WEB_MODE_NETEASE_MUSIC_PULSE_LATENCY_MSEC:=0}"
+# Leave this at zero outside constrained devices so existing latency
+# characteristics remain unchanged. Chromium receives a positive value as an
+# explicit --audio-buffer-size flag, which survives its child-process setup.
+: "${TIKPAL_WEB_MODE_NETEASE_MUSIC_AUDIO_BUFFER_SIZE:=0}"
 
 if [[ -n "${TIKPAL_WEB_MODE_ONBOARD_ACTION_POSITION:-}" ]]; then
   TIKPAL_WEB_MODE_ONBOARD_POSITION="$TIKPAL_WEB_MODE_ONBOARD_ACTION_POSITION"
@@ -1892,31 +1892,28 @@ provider_url() {
   esac
 }
 
-provider_chromium_pulse_latency_msec() {
-  local provider="$1" latency_msec=""
+provider_chromium_audio_buffer_size() {
+  local provider="$1" buffer_size=""
   case "$provider" in
-    netease_music) latency_msec="$TIKPAL_WEB_MODE_NETEASE_MUSIC_PULSE_LATENCY_MSEC" ;;
+    netease_music) buffer_size="$TIKPAL_WEB_MODE_NETEASE_MUSIC_AUDIO_BUFFER_SIZE" ;;
     *) return 0 ;;
   esac
-  [[ "$latency_msec" =~ ^[0-9]+$ ]] || {
-    log "invalid Pulse latency for $provider; using Chromium default"
+  [[ "$buffer_size" =~ ^[0-9]+$ ]] || {
+    log "invalid Chromium audio buffer size for $provider; using Chromium default"
     return 0
   }
-  (( latency_msec > 0 && latency_msec <= 2000 )) || return 0
-  printf '%s\n' "$latency_msec"
+  (( buffer_size >= 256 && buffer_size <= 96000 )) || return 0
+  printf '%s\n' "$buffer_size"
 }
 
 launch_provider_chromium() {
   local provider="$1"
   shift
-  local pulse_latency_msec
-  pulse_latency_msec="$(provider_chromium_pulse_latency_msec "$provider")"
-  if [[ -n "$pulse_latency_msec" ]]; then
-    PULSE_LATENCY_MSEC="$pulse_latency_msec" DISPLAY="$TIKPAL_KIOSK_DISPLAY" \
-      "$TIKPAL_CHROMIUM_BIN" "$@"
-  else
-    DISPLAY="$TIKPAL_KIOSK_DISPLAY" "$TIKPAL_CHROMIUM_BIN" "$@"
-  fi
+  local audio_buffer_size
+  local -a audio_args=()
+  audio_buffer_size="$(provider_chromium_audio_buffer_size "$provider")"
+  [[ -z "$audio_buffer_size" ]] || audio_args+=("--audio-buffer-size=$audio_buffer_size")
+  DISPLAY="$TIKPAL_KIOSK_DISPLAY" "$TIKPAL_CHROMIUM_BIN" "${audio_args[@]}" "$@"
 }
 
 provider_label() {
