@@ -3487,6 +3487,18 @@ select {
   height: 46px;
 }
 
+@media (min-width: 901px) {
+  .ambient-transport.is-hifi .ambient-transport-play {
+    width: 96px;
+    height: 96px;
+  }
+
+  .ambient-transport.is-hifi .ambient-transport-play svg {
+    width: 39px;
+    height: 39px;
+  }
+}
+
 .ambient-transport-scene-previous svg {
   transform: scaleX(-1);
 }
