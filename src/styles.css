@@ -517,6 +517,27 @@ select {
   animation: none;
 }
 
+.app-root.is-render-constrained .is-spinning {
+  animation: none;
+}
+
+/* The full HiFi backdrop is designed for the x86 kiosk. On the constrained
+ * ARM profile, keep the track information but avoid compositing its SVG,
+ * glow, and layered full-screen gradients on every interaction frame. */
+.app-root.is-render-constrained .eq-visual-scene {
+  background: var(--hifi-theme-bg-a);
+}
+
+.app-root.is-render-constrained .eq-visual-backdrop,
+.app-root.is-render-constrained .hifi-ambient-visuals,
+.app-root.is-render-constrained .hifi-playback-presence {
+  display: none;
+}
+
+.app-root.is-render-constrained .hifi-cover-art {
+  box-shadow: none;
+}
+
 .app-root.is-render-constrained.is-quick-menu-active .ambient-screen {
   filter: none;
 }
@@ -1346,6 +1367,13 @@ select {
   animation: hifi-presence-sweep 7s linear infinite;
 }
 
+/* This comes after the playback-state rules so constrained kiosks cannot
+ * re-enable the composited presence effects through equal CSS specificity. */
+.app-root.is-render-constrained .eq-visual-scene.is-playing .hifi-playback-presence,
+.app-root.is-render-constrained .eq-visual-scene.is-playing .hifi-playback-presence::after {
+  animation: none;
+}
+
 .eq-visual-scene.is-playing .hifi-wave-line,
 .eq-visual-scene.is-playing .hifi-particle,
 .eq-visual-scene.is-playing .hifi-playback-presence,
@@ -1608,6 +1636,12 @@ select {
 .eq-visual-scene.is-playing .hifi-mini-eq span {
   animation: hifi-mini-eq-pulse var(--hifi-mini-eq-duration, 1.28s) cubic-bezier(0.37, 0, 0.28, 1) infinite alternate;
   animation-delay: var(--hifi-mini-eq-delay);
+}
+
+/* The lyric footer has 28 independent bars. Keep their still waveform on the
+ * constrained ARM profile, but do not schedule a compositor animation for each. */
+.app-root.is-render-constrained .eq-visual-scene.is-playing .hifi-mini-eq span {
+  animation: none;
 }
 
 .eq-visual-scene.is-paused .hifi-mini-eq span {
@@ -10825,6 +10859,16 @@ select {
 }
 
 @media (min-width: 1281px) and (max-height: 720px) {
+  .ambient-transport.is-hifi .ambient-transport-play {
+    width: 96px;
+    height: 96px;
+  }
+
+  .ambient-transport.is-hifi .ambient-transport-play svg {
+    width: 39px;
+    height: 39px;
+  }
+
   .settings-detail-panel[data-settings-detail="web-mode"] {
     gap: 10px;
     padding: 16px;

@@ -146,3 +146,13 @@ The helper reads the current output property, writes only an integer from 0 to
 status read is successful. This controls the X display pipeline, not a measured
 panel-backlight luminance value. If the property is absent or readback fails, the
 API remains unavailable and the UI must not present a successful brightness change.
+
+## Constrained runtime sampling — 2026-09-17
+
+Playback state remains fresh every three seconds, but network, display, output,
+DSP, thermal, uptime and multi-room probes are reused for 15 seconds by default.
+Set `TIKPAL_SYSTEM_SNAPSHOT_REFRESH_MS=15000` in `.env.kiosk` for the same
+behavior on the device. Any user action invalidates this system cache, so a
+brightness or source change still returns its updated state immediately. The ARM
+Hi-Fi view also freezes its 28 lyric-footer equalizer bars in the constrained
+render profile while keeping their static waveform visible.

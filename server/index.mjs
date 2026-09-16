@@ -208,6 +208,11 @@ const STATE_SNAPSHOT_REFRESH_MS_RAW = Number(process.env.TIKPAL_STATE_SNAPSHOT_R
 const STATE_SNAPSHOT_REFRESH_MS = Number.isFinite(STATE_SNAPSHOT_REFRESH_MS_RAW) && STATE_SNAPSHOT_REFRESH_MS_RAW >= 1000
   ? STATE_SNAPSHOT_REFRESH_MS_RAW
   : 3000;
+const SYSTEM_SNAPSHOT_REFRESH_MS_RAW = Number(process.env.TIKPAL_SYSTEM_SNAPSHOT_REFRESH_MS ?? 15_000);
+const SYSTEM_SNAPSHOT_REFRESH_MS = Number.isFinite(SYSTEM_SNAPSHOT_REFRESH_MS_RAW)
+  && SYSTEM_SNAPSHOT_REFRESH_MS_RAW >= STATE_SNAPSHOT_REFRESH_MS
+  ? SYSTEM_SNAPSHOT_REFRESH_MS_RAW
+  : 15_000;
 const HIFI_RUNTIME_RECOVERY_COOLDOWN_MS = parseEnvPositiveInteger(process.env.TIKPAL_HIFI_RUNTIME_RECOVERY_COOLDOWN_MS, 10_000);
 const HIFI_RUNTIME_RECOVERY_MUTATION_QUIET_MS = parseEnvPositiveInteger(process.env.TIKPAL_HIFI_RUNTIME_RECOVERY_MUTATION_QUIET_MS, 8000);
 const KIOSK_HEARTBEAT_STALE_MS_RAW = Number(process.env.TIKPAL_KIOSK_HEARTBEAT_STALE_MS ?? 30_000);
@@ -764,6 +769,7 @@ let displayBrightnessSnapshotCache = null;
 let displayBrightnessRefreshPromise = null;
 let displayBrightnessUnavailableUntilMs = 0;
 let tikpalStateSnapshotCache = null;
+let mpcSystemSnapshotCache = null;
 let tikpalStateSnapshotRefreshPromise = null;
 let tikpalStateSnapshotRefreshTimer = null;
 let tikpalStateSnapshotRefreshQueued = false;
@@ -3921,8 +3927,7 @@ async function getMpcSystemSnapshot(statusRaw, statsRaw) {
   };
 }
 
-function getCachedMpcSystemSnapshot(statusRaw, statsRaw) {
-  const cachedSystem = tikpalStateSnapshotCache?.state?.system ?? system;
+function buildCachedMpcSystemSnapshot(cachedSystem, statusRaw, statsRaw) {
   const status = applyTikpalPlaybackModeToStatus(parseMpcStatus(statusRaw));
   const stats = parseMpcStats(statsRaw);
   const scanRecentlyRequested = Date.now() - lastSystemLibraryScanRequestedAt < 15000;
@@ -3940,6 +3945,20 @@ function getCachedMpcSystemSnapshot(statusRaw, statsRaw) {
       scanning: status.scanning || scanRecentlyRequested
     }
   };
+}
+
+function getCachedMpcSystemSnapshot(statusRaw, statsRaw) {
+  return buildCachedMpcSystemSnapshot(tikpalStateSnapshotCache?.state?.system ?? system, statusRaw, statsRaw);
+}
+
+async function getThrottledMpcSystemSnapshot(statusRaw, statsRaw) {
+  const now = Date.now();
+  if (mpcSystemSnapshotCache && now - mpcSystemSnapshotCache.updatedAtMs < SYSTEM_SNAPSHOT_REFRESH_MS) {
+    return buildCachedMpcSystemSnapshot(mpcSystemSnapshotCache.value, statusRaw, statsRaw);
+  }
+  const snapshot = await getMpcSystemSnapshot(statusRaw, statsRaw);
+  mpcSystemSnapshotCache = { value: snapshot, updatedAtMs: Date.now() };
+  return snapshot;
 }
 
 function normalizeRadioCategory(value) {
@@ -9719,7 +9738,7 @@ async function getMpcSnapshot(options = {}) {
     : null;
   const trustedUpnpPlaybackMetadata = normalizeUpnpPlaybackMetadata(upnpPlaybackMetadata);
   const nextSystem = includeSlowRuntimeStatus
-    ? await getMpcSystemSnapshot(statusRaw, statsRaw)
+    ? await getThrottledMpcSystemSnapshot(statusRaw, statsRaw)
     : getCachedMpcSystemSnapshot(statusRaw, statsRaw);
   const useCachedSceneSourceRuntimeStatus = includeSourceRuntimeStatus && shouldUseCachedSceneSourceRuntimeStatus(file);
   const audio = includeSourceRuntimeStatus && !useCachedSceneSourceRuntimeStatus
@@ -11566,6 +11585,7 @@ function cacheTikpalStateSnapshot(state) {
 function invalidateTikpalStateSnapshotCache() {
   tikpalStateSnapshotGeneration += 1;
   tikpalStateSnapshotCache = null;
+  mpcSystemSnapshotCache = null;
 }
 
 async function refreshAirplayPlaybackMetadataForState(state, { force = false } = {}) {
@@ -11677,6 +11697,7 @@ async function refreshTikpalStateSnapshotAfterMutation(options = {}) {
   }
 
   tikpalStateSnapshotGeneration += 1;
+  mpcSystemSnapshotCache = null;
   try {
     const state = await collectTikpalStateSnapshot({
       includeSlowRuntimeStatus: false,
