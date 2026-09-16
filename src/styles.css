@@ -1402,7 +1402,7 @@ select {
   position: absolute;
   z-index: 2;
   top: 72px;
-  right: clamp(88px, 8vw, 180px);
+  right: clamp(360px, 18vw, 480px);
   bottom: 132px;
   left: clamp(640px, 42vw, 1080px);
   display: grid;
@@ -1416,6 +1416,7 @@ select {
 }
 
 .hifi-lyrics-heading {
+  width: 100%;
   min-width: 0;
 }
 
@@ -1426,8 +1427,32 @@ select {
   font-size: clamp(38px, 2.85vw, 48px);
   font-weight: 820;
   line-height: 1.08;
-  text-overflow: ellipsis;
   text-shadow: 0 12px 34px rgba(0, 0, 0, 0.26);
+  white-space: nowrap;
+}
+
+.hifi-title-marquee {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.hifi-title-marquee-track {
+  display: inline-flex;
+  align-items: center;
+  gap: 56px;
+  min-width: max-content;
+}
+
+.hifi-title-marquee-track.is-static {
+  min-width: 0;
+}
+
+.hifi-title-marquee-track.is-scrolling {
+  animation: hifi-title-marquee var(--hifi-title-marquee-duration, 48s) linear infinite;
+}
+
+.hifi-title-marquee-track > span {
   white-space: nowrap;
 }
 
@@ -1858,13 +1883,13 @@ select {
 }
 
 .hifi-now-playing-copy strong {
+  display: block;
   overflow: hidden;
   color: var(--theme-text);
   max-width: 100%;
   font-size: clamp(34px, 4vw, 68px);
   font-weight: 620;
   line-height: 0.98;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -3111,11 +3136,40 @@ select {
 }
 
 .ambient-transport-mode-copy strong {
+  display: block;
+  overflow: hidden;
   color: var(--room-accent-strong);
+  max-width: 100%;
   font-size: clamp(22px, 1.45vw, 30px);
   font-weight: 690;
   line-height: 1;
   text-shadow: 0 0 24px var(--room-accent-muted);
+  white-space: nowrap;
+}
+
+.ambient-now-playing-title-track {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.ambient-now-playing-title-track-track {
+  display: inline-flex;
+  align-items: center;
+  gap: 40px;
+  min-width: max-content;
+}
+
+.ambient-now-playing-title-track-track.is-static {
+  min-width: 0;
+}
+
+.ambient-now-playing-title-track-track.is-scrolling {
+  animation: ambient-title-marquee var(--ambient-title-marquee-duration, 36s) linear infinite;
+}
+
+.ambient-now-playing-title-track-track > span {
+  white-space: nowrap;
 }
 
 .ambient-transport-mode-copy span {
@@ -3126,6 +3180,21 @@ select {
   line-height: 1.2;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.ambient-transport.is-room-mode .ambient-transport-mode-copy .ambient-now-playing-title-track {
+  display: block;
+  overflow: hidden;
+  text-overflow: clip;
+}
+
+.ambient-transport.is-room-mode .ambient-transport-mode-copy .ambient-now-playing-title-track-track,
+.ambient-transport.is-room-mode .ambient-transport-mode-copy .ambient-now-playing-title-track-track > span {
+  overflow: visible;
+  color: inherit;
+  font: inherit;
+  line-height: inherit;
+  text-overflow: clip;
 }
 
 .ambient-screen:not([data-room-mode="hifi"]) .ambient-lyrics-layer {
@@ -9582,6 +9651,26 @@ select {
 
   100% {
     transform: translate3d(calc(-50% - 28px), 0, 0);
+  }
+}
+
+@keyframes hifi-title-marquee {
+  0% {
+    transform: translate3d(0, 0, 0);
+  }
+
+  100% {
+    transform: translate3d(calc(-50% - 28px), 0, 0);
+  }
+}
+
+@keyframes ambient-title-marquee {
+  0% {
+    transform: translate3d(0, 0, 0);
+  }
+
+  100% {
+    transform: translate3d(calc(-50% - 20px), 0, 0);
   }
 }
 

@@ -4,6 +4,7 @@ import { useI18n } from "../i18n";
 import { formatDuration, formatSampleRate } from "../mockState";
 import { getPlaybackDisplayTruth } from "../playbackTruth";
 import type { AudioState, FontTheme, HifiEqPresetId, PlaybackSummary, SystemState } from "../types";
+import { OverflowMarquee } from "./OverflowMarquee";
 
 export interface HifiLyricsPanelLine {
   id: string;
@@ -336,7 +337,7 @@ export function EqVisualScene({ playback, audio, system, fontTheme, lyricsPanel,
         {!hasLyricsPanel && !isRecognizingLyrics && !hasUnavailableLyrics ? (
             <div className="hifi-now-playing-copy" data-hifi-track-info>
               <span>{t("hifi.nowPlaying")}</span>
-              <strong>{displayedTitle}</strong>
+              <strong><OverflowMarquee text={displayedTitle} className="hifi-title-marquee" trackClassName="hifi-title-marquee-track" durationVariable="--hifi-title-marquee-duration" minDuration={20} maxDuration={72} /></strong>
               {displayedMetadata ? <em>{displayedMetadata}</em> : null}
               <div className="hifi-now-playing-meta" aria-label={t("hifi.playbackDetails")}>
                 <span>{playbackTruth.sourceLabel}</span>
@@ -351,7 +352,7 @@ export function EqVisualScene({ playback, audio, system, fontTheme, lyricsPanel,
       {isRecognizingLyrics ? (
         <div className="hifi-lyrics-recognizing" data-hifi-track-info>
           <header className="hifi-lyrics-heading">
-            <strong>{trackHeading}</strong>
+            <strong><OverflowMarquee text={trackHeading} className="hifi-title-marquee" trackClassName="hifi-title-marquee-track" durationVariable="--hifi-title-marquee-duration" minDuration={20} maxDuration={72} /></strong>
           </header>
           <div className="hifi-lyrics-recognizing-status">
             <span className="hifi-lyrics-recognizing-spinner" aria-hidden="true" />
@@ -362,14 +363,14 @@ export function EqVisualScene({ playback, audio, system, fontTheme, lyricsPanel,
       {hasUnavailableLyrics ? (
         <div className="hifi-lyrics-recognized" data-hifi-track-info>
           <header className="hifi-lyrics-heading">
-            <strong>{[lyricsTitle || displayedTitle, lyricsArtist || playbackTruth.artist].filter(Boolean).join(" - ")}</strong>
+            <strong><OverflowMarquee text={[lyricsTitle || displayedTitle, lyricsArtist || playbackTruth.artist].filter(Boolean).join(" - ")} className="hifi-title-marquee" trackClassName="hifi-title-marquee-track" durationVariable="--hifi-title-marquee-duration" minDuration={20} maxDuration={72} /></strong>
           </header>
         </div>
       ) : null}
       {hasLyricsPanel && visibleLyricsPanel ? (
         <aside className={`hifi-lyrics-panel ${visibleLyricsPanel.synced ? "is-synced" : "is-static"}`} aria-label={t("settings.lyrics")} data-hifi-lyrics-panel>
           <header className="hifi-lyrics-heading" data-hifi-track-info>
-            <strong>{trackHeading}</strong>
+            <strong><OverflowMarquee text={trackHeading} className="hifi-title-marquee" trackClassName="hifi-title-marquee-track" durationVariable="--hifi-title-marquee-duration" minDuration={20} maxDuration={72} /></strong>
           </header>
           <div
             className="hifi-lyrics-wall"

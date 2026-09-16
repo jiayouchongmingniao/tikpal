@@ -4,6 +4,7 @@ import type { LucideIcon } from "lucide-react";
 import { fetchBackgroundVideos, fetchSceneContext } from "../api/tikpalClient";
 import { EqVisualScene, type HifiLyricsPanel } from "./EqVisualScene";
 import { FlameScene } from "./FlameScene";
+import { OverflowMarquee } from "./OverflowMarquee";
 import { SceneAudioTransport } from "./SceneAudioTransport";
 import { useSceneRenderBudget } from "../hooks/useSceneRenderBudget";
 import { useI18n } from "../i18n";
@@ -2059,7 +2060,9 @@ export function AmbientScreen({
       >
         <div className="ambient-transport-main">
           <div className="ambient-transport-mode-copy ambient-now-playing" aria-live="polite" data-ambient-now-playing>
-            <strong>{nowPlayingTitle}</strong>
+            <strong>
+              <OverflowMarquee text={nowPlayingTitle} className="ambient-now-playing-title-track" trackClassName="ambient-now-playing-title-track-track" durationVariable="--ambient-title-marquee-duration" minDuration={18} maxDuration={60} />
+            </strong>
             <span>{nowPlayingDetail}</span>
           </div>
           {!isHifiMode ? (

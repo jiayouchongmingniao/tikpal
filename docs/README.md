@@ -65,6 +65,7 @@ This directory is the source of truth for Tikpal product, UX, visual, architectu
 | [Provider Guard OTA v1](06-deployment/provider-guard-ota-v1.md) | Current reference | Signed, device-independent R2 Provider Guard updates, activation, rollback, and release procedure. |
 | [场景环境音与 P2 体验交付（207）](06-deployment/ambient-p2-207-20260912.md) | Acceptance baseline | 场景音/Hi-Fi 互斥交接、P2 行为、多语言、构建检查与 207 窄部署验收边界。 |
 | [207 可迁移基线 v1](06-deployment/207-portability-baseline-v1.md) | Current reference | 207 分支的源码、LFS 场景资产和电台 SQLite 种子，以及 ARM/其他平台迁移时必须重新建立的硬件与私有运行状态。 |
+| [102 Hi-Fi 标题溢出滚动 v1](06-deployment/102-hifi-title-overflow-marquee-v1.md) | Acceptance baseline | 真实宽度驱动的 Hi-Fi 标题滚动、102 现场验收与回滚边界。 |
 | [Raspberry Pi kiosk deploy v1](06-deployment/raspberry-pi-kiosk-deploy-v1.md) | Current reference | Pi sync, systemd install, Chromium kiosk launch, verification, and rollback. |
 | [Gentoo kiosk deploy v1](06-deployment/gentoo-kiosk-deploy-v1.md) | Current reference | Gentoo systemd migration, physical display, Portage audio/kiosk setup, Explore provider validation, and rollback. |
 | [Gentoo 207 constrained kiosk v1](06-deployment/gentoo-207-constrained-kiosk-v1.md) | Current reference | Weak-GPU/EVDI render profile, CPU thermal scene guard, Provider lifecycle freezing, governor, diagnostics, and physical acceptance boundary. |
