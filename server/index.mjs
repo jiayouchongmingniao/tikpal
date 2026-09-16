@@ -90,6 +90,7 @@ const RADIO_XRUN_GRACE_MS = parseEnvPositiveInteger(process.env.TIKPAL_RADIO_XRU
 const RADIO_XRUN_WINDOW_MS = parseEnvPositiveInteger(process.env.TIKPAL_RADIO_XRUN_WINDOW_MS, 45_000);
 const RADIO_XRUN_SKIP_THRESHOLD = parseEnvPositiveInteger(process.env.TIKPAL_RADIO_XRUN_SKIP_THRESHOLD, 4);
 const RADIO_XRUN_LOG_TAIL_BYTES = parseEnvPositiveInteger(process.env.TIKPAL_RADIO_XRUN_LOG_TAIL_BYTES, 32_768);
+const RADIO_LOW_BANDWIDTH_VARIANTS = parseRadioLowBandwidthVariants(process.env.TIKPAL_RADIO_LOW_BANDWIDTH_VARIANTS);
 const KIOSK_AUDIO_RELEASE_COMMAND = process.env.TIKPAL_KIOSK_AUDIO_RELEASE_COMMAND ?? "";
 const KIOSK_AUDIO_RELEASE_SETTLE_MS = parseEnvPositiveInteger(process.env.TIKPAL_KIOSK_AUDIO_RELEASE_SETTLE_MS, 250);
 const AUDIO_READY_COMMAND = process.env.TIKPAL_AUDIO_READY_COMMAND ?? "";
@@ -660,6 +661,35 @@ function parseEnvIntegerList(value, fallback) {
     .map((entry) => parseEnvPositiveInteger(entry.trim(), null))
     .filter((entry) => Number.isFinite(entry));
   return parsed.length > 0 ? parsed : fallback;
+}
+
+function parseRadioLowBandwidthVariants(value) {
+  if (!String(value ?? "").trim()) return new Map();
+
+  try {
+    const parsed = JSON.parse(value);
+    if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") return new Map();
+
+    return new Map(Object.entries(parsed).flatMap(([sourceUri, rawVariant]) => {
+      const normalizedSourceUri = String(sourceUri ?? "").trim();
+      const variant = typeof rawVariant === "string"
+        ? { uri: rawVariant }
+        : rawVariant && typeof rawVariant === "object" && !Array.isArray(rawVariant)
+          ? rawVariant
+          : null;
+      const uri = String(variant?.uri ?? "").trim();
+      if (!isStreamUri(normalizedSourceUri) || !isStreamUri(uri) || uri === normalizedSourceUri) return [];
+
+      const bitrateKbps = Number(variant?.bitrateKbps);
+      return [[normalizedSourceUri, {
+        uri,
+        bitrateKbps: Number.isFinite(bitrateKbps) && bitrateKbps > 0 ? Math.round(bitrateKbps) : null,
+        codec: String(variant?.codec ?? "").trim() || null
+      }]];
+    }));
+  } catch {
+    return new Map();
+  }
 }
 
 function parseEnvPathList(value) {
@@ -3949,6 +3979,28 @@ function buildMpcRadioStationSummary(row) {
     _sourceOrder: sourceOrder,
     _categorySort: categorySort
   });
+}
+
+function buildLowBandwidthRadioStationVariant(station, sourceUri) {
+  const variant = RADIO_LOW_BANDWIDTH_VARIANTS.get(String(sourceUri ?? "").trim());
+  if (!station || !variant) return null;
+
+  const bitrateKbps = variant.bitrateKbps ?? station.bitrateKbps ?? null;
+  const codec = variant.codec ?? station.codec ?? null;
+  const statusBits = [station.categoryLabel, station.broadcaster];
+  if (bitrateKbps) statusBits.push(`${bitrateKbps} kbps`);
+  if (codec) statusBits.push(codec);
+  statusBits.push("Direct fallback");
+
+  return {
+    uri: variant.uri,
+    station: {
+      ...station,
+      bitrateKbps,
+      codec,
+      secondaryStatus: statusBits.filter(Boolean).join(" · ")
+    }
+  };
 }
 
 function sortRadioStations(stations) {
@@ -10291,6 +10343,26 @@ async function autoAdvanceMpcRadioStation(currentUri, reason = "radio stream fai
   }
 }
 
+async function switchMpcRadioToLowBandwidthVariant(station, sourceUri) {
+  const variant = buildLowBandwidthRadioStationVariant(station, sourceUri);
+  if (!variant) return false;
+
+  try {
+    console.warn(`tikpal-api switching Radio to low-bandwidth variant for ${station.id ?? sourceUri}`);
+    cacheActiveMpcRadioStation(variant.station, variant.uri);
+    await startRadioStreamUri(variant.uri, getFastRadioSwitchOptions());
+    cacheActiveMpcRadioStation(variant.station, variant.uri);
+    resetMpcRadioWeakNetworkMonitor(variant.station.id ?? null, variant.uri);
+    await rememberActiveRadioStationSource(variant.station);
+    scheduleMpcRadioLatePlayNudges(variant.uri);
+    await refreshTikpalStateSnapshotAfterMutation({ includeSourceRuntimeStatus: true });
+    return true;
+  } catch (error) {
+    console.warn(`tikpal-api low-bandwidth Radio fallback failed: ${error instanceof Error ? error.message : "unknown error"}`);
+    return false;
+  }
+}
+
 async function tryAutoAdvanceFailedMpcRadio(targetUri, currentUri, statusRaw) {
   if (currentUri !== targetUri || !getMpcRadioStreamFailure(statusRaw)) {
     return false;
@@ -10356,6 +10428,12 @@ function recoverWeakNetworkMpcRadioIfNeeded(snapshot) {
     if (!noteMpcRadioXrunLines(stationId, currentUri, recentMpdLogLines)) return false;
     if (await shouldSuspendMpcRadioBackgroundRecovery()) return false;
     if (sourceSwitchInFlightCount > 0) return false;
+
+    const stations = await getAvailableRadioStations("all");
+    const activeStation = stationId
+      ? stations.find((station) => station.id === stationId) ?? findActiveRadioStationFromList(currentUri, stations)
+      : findActiveRadioStationFromList(currentUri, stations);
+    if (await switchMpcRadioToLowBandwidthVariant(activeStation, currentUri)) return true;
 
     return await autoAdvanceMpcRadioStation(currentUri, "repeated decoder/xrun stalls", { currentStationId: stationId });
   })()

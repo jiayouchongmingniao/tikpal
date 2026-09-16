@@ -1646,6 +1646,7 @@ async function runMpcHifiRuntimePlaybackRecoverySmoke() {
   const webModeStatePath = path.join(workspace, "web-mode-state.json");
   const playbackModeStatePath = path.join(workspace, "playback-mode-state.json");
   const radioUri = "http://radio.example/runtime-restore";
+  const lowBandwidthRadioUri = "http://radio.example/runtime-restore-low";
   const otherRadioUri = "http://radio.example/runtime-other";
   const rememberedTrackPath = "Focus/Lo-fi Ambient/FASSounds - Good Night - Lofi Cozy Chill Music - 02m27s - Lo-fi.mp3";
   const fakeMpcTracks = [
@@ -1821,6 +1822,9 @@ if (process.argv.join(" ").includes("cfg_radio")) {
       TIKPAL_RADIO_XRUN_GRACE_MS: "500",
       TIKPAL_RADIO_XRUN_WINDOW_MS: "5000",
       TIKPAL_RADIO_XRUN_SKIP_THRESHOLD: "3",
+      TIKPAL_RADIO_LOW_BANDWIDTH_VARIANTS: JSON.stringify({
+        [radioUri]: { uri: lowBandwidthRadioUri, bitrateKbps: 64, codec: "AAC" }
+      }),
       TIKPAL_HIFI_RUNTIME_RECOVERY_COOLDOWN_MS: "1000",
       TIKPAL_HIFI_RUNTIME_RECOVERY_MUTATION_QUIET_MS: "1",
       TIKPAL_STATE_SNAPSHOT_REFRESH_MS: "1000"
@@ -1932,34 +1936,34 @@ if (process.argv.join(" ").includes("cfg_radio")) {
     assert(fakeState.currentFile === radioUri, "mpc Radio background recovery should not auto-advance while Explore is active");
     assert(fakeState.switchCount === 0, "mpc Radio background recovery should not restart MPD while Explore is active");
     await writeFile(webModeStatePath, `${JSON.stringify({ activeProvider: null }, null, 2)}\n`);
-    let xrunSkippedRadio = null;
-    let rememberedAfterXrunSkip = null;
-    let lastXrunSkipState = null;
+    let xrunRecoveredRadio = null;
+    let rememberedAfterXrunRecovery = null;
+    let lastXrunRecoveryState = null;
     for (let attempt = 0; attempt < 40; attempt += 1) {
       const state = await requestFrom(baseUrl, "/api/v1/system/state");
-      lastXrunSkipState = state.body;
+      lastXrunRecoveryState = state.body;
       fakeState = JSON.parse(await readFile(fakeMpcStatePath, "utf8"));
-      rememberedAfterXrunSkip = JSON.parse(await readFile(audioSourceMemoryStatePath, "utf8"));
+      rememberedAfterXrunRecovery = JSON.parse(await readFile(audioSourceMemoryStatePath, "utf8"));
       if (
         state.response.ok
-        && state.body.audio.currentSource.radioStationId === "radio-506"
-        && fakeState.currentFile === otherRadioUri
-        && rememberedAfterXrunSkip.radioStationId === "radio-506"
+        && state.body.audio.currentSource.radioStationId === "radio-505"
+        && fakeState.currentFile === lowBandwidthRadioUri
+        && rememberedAfterXrunRecovery.radioStationId === "radio-505"
       ) {
-        xrunSkippedRadio = state.body;
+        xrunRecoveredRadio = state.body;
         break;
       }
       await wait(150);
     }
     assert(
-      xrunSkippedRadio,
-      `mpc Radio weak-network recovery should auto-advance after repeated xrun stalls: ${JSON.stringify({
+      xrunRecoveredRadio,
+      `mpc Radio weak-network recovery should prefer a configured lower-bitrate variant after repeated xrun stalls: ${JSON.stringify({
         fakeState,
-        rememberedAfterXrunSkip,
+        rememberedAfterXrunRecovery,
         mpdLog: await readFile(fakeMpdLogPath, "utf8"),
         mpcLog: await readFile(fakeMpcCommandLogPath, "utf8"),
-        state: lastXrunSkipState?.audio?.currentSource,
-        playback: lastXrunSkipState?.playback
+        state: lastXrunRecoveryState?.audio?.currentSource,
+        playback: lastXrunRecoveryState?.playback
       })}`
     );
 

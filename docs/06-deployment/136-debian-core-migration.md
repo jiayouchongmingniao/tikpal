@@ -108,3 +108,22 @@ state` during concurrent checks. Both the unchanged baseline and the Radxa rerun
 passed. The panel browser fixture failed at line 81 (`[role="status"][title*="retry"]`)
 on both branches; it is a reproduced baseline failure, not an accepted browser pass.
 The build also reports its existing bundle-size warning.
+
+## Radio direct-network fallback — 2026-09-16
+
+MPD cannot sustain an Internet stream when the source's delivered throughput stays
+below its bitrate. Larger buffers only defer the dropout. Keep the proxy path when
+it is available, but configure a direct lower-bitrate variant only after verifying
+that exact endpoint from the target device:
+
+```conf
+TIKPAL_RADIO_LOW_BANDWIDTH_VARIANTS='{"http://ice1.somafm.com/beatblender-128-mp3":{"uri":"http://ice1.somafm.com/beatblender-64-aac","bitrateKbps":64,"codec":"AAC"}}'
+```
+
+The mapping is optional and defaults to no behavior change. After the configured
+Radio xrun grace/window/threshold is exceeded, Tikpal reopens the configured
+lower-bitrate URL for the same station and keeps its `radioStationId`, artwork and
+remembered source. If that retry cannot reach a playing state, the existing
+bounded next-station recovery remains the fallback; it must not wait indefinitely
+or keep outputting silence. Add entries only for streams with an independently
+verified lower-bitrate URL, codec support and sustained direct throughput.
