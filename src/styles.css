@@ -3489,6 +3489,7 @@ select {
 
 @media (min-width: 901px) {
   .ambient-transport.is-hifi .ambient-transport-play {
+    flex: 0 0 96px;
     width: 96px;
     height: 96px;
   }
