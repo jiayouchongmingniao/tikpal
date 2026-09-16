@@ -42,6 +42,8 @@ const SYSTEM_SHUTDOWN_COMMAND = process.env.TIKPAL_SYSTEM_SHUTDOWN_COMMAND ?? "s
 const DSP_PRESET = process.env.TIKPAL_DSP_PRESET ?? "Unknown";
 const DDCUTIL_BIN = process.env.TIKPAL_DDCUTIL_BIN ?? "ddcutil";
 const DDCUTIL_DISPLAY = process.env.TIKPAL_DDCUTIL_DISPLAY ?? "";
+const DISPLAY_BRIGHTNESS_COMMAND = process.env.TIKPAL_DISPLAY_BRIGHTNESS_COMMAND ?? "";
+const DISPLAY_BRIGHTNESS_TIMEOUT_MS = parseEnvPositiveInteger(process.env.TIKPAL_DISPLAY_BRIGHTNESS_TIMEOUT_MS, 2500);
 const DDC_BRIGHTNESS_MIN = process.env.TIKPAL_DDC_BRIGHTNESS_MIN ?? "0";
 const DDC_BRIGHTNESS_MAX = process.env.TIKPAL_DDC_BRIGHTNESS_MAX ?? "100";
 const DDCUTIL_READ_CACHE_MS_RAW = Number(process.env.TIKPAL_DDCUTIL_READ_CACHE_MS ?? 300_000);
@@ -3641,6 +3643,40 @@ async function readTurzxBrightnessSnapshot() {
   return parseTurzxBrightnessSnapshot(raw);
 }
 
+function parseCommandDisplayBrightnessSnapshot(raw) {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    const brightnessPercent = Number(parsed?.brightnessPercent);
+    const minBrightnessPercent = Number(parsed?.minBrightnessPercent ?? 0);
+    const maxBrightnessPercent = Number(parsed?.maxBrightnessPercent ?? 100);
+    if (parsed?.available !== true || !Number.isFinite(brightnessPercent)
+      || !Number.isInteger(minBrightnessPercent) || !Number.isInteger(maxBrightnessPercent)
+      || minBrightnessPercent < 0 || maxBrightnessPercent > 100 || minBrightnessPercent > maxBrightnessPercent) {
+      return null;
+    }
+    const transport = String(parsed.transport ?? "command").trim();
+    return {
+      brightnessPercent: Math.max(minBrightnessPercent, Math.min(maxBrightnessPercent, clampPercent(brightnessPercent))),
+      controllable: parsed.controllable !== false,
+      transport: /^[a-z0-9-]{1,32}$/i.test(transport) ? transport : "command",
+      minBrightnessPercent,
+      maxBrightnessPercent
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function readCommandDisplayBrightnessSnapshot() {
+  if (!DISPLAY_BRIGHTNESS_COMMAND.trim()) return null;
+  const raw = await runCommand(`${DISPLAY_BRIGHTNESS_COMMAND} status`, {
+    allowFailure: true,
+    timeout: DISPLAY_BRIGHTNESS_TIMEOUT_MS
+  });
+  return parseCommandDisplayBrightnessSnapshot(raw);
+}
+
 function parseDisplayBrightnessSnapshot(raw) {
   const current = raw.match(/current value =\s*(\d+)/i)?.[1] ?? raw.match(/^VCP\s+10\s+\S+\s+(\d+)\s+(\d+)/i)?.[1];
   const max = raw.match(/max value =\s*(\d+)/i)?.[1] ?? raw.match(/^VCP\s+10\s+\S+\s+(\d+)\s+(\d+)/i)?.[2];
@@ -3703,6 +3739,14 @@ async function readDisplayBrightnessSnapshot() {
     return turzxSnapshot;
   }
 
+  const commandSnapshot = await readCommandDisplayBrightnessSnapshot();
+  if (commandSnapshot) {
+    displayBrightnessSnapshotCache = { value: commandSnapshot, updatedAtMs: now };
+    displayBrightnessUnavailableUntilMs = 0;
+    system.display = commandSnapshot;
+    return commandSnapshot;
+  }
+
   if (displayBrightnessSnapshotCache && now - displayBrightnessSnapshotCache.updatedAtMs < DDCUTIL_READ_CACHE_MS) {
     return displayBrightnessSnapshotCache.value;
   }
@@ -3752,6 +3796,30 @@ async function setDisplayBrightnessPercent(percent) {
     };
     displayBrightnessUnavailableUntilMs = 0;
     system.display = displayBrightnessSnapshotCache.value;
+    return;
+  }
+
+  const commandSnapshot = await readCommandDisplayBrightnessSnapshot();
+  if (commandSnapshot) {
+    const safePercent = Math.max(
+      commandSnapshot.minBrightnessPercent,
+      Math.min(commandSnapshot.maxBrightnessPercent, nextPercent)
+    );
+    await runCommand(`${DISPLAY_BRIGHTNESS_COMMAND} set ${safePercent}`, {
+      allowFailure: false,
+      timeout: DISPLAY_BRIGHTNESS_TIMEOUT_MS
+    });
+    const verifiedSnapshot = await readCommandDisplayBrightnessSnapshot();
+    if (!verifiedSnapshot?.controllable || Math.abs(verifiedSnapshot.brightnessPercent - safePercent) > 1) {
+      const failedSnapshot = verifiedSnapshot ?? buildUnavailableDisplayBrightnessSnapshot();
+      displayBrightnessSnapshotCache = { value: failedSnapshot, updatedAtMs: Date.now() };
+      system.display = failedSnapshot;
+      invalidateTikpalStateSnapshotCache();
+      throw new Error("Display brightness command did not accept brightness command");
+    }
+    displayBrightnessSnapshotCache = { value: verifiedSnapshot, updatedAtMs: Date.now() };
+    displayBrightnessUnavailableUntilMs = 0;
+    system.display = verifiedSnapshot;
     return;
   }
 

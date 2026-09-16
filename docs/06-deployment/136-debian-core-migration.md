@@ -127,3 +127,22 @@ remembered source. If that retry cannot reach a playing state, the existing
 bounded next-station recovery remains the fallback; it must not wait indefinitely
 or keep outputting silence. Add entries only for streams with an independently
 verified lower-bitrate URL, codec support and sustained direct throughput.
+
+## HDMI XRandR brightness fallback — 2026-09-17
+
+The 2560×720 HDMI display on the Radxa exposes no `/sys/class/backlight` node and
+does not answer DDC/CI VCP `0x10` on its mapped I²C bus. Do not configure a DDC
+display index for this panel. Its XRandR output does expose a writable `brightness`
+property, so configure the API's verified driver-property helper instead:
+
+```conf
+TIKPAL_DISPLAY_BRIGHTNESS_COMMAND=./deploy/debian/tikpal-xrandr-display-brightness.sh
+TIKPAL_DISPLAY_BRIGHTNESS_OUTPUT=HDMI-1
+TIKPAL_DISPLAY_BRIGHTNESS_TIMEOUT_MS=2500
+```
+
+The helper reads the current output property, writes only an integer from 0 to
+100, then reads it back. The API reports `transport: "xrandr"` only after that
+status read is successful. This controls the X display pipeline, not a measured
+panel-backlight luminance value. If the property is absent or readback fails, the
+API remains unavailable and the UI must not present a successful brightness change.
