@@ -36,8 +36,10 @@ PipeWire or WirePlumber.
   2560x720 display are active.
 - Explore layout passed ten QQ collapse/expand rounds with a 30-second
   collapsed hold: expanded provider/panel `1920x720 + 640x720`; collapsed
-  provider/control strip `2504x720 + 56x720`. XIDs and `timeOrigin` remained
-  stable.
+  provider/control strip `2504x720 + 56x720`. In collapsed mode the panel's
+  Chromium client remains `640x720` at `x=2504`, intentionally parking its
+  hidden 584px off-screen and exposing the 56px control strip. XIDs and
+  `timeOrigin` remained stable.
 - The 36-station radio database is intact. A representative radio stream,
   pause/play, volume and provider-close audio release were verified. Physical
   sound on the USB BT66 output was confirmed on site.
@@ -116,6 +118,12 @@ systemctl --user is-active tikpal-debian.target 'tikpal-debian-*.service'
 
 The actual GDM/X11 session obtains `DISPLAY` and `XAUTHORITY` dynamically. Do
 not hardcode `:0`, a fixed panel resolution, PID, XID or runtime lock file.
+The Debian `kiosk` service must run
+`deploy/chromium/start-tikpal-kiosk-session.sh`, rather than calling the raw
+Chromium launcher directly. That session wrapper atomically publishes the
+current X-session generation before Chromium starts; Explore correctly rejects
+an open when the generation is absent. The tracked
+`deploy/debian/run-service.sh` already uses the wrapper.
 
 ## Per-device audio and acceptance
 
