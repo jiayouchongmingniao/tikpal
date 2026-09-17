@@ -6,7 +6,6 @@ import { EqVisualScene, type HifiLyricsPanel } from "./EqVisualScene";
 import { FlameScene } from "./FlameScene";
 import { OverflowMarquee } from "./OverflowMarquee";
 import { SceneAudioTransport } from "./SceneAudioTransport";
-import { useSceneRenderBudget } from "../hooks/useSceneRenderBudget";
 import { useI18n } from "../i18n";
 import { getPlaybackDisplayTruth } from "../playbackTruth";
 import { roomModeOptions } from "../roomExperienceTruth";
@@ -30,7 +29,6 @@ interface AmbientScreenProps {
   sceneVideoEnabled: boolean;
   sceneVideoStableLoop: boolean;
   renderProfile: TikpalState["runtime"]["renderProfile"];
-  ambientActive: boolean;
   sceneSoundEnabled: boolean;
   clockVisible: boolean;
   webModeState: WebModeState | null;
@@ -366,7 +364,6 @@ export function AmbientScreen({
   sceneVideoEnabled,
   sceneVideoStableLoop,
   renderProfile,
-  ambientActive,
   sceneSoundEnabled,
   clockVisible,
   webModeState,
@@ -523,12 +520,6 @@ export function AmbientScreen({
   const sceneAudioAvailable = Boolean(currentBackgroundVideo.audioSrc);
   const sceneAudioEligible = sceneAudioAvailable && sceneSoundEnabled && !ambientSceneAudioSuppressed && playback.source === "scene";
   const sceneAudioEnabled = sceneAudioEligible && playback.state === "playing";
-  const { staticOnly: sceneVideoBudgetStaticOnly, diagnostics: sceneRenderDiagnostics } = useSceneRenderBudget({
-    constrained: renderProfile === "constrained" && !isHifiMode,
-    // Scene audio is independent from the visual layer. Keep the visual loop
-    // out of its 60s fallback while a selected scene owns the audio source.
-    enabled: shouldRenderSceneVideo && ambientActive && !sceneAudioEligible
-  });
   const sceneVisualLowPower = audioProtectionMode || sceneVideoThermalGuardActive || renderProfile === "constrained";
   const useStableSceneLoop = sceneVideoStableLoop && shouldRenderSceneVideo && !isHifiMode;
   const proxyLyricsClockUsable = playback.timingDiagnostics?.positionTrusted === true
@@ -1932,7 +1923,7 @@ export function AmbientScreen({
     <section
       className={`ambient-screen ${ambientHudVisible ? "is-hud-visible" : "is-hud-hidden"} ${sourcePickerOpen ? "is-source-picker-open" : ""} ${roomModePickerOpen ? "is-room-mode-picker-open" : ""} ${sceneGalleryOpen ? "is-scene-gallery-open" : ""}`}
       data-room-mode={roomExperience.mode}
-      data-scene-render-mode={sceneVideoBudgetStaticOnly ? "static" : "video"}
+      data-scene-render-mode={sceneVideoThermalGuardActive ? "static" : "video"}
       aria-label={t("ambient.screen")}
       onWheelCapture={handleAmbientWheelCapture}
     >
@@ -1957,7 +1948,7 @@ export function AmbientScreen({
           singleLoop={useStableSceneLoop}
           videoSrc={currentBackgroundVideo.src}
           staticImageSrc={currentBackgroundVideo.thumbnailSrc}
-          staticOnly={(sceneVideoThermalGuardActive || sceneVideoBudgetStaticOnly) && sceneVideoEnabled && hasSceneVideo}
+          staticOnly={sceneVideoThermalGuardActive && sceneVideoEnabled && hasSceneVideo}
           videoEnabled={shouldRenderSceneVideo}
           audioEnabled={false}
           onVideoReadyChange={onSceneVideoReadyChange}
@@ -1981,16 +1972,6 @@ export function AmbientScreen({
             <span>{t("ambient.thermalWarningDetail", { temperature: system.cpuTemp })}</span>
           </span>
         </div>
-      ) : null}
-      {sceneVideoBudgetStaticOnly ? (
-        <span
-          className="ambient-performance-status"
-          role="status"
-          aria-live="polite"
-          title={`rAF p95 ${sceneRenderDiagnostics.rafP95Ms?.toFixed(0) ?? "?"}ms`}
-        >
-          {t("settings.audioCustom.smoothTransition")}
-        </span>
       ) : null}
       {sceneGallery}
       <div

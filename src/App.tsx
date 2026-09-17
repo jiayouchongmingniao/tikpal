@@ -1338,7 +1338,6 @@ export default function App() {
         sceneVideoEnabled={sceneVideoEnabled}
         sceneVideoStableLoop={tikpalState.runtime.apiMode === "mpc" || tikpalState.runtime.renderProfile === "constrained"}
         renderProfile={tikpalState.runtime.renderProfile}
-        ambientActive={mode === "ambient"}
         sceneSoundEnabled={roomExperience.sceneSoundEnabled}
         clockVisible={clockVisible}
         webModeState={webModeState}
