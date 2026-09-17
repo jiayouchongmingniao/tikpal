@@ -1205,7 +1205,7 @@ export function AmbientScreen({
       setSourcePickerOpen(true);
       return;
     }
-    if (!ambientHudVisible || !isHifiMode) setSourcePickerOpen(false);
+    if (!ambientHudVisible) setSourcePickerOpen(false);
   }, [ambientHudVisible, hifiSourcePickerDefault, isHifiMode, sceneGalleryOpen]);
 
   useEffect(() => {

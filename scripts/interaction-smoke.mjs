@@ -3124,6 +3124,12 @@ try {
     "document.querySelectorAll('[data-ambient-source-picker] [data-ambient-source-option]').length === 7 && document.querySelector('[data-ambient-source-option=\"web-mode\"] strong')?.textContent === 'Explore'",
     "ambient music button opens six source choices plus Explore"
   );
+  await wait(500);
+  await expect(
+    client,
+    "document.querySelectorAll('[data-ambient-source-picker] [data-ambient-source-option]').length === 7",
+    "ambient music picker remains available for selecting a source"
+  );
   await expect(
     client,
     `
