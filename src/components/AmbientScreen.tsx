@@ -9,7 +9,7 @@ import { SceneAudioTransport } from "./SceneAudioTransport";
 import { useI18n } from "../i18n";
 import { getPlaybackDisplayTruth } from "../playbackTruth";
 import { roomModeOptions } from "../roomExperienceTruth";
-import { getSourceDisplayStatus, isExplorePrewarmComplete } from "../sourceStatus";
+import { getSourceDisplayStatus } from "../sourceStatus";
 import { friendlyUiError } from "../uiCopy";
 import type { TikpalDataStatus } from "../hooks/useTikpalState";
 import type { AudioState, BackgroundVideoSummary, FontTheme, LyricsFontSize, LyricsState, PlaybackActionType, PlaybackMode, PlaybackSummary, RoomExperienceActionRequest, RoomExperienceState, RoomMode, SceneContextSummary, SceneDayPart, SceneWeatherCondition, SourceSwitchTarget, SystemActionType, SystemState, TikpalState, WebModeState } from "../types";
@@ -429,7 +429,6 @@ export function AmbientScreen({
   const [sceneContext, setSceneContext] = useState<SceneContextSummary | null>(null);
   const [sceneVideoThermalPaused, setSceneVideoThermalPaused] = useState(false);
   const [ambientSceneAudioSuppressed, setAmbientSceneAudioSuppressed] = useState(false);
-  const explorePrewarmComplete = isExplorePrewarmComplete(webModeState);
   const [hifiLyricsFakeControlsVisible, setHifiLyricsFakeControlsVisible] = useState(false);
   const indexedBackgroundVideo = backgroundVideos[backgroundVideoIndex] ?? DEFAULT_BACKGROUND_VIDEO;
   const isHifiMode = roomExperience.mode === "hifi";
@@ -1066,7 +1065,7 @@ export function AmbientScreen({
 
   async function handleOpenWebModeClick() {
     onHudActivity();
-    if (!explorePrewarmComplete || status.pending || pendingAmbientSource || webModePending) return;
+    if (status.pending || pendingAmbientSource || webModePending) return;
     setWebModePending(true);
     setAmbientSourceError(null);
     setSourcePickerOpen(false);
@@ -1783,16 +1782,16 @@ export function AmbientScreen({
                 className="ambient-source-option ambient-source-option-web"
                 type="button"
                 role="menuitem"
-                disabled={!explorePrewarmComplete || status.pending || pendingAmbientSource !== null || webModePending}
-                aria-busy={webModePending || !explorePrewarmComplete}
+                disabled={status.pending || pendingAmbientSource !== null || webModePending}
+                aria-busy={webModePending}
                 data-ambient-source-option="web-mode"
                 onClick={() => void handleOpenWebModeClick()}
               >
                 <span className="ambient-source-option-icon" aria-hidden="true">
-                  {webModePending || !explorePrewarmComplete ? <LoaderCircle size={27} className="is-spinning" /> : <Globe2 size={27} strokeWidth={1.8} />}
+                  {webModePending ? <LoaderCircle size={27} className="is-spinning" /> : <Globe2 size={27} strokeWidth={1.8} />}
                 </span>
                 <strong>{t("source.explore")}</strong>
-                <span>{webModePending ? t("common.opening") : !explorePrewarmComplete ? t("common.prewarming") : t("common.ready")}</span>
+                <span>{webModePending ? t("common.opening") : t("common.ready")}</span>
               </button>
             </div>
           )}

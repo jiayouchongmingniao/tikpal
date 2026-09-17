@@ -2394,10 +2394,11 @@ sync_runtime_provider_pool_process_statuses ""
   );
   assert(
     serverSource.includes('prewarmComplete: raw.prewarmComplete === true')
-      && ambientScreenSource.includes("isExplorePrewarmComplete(webModeState)")
+      && !ambientScreenSource.includes("isExplorePrewarmComplete(webModeState)")
+      && ambientScreenSource.includes("disabled={status.pending || pendingAmbientSource !== null || webModePending}")
       && sourceStatusSource.includes('status === "ready"')
       && sourceStatusSource.includes('status === "check_setup"'),
-    "the source picker must wait until the queue reaches real pages or terminal provider states"
+    "the source picker must keep Explore actionable while provider prewarming runs in the background"
   );
   assert(webModeScript.includes("detect_non_hdmi_card_id"), "web mode should detect the actual non-HDMI ALSA card");
   assert(webModeScript.includes("tikpal-audio-adapt.sh") && webModeScript.includes("resolve-browser"), "web mode should use the shared audio adapter for auto ALSA output");

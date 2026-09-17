@@ -522,7 +522,7 @@ async function restoreInteractionFetchMocks(client) {
   );
 }
 
-async function verifyExplorePrewarmGate(client) {
+async function verifyExplorePrewarmDoesNotGate(client) {
   await evaluate(
     client,
     `
@@ -534,7 +534,7 @@ async function verifyExplorePrewarmGate(client) {
       })()
     `
   );
-  await expectEventually(client, "document.querySelector('[data-ambient-source-option=\"web-mode\"]') !== null", "Ambient source picker exposes Explore for prewarm gating");
+  await expectEventually(client, "document.querySelector('[data-ambient-source-option=\"web-mode\"]') !== null", "Ambient source picker exposes Explore while prewarming");
   await evaluate(
     client,
     `
@@ -579,16 +579,16 @@ async function verifyExplorePrewarmGate(client) {
   );
   await expectEventually(
     client,
-    "document.querySelector('[data-ambient-source-option=\"web-mode\"]')?.disabled === true && document.querySelector('[data-ambient-source-option=\"web-mode\"]')?.getAttribute('aria-busy') === 'true' && document.querySelector('[data-ambient-source-option=\"web-mode\"] span:last-child')?.textContent?.trim() === 'Prewarming'",
-    "Explore stays disabled while any provider is prewarming",
+    "document.querySelector('[data-ambient-source-option=\"web-mode\"]')?.disabled === false && document.querySelector('[data-ambient-source-option=\"web-mode\"]')?.getAttribute('aria-busy') === 'false' && document.querySelector('[data-ambient-source-option=\"web-mode\"] span:last-child')?.textContent?.trim() === 'Ready'",
+    "Explore stays actionable while providers prewarm",
     30,
     150
   );
   await evaluate(client, "window.__tikpalExplorePrewarmGateMode = 'missing'; true");
   await expectEventually(
     client,
-    "document.querySelector('[data-ambient-source-option=\"web-mode\"]')?.disabled === true && document.querySelector('[data-ambient-source-option=\"web-mode\"] span:last-child')?.textContent?.trim() === 'Prewarming'",
-    "Explore fails closed when a provider has no resident status",
+    "document.querySelector('[data-ambient-source-option=\"web-mode\"]')?.disabled === false && document.querySelector('[data-ambient-source-option=\"web-mode\"] span:last-child')?.textContent?.trim() === 'Ready'",
+    "Explore stays actionable when a provider has no resident status",
     30,
     150
   );
@@ -596,8 +596,8 @@ async function verifyExplorePrewarmGate(client) {
   await evaluate(client, "window.__tikpalExplorePrewarmGateMode = 'failed'; true");
   await expectEventually(
     client,
-    `window.__tikpalExplorePrewarmRequests > ${Number(failedPrewarmRequestsBefore)} && document.querySelector('[data-ambient-source-option="web-mode"]')?.disabled === true`,
-    "Explore remains disabled when the prewarm state request fails",
+    `window.__tikpalExplorePrewarmRequests > ${Number(failedPrewarmRequestsBefore)} && document.querySelector('[data-ambient-source-option="web-mode"]')?.disabled === false`,
+    "Explore stays actionable when the prewarm state request fails",
     30,
     150
   );
@@ -605,7 +605,7 @@ async function verifyExplorePrewarmGate(client) {
   await expectEventually(
     client,
     "document.querySelector('[data-ambient-source-option=\"web-mode\"]')?.disabled === false && document.querySelector('[data-ambient-source-option=\"web-mode\"]')?.getAttribute('aria-busy') === 'false' && document.querySelector('[data-ambient-source-option=\"web-mode\"] span:last-child')?.textContent?.trim() === 'Ready'",
-    "Explore shows Ready once every provider reaches a terminal prewarm state",
+    "Explore remains Ready once every provider reaches a terminal prewarm state",
     30,
     150
   );
@@ -624,7 +624,7 @@ async function verifyExplorePrewarmGate(client) {
       })()
     `
   );
-  await expectEventually(client, "document.querySelector('[data-ambient-source-picker]') === null", "Explore prewarm gate check restores the source picker state");
+  await expectEventually(client, "document.querySelector('[data-ambient-source-picker]') === null", "Explore prewarm availability check restores the source picker state");
 }
 
 async function switchRoomModeAndNavigate(client, mode, label) {
@@ -1884,7 +1884,7 @@ try {
   );
   await setStatePatchMode(client, "");
   await switchRoomModeAndNavigate(client, "calm", "Ambient thermal checks restore Calm mode");
-  await verifyExplorePrewarmGate(client);
+  await verifyExplorePrewarmDoesNotGate(client);
   await evaluate(
     client,
     `

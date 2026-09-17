@@ -29,7 +29,7 @@ import type { LucideIcon } from "lucide-react";
 import { copyLibraryTrackToLocal, deleteLibraryTrackFromLocal, fetchAudioLibrary, fetchRadioCatalog, sendFavoriteTrack } from "../api/tikpalClient";
 import { useI18n } from "../i18n";
 import { getPlaybackDisplayTruth, getPlaybackSourceSummary } from "../playbackTruth";
-import { getSourceDisplayStatus, isExplorePrewarmComplete } from "../sourceStatus";
+import { getSourceDisplayStatus } from "../sourceStatus";
 import { friendlyUiError } from "../uiCopy";
 import type { TikpalDataStatus } from "../hooks/useTikpalState";
 import { formatDuration } from "../mockState";
@@ -289,7 +289,6 @@ export function PlayerOverlay({
   const [failedRadioLogoIds, setFailedRadioLogoIds] = useState<Set<string>>(() => new Set());
   const [pendingSource, setPendingSource] = useState<SourceSwitchTarget | null>(null);
   const [webModePending, setWebModePending] = useState(false);
-  const explorePrewarmComplete = isExplorePrewarmComplete(webModeState);
   const [sourceError, setSourceError] = useState<string | null>(null);
   const [sourceHint, setSourceHint] = useState<string | null>(null);
   const [volumeDraftPercent, setVolumeDraftPercent] = useState<number | null>(null);
@@ -1391,7 +1390,7 @@ export function PlayerOverlay({
               >
                 <Globe2 size={20} />
                 <strong>{t("source.explore")}</strong>
-                <span>{webModePending ? t("common.opening") : explorePrewarmComplete ? t("common.ready") : t("common.prewarming")}</span>
+                <span>{webModePending ? t("common.opening") : t("common.ready")}</span>
               </button>
             </nav>
           ) : null}
