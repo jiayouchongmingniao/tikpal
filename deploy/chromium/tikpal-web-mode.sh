@@ -3118,6 +3118,12 @@ prefs.profile.default_content_setting_values.cookies = 1;
 // permission prompt. This is a Chromium profile default, so it applies to
 // every provider origin without maintaining a per-site allowlist.
 prefs.profile.default_content_setting_values.notifications = 2;
+// Chromium 151 can still show its translation bubble even when the feature
+// flag is disabled. Persist the profile preference too so every Provider
+// starts without a browser-chrome prompt covering the kiosk.
+prefs.translate = prefs.translate && typeof prefs.translate === "object" ? prefs.translate : {};
+prefs.translate.enabled = false;
+prefs.translate_offer_enabled = false;
 if (/^(1|true|yes|on|enabled)$/i.test(String(popupBlocking))) {
   prefs.profile.default_content_setting_values.popups = 2;
   prefs.profile.default_content_setting_values.ads = 2;
@@ -3213,7 +3219,7 @@ write_profile_widevine_cdm_hint() {
   cdm_dir="$profile_dir/WidevineCdm"
   escaped_path="${cdm_dir//\\/\\\\}"
   escaped_path="${escaped_path//\"/\\\"}"
-  hint_path="$profile_dir/latest-component-updated-widevine-cdm"
+  hint_path="$cdm_dir/latest-component-updated-widevine-cdm"
   temp_path="${hint_path}.tmp-$$"
   printf '{"Path":"%s"}\n' "$escaped_path" > "$temp_path" && mv "$temp_path" "$hint_path"
 }

@@ -1819,7 +1819,7 @@ sync_runtime_provider_pool_process_statuses ""
     widevineSeeded = false;
   }
   assert(widevineSeeded, "fallback system Widevine CDM should repair an empty provider profile");
-  const widevineHint = JSON.parse(await readFile(path.join(widevineTargetProfile, "latest-component-updated-widevine-cdm"), "utf8"));
+  const widevineHint = JSON.parse(await readFile(path.join(widevineTargetProfile, "WidevineCdm", "latest-component-updated-widevine-cdm"), "utf8"));
   assert(widevineHint.Path === path.join(widevineTargetProfile, "WidevineCdm"), "system Widevine seeding should register the profile CDM hint");
   const proxyPolicySmoke = spawnSync("bash", ["-s"], {
     cwd: ROOT,

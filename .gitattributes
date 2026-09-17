@@ -1,3 +1,4 @@
 docs/assets/brand/*.pdf binary
 public/assets/scenes/*.mp4 filter=lfs diff=lfs merge=lfs -text
 public/assets/scenes/audio/*.ogg filter=lfs diff=lfs merge=lfs -text
+artifacts/chromium/*.tar.gz filter=lfs diff=lfs merge=lfs -text
