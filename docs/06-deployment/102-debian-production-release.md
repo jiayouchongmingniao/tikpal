@@ -53,6 +53,29 @@ do not report it as passed. `node scripts/kiosk-package-smoke.mjs` has an
 unchanged baseline failure at the Hi-Fi room-mode assertion. The same failure
 reproduces from commit `273ee4c`; it is not a release pass.
 
+### Controlled 102 activation record
+
+The 102 source activation used the packaged `a530784` release and then applied
+`2f41a4b` for the Debian session-launcher fix. The latter is required for
+Explore: a direct Chromium launch leaves the API without an X-session
+generation and correctly causes an Explore open to fail closed.
+
+Before the directory activation, the staged Debian source passed `npm ci`,
+`npm run typecheck`, `npm run build`, and
+`bash scripts/debian-platform-fixture.sh`. The only source files changed after
+the staged release were `deploy/debian/run-service.sh` and its package-smoke
+assertion. The activation retained the device's `.env.kiosk`, web-mode settings,
+Chromium profiles, radio database, PipeWire default sink, and installed 151
+binary; none of those assets were copied from another device.
+
+After the controlled kiosk restart, the session wrapper published a fresh
+generation, QQ opened through the loopback Web Mode API, and QQ close/immediate
+reopen retained its profile. The acceptance capture contains 26 X11 frames;
+each checked the API state, provider and panel XIDs/geometries, and QQ
+`performance.timeOrigin`. It recorded no panel bounce, unexpected document
+reload, or service warning. The device reboot and fresh 30-minute playback
+gates remain deliberately unaccepted.
+
 ## Factory install
 
 Run these steps on a new Debian 12 ARM64 device as the intended `radxa`-like
