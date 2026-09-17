@@ -24,6 +24,7 @@ const requiredFiles = [
   "docs/06-deployment/gentoo-kiosk-deploy-v1.md",
   "docs/06-deployment/raspberry-pi-kiosk-deploy-v1.md",
   "deploy/chromium/launch-tikpal-kiosk.sh",
+  "deploy/debian/run-service.sh",
   "deploy/chromium/start-tikpal-kiosk-devtools-proxy.sh",
   "deploy/chromium/start-tikpal-kiosk-display.sh",
   "deploy/chromium/start-tikpal-kiosk-session.sh",
@@ -1197,6 +1198,7 @@ audio_output {
   assert(kioskEnv.includes("TIKPAL_WEB_MODE_PROVIDER_TEXT_SCALE=1.10"), "kiosk env should default Explore provider text scale to 110%");
   const kioskLauncher = await readFile(path.join(ROOT, "deploy/chromium/launch-tikpal-kiosk.sh"), "utf8");
   const kioskSession = await readFile(path.join(ROOT, "deploy/chromium/start-tikpal-kiosk-session.sh"), "utf8");
+  const debianServiceRunner = await readFile(path.join(ROOT, "deploy/debian/run-service.sh"), "utf8");
   const watchdogSource = await readFile(path.join(ROOT, "deploy/chromium/tikpal-kiosk-healthcheck.sh"), "utf8");
   const webModeScript = await readFile(path.join(ROOT, "deploy/chromium/tikpal-web-mode.sh"), "utf8");
   const panelModeActionStart = webModeScript.indexOf('  panel-mode)');
@@ -1205,6 +1207,10 @@ audio_output {
   const cdpManagerSource = await readFile(path.join(ROOT, "deploy/chromium/tikpal-web-mode-cdp-manager.mjs"), "utf8");
   const cdpManagerClient = await readFile(path.join(ROOT, "deploy/chromium/tikpal-web-mode-cdp-client.py"), "utf8");
   const initialEntryFixture = await readFile(path.join(ROOT, "scripts/tikpal-initial-entry-fixture.sh"), "utf8");
+  assert(
+    debianServiceRunner.includes("exec bash deploy/chromium/start-tikpal-kiosk-session.sh"),
+    "Debian kiosk service must publish its X-session generation before Chromium starts"
+  );
   assert(
     webModeScript.includes("x11_helper_prepare_switch()")
       && webModeScript.includes("x11_helper_begin_switch()")

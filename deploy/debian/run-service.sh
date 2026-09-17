@@ -20,7 +20,9 @@ case "${1:-}" in
     "$APP_DIR/deploy/debian/disable-touch-mouse-emulation.sh" || true
     for attempt in {1..60}; do
       if curl -fsS --max-time 1 http://127.0.0.1:4173/ >/dev/null; then
-        exec bash deploy/chromium/launch-tikpal-kiosk.sh
+        # The session launcher publishes the X-session generation before
+        # Chromium starts. Explore rejects opens without that generation.
+        exec bash deploy/chromium/start-tikpal-kiosk-session.sh
       fi
       sleep 1
     done
