@@ -1163,6 +1163,13 @@ select {
     linear-gradient(180deg, rgba(0, 0, 0, 0.44), transparent 28%, rgba(36, 9, 2, 0.5));
 }
 
+/* Scene video already composites every decoded frame. On the constrained ARM
+ * kiosk, keep the same full-screen vignette as one cached texture instead of
+ * evaluating its three CSS gradients for every frame. */
+.app-root.is-render-constrained .ambient-vignette {
+  background: url("/assets/ambient-vignette-2560x720.png") center / 100% 100% no-repeat;
+}
+
 .eq-visual-scene {
   position: absolute;
   inset: 0;
