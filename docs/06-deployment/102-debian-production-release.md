@@ -76,6 +76,31 @@ each checked the API state, provider and panel XIDs/geometries, and QQ
 reload, or service warning. The device reboot and fresh 30-minute playback
 gates remain deliberately unaccepted.
 
+### Explore parked-window safeguard
+
+During the first QQ-to-NetEase switch on 102, the API had committed NetEase as
+active while both provider windows were still at `0,0 1920x720`; the old QQ
+window therefore obscured the selected provider. This X11 session does not
+advertise the EWMH root properties that `wmctrl` normally relies on. Its
+geometry command can exit successfully without moving a window.
+
+Commit `7ba9d4c` verifies the requested geometry after every `wmctrl` move and
+falls back to `xdotool` when it was not applied. A cold/resident switch also
+requires the known previous provider window to reach the off-screen staging
+geometry before it can commit the new active provider. This is intentionally a
+window-lifecycle fix only: it does not modify Chromium 151, provider profiles,
+PipeWire, the radio database, or user settings.
+
+On 102, the prior files were preserved in
+`/home/radxa/tikpal-migration/explore-park-fix-20260918T001000Z/`. Only
+`deploy/chromium/tikpal-web-mode.sh` and
+`scripts/kiosk-package-smoke.mjs` were synchronized. The deployed script hash
+is `48c57386698c8c7231d128ed338ee62a9e8bbc072b950d9a07d0525f0d6f833a`.
+The regular QQ-to-NetEase action then held for 30 seconds with API state
+`netease_music active`, NetEase at `0,0 1920x720`, and QQ at
+`2560,0 1920x720`. This fixes the observed return-to-QQ condition, but does
+not replace the separate full-provider or 30-minute playback acceptance gates.
+
 ## Factory install
 
 Run these steps on a new Debian 12 ARM64 device as the intended `radxa`-like
