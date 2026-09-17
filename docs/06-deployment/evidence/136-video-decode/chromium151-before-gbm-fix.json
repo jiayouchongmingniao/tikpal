@@ -1,0 +1,196 @@
+{
+  "dir": "/tmp/tikpal151-smoke.FHgME6",
+  "version": {
+    "Browser": "Chrome/151.0.7922.173",
+    "Protocol-Version": "1.3",
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
+    "V8-Version": "15.1.206.23",
+    "WebKit-Version": "537.36 (@0000000000000000000000000000000000000000)",
+    "webSocketDebuggerUrl": "ws://127.0.0.1:19473/devtools/browser/caa96908-1291-417c-bd94-ae8c6a408ebc"
+  },
+  "state": {
+    "result": {
+      "type": "object",
+      "value": {
+        "time": 0.642613,
+        "ready": 4,
+        "width": 2560,
+        "height": 720,
+        "frames": 2,
+        "dropped": 0
+      }
+    }
+  },
+  "props": [
+    {
+      "playerId": "79DB86DB9289A1CDB40A595A43C442F4",
+      "properties": [
+        {
+          "name": "kBitrate",
+          "value": "2930563"
+        },
+        {
+          "name": "kVideoDecoderName",
+          "value": "V4L2VideoDecoder"
+        },
+        {
+          "name": "kIsStreaming",
+          "value": "false"
+        },
+        {
+          "name": "kVideoTracks",
+          "value": "[{\"alpha mode\":\"is_opaque\",\"codec\":\"h264\",\"coded size\":\"2560x720\",\"color space\":{\"matrix\":\"BT709\",\"primaries\":\"BT709\",\"range\":\"LIMITED\",\"transfer\":\"BT709\"},\"encryption scheme\":\"Unencrypted\",\"has extra data\":true,\"hdr metadata\":{},\"natural size\":\"2560x720\",\"orientation\":\"0\u00b0\",\"profile\":\"h264 high\",\"visible rect\":\"0,0 2560x720\"}]"
+        },
+        {
+          "name": "kIsPlatformVideoDecoder",
+          "value": "true"
+        },
+        {
+          "name": "kFrameUrl",
+          "value": "http://localhost:4173/assets/scenes/Midnight-Library.mp4"
+        },
+        {
+          "name": "kIsRangeHeaderSupported",
+          "value": "true"
+        },
+        {
+          "name": "kIsVideoDecryptingDemuxerStream",
+          "value": "false"
+        },
+        {
+          "name": "kStartTime",
+          "value": "0.0"
+        },
+        {
+          "name": "kRendererName",
+          "value": "RendererImpl"
+        },
+        {
+          "name": "kTotalBytes",
+          "value": "0xa5d333"
+        },
+        {
+          "name": "kMaxDuration",
+          "value": "29.666667"
+        },
+        {
+          "name": "kIsSingleOrigin",
+          "value": "true"
+        },
+        {
+          "name": "kFrameTitle",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "playerId": "79DB86DB9289A1CDB40A595A43C442F4",
+      "properties": [
+        {
+          "name": "kBitrate",
+          "value": "2930563"
+        },
+        {
+          "name": "kVideoDecoderName",
+          "value": "V4L2VideoDecoder"
+        },
+        {
+          "name": "kIsStreaming",
+          "value": "false"
+        },
+        {
+          "name": "kVideoTracks",
+          "value": "[{\"alpha mode\":\"is_opaque\",\"codec\":\"h264\",\"coded size\":\"2560x720\",\"color space\":{\"matrix\":\"BT709\",\"primaries\":\"BT709\",\"range\":\"LIMITED\",\"transfer\":\"BT709\"},\"encryption scheme\":\"Unencrypted\",\"has extra data\":true,\"hdr metadata\":{},\"natural size\":\"2560x720\",\"orientation\":\"0\u00b0\",\"profile\":\"h264 high\",\"visible rect\":\"0,0 2560x720\"}]"
+        },
+        {
+          "name": "kIsPlatformVideoDecoder",
+          "value": "true"
+        },
+        {
+          "name": "kFrameUrl",
+          "value": "http://localhost:4173/assets/scenes/Midnight-Library.mp4"
+        },
+        {
+          "name": "kIsRangeHeaderSupported",
+          "value": "true"
+        },
+        {
+          "name": "kIsVideoDecryptingDemuxerStream",
+          "value": "false"
+        },
+        {
+          "name": "kStartTime",
+          "value": "0.0"
+        },
+        {
+          "name": "kResolution",
+          "value": "2560x720"
+        },
+        {
+          "name": "kRendererName",
+          "value": "RendererImpl"
+        },
+        {
+          "name": "kTotalBytes",
+          "value": "0xa5d333"
+        },
+        {
+          "name": "kMaxDuration",
+          "value": "29.666667"
+        },
+        {
+          "name": "kIsSingleOrigin",
+          "value": "true"
+        },
+        {
+          "name": "kFrameTitle",
+          "value": ""
+        }
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "playerId": "79DB86DB9289A1CDB40A595A43C442F4",
+      "errors": [
+        {
+          "errorType": "DecoderStatus::5",
+          "code": 5,
+          "stack": [
+            {
+              "file": "media/mojo/clients/mojo_video_decoder.cc",
+              "line": 481
+            }
+          ],
+          "cause": [],
+          "data": {}
+        },
+        {
+          "errorType": "PipelineStatus::PIPELINE_ERROR_DISCONNECTED",
+          "code": 24,
+          "stack": [
+            {
+              "file": "media/renderers/video_renderer_impl.cc",
+              "line": 608
+            }
+          ],
+          "cause": [
+            {
+              "errorType": "DecoderStatus::5",
+              "code": 5,
+              "stack": [
+                {
+                  "file": "media/mojo/clients/mojo_video_decoder.cc",
+                  "line": 481
+                }
+              ],
+              "cause": [],
+              "data": {}
+            }
+          ],
+          "data": {}
+        }
+      ]
+    }
+  ]
+}

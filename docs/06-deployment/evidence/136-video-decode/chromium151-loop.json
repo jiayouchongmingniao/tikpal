@@ -1,0 +1,218 @@
+{
+  "dir": "/tmp/tikpal151-smoke.rrfG72",
+  "version": {
+    "Browser": "Chrome/151.0.7922.173",
+    "Protocol-Version": "1.3",
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
+    "V8-Version": "15.1.206.23",
+    "WebKit-Version": "537.36 (@0000000000000000000000000000000000000000)",
+    "webSocketDebuggerUrl": "ws://127.0.0.1:19473/devtools/browser/228590da-944a-4880-bc01-e2b8fa4af587"
+  },
+  "state": {
+    "result": {
+      "type": "object",
+      "value": {
+        "time": 10.987808,
+        "ready": 4,
+        "width": 2560,
+        "height": 720,
+        "frames": 980,
+        "dropped": 8
+      }
+    }
+  },
+  "props": [
+    {
+      "playerId": "58871C7DDF07B263787AD4A1E0C6C959",
+      "properties": [
+        {
+          "name": "kBitrate",
+          "value": "2930563"
+        },
+        {
+          "name": "kIsStreaming",
+          "value": "false"
+        },
+        {
+          "name": "kVideoTracks",
+          "value": "[{\"alpha mode\":\"is_opaque\",\"codec\":\"h264\",\"coded size\":\"2560x720\",\"color space\":{\"matrix\":\"BT709\",\"primaries\":\"BT709\",\"range\":\"LIMITED\",\"transfer\":\"BT709\"},\"encryption scheme\":\"Unencrypted\",\"has extra data\":true,\"hdr metadata\":{},\"natural size\":\"2560x720\",\"orientation\":\"0°\",\"profile\":\"h264 high\",\"visible rect\":\"0,0 2560x720\"}]"
+        },
+        {
+          "name": "kFrameUrl",
+          "value": "http://localhost:4173/assets/scenes/Midnight-Library.mp4"
+        },
+        {
+          "name": "kIsRangeHeaderSupported",
+          "value": "true"
+        },
+        {
+          "name": "kStartTime",
+          "value": "0.0"
+        },
+        {
+          "name": "kRendererName",
+          "value": "RendererImpl"
+        },
+        {
+          "name": "kTotalBytes",
+          "value": "0xa5d333"
+        },
+        {
+          "name": "kMaxDuration",
+          "value": "29.666667"
+        },
+        {
+          "name": "kIsSingleOrigin",
+          "value": "true"
+        },
+        {
+          "name": "kFrameTitle",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "playerId": "58871C7DDF07B263787AD4A1E0C6C959",
+      "properties": [
+        {
+          "name": "kBitrate",
+          "value": "2930563"
+        },
+        {
+          "name": "kVideoDecoderName",
+          "value": "V4L2VideoDecoder"
+        },
+        {
+          "name": "kIsStreaming",
+          "value": "false"
+        },
+        {
+          "name": "kVideoTracks",
+          "value": "[{\"alpha mode\":\"is_opaque\",\"codec\":\"h264\",\"coded size\":\"2560x720\",\"color space\":{\"matrix\":\"BT709\",\"primaries\":\"BT709\",\"range\":\"LIMITED\",\"transfer\":\"BT709\"},\"encryption scheme\":\"Unencrypted\",\"has extra data\":true,\"hdr metadata\":{},\"natural size\":\"2560x720\",\"orientation\":\"0°\",\"profile\":\"h264 high\",\"visible rect\":\"0,0 2560x720\"}]"
+        },
+        {
+          "name": "kIsPlatformVideoDecoder",
+          "value": "true"
+        },
+        {
+          "name": "kFrameUrl",
+          "value": "http://localhost:4173/assets/scenes/Midnight-Library.mp4"
+        },
+        {
+          "name": "kIsRangeHeaderSupported",
+          "value": "true"
+        },
+        {
+          "name": "kIsVideoDecryptingDemuxerStream",
+          "value": "false"
+        },
+        {
+          "name": "kStartTime",
+          "value": "0.0"
+        },
+        {
+          "name": "kResolution",
+          "value": "2560x720"
+        },
+        {
+          "name": "kRendererName",
+          "value": "RendererImpl"
+        },
+        {
+          "name": "kTotalBytes",
+          "value": "0xa5d333"
+        },
+        {
+          "name": "kMaxDuration",
+          "value": "29.666667"
+        },
+        {
+          "name": "kIsSingleOrigin",
+          "value": "true"
+        },
+        {
+          "name": "kFrameTitle",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "playerId": "58871C7DDF07B263787AD4A1E0C6C959",
+      "properties": [
+        {
+          "name": "kVideoDecoderName",
+          "value": "V4L2VideoDecoder"
+        },
+        {
+          "name": "kIsStreaming",
+          "value": "false"
+        },
+        {
+          "name": "kFrameUrl",
+          "value": "http://localhost:4173/assets/scenes/Midnight-Library.mp4"
+        },
+        {
+          "name": "kVideoPlaybackFreezing",
+          "value": "0.091774"
+        },
+        {
+          "name": "kResolution",
+          "value": "2560x720"
+        },
+        {
+          "name": "kRendererName",
+          "value": "RendererImpl"
+        },
+        {
+          "name": "kTotalBytes",
+          "value": "0xa5d333"
+        },
+        {
+          "name": "kMaxDuration",
+          "value": "29.666667"
+        },
+        {
+          "name": "kFrameTitle",
+          "value": ""
+        },
+        {
+          "name": "kFramerate",
+          "value": "24.0"
+        },
+        {
+          "name": "kVideoTracks",
+          "value": "[{\"alpha mode\":\"is_opaque\",\"codec\":\"h264\",\"coded size\":\"2560x720\",\"color space\":{\"matrix\":\"BT709\",\"primaries\":\"BT709\",\"range\":\"LIMITED\",\"transfer\":\"BT709\"},\"encryption scheme\":\"Unencrypted\",\"has extra data\":true,\"hdr metadata\":{},\"natural size\":\"2560x720\",\"orientation\":\"0°\",\"profile\":\"h264 high\",\"visible rect\":\"0,0 2560x720\"}]"
+        },
+        {
+          "name": "kIsRangeHeaderSupported",
+          "value": "true"
+        },
+        {
+          "name": "kIsVideoDecryptingDemuxerStream",
+          "value": "false"
+        },
+        {
+          "name": "kVideoPlaybackRoughness",
+          "value": "26.846"
+        },
+        {
+          "name": "kStartTime",
+          "value": "0.0"
+        },
+        {
+          "name": "kBitrate",
+          "value": "2930563"
+        },
+        {
+          "name": "kIsPlatformVideoDecoder",
+          "value": "true"
+        },
+        {
+          "name": "kIsSingleOrigin",
+          "value": "true"
+        }
+      ]
+    }
+  ],
+  "errors": []
+}

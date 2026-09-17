@@ -6,7 +6,6 @@ SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_SOURCE")" && pwd)"
 APP_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 ENV_FILE="${TIKPAL_KIOSK_ENV_FILE:-$APP_DIR/.env.kiosk}"
 export TIKPAL_APP_DIR="${TIKPAL_APP_DIR:-$APP_DIR}"
-FLAGS_FILE="${TIKPAL_CHROMIUM_FLAGS_FILE:-$SCRIPT_DIR/chromium-flags.conf}"
 WEB_MODE_COMMAND_ARGS=("$@")
 
 should_source_env_file() {
@@ -22,8 +21,16 @@ if should_source_env_file && [[ -f "$ENV_FILE" ]]; then
   set +a
 fi
 
+# The environment file can select the per-device flags file.
+FLAGS_FILE="${TIKPAL_CHROMIUM_FLAGS_FILE:-$SCRIPT_DIR/chromium-flags.conf}"
+
 : "${TIKPAL_KIOSK_DISPLAY:=:0}"
 : "${TIKPAL_CHROMIUM_BIN:=/usr/lib/chromium-browser/chromium-browser}"
+: "${TIKPAL_CHROMIUM_ENABLE_FEATURES:=}"
+: "${TIKPAL_WEB_MODE_CHROMIUM_BIN:=$TIKPAL_CHROMIUM_BIN}"
+# Explore may intentionally retain the vendor browser while the main kiosk
+# moves to a separately validated build and profile.
+TIKPAL_CHROMIUM_BIN="$TIKPAL_WEB_MODE_CHROMIUM_BIN"
 # When running as root (e.g. via SSH), $HOME is /root but the kiosk data
 # lives under the kiosk user's home.  Detect it from the running Chromium
 # process or fall back to the first /home/* user with a tikpal-web-mode dir.
@@ -3554,9 +3561,13 @@ NODE
 }
 
 chromium_base_args() {
+  local features="WebUIDarkMode"
+  if [[ -n "$TIKPAL_CHROMIUM_ENABLE_FEATURES" ]]; then
+    features="$TIKPAL_CHROMIUM_ENABLE_FEATURES,$features"
+  fi
   printf '%s\n' \
     "--force-dark-mode" \
-    "--enable-features=WebUIDarkMode" \
+    "--enable-features=$features" \
     "--default-background-color=000000"
 }
 

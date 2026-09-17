@@ -48,3 +48,70 @@
    H265NALU nalu;
    H265Parser::Result result;
    *endpos = 0;
+--- a/tools/v8_context_snapshot/BUILD.gn
++++ b/tools/v8_context_snapshot/BUILD.gn
+@@ -122,7 +122,7 @@
+       ldflags = [ "/OPT:NOICF" ]  # link.exe, but also lld-link.exe.
+     } else if (is_apple && !use_lld) {
+       ldflags = [ "-Wl,-no_deduplicate" ]  # ld64.
+-    } else if (use_lld) {
++    } else if (use_lld || linker_path != "") {
+       ldflags = [ "-Wl,--icf=none" ]
+     }
+   }
+--- a/ui/gfx/linux/gbm_wrapper.cc
++++ b/ui/gfx/linux/gbm_wrapper.cc
+@@ -33,11 +33,6 @@
+ #include "base/strings/stringize_macros.h"
+ #endif
+
+-extern "C" {
+-int gbm_bo_get_fd_for_plane(struct gbm_bo* bo, int plane)
+-    __attribute__((weak_import));
+-}
+-
+ namespace ui {
+ namespace gbm_wrapper {
+ namespace {
+@@ -62,9 +57,13 @@
+ #if defined(MINIGBM)
+   return base::ScopedFD(gbm_bo_get_plane_fd(bo, plane));
+ #else
+-  // System linux gbm (or Mesa gbm) has fd per plane support
+-  if (gbm_bo_get_fd_for_plane) {
+-    int fd = gbm_bo_get_fd_for_plane(bo, static_cast<int>(plane));
++  // Resolve at runtime: older sysroots lack this symbol, and mold can bind
++  // the unresolved weak reference to zero even with a newer runtime libgbm.
++  using GetFdForPlane = int (*)(gbm_bo*, int);
++  static const auto get_fd_for_plane = reinterpret_cast<GetFdForPlane>(
++      dlsym(RTLD_DEFAULT, "gbm_bo_get_fd_for_plane"));
++  if (get_fd_for_plane) {
++    int fd = get_fd_for_plane(bo, static_cast<int>(plane));
+     if (fd >= 0) {
+       return base::ScopedFD(fd);
+     }
+--- a/ui/gfx/linux/gbm_wrapper.cc
++++ b/ui/gfx/linux/gbm_wrapper.cc
+@@ -426,8 +426,14 @@
+       return nullptr;
+     }
+
+-    int gbm_flags = 0;
+-    if ((gbm_flags = GetSupportedGbmFlags(format)) == 0) {
++    int gbm_flags = GetSupportedGbmFlags(format);
++    bool can_import = gbm_flags != 0;
++#if !defined(MINIGBM)
++    // Mesa can import decoder-owned NV12 even when allocation is unsupported.
++    // Use no allocation/scanout preference and let gbm_bo_import validate it.
++    can_import |= format == DRM_FORMAT_NV12;
++#endif
++    if (!can_import) {
+       LOG(ERROR) << "gbm format not supported: " << DrmFormatToString(format);
+       return nullptr;
+     }
+--- a/ui/gfx/linux/gbm_wrapper.cc
++++ b/ui/gfx/linux/gbm_wrapper.cc
+@@ -7,2 +7,3 @@
++#include <drm_fourcc.h>
+ #include <gbm.h>
+ #include <sys/mman.h>

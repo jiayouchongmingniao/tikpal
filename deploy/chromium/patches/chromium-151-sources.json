@@ -82,7 +82,11 @@
   ],
   "local_patch": {
     "file": "chromium-151-mesa-decoder-import.patch",
-    "sha256": "5eb1343ffe4d173bd7a47e1a5833209cc7dd2f7f7d2759244378d19c496a3a9a"
+    "sha256": "608c8e5b9d5b78a0d8ccbce9b0573b554c225255b322b45b2882ed6037e13784"
+  },
+  "touch_factory_patch": {
+    "file": "chromium-151-touch-factory-x11.patch",
+    "sha256": "28fae8da05fffae31150f1de638b1a1bf9ac1f5f3b6bcffb1145e2a2421405eb"
   },
   "source_archive": {
     "url": "https://commondatastorage.googleapis.com/chromium-browser-official/chromium-151.0.7922.173.tar.xz",

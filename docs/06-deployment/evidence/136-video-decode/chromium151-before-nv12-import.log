@@ -1,0 +1,328 @@
+[122615:122615:0915/233800.780284:WARNING:chrome/browser/signin/account_consistency_mode_manager.cc:74] Desktop Identity Consistency cannot be enabled as no OAuth client ID and client secret have been configured.
+WARN: SystemInfo_vulkan.cpp:198 (HasKhronosValidationLayer): Vulkan validation layers are missing
+[122831:122831:0915/233801.224917:WARNING:sandbox/policy/linux/sandbox_linux.cc:405] InitializeSandbox() called with multiple threads in process gpu-process.
+
+DevTools listening on ws://127.0.0.1:9433/devtools/browser/76afa7f7-6f51-4e07-bb49-a3f5cce6e028
+[122831:123454:0915/233804.474043:VERBOSE1:media/mojo/services/mojo_video_decoder_service.cc:146] MojoVideoDecoderService
+Failed to query video capabilities: Inappropriate ioctl for device
+[122831:123454:0915/233804.505545:VERBOSE3:media/gpu/v4l2/v4l2_utils.cc:658] GetSupportedV4L2DecoderConfigs(): Using libv4l2 for /dev/video-dec0
+[122831:123454:0915/233804.511568:VERBOSE3:media/gpu/v4l2/v4l2_utils.cc:697] GetSupportedV4L2DecoderConfigs(): Enumerated av1 profile main (48x48-3840x2160)
+[122831:123454:0915/233804.512463:VERBOSE3:media/gpu/v4l2/v4l2_utils.cc:697] GetSupportedV4L2DecoderConfigs(): Enumerated hevc main (48x48-3840x2160)
+[122831:123454:0915/233804.513424:VERBOSE3:media/gpu/v4l2/v4l2_utils.cc:697] GetSupportedV4L2DecoderConfigs(): Enumerated hevc main 10 (48x48-3840x2160)
+[122831:123454:0915/233804.514409:VERBOSE3:media/gpu/v4l2/v4l2_utils.cc:697] GetSupportedV4L2DecoderConfigs(): Enumerated h264 baseline (48x48-3840x2160)
+[122831:123454:0915/233804.515779:VERBOSE3:media/gpu/v4l2/v4l2_utils.cc:697] GetSupportedV4L2DecoderConfigs(): Enumerated h264 main (48x48-3840x2160)
+[122831:123454:0915/233804.517649:VERBOSE3:media/gpu/v4l2/v4l2_utils.cc:697] GetSupportedV4L2DecoderConfigs(): Enumerated h264 high (48x48-3840x2160)
+[122831:123454:0915/233804.519434:VERBOSE3:media/gpu/v4l2/v4l2_utils.cc:697] GetSupportedV4L2DecoderConfigs(): Enumerated vp8 (48x48-3840x2160)
+[122831:123454:0915/233804.520413:VERBOSE3:media/gpu/v4l2/v4l2_utils.cc:697] GetSupportedV4L2DecoderConfigs(): Enumerated vp9 profile0 (48x48-3840x2160)
+[122831:123454:0915/233804.521341:VERBOSE3:media/gpu/v4l2/v4l2_utils.cc:697] GetSupportedV4L2DecoderConfigs(): Enumerated vp9 profile2 (48x48-3840x2160)
+[122831:123454:0915/233804.529096:VERBOSE1:media/mojo/services/mojo_video_decoder_service.cc:153] ~MojoVideoDecoderService
+[122831:123454:0915/233804.701788:VERBOSE1:media/mojo/services/mojo_video_decoder_service.cc:146] MojoVideoDecoderService
+[122831:123454:0915/233804.706903:VERBOSE1:media/mojo/services/mojo_video_decoder_service.cc:146] MojoVideoDecoderService
+[122831:123454:0915/233804.708103:VERBOSE1:media/mojo/services/mojo_video_decoder_service.cc:153] ~MojoVideoDecoderService
+[122831:123454:0915/233805.039882:VERBOSE1:media/mojo/services/mojo_video_decoder_service.cc:153] ~MojoVideoDecoderService
+[122615:122615:0915/233805.198185:WARNING:ui/base/idle/idle_linux.cc:111] None of the known D-Bus ScreenSaver services could be used.
+[122615:122685:0915/233807.416994:WARNING:content/browser/cache_storage/cache_storage_manager.cc:423] Multiple CacheStorage instances using the same directory detected
+[122834:122881:0915/233807.595611:ERROR:net/socket/ssl_client_socket_impl.cc:964] handshake failed; returned -1, SSL error code 1, net_error -101
+[122831:123454:0915/233807.929656:VERBOSE1:media/mojo/services/mojo_video_decoder_service.cc:146] MojoVideoDecoderService
+[122831:123454:0915/233807.960442:VERBOSE1:media/mojo/services/mojo_video_decoder_service.cc:153] ~MojoVideoDecoderService
+[122834:122881:0915/233808.350456:ERROR:net/socket/ssl_client_socket_impl.cc:964] handshake failed; returned -1, SSL error code 1, net_error -101
+[122834:122881:0915/233808.723708:ERROR:net/socket/ssl_client_socket_impl.cc:964] handshake failed; returned -1, SSL error code 1, net_error -101
+[122831:123454:0915/233810.423617:VERBOSE1:media/mojo/services/mojo_video_decoder_service.cc:146] MojoVideoDecoderService
+[122831:123454:0915/233810.436228:VERBOSE1:media/mojo/services/mojo_video_decoder_service.cc:153] ~MojoVideoDecoderService
+[122831:123454:0915/233810.753676:VERBOSE1:media/mojo/services/mojo_video_decoder_service.cc:146] MojoVideoDecoderService
+[122831:123454:0915/233810.758180:VERBOSE1:media/mojo/services/mojo_video_decoder_service.cc:153] ~MojoVideoDecoderService
+[123279:12:0915/233810.760848:VERBOSE1:media/mojo/clients/mojo_video_decoder.cc:108] MojoVideoDecoder
+[123279:12:0915/233810.761446:VERBOSE1:media/filters/ffmpeg_video_decoder.cc:126] FFmpegVideoDecoder
+[123279:12:0915/233810.761888:VERBOSE1:media/mojo/clients/mojo_video_decoder.cc:148] Initialize
+[122831:123454:0915/233810.841072:VERBOSE1:media/mojo/services/mojo_video_decoder_service.cc:146] MojoVideoDecoderService
+[122831:123454:0915/233810.842496:VERBOSE1:media/mojo/services/mojo_video_decoder_service.cc:199] Construct
+[122831:123454:0915/233810.851598:VERBOSE2:media/gpu/chromeos/video_decoder_pipeline.cc:468] VideoDecoderPipeline(): 
+[122831:123454:0915/233810.852696:VERBOSE1:media/mojo/services/mojo_video_decoder_service.cc:259] Initialize config = codec: h264, profile: h264 high, level: not available, alpha_mode: is_opaque, coded size: [2560,720], visible rect: [0,0,2560,720], natural size: [2560,720], has extra data: true, encryption scheme: Unencrypted, rotation: 0°, flipped: 0, color space: {primaries:BT709, transfer:BT709, matrix:BT709, range:LIMITED}, spatial format: [projection_type: none, stereo_mode: mono], cdm_id = null
+[122831:123454:0915/233810.853440:VERBOSE2:media/gpu/chromeos/video_decoder_pipeline.cc:585] Initialize(): config: codec: h264, profile: h264 high, level: not available, alpha_mode: is_opaque, coded size: [2560,720], visible rect: [0,0,2560,720], natural size: [2560,720], has extra data: true, encryption scheme: Unencrypted, rotation: 0°, flipped: 0, color space: {primaries:BT709, transfer:BT709, matrix:BT709, range:LIMITED}, spatial format: [projection_type: none, stereo_mode: mono]
+Failed to query video capabilities: Inappropriate ioctl for device
+[122831:123454:0915/233810.861104:VERBOSE3:media/gpu/v4l2/v4l2_utils.cc:658] GetSupportedV4L2DecoderConfigs(): Using libv4l2 for /dev/video-dec0
+[122831:123454:0915/233810.863828:VERBOSE3:media/gpu/v4l2/v4l2_utils.cc:697] GetSupportedV4L2DecoderConfigs(): Enumerated av1 profile main (48x48-3840x2160)
+[122831:123454:0915/233810.864569:VERBOSE3:media/gpu/v4l2/v4l2_utils.cc:697] GetSupportedV4L2DecoderConfigs(): Enumerated hevc main (48x48-3840x2160)
+[122831:123454:0915/233810.865126:VERBOSE3:media/gpu/v4l2/v4l2_utils.cc:697] GetSupportedV4L2DecoderConfigs(): Enumerated hevc main 10 (48x48-3840x2160)
+[122831:123454:0915/233810.865964:VERBOSE3:media/gpu/v4l2/v4l2_utils.cc:697] GetSupportedV4L2DecoderConfigs(): Enumerated h264 baseline (48x48-3840x2160)
+[122831:123454:0915/233810.867537:VERBOSE3:media/gpu/v4l2/v4l2_utils.cc:697] GetSupportedV4L2DecoderConfigs(): Enumerated h264 main (48x48-3840x2160)
+[122831:123454:0915/233810.868516:VERBOSE3:media/gpu/v4l2/v4l2_utils.cc:697] GetSupportedV4L2DecoderConfigs(): Enumerated h264 high (48x48-3840x2160)
+[122831:123454:0915/233810.869533:VERBOSE3:media/gpu/v4l2/v4l2_utils.cc:697] GetSupportedV4L2DecoderConfigs(): Enumerated vp8 (48x48-3840x2160)
+[122831:123454:0915/233810.870616:VERBOSE3:media/gpu/v4l2/v4l2_utils.cc:697] GetSupportedV4L2DecoderConfigs(): Enumerated vp9 profile0 (48x48-3840x2160)
+[122831:123454:0915/233810.871263:VERBOSE3:media/gpu/v4l2/v4l2_utils.cc:697] GetSupportedV4L2DecoderConfigs(): Enumerated vp9 profile2 (48x48-3840x2160)
+[122831:124103:0915/233810.872465:VERBOSE2:media/gpu/v4l2/v4l2_video_decoder.cc:187] V4L2VideoDecoder(): 
+[122831:124103:0915/233810.873389:VERBOSE3:media/gpu/v4l2/v4l2_video_decoder.cc:232] Initialize(): 
+[122831:124103:0915/233810.873956:VERBOSE3:media/gpu/v4l2/v4l2_video_decoder.cc:386] InitializeBackend(): 
+[122831:124103:0915/233810.874569:VERBOSE3:media/gpu/v4l2/v4l2_device.cc:141] Open(): 
+Failed to query video capabilities: Inappropriate ioctl for device
+[122831:124103:0915/233810.880742:VERBOSE3:media/gpu/v4l2/v4l2_device.cc:899] OpenDevicePath(): Using libv4l2 for /dev/video-dec0
+[122831:124103:0915/233810.881620:VERBOSE3:media/gpu/v4l2/v4l2_device.cc:1056] EnumerateDevicesForType(): Found device: /dev/video-dec0
+[122831:124103:0915/233810.882238:VERBOSE3:media/gpu/v4l2/v4l2_device.cc:907] CloseDevice(): 
+Failed to query video capabilities: Inappropriate ioctl for device
+[122831:124103:0915/233810.894208:VERBOSE3:media/gpu/v4l2/v4l2_device.cc:899] OpenDevicePath(): Using libv4l2 for /dev/video-dec0
+[122831:124103:0915/233810.895053:VERBOSE1:media/gpu/v4l2/v4l2_video_decoder.cc:466] InitializeBackend(): Using a stateful API for profile: h264 high and fourcc: H264
+[122831:124103:0915/233810.895639:VERBOSE3:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:85] V4L2StatefulVideoDecoderBackend(): 
+[122831:124103:0915/233810.896165:VERBOSE3:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:107] Initialize(): 
+Failed to query video capabilities: Inappropriate ioctl for device
+[122831:124103:0915/233810.900834:VERBOSE3:media/gpu/v4l2/v4l2_device.cc:899] OpenDevicePath(): Using libv4l2 for /dev/video-dec0
+[122831:124103:0915/233810.904403:VERBOSE3:media/gpu/v4l2/v4l2_device.cc:1056] EnumerateDevicesForType(): Found device: /dev/video-dec0
+[122831:124103:0915/233810.905015:VERBOSE3:media/gpu/v4l2/v4l2_device.cc:907] CloseDevice(): 
+Failed to query video capabilities: Inappropriate ioctl for device
+[122831:124103:0915/233810.913025:VERBOSE3:media/gpu/v4l2/v4l2_device.cc:899] OpenDevicePath(): Using libv4l2 for /dev/video-dec0
+[122831:124103:0915/233810.914200:VERBOSE3:media/gpu/v4l2/v4l2_device.cc:614] EnumerateSupportedDecodeProfiles(): Found decoder profile av1 profile main, resolutions: 48x48 3840x2160
+[122831:124103:0915/233810.915308:VERBOSE3:media/gpu/v4l2/v4l2_device.cc:614] EnumerateSupportedDecodeProfiles(): Found decoder profile hevc main, resolutions: 48x48 3840x2160
+[122831:124103:0915/233810.915803:VERBOSE3:media/gpu/v4l2/v4l2_device.cc:614] EnumerateSupportedDecodeProfiles(): Found decoder profile hevc main 10, resolutions: 48x48 3840x2160
+[122831:124103:0915/233810.916269:VERBOSE3:media/gpu/v4l2/v4l2_device.cc:614] EnumerateSupportedDecodeProfiles(): Found decoder profile h264 baseline, resolutions: 48x48 3840x2160
+[122831:124103:0915/233810.916632:VERBOSE3:media/gpu/v4l2/v4l2_device.cc:614] EnumerateSupportedDecodeProfiles(): Found decoder profile h264 main, resolutions: 48x48 3840x2160
+[122831:124103:0915/233810.917028:VERBOSE3:media/gpu/v4l2/v4l2_device.cc:614] EnumerateSupportedDecodeProfiles(): Found decoder profile h264 high, resolutions: 48x48 3840x2160
+[122831:124103:0915/233810.917461:VERBOSE3:media/gpu/v4l2/v4l2_device.cc:614] EnumerateSupportedDecodeProfiles(): Found decoder profile vp8, resolutions: 48x48 3840x2160
+[122831:124103:0915/233810.918961:VERBOSE3:media/gpu/v4l2/v4l2_device.cc:614] EnumerateSupportedDecodeProfiles(): Found decoder profile vp9 profile0, resolutions: 48x48 3840x2160
+[122831:124103:0915/233810.920290:VERBOSE3:media/gpu/v4l2/v4l2_device.cc:614] EnumerateSupportedDecodeProfiles(): Found decoder profile vp9 profile2, resolutions: 48x48 3840x2160
+[122831:124103:0915/233810.920784:VERBOSE3:media/gpu/v4l2/v4l2_device.cc:907] CloseDevice(): 
+[122831:124103:0915/233810.922648:VERBOSE3:media/gpu/v4l2/v4l2_device.cc:907] CloseDevice(): 
+[122831:124103:0915/233810.923299:VERBOSE1:media/gpu/v4l2/v4l2_framerate_control.cc:60] Failed to issue VIDIOC_S_PARM command
+[122831:124103:0915/233810.923928:VERBOSE1:media/gpu/v4l2/v4l2_video_decoder.cc:593] SetupInputFormat(): Input (OUTPUT queue) Fourcc: H264
+[122831:124103:0915/233810.924662:VERBOSE1:media/gpu/v4l2/v4l2_video_decoder.cc:631] AllocateInputBuffers(): Requesting: 8 OUTPUT buffers of type V4L2_MEMORY_MMAP
+[122831:124103:0915/233810.926290:VERBOSE3:media/gpu/v4l2/v4l2_queue.cc:1209] AllocateBuffers(): (OUTPUT_MPLANE) Requesting 8 buffers
+[122831:124103:0915/233810.933180:VERBOSE3:media/gpu/v4l2/v4l2_queue.cc:1217] AllocateBuffers(): (OUTPUT_MPLANE) Allocated 8 buffers.
+[122831:124103:0915/233810.933727:VERBOSE3:media/gpu/v4l2/v4l2_video_decoder.cc:1356] SetState(): Change state from 0 to 1
+[122831:123454:0915/233810.935154:VERBOSE1:media/mojo/services/mojo_video_decoder_service.cc:425] OnDecoderInitialized
+[122831:124103:0915/233810.947561:VERBOSE3:media/gpu/v4l2/v4l2_video_decoder.cc:957] StartStreamV4L2Queue(): 
+[122831:124103:0915/233810.956426:VERBOSE3:media/gpu/v4l2/v4l2_device_poller.cc:63] StartPolling(): Polling thread started
+[122831:124103:0915/233810.956843:VERBOSE3:media/gpu/v4l2/v4l2_video_decoder.cc:1356] SetState(): Change state from 1 to 2
+[122831:124103:0915/233810.957557:VERBOSE3:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:139] EnqueueDecodeTask(): 
+[122831:124103:0915/233810.958034:VERBOSE3:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:153] DoDecodeWork(): 
+[122831:124103:0915/233810.958452:VERBOSE3:media/gpu/v4l2/v4l2_video_decoder.cc:1421] IsDecoding(): 
+[122831:124103:0915/233810.961060:VERBOSE3:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:291] ScheduleDecodeWork(): 
+[122831:124103:0915/233810.962405:VERBOSE3:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:139] EnqueueDecodeTask(): 
+[122831:124103:0915/233810.962936:VERBOSE3:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:153] DoDecodeWork(): 
+[122831:124103:0915/233810.963463:VERBOSE3:media/gpu/v4l2/v4l2_video_decoder.cc:1421] IsDecoding(): 
+[122831:124103:0915/233810.964338:VERBOSE3:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:291] ScheduleDecodeWork(): 
+[122831:124103:0915/233810.964772:VERBOSE3:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:139] EnqueueDecodeTask(): 
+[122831:124103:0915/233810.965253:VERBOSE3:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:153] DoDecodeWork(): 
+[122831:124103:0915/233810.966428:VERBOSE3:media/gpu/v4l2/v4l2_video_decoder.cc:1421] IsDecoding(): 
+[122831:124103:0915/233810.967599:VERBOSE3:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:291] ScheduleDecodeWork(): 
+[122831:124103:0915/233810.968644:VERBOSE3:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:139] EnqueueDecodeTask(): 
+[122831:124103:0915/233810.970452:VERBOSE3:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:153] DoDecodeWork(): 
+[122831:124103:0915/233810.970854:VERBOSE3:media/gpu/v4l2/v4l2_video_decoder.cc:1421] IsDecoding(): 
+[122831:124103:0915/233810.972537:VERBOSE3:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:139] EnqueueDecodeTask(): 
+[122831:124103:0915/233810.973706:VERBOSE3:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:153] DoDecodeWork(): 
+[122831:124103:0915/233810.974573:VERBOSE3:media/gpu/v4l2/v4l2_video_decoder.cc:1421] IsDecoding(): 
+[122831:124103:0915/233810.976315:VERBOSE3:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:291] ScheduleDecodeWork(): 
+[122831:124103:0915/233810.977429:VERBOSE3:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:139] EnqueueDecodeTask(): 
+[122831:124103:0915/233810.977961:VERBOSE3:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:153] DoDecodeWork(): 
+[122831:124103:0915/233810.979116:VERBOSE3:media/gpu/v4l2/v4l2_video_decoder.cc:1421] IsDecoding(): 
+[122831:124103:0915/233810.980020:VERBOSE3:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:139] EnqueueDecodeTask(): 
+[122831:124103:0915/233810.980478:VERBOSE3:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:153] DoDecodeWork(): 
+[122831:124103:0915/233810.981155:VERBOSE3:media/gpu/v4l2/v4l2_video_decoder.cc:1421] IsDecoding(): 
+[122831:124103:0915/233810.982608:VERBOSE3:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:291] ScheduleDecodeWork(): 
+[122831:124103:0915/233810.983141:VERBOSE3:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:139] EnqueueDecodeTask(): 
+[122831:124103:0915/233810.983495:VERBOSE3:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:153] DoDecodeWork(): 
+[122831:124103:0915/233810.984107:VERBOSE3:media/gpu/v4l2/v4l2_video_decoder.cc:1421] IsDecoding(): 
+[122831:124103:0915/233810.984970:VERBOSE3:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:153] DoDecodeWork(): 
+[122831:124103:0915/233810.985445:VERBOSE3:media/gpu/v4l2/v4l2_video_decoder.cc:1421] IsDecoding(): 
+[122831:124103:0915/233810.986311:VERBOSE3:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:291] ScheduleDecodeWork(): 
+[122831:124103:0915/233810.987002:VERBOSE3:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:153] DoDecodeWork(): 
+[122831:124103:0915/233810.987579:VERBOSE3:media/gpu/v4l2/v4l2_video_decoder.cc:1421] IsDecoding(): 
+[122831:124103:0915/233810.988522:VERBOSE3:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:153] DoDecodeWork(): 
+[122831:124103:0915/233810.988958:VERBOSE3:media/gpu/v4l2/v4l2_video_decoder.cc:1421] IsDecoding(): 
+[122831:124103:0915/233810.989733:VERBOSE3:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:291] ScheduleDecodeWork(): 
+[122831:124103:0915/233810.990519:VERBOSE3:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:153] DoDecodeWork(): 
+[122831:124103:0915/233810.991300:VERBOSE3:media/gpu/v4l2/v4l2_video_decoder.cc:1421] IsDecoding(): 
+[122831:124103:0915/233810.993140:VERBOSE3:media/gpu/v4l2/v4l2_video_decoder.cc:1269] ServiceDeviceTask(): Number of queued input buffers: 7, Number of queued output buffers: 0
+[122831:124103:0915/233810.994834:VERBOSE3:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:309] OnServiceDeviceTask(): 
+[122831:124103:0915/233810.995916:VERBOSE3:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:589] ChangeResolution(): 
+[122831:124103:0915/233810.998143:VERBOSE2:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:634] ChangeResolution(): V4L2_CID_MIN_BUFFERS_FOR_CAPTURE  = 18
+[122831:124103:0915/233810.998492:VERBOSE3:media/gpu/v4l2/v4l2_video_decoder.cc:1010] InitiateFlush(): 
+[122831:124103:0915/233810.998750:VERBOSE3:media/gpu/v4l2/v4l2_video_decoder.cc:1356] SetState(): Change state from 2 to 3
+[122831:124103:0915/233810.999103:VERBOSE3:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:664] ContinueChangeResolution(): 
+[122831:124103:0915/233810.999418:VERBOSE3:media/gpu/v4l2/v4l2_video_decoder.cc:1059] ChangeResolution(): 
+[122831:124103:0915/233810.999725:VERBOSE3:media/gpu/v4l2/v4l2_video_decoder.cc:1078] ApplyResolutionChange(): 
+[122831:124103:0915/233811.000078:VERBOSE3:media/gpu/v4l2/v4l2_video_decoder.cc:1130] ContinueChangeResolution(): 
+[122831:124103:0915/233811.000369:VERBOSE3:media/gpu/v4l2/v4l2_video_decoder.cc:980] StopStreamV4L2Queue(): 
+[122831:124103:0915/233811.000936:VERBOSE3:media/gpu/v4l2/v4l2_device_poller.cc:87] StopPolling(): Stop device poll thread
+[122831:124103:0915/233811.001730:VERBOSE3:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:580] OnStreamStopped(): 
+[122831:124103:0915/233811.002070:VERBOSE3:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:676] ApplyResolution(): 
+[122831:124103:0915/233811.002577:VERBOSE3:media/gpu/v4l2/v4l2_video_decoder.cc:643] SetupOutputFormat(): size: 2752x720, visible_rect: 0,0 2560x720
+[122831:124103:0915/233811.003203:VERBOSE1:media/gpu/v4l2/v4l2_video_decoder.cc:666] SetupOutputFormat(): Output (CAPTURE queue) candidate: NV12
+[122831:124103:0915/233811.004062:VERBOSE1:media/gpu/v4l2/v4l2_video_decoder.cc:1220] ContinueChangeResolution(): Requesting: 20 CAPTURE buffers of type V4L2_MEMORY_MMAP
+[122831:124103:0915/233811.004704:VERBOSE3:media/gpu/v4l2/v4l2_queue.cc:1209] AllocateBuffers(): (CAPTURE_MPLANE) Requesting 20 buffers
+[122831:124103:0915/233811.023212:VERBOSE3:media/gpu/v4l2/v4l2_queue.cc:1217] AllocateBuffers(): (CAPTURE_MPLANE) Allocated 20 buffers.
+[122831:124103:0915/233811.024065:VERBOSE3:media/gpu/v4l2/v4l2_video_decoder.cc:957] StartStreamV4L2Queue(): 
+[122831:124103:0915/233811.025033:VERBOSE3:media/gpu/v4l2/v4l2_device_poller.cc:63] StartPolling(): Polling thread started
+[122831:124103:0915/233811.025613:VERBOSE3:media/gpu/v4l2/v4l2_video_decoder.cc:1247] OnChangeResolutionDone(): 0
+[122831:124103:0915/233811.026075:VERBOSE3:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:686] OnChangeResolutionDone(): status=0
+[122831:124103:0915/233811.026982:VERBOSE3:media/gpu/v4l2/v4l2_video_decoder.cc:1017] CompleteFlush(): 
+[122831:124103:0915/233811.028861:VERBOSE3:media/gpu/v4l2/v4l2_video_decoder.cc:1356] SetState(): Change state from 3 to 2
+[122831:124103:0915/233811.030011:VERBOSE3:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:323] EnqueueOutputBuffers(): 
+[122831:124103:0915/233811.034255:VERBOSE3:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:373] EnqueueOutputBuffers(): 20/20 output buffers queued
+[122831:124103:0915/233811.036729:VERBOSE3:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:153] DoDecodeWork(): 
+[122831:124103:0915/233811.039830:VERBOSE3:media/gpu/v4l2/v4l2_video_decoder.cc:1421] IsDecoding(): 
+[122831:124103:0915/233811.041704:VERBOSE3:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:291] ScheduleDecodeWork(): 
+[122831:124103:0915/233811.042197:VERBOSE3:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:323] EnqueueOutputBuffers(): 
+[122831:124103:0915/233811.042606:VERBOSE3:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:373] EnqueueOutputBuffers(): 20/20 output buffers queued
+[122831:124103:0915/233811.042970:VERBOSE3:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:153] DoDecodeWork(): 
+[122831:124103:0915/233811.047547:VERBOSE3:media/gpu/v4l2/v4l2_video_decoder.cc:1421] IsDecoding(): 
+[122831:124103:0915/233811.048768:VERBOSE3:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:435] OnOutputBufferDequeued(): 
+[122831:124103:0915/233811.050271:VERBOSE3:media/gpu/v4l2/v4l2_queue.cc:130] GetDmabufsForV4L2Buffer(): 
+[122831:124103:0915/233811.061449:VERBOSE3:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:323] EnqueueOutputBuffers(): 
+[122831:124103:0915/233811.063308:VERBOSE3:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:373] EnqueueOutputBuffers(): 19/20 output buffers queued
+[122831:124103:0915/233811.065137:VERBOSE3:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:435] OnOutputBufferDequeued(): 
+[122831:124103:0915/233811.066212:VERBOSE3:media/gpu/v4l2/v4l2_queue.cc:130] GetDmabufsForV4L2Buffer(): 
+[122831:122831:0915/233811.067186:ERROR:ui/gfx/linux/gbm_wrapper.cc:431] gbm format not supported: DRM_FORMAT_NV12
+[122831:124103:0915/233811.067065:VERBOSE3:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:323] EnqueueOutputBuffers(): 
+[122831:122831:0915/233811.067745:ERROR:gpu/command_buffer/service/shared_image/shared_image_factory.cc:1081] CreateSharedImage: could not create backing.
+[122831:124103:0915/233811.067746:VERBOSE3:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:373] EnqueueOutputBuffers(): 18/20 output buffers queued
+[122831:122831:0915/233811.068891:ERROR:components/viz/service/gl/exit_code.cc:13] Restarting GPU process due to unrecoverable error. Context was lost.
+[122831:124103:0915/233811.069172:VERBOSE3:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:435] OnOutputBufferDequeued(): 
+[122831:124103:0915/233811.069620:VERBOSE3:media/gpu/v4l2/v4l2_queue.cc:130] GetDmabufsForV4L2Buffer(): 
+[122831:124103:0915/233811.073642:VERBOSE3:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:323] EnqueueOutputBuffers(): 
+[122831:124103:0915/233811.078643:VERBOSE3:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:373] EnqueueOutputBuffers(): 17/20 output buffers queued
+[122831:124103:0915/233811.079806:VERBOSE3:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:435] OnOutputBufferDequeued(): 
+[122831:124103:0915/233811.080560:VERBOSE3:media/gpu/v4l2/v4l2_queue.cc:130] GetDmabufsForV4L2Buffer(): 
+[122831:124103:0915/233811.082264:VERBOSE3:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:323] EnqueueOutputBuffers(): 
+[122831:124103:0915/233811.083265:VERBOSE3:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:373] EnqueueOutputBuffers(): 16/20 output buffers queued
+[122831:124103:0915/233811.083907:VERBOSE3:media/gpu/v4l2/legacy/v4l2_video_decoder_backend_stateful.cc:435] OnOutputBufferDequeued(): 
+[123279:12:0915/233811.165130:VERBOSE2:media/mojo/clients/mojo_video_decoder.cc:463] Stop
+[123279:12:0915/233811.166020:WARNING:media/mojo/clients/mojo_video_decoder.cc:481] DecoderStatus::5
+[123279:12:0915/233811.168046:ERROR:media/filters/decoder_stream.cc:686] video decode error!
+[122615:122615:0915/233811.240764:ERROR:content/browser/gpu/gpu_process_host.cc:1035] GPU process exited unexpectedly: exit_code=8704
+[122615:122615:0915/233811.241170:WARNING:content/browser/gpu/gpu_process_host.cc:1479] The GPU process has crashed 1 time(s)
+WARN: SystemInfo_vulkan.cpp:198 (HasKhronosValidationLayer): Vulkan validation layers are missing
+[124174:124174:0915/233811.670596:WARNING:sandbox/policy/linux/sandbox_linux.cc:405] InitializeSandbox() called with multiple threads in process gpu-process.
+[122615:122615:0915/233811.711521:WARNING:content/browser/gpu/gpu_process_host.cc:1057] Reinitialized the GPU process after a crash. The reported initialization time was 405 ms
+[123279:1:0915/233811.801933:WARNING:media/filters/decoder_stream.cc:210] DecoderStatus::108
+[123279:1:0915/233811.801601:WARNING:media/renderers/video_renderer_impl.cc:614] PipelineStatus::PIPELINE_ERROR_DECODE
+[123279:1:0915/233811.806805:ERROR:third_party/blink/renderer/core/html/media/html_media_element.cc:5389] SetError: {code=3, message="PipelineStatus::PIPELINE_ERROR_DECODE: video decode error!"}
+[123279:12:0915/233811.810823:VERBOSE1:media/mojo/clients/mojo_video_decoder.cc:114] ~MojoVideoDecoder
+[124174:124174:0915/233812.709203:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233812.710165:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233812.721521:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233812.721919:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233812.735043:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233812.738821:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124716:0915/233814.856934:VERBOSE1:media/mojo/services/mojo_video_decoder_service.cc:146] MojoVideoDecoderService
+Failed to query video capabilities: Inappropriate ioctl for device
+[124174:124716:0915/233814.912439:VERBOSE3:media/gpu/v4l2/v4l2_utils.cc:658] GetSupportedV4L2DecoderConfigs(): Using libv4l2 for /dev/video-dec0
+[124174:124716:0915/233814.916045:VERBOSE3:media/gpu/v4l2/v4l2_utils.cc:697] GetSupportedV4L2DecoderConfigs(): Enumerated av1 profile main (48x48-3840x2160)
+[124174:124716:0915/233814.922562:VERBOSE3:media/gpu/v4l2/v4l2_utils.cc:697] GetSupportedV4L2DecoderConfigs(): Enumerated hevc main (48x48-3840x2160)
+[124174:124716:0915/233814.923933:VERBOSE3:media/gpu/v4l2/v4l2_utils.cc:697] GetSupportedV4L2DecoderConfigs(): Enumerated hevc main 10 (48x48-3840x2160)
+[124174:124716:0915/233814.924631:VERBOSE3:media/gpu/v4l2/v4l2_utils.cc:697] GetSupportedV4L2DecoderConfigs(): Enumerated h264 baseline (48x48-3840x2160)
+[124174:124716:0915/233814.925426:VERBOSE3:media/gpu/v4l2/v4l2_utils.cc:697] GetSupportedV4L2DecoderConfigs(): Enumerated h264 main (48x48-3840x2160)
+[124174:124716:0915/233814.927355:VERBOSE3:media/gpu/v4l2/v4l2_utils.cc:697] GetSupportedV4L2DecoderConfigs(): Enumerated h264 high (48x48-3840x2160)
+[124174:124716:0915/233814.937642:VERBOSE3:media/gpu/v4l2/v4l2_utils.cc:697] GetSupportedV4L2DecoderConfigs(): Enumerated vp8 (48x48-3840x2160)
+[124174:124716:0915/233814.938501:VERBOSE3:media/gpu/v4l2/v4l2_utils.cc:697] GetSupportedV4L2DecoderConfigs(): Enumerated vp9 profile0 (48x48-3840x2160)
+[124174:124716:0915/233814.939293:VERBOSE3:media/gpu/v4l2/v4l2_utils.cc:697] GetSupportedV4L2DecoderConfigs(): Enumerated vp9 profile2 (48x48-3840x2160)
+[124174:124716:0915/233814.950482:VERBOSE1:media/mojo/services/mojo_video_decoder_service.cc:153] ~MojoVideoDecoderService
+[124174:124174:0915/233814.958576:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233814.959117:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233814.973234:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233814.974504:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233814.988612:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233814.989609:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233814.999594:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233815.007999:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233815.018384:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233815.019598:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233815.041591:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233815.043576:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233815.055301:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233815.062788:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233815.077575:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233815.078971:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233815.089860:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233815.090889:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233815.101682:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233815.102465:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233815.116148:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233815.116798:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233815.132915:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233815.134532:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233815.150379:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233815.151055:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233815.163389:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233815.164065:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233815.185912:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233815.186817:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233815.195852:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233815.196939:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233815.217663:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233815.218228:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233815.243378:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233815.248917:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233815.265993:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233815.266768:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233815.286048:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233815.286599:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233815.297445:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233815.298051:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233815.315946:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233815.316494:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233815.327026:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233815.329521:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233815.348379:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233815.370658:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233815.402651:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233815.411488:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233815.433457:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233815.437675:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233815.449189:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233815.451719:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233815.470032:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233815.470761:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233815.487936:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233815.492810:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233815.505490:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233815.507129:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233815.519431:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233815.522759:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233815.535748:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233815.536595:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233815.553633:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233815.554714:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233815.567620:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233815.568396:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233815.579019:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233815.579851:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233815.601419:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233815.602555:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233815.618045:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233815.619655:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233815.640195:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233815.641412:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233815.659451:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233815.661093:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233815.673204:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233815.674912:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233815.685261:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233815.685781:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233815.696213:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233815.696770:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233815.715094:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233815.716179:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233815.732693:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233815.733299:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233815.748311:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233815.748796:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233815.769378:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233815.770064:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233815.783715:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233815.784317:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233815.797792:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233815.798353:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233815.812732:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233815.813345:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233815.829346:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233815.829903:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233815.846454:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233815.847130:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233815.862190:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233815.862996:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233815.889393:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233815.890836:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233815.906479:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233815.907575:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233820.326755:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233820.343984:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.
+[124174:124174:0915/233820.359120:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:254] SharedImageManager::ProduceSkia: Trying to Produce a Skia representation from a non-existent mailbox.
+[124174:124174:0915/233820.359645:ERROR:components/viz/service/display_embedder/image_context_impl.cc:407] Failed to fulfill the promise texture - SharedImage mailbox not found in SharedImageManager.

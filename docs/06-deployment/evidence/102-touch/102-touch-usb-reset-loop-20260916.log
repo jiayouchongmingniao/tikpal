@@ -1,0 +1,75 @@
+Apr 27 19:48:55 tikpal-room kernel: usbcore: registered new interface driver usbtouchscreen
+Sep 16 07:25:28 tikpal-room kernel: usb 3-1.4: USB disconnect, device number 3
+Sep 16 08:30:34 tikpal-room kernel: usb 3-1.3: new high-speed USB device number 6 using xhci-hcd
+Sep 16 08:30:34 tikpal-room kernel: usb 3-1.3: New USB device found, idVendor=1a40, idProduct=0101, bcdDevice= 1.00
+Sep 16 08:30:34 tikpal-room kernel: usb 3-1.3: New USB device strings: Mfr=0, Product=1, SerialNumber=0
+Sep 16 08:30:34 tikpal-room kernel: usb 3-1.3: Product: USB2.0 HUB
+Sep 16 08:30:34 tikpal-room kernel: usb 3-1.3.1: new full-speed USB device number 7 using xhci-hcd
+Sep 16 08:30:35 tikpal-room kernel: usb 3-1.3.1: New USB device found, idVendor=27c0, idProduct=0859, bcdDevice= 1.50
+Sep 16 08:30:35 tikpal-room kernel: usb 3-1.3.1: New USB device strings: Mfr=1, Product=2, SerialNumber=3
+Sep 16 08:30:35 tikpal-room kernel: usb 3-1.3.1: Product: TouchScreen
+Sep 16 08:30:35 tikpal-room kernel: usb 3-1.3.1: Manufacturer: wch.cn
+Sep 16 08:30:35 tikpal-room kernel: usb 3-1.3.1: SerialNumber: 9LQ0172005164
+Sep 16 08:30:35 tikpal-room kernel: input: wch.cn TouchScreen as /devices/platform/23400000.usb/xhci-hcd.1.auto/usb3/3-1/3-1.3/3-1.3.1/3-1.3.1:1.0/0003:27C0:0859.0002/input/input4
+Sep 16 08:30:35 tikpal-room kernel: hid-multitouch 0003:27C0:0859.0002: input,hiddev96,hidraw1: USB HID v1.10 Device [wch.cn TouchScreen] on usb-xhci-hcd.1.auto-1.3.1/input0
+Sep 16 08:30:35 tikpal-room kernel: hid-generic 0003:27C0:0859.0003: hiddev97,hidraw2: USB HID v1.10 Device [wch.cn TouchScreen] on usb-xhci-hcd.1.auto-1.3.1/input1
+Sep 16 08:30:35 tikpal-room kernel: input: wch.cn TouchScreen as /devices/platform/23400000.usb/xhci-hcd.1.auto/usb3/3-1/3-1.3/3-1.3.1/3-1.3.1:1.2/0003:27C0:0859.0004/input/input5
+Sep 16 08:30:35 tikpal-room kernel: hid-generic 0003:27C0:0859.0004: input,hidraw3: USB HID v1.10 Mouse [wch.cn TouchScreen] on usb-xhci-hcd.1.auto-1.3.1/input2
+Sep 16 08:30:36 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:30:38 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:30:39 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:30:41 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:30:42 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:30:44 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:30:45 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:30:48 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:30:50 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:30:51 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:30:53 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:30:55 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:30:56 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:30:58 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:30:59 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:31:00 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:31:01 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:31:03 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:31:04 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:31:06 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:31:06 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:31:08 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:31:09 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:31:11 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:31:12 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:31:14 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:31:15 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:31:17 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:31:19 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:31:20 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:31:21 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:31:22 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:31:24 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:31:25 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:31:27 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:31:28 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:31:30 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:31:32 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:31:33 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:31:35 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:31:37 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:31:44 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:31:45 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:31:47 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:31:49 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:31:51 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:31:52 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:31:53 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:31:55 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:31:55 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:31:57 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:31:58 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:32:00 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:32:01 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:32:03 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:32:03 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:32:05 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd
+Sep 16 08:32:07 tikpal-room kernel: usb 3-1.3.1: reset full-speed USB device number 7 using xhci-hcd

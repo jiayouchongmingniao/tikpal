@@ -394,6 +394,7 @@ export function AmbientScreen({
   const selectedBackgroundVideoSrcRef = useRef(DEFAULT_BACKGROUND_VIDEO.src);
   const sceneGallerySwipeRef = useRef<SceneGallerySwipeState | null>(null);
   const sceneGalleryClickSuppressionUntilRef = useRef(0);
+  const settingsTouchClickCleanupRef = useRef<(() => void) | null>(null);
   const adjustCommitTimersRef = useRef<Record<AmbientAdjustChannel, number | null>>({
     volume: null,
     brightness: null
@@ -410,11 +411,14 @@ export function AmbientScreen({
   const [adjustOverlay, setAdjustOverlay] = useState<AdjustOverlayState | null>(null);
   const [sourcePickerOpen, setSourcePickerOpen] = useState(false);
   const [roomModePickerOpen, setRoomModePickerOpen] = useState(false);
-  const [hifiSourcePickerDefault, setHifiSourcePickerDefault] = useState(true);
   const [sceneGalleryOpen, setSceneGalleryOpen] = useState(false);
   const [sceneGalleryPage, setSceneGalleryPage] = useState(0);
   const [sceneGalleryPageSize, setSceneGalleryPageSize] = useState(getSceneGalleryPageSize);
   const [sceneGalleryPending, setSceneGalleryPending] = useState(false);
+
+  useEffect(() => () => {
+    settingsTouchClickCleanupRef.current?.();
+  }, []);
   const [sceneGalleryError, setSceneGalleryError] = useState<string | null>(null);
   const [pendingAmbientSource, setPendingAmbientSource] = useState<AmbientMusicSourceTarget | null>(null);
   const [ambientSourceNotification, setAmbientSourceNotification] = useState<AmbientSourceNotification | null>(null);
@@ -971,7 +975,6 @@ export function AmbientScreen({
   function handleRoomModePickerToggle() {
     onHudActivity();
     setAmbientSourceError(null);
-    setHifiSourcePickerDefault(false);
     setSourcePickerOpen(false);
     setRoomModePickerOpen((open) => !open);
   }
@@ -1083,7 +1086,6 @@ export function AmbientScreen({
     onHudActivity();
     setRoomModePickerOpen(false);
     setSourcePickerOpen(false);
-    setHifiSourcePickerDefault(true);
     if (mode === roomExperience.mode) return;
     void onExperienceAction({ type: "set_mode", mode });
   }
@@ -1191,17 +1193,16 @@ export function AmbientScreen({
       setRoomModePickerOpen(false);
       return;
     }
-    if (isHifiMode && ambientHudVisible && hifiSourcePickerDefault) {
-      setSourcePickerOpen(true);
+    if (isHifiMode && ambientHudVisible) {
+      setRoomModePickerOpen(!sourcePickerOpen);
       return;
     }
     if (!ambientHudVisible) setSourcePickerOpen(false);
-  }, [ambientHudVisible, hifiSourcePickerDefault, isHifiMode, sceneGalleryOpen]);
+  }, [ambientHudVisible, isHifiMode, sceneGalleryOpen, sourcePickerOpen]);
 
   useEffect(() => {
     if (ambientHudVisible && !sceneGalleryOpen) return;
     setRoomModePickerOpen(false);
-    if (!ambientHudVisible) setHifiSourcePickerDefault(true);
   }, [ambientHudVisible, sceneGalleryOpen]);
 
   useEffect(() => {
@@ -1646,6 +1647,51 @@ export function AmbientScreen({
     finishAdjust();
   }, []);
 
+  const handleZoneClick = useCallback<React.MouseEventHandler<HTMLDivElement>>((event) => {
+    // Pointer handling already performs an edge adjustment. Suppress Chromium's
+    // delayed synthetic click so it cannot fall through to a parent gesture.
+    event.preventDefault();
+    event.stopPropagation();
+  }, []);
+
+  const suppressNextSettingsTouchClick = useCallback(() => {
+    settingsTouchClickCleanupRef.current?.();
+
+    let timeout: number | null = null;
+    function handleClick(event: MouseEvent) {
+      // Opening Settings on pointerdown changes what lies beneath the finger.
+      // Chromium's later synthetic click would otherwise land on its Close
+      // button and immediately return to Ambient.
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      cleanup();
+    }
+    function cleanup() {
+      window.removeEventListener("click", handleClick, true);
+      if (timeout !== null) window.clearTimeout(timeout);
+      if (settingsTouchClickCleanupRef.current === cleanup) {
+        settingsTouchClickCleanupRef.current = null;
+      }
+    }
+
+    window.addEventListener("click", handleClick, true);
+    timeout = window.setTimeout(cleanup, 1000);
+    settingsTouchClickCleanupRef.current = cleanup;
+  }, []);
+
+  const handleSettingsPointerDown = useCallback<React.PointerEventHandler<HTMLButtonElement>>((event) => {
+    if (event.pointerType !== "touch") return;
+    event.preventDefault();
+    event.stopPropagation();
+    suppressNextSettingsTouchClick();
+    onOpenSettings();
+  }, [onOpenSettings, suppressNextSettingsTouchClick]);
+
+  const handleSettingsClick = useCallback<React.MouseEventHandler<HTMLButtonElement>>((event) => {
+    event.stopPropagation();
+    onOpenSettings();
+  }, [onOpenSettings]);
+
   function getChangedTouch(event: React.TouchEvent<HTMLDivElement>) {
     return event.changedTouches[0] ?? event.touches[0] ?? null;
   }
@@ -1987,6 +2033,7 @@ export function AmbientScreen({
         onTouchEnd={handleZoneTouchEnd}
         onTouchCancel={handleZoneTouchCancel}
         onWheel={handleZoneWheel("brightness")}
+        onClick={handleZoneClick}
       />
       <div
         className="ambient-adjust-zone ambient-adjust-zone-right"
@@ -2002,9 +2049,10 @@ export function AmbientScreen({
         onTouchEnd={handleZoneTouchEnd}
         onTouchCancel={handleZoneTouchCancel}
         onWheel={handleZoneWheel("volume")}
+        onClick={handleZoneClick}
       />
 
-      <button className="icon-button ambient-settings" type="button" data-gesture-protected onClick={onOpenSettings} aria-label={t("settings.console")} title={t("settings.console")}>
+      <button className="icon-button ambient-settings" type="button" data-gesture-protected onPointerDown={handleSettingsPointerDown} onClick={handleSettingsClick} aria-label={t("settings.console")} title={t("settings.console")}>
         <Settings size={28} strokeWidth={1.8} />
       </button>
 
@@ -2187,18 +2235,20 @@ export function AmbientScreen({
               {sourcePickerControl}
             </>
           )}
-          <button
-            className={`ambient-transport-button ambient-transport-setting ambient-room-mode-toggle ${roomModePickerOpen ? "is-active" : ""}`}
-            type="button"
-            aria-label={t("ambient.chooseRoomMode")}
-            title={t("ambient.chooseRoomMode")}
-            aria-expanded={roomModePickerOpen}
-            data-ambient-room-mode-toggle
-            tabIndex={ambientHudVisible ? 0 : -1}
-            onClick={handleRoomModePickerToggle}
-          >
-            <SlidersHorizontal size={25} strokeWidth={1.8} />
-          </button>
+          {!isHifiMode ? (
+            <button
+              className={`ambient-transport-button ambient-transport-setting ambient-room-mode-toggle ${roomModePickerOpen ? "is-active" : ""}`}
+              type="button"
+              aria-label={t("ambient.chooseRoomMode")}
+              title={t("ambient.chooseRoomMode")}
+              aria-expanded={roomModePickerOpen}
+              data-ambient-room-mode-toggle
+              tabIndex={ambientHudVisible ? 0 : -1}
+              onClick={handleRoomModePickerToggle}
+            >
+              <SlidersHorizontal size={25} strokeWidth={1.8} />
+            </button>
+          ) : null}
         </div>
       </div> : null}
 

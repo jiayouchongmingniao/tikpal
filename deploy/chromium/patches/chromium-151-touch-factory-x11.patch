@@ -1,0 +1,19 @@
+diff --git a/ui/events/devices/x11/touch_factory_x11.cc b/ui/events/devices/x11/touch_factory_x11.cc
+index 9f8d5e1b77d8..f6bdf1d3e9ea 100644
+--- a/ui/events/devices/x11/touch_factory_x11.cc
++++ b/ui/events/devices/x11/touch_factory_x11.cc
+@@ -127,5 +127,14 @@ void TouchFactory::UpdateDeviceList(x11::Connection* connection) {
+         touch_device_lookup_.insert(master_id);
+         touch_device_list_[master_id] = {true, EventPointerType::kTouch};
+
++        if (devinfo.type != x11::Input::DeviceType::MasterPointer) {
++          // XInput touch events are selected through the master pointer but
++          // identify the physical touchscreen as their source. Keep both IDs
++          // so pointer details remain available after a device-list refresh.
++          touch_device_lookup_.insert(devinfo.deviceid);
++          touch_device_list_[devinfo.deviceid] = {false,
++                                                  EventPointerType::kTouch};
++        }
++
+         if (devinfo.type != x11::Input::DeviceType::MasterPointer)
+           CacheTouchscreenIds(devinfo.deviceid);

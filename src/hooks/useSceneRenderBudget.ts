@@ -1,11 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 
 const SAMPLE_WINDOW_MS = 10_000;
+const STARTUP_GRACE_MS = 45_000;
 const INITIAL_RECOVERY_MS = 60_000;
 const RETRY_RECOVERY_MS = 5 * 60_000;
-const MAX_STABLE_FRAME_MS = 42;
-const MAX_UNSTABLE_FRAME_MS = 45;
+// A 30fps scene on a 60Hz kiosk can produce an rAF p95 near 67ms. Reserve the
+// static fallback for sustained jank instead of treating that normal cadence
+// as a failure.
+const MAX_STABLE_FRAME_MS = 75;
+const MAX_UNSTABLE_FRAME_MS = 90;
 const MAX_DROPPED_FRAME_RATIO = 0.04;
+const REQUIRED_UNSTABLE_SAMPLES = 3;
 
 export interface SceneRenderDiagnostics {
   mode: "video" | "static";
@@ -37,11 +42,13 @@ export function useSceneRenderBudget({ constrained, enabled }: UseSceneRenderBud
   });
   const retryCountRef = useRef(0);
   const staticSinceRef = useRef<number | null>(null);
+  const unstableSampleCountRef = useRef(0);
 
   useEffect(() => {
     if (constrained && enabled) return;
     retryCountRef.current = 0;
     staticSinceRef.current = null;
+    unstableSampleCountRef.current = 0;
     diagnosticsRef.current = {
       mode: "video",
       rafP95Ms: null,
@@ -60,6 +67,7 @@ export function useSceneRenderBudget({ constrained, enabled }: UseSceneRenderBud
     const videoSamples: Array<{ at: number; total: number; dropped: number }> = [];
     let animationFrame = 0;
     let lastFrameAt = performance.now();
+    const startedAt = lastFrameAt;
     let observer: PerformanceObserver | null = null;
 
     const publish = () => {
@@ -124,9 +132,17 @@ export function useSceneRenderBudget({ constrained, enabled }: UseSceneRenderBud
       const unstable = (rafP95Ms !== null && rafP95Ms > MAX_UNSTABLE_FRAME_MS)
         || (droppedFrameRatio !== null && droppedFrameRatio >= MAX_DROPPED_FRAME_RATIO);
       const stable = rafP95Ms !== null && rafP95Ms <= MAX_STABLE_FRAME_MS;
+      const readyToProtect = now - startedAt >= STARTUP_GRACE_MS;
 
-      if (!currentStatic && sampledForTenSeconds && unstable) {
+      if (!currentStatic && sampledForTenSeconds && readyToProtect && unstable) {
+        unstableSampleCountRef.current += 1;
+      } else if (!currentStatic) {
+        unstableSampleCountRef.current = 0;
+      }
+
+      if (!currentStatic && unstableSampleCountRef.current >= REQUIRED_UNSTABLE_SAMPLES) {
         staticSinceRef.current = Date.now();
+        unstableSampleCountRef.current = 0;
         const retryDelay = retryCountRef.current > 0 ? RETRY_RECOVERY_MS : INITIAL_RECOVERY_MS;
         diagnosticsRef.current = {
           mode: "static",

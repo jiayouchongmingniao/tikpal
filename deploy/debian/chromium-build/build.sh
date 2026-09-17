@@ -42,6 +42,8 @@ for item in manifest['rockchip_patches']:
     apply(path, item['sha256'])
 item = manifest['local_patch']
 apply(patch_dir / item['file'], item['sha256'])
+item = manifest['touch_factory_patch']
+apply(patch_dir / item['file'], item['sha256'])
 item = manifest['tarball_build_patch']
 path = downloads / 'tarball-build.patch'
 subprocess.run(['curl', '-fsSL', '--retry', '3', '--connect-timeout', '20', '--max-time', '120', item['url'], '-o', str(path)], check=True)
@@ -60,6 +62,9 @@ if [[ ! -f "$WORK_DIR/dependencies.ready" ]]; then
 fi
 mkdir -p out/Tikpal
 cp "$SCRIPT_DIR/args.gn" out/Tikpal/args.gn
+if [[ -n "${TIKPAL_GOOGLE_API_KEYS_FILE:-}" ]]; then
+  python3 "$SCRIPT_DIR/inject-google-api-key.py" out/Tikpal/args.gn
+fi
 buildtools/linux64/gn gen out/Tikpal --fail-on-unused-args
 third_party/ninja/ninja -C out/Tikpal -j6 chrome chrome_sandbox
 file out/Tikpal/chrome

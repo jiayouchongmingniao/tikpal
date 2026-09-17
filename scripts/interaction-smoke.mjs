@@ -2993,14 +2993,20 @@ try {
   await expect(client, "document.querySelector('.ambient-room-beacon') === null", "ambient top-left mood card is removed");
   await expect(
     client,
-    "document.querySelector('[data-ambient-room-mode-picker]')?.getAttribute('aria-hidden') === 'true' && document.querySelector('[data-ambient-source-picker]') !== null",
-    "Hi-Fi defaults to the seven-source shelf while room modes remain a secondary choice"
+    "document.querySelector('[data-ambient-room-mode-picker]')?.getAttribute('aria-hidden') === 'false' && document.querySelector('[data-ambient-source-picker]') === null && document.querySelectorAll('.ambient-room-mode-buttons button').length === 4 && document.querySelector('.ambient-room-mode-buttons button[aria-pressed=\"true\"]')?.textContent?.trim() === 'Hi-Fi' && document.querySelector('[data-ambient-room-mode-toggle]') === null",
+    "Hi-Fi defaults to its selected room mode capsule without adding a crowded mode button to the transport"
   );
-  await evaluate(client, "document.querySelector('[data-ambient-room-mode-toggle]')?.click(); true");
+  await evaluate(client, "document.querySelector('[data-ambient-source-toggle]')?.click(); true");
   await expectEventually(
     client,
-    "document.querySelector('[data-ambient-room-mode-picker]')?.getAttribute('aria-hidden') === 'false' && document.querySelector('[data-ambient-source-picker]') === null && document.querySelectorAll('.ambient-room-mode-buttons button').length === 4 && document.querySelector('.ambient-room-mode-buttons button[aria-pressed=\"true\"]') !== null",
-    "room mode control replaces the source shelf with one centered secondary picker"
+    "document.querySelector('[data-ambient-room-mode-picker]')?.getAttribute('aria-hidden') === 'true' && document.querySelector('[data-ambient-source-picker]') !== null",
+    "Hi-Fi music control replaces the room mode capsule with the source shelf"
+  );
+  await evaluate(client, "document.querySelector('[data-ambient-source-toggle]')?.click(); true");
+  await expectEventually(
+    client,
+    "document.querySelector('[data-ambient-room-mode-picker]')?.getAttribute('aria-hidden') === 'false' && document.querySelector('[data-ambient-source-picker]') === null",
+    "closing the Hi-Fi source shelf restores the room mode capsule"
   );
   await expect(
     client,

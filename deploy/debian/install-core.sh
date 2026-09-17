@@ -52,6 +52,9 @@ chmod 755 "$policy"
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends --no-upgrade "${packages[@]}"
 restore_policy
 trap 'rm -rf "$tmp"' EXIT
+# The API invokes only these two commands with `sudo -n`; keep the grant
+# separate and command-scoped instead of allowing a general privileged shell.
+"$APP_DIR/deploy/debian/install-system-power-sudoers.sh" "$SERVICE_USER"
 # The distro MPD must not compete with the per-user daemon on the next boot.
 for unit in mpd.service mpd.socket; do
   if [[ ! -e "$BACKUP/$unit.enabled" ]]; then

@@ -1,0 +1,54 @@
+[
+  {
+    "result": {
+      "type": "object",
+      "value": {
+        "time": 11.102134,
+        "paused": false,
+        "frames": 274,
+        "dropped": 6,
+        "width": 1920,
+        "height": 633
+      }
+    }
+  },
+  {
+    "result": {
+      "type": "object",
+      "value": {
+        "time": 21.271272,
+        "paused": false,
+        "frames": 518,
+        "dropped": 7,
+        "width": 2504,
+        "height": 633
+      }
+    }
+  },
+  {
+    "result": {
+      "type": "object",
+      "value": {
+        "time": 0.864345,
+        "paused": false,
+        "frames": 737,
+        "dropped": 8,
+        "width": 1920,
+        "height": 633
+      }
+    }
+  },
+  {
+    "result": {
+      "type": "object",
+      "value": {
+        "time": 10.960489,
+        "paused": false,
+        "frames": 979,
+        "dropped": 8,
+        "width": 2504,
+        "height": 633
+      }
+    }
+  }
+]

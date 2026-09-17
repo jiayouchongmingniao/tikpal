@@ -17,6 +17,7 @@ case "${1:-}" in
       --socket "$TIKPAL_WEB_MODE_X11_HELPER_SOCKET" \
       --generation-file "$TIKPAL_WEB_MODE_X11_HELPER_GENERATION_PATH" --phase 0 ;;
   kiosk)
+    "$APP_DIR/deploy/debian/disable-touch-mouse-emulation.sh" || true
     for attempt in {1..60}; do
       if curl -fsS --max-time 1 http://127.0.0.1:4173/ >/dev/null; then
         exec bash deploy/chromium/launch-tikpal-kiosk.sh

@@ -181,6 +181,19 @@ async function run() {
     assert(info.isFile(), `${file} should be a file`);
   }
 
+  const chromiumBuildArgs = await readFile(path.join(ROOT, "deploy/debian/chromium-build/args.gn"), "utf8");
+  assert(/^\s*enable_widevine\s*=\s*true\s*$/m.test(chromiumBuildArgs), "ARM64 Chromium build should enable the Widevine key system");
+  assert(/^\s*enable_library_cdms\s*=\s*true\s*$/m.test(chromiumBuildArgs), "ARM64 Chromium build should enable library CDMs for Widevine");
+  const chromiumSourceManifest = JSON.parse(await readFile(path.join(ROOT, "deploy/chromium/patches/chromium-151-sources.json"), "utf8"));
+  assert(chromiumSourceManifest.touch_factory_patch?.file === "chromium-151-touch-factory-x11.patch", "ARM64 Chromium build should retain the current X11 touch patch");
+  const chromiumBuildScript = await readFile(path.join(ROOT, "deploy/debian/chromium-build/build.sh"), "utf8");
+  assert(chromiumBuildScript.includes("manifest['touch_factory_patch']"), "ARM64 Chromium build should apply the locked X11 touch patch");
+  assert(chromiumBuildScript.includes("TIKPAL_GOOGLE_API_KEYS_FILE"), "ARM64 Chromium build should support an external Google API key file");
+  const chromiumGoogleApiKeyInjector = await readFile(path.join(ROOT, "deploy/debian/chromium-build/inject-google-api-key.py"), "utf8");
+  assert(chromiumGoogleApiKeyInjector.includes('required_key = "GOOGLE_API_KEY"'), "ARM64 Chromium build should inject only the Google API key required by Chromium's missing-key check");
+  const chromiumPackager = await readFile(path.join(ROOT, "deploy/debian/chromium-build/package.py"), "utf8");
+  assert(chromiumPackager.includes('"<redacted>"'), "ARM64 Chromium package provenance should redact the Google API key");
+
   assert(buildProxyConfig({ proxyEnabled: false }).mode === "direct", "extension should apply direct mode when the proxy is off");
   for (const [proxyUrl, expectedScheme] of [
     ["proxy.local:8080", "http"],
@@ -1907,9 +1920,9 @@ sync_runtime_provider_pool_process_statuses ""
   assert(ambientScreenSource.includes("ambient-source-toggle is-source-primary") && ambientScreenSource.includes('aria-expanded={sourcePickerOpen}'), "Ambient source picker toggle should stay visually primary while aria-expanded only tracks the open shelf");
   assert(ambientScreenSource.includes("is-source-picker-open") && stylesSource.includes(".ambient-screen.is-source-picker-open::before"), "Ambient source picker should dim the room behind the options");
   assert(stylesSource.includes("backdrop-filter: blur(5px) saturate(0.82) brightness(0.72)"), "Ambient source picker dim layer should softly blur and darken the room");
-  assert(!ambientScreenSource.includes("sourcePickerOpenRequest") && ambientScreenSource.includes("if (isHifiMode && ambientHudVisible && hifiSourcePickerDefault)") && ambientScreenSource.includes("if (!ambientHudVisible || !isHifiMode) setSourcePickerOpen(false)") && !ambientScreenSource.includes("SOURCE_PICKER_AUTO_CLOSE_MS"), "Hi-Fi should default open the seven-source picker while scene modes keep it closed until the music button is chosen");
+  assert(!ambientScreenSource.includes("sourcePickerOpenRequest") && !ambientScreenSource.includes("hifiSourcePickerDefault") && ambientScreenSource.includes("if (isHifiMode && ambientHudVisible)") && ambientScreenSource.includes("setRoomModePickerOpen(!sourcePickerOpen);") && ambientScreenSource.includes("if (!ambientHudVisible || !isHifiMode) setSourcePickerOpen(false)") && !ambientScreenSource.includes("SOURCE_PICKER_AUTO_CLOSE_MS"), "Hi-Fi should default to the selected room mode capsule, temporarily yielding it only while the music source shelf is open");
   assert(stylesSource.includes('--ambient-control-anchor-x: 50%;') && !stylesSource.includes('--ambient-control-anchor-x: calc(50% + clamp(80px, 4vw, 110px));'), "Scene and Hi-Fi controls should share the screen center");
-  assert(ambientScreenSource.includes("data-ambient-room-mode-toggle") && ambientScreenSource.includes("data-ambient-room-mode-picker") && ambientScreenSource.includes("setSourcePickerOpen(false);") && ambientScreenSource.includes("setRoomModePickerOpen((open) => !open);"), "Room modes should open from their own secondary control and never stay open with the source shelf");
+  assert(ambientScreenSource.includes("{!isHifiMode ? (") && ambientScreenSource.includes("data-ambient-room-mode-toggle") && ambientScreenSource.includes("data-ambient-room-mode-picker") && ambientScreenSource.includes("setSourcePickerOpen(false);") && ambientScreenSource.includes("setRoomModePickerOpen((open) => !open);"), "Room modes should keep their secondary control outside Hi-Fi, where the selected capsule is already open and never overlaps the source shelf");
   assert(stylesSource.includes("width: min(840px, calc(100vw - 112px));") && stylesSource.includes("grid-template-columns: minmax(0, 1fr) repeat(4, auto);") && stylesSource.includes("font-size: clamp(22px, 1.45vw, 30px);") && stylesSource.includes("font-size: clamp(13px, 0.8vw, 16px);") && stylesSource.includes(".ambient-transport.is-room-mode .ambient-transport-mode-copy strong,") && stylesSource.includes("text-overflow: ellipsis;"), "Scene transport should keep its centered width, smaller playback copy, and fixed control columns when playback titles vary");
   assert(stylesSource.includes("min-height: 72px;") && stylesSource.includes("font-size: 17px;") && stylesSource.includes("width: 23px;") && stylesSource.includes("min-height: 64px;") && stylesSource.includes("font-size: 16px;"), "Desktop and tablet room mode choices should use enlarged readable controls");
   assert(ambientScreenSource.includes("data-ambient-standby-status") && !ambientScreenSource.includes("ambient-standby-status ${clockVisible ?") && stylesSource.includes("left: max(38px, env(safe-area-inset-left));") && stylesSource.includes("top: 144px;") && !stylesSource.includes(".ambient-standby-status.has-clock") && stylesSource.includes(".ambient-screen.is-hud-visible .ambient-standby-status") && /\.ambient-standby-status\s*\{[\s\S]*?min-height:\s*44px;/.test(stylesSource), "Ambient standby should keep a fadeable 44px identity target away from the clock at every viewport");
@@ -2294,6 +2307,13 @@ sync_runtime_provider_pool_process_statuses ""
   assert(kioskLauncher.includes(': "${TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE:=auto}"'), "kiosk launcher should default Chromium audio to the physical adapter instead of ALSA default");
   assert(webModeScript.includes(': "${TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE:=auto}"'), "Explore should default Chromium audio to the physical adapter instead of ALSA default");
   assert(kioskLauncher.includes('TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE="$(resolve_physical_alsa_output_device'), "kiosk launcher should resolve auto ALSA output before launching Chromium");
+  assert(
+    kioskLauncher.includes('TIKPAL_CHROMIUM_TOUCH_DEVICE_MAP:=}')
+      && kioskLauncher.includes("resolve_chromium_touch_device_map()")
+      && kioskLauncher.includes("ID_INPUT_TOUCHSCREEN=1")
+      && kioskLauncher.includes('ARGS+=("--touch-devices=$CHROMIUM_TOUCH_DEVICE_MAP")'),
+    "kiosk launcher should map the X master pointer and direct touchscreen together when requested"
+  );
   assert(
     kioskLauncher.includes("resolve_xrandr_primary_output")
       && kioskLauncher.includes("TIKPAL_KIOSK_XRANDR_DIRECT_OUTPUT_PATTERN")

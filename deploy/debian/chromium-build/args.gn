@@ -19,3 +19,5 @@ use_v4lplugin = true
 use_vaapi = false
 proprietary_codecs = true
 ffmpeg_branding = "Chrome"
+enable_widevine = true
+enable_library_cdms = true

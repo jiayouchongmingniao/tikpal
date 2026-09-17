@@ -4,7 +4,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 ENV_FILE="${TIKPAL_KIOSK_ENV_FILE:-$APP_DIR/.env.kiosk}"
-FLAGS_FILE="${TIKPAL_CHROMIUM_FLAGS_FILE:-$SCRIPT_DIR/chromium-flags.conf}"
 
 should_source_env_file() {
   local value
@@ -26,6 +25,9 @@ if should_source_env_file && [[ -f "$ENV_FILE" ]]; then
   set +a
 fi
 
+# The environment file can select the per-device flags file.
+FLAGS_FILE="${TIKPAL_CHROMIUM_FLAGS_FILE:-$SCRIPT_DIR/chromium-flags.conf}"
+
 : "${TIKPAL_KIOSK_URL:=http://localhost:4173/}"
 : "${TIKPAL_KIOSK_WINDOW:=2560x720}"
 : "${TIKPAL_KIOSK_WINDOW_POSITION:=0,0}"
@@ -43,6 +45,8 @@ fi
 : "${TIKPAL_KIOSK_XRANDR_FALLBACK_TO_CONNECTED:=1}"
 : "${TIKPAL_KIOSK_X_COMMAND_TIMEOUT_SECONDS:=5}"
 : "${TIKPAL_CHROMIUM_BIN:=/usr/lib/chromium-browser/chromium-browser}"
+: "${TIKPAL_CHROMIUM_ENABLE_FEATURES:=}"
+: "${TIKPAL_CHROMIUM_TOUCH_DEVICE_MAP:=}"
 : "${TIKPAL_CHROMIUM_PROFILE_DIR:=$HOME/.config/tikpal-chromium-kiosk}"
 : "${TIKPAL_CHROMIUM_COLOR_SCHEME:=dark}"
 : "${TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE:=auto}"
@@ -289,6 +293,44 @@ read_flags() {
   printf '%s\n' "${flags[@]}"
 }
 
+resolve_chromium_touch_device_map() {
+  local configured master_id device_id device_node properties
+  local -a touch_device_ids=()
+
+  configured="$(printf '%s' "$TIKPAL_CHROMIUM_TOUCH_DEVICE_MAP" | tr '[:upper:]' '[:lower:]')"
+  case "$configured" in
+    ""|0|false|no|off|disabled)
+      return 0
+      ;;
+    auto)
+      command -v xinput >/dev/null 2>&1 || return 0
+      command -v udevadm >/dev/null 2>&1 || return 0
+      master_id="$(xinput list --short 2>/dev/null | sed -n 's/.*id=\([0-9][0-9]*\).*\[master pointer.*/\1/p' | head -n1)"
+      [[ -n "$master_id" ]] || return 0
+      while IFS= read -r device_id; do
+        [[ -n "$device_id" ]] || continue
+        properties="$(xinput list-props "$device_id" 2>/dev/null || true)"
+        device_node="$(printf '%s\n' "$properties" | sed -n 's/.*Device Node.*:[[:space:]]*"\(.*\)"/\1/p')"
+        [[ -n "$device_node" ]] || continue
+        if udevadm info --query=property --name="$device_node" 2>/dev/null | grep -qx 'ID_INPUT_TOUCHSCREEN=1'; then
+          touch_device_ids+=("$device_id")
+        fi
+      done < <(xinput list --short 2>/dev/null | sed -n 's/.*id=\([0-9][0-9]*\).*/\1/p')
+      ((${#touch_device_ids[@]})) || return 0
+      printf '%s' "$master_id"
+      printf ',%s' "${touch_device_ids[@]}"
+      printf '\n'
+      ;;
+    *)
+      [[ "$TIKPAL_CHROMIUM_TOUCH_DEVICE_MAP" =~ ^[0-9]+(,[0-9]+)*$ ]] || {
+        log "WARN: ignoring invalid TIKPAL_CHROMIUM_TOUCH_DEVICE_MAP value"
+        return 0
+      }
+      printf '%s\n' "$TIKPAL_CHROMIUM_TOUCH_DEVICE_MAP"
+      ;;
+  esac
+}
+
 reset_chromium_profile_state() {
   mkdir -p "$TIKPAL_CHROMIUM_PROFILE_DIR/Default"
   rm -rf \
@@ -489,10 +531,20 @@ if command -v xsetroot >/dev/null 2>&1; then
 fi
 
 if command -v unclutter >/dev/null 2>&1; then
-  unclutter -idle 0.1 -root >/dev/null 2>&1 &
+  unclutter_help="$(unclutter --help 2>&1 || true)"
+  if [[ "$unclutter_help" == *--hide-on-touch* ]]; then
+    unclutter --timeout 0.1 --hide-on-touch --start-hidden --fork >/dev/null 2>&1 || true
+  else
+    unclutter -idle 0.1 -root >/dev/null 2>&1 &
+  fi
 fi
 
 mapfile -t EXTRA_FLAGS < <(read_flags)
+CHROMIUM_TOUCH_DEVICE_MAP="$(resolve_chromium_touch_device_map || true)"
+CHROMIUM_FEATURES=()
+if [[ -n "$TIKPAL_CHROMIUM_ENABLE_FEATURES" ]]; then
+  CHROMIUM_FEATURES+=("$TIKPAL_CHROMIUM_ENABLE_FEATURES")
+fi
 ARGS=(
   "--kiosk"
   "$TIKPAL_KIOSK_URL"
@@ -503,11 +555,22 @@ ARGS=(
 )
 
 if [[ "$TIKPAL_CHROMIUM_COLOR_SCHEME" == "dark" ]]; then
-  ARGS+=("--force-dark-mode" "--enable-features=WebUIDarkMode")
+  ARGS+=("--force-dark-mode")
+  CHROMIUM_FEATURES+=("WebUIDarkMode")
+fi
+
+if ((${#CHROMIUM_FEATURES[@]})); then
+  CHROMIUM_FEATURES_CSV="$(IFS=,; printf '%s' "${CHROMIUM_FEATURES[*]}")"
+  ARGS+=("--enable-features=$CHROMIUM_FEATURES_CSV")
 fi
 
 if [[ -n "$TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE" ]]; then
   ARGS+=("--alsa-output-device=$TIKPAL_CHROMIUM_ALSA_OUTPUT_DEVICE")
+fi
+
+if [[ -n "$CHROMIUM_TOUCH_DEVICE_MAP" ]]; then
+  ARGS+=("--touch-devices=$CHROMIUM_TOUCH_DEVICE_MAP")
+  log "touch device map: $CHROMIUM_TOUCH_DEVICE_MAP"
 fi
 
 if is_enabled "$TIKPAL_KIOSK_REMOTE_DEBUG"; then
