@@ -5447,8 +5447,11 @@ tile_window() {
     wmctrl_mutation clear_maximize "$window" normal \
       -i -r "$window" -b remove,fullscreen,maximized_vert,maximized_horz >/dev/null 2>&1 || true
     if ! is_enabled "$TIKPAL_WEB_MODE_X11_SYNC_WINDOW_OPS"; then
-      wmctrl_mutation geometry "$window" "${x},${y}_${width}x${height}" \
-        -i -r "$window" -e "0,$x,$y,$width,$height" >/dev/null 2>&1 && return 0
+      if wmctrl_mutation geometry "$window" "${x},${y}_${width}x${height}" \
+          -i -r "$window" -e "0,$x,$y,$width,$height" >/dev/null 2>&1 \
+          && window_is_at_position "$window" "$position" "$size"; then
+        return 0
+      fi
     fi
   fi
   if is_enabled "$TIKPAL_WEB_MODE_X11_SYNC_WINDOW_OPS"; then
@@ -5475,8 +5478,11 @@ tile_window_fast() {
   height="$(window_height "$size")"
   TIKPAL_TILE_WINDOW_CHANGED=1
   if command -v wmctrl >/dev/null 2>&1 && ! is_enabled "$TIKPAL_WEB_MODE_X11_SYNC_WINDOW_OPS"; then
-    wmctrl_mutation geometry "$window" "${x},${y}_${width}x${height}" \
-      -i -r "$window" -e "0,$x,$y,$width,$height" >/dev/null 2>&1 && return 0
+    if wmctrl_mutation geometry "$window" "${x},${y}_${width}x${height}" \
+        -i -r "$window" -e "0,$x,$y,$width,$height" >/dev/null 2>&1 \
+        && window_is_at_position "$window" "$position" "$size"; then
+      return 0
+    fi
   fi
   if is_enabled "$TIKPAL_WEB_MODE_X11_SYNC_WINDOW_OPS"; then
     tile_window "$window" "$position" "$size"
@@ -8047,7 +8053,11 @@ reveal_resident_provider_surfaces() {
   local previous_profile="${4:-}"
   local transition_shown_ms="${5:-0}"
   local provider_port="${6:-}"
-  local panel_window
+  local panel_window previous_window=""
+  if [[ -n "$previous_profile" && "$previous_profile" != "$provider_profile" ]]; then
+    previous_window="$(first_window_for_profile "$previous_profile" || true)"
+    [[ "$previous_window" =~ ^[1-9][0-9]*$ ]] || return 1
+  fi
   panel_window="$(wait_for_profile_window "$panel_profile" 8 || true)"
   if [[ -n "$panel_window" ]]; then
     restore_window_opacity "$panel_window"
@@ -8055,7 +8065,7 @@ reveal_resident_provider_surfaces() {
     mark_window_above "$panel_window"
     raise_window_without_focus "$panel_window"
   fi
-  reveal_resident_provider_window "$target_window" "$previous_profile" "$provider_profile" "$transition_shown_ms" "$provider_port"
+  reveal_resident_provider_window "$target_window" "$previous_profile" "$provider_profile" "$transition_shown_ms" "$provider_port" "$previous_window"
   raise_onboard
 }
 
@@ -8450,7 +8460,12 @@ reveal_resident_provider_window() {
   cleanup_target_window_probe "$target_window"
   log_stage "reveal_paint_ok target=$target_window elapsed_ms=$(( $(now_ms) - _paint_check_ms ))"
   if [[ -n "$previous_profile" && "$previous_profile" != "$provider_profile" ]]; then
-    park_profile_windows_for_reopen "$previous_profile" "$TIKPAL_WEB_MODE_LEFT_WINDOW" || true
+    if ! park_profile_windows_for_reopen "$previous_profile" "$TIKPAL_WEB_MODE_LEFT_WINDOW" "$previous_window" \
+        || ! wait_for_window_position "$previous_window" "$TIKPAL_WEB_MODE_STAGE_POSITION" "$TIKPAL_WEB_MODE_LEFT_WINDOW" 1; then
+      restore_window_opacity "$previous_window"
+      log_stage "reveal_previous_park_failed target=$target_window previous=$previous_window"
+      return 1
+    fi
   fi
   mark_window_above "$target_window"
   raise_window "$target_window"

@@ -3462,8 +3462,9 @@ sync_runtime_provider_pool_process_statuses ""
   assert(
     webModeScript.includes("TIKPAL_WEB_MODE_X11_SYNC_WINDOW_OPS:=0")
       && webModeScript.includes('wmctrl_mutation geometry "$window"')
+      && webModeScript.includes('&& window_is_at_position "$window" "$position" "$size"; then')
       && webModeScript.includes('windowmove "$window" "$x" "$y"'),
-    "Explore hot window moves should default to traced async X11 operations instead of xdotool --sync"
+    "Explore hot window moves should verify wmctrl geometry before accepting it or falling back to xdotool"
   );
   assert(
     webModeScript.includes("x11_mutation_run() {")
@@ -3588,9 +3589,10 @@ sync_runtime_provider_pool_process_statuses ""
         < residentFallbackBody.indexOf('park_profile_windows_for_reopen "$previous_profile"')
       && residentFallbackBody.indexOf('park_profile_windows_for_reopen "$previous_profile"')
         < residentFallbackBody.lastIndexOf('raise_window "$target_window"')
+      && residentFallbackBody.includes('wait_for_window_position "$previous_window" "$TIKPAL_WEB_MODE_STAGE_POSITION"')
       && parkProfileWindowBody.indexOf('set_window_opacity "$window" 0')
         < parkProfileWindowBody.indexOf('tile_window_fast "$window"'),
-    "Explore resident reveal should tile before raise and park the known previous provider without re-running the Close helper"
+    "Explore resident reveal should prove the known previous provider is parked before raising and committing the target"
   );
   const openProviderPoolStart = webModeScript.indexOf("open_provider_pool() {");
   const openProviderPoolEnd = webModeScript.indexOf("\n}\n\nopen_provider()", openProviderPoolStart);
