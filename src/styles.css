@@ -1432,7 +1432,7 @@ select {
   top: 72px;
   right: clamp(360px, 18vw, 480px);
   bottom: 132px;
-  left: clamp(640px, 42vw, 1080px);
+  left: clamp(860px, 36vw, 940px);
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   row-gap: 76px;
@@ -1593,7 +1593,7 @@ select {
   width: min(1180px, calc(100vw - 280px - var(--hifi-lyrics-footer-shift-x)));
   bottom: clamp(76px, 12vh, 96px);
   display: grid;
-  grid-template-columns: minmax(520px, 720px) auto;
+  grid-template-columns: minmax(520px, 620px) auto;
   align-items: center;
   gap: clamp(48px, 4vw, 82px);
   color: color-mix(in srgb, var(--hifi-theme-title) 82%, transparent);
@@ -2008,7 +2008,7 @@ select {
   top: 72px;
   right: clamp(88px, 8vw, 180px);
   bottom: 132px;
-  left: clamp(640px, 42vw, 1080px);
+  left: clamp(860px, 36vw, 940px);
   opacity: 1;
 }
 
