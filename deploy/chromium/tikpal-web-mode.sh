@@ -4812,6 +4812,7 @@ reconcile_provider_pool() {
     log_stage "reconcile_ms=$elapsed_ms provider=$active_provider abandoned=1"
     return 0
   }
+  start_provider_thermal_guard
   provider_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/$active_provider"
   provider_switch_in_progress && {
     elapsed_ms="$(( $(now_ms) - started_ms ))"
