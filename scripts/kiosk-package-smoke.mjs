@@ -130,6 +130,42 @@ async function assertExecutable(file) {
   await access(path.join(ROOT, file), constants.X_OK);
 }
 
+function writeFixtureExecutable(directory, name, source) {
+  writeFileSync(path.join(directory, name), `#!/bin/sh\n${source}\n`, { mode: 0o755 });
+}
+
+function runMultiroomActiveFixture({ name, ecosystem, pgrepStatus = null, fuserPids = "", process = "", grepStatus = 1 }) {
+  const directory = mkdtempSync(path.join(tmpdir(), `tikpal-multiroom-${name}-`));
+  const binDirectory = path.join(directory, "bin");
+  const logPath = path.join(directory, "commands.log");
+  mkdirSync(binDirectory);
+
+  if (pgrepStatus !== null) {
+    writeFixtureExecutable(binDirectory, "pgrep", `printf 'pgrep\\n' >> "$TIKPAL_MULTIROOM_FIXTURE_LOG"\nexit ${pgrepStatus}`);
+  }
+  writeFixtureExecutable(binDirectory, "fuser", `printf 'fuser\\n' >> "$TIKPAL_MULTIROOM_FIXTURE_LOG"\nprintf '%s\\n' "$TIKPAL_MULTIROOM_FIXTURE_FUSER_PIDS"`);
+  writeFixtureExecutable(binDirectory, "ps", `printf 'ps\\n' >> "$TIKPAL_MULTIROOM_FIXTURE_LOG"\nprintf '%s\\n' "$TIKPAL_MULTIROOM_FIXTURE_PROCESS"`);
+  writeFixtureExecutable(binDirectory, "grep", `printf 'grep\\n' >> "$TIKPAL_MULTIROOM_FIXTURE_LOG"\nexit "$TIKPAL_MULTIROOM_FIXTURE_GREP_STATUS"`);
+
+  const result = spawnSync("/bin/bash", [path.join(ROOT, "deploy/moode/tikpal-multiroom-state.sh"), ecosystem, "active"], {
+    env: {
+      PATH: binDirectory,
+      TIKPAL_MULTIROOM_FIXTURE_LOG: logPath,
+      TIKPAL_MULTIROOM_FIXTURE_FUSER_PIDS: fuserPids,
+      TIKPAL_MULTIROOM_FIXTURE_PROCESS: process,
+      TIKPAL_MULTIROOM_FIXTURE_GREP_STATUS: String(grepStatus)
+    },
+    encoding: "utf8"
+  });
+  let log = "";
+  try {
+    log = readFileSync(logPath, "utf8");
+  } catch {
+    // The Music Assistant fast path intentionally does not invoke a command.
+  }
+  return { ...result, log };
+}
+
 async function getFreePorts(count) {
   const servers = Array.from({ length: count }, () => createNetServer());
   await Promise.all(servers.map((server) => new Promise((resolve, reject) => {
@@ -458,6 +494,44 @@ async function run() {
   assert(multiroomHelperSource.includes("RoonBridge|RAATServer"), "Multi-room helper should detect Roon ALSA ownership");
   assert(multiroomHelperSource.includes("squeezelite"), "Multi-room helper should support Lyrion / Squeezelite");
   assert(multiroomHelperSource.includes("tikpal-multiroom|snapclient|snapserver"), "Multi-room helper should support Tikpal Multi-room ownership");
+  assert(
+    multiroomHelperSource.includes('pgrep -fi -- "$process_pgrep_pattern"')
+      && multiroomHelperSource.includes("(^|/)(tikpal-multiroom|snapclient|snapserver)([[:space:]]|$)")
+      && multiroomHelperSource.indexOf('pgrep -fi -- "$process_pgrep_pattern"') < multiroomHelperSource.indexOf('fuser /dev/snd/pcm*p /dev/snd/pcm*c'),
+    "Multi-room helper should check for an ecosystem process before scanning ALSA devices"
+  );
+  const multiroomHelperSyntax = spawnSync("bash", ["-n", path.join(ROOT, "deploy/moode/tikpal-multiroom-state.sh")], { encoding: "utf8" });
+  assert(multiroomHelperSyntax.status === 0, `multi-room helper should pass bash syntax validation: ${multiroomHelperSyntax.stderr}`);
+  const noCandidateMultiroom = runMultiroomActiveFixture({ name: "no-candidate", ecosystem: "lyrion", pgrepStatus: 1 });
+  assert(noCandidateMultiroom.status !== 0 && noCandidateMultiroom.log === "pgrep\n", "an absent multi-room process should skip fuser");
+  const activeOwnerMultiroom = runMultiroomActiveFixture({
+    name: "active-owner",
+    ecosystem: "lyrion",
+    pgrepStatus: 0,
+    fuserPids: "4242",
+    process: "squeezelite -n Tikpal",
+    grepStatus: 0
+  });
+  assert(activeOwnerMultiroom.status === 0 && activeOwnerMultiroom.log === "pgrep\nfuser\nps\ngrep\n", "a candidate owning ALSA should retain the existing active result");
+  const inactiveOwnerMultiroom = runMultiroomActiveFixture({
+    name: "candidate-not-owner",
+    ecosystem: "lyrion",
+    pgrepStatus: 0,
+    fuserPids: "4242",
+    process: "mpd --no-daemon",
+    grepStatus: 1
+  });
+  assert(inactiveOwnerMultiroom.status !== 0 && inactiveOwnerMultiroom.log === "pgrep\nfuser\nps\ngrep\n", "a candidate not owning ALSA should remain inactive after fuser checks");
+  const pgrepUnavailableMultiroom = runMultiroomActiveFixture({
+    name: "without-pgrep",
+    ecosystem: "roon",
+    fuserPids: "4242",
+    process: "RoonBridge",
+    grepStatus: 0
+  });
+  assert(pgrepUnavailableMultiroom.status === 0 && pgrepUnavailableMultiroom.log === "fuser\nps\ngrep\n", "a missing pgrep should retain the fuser fallback");
+  const musicAssistantMultiroom = runMultiroomActiveFixture({ name: "music-assistant", ecosystem: "music_assistant", pgrepStatus: 0 });
+  assert(musicAssistantMultiroom.status !== 0 && musicAssistantMultiroom.log === "", "Music Assistant should remain outside ALSA ownership detection");
   assert(quickSettingsAudioSource.includes("data-audio-diagnostics-grid"), "Audio Diagnostics should expose a horizontal grid test hook");
   assert(quickSettingsAudioSource.includes("settings.audioDiagnosticsNoActiveStream"), "Audio Diagnostics should show a friendly empty stream state");
   const audioDiagnosticsStylesSource = await readFile(path.join(ROOT, "src/styles.css"), "utf8");

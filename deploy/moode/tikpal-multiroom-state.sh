@@ -39,9 +39,19 @@ process_pattern_for() {
   esac
 }
 
+process_pgrep_pattern_for() {
+  case "$ecosystem" in
+    roon) printf '%s\n' '(^|/)(RoonBridge|RAATServer)([[:space:]]|$)' ;;
+    lyrion) printf '%s\n' '(^|/)squeezelite([[:space:]]|$)' ;;
+    tikpal) printf '%s\n' '(^|/)(tikpal-multiroom|snapclient|snapserver)([[:space:]]|$)' ;;
+    music_assistant) printf '%s\n' '(^|/)(MusicAssistant|music-assistant)([[:space:]]|$)' ;;
+  esac
+}
+
 service="$(service_for)"
 label="$(label_for)"
 process_pattern="$(process_pattern_for)"
+process_pgrep_pattern="$(process_pgrep_pattern_for)"
 
 run_systemctl() {
   [[ -n "$service" ]] || return 1
@@ -84,6 +94,16 @@ installed() {
 
 active_alsa_owner() {
   [[ "$ecosystem" != "music_assistant" ]] || return 1
+
+  # Most status refreshes run with no multi-room player installed or running.
+  # Avoid the expensive ALSA-device scan unless this ecosystem has a candidate
+  # process. Match complete executable names so this helper's own filename
+  # cannot make tikpal-multiroom look active. Keep the fuser path for minimal
+  # environments without pgrep.
+  if command -v pgrep >/dev/null 2>&1; then
+    pgrep -fi -- "$process_pgrep_pattern" >/dev/null 2>&1 || return 1
+  fi
+
   command -v fuser >/dev/null 2>&1 || return 1
   local pids pid process
   pids="$(fuser /dev/snd/pcm*p /dev/snd/pcm*c 2>/dev/null || true)"
