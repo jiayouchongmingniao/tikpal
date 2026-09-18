@@ -85,4 +85,15 @@ freeze_background_provider qq_music netease_music
 grep -Fxq 'close:qq_music' "$events"
 grep -Fxq 'status:qq_music:closed' "$events"
 
-echo 'Provider resource guard fixture passed: flag filtering, thermal hysteresis, bounded release, resident handoff, lifecycle fallback'
+: > "$events"
+read_proxy_settings() { printf '\t0\n'; }
+effective_provider_proxy_enabled() { printf '0\n'; }
+write_provider_failure_and_release() { printf 'failure-release:%s:%s:%s\n' "$1" "$2" "$3" >> "$events"; }
+clear_provider_switch_guard() { :; }
+write_runtime_provider_state() { :; }
+write_runtime_provider_status() { :; }
+close_web_mode() { :; }
+recover_or_cover_provider_failure '' '' suno check_setup 'Suno did not become ready' || true
+grep -Fxq 'failure-release:suno:check_setup:Suno did not become ready' "$events"
+
+echo 'Provider resource guard fixture passed: flag filtering, thermal hysteresis, bounded release, resident handoff, lifecycle fallback, failed-target release'

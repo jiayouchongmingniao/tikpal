@@ -7583,17 +7583,16 @@ recover_or_cover_provider_failure() {
   local failed_provider="${3:-}"
   local status="${4:-check_setup}"
   local message="${5:-}"
-  local current_window failed_profile proxy_line proxy_enabled
+  local current_window proxy_line proxy_enabled
   proxy_line="$(read_proxy_settings)"
   proxy_enabled="$(effective_provider_proxy_enabled "$current_provider" "${proxy_line%%$'\t'*}")"
 
   # A failed target can still finish its extension navigation after the API has
-  # restored the previous provider. Keep that stale target and its guard off
-  # the left surface so runtime state and the visible page cannot diverge.
+  # restored the previous provider. Its Chromium profile must be terminated,
+  # not merely parked, so an unreachable provider cannot consume background
+  # CPU while its actionable failure card remains visible in the panel.
   if [[ -n "$failed_provider" && "$failed_provider" != "$current_provider" ]]; then
-    failed_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/$failed_provider"
-    stop_provider_guard "$failed_provider"
-    park_profile_windows_for_reopen "$failed_profile" "$TIKPAL_WEB_MODE_LEFT_WINDOW" || true
+    write_provider_failure_and_release "$failed_provider" "$status" "$message"
   fi
   clear_provider_switch_guard
 
