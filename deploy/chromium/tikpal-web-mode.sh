@@ -20,6 +20,13 @@ if should_source_env_file && [[ -f "$ENV_FILE" ]]; then
   source "$ENV_FILE"
   set +a
 fi
+: "${TIKPAL_WEB_MODE_DEVICE_ENV_FILE:=$APP_DIR/.tikpal/web-mode.env}"
+if should_source_env_file && [[ -f "$TIKPAL_WEB_MODE_DEVICE_ENV_FILE" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$TIKPAL_WEB_MODE_DEVICE_ENV_FILE"
+  set +a
+fi
 
 # The environment file can select the per-device flags file.
 FLAGS_FILE="${TIKPAL_CHROMIUM_FLAGS_FILE:-$SCRIPT_DIR/chromium-flags.conf}"

@@ -6,13 +6,16 @@ fixture="$(mktemp -d)"
 cleanup() { rm -rf "$fixture"; }
 trap cleanup EXIT
 
-export TIKPAL_KIOSK_SKIP_ENV_SOURCE=1
+export TIKPAL_KIOSK_SKIP_ENV_SOURCE=0
+export TIKPAL_KIOSK_ENV_FILE="$fixture/missing.env"
 export TIKPAL_WEB_MODE_SOURCE_ONLY=1
 export TIKPAL_WEB_MODE_PROFILE_ROOT="$fixture/runtime"
 export TIKPAL_WEB_MODE_STATE_PATH="$fixture/state.json"
 export TIKPAL_WEB_MODE_PROVIDER_THERMAL_ZONE_ROOT="$fixture/thermal"
 export TIKPAL_WEB_MODE_PROVIDER_THERMAL_STATE_PATH="$fixture/runtime/thermal-state.tsv"
 export TIKPAL_CHROMIUM_FLAGS_FILE="$fixture/chromium-flags.conf"
+export TIKPAL_WEB_MODE_DEVICE_ENV_FILE="$fixture/web-mode.env"
+printf 'TIKPAL_WEB_MODE_PROVIDER_MAX_RESIDENT=2\n' > "$TIKPAL_WEB_MODE_DEVICE_ENV_FILE"
 printf '%s\n' \
   --disable-backgrounding-occluded-windows \
   --disable-renderer-backgrounding \
@@ -21,6 +24,7 @@ printf '%s\n' \
 # shellcheck disable=SC1090
 source "$ROOT/deploy/chromium/tikpal-web-mode.sh"
 
+[[ "$(provider_max_resident)" == "2" ]]
 mapfile -t provider_flags < <(read_provider_chromium_flags)
 [[ "${#provider_flags[@]}" == "1" ]]
 [[ "${provider_flags[0]}" == "--enable-accelerated-video-decode" ]]

@@ -185,17 +185,18 @@ login data stay on disk.
 ```sh
 systemctl --user is-active tikpal-debian-cdp.service
 test -S /run/user/<service-uid>/tikpal/cdp-session-manager.sock
-
-sudoedit ~/code/tikpal/.env.kiosk
+install -d -m 700 ~/code/tikpal/.tikpal
+install -m 600 deploy/debian/102-resource-guard.env \
+  ~/code/tikpal/.tikpal/web-mode.env
 ```
 
-Add these device-local values, replacing `<service-uid>` with `id -u` for the
-service user:
+Replace `<service-uid>` with `id -u` for the service user in the socket check.
+The resource policy is deliberately an overlay at `.tikpal/web-mode.env`; it
+does not replace `.env.kiosk`, Chromium profiles, provider credentials, or the
+radio database. Its tracked template contains:
 
 ```sh
 TIKPAL_WEB_MODE_PROVIDER_MAX_RESIDENT=2
-TIKPAL_WEB_MODE_CDP_SESSION_MANAGER=1
-TIKPAL_WEB_MODE_CDP_SESSION_MANAGER_SOCKET=/run/user/<service-uid>/tikpal/cdp-session-manager.sock
 TIKPAL_WEB_MODE_PROVIDER_BACKGROUND_FREEZE_ENABLED=1
 TIKPAL_WEB_MODE_PROVIDER_BACKGROUND_PROCESS_FREEZE_ENABLED=1
 TIKPAL_WEB_MODE_PROVIDER_BACKGROUND_FREEZE_DELAY_SECONDS=8

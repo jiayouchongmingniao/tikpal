@@ -4,6 +4,9 @@ APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$APP_DIR"
 set -a
 source "$APP_DIR/.env.kiosk"
+if [[ -r "$APP_DIR/.tikpal/web-mode.env" ]]; then
+  source "$APP_DIR/.tikpal/web-mode.env"
+fi
 source "$HOME/.config/tikpal/session.env"
 set +a
 export PATH="/opt/tikpal/node-v24.21.0-linux-arm64/bin:$PATH"
