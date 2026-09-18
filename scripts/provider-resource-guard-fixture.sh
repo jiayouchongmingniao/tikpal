@@ -28,6 +28,10 @@ source "$ROOT/deploy/chromium/tikpal-web-mode.sh"
 mapfile -t provider_flags < <(read_provider_chromium_flags)
 [[ "${#provider_flags[@]}" == "1" ]]
 [[ "${provider_flags[0]}" == "--enable-accelerated-video-decode" ]]
+# The resident-reveal branch commits the new state before reconciliation, so
+# it must explicitly hand the just-left provider to the bounded pool.
+grep -Fq 'reconcile_provider_pool_in_background "$provider" "$current_provider"' \
+  "$ROOT/deploy/chromium/tikpal-web-mode.sh"
 
 mkdir -p "$TIKPAL_WEB_MODE_PROVIDER_THERMAL_ZONE_ROOT/thermal_zone0" "$TIKPAL_WEB_MODE_PROVIDER_THERMAL_ZONE_ROOT/thermal_zone1"
 printf 'little-core-thermal\n' > "$TIKPAL_WEB_MODE_PROVIDER_THERMAL_ZONE_ROOT/thermal_zone0/type"
@@ -81,4 +85,4 @@ freeze_background_provider qq_music netease_music
 grep -Fxq 'close:qq_music' "$events"
 grep -Fxq 'status:qq_music:closed' "$events"
 
-echo 'Provider resource guard fixture passed: flag filtering, thermal hysteresis, bounded release, lifecycle fallback'
+echo 'Provider resource guard fixture passed: flag filtering, thermal hysteresis, bounded release, resident handoff, lifecycle fallback'

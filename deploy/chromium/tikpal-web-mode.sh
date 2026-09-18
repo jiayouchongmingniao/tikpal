@@ -9528,7 +9528,12 @@ open_provider_pool() {
       # visible transaction has completed. Normal interactive switches retain
       # the background reconcile.
       if ! switch_trace_enabled; then
-        reconcile_provider_pool_in_background "$provider"
+        # The hot-resident path has the same bounded-pool contract as a cold
+        # switch: keep the page we just left as the single resumable peer.
+        # Without this argument a return switch releases that peer immediately
+        # because commit_visible_provider_state has already replaced the
+        # runtime lastProvider value with the new foreground provider.
+        reconcile_provider_pool_in_background "$provider" "$current_provider"
         record_switch_trace_event reconcile_dispatched
       else
         record_switch_trace_event reconcile_deferred
