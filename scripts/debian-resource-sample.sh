@@ -98,14 +98,17 @@ cgroup_summary() {
 }
 
 error_count_since_start() {
+  # Do not count normal JSON fields such as `errorCode: null` or
+  # `systemStateError: null` as failures. Match standalone operational
+  # errors only, keeping the sampler useful for unattended acceptance runs.
   journalctl --user \
     -u pipewire.service -u wireplumber.service \
     -u tikpal-debian-mpd.service -u tikpal-debian-kiosk.service -u tikpal-debian-cdp.service \
     --since "@$start_epoch" --no-pager 2>/dev/null \
-    | grep -Eic 'xrun|underrun|overrun|error|fail|crash' || true
+    | grep -Eic '(^|[^[:alnum:]_])(xrun|underrun|overrun|error|fail(ed|ure)?|crash)([^[:alnum:]_]|$)' || true
 }
 
-printf 'timestamp\tload1\tmem_available_kib\tswap_used_kib\tthermal_max_mC\tthermal_zones_mC\tchromium_profile_processes_cpu_ticks\tservice_memory_bytes_cpu_ns\tnew_error_events\n'
+printf 'timestamp\tload1\tmem_available_kib\tswap_used_kib\tthermal_max_mC\tthermal_zones_mC\tchromium_profile_processes_cpu_ticks\tservice_memory_bytes_cpu_ns\terror_events_since_start\n'
 for ((sample = 1; sample <= samples; sample += 1)); do
   read -r load1 _ < /proc/loadavg
   mem_available="$(awk '/^MemAvailable:/{print $2}' /proc/meminfo)"

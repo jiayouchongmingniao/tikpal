@@ -223,8 +223,9 @@ bash scripts/debian-resource-sample.sh --interval 5 --samples 360 \
 
 The TSV records system load, available RAM, swap usage, thermal zones, Chromium
 process counts and CPU ticks by provider profile, service cgroup memory/CPU,
-and new PipeWire/MPD/kiosk/CDP error events. Keep the capture with the physical
-listening result. A passing run has no swap use, no inactive Chromium provider
+and cumulative PipeWire/MPD/kiosk/CDP operational error events. Normal JSON
+fields with a null error value do not count as failures. Keep the capture with
+the physical listening result. A passing run has no swap use, no inactive Chromium provider
 except the one frozen recent provider, no thermal sample at or above 85°C, and
 no audible NetEase stall.
 
