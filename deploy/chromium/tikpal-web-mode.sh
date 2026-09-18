@@ -166,6 +166,7 @@ fi
 : "${TIKPAL_WEB_MODE_PROVIDER_PREWARM_DELAY_SECONDS:=0.4}"
 : "${TIKPAL_WEB_MODE_PROVIDER_PREWARM_MAX_CONCURRENT_LAUNCHES:=3}"
 : "${TIKPAL_WEB_MODE_PROVIDER_PREWARM_LOCK_TIMEOUT_SECONDS:=2}"
+: "${TIKPAL_WEB_MODE_PROVIDER_MAX_RESIDENT:=0}"
 : "${TIKPAL_WEB_MODE_PROVIDER_GUARD_IDLE_POLL_MS:=2000}"
 : "${TIKPAL_WEB_MODE_DIRECT_PROBE_ENABLED:=1}"
 : "${TIKPAL_WEB_MODE_DIRECT_PROBE_TIMEOUT_SECONDS:=4}"
@@ -178,6 +179,11 @@ fi
 : "${TIKPAL_WEB_MODE_PROVIDER_BACKGROUND_FREEZE_ENABLED:=0}"
 : "${TIKPAL_WEB_MODE_PROVIDER_BACKGROUND_PROCESS_FREEZE_ENABLED:=0}"
 : "${TIKPAL_WEB_MODE_PROVIDER_BACKGROUND_FREEZE_DELAY_SECONDS:=8}"
+: "${TIKPAL_WEB_MODE_PROVIDER_THERMAL_ZONE_ROOT:=/sys/class/thermal}"
+: "${TIKPAL_WEB_MODE_PROVIDER_THERMAL_PAUSE_MILLICELSIUS:=0}"
+: "${TIKPAL_WEB_MODE_PROVIDER_THERMAL_RESUME_MILLICELSIUS:=0}"
+: "${TIKPAL_WEB_MODE_PROVIDER_THERMAL_COOLDOWN_SECONDS:=60}"
+: "${TIKPAL_WEB_MODE_PROVIDER_THERMAL_STATE_PATH:=$TIKPAL_WEB_MODE_PROFILE_ROOT/provider-thermal-state.tsv}"
 : "${TIKPAL_WEB_MODE_DISABLE_HANG_MONITOR:=1}"
 : "${TIKPAL_WEB_MODE_REFRESH_EXTENSION_CACHE:=1}"
 : "${TIKPAL_WEB_MODE_ERROR_PAGE_URL:=http://127.0.0.1:4173/web-mode-error.html}"
@@ -2402,6 +2408,89 @@ provider_background_process_freeze_enabled() {
   provider_background_freeze_enabled
 }
 
+provider_max_resident() {
+  local maximum="${TIKPAL_WEB_MODE_PROVIDER_MAX_RESIDENT:-0}"
+  [[ "$maximum" =~ ^[0-9]+$ ]] || maximum=0
+  [[ "$maximum" -le 10 ]] || maximum=10
+  printf '%s\n' "$maximum"
+}
+
+provider_resident_limit_enabled() {
+  [[ "$(provider_max_resident)" -gt 0 ]]
+}
+
+provider_thermal_max_millicelsius() {
+  local root="${TIKPAL_WEB_MODE_PROVIDER_THERMAL_ZONE_ROOT:-/sys/class/thermal}"
+  local zone type temperature maximum=0 found=0
+  for zone in "$root"/thermal_zone*; do
+    [[ -r "$zone/type" && -r "$zone/temp" ]] || continue
+    type="$(tr '[:upper:]' '[:lower:]' < "$zone/type" 2>/dev/null || true)"
+    case "$type" in
+      *cpu*|*core*|*gpu*|soc-thermal) ;;
+      *) continue ;;
+    esac
+    temperature="$(tr -d '[:space:]' < "$zone/temp" 2>/dev/null || true)"
+    [[ "$temperature" =~ ^[0-9]+$ ]] || continue
+    if [[ "$found" == "0" || "$temperature" -gt "$maximum" ]]; then
+      maximum="$temperature"
+      found=1
+    fi
+  done
+  [[ "$found" == "1" ]] && printf '%s\n' "$maximum"
+}
+
+write_provider_thermal_state() {
+  local state="$1" temperature="$2" timestamp="$3"
+  local target="$TIKPAL_WEB_MODE_PROVIDER_THERMAL_STATE_PATH" temporary
+  [[ -n "$target" ]] || return 0
+  mkdir -p "$(dirname "$target")"
+  temporary="$target.$$.tmp"
+  printf '%s\t%s\t%s\n' "$state" "$timestamp" "$temperature" > "$temporary"
+  mv -f "$temporary" "$target"
+}
+
+provider_thermal_background_work_allowed() {
+  local pause="${TIKPAL_WEB_MODE_PROVIDER_THERMAL_PAUSE_MILLICELSIUS:-0}"
+  local resume="${TIKPAL_WEB_MODE_PROVIDER_THERMAL_RESUME_MILLICELSIUS:-0}"
+  local cooldown="${TIKPAL_WEB_MODE_PROVIDER_THERMAL_COOLDOWN_SECONDS:-60}"
+  local temperature now state="" since="" ignored
+  [[ "$pause" =~ ^[0-9]+$ && "$pause" -gt 0 ]] || return 0
+  [[ "$resume" =~ ^[0-9]+$ && "$resume" -gt 0 && "$resume" -lt "$pause" ]] || resume="$((pause - 5000))"
+  [[ "$cooldown" =~ ^[0-9]+$ ]] || cooldown=60
+  temperature="$(provider_thermal_max_millicelsius || true)"
+  [[ "$temperature" =~ ^[0-9]+$ ]] || return 0
+  now="$(date +%s)"
+
+  if [[ "$temperature" -ge "$pause" ]]; then
+    write_provider_thermal_state hot "$temperature" "$now"
+    log_stage "provider_thermal_guard state=hot temperature_mC=$temperature pause_mC=$pause"
+    return 1
+  fi
+
+  if [[ -r "$TIKPAL_WEB_MODE_PROVIDER_THERMAL_STATE_PATH" ]]; then
+    IFS=$'\t' read -r state since ignored < "$TIKPAL_WEB_MODE_PROVIDER_THERMAL_STATE_PATH" || true
+  fi
+  [[ -n "$state" ]] || return 0
+
+  if [[ "$temperature" -ge "$resume" ]]; then
+    write_provider_thermal_state hot "$temperature" "$now"
+    log_stage "provider_thermal_guard state=cooling temperature_mC=$temperature resume_mC=$resume"
+    return 1
+  fi
+
+  if [[ "$state" != "cooling" || ! "$since" =~ ^[0-9]+$ ]]; then
+    write_provider_thermal_state cooling "$temperature" "$now"
+    log_stage "provider_thermal_guard state=cooldown temperature_mC=$temperature cooldown_s=$cooldown"
+    return 1
+  fi
+  if [[ "$((now - since))" -lt "$cooldown" ]]; then
+    return 1
+  fi
+  rm -f "$TIKPAL_WEB_MODE_PROVIDER_THERMAL_STATE_PATH"
+  log_stage "provider_thermal_guard state=clear temperature_mC=$temperature"
+  return 0
+}
+
 provider_chromium_signal() {
   local provider="$1" signal="$2" provider_profile pid command count=0
   [[ "$signal" == "STOP" || "$signal" == "CONT" ]] || return 2
@@ -2480,13 +2569,14 @@ freeze_background_provider() {
     write_runtime_provider_activity "$provider" frozen || true
     if provider_background_process_freeze_enabled && ! provider_chromium_signal "$provider" STOP; then
       provider_cdp_lifecycle "$provider" active maintenance || true
-      write_runtime_provider_activity "$provider" unsupported || true
       log "provider process freeze found no Chromium processes for $provider"
+      release_provider_from_resident_pool "$provider"
       return 0
     fi
     log_stage "provider_freeze provider=$provider"
   else
-    write_runtime_provider_activity "$provider" unsupported || true
+    log "provider lifecycle freeze failed; releasing $provider"
+    release_provider_from_resident_pool "$provider"
   fi
 }
 
@@ -2792,6 +2882,22 @@ write_provider_friendly_error_status() {
     message="$(provider_label "$provider") connection unavailable"
   fi
   write_runtime_provider_status "$provider" "$status" "$message"
+}
+
+close_provider_after_friendly_error() {
+  local provider="$1" provider_port="$2"
+  write_provider_friendly_error_status "$provider" "$provider_port" || return 1
+  release_provider_from_resident_pool "$provider"
+  log_stage "provider_friendly_error_released provider=$provider"
+  return 0
+}
+
+write_provider_failure_and_release() {
+  local provider="$1" status="$2" message="$3"
+  write_runtime_provider_status "$provider" "$status" "$message"
+  release_provider_from_resident_pool "$provider"
+  log_stage "provider_launch_failure_released provider=$provider status=$status"
+  return 0
 }
 
 # Reload uses the committed visible session, not the now-cleared open request.
@@ -4597,6 +4703,7 @@ sync_runtime_provider_pool_process_statuses() {
       friendly_error_reason="$(provider_friendly_error_reason "$provider_port")"
       if [[ -n "$friendly_error_reason" ]]; then
         write_provider_friendly_error_status "$provider" "$provider_port"
+        [[ "$provider" == "$active_provider" ]] || release_provider_from_resident_pool "$provider"
         continue
       fi
       status="$(read_runtime_provider_status "$provider")"
@@ -4626,20 +4733,22 @@ sync_runtime_provider_pool_process_statuses() {
 
 reconcile_provider_pool_in_background() {
   local active_provider="$1"
+  local previous_provider="${2:-}"
   local started_ms elapsed_ms
   is_enabled "$TIKPAL_WEB_MODE_PROVIDER_POOL" || return 0
   [[ -n "$active_provider" ]] || return 0
   started_ms="$(now_ms)"
   if command -v setsid >/dev/null 2>&1; then
-    setsid "$SCRIPT_DIR/tikpal-web-mode.sh" reconcile "$active_provider" "$started_ms" </dev/null >/dev/null 2>&1 9>&- &
+    setsid "$SCRIPT_DIR/tikpal-web-mode.sh" reconcile "$active_provider" "$started_ms" "$previous_provider" </dev/null >/dev/null 2>&1 9>&- &
   else
-    nohup "$SCRIPT_DIR/tikpal-web-mode.sh" reconcile "$active_provider" "$started_ms" </dev/null >/dev/null 2>&1 9>&- &
+    nohup "$SCRIPT_DIR/tikpal-web-mode.sh" reconcile "$active_provider" "$started_ms" "$previous_provider" </dev/null >/dev/null 2>&1 9>&- &
   fi
 }
 
 reconcile_provider_pool() {
   local active_provider="$1"
   local started_ms="${2:-$(now_ms)}"
+  local previous_provider="${3:-}"
   local elapsed_ms provider_profile proxy_line proxy_enabled
   provider_switch_in_progress && {
     elapsed_ms="$(( $(now_ms) - started_ms ))"
@@ -4665,6 +4774,13 @@ reconcile_provider_pool() {
     log_stage "reconcile_ms=$elapsed_ms provider=$active_provider abandoned=switching"
     return 0
   }
+  if provider_resident_limit_enabled; then
+    stop_provider_pool_prewarm
+    reconcile_bounded_provider_pool "$active_provider" "$previous_provider"
+    elapsed_ms="$(( $(now_ms) - started_ms ))"
+    log_stage "reconcile_ms=$elapsed_ms provider=$active_provider pool=bounded previous=${previous_provider:-none}"
+    return 0
+  fi
   if provider_prewarm_queue_running; then
     elapsed_ms="$(( $(now_ms) - started_ms ))"
     log_stage "reconcile_ms=$elapsed_ms provider=$active_provider pool=prewarming"
@@ -5289,6 +5405,61 @@ close_provider_profile() {
     fi
   fi
   cleanup_stale_profile_singletons "$provider_profile"
+}
+
+release_provider_from_resident_pool() {
+  local provider="$1"
+  local provider_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/$provider"
+  local status
+  [[ -n "$provider" ]] || return 0
+  status="$(read_runtime_provider_status "$provider")"
+  stop_provider_guard "$provider" || true
+  close_provider_profile "$provider_profile"
+  case "$status" in
+    ready|active|opening|prewarming)
+      write_runtime_provider_status "$provider" "closed"
+      ;;
+  esac
+  log_stage "provider_resident_release provider=$provider status=${status:-missing}"
+}
+
+reconcile_bounded_provider_pool() {
+  local active_provider="$1"
+  local previous_provider="${2:-}"
+  local maximum previous_profile previous_status provider profile status
+  maximum="$(provider_max_resident)"
+  [[ "$maximum" -gt 0 ]] || return 1
+
+  # A thermal breach always favors the audible foreground provider. The old
+  # session is not kept hot while the board is trying to recover.
+  if ! provider_thermal_background_work_allowed; then
+    previous_provider=""
+    stop_provider_pool_prewarm
+  elif [[ "$maximum" -lt 2 || "$previous_provider" == "$active_provider" ]]; then
+    previous_provider=""
+  elif [[ -n "$previous_provider" ]]; then
+    previous_profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/$previous_provider"
+    previous_status="$(read_runtime_provider_status "$previous_provider")"
+    if ! profile_process_exists "$previous_profile" || [[ "$previous_status" != "ready" && "$previous_status" != "active" ]]; then
+      previous_provider=""
+    fi
+  fi
+
+  while IFS= read -r provider; do
+    [[ -n "$provider" ]] || continue
+    [[ "$provider" == "$active_provider" || "$provider" == "$previous_provider" ]] && continue
+    profile="$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/$provider"
+    status="$(read_runtime_provider_status "$provider")"
+    if profile_process_exists "$profile" || [[ "$status" == "ready" || "$status" == "active" || "$status" == "opening" || "$status" == "prewarming" ]]; then
+      release_provider_from_resident_pool "$provider"
+    fi
+  done < <(provider_ids)
+
+  if [[ -n "$previous_provider" ]]; then
+    schedule_background_provider_freeze "$active_provider"
+  fi
+  write_runtime_prewarm_complete 1
+  log_stage "provider_resident_limit active=$active_provider previous=${previous_provider:-none} maximum=$maximum"
 }
 
 reset_provider_profile_locked() {
@@ -8500,6 +8671,20 @@ reassert_visible_provider_surfaces() {
   raise_window "$target_window"
 }
 
+read_provider_chromium_flags() {
+  local flag
+  while IFS= read -r flag; do
+    case "$flag" in
+      --disable-backgrounding-occluded-windows|--disable-renderer-backgrounding)
+        # Provider windows are explicitly parked or frozen when inactive. Do
+        # not globally disable Chromium's own background scheduling for them.
+        continue
+        ;;
+    esac
+    printf '%s\n' "$flag"
+  done < <(read_flags)
+}
+
 launch_provider_for_pool() {
   local provider="$1"
   local wait_ready="${2:-1}"
@@ -8558,22 +8743,20 @@ launch_provider_for_pool() {
 
   if profile_process_exists "$provider_profile"; then
     if ! provider_has_real_provider_page "$provider_port"; then
-      if [[ "$launch_role" != "prewarm" ]] && write_provider_friendly_error_status "$provider" "$provider_port"; then
-        start_provider_guard "$provider" "$provider_profile" "$url" "$proxy_enabled" "$provider_port"
-        return 0
+      if [[ "$launch_role" != "prewarm" ]] && close_provider_after_friendly_error "$provider" "$provider_port"; then
+        return 1
       elif [[ "$launch_role" == "prewarm" && "$force_existing" == "1" ]]; then
         write_runtime_provider_status "$provider" "prewarming"
         if ! navigate_provider_target "$provider_port" "$url"; then
           log "WARN: provider navigation was not confirmed; checking the resident page: $provider"
         fi
         if ! wait_for_provider_page_or_friendly_error "$provider_port"; then
-          write_runtime_provider_status "$provider" "check_setup" "$(provider_label "$provider") did not enter the provider page"
-          return 0
+          write_provider_failure_and_release "$provider" "check_setup" "$(provider_label "$provider") did not enter the provider page"
+          return 1
         fi
-        write_provider_friendly_error_status "$provider" "$provider_port" && return 0
+        close_provider_after_friendly_error "$provider" "$provider_port" && return 1
       else
-        write_runtime_provider_status "$provider" "check_setup" "$(provider_label "$provider") did not enter the provider page"
-        [[ "$launch_role" == "prewarm" ]] && return 0
+        write_provider_failure_and_release "$provider" "check_setup" "$(provider_label "$provider") did not enter the provider page"
         return 1
       fi
     elif [[ "$launch_role" == "prewarm" && "$force_existing" == "1" ]]; then
@@ -8582,10 +8765,10 @@ launch_provider_for_pool() {
         log "WARN: provider navigation was not confirmed; checking the resident page: $provider"
       fi
       if ! wait_for_provider_page_or_friendly_error "$provider_port"; then
-        write_runtime_provider_status "$provider" "check_setup" "$(provider_label "$provider") could not reopen"
-        return 0
+        write_provider_failure_and_release "$provider" "check_setup" "$(provider_label "$provider") could not reopen"
+        return 1
       fi
-      write_provider_friendly_error_status "$provider" "$provider_port" && return 0
+      close_provider_after_friendly_error "$provider" "$provider_port" && return 1
     fi
     start_provider_guard "$provider" "$provider_profile" "$url" "$proxy_enabled" "$provider_port"
     log_stage "provider_https_ready provider=$provider role=$launch_role reused=1 ms=$(( $(now_ms) - launch_started_ms ))"
@@ -8597,11 +8780,11 @@ launch_provider_for_pool() {
         write_runtime_provider_status "$provider" "ready"
         return 0
       fi
-      write_runtime_provider_status "$provider" "check_setup" "$(provider_label "$provider") did not enter the provider page"
-      return 0
+      write_provider_failure_and_release "$provider" "check_setup" "$(provider_label "$provider") did not enter the provider page"
+      return 1
     fi
     if ! wait_for_provider_ready "$provider_port" "$provider"; then
-      write_runtime_provider_status "$provider" "check_setup" "$(provider_label "$provider") did not become ready"
+      write_provider_failure_and_release "$provider" "check_setup" "$(provider_label "$provider") did not become ready"
       return 1
     fi
     if ! wait_for_guard_ota_marker "$provider_port"; then
@@ -8612,7 +8795,7 @@ launch_provider_for_pool() {
         TIKPAL_GUARD_OTA_RETRY_AFTER_ROLLBACK=1 launch_provider_for_pool "$provider" "$wait_ready" "$launch_role" "$force_existing"
         return $?
       fi
-      write_runtime_provider_status "$provider" "check_setup" "$(provider_label "$provider") Guard did not activate"
+      write_provider_failure_and_release "$provider" "check_setup" "$(provider_label "$provider") Guard did not activate"
       return 1
     fi
     write_runtime_provider_status "$provider" "ready"
@@ -8631,7 +8814,7 @@ launch_provider_for_pool() {
   seed_profile_widevine_cdm "$provider_profile"
   cleanup_stale_profile_singletons "$provider_profile"
   refresh_extension_script_cache "$provider_profile"
-  mapfile -t flags < <(read_flags)
+  mapfile -t flags < <(read_provider_chromium_flags)
   mapfile -t base_args < <(chromium_base_args)
 
   local args=(
@@ -8666,7 +8849,7 @@ launch_provider_for_pool() {
     if [[ "$launch_role" == "prewarm" && -z "$(read_runtime_active_provider)" ]] && ! is_enabled "${TIKPAL_WEB_MODE_IDLE_POOL_WARMUP:-0}"; then
       return 1
     fi
-    write_runtime_provider_status "$provider" "check_setup" "$(provider_label "$provider") did not open"
+    write_provider_failure_and_release "$provider" "check_setup" "$(provider_label "$provider") did not open"
     return 1
   fi
   tile_window "$target_window" "$window_position" "$TIKPAL_WEB_MODE_LEFT_WINDOW"
@@ -8677,10 +8860,10 @@ launch_provider_for_pool() {
       if [[ "$launch_role" == "prewarm" && -z "$(read_runtime_active_provider)" ]] && ! is_enabled "${TIKPAL_WEB_MODE_IDLE_POOL_WARMUP:-0}"; then
         return 1
       fi
-      write_runtime_provider_status "$provider" "check_setup" "$(provider_label "$provider") did not enter the provider page"
+      write_provider_failure_and_release "$provider" "check_setup" "$(provider_label "$provider") did not enter the provider page"
       return 1
     fi
-    write_provider_friendly_error_status "$provider" "$provider_port" && return 0
+    close_provider_after_friendly_error "$provider" "$provider_port" && return 1
     log_stage "provider_https_ready provider=$provider role=$launch_role reused=0 ms=$(( $(now_ms) - launch_started_ms ))"
   fi
   if [[ "$wait_for_full_ready" == "1" ]]; then
@@ -8688,7 +8871,7 @@ launch_provider_for_pool() {
       if [[ "$launch_role" == "prewarm" && -z "$(read_runtime_active_provider)" ]] && ! is_enabled "${TIKPAL_WEB_MODE_IDLE_POOL_WARMUP:-0}"; then
         return 1
       fi
-      write_runtime_provider_status "$provider" "check_setup" "$(provider_label "$provider") did not become ready"
+      write_provider_failure_and_release "$provider" "check_setup" "$(provider_label "$provider") did not become ready"
       return 1
     fi
     if ! wait_for_guard_ota_marker "$provider_port"; then
@@ -8699,7 +8882,7 @@ launch_provider_for_pool() {
         TIKPAL_GUARD_OTA_RETRY_AFTER_ROLLBACK=1 launch_provider_for_pool "$provider" "$wait_ready" "$launch_role" "$force_existing"
         return $?
       fi
-      write_runtime_provider_status "$provider" "check_setup" "$(provider_label "$provider") Guard did not activate"
+      write_provider_failure_and_release "$provider" "check_setup" "$(provider_label "$provider") Guard did not activate"
       return 1
     fi
   fi
@@ -8729,6 +8912,14 @@ provider_prewarm_queue_can_continue() {
   local active_provider="$1"
   local queue_mode="$2"
   local current_active
+  if provider_resident_limit_enabled; then
+    log "provider prewarm skipped: bounded resident pool"
+    return 1
+  fi
+  if ! provider_thermal_background_work_allowed; then
+    log "provider prewarm paused: thermal guard"
+    return 1
+  fi
   current_active="$(read_runtime_active_provider)"
 
   if [[ "$queue_mode" == "idle" ]]; then
@@ -8882,6 +9073,7 @@ prewarm_provider_pool() {
   local active_provider="${1:-}"
   local current_active force_existing pid_file active_file
   is_enabled "$TIKPAL_WEB_MODE_PROVIDER_PREWARM_ENABLED" || return 0
+  provider_resident_limit_enabled && return 0
   pid_file="$(prewarm_pid_file)"
   active_file="$(prewarm_active_provider_file)"
   mkdir -p "$(dirname "$pid_file")"
@@ -8912,6 +9104,7 @@ start_provider_pool_prewarm() {
   local force_env=() running_active_provider
   is_enabled "$TIKPAL_WEB_MODE_PROVIDER_POOL" || return 0
   is_enabled "$TIKPAL_WEB_MODE_PROVIDER_PREWARM_ENABLED" || return 0
+  provider_resident_limit_enabled && return 0
   if [[ "$seed_mode" != "force" ]] && provider_prewarm_queue_running; then
     running_active_provider="$(cat "$(prewarm_active_provider_file)" 2>/dev/null || true)"
     if [[ "$running_active_provider" == "$active_provider" ]]; then
@@ -8946,6 +9139,7 @@ warm_provider_pool() {
   is_enabled "$TIKPAL_WEB_MODE_PROVIDER_POOL" || return 0
   is_enabled "$TIKPAL_WEB_MODE_PROVIDER_IDLE_POOL_ENABLED" || return 0
   is_enabled "$TIKPAL_WEB_MODE_PROVIDER_PREWARM_ENABLED" || return 0
+  provider_resident_limit_enabled && return 0
   stop_provider_pool_prewarm
   pid_file="$(prewarm_pid_file)"
   mkdir -p "$(dirname "$pid_file")"
@@ -9533,7 +9727,7 @@ open_provider_pool() {
   write_audio_bus_state ""
   record_switch_trace_event runtime_state_committed
   start_window_guard "$provider_profile" "$panel_profile" "$target_window" "$panel_window"
-  switch_trace_enabled || reconcile_provider_pool_in_background "$provider"
+  switch_trace_enabled || reconcile_provider_pool_in_background "$provider" "$current_provider"
   command_return_ms="$(( $(now_ms) - started_ms ))"
   log_stage "command_return_ms=$command_return_ms provider=$provider resident=$fast_resident"
   log_open_stage opened "provider=$provider target_window=$target_window command_return_ms=$command_return_ms"
@@ -9800,6 +9994,9 @@ check_runtime() {
   log "provider pool: $TIKPAL_WEB_MODE_PROVIDER_POOL"
   log "provider idle pool: $TIKPAL_WEB_MODE_PROVIDER_IDLE_POOL_ENABLED"
   log "provider prewarm: $TIKPAL_WEB_MODE_PROVIDER_PREWARM_ENABLED delay=${TIKPAL_WEB_MODE_PROVIDER_PREWARM_DELAY_SECONDS}s"
+  log "provider max resident: $(provider_max_resident)"
+  log "provider background freeze: $TIKPAL_WEB_MODE_PROVIDER_BACKGROUND_FREEZE_ENABLED process-freeze=$TIKPAL_WEB_MODE_PROVIDER_BACKGROUND_PROCESS_FREEZE_ENABLED delay=${TIKPAL_WEB_MODE_PROVIDER_BACKGROUND_FREEZE_DELAY_SECONDS}s"
+  log "provider thermal guard: pause=${TIKPAL_WEB_MODE_PROVIDER_THERMAL_PAUSE_MILLICELSIUS}mC resume=${TIKPAL_WEB_MODE_PROVIDER_THERMAL_RESUME_MILLICELSIUS}mC cooldown=${TIKPAL_WEB_MODE_PROVIDER_THERMAL_COOLDOWN_SECONDS}s"
   log "provider guard idle poll: ${TIKPAL_WEB_MODE_PROVIDER_GUARD_IDLE_POLL_MS}ms"
   log "popup blocking: $TIKPAL_WEB_MODE_POPUP_BLOCKING"
   log "extension: $TIKPAL_WEB_MODE_EXTENSION_ENABLED $TIKPAL_WEB_MODE_EXTENSION_DIR"
@@ -9948,7 +10145,7 @@ case "$web_mode_action" in
     prewarm_provider_pool "${2:-}"
     ;;
   reconcile)
-    reconcile_provider_pool "${2:-}" "${3:-}"
+    reconcile_provider_pool "${2:-}" "${3:-}" "${4:-}"
     ;;
   sync-status)
     active_provider="$(read_runtime_active_provider)"

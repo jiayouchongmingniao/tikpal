@@ -173,6 +173,58 @@ current X-session generation before Chromium starts; Explore correctly rejects
 an open when the generation is absent. The tracked
 `deploy/debian/run-service.sh` already uses the wrapper.
 
+## Constrained-provider resource guard
+
+The default factory pool remains unchanged. On a thermally constrained ROCK 4D,
+use the bounded pool below only after confirming that the user CDP manager
+socket is live. It retains the visible provider and one immediately previous
+provider; the latter is lifecycle-frozen after eight seconds. Any third,
+unready, or proxy-failed provider exits normally while its browser profile and
+login data stay on disk.
+
+```sh
+systemctl --user is-active tikpal-debian-cdp.service
+test -S /run/user/<service-uid>/tikpal/cdp-session-manager.sock
+
+sudoedit ~/code/tikpal/.env.kiosk
+```
+
+Add these device-local values, replacing `<service-uid>` with `id -u` for the
+service user:
+
+```sh
+TIKPAL_WEB_MODE_PROVIDER_MAX_RESIDENT=2
+TIKPAL_WEB_MODE_CDP_SESSION_MANAGER=1
+TIKPAL_WEB_MODE_CDP_SESSION_MANAGER_SOCKET=/run/user/<service-uid>/tikpal/cdp-session-manager.sock
+TIKPAL_WEB_MODE_PROVIDER_BACKGROUND_FREEZE_ENABLED=1
+TIKPAL_WEB_MODE_PROVIDER_BACKGROUND_PROCESS_FREEZE_ENABLED=1
+TIKPAL_WEB_MODE_PROVIDER_BACKGROUND_FREEZE_DELAY_SECONDS=8
+TIKPAL_WEB_MODE_PROVIDER_THERMAL_PAUSE_MILLICELSIUS=85000
+TIKPAL_WEB_MODE_PROVIDER_THERMAL_RESUME_MILLICELSIUS=80000
+TIKPAL_WEB_MODE_PROVIDER_THERMAL_COOLDOWN_SECONDS=60
+```
+
+At or above 85°C, Tikpal stops background prewarm and releases inactive
+providers; the currently audible provider continues. It will not resume
+background work until all sampled CPU/GPU thermal zones stay below 80°C for 60
+seconds. This guard does not modify CPU governors, fan policy, Chromium 151,
+PipeWire, or the selected audio sink.
+
+Capture an acceptance run without summing Chromium RSS (which double-counts
+shared pages):
+
+```sh
+bash scripts/debian-resource-sample.sh --interval 5 --samples 360 \
+  > ~/tikpal-migration/netease-resource-30m.tsv
+```
+
+The TSV records system load, available RAM, swap usage, thermal zones, Chromium
+process counts and CPU ticks by provider profile, service cgroup memory/CPU,
+and new PipeWire/MPD/kiosk/CDP error events. Keep the capture with the physical
+listening result. A passing run has no swap use, no inactive Chromium provider
+except the one frozen recent provider, no thermal sample at or above 85°C, and
+no audible NetEase stall.
+
 ## Per-device audio and acceptance
 
 Tikpal sends both MPD and Chromium to the PipeWire `default` sink. Select the

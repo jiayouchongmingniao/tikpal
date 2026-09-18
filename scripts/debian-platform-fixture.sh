@@ -33,6 +33,7 @@ profile_has_widevine_cdm "$fixture/profile"
 ! profile_has_widevine_cdm "$fixture/missing"
 echo 'Debian platform fixture passed: architecture-specific CDM paths and absent CDM'
 unset -f uname
+bash "$ROOT/scripts/provider-resource-guard-fixture.sh"
 if [[ "$(uname -s)" == Linux ]]; then
   cc -std=c11 -O2 -Wall -Wextra -Werror "$ROOT/deploy/debian/xdotool-compat.c" -o "$fixture/xdotool" $(pkg-config --cflags --libs xcb)
   cc -std=c11 -O2 "$ROOT/scripts/fixtures/tikpal-x11-late-writer-client.c" -o "$fixture/chromium-bin" $(pkg-config --cflags --libs xcb)
