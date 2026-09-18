@@ -203,9 +203,11 @@ TIKPAL_WEB_MODE_PROVIDER_BACKGROUND_FREEZE_DELAY_SECONDS=8
 TIKPAL_WEB_MODE_PROVIDER_THERMAL_PAUSE_MILLICELSIUS=85000
 TIKPAL_WEB_MODE_PROVIDER_THERMAL_RESUME_MILLICELSIUS=80000
 TIKPAL_WEB_MODE_PROVIDER_THERMAL_COOLDOWN_SECONDS=60
+TIKPAL_WEB_MODE_PROVIDER_THERMAL_POLL_SECONDS=5
 ```
 
-At or above 85°C, Tikpal stops background prewarm and releases inactive
+While an Explore Provider is active, a five-second guard samples the thermal
+zones. At or above 85°C, Tikpal stops background prewarm and releases inactive
 providers; the currently audible provider continues. It will not resume
 background work until all sampled CPU/GPU thermal zones stay below 80°C for 60
 seconds. This guard does not modify CPU governors, fan policy, Chromium 151,

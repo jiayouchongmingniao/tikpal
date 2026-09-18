@@ -41,6 +41,8 @@ printf '80200\n' > "$TIKPAL_WEB_MODE_PROVIDER_THERMAL_ZONE_ROOT/thermal_zone1/te
 export TIKPAL_WEB_MODE_PROVIDER_THERMAL_PAUSE_MILLICELSIUS=85000
 export TIKPAL_WEB_MODE_PROVIDER_THERMAL_RESUME_MILLICELSIUS=80000
 export TIKPAL_WEB_MODE_PROVIDER_THERMAL_COOLDOWN_SECONDS=0
+export TIKPAL_WEB_MODE_PROVIDER_THERMAL_POLL_SECONDS=5
+provider_thermal_guard_enabled
 [[ "$(provider_thermal_max_millicelsius)" == "85100" ]]
 ! provider_thermal_background_work_allowed
 printf '79000\n' > "$TIKPAL_WEB_MODE_PROVIDER_THERMAL_ZONE_ROOT/thermal_zone0/temp"
@@ -48,6 +50,7 @@ printf '79000\n' > "$TIKPAL_WEB_MODE_PROVIDER_THERMAL_ZONE_ROOT/thermal_zone1/te
 ! provider_thermal_background_work_allowed
 provider_thermal_background_work_allowed
 [[ ! -e "$TIKPAL_WEB_MODE_PROVIDER_THERMAL_STATE_PATH" ]]
+grep -Fq 'thermal-guard)' "$ROOT/deploy/chromium/tikpal-web-mode.sh"
 
 mkdir -p "$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/netease_music" \
   "$TIKPAL_WEB_MODE_PROFILE_ROOT/providers/qq_music" \

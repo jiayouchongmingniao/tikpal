@@ -190,7 +190,9 @@ fi
 : "${TIKPAL_WEB_MODE_PROVIDER_THERMAL_PAUSE_MILLICELSIUS:=0}"
 : "${TIKPAL_WEB_MODE_PROVIDER_THERMAL_RESUME_MILLICELSIUS:=0}"
 : "${TIKPAL_WEB_MODE_PROVIDER_THERMAL_COOLDOWN_SECONDS:=60}"
+: "${TIKPAL_WEB_MODE_PROVIDER_THERMAL_POLL_SECONDS:=5}"
 : "${TIKPAL_WEB_MODE_PROVIDER_THERMAL_STATE_PATH:=$TIKPAL_WEB_MODE_PROFILE_ROOT/provider-thermal-state.tsv}"
+: "${TIKPAL_WEB_MODE_PROVIDER_THERMAL_GUARD_PID_PATH:=$TIKPAL_WEB_MODE_PROFILE_ROOT/provider-thermal-guard.pid}"
 : "${TIKPAL_WEB_MODE_DISABLE_HANG_MONITOR:=1}"
 : "${TIKPAL_WEB_MODE_REFRESH_EXTENSION_CACHE:=1}"
 : "${TIKPAL_WEB_MODE_ERROR_PAGE_URL:=http://127.0.0.1:4173/web-mode-error.html}"
@@ -2426,6 +2428,13 @@ provider_resident_limit_enabled() {
   [[ "$(provider_max_resident)" -gt 0 ]]
 }
 
+provider_thermal_guard_enabled() {
+  local pause="${TIKPAL_WEB_MODE_PROVIDER_THERMAL_PAUSE_MILLICELSIUS:-0}"
+  local resume="${TIKPAL_WEB_MODE_PROVIDER_THERMAL_RESUME_MILLICELSIUS:-0}"
+  [[ "$pause" =~ ^[0-9]+$ && "$pause" -gt 0 ]] || return 1
+  [[ "$resume" =~ ^[0-9]+$ && "$resume" -gt 0 && "$resume" -lt "$pause" ]]
+}
+
 provider_thermal_max_millicelsius() {
   local root="${TIKPAL_WEB_MODE_PROVIDER_THERMAL_ZONE_ROOT:-/sys/class/thermal}"
   local zone type temperature maximum=0 found=0
@@ -2496,6 +2505,41 @@ provider_thermal_background_work_allowed() {
   rm -f "$TIKPAL_WEB_MODE_PROVIDER_THERMAL_STATE_PATH"
   log_stage "provider_thermal_guard state=clear temperature_mC=$temperature"
   return 0
+}
+
+run_provider_thermal_guard() {
+  local pid_file="$TIKPAL_WEB_MODE_PROVIDER_THERMAL_GUARD_PID_PATH"
+  local poll_seconds="${TIKPAL_WEB_MODE_PROVIDER_THERMAL_POLL_SECONDS:-5}"
+  local active_provider
+  provider_resident_limit_enabled && provider_thermal_guard_enabled || return 0
+  [[ "$poll_seconds" =~ ^[0-9]+([.][0-9]+)?$ ]] || poll_seconds=5
+  while true; do
+    active_provider="$(read_runtime_active_provider)"
+    [[ -n "$active_provider" ]] || break
+    if ! provider_thermal_background_work_allowed; then
+      # At the threshold the audible page always wins. Reconcile with no
+      # retained peer so every inactive Chromium profile is closed promptly.
+      reconcile_bounded_provider_pool "$active_provider" ""
+    fi
+    sleep "$poll_seconds"
+  done
+  [[ "$(cat "$pid_file" 2>/dev/null || true)" == "$$" ]] && rm -f "$pid_file"
+}
+
+start_provider_thermal_guard() {
+  local pid_file="$TIKPAL_WEB_MODE_PROVIDER_THERMAL_GUARD_PID_PATH" existing_pid
+  provider_resident_limit_enabled && provider_thermal_guard_enabled || return 0
+  mkdir -p "$(dirname "$pid_file")"
+  existing_pid="$(cat "$pid_file" 2>/dev/null || true)"
+  if [[ "$existing_pid" =~ ^[0-9]+$ ]] && kill -0 "$existing_pid" 2>/dev/null; then
+    return 0
+  fi
+  if command -v setsid >/dev/null 2>&1; then
+    setsid "$SCRIPT_DIR/tikpal-web-mode.sh" thermal-guard </dev/null >/dev/null 2>&1 9>&- &
+  else
+    nohup "$SCRIPT_DIR/tikpal-web-mode.sh" thermal-guard </dev/null >/dev/null 2>&1 9>&- &
+  fi
+  printf '%s\n' "$!" > "$pid_file"
 }
 
 provider_chromium_signal() {
@@ -4744,6 +4788,7 @@ reconcile_provider_pool_in_background() {
   local started_ms elapsed_ms
   is_enabled "$TIKPAL_WEB_MODE_PROVIDER_POOL" || return 0
   [[ -n "$active_provider" ]] || return 0
+  start_provider_thermal_guard
   started_ms="$(now_ms)"
   if command -v setsid >/dev/null 2>&1; then
     setsid "$SCRIPT_DIR/tikpal-web-mode.sh" reconcile "$active_provider" "$started_ms" "$previous_provider" </dev/null >/dev/null 2>&1 9>&- &
@@ -10007,7 +10052,7 @@ check_runtime() {
   log "provider prewarm: $TIKPAL_WEB_MODE_PROVIDER_PREWARM_ENABLED delay=${TIKPAL_WEB_MODE_PROVIDER_PREWARM_DELAY_SECONDS}s"
   log "provider max resident: $(provider_max_resident)"
   log "provider background freeze: $TIKPAL_WEB_MODE_PROVIDER_BACKGROUND_FREEZE_ENABLED process-freeze=$TIKPAL_WEB_MODE_PROVIDER_BACKGROUND_PROCESS_FREEZE_ENABLED delay=${TIKPAL_WEB_MODE_PROVIDER_BACKGROUND_FREEZE_DELAY_SECONDS}s"
-  log "provider thermal guard: pause=${TIKPAL_WEB_MODE_PROVIDER_THERMAL_PAUSE_MILLICELSIUS}mC resume=${TIKPAL_WEB_MODE_PROVIDER_THERMAL_RESUME_MILLICELSIUS}mC cooldown=${TIKPAL_WEB_MODE_PROVIDER_THERMAL_COOLDOWN_SECONDS}s"
+  log "provider thermal guard: pause=${TIKPAL_WEB_MODE_PROVIDER_THERMAL_PAUSE_MILLICELSIUS}mC resume=${TIKPAL_WEB_MODE_PROVIDER_THERMAL_RESUME_MILLICELSIUS}mC cooldown=${TIKPAL_WEB_MODE_PROVIDER_THERMAL_COOLDOWN_SECONDS}s poll=${TIKPAL_WEB_MODE_PROVIDER_THERMAL_POLL_SECONDS}s"
   log "provider guard idle poll: ${TIKPAL_WEB_MODE_PROVIDER_GUARD_IDLE_POLL_MS}ms"
   log "popup blocking: $TIKPAL_WEB_MODE_POPUP_BLOCKING"
   log "extension: $TIKPAL_WEB_MODE_EXTENSION_ENABLED $TIKPAL_WEB_MODE_EXTENSION_DIR"
@@ -10157,6 +10202,9 @@ case "$web_mode_action" in
     ;;
   reconcile)
     reconcile_provider_pool "${2:-}" "${3:-}" "${4:-}"
+    ;;
+  thermal-guard)
+    run_provider_thermal_guard
     ;;
   sync-status)
     active_provider="$(read_runtime_active_provider)"
